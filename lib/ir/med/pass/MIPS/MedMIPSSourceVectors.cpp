@@ -701,7 +701,9 @@ void discardUnobservedMIPSFPUpperBits(
     }
     for (const auto &Op : Block.Ops) {
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
-        CompleteCalls &= bool(Op.ScalarCallSignature);
+        CompleteCalls &=
+            bool(Op.ScalarCallSignature) ||
+            (Op.SourceCallHint && Op.SourceCallHint->Signature.MIPSRecords);
       for (unsigned I = 0; I < Op.NumInputs; ++I)
         Uses[KeyOf(Op.Inputs[I])].push_back(
             {&Op, nullptr, I, Op.Inputs[I].Size});

@@ -5,7 +5,8 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Read the goroutine register of Go's internal ABI as the goroutine it holds.
+/// Read the goroutine and closure context registers of Go's internal ABI as
+/// the values they hold.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -24,21 +25,22 @@
 
 namespace neverd {
 namespace {
-/// The goroutine is a pointer.
+/// The goroutine and the closure context are pointers.
 constexpr uint16_t GoroutineBytes = 8;
 
-MedOp goroutineRead(const MedVar &Output, va_t Addr) {
+MedOp goroutineRead(Intrinsic Id, const MedVar &Output, va_t Addr) {
   MedOp Read;
   Read.Opcode = NdOp::INTRINSIC;
   Read.Addr = Addr;
   Read.Output = Output;
-  Read.addInput(MedVar::makeConst(
-      static_cast<uint64_t>(Intrinsic::GoCurrentGoroutine), 2));
+  Read.addInput(MedVar::makeConst(static_cast<uint64_t>(Id), 2));
   return Read;
 }
-} // namespace
 
-void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register) {
+/// Give the reads of \p Register in \p Func the value \p Id reads: the
+/// incoming value, and where \p AfterCalls, each call's clobber of it.
+void defineGoRegisterValue(MedFunc &Func, uint64_t Register, Intrinsic Id,
+                           bool AfterCalls) {
   if (Func.Blocks.empty())
     return;
   const auto Goroutine = [&](const MedVar &V) {
@@ -88,12 +90,35 @@ void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register) {
   }
   if (!Any)
     return;
-  const int Id = Any->Id;
+  const int RegisterId = Any->Id;
+  // The incoming value is the version nothing in the function defines:
+  // version 0, unless an operation, a PHI or a call's clobber defines it, as
+  // the first call's clobber does where the function reads the register only
+  // after that call.
+  const auto DefinesVersionZero = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.Id == RegisterId && V.SSAVer == 0;
+  };
+  bool VersionZeroDefined =
+      llvm::any_of(Func.CallClobbers, [&](const MedCallClobber &Clobber) {
+        return DefinesVersionZero(Clobber.Value);
+      });
+  for (const MedBlock &Block : Func.Blocks) {
+    if (VersionZeroDefined)
+      break;
+    VersionZeroDefined = llvm::any_of(Block.Phis,
+                                      [&](const PhiNode &Phi) {
+                                        return DefinesVersionZero(Phi.Output);
+                                      }) ||
+                         llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+                           return DefinesVersionZero(Op.Output);
+                         });
+  }
   // The incoming value: the read takes the copy's place, or defines it where
   // no copy names it, and every other read of it reads the read's result,
   // which the read at the entry dominates.
   const bool CopyRead = CopyAt && Read.count(KeyOf(Entry.Ops[*CopyAt].Output));
-  const bool IncomingRead = Read.count({Id, 0}) != 0;
+  const bool IncomingRead =
+      !VersionZeroDefined && Read.count({RegisterId, 0}) != 0;
   if (CopyRead || IncomingRead) {
     MedVar Defined = *Any;
     Defined.SSAVer = 0;
@@ -117,7 +142,7 @@ void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register) {
       }
     }
     Entry.Ops.insert(Entry.Ops.begin() + Copies,
-                     goroutineRead(Defined, Entry.StartAddr));
+                     goroutineRead(Id, Defined, Entry.StartAddr));
     Entry.Ops.insert(Entry.Ops.begin() + Copies + 1, Readers.begin(),
                      Readers.end());
     if (Defined.SSAVer != 0) {
@@ -137,6 +162,8 @@ void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register) {
   }
   // Each call's clobber of the register that something reads: a read just
   // after the call defines it.
+  if (!AfterCalls)
+    return;
   std::map<uint32_t, MedVar> Clobbered;
   for (const MedCallClobber &Clobber : Func.CallClobbers)
     if (Goroutine(Clobber.Value) && Clobber.PreservedPrefixSize == 0 &&
@@ -160,7 +187,7 @@ void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register) {
       const va_t Addr = Op.Addr;
       Ops.push_back(std::move(Op));
       if (Reads && Placed.insert(Site).second)
-        Ops.push_back(goroutineRead(Clobbered.at(Site), Addr));
+        Ops.push_back(goroutineRead(Id, Clobbered.at(Site), Addr));
     }
     Block.Ops = std::move(Ops);
   }
@@ -173,5 +200,16 @@ void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register) {
       Kept.push_back(std::move(Clobber));
   }
   Func.CallClobbers = std::move(Kept);
+}
+} // namespace
+
+void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register) {
+  defineGoRegisterValue(Func, Register, Intrinsic::GoCurrentGoroutine,
+                        /*AfterCalls=*/true);
+}
+
+void defineGoClosureContext(MedFunc &Func, uint64_t Register) {
+  defineGoRegisterValue(Func, Register, Intrinsic::GoClosureContext,
+                        /*AfterCalls=*/false);
 }
 } // namespace neverd

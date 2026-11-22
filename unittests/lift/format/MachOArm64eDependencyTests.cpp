@@ -14,6 +14,7 @@
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/SourcePatch.h"
 #include "neverd/backend/codegen/SourcePatchDependencies.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
@@ -245,6 +246,67 @@ void addFunctionStarts(std::vector<uint8_t> &Image) {
               Starts.datasize);
   Header->sizeofcmds += sizeof(Starts);
   ++Header->ncmds;
+}
+
+TEST(MachOArm64eDependencies, HeaderPageAddressNeedsAProvenConsumer) {
+  const auto Check = [](uint32_t Add, uint32_t Next, uint32_t Last,
+                        bool Expected) {
+    SCOPED_TRACE(Add);
+    SCOPED_TRACE(Next);
+    SCOPED_TRACE(Last);
+    auto Image = linkedImage(Chains[0]);
+    addFunctionStarts(Image);
+    auto *Text = reinterpret_cast<section_64 *>(
+        Image.data() + sizeof(mach_header_64) + sizeof(segment_command_64));
+    const uint32_t Words[] = {kPageToX8, Add, Next, Last};
+    Text->size = sizeof(Words);
+    std::memcpy(Image.data() + Text->offset, Words, sizeof(Words));
+    const auto Before = Image;
+    auto Grown = reserveMachOHeaderStorage(Image, Arch::AArch64, kPage);
+    if (Expected) {
+      ASSERT_TRUE(bool(Grown)) << llvm::toString(Grown.takeError());
+      EXPECT_TRUE(*Grown);
+      EXPECT_EQ(std::memcmp(Image.data() + kLargePage + kOrdinaryRebaseTarget,
+                            Words, sizeof(Words)),
+                0);
+    } else {
+      EXPECT_FALSE(bool(Grown));
+      llvm::consumeError(Grown.takeError());
+      EXPECT_EQ(Image, Before);
+    }
+  };
+  for (auto Ret : {kReturnLR, kReturnAA, kReturnAB})
+    Check(kTextFromX8, kReadWordFromX0, Ret, true);
+  Check(kTextFromX8, kClearPageX8, kReadHeaderViaX8, true);
+  Check(kTextFromX8, kCopyPageW8, kReturnLR, false);
+  Check(kTextFromX8, kReadHeaderViaX8, kReturnLR, false);
+  Check(kTextFromX8, kReadWordFromX0, kReturnX8, false);
+  Check(kHeaderFromX8, kReadWordFromX0, kReturnLR, false);
+}
+
+TEST(MachOArm64eDependencies, NativeObjectTripleUsesTheMacOSDeploymentTarget) {
+  const auto Check = [](const auto &Version) {
+    auto Bytes = linkedImage(Chains[0]);
+    auto *Header = reinterpret_cast<mach_header_64 *>(Bytes.data());
+    Header->cpusubtype = kMacOSExecutableABI1;
+    Header->filetype = MH_EXECUTE;
+    std::memcpy(Bytes.data() + sizeof(*Header) + Header->sizeofcmds, &Version,
+                sizeof(Version));
+    Header->sizeofcmds += sizeof(Version);
+    ++Header->ncmds;
+    auto Image =
+        Loader::create(BinaryFormat::MachO)
+            ->loadBuffer(llvm::MemoryBufferRef(
+                llvm::toStringRef(llvm::ArrayRef(Bytes)), kProducerModule));
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto Triple = sourcePatchTargetTriple(*Image);
+    ASSERT_TRUE(bool(Triple)) << llvm::toString(Triple.takeError());
+    EXPECT_EQ(*Triple, kMacOSDeploymentTriple);
+  };
+  Check(build_version_command{LC_BUILD_VERSION, sizeof(build_version_command),
+                              PLATFORM_MACOS, kMacOSDeploymentVersion, 0, 0});
+  Check(version_min_command{LC_VERSION_MIN_MACOSX, sizeof(version_min_command),
+                            kMacOSDeploymentVersion, 0});
 }
 
 TEST(MachOArm64eDependencies, HeaderGrowthPreservesChainedAndThreadedSlots) {

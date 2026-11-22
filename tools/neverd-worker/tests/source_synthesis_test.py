@@ -14,6 +14,8 @@ from transport_test import Client
 
 
 ENTRY = 0x400078
+# Both entry points decompile the entire function before returning a page.
+DECOMPILE_TIMEOUT_SECONDS = 90
 WEIGHTED_MASKS = (0x7A6D35C1, 0xB53C678A, 0x4EF0A903, 0xD2195A6C)
 WEIGHTED_UNION = 0
 for _mask in WEIGHTED_MASKS:
@@ -317,7 +319,9 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
 def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                           observed=32, dynamic_masks=False, spliced_words=False,
                           rotated_bytes=False, shifted_bytes=False, funnel_bytes=False,
-                          staggered_bytes=False):
+                          staggered_bytes=False, signed_bytes=False, joined_prefix=False,
+                          masked_window=False):
+    signed_bytes = signed_bytes or joined_prefix or masked_window
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
@@ -329,14 +333,18 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
         coefficient = ((2 * i + 1) << shift) & 0xffffffff
         offset = 2 * i + 1
         code += bytes.fromhex("89f9" + op)
-        if rotated_bytes or shifted_bytes or funnel_bytes or staggered_bytes:
+        if rotated_bytes or shifted_bytes or funnel_bytes or staggered_bytes or signed_bytes:
             # Choose the source of CH, including a window wrapping past bit 31.
             source_bit = (0, 5, 29)[i % 3]
             distance = 1 + (i // 3) % 7 if shifted_bytes or funnel_bytes else 0
             if staggered_bytes:
                 distance = 2 + (i // 3) % 5
-            left_shift = i % 3 == 0
-            start = 8 - distance if left_shift else 8 + distance
+            if signed_bytes:
+                distance = 19 if i == degree // 2 else 1 + i % 11
+            left_shift = i % 3 == 0 and not signed_bytes
+            # The moving field reaches CH after a second rotation.
+            field_at = 2 + (5 * i) % 12 if masked_window else 8
+            start = field_at - distance if left_shift else field_at + distance
             left = (start - source_bit) % 32
             if left:
                 if i % 2:
@@ -344,7 +352,50 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                 else:
                     code += bytes.fromhex("c1c9") + bytes([32 - left])  # ror ecx, imm8
                 value = f"(({value}<<{left})|({value}>>{32-left}))"
-            if funnel_bytes or staggered_bytes:
+            if signed_bytes:
+                # The neighbor leaves the observed window clear. The masked
+                # case also preserves unrelated low bits that may carry in an ADD.
+                cut = (field_at + 8 + (i // 3) % (24 - field_at) if masked_window
+                       else 16 + (i // 3) % 9)
+                mask = (((0x9e3779b9 * (i + 1)) | 1) << cut) & 0xffffffff
+                masked = masked_window or i % 2 == 1
+                if masked_window:
+                    mask |= ((offset * 0x9e3779b9) & ((1 << field_at) - 1)) | 1
+                literal = mask if masked else (3 + 2 * (i % 5)) << cut
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", offset)
+                code += bytes.fromhex("4181e0" if masked else "4569c0") + struct.pack("<I", literal)
+                other = f"((z+{offset}U){'&' if masked else '*'}{literal}U)"
+                arithmetic = i % 4 != 1
+                code += bytes.fromhex("c1f9" if arithmetic else "c1e9") + bytes([distance])
+                moved = f"({value}>>{distance})"
+                if arithmetic:
+                    moved = f"({moved}|((0U-({value}>>31))<<{32-distance}))"
+                join, symbol = (("4409c1", "|"), ("4431c1", "^"), ("4401c1", "+"))[(i // 3) % 3]
+                if masked_window:
+                    # Only the addition at the boundary can carry into CH.
+                    join, symbol = (("4409c1", "|"), ("4431c1", "^"))[i % 2]
+                    if i == degree // 3:
+                        join, symbol = "4401c1", "+"
+                code += bytes.fromhex(join)
+                value = f"({moved}{symbol}{other})"
+                if masked_window:
+                    if i % 3 == 1:
+                        low_mask = (1 << field_at) - 1
+                        code += bytes.fromhex("4189f0 4181e0") + struct.pack("<I", low_mask)
+                        code += bytes.fromhex(join)
+                        value = f"({value}{symbol}(y&{low_mask}U))"
+                    by = (field_at - 8) % 32  # rotate the observed byte into CH
+                    if by:
+                        code += bytes.fromhex("c1c9") + bytes([by])
+                        value = f"(({value}>>{by})|({value}<<{32-by}))"
+                if joined_prefix:
+                    # A second independent word starts above CH. At one
+                    # boundary its low bit contributes to the selected byte.
+                    extra_cut = 14 if i == degree // 3 else 16 + i % 13
+                    code += bytes.fromhex("4189f0 41c1e0") + bytes([extra_cut])
+                    code += bytes.fromhex(join)
+                    value = f"({value}{symbol}(y<<{extra_cut}))"
+            elif funnel_bytes or staggered_bytes:
                 # A different register supplies the other half of the funnel.
                 # CH lies entirely within ECX's shifted bits.
                 join, symbol = (("4409c1", "|"), ("4431c1", "^"), ("4401c1", "+"))[(i // 3) % 3]
@@ -448,17 +499,16 @@ def elf(code):
     return header + segment + code
 
 
-def ok(client, operation, payload):
-    reply = client.call(operation, payload)
+def ok(reply):
     assert reply["status"] == "ok", reply
     return reply["payload"]
 
 
 def source(client, representation, symbolic):
-    return ok(client, "decompile", {
+    return ok(client.call("decompile", {
         "address": hex(ENTRY), "representation": representation, "limit": 2048,
         "source_options": {"symbolic": True} if symbolic else {},
-    })["text"]
+    }, timeout=DECOMPILE_TIMEOUT_SECONDS))["text"]
 
 
 def function_name(text):
@@ -551,6 +601,16 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind.startswith("funnel-perturbation-masked-"):
+            # The few surviving factors may include a live carry and shifts
+            # printed as literal products. Bound the actual emitted expression.
+            assert code.count("*") <= 14, text
+        elif kind == "funnel-perturbation-joined-137":
+            # Five distinct affine factors need five coefficient products and
+            # four joins. High C can spell the bit-window shifts as 2^k * x.
+            literals = re.findall(r"\b(0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*\s*\*", code)
+            shifts = sum(int(lit, 0).bit_count() == 1 for lit in literals)
+            assert code.count("*") - shifts <= 9 and code.count("*") <= 14, text
         elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")):
             assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
@@ -603,7 +663,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
         fixture.write_bytes(image)
         outputs = {}
         with Client(worker) as client:
-            ok(client, "open", {"path": str(fixture), "read_only": True})
+            ok(client.call("open", {"path": str(fixture), "read_only": True}))
             for representation in ("source", "llvmc"):
                 ordinary = source(client, representation, False)
                 enhanced = source(client, representation, True)
@@ -646,7 +706,8 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                     if single:
                         args.append("--func=" + hex(ENTRY))
                     subprocess.run(args + ["-o", str(output), str(fixture)],
-                                   check=True, capture_output=True, text=True, timeout=90)
+                                   check=True, capture_output=True, text=True,
+                                   timeout=DECOMPILE_TIMEOUT_SECONDS)
                     text = output.read_text(encoding="utf-8")
                     enhanced_shape(text)
                     outputs[name] = text
@@ -723,6 +784,13 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            *((f"funnel-perturbation-masked-{degree}", *high_perturbation_elf(
+                degree, shift_base=shift, affine_depth=1, observed=bits, masked_window=True))
+              for degree, shift, bits in ((139, 5, 13), (141, 6, 14), (157, 7, 15), (173, 6, 14))),
+            ("funnel-perturbation-joined-137", *high_perturbation_elf(
+                137, shift_base=6, affine_depth=1, observed=14, joined_prefix=True)),
+            ("funnel-perturbation-signed-277", *high_perturbation_elf(
+                277, shift_base=6, affine_depth=1, observed=14, signed_bytes=True)),
             ("funnel-perturbation-staggered-239", *high_perturbation_elf(
                 239, shift_base=6, affine_depth=1, observed=14, staggered_bytes=True)),
             ("funnel-perturbation-197", *high_perturbation_elf(

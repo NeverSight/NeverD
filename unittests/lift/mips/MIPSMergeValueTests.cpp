@@ -16,6 +16,7 @@
 #include "neverd/ir/med/MIPS/MIPSMergeValues.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include <memory>
 #include <utility>
 
 using namespace neverd;
@@ -97,6 +98,34 @@ struct Pair {
 
   MedOp &first() { return Function.Blocks[0].Ops[1]; }
   MedOp &second() { return Function.Blocks[0].Ops[3]; }
+  MedOp &addRecordCall(NdOp Opcode) {
+    LowOp Low;
+    Low.Opcode = Opcode;
+    Low.Addr = 0x1008;
+    Low.Seq = 12;
+    auto &Block = Physical.Blocks.front();
+    LowInstructionBoundary Boundary;
+    Boundary.Control = LowInstructionControl::Call;
+    Boundary.Address = Low.Addr;
+    Boundary.Size = 4;
+    Boundary.FirstOp = Block.Ops.size();
+    Boundary.OpCount = 1;
+    Block.Ops.push_back(Low);
+    Block.InstructionBoundaries.push_back(Boundary);
+
+    auto Hint = std::make_shared<SourceCallTypeHint>();
+    Hint->Signature.MIPSRecords = true;
+    MedOp Call;
+    Call.Opcode = Opcode;
+    Call.Addr = Low.Addr;
+    Call.OriginSeq = Low.Seq;
+    Call.addInput(Opcode == NdOp::CALL ? scalar(0x2000, Width)
+                                       : variable(40, Width, Target));
+    Call.SourceCallHint = std::move(Hint);
+    auto &Ops = Function.Blocks.front().Ops;
+    return *Ops.insert(Ops.end() - 1, std::move(Call));
+  }
+
   unsigned run() {
     return discardUnobservedMIPSMergeInputs(Function, Physical, Target);
   }
@@ -116,6 +145,117 @@ TEST_P(MIPSMergeValues, BothOrdersDiscardOnlyTheFirstOldValue) {
       EXPECT_EQ(P.first().Inputs[2].ConstVal, 0u);
       EXPECT_EQ(P.second().Inputs[2], Partial);
       EXPECT_EQ(P.run(), 0u);
+    }
+  }
+}
+
+TEST_P(MIPSMergeValues, ScheduledArgumentArithmeticPreservesThePair) {
+  enum class Gap { Arithmetic, PartialValue, Load, MissingInstruction };
+  for (bool Reverse : {false, true}) {
+    for (auto G : {Gap::Arithmetic, Gap::PartialValue, Gap::Load,
+                   Gap::MissingInstruction}) {
+      Pair P(GetParam(), 4, Reverse);
+      auto &Low = P.Physical.Blocks.front();
+      auto &B = Low.InstructionBoundaries;
+      LowOp Middle;
+      Middle.Opcode = G == Gap::Load ? NdOp::LOAD : NdOp::INT_ADD;
+      Middle.Addr = 0x1004;
+      Middle.Seq = 15;
+      Middle.Output = NdVar::tmp(41, P.Bytes);
+      const unsigned InputBytes = G == Gap::Load ? P.Width : P.Bytes;
+      Middle.Inputs[0] = G == Gap::PartialValue ? NdVar::tmp(30, P.Bytes)
+                                                : NdVar::reg(48, InputBytes);
+      Middle.NumInputs = 1;
+      if (Middle.Opcode == NdOp::INT_ADD)
+        Middle.Inputs[Middle.NumInputs++] = NdVar::cst(5, P.Bytes);
+      Low.Ops[1].Addr = P.second().Addr = 0x1008;
+      B[1].Address = P.second().Addr;
+      B[1].FirstOp = 2;
+      Low.Ops.insert(Low.Ops.begin() + 1, Middle);
+      LowInstructionBoundary Between;
+      Between.Address = Middle.Addr;
+      Between.FirstOp = 1;
+      Between.OpCount = 1;
+      Between.Size = G == Gap::MissingInstruction ? 2 : 4;
+      B.insert(B.begin() + 1, Between);
+
+      MedOp GapOp;
+      GapOp.Opcode = Middle.Opcode;
+      GapOp.Addr = Middle.Addr;
+      GapOp.OriginSeq = Middle.Seq;
+      GapOp.Output = variable(41, P.Bytes, GetParam());
+      GapOp.addInput(G == Gap::PartialValue
+                         ? P.first().Output
+                         : variable(42, InputBytes, GetParam()));
+      if (Middle.Opcode == NdOp::INT_ADD)
+        GapOp.addInput(scalar(5, P.Bytes));
+      auto &Ops = P.Function.Blocks.front().Ops;
+      Ops.insert(Ops.begin() + 2, GapOp);
+      const auto Partial = P.first().Output;
+      EXPECT_EQ(P.run(), G == Gap::Arithmetic ? 1u : 0u);
+      EXPECT_EQ(P.first().Inputs[2].isConst(), G == Gap::Arithmetic);
+      EXPECT_EQ(Ops[4].Inputs[2], Partial);
+    }
+  }
+}
+
+TEST_P(MIPSMergeValues, InterleavedPairsFollowEachPartialValue) {
+  for (unsigned Bytes : {4u, 8u}) {
+    if (Bytes == 8 && !isMIPS64(GetParam()))
+      continue;
+    for (bool ObserveOuter : {false, true}) {
+      Pair P(GetParam(), Bytes, false);
+      auto &Low = P.Physical.Blocks.front();
+      auto &Ops = P.Function.Blocks.front().Ops;
+      const auto Core = Low.Ops;
+      const auto Original = Ops;
+      Low.Ops.clear();
+      Low.InstructionBoundaries.clear();
+      Ops.clear();
+      // The outer pair surrounds both members of the inner pair. Both base
+      // offsets and both old destinations coexist until their own second load.
+      const unsigned Words[] = {0, 1, 1, 0};
+      for (unsigned I = 0; I != 4; ++I) {
+        const unsigned Word = Words[I];
+        const unsigned Half = I >= 2;
+        const auto PC = 0x1000u + 4 * I;
+        MedOp Address = Original[Half * 2];
+        Address.Output = variable(20 + I, P.Width, GetParam());
+        Address.Inputs[1].ConstVal += Word * Bytes;
+        Ops.push_back(Address);
+        MedOp Load = Original[Half * 2 + 1];
+        Load.Addr = PC;
+        Load.OriginSeq = 10 + I;
+        Load.Output = variable(30 + I, Bytes, GetParam());
+        Load.Inputs[1] = Address.Output;
+        Load.Inputs[2] =
+            Half ? Ops[2 * Word + 1].Output
+                 : variable(11 + Word, Bytes, GetParam(), MedVar::Reg);
+        Ops.push_back(Load);
+        LowOp Physical = Core[Half];
+        Physical.Addr = PC;
+        Physical.Seq = Load.OriginSeq;
+        Physical.Output = NdVar::tmp(30 + I, Bytes);
+        Physical.Inputs[2] = NdVar::reg(16 + Word * 8, Bytes);
+        Low.Ops.push_back(Physical);
+        auto &Boundary = Low.InstructionBoundaries.emplace_back();
+        Boundary.Address = PC;
+        Boundary.FirstOp = I;
+        Boundary.OpCount = 1;
+        Boundary.Size = 4;
+      }
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.addInput(Ops[7].Output);
+      Return.addInput(Ops[5].Output);
+      if (ObserveOuter)
+        Return.addInput(Ops[1].Output);
+      Ops.push_back(Return);
+      EXPECT_EQ(P.run(), ObserveOuter ? 1u : 2u);
+      EXPECT_EQ(Ops[1].Inputs[2].isConst(), !ObserveOuter);
+      EXPECT_TRUE(Ops[3].Inputs[2].isConst());
+      EXPECT_EQ(Ops[5].Inputs[2], Ops[3].Output);
+      EXPECT_EQ(Ops[7].Inputs[2], Ops[1].Output);
     }
   }
 }
@@ -265,6 +405,54 @@ TEST_P(MIPSMergeValues, IntermediateObservationsAndControlKeepTheOldValue) {
     EXPECT_EQ(P.run(), 0u);
     EXPECT_FALSE(P.first().Inputs[2].isConst());
   }
+}
+
+TEST_P(MIPSMergeValues, RecordCallsRequireTheSamePhysicalOccurrence) {
+  for (NdOp Opcode : {NdOp::CALL, NdOp::INDIR_CALL}) {
+    Pair P(GetParam(), 4, false);
+    P.addRecordCall(Opcode);
+    const auto Partial = P.first().Output;
+    ASSERT_EQ(P.run(), 1u);
+    EXPECT_EQ(P.second().Inputs[2], Partial);
+    EXPECT_EQ(P.Function.Blocks.front().Ops[4].Opcode, Opcode);
+  }
+  Pair Untyped(GetParam(), 4, false);
+  Untyped.addRecordCall(NdOp::INDIR_CALL).SourceCallHint.reset();
+  EXPECT_EQ(Untyped.run(), 0u);
+  Pair WrongSequence(GetParam(), 4, false);
+  ++WrongSequence.addRecordCall(NdOp::CALL).OriginSeq;
+  EXPECT_EQ(WrongSequence.run(), 0u);
+  Pair WrongKind(GetParam(), 4, false);
+  WrongKind.addRecordCall(NdOp::CALL).Opcode = NdOp::INDIR_CALL;
+  EXPECT_EQ(WrongKind.run(), 0u);
+}
+
+TEST_P(MIPSMergeValues, RecordCallsObserveRegistersAndPreservedBytes) {
+  for (bool BeforeCall : {false, true}) {
+    Pair P(GetParam(), 4, false);
+    P.addRecordCall(NdOp::INDIR_CALL);
+    MedOp Save;
+    Save.Opcode = NdOp::COPY;
+    Save.Output = variable(50, 4, GetParam(), MedVar::Reg);
+    Save.Output.RegOff = 48;
+    Save.addInput(P.first().Output);
+    MedOp Overwrite = Save;
+    ++Overwrite.Output.SSAVer;
+    Overwrite.Inputs[0] = scalar(0, 4);
+    auto &Ops = P.Function.Blocks.front().Ops;
+    Ops.insert(Ops.end() - 2, Save);
+    Ops.insert(Ops.end() - (BeforeCall ? 2 : 1), Overwrite);
+    // Both cases return after overwriting the register. Only a call between
+    // the two writes can observe the partial result.
+    EXPECT_EQ(P.run(), BeforeCall ? 1u : 0u);
+  }
+  Pair Preserved(GetParam(), 4, false);
+  Preserved.addRecordCall(NdOp::CALL);
+  MedCallClobber Clobber;
+  Clobber.PreservedInput = Preserved.first().Output;
+  Clobber.PreservedPrefixSize = 2;
+  Preserved.Function.CallClobbers.push_back(Clobber);
+  EXPECT_EQ(Preserved.run(), 0u);
 }
 
 TEST_P(MIPSMergeValues, TransportMustKeepEveryMergeByte) {

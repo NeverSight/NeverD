@@ -54,75 +54,32 @@ bool MIPSLifter::liftMemory(State &S, uint32_t Word,
     S.write(Register, Result);
     return true;
   }
-  unsigned Bytes = 0;
-  bool Store = false;
-  bool Signed = true;
-  switch (Opcode) {
-  case 32:
-    Bytes = 1;
-    break; // LB
-  case 33:
-    Bytes = 2;
-    break; // LH
-  case 35:
-    Bytes = 4;
-    break; // LW
-  case 36:
-    Bytes = 1;
-    Signed = false;
-    break; // LBU
-  case 37:
-    Bytes = 2;
-    Signed = false;
-    break; // LHU
-  case 39:
-    Bytes = 4;
-    Signed = false;
-    break; // LWU (MIPS64 only)
-  case 55:
-    Bytes = 8;
-    break; // LD
-  case 40:
-    Bytes = 1;
-    Store = true;
-    break; // SB
-  case 41:
-    Bytes = 2;
-    Store = true;
-    break; // SH
-  case 43:
-    Bytes = 4;
-    Store = true;
-    break; // SW
-  case 63:
-    Bytes = 8;
-    Store = true;
-    break; // SD
-  default:
+  const auto Transfer = mips::integerMemoryAccess(Opcode);
+  if (!Transfer || (Transfer->Wide && S.Width != 8))
     return false;
-  }
-  if ((Bytes == 8 || Opcode == 39) && S.Width != 8)
-    return false;
+  const unsigned Bytes = Transfer->Bytes;
   const unsigned Base = (Word >> 21) & 31;
   const unsigned Register = (Word >> 16) & 31;
   const auto Displacement = uint64_t(int64_t(int16_t(Word)));
-  const NdVar Address =
+  NdVar Address =
       BaseOverride && BaseOverride->isConst() && !Displacement
           ? *BaseOverride
           : S.binary(NdOp::INT_ADD, BaseOverride ? *BaseOverride : S.read(Base),
                      NdVar::cst(Displacement, S.Width));
-  if (Bytes > 1 && TimedInstructions)
-    S.emitIntrinsic(Intrinsic::MIPSHistoricalAddressCheck, {}, {Address});
-  else if (Bytes > 1 && ISARevision != 6 &&
+  if (TimedInstructions) {
+    const NdVar Physical = S.makeTemp(S.Width);
+    S.emitIntrinsic(Intrinsic::MIPSHistoricalAddressCheck, Physical, {Address});
+    Address = Physical;
+  } else if (Bytes > 1 && ISARevision != 6 &&
            (!Address.isConst() || (Address.Offset & (Bytes - 1))))
     S.emitIntrinsic(Intrinsic::RequireAligned, {},
                     {S.resize(Address, 8), NdVar::scalar(Bytes, 8)});
-  if (Store) {
+  if (Transfer->Store) {
     S.emit(NdOp::STORE, {}, {Address, S.read(Register, Bytes)});
   } else {
     NdVar Value = S.makeTemp(Bytes);
     S.emit(NdOp::LOAD, Value, {Address});
-    S.write(Register, Value, Signed);
+    S.write(Register, Value, Transfer->Signed);
   }
   return true;
 }

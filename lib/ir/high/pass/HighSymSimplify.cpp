@@ -36,9 +36,11 @@
 #include "neverd/symbolic/SymWideArithmetic.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <limits>
@@ -459,6 +461,63 @@ struct AvailableDefinition {
   bool CapturedCallResult = false;
 };
 using AvailableDefinitions = std::map<LocalIdentity, AvailableDefinition>;
+
+// Bound the keys and transitive inputs actually retained. A fresh write to
+// an unread key needs no sweep, even in a long straight-line region.
+struct DefinitionState {
+  AvailableDefinitions Values;
+  std::map<LocalIdentity, size_t> Readers;
+  size_t Identities = 0;
+
+  void clear() {
+    Values.clear();
+    Readers.clear();
+    Identities = 0;
+  }
+
+  bool hasRoom(size_t Inputs) const {
+    // The region may hold this many fully populated dependency sets. Each
+    // sparse fact pays only for its key and the inputs it actually reads.
+    constexpr size_t Capacity =
+        size_t(
+            limits::ir::
+                kHighSymSimplifyStatementRegionsSimplifyDefinitionsSizeLimit) *
+        (1 + limits::ir::kHighSymSimplifyDefinitionInputsSizeLimit);
+    return 1 + Inputs <= Capacity - Identities;
+  }
+
+  void insert(const LocalIdentity &Key, AvailableDefinition Definition) {
+    Identities += 1 + Definition.Dependencies.size();
+    for (const auto &Input : Definition.Dependencies)
+      ++Readers[Input];
+    Values.emplace(Key, std::move(Definition));
+  }
+
+  AvailableDefinitions::iterator erase(AvailableDefinitions::iterator It) {
+    const auto &Inputs = It->second.Dependencies;
+    Identities -= 1 + Inputs.size();
+    for (const auto &Input : Inputs) {
+      auto Reader = Readers.find(Input);
+      if (!--Reader->second)
+        Readers.erase(Reader);
+    }
+    return Values.erase(It);
+  }
+
+  void forgetWrite(const LocalIdentity &Key) {
+    if (auto It = Values.find(Key); It != Values.end())
+      erase(It);
+    if (!Readers.contains(Key))
+      return;
+    // Dependencies are transitive, so one sweep also retires indirect reads.
+    for (auto It = Values.begin(); It != Values.end();) {
+      if (It->second.Dependencies.contains(Key))
+        It = erase(It);
+      else
+        ++It;
+    }
+  }
+};
 
 bool isScalarLocal(const ExprPtr &E) {
   return E && E->Kind == ExprKind::Var && isRewriteableNode(E) && E->Type &&
@@ -1060,6 +1119,169 @@ std::pair<sym::SymRef, bool> lowByteParityInput(sym::SymContext &Ctx,
   return {};
 }
 
+// A bitwise operation on equally placed fields can be evaluated on their
+// whole words, then narrowed once. This gives a signed sub-byte field a
+// source spelling even when the engine pushed extraction through XOR/AND/OR.
+struct SourceBitField {
+  sym::SymRef Word;
+  unsigned Low, Bits;
+};
+
+std::optional<SourceBitField> sourceBitField(sym::SymContext &Ctx,
+                                             sym::SymRef Field) {
+  const unsigned Bits = Ctx.width(Field);
+  if (Bits >= 8)
+    return std::nullopt;
+  auto Piece = [&](sym::SymRef R) -> std::optional<SourceBitField> {
+    const auto Op = Ctx.op(R);
+    if (Op == sym::SymOp::Extract) {
+      const auto Word = Ctx.operand(R, 0);
+      if (Ctx.width(Word) % 8 == 0)
+        return SourceBitField{Word, unsigned(Ctx.node(R).Aux), Bits};
+      return std::nullopt;
+    }
+    const bool Packed = Op == sym::SymOp::Concat && Ctx.numOperands(R) == 2 &&
+                        Ctx.isConst(Ctx.operand(R, 1));
+    if (Op != sym::SymOp::ZExt && !Packed)
+      return std::nullopt;
+    // An extension or packed literal strictly reduces the field width on
+    // descent. Assemble its low bits using only whole-byte operations.
+    auto Part = sourceBitField(Ctx, Ctx.operand(R, 0));
+    if (!Part)
+      return std::nullopt;
+    auto Word = Part->Word;
+    const auto W = Ctx.width(Word);
+    if (Part->Low)
+      Word = Ctx.mkLShr(Word, Ctx.mkConst(W, Part->Low));
+    if (Packed) {
+      const auto Low = Ctx.operand(R, 1);
+      Word = Ctx.mkShl(Word, Ctx.mkConst(W, Ctx.width(Low)));
+      Word = Ctx.mkOr(Word, Ctx.mkConst(Ctx.constValue(Low).zext(W)));
+    } else {
+      Word = Ctx.mkAnd(Word,
+                       Ctx.mkConst(llvm::APInt::getLowBitsSet(W, Part->Bits)));
+    }
+    return SourceBitField{Word, 0, Bits};
+  };
+  const auto Op = Ctx.op(Field);
+  if (Op != sym::SymOp::Xor && Op != sym::SymOp::And && Op != sym::SymOp::Or)
+    return Piece(Field);
+  llvm::SmallVector<sym::SymRef, 4> Words;
+  llvm::SmallVector<sym::SymRef, 4> Terms(Ctx.operands(Field));
+  const auto First = Piece(Terms.front());
+  if (!First)
+    return std::nullopt;
+  Words.push_back(First->Word);
+  for (auto V : llvm::drop_begin(Terms)) {
+    const auto Part = Piece(V);
+    if (!Part || Part->Low != First->Low ||
+        Ctx.width(Part->Word) != Ctx.width(First->Word))
+      return std::nullopt;
+    Words.push_back(Part->Word);
+  }
+  return SourceBitField{Ctx.rebuild(Field, Words), First->Low, Bits};
+}
+
+// A source integer has a whole-byte width. For the source of an extract,
+// keep a native unsigned word congruent to each packed value modulo its bit
+// width. Addition and bitwise operations preserve that congruence. Zero
+// extension and the low operand of a concatenation make padding observable.
+ExprPtr packedExtractWord(sym::SymContext &Ctx, sym::SymRef Root,
+                          const std::unordered_map<uint32_t, ExprPtr> &Built,
+                          llvm::DenseMap<uint32_t, ExprPtr> &Words,
+                          bool ScalarLiterals) {
+  using sym::SymOp;
+  auto Literal = [](uint64_t N) {
+    return HighExpr::makeConst(N, 8, ConstantAddressProvenance::Scalar);
+  };
+  auto Binary = [](NdOp O, ExprPtr L, ExprPtr V) {
+    auto E = HighExpr::makeBinop(O, std::move(L), std::move(V));
+    E->Type = NdType::makeInt(8, false);
+    return E;
+  };
+  auto Clip = [&](ExprPtr V, unsigned Bits) {
+    return Binary(NdOp::INT_AND, std::move(V),
+                  Literal(llvm::maskTrailingOnes<uint64_t>(Bits)));
+  };
+  auto Assemble = [&](sym::SymRef R) -> ExprPtr {
+    const auto Op = Ctx.op(R);
+    if (Op == SymOp::Const)
+      return literalExpr(Ctx.constValue(R), 8, ScalarLiterals);
+    const auto Args = Ctx.operands(R);
+    if (Args.empty())
+      return nullptr;
+    auto Word = Words.lookup(Args.front().index());
+    if (!Word)
+      return nullptr;
+    if (Op == SymOp::Extract) {
+      const auto Low = Ctx.node(R).Aux;
+      return Low ? Binary(NdOp::INT_RIGHT, Word, Literal(Low)) : Word;
+    }
+    if (Op == SymOp::ZExt)
+      return Clip(Word, Ctx.width(Args.front()));
+    NdOp Operation;
+    switch (Op) {
+    case SymOp::Add:
+      Operation = NdOp::INT_ADD;
+      break;
+    case SymOp::Mul:
+      Operation = NdOp::INT_MULT;
+      break;
+    case SymOp::And:
+      Operation = NdOp::INT_AND;
+      break;
+    case SymOp::Or:
+      Operation = NdOp::INT_OR;
+      break;
+    case SymOp::Xor:
+      Operation = NdOp::INT_XOR;
+      break;
+    case SymOp::Concat:
+      Operation = NdOp::INT_OR;
+      break;
+    default:
+      return nullptr;
+    }
+    for (auto Part : llvm::drop_begin(Args)) {
+      auto Right = Words.lookup(Part.index());
+      if (!Right)
+        return nullptr;
+      if (Op == SymOp::Concat) {
+        Word = Binary(NdOp::INT_LEFT, Word, Literal(Ctx.width(Part)));
+        Right = Clip(Right, Ctx.width(Part));
+      }
+      Word = Binary(Operation, std::move(Word), std::move(Right));
+    }
+    return Word;
+  };
+  llvm::SmallVector<std::pair<sym::SymRef, bool>, 16> Work{{Root, false}};
+  while (!Work.empty()) {
+    const auto [R, Ready] = Work.pop_back_val();
+    if (Words.contains(R.index()))
+      continue;
+    const unsigned Bits = Ctx.width(R);
+    ExprPtr Word;
+    if (Bits == 1 || Bits % 8 == 0 || Bits >= 64) {
+      const auto It = Built.find(R.index());
+      if (Bits <= 64 && It != Built.end() && It->second) {
+        Word = std::make_shared<HighExpr>();
+        Word->Kind = ExprKind::Cast;
+        Word->Type = Word->CastTo = NdType::makeInt(8, false);
+        Word->Operands = {It->second};
+      }
+    } else if (!Ready) {
+      Work.emplace_back(R, true);
+      for (auto Child : Ctx.operands(R))
+        Work.emplace_back(Child, false);
+      continue;
+    } else {
+      Word = Assemble(R);
+    }
+    Words.try_emplace(R.index(), std::move(Word));
+  }
+  return Words.lookup(Root.index());
+}
+
 ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
                         bool ScalarLiterals) {
   struct WorkItem {
@@ -1068,6 +1290,7 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
   };
   llvm::SmallVector<WorkItem, 64> Work{{R, false}};
   std::unordered_map<uint32_t, ExprPtr> Built;
+  llvm::DenseMap<uint32_t, ExprPtr> PackedWords;
   std::unordered_set<uint32_t> Active;
   std::unordered_map<uint32_t, std::pair<sym::SymRef, bool>> ParityInputs;
 
@@ -1086,18 +1309,13 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       continue;
     }
 
-    // A proved low-bit lookup can expose a sub-byte extract. Lower only
-    // its zero extension as one masked native-word operation: materializing
-    // the fragment as a byte would give a later sign extension wrong semantics.
-    sym::SymRef UnsignedFragment;
-    if (Ctx.op(Item.Ref) == sym::SymOp::ZExt) {
-      const auto Child = Ctx.operand(Item.Ref, 0);
-      if (Ctx.op(Child) == sym::SymOp::Extract && Ctx.width(Child) < 8)
-        UnsignedFragment = Child;
-    }
-    // The source language stores integer fields in whole bytes. A packed
-    // sign bit above a literal can be emitted directly at its carrier width.
-    sym::SymRef SignWord, LowLiteral;
+    std::optional<SourceBitField> Field;
+    if (Ctx.width(Item.Ref) % 8 == 0 && (Ctx.op(Item.Ref) == sym::SymOp::ZExt ||
+                                         Ctx.op(Item.Ref) == sym::SymOp::SExt))
+      Field = sourceBitField(Ctx, Ctx.operand(Item.Ref, 0));
+    // The source language stores integer fields in whole bytes. Lift a packed
+    // high field above a literal into that whole-byte carrier before shifting.
+    sym::SymRef PackedHigh, LowLiteral;
     if (Ctx.op(Item.Ref) == sym::SymOp::Concat &&
         Ctx.numOperands(Item.Ref) == 2) {
       const auto High = Ctx.operand(Item.Ref, 0),
@@ -1105,7 +1323,11 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       if (Ctx.op(High) == sym::SymOp::Extract && Ctx.node(High).Aux == 0 &&
           Ctx.width(High) == 1 && Ctx.isConst(Low) &&
           Ctx.width(Ctx.operand(High, 0)) == Ctx.width(Item.Ref)) {
-        SignWord = Ctx.operand(High, 0);
+        PackedHigh = Ctx.operand(High, 0);
+        LowLiteral = Low;
+      } else if (Ctx.isConst(Low) && Ctx.width(High) < 8 &&
+                 Ctx.width(Item.Ref) % 8 == 0) {
+        PackedHigh = Ctx.mkZExt(High, Ctx.width(Item.Ref));
         LowLiteral = Low;
       }
     }
@@ -1125,13 +1347,17 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
           Work.push_back({Parity->second.first, false});
         continue;
       }
-      if (SignWord) {
-        if (!Built.contains(SignWord.index()))
-          Work.push_back({SignWord, false});
+      if (PackedHigh) {
+        if (!Built.contains(PackedHigh.index()))
+          Work.push_back({PackedHigh, false});
         continue;
       }
-      llvm::ArrayRef<sym::SymRef> Operands =
-          Ctx.operands(UnsignedFragment ? UnsignedFragment : Item.Ref);
+      if (Field) {
+        if (!Built.contains(Field->Word.index()))
+          Work.push_back({Field->Word, false});
+        continue;
+      }
+      const auto Operands = Ctx.operands(Item.Ref);
       for (auto It = Operands.rbegin(); It != Operands.rend(); ++It)
         if (Built.find(It->index()) == Built.end())
           Work.push_back({*It, false});
@@ -1434,6 +1660,17 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     case sym::SymOp::Extract: {
       const auto Source = Ctx.operand(Item.Ref, 0);
       ExprPtr Operand = get(Source);
+      auto SourceBits = Ctx.width(Source);
+      // A packed arithmetic result can carry into the selected byte. Keep
+      // bitwise projections in their source form so repeated shifted views
+      // can still share the same word in the surrounding expression.
+      const auto SourceOp = Ctx.op(Source);
+      if (!Operand && SourceBits > 1 && SourceBits < 64 && SourceBits % 8 &&
+          (SourceOp == sym::SymOp::Add || SourceOp == sym::SymOp::Mul)) {
+        Operand =
+            packedExtractWord(Ctx, Source, Built, PackedWords, ScalarLiterals);
+        SourceBits = 64;
+      }
       const uint64_t Low = Ctx.node(Item.Ref).Aux;
       if (!Operand)
         break;
@@ -1441,11 +1678,11 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       // (uint32_t)(x >> 14) arrives as a window at bit 14. Read it as that
       // shift and truncation again; the source width is a whole byte count.
       if (Low % 8 != 0) {
-        if (Ctx.width(Source) % 8 != 0)
+        if (SourceBits % 8 != 0)
           break;
         Operand = HighExpr::makeBinop(
             NdOp::INT_RIGHT, Operand,
-            HighExpr::makeConst(Low, Ctx.width(Source) / 8,
+            HighExpr::makeConst(Low, SourceBits / 8,
                                 ConstantAddressProvenance::Scalar));
       }
       Result = std::make_shared<HighExpr>();
@@ -1465,23 +1702,31 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
     case sym::SymOp::ZExt:
     case sym::SymOp::SExt: {
-      if (UnsignedFragment) {
-        const auto Source = Ctx.operand(UnsignedFragment, 0);
-        ExprPtr Operand = get(Source);
+      if (Field) {
+        ExprPtr Operand = get(Field->Word);
         if (!Operand)
           break;
-        const uint16_t SourceBytes = Ctx.width(Source) / 8;
-        const auto Low = Ctx.node(UnsignedFragment).Aux;
-        if (Low)
+        const unsigned SourceBits = Ctx.width(Field->Word);
+        const uint16_t SourceBytes = SourceBits / 8;
+        auto Apply = [&](NdOp Op, uint64_t Literal) {
           Operand = HighExpr::makeBinop(
-              NdOp::INT_RIGHT, Operand,
-              HighExpr::makeConst(Low, SourceBytes,
+              Op, Operand,
+              HighExpr::makeConst(Literal, SourceBytes,
                                   ConstantAddressProvenance::Scalar));
-        Operand = HighExpr::makeBinop(
-            NdOp::INT_AND, Operand,
-            HighExpr::makeConst(
-                (uint64_t(1) << Ctx.width(UnsignedFragment)) - 1, SourceBytes,
-                ConstantAddressProvenance::Scalar));
+        };
+        if (Ctx.op(Item.Ref) == sym::SymOp::SExt) {
+          const auto Padding = SourceBits - Field->Bits;
+          if (Padding > Field->Low)
+            Apply(NdOp::INT_LEFT, Padding - Field->Low);
+          Apply(NdOp::INT_ASHR, Padding);
+          // Widen the sign-filled carrier as signed when the destination is
+          // wider. The final cast preserves the extension's raw bit pattern.
+          Operand->Type = NdType::makeInt(SourceBytes, true);
+        } else {
+          if (Field->Low)
+            Apply(NdOp::INT_RIGHT, Field->Low);
+          Apply(NdOp::INT_AND, (uint64_t(1) << Field->Bits) - 1);
+        }
         Result = std::make_shared<HighExpr>();
         Result->Kind = ExprKind::Cast;
         Result->Type = Result->CastTo = NdType::makeInt(ByteSize, false);
@@ -1503,14 +1748,15 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
     }
     case sym::SymOp::Concat: {
-      if (SignWord) {
-        const auto Source = get(SignWord);
+      if (PackedHigh) {
+        const auto Source = get(PackedHigh);
         const auto Literal =
             literalExpr(Ctx.constValue(LowLiteral).zext(NodeWidth), ByteSize,
                         ScalarLiterals);
         if (Source && Literal) {
-          const auto Shift = HighExpr::makeConst(
-              NodeWidth - 1, ByteSize, ConstantAddressProvenance::Scalar);
+          const auto Shift =
+              HighExpr::makeConst(Ctx.width(LowLiteral), ByteSize,
+                                  ConstantAddressProvenance::Scalar);
           const auto High = HighExpr::makeBinop(NdOp::INT_LEFT, Source, Shift);
           Result = HighExpr::makeBinop(NdOp::INT_OR, High, Literal);
         }
@@ -1996,9 +2242,10 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
         Weight};
   };
   auto Simplify = [&](HighStmt &S, const StatementProperties &Properties,
-                      AvailableDefinitions &Definitions) {
+                      DefinitionState &State) {
+    auto &Definitions = State.Values;
     if (Properties.ResetBefore)
-      Definitions.clear();
+      State.clear();
     const auto RetireMutable = [&] {
       // Calls and memory observations cannot change an unescaped C temporary
       // or parameter. A register, frame object, escaped local, or a definition
@@ -2014,7 +2261,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
         if (Mutable(It->first) ||
             std::any_of(It->second.Dependencies.begin(),
                         It->second.Dependencies.end(), Mutable))
-          It = Definitions.erase(It);
+          It = State.erase(It);
         else
           ++It;
       }
@@ -2026,7 +2273,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
     if (Properties.MutableBoundary && Properties.ReadsBeforeMutation)
       RetireMutable();
     if (Properties.ResetAfter) {
-      Definitions.clear();
+      State.clear();
       return;
     }
     // Unknown stores may touch a frame object. Kill every definition that
@@ -2040,7 +2287,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
                         It->second.Dependencies.end(),
                         [&](const auto &Key) { return StackViews.count(Key); });
         if (ReadsFrame)
-          It = Definitions.erase(It);
+          It = State.erase(It);
         else
           ++It;
       }
@@ -2049,35 +2296,25 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
     if (S.Kind != StmtKind::Assign)
       return;
     if (!isScalarLocal(S.Dst)) {
-      Definitions.clear();
+      State.clear();
       return;
     }
 
     const auto Key = highSourceLocalIdentity(S.Dst->Var);
     auto Inputs = definitionInputs(S.Val, Definitions, Escaped);
-    for (auto It = Definitions.begin(); It != Definitions.end();) {
-      if (It->first == Key || It->second.Dependencies.count(Key))
-        It = Definitions.erase(It);
-      else
-        ++It;
-    }
+    State.forgetWrite(Key);
     // Keep the value assignment, never a deferred or repeated invocation.
     // Explicit writes, escapes, intrinsic outputs and scope resets still
     // retire this marker and every expression depending on it.
     if (S.Val && S.Val->Kind == ExprKind::Call &&
         S.Dst->Var.Kind == MedVar::Reg && !Escaped.count(Key) &&
-        !ExplicitOutputs.count(Key) &&
-        Definitions.size() <
-            ::neverd::limits::ir::
-                kHighSymSimplifyStatementRegionsSimplifyDefinitionsSizeLimit) {
-      Definitions.emplace(Key, AvailableDefinition{S.Dst, {}, true});
+        !ExplicitOutputs.count(Key) && State.hasRoom(0)) {
+      State.insert(Key, AvailableDefinition{S.Dst, {}, true});
       return;
     }
     if (Inputs && !Inputs->count(Key) && !Escaped.count(Key) &&
-        Definitions.size() <
-            ::neverd::limits::ir::
-                kHighSymSimplifyStatementRegionsSimplifyDefinitionsSizeLimit &&
-        S.Val && S.Val->Type && S.Val->Type->Kind == NdTypeKind::Int &&
+        State.hasRoom(Inputs->size()) && S.Val && S.Val->Type &&
+        S.Val->Type->Kind == NdTypeKind::Int &&
         widthFromBytes(S.Val->Type->Size)) {
       // Retain the assignment conversion, including its source width and
       // signedness. Later reads use the destination integer type.
@@ -2091,7 +2328,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
         Converted->Operands = {Value};
         Value = std::move(Converted);
       }
-      Definitions.emplace(Key, AvailableDefinition{Value, std::move(*Inputs)});
+      State.insert(Key, AvailableDefinition{Value, std::move(*Inputs)});
     }
   };
   std::vector<std::vector<HighStmt> *> Scopes{&Stmts};
@@ -2118,7 +2355,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
     while (!Scopes.empty()) {
       auto *Scope = Scopes.back();
       Scopes.pop_back();
-      AvailableDefinitions Definitions;
+      DefinitionState Definitions;
       for (auto &S : *Scope) {
         AppendChildren(S);
         Simplify(S, Classify(S), Definitions);
@@ -2174,7 +2411,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
     Finish();
   }
   auto Process = [&](size_t Index) {
-    AvailableDefinitions Definitions;
+    DefinitionState Definitions;
     const auto &Segment = Segments[Index];
     for (size_t I = Segment.Begin; I < Segment.End; ++I)
       Simplify(*Statements[I].Stmt, Statements[I].Properties, Definitions);

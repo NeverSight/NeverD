@@ -100,10 +100,37 @@ SymRef foldOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   if (Budget.exhausted() || Ctx.op(Root) != SymOp::Mul ||
       Ctx.numOperands(Root) < limits::kMinResidueProductFactors)
     return Root;
-  if (Ctx.numOperands(Root) > limits::kMaxResidueProductFactors)
-    return Ctx.isConst(Ctx.operand(Root, 0))
-               ? foldResidualProductResidues(Ctx, Root, Budget, Storage)
-               : Root;
+  if (Ctx.numOperands(Root) > limits::kMaxResidueProductFactors) {
+    const auto Scale = Ctx.operand(Root, 0);
+    if (!Ctx.isConst(Scale))
+      return Root;
+    // Give the existing low-word proof its original allowance first.
+    const auto Residue =
+        foldResidualProductResidues(Ctx, Root, Budget, Storage);
+    if (Residue != Root || Budget.exhausted())
+      return Residue;
+
+    // A scaled disturbance can admit a truncated polynomial even beyond
+    // the general affine search's factor limit. Its reader accounts for
+    // every factor, including those outside the first coordinate.
+    const auto F = Ctx.operand(Root, 1);
+    if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) != 2 ||
+        !Ctx.isConst(Ctx.operand(F, 0)))
+      return Root;
+    const auto D = Ctx.operand(F, 1);
+    if (Ctx.op(D) != SymOp::Mul || !Ctx.isConst(Ctx.operand(D, 0)) ||
+        (Ctx.constWords(Ctx.operand(D, 0)).front() & 1))
+      return Root;
+    const auto Digits = Ctx.constWords(Scale);
+    if (!Budget.consume(Digits.size()))
+      return Root;
+    const auto Zeros = llvm::APInt::tcLSB(Digits.data(), Digits.size());
+    const unsigned Bits = Ctx.width(Root) - Zeros;
+    if (!Zeros || Bits <= limits::kMaxAffineResidueTableBits)
+      return Root;
+    return foldTruncatedProduct(Ctx, Root, Bits, Budget, Storage,
+                                EmittedReading);
+  }
   if (Ctx.op(Ctx.operands(Root).back()) == SymOp::Xor) {
     if (auto Direct = foldMixedProductProgression(Ctx, Root, Budget, Storage);
         Direct != Root)

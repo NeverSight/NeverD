@@ -144,6 +144,17 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
                : "({ uint64_t __g; __asm__ volatile(\"mov %0, x28\" : "
                  "\"=r\"(__g)); __g; })";
   }
+  // The closure context Go's internal ABI passes a func value in a register
+  // of its own, which C reads from that register at the closure's entry.
+  if (Id == Intrinsic::GoClosureContext) {
+    if (!Ops.empty() || (TheArch != Arch::X64 && TheArch != Arch::AArch64))
+      throw std::invalid_argument("Go closure context of a malformed shape");
+    return TheArch == Arch::X64
+               ? "({ uint64_t __ctx; __asm__ volatile(\"movq %%rdx, %0\" : "
+                 "\"=r\"(__ctx)); __ctx; })"
+               : "({ uint64_t __ctx; __asm__ volatile(\"mov %0, x26\" : "
+                 "\"=r\"(__ctx)); __ctx; })";
+  }
   std::string Result;
   if (TheArch == Arch::ARM || TheArch == Arch::AArch64) {
     if (TheArch == Arch::AArch64 && GnuToolchain)

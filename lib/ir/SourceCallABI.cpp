@@ -8,6 +8,7 @@
 
 #include "neverd/ir/SourceCallABI.h"
 
+#include "../safety/StackSlotFlow.h"
 #include "MIPS/SourceScalarResult.h"
 
 #include "neverd/ir/FloatingCallArguments.h"
@@ -18,6 +19,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/SourceFrameAnalysis.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -96,7 +98,8 @@ bool neverd::sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
                             !sourceAArch64VectorAggregateMembers(Parameter.Type)
                                  .empty();
                    }));
-  return sourceCallRetainsResultStorage(Hint) ||
+  return (Hint.Signature.Architecture == Arch::AArch64 &&
+          sourceCallRetainsResultStorage(Hint)) ||
          (Format == BinaryFormat::MachO && NativePhysical) ||
          (Authenticated && Format == BinaryFormat::MachO &&
           (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
@@ -107,11 +110,15 @@ bool neverd::sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
 }
 
 bool neverd::sourceCallRetainsResultStorage(const SourceCallTypeHint &Hint) {
-  return (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
-          sourceCallRetainsNativeCarriers(Hint)) &&
-         Hint.Signature.Architecture == Arch::AArch64 &&
-         Hint.Signature.ReturnLocation.Kind ==
-             SourceABICarrierKind::IndirectResultPointer;
+  if (Hint.Signature.ReturnLocation.Kind !=
+      SourceABICarrierKind::IndirectResultPointer)
+    return false;
+  if (Hint.Signature.MIPSRecords)
+    return Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
+           Hint.CallKind == SourceCallTypeHint::Kind::Native;
+  return Hint.Signature.Architecture == Arch::AArch64 &&
+         (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
+          sourceCallRetainsNativeCarriers(Hint));
 }
 bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
                                   BinaryFormat Format, std::string &Error,
@@ -364,9 +371,13 @@ bool neverd::sourceCallStackArgumentsDefined(
           }
         return true;
       }
+      // A checked MIPS64 word operation can stop execution, but on the path
+      // reaching the call it has changed neither the stack nor its contents.
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          (Op.Opcode == NdOp::INTRINSIC &&
-           !isSourceFrameObservationGuard(Op))) {
+          (Op.Opcode == NdOp::INTRINSIC && !isSourceFrameObservationGuard(Op) &&
+           !(isMIPS64(Architecture) && Op.NumInputs &&
+             Op.Inputs[0].Offset == uint64_t(Intrinsic::MIPSRequireWord) &&
+             mipsScalarLowShapeIsValid(Op, Architecture)))) {
         Written.clear();
         const auto CurrentSP = address(SP);
         Addresses.clear();
@@ -519,6 +530,8 @@ bool neverd::sourceCallArgumentsDefined(const MedFunc &Function,
   if (!Call)
     return refuse(Error, "The call-site declaration could not bind to a "
                          "surviving original call");
+  const auto &TRI =
+      getTargetRegInfo(Call->SourceCallHint->Signature.Architecture);
   using Read = std::tuple<Key, unsigned, unsigned>;
   std::map<Read, unsigned> State;
   size_t Work = 0;
@@ -554,6 +567,15 @@ bool neverd::sourceCallArgumentsDefined(const MedFunc &Function,
           return false;
         }
         State[Query] = 1;
+        // The incoming SP is defined by the ABI even when it is absent from
+        // the C parameter list. Its canonical self-copy seeds frame addresses.
+        if (TRI.TheArch != Arch::Unknown && V.TheArch == TRI.TheArch &&
+            V.Kind == MedVar::Reg && V.RegOff == TRI.StackPointer &&
+            V.Size == TRI.addressRegisterBytes() &&
+            safety::detail::isAuthenticatedEntryRegisterLiveIn(Function, V)) {
+          State[Query] = 2;
+          return true;
+        }
         const auto It = Definitions.find(key(V));
         if (It == Definitions.end()) {
           Missing = V.display();

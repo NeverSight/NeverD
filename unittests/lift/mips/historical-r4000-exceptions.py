@@ -32,7 +32,7 @@ def mfc0(rt, rd):
     return 0x40000000 | rt << 16 | rd << 11
 
 
-def boot_rom(order, prefix, instructions, return_offset):
+def boot_rom(order, prefix, instructions, return_offset, vector=0x380):
     rom = bytearray(4096)
 
     def place(offset, words):
@@ -56,7 +56,7 @@ def boot_rom(order, prefix, instructions, return_offset):
                     immediate(43, 26, 8, index * 4)]
     handler += [immediate(13, 0, 8, READY), immediate(43, 26, 8, 16),
                 0x1000FFFF, 0]
-    place(0x380, handler)
+    place(vector, handler)
     return rom, epc
 
 
@@ -68,6 +68,12 @@ def qmp(stream, command, **arguments):
             raise RuntimeError(reply)
         if 'return' in reply:
             return reply['return']
+
+
+def read_words(stream, address, count):
+    text = qmp(stream, 'human-monitor-command',
+               **{'command-line': f'xp /{count}wx 0x{address:x}'})
+    return [int(word, 16) for word in re.findall(r'0x([0-9a-fA-F]{8})\b', text)]
 
 
 def run_machine(executable, rom):
@@ -95,10 +101,14 @@ def run_machine(executable, rom):
                         qmp(stream, 'qmp_capabilities')
                         qmp(stream, 'cont')
                         while time.monotonic() < deadline:
-                            text = qmp(stream, 'human-monitor-command',
-                                       **{'command-line': 'xp /5wx 0x1000'})
-                            words = [int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{8})\b', text)]
-                            if len(words) == 5 and words[-1] == READY:
+                            if read_words(stream, 0x1010, 1) == [READY]:
+                                # A monitor dump reads words sequentially while
+                                # the guest runs. Observe completion first, then
+                                # freeze the VM before reading CP0's saved words.
+                                qmp(stream, 'stop')
+                                words = read_words(stream, 0x1000, 5)
+                                if len(words) != 5 or words[-1] != READY:
+                                    raise RuntimeError(f'incomplete register dump: {words}')
                                 return words[:-1]
                             time.sleep(0.01)
                         registers = qmp(stream, 'human-monitor-command',
@@ -116,10 +126,10 @@ def qualify(executable, order):
     rows = []
 
     def check(name, prefix, instructions, code, *, slot=False, address=None,
-              coprocessor=None, pending=0, return_offset=None):
-        rom, expected_epc = boot_rom(order, prefix, instructions, return_offset)
+              coprocessor=None, pending=0, return_offset=None, vector=0x380):
+        rom, expected_epc = boot_rom(order, prefix, instructions, return_offset, vector)
         status, cause, epc, bad = run_machine(executable, rom)
-        row = dict(order=order, scenario=name, status=status, cause=cause,
+        row = dict(order=order, scenario=name, handler=BOOT + vector, status=status, cause=cause,
                    epc=epc, badvaddr=bad, expected_epc=expected_epc,
                    rom_sha256=hashlib.sha256(rom).hexdigest())
         assert status & (BEV | 6) == BEV | 2, row
@@ -128,6 +138,33 @@ def qualify(executable, order):
         assert address is None or bad == address, row
         assert coprocessor is None or (cause >> 28) & 3 == coprocessor, row
         rows.append(row)
+
+    # Placing the same register reader at the reset vector observes Status
+    # before any guest MTC0, and proves the first ROM fetch in QEMU.
+    reset_rom, _ = boot_rom(order, [], [], None, vector=0)
+    reset_status, _, _, _ = run_machine(executable, reset_rom)
+    assert reset_status & (BEV | (3 << 20) | 4) == BEV | 4, hex(reset_status)
+    rows.append(dict(order=order, scenario='cold-reset', pc=BOOT, status=reset_status))
+
+    # Assign every tag explicitly. An invalid entry can still match, so a
+    # freshly reset, otherwise unobserved TLB is not evidence of a refill.
+    tlb = [mtc0(0, 5), mtc0(0, 2), mtc0(0, 3),
+           immediate(15, 0, 10, 0x7100), immediate(9, 0, 8, 47)]
+    loop = len(tlb)
+    tlb += [mtc0(8, 0), mtc0(10, 10), *[0] * 6, 0x42000002,
+            immediate(9, 10, 10, 0x2000), immediate(9, 8, 8, -1)]
+    tlb += [immediate(1, 8, 1, loop - len(tlb) - 1), 0]  # BGEZ t0,loop.
+    va = 0x1234000
+    tlb += [immediate(15, 0, 10, va >> 16),
+            immediate(13, 10, 10, va & 0xffff), mtc0(10, 10), *[0] * 6]
+    for name, major, code in [('load', 35, 2), ('store', 43, 3)]:
+        check('refill-' + name, tlb, [immediate(major, 10, 2, 0)],
+              code, address=va, vector=0x200)
+        indexed = [mtc0(0, 0), *[0] * 6, 0x42000002, *[0] * 6]
+        check('invalid-' + name, tlb + indexed, [immediate(major, 10, 2, 0)],
+              code, address=va)
+    clean = [immediate(13, 0, 8, 2), mtc0(8, 2), *indexed]
+    check('clean-store', tlb + clean, [immediate(43, 10, 2, 0)], 1, address=va)
 
     for name, opcode, code in [('syscall', 12, 8), ('break', 13, 9)]:
         check(name, [], [opcode], code)

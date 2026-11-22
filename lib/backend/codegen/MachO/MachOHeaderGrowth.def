@@ -38,6 +38,14 @@ MACHO_HEADER_TEXT(kSlideSymbol, "symbol has no section-relative slide contract")
 MACHO_HEADER_TEXT(kSlideOverflow,
                   "preferred image address overflows during slide")
 
+MACHO_HEADER_TEXT(kUnresolvedHeaderPage, "unresolved header-page ADRP")
+MACHO_HEADER_TEXT(kHeaderDecoder, "instruction decoder unavailable")
+MACHO_HEADER_TEXT(kHeaderPageConsumer,
+                  "header-page ADRP needs a proven consuming ADD")
+MACHO_HEADER_TEXT(kHeaderPageLive,
+                  "header-page ADRP leaves a live page register")
+MACHO_HEADER_TEXT(kCodeInHeader,
+                  "code computes an address in the relocated Mach header")
 MACHO_HEADER_TEXT(kMixedCoverage,
                   "instruction section lacks a usable data-in-code layout")
 MACHO_HEADER_TEXT(kSlideEmbedded,

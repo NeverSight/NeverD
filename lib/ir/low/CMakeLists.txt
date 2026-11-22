@@ -108,6 +108,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationCxxState.cpp
   CFGBuilderBlocks.cpp
   X86/CFGBuilderX86BoundedLeaf.cpp
+  AArch64/AArch64AddressResult.cpp
   AArch64/CFGBuilderAArch64PAuth.cpp
   CFGBuilderException.cpp
   CFGBuilderAnalysis.cpp
@@ -127,6 +128,7 @@ add_neverd_component_library(NeverDIRLow
   X86/CFGBuilderX86PLT.cpp
   CallRegisterEffects.cpp
   GoCallContract.cpp
+  GoInlinedRoutine.cpp
   CallStackOffsets.cpp
   CallRegisterUnread.cpp
   CircleRange.cpp
@@ -182,6 +184,7 @@ add_neverd_component_library(NeverDIRLow
   NdOpEmulatorExec.cpp
   NdOpEmulatorValues.cpp
   MIPS/MIPSHistoricalCP0.cpp
+  MIPS/MIPSHistoricalTLB.cpp
   MIPS/NdOpEmulatorMIPS.cpp
   MIPS/MIPS16EntryTransport.cpp
   MIPS/MIPS16IndirectCallTransport.cpp

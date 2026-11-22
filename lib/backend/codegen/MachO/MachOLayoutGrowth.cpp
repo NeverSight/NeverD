@@ -872,20 +872,34 @@ compactCapacity(const macho_unwind::CompactUnwindRawSection &Raw,
       Raw.LSDAEntries.size() + Additional.LSDAs);
 }
 
-llvm::Expected<bool> reserveMachOSourceUnwind(
-    std::vector<uint8_t> &Binary, Arch A, uint64_t AdditionalEHBytes,
-    uint64_t AdditionalFunctions, const MachOUnwindRelocationLimits &Limits) {
-  return reserveMachOSourceUnwind(Binary, A, AdditionalEHBytes,
-                                  {AdditionalFunctions, AdditionalFunctions},
-                                  Limits);
+static llvm::Error
+restoreTerminalDwarfBoundary(std::vector<uint8_t> &Bytes, Arch A,
+                             const MachOCompactUnwindRegion &R) {
+  if (A != Arch::AArch64)
+    return llvm::Error::success();
+  const auto Table =
+      llvm::ArrayRef(Bytes).slice(R.SectionFileOff, R.SectionSize);
+  const auto Entry = macho_unwind::findTerminalDwarfEntry(Table);
+  if (!Entry)
+    return llvm::Error::success();
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto Image = Reader->loadBuffer(llvm::MemoryBufferRef(
+      llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                      Bytes.size()),
+      kTerminalDwarfInput));
+  if (!Image)
+    return Image.takeError();
+  if (auto End = macho_unwind::resolveTerminalDwarfEnd(*Image, *Entry))
+    llvm::support::endian::write32le(
+        Bytes.data() + R.SectionFileOff + Entry->SentinelField, *End);
+  return llvm::Error::success();
 }
 
-llvm::Expected<bool>
-reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
-                         uint64_t AdditionalEHBytes,
-                         MachOUnwindFunctionCounts Additional,
-                         const MachOUnwindRelocationLimits &Limits,
-                         llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
+static llvm::Expected<bool> reserveUnwindAndCommands(
+    std::vector<uint8_t> &Binary, Arch A, uint64_t AdditionalEHBytes,
+    MachOUnwindFunctionCounts Additional, uint64_t CommandBytes,
+    const MachOUnwindRelocationLimits &Limits,
+    llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
   const uint64_t AdditionalFunctions = Additional.Functions;
   if (AdditionalEHBytes >
           ::neverd::limits::backend::
@@ -896,6 +910,19 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
           ::neverd::limits::backend::kMaxMachOAdditionalUnwindFunctions)
     return fail("unwind request exceeds supported bounds");
   auto Candidate = Binary;
+  // A failed header reservation can retry with a different image base. The
+  // retry must see the original section owners and their original bytes.
+  const auto Commit = [&]() -> llvm::Expected<bool> {
+    if (CommandBytes) {
+      auto Space =
+          reserveMachOHeaderStorage(Candidate, A, CommandBytes, RecoveredData);
+      if (!Space)
+        return Space.takeError();
+    }
+    const bool Changed = Candidate != Binary;
+    Binary.swap(Candidate);
+    return Changed;
+  };
   auto Compact = findMachOCompactUnwindRegion(Candidate);
   if (!Compact)
     return Compact.takeError();
@@ -956,6 +983,9 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
     if (!Compact)
       return Compact.takeError();
   }
+  if (*Compact && (AdditionalFunctions || AdditionalEHBytes || CommandBytes))
+    if (auto E = restoreTerminalDwarfBoundary(Candidate, A, **Compact))
+      return E;
   if (*Compact && AdditionalFunctions) {
     const auto R = **Compact;
     auto Raw = macho_unwind::parseCompactUnwindRaw(
@@ -973,10 +1003,8 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
         llvm::consumeError(std::move(E));
         const uint64_t Capacity = llvm::alignTo(Required, alignof(uint64_t));
         if (tryPackAdjacentFrames(Candidate, A, R, Capacity, AdditionalEHBytes,
-                                  Limits)) {
-          Binary.swap(Candidate);
-          return true;
-        }
+                                  Limits))
+          return Commit();
         // Adopt checked prefix growth before placing the compact registry.
         // The growth owner rebases its TEXT-relative records, so refresh the
         // payload instead of copying the pre-growth offsets into the new map.
@@ -1048,9 +1076,25 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
         return fail("relocated frame placement changed");
     }
   }
-  const bool Changed = Candidate != Binary;
-  Binary.swap(Candidate);
-  return Changed;
+  return Commit();
+}
+
+llvm::Expected<bool> reserveMachOSourceUnwind(
+    std::vector<uint8_t> &Binary, Arch A, uint64_t AdditionalEHBytes,
+    uint64_t AdditionalFunctions, const MachOUnwindRelocationLimits &Limits) {
+  return reserveMachOSourceUnwind(Binary, A, AdditionalEHBytes,
+                                  {AdditionalFunctions, AdditionalFunctions},
+                                  Limits);
+}
+
+llvm::Expected<bool>
+reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
+                         uint64_t AdditionalEHBytes,
+                         MachOUnwindFunctionCounts Additional,
+                         const MachOUnwindRelocationLimits &Limits,
+                         llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
+  return reserveUnwindAndCommands(Binary, A, AdditionalEHBytes, Additional, 0,
+                                  Limits, RecoveredData);
 }
 
 llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
@@ -1059,18 +1103,12 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
     std::optional<MachODependencyState> &SlidDependencies,
     uint64_t AdditionalCommandBytes,
     llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
-  auto Reserved = reserveMachOSourceUnwind(Binary, A, ExtraFrameBytes,
-                                           Additional, {}, RecoveredData);
+  auto Reserved =
+      reserveUnwindAndCommands(Binary, A, ExtraFrameBytes, Additional,
+                               AdditionalCommandBytes, {}, RecoveredData);
+  if (Reserved)
+    return 0;
   llvm::Error UnwindError = Reserved.takeError();
-  if (!UnwindError) {
-    if (!AdditionalCommandBytes)
-      return 0;
-    auto Space = reserveMachOHeaderStorage(Binary, A, AdditionalCommandBytes,
-                                           RecoveredData);
-    if (Space)
-      return 0;
-    UnwindError = Space.takeError();
-  }
   if (!AllowSlide || (!UnwindError.isA<InsufficientText>() &&
                       !UnwindError.isA<InsufficientMachOHeaderPrefix>()))
     return UnwindError;
@@ -1083,8 +1121,11 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
     return UnwindError;
   llvm::consumeError(std::move(UnwindError));
   const auto &R = **Region;
+  auto Candidate = Binary;
+  if (auto E = restoreTerminalDwarfBoundary(Candidate, A, R))
+    return E;
   auto Raw = macho_unwind::parseCompactUnwindRaw(
-      llvm::ArrayRef(Binary).slice(R.SectionFileOff, R.SectionSize),
+      llvm::ArrayRef(Candidate).slice(R.SectionFileOff, R.SectionSize),
       {.TargetArch = A});
   if (!Raw)
     return Raw.takeError();
@@ -1111,7 +1152,6 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
       llvm::alignTo(Bytes, macho_loader::arm64e::kLargePageBytes);
   if (Slide > limits::backend::kMaxMachOHeaderGrowthBytes)
     return fail(kUnwindPrefix);
-  auto Candidate = Binary;
   auto Before = slideMachOZeroBaseDylib(Candidate, Slide);
   if (!Before)
     return Before.takeError();

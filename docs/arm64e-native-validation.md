@@ -2883,8 +2883,8 @@ Each form uses the original destination register and occupies
 one instruction, preserving the containing function's unwind and exception
 offsets. The final check decodes the installed instruction and compares the
 loaded target with the original address adjusted for layout growth. A literal
-load has a signed 19-bit displacement in four-byte units. Publication reports
-a placement error when the cell itself is outside that range.
+load has a signed 19-bit displacement in four-byte units. The wide-image
+paths below handle sites that cannot reach a trailing cell.
 
 `ndDarwinArm64eWalkHandlerEntry` starts in an active `SA_SIGINFO` handler.
 It walks Darwin's registered frames until the signal-frame address agrees
@@ -2920,10 +2920,162 @@ dylibs and checked their values. Darwin launched all 14 original and
 published executables. Each host passed 268 source-fork tests, including
 twelve handler-start walks on the compiler and published images.
 An additional 1.1 MiB instruction section with eighteen embedded data regions
-put the trailing pool outside the first load's range. Both optimization modes
-reported the placement failure before creating an output.
+put the trailing pool outside the first load's range. At the recorded revision
+both optimization modes reported the placement failure before creating an output.
 The frozen r6 build passed 258 tests on each host, with six previously
 recorded signed-CFI failures and four compact-emitter skips.
 [Source-fork execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44877832586).
 [Frozen r6 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44877884491).
 [Revision, test executables and results](evidence/arm64e-interior-address-publication-2026-11-21.json).
+
+### Source addresses beyond literal-load reach
+
+A numeric `ADRP` followed by an unshifted 64-bit `ADD` can return a
+mapped instruction address or the address of declared embedded data. The
+publisher relocates the page displacement and low twelve bits. The final
+decoder checks both register operands, including pairs that retain the
+page in X8 and return the full address in X0. Each publication recovers the
+original numeric address from the linked input.
+
+When a one-word site cannot reach either its original address or its dyld
+pointer cell, the publisher can emit a two-word page pair inside a function
+with compact unwind. It recognizes a zero-stack leaf or an FP/LR save and
+restore, checks the position-independent body and its final return,
+and excludes DWARF and language metadata from this expansion. The leading
+B-key SP signature and authenticated return keep their signing modifier.
+It then verifies the new instruction, all shifted words and every embedded
+data range against the source. A whole function that needs to preserve its
+instruction offsets can move closer to the pool. The final verifier checks
+the relocated calls, original register operands and unwind records in either
+layout. Publication still reports a range error if the available placements
+cannot encode the address.
+
+When a published entry begins with a forwarding branch, its old FP/LR save
+can still appear in the next word. Function discovery uses the linker's
+function starts and unwind extent to keep that instruction with its owner.
+A direct `BL` to the same address supplies independent call evidence.
+
+
+A linked executable can omit a data-in-code record for a constant read
+through an adjacent `ADR` or `ADRP`/`ADD` in the same basic block. The
+publisher recovers the exact bytes of a fixed-width load at offset zero
+and checks them against every CFG block and existing data range in the
+function. It installs the recovered record for the original and copied
+storage. A different base register, a store or a load past the constant
+provides no such evidence.
+
+On layouts where code and the Mach header share a 4 KiB page, header
+growth resolves the address computed by the consuming `ADD`. When the
+page register differs from the result, the publisher follows the Darwin
+scratch register through ordinary instructions. A fresh definition or
+return through LR ends its lifetime. Reading the page itself or reaching
+an unresolved transfer prevents header movement.
+
+Native arm64e object generation carries the input's macOS deployment
+version from `LC_BUILD_VERSION` or `LC_VERSION_MIN_MACOSX`. This puts the
+platform in the emitted object so the installer can verify an ABI0 object's
+use in an ABI1 macOS executable.
+
+The six wide inputs each contain eighteen 60 KiB embedded data regions.
+The Release CLI published each as a dylib and as a high-base PIE through
+three generations at O0 and O2. An independent decoder followed every old
+entry, verified both physical registers for each page pair and checked each
+numeric address against its original target. On both virtual M1 runner
+profiles, Darwin launched 49 original and published main executables and a
+separate arm64e caller exercised 49 signed dylibs. Each profile also passed
+271 source-fork tests, including direct walks from the signal handler.
+Frozen r6 reproduced six signed-CFI failures and four compact PAuth_LR skips.
+The two Xcode 27 inputs captured before the fix passed three consecutive
+publications per optimization level. The Apple Clang 17 modern-linker
+control with an empty terminal unwind interval still reports the malformed
+range. A separate address-only input from that linker omits every embedded
+data record. At that revision, both optimization levels reported an
+unverified 28-byte source extent for a 20-byte generated body.
+
+[Source-fork native execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44893316681).
+[Frozen r6 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44893359488).
+[Revisions, output hashes and native results](evidence/arm64e-wide-address-returns-2026-11-21.json).
+
+During this run GitHub listed M1 for the standard macOS arm64 profiles and M2 for XLarge. The three hosted qualification reports record the features that each guest exposed.
+[Standard macOS runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+[Larger macOS runners](https://docs.github.com/en/actions/reference/runners/larger-runners).
+
+
+### Returned addresses in text without embedded-data records
+
+For a function that returns an address inside its own trailing bytes, the
+linker and unwind bounds delimit the original storage. The entry CFG supplies
+the last reachable instruction. When that instruction is a return and the
+address survives to X0 or an output slot, the publisher copies the reachable
+prefix and leaves the suffix in its original executable mapping. The suffix
+can contain bytes, instructions, or both. Its address alone supplies neither
+a read width nor a data-in-code record.
+
+The address can come from an `ADR`, a page/address pair with a separate
+destination register, or a dyld-rebased literal slot. Full-width moves and
+direct branches to a shared return preserve the address. A W-register
+overwrite clobbers its X-register alias. Each publication checks the mapped
+and on-disk bytes, the segment permissions, the relocated address and the
+extent of the copied unwind record. A former entry that now forwards to a
+separately owned function keeps its trailer as original storage. Explicit
+control-flow evidence still contributes roots.
+
+The archived Apple Clang 17 input was reproduced byte for byte. The Release
+CLI published six inputs at O0 and O2 through three generations each. All
+36 outputs passed signature, dyld and retained-byte checks. The largest
+fixture retained 1,105,988 bytes across 24 ranges. On each Darwin runner,
+a native caller exercised 35 dylibs and the system launched seven PIEs.
+Both runners passed all 273 tests with the source LLVM fork. Frozen r6
+reproduced its six signed-CFI failures and four compact PAuth_LR skips.
+Both runners reported Apple M1 (Virtual) and lacked native x1 qualification.
+
+[Source LLVM run](https://github.com/gmh5225/test_mac_intel/actions/runs/44917069820).
+[Frozen r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44921174291).
+[Input hashes and native results](evidence/arm64e-unmarked-address-tails-2026-11-21.json).
+
+### Indexed DWARF at the end of an arm64e image
+
+Apple Clang 17's linker emitted a compact-unwind sentinel at the start of
+the final indexed function in the archived signed PIE. The index names FDE
+`0x14`, which covers `0x10000037c` through the exclusive end
+`0x10000039c`. On two Darwin runners, the system unwinder also recovered
+the caller through a live signed callback with this linker layout. It
+reported the same 24-byte callback interval for the original dylib and a
+control carrying the explicit end.
+[System unwind control](https://github.com/gmh5225/test_mac_intel/actions/runs/44924024676).
+
+The image reader uses the indexed FDE's initial location, section offset
+and complete range to recover that endpoint. The range must fit a single
+file-backed instruction section. A competing frame or an intervening
+function start prevents recovery. The publisher writes the proven end to
+its private candidate and validates the complete compact table. It reserves
+unwind storage and load-command space together so a zero-base layout retry
+starts from the original image.
+
+A saved link-register slot in an indexed leaf or register-call frame keeps
+the physical frame even when the arithmetic alone could fit in a frameless
+function. Register calls retain their original authentication instruction
+and fall through to the original restore. A Darwin callback walked through this frame, then threw a
+C++ exception on a separate invocation. The caller observed one destructor
+per invocation across three successive publications at each optimization
+level.
+[Signed callback and exception execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44926088390).
+
+The Release CLI published eight Apple-linked inputs at O0 and O2 through
+three generations, producing 48 images. Strict code signature, dyld and
+DWARF range checks passed for every image. The linker on the macOS 26
+runner placed the sentinel at the final function's start. The Xcode 27
+input contained a separate lookup byte after the end of its text section.
+Twelve cases with contradictory frame metadata were rejected. Each kept
+its original input hash and left the output path absent.
+[Linker inputs](https://github.com/gmh5225/test_mac_intel/actions/runs/44927794140) · [Publication hashes and range checks](evidence/arm64e-terminal-dwarf-2026-11-22.json).
+
+Each Darwin runner executed the 56 original and published program cases.
+Each passed all 275 source-fork tests. Frozen r6 passed 265 on each runner,
+reproduced the six recorded signed-CFI failures and skipped four compact
+PAuth_LR emitter tests. Both new signed-frame tests passed with each toolchain.
+[Release execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44927498865) · [Source-fork suite](https://github.com/gmh5225/test_mac_intel/actions/runs/44929436839) · [Frozen r6 suite](https://github.com/gmh5225/test_mac_intel/actions/runs/44929546376).
+
+After integration with dev at `3ed69e2048a8`, the Release CLI reproduced
+all 48 output hashes. The integrated test binary passed all 275 cases on each
+Darwin runner. [Integrated source-fork run](https://github.com/gmh5225/test_mac_intel/actions/runs/44932537141).

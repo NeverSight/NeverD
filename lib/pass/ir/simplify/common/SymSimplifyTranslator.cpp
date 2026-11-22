@@ -105,6 +105,34 @@ unsigned shiftedSignedWidth(const llvm::Instruction &I) {
   return Width - K->getZExtValue();
 }
 
+// A left shift inserts zero bits. Successive logical or arithmetic right
+// shifts can discard those bits exactly, up to the first original bit.
+// Every contributing instruction is still checked for its own poison flags.
+bool provesExactRightShift(const llvm::Instruction &I) {
+  if ((I.getOpcode() != llvm::Instruction::LShr &&
+       I.getOpcode() != llvm::Instruction::AShr) ||
+      !llvm::cast<llvm::PossiblyExactOperator>(I).isExact())
+    return false;
+  const unsigned Width = I.getType()->getIntegerBitWidth();
+  unsigned Needed = 0;
+  const llvm::Instruction *Shift = &I;
+  while (Shift) {
+    const auto *K = llvm::dyn_cast<llvm::ConstantInt>(Shift->getOperand(1));
+    if (!K || K->getValue().uge(Width))
+      return false;
+    const unsigned Amount = K->getZExtValue();
+    if (Shift->getOpcode() == llvm::Instruction::Shl)
+      return Amount >= Needed;
+    if (!Amount || Amount > Width - Needed)
+      return !Needed && !Amount;
+    Needed += Amount;
+    Shift = llvm::dyn_cast<llvm::BinaryOperator>(Shift->getOperand(0));
+    if (Shift && !Shift->isShift())
+      return false;
+  }
+  return false;
+}
+
 struct MaskedArithmeticBounds {
   llvm::APInt UnsignedMax, SignedMin, SignedMax;
 
@@ -164,17 +192,22 @@ MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
       }
     }
   }
-  // An arithmetic right shift by K has at most Width-K signed bits,
-  // whatever produced its input. Exactness and child poison are checked
-  // separately before the translator can use the resulting value.
-  if (I->getOpcode() == llvm::Instruction::AShr) {
+  // A nonzero logical shift clears the sign bit. An arithmetic shift
+  // leaves at most Width-K signed bits. Child poison and exactness are
+  // checked separately before translating the region.
+  if (I->getOpcode() == llvm::Instruction::AShr ||
+      I->getOpcode() == llvm::Instruction::LShr) {
     const auto *Shift = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(1));
-    if (Shift && Shift->getValue().ult(Width)) {
-      const unsigned Bits = Width - Shift->getZExtValue();
-      Result.SignedMin =
-          llvm::APInt::getSignedMinValue(Bits).sextOrTrunc(Width);
-      Result.SignedMax =
-          llvm::APInt::getSignedMaxValue(Bits).sextOrTrunc(Width);
+    if (!Shift || Shift->isZero() || !Shift->getValue().ult(Width))
+      return Result;
+    const unsigned Bits = Width - Shift->getZExtValue();
+    if (I->getOpcode() == llvm::Instruction::LShr) {
+      Result.UnsignedMax = llvm::APInt::getLowBitsSet(Width, Bits);
+      Result.SignedMin.clearAllBits();
+      Result.SignedMax = Result.UnsignedMax;
+    } else {
+      Result.SignedMin = llvm::APInt::getSignedMinValue(Bits).sext(Width);
+      Result.SignedMax = llvm::APInt::getSignedMaxValue(Bits).sext(Width);
     }
     return Result;
   }
@@ -324,9 +357,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
   // the exact language subset accepted today.
   const bool SafeArithmetic = safeMaskedArithmetic(I);
   const bool SafeOr = safeMaskedOr(I);
+  const bool SafeExact = provesExactRightShift(I);
   if ((I.hasPoisonGeneratingFlags() && !SafeArithmetic && !SafeOr &&
-       !splitWordAssembly(I) && !safeWidenedShift(I) &&
-       !shiftedSignedWidth(I)) ||
+       !splitWordAssembly(I) && !safeWidenedShift(I) && !SafeExact) ||
       I.hasPoisonGeneratingAttributes() || I.hasPoisonGeneratingMetadata())
     return false;
 
@@ -356,8 +389,7 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
   case OpTag::LShr:
   case OpTag::AShr:
     return HasInRangeConstantShift() &&
-           (!llvm::cast<llvm::PossiblyExactOperator>(I).isExact() ||
-            shiftedSignedWidth(I));
+           (!llvm::cast<llvm::PossiblyExactOperator>(I).isExact() || SafeExact);
   case OpTag::UDiv:
   case OpTag::SDiv:
   case OpTag::URem:
@@ -619,6 +651,11 @@ void Translator::collectRegion(llvm::Value *Root) {
     auto Ops = children(*llvm::cast<llvm::Instruction>(V));
     Pending.append(Ops.begin(), Ops.end());
   }
+
+  // A leaf contributes no removable instruction, including when this
+  // translator already holds the region of an earlier root.
+  if (!Region.contains(Root))
+    return;
 
   // The closed region is cheaper to measure and gives shared computations a
   // stable opaque identity.  If it cannot simplify, a second translation may

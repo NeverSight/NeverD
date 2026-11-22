@@ -44,6 +44,26 @@ placeRecordCall(Arch Architecture, BinaryFormat Format,
                 const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> Parameters,
                 bool Variadic = false);
 
+/// First o32 word occupied by a scalar or naturally aligned record.
+unsigned alignedO32ArgumentSlot(unsigned Next, const TypeRef &Type);
+
+/// A validated record argument represented by consecutive integer words in
+/// memory order. Only the last word may contain fewer than a full slot.
+bool usesIntegerRecordWords(Arch Architecture,
+                            const SourceParameterTypeHint &Parameter);
+
+/// A natural record whose complete object representation consists of byte
+/// fields.
+bool isByteRecord(const TypeRef &Type);
+
+/// A complete record whose independently addressable leaves share a single
+/// full integer argument word. The source object uses memory byte order.
+bool isPackedRecordWord(const TypeRef &Type,
+                        llvm::ArrayRef<SourceABIValueLocation> Locations);
+
+/// An o32 double or long long carried as two words of one source parameter.
+bool isSplitRecordScalar(const SourceParameterTypeHint &Parameter);
+
 /// Bind a source declaration whose components can be represented independently
 /// in the source IR. Retains the input unchanged when a carrier is unavailable.
 bool assignRecordSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,

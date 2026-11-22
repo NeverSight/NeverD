@@ -25,6 +25,7 @@
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/ControlFlowEntries.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Parallel.h"
 #include "neverd/support/ProloguePatterns.h"
@@ -1391,10 +1392,15 @@ void FuncDetector::scanCallTargets(
     llvm::sort(Targets);
     for (const auto &[Entry, After] : A64Entries.EntryCandidates) {
       const auto Target = llvm::lower_bound(Targets, After);
-      if (Target == Targets.end() || *Target > Entry) {
-        Out.insert(Entry);
-        MarkedAArch64Entries.insert(Entry);
-      }
+      if (Target != Targets.end() && *Target <= Entry)
+        continue;
+      // A forwarding branch can leave its old frame save immediately after
+      // it. The marker alone cannot split a linker-owned function. A real
+      // BL to the same address has already contributed its own evidence.
+      if (!Out.contains(Entry) && machOInteriorAddressOwner(Img, Entry))
+        continue;
+      Out.insert(Entry);
+      MarkedAArch64Entries.insert(Entry);
     }
   };
   struct ScanChunk {

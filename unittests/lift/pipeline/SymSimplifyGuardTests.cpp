@@ -382,6 +382,31 @@ TEST(SymSimplifyGuard, GeneratedVariableShiftsRequireCompleteValueBounds) {
   }
 }
 
+TEST(SymSimplifyGuard, LeafRootsDoNotCountAsRemovableInstructions) {
+  llvm::LLVMContext C;
+  llvm::Module M("leaf-roots", C);
+  auto *Ty = llvm::Type::getInt32Ty(C);
+  auto *F = llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", M);
+  llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+  auto Callee =
+      M.getOrInsertFunction("read_word", llvm::FunctionType::get(Ty, false));
+  auto *Arg = F->getArg(0);
+  auto *Literal = B.getInt32(3);
+  auto *Call = B.CreateCall(Callee);
+  auto *Sum = B.CreateAdd(Arg, Literal);
+  B.CreateRet(Sum);
+  sym::SymContext Ctx;
+  Translator Xlat(Ctx);
+  ASSERT_TRUE(Xlat.in(Sum));
+  ASSERT_EQ(Xlat.descendedInsts(), 1u);
+  llvm::Value *Leaves[] = {Arg, Literal, Call};
+  for (auto *Leaf : Leaves) {
+    EXPECT_TRUE(Xlat.in(Leaf));
+    EXPECT_EQ(Xlat.descendedInsts(), 1u);
+  }
+}
+
 TEST(SymSimplifyGuard, TranslatesRotationsAndPreservesBothFunnelInputs) {
   namespace sym = neverd::symbolic;
   llvm::LLVMContext C;
@@ -684,6 +709,49 @@ TEST(SymSimplifyGuard, MaskedNoWrapAdmissionMatchesExhaustiveByteDomains) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
+TEST(SymSimplifyGuard, LogicalShiftBoundsMatchDefinedByteAdditions) {
+  llvm::LLVMContext C;
+  llvm::Module M("shifted_add_domains", C);
+  auto *I8 = llvm::Type::getInt8Ty(C);
+  for (unsigned Shift : {0u, 1u, 4u, 7u, 8u})
+    for (unsigned Mask : {1u, 0x7fu, 0x80u, 0xffu})
+      for (unsigned Flags : {1u, 2u, 3u})
+        for (bool Exact : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << Shift << "," << Mask << "," << Flags << "," << Exact);
+          auto *F = llvm::Function::Create(
+              llvm::FunctionType::get(I8, {I8, I8}, false),
+              llvm::Function::ExternalLinkage, "f", &M);
+          llvm::IRBuilder<> IR(llvm::BasicBlock::Create(C, "entry", F));
+          auto make = [&] {
+            auto *L = IR.CreateLShr(F->getArg(0), IR.getInt8(Shift), "", Exact);
+            auto *R = IR.CreateAnd(F->getArg(1), IR.getInt8(Mask));
+            return IR.CreateAdd(L, R, "", Flags & 1, Flags & 2);
+          };
+          auto *Root = IR.CreateXor(make(), make());
+          IR.CreateRet(Root);
+          bool Defined = Shift < 8;
+          auto Signed = [](unsigned V) { return int(V) - (V < 128 ? 0 : 256); };
+          for (unsigned X = 0; X < 256 && Defined; ++X) {
+            if (Exact && (X & ((1u << Shift) - 1))) {
+              Defined = false;
+              break;
+            }
+            for (unsigned Y = 0; Y < 256 && Defined; ++Y) {
+              unsigned L = X >> Shift, R = Y & Mask;
+              int Sum = Signed(L) + Signed(R);
+              Defined = (!(Flags & 1) || L + R < 256) &&
+                        (!(Flags & 2) || (Sum >= -128 && Sum <= 127));
+            }
+          }
+          auto Result = SymSimplifyPass::constantValueOf(Root);
+          EXPECT_EQ(Result.has_value(), Defined);
+          if (Result)
+            EXPECT_TRUE(Result->isZero());
+        }
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
 TEST(SymSimplifyGuard, NestedMaskedBoundsPreserveHiddenPoisonAndWideDomains) {
   for (unsigned Width : {8u, 16u, 32u, 64u, 128u, 257u}) {
     for (bool Poisoned : {false, true}) {
@@ -715,6 +783,40 @@ TEST(SymSimplifyGuard, NestedMaskedBoundsPreserveHiddenPoisonAndWideDomains) {
       EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
     }
   }
+}
+
+TEST(SymSimplifyGuard, ExactRightShiftsCanOnlyDiscardInsertedZeros) {
+  llvm::LLVMContext C;
+  llvm::Module M("exact_shift_chain", C);
+  auto *Ty = llvm::IntegerType::get(C, 8);
+  auto *F = llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", M);
+  llvm::IRBuilder<> IR(llvm::BasicBlock::Create(C, "entry", F));
+  auto *X = F->getArg(0);
+  for (unsigned Padding : {2u, 5u, 7u}) {
+    for (unsigned First : {1u, 3u}) {
+      for (unsigned Second : {1u, 2u, 4u}) {
+        for (bool Arithmetic : {false, true}) {
+          auto *Left = IR.CreateShl(X, Padding);
+          auto *Middle = Arithmetic ? IR.CreateAShr(Left, First, "", true)
+                                    : IR.CreateLShr(Left, First, "", true);
+          auto *Last = Arithmetic ? IR.CreateLShr(Middle, Second, "", true)
+                                  : IR.CreateAShr(Middle, Second, "", true);
+          symbolic::SymContext Ctx;
+          Translator Xlat(Ctx);
+          EXPECT_EQ(Xlat.in(Last).isValid(), First + Second <= Padding)
+              << Padding << ',' << First << ',' << Second << ',' << Arithmetic;
+        }
+      }
+    }
+  }
+  auto *Flagged = IR.CreateShl(X, 5, "", /*HasNUW=*/false, /*HasNSW=*/true);
+  auto *Last = IR.CreateLShr(Flagged, 4, "", true);
+  symbolic::SymContext Ctx;
+  Translator Xlat(Ctx);
+  EXPECT_FALSE(Xlat.in(Last));
+  IR.CreateRet(X);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
 TEST(SymSimplifyGuard, SignedShiftBoundsRespectOverflowAndExactness) {

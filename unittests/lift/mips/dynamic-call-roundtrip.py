@@ -48,6 +48,19 @@ def rebuilt_storage(source, rebuilt_symbols, address, width, fallback):
     return next(iter(owners)) if owners else fallback
 
 
+SPILL_TRANSFERS = {
+    "chain-spill-copy": [],
+    "chain-spill-store-halves": ["-DSTORE_HALVES"],
+    "chain-spill-load-halves": ["-DLOAD_HALVES"],
+    "chain-spill-separate": ["-DSEPARATE_HALVES"],
+    "chain-spill-pack-checked": ["-DLOAD_HALVES", "-DGUARD_BEFORE_PACK"],
+    "chain-spill-swapped": ["-DLOAD_HALVES", "-DSWAPPED_SAMPLE"],
+    "chain-spill-field": ["-DLOAD_HALVES", "-DINSERT_FIELD"],
+    "chain-spill-add": ["-DLOAD_HALVES", "-DCOMBINE_WORDS=daddu"],
+    "chain-spill-xor": ["-DLOAD_HALVES", "-DCOMBINE_WORDS=xor"],
+}
+
+
 def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                  provider, companions, callbacks, little, values, results, linker, form):
     work = artifacts.work
@@ -57,6 +70,18 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     chain = form.startswith("chain")
     if chain:
         fixture = "pic-import-chain.c" if form == "chain-compiled" else "pic-import-chain.S"
+    rechecked = form in ("chain-join-check", "chain-recheck-first", "chain-recheck-second",
+                         "chain-spill-recheck")
+    self_forward = form == "loop-self-forward"
+    repeated = form in ("chain-loop-result", "chain-loop-spill")
+    loop_guard = (form in SPILL_TRANSFERS or repeated or
+                  form in ("chain-spill-check", "chain-spill-recheck", "chain-spill-byte"))
+    joined = form == "chain-join" or (rechecked and not loop_guard)
+    if joined or loop_guard or self_forward:
+        fixture = "pic-guarded-forward.S"
+        values = [*values, *range(16 if form == "chain-spill-recheck" else 8)]
+    if form == "chain-guard-zero":
+        values = [*values, 37, (-37) & 0xffffffffffffffff]
     flags = {
         "direct": [], "guarded": [], "saved": ["-DSAVED_ENTRY"],
         "likely-taken": ["-DSAVED_ENTRY", "-DLIKELY_TAKEN"],
@@ -66,6 +91,17 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
         "entry-loop": ["-DENTRY_HEADER"],
         "slot-setup": ["-DSLOT_SETUP"],
         "slot-barrier": ["-DSAVED_ENTRY", "-DLIKELY_SKIPPED", "-DSLOT_BARRIER"],
+        "chain-guard-zero": ["-DGUARD_ZERO"], "chain-guard-match": ["-DGUARD_MATCH"],
+        "chain-join": [], "chain-join-check": ["-DJOIN_BEFORE_CHECK", "-DRECHECK_FIRST"],
+        "loop-self-forward": ["-DSELF_FORWARD"],
+        "chain-loop-result": ["-DREPEAT_PRODUCER"],
+        **{k: ["-DRESULT_SPILL", "-DTRANSFER_SPILL", *v] for k, v in SPILL_TRANSFERS.items()},
+        "chain-spill-check": ["-DRESULT_SPILL"],
+        "chain-spill-byte": ["-DRESULT_SPILL", "-DWRITE_SPILL_BYTE"],
+        "chain-loop-spill": ["-DREPEAT_PRODUCER", "-DRESULT_SPILL"],
+        "chain-spill-recheck": ["-DRESULT_SPILL", "-DRECHECK_FIRST"],
+        "chain-recheck-first": ["-DRECHECK_FIRST"],
+        "chain-recheck-second": ["-DRECHECK_SECOND"],
         "chain": [], "chain-compiled": [], "chain-overwrite": ["-DREPLACE_ARGUMENT"], "chain-spill": ["-DSPILL_GP"],
     }[form]
     command([args.clang, *original_flags, "-O2", *flags, "-c", Path(__file__).with_name(fixture),
@@ -85,6 +121,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     types = ("STT_FUNC", "STT_NOTYPE") if fixture.endswith(".c") else ("STT_FUNC",)
     width = elf.elfclass // 8
     imports = ("dispatch", "transform") if chain else ("dispatch",)
+    if rechecked:
+        imports += ("finish",)
     slots = []
     for symbol in imports:
         index = next(i for i, sym in enumerate(syms) if sym.name == symbol
@@ -117,15 +155,22 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                 observed += (cpu.reg_read(mips.UC_MIPS_REG_A2),)
                 if rebind:
                     cpu.mem_write(storage[1], callbacks[binding[1]].to_bytes(width, order))
+            if (self_forward or (form == "chain-join-check" and len(observations) == 1) or
+                    (loop_guard and 0 < len(observations) <= len(producer_args))):
+                observed += (cpu.reg_read(mips.UC_MIPS_REG_A2), cpu.reg_read(mips.UC_MIPS_REG_A3))
             observations.append(observed)
         for address in set(callbacks):
             uc.hook_add(UC_HOOK_CODE, visit, begin=address, end=address)
-        saved = {16: 0x6789ab, 17: 0x321fed, 28: entry_gp}
+        saved = {16: 0x6789ab, 17: 0x321fed, 18: 0x789abc, 28: entry_gp}
+        if joined or loop_guard or self_forward:
+            saved.update({19: 0x456789, 20: 0xabcdef})
+        guarded_chain = form in ("chain-guard-zero", "chain-guard-match")
+        guard_outcomes = set()
+        changed_word_forwarded = False
         for value in values:
             if rebind:
                 # The second call must observe a GOT update made by the first.
                 uc.mem_write(storage[1], callbacks[1 - binding[1]].to_bytes(width, order))
-            result, _ = invoke(uc, entry, 64, little, [value], initial_registers={25: entry, **saved})
             argument = value
             if form == "loop":
                 argument = (value + (value & 3)) & 0xffffffffffffffff
@@ -133,22 +178,63 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                 argument = (value + 4) & 0xfffffffffffffffc
             elif form == "likely-join" and value:
                 argument = (value + 1) & 0xffffffffffffffff
-            first = (argument + 37 if binding[0] else argument ^ 37) & 0xffffffffffffffff
-            expected_calls = [(callbacks[binding[0]], argument, 37)]
+            addend = 41 if form == "chain-join-check" and not (value & 2) else 37
+            if self_forward:
+                addend = (value & 1) << 32
+            trips = (value >> 1) & 3 if loop_guard or self_forward else 0
+            producer_args = [argument]
+            if repeated:
+                producer_args.extend((argument + i) & 0xffffffffffffffff for i in range(1, trips + 1))
+            last_input = producer_args[-1]
+            dispatch_result = (last_input + addend if binding[0] else last_input ^ addend) & 0xffffffffffffffff
+            forwarded = dispatch_result
+            if form == "chain-spill-byte":
+                forwarded &= ~(0xff << (32 if little else 24))
+            elif form == "chain-spill-swapped":
+                forwarded = ((dispatch_result << 32) | (dispatch_result >> 32)) & 0xffffffffffffffff
+            arguments = [value]
+            if self_forward:
+                arguments.extend([value, trips, addend])
+                if dispatch_result == value:
+                    producer_args = [value] * (trips + 1)
+            elif loop_guard:
+                arguments.extend([forwarded ^ ((value & 1) << 32), trips])
+                if rechecked:
+                    third_argument = dispatch_result
+                    arguments.append(dispatch_result ^ (((value >> 3) & 1) << 32))
+            elif form == "chain-guard-match":
+                # The two words can agree below bit 32 and differ above it on n32 too.
+                arguments.append(dispatch_result ^ ((value & 1) << 32))
+            elif joined:
+                next_result = (dispatch_result + 11 if binding[1] else dispatch_result ^ 11) & 0xffffffffffffffff
+                third_argument = next_result if form == "chain-recheck-second" else dispatch_result
+                arguments.extend([dispatch_result ^ ((value & 1) << 32), (value >> 1) & 1,
+                                  third_argument ^ (((value >> 2) & 1) << 32)])
+            result, _ = invoke(uc, entry, 64, little, arguments, initial_registers={25: entry, **saved})
+            expected_calls = [(callbacks[binding[0]], arg, addend) + ((0, 0) if i or self_forward else ())
+                              for i, arg in enumerate(producer_args)]
             if form == "chain-spill":
                 address = got_storage + linked_gp - got
                 if width == 4:
                     address = word_value(address)
                 expected_calls[0] += (address & 0xffffffffffffffff,)
-            last = first
-            if chain:
-                argument = first
+            last = dispatch_result
+            forward = ((form != "chain-guard-zero" or dispatch_result == 0) and
+                       (not (form == "chain-guard-match" or joined or loop_guard) or forwarded == arguments[1]))
+            if chain and forward:
+                argument = forwarded
+                changed_word_forwarded |= forwarded != dispatch_result
                 if form == "chain-overwrite":
                     argument = 19
                 elif form == "chain-compiled":
                     argument = value
                 expected_calls.append((callbacks[binding[1]], argument, 11))
+                if form == "chain-join-check" or loop_guard:
+                    expected_calls[-1] += (0, 0)
                 last = argument + 11 if binding[1] else argument ^ 11
+                if rechecked and third_argument == arguments[3]:
+                    expected_calls.append((callbacks[binding[2]], third_argument, 7))
+                    last = third_argument + 7 if binding[2] else third_argument ^ 7
             expected = (last + 1) & 0xffffffffffffffff
             if not value and form in ("guarded", "likely-taken", "likely-skipped",
                                       "slot-setup", "slot-barrier"):
@@ -158,10 +244,30 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                     uc.reg_read(mips.UC_MIPS_REG_RA) != STOP or uc.reg_read(mips.UC_MIPS_REG_SP) != STACK):
                 raise AssertionError(f"{name} wrong import result, arguments or saved state for {value:#x}: "
                                      f"{result:#x}, calls {observations}, expected {expected:#x}, {expected_calls}")
+            if guarded_chain:
+                guard_outcomes.add(len(observations) == 2)
+            if joined:
+                guard_outcomes.add((arguments[2], len(observations)))
+            if self_forward:
+                guard_outcomes.add((trips, len(observations)))
+            if loop_guard:
+                guard_outcomes.add((trips, len(observations) - len(producer_args)))
             observations.clear()
-            if reads != [(storage[i], width) for i in watched if i < len(expected_calls)]:
+            repeats = len(producer_args) - 1
+            called_slots = [0] * repeats + list(range(len(expected_calls) - repeats))
+            if reads != [(storage[i], width) for i in called_slots if i in watched]:
                 raise AssertionError(f"{name} wrong GOT loads for {value:#x}: {reads}")
             reads.clear()
+        if form in ("chain-spill-byte", "chain-spill-swapped") and not changed_word_forwarded:
+            raise AssertionError(f"{name} never forwarded a changed word for {binding}")
+        if guarded_chain and guard_outcomes != {False, True}:
+            raise AssertionError(f"{name} did not exercise both branch outcomes for {binding}")
+        if self_forward and guard_outcomes != {(n, calls) for n in range(4) for calls in (1, n + 1)}:
+            raise AssertionError(f"{name} missed a self-call backedge for {binding}")
+        if loop_guard and guard_outcomes != set(product(range(4), range(len(imports)))):
+            raise AssertionError(f"{name} missed a loop count or guard outcome for {binding}")
+        if joined and guard_outcomes != set(product(range(2), range(1, len(imports) + 1))):
+            raise AssertionError(f"{name} missed a path for {binding}: {guard_outcomes}")
 
     for binding in bindings:
         uc, entry = emulator(shared, 64, little, "import_probe", original=provider, load_bias=bias)
@@ -443,7 +549,11 @@ word probe(word value) { return target(value, 37) + 1; }
         if pic and value_bits == 64:
             for form in ("direct", "saved", "guarded", "likely-taken", "likely-skipped",
                          "likely-join", "loop", "entry-loop", "slot-setup", "slot-barrier",
-                         "chain", "chain-compiled", "chain-overwrite", "chain-spill"):
+                         "chain", "chain-compiled", "chain-overwrite", "chain-spill",
+                         "chain-guard-zero", "chain-guard-match", "chain-join", "chain-join-check",
+                         "chain-recheck-first", "chain-recheck-second", "chain-loop-result",
+                         "chain-spill-check", "chain-loop-spill", "chain-spill-recheck", "chain-spill-byte",
+                         *SPILL_TRANSFERS, "loop-self-forward"):
                 check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                              original, companions, callbacks, little, values, results, linker, form)
         artifacts.discard(original, *companions)

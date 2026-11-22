@@ -58,6 +58,7 @@ struct CNameTable {
     C(Intrinsic::X86SEHRegisterRead, "__neverd_seh_register_read");
     C(Intrinsic::X86SEHRegisterWrite, "__neverd_seh_register_write");
     C(Intrinsic::GoCurrentGoroutine, "__neverd_go_getg");
+    C(Intrinsic::GoClosureContext, "__neverd_go_closure_context");
 
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_cnames.inc"
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm_cnames.inc"

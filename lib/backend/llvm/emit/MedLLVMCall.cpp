@@ -48,6 +48,7 @@
 #include "llvm/IR/InlineAsm.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-call"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 
@@ -1065,10 +1066,17 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     };
     if (RetainResultStorage &&
         (Bits(Args.back()->getType()) !=
-             kSourceCallWordBytes * kSourceCallByteBits ||
+             Hint.Signature.ReturnLocation.ValueBytes * kSourceCallByteBits ||
          llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Args.back()))) {
       Refuse(kSourceCallCarrierMissing);
       return;
+    }
+    if (RetainResultStorage && Hint.Signature.MIPSRecords) {
+      auto *Address = Args.back();
+      Types.push_back(PtrTy);
+      Values.push_back(Address->getType()->isPointerTy()
+                           ? Address
+                           : Builder.CreateIntToPtr(Address, PtrTy));
     }
     for (unsigned I = 0; I < Bindings.size(); ++I) {
       auto *Type = mapNdtype(Bindings[I].Type);
@@ -1111,54 +1119,68 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
       return Value;
     };
-    size_t At = 0;
-    for (const auto &Parameter : Hint.Signature.Parameters) {
-      if (Parameter.Components.empty()) {
-        Types.push_back(Carriers[At]->getType());
-        Values.push_back(Carriers[At++]);
-        continue;
-      }
-      const auto Members = Hint.Signature.MIPSRecords
-                               ? sourceValueMembers(Parameter.Type)
-                               : sourceABIValueMembers(Parameter.Type);
-      const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
-                                                Members.size());
-      At += Members.size();
-      if (Hint.Signature.MIPSRecords) {
-        for (unsigned I = 0; I < Parts.size(); ++I) {
-          const auto &Binding = Bindings[At - Parts.size() + I];
-          auto *Type = llvmMIPSRecordPieceType(*Ctx, Binding, Hint.Signature);
-          auto *Part = Parts[I];
-          Types.push_back(Type);
-          Values.push_back(Type == Part->getType() ? Part : IntegerBits(Part));
+    if (Hint.Signature.MIPSRecords) {
+      const auto Arguments =
+          llvmMIPSRecordArguments(*Ctx, Hint.Signature, Bindings);
+      for (const auto &A : Arguments) {
+        if (!A.PieceCount) {
+          Types.push_back(A.Type);
+          Values.push_back(llvm::UndefValue::get(A.Type));
+          continue;
         }
-        continue;
+        auto *Value = Carriers[A.FirstPiece];
+        if (A.PieceCount == 2) {
+          const auto First = A.FirstPiece;
+          SourceAggregateMember Members[] = {
+              {Bindings[First].Type, Bindings[First].ByteOffset},
+              {Bindings[First + 1].Type, Bindings[First + 1].ByteOffset}};
+          Value = Pack(llvm::ArrayRef(Carriers).slice(First, 2), Members, 8);
+        }
+        if (Value->getType() != A.Type)
+          Value = A.Type->isIntegerTy() ? IntegerBits(Value)
+                                        : Builder.CreateBitCast(Value, A.Type);
+        Types.push_back(A.Type);
+        Values.push_back(Value);
       }
-      auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
-      if (Parameter.Type->Kind == NdTypeKind::Int) {
-        Types.push_back(Packed->getType());
-        Values.push_back(Packed);
-        continue;
+    } else {
+      size_t At = 0;
+      for (const auto &Parameter : Hint.Signature.Parameters) {
+        if (Parameter.Components.empty()) {
+          Types.push_back(Carriers[At]->getType());
+          Values.push_back(Carriers[At++]);
+          continue;
+        }
+        const auto Members = sourceABIValueMembers(Parameter.Type);
+        const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
+                                                  Members.size());
+        At += Members.size();
+        auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
+        if (Parameter.Type->Kind == NdTypeKind::Int) {
+          Types.push_back(Packed->getType());
+          Values.push_back(Packed);
+          continue;
+        }
+        const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
+                              isSourceAArch64VectorType(Members.front().Type);
+        auto *Array = llvm::cast<llvm::ArrayType>(
+            llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
+        const unsigned Count = Array->getNumElements();
+        llvm::Value *Value = llvm::PoisonValue::get(Array);
+        for (unsigned I = 0; I < Count; ++I) {
+          auto *Part =
+              Floating
+                  ? Parts[I]
+                  : Builder.CreateZExtOrTrunc(
+                        Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
+                                                       kSourceCallByteBits),
+                        I64Ty);
+          if (Part->getType() != Array->getElementType())
+            Part = Builder.CreateBitCast(Part, Array->getElementType());
+          Value = Builder.CreateInsertValue(Value, Part, {I});
+        }
+        Types.push_back(Array);
+        Values.push_back(Value);
       }
-      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
-                            isSourceAArch64VectorType(Members.front().Type);
-      auto *Array = llvm::cast<llvm::ArrayType>(
-          llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
-      const unsigned Count = Array->getNumElements();
-      llvm::Value *Value = llvm::PoisonValue::get(Array);
-      for (unsigned I = 0; I < Count; ++I) {
-        auto *Part =
-            Floating ? Parts[I]
-                     : Builder.CreateZExtOrTrunc(
-                           Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
-                                                          kSourceCallByteBits),
-                           I64Ty);
-        if (Part->getType() != Array->getElementType())
-          Part = Builder.CreateBitCast(Part, Array->getElementType());
-        Value = Builder.CreateInsertValue(Value, Part, {I});
-      }
-      Types.push_back(Array);
-      Values.push_back(Value);
     }
     const unsigned Fixed =
         Hint.AnalystFixedCount < 0 ? Types.size() : Hint.AnalystFixedCount;
@@ -1354,7 +1376,22 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       setVar(Op.Output, MachineResult, Builder);
     } else if (Op.Output.Size && !Call->getType()->isVoidTy()) {
       llvm::Value *Value = Call;
-      if (!ReturnMembers.empty()) {
+      if (Hint.Signature.MIPSRecords &&
+          mips::isByteRecord(Hint.Signature.ReturnType)) {
+        std::vector<llvm::Value *> Bytes;
+        for (const auto &[I, P] :
+             llvm::enumerate(Hint.Signature.ReturnComponents)) {
+          auto *Word = Builder.CreateExtractValue(Call, {unsigned(I)});
+          for (unsigned J = 0; J < P.ValueBytes; ++J) {
+            const unsigned Lane =
+                archLittleEndian(TargetArch) ? J : P.ValueBytes - J - 1;
+            auto *Byte = Lane ? Builder.CreateLShr(Word, 8 * Lane) : Word;
+            Bytes.push_back(
+                Builder.CreateZExtOrTrunc(Byte, Builder.getInt8Ty()));
+          }
+        }
+        Value = Pack(Bytes, ReturnMembers, Hint.Signature.ReturnType->Size);
+      } else if (!ReturnMembers.empty()) {
         std::vector<llvm::Value *> Parts;
         std::vector<SourceAggregateMember> Members;
         const bool Floating =

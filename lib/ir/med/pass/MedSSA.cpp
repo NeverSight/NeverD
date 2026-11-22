@@ -620,6 +620,21 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     std::map<int, uint64_t> SEHFrameOffsets;
     std::set<int> CxxContinuationRoots;
     std::set<int> LocalUnwindRoots;
+    // Go's runtime resumes a frame that deferred at its `deferreturn` call on
+    // the frame's own stack pointer (runtime.recovery), the one its pcsp table
+    // reaches (GoFunctionEH::FrameSize), where no branch or exceptional edge
+    // gives the block a frame: open-coded defers register no call site.
+    if (Low.ExceptionMetadata && Low.ExceptionMetadata->Go &&
+        Low.ExceptionMetadata->Go->DeferReturnOffset &&
+        Low.ExceptionMetadata->Go->FrameSize &&
+        *Low.ExceptionMetadata->Go->FrameSize > 0) {
+      const va_t Resume = Low.ExceptionMetadata->CodeRange.Begin +
+                          *Low.ExceptionMetadata->Go->DeferReturnOffset;
+      for (int B = 1; B < N; ++B)
+        if (IsRoot[B] && Func.Blocks[B].StartAddr == Resume)
+          SEHFrameOffsets[B] =
+              static_cast<uint64_t>(*Low.ExceptionMetadata->Go->FrameSize);
+    }
     if (TargetArch == Arch::X64 && Low.ExceptionMetadata &&
         Low.ExceptionMetadata->Cxx && !Low.CxxContinuationEntries.empty()) {
       for (int B = 1; B < N; ++B) {

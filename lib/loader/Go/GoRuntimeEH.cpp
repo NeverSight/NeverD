@@ -340,12 +340,16 @@ void parseGoExceptions(BinaryImage &Img) {
       }
       if (G.Name == "runtime.duffzero" || G.Name == "runtime.duffcopy")
         Module.DuffDevices.push_back(G.CodeRange);
+      if (G.Name == "runtime.spillArgs" || G.Name == "runtime.unspillArgs")
+        Module.RegisterArgumentTransfers.push_back(G.CodeRange);
     }
   llvm::sort(Module.MorestackEntries);
   llvm::sort(Module.ThrowingMorestackEntries);
-  llvm::sort(Module.DuffDevices,
-             [](const ExceptionAddressRange &A,
-                const ExceptionAddressRange &B) { return A.Begin < B.Begin; });
+  for (auto *Ranges : {&Module.DuffDevices, &Module.RegisterArgumentTransfers})
+    llvm::sort(*Ranges, [](const ExceptionAddressRange &A,
+                           const ExceptionAddressRange &B) {
+      return A.Begin < B.Begin;
+    });
   // Before Go's internal ABI every function takes its arguments and returns
   // its results on the stack.  arm64 gained the ABI with the Go 1.18 pclntab;
   // amd64 a release earlier, under the 1.16 one, so there the prologues

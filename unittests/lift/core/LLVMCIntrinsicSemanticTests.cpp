@@ -164,7 +164,8 @@ void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
                      llvm::StringRef Optimization = "-O1",
                      bool CheckUndefined = false,
                      llvm::StringRef ExtraInput = {},
-                     llvm::ArrayRef<llvm::StringRef> ExtraFlags = {}) {
+                     llvm::ArrayRef<llvm::StringRef> ExtraFlags = {},
+                     bool LinkMath = false) {
   auto Compiler = llvm::sys::findProgramByName("clang");
   ASSERT_TRUE(static_cast<bool>(Compiler)) << "clang is required";
   if (!LLVMOnly) {
@@ -204,11 +205,8 @@ void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
   Args.append(ExtraFlags.begin(), ExtraFlags.end());
   if (LLVMOnly)
     Args.append({"-target", "x86_64-pc-windows-msvc", "-S", "-emit-llvm"});
-  // Clang lowers the i128 conversion controls to its compiler runtime. The
-  // MSVC CRT alone does not supply these builtins; retain execution coverage.
-  if (!LLVMOnly &&
-      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows())
-    Args.push_back("--rtlib=compiler-rt");
+  else
+    neverd::test::appendHostCLinkFlags(Args, LinkMath);
   if (CheckUndefined)
     Args.append({"-fsanitize=undefined", "-fsanitize-trap=undefined"});
   const std::optional<llvm::StringRef> Redirects[] = {
@@ -248,13 +246,16 @@ TEST(LLVMCIntrinsicSemantics, FloatingMinMaxKeepNaNsAndSignedZeros) {
   const llvm::Intrinsic::ID Operations[] = {
       llvm::Intrinsic::minnum, llvm::Intrinsic::maxnum,
       llvm::Intrinsic::minimum, llvm::Intrinsic::maximum};
-  for (bool Single : {false, true})
+  const std::pair<const char *, llvm::Type *> Formats[] = {
+      {"half", B.getHalfTy()},
+      {"single", B.getFloatTy()},
+      {"wide", B.getDoubleTy()}};
+  for (const auto &[Prefix, Type] : Formats)
     for (unsigned I = 0; I < std::size(Operations); ++I) {
-      auto *Type = Single ? B.getFloatTy() : B.getDoubleTy();
       auto *Fn = llvm::Function::Create(
           llvm::FunctionType::get(Type, {Type, Type}, false),
           llvm::GlobalValue::ExternalLinkage,
-          std::string(Single ? "single" : "wide") + std::to_string(I), Module);
+          std::string(Prefix) + std::to_string(I), Module);
       B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
       B.CreateRet(B.CreateIntrinsic(Operations[I], {Type},
                                     {Fn->getArg(0), Fn->getArg(1)}));
@@ -269,8 +270,8 @@ TEST(LLVMCIntrinsicSemantics, FloatingMinMaxKeepNaNsAndSignedZeros) {
                        "double f(double a, double b) {\n"
                        "  return __builtin_elementwise_minimum(a, b) +\n"
                        "      __builtin_elementwise_maximum(a, b) +\n"
-                       "      __builtin_elementwise_minnum(a, b) +\n"
-                       "      __builtin_elementwise_maxnum(a, b);\n}\n",
+                       "      __builtin_elementwise_minimumnum(a, b) +\n"
+                       "      __builtin_elementwise_maximumnum(a, b);\n}\n",
                        {}))
     GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
   Source += R"c(
@@ -291,14 +292,17 @@ static int correct(double a, double b, double got, int kind) {
 int main(void) {
   double (*wide[])(double, double) = {wide0, wide1, wide2, wide3};
   float (*single[])(float, float) = {single0, single1, single2, single3};
+  _Float16 (*half[])(_Float16, _Float16) = {half0, half1, half2, half3};
   const double values[] = {0.0, -0.0, 1.0, -1.0, INFINITY, -INFINITY,
-                           NAN, 0x1p-126, 0x1p-149, -0x1p-149};
+                           NAN, 0x1p-14, 0x1p-24, -0x1p-24,
+                           0x1p-126, 0x1p-149, -0x1p-149};
   for (unsigned i = 0; i < sizeof(values)/sizeof(values[0]); ++i)
     for (unsigned j = 0; j < sizeof(values)/sizeof(values[0]); ++j)
       for (int k = 0; k < 4; ++k) {
         const double a = values[i], b = values[j];
         if (!correct(a, b, wide[k](a, b), k)) return 1;
         if (!correct((float)a, (float)b, single[k](a, b), k)) return 2;
+        if (!correct((_Float16)a, (_Float16)b, half[k](a, b), k)) return 3;
       }
   return 0;
 }
@@ -354,12 +358,9 @@ int main(void) {
   return 0;
 }
 )";
-  const bool Windows =
-      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
-    compileAndCheck(Source, false, {}, Optimization, false, {},
-                    Windows ? llvm::ArrayRef<llvm::StringRef>{}
-                            : llvm::ArrayRef<llvm::StringRef>{"-lm"});
+    compileAndCheck(Source, false, {}, Optimization, false, {}, {},
+                    /*LinkMath=*/true);
 }
 
 TEST(LLVMCIntrinsicSemantics,
@@ -1851,10 +1852,8 @@ int main(void) {
 }
 
 TEST(LLVMCIntrinsicSemantics, FloatingPointIntrinsicsAreCompilerBuiltins) {
-  // Each floating-point intrinsic prints as the elementwise builtin that is
-  // the same intrinsic for its operands' width: no C library header, no errno
-  // from a square root, and the fused multiply-add, the four minimum and
-  // maximum rules and the rounding modes each keep their own.
+  // Check the emitted operations at each width, including round-to-even on
+  // hosts whose C runtime has no entry point for the compiler builtin.
   llvm::LLVMContext Context;
   llvm::SMDiagnostic Error;
   auto Module = llvm::parseAssemblyString(R"ir(
@@ -1865,6 +1864,8 @@ declare double @llvm.maximum.f64(double, double)
 declare double @llvm.minnum.f64(double, double)
 declare double @llvm.maxnum.f64(double, double)
 declare double @llvm.copysign.f64(double, double)
+declare half @llvm.roundeven.f16(half)
+declare float @llvm.roundeven.f32(float)
 declare double @llvm.roundeven.f64(double)
 declare double @llvm.trunc.f64(double)
 declare double @llvm.fabs.f64(double)
@@ -1906,6 +1907,14 @@ define double @signed_as(double %a, double %b) {
   %r = call double @llvm.copysign.f64(double %a, double %b)
   ret double %r
 }
+define half @to_even_half(half %a) {
+  %r = call half @llvm.roundeven.f16(half %a)
+  ret half %r
+}
+define float @to_even_single(float %a) {
+  %r = call float @llvm.roundeven.f32(float %a)
+  ret float %r
+}
 define double @to_even(double %a) {
   %r = call double @llvm.roundeven.f64(double %a)
   ret double %r
@@ -1935,17 +1944,22 @@ define double @between(double %a) {
   ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
   for (llvm::StringRef Spelling :
        {"__builtin_elementwise_fma(", "__builtin_elementwise_minimum(",
-        "__builtin_elementwise_maximum(", "__builtin_elementwise_minnum(",
-        "__builtin_elementwise_maxnum(", "__builtin_elementwise_copysign(",
+        "__builtin_elementwise_maximum(", "__builtin_elementwise_minimumnum(",
+        "__builtin_elementwise_maximumnum(", "__builtin_elementwise_copysign(",
         "__builtin_elementwise_roundeven(", "__builtin_elementwise_trunc(",
         "__builtin_elementwise_abs(", "__builtin_elementwise_sqrt(",
         "__builtin_elementwise_floor(", "__builtin_elementwise_ceil("})
     EXPECT_NE(Text.find(Spelling.str()), std::string::npos)
         << Spelling.str() << "\n"
         << Text;
-  EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+  for (auto Width : {"16", "32", "64"})
+    EXPECT_NE(Text.find(std::string("neverd_llvm_roundeven_f") + Width + "("),
+              std::string::npos)
+        << Text;
+  EXPECT_EQ(Text.find("llvm_x2E_"), std::string::npos) << Text;
   EXPECT_EQ(Text.find("math.h"), std::string::npos) << Text;
   const std::string Source = Text + R"(
+#include <fenv.h>
 static uint64_t bits(double value) {
   uint64_t out;
   __builtin_memcpy(&out, &value, 8);
@@ -1980,7 +1994,35 @@ int main(void) {
   /* A half constant is a half: 1.5 * 2 + 1.5, then the greater of it and 2. */
   volatile _Float16 small = 1.5f16, two = 2.0f16;
   if (fused_half(small, two) != 4.5f16) return 15;
-  return 0;
+  const struct { double x, expected; } rounds[] = {
+    {-4.5, -4}, {-3.5, -4}, {-2.5, -2}, {-1.5, -2}, {-0.5, -0.0},
+    {-0.25, -0.0}, {-0.0, -0.0}, {0.0, 0.0}, {0.25, 0.0}, {0.5, 0.0},
+    {1.5, 2}, {2.5, 2}, {3.5, 4}, {4.5, 4},
+    {-__builtin_inf(), -__builtin_inf()}, {__builtin_inf(), __builtin_inf()}
+  };
+  const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+  const int saved = fegetround();
+  for (unsigned m = 0; m < sizeof(modes) / sizeof(*modes); ++m) {
+    if (fesetround(modes[m])) return 16;
+    for (unsigned i = 0; i < sizeof(rounds) / sizeof(*rounds); ++i) {
+      volatile double x = rounds[i].x;
+      uint64_t want = bits(rounds[i].expected);
+      if (bits(to_even(x)) != want || bits(to_even_single((float)x)) != want ||
+          bits(to_even_half((_Float16)x)) != want) return 17;
+    }
+    volatile double dtiny = -0x1p-1074, dmax = 0x1.fffffffffffffp1023;
+    volatile float stiny = -0x1p-149f, smax = 0x1.fffffep127f;
+    volatile _Float16 htiny = -0x1p-24f16, hmax = 65504.0f16;
+    if (bits(to_even(dtiny)) != bits(-0.0) || to_even(dmax) != dmax ||
+        bits(to_even_single(stiny)) != bits(-0.0) ||
+        to_even_single(smax) != smax ||
+        bits(to_even_half(htiny)) != bits(-0.0) ||
+        to_even_half(hmax) != hmax) return 18;
+    if (!__builtin_isnan(to_even(nan)) ||
+        !__builtin_isnan(to_even_single((float)nan)) ||
+        !__builtin_isnan(to_even_half((_Float16)nan))) return 19;
+  }
+  return fesetround(saved) != 0;
 }
 )";
   // An older compiler lacks some of these builtins, and one without the
@@ -1997,12 +2039,9 @@ int main(void) {
           "_Float16 h(_Float16 a) { return __builtin_elementwise_sqrt(a); }\n",
           {}))
     GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
-  const bool Windows =
-      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
-    compileAndCheck(Source, false, {}, Optimization, false, {},
-                    Windows ? llvm::ArrayRef<llvm::StringRef>{}
-                            : llvm::ArrayRef<llvm::StringRef>{"-lm"});
+    compileAndCheck(Source, false, {}, Optimization, false, {}, {},
+                    /*LinkMath=*/true);
 }
 
 TEST(LLVMCIntrinsicSemantics, AnUnknownOperandOfATypeGenericBuiltinHasItsType) {
@@ -2048,11 +2087,8 @@ define float @least_of_one(float %a) {
           "float f(float a) { return __builtin_elementwise_minimum(a, a); }\n",
           {}))
     GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
-  const bool Windows =
-      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
   compileAndCheck(Text + "\nint main(void) { return 0; }\n", false, {}, "-O1",
-                  false, {}, Windows ? llvm::ArrayRef<llvm::StringRef>{}
-                                     : llvm::ArrayRef<llvm::StringRef>{"-lm"});
+                  false, {}, {}, /*LinkMath=*/true);
 }
 
 TEST(LLVMCIntrinsicSemantics,

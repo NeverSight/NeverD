@@ -63,6 +63,10 @@ argument in send/receive. Scalar `read` and `write` share stream cursors;
 `dup`/`dup3` aliases and closing/reusing descriptor numbers retain the same
 open-description lifetime. Bionic alone converts raw negative errors to errno.
 
+An entry with just `peer_hex` supplies a successful TCP `connect`. A nonempty
+send or receive requires that entry's own transfer observations, even when
+the guest reuses the same peer and descriptor number.
+
 Every outgoing byte is compared before the cursor advances. Per-call ceilings
 of 1–65536 bytes model short transfers. The receive stream ends only when
 `receive_eof` explicitly says so; exhausted input without EOF remains unknown.

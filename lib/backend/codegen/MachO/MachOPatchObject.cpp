@@ -55,7 +55,7 @@ namespace arm64e = macho_loader::arm64e;
 #include "MachOPatchObject.def"
 llvm::Error fail(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::not_supported,
-                                 "Mach-O patch object: " + Message);
+                                 kObjectErrorPrefix + Message);
 }
 std::string canonical(llvm::StringRef Name) {
   return (Name.starts_with("_") ? Name.drop_front() : Name).str();
@@ -2061,7 +2061,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
         if (!Page && TLV->second.Direct) {
           if ((Old & aarch64::kRdMask) == aarch64::kRdMask)
             return fail(kTLVInstruction);
-          Old = kTLVDescriptorAddress | (Old & RegisterFields);
+          Old = kAddImmediate64 | (Old & RegisterFields);
         }
       }
       if (R.Type == ARM64_RELOC_PAGE21 ||
@@ -2528,9 +2528,8 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
 }
 
 namespace {
-// Preserve instruction offsets so branches, CFI rows and exception ranges keep
-// their meaning. A distant source address uses a single integer literal load
-// from an ordinary dyld rebase. Both forms affect only the original Rd.
+// Keep each site at its verified instruction offset. One-word sites may use a
+// dyld pointer cell. Page pairs carry both original register operands.
 struct LiftedAddressPlacement {
   const Symbol *Owner;
   uint64_t Offset;
@@ -2541,13 +2540,11 @@ struct LiftedAddressPlacement {
 
 struct LiftedAddressPlan {
   std::vector<LiftedAddressPlacement> Sites;
+  std::vector<va_t> PoolInstructions;
   size_t TextSection = 0;
   va_t TextVA = 0;
   std::optional<size_t> PoolSection;
 };
-
-static constexpr unsigned AddressBits =
-    branch::A64PageImmLo.Width + branch::A64PageImmHi.Width;
 
 llvm::Expected<LiftedAddressPlan>
 prepareLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
@@ -2583,26 +2580,51 @@ prepareLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
     const auto &Entry = Mappings.front();
     const auto &Sym = Object.Symbols.at(Object.Names.at(Entry.Symbol));
     const uint64_t Offset = Fixup.Instruction - Entry.OriginalVA;
-    const auto *Before = Original.readVA(Fixup.Instruction, kInsnSize);
+    const bool Pair = Fixup.Form == MachOAddressForm::PagePair;
+    const bool Expanded = Fixup.Form == MachOAddressForm::Expanded;
+    const auto *Before =
+        Original.readVA(Fixup.Instruction, Pair ? 2 * kInsnSize : kInsnSize);
     if (!Before || Object.Sections.at(Sym.Section) != Plan.TextSection ||
-        !rangeInBounds(Offset, kInsnSize, Text->Size - Sym.Offset) ||
+        !rangeInBounds(Offset, Pair || Expanded ? 2 * kInsnSize : kInsnSize,
+                       Text->Size - Sym.Offset) ||
         Fixup.Target > InvalidVA - Slide)
       return fail(kAddressSourceWord);
     const uint32_t Word = readLE<uint32_t>(Before);
     const uint64_t At = Sym.Offset + Offset;
-    if ((Word & kADRP_Mask) != kADR_Op &&
-        machORebasedLiteralAddress(Original, Word, Fixup.Instruction) !=
-            Fixup.Target)
+    if (Pair ? (Word & kADRP_Mask) != kADRP_Op
+             : (Word & kADRP_Mask) != kADR_Op &&
+                   machORebasedLiteralAddress(
+                       Original, Word, Fixup.Instruction) != Fixup.Target)
       return fail(kAddressSourceWord);
     const va_t PC = Plan.TextVA + At;
     const va_t Target = Fixup.Target + Slide;
     const uint32_t Rd = Word & kRdMask;
+    if (Pair || Expanded) {
+      const auto Page =
+          encodePCRelativeAddress(AddressInstruction::ADRP, Rd, PC, Target);
+      if (!Page)
+        return fail(kAddressPageReach);
+      const uint32_t OriginalAdd =
+          Pair ? readLE<uint32_t>(Before + kInsnSize) : Word;
+      const auto Imm = branch::A64AddImm12;
+      // An existing pair may use different page and result registers. A
+      // widened single instruction must write only its original destination.
+      const uint32_t Add =
+          Pair ? OriginalAdd & ~Imm.mask()
+               : kAddImmediate64 | (Rd << kAddressBaseRegisterShift) | Rd;
+      Plan.Sites.push_back({&Sym, At, Expanded ? kNop : Word, *Page, {}});
+      Plan.Sites.push_back({&Sym,
+                            At + kInsnSize,
+                            OriginalAdd,
+                            Add | uint32_t((Target & ~kPageMask) << Imm.Low),
+                            {}});
+      continue;
+    }
     auto &Site = Plan.Sites.emplace_back(
         LiftedAddressPlacement{&Sym, At, Word, Rd, std::nullopt});
-    if (const auto Delta = addressDisplacement<AddressBits>(PC, Target)) {
-      const uint32_t Bits = *Delta;
-      Site.Word = kADR_Op | Rd | ((Bits & kImmLoMask) << kImmLoShift) |
-                  (((Bits >> kImmLoWidth) & kImmHiMask) << kImmHiShift);
+    if (auto ADR =
+            encodePCRelativeAddress(AddressInstruction::ADR, Rd, PC, Target)) {
+      Site.Word = *ADR;
       continue;
     }
     if (isPointerLiteralLoad(Word)) {
@@ -2625,6 +2647,7 @@ prepareLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
       Pool.Size += arm64e::kPointerBytes;
     }
     Site.PoolOffset = It->second;
+    Plan.PoolInstructions.push_back(Fixup.Instruction);
   }
   if (Pool.Size) {
     Pool.ExternalBytes.resize(Pool.Size);
@@ -2656,7 +2679,8 @@ llvm::Error relocateLiftedAddresses(NativeMachO &Object,
       const auto Load =
           encodePointerLiteralLoad(Word, Text.VA + Site.Offset, Slot);
       if (!Load)
-        return fail(kAddressReach);
+        return llvm::make_error<MachOLiteralPoolOutOfRange>(
+            Plan.PoolInstructions);
       Word = *Load;
     }
     writeLE<uint32_t>(After, Word);
@@ -2664,6 +2688,14 @@ llvm::Error relocateLiftedAddresses(NativeMachO &Object,
   return llvm::Error::success();
 }
 } // namespace
+
+char MachOLiteralPoolOutOfRange::ID;
+void MachOLiteralPoolOutOfRange::log(llvm::raw_ostream &OS) const {
+  OS << kObjectErrorPrefix << kAddressReach;
+}
+std::error_code MachOLiteralPoolOutOfRange::convertToErrorCode() const {
+  return llvm::errc::not_supported;
+}
 
 static llvm::Expected<PatchResult> installObject(
     llvm::StringRef Bytes, const BinaryImage &OriginalInput,
@@ -2787,6 +2819,14 @@ static llvm::Expected<PatchResult> installObject(
     return std::move(E);
   if (auto E = relocate(*Object, *LayoutImage, Bindings))
     return std::move(E);
+  // A repeated code-only installation can extend the old RX segment. Adding
+  // another in-image pool would also require a new RELRO segment. Return the
+  // affected sites to the layout planner before publishing either mapping.
+  if (AddressPlan->PoolSection &&
+      Object->Image.Sections[*AddressPlan->PoolSection].IsInImage &&
+      Original.findSegmentByName(kDefaultNdTextSegment))
+    return llvm::make_error<MachOLiteralPoolOutOfRange>(
+        AddressPlan->PoolInstructions);
   if (auto E = relocateLiftedAddresses(*Object, *AddressPlan))
     return E;
   if (!Object->Thunks.empty()) {

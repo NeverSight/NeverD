@@ -303,8 +303,10 @@ private:
   using RegWriteMap = std::map<std::pair<uint64_t, uint16_t>, RegWriteInfo>;
 
   void analyzeStack(const LowFunc &Low);
-  const SourceFunctionTypeHint *
-  bindSourceCalls(MedFunc &Func, const LowFunc &Low, BinaryFormat Fmt);
+  const SourceFunctionTypeHint *bindSourceCalls(MedFunc &Func,
+                                                const LowFunc &Low,
+                                                BinaryFormat Fmt,
+                                                bool &BoundMIPSRecordCall);
   MedVar ndVarToMedVar(const NdVar &VN);
   void fixupSubRegisters(MedFunc &Func);
   /// Keep the architectural data registers of checked ordinary SEH callbacks

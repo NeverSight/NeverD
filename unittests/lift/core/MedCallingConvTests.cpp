@@ -10,6 +10,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -941,6 +942,63 @@ TEST(MedCallingConvStackParams, SharedStackPointerPhisAreTracedOnce) {
       Read |= Op.Inputs[I].Kind == MedVar::Param &&
               Op.Inputs[I].Id == int(Layout.Registers.size());
   EXPECT_TRUE(Read);
+}
+
+TEST(MedCallingConvStackParams, EscapedMIPSRecordKeepsItsPartialStackWord) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto &TRI = getTargetRegInfo(A);
+    const auto Layout = TRI.integerArgumentLayout(BinaryFormat::ELF);
+    const auto Width = TRI.addressRegisterBytes();
+    auto Word = NdType::makeInt(Layout.SlotBytes, false);
+    auto Payload = NdType::makeStruct(
+        {NdType::makeArray(NdType::makeInt(1, false), 17, 17)});
+    Payload->Passing = NdRecordPassing::ByValue;
+    SourceFunctionTypeHint Hint;
+    Hint.ReturnType = NdType::makeVoid();
+    Hint.Parameters.resize(Layout.Registers.size(), {"prefix", Word});
+    Hint.Parameters.push_back({"payload", Payload});
+    Hint.Parameters.push_back({"tail", Word});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Hint, A, BinaryFormat::ELF));
+    const auto &Pieces = Hint.Parameters[Layout.Registers.size()].Components;
+    ASSERT_EQ(Pieces.size(), (17u + Layout.SlotBytes - 1) / Layout.SlotBytes);
+    ASSERT_EQ(Pieces.back().ValueBytes, 1u);
+    for (bool Escape : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << Escape);
+      MedFunc F;
+      auto &B = F.Blocks.emplace_back();
+      const auto SP = reg(1, 0, Width, TRI.StackPointer, A);
+      addLiveIn(B, SP);
+      const auto Address = [&](int Id, int64_t Offset) {
+        auto Address = temp(Id, 0, Width, A);
+        B.Ops.push_back(binary(NdOp::INT_ADD, Address, SP,
+                               MedVar::makeConst(Offset, Width)));
+        return Address;
+      };
+      if (Escape) {
+        const auto First = Address(2, Pieces.front().EntryStackOffset);
+        B.Ops.push_back(binary(NdOp::STORE, {},
+                               reg(3, 0, Width, Layout.Registers.front(), A),
+                               First));
+      }
+      const auto Last = Address(4, Pieces.back().EntryStackOffset);
+      B.Ops.push_back(unary(NdOp::LOAD, temp(5, 0, 1, A), Last));
+      const auto Tail =
+          Address(6, Hint.Parameters.back().Location.EntryStackOffset);
+      B.Ops.push_back(unary(NdOp::LOAD, temp(7, 0, Layout.SlotBytes, A), Tail));
+      med_calling_conv_detail::detectStackParams(F, A, BinaryFormat::ELF, 0,
+                                                 nullptr, &Hint);
+      std::vector<std::pair<int, int64_t>> Expected;
+      if (Escape)
+        for (const auto &Piece : Pieces)
+          Expected.emplace_back(Layout.Registers.size() + Expected.size(),
+                                Piece.EntryStackOffset);
+      EXPECT_EQ(F.MutableStackParamHomes, Expected);
+      const auto &LastRead = B.Ops[B.Ops.size() - 3];
+      EXPECT_EQ(LastRead.Opcode == NdOp::LOAD, Escape);
+      EXPECT_EQ(B.Ops.back().Opcode, NdOp::COPY);
+    }
+  }
 }
 
 TEST(MedCallingConvStackParams, MutableHomesFollowEveryRegisterParameter) {
@@ -11067,6 +11125,18 @@ TEST(CallRegisterEffects, ASyscallReadsOnlyItsOwnArguments) {
   for (uint64_t Register : {x86reg::RDI, x86reg::RSI, x86reg::RDX, x86reg::R10,
                             x86reg::R8, x86reg::R9})
     EXPECT_EQ(Unlisted[Register / 8], 8u) << Register;
+  // munmap (11) reads RSI but not RDX, and rt_sigaction (13) R10 but not R8:
+  // a pair's half the call ignores is no read either.
+  const GPRReadWidths Munmap = Reads(11);
+  for (uint64_t Register : {x86reg::RDI, x86reg::RSI})
+    EXPECT_EQ(Munmap[Register / 8], 8u) << Register;
+  for (uint64_t Register : {x86reg::RDX, x86reg::R10, x86reg::R8, x86reg::R9})
+    EXPECT_EQ(Munmap[Register / 8], 0u) << Register;
+  const GPRReadWidths Sigaction = Reads(13);
+  for (uint64_t Register : {x86reg::RDI, x86reg::RSI, x86reg::RDX, x86reg::R10})
+    EXPECT_EQ(Sigaction[Register / 8], 8u) << Register;
+  for (uint64_t Register : {x86reg::R8, x86reg::R9})
+    EXPECT_EQ(Sigaction[Register / 8], 0u) << Register;
 }
 
 TEST(MedCallingConv, ASyscallTakesOnlyItsOwnArgumentsAsParameters) {
@@ -11120,6 +11190,12 @@ TEST(MedCallingConv, ASyscallTakesOnlyItsOwnArgumentsAsParameters) {
     EXPECT_TRUE(Syscall->Inputs[I].isConst() &&
                 Syscall->Inputs[I].ConstVal == 0)
         << I;
+  // munmap (11) takes RDI and RSI, not RDX, which its pair also carries: the
+  // routine took a third parameter.
+  const MedFunc Munmap = Lift(11, SystemV);
+  ASSERT_EQ(Munmap.Params.size(), 2u);
+  EXPECT_EQ(Munmap.Params[0].RegOff, x86reg::RDI);
+  EXPECT_EQ(Munmap.Params[1].RegOff, x86reg::RSI);
   for (const auto &[Number, OSABI] :
        {std::pair<uint64_t, uint8_t>{0x7FFF, SystemV}, {60, FreeBSD}}) {
     SCOPED_TRACE(Number);

@@ -1545,6 +1545,158 @@ def staggered_window_corpus(width, count):
     return rows
 
 
+def signed_window_corpus(width, count):
+    """Signed and logical slices with scaled or masked neighboring lanes."""
+    rows = []
+    axes = ("(x^y)", "((u|w)^(z+x))")
+    full = (1 << width) - 1
+    for case in range(count):
+        rng = random.Random(0x51a6ed + 4049 * width + 12911 * case)
+        degree = (361, 397, 449, 503)[case % 4]
+        observed = min(width - 6, max(10, width // 5 + case % 3))
+        stride = (observed + 2) // 3
+        factors = []
+        for i in range(degree):
+            axis = (case + i) % 2
+            position = (0, width - 2)[axis]
+            zeros = stride + i % 2
+            bits = observed - zeros
+            size = bits + (i % 3 == 0)
+            start = rng.randrange(width - size - 6)
+            cut = rng.randrange(start + size, min(width, start + size + 12))
+            end = rng.randrange(start + size, min(width, start + size + 12))
+            signed = (i + case) % 4 != 1
+            variant = (i // 2 + case) % 3
+            odd = rng.randrange(3, 16, 2)
+            mask = ((rng.getrandbits(width) | 1) << cut) & full
+            if case % 4 == 3 and i == degree // 2:
+                if case % 8 == 3:
+                    signed, end = True, start + bits - 1
+                else:
+                    cut = start + bits - 1
+                    mask = ((rng.getrandbits(width) | 1) << cut) & full
+            scale = ((odd if variant == 0 else 1) << cut) & full
+            shift = width - end
+            turn = (position - start - shift) % width
+            selected = f"ror({axes[axis]},{turn})"
+            other = f"(({rng.randrange(1, 64000, 2)}+u*y)^(w+z*x))"
+            noise = selected if (case + i) % 7 == 0 else other
+            high = f"({noise}&{mask})" if variant == 1 else f"({scale}*{noise})"
+            low = f"ashr({selected},{shift})" if signed else f"({selected}>>{shift})"
+            op = ("^", "|", "+")[(i // 3 + case) % 3]
+            joined = f"({high}{op}{low})"
+            at = start
+            if i % 3 != 2:
+                at = rng.randrange(width - size + 1)
+                joined = f"ror({joined},{(start - at) % width})"
+            field = f"extract({joined},{at},{size})"
+            word = (f"concat(extract({other},{size},{width-size}),{field})" if i % 2 else
+                    f"sext({field},{width})")
+            offset = rng.randrange(-19, 20) | 1
+            weight = (rng.randrange(-11, 12) | 1) << zeros
+            inner_offset = rng.randrange(-13, 14) | 1
+            inner_weight = rng.randrange(-7, 8) | 1
+            factors.append(f"({offset}+({weight})*({inner_offset}+({inner_weight})*{word}))")
+        scale = 5 << (width - observed)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)")
+    return rows
+
+
+def joined_prefix_corpus(width, count):
+    """Long products of signed and logical fields with two or three noisy neighbors."""
+    axes = ("(x^y)", "((u|w)^(x+z))", "((x&z)^(y+w))")
+    positions = (0, width - 2, 1 + width // 3)
+    full = (1 << width) - 1
+    expressions = []
+    for case in range(count):
+        rng = random.Random(0x9D16F + width * 3749 + case * 17713)
+        degree = (383, 439, 509, 563)[case % 4]
+        observed = min(width - 6, max(10, width // 7 + case % 3))
+        factors = []
+        for i in range(degree):
+            axis = (case + i) % (2 + case % 2)
+            zeros = (observed + 2) // 3 + i % 2
+            bits = observed - zeros
+            size = bits + (i % 4 == 2)
+            start = rng.randrange(1, width - size - 4)
+            shift = width - (start + size + rng.randrange(4))
+            turn = (positions[axis] - start - shift) % width
+            selected = f"ror({axes[axis]},{turn})"
+            low = (f"ashr({selected},{shift})" if (i + case) % 3 != 1
+                   else f"({selected}>>{shift})")
+            neighbors = (f"(({17*i+3}+u*y)^(x+z*w))",
+                         f"((v+{11*i+1})^(y+w*x))", f"(z^(u+w+{i+7}))")
+            terms = []
+            for j in range(2 + (i % 3 == 0)):
+                cut = start + size + rng.randrange(4)
+                if case % 3 and i == degree // 2 and j == 1:
+                    cut = start + bits - 1
+                if (i + j + case) % 2:
+                    mask = ((rng.getrandbits(width) | 1) << cut) & full
+                    terms.append(f"({neighbors[j]}&{mask})")
+                else:
+                    scale = (rng.randrange(1, 16, 2) << cut) & full
+                    terms.append(f"({scale}*{neighbors[j]})")
+            terms.insert((i + case) % len(terms), low)
+            op = ("^", "|", "+")[(i + case) % 3]
+            joined = "(" + op.join(terms) + ")"
+            at = rng.randrange(width - size + 1)
+            field = f"extract(ror({joined},{(start-at)%width}),{at},{size})"
+            word = (f"sext({field},{width})" if i % 2
+                    else f"concat(extract(v,{size},{width-size}),{field})")
+            offset = rng.randrange(-21, 22) | 1
+            weight = (rng.randrange(-13, 14) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{word})")
+        scale = 3 << (width - observed)
+        expressions.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)")
+    return expressions
+
+
+def masked_window_corpus(width, count):
+    """Wide products with bitwise noise on both sides of a live interior field."""
+    axes = ("(x^y)", "((u|w)^(x+z))", "((x&z)^(y+w))")
+    positions = (0, width - 2, width // 3 + 1)
+    rows = []
+    for case in range(count):
+        rng = random.Random(0xC521 + width * 3569 + case * 17011)
+        degree = (607, 661, 733, 811)[case % 4]
+        observed = (97, 129, 153)[case % 3] + case % 2
+        factors = []
+        for i in range(degree):
+            axis = (case + i) % (2 + case % 2)
+            zeros = (observed + 2) // 3 + i % 2
+            bits = observed - zeros
+            size = bits + (i % 3 == 0)
+            start = rng.randrange(3, width - size - 5)
+            shift = width - start - size - rng.randrange(1, 5)
+            turn = (positions[axis] - start - shift) % width
+            selected = f"ror({axes[axis]},{turn})"
+            moved = (f"ashr({selected},{shift})" if (case + i) % 2 else
+                     f"({selected}>>{shift})")
+            low = rng.getrandbits(start) | 1
+            high = (rng.getrandbits(width - start - size) | 1) << (start + size)
+            mask = low | high
+            # Change exactly one live bit or introduce a carry from below.
+            boundary = i == degree // 2
+            if boundary and case % 3 == 1:
+                mask |= 1 << (start + bits - 1)
+            op = "+" if boundary and case % 3 == 2 else ("^", "|")[(i + case) % 2]
+            neighbor = f"(({11*i+3}+u*y)^(w+x*z))"
+            joined = f"({moved}{op}({neighbor}&{mask}))"
+            if i % 3 == 1:
+                joined = f"({joined}{op}((w+{2*i+1})&{min(low, 65535)}))"
+            at = rng.randrange(width - size + 1)
+            field = f"extract(ror({joined},{(start-at)%width}),{at},{size})"
+            word = (f"sext({field},{width})" if i % 2 else
+                    f"concat(extract(v,{size},{width-size}),{field})")
+            offset = rng.randrange(-25, 26) | 1
+            weight = (rng.randrange(-17, 18) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{word})")
+        scale = 3 << (width - observed)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)")
+    return rows
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1817,7 +1969,7 @@ def main():
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
-                 "funnel-window", "staggered-window"),
+                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1839,6 +1991,9 @@ def main():
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "masked-window": (1537, 2049, 3073),
+            "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
+            "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
             "staggered-window": (32, 64, 97, 193, 257, 513, 769),
             "funnel-window": (19, 24, 32, 64, 97, 193, 257, 513),
             "shifted-window": (17, 24, 32, 64, 97, 193, 257, 513),
@@ -1889,6 +2044,9 @@ def main():
                 "shifted-window": shifted_window_corpus,
                 "funnel-window": funnel_window_corpus,
                 "staggered-window": staggered_window_corpus,
+                "signed-window": signed_window_corpus,
+                "joined-prefix": joined_prefix_corpus,
+                "masked-window": masked_window_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

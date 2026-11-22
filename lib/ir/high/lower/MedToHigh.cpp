@@ -34,6 +34,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighFlowOracle.h"
 #include "neverd/ir/high/HighSourceFlow.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/AArch64/AArch64AuthenticatedCall.h"
 #include "neverd/ir/med/AArch64/AArch64SVEState.h"
 #include "neverd/ir/med/MedABIPass.h"
@@ -93,6 +94,13 @@ TypeRef multiRegisterReturnType(const std::vector<MedReturnReg> &Fields) {
                                  : NdType::makeInt(Field.Size, false));
   }
   return registerReturnType(std::move(Members));
+}
+
+/// Whether \p Med returns Go's results, which C carries as a record however
+/// many words they take: Go's register ABI returns a list of values, so the
+/// two in X0 and X1 are no double-word integer, as AAPCS64's pair is.
+bool returnsGoResults(const BinaryImage *Img, const MedFunc &Med) {
+  return Img && usesGoRegisterArguments(*Img, Med.Entry);
 }
 
 // Temporary, opt-in observation of the actual source-recovery conversion.
@@ -386,9 +394,12 @@ TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
       llvm::any_of(*Op.RegisterReturnFields,
                    [](const auto &Field) { return Field.IsFP; }))
     return multiRegisterReturnType(*Op.RegisterReturnFields);
+  // A call under Go's internal ABI returns its callee's results, a record as
+  // the callee returns them (returnsGoResults).
   if (Op.RegisterReturnFields &&
-      !isWholeIntegerReturnPair(*Op.RegisterReturnFields,
-                                getTargetRegInfo(TargetArch)))
+      (Op.RegisterContract == CallRegisterContract::GoInternal ||
+       !isWholeIntegerReturnPair(*Op.RegisterReturnFields,
+                                 getTargetRegInfo(TargetArch))))
     if (TypeRef Record = multiRegisterReturnType(*Op.RegisterReturnFields))
       return Record;
   if (Op.ScalarCallSignature && !Op.ScalarCallSignature->ReturnBytes &&
@@ -870,7 +881,7 @@ ExprPtr MedToHighConverter::sourceBitSlice(const ExprPtr &Value,
     // A machine reader can observe part of a vector member (including its
     // upper word). Select the complete source member before slicing its bits;
     // record padding and slices spanning members are not source values.
-    for (const auto &Member : sourceAggregateMembers(Value->Type))
+    for (const auto &Member : sourceValueMembers(Value->Type))
       if (ByteOffset >= Member.ByteOffset &&
           ByteOffset + Bytes <= Member.ByteOffset + Member.Type->Size) {
         auto Field = HighExpr::makeBitCast(
@@ -1174,6 +1185,8 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           Op.Output.Size) {
         const auto Type = sourceCallResultType(Op);
+        if (!Type)
+          continue;
         if (Type->Kind == NdTypeKind::Struct)
           SourceRecordValues.emplace(varKey(Op.Output), Type);
         else if (Type->Kind == NdTypeKind::Float && Type->Size <= 8 &&
@@ -2030,7 +2043,8 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   if (Med.ReturnsVectorRegister && Func.ReturnType)
     Func.ReturnType = NdType::makeInt(Func.ReturnType->Size, false);
   if (!Med.SourceParametersBound && !Med.ExplicitMIPSRecordResult &&
-      isWholeIntegerReturnPair(Med.MultiReturn, ReturnTRI))
+      isWholeIntegerReturnPair(Med.MultiReturn, ReturnTRI) &&
+      !returnsGoResults(Image, Med))
     Func.ReturnType = NdType::makeInt(2 * ReturnTRI.PointerSize);
   else if (!Med.SourceParametersBound &&
            (Med.ExplicitMIPSRecordResult || Med.MultiReturn.size() >= 2) &&

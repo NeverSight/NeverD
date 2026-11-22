@@ -31,9 +31,11 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <array>
 #include <cstring>
 #include <map>
 #include <set>
@@ -1591,23 +1593,27 @@ TEST(GoFunctionTable, CodeInsideARecordedFunctionBeginsNone) {
   EXPECT_FALSE(Begins(F + 8));
 }
 
-TEST(GoFunctionTable, ADuffsDeviceEntryBeginsAFunction) {
-  // Go's compiler calls `runtime.duffzero` and `runtime.duffcopy` at the point
-  // that zeroes or copies as many bytes as it needs, so each such point begins
-  // a routine of its own though the pclntab records only the first.
-  //   runtime.duffzero: nop x16; ret
-  //   main.g:           call runtime.duffzero+8; ret
-  constexpr va_t F = kTextVA + 0x100;
+TEST(GoFunctionTable, ACallIntoADuffsDeviceRunsItsBody) {
+  // Go's compiler calls `runtime.duffzero` at the point that zeroes as many
+  // bytes as it needs, and expects the call to change only the registers that
+  // straight-line body writes: the caller keeps RBX across it.  The body runs
+  // in the caller's place, and the entry begins no function of its own.
+  //   runtime.duffzero: movups [rdi], xmm15; movups [rdi+16], xmm15
+  //                     lea rdi, [rdi+32]; movups [rdi], xmm15; ret
+  //   main.g:           mov rdi, rax; call runtime.duffzero+4; mov rax, rbx
+  //                     ret
+  constexpr va_t Z = kTextVA + 0x100;
   constexpr va_t G = kTextVA + 0x200;
   GoTestImage T;
-  std::vector<uint8_t> Body(16, 0x90);
-  Body.push_back(0xC3);
-  T.writeText(F, Body);
-  std::vector<uint8_t> Caller = makeCall(G, F + 8);
-  Caller.push_back(0xC3);
+  T.writeText(Z, {0x44, 0x0F, 0x11, 0x3F, 0x44, 0x0F, 0x11, 0x7F, 0x10, 0x48,
+                  0x8D, 0x7F, 0x20, 0x44, 0x0F, 0x11, 0x3F, 0xC3});
+  std::vector<uint8_t> Caller = {0x48, 0x89, 0xC7};
+  const std::vector<uint8_t> Call = makeCall(G + Caller.size(), Z + 4);
+  Caller.insert(Caller.end(), Call.begin(), Call.end());
+  Caller.insert(Caller.end(), {0x48, 0x89, 0xD8, 0xC3});
   T.writeText(G, Caller);
   for (const auto &[Entry, Name] :
-       {std::pair{F, "runtime.duffzero"}, std::pair{G, "main.g"}}) {
+       {std::pair{Z, "runtime.duffzero"}, std::pair{G, "main.g"}}) {
     Symbol Function = Symbol::makeFunc(Entry);
     Function.Name = Name;
     T.Img.Symbols.push_back(std::move(Function));
@@ -1615,15 +1621,63 @@ TEST(GoFunctionTable, ADuffsDeviceEntryBeginsAFunction) {
   GoModuleInfo Module;
   Module.PclnTabMagic = 0xFFFFFFF1u;
   Module.RegisterArguments = true;
-  Module.GoCode = {{F, kTextVA + 0x300}};
-  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
-  Module.DuffDevices = {{F, F + 17}};
+  Module.GoCode = {{Z, kTextVA + 0x300}};
+  Module.GoAssembly = {{Z, Z + 0x20}};
+  Module.FrameArguments = {{Z, 0, 0}, {G, 16, std::nullopt}};
+  Module.DuffDevices = {{Z, Z + 0x20}};
   T.Img.ExceptionMetadata.GoModule = std::move(Module);
   Decoder Dec;
   ASSERT_TRUE(Dec.init(T.Img));
   const auto Found = FuncDetector().detect(T.Img, Dec);
-  EXPECT_TRUE(llvm::any_of(
-      Found, [&](const auto &Item) { return Item.first == F + 8; }));
+  EXPECT_FALSE(llvm::any_of(
+      Found, [&](const auto &Item) { return Item.first == Z + 4; }));
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == G; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_FALSE(hasOp(*It, NdOp::CALL));
+  unsigned Stores = 0;
+  for (const MedBlock &Block : It->Blocks)
+    for (const MedOp &Op : Block.Ops)
+      Stores += Op.Opcode == NdOp::STORE;
+  EXPECT_GE(Stores, 2u);
+  const std::string Text = highCBody(R, T.Img, "main_g");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
+TEST(GoAssembly, ADuffsDeviceEntersWithZeroInX15) {
+  // Compiled code alone calls a Duff's device routine, at whichever entry,
+  // so under the internal ABI it enters with X15 zero: Go 1.18-1.24's
+  // `runtime.duffzero` stores X15.
+  //   runtime.duffzero: movups [rdi], xmm15; movups [rdi+16], xmm15; ret
+  constexpr va_t Zero = kTextVA + 0x100;
+  GoTestImage T;
+  T.writeText(Zero,
+              {0x44, 0x0F, 0x11, 0x3F, 0x44, 0x0F, 0x11, 0x7F, 0x10, 0xC3});
+  Symbol Function = Symbol::makeFunc(Zero);
+  Function.Name = "runtime.duffzero";
+  T.Img.Symbols.push_back(std::move(Function));
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Zero, kTextVA + 0x300}};
+  Module.GoAssembly = {{Zero, Zero + 0x10}};
+  Module.FrameArguments = {{Zero, 0, 0}};
+  Module.DuffDevices = {{Zero, Zero + 0x10}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const std::string Text = highCBody(R, T.Img, "runtime_duffzero");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
 }
 
 TEST(GoAssembly, ABIInternalAssemblyEntersWithZeroInX15) {
@@ -1655,6 +1709,380 @@ TEST(GoAssembly, ABIInternalAssemblyEntersWithZeroInX15) {
   const std::string Text = highCBody(R, T.Img, "main_clr");
   ASSERT_FALSE(Text.empty());
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
+TEST(GoSyscall, AnOrrMovedNumberBoundsTheArguments) {
+  // Go's assembler moves a bitmask constant with ORR: `runtime.osyield` sets
+  // its system call number with `orr x8, xzr, #0x7c`, for which Capstone names
+  // no MOV alias, MOVZ being able to encode the value.  Lifted as an OR of two
+  // operands, the number was no constant the block set, so sched_yield read
+  // X0-X5 and every caller passed six unknown arguments.
+  //   runtime.osyield: orr x8, xzr, #0x7c; svc #0; ret
+  constexpr va_t F = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  T.Img.ELFMetadata.emplace();
+  T.Img.ELFMetadata->OSABI = llvm::ELF::ELFOSABI_NONE;
+  T.writeText(F, words({0xB27E13E8, 0xD4000001, 0xD65F03C0}));
+  Symbol Function = Symbol::makeFunc(F);
+  Function.Name = "runtime.osyield";
+  T.Img.Symbols.push_back(std::move(Function));
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.GoAssembly = {{F, F + 0x10}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_TRUE(It->Params.empty()) << It->Params.size();
+}
+
+TEST(GoDefer, DeferReturnResumesOnTheFrame) {
+  // Go's runtime resumes a frame that deferred at its `deferreturn` call on
+  // the frame's own stack pointer, from where the code reloads the named
+  // result and returns.  Entered at the stack pointer the function was called
+  // with, those loads read its caller's frame, and `main.namedResultRewrite`
+  // took a stack argument no caller passed.
+  //   main.f: str x30, [sp, #-0x20]!; str x0, [sp, #0x10]; bl main.g
+  //           ldr x0, [sp, #0x10]; ldr x30, [sp], #0x20; ret
+  //       r:  bl main.g; ldr x0, [sp, #0x10]; ldr x30, [sp], #0x20; ret
+  //   main.g: ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  const auto Call = [&](va_t At) {
+    return 0x94000000u | (((G - At) >> 2) & 0x3FFFFFFu);
+  };
+  T.writeText(
+      F, words({0xF81E0FFE, 0xF9000BE0, Call(F + 8), 0xF9400BE0, 0xF84207FE,
+                0xD65F03C0, Call(F + 24), 0xF9400BE0, 0xF84207FE, 0xD65F03C0}));
+  T.writeText(G, words({0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 8, 1}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  ExceptionFunction EH;
+  EH.CodeRange = {F, F + 40};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  EH.Encoding = ExceptionEncoding::GoFuncTable;
+  GoFunctionEH Go;
+  Go.EntryVA = F;
+  Go.DeferReturnOffset = 24;
+  Go.FrameSize = 0x20;
+  Go.UsesOpenCodedDefers = true;
+  EH.Go = std::move(Go);
+  T.Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  T.Img.ExceptionMetadata.rebuildIndex();
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_EQ(It->Params.size(), 1u);
+}
+
+TEST(GoInternalABI, AClosureReadsTheContextItsCallerPasses) {
+  // A call through a Go func value passes the value's address in RDX (arm64
+  // R26), through which a closure reads what it captured.  No model defined
+  // the incoming register, and each capture read printed an unknown value.
+  //   main.f.func1: mov rax, [rdx+8]; add rax, [rdx+16]; ret
+  //   (arm64)       ldr x0, [x26, #8]; ldr x1, [x26, #16]; add x0, x0, x1
+  //                 ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t F = kTextVA + 0x100;
+    GoTestImage T(A);
+    if (A == Arch::X64)
+      T.writeText(F, {0x48, 0x8B, 0x42, 0x08, 0x48, 0x03, 0x42, 0x10, 0xC3});
+    else
+      T.writeText(F, words({0xF9400740, 0xF9400B41, 0x8B010000, 0xD65F03C0}));
+    Symbol Function = Symbol::makeFunc(F);
+    Function.Name = "main.f.func1";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_f_func1");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_NE(Text.find(A == Arch::X64 ? "movq %%rdx" : "mov %0, x26"),
+              std::string::npos)
+        << Text;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+}
+
+TEST(GoInternalABI, ARegisterReadAfterACallIsNoContext) {
+  // The context is the register's incoming value.  Where a function reads
+  // the register only after a call that writes it, the first version of it is
+  // the call's clobber, and taking that version for the incoming value
+  // defined it twice: Go 1.26's `internal/cpu.doinit` and `runtime.mapaccess2`
+  // were refused.
+  //   main.f: lea rdx, [rax+1]; ret
+  //   main.g: call main.f; mov rax, rdx; ret
+  //   (arm64) main.f: add x26, x0, #1; ret
+  //           main.g: stp x29, x30, [sp, #-16]!; mov x29, sp; bl main.f
+  //                   mov x0, x26; ldp x29, x30, [sp], #16; ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t F = kTextVA + 0x100;
+    constexpr va_t G = kTextVA + 0x180;
+    GoTestImage T(A);
+    if (A == Arch::X64) {
+      T.writeText(F, {0x48, 0x8D, 0x50, 0x01, 0xC3});
+      const auto Rel = static_cast<uint32_t>(F - (G + 5));
+      T.writeText(G, {0xE8, static_cast<uint8_t>(Rel),
+                      static_cast<uint8_t>(Rel >> 8),
+                      static_cast<uint8_t>(Rel >> 16),
+                      static_cast<uint8_t>(Rel >> 24), 0x48, 0x89, 0xD0, 0xC3});
+    } else {
+      T.writeText(F, words({0x9100041A, 0xD65F03C0}));
+      const uint32_t Call = 0x94000000u | (((F - (G + 8)) >> 2) & 0x3FFFFFFu);
+      T.writeText(G, words({0xA9BF7BFD, 0x910003FD, Call, 0xAA1A03E0,
+                            0xA8C17BFD, 0xD65F03C0}));
+    }
+    for (const auto &[Entry, Name] :
+         {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_g");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_EQ(Text.find(A == Arch::X64 ? "movq %%rdx" : "mov %0, x26"),
+              std::string::npos)
+        << Text;
+  }
+}
+
+TEST(GoStackABI, AClosureReadsTheContextItsCallerPasses) {
+  // Before Go's internal ABI a call through a func value passes the closure
+  // in RDX (arm64 R26) too, and a closure, which takes no register argument,
+  // reads what it captured through it.  HighC printed its loads as reads of
+  // its own frame (`var_30`), LLVM C as reads through an unknown register.
+  //   main.f.func1: sub rsp, 0x18; mov [rsp+0x10], rbp; lea rbp, [rsp+0x10]
+  //                 mov rax, [rdx+0x30]; add rax, [rdx+0x38]
+  //                 mov [rsp+0x20], rax; mov rbp, [rsp+0x10]; add rsp, 0x18
+  //                 ret
+  //   (arm64)       sub sp, sp, #32; ldr x0, [x26, #0x30]
+  //                 ldr x1, [x26, #0x38]; add x0, x0, x1; str x0, [sp, #40]
+  //                 add sp, sp, #32; ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t F = kTextVA + 0x100;
+    GoTestImage T(A);
+    if (A == Arch::X64)
+      T.writeText(F,
+                  {0x48, 0x83, 0xEC, 0x18, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
+                   0x8D, 0x6C, 0x24, 0x10, 0x48, 0x8B, 0x42, 0x30, 0x48, 0x03,
+                   0x42, 0x38, 0x48, 0x89, 0x44, 0x24, 0x20, 0x48, 0x8B, 0x6C,
+                   0x24, 0x10, 0x48, 0x83, 0xC4, 0x18, 0xC3});
+    else
+      T.writeText(F, words({0xD10083FF, 0xF9401B40, 0xF9401F41, 0x8B010000,
+                            0xF90017E0, 0x910083FF, 0xD65F03C0}));
+    Symbol Function = Symbol::makeFunc(F);
+    Function.Name = "main.f.func1";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.FrameArguments = {{F, 8}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_f_func1");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_NE(Text.find(A == Arch::X64 ? "movq %%rdx" : "mov %0, x26"),
+              std::string::npos)
+        << Text;
+    EXPECT_EQ(Text.find("var_30"), std::string::npos) << Text;
+    EXPECT_EQ(Text.find("var_38"), std::string::npos) << Text;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+}
+
+TEST(GoStackABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
+  // Go has kept the arm64 goroutine in R28 since its port, before the
+  // internal ABI too.  Only register-ABI code read the register as the
+  // goroutine, so a Go 1.15 function's loads through it read an unknown
+  // register.
+  //   main.f: ldr x0, [x28, #48]; str x0, [sp, #8]; ret
+  constexpr va_t F = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(F, words({0xF9401B80, 0xF90007E0, 0xD65F03C0}));
+  Symbol Function = Symbol::makeFunc(F);
+  Function.Name = "main.f";
+  T.Img.Symbols.push_back(std::move(Function));
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.FrameArguments = {{F, 8}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "main_f");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_NE(Text.find("mov %0, x28"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
+TEST(GoInternalABI, AFuncValueCallReturnsItsFloatResults) {
+  // Go's internal ABI returns floating results in X0-X14 (arm64 F0-F15),
+  // numbered apart from its integer ones.  A call through a func value
+  // returned only the integer ones, so a read of X0 after it read what the
+  // call clobbered.
+  //   main.g: push rbp; mov rbp, rsp; sub rsp, 16; mov [rsp], rbx
+  //           mov rdx, rax; call [rdx]; mov rcx, [rsp]; movsd [rcx], xmm0
+  //           add rsp, 16; pop rbp; ret
+  //   (arm64) stp x29, x30, [sp, #-32]!; mov x29, sp; str x1, [sp, #16]
+  //           mov x26, x0; ldr x2, [x26]; blr x2; ldr x1, [sp, #16]
+  //           str d0, [x1]; ldp x29, x30, [sp], #32; ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t G = kTextVA + 0x100;
+    GoTestImage T(A);
+    if (A == Arch::X64)
+      T.writeText(G, {0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x10,
+                      0x48, 0x89, 0x1C, 0x24, 0x48, 0x89, 0xC2, 0xFF,
+                      0x12, 0x48, 0x8B, 0x0C, 0x24, 0xF2, 0x0F, 0x11,
+                      0x01, 0x48, 0x83, 0xC4, 0x10, 0x5D, 0xC3});
+    else
+      T.writeText(G, words({0xA9BE7BFD, 0x910003FD, 0xF9000BE1, 0xAA0003FA,
+                            0xF9400342, 0xD63F0040, 0xF9400BE1, 0xFD000020,
+                            0xA8C27BFD, 0xD65F03C0}));
+    Symbol Function = Symbol::makeFunc(G);
+    Function.Name = "main.g";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_g");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+    EXPECT_NE(Text.find("double"), std::string::npos) << Text;
+  }
+}
+
+TEST(GoAssembly, AReflectCallHelperStoresWhatItsFuncValueReturns) {
+  // Reflection's call helpers (`runtime.callNNN`) load a call's argument
+  // registers from an internal/abi.RegArgs with `runtime.unspillArgs`, call
+  // a func value, and store every result register back with
+  // `runtime.spillArgs`.  Each transfer runs in its caller's place, and the
+  // func value enters Go code by the internal ABI, so the stores read the
+  // call's results: each of them read an unknown value.
+  //   runtime.unspillArgs: mov rax, [r12]; mov rbx, [r12+8]
+  //                        movsd xmm0, [r12+72]; ret
+  //   runtime.spillArgs:   mov [r12], rax; mov [r12+8], rbx
+  //                        movsd [r12+72], xmm0; ret
+  //   main.call16: push rbp; mov rbp, rsp; sub rsp, 16; mov [rsp], rsi
+  //                mov r12, rsi; call runtime.unspillArgs; mov rdx, rdi
+  //                mov r12, [rdx]; call r12; mov r12, [rsp]
+  //                call runtime.spillArgs; add rsp, 16; pop rbp; ret
+  constexpr va_t Helper = kTextVA + 0x100;
+  constexpr va_t Unspill = kTextVA + 0x200;
+  constexpr va_t Spill = kTextVA + 0x240;
+  GoTestImage T(Arch::X64);
+  T.writeText(Unspill, {0x49, 0x8B, 0x04, 0x24, 0x49, 0x8B, 0x5C, 0x24, 0x08,
+                        0xF2, 0x41, 0x0F, 0x10, 0x44, 0x24, 0x48, 0xC3});
+  T.writeText(Spill, {0x49, 0x89, 0x04, 0x24, 0x49, 0x89, 0x5C, 0x24, 0x08,
+                      0xF2, 0x41, 0x0F, 0x11, 0x44, 0x24, 0x48, 0xC3});
+  const auto Rel = [](va_t Target, va_t Next) {
+    const auto Value = static_cast<uint32_t>(Target - Next);
+    return std::array<uint8_t, 4>{
+        static_cast<uint8_t>(Value), static_cast<uint8_t>(Value >> 8),
+        static_cast<uint8_t>(Value >> 16), static_cast<uint8_t>(Value >> 24)};
+  };
+  const auto ToUnspill = Rel(Unspill, Helper + 20);
+  const auto ToSpill = Rel(Spill, Helper + 38);
+  T.writeText(
+      Helper,
+      {0x55,         0x48,         0x89, 0xE5, 0x48,         0x83,
+       0xEC,         0x10,         0x48, 0x89, 0x34,         0x24,
+       0x49,         0x89,         0xF4, 0xE8, ToUnspill[0], ToUnspill[1],
+       ToUnspill[2], ToUnspill[3], 0x48, 0x89, 0xFA,         0x4C,
+       0x8B,         0x22,         0x41, 0xFF, 0xD4,         0x4C,
+       0x8B,         0x24,         0x24, 0xE8, ToSpill[0],   ToSpill[1],
+       ToSpill[2],   ToSpill[3],   0x48, 0x83, 0xC4,         0x10,
+       0x5D,         0xC3});
+  for (const auto &[Entry, Name] : {std::pair{Helper, "main.call16"},
+                                    std::pair{Unspill, "runtime.unspillArgs"},
+                                    std::pair{Spill, "runtime.spillArgs"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Helper, Helper + 0x40},
+                       {Unspill, Unspill + 0x40},
+                       {Spill, Spill + 0x40}};
+  Module.RegisterArgumentTransfers = {{Unspill, Unspill + 0x40},
+                                      {Spill, Spill + 0x40}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "main_call16");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("spillArgs"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("double"), std::string::npos) << Text;
 }
 
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
@@ -1874,6 +2302,73 @@ TEST(GoInternalABI, AnARM64DirectCallReturnsEveryResultItsCallerReads) {
   ASSERT_NE(Read, nullptr);
   ASSERT_TRUE(Read->RegisterReturnFields);
   EXPECT_TRUE(ReturnsX0ToX2(*Read->RegisterReturnFields));
+}
+
+TEST(GoInternalABI, TwoARM64ResultsAreARecord) {
+  // Go returns a list of results, which C carries as a record: two arm64
+  // results in X0 and X1 are no double-word integer, as AAPCS64's pair is.
+  // As one, `runtime.makeAddrRange`, which returns its two arguments, was
+  // refused, its high word being no value the function computed.
+  //   main.f: stp x29, x30, [sp, #-16]!; mov x29, sp; cbz x0, 1f
+  //           cmp x0, x1; b.hi 1f; ldp x29, x30, [sp], #16; ret
+  //       1:  mov x1, #60; bl main.h; brk #1
+  //   main.h: ret
+  //   main.g: stp x29, x30, [sp, #-16]!; mov x29, sp; mov x0, #1
+  //           mov x1, #2; bl main.f; add x0, x0, x1
+  //           ldp x29, x30, [sp], #16; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t H = kTextVA + 0x140;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Trap = 0x94000000u | (((H - (F + 32)) >> 2) & 0x3FFFFFFu);
+  T.writeText(F,
+              words({0xA9BF7BFD, 0x910003FD, 0xB40000A0, 0xEB01001F, 0x54000068,
+                     0xA8C17BFD, 0xD65F03C0, 0xD2800781, Trap, 0xD4200020}));
+  T.writeText(H, words({0xD65F03C0}));
+  const uint32_t Call = 0x94000000u | (((F - (G + 16)) >> 2) & 0x3FFFFFFu);
+  T.writeText(G, words({0xA9BF7BFD, 0x910003FD, 0xD2800020, 0xD2800041, Call,
+                        0x8B010000, 0xA8C17BFD, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{H, "main.h"},
+        std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  ASSERT_EQ(It->MultiReturn.size(), 2u);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions C;
+  C.TheArch = T.Img.Arch;
+  C.Format = T.Img.Format;
+  C.Image = &T.Img;
+  ASSERT_TRUE(HighCEmitter().emit(R.HighFuncs, OS, C));
+  OS.flush();
+  // The definition, not its declaration or main.g's call.
+  size_t At = 0;
+  while ((At = Source.find(" main_f(", At)) != std::string::npos &&
+         Source.compare(Source.find('\n', At) - 2, 2, " {") != 0)
+    ++At;
+  ASSERT_NE(At, std::string::npos) << Source;
+  const size_t Line = Source.rfind('\n', At) + 1;
+  const std::string Signature = Source.substr(Line, At - Line);
+  EXPECT_EQ(Signature.find("__int128"), std::string::npos) << Signature;
+  const std::string Body = Source.substr(At, Source.find("\n}", At) - At);
+  EXPECT_EQ(Body.find("no recovered semantics"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("has no definition"), std::string::npos) << Body;
 }
 
 TEST(GoInternalABI, AStaleViewReadsNoResultOfTheCall) {

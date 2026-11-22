@@ -473,9 +473,11 @@ public:
 
   //--- Expression rendering (HighCExprWriter.cpp) ---
   std::string exprStr(const HighExpr &Expr, int ParentPrec = 0,
-                      MemoryLoadDestination *Destination = nullptr);
+                      MemoryLoadDestination *Destination = nullptr,
+                      bool InInitializer = false);
   std::string exprStrImpl(const HighExpr &Expr, int ParentPrec,
-                          MemoryLoadDestination *Destination = nullptr);
+                          MemoryLoadDestination *Destination,
+                          bool InInitializer);
   /// Operands of the integer operator being printed. A string literal among
   /// them is an array in C and prints as its integer address instead.
   std::set<const HighExpr *> LiteralAddressOperands;

@@ -1501,6 +1501,28 @@ TEST(HighSymSimplify, InvalidatesDefinitionsAcrossRenamedLocalWrites) {
       << Body.back().RetVal->str();
 }
 
+TEST(HighSymSimplify, TracksLateScalarFactsUntilTheirInputsChange) {
+  const auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  const auto Y = HighExpr::makeVar(tempOfSize(2, 4));
+  const auto Mask = HighExpr::makeBinop(NdOp::INT_AND, X, Y);
+  for (bool Write : {false, true}) {
+    std::vector<HighStmt> Body;
+    ExprPtr Last;
+    for (int Id = 3; Id < 303; ++Id) {
+      Last = HighExpr::makeVar(tempOfSize(Id, 4));
+      Body.push_back(assignValue(Last, Mask));
+    }
+    const auto Copy = HighExpr::makeVar(tempOfSize(303, 4));
+    Body.push_back(assignValue(Copy, Last));
+    if (Write)
+      Body.push_back(assignValue(Y, HighExpr::makeConst(17, 4)));
+    Body.push_back(returnValue(sharedMaskUse(X, Y, Copy)));
+    simplifyExprSemantics(Body);
+    EXPECT_EQ(Body.back().RetVal->str().find('|') != std::string::npos, Write)
+        << Body.back().RetVal->str();
+  }
+}
+
 TEST(HighSymSimplify, ReassigningATemporaryDoesNotReuseItsOldDefinition) {
   const auto X = HighExpr::makeVar(tempOfSize(1, 4));
   const auto Y = HighExpr::makeVar(tempOfSize(2, 4));

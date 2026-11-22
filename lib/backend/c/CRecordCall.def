@@ -16,6 +16,13 @@ NEVERD_C_RECORD_TEXT(kSourceRecordValue,
 NEVERD_C_RECORD_TEXT(kSourceRecordFieldCopy,
                      "__builtin_memcpy((unsigned char *)&{2} + {0}, "
                      "(const unsigned char *)&{3} + {0}, {1}); ")
+NEVERD_C_RECORD_TEXT(kSourceRecordWordFieldLE,
+                     "__builtin_memcpy(&{0}.field_{1}, "
+                     "(const unsigned char *)&{2} + {3}, {4}); ")
+NEVERD_C_RECORD_TEXT(kSourceRecordWordFieldBE,
+                     "__builtin_memcpy((unsigned char *)&{0}.field_{1} "
+                     "+ sizeof({0}.field_{1}) - {4}, "
+                     "(const unsigned char *)&{2} + {3}, {4}); ")
 NEVERD_C_RECORD_TEXT(kSourceRecordDestination, "__neverd_record_destination")
 NEVERD_C_RECORD_TEXT(kSourceRecordSource, "__neverd_record_source")
 NEVERD_C_RECORD_TEXT(kUnknownNamedRecordField,
@@ -28,8 +35,10 @@ NEVERD_C_RECORD_TEXT(kInvalidSourceRecordFieldType,
                      "HighC source record field type disagrees")
 NEVERD_C_RECORD_TEXT(kInvalidSourceRecordField,
                      "HighC cannot render an invalid source field")
+NEVERD_C_RECORD_TEXT(kSourceRecordStore,
+                     "((void)(*({0} *)(uintptr_t)({1}) = ({2})))")
 NEVERD_C_RECORD_TEXT(kSourceArrayField, "({0})[{1}]")
-NEVERD_C_RECORD_TEXT(kSourceArrayInitializerOpen, "{")
+NEVERD_C_RECORD_TEXT(kSourceAggregateInitializerOpen, "{")
 NEVERD_C_RECORD_TEXT(kSourceVectorRecordCode, "v{0}")
 NEVERD_C_RECORD_TEXT(kSourceArrayRecordCode, "a{0}_{1}_e")
 

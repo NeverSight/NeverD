@@ -2848,6 +2848,9 @@ retaining explicit per-image debug-file diagnostics.
 `HighCPointerAddresses.AGlobalOfAnUnspellableCallbackKeepsItsAccessType`
 gives a global the debug type of a callback returning an array: the unit is
 written, the global declared with the type its load gives.
+`HighCPointerAddresses.AnIncomingRegisterIsNoFrame` loads `*(RDX + 16)` in a
+function with a frame: RDX, which the convention does not preserve, names no
+frame slot (`var_10`), and the load reads an unknown register.
 `HighCPointerAddresses.CompilerDispatchDoesNotDependOnIncludes` checks seven
 x86 compiler-dispatch families through HighC and LLVMC, across COFF/ELF/Mach-O.
 Disabling includes must retain the required definitions; each unmodified source
@@ -4536,6 +4539,21 @@ suite exercises the same gap and overlap cases in a 239-factor x86-64 fixture.
 Wide product evaluation tests compare repeated affine factors against direct
 full-width arithmetic with the live prefix one bit below, at, and above an
 extension or concatenation boundary.
+Use `--family signed-window --count 12` for 96 products across 32 to 1025
+bits. Each has 361 to 503 factors. Arithmetic and logical right shifts share a
+field with an odd-scaled word or a literal mask. In 24 cases the final live
+bit crosses into sign padding or the neighboring word. A 277-factor x86-64
+fixture exercises consecutive exact shifts, more than 256 scalar definitions
+and a signed five-bit field. Both C renderers must shorten the product chain
+and preserve the sign fill when the output is executed at `-O0` and `-O2`.
+Use `--family joined-prefix --count 12` for 96 products across 32 to 1281
+bits. Each of the 383 to 563 factors selects a field beside two or three
+separately scaled or masked words. In 64 products one neighbor contributes
+the last observed bit. The x86-64 source fixture combines a live neighboring
+bit with a sign-filled byte. The evaluator tests compare shared-coordinate
+quadratics and the adjacent surviving cubic against direct full-width
+multiplication, including duplicate factors and independent inputs. The
+parser tests narrow long decimal constants at explicit widths.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
@@ -4547,6 +4565,15 @@ overlap and no-wrap flags that can make the input poison.
 Additional regressions combine a masked product with a compound arithmetic
 summand and recover a quadratic product beside twelve independently weighted
 inputs within a fixed work allowance.
+
+Use `--family masked-window --count 8` for 24 products at 1537, 2049 and
+3073 bits, with 607 to 811 factors each. The masks have set bits both above
+and below each extracted field. Boundary cases leave one live bit inside
+the field or add a low neighbor that can carry into it. Four x86 fixtures
+rotate the joined word before reading a byte. They execute both emitted C
+views against the original 139–173-factor products at Clang O0 and O2.
+`LogicalShiftBoundsMatchDefinedByteAdditions` checks no-wrap and exact
+shift flags against all byte input pairs, including shift-by-width.
 
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
@@ -17070,7 +17097,10 @@ installing records authenticate their function entries and aligned ESP
 coordinates; fixed EBP slots and native rewrite authority remain separate.
 `FunctionDiscoveryAlignment.RawDataPointerCandidatesRemainGuesses` checks
 COFF, ELF and Mach-O across x86, x64, ARM32 and ARM64, including existing
-symbols, relocation-slot order and later confirmation. Run these with
+symbols, relocation-slot order and later confirmation.
+`FunctionDiscoveryAlignment.ELFRelocationRecordsHoldNoFunctionPointers` scans an
+ELF image whose RELA record's addend is a function's address: the record names
+no function, while the same words in a PROGBITS section do. Run these with
 `NeverDImageAnalysisBoundaryTests` and the registration suites.
 `CxxSharedEntryOwnsItsProvenReturningFallthrough` checks short/wide physical
 entry calls with exact instruction-boundary guesses, stated/exported roots,
@@ -18276,10 +18306,38 @@ reloads the next GOT binding after the first callback changes it. Its n32
 runtime address sets the pointer's sign bit. The n32 CPIC samples also link
 their code and GOT above 2 GiB before moving them. Both the default and
 unoptimized LLVM source routes exercise the explicit n32 word extension.
-The private-frame tests
-also vary whether a loop argument acquires a stack address at entry or on
-its backedge, and whether a native call can observe an argument write on any
-path before a full-register overwrite.
+Two more fixtures save the link only on the stack and pass the first opaque
+result unchanged to the next import on an equality edge. One compares it
+with zero and forwards in the branch delay slot. The other compares with a
+saved parameter and forwards in the taken block. The harness runs both paths
+in the original and rebuilt binaries and checks the second import's arguments
+and the return value, including n32 inputs that differ only above bit 31.
+The joined forwarding fixture reaches the second import from two independent
+equality edges. Its three-call variants recheck either the saved first result
+or the second result. Another variant joins results from two call sites,
+compares the saved copy and forwards the selected return register. It checks
+that copy again before a third import. For every binding, both paths execute
+with matching and mismatching high halves. The harness checks the arguments
+and order of all observed calls, the restored registers and the final value against the original
+PIC and CPIC ELF on n32 and n64 in both byte orders.
+Loop variants take zero through three backedges and compare the final
+producer's word with an independent input. A single-site loop also passes
+its checked result back to that same import. The other loops forward from
+a register or through two full-width loads of a stack spill. Another variant rechecks
+the sampled word after the second call. A byte-store variant changes a
+known lane before both reloads and checks the forwarded value on each byte
+order. Each binding exercises equality and a mismatch above bit 31. The
+controls include stale iterations, missing
+stores, partial overwrites and an unchecked spill in an open call's frame.
+The stack-transfer variants copy between two slots and carry 32-bit pieces
+across loop edges. They cover native-endian stores, signed high and unsigned
+low loads, disjoint OR, XOR and addition, and doubleword field insertion.
+One variant checks before packing. Another swaps the halves and forwards
+the newly checked word. The return-target tests reject forwarding a different
+word, a possible carry into the high half and an uncleared outgoing fragment.
+The private-frame tests also vary whether a loop argument acquires a stack
+address at entry or on its backedge, and whether a native call can observe an
+argument write on any path before a full-register overwrite.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must
@@ -20716,6 +20774,9 @@ unknown value.
 `GoInternalABI.AnARM64DirectCallReturnsEveryResultItsCallerReads` runs an
 arm64 `main.f` that loads X0-X2 and a caller that reads X2: both return three
 results, where AAPCS64 alone gives X0:X1.
+`GoInternalABI.TwoARM64ResultsAreARecord` runs an arm64 `main.f` that returns
+its two arguments and a caller that reads both: `main.f` returns a record, not
+an `__int128`, and its C holds no unknown value.
 `GoArgumentComponents.CountEachScalarTheTracebackLists` loads ArgInfo tables:
 `gopark`'s five components with two bytes in one word, a string's and a
 struct's words, an offset too large for a byte, and a table that elides past
@@ -20754,8 +20815,18 @@ stores zero and traps nowhere.
 `GoFunctionTable.CodeInsideARecordedFunctionBeginsNone` runs function
 discovery over a Go image in which `main.g` calls `main.f+8`: `main.f` and
 `main.g` begin functions, and `main.f+8` begins none.
-`GoFunctionTable.ADuffsDeviceEntryBeginsAFunction` runs it again with
-`main.f` as `runtime.duffzero`: `main.f+8` begins a function.
+`GoFunctionTable.ACallIntoADuffsDeviceRunsItsBody` lifts a `main.g` that calls
+`runtime.duffzero+4` with RBX live across the call: discovery begins no
+function there, `main.g` makes no call and stores twice, and its C holds no
+unknown value.
+`GoAssembly.ADuffsDeviceEntersWithZeroInX15` lifts a
+`runtime.duffzero` that stores X15 twice: its C stores zero and traps nowhere.
+`GoSyscall.AnOrrMovedNumberBoundsTheArguments` lifts an arm64
+`runtime.osyield` that sets its number with `orr x8, xzr, #0x7c` before `svc
+#0`: sched_yield reads no argument, and the routine takes none.
+`GoDefer.DeferReturnResumesOnTheFrame` lifts an arm64 `main.f` whose
+`deferreturn` block, which no edge reaches, reloads its result from its frame:
+`main.f` takes the one argument its record gives, not the caller's frame.
 `GoFunctionTable.ABranchInsideARecordedFunctionStaysInIt` lifts a Go function
 that jumps to its own label, which another function calls: the jump is no
 call.
@@ -20766,6 +20837,28 @@ reads no undefined R14 and takes no parameter, and its C reads R14 and traps
 nowhere. `GoInternalABI.AnARM64GoroutineRegisterHoldsTheCurrentGoroutine` does
 the same with arm64's `[x28, #48]`, where the call may change R28: it reads
 the goroutine at its entry and again after the call.
+`GoInternalABI.AClosureReadsTheContextItsCallerPasses` lifts a closure that adds
+two words it loads through RDX, and its arm64 twin through R26: its C reads
+the register at the entry and traps nowhere.
+`GoAssembly.AReflectCallHelperStoresWhatItsFuncValueReturns` lifts a helper that
+loads RAX, RBX and X0 with `runtime.unspillArgs`, calls a func value through
+RDX and stores them back with `runtime.spillArgs`: neither routine is called,
+and the C stores what the call returns, a double among it, trapping nowhere.
+`GoRegisterArgumentTransfers.AreFoundByName` checks that the pclntab names both
+routines' code.
+`GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
+a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
+the call returns a record with a double field, and the C traps nowhere.
+`GoStackABI.AClosureReadsTheContextItsCallerPasses` lifts a Go 1.15-style
+closure with a frame that adds two words it loads through RDX, and its arm64
+twin through R26: its C reads the register, names no frame word for those
+loads, and traps nowhere.
+`GoStackABI.AnARM64GoroutineRegisterHoldsTheCurrentGoroutine` lifts a Go
+1.15-style arm64 function that loads `[x28, #48]`: its C reads R28 and traps
+nowhere.
+`GoInternalABI.ARegisterReadAfterACallIsNoContext` lifts `main.g`, which reads
+RDX (arm64 R26) only after a call to a function that writes it: MedIR verifies
+and the C reads no context.
 `GoRegisterArguments.RegistersStoredInARowAreNoVariadicSaveArea` lifts
 `main.g`, which stores RAX, R8 and R9 into consecutive words off RDI, and a
 caller that sets all seven of Go's first argument registers: `main.g` takes
@@ -22402,7 +22495,9 @@ tail expressions' word width before the provider can convert them.
 range across selectors, including an unknown alternative.
 `MedCallingConv.ASyscallTakesOnlyItsOwnArgumentsAsParameters` converts
 `mov rax, 60; syscall` to MedIR: the routine takes RDI alone, and the
-syscall's other operands are zero. A number the table does not list, and the
+syscall's other operands are zero. munmap (11) takes RDI and RSI, not the RDX
+its pair carries; `CallRegisterEffects.ASyscallReadsOnlyItsOwnArguments`
+checks that munmap reads no RDX and rt_sigaction (13) no R8. A number the table does not list, and the
 same call in a FreeBSD image, keep R9 among the parameters.
 `LinuxSyscallUnusedClobbersDoNotTrap` executes both arms of an AArch64 call
 diamond: an unread clobber must not stop execution, while a read clobber must
@@ -26571,6 +26666,18 @@ cross-object direct/indirect calls against GCC and Clang at O0/O2. For hidden
 results it also poisons v0 after the callee's return delay slot, before the
 caller consumes the result. The caller must use its original result buffer;
 a callee that happens to return that address in v0 is not an ABI guarantee.
+
+Run the record roundtrip with both values of `--original-compiler`. GCC and
+Clang alternate as the callee and caller compiler. Only the reconstructed C
+uses `-fno-strict-aliasing`, as required by the plain-pointer output. The n32
+two-float return checks both fields at `-O2` in each byte order.
+The eight input patterns cover every byte alignment within an o32 word or an
+n32/n64 doubleword. Guards surround both the input and the result buffers.
+The two record-call cases in `MIPSMergeValues` check the original call occurrence
+and a partial register overwritten before or after a call. The saved-link test
+`MIPSRecordSourceEntry.MergeLoadsPreservePrivateLinkForExternalData` exercises
+a bytewise result copy and checks that a private frame address cannot escape
+through either side of a merge load.
 
 `DWARFSourceTypes.NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth` and
 `DWARFSourceTypes.PartialOrOverlappingRecordsCannotBecomeCompleteValues` in

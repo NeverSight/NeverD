@@ -34,6 +34,10 @@ struct SourceABIValueLocation {
   // observed low lane; it does not define the high 32 bits or any stack
   // padding.
   bool ExtendTo32Bits = false;
+  /// A partial record word can occupy either end of an integer register.
+  /// Zero CarrierBytes retains the ordinary low-ValueBytes scalar contract.
+  uint8_t CarrierBytes = 0;
+  uint8_t RegisterByteOffset = 0;
 };
 
 struct SourceParameterTypeHint {

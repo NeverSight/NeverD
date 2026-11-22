@@ -16,14 +16,20 @@
 
 namespace neverd {
 
-inline const char *scalarUnarySpelling(llvm::Intrinsic::ID Kind) {
-  switch (Kind) {
+inline const char *scalarUnarySpelling(const llvm::Function &Function) {
+  switch (Function.getIntrinsicID()) {
   case llvm::Intrinsic::bitreverse:
     return "bitreverse";
   case llvm::Intrinsic::fptosi_sat:
     return "fptosi_sat";
   case llvm::Intrinsic::fptoui_sat:
     return "fptoui_sat";
+  case llvm::Intrinsic::roundeven: {
+    const auto *Type = Function.getReturnType();
+    return Type->isHalfTy() || Type->isFloatTy() || Type->isDoubleTy()
+               ? "roundeven"
+               : nullptr;
+  }
   default:
     return nullptr;
   }
@@ -47,7 +53,7 @@ struct ScalarUnary {
 inline std::optional<ScalarUnary> scalarUnary(const llvm::CallBase &Call) {
   const auto *Callee = llvm::dyn_cast<llvm::Function>(
       Call.getCalledOperand()->stripPointerCasts());
-  if (!Callee || !scalarUnarySpelling(Callee->getIntrinsicID()))
+  if (!Callee || !scalarUnarySpelling(*Callee))
     return std::nullopt;
   const auto Kind = Callee->getIntrinsicID();
   const auto *Integer = llvm::dyn_cast<llvm::IntegerType>(Call.getType());
@@ -57,6 +63,11 @@ inline std::optional<ScalarUnary> scalarUnary(const llvm::CallBase &Call) {
       Call.getFunctionType() != Callee->getFunctionType())
     throw std::runtime_error("unsupported LLVM scalar unary intrinsic shape");
   const auto *Input = Call.getArgOperand(0)->getType();
+  if (Kind == llvm::Intrinsic::roundeven) {
+    if (Input != Call.getType())
+      throw std::runtime_error("unsupported LLVM roundeven operand type");
+    return ScalarUnary{Kind, 0, Input->getScalarSizeInBits()};
+  }
   if (Kind == llvm::Intrinsic::fptosi_sat && Input->isX86_FP80Ty())
     return std::nullopt;
   if (Kind == llvm::Intrinsic::bitreverse) {

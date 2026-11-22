@@ -30,12 +30,21 @@ namespace neverd {
 /// RCX, RDI, RSI, R8-R11: goIntegerArgumentRegisters), or -1.
 int goResultPosition(Arch A, uint64_t RegOff);
 
+/// The position of \p RegOff among Go's floating results on \p A (X0-X14,
+/// arm64 F0-F15), or -1.  Go numbers its integer and floating results apart,
+/// each from its first register.
+int goFloatResultPosition(Arch A, uint64_t RegOff);
+
 /// The results a call returns: the position of the last, and for each the
 /// bytes of its register the call's readers take, at most a word.  A
 /// position no reader takes, before the last, is a whole word.
 struct GoCallShape {
   int Last = -1;
   llvm::SmallVector<uint16_t, 9> Widths;
+  /// The floating results: the position of the last, or -1, and the bytes
+  /// of each, a float32's or a float64's.
+  int LastFloat = -1;
+  llvm::SmallVector<uint16_t, 16> FloatWidths;
 };
 
 /// The results \p Func reads after each call in \p Sites, before any write:
@@ -44,11 +53,12 @@ struct GoCallShape {
 /// returns.  A call that returns some results already counts them.  A read
 /// that only keeps the bytes a partial write leaves, a self-zeroing idiom,
 /// or a sub-register view takes no result; the view still reads as many of
-/// a result's bytes as it covers.  A call none of whose results past RAX is
-/// read is absent.
+/// a result's bytes as it covers.  With \p Floats, a read of a floating
+/// result register counts too (GoCallShape::LastFloat).  A call none of
+/// whose results past RAX is read is absent.
 std::map<uint32_t, GoCallShape>
 goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
-                  llvm::ArrayRef<MedVar> Returned = {});
+                  llvm::ArrayRef<MedVar> Returned = {}, bool Floats = false);
 
 /// What a Go function's return in \p Block hands back in the register at
 /// \p RegOff, as the return lowers a result field: the newest write of the
@@ -76,7 +86,8 @@ goReturnedValue(const llvm::DenseMap<int, const MedBlock *> &ById,
 /// leaves, at every width it leaves it, so the reads it reaches keep their
 /// values.  A width wider than its field takes the field's value in its low
 /// bytes: no reader takes more.  A call that returns some already, each a
-/// word, takes the rest.
+/// word, takes the rest.  Its floating results follow its integer ones in
+/// the record, each a float as wide as the shape says.
 void defineGoCallResults(MedFunc &Func, Arch A,
                          const std::map<uint32_t, GoCallShape> &Shapes);
 
