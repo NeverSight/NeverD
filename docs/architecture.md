@@ -6989,7 +6989,9 @@ This computation retains every live coefficient bit across machine-word
 boundaries. A bitwise expression in which each abstract input occurs once
 already uses the minimum number of binary operations for that reading.
 The region solver can use it directly and still check alternative input
-relations after restoring the original expressions.
+relations after restoring the original expressions. A one-bit XOR over
+abstracted inputs keeps its additive reading so a restored sum can cancel
+against its individual bits.
 LLVM source translation uses operand-derived zero bits to prove exact right
 shifts through overlapping masked OR and XOR expressions. The same facts bound
 flagged left shifts and arithmetic on logical shifts of those expressions.

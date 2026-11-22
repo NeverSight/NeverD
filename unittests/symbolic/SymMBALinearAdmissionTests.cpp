@@ -154,6 +154,20 @@ TEST(SymMBALinearAdmission, RepeatedLeavesStillExposeACommonBitwiseOperand) {
   EXPECT_EQ(Result.Expr, Expected);
 }
 
+TEST(SymMBALinearAdmission, RestoredOneBitSumsCancelTheirParityInputs) {
+  for (bool OmitLowBit : {false, true}) {
+    SymContext Ctx;
+    const auto Byte = Ctx.mkSub(Ctx.mkVar("x", 8), Ctx.mkVar("y", 8));
+    llvm::SmallVector<SymRef, 8> Bits;
+    for (unsigned I = 0; I < 8; ++I)
+      Bits.push_back(Ctx.mkExtract(Byte, I, 1));
+    llvm::SmallVector<SymRef, 9> Parity{Ctx.mkAdd(Bits)};
+    Parity.append(Bits.begin() + OmitLowBit, Bits.end());
+    const auto Result = simplifyMBADeep(Ctx, Ctx.mkXor(Parity));
+    EXPECT_EQ(Result.Expr, OmitLowBit ? Bits.front() : Ctx.mkZero(1));
+  }
+}
+
 TEST(SymMBALinearAdmission, CoversHiddenSubtractionNodesAtFullWidth) {
   for (unsigned Width : {8u, 64u, 257u}) {
     SCOPED_TRACE(Width);

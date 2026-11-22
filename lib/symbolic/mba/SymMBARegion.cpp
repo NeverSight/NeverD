@@ -264,6 +264,10 @@ size_t directLinearWork(const SymContext &Ctx, SymRef R, size_t Atoms,
                         SymRef Original) {
   const auto Op = Ctx.op(R);
   if (Atoms && (Op == SymOp::Or || Op == SymOp::And || Op == SymOp::Xor)) {
+    // For one-bit XOR the additive form is equally short. Restoring hidden
+    // inputs into that form can cancel a sum against its individual bits.
+    if (Op == SymOp::Xor && Ctx.width(R) == 1 && R != Original)
+      return 0;
     if (Atoms < limits::kMinReadOnceAtoms &&
         llvm::APInt::getNumWords(Ctx.width(R)) <
             limits::kMinReadOnceWordLimbs) {
