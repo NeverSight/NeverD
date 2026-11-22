@@ -22,28 +22,31 @@
 #include <webauthn.h>
 // clang-format on
 
-__declspec(dllexport) BOOL UseIcmpHandle(HANDLE Handle) {
+__declspec(dllexport) BOOL __cdecl UseIcmpHandle(HANDLE Handle) {
   return IcmpCloseHandle(Handle);
 }
 
-__declspec(dllexport) BOOL UseTransactionClock(HANDLE Manager,
-                                               LARGE_INTEGER *Clock) {
+__declspec(dllexport) BOOL __cdecl UseTransactionClock(HANDLE Manager,
+                                                       LARGE_INTEGER *Clock) {
   return GetCurrentClockTransactionManager(Manager, Clock);
 }
 
-__declspec(dllexport) BOOL UseTransactionManagerId(HANDLE Manager, GUID *Id) {
+__declspec(dllexport) BOOL __cdecl UseTransactionManagerId(HANDLE Manager,
+                                                           GUID *Id) {
   return GetTransactionManagerId(Manager, Id);
 }
 
-__declspec(dllexport) NTSTATUS UseSensorSerialization(
-    PSENSOR_COLLECTION_LIST Collection, ULONG *Size, BYTE **Bytes) {
+__declspec(dllexport) NTSTATUS __cdecl
+UseSensorSerialization(PSENSOR_COLLECTION_LIST Collection, ULONG *Size,
+                       BYTE **Bytes) {
   return CollectionsListAllocateBufferAndSerialize(Collection, Size, Bytes);
 }
 
-__declspec(dllexport) void UseSnmpRelease(void *Buffer) {
+__declspec(dllexport) void __cdecl UseSnmpRelease(void *Buffer) {
   SnmpUtilMemFree(Buffer);
 }
 
-__declspec(dllexport) HRESULT UsePlatformAuthenticator(BOOL *Available) {
+__declspec(dllexport) HRESULT __cdecl
+UsePlatformAuthenticator(BOOL *Available) {
   return WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable(Available);
 }
