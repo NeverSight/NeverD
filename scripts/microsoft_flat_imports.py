@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 import build_wdk_driver_fixtures as wdk
+import microsoft_ordinal_imports as ordinal
 import microsoft_ucrt_types as ucrt
 
 
@@ -126,6 +127,11 @@ def legacy_headers(root, cache):
 def read_symbols(inputs, directory, run):
     if wdk.digest(Path(inputs["file"])) != inputs["sha256"]:
         raise ValueError("Microsoft SDK import library changed: " + inputs["file"])
+    if witnessed := inputs.get("ordinal_export_witness"):
+        if inputs["module"] != witnessed["module"]:
+            raise ValueError("SDK ordinal witness belongs to a different DLL")
+        return ordinal.symbols(Path(inputs["file"]), inputs["architecture"],
+                               inputs["module"], witnessed["exports"])
     text = run(inputs["command"], directory / (inputs["module"] + "-imports.log"))
     symbols = ucrt.module_import_symbols(text, inputs["architecture"], inputs["module"])
     if not symbols:
@@ -138,6 +144,9 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
     current = json.loads(ucrt.INPUTS.read_text(encoding="utf-8"))
     groups = {key: value for key, value in CURRENT.items()
               if architecture != "x86" or key not in WIDE_ONLY}
+    ordinal_profiles = ordinal.profiles()
+    groups.update({name: (profile["library"], tuple(profile["headers"]))
+                   for name, profile in ordinal_profiles.items() if architecture in profile["targets"]})
     specifications = [(current["import_packages"][architecture], groups, primary,
                        primary, "c", ("winsock2", "windows"))]
     if legacy is not None:
@@ -174,6 +183,9 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
             # SensorsUtils.lib carries short imports for the versioned system DLL.
             if name == "SensorUtilities":
                 identity["module"] = "sensorsutilsv2.dll"
+            if name in ordinal_profiles:
+                record = ordinal.witness(ordinal_profiles[name], architecture)
+                identity.update(module=record["module"], ordinal_export_witness=record)
             # Both SDK libraries decorate their unannotated x86 APIs as stdcall.
             # Keep the original compiler and the declaration reader on that
             # target convention. verify_abis checks every selected object symbol.
@@ -208,6 +220,8 @@ def select(proof, declared, directory, run):
     symbols = read_symbols(proof["import_library"], directory, run)
     eligible = {name for name in symbols if name.startswith(proof.get("import_prefix", ""))}
     names = sorted(eligible & set(declared))
+    if "ordinal_export_witness" in proof["import_library"] and (missing := eligible - set(names)):
+        raise ValueError("Microsoft headers lack witnessed ordinal exports: " + ", ".join(sorted(missing)))
     if not names:
         raise ValueError("Microsoft SDK headers and import library share no named API")
     proof.update(projected_functions=names, imports_without_declaration=sorted(eligible-set(names)))

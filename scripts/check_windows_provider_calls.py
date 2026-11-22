@@ -28,6 +28,10 @@ GDIPLUS_FIXTURE = FIXTURE.with_name("windows_gdiplus_provider_calls.cpp")
 LEGACY_FIXTURE = FIXTURE.with_name("windows_legacy_sdk_calls.cpp")
 FLAT_FIXTURE = FIXTURE.with_name("windows_sdk_import_calls.c")
 SYSTEM_FIXTURE = FIXTURE.with_name("windows_sdk_system_calls.c")
+ORDINAL_FIXTURE = FIXTURE.with_name("windows_sdk_ordinal_calls.c")
+ORDINAL_FUNCTIONS = {"UseCloseCompressor": "CloseCompressor", "UseCloseDecompressor": "CloseDecompressor",
+                     "UsePrintTicketHandle": "PTCloseProvider", "UseControllerState": "XInputGetState"}
+ORDINAL_PROVIDERS = ("CabinetCompression", "PrintTicket", "XInput")
 FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombineEx",
              "UseRuntimeString": "WindowsCreateString", "UseGraphicsDevice": "D3DKMTCreateDevice",
              "UseLogFile": "CreateLogFile", "UseTpmContext": "Tbsi_Context_Create",
@@ -88,6 +92,19 @@ SYSTEM_PROVIDERS = ("InternetControlMessage", "TransactionManager", "SensorUtili
                     "SNMPUtilities", "WebAuthentication")
 
 
+def linked_ordinals(binary, reader, run):
+    result = run([reader, "--coff-imports", str(binary)], binary.with_suffix(".imports.log"))
+    result.check_returncode()
+    pairs = set()
+    for block in re.findall(r"(?ms)^Import \{\n(.*?)^\}", result.stdout):
+        module = re.search(r"(?m)^  Name: (\S+)$", block)
+        if not module:
+            raise ValueError("PE import descriptor lacks a module")
+        pairs.update((module[1].lower(), int(value))
+                     for value in re.findall(r"(?m)^  Symbol:\s*\((\d+)\)$", block))
+    return pairs
+
+
 def check(args: argparse.Namespace) -> dict:
     args.output.mkdir(parents=True, exist_ok=False)
     if getattr(args, "gdiplus", False):
@@ -96,6 +113,8 @@ def check(args: argparse.Namespace) -> dict:
         fixture, functions, provider_name = LEGACY_FIXTURE, LEGACY_FUNCTIONS, "AllJoyn"
     elif getattr(args, "sdk_system", False):
         fixture, functions, provider_name = SYSTEM_FIXTURE, SYSTEM_FUNCTIONS, "TransactionManager"
+    elif getattr(args, "sdk_ordinal", False):
+        fixture, functions, provider_name = ORDINAL_FIXTURE, ORDINAL_FUNCTIONS, "CabinetCompression"
     elif getattr(args, "sdk_imports", False):
         fixture, functions, provider_name = FLAT_FIXTURE, FLAT_FUNCTIONS, "ColorManagement"
     elif args.rdbss:
@@ -184,7 +203,9 @@ def check(args: argparse.Namespace) -> dict:
                 members = {name.lower(): name for name in source.namelist()}
                 fixture_libraries = {"GDIPlus": ("gdiplus.lib",), "AllJoyn": flat.LEGACY.values(),
                                      "ColorManagement": [flat.CURRENT[name][0] for name in FLAT_CALL_PROVIDERS],
-                                     "TransactionManager": [flat.CURRENT[name][0] for name in SYSTEM_PROVIDERS]}
+                                     "TransactionManager": [flat.CURRENT[name][0] for name in SYSTEM_PROVIDERS],
+                                     "CabinetCompression": [flat.ordinal.profiles()[name]["library"]
+                                                           for name in ORDINAL_PROVIDERS]}
                 for name in fixture_libraries.get(provider_name, LIBRARIES):
                     member = members[f"c/um/{arch}/{name.lower()}"]
                     destination = directory / name
@@ -197,6 +218,17 @@ def check(args: argparse.Namespace) -> dict:
         run([args.linker, "/dll", "/noentry", "/nodefaultlib", "/timestamp:0",
              *(["/driver", "/subsystem:native"] if args.kernel else []),
              "/out:" + str(binary), str(obj), *libraries], directory / "link.log").check_returncode()
+        ordinal_targets = {}
+        if getattr(args, "sdk_ordinal", False):
+            profiles = flat.ordinal.profiles()
+            for selected in ORDINAL_PROVIDERS:
+                witness = flat.ordinal.witness(profiles[selected], arch)
+                ordinal_targets.update({api: (witness["module"], number)
+                                        for api, number in witness["exports"].items()
+                                        if api in functions.values()})
+            reader = bridge["import_library"]["command"][0]
+            if linked_ordinals(binary, reader, run) != set(ordinal_targets.values()):
+                raise ValueError("original SDK binary does not contain the expected ordinal imports")
         for function, api in functions.items():
             references = f"\n__typeof__(&{api}) neverd_ucrt_abi_0 = &{api};\n"
             original_references = ('extern "C" {\n' + references + '}\n'
@@ -237,7 +269,7 @@ def check(args: argparse.Namespace) -> dict:
                     row["passed"] = (result.returncode == 0 and compiled.returncode == 0
                                      and actual == expected and row["retains_call"]
                                      and "unknown value" not in text and "__builtin_trap" not in text)
-                    if args.sdk_system and row["passed"]:
+                    if (args.sdk_system or getattr(args, "sdk_ordinal", False)) and row["passed"]:
                         # IR compilation accepts an unresolved image anchor. Relink the
                         # recovered caller against the same native SDK import archives.
                         obj = stem.with_suffix(".link.obj")
@@ -252,6 +284,10 @@ def check(args: argparse.Namespace) -> dict:
                                           *libraries], stem.with_suffix(".link.log"))
                             row["link_exit"] = linked.returncode
                         row["passed"] = row.get("link_exit") == 0
+                        if row["passed"] and ordinal_targets:
+                            imports = linked_ordinals(stem.with_suffix(".dll"), reader, run)
+                            row["ordinal_imports"] = sorted(imports)
+                            row["passed"] = imports == {ordinal_targets[api]}
                 except ValueError as error:
                     row["error"] = str(error)
                 report["cases"].append(row)
@@ -284,6 +320,8 @@ def main() -> None:
                          help="check color, trust, monitor, diagnostic and device service callers")
     profile.add_argument("--sdk-system", action="store_true",
                          help="check ICMP, transaction, sensor, SNMP and WebAuthn import callers")
+    profile.add_argument("--sdk-ordinal", action="store_true",
+                         help="check callers linked by ordinal to Cabinet, PrintTicket and XInput")
     parser.add_argument("--architecture", choices=("x86", "x64", "arm64"), action="append")
     parser.add_argument("--timeout", type=int, default=wdk.LIMITS["command_timeout"])
     args = parser.parse_args()

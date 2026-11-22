@@ -1,0 +1,739 @@
+{
+  "win32_metadata": {
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.win32metadata/71.0.45-preview/microsoft.windows.sdk.win32metadata.71.0.45-preview.nupkg",
+    "version": "71.0.45-preview",
+    "metadata_sha256": "b9e476a81e14060040804e4cf09b2973fc53a174befc7b3b670d4db72eef55af"
+  },
+  "providers": {
+    "AccessControlUI": {
+      "module": "aclui.dll",
+      "library": "AclUI.Lib",
+      "headers": [
+        "aclui"
+      ],
+      "exports": {
+        "CreateSecurityPage": 1,
+        "EditSecurity": 2,
+        "EditSecurityAdvanced": 3
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "57173408c92e1830dd5986132b73c79a1ecd8dfa0cab2b6efc6a41a74e048d37",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "3eb8820c58422c39340787ab5d418155cb105e52686ba1f13fdb74ff710935dd",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "6407fc35c1feceeb70fb928d74b1d6e4352cb475ccdf1af31ae0ea0365d07c8e",
+          "additional_exports": {}
+        }
+      }
+    },
+    "ActiveDirectoryHelpers": {
+      "module": "activeds.dll",
+      "library": "ActiveDS.Lib",
+      "headers": [
+        "activeds"
+      ],
+      "exports": {
+        "ADsBuildEnumerator": 4,
+        "ADsBuildVarArrayInt": 8,
+        "ADsBuildVarArrayStr": 7,
+        "ADsEnumerateNext": 6,
+        "ADsFreeEnumerator": 5,
+        "ADsGetObject": 3,
+        "ADsOpenObject": 9,
+        "AdsFreeAdsValues": 23,
+        "AdsTypeToPropVariant": 22,
+        "BinarySDToSecurityDescriptor": 29,
+        "PropVariantToAdsType": 21,
+        "SecurityDescriptorToBinarySD": 30
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "496fa23b0ed0a2ee0647b01487d59a3b5a890b4b92257b518619738a932a1646",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "76b51e23c0b0768500cc45bf3832e9464d941f8cae6052cf31ed97df2d3ef5c9",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "07ef33a67fca0cf487c5dde36aad1cc2d84343711cb9c409a2a126842cae0bad",
+          "additional_exports": {}
+        }
+      }
+    },
+    "CabinetArchive": {
+      "module": "cabinet.dll",
+      "library": "Cabinet.Lib",
+      "headers": [
+        "fci",
+        "fdi"
+      ],
+      "exports": {
+        "FCIAddFile": 11,
+        "FCICreate": 10,
+        "FCIDestroy": 14,
+        "FCIFlushCabinet": 13,
+        "FCIFlushFolder": 12,
+        "FDICopy": 22,
+        "FDICreate": 20,
+        "FDIDestroy": 23,
+        "FDIIsCabinet": 21,
+        "FDITruncateCabinet": 24
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "a46ea337d7fc04edce0b320eb70d2129cda266d047c12d923cab996018272ac8",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "bc99c4959e74204bd03f02e097e52051650fd17d1cd6db0055f75b5e3088c138",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "f845e2da5bd505146dce56546f01dab05dd23c975cbbf50260619817bc4a71dd",
+          "additional_exports": {}
+        }
+      }
+    },
+    "CabinetCompression": {
+      "module": "cabinet.dll",
+      "library": "Cabinet.Lib",
+      "headers": [
+        "compressapi"
+      ],
+      "exports": {
+        "CloseCompressor": 35,
+        "CloseDecompressor": 45,
+        "Compress": 33,
+        "CreateCompressor": 30,
+        "CreateDecompressor": 40,
+        "Decompress": 43,
+        "QueryCompressorInformation": 32,
+        "QueryDecompressorInformation": 42,
+        "ResetCompressor": 34,
+        "ResetDecompressor": 44,
+        "SetCompressorInformation": 31,
+        "SetDecompressorInformation": 41
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "a46ea337d7fc04edce0b320eb70d2129cda266d047c12d923cab996018272ac8",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "bc99c4959e74204bd03f02e097e52051650fd17d1cd6db0055f75b5e3088c138",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "f845e2da5bd505146dce56546f01dab05dd23c975cbbf50260619817bc4a71dd",
+          "additional_exports": {}
+        }
+      }
+    },
+    "ColorModule": {
+      "module": "icm32.dll",
+      "library": "Icm32.Lib",
+      "headers": [
+        "icm"
+      ],
+      "exports": {
+        "CMCheckColors": 1,
+        "CMCheckColorsInGamut": 2,
+        "CMCheckRGBs": 3,
+        "CMConvertColorNameToIndex": 19,
+        "CMConvertIndexToColorName": 20,
+        "CMCreateDeviceLinkProfile": 4,
+        "CMCreateMultiProfileTransform": 5,
+        "CMCreateProfile": 6,
+        "CMCreateProfileW": 7,
+        "CMCreateTransform": 8,
+        "CMCreateTransformExt": 9,
+        "CMCreateTransformExtW": 10,
+        "CMCreateTransformW": 11,
+        "CMDeleteTransform": 12,
+        "CMGetInfo": 13,
+        "CMGetNamedProfileInfo": 21,
+        "CMIsProfileValid": 14,
+        "CMTranslateColors": 15,
+        "CMTranslateRGB": 16,
+        "CMTranslateRGBs": 17,
+        "CMTranslateRGBsExt": 18
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "3d47462bd1fae6e4bdd47f11e39ce710b21fa13dad302674e40e6f03b33bc29c",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "37a0716b7b3af2a91ad3d29b4c7d1e85012ffdc2b83d69a3e5b57d5a6b62a6da",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "a6f4e385c480aa100f4dd110ed2557b0b6d066b006d6d025648a8acded2fc26e",
+          "additional_exports": {}
+        }
+      }
+    },
+    "ColorProfileOrdinals": {
+      "module": "mscms.dll",
+      "library": "Mscms.Lib",
+      "headers": [
+        "icm"
+      ],
+      "exports": {
+        "AssociateColorProfileWithDeviceA": 1,
+        "ColorProfileAddDisplayAssociation": 230,
+        "ColorProfileGetDisplayDefault": 234,
+        "ColorProfileGetDisplayList": 233,
+        "ColorProfileGetDisplayUserScope": 235,
+        "ColorProfileRemoveDisplayAssociation": 231,
+        "ColorProfileSetDisplayDefaultAssociation": 232
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "bc7c5731715236656390e2c07a69023f6876ebe6ad5559655333a2379931fa0d",
+          "additional_exports": {
+            "ColorProfileGetDeviceCapabilities": 236
+          }
+        },
+        "x64": {
+          "image_sha256": "05de48bbd8b2a4c5d1d147ef6adaf992de2bee022094a0f986ed946d320d6690",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "be8b0c33b2f589e0d4a9ae7e5017040031651fd36e83a9d37c4b09e55837594d",
+          "additional_exports": {}
+        }
+      }
+    },
+    "Direct2DUtilities": {
+      "module": "d2d1.dll",
+      "library": "d2d1.lib",
+      "headers": [
+        "d2d1",
+        "d2d1_1",
+        "d2d1_2",
+        "d2d1_3"
+      ],
+      "exports": {
+        "D2D1ComputeMaximumScaleFactor": 12,
+        "D2D1ConvertColorSpace": 6,
+        "D2D1CreateDevice": 7,
+        "D2D1CreateDeviceContext": 8,
+        "D2D1CreateFactory": 1,
+        "D2D1GetGradientMeshInteriorPointsFromCoonsPatch": 13,
+        "D2D1InvertMatrix": 5,
+        "D2D1IsMatrixInvertible": 4,
+        "D2D1MakeRotateMatrix": 2,
+        "D2D1MakeSkewMatrix": 3,
+        "D2D1SinCos": 9,
+        "D2D1Tan": 10,
+        "D2D1Vec3Length": 11
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "a698d6261da0c31433056800be5562117b289c76622db8c9123596bd63bd57f2",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "8310110a1fea0523833a54884cf0d292fd56113896ff5fb7feb259547d885c49",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "8c01752956d09c428aa686ae6f65d8f2f039e2cd080762aeeae4cdebe87e2026",
+          "additional_exports": {}
+        }
+      }
+    },
+    "Direct3D9On12": {
+      "module": "d3d9.dll",
+      "library": "d3d9.lib",
+      "headers": [
+        "d3d9",
+        "d3d9on12"
+      ],
+      "exports": {
+        "Direct3DCreate9On12": 20,
+        "Direct3DCreate9On12Ex": 21
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "dd2bd38358c0fd76c1eb2bc87c06534a580364c873b9d86dace3fc71369e4f1a",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "05cca6e73ae6cb02c1513b78517e103742ac07e8580ff67225ba2260d2c9c12b",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "210e52314d24bdc8492e5185674626225af2c030ff51d13c01155aedb2d248ad",
+          "additional_exports": {}
+        }
+      }
+    },
+    "DirectSound": {
+      "module": "dsound.dll",
+      "library": "dsound.lib",
+      "headers": [
+        "dsound"
+      ],
+      "exports": {
+        "DirectSoundCaptureCreate": 6,
+        "DirectSoundCaptureCreate8": 12,
+        "DirectSoundCaptureEnumerateA": 7,
+        "DirectSoundCaptureEnumerateW": 8,
+        "DirectSoundCreate": 1,
+        "DirectSoundCreate8": 11,
+        "DirectSoundEnumerateA": 2,
+        "DirectSoundEnumerateW": 3,
+        "DirectSoundFullDuplexCreate": 10
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "03089415485d10c86e08c0bec51386f014c2fee28e9992aa6246d9973e37c25f",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "65248c7a42e1a49aaaf4da58b118bea0205519071a4d8f1bb121fcae418e7a35",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "9634bb67200ca6322cf868bc9332ef9e328e770c298a87754f666eb179013b66",
+          "additional_exports": {}
+        }
+      }
+    },
+    "DirectorySecurity": {
+      "module": "dssec.dll",
+      "library": "dssec.lib",
+      "headers": [
+        "dssec"
+      ],
+      "exports": {
+        "DSCreateISecurityInfoObject": 1,
+        "DSCreateISecurityInfoObjectEx": 4,
+        "DSCreateSecurityPage": 2,
+        "DSEditSecurity": 3
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "4afe94b4948ee4d5b95d9702f28ed3c023b7a06980eba4e52e0666034b588ea5",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "d7cce27536d737adb145935785d4be93ad5f44e83c69a1ed196c1f3027273236",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "77340f52459cac862aacca605a60514aa0eb6486cf3d4ca40c8d7cd08285d3e6",
+          "additional_exports": {}
+        }
+      }
+    },
+    "Hyperlinks": {
+      "module": "hlink.dll",
+      "library": "HLink.Lib",
+      "headers": [
+        "hlink"
+      ],
+      "exports": {
+        "HlinkClone": 7,
+        "HlinkCreateBrowseContext": 6,
+        "HlinkCreateExtensionServices": 32,
+        "HlinkCreateFromData": 5,
+        "HlinkCreateFromMoniker": 3,
+        "HlinkCreateFromString": 4,
+        "HlinkCreateShortcut": 23,
+        "HlinkCreateShortcutFromMoniker": 29,
+        "HlinkCreateShortcutFromString": 27,
+        "HlinkGetSpecialReference": 22,
+        "HlinkGetValueFromParams": 28,
+        "HlinkIsShortcut": 25,
+        "HlinkNavigate": 10,
+        "HlinkNavigateToStringReference": 8,
+        "HlinkOnNavigate": 9,
+        "HlinkOnRenameDocument": 12,
+        "HlinkParseDisplayName": 18,
+        "HlinkPreprocessMoniker": 33,
+        "HlinkQueryCreateFromData": 20,
+        "HlinkResolveMonikerForData": 14,
+        "HlinkResolveShortcut": 24,
+        "HlinkResolveShortcutToMoniker": 30,
+        "HlinkResolveShortcutToString": 26,
+        "HlinkResolveStringForData": 15,
+        "HlinkSetSpecialReference": 21,
+        "HlinkTranslateURL": 31,
+        "HlinkUpdateStackItem": 11,
+        "OleSaveToStreamEx": 16
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "8166dc495af8580184da3e7dcbde4c1cc19af1b938d2f79b2e6364bc68e0f7e0",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "63c306375f11eba85a3cd947eee3c70a67245efb3746cd00fd8759d8e51d4040",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "b12b9791faac00ecbf30cb0f9dff00983b39819dc8d48441a0bae4876102c21c",
+          "additional_exports": {}
+        }
+      }
+    },
+    "MAPIUtilities": {
+      "module": "mapi32.dll",
+      "library": "MAPI32.Lib",
+      "headers": [
+        "wab",
+        "imessage",
+        "tnef",
+        "mapi"
+      ],
+      "exports": {
+        "BuildDisplayTable": 46,
+        "ChangeIdleRoutine": 55,
+        "CloseIMsgSession": 197,
+        "CreateIProp": 60,
+        "DeinitMapiUtil": 34,
+        "DeregisterIdleRoutine": 54,
+        "EnableIdleRoutine": 53,
+        "FEqualNames": 72,
+        "FPropCompareProp": 79,
+        "FPropContainsProp": 78,
+        "FPropExists": 137,
+        "FreePadrlist": 139,
+        "FreeProws": 140,
+        "FtAddFt": 121,
+        "FtMulDw": 124,
+        "FtMulDwDw": 125,
+        "FtNegFt": 126,
+        "FtSubFt": 123,
+        "FtgRegisterIdleRoutine": 52,
+        "GetAttribIMsgOnIStg": 200,
+        "GetTnefStreamCodepage": 153,
+        "HrAddColumns": 81,
+        "HrAddColumnsEx": 82,
+        "HrAllocAdviseSink": 36,
+        "HrDispatchNotifications": 239,
+        "HrGetOneProp": 135,
+        "HrIStorageFromStream": 194,
+        "HrQueryAllRows": 75,
+        "HrSetOneProp": 136,
+        "HrThisThreadAdviseSink": 42,
+        "LPropCompareProp": 80,
+        "LpValFindProp": 173,
+        "MAPIDeinitIdle": 50,
+        "MAPIFreeBuffer": 17,
+        "MAPIGetDefaultMalloc": 59,
+        "MAPIInitIdle": 49,
+        "MapStorageSCode": 201,
+        "OpenIMsgOnIStg": 198,
+        "OpenIMsgSession": 196,
+        "OpenStreamOnFile": 147,
+        "OpenTnefStream": 149,
+        "OpenTnefStreamEx": 151,
+        "PpropFindProp": 138,
+        "PropCopyMore": 76,
+        "RTFSync": 183,
+        "ScCopyNotifications": 165,
+        "ScCopyProps": 171,
+        "ScCountNotifications": 164,
+        "ScCountProps": 170,
+        "ScCreateConversationIndex": 244,
+        "ScDupPropset": 174,
+        "ScInitMapiUtil": 33,
+        "ScLocalPathFromUNC": 193,
+        "ScRelocNotifications": 166,
+        "ScRelocProps": 172,
+        "ScUNCFromLocalPath": 192,
+        "SetAttribIMsgOnIStg": 199,
+        "SzFindCh": 130,
+        "SzFindLastCh": 131,
+        "SzFindSz": 132,
+        "UFromSz": 133,
+        "UlAddRef": 128,
+        "UlPropSize": 77,
+        "UlRelease": 129,
+        "WrapCompressedRTFStream": 185,
+        "WrapStoreEntryID": 73
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "a4cd7ec5ca65772d99c2f6cbc1dd0d2caeab8785be19da45a14750db74497a1c",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "09b32b168c8c56ccfaf720af5714f08f574682ec0abd8009ded2a7272d459a31",
+          "additional_exports": {}
+        }
+      }
+    },
+    "NetworkProviderOrdinals": {
+      "module": "ntlanman.dll",
+      "library": "ntlanman.lib",
+      "headers": [
+        "npapi"
+      ],
+      "exports": {
+        "NPAddConnection4": 55,
+        "NPGetConnection3": 54,
+        "NPGetConnectionPerformance": 49,
+        "NPGetPersistentUseOptionsForConnection": 56
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "e8233ea13f68cb70d22631c897b37cecea41b4ed61dffd0d0ff375df4f86f972",
+          "additional_exports": {
+            "NPCancelConnection2": 57
+          }
+        },
+        "x64": {
+          "image_sha256": "64ee1a30e7e2775b4c31aeea74d888a64544b8f198c2eee94c81b3f9a6e7e9b6",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "e9de064ab731d6e8d6c88a974ff51c9ecb469564d4c1cf046b3b1924890c9bab",
+          "additional_exports": {}
+        }
+      }
+    },
+    "ODBCBulkCopy": {
+      "module": "odbcbcp.dll",
+      "library": "odbcbcp.lib",
+      "headers": [
+        "sql",
+        "sqlext",
+        "odbcss"
+      ],
+      "exports": {
+        "SQLCloseEnumServers": 27,
+        "SQLGetNextEnumeration": 26,
+        "SQLInitEnumServers": 25,
+        "SQLLinkedCatalogsA": 23,
+        "SQLLinkedCatalogsW": 22,
+        "SQLLinkedServers": 21,
+        "bcp_batch": 2,
+        "bcp_bind": 3,
+        "bcp_colfmt": 4,
+        "bcp_collen": 5,
+        "bcp_colptr": 6,
+        "bcp_columns": 8,
+        "bcp_control": 9,
+        "bcp_done": 10,
+        "bcp_exec": 12,
+        "bcp_getcolfmt": 28,
+        "bcp_initA": 11,
+        "bcp_initW": 18,
+        "bcp_moretext": 13,
+        "bcp_readfmtA": 15,
+        "bcp_readfmtW": 19,
+        "bcp_sendrow": 14,
+        "bcp_setcolfmt": 29,
+        "bcp_writefmtA": 16,
+        "bcp_writefmtW": 20,
+        "dbprtypeA": 1,
+        "dbprtypeW": 17
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "91f0e0588629c0c36b7ce8eb25081e1298a7cbc14c29b9c8fa069e8120196751",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "97c46b51787a5244764f72739ada8b69ec6ce74a151304eb1356aa0d9b61a175",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "72dc9959afbc3e1475c1aaf787770646a0109157585995b0f9ddcf0bbbcc50e5",
+          "additional_exports": {}
+        }
+      }
+    },
+    "OLEDialogOrdinals": {
+      "module": "oledlg.dll",
+      "library": "OleDlg.Lib",
+      "headers": [
+        "oledlg"
+      ],
+      "exports": {
+        "OleUIAddVerbMenuA": 1,
+        "OleUIBusyA": 8,
+        "OleUICanConvertOrActivateAs": 2,
+        "OleUIChangeIconA": 6,
+        "OleUIChangeSourceA": 12,
+        "OleUIConvertA": 7,
+        "OleUIEditLinksA": 5,
+        "OleUIInsertObjectA": 3,
+        "OleUIObjectPropertiesA": 11,
+        "OleUIPasteSpecialA": 4,
+        "OleUIPromptUserA": 10,
+        "OleUIUpdateLinksA": 9
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "5d9d2aeef00268b66bce63a27d307563362c40b5e2b0ccef4ae0c8284b1a33d4",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "55dae323759e81c5c0a49fa5d2de541d8cc4888e5e97dc61108655b96a9f733a",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "715347064d995bfa27b1c0362aa010b62711917c9cec5d7cdbd1a24225ee97cf",
+          "additional_exports": {}
+        }
+      }
+    },
+    "OLEPictureProperties": {
+      "module": "oleaut32.dll",
+      "library": "OleAut32.Lib",
+      "headers": [
+        "olectl"
+      ],
+      "exports": {
+        "OleCreateFontIndirect": 420,
+        "OleCreatePictureIndirect": 419,
+        "OleCreatePropertyFrame": 417,
+        "OleCreatePropertyFrameIndirect": 416,
+        "OleIconToCursor": 415,
+        "OleLoadPicture": 418,
+        "OleLoadPictureEx": 401,
+        "OleLoadPictureFile": 422,
+        "OleLoadPictureFileEx": 402,
+        "OleLoadPicturePath": 424,
+        "OleSavePictureFile": 423,
+        "OleTranslateColor": 421
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "427ea11ddeb032dbd12a863873fd7608017e65b0f268d5f6529ae5ad6307b8ff",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "4dd40579e7254dd553b49b229aa85b9c079586b034e37e564909da25eb298345",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "3087391a67ae4574850f52846869ff5c6bac35a5e540e01f58c97d90a87c40c4",
+          "additional_exports": {}
+        }
+      }
+    },
+    "PrintTicket": {
+      "module": "prntvpt.dll",
+      "library": "prntvpt.lib",
+      "headers": [
+        "prntvpt"
+      ],
+      "exports": {
+        "PTCloseProvider": 4,
+        "PTConvertDevModeToPrintTicket": 9,
+        "PTConvertPrintTicketToDevMode": 8,
+        "PTGetPrintCapabilities": 6,
+        "PTGetPrintDeviceCapabilities": 11,
+        "PTGetPrintDeviceResources": 12,
+        "PTMergeAndValidatePrintTicket": 7,
+        "PTOpenProvider": 2,
+        "PTOpenProviderEx": 3,
+        "PTQuerySchemaVersionSupport": 1,
+        "PTReleaseMemory": 10
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "9042fad422e54f2ffcdefc62ec56a6a08f0bcf31fb9a8dfe0fc8af9cf4ad9ee7",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "e4969df90b3df882f7e1c0b34464c1e818c79a5c075beddc7d7394564c911496",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "32d767c3641f31c9cccd02ab0ab672761885750dba41c9a98b3d34fd704e7d37",
+          "additional_exports": {}
+        }
+      }
+    },
+    "VideoForWindowsVersion": {
+      "module": "msvfw32.dll",
+      "library": "msvfw32.Lib",
+      "headers": [
+        "vfw"
+      ],
+      "exports": {
+        "VideoForWindowsVersion": 2
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "bd718a76155573cd0e6b3215606ba029eee3faba1993dacaacb9271f61425559",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "7e09b985d0ce2e6cab125bfb88ea3f3f85e9de065bcf2c140c7ba6ca82ad5dc0",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "a521d6b2a6684b4c50bef0335e61546d998f30680378ff11a8ffbbf782a7af9d",
+          "additional_exports": {}
+        }
+      }
+    },
+    "XInput": {
+      "module": "xinput1_4.dll",
+      "library": "xinput.lib",
+      "headers": [
+        "xinput"
+      ],
+      "exports": {
+        "XInputEnable": 5,
+        "XInputGetAudioDeviceIds": 10,
+        "XInputGetBatteryInformation": 7,
+        "XInputGetCapabilities": 4,
+        "XInputGetKeystroke": 8,
+        "XInputGetState": 2,
+        "XInputSetState": 3
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "ca2c4b691c701b1388bc5699f20d034afe2c4879bf1203d82a9a43adee9edbe5",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "cc119f987bf33731fcd22c3a9bbcc675f31d80593a4c26428b363d6eedef974b",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "afcef57f5c6068cedb49ddb370a8d070867fd47fcc8a67fd11694053885dec8d",
+          "additional_exports": {}
+        }
+      }
+    }
+  },
+  "existing_loader_contracts": [
+    {
+      "module": "d3d12.dll",
+      "exports": {
+        "D3D12CreateDevice": 101
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "d8c4f329a5e5a19f37797fdeff6a1ad45811a599a85b95d4458e66b342083e74",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "978791504f40e96ae85570c0e45e24a6e79aa003087a45c45a7545f8321a4f8f",
+          "additional_exports": {}
+        },
+        "x86": {
+          "image_sha256": "65ff11606204621174f4482b9938c91f4e899f7ddcdda03e1bcfe4f13e3351f0",
+          "additional_exports": {}
+        }
+      }
+    }
+  ]
+}
