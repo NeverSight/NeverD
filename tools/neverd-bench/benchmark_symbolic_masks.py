@@ -1754,6 +1754,48 @@ def blended_field(width, case):
     return f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
 
 
+def masked_join_product(width, case):
+    """Products of shuffled, independently masked OR/XOR fields."""
+    rng = random.Random(0x5A34F + width * 79 + case * 2647)
+    variant = case % 4
+    if width <= 64:
+        degree, size = ((67, 6), (73, 9), (89, 7), (97, 11))[variant]
+    else:
+        degree, size = ((1451, 31), (1511, 42), (1613, 65), (1709, 54))[variant]
+    arity = (3, 4, 5, 7)[variant]
+    starts = (width - size - 1, max(1, width // 2 - size // 2), min(63, width - size))
+    axes = ("(x^y)", "(u+v)", "((v|w)^(y+z))", "((x&z)^u)",
+            "((v|y)+x)", "(w^(x+z))", "((u&w)+y)")
+    masks = [[rng.getrandbits(size) | (1 << (j % size)) for j in range(arity)]
+             for _ in starts]
+    factors = []
+    for i in range(degree):
+        axis = (i + case) % (2 + case % 2)
+        start = starts[axis]
+        order = list(range(arity))
+        rng.shuffle(order)
+        arms = []
+        for j in order:
+            live = masks[axis][j]
+            if i == degree // 2 and case % 3 and j == 0:
+                live ^= 1 << (size // 2)
+            outside = rng.getrandbits(width) & ~(((1 << size) - 1) << start)
+            mask = outside | (live << start)
+            arms.append(f"({axes[(j + axis) % len(axes)]}&{mask:#x})")
+        at = rng.randrange(width - size + 1)
+        op = "|" if (axis + case) % 2 else "^"
+        field = f"extract(ror(({op.join(arms)}),{(start - at) % width}),{at},{size})"
+        if i % 3 == 2:
+            word = f"concat(extract(w,{size},{width - size}),{field})"
+        else:
+            word = f"{('zext', 'sext')[i % 3]}({field},{width})"
+        offset = rng.randrange(-35, 36) | 1
+        weight = (rng.randrange(-27, 28) | 1) << (size + 1)
+        factors.append(f"({offset}+({weight})*{word})")
+    scale = 3 << (width - 2 * size - 1)
+    return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
+
+
 def overlapping_field(width, case):
     """Masked fields with two live operands and first-order modular products."""
     rng = random.Random(0x91A27 + 47 * width + 1889 * case)
@@ -2078,7 +2120,7 @@ def main():
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
-                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field"),
+                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field", "masked-join"),
         default="complement",
     )
     args = parser.parse_args()
@@ -2102,6 +2144,7 @@ def main():
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
             "blended-field": (3329, 4097, 6145),
             "overlapping-field": (4097, 7169, 9217),
+            "masked-join": (32, 64, 1025, 4097, 8193, 12289),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2160,6 +2203,7 @@ def main():
                 "masked-window": masked_window_corpus,
                 "blended-field": lambda w, n: [blended_field(w, i) for i in range(n)],
                 "overlapping-field": lambda w, n: [overlapping_field(w, i) for i in range(n)],
+                "masked-join": lambda w, n: [masked_join_product(w, i) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

@@ -7026,10 +7026,21 @@ the operand bounds prove each requested signed or unsigned no-wrap condition.
 Both inputs can contribute to the field. The builder slices both literal masks
 at the last relevant carry boundary and reuses a shared operand's field.
 A bounded number of splits per extraction keeps nested masked sums tractable.
+OR and XOR fields can also span several masked inputs. Each input supplies
+only its selected literal bits. When the bounded mask check shows that every
+mask already fits the field, one extraction after the join keeps a common
+shift shared.
 For large products of affine factors, two perturbations can vanish together
 modulo the observed width. Prefix and suffix products then give the exact
 weight of each surviving low field, including for even offsets. The solver
 combines equal fields at their live width and appends the constant low bits.
+This computation retains every live coefficient bit across machine-word
+boundaries. A bitwise expression in which each abstract input occurs once
+already uses the minimum number of binary operations for that reading.
+The region solver can use it directly and still check alternative input
+relations after restoring the original expressions. A one-bit XOR over
+abstracted inputs keeps its additive reading so a restored sum can cancel
+against its individual bits.
 LLVM source translation uses operand-derived zero bits to prove exact right
 shifts through overlapping masked OR and XOR expressions. The same facts bound
 flagged left shifts and arithmetic on logical shifts of those expressions.

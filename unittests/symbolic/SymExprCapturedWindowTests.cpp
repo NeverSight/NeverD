@@ -399,6 +399,53 @@ TEST(SymExpr, OverlappingFieldsReuseTheSameSliceAcrossDifferentMasks) {
   }
 }
 
+TEST(SymExpr, MaskedBitwiseJoinsShareOnlyTheObservedLanes) {
+  constexpr unsigned Width = 193;
+  SymContext C;
+  const std::array Vars{C.mkVar("x", Width), C.mkVar("y", Width),
+                        C.mkVar("z", Width)};
+  for (auto Op : {SymOp::Or, SymOp::Xor}) {
+    auto Join = [&](llvm::ArrayRef<SymRef> Arms) {
+      return Op == SymOp::Or ? C.mkOr(Arms) : C.mkXor(Arms);
+    };
+    for (unsigned At : {0u, 63u, 128u}) {
+      constexpr unsigned Bits = 65;
+      SCOPED_TRACE(::testing::Message() << unsigned(Op) << ',' << At);
+      const auto Window = llvm::APInt::getBitsSet(Width, At, At + Bits);
+      const auto Outside = ~Window;
+      llvm::SmallVector<SymRef, 4> Wide, Narrow, Cropped;
+      for (unsigned I = 0; I < Vars.size(); ++I) {
+        auto Mask = Window;
+        Mask.clearBit(At + 1 + I);
+        Wide.push_back(C.mkAnd(Vars[I], C.mkConst(Mask | Outside)));
+        Narrow.push_back(C.mkAnd(C.mkExtract(Vars[I], At, Bits),
+                                 C.mkConst(Mask.extractBits(Bits, At))));
+        Cropped.push_back(C.mkAnd(Vars[I], C.mkConst(Mask)));
+      }
+      const auto Literal = llvm::APInt::getOneBitSet(Width, At + Bits - 1);
+      Wide.push_back(C.mkConst(Literal | Outside));
+      Narrow.push_back(C.mkConst(Literal.extractBits(Bits, At)));
+      const auto Expected = Join(Narrow);
+      const auto Word = Join(Wide);
+      EXPECT_EQ(C.mkExtract(Word, At, Bits), Expected);
+      std::reverse(Wide.begin(), Wide.end());
+      EXPECT_EQ(C.mkExtract(C.mkRor(Join(Wide), C.mkConst(Width, At)), 0, Bits),
+                Expected);
+      if (At != 0) {
+        const auto Shared = Join(Cropped);
+        EXPECT_EQ(C.operand(C.mkExtract(Shared, At, Bits), 0), Shared);
+      }
+      for (unsigned I = 0; I < Vars.size(); ++I) {
+        std::array Values{llvm::APInt(Width, 0), llvm::APInt(Width, 0),
+                          llvm::APInt(Width, 0)};
+        Values[I] = llvm::APInt::getAllOnes(Width);
+        const auto Full = C.eval(Word, Values);
+        EXPECT_EQ(C.eval(Expected, Values), Full.extractBits(Bits, At));
+      }
+    }
+  }
+}
+
 TEST(SymExpr, SharedMaskedSumsKeepNestedFieldProjectionBounded) {
   constexpr unsigned Width = 193, Depth = 36;
   for (bool SameSource : {true, false}) {

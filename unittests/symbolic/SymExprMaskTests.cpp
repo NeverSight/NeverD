@@ -432,12 +432,16 @@ TEST(SymExprMask, RightShiftConstantCountsHaveOneWidthIndependentIdentity) {
     auto X = C.mkVar("x", W);
     for (unsigned N : {0U, W / 2, W - 1, W, W + 1}) {
       auto Short = C.mkConst(16, N), Long = C.mkConst(256, N);
+      EXPECT_EQ(C.mkShl(X, Short), C.mkShl(X, Long));
       EXPECT_EQ(C.mkLShr(X, Short), C.mkLShr(X, Long));
       EXPECT_EQ(C.mkAShr(X, Short), C.mkAShr(X, Long));
     }
-    auto Huge = C.mkConst(llvm::APInt::getOneBitSet(256, 200));
+    auto Huge = C.mkConst(llvm::APInt::getOneBitSet(256, 200) | 1);
+    EXPECT_EQ(C.mkShl(X, Huge), C.mkZero(W));
     EXPECT_EQ(C.mkLShr(X, Huge), C.mkZero(W));
     EXPECT_EQ(C.mkAShr(X, Huge), C.mkAShr(X, C.mkConst(32, W - 1)));
+    EXPECT_EQ(C.mkAShr(C.mkConst(llvm::APInt::getSignMask(W)), Huge),
+              C.mkOnes(W));
   }
   SymContext C;
   auto X = C.mkVar("x", 8);

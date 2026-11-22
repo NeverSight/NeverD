@@ -440,6 +440,16 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       Edges += Ctx.numOperands(D);
     }
   }
+  if (!Mixed && Scale && First < Observed && First >= Observed - First &&
+      hasJoinedLowField(Ctx, Disturbance(Factors.front()), Observed - First)) {
+    // Collect the live field before expansion mixes sign and zero extensions
+    // of the same word. The narrow reader checks every factor and coefficient.
+    const auto Compact = foldTruncatedProduct(Ctx, Root, Observed, Budget,
+                                              Storage, EmittedReading);
+    if (Compact != Root || Budget.exhausted())
+      return Compact;
+    Factors = Ctx.operands(Root).drop_front();
+  }
   llvm::SmallVector<SymRef, 16> High, Remainder;
   if (Mixed) {
     // Keep the low factors as an exact multiplier. Among disturbances with
