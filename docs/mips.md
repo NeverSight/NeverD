@@ -1199,6 +1199,12 @@ outcomes are checked by original-target execution. Memory tests also compare
 literal 16/32-bit encodings with independent byte expectations and Unicorn,
 including sign extension, aliases, exact stores and failed/discarded loads.
 
+For MIPS16, the fixed-address decoder sends detailed no-text requests directly
+to the Capstone MIPS16 decoder and its shared instruction mapper. The
+`mips16` and `mips16el` profiles of `neverd-mips-bench` compare this path
+with the public Capstone iterator on the same bytes. Text output and skip-data
+use the ordinary Capstone path. [Capstone implementation and differential tests](https://github.com/NeverSight/capstone/pull/30).
+
 `neverd-mips-bench micromips|micromipsel capstone|decode|lift CODE REPEATS`
 uses matching microMIPS options for physical Capstone/Decoder comparisons.
 Decode plus lift is a separate workload. The paired regression runner continues
