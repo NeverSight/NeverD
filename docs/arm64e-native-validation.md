@@ -349,12 +349,68 @@ passes the resulting signing recipes to dyld. An explicit source binding names
 an address in the original image. After a dylib layout change, ordinary GOT
 slots and signed or unsigned pointer initializers all rebase to that address
 in the new layout. The successful patch receipt records this address in
-`bindings[].resolved_va` for both source IR and native objects. These LLVM
-toolchains accept inline stack probes. Modules that also request Apple’s named
-`__chkstk_darwin` helper receive a diagnostic before code generation. The
-Apple Clang native-object route can preserve that helper. Compiler selection
-remains explicit with `--compiler-path`. The compatibility profile pins the r6
-release tag and archive digest. The dev branch selects r7 for fresh builds.
+`bindings[].resolved_va` for both source IR and native objects.
+
+The NeverSight LLVM source backend accepts Apple's explicit
+`"probe-stack"="__chkstk_darwin"` on Darwin AArch64. A fixed frame
+uses the effective threshold from its function or module. A dynamic allocation
+passes its byte count in `x9` before rounding to the stack alignment. With
+`ptrauth-calls`, the helper address is an IA-signed, address-diversified import
+slot consumed by `blraa`. The arm64e Mach-O installer can resolve a newly
+required probe through libSystem. When a replacement introduces a new dylib,
+the installer reserves one load command per new provider before moving the
+sections of a zero-base image. A direct branch to a newly declared function
+receives a local frameless stub that authenticates its dyld-bound IA pointer
+in RELRO. The slot remains separate from a DB-signed function-pointer field
+that names the same function.
+
+Prebuilt compilers without named-probe support diagnose that request in IR.
+Apple Clang's native-object profile can supply its own probe with an explicitly
+selected `--compiler-path`. The r6 compatibility profile pins its release tag
+and archive digest. Fresh builds use the source fork by default. Enabling
+`NEVERD_LLVM_PREBUILT` selects r7 unless the build pins another package.
+[Darwin stack probe and data-key lowering in the LLVM fork](https://github.com/NeverSight/llvm-project/pull/16).
+
+Direct calls through DA- and DB-signed function-pointer fields authenticate the
+value using the key and discriminator carried by the IR call. In the Apple
+Clang 17 O0 control, a DB-qualified call selected `blrab`, which verifies an
+IB signature. AArch64 has combined branch instructions for IA and IB. For a
+data key the fork emits `autd*` and the consuming branch consecutively,
+including tail calls. On older
+LLVM packages NeverD uses `llvm.ptrauth.resign` before the authenticated call
+to preserve the field's original signing contract. For functions using
+PAuth_LR the fork keeps the target in `x17` while the epilogue uses `x16`.
+Older packages use a regular authenticated call when a tail call is optional
+and diagnose an explicit `musttail` requirement.
+
+Both hosted Darwin profiles executed the O0 and O2 objects from SelectionDAG
+and GlobalISel. Each ran fixed and dynamic stack allocations, accepted valid
+DA/DB field calls, rejected calls after a field changed signing addresses, and
+ran a destructor and typed catch through a DB-signed call. The r6 objects
+also passed the valid and invalid field calls on both runners.
+[Source-fork execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45009562770) ·
+[r6 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45009493056).
+
+The macOS 26 and Xcode 27 runners each loaded ten O0/O2 dylibs through dyld.
+The inputs covered automatic and explicit libSystem imports, an existing probe
+import, spare header space, and a new sibling dylib. Compact inputs moved by
+16 KiB. Each image executed a direct DB field call and both stack probes. The
+new provider's stub had a frameless compact-unwind entry.
+[Installed dylib execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45012672355).
+
+The Release CLI also published the Apple Clang 17 modules with the default
+stack protector. Their guard uses an ordinary libSystem data binding and
+their failure handler uses an authenticated callable. Two further images
+bound the same external function both through a DB/address-diversified
+field and through a direct call. Both runners executed twelve installed
+images and four NeverD-generated objects from the source and r6 builds.
+[Release images and objects](https://github.com/gmh5225/test_mac_intel/actions/runs/45016941253).
+
+To inspect the signing recipes, run
+`dyld_info -imports -fixup_chain_details <image>` and match each bind ordinal
+to its import. The local Command Line Tools' `dyld_info -fixups` crashed while
+formatting the image that already imported the helper. The raw chain dump,
+`dyld_info -validate_only`, and system dyld each handled that image.
 
 The artifact directory for
 `AArch64AuthenticatedCall.CompilesFrontendAuthenticatedGlobals` includes
@@ -362,8 +418,10 @@ The artifact directory for
 the IA and IB calls, passes the DB-signed aggregate field to a function that
 takes a regular function pointer, and reads the DA-signed data pointer with a
 three-byte addend. Both Darwin profiles ran the NeverD objects and the Apple
-Clang controls. Source, native-object and direct legacy-IR installation also
-resolved an explicitly bound constant after a 16 KiB image slide.
+Clang controls. The fixture also calls through DA- and DB-signed fields inside
+the NeverD-generated object. Source, native-object and direct legacy-IR
+installation also resolved an explicitly bound constant after a 16 KiB image
+slide.
 [Four-key objects and installed-image execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44998646615).
 
 Apple Clang 17 compiled the C++ installation fixture with

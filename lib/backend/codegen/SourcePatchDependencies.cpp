@@ -224,9 +224,21 @@ llvm::Error validateSourcePatchDependencyDeclarations(
     return llvm::Error::success();
   if (auto Error = validateSourcePatchDependencyRequests(Requests))
     return Error;
-  for (const auto &Request : Requests)
+  for (const auto &Request : Requests) {
+    // Frame lowering can introduce these references after IR validation.
+    // The native installer verifies the actual use and its dyld provider.
+    if (Module.getTargetTriple().isArm64e() &&
+        Module.getTargetTriple().isOSDarwin() &&
+        !Module.getNamedValue(Request.Symbol) &&
+        llvm::any_of(machODarwinStackImports(), [&](const auto &Runtime) {
+          return Request.Symbol == Runtime.Symbol &&
+                 Request.Library == Runtime.Library &&
+                 Request.Kind == Runtime.Kind;
+        }))
+      continue;
     if (auto Error = validateDeclaration(Module, Request))
       return Error;
+  }
   return llvm::Error::success();
 }
 

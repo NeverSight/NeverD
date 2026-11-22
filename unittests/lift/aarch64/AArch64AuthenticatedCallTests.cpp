@@ -29,12 +29,14 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/BinaryRewrite.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
@@ -1513,26 +1515,92 @@ TEST(AArch64AuthenticatedCall, ImportsAppleSigningDescriptorsIntoMachO) {
 #endif
 }
 
-TEST(AArch64AuthenticatedCall, PreservesUnsupportedStackProbeOnLegacyInput) {
+TEST(AArch64AuthenticatedCall, AuthenticatesDirectDataKeyCallsInMachineCode) {
   llvm::LLVMContext Context;
   llvm::SMDiagnostic Diag;
-  auto M = llvm::parseIR(llvm::MemoryBufferRef(kLegacyPAuthIR, kFunction), Diag,
+  auto M = llvm::parseIR(llvm::MemoryBufferRef(kDirectDataKeyIR, kFunction),
+                         Diag, Context);
+  ASSERT_TRUE(M);
+  const auto Compiled =
+      Codegen().compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple);
+  ASSERT_TRUE(Compiled.Success);
+  auto Object =
+      llvm::object::ObjectFile::createObjectFile(llvm::MemoryBufferRef(
+          llvm::toStringRef(llvm::ArrayRef(Compiled.ObjectData)), kFunction));
+  ASSERT_TRUE(bool(Object)) << llvm::toString(Object.takeError());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  std::set<std::string> Mnemonics;
+  for (const auto &Section : (*Object)->sections()) {
+    if (!Section.isText())
+      continue;
+    auto Bytes = Section.getContents();
+    ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+    for (size_t Offset = 0; Offset < Bytes->size();) {
+      const auto Insns = llvm::arrayRefFromStringRef(Bytes->drop_front(Offset));
+      DecodedInsn I;
+      const auto Size = Dec.decodeOne(Insns.data(), Insns.size(), Offset, I);
+      ASSERT_GT(Size, 0);
+      Mnemonics.insert(I.Raw->mnemonic);
+      Offset += Size;
+    }
+  }
+  EXPECT_TRUE(Mnemonics.contains(kAuthenticateDB));
+  EXPECT_TRUE(Mnemonics.contains(kAuthenticateZeroDA));
+}
+
+TEST(AArch64AuthenticatedCall, ValidatesAuthenticatedTailCallRequirements) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diag;
+  auto Compile = [&](const char *IR) {
+    auto M = llvm::parseIR(llvm::MemoryBufferRef(IR, kFunction), Diag, Context);
+    EXPECT_TRUE(M);
+    return M && Codegen()
+                    .compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple)
+                    .Success;
+  };
+  EXPECT_FALSE(Compile(kInvalidCallKeyIR));
+#if __has_include("llvm/BinaryFormat/AArch64AuthenticatedCalls.def")
+  EXPECT_TRUE(Compile(kDataKeyLRTailIR));
+#else
+  EXPECT_FALSE(Compile(kDataKeyLRTailIR));
+#endif
+}
+
+TEST(AArch64AuthenticatedCall, PreservesNamedDarwinStackProbe) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diag;
+  auto M = llvm::parseIR(llvm::MemoryBufferRef(kDarwinProbeIR, kFunction), Diag,
                          Context);
   ASSERT_TRUE(M);
-  for (auto &F : *M)
-    if (!F.isDeclaration())
-      F.addFnAttr(kProbeMethodAttribute, kDarwinProbeMethod);
-  auto Object =
+  const auto Object =
       Codegen().compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple);
+#if __has_include("llvm/BinaryFormat/AArch64DarwinStackProbe.def")
+  ASSERT_TRUE(Object.Success);
+  for (const auto *Symbol :
+       {kDarwinHelperSymbol, kDarwinGuardSymbol, kDarwinFailureSymbol})
+    EXPECT_TRUE(llvm::any_of(Object.Relocations, [&](const auto &R) {
+      return R.Symbol == Symbol;
+    })) << Symbol;
+  save(kDarwinProbeCase, kMachOObject,
+       llvm::toStringRef(llvm::ArrayRef(Object.ObjectData)));
+#else
   EXPECT_FALSE(Object.Success);
   EXPECT_TRUE(Object.ObjectData.empty());
+#endif
+  for (auto &F : *M)
+    if (!F.isDeclaration())
+      F.addFnAttr(kProbeMethodAttribute, kUnknownProbeMethod);
+  EXPECT_FALSE(Codegen()
+                   .compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple)
+                   .Success);
   const auto Rewrite = Codegen().compileForRewrite(
       *M, Arch::AArch64, {}, BinaryFormat::MachO, kTriple);
   EXPECT_FALSE(Rewrite.ImageValid);
   for (const auto &F : *M)
     if (!F.isDeclaration())
       EXPECT_EQ(F.getFnAttribute(kProbeMethodAttribute).getValueAsString(),
-                kDarwinProbeMethod);
+                kUnknownProbeMethod);
 }
 
 TEST(AArch64AuthenticatedCall, ImportsTypedPointerGlobalConstructor) {

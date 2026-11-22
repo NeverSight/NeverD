@@ -9,6 +9,7 @@
 #include "MachOExportLayout.h"
 #include "MachOLiftedObject.h"
 #include "MachOPublishedData.h"
+#include "MachOSourceDependencies.h"
 #include "MachOTLSRuntime.h"
 
 #include "neverd/backend/Limits.h"
@@ -30,6 +31,7 @@
 #include "neverd/object/MachOLayout.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/AArch64Literal.h"
+#include "neverd/support/BranchEncoding.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -129,8 +131,10 @@ struct NativeMachO {
   std::optional<ThreadRuntime> PerThread;
   std::vector<MachOAuthenticatedFixup>
       TemplateFixups; // Template-relative until placed.
-  std::optional<std::pair<size_t, size_t>>
-      AtExitThunk; // Code and resolver slot.
+  struct AuthenticatedCallStub {
+    size_t Code, Slot;
+  };
+  std::map<unsigned, AuthenticatedCallStub> AuthenticatedCallStubs;
   // Section index to the sole public weak definition that owns its storage.
   std::map<size_t, unsigned> WeakData;
 };
@@ -189,7 +193,7 @@ MachOUnwindFunctionCounts unwindFunctionCounts(const NativeMachO &Object) {
   return {Object.Symbols.size() +
               unsigned(Object.Descriptors.has_value() ||
                        !Object.ThreadInitializers.empty()) +
-              unsigned(Object.Descriptors.has_value()),
+              Object.AuthenticatedCallStubs.size(),
           LSDAs};
 }
 
@@ -970,7 +974,7 @@ llvm::Error prepareImports(NativeMachO &Object,
     if (!Code)
       return Code.takeError();
     CompiledSection S;
-    S.Name = "__nd_import_" + std::to_string(N->second);
+    S.Name = kImportStubPrefix + std::to_string(N->second);
     S.Kind = Kind::Code;
     S.Alignment = 4;
     S.Size = Code->size();
@@ -1138,38 +1142,116 @@ bool needsThreadLocalTerminator(const NativeMachO &Object) {
          });
 }
 
-llvm::Error
-prepareTLSDependencies(const NativeMachO &Object,
-                       std::vector<SourcePatchDependency> &Dependencies) {
-  if (!Object.Descriptors && Object.ThreadInitializers.empty())
-    return llvm::Error::success();
-  const auto Add = [&](llvm::StringRef Name) -> llvm::Error {
-    const auto Old = llvm::find_if(
-        Dependencies, [&](const auto &D) { return D.Symbol == Name; });
-    if (Old != Dependencies.end())
-      return Old->Library == macho_arm64e_abi::kTLVProvider &&
-                     Old->Kind == SourcePatchDependencyKind::Function
-                 ? llvm::Error::success()
-                 : fail(kTLVStorage);
-    Dependencies.push_back({macho_arm64e_abi::kTLVProvider, Name.str(),
-                            SourcePatchDependencyKind::Function});
-    return llvm::Error::success();
-  };
-  if (auto E = Add(canonical(macho_arm64e_abi::kTLVBootstrap)))
-    return E;
-  if (needsThreadLocalTerminator(Object))
-    return Add(kTLVAtExit);
-  return llvm::Error::success();
-}
-
-static CompiledFixupReference boundThreadResolver() {
+static CompiledFixupReference signedFunctionImport(llvm::StringRef Name) {
   CompiledFixupReference Ref;
   Ref.BitWidth = arm64e::kPointerBytes * CHAR_BIT;
-  Ref.Symbol = canonical(macho_arm64e_abi::kTLVBootstrap);
+  Ref.Symbol = Name.str();
   Ref.IsResolved = true;
   Ref.PointerAuth =
       CompiledPointerAuthentication{kDefaultFunctionPointerKey, 0, false};
   return Ref;
+}
+
+// A native B/BL to a newly declared function needs a local callable. Keep the
+// slot in RELRO and describe the leaf stub to the system unwinder.
+llvm::Error prepareAuthenticatedCallStubs(NativeMachO &Object,
+                                          std::set<unsigned> Functions) {
+  if (Functions.empty())
+    return llvm::Error::success();
+  for (const auto &R : Object.Relocations) {
+    if (!R.External || R.Type != ARM64_RELOC_BRANCH26 ||
+        !Functions.erase(R.SymbolIndex))
+      continue;
+    const auto &Name = Object.Symbols.at(R.SymbolIndex).Name;
+    CompiledSection Slot;
+    Slot.Name = kNativeGOT;
+    Slot.Kind = Kind::WritableData;
+    Slot.Size = Slot.Alignment = arm64e::kPointerBytes;
+    Slot.ExternalBytes.resize(Slot.Size);
+    Slot.ReadOnlyAfterFixups = true;
+    Slot.FixupReferences.push_back(signedFunctionImport(Name));
+    auto &Sections = Object.Image.Sections;
+    const auto SlotIndex = Sections.size();
+    Sections.push_back(std::move(Slot));
+    Object.AuthenticatedCallStubs.emplace(
+        R.SymbolIndex,
+        NativeMachO::AuthenticatedCallStub{Sections.size(), SlotIndex});
+    CompiledSection Code;
+    Code.Name = Name == kTLVAtExit
+                    ? std::string(kTLVAtExitThunk)
+                    : kImportStubPrefix + std::to_string(R.SymbolIndex);
+    Code.Kind = Kind::Code;
+    Code.Alignment = neverd::aarch64::kInsnSize;
+    auto Stub =
+        buildSourceImportThunk(Arch::AArch64, InstructionMode::Default, 0, 0);
+    if (!Stub)
+      return Stub.takeError();
+    Code.Size = Stub->size();
+    Code.ExternalBytes = std::move(*Stub);
+    Sections.push_back(std::move(Code));
+  }
+  return llvm::Error::success();
+}
+
+llvm::Error
+prepareRuntimeDependencies(NativeMachO &Object, const BinaryImage &Original,
+                           std::vector<SourcePatchDependency> &Dependencies,
+                           llvm::ArrayRef<SourcePatchBinding> Bindings = {}) {
+  std::set<unsigned> Functions;
+  if (Original.isArm64e()) {
+    for (const auto &Runtime : machODarwinStackImports()) {
+      const auto I = Object.Names.find(Runtime.Symbol);
+      if (I == Object.Names.end() || Object.Symbols.at(I->second).Section ||
+          llvm::none_of(Object.Relocations,
+                        [&](const auto &R) {
+                          return R.External && R.SymbolIndex == I->second;
+                        }) ||
+          llvm::any_of(
+              Bindings,
+              [&](const auto &B) { return B.Symbol == Runtime.Symbol; }) ||
+          llvm::any_of(Dependencies, [&](const auto &D) {
+            return D.Symbol == Runtime.Symbol;
+          }))
+        continue;
+      // Keep the original dyld provider. A direct branch can still need a
+      // callable when the original only stored the imported pointer.
+      if (Original.findImport((llvm::Twine('_') + Runtime.Symbol).str()) ||
+          Original.findImport(Runtime.Symbol)) {
+        if (Runtime.Kind == SourcePatchDependencyKind::Function)
+          Functions.insert(I->second);
+      } else {
+        Dependencies.push_back(Runtime);
+      }
+    }
+  }
+  const auto Add = [&](llvm::StringRef Name) -> llvm::Error {
+    const auto Old = llvm::find_if(
+        Dependencies, [&](const auto &D) { return D.Symbol == Name; });
+    if (Old != Dependencies.end())
+      return Old->Library == macho_arm64e_abi::kLibSystem &&
+                     Old->Kind == SourcePatchDependencyKind::Function
+                 ? llvm::Error::success()
+                 : fail(kTLVStorage);
+    Dependencies.push_back({macho_arm64e_abi::kLibSystem, Name.str(),
+                            SourcePatchDependencyKind::Function});
+    return llvm::Error::success();
+  };
+  if (Object.Descriptors || !Object.ThreadInitializers.empty()) {
+    if (auto E = Add(canonical(macho_arm64e_abi::kTLVBootstrap)))
+      return E;
+    if (needsThreadLocalTerminator(Object))
+      if (auto E = Add(kTLVAtExit))
+        return E;
+  }
+  if (!Original.isArm64e())
+    return llvm::Error::success();
+  for (const auto &D : Dependencies) {
+    const auto I = Object.Names.find(D.Symbol);
+    if (D.Kind == SourcePatchDependencyKind::Function &&
+        I != Object.Names.end() && !Object.Symbols.at(I->second).Section)
+      Functions.insert(I->second);
+  }
+  return prepareAuthenticatedCallStubs(Object, std::move(Functions));
 }
 
 // Existing descriptors and public TLS exports retain their address and byte
@@ -1183,38 +1265,6 @@ llvm::Error prepareThreadLocals(NativeMachO &Object,
     return llvm::Error::success();
   if (Object.Descriptors.has_value() == Object.TemplateSections.empty())
     return fail(kTLVStorage);
-  // Clang's dynamic TLS initializer registers its destructor with libSystem.
-  // A freshly imported function needs a real authenticated callable and a
-  // leaf unwind entry, including when the input had no TLS or import stub.
-  if (needsThreadLocalTerminator(Object)) {
-    CompiledSection Slot;
-    Slot.Name = kNativeGOT;
-    Slot.Kind = Kind::WritableData;
-    Slot.Size = Slot.Alignment = arm64e::kPointerBytes;
-    Slot.ExternalBytes.resize(Slot.Size);
-    Slot.ReadOnlyAfterFixups = true;
-    CompiledFixupReference Ref;
-    Ref.BitWidth = arm64e::kPointerBytes * CHAR_BIT;
-    Ref.Symbol = kTLVAtExit;
-    Ref.IsResolved = true;
-    Ref.PointerAuth =
-        CompiledPointerAuthentication{kDefaultFunctionPointerKey, 0, false};
-    Slot.FixupReferences.push_back(std::move(Ref));
-    Object.Image.Sections.push_back(std::move(Slot));
-    const auto CodeIndex = Object.Image.Sections.size();
-    Object.AtExitThunk.emplace(CodeIndex, CodeIndex - 1);
-    CompiledSection Code;
-    Code.Name = kTLVAtExitThunk;
-    Code.Kind = Kind::Code;
-    Code.Alignment = neverd::aarch64::kInsnSize;
-    auto Stub =
-        buildSourceImportThunk(Arch::AArch64, InstructionMode::Default, 0, 0);
-    if (!Stub)
-      return Stub.takeError();
-    Code.Size = Stub->size();
-    Code.ExternalBytes = std::move(*Stub);
-    Object.Image.Sections.push_back(std::move(Code));
-  }
   CompiledSection Prefix;
   Prefix.Name = kTLVTemplatePrefix;
   Prefix.Kind = Kind::WritableData;
@@ -1405,7 +1455,8 @@ llvm::Error prepareThreadLocals(NativeMachO &Object,
   Sections[Config].ReadOnlyAfterFixups = true;
   const size_t Anchor = Append(kThreadAnchor, Kind::WritableData,
                                kTLVDescriptorBytes, arm64e::kPointerBytes);
-  Sections[Anchor].FixupReferences.push_back(boundThreadResolver());
+  Sections[Anchor].FixupReferences.push_back(
+      signedFunctionImport(canonical(macho_arm64e_abi::kTLVBootstrap)));
   const size_t Guard = Append(kThreadGuard, Kind::WritableData, 1, 1);
   Object.TemplateSections.insert(Guard);
   Object.PerThread.emplace(NativeMachO::ThreadRuntime{
@@ -1561,9 +1612,9 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
                               macho_unwind::kARM64ModeFrame, std::nullopt,
                               std::nullopt});
   }
-  if (Object.AtExitThunk) {
-    const auto &Code = Image.Sections[Object.AtExitThunk->first];
-    const auto &Slot = Image.Sections[Object.AtExitThunk->second];
+  for (const auto &[Index, CallStub] : Object.AuthenticatedCallStubs) {
+    const auto &Code = Image.Sections[CallStub.Code];
+    const auto &Slot = Image.Sections[CallStub.Slot];
     auto Stub = buildSourceImportThunk(Arch::AArch64, InstructionMode::Default,
                                        Code.VA, Slot.VA);
     if (!Stub)
@@ -1609,7 +1660,8 @@ llvm::Expected<uint64_t> mapOldVA(const NativeMachO &Object, uint64_t VA) {
 }
 llvm::Expected<uint64_t>
 resolve(const NativeMachO &Object, unsigned Index, const BinaryImage &Original,
-        const std::map<std::string, SourcePatchBinding> &Bindings) {
+        const std::map<std::string, SourcePatchBinding> &Bindings,
+        bool DirectBranch = false) {
   if (!Object.Symbols.contains(Index))
     return fail("relocation symbol is invalid");
   const auto &S = Object.Symbols.at(Index);
@@ -1625,8 +1677,10 @@ resolve(const NativeMachO &Object, unsigned Index, const BinaryImage &Original,
     return Object.Image.Sections[Object.Sections.at(S.Section)].VA + S.Offset +
            (S.Function && S.Thumb ? 1 : 0);
   }
-  if (Object.AtExitThunk && S.Name == kTLVAtExit)
-    return Object.Image.Sections[Object.AtExitThunk->first].VA;
+  if (DirectBranch || S.Name == kTLVAtExit)
+    if (auto Stub = Object.AuthenticatedCallStubs.find(Index);
+        Stub != Object.AuthenticatedCallStubs.end())
+      return Object.Image.Sections[Stub->second.Code].VA;
   if (Object.Descriptors && S.Name == kDSOHandle) {
     const auto Header = Original.fileOffsetToVA(0);
     if (Header == InvalidVA)
@@ -1789,7 +1843,8 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
           Recipe.Target = Object.Image.Sections[Object.PerThread->Code].VA;
           Object.TemplateFixups.push_back({P, std::move(Recipe), false, true});
         } else {
-          auto Ref = boundThreadResolver();
+          auto Ref =
+              signedFunctionImport(canonical(macho_arm64e_abi::kTLVBootstrap));
           Ref.Offset = R.Offset;
           Object.Image.Sections[R.Section].FixupReferences.push_back(
               std::move(Ref));
@@ -1928,7 +1983,9 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
                                 ? Object.GOT.at({R.SymbolIndex, false}).Address
                                 : Object.Imports.at(R.SymbolIndex).SlotVA)
         : R.Scattered ? mapOldVA(Object, R.ScatteredVA)
-        : R.External  ? resolve(Object, R.SymbolIndex, Original, Bindings)
+        : R.External
+            ? resolve(Object, R.SymbolIndex, Original, Bindings,
+                      A == Arch::AArch64 && R.Type == ARM64_RELOC_BRANCH26)
         : Object.Sections.contains(R.SymbolIndex)
             ? llvm::Expected<uint64_t>(
                   Object.Image.Sections[Object.Sections.at(R.SymbolIndex)].VA)
@@ -2135,10 +2192,13 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     } else if (A == Arch::AArch64 && R.Type == ARM64_RELOC_BRANCH26 &&
                R.PCRel && R.Width == 4) {
       const uint32_t Old = Raw;
-      if ((Old & 0x7c000000) != 0x14000000)
+      if (!branch::A64BranchOrLink.matches(Old))
         return fail("BRANCH26 does not name B/BL");
-      V += llvm::APInt(
-          128, uint64_t(llvm::SignExtend64<26>(Old & 0x3ffffff) * 4), true);
+      const auto Addend = branch::a64BranchDisplacement(Old);
+      if (R.External && Object.AuthenticatedCallStubs.contains(R.SymbolIndex) &&
+          (R.InstructionAddend || Addend))
+        return fail(kImportStubAddend);
+      V += llvm::APInt(kRelocationBits, uint64_t(Addend), true);
       V -= llvm::APInt(128, P);
       if (!V.isSignedIntN(28) || (V.getLoBits(2).getZExtValue()))
         return fail("native branch overflows");
@@ -2457,13 +2517,16 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
     return Object.takeError();
   std::vector<SourcePatchDependency> RuntimeDependencies(Dependencies.begin(),
                                                          Dependencies.end());
-  if (auto E = prepareTLSDependencies(*Object, RuntimeDependencies))
+  if (auto E =
+          prepareRuntimeDependencies(*Object, *Original, RuntimeDependencies))
     return E;
   Dependencies = RuntimeDependencies;
   auto Candidate = Binary;
   const uint64_t ExtraEH = requiredNativeEHBytes(*Object, Candidate);
   std::optional<MachODependencyState> SlidDependencies;
-  const auto CommandBytes = installationCommandBytes(*Object, *Original);
+  const auto CommandBytes =
+      installationCommandBytes(*Object, *Original) +
+      machOSourceLibraryCommandBytes(*Original, Dependencies);
   auto Slide = reserveMachOPublishedUnwind(
       Candidate, Original->Arch, ExtraEH, unwindFunctionCounts(*Object),
       CommandBytes != 0, SlidDependencies, CommandBytes);
@@ -2732,7 +2795,8 @@ static llvm::Expected<PatchResult> installObject(
     return Object.takeError();
   std::vector<SourcePatchDependency> RuntimeDependencies(Dependencies.begin(),
                                                          Dependencies.end());
-  if (auto E = prepareTLSDependencies(*Object, RuntimeDependencies))
+  if (auto E = prepareRuntimeDependencies(
+          *Object, Original, RuntimeDependencies, RequestedBindings))
     return E;
   Dependencies = RuntimeDependencies;
   std::set<std::string> Entries;
@@ -2766,11 +2830,13 @@ static llvm::Expected<PatchResult> installObject(
       return E;
   const uint64_t ExtraEH = requiredNativeEHBytes(*Object, LayoutBytes);
   std::optional<MachODependencyState> SlidDependencies;
+  const auto LibraryCommands =
+      machOSourceLibraryCommandBytes(Original, Dependencies);
   const auto Reserve = [&](uint64_t Commands) {
     return reserveMachOPublishedUnwind(
         LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
         Original.isArm64e() && !Preparation && !DynCode, SlidDependencies,
-        Commands, RecoveredData);
+        Commands + LibraryCommands, RecoveredData);
   };
   const auto InitialCommands = installationCommandBytes(*Object, Original);
   auto Slide = Reserve(InitialCommands);

@@ -447,8 +447,7 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
   for (const auto *F : Requests) {
     if (!F->ReplacesTLVBootstrap)
       continue;
-    const auto Lib =
-        llvm::find(Chains.Libraries, macho_arm64e_abi::kTLVProvider);
+    const auto Lib = llvm::find(Chains.Libraries, macho_arm64e_abi::kLibSystem);
     if (Lib == Chains.Libraries.end())
       return fail(kRecipe);
     MachOAuthenticatedPointer Old;

@@ -7,6 +7,8 @@
 CODEGEN_STACK_TEXT(kStackProbe, "probe-stack")
 CODEGEN_STACK_TEXT(kStackProbeSize, "stack-probe-size")
 CODEGEN_STACK_TEXT(kInlineStackProbe, "inline-asm")
+CODEGEN_STACK_TEXT(kLiftedProbeLimit, "4294967295")
+CODEGEN_STACK_TEXT(kNoStackArgProbe, "no-stack-arg-probe")
 CODEGEN_STACK_TEXT(kInvalidModuleProbeSize, "invalid module stack-probe-size")
 CODEGEN_STACK_TEXT(kInvalidModuleProbe, "invalid module probe-stack method")
 CODEGEN_STACK_TEXT(kInvalidFunctionProbeSize, "invalid stack-probe-size on ")

@@ -13,6 +13,14 @@
 
 #include <map>
 namespace neverd {
+/// Symbols that Darwin frame lowering can introduce after source validation.
+llvm::ArrayRef<SourcePatchDependency> machODarwinStackImports();
+
+/// Space required by load commands for providers absent from the input image.
+uint64_t
+machOSourceLibraryCommandBytes(const BinaryImage &Original,
+                               llvm::ArrayRef<SourcePatchDependency> Requests);
+
 /// Admit validated explicit requests using exact dylib load commands. Does not
 /// allocate import slots; callers retain their transactional candidate bytes.
 llvm::Expected<std::map<std::string, uint32_t>>
