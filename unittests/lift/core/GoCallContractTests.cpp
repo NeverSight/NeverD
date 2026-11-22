@@ -2488,6 +2488,114 @@ TEST(GoWriteBarriers, AStackArgumentIsNoKeptRegister) {
   EXPECT_EQ(C.Body.find("var_m8"), std::string::npos) << C.Body;
 }
 
+TEST(GoInternalABI, ARegisterNoParameterArrivesInIsNoPositionalParameter) {
+  // A PE's platform passes its first argument in RCX.  Go's internal ABI
+  // passes the third there, so a Go function of two arguments takes none in
+  // it, and its entry RCX is no parameter.  Read by the platform's position
+  // it printed as `arg0`, the argument RAX carries: main.f stored its first
+  // argument through both, and main.g called through it.  Both formats now
+  // print the same.
+  //   main.f: mov [rax], rcx; mov [rbx], rcx; ret
+  //   main.g: mov [rax], rbx; call rcx; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x140;
+  std::string Bodies[2];
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    GoTestImage T(Arch::X64);
+    T.Img.Format = Format;
+    T.writeText(F, {0x48, 0x89, 0x08, 0x48, 0x89, 0x0B, 0xC3});
+    T.writeText(G, {0x48, 0x89, 0x18, 0xFF, 0xD1, 0xC3});
+    for (const auto &[Address, Name] :
+         {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+      Symbol Function = Symbol::makeFunc(Address);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.FrameArguments = {{F, 16, 2}, {G, 16, 2}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::string Stores = highCBody(R, T.Img, "main_f");
+    EXPECT_NE(Stores.find("*(int64_t *)arg0 = "), std::string::npos) << Stores;
+    EXPECT_NE(Stores.find("*(int64_t *)arg1 = "), std::string::npos) << Stores;
+    // What each stores is a register no argument arrives in.
+    EXPECT_EQ(Stores.find("= (uintptr_t)arg0;"), std::string::npos) << Stores;
+    EXPECT_EQ(Stores.find("= arg0;"), std::string::npos) << Stores;
+    EXPECT_NE(Stores.find("incoming register has no definition"),
+              std::string::npos)
+        << Stores;
+    const std::string Calls = highCBody(R, T.Img, "main_g");
+    EXPECT_NE(Calls.find("*(int64_t *)arg0 = arg1;"), std::string::npos)
+        << Calls;
+    EXPECT_EQ(Calls.find("(uintptr_t)((uintptr_t)arg0))("), std::string::npos)
+        << Calls;
+    EXPECT_NE(Calls.find("incoming register has no definition"),
+              std::string::npos)
+        << Calls;
+    Bodies[Format == BinaryFormat::COFF] = Stores + Calls;
+  }
+  // The placeholders name the instruction, which both images place alike.
+  EXPECT_EQ(Bodies[0], Bodies[1]);
+}
+
+TEST(GoStackABI, ARegisterAStackRoutinePassesOnIsNoParameter) {
+  // A stack-ABI routine takes nothing in a register.  One that sets RCX and
+  // calls through a table passes on, by the platform's positions, whatever
+  // RDI, RSI and RDX hold: call recovery names those entry values before it
+  // knows the routine's parameters, and none is one.  Each printed as the
+  // parameter at its platform position, a stack word the routine takes, or
+  // past the last one as `arg-1`, which is no C.  Assembly of a register-ABI
+  // image and code of a stack-ABI one print alike.
+  //   main.d: mov rcx, [rsp+8]; mov rax, [rsp+16]; call [rax+rcx*8]; ret
+  constexpr va_t D = kTextVA + 0x100;
+  for (const bool RegisterABI : {true, false}) {
+    SCOPED_TRACE(RegisterABI);
+    GoTestImage T(Arch::X64);
+    T.writeText(D, {0x48, 0x8B, 0x4C, 0x24, 0x08, 0x48, 0x8B, 0x44, 0x24, 0x10,
+                    0xFF, 0x14, 0xC8, 0xC3});
+    Symbol Function = Symbol::makeFunc(D);
+    Function.Name = "main.d";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    if (RegisterABI) {
+      Module.PclnTabMagic = 0xFFFFFFF1u;
+      Module.RegisterArguments = true;
+      Module.GoAssembly = {{D, D + 0x10}};
+    } else {
+      Module.StackArguments = true;
+    }
+    Module.FrameArguments = {{D, 16}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::string Text = highCBody(R, T.Img, "main_d");
+    EXPECT_EQ(Text.find("arg-1"), std::string::npos) << Text;
+    // The word it loaded into RCX is the call's last argument ...
+    EXPECT_NE(Text.find(", arg0);"), std::string::npos) << Text;
+    // ... after three registers nothing gave a value, none of them the
+    // routine's own stack words.
+    size_t Unknown = 0;
+    for (size_t At = Text.find("__builtin_trap"); At != std::string::npos;
+         At = Text.find("__builtin_trap", At + 1))
+      ++Unknown;
+    EXPECT_EQ(Unknown, 3u) << Text;
+    EXPECT_EQ(Text.find("(arg0, "), std::string::npos) << Text;
+    EXPECT_EQ(Text.find(", arg1, "), std::string::npos) << Text;
+  }
+}
+
 TEST(GoInternalABI, AFuncValueCallTakesItsArgumentsInGoRegisters) {
   // A call through a func value enters Go code by the internal ABI, which
   // passes integer arguments in RAX, RBX, RCX, RDI, RSI and R8-R11.  The

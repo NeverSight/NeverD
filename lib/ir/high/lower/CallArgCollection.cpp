@@ -2213,6 +2213,14 @@ int MedToHighConverter::abiParamIndex(const MedVar &V) const {
     for (size_t I = 0; I < CurMed->Params.size(); ++I)
       if (CurMed->Params[I].RegOff == RegOff)
         return static_cast<int>(I);
+    // A position names a parameter only where the function takes its
+    // arguments at the platform's positions.  One that takes them in
+    // registers of its own (MedFunc::IntegerArgumentRegisters: Go's internal
+    // ABI, a write barrier's operands) or on the stack alone
+    // (StackArgumentsOnly) has none at a register's position: there RCX's
+    // entry value is no `arg0`.
+    if (!CurMed->IntegerArgumentRegisters.empty() || CurMed->StackArgumentsOnly)
+      return -1;
     const int Idx = regToArgIdx(RegOff);
     if (Idx >= 0 && static_cast<size_t>(Idx) < CurMed->Params.size())
       return Idx;

@@ -20877,6 +20877,15 @@ the call returns a record with a double field, and the C traps nowhere.
 built as ELF and as PE, which sets RAX to 5 and RBX to 7 and calls a func value
 through RDX after storing a local above Win64's shadow space, RDI set before a
 branch: the call passes exactly 5 and 7.
+`GoInternalABI.ARegisterNoParameterArrivesInIsNoPositionalParameter` runs the
+pipeline over two Go functions of two arguments, built as ELF and as PE, one
+that stores RCX through both and one that calls through it: neither names
+`arg0` for RCX, each prints the register as one with no definition, and both
+formats print the same.
+`GoStackABI.ARegisterAStackRoutinePassesOnIsNoParameter` runs it over a
+stack-ABI routine that loads a word into RCX and calls through a table: the
+call passes three unknown values and that word, names none of the routine's
+stack words for a register, and prints no `arg-1`.
 `GoInternalABI.TheRegisterThatHoldsTheTargetEndsTheArguments` lifts a Go 1.21
 map access's call of its hasher through RCX after loading the seed into ESI:
 the call passes the key's address and the seed, and nothing in RCX or above.

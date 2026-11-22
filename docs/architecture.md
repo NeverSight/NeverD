@@ -5930,6 +5930,24 @@ prologue's vector count, which lists no parameters; a Go summary always lists
 them (`summaryListsNoParameters`), since a Go function's first argument may be
 a `bool`.
 
+Such a function has no parameter at a platform position. HighIR names the
+entry value of a register as the parameter that arrives in it
+(`MedToHighConverter::abiParamIndex`), and falls back on the register's
+platform position only where the function takes its arguments at the
+platform's positions: not where it takes them in registers of its own or on
+the stack alone (`MedFunc::StackArgumentsOnly`). A PE's platform passes its
+first argument in RCX, Go's internal ABI its third, so in a PE a Go function
+of two arguments printed its entry RCX, a register no argument arrives in, as
+`arg0`: the copy index for Win64's entry copies read the position.
+
+Call recovery names the entry value of a register a call passes on as a
+parameter before it knows the function's parameters. Where none arrives in
+that register the value is unknown, and MedToHigh lowers it as it lowers the
+rename sentinel of such a register: a stack-ABI routine that sets RCX and
+calls through a table passes on, by the platform's positions, whatever RDI,
+RSI and RDX hold. Those printed as the stack words at their platform
+positions, and past the routine's last parameter as `arg-1`, which is no C.
+
 Assembly with no Go declaration of its own, whose record gives no argument
 word, takes its operands in registers of its own where it reads at entry one
 the platform passes no argument in: `internal/bytealg`'s `indexbytebody<>`
