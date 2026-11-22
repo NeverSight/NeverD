@@ -5930,6 +5930,18 @@ prologue's vector count, which lists no parameters; a Go summary always lists
 them (`summaryListsNoParameters`), since a Go function's first argument may be
 a `bool`.
 
+Compiled code reads the goroutine in R14 (R28 on arm64), which LowToMed
+defines at its entry (`defineGoCurrentGoroutine`). x86-64 assembly of a
+register-ABI image that Go code enters still finds it there, whatever ABI it
+declares, and its helpers rely on that: `runtime.mcall` and
+`gosave_systemstack_switch<>` save their caller's state in `g.sched` through
+R14. Assembly the platform enters, a signal trampoline or a callback, only
+saves R14 for its caller. So the assembly that addresses memory through the
+register as it was entered reads the goroutine
+(`addressesThroughEntryRegister`): a load or a store whose address is that
+value or a constant away from it. Those reads printed as a register with no
+definition.
+
 Go's internal ABI passes floating arguments in X0 to X14 (F0 to F15 on
 arm64), where System V passes eight, Win64 four and AAPCS64 eight. Code that
 takes Go's integer registers, or operands of its own, takes the floating ones

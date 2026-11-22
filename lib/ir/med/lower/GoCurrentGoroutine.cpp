@@ -203,6 +203,66 @@ void defineGoRegisterValue(MedFunc &Func, uint64_t Register, Intrinsic Id,
 }
 } // namespace
 
+bool addressesThroughEntryRegister(const MedFunc &Func, uint64_t Register) {
+  if (Func.Blocks.empty())
+    return false;
+  using Key = std::pair<int, int>;
+  const auto KeyOf = [](const MedVar &V) { return Key{V.Id, V.SSAVer}; };
+  const auto Incoming = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.RegOff == Register &&
+           V.Size == GoroutineBytes && V.Id >= 0 && V.SSAVer == 0;
+  };
+  // The incoming value is the version nothing but an entry self-copy
+  // defines, and the values a copy or a constant offset makes of it.
+  std::set<Key> Derived;
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      if (Incoming(Phi.Output))
+        return false;
+    for (const MedOp &Op : Block.Ops)
+      if (Incoming(Op.Output) &&
+          !(Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+            Op.Inputs[0].Kind == MedVar::Reg &&
+            Op.Inputs[0].Id == Op.Output.Id && Op.Inputs[0].SSAVer == 0))
+        return false;
+  }
+  if (llvm::any_of(Func.CallClobbers, [&](const MedCallClobber &Clobber) {
+        return Incoming(Clobber.Value);
+      }))
+    return false;
+  const auto Through = [&](const MedVar &V) {
+    return !V.isConst() && V.Id >= 0 &&
+           (Incoming(V) || Derived.count(KeyOf(V)));
+  };
+  // Operations are in no dominance order here; a few rounds reach every
+  // offset of an offset.
+  for (unsigned Round = 0, Grew = 1; Grew && Round < 4; ++Round) {
+    Grew = 0;
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops) {
+        if (Op.Output.Id < 0 || Derived.count(KeyOf(Op.Output)) ||
+            Incoming(Op.Output))
+          continue;
+        const bool Copy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                          Through(Op.Inputs[0]);
+        const bool Offset =
+            (Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+            Op.NumInputs == 2 && Through(Op.Inputs[0]) &&
+            Op.Inputs[1].isConst();
+        if (Copy || Offset) {
+          Derived.insert(KeyOf(Op.Output));
+          Grew = 1;
+        }
+      }
+  }
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+          Op.NumInputs >= 1 && Through(Op.Inputs[0]))
+        return true;
+  return false;
+}
+
 void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register) {
   defineGoRegisterValue(Func, Register, Intrinsic::GoCurrentGoroutine,
                         /*AfterCalls=*/true);

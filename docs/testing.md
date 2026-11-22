@@ -20895,6 +20895,11 @@ the call returns a record with a double field, and the C traps nowhere.
 built as ELF and as PE, which sets RAX to 5 and RBX to 7 and calls a func value
 through RDX after storing a local above Win64's shadow space, RDI set before a
 branch: the call passes exactly 5 and 7.
+`GoInternalABI.AssemblyThatAddressesThroughR14ReadsTheGoroutine` runs the
+pipeline over two x86-64 assembly routines, built as ELF and as PE: one
+stores and loads through R14 and reads the goroutine register for both, the
+other stores R14 into a record it was handed, takes the register as an
+operand of its own and reads no goroutine.
 `GoInternalABI.AssemblyTakesFloatsInEveryGoRegister` runs the pipeline over
 assembly, built as ELF and as PE, that stores RAX, X0, X8 and X14 through
 R12: its parameters are those five registers and its C traps nowhere.

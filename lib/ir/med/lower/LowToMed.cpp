@@ -2549,11 +2549,25 @@ MedFunc LowToMedConverter::convertFunction(
     // thread-local storage until R14 took it.
     // A write barrier of a register-ABI image finds its buffer through it
     // too (`MOVQ g_m(R14), R13`): compiled code alone calls it.
-    if (Image && (usesGoRegisterArguments(*Image, Low.Entry) ||
-                  (TheArch == Arch::AArch64 && isGoCode(*Image, Low.Entry)) ||
-                  (Image->ExceptionMetadata.GoModule &&
-                   Image->ExceptionMetadata.GoModule->RegisterArguments &&
-                   goWriteBarrierAt(*Image, Low.Entry))))
+    // So does any other x86-64 assembly of such an image that Go code
+    // enters, whatever ABI it declares: the register still holds what the
+    // caller's internal ABI keeps there.  Assembly the platform enters, a
+    // signal trampoline or a callback, only saves R14 for its caller, so the
+    // one that addresses memory through the register as it was entered reads
+    // the goroutine (addressesThroughEntryRegister): `runtime.mcall` saves
+    // its caller's state in `g.sched` so.
+    const std::optional<uint64_t> GoroutineRegister =
+        goRoutineRegister(TheArch);
+    const bool RegisterABIGoCode =
+        Image && Image->ExceptionMetadata.GoModule &&
+        Image->ExceptionMetadata.GoModule->RegisterArguments &&
+        isGoCode(*Image, Low.Entry);
+    if (Image &&
+        (usesGoRegisterArguments(*Image, Low.Entry) ||
+         (TheArch == Arch::AArch64 && isGoCode(*Image, Low.Entry)) ||
+         (RegisterABIGoCode && goWriteBarrierAt(*Image, Low.Entry)) ||
+         (RegisterABIGoCode && TheArch == Arch::X64 && GoroutineRegister &&
+          addressesThroughEntryRegister(Func, *GoroutineRegister))))
       if (const std::optional<uint64_t> Goroutine =
               goRoutineRegister(TheArch)) {
         defineGoCurrentGoroutine(Func, *Goroutine);

@@ -2540,6 +2540,55 @@ TEST(GoWriteBarriers, AStackArgumentIsNoKeptRegister) {
   EXPECT_EQ(C.Body.find("var_m8"), std::string::npos) << C.Body;
 }
 
+TEST(GoInternalABI, AssemblyThatAddressesThroughR14ReadsTheGoroutine) {
+  // Go's internal ABI keeps the goroutine in R14, and x86-64 assembly that
+  // Go code enters still finds it there, whatever ABI it declares: main.save
+  // stores through the register as it was entered, as `runtime.mcall` saves
+  // its caller's state in `g.sched`, so it reads the goroutine.  Assembly
+  // the platform enters only saves R14 for its caller: main.host, which
+  // stores it into a record it was handed, takes the register as an operand
+  // of its own and reads no goroutine.
+  //   main.save: mov [r14+0x38], rax; mov rbx, [r14+0x30]; mov rax, rbx; ret
+  //   main.host: mov [rdi], r14; ret
+  constexpr va_t Save = kTextVA + 0x100;
+  constexpr va_t Host = kTextVA + 0x140;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    GoTestImage T(Arch::X64);
+    T.Img.Format = Format;
+    T.writeText(Save, {0x49, 0x89, 0x46, 0x38, 0x49, 0x8B, 0x5E, 0x30, 0x48,
+                       0x89, 0xD8, 0xC3});
+    T.writeText(Host, {0x4C, 0x89, 0x37, 0xC3});
+    for (const auto &[Address, Name] :
+         {std::pair{Save, "main.save"}, std::pair{Host, "main.host"}}) {
+      Symbol Function = Symbol::makeFunc(Address);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.GoAssembly = {{Save, Save + 0x10}, {Host, Host + 0x10}};
+    Module.FrameArguments = {{Save, 0}, {Host, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::string Saving = highCBody(R, T.Img, "main_save");
+    EXPECT_NE(Saving.find("%%r14"), std::string::npos) << Saving;
+    EXPECT_NE(Saving.find("(g + 0x38) = arg0;"), std::string::npos) << Saving;
+    EXPECT_NE(Saving.find("(g + 0x30)"), std::string::npos) << Saving;
+    EXPECT_EQ(Saving.find("__builtin_trap"), std::string::npos) << Saving;
+    const std::string Entered = highCBody(R, T.Img, "main_host");
+    EXPECT_EQ(Entered.find("%%r14"), std::string::npos) << Entered;
+    EXPECT_NE(Entered.find("*(int64_t *)arg0 = arg1;"), std::string::npos)
+        << Entered;
+  }
+}
+
 TEST(GoInternalABI, AssemblyTakesFloatsInEveryGoRegister) {
   // Go's internal ABI passes floating arguments in X0 to X14, where System V
   // passes eight and Win64 four.  Assembly that takes operands in registers
