@@ -69,12 +69,14 @@ after linking the object with the target linker.
   a literal or an independently known non-frame word. Separate comparisons
   can establish the same fact when the low and high 32-bit patterns both
   match the corresponding halves of that word on the path to the call.
-  Either comparison may come first. A zero test in the same machine block
-  can also establish equality from a full-width XOR or modular subtraction.
+  Either comparison may come first. A zero test can also establish equality
+  from a full-width XOR or modular subtraction computed in an earlier block.
   If the bitwise OR of two differences is zero, each difference is zero.
   The proof uses the operands sampled when each difference was computed.
-  A spill and reload preserves the test for the bits it carries within the
-  block. A single word can hold the OR of two 32-bit differences. A word
+  A register copy or stack reload preserves the test for the bits it carries.
+  At a merge or loop header, the selected difference must imply equality on
+  every incoming edge. Replacing it on a single edge can invalidate the guard.
+  A single word can hold the OR of two 32-bit differences. A word
   spill of a 64-bit XOR can leave its high half unchecked.
   Full-width moves carry the established fact across basic blocks.
   At a join, every incoming path must qualify

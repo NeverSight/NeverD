@@ -70,6 +70,12 @@ SPILL_GUARDS = {
                                         "-DSPILL_DIFFERENCE=8"],
     "chain-spill-guard-folded-word": ["-DGUARD_HALVES", "-DOR_DIFFERENCES",
                                       "-DSPILL_DIFFERENCE=4"],
+    "chain-spill-guard-join": ["-DGUARD_HALVES", "-DOR_DIFFERENCES", "-DCROSS_JOIN"],
+    "chain-spill-guard-join-reload": ["-DGUARD_HALVES", "-DOR_DIFFERENCES",
+                                      "-DCROSS_JOIN", "-DSPILL_DIFFERENCE=8"],
+    "chain-spill-guard-loop": ["-DGUARD_HALVES", "-DOR_DIFFERENCES", "-DCROSS_LOOP"],
+    "chain-spill-guard-loop-recompute": ["-DGUARD_HALVES", "-DCROSS_LOOP",
+                                        "-DRECOMPUTE_DIFFERENCE"],
     "chain-spill-recheck-pack": ["-DRECHECK_LOW"],
 }
 

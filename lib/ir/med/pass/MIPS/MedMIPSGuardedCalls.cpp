@@ -272,6 +272,15 @@ struct Spill {
     return Exposed;
   }
 };
+struct ZeroTest {
+  Word Left, Right;
+  bool BothZero;
+  bool operator==(const ZeroTest &) const = default;
+};
+// (lo, hi) names a whole arithmetic sample. (bits, 0) names a single
+// 32-bit pattern anywhere a move, projection or stack reload carries it.
+using ZeroTests = llvm::DenseMap<BitPair, ZeroTest>;
+
 struct State {
   Registers Regs{};
   llvm::SmallVector<Spill, 0> Slots;
@@ -280,6 +289,7 @@ struct State {
   // Only the predecessor-free entry block appends to this list, so all
   // incoming edges carry the same peers in the same order.
   llvm::SmallVector<Word, 0> Peers;
+  ZeroTests Tests;
   unsigned NextId = ZeroId + 1;
 
   KnownWords knownWords() const {
@@ -345,91 +355,73 @@ void assumeEqual(State &Out, Word L, Word R) {
   }
 }
 
-// Capture operands when the arithmetic executes. The zero test can follow a
-// register overwrite, and its branch delay slot can change the forwarded word.
-class ZeroTests {
-  struct Test {
-    Word Left, Right;
-    bool BothZero, Needed = false;
+// Sample the operands before any register reuse or branch delay slot. A
+// modular subtraction can borrow into the high half; only its low half
+// and the complete difference independently imply an equality.
+void captureZeroTest(ZeroTests &Tests, NdOp Op, Word &Result, Word L, Word R,
+                     unsigned &NextId) {
+  if (Result.complete() || L == Word{} || R == Word{})
+    return;
+  const bool BothZero = Op == NdOp::INT_OR;
+  // Equality is symmetric, including a zero modular subtraction. Keep an
+  // independent peer on the same side when two paths reverse the operands.
+  if (L.Proof == Evidence::Independent && R.Proof != Evidence::Independent)
+    std::swap(L, R);
+  for (auto Part : {&Word::Low, &Word::High}) {
+    auto &H = Result.*Part;
+    if (H.Id)
+      continue;
+    H.Id = NextId++;
+    if (Op != NdOp::INT_SUB || Part == &Word::Low)
+      Tests.try_emplace({H.Id, 0},
+                        ZeroTest{{L.*Part, {}}, {R.*Part, {}}, BothZero});
+  }
+  Tests.try_emplace({Result.Low.Id, Result.High.Id}, ZeroTest{L, R, BothZero});
+}
+
+bool assumeZeroTest(State &Out, Word Tested, size_t Locations,
+                    size_t &Remaining) {
+  llvm::SmallVector<const ZeroTest *, 8> Work;
+  llvm::SmallPtrSet<const ZeroTest *, 8> Seen;
+  const auto Add = [&](BitPair Bits) {
+    const auto I = Out.Tests.find(Bits);
+    if (I == Out.Tests.end())
+      return false;
+    if (Seen.insert(&I->second).second)
+      Work.push_back(&I->second);
+    return true;
   };
-  llvm::SmallVector<Test, 0> Tests;
-  // (lo, hi) identifies a whole sample. (bits, 0) identifies a single
-  // 32-bit pattern wherever a copy, shift or stack reload places it.
-  llvm::DenseMap<BitPair, size_t> ByBits;
-
-  void add(BitPair Bits, Word L, Word R, bool BothZero) {
-    ByBits.try_emplace(Bits, Tests.size());
-    Tests.push_back({L, R, BothZero});
-  }
-  bool mark(BitPair Bits) {
-    const auto It = ByBits.find(Bits);
-    if (It == ByBits.end())
-      return false;
-    Tests[It->second].Needed = true;
-    return true;
-  }
-  bool mark(Word W) {
-    if (W.complete() && mark(BitPair{W.Low.Id, W.High.Id}))
-      return true;
-    const bool Low = mark(BitPair{W.Low.Id, 0});
-    return mark(BitPair{W.High.Id, 0}) || Low;
-  }
-
-public:
-  void clear() {
-    Tests.clear();
-    ByBits.clear();
-  }
-  void capture(NdOp Op, Word &Result, Word L, Word R, unsigned &NextId) {
-    if (Result.complete() || L == Word{} || R == Word{})
-      return;
-    const bool BothZero = Op == NdOp::INT_OR;
-    for (auto Part : {&Word::Low, &Word::High}) {
-      auto &H = Result.*Part;
-      if (H.Id)
-        continue;
-      // A sampled result still has opaque bits until the guard executes.
-      H.Id = NextId++;
-      // A borrow from the low half can affect the high half of a difference.
-      if (Op != NdOp::INT_SUB || Part == &Word::Low)
-        add({H.Id, 0}, {L.*Part, {}}, {R.*Part, {}}, BothZero);
+  const auto Visit = [&](Word W) {
+    if (!(W.complete() && Add({W.Low.Id, W.High.Id}))) {
+      Add({W.Low.Id, 0});
+      Add({W.High.Id, 0});
     }
-    add({Result.Low.Id, Result.High.Id}, L, R, BothZero);
-  }
-  bool assume(State &Out, Word Tested, size_t Locations, size_t &Remaining) {
-    if (Tests.empty() || !mark(Tested))
-      return true;
-    if (Tests.size() > Remaining)
+  };
+  Visit(Tested);
+  const Word Zero{{ZeroId}, {ZeroId}, Evidence::Independent};
+  while (!Work.empty()) {
+    const auto &T = *Work.pop_back_val();
+    const auto Cost = Locations * (T.BothZero ? 2 : 1);
+    if (Cost > Remaining)
       return false;
-    Remaining -= Tests.size();
-    const Word Zero{{ZeroId}, {ZeroId}, Evidence::Independent};
-    // A new test has at least one fresh identity. Its operands can only name
-    // earlier tests, including when several ORs share the same difference.
-    for (auto &T : llvm::reverse(Tests)) {
-      if (!T.Needed)
-        continue;
-      const unsigned Equalities = T.BothZero ? 2 : 1;
-      if (Locations > Remaining / Equalities)
-        return false;
-      Remaining -= Equalities * Locations;
-      if (T.BothZero) {
-        for (const Word &Part : {T.Left, T.Right}) {
-          assumeEqual(Out, Part, Zero);
-          mark(Part);
-        }
-      } else {
-        assumeEqual(Out, T.Left, T.Right);
+    Remaining -= Cost;
+    if (T.BothZero) {
+      for (const Word &Part : {T.Left, T.Right}) {
+        assumeEqual(Out, Part, Zero);
+        Visit(Part);
       }
+    } else {
+      assumeEqual(Out, T.Left, T.Right);
     }
-    return true;
   }
-};
+  return true;
+}
 
 /// An identity names equal bits within one execution state. At a join two
 /// locations remain equal exactly when their incoming identities agree on
 /// each edge. Renumbering by location order gives loops a stable fixed point
 /// without identifying successive executions of the same call instruction.
-void intersect(State &A, const State &B) {
+bool intersect(State &A, const State &B, size_t &Remaining) {
   llvm::SmallDenseMap<std::pair<unsigned, unsigned>, unsigned, 8> Classes;
   const auto MeetBits = [&](unsigned L, unsigned R) -> unsigned {
     if (!L || !R)
@@ -455,20 +447,76 @@ void intersect(State &A, const State &B) {
       V.Proof = Evidence::Equal;
     return V;
   };
+  // Keep only implications reachable from a surviving register or slot.
+  // Each merged implication must hold on both edges. Its sampled operands
+  // use the same identity mapping as the live words, even after a PHI.
+  struct PendingTest {
+    BitPair Bits;
+    const ZeroTest *Left, *Right;
+  };
+  ZeroTests Joined;
+  llvm::SmallVector<PendingTest, 8> Work;
+  const auto Match = [&](BitPair Bits, BitPair L, BitPair R) {
+    const auto I = A.Tests.find(L);
+    const auto J = B.Tests.find(R);
+    if (I != A.Tests.end() && J != B.Tests.end() &&
+        I->second.BothZero == J->second.BothZero &&
+        Joined.try_emplace(Bits).second)
+      Work.push_back({Bits, &I->second, &J->second});
+  };
+  const auto MatchWord = [&](Word V, Word L, Word R) {
+    if (V.complete())
+      Match({V.Low.Id, V.High.Id}, {L.Low.Id, L.High.Id},
+            {R.Low.Id, R.High.Id});
+    if (V.Low.Id)
+      Match({V.Low.Id, 0}, {L.Low.Id, 0}, {R.Low.Id, 0});
+    if (V.High.Id)
+      Match({V.High.Id, 0}, {L.High.Id, 0}, {R.High.Id, 0});
+  };
+  const auto MeetLive = [&](Word L, Word R) {
+    Word V = Meet(L, R);
+    if (!A.Tests.empty() && !B.Tests.empty())
+      MatchWord(V, L, R);
+    return V;
+  };
   for (unsigned I = 0; I < A.Regs.size(); ++I) {
     auto &L = A.Regs[I];
     const auto &R = B.Regs[I];
-    L = L.Name && L.Name == R.Name ? bind(*L.Name, Meet(L.Value, R.Value))
+    L = L.Name && L.Name == R.Name ? bind(*L.Name, MeetLive(L.Value, R.Value))
                                    : RegisterWord{};
   }
   for (size_t I = 0; I < A.Slots.size(); ++I) {
-    A.Slots[I].Value = Meet(A.Slots[I].Value, B.Slots[I].Value);
+    A.Slots[I].Value = MeetLive(A.Slots[I].Value, B.Slots[I].Value);
     A.Slots[I].OpaqueBytes |= B.Slots[I].OpaqueBytes;
     A.Slots[I].Unchecked |= B.Slots[I].Unchecked;
   }
   for (size_t I = 0; I < A.Peers.size(); ++I)
     A.Peers[I] = Meet(A.Peers[I], B.Peers[I]);
+  while (!Work.empty()) {
+    if (!Remaining)
+      return false;
+    --Remaining;
+    const auto [Bits, L, R] = Work.pop_back_val();
+    const Word Left = Meet(L->Left, R->Left), Right = Meet(L->Right, R->Right);
+    Joined.at(Bits) = {Left, Right, L->BothZero};
+    if (L->BothZero) {
+      MatchWord(Left, L->Left, R->Left);
+      MatchWord(Right, L->Right, R->Right);
+    }
+  }
+  A.Tests = std::move(Joined);
   A.NextId = Classes.size() + ZeroId + 1;
+  return true;
+}
+
+bool comparesWordToZero(const MedOp &Op) {
+  const auto IsZero = [](const MedVar &V) {
+    return V.isConst() && !V.ConstVal;
+  };
+  return (Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_NOTEQUAL) &&
+         Op.NumInputs == 2 && Op.Inputs[0].Size == WordBytes &&
+         Op.Inputs[1].Size == WordBytes &&
+         (IsZero(Op.Inputs[0]) || IsZero(Op.Inputs[1]));
 }
 
 /// Select the successor on which the comparison was equal. The instruction
@@ -537,11 +585,13 @@ GuardedCalls guardedResultArguments(
   // with no later load may escape as a stack argument.
   const bool Little = archLittleEndian(TRI.TheArch);
   llvm::SmallVector<int64_t, 8> Offsets;
+  bool HasZeroComparison = false;
   for (const auto &B : F.Blocks) {
     if (B.Ops.size() > Remaining)
       return {};
     Remaining -= B.Ops.size();
     for (const auto &Op : B.Ops) {
+      HasZeroComparison = HasZeroComparison || comparesWordToZero(Op);
       if (safety::detail::isStackMemoryWrite(Op.Opcode) &&
           (Op.Opcode != NdOp::STORE || Op.NumInputs != 2 || !Op.Inputs[1].Size))
         return {};
@@ -600,6 +650,9 @@ GuardedCalls guardedResultArguments(
       }
       Input.Visited = true;
     }
+    if (Input.Words.Tests.size() > Remaining)
+      return {};
+    Remaining -= Input.Words.Tests.size();
     auto Current = Input.Words;
     auto &Regs = Current.Regs;
     auto SP = Stack.BlockEntrySP(B->Id);
@@ -649,13 +702,7 @@ GuardedCalls guardedResultArguments(
       return true;
     };
     const auto Edge = equalityEdge(*B, Graph, Definitions);
-    const bool ChecksZero =
-        Edge.Compare && Edge.Compare->Inputs[0].Size == WordBytes &&
-        Edge.Compare->Inputs[1].Size == WordBytes &&
-        llvm::any_of(
-            llvm::ArrayRef(Edge.Compare->Inputs).take_front(2),
-            [](const MedVar &V) { return V.isConst() && V.ConstVal == 0; });
-    ZeroTests Tests;
+    const bool ChecksZero = Edge.Compare && comparesWordToZero(*Edge.Compare);
     Word Left, Right;
     llvm::ArrayRef<size_t> Sites;
     if (const auto It = Native.find(B); It != Native.end())
@@ -714,7 +761,7 @@ GuardedCalls guardedResultArguments(
         else
           Exposed.erase(&Op);
         Left = Right = {};
-        Tests.clear();
+        Current.Tests.clear();
         Temps.clear();
         AtEntry = false;
         if (Untyped && fullGPR(Op.Output) &&
@@ -772,13 +819,13 @@ GuardedCalls guardedResultArguments(
           }
         } else if (Op.Output.Size) {
           Value = transferredHalves(Op, read);
-          if (ChecksZero && Op.NumInputs == 2 && Op.Output.Size == WordBytes &&
-              Op.Inputs[0].Size == WordBytes &&
+          if (HasZeroComparison && Op.NumInputs == 2 &&
+              Op.Output.Size == WordBytes && Op.Inputs[0].Size == WordBytes &&
               Op.Inputs[1].Size == WordBytes &&
               (Op.Opcode == NdOp::INT_XOR || Op.Opcode == NdOp::INT_SUB ||
                Op.Opcode == NdOp::INT_OR)) {
-            Tests.capture(Op.Opcode, Value, read(Op.Inputs[0]),
-                          read(Op.Inputs[1]), NextIdentity);
+            captureZeroTest(Current.Tests, Op.Opcode, Value, read(Op.Inputs[0]),
+                            read(Op.Inputs[1]), NextIdentity);
           }
         }
         if (AtEntry && fullGPR(Op.Output) &&
@@ -804,15 +851,17 @@ GuardedCalls guardedResultArguments(
         Regs.size() + Offsets.size() + Current.Peers.size();
     for (int Id : B->Succs) {
       const auto *Succ = Graph.blockById(Id);
-      if (!Succ || Remaining < Locations)
+      const auto EdgeCost = Locations + Current.Tests.size();
+      if (!Succ || Remaining < EdgeCost)
         return {};
-      Remaining -= Locations;
+      Remaining -= EdgeCost;
       auto Out = Current;
       if (Succ == Edge.Successor) {
         assumeEqual(Out, Left, Right);
         if (ChecksZero &&
-            !Tests.assume(Out, Edge.Compare->Inputs[0].isConst() ? Right : Left,
-                          Locations, Remaining))
+            !assumeZeroTest(Out,
+                            Edge.Compare->Inputs[0].isConst() ? Right : Left,
+                            Locations, Remaining))
           return {};
       }
       for (const auto &Phi : Succ->Phis) {
@@ -823,7 +872,8 @@ GuardedCalls guardedResultArguments(
       }
       // Also normalize a single edge so fresh call identities never collide
       // with incoming ones when this block is visited again.
-      intersect(Out, Out);
+      if (!intersect(Out, Out, Remaining))
+        return {};
       auto [It, Inserted] = Incoming.try_emplace(Succ);
       auto &Next = It->second;
       if (Succ->Preds.size() > 1 || Succ == &F.Blocks.front()) {
@@ -842,14 +892,19 @@ GuardedCalls guardedResultArguments(
         if (Edges.size() > Remaining / Locations)
           return {};
         Remaining -= Edges.size() * Locations;
-        Out = Edges.front().second;
+        const auto &First = Edges.front().second;
+        if (First.Tests.size() > Remaining)
+          return {};
+        Remaining -= First.Tests.size();
+        Out = First;
         for (const auto &E : llvm::drop_begin(Edges))
-          intersect(Out, E.second);
-        if (Succ == &F.Blocks.front())
-          intersect(Out, Entry);
+          if (!intersect(Out, E.second, Remaining))
+            return {};
+        if (Succ == &F.Blocks.front() && !intersect(Out, Entry, Remaining))
+          return {};
       }
       if (Inserted || Next.Words != Out) {
-        Next.Words = Out;
+        Next.Words = std::move(Out);
         Work.insert(Succ);
       }
     }

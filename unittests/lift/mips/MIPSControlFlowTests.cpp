@@ -1493,6 +1493,45 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
                {LowDiff, HighDiff, EitherDiff, Move(13, 0), ZeroDiff, 0});
     CheckParts("folded differences and repack", true,
                {LowDiff, HighDiff, EitherDiff, ZeroDiff, 0, Shift, Join}, 15);
+    // BEQ selects the right arm. Both arms reach the separate zero test.
+    constexpr uint32_t RightArm = 0x12200003, JoinArms = 0x10000002;
+    const auto Xor = Binary(0x26, 24, 2, 16);
+    const auto Sub = Binary(0x2f, 24, 16, 2);
+    CheckParts("each incoming difference proves the same equality", true,
+               {RightArm, 0, JoinArms, Xor, Sub, ZeroDiff, 0});
+    CheckParts(
+        "one incoming difference compares another word", false,
+        {RightArm, 0, JoinArms, Xor, Binary(0x2f, 24, 16, 17), ZeroDiff, 0});
+    CheckParts("overwritten difference with an intact saved copy", true,
+               {LowDiff, HighDiff, EitherDiff, Move(12, 24), RightArm, 0,
+                JoinArms, Move(24, 0), Move(24, 17), Guard(12, 0), 0});
+    CheckParts("overwritten difference on one incoming edge", false,
+               {LowDiff, HighDiff, EitherDiff, RightArm, 0, JoinArms, 0,
+                Move(24, 0), ZeroDiff, 0});
+    // Skip the loop or decrement s1 until zero. The final BNE samples the
+    // difference after all executed backedges and their delay slots.
+    constexpr uint32_t SkipLoop = 0x12200004, Decrement = 0x6631ffff,
+                       Backedge = 0x1620fffe;
+    CheckParts("loop-invariant folded difference", true,
+               {LowDiff, HighDiff, EitherDiff, SkipLoop, 0, Decrement, Backedge,
+                0, ZeroDiff, 0});
+    CheckParts("backedge delay slot replaces the difference", false,
+               {LowDiff, HighDiff, EitherDiff, SkipLoop, 0, Decrement, Backedge,
+                Move(24, 0), ZeroDiff, 0});
+    CheckParts("loop recomputes an equivalent whole difference", true,
+               {Xor, SkipLoop, 0, Decrement, Backedge, Sub, ZeroDiff, 0});
+    CheckParts("only a taken backedge replaces the difference", false,
+               {Xor, 0x12200006, 0, Decrement, 0x12200003, 0, 0x1000fffc,
+                Move(24, 0), ZeroDiff, 0});
+    CheckParts("one path bypasses the zero test", false,
+               {Xor, 0x12200003, 0, ZeroDiff, 0});
+    CheckParts("fold half differences from the preceding block", true,
+               {LowDiff, HighDiff, RightArm, 0, JoinArms, 0, Move(12, 12),
+                EitherDiff, ZeroDiff, 0});
+    CheckParts("one arm changes a byte of the spilled difference", false,
+               {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40), RightArm, 0,
+                JoinArms, 0, Memory(40, 0, archLittleEndian(A) ? 40 : 47),
+                Memory(55, 24, 40), OtherClear, ZeroDiff, 0});
     CheckParts("matching differences can cancel", false,
                {LowDiff, HighDiff, Binary(0x26, 24, 15, 12), ZeroDiff, 0});
     CheckParts("disjoint differences can mask each other", false,

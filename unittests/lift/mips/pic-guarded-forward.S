@@ -36,7 +36,9 @@ import_probe:
   or $16,$25,$zero
   or $17,$6,$zero
   or $18,$5,$zero
-#ifdef REPEAT_PRODUCER
+#if defined(CROSS_JOIN) || defined(CROSS_LOOP)
+  or $20,$6,$zero
+#elif defined(REPEAT_PRODUCER)
   or $20,$4,$zero
 #else
   or $20,$7,$zero
@@ -197,17 +199,48 @@ import_probe:
   dsrl32 $19,$18,0
   dsll32 $24,$18,0
   dsrl32 $24,$24,0
-#ifdef OR_DIFFERENCES
+#if defined(OR_DIFFERENCES) || defined(RECOMPUTE_DIFFERENCE)
+#ifdef RECOMPUTE_DIFFERENCE
+  xor $24,$2,$18
+#else
   xor $24,$13,$24
   xor $19,$14,$19
   or $24,$24,$19
+#endif
 #if SPILL_DIFFERENCE == 4
   sw $24,40($sp)
-  or $24,$zero,$zero
-  lw $24,40($sp)
 #elif SPILL_DIFFERENCE == 8
   sd $24,40($sp)
+#endif
+#ifdef SPILL_DIFFERENCE
   or $24,$zero,$zero
+#endif
+#ifdef CROSS_JOIN
+  beq $20,$zero,.Lcopy_difference
+  or $12,$24,$zero
+  b .Ltest_difference
+  nop
+.Lcopy_difference:
+  dsll32 $12,$24,0
+  dsrl32 $12,$12,0
+.Ltest_difference:
+  or $24,$12,$zero
+#elif defined(CROSS_LOOP)
+  beq $20,$zero,.Ltest_difference
+  nop
+.Lcarry_difference:
+  daddiu $20,$20,-1
+  bne $20,$zero,.Lcarry_difference
+#ifdef RECOMPUTE_DIFFERENCE
+  dsubu $24,$18,$2
+#else
+  nop
+#endif
+.Ltest_difference:
+#endif
+#if SPILL_DIFFERENCE == 4
+  lw $24,40($sp)
+#elif SPILL_DIFFERENCE == 8
   ld $24,40($sp)
 #endif
   bne $24,$zero,.Ldone

@@ -18369,7 +18369,12 @@ a hole under overlapping writes, comparisons of different inputs, and branches
 that bypass one of the checks. Folded-guard cases cover word and doubleword
 spills, signed and unsigned reloads, a changed byte, a borrow into the high
 half, differences that cancel under XOR or are concealed by AND, and a
-changed delay-slot value.
+changed delay-slot value. The PIC and CPIC fixtures carry a difference through
+a register join, a stack reload at the join, and a loop with zero to three
+iterations before testing it. One loop computes an XOR before entry and a
+modular subtraction of the same operands on each iteration. Return-target
+tests also change the difference on one arm or only on a taken backedge, and
+overwrite a single byte of its spill.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.
