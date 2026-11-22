@@ -11,6 +11,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
@@ -25,6 +26,7 @@
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/MachOLayout.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -32,12 +34,16 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugFrame.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
@@ -50,8 +56,10 @@
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -66,11 +74,84 @@ using namespace neverd;
   constexpr llvm::StringLiteral Name[] = {__VA_ARGS__};
 #include "MachOAuthenticatedNativeFixtures.def"
 
+TEST(MachOArm64eRuntimeGlobals, EmitsSignedRegistrationInDyldPriorityOrder) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto M = llvm::parseAssemblyString(kDarwinDestructorIR, Diagnostic, Context);
+  ASSERT_NE(M, nullptr) << Diagnostic.getMessage().str();
+  auto Compiled = Codegen().compile(*M, Arch::AArch64, BinaryFormat::MachO,
+                                    M->getTargetTriple().str());
+  ASSERT_TRUE(Compiled.Success);
+  std::map<uint64_t, std::string> ByPriority, ByOffset;
+  const auto *Ctors = M->getNamedGlobal(kIRConstructorList);
+  ASSERT_NE(Ctors, nullptr);
+  for (const auto &Entry : Ctors->getInitializer()->operands()) {
+    const auto *Row = llvm::cast<llvm::ConstantStruct>(Entry);
+    const auto *F =
+        llvm::cast<llvm::Function>(Row->getOperand(kIRConstructorFunction));
+    const auto Priority =
+        llvm::cast<llvm::ConstantInt>(Row->getOperand(kIRConstructorPriority))
+            ->getZExtValue();
+    ByPriority.emplace(Priority,
+                       (llvm::Twine(kMachOSymbolPrefix) + F->getName()).str());
+  }
+  const auto *Register = M->getFunction(kDarwinRegisterName);
+  ASSERT_NE(Register, nullptr);
+  unsigned Registrations = 0;
+  for (const auto *User : Register->users()) {
+    const auto *Call = llvm::dyn_cast<llvm::CallBase>(User);
+    ASSERT_NE(Call, nullptr);
+    const auto *Recipe =
+        llvm::dyn_cast<llvm::ConstantPtrAuth>(Call->getArgOperand(0));
+    ASSERT_NE(Recipe, nullptr);
+    EXPECT_EQ(Recipe->getKey()->getZExtValue(), kAArch64PAuthKeyIA);
+    EXPECT_TRUE(Recipe->getDiscriminator()->isZero());
+    EXPECT_FALSE(Recipe->hasAddressDiscriminator());
+    EXPECT_TRUE(llvm::isa<llvm::Function>(Recipe->getPointer()));
+    ++Registrations;
+  }
+  EXPECT_EQ(Registrations, kRegisteredDestructors);
+  const llvm::StringRef Bytes(
+      reinterpret_cast<const char *>(Compiled.ObjectData.data()),
+      Compiled.ObjectData.size());
+  auto Object = llvm::object::ObjectFile::createObjectFile(
+      llvm::MemoryBufferRef(Bytes, kOriginalFile));
+  ASSERT_TRUE(bool(Object)) << llvm::toString(Object.takeError());
+  const auto &MachO = llvm::cast<llvm::object::MachOObjectFile>(**Object);
+  for (const auto &Section : MachO.sections()) {
+    auto Flags = MachO.getSection64(Section.getRawDataRefImpl()).flags;
+    if ((Flags & llvm::MachO::SECTION_TYPE) !=
+        llvm::MachO::S_MOD_INIT_FUNC_POINTERS)
+      continue;
+    for (const auto &Reloc : Section.relocations()) {
+      auto Symbol = Reloc.getSymbol();
+      ASSERT_NE(Symbol, MachO.symbol_end());
+      auto Name = Symbol->getName();
+      ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+      ByOffset.emplace(Reloc.getOffset(), Name->str());
+    }
+  }
+  ASSERT_EQ(ByPriority.size(), kRegisteredInitializers);
+  ASSERT_EQ(ByOffset.size(), kRegisteredInitializers);
+  EXPECT_TRUE(std::equal(
+      ByPriority.begin(), ByPriority.end(), ByOffset.begin(),
+      [](const auto &P, const auto &S) { return P.second == S.second; }));
+}
+
+TEST(MachOArm64eRuntimeGlobals, RejectsAnIncompatibleDestructorPrototype) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto M = llvm::parseAssemblyString(kInvalidDestructorIR, Diagnostic, Context);
+  ASSERT_NE(M, nullptr) << Diagnostic.getMessage().str();
+  auto Compiled = Codegen().compile(*M, Arch::AArch64, BinaryFormat::MachO,
+                                    M->getTargetTriple().str());
+  EXPECT_FALSE(Compiled.Success);
+  EXPECT_TRUE(Compiled.ObjectData.empty());
+}
+
 void checkAppleChainedRecipes(llvm::StringRef Info,
                               llvm::ArrayRef<uint8_t> Binary,
                               llvm::ArrayRef<MachOAuthenticatedFixup> Fixups) {
-  // Apple's symbolicated -fixups printer indexes past its section inventory
-  // for sectionless segments. Chain details and imports do not use that path.
   ASSERT_TRUE(Info.contains(kFixupsHeading));
   ASSERT_TRUE(Info.contains(kImportsHeading));
   llvm::SmallVector<llvm::StringRef> Lines;
@@ -1412,6 +1493,16 @@ void checkNativeObjectInstallation(
   llvm::consumeError(std::move(Error));
   auto Parsed = Loader->loadBuffer((*Input)->getMemBufferRef());
   ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  for (const auto &Fixup : *Recipes) {
+    const auto *Section = Parsed->getSectionFor(Fixup.Address);
+    ASSERT_NE(Section, nullptr) << Fixup.Address;
+    EXPECT_TRUE(rangeInBounds(Fixup.Address - Section->VA, kPointerBytes,
+                              Section->FileSz));
+    if (Section->SegmentName == kNewConstSegment)
+      EXPECT_EQ(Section->Name, section_names::macho::Const);
+    if (Section->SegmentName == kNewDataSegment)
+      EXPECT_EQ(Section->Name, section_names::macho::Data);
+  }
   checkPreservedSignedUnwind(*Before, *Parsed);
   if (RelocateOriginalLanguage) {
     for (const auto *Name : {kCleanupSymbol, kOriginalCatch}) {

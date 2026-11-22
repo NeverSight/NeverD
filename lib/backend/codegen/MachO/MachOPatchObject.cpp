@@ -143,24 +143,34 @@ struct NativeMachO {
 // Reserve them before assigning code, unwind and fixup addresses.
 uint64_t installationCommandBytes(const NativeMachO &Object,
                                   const BinaryImage &Original) {
-  const auto Sections =
-      ((Object.Descriptors || !Object.ThreadInitializers.empty())
-           ? kTLVSectionCount
-           : 0) +
+  const bool HasTLS = Object.Descriptors || !Object.ThreadInitializers.empty();
+  const unsigned RuntimeSections =
+      (HasTLS ? kTLVSectionCount : 0) +
       unsigned(Object.InitializerOffsets.has_value());
-  const bool HasData = llvm::any_of(Object.Image.Sections, [](const auto &S) {
-    return S.IsAllocated && S.Size &&
-           (S.Kind == Kind::WritableData || S.Kind == Kind::UninitializedData);
-  });
+  // Preparing per-thread signing can add a sealed resolver configuration and
+  // ordinary mutable storage before the native descriptors and template.
+  bool Relro = HasTLS, Mutable = HasTLS;
+  for (const auto &S : Object.Image.Sections) {
+    if (!S.IsAllocated || !S.IsInImage || !S.Size ||
+        (S.Kind != Kind::WritableData && S.Kind != Kind::UninitializedData))
+      continue;
+    Relro |= S.ReadOnlyAfterFixups;
+    Mutable |= !S.ReadOnlyAfterFixups;
+  }
   // A nonempty source DICE command survives segment installation. An object
   // introducing the first data island also needs room for the new command.
   const bool NewDICE =
       !Object.Embedded.empty() && Original.MachODataInCode.empty();
   const auto SegmentBytes =
       getMachOSegmentCmdSize(Object.Image.PointerWidth == sizeof(uint64_t));
-  if (Sections || HasData)
-    return SegmentBytes * kRuntimeSegmentCount + sizeof(section_64) * Sections +
+  if (RuntimeSections || Relro || Mutable) {
+    const unsigned Pools = unsigned(Relro) + unsigned(Mutable);
+    const auto Segments =
+        Original.isArm64e() ? 1 + Pools : kRuntimeSegmentCount;
+    const auto Sections = RuntimeSections + (Original.isArm64e() ? Pools : 0);
+    return SegmentBytes * Segments + sizeof(section_64) * Sections +
            sizeof(linkedit_data_command) * (1 + unsigned(NewDICE));
+  }
   if (!NewDICE && Original.isArm64e() &&
       Original.findSegmentByName(kDefaultNdTextSegment)) {
     const auto *Linkedit =
@@ -242,12 +252,14 @@ bool isCompactPersonality(const NativeMachO &Object, const Relocation &R) {
 // The arm64e unwind personality ABI uses an IA/address-diversified GOT slot;
 // LSDA type information uses an ordinary data pointer. Keep these identities
 // distinct even when a symbol appears in both roles.
-llvm::Error
-prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
-                 llvm::ArrayRef<SourcePatchDependency> Dependencies) {
+llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
+                             llvm::ArrayRef<SourcePatchDependency> Dependencies,
+                             llvm::ArrayRef<SourcePatchBinding> Bindings = {}) {
   std::set<std::string> Declared;
   for (const auto &D : Dependencies)
     Declared.insert(D.Symbol);
+  for (const auto &B : Bindings)
+    Declared.insert(B.Symbol);
   const auto UsesGOT = [&](const Relocation &R) {
     return isCompactPersonality(Object, R) ||
            R.Type == ARM64_RELOC_POINTER_TO_GOT || isGOTLoad(R.Type) ||
@@ -1199,7 +1211,7 @@ prepareRuntimeDependencies(NativeMachO &Object, const BinaryImage &Original,
                            llvm::ArrayRef<SourcePatchBinding> Bindings = {}) {
   std::set<unsigned> Functions;
   if (Original.isArm64e()) {
-    for (const auto &Runtime : machODarwinStackImports()) {
+    const auto AdmitRuntime = [&](const SourcePatchDependency &Runtime) {
       const auto I = Object.Names.find(Runtime.Symbol);
       if (I == Object.Names.end() || Object.Symbols.at(I->second).Section ||
           llvm::none_of(Object.Relocations,
@@ -1212,7 +1224,7 @@ prepareRuntimeDependencies(NativeMachO &Object, const BinaryImage &Original,
           llvm::any_of(Dependencies, [&](const auto &D) {
             return D.Symbol == Runtime.Symbol;
           }))
-        continue;
+        return;
       // Keep the original dyld provider. A direct branch can still need a
       // callable when the original only stored the imported pointer.
       if (Original.findImport((llvm::Twine('_') + Runtime.Symbol).str()) ||
@@ -1222,7 +1234,11 @@ prepareRuntimeDependencies(NativeMachO &Object, const BinaryImage &Original,
       } else {
         Dependencies.push_back(Runtime);
       }
-    }
+    };
+    for (const auto &Runtime : machODarwinStackImports())
+      AdmitRuntime(Runtime);
+    AdmitRuntime({macho_arm64e_abi::kLibSystem, macho_arm64e_abi::kCxaAtExit,
+                  SourcePatchDependencyKind::Function});
   }
   const auto Add = [&](llvm::StringRef Name) -> llvm::Error {
     const auto Old = llvm::find_if(
@@ -1467,7 +1483,7 @@ llvm::Error prepareThreadLocals(NativeMachO &Object,
   return llvm::Error::success();
 }
 
-llvm::Error place(NativeMachO &Object, uint64_t Base,
+llvm::Error place(NativeMachO &Object, uint64_t Base, uint64_t OriginalSlide,
                   const std::optional<MachOEHFrameRegion> &EH) {
   auto &Image = Object.Image;
   Image.BaseVA = Base;
@@ -1551,8 +1567,10 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
       Image.SymbolAddrs[S.Name] =
           Image.Sections[Object.Sections.at(S.Section)].VA + S.Offset;
   for (auto &[Key, Slot] : Object.GOT) {
-    if (!Slot.Section)
+    if (!Slot.Section) {
+      Slot.Address += OriginalSlide;
       continue;
+    }
     auto &S = Image.Sections[*Slot.Section];
     Slot.Address = S.VA;
     auto &Reference = S.FixupReferences.front();
@@ -1630,6 +1648,8 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
     const auto &S = Object.Symbols.at(Index);
     if (S.Section)
       Reference.Address = Image.SymbolAddrs.at(S.Name);
+    else
+      Reference.Address += OriginalSlide;
   }
   Image.Success = true;
   return llvm::Error::success();
@@ -1681,10 +1701,13 @@ resolve(const NativeMachO &Object, unsigned Index, const BinaryImage &Original,
     if (auto Stub = Object.AuthenticatedCallStubs.find(Index);
         Stub != Object.AuthenticatedCallStubs.end())
       return Object.Image.Sections[Stub->second.Code].VA;
-  if (Object.Descriptors && S.Name == kDSOHandle) {
+  // Darwin passes the address of the final Mach header to libSystem when
+  // registering image and per-thread destructors.
+  if (Original.isArm64e() && !DirectBranch &&
+      S.Name == macho_arm64e_abi::kDSOHandle && !Bindings.contains(S.Name)) {
     const auto Header = Original.fileOffsetToVA(0);
     if (Header == InvalidVA)
-      return fail(kTLVStorage);
+      return fail(kMissingDSOHeader);
     return Header;
   }
   if (auto T = Object.Thunks.find(Index); T != Object.Thunks.end())
@@ -2521,6 +2544,10 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
           prepareRuntimeDependencies(*Object, *Original, RuntimeDependencies))
     return E;
   Dependencies = RuntimeDependencies;
+  // Newly allocated GOT slots need segment and section commands. Resolve
+  // reuse against the input image before reserving the publication header.
+  if (auto Error = prepareArm64eGOT(*Object, *Original, Dependencies))
+    return Error;
   auto Candidate = Binary;
   const uint64_t ExtraEH = requiredNativeEHBytes(*Object, Candidate);
   std::optional<MachODependencyState> SlidDependencies;
@@ -2542,13 +2569,11 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   if (!Layout)
     return Layout.takeError();
   scanImportThunks(*Layout);
-  if (auto Error = prepareArm64eGOT(*Object, *Layout, Dependencies))
-    return Error;
   if (auto Error = prepareThreadLocals(*Object, *Layout))
     return Error;
   if (auto Error = prepareMainRelro(*Object, Candidate, *Layout))
     return Error;
-  if (auto Error = place(*Object, Base, EH))
+  if (auto Error = place(*Object, Base, *Slide, EH))
     return Error;
   if (auto Error = relocate(*Object, *Layout, {}))
     return Error;
@@ -2828,6 +2853,10 @@ static llvm::Expected<PatchResult> installObject(
   if (Preparation)
     if (auto E = prepareImports(*Object, Preparation->Imports))
       return E;
+  if (Original.isArm64e())
+    if (auto E = prepareArm64eGOT(*Object, Original, Dependencies,
+                                  RequestedBindings))
+      return E;
   const uint64_t ExtraEH = requiredNativeEHBytes(*Object, LayoutBytes);
   std::optional<MachODependencyState> SlidDependencies;
   const auto LibraryCommands =
@@ -2883,14 +2912,11 @@ static llvm::Expected<PatchResult> installObject(
   if (!LayoutImage)
     return LayoutImage.takeError();
   scanImportThunks(*LayoutImage);
-  if (Original.isArm64e())
-    if (auto E = prepareArm64eGOT(*Object, *LayoutImage, Dependencies))
-      return E;
   if (auto E = prepareThreadLocals(*Object, *LayoutImage))
     return E;
   if (auto E = prepareMainRelro(*Object, LayoutBytes, *LayoutImage))
     return E;
-  if (auto E = place(*Object, Base, EH))
+  if (auto E = place(*Object, Base, *Slide, EH))
     return std::move(E);
   if (auto E = relocate(*Object, *LayoutImage, Bindings))
     return std::move(E);

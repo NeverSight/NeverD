@@ -59,8 +59,69 @@ static int plus(int x) {
 }
 static Fn __ptrauth(1, 1, 0x5371) volatile slot = plus;
 extern int neverd_provider(void);
-int entry(int x) { return slot(x) + neverd_provider(); }
+static __thread volatile int per_thread = 1;
+static volatile int ready;
+__attribute__((constructor)) static void initialize(void) { ready = 1; }
+int entry(int x) { return slot(x) + neverd_provider() + per_thread - ready; }
 )c")
+MACHO_AUTH_NATIVE_TEXT(kGOTOnlySource, R"c(
+extern int neverd_provider_data;
+int entry(int x) { return x + neverd_provider_data; }
+)c")
+MACHO_AUTH_NATIVE_TEXT(kRecordEvent, "record_event")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kRegisteredInitializers, 3)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kRegisteredDestructors, 2)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kIRConstructorPriority, 0)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kIRConstructorFunction, 1)
+MACHO_AUTH_NATIVE_TEXT(kMachOSymbolPrefix, "_")
+MACHO_AUTH_NATIVE_TEXT(kIRConstructorList, "llvm.global_ctors")
+MACHO_AUTH_NATIVE_TEXT(kDarwinRegisterName, "__cxa_atexit")
+MACHO_AUTH_NATIVE_TEXT(kDarwinDestructorIR, R"ir(
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "arm64e-apple-macosx14.0.0"
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [
+  { i32, ptr, ptr } { i32 65535, ptr @start, ptr null }
+]
+@llvm.global_dtors = appending global [2 x { i32, ptr, ptr }] [
+  { i32, ptr, ptr } { i32 100, ptr @late, ptr null },
+  { i32, ptr, ptr } { i32 300, ptr @early, ptr @entry }
+]
+
+declare void @record_event(i32)
+
+define internal void @start() #0 {
+  call void @record_event(i32 1)
+  ret void
+}
+define internal void @early() #0 {
+  call void @record_event(i32 3)
+  ret void
+}
+define internal void @late() #0 {
+  call void @record_event(i32 2)
+  ret void
+}
+define i32 @entry(i32 %x) #0 {
+  ret i32 %x
+}
+
+attributes #0 = { nounwind uwtable(sync) "ptrauth-returns" }
+!llvm.module.flags = !{!0, !3}
+!0 = !{i32 6, !"ptrauth.abi-version", !1}
+!1 = !{!2}
+!2 = !{i32 0, i1 false}
+!3 = !{i32 7, !"uwtable", i32 1}
+)ir")
+MACHO_AUTH_NATIVE_TEXT(kInvalidDestructorIR, R"ir(
+target triple = "arm64e-apple-macosx14.0.0"
+@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] [
+  { i32, ptr, ptr } { i32 100, ptr @entry, ptr null }
+]
+define i32 @entry(i32 %x) {
+  ret i32 %x
+}
+)ir")
 MACHO_AUTH_NATIVE_TEXT(kBindingEntry, "entry")
 MACHO_AUTH_NATIVE_TEXT(kBindingEntrySymbol, "_entry")
 MACHO_AUTH_NATIVE_TEXT(kBindingBiasSymbol, "_bias")
@@ -210,7 +271,7 @@ MACHO_AUTH_NATIVE_VALUE(uint32_t, kMacOSMainSubtype, 0x81000002u)
 MACHO_AUTH_NATIVE_VALUE(uint32_t, kUnsupportedObjectSubtype, 0x82000002u)
 MACHO_AUTH_NATIVE_VALUE(uint32_t, kKernelMainSubtype, 0xc1000002u)
 MACHO_AUTH_NATIVE_ARGS(kOutputArgs, "-o")
-MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-imports",
+MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-imports", "-fixups",
                        "-fixup_chain_details")
 
 MACHO_AUTH_NATIVE_TEXT(kClassicLinker, "ld-classic")

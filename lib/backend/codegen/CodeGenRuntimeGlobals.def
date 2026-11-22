@@ -1,0 +1,20 @@
+//===- CodeGenRuntimeGlobals.def - LLVM runtime global contracts ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+CODEGEN_RUNTIME_GLOBAL(kGlobalCtors, "llvm.global_ctors")
+CODEGEN_RUNTIME_GLOBAL(kGlobalDtors, "llvm.global_dtors")
+
+#ifdef SOURCE_PATCH_STORAGE_TEXT
+SOURCE_PATCH_STORAGE_TEXT(kLLVMUsed, "llvm.used")
+SOURCE_PATCH_STORAGE_TEXT(kLLVMCompilerUsed, "llvm.compiler.used")
+SOURCE_PATCH_STORAGE_TEXT(kUnsupportedTLS,
+                          "TLS storage is not supported by this source profile")
+SOURCE_PATCH_STORAGE_TEXT(kMissingRegistration,
+                          "global initialization requires runtime registration")
+#undef SOURCE_PATCH_STORAGE_TEXT
+#endif
+
+#undef CODEGEN_RUNTIME_GLOBAL

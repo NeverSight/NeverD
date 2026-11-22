@@ -42,6 +42,12 @@
 namespace neverd {
 namespace {
 
+#define CODEGEN_RUNTIME_GLOBAL(Name, Text)                                     \
+  constexpr llvm::StringLiteral Name = Text;
+#define SOURCE_PATCH_STORAGE_TEXT(Name, Text)                                  \
+  constexpr llvm::StringLiteral Name = Text;
+#include "CodeGenRuntimeGlobals.def"
+
 llvm::Error patchError(const llvm::Twine &Detail) {
   return llvm::make_error<llvm::StringError>("source patch: " + Detail,
                                              llvm::inconvertibleErrorCode());
@@ -514,17 +520,18 @@ llvm::Expected<PatchResult> installSourcePatch(
   // Address initializers additionally need load-time relocation registration;
   // until that contract is installed, never freeze an ASLR-sensitive pointer.
   for (const llvm::GlobalVariable &Global : Module.globals()) {
-    if (Global.isThreadLocal())
-      return patchError("TLS storage is not supported by this source profile");
-    if ((Global.getName() == "llvm.global_ctors" ||
-         Global.getName() == "llvm.global_dtors")) {
-      if (Global.hasInitializer() && !Global.getInitializer()->isNullValue())
-        return patchError(
-            "global initialization requires runtime registration");
+    if (Global.isThreadLocal() && !Image.isArm64e())
+      return patchError(kUnsupportedTLS);
+    if (Global.getName() == kGlobalCtors || Global.getName() == kGlobalDtors) {
+      // Darwin publishes initializer offsets. Arm64e destructors register an
+      // authenticated callback with libSystem during image initialization.
+      if (Global.hasInitializer() && !Global.getInitializer()->isNullValue() &&
+          !Image.isArm64e())
+        return patchError(kMissingRegistration);
       continue;
     }
-    if (!Global.hasInitializer() || Global.getName() == "llvm.used" ||
-        Global.getName() == "llvm.compiler.used")
+    if (!Global.hasInitializer() || Global.getName() == kLLVMUsed ||
+        Global.getName() == kLLVMCompilerUsed)
       continue;
     const bool PESource = Image.Format == BinaryFormat::COFF;
     if (!Global.isConstant() && Image.Format != BinaryFormat::ELF &&
