@@ -108,6 +108,7 @@ public:
   llvm::Expected<std::optional<uint64_t>>
   copyResults(llvm::ArrayRef<uint16_t> Events, uint64_t Return,
               ProcessResult &Result) {
+    // Linux 6.6 calls user_write_access_begin even for an empty pollfd array.
     const uint64_t Size = Input.size() * PollDescriptorSize;
     if (Output > Files.Layout.UserLimit ||
         Size > Files.Layout.UserLimit - Output)

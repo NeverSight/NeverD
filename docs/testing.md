@@ -22728,7 +22728,10 @@ cases assert partial objects, newline/read-ahead, multiple suspensions, EOF,
 per-read timeout, thread-local errno and incomplete imports at unknown input.
 TCP quiet-duration cases cover a delayed connect, duplicate and reused descriptors,
 the first unknown nanosecond, and a schedule that becomes valid on a later
-connect attempt. Android callers exercise libc `poll` and raw `ppoll`.
+connect attempt. Android libc `poll`, `ppoll`, and raw `ppoll` callers read
+back `revents` at the exact deadline. Ending the quiet interval one nanosecond
+earlier leaves the wait unresolved. Zero-descriptor kernel tests check the
+output address range and remaining time after the deadline.
 Run affected Linux and Android owner suites before review; unavailable backend
 skips do not count as executed coverage. All fixtures use explicit offline data.
 
