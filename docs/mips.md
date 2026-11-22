@@ -1591,6 +1591,26 @@ edge against the instruction clock.
 [SGI IP12 console](https://mail-index.netbsd.org/port-sgimips/2018/08/26/msg000766.html),
 [SGI IP20 R4000 console](https://mail-index.netbsd.org/netbsd-bugs/2018/08/13/msg058468.html).
 
+On a little-endian Sony SCPH-5501 (PRId 2, US ROM 3.0), the
+`irqsio` memory-card reports give the instruction count between enabling
+Status.IEc with IP2 pending and exception entry. All 18 trials in three
+distinct reports retired two instructions. The handler sampled Status
+`0x40000404` and root counter 2 at 54–68 clocks. The regression checks
+the retirement count, exception vector and Status using representative
+instructions. The timing of the electrical IRQ pin was outside this probe.
+[Board and test description](https://psx.wiki/tests/irqsio/),
+[card-b](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt),
+[card-g](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g/irqsio/14IEX.txt),
+[card-g3](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g3/irqsio/14IEX.txt).
+
+The same board's `04IP2` probe reads Cause after a peripheral write with
+IEc cleared. Enabling the pending source in I_MASK, or acknowledging it
+in I_STAT, changes the sampled IP2 after two intervening NOPs. Forcing
+the source in DICR first changes the sample after four NOPs. The separate
+DICR-to-handler experiment retired eight instructions. Replaying those
+device-triggered paths requires a model of the PlayStation interrupt controller.
+[Cause.IP2 samples](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/04IP2.txt).
+
 The CW4011 integration is described in the
 [LSI L64364 ATMizer II manual, chapter 4](https://www.ic72.com/pdf_file/l/123798.pdf).
 

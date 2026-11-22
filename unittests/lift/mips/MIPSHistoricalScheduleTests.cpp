@@ -813,6 +813,35 @@ TEST(MIPSHistoricalScheduling, R30xxMixedInterruptRequiresAnIssueSample) {
   }
 }
 
+// SCPH-5501 irqsio/14IEX, card-b, card-g and card-g3. The console
+// counts instructions after MTC0 and samples SR in the handler. The probe
+// PCs and counter instruction below are representative.
+TEST(MIPSHistoricalScheduling, SCPH5501PendingIP2OnIEEnable) {
+  const auto Img = image(Arch::MIPS32EL, 1);
+  MIPSSystemContext Context;
+  Context.Historical = HistoricalSchedule::fromSnapshot(
+      1, {},
+      HistoricalCP0{HistoricalProcessor::R30xx, 0x40000400, 0, 0, {}, {}});
+  ASSERT_TRUE(Context.Historical);
+  ASSERT_TRUE(Context.Historical->setHardwareInterrupts(1));
+  NdOpEmulator Emulator(Img);
+  Emulator.setRegister(mipsreg::A0, 0x40000401);
+  Emulator.setRegister(mipsreg::V0, 0);
+  const uint32_t PC = 0x80010000;
+  ASSERT_TRUE(execute(lift(Img, PC, {0x40846000}), Emulator, Context));
+  for (uint32_t I = 1; I <= 2; ++I) {
+    ASSERT_TRUE(
+        execute(lift(Img, PC + I * 4, {0x24420001}), Emulator, Context));
+    EXPECT_EQ(Emulator.getRegister(mipsreg::V0), I);
+  }
+  EXPECT_FALSE(execute(lift(Img, PC + 12, {0x24420001}), Emulator, Context));
+  const auto &CPU = *Context.Historical->system();
+  EXPECT_EQ(Emulator.getRegister(mipsreg::V0), 2u);
+  EXPECT_EQ(CPU.ExceptionVector, 0x80000080u);
+  EXPECT_EQ(CPU.EPC, PC + 12);
+  EXPECT_EQ(CPU.Status, 0x40000404u);
+}
+
 TEST(MIPSHistoricalScheduling, R30xxInterruptWindowIsSpecificToTheSource) {
   struct Transition {
     uint32_t Old, New;
