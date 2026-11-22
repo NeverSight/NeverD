@@ -237,6 +237,21 @@ def check(args: argparse.Namespace) -> dict:
                     row["passed"] = (result.returncode == 0 and compiled.returncode == 0
                                      and actual == expected and row["retains_call"]
                                      and "unknown value" not in text and "__builtin_trap" not in text)
+                    if args.sdk_system and row["passed"]:
+                        # IR compilation accepts an unresolved image anchor. Relink the
+                        # recovered caller against the same native SDK import archives.
+                        obj = stem.with_suffix(".link.obj")
+                        emit = run(emitted_compiler + ["-O2", "-fno-stack-protector", "-c",
+                                                       str(generated), "-o", str(obj)],
+                                   stem.with_suffix(".object.log"))
+                        row["object_exit"] = emit.returncode
+                        if emit.returncode == 0:
+                            linked = run([args.linker, "/dll", "/noentry", "/nodefaultlib",
+                                          "/opt:noref", "/timestamp:0", "/export:" + function,
+                                          "/out:" + str(stem.with_suffix(".dll")), str(obj),
+                                          *libraries], stem.with_suffix(".link.log"))
+                            row["link_exit"] = linked.returncode
+                        row["passed"] = row.get("link_exit") == 0
                 except ValueError as error:
                     row["error"] = str(error)
                 report["cases"].append(row)

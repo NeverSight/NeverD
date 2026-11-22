@@ -2224,9 +2224,10 @@ void LLVMCWriter::writeReferencedImageObjects(
   for (const llvm::Function *Fn : Fns)
     for (const auto &BB : *Fn)
       for (const auto &Inst : BB) {
-        if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst))
-          Note(LI->getPointerOperand(), LI->getType(), LI->isSimple());
-        else if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst))
+        if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
+          if (!isImportCalleeOnlyLoad(LI))
+            Note(LI->getPointerOperand(), LI->getType(), LI->isSimple());
+        } else if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst))
           Note(SI->getPointerOperand(), SI->getValueOperand()->getType(),
                false);
       }

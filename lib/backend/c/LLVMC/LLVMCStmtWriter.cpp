@@ -1768,6 +1768,11 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     return;
   if (RawMemoryUpdateInputs.count(&Inst))
     return;
+  // A named import call already represents the machine's read of its slot.
+  // Decide before image-byte, volatile and scalar load rendering diverge.
+  if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
+      Load && isImportCalleeOnlyLoad(Load))
+    return;
   if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst))
     if (writeRawMemoryUpdate(*Store, Indent))
       return;
@@ -2007,10 +2012,6 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
   }
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
       Load && !Load->isSimple() && Load->getPointerAddressSpace() == 0) {
-    // The slot a call reaches an import through, which the call names: the
-    // word read there is no value of the C (HighC prints none either).
-    if (isImportCalleeOnlyLoad(Load))
-      return;
     const std::string Type = typeToCLLVM(Load->getType());
     const llvm::Value *Address = Load->getPointerOperand();
     std::string AddressText;
@@ -2159,8 +2160,7 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
   }
 
   if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
-    if (isImportCalleeOnlyLoad(LI) || computedAllocaLoadIsForwarded(LI) ||
-        !valueFeedsPrintedUse(LI) ||
+    if (computedAllocaLoadIsForwarded(LI) || !valueFeedsPrintedUse(LI) ||
         isJoinCallArgAlloca(asAllocaPointer(LI->getPointerOperand())) ||
         joinFieldDefaultText(asAllocaPointer(LI->getPointerOperand())))
       return;
@@ -8892,24 +8892,20 @@ std::string LLVMCWriter::importCalleeCName(const llvm::Value *Callee) const {
 
 bool LLVMCWriter::isImportCalleeOnlyLoad(const llvm::LoadInst *LI) const {
   // An atomic load orders other accesses, which C keeps only by printing it.
-  if (!LI || LI->use_empty() || LI->isAtomic())
+  if (!LI || LI->use_empty() || LI->isAtomic() || LI->getPointerAddressSpace())
     return false;
-  for (const llvm::User *User : LI->users()) {
-    const llvm::Value *Callee = User;
-    if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(User)) {
+  const auto NamedCalleeUse = [&](const llvm::Use &U) {
+    const auto *Call = llvm::dyn_cast<llvm::CallBase>(U.getUser());
+    return Call && Call->isCallee(&U) &&
+           !resolveImportCalleeName(Call->getCalledOperand()).empty();
+  };
+  for (const llvm::Use &U : LI->uses()) {
+    if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(U.getUser())) {
       if (Cast->user_empty())
         return false;
-      for (const llvm::User *CastUser : Cast->users()) {
-        const auto *Call = llvm::dyn_cast<llvm::CallBase>(CastUser);
-        if (!Call || Call->getCalledOperand() != Cast ||
-            resolveImportCalleeName(Call->getCalledOperand()).empty())
-          return false;
-      }
-      continue;
-    }
-    const auto *Call = llvm::dyn_cast<llvm::CallBase>(User);
-    if (!Call || Call->getCalledOperand() != LI ||
-        resolveImportCalleeName(Call->getCalledOperand()).empty())
+      if (!llvm::all_of(Cast->uses(), NamedCalleeUse))
+        return false;
+    } else if (!NamedCalleeUse(U))
       return false;
   }
   return true;

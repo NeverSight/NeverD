@@ -15,6 +15,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/IRBuilder.h"
@@ -132,6 +133,56 @@ TEST(LLVMCSourcePointers, ComplexResultIdentitySurvivesCallsAndSerialization) {
       for (const auto Optimization : {"-O0", "-O2"})
         source_call_execution_test::compileAndRun(Source, {Optimization});
     }
+  }
+}
+
+TEST(LLVMCSourcePointers, ARM64ImageBackedImportLoadBelongsToItsCalleeUse) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-p:64:64"
+@__nd_data_180000000.image = external global [8994 x i8], align 4096, !neverd.source.image-storage !0
+define i32 @only_call(ptr %handle) {
+  %slot = load volatile i64, ptr getelementptr (i8, ptr @__nd_data_180000000.image, i64 8640), align 8
+  %callee = inttoptr i64 %slot to ptr
+  %r = call i32 %callee(ptr %handle)
+  ret i32 %r
+}
+define i32 @also_pass_pointer() {
+  %slot = load volatile i64, ptr getelementptr (i8, ptr @__nd_data_180000000.image, i64 8640), align 8
+  %callee = inttoptr i64 %slot to ptr
+  %r = call i32 %callee(ptr %callee)
+  ret i32 %r
+}
+!0 = !{}
+)",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  Import Entry;
+  Entry.Name = "IcmpCloseHandle";
+  Entry.Module = "iphlpapi.dll";
+  Entry.IATAddr = 0x1800021C0;
+  Image.Imports.push_back(Entry);
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  for (const auto &Fn : *Module) {
+    SCOPED_TRACE(Fn.getName().str());
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(
+        LLVMCEmitter().emit(*Module, Out, Options, nullptr, &Image, &Fn));
+    Out.flush();
+    EXPECT_NE(Source.find("IcmpCloseHandle("), std::string::npos) << Source;
+    const bool ReadAsValue = Fn.getName() == "also_pass_pointer";
+    EXPECT_EQ(Source.find("volatile uint8_t") != std::string::npos, ReadAsValue)
+        << Source;
+    EXPECT_EQ(Source.find("unk_180000000") != std::string::npos, ReadAsValue)
+        << Source;
   }
 }
 

@@ -5674,7 +5674,7 @@ bool LLVMCWriter::instructionIsPrinted(const llvm::Instruction &Inst) {
   // Keep this in the same predicate used to eliminate passthrough blocks.
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
     if (!Load->isSimple())
-      return true;
+      return !isImportCalleeOnlyLoad(Load);
   if (llvm::isa<llvm::DbgInfoIntrinsic, llvm::AllocaInst, llvm::PHINode,
                 llvm::CatchPadInst, llvm::CleanupPadInst,
                 llvm::CatchSwitchInst>(&Inst))
