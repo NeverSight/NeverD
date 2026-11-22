@@ -172,7 +172,46 @@ import_probe:
   bne $17,$zero,.Lrepeat
   nop
 .Lcheck_result:
-#ifdef RESULT_SPILL
+#if defined(CLEAR_BYTES)
+#if CLEAR_BYTES == 1
+  .irp offset,40,41,42,43,44,45,46,47
+    sb $zero,\offset($sp)
+  .endr
+#else
+  .irp offset,40,42,44,46
+    sh $zero,\offset($sp)
+  .endr
+#endif
+  bne $2,$18,.Ldone
+  or $4,$2,$zero
+#elif defined(GUARD_HALVES) || defined(RECHECK_LOW)
+  lwu $13,LOW_AT(40)($sp)
+  lwu $14,HIGH_AT(40)($sp)
+  sd $zero,40($sp)
+#ifdef RECHECK_LOW
+  bne $2,$18,.Ldone
+  nop
+  bne $13,$20,.Ldone
+  nop
+#else
+  dsrl32 $19,$18,0
+  dsll32 $24,$18,0
+  dsrl32 $24,$24,0
+#ifdef HIGH_FIRST
+  bne $14,$19,.Ldone
+  nop
+  bne $13,$24,.Ldone
+  nop
+#else
+  bne $13,$24,.Ldone
+  nop
+  bne $14,$19,.Ldone
+  nop
+#endif
+#endif
+  dsll32 $14,$14,0
+  or $4,$14,$13
+#elif defined(RESULT_SPILL)
   check_spill
 #else
   bne $19,$18,.Ldone

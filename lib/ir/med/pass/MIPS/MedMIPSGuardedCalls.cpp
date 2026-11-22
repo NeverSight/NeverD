@@ -13,7 +13,9 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
@@ -41,8 +43,19 @@ enum class Evidence { None, Independent, Equal };
 // Identity 0 is unknown. Reserve one identity for the all-zero pattern
 // so a shift and an OR can reconstruct the two exact 32-bit halves.
 constexpr unsigned ZeroId = 1;
+// The bounded analysis uses the low bits for local class numbers. Preserve
+// literal identities across edges and distinguish entry bits from opaque data.
+constexpr unsigned EntryBit = 1u << 30;
+constexpr unsigned LiteralBit = 1u << 31;
+bool literal(unsigned Id) { return Id == ZeroId || (Id & LiteralBit); }
+bool opaque(unsigned Id) {
+  return Id > ZeroId && !(Id & (EntryBit | LiteralBit));
+}
+using BitPair = std::pair<unsigned, unsigned>;
+using KnownWords = llvm::SmallDenseSet<BitPair, 8>;
 constexpr int64_t WordBytes = mipsreg::SlotBytes;
 constexpr int64_t HalfBytes = WordBytes / 2;
+constexpr unsigned HalfByteMask = (1u << HalfBytes) - 1;
 
 bool highMemoryHalf(int64_t Displacement, bool Little) {
   return Displacement == (Little ? HalfBytes : 0);
@@ -50,9 +63,13 @@ bool highMemoryHalf(int64_t Displacement, bool Little) {
 
 struct Half {
   unsigned Id = 0;
-  // As the low half of a checked GPR, these bits qualified this high half.
-  // Remember the order even when a move or a spill separates the halves.
-  unsigned CheckedHigh = 0;
+  // Partners in a whole-word guard, indexed by the position of these bits.
+  // A later check of a projection can replace one partner while the other
+  // half still records the original pair, including across a CFG join.
+  unsigned CheckedHigh = 0, CheckedLow = 0;
+  // The equality class on this path. The original identity survives a call.
+  unsigned Compared = 0;
+  unsigned number() const { return Compared ? Compared : Id; }
   bool operator==(const Half &) const = default;
 };
 
@@ -62,25 +79,37 @@ struct Word {
   bool operator==(const Word &) const = default;
 
   bool complete() const { return Low.Id && High.Id; }
+  BitPair numbers() const { return {Low.number(), High.number()}; }
+  void qualify(const KnownWords &Known) {
+    if (Proof != Evidence::None || !complete())
+      return;
+    const auto [L, H] = numbers();
+    if ((literal(L) && literal(H)) || Known.contains({L, H}))
+      Proof = Evidence::Equal;
+  }
   Evidence evidence() const {
-    if (Proof == Evidence::None && Low.CheckedHigh &&
-        Low.CheckedHigh == High.Id)
+    if (Proof == Evidence::None &&
+        ((Low.CheckedHigh && Low.CheckedHigh == High.Id) ||
+         (High.CheckedLow && High.CheckedLow == Low.Id)))
       return Evidence::Equal;
     return Proof;
   }
-  bool check(const Word &W) {
-    for (auto *H : {&Low, &High})
+  void check(const Word &W) {
+    for (auto *H : {&Low, &High}) {
       if (H->Id == W.Low.Id)
         H->CheckedHigh = W.High.Id;
-    if (Low.Id != W.Low.Id || High.Id != W.High.Id)
-      return false;
-    Proof = Evidence::Equal;
-    return true;
+      if (H->Id == W.High.Id)
+        H->CheckedLow = W.Low.Id;
+    }
+    if (Low.Id == W.Low.Id && High.Id == W.High.Id &&
+        Proof != Evidence::Independent)
+      Proof = Evidence::Equal;
   }
   void afterCall() {
     if (Proof == Evidence::Equal)
       Proof = Evidence::None;
-    Low.CheckedHigh = High.CheckedHigh = 0;
+    for (auto *H : {&Low, &High})
+      H->CheckedHigh = H->CheckedLow = H->Compared = 0;
   }
 };
 
@@ -176,15 +205,15 @@ void writeRegister(Registers &Regs, const MedVar &V, Word Value) {
 
 struct Spill {
   Word Value;
-  // A checked stack argument is safe as a whole. Keep track of the opaque
-  // halves still present in case a later store changes the other bits.
-  unsigned OpaqueHalves = 0;
+  // Bit i is the byte at slot address + i. A checked word can still contain
+  // opaque bytes that matter if a later write changes its value.
+  unsigned OpaqueBytes = 0;
   bool Unchecked = false;
   bool operator==(const Spill &) const = default;
 
   void forget() {
     Value = {};
-    Unchecked = OpaqueHalves != 0;
+    Unchecked = OpaqueBytes != 0;
   }
 
   bool store(int64_t Offset, uint16_t Bytes, Word W, bool Little,
@@ -195,40 +224,42 @@ struct Spill {
       // identities (one arm supplied an independent value).
       const auto Proof = W.evidence();
       const auto OpaqueHalf = [&](Half H) {
-        return H.Id > ZeroId || (!H.Id && Proof == Evidence::Equal);
+        return opaque(H.Id) || (!H.Id && Proof == Evidence::Equal);
       };
-      OpaqueHalves =
-          unsigned(OpaqueHalf(W.Low)) | (unsigned(OpaqueHalf(W.High)) << 1);
-      Unchecked = OpaqueHalves && Proof == Evidence::None;
-      return W.complete() || Proof == Evidence::Equal;
+      const unsigned Low = OpaqueHalf(W.Low) ? HalfByteMask : 0;
+      const unsigned High = OpaqueHalf(W.High) ? HalfByteMask : 0;
+      OpaqueBytes =
+          Little ? Low | (High << HalfBytes) : (Low << HalfBytes) | High;
+      Unchecked = OpaqueBytes && Proof == Evidence::None;
+      return (W.complete() && OpaqueBytes) || Proof == Evidence::Equal;
     }
     bool Tracked = false;
     // Replacing part of a checked word can expose a different pointer.
-    // Retain every outstanding half until its last opaque bits are replaced.
-    const auto PreviousOpaqueHalves = OpaqueHalves;
+    // Clear only the bytes covered by this store, in address order.
+    const bool HadOpaque = OpaqueBytes != 0;
+    const auto Begin = std::max<int64_t>(0, Offset);
+    const auto End = std::min<int64_t>(WordBytes, Offset + Bytes);
+    OpaqueBytes &= ~(llvm::maskTrailingOnes<unsigned>(End - Begin) << Begin);
     Value.Proof = Evidence::None;
     for (int64_t At : {int64_t{0}, HalfBytes}) {
       if (!safety::detail::stackRangesOverlap(At, HalfBytes, Offset, Bytes))
         continue;
       const bool High = highMemoryHalf(At, Little);
-      const unsigned Mask = High ? 2 : 1;
       auto &Part = High ? Value.High : Value.Low;
       Half H;
       if (At == Offset && Bytes == HalfBytes) {
         H = W.Low;
-        Tracked = H.Id > ZeroId;
+        Tracked = opaque(H.Id);
       }
-      if (Offset <= At && Offset + Bytes >= At + HalfBytes)
-        OpaqueHalves &= ~Mask;
-      if (H.Id > ZeroId)
-        OpaqueHalves |= Mask;
+      if (opaque(H.Id))
+        OpaqueBytes |= HalfByteMask << At;
       // A sample after a narrow write has fresh bits. Earlier samples
       // keep their identities, including the half that was untouched.
-      if (!H.Id && Part.Id && PreviousOpaqueHalves && Bytes <= HalfBytes)
+      if (!H.Id && Part.Id && HadOpaque && Bytes <= HalfBytes)
         H.Id = NextIdentity++;
       Part = H;
     }
-    Unchecked = OpaqueHalves && Value.evidence() != Evidence::Equal;
+    Unchecked = OpaqueBytes && Value.evidence() != Evidence::Equal;
     return Tracked;
   }
 
@@ -245,8 +276,75 @@ struct Spill {
 struct State {
   Registers Regs{};
   llvm::SmallVector<Spill, 0> Slots;
+  // Entry words that are independently non-frame. Keep their ordered halves
+  // even if the machine later overwrites the register holding the peer.
+  // Only the predecessor-free entry block appends to this list, so all
+  // incoming edges carry the same peers in the same order.
+  llvm::SmallVector<Word, 0> Peers;
+  unsigned NextId = ZeroId + 1;
+
+  KnownWords knownWords() const {
+    KnownWords Known;
+    for (const Word &Peer : Peers)
+      Known.insert(Peer.numbers());
+    return Known;
+  }
   bool operator==(const State &) const = default;
 };
+
+/// A true machine equality identifies corresponding 32-bit patterns. Apply
+/// both substitutions to every live copy and to the independent peers. This
+/// keeps earlier equalities when another comparison shares only one half.
+void assumeEqual(State &Out, Word L, Word R) {
+  const Word *Whole = nullptr;
+  if (L.complete() && R.Proof == Evidence::Independent)
+    Whole = &L;
+  else if (R.complete() && L.Proof == Evidence::Independent)
+    Whole = &R;
+  llvm::SmallVector<BitPair, 2> Substitutions;
+  const auto Number = [&](unsigned Id) {
+    for (auto [From, To] : Substitutions)
+      if (Id == From)
+        Id = To;
+    return Id;
+  };
+  for (auto [A, B] : {BitPair{L.Low.number(), R.Low.number()},
+                      BitPair{L.High.number(), R.High.number()}}) {
+    A = Number(A);
+    B = Number(B);
+    if (!A || !B || A == B)
+      continue;
+    if (literal(A) && literal(B))
+      return;
+    if (literal(A))
+      std::swap(A, B);
+    Substitutions.emplace_back(A, B);
+  }
+  if (!Whole && Substitutions.empty())
+    return;
+  const auto Rename = [&](Word &W) {
+    for (auto *H : {&W.Low, &W.High}) {
+      const unsigned Id = Number(H->number());
+      H->Compared = Id == H->Id ? 0 : Id;
+    }
+  };
+  for (Word &Peer : Out.Peers)
+    Rename(Peer);
+  const auto Known = Out.knownWords();
+  const auto Check = [&](Word &W) {
+    if (Whole)
+      W.check(*Whole);
+    Rename(W);
+    W.qualify(Known);
+  };
+  for (auto &Reg : Out.Regs)
+    Check(Reg.Value);
+  for (auto &S : Out.Slots) {
+    Check(S.Value);
+    if (S.Value.evidence() != Evidence::None)
+      S.Unchecked = false;
+  }
+}
 
 /// An identity names equal bits within one execution state. At a join two
 /// locations remain equal exactly when their incoming identities agree on
@@ -257,13 +355,18 @@ void intersect(State &A, const State &B) {
   const auto MeetBits = [&](unsigned L, unsigned R) -> unsigned {
     if (!L || !R)
       return 0;
-    if (L == ZeroId && R == ZeroId)
-      return ZeroId;
-    return Classes.try_emplace({L, R}, Classes.size() + ZeroId + 1)
+    if (L == R && literal(L))
+      return L;
+    const unsigned Kind = !opaque(L) && !opaque(R) ? EntryBit : 0;
+    return Classes.try_emplace({L, R}, Kind | (Classes.size() + ZeroId + 1))
         .first->second;
   };
   const auto MeetHalf = [&](Half L, Half R) -> Half {
-    return {MeetBits(L.Id, R.Id), MeetBits(L.CheckedHigh, R.CheckedHigh)};
+    Half H{MeetBits(L.Id, R.Id), MeetBits(L.CheckedHigh, R.CheckedHigh),
+           MeetBits(L.CheckedLow, R.CheckedLow)};
+    const auto Id = MeetBits(L.number(), R.number());
+    H.Compared = Id == H.Id ? 0 : Id;
+    return H;
   };
   const auto Meet = [&](Word L, Word R) {
     Word V{MeetHalf(L.Low, R.Low), MeetHalf(L.High, R.High)};
@@ -281,9 +384,12 @@ void intersect(State &A, const State &B) {
   }
   for (size_t I = 0; I < A.Slots.size(); ++I) {
     A.Slots[I].Value = Meet(A.Slots[I].Value, B.Slots[I].Value);
-    A.Slots[I].OpaqueHalves |= B.Slots[I].OpaqueHalves;
+    A.Slots[I].OpaqueBytes |= B.Slots[I].OpaqueBytes;
     A.Slots[I].Unchecked |= B.Slots[I].Unchecked;
   }
+  for (size_t I = 0; I < A.Peers.size(); ++I)
+    A.Peers[I] = Meet(A.Peers[I], B.Peers[I]);
+  A.NextId = Classes.size() + ZeroId + 1;
 }
 
 /// Select the successor on which the comparison was equal. The instruction
@@ -376,7 +482,15 @@ GuardedCalls guardedResultArguments(
   Offsets.erase(std::unique(Offsets.begin(), Offsets.end()), Offsets.end());
   State Entry;
   Entry.Slots.resize(Offsets.size());
-  const size_t Locations = Entry.Regs.size() + Offsets.size();
+  // Every 32-bit pattern is a valid literal, including DenseMap's reserved
+  // integer keys. Widen the key before interning the pattern.
+  llvm::SmallDenseMap<uint64_t, unsigned, 8> Literals;
+  const auto LiteralId = [&](uint32_t Bits) -> unsigned {
+    if (!Bits)
+      return ZeroId;
+    return Literals.try_emplace(Bits, LiteralBit | Literals.size())
+        .first->second;
+  };
   struct BlockInput {
     State Words;
     llvm::SmallVector<std::pair<int, State>, 0> Edges;
@@ -410,17 +524,20 @@ GuardedCalls guardedResultArguments(
     auto Current = Input.Words;
     auto &Regs = Current.Regs;
     auto SP = Stack.BlockEntrySP(B->Id);
-    // A normalized location has at most four distinct identities (the two
-    // halves and their guard partners). Dynamic call executions start fresh.
-    unsigned NextIdentity = 4 * Locations + ZeroId + 1;
+    if (Current.Peers.size() > Remaining)
+      return {};
+    Remaining -= Current.Peers.size();
+    auto Known = Current.knownWords();
+    auto &NextIdentity = Current.NextId;
     llvm::SmallDenseMap<std::pair<int, int>, Word, 8> Temps;
     auto read = [&](const MedVar &V) -> Word {
       if (V.Size != WordBytes && V.Size != HalfBytes)
         return {};
       if (V.isConst())
-        return {{uint32_t(V.ConstVal) == 0 ? ZeroId : 0},
-                {V.Size == WordBytes && (V.ConstVal >> 32) == 0 ? ZeroId : 0},
-                V.Size == WordBytes ? Evidence::Independent : Evidence::None};
+        return {
+            {LiteralId(uint32_t(V.ConstVal))},
+            {V.Size == WordBytes ? LiteralId(uint32_t(V.ConstVal >> 32)) : 0},
+            V.Size == WordBytes ? Evidence::Independent : Evidence::None};
       if (V.Kind == MedVar::Temp)
         return Temps.lookup({V.Id, V.SSAVer});
       if (fullGPR(V)) {
@@ -453,7 +570,7 @@ GuardedCalls guardedResultArguments(
       return true;
     };
     const auto Edge = equalityEdge(*B, Graph, Definitions);
-    Word Checked;
+    Word Left, Right;
     llvm::ArrayRef<size_t> Sites;
     if (const auto It = Native.find(B); It != Native.end())
       Sites = It->second;
@@ -461,11 +578,8 @@ GuardedCalls guardedResultArguments(
     for (const MedOp &Op : B->Ops) {
       if (&Op == Edge.Compare && Op.Inputs[0].Size == WordBytes &&
           Op.Inputs[1].Size == WordBytes) {
-        const auto L = read(Op.Inputs[0]), R = read(Op.Inputs[1]);
-        if (L.complete() && R.Proof == Evidence::Independent)
-          Checked = L;
-        else if (R.complete() && L.Proof == Evidence::Independent)
-          Checked = R;
+        Left = read(Op.Inputs[0]);
+        Right = read(Op.Inputs[1]);
       }
       Word Value;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
@@ -498,9 +612,12 @@ GuardedCalls guardedResultArguments(
             R = bind(*R.Name, R.Value);
           }
         }
-        if (Offsets.size() > Remaining)
+        if (Offsets.size() + Current.Peers.size() > Remaining)
           return {};
-        Remaining -= Offsets.size();
+        Remaining -= Offsets.size() + Current.Peers.size();
+        for (auto &Peer : Current.Peers)
+          Peer.afterCall();
+        Known = Current.knownWords();
         const auto Private = Stack.ClosedPrivateStart(Op);
         bool Unsafe = false;
         for (size_t I = 0; I < Offsets.size(); ++I)
@@ -510,7 +627,7 @@ GuardedCalls guardedResultArguments(
           Exposed.insert(&Op);
         else
           Exposed.erase(&Op);
-        Checked = {};
+        Left = Right = {};
         Temps.clear();
         AtEntry = false;
         if (Untyped && fullGPR(Op.Output) &&
@@ -555,6 +672,9 @@ GuardedCalls guardedResultArguments(
               if (S.store(*At - *It, Stored.Size, read(Stored), Little,
                           NextIdentity))
                 Proven.Spills.insert(&Op);
+              S.Value.qualify(Known);
+              if (S.Value.evidence() != Evidence::None)
+                S.Unchecked = false;
             }
           } else if (!Offsets.empty() && !IsNonFrame(Op.Inputs[0])) {
             if (Offsets.size() > Remaining)
@@ -565,9 +685,18 @@ GuardedCalls guardedResultArguments(
           }
         } else if (Op.Output.Size)
           Value = transferredHalves(Op, read);
-        if (Value.Proof == Evidence::None && AtEntry && fullGPR(Op.Output) &&
-            IsNonFrame(Op.Output))
+        if (AtEntry && fullGPR(Op.Output) &&
+            (Value.Proof == Evidence::Independent || IsNonFrame(Op.Output))) {
           Value.Proof = Evidence::Independent;
+          for (auto *H : {&Value.Low, &Value.High})
+            if (!H->Id)
+              H->Id = EntryBit | NextIdentity++;
+          if (!(literal(Value.Low.Id) && literal(Value.High.Id)) &&
+              Known.insert(Value.numbers()).second)
+            Current.Peers.push_back(Value);
+        } else {
+          Value.qualify(Known);
+        }
       }
       if (!write(Op.Output, Value))
         return {};
@@ -575,19 +704,16 @@ GuardedCalls guardedResultArguments(
         if (!write(Output, {}))
           return {};
     }
+    const size_t Locations =
+        Regs.size() + Offsets.size() + Current.Peers.size();
     for (int Id : B->Succs) {
       const auto *Succ = Graph.blockById(Id);
       if (!Succ || Remaining < Locations)
         return {};
       Remaining -= Locations;
       auto Out = Current;
-      if (Checked.complete() && Succ == Edge.Successor) {
-        for (auto &R : Out.Regs)
-          R.Value.check(Checked);
-        for (auto &S : Out.Slots)
-          if (S.Value.check(Checked))
-            S.Unchecked = false;
-      }
+      if (Succ == Edge.Successor)
+        assumeEqual(Out, Left, Right);
       for (const auto &Phi : Succ->Phis) {
         if (Phi.Args.size() + 1 > Remaining)
           return GuardedCalls{};

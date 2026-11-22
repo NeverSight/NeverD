@@ -66,8 +66,11 @@ after linking the object with the target linker.
   can carry a frame address. Replacing that argument before the call, including
   in its executed delay slot, removes the earlier value from the proof.
   On n32/n64 a full-GPR comparison can prove that an opaque result equals
-  a literal or an independently known non-frame word. Full-width moves carry
-  this fact across basic blocks. At a join, every incoming path must qualify
+  a literal or an independently known non-frame word. Separate comparisons
+  can establish the same fact when the low and high 32-bit patterns both
+  match the corresponding halves of that word on the path to the call.
+  Either comparison may come first. Full-width moves carry this fact across
+  basic blocks. At a join, every incoming path must qualify
   the actual argument. A comparison after the join can also qualify two
   registers that carry the same selected return word on every incoming edge.
   A subsequent opaque call needs a fresh comparison.
@@ -82,13 +85,17 @@ after linking the object with the target linker.
   doubleword in memory. Two word loads can reconstruct it in a GPR when each
   half occupies its original bit positions. A signed high word is usable
   after shifting it left by 32. A signed low word must first have its upper
-  bits cleared. A guard can precede or follow this reconstruction.
+  bits cleared. A guard can precede or follow this reconstruction. Checking
+  the low half again after a whole-word match preserves the proof when the
+  original pieces are reassembled.
   Swapped, duplicated or mixed halves cannot establish equality with the
   original result. A fresh full-width guard can qualify the actual assembled
   value, including one changed by a narrow write. A store through an
   unresolved frame alias invalidates the sampled identities in memory.
   Before an open call, every exposed stack cell containing opaque bits must
-  itself be checked or have those bits overwritten. This includes fragments kept in separate cells.
+  itself be checked or have those bits overwritten. Byte and halfword stores
+  can collectively cover a slot. Every path to the call must overwrite each
+  outstanding byte, including fragments kept in separate cells.
   The call invalidates those slot identities. An earlier sample in a preserved
   register can be checked again. A call with a known argument extent can
   preserve a spill outside its outgoing area when the frame stays private.

@@ -1336,22 +1336,23 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
     constexpr uint32_t Split = 0x0002603e; // dsrl32 t0,v0,0
     constexpr uint32_t Shift = 0x000e703c; // dsll32 t2,t2,0
     constexpr uint32_t Join = 0x01ae7825;  // or t3,t1,t2
-    const auto Check = [&](const char *Name, bool Proven,
-                           llvm::ArrayRef<uint32_t> Before,
-                           unsigned Compared = 15, unsigned Forwarded = 2,
-                           llvm::ArrayRef<uint32_t> After = {}) {
+    const auto Guard = [](unsigned Left, unsigned Right) {
+      return 0x14000000u | (Left << 21) | (Right << 16);
+    };
+    const auto CheckBody = [&](const char *Name, bool Proven,
+                               llvm::ArrayRef<uint32_t> Body,
+                               unsigned Forwarded) {
       SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << Name);
-      std::vector<uint32_t> Code{0x67bdffc0, 0xffbf0038,  0xffb00000,
-                                 0xffb10008, Move(16, 5), 0x0320f809,
-                                 0};
-      Code.insert(Code.end(), Before.begin(), Before.end());
-      const auto Exit = Code.size();
-      Code.insert(Code.end(),
-                  {0x14000000u | (Compared << 21) | (16u << 16), 0});
-      Code.insert(Code.end(), After.begin(), After.end());
+      std::vector<uint32_t> Code{
+          0x67bdffc0,  0xffbf0038,  0xffb00000, 0xffb10008,
+          Move(16, 5), Move(17, 6), 0x0320f809, 0};
+      Code.insert(Code.end(), Body.begin(), Body.end());
       Code.insert(Code.end(), {Move(4, Forwarded), 0x3c190002, Target,
                                0x0320f809, 0x6405000b});
-      Code[Exit] |= Code.size() - Exit - 1;
+      // Guard emits a BNE with an empty displacement to the common exit.
+      for (size_t I = 0; I < Code.size(); ++I)
+        if ((Code[I] & 0xfc00ffffu) == 0x14000000u)
+          Code[I] |= Code.size() - I - 1;
       Code.insert(Code.end(),
                   {0xdfb00000, 0xdfb10008, 0xdfbf0038, 0x03e00008, 0x67bd0040});
       const auto Lifted = build(image(Code, A));
@@ -1365,6 +1366,15 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
         EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
                             Error.what());
       }
+    };
+    const auto Check = [&](const char *Name, bool Proven,
+                           llvm::ArrayRef<uint32_t> Before,
+                           unsigned Compared = 15, unsigned Forwarded = 2,
+                           llvm::ArrayRef<uint32_t> After = {}) {
+      std::vector<uint32_t> Body(Before.begin(), Before.end());
+      Body.insert(Body.end(), {Guard(Compared, 16), 0});
+      Body.insert(Body.end(), After.begin(), After.end());
+      CheckBody(Name, Proven, Body, Forwarded);
     };
     Check("doubleword copied before source clear", true,
           {Full, Reload, Memory(63, 15, 40), Clear, Memory(55, 15, 40)});
@@ -1423,6 +1433,82 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
           {0x14500003, 0, 0x10000002, Move(15, 2), Move(15, 16),
            Memory(63, 15, 24), Memory(40, 0, Low)},
           2, 15);
+    for (unsigned Bytes : {1u, 2u}) {
+      SCOPED_TRACE(Bytes);
+      std::vector<uint32_t> Body{Full};
+      for (unsigned I = 0; I < 8; I += Bytes)
+        Body.push_back(Memory(Bytes == 1 ? 40 : 41, 0, 24 + I));
+      CheckBody("every byte overwritten", true, Body, 0);
+      Body.back() = Body[Body.size() - 2];
+      CheckBody("duplicate write leaves a hole", false, Body, 0);
+    }
+    CheckBody("overlapping writes cover the last byte", true,
+              {Full, Memory(43, 0, 24), Memory(41, 0, 28), Memory(41, 0, 30),
+               Memory(40, 0, 30)},
+              0);
+    // The conditional store must cover the last byte on every path.
+    CheckBody("only one predecessor clears the last byte", false,
+              {Full, Memory(43, 0, 24), Memory(41, 0, 28), Memory(40, 0, 30),
+               0x12000002, 0, Memory(40, 0, 31)},
+              0);
+
+    // t1:t2 contain the low and high patterns of v0, t0:t3 those of s0.
+    const auto SplitPeers = {Full,       LoadLow,     Memory(39, 14, High),
+                             Clear,      0x0010603cu, 0x000c603eu,
+                             0x0010783eu};
+    const auto CheckParts = [&](const char *Name, bool Proven,
+                                llvm::ArrayRef<uint32_t> Ops,
+                                unsigned Forwarded = 2) {
+      std::vector<uint32_t> Body(SplitPeers);
+      Body.insert(Body.end(), Ops.begin(), Ops.end());
+      CheckBody(Name, Proven, Body, Forwarded);
+    };
+    const auto LowEqual = Guard(13, 12), HighEqual = Guard(14, 15);
+    CheckParts("both halves equal the same input", true,
+               {LowEqual, 0, HighEqual, 0});
+    CheckParts("high half checked first", true,
+               {HighEqual, 0, LowEqual, 0, Shift, Join}, 15);
+    CheckParts("both halves zero", true, {Guard(13, 0), 0, Guard(14, 0), 0});
+    CheckParts("two distinct literal halves", true,
+               {0x640c0007, 0x640f0013, LowEqual, 0, HighEqual, 0});
+    CheckParts("all-ones and adjacent literal patterns", true,
+               {0x640cffff, 0x000c603c, 0x000c603e, LowEqual, 0, 0x640ffffe,
+                0x000f783c, 0x000f783e, HighEqual, 0});
+    CheckParts("only the literal low half", false, {0x640c0007, LowEqual, 0});
+    CheckParts("only high half checked", false, {HighEqual, 0});
+    CheckParts("same low half checked twice", false,
+               {LowEqual, 0, LowEqual, 0});
+    CheckParts("halves compared to different inputs", false,
+               {LowEqual, 0, 0x0011783e, HighEqual, 0});
+    CheckParts("halves compared in the wrong positions", false,
+               {Guard(13, 15), 0, Guard(14, 12), 0});
+    CheckParts("one path bypasses the high comparison", false,
+               {LowEqual, 0, 0x12200003, 0, HighEqual, 0});
+    CheckParts("checks on mutually exclusive paths", false,
+               {0x12200005, 0, LowEqual, 0, 0x10000003, 0, HighEqual, 0});
+    CheckParts("whole check then low check and repack saved pieces", true,
+               {Guard(2, 16), Move(2, 0), Guard(13, 17), 0, Shift, Join}, 15);
+    CheckParts("both orders around a join", true,
+               {0x12200007, 0, LowEqual, 0, HighEqual, 0, 0x10000005, 0,
+                HighEqual, 0, LowEqual, 0, Shift, Join},
+               15);
+    CheckParts("path-specific whole peers followed by a low check", true,
+               {0x12200005, 0, Guard(2, 16), 0, 0x10000003, 0, Guard(2, 17), 0,
+                Guard(13, 17), Move(2, 0), Shift, Join},
+               15);
+    CheckParts("low check expired at another call", false,
+               {LowEqual, Move(17, 2), 0x3c190002, Target, 0x0320f809,
+                Move(4, 0), 0x0011703e, 0x0010783e, HighEqual, 0},
+               17);
+    CheckParts("whole check then low 16 bits and repack", true,
+               {Guard(2, 16), 0, 0x31acffff, Guard(12, 17), 0, Shift, Join},
+               15);
+    CheckParts("low 16 bits alone and repack", false,
+               {0x31acffff, Guard(12, 17), 0, Shift, Join}, 15);
+    CheckParts("low check then repack saved pieces", false,
+               {Guard(13, 17), 0, Shift, Join}, 15);
+    CheckParts("high replaced in equality delay slot", false,
+               {LowEqual, 0, HighEqual, Move(14, 13), Shift, Join}, 15);
     Check("mixed calls", false,
           {Move(17, 2), 0x3c190002, Target, 0x0320f809, 0x64040007, 0x0011603e,
            StoreLow, StoreHigh, Reload});

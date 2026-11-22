@@ -18337,6 +18337,13 @@ low loads, disjoint OR, XOR and addition, and doubleword field insertion.
 One variant checks before packing. Another swaps the halves and forwards
 the newly checked word. The return-target tests reject forwarding a different
 word, a possible carry into the high half and an uncleared outgoing fragment.
+Byte and halfword store sequences cover a complete spill in both byte orders.
+Other variants compare the low and high halves in either order, or check the
+whole word, compare its low half again, and forward the reconstructed word.
+The runtime harness varies both comparison outcomes independently and checks
+the argument observed at the next import. The return-target tests also cover
+a hole under overlapping writes, comparisons of different inputs, and branches
+that bypass one of the checks.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.
