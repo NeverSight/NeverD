@@ -42,14 +42,24 @@ bool isGoCode(const BinaryImage &Img, va_t Address);
 const GoWriteBarrier *goWriteBarrierAt(const BinaryImage &Img, va_t Entry);
 
 /// The register a write barrier of \p Kind leaves its buffer space in on
-/// \p A: R11 or X25 for GoWriteBarrierKind::Buffer, none for Store.
+/// \p A: R11 or X25 for GoWriteBarrierKind::Buffer and BufferBody, none for
+/// Store.
 std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind);
+
+/// Whether a write barrier of \p Kind keeps the register at \p Register on
+/// \p A for its caller: every general-purpose register but the stack pointer,
+/// the one it returns buffer space in (goWriteBarrierResult) and arm64's
+/// assembler temporary R27 (GoWriteBarrierKind).
+bool goWriteBarrierKeeps(Arch A, GoWriteBarrierKind Kind, uint64_t Register);
 
 /// The operands of the write barrier at \p Entry where it performs the store
 /// itself (GoWriteBarrierKind::Store), in its own order: the address it writes
 /// at and the pointer it writes there (GoWriteBarrier::Destination, Value).
-/// They follow neither the platform's argument order nor Go's.  None for a
-/// Buffer barrier, which takes no argument, or for any other routine.
+/// They follow neither the platform's argument order nor Go's.  The shared
+/// body of the buffer barriers (BufferBody) takes one, the bytes of buffer
+/// space wanted, in the register it returns that space in
+/// (goWriteBarrierResult).  None for a Buffer barrier, which takes no
+/// argument, or for any other routine.
 std::optional<FixedIntegerCallArguments>
 goWriteBarrierArguments(const BinaryImage &Img, va_t Entry);
 

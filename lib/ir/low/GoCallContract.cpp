@@ -151,7 +151,8 @@ const GoWriteBarrier *goWriteBarrierAt(const BinaryImage &Img, va_t Entry) {
 }
 
 std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind) {
-  if (Kind != GoWriteBarrierKind::Buffer)
+  if (Kind != GoWriteBarrierKind::Buffer &&
+      Kind != GoWriteBarrierKind::BufferBody)
     return std::nullopt;
   if (A == Arch::X64)
     return x86reg::R11;
@@ -160,14 +161,32 @@ std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind) {
   return std::nullopt;
 }
 
+bool goWriteBarrierKeeps(Arch A, GoWriteBarrierKind Kind, uint64_t Register) {
+  if (Register % 8 != 0 || goWriteBarrierResult(A, Kind) == Register)
+    return false;
+  // RAX to R15 but the stack pointer; X0 to X30 but the assembler's R27.
+  if (A == Arch::X64)
+    return Register <= x86reg::R15 && Register != x86reg::RSP;
+  if (A == Arch::AArch64)
+    return Register <= a64reg::X30 && Register != a64reg::X27;
+  return false;
+}
+
 std::optional<FixedIntegerCallArguments>
 goWriteBarrierArguments(const BinaryImage &Img, va_t Entry) {
   const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Entry);
-  if (!Barrier || Barrier->Kind != GoWriteBarrierKind::Store)
+  if (!Barrier || Barrier->Kind == GoWriteBarrierKind::Buffer)
     return std::nullopt;
   const auto Bytes =
       static_cast<uint16_t>(getTargetRegInfo(Img.Arch).PointerSize);
   FixedIntegerCallArguments Arguments;
+  if (Barrier->Kind == GoWriteBarrierKind::BufferBody) {
+    if (const std::optional<uint64_t> Size =
+            goWriteBarrierResult(Img.Arch, Barrier->Kind))
+      Arguments.Parameters.push_back(
+          {SourceABICarrierKind::IntegerRegister, *Size, 0, Bytes});
+    return Arguments;
+  }
   for (const uint64_t Register : {Barrier->Destination, Barrier->Value})
     Arguments.Parameters.push_back(
         {SourceABICarrierKind::IntegerRegister, Register, 0, Bytes});

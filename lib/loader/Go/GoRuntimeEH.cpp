@@ -73,11 +73,19 @@ std::optional<RuntimeCallKind> classifyRuntimeName(llvm::StringRef Name) {
 /// on \p A, or none for any other function (GoWriteBarrierKind).
 std::optional<GoWriteBarrier> writeBarrierAt(Arch A, va_t Entry,
                                              llvm::StringRef Name) {
-  if ((A != Arch::X64 && A != Arch::AArch64) ||
-      !Name.consume_front("runtime.gcWriteBarrier"))
+  if (A != Arch::X64 && A != Arch::AArch64)
     return std::nullopt;
   GoWriteBarrier Barrier;
   Barrier.Entry = Entry;
+  // The numbered barriers' shared body is an assembly local
+  // (`gcWriteBarrier<>`), which the pclntab names without its package.  The
+  // caller keeps it only beside a numbered barrier.
+  if (Name == "gcWriteBarrier") {
+    Barrier.Kind = GoWriteBarrierKind::BufferBody;
+    return Barrier;
+  }
+  if (!Name.consume_front("runtime.gcWriteBarrier"))
+    return std::nullopt;
   if (Name.size() == 1 && Name.front() >= '1' && Name.front() <= '8') {
     Barrier.Kind = GoWriteBarrierKind::Buffer;
     return Barrier;
@@ -302,6 +310,14 @@ void parseGoExceptions(BinaryImage &Img) {
         if (std::optional<GoWriteBarrier> Barrier =
                 writeBarrierAt(Img.Arch, G.CodeRange.Begin, G.Name))
           Module.WriteBarriers.push_back(*Barrier);
+  // Only the numbered barriers jump to the body they share: a function of
+  // its bare name in a module that has none of them is something else.
+  if (llvm::none_of(Module.WriteBarriers, [](const GoWriteBarrier &Barrier) {
+        return Barrier.Kind == GoWriteBarrierKind::Buffer;
+      }))
+    llvm::erase_if(Module.WriteBarriers, [](const GoWriteBarrier &Barrier) {
+      return Barrier.Kind == GoWriteBarrierKind::BufferBody;
+    });
   llvm::sort(Module.WriteBarriers,
              [](const GoWriteBarrier &A, const GoWriteBarrier &B) {
                return A.Entry < B.Entry;

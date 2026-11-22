@@ -1457,6 +1457,12 @@ LocalRegisterEffect goWriteBarrierEffect(Arch A,
     addRead(A, Read.Reads, Barrier.Destination, 8);
     addRead(A, Read.Reads, Barrier.Value, 8);
   }
+  // The buffer barriers' shared body reads the bytes wanted where it
+  // returns their space.
+  if (Barrier.Kind == GoWriteBarrierKind::BufferBody)
+    if (const std::optional<uint64_t> Size =
+            goWriteBarrierResult(A, Barrier.Kind))
+      addRead(A, Read.Reads, *Size, 8);
   // `MOVQ g_m(R14), R13`: the barrier finds its buffer through the
   // goroutine in R14 (arm64's R28 is no tracked family).
   if (A == Arch::X64)

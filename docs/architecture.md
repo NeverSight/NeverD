@@ -5790,6 +5790,19 @@ the same parameters. Read by position, a System V call passed
 `gcWriteBarrierCX(slot, 0, 0, value)`, a Win64 call `gcWriteBarrier()` and
 `gcWriteBarrierCX(value)`, and an AAPCS64 call a placeholder for X1.
 
+The numbered barriers jump to a body they share, an assembly local the
+`pclntab` names `gcWriteBarrier` (`GoWriteBarrierKind::BufferBody`), which the
+loader records only in a module that names a numbered barrier too. It takes
+the bytes of buffer space wanted in the register it returns that space in and
+nothing else (`goWriteBarrierArguments`), reads the goroutine in R14 as
+compiled code does, and keeps every other general-purpose register as the
+numbered barriers do. A barrier's return hands back its buffer register, where
+every later stage reads the platform's result register: LowToMed copies the
+one into the other before each RETURN, and a numbered barrier's jump to the
+body returns the body's space as it comes. Read by System V's positions, the
+body took the six registers its slow path saves as parameters, each numbered
+barrier passed it six unknown values, and it returned an RAX it never set.
+
 MedIR caches the decision on each call (`MedOp::RegisterContract`). From
 there `callClobbersRegister`, SSA's partial clobbers, sub-register merges and
 the code-pointer resolver read it. The rest asks the authority directly: the
@@ -5810,6 +5823,43 @@ incoming RBX, R12-R15 or X19-X28 as no save. In Go, RBX is the second integer
 argument. Read as System V's callee-saved register, `runtime.throw`'s store
 of its string length into the closure it hands `systemstack` disappeared
 from the C.
+
+A routine that calls out on the slow path of a loop saves the registers it
+keeps before the call and reloads them after it: Go 1.21's `gcWriteBarrier`
+saves ten round `wbBufFlush` and tries its buffer again. What such a save
+stores the next time round is the register's entry value joined with what the
+reload brought back, the entry value still, which the prologue rule does not
+see, since it reads a save of the entry value itself. Source mode marks those
+saves too and gives each reload the value its save stored
+(`markKeptRegisterSpills`). The bytes are the function's own, no other store
+writes them, every read of them is such a reload whose value reaches nothing
+but the save again, and no call takes one of those values as an argument: a
+store at a call's stack pointer may pass a stack argument, which the routine
+called may change before the reload reads it. The save also runs before each
+reload, earlier in the reload's block or in a block every way from the entry
+to the reload runs: a reload some way reaches without the save may read bytes
+nothing wrote, so both stay. The pass runs after call
+recovery, which binds those arguments; a call whose arguments nothing bound,
+to a routine whose `pclntab` record does not give it no argument word, may
+take any save, so a function that makes one keeps all of them. The registers
+are those the convention keeps, and those a write barrier keeps
+(`goWriteBarrierKeeps`): every general-purpose register but the stack
+pointer, the one it returns in and arm64's assembler temporary R27, X19 to
+X26 among them, which the call summaries track no family of. Go's linker
+gives every function of a PE unwind data and no personality; such data
+enters no block, so the pass still runs there, while a function with a
+personality, whose dispatcher may read what it saved, keeps its saves.
+Printed, each of the body's saves stored an unknown value.
+
+The storing barrier of a register-ABI image (Go 1.17 to 1.20) finds its buffer
+through R14 too, so LowToMed defines the goroutine at its entry as it does for
+compiled code, which alone calls it. That read is the function's first
+statement, and HighIR's prefix of frame addresses (`entryFrameAliases`) runs
+over it as it runs over a plain store: a read that changes nothing
+(`intrinsicReadIsDiscardable`) names no frame address and ends no prefix. A
+prefix it ended left every store through `v0 = RSP - N` without a frame
+offset, and the barrier's saves of R10 and R11, registers the convention gives
+no value, printed as stores of an unknown value.
 
 Go passes a func value its closure in a context register, RDX or arm64's
 R26, and it is no positional argument. MedABIPass recognizes an indirect call

@@ -1404,6 +1404,16 @@ MedFunc LowToMedConverter::convertFunction(
     return *WrittenSmcccArguments;
   };
 
+  // The register a Go write barrier returns its buffer space in, where this
+  // function is one that returns some (goWriteBarrierResult).  Its return
+  // hands that register back, where every later stage reads the platform's
+  // result register: a copy before each RETURN gives it the value.  A
+  // barrier that jumps to another returns that one's space as it comes.
+  std::optional<uint64_t> GoBarrierResult;
+  if (Image)
+    if (const GoWriteBarrier *Barrier = goWriteBarrierAt(*Image, Low.Entry))
+      GoBarrierResult = goWriteBarrierResult(TheArch, Barrier->Kind);
+
   for (const auto &LB : Low.Blocks) {
     uint8_t DispatchDefined =
         TrackDispatchArgs ? DispatchDefinedIn[LowBlockIndex] : 0;
@@ -1575,6 +1585,15 @@ MedFunc LowToMedConverter::convertFunction(
           }
           continue;
         }
+      }
+      if (GoBarrierResult && LOp.Opcode == NdOp::RETURN && !TailCall) {
+        MedOp Result;
+        Result.Opcode = NdOp::COPY;
+        Result.Addr = LOp.Addr;
+        Result.Output = ndVarToMedVar(
+            NdVar::reg(getTargetRegInfo(TheArch).IntReturnReg, 8));
+        Result.addInput(ndVarToMedVar(NdVar::reg(*GoBarrierResult, 8)));
+        MB.Ops.push_back(std::move(Result));
       }
       MOp.Opcode = LOp.Opcode;
       MOp.MemoryOrdering = LOp.MemoryOrdering;
@@ -1830,7 +1849,8 @@ MedFunc LowToMedConverter::convertFunction(
                 goWriteBarrierAt(*Image, MOp.Inputs[0].ConstVal)) {
           if (const std::optional<uint64_t> Buffer =
                   goWriteBarrierResult(TheArch, Barrier->Kind)) {
-            MOp.Output = ndVarToMedVar(NdVar::reg(*Buffer, 8));
+            if (!(TailCall && GoBarrierResult == Buffer))
+              MOp.Output = ndVarToMedVar(NdVar::reg(*Buffer, 8));
           } else {
             MOp.Output = MedVar{};
             MOp.Output.Id = -1;
@@ -2526,8 +2546,13 @@ MedFunc LowToMedConverter::convertFunction(
     // arm64 every Go function does, before the internal ABI too: Go has kept
     // the goroutine in R28 since its arm64 port, where x86-64 kept it in
     // thread-local storage until R14 took it.
+    // A write barrier of a register-ABI image finds its buffer through it
+    // too (`MOVQ g_m(R14), R13`): compiled code alone calls it.
     if (Image && (usesGoRegisterArguments(*Image, Low.Entry) ||
-                  (TheArch == Arch::AArch64 && isGoCode(*Image, Low.Entry))))
+                  (TheArch == Arch::AArch64 && isGoCode(*Image, Low.Entry)) ||
+                  (Image->ExceptionMetadata.GoModule &&
+                   Image->ExceptionMetadata.GoModule->RegisterArguments &&
+                   goWriteBarrierAt(*Image, Low.Entry))))
       if (const std::optional<uint64_t> Goroutine =
               goRoutineRegister(TheArch)) {
         defineGoCurrentGoroutine(Func, *Goroutine);

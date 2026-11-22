@@ -2104,6 +2104,390 @@ TEST(GoAssembly, AReflectCallHelperStoresWhatItsFuncValueReturns) {
       << Text;
 }
 
+TEST(GoWriteBarriers, AStoringBarrierReadsItsGoroutine) {
+  // Go 1.17 to 1.20's storing barrier, which only compiled code calls, finds
+  // its buffer through the goroutine register and saves every register it
+  // keeps round the flush, the two the convention gives no value among them:
+  //   main.flush: ret
+  //   runtime.gcWriteBarrier: sub rsp, 0x28; mov r13, [r14+0x30]
+  //           mov [r13+8], rax; mov [rdi], rax; lea rcx, [rsp+0x20]
+  //           mov [rsp], rcx; mov [rsp+8], r10; mov [rsp+0x10], r11
+  //           call main.flush; mov r10, [rsp+8]; mov r11, [rsp+0x10]
+  //           add rsp, 0x28; ret
+  constexpr va_t Flush = kTextVA + 0x180;
+  constexpr va_t BarrierEntry = kTextVA + 0x200;
+  GoTestImage T(Arch::X64);
+  T.writeText(Flush, {0xC3});
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xEC, 0x28, 0x4D, 0x8B, 0x6E, 0x30, 0x49, 0x89, 0x45, 0x08,
+      0x48, 0x89, 0x07, 0x48, 0x8D, 0x4C, 0x24, 0x20, 0x48, 0x89, 0x0C, 0x24,
+      0x4C, 0x89, 0x54, 0x24, 0x08, 0x4C, 0x89, 0x5C, 0x24, 0x10};
+  const std::vector<uint8_t> Call = makeCall(BarrierEntry + Code.size(), Flush);
+  Code.insert(Code.end(), Call.begin(), Call.end());
+  Code.insert(Code.end(), {0x4C, 0x8B, 0x54, 0x24, 0x08, 0x4C, 0x8B, 0x5C, 0x24,
+                           0x10, 0x48, 0x83, 0xC4, 0x28, 0xC3});
+  T.writeText(BarrierEntry, Code);
+  for (const auto &[Address, Name] :
+       {std::pair{Flush, "main.flush"},
+        std::pair{BarrierEntry, "runtime.gcWriteBarrier"}}) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA + 0x100, kTextVA + 0x400}};
+  Module.GoAssembly = {{BarrierEntry, BarrierEntry + 0x40}};
+  Module.FrameArguments = {{Flush, 0, 0}, {BarrierEntry}};
+  GoWriteBarrier Barrier;
+  Barrier.Entry = BarrierEntry;
+  Barrier.Kind = GoWriteBarrierKind::Store;
+  Barrier.Destination = x86reg::RDI;
+  Barrier.Value = x86reg::RAX;
+  Module.WriteBarriers = {Barrier};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "runtime_gcWriteBarrier");
+  // It reads the goroutine where its caller keeps it, not a register with no
+  // value at entry ...
+  EXPECT_NE(Text.find("%%r14"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("(g + 0x30)"), std::string::npos) << Text;
+  // ... and that read, the first statement, ends no prefix of frame
+  // addresses: the saves of R10 and R11, which nothing reads back, still go,
+  // while the frame word the function fills stays.
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("var_m20"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("var_m18"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("stack_storage.var_m28 = "), std::string::npos) << Text;
+  EXPECT_NE(Text.find("main_flush();"), std::string::npos) << Text;
+}
+
+namespace {
+/// The C of Go 1.21's shared write barrier body and of one numbered barrier
+/// that jumps to it, and the body's parameters.
+///   main.flush: ret
+///   gcWriteBarrier:
+///           sub rsp, 0x18; mov [rsp+8], r12
+///        1: mov r12, [r14+0x30]; add r12, r11; cmp r12, [r14+0x38]; ja 2f
+///           mov r11, r12; mov r12, [rsp+8]; add rsp, 0x18; ret
+///        2: mov [rsp], rdi; mov [rsp+0x10], rax; call main.flush
+///           mov rdi, [rsp]; mov rax, [rsp+0x10]; jmp 1b
+///   runtime.gcWriteBarrier2: mov r11d, 16; jmp gcWriteBarrier
+///   main.h: push rbp; mov rbp, rsp; call [rdx]; pop rbp; ret
+/// \p CallsRecovered adds main.h, whose call through a func value makes the
+/// image one whose calls recovery binds, as every Go image's are.
+/// \p FlushRecorded gives main.flush the pclntab record that says it takes
+/// no stack argument.  \p FlushTakesStackWord makes it Go assembly that
+/// takes a word on the stack instead (`mov rax, [rsp+8]; ret`), which the
+/// body's store at [rsp] then passes.
+struct GoBufferBarrierC {
+  std::string Body;
+  std::string Entry;
+  std::vector<uint64_t> BodyParameters;
+  /// The bytes of R11 the body's summary reads at its entry.
+  unsigned BodyReadsOfBufferRegister = 0;
+};
+
+/// What a PE's function table says of the shared body: nothing, as in an
+/// ELF; unwind data alone, as Go's linker writes; or a personality too.
+enum class BarrierUnwind { None, Data, Personality };
+
+GoBufferBarrierC
+liftGoBufferBarrier(bool CallsRecovered, bool FlushRecorded,
+                    bool FlushTakesStackWord = false,
+                    bool ReloadSkipsItsSave = false,
+                    BarrierUnwind Unwind = BarrierUnwind::None) {
+  constexpr va_t Flush = kTextVA + 0x80;
+  constexpr va_t Body = kTextVA + 0x100;
+  constexpr va_t Entry = kTextVA + 0x200;
+  constexpr va_t Other = kTextVA + 0x280;
+  GoTestImage T(Arch::X64);
+  if (FlushTakesStackWord)
+    T.writeText(Flush, {0x48, 0x8B, 0x44, 0x24, 0x08, 0xC3});
+  else
+    T.writeText(Flush, {0xC3});
+  std::vector<uint8_t> Code = {
+      0x48, 0x83, 0xEC, 0x18, 0x4C, 0x89, 0x64, 0x24, 0x08, 0x4D, 0x8B,
+      0x66, 0x30, 0x4D, 0x01, 0xDC, 0x4D, 0x3B, 0x66, 0x38, 0x77, 0x0D,
+      0x4D, 0x89, 0xE3, 0x4C, 0x8B, 0x64, 0x24, 0x08, 0x48, 0x83, 0xC4,
+      0x18, 0xC3, 0x48, 0x89, 0x3C, 0x24, 0x48, 0x89, 0x44, 0x24, 0x10};
+  // A slow path that may skip its saves: test r11, r11; je <the reloads>.
+  if (ReloadSkipsItsSave)
+    Code.insert(Code.end() - 9, {0x4D, 0x85, 0xDB, 0x74, 0x0E});
+  const std::vector<uint8_t> Call = makeCall(Body + Code.size(), Flush);
+  Code.insert(Code.end(), Call.begin(), Call.end());
+  Code.insert(Code.end(), {0x48, 0x8B, 0x3C, 0x24, 0x48, 0x8B, 0x44, 0x24, 0x10,
+                           0xEB, uint8_t(ReloadSkipsItsSave ? 0xC8 : 0xCD)});
+  T.writeText(Body, Code);
+  std::vector<uint8_t> Numbered = {0x41, 0xBB, 0x10, 0x00, 0x00, 0x00, 0xE9};
+  const auto Jump = static_cast<uint32_t>(Body - (Entry + 11));
+  for (unsigned Shift = 0; Shift < 32; Shift += 8)
+    Numbered.push_back(static_cast<uint8_t>(Jump >> Shift));
+  T.writeText(Entry, Numbered);
+  std::vector<std::pair<va_t, const char *>> Functions = {
+      {Flush, "main.flush"},
+      {Body, "gcWriteBarrier"},
+      {Entry, "runtime.gcWriteBarrier2"}};
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Body, Body + 0x40}, {Entry, Entry + 0x10}};
+  Module.FrameArguments = {{Flush}, {Body}, {Entry}};
+  if (FlushRecorded)
+    Module.FrameArguments.front() = {Flush, 0, 0};
+  if (FlushTakesStackWord) {
+    Module.GoAssembly.insert(Module.GoAssembly.begin(), {Flush, Flush + 0x10});
+    Module.FrameArguments.front() = {Flush, 8};
+  }
+  if (CallsRecovered) {
+    T.writeText(Other, {0x55, 0x48, 0x89, 0xE5, 0xFF, 0x12, 0x5D, 0xC3});
+    Functions.push_back({Other, "main.h"});
+    Module.FrameArguments.push_back({Other, 0, 0});
+  }
+  for (const auto &[Address, Name] : Functions) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoWriteBarrier Shared;
+  Shared.Entry = Body;
+  Shared.Kind = GoWriteBarrierKind::BufferBody;
+  GoWriteBarrier Entered;
+  Entered.Entry = Entry;
+  Entered.Kind = GoWriteBarrierKind::Buffer;
+  Module.WriteBarriers = {Shared, Entered};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  if (Unwind != BarrierUnwind::None) {
+    T.Img.Format = BinaryFormat::COFF;
+    ExceptionFunction Record;
+    Record.FunctionEntry = Body;
+    Record.CodeRange = {Body, Body + Code.size()};
+    Record.Kind = RuntimeFunctionKind::Primary;
+    Record.Encoding = ExceptionEncoding::X64UnwindV1;
+    Record.UnwindVersion = 1;
+    if (Unwind == BarrierUnwind::Personality)
+      Record.Personality = ExceptionPersonality::Unknown;
+    T.Img.ExceptionMetadata.Functions.push_back(std::move(Record));
+    T.Img.ExceptionMetadata.rebuildIndex();
+  }
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  GoBufferBarrierC C;
+  EXPECT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  if (!R.Success)
+    return C;
+  C.Body = highCBody(R, T.Img, "gcWriteBarrier");
+  C.Entry = highCBody(R, T.Img, "runtime_gcWriteBarrier2");
+  for (const MedFunc &F : R.MedFuncs)
+    if (F.Entry == Body)
+      for (const MedVar &Parameter : F.Params)
+        C.BodyParameters.push_back(Parameter.RegOff);
+  if (const auto Reads = R.CallEntryReadGPRs.find(Body);
+      Reads != R.CallEntryReadGPRs.end())
+    C.BodyReadsOfBufferRegister = Reads->second[x86reg::R11 / 8];
+  return C;
+}
+} // namespace
+
+TEST(GoWriteBarriers, TheSharedBodyTakesAndReturnsItsBufferRegister) {
+  // Go 1.21's numbered barriers load the bytes of buffer space they want
+  // into R11 and jump to a body they share, `gcWriteBarrier`, which returns
+  // that space in R11, reads the goroutine in R14 and keeps every other
+  // register: its slow path saves them round the flush it calls.  Read by
+  // System V's positions, the body took the registers it saves as six
+  // parameters, each numbered barrier passed it six unknown values, and the
+  // body returned an RAX it never set.  The saves and reloads are no source
+  // statements where the flush is known to take no word on the stack: call
+  // recovery bound its arguments, or its pclntab record gives it none.  A
+  // flush nothing says that of may take a save as its argument, so there the
+  // saves and reloads stay.
+  for (const bool Recovered : {true, false})
+    for (const bool Recorded : {true, false}) {
+      SCOPED_TRACE(testing::Message()
+                   << "recovered=" << Recovered << " recorded=" << Recorded);
+      const GoBufferBarrierC C = liftGoBufferBarrier(Recovered, Recorded);
+      EXPECT_EQ(C.BodyParameters, std::vector<uint64_t>{x86reg::R11});
+      EXPECT_EQ(C.BodyReadsOfBufferRegister, 8u);
+      EXPECT_NE(C.Body.find("+ (uint64_t)arg0"), std::string::npos) << C.Body;
+      EXPECT_NE(C.Body.find("%%r14"), std::string::npos) << C.Body;
+      if (Recovered || Recorded) {
+        EXPECT_EQ(C.Body.find("__builtin_trap"), std::string::npos) << C.Body;
+        EXPECT_EQ(C.Body.find("var_"), std::string::npos) << C.Body;
+      } else {
+        EXPECT_NE(C.Body.find("var_m18 = "), std::string::npos) << C.Body;
+        EXPECT_NE(C.Body.find("= var_m18;"), std::string::npos) << C.Body;
+        EXPECT_NE(C.Body.find("var_m8 = "), std::string::npos) << C.Body;
+        EXPECT_NE(C.Body.find("= var_m8;"), std::string::npos) << C.Body;
+      }
+      if (Recovered)
+        EXPECT_EQ(C.Body.find("_known"), std::string::npos) << C.Body;
+      EXPECT_NE(C.Entry.find("return gcWriteBarrier(0x10);"), std::string::npos)
+          << C.Entry;
+    }
+}
+
+TEST(GoWriteBarriers, AReloadNoSaveRanBeforeStays) {
+  // A reload reads what its save stored only where the save ran first.  A
+  // slow path that may skip its saves (`test r11, r11; je <the reloads>`)
+  // reloads bytes nothing wrote the first time round: neither the saves nor
+  // the reloads are a kept register's, and all four stay.
+  for (const bool Recovered : {true, false}) {
+    SCOPED_TRACE(testing::Message() << "recovered=" << Recovered);
+    const GoBufferBarrierC C =
+        liftGoBufferBarrier(Recovered, true, false, true);
+    EXPECT_NE(C.Body.find("var_m18 = "), std::string::npos) << C.Body;
+    EXPECT_NE(C.Body.find("= var_m18;"), std::string::npos) << C.Body;
+    EXPECT_NE(C.Body.find("var_m8 = "), std::string::npos) << C.Body;
+    EXPECT_NE(C.Body.find("= var_m8;"), std::string::npos) << C.Body;
+    EXPECT_NE(C.Body.find("main_flush();"), std::string::npos) << C.Body;
+  }
+}
+
+TEST(GoWriteBarriers, UnwindDataAloneEntersNoBlock) {
+  // Go's linker gives every function of a PE unwind data and no personality.
+  // Such data enters no block of the body, so its saves are still a kept
+  // register's; a personality's dispatcher may read what the body saved, so
+  // there the saves and reloads stay.
+  const GoBufferBarrierC Plain =
+      liftGoBufferBarrier(true, true, false, false, BarrierUnwind::Data);
+  EXPECT_EQ(Plain.BodyParameters, std::vector<uint64_t>{x86reg::R11});
+  EXPECT_NE(Plain.Body.find("main_flush();"), std::string::npos) << Plain.Body;
+  EXPECT_EQ(Plain.Body.find("__builtin_trap"), std::string::npos) << Plain.Body;
+  EXPECT_EQ(Plain.Body.find("var_"), std::string::npos) << Plain.Body;
+  const GoBufferBarrierC Dispatched =
+      liftGoBufferBarrier(true, true, false, false, BarrierUnwind::Personality);
+  EXPECT_NE(Dispatched.Body.find("var_m18 = "), std::string::npos)
+      << Dispatched.Body;
+  EXPECT_NE(Dispatched.Body.find("= var_m18;"), std::string::npos)
+      << Dispatched.Body;
+  EXPECT_NE(Dispatched.Body.find("var_m8 = "), std::string::npos)
+      << Dispatched.Body;
+  EXPECT_NE(Dispatched.Body.find("= var_m8;"), std::string::npos)
+      << Dispatched.Body;
+}
+
+TEST(GoWriteBarriers, KeepEveryRegisterButTheirResultAndArm64sTemporary) {
+  for (const GoWriteBarrierKind Kind :
+       {GoWriteBarrierKind::Store, GoWriteBarrierKind::Buffer,
+        GoWriteBarrierKind::BufferBody}) {
+    SCOPED_TRACE(static_cast<int>(Kind));
+    const bool ReturnsSpace = Kind != GoWriteBarrierKind::Store;
+    for (const uint64_t Register :
+         {x86reg::RAX, x86reg::RDI, x86reg::RBP, x86reg::R10, x86reg::R15})
+      EXPECT_TRUE(goWriteBarrierKeeps(Arch::X64, Kind, Register)) << Register;
+    EXPECT_FALSE(goWriteBarrierKeeps(Arch::X64, Kind, x86reg::RSP));
+    EXPECT_EQ(goWriteBarrierKeeps(Arch::X64, Kind, x86reg::R11), !ReturnsSpace);
+    // No part of a register and nothing past R15 is one it keeps.
+    EXPECT_FALSE(goWriteBarrierKeeps(Arch::X64, Kind, x86reg::RAX + 1));
+    EXPECT_FALSE(goWriteBarrierKeeps(Arch::X64, Kind, x86reg::R15 + 8));
+    for (const uint64_t Register :
+         {a64reg::X0, a64reg::X15, a64reg::X16, a64reg::X19, a64reg::X26,
+          a64reg::X28, a64reg::X29, a64reg::X30})
+      EXPECT_TRUE(goWriteBarrierKeeps(Arch::AArch64, Kind, Register))
+          << Register;
+    EXPECT_FALSE(goWriteBarrierKeeps(Arch::AArch64, Kind, a64reg::X27));
+    EXPECT_FALSE(goWriteBarrierKeeps(Arch::AArch64, Kind, a64reg::SP));
+    EXPECT_EQ(goWriteBarrierKeeps(Arch::AArch64, Kind, a64reg::X25),
+              !ReturnsSpace);
+    EXPECT_FALSE(goWriteBarrierKeeps(Arch::X86, Kind, x86reg::RAX));
+  }
+}
+
+TEST(GoWriteBarriers, TheSharedBodyKeepsArm64sUpperRegisters) {
+  // arm64's body keeps X19 to X26 too, which the call summaries track no
+  // family of, and saves them in pairs round the flush.  The pair of the
+  // register it takes and returns in (X25, X26) is saved there as well: the
+  // save of X26 is a kept register's, and that of X25, the bytes wanted,
+  // stays with its reload.
+  //   main.flush: ret
+  //   gcWriteBarrier: str x30, [sp, #-64]!; stp x0, x1, [sp, #48]
+  //     retry: ldr x0, [x28, #0x30]; ldr x1, [x0, #0x10]; ldr x27, [x0, #0x18]
+  //            add x1, x1, x25; cmp x1, x27; b.hi flush; str x1, [x0, #0x10]
+  //            sub x25, x1, x25; ldp x0, x1, [sp, #48]; ldr x30, [sp], #64
+  //            ret
+  //     flush: stp x19, x20, [sp, #16]; stp x25, x26, [sp, #32]
+  //            bl main.flush; ldp x19, x20, [sp, #16]
+  //            ldp x25, x26, [sp, #32]; b retry
+  //   runtime.gcWriteBarrier2: mov x25, #16; b gcWriteBarrier
+  constexpr va_t Flush = kTextVA + 0x80;
+  constexpr va_t Body = kTextVA + 0x100;
+  constexpr va_t Entry = kTextVA + 0x200;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Flush, words({0xD65F03C0}));
+  const uint32_t Call =
+      0x94000000u | (((Flush - (Body + 0x3C)) >> 2) & 0x3FFFFFFu);
+  T.writeText(Body,
+              words({0xF81C0FFE, 0xA90307E0, 0xF9401B80, 0xF9400801, 0xF9400C1B,
+                     0x8B190021, 0xEB1B003F, 0x540000C8, 0xF9000801, 0xCB190039,
+                     0xA94307E0, 0xF84407FE, 0xD65F03C0, 0xA90153F3, 0xA9026BF9,
+                     Call, 0xA94153F3, 0xA9426BF9, 0x17FFFFF0}));
+  const uint32_t Jump =
+      0x14000000u | (((Body - (Entry + 4)) >> 2) & 0x3FFFFFFu);
+  T.writeText(Entry, words({0xD2800219, Jump}));
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Body, Body + 0x4C}, {Entry, Entry + 8}};
+  Module.FrameArguments = {{Flush, 0, 0}, {Body}, {Entry}};
+  GoWriteBarrier Shared;
+  Shared.Entry = Body;
+  Shared.Kind = GoWriteBarrierKind::BufferBody;
+  GoWriteBarrier Entered;
+  Entered.Entry = Entry;
+  Entered.Kind = GoWriteBarrierKind::Buffer;
+  Module.WriteBarriers = {Shared, Entered};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  for (const auto &[Address, Name] :
+       {std::pair{Flush, "main.flush"}, std::pair{Body, "gcWriteBarrier"},
+        std::pair{Entry, "runtime.gcWriteBarrier2"}}) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "gcWriteBarrier");
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  // X19 and X20 at [sp, #16] and X26 at [sp, #40] ...
+  EXPECT_EQ(Text.find("var_m30"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("var_m28"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("var_m18"), std::string::npos) << Text;
+  // ... and X25 at [sp, #32].
+  EXPECT_NE(Text.find("var_m20 = "), std::string::npos) << Text;
+  EXPECT_NE(Text.find("= var_m20;"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("main_flush();"), std::string::npos) << Text;
+  EXPECT_NE(highCBody(R, T.Img, "runtime_gcWriteBarrier2")
+                .find("return gcWriteBarrier(0x10);"),
+            std::string::npos);
+}
+
+TEST(GoWriteBarriers, AStackArgumentIsNoKeptRegister) {
+  // Where the routine the slow path calls takes a word on the stack, the
+  // store at [rsp] passes it and the reload reads what the routine left
+  // there: both stay, though the value goes round the loop as a kept
+  // register's does.  The store at [rsp+0x10], no argument, still goes.
+  const GoBufferBarrierC C = liftGoBufferBarrier(true, true, true);
+  EXPECT_NE(C.Body.find("var_m18 = "), std::string::npos) << C.Body;
+  EXPECT_NE(C.Body.find("= var_m18;"), std::string::npos) << C.Body;
+  EXPECT_NE(C.Body.find("main_flush(("), std::string::npos) << C.Body;
+  EXPECT_EQ(C.Body.find("var_m8"), std::string::npos) << C.Body;
+}
+
 TEST(GoInternalABI, AFuncValueCallTakesItsArgumentsInGoRegisters) {
   // A call through a func value enters Go code by the internal ABI, which
   // passes integer arguments in RAX, RBX, RCX, RDI, RSI and R8-R11.  The

@@ -267,6 +267,11 @@ enum class GoWriteBarrierKind : uint8_t {
   /// (arm64), and keeps every other general-purpose register but arm64's
   /// assembler temporary R27.
   Buffer,
+  /// The body those jump to, an assembly local the `pclntab` names
+  /// `gcWriteBarrier`: it takes the bytes of buffer space they want in the
+  /// register it returns that space in, and keeps the others as they do.
+  /// Recorded only in a module that names a numbered barrier too.
+  BufferBody,
 };
 
 /// A runtime write barrier routine the `pclntab` names.

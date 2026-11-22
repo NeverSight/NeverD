@@ -286,14 +286,19 @@ TEST(GoWriteBarriers, NameEachContractTheRuntimeDocuments) {
                     makeGoCode("runtime.gcWriteBarrierR8", kTextVA + 0x200),
                     makeGoCode("runtime.gcWriteBarrier3", kTextVA + 0x300),
                     makeGoCode("runtime.gcWriteBarrierAX", kTextVA + 0x400),
-                    Unbuilt},
+                    makeGoCode("gcWriteBarrier", kTextVA + 0x480), Unbuilt},
                    kTextVA + 0x600)
           .Bytes);
   parseGoExceptions(T.Img);
 
   const auto &Module = T.Img.ExceptionMetadata.GoModule;
   ASSERT_TRUE(Module.has_value());
-  ASSERT_EQ(Module->WriteBarriers.size(), 3u);
+  ASSERT_EQ(Module->WriteBarriers.size(), 4u);
+  // The body the numbered barriers share is an assembly local, which the
+  // pclntab names without its package.
+  const GoWriteBarrier &Shared = Module->WriteBarriers[3];
+  EXPECT_EQ(Shared.Entry, kTextVA + 0x480);
+  EXPECT_EQ(Shared.Kind, GoWriteBarrierKind::BufferBody);
   const GoWriteBarrier &Store = Module->WriteBarriers[0];
   EXPECT_EQ(Store.Entry, kTextVA + 0x100);
   EXPECT_EQ(Store.Kind, GoWriteBarrierKind::Store);
@@ -305,6 +310,26 @@ TEST(GoWriteBarriers, NameEachContractTheRuntimeDocuments) {
   const GoWriteBarrier &Buffer = Module->WriteBarriers[2];
   EXPECT_EQ(Buffer.Entry, kTextVA + 0x300);
   EXPECT_EQ(Buffer.Kind, GoWriteBarrierKind::Buffer);
+}
+
+TEST(GoWriteBarriers, ASharedBodyNeedsANumberedBarrier) {
+  // Only the numbered barriers jump to the body they share.  An assembly
+  // local of that bare name in a module that has none of them, whose runtime
+  // still stores through `runtime.gcWriteBarrier`, is something else.
+  GoTestImage T;
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {makeGoCode("runtime.gcWriteBarrier", kTextVA + 0x100),
+                    makeGoCode("gcWriteBarrier", kTextVA + 0x200)},
+                   kTextVA + 0x300)
+          .Bytes);
+  parseGoExceptions(T.Img);
+
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  ASSERT_EQ(Module->WriteBarriers.size(), 1u);
+  EXPECT_EQ(Module->WriteBarriers[0].Entry, kTextVA + 0x100);
+  EXPECT_EQ(Module->WriteBarriers[0].Kind, GoWriteBarrierKind::Store);
 }
 
 TEST(GoArgumentComponents, CountEachScalarTheTracebackLists) {

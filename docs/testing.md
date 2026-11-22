@@ -20929,6 +20929,35 @@ over a call to `runtime.gcWriteBarrierCX`, alone and in the whole image, as
 System V and Win64 x86-64 with Go's register ABI, as System V with the stack
 ABI, and as arm64 with X2 and X3: each call passes `(0x1000, 0x2000)`, and
 the barrier's parameters are its two registers.
+`GoWriteBarriers.TheSharedBodyTakesAndReturnsItsBufferRegister` runs the
+pipeline over Go 1.21's shared barrier body, a numbered barrier that jumps to
+it and the flush its slow path calls, with and without a func value call
+elsewhere, which makes call recovery run, and with and without a pclntab
+record for the flush: the body's one parameter is R11, its summary reads R11,
+its C reads R14 and the byte count, and the numbered barrier returns
+`gcWriteBarrier(0x10)`. Where recovery ran or the record gives the flush no
+argument word the body traps nowhere and names no frame word; where neither
+says what the flush takes, the saves and reloads stay.
+`GoWriteBarriers.AStackArgumentIsNoKeptRegister` makes the flush Go assembly
+that takes a word on the stack: the body's store at `[rsp]` and its reload
+stay and the call passes the word, while the save at `[rsp+0x10]` still goes.
+`GoWriteBarriers.AReloadNoSaveRanBeforeStays` lets the slow path skip its
+saves, so that the reloads may run first: both saves and both reloads stay.
+`GoWriteBarriers.UnwindDataAloneEntersNoBlock` gives the body a PE's unwind
+record: without a personality its saves still go, with one they stay.
+`GoWriteBarriers.KeepEveryRegisterButTheirResultAndArm64sTemporary` reads
+`goWriteBarrierKeeps` for each kind on both architectures, and
+`GoWriteBarriers.TheSharedBodyKeepsArm64sUpperRegisters` runs the pipeline
+over an arm64 body that saves X19, X20 and the pair X25, X26 round its
+flush: only the save and reload of X25, the bytes wanted, stay.
+`GoWriteBarriers.NameEachContractTheRuntimeDocuments` loads a pclntab that
+names each kind, the shared body `gcWriteBarrier` among them, and
+`GoWriteBarriers.ASharedBodyNeedsANumberedBarrier` one that names the body
+without a numbered barrier, which records none.
+`GoWriteBarriers.AStoringBarrierReadsItsGoroutine` runs the pipeline over a
+storing barrier that reads its buffer through R14 and saves R10 and R11 round
+its flush: its C reads R14, traps nowhere, drops the two saves nothing reads
+back and keeps the frame word the function fills.
 `GoNoReturn.AreListedWhereTheImagesArgumentPassingIsKnown` loads Go
 1.16 pclntabs: a thread-local g prologue lists `runtime.gopanic`, while a Go
 1.17 `cmp rsp, [r14+0x10]` beside it, or no prologue, lists nothing.
