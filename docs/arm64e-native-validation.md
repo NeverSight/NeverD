@@ -349,9 +349,8 @@ passes the resulting signing recipes to dyld. An explicit source binding names
 an address in the original image. After a dylib layout change, ordinary GOT
 slots and signed or unsigned pointer initializers all rebase to that address
 in the new layout. The successful patch receipt records this address in
-`bindings[].resolved_va` for both source IR and native objects. The LLVM
-toolchains used here
-accept inline stack probes. Modules that also request Apple’s named
+`bindings[].resolved_va` for both source IR and native objects. These LLVM
+toolchains accept inline stack probes. Modules that also request Apple’s named
 `__chkstk_darwin` helper receive a diagnostic before code generation. The
 Apple Clang native-object route can preserve that helper. Compiler selection
 remains explicit with `--compiler-path`. The compatibility profile pins the r6
@@ -366,6 +365,15 @@ three-byte addend. Both Darwin profiles ran the NeverD objects and the Apple
 Clang controls. Source, native-object and direct legacy-IR installation also
 resolved an explicitly bound constant after a 16 KiB image slide.
 [Four-key objects and installed-image execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44998646615).
+
+Apple Clang 17 compiled the C++ installation fixture with
+`-ffreestanding -funwind-tables`. Each O0 and O2 module contained four legacy
+signing descriptors. The synchronous unwind setting supplied the table for
+each published function and preserved the fixture’s compact and forced-DWARF
+variants. Both dylib and executable publication passed locally. On macOS 26,
+Apple Clang 21 produced the IR for eight native execution cases. All 32 native
+installation cases passed, including authenticated calls, catches and cleanups.
+[Native installation and execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45002434803).
 
 The r6 explicit classic signed-return CFI is incompatible with the macOS 26
 system unwinder, so publication rejects those objects transactionally. The
