@@ -8349,6 +8349,20 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(view->text()->complete(), OpenTimeoutMs);
     QCOMPARE(diagnostics.join('\n').count(marker), prepared + 1);
     QCOMPARE(view->text()->allText(), original);
+    // An independent document of the same revision can display the result.
+    bench.action(ActionId::ViewDisassembly)->trigger();
+    bench.window->disassembly()->focusContent();
+    QTRY_VERIFY(bench.window->disassembly()->listing()->hasFocus());
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    CodeView *other = nullptr;
+    for (auto *candidate : bench.window->findChildren<CodeView *>())
+      if (candidate != view &&
+          candidate->representation() == view->representation())
+        other = candidate;
+    QVERIFY(other);
+    QTRY_VERIFY_WITH_TIMEOUT(other->text()->complete(), OpenTimeoutMs);
+    QCOMPARE(other->text()->allText(), original);
+    QCOMPARE(diagnostics.join('\n').count(marker), prepared + 1);
   }
 
   void ownerDoesNotWarmPipelinesUsedOnlyByAnalysisReplicas() {

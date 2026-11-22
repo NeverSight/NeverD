@@ -61,7 +61,7 @@ private:
                 std::optional<LinkResource> resource = std::nullopt);
   Step pseudocodeStep(const char *name);
   void measurePseudocode(const char *name, Done done,
-                         std::optional<qint64> actionStart);
+                         std::optional<qint64> actionStart = std::nullopt);
   Step graphStep(const char *name);
   /// Call \p then at the backing-store flush after \p view next paints.
   void afterPaint(QWidget *view, Done then);

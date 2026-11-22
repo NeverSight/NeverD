@@ -20,6 +20,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -109,7 +110,8 @@ void InteractionMetrics::sampleFunctions(int count) {
   if (function_) {
     samples_ = {*function_};
     runSteps({jumpStep("jump_cold"), pseudocodeStep("pseudocode_cold"),
-              pseudocodeStep("pseudocode_warm")});
+              pseudocodeStep("pseudocode_warm"),
+              pseudocodeStep("pseudocode_refresh")});
     return;
   }
   // One page per sample, spread over the address-ordered list; its first
@@ -379,8 +381,19 @@ InteractionMetrics::Step InteractionMetrics::pseudocodeStep(const char *name) {
         return;
       }
       std::optional<qint64> actionStart;
-      if (function_)
+      if (function_) {
+        if (QLatin1String(name) == QLatin1String("pseudocode_warm")) {
+          auto *listing =
+              window_.findChild<QAction *>(QStringLiteral("ViewDisassembly"));
+          if (!listing) {
+            finish(false, QStringLiteral("no disassembly action"));
+            return;
+          }
+          listing->trigger();
+          window_.disassembly()->focusContent();
+        }
         actionStart = clock_.nsecsElapsed();
+      }
       action->trigger();
       QTimer::singleShot(0, this, [this, name, done, actionStart] {
         measurePseudocode(name, done, actionStart);
@@ -402,7 +415,8 @@ void InteractionMetrics::measurePseudocode(const char *name, Done done,
   {
     CodeView *code = nullptr;
     for (auto *view : window_.findChildren<CodeView *>())
-      if (view->isVisible() && CodeView::isSource(view->representation())) {
+      if (view->isVisible() && CodeView::isSource(view->representation()) &&
+          (!actionStart || view->isAncestorOf(QApplication::focusWidget()))) {
         code = view;
         break;
       }
@@ -438,6 +452,13 @@ void InteractionMetrics::measurePseudocode(const char *name, Done done,
           const double ms = (clock_.nsecsElapsed() - start) / 1.0e6;
           series->ms.append(ms);
           sample["ms"] = ms;
+          if (actionStart) {
+            const QByteArray source = text->allText().toUtf8();
+            sample["bytes"] = source.size();
+            sample["sha256"] = QString::fromLatin1(
+                QCryptographicHash::hash(source, QCryptographicHash::Sha256)
+                    .toHex());
+          }
         } else {
           ++series->missed;
           sample["missed"] = failure;

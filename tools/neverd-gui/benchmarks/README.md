@@ -257,8 +257,9 @@ defaults to 600000 ms.
 
 For a single function, pass `--interaction-benchmark-function 0xADDRESS`
 with `--interaction-benchmark`. The workbench records the listing jump, then
-times the first F5 and its repeat from the action to the paint of the complete
-source document at that entry.
+times the first F5 from disassembly, a second opening from disassembly, and
+an explicit F5 refresh inside the source pane. Each measurement ends when the
+complete source document at that entry paints.
 
 ## Against IDA
 
