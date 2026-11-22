@@ -45,8 +45,10 @@ revision produced the same machine objects and guest images as the hosted
 fixtures.
 [AMD KVM execution and byte hashes](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
 
-These results establish the tested nested KVM profile. The compiler receives
-an initialized VMCB and explicit xstate in each case.
+These results establish the tested nested KVM profile. The generated path
+preserves the full RAX value and emits the original address-size prefix; the
+CPU environment selects the VMCB address or raises the observed exception.
+The compiler receives an initialized VMCB and explicit xstate in each case.
 
 ## Current compiler and production LLVM
 
@@ -115,7 +117,7 @@ This completes a native explicit GPR/user-xstate interface and its IR-to-C
 projection. The original 2026-10-30 qualification did not yet connect raw
 instruction selection to that interface. The following separate source profile
 now provides that connection without inferring an ordinary function ABI.
-Physical AMD execution, other XCR0 components, faults, nested SVM, SEV-ES and
+Bare-metal AMD execution, other XCR0 components, faults, nested SVM, SEV-ES and
 arbitrary guest system/mode changes are unqualified. The SDK release, pin and
 LLVM submodule update are not advanced on the strength of this bounded API.
 
