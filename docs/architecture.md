@@ -12613,8 +12613,14 @@ calls take their arguments from the caller's setup. A caller's pass-through
 registers and incoming stack slots then become its parameters. Without such
 evidence an indirect call uses its setup prefix. A later integer argument
 can establish untouched incoming slots before it, provided every path to the
-call preserves those inputs. The target's own register establishes no prefix;
-prior calls, exceptional roots and independent entries cannot invent one.
+call preserves those inputs. The target's own register establishes no prefix,
+nor does the register the target is loaded through: the call needs the
+address there whatever it passes. `sqlite3_free` loads its configuration's
+address into RDX and jumps through a slot of it (`mov rdx, [config]; jmp
+[rdx+0x28]`); RDX read as a third argument made RSI, which the function never
+touches, a second, and a parameter that each of its 964 callers passed an
+unknown value for. Prior calls, exceptional roots and independent entries
+cannot invent a prefix.
 Both C routes consume this shared Med ABI recovery, including System V x64.
 Physical integer slot width owns promoted carriers (eight bytes on n32),
 independently of pointer width. LLVM call argument symbolization only converts

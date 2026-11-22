@@ -9671,6 +9671,11 @@ This suite does not establish packed FP, VEX or x87 state coverage.
 
 `MedCallingConvValueFlow.VectorParameterBanksRespectTheImageABI` checks entry
 vector arguments for x86, x64, ARM and AArch64 across ELF, COFF and Mach-O.
+`MedABIPass.TheRegisterATargetIsLoadedThroughProvesNoArgument` recovers a
+call, as a tail jump and as a call, whose target is loaded through an address
+the function put in RDX, in a function that takes RDI: the call passes RDI
+alone and the function gains no parameter, and where the function sets RSI
+too the call passes all three.
 `MedABIPass.IndirectFPSetupUsesOnlyTheTargetArgumentBank` checks the outgoing
 bank on x64, ARM and AArch64. Win64 admits four floating slots while the other
 tested banks retain eight. `Win64CallContract.SavedXmmRegistersDoNotShiftTheFifthParameter`

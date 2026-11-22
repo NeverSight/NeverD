@@ -2471,6 +2471,22 @@ void recoverCallAbi(
                 *Site.Block, int(Site.Op - Site.Block->Ops.data()), TRI,
                 IntegerLayout);
       }
+      // Nor does the register the target is loaded through
+      // (`mov rdx, [config]; jmp [rdx+0x28]`): the call needs the address
+      // there whatever it passes.
+      std::optional<MedVar> TargetLoadBase;
+      if (UnboundIndirect && Op.NumInputs && !Op.Inputs[0].isConst())
+        if (const auto Site = DefSites.find(Op.Inputs[0]);
+            !Site.Ambiguous && Site.Op && Site.Op->Opcode == NdOp::LOAD &&
+            Site.Op->NumInputs >= 1) {
+          MedVar Address = Site.Op->Inputs[0];
+          if (const auto Sum = DefSites.find(Address);
+              !Sum.Ambiguous && Sum.Op && Sum.Op->Opcode == NdOp::INT_ADD &&
+              Sum.Op->NumInputs >= 2 && Sum.Op->Inputs[1].isConst())
+            Address = Sum.Op->Inputs[0];
+          if (!Address.isConst())
+            TargetLoadBase = Address;
+        }
       int IndirectPrefix = -1;
       if (UnboundIndirect)
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K)
@@ -2479,7 +2495,8 @@ void recoverCallAbi(
               !(K == TargetSetupSlot && TargetSetupValue &&
                 Found[K] == *TargetSetupValue) &&
               !(Op.NumInputs && !Op.Inputs[0].isConst() &&
-                Found[K] == Op.Inputs[0]))
+                Found[K] == Op.Inputs[0]) &&
+              !(TargetLoadBase && Found[K] == *TargetLoadBase))
             IndirectPrefix = K;
       if (IntRegArgsApply)
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
