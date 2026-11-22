@@ -2435,9 +2435,9 @@ separately; the model guests were not rerun for identical objects.
 The LowIR integration case checks the actual source-call binder and all three
 emission routes, retaining original input and result addresses without new
 logical copies or `byval`/`sret` promises. Named-function C output is compiled
-by Apple Clang directly; Apple Clang's legacy `llvm.ptrauth` globals remain
-unsupported by r6 IR import. Ordinary and rewrite code-generation boundaries
-now reject that representation before the incompatible backend can abort.
+by Apple Clang directly. The current NeverD backend imports Apple LLVM's
+legacy signing descriptors for object emission. Final-address MC rewrite
+requires the signing-recipe callback in the source LLVM fork.
 That receipt predates HVA transport. The vector-aggregate profile below extends
 its fixed-call coverage; whole-image authentication installation and signed
 exception execution remain separate, incomplete work.

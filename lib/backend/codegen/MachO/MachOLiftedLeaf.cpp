@@ -562,10 +562,24 @@ std::optional<FrameBody> signedFrameBody(llvm::ArrayRef<uint8_t> Code,
   return FrameBody{(Save.size() + 1) * Size, End};
 }
 
+// An inserted word belongs to the original ADR. A boundary at that ADR
+// still names its first word, while every later boundary moves.
+struct AddressExpansion {
+  llvm::SmallVector<uint64_t, 2> Sites;
+
+  uint64_t operator()(uint64_t Offset) const {
+    const auto Word = llvm::alignDown(Offset, aarch64::kInsnSize);
+    return Offset + aarch64::kInsnSize *
+                        (llvm::lower_bound(Sites, Word) - Sites.begin());
+  }
+};
+
 // Frame instructions materialize CodeOffset relative to each function.
 // Padding NOPs can change when the linker lays out the relocated records.
 bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
-                    llvm::ArrayRef<CFIInstruction> New) {
+                    llvm::ArrayRef<CFIInstruction> New,
+                    const AddressExpansion &Growth = {},
+                    uint64_t Alignment = 1) {
   const auto Effective = [](const CFIInstruction &I) {
     return I.Kind != CFIOpKind::Nop;
   };
@@ -589,7 +603,22 @@ bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
                           return false;
                         }
                       }) &&
-         llvm::equal(Before, After, dwarf_eh::sameCFIInstruction);
+         llvm::equal(Before, After,
+                     [&](const CFIInstruction &A, const CFIInstruction &B) {
+                       if (Growth.Sites.empty())
+                         return dwarf_eh::sameCFIInstruction(A, B);
+                       auto Mapped = A;
+                       Mapped.CodeOffset = Growth(A.CodeOffset);
+                       if (A.Kind == CFIOpKind::AdvanceLoc) {
+                         const auto Distance =
+                             Growth(A.CodeOffset + A.Offset * Alignment) -
+                             Mapped.CodeOffset;
+                         if (Distance % Alignment)
+                           return false;
+                         Mapped.Offset = Distance / Alignment;
+                       }
+                       return dwarf_eh::sameCFIInstruction(Mapped, B);
+                     });
 }
 
 // The compact table points to a specific FDE. Compare the compiler's LR
@@ -599,12 +628,13 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
                           const dwarf_eh::ParseResult &Generated,
                           const DwarfFDE *NewFrame, va_t Start,
                           const NativeMachOCompactRange &Range, va_t Slide,
-                          uint64_t RetainedBytes) {
+                          uint64_t RetainedBytes,
+                          const AddressExpansion &Growth) {
   const auto CodeSize = Range.EndVA - Range.BeginVA;
   const bool Language = Frame.Itanium.has_value();
   if (!Frame.Dwarf || !NewFrame || Frame.Dwarf->InitialLocation != Start ||
       Frame.Dwarf->AddressRange < RetainedBytes ||
-      Frame.Dwarf->AddressRange - RetainedBytes != CodeSize ||
+      Growth(Frame.Dwarf->AddressRange - RetainedBytes) != CodeSize ||
       Frame.Dwarf->ParseStatus != ExceptionParseStatus::Complete ||
       (Frame.Compact->NativeEncoding & macho_unwind::kDwarfSectionOffsetMask) !=
           Frame.Dwarf->SectionOffset ||
@@ -638,12 +668,14 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
          Range.LSDAVA.value_or(0) == NewFrame->LSDAVA &&
          Range.PersonalitySlotVA.value_or(0) == New->PersonalitySlotVA &&
          sameSpillRules(Old->InitialInstructions, New->InitialInstructions) &&
-         sameSpillRules(Frame.Dwarf->Instructions, NewFrame->Instructions);
+         sameSpillRules(Frame.Dwarf->Instructions, NewFrame->Instructions,
+                        Growth, Old->CodeAlignmentFactor);
 }
 
 bool sameLanguageTable(const ExceptionFunction &Before,
                        const BinaryImage &Installed,
-                       const NativeMachOCompactRange &Range, va_t Slide) {
+                       const NativeMachOCompactRange &Range, va_t Slide,
+                       const AddressExpansion &Growth, bool Rebuilt) {
   const auto *After = Installed.ExceptionMetadata.findFunction(Range.BeginVA);
   if (!After || After->ParseStatus != ExceptionParseStatus::Complete ||
       !After->Itanium || After->CodeRange.Begin != Range.BeginVA ||
@@ -660,22 +692,22 @@ bool sameLanguageTable(const ExceptionFunction &Before,
       Old.TypeTable.size() != New.TypeTable.size() ||
       Old.ExceptionSpecs.size() != New.ExceptionSpecs.size())
     return false;
-  if (Old.LandingPadBaseEncoding == dweh::Omit) {
-    if (New.LSDAVA != Old.LSDAVA + Slide)
-      return false;
-  }
+  if (!Rebuilt && New.LSDAVA != Old.LSDAVA + Slide)
+    return false;
   // Explicit source bases may be canonicalized. Compare the normalized
   // guard and handler coordinates below, including entry-point handlers.
 
   for (size_t I = 0; I < Old.CallSites.size(); ++I) {
     const auto &A = Old.CallSites[I];
     const auto &B = New.CallSites[I];
-    if (A.GuardedRange.Begin - Before.CodeRange.Begin !=
+    if (Growth(A.GuardedRange.Begin - Before.CodeRange.Begin) !=
             B.GuardedRange.Begin - Range.BeginVA ||
-        A.GuardedRange.size() != B.GuardedRange.size() ||
+        Growth(A.GuardedRange.End - Before.CodeRange.Begin) !=
+            B.GuardedRange.End - Range.BeginVA ||
         A.FirstActionOffset != B.FirstActionOffset ||
-        (A.LandingPadVA ? A.LandingPadVA - Before.CodeRange.Begin !=
-                              B.LandingPadVA - Range.BeginVA
+        (A.LandingPadVA ? (!B.LandingPadVA ||
+                           Growth(A.LandingPadVA - Before.CodeRange.Begin) !=
+                               B.LandingPadVA - Range.BeginVA)
                         : B.LandingPadVA != 0))
       return false;
   }
@@ -869,14 +901,15 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         machODataInCodeRanges(SourceData, Start, SourceBody->Bytes.size());
     const auto Source = SourceBody->Bytes;
     const va_t End = Start + Source.size();
-    const bool Expanded = !Addresses.empty() &&
-                          Addresses.front().Instruction < End &&
-                          Addresses.front().Form == MachOAddressForm::Expanded;
-    const auto Split = Expanded ? Addresses.front().Instruction - Start
-                                : uint64_t(Source.size());
-    const auto InstalledOffset = [=](uint64_t Offset) {
-      return Offset > Split ? Offset + aarch64::kInsnSize : Offset;
-    };
+    AddressExpansion InstalledOffset;
+    bool RebuiltLSDA = false;
+    for (const auto &Site : Addresses) {
+      if (Site.Instruction >= End)
+        break;
+      RebuiltLSDA |= Site.Form != MachOAddressForm::PagePair;
+      if (Site.Form == MachOAddressForm::Expanded)
+        InstalledOffset.Sites.push_back(Site.Instruction - Start);
+    }
     const auto *Frame = Original.ExceptionMetadata.findFunction(Start);
     const auto Owner = Generated.SymbolAddrs.find(Mapping.Symbol);
     if (Owner == Generated.SymbolAddrs.end())
@@ -928,7 +961,10 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         Frame->CodeRange.End < End)
       return refuse(kLeafFrame);
     if (Frame->Itanium &&
-        !sameLanguageTable(*Frame, Layout, *Range.mapped(), Slide))
+        !sameLanguageTable(
+            *Frame, Layout, *Range.mapped(), Slide, InstalledOffset,
+            RebuiltLSDA ||
+                !canBindMachOLanguageTable(Original, *Frame->Itanium)))
       return refuse(kLeafFrame);
     if (Source.empty() || Source.size() % aarch64::kInsnSize)
       return refuse(kLeafCode);
@@ -971,7 +1007,8 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
       if ((SourceEncoding & ~DwarfFields) != macho_unwind::kARM64ModeDwarf ||
           !sameIndexedLinkFrame(
               Original, *Frame, LinkedFrames, FDEs.lookup(Owner->second), Start,
-              *Range.mapped(), Slide, RetainedTails.lookup(Start).size()))
+              *Range.mapped(), Slide, RetainedTails.lookup(Start).size(),
+              InstalledOffset))
         return refuse(kLeafFrame);
     } else {
       const bool Language = Frame->Itanium.has_value();
@@ -985,8 +1022,8 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     }
 
     if (RegisterEntries.contains(Start)) {
-      // Branches keep their original displacements. An expanded address shifts
-      // only a straight-line suffix. Calls must resolve to their placed entry.
+      // Verify every edge against the layout that includes the widened sites.
+      // A call between functions must resolve to the installed entry.
       if (!Indexed && (FDEs.count(Owner->second) || Frame->Dwarf))
         return refuse(kLeafFrame);
       for (size_t Offset = 0; Offset < Source.size();
@@ -1060,9 +1097,29 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         const auto Target = Transfer ? Transfer->target() : std::nullopt;
         if (Target && (*Target < Start || *Target >= End)) {
           if (!matchesDirectTransfer(Before, Start + Offset, After,
-                                     Owner->second + Offset, Mappings,
-                                     Generated, Original, Slide,
+                                     Owner->second + InstalledOffset(Offset),
+                                     Mappings, Generated, Original, Slide,
                                      {.Jumps = true, .Calls = true}))
+            return refuse(kDirectTarget);
+        } else if (!InstalledOffset.Sites.empty() &&
+                   (Target || branch::a64ConditionalBranchDisplacement(
+                                  readLE<uint32_t>(Before.data())))) {
+          const auto Word = readLE<uint32_t>(Before.data());
+          const va_t Destination =
+              Target ? *Target
+                     : Start + Offset +
+                           *branch::a64ConditionalBranchDisplacement(Word);
+          if (Destination < Start || Destination >= End)
+            return refuse(kDirectTarget);
+          const auto Delta = int64_t(InstalledOffset(Destination - Start)) -
+                             int64_t(InstalledOffset(Offset));
+          std::optional<uint32_t> Expected;
+          if (!Target)
+            Expected =
+                branch::withA64ConditionalBranchDisplacement(Word, Delta);
+          else if (branch::isA64BranchDisplacement(Delta))
+            Expected = branch::withA64BranchDisplacement(Word, Delta);
+          if (Expected != readLE<uint32_t>(After.data()))
             return refuse(kDirectTarget);
         } else if (!equivalentLeafWord(readLE<uint32_t>(Before.data()),
                                        readLE<uint32_t>(After.data()))) {
@@ -1191,110 +1248,49 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
   return llvm::Error::success();
 }
 
-// The extra word shifts the straight-line suffix as a unit. No branch may
-// enter the second half of the new pair, and there must be no frame or LSDA
-// transition whose PC would acquire a different meaning.
-bool canWidenSourceAddress(Decoder &Decode, const BinaryImage &Image,
-                           va_t Start, va_t Next, va_t Site,
-                           llvm::ArrayRef<MachODataInCodeRange> SourceData,
-                           ExceptionAddressRange TailStorage) {
-  constexpr auto Word = aarch64::kInsnSize;
-  const auto *Frame = Image.ExceptionMetadata.findFunction(Start);
-  if (!Frame || !Frame->Compact || Frame->Dwarf || Frame->Itanium)
-    return false;
-  const auto Mode = Frame->Compact->NativeEncoding;
-  if (Mode != macho_unwind::kARM64ModeFrameless &&
-      Mode != macho_unwind::kARM64ModeFrame)
-    return false;
-  auto Source = machOLiftedSource(Image, Start, Next);
-  if (!Source || Source->ForwardTarget)
-    return false;
-  if (TailStorage.isValid())
-    Source->Bytes = Source->Bytes.take_front(TailStorage.Begin - Start);
-  const auto End = Start + Source->Bytes.size();
-  const auto Embedded =
-      machODataInCodeRanges(SourceData, Start, Source->Bytes.size());
-  const auto CodeEnd = Embedded.empty() ? End : Embedded.front().Begin;
-  va_t Tail = CodeEnd;
-  for (const auto &R : Embedded) {
-    if (R.Begin != Tail)
-      return false;
-    Tail = R.End;
-  }
-  if (Tail != End || CodeEnd - Start < 2 * Word || CodeEnd % Word ||
-      Site < Start || Site >= CodeEnd - Word)
-    return false;
-  const bool Signed = readLE<uint32_t>(Source->Bytes.data()) ==
-                      static_cast<uint32_t>(SigningHint::PACIBSP);
-  const auto *Return = Source->Bytes.data() + (CodeEnd - Start) - Word;
-  if (Signed) {
-    DecodedInsn I{};
-    if (Decode.decodeOne(Return, Word, CodeEnd - Word, I) != int(Word) ||
-        I.Id != AARCH64_INS_RETAB)
-      return false;
-  } else if (readLE<uint32_t>(Return) != kReturnToLR) {
-    return false;
-  }
-  FrameBody Body{Signed ? Word : 0, size_t(CodeEnd - Start - Word)};
-  if (Mode == macho_unwind::kARM64ModeFrame) {
-    const auto Code = Source->Bytes.take_front(CodeEnd - Start);
-    auto Bounds = signedFrameBody(Code, kPushFrame, kPopFrame);
-    if (!Bounds)
-      Bounds = signedFrameBody(Code, kAllocateFrame, kDeallocateFrame);
-    if (!Bounds)
-      return false;
-    Body = *Bounds;
-  }
-  if (Site - Start < Body.Begin || Site - Start >= Body.End)
-    return false;
-  for (va_t PC = Start + Body.Begin; PC < Start + Body.End; PC += Word) {
-    if (PC == Site)
-      continue;
-    DecodedInsn I{};
-    if (Decode.decodeOne(Source->Bytes.data() + (PC - Start), Word, PC, I) !=
-            int(Word) ||
-        !I.Raw || !I.Raw->detail || !isPositionIndependentLeafInstruction(I))
-      return false;
-  }
-  return true;
-}
-
+// Insert words only in independently validated register bodies. Each offset
+// refers to the original assembly, including when a later retry widens another
+// site in the same owner. Update each function once per placement attempt.
 bool widenSourceAddresses(
-    llvm::Module &M, const BinaryImage &Image,
-    llvm::ArrayRef<SourcePatchMapping> Mappings, llvm::ArrayRef<va_t> PoolSites,
-    llvm::MutableArrayRef<MachOLiftedSourceAddress> Sites,
-    llvm::ArrayRef<MachODataInCodeRange> SourceData,
-    const llvm::DenseMap<va_t, ExceptionAddressRange> &RetainedTails) {
-  Decoder Decode;
-  if (!Decode.init(Image))
-    return false;
+    llvm::Module &M, llvm::ArrayRef<SourcePatchMapping> Mappings,
+    llvm::ArrayRef<va_t> PoolSites,
+    llvm::MutableArrayRef<MachOLiftedSourceAddress> Sites) {
   bool Changed = false;
-  for (auto &Site : Sites) {
-    if (Site.Form != MachOAddressForm::Single ||
-        !llvm::binary_search(PoolSites, Site.Instruction))
+  while (!Mappings.empty() && !Sites.empty()) {
+    const auto &Owner = Mappings.front();
+    Mappings = Mappings.drop_front();
+    const size_t Count =
+        Mappings.empty() ? Sites.size()
+                         : llvm::lower_bound(Sites, Mappings.front().OriginalVA,
+                                             [](const auto &S, va_t VA) {
+                                               return S.Instruction < VA;
+                                             }) -
+                               Sites.begin();
+    auto Local = Sites.take_front(Count);
+    Sites = Sites.drop_front(Count);
+    llvm::SmallVector<size_t> Insertions;
+    size_t Added = 0;
+    for (auto &Site : Local) {
+      if (Site.Form == MachOAddressForm::Expanded) {
+        Added += llvm::StringRef(kAddressPrefix).size();
+      } else if (Site.CanExpand && Site.Form == MachOAddressForm::Single &&
+                 llvm::binary_search(PoolSites, Site.Instruction)) {
+        Insertions.push_back(Site.AssemblyOffset + Added);
+        Site.Form = MachOAddressForm::Expanded;
+      }
+    }
+    if (Insertions.empty())
       continue;
-    const auto Next = llvm::upper_bound(
-        Mappings, Site.Instruction,
-        [](va_t VA, const auto &Mapping) { return VA < Mapping.OriginalVA; });
-    const auto &Owner = *std::prev(Next);
-    if (!canWidenSourceAddress(Decode, Image, Owner.OriginalVA,
-                               Next == Mappings.end() ? InvalidVA
-                                                      : Next->OriginalVA,
-                               Site.Instruction, SourceData,
-                               RetainedTails.lookup(Owner.OriginalVA)))
-      continue;
-    // Register bodies and their single inline-assembly call were validated
-    // before cloning M. The installer checks both words before replacing them.
     auto &F = *M.getFunction(Owner.Symbol);
     auto &Call = llvm::cast<llvm::CallInst>(F.front().front());
     auto *Asm = llvm::cast<llvm::InlineAsm>(Call.getCalledOperand());
     auto Text = Asm->getAsmString().str();
-    Text.insert(Site.AssemblyOffset, kAddressPrefix);
+    for (auto Offset : llvm::reverse(Insertions))
+      Text.insert(Offset, kAddressPrefix);
     Call.setCalledOperand(llvm::InlineAsm::get(
         Asm->getFunctionType(), Text, Asm->getConstraintString(),
         Asm->hasSideEffects(), Asm->isAlignStack(), Asm->getDialect(),
         Asm->canThrow()));
-    Site.Form = MachOAddressForm::Expanded;
     Changed = true;
   }
   return Changed;
@@ -1402,6 +1398,8 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     auto Entry = rewrite_source::getOriginalVA(F);
     if (!Entry)
       return Entry.takeError();
+    if (F.isDeclaration() && !*Entry && F.use_empty())
+      continue;
     if (F.isDeclaration() && *Entry && Image.findImportStubAt(**Entry)) {
       if (!F.use_empty())
         Bindings.push_back(
@@ -1599,8 +1597,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     llvm::handleAllErrors(std::move(Error), [&](MachOLiteralPoolOutOfRange &E) {
       Sites = std::move(E.Instructions);
     });
-    if (widenSourceAddresses(*Candidate, Image, Mappings, Sites, Addresses,
-                             SourceData, RetainedTails))
+    if (widenSourceAddresses(*Candidate, Mappings, Sites, Addresses))
       continue;
     if (!Reordered && placeLiteralUsersLast(*Candidate, Mappings, Sites)) {
       Reordered = true;

@@ -548,13 +548,31 @@ void emitCompactFrame(const CompactUnwindEntry &Compact,
   }
 }
 
-// The function body keeps every instruction offset. Canonicalize LPStart to
-// the new function start and rebuild only address-bearing fields. Raw action
-// links and specification-list offsets retain their selectors and shared tails.
-bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
-                       llvm::Module &Module, RegisterBody &Body,
-                       llvm::raw_ostream &OS) {
+bool canCopyLanguageTables(const BinaryImage &Image,
+                           const ItaniumEHInfo &Table) {
+  for (auto Range : {Table.ActionTableRange, Table.ExceptionSpecRange})
+    if (Range.End < Range.Begin ||
+        Range.size() > limits::loader::kLSDAMaxLSDABytes ||
+        (Range.size() && !Image.readVA(Range.Begin, Range.size())))
+      return false;
+  const bool Indirect = Table.TypeTableEncoding & dweh::Indirect;
+  for (const auto &Type : Table.TypeTable)
+    if (!Type.IsCatchAll && !(Indirect ? Type.TypeInfoSlotVA : Type.TypeInfoVA))
+      return false;
+  return true;
+}
+
+// Rebuild address-bearing LSDA fields and retain action and type identities.
+bool emitLanguageTable(
+    const BinaryImage &Image, const ExceptionFunction &Frame,
+    llvm::function_ref<llvm::GlobalVariable *(va_t)> DataSymbol,
+    RegisterBody &Body, llvm::raw_ostream &OS, bool SymbolicSites,
+    llvm::ArrayRef<MachODataInCodeRange> Embedded, va_t TextEnd) {
   const auto &Table = *Frame.Itanium;
+  if (Table.LandingPadBaseEncoding == dweh::Omit &&
+      !canCopyLanguageTables(Image, Table))
+    return false;
+  const bool Indirect = Table.TypeTableEncoding & dweh::Indirect;
   // A zero landing-pad offset means no handler. An entry-point handler needs
   // a base before the function so that its encoded offset remains nonzero.
   const unsigned BaseBias =
@@ -572,18 +590,6 @@ bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
     if (Range.size())
       Bytes({Image.readVA(Range.Begin, Range.size()), size_t(Range.size())});
   };
-  llvm::SmallVector<char> Sites;
-  llvm::raw_svector_ostream Encoded(Sites);
-  for (const auto &Site : Table.CallSites) {
-    llvm::encodeULEB128(Site.GuardedRange.Begin - Frame.CodeRange.Begin,
-                        Encoded);
-    llvm::encodeULEB128(Site.GuardedRange.size(), Encoded);
-    llvm::encodeULEB128(Site.LandingPadVA ? Site.LandingPadVA -
-                                                Frame.CodeRange.Begin + BaseBias
-                                          : 0,
-                        Encoded);
-    llvm::encodeULEB128(Site.NativeActionRecord, Encoded);
-  }
   OS << kPushSection << section_names::macho::TextSeg << kSeparator
      << section_names::macho::GccExceptTab << '\n';
   OS << kGeneratedLSDA << kEndLabel << kByte
@@ -591,7 +597,6 @@ bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
   if (BaseBias)
     OS << kLong << kLocal << 0 << '-' << BaseBias << kRelativeField;
   const bool HasTypes = Table.TypeTableEncoding != dweh::Omit;
-  const bool Indirect = Table.TypeTableEncoding & dweh::Indirect;
   OS << kByte
      << unsigned(HasTypes ? dweh::PCRel | dweh::Sdata4 |
                                 (Indirect ? dweh::Indirect : 0)
@@ -600,9 +605,66 @@ bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
   if (HasTypes)
     OS << kULEB << kTypeTableEnd << '-' << kTypeTableBase << '\n'
        << kTypeTableBase << kEndLabel;
-  OS << kByte << unsigned(dweh::Uleb128) << '\n'
-     << kULEB << Sites.size() << '\n';
-  Bytes({reinterpret_cast<const uint8_t *>(Sites.data()), Sites.size()});
+  if (SymbolicSites) {
+    // All instruction labels belong to this copy of the frame. A linker may
+    // widen ADR after lifting, so express the bounds as differences in text.
+    const auto Label = [&](va_t PC) {
+      if (PC == TextEnd) {
+        OS << kTextEnd;
+        return;
+      }
+      const auto Ranges = machODataInCodeRanges(Embedded, PC, 1);
+      const auto Base =
+          Ranges.empty()
+              ? llvm::alignDown(PC - Frame.CodeRange.Begin, aarch64::kInsnSize)
+              : Ranges.front().Begin - Frame.CodeRange.Begin;
+      OS << '(';
+      if (Ranges.empty())
+        OS << kLocal << Base / aarch64::kInsnSize;
+      else
+        OS << kDataLabel << Base;
+      if (auto Rest = PC - Frame.CodeRange.Begin - Base)
+        OS << '+' << Rest;
+      OS << ')';
+    };
+    OS << kByte << unsigned(dweh::Udata4) << '\n'
+       << kULEB << kSitesEnd << '-' << kSitesBegin << '\n'
+       << kSitesBegin << kEndLabel;
+    for (const auto &Site : Table.CallSites) {
+      OS << kLong;
+      Label(Site.GuardedRange.Begin);
+      OS << '-' << kLocal << 0 << '\n' << kLong;
+      Label(Site.GuardedRange.End);
+      OS << '-';
+      Label(Site.GuardedRange.Begin);
+      OS << '\n' << kLong;
+      if (Site.LandingPadVA) {
+        Label(Site.LandingPadVA);
+        OS << '-' << kLocal << 0 << '+' << BaseBias;
+      } else {
+        OS << 0;
+      }
+      OS << '\n' << kULEB << Site.NativeActionRecord << '\n';
+    }
+    OS << kSitesEnd << kEndLabel;
+  } else {
+    llvm::SmallVector<char> Sites;
+    llvm::raw_svector_ostream Encoded(Sites);
+    for (const auto &Site : Table.CallSites) {
+      llvm::encodeULEB128(Site.GuardedRange.Begin - Frame.CodeRange.Begin,
+                          Encoded);
+      llvm::encodeULEB128(Site.GuardedRange.size(), Encoded);
+      llvm::encodeULEB128(Site.LandingPadVA
+                              ? Site.LandingPadVA - Frame.CodeRange.Begin +
+                                    BaseBias
+                              : 0,
+                          Encoded);
+      llvm::encodeULEB128(Site.NativeActionRecord, Encoded);
+    }
+    OS << kByte << unsigned(dweh::Uleb128) << '\n'
+       << kULEB << Sites.size() << '\n';
+    Bytes({reinterpret_cast<const uint8_t *>(Sites.data()), Sites.size()});
+  }
   SourceBytes(Table.ActionTableRange);
   for (const auto &Type : llvm::reverse(Table.TypeTable)) {
     OS << kLong;
@@ -610,8 +672,7 @@ bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
       OS << 0 << '\n';
       continue;
     }
-    auto *Target = Module.getNamedGlobal(
-        makeNdDataSymbol(Indirect ? Type.TypeInfoSlotVA : Type.TypeInfoVA));
+    auto *Target = DataSymbol(Indirect ? Type.TypeInfoSlotVA : Type.TypeInfoVA);
     if (!Target)
       return false;
     emitOperand(Body, OS, Target, kSymbolConstraint);
@@ -657,8 +718,18 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       (!Frame->describesUnwindOnly() &&
        !canPublishMachOLanguageFrame(Image, *Frame)) ||
       Frame->CodeRange.End < End ||
-      (Frame->Itanium &&
-       (Frame->CodeRange.Begin != Start || Frame->CodeRange.End != End)))
+      (Frame->Itanium && (Frame->CodeRange.Begin != Start ||
+                          (!Frame->Dwarf && Frame->CodeRange.End != End))))
+    return std::nullopt;
+  // ld_classic can place its terminal compact sentinel past the last text
+  // byte. The indexed FDE supplies the exact function extent below.
+  const auto LanguageFits = [&](va_t Limit) {
+    return !Frame->Itanium ||
+           llvm::all_of(Frame->Itanium->CallSites, [&](const auto &Site) {
+             return Site.GuardedRange.End <= Limit && Site.LandingPadVA < Limit;
+           });
+  };
+  if (!LanguageFits(End))
     return std::nullopt;
   const auto &Compact = *Frame->Compact;
   const auto FrameEncoding =
@@ -729,10 +800,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     if (Body.RetainedTail) {
       End = Body.RetainedTail->Begin;
       if ((PAuthLR && *Compact.ReturnAddressSigningOffset >= End - Start) ||
-          (Frame->Itanium &&
-           llvm::any_of(Frame->Itanium->CallSites, [&](const auto &Site) {
-             return Site.GuardedRange.End > End || Site.LandingPadVA >= End;
-           })))
+          !LanguageFits(End))
         return std::nullopt;
       Source->Bytes = Source->Bytes.take_front(End - Start);
     }
@@ -758,18 +826,6 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
                ? kGxxPersonality
                : kObjCPersonality)
        << '\n';
-    OS << kLSDA << unsigned(CIE ? CIE->LSDAPointerEncoding : dweh::PCRel)
-       << kSeparator;
-    if (Frame->Itanium->LandingPadBaseEncoding != dweh::Omit) {
-      OS << kGeneratedLSDA;
-    } else {
-      auto *LSDA = Owner->second->getParent()->getNamedGlobal(
-          makeNdDataSymbol(Frame->Itanium->LSDAVA));
-      if (!LSDA)
-        return std::nullopt;
-      emitOperand(Body, OS, LSDA, kSymbolConstraint);
-    }
-    OS << '\n';
   }
   if (FramelessSpills) {
     for (const auto &Row : machOFramelessSpillRows(Compact))
@@ -790,6 +846,16 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
   // Ordinary lowering can discard the complete frame of a leaf. Direct
   // callers retain their existing call/result analysis.
   Body.HasSavedFrame |= SavesLR && !HasCall;
+  // A zero encoding denotes a reference emitted as an opaque word. Direct
+  // branches have symbolic labels and can grow up to their encoding's reach.
+  struct LocalReference {
+    va_t From, To;
+    uint32_t Branch;
+  };
+  llvm::SmallVector<LocalReference> References;
+  if (PAuthLR)
+    References.push_back(
+        {Start, Start + *Compact.ReturnAddressSigningOffset, 0});
   bool UsesPCSigning = false;
   llvm::GlobalVariable *PageOffset = nullptr;
   auto Islands = Source->Embedded;
@@ -815,6 +881,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       }
       if (hasRelocationProvenanceIn(Image, R.Begin, R.End))
         return std::nullopt;
+      if (Body.HasLanguageFrame)
+        OS << kDataLabel << (PC - Start) << kEndLabel;
       OS << Directive << '\n';
       for (const auto Byte : Source->Bytes.slice(PC - Start, R.End - PC))
         OS << kByte << unsigned(Byte) << '\n';
@@ -847,7 +915,10 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     const bool KeepEncoding =
         OutsideCFG && !PCSigning && !PACM && independent(I);
     const bool RecoveredCode = OutsideCFG && !Body.RecoveredData.empty();
-    const auto Targets = Dispatch.BranchTargets.lookup(PC);
+    const auto *BranchTable = Dispatch.BranchTables.lookup(PC);
+    const auto Targets = BranchTable
+                             ? llvm::ArrayRef<va_t>(BranchTable->Targets)
+                             : llvm::ArrayRef<va_t>();
     const bool Stops = Jump || !Targets.empty() || I.Id == AARCH64_INS_RET ||
                        I.Id == AARCH64_INS_RETAA || I.Id == AARCH64_INS_RETAB ||
                        I.Id == AARCH64_INS_BRK ||
@@ -951,6 +1022,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         Flow[(Target - Start) / Word].Predecessors.push_back(Index);
       if (!Jump)
         Fallthrough();
+      References.push_back({PC, Target, Encoding});
       OS << I.Raw->mnemonic << ' ';
       if (TestReg)
         OS << cs_reg_name(Decode.getHandle(), Ops.front().reg) << kSeparator;
@@ -972,6 +1044,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
           kAArch64PAuthLRScale;
       if (Distance > PC - Start)
         return std::nullopt;
+      References.push_back({PC, PC - Distance, 0});
     }
     if (PageOffset) {
       // The preceding ADRP proved these physical ADD operands. Emit PAGEOFF12
@@ -1034,7 +1107,9 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       const bool Moves = !NumericPage && !Rebased && !OutsideCFG &&
                          (Dispatch.TableAddresses.contains(PC) ||
                           movesSigningPoint(*Source, Start, PC, Target, Reg));
-      if (!Moves) {
+      if (Moves)
+        References.push_back({PC, Target, 0});
+      else {
         // The lookahead consumes the borrowed instruction. The source word
         // and destination register have already been copied.
         if (!LiteralAddress) {
@@ -1069,6 +1144,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         !coverMachOEmbeddedRead(*Source, Start, Literal->Address,
                                 Literal->Width, llvm::MachO::DICE_KIND_DATA))
       return std::nullopt;
+    if (Literal)
+      References.push_back({PC, Literal->Address, 0});
     // Local branches above and typed literal loads keep their displacement.
     // Other instructions outside the CFG must keep a PC-independent word.
     if (RecoveredCode && !KeepEncoding && !Literal)
@@ -1139,10 +1216,68 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
   if (!llvm::all_of(Rows,
                     [](const auto &Row) { return Row.Kind == CFIOpKind::Nop; }))
     return std::nullopt;
-  if (Body.HasLanguageFrame &&
-      Frame->Itanium->LandingPadBaseEncoding != dweh::Omit &&
-      !emitLanguageTable(Image, *Frame, *Owner->second->getParent(), Body, OS))
-    return std::nullopt;
+  if (Body.HasLanguageFrame) {
+    const bool SymbolicSites =
+        llvm::any_of(Body.SourceAddresses, [](const auto &S) {
+          return S.Form == MachOAddressForm::Single;
+        });
+    const bool Rebuild =
+        SymbolicSites || !canBindMachOLanguageTable(Image, *Frame->Itanium);
+    if (SymbolicSites)
+      OS << kTextEnd << kEndLabel;
+    OS << kLSDA << unsigned(CIE ? CIE->LSDAPointerEncoding : dweh::PCRel)
+       << kSeparator;
+    if (Rebuild) {
+      OS << kGeneratedLSDA;
+    } else {
+      auto *LSDA = Owner->second->getParent()->getNamedGlobal(
+          makeNdDataSymbol(Frame->Itanium->LSDAVA));
+      if (!LSDA)
+        return std::nullopt;
+      emitOperand(Body, OS, LSDA, kSymbolConstraint);
+    }
+    OS << '\n';
+    if (Rebuild && !emitLanguageTable(Image, *Frame, DataSymbol, Body, OS,
+                                      SymbolicSites, Source->Embedded, End))
+      return std::nullopt;
+  }
+  // Across either endpoint a wider address changes the delta. Check even the
+  // largest possible displacement before MC assembles the symbolic branches.
+  // Relative dispatch entries embedded in data must retain their byte offsets.
+  auto &Sites = Body.SourceAddresses;
+  if (!Sites.empty()) {
+    for (const auto &[PC, Table] : Dispatch.BranchTables) {
+      auto Low = Table->TargetBase, High = Low;
+      for (auto Target : Table->Targets) {
+        Low = std::min(Low, Target);
+        High = std::max(High, Target);
+      }
+      References.push_back({Low, High, 0});
+    }
+    const auto Before = [&](va_t PC) {
+      return llvm::lower_bound(
+          Sites, PC, [](const auto &S, va_t P) { return S.Instruction < P; });
+    };
+    for (const auto &[From, To, Branch] : References) {
+      const auto [Low, High] = std::minmax(From, To);
+      const auto Inside = llvm::make_range(Before(Low), Before(High));
+      const int64_t Extra =
+          llvm::count_if(Inside,
+                         [](const auto &S) {
+                           return S.Form == MachOAddressForm::Single;
+                         }) *
+          int64_t(Word);
+      const int64_t Displacement =
+          int64_t(To - From) + (To < From ? -Extra : Extra);
+      if (Branch && (branch::a64ConditionalBranchDisplacement(Branch)
+                         ? bool(branch::withA64ConditionalBranchDisplacement(
+                               Branch, Displacement))
+                         : branch::isA64BranchDisplacement(Displacement)))
+        continue;
+      for (auto &Site : Inside)
+        Site.CanExpand = false;
+    }
+  }
   observeScratchResults(Flow, Body);
   Body.Constraints += kEffects;
   return Body;
@@ -1181,6 +1316,12 @@ machOFramelessSpillRows(const CompactUnwindEntry &Compact) {
   return Rows;
 }
 
+bool canBindMachOLanguageTable(const BinaryImage &Image,
+                               const ItaniumEHInfo &Table) {
+  return Table.LandingPadBaseEncoding == dweh::Omit &&
+         Image.getSectionFor(Table.LSDAVA);
+}
+
 bool canPublishMachOLanguageFrame(const BinaryImage &Image,
                                   const ExceptionFunction &Frame) {
   if (Frame.ParseStatus != ExceptionParseStatus::Complete || !Frame.Itanium ||
@@ -1191,8 +1332,10 @@ bool canPublishMachOLanguageFrame(const BinaryImage &Image,
   const auto &LSDA = *Frame.Itanium;
   if (!LSDA.LSDAVA || !LSDA.IsCallSiteAddressForm)
     return false;
-  const auto *Storage = Image.getSectionFor(LSDA.LSDAVA);
-  if (!Storage || Storage->isWritable() || !Image.readVA(LSDA.LSDAVA, 1))
+  const auto *Storage = Image.getSegmentFor(LSDA.LSDAVA);
+  if (!Storage || !Storage->isReadable() ||
+      !Image.readOnlyAfterRelocations(LSDA.LSDAVA, 1) ||
+      !Image.readVA(LSDA.LSDAVA, 1))
     return false;
   for (const auto &Site : LSDA.CallSites)
     if (!Frame.CodeRange.contains(Site.GuardedRange) ||
@@ -1200,20 +1343,9 @@ bool canPublishMachOLanguageFrame(const BinaryImage &Image,
          (!Frame.CodeRange.contains(Site.LandingPadVA) ||
           !Image.hasExecutableCodeOwnerAt(Site.LandingPadVA))))
       return false;
-  // Rebuilding an explicit base retains the address-free bytes referenced by
-  // action links and exception specifications.
-  if (LSDA.LandingPadBaseEncoding != dweh::Omit) {
-    for (auto Range : {LSDA.ActionTableRange, LSDA.ExceptionSpecRange})
-      if (Range.End < Range.Begin ||
-          Range.size() > limits::loader::kLSDAMaxLSDABytes ||
-          (Range.size() && !Image.readVA(Range.Begin, Range.size())))
-        return false;
-    const bool Indirect = LSDA.TypeTableEncoding & dweh::Indirect;
-    for (const auto &Type : LSDA.TypeTable)
-      if (!Type.IsCatchAll &&
-          !(Indirect ? Type.TypeInfoSlotVA : Type.TypeInfoVA))
-        return false;
-  }
+  if (!canBindMachOLanguageTable(Image, LSDA) &&
+      !canCopyLanguageTables(Image, LSDA))
+    return false;
   if (!Frame.Dwarf)
     return (Frame.Compact->Kind == CompactUnwindKind::FramePointer ||
             Frame.Compact->Kind == CompactUnwindKind::FramelessImmediate) &&
@@ -1270,7 +1402,7 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
         !canPublishMachOLanguageFrame(Image, *Frame))
       continue;
     const auto &Table = *Frame->Itanium;
-    if (Table.LandingPadBaseEncoding == dweh::Omit) {
+    if (canBindMachOLanguageTable(Image, Table)) {
       M.getOrInsertGlobal(makeNdDataSymbol(Table.LSDAVA), Byte);
       continue;
     }
@@ -1424,6 +1556,10 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
       continue;
     while (!F->empty())
       F->begin()->eraseFromParent();
+    // The verified assembly owns both the personality and LSDA. A personality
+    // on the discarded IR body would also make LLVM emit its own frame record.
+    if (Body.HasLanguageFrame && F->hasPersonalityFn())
+      F->setPersonalityFn(nullptr);
     F->addFnAttr(kRegisterBody);
     if (!Body.RecoveredData.empty())
       F->addFnAttr(kRecoveredData);

@@ -2572,16 +2572,21 @@ prepareLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
   Pool.Alignment = arm64e::kPointerBytes;
   Pool.ReadOnlyAfterFixups = true;
   std::map<va_t, uint64_t> Slots;
+  uint64_t AddedBytes = 0;
   for (const auto &Fixup : Addresses) {
-    while (Mappings.size() > 1 && Mappings[1].OriginalVA <= Fixup.Instruction)
+    while (Mappings.size() > 1 && Mappings[1].OriginalVA <= Fixup.Instruction) {
       Mappings = Mappings.drop_front();
+      AddedBytes = 0;
+    }
     if (Mappings.empty() || Fixup.Instruction < Mappings.front().OriginalVA)
       return fail(kAddressSourceWord);
     const auto &Entry = Mappings.front();
     const auto &Sym = Object.Symbols.at(Object.Names.at(Entry.Symbol));
-    const uint64_t Offset = Fixup.Instruction - Entry.OriginalVA;
+    const uint64_t Offset = Fixup.Instruction - Entry.OriginalVA + AddedBytes;
     const bool Pair = Fixup.Form == MachOAddressForm::PagePair;
     const bool Expanded = Fixup.Form == MachOAddressForm::Expanded;
+    if (Expanded)
+      AddedBytes += kInsnSize;
     const auto *Before =
         Original.readVA(Fixup.Instruction, Pair ? 2 * kInsnSize : kInsnSize);
     if (!Before || Object.Sections.at(Sym.Section) != Plan.TextSection ||

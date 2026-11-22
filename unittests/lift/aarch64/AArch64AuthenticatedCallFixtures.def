@@ -50,14 +50,76 @@
 #define A64_CALL_TYPED_VARIANT(Key, Zero, Raw)
 #endif
 
+A64_CALL_TEXT(kLegacyFrontendGlobals, R"C(
+typedef int (*fn)(int);
+extern int passthrough(int);
+fn plain = passthrough;
+fn __ptrauth(1,0,0x5432) any = passthrough;
+fn __ptrauth(0,1,0x1234) specific = passthrough;
+struct P { int tag; fn __ptrauth(3,1,0x4321) field; } obj = { 1, passthrough };
+extern char buf[16];
+char *__ptrauth(2,1,0x1234) data = &buf[3];
+fn produce(void) { return passthrough; }
+int invoke(fn f, int x) {return f(x);}
+)C")
+A64_CALL_TEXT(kLegacyFrontendCase, "apple-authenticated-globals")
+A64_CALL_TEXT(kLegacyGlobalCase, "legacy-descriptors")
 A64_CALL_TEXT(kLegacyPAuthIR, R"IR(
-@callback.ptrauth = private constant { ptr, i32, i64, i64 }
-  { ptr @callback, i32 0, i64 0, i64 0 }, section "llvm.ptrauth", align 8
+%Pair = type { i64, [2 x ptr] }
+@plain.auth = private constant { ptr, i32, i64, i64 }
+  { ptr @callback, i32 0, i64 0, i64 0 }, section "llvm.ptrauth"
+@extra.auth = private constant { ptr, i32, i64, i64 }
+  { ptr @callback, i32 1, i64 0, i64 22 }, section "llvm.ptrauth"
+@data.auth = private constant { ptr, i32, i64, i64 }
+  { ptr getelementptr (i8, ptr @data, i64 3), i32 2, i64 ptrtoint (ptr @slot to i64), i64 33 }, section "llvm.ptrauth"
+@field.auth = private constant { ptr, i32, i64, i64 }
+  { ptr @data, i32 3, i64 ptrtoint (ptr getelementptr (%Pair, ptr @pair, i32 0, i32 1, i32 1) to i64), i64 44 }, section "llvm.ptrauth"
+@data = external global i8
+@slot = global ptr @data.auth
+@pair = global %Pair { i64 0, [2 x ptr] [ptr @extra.auth, ptr @field.auth] }
+@plain = global ptr @plain.auth
 declare void @callback()
 define ptr @legacy_callback_address() {
-  ret ptr @callback.ptrauth
+  ret ptr @plain.auth
 }
 )IR")
+A64_CALL_TEXT(kCanonicalPAuthIR, R"IR(
+%Pair = type { i64, [2 x ptr] }
+@data = external global i8
+@slot = global ptr ptrauth (ptr getelementptr (i8, ptr @data, i64 3), i32 2, i64 33, ptr @slot)
+@pair = global %Pair { i64 0, [2 x ptr] [ptr ptrauth (ptr @callback, i32 1, i64 22),
+ ptr ptrauth (ptr @data, i32 3, i64 44, ptr getelementptr (%Pair, ptr @pair, i32 0, i32 1, i32 1))] }
+@plain = global ptr ptrauth (ptr @callback, i32 0)
+declare void @callback()
+define ptr @legacy_callback_address() { ret ptr ptrauth (ptr @callback, i32 0) }
+)IR")
+A64_CALL_TEXT(kTypedStructorIR, R"IR(
+%Auth = type { i8*, i32, i64, i64 }
+@init.auth = private constant %Auth { i8* bitcast (void ()* @init to i8*),
+    i32 0, i64 1, i64 0 }, section "llvm.ptrauth"
+@llvm.global_ctors = appending global [1 x {i32, void ()*, i8*}]
+  [{i32, void ()*, i8*} {i32 65535, void ()* bitcast (%Auth* @init.auth to void ()*), i8* null}]
+define void @init() { ret void }
+)IR")
+A64_CALL_TEXT(kCanonicalStructorIR, R"IR(
+@llvm.global_ctors = appending global [1 x {i32, ptr, ptr}]
+  [{i32, ptr, ptr} {i32 65535, ptr ptrauth (ptr @init, i32 0, i64 0, ptr inttoptr (i64 1 to ptr)), ptr null}]
+define void @init() { ret void }
+)IR")
+A64_CALL_TEXT(kConflictingPAuthIR, R"IR(
+@ok = private constant { ptr, i32, i64, i64 }
+  { ptr @other, i32 0, i64 0, i64 0 }, section "llvm.ptrauth"
+@bad = private constant { ptr, i32, i64, i64 }
+  { ptr @other, i32 0, i64 ptrtoint (ptr @other to i64), i64 7 }, section "llvm.ptrauth"
+@other = global ptr @ok
+@slot = global ptr @bad
+)IR")
+A64_CALL_VALUE(unsigned, kLegacyAuthRecipes, 4)
+A64_CALL_TEXT(kProbeMethodAttribute, "probe-stack")
+A64_CALL_TEXT(kDarwinProbeMethod, "__chkstk_darwin")
+A64_CALL_TEXT(kFirstAuthDescriptor, "ok")
+A64_CALL_TEXT(kSecondAuthDescriptor, "bad")
+A64_CALL_TEXT(kDataAuthSlot, "slot")
 A64_CALL_TEXT(kUnknownTypedKind, "unknown authenticated call fixture type")
 A64_CALL_TEXT(kHVACompilerCase, "hva-clang-darwin")
 A64_CALL_VALUE(unsigned, kHVAIndirectParameters, 2)

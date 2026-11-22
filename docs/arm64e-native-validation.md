@@ -339,12 +339,17 @@ available TEXT padding before requesting prefix growth, including creation of a 
 `__eh_frame` section in a dylib. Deferred authenticated function providers do
 not reserve ordinary import-thunk frames.
 
-Use a frontend that emits LLVM's standard
-[pointer-authentication constants and call bundles](https://llvm.org/docs/PointerAuth.html),
-such as the tested Clang 22 frontend, selected explicitly with `--compiler-path`.
-Apple's older synthetic `llvm.ptrauth` globals remain unsupported IR input;
-its native object artifact uses the separately qualified object installer.
-Compiler selection never silently changes. The default prebuilt package remains
+The arm64e Mach-O backend accepts modern LLVM pointer-authentication constants
+and the four-field descriptor globals emitted by older Apple LLVM frontends.
+It converts descriptors before object emission and MC rewrite, preserving the
+symbol addend, IA/IB/DA/DB key, address discriminator and integer diversity.
+For an address-diverse global initializer the discriminator must identify its
+storage slot, including a field inside an aggregate. The object installer
+passes the resulting signing recipes to dyld. The LLVM toolchains used here
+accept inline stack probes. Modules that also request Apple’s named
+`__chkstk_darwin` helper receive a diagnostic before code generation. The
+Apple Clang native-object route can preserve that helper. Compiler selection
+remains explicit with `--compiler-path`. The default prebuilt package remains
 r6. Its explicit classic signed-return CFI is incompatible with the macOS 26
 system unwinder, so publication rejects those objects transactionally. The
 Apple-native object route remains available. Canonical generation requires the
@@ -2937,18 +2942,17 @@ decoder checks both register operands, including pairs that retain the
 page in X8 and return the full address in X0. Each publication recovers the
 original numeric address from the linked input.
 
-When a one-word site cannot reach either its original address or its dyld
-pointer cell, the publisher can emit a two-word page pair inside a function
-with compact unwind. It recognizes a zero-stack leaf or an FP/LR save and
-restore, checks the position-independent body and its final return,
-and excludes DWARF and language metadata from this expansion. The leading
-B-key SP signature and authenticated return keep their signing modifier.
-It then verifies the new instruction, all shifted words and every embedded
-data range against the source. A whole function that needs to preserve its
-instruction offsets can move closer to the pool. The final verifier checks
-the relocated calls, original register operands and unwind records in either
-layout. Publication still reports a range error if the available placements
-cannot encode the address.
+When a single address instruction cannot reach its original address or its
+dyld pointer cell, the publisher can widen it to an `ADRP`/`ADD` pair in the
+same destination register. For a register body with an indexed DWARF frame,
+the instruction labels reposition the CFA and register recovery rules. For a
+language frame they also reposition the guarded ranges and landing pads.
+Publication checks those offsets against the installed FDE and LSDA, including
+cleanup-only and handler-free call sites, and checks local branches and
+embedded data at their new positions. A raw PC-relative reference or relative
+dispatch table can require fixed instruction distances. The publisher can
+place the function nearer its literal pool when that preserves those distances.
+If neither placement is encodable, publication reports the range failure.
 
 When a published entry begins with a forwarding branch, its old FP/LR save
 can still appear in the next word. Function discovery uses the linker's

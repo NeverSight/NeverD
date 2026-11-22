@@ -12,6 +12,139 @@
 #endif
 
 A64_LEAF_TEXT(kTemporary, "neverd-arm64e-lifted-leaves")
+A64_LEAF_TEXT(kWideLSDAOption, "#define WIDE_LSDA 1\n")
+A64_LEAF_TEXT(kWideLanguageFrame, R"asm(
+.text
+.globl _wide
+.p2align 2
+_wide:
+.cfi_startproc
+#ifdef WIDE_LSDA
+.cfi_personality 155, ___gxx_personality_v0
+.cfi_lsda 16, Lexception
+#endif
+ pacibsp
+ stp x29, x30, [sp, #-16]!
+ .cfi_def_cfa_offset 16
+ .cfi_offset x30, -8
+ .cfi_offset x29, -16
+ mov x29, sp
+ .cfi_def_cfa_register x29
+ .cfi_escape 0x2e, 0
+ cbz x1, Lsecond
+ adr x8, Lvalue
+ str x8, [x0]
+ b Lcall
+Lsecond:
+ adr x8, Lvalue+4
+ str x8, [x0]
+ cbz x1, Lnormal
+Lcall:
+ blraaz x1
+Lnormal:
+ mov w0, #42
+ ldp x29, x30, [sp], #16
+ .cfi_def_cfa sp, 0
+ .cfi_restore x29
+ .cfi_restore x30
+ retab
+#ifdef WIDE_LSDA
+Lpad:
+ .cfi_def_cfa x29, 16
+ .cfi_offset x29, -16
+ .cfi_offset x30, -8
+ adrp x8, _wide_cleaned@PAGE
+ add x8, x8, _wide_cleaned@PAGEOFF
+ mov w9, #1
+ str w9,[x8]
+ bl __Unwind_Resume
+ brk #0
+#endif
+.data_region
+Lvalue: .long 19, 23
+.end_data_region
+.macro filler value
+ .data_region
+ .space 61440, \value
+ .end_data_region
+.endm
+.irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+ filler \n
+.endr
+.cfi_endproc
+#ifndef WIDE_LSDA
+.globl _wide_anchor
+_wide_anchor:
+.cfi_startproc
+ mov w0,#42
+ ret
+.cfi_endproc
+#endif
+#ifdef WIDE_LSDA
+.section __TEXT,__gcc_except_tab
+Lexception:
+ .byte 255,255,1
+ .uleb128 Lend-Lsites
+Lsites:
+ .uleb128 Lcall-_wide
+ .uleb128 Lnormal-Lcall
+ .uleb128 Lpad-_wide
+ .uleb128 0
+ // _Unwind_Resume crosses this call without entering the cleanup again.
+ .uleb128 Lnormal-_wide
+ .uleb128 Lvalue-Lnormal
+ .byte 0,0
+Lend:
+#endif
+.data
+.p2align 2
+.globl _wide_cleaned
+_wide_cleaned: .long 0
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kWideLanguageDriver, R"cpp(
+#include <dlfcn.h>
+#include <unwind.h>
+#ifdef WIDE_LSDA
+constexpr int ExpectedCleanups = 1;
+#else
+constexpr int ExpectedCleanups = 0;
+#endif
+using Entry = int (*)(const int **, void (*)());
+static bool seen;
+static void *imageBase;
+static _Unwind_Reason_Code visit(_Unwind_Context *ctx, void *) {
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<void *>(_Unwind_GetIP(ctx)), &info) &&
+      info.dli_fbase == imageBase)
+    seen = true;
+  return _URC_NO_REASON;
+}
+static void walk() { _Unwind_Backtrace(visit, nullptr); }
+static void raise() { throw 37; }
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  auto *handle = dlopen(argv[1], RTLD_NOW);
+  if (!handle) return 2;
+  auto entry = reinterpret_cast<Entry>(dlsym(handle, "wide"));
+  auto *cleanup = static_cast<int *>(dlsym(handle, "wide_cleaned"));
+  if (!entry || !cleanup) return 3;
+  Dl_info info{};
+  if (!dladdr(dlsym(handle, "wide"), &info)) return 3;
+  imageBase = info.dli_fbase;
+  const int *value = nullptr;
+  if (entry(&value, nullptr) != 42 || !value || *value != 23) return 4;
+  if (entry(&value, walk) != 42 || !seen || *value != 19) return 5;
+  try { entry(&value, raise); }
+  catch (int n) { return n == 37 && *cleanup == ExpectedCleanups && *value == 19 ? 0 : 6; }
+  return 7;
+}
+)cpp")
+A64_LEAF_TEXT(kWideLanguageDriverFile, "driver.cpp")
+A64_LEAF_TEXT(kWideEntry, "_wide")
+A64_LEAF_TEXT(kLinkCxx, "-lc++")
+A64_LEAF_VALUE(unsigned, kWideLanguageSites, 2)
+A64_LEAF_VALUE(unsigned, kWideLanguageCallSites, 2)
 A64_LEAF_TEXT(kWideAddressLeaves, R"asm(
 .text
 .p2align 2
@@ -795,7 +928,7 @@ A64_LEAF_TEXT(kInteriorAddresses, "#define NEVERD_TEST_INTERIOR_ADDRESSES 1\n")
 A64_LEAF_TEXT(kBlockAddresses, "#define NEVERD_TEST_BLOCK_ADDRESSES 1\n")
 A64_LEAF_VALUE(unsigned, kReturnLabelWords, 3)
 A64_LEAF_TEXT(kDistantInterior, "#define NEVERD_TEST_INTERIOR_ADDRESSES 1\n"
-                               "#define NEVERD_TEST_DISTANT_ADDRESSES 1\n")
+                                "#define NEVERD_TEST_DISTANT_ADDRESSES 1\n")
 A64_LEAF_TEXT(kRebasedSlots, "distinct_rebased_address_slots")
 A64_LEAF_TEXT(kAddressCellsSymbol, "_address_cells")
 A64_LEAF_TEXT(kMutableCellSymbol, "_mutable_cell")
