@@ -1754,6 +1754,58 @@ def blended_field(width, case):
     return f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
 
 
+def overlapping_field(width, case):
+    """Masked fields with two live operands and first-order modular products."""
+    rng = random.Random(0x91A27 + 47 * width + 1889 * case)
+    degree = (1051, 1129, 1249, 1399)[case % 4]
+    observed = (69, 85, 101)[case % 3]
+    zeros = (observed + 1) // 2
+    size = observed - zeros
+    axes = (("(x^y)", "(u+v)"), ("((x+z)^(u&w))", "((v|y)+x)"),
+            ("((v|w)^(y+z))", "((x&z)^u)"))
+    starts = (63, width // 2 - 11, width - size - 3)
+    patterns = [(rng.getrandbits(size) | 3, rng.getrandbits(size) | 5) for _ in axes]
+    factors = []
+    for i in range(degree):
+        axis = (case + i) % (2 + case % 2)
+        a, b = axes[axis]
+        start = starts[axis]
+        ml, mr = patterns[axis]
+        op = ("+", "^", "|")[(axis + case) % 3]
+        carry = (0, 1, 5)[(axis + case // 3) % 3] if op == "+" else 0
+        # Below the field, either a zero column or a possible generate followed
+        # by propagate columns. A one-bit change in the middle factor is live.
+        if i == degree // 2 and case % 4:
+            if case % 4 == 1:
+                ml ^= 1 << (size - 2)
+            elif case % 4 == 2:
+                mr ^= 1 << (size // 2)
+            else:
+                op, carry = "+", 3
+        lm = (ml << carry) | ((1 << carry) - 1)
+        rm = (mr << carry) | int(carry != 0)
+        low = start - carry
+        span = size + carry
+        window = ((1 << (span + 1)) - 1) << (low - 1)
+        left = (rng.getrandbits(width) & ~window) | (lm << low)
+        right = (rng.getrandbits(width) & ~window) | (rm << low)
+        at = rng.randrange(width - size + 1)
+        lhs = f"({a}&{hex(left)})"
+        rhs = f"({b}&{hex(right)})"
+        joined = f"({lhs}{op}{rhs})" if i % 2 else f"({rhs}{op}{lhs})"
+        field = f"extract(ror({joined},{(start - at) % width}),{at},{size})"
+        if i % 3 == 0:
+            word = f"zext({field},{width})"
+        elif i % 3 == 1:
+            word = f"sext({field},{width})"
+        else:
+            word = f"concat(extract(w,{size},{width - size}),{field})"
+        offset = rng.randrange(-25, 26) | 1
+        weight = (rng.randrange(-19, 20) | 1) << zeros
+        factors.append(f"({offset}+({weight})*{word})")
+    return f"({hex(3<<(width-observed))}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -2026,7 +2078,7 @@ def main():
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
-                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field"),
+                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field"),
         default="complement",
     )
     args = parser.parse_args()
@@ -2049,6 +2101,7 @@ def main():
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
             "blended-field": (3329, 4097, 6145),
+            "overlapping-field": (4097, 7169, 9217),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2106,6 +2159,7 @@ def main():
                 "joined-prefix": joined_prefix_corpus,
                 "masked-window": masked_window_corpus,
                 "blended-field": lambda w, n: [blended_field(w, i) for i in range(n)],
+                "overlapping-field": lambda w, n: [overlapping_field(w, i) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

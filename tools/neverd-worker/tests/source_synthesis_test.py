@@ -320,7 +320,8 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                           observed=32, dynamic_masks=False, spliced_words=False,
                           rotated_bytes=False, shifted_bytes=False, funnel_bytes=False,
                           staggered_bytes=False, signed_bytes=False, joined_prefix=False,
-                          masked_window=False, blended_fields=False):
+                          masked_window=False, blended_fields=False, overlapping_fields=False):
+    blended_fields = blended_fields or overlapping_fields
     signed_bytes = signed_bytes or joined_prefix or masked_window
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
@@ -345,6 +346,8 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
             left_shift = i % 3 == 0 and not signed_bytes
             # The moving field reaches CH after a second rotation.
             field_at = 2 + (5 * i) % 12 if masked_window or blended_fields else 8
+            if overlapping_fields:
+                field_at = (5, 11, 19)[i % 3]
             start = field_at - distance if left_shift else field_at + distance
             left = (start - source_bit) % 32
             if left:
@@ -370,10 +373,17 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                     join, symbol = "4401c1", "+"
                     live |= 1 << (field_at - 1)
                     other |= 1 << (field_at - 1)
+                neighbor_offset = offset
+                if overlapping_fields:
+                    # Both inputs contribute inside CH. Changing bits outside
+                    # the byte preserves it except for an incoming carry.
+                    live = (live & ~field) | (0xb3 << field_at)
+                    other = (other & ~field) | (0x6d << field_at)
+                    neighbor_offset = 1 + 2 * (i % 3)
                 code += bytes.fromhex("81e1") + struct.pack("<I", live)
-                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", offset)
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", neighbor_offset)
                 code += bytes.fromhex("4181e0") + struct.pack("<I", other) + bytes.fromhex(join)
-                value = f"(({value}&{live}U){symbol}((z+{offset}U)&{other}U))"
+                value = f"(({value}&{live}U){symbol}((z+{neighbor_offset}U)&{other}U))"
                 by = (field_at - 8) % 32
                 if by:
                     code += bytes.fromhex("c1c9") + bytes([by])
@@ -627,7 +637,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
-        elif kind.startswith("funnel-perturbation-masked-"):
+        elif kind.startswith(("funnel-perturbation-masked-", "funnel-perturbation-overlap-")):
             # The few surviving factors may include a live carry and shifts
             # printed as literal products. Bound the actual emitted expression.
             assert code.count("*") <= 14, text
@@ -810,6 +820,8 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("funnel-perturbation-overlap-81", *high_perturbation_elf(
+                81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
             *((f"funnel-perturbation-blended-{degree}", *high_perturbation_elf(
                 degree, shift_base=6, affine_depth=1, observed=14, blended_fields=True))
               for degree in (47, 99)),

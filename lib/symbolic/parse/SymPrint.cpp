@@ -19,13 +19,13 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <optional>
 #include <string>
@@ -67,35 +67,28 @@ void appendWrapped(std::string &Out, const Fragment &F, int Need) {
 }
 
 void appendDigits(std::string &Out, const llvm::APInt &V) {
-  llvm::SmallString<48> S;
-  // Small numbers read as quantities and belong in decimal.  Larger ones are
-  // nearly always masks or magic constants, where the hex form is the one that
-  // carries the meaning.
+  // The decimal spelling is bounded to four digits. All larger values use
+  // the same limb emitter, including a single native word.
   if (V.ule(9999)) {
-    V.toString(S, 10, /*Signed=*/false);
-  } else {
-    Out += "0x";
-    const unsigned Bits = V.getActiveBits();
-    if (Bits > 64) {
-      // Write each limb in place. Repeatedly shifting the complete APInt for
-      // one hex digit copies all remaining limbs for every output character.
-      const size_t Count = 1 + (Bits - 1) / 4;
-      const size_t Start = Out.size();
-      Out.resize(Start + Count);
-      size_t End = Count;
-      for (unsigned I = 0; End; ++I) {
-        uint64_t Word = V.getRawData()[I];
-        const size_t Begin = End - std::min<size_t>(End, 16);
-        while (End > Begin) {
-          Out[Start + --End] = llvm::hexdigit(Word & 15);
-          Word >>= 4;
-        }
-      }
-      return;
-    }
-    V.toString(S, 16, /*Signed=*/false);
+    char Digits[4];
+    const auto End =
+        std::to_chars(Digits, Digits + sizeof(Digits), V.getRawData()[0]).ptr;
+    Out.append(Digits, End);
+    return;
   }
-  Out.append(S.begin(), S.end());
+  Out += "0x";
+  const size_t Count = llvm::divideCeil(V.getActiveBits(), 4u);
+  const size_t Start = Out.size();
+  Out.resize(Start + Count);
+  size_t End = Count;
+  for (unsigned I = 0; End; ++I) {
+    uint64_t Word = V.getRawData()[I];
+    const size_t Begin = End - std::min<size_t>(End, 16);
+    while (End > Begin) {
+      Out[Start + --End] = llvm::hexdigit(Word & 15);
+      Word >>= 4;
+    }
+  }
 }
 
 class Printer {
@@ -204,16 +197,15 @@ std::optional<Printer::Magnitude> Printer::negatedProduct(SymRef R) const {
   if (Ops.size() < 2 || !Ctx.isConst(Ops[0]))
     return std::nullopt;
   llvm::APInt C = Ctx.constValue(Ops[0]);
-  std::optional<Fragment> Coeff = negatedLiteral(C);
-  if (!Coeff)
+  if (!print_detail::hasSignedMagnitude(C))
     return std::nullopt;
 
   Magnitude M;
-  M.CoeffLed = !(-C).isOne();
+  M.CoeffLed = !C.isAllOnes();
   llvm::ArrayRef<SymRef> Factors = Ops.drop_front();
   std::string T;
   if (M.CoeffLed) {
-    T = Coeff->Text;
+    T = literal(-C, C.getBitWidth()).Text;
     T += " * ";
   }
   // Division sits at the same strength as multiplication but does not

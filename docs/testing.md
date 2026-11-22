@@ -4590,6 +4590,15 @@ Clang O0 and O2. The LLVM guard test checks the exact signed and unsigned
 overflow boundaries on byte-sized inputs. Generated LLVM C also exercises
 wrapping 9- and 17-bit sums and differences before right shifts.
 
+Use `--family overlapping-field --count 8` for 24 products at 4097, 7169
+and 9217 bits with 1051 to 1399 factors. Both masked operands supply live
+bits and selected additions carry into the field. The factors mix sign and
+zero extensions with concatenations and a one-bit perturbation. Regression
+tests cover 1, 31, 64 and 65 live coefficient bits, shared expression graphs
+and exhaustive byte inputs for LLVM exact-shift and overflow flags. An
+81-factor x86 fixture checks High C and LLVM C through the CLI and the worker
+used by the GUI. Its ordinary and optimized outputs execute at Clang O0 and O2.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work
