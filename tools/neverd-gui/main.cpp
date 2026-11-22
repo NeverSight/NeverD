@@ -1,5 +1,6 @@
 #include "Config.h"
 #include "ResourceLimits.h"
+#include "app/Address.h"
 #include "app/AnalysisPlugins.h"
 #include "app/DeepLink.h"
 #include "app/DialogReturnKey.h"
@@ -36,6 +37,7 @@
 #include <QVector>
 #include <algorithm>
 #include <memory>
+#include <optional>
 
 #ifdef NEVERD_GUI_TEST_PROBES
 #include "tests/WidgetsProbe.h"
@@ -132,6 +134,10 @@ void configureOptions(QCommandLineParser &parser) {
                       "in the opened file, write their latencies as JSON "
                       "and exit"),
        QStringLiteral("path")});
+  parser.addOption(
+      {QStringLiteral("interaction-benchmark-function"),
+       QStringLiteral("Measure first and repeat F5 at this function entry"),
+       QStringLiteral("address")});
   parser.addOption(
       {QStringLiteral("interaction-benchmark-timeout"),
        QStringLiteral("Interaction benchmark deadline in milliseconds"),
@@ -250,6 +256,16 @@ int main(int argc, char **argv) {
     );
   const bool interaction =
       parser.isSet(QStringLiteral("interaction-benchmark"));
+  std::optional<Address> benchmarkFunction;
+  if (parser.isSet(QStringLiteral("interaction-benchmark-function"))) {
+    benchmarkFunction = parseAddress(
+        parser.value(QStringLiteral("interaction-benchmark-function")));
+    if (!interaction || !benchmarkFunction) {
+      qCritical("A benchmark function needs --interaction-benchmark and a "
+                "valid address");
+      return 2;
+    }
+  }
   bool automated = parser.isSet(QStringLiteral("startup-benchmark")) ||
                    parser.isSet(QStringLiteral("smoke-test")) || interaction;
 #ifdef NEVERD_GUI_TEST_PROBES
@@ -409,7 +425,7 @@ int main(int argc, char **argv) {
     }
     interactionMetrics = std::make_unique<InteractionMetrics>(
         window, session, parser.value(QStringLiteral("interaction-benchmark")),
-        timeout, &app);
+        timeout, &app, benchmarkFunction);
   }
   if (!greet && !asksFirst)
     window.showWorkbench();

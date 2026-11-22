@@ -35,7 +35,8 @@ class Session;
 class InteractionMetrics final : public QObject {
 public:
   InteractionMetrics(MainWindow &window, Session &session,
-                     const QString &output, int timeoutMs, QObject *parent);
+                     const QString &output, int timeoutMs, QObject *parent,
+                     std::optional<Address> function = std::nullopt);
 
 protected:
   bool eventFilter(QObject *object, QEvent *event) override;
@@ -59,7 +60,8 @@ private:
   Step jumpStep(const char *name,
                 std::optional<LinkResource> resource = std::nullopt);
   Step pseudocodeStep(const char *name);
-  void measurePseudocode(const char *name, Done done);
+  void measurePseudocode(const char *name, Done done,
+                         std::optional<qint64> actionStart);
   Step graphStep(const char *name);
   /// Call \p then at the backing-store flush after \p view next paints.
   void afterPaint(QWidget *view, Done then);
@@ -70,6 +72,7 @@ private:
   Session &session_;
   QString output_;
   int timeoutMs_;
+  std::optional<Address> function_;
   QElapsedTimer clock_;
   QVector<Address> samples_;
   QJsonObject phases_;
