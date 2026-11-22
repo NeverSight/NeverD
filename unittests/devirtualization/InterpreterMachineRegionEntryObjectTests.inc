@@ -24,6 +24,38 @@ entryObjectSource(const SpecializationResult &Result,
 }
 
 TEST_F(InterpreterMachineRegionSourceTest,
+       EntryLoadedObjectGuardReadsDeclaredPointerBeforeGuestEffects) {
+  // mov rax, qword ptr [0x51000028]; mov [rax+0x68], rdx; ret
+  auto Image = loadRegion(
+      {0x48, 0xa1, 0x28, 0, 0, 0x51, 0, 0, 0, 0, 0x48, 0x89, 0x50, 0x68, 0xc3});
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  auto Options = regionOptions(Entry + 14, ExitKind::Return);
+  Options.EntryFrameBounds = SpecializationEntryFrameBounds{-32, 8};
+  Options.EntryFrameBounds->ExcludedAddressRanges = {{0x51000000, 0x51000100}};
+  Options.EntryFrameLoadedObjects = {{0x51000028, 0, 0x80}};
+  Options.ProveStoreFrameSeparation = true;
+  const auto Result = specializeBinaryInterpreter(*Image, Entry, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  auto Wrapped = wrapInterpreterMachineRegionSourceX64(Result, Options);
+  ASSERT_TRUE(bool(Wrapped)) << llvm::toString(Wrapped.takeError());
+  const auto &Guard = Wrapped->Source.Function.Blocks.front();
+  EXPECT_TRUE(
+      std::any_of(Guard.Ops.begin(), Guard.Ops.end(), [](const LowOp &Op) {
+        return Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 &&
+               Op.Inputs[0].isConst() && Op.Inputs[0].Offset == 0x51000028;
+      }));
+  EXPECT_FALSE(
+      std::any_of(Guard.Ops.begin(), Guard.Ops.end(),
+                  [](const LowOp &Op) { return Op.Opcode == NdOp::STORE; }));
+  auto Changed = Options;
+  ++Changed.EntryFrameLoadedObjects[0].End;
+  auto Refused = wrapInterpreterMachineRegionSourceX64(Result, Changed);
+  EXPECT_FALSE(bool(Refused));
+  if (!Refused)
+    llvm::consumeError(Refused.takeError());
+}
+
+TEST_F(InterpreterMachineRegionSourceTest,
        EntryObjectsRejectBeforeGuestWritesAndQueries) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "entry object source execution requires clang";
