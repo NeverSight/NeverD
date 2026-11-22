@@ -705,7 +705,8 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
       continue;
     writeIR(*Module, Root / (Dwarf ? kExportDwarfIR : kExportIR));
     ASSERT_FALSE(HasFailure());
-    if (!std::getenv(kBackendExport))
+    const char *ExportMode = std::getenv(kBackendExport);
+    if (!ExportMode)
       continue;
     auto Copy = llvm::CloneModule(*Module);
     auto Object = Codegen().compile(*Copy, Arch::AArch64, BinaryFormat::MachO,
@@ -723,11 +724,14 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
         **Native, llvm::DWARFContext::ProcessDebugRelocations::Ignore);
     auto Frames = Debug->getEHFrame();
     ASSERT_TRUE(bool(Frames)) << llvm::toString(Frames.takeError());
-    for (const auto &Frame : (*Frames)->entries())
-      for (const auto &Instruction : Frame.cfis())
-        ASSERT_NE(Instruction.Opcode,
-                  llvm::dwarf::DW_CFA_AARCH64_negate_ra_state)
-            << kIncompatibleCFI;
+    // Standalone export goes straight to the platform linker. For publication
+    // NeverD checks the relocated rules against the actual signed prologue.
+    if (llvm::StringRef(ExportMode) != kPublishBackendExport)
+      for (const auto &Frame : (*Frames)->entries())
+        for (const auto &Instruction : Frame.cfis())
+          ASSERT_NE(Instruction.Opcode,
+                    llvm::dwarf::DW_CFA_AARCH64_negate_ra_state)
+              << kIncompatibleCFI;
     std::ofstream Output(Root / (Dwarf ? kBackendDwarfObject : kBackendObject),
                          std::ios::binary);
     Output.write(reinterpret_cast<const char *>(Object.ObjectData.data()),

@@ -59,6 +59,14 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
 AArch64RAQueryResult evaluateAArch64ReturnAddressState(
     Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
     const AArch64RAQueryLimits &Limits, bool &HasExplicitRule) {
+  return evaluateAArch64ReturnAddressState(Architecture, CIE, FDE, PC, Limits,
+                                           HasExplicitRule, nullptr);
+}
+
+AArch64RAQueryResult evaluateAArch64ReturnAddressState(
+    Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
+    const AArch64RAQueryLimits &Limits, bool &HasExplicitRule,
+    AArch64RASigningVisitor VisitSigning) {
   HasExplicitRule = false;
   using namespace aarch64;
   using Status = AArch64RAQueryStatus;
@@ -188,6 +196,8 @@ AArch64RAQueryResult evaluateAArch64ReturnAddressState(
           if (!State->SigningPC)
             return reject(Status::Malformed, kSigningPCOverflow);
         }
+        if (!IsInitial && VisitSigning)
+          VisitSigning(I, *State);
         break;
       }
       case CFIOpKind::Opaque:

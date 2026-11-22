@@ -35,7 +35,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/AsmParser/Parser.h"
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugFrame.h"
 #include "llvm/IR/Constants.h"
@@ -909,33 +908,6 @@ void checkNativeObjectInstallation(
   if (FreshPersonality)
     Dependencies.push_back(
         {kCxxLibrary, kCxxPersonality, SourcePatchDependencyKind::Function});
-  if (Generated) {
-    auto NativeObject = llvm::object::ObjectFile::createObjectFile(ObjectPath);
-    ASSERT_TRUE(bool(NativeObject)) << llvm::toString(NativeObject.takeError());
-    auto Debug = llvm::DWARFContext::create(
-        *NativeObject->getBinary(),
-        llvm::DWARFContext::ProcessDebugRelocations::Ignore);
-    auto Frames = Debug->getEHFrame();
-    ASSERT_TRUE(bool(Frames)) << llvm::toString(Frames.takeError());
-    const bool Incompatible = llvm::any_of((*Frames)->entries(), [](auto &F) {
-      return llvm::any_of(F.cfis(), [](const auto &Instruction) {
-        return Instruction.Opcode ==
-               llvm::dwarf::DW_CFA_AARCH64_negate_ra_state;
-      });
-    });
-    if (Incompatible) {
-      auto Candidate = Bytes;
-      auto Rejected = appendMachOObjectImage(Candidate, (*Object)->getBuffer(),
-                                             Dependencies);
-      ASSERT_FALSE(bool(Rejected));
-      EXPECT_TRUE(llvm::StringRef(llvm::toString(Rejected.takeError()))
-                      .contains(kClassicReturnCFIDiagnostic));
-      EXPECT_EQ(Candidate, Bytes);
-      // The native verifier rejects this skipped producer profile. Refusing
-      // incompatible bytes is required even on a newer forgiving unwinder.
-      GTEST_SKIP() << kMissingCompatibleIRProducer;
-    }
-  }
   if (!Executable && !RelocateOriginalLanguage && !Threaded &&
       llvm::StringRef(Optimization) == kO0) {
     uint64_t Tail = 0, TextEnd = 0;
@@ -1571,7 +1543,22 @@ void checkNativeObjectInstallation(
     return Entry.CodeRange.Begin == Image->SymbolAddrs.at(kObjectDispatch) &&
            Entry.SemanticStatus == CompactUnwindSemanticStatus::Complete;
   }));
-  const bool ObjectDwarfLanguage = DwarfLanguage;
+  bool ObjectDwarfLanguage = DwarfLanguage;
+  if (Generated && !DwarfLanguage) {
+    // The producer can choose DWARF for the catch and cleanup even without
+    // an explicit request. Read its object before inspecting the installation.
+    auto InputObject = llvm::object::ObjectFile::createObjectFile(ObjectPath);
+    ASSERT_TRUE(bool(InputObject)) << llvm::toString(InputObject.takeError());
+    auto Debug = llvm::DWARFContext::create(
+        *InputObject->getBinary(),
+        llvm::DWARFContext::ProcessDebugRelocations::Ignore);
+    auto Frames = Debug->getEHFrame();
+    ASSERT_TRUE(bool(Frames)) << llvm::toString(Frames.takeError());
+    ObjectDwarfLanguage = llvm::any_of((*Frames)->entries(), [](auto &Entry) {
+      const auto *FDE = llvm::dyn_cast<llvm::dwarf::FDE>(&Entry);
+      return FDE && FDE->getLSDAAddress().has_value();
+    });
+  }
   std::string DwarfInfo;
   if (ObjectDwarfLanguage) {
     const auto DwarfInfoPath = Path(kDwarfInfoFile);

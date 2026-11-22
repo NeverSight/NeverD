@@ -831,7 +831,11 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     for (const auto &Row : machOFramelessSpillRows(Compact))
       if (!emitFrameRow(Row, OS))
         return std::nullopt;
-  } else if (!Indexed)
+  } else if (Indexed) {
+    // MC must retain the source FDE even when all of its effective rules are
+    // inherited from the CIE. An escaped DW_CFA_nop keeps the DWARF index.
+    OS << kEscape << unsigned(llvm::dwarf::DW_CFA_nop) << '\n';
+  } else
     emitCompactFrame(Compact, OS);
   const uint8_t *Code = Source->Bytes.data();
   bool HasCall = false;
