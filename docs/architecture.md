@@ -6106,6 +6106,16 @@ platform's. Counted over those, a call never bound R11, Go's ninth: the move
 that set it was dead, and `runtime.concatstring4`, which takes a buffer and
 four strings, got eight arguments and an unknown value.
 
+Where a call takes its arguments from the setup its caller writes, with no
+summary to bind them (arm64), MedDCE keeps the setup of every register Go
+passes an integer argument in live for a direct call of code Go compiled
+(`usesGoRegisterArguments`), as it keeps the platform's for any call, until
+call recovery reads them. X9 to X15 carry Go's tenth to sixteenth argument
+and nothing AAPCS64 passes: `strconv.formatDigits` shifts its parameters into
+place for `fmtE` (`MOVD R10, R9; MOVD R11, R10`), both moves were deleted as
+dead, and the call passed what R9 and R10 held on entry, two other parameters
+of the caller, in place of the precision and the format.
+
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
 argument registers from the first variadic one through R9 into consecutive

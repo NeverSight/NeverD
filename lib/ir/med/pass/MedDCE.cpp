@@ -501,6 +501,16 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         for (const uint64_t Register : goIntegerArgumentRegisters(TargetArch))
           seedReachingDef(Blk, static_cast<int>(I) - 1, Register,
                           /*Argument=*/true);
+      // So does a direct call of code Go compiled where a call takes its
+      // arguments from the setup its caller writes, with no summary to bind
+      // them (arm64): X9 to X15 carry Go's tenth to sixteenth argument and
+      // nothing the platform passes.
+      if (Image && DirectCall && Convention &&
+          Convention->ArgumentsFromCallSetup &&
+          usesGoRegisterArguments(*Image, Call.Inputs[0].ConstVal))
+        for (const uint64_t Register : goIntegerArgumentRegisters(TargetArch))
+          seedReachingDef(Blk, static_cast<int>(I) - 1, Register,
+                          /*Argument=*/true);
       // Setup can dominate several branches before the call. Keeping only
       // its immediate predecessor silently deletes these implicit inputs
       // before ABI recovery has bound them. Reuse the per-register walk,

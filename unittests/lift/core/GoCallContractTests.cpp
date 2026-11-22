@@ -2639,6 +2639,60 @@ TEST(GoInternalABI, ACallPassesGosNinthRegister) {
   }
 }
 
+TEST(GoInternalABI, ACallKeepsTheSetupOfEveryGoRegister) {
+  // Where a call takes its arguments from the setup its caller writes, with
+  // no summary to bind them (arm64), the moves that set its argument
+  // registers stay live until call recovery reads them, and the registers
+  // kept were the platform's: X0 to X7.  Go passes sixteen integer
+  // arguments in registers there.  `strconv.formatDigits` shifts its own into
+  // place for `fmtE` (`mov x9, x10; mov x10, x11`): both moves were deleted
+  // as dead, and the call passed what X9 and X10 held on entry, two of the
+  // caller's other parameters.  The setup of a call of anything but code Go
+  // compiled is as dead as before.
+  constexpr va_t Callee = kTextVA + 0x100;
+  for (const bool GoCallee : {true, false}) {
+    SCOPED_TRACE(GoCallee);
+    GoTestImage T(Arch::AArch64);
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    if (GoCallee)
+      Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    const auto Register = [](uint64_t Offset, int Id, int Version) {
+      MedVar Value;
+      Value.Kind = MedVar::Reg;
+      Value.TheArch = Arch::AArch64;
+      Value.Id = Id;
+      Value.SSAVer = Version;
+      Value.Size = 8;
+      Value.RegOff = Offset;
+      return Value;
+    };
+    MedFunc Func;
+    Func.Entry = kTextVA + 0x200;
+    Func.Blocks.resize(1);
+    MedBlock &Block = Func.Blocks.front();
+    Block.Id = 0;
+    MedOp Move;
+    Move.Opcode = NdOp::COPY;
+    Move.Output = Register(a64reg::X9, 9, 1);
+    Move.addInput(Register(a64reg::X10, 10, 0));
+    Block.Ops.push_back(Move);
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.addInput(MedVar::makeConst(Callee, 8));
+    Block.Ops.push_back(Call);
+    LowToMedConverter Converter;
+    Converter.setBinaryImage(&T.Img);
+    Converter.runRegisterDce(Func, Arch::AArch64);
+    EXPECT_EQ(
+        llvm::any_of(Func.Blocks.front().Ops,
+                     [](const MedOp &Op) { return Op.Opcode == NdOp::COPY; }),
+        GoCallee);
+  }
+}
+
 TEST(GoInternalABI, AFuncValueSetBeforeTheCallsBlockIsStillOne) {
   // Go assembly passes a func value only what it sets in Go's registers.
   // `runtime.mcall` moves its fn into the context register at its entry and
