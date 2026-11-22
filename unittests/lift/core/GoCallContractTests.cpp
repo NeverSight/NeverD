@@ -2889,6 +2889,47 @@ TEST(GoInternalABI, AnArm64StackArgumentFollowsNoPlatformPosition) {
   EXPECT_NE(Passing.find("main_far(1, 7);"), std::string::npos) << Passing;
 }
 
+TEST(GoStackABI, AnArgumentNarrowerThanAWordIsStillOne) {
+  // A stack-ABI call passes no more words than its callee's record gives.
+  // The bytes were divided by the word size, so a record of four bytes, one
+  // int32, gave no word: `runtime.exit(code int32)`, assembly that reads its
+  // code from the stack, took it from every arm64 caller as an unknown
+  // value.
+  //   main.exit: ldrsw x0, [sp, #8]; ret
+  //   main.user: str x30, [sp, #-0x20]!; mov x0, #2; str w0, [sp, #8]
+  //              bl main.exit; ldr x30, [sp], #0x20; ret
+  constexpr va_t Exit = kTextVA + 0x100;
+  constexpr va_t User = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Exit, words({0xB9800BE0, 0xD65F03C0}));
+  const va_t At = User + 3 * 4;
+  T.writeText(User, words({0xF81E0FFE, 0xD2800040, 0xB9000BE0,
+                           0x94000000u | static_cast<uint32_t>(
+                                             ((Exit - At) / 4) & 0x03FFFFFFu),
+                           0xF84207FE, 0xD65F03C0}));
+  for (const auto &[Address, Name] :
+       {std::pair{Exit, "main.exit"}, std::pair{User, "main.user"}}) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Exit, Exit + 0x10}};
+  Module.FrameArguments = {{Exit, 4}, {User, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const std::string Calling = highCBody(R, T.Img, "main_user");
+  EXPECT_NE(Calling.find("main_exit(2);"), std::string::npos) << Calling;
+  EXPECT_EQ(Calling.find("__builtin_trap"), std::string::npos) << Calling;
+}
+
 TEST(GoAssemblyOperands, ARoutineThatResumesSavedStateTakesWhatItReads) {
   // `gogo<>` takes the gobuf in BX and the goroutine in DX, loads the stack
   // pointer, the closure context and the frame pointer from the gobuf, and

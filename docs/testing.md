@@ -20982,6 +20982,9 @@ method table passes the word it stored and nothing else, and reads no
 goroutine; one without that calls through a func value after loading RCX
 passes nothing; assembly without a check that calls through a pointer still
 passes what it set in RDI.
+`GoStackABI.AnArgumentNarrowerThanAWordIsStillOne` runs it over arm64
+assembly that reads an int32 from the stack, whose record gives four bytes,
+and a caller that stores 2 there: the call passes 2.
 `GoStackABI.ARegisterAStackRoutinePassesOnIsNoParameter` runs it over a
 stack-ABI routine that loads a word into RCX and calls through a table: the
 call passes three unknown values and that word, names none of the routine's

@@ -1867,9 +1867,11 @@ void recoverCallAbi(
         CalleeRegArgs = 0;
         // The callee's own recovery counts the arguments it reads; the rest
         // of the words its record gives are its results.
+        // A record of four bytes, one int32, is one word of arguments.
         if (GoFrameBytes) {
           const int FrameWords =
-              static_cast<int>(*GoFrameBytes / IntegerLayout.SlotBytes);
+              static_cast<int>((*GoFrameBytes + IntegerLayout.SlotBytes - 1) /
+                               IntegerLayout.SlotBytes);
           CalleeArgs =
               CalleeArgs >= 0 ? std::min(CalleeArgs, FrameWords) : FrameWords;
         }

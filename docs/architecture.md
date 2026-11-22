@@ -6398,7 +6398,10 @@ The loader proves the stack ABI before anything relies on it
 prologues decide: Go 1.16 and earlier load g from thread-local storage
 (`mov rcx, fs:[-8]`), and no Go 1.17 prologue's `cmp rsp, [r14+0x10]` may
 appear. It also keeps each function's `_func.args`, the bytes of its arguments
-and results (`GoModuleInfo::FrameArguments`).
+and results (`GoModuleInfo::FrameArguments`). A call passes no more words than
+those bytes round up to: `runtime.exit(code int32)` records four, one word.
+Divided down, the record gave none, and every arm64 caller of that assembly,
+which reads its code from the stack, passed an unknown value.
 
 `detectCc` gives such a function no register parameter and numbers its stack
 parameters from the slot past its return address (`MedFunc::
