@@ -288,6 +288,26 @@ TEST_P(LinuxPoll, ZeroCountDeadlinesAndMillisAdapterDoNotNeedGKI) {
   EXPECT_FALSE(call(ServiceKind::Poll, 0, 0, uint32_t(-1)));
   EXPECT_NE(Report.Diagnostic.find("readiness schedule"), std::string::npos);
 }
+TEST_P(LinuxPoll, MissingReadObservationReportsAcceptedBytesAcrossAliases) {
+  auto &C = Options.LinuxNetwork->Connections.front();
+  C.Receive.clear();
+  C.ReceiveEOF = false;
+  C.MaxSend = 2;
+  ASSERT_EQ(socket(), 3u);
+  ASSERT_EQ(call(ServiceKind::Dup, 3), 4u);
+  require(cpu().write(Base + 128, C.ExpectedSend));
+  ASSERT_EQ(call(ServiceKind::SendTo, 4, Base + 128, C.ExpectedSend.size()),
+            2u);
+
+  entry(0, 3, 1);
+  EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 1));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, read readiness), "
+                               "sent bytes 2");
+  EXPECT_EQ(events(0), 0xa5a5u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 0u);
+}
+
 TEST_P(LinuxPoll, UnknownReadinessAndClosedDescriptorsNeverBecomeTimeouts) {
   auto &C = Options.LinuxNetwork->Connections[0];
   C.Receive.clear();
