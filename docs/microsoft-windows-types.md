@@ -291,10 +291,13 @@ exporting image's SHA-256 for the target, the public Win32Metadata release
 and the selected export names and ordinals. The SDK generator reads executable
 ordinal members from the target's Microsoft import archive and checks the
 original compiler's exact linker spelling and ABI against the published declaration.
+The x86 MAPI profile also checks the decorated export spelling. For example,
+the SDK calls `GetTnefStreamCodepage@12` at ordinal 153. The same DLL
+exports the undecorated name separately at ordinal 154.
 An import retains its module, ordinal and IAT address. An unrecognized
 target or module/ordinal pair displays its numeric name. Run
 `check_windows_provider_calls.py --sdk-ordinal` with the generated catalog
-and package cache to recompile the Cabinet, PrintTicket and XInput callers
+and package cache to recompile the Cabinet, PrintTicket, XInput and MAPI callers
 and compare the ordinal imports of the original and regenerated DLLs.
 
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with

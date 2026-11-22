@@ -22,8 +22,15 @@ def profiles():
 
 def witness(profile, architecture):
     target = profile["targets"][architecture]
-    return {"module": profile["module"], "image_sha256": target["image_sha256"],
-            "exports": {**profile["exports"], **target["additional_exports"]}}
+    exports = {**profile["exports"], **target["additional_exports"]}
+    result = {"module": profile["module"], "image_sha256": target["image_sha256"], "exports": exports}
+    if decorated := target.get("pe_export_names"):
+        if architecture != "x86" or any(name not in exports or
+                not re.fullmatch(re.escape(name) + r"@[0-9]+", spelling)
+                for name, spelling in decorated.items()):
+            raise ValueError("invalid x86 decorated PE export witness")
+        result["pe_export_names"] = decorated
+    return result
 
 
 def members(archive):
@@ -46,7 +53,7 @@ def members(archive):
         yield archive[start:end]
 
 
-def symbols(path, architecture, module, exports):
+def symbols(path, architecture, module, exports, pe_names=None):
     """Keep the linker spellings that reach a witnessed code ordinal on this target."""
     by_ordinal = {ordinal: name for name, ordinal in exports.items()}
     if not by_ordinal or len(by_ordinal) != len(exports) or any(
@@ -71,8 +78,13 @@ def symbols(path, architecture, module, exports):
         fields = strings.split(b"\0")
         if len(fields) != 3 or fields[-1] or not fields[0] or not fields[1]:
             raise ValueError("invalid ordinal import symbol or DLL name")
-        if fields[1].lower() == expected_module:
-            result.setdefault(by_ordinal[ordinal], set()).add(fields[0].decode("ascii"))
+        if fields[1].lower() != expected_module:
+            continue
+        name = by_ordinal[ordinal]
+        linker = fields[0].decode("ascii")
+        if pe_names and name in pe_names and linker != "_" + pe_names[name]:
+            continue
+        result.setdefault(name, set()).add(linker)
     if missing := exports.keys() - result.keys():
         raise ValueError(f"{module} lacks witnessed SDK code ordinals for " + ", ".join(sorted(missing)))
     return result

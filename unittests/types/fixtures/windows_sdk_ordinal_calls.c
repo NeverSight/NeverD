@@ -12,6 +12,7 @@
 // clang-format off
 #include <windows.h>
 #include <compressapi.h>
+#include <mapi.h>
 #include <prntvpt.h>
 #include <xinput.h>
 // clang-format on
@@ -34,4 +35,8 @@ UsePrintTicketHandle(HPTPROVIDER Provider) {
 __declspec(dllexport) DWORD __cdecl UseControllerState(DWORD Index,
                                                        XINPUT_STATE *State) {
   return XInputGetState(Index, State);
+}
+
+__declspec(dllexport) ULONG __cdecl UseFreeMessageBuffer(void *Buffer) {
+  return MAPIFreeBuffer(Buffer);
 }

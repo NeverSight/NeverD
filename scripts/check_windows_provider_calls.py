@@ -30,8 +30,9 @@ FLAT_FIXTURE = FIXTURE.with_name("windows_sdk_import_calls.c")
 SYSTEM_FIXTURE = FIXTURE.with_name("windows_sdk_system_calls.c")
 ORDINAL_FIXTURE = FIXTURE.with_name("windows_sdk_ordinal_calls.c")
 ORDINAL_FUNCTIONS = {"UseCloseCompressor": "CloseCompressor", "UseCloseDecompressor": "CloseDecompressor",
-                     "UsePrintTicketHandle": "PTCloseProvider", "UseControllerState": "XInputGetState"}
-ORDINAL_PROVIDERS = ("CabinetCompression", "PrintTicket", "XInput")
+                     "UsePrintTicketHandle": "PTCloseProvider", "UseControllerState": "XInputGetState",
+                     "UseFreeMessageBuffer": "MAPIFreeBuffer"}
+ORDINAL_PROVIDERS = ("CabinetCompression", "PrintTicket", "XInput", "MAPIUtilities")
 FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombineEx",
              "UseRuntimeString": "WindowsCreateString", "UseGraphicsDevice": "D3DKMTCreateDevice",
              "UseLogFile": "CreateLogFile", "UseTpmContext": "Tbsi_Context_Create",
@@ -321,7 +322,7 @@ def main() -> None:
     profile.add_argument("--sdk-system", action="store_true",
                          help="check ICMP, transaction, sensor, SNMP and WebAuthn import callers")
     profile.add_argument("--sdk-ordinal", action="store_true",
-                         help="check callers linked by ordinal to Cabinet, PrintTicket and XInput")
+                         help="check callers linked by ordinal to Cabinet, PrintTicket, XInput and MAPI")
     parser.add_argument("--architecture", choices=("x86", "x64", "arm64"), action="append")
     parser.add_argument("--timeout", type=int, default=wdk.LIMITS["command_timeout"])
     args = parser.parse_args()

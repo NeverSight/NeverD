@@ -131,7 +131,7 @@ def read_symbols(inputs, directory, run):
         if inputs["module"] != witnessed["module"]:
             raise ValueError("SDK ordinal witness belongs to a different DLL")
         return ordinal.symbols(Path(inputs["file"]), inputs["architecture"],
-                               inputs["module"], witnessed["exports"])
+                               inputs["module"], witnessed["exports"], witnessed.get("pe_export_names"))
     text = run(inputs["command"], directory / (inputs["module"] + "-imports.log"))
     symbols = ucrt.module_import_symbols(text, inputs["architecture"], inputs["module"])
     if not symbols:

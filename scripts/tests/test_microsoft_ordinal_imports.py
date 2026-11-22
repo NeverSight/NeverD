@@ -39,6 +39,18 @@ class MicrosoftOrdinalImportsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "ambiguous witnessed export ordinal"):
                 ordinal.symbols(path, "x86", "example.dll", {"One": 8, "Two": 8})
 
+    def test_decorated_x86_export_requires_the_same_archive_linker_spelling(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "mapi.lib"
+            path.write_bytes(b"!<arch>\n" + member(short_import(b"_GetTnefStreamCodepage@12", b"mapi32.dll", 153)) +
+                             member(short_import(b"_GetTnefStreamCodepage", b"mapi32.dll", 154)))
+            name = "GetTnefStreamCodepage"
+            pe_names = {name: name + "@12"}
+            self.assertEqual(ordinal.symbols(path, "x86", "mapi32.dll", {name: 153}, pe_names),
+                             {name: {"_" + pe_names[name]}})
+            with self.assertRaisesRegex(ValueError, "lacks witnessed SDK code ordinals"):
+                ordinal.symbols(path, "x86", "mapi32.dll", {name: 154}, pe_names)
+
     def test_truncated_payload_and_invalid_import_strings_are_rejected(self):
         valid = short_import(b"Api", b"example.dll", 1)
         archive = b"!<arch>\n" + member(valid)
