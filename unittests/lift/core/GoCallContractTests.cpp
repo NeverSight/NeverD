@@ -2232,8 +2232,9 @@ namespace {
 ///           mov rdi, [rsp]; mov rax, [rsp+0x10]; jmp 1b
 ///   runtime.gcWriteBarrier2: mov r11d, 16; jmp gcWriteBarrier
 ///   main.h: push rbp; mov rbp, rsp; call [rdx]; pop rbp; ret
-/// \p CallsRecovered adds main.h, whose call through a func value makes the
-/// image one whose calls recovery binds, as every Go image's are.
+/// \p CallsRecovered adds main.h, which calls through a func value, as most
+/// Go images do; recovery binds the calls of the image without it too, as
+/// those of every run with a call of Go code.
 /// \p FlushRecorded gives main.flush the pclntab record that says it takes
 /// no stack argument.  \p FlushTakesStackWord makes it Go assembly that
 /// takes a word on the stack instead (`mov rax, [rsp+8]; ret`), which the
@@ -2360,29 +2361,20 @@ TEST(GoWriteBarriers, TheSharedBodyTakesAndReturnsItsBufferRegister) {
   // parameters, each numbered barrier passed it six unknown values, and the
   // body returned an RAX it never set.  The saves and reloads are no source
   // statements where the flush is known to take no word on the stack: call
-  // recovery bound its arguments, or its pclntab record gives it none.  A
-  // flush nothing says that of may take a save as its argument, so there the
-  // saves and reloads stay.
-  for (const bool Recovered : {true, false})
+  // recovery binds its arguments, in an image with a call through a func
+  // value or without one, whether or not its pclntab record gives it none.
+  for (const bool Indirect : {true, false})
     for (const bool Recorded : {true, false}) {
       SCOPED_TRACE(testing::Message()
-                   << "recovered=" << Recovered << " recorded=" << Recorded);
-      const GoBufferBarrierC C = liftGoBufferBarrier(Recovered, Recorded);
+                   << "indirect=" << Indirect << " recorded=" << Recorded);
+      const GoBufferBarrierC C = liftGoBufferBarrier(Indirect, Recorded);
       EXPECT_EQ(C.BodyParameters, std::vector<uint64_t>{x86reg::R11});
       EXPECT_EQ(C.BodyReadsOfBufferRegister, 8u);
       EXPECT_NE(C.Body.find("+ (uint64_t)arg0"), std::string::npos) << C.Body;
       EXPECT_NE(C.Body.find("%%r14"), std::string::npos) << C.Body;
-      if (Recovered || Recorded) {
-        EXPECT_EQ(C.Body.find("__builtin_trap"), std::string::npos) << C.Body;
-        EXPECT_EQ(C.Body.find("var_"), std::string::npos) << C.Body;
-      } else {
-        EXPECT_NE(C.Body.find("var_m18 = "), std::string::npos) << C.Body;
-        EXPECT_NE(C.Body.find("= var_m18;"), std::string::npos) << C.Body;
-        EXPECT_NE(C.Body.find("var_m8 = "), std::string::npos) << C.Body;
-        EXPECT_NE(C.Body.find("= var_m8;"), std::string::npos) << C.Body;
-      }
-      if (Recovered)
-        EXPECT_EQ(C.Body.find("_known"), std::string::npos) << C.Body;
+      EXPECT_EQ(C.Body.find("__builtin_trap"), std::string::npos) << C.Body;
+      EXPECT_EQ(C.Body.find("var_"), std::string::npos) << C.Body;
+      EXPECT_EQ(C.Body.find("_known"), std::string::npos) << C.Body;
       EXPECT_NE(C.Entry.find("return gcWriteBarrier(0x10);"), std::string::npos)
           << C.Entry;
     }
@@ -2538,6 +2530,59 @@ TEST(GoWriteBarriers, AStackArgumentIsNoKeptRegister) {
   EXPECT_NE(C.Body.find("= var_m18;"), std::string::npos) << C.Body;
   EXPECT_NE(C.Body.find("main_flush(("), std::string::npos) << C.Body;
   EXPECT_EQ(C.Body.find("var_m8"), std::string::npos) << C.Body;
+}
+
+TEST(GoInternalABI, ARunWithoutIndirectCallsRecoversItsGoCalls) {
+  // A call of Go code passes its arguments in Go's registers, which call
+  // recovery reads in the callee's order.  HighIR's own collection numbers a
+  // platform's registers, System V's six: a run with no indirect call and no
+  // stack-ABI callee skipped recovery, as the run of one function a user
+  // opens can, and a call that sets seven registers passed six and an unknown
+  // value.
+  //   main.seven: add rax, rbx; add rax, rcx; add rax, rdi; add rax, rsi
+  //               add rax, r8; add rax, r9; ret
+  //   main.user: mov eax, 1; mov ebx, 2; mov ecx, 3; mov edi, 4; mov esi, 5
+  //              mov r8d, 6; mov r9d, 7; call main.seven; ret
+  constexpr va_t Seven = kTextVA + 0x100;
+  constexpr va_t User = kTextVA + 0x180;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    GoTestImage T(Arch::X64);
+    T.Img.Format = Format;
+    T.writeText(Seven,
+                {0x48, 0x01, 0xD8, 0x48, 0x01, 0xC8, 0x48, 0x01, 0xF8, 0x48,
+                 0x01, 0xF0, 0x4C, 0x01, 0xC0, 0x4C, 0x01, 0xC8, 0xC3});
+    std::vector<uint8_t> Body = {0xB8, 0x01, 0x00, 0x00, 0x00, 0xBB, 0x02, 0x00,
+                                 0x00, 0x00, 0xB9, 0x03, 0x00, 0x00, 0x00, 0xBF,
+                                 0x04, 0x00, 0x00, 0x00, 0xBE, 0x05, 0x00, 0x00,
+                                 0x00, 0x41, 0xB8, 0x06, 0x00, 0x00, 0x00, 0x41,
+                                 0xB9, 0x07, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call = makeCall(User + Body.size(), Seven);
+    Body.insert(Body.end(), Call.begin(), Call.end());
+    Body.push_back(0xC3);
+    T.writeText(User, Body);
+    for (const auto &[Address, Name] :
+         {std::pair{Seven, "main.seven"}, std::pair{User, "main.user"}}) {
+      Symbol Function = Symbol::makeFunc(Address);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.FrameArguments = {{Seven, 56}, {User, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::string Calling = highCBody(R, T.Img, "main_user");
+    EXPECT_NE(Calling.find("main_seven(1, 2, 3, 4, 5, 6, 7);"),
+              std::string::npos)
+        << Calling;
+  }
 }
 
 TEST(GoInternalABI, AFuncValueSetBeforeTheCallsBlockIsStillOne) {

@@ -6091,6 +6091,14 @@ it nor to any call in its callee's own order. Read with them on Windows, a
 local stored above the shadow space proved every register an argument, and
 each hasher took nine.
 
+Call recovery gives a call of Go code its arguments in the callee's order;
+HighIR's own collection numbers a platform's registers and takes at most that
+many, System V's six of Go's nine. A HighIR run recovers its calls where one
+of them is a direct call of Go code, as it does where the run has an indirect
+call or the convention takes arguments from the call's setup. A run of one
+function with neither, as a user opens one, skipped recovery, and a call that
+set seven registers passed six and an unknown value.
+
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
 argument registers from the first variadic one through R9 into consecutive

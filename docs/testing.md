@@ -20905,6 +20905,9 @@ over assembly shaped as `runtime.mcall`, which moves its func value into RDX
 at its entry and calls through it after a branch, and a caller: the routine
 takes RAX and RBX alone, its call passes the 5 it set, and the caller passes
 two arguments with no unknown value.
+`GoInternalABI.ARunWithoutIndirectCallsRecoversItsGoCalls` runs the pipeline,
+as ELF and as PE, over a Go function that sets seven registers and calls
+another, in an image with no indirect call: the call passes all seven.
 `GoScheduleCalls.AreFoundByName` loads a pclntab that names `runtime.mcall`:
 the module records its entry and a call of it resumes, where one of
 `runtime.mcallx` or of any other function does not.
@@ -20994,12 +20997,11 @@ the barrier's parameters are its two registers.
 `GoWriteBarriers.TheSharedBodyTakesAndReturnsItsBufferRegister` runs the
 pipeline over Go 1.21's shared barrier body, a numbered barrier that jumps to
 it and the flush its slow path calls, with and without a func value call
-elsewhere, which makes call recovery run, and with and without a pclntab
-record for the flush: the body's one parameter is R11, its summary reads R11,
-its C reads R14 and the byte count, and the numbered barrier returns
-`gcWriteBarrier(0x10)`. Where recovery ran or the record gives the flush no
-argument word the body traps nowhere and names no frame word; where neither
-says what the flush takes, the saves and reloads stay.
+elsewhere and with and without a pclntab record for the flush: the body's one
+parameter is R11, its summary reads R11, its C reads R14 and the byte count,
+and the numbered barrier returns `gcWriteBarrier(0x10)`. Call recovery binds
+the flush's arguments in each, so the body traps nowhere and names no frame
+word.
 `GoWriteBarriers.AStackArgumentIsNoKeptRegister` makes the flush Go assembly
 that takes a word on the stack: the body's store at `[rsp]` and its reload
 stay and the call passes the word, while the save at `[rsp+0x10]` still goes.
