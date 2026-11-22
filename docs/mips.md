@@ -1594,9 +1594,23 @@ at physical address `0x1fc00000`. A bound MMU snapshot checks guest
 instruction fetches against physical bytes. Aligned and byte scalar integer
 transfers translate through a complete 64-entry R3000A or 48-entry R4000
 table. R4000 compatibility translations support even and odd pages, global
-pairs and variable page sizes. Misses, invalid entries, and writes to clean
-pages update the fault state before retirement. Optional Context and XContext
-samples preserve the board's page-table base. Extended R4000 address regions,
+pairs and variable page sizes. On a miss to a sign-extended 32-bit address,
+the R4000 selects the refill vector from the interrupted mode's UX, SX or KX
+bit. Extended addressing adds `0x80` to the refill vector. A miss with EXL
+already set uses the general vector and preserves EPC. Invalid entries and
+writes to clean pages also use the general vector. The big- and little-endian
+system tests stamp the vector actually entered in the guest ROM.
+[R4000 manual, chapters 4 and 5](https://www.cs.columbia.edu/~youngjin/download/MIPSR4000.pdf#page=152),
+[RM5200 manual, comparison with R4000 refill selection](https://erikarn.github.io/mips/cpu/rm5200um_v3.2.pdf).
+
+Optional Context and XContext samples preserve the board's page-table base.
+R4000PC/SC revisions 2.2 and 3.0 also have a documented load-interlock
+case at a page boundary that selects the general vector after an instruction
+cache miss. Replaying that silicon erratum requires the pipeline and cache
+state. The manufacturer's report gives no write-to-first-translation interval.
+[R4000PC/SC revision errata, item 11](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=3).
+
+Extended R4000 address regions,
 TLB management instructions, reverse-endian user data, cache-isolation data
 accesses and CW4011 MMU
 behavior need additional processor-specific evidence.
@@ -1619,6 +1633,16 @@ edge against the instruction clock.
 [DECstation R3000A console](https://mail-index.netbsd.org/port-pmax/2011/04/21/msg000100.html),
 [SGI IP12 console](https://mail-index.netbsd.org/port-sgimips/2018/08/26/msg000766.html),
 [SGI IP20 R4000 console](https://mail-index.netbsd.org/netbsd-bugs/2018/08/13/msg058468.html).
+
+DEC measured interrupts on a DECstation 5000/200 running ULTRIX 4.2A. A
+TURBOchannel option recorded its interrupt assertion on a 25 MHz clock. In
+one refresh-synchronized run, 35% of 21,342 samples reached the device
+handler's timer read in 283 cycles (11.32 µs). In a separate run the option
+timestamped a write from a probe just after exception entry. Figure 9 places
+most of those writes within 20 cycles of assertion. That interval includes
+board delivery, exception entry, and the probe write. The experiment does
+not resolve the instruction at which the CPU recognized the input.
+[DEC PRL Research Report 19, sections 3.1–3.2, figures 6 and 9](https://ftpmirror.your.org/pub/misc/bitsavers/pdf/dec/tech_reports/PRL-RR-19.pdf#page=16).
 
 On a little-endian Sony SCPH-5501 (PRId 2, US ROM 3.0), the
 `irqsio` memory-card reports give the instruction count between enabling

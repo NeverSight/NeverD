@@ -32,7 +32,7 @@ def mfc0(rt, rd):
     return 0x40000000 | rt << 16 | rd << 11
 
 
-def boot_rom(order, prefix, instructions, return_offset, vector=0x380):
+def boot_rom(order, prefix, instructions, return_offset, *, reset=False):
     rom = bytearray(4096)
 
     def place(offset, words):
@@ -50,13 +50,21 @@ def boot_rom(order, prefix, instructions, return_offset, vector=0x380):
             place(return_offset, [12])  # SYSCALL at an aligned destination.
         epc = BOOT + return_offset
 
+    # Each possible entry stamps its own offset in the branch delay slot.
+    # Installing just the expected handler lets an earlier vector run through
+    # zero-filled ROM and impersonate the expected one.
+    reader = 0x500
+    for vector in ((0, 0x200, 0x280, 0x380) if reset else (0x200, 0x280, 0x380)):
+        place(vector, [immediate(4, 0, 0, (reader - vector - 4) // 4),
+                       immediate(13, 0, 27, vector)])
     handler = [immediate(15, 0, 26, 0xA000), immediate(13, 26, 26, 0x1000)]
     for index, register in enumerate((12, 13, 14, 8)):
         handler += [mfc0(8, register), *[0] * 4,
                     immediate(43, 26, 8, index * 4)]
-    handler += [immediate(13, 0, 8, READY), immediate(43, 26, 8, 16),
+    handler += [immediate(43, 26, 27, 16),
+                immediate(13, 0, 8, READY), immediate(43, 26, 8, 20),
                 0x1000FFFF, 0]
-    place(vector, handler)
+    place(reader, handler)
     return rom, epc
 
 
@@ -101,13 +109,13 @@ def run_machine(executable, rom):
                         qmp(stream, 'qmp_capabilities')
                         qmp(stream, 'cont')
                         while time.monotonic() < deadline:
-                            if read_words(stream, 0x1010, 1) == [READY]:
+                            if read_words(stream, 0x1014, 1) == [READY]:
                                 # A monitor dump reads words sequentially while
                                 # the guest runs. Observe completion first, then
                                 # freeze the VM before reading CP0's saved words.
                                 qmp(stream, 'stop')
-                                words = read_words(stream, 0x1000, 5)
-                                if len(words) != 5 or words[-1] != READY:
+                                words = read_words(stream, 0x1000, 6)
+                                if len(words) != 6 or words[-1] != READY:
                                     raise RuntimeError(f'incomplete register dump: {words}')
                                 return words[:-1]
                             time.sleep(0.01)
@@ -127,11 +135,12 @@ def qualify(executable, order):
 
     def check(name, prefix, instructions, code, *, slot=False, address=None,
               coprocessor=None, pending=0, return_offset=None, vector=0x380):
-        rom, expected_epc = boot_rom(order, prefix, instructions, return_offset, vector)
-        status, cause, epc, bad = run_machine(executable, rom)
-        row = dict(order=order, scenario=name, handler=BOOT + vector, status=status, cause=cause,
+        rom, expected_epc = boot_rom(order, prefix, instructions, return_offset)
+        status, cause, epc, bad, observed = run_machine(executable, rom)
+        row = dict(order=order, scenario=name, handler=BOOT + observed, status=status, cause=cause,
                    epc=epc, badvaddr=bad, expected_epc=expected_epc,
                    rom_sha256=hashlib.sha256(rom).hexdigest())
+        assert observed == vector, row
         assert status & (BEV | 6) == BEV | 2, row
         assert (cause >> 2) & 31 == code and bool(cause >> 31) == slot, row
         assert epc == expected_epc and cause & 0x300 == pending, row
@@ -141,8 +150,9 @@ def qualify(executable, order):
 
     # Placing the same register reader at the reset vector observes Status
     # before any guest MTC0, and proves the first ROM fetch in QEMU.
-    reset_rom, _ = boot_rom(order, [], [], None, vector=0)
-    reset_status, _, _, _ = run_machine(executable, reset_rom)
+    reset_rom, _ = boot_rom(order, [], [], None, reset=True)
+    reset_status, _, _, _, observed = run_machine(executable, reset_rom)
+    assert observed == 0, hex(observed)
     assert reset_status & (BEV | (3 << 20) | 4) == BEV | 4, hex(reset_status)
     rows.append(dict(order=order, scenario='cold-reset', pc=BOOT, status=reset_status))
 
@@ -163,6 +173,13 @@ def qualify(executable, order):
         indexed = [mtc0(0, 0), *[0] * 6, 0x42000002, *[0] * 6]
         check('invalid-' + name, tlb + indexed, [immediate(major, 10, 2, 0)],
               code, address=va)
+    # Kernel references to low addresses where R4000 and QEMU agree on the
+    # vector. Split KX/UX settings are covered by the native regression.
+    for mode, vector in ((0x40, 0x200), (0xa0, 0x280)):
+        prefix = [immediate(15, 0, 8, 0x40), immediate(13, 8, 8, mode),
+                  mtc0(8, 12), *[0] * 6]
+        check(f'refill-kernel-status-{mode:x}', tlb + prefix,
+              [immediate(35, 10, 2, 0)], 2, address=va, vector=vector)
     clean = [immediate(13, 0, 8, 2), mtc0(8, 2), *indexed]
     check('clean-store', tlb + clean, [immediate(43, 10, 2, 0)], 1, address=va)
 

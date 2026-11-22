@@ -14,7 +14,14 @@ constexpr uint32_t StatusIE = 1, StatusEXL = 2, StatusERL = 4;
 constexpr uint32_t StatusIM = 0xff00, StatusBEV = 1u << 22;
 constexpr uint32_t StatusCU = 0xf0000000u, CauseBD = 1u << 31;
 constexpr uint32_t SoftwareIP = 0x300u;
-constexpr uint32_t StatusKSU = 0x18, StatusUX = 0x20, StatusSX = 0x40;
+constexpr uint32_t StatusKSU = 0x18, StatusUX = 0x20, StatusSX = 0x40,
+                   StatusKX = 0x80;
+
+uint32_t r4000AddressModeBit(uint32_t Status) {
+  if ((Status & (StatusEXL | StatusERL)) || !(Status & StatusKSU))
+    return StatusKX;
+  return (Status & StatusKSU) == 8 ? StatusSX : StatusUX;
+}
 
 constexpr uint16_t R30xxIM = 0xff, R30xxIE = 0x100;
 uint16_t r30xxInterruptFields(uint32_t Status, uint32_t Cause) {
@@ -80,9 +87,8 @@ bool HistoricalCP0::canUseCP0() const {
 bool HistoricalCP0::permitsDoublewordGPRs() const {
   if (Processor != HistoricalProcessor::R4000)
     return false;
-  if ((Status & (StatusEXL | StatusERL)) || !(Status & StatusKSU))
-    return true;
-  return Status & ((Status & StatusKSU) == 8 ? StatusSX : StatusUX);
+  const auto Mode = r4000AddressModeBit(Status);
+  return Mode == StatusKX || (Status & Mode);
 }
 
 std::optional<uint64_t> HistoricalCP0::read(unsigned Register,
@@ -382,6 +388,10 @@ bool HistoricalCP0::commitException(uint8_t Code, uint64_t PC,
   if (FaultAddress || usesModeStack())
     BadVAddr = FaultAddress;
   const bool BEV = Status & StatusBEV;
+  // R4000 selects TLB/XTLB using the mode before the exception sets EXL.
+  const bool ExtendedRefill = Refill &&
+                              Processor == HistoricalProcessor::R4000 &&
+                              (Status & r4000AddressModeBit(Status));
   if (usesModeStack()) {
     Status = (Status & ~0x3fu) | ((Status << 2) & 0x3fu);
     restoreR30xxInterruptEnable();
@@ -389,7 +399,7 @@ bool HistoricalCP0::commitException(uint8_t Code, uint64_t PC,
     Status |= StatusEXL;
   const auto Base = BEV ? 0xbfc00000u : 0x80000000u;
   const auto Offset = (BEV ? (usesModeStack() ? 0x100u : 0x200u) : 0u) +
-                      (Refill            ? 0u
+                      (Refill            ? (ExtendedRefill ? 0x80u : 0u)
                        : usesModeStack() ? 0x80u
                                          : 0x180u);
   const auto Vector = Base + Offset;
