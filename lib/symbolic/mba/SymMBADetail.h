@@ -644,6 +644,8 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 
 /// Truncate products of repeated affine offsets on the same arbitrary word
 /// modulo the observed width. The caller has established a mixed product.
+bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
+                       unsigned Bits);
 SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
                             WorkBudget &Budget, size_t &Storage,
                             bool *EmittedReading);

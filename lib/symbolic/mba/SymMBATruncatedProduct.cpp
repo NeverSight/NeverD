@@ -23,6 +23,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 namespace neverd::symbolic::detail {
@@ -710,19 +711,27 @@ void multiplyProjectedFactors(
 // If two perturbations cannot survive the outer scale, the coefficient of
 // each word is its weight times all the other offsets. Prefix and suffix
 // products avoid division, including when an offset is even or zero.
+template <typename Coefficient>
 SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
                           SymRef Outer, unsigned Precision, unsigned Shift,
                           WorkBudget &Budget, size_t &Storage) {
   const unsigned Bits = Precision - Shift;
-  assert(Bits && Bits <= 64 && Shift >= Bits);
+  constexpr bool Native = std::is_same_v<Coefficient, uint64_t>;
+  assert(Bits && Shift >= Bits && Native == (Bits <= 64));
+  const size_t Limbs = llvm::APInt::getNumWords(Bits);
   const size_t Words = llvm::APInt::getNumWords(Precision);
-  const size_t PerRow =
-      sizeof(uint64_t) + 4 * sizeof(std::pair<uint32_t, uint64_t>);
+  const size_t PerRow = sizeof(Coefficient) +
+                        4 * sizeof(std::pair<uint32_t, Coefficient>) +
+                        (Native ? 0 : 5 * Limbs * sizeof(uint64_t));
   const unsigned Width = Ctx.width(Outer);
   const size_t WideWords = llvm::APInt::getNumWords(Width);
-  const size_t FixedBytes = (4 * WideWords + 6 * Words) * sizeof(uint64_t);
+  const size_t FixedBytes =
+      (4 * WideWords + 6 * Words + (Native ? 0 : 4 * Limbs)) * sizeof(uint64_t);
   const size_t FixedWork = 4 * WideWords + Words * Words;
-  const size_t Work = 9 + 2 * Words + Words * Words;
+  // Each coefficient needs three low products. The native case includes
+  // those operations in its scalar cost.
+  const size_t Work = 9 + 2 * Words + Words * Words +
+                      (Native ? 0 : 3 * (Limbs * (Limbs + 1) / 2 - 1));
   if (FixedBytes > Storage || Rows.size() > (Storage - FixedBytes) / PerRow ||
       !Budget.canConsume(FixedWork) ||
       Rows.size() > (Budget.available() - FixedWork) / Work)
@@ -742,37 +751,58 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   auto Literal = [&](SymRef V) {
     return llvm::APInt(Precision, Ctx.constWords(V).take_front(Words));
   };
-  llvm::SmallVector<uint64_t, 16> Prefix;
+  auto Low = [&](const uint64_t *Digits) -> Coefficient {
+    if constexpr (Native)
+      return *Digits;
+    else
+      return llvm::APInt(Bits, llvm::ArrayRef(Digits, Limbs));
+  };
+  auto Value = [&](const Coefficient &C) -> llvm::APInt {
+    if constexpr (Native)
+      return llvm::APInt(Bits, C);
+    else
+      return C;
+  };
+  auto LiveWeight = [&](SymRef V) -> Coefficient {
+    auto Full = Literal(V);
+    if constexpr (Native)
+      return Full.extractBitsAsZExtValue(Bits, Shift);
+    else
+      return Full.extractBits(Bits, Shift);
+  };
+  llvm::SmallVector<Coefficient, 16> Prefix;
   Prefix.reserve(Rows.size());
   llvm::APInt Product(Precision, 1);
   for (const auto &F : Rows) {
-    Prefix.push_back(Product.getRawData()[0]);
+    Prefix.push_back(Low(Product.getRawData()));
     Product *= Literal(F.Offset);
   }
 
   // Once 2^Shift has been factored out, only Bits low bits of a
   // coefficient can survive. Unsigned limb arithmetic preserves all of them.
-  llvm::SmallDenseMap<uint32_t, uint64_t, 8> Weights;
+  llvm::SmallDenseMap<uint32_t, Coefficient, 8> Weights;
   const auto Unit =
       Ctx.constValue(Outer).extractBits(Precision, Width - Precision);
-  uint64_t Suffix = Unit.getRawData()[0], Correction = 0;
+  Coefficient Suffix = Low(Unit.getRawData());
+  Coefficient Correction = Low(llvm::APInt::getZero(Bits).getRawData());
   for (size_t I = Rows.size(); I-- != 0;) {
     const auto &F = Rows[I];
-    uint64_t C = Literal(F.Weight).extractBitsAsZExtValue(Bits, Shift) *
-                 Prefix[I] * Suffix;
-    Suffix *= Ctx.constWords(F.Offset).front();
+    Coefficient C = LiveWeight(F.Weight) * Prefix[I] * Suffix;
+    Suffix *= Low(Ctx.constWords(F.Offset).data());
     auto Word = lowOperand(Ctx, F.Word);
     if (Ctx.op(Word) == SymOp::Not) {
       Word = Ctx.operand(Word, 0);
       Correction += C;
       C = -C;
     }
-    Weights[Word.index()] += C;
+    auto [It, Inserted] = Weights.try_emplace(Word.index(), C);
+    if (!Inserted)
+      It->second += C;
   }
   Product *= Unit;
-  Product -= llvm::APInt(Precision, Correction).shl(Shift);
+  Product -= Value(Correction).zext(Precision).shl(Shift);
   size_t Edges = 1;
-  for (auto [Index, C] : Weights) {
+  for (const auto &[Index, C] : Weights) {
     const SymRef V(Index);
     // A product may flatten a multiply. A unit coefficient may instead
     // expose an addition when the terms are collected.
@@ -786,8 +816,8 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   Storage -= Edges * PerEdge;
   llvm::SmallVector<SymRef, 8> Sum{
       Ctx.mkConst(Product.extractBits(Bits, Shift))};
-  for (auto [Index, C] : Weights) {
-    const llvm::APInt K(Bits, C);
+  for (const auto &[Index, C] : Weights) {
+    const auto K = Value(C);
     if (!K.isZero())
       Sum.push_back(Ctx.mkMul(Ctx.mkConst(K), SymRef(Index)));
   }
@@ -877,6 +907,16 @@ SymRef buildTruncatedGroup(SymContext &Ctx, llvm::ArrayRef<Factor> Group,
 
 } // namespace
 
+bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
+                       unsigned Bits) {
+  if (!Perturbation || Ctx.op(Perturbation) != SymOp::Mul ||
+      Ctx.numOperands(Perturbation) != 2)
+    return false;
+  const auto Field = lowOperand(Ctx, Ctx.operand(Perturbation, 1));
+  return Field && Ctx.width(Field) == Bits && Ctx.numOperands(Field) > 2 &&
+         (Ctx.op(Field) == SymOp::Xor || Ctx.op(Field) == SymOp::Or);
+}
+
 SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
                             WorkBudget &Budget, size_t &Storage,
                             bool *EmittedReading) {
@@ -946,12 +986,14 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
       *EmittedReading = true;
     return Candidate;
   };
-  const bool Linear = Outer && N > limits::kMaxResidueProductFactors &&
-                      MinimumZeros < Observed &&
+  const bool Linear = Outer && MinimumZeros < Observed &&
                       MinimumZeros >= Observed - MinimumZeros;
-  if (Linear && Observed - MinimumZeros <= 64) {
-    if (auto Sum = buildLinearProduct(Ctx, Rows, Outer, Observed, MinimumZeros,
-                                      Budget, Storage)) {
+  if (Linear) {
+    auto Build = Observed - MinimumZeros <= 64
+                     ? buildLinearProduct<uint64_t>
+                     : buildLinearProduct<llvm::APInt>;
+    if (auto Sum =
+            Build(Ctx, Rows, Outer, Observed, MinimumZeros, Budget, Storage)) {
       Parts.push_back(Sum);
       return Finish();
     }
