@@ -1612,10 +1612,9 @@ cache miss. Replaying that silicon erratum requires the pipeline and cache
 state. The manufacturer's report gives no write-to-first-translation interval.
 [R4000PC/SC revision errata, item 11](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=3).
 
-Extended R4000 address regions,
-TLB management instructions, reverse-endian user data, cache-isolation data
-accesses and CW4011 MMU
-behavior need additional processor-specific evidence.
+Extended R4000 address regions, TLB management instructions, reverse-endian
+user data, cache-isolation data accesses and CW4011 MMU behavior need
+additional processor-specific evidence.
 
 On a 40 MHz R3000 DECstation 5000/240 running Mach 3.0, the IOASIC counter
 measured a first-level user TLB miss handler at 10 CPU cycles with a
@@ -1623,7 +1622,7 @@ page-table load that hit in cache and 30–40 on a cache miss. On a 100 MHz
 R4000 SGI Indy, the Calibrator's pointer-chasing experiment reported a
 46-cycle TLB miss penalty. Both measurements include work beyond the TLB
 write. Neither timestamps the first fetch or load that sees the new mapping.
-[Bala et al., section 2.2 and table 1](https://www.usenix.org/conference/osdi-94/software-prefetching-and-caching-translation-lookaside-buffers),
+[Bala et al., table 1](https://www.usenix.org/conference/osdi-94/software-prefetching-and-caching-translation-lookaside-buffers),
 [CWI measurements, SGI Indy “boktor”](https://homepages.cwi.nl/~manegold/Calibrator/DB/boktor.pdf).
 
 IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
@@ -1632,8 +1631,12 @@ supplies its NOP delay slot, and the target at `0x1fc00220` supplies
 `lui v0,0x10`. Relative to the first read, the other two appear at 760 ns
 and 1.52 µs on that setup. The regression replays the captured words in
 both byte orders against the physical ROM addresses. The listing leaves
-the board's byte order and the time of reset release unspecified.
-[IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf).
+the board's byte order and the time of reset release unspecified. The R3051
+hardware manual specifies that the CPU samples reset release against a
+falling SysClk edge and requests the vector word on the sixth rising edge
+after detection. The analyzer listing begins at the read.
+[IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf),
+[R3051 hardware manual, chapter 10, Reset Behavior](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/cpu/mips/r3051.pdf#page=131).
 
 The hardware regressions compare a little-endian DECstation 5000/133 load
 with its console instruction, EPC, fault address and exception fields. The SGI
