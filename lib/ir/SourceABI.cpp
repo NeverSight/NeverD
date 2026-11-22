@@ -129,6 +129,9 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
              Left->Pointee->Size == Right->Pointee->Size;
     return equalTypes(Left->Pointee, Right->Pointee, Depth + 1, Remaining);
   case NdTypeKind::Struct: {
+    if (Left->IsUnion != Right->IsUnion ||
+        (Left->IsUnion && Left->SourceName != Right->SourceName))
+      return false;
     if (Left->Passing == NdRecordPassing::Complex ||
         Right->Passing == NdRecordPassing::Complex) {
       const unsigned Bytes = sourceComplexComponentBytes(Left);
@@ -496,7 +499,8 @@ bool equalSourceTypes(const TypeRef &Left, const TypeRef &Right) {
   return equalTypes(Left, Right, 0, Remaining);
 }
 
-std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
+static std::vector<SourceAggregateMember> valueMembers(const TypeRef &Type,
+                                                       bool AllowUnions) {
   if (const auto Bytes = sourceComplexComponentBytes(Type))
     return {{Type->Fields[0], 0},
             {Type->Fields[1], static_cast<uint16_t>(Bytes)}};
@@ -510,7 +514,8 @@ std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
     if (Member.Type->Kind == NdTypeKind::Struct) {
       // Generic record projection emits field access and a record ABI. A
       // complex value needs its own component expressions and call rules.
-      if (Member.Type->Passing == NdRecordPassing::Complex)
+      if ((!AllowUnions && Member.Type->IsUnion) ||
+          Member.Type->Passing == NdRecordPassing::Complex)
         return {};
       for (size_t I = Member.Type->Fields.size(); I-- > 0;)
         Pending.push_back(
@@ -530,10 +535,14 @@ std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
   return Result;
 }
 
+std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
+  return valueMembers(Type, true);
+}
+
 std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
   if (!Type || Type->Passing == NdRecordPassing::Complex)
     return {};
-  auto Result = sourceValueMembers(Type);
+  auto Result = valueMembers(Type, false);
   if (Result.empty())
     return {};
   if (std::any_of(Result.begin(), Result.end(), [](const auto &Member) {

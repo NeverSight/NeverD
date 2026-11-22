@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/debug/UserPrototype.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/libc/LibCStartup.h"
 #include "neverd/loader/FunctionNames.h"
@@ -198,6 +199,12 @@ private:
       // A type this conversion made, a scalar, a pointer or an enumeration,
       // keeps the typedef's name for display; a record is shared, and
       // keeps its tag's.
+      if (CompleteValues && Target && Target->IsUnion &&
+          Target->SourceName.empty()) {
+        auto Named = std::make_shared<NdType>(*Target);
+        Named->SourceName = Name.str();
+        return Named;
+      }
       if (!Target || (Target->Kind == NdTypeKind::Struct && !Target->IsEnum &&
                       Target->Passing != NdRecordPassing::Complex))
         return Target;
@@ -213,9 +220,10 @@ private:
     case types::TypeKind::Union:
       if (BorrowRecords || ActiveRecords.contains(Name))
         return NdType::makeNamedRecord(Name.str(), 0);
-      if (CompleteValues && Type->Kind == types::TypeKind::Union)
-        return nullptr;
-      if (!Type->Record)
+      if (!Type->Record ||
+          (CompleteValues && Type->Kind == types::TypeKind::Union &&
+           Type->Origin == types::TypeOrigin::DWARF &&
+           !Type->Record->Alignment))
         return nullptr;
       if (Shared)
         return sharedRecord(Name, *Type->Record);
@@ -289,6 +297,7 @@ private:
     if (Record.Size > std::numeric_limits<uint16_t>::max())
       return nullptr;
     TypeRef Named = NdType::makeNamedRecord(Name.str(), uint16_t(Record.Size));
+    Named->IsUnion = Record.Union;
     Named->FieldDisplaySize = Named->Size;
     // Local types are C's records, whose calls pass and return them as C
     // does: no constructor sends a small one through memory.
@@ -338,10 +347,6 @@ private:
   /// from whole-byte members.
   TypeRef record(llvm::StringRef Name, const types::RecordDef &Record,
                  unsigned Depth) {
-    // An anonymous union reaches this boundary without named()'s TypeKind.
-    // Even a one-member union has a distinct ABI classification.
-    if (CompleteValues && Record.Union)
-      return nullptr;
     TypeRef Named = recordNode(Name, Record);
     if (!Named)
       return nullptr;
@@ -374,6 +379,16 @@ private:
         Fields.push_back(convert(*Field.Type, Depth + 1));
         Offsets.push_back(
             static_cast<uint16_t>(Field.BitOffset / kSourceValueByteBits));
+      }
+      if (Record.Union) {
+        // Display flattening can omit physical members or expand an anonymous
+        // record. Only the complete declaration authenticates a value layout.
+        Named->FieldDisplayTypes = std::move(Fields);
+        Named->FieldDisplayOffsets = Offsets;
+        Named->FieldDisplayNames.clear();
+        for (const auto &Field : Record.Members)
+          Named->FieldDisplayNames.push_back(Field.Name);
+        return Named->setUnionValueLayout() ? Named : nullptr;
       }
       const auto Natural = NdType::makeStruct(
           std::move(Fields), types::pointerBytes(Library.dataModel()));
@@ -1040,8 +1055,23 @@ bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
   } else {
     Local = definedRecord(Type->SourceName, Type->Size);
     const TypeRef From = Local ? libraryRecord(*Local) : nullptr;
-    if (!From || From->Kind != NdTypeKind::Struct)
+    if (!From || From->Kind != NdTypeKind::Struct ||
+        (!Type->Fields.empty() && Type->IsUnion != From->IsUnion))
       return false;
+    if (Type->IsUnion && !Type->Fields.empty()) {
+      // Keep the semantic member identities of a completed union. Renaming
+      // members at one offset cannot identify which alternative carries bits.
+      for (size_t I = 0; I < Type->FieldDisplayTypes.size(); ++I) {
+        const auto &Member = Type->FieldDisplayTypes[I];
+        const auto Index = From->displayFieldIndexAt(
+            0, Member->Size,
+            Member->Kind == NdTypeKind::Float ? NdAccessClass::Floating
+                                              : NdAccessClass::Integer);
+        if (!Index ||
+            !equalSourceTypes(Member, From->FieldDisplayTypes[*Index]))
+          return false;
+      }
+    }
     // Each member the debug information gave lies where one of the
     // library's does, as the members of the same record do under names the
     // user changed; a record laid out otherwise keeps its own.
@@ -1303,6 +1333,9 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
         Roots.push_back(Owner->second);
       continue;
     }
+    if (!Record->Fields.empty() && Local->Record &&
+        Record->IsUnion != Local->Record->Union)
+      continue;
     if (Local->Kind == types::TypeKind::Struct ||
         Local->Kind == types::TypeKind::Union)
       Result.Tags[CRenderer->typeName(Record->SourceName)] =

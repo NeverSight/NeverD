@@ -46,6 +46,8 @@ CASES = (
     ('df', 'struct { double x; float y; }', 16, list(range(12))),
     ('di', 'struct { double x; unsigned long long y; }', 16, list(range(16))),
     ('du', 'union { double x; unsigned long long y; }', 8, list(range(8))),
+    ('ud', 'union { unsigned long long y; double x; }', 8, list(range(8))),
+    ('nested_du', 'struct { union BitsOrDouble first; double tail; }', 16, list(range(16))),
     ('da', 'struct { double x[2]; }', 16, list(range(16))),
     ('dn', 'struct { struct { double x; } a, b; }', 16, list(range(16))),
     ('p1', 'struct { void *x; }', {'n32': 4, '64': 8},
@@ -90,7 +92,9 @@ def sources(case, prefix):
     params += [f'T_{name} value', 'unsigned long long tail']
     signature = ', '.join(params)
     declaration = f'T_{name} record_callee({signature});'
-    header = (f'typedef {definition} T_{name};\n'
+    union_tag = ('union BitsOrDouble { double real; unsigned long long bits; };\n'
+                 if name == 'nested_du' else '')
+    header = (union_tag + f'typedef {definition} T_{name};\n'
               f'_Static_assert(sizeof(T_{name}) == {size}, "record size");\n'
               + declaration + '\n')
     # Every scalar surrounding the record contributes to its result. An
@@ -141,6 +145,13 @@ def observe(image, little, abi, case, function, prefix):
     fprs = {r: (0x3ff013579bdf0000 + r) & mask for r in preserved_fp[abi]}
     rng = random.Random(0x4d495053)
     values = [bytes(size), bytes([0xff]) * size]
+    if name in ('du', 'ud'):
+        # Preserve object representations, including signed zero, both
+        # infinities and NaN payloads that a floating conversion could change.
+        order = 'little' if little else 'big'
+        values += [v.to_bytes(8, order) for v in (
+            0x8000000000000000, 0x7ff0000000000000, 0xfff0000000000000,
+            0x7ff8000012345678, 0x7ff000009abcdef1, 0x0123456789abcdef)]
     values += [bytes(rng.getrandbits(8) for _ in range(size)) for _ in range(6)]
     rows, calls = [], []
     mix = argument_mix(prefix)
@@ -241,6 +252,31 @@ def observe(image, little, abi, case, function, prefix):
     return rows
 
 
+def check_union_call(artifacts, clang, triple, common, source, name, prefix):
+    """Check the argument and result on the emitted call expression itself."""
+    tree = source.with_suffix('.ast.json')
+    errors = source.with_suffix('.ast.log')
+    command = [clang, '--target=' + triple, *common, '-Wno-everything',
+               '-fsyntax-only', '-Xclang', '-ast-dump=json', source]
+    with artifacts.process(command, tree, errors) as (process, _):
+        process.wait(timeout=60)
+    if process.returncode:
+        raise RuntimeError(errors.read_text()[-8192:])
+    pending = [json.loads(tree.read_text())]
+    artifacts.discard(tree, errors)
+    matched = 0
+    while pending:
+        node = pending.pop()
+        children = node.get('inner', [])
+        if (node.get('kind') == 'CallExpr' and
+                node['type']['qualType'] == name and
+                len(children) == prefix + 3 and
+                children[1 + prefix].get('type', {}).get('qualType') == name):
+            matched += 1
+        pending.extend(children)
+    assert matched == 1, (source, name, prefix, matched)
+
+
 def run(args, artifacts):
     views = CALL_VIEWS.CallSiteViews(args.sdk) if args.neverd else None
     rows = []
@@ -326,6 +362,9 @@ def run(args, artifacts):
                                                      *(['--llvm'] if route == 'llvmc' else []), '-o', source])
                                         artifacts.keep_source(source)
                                         source_text, source_hash = source.read_text(), digest(source)
+                                        if function != 'record_callee' and case[0] in ('du', 'ud', 'nested_du'):
+                                            check_union_call(artifacts, args.clang, triple, common, source,
+                                                             'T_' + case[0], prefix)
                                         if function == 'record_callee':
                                             # A raw integer function can accidentally
                                             # reproduce this record's register bits.
@@ -385,7 +424,7 @@ def main():
             ('function', ('record_callee', 'record_direct', 'record_indirect')),
             ('case', tuple(case[0] for case in CASES))):
         parser.add_argument('--' + name, action='append', choices=choices)
-    parser.add_argument('--prefix', action='append', type=int, choices=(0, 1, 7))
+    parser.add_argument('--prefix', action='append', type=int, choices=(0, 1, 3, 7))
     args = parser.parse_args()
     if args.neverd and not args.sdk:
         args.sdk = args.neverd.resolve().with_name(

@@ -1491,9 +1491,18 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die, int Depth,
   case llvm::dwarf::DW_TAG_volatile_type:
   case llvm::dwarf::DW_TAG_restrict_type: {
     auto Ref = Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
-    return Ref.isValid()   ? convertDwarfType(Ref, Depth + 1, CompleteValue)
-           : CompleteValue ? nullptr
-                           : NdType::makeVoid();
+    if (!Ref.isValid())
+      return CompleteValue ? nullptr : NdType::makeVoid();
+    auto Target = convertDwarfType(Ref, Depth + 1, CompleteValue);
+    if (CompleteValue && Target && Target->IsUnion)
+      if (const auto A = Die.find(llvm::dwarf::DW_AT_alignment);
+          A && A->getAsUnsignedConstant() != Target->Alignment)
+        return nullptr;
+    if (Target && Target->IsUnion && Target->SourceName.empty() &&
+        Tag == llvm::dwarf::DW_TAG_typedef)
+      if (const auto *Name = Die.getName(llvm::DINameKind::ShortName))
+        Target->SourceName = Name;
+    return Target;
   }
   case llvm::dwarf::DW_TAG_array_type: {
     const bool Vector =
@@ -1578,9 +1587,9 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die, int Depth,
     auto Sz = Die.find(llvm::dwarf::DW_AT_byte_size);
     T->Size =
         Sz ? static_cast<uint16_t>(Sz->getAsUnsignedConstant().value_or(0)) : 0;
+    T->IsUnion = Tag == llvm::dwarf::DW_TAG_union_type;
     if (CompleteValue) {
-      if (Tag == llvm::dwarf::DW_TAG_union_type ||
-          Die.find(llvm::dwarf::DW_AT_declaration) || !Sz ||
+      if (Die.find(llvm::dwarf::DW_AT_declaration) || !Sz ||
           Sz->getAsUnsignedConstant() != T->Size ||
           recordPassing(Die) != NdRecordPassing::ByValue)
         return nullptr;
@@ -1603,12 +1612,31 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die, int Depth,
           return nullptr;
         const auto Location =
             Child.find(llvm::dwarf::DW_AT_data_member_location);
-        const auto Offset = Location ? memberLocation(*Location) : std::nullopt;
+        // DWARF union members at zero may omit DW_AT_data_member_location.
+        const auto Offset = Location     ? memberLocation(*Location)
+                            : T->IsUnion ? std::optional<uint64_t>(0)
+                                         : std::nullopt;
         if (!Offset || *Offset > T->Size)
           return nullptr;
         Fields.push_back(
             convertDwarfType(declaredTypeDie(Child), Depth + 1, true));
         Offsets.push_back(static_cast<uint16_t>(*Offset));
+        if (T->IsUnion) {
+          const char *Name = Child.getName(llvm::DINameKind::ShortName);
+          T->FieldDisplayNames.emplace_back(Name ? Name : "");
+        }
+      }
+      if (T->IsUnion) {
+        const auto Alignment = Die.find(llvm::dwarf::DW_AT_alignment);
+        // A packed and a natural union may both omit DW_AT_alignment and
+        // have identical member DIEs. Their o32 argument positions differ.
+        if (!Alignment || Alignment->getAsUnsignedConstant() != 8)
+          return nullptr;
+        T->Alignment = 8;
+        T->Passing = NdRecordPassing::ByValue;
+        T->FieldDisplayTypes = std::move(Fields);
+        T->FieldDisplayOffsets = std::move(Offsets);
+        return T->setUnionValueLayout() ? T : nullptr;
       }
       const unsigned PointerBytes = Die.getDwarfUnit()->getAddressByteSize();
       const auto Natural = NdType::makeStruct(std::move(Fields), PointerBytes);
@@ -1674,6 +1702,9 @@ static TypeRef copySignatureType(const TypeRef &Type) {
   Copy->RetType = copySignatureType(Type->RetType);
   for (auto &Field : Copy->Fields)
     Field = copySignatureType(Field);
+  if (Copy->IsUnion)
+    for (auto &Alternative : Copy->FieldDisplayTypes)
+      Alternative = copySignatureType(Alternative);
   for (auto &Param : Copy->ParamTypes)
     Param = copySignatureType(Param);
   return Copy;
@@ -1685,7 +1716,8 @@ DWARFDebugContext::Impl::signatureType(llvm::DWARFDie Die,
   const auto Record = unqualifiedType(Die);
   if (Record.isValid() &&
       (Record.getTag() == llvm::dwarf::DW_TAG_structure_type ||
-       Record.getTag() == llvm::dwarf::DW_TAG_class_type)) {
+       Record.getTag() == llvm::dwarf::DW_TAG_class_type ||
+       Record.getTag() == llvm::dwarf::DW_TAG_union_type)) {
     // The declared DIE includes the qualifier chain that complete conversion
     // validates. A referenced type may belong to a different unit.
     const auto Key = std::make_pair(Die.getDwarfUnit(), Die.getOffset());
