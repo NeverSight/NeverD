@@ -51,6 +51,12 @@ CURRENT = {
     "DeviceManagementRegistration": ("MDMRegistration.lib", ("mdmregistration",)),
     "NetworkTrafficControl": ("Traffic.Lib", ("ntddndis", "traffic")),
     "ComputeStorage": ("computestorage.lib", ("computestorage",)),
+    "WebSockets": ("websocket.lib", ("websocket",)),
+    "RestartManager": ("rstrtmgr.lib", ("restartmanager",)),
+    "FontEmbedding": ("t2embed.lib", ("t2embapi",)),
+    "PerformanceCounters": ("LoadPerf.Lib", ("loadperf",)),
+    "QoSTraffic": ("qwave.lib", ("qos2",)),
+    "OverlayFiles": ("wofutil.lib", ("wofapi",)),
 }
 LEGACY = {"AllJoyn": "MSAJApi.lib", "PeerNetworking": "p2p.lib", "PeerGraph": "p2pgraph.lib"}
 
