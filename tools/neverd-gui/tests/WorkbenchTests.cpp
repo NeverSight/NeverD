@@ -8551,6 +8551,33 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(editing.analysisReplicaReady(), OpenTimeoutMs);
   }
 
+  void idleProjectRendersBeforeTheFirstSourceView() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    QFile image(path);
+    QVERIFY(image.open(QIODevice::ReadWrite));
+    QVERIFY(image.resize(
+        ::neverd::limits::gui::kSessionIdleRenderMinimumImageBytes));
+    image.close();
+    {
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+    }
+    Session reader(QString::fromLocal8Bit(TEST_WORKER));
+    reader.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(reader.loaded(), OpenTimeoutMs);
+    QJsonObject kept;
+    reader.read(QStringLiteral("kept_renders"), {}, this,
+                [&](const QJsonObject &payload) { kept = payload; });
+    QTRY_VERIFY_WITH_TIMEOUT(kept.value("complete").toBool(), OpenTimeoutMs);
+    QVERIFY(!reader.analysisReplicaStarted());
+  }
+
   void ownerAnswersForItsPagesWhileAReplicaIsReady() {
     QTemporaryDir directory;
     const auto path = writeFixture(
