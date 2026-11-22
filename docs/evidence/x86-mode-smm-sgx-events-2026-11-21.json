@@ -64,7 +64,7 @@
     "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44886176997",
     "software": {
       "source_commit": "6f81b8559bac0dd326d9426269b5b7d48c03b343",
-      "neverc_version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /home/runner/work/test_mac_intel/test_mac_intel/NeverC/build-portable/bin",
+      "neverc_version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
       "cases": [
         {
           "name": "X86PagingTest.EnclavePrivatePagesEnforcePagingIdentityAndEpcmPermissions",
@@ -181,7 +181,7 @@
     "x64_compiler": {
       "host_cpu_model": "AMD EPYC 7763 64-Core Processor",
       "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
-      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /home/runner/work/test_mac_intel/test_mac_intel/NeverC/build-portable/bin",
+      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
       "binary_sha256": "282340d70398fdf19f2f9805266439de9856c0911e63ad9c97400002348672e8",
       "compiler_execution": "native",
       "generated_library_pointer_bytes": 8,
@@ -224,7 +224,7 @@
     "binary_digests": [
       "188dd1a92baa996d02255a9519e3ed9554e0c5af576ab951cc4442e30ccb1be8  app",
       "070a3b046b19489a4539c1615d076310d78310df1357b059cb0c1bfdb2f5fb77  enclave.signed.so",
-      "22fcee40b689d2552199a581ab87f52abe1a217afb0222ee7a9c5a378bae23d2  /home/runner/work/_temp/sgxsdk/lib64/libsgx_urts_sim.so"
+      "22fcee40b689d2552199a581ab87f52abe1a217afb0222ee7a9c5a378bae23d2  <sgx-sdk-lib>/libsgx_urts_sim.so"
     ]
   },
   "native_sgx": {
@@ -339,8 +339,8 @@
           "missing": [],
           "failures": [],
           "skips": {
-            "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
-            "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+            "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
           },
           "duplicates": [],
           "exit_codes": []
@@ -425,8 +425,8 @@
           "missing": [],
           "failures": [],
           "skips": {
-            "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
-            "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+            "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
           },
           "duplicates": [],
           "exit_codes": []
@@ -1654,8 +1654,8 @@
             "missing": [],
             "failures": [],
             "skips": {
-              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
-              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
             },
             "duplicates": [],
             "exit_codes": []
@@ -1740,8 +1740,8 @@
             "missing": [],
             "failures": [],
             "skips": {
-              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
-              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
             },
             "duplicates": [],
             "exit_codes": []
