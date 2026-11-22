@@ -356,6 +356,17 @@ accept inline stack probes. Modules that also request Apple’s named
 Apple Clang native-object route can preserve that helper. Compiler selection
 remains explicit with `--compiler-path`. The compatibility profile pins the r6
 release tag and archive digest. The dev branch selects r7 for fresh builds.
+
+The artifact directory for
+`AArch64AuthenticatedCall.CompilesFrontendAuthenticatedGlobals` includes
+`caller.c` and the O0 and O2 objects. The independent arm64e caller checks
+the IA and IB calls, passes the DB-signed aggregate field to a function that
+takes a regular function pointer, and reads the DA-signed data pointer with a
+three-byte addend. Both Darwin profiles ran the NeverD objects and the Apple
+Clang controls. Source, native-object and direct legacy-IR installation also
+resolved an explicitly bound constant after a 16 KiB image slide.
+[Four-key objects and installed-image execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44998646615).
+
 The r6 explicit classic signed-return CFI is incompatible with the macOS 26
 system unwinder, so publication rejects those objects transactionally. The
 Apple-native object route remains available. Canonical generation requires the
