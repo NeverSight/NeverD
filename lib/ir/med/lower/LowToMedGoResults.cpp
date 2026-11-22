@@ -57,8 +57,9 @@ void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
           Op.Output.Kind != MedVar::Reg ||
           Op.Output.RegOff != goIntegerArgumentRegisters(TargetArch)[0])
         continue;
-      if (Compiled ? Op.RegisterContract == CallRegisterContract::GoInternal
-                   : Context && callsThroughFuncValue(Block, I, *Context))
+      if (Compiled
+              ? Op.RegisterContract == CallRegisterContract::GoInternal
+              : Context && callsThroughFuncValue(Block, I, *Context, &Func))
         Sites.insert(Op.CallSiteId);
     }
   // An indirect call's results are words: no callee shares its record, and

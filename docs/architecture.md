@@ -6066,6 +6066,15 @@ one into its own register sets nothing, and one left there is no argument it
 passes on. Taken as forwarded, a helper's RDI and RSI, Go's fourth and fifth,
 reordered its own parameters to Go's.
 
+A call is one through a func value where it loads its target from the address
+in the context register (`callsThroughFuncValue`). The block of the call need
+not set that register: it holds what the one block that leads there left in
+it, and so on back, where no join, second way in or call lies between.
+`runtime.mcall` moves its fn into DX at its entry and calls through it two
+blocks later (`MOVQ 0(DX), R12; CALL R12`). Read by the platform's positions,
+that call passed on RDI and RSI, which became parameters of `mcall`, and each
+of its callers passed three unknown values.
+
 Go assigns its integer arguments to those registers in order, so the register
 that holds such a call's target ends them, whatever was set above it. Go
 1.21's map access loads the hash seed into ESI before RBX takes it, and RSI,

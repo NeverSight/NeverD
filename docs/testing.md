@@ -20900,6 +20900,11 @@ the call returns a record with a double field, and the C traps nowhere.
 built as ELF and as PE, which sets RAX to 5 and RBX to 7 and calls a func value
 through RDX after storing a local above Win64's shadow space, RDI set before a
 branch: the call passes exactly 5 and 7.
+`GoInternalABI.AFuncValueSetBeforeTheCallsBlockIsStillOne` runs the pipeline
+over assembly shaped as `runtime.mcall`, which moves its func value into RDX
+at its entry and calls through it after a branch, and a caller: the routine
+takes RAX and RBX alone, its call passes the 5 it set, and the caller passes
+two arguments with no unknown value.
 `GoScheduleCalls.AreFoundByName` loads a pclntab that names `runtime.mcall`:
 the module records its entry and a call of it resumes, where one of
 `runtime.mcallx` or of any other function does not.

@@ -2540,6 +2540,60 @@ TEST(GoWriteBarriers, AStackArgumentIsNoKeptRegister) {
   EXPECT_EQ(C.Body.find("var_m8"), std::string::npos) << C.Body;
 }
 
+TEST(GoInternalABI, AFuncValueSetBeforeTheCallsBlockIsStillOne) {
+  // Go assembly passes a func value only what it sets in Go's registers.
+  // `runtime.mcall` moves its fn into the context register at its entry and
+  // calls through it two blocks later: the block of the call sets the
+  // register nowhere, so the call was no func value call, took the platform's
+  // positions, and what it passed on in RDI and RSI became parameters of the
+  // routine, which every caller then passed unknown values for.  The register
+  // holds what the one block that leads to the call left in it.
+  //   main.mc: mov rdx, rax; test rbx, rbx; jne 1f; ret
+  //         1: mov eax, 5; mov r12, [rdx]; call r12; ret
+  //   main.user: lea rax, [rip+0]; mov ebx, 1; call main.mc; ret
+  constexpr va_t Mc = kTextVA + 0x100;
+  constexpr va_t User = kTextVA + 0x140;
+  GoTestImage T(Arch::X64);
+  T.writeText(Mc,
+              {0x48, 0x89, 0xC2, 0x48, 0x85, 0xDB, 0x75, 0x01, 0xC3, 0xB8, 0x05,
+               0x00, 0x00, 0x00, 0x4C, 0x8B, 0x22, 0x41, 0xFF, 0xD4, 0xC3});
+  std::vector<uint8_t> Caller = {0x48, 0x8D, 0x05, 0x00, 0x00, 0x00,
+                                 0x00, 0xBB, 0x01, 0x00, 0x00, 0x00};
+  const std::vector<uint8_t> Call = makeCall(User + Caller.size(), Mc);
+  Caller.insert(Caller.end(), Call.begin(), Call.end());
+  Caller.push_back(0xC3);
+  T.writeText(User, Caller);
+  for (const auto &[Address, Name] :
+       {std::pair{Mc, "main.mc"}, std::pair{User, "main.user"}}) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Mc, Mc + 0x20}};
+  Module.FrameArguments = {{Mc, 16, 2}, {User, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  std::vector<uint64_t> Registers;
+  for (const MedFunc &F : R.MedFuncs)
+    if (F.Entry == Mc)
+      for (const MedVar &Parameter : F.Params)
+        Registers.push_back(Parameter.RegOff);
+  EXPECT_EQ(Registers, (std::vector<uint64_t>{x86reg::RAX, x86reg::RBX}));
+  const std::string Routine = highCBody(R, T.Img, "main_mc");
+  EXPECT_NE(Routine.find(")((uint64_t)5);"), std::string::npos) << Routine;
+  const std::string Calling = highCBody(R, T.Img, "main_user");
+  EXPECT_NE(Calling.find(", 1);"), std::string::npos) << Calling;
+  EXPECT_EQ(Calling.find("__builtin_trap"), std::string::npos) << Calling;
+}
+
 TEST(GoScheduleCalls, ACallOfMcallResumesAtItsReturnAddress) {
   // `runtime.mcall` saves its caller's state, switches to the scheduler's
   // stack and calls a function that never returns, so its own code never

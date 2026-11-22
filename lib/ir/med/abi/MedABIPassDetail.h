@@ -262,8 +262,13 @@ bool callsThroughContext(const MedBlock &Blk, int CallIdx, const MedVar &Target,
 /// Whether the indirect call at \p CallIdx in \p Block calls a func value:
 /// it loads its target from the address in the closure context register
 /// \p Context, as the block last sets that register (callsThroughContext).
+/// Where the block sets it nowhere before the call and \p Func is given, the
+/// register holds what the one block that leads here left in it, and so on
+/// back: `runtime.mcall` moves its fn into DX at its entry and calls through
+/// it two blocks later.  A join, a second way in or a call on the way ends
+/// the search.
 bool callsThroughFuncValue(const MedBlock &Block, size_t CallIdx,
-                           uint64_t Context);
+                           uint64_t Context, const MedFunc *Func = nullptr);
 
 /// Whether the indirect call at \p CallIdx in \p Block of \p Func enters Go
 /// code by the internal ABI, taking its arguments in Go's registers: a call
