@@ -408,8 +408,6 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
       Preparation ? Preparation->Bindings : Bindings, !NativeObject);
   if (!References)
     return Error(References.takeError());
-  if (NativeObject)
-    Preparation->Bindings = *References;
   llvm::json::Array BindingReport;
   for (const auto &Binding : *References) {
     const auto Requested = llvm::find_if(
@@ -433,8 +431,9 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
     Report["emission"] = "native-object-with-indirect-symbols";
   const auto ObfuscationCounts = S.runSessionObfuscation(*Module);
   auto Installed = installSourcePatch(
-      *Module, S.Img, *Bound, Output, S.TextSectionOverride, PrepareReceipt,
-      Preparation ? &*Preparation : nullptr, NativeDependencies);
+      *Module, S.Img, *Bound, *References, Output, S.TextSectionOverride,
+      PrepareReceipt, Preparation ? &*Preparation : nullptr,
+      NativeDependencies);
   if (!Installed)
     return Error(Installed.takeError());
   S.commitObfuscationCounts(ObfuscationCounts);

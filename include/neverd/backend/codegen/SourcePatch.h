@@ -25,6 +25,7 @@ namespace neverd {
 llvm::Error validateSourcePatchTarget(Arch Architecture, BinaryFormat Format);
 
 struct BinaryImage;
+struct SourcePatchBinding;
 struct SourcePatchPreparation;
 struct SourcePatchDependency;
 
@@ -60,6 +61,17 @@ llvm::Expected<PatchResult> installSourcePatch(
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt = {},
     const SourcePatchPreparation *Preparation = nullptr,
     llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
+
+/// Install with the resolved symbolic bindings when object placement is
+/// deferred.
+llvm::Expected<PatchResult> installSourcePatch(
+    llvm::Module &Module, const BinaryImage &Image,
+    llvm::ArrayRef<SourcePatchMapping> Mappings,
+    llvm::ArrayRef<SourcePatchBinding> Bindings,
+    const std::filesystem::path &OutputPath, llvm::StringRef TextSection,
+    llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
+    const SourcePatchPreparation *Preparation,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies);
 
 struct CompiledImage;
 struct CompiledSection;

@@ -41,6 +41,25 @@ MACHO_AUTH_NATIVE_VALUE(unsigned, kImportSymbol, 1)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kImportFrom, 2)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kImportModule, 3)
 MACHO_AUTH_NATIVE_TEXT(kCompiler, "/usr/bin/clang++")
+MACHO_AUTH_NATIVE_TEXT(kLegacyBindingImage, R"cpp(
+extern "C" {
+extern const int bias = 5;
+int entry(int x) { return x + 1; }
+int (*original_entry)(int) = entry;
+}
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kLegacyBindingSource, R"c(
+extern const int retained;
+typedef int (*Fn)(int);
+static int plus(int x) { return x + retained; }
+static Fn __ptrauth(1, 1, 0x5371) volatile slot = plus;
+int entry(int x) { return slot(x); }
+)c")
+MACHO_AUTH_NATIVE_TEXT(kBindingEntry, "entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingEntrySymbol, "_entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingBiasSymbol, "_bias")
+MACHO_AUTH_NATIVE_TEXT(kBindingRetained, "retained")
+MACHO_AUTH_NATIVE_TEXT(kFreestandingSource, "-ffreestanding")
 MACHO_AUTH_NATIVE_TEXT(kIRCompilerEnvironment, "NEVERD_ARM64E_IR_COMPILER")
 MACHO_AUTH_NATIVE_TEXT(kMissingIRCompiler,
                        "requires an explicit canonical LLVM IR frontend")

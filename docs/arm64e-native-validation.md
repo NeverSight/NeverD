@@ -349,8 +349,9 @@ passes the resulting signing recipes to dyld. The LLVM toolchains used here
 accept inline stack probes. Modules that also request Apple’s named
 `__chkstk_darwin` helper receive a diagnostic before code generation. The
 Apple Clang native-object route can preserve that helper. Compiler selection
-remains explicit with `--compiler-path`. The default prebuilt package remains
-r6. Its explicit classic signed-return CFI is incompatible with the macOS 26
+remains explicit with `--compiler-path`. The compatibility profile pins the r6
+release tag and archive digest. The dev branch selects r7 for fresh builds.
+The r6 explicit classic signed-return CFI is incompatible with the macOS 26
 system unwinder, so publication rejects those objects transactionally. The
 Apple-native object route remains available. Canonical generation requires the
 [Darwin CFI correction](https://github.com/NeverSight/llvm-project/pull/8)
