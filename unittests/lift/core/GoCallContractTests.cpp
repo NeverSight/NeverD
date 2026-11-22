@@ -2540,6 +2540,100 @@ TEST(GoWriteBarriers, AStackArgumentIsNoKeptRegister) {
   EXPECT_EQ(C.Body.find("var_m8"), std::string::npos) << C.Body;
 }
 
+TEST(GoInternalABI, AssemblyTakesFloatsInEveryGoRegister) {
+  // Go's internal ABI passes floating arguments in X0 to X14, where System V
+  // passes eight and Win64 four.  Assembly that takes operands in registers
+  // of its own, as `runtime.spillArgs` takes the address in R12 and stores
+  // every argument register through it, takes the floating ones in Go's:
+  // X8 and X14 were registers with no definition.
+  //   main.spill: mov [r12], rax; movq [r12+8], xmm0; movq [r12+0x10], xmm8
+  //               movq [r12+0x18], xmm14; ret
+  constexpr va_t Spill = kTextVA + 0x100;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    GoTestImage T(Arch::X64);
+    T.Img.Format = Format;
+    T.writeText(Spill, {0x49, 0x89, 0x04, 0x24, 0x66, 0x41, 0x0F, 0xD6, 0x44,
+                        0x24, 0x08, 0x66, 0x45, 0x0F, 0xD6, 0x44, 0x24, 0x10,
+                        0x66, 0x45, 0x0F, 0xD6, 0x74, 0x24, 0x18, 0xC3});
+    Symbol Function = Symbol::makeFunc(Spill);
+    Function.Name = "main.spill";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.GoAssembly = {{Spill, Spill + 0x20}};
+    Module.FrameArguments = {{Spill, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    std::vector<uint64_t> Registers;
+    for (const MedFunc &F : R.MedFuncs)
+      if (F.Entry == Spill)
+        for (const MedVar &Parameter : F.Params)
+          Registers.push_back(Parameter.RegOff);
+    EXPECT_EQ(Registers, (std::vector<uint64_t>{
+                             x86reg::RAX, x86reg::R12, x86reg::vectorReg(0),
+                             x86reg::vectorReg(8), x86reg::vectorReg(14)}));
+    const std::string Text = highCBody(R, T.Img, "main_spill");
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+    EXPECT_NE(Text.find("(double)(arg3)"), std::string::npos) << Text;
+    EXPECT_NE(Text.find("(double)(arg4)"), std::string::npos) << Text;
+  }
+}
+
+TEST(GoInternalABI, AnARM64RoutineThatReadsGoRegistersTakesGoFloats) {
+  // AAPCS64's integer positions are Go's first eight, so only a read of a
+  // register past them tells Go's convention from the platform's: X9 carries
+  // Go's tenth argument and nothing the platform passes.  main.spill reads
+  // it, so the D8 it stores is Go's ninth floating argument.  main.saved
+  // reads none: code the platform enters saves D8 for its caller, as
+  // `runtime.sigtramp` does, and takes no argument in it.
+  //   main.spill: str x9, [x0]; str d8, [x0, #8]; ret
+  //   main.saved: str d8, [x0]; ret
+  constexpr va_t Spill = kTextVA + 0x100;
+  constexpr va_t Saved = kTextVA + 0x140;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Spill, words({0xF9000009, 0xFD000408, 0xD65F03C0}));
+  T.writeText(Saved, words({0xFD000008, 0xD65F03C0}));
+  for (const auto &[Address, Name] :
+       {std::pair{Spill, "main.spill"}, std::pair{Saved, "main.saved"}}) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Spill, Spill + 0x10}, {Saved, Saved + 0x10}};
+  Module.FrameArguments = {{Spill, 0}, {Saved, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  std::vector<uint64_t> SpillRegisters, SavedRegisters;
+  for (const MedFunc &F : R.MedFuncs)
+    for (const MedVar &Parameter : F.Params) {
+      if (F.Entry == Spill)
+        SpillRegisters.push_back(Parameter.RegOff);
+      if (F.Entry == Saved)
+        SavedRegisters.push_back(Parameter.RegOff);
+    }
+  EXPECT_EQ(SpillRegisters, (std::vector<uint64_t>{a64reg::X0, a64reg::V(8)}));
+  EXPECT_EQ(SavedRegisters, std::vector<uint64_t>{a64reg::X0});
+  const std::string Spilled = highCBody(R, T.Img, "main_spill");
+  EXPECT_NE(Spilled.find("(double)(arg1)"), std::string::npos) << Spilled;
+  const std::string Kept = highCBody(R, T.Img, "main_saved");
+  EXPECT_NE(Kept.find("__builtin_trap"), std::string::npos) << Kept;
+}
+
 TEST(GoInternalABI, ARegisterNoParameterArrivesInIsNoPositionalParameter) {
   // A PE's platform passes its first argument in RCX.  Go's internal ABI
   // passes the third there, so a Go function of two arguments takes none in

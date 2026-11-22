@@ -28,10 +28,27 @@ namespace neverd {
 void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
+    Arch TargetArch, BinaryFormat TargetFormat,
+    llvm::ArrayRef<uint64_t> OwnRegisters);
+
+void detectFPParams(
+    MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
+    const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat) {
+  detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat, {});
+}
+
+void detectFPParams(
+    MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
+    const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
+    Arch TargetArch, BinaryFormat TargetFormat,
+    llvm::ArrayRef<uint64_t> OwnRegisters) {
   // FP/vector arguments arrive in a dedicated vector register class under
   // clang's -O2 conventions: x86-64 XMM0-7, AArch64 V0-7, ARM VFP D0-7 — all
-  // observed as live-in self-copies.
+  // observed as live-in self-copies.  A function that takes its arguments in
+  // registers of its own takes the floating ones in \p OwnRegisters: Go's
+  // internal ABI passes fifteen (goFloatArgumentRegisters) where System V
+  // passes eight and Win64 four.
   if (TRI.VecRegCount == 0)
     return;
   // Only a leading entry self-copy of a floating argument register can become
@@ -39,7 +56,9 @@ void detectFPParams(
   auto isFPArgSelfCopy = [&](const MedOp &Op) {
     return Op.Output.Kind == MedVar::Reg && Op.NumInputs >= 1 &&
            Op.Inputs[0].Id == Op.Output.Id &&
-           TRI.isFPArgReg(Op.Output.RegOff, TargetFormat);
+           (OwnRegisters.empty()
+                ? TRI.isFPArgReg(Op.Output.RegOff, TargetFormat)
+                : llvm::is_contained(OwnRegisters, Op.Output.RegOff));
   };
   {
     bool AnyCandidate = false;

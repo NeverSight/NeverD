@@ -5930,6 +5930,19 @@ prologue's vector count, which lists no parameters; a Go summary always lists
 them (`summaryListsNoParameters`), since a Go function's first argument may be
 a `bool`.
 
+Go's internal ABI passes floating arguments in X0 to X14 (F0 to F15 on
+arm64), where System V passes eight, Win64 four and AAPCS64 eight. Code that
+takes Go's integer registers, or operands of its own, takes the floating ones
+in Go's (`detectFPParams` with `goFloatArgumentRegisters`):
+`runtime.spillArgs` stores every argument register through R12, and X8 to X14
+printed as registers with no definition. On arm64 the platform's integer
+positions are Go's first eight, so `detectCc` has no other function to tell
+assembly by; a routine that reads X9 to X15 at its entry, which carry Go's
+tenth to sixteenth argument and nothing the platform passes, follows Go's
+convention. Code the platform enters reads none of them and saves D8 to D15
+for its caller, as `runtime.sigtramp` does: read as Go's, those saves were
+eight floating parameters, and `cgoSigtramp` passed it eight unknown values.
+
 Such a function has no parameter at a platform position. HighIR names the
 entry value of a register as the parameter that arrives in it
 (`MedToHighConverter::abiParamIndex`), and falls back on the register's
