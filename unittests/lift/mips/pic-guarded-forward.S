@@ -197,7 +197,22 @@ import_probe:
   dsrl32 $19,$18,0
   dsll32 $24,$18,0
   dsrl32 $24,$24,0
-#ifdef HIGH_FIRST
+#ifdef OR_DIFFERENCES
+  xor $24,$13,$24
+  xor $19,$14,$19
+  or $24,$24,$19
+#if SPILL_DIFFERENCE == 4
+  sw $24,40($sp)
+  or $24,$zero,$zero
+  lw $24,40($sp)
+#elif SPILL_DIFFERENCE == 8
+  sd $24,40($sp)
+  or $24,$zero,$zero
+  ld $24,40($sp)
+#endif
+  bne $24,$zero,.Ldone
+  nop
+#elif defined(HIGH_FIRST)
   bne $14,$19,.Ldone
   nop
   bne $13,$24,.Ldone
