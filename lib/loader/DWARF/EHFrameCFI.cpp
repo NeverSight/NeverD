@@ -36,11 +36,12 @@ namespace detail {
 bool decodeCFIProgram(const uint8_t *Buf, size_t Size, size_t Cursor,
                       size_t End, const DwarfCIE &CIE, uint8_t FDEEncoding,
                       va_t BufVA, const PointerBases &Bases, unsigned PtrSize,
-                      std::optional<va_t> FunctionStart, const BinaryImage *Img,
+                      const DwarfFDE *FDE, const BinaryImage *Img,
                       const ParseLimits &Limits,
                       std::vector<CFIInstruction> &Out,
                       ExceptionParseStatus &Status,
-                      std::vector<std::string> &Diagnostics) {
+                      std::vector<std::string> &Diagnostics,
+                      FDEOpcodeVisitor VisitOpcode) {
   using namespace llvm::dwarf;
 
   uint64_t Location = 0;
@@ -85,6 +86,8 @@ bool decodeCFIProgram(const uint8_t *Buf, size_t Size, size_t Cursor,
       return true;
     }
 
+    if (VisitOpcode)
+      VisitOpcode(FDE->SectionOffset, Cursor, Buf[Cursor]);
     const uint8_t Op = Buf[Cursor++];
     CFIInstruction Insn;
     Insn.CodeOffset = Location;
@@ -144,16 +147,17 @@ bool decodeCFIProgram(const uint8_t *Buf, size_t Size, size_t Cursor,
       }
       Insn.Kind = CFIOpKind::SetLoc;
       Insn.Offset = std::bit_cast<int64_t>(Address);
-      if (!FunctionStart) {
+      if (!FDE) {
         Out.push_back(std::move(Insn));
         Status =
             mergeExceptionParseStatus(Status, ExceptionParseStatus::Partial);
         Diagnostics.emplace_back(aarch64::kUnboundSetLoc);
         return true;
       }
-      if (Address < *FunctionStart || Address - *FunctionStart <= Location)
+      if (Address < FDE->InitialLocation ||
+          Address - FDE->InitialLocation <= Location)
         return fail(aarch64::kInvalidSetLoc);
-      Location = Address - *FunctionStart;
+      Location = Address - FDE->InitialLocation;
       break;
     }
     case DW_CFA_advance_loc1:

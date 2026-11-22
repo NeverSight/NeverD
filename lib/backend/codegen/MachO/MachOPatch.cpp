@@ -36,6 +36,8 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
@@ -1548,10 +1550,45 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
     ++AddedSections;
     return true;
   };
-  if (Runtime && Runtime->InitializerOffsets.Size &&
-      !AppendSection(NewSegBuf, NewSF, Runtime->InitializerOffsets,
-                     kInitializerOffsets, S_INIT_FUNC_OFFSETS))
-    return 0;
+  if (Runtime && Runtime->InitializerOffsets.Size) {
+    // Once a segment has section records, its executable bytes must have an
+    // instruction section of their own. Keep other read-only storage out of it.
+    llvm::SmallVector<const CompiledSection *> Ordered;
+    for (const auto &S : Sections)
+      if (S.IsAllocated && S.IsInImage && S.Size && S.VA >= NewSF.VMAddr &&
+          S.VA - NewSF.VMAddr < NewSF.VMSize)
+        Ordered.push_back(&S);
+    llvm::sort(Ordered,
+               [](const auto *L, const auto *R) { return L->VA < R->VA; });
+    MachORuntimeSections::Span Text;
+    const auto FlushText = [&] {
+      if (!Text.Size)
+        return true;
+      const bool Added =
+          AppendSection(NewSegBuf, NewSF, Text, kNdTextSectionMachO,
+                        S_ATTR_SOME_INSTRUCTIONS);
+      Text = {};
+      return Added;
+    };
+    for (const auto *S : Ordered) {
+      const bool IsCode = S->Kind == llvm::mc_rewrite::RewriteSectionKind::Code;
+      if (Text.Size &&
+          (!IsCode ||
+           llvm::alignTo(Text.VA + Text.Size, S->Alignment) != S->VA) &&
+          !FlushText())
+        return 0;
+      if (!IsCode)
+        continue;
+      if (!Text.Size)
+        Text = {S->VA, S->Size, S->Alignment};
+      else
+        Text.Size = S->VA - Text.VA + S->Size;
+    }
+    if (!FlushText() ||
+        !AppendSection(NewSegBuf, NewSF, Runtime->InitializerOffsets,
+                       kInitializerOffsets, S_INIT_FUNC_OFFSETS))
+      return 0;
+  }
   std::vector<std::vector<uint8_t>> DataSegments;
   uint64_t DataOffset = WritableOffset;
   for (const bool ReadOnly : {true, false}) {

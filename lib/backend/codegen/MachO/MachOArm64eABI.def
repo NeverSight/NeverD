@@ -35,5 +35,7 @@ MACHO_ARM64E_ABI_TEXT(
 MACHO_ARM64E_ABI_TEXT(
     kDependencies, "deferred pointer providers require a native arm64e image")
 
+MACHO_ARM64E_ABI_VALUE(uint32_t, kReturnToLR, 0xd65f03c0)
+
 #undef MACHO_ARM64E_ABI_TEXT
 #undef MACHO_ARM64E_ABI_VALUE

@@ -445,7 +445,9 @@ and without existing TLS. It checked an authenticated per-thread callback,
 an exported descriptor, constructors and thread-exit destructors against
 independently Apple-linked images.
 [Native image and unload checks](https://github.com/gmh5225/test_mac_intel/actions/runs/45036493917).
-The pinned r6 backend emitted objects from ordinary and legacy-signed destructor inputs at O0 and O2. Apple’s platform linker produced four images for native unload checks. The raw r6 objects carry explicit return-address CFI that the classic installer rejects. The source backend emits the implicit Darwin rule for direct installation. [r6 native unload checks](https://github.com/gmh5225/test_mac_intel/actions/runs/45037160445).
+The pinned r6 backend emits a generic DWARF signing toggle for a classic
+`PACIBSP` prologue. Apple-linked O0/O2 destructor images provided the original
+unload controls. [r6 native unload checks](https://github.com/gmh5225/test_mac_intel/actions/runs/45037160445).
 The native object installation suite ran under both system loaders. [Native object installation suite](https://github.com/gmh5225/test_mac_intel/actions/runs/45037152456).
 
 The artifact directory for
@@ -469,13 +471,43 @@ Apple Clang 21 produced the IR for eight native execution cases. All 32 native
 installation cases passed, including authenticated calls, catches and cleanups.
 [Native installation and execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45002434803).
 
-The r6 explicit classic signed-return CFI is incompatible with the macOS 26
-system unwinder, so publication rejects those objects transactionally. The
-Apple-native object route remains available. Canonical generation requires the
-[Darwin CFI correction](https://github.com/NeverSight/llvm-project/pull/8)
-committed directly to the NeverSight LLVM fork; it does
-not strip assembly or patch LLVM during the NeverD build. A separate source
-build validates that correction without changing the prebuilt release selection.
+### Direct installation of r6 objects
+
+For a classic arm64e object, `--from-object` can install the r6 DWARF recipe
+when the function starts with `PACIBSP`, its CIE defines the incoming SP as the CFA,
+and the explicit signing row begins immediately after that instruction. The
+installer replaces the redundant one-byte DWARF opcode with `DW_CFA_nop` in
+the output. Other register rules, pointer relocations and language tables
+keep their positions.
+
+An asynchronous r6 FDE can also mark LR unsigned before a return, a direct tail
+call, or a register tail call to a statically identified function. The installer
+evaluates remembered and restored CFI independently on each exit. It checks
+the installed authentication instruction, live LR,
+incoming SP and signing states. A mismatched key, an unexplained signing
+transition or a mixed signing-column rule leaves the candidate unpublished.
+The LLVM source fork emits the implicit Darwin recipe directly.
+[LLVM fork change](https://github.com/NeverSight/llvm-project/pull/8).
+
+The r6 emitter reproduced 14 O0/O2 fixture objects byte for byte. On macOS
+26.7.2 and 27.0.1, the installed images ran their constructor and destructor
+sequences, typed catches, foreign exception cleanups and both tail-call paths.
+Each Apple M1 runner passed 14 NeverD installations and 14 reference images.
+In an independent comparison,
+Apple's linker produced two raw r6 C++ images whose foreign exception
+propagation aborted on 26.7.2 and passed on 27.0.1. Both macOS versions passed
+the Apple-compiled source controls. [Direct r6 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45050069492).
+[Apple-linked controls](https://github.com/gmh5225/test_mac_intel/actions/runs/45045275169).
+
+When a replacement contains initializer offsets, the installed Mach-O gives
+the initializer functions their own instruction section. The offset array
+retains its `S_INIT_FUNC_OFFSETS` type. A lifted signed leaf or standard FP/LR
+frame may use indexed DWARF for a source compact recipe. Publication checks
+the CFA and saved registers at the corresponding instructions. Republishing
+an indexed body preserves its FDE even when it inherits every rule from the CIE.
+The native installation suite passed all 72 cases with zero skips on each M1
+runner. [Native object and executable suite](https://github.com/gmh5225/test_mac_intel/actions/runs/45050584000).
+
 The prebuilt audit checks the tag, release commit, all archive digests and checksum
 sidecars against the r6 snapshot. The source gitlink may advance only when the
 fork's authoritative comparison proves that snapshot is its ancestor; older,
@@ -488,9 +520,9 @@ local and new external data/code pointers, ordinary pointer addends, new writabl
 storage, three original-entry replacements, C++ catches, cleanup/resume and
 transaction rollback. A compatible producer exercises both compact language
 frames and explicit DWARF language frames. The latter forces a GNU_args_size
-row, including creation of previously absent EH storage. A deliberate generic
-RA-state toggle is a negative producer control: both the native installer and
-SDK must refuse publication without changing the original image.
+row, including creation of previously absent EH storage. The SDK and native
+installer reject signing rules at the wrong instruction boundary and preserve
+the original image on failure.
 The offline checks compare native object/final unwind metadata and Apple's
 `dwarfdump` output; only execution on a qualified host can certify runtime use.
 
@@ -883,12 +915,11 @@ unqualified.
 
 Use `--producer neverd` with `scripts/verify_arm64e_entry.py` to export the
 reconstructed entry objects through `Codegen::compile`. The independent Apple
-compiler builds the caller and links the image. The exported objects must
-already have the classic arm64e subtype and compatible signed-return CFI;
-neither the verifier nor linker repairs those identities. In particular, r6
-is rejected when it emits `DW_CFA_AARCH64_negate_ra_state`. Use a separate
-source build of the pinned NeverSight LLVM fork for this qualification; the
-default r6 selection stays unchanged.
+compiler builds the caller and links the image. Standalone export checks the
+classic arm64e subtype and requires system-compatible unwind information in
+the raw object. With `--publish`, NeverD checks the
+relocated object and its final installed unwind ranges. This also exercises
+the classic r6 conversion described above.
 
 Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
 same reconstructed fixed-C entry matrix. Each original dylib contains 26
@@ -1186,9 +1217,9 @@ no PC sensitivity and unavailable explicit PAuth_LR.
 Native register-result image publication also retains FP/SP CFA changes,
 remembered states across multiple epilogues, saved/same-value register rules,
 GNU argument-size rows and the explicit B-key CIE augmentation. Final linked
-CFI is compared against the original at every instruction boundary. Generic
-RA toggles remain rejected by the existing classic-Darwin compatibility
-boundary; this extension does not authorize them.
+CFI is compared against the original at every instruction boundary. Direct r6
+object installation handles the machine-verified classic signing transitions
+described above.
 
 Release verification at `06d091c34b8fa1fa84016c528982aa55452ba874` passes all
 30 lifted-image tests with the tracked LLVM fork, locally and on both Apple

@@ -23,7 +23,8 @@ MACHO_OBJECT_TEXT(kAddressPageReach,
 MACHO_OBJECT_TEXT(kNoPlacement, "original Mach-O has no safe placement")
 MACHO_OBJECT_TEXT(kClassicReturnCFI,
                   "classic arm64e requires implicit signed-return CFI; "
-                  "use a compatible native object producer or fixed LLVM fork")
+                  "explicit rule does not match the installed signing "
+                  "instructions or frame state")
 
 MACHO_OBJECT_TEXT(
     kSubtype,
@@ -68,9 +69,11 @@ MACHO_OBJECT_TEXT(kGOTRelocation,
 MACHO_OBJECT_TEXT(kTLVDescriptor,
                   "thread-local access requires a strong descriptor export "
                   "or a sealed descriptor import")
-// RX, RELRO and RW segments; two TLS spans plus the distinct initializer span.
+// Placement packs code before the read-only initializer offsets. Both spans
+// have section records when dyld registers initializers in the RX segment.
 MACHO_OBJECT_VALUE(unsigned, kRuntimeSegmentCount, 3)
 MACHO_OBJECT_VALUE(unsigned, kTLVSectionCount, 2)
+MACHO_OBJECT_VALUE(unsigned, kInitializerSectionCount, 2)
 MACHO_OBJECT_TEXT(kFunctionAlias,
                   "aliased native function entries have no shared unwind range")
 MACHO_OBJECT_TEXT(

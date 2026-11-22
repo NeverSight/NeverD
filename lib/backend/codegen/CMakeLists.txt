@@ -107,6 +107,7 @@ add_neverd_component_library(NeverDCodeGen
   rewrite/InplaceRewriter.cpp
 
   LINK_COMPONENTS
+  AArch64UnwindRecovery
   LLVMMemoryAnalysis
   IR
   Loader

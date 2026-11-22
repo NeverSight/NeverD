@@ -5,6 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MachOArm64eABI.h"
 #include "MachOLiftedObject.h"
 #include "MachOPageAddress.h"
 
@@ -63,11 +64,7 @@ namespace {
   constexpr uint32_t Name[] = {__VA_ARGS__};
 #include "MachOLiftedLeaf.def"
 
-enum class SigningHint : uint32_t {
-#define NEVERD_A64_PAUTH_HINT(Name, Word, Operation, Pointer, Modifier)        \
-  Name = Word,
-#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.def"
-};
+using macho_arm64e_abi::PAuthEncoding;
 
 llvm::Error refuse(const char *Reason) {
   return llvm::createStringError(llvm::errc::not_supported, Reason);
@@ -273,8 +270,8 @@ bool elidesUnusedStackFrame(Decoder &Decode, llvm::ArrayRef<uint8_t> Source,
           macho_unwind::kARM64ModeFrameless ||
       Emitted.size() < Word || Emitted.size() % Word ||
       Source.size() <= Emitted.size() ||
-      readLE<uint32_t>(Source.end() - Word) != kReturnToLR ||
-      readLE<uint32_t>(Emitted.end() - Word) != kReturnToLR)
+      readLE<uint32_t>(Source.end() - Word) != macho_arm64e_abi::kReturnToLR ||
+      readLE<uint32_t>(Emitted.end() - Word) != macho_arm64e_abi::kReturnToLR)
     return false;
   const auto Read = [&](llvm::ArrayRef<uint8_t> Bytes, va_t VA, size_t Offset,
                         DecodedInsn &I) {
@@ -550,7 +547,7 @@ std::optional<FrameBody> signedFrameBody(llvm::ArrayRef<uint8_t> Code,
   constexpr auto Size = aarch64::kInsnSize;
   if (Code.size() / Size < Save.size() + Restore.size() + 2 ||
       readLE<uint32_t>(Code.data()) !=
-          static_cast<uint32_t>(SigningHint::PACIBSP))
+          static_cast<uint32_t>(PAuthEncoding::PACIBSP))
     return std::nullopt;
   const size_t End = Code.size() - (Restore.size() + 1) * Size;
   for (auto [Index, Word] : llvm::enumerate(Save))
@@ -574,21 +571,32 @@ struct AddressExpansion {
   }
 };
 
-// Frame instructions materialize CodeOffset relative to each function.
-// Padding NOPs can change when the linker lays out the relocated records.
+// Compare effective rules at their code locations. A removed signing opcode
+// can leave two DW_CFA_advance_loc instructions for one unchanged interval.
 bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
-                    llvm::ArrayRef<CFIInstruction> New,
-                    const AddressExpansion &Growth = {},
-                    uint64_t Alignment = 1) {
+                    llvm::ArrayRef<CFIInstruction> New, uint64_t CodeSize = 0,
+                    uint64_t Alignment = 1,
+                    const AddressExpansion &Growth = {}) {
+  // The decoder advances monotonically. Check even a final advance with no
+  // subsequent rule, which would otherwise disappear from the comparison.
+  const auto InRange = [Alignment](auto Program, uint64_t Size) {
+    if (Program.empty())
+      return true;
+    const auto &Last = Program.back();
+    return Last.CodeOffset <= Size &&
+           (Last.Kind != CFIOpKind::AdvanceLoc ||
+            uint64_t(Last.Offset) <= (Size - Last.CodeOffset) / Alignment);
+  };
+  if (!InRange(Old, CodeSize) || !InRange(New, Growth(CodeSize)))
+    return false;
   const auto Effective = [](const CFIInstruction &I) {
-    return I.Kind != CFIOpKind::Nop;
+    return I.Kind != CFIOpKind::Nop && I.Kind != CFIOpKind::AdvanceLoc;
   };
   auto Before = llvm::make_filter_range(Old, Effective);
   auto After = llvm::make_filter_range(New, Effective);
   return llvm::all_of(Before,
                       [](const auto &I) {
                         switch (I.Kind) {
-                        case CFIOpKind::AdvanceLoc:
                         case CFIOpKind::DefCFA:
                         case CFIOpKind::DefCFARegister:
                         case CFIOpKind::DefCFAOffset:
@@ -609,14 +617,6 @@ bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
                          return dwarf_eh::sameCFIInstruction(A, B);
                        auto Mapped = A;
                        Mapped.CodeOffset = Growth(A.CodeOffset);
-                       if (A.Kind == CFIOpKind::AdvanceLoc) {
-                         const auto Distance =
-                             Growth(A.CodeOffset + A.Offset * Alignment) -
-                             Mapped.CodeOffset;
-                         if (Distance % Alignment)
-                           return false;
-                         Mapped.Offset = Distance / Alignment;
-                       }
                        return dwarf_eh::sameCFIInstruction(Mapped, B);
                      });
 }
@@ -669,7 +669,8 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
          Range.PersonalitySlotVA.value_or(0) == New->PersonalitySlotVA &&
          sameSpillRules(Old->InitialInstructions, New->InitialInstructions) &&
          sameSpillRules(Frame.Dwarf->Instructions, NewFrame->Instructions,
-                        Growth, Old->CodeAlignmentFactor);
+                        Frame.Dwarf->AddressRange - RetainedBytes,
+                        Old->CodeAlignmentFactor, Growth);
 }
 
 bool sameLanguageTable(const ExceptionFunction &Before,
@@ -737,10 +738,12 @@ bool sameLanguageTable(const ExceptionFunction &Before,
   return true;
 }
 
-bool sameFramelessSpillFrame(const ExceptionFunction &Original,
-                             const dwarf_eh::ParseResult &Generated,
-                             const DwarfFDE *Frame,
-                             const NativeMachOCompactRange &Range, va_t Slide) {
+bool sameCompactFrameRows(const ExceptionFunction &Original,
+                          const dwarf_eh::ParseResult &Generated,
+                          const DwarfFDE *Frame,
+                          const NativeMachOCompactRange &Range, va_t Slide,
+                          llvm::ArrayRef<CFIInstruction> Rows,
+                          llvm::StringRef Augmentation) {
   const bool Language = Original.Itanium.has_value();
   if (!Frame || Frame->InitialLocation != Range.BeginVA ||
       Frame->AddressRange != Range.EndVA - Range.BeginVA ||
@@ -763,13 +766,55 @@ bool sameFramelessSpillFrame(const ExceptionFunction &Original,
                              Range.PersonalitySlotVA.value_or(0) &&
                          CIE->LSDAPointerEncoding == dweh::PCRel &&
                          !CIE->IsSignalFrame && !CIE->UsesNonHintPAuthLR &&
-                         !CIE->HasMTETaggedFrame
-                   : CIE->Augmentation == kBKeyFrameAugmentation) &&
-         CIE->UsesArm64eReturnAddressABI && CIE->HasPointerAuth &&
+                         !CIE->HasMTETaggedFrame && CIE->HasPointerAuth
+                   : CIE->Augmentation == Augmentation &&
+                         !Range.PersonalitySlotVA && !Range.LSDAVA) &&
+         CIE->UsesArm64eReturnAddressABI &&
          CIE->ReturnAddressRegister == aarch64_unwind::kLR &&
          sameSpillRules({Initial}, CIE->InitialInstructions) &&
-         sameSpillRules(machOFramelessSpillRows(*Original.Compact),
-                        Frame->Instructions);
+         sameSpillRules(Rows, Frame->Instructions, Frame->AddressRange,
+                        CIE->CodeAlignmentFactor);
+}
+
+// A classic PACIBSP frame may be indexed by DWARF even when the original
+// used a compact recipe. Match its rules against the actual frame record.
+bool sameSignedCompactFrame(const ExceptionFunction &Original,
+                            const dwarf_eh::ParseResult &Generated,
+                            const DwarfFDE *Frame,
+                            const NativeMachOCompactRange &Range,
+                            llvm::ArrayRef<uint8_t> Code) {
+  constexpr auto Word = aarch64::kInsnSize;
+  if (Original.Dwarf || Original.Itanium || Code.size() < 2 * Word ||
+      readLE<uint32_t>(Code.data()) !=
+          static_cast<uint32_t>(PAuthEncoding::PACIBSP) ||
+      readLE<uint32_t>(Code.end() - Word) !=
+          static_cast<uint32_t>(PAuthEncoding::RETAB))
+    return false;
+  llvm::SmallVector<CFIInstruction> Rows;
+  if (Original.Compact->NativeEncoding == macho_unwind::kARM64ModeFrame) {
+    auto Body = signedFrameBody(Code, kPushFrame, kPopFrame);
+    if (!Body)
+      Body = signedFrameBody(Code, kAllocateFrame, kDeallocateFrame);
+    if (!Body)
+      return false;
+    constexpr int64_t Slot = aarch64_unwind::kRegisterBytes;
+    Rows = {{.Kind = CFIOpKind::DefCFA,
+             .CodeOffset = Body->Begin,
+             .Register = aarch64_unwind::kFP,
+             .Offset = 2 * Slot},
+            {.Kind = CFIOpKind::Offset,
+             .CodeOffset = Body->Begin,
+             .Register = aarch64_unwind::kLR,
+             .Offset = -Slot},
+            {.Kind = CFIOpKind::Offset,
+             .CodeOffset = Body->Begin,
+             .Register = aarch64_unwind::kFP,
+             .Offset = -2 * Slot}};
+  } else if (Original.Compact->NativeEncoding !=
+             macho_unwind::kARM64ModeFrameless)
+    return false;
+  return sameCompactFrameRows(Original, Generated, Frame, Range, 0, Rows,
+                              kCompilerFrameAugmentation);
 }
 
 // Compare on-disk bytes as well as the loaded view: dyld can normalize pointer
@@ -999,16 +1044,20 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         !Frame->Compact->SavedRegisterSlots.empty();
     if (FramelessSpills) {
       if (!Indexed || Frame->Dwarf ||
-          !sameFramelessSpillFrame(*Frame, LinkedFrames,
-                                   FDEs.lookup(Owner->second), *Range.mapped(),
-                                   Slide))
+          !sameCompactFrameRows(*Frame, LinkedFrames,
+                                FDEs.lookup(Owner->second), *Range.mapped(),
+                                Slide, machOFramelessSpillRows(*Frame->Compact),
+                                kBKeyFrameAugmentation))
         return refuse(kLeafFrame);
     } else if (Indexed) {
-      if ((SourceEncoding & ~DwarfFields) != macho_unwind::kARM64ModeDwarf ||
-          !sameIndexedLinkFrame(
-              Original, *Frame, LinkedFrames, FDEs.lookup(Owner->second), Start,
-              *Range.mapped(), Slide, RetainedTails.lookup(Start).size(),
-              InstalledOffset))
+      const auto *FDE = FDEs.lookup(Owner->second);
+      if ((SourceEncoding & ~DwarfFields) == macho_unwind::kARM64ModeDwarf) {
+        if (!sameIndexedLinkFrame(
+                Original, *Frame, LinkedFrames, FDE, Start, *Range.mapped(),
+                Slide, RetainedTails.lookup(Start).size(), InstalledOffset))
+          return refuse(kLeafFrame);
+      } else if (!sameSignedCompactFrame(*Frame, LinkedFrames, FDE,
+                                         *Range.mapped(), Emitted))
         return refuse(kLeafFrame);
     } else {
       const bool Language = Frame->Itanium.has_value();
@@ -1129,8 +1178,7 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
       continue;
     }
 
-    const bool Framed =
-        Range.mapped()->Encoding == macho_unwind::kARM64ModeFrame;
+    const bool Framed = SourceEncoding == macho_unwind::kARM64ModeFrame;
     std::optional<FrameBody> Body;
     if (Framed) {
       Body = signedFrameBody(Source, kPushFrame, kPopFrame);
@@ -1138,11 +1186,12 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         Body = signedFrameBody(Source, kAllocateFrame, kDeallocateFrame);
       if (!Body)
         return refuse(kLeafFrame);
-    } else if (Indexed) {
+    } else if ((SourceEncoding & ~DwarfFields) ==
+               macho_unwind::kARM64ModeDwarf) {
       Body = signedFrameBody(Source, kPushLink, kPopLink);
       if (!Body)
         return refuse(kLeafFrame);
-    } else if (Native != macho_unwind::kARM64ModeFrameless) {
+    } else if (SourceEncoding != macho_unwind::kARM64ModeFrameless) {
       return refuse(kLeafFrame);
     }
     bool Signed = false;
@@ -1219,15 +1268,17 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         break;
       }
       if (!Last && !Signed && Native == macho_unwind::kARM64ModeFrameless &&
-          readLE<uint32_t>(Source.data() + Offset) == kReturnToLR)
+          readLE<uint32_t>(Source.data() + Offset) ==
+              macho_arm64e_abi::kReturnToLR)
         continue;
       if (Last) {
         // Plain RET must select LR. RETAB has an implicit LR, SP and B key.
         if (Signed ? Insn.Id != AARCH64_INS_RETAB
-                   : readLE<uint32_t>(Source.data() + Offset) != kReturnToLR)
+                   : readLE<uint32_t>(Source.data() + Offset) !=
+                         macho_arm64e_abi::kReturnToLR)
           return refuse(kLeafCode);
       } else if (!Offset && readLE<uint32_t>(Source.data()) ==
-                                static_cast<uint32_t>(SigningHint::PACIBSP)) {
+                                static_cast<uint32_t>(PAuthEncoding::PACIBSP)) {
         Signed = true;
       } else if (Body && (Offset < Body->Begin || Offset >= Body->End)) {
         // Both images performed the same frame operation at this offset.

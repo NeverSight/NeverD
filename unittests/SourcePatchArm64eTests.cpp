@@ -8,12 +8,17 @@
 
 #include "neverd/sdk/NeverDCAPI.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugFrame.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -33,7 +38,12 @@ namespace {
   constexpr llvm::StringLiteral Name[] = {__VA_ARGS__};
 #include "lift/format/MachOAuthenticatedNativeFixtures.def"
 
-enum class ArtifactProfile { GeneratedIR, NativeObject, IncompatibleCFI };
+enum class ReturnCFI { Native, Normalize, Reject };
+struct ArtifactProfile {
+  const char *CompilerArg = nullptr;
+  bool Generated = false;
+  ReturnCFI Rule = ReturnCFI::Native;
+};
 class SourcePatchArm64e : public testing::TestWithParam<ArtifactProfile> {};
 
 TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
@@ -41,8 +51,7 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
   GTEST_SKIP() << kMissingHost;
 #else
   const auto *IRCompiler = std::getenv(kIRCompilerEnvironment);
-  const bool Generated = GetParam() == ArtifactProfile::GeneratedIR;
-  const bool Incompatible = GetParam() == ArtifactProfile::IncompatibleCFI;
+  const auto [CompilerArg, Generated, Rule] = GetParam();
   if (Generated && !IRCompiler)
     GTEST_SKIP() << kMissingIRCompiler;
   llvm::SmallString<kPathCapacity> Directory;
@@ -107,11 +116,9 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
   Options.compiler_path = Generated ? IRCompiler : kCompiler;
   Options.artifact = Generated ? NEVERD_SOURCE_PATCH_ARTIFACT_IR
                                : NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT;
-  const char *CompilerArgs[] = {Incompatible ? kExplicitReturnCFIOption
-                                             : kDwarfLanguageOption};
-  if (Generated || Incompatible) {
-    Options.compiler_args = CompilerArgs;
-    Options.compiler_arg_count = std::size(CompilerArgs);
+  if (CompilerArg) {
+    Options.compiler_args = &CompilerArg;
+    Options.compiler_arg_count = 1;
   }
   Options.mappings = Mappings;
   Options.mapping_count = std::size(Mappings);
@@ -126,20 +133,16 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
   auto After = llvm::MemoryBuffer::getFile(Original);
   ASSERT_TRUE(bool(After));
   EXPECT_EQ((*After)->getBuffer(), (*Before)->getBuffer());
-  if (Incompatible || (Generated && !Result &&
-                       llvm::StringRef(neverd_last_error(Session))
-                           .contains(kClassicReturnCFIDiagnostic))) {
+  if (Rule == ReturnCFI::Reject) {
     EXPECT_EQ(Result, 0);
     EXPECT_FALSE(llvm::sys::fs::exists(Output));
     EXPECT_TRUE(llvm::StringRef(neverd_last_error(Session))
                     .contains(kClassicReturnCFIDiagnostic));
-    if (Generated)
-      GTEST_SKIP() << kMissingCompatibleIRProducer;
     return;
   }
   ASSERT_EQ(Result, 1) << neverd_last_error(Session);
   EXPECT_TRUE(llvm::sys::fs::exists(Output));
-  if (Generated) {
+  if (Generated || Rule == ReturnCFI::Normalize) {
     auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
     ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
     bool Found = false;
@@ -149,6 +152,26 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
       Found |= *Name == kEHFrameSection && Section.getSize() != 0;
     }
     EXPECT_TRUE(Found);
+    if (Rule == ReturnCFI::Normalize) {
+      auto Debug = llvm::DWARFContext::create(*Installed->getBinary());
+      auto Frames = Debug->getEHFrame();
+      ASSERT_TRUE(bool(Frames)) << llvm::toString(Frames.takeError());
+      bool FoundOperand = false;
+      for (const auto &Frame : (*Frames)->entries()) {
+        const auto &CFI = Frame.cfis();
+        if (llvm::none_of(CFI, [](const auto &I) {
+              return I.Opcode == llvm::dwarf::DW_CFA_GNU_args_size &&
+                     I.Ops.front() == kClassicCFIOperand;
+            }))
+          continue;
+        EXPECT_FALSE(FoundOperand);
+        FoundOperand = true;
+        EXPECT_TRUE(llvm::none_of(CFI, [](const auto &I) {
+          return I.Opcode == llvm::dwarf::DW_CFA_AARCH64_negate_ra_state;
+        }));
+      }
+      EXPECT_TRUE(FoundOperand);
+    }
   }
   EXPECT_EQ(neverd_patch_source(Session, kObjectSource,
                                 sizeof(kObjectSource) - 1, &Options,
@@ -315,6 +338,9 @@ TEST_F(SourcePatchArm64eSDK, ReservesTheFirstGOTSlotForCodeOnlyObjects) {
   const neverd_source_patch_dependency_v1 Data{kProviderLibrary, kProviderData,
                                                NEVERD_SOURCE_DEPENDENCY_DATA};
   auto Options = options();
+  const char *Flags[] = {kFreestandingSource};
+  Options.compiler_args = Flags;
+  Options.compiler_arg_count = std::size(Flags);
   Options.dependencies = &Data;
   Options.dependency_count = 1;
   for (auto Artifact :
@@ -364,19 +390,53 @@ TEST_F(SourcePatchArm64eSDK, RegistersPrioritizedIRDestructorsWithLibSystem) {
   ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
   const auto &MachO =
       llvm::cast<llvm::object::MachOObjectFile>(*Installed->getBinary());
-  size_t Entries = 0;
-  for (const auto &Section : MachO.sections()) {
-    const auto Type = MachO.getSection64(Section.getRawDataRefImpl()).flags &
-                      llvm::MachO::SECTION_TYPE;
-    EXPECT_NE(Type, llvm::MachO::S_MOD_TERM_FUNC_POINTERS);
-    if (Type == llvm::MachO::S_INIT_FUNC_OFFSETS)
-      Entries += Section.getSize() / sizeof(uint32_t);
+  std::optional<uint64_t> HeaderVA;
+  for (const auto &Command : MachO.load_commands()) {
+    if (Command.C.cmd != llvm::MachO::LC_SEGMENT_64)
+      continue;
+    const auto Segment = MachO.getSegment64LoadCommand(Command);
+    if (Segment.fileoff == 0 && Segment.filesize)
+      HeaderVA = Segment.vmaddr;
   }
-  EXPECT_EQ(Entries, kRegisteredInitializers);
+  ASSERT_TRUE(HeaderVA.has_value());
+  llvm::SmallVector<uint64_t> Entries;
+  for (const auto &Section : MachO.sections()) {
+    const auto Flags = MachO.getSection64(Section.getRawDataRefImpl()).flags;
+    const auto Type = Flags & llvm::MachO::SECTION_TYPE;
+    EXPECT_NE(Type, llvm::MachO::S_MOD_TERM_FUNC_POINTERS);
+    if (Type != llvm::MachO::S_INIT_FUNC_OFFSETS)
+      continue;
+    EXPECT_EQ(Flags & (llvm::MachO::S_ATTR_SOME_INSTRUCTIONS |
+                       llvm::MachO::S_ATTR_PURE_INSTRUCTIONS),
+              0u);
+    auto Bytes = Section.getContents();
+    ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+    ASSERT_EQ(Bytes->size() % sizeof(uint32_t), 0u);
+    for (size_t I = 0; I < Bytes->size(); I += sizeof(uint32_t))
+      Entries.push_back(*HeaderVA +
+                        llvm::support::endian::read32le(Bytes->data() + I));
+  }
+  ASSERT_EQ(Entries.size(), kRegisteredInitializers);
+  for (uint64_t VA : Entries)
+    EXPECT_TRUE(llvm::any_of(MachO.sections(), [&](const auto &Section) {
+      const auto S = MachO.getSection64(Section.getRawDataRefImpl());
+      return VA >= S.addr && VA - S.addr < S.size &&
+             (S.flags & llvm::MachO::S_ATTR_SOME_INSTRUCTIONS);
+    })) << VA;
 }
 
-INSTANTIATE_TEST_SUITE_P(Native, SourcePatchArm64e,
-                         ::testing::Values(ArtifactProfile::GeneratedIR,
-                                           ArtifactProfile::NativeObject,
-                                           ArtifactProfile::IncompatibleCFI));
+INSTANTIATE_TEST_SUITE_P(
+    Native, SourcePatchArm64e,
+    ::testing::Values(
+        ArtifactProfile{kDwarfLanguageOption, true}, ArtifactProfile{},
+        ArtifactProfile{kExplicitReturnCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kClassicReturnCFIOption, false, ReturnCFI::Normalize},
+        ArtifactProfile{kWrongKeyCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kMixedReturnCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kClassicAsyncCFIOption, false, ReturnCFI::Normalize},
+        ArtifactProfile{kRegisterTailCFIOption, false, ReturnCFI::Normalize},
+        ArtifactProfile{kOpaqueTailCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kMultiExitCFIOption, false, ReturnCFI::Normalize},
+        ArtifactProfile{kMissingRestoreCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kWrongEpilogueCFIOption, false, ReturnCFI::Reject}));
 } // namespace

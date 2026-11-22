@@ -45,11 +45,12 @@ ParseResult parseFrameHeaders(const BinaryImage &Img, const FrameSection &Sec,
 bool decodeCFIProgram(const uint8_t *Buf, size_t Size, size_t Cursor,
                       size_t End, const DwarfCIE &CIE, uint8_t FDEEncoding,
                       va_t BufVA, const PointerBases &Bases, unsigned PtrSize,
-                      std::optional<va_t> FunctionStart, const BinaryImage *Img,
+                      const DwarfFDE *FDE, const BinaryImage *Img,
                       const ParseLimits &Limits,
                       std::vector<CFIInstruction> &Out,
                       ExceptionParseStatus &Status,
-                      std::vector<std::string> &Diagnostics);
+                      std::vector<std::string> &Diagnostics,
+                      FDEOpcodeVisitor VisitOpcode = nullptr);
 
 } // namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE detail
 } // namespace neverd::dwarf_eh
