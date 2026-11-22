@@ -14,6 +14,51 @@ SpecializationOptions returningCallOptions(va_t Call, va_t Exit) {
   return O;
 }
 
+TEST_F(PEFixedImageTest, ReturningCallCanRetainDeclaredEarlierFrameBytes) {
+  // Save the real return stack pointer in a VM frame slot below the later
+  // outbound call, then restore it after the imported call returns.
+  const std::vector<uint8_t> Code = {
+      0x48, 0x89, 0x64, 0x24, 0x90, // mov [rsp-112],rsp
+      0x48, 0x83, 0xec, 0x40,       // sub rsp,64
+      0xff, 0xd0,                   // call rax
+      0x48, 0x83, 0xc4, 0x40,       // add rsp,64
+      0x48, 0x8b, 0x64, 0x24, 0x90, // mov rsp,[rsp-112]
+      0xff, 0xd0,                   // call rax through the restored stack
+      0xc3};                        // ret
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x1016);
+  O.X64ReturningCalls.push_back(
+      {1, Base + 0x1014,
+       SpecializationX64CallProfile::ConditionalNormalReturnV1, 32});
+  const auto Unpreserved =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  EXPECT_FALSE(Unpreserved.complete());
+  EXPECT_TRUE(Unpreserved.Residual.Blocks.empty());
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 2;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnFrameSpansV2;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  const auto Preserved = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(Preserved.complete()) << Preserved.Diagnostic;
+  ASSERT_EQ(Preserved.ReturningCalls.size(), 2U);
+  ASSERT_TRUE(Preserved.RawEnvironment);
+  auto Error = validateSpecializationRawEnvironment(Preserved, O);
+  EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  auto Stale = O;
+  Stale.X64ReturningCalls.front().PreservedFrameRanges.front().End = -105;
+  auto Mismatch = validateSpecializationRawEnvironment(Preserved, Stale);
+  EXPECT_TRUE(bool(Mismatch));
+  llvm::consumeError(std::move(Mismatch));
+  auto Overlap = O;
+  Overlap.X64ReturningCalls.front().PreservedFrameRanges = {{-72, -64}};
+  const auto Refused =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, Overlap);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
+}
+
 llvm::ArrayRef<LowOp> returningCallSpan(const SpecializationResult &R,
                                         va_t Address) {
   for (const auto &B : R.Residual.Blocks)

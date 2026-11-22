@@ -15,6 +15,7 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace neverd::symbolic {
 class SymContext;
@@ -149,6 +150,7 @@ struct RecoveryCallTransition {
   llvm::ArrayRef<uint64_t> FreshFlags;
   NdVar Stack;
   NdVar ProgramCounter;
+  std::vector<symbolic::SymMemoryRange> PreservedFrameRanges;
 };
 
 /// Native policies live under arch/<isa>. Core owns graph/evidence integrity
@@ -167,7 +169,8 @@ public:
   virtual llvm::Expected<std::unique_ptr<RecoveryReturningCallLookup>>
   prepareReturningCallLookup(const SpecializationOptions &Options,
                              uint64_t &Work) const = 0;
-  virtual RecoveryCallTransition returningCallTransition() const = 0;
+  virtual RecoveryCallTransition
+  returningCallTransition(const SpecializationReturningCall &Call) const = 0;
   virtual std::string
   returningCallDigest(const SpecializationReturningCall &Call) const = 0;
   virtual llvm::Error

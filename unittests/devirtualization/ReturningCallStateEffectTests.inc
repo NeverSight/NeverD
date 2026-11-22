@@ -31,6 +31,15 @@ void returningStateSwapGS(SymState &S, RuntimeControlState &Controls,
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
 }
 
+RecoveryCallTransition returningStateV1CallPolicy() {
+  SpecializationX64ReturningCall D;
+  D.Version = 1;
+  D.Address = 0x100;
+  D.Profile = SpecializationX64CallProfile::ConditionalNormalReturnV1;
+  D.OutgoingBytes = 32;
+  return x64::returningCallTransition(D);
+}
+
 TEST(InterpreterSpecialization,
      ReturningCallEffectKeepsSegmentRootsAndCurrentViews) {
   for (bool Aliased : {false, true}) {
@@ -75,7 +84,7 @@ TEST(InterpreterSpecialization,
     auto Sibling = S;
     const auto SiblingHole = Sibling.load(At(80), 8);
     const auto Nodes = C.numNodes();
-    const auto Policy = x64::returningCallTransition();
+    const auto Policy = returningStateV1CallPolicy();
     ReturningCallStateEffect Effect;
     Effect.MaxWork = 100000;
     Effect.MaxNodes = Nodes + 4096;
@@ -121,7 +130,7 @@ TEST(InterpreterSpecialization,
   Effect.MaxWork = 100000;
   Effect.MaxNodes = 65536;
   applyReturningCallState(S, Root, Root, 32, 256, 0x103,
-                          x64::returningCallTransition(), Effect);
+                          returningStateV1CallPolicy(), Effect);
   ASSERT_EQ(Effect.Status, SpecializationStatus::Complete) << Effect.Diagnostic;
   const uint64_t Flags[] = {x86reg::CF, x86reg::PF, x86reg::AF,
                             x86reg::ZF, x86reg::SF, x86reg::OF};
@@ -164,7 +173,7 @@ TEST(InterpreterSpecialization, ReturningCallEffectEmptyStateHasExactLedgers) {
     Effect.MaxWork = Budget;
     Effect.MaxNodes = Before + AddedNodeAllowance;
     applyReturningCallState(S, Root, Root, 32, 256, 0x103,
-                            x64::returningCallTransition(), Effect);
+                            returningStateV1CallPolicy(), Effect);
     EXPECT_LE(Effect.WorkUsed, Budget);
     EXPECT_EQ(Effect.Status, Budget == ExactWork
                                  ? SpecializationStatus::Complete
@@ -193,7 +202,7 @@ TEST(InterpreterSpecialization, ReturningCallEffectEmptyStateHasExactLedgers) {
     Effect.MaxWork = ExactWork;
     Effect.MaxNodes = Before + AddedNodeAllowance - (Exact ? 0 : 1);
     applyReturningCallState(S, Root, Root, 32, 256, 0x103,
-                            x64::returningCallTransition(), Effect);
+                            returningStateV1CallPolicy(), Effect);
     EXPECT_EQ(Effect.Status, Exact ? SpecializationStatus::Complete
                                    : SpecializationStatus::BudgetExceeded);
     if (Exact) {

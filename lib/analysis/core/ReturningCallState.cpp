@@ -67,6 +67,7 @@ void applyReturningCallState(SymState &State, SymRef FrameRoot,
   Memory.Base = FrameRoot;
   Memory.Begin = PreservedBegin;
   Memory.End = FrameEnd;
+  Memory.EarlierRanges = Policy.PreservedFrameRanges;
   Memory.MaxWork = Effect.MaxWork - Effect.WorkUsed;
   State.clobberMemory(Memory);
   Effect.WorkUsed += Memory.WorkUsed;

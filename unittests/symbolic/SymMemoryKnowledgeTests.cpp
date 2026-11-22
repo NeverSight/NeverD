@@ -451,6 +451,41 @@ TEST(SymMemoryPreservation, CurrentBytesMatchIndependentByteArray) {
   }
 }
 
+TEST(SymMemoryPreservation, RetainsDisjointCurrentFrameSpans) {
+  SymContext C;
+  SymState Source(C);
+  const auto Frame = C.mkVar("frame", 64);
+  for (int64_t Offset : {-24, -16, -8, 0, 8})
+    Source.store(C.mkAdd(Frame, C.mkConst(64, Offset)),
+                 C.mkConst(8, 0x40 + Offset / 8));
+  const SymMemoryRange Earlier[] = {{-24, -23}, {-8, -7}};
+  SymState S(Source);
+  SymMemoryPreservation Keep{Frame, 0, 1, 1000};
+  Keep.EarlierRanges = Earlier;
+  const auto Nodes = C.numNodes();
+  S.clobberMemory(Keep);
+  ASSERT_EQ(Keep.Status, SymMemoryPreservationStatus::Applied);
+  EXPECT_EQ(C.numNodes(), Nodes);
+  for (int64_t Offset : {-24, -16, -8, 0, 8}) {
+    const auto Value = S.load(C.mkAdd(Frame, C.mkConst(64, Offset)), 1);
+    if (Offset == -24 || Offset == -8 || Offset == 0)
+      EXPECT_EQ(C.asConst(Value), uint64_t(0x40 + Offset / 8));
+    else
+      EXPECT_FALSE(C.asConst(Value));
+  }
+  SymState Short(Source), Before(Source);
+  Keep.MaxWork = 1;
+  Short.clobberMemory(Keep);
+  EXPECT_EQ(Keep.Status, SymMemoryPreservationStatus::BudgetExceeded);
+  EXPECT_TRUE(Short.mergeIdentical(Before));
+  const SymMemoryRange Overlapping[] = {{-24, -15}, {-16, -7}};
+  Keep.MaxWork = 1000;
+  Keep.EarlierRanges = Overlapping;
+  Short.clobberMemory(Keep);
+  EXPECT_EQ(Keep.Status, SymMemoryPreservationStatus::Invalid);
+  EXPECT_TRUE(Short.mergeIdentical(Before));
+}
+
 TEST(SymMemoryPreservation, RetainsCurrentSymbolicValuesAndHistoricalOrigins) {
   for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
     SymContext C;
