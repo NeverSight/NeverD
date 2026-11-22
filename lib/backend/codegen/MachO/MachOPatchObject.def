@@ -96,7 +96,8 @@ MACHO_OBJECT_TEXT(
     "a branch to an authenticated import stub must target its entry")
 MACHO_OBJECT_TEXT(kTLVAtExitThunk, "__nd_tlv_atexit")
 MACHO_OBJECT_VALUE(uint32_t, kBranchAuthZeroX16, 0xd61f0a1f)
-MACHO_OBJECT_TEXT(kDSOHandle, "__dso_handle")
+MACHO_OBJECT_TEXT(kMissingDSOHeader,
+                  "image handle requires a mapped Mach header")
 MACHO_OBJECT_VALUE(unsigned, kTLVOffsetField, 2 * sizeof(uint64_t))
 MACHO_OBJECT_TEXT(kTLVSymbolPrefix, "_")
 MACHO_OBJECT_VALUE(uint8_t, kDefaultFunctionPointerKey,

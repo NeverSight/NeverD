@@ -406,11 +406,47 @@ field and through a direct call. Both runners executed twelve installed
 images and four NeverD-generated objects from the source and r6 builds.
 [Release images and objects](https://github.com/gmh5225/test_mac_intel/actions/runs/45016941253).
 
-To inspect the signing recipes, run
-`dyld_info -imports -fixup_chain_details <image>` and match each bind ordinal
-to its import. The local Command Line Tools' `dyld_info -fixups` crashed while
-formatting the image that already imported the helper. The raw chain dump,
-`dyld_info -validate_only`, and system dyld each handled that image.
+The publisher gives file-backed fixup slots regular sections in
+`__ND_CONST,__const` and `__ND_DATA,__data`. TLS descriptors and template
+bytes retain their dyld section types. On the compact input that already
+imported the stack helper, adding just these records kept the raw chains
+identical and made Apple's `dyld_info -fixups` print every slot. Use
+`dyld_info -imports -fixups -fixup_chain_details <image>` to compare the
+printed section, provider and signing recipe. Code-only replacements can
+allocate a first GOT slot. When a compact header grows, the publisher uses
+the final addresses of reused slots and explicitly bound data.
+When a zero-base dylib needs more header space, newly allocated compact
+unwind and DWARF tables start after the planned load commands. This includes
+the section record for a new `__eh_frame` table. An object can therefore add
+RELRO, mutable data, TLS descriptors, a TLS template and image initializer
+offsets in the same publication.
+When an input has an empty chained-fixup table, the publisher chooses the
+first chain format from the deployment target. macOS 12, iOS 15 and aligned
+releases use `DYLD_CHAINED_PTR_ARM64E_USERLAND24`. Older deployment targets
+use `DYLD_CHAINED_PTR_ARM64E`. Images with an existing format retain it.
+[Apple dyld chained-fixup policy](https://github.com/apple-oss-distributions/dyld/blob/main/mach_o/Policy.cpp).
+
+Legacy Apple LLVM IR can define initialized thread-local storage and image
+initializers. Darwin visits initializer offsets in ascending priority order.
+For `llvm.global_dtors` the publisher emits registrations with libSystem's
+`__cxa_atexit`, signing each callback with IA and a zero discriminator and
+passing the installed Mach header as the image handle. The lowering preserves
+Darwin's 16-bit priorities and the association with a retained definition.
+A native input object's legacy `__mod_term_func` remains unsupported because
+dyld skips that section on arm64e.
+[Apple dyld initializer and terminator handling](https://github.com/apple-oss-distributions/dyld/blob/main/dyld/Loader.cpp).
+
+The macOS 26 and Xcode 27 runners each checked both O0 and O2 images. They
+compared named fixups with raw chains, loaded and called the replacements,
+and verified per-thread values on two threads. The unload driver kept the
+event recorder in a separate library and checked callback order over two
+load/unload cycles. The C++ TLS driver tested new definitions in images with
+and without existing TLS. It checked an authenticated per-thread callback,
+an exported descriptor, constructors and thread-exit destructors against
+independently Apple-linked images.
+[Native image and unload checks](https://github.com/gmh5225/test_mac_intel/actions/runs/45036493917).
+The pinned r6 backend emitted objects from ordinary and legacy-signed destructor inputs at O0 and O2. Apple’s platform linker produced four images for native unload checks. The raw r6 objects carry explicit return-address CFI that the classic installer rejects. The source backend emits the implicit Darwin rule for direct installation. [r6 native unload checks](https://github.com/gmh5225/test_mac_intel/actions/runs/45037160445).
+The native object installation suite ran under both system loaders. [Native object installation suite](https://github.com/gmh5225/test_mac_intel/actions/runs/45037152456).
 
 The artifact directory for
 `AArch64AuthenticatedCall.CompilesFrontendAuthenticatedGlobals` includes

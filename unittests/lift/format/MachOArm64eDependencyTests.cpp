@@ -625,6 +625,50 @@ TEST(MachOArm64eInstallation,
   }
 }
 
+TEST(MachOArm64eInstallation, PartitionsPublishedDataAroundThreadLocalStorage) {
+  auto Bytes = largePageImage(linkedImage(Chains[0]));
+  auto Image = producerImage(Bytes);
+  auto &Data = Image.Sections.back();
+  const uint64_t Sizes[] = {kSlotBytes, kTLSDescriptorWords * kSlotBytes,
+                            kSlotBytes, kSlotBytes, kSlotBytes};
+  const uint32_t Types[] = {S_REGULAR, S_THREAD_LOCAL_VARIABLES, S_REGULAR,
+                            S_THREAD_LOCAL_REGULAR, S_REGULAR};
+  Data.Size = 0;
+  for (const auto Size : Sizes)
+    Data.Size += Size;
+  Data.FixupReferences.back().Offset = Data.Size - kSlotBytes;
+  Image.Bytes.resize(Data.Offset + Data.Size);
+  MachORuntimeSections Runtime;
+  Runtime.Descriptors = {Data.VA + Sizes[0], Sizes[1], kSlotBytes};
+  Runtime.Template = {Runtime.Descriptors.VA + Sizes[1] + Sizes[2], Sizes[3],
+                      kSlotBytes};
+  auto Error =
+      MachOPatcher().appendReplacementImage(Bytes, Image, {}, {}, &Runtime);
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+  unsigned Found = 0;
+  forEachMachOLoadCommand(
+      Bytes.data(), Bytes.size(),
+      [&](const uint8_t *Command, uint32_t ID, uint32_t, bool) {
+        if (ID != LC_SEGMENT_64)
+          return;
+        const auto *S = reinterpret_cast<const segment_command_64 *>(Command);
+        if (readMachOName(S->segname) != kMutableSegment)
+          return;
+        ++Found;
+        ASSERT_EQ(S->nsects, std::size(Sizes));
+        const auto *Sections = reinterpret_cast<const section_64 *>(S + 1);
+        uint64_t Offset = 0;
+        for (unsigned I = 0; I != S->nsects; ++I) {
+          EXPECT_EQ(Sections[I].addr, Data.VA + Offset);
+          EXPECT_EQ(Sections[I].offset, S->fileoff + Offset);
+          EXPECT_EQ(Sections[I].size, Sizes[I]);
+          EXPECT_EQ(Sections[I].flags & SECTION_TYPE, Types[I]);
+          Offset += Sizes[I];
+        }
+      });
+  EXPECT_EQ(Found, 1u);
+}
+
 TEST(MachOArm64eInstallation, RejectsIncompleteProducerReceiptsBeforeMutation) {
   const auto Original = largePageImage(threadedImage());
   const auto Check = [&](auto Change) {
@@ -737,6 +781,16 @@ TEST(MachOArm64eInstallation, DeclaredProvidersAndRelroInstallTogether) {
             const auto *Segment =
                 reinterpret_cast<const segment_command_64 *>(Command);
             const auto Name = readMachOName(Segment->segname);
+            if (Name == kRelroSegment || Name == kMutableSegment) {
+              ASSERT_EQ(Segment->nsects, 1u);
+              const auto *Sec =
+                  reinterpret_cast<const section_64 *>(Segment + 1);
+              EXPECT_EQ(Sec->addr, Segment->vmaddr);
+              EXPECT_EQ(Sec->offset, Segment->fileoff);
+              EXPECT_EQ(Sec->size,
+                        Name == kRelroSegment ? 2 * kSlotBytes : kSlotBytes);
+              EXPECT_EQ(Sec->flags & SECTION_TYPE, S_REGULAR);
+            }
             if (Name == kRelroSegment) {
               ++Relro;
               EXPECT_EQ(Segment->vmaddr, Image.BaseVA + kLargePage);
@@ -1502,6 +1556,54 @@ TEST(MachOArm64eInstallation, EncodesLargePageGapsAndAllSpecialOrdinals) {
   }
 }
 
+TEST(MachOArm64eInstallation, FirstChainFollowsTheImageDeploymentTarget) {
+  struct Case {
+    uint32_t Platform, LegacyCommand, Major;
+    uint16_t Format;
+  };
+  constexpr Case Cases[] = {
+#define ARM64E_FIRST_CHAIN_CASE(Platform, Cmd, Major, Format)                  \
+  {Platform, Cmd, Major, Format},
+#include "MachOArm64eDependencyFixtures.def"
+  };
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Platform);
+    SCOPED_TRACE(C.LegacyCommand);
+    SCOPED_TRACE(C.Major);
+    auto Bytes = linkedImage(Chains[0]);
+    auto *Chain =
+        reinterpret_cast<dyld_chained_fixups_header *>(Bytes.data() + kChains);
+    Chain->imports_count = 0;
+    auto *Starts = reinterpret_cast<dyld_chained_starts_in_image *>(
+        Bytes.data() + kChains + Chain->starts_offset);
+    std::fill_n(Starts->seg_info_offset, Starts->seg_count, 0);
+    auto *H = reinterpret_cast<mach_header_64 *>(Bytes.data());
+    const auto Append = [&](const auto &Command) {
+      std::memcpy(Bytes.data() + sizeof(*H) + H->sizeofcmds, &Command,
+                  sizeof(Command));
+      H->sizeofcmds += sizeof(Command);
+      ++H->ncmds;
+    };
+    const auto Version = C.Major << packed_version::kMajorShift;
+    if (C.Platform)
+      Append(build_version_command{LC_BUILD_VERSION,
+                                   sizeof(build_version_command), C.Platform,
+                                   Version, 0, 0});
+    if (C.LegacyCommand)
+      Append(version_min_command{C.LegacyCommand, sizeof(version_min_command),
+                                 Version, 0});
+    auto Error = installMachOAuthenticatedFixups(Bytes, {installedFixup(true)});
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    MachOChainedFixups State;
+    auto Dependencies = readMachODependencyState(Bytes, &State);
+    ASSERT_TRUE(bool(Dependencies)) << llvm::toString(Dependencies.takeError());
+    const auto Segment = llvm::find_if(
+        State.Segments, [](const auto &S) { return !S.Slots.empty(); });
+    ASSERT_NE(Segment, State.Segments.end());
+    EXPECT_EQ(Segment->PointerFormat, C.Format);
+  }
+}
+
 TEST(MachOArm64eInstallation, InstallsFinalNewSegmentAddressesTransactionally) {
   using Kind = llvm::mc_rewrite::RewriteSectionKind;
   for (const auto &Chain : Chains) {
@@ -1549,30 +1651,41 @@ TEST(MachOArm64eInstallation, InstallsFinalNewSegmentAddressesTransactionally) {
     EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
     if (macho_loader::arm64e::chainFormat(Chain.Format)->Segmented) {
       // A segment may appear after LINKEDIT in load-command order while
-      // occupying an earlier VM range. Insertion changes its target ordinal
-      // even when the chain's owning segment and storage VA stay fixed.
+      // occupying an earlier VM range. Preserve its target ordinal and the
+      // original section numbers when publishing the new data section.
       auto Reordered = Original;
       auto *Header = reinterpret_cast<mach_header_64 *>(Reordered.data());
       segment_command_64 Extra{};
       Extra.cmd = LC_SEGMENT_64;
-      Extra.cmdsize = sizeof(Extra);
+      Extra.cmdsize = sizeof(Extra) + sizeof(section_64);
+      Extra.nsects = 1;
       std::memcpy(Extra.segname, kExtraSegment, sizeof(kExtraSegment));
       Extra.vmaddr = kBase - kLargePage;
       Extra.vmsize = kLargePage;
       Extra.initprot = Extra.maxprot = VM_PROT_READ;
-      std::memcpy(Reordered.data() + sizeof(*Header) + Header->sizeofcmds,
-                  &Extra, sizeof(Extra));
-      Header->sizeofcmds += sizeof(Extra);
+      section_64 Zero{};
+      std::memcpy(Zero.segname, Extra.segname, sizeof(Zero.segname));
+      std::memcpy(Zero.sectname, kExtraSegment, sizeof(kExtraSegment));
+      Zero.addr = Extra.vmaddr;
+      Zero.size = Extra.vmsize;
+      Zero.flags = S_ZEROFILL;
+      auto *Tail = Reordered.data() + sizeof(*Header) + Header->sizeofcmds;
+      std::memcpy(Tail, &Extra, sizeof(Extra));
+      std::memcpy(Tail + sizeof(Extra), &Zero, sizeof(Zero));
+      Header->sizeofcmds += Extra.cmdsize;
       ++Header->ncmds;
       writeLE<uint64_t>(Reordered.data() + kLargePage + kSlotBytes,
                         kExtraSegmentTarget);
       auto OldState = readMachODependencyState(Reordered);
       ASSERT_TRUE(bool(OldState)) << llvm::toString(OldState.takeError());
-      const auto Snapshot = Reordered;
       Error = Patcher.appendReplacementImage(Reordered, Image, {Fixup});
-      EXPECT_TRUE(bool(Error));
-      llvm::consumeError(std::move(Error));
-      EXPECT_EQ(Reordered, Snapshot);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      auto NewState = readMachODependencyState(Reordered);
+      ASSERT_TRUE(bool(NewState)) << llvm::toString(NewState.takeError());
+      Error = preserveMachODependencyState(*OldState, *NewState);
+      EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      Error = verifyMachOAuthenticatedFixups(Reordered, {Fixup});
+      EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
     }
   }
 }

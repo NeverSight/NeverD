@@ -95,6 +95,15 @@ static void reserveX86StackTemporaries(llvm::Module &Mod, Arch TargetArch) {
           Function.addFnAttr(llvm::Attribute::NoRedZone);
 }
 
+static llvm::TargetOptions codegenTargetOptions(const llvm::Triple &Triple) {
+  llvm::TargetOptions Options;
+  // dyld calls initializer offsets forwards. The legacy .ctors convention
+  // reverses the sorted functions before emitting them.
+  if (Triple.isArm64e() && Triple.isOSBinFormatMachO())
+    Options.UseInitArray = true;
+  return Options;
+}
+
 static bool tripleMatchesTarget(const llvm::Triple &TT, Arch TargetArch,
                                 BinaryFormat ObjectFormat) {
   const bool MatchesFormat =
@@ -444,7 +453,7 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
     return Result;
   }
 
-  llvm::TargetOptions Opt;
+  auto Opt = codegenTargetOptions(TT);
 #if __has_include("llvm/BinaryFormat/AArch64CompactUnwind.def")
   Opt.MCOptions.EmitCompactUnwindForFinalImage =
       Consumer == ObjectConsumer::FinalImageInstaller;
@@ -674,7 +683,7 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     return Result;
   }
 
-  llvm::TargetOptions TOpt;
+  auto TOpt = codegenTargetOptions(TT);
   TOpt.EmitBinaryRewriteFinalImage = true;
   // Darwin targets may omit DWARF CFI when a frame has a compact-unwind
   // encoding.  A Mach-O rewrite transaction needs an explicit unwind payload

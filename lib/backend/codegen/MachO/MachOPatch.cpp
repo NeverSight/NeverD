@@ -33,6 +33,7 @@
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/object/MachOLayout.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -1234,7 +1235,7 @@ bool MachOPatcher::validateExecSegmentInstall(
               Segment.FileSize == Receipt.RelroSize &&
               Segment.MaxProt == (VM_PROT_READ | VM_PROT_WRITE) &&
               Segment.InitProt == (VM_PROT_READ | VM_PROT_WRITE) &&
-              Flags == SG_READ_ONLY && Segment.NSects == 0;
+              Flags == SG_READ_ONLY && Segment.NSects == Receipt.RelroSections;
         }
       });
 
@@ -1303,7 +1304,7 @@ llvm::Error MachOPatcher::appendReplacementImage(
     if (appendExecSegmentImpl(Candidate, Image.Bytes, kDefaultNdTextSegment,
                               Image.TargetArch, &Receipt,
                               Storage->WritableOffset, Storage->RelroSize,
-                              Runtime) != Image.BaseVA)
+                              Runtime, Image.Sections) != Image.BaseVA)
       return llvm::createStringError(llvm::errc::not_supported,
                                      kSegmentInstallation);
     for (const auto &Section : Image.Sections) {
@@ -1385,7 +1386,8 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
     std::vector<uint8_t> &Binary, llvm::ArrayRef<uint8_t> Code,
     llvm::StringRef SegName, Arch TargetArch,
     ExecSegmentInstallReceipt *Receipt, uint64_t WritableOffset,
-    uint64_t RelroSize, const MachORuntimeSections *Runtime) {
+    uint64_t RelroSize, const MachORuntimeSections *Runtime,
+    llvm::ArrayRef<CompiledSection> Sections) {
   const uint64_t PageSize = machoPageSize(TargetArch);
   PatchLayout Layout;
   if (!parseLayout(Binary, Layout, TargetArch) || Code.empty() ||
@@ -1482,6 +1484,10 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
   const uint64_t Shift = NewLinkeditOff - Layout.LinkeditFileOff;
   if (WritableOffset > CodePadded || RelroSize > CodePadded - WritableOffset)
     return 0;
+  const bool Arm64eData =
+      Is64 && TargetArch == Arch::AArch64 &&
+      macho_loader::arm64e::isSubtype(
+          reinterpret_cast<const mach_header *>(Binary.data())->cpusubtype);
   const uint64_t MutableSize =
       WritableOffset ? CodePadded - WritableOffset - RelroSize : 0;
   const uint32_t AddedSegmentCount =
@@ -1509,7 +1515,7 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
   NewSF.InitProt = VM_PROT_READ | VM_PROT_EXECUTE;
   writeMachOSegment(NewSegBuf.data(), Is64, NewSF);
 
-  uint32_t AddedCommandBytes = NewSegCmdSize * AddedSegmentCount;
+  uint32_t AddedSections = 0;
   if (Runtime &&
       (bool(Runtime->Descriptors.Size) != bool(Runtime->Template.Size)))
     return 0;
@@ -1539,7 +1545,7 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
     auto *Updated = reinterpret_cast<segment_command_64 *>(Command.data());
     Updated->nsects++;
     Updated->cmdsize = Command.size();
-    AddedCommandBytes += sizeof(Record);
+    ++AddedSections;
     return true;
   };
   if (Runtime && Runtime->InitializerOffsets.Size &&
@@ -1568,15 +1574,49 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
         reinterpret_cast<segment_command *>(Command.data())->flags =
             SG_READ_ONLY;
     }
+    // A chained fixup belongs to its file-backed section. Keep padding outside
+    // the published extent, and leave dyld's TLS descriptor and template
+    // sections in sole ownership of their bytes.
+    const auto AppendRegular = [&](uint64_t Begin, uint64_t End,
+                                   llvm::StringRef Name) {
+      if (!Arm64eData || Begin >= End)
+        return true;
+      uint64_t First = End, Last = Begin;
+      for (const auto &S : Sections) {
+        if (!S.IsAllocated || !S.IsInImage || !S.Size)
+          continue;
+        const auto Start = std::max(Begin, S.VA);
+        const auto Stop = std::min(End, S.VA + S.Size);
+        if (Start < Stop) {
+          First = std::min(First, Start);
+          Last = std::max(Last, Stop);
+        }
+      }
+      return First >= Last ||
+             AppendSection(Command, Data,
+                           {First, Last - First,
+                            llvm::MinAlign(PageSize, First - Data.VMAddr)},
+                           Name, S_REGULAR);
+    };
+    const auto End = Data.VMAddr + Data.FileSize;
     if (Runtime && Runtime->Descriptors.Size && !ReadOnly) {
-      if (!AppendSection(Command, Data, Runtime->Descriptors, kThreadVariables,
+      const auto &Descriptors = Runtime->Descriptors;
+      const auto &Template = Runtime->Template;
+      if (!AppendRegular(Data.VMAddr, Descriptors.VA,
+                         section_names::macho::Data) ||
+          !AppendSection(Command, Data, Descriptors, kThreadVariables,
                          S_THREAD_LOCAL_VARIABLES) ||
-          !AppendSection(Command, Data, Runtime->Template, kThreadTemplate,
+          Descriptors.VA + Descriptors.Size > Template.VA ||
+          !AppendRegular(Descriptors.VA + Descriptors.Size, Template.VA,
+                         kDataBetweenTLS) ||
+          !AppendSection(Command, Data, Template, kThreadTemplate,
                          S_THREAD_LOCAL_REGULAR) ||
-          Runtime->Descriptors.VA + Runtime->Descriptors.Size >
-              Runtime->Template.VA)
+          !AppendRegular(Template.VA + Template.Size, End, kDataAfterTLS))
         return 0;
-    }
+    } else if (!AppendRegular(Data.VMAddr, End,
+                              ReadOnly ? section_names::macho::Const
+                                       : section_names::macho::Data))
+      return 0;
     DataSegments.push_back(std::move(Command));
     DataOffset += Size;
   }
@@ -1587,15 +1627,28 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
     uint32_t Cmd = 0;
   };
   std::vector<CmdInfo> Cmds;
+  uint64_t InsertBefore = Layout.LinkeditCmdOff;
+  uint64_t SectionCount = AddedSections;
   forEachMachOLoadCommand(
       Binary.data(), Binary.size(),
       [&](const uint8_t *LCPtr, uint32_t Cmd, uint32_t CmdSize, bool) {
         const uint64_t Offset = LCPtr - Binary.data();
         if (Offset <= std::numeric_limits<uint32_t>::max())
           Cmds.push_back({Offset, CmdSize, Cmd});
+        if (Cmd == SegCmdID) {
+          if (AddedSections)
+            SectionCount += readMachOSegment(LCPtr, Is64).NSects;
+          // Symbols and segmented rebases reference load-command order. Keep
+          // the indices of any original mappings listed after __LINKEDIT.
+          if (Offset > Layout.LinkeditCmdOff)
+            InsertBefore = Offset + CmdSize;
+        }
       });
-  if (Cmds.size() != Layout.NCmds)
+  if (Cmds.size() != Layout.NCmds ||
+      SectionCount > std::numeric_limits<uint8_t>::max())
     return 0;
+  const uint32_t AddedCommandBytes =
+      NewSegCmdSize * AddedSegmentCount + sizeof(section_64) * AddedSections;
 
   uint64_t FirstDataOff =
       findFirstMachODataOffset(Binary.data(), Binary.size());
@@ -1687,7 +1740,18 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
   std::vector<std::vector<uint8_t>> OutCmds;
   uint32_t TotCmds = 0, TotSize = 0;
   unsigned InsertedSegments = 0;
+  const auto InsertSegments = [&](uint64_t Offset) {
+    if (ExtendCommand || Offset != InsertBefore)
+      return true;
+    OutCmds.push_back(NewSegBuf);
+    OutCmds.insert(OutCmds.end(), DataSegments.begin(), DataSegments.end());
+    ++InsertedSegments;
+    return checkedAddU32(TotCmds, AddedSegmentCount, TotCmds) &&
+           checkedAddU32(TotSize, AddedCommandBytes, TotSize);
+  };
   for (const CmdInfo &Command : Cmds) {
+    if (!InsertSegments(Command.Off))
+      return 0;
     if (DroppedCommands.count(Command.Off))
       continue;
     bool IsLinkedit = false;
@@ -1696,15 +1760,6 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
           readMachOSegment(Binary.data() + Command.Off, Is64);
       IsLinkedit =
           (readMachOName(SF.SegName) == section_names::macho::LinkeditSeg);
-    }
-    if (IsLinkedit && !ExtendCommand) {
-      OutCmds.push_back(NewSegBuf);
-      for (const auto &Command : DataSegments)
-        OutCmds.push_back(Command);
-      ++InsertedSegments;
-      if (!checkedAddU32(TotCmds, AddedSegmentCount, TotCmds) ||
-          !checkedAddU32(TotSize, AddedCommandBytes, TotSize))
-        return 0;
     }
     std::vector<uint8_t> CmdData(Command.Size);
     std::memcpy(CmdData.data(), Binary.data() + Command.Off, Command.Size);
@@ -1746,7 +1801,7 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
       return 0;
   }
   uint64_t FinalCommandsEnd = 0;
-  if (InsertedSegments != 1 ||
+  if (!InsertSegments(HdrPlusCmds) || InsertedSegments != 1 ||
       !macho_patch_detail::checkedAdd(HdrSize, TotSize, FinalCommandsEnd) ||
       FinalCommandsEnd > FirstDataOff)
     return 0;
@@ -1771,11 +1826,13 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
     Expected.SegmentNSects = Extended.NSects;
   }
   Expected.WritableSize = MutableSize;
-  if (Runtime && Runtime->Descriptors.Size)
+  if (MutableSize)
     Expected.WritableSections =
-        reinterpret_cast<const segment_command_64 *>(DataSegments.back().data())
-            ->nsects;
+        readMachOSegment(DataSegments.back().data(), Is64).NSects;
   Expected.RelroSize = RelroSize;
+  if (RelroSize)
+    Expected.RelroSections =
+        readMachOSegment(DataSegments.front().data(), Is64).NSects;
   Expected.LinkeditVA = NewLinkeditVMAddr;
   Expected.LinkeditVMSize = Layout.LinkeditVMSize;
   Expected.LinkeditFileOff = NewLinkeditOff;
@@ -2297,9 +2354,9 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
           WritableOffset = Storage->WritableOffset;
         }
         ExecSegmentInstallReceipt SegmentReceipt;
-        uint64_t Placed =
-            appendExecSegmentImpl(Candidate, Img.Bytes, Opts.SegmentName,
-                                  TargetArch, &SegmentReceipt, WritableOffset);
+        uint64_t Placed = appendExecSegmentImpl(
+            Candidate, Img.Bytes, Opts.SegmentName, TargetArch, &SegmentReceipt,
+            WritableOffset, 0, nullptr, Img.Sections);
         if (Placed != NewSegVMAddr) {
           llvm::WithColor::error() << "macho_patch: appendExecSegment failed\n";
           return false;
