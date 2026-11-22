@@ -27,14 +27,22 @@ IDA versions, all inputs or overall decompiler quality.
 
 ## Hosted AMD SVM execution
 
-The `test_mac_intel` Ubuntu 22.04 runner exposed AMD SVM to a nested KVM vCPU.
-It executed twelve x64 guest images. With the upper half of RAX zero, the
-original `67 0F 01 D8` and the HighC and LLVM-to-C outputs at O0/O2 returned.
-The four generated guests completed 200 register and xstate contexts. With a
-nonzero upper half, all six images raised vector 13 with error code zero at
-`67 0F 01 D8`. Each exception frame identifies its faulting instruction
-bytes and records the full faulting RAX. The current 64-bit NeverC revision
-produced the same machine objects and guest images as the hosted fixtures.
+The `test_mac_intel` Ubuntu 22.04 and 24.04 runners exposed AMD SVM to nested
+KVM vCPUs on EPYC 7763 and EPYC 9V74 processors. Each runner executed twelve
+x64 guest images. With the upper half of RAX zero, the original
+`67 0F 01 D8` and the HighC and LLVM-to-C outputs at O0/O2 all returned.
+The four generated guests completed 200 register and xstate contexts per
+runner. With a nonzero upper half, all six images per runner raised vector 13
+with error code zero at `67 0F 01 D8`. Each exception frame records the full
+faulting RAX and instruction bytes.
+
+The generated faults occurred inside LLVM's native
+`__llvm_x86_vmrun_context.1` helper, called uniquely from NeverD's exported
+`neverd_step_v10_1010`. The hosted checker verifies the fault PC against the
+ELF symbol range and disassembly. It rejects a generated guest if the fault
+instead occurs at the fixture's original VMRUN. The current 64-bit NeverC
+revision produced the same machine objects and guest images as the hosted
+fixtures.
 [AMD KVM execution and byte hashes](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
 
 These results establish the tested nested KVM profile. The compiler receives

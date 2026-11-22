@@ -363,6 +363,12 @@ Entries count passed and registered cases. The JSON records the LA57 skips,
 both hybrid-core replays, binary and XML hashes, and KVM save images and fault
 frames. [Qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
 
+After merging 77 subsequent `dev` commits at `bf4da7c3f9`, both SDKs repeated
+the same complete matrix: 243/243 machine-execution cases, 853/855 paging cases
+with two LA57 capability skips, 253/253 generated-C source cases and 4/4
+Python SDK integrations each. The opposite-core selections also passed. The
+HighC and LLVM-to-C VMRUN exports kept their exact source hashes.
+
 The Linux Actions job built the pinned x64 NeverC revision and passed 27
 required software cases. The signed Intel simulation enclave completed three
 calls, including two nested exception repairs. Both Intel macOS runners and
