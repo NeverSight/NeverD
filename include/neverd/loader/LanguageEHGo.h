@@ -386,6 +386,13 @@ struct GoModuleInfo {
   /// (`runtime.morestackc`, a system-stack function called on a user stack):
   /// a growth path that calls one never restarts its function.
   std::vector<va_t> ThrowingMorestackEntries;
+  /// Entries of `runtime.mcall`, sorted: it saves its caller's state in the
+  /// goroutine, switches to the scheduler's stack and calls a function that
+  /// never returns, so its own code never returns either.  The scheduler
+  /// resumes the goroutine at the call's return address (`gogo` restores the
+  /// saved PC), as if the call had returned.  Empty unless the text base is
+  /// proven.
+  std::vector<va_t> ScheduleCallEntries;
   /// The code of `runtime.duffzero` and `runtime.duffcopy`, sorted: Go's
   /// compiler calls each at the point that zeroes or copies as many bytes as
   /// it needs (Duff's device), so each such point begins a routine of its own

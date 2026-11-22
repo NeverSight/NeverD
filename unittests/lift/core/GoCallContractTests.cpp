@@ -2540,6 +2540,83 @@ TEST(GoWriteBarriers, AStackArgumentIsNoKeptRegister) {
   EXPECT_EQ(C.Body.find("var_m8"), std::string::npos) << C.Body;
 }
 
+TEST(GoScheduleCalls, ACallOfMcallResumesAtItsReturnAddress) {
+  // `runtime.mcall` saves its caller's state, switches to the scheduler's
+  // stack and calls a function that never returns, so its own code never
+  // returns: here it ends in a call of a routine that loops for ever.  The
+  // scheduler resumes its caller at the call's return address all the same.
+  // Proved terminal, the call ended main.park, which lost its `return 7`,
+  // and every function that calls main.park never returned either, as
+  // `runtime.gopark` and each blocking operation above it did.
+  //   runtime.throw: jmp runtime.throw
+  //   runtime.mcall: mov rdx, rax; mov r12, [rdx]; call r12
+  //                  call runtime.throw; ud2
+  //   main.park: sub rsp, 8; lea rax, [rip+0]; call runtime.mcall
+  //              mov eax, 7; add rsp, 8; ret
+  //   main.wait: sub rsp, 8; call main.park; add eax, 1; add rsp, 8; ret
+  constexpr va_t Throw = kTextVA + 0xC0;
+  constexpr va_t Mcall = kTextVA + 0x100;
+  constexpr va_t Park = kTextVA + 0x140;
+  constexpr va_t Wait = kTextVA + 0x180;
+  GoTestImage T(Arch::X64);
+  T.writeText(Throw, {0xEB, 0xFE});
+  std::vector<uint8_t> Code = {0x48, 0x89, 0xC2, 0x4C, 0x8B,
+                               0x22, 0x41, 0xFF, 0xD4};
+  std::vector<uint8_t> Call = makeCall(Mcall + Code.size(), Throw);
+  Code.insert(Code.end(), Call.begin(), Call.end());
+  Code.insert(Code.end(), {0x0F, 0x0B});
+  T.writeText(Mcall, Code);
+  Code = {0x48, 0x83, 0xEC, 0x08, 0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00};
+  Call = makeCall(Park + Code.size(), Mcall);
+  Code.insert(Code.end(), Call.begin(), Call.end());
+  Code.insert(Code.end(),
+              {0xB8, 0x07, 0x00, 0x00, 0x00, 0x48, 0x83, 0xC4, 0x08, 0xC3});
+  T.writeText(Park, Code);
+  Code = {0x48, 0x83, 0xEC, 0x08};
+  Call = makeCall(Wait + Code.size(), Park);
+  Code.insert(Code.end(), Call.begin(), Call.end());
+  Code.insert(Code.end(), {0x83, 0xC0, 0x01, 0x48, 0x83, 0xC4, 0x08, 0xC3});
+  T.writeText(Wait, Code);
+  for (const auto &[Address, Name] :
+       {std::pair{Throw, "runtime.throw"}, std::pair{Mcall, "runtime.mcall"},
+        std::pair{Park, "main.park"}, std::pair{Wait, "main.wait"}}) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Mcall, Mcall + 0x10}};
+  Module.FrameArguments = {
+      {Throw, 0, 0}, {Mcall, 8, 1}, {Park, 0, 0}, {Wait, 0, 0}};
+  Module.ScheduleCallEntries = {Mcall};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  for (const MedFunc &F : R.MedFuncs) {
+    SCOPED_TRACE(F.Entry - kTextVA);
+    // Each function's own flag is what its body proves: the routine that
+    // loops and `mcall` itself never return, their callers do.
+    EXPECT_EQ(F.DoesNotReturn, F.Entry == Throw || F.Entry == Mcall);
+  }
+  // To C, `mcall` is no `_Noreturn` function: its callers go on.
+  for (const HighFunc &F : R.HighFuncs) {
+    SCOPED_TRACE(F.Entry - kTextVA);
+    EXPECT_EQ(F.DoesNotReturn, F.Entry == Throw);
+  }
+  const std::string Parked = highCBody(R, T.Img, "main_park");
+  EXPECT_NE(Parked.find("runtime_mcall("), std::string::npos) << Parked;
+  EXPECT_NE(Parked.find("return 7;"), std::string::npos) << Parked;
+  const std::string Waited = highCBody(R, T.Img, "main_wait");
+  EXPECT_NE(Waited.find("main_park()"), std::string::npos) << Waited;
+  EXPECT_NE(Waited.find("+ 1;"), std::string::npos) << Waited;
+}
+
 TEST(GoInternalABI, AssemblyThatAddressesThroughR14ReadsTheGoroutine) {
   // Go's internal ABI keeps the goroutine in R14, and x86-64 assembly that
   // Go code enters still finds it there, whatever ABI it declares: main.save

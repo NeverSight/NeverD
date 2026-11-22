@@ -22,6 +22,7 @@
 #include "neverd/evm/analysis/EVMAnalyzer.h"
 #include "neverd/evm/bytecode/EVMBytecode.h"
 #include "neverd/evm/emit/EVMLLVMEmitter.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/loader/BinaryImage.h"
@@ -540,7 +541,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   {
     std::set<va_t> OwnImportCalls;
     propagateInternalNoReturn(
-        Result.MedFuncs, Img.Arch, Img.UserNoReturn,
+        Result.MedFuncs, Img.Arch, goStatedCallReturns(Img),
         importCallAddressesOf(Img, sharedAnalysisCache(Img, Opts),
                               OwnImportCalls));
   }
@@ -655,7 +656,7 @@ bool Pipeline::resumeMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   {
     std::set<va_t> OwnImportCalls;
     propagateInternalNoReturn(
-        Result.MedFuncs, Img.Arch, Img.UserNoReturn,
+        Result.MedFuncs, Img.Arch, goStatedCallReturns(Img),
         importCallAddressesOf(Img, sharedAnalysisCache(Img, Opts),
                               OwnImportCalls));
   }

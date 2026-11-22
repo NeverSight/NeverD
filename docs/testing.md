@@ -20900,6 +20900,14 @@ the call returns a record with a double field, and the C traps nowhere.
 built as ELF and as PE, which sets RAX to 5 and RBX to 7 and calls a func value
 through RDX after storing a local above Win64's shadow space, RDI set before a
 branch: the call passes exactly 5 and 7.
+`GoScheduleCalls.AreFoundByName` loads a pclntab that names `runtime.mcall`:
+the module records its entry and a call of it resumes, where one of
+`runtime.mcallx` or of any other function does not.
+`GoScheduleCalls.ACallOfMcallResumesAtItsReturnAddress` runs the pipeline
+over an `mcall` whose body ends in a routine that loops for ever, a function
+that calls it and returns 7, and a caller of that: the looping routine and
+`mcall` itself never return, both callers keep the code after their calls,
+and HighIR declares `mcall` no `_Noreturn` function.
 `GoInternalABI.AssemblyThatAddressesThroughR14ReadsTheGoroutine` runs the
 pipeline over two x86-64 assembly routines, built as ELF and as PE: one
 stores and loads through R14 and reads the goroutine register for both, the

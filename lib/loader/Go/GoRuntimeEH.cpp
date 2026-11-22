@@ -354,6 +354,8 @@ void parseGoExceptions(BinaryImage &Img) {
         if (G.Name == "runtime.morestackc")
           Module.ThrowingMorestackEntries.push_back(G.CodeRange.Begin);
       }
+      if (G.Name == "runtime.mcall")
+        Module.ScheduleCallEntries.push_back(G.CodeRange.Begin);
       if (G.Name == "runtime.duffzero" || G.Name == "runtime.duffcopy")
         Module.DuffDevices.push_back(G.CodeRange);
       if (G.Name == "runtime.spillArgs" || G.Name == "runtime.unspillArgs")
@@ -361,6 +363,7 @@ void parseGoExceptions(BinaryImage &Img) {
     }
   llvm::sort(Module.MorestackEntries);
   llvm::sort(Module.ThrowingMorestackEntries);
+  llvm::sort(Module.ScheduleCallEntries);
   for (auto *Ranges : {&Module.DuffDevices, &Module.RegisterArgumentTransfers})
     llvm::sort(*Ranges, [](const ExceptionAddressRange &A,
                            const ExceptionAddressRange &B) {

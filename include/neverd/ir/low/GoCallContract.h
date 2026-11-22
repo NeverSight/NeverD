@@ -26,6 +26,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -207,8 +208,16 @@ std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
 /// Whether a call to \p Callee resumes at its return address although the
 /// callee's own code never returns: Go's stack-growth routines, whose
 /// `newstack` resumes the goroutine at the call's return address once the
-/// stack has grown (src/runtime/stack.go).  `runtime.morestackc` throws.
+/// stack has grown (src/runtime/stack.go), and `runtime.mcall`, whose caller
+/// the scheduler resumes there when it runs the goroutine again
+/// (GoModuleInfo::ScheduleCallEntries).  `runtime.morestackc` throws.
 bool goCallResumesAfter(const BinaryImage &Img, va_t Callee);
+
+/// What is stated of each function's calls in \p Img, for the proofs that
+/// find the calls that never return: what the user states
+/// (BinaryImage::UserNoReturn), and that a call of a routine above returns
+/// (goCallResumesAfter), which no proof of its body may overturn.
+std::map<va_t, bool> goStatedCallReturns(const BinaryImage &Img);
 
 /// Whether the Go function at \p Entry takes every argument and returns every
 /// result on the stack, as Go code did before its internal register ABI

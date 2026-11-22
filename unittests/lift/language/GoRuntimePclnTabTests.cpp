@@ -7,6 +7,7 @@
 #include "GoRuntimeEHTestsDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -594,6 +595,27 @@ TEST(GoRegisterArguments, NeedAPclntabThatMarksAssembly) {
   EXPECT_TRUE(Module->GoAssembly.empty());
   EXPECT_EQ(Module->MorestackEntries,
             (std::vector<va_t>{kTextVA + 0x200, kTextVA + 0x300}));
+  EXPECT_TRUE(Module->ScheduleCallEntries.empty());
+}
+
+TEST(GoScheduleCalls, AreFoundByName) {
+  // `runtime.mcall` never returns itself; the scheduler resumes its caller
+  // at the call's return address.
+  GoTestImage T;
+  T.installPclnTab(buildPclnTab(kGo116Magic,
+                                {makeGoCode("main.a", kTextVA + 0x100),
+                                 makeGoCode("runtime.mcall", kTextVA + 0x200),
+                                 makeGoCode("runtime.mcallx", kTextVA + 0x300)},
+                                kTextVA + 0x400)
+                       .Bytes);
+  parseGoExceptions(T.Img);
+
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  EXPECT_EQ(Module->ScheduleCallEntries, std::vector<va_t>{kTextVA + 0x200});
+  EXPECT_TRUE(goCallResumesAfter(T.Img, kTextVA + 0x200));
+  EXPECT_FALSE(goCallResumesAfter(T.Img, kTextVA + 0x300));
+  EXPECT_FALSE(goCallResumesAfter(T.Img, kTextVA + 0x100));
 }
 
 TEST(GoDuffDevices, AreFoundByName) {

@@ -456,11 +456,27 @@ std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
 
 bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (!Module)
+    return false;
+  if (std::binary_search(Module->ScheduleCallEntries.begin(),
+                         Module->ScheduleCallEntries.end(), Callee))
+    return true;
   return goGrowthPathsModeled(Img) &&
          std::binary_search(Module->MorestackEntries.begin(),
                             Module->MorestackEntries.end(), Callee) &&
          !std::binary_search(Module->ThrowingMorestackEntries.begin(),
                              Module->ThrowingMorestackEntries.end(), Callee);
+}
+
+std::map<va_t, bool> goStatedCallReturns(const BinaryImage &Img) {
+  std::map<va_t, bool> Stated = Img.UserNoReturn;
+  if (const auto &Module = Img.ExceptionMetadata.GoModule)
+    for (const std::vector<va_t> *Entries :
+         {&Module->MorestackEntries, &Module->ScheduleCallEntries})
+      for (const va_t Entry : *Entries)
+        if (goCallResumesAfter(Img, Entry))
+          Stated.try_emplace(Entry, false);
+  return Stated;
 }
 
 bool goTakesStackArguments(const BinaryImage &Img, va_t Entry) {

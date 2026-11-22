@@ -1990,7 +1990,12 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
                                 limits::kVariadicOverflowSlop);
   }
   Func.Name = Med.Name;
-  Func.DoesNotReturn = Med.DoesNotReturn;
+  // A routine whose calls resume at their return address is no `_Noreturn`
+  // function to C, though its own code never returns: the scheduler resumes
+  // the caller of `runtime.mcall` after the call (goCallResumesAfter), and a
+  // C compiler told otherwise would drop what follows.
+  Func.DoesNotReturn =
+      Med.DoesNotReturn && !(Image && goCallResumesAfter(*Image, Med.Entry));
   Func.ReturnsNoValue = Med.ReturnsNoValue;
   Func.IsVariadic = Med.IsVariadic;
   Func.UsesNativeVariadicStack = usesDarwinVariadicEntryStack(

@@ -5930,6 +5930,21 @@ prologue's vector count, which lists no parameters; a Go summary always lists
 them (`summaryListsNoParameters`), since a Go function's first argument may be
 a `bool`.
 
+`runtime.mcall` saves its caller's state in the goroutine, switches to the
+scheduler's stack and calls a function that never returns, so its own code
+never returns. The scheduler resumes the goroutine at the call's return
+address, as if the call had returned: `gogo` restores the saved PC. A call of
+it therefore resumes after it (`goCallResumesAfter`,
+`GoModuleInfo::ScheduleCallEntries`), as a call of a stack-growth routine
+does, and the proofs that find the calls that never return take that as
+stated of the routine (`goStatedCallReturns`), which no proof of its body
+overturns; the routine's own flag stays what its body proves, and HighIR
+declares it no `_Noreturn` function, which would let a C compiler drop what
+follows its calls. Proved terminal,
+the call ended `runtime.gopark`, so every blocking operation lost the code
+after it parks, and `runtime.exitsyscall` lost what follows
+`mcall(exitsyscall0)`.
+
 Compiled code reads the goroutine in R14 (R28 on arm64), which LowToMed
 defines at its entry (`defineGoCurrentGoroutine`). x86-64 assembly of a
 register-ABI image that Go code enters still finds it there, whatever ABI it
