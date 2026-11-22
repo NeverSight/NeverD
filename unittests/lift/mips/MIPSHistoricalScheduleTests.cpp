@@ -292,12 +292,18 @@ TEST(MIPSHistoricalScheduling, ImageAndBoundProcessorMustNameTheSameProfile) {
     }
 }
 
-std::vector<LowOp> lift(const BinaryImage &Img, uint64_t PC,
-                        std::initializer_list<uint32_t> Words) {
+std::vector<uint8_t> encode(Arch Target,
+                            std::initializer_list<uint32_t> Words) {
   std::vector<uint8_t> Bytes;
   for (const auto Word : Words)
     for (unsigned I = 0; I != 4; ++I)
-      Bytes.push_back(Word >> (8 * (archLittleEndian(Img.Arch) ? I : 3 - I)));
+      Bytes.push_back(Word >> (8 * (archLittleEndian(Target) ? I : 3 - I)));
+  return Bytes;
+}
+
+std::vector<LowOp> lift(const BinaryImage &Img, uint64_t PC,
+                        std::initializer_list<uint32_t> Words) {
+  const auto Bytes = encode(Img.Arch, Words);
   Decoder D;
   EXPECT_TRUE(D.init(Img));
   DecodedExecutionUnit Unit;
@@ -1249,6 +1255,55 @@ TEST(MIPSHistoricalScheduling, ColdResetRequiresObservedUnknownRegisters) {
     EXPECT_TRUE(S->beginPhysical(PC + 4, 0, false));
     Sample.Status ^= BEV;
     EXPECT_FALSE(HistoricalSchedule::fromColdReset(Sample));
+  }
+}
+
+// IDT AN-93, figures 1 and 2, reports bus addresses and 32-bit words.
+// Either byte serialization represents the listing. The CP0 values are
+// fixture inputs since the logic analyzer sampled the external bus.
+TEST(MIPSHistoricalScheduling, R3051ResetVectorFetchesMatchBusCapture) {
+  constexpr uint32_t Jump = 0x0bf00088, Nop = 0, Lui = 0x3c020010;
+  for (const Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    auto Img = image(A, 1);
+    auto addROM = [&](uint32_t Address, std::initializer_list<uint32_t> Words) {
+      Segment Rom;
+      Rom.VA = Address;
+      Rom.Data = encode(A, Words);
+      Rom.Size = Rom.FileSz = Rom.Data.size();
+      Rom.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Img.Segments.push_back(std::move(Rom));
+    };
+    addROM(0x1fc00000, {Jump, Nop});
+    addROM(0x1fc00220, {Lui});
+
+    MIPSSystemContext C;
+    const HistoricalTLB NoMappedPages{{}, 0};
+    C.HistoricalMMU = &NoMappedPages;
+    C.Historical = HistoricalSchedule::fromColdReset(
+        {HistoricalProcessor::R30xx, 1u << 22, 0, 0, {}, {}});
+    ASSERT_TRUE(C.Historical);
+    ASSERT_TRUE(C.Historical->system()->ExceptionVector);
+    const auto PC = *C.Historical->system()->ExceptionVector;
+    const auto Ops = lift(Img, PC, {Jump, Nop});
+    ASSERT_FALSE(Ops.empty());
+    const auto &Branch = Ops.back();
+    ASSERT_EQ(Branch.Opcode, NdOp::BRANCH);
+    ASSERT_TRUE(Branch.Inputs[0].isConst());
+    const auto Target = Branch.Inputs[0].Offset;
+    EXPECT_EQ(Target, 0xbfc00220u);
+    std::vector<uint64_t> Retired;
+    for (const auto &Op : Ops)
+      if (Op.Opcode == NdOp::INTRINSIC &&
+          Op.Inputs[0].Offset == unsigned(Intrinsic::MIPSHistoricalRetire))
+        Retired.push_back(Op.Addr);
+    EXPECT_EQ(Retired, (std::vector<uint64_t>{0xbfc00000, 0xbfc00004}));
+
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    ASSERT_TRUE(execute(Ops, E, C));
+    ASSERT_TRUE(execute(lift(Img, Target, {Lui}), E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x00100000u);
   }
 }
 

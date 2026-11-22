@@ -1594,6 +1594,15 @@ TLB management instructions, reverse-endian user data, cache-isolation data
 accesses and CW4011 MMU
 behavior need additional processor-specific evidence.
 
+IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
+fetch at physical `0x1fc00000` supplies a jump, the read at `0x1fc00004`
+supplies its NOP delay slot, and the target at `0x1fc00220` supplies
+`lui v0,0x10`. Relative to the first read, the other two appear at 760 ns
+and 1.52 µs on that setup. The regression replays the captured words in
+both byte orders against the physical ROM addresses. The listing leaves
+the board's byte order and the time of reset release unspecified.
+[IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf).
+
 The hardware regressions compare a little-endian DECstation 5000/133 load
 with its console instruction, EPC, fault address and exception fields. The SGI
 IP12 and IP20 PROM reports identify the vector and access direction. Their
