@@ -1552,6 +1552,7 @@ TEST(AArch64AuthenticatedCall, ImportsTypedPointerGlobalConstructor) {
 }
 
 TEST(AArch64AuthenticatedCall, CompilesFrontendAuthenticatedGlobals) {
+  save(kLegacyFrontendCase, kLegacyDriverName, kLegacyFrontendDriver);
   compile(
       kLegacyFrontendGlobals,
       [](llvm::Module &M) { EXPECT_FALSE(llvm::verifyModule(M)); },
