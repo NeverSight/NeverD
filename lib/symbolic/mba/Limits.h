@@ -67,6 +67,10 @@ inline constexpr std::size_t kMinUnitProductOperands = 3;
 inline constexpr std::size_t kMaxUnitProductCoordinates = 64;
 inline constexpr std::size_t kMaxBooleanBoundaryNodes = 128;
 inline constexpr unsigned kMinCanonicalAffineAtoms = 4;
+/// Small native bitwise regions share their measured corner tables across
+/// later readings. A large truth table or wide input favors a direct proof.
+inline constexpr unsigned kMinReadOnceAtoms = 5;
+inline constexpr unsigned kMinReadOnceWordLimbs = 16;
 inline constexpr unsigned kMinProductCofactorDegree = 4;
 inline constexpr unsigned kMaxPartitionCubeAxes = 3;
 inline constexpr unsigned kMinCompressedCommonFactors = 3;

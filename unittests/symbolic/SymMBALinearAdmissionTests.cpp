@@ -123,7 +123,7 @@ MBAOptions admissionOptions() {
   return Opts;
 }
 
-TEST(SymMBALinearAdmission, RejectsOnlyMoreThanTheGroupLimit) {
+TEST(SymMBALinearAdmission, ReadsDisjointGroupsWithinTheCornerBudget) {
   for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u}) {
     SCOPED_TRACE(Width);
     for (LinearFixture Kind :
@@ -135,13 +135,23 @@ TEST(SymMBALinearAdmission, RejectsOnlyMoreThanTheGroupLimit) {
       const MBAResult Result = simplifyMBA(Ctx, F.Input, admissionOptions());
       EXPECT_LE(Result.Work, admissionOptions().MaxWork);
       EXPECT_LE(Result.SizeAfter, Result.SizeBefore);
-      if (Kind == LinearFixture::TwoGroups)
-        EXPECT_NE(Result.Outcome, MBAOutcome::BudgetExhausted);
-      else
-        EXPECT_EQ(Result.Outcome, MBAOutcome::BudgetExhausted);
+      EXPECT_NE(Result.Outcome, MBAOutcome::BudgetExhausted);
       checkAdmissionSemantics(Ctx, F, Result.Expr, Kind);
     }
   }
+}
+
+TEST(SymMBALinearAdmission, RepeatedLeavesStillExposeACommonBitwiseOperand) {
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", 65), Y = Ctx.mkVar("y", 65);
+  const auto A = Ctx.mkVar("a", 65), B = Ctx.mkVar("b", 65);
+  const auto Mask = Ctx.mkXor(A, B);
+  const auto Joined =
+      Ctx.mkOr({Ctx.mkAnd(X, Mask), Ctx.mkAnd(X, Ctx.mkNot(Mask)), Y});
+  const auto Expected = Ctx.mkOr(X, Y);
+  ASSERT_NE(Joined, Expected);
+  const auto Result = simplifyMBADeep(Ctx, Joined);
+  EXPECT_EQ(Result.Expr, Expected);
 }
 
 TEST(SymMBALinearAdmission, CoversHiddenSubtractionNodesAtFullWidth) {
