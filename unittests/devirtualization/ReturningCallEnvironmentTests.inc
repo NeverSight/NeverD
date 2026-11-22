@@ -23,10 +23,14 @@ TEST_F(PEFixedImageTest, ReturningCallCanRetainDeclaredEarlierFrameBytes) {
       0xff, 0xd0,                   // call rax
       0x48, 0x83, 0xc4, 0x40,       // add rsp,64
       0x48, 0x8b, 0x64, 0x24, 0x90, // mov rsp,[rsp-112]
+      0xff, 0xd0,                   // call rax through the restored stack
       0xc3};                        // ret
   auto Loaded = load(machineExitFixture(Code));
   ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
-  auto O = returningCallOptions(Base + 0x1009, Base + 0x1014);
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x1016);
+  O.X64ReturningCalls.push_back(
+      {1, Base + 0x1014,
+       SpecializationX64CallProfile::ConditionalNormalReturnV1, 32});
   const auto Unpreserved =
       specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
   EXPECT_FALSE(Unpreserved.complete());
@@ -38,7 +42,7 @@ TEST_F(PEFixedImageTest, ReturningCallCanRetainDeclaredEarlierFrameBytes) {
   Call.PreservedFrameRanges = {{-112, -104}};
   const auto Preserved = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
   ASSERT_TRUE(Preserved.complete()) << Preserved.Diagnostic;
-  ASSERT_EQ(Preserved.ReturningCalls.size(), 1U);
+  ASSERT_EQ(Preserved.ReturningCalls.size(), 2U);
   ASSERT_TRUE(Preserved.RawEnvironment);
   auto Error = validateSpecializationRawEnvironment(Preserved, O);
   EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
