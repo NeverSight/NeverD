@@ -1402,6 +1402,8 @@ static bool condStructEq(const HighExpr *A, const HighExpr *B,
     // (MedIR reuses the temp). Only match exact SSA; compose loads first.
     return sameMedVar(A->Var, B->Var);
   }
+  if (A->Kind == ExprKind::Undef)
+    return A->structuralEq(*B);
   if (A->Kind == ExprKind::Const)
     return A->ConstVal == B->ConstVal;
   // Two call nodes are two evaluations that may return different values; a

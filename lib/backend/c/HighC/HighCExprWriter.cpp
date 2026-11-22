@@ -19,6 +19,7 @@
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../render/MIPS/MIPSScalar.h"
+#include "../render/X86/Win64CallStackInput.h"
 #include "../render/X86/X64CallRCX.h"
 #include "../render/X86/X86APXAtomic.h"
 #include "../render/X86/X86AmxState.h"
@@ -8475,6 +8476,12 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     return constStr(E.ConstVal, E.Type);
   }
   case ExprKind::Undef:
+    if (auto Input = Win64CallStackInput::from(E.Var)) {
+      const auto Text = win64CallStackInputText(*Input);
+      return E.Type && E.Type->Kind == NdTypeKind::Ptr
+                 ? "(" + typeToC(E.Type) + ")(uintptr_t)" + Text
+                 : Text;
+    }
     // An observed unknown value has no recovered semantics. Fail at this
     // use; an unchosen conditional operand must not fail eagerly.
     return unknownValueText(E, "value");

@@ -13,6 +13,7 @@
 #include "../CDeferredValue.h"
 #include "../CDisplayFieldPath.h"
 #include "../CDisplayFrameRecord.h"
+#include "../render/X86/Win64CallStackInput.h"
 #include "LLVMCAtomicOrdering.h"
 #include "LLVMCFrameLayout.h"
 #include "LLVMCStorage.h"
@@ -3626,8 +3627,24 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
     return "(" + Flag->second + " ? " + getName(V) + " : " +
            unknownValueText("no recovered machine state") + ")";
   }
-  if (llvm_source_unknown::isValue(V))
-    return unknownValueText("no recovered machine state");
+  if (llvm_source_unknown::isValue(V)) {
+    const auto *Call = llvm::cast<llvm::CallInst>(V);
+    if (Call->arg_empty())
+      return unknownValueText("no recovered machine state");
+    const auto *Site =
+        llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(0));
+    const auto *Slot =
+        llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(1));
+    if ((Site && Site->getZExtValue() == InvalidVA) ||
+        (Slot && !Win64CallStackInput::validOffset(Slot->getZExtValue())))
+      throw std::runtime_error("invalid original Win64 CALL stack coordinate");
+    if (Site && Slot)
+      return win64CallStackInputText(
+          {Site->getZExtValue(), uint32_t(Slot->getZExtValue())});
+    return "((uint64_t)NEVERD_WIN64_CALL_STACK_U64(" +
+           valueStr(Call->getArgOperand(0)) + ", " +
+           valueStr(Call->getArgOperand(1)) + "))";
+  }
   // A parameter the signature types as a pointer is the integer the code
   // computes with.
   if (const auto *Arg = llvm::dyn_cast<llvm::Argument>(V);

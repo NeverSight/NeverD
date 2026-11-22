@@ -34,6 +34,7 @@
 #include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
+#include "neverd/ir/med/X86/Win64CallStackInput.h"
 #include "neverd/ir/med/X86/X86RegistrationCall.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHJump.h"
@@ -1083,6 +1084,7 @@ void recoverCallAbi(
     const std::map<va_t, std::map<uint64_t, uint16_t>> *CalleeFPScalarBytes,
     const std::set<va_t> *StackArgumentCallees) {
   Func.CallInfos.clear();
+  int LastStackInputVersion = 0;
   bool BoundFPResult = false;
   // Every callee summary, user prototype and name the recovery reads is at a
   // key it notes first.  It writes summaries only at the function's entry.
@@ -3890,6 +3892,13 @@ void recoverCallAbi(
             : RequiredStackPosition && (!FillGaps || StackSetupIncomplete)
                 ? MedVar::makeUnspecified(CallLayout.SlotBytes, TheArch)
                 : MedVar::makeConst(0, CallLayout.SlotBytes);
+        if (A.Kind == MedVar::Unspecified && RequiredStackPosition &&
+            RecoverStackJoins && !CheckedStackCall && !RegistrationObjectCall)
+          Win64CallStackInput::bind(A, Img, Op.Addr, CI.TargetAddr,
+                                    CallLayout.CallStackBase +
+                                        (K - StackArgBase) *
+                                            CallLayout.SlotBytes,
+                                    LastStackInputVersion);
         // A slot found by the stack scan is a stack argument even when its
         // index falls in the integer-register range (i386 FP-register callee
         // with no integer register argument); assemble it after the FP

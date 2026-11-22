@@ -22,6 +22,7 @@
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../render/MIPS/MIPSScalar.h"
+#include "../render/X86/Win64CallStackInput.h"
 #include "../render/X86/X86AtomicRmw.h"
 #include "../render/X86/X86Bound.h"
 #include "../render/X86/X86DescriptorState.h"
@@ -5427,10 +5428,13 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
     if (Opts.EmitRecordGuards)
       OS << "#endif\n";
   };
+  bool NeedsWin64CallStackInput = false;
   HighExprSet Seen;
   std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
     if (!E || !Seen.insert(E.get()).second)
       return;
+    if (E->Kind == ExprKind::Undef && Win64CallStackInput::from(E->Var))
+      NeedsWin64CallStackInput = true;
     RecordType(E->Type);
     if (E->SourceCallHint) {
       RecordType(E->SourceCallHint->Signature.ReturnType);
@@ -5448,6 +5452,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
               [&](const HighStmt &Stmt) { forEachExpr(Stmt, Visit); });
   }
   writeX87CHelpers(OS, UsesX87Extended, X87Helpers);
+  if (NeedsWin64CallStackInput)
+    OS << Win64CallStackInputPrelude;
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
   if (NeedsX86SegmentMoveDispatch)
