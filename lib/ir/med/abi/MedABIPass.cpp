@@ -1418,6 +1418,19 @@ void recoverCallAbi(
       // An ordinary SEH finally CALL uses the checked shared-frame protocol.
       // Its caller's private PUSHes are saved temporaries, not cdecl argument
       // setup. Native lowering supplies its separately proved frame operand.
+      // A jump that follows a load of the stack pointer from memory resumes
+      // state saved elsewhere, on that state's stack (`gogo<>`, longjmp): it
+      // calls no function and passes no argument.
+      if (CI.IsIndirect && OI + 1 < Blk.Ops.size() &&
+          Blk.Ops[OI + 1].Opcode == NdOp::RETURN &&
+          Blk.Ops[OI + 1].Addr == Op.Addr &&
+          loadsStackPointerBefore(Blk, OI, TRI)) {
+        CI.ArgumentsFromPrototype = true;
+        CI.IntegerRegisterArgCount = 0;
+        CI.FloatingRegisterArgCount = 0;
+        Func.CallInfos.push_back(std::move(CI));
+        continue;
+      }
       if (SEHReturns) {
         const auto Key = std::make_tuple(Blk.Id, Op.Addr, Op.OriginSeq);
         const auto Finally = SEHReturns->ReturningCalls.find(Key);

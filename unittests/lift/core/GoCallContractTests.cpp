@@ -2889,6 +2889,77 @@ TEST(GoInternalABI, AnArm64StackArgumentFollowsNoPlatformPosition) {
   EXPECT_NE(Passing.find("main_far(1, 7);"), std::string::npos) << Passing;
 }
 
+TEST(GoAssemblyOperands, ARoutineThatResumesSavedStateTakesWhatItReads) {
+  // `gogo<>` takes the gobuf in BX and the goroutine in DX, loads the stack
+  // pointer, the closure context and the frame pointer from the gobuf, and
+  // jumps to the PC saved there.  A jump to code no summary describes passes
+  // this routine's argument registers on, so what the routine reads at its
+  // entry was unknown and it took no operand of its own: it read the gobuf
+  // through a register with no definition, and `runtime.gogo`, which sets
+  // both registers, passed two unknown values.  A jump that follows a load
+  // of the stack pointer from memory resumes state saved elsewhere, on that
+  // state's stack: it calls nothing and reads no register as the routine was
+  // entered with it.  One that loads no stack pointer is a tail call still.
+  //   gogo: mov r14, rdx; mov rsp, [rbx]; mov rdx, [rbx+0x18]
+  //         mov rbp, [rbx+0x28]; mov qword [rbx], 0; mov rbx, [rbx+8]; jmp rbx
+  //   runtime.gogo: mov rbx, [rsp+8]; mov rdx, [rbx+0x10]; jmp gogo
+  //   main.hop: mov rbx, [rbx+8]; jmp rbx
+  constexpr va_t Gogo = kTextVA + 0x100;
+  constexpr va_t Entered = kTextVA + 0x180;
+  constexpr va_t Hop = kTextVA + 0x200;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    GoTestImage T(Arch::X64);
+    T.Img.Format = Format;
+    T.writeText(Gogo, {0x49, 0x89, 0xD6, 0x48, 0x8B, 0x23, 0x48, 0x8B, 0x53,
+                       0x18, 0x48, 0x8B, 0x6B, 0x28, 0x48, 0xC7, 0x03, 0x00,
+                       0x00, 0x00, 0x00, 0x48, 0x8B, 0x5B, 0x08, 0xFF, 0xE3});
+    std::vector<uint8_t> Body = {0x48, 0x8B, 0x5C, 0x24, 0x08,
+                                 0x48, 0x8B, 0x53, 0x10, 0xE9};
+    const auto Jump = static_cast<uint32_t>(Gogo - (Entered + Body.size() + 4));
+    for (unsigned Shift = 0; Shift < 32; Shift += 8)
+      Body.push_back(static_cast<uint8_t>(Jump >> Shift));
+    T.writeText(Entered, Body);
+    T.writeText(Hop, {0x48, 0x8B, 0x5B, 0x08, 0xFF, 0xE3});
+    for (const auto &[Address, Name] :
+         {std::pair{Gogo, "gogo"}, std::pair{Entered, "runtime.gogo"},
+          std::pair{Hop, "main.hop"}}) {
+      Symbol Function = Symbol::makeFunc(Address);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.GoAssembly = {
+        {Gogo, Gogo + 0x20}, {Entered, Entered + 0x10}, {Hop, Hop + 0x10}};
+    Module.FrameArguments = {{Gogo}, {Entered, 8}, {Hop}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const auto &Operands = R.CallEntryIntegerArguments.get();
+    const auto Taken = Operands.find(Gogo);
+    ASSERT_NE(Taken, Operands.end());
+    std::vector<uint64_t> Registers;
+    for (const auto &Parameter : Taken->second.Parameters)
+      Registers.push_back(Parameter.Register);
+    EXPECT_EQ(Registers, (std::vector<uint64_t>{x86reg::RDX, x86reg::RBX}));
+    EXPECT_EQ(Operands.count(Hop), 0u);
+    const std::string Resuming = highCBody(R, T.Img, "gogo");
+    EXPECT_EQ(Resuming.find("__builtin_trap"), std::string::npos) << Resuming;
+    EXPECT_NE(Resuming.find(")();"), std::string::npos) << Resuming;
+    const std::string Entering = highCBody(R, T.Img, "runtime_gogo");
+    EXPECT_EQ(Entering.find("__builtin_trap"), std::string::npos) << Entering;
+    EXPECT_NE(Entering.find("gogo(*(int64_t *)(arg0 + 0x10), "),
+              std::string::npos)
+        << Entering;
+  }
+}
+
 TEST(GoInternalABI, AFunctionThatPassesItsFirstArgumentOnReadsIt) {
   // A function reads at its entry what a callee of it reads at its own,
   // where the function wrote the register nowhere before the call.  The

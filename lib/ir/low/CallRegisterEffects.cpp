@@ -1444,6 +1444,33 @@ GPRFamilyMask goCodeCallClobbers(Arch A) {
 /// space in, if any, and the vector registers, and reads only the address and
 /// pointer of the store it performs and, on amd64, the goroutine register.
 /// Its body saves and restores the rest around a call this summary would
+/// Whether the code of \p Block before op \p Index loads the stack pointer
+/// from memory (`mov rsp, [rbx]`), as a routine that resumes saved state does
+/// before it jumps there: `gogo<>` takes the stack, the frame pointer and the
+/// closure context from a gobuf and jumps to its saved PC, and longjmp does
+/// the same with a jmp_buf.  What runs next runs on that state's stack.
+bool loadsStackPointerBefore(const BinaryImage &Img, const LowBlock &Block,
+                             size_t Index) {
+  const uint64_t StackPointer = getTargetRegInfo(Img.Arch).StackPointer;
+  std::set<uint64_t> Loaded;
+  for (size_t I = 0; I < Index && I < Block.Ops.size(); ++I) {
+    const LowOp &Op = Block.Ops[I];
+    const bool Loads = Op.Opcode == NdOp::LOAD;
+    if (Op.Output.isReg() && Op.Output.Offset == StackPointer &&
+        Op.Output.Size >= 4 &&
+        (Loads || (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+                   Op.Inputs[0].isTemp() && Loaded.count(Op.Inputs[0].Offset))))
+      return true;
+    if (!Op.Output.isTemp())
+      continue;
+    if (Loads)
+      Loaded.insert(Op.Output.Offset);
+    else
+      Loaded.erase(Op.Output.Offset);
+  }
+  return false;
+}
+
 /// otherwise take to change them.
 LocalRegisterEffect goWriteBarrierEffect(Arch A,
                                          const GoWriteBarrier &Barrier) {
@@ -1718,6 +1745,9 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
       return static_cast<int8_t>(*Count);
     return -1;
   };
+  // Whether the body leaves for code no summary describes by resuming saved
+  // state, and whether it leaves so any other way.
+  bool Resumes = false, LeavesOtherwise = false;
   for (size_t BI = 0; BI < F.Blocks.size(); ++BI) {
     const LowBlock &Block = F.Blocks[BI];
     Effect.BodyUnknown |=
@@ -1909,9 +1939,12 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
       case NdOp::INDIR_CALL:
         // A rewritten indirect tail jump (`jmp [iat]` in an import thunk)
         // passes this function's registers on to its unknown target, unless
-        // the slot is an import's and its prototype says what that reads.
+        // the slot is an import's and its prototype says what that reads, or
+        // the jump resumes saved state on another stack.
         Effect.Unknown = true;
         (TailCall ? Step.UnknownTailCall : Step.UnknownCall) = true;
+        Step.ResumesContext =
+            TailCall && loadsStackPointerBefore(Img, Block, I);
         if (DirectTarget &&
             !importCalleeName(Img, Op.Inputs[0].Offset).empty() &&
             !importOwnRoutine(Img, ArgumentSources, Op.Inputs[0].Offset))
@@ -1927,6 +1960,7 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
         if (Block.Succs.empty()) {
           Effect.Unknown = true;
           Step.UnknownTailCall = true;
+          Step.ResumesContext = loadsStackPointerBefore(Img, Block, I);
         }
         break;
       case NdOp::BRANCH:
@@ -1980,11 +2014,15 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
       default:
         break;
       }
-      Effect.UnknownEntryReads |= Step.UnknownTailCall &&
-                                  Step.ImportCallee == InvalidVA &&
-                                  Step.ArgumentsFrom == InvalidVA;
+      Effect.UnknownEntryReads |=
+          Step.UnknownTailCall && !Step.ResumesContext &&
+          Step.ImportCallee == InvalidVA && Step.ArgumentsFrom == InvalidVA;
+      Resumes |= Step.ResumesContext;
+      LeavesOtherwise |=
+          Step.UnknownCall || (Step.UnknownTailCall && !Step.ResumesContext);
     }
   }
+  Effect.OnlyResumesContext = Resumes && !LeavesOtherwise;
   summarizeIncomingStackReads(Img, F, IndexOfId, BlockStarts, ArgumentSources,
                               StackProbes, Effect);
   joinPlainSteps(Effect);
@@ -2081,7 +2119,7 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
         Live.fill(0);
         if (ImportReads != EntryReads.end())
           joinReads(Live, ImportReads->second);
-        else
+        else if (!Step.ResumesContext)
           for (size_t I = 0; I < Live.size(); ++I)
             if ((ArgumentFamilies >> I) & 1)
               Live[I] = 8;

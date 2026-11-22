@@ -20941,6 +20941,13 @@ exactly those parameters and read no local, the calls pass 1 to 11 and 1, 10,
 over a function that reads the word above the stack pointer's and its caller:
 the function takes X0 and that word, the call passes 1 and 7, and the caller
 takes no parameter.
+`GoAssemblyOperands.ARoutineThatResumesSavedStateTakesWhatItReads` runs the
+pipeline, as ELF and as PE, over assembly shaped as `gogo<>` and
+`runtime.gogo` and over a routine that jumps through a loaded pointer without
+loading the stack pointer: the first takes RDX and RBX as its operands and
+its C names no undefined register and passes its jump nothing, the second
+passes the goroutine and the gobuf, and the third takes no operand of its
+own.
 `GoInternalABI.AFunctionThatPassesItsFirstArgumentOnReadsIt` runs the
 pipeline, as ELF and as PE, over a Go function that reads RAX, RBX and RCX
 and one that only jumps to it: the second's summary reads all three, each of

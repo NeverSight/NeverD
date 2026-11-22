@@ -1167,6 +1167,24 @@ resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
   }
 }
 
+bool loadsStackPointerBefore(const MedBlock &Block, size_t Index,
+                             const TargetRegInfo &TRI) {
+  std::set<std::tuple<MedVar::VarKind, int, int>> Loaded;
+  for (size_t I = 0; I < Index && I < Block.Ops.size(); ++I) {
+    const MedOp &Op = Block.Ops[I];
+    const bool Loads = Op.Opcode == NdOp::LOAD;
+    if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == TRI.StackPointer &&
+        Op.Output.Size >= 4 &&
+        (Loads || (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+                   Loaded.count({Op.Inputs[0].Kind, Op.Inputs[0].Id,
+                                 Op.Inputs[0].SSAVer}))))
+      return true;
+    if (Loads && !Op.Output.isConst())
+      Loaded.insert({Op.Output.Kind, Op.Output.Id, Op.Output.SSAVer});
+  }
+  return false;
+}
+
 // Offset of \p V relative to the function-entry stack pointer, following the SP
 // definition chain through constant add/sub decrements (cdecl `push`/`sub esp`)
 // and width casts.  Lets the stack-argument scan place each pushed argument at

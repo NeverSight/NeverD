@@ -6016,7 +6016,18 @@ RCX and R8, and left the byte and the length undefined in each of its SIMD
 compares. A routine that calls out reads the registers it saves for its
 callee (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`), and assembly
 the platform's code enters reads its arguments where the platform passes them
-(`runtime.sigtramp`): both keep the platform's positions. Before Go 1.17 no
+(`runtime.sigtramp`): both keep the platform's positions. A routine that
+leaves only to resume saved state calls nothing either. A jump to code no
+summary describes passes the routine's argument registers on, so its entry
+reads are unknown (`LocalRegisterEffect::UnknownEntryReads`); one that
+follows a load of the stack pointer from memory in its block resumes state
+saved elsewhere, on that state's stack (`RegisterStep::ResumesContext`,
+`loadsStackPointerBefore`): it reads no register as the routine was entered
+with it, and call recovery passes it no argument. `gogo<>` loads the stack
+pointer, the closure context and the frame pointer from the gobuf in BX and
+jumps to the PC saved there, so it takes BX and the goroutine in DX; read as
+a tail call, it reached the gobuf through a register with no definition and
+`runtime.gogo` passed it two unknown values. Before Go 1.17 no
 amd64 Go code takes a register argument, so in such an image a routine that
 reads one is assembly, though no flag says so; there a read of RAX's low byte
 alone counts for none, since a compiled function's nil check makes one (`testb

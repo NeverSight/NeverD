@@ -316,6 +316,12 @@ vtableCallObject(const MedFunc &Func, const MedBlock &Blk, int CallIdx,
 
 /// Where a value is defined: its one operation or PHI anywhere in the
 /// function, or Ambiguous when more than one defines it.
+/// Whether the code of \p Block before op \p Index loads the stack pointer
+/// from memory (`mov rsp, [rbx]`), as a routine that resumes saved state does
+/// before it jumps there (RegisterStep::ResumesContext).
+bool loadsStackPointerBefore(const MedBlock &Block, size_t Index,
+                             const TargetRegInfo &TRI);
+
 struct MedDefSite {
   const MedBlock *Block = nullptr;
   const MedOp *Op = nullptr;
