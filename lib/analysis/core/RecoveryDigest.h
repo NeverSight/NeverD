@@ -66,6 +66,12 @@ public:
       variable(Op.Inputs[I]);
     number(static_cast<unsigned>(Op.MemoryOrdering));
     number(static_cast<unsigned>(Op.MemoryAddressSpace));
+    if (Op.ConsumesX87Argument || Op.X87ScratchSlots || Op.X87ImportArguments) {
+      text("x87-call-metadata-v1");
+      number(Op.ConsumesX87Argument);
+      number(Op.X87ScratchSlots);
+      number(Op.X87ImportArguments);
+    }
   }
   template <typename Range> void numbers(const Range &Values) {
     number(Values.size());

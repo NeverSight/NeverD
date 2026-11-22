@@ -22653,6 +22653,13 @@ cmake --build build-release --target NeverDX86ScalarMoveAuditTests NeverDX86Lega
 ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86LegacyAlignedMoveTests|NeverDX86UndefinedEffectsTests)$" --output-on-failure
 ```
 
+`PEFixedImageTest.ReturningCall*` in `NeverDInterpreterSpecializationTests` checks exact physical call expansion, fresh results, repeated sites, receipt integrity, current frame-byte preservation, joins and short budgets. `NeverDSymMemoryKnowledgeTests` checks transactional bounded memory forgetting; `NeverDRawEnvironmentRequirementTests` checks that raw call markers are refused by ordinary execution and source consumers. Run these focused targets after changing the conditional raw-call relation. A passing raw result is not an ordinary C or native equivalence certificate.
+
+```sh
+cmake --build build-release --target NeverDInterpreterSpecializationTests NeverDSymMemoryKnowledgeTests NeverDRawEnvironmentRequirementTests
+ctest --test-dir build-release -L "^(NeverDInterpreterSpecializationTests|NeverDSymMemoryKnowledgeTests|NeverDRawEnvironmentRequirementTests)$" --output-on-failure
+```
+
 `NeverDSymConditionalStoreTests` covers bounded byte effects across absolute and symbolic banks, both byte orders, overlap, wrapping, unknown epochs and exact budgets. Executor tests cover STORE, scalar atomic ADD/XCHG/CMPXCHG, aliased address/value/output registers, delayed Old publication, malformed shapes and refusal havoc. `SymStorePreservation` checks the same atomic write path with explicit frame preservation and exact versus one-short budgets. Ordinary execution without a descriptor retains its existing behavior; these checks do not certify access permissions or whole-program recovery.
 
 ## Runtime module resources and persistent buffers

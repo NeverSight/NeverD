@@ -7,6 +7,7 @@
 #include "NativeStackControl.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/LowRawCall.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/Support/Endian.h"
@@ -531,6 +532,37 @@ expandX64MachineExit(const SpecializationInstruction &Instruction,
   Result.Receipt.ExpandedOperationDigest =
       Result.UndefinedEffects.OperationDigest;
   return Result;
+}
+
+llvm::Expected<NativeStackExpansion>
+expandX64ReturningCall(const SpecializationInstruction &Instruction,
+                       const std::array<uint64_t, 4> &DeclarationDigest,
+                       NdVar Scratch,
+                       llvm::ArrayRef<NdVar> ReservedTemporaries) {
+  for (const auto &Op : Instruction.Ops)
+    if (Op.ConsumesX87Argument || Op.X87ScratchSlots || Op.X87ImportArguments)
+      return invalid(
+          "returning call cannot carry an unrelated x87 ABI contract");
+  const SpecializationX64MachineExit Call{
+      1, Instruction.Origin.Address, SpecializationX64MachineExitKind::Call};
+  auto Expanded =
+      expandX64MachineExit(Instruction, Call, Scratch, ReservedTemporaries);
+  if (!Expanded)
+    return Expanded.takeError();
+  auto Target = Expanded->Ops.back().Inputs[0];
+  if (Target.isConst())
+    Target = NdVar::scalar(Target.Offset, Target.Size);
+  Expanded->Ops.back() = makeLowRawReturningCall(
+      DeclarationDigest, Target, Instruction.Origin.Address,
+      static_cast<int>(Expanded->Ops.size() - 1));
+  Expanded->Boundary.Control = LowInstructionControl::None;
+  Expanded->Boundary.ControlFlags = LowInstructionControlFlag::None;
+  Expanded->Boundary.Immediate.reset();
+  Expanded->UndefinedEffects.OperationDigest =
+      lowUndefinedOperationDigest(Expanded->Ops);
+  Expanded->Receipt.ExpandedOperationDigest =
+      Expanded->UndefinedEffects.OperationDigest;
+  return Expanded;
 }
 
 } // namespace neverd::analysis

@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/analysis/arch/x86_64/X64CallContinuation.h"
 #include "../../lib/analysis/core/RawEnvironment.h"
 #include "gtest/gtest.h"
 
@@ -1278,5 +1279,6 @@ TEST_F(PEFixedImageTest, TerminalImportNameRVAUses31Bits) {
 }
 
 #include "RawCodeEnvironmentTests.inc"
+#include "ReturningCallIntegrityTests.inc"
 
 } // namespace

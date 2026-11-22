@@ -995,7 +995,7 @@ MedFunc LowToMedConverter::convertFunction(
   bool HasMIPSAccumulatorTransport = false;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
-      if (isLowRawEnvironmentRequirement(Op) ||
+      if (isLowRawAnalysisOperation(Op) ||
           (Op.Opcode == NdOp::INTRINSIC &&
            isArchitecturalValueId(Op.Inputs[0].Offset)))
         throw LowToMedConversionError(
