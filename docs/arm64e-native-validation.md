@@ -2955,6 +2955,16 @@ dispatch table can require fixed instruction distances. The publisher can
 place the function nearer its literal pool when that preserves those distances.
 If neither placement is encodable, publication reports the range failure.
 
+Two signed functions containing over 1 MiB of inline data each required two
+address expansions. In the cleanup fixture the Darwin unwinder crossed the
+published body and the caller caught the exception after its cleanup ran. In
+the typed fixture the body caught a `double` locally and cleaned up an `int`
+that propagated to the caller. Both runner profiles exercised the original
+and two successive publications of the typed fixture. The second publication
+rebuilt the LSDA from its file-backed, read-only segment. This preserves the
+personality and type-info references even when the segment has no sections.
+[Signed cleanup execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44993433517) · [Typed catch and cleanup execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44995374215).
+
 When a published entry begins with a forwarding branch, its old FP/LR save
 can still appear in the next word. Function discovery uses the linker's
 function starts and unwind extent to keep that instruction with its owner.

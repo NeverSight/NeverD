@@ -2407,8 +2407,11 @@ TEST(AArch64LiftedImage, RepublishesAddressReturnsBeyondLiteralPoolReach) {
   verifyWideAddressReturns(false);
 }
 
-static void verifyWideSignedFrame(bool Language) {
+enum class WideFrame { Dwarf, Cleanup, TypedCatch };
+
+static void verifyWideSignedFrame(WideFrame Kind) {
 #if defined(__APPLE__) && defined(__aarch64__)
+  const bool Language = Kind != WideFrame::Dwarf;
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
   const std::filesystem::path Root(Directory.str().str());
@@ -2417,7 +2420,9 @@ static void verifyWideSignedFrame(bool Language) {
   const auto Driver = (Root / kDriver).string();
   const auto Caller = (Root / kWideLanguageDriverFile).string();
   const auto Input = (Root / kOriginal).string();
-  const std::string Defines = Language ? kWideLSDAOption : std::string();
+  const std::string Defines = Kind == WideFrame::TypedCatch ? kWideTypedOption
+                              : Language                    ? kWideLSDAOption
+                                                            : std::string();
   std::ofstream(Source) << Defines << kWideLanguageFrame;
   ASSERT_EQ(llvm::sys::ExecuteAndWait(
                 kCompiler, {kCompiler, kTargetFlag, kTarget, kDylib,
@@ -2444,8 +2449,14 @@ static void verifyWideSignedFrame(bool Language) {
   const auto *Frame = Original->ExceptionMetadata.findFunction(Entry->Addr);
   ASSERT_TRUE(Frame && Frame->Dwarf);
   ASSERT_EQ(Frame->Itanium.has_value(), Language);
-  if (Language)
+  if (Language) {
     ASSERT_EQ(Frame->Itanium->CallSites.size(), kWideLanguageCallSites);
+    EXPECT_EQ(Frame->Itanium->isCleanupOnly(), Kind == WideFrame::Cleanup);
+    if (Kind == WideFrame::TypedCatch) {
+      ASSERT_FALSE(Frame->Itanium->TypeTable.empty());
+      EXPECT_NE(Frame->Itanium->TypeTable.front().TypeInfoSlotVA, 0u);
+    }
+  }
   unsigned Executions = Native ? 1 : 0;
   for (bool NoOpt : {true, false}) {
     SCOPED_TRACE(NoOpt);
@@ -2517,6 +2528,10 @@ static void verifyWideSignedFrame(bool Language) {
         EXPECT_EQ(AfterSite.LandingPadVA - Placed,
                   BeforeSite.LandingPadVA - Entry->Addr + Growth);
         EXPECT_EQ(After->Itanium->CallSites.back().LandingPadVA, 0u);
+        EXPECT_EQ(After->Itanium->isCleanupOnly(),
+                  Frame->Itanium->isCleanupOnly());
+        EXPECT_EQ(After->Itanium->TypeTable.size(),
+                  Frame->Itanium->TypeTable.size());
       }
       if (Native) {
         ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
@@ -2532,11 +2547,15 @@ static void verifyWideSignedFrame(bool Language) {
 }
 
 TEST(AArch64LiftedImage, WidensTwoAddressesAcrossIndexedDwarfFrame) {
-  verifyWideSignedFrame(false);
+  verifyWideSignedFrame(WideFrame::Dwarf);
 }
 
 TEST(AArch64LiftedImage, WidensTwoAddressesAcrossSignedLanguageFrame) {
-  verifyWideSignedFrame(true);
+  verifyWideSignedFrame(WideFrame::Cleanup);
+}
+
+TEST(AArch64LiftedImage, WidensTwoAddressesAcrossTypedCatchAndCleanup) {
+  verifyWideSignedFrame(WideFrame::TypedCatch);
 }
 
 TEST(AArch64LiftedImage, KeepsAddressOnlyTailsWithoutDataInCode) {

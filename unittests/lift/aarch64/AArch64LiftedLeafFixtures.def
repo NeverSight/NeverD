@@ -13,6 +13,7 @@
 
 A64_LEAF_TEXT(kTemporary, "neverd-arm64e-lifted-leaves")
 A64_LEAF_TEXT(kWideLSDAOption, "#define WIDE_LSDA 1\n")
+A64_LEAF_TEXT(kWideTypedOption, "#define WIDE_LSDA 1\n#define WIDE_TYPED 1\n")
 A64_LEAF_TEXT(kWideLanguageFrame, R"asm(
 .text
 .globl _wide
@@ -43,6 +44,7 @@ Lcall:
  blraaz x1
 Lnormal:
  mov w0, #42
+Lret:
  ldp x29, x30, [sp], #16
  .cfi_def_cfa sp, 0
  .cfi_restore x29
@@ -53,6 +55,15 @@ Lpad:
  .cfi_def_cfa x29, 16
  .cfi_offset x29, -16
  .cfi_offset x30, -8
+#ifdef WIDE_TYPED
+ cmp w1, #1
+ b.ne Lcleanup
+ bl ___cxa_begin_catch
+ bl ___cxa_end_catch
+ mov w0, #43
+ b Lret
+Lcleanup:
+#endif
  adrp x8, _wide_cleaned@PAGE
  add x8, x8, _wide_cleaned@PAGEOFF
  mov w9, #1
@@ -83,18 +94,37 @@ _wide_anchor:
 #ifdef WIDE_LSDA
 .section __TEXT,__gcc_except_tab
 Lexception:
+#ifdef WIDE_TYPED
+ .byte 255,155
+ .uleb128 Ltypeend-Ltypebase
+Ltypebase:
+ .byte 1
+#else
  .byte 255,255,1
+#endif
  .uleb128 Lend-Lsites
 Lsites:
  .uleb128 Lcall-_wide
  .uleb128 Lnormal-Lcall
  .uleb128 Lpad-_wide
+#ifdef WIDE_TYPED
+ .uleb128 3
+#else
  .uleb128 0
+#endif
  // _Unwind_Resume crosses this call without entering the cleanup again.
  .uleb128 Lnormal-_wide
  .uleb128 Lvalue-Lnormal
  .byte 0,0
 Lend:
+#ifdef WIDE_TYPED
+ // The typed action links back to the cleanup record for unmatched throws.
+ .byte 0,0,1,125
+ .p2align 2
+Ltype:
+ .long __ZTId@GOT-Ltype
+Ltypeend:
+#endif
 #endif
 .data
 .p2align 2
@@ -121,6 +151,9 @@ static _Unwind_Reason_Code visit(_Unwind_Context *ctx, void *) {
   return _URC_NO_REASON;
 }
 static void walk() { _Unwind_Backtrace(visit, nullptr); }
+#ifdef WIDE_TYPED
+static void matched() { throw 0.5; }
+#endif
 static void raise() { throw 37; }
 int main(int argc, char **argv) {
   if (argc != 2) return 1;
@@ -135,6 +168,9 @@ int main(int argc, char **argv) {
   const int *value = nullptr;
   if (entry(&value, nullptr) != 42 || !value || *value != 23) return 4;
   if (entry(&value, walk) != 42 || !seen || *value != 19) return 5;
+#ifdef WIDE_TYPED
+  if (entry(&value, matched) != 43 || *cleanup != 0 || *value != 19) return 8;
+#endif
   try { entry(&value, raise); }
   catch (int n) { return n == 37 && *cleanup == ExpectedCleanups && *value == 19 ? 0 : 6; }
   return 7;
