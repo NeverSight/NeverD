@@ -2467,8 +2467,9 @@ static void verifyWideSignedFrame(WideFrame Kind) {
     auto Previous = Input;
     for (unsigned I = 0; I != kRepeatedPublications; ++I) {
       SCOPED_TRACE(I);
-      const auto Output =
-          (Root / (kRepeatedPrefix + std::to_string(I))).string();
+      const auto Output = (Root / (kRepeatedPrefix + std::to_string(I) +
+                                   (NoOpt ? kUnoptimized : kOptimize)))
+                              .string();
       auto Before = Reader->load(Previous);
       ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
       llvm::LLVMContext Context;

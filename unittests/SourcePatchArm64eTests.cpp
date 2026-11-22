@@ -170,7 +170,6 @@ TEST(SourcePatchArm64eSDK, InstallsLegacyIRWithDeferredDataBinding) {
   };
   const auto Source = Path(kSourceFile);
   const auto Original = Path(kOriginalFile);
-  const auto Output = Path(kInstalledFile);
   std::error_code Error;
   llvm::raw_fd_ostream OS(Source, Error);
   ASSERT_FALSE(Error);
@@ -217,17 +216,24 @@ TEST(SourcePatchArm64eSDK, InstallsLegacyIRWithDeferredDataBinding) {
   Options.compiler_path = kCompiler;
   Options.compiler_args = Flags;
   Options.compiler_arg_count = std::size(Flags);
-  Options.artifact = NEVERD_SOURCE_PATCH_ARTIFACT_IR;
   Options.mappings = &Mapping;
   Options.mapping_count = 1;
   Options.bindings = &Binding;
   Options.binding_count = 1;
-  ASSERT_EQ(neverd_patch_source(Session, kLegacyBindingSource,
-                                sizeof(kLegacyBindingSource) - 1, &Options,
-                                Output.c_str()),
-            1)
-      << neverd_last_error(Session);
-  EXPECT_TRUE(llvm::sys::fs::exists(Output));
+  for (auto Artifact :
+       {NEVERD_SOURCE_PATCH_ARTIFACT_IR, NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT}) {
+    SCOPED_TRACE(Artifact);
+    Options.artifact = Artifact;
+    const auto Output =
+        Path(Artifact == NEVERD_SOURCE_PATCH_ARTIFACT_IR ? kInstalledFile
+                                                         : kBoundObjectOutput);
+    ASSERT_EQ(neverd_patch_source(Session, kLegacyBindingSource,
+                                  sizeof(kLegacyBindingSource) - 1, &Options,
+                                  Output.c_str()),
+              1)
+        << neverd_last_error(Session);
+    EXPECT_TRUE(llvm::sys::fs::exists(Output));
+  }
 #endif
 }
 

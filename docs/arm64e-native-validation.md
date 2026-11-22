@@ -345,7 +345,10 @@ It converts descriptors before object emission and MC rewrite, preserving the
 symbol addend, IA/IB/DA/DB key, address discriminator and integer diversity.
 For an address-diverse global initializer the discriminator must identify its
 storage slot, including a field inside an aggregate. The object installer
-passes the resulting signing recipes to dyld. The LLVM toolchains used here
+passes the resulting signing recipes to dyld. An explicit source binding names
+an address in the original image. After a dylib layout change, ordinary GOT
+slots and signed or unsigned pointer initializers all rebase to that address
+in the new layout. The LLVM toolchains used here
 accept inline stack probes. Modules that also request Apple’s named
 `__chkstk_darwin` helper receive a diagnostic before code generation. The
 Apple Clang native-object route can preserve that helper. Compiler selection

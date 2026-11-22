@@ -405,7 +405,8 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     const auto &Symbol = Object.Symbols.at(R.SymbolIndex);
     if (Symbol.Name.empty())
       return fail(kGOTRelocation);
-    if (!Symbol.Section && !Declared.contains(Symbol.Name)) {
+    if (!Symbol.Section && !Object.Image.SymbolAddrs.contains(Symbol.Name) &&
+        !Declared.contains(Symbol.Name)) {
       const auto &Candidates = Personality ? Personalities : Ordinary;
       if (auto It = Candidates.find(Symbol.Name); It != Candidates.end()) {
         Object.GOT.emplace(Key, NativeMachO::GOTSlot{std::nullopt, It->second});
@@ -1810,8 +1811,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       if (!Word)
         return fail(arm64e::kInvalidObjectPointerBits);
       const auto Symbol = Object.Symbols.find(R.SymbolIndex);
-      if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty() ||
-          Bindings.contains(Symbol->second.Name))
+      if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty())
         return fail(kAuthSymbol);
       CompiledFixupReference Reference;
       Reference.Offset = R.Offset;
@@ -1822,7 +1822,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       Reference.IsResolved = true;
       Reference.PointerAuth = CompiledPointerAuthentication{
           Word->Key, Word->Diversity, Word->AddressDiversity};
-      if (Symbol->second.Section) {
+      if (Symbol->second.Section || Bindings.contains(Symbol->second.Name)) {
         auto Target = resolve(Object, R.SymbolIndex, Original, Bindings);
         if (!Target)
           return Target.takeError();
@@ -1876,12 +1876,11 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       Reference.IsResolved = Reference.OrdinaryPointer = true;
       if (R.External) {
         auto Symbol = Object.Symbols.find(R.SymbolIndex);
-        if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty() ||
-            Bindings.contains(Symbol->second.Name))
+        if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty())
           return fail(kOrdinarySymbol);
         Reference.Symbol = Symbol->second.Name;
         Reference.Addend = int64_t(Raw);
-        if (Symbol->second.Section) {
+        if (Symbol->second.Section || Bindings.contains(Symbol->second.Name)) {
           auto Target = resolve(Object, R.SymbolIndex, Original, Bindings);
           if (!Target)
             return Target.takeError();
@@ -2800,8 +2799,13 @@ static llvm::Expected<PatchResult> installObject(
         return AddressPlan.takeError();
     }
   }
-  for (auto &[Name, Binding] : Bindings)
+  for (auto &[Name, Binding] : Bindings) {
     Binding.OriginalVA += *Slide;
+    // Explicitly bound symbols are defined by the input image. GOT slots
+    // and pointer initializers for them require rebases to its final layout.
+    if (Original.isArm64e())
+      Object->Image.SymbolAddrs.emplace(Name, Binding.OriginalVA);
+  }
   const auto EH = findMachOEHFrameRegion(LayoutBytes);
   if (!Base)
     return fail(kNoPlacement);
