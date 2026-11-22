@@ -65,6 +65,10 @@ MACHO_AUTH_NATIVE_TEXT(kBindingEntrySymbol, "_entry")
 MACHO_AUTH_NATIVE_TEXT(kBindingBiasSymbol, "_bias")
 MACHO_AUTH_NATIVE_TEXT(kBindingRetained, "retained")
 MACHO_AUTH_NATIVE_TEXT(kBoundObjectOutput, "bound-object.dylib")
+MACHO_AUTH_NATIVE_ARGS(kBoundImageArgs, "-target", "arm64e-apple-macos15",
+                       "-dynamiclib", "-Wl,-headerpad,0")
+MACHO_AUTH_NATIVE_TEXT(kBindingRows, "bindings")
+MACHO_AUTH_NATIVE_TEXT(kBoundAddressField, "resolved_va")
 MACHO_AUTH_NATIVE_TEXT(kFreestandingSource, "-ffreestanding")
 MACHO_AUTH_NATIVE_TEXT(kIRCompilerEnvironment, "NEVERD_ARM64E_IR_COMPILER")
 MACHO_AUTH_NATIVE_TEXT(kMissingIRCompiler,

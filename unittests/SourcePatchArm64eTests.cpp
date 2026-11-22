@@ -14,6 +14,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
@@ -177,7 +178,7 @@ TEST(SourcePatchArm64eSDK, InstallsLegacyIRWithDeferredDataBinding) {
   OS.close();
   ASSERT_FALSE(OS.has_error());
   llvm::SmallVector<llvm::StringRef> Args{kCompiler};
-  Args.append(std::begin(kCompileArgs), std::end(kCompileArgs));
+  Args.append(std::begin(kBoundImageArgs), std::end(kBoundImageArgs));
   Args.append({kO0, Source});
   Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
   Args.push_back(Original);
@@ -232,7 +233,32 @@ TEST(SourcePatchArm64eSDK, InstallsLegacyIRWithDeferredDataBinding) {
                                   Output.c_str()),
               1)
         << neverd_last_error(Session);
-    EXPECT_TRUE(llvm::sys::fs::exists(Output));
+    auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
+    ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+    std::optional<uint64_t> FinalVA;
+    for (const auto &Symbol : Installed->getBinary()->symbols()) {
+      auto Name = Symbol.getName();
+      ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+      if (*Name != kBindingBiasSymbol)
+        continue;
+      auto Address = Symbol.getAddress();
+      ASSERT_TRUE(bool(Address)) << llvm::toString(Address.takeError());
+      FinalVA = *Address;
+    }
+    ASSERT_TRUE(FinalVA.has_value());
+    EXPECT_GT(*FinalVA, Binding.original_va);
+    const char *Text = neverd_patch_source_report(Session);
+    ASSERT_NE(Text, nullptr);
+    const auto Release = llvm::scope_exit([&] { neverd_free_string(Text); });
+    auto Receipt = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(Receipt)) << llvm::toString(Receipt.takeError());
+    ASSERT_NE(Receipt->getAsObject(), nullptr);
+    const auto *Rows = Receipt->getAsObject()->getArray(kBindingRows);
+    ASSERT_NE(Rows, nullptr);
+    ASSERT_EQ(Rows->size(), 1u);
+    ASSERT_NE(Rows->front().getAsObject(), nullptr);
+    EXPECT_EQ(Rows->front().getAsObject()->getInteger(kBoundAddressField),
+              *FinalVA);
   }
 #endif
 }

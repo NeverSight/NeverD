@@ -14,6 +14,7 @@
 #include "neverd/backend/codegen/SourcePatchPreparation.h"
 #include "neverd/sdk/Limits.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/JSON.h"
@@ -24,6 +25,7 @@
 #include <cstddef>
 #include <cstring>
 #include <exception>
+#include <optional>
 
 using namespace neverd;
 using namespace neverd::sdk;
@@ -283,10 +285,30 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
       Preparation->Imports = std::move(Added->Imports);
     return llvm::Error::success();
   };
+  // Binding preparation preserves request order and can substitute a
+  // callback address. The installer supplies the final Mach-O layout slide.
+  auto BindingReport = [&](llvm::ArrayRef<SourcePatchBinding> Resolved,
+                           std::optional<va_t> Slide) {
+    llvm::json::Array Rows;
+    for (const auto &[Request, Bound] : llvm::zip_equal(Bindings, Resolved)) {
+      llvm::json::Object Row{
+          {kBindingName, Request.Symbol},
+          {kBindingKind, static_cast<unsigned>(Request.Kind)},
+          {kBindingOriginalVA, Request.OriginalVA},
+          {kBindingSize, Bound.Size}};
+      if (Slide)
+        Row[kBindingResolvedVA] = Bound.OriginalVA + *Slide;
+      Rows.push_back(std::move(Row));
+    }
+    return Rows;
+  };
+  llvm::ArrayRef<SourcePatchBinding> EffectiveBindings;
   std::string SuccessText;
   auto PrepareReceipt = [&](const PatchResult &Result) {
     llvm::json::Object SuccessReport = Report;
     SuccessReport[kOriginalSectionSlide] = Result.OriginalSectionSlide;
+    SuccessReport[kBindingList] =
+        BindingReport(EffectiveBindings, Result.OriginalSectionSlide);
     llvm::json::Array Mappings;
     for (const auto &Mapping : Result.PatchedFunctions)
       Mappings.push_back(
@@ -335,23 +357,17 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
                         reinterpret_cast<const uint8_t *>(Artifact.data()),
                         Artifact.size())),
                     true);
-    llvm::json::Array RequestedReport, BindingReport;
+    llvm::json::Array RequestedReport;
     for (const auto &Mapping : Requested)
       RequestedReport.push_back(llvm::json::Object{
           {"symbol", Mapping.Symbol}, {"original_va", Mapping.OriginalVA}});
-    for (const auto &Binding : Bindings)
-      BindingReport.push_back(
-          llvm::json::Object{{"symbol", Binding.Symbol},
-                             {"kind", static_cast<unsigned>(Binding.Kind)},
-                             {"original_va", Binding.OriginalVA},
-                             {"size", Binding.Size}});
     Report["requested"] = std::move(RequestedReport);
-    Report["bindings"] = std::move(BindingReport);
+    Report[kBindingList] = BindingReport(Bindings, std::nullopt);
     if (auto E = Prepare(Requested, Artifact))
       return Error(std::move(E));
+    EffectiveBindings = Preparation ? Preparation->Bindings : Bindings;
     auto Installed = installObjectPatch(
-        Artifact, S.Img, Requested,
-        Preparation ? Preparation->Bindings : Bindings, Output, PrepareReceipt,
+        Artifact, S.Img, Requested, EffectiveBindings, Output, PrepareReceipt,
         DynCode ? &*DynCode : nullptr, Preparation ? &*Preparation : nullptr,
         NativeDependencies);
     if (!Installed)
@@ -408,18 +424,8 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
       Preparation ? Preparation->Bindings : Bindings, !NativeObject);
   if (!References)
     return Error(References.takeError());
-  llvm::json::Array BindingReport;
-  for (const auto &Binding : *References) {
-    const auto Requested = llvm::find_if(
-        Bindings, [&](const auto &B) { return B.Symbol == Binding.Symbol; });
-    BindingReport.push_back(
-        llvm::json::Object{{"symbol", Binding.Symbol},
-                           {"kind", static_cast<unsigned>(Requested->Kind)},
-                           {"original_va", Requested->OriginalVA},
-                           {"resolved_va", Binding.OriginalVA},
-                           {"size", Binding.Size}});
-  }
-  Report["bindings"] = std::move(BindingReport);
+  EffectiveBindings = *References;
+  Report[kBindingList] = BindingReport(EffectiveBindings, 0);
   Report["target"] = Module->getTargetTriple().str();
   Report["data_layout"] = Module->getDataLayoutStr();
   Report["language"] = Options->language;
