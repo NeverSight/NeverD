@@ -5,5 +5,11 @@
 //===----------------------------------------------------------------------===//
 
 NEVERD_SOURCE_PATCH_FIELD(kOriginalSectionSlide, "original_section_slide")
+NEVERD_SOURCE_PATCH_FIELD(kBindingList, "bindings")
+NEVERD_SOURCE_PATCH_FIELD(kBindingName, "symbol")
+NEVERD_SOURCE_PATCH_FIELD(kBindingKind, "kind")
+NEVERD_SOURCE_PATCH_FIELD(kBindingOriginalVA, "original_va")
+NEVERD_SOURCE_PATCH_FIELD(kBindingResolvedVA, "resolved_va")
+NEVERD_SOURCE_PATCH_FIELD(kBindingSize, "size")
 
 #undef NEVERD_SOURCE_PATCH_FIELD

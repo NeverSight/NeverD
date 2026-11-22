@@ -339,13 +339,43 @@ available TEXT padding before requesting prefix growth, including creation of a 
 `__eh_frame` section in a dylib. Deferred authenticated function providers do
 not reserve ordinary import-thunk frames.
 
-Use a frontend that emits LLVM's standard
-[pointer-authentication constants and call bundles](https://llvm.org/docs/PointerAuth.html),
-such as the tested Clang 22 frontend, selected explicitly with `--compiler-path`.
-Apple's older synthetic `llvm.ptrauth` globals remain unsupported IR input;
-its native object artifact uses the separately qualified object installer.
-Compiler selection never silently changes. The default prebuilt package remains
-r6. Its explicit classic signed-return CFI is incompatible with the macOS 26
+The arm64e Mach-O backend accepts modern LLVM pointer-authentication constants
+and the four-field descriptor globals emitted by older Apple LLVM frontends.
+It converts descriptors before object emission and MC rewrite, preserving the
+symbol addend, IA/IB/DA/DB key, address discriminator and integer diversity.
+For an address-diverse global initializer the discriminator must identify its
+storage slot, including a field inside an aggregate. The object installer
+passes the resulting signing recipes to dyld. An explicit source binding names
+an address in the original image. After a dylib layout change, ordinary GOT
+slots and signed or unsigned pointer initializers all rebase to that address
+in the new layout. The successful patch receipt records this address in
+`bindings[].resolved_va` for both source IR and native objects. These LLVM
+toolchains accept inline stack probes. Modules that also request Apple’s named
+`__chkstk_darwin` helper receive a diagnostic before code generation. The
+Apple Clang native-object route can preserve that helper. Compiler selection
+remains explicit with `--compiler-path`. The compatibility profile pins the r6
+release tag and archive digest. The dev branch selects r7 for fresh builds.
+
+The artifact directory for
+`AArch64AuthenticatedCall.CompilesFrontendAuthenticatedGlobals` includes
+`caller.c` and the O0 and O2 objects. The independent arm64e caller checks
+the IA and IB calls, passes the DB-signed aggregate field to a function that
+takes a regular function pointer, and reads the DA-signed data pointer with a
+three-byte addend. Both Darwin profiles ran the NeverD objects and the Apple
+Clang controls. Source, native-object and direct legacy-IR installation also
+resolved an explicitly bound constant after a 16 KiB image slide.
+[Four-key objects and installed-image execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44998646615).
+
+Apple Clang 17 compiled the C++ installation fixture with
+`-ffreestanding -funwind-tables`. Each O0 and O2 module contained four legacy
+signing descriptors. The synchronous unwind setting supplied the table for
+each published function and preserved the fixture’s compact and forced-DWARF
+variants. Both dylib and executable publication passed locally. On macOS 26,
+Apple Clang 21 produced the IR for eight native execution cases. All 32 native
+installation cases passed, including authenticated calls, catches and cleanups.
+[Native installation and execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45002434803).
+
+The r6 explicit classic signed-return CFI is incompatible with the macOS 26
 system unwinder, so publication rejects those objects transactionally. The
 Apple-native object route remains available. Canonical generation requires the
 [Darwin CFI correction](https://github.com/NeverSight/llvm-project/pull/8)
@@ -2937,18 +2967,31 @@ decoder checks both register operands, including pairs that retain the
 page in X8 and return the full address in X0. Each publication recovers the
 original numeric address from the linked input.
 
-When a one-word site cannot reach either its original address or its dyld
-pointer cell, the publisher can emit a two-word page pair inside a function
-with compact unwind. It recognizes a zero-stack leaf or an FP/LR save and
-restore, checks the position-independent body and its final return,
-and excludes DWARF and language metadata from this expansion. The leading
-B-key SP signature and authenticated return keep their signing modifier.
-It then verifies the new instruction, all shifted words and every embedded
-data range against the source. A whole function that needs to preserve its
-instruction offsets can move closer to the pool. The final verifier checks
-the relocated calls, original register operands and unwind records in either
-layout. Publication still reports a range error if the available placements
-cannot encode the address.
+When a single address instruction cannot reach its original address or its
+dyld pointer cell, the publisher can widen it to an `ADRP`/`ADD` pair in the
+same destination register. For a register body with an indexed DWARF frame,
+the instruction labels reposition the CFA and register recovery rules. For a
+language frame they also reposition the guarded ranges and landing pads.
+Publication checks those offsets against the installed FDE and LSDA, including
+cleanup-only and handler-free call sites, and checks local branches and
+embedded data at their new positions. A raw PC-relative reference or relative
+dispatch table can require fixed instruction distances. The publisher can
+place the function nearer its literal pool when that preserves those distances.
+If neither placement is encodable, publication reports the range failure.
+
+Two signed functions containing over 1 MiB of inline data each required two
+address expansions. In the cleanup fixture the Darwin unwinder crossed the
+published body and the caller caught the exception after its cleanup ran. In
+the typed fixture the body caught a `double` locally and cleaned up an `int`
+that propagated to the caller. Both runner profiles exercised the original
+and two successive publications of the typed fixture. The second publication
+rebuilt the LSDA from its file-backed, read-only segment. This preserves the
+personality and type-info references even when the segment has no sections.
+[Signed cleanup execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44993433517) · [Typed catch and cleanup execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44995374215).
+Both runner profiles also passed all 278 lifted-image and unwind tests.
+Each of the three wide-frame tests ran five images, comprising the original
+and two generations for each optimization setting.
+[Complete Darwin suite](https://github.com/gmh5225/test_mac_intel/actions/runs/44998815905).
 
 When a published entry begins with a forwarding branch, its old FP/LR save
 can still appear in the next word. Function discovery uses the linker's

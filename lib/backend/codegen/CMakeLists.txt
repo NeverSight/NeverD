@@ -53,6 +53,7 @@ add_neverd_component_library(NeverDCodeGen
   COFF/COFFRegistrationCxxThrow.cpp
   COFF/COFFRegistrationIRProof.cpp
   CodeGen.cpp
+  CodeGenPointerAuth.cpp
   AArch64/CodeGenAArch64.cpp
   ARM/CodeGenARM.cpp
   CodeGenSymbolize.cpp

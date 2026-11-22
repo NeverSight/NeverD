@@ -180,42 +180,56 @@ detectTargetFeatures(llvm::Module &Mod, Arch TheArch) {
   }
 }
 
-#define CODEGEN_PAUTH_TEXT(Name, Text) static constexpr char Name[] = Text;
-#include "CodeGenPointerAuth.def"
+#define CODEGEN_STACK_TEXT(Name, Text) static constexpr char Name[] = Text;
+#include "CodeGenStackProbe.def"
 
-static bool supportsPointerAuthenticationGlobals(const llvm::Module &Module,
-                                                 bool RequireRecipes = false) {
-  for (const auto &Global : Module.globals())
-    if (Global.getSection() == kLegacyApplePAuthSection) {
-      llvm::WithColor::error() << kLegacyApplePAuthUnsupported;
-      return false;
-    }
-  if (!RequireRecipes)
-    return true;
-#if !__has_include("llvm/MC/MCPointerAuthInfo.h")
-  // The prebuilt compiler can emit native object authentication relocations,
-  // but its final-address callback cannot retain their signing schema. Detect
-  // nested constants as well as top-level pointer initializers before codegen.
-  llvm::SmallVector<const llvm::Constant *> Pending;
-  llvm::DenseSet<const llvm::Constant *> Seen;
-  for (const auto &Global : Module.globals())
-    if (Global.hasInitializer())
-      Pending.push_back(Global.getInitializer());
-  while (!Pending.empty()) {
-    const auto *Value = Pending.pop_back_val();
-    if (!Seen.insert(Value).second)
-      continue;
-    if (llvm::isa<llvm::ConstantPtrAuth>(Value)) {
-      llvm::WithColor::error() << kPAuthRecipeCallbackMissing;
-      return false;
-    }
-    for (const auto &Operand : Value->operands())
-      if (const auto *Nested = llvm::dyn_cast<llvm::Constant>(Operand))
-        if (!llvm::isa<llvm::GlobalValue>(Nested))
-          Pending.push_back(Nested);
+// Validate named methods before the AArch64 target constructs a
+// MachineFunction. Both object emission and fixed-address rewrite must preserve
+// requested probes.
+static llvm::Error validateStackProbes(const llvm::Module &Module,
+                                       Arch TargetArch,
+                                       bool CheckOtherTargets = false) {
+  const bool InlineProbeOnly =
+      TargetArch == Arch::AArch64 && !Module.getTargetTriple().isOSWindows();
+  if (!InlineProbeOnly && !CheckOtherTargets)
+    return llvm::Error::success();
+  const auto Fail = [](const llvm::Twine &Detail) {
+    return llvm::createStringError(llvm::errc::invalid_argument, Detail);
+  };
+  if (const auto *Flag = Module.getModuleFlag(kStackProbeSize)) {
+    const auto *Size = llvm::mdconst::dyn_extract<llvm::ConstantInt>(Flag);
+    if (!Size || Size->isZero() || Size->getValue().getActiveBits() > 63)
+      return Fail(kInvalidModuleProbeSize);
   }
-#endif
-  return true;
+  llvm::StringRef ModuleProbe;
+  if (InlineProbeOnly) {
+    if (const auto *Flag = Module.getModuleFlag(kStackProbe)) {
+      const auto *Value = llvm::dyn_cast<llvm::MDString>(Flag);
+      if (!Value)
+        return Fail(kInvalidModuleProbe);
+      ModuleProbe = Value->getString();
+    }
+  }
+  for (const llvm::Function &Function : Module) {
+    if (Function.isDeclaration())
+      continue;
+    if (Function.hasFnAttribute(kStackProbeSize)) {
+      uint64_t Size = 0;
+      if (Function.getFnAttribute(kStackProbeSize)
+              .getValueAsString()
+              .getAsInteger(0, Size) ||
+          Size == 0 || Size > INT64_MAX)
+        return Fail(kInvalidFunctionProbeSize + Function.getName());
+    }
+    const auto Probe =
+        Function.hasFnAttribute(kStackProbe)
+            ? Function.getFnAttribute(kStackProbe).getValueAsString()
+            : ModuleProbe;
+    if (InlineProbeOnly && !Probe.empty() && Probe != kInlineStackProbe)
+      return Fail(kUnsupportedProbe + Probe + kProbeOnFunction +
+                  Function.getName() + kProbeProfile);
+  }
+  return llvm::Error::success();
 }
 
 static bool supportsAArch64ReturnUnwind(const llvm::Module &Module,
@@ -379,8 +393,7 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                ObjectConsumer Consumer) {
   CodegenResult Result;
   initializeLLVMCodegenTargets();
-  if (!supportsX86NativeExtensions(Mod) ||
-      !supportsPointerAuthenticationGlobals(Mod))
+  if (!supportsX86NativeExtensions(Mod))
     return Result;
   if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
     llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
@@ -411,6 +424,10 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
   if (!supportsAArch64ReturnUnwind(Mod, TT))
     return Result;
   Mod.setTargetTriple(TT);
+  if (auto Error = validateStackProbes(Mod, TargetArch)) {
+    llvm::WithColor::error() << llvm::toString(std::move(Error)) << '\n';
+    return Result;
+  }
 
   std::string Err;
   auto *TheTarget = llvm::TargetRegistry::lookupTarget(TT, Err);
@@ -445,6 +462,8 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
   }
 
   Mod.setDataLayout(TM->createDataLayout());
+  if (!preparePointerAuthenticationGlobals(Mod, TT))
+    return Result;
 
   reserveX86StackTemporaries(Mod, TargetArch);
 
@@ -565,43 +584,9 @@ llvm::Error validateReplacementIR(const llvm::Module &Module, Arch TargetArch) {
     if (Global.hasInitializer() && Global.getName().starts_with(kNdDataPrefix))
       return Fail("reserved original-data symbol has an initializer: " +
                   Global.getName());
-  if (const auto *Flag = Module.getModuleFlag("stack-probe-size")) {
-    const auto *Size = llvm::mdconst::dyn_extract<llvm::ConstantInt>(Flag);
-    if (!Size || Size->isZero() || Size->getValue().getActiveBits() > 63)
-      return Fail("invalid module stack-probe-size");
-  }
-  const bool InlineProbeOnly =
-      TargetArch == Arch::AArch64 && !Module.getTargetTriple().isOSWindows();
-  llvm::StringRef ModuleProbe;
-  if (InlineProbeOnly) {
-    if (const auto *Flag = Module.getModuleFlag("probe-stack")) {
-      const auto *Value = llvm::dyn_cast<llvm::MDString>(Flag);
-      if (!Value)
-        return Fail("invalid module probe-stack method");
-      ModuleProbe = Value->getString();
-    }
-  }
-  for (const llvm::Function &Function : Module) {
-    if (Function.isDeclaration())
-      continue;
-    if (Function.hasFnAttribute("stack-probe-size")) {
-      uint64_t Size = 0;
-      if (Function.getFnAttribute("stack-probe-size")
-              .getValueAsString()
-              .getAsInteger(0, Size) ||
-          Size == 0 || Size > INT64_MAX)
-        return Fail("invalid stack-probe-size on " + Function.getName());
-    }
-    const auto Probe =
-        Function.hasFnAttribute("probe-stack")
-            ? Function.getFnAttribute("probe-stack").getValueAsString()
-            : ModuleProbe;
-    if (InlineProbeOnly && !Probe.empty() && Probe != "inline-asm")
-      return Fail(
-          "unsupported AArch64 stack probe '" + Probe + "' on " +
-          Function.getName() +
-          "; use a compatible LLVM IR compiler or native object profile");
-  }
+  if (auto Error =
+          validateStackProbes(Module, TargetArch, /*CheckOtherTargets=*/true))
+    return Fail(llvm::toString(std::move(Error)));
   return llvm::Error::success();
 }
 
@@ -619,8 +604,7 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
   llvm::mc_rewrite::RewriteResult Result;
   initializeLLVMCodegenTargets();
-  if (!supportsX86NativeExtensions(Mod) ||
-      !supportsPointerAuthenticationGlobals(Mod, TargetArch == Arch::AArch64)) {
+  if (!supportsX86NativeExtensions(Mod)) {
     Result.ImageValid = false;
     return Result;
   }
@@ -666,12 +650,12 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
   }
   Mod.setTargetTriple(TT);
 
-  if (InputKind == RewriteInputKind::ReplacementIR) {
-    if (auto Error = validateReplacementIR(Mod, TargetArch)) {
-      llvm::WithColor::error() << llvm::toString(std::move(Error)) << "\n";
-      Result.ImageValid = false;
-      return Result;
-    }
+  if (auto Error = InputKind == RewriteInputKind::ReplacementIR
+                       ? validateReplacementIR(Mod, TargetArch)
+                       : validateStackProbes(Mod, TargetArch)) {
+    llvm::WithColor::error() << llvm::toString(std::move(Error)) << '\n';
+    Result.ImageValid = false;
+    return Result;
   }
 
   std::string Err;
@@ -748,6 +732,11 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
   }
 
   Mod.setDataLayout(TM->createDataLayout());
+  if (!preparePointerAuthenticationGlobals(Mod, TT,
+                                           TargetArch == Arch::AArch64)) {
+    Result.ImageValid = false;
+    return Result;
+  }
   reserveX86StackTemporaries(Mod, TargetArch);
   expandNarrowFunnelShifts(Mod);
 

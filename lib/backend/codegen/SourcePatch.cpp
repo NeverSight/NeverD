@@ -489,6 +489,21 @@ llvm::Expected<PatchResult> installSourcePatch(
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
     const SourcePatchPreparation *Preparation,
     llvm::ArrayRef<SourcePatchDependency> Dependencies) {
+  return installSourcePatch(Module, Image, Mappings,
+                            Preparation ? llvm::ArrayRef(Preparation->Bindings)
+                                        : llvm::ArrayRef<SourcePatchBinding>(),
+                            OutputPath, TextSection, PrepareReceipt,
+                            Preparation, Dependencies);
+}
+
+llvm::Expected<PatchResult> installSourcePatch(
+    llvm::Module &Module, const BinaryImage &Image,
+    llvm::ArrayRef<SourcePatchMapping> Mappings,
+    llvm::ArrayRef<SourcePatchBinding> Bindings,
+    const std::filesystem::path &OutputPath, llvm::StringRef TextSection,
+    llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
+    const SourcePatchPreparation *Preparation,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies) {
   if (!Dependencies.empty() && !Image.isArm64e())
     return patchError(macho_arm64e_abi::kDependencies);
   if (Image.isArm64e() && !TextSection.empty())
@@ -536,14 +551,12 @@ llvm::Expected<PatchResult> installSourcePatch(
                                     Module.getTargetTriple().str());
     if (!Object.Success || Object.ObjectData.empty())
       return patchError(macho_arm64e_abi::kEmissionFailed);
-    return installObjectPatch(
-        llvm::StringRef(
-            reinterpret_cast<const char *>(Object.ObjectData.data()),
-            Object.ObjectData.size()),
-        Image, Mappings,
-        Preparation ? llvm::ArrayRef(Preparation->Bindings)
-                    : llvm::ArrayRef<SourcePatchBinding>(),
-        OutputPath, PrepareReceipt, nullptr, Preparation, Dependencies);
+    return installObjectPatch(llvm::StringRef(reinterpret_cast<const char *>(
+                                                  Object.ObjectData.data()),
+                                              Object.ObjectData.size()),
+                              Image, Mappings, Bindings, OutputPath,
+                              PrepareReceipt, nullptr, Preparation,
+                              Dependencies);
   }
   return publishSourcePatch(
       Image, Mappings, OutputPath,

@@ -373,7 +373,7 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
         return std::nullopt;
       Result.TableAddresses.insert(Producer->StoragePC);
       Result.TableAddresses.insert(Producer->AnchorPC);
-      Result.BranchTargets.try_emplace(Table->InsnAddr, Table->Targets);
+      Result.BranchTables.try_emplace(Table->InsnAddr, Table);
     }
   }
   const bool MissingReads = !Result.Recovered.empty();

@@ -22,7 +22,17 @@
 #include <string>
 #include <utility>
 
+namespace llvm {
+class Triple;
+class Module;
+} // namespace llvm
+
 namespace neverd {
+
+/// Normalize Apple descriptor globals before target-specific object emission.
+bool preparePointerAuthenticationGlobals(llvm::Module &M,
+                                         const llvm::Triple &Triple,
+                                         bool RequireRecipes = false);
 
 /// Synthetic marker inserted into the scanned-name set when the module uses
 /// native half-precision (`half`) arithmetic (emitted as ops, not intrinsics),

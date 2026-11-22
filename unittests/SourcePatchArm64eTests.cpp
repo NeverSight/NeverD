@@ -14,6 +14,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
@@ -151,6 +152,114 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
                                 sizeof(kObjectSource) - 1, &Options,
                                 Output.c_str()),
             0);
+#endif
+}
+
+TEST(SourcePatchArm64eSDK, InstallsLegacyIRWithDeferredDataBinding) {
+#ifndef __APPLE__
+  GTEST_SKIP() << kMissingHost;
+#else
+  llvm::SmallString<kPathCapacity> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory(kObjectArtifactPrefix, Directory));
+  const auto Cleanup = llvm::scope_exit(
+      [&] { EXPECT_FALSE(llvm::sys::fs::remove_directories(Directory)); });
+  const auto Path = [&](llvm::StringRef Name) {
+    auto Value = Directory;
+    llvm::sys::path::append(Value, Name);
+    return Value.str().str();
+  };
+  const auto Source = Path(kSourceFile);
+  const auto Original = Path(kOriginalFile);
+  std::error_code Error;
+  llvm::raw_fd_ostream OS(Source, Error);
+  ASSERT_FALSE(Error);
+  OS << kLegacyBindingImage;
+  OS.close();
+  ASSERT_FALSE(OS.has_error());
+  llvm::SmallVector<llvm::StringRef> Args{kCompiler};
+  Args.append(std::begin(kBoundImageArgs), std::end(kBoundImageArgs));
+  Args.append({kO0, Source});
+  Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
+  Args.push_back(Original);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Args, std::nullopt, {},
+                                      kToolTimeout),
+            0);
+  auto Before = llvm::object::ObjectFile::createObjectFile(Original);
+  ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+  neverd_source_patch_mapping_v1 Mapping{kBindingEntry, 0};
+  neverd_source_patch_binding_v1 Binding{
+      kBindingRetained, NEVERD_SOURCE_BIND_READ_ONLY_DATA, 0, sizeof(int)};
+  for (const auto &Symbol : Before->getBinary()->symbols()) {
+    auto Name = Symbol.getName();
+    ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+    if (*Name != kBindingEntrySymbol && *Name != kBindingBiasSymbol)
+      continue;
+    auto Address = Symbol.getAddress();
+    ASSERT_TRUE(bool(Address)) << llvm::toString(Address.takeError());
+    if (*Name == kBindingEntrySymbol)
+      Mapping.original_va = *Address;
+    else
+      Binding.original_va = *Address;
+  }
+  ASSERT_NE(Mapping.original_va, 0u);
+  ASSERT_NE(Binding.original_va, 0u);
+  auto Session = neverd_session_create();
+  ASSERT_NE(Session, nullptr);
+  const auto Destroy =
+      llvm::scope_exit([&] { neverd_session_destroy(Session); });
+  ASSERT_EQ(neverd_session_load(Session, Original.c_str()), 1)
+      << neverd_last_error(Session);
+  const char *Flags[] = {kFreestandingSource};
+  neverd_source_patch_options_v1 Options{};
+  Options.struct_size = sizeof(Options);
+  Options.language = NEVERD_SOURCE_PATCH_C;
+  Options.compiler_path = kCompiler;
+  Options.compiler_args = Flags;
+  Options.compiler_arg_count = std::size(Flags);
+  Options.mappings = &Mapping;
+  Options.mapping_count = 1;
+  Options.bindings = &Binding;
+  Options.binding_count = 1;
+  for (auto Artifact :
+       {NEVERD_SOURCE_PATCH_ARTIFACT_IR, NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT}) {
+    SCOPED_TRACE(Artifact);
+    Options.artifact = Artifact;
+    const auto Output =
+        Path(Artifact == NEVERD_SOURCE_PATCH_ARTIFACT_IR ? kInstalledFile
+                                                         : kBoundObjectOutput);
+    ASSERT_EQ(neverd_patch_source(Session, kLegacyBindingSource,
+                                  sizeof(kLegacyBindingSource) - 1, &Options,
+                                  Output.c_str()),
+              1)
+        << neverd_last_error(Session);
+    auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
+    ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+    std::optional<uint64_t> FinalVA;
+    for (const auto &Symbol : Installed->getBinary()->symbols()) {
+      auto Name = Symbol.getName();
+      ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+      if (*Name != kBindingBiasSymbol)
+        continue;
+      auto Address = Symbol.getAddress();
+      ASSERT_TRUE(bool(Address)) << llvm::toString(Address.takeError());
+      FinalVA = *Address;
+    }
+    ASSERT_TRUE(FinalVA.has_value());
+    EXPECT_GT(*FinalVA, Binding.original_va);
+    const char *Text = neverd_patch_source_report(Session);
+    ASSERT_NE(Text, nullptr);
+    const auto Release = llvm::scope_exit([&] { neverd_free_string(Text); });
+    auto Receipt = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(Receipt)) << llvm::toString(Receipt.takeError());
+    ASSERT_NE(Receipt->getAsObject(), nullptr);
+    const auto *Rows = Receipt->getAsObject()->getArray(kBindingRows);
+    ASSERT_NE(Rows, nullptr);
+    ASSERT_EQ(Rows->size(), 1u);
+    ASSERT_NE(Rows->front().getAsObject(), nullptr);
+    EXPECT_EQ(Rows->front().getAsObject()->getInteger(kBoundAddressField),
+              *FinalVA);
+  }
 #endif
 }
 

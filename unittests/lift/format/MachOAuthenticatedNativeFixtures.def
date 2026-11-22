@@ -41,6 +41,35 @@ MACHO_AUTH_NATIVE_VALUE(unsigned, kImportSymbol, 1)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kImportFrom, 2)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kImportModule, 3)
 MACHO_AUTH_NATIVE_TEXT(kCompiler, "/usr/bin/clang++")
+MACHO_AUTH_NATIVE_TEXT(kLegacyBindingImage, R"cpp(
+extern "C" {
+extern const int bias = 5;
+int entry(int x) { return x + 1; }
+int (*original_entry)(int) = entry;
+}
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kLegacyBindingSource, R"c(
+extern const int retained;
+typedef int (*Fn)(int);
+static const int *volatile plain = &retained;
+static const int *__ptrauth(2, 1, 0x3197) volatile checked = &retained;
+static int plus(int x) {
+  const int *value = plain;
+  return value == &retained && checked == value ? x + *value : x;
+}
+static Fn __ptrauth(1, 1, 0x5371) volatile slot = plus;
+int entry(int x) { return slot(x); }
+)c")
+MACHO_AUTH_NATIVE_TEXT(kBindingEntry, "entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingEntrySymbol, "_entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingBiasSymbol, "_bias")
+MACHO_AUTH_NATIVE_TEXT(kBindingRetained, "retained")
+MACHO_AUTH_NATIVE_TEXT(kBoundObjectOutput, "bound-object.dylib")
+MACHO_AUTH_NATIVE_ARGS(kBoundImageArgs, "-target", "arm64e-apple-macos15",
+                       "-dynamiclib", "-Wl,-headerpad,0")
+MACHO_AUTH_NATIVE_TEXT(kBindingRows, "bindings")
+MACHO_AUTH_NATIVE_TEXT(kBoundAddressField, "resolved_va")
+MACHO_AUTH_NATIVE_TEXT(kFreestandingSource, "-ffreestanding")
 MACHO_AUTH_NATIVE_TEXT(kIRCompilerEnvironment, "NEVERD_ARM64E_IR_COMPILER")
 MACHO_AUTH_NATIVE_TEXT(kMissingIRCompiler,
                        "requires an explicit canonical LLVM IR frontend")
