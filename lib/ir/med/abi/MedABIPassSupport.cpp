@@ -1864,6 +1864,21 @@ bool goIndirectCallTakesGoRegisters(const BinaryImage &Img, const MedFunc &Func,
   return Context && callsThroughFuncValue(Block, CallIdx, *Context);
 }
 
+bool goIndirectCallTakesStackArguments(const BinaryImage &Img,
+                                       const MedFunc &Func,
+                                       const MedBlock &Block, size_t CallIdx) {
+  if (CallIdx >= Block.Ops.size() ||
+      Block.Ops[CallIdx].Opcode != NdOp::INDIR_CALL ||
+      !Img.ExceptionMetadata.GoModule ||
+      !Img.ExceptionMetadata.GoModule->StackArguments ||
+      !isGoCode(Img, Func.Entry))
+    return false;
+  if (Func.ChecksGoStack)
+    return true;
+  const std::optional<uint64_t> Context = goClosureContextRegister(Img.Arch);
+  return Context && callsThroughFuncValue(Block, CallIdx, *Context);
+}
+
 bool setOnEveryWay(const MedFunc &Func, const MedVar &V,
                    const ValuesLeftByCalls &LeftByCalls) {
   using Key = std::tuple<int, int, int, uint64_t, uint16_t>;

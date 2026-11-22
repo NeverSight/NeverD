@@ -273,6 +273,17 @@ bool callsThroughFuncValue(const MedBlock &Block, size_t CallIdx,
 bool goIndirectCallTakesGoRegisters(const BinaryImage &Img, const MedFunc &Func,
                                     const MedBlock &Block, size_t CallIdx);
 
+/// Whether the indirect call at \p CallIdx in \p Block of \p Func enters Go
+/// code of an image older than the internal ABI, which takes every argument
+/// on the stack and none in a register (goStackArgumentLayout): any call of
+/// a function that checks its goroutine's stack, which calls nothing but Go
+/// code (MedFunc::ChecksGoStack), and one any other Go routine makes through
+/// a func value (callsThroughFuncValue).  Assembly without that check may
+/// call another language's code, with the registers it sets.
+bool goIndirectCallTakesStackArguments(const BinaryImage &Img,
+                                       const MedFunc &Func,
+                                       const MedBlock &Block, size_t CallIdx);
+
 /// Whether \p Func set \p V, a value reaching a call, on every way to it.
 /// \p V and each value a PHI joins into it, directly or through other joins,
 /// is neither the register as \p Func was entered, where no parameter of it

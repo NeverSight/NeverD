@@ -20882,6 +20882,12 @@ pipeline over two Go functions of two arguments, built as ELF and as PE, one
 that stores RCX through both and one that calls through it: neither names
 `arg0` for RCX, each prints the register as one with no definition, and both
 formats print the same.
+`GoStackABI.AnIndirectCallPassesNothingInARegister` runs it over three
+routines of a stack-ABI image: one with a stack check that calls through a
+method table passes the word it stored and nothing else, and reads no
+goroutine; one without that calls through a func value after loading RCX
+passes nothing; assembly without a check that calls through a pointer still
+passes what it set in RDI.
 `GoStackABI.ARegisterAStackRoutinePassesOnIsNoParameter` runs it over a
 stack-ABI routine that loads a word into RCX and calls through a table: the
 call passes three unknown values and that word, names none of the routine's

@@ -5940,6 +5940,20 @@ first argument in RCX, Go's internal ABI its third, so in a PE a Go function
 of two arguments printed its entry RCX, a register no argument arrives in, as
 `arg0`: the copy index for Win64's entry copies read the position.
 
+Before the internal ABI every call into Go code passes its arguments on the
+stack, floating ones too, and nothing in a register. A direct call takes that
+layout from its callee (`MedFunc::StackArgumentsOnly`); an indirect one has no
+callee to ask. A function that begins with Go's stack check runs on a
+goroutine's stack, where Go code calls nothing but Go code
+(`MedFunc::ChecksGoStack`), so each indirect call it makes takes
+`goStackArgumentLayout`; so does a call any other Go routine of such an image
+makes through a func value (`goIndirectCallTakesStackArguments`). Assembly
+without the check may call another language's code through a pointer, on the
+system stack, with the registers it sets, and keeps the platform's layout. By
+the platform's positions `efaceeq`'s `eq(x, y)` passed six arguments: whatever
+RDI and RSI held, the closure in RDX and the goroutine the stack check left
+in RCX came before the two words it stored.
+
 Call recovery names the entry value of a register a call passes on as a
 parameter before it knows the function's parameters. Where none arrives in
 that register the value is unknown, and MedToHigh lowers it as it lowers the

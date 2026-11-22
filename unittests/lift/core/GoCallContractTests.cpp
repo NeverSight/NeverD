@@ -2546,6 +2546,74 @@ TEST(GoInternalABI, ARegisterNoParameterArrivesInIsNoPositionalParameter) {
   EXPECT_EQ(Bodies[0], Bodies[1]);
 }
 
+TEST(GoStackABI, AnIndirectCallPassesNothingInARegister) {
+  // Before the internal ABI a call into Go code passes every argument on the
+  // stack.  main.m checks its goroutine's stack, so it runs there and calls
+  // nothing but Go code: its call through a method table passes the word it
+  // stored at its stack pointer and nothing else.  By the platform's
+  // positions it passed whatever RDI, RSI and RDX held, and the goroutine
+  // its stack check left in RCX.  main.n has no such check and calls through
+  // a func value, the closure in RDX, after loading a word into RCX: no
+  // argument either.  main.c, assembly without a check that calls through a
+  // pointer it was given, may call C: it passes what it set in RDI.
+  //   main.m: mov rcx, fs:[-8]; cmp rsp, [rcx+0x10]; jbe grow; sub rsp, 0x18
+  //           mov rax, [rsp+0x20]; mov [rsp], rax; mov rax, [rsp+0x28]
+  //           mov rax, [rax+0x18]; call rax; add rsp, 0x18; ret
+  //     grow: call morestack; jmp main.m
+  //   main.n: sub rsp, 0x10; mov rcx, [rsp+0x20]; mov rdx, [rsp+0x18]
+  //           mov rax, [rdx]; call rax; add rsp, 0x10; ret
+  //   main.c: sub rsp, 0x10; mov rax, [rsp+0x18]; mov rdi, [rsp+0x20]
+  //           call rax; add rsp, 0x10; ret
+  constexpr va_t M = kTextVA + 0x100;
+  constexpr va_t N = kTextVA + 0x180;
+  constexpr va_t C = kTextVA + 0x1C0;
+  GoTestImage T(Arch::X64);
+  std::vector<uint8_t> Code = {
+      0x64, 0x48, 0x8B, 0x0C, 0x25, 0xF8, 0xFF, 0xFF, 0xFF, 0x48, 0x3B,
+      0x61, 0x10, 0x76, 0x1D, 0x48, 0x83, 0xEC, 0x18, 0x48, 0x8B, 0x44,
+      0x24, 0x20, 0x48, 0x89, 0x04, 0x24, 0x48, 0x8B, 0x44, 0x24, 0x28,
+      0x48, 0x8B, 0x40, 0x18, 0xFF, 0xD0, 0x48, 0x83, 0xC4, 0x18, 0xC3};
+  const std::vector<uint8_t> Grow = makeCall(M + Code.size(), Morestack);
+  Code.insert(Code.end(), Grow.begin(), Grow.end());
+  Code.insert(Code.end(), {0xEB, 0xCD});
+  T.writeText(M, Code);
+  T.writeText(Morestack, {0xC3});
+  T.writeText(N, {0x48, 0x83, 0xEC, 0x10, 0x48, 0x8B, 0x4C, 0x24,
+                  0x20, 0x48, 0x8B, 0x54, 0x24, 0x18, 0x48, 0x8B,
+                  0x02, 0xFF, 0xD0, 0x48, 0x83, 0xC4, 0x10, 0xC3});
+  T.writeText(C,
+              {0x48, 0x83, 0xEC, 0x10, 0x48, 0x8B, 0x44, 0x24, 0x18, 0x48, 0x8B,
+               0x7C, 0x24, 0x20, 0xFF, 0xD0, 0x48, 0x83, 0xC4, 0x10, 0xC3});
+  for (const auto &[Address, Name] :
+       {std::pair{M, "main.m"}, std::pair{N, "main.n"},
+        std::pair{C, "main.c"}}) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{kTextVA + 0x100, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  Module.FrameArguments = {{M, 16}, {N, 16}, {C, 16}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const std::string Method = highCBody(R, T.Img, "main_m");
+  EXPECT_NE(Method.find(")(arg0);"), std::string::npos) << Method;
+  EXPECT_EQ(Method.find("__builtin_trap"), std::string::npos) << Method;
+  // The goroutine the check read reaches nothing now.
+  EXPECT_EQ(Method.find("neverd_mem_load_fs"), std::string::npos) << Method;
+  const std::string FuncValue = highCBody(R, T.Img, "main_n");
+  EXPECT_NE(FuncValue.find(")))();"), std::string::npos) << FuncValue;
+  EXPECT_EQ(FuncValue.find("__builtin_trap"), std::string::npos) << FuncValue;
+  const std::string Pointer = highCBody(R, T.Img, "main_c");
+  EXPECT_NE(Pointer.find(")(arg1);"), std::string::npos) << Pointer;
+}
+
 TEST(GoStackABI, ARegisterAStackRoutinePassesOnIsNoParameter) {
   // A stack-ABI routine takes nothing in a register.  One that sets RCX and
   // calls through a table passes on, by the platform's positions, whatever

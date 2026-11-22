@@ -2244,6 +2244,7 @@ MedFunc LowToMedConverter::convertFunction(
     // it unchanged (GoStackGrowth::Restarts).
     const std::optional<GoStackGrowth> GoGrowth =
         Image ? goStackGrowth(*Image, Low.Blocks) : std::nullopt;
+    Func.ChecksGoStack = GoGrowth.has_value();
     if (GoGrowth && GoGrowth->Restarts)
       elideGoStackGrowth(Func, GoGrowth->GrowthStart);
     // Go's internal ABI enters a function with X15 zero, and its calls keep

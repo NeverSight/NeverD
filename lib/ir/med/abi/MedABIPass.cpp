@@ -1691,6 +1691,19 @@ void recoverCallAbi(
       // compiled Go code's own parameters are.
       const bool GoAssemblyFuncValueCall =
           GoRegisterCall && !usesGoRegisterArguments(*Img, Func.Entry);
+      // Before the internal ABI an indirect call into Go code passes every
+      // argument on the stack, a floating one too, and nothing in a register
+      // (goIndirectCallTakesStackArguments).  By the platform's positions a
+      // call through a func value passed whatever RDI and RSI held, the
+      // closure in RDX and the goroutine the stack check left in RCX.
+      const bool GoStackIndirectCall =
+          CI.IsIndirect && Img &&
+          goIndirectCallTakesStackArguments(*Img, Func, Blk, OI);
+      if (GoStackIndirectCall) {
+        IntegerLayout = goStackArgumentLayout(TheArch);
+        IntParamRegs = IntegerLayout.Registers;
+        CI.ArgumentsInCalleeRegisterOrder = true;
+      }
 
       // The callee's full integer-argument count (register + stack), for
       // bounding a tail-call forwarder's passed-through stack arguments.
@@ -3452,6 +3465,8 @@ void recoverCallAbi(
               goFloatArgumentRegisters(TheArch);
           FPRegs.assign(GoFloats.begin(), GoFloats.end());
         }
+        if (GoStackIndirectCall)
+          FPRegs.clear();
         int FPLimit = static_cast<int>(FPRegs.size());
         bool KnownFPCallee = false;
         if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport &&
