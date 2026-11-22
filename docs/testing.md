@@ -4599,6 +4599,13 @@ and exhaustive byte inputs for LLVM exact-shift and overflow flags. An
 81-factor x86 fixture checks High C and LLVM C through the CLI and the worker
 used by the GUI. Its ordinary and optimized outputs execute at Clang O0 and O2.
 
+Use `--family masked-join --count 4` for 24 products at 32, 64, 1025,
+4097, 8193 and 12289 bits. Each field joins three to seven shuffled masked
+inputs. The largest product contains 1709 factors. Cases include a changed
+live bit, signed byte extensions and 65-bit coefficients. The 89-factor x86
+fixture checks both source views and executes the emitted C against the
+original multiplication at Clang O0 and O2.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work
