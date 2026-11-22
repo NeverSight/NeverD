@@ -2889,6 +2889,65 @@ TEST(GoInternalABI, AnArm64StackArgumentFollowsNoPlatformPosition) {
   EXPECT_NE(Passing.find("main_far(1, 7);"), std::string::npos) << Passing;
 }
 
+TEST(GoInternalABI, AFunctionThatPassesItsFirstArgumentOnReadsIt) {
+  // A function reads at its entry what a callee of it reads at its own,
+  // where the function wrote the register nowhere before the call.  The
+  // call's write of its result ended that read: the summary cleared the
+  // result register after it joined the callee's reads, though the callee
+  // reads what it was entered with before the call writes anything.  Go
+  // passes its first argument in the register it returns its first result
+  // in, so a function that passes RAX on as it came, as `runtime.chansend1`
+  // jumps to `chansend`, read RBX and RCX and not RAX: it took RAX as a
+  // parameter only by the call that forwards it, and passed on a register
+  // with no definition.
+  //   main.three: add rax, rbx; add rax, rcx; ret
+  //   main.wrap: jmp main.three
+  constexpr va_t Three = kTextVA + 0x100;
+  constexpr va_t Wrap = kTextVA + 0x180;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    GoTestImage T(Arch::X64);
+    T.Img.Format = Format;
+    T.writeText(Three, {0x48, 0x01, 0xD8, 0x48, 0x01, 0xC8, 0xC3});
+    std::vector<uint8_t> Body = {0xE9};
+    const auto Jump = static_cast<uint32_t>(Three - (Wrap + 5));
+    for (unsigned Shift = 0; Shift < 32; Shift += 8)
+      Body.push_back(static_cast<uint8_t>(Jump >> Shift));
+    T.writeText(Wrap, Body);
+    for (const auto &[Address, Name] :
+         {std::pair{Three, "main.three"}, std::pair{Wrap, "main.wrap"}}) {
+      Symbol Function = Symbol::makeFunc(Address);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.FrameArguments = {{Three, 24}, {Wrap, 24}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const auto Reads = R.CallEntryReadGPRs.find(Wrap);
+    ASSERT_NE(Reads, R.CallEntryReadGPRs.end());
+    for (const uint64_t Register : {x86reg::RAX, x86reg::RBX, x86reg::RCX})
+      EXPECT_EQ(Reads->second[Register / 8], 8u) << Register;
+    for (const MedFunc &F : R.MedFuncs)
+      if (F.Entry == Wrap) {
+        ASSERT_EQ(F.Params.size(), 3u);
+        for (const MedVar &Parameter : F.Params)
+          EXPECT_GE(Parameter.Id, 0) << Parameter.RegOff;
+      }
+    const std::string Wrapping = highCBody(R, T.Img, "main_wrap");
+    EXPECT_NE(Wrapping.find("return main_three(arg0, arg1, arg2);"),
+              std::string::npos)
+        << Wrapping;
+  }
+}
+
 TEST(GoInternalABI, AFuncValueSetBeforeTheCallsBlockIsStillOne) {
   // Go assembly passes a func value only what it sets in Go's registers.
   // `runtime.mcall` moves its fn into the context register at its entry and

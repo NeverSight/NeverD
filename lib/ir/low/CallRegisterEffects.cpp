@@ -2057,6 +2057,18 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
                                    : EntryReads.end();
       if (Step.Exits)
         Live.fill(0);
+      // A call writes its result after its callee has read what it was
+      // entered with: the write ends no read of the callee's.  Go passes its
+      // first argument in the register it returns its first result in, so a
+      // function that passes RAX on as it came reads it.
+      const bool CallsFirst = Step.FixedArguments || Step.UnknownTailCall ||
+                              Step.UnknownCall || Step.Callee != InvalidVA;
+      if (CallsFirst) {
+        Clear(Live, Step.Kills);
+        for (size_t I = 0; I < Live.size(); ++I)
+          if (Step.LowWrites[I] && Live[I] <= Step.LowWrites[I])
+            Live[I] = 0;
+      }
       if (Step.FixedArguments) {
         // A call with fixed arguments reads exactly those; a tail call
         // passes nothing else on.
@@ -2096,10 +2108,12 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
       // The bytes of the copy that later reads need, before the copy's
       // write ends their life.
       const uint8_t Copied = Step.VectorCopy ? Live[Step.VectorCopy->first] : 0;
-      Clear(Live, Step.Kills);
-      for (size_t I = 0; I < Live.size(); ++I)
-        if (Step.LowWrites[I] && Live[I] <= Step.LowWrites[I])
-          Live[I] = 0;
+      if (!CallsFirst) {
+        Clear(Live, Step.Kills);
+        for (size_t I = 0; I < Live.size(); ++I)
+          if (Step.LowWrites[I] && Live[I] <= Step.LowWrites[I])
+            Live[I] = 0;
+      }
       const uint8_t Subleaf = Live[x86reg::RCX / 8];
       joinReads(Live, Step.Reads);
       if (Step.CpuidIgnoresSubleaf)

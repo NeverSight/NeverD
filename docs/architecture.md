@@ -12809,6 +12809,15 @@ parameters: those positions pass zero, before the floating arguments. A call
 whose block loads AL with no constant gives no count, and nothing changes for
 it.
 
+A callee reads what it was entered with before its call writes a result, so
+the summary ends what the call's own output defines before it joins the
+callee's entry reads, not after. Go passes its first argument in the register
+it returns its first result in: joined the other way round, a function that
+passes RAX on as it came, as `runtime.chansend1` jumps to `chansend`, read RBX
+and RCX at its entry and not RAX. It took RAX as a parameter only once call
+recovery promoted the register its call forwards, with no entry value to
+name, and HighIR passed a register with no definition.
+
 Past its register save area, a System V variadic routine of the image takes
 one trailing stack parameter per slot its widest call stores from the call's
 stack pointer up (`finalizeVariadicCallees` for the LLVM route,

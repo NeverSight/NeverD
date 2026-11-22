@@ -20941,6 +20941,10 @@ exactly those parameters and read no local, the calls pass 1 to 11 and 1, 10,
 over a function that reads the word above the stack pointer's and its caller:
 the function takes X0 and that word, the call passes 1 and 7, and the caller
 takes no parameter.
+`GoInternalABI.AFunctionThatPassesItsFirstArgumentOnReadsIt` runs the
+pipeline, as ELF and as PE, over a Go function that reads RAX, RBX and RCX
+and one that only jumps to it: the second's summary reads all three, each of
+its parameters has an entry value, and it passes `arg0, arg1, arg2`.
 `GoScheduleCalls.AreFoundByName` loads a pclntab that names `runtime.mcall`:
 the module records its entry and a call of it resumes, where one of
 `runtime.mcallx` or of any other function does not.
