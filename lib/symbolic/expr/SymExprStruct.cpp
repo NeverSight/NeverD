@@ -25,6 +25,7 @@
 #include "llvm/ADT/DenseMap.h"
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <optional>
 #include <utility>
@@ -89,6 +90,102 @@ std::optional<int> compareConstantWithZExtMaximum(const SymContext &Ctx,
   if (Value.getActiveBits() > Narrow)
     return 1;
   return Value.isMask(Narrow) ? 0 : -1;
+}
+
+// For a masked addition, a pair of zero mask bits kills a carry and a
+// pair of set bits can generate one. A differing pair can only propagate.
+// The highest equal mask bits below the field decide whether a carry can
+// enter it. OR and XOR need only the bits inside the field.
+std::optional<detail::WordWindow>
+projectMaskedPair(SymContext &Ctx, SymRef Join, uint64_t At, unsigned Size) {
+  if (At + Size > Ctx.width(Join))
+    return std::nullopt;
+  auto L = Ctx.operand(Join, 0), R = Ctx.operand(Join, 1);
+  if (Ctx.numOperands(L) != 2 || Ctx.numOperands(R) != 2 ||
+      !Ctx.isConst(Ctx.operand(L, 0)) || !Ctx.isConst(Ctx.operand(R, 0)))
+    return std::nullopt;
+  auto Live = Ctx.constWords(Ctx.operand(L, 0));
+  auto Other = Ctx.constWords(Ctx.operand(R, 0));
+  const unsigned First = At / 64, Last = (At + Size - 1) / 64;
+  const unsigned Low = At % 64, High = (At + Size - 1) % 64;
+  if (!(Live[First] & (uint64_t{1} << Low))) {
+    std::swap(L, R);
+    std::swap(Live, Other);
+  }
+  constexpr auto Limit = ::neverd::limits::symbolic::
+      kSymExprStructSymContextConstantWindowRemaining;
+  const unsigned Words = Last - First + 1;
+  if (Words > Limit / 2)
+    return std::nullopt;
+  bool LiveFull = true, OtherZero = true;
+  for (unsigned I = First; I <= Last; ++I) {
+    uint64_t Field = I == First ? ~uint64_t{0} << Low : ~uint64_t{0};
+    if (I == Last)
+      Field &= ~uint64_t{0} >> (63 - High);
+    LiveFull &= !(~Live[I] & Field);
+    OtherZero &= !(Other[I] & Field);
+  }
+  auto SliceMasks = [&](unsigned From, unsigned Bits) {
+    const unsigned Skip = From % 64;
+    auto Read = [&](llvm::ArrayRef<uint64_t> Digits) {
+      return llvm::APInt(
+                 Bits + Skip,
+                 Digits.slice(From / 64, llvm::APInt::getNumWords(Bits + Skip)))
+          .extractBits(Bits, Skip);
+    };
+    return std::pair{Read(Live), Read(Other)};
+  };
+  auto Slice = [&](SymRef Arm, unsigned From, const llvm::APInt &Mask) {
+    const unsigned Bits = Mask.getBitWidth();
+    if (Mask.isZero())
+      return Ctx.mkZero(Bits);
+    const auto Source = Ctx.operand(Arm, 1);
+    const auto Field = Ctx.mkExtract(Source, From, Bits);
+    return Mask.isAllOnes() ? Field : Ctx.mkAnd(Field, Ctx.mkConst(Mask));
+  };
+  if (!LiveFull || !OtherZero) {
+    if (Ctx.op(Join) == SymOp::Add || Size == Ctx.width(Join))
+      return std::nullopt;
+    // Both literals must be owned before a builder can grow the arena.
+    auto [LM, RM] = SliceMasks(At, Size);
+    if (!LM.isZero() && !RM.isZero() && !LM.isAllOnes() && !RM.isAllOnes())
+      return std::nullopt;
+    auto X = Slice(L, At, LM), Y = Slice(R, At, RM);
+    return detail::WordWindow{
+        Ctx.op(Join) == SymOp::Or ? Ctx.mkOr(X, Y) : Ctx.mkXor(X, Y), 0};
+  }
+  if (Ctx.op(Join) == SymOp::Add) {
+    // Below the most recent kill a carry cannot survive. Above it bits
+    // preceding the first possible generate also have zero carry-in.
+    unsigned From = At;
+    unsigned Remaining = Limit / 2 - Words;
+    for (unsigned End = At; End;) {
+      if (!Remaining)
+        return std::nullopt;
+      --Remaining;
+      const unsigned I = (End - 1) / 64;
+      const auto Below = ~uint64_t{0} >> (63 - (End - 1) % 64);
+      auto Generate = (Live[I] & Other[I]) & Below;
+      const auto Kill = ~(Live[I] | Other[I]) & Below;
+      if (Kill)
+        Generate &= ~(std::bit_floor(Kill) - 1);
+      if (Generate)
+        From = 64 * I + std::countr_zero(Generate);
+      if (Kill)
+        break;
+      End = 64 * I;
+    }
+    if (From < At) {
+      const unsigned Span = At + Size - From;
+      if (Span == Ctx.width(Join))
+        return std::nullopt;
+      auto [LM, RM] = SliceMasks(From, Span);
+      auto X = Slice(L, From, LM), Y = Slice(R, From, RM);
+      return detail::WordWindow{Ctx.mkExtract(Ctx.mkAdd(X, Y), At - From, Size),
+                                0};
+    }
+  }
+  return detail::WordWindow{Ctx.operand(L, 1), At};
 }
 
 // One right shift can supply the low prefix of an n-ary join. Even for an
@@ -373,6 +470,12 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
   // repeated fields share a source even when their packing offsets differ.
   for (;;) {
     const auto Outer = op(A);
+    // Every bit of a field inside the original word survives either extension.
+    if ((Outer == SymOp::ZExt || Outer == SymOp::SExt) &&
+        uint64_t(Low) + Width <= width(operand(A, 0))) {
+      A = operand(A, 0);
+      continue;
+    }
     const bool Turn = Outer == SymOp::Rol || Outer == SymOp::Ror;
     const auto Packed = Turn ? operand(A, 0) : A;
     const auto Shifts = detail::FunnelShifts::match(*this, Packed);
@@ -390,7 +493,11 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
     const bool Multi =
         numOperands(Packed) > 2 &&
         (Op == SymOp::Add || Op == SymOp::Or || Op == SymOp::Xor);
-    if ((!Shifts && !Multi) || (Shifts && Shifts->sharesSource(*this)))
+    const bool Masked =
+        (Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Add) &&
+        numOperands(Packed) == 2 && op(operand(Packed, 0)) == SymOp::And &&
+        op(operand(Packed, 1)) == SymOp::And;
+    if (!Shifts && !Multi && !Masked)
       break;
     const unsigned Have = width(Packed);
     uint64_t At = Low;
@@ -401,13 +508,21 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
       const auto By = constValue(Count).urem(Have);
       At = (At + (Outer == SymOp::Ror ? By : Have - By)) % Have;
     }
-    const auto Selected = Shifts
-                              ? Shifts->project(*this, At, Width)
-                              : projectShiftedPrefix(*this, Packed, At, Width);
+    std::optional<detail::WordWindow> Selected;
+    if (Shifts)
+      Selected = Shifts->project(*this, At, Width);
+    else if (Masked)
+      Selected = projectMaskedPair(*this, Packed, At, Width);
+    else
+      Selected = projectShiftedPrefix(*this, Packed, At, Width);
     if (!Selected)
       break;
     A = Selected->Word;
     Low = Selected->Offset;
+    if (width(A) < Have) {
+      assert(width(A) == Width && Low == 0);
+      return A;
+    }
     const auto Motion = op(A);
     if ((Motion == SymOp::Rol || Motion == SymOp::Ror) &&
         isConst(operand(A, 1))) {
@@ -415,10 +530,11 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
       At = (uint64_t(Low) + (Motion == SymOp::Ror ? By : Have - By)) % Have;
       A = operand(A, 0);
       Low = At;
-      if (At + Width > Have) {
-        A = mkRor(A, mkConst(Have, At));
-        Low = 0;
-      }
+    }
+    // The source of a lowered rotation can wrap across its own word boundary.
+    if (uint64_t(Low) + Width > Have) {
+      A = mkRor(A, mkConst(Have, Low));
+      Low = 0;
     }
   }
 
@@ -465,12 +581,6 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
     const auto Slice = mkExtract(Source, Begin, std::min(Width, Have - Begin));
     return op(A) == SymOp::AShr ? mkSExt(Slice, Width) : mkZExt(Slice, Width);
   }
-
-  // Taking the low bits of a widening cast reaches straight through to the
-  // original value when the window stays inside it.
-  if ((op(A) == SymOp::ZExt || op(A) == SymOp::SExt) && Low == 0 &&
-      Width <= width(operand(A, 0)))
-    return mkExtract(operand(A, 0), 0, Width);
 
   // Projection to the low word is a homomorphism for modular arithmetic and
   // bitwise operations. In particular, the low product of widened operands

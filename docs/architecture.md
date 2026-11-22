@@ -6854,6 +6854,14 @@ rewrite; the full-width verifier must accept it before the normal type,
 effect and profitability checks can publish it. Exhaustion preserves the
 expression. GUI menu requests, CLI single-function options and whole-program
 source sessions all reach these same policies.
+The shared bitvector builder can read a field from two masked words joined by
+OR, XOR or addition. For an addition it checks both masks below the field. A
+pair of clear bits stops a carry, and a pair of set bits can generate one. If a
+carry can reach the field, the computation starts at the first possible
+generate after the last pair of clear bits. A field can pass through a widening
+conversion or the shifts that implement a rotation when its source coordinates
+are known. LLVM source translation admits a flagged constant left shift when
+the operand bounds prove each requested signed or unsigned no-wrap condition.
 Expression interning beneath these passes uses a flat hash table, avoiding a
 separate allocation for each distinct node hash. Reserved key pairs use
 separate context-owned heads, so every 64-bit hash remains representable. Colliding

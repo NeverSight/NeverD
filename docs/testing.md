@@ -4577,6 +4577,19 @@ views against the original 139–173-factor products at Clang O0 and O2.
 `LogicalShiftBoundsMatchDefinedByteAdditions` checks no-wrap and exact
 shift flags against all byte input pairs, including shift-by-width.
 
+Use `--family blended-field --count 8` for 24 products at 3329, 4097 and
+6145 bits with 823 to 1031 factors. Two masked operands are joined with OR,
+XOR or addition before rotating and extracting a field. The controls introduce
+a live mask bit, remove a copied bit or let a carry enter the field. The
+symbolic expression tests enumerate both masks and both inputs at four bits
+and exercise carry propagation across a 64-bit limb boundary. Parser tests
+cover mixed-case hexadecimal, binary, partial limbs and narrowed literals.
+The 47- and 99-factor native fixtures cover both source views with the CLI
+option and the worker option used by the GUI. Their generated C runs at
+Clang O0 and O2. The LLVM guard test checks the exact signed and unsigned
+overflow boundaries on byte-sized inputs. Generated LLVM C also exercises
+wrapping 9- and 17-bit sums and differences before right shifts.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work

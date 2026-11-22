@@ -1697,6 +1697,63 @@ def masked_window_corpus(width, count):
     return rows
 
 
+def blended_field(width, case):
+    """Products of independently masked words with cross-limb carry chains."""
+    rng = random.Random(0xD36F + 7759 * width + 3217 * case)
+    degree = (823, 887, 953, 1031)[case % 4]
+    observed = (65, 79, 97)[case % 3]
+    axes = ("(x^y)", "((x+z)^(u&w))", "((v|w)^(y+z))")
+    positions = (0, width - 3, width // 3 + 1)
+    full = (1 << width) - 1
+    factors = []
+    for i in range(degree):
+        axis = (case + i) % (2 + case % 2)
+        zeros = (observed + 2) // 3 + i % 2
+        needed = observed - zeros
+        size = needed + (i % 3 == 0)
+        start = rng.randrange(3, width - size - 3)
+        at = rng.randrange(width - size + 1)
+        mask = ((1 << size) - 1) << start
+        left = (rng.getrandbits(width) | mask) & full
+        right = rng.getrandbits(width) & ~mask
+        op = ("^", "|", "+")[(i + case) % 3]
+        # A zero in both masks stops incoming carries below a propagate chain.
+        if op == "+":
+            cut = rng.randrange(start)
+            prop = ((1 << start) - 1) ^ ((1 << cut) - 1)
+            right = (right & ~prop) | ((~left) & prop)
+            left &= ~(1 << cut)
+            right &= ~(1 << cut)
+        guard = case % 4 if i == degree // 2 else 0
+        if guard == 1:
+            op = "^"
+            right |= 1 << (start + needed - 1)
+        elif guard == 2:
+            op = "|"
+            left &= ~(1 << start)
+        elif guard == 3:
+            op = "+"
+            left |= 1 << (start - 1)
+            right |= 1 << (start - 1)
+        turn = (positions[axis] - start) % width
+        chosen = f"ror({axes[axis]},{turn})"
+        other = f"(({2 * i + 3}+u*y)^(z+v*x))"
+        a = f"({chosen}&{hex(left)})"
+        b = f"({other}&{hex(right)})"
+        joined = f"({a}{op}{b})" if i % 2 else f"({b}{op}{a})"
+        field = f"extract(ror({joined},{(start - at) % width}),{at},{size})"
+        word = (
+            f"sext({field},{width})"
+            if i % 2
+            else f"concat(extract(v,{size},{width - size}),{field})"
+        )
+        offset = rng.randrange(-25, 26) | 1
+        weight = (rng.randrange(-17, 18) | 1) << zeros
+        factors.append(f"({offset}+({weight})*{word})")
+    scale = hex(3 << (width - observed))
+    return f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1969,7 +2026,7 @@ def main():
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
-                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window"),
+                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1991,6 +2048,7 @@ def main():
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "blended-field": (3329, 4097, 6145),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2047,6 +2105,7 @@ def main():
                 "signed-window": signed_window_corpus,
                 "joined-prefix": joined_prefix_corpus,
                 "masked-window": masked_window_corpus,
+                "blended-field": lambda w, n: [blended_field(w, i) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]
