@@ -709,6 +709,41 @@ TEST(SymSimplifyGuard, MaskedNoWrapAdmissionMatchesExhaustiveByteDomains) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
+TEST(SymSimplifyGuard, FlaggedLeftShiftsRequireTheCompleteInputRangeToFit) {
+  llvm::LLVMContext C;
+  llvm::Module M("masked_left_shift", C);
+  auto *Ty = llvm::Type::getInt8Ty(C);
+  auto *F = llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty, Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", &M);
+  llvm::IRBuilder<> IR(llvm::BasicBlock::Create(C, "entry", F));
+  for (unsigned Mask : {7u, 15u, 31u, 63u, 127u}) {
+    for (unsigned K : {0u, 1u, 2u, 3u, 7u, 8u}) {
+      for (unsigned Flags : {1u, 2u, 3u}) {
+        auto *Left = IR.CreateAnd(F->getArg(0), IR.getInt8(Mask));
+        auto *Right = IR.CreateAnd(F->getArg(1), IR.getInt8(1));
+        auto *Sum = IR.CreateAdd(Left, Right);
+        auto *Shift = IR.CreateShl(Sum, K, "", Flags & 1, Flags & 2);
+        bool Defined = K < 8;
+        for (unsigned X = 0; X < 256 && Defined; ++X) {
+          for (unsigned Y : {0u, 1u}) {
+            const unsigned U = (X & Mask) + Y;
+            const int S = U < 128 ? int(U) : int(U) - 256;
+            const int Product = S * int(1u << K);
+            Defined &= (!(Flags & 1) || (U << K) < 256) &&
+                       (!(Flags & 2) || (Product >= -128 && Product <= 127));
+          }
+        }
+        symbolic::SymContext Ctx;
+        Translator Xlat(Ctx);
+        EXPECT_EQ(Xlat.in(Shift).isValid(), Defined)
+            << Mask << ',' << K << ',' << Flags;
+      }
+    }
+  }
+  IR.CreateRet(F->getArg(0));
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
 TEST(SymSimplifyGuard, LogicalShiftBoundsMatchDefinedByteAdditions) {
   llvm::LLVMContext C;
   llvm::Module M("shifted_add_domains", C);

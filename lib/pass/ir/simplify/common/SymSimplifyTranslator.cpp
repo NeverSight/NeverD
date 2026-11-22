@@ -244,7 +244,8 @@ MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
 
 bool safeMaskedArithmetic(const llvm::Instruction &I) {
   const bool Product = I.getOpcode() == llvm::Instruction::Mul;
-  if ((!Product && I.getOpcode() != llvm::Instruction::Add) ||
+  const bool Shift = I.getOpcode() == llvm::Instruction::Shl;
+  if ((!Product && !Shift && I.getOpcode() != llvm::Instruction::Add) ||
       !I.getType()->isIntegerTy() ||
       I.getType()->getIntegerBitWidth() >
           ::neverd::limits::pass::
@@ -256,6 +257,18 @@ bool safeMaskedArithmetic(const llvm::Instruction &I) {
   const unsigned Depth =
       ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedArithmeticDepth;
   auto Left = maskedArithmeticBounds(I.getOperand(0), Depth, Remaining);
+  if (Shift) {
+    const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1));
+    const unsigned Width = I.getType()->getIntegerBitWidth();
+    if (!K || K->getValue().uge(Width))
+      return false;
+    // A shift by K is exact multiplication by 2^K for each requested
+    // domain when every source value fits in the remaining Width-K bits.
+    const unsigned Bits = Width - K->getZExtValue();
+    return (!I.hasNoUnsignedWrap() || Left.UnsignedMax.isIntN(Bits)) &&
+           (!I.hasNoSignedWrap() || (Left.SignedMin.isSignedIntN(Bits) &&
+                                     Left.SignedMax.isSignedIntN(Bits)));
+  }
   auto Right = maskedArithmeticBounds(I.getOperand(1), Depth, Remaining);
   bool Overflow;
   if (I.hasNoUnsignedWrap()) {
@@ -385,7 +398,8 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
     return !llvm::cast<llvm::PossiblyDisjointInst>(I).isDisjoint() || SafeOr ||
            splitWordAssembly(I).has_value();
   case OpTag::Shl:
-    return (!HasNoWrap() || safeWidenedShift(I)) && HasInRangeConstantShift();
+    return (!HasNoWrap() || SafeArithmetic || safeWidenedShift(I)) &&
+           HasInRangeConstantShift();
   case OpTag::LShr:
   case OpTag::AShr:
     return HasInRangeConstantShift() &&
