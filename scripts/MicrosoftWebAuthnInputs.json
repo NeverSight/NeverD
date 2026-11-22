@@ -1,0 +1,56 @@
+{
+  "provider": "WebAuthenticationRuntime",
+  "module": "webauthn.dll",
+  "metadata": {
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.win32metadata/71.0.45-preview/microsoft.windows.sdk.win32metadata.71.0.45-preview.nupkg",
+    "winmd_sha256": "b9e476a81e14060040804e4cf09b2973fc53a174befc7b3b670d4db72eef55af"
+  },
+  "headers": [
+    {
+      "file": "microsoft-webauthn-webauthn.h",
+      "url": "https://raw.githubusercontent.com/microsoft/webauthn/ef82c157125a0490e05f6ea82a7adb1b8e1bad08/webauthn.h",
+      "sha256": "da82d5be6b90a2706185ae44ad93649bcefc0f89c97ab930ec4e6f0abb7b2283"
+    },
+    {
+      "file": "microsoft-webauthn-webauthnplugin.h",
+      "url": "https://raw.githubusercontent.com/microsoft/webauthn/ef82c157125a0490e05f6ea82a7adb1b8e1bad08/webauthnplugin.h",
+      "sha256": "db2b3d08a73f085c7fa28f037835c829657fa89dab881588fc66769fdd66e298"
+    }
+  ],
+  "license": {
+    "file": "Microsoft-WebAuthn-LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/microsoft/webauthn/ef82c157125a0490e05f6ea82a7adb1b8e1bad08/LICENSE",
+    "sha256": "27ebda9d51f0a56b7e281ccd8230a27236dcb51c05f64b07869ecf6e965d68b0"
+  },
+  "exports": [
+    "WebAuthNDecodeGetAssertionRequest",
+    "WebAuthNDecodeMakeCredentialRequest",
+    "WebAuthNEncodeGetAssertionResponse",
+    "WebAuthNEncodeMakeCredentialResponse",
+    "WebAuthNFreeAuthenticatorList",
+    "WebAuthNFreeDecodedGetAssertionRequest",
+    "WebAuthNFreeDecodedMakeCredentialRequest",
+    "WebAuthNGetAuthenticatorList",
+    "WebAuthNPluginAddAuthenticator",
+    "WebAuthNPluginAddAuthenticator2",
+    "WebAuthNPluginAuthenticatorAddCredentials",
+    "WebAuthNPluginAuthenticatorFreeCredentialDetailsArray",
+    "WebAuthNPluginAuthenticatorGetAllCredentials",
+    "WebAuthNPluginAuthenticatorRemoveAllCredentials",
+    "WebAuthNPluginAuthenticatorRemoveCredentials",
+    "WebAuthNPluginFreeAddAuthenticatorResponse",
+    "WebAuthNPluginFreePublicKeyResponse",
+    "WebAuthNPluginFreeUserVerificationResponse",
+    "WebAuthNPluginGetAuthenticatorState",
+    "WebAuthNPluginGetOperationSigningPublicKey",
+    "WebAuthNPluginGetUserVerificationCount",
+    "WebAuthNPluginGetUserVerificationPublicKey",
+    "WebAuthNPluginPerformUserVerification",
+    "WebAuthNPluginPerformUserVerification2",
+    "WebAuthNPluginRegisterStatusChangeCallback",
+    "WebAuthNPluginRemoveAuthenticator",
+    "WebAuthNPluginUnregisterStatusChangeCallback",
+    "WebAuthNPluginUpdateAuthenticatorDetails",
+    "WebAuthNPluginUpdateAuthenticatorDetails2"
+  ]
+}

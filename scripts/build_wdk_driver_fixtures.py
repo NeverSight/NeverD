@@ -14,6 +14,7 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+import tempfile
 import urllib.request
 import zipfile
 
@@ -49,14 +50,17 @@ def digest(path: Path) -> str:
 def download(cache: Path, name: str, url: str, expected: str) -> Path:
     destination = cache / name
     if not destination.exists():
-        partial = destination.with_suffix(destination.suffix + ".part")
+        # Independent target generations can authenticate the same cached package.
+        # Only a fully written, verified download may acquire its public name.
+        temporary = tempfile.NamedTemporaryFile(dir=cache, prefix=name + ".", suffix=".part",
+                                                delete=False)
+        partial = Path(temporary.name)
         try:
-            with urllib.request.urlopen(
+            with temporary as output, urllib.request.urlopen(
                 url, timeout=LIMITS["download_timeout"]
             ) as response:
-                with partial.open("wb") as output:
-                    while block := response.read(LIMITS["read_chunk"]):
-                        output.write(block)
+                while block := response.read(LIMITS["read_chunk"]):
+                    output.write(block)
             if digest(partial) != expected:
                 raise ValueError(f"Microsoft package hash mismatch: {name}")
             partial.replace(destination)
