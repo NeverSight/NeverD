@@ -2980,6 +2980,10 @@ and two successive publications of the typed fixture. The second publication
 rebuilt the LSDA from its file-backed, read-only segment. This preserves the
 personality and type-info references even when the segment has no sections.
 [Signed cleanup execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44993433517) · [Typed catch and cleanup execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44995374215).
+Both runner profiles also passed all 278 lifted-image and unwind tests.
+Each of the three wide-frame tests ran five images, comprising the original
+and two generations for each optimization setting.
+[Complete Darwin suite](https://github.com/gmh5225/test_mac_intel/actions/runs/44998815905).
 
 When a published entry begins with a forwarding branch, its old FP/LR save
 can still appear in the next word. Function discovery uses the linker's
