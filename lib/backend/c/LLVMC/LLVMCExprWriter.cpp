@@ -3977,10 +3977,10 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
                ? "(" + typeToCLLVM(Ty) + ")(" + Text + ")"
                : Text;
   };
-  auto Bitwise = [&](const char *Operator) {
+  auto Modular = [&](const char *Operator) {
     std::string Text = LHS + Operator + RHS;
     // Bits outside a rounded C carrier's LLVM width do not belong to the
-    // result, including sign-extension bits in a printed negative constant.
+    // result. Normalize carries, borrows and sign bits of negative constants.
     if (Ty->isIntegerTy() && !Ty->isIntegerTy(1)) {
       const unsigned Width = Ty->getIntegerBitWidth();
       if (Width != signedIntegerCarrierWidth(Width))
@@ -3998,9 +3998,9 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
   case llvm::Instruction::FDiv:
     return Floating(" / ");
   case llvm::Instruction::Add:
-    return LHS + " + " + RHS;
+    return Modular(" + ");
   case llvm::Instruction::Sub:
-    return LHS + " - " + RHS;
+    return Modular(" - ");
   case llvm::Instruction::Mul:
     // A full u16 product can overflow C's signed integer promotion even
     // though the LLVM bitvector multiplication is defined.
@@ -4044,11 +4044,11 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
                    signedIntegerOperand(Ty, LHS) + " >> " + ShiftCount(), Ty,
                    Ty);
   case llvm::Instruction::And:
-    return Bitwise(" & ");
+    return Modular(" & ");
   case llvm::Instruction::Or:
-    return Bitwise(" | ");
+    return Modular(" | ");
   case llvm::Instruction::Xor:
-    return Bitwise(" ^ ");
+    return Modular(" ^ ");
   default:
     return LHS + " /* no recovered operator at 0x0 */ " + RHS;
   }
