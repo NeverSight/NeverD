@@ -596,7 +596,7 @@ private:
   /// once more than one width uses it.  Name-only lookup must never choose one
   /// of several width-specific variables by accident.
   std::unordered_map<std::string, uint32_t> VarByName;
-  llvm::DenseMap<llvm::APInt, uint32_t> WideConstByValue;
+  llvm::DenseMap<llvm::APInt, SymRef> WideConstByValue;
 
   struct InputSpaceKey {
     SymInputKind Kind = SymInputKind::Register;

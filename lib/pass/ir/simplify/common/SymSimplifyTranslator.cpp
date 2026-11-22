@@ -275,9 +275,15 @@ MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
       return Result;
     const unsigned Bits = Width - Shift->getZExtValue();
     if (I->getOpcode() == llvm::Instruction::LShr) {
-      Result.UnsignedMax =
-          maskedArithmeticBounds(I->getOperand(0), Depth - 1, Remaining)
-              .UnsignedMax.lshr(Width - Bits);
+      // A masked join can fix high bits before the shift. Use its bit
+      // facts directly, keeping general arithmetic regions available for
+      // factorization after LLVM canonicalization.
+      const auto *Join = llvm::dyn_cast<llvm::BinaryOperator>(I->getOperand(0));
+      if (Join && (Join->getOpcode() == llvm::Instruction::Or ||
+                   Join->getOpcode() == llvm::Instruction::Xor))
+        Result.UnsignedMax =
+            maskedWordBits(Join, Depth - 1, Remaining).getMaxValue();
+      Result.UnsignedMax.lshrInPlace(Width - Bits);
       Result.SignedMin.clearAllBits();
       Result.SignedMax = Result.UnsignedMax;
     } else {
