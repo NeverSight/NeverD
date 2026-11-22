@@ -105,6 +105,57 @@ unsigned shiftedSignedWidth(const llvm::Instruction &I) {
   return Width - K->getZExtValue();
 }
 
+// Infer bit facts from operand values alone. The translator checks every
+// hidden child for poison separately. Running out of work returns unknown bits.
+llvm::KnownBits maskedWordBits(const llvm::Value *V, unsigned Depth,
+                               unsigned &Remaining) {
+  const unsigned Width = V->getType()->getIntegerBitWidth();
+  llvm::KnownBits Unknown(Width);
+  if (!Remaining || !Depth)
+    return Unknown;
+  --Remaining;
+  if (const auto *C = llvm::dyn_cast<llvm::ConstantInt>(V))
+    return llvm::KnownBits::makeConstant(C->getValue());
+  const auto *I = llvm::dyn_cast<llvm::BinaryOperator>(V);
+  if (!I)
+    return Unknown;
+  if (I->getOpcode() == llvm::Instruction::And) {
+    for (const llvm::Value *Operand : I->operands())
+      if (const auto *Mask = llvm::dyn_cast<llvm::ConstantInt>(Operand)) {
+        Unknown.Zero = ~Mask->getValue();
+        return Unknown;
+      }
+  }
+  // A literal scale leaves its trailing bits clear for every input word.
+  // This also admits InstCombine's disjoint OR of an offset into those bits.
+  if (I->getOpcode() == llvm::Instruction::Mul) {
+    for (const llvm::Value *Operand : I->operands())
+      if (const auto *K = llvm::dyn_cast<llvm::ConstantInt>(Operand)) {
+        Unknown.Zero.setLowBits(K->getValue().countr_zero());
+        break;
+      }
+    return Unknown;
+  }
+  if (I->getOpcode() == llvm::Instruction::Shl) {
+    const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(1));
+    if (K && K->getValue().ult(Width))
+      Unknown.Zero.setLowBits(K->getZExtValue());
+    return Unknown;
+  }
+  if (I->getOpcode() != llvm::Instruction::Add &&
+      I->getOpcode() != llvm::Instruction::Or &&
+      I->getOpcode() != llvm::Instruction::Xor)
+    return Unknown;
+  auto Left = maskedWordBits(I->getOperand(0), Depth - 1, Remaining);
+  auto Right = maskedWordBits(I->getOperand(1), Depth - 1, Remaining);
+  if (I->getOpcode() == llvm::Instruction::Or)
+    return Left | Right;
+  if (I->getOpcode() == llvm::Instruction::Xor)
+    return Left ^ Right;
+  return llvm::KnownBits::computeForAddSub(
+      /*Add=*/true, /*NSW=*/false, /*NUW=*/false, Left, Right);
+}
+
 // A left shift inserts zero bits. Successive logical or arithmetic right
 // shifts can discard those bits exactly, up to the first original bit.
 // Every contributing instruction is still checked for its own poison flags.
@@ -114,6 +165,18 @@ bool provesExactRightShift(const llvm::Instruction &I) {
       !llvm::cast<llvm::PossiblyExactOperator>(I).isExact())
     return false;
   const unsigned Width = I.getType()->getIntegerBitWidth();
+  auto ZeroPrefix = [&](const llvm::Value *V, unsigned Bits) {
+    if (Width > ::neverd::limits::pass::
+                    kSymSimplifyTranslatorSafeMaskedArithmeticMaxWidth)
+      return false;
+    unsigned Remaining =
+        ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedOrRemaining;
+    return maskedWordBits(V,
+                          ::neverd::limits::pass::
+                              kSymSimplifyTranslatorSafeMaskedArithmeticDepth,
+                          Remaining)
+               .Zero.countr_one() >= Bits;
+  };
   unsigned Needed = 0;
   const llvm::Instruction *Shift = &I;
   while (Shift) {
@@ -122,13 +185,15 @@ bool provesExactRightShift(const llvm::Instruction &I) {
       return false;
     const unsigned Amount = K->getZExtValue();
     if (Shift->getOpcode() == llvm::Instruction::Shl)
-      return Amount >= Needed;
+      return Amount >= Needed ||
+             ZeroPrefix(Shift->getOperand(0), Needed - Amount);
     if (!Amount || Amount > Width - Needed)
       return !Needed && !Amount;
     Needed += Amount;
-    Shift = llvm::dyn_cast<llvm::BinaryOperator>(Shift->getOperand(0));
-    if (Shift && !Shift->isShift())
-      return false;
+    const auto *Input = Shift->getOperand(0);
+    Shift = llvm::dyn_cast<llvm::BinaryOperator>(Input);
+    if (!Shift || !Shift->isShift())
+      return ZeroPrefix(Input, Needed);
   }
   return false;
 }
@@ -192,6 +257,14 @@ MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
       }
     }
   }
+  if (I->getOpcode() == llvm::Instruction::Or ||
+      I->getOpcode() == llvm::Instruction::Xor) {
+    const auto Known = maskedWordBits(V, Depth, Remaining);
+    Result.UnsignedMax = Known.getMaxValue();
+    Result.SignedMin = Known.getSignedMinValue();
+    Result.SignedMax = Known.getSignedMaxValue();
+    return Result;
+  }
   // A nonzero logical shift clears the sign bit. An arithmetic shift
   // leaves at most Width-K signed bits. Child poison and exactness are
   // checked separately before translating the region.
@@ -202,7 +275,9 @@ MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
       return Result;
     const unsigned Bits = Width - Shift->getZExtValue();
     if (I->getOpcode() == llvm::Instruction::LShr) {
-      Result.UnsignedMax = llvm::APInt::getLowBitsSet(Width, Bits);
+      Result.UnsignedMax =
+          maskedArithmeticBounds(I->getOperand(0), Depth - 1, Remaining)
+              .UnsignedMax.lshr(Width - Bits);
       Result.SignedMin.clearAllBits();
       Result.SignedMax = Result.UnsignedMax;
     } else {
@@ -294,64 +369,20 @@ bool safeMaskedArithmetic(const llvm::Instruction &I) {
   return true;
 }
 
-// Infer only bit facts that hold for the operand values themselves. Neither
-// the disjoint flag being justified nor overflow flags, metadata or assumptions
-// contribute evidence. The translator separately checks every hidden child
-// for poison. Bounded failure supplies unknown bits, never a premise.
-llvm::KnownBits maskedOrBits(const llvm::Value *V, unsigned Depth,
-                             unsigned &Remaining) {
-  const unsigned Width = V->getType()->getIntegerBitWidth();
-  llvm::KnownBits Unknown(Width);
-  if (!Remaining || !Depth)
-    return Unknown;
-  --Remaining;
-  if (const auto *C = llvm::dyn_cast<llvm::ConstantInt>(V))
-    return llvm::KnownBits::makeConstant(C->getValue());
-  const auto *I = llvm::dyn_cast<llvm::BinaryOperator>(V);
-  if (!I)
-    return Unknown;
-  if (I->getOpcode() == llvm::Instruction::And) {
-    for (const llvm::Value *Operand : I->operands())
-      if (const auto *Mask = llvm::dyn_cast<llvm::ConstantInt>(Operand)) {
-        Unknown.Zero = ~Mask->getValue();
-        return Unknown;
-      }
-  }
-  // A literal scale leaves its trailing bits clear for every input word.
-  // This also admits InstCombine's disjoint OR of an offset into those bits.
-  if (I->getOpcode() == llvm::Instruction::Mul) {
-    for (const llvm::Value *Operand : I->operands())
-      if (const auto *K = llvm::dyn_cast<llvm::ConstantInt>(Operand)) {
-        Unknown.Zero.setLowBits(K->getValue().countr_zero());
-        break;
-      }
-    return Unknown;
-  }
-  if (I->getOpcode() == llvm::Instruction::Shl) {
-    const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(1));
-    if (K && K->getValue().ult(Width))
-      Unknown.Zero.setLowBits(K->getZExtValue());
-    return Unknown;
-  }
-  if (I->getOpcode() != llvm::Instruction::Add &&
-      I->getOpcode() != llvm::Instruction::Or)
-    return Unknown;
-  auto Left = maskedOrBits(I->getOperand(0), Depth - 1, Remaining);
-  auto Right = maskedOrBits(I->getOperand(1), Depth - 1, Remaining);
-  return I->getOpcode() == llvm::Instruction::Or
-             ? Left | Right
-             : llvm::KnownBits::computeForAddSub(
-                   /*Add=*/true, /*NSW=*/false, /*NUW=*/false, Left, Right);
-}
-
 bool safeMaskedOr(const llvm::Instruction &I) {
   if (I.getOpcode() != llvm::Instruction::Or || !I.getType()->isIntegerTy() ||
       I.getType()->getIntegerBitWidth() > 512)
     return false;
   unsigned Remaining =
       ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedOrRemaining;
-  auto Left = maskedOrBits(I.getOperand(0), 8, Remaining);
-  auto Right = maskedOrBits(I.getOperand(1), 8, Remaining);
+  auto Left = maskedWordBits(
+      I.getOperand(0),
+      ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedArithmeticDepth,
+      Remaining);
+  auto Right = maskedWordBits(
+      I.getOperand(1),
+      ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedArithmeticDepth,
+      Remaining);
   return (Left.Zero | Right.Zero).isAllOnes();
 }
 

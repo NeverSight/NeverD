@@ -744,6 +744,42 @@ TEST(SymSimplifyGuard, FlaggedLeftShiftsRequireTheCompleteInputRangeToFit) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
+TEST(SymSimplifyGuard, ExactMaskedFieldShiftsRejectEveryLiveDiscardedBit) {
+  llvm::LLVMContext C;
+  llvm::Module M("overlapping_mask_shifts", C);
+  auto *Ty = llvm::Type::getInt8Ty(C);
+  auto *F = llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty, Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", &M);
+  llvm::IRBuilder<> IR(llvm::BasicBlock::Create(C, "entry", F));
+  for (bool UseXor : {false, true})
+    for (bool Signed : {false, true})
+      for (unsigned Mask : {0x14u, 0x15u, 0x16u, 0x54u, 0x94u}) {
+        const auto Make = [&] {
+          auto *L = IR.CreateAnd(F->getArg(0), IR.getInt8(0x34));
+          auto *R = IR.CreateAnd(F->getArg(1), IR.getInt8(Mask));
+          auto *Joined = UseXor ? IR.CreateXor(L, R) : IR.CreateOr(L, R);
+          if (!Signed)
+            return IR.CreateLShr(Joined, IR.getInt8(2), "", true);
+          auto *Left = IR.CreateShl(Joined, IR.getInt8(1), "", true, false);
+          return IR.CreateAShr(Left, IR.getInt8(3), "", true);
+        };
+        auto *Root = IR.CreateXor(Make(), Make());
+        bool Defined = true;
+        for (unsigned X = 0; X < 256; ++X)
+          for (unsigned Y = 0; Y < 256; ++Y) {
+            const auto L = X & 0x34, R = Y & Mask;
+            const auto V = UseXor ? L ^ R : L | R;
+            Defined &= !(V & 3) && (!Signed || V < 128);
+          }
+        auto Result = SymSimplifyPass::constantValueOf(Root);
+        EXPECT_EQ(Result.has_value(), Defined) << UseXor << Signed << Mask;
+        if (Result)
+          EXPECT_TRUE(Result->isZero());
+      }
+  IR.CreateRet(IR.getInt8(0));
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
 TEST(SymSimplifyGuard, LogicalShiftBoundsMatchDefinedByteAdditions) {
   llvm::LLVMContext C;
   llvm::Module M("shifted_add_domains", C);

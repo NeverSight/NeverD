@@ -362,3 +362,67 @@ TEST(SymExpr, InteriorMaskedWindowsKeepCarriesAndOverlap) {
     }
   }
 }
+
+TEST(SymExpr, OverlappingFieldsReuseTheSameSliceAcrossDifferentMasks) {
+  SymContext C;
+  constexpr unsigned Width = 193, At = 67, Size = 65;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  auto L = llvm::APInt::getBitsSet(Width, At - 5, At + Size);
+  auto R = llvm::APInt::getBitsSet(Width, At, At + Size);
+  L.clearBit(At + 2);
+  R.clearBit(At + 17);
+  R.setBit(At - 5);
+  const auto A = C.mkAnd(X, C.mkConst(L)), B = C.mkAnd(Y, C.mkConst(R));
+  auto Field = [&](SymRef V) { return C.mkExtract(V, At, Size); };
+  for (auto Op : {SymOp::Add, SymOp::Or, SymOp::Xor}) {
+    auto Join = [&](SymRef Left, SymRef Right) {
+      if (Op == SymOp::Add)
+        return C.mkAdd(Left, Right);
+      return Op == SymOp::Or ? C.mkOr(Left, Right) : C.mkXor(Left, Right);
+    };
+    const auto Expected = Field(Join(A, B));
+    auto L2 = L, R2 = R;
+    L2.setBit(At - 7);
+    R2.setBit(At - 7);
+    R2.setBit(At + Size + 1);
+    const auto Alternate =
+        Join(C.mkAnd(Y, C.mkConst(R2)), C.mkAnd(X, C.mkConst(L2)));
+    EXPECT_EQ(Field(Alternate), Expected);
+    EXPECT_EQ(
+        C.mkExtract(C.mkRor(Alternate, C.mkConst(Width, 53)), At - 53, Size),
+        Expected);
+    const std::array<llvm::APInt, 2> Ones{llvm::APInt::getAllOnes(Width),
+                                          llvm::APInt::getAllOnes(Width)};
+    const auto Value =
+        Op == SymOp::Add ? L + R : (Op == SymOp::Or ? L | R : L ^ R);
+    EXPECT_EQ(C.eval(Expected, Ones), Value.extractBits(Size, At));
+  }
+}
+
+TEST(SymExpr, SharedMaskedSumsKeepNestedFieldProjectionBounded) {
+  constexpr unsigned Width = 193, Depth = 36;
+  for (bool SameSource : {true, false}) {
+    SymContext C;
+    auto Prev = C.mkVar("x", Width), Sum = C.mkVar("y", Width);
+    for (unsigned I = 0; I < Depth; ++I) {
+      auto A = llvm::APInt::getBitsSet(Width, 64, 80);
+      auto B = A;
+      A.clearBit(65 + I % 7);
+      B.clearBit(72 + I % 7);
+      A.setBit(I % 41);
+      B.setBit(120 + I % 30);
+      const auto Next = C.mkAdd(C.mkAnd(Sum, C.mkConst(A)),
+                                C.mkAnd(SameSource ? Sum : Prev, C.mkConst(B)));
+      Prev = Sum;
+      Sum = Next;
+    }
+    const auto Field = C.mkExtract(Sum, 64, 16);
+    SymEvalPlan Original(C, Sum), Actual(C, Field);
+    for (unsigned X = 1; X < 32; ++X) {
+      const std::array<llvm::APInt, 2> Inputs{
+          llvm::APInt(Width, X * 0x1349u).shl(64),
+          llvm::APInt(Width, X * 0x7315u).shl(64)};
+      EXPECT_EQ(Actual.eval(Inputs), Original.eval(Inputs).extractBits(16, 64));
+    }
+  }
+}

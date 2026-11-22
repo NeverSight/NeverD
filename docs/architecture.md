@@ -6912,6 +6912,17 @@ generate after the last pair of clear bits. A field can pass through a widening
 conversion or the shifts that implement a rotation when its source coordinates
 are known. LLVM source translation admits a flagged constant left shift when
 the operand bounds prove each requested signed or unsigned no-wrap condition.
+Both inputs can contribute to the field. The builder slices both literal masks
+at the last relevant carry boundary and reuses a shared operand's field.
+A bounded number of splits per extraction keeps nested masked sums tractable.
+For large products of affine factors, two perturbations can vanish together
+modulo the observed width. Prefix and suffix products then give the exact
+weight of each surviving low field, including for even offsets. The solver
+combines equal fields at their live width and appends the constant low bits.
+LLVM source translation uses operand-derived zero bits to prove exact right
+shifts through overlapping masked OR and XOR expressions. The same facts bound
+flagged left shifts and arithmetic on logical shifts of those expressions.
+
 Expression interning beneath these passes uses a flat hash table, avoiding a
 separate allocation for each distinct node hash. Reserved key pairs use
 separate context-owned heads, so every 64-bit hash remains representable. Colliding
