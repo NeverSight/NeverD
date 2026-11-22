@@ -1599,7 +1599,9 @@ the R4000 selects the refill vector from the interrupted mode's UX, SX or KX
 bit. Extended addressing adds `0x80` to the refill vector. A miss with EXL
 already set uses the general vector and preserves EPC. Invalid entries and
 writes to clean pages also use the general vector. The big- and little-endian
-system tests stamp the vector actually entered in the guest ROM.
+system tests stamp the vector actually entered in the guest ROM. In QEMU
+8.2.2, a kernel miss at a low address follows UX when UX and KX differ.
+The native regression checks these split settings against the R4000 rule.
 [R4000 manual, chapters 4 and 5](https://www.cs.columbia.edu/~youngjin/download/MIPSR4000.pdf#page=152),
 [RM5200 manual, comparison with R4000 refill selection](https://erikarn.github.io/mips/cpu/rm5200um_v3.2.pdf).
 
@@ -1614,6 +1616,15 @@ Extended R4000 address regions,
 TLB management instructions, reverse-endian user data, cache-isolation data
 accesses and CW4011 MMU
 behavior need additional processor-specific evidence.
+
+On a 40 MHz R3000 DECstation 5000/240 running Mach 3.0, the IOASIC counter
+measured a first-level user TLB miss handler at 10 CPU cycles with a
+page-table load that hit in cache and 30–40 on a cache miss. On a 100 MHz
+R4000 SGI Indy, the Calibrator's pointer-chasing experiment reported a
+46-cycle TLB miss penalty. Both measurements include work beyond the TLB
+write. Neither timestamps the first fetch or load that sees the new mapping.
+[Bala et al., section 2.2 and table 1](https://www.usenix.org/conference/osdi-94/software-prefetching-and-caching-translation-lookaside-buffers),
+[CWI measurements, SGI Indy “boktor”](https://homepages.cwi.nl/~manegold/Calibrator/DB/boktor.pdf).
 
 IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
 fetch at physical `0x1fc00000` supplies a jump, the read at `0x1fc00004`
