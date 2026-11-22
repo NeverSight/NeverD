@@ -1150,6 +1150,65 @@ TEST(MIPSHistoricalScheduling, RefillDuringEXLPreservesTheInterruptedEPC) {
   EXPECT_FALSE(MMU.translate(User, 0x1200, HistoricalMemoryAccess::Fetch));
 }
 
+TEST(MIPSHistoricalScheduling, R4000RefillUsesTheInterruptedAddressMode) {
+  constexpr uint32_t PC = 0x10000, Load = 0x8c820000, BEV = 1u << 22;
+  constexpr uint32_t UX = 0x20, SX = 0x40, KX = 0x80;
+  // The same mapped fetch and unmapped load run in each saved mode. ERL
+  // makes low addresses direct, so that case faults in mapped kernel space.
+  struct Case {
+    uint32_t Status, Offset;
+  };
+  constexpr Case Modes[] = {
+      {UX | SX, 0},        {KX, 0x80},          // Kernel
+      {8 | UX | KX, 0},    {8 | SX, 0x80},      // Supervisor
+      {16 | SX | KX, 0},   {16 | UX, 0x80},     // User
+      {16 | UX | 4, 0},    {16 | KX | 4, 0x80}, // ERL selects kernel
+      {16 | UX | 2, 0x180}};                    // Nested exception
+  std::array<HistoricalTLBEntry, 48> Entries{};
+  for (unsigned I = 0; I < Entries.size(); ++I)
+    Entries[I].Hi = 0x01000000 + (I << 13);
+  Entries[0] = {PC | 7, (PC >> 6) | 2, 0, 0};
+  const HistoricalTLB MMU{Entries, 7};
+  for (const Arch A : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Img = image(A, 3);
+    Segment Code;
+    Code.VA = PC;
+    Code.Data = encode(A, {Load});
+    Code.Size = Code.FileSz = Code.Data.size();
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Img.Segments.push_back(std::move(Code));
+    auto Ops = lift(Img, PC, {Load});
+    for (const auto &[Mode, Offset] : Modes) {
+      for (const auto Bootstrap : {0u, BEV}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << " Status=" << (Mode | Bootstrap));
+        HistoricalCP0 CPU{
+            HistoricalProcessor::R4000, Mode | Bootstrap, 0, 0x1234, {}, {}};
+        MIPSSystemContext C;
+        C.Historical = HistoricalSchedule::fromSnapshot(3, {}, CPU);
+        ASSERT_TRUE(C.Historical);
+        C.HistoricalMMU = &MMU;
+        NdOpEmulator E(Img);
+        E.setStrictMode(true);
+        const uint64_t Address =
+            (Mode & 4) ? UINT64_C(0xffffffffe0024000) : 0x24000;
+        E.setRegister(mipsreg::A0, Address);
+        E.setRegister(mipsreg::V0, 0x55);
+        EXPECT_FALSE(execute(Ops, E, C));
+        const auto &After = *C.Historical->system();
+        const auto Base = Bootstrap ? UINT64_C(0xffffffffbfc00200)
+                                    : UINT64_C(0xffffffff80000000);
+        EXPECT_EQ(After.ExceptionVector, Base + Offset);
+        EXPECT_EQ(After.EPC, Mode & 2 ? 0x1234u : PC);
+        EXPECT_EQ(After.BadVAddr, Address);
+        EXPECT_EQ(After.Cause, 2u << 2);
+        EXPECT_EQ(After.Status, Mode | Bootstrap | 2);
+        EXPECT_EQ(E.getRegister(mipsreg::V0), 0x55u);
+      }
+    }
+  }
+}
+
 TEST(MIPSHistoricalScheduling, TranslatedLoadAndStoreReachThePhysicalFrame) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     const bool Wide = isMIPS64(A);
