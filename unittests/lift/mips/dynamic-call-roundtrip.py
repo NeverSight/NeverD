@@ -76,6 +76,8 @@ SPILL_GUARDS = {
     "chain-spill-guard-loop": ["-DGUARD_HALVES", "-DOR_DIFFERENCES", "-DCROSS_LOOP"],
     "chain-spill-guard-loop-recompute": ["-DGUARD_HALVES", "-DCROSS_LOOP",
                                         "-DRECOMPUTE_DIFFERENCE"],
+    "chain-spill-guard-mixed-xor": ["-DGUARD_HALVES", "-DMIXED_DIFFERENCE=xor"],
+    "chain-spill-guard-mixed-sub": ["-DGUARD_HALVES", "-DMIXED_DIFFERENCE=dsubu"],
     "chain-spill-recheck-pack": ["-DRECHECK_LOW"],
 }
 
@@ -253,7 +255,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             if split_guard or recheck_low:
                 low_peer = arguments[3] if recheck_low else arguments[1] & 0xffffffff
                 low_equal = (forwarded & 0xffffffff) == low_peer
-                half_outcomes.add((forwarded >> 32 == arguments[1] >> 32, low_equal))
+                half_outcomes.add((trips, forwarded >> 32 == arguments[1] >> 32, low_equal))
                 forward &= low_equal
             if chain and forward:
                 argument = forwarded
@@ -298,8 +300,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             raise AssertionError(f"{name} did not exercise both branch outcomes for {binding}")
         if self_forward and guard_outcomes != {(n, calls) for n in range(4) for calls in (1, n + 1)}:
             raise AssertionError(f"{name} missed a self-call backedge for {binding}")
-        if (split_guard or recheck_low) and half_outcomes != set(product((False, True), repeat=2)):
-            raise AssertionError(f"{name} missed a high/low comparison outcome for {binding}")
+        if (split_guard or recheck_low) and half_outcomes != set(product(range(4), (False, True), (False, True))):
+            raise AssertionError(f"{name} missed a high/low comparison outcome at a loop count for {binding}")
         if loop_guard and guard_outcomes != set(product(range(4), range(len(imports)))):
             raise AssertionError(f"{name} missed a loop count or guard outcome for {binding}")
         if joined and guard_outcomes != set(product(range(2), range(1, len(imports) + 1))):

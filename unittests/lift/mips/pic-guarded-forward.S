@@ -36,7 +36,7 @@ import_probe:
   or $16,$25,$zero
   or $17,$6,$zero
   or $18,$5,$zero
-#if defined(CROSS_JOIN) || defined(CROSS_LOOP)
+#if defined(CROSS_JOIN) || defined(CROSS_LOOP) || defined(MIXED_DIFFERENCE)
   or $20,$6,$zero
 #elif defined(REPEAT_PRODUCER)
   or $20,$4,$zero
@@ -199,13 +199,23 @@ import_probe:
   dsrl32 $19,$18,0
   dsll32 $24,$18,0
   dsrl32 $24,$24,0
-#if defined(OR_DIFFERENCES) || defined(RECOMPUTE_DIFFERENCE)
+#if defined(OR_DIFFERENCES) || defined(RECOMPUTE_DIFFERENCE) || defined(MIXED_DIFFERENCE)
+#ifdef MIXED_DIFFERENCE
+  beq $20,$zero,.Lsplit_difference
+  nop
+  b .Lmixed_zero
+  MIXED_DIFFERENCE $24,$18,$2
+.Lsplit_difference:
+#endif
 #ifdef RECOMPUTE_DIFFERENCE
   xor $24,$2,$18
 #else
   xor $24,$13,$24
   xor $19,$14,$19
   or $24,$24,$19
+#endif
+#ifdef MIXED_DIFFERENCE
+.Lmixed_zero:
 #endif
 #if SPILL_DIFFERENCE == 4
   sw $24,40($sp)

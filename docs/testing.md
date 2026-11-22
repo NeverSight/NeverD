@@ -18386,7 +18386,12 @@ a register join, a stack reload at the join, and a loop with zero to three
 iterations before testing it. One loop computes an XOR before entry and a
 modular subtraction of the same operands on each iteration. Return-target
 tests also change the difference on one arm or only on a taken backedge, and
-overwrite a single byte of its spill.
+overwrite a single byte of its spill. Two register-join fixtures select a
+whole XOR or modular subtraction on one arm and the OR of separate low and
+high XORs on the other. The harness exercises all four combinations of half
+matches at each trip count, including both routes to the shared zero test.
+Return-target cases also swap the arm order, omit or cross halves, and change
+the sample before the test.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.

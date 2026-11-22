@@ -75,7 +75,10 @@ after linking the object with the target linker.
   The proof uses the operands sampled when each difference was computed.
   A register copy or stack reload preserves the test for the bits it carries.
   At a merge or loop header, the selected difference must imply equality on
-  every incoming edge. Replacing it on a single edge can invalidate the guard.
+  every incoming edge. One path can use a full-width XOR or subtraction while
+  another uses the OR of the low- and high-half XORs. Their zero tests establish
+  the same equality when both pairs refer to the corresponding sampled bits.
+  Replacing the difference on a single edge can invalidate the guard.
   A single word can hold the OR of two 32-bit differences. A word
   spill of a 64-bit XOR can leave its high half unchecked.
   Full-width moves carry the established fact across basic blocks.

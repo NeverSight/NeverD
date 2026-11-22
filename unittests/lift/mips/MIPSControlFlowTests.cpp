@@ -1502,6 +1502,60 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
     CheckParts(
         "one incoming difference compares another word", false,
         {RightArm, 0, JoinArms, Xor, Binary(0x2f, 24, 16, 17), ZeroDiff, 0});
+    // The fallthrough arm computes the full-width difference in its jump
+    // delay slot. The other arm folds the two 32-bit differences before
+    // the common zero test of the selected value.
+    const auto Mixed = [&](const char *Name, bool Proven, uint32_t Whole,
+                           uint32_t First, uint32_t Second, uint32_t Fold) {
+      CheckParts(
+          Name, Proven,
+          {RightArm, 0, 0x10000004, Whole, First, Second, Fold, ZeroDiff, 0});
+    };
+    Mixed("whole XOR or two folded halves", true, Xor, LowDiff, HighDiff,
+          EitherDiff);
+    Mixed("whole subtraction or reversed folded halves", true, Sub, HighDiff,
+          LowDiff, Binary(0x25, 24, 12, 15));
+    CheckParts("folded difference on the fallthrough edge", true,
+               {0x12200005, 0, LowDiff, HighDiff, JoinArms, EitherDiff, Xor,
+                ZeroDiff, 0});
+    CheckParts("whole subtraction or repacked XOR differences", true,
+               {RightArm, 0, 0x10000005, Sub, LowDiff, HighDiff,
+                Binary(0x3c, 15, 0, 15), EitherDiff, ZeroDiff, 0});
+    CheckParts("whole XOR with zero or folded raw halves", true,
+               {RightArm, 0, JoinArms, Binary(0x26, 24, 2, 0),
+                Binary(0x25, 24, 13, 14), ZeroDiff, 0});
+    CheckParts("whole XOR with zero or just the raw low half", false,
+               {RightArm, 0, JoinArms, Binary(0x26, 24, 2, 0), Move(24, 13),
+                ZeroDiff, 0});
+    Mixed("other arm only tests the low difference", false, Sub, LowDiff, 0,
+          Move(24, 12));
+    Mixed("other arm only tests the high difference", false, Xor, 0, HighDiff,
+          Move(24, 15));
+    Mixed("low difference occurs twice", false, Xor, LowDiff, Move(15, 12),
+          EitherDiff);
+    Mixed("folded halves are crossed", false, Sub, Binary(0x26, 12, 12, 14),
+          Binary(0x26, 15, 15, 13), EitherDiff);
+    Mixed("full-width arm overwrites the sample", false, Move(24, 0), LowDiff,
+          HighDiff, EitherDiff);
+    CheckParts("folded arm overwrites its completed difference", false,
+               {RightArm, 0, 0x10000005, Xor, LowDiff, HighDiff, EitherDiff,
+                Move(24, 0), ZeroDiff, 0});
+    // A scratch copy of each half changes on the folded edge. Both the
+    // scratch zeroes and the original operand equalities hold under the
+    // guard; retaining one pair of aliases must not displace the others.
+    CheckParts("mixed difference with reused operand copies", true,
+               {Move(1, 13), Move(3, 14), RightArm, 0, 0x10000006, Xor, LowDiff,
+                HighDiff, EitherDiff, Move(1, 0), Move(3, 0), ZeroDiff, 0});
+    CheckParts("intact stack sample of a mixed difference", true,
+               {RightArm, 0, 0x10000004, Sub, LowDiff, HighDiff, EitherDiff,
+                Memory(63, 24, 40), Move(24, 0), Memory(55, 24, 40), OtherClear,
+                ZeroDiff, 0});
+    CheckParts("mixed difference changed before testing zero", false,
+               {RightArm, 0, 0x10000004, Xor, LowDiff, HighDiff, EitherDiff,
+                0x3b180001, ZeroDiff, 0}); // xori t8,t8,1
+    CheckParts("word projection of a mixed difference", false,
+               {RightArm, 0, 0x10000004, Xor, LowDiff, HighDiff, EitherDiff,
+                0x0018c03c, 0x0018c03e, ZeroDiff, 0});
     CheckParts("overwritten difference with an intact saved copy", true,
                {LowDiff, HighDiff, EitherDiff, Move(12, 24), RightArm, 0,
                 JoinArms, Move(24, 0), Move(24, 17), Guard(12, 0), 0});
@@ -1512,6 +1566,9 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
     // difference after all executed backedges and their delay slots.
     constexpr uint32_t SkipLoop = 0x12200004, Decrement = 0x6631ffff,
                        Backedge = 0x1620fffe;
+    CheckParts("mixed zero evidence through a loop header", true,
+               {RightArm, 0, 0x10000004, Sub, LowDiff, HighDiff, EitherDiff,
+                SkipLoop, 0, Decrement, Backedge, 0, ZeroDiff, 0});
     CheckParts("loop-invariant folded difference", true,
                {LowDiff, HighDiff, EitherDiff, SkipLoop, 0, Decrement, Backedge,
                 0, ZeroDiff, 0});

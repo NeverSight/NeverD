@@ -14,11 +14,13 @@
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
+#include <variant>
 
 namespace neverd::mips {
 
@@ -79,6 +81,7 @@ struct Word {
   bool operator==(const Word &) const = default;
 
   bool complete() const { return Low.Id && High.Id; }
+  BitPair bits() const { return {Low.Id, High.Id}; }
   BitPair numbers() const { return {Low.number(), High.number()}; }
   void qualify(const KnownWords &Known) {
     if (Proof != Evidence::None || !complete())
@@ -274,12 +277,17 @@ struct Spill {
 };
 struct ZeroTest {
   Word Left, Right;
-  bool BothZero;
+  bool BothZero = false;
   bool operator==(const ZeroTest &) const = default;
 };
 // (lo, hi) names a whole arithmetic sample. (bits, 0) names a single
 // 32-bit pattern anywhere a move, projection or stack reload carries it.
-using ZeroTests = llvm::DenseMap<BitPair, ZeroTest>;
+// Shared equalities map each surviving bit class to its representative on
+// the zero edge. Their order is stable across worklist visits.
+using SharedEqualities = llvm::SmallVector<BitPair, 2>;
+using ZeroRule = std::variant<ZeroTest, SharedEqualities>;
+using ZeroTests = llvm::DenseMap<BitPair, ZeroRule>;
+using IncomingClasses = llvm::SmallDenseMap<BitPair, unsigned, 8>;
 
 struct State {
   Registers Regs{};
@@ -290,6 +298,8 @@ struct State {
   // incoming edges carry the same peers in the same order.
   llvm::SmallVector<Word, 0> Peers;
   ZeroTests Tests;
+  size_t SharedPairs = 0;
+  size_t testCost() const { return Tests.size() + SharedPairs; }
   unsigned NextId = ZeroId + 1;
 
   KnownWords knownWords() const {
@@ -376,44 +386,134 @@ void captureZeroTest(ZeroTests &Tests, NdOp Op, Word &Result, Word L, Word R,
       Tests.try_emplace({H.Id, 0},
                         ZeroTest{{L.*Part, {}}, {R.*Part, {}}, BothZero});
   }
-  Tests.try_emplace({Result.Low.Id, Result.High.Id}, ZeroTest{L, R, BothZero});
+  Tests.try_emplace(Result.bits(), ZeroTest{L, R, BothZero});
 }
 
-bool assumeZeroTest(State &Out, Word Tested, size_t Locations,
-                    size_t &Remaining) {
-  llvm::SmallVector<const ZeroTest *, 8> Work;
-  llvm::SmallPtrSet<const ZeroTest *, 8> Seen;
-  const auto Add = [&](BitPair Bits) {
-    const auto I = Out.Tests.find(Bits);
-    if (I == Out.Tests.end())
-      return false;
-    if (Seen.insert(&I->second).second)
-      Work.push_back(&I->second);
-    return true;
+// Enumerate what the sampled bits being zero implies, both at a branch
+// and when comparing two differently computed guards at a merge.
+bool visitZeroEqualities(const ZeroTests &Tests, BitPair Tested,
+                         size_t EqualityCost, size_t &Remaining,
+                         llvm::function_ref<void(Word, Word)> Apply) {
+  llvm::SmallVector<const ZeroRule *, 8> Work;
+  llvm::SmallPtrSet<const ZeroRule *, 8> Seen;
+  const auto Find = [&](BitPair Bits) -> const ZeroRule * {
+    const auto I = Tests.find(Bits);
+    return I == Tests.end() ? nullptr : &I->second;
   };
-  const auto Visit = [&](Word W) {
-    if (!(W.complete() && Add({W.Low.Id, W.High.Id}))) {
-      Add({W.Low.Id, 0});
-      Add({W.High.Id, 0});
+  const auto Add = [&](const ZeroRule *R) {
+    if (R && Seen.insert(R).second)
+      Work.push_back(R);
+  };
+  const auto Visit = [&](BitPair Bits) {
+    const auto *Whole = Bits.first && Bits.second ? Find(Bits) : nullptr;
+    // A shared relation describes retained identities. A projection can
+    // still carry a structural rule about its original whole operands.
+    if (!Whole || std::holds_alternative<SharedEqualities>(*Whole)) {
+      Add(Find({Bits.first, 0}));
+      Add(Find({Bits.second, 0}));
     }
+    Add(Whole);
   };
   Visit(Tested);
   const Word Zero{{ZeroId}, {ZeroId}, Evidence::Independent};
   while (!Work.empty()) {
-    const auto &T = *Work.pop_back_val();
-    const auto Cost = Locations * (T.BothZero ? 2 : 1);
+    const auto &Rule = *Work.pop_back_val();
+    if (const auto *Pairs = std::get_if<SharedEqualities>(&Rule)) {
+      if (Pairs->size() > Remaining / EqualityCost)
+        return false;
+      Remaining -= Pairs->size() * EqualityCost;
+      for (auto [From, To] : *Pairs)
+        Apply({{From}, {}}, {{To}, {}});
+      continue;
+    }
+    const auto &T = std::get<ZeroTest>(Rule);
+    const auto Cost = EqualityCost * (T.BothZero ? 2 : 1);
     if (Cost > Remaining)
       return false;
     Remaining -= Cost;
     if (T.BothZero) {
       for (const Word &Part : {T.Left, T.Right}) {
-        assumeEqual(Out, Part, Zero);
-        Visit(Part);
+        Apply(Part, Zero);
+        Visit(Part.bits());
       }
     } else {
-      assumeEqual(Out, T.Left, T.Right);
+      Apply(T.Left, T.Right);
     }
   }
+  return true;
+}
+
+using BitPartition = llvm::EquivalenceClasses<unsigned>;
+
+unsigned representative(const BitPartition &Partition, unsigned Id) {
+  const auto I = Partition.findLeader(Id);
+  return I == Partition.member_end() ? Id : *I;
+}
+
+// On each incoming edge, group the bit patterns which that particular
+// guard equates. Keep literals as representatives so that a fact about a
+// constant survives even if no register holds it.
+bool partitionAtZero(const ZeroTests &Tests, BitPair Bits,
+                     BitPartition &Partition, size_t &Remaining) {
+  const auto Unite = [&](unsigned A, unsigned B) {
+    if (!A || !B || A == B)
+      return;
+    A = representative(Partition, A);
+    B = representative(Partition, B);
+    if (A == B || (literal(A) && literal(B)))
+      return;
+    if (literal(B))
+      std::swap(A, B);
+    Partition.unionSets(A, B);
+  };
+  Unite(Bits.first, ZeroId);
+  Unite(Bits.second, ZeroId);
+  return visitZeroEqualities(Tests, Bits, 1, Remaining, [&](Word L, Word R) {
+    Unite(L.Low.number(), R.Low.number());
+    Unite(L.High.number(), R.High.number());
+  });
+}
+
+// Joined values are equal under the selected zero test exactly when their
+// incoming identities are in the same class on each edge. Intersect the
+// partitions on retained identities independently of operation and lane order.
+bool commonZeroEqualities(const ZeroTests &Left, BitPair L,
+                          const ZeroTests &Right, BitPair R,
+                          const IncomingClasses &Classes, BitPair Tested,
+                          SharedEqualities &Common, size_t &Remaining) {
+  if (Classes.size() > Remaining / 2)
+    return false;
+  Remaining -= Classes.size() * 2;
+  BitPartition A, B;
+  if (!partitionAtZero(Left, L, A, Remaining) ||
+      !partitionAtZero(Right, R, B, Remaining))
+    return false;
+  IncomingClasses Leaders;
+  llvm::SmallVector<std::pair<BitPair, unsigned>, 16> Members;
+  for (const auto &[Inputs, Id] : Classes) {
+    const auto X = A.findLeader(Inputs.first), Y = B.findLeader(Inputs.second);
+    if (X == A.member_end() && Y == B.member_end())
+      continue;
+    BitPair Key{X == A.member_end() ? Inputs.first : *X,
+                Y == B.member_end() ? Inputs.second : *Y};
+    if (Key.first == Key.second && literal(Key.first)) {
+      // The branch already establishes that the tested bits are zero.
+      if (Key.first != ZeroId || (Id != Tested.first && Id != Tested.second))
+        Common.emplace_back(Id, Key.first);
+    } else {
+      // Pick a live representative independently of operand order and of
+      // the partition's internal leader, including on a loop revisit.
+      auto &Leader = Leaders.try_emplace(Key, Id).first->second;
+      Leader = std::min(Leader, Id);
+      Members.emplace_back(Key, Id);
+    }
+  }
+  for (auto [Key, Id] : Members) {
+    const auto Root = Leaders.at(Key);
+    if (Id != Root)
+      Common.emplace_back(Id, Root);
+  }
+  llvm::sort(Common);
   return true;
 }
 
@@ -422,7 +522,7 @@ bool assumeZeroTest(State &Out, Word Tested, size_t Locations,
 /// each edge. Renumbering by location order gives loops a stable fixed point
 /// without identifying successive executions of the same call instruction.
 bool intersect(State &A, const State &B, size_t &Remaining) {
-  llvm::SmallDenseMap<std::pair<unsigned, unsigned>, unsigned, 8> Classes;
+  IncomingClasses Classes;
   const auto MeetBits = [&](unsigned L, unsigned R) -> unsigned {
     if (!L || !R)
       return 0;
@@ -454,20 +554,30 @@ bool intersect(State &A, const State &B, size_t &Remaining) {
     BitPair Bits;
     const ZeroTest *Left, *Right;
   };
+  struct MixedTest {
+    BitPair Bits, Left, Right;
+  };
   ZeroTests Joined;
   llvm::SmallVector<PendingTest, 8> Work;
+  llvm::SmallVector<MixedTest, 2> Mixed;
   const auto Match = [&](BitPair Bits, BitPair L, BitPair R) {
     const auto I = A.Tests.find(L);
     const auto J = B.Tests.find(R);
-    if (I != A.Tests.end() && J != B.Tests.end() &&
-        I->second.BothZero == J->second.BothZero &&
-        Joined.try_emplace(Bits).second)
-      Work.push_back({Bits, &I->second, &J->second});
+    if ((I == A.Tests.end() && J == B.Tests.end()) ||
+        !Joined.try_emplace(Bits).second)
+      return;
+    const auto *Left =
+        I == A.Tests.end() ? nullptr : std::get_if<ZeroTest>(&I->second);
+    const auto *Right =
+        J == B.Tests.end() ? nullptr : std::get_if<ZeroTest>(&J->second);
+    if (Left && Right && Left->BothZero == Right->BothZero)
+      Work.push_back({Bits, Left, Right});
+    else
+      Mixed.push_back({Bits, L, R});
   };
   const auto MatchWord = [&](Word V, Word L, Word R) {
     if (V.complete())
-      Match({V.Low.Id, V.High.Id}, {L.Low.Id, L.High.Id},
-            {R.Low.Id, R.High.Id});
+      Match(V.bits(), L.bits(), R.bits());
     if (V.Low.Id)
       Match({V.Low.Id, 0}, {L.Low.Id, 0}, {R.Low.Id, 0});
     if (V.High.Id)
@@ -475,7 +585,7 @@ bool intersect(State &A, const State &B, size_t &Remaining) {
   };
   const auto MeetLive = [&](Word L, Word R) {
     Word V = Meet(L, R);
-    if (!A.Tests.empty() && !B.Tests.empty())
+    if (!A.Tests.empty() || !B.Tests.empty())
       MatchWord(V, L, R);
     return V;
   };
@@ -498,12 +608,26 @@ bool intersect(State &A, const State &B, size_t &Remaining) {
     --Remaining;
     const auto [Bits, L, R] = Work.pop_back_val();
     const Word Left = Meet(L->Left, R->Left), Right = Meet(L->Right, R->Right);
-    Joined.at(Bits) = {Left, Right, L->BothZero};
+    Joined.at(Bits) = ZeroTest{Left, Right, L->BothZero};
     if (L->BothZero) {
       MatchWord(Left, L->Left, R->Left);
       MatchWord(Right, L->Right, R->Right);
     }
   }
+  // All live words and reachable operand pairs now have their joined IDs.
+  // Project each semantic intersection onto that same complete mapping.
+  size_t SharedPairs = 0;
+  for (auto [Bits, L, R] : Mixed) {
+    auto &Common = Joined.at(Bits).emplace<SharedEqualities>();
+    if (!commonZeroEqualities(A.Tests, L, B.Tests, R, Classes, Bits, Common,
+                              Remaining))
+      return false;
+    if (Common.empty())
+      Joined.erase(Bits);
+    else
+      SharedPairs += Common.size();
+  }
+  A.SharedPairs = SharedPairs;
   A.Tests = std::move(Joined);
   A.NextId = Classes.size() + ZeroId + 1;
   return true;
@@ -650,9 +774,9 @@ GuardedCalls guardedResultArguments(
       }
       Input.Visited = true;
     }
-    if (Input.Words.Tests.size() > Remaining)
+    if (Input.Words.testCost() > Remaining)
       return {};
-    Remaining -= Input.Words.Tests.size();
+    Remaining -= Input.Words.testCost();
     auto Current = Input.Words;
     auto &Regs = Current.Regs;
     auto SP = Stack.BlockEntrySP(B->Id);
@@ -762,6 +886,7 @@ GuardedCalls guardedResultArguments(
           Exposed.erase(&Op);
         Left = Right = {};
         Current.Tests.clear();
+        Current.SharedPairs = 0;
         Temps.clear();
         AtEntry = false;
         if (Untyped && fullGPR(Op.Output) &&
@@ -851,18 +976,20 @@ GuardedCalls guardedResultArguments(
         Regs.size() + Offsets.size() + Current.Peers.size();
     for (int Id : B->Succs) {
       const auto *Succ = Graph.blockById(Id);
-      const auto EdgeCost = Locations + Current.Tests.size();
+      const auto EdgeCost = Locations + Current.testCost();
       if (!Succ || Remaining < EdgeCost)
         return {};
       Remaining -= EdgeCost;
       auto Out = Current;
       if (Succ == Edge.Successor) {
         assumeEqual(Out, Left, Right);
-        if (ChecksZero &&
-            !assumeZeroTest(Out,
-                            Edge.Compare->Inputs[0].isConst() ? Right : Left,
-                            Locations, Remaining))
-          return {};
+        if (ChecksZero) {
+          const Word Tested = Edge.Compare->Inputs[0].isConst() ? Right : Left;
+          if (!visitZeroEqualities(
+                  Out.Tests, Tested.bits(), Locations, Remaining,
+                  [&](Word L, Word R) { assumeEqual(Out, L, R); }))
+            return {};
+        }
       }
       for (const auto &Phi : Succ->Phis) {
         if (Phi.Args.size() + 1 > Remaining)
@@ -893,9 +1020,9 @@ GuardedCalls guardedResultArguments(
           return {};
         Remaining -= Edges.size() * Locations;
         const auto &First = Edges.front().second;
-        if (First.Tests.size() > Remaining)
+        if (First.testCost() > Remaining)
           return {};
-        Remaining -= First.Tests.size();
+        Remaining -= First.testCost();
         Out = First;
         for (const auto &E : llvm::drop_begin(Edges))
           if (!intersect(Out, E.second, Remaining))
