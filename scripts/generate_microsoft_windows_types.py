@@ -387,6 +387,9 @@ PROVIDER_INLINE_ROUTINES = {
 CPP_NOARG_PROVIDERS = {
     "SNMPUtilities": {"SnmpSvcGetUptime": "DWORD __stdcall"},
     "WebAuthentication": {"WebAuthNGetApiVersionNumber": "DWORD WINAPI"},
+    "DeviceManagementRegistration": {
+        "RegisterDeviceWithManagementUsingAADDeviceCredentials": "HRESULT WINAPI",
+    },
     "DXGI": {"DXGIDeclareAdapterRemovalSupport": "HRESULT WINAPI"},
     "ODBC": {"ODBCGetTryWaitValue": "DWORD WINAPI"},
     "MediaFoundation": {
@@ -501,8 +504,11 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
     if flat_proof is not None:
         standalone = arguments[:arguments.index("-I")]
         flat.verify_abis(flat_proof, preprocessed, standalone, directory, prototypes, run)
-        metadata = dict(metadata or {}, sdk_import_bridge=flat_proof)
-        commands += [flat_proof["import_library"]["command"], *flat_proof["commands"]]
+        key = "sdk_import_bridge" if "import_library" in flat_proof else "sdk_runtime_bridge"
+        metadata = dict(metadata or {}, **{key: flat_proof})
+        if "import_library" in flat_proof:
+            commands.append(flat_proof["import_library"]["command"])
+        commands.extend(flat_proof["commands"])
     original_profile = flat_proof or (cpp_bridge if name == "RDBSS" else None)
     layout_arguments = original_profile["arguments"] if original_profile else arguments
     layout_source = original_profile["source"] if original_profile else str(source)
@@ -584,7 +590,8 @@ def merge_providers(base: str, primary: Path, output: Path,
         for index, (unit, report) in enumerate(zip(units, imported), 1):
             if report["declaration"] != index or report["prefix"] != unit["name"]:
                 raise ValueError("official provider provenance does not match its input")
-            flat_bridge = unit["metadata"].get("sdk_import_bridge")
+            flat_bridge = (unit["metadata"].get("sdk_import_bridge") or
+                           unit["metadata"].get("sdk_runtime_bridge"))
             bridge = flat_bridge or unit["metadata"].get("cpp_header_bridge")
             if bridge and not set(report["prototypes"]) <= set(bridge["verified_functions"]):
                 language = bridge.get("language", "c++")
@@ -851,6 +858,10 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                 target_packages.append(gdiplus_imports["package"])
             flat_units, archives = flat.source_units(output, cache, architecture, readobj,
                                                      arguments, legacy_profile)
+            webauthn, headers, notice = flat.webauthn_runtime_unit(output, cache, arguments)
+            flat_units.append(webauthn)
+            runtime_packages.extend(headers)
+            shutil.copy2(notice, licenses / notice.name)
             target_packages.extend(item for item in archives if item not in target_packages)
             if legacy_profile:
                 runtime_packages.extend(item for item in legacy_profile["packages"]
@@ -883,6 +894,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                          rdbss=wdk.digest(Path(rdbss.__file__)),
                          gdiplus=wdk.digest(Path(gdiplus.__file__)),
                          flat_imports=wdk.digest(Path(flat.__file__)),
+                         webauthn_runtime=wdk.digest(flat.WEBAUTHN_INPUTS),
                          **({"legacy_sdk": wdk.digest(flat.LEGACY_INPUTS)} if legacy_sdk else {})),
         "inputs": inputs,
         "licenses": [{"file": path.name, "sha256": wdk.digest(path)}

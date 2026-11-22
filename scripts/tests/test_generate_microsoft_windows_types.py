@@ -18,6 +18,16 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_documented_runtime_profile_requires_every_named_declaration(self):
+        proof = {"runtime_exports": {"names": ["ApiB", "ApiA"]}}
+        self.assertEqual(windows.flat.select(proof, ["Private", "ApiA", "ApiB"], None, None),
+                         ["ApiA", "ApiB"])
+        with self.assertRaisesRegex(ValueError, "lack documented runtime exports: ApiB"):
+            windows.flat.select(proof, ["ApiA"], None, None)
+        with self.assertRaisesRegex(ValueError, "exactly once"):
+            windows.flat.select({"runtime_exports": {"names": ["ApiA", "ApiA"]}},
+                                ["ApiA"], None, None)
+
     def test_large_selection_preserves_every_prototype_in_a_response_file(self):
         with tempfile.TemporaryDirectory() as directory:
             response = Path(directory) / "SDK prototypes.rsp"

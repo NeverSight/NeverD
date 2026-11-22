@@ -1,8 +1,11 @@
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import io
 from pathlib import Path
 import re
 import tempfile
+from threading import Barrier
 import unittest
 from unittest import mock
 import zipfile
@@ -51,7 +54,23 @@ class WDKDriverFixtureTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "hash mismatch"):
                 fixtures.download(self.root, package.name, "unused", expected)
         self.assertFalse(package.exists())
-        self.assertFalse(package.with_suffix(".nupkg.part").exists())
+        self.assertEqual(list(self.root.glob("*.part")), [])
+
+    def test_concurrent_targets_publish_the_same_verified_package(self):
+        data = b"official header"
+        expected = hashlib.sha256(data).hexdigest()
+        together = Barrier(2)
+
+        def fetch(*args, **kwargs):
+            together.wait(timeout=5)
+            return io.BytesIO(data)
+
+        with mock.patch.object(fixtures.urllib.request, "urlopen", side_effect=fetch), \
+                ThreadPoolExecutor(max_workers=2) as targets:
+            results = [targets.submit(fixtures.download, self.root, "header.h", "unused", expected)
+                       for _ in range(2)]
+            self.assertEqual([result.result().read_bytes() for result in results], [data, data])
+        self.assertEqual(list(self.root.glob("*.part")), [])
 
     def test_extract_preserves_original_case_bytes_and_license(self):
         files = {"c/Include/Native.h": b"original header\r\n",
