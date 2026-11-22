@@ -7,6 +7,73 @@
 /// Exact pair selection, unsupported-host refusal and complete resumption.
 //===----------------------------------------------------------------------===//
 
+TEST_F(X64ContinuationExportTest, BoundRtmAbortStepsProjectActualStatus) {
+  // The abort instruction can also be selected independently. Only the
+  // XBEGIN entry owns the authenticated adjacent pair and its fallback.
+  for (bool Adjacent : {false, true}) {
+    std::vector<uint8_t> Code = {0x66, 0xc7, 0xf8, 4, 0};
+    if (!Adjacent)
+      Code.push_back(0x90);
+    Code.insert(Code.end(), {0xc6, 0xf8, 0xa7, 0xc3, 0xc3});
+    load(Code);
+    for (bool LLVM : {false, true})
+      for (auto Dispatch : {"switch", "direct"}) {
+        const auto [Source, Manifest] =
+            source(request(std::string(R"("instructions":[4096,)") +
+                           (Adjacent ? "4101" : "4102") +
+                           R"(],"native_rtm_abort_steps":true,"dispatch":")" +
+                           Dispatch + '"'),
+                   LLVM);
+        auto Parsed = llvm::json::parse(Manifest);
+        ASSERT_TRUE(bool(Parsed));
+        const auto *Report = Parsed->getAsObject();
+        ASSERT_NE(Report, nullptr);
+        EXPECT_EQ(Report->getInteger("native_requests"), Adjacent ? 1 : 2);
+        const auto *Binding = Report->getObject("native_rtm_abort_steps");
+        ASSERT_NE(Binding, nullptr);
+        const auto *Regions = Binding->getArray("regions");
+        ASSERT_NE(Regions, nullptr);
+        ASSERT_EQ(Regions->size(), Adjacent ? 1u : 0u);
+        if (!Adjacent) {
+          EXPECT_EQ(Source.find("__builtin_ia32_rtm_abort_pair"),
+                    std::string::npos);
+          continue;
+        }
+        const auto *Region = Regions->front().getAsObject();
+        ASSERT_NE(Region, nullptr);
+        EXPECT_EQ(Region->getString("bytes"), "66C7F80400C6F8A7");
+        EXPECT_EQ(Region->getString("fallback"), "0x1009");
+        EXPECT_NE(Source.find("neverd_step_v6_1000_guard(raw)"),
+                  std::string::npos);
+        EXPECT_NE(Source.find("status=__builtin_ia32_rtm_abort_pair(167)"),
+                  std::string::npos);
+        EXPECT_NE(Source.find("state->GPR[0]=status;"), std::string::npos);
+        EXPECT_NE(Source.find("state->PC=0x1009ULL;"), std::string::npos);
+        EXPECT_EQ(Source.find("neverd_x64_rtm_abort_environment_v6"),
+                  std::string::npos);
+        EXPECT_EQ(Source.find("cpuidex"), std::string::npos);
+      }
+  }
+}
+
+TEST_F(X64ContinuationExportTest, BoundRtmAbortStepsRejectIncompatibleDomains) {
+  load({0xc7, 0xf8, 3, 0, 0, 0, 0xc6, 0xf8, 0, 0xc3});
+  for (auto Other : {"native_rtm_regions", "native_rtm_abort_regions",
+                     "paged_memory", "scheduled_events"}) {
+    const auto Query = request(
+        std::string(
+            R"("instructions":[4096],"native_rtm_abort_steps":true,")") +
+        Other + R"(":true)");
+    const char *Report = nullptr;
+    EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Query.data(),
+                                                Query.size(), 0, &Report),
+              nullptr);
+    EXPECT_EQ(Report, nullptr);
+    EXPECT_NE(take(neverd_last_error(Session)).find("RTM abort steps"),
+              std::string::npos);
+  }
+}
+
 TEST_F(X64ContinuationExportTest, RtmAbortRegionsRequireExactAdjacentBytes) {
   const std::vector<std::vector<uint8_t>> Cases = {
       {0xc7, 0xf8, 3, 0, 0, 0, 0xc6, 0xf8, 0xff, 0xc3},

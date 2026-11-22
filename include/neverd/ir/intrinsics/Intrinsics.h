@@ -347,11 +347,13 @@ enum class Intrinsic : uint16_t {
   /// A retained raw-analysis environment precondition, never a runtime call.
   /// Its exact LowIR contract is owned by LowRawEnvironment.h.
   RawEnvironmentRequirementV1 = 2,
-
   /// A fresh architectural bit production in a checked raw region. Ordinary
   /// emitters must refuse it; its LowIR shape belongs to
   /// LowArchitecturalValue.h.
   ArchitecturalValueV1 = 3,
+
+  /// Conditional raw invocation/normal-return relation; see LowRawCall.h.
+  RawReturningCallV1 = 4,
 
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64.inc"
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm.inc"
@@ -1463,6 +1465,16 @@ constexpr bool isRawEnvironmentRequirementId(uint64_t Id) {
 constexpr bool isArchitecturalValueId(uint64_t Id) {
   return (Id & UINT16_MAX) ==
          static_cast<uint64_t>(Intrinsic::ArchitecturalValueV1);
+}
+
+constexpr bool isRawReturningCallId(uint64_t Id) {
+  return (Id & UINT16_MAX) ==
+         static_cast<uint64_t>(Intrinsic::RawReturningCallV1);
+}
+
+/// Refusal before narrowing or validating a possibly malformed raw operation.
+constexpr bool isRawAnalysisIntrinsicId(uint64_t Id) {
+  return isRawEnvironmentRequirementId(Id) || isRawReturningCallId(Id);
 }
 
 const char *intrinsicName(Intrinsic Id);

@@ -41,6 +41,7 @@
 #include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
+#include "neverd/ir/med/X86/Win64CallStackInput.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/support/Diagnostic.h"
@@ -445,8 +446,12 @@ TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
 }
 
 ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
-  if (V.Kind == MedVar::Unspecified)
-    return HighExpr::makeUndef(V.Size);
+  if (V.Kind == MedVar::Unspecified) {
+    auto E = HighExpr::makeUndef(V.Size);
+    if (Win64CallStackInput::from(V))
+      E->Var = V;
+    return E;
+  }
   if (V.isConst()) {
     return HighExpr::makeConst(V.ConstVal, V.Size, V.Provenance,
                                V.AddressOwnerVA);

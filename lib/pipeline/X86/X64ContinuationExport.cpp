@@ -27,6 +27,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -82,6 +83,7 @@ struct Request {
   bool FollowInternalCalls = false;
   bool FollowDirectJumps = false;
   bool NativeRtmAbortRegions = false;
+  bool NativeRtmAbortSteps = false;
   bool NativeRtmRegions = false;
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
@@ -118,6 +120,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_debug_register_access",
                                        "native_page_global_access",
                                        "native_rtm_abort_regions",
+                                       "native_rtm_abort_steps",
                                        "native_rtm_regions",
                                        "native_kvm_hypercalls",
                                        "native_hle_steps",
@@ -226,6 +229,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_debug_register_access", &Options.NativeDebugRegisterAccess},
       {"native_page_global_access", &Options.NativePageGlobalAccess},
       {"native_rtm_abort_regions", &Result.NativeRtmAbortRegions},
+      {"native_rtm_abort_steps", &Result.NativeRtmAbortSteps},
       {"native_rtm_regions", &Result.NativeRtmRegions},
       {"native_kvm_hypercalls", &Options.NativeKvmHypercalls},
       {"native_hle_steps", &Options.NativeHleSteps},
@@ -253,6 +257,13 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
         return invalid(Key + " must be a boolean");
       *Destination = *Flag;
     }
+  if (Result.NativeRtmAbortSteps &&
+      (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
+       Options.PagedMemory || Options.ScheduledEvents ||
+       Result.NativeRtmRegions || Result.NativeRtmAbortRegions))
+    return invalid(
+        "native RTM abort steps require successful-RAM kernel-events-v6 "
+        "with a single RTM binding and no event scheduler");
   if (Result.NativeRtmAbortRegions &&
       Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6)
     return invalid("native RTM abort regions require kernel-events-v6");
@@ -667,7 +678,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   if (Request->Entries) {
     auto Selection = selectX64SpecialRegions(
         Image, Addresses, Request->Options, Request->CalleeDepth,
-        Request->FollowDirectJumps, Request->NativeRtmAbortRegions,
+        Request->FollowDirectJumps,
+        Request->NativeRtmAbortRegions || Request->NativeRtmAbortSteps,
         Request->NativeRtmRegions, Debug);
     if (!Selection)
       return Selection.takeError();
@@ -697,6 +709,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   const std::map<va_t, std::string> PagedNames{
       {kX64PagedAccessAddress, PagedAccessName}};
   llvm::json::Array Manifest;
+  std::vector<X64RtmAbortStep> RtmSteps;
   size_t Native = 0;
   uint64_t Work = Units->size();
   const auto AddFunction =
@@ -745,15 +758,29 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
         return std::move(Error);
     if (auto Error = AddFunction(Unit.Function, Unit.SourceABI))
       return std::move(Error);
-    Native += Unit.RequiresNativeExecution;
-    Manifest.push_back(
-        llvm::json::Object{{"pc", hex(Unit.Address)},
-                           {"bytes", llvm::toHex(Unit.Bytes)},
-                           {"native_boundary", Unit.RequiresNativeExecution},
-                           {"rtm_body", Unit.SupportsRtmBody},
-                           {"diagnostic", Unit.Diagnostic},
-                           {"name", Unit.Function.Name},
-                           {"arbitrary_effects", effects(Unit)}});
+    bool NativeBoundary = Unit.RequiresNativeExecution;
+    if (NativeBoundary && Request->NativeRtmAbortSteps &&
+        x86TransactionBeginEncoding(Unit.Bytes, Unit.Address, true)) {
+      if (auto Pair = readX64RtmAbortRegion(
+              Image, Unit.Address, *Request->Options.PagingAddressBits)) {
+        // The existing instruction function validates all V6 state before
+        // returning NativeInstruction. Keep it as the guard for the bound step.
+        Functions.back().Name += "_guard";
+        RtmSteps.push_back({Unit.Function.Name, std::move(*Pair)});
+        NativeBoundary = false;
+      }
+    }
+    Native += NativeBoundary;
+    Manifest.push_back(llvm::json::Object{
+        {"pc", hex(Unit.Address)},
+        {"bytes", llvm::toHex(Unit.Bytes)},
+        {"native_boundary", NativeBoundary},
+        {"rtm_body", Unit.SupportsRtmBody},
+        {"diagnostic", Unit.RequiresNativeExecution && !NativeBoundary
+                           ? std::string()
+                           : Unit.Diagnostic},
+        {"name", Unit.Function.Name},
+        {"arbitrary_effects", effects(Unit)}});
   }
   X64ContinuationExport Result;
   llvm::raw_string_ostream OS(Result.Source);
@@ -846,6 +873,9 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   // declarations need not precede byte-pointer steps; inserting their headers
   // first would freeze libc feature selection before the emitter's macros.
   auto Fields = stateDeclaration(OS, Version, Units->front().StateBytes);
+  llvm::json::Array RtmStepReceipts;
+  if (!RtmSteps.empty())
+    RtmStepReceipts = emitX64RtmAbortSteps(OS, RtmSteps);
   if (Request->Options.EventDelivery || Request->Options.ScheduledEvents) {
     OS << R"C(
 /* The producer selects the event and supplies architectural restart state.
@@ -1224,6 +1254,13 @@ typedef struct neverd_x64_event_v1 {
                     "initial CPU/controller coherence is caller-owned; "
                     "raw steps and unscheduled drivers do not notify"}};
   }
+  if (Request->NativeRtmAbortSteps)
+    Report["native_rtm_abort_steps"] = llvm::json::Object{
+        {"native_intrinsic", "llvm.x86.rtm.abort.pair"},
+        {"regions", std::move(RtmStepReceipts)},
+        {"domain", "RTM supported on the bound executing CPU, outside RTM/HLE, "
+                   "successful instruction fetch and no debug trap"},
+        {"budget", "one translated step per attempted pair"}};
   if (Request->NativeRtmAbortRegions)
     Report["native_rtm_abort_environment"] = llvm::json::Object{
         {"provider", "neverd_x64_rtm_abort_environment_v6"},

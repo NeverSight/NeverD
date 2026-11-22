@@ -826,6 +826,8 @@ source and MPX context/encoding targets.
 
 `InterpreterMachineRegionSourceTest.EntryObjects*` executes all four region state interfaces through HighC and LLVMC at O0/O2 with ASan/UBSan. Complete state, guest writes and query tapes cover optional alignment, object aliases, equal roots with disjoint relative ranges, one-byte overlaps and rejected inputs before any effects. An independent 128-bit arithmetic oracle covers signed displacement extremes, address wraparound and UINT64_MAX endpoints. Exact/short source budgets and changed authenticated declarations remain checked; ordinary source consumers still refuse the raw domain.
 
+`PEFixedImageTest.EntryLoadedObjectBindsAChangingMemoryPointer` checks a complete entry memory pointer field through raw symbolic specialization, a concrete original-instruction replay, missing-relation refusal and malformed source domains. `EntryLoadedObjectSurvivesAConditionalCall` checks the preserved pointer across a declared returning call, while `EntryLoadedObjectForgetsOverwrittenPointerField` checks that a guest write cannot resurrect its initial relation. Run `NeverDInterpreterSpecializationTests` and `NeverDInterpreterMachineStateTests` when changing the loaded-object relation or its source guard. These tests qualify the declared initial pointer domain, not an observed address or an actual driver's loader contract.
+
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` runs x64/ARM64 Mach-O integer, floating and mixed stack carriers through the source pipeline. `IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` keeps entry storage for memory reads, calls, escaping stack addresses and opaque or memory intrinsics. Pure value paths use declared parameters without inventing physical SP writes; register FP state effects remain. The macOS mobile matrix independently compiles and executes recovered Swift; successful emission alone is not execution evidence.
 
 `NeverDLLVMCValueTests` compiles and executes a recast variadic call against a separate Windows x64 ABI callee at O0/O2, with preserved LLVM types enabled and disabled. Native x64 hosts verify the floating value through the callee’s variadic argument reader; other architectures explicitly skip that execution.
@@ -22651,6 +22653,15 @@ ctest --test-dir build-release -L "^NeverDX86NativeStateAuditTests$" --output-on
 ```sh
 cmake --build build-release --target NeverDX86ScalarMoveAuditTests NeverDX86LegacyAlignedMoveTests NeverDX86UndefinedEffectsTests
 ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86LegacyAlignedMoveTests|NeverDX86UndefinedEffectsTests)$" --output-on-failure
+```
+
+`PEFixedImageTest.ReturningCall*` in `NeverDPEFixedImageTests` checks exact physical call expansion, fresh results, repeated sites, receipt integrity, current frame-byte preservation, joins and short budgets. `NeverDInterpreterSpecializationTests` checks the direct returning-call state effect. `NeverDSymMemoryKnowledgeTests` checks transactional bounded memory forgetting; `NeverDRawEnvironmentRequirementTests` checks that raw call markers are refused by ordinary execution and source consumers. Run these focused targets after changing the conditional raw-call relation. A passing raw result is not an ordinary C or native equivalence certificate.
+
+`PEFixedImageTest.ReturningCallCanRetainDeclaredEarlierFrameBytes` in `NeverDPEFixedImageTests` distinguishes the version 2 frame-span relation from version 1 and rejects overlap with the call stack area. `RetainsDisjointCurrentFrameSpans` in `NeverDSymMemoryKnowledgeTests` checks that only current bytes in the declared intervals survive, with bounded atomic failure. Run these focused targets for changes to this relation; neither test authenticates an external callee's actual writes.
+
+```sh
+cmake --build build-release --target NeverDPEFixedImageTests NeverDInterpreterSpecializationTests NeverDSymMemoryKnowledgeTests NeverDRawEnvironmentRequirementTests
+ctest --test-dir build-release -L "^(NeverDPEFixedImageTests|NeverDInterpreterSpecializationTests|NeverDSymMemoryKnowledgeTests|NeverDRawEnvironmentRequirementTests)$" --output-on-failure
 ```
 
 `NeverDSymConditionalStoreTests` covers bounded byte effects across absolute and symbolic banks, both byte orders, overlap, wrapping, unknown epochs and exact budgets. Executor tests cover STORE, scalar atomic ADD/XCHG/CMPXCHG, aliased address/value/output registers, delayed Old publication, malformed shapes and refusal havoc. `SymStorePreservation` checks the same atomic write path with explicit frame preservation and exact versus one-short budgets. Ordinary execution without a descriptor retains its existing behavior; these checks do not certify access permissions or whole-program recovery.

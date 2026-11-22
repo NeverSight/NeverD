@@ -14,6 +14,8 @@
 #ifndef NEVERD_BACKEND_LLVMSOURCEUNKNOWNVALUE_H
 #define NEVERD_BACKEND_LLVMSOURCEUNKNOWNVALUE_H
 
+#include "neverd/backend/llvm/X86/LLVMWin64CallStackProvider.h"
+
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -36,8 +38,15 @@ inline bool isFunction(const llvm::Function &Function) {
 inline bool isValue(const llvm::Value *Value) {
   const auto *Call = llvm::dyn_cast_or_null<llvm::CallInst>(Value);
   const auto *Function = Call ? Call->getCalledFunction() : nullptr;
-  return Function && isFunction(*Function) && Call->arg_empty() &&
-         !Call->hasOperandBundles() &&
+  if (!Function)
+    return false;
+  // Original coordinates identify a missing machine value. Keep it eligible
+  // for the same use-demand and unused-formal proofs as anonymous unknowns.
+  const bool Unknown = Call->arg_empty()
+                           ? isFunction(*Function)
+                           : Call->arg_size() == 2 &&
+                                 llvm_win64_call_stack::isProvider(*Function);
+  return Unknown && !Call->hasOperandBundles() &&
          Call->getFunctionType() == Function->getFunctionType();
 }
 

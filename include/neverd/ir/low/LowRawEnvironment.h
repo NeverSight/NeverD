@@ -16,6 +16,7 @@
 #define NEVERD_IR_LOW_LOWRAWENVIRONMENT_H
 
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/LowRawCall.h"
 
 #include <array>
 
@@ -32,6 +33,18 @@ inline bool hasLowRawEnvironmentRequirement(const LowFunc &Function) {
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops)
       if (isLowRawEnvironmentRequirement(Op))
+        return true;
+  return false;
+}
+
+inline bool isLowRawAnalysisOperation(const LowOp &Op) {
+  return isLowRawEnvironmentRequirement(Op) || isLowRawReturningCall(Op);
+}
+
+inline bool hasLowRawAnalysisOperation(const LowFunc &Function) {
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (isLowRawAnalysisOperation(Op))
         return true;
   return false;
 }

@@ -6,6 +6,7 @@
 /// \file x64 raw environment policy.
 
 #include "../../core/RecoveryDigest.h"
+#include "X64CallContinuation.h"
 #include "X64Recovery.h"
 
 #include <algorithm>
@@ -52,6 +53,12 @@ std::string optionsDigest(const SpecializationOptions &O) {
     H.number(E.Version);
     H.number(E.Address);
     H.number(static_cast<unsigned>(E.Kind));
+  }
+  if (!O.X64ReturningCalls.empty()) {
+    H.text("x64-conditional-returning-calls-v1");
+    H.number(O.X64ReturningCalls.size());
+    for (const auto &C : O.X64ReturningCalls)
+      x64::appendReturningCallDeclaration(H, C);
   }
   H.number(O.X64TerminalImports.size());
   for (const auto &B : O.X64TerminalImports) {
@@ -118,6 +125,40 @@ public:
   }
 };
 
+class X64ReturningCallLookup final : public RecoveryReturningCallLookup {
+  std::vector<SpecializationX64ReturningCall> Declarations;
+
+public:
+  explicit X64ReturningCallLookup(
+      std::vector<SpecializationX64ReturningCall> Entries)
+      : Declarations(std::move(Entries)) {
+    std::sort(
+        Declarations.begin(), Declarations.end(),
+        [](const auto &A, const auto &B) { return A.Address < B.Address; });
+  }
+  bool lookup(va_t Address, uint64_t &Work,
+              std::optional<SpecializationReturningCall> &Call) const override {
+    Call.reset();
+    if (Declarations.empty())
+      return true;
+    const uint64_t Cost = std::bit_width(Declarations.size()) + 1;
+    if (Cost > Work)
+      return false;
+    Work -= Cost;
+    const auto At = std::lower_bound(
+        Declarations.begin(), Declarations.end(), Address,
+        [](const auto &D, va_t Value) { return D.Address < Value; });
+    if (At != Declarations.end() && At->Address == Address) {
+      if (At->PreservedFrameRanges.size() > Work)
+        return false;
+      Work -= At->PreservedFrameRanges.size();
+      Call.emplace();
+      Call->Declaration = *At;
+    }
+    return true;
+  }
+};
+
 class X64RecoveryArchitecture final : public RecoveryArchitecture {
 public:
   llvm::Expected<RawEnvironmentPreparation>
@@ -136,6 +177,37 @@ public:
                                      "machine-exit index budget exhausted");
     Work -= Count * Comparisons;
     return std::make_unique<X64MachineExitLookup>(Options.X64MachineExits);
+  }
+  llvm::Expected<std::unique_ptr<RecoveryReturningCallLookup>>
+  prepareReturningCallLookup(const SpecializationOptions &Options,
+                             uint64_t &Work) const override {
+    const uint64_t Count = Options.X64ReturningCalls.size();
+    const uint64_t Comparisons = 2 * std::bit_width(Count) + 2;
+    if (Count > Work / Comparisons)
+      return llvm::createStringError(std::errc::value_too_large,
+                                     "returning-call index budget exhausted");
+    Work -= Count * Comparisons;
+    for (const auto &Call : Options.X64ReturningCalls) {
+      if (Call.PreservedFrameRanges.size() > Work)
+        return llvm::createStringError(
+            std::errc::value_too_large,
+            "returning-call frame-range index budget exhausted");
+      Work -= Call.PreservedFrameRanges.size();
+    }
+    return std::make_unique<X64ReturningCallLookup>(Options.X64ReturningCalls);
+  }
+  RecoveryCallTransition returningCallTransition(
+      const SpecializationReturningCall &Call) const override {
+    return x64::returningCallTransition(Call.Declaration);
+  }
+  std::string
+  returningCallDigest(const SpecializationReturningCall &Call) const override {
+    return x64::returningCallDigest(Call);
+  }
+  llvm::Error
+  validateReturningCalls(const SpecializationResult &R,
+                         const SpecializationOptions &O) const override {
+    return x64::validateReturningCalls(R, O);
   }
   std::string
   rawOptionsDigest(const SpecializationOptions &Options) const override {
@@ -160,6 +232,14 @@ public:
                    E.Address - R.Address < R.Bytes.size();
           }))
         return invalid("machine exit is outside the declared code domain");
+    for (const auto &C : D.Declaration.X64ReturningCalls)
+      if (!(C.Address >= D.PrimaryImageBegin &&
+            C.Address < D.PrimaryImageEnd) &&
+          !llvm::any_of(D.Declaration.X64CodeRegions, [&](const auto &R) {
+            return C.Address >= R.Address &&
+                   C.Address - R.Address < R.Bytes.size();
+          }))
+        return invalid("returning call is outside the declared code domain");
     return llvm::Error::success();
   }
   llvm::Error reserveExternalExitValidation(
@@ -206,6 +286,34 @@ public:
                      !Budget.bytes(Import->Binding.Symbol.size()) ||
                      !Budget.bytes(Import->FixedImageDigest.size())))
         return RecoveryValidationBudget::exhausted();
+    // Empty declarations/receipts retain previous validation costs. Raw event
+    // discovery is covered by the already charged graph walk regardless.
+    if (!Expected.X64ReturningCalls.empty() || !R.ReturningCalls.empty()) {
+      const uint64_t Calls = R.ReturningCalls.size();
+      if (!IndexWork(R.Origins.size()) || !IndexWork(Calls))
+        return RecoveryValidationBudget::exhausted();
+      const uint64_t Lookups =
+          2 * OriginLookups + Expected.X64ReturningCalls.size();
+      if (Calls > Budget.Records / Lookups ||
+          !Budget.records(Calls * Lookups, 32))
+        return RecoveryValidationBudget::exhausted();
+      uint64_t FrameRanges = 0;
+      for (const auto &Declaration : Expected.X64ReturningCalls) {
+        if (Declaration.PreservedFrameRanges.size() >
+            Budget.Records - FrameRanges)
+          return RecoveryValidationBudget::exhausted();
+        FrameRanges += Declaration.PreservedFrameRanges.size();
+      }
+      if (Calls && FrameRanges > Budget.Records / Calls)
+        return RecoveryValidationBudget::exhausted();
+      if (!Budget.records(Calls * FrameRanges, 32))
+        return RecoveryValidationBudget::exhausted();
+      const uint64_t CallLookups = std::bit_width(Calls) + 1;
+      for (const auto &B : R.Residual.Blocks)
+        if (B.InstructionBoundaries.size() > Budget.Records / CallLookups ||
+            !Budget.records(B.InstructionBoundaries.size() * CallLookups, 8))
+          return RecoveryValidationBudget::exhausted();
+    }
     return llvm::Error::success();
   }
   std::string

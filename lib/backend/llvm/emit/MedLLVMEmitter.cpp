@@ -971,7 +971,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
           Func.Name);
     for (const auto &Block : Func.Blocks)
       for (const auto &Op : Block.Ops) {
-        if (isMedRawEnvironmentRequirement(Op) || isMedArchitecturalValue(Op))
+        if (isMedRawAnalysisOperation(Op) || isMedArchitecturalValue(Op))
           llvm::report_fatal_error(
               "raw environment requirement has no LLVM runtime contract");
         if (Op.Opcode == NdOp::INTRINSIC && !Op.Inputs.empty() &&

@@ -24,6 +24,108 @@ SpecializationOptions entryObjectOptions() {
   return O;
 }
 
+TEST_F(PEFixedImageTest, EntryLoadedObjectBindsAChangingMemoryPointer) {
+  // The jump forces a fresh symbolic node before the declared field load.
+  // jmp next; mov rax,[0x51000028]; mov [rax+0x68],rdx; ret
+  const std::vector<uint8_t> Code = {0xeb, 0,    0x48, 0xa1, 0x28, 0,
+                                     0,    0x51, 0,    0,    0,    0,
+                                     0x48, 0x89, 0x50, 0x68, 0xc3};
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = entryObjectOptions();
+  O.EntryFrameExcludedObjects.clear();
+  O.EntryFrameBounds->ExcludedAddressRanges = {{0x51000000, 0x51000100}};
+  O.EntryFrameLoadedObjects = {{0x51000028, 0, 0x80}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_TRUE(R.RawEnvironment);
+  for (uint64_t Object : {UINT64_C(0x9000), UINT64_C(0xffff900000001000)}) {
+    auto Actual = machineExitState(0x8000);
+    Actual.memory(0x51000028, Object, 8);
+    auto Expected = Actual;
+    const auto Value = Actual.read(NdVar::reg(x86reg::RDX, 8));
+    Expected.memory(Object + 0x68, Value, 8);
+    Expected.write(NdVar::reg(x86reg::RAX, 8), Object);
+    ASSERT_TRUE(Actual.run(R, O)) << Actual.Diagnostic;
+    std::erase_if(Actual.Registers, [](const auto &V) {
+      return V.first.first == VnodeSpace::TEMP;
+    });
+    EXPECT_EQ(Actual.Registers, Expected.Registers);
+    EXPECT_EQ(Actual.Memory, Expected.Memory);
+  }
+  auto Missing = O;
+  Missing.EntryFrameLoadedObjects.clear();
+  const auto Refused =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, Missing);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
+  for (unsigned Case = 0; Case < 5; ++Case) {
+    auto Invalid = O;
+    switch (Case) {
+    case 0:
+      Invalid.EntryFrameLoadedObjects[0].PointerAddress = UINT64_MAX - 3;
+      break;
+    case 1:
+      Invalid.EntryFrameLoadedObjects[0].End = 0;
+      break;
+    case 2:
+      Invalid.EntryFrameBounds->ExcludedAddressRanges.clear();
+      break;
+    case 3:
+      Invalid.EntryFrameLoadedObjects.push_back({0x5100002c, 0, 0x80});
+      break;
+    case 4:
+      Invalid.EntryFrameBounds.reset();
+      break;
+    }
+    const auto Bad =
+        specializeBinaryInterpreter(*Loaded, Base + 0x1000, Invalid);
+    EXPECT_FALSE(Bad.complete()) << Case;
+    EXPECT_TRUE(Bad.Residual.Blocks.empty()) << Case;
+  }
+}
+
+TEST_F(PEFixedImageTest, EntryLoadedObjectSurvivesAConditionalCall) {
+  // mov rax,[0x51000028]; mov rsi,rax; call rcx; jmp next;
+  // mov [rsi+0x68],rdx; ret
+  const std::vector<uint8_t> Code = {
+      0x48, 0xa1, 0x28, 0,    0,    0x51, 0,    0,    0,    0,    0x48,
+      0x89, 0xc6, 0xff, 0xd1, 0xeb, 0,    0x48, 0x89, 0x56, 0x68, 0xc3};
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x100d, Base + 0x1015);
+  O.EntryFrameBounds->ExcludedAddressRanges = {{0x51000000, 0x51000100}};
+  O.EntryFrameLoadedObjects = {{0x51000028, 0, 0x80}};
+  O.ProveStoreFrameSeparation = true;
+  O.MaxChainedTransfers = 0;
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  auto Missing = O;
+  Missing.EntryFrameLoadedObjects.clear();
+  const auto Refused =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, Missing);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
+}
+
+TEST_F(PEFixedImageTest, EntryLoadedObjectForgetsOverwrittenPointerField) {
+  // mov [0x51000028],rdx; jmp next; mov rax,[0x51000028];
+  // mov [rax+0x68],rdx; ret
+  const std::vector<uint8_t> Code = {
+      0x48, 0x89, 0x14, 0x25, 0x28, 0, 0, 0x51, 0xeb, 0,    0x48, 0xa1, 0x28,
+      0,    0,    0x51, 0,    0,    0, 0, 0x48, 0x89, 0x50, 0x68, 0xc3};
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = entryObjectOptions();
+  O.EntryFrameExcludedObjects.clear();
+  O.EntryFrameBounds->ExcludedAddressRanges = {{0x51000000, 0x51000100}};
+  O.EntryFrameLoadedObjects = {{0x51000028, 0, 0x80}};
+  const auto Refused = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
+}
+
 std::vector<uint8_t> entryObjectCode() {
   return {0x48, 0x89, 0x64, 0x24, 0xf0, // mov [rsp-16],rsp
           0x48, 0x89, 0x4c, 0x24, 0xe8, // mov [rsp-24],rcx
