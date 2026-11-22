@@ -484,8 +484,11 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
                       : Function == 42                   ? NdOp::INT_SLESS
                                                          : NdOp::INT_LESS;
       const bool Compare = Function == 42 || Function == 43;
-      NdVar Result = S.binary(Op, S.read(RS, Bytes), S.read(RT, Bytes),
-                              Compare ? 1 : Bytes);
+      // On MIPS64 a word read emits a truncation. Keep those operations in
+      // source operand order on hosts with different argument evaluation order.
+      const NdVar Left = S.read(RS, Bytes);
+      const NdVar Right = S.read(RT, Bytes);
+      NdVar Result = S.binary(Op, Left, Right, Compare ? 1 : Bytes);
       if (Function == 39) {
         NdVar Inverted = S.makeTemp(Bytes);
         S.emit(NdOp::INT_NOT, Inverted, {Result});

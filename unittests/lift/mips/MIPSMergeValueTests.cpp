@@ -199,6 +199,67 @@ TEST_P(MIPSMergeValues, ScheduledArgumentArithmeticPreservesThePair) {
   }
 }
 
+TEST_P(MIPSMergeValues, InterleavedPairsFollowEachPartialValue) {
+  for (unsigned Bytes : {4u, 8u}) {
+    if (Bytes == 8 && !isMIPS64(GetParam()))
+      continue;
+    for (bool ObserveOuter : {false, true}) {
+      Pair P(GetParam(), Bytes, false);
+      auto &Low = P.Physical.Blocks.front();
+      auto &Ops = P.Function.Blocks.front().Ops;
+      const auto Core = Low.Ops;
+      const auto Original = Ops;
+      Low.Ops.clear();
+      Low.InstructionBoundaries.clear();
+      Ops.clear();
+      // The outer pair surrounds both members of the inner pair. Both base
+      // offsets and both old destinations coexist until their own second load.
+      const unsigned Words[] = {0, 1, 1, 0};
+      for (unsigned I = 0; I != 4; ++I) {
+        const unsigned Word = Words[I];
+        const unsigned Half = I >= 2;
+        const auto PC = 0x1000u + 4 * I;
+        MedOp Address = Original[Half * 2];
+        Address.Output = variable(20 + I, P.Width, GetParam());
+        Address.Inputs[1].ConstVal += Word * Bytes;
+        Ops.push_back(Address);
+        MedOp Load = Original[Half * 2 + 1];
+        Load.Addr = PC;
+        Load.OriginSeq = 10 + I;
+        Load.Output = variable(30 + I, Bytes, GetParam());
+        Load.Inputs[1] = Address.Output;
+        Load.Inputs[2] =
+            Half ? Ops[2 * Word + 1].Output
+                 : variable(11 + Word, Bytes, GetParam(), MedVar::Reg);
+        Ops.push_back(Load);
+        LowOp Physical = Core[Half];
+        Physical.Addr = PC;
+        Physical.Seq = Load.OriginSeq;
+        Physical.Output = NdVar::tmp(30 + I, Bytes);
+        Physical.Inputs[2] = NdVar::reg(16 + Word * 8, Bytes);
+        Low.Ops.push_back(Physical);
+        auto &Boundary = Low.InstructionBoundaries.emplace_back();
+        Boundary.Address = PC;
+        Boundary.FirstOp = I;
+        Boundary.OpCount = 1;
+        Boundary.Size = 4;
+      }
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.addInput(Ops[7].Output);
+      Return.addInput(Ops[5].Output);
+      if (ObserveOuter)
+        Return.addInput(Ops[1].Output);
+      Ops.push_back(Return);
+      EXPECT_EQ(P.run(), ObserveOuter ? 1u : 2u);
+      EXPECT_EQ(Ops[1].Inputs[2].isConst(), !ObserveOuter);
+      EXPECT_TRUE(Ops[3].Inputs[2].isConst());
+      EXPECT_EQ(Ops[5].Inputs[2], Ops[3].Output);
+      EXPECT_EQ(Ops[7].Inputs[2], Ops[1].Output);
+    }
+  }
+}
+
 TEST_P(MIPSMergeValues, MIPS16PairsRequireFourBytePhysicalInstructions) {
   for (bool Reverse : {false, true}) {
     Pair P(GetParam(), 4, Reverse);

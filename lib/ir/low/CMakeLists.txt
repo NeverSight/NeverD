@@ -184,6 +184,7 @@ add_neverd_component_library(NeverDIRLow
   NdOpEmulatorExec.cpp
   NdOpEmulatorValues.cpp
   MIPS/MIPSHistoricalCP0.cpp
+  MIPS/MIPSHistoricalTLB.cpp
   MIPS/NdOpEmulatorMIPS.cpp
   MIPS/MIPS16EntryTransport.cpp
   MIPS/MIPS16IndirectCallTransport.cpp

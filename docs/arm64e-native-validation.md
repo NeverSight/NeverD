@@ -3032,3 +3032,50 @@ Both runners reported Apple M1 (Virtual) and lacked native x1 qualification.
 [Source LLVM run](https://github.com/gmh5225/test_mac_intel/actions/runs/44917069820).
 [Frozen r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44921174291).
 [Input hashes and native results](evidence/arm64e-unmarked-address-tails-2026-11-21.json).
+
+### Indexed DWARF at the end of an arm64e image
+
+Apple Clang 17's linker emitted a compact-unwind sentinel at the start of
+the final indexed function in the archived signed PIE. The index names FDE
+`0x14`, which covers `0x10000037c` through the exclusive end
+`0x10000039c`. On two Darwin runners, the system unwinder also recovered
+the caller through a live signed callback with this linker layout. It
+reported the same 24-byte callback interval for the original dylib and a
+control carrying the explicit end.
+[System unwind control](https://github.com/gmh5225/test_mac_intel/actions/runs/44924024676).
+
+The image reader uses the indexed FDE's initial location, section offset
+and complete range to recover that endpoint. The range must fit a single
+file-backed instruction section. A competing frame or an intervening
+function start prevents recovery. The publisher writes the proven end to
+its private candidate and validates the complete compact table. It reserves
+unwind storage and load-command space together so a zero-base layout retry
+starts from the original image.
+
+A saved link-register slot in an indexed leaf or register-call frame keeps
+the physical frame even when the arithmetic alone could fit in a frameless
+function. Register calls retain their original authentication instruction
+and fall through to the original restore. A Darwin callback walked through this frame, then threw a
+C++ exception on a separate invocation. The caller observed one destructor
+per invocation across three successive publications at each optimization
+level.
+[Signed callback and exception execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44926088390).
+
+The Release CLI published eight Apple-linked inputs at O0 and O2 through
+three generations, producing 48 images. Strict code signature, dyld and
+DWARF range checks passed for every image. The linker on the macOS 26
+runner placed the sentinel at the final function's start. The Xcode 27
+input contained a separate lookup byte after the end of its text section.
+Twelve cases with contradictory frame metadata were rejected. Each kept
+its original input hash and left the output path absent.
+[Linker inputs](https://github.com/gmh5225/test_mac_intel/actions/runs/44927794140) · [Publication hashes and range checks](evidence/arm64e-terminal-dwarf-2026-11-22.json).
+
+Each Darwin runner executed the 56 original and published program cases.
+Each passed all 275 source-fork tests. Frozen r6 passed 265 on each runner,
+reproduced the six recorded signed-CFI failures and skipped four compact
+PAuth_LR emitter tests. Both new signed-frame tests passed with each toolchain.
+[Release execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44927498865) · [Source-fork suite](https://github.com/gmh5225/test_mac_intel/actions/runs/44929436839) · [Frozen r6 suite](https://github.com/gmh5225/test_mac_intel/actions/runs/44929546376).
+
+After integration with dev at `3ed69e2048a8`, the Release CLI reproduced
+all 48 output hashes. The integrated test binary passed all 275 cases on each
+Darwin runner. [Integrated source-fork run](https://github.com/gmh5225/test_mac_intel/actions/runs/44932537141).

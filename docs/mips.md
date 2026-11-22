@@ -12,6 +12,16 @@ slice, with version-specific instruction checks described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
+DWARF 2/3 bit-field layouts use the target byte order when converting offsets
+within a storage unit. A struct inside a union keeps its member declaration
+order in both MIPS byte orders, including fields that span bytes.
+Legacy packed bit-fields may cross that unit. For example, a
+12-bit field following 27 bits starts at bit 27 in both byte orders, even when
+the little-endian debug entry encodes a high-bit offset of −7.
+For unlinked n32 ELF objects, the LLVM source build reads debug string offsets
+from explicit relocation addends. The r7 prebuilt package can read these types
+after linking the object with the target linker.
+
 ## Implementation boundaries
 
 - ELF identification and loading share class, ISA, ABI and encoding checks.
@@ -67,11 +77,18 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   arguments that reach the same call still need their own non-frame evidence.
   Loop backedges carry equality only when it holds on entry and after every
   iteration. Repeated executions of one call can return different words.
-  An aligned doubleword spill and reload can carry the same value through
-  the allocated frame. A partial or possibly aliasing write breaks that
-  identity. After a narrow write to an initialized spill, a new full-width
-  comparison can qualify the changed word. Before a call with unknown stack
-  argument extent, each live opaque spill must be checked or fully overwritten.
+  Aligned doubleword copies through several allocated stack slots keep the
+  sampled value. On both byte orders, two 32-bit stores can reconstruct a
+  doubleword in memory. Two word loads can reconstruct it in a GPR when each
+  half occupies its original bit positions. A signed high word is usable
+  after shifting it left by 32. A signed low word must first have its upper
+  bits cleared. A guard can precede or follow this reconstruction.
+  Swapped, duplicated or mixed halves cannot establish equality with the
+  original result. A fresh full-width guard can qualify the actual assembled
+  value, including one changed by a narrow write. A store through an
+  unresolved frame alias invalidates the sampled identities in memory.
+  Before an open call, every exposed stack cell containing opaque bits must
+  itself be checked or have those bits overwritten. This includes fragments kept in separate cells.
   The call invalidates those slot identities. An earlier sample in a preserved
   register can be checked again. A call with a known argument extent can
   preserve a spill outside its outgoing area when the frame stays private.
@@ -168,8 +185,8 @@ Narrow reads can still consume a defined low word. This does not select a CPU's
 implementation-dependent behavior or give uninitialized registers a zero value.
 
 Before inferring parameters, source recovery checks merge-load pairs in a
-single block. Register arithmetic that constructs other call arguments may
-appear between the loads. The instructions must be complementary at the addresses
+single block. Register arithmetic and other merge loads may appear between
+the two reads. Each partial value must reach its own complementary load at the addresses
 required by the target byte order. Both reads retain their fault order, and
 the second consumes the first result. The first load can discard its incoming
 register bits only when every use of its result proves those bits unobservable.
@@ -1547,8 +1564,34 @@ code 13 and the appropriate EPC and BD before the instruction retires. A
 false predicate completes normally. A disabled coprocessor
 sets the CE field. Interrupts sample the observed IP and IM bits at issue
 after the corresponding write hazard. The platform can update its six
-hardware interrupt lines between physical instructions. Reset, TLB state
-and board-specific Status fields require additional platform evidence. The CW4011 conventions follow the
+hardware interrupt lines between physical instructions. A recorded issue PC can
+bind that sample to an instruction or an executed delay slot. A failed issue
+preserves the sample for retry.
+
+A cold-reset snapshot for R30xx or R4000 supplies the unspecified register
+values. The first physical instruction must come from the uncached boot ROM
+at physical address `0x1fc00000`. A bound MMU snapshot checks guest
+instruction fetches against physical bytes. Aligned and byte scalar integer
+transfers translate through a complete 64-entry R3000A or 48-entry R4000
+table. R4000 compatibility translations support even and odd pages, global
+pairs and variable page sizes. Misses, invalid entries, and writes to clean
+pages update the fault state before retirement. Optional Context and XContext
+samples preserve the board's page-table base. Extended R4000 address regions,
+TLB management instructions, reverse-endian user data, cache-isolation data
+accesses and CW4011 MMU
+behavior need additional processor-specific evidence.
+
+The hardware regressions compare a little-endian DECstation 5000/133 load
+with its console instruction, EPC, fault address and exception fields. The SGI
+IP12 and IP20 PROM reports identify the vector and access direction. Their
+tests use representative load/store instructions and constructed TLB contents.
+These captures do not time reset release, a TLB write, or the external IRQ
+edge against the instruction clock.
+[DECstation R3000A console](https://mail-index.netbsd.org/port-pmax/2011/04/21/msg000100.html),
+[SGI IP12 console](https://mail-index.netbsd.org/port-sgimips/2018/08/26/msg000766.html),
+[SGI IP20 R4000 console](https://mail-index.netbsd.org/netbsd-bugs/2018/08/13/msg058468.html).
+
+The CW4011 integration is described in the
 [LSI L64364 ATMizer II manual, chapter 4](https://www.ic72.com/pdf_file/l/123798.pdf).
 
 The timing rules are based on the
@@ -1737,7 +1780,9 @@ Natural C record transport for o32, n32 and n64 is classified in
 `neverd/ir/MIPS/SourceRecordABI.h`. Each piece records its offset in the object,
 its register or stack slot, and its position in the carrier. On o32 every
 record result uses caller-provided storage and the callee returns its address
-in v0. Large n32/n64 results use caller-provided storage and leave v0
+in v0. The private machine body captures v0 at the return, including when a
+callee saves the address before a loop and writes its last byte in the return
+delay slot. Large n32/n64 results use caller-provided storage and leave v0
 unspecified. A typed call passes the original result address as LLVM `sret`.
 The saved-link check accounts for every byte that the result writes into a
 private frame, including the last byte of a short final word. An o32 double or long long
@@ -1756,12 +1801,20 @@ a typed entry around a recovered body
 when the machine inputs match the declared layout. The return can occupy
 one register, a pair of GPRs or FPRs, or the caller's storage. A short final
 word uses only the object's remaining bytes, including on big-endian targets.
+When the body takes the address of a stack-passed record, the stack slots
+that hold that object share one backing store. A byte loop can update its
+partial final word before a later load, including in a hidden-result callee.
 Direct calls and explicitly typed indirect calls retain the register bank and
 byte offset of each independently placed field. A result written in the
 return delay slot is captured before SSA loses its physical register name. Reconstructing a source type requires an
 explicit local declaration or matching debug information and a complete
 by-value field layout. Unions and incomplete field graphs retain their display
 types.
+
+When HighC reconstructs a record from individual arguments or result words,
+it initializes nested structures and arrays in the enclosing member's type.
+Field reads through a declared record retain its member names through nested
+anonymous structures and array elements.
 
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
@@ -1788,6 +1841,8 @@ that byte's previous value. A merge store to an output pointer requires
 evidence that the stored bytes cannot expose the private frame.
 For record callers that copy an argument into a private stack buffer in a
 counted loop, the proof follows the loop's actual byte addresses and bound.
+When a declared callee writes its result into a known private stack buffer,
+the analysis checks the exact result bytes before tracing other frame uses.
 A call with an unknown frame effect, an uninitialized private byte or an
 overlapping write to the saved link prevents this reconstruction.
 The shared call-stack proof computes that intersection using complete outgoing
@@ -1797,7 +1852,9 @@ Byte provenance ignores unread upper FPR bytes; stack arguments require their
 own reaching-store proof. A validated alignment guard preserves computed stack
 addresses and reaching stores; malformed guards and opaque effects invalidate
 that evidence. This also qualifies the aligned pre-R6 floating stores used for
-outgoing overflow and variadic arguments.
+outgoing overflow and variadic arguments. A validated MIPS64 word check in
+the caller preserves bytes already stored for a typed indirect call on the
+execution path that reaches it.
 In n32, an eight-byte saved link can survive a declared call beside a four-byte
 pointer spill, including word-sized or doubleword-sized stack adjustments.
 Unknown call-stack state and writes overlapping that link slot still fail
@@ -1841,6 +1898,11 @@ Capstone's retained but unpopulated operand allocation. MIPS lifting uses the
 physical bytes, so discovery does not need to enable operand detail merely to
 avoid a stale operand count. Repeated SDK requests and poisoned detail counts
 exercise this boundary separately from instruction semantics.
+
+Single-instruction MIPS decoding uses the static Capstone entry for classic and
+compressed profiles. The streaming iterator supplies the operand and text
+reference. Historical admission, Release 6 forbidden followers and NeverD ASE
+adapters still run at their profile boundaries.
 
 The baseline for decoder measurements is
 bcef8d07e1, with matched Release compiler and dependency inputs except for

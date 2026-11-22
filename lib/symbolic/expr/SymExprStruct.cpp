@@ -100,10 +100,10 @@ std::optional<detail::WordWindow> projectShiftedPrefix(const SymContext &Ctx,
   const uint64_t End = At + Size;
   if (End > Width)
     return std::nullopt;
-  const auto Words = llvm::APInt::getNumWords(End);
   constexpr auto InspectionWork = ::neverd::limits::symbolic::
       kSymExprStructSymContextConstantWindowRemaining;
-  if (Ctx.numOperands(Join) > InspectionWork / (1 + Words))
+  unsigned Remaining = InspectionWork;
+  if (Ctx.numOperands(Join) > Remaining)
     return std::nullopt;
   SymRef Right;
   for (SymRef Term : Ctx.operands(Join)) {
@@ -116,9 +116,15 @@ std::optional<detail::WordWindow> projectShiftedPrefix(const SymContext &Ctx,
     }
     if (Op == SymOp::And || Op == SymOp::Mul)
       Term = Ctx.operand(Term, 0);
-    if (!Ctx.isConst(Term) ||
-        llvm::APInt::tcLSB(Ctx.constWords(Term).data(), Words) < End)
+    // A sum may carry from below the window. A multiplier's zero
+    // bits only bound the product up to its first set bit, even for OR/XOR.
+    const unsigned Begin =
+        Ctx.op(Join) == SymOp::Add || Op == SymOp::Mul ? 0 : At;
+    const unsigned Work = 2 + (End - 1) / 64 - Begin / 64;
+    if (!Ctx.isConst(Term) || Work > Remaining ||
+        !detail::zeroBitWindow(Ctx.constWords(Term), Begin, End))
       return std::nullopt;
+    Remaining -= Work;
   }
   if (!Right)
     return std::nullopt;

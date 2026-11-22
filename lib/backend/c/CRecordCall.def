@@ -38,7 +38,7 @@ NEVERD_C_RECORD_TEXT(kInvalidSourceRecordField,
 NEVERD_C_RECORD_TEXT(kSourceRecordStore,
                      "((void)(*({0} *)(uintptr_t)({1}) = ({2})))")
 NEVERD_C_RECORD_TEXT(kSourceArrayField, "({0})[{1}]")
-NEVERD_C_RECORD_TEXT(kSourceArrayInitializerOpen, "{")
+NEVERD_C_RECORD_TEXT(kSourceAggregateInitializerOpen, "{")
 NEVERD_C_RECORD_TEXT(kSourceVectorRecordCode, "v{0}")
 NEVERD_C_RECORD_TEXT(kSourceArrayRecordCode, "a{0}_{1}_e")
 

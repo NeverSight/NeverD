@@ -20,6 +20,23 @@
 
 namespace neverd::mips {
 
+struct IntegerMemoryAccess {
+  uint8_t Bytes;
+  bool Store, Signed, Wide;
+};
+
+constexpr std::optional<IntegerMemoryAccess>
+integerMemoryAccess(unsigned Major) {
+  switch (Major) {
+#define NEVERD_MIPS_INTEGER_MEMORY(Op, Bytes, Store, Signed, Wide)             \
+  case Op:                                                                     \
+    return IntegerMemoryAccess{Bytes, Store, Signed, Wide};
+#include "neverd/ir/intrinsics/MIPS/MIPSIntegerMemory.def"
+  default:
+    return std::nullopt;
+  }
+}
+
 #define NEVERD_MIPS_SCALAR_TEXT(Name, Text) inline constexpr char Name[] = Text;
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
 
@@ -351,7 +368,9 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
         Id == Intrinsic::MIPSHistoricalTrap)
       return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1;
     if (Id == Intrinsic::MIPSHistoricalAddressCheck)
-      return S.Inputs == 2 && !S.OutputBytes &&
+      return S.Inputs == 2 &&
+             (!S.OutputBytes ||
+              (S.OutputWritable && S.OutputBytes == S.FirstBytes)) &&
              (S.FirstBytes == 4 || S.FirstBytes == 8) &&
              (S.Target == Arch::Unknown ||
               S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));

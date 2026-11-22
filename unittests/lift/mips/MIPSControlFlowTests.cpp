@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -524,6 +525,117 @@ TEST(MIPSRecordSourceEntry, MergeLoadsPreservePrivateLinkForExternalData) {
                      LowToMedConversionError);
       else
         EXPECT_NO_THROW(Convert.convert(build(Image), A, BinaryFormat::ELF));
+    }
+  }
+}
+
+TEST(MIPSRecordSourceEntry, StackResultTracksARecordCopiedInAndOutOfTheFrame) {
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    SourceFunctionTypeHint Sig;
+    Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Sig.ReturnType = Record;
+    auto Wide = NdType::makeInt(8, false);
+    Sig.Parameters.assign(7, {"word", Wide});
+    Sig.Parameters.push_back({"bytes", Record});
+    Sig.Parameters.push_back({"tail", Wide});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+    const std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Sig}};
+    for (uint32_t LinkOffset : {140u, 112u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << LinkOffset);
+      // GCC places the input copy at sp+116 and the hidden result at sp+96.
+      // Both counted loops use the branch delay slot to store their byte.
+      std::vector<uint32_t> Words{0x27bdff70,
+                                  0x27a80074,
+                                  0x27a90085,
+                                  0xafb00088,
+                                  0xafbf0000 | LinkOffset,
+                                  0x00a08025,
+                                  0x908a0000,
+                                  0x25080001,
+                                  0x24840001,
+                                  0x1509fffc,
+                                  0xa10affff,
+                                  0x24060002,
+                                  0x24070003};
+      for (uint32_t I = 16; I < 64; I += 4)
+        Words.push_back(0xafa00000 | I); // Subsequent scalar argument halves.
+      for (uint32_t I = 0; I < 16; I += 4) {
+        Words.push_back(0x8faa0074 + I);
+        Words.push_back(0xafaa0040 + I);
+      }
+      Words.insert(Words.end(),
+                   {0x93aa0084, 0xa3aa0050, 0xafa00058, 0xafa0005c, 0x0c000800,
+                    0x27a40060, // jal callee; addiu a0,sp,96
+                    0x27a80060, 0x27a90071, 0x02002825, 0x910a0000, 0x25080001,
+                    0x24a50001, 0x1509fffc, 0xa0aaffff, 0x8fbf0000 | LinkOffset,
+                    0x8fb00088, 0x03e00008, 0x27bd0090});
+      auto Image = image(Words, A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = MIPSABI::O32;
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      Convert.setSourceCalleeTypeHints(&Targets);
+      const auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      if (LinkOffset == 112)
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+      else
+        EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+    }
+  }
+}
+
+TEST(MIPSRecordSourceEntry,
+     WordGuardPreservesOutgoingStackBytesAtIndirectCall) {
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    SourceCallTypeHint Hint;
+    Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Hint.Signature.ReturnType = Record;
+    Hint.Signature.Parameters.assign(7, {"word", NdType::makeInt(8, false)});
+    Hint.Signature.Parameters.push_back({"bytes", Record});
+    ASSERT_TRUE(
+        mips::assignRecordSourceABI(Hint.Signature, A, BinaryFormat::ELF));
+    for (bool WholeWord : {false, true}) {
+      // After the two outgoing stores GCC uses word ADDIU to select the
+      // result buffer. The JALR delay slot writes only the record's final byte.
+      auto Image =
+          image({0x67bdffc0, WholeWord ? 0xffa00000u : 0xa3a00000u, 0xffa00008,
+                 0x27a40020, 0x0180f809, 0xa3a00010, 0x03e00008, 0x67bd0040},
+                A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
+      auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      std::optional<SourceCallOccurrenceKey> Site;
+      LowOp *Check = nullptr;
+      for (auto &Block : Low.Blocks)
+        for (auto &Op : Block.Ops) {
+          if (Op.Opcode == NdOp::INDIR_CALL)
+            Site = sourceCallOccurrenceKey(Op);
+          if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 2 &&
+              Op.Inputs[0].isConst() &&
+              Op.Inputs[0].Offset == uint64_t(Intrinsic::MIPSRequireWord))
+            Check = &Op;
+        }
+      ASSERT_TRUE(Site);
+      ASSERT_NE(Check, nullptr);
+      std::string Error;
+      EXPECT_EQ(sourceCallStackArgumentsDefined(Low, Hint, *Site, A, 0, Error),
+                WholeWord)
+          << Error;
+      Check->Inputs[1].Size = 4;
+      EXPECT_FALSE(
+          sourceCallStackArgumentsDefined(Low, Hint, *Site, A, 0, Error));
     }
   }
 }
@@ -1203,6 +1315,118 @@ TEST(MIPSReturnTargets, GuardedReloadUsesTheCompleteLiveSpillOnEveryIteration) {
                             Error.what());
       }
     }
+}
+
+TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
+  const auto Memory = [](unsigned Opcode, unsigned Reg, unsigned Offset) {
+    return (Opcode << 26) | (29u << 21) | (Reg << 16) | Offset;
+  };
+  const auto Move = [](unsigned Dst, unsigned Src) {
+    return (Src << 21) | (Dst << 11) | 0x25u;
+  };
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const unsigned Low = archLittleEndian(A) ? 24 : 28;
+    const unsigned High = archLittleEndian(A) ? 28 : 24;
+    const auto StoreLow = Memory(43, 2, Low), StoreHigh = Memory(43, 12, High);
+    const auto LoadLow = Memory(39, 13, Low), LoadHigh = Memory(35, 14, High);
+    const auto Full = Memory(63, 2, 24), Reload = Memory(55, 15, 24);
+    const auto Clear = Memory(63, 0, 24), OtherClear = Memory(63, 0, 40);
+    const auto Target = isMIPSN32(A) ? 0x8f390000u : 0xdf390000u;
+    constexpr uint32_t Split = 0x0002603e; // dsrl32 t0,v0,0
+    constexpr uint32_t Shift = 0x000e703c; // dsll32 t2,t2,0
+    constexpr uint32_t Join = 0x01ae7825;  // or t3,t1,t2
+    const auto Check = [&](const char *Name, bool Proven,
+                           llvm::ArrayRef<uint32_t> Before,
+                           unsigned Compared = 15, unsigned Forwarded = 2,
+                           llvm::ArrayRef<uint32_t> After = {}) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << Name);
+      std::vector<uint32_t> Code{0x67bdffc0, 0xffbf0038,  0xffb00000,
+                                 0xffb10008, Move(16, 5), 0x0320f809,
+                                 0};
+      Code.insert(Code.end(), Before.begin(), Before.end());
+      const auto Exit = Code.size();
+      Code.insert(Code.end(),
+                  {0x14000000u | (Compared << 21) | (16u << 16), 0});
+      Code.insert(Code.end(), After.begin(), After.end());
+      Code.insert(Code.end(), {Move(4, Forwarded), 0x3c190002, Target,
+                               0x0320f809, 0x6405000b});
+      Code[Exit] |= Code.size() - Exit - 1;
+      Code.insert(Code.end(),
+                  {0xdfb00000, 0xdfb10008, 0xdfbf0038, 0x03e00008, 0x67bd0040});
+      const auto Lifted = build(image(Code, A));
+      ASSERT_TRUE(Lifted.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      try {
+        Convert.convert(Lifted, A, BinaryFormat::ELF);
+        EXPECT_TRUE(Proven);
+      } catch (const LowToMedConversionError &Error) {
+        EXPECT_FALSE(Proven) << Error.what();
+        EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
+                            Error.what());
+      }
+    };
+    Check("doubleword copied before source clear", true,
+          {Full, Reload, Memory(63, 15, 40), Clear, Memory(55, 15, 40)});
+    Check("word stores then doubleword load", true,
+          {Split, StoreLow, StoreHigh, Reload});
+    Check("doubleword store then word loads", true,
+          {Full, LoadLow, LoadHigh, Shift, Join});
+    Check("disjoint addition", true,
+          {Full, LoadLow, LoadHigh, Shift, 0x01ae782d});
+    Check("disjoint xor", true, {Full, LoadLow, LoadHigh, Shift, 0x01ae7826});
+    Check("carry into sampled high half", false,
+          {Full, LoadLow, LoadHigh, Shift, 0x35ce0001, 0x01ae782d, 0x000f703e,
+           Shift, Join});
+    Check("reassemble after guarding original", true, {Full, LoadHigh}, 2, 15,
+          {LoadLow, Shift, Join, Clear});
+    Check("same half rewritten after sampling", true, {Full, Reload, StoreLow});
+    Check("halves held in separate cells", true,
+          {Split, StoreLow, Memory(43, 12, 40), LoadLow, Memory(35, 14, 40),
+           Shift, Join, Clear, OtherClear});
+    Check("open call can read leftover half", false,
+          {Split, StoreLow, Memory(43, 12, 40), LoadLow, Memory(35, 14, 40),
+           Shift, Join, Clear});
+    Check("numeric write removes the only opaque half", true,
+          {StoreLow, 0x640d0049, Memory(43, 13, Low)}, 2);
+    Check("ordinary byte store after clearing", true,
+          {Full, Clear, Memory(40, 0, Low)}, 2);
+    Check("exchanged halves", false,
+          {Split, Memory(43, 2, High), Memory(43, 12, Low), Reload});
+    Check("duplicated low half", false,
+          {StoreLow, Memory(43, 2, High), Reload});
+    Check("sign extension contaminates high half", false,
+          {Full, Memory(35, 13, Low), LoadHigh, Shift, Join});
+    Check("sign extension after guarding original", false, {Full, LoadHigh}, 2,
+          15, {Memory(35, 13, Low), Shift, Join, Clear});
+    Check("only one predecessor supplies the high half", false,
+          {Split, StoreLow, 0x12000002, 0, StoreHigh, Reload});
+    Check("partial clear of a conditionally stored half", false,
+          {0x12000002, 0, StoreLow, Memory(40, 0, Low)}, 2);
+    Check("complete clear of a conditionally stored half", true,
+          {0x12000002, 0, StoreLow, Memory(43, 0, Low)}, 2);
+    Check("exchanged halves checked and forwarded together", true,
+          {Full, Memory(39, 13, High), Memory(35, 14, Low), Shift, Join, Clear},
+          15, 15);
+    Check("byte changed after sampling", false,
+          {Full, Reload, Memory(40, 0, High)});
+    Check("sample modified before both loads", true,
+          {Full, Memory(40, 0, High), LoadLow, LoadHigh, Shift, Join}, 15, 13,
+          {Memory(55, 13, 24)});
+    // One edge selects a checked result and the other an independent input.
+    // The joined word is safe until a later store changes part of it.
+    Check("joined safe word", true,
+          {0x14500003, 0, 0x10000002, Move(15, 2), Move(15, 16),
+           Memory(63, 15, 24)},
+          2, 15);
+    Check("partial write to joined safe word", false,
+          {0x14500003, 0, 0x10000002, Move(15, 2), Move(15, 16),
+           Memory(63, 15, 24), Memory(40, 0, Low)},
+          2, 15);
+    Check("mixed calls", false,
+          {Move(17, 2), 0x3c190002, Target, 0x0320f809, 0x64040007, 0x0011603e,
+           StoreLow, StoreHigh, Reload});
+  }
 }
 
 TEST(MIPSReturnTargets, ReloadAfterACallRequiresPrivateSpillBytes) {

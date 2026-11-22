@@ -18,9 +18,9 @@ struct LowFunc;
 struct MedFunc;
 
 /// Run after SSA, byte projection and DCE, before ABI inference. A pair may
-/// span straight-line register arithmetic in the same block and mode. A bound
-/// record call observes its explicit operands and live register views. Both
-/// memory operations keep their original access order and fault behavior.
+/// span register arithmetic and other merge loads in the same block and mode. A
+/// bound record call observes its explicit operands and live register views.
+/// Both memory operations keep their original access order and fault behavior.
 /// Returns the number of first-core old-value operands made independent.
 unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
                                           const LowFunc &Physical, Arch Target);

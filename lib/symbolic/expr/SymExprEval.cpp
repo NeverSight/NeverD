@@ -21,6 +21,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cassert>
 #include <cstddef>
@@ -192,17 +193,15 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
       });
 }
 
-// Factors on the same evaluation slot read exactly the same value X. If
-// any three weights multiply to zero in the observed ring, the group is
-// A + B*X + C*X^2 for every X. Only group three or more distinct
-// singleton rows: the two multiplies in Horner evaluation then save work.
-size_t groupQuadraticFactors(llvm::MutableArrayRef<uint32_t> Slots,
-                             llvm::SmallVectorImpl<uint64_t> &Words,
-                             llvm::MutableArrayRef<uint8_t> Uses,
-                             unsigned Bits) {
+// If any four weights on the same evaluation slot multiply to zero modulo
+// 2^Bits, their affine product has degree at most three in that slot. Build
+// the coefficients once and evaluate the original input at every assignment.
+size_t groupAffineFactors(llvm::MutableArrayRef<uint32_t> Slots,
+                          llvm::SmallVectorImpl<uint64_t> &Words,
+                          llvm::MutableArrayRef<uint8_t> Uses, unsigned Bits) {
   const unsigned N = llvm::APInt::getNumWords(Bits);
   const size_t Stride = 1 + 2 * size_t(N);
-  const unsigned MinZeros = llvm::divideCeil(Bits, 3u);
+  const unsigned MinZeros = llvm::divideCeil(Bits, 4u);
   auto Eligible = [&](size_t I) {
     const auto *Row = Words.data() + I * Stride;
     return Row[0] == 1 && llvm::APInt::tcLSB(Row + 1 + N, N) >= MinZeros;
@@ -215,12 +214,12 @@ size_t groupQuadraticFactors(llvm::MutableArrayRef<uint32_t> Slots,
   if (!CanGroup)
     return Slots.size();
 
-  struct Quadratic {
+  struct Polynomial {
     uint32_t Slot;
-    llvm::APInt Constant, Linear, Square;
+    std::array<llvm::APInt, 4> Coefficients;
   };
   llvm::DenseMap<uint32_t, unsigned> Index;
-  llvm::SmallVector<Quadratic, 4> Groups;
+  llvm::SmallVector<Polynomial, 4> Groups;
   size_t Kept = 0;
   for (auto [I, Slot] : llvm::enumerate(Slots.drop_front())) {
     const auto Row = llvm::ArrayRef(Words).slice(I * Stride, Stride);
@@ -235,25 +234,29 @@ size_t groupQuadraticFactors(llvm::MutableArrayRef<uint32_t> Slots,
     llvm::APInt A(Bits, Row.slice(1, N)), B(Bits, Row.take_back(N));
     const auto [It, New] = Index.try_emplace(Slot, Groups.size());
     if (New) {
-      Groups.push_back(
-          {Slot, std::move(A), std::move(B), llvm::APInt(Bits, 0)});
+      Groups.push_back({Slot,
+                        {std::move(A), std::move(B), llvm::APInt(Bits, 0),
+                         llvm::APInt(Bits, 0)}});
     } else {
-      auto &G = Groups[It->second];
-      G.Square = G.Square * A + G.Linear * B;
-      G.Linear = G.Linear * A + G.Constant * B;
-      G.Constant *= A;
+      auto &C = Groups[It->second].Coefficients;
+      for (unsigned K = C.size() - 1; K > 0; --K)
+        C[K] = C[K] * A + C[K - 1] * B;
+      C[0] *= A;
     }
   }
   Words.resize(Kept * Stride);
   for (const auto &G : Groups) {
     Slots[++Kept] = G.Slot;
-    // A zero repeat marks a quadratic row. Ordinary rows retain their
-    // original multiplicity and variable lookups retain their original order.
-    Words.push_back(G.Square.isZero() ? 1 : 0);
-    Words.append(G.Constant.getRawData(), G.Constant.getRawData() + N);
-    Words.append(G.Linear.getRawData(), G.Linear.getRawData() + N);
-    if (!G.Square.isZero())
-      Words.append(G.Square.getRawData(), G.Square.getRawData() + N);
+    auto Coefficients = llvm::ArrayRef(G.Coefficients);
+    while (Coefficients.size() > 2 && Coefficients.back().isZero())
+      Coefficients = Coefficients.drop_back();
+    // Positive counts retain their original multiplicity. A zero count
+    // introduces one polynomial row with an explicit degree.
+    Words.push_back(Coefficients.size() == 2);
+    if (Coefficients.size() > 2)
+      Words.push_back(Coefficients.size() - 1);
+    for (const auto &C : Coefficients)
+      Words.append(C.getRawData(), C.getRawData() + N);
   }
   return Kept + 1;
 }
@@ -331,11 +334,22 @@ size_t prepareAffineFactors(const SymContext &Ctx, SymRef Root,
       }
       break;
     } while (Uses[Slot.find(F.index())->second - 1] == 1);
+    // Shared scalar multiples can hide the power of two that makes the
+    // weights nilpotent. Peel a single shared scale to expose that source;
+    // shared affine chains otherwise keep their ordinary evaluation slots.
+    if (Ctx.op(F) == SymOp::Mul && Ctx.numOperands(F) == 2 &&
+        Ctx.isConst(Ctx.operand(F, 0))) {
+      const auto Digits = Ctx.constWords(Ctx.operand(F, 0)).take_front(N);
+      if (!(Digits.front() & 1)) {
+        B *= llvm::APInt(Bits, Digits);
+        F = Ctx.operand(F, 1);
+      }
+    }
     Slots[Out++] = Slot.find(F.index())->second - 1;
     Words.append(A.getRawData(), A.getRawData() + N);
     Words.append(B.getRawData(), B.getRawData() + N);
   }
-  Slots = Slots.take_front(groupQuadraticFactors(Slots, Words, Uses, Bits));
+  Slots = Slots.take_front(groupAffineFactors(Slots, Words, Uses, Bits));
   Steps.back().NumArgs = Slots.size();
   Steps.back().Aux = Bits;
   // Consumers outside a factor still need their complete inputs. Every
@@ -910,19 +924,21 @@ llvm::APInt evaluateAffineFactors(llvm::ArrayRef<llvm::APInt> Values,
     }
     const auto Repeat = Coefficients.front();
     Coefficients = Coefficients.drop_front();
-    if (Repeat) {
-      llvm::APInt::tcMultiply(Factor, Raw, Coefficients.data() + N, N);
-    } else {
-      llvm::APInt::tcMultiply(Next, Raw, Coefficients.data() + 2 * N, N);
-      llvm::APInt::tcAdd(Next, Coefficients.data() + N, 0, N);
-      llvm::APInt::tcMultiply(Factor, Raw, Next, N);
+    const unsigned Degree = Repeat ? 1 : Coefficients.front();
+    if (!Repeat)
+      Coefficients = Coefficients.drop_front();
+    llvm::APInt::tcMultiply(Factor, Raw, Coefficients.data() + Degree * N, N);
+    for (unsigned K = Degree - 1; K != 0; --K) {
+      llvm::APInt::tcAdd(Factor, Coefficients.data() + K * N, 0, N);
+      llvm::APInt::tcMultiply(Next, Raw, Factor, N);
+      std::swap(Factor, Next);
     }
     llvm::APInt::tcAdd(Factor, Coefficients.data(), 0, N);
     for (uint64_t K = 0, Count = Repeat ? Repeat : 1; K < Count; ++K) {
       llvm::APInt::tcMultiply(Next, Product, Factor, N);
       std::swap(Product, Next);
     }
-    Coefficients = Coefficients.drop_front((Repeat ? 2 : 3) * N);
+    Coefficients = Coefficients.drop_front((Degree + 1) * N);
   }
   const auto &Scale = Values[Sources.front()];
   return Scale * llvm::APInt(Bits, llvm::ArrayRef(Product, N))

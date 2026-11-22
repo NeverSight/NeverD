@@ -284,8 +284,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           auto &Frame = Calls[&Op];
           for (const auto &P : Pieces)
             Frame.Inputs.push_back(P.Location);
-          if (Hidden)
+          if (Hidden) {
             Frame.Inputs.push_back(Signature.ReturnLocation);
+            MemoryAddresses.push_back(Op.Inputs[Op.NumInputs - 1]);
+          }
           // A complete scalar-only object returned by a qualified call can
           // be spilled as data after its non-frame operands are proven. A
           // pointer field or padding cannot provide that byte provenance.
@@ -792,6 +794,15 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         return C.first->SourceCallHint &&
                C.first->SourceCallHint->Signature.MIPSRecords;
       });
+  const bool HasStackResult =
+      SingleRecordExit && llvm::any_of(Calls, [&](const auto &C) {
+        const auto &Inputs = C.second.Inputs;
+        if (Inputs.empty() ||
+            Inputs.back().Kind != SourceABICarrierKind::IndirectResultPointer)
+          return false;
+        const auto &Call = *C.first;
+        return Offset(Call.Inputs[Call.NumInputs - 1]).value_or(0) < 0;
+      });
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops)
       if (Op.Opcode == NdOp::RETURN) {
@@ -811,11 +822,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                  mips::preservesRecordFrameLink(Function, Op, Target,
                                                 RecordCall, Remaining);
         };
-        // A hidden result pointer can expose selected frame bytes to the
-        // callee. Follow those bytes before spending the shared budget on a
-        // general reaching-store proof that cannot preserve this call.
+        // Follow a stack result through its exact byte range before a general
+        // frame-exposure walk can exhaust the shared budget on a copy loop.
         const bool CheckRecordFirst =
-            SingleRecordExit && (!QualifiedMemory || !FrameIsPrivate());
+            SingleRecordExit &&
+            (!QualifiedMemory || HasStackResult || !FrameIsPrivate());
         const bool LinkPreserved = CheckRecordFirst
                                        ? RecordFrame() || Prove(Link)
                                        : Prove(Link) || RecordFrame();

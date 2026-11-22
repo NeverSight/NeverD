@@ -48,6 +48,19 @@ def rebuilt_storage(source, rebuilt_symbols, address, width, fallback):
     return next(iter(owners)) if owners else fallback
 
 
+SPILL_TRANSFERS = {
+    "chain-spill-copy": [],
+    "chain-spill-store-halves": ["-DSTORE_HALVES"],
+    "chain-spill-load-halves": ["-DLOAD_HALVES"],
+    "chain-spill-separate": ["-DSEPARATE_HALVES"],
+    "chain-spill-pack-checked": ["-DLOAD_HALVES", "-DGUARD_BEFORE_PACK"],
+    "chain-spill-swapped": ["-DLOAD_HALVES", "-DSWAPPED_SAMPLE"],
+    "chain-spill-field": ["-DLOAD_HALVES", "-DINSERT_FIELD"],
+    "chain-spill-add": ["-DLOAD_HALVES", "-DCOMBINE_WORDS=daddu"],
+    "chain-spill-xor": ["-DLOAD_HALVES", "-DCOMBINE_WORDS=xor"],
+}
+
+
 def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                  provider, companions, callbacks, little, values, results, linker, form):
     work = artifacts.work
@@ -61,7 +74,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                          "chain-spill-recheck")
     self_forward = form == "loop-self-forward"
     repeated = form in ("chain-loop-result", "chain-loop-spill")
-    loop_guard = repeated or form in ("chain-spill-check", "chain-spill-recheck", "chain-spill-byte")
+    loop_guard = (form in SPILL_TRANSFERS or repeated or
+                  form in ("chain-spill-check", "chain-spill-recheck", "chain-spill-byte"))
     joined = form == "chain-join" or (rechecked and not loop_guard)
     if joined or loop_guard or self_forward:
         fixture = "pic-guarded-forward.S"
@@ -81,6 +95,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
         "chain-join": [], "chain-join-check": ["-DJOIN_BEFORE_CHECK", "-DRECHECK_FIRST"],
         "loop-self-forward": ["-DSELF_FORWARD"],
         "chain-loop-result": ["-DREPEAT_PRODUCER"],
+        **{k: ["-DRESULT_SPILL", "-DTRANSFER_SPILL", *v] for k, v in SPILL_TRANSFERS.items()},
         "chain-spill-check": ["-DRESULT_SPILL"],
         "chain-spill-byte": ["-DRESULT_SPILL", "-DWRITE_SPILL_BYTE"],
         "chain-loop-spill": ["-DREPEAT_PRODUCER", "-DRESULT_SPILL"],
@@ -151,7 +166,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             saved.update({19: 0x456789, 20: 0xabcdef})
         guarded_chain = form in ("chain-guard-zero", "chain-guard-match")
         guard_outcomes = set()
-        changed_byte_forwarded = False
+        changed_word_forwarded = False
         for value in values:
             if rebind:
                 # The second call must observe a GOT update made by the first.
@@ -175,6 +190,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             forwarded = dispatch_result
             if form == "chain-spill-byte":
                 forwarded &= ~(0xff << (32 if little else 24))
+            elif form == "chain-spill-swapped":
+                forwarded = ((dispatch_result << 32) | (dispatch_result >> 32)) & 0xffffffffffffffff
             arguments = [value]
             if self_forward:
                 arguments.extend([value, trips, addend])
@@ -206,7 +223,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                        (not (form == "chain-guard-match" or joined or loop_guard) or forwarded == arguments[1]))
             if chain and forward:
                 argument = forwarded
-                changed_byte_forwarded |= forwarded != dispatch_result
+                changed_word_forwarded |= forwarded != dispatch_result
                 if form == "chain-overwrite":
                     argument = 19
                 elif form == "chain-compiled":
@@ -241,8 +258,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             if reads != [(storage[i], width) for i in called_slots if i in watched]:
                 raise AssertionError(f"{name} wrong GOT loads for {value:#x}: {reads}")
             reads.clear()
-        if form == "chain-spill-byte" and not changed_byte_forwarded:
-            raise AssertionError(f"{name} never forwarded a changed byte for {binding}")
+        if form in ("chain-spill-byte", "chain-spill-swapped") and not changed_word_forwarded:
+            raise AssertionError(f"{name} never forwarded a changed word for {binding}")
         if guarded_chain and guard_outcomes != {False, True}:
             raise AssertionError(f"{name} did not exercise both branch outcomes for {binding}")
         if self_forward and guard_outcomes != {(n, calls) for n in range(4) for calls in (1, n + 1)}:
@@ -536,7 +553,7 @@ word probe(word value) { return target(value, 37) + 1; }
                          "chain-guard-zero", "chain-guard-match", "chain-join", "chain-join-check",
                          "chain-recheck-first", "chain-recheck-second", "chain-loop-result",
                          "chain-spill-check", "chain-loop-spill", "chain-spill-recheck", "chain-spill-byte",
-                         "loop-self-forward"):
+                         *SPILL_TRANSFERS, "loop-self-forward"):
                 check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                              original, companions, callbacks, little, values, results, linker, form)
         artifacts.discard(original, *companions)
