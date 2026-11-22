@@ -12823,6 +12823,18 @@ parameters: those positions pass zero, before the floating arguments. A call
 whose block loads AL with no constant gives no count, and nothing changes for
 it.
 
+An unknown call that returns passes on the argument registers its setup
+leaves alone below one it sets (`forwardedArgumentRegisters`), and the summary
+counts them as the call's reads, so a function that passes them on reads them
+at its entry, as call recovery later makes them its parameters. A register
+the setup writes and then reads again holds the function's own value, a base
+its target is loaded through or the target, and proves nothing below it; Go
+code, which sets Go's registers, is left to Go's rules. `sqlite3AuthCheck`
+loads the authorizer's first and sixth arguments and calls it with RSI, RDX,
+RCX and R8 as it got them. Its summary read RDI alone, so in each of its
+callers the four moves that set them were dead before recovery knew the
+parameters, and its calls passed 139 unknown values.
+
 A callee reads what it was entered with before its call writes a result, so
 the summary ends what the call's own output defines before it joins the
 callee's entry reads, not after. Go passes its first argument in the register

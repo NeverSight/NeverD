@@ -20982,6 +20982,10 @@ method table passes the word it stored and nothing else, and reads no
 goroutine; one without that calls through a func value after loading RCX
 passes nothing; assembly without a check that calls through a pointer still
 passes what it set in RDI.
+`SysVCallContract.ArgumentsPassedOnToAnUnknownCallReachIt` lifts a routine
+shaped as `sqlite3AuthCheck`, which sets RDI and R9 and calls through a loaded
+pointer, and a caller that sets RSI, RDX, RCX and R8: the call passes 0x1A,
+2, 3 and 4 and no unknown value.
 `GoStackABI.AnArgumentNarrowerThanAWordIsStillOne` runs it over arm64
 assembly that reads an int32 from the stack, whose record gives four bytes,
 and a caller that stores 2 there: the call passes 2.

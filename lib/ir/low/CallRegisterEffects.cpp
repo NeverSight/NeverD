@@ -1471,6 +1471,64 @@ bool loadsStackPointerBefore(const BinaryImage &Img, const LowBlock &Block,
   return false;
 }
 
+/// The integer argument registers the unknown call at op \p Call of \p Block
+/// passes on as they reached its setup: those below the highest one the
+/// setup writes and does not read again itself, where the setup leaves them
+/// alone.  A compiler sets a call's arguments before it; one it leaves in
+/// place below one it sets is the caller's own, as `sqlite3AuthCheck` loads
+/// the authorizer's context into RDI and RCX's successor R9 and leaves the
+/// four between as it got them.  A register the setup writes and then reads
+/// holds the function's own value, a base the target is loaded through or
+/// the target itself, and proves nothing below it.
+std::vector<uint64_t> forwardedArgumentRegisters(const BinaryImage &Img,
+                                                 const LowBlock &Block,
+                                                 size_t Call) {
+  const llvm::ArrayRef<uint64_t> Arguments =
+      getTargetRegInfo(Img.Arch)
+          .integerArgumentLayout(Img.abiFormat())
+          .Registers;
+  size_t Begin = 0;
+  for (size_t I = Call; I-- > 0;)
+    if (Block.Ops[I].Opcode == NdOp::CALL ||
+        Block.Ops[I].Opcode == NdOp::INDIR_CALL) {
+      Begin = I + 1;
+      break;
+    }
+  const auto Position = [&](const NdVar &V) -> int {
+    if (!V.isReg())
+      return -1;
+    const std::optional<unsigned> Family = gprFamilyOf(Img.Arch, V.Offset);
+    if (!Family)
+      return -1;
+    for (size_t K = 0; K < Arguments.size(); ++K)
+      if (Arguments[K] / 8 == *Family)
+        return static_cast<int>(K);
+    return -1;
+  };
+  std::vector<bool> Written(Arguments.size()), ReadAgain(Arguments.size());
+  for (size_t I = Begin; I <= Call && I < Block.Ops.size(); ++I) {
+    const LowOp &Op = Block.Ops[I];
+    for (unsigned In = 0; In < Op.NumInputs; ++In)
+      if (const int K = Position(Op.Inputs[In]); K >= 0 && Written[K])
+        ReadAgain[K] = true;
+    if (I == Call)
+      break;
+    if (const int K = Position(Op.Output); K >= 0) {
+      Written[K] = true;
+      ReadAgain[K] = false;
+    }
+  }
+  int Highest = -1;
+  for (size_t K = 0; K < Arguments.size(); ++K)
+    if (Written[K] && !ReadAgain[K])
+      Highest = static_cast<int>(K);
+  std::vector<uint64_t> Forwarded;
+  for (int K = 0; K < Highest; ++K)
+    if (!Written[K])
+      Forwarded.push_back(Arguments[K]);
+  return Forwarded;
+}
+
 /// otherwise take to change them.
 LocalRegisterEffect goWriteBarrierEffect(Arch A,
                                          const GoWriteBarrier &Barrier) {
@@ -1945,6 +2003,12 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
         (TailCall ? Step.UnknownTailCall : Step.UnknownCall) = true;
         Step.ResumesContext =
             TailCall && loadsStackPointerBefore(Img, Block, I);
+        // A call that returns passes on the argument registers its setup
+        // leaves alone below one it sets; Go code sets Go's.
+        if (!TailCall && !Img.ExceptionMetadata.GoModule)
+          for (const uint64_t Register :
+               forwardedArgumentRegisters(Img, Block, I))
+            addRead(Img.Arch, Step.Reads, Register, 8);
         if (DirectTarget &&
             !importCalleeName(Img, Op.Inputs[0].Offset).empty() &&
             !importOwnRoutine(Img, ArgumentSources, Op.Inputs[0].Offset))
