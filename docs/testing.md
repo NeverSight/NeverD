@@ -26739,6 +26739,11 @@ results it also poisons v0 after the callee's return delay slot, before the
 caller consumes the result. The caller must use its original result buffer;
 a callee that happens to return that address in v0 is not an ABI guarantee.
 
+The `du` and `ud` cases use both member orders of a double/unsigned
+64-bit union. They check negative zero, infinities and distinct NaN payloads
+as object bytes. The `nested_du` case passes that union alongside a double
+inside a structure.
+
 Run the record roundtrip with both values of `--original-compiler`. GCC and
 Clang alternate as the callee and caller compiler. Only the reconstructed C
 uses `-fno-strict-aliasing`, as required by the plain-pointer output. The n32

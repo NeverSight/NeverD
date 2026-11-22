@@ -919,6 +919,8 @@ enum class RecordValueFixture {
   NestedDouble,
   ArrayDouble,
   NestedUnion,
+  MixedUnion,
+  MixedUnionNoAlignment,
   MissingType,
   MissingOffset,
   MissingEncoding,
@@ -974,6 +976,14 @@ std::vector<uint8_t> makeMIPSDWARFRecordValue(unsigned PointerBytes,
           {{DW_AT_type, DW_FORM_ref4},
            {DW_AT_data_member_location, DW_FORM_data1},
            {DW_AT_data_member_location, DW_FORM_data1}});
+  declare(16, DW_TAG_union_type, true,
+          {{DW_AT_byte_size, DW_FORM_data4},
+           {DW_AT_alignment, DW_FORM_data1},
+           {DW_AT_name, DW_FORM_string}});
+  declare(17, DW_TAG_member, false,
+          {{DW_AT_type, DW_FORM_ref4}, {DW_AT_name, DW_FORM_string}});
+  declare(18, DW_TAG_union_type, true,
+          {{DW_AT_byte_size, DW_FORM_data4}, {DW_AT_name, DW_FORM_string}});
   Abbrev.push_back(0);
   const auto word = [&](uint64_t Value, unsigned Bytes) {
     for (unsigned I = 0; I < Bytes; ++I)
@@ -1016,8 +1026,17 @@ std::vector<uint8_t> makeMIPSDWARFRecordValue(unsigned PointerBytes,
   if (Kind != RecordValueFixture::MissingArrayBound)
     Info.insert(Info.end(), {7, 1});
   Info.push_back(0);
+  const auto Integer = static_cast<uint32_t>(Info.size());
+  Info.push_back(2);
+  word(8, 4);
+  Info.push_back(DW_ATE_unsigned);
   const auto Record = static_cast<uint32_t>(Info.size());
-  Info.push_back(Kind == RecordValueFixture::DuplicateSize ? 14 : 4);
+  const bool Mixed = Kind == RecordValueFixture::MixedUnion ||
+                     Kind == RecordValueFixture::MixedUnionNoAlignment;
+  Info.push_back(Kind == RecordValueFixture::MixedUnion              ? 16
+                 : Kind == RecordValueFixture::MixedUnionNoAlignment ? 18
+                 : Kind == RecordValueFixture::DuplicateSize         ? 14
+                                                                     : 4);
   const bool Pointers = Kind == RecordValueFixture::Pointer ||
                         Kind == RecordValueFixture::WrongPointerWidth;
   word(Pointers                                      ? 2 * DeclaredPointer
@@ -1027,7 +1046,15 @@ std::vector<uint8_t> makeMIPSDWARFRecordValue(unsigned PointerBytes,
        4);
   if (Kind == RecordValueFixture::DuplicateSize)
     word(8, 4);
-  if (Pointers) {
+  if (Mixed) {
+    if (Kind == RecordValueFixture::MixedUnion)
+      Info.push_back(8);
+    Info.insert(Info.end(), {'U', 0, 17});
+    word(Double, 4);
+    Info.insert(Info.end(), {'d', 0, 17});
+    word(Integer, 4);
+    Info.insert(Info.end(), {'i', 0});
+  } else if (Pointers) {
     member(Pointer, 0);
     member(Byte, DeclaredPointer);
   } else if (Kind == RecordValueFixture::MissingType) {
@@ -2619,6 +2646,42 @@ TEST(DWARFSourceTypes, NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth) {
                   Kind == RecordValueFixture::Double
                       ? SourceABICarrierKind::FloatingRegister
                       : SourceABICarrierKind::IntegerRegister);
+      }
+}
+
+TEST(DWARFSourceTypes, MixedUnionRequiresDeclaredAlignmentForValueCalls) {
+  ScratchDir Dir;
+  for (unsigned Width : {4, 8})
+    for (bool Little : {false, true})
+      for (auto Kind : {RecordValueFixture::MixedUnion,
+                        RecordValueFixture::MixedUnionNoAlignment}) {
+        SCOPED_TRACE(::testing::Message() << Width << Little << unsigned(Kind));
+        const auto Bytes = makeMIPSDWARFRecordValue(Width, Little, Kind);
+        const auto Context = DWARFDebugContext::load(
+            Dir.writeBytes("union.elf", Bytes), BinaryFormat::ELF,
+            DWARFLoadTrust::InImage, Bytes);
+        ASSERT_TRUE(Context);
+        const auto Function = Context->resolveFunction(0x1000);
+        ASSERT_TRUE(Function && Function->ReturnType);
+        ASSERT_EQ(Function->Params.size(), 1u);
+        const auto &R = Function->ReturnType;
+        const auto &P = Function->Params.front().second;
+        ASSERT_TRUE(P);
+        EXPECT_TRUE(R->IsUnion);
+        EXPECT_TRUE(P->IsUnion);
+        if (Kind == RecordValueFixture::MixedUnionNoAlignment) {
+          EXPECT_TRUE(R->Fields.empty());
+          EXPECT_TRUE(P->Fields.empty());
+          continue;
+        }
+        ASSERT_EQ(R->Fields.size(), 1u);
+        ASSERT_EQ(P->Fields.size(), 1u);
+        EXPECT_EQ(R->Fields.front()->Kind, NdTypeKind::Int);
+        EXPECT_EQ(R->Fields.front()->Size, 8);
+        ASSERT_EQ(P->FieldDisplayTypes.size(), 2u);
+        ASSERT_EQ(R->FieldDisplayTypes.size(), 2u);
+        EXPECT_NE(R->FieldDisplayTypes[0].get(), P->FieldDisplayTypes[0].get());
+        EXPECT_NE(R->FieldDisplayTypes[1].get(), P->FieldDisplayTypes[1].get());
       }
 }
 

@@ -1841,8 +1841,13 @@ Direct calls and explicitly typed indirect calls retain the register bank and
 byte offset of each independently placed field. A result written in the
 return delay slot is captured before SSA loses its physical register name. Reconstructing a source type requires an
 explicit local declaration or matching debug information and a complete
-by-value field layout. Unions and incomplete field graphs retain their display
-types.
+by-value field layout. An eight-byte union of `double` and an unsigned
+64-bit integer retains its C type for arguments and returns in either member
+order. n32/n64 carry its bits in the integer argument and result registers;
+o32 uses an aligned argument pair and a caller-provided result address.
+The local C declaration supplies alignment. DWARF-only value conversion
+requires explicit eight-byte alignment because packed and natural unions can
+have identical member DIEs. Other union shapes retain their display types.
 
 When HighC reconstructs a record from individual arguments or result words,
 it initializes nested structures and arrays in the enclosing member's type.
