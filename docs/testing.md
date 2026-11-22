@@ -20908,6 +20908,8 @@ two arguments with no unknown value.
 `GoInternalABI.ARunWithoutIndirectCallsRecoversItsGoCalls` runs the pipeline,
 as ELF and as PE, over a Go function that sets seven registers and calls
 another, in an image with no indirect call: the call passes all seven.
+`GoInternalABI.ACallPassesGosNinthRegister` does so over a call that sets
+nine: the call passes R11's value too.
 `GoScheduleCalls.AreFoundByName` loads a pclntab that names `runtime.mcall`:
 the module records its entry and a call of it resumes, where one of
 `runtime.mcallx` or of any other function does not.

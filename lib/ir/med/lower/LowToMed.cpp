@@ -783,8 +783,12 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
                    ? R->second[kX64VectorFamilyBase + I]
                    : 0;
       };
+      // The summary reads every register the callee takes arguments in:
+      // Go's nine, one more than the slots tracked for a dispatcher or a
+      // variadic call, which count a platform's.
+      const auto SummarySlots = static_cast<int8_t>(ArgRegs.size());
       int8_t Count = 0;
-      for (int8_t I = 0; I < Slots; ++I)
+      for (int8_t I = 0; I < SummarySlots; ++I)
         if (R->second[ArgRegs[I] / 8] || SlotVectorWidth(I))
           Count = I + 1;
       // Stack arguments in a positional ABI retain every preceding register

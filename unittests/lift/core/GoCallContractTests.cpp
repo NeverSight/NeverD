@@ -2585,6 +2585,60 @@ TEST(GoInternalABI, ARunWithoutIndirectCallsRecoversItsGoCalls) {
   }
 }
 
+TEST(GoInternalABI, ACallPassesGosNinthRegister) {
+  // Go's internal ABI passes nine integer arguments in registers on x86-64,
+  // R11 the last.  The operands a callee's summary names were counted over
+  // the slots tracked for a dispatcher or a variadic call, eight: a call of
+  // `runtime.concatstring4`, which takes a buffer and four strings, passed
+  // eight arguments and an unknown value, and the move that set R11 was
+  // dead.
+  //   main.nine: add rax, rbx; add rax, rcx; add rax, rdi; add rax, rsi
+  //              add rax, r8; add rax, r9; add rax, r10; add rax, r11; ret
+  //   main.user: mov eax, 1; ...; mov r10d, 8; mov r11d, 9; call main.nine
+  //              ret
+  constexpr va_t Nine = kTextVA + 0x100;
+  constexpr va_t User = kTextVA + 0x180;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    GoTestImage T(Arch::X64);
+    T.Img.Format = Format;
+    T.writeText(Nine, {0x48, 0x01, 0xD8, 0x48, 0x01, 0xC8, 0x48, 0x01, 0xF8,
+                       0x48, 0x01, 0xF0, 0x4C, 0x01, 0xC0, 0x4C, 0x01, 0xC8,
+                       0x4C, 0x01, 0xD0, 0x4C, 0x01, 0xD8, 0xC3});
+    std::vector<uint8_t> Body = {
+        0xB8, 0x01, 0x00, 0x00, 0x00, 0xBB, 0x02, 0x00, 0x00, 0x00,
+        0xB9, 0x03, 0x00, 0x00, 0x00, 0xBF, 0x04, 0x00, 0x00, 0x00,
+        0xBE, 0x05, 0x00, 0x00, 0x00, 0x41, 0xB8, 0x06, 0x00, 0x00,
+        0x00, 0x41, 0xB9, 0x07, 0x00, 0x00, 0x00, 0x41, 0xBA, 0x08,
+        0x00, 0x00, 0x00, 0x41, 0xBB, 0x09, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call = makeCall(User + Body.size(), Nine);
+    Body.insert(Body.end(), Call.begin(), Call.end());
+    Body.push_back(0xC3);
+    T.writeText(User, Body);
+    for (const auto &[Address, Name] :
+         {std::pair{Nine, "main.nine"}, std::pair{User, "main.user"}}) {
+      Symbol Function = Symbol::makeFunc(Address);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.FrameArguments = {{Nine, 72}, {User, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::string Calling = highCBody(R, T.Img, "main_user");
+    EXPECT_NE(Calling.find("main_nine(1, 2, 3, 4, 5, 6, 7, 8, 9);"),
+              std::string::npos)
+        << Calling;
+  }
+}
+
 TEST(GoInternalABI, AFuncValueSetBeforeTheCallsBlockIsStillOne) {
   // Go assembly passes a func value only what it sets in Go's registers.
   // `runtime.mcall` moves its fn into the context register at its entry and

@@ -6099,6 +6099,13 @@ call or the convention takes arguments from the call's setup. A run of one
 function with neither, as a user opens one, skipped recovery, and a call that
 set seven registers passed six and an unknown value.
 
+The operands a direct call's summary names count every register its callee
+takes arguments in (`goIntegerArgumentRegisters`), not the eight slots tracked
+for a dispatcher or a variadic call (`kTrackedArgSlots`), which hold a
+platform's. Counted over those, a call never bound R11, Go's ninth: the move
+that set it was dead, and `runtime.concatstring4`, which takes a buffer and
+four strings, got eight arguments and an unknown value.
+
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
 argument registers from the first variadic one through R9 into consecutive
