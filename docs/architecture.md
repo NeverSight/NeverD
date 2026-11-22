@@ -6189,8 +6189,13 @@ seemed to end where its stack ran short. The path is left out only when the
 entry does nothing but compare and branch, so running it again is the same as
 running it once (`GoStackGrowth::Restarts`). The path must also call a routine
 that grows the stack rather than `runtime.morestackc`, which throws, and the
-entry alone must reach it. A frame larger than 4 KiB checks for underflow with
-a second branch to the path and keeps it. `g` is R14 from Go 1.17 and a
+checks alone must reach it. A frame too large for one comparison checks
+twice: the entry proves that the stack pointer less the frame does not wrap
+(`sub r12, N; jb`), and the block it falls into, which nothing else reaches
+and which computes nothing either, compares that with the guard
+(`GoStackGrowth::SecondCheck`). Each then branches straight to the block
+after it. Reflection's `runtime.callNNN` frames are such, up to a gibibyte,
+and each printed its body under the two comparisons. `g` is R14 from Go 1.17 and a
 thread-local load before it, and both forms qualify. The runtime's growth
 routines take no register argument, exactly (`MorestackEntries`): arm64's path
 hands them its own return address in R3, as any call does in LR, and their

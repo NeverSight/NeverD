@@ -779,6 +779,22 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
   Result.Spills = std::move(Spills);
   Result.GrowthStart = Growth->StartAddr;
   Result.Restarts = !Throws;
+  // A frame too large for one comparison checks twice: the block the entry
+  // falls into, which nothing else reaches, computes nothing either and
+  // branches to the same growth block.
+  const auto Second =
+      llvm::find_if(Blocks.drop_front(), [&](const LowBlock &Block) {
+        return Block.StartAddr == Entry.EndAddr;
+      });
+  if (Second != Blocks.end() && Second != Growth && !Second->Ops.empty() &&
+      Second->Preds == std::vector<int>{Entry.Id}) {
+    const LowOp &Again = Second->Ops.back();
+    if (Again.Opcode == NdOp::COND_BR && Again.NumInputs >= 1 &&
+        Again.Inputs[0].isConst() &&
+        Again.Inputs[0].Offset == Check.Inputs[0].Offset &&
+        llvm::all_of(llvm::ArrayRef(Second->Ops).drop_back(), isStackCheckStep))
+      Result.SecondCheck = Second->StartAddr;
+  }
   return Result;
 }
 

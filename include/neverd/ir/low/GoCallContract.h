@@ -169,6 +169,12 @@ struct GoStackGrowth {
   /// the path changes nothing the function computes; `runtime.morestackc`
   /// throws instead (GoModuleInfo::ThrowingMorestackEntries).
   bool Restarts = false;
+  /// Where the entry's second check starts, for a frame too large for one
+  /// comparison: the entry proves the stack pointer less the frame does not
+  /// wrap (`sub r12, N; jb`), and the block after it compares that with the
+  /// guard (`cmp r12, [r14+16]; jbe`), each branching to the growth block.
+  /// InvalidVA where the entry checks once.
+  va_t SecondCheck = InvalidVA;
 };
 
 /// The stack-growth path of a function whose entry is block 0 of \p Blocks,

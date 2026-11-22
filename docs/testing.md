@@ -20822,6 +20822,11 @@ eleven.
 `GoStackGrowth.AGrowthRoutineTakesNoArgument` runs arm64's
 `runtime.morestack_noctxt`, which branches to a `runtime.morestack` that reads
 X3: alone and in the pipeline, neither takes a parameter, and both are exact.
+`GoStackGrowth.AFrameTooLargeForOneComparisonChecksTwice` lifts a function
+whose entry is `runtime.call1048576`'s (`mov r12, rsp; sub r12, 0xfff88; jb`
+then `cmp r12, [r14+0x10]; jbe`): the recognizer names the second check and
+the body keeps no call and no branch; with a store before the second
+comparison the path stays.
 `GoInternalABI.AStaleViewReadsNoResultOfTheCall` lifts an arm64 caller that,
 after a call, joins `ldrb w11` with `mov x11, #45` and reads the low byte:
 the call returns nothing it reads, though the stale arm of the W11 PHI is

@@ -438,6 +438,58 @@ TEST(GoStackGrowth, GReadFromThreadLocalStorageChecksTheSameWay) {
   EXPECT_FALSE(hasOp(lift(Img, kTextVA + 0x100), NdOp::CALL));
 }
 
+/// A Go function at kTextVA + 0x100 whose frame is too large for one
+/// comparison, as Go's assembler checks it (`stacksplit`): it proves that the
+/// stack pointer less the frame does not wrap, then compares that with the
+/// guard, and each branch leaves for the growth path.  \p Between runs before
+/// the second comparison.
+///   mov r14, fs:[-8]; mov r12, rsp; sub r12, 0xfff88; jb grow; <Between>
+///   cmp r12, [r14+0x10]; jbe grow; ret
+///   grow: call morestack_noctxt; jmp entry
+BinaryImage hugeFrameImage(std::vector<uint8_t> Between = {}) {
+  constexpr va_t Function = kTextVA + 0x100;
+  GoTestImage T;
+  std::vector<uint8_t> Code = {0x64, 0x4C, 0x8B, 0x34, 0x25, 0xF8, 0xFF,
+                               0xFF, 0xFF, 0x49, 0x89, 0xE4, 0x49, 0x81,
+                               0xEC, 0x88, 0xFF, 0x0F, 0x00, 0x72};
+  const auto Rest = static_cast<uint8_t>(Between.size() + 7);
+  Code.push_back(Rest);
+  Code.insert(Code.end(), Between.begin(), Between.end());
+  Code.insert(Code.end(), {0x4D, 0x3B, 0x66, 0x10, 0x76, 0x01, 0xC3});
+  T.writeText(Function, Code);
+  const va_t Grow = Function + Code.size();
+  T.writeText(Grow, makeCall(Grow, Morestack));
+  T.writeText(Grow + 5, {0xEB, static_cast<uint8_t>(Function - (Grow + 7))});
+  T.writeText(Morestack, {0xC3});
+  GoModuleInfo Module;
+  Module.GoCode = {{Function, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  return std::move(T.Img);
+}
+
+TEST(GoStackGrowth, AFrameTooLargeForOneComparisonChecksTwice) {
+  // Both branches leave for the one growth path, which restarts the
+  // function: the body is all it computes, as with one comparison.
+  // Reflection's `runtime.callNNN` printed theirs under the two conditions.
+  const BinaryImage Img = hugeFrameImage();
+  const auto Growth = goStackGrowth(Img, build(Img, kTextVA + 0x100).Blocks);
+  ASSERT_TRUE(Growth.has_value());
+  EXPECT_TRUE(Growth->Restarts);
+  EXPECT_NE(Growth->SecondCheck, InvalidVA);
+  const MedFunc F = lift(Img, kTextVA + 0x100);
+  EXPECT_FALSE(hasOp(F, NdOp::CALL));
+  EXPECT_FALSE(hasOp(F, NdOp::COND_BR));
+  // A second block that stores is no part of a check: the path stays.
+  //   mov [rsp+8], rax
+  const BinaryImage Storing = hugeFrameImage({0x48, 0x89, 0x44, 0x24, 0x08});
+  const auto Kept =
+      goStackGrowth(Storing, build(Storing, kTextVA + 0x100).Blocks);
+  if (Kept)
+    EXPECT_EQ(Kept->SecondCheck, InvalidVA);
+  EXPECT_TRUE(hasOp(lift(Storing, kTextVA + 0x100), NdOp::CALL));
+}
+
 TEST(GoStackGrowth, AnEntryThatStoresIsNoStackCheck) {
   // mov [rsp+8], rax; cmp rsp, [r14+0x10]; jbe grow: running the entry again
   // would store again, so the path is not one that changes nothing.
