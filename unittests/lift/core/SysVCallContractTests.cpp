@@ -3117,4 +3117,98 @@ int main(void) {
 )");
 }
 
+TEST(SysVCallContract,
+     AnIntegerItsCallersReadIsTheResultBesideAReloadedDouble) {
+  // classify(i, r) returns what is_odd(i) returned where that is not zero,
+  // and otherwise -1 or 2 by how i compares with r, which it reloads into
+  // XMM0 to convert: as sqlite3IntFloatCompare does.  At its one `ret` the
+  // integer register merges a call's result, which a branch tested, with
+  // two constants, and the vector register a double the body read: the
+  // body alone reads as returning the double.  order(i, r) tests EAX after
+  // the call and nothing reads XMM0, so the integer is the result.
+  constexpr va_t IsOdd = Text, Classify = Text + 0x10, Order = Text + 0x50;
+  const std::vector<uint8_t> Code = {
+      0x89, 0xF8,       // is_odd: mov eax, edi
+      0x83, 0xE0, 0x01, // and eax, 1
+      0xC3,             // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0x53,                               // classify: push rbx
+      0x48, 0x83, 0xEC, 0x10,             // sub rsp, 16
+      0xF2, 0x0F, 0x11, 0x44, 0x24, 0x08, // movsd [rsp+8], xmm0
+      0x48, 0x89, 0xFB,                   // mov rbx, rdi
+      0xE8, 0xDD, 0xFF, 0xFF, 0xFF,       // call is_odd
+      0x85, 0xC0,                         // test eax, eax
+      0x75, 0x1A,                         // jne done
+      0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, // movsd xmm0, [rsp+8]
+      0xF2, 0x48, 0x0F, 0x2C, 0xD0,       // cvttsd2si rdx, xmm0
+      0xB8, 0xFF, 0xFF, 0xFF, 0xFF,       // mov eax, -1
+      0x48, 0x39, 0xD3,                   // cmp rbx, rdx
+      0x7C, 0x05,                         // jl done
+      0xB8, 0x02, 0x00, 0x00, 0x00,       // mov eax, 2
+      0x48, 0x83, 0xC4, 0x10,             // done: add rsp, 16
+      0x5B,                               // pop rbx
+      0xC3,                               // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0x48, 0x83, 0xEC, 0x08,                               // order: sub rsp, 8
+      0xE8, 0xB7, 0xFF, 0xFF, 0xFF,                         // call classify
+      0x85, 0xC0,                                           // test eax, eax
+      0x0F, 0x9F, 0xC0,                                     // setg al
+      0x0F, 0xB6, 0xC0,                                     // movzx eax, al
+      0x48, 0x83, 0xC4, 0x08,                               // add rsp, 8
+      0xC3};                                                // ret
+  const BinaryImage Img = makeImportImage(
+      Code, {{IsOdd, "is_odd"}, {Classify, "classify"}, {Order, "order"}}, {});
+  const std::string Source = liftEntries(Img, {IsOdd, Classify, Order});
+  EXPECT_EQ(Source.find("\ndouble classify("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  /* odd: is_odd's 1; even below r: -1; even at or above r: 2 */
+  return order(3, 9.0) == 1 && order(4, 9.0) == 0 && order(10, 9.0) == 1 ? 0
+                                                                         : 1;
+}
+)");
+}
+
+TEST(SysVCallContract, AFloatReadThroughAWrapperKeepsItsFunctionFloat) {
+  // pair leaves n + 1 in RAX and 2x in XMM0.  count tests the integer;
+  // pass only jumps to pair, handing back what it leaves; twice reads the
+  // double after calling pass.  That read is one of pair's double, so the
+  // integer count reads does not make pair return no float.
+  constexpr va_t Pair = Text, Count = Text + 0x10, Pass = Text + 0x30,
+                 Twice = Text + 0x40;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x8D, 0x47, 0x01,                   // pair: lea rax, [rdi+1]
+      0xF2, 0x0F, 0x58, 0xC0,                   // addsd xmm0, xmm0
+      0xC3,                                     // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0x48, 0x83, 0xEC, 0x08,                   // count: sub rsp, 8
+      0xE8, 0xE7, 0xFF, 0xFF, 0xFF,             // call pair
+      0x48, 0x85, 0xC0,                         // test rax, rax
+      0x0F, 0x95, 0xC0,                         // setne al
+      0x0F, 0xB6, 0xC0,                         // movzx eax, al
+      0x48, 0x83, 0xC4, 0x08,                   // add rsp, 8
+      0xC3,                                     // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0xEB, 0xCE,                                           // pass: jmp pair
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,             // padding
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,             // padding
+      0x48, 0x83, 0xEC, 0x08,                               // twice: sub rsp, 8
+      0xE8, 0xE7, 0xFF, 0xFF, 0xFF,                         // call pass
+      0xF2, 0x48, 0x0F, 0x2C, 0xC0, // cvttsd2si rax, xmm0
+      0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+      0xC3};                        // ret
+  const BinaryImage Img = makeImportImage(
+      Code,
+      {{Pair, "pair"}, {Count, "count"}, {Pass, "pass"}, {Twice, "twice"}}, {});
+  const std::string Source = liftEntries(Img, {Pair, Count, Pass, Twice});
+  EXPECT_NE(Source.find("\ndouble pair("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\ndouble pass("), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) { return twice(3, 2.75) == 5 ? 0 : 1; }
+)");
+}
+
 } // namespace

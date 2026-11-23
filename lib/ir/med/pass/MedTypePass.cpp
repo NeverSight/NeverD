@@ -1665,6 +1665,9 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         else if (FloatTested && !IntTested && OnlyReturned(IntWrite))
           UseFloat = false;
       }
+      // What the callers read settles it over anything the body shows.
+      if (Func.CallersReadIntegerResult)
+        UseFloat = false;
       if (UseFloat) {
         AnyFloat = true;
         ReturnViaX87 |= FirstFloatViaX87;

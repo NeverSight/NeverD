@@ -690,6 +690,11 @@ struct MedFunc {
   /// `__m128`, a NEON vector, x86-64's `{float, float}` packed in one
   /// register), typed Float(16): its bits, not a scalar float.
   bool ReturnsVectorRegister = false;
+  /// Callers of this image depend on the integer result of calls to this
+  /// function and none on what it leaves in the floating-point return
+  /// register (settleFloatReturnsByCallers): a floating value its body
+  /// holds at a return is no result.
+  bool CallersReadIntegerResult = false;
 
   std::vector<MedTypedParam> TypedParams;
   /// The width (4 or 8 bytes) of the scalar each floating-point argument

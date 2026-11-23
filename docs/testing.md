@@ -9184,6 +9184,12 @@ result a caller reads; and
 `AConstantTheCodeHeldIsNoResult` and
 `AFloatResultReadsNoIntegerItsFunctionHandsBack` compile and run the C of
 such functions, which a null argument must not trap.
+`SysVCallContract.AnIntegerItsCallersReadIsTheResultBesideAReloadedDouble`
+runs a caller that tests the integer a function returns after reloading a
+double into XMM0: the function must not be typed as returning the double.
+`AFloatReadThroughAWrapperKeepsItsFunctionFloat` keeps a function's double
+where the only read of it follows a call to a wrapper that jumps to the
+function, beside another caller that tests its integer.
 `SysVCallContract.ACalleeThatLeavesForUnknownCodeStillReadsItsArguments`
 checks that a function which only hands its arguments to a callee ending in
 a jump through a pointer still takes them, and that a tail jump to it passes

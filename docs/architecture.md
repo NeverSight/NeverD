@@ -5526,6 +5526,20 @@ results that function hands back. So a callee and the callers that hand its
 result back return no value together, as `sqlite3_free` and the functions
 that end in it do, and an operation that reads the result of a call that
 returns nothing, where no byte of it reaches anything, reads zero instead.
+The same demand (`MedByteDemand`) settles which register holds the result of
+a function whose returns leave a floating value in the vector return
+register beside an integer in the integer one. The type pass chooses from
+the body first (`inferReturnType`); where something a direct caller does
+depends on the integer register after the call and nothing depends on the
+vector one, the integer is the result and the function is typed again
+without the float (`settleFloatReturnsByCallers`).
+`sqlite3IntFloatCompare` reloads the double it compares before it returns
+-1, 0 or 1, and its callers test EAX. A caller that hands a register back
+as the call left it shows nothing itself, and a read of what that caller
+returns counts for the function it came from, so the double a wrapper
+passes on to a reader stays a result. This is settled only on x86-64, where
+a call's register arguments are its operands by then and a result handed
+straight to the next call is a read like any other.
 An inferred integer result is as wide as the widest value some return path
 is seen to leave (`inferReturnType`). The write in the return's own block,
 the writes that reach a return without one from the blocks before it, and the
