@@ -32,7 +32,8 @@ def mfc0(rt, rd):
     return 0x40000000 | rt << 16 | rd << 11
 
 
-def boot_rom(order, prefix, instructions, return_offset, *, reset=False, return_words=(12,)):
+def boot_rom(order, prefix, instructions, return_offset, *, reset=False,
+             return_words=(12,), wide_epc=False):
     rom = bytearray(4096)
 
     def place(offset, words):
@@ -61,6 +62,9 @@ def boot_rom(order, prefix, instructions, return_offset, *, reset=False, return_
     for index, register in enumerate((12, 13, 14, 8)):
         handler += [mfc0(8, register), *[0] * 4,
                     immediate(43, 26, 8, index * 4)]
+    if wide_epc:
+        handler += [0x40287000, *[0] * 4, 0x0008403e,  # DMFC0 t0,EPC; DSRL32 t0,t0,0.
+                    immediate(43, 26, 8, 24)]
     handler += [immediate(43, 26, 27, 16),
                 immediate(13, 0, 8, READY), immediate(43, 26, 8, 20),
                 0x1000FFFF, 0]
@@ -84,7 +88,7 @@ def read_words(stream, address, count):
     return [int(word, 16) for word in re.findall(r'0x([0-9a-fA-F]{8})\b', text)]
 
 
-def run_machine(executable, rom):
+def run_machine(executable, rom, *, wide_epc=False):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         bios, monitor = root / 'rom', root / 'monitor'
@@ -114,10 +118,13 @@ def run_machine(executable, rom):
                                 # the guest runs. Observe completion first, then
                                 # freeze the VM before reading CP0's saved words.
                                 qmp(stream, 'stop')
-                                words = read_words(stream, 0x1000, 6)
-                                if len(words) != 6 or words[-1] != READY:
+                                count = 7 if wide_epc else 6
+                                words = read_words(stream, 0x1000, count)
+                                if len(words) != count or words[5] != READY:
                                     raise RuntimeError(f'incomplete register dump: {words}')
-                                return words[:-1]
+                                if wide_epc:
+                                    words[2] |= words[6] << 32
+                                return words[:5]
                             time.sleep(0.01)
                         registers = qmp(stream, 'human-monitor-command',
                                         **{'command-line': 'info registers'})
@@ -135,12 +142,12 @@ def qualify(executable, order):
 
     def check(name, prefix, instructions, code, *, slot=False, address=None,
               coprocessor=None, pending=0, return_offset=None, vector=0x380,
-              return_words=(12,), trap_pc=None):
+              return_words=(12,), trap_pc=None, wide_epc=False):
         rom, expected_epc = boot_rom(order, prefix, instructions, return_offset,
-                                     return_words=return_words)
+                                     return_words=return_words, wide_epc=wide_epc)
         if trap_pc is not None:
             expected_epc = trap_pc
-        status, cause, epc, bad, observed = run_machine(executable, rom)
+        status, cause, epc, bad, observed = run_machine(executable, rom, wide_epc=wide_epc)
         row = dict(order=order, scenario=name, handler=BOOT + observed, status=status, cause=cause,
                    epc=epc, badvaddr=bad, expected_epc=expected_epc,
                    rom_sha256=hashlib.sha256(rom).hexdigest())
@@ -218,6 +225,34 @@ def qualify(executable, order):
                 probe = [immediate(35, 10, 2, 8), 0, immediate(5, 2, 11, 2), 0, 12, 13]
                 check(name + 'load', prefix, tail, 8, return_offset=0x400,
                       return_words=probe, trap_pc=dest + 16)
+
+    # Two 4 KiB pages differ only in VPN2[39:32]. Prime both translations,
+    # rewrite the high tag, then check the first mapped load and the first
+    # fetch. KSEG1 hosts the probe so its own instruction fetches bypass TLB.
+    high = (1 << 32) | va
+    probe = [*tlb, *frames, immediate(15, 0, 8, 0x40), immediate(13, 8, 8, 0xa0),
+             mtc0(8, 12), *[0] * 6,
+             immediate(13, 0, 12, 1), 0x000c603c, (12 << 21) | (10 << 16) | (12 << 11) | 37]
+    # t2 = low VA, t4 = high VA (DSLL32 followed by OR).
+    def write_page(index, address_register, frame):
+        return [immediate(13, 0, 8, index), mtc0(8, 0),
+                0x40a00000 | (address_register << 16) | (10 << 11),  # DMTC0 EntryHi
+                immediate(13, 0, 8, (frame >> 6) | 0x16), mtc0(8, 2),
+                *[0] * 6, 0x42000002, *[0] * 6]  # TLBWI
+
+    def check_marker(address_register, marker):
+        return [immediate(35, address_register, 2, 8), immediate(13, 0, 11, marker),
+                immediate(4, 2, 11, 2), 0, 0x34]  # Unexpected value reaches TEQ.
+
+    probe += [*write_page(0, 10, 0x2000), *write_page(1, 12, 0x4000),
+              *check_marker(10, 0x1357), *check_marker(12, 0x2468)]
+    jump_to_probe = [0x08000000 | (((BOOT + 0x600) >> 2) & 0x03ffffff), 0]
+    jump_high = [(12 << 21) | 8, 0]  # JR t4.
+    check('xtlb-distinct-vpn-fetch', [], jump_to_probe, 9, return_offset=0x600,
+          return_words=probe + jump_high, trap_pc=high, wide_epc=True)
+    check('xtlb-replacement-first-load-and-fetch', [], jump_to_probe, 8, return_offset=0x600,
+          return_words=probe + write_page(1, 12, 0x2000) + check_marker(12, 0x1357) + jump_high,
+          trap_pc=high, wide_epc=True)
 
     for name, opcode, code in [('syscall', 12, 8), ('break', 13, 9)]:
         check(name, [], [opcode], code)

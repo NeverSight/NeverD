@@ -1473,6 +1473,94 @@ TEST(MIPSHistoricalScheduling, FirstAccessUsesTheObservedReplacementFrame) {
   }
 }
 
+TEST(MIPSHistoricalScheduling, R4000ExtendedFetchUsesTheReplacementFrame) {
+  constexpr uint32_t OldLoad = 0x8c820004, NewLoad = 0x8c820008;
+  constexpr uint64_t Low = 0x81004000u, High = UINT64_C(0x0181004000);
+  for (Arch A : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Img = image(A, 3);
+    addCode(Img, 0x2000, {OldLoad, 0x1357, 0xdead});
+    addCode(Img, 0x4000, {NewLoad, 0xbeef, 0x2468});
+    std::array<HistoricalTLBEntry, 48> Entries{};
+    Entries[0] = {Low | 7, (0x2000 >> 6) | 6, 0, 0};
+    Entries[1] = {High | 7, (0x4000 >> 6) | 6, 0, 0};
+    const HistoricalTLB MMU{Entries, 7};
+    MIPSSystemContext C;
+    C.HistoricalMMU = &MMU;
+    C.Historical = HistoricalSchedule::fromSnapshot(
+        3, {}, HistoricalCP0{HistoricalProcessor::R4000, 0x30, 0, 0, {}, {}});
+    ASSERT_TRUE(C.Historical);
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    for (bool Replace : {false, true}) {
+      if (Replace)
+        Entries[1].Lo0 = Entries[0].Lo0;
+      for (uint64_t VA : {Low, High}) {
+        const bool Old = VA == Low || Replace;
+        E.setRegister(mipsreg::A0, VA);
+        EXPECT_FALSE(execute(lift(Img, VA, {Old ? NewLoad : OldLoad}), E, C));
+        ASSERT_TRUE(execute(lift(Img, VA, {Old ? OldLoad : NewLoad}), E, C));
+        EXPECT_EQ(E.getRegister(mipsreg::V0), Old ? 0x1357u : 0x2468u);
+      }
+    }
+    // Miss only the upper tag. The saved CP0 fields must retain VPN2[39:32].
+    Entries[1].Hi ^= UINT64_C(1) << 36;
+    EXPECT_FALSE(execute(lift(Img, High, {OldLoad}), E, C));
+    const auto &After = *C.Historical->system();
+    EXPECT_EQ(After.EPC, High);
+    EXPECT_EQ(After.BadVAddr, High);
+    EXPECT_EQ(After.EntryHi, High | 7);
+    EXPECT_EQ(After.Cause, 8u);
+    EXPECT_EQ(After.ExceptionVector, UINT64_C(0xffffffff80000080));
+  }
+}
+
+TEST(MIPSHistoricalScheduling, R4000ExtendedSegmentsRespectModeAndBounds) {
+  using Result = HistoricalAddressResult;
+  constexpr uint64_t User = UINT64_C(0x000000ffffffffff);
+  constexpr uint64_t Super = UINT64_C(0x400000ffffffffff);
+  constexpr uint64_t Kernel = UINT64_C(0xc00000ff7fffffff);
+  constexpr uint64_t Uncached = UINT64_C(0x9000000fffffffff);
+  std::array<HistoricalTLBEntry, 48> Entries{};
+  const HistoricalTLB MMU{Entries, 7};
+  for (const unsigned Mode : {0x80u, 0x48u, 0x30u, 0x92u, 0x94u}) {
+    SCOPED_TRACE(Mode);
+    HistoricalCP0 CPU{HistoricalProcessor::R4000, Mode, 0, 0, {}, {}};
+    const bool IsUser = Mode == 0x30, IsSupervisor = Mode == 0x48;
+    const bool IsKernel = !IsSupervisor && !IsUser;
+    const auto Check = [&](uint64_t VA, Result Expected, uint64_t PA = 0) {
+      for (const auto Access :
+           {HistoricalMemoryAccess::Fetch, HistoricalMemoryAccess::Load,
+            HistoricalMemoryAccess::Store}) {
+        SCOPED_TRACE(::testing::Message() << std::hex << VA);
+        const auto T = MMU.translate(CPU, VA, Access);
+        ASSERT_TRUE(T);
+        EXPECT_EQ(T->Result, Expected);
+        EXPECT_EQ(T->Physical, PA);
+      }
+    };
+    if (!(Mode & 4))
+      Check(User, Result::Refill);
+    Check(User + 1, Result::AddressError);
+    Check(Super, IsUser ? Result::AddressError : Result::Refill);
+    Check(Super + 1, Result::AddressError);
+    Check(Kernel, IsKernel ? Result::Refill : Result::AddressError);
+    Check(Kernel + 1, Result::AddressError);
+    Check(Uncached, IsKernel ? Result::Mapped : Result::AddressError,
+          IsKernel ? UINT64_C(0xfffffffff) : 0);
+    Check(Uncached + 1, Result::AddressError);
+    if (IsKernel)
+      EXPECT_FALSE(MMU.translate(CPU, UINT64_C(0x8800000000000000),
+                                 HistoricalMemoryAccess::Load));
+    if (Mode & 4)
+      Check(0x2456, Result::Mapped, 0x2456);
+  }
+  // KX alone cannot enable extended addressing for user or supervisor code.
+  for (uint32_t Mode : {0u, 0x90u, 0x88u, 0x32u, 0x34u}) {
+    HistoricalCP0 CPU{HistoricalProcessor::R4000, Mode, 0, 0, {}, {}};
+    EXPECT_FALSE(MMU.translate(CPU, User, HistoricalMemoryAccess::Load));
+  }
+}
+
 // The VR4300 cross-page probe maps the odd virtual page two physical frames
 // after the even page. Put a different legal slot in the intervening frame.
 TEST(MIPSHistoricalScheduling, SplitTLBTranslatesTheBranchSlotIndependently) {

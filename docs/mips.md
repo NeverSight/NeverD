@@ -1624,10 +1624,15 @@ values. The first physical instruction must come from the uncached boot ROM
 at physical address `0x1fc00000`. A bound MMU snapshot checks guest
 instruction fetches against physical bytes. Aligned and byte scalar integer
 transfers translate through a complete 64-entry R3000A or 48-entry R4000
-table. R4000 compatibility translations support even and odd pages, global
-pairs and variable page sizes. On a miss to a sign-extended 32-bit address,
-the R4000 selects the refill vector from the interrupted mode's UX, SX or KX
-bit. Extended addressing adds `0x80` to the refill vector. A miss with EXL
+table. R4000 translations support even and odd pages, global pairs and
+variable page sizes. With extended addressing active, mapped addresses
+retain their region and all 40 virtual address bits during TLB lookup.
+User, supervisor and kernel access follow the R4000 segment bounds.
+For a defined `xkphys` cache attribute, the low 36 bits supply the physical
+address directly. Fetching or accessing a hole in the extended address
+space raises Address Error. The R4000 selects the refill vector from the
+interrupted mode's UX, SX or KX bit. Extended addressing adds `0x80` to
+the refill vector. A miss with EXL
 already set uses the general vector and preserves EPC. Invalid entries and
 writes to clean pages also use the general vector. The big- and little-endian
 system tests stamp the vector actually entered in the guest ROM. In QEMU
@@ -1643,8 +1648,18 @@ cache miss. Replaying that silicon erratum requires the pipeline and cache
 state. The manufacturer's report gives no write-to-first-translation interval.
 [R4000PC/SC revision errata, item 11](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=3).
 
-Extended R4000 address regions, TLB management instructions, reverse-endian
-user data, cache-isolation data accesses and CW4011 MMU behavior need
+The big- and little-endian R4000 guest ROMs map two pages with identical
+low 32 bits, fill both translations, rewrite the high tag with `TLBWI`,
+then read and execute from the replacement frame. A guest exception handler
+reads the full EPC to identify the executed virtual page. This tests access
+order. Measuring elapsed hardware cycles requires a trace that records the
+TLB write and the first use of its new physical frame on the same clock.
+[R4000 manual, segment tables 4-1 through 4-5](https://techpubs.jurassic.nl/library/manuals/2000/007-2489-001/pdf/007-2489-001.pdf#page=98).
+
+The snapshot executor leaves non-sign-extended addresses in 32-bit mode,
+reserved `xkphys` cache attributes and extended user addresses above the
+low 2 GiB under ERL unresolved. TLB management instructions, reverse-endian
+user data, cache-isolation data accesses and CW4011 MMU behavior also need
 additional processor-specific evidence.
 
 On a 40 MHz R3000 DECstation 5000/240 running Mach 3.0, the IOASIC counter
