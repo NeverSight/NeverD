@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/BinaryImageFlags.h"
+#include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/MachO/DyldSharedCache.h"
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
@@ -28,6 +29,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -39,6 +41,11 @@ using namespace neverd::macho_loader;
 namespace {
 
 constexpr va_t Base = 0x180000000;
+
+#define DARWIN_RTTI_CACHE_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define DARWIN_RTTI_TEXT(Name, Value)                                          \
+  [[maybe_unused]] constexpr char Name[] = Value;
+#include "../language/DarwinCxxRTTIFixtures.def"
 
 struct CacheFixture {
   std::vector<uint8_t> Data = std::vector<uint8_t>(0x5000);
@@ -714,6 +721,80 @@ TEST(DyldSharedCache, RangeReadsValidateWholePagesAndRetainOverlap) {
     auto OtherPage = Cache->readSlideFixupsInRange(Base + 0x4000, 16);
     ASSERT_TRUE(bool(OtherPage)) << llvm::toString(OtherPage.takeError());
     ASSERT_EQ(OtherPage->size(), 1u);
+  }
+}
+
+TEST(DyldSharedCache, ReadsNonUniqueCxxTypeNamesAcrossMappings) {
+  for (uint32_t Version : {kCacheV3, kCacheV5}) {
+    SCOPED_TRACE(Version);
+    CacheFixture Fixture(Version);
+    const uint64_t NameWord =
+        Version == kCacheV3 ? kCacheV3NameBits | (Base + kCacheNameStringOffset)
+                            : kCacheV5NameBits | kCacheNameStringOffset;
+    Fixture.set<uint64_t>(kCacheNameWordOffset, NameWord);
+    Fixture.set<uint64_t>(kCacheIndirectWordOffset,
+                          Version == kCacheV3 ? Base + kCacheDescriptorOffset
+                                              : kCacheDescriptorOffset);
+    std::memcpy(Fixture.Data.data() + kCacheNameStringOffset, kPublicTypeName,
+                sizeof(kPublicTypeName));
+    std::memcpy(Fixture.Data.data() + kCacheAuthStringOffset, kHiddenTypeName,
+                sizeof(kHiddenTypeName));
+    auto Parsed = Fixture.parse();
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+    BinaryImage Image;
+    Image.Format = BinaryFormat::MachO;
+    Image.Arch = Arch::AArch64;
+    Image.Bits = Bitness::Bits64;
+    Image.MachOSharedCache =
+        std::make_shared<DyldSharedCache>(std::move(*Parsed));
+    const va_t Descriptor = Base + kCacheDescriptorOffset;
+    const va_t Slot = Descriptor + sizeof(uint64_t);
+    EXPECT_FALSE(readMetadataPointerTarget(Image, Slot));
+    EXPECT_EQ(dwarf_eh::readItaniumTypeName(Image, Descriptor),
+              kPublicTypeName);
+    const va_t Auth = Base + kCacheAuthSlotOffset;
+    EXPECT_EQ(readMetadataPointerTarget(Image, Auth),
+              Base + kCacheAuthStringOffset);
+    EXPECT_TRUE(
+        dwarf_eh::readItaniumTypeName(Image, Auth - sizeof(uint64_t)).empty());
+
+    // Only the LSDA belongs to the selected image. Both the GOT slot and
+    // its descriptor lie outside that image.
+    Segment Table;
+    Table.VA = Base + kCacheLSDAOffset;
+    Table.Data.assign(kCacheCatchLSDA.begin(), kCacheCatchLSDA.end());
+    Table.Size = Table.FileSz = Table.Data.size();
+    Table.Flags = SegmentFlags::Readable;
+    Image.Segments.push_back(std::move(Table));
+    dwarf_eh::LSDAParseRequest Request;
+    Request.LSDAVA = Base + kCacheLSDAOffset;
+    Request.FunctionStart = Base;
+    Request.Personality = ExceptionPersonality::GxxPersonalityV0;
+    const auto ParsedLSDA = dwarf_eh::parseLSDA(Image, Request, {});
+    ASSERT_EQ(ParsedLSDA.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_TRUE(ParsedLSDA.Info);
+    ASSERT_EQ(ParsedLSDA.Info->TypeTable.size(), 1u);
+    const auto &Type = ParsedLSDA.Info->TypeTable.front();
+    EXPECT_EQ(Type.TypeInfoSlotVA, Base + kCacheIndirectSlotOffset);
+    EXPECT_EQ(Type.TypeInfoVA, Descriptor);
+    EXPECT_EQ(Type.TypeName, kPublicTypeName);
+    Image.ImportPtrSlots.emplace(Type.TypeInfoSlotVA, kPublicTypeInfo);
+    const auto Imported = dwarf_eh::parseLSDA(Image, Request, {});
+    ASSERT_EQ(Imported.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_TRUE(Imported.Info);
+    ASSERT_EQ(Imported.Info->TypeTable.size(), 1u);
+    const auto &Bound = Imported.Info->TypeTable.front();
+    EXPECT_FALSE(Bound.IsCatchAll);
+    EXPECT_EQ(Bound.TypeInfoVA, 0u);
+    EXPECT_EQ(Bound.TypeInfoSlotVA, Type.TypeInfoSlotVA);
+    EXPECT_EQ(Bound.TypeName, kPublicTypeInfo);
+    Image.ImportPtrSlots.clear();
+    Image.MachOChainedFixupsAmbiguous = true;
+    EXPECT_EQ(dwarf_eh::parseLSDA(Image, Request, {}).ParseStatus,
+              ExceptionParseStatus::Partial);
+    Image.MachOChainedFixupsAmbiguous = false;
+    Image.ImportPtrSlots.emplace(Slot, kPublicTypeInfo);
+    EXPECT_TRUE(dwarf_eh::readItaniumTypeName(Image, Descriptor).empty());
   }
 }
 

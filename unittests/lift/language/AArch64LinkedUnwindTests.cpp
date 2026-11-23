@@ -22,7 +22,9 @@
 
 #include <filesystem>
 #include <optional>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -32,6 +34,12 @@ using namespace neverd::dwarf_eh;
 #define NEVERD_A64_LINKED_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define NEVERD_A64_LINKED_TEXT(Name, Text) constexpr char Name[] = Text;
 #include "AArch64LinkedUnwindFixtures.def"
+
+#define DARWIN_RTTI_TEXT(Name, Value) constexpr char Name[] = Value;
+#define DARWIN_RTTI_LINK_TEXT(Name, Value) constexpr char Name[] = Value;
+#define DARWIN_RTTI_VALUE(Type, Name, Value)                                   \
+  [[maybe_unused]] constexpr Type Name = Value;
+#include "DarwinCxxRTTIFixtures.def"
 
 class AArch64LinkedUnwind : public ::testing::Test {
 protected:
@@ -177,6 +185,51 @@ protected:
     EXPECT_FALSE(End.State);
   }
 };
+
+TEST_F(AArch64LinkedUnwind, StrippedCatchesPreserveTypeInfoNames) {
+  ASSERT_NO_FATAL_FAILURE(write(kCatchSourceFile, kCatchSource));
+  const auto Path = file(kImageFile).string();
+  const std::set<std::string> Expected{kPublicTypeName, kHiddenTypeName,
+                                       kPrivateTypeName};
+  const auto Reader = Loader::create(BinaryFormat::MachO);
+  for (const auto *Opt : {kO0, kO2}) {
+    SCOPED_TRACE(Opt);
+    // Apple ld supports bind opcodes for ordinary arm64. Recent versions
+    // select chained fixups for arm64e even when asked for bind opcodes.
+    for (const auto &[Triple, Fixups] :
+         {std::pair{kTriple, kChained}, std::pair{kArm64Triple, kChained},
+          std::pair{kArm64Triple, kDyldInfo}}) {
+      SCOPED_TRACE(Triple);
+      SCOPED_TRACE(Fixups);
+      ASSERT_TRUE(run({kCxx, kTarget, Triple, Opt, Fixups, kStripLocal,
+                       file(kCatchSourceFile).string(), kOutput, Path}))
+          << Diagnostic;
+      auto Image = Reader->load(Path);
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      EXPECT_EQ(Image->MachOHasChainedFixups,
+                llvm::StringRef(Fixups) == kChained);
+      ASSERT_FALSE(Image->findSymbol(kPublicTypeInfo));
+      const auto *Function = Image->findSymbol(kCatchFunction);
+      ASSERT_TRUE(Function);
+      const auto *Frame = Image->ExceptionMetadata.findFunction(Function->Addr);
+      ASSERT_TRUE(Frame && Frame->Itanium);
+      ASSERT_EQ(Frame->ParseStatus, ExceptionParseStatus::Complete);
+      std::set<std::string> Names;
+      for (const auto &Type : Frame->Itanium->TypeTable) {
+        ASSERT_FALSE(Type.IsCatchAll);
+        ASSERT_NE(Type.TypeInfoSlotVA, 0u);
+        ASSERT_NE(Type.TypeInfoVA, 0u);
+        const auto *Word =
+            Image->readVA(Type.TypeInfoVA + sizeof(uint64_t), sizeof(uint64_t));
+        ASSERT_TRUE(Word);
+        EXPECT_EQ(bool(readLE<uint64_t>(Word) & kNameTag),
+                  Type.TypeName == kPublicTypeName);
+        EXPECT_TRUE(Names.insert(Type.TypeName).second);
+      }
+      EXPECT_EQ(Names, Expected);
+    }
+  }
+}
 
 TEST_F(AArch64LinkedUnwind, LinkerPreservesAnExplicitCompactPAuthLRRecipe) {
   ASSERT_NO_FATAL_FAILURE(link(kCompactSource));

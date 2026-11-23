@@ -9,6 +9,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
 
@@ -46,19 +47,15 @@ std::optional<va_t> resolveLandingPad(va_t Base, va_t Offset, uint8_t Format,
   return Base + Offset;
 }
 
-/// Largest run starting at \p Address, capped at \p Want, that a single
-/// \ref BinaryImage::readVA can hand back.  The decoder works on a bounded
-/// local buffer instead of chasing addresses field by field, so the length must
-/// stay inside one segment: adjacent segments are contiguous in VA space but
-/// live in separate buffers, and asking for a run that crosses the boundary
-/// fails outright rather than returning the short prefix.
-size_t mappedBytesAt(const BinaryImage &Img, va_t Address, size_t Want) {
-  if (Want == 0 || !Img.readVA(Address, 1))
+/// Largest contiguous prefix, capped at \p Want, that fits in one backing
+/// buffer. Adjacent virtual segments can occupy separate buffers.
+template <typename Reader> size_t readablePrefix(Reader Read, size_t Want) {
+  if (Want == 0 || !Read(1))
     return 0;
   size_t Lo = 1, Hi = Want;
   while (Lo < Hi) {
     const size_t Mid = Lo + (Hi - Lo + 1) / 2;
-    if (Img.readVA(Address, Mid))
+    if (Read(Mid))
       Lo = Mid;
     else
       Hi = Mid - 1;
@@ -66,14 +63,21 @@ size_t mappedBytesAt(const BinaryImage &Img, va_t Address, size_t Want) {
   return Lo;
 }
 
+size_t mappedBytesAt(const BinaryImage &Img, va_t Address, size_t Want) {
+  return readablePrefix([&](size_t N) { return Img.readVA(Address, N); }, Want);
+}
+
 std::string readMappedCString(const BinaryImage &Img, va_t Address) {
   if (Address == 0)
     return {};
-  const size_t Available = mappedBytesAt(
-      Img, Address, ::neverd::limits::loader::kLSDAMaxTypeNameBytes);
+  const auto Read = [&](size_t N) {
+    return macho_loader::readMetadataBytes(Img, Address, N);
+  };
+  const size_t Available =
+      readablePrefix(Read, ::neverd::limits::loader::kLSDAMaxTypeNameBytes);
   if (Available == 0)
     return {};
-  const uint8_t *Bytes = Img.readVA(Address, Available);
+  const uint8_t *Bytes = Read(Available);
   if (!Bytes)
     return {};
   size_t Length = 0;
@@ -84,6 +88,35 @@ std::string readMappedCString(const BinaryImage &Img, va_t Address) {
   if (Length == 0 || Length == Available)
     return {};
   return std::string(reinterpret_cast<const char *>(Bytes), Length);
+}
+
+bool readTypeTablePointer(const BinaryImage &Img, const uint8_t *Bytes,
+                          size_t Size, va_t EntryVA, uint8_t Encoding,
+                          const PointerBases &Bases, unsigned PtrSize,
+                          va_t &Target, va_t &IndirectSlot) {
+  // Cache slide info owns the dereference, including slots outside the
+  // selected Mach-O image. DWARF still owns the address of the slot.
+  const bool CacheIndirect = Img.MachOSharedCache && (Encoding & Indirect);
+  size_t Cursor = 0;
+  if (!readEncodedPointer(Bytes, Size, Cursor, EntryVA,
+                          CacheIndirect ? Encoding & ~Indirect : Encoding,
+                          Bases, PtrSize, &Img, Target, &IndirectSlot))
+    return false;
+  if (CacheIndirect && Target) {
+    IndirectSlot = Target;
+    if (auto Address =
+            macho_loader::readMetadataPointerTarget(Img, IndirectSlot)) {
+      Target = *Address;
+      return true;
+    }
+    Target = 0;
+    return !resolveRoutineName(Img, 0, IndirectSlot).empty();
+  }
+  // A bound slot can contain an ordinal or an unmapped link-time placeholder.
+  // Its binding still identifies the type.
+  if (Target && IndirectSlot && !Img.readVA(Target, 1))
+    Target = 0;
+  return true;
 }
 
 } // namespace
@@ -97,7 +130,13 @@ std::string readItaniumTypeName(const BinaryImage &Img, va_t TypeInfoVA) {
   if (TypeInfoVA > InvalidVA - PtrSize)
     return {};
 
-  const uint8_t *NameSlot = Img.readVA(TypeInfoVA + PtrSize, PtrSize);
+  const va_t SlotVA = TypeInfoVA + PtrSize;
+  if (Img.isMachO() && Img.Arch == Arch::AArch64 && Img.is64Bit()) {
+    const auto Name = macho_loader::readArm64TypeNameAddress(Img, SlotVA);
+    return Name ? readMappedCString(Img, *Name) : std::string{};
+  }
+
+  const uint8_t *NameSlot = Img.readVA(SlotVA, PtrSize);
   if (!NameSlot)
     return {};
   const va_t NameVA = PtrSize == 4 ? va_t(readTargetEndian<uint32_t>(
@@ -471,23 +510,13 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
           partial("Itanium LSDA type-table entry is not mapped");
           break;
         }
-        size_t SlotCursor = 0;
         va_t TypeInfo = 0;
         va_t IndirectSlot = 0;
-        if (!readEncodedPointer(Slot, EntrySize, SlotCursor, EntryVA,
-                                SlotEncoding, Bases, PtrSize, &Img, TypeInfo,
-                                &IndirectSlot)) {
+        if (!readTypeTablePointer(Img, Slot, EntrySize, EntryVA, SlotEncoding,
+                                  Bases, PtrSize, TypeInfo, IndirectSlot)) {
           partial("unresolved Itanium LSDA type-table entry");
           break;
         }
-        // A slot the loader binds holds no usable pointer in the file image:
-        // Mach-O chained fixups leave an encoded ordinal there and ELF leaves
-        // zero or a link-time placeholder.  Reporting that word as an address
-        // would hand a consumer a number that names nothing, so the address is
-        // dropped and the slot — which the binding does name — is what carries
-        // the identity.
-        if (TypeInfo != 0 && IndirectSlot != 0 && !Img.readVA(TypeInfo, 1))
-          TypeInfo = 0;
 
         ItaniumTypeEntry Entry;
         Entry.Index = Index;

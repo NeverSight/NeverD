@@ -1390,6 +1390,17 @@ An ordinary RTTI reference and an authenticated personality reference keep
 their respective pointer encodings. A writable source slot requires separate
 GOT storage for the published reference.
 
+On 64-bit Darwin Arm, the name word in a C++ `type_info` descriptor can
+carry the non-unique RTTI flag in bit 63. NeverD resolves the plain fixup
+for that word and clears the flag before reading the type name. The linked
+exception tests check public, hidden and translation-unit-local catch types
+after stripping local symbols, at both `-O0` and `-O2`. They cover chained
+fixups on arm64e and arm64 and dyld-info rebases on arm64. In a shared
+cache, the LSDA can reach a descriptor through an indirect slot outside the
+selected image. The v3 and v5 tests follow that slot and read its name from
+another mapping.
+See the [Darwin Arm type-name implementation in libc++](https://github.com/llvm/llvm-project/blob/main/libcxx/include/typeinfo).
+
 Apple Clang can leave a synchronous DWARF row in force through part of the
 prologue or epilogue. At an interrupt where its CFA cannot be proved to equal
 the incoming SP, recovery derives the CFA and integer register locations from

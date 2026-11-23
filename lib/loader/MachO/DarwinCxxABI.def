@@ -1,0 +1,11 @@
+//===- DarwinCxxABI.def - Apple C++ ABI fields ----------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+// Apple arm64 libc++ stores RTTI name uniqueness in the top bit of the
+// type_info name word. The remaining bits are the address of the mangled name.
+NEVERD_DARWIN_CXX_ABI_VALUE(kNonUniqueTypeNameBit, UINT64_C(1) << 63)
+
+#undef NEVERD_DARWIN_CXX_ABI_VALUE
