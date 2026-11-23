@@ -1665,6 +1665,16 @@ snapshots identify which frame the slot used. The time of the TLB write on
 silicon remains open.
 [VR4300 split-page probe](https://github.com/lemmy-64/n64-systemtest/blob/196f5421173220eb2f63a7a99c64795dc0ea0698/src/tests/tlb/cross_page_exec.rs#L112-L129).
 
+The N64 test maintainer reports a full hardware run with zero failures in
+3,935 cases. That revision registers the split-page branch test. Its separate
+timing group uses CP0 Count and expects one CPU cycle for a single `TLBWI`
+or `TLBWR` in the measured code. The timing group is opt-in and the run
+summary gives no per-case samples. Neither case records when a replacement
+entry became visible alongside the first access that used it.
+[N64 hardware run](https://github.com/thelemmy/nemu64-test/commit/c918c15794bcc80483352e50905bec43025f739c),
+[registered tests](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/testlist.rs#L1106),
+[TLB timing cases](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/timing/mod.rs#L517-L546).
+
 IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
 fetch at physical `0x1fc00000` supplies a jump, the read at `0x1fc00004`
 supplies its NOP delay slot, and the target at `0x1fc00220` supplies
@@ -1768,6 +1778,16 @@ is supplied at the observed instruction boundaries. The board ran
 little-endian. The reports record handler state and timer settings without
 an electrical timestamp for the CPU interrupt pin.
 [Original card report, timer loop](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt).
+
+In the two linear timer sweeps, each report lists 16 settings, 100–107
+and 150–157. Across all 48 observations the handler's timer 2 reading
+exceeds the programmed compare value by 35–46 system-clock counts, with a
+median of 40. For each column, subtract its programmed target from the
+reading to the right of `@`. The value to the left counts instructions.
+These are timer and handler measurements on the board's counter.
+[Timer sweeps on card-b](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt),
+[card-g](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g/irqsio/14IEX.txt),
+[card-g3](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g3/irqsio/14IEX.txt).
 
 The same board's `04IP2` probe reads Cause after a peripheral write with
 IEc cleared. Enabling the pending source in I_MASK, or acknowledging it
