@@ -78,6 +78,10 @@ SPILL_GUARDS = {
                                         "-DRECOMPUTE_DIFFERENCE"],
     "chain-spill-guard-mixed-xor": ["-DGUARD_HALVES", "-DMIXED_DIFFERENCE=xor"],
     "chain-spill-guard-mixed-sub": ["-DGUARD_HALVES", "-DMIXED_DIFFERENCE=dsubu"],
+    "chain-spill-guard-three-join": ["-DGUARD_HALVES", "-DTHREE_WAY_JOIN"],
+    "chain-spill-guard-three-loop": ["-DGUARD_HALVES", "-DTHREE_WAY_LOOP"],
+    "chain-spill-guard-three-fold-first-join": ["-DGUARD_HALVES", "-DTHREE_WAY_JOIN", "-DTHREE_WAY_FOLD_FIRST"],
+    "chain-spill-guard-three-fold-first-loop": ["-DGUARD_HALVES", "-DTHREE_WAY_LOOP", "-DTHREE_WAY_FOLD_FIRST"],
     "chain-spill-recheck-pack": ["-DRECHECK_LOW"],
 }
 
@@ -96,6 +100,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     self_forward = form == "loop-self-forward"
     repeated = form in ("chain-loop-result", "chain-loop-spill")
     split_guard = "-DGUARD_HALVES" in SPILL_GUARDS.get(form, ())
+    three_way = form.startswith("chain-spill-guard-three-")
     recheck_low = form == "chain-spill-recheck-pack"
     loop_guard = (form in SPILL_TRANSFERS or form in SPILL_GUARDS or repeated or
                   form in ("chain-spill-check", "chain-spill-recheck", "chain-spill-byte"))
@@ -103,7 +108,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     if joined or loop_guard or self_forward:
         fixture = "pic-guarded-forward.S"
         vary_both_checks = split_guard or recheck_low or form == "chain-spill-recheck"
-        values = [*values, *range(16 if vary_both_checks else 8)]
+        period = 16 if vary_both_checks else 8
+        values = [*values, *range(2 * period if three_way else period)]
     if form == "chain-guard-zero":
         values = [*values, 37, (-37) & 0xffffffffffffffff]
     flags = {
@@ -161,14 +167,21 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
         bias = 0xffffffff80200000
     order = "little" if little else "big"
     got = dyn["DT_PLTGOT"]
-    linked_gp = symbols(shared)["_gp"]["st_value"]
+    linked_symbols = symbols(shared)
+    linked_gp = linked_symbols["_gp"]["st_value"]
+    original_arms = ([bias + linked_symbols[s]["st_value"] for s in ("guard_fold", "guard_sub")]
+                     if three_way else ())
 
-    def execute(uc, entry, binding, entry_gp, storage, watched, got_storage):
+    def execute(uc, entry, binding, entry_gp, storage, watched, got_storage, arm_addresses=()):
         if bias > 0xffffffff:
             uc.ctl_set_tlb_mode(UC_TLB_VIRTUAL)
         for address, variant in zip(storage, binding):
             uc.mem_write(address, callbacks[variant].to_bytes(width, order))
         reads = []
+        visited_arms = []
+        for arm, address in enumerate(arm_addresses):
+            uc.hook_add(UC_HOOK_CODE, lambda cpu, pc, size, which: visited_arms.append(which),
+                        arm, begin=address, end=address)
         for index in watched:
             uc.hook_add(UC_HOOK_MEM_READ, lambda cpu, access, addr, size, val, data: reads.append((addr, size)),
                         begin=storage[index], end=storage[index])
@@ -208,6 +221,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             if self_forward:
                 addend = (value & 1) << 32
             trips = (value >> 1) & 3 if loop_guard or self_forward else 0
+            first_arm = (value >> 4) & 1 if three_way else 0
             producer_args = [argument]
             if repeated:
                 producer_args.extend((argument + i) & 0xffffffffffffffff for i in range(1, trips + 1))
@@ -228,6 +242,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                 if split_guard:
                     peer ^= (value >> 3) & 1
                 arguments.extend([peer, trips])
+                if three_way:
+                    arguments.append(first_arm)
                 if recheck_low:
                     arguments.append((forwarded & 0xffffffff) ^ ((value >> 3) & 1))
                 if rechecked:
@@ -242,6 +258,12 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                 arguments.extend([dispatch_result ^ ((value & 1) << 32), (value >> 1) & 1,
                                   third_argument ^ (((value >> 2) & 1) << 32)])
             result, _ = invoke(uc, entry, 64, little, arguments, initial_registers={25: entry, **saved})
+            if arm_addresses:
+                count = trips if form.endswith("-loop") else min(trips, 1)
+                expected_arms = [first_arm ^ (i & 1) for i in range(count)]
+                if visited_arms != expected_arms:
+                    raise AssertionError(f"{name} visited {visited_arms}, expected {expected_arms}")
+                visited_arms.clear()
             expected_calls = [(callbacks[binding[0]], arg, addend) + ((0, 0) if i or self_forward else ())
                               for i, arg in enumerate(producer_args)]
             if form == "chain-spill":
@@ -255,7 +277,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             if split_guard or recheck_low:
                 low_peer = arguments[3] if recheck_low else arguments[1] & 0xffffffff
                 low_equal = (forwarded & 0xffffffff) == low_peer
-                half_outcomes.add((trips, forwarded >> 32 == arguments[1] >> 32, low_equal))
+                half_outcomes.add((trips, first_arm, forwarded >> 32 == arguments[1] >> 32, low_equal))
                 forward &= low_equal
             if chain and forward:
                 argument = forwarded
@@ -300,8 +322,10 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             raise AssertionError(f"{name} did not exercise both branch outcomes for {binding}")
         if self_forward and guard_outcomes != {(n, calls) for n in range(4) for calls in (1, n + 1)}:
             raise AssertionError(f"{name} missed a self-call backedge for {binding}")
-        if (split_guard or recheck_low) and half_outcomes != set(product(range(4), (False, True), (False, True))):
-            raise AssertionError(f"{name} missed a high/low comparison outcome at a loop count for {binding}")
+        if split_guard or recheck_low:
+            expected_halves = set(product(range(4), range(2 if three_way else 1), (False, True), (False, True)))
+            if half_outcomes != expected_halves:
+                raise AssertionError(f"{name} missed a high/low comparison outcome at a path or loop count for {binding}")
         if loop_guard and guard_outcomes != set(product(range(4), range(len(imports)))):
             raise AssertionError(f"{name} missed a loop count or guard outcome for {binding}")
         if joined and guard_outcomes != set(product(range(2), range(1, len(imports) + 1))):
@@ -309,7 +333,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
 
     for binding in bindings:
         uc, entry = emulator(shared, 64, little, "import_probe", original=provider, load_bias=bias)
-        execute(uc, entry, binding, 0x486100, [bias + slot for slot in slots], range(len(slots)), bias + got)
+        execute(uc, entry, binding, 0x486100, [bias + slot for slot in slots], range(len(slots)),
+                bias + got, original_arms)
 
     routes = [("highc", []), ("llvmc", ["--llvm"])]
     if profile.startswith("n32-") and form in ("chain", "chain-spill"):

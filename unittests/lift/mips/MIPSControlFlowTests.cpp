@@ -24,6 +24,7 @@
 #include "llvm/Support/Error.h"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -1566,6 +1567,46 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
     // difference after all executed backedges and their delay slots.
     constexpr uint32_t SkipLoop = 0x12200004, Decrement = 0x6631ffff,
                        Backedge = 0x1620fffe;
+    // The entry XOR and both arms reach the same successor. Backward jumps
+    // revisit the counter test. Forward jumps go straight to the zero test.
+    // Keep both arms the same size so swapping them preserves branch offsets.
+    constexpr uint32_t InitialArm = 0x32010001, ExitIfDone = 0x1220000e,
+                       SelectSecond = 0x10200006, ToggleArm = 0x38210001;
+    for (bool Loop : {false, true}) {
+      SCOPED_TRACE(Loop ? "two backedges" : "three-way join");
+      for (bool ScalarFirst : {true, false}) {
+        SCOPED_TRACE(ScalarFirst ? "scalar arm first" : "folded arm first");
+        const auto ThreeWay = [&](const char *Name, bool Proven, uint32_t Whole,
+                                  uint32_t Fold, uint32_t WholeDelay = 0,
+                                  uint32_t FoldDelay = 0) {
+          const std::array<uint32_t, 4> Scalar{0, 0, Whole, WholeDelay};
+          const std::array<uint32_t, 4> Folded{Binary(0x26, 3, 12, 13),
+                                               Binary(0x26, 25, 14, 15), Fold,
+                                               FoldDelay};
+          const auto &First = ScalarFirst ? Scalar : Folded;
+          const auto &Second = ScalarFirst ? Folded : Scalar;
+          CheckParts(Name, Proven,
+                     {InitialArm, Xor, ExitIfDone, 0, Decrement, SelectSecond,
+                      ToggleArm, First[0], First[1], First[2],
+                      Loop ? 0x1000fff7u : 0x10000006u, First[3], Second[0],
+                      Second[1], Second[2], Loop ? 0x1000fff2u : 0x10000001u,
+                      Second[3], ZeroDiff, 0});
+        };
+        const auto Fold = Binary(0x25, 24, 3, 25);
+        constexpr uint32_t FlipDifference = 0x3b180001; // xori t8,t8,1
+        ThreeWay("entry XOR, subtraction and folded XOR", true, Sub, Fold);
+        ThreeWay("scalar arm compares only low bits", false,
+                 Binary(0x26, 24, 12, 13), Fold);
+        ThreeWay("scalar arm compares only high bits", false,
+                 Binary(0x26, 24, 14, 15), Fold);
+        ThreeWay("folded arm compares only low bits", false, Sub, Move(24, 3));
+        ThreeWay("folded arm compares only high bits", false, Sub,
+                 Move(24, 25));
+        ThreeWay("changed scalar difference", false, Sub, Fold, FlipDifference);
+        ThreeWay("changed folded difference", false, Sub, Fold, 0,
+                 FlipDifference);
+      }
+    }
     CheckParts("mixed zero evidence through a loop header", true,
                {RightArm, 0, 0x10000004, Sub, LowDiff, HighDiff, EitherDiff,
                 SkipLoop, 0, Decrement, Backedge, 0, ZeroDiff, 0});

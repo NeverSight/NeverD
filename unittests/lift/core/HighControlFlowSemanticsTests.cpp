@@ -11281,11 +11281,15 @@ TEST(HighControlFlowSemantics, LoopTakesEveryBackedgeToItsHeader) {
   Split.Body.front().Addr = 0;
   auto Latch = conditional(0x1200, 0x1100);
   Latch.Body.front().Addr = 0;
+  HighStmt Marker;
+  Marker.Kind = StmtKind::Nop;
+  Marker.Addr = 0x1300;
   F.Body = {assign(0x1000, 1, 0),
             assign(0x1100, 1, 7),
             Split,
             Latch,
             jump(0x1204, 0x1400),
+            Marker,
             jump(0x1300, 0x1100),
             result(0x1400, local(1))};
   MedFunc Med;
@@ -11316,6 +11320,51 @@ TEST(HighControlFlowSemantics, LoopTakesEveryBackedgeToItsHeader) {
   for (const auto &Item : Graph.Diagnostics.Items)
     ADD_FAILURE() << Item.Reason << " at " << Item.RelatedAddress;
   EXPECT_TRUE(Graph.Diagnostics.Complete);
+}
+
+TEST(HighControlFlowSemantics, JumpToLatchExecutesItsEdgeCopy) {
+  auto Med = blockFunction("latch_copy", 6);
+  Med.Blocks[0].Succs = {1};
+  Med.Blocks[1].Succs = {2, 5};
+  Med.Blocks[2].Succs = {3, 4};
+  Med.Blocks[3].Succs = {1};
+  Med.Blocks[4].Succs = {1};
+
+  auto Exit = conditional(0x1100, 0x1500);
+  Exit.Cond = local(1);
+  Exit.Body.front().Addr = 0;
+  auto Split = conditional(0x1200, 0x1400);
+  Split.Body.front().Addr = 0;
+  auto Copy = assign(0x1400, 1, 7);
+  Copy.IsPhiCopy = true;
+  HighFunc F;
+  F.Entry = Med.Entry;
+  F.Body = {assign(0x1000, 1, 0),
+            Exit,
+            Split,
+            assign(0x1300, 1, 5),
+            jump(0x1300, 0x1100),
+            Copy,
+            jump(0x1400, 0x1100),
+            result(0x1500, local(1))};
+  ASSERT_EQ(execute(F, 0, true), 5u);
+  ASSERT_EQ(execute(F, 1, true), 7u);
+  detectAndConvertLoops(F, {}, Med, false);
+
+  ASSERT_EQ(countKind(F, StmtKind::While), 1u);
+  const auto Graph = buildHighSourceFlowGraph(F);
+  ASSERT_TRUE(Graph.Diagnostics.Complete);
+  auto ToCopy = std::find_if(
+      Graph.Nodes.begin(), Graph.Nodes.end(), [](const auto &Node) {
+        return Node.Statement && Node.Statement->Kind == StmtKind::Goto &&
+               Node.Statement->GotoTarget == 0x1400;
+      });
+  ASSERT_NE(ToCopy, Graph.Nodes.end());
+  ASSERT_EQ(ToCopy->Successors.size(), 1u);
+  const auto *Target = Graph.Nodes[ToCopy->Successors.front()].Statement;
+  ASSERT_TRUE(Target);
+  EXPECT_TRUE(Target->IsPhiCopy);
+  EXPECT_EQ(Target->Addr, Copy.Addr);
 }
 
 TEST(HighControlFlowSemantics, ElseJumpToALabelInAnotherListStays) {

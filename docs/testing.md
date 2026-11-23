@@ -18392,6 +18392,16 @@ high XORs on the other. The harness exercises all four combinations of half
 matches at each trip count, including both routes to the shared zero test.
 Return-target cases also swap the arm order, omit or cross halves, and change
 the sample before the test.
+The three-way join and two-backedge fixtures start with a whole XOR, then
+select subtraction or the OR of the high and low 32-bit XORs. The original
+ELF trace checks both initial arm choices and zero to three iterations,
+including both orders of alternating backedges. Both physical orders of the
+two arithmetic blocks run through HighC and LLVMC. When subtraction lies in
+the final jump's delay slot, HighC must still execute it and the loop-carried
+assignments on that edge. The roundtrips check the forwarded word and the
+restored return address. Return-target tests
+replace either arm with a single-half check or flip the difference in its jump
+delay slot.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.
