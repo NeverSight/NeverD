@@ -19,6 +19,7 @@
 
 #define DEBUG_TYPE "neverd-med-llvm-return"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedReturnValue.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -583,6 +584,27 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           for (int P : Blk.Preds)
             Worklist.push_back(P);
         }
+      }
+    }
+
+    // A bare return can hand back an argument in the integer result register.
+    // Its operand on a link-register target carries the control destination.
+    if (!RetVal && RetBlkId >= 0 && TRI.LinkRegister && !WantFloat &&
+        !CurMedFunc->FPReturnViaX87 && ParamRegoffMap.count(RetRegOff) &&
+        (RetTy->isPointerTy() || RetTy->isIntegerTy())) {
+      const unsigned Bytes = RetTy->isPointerTy()
+                                 ? TRI.PointerSize
+                                 : (RetTy->getIntegerBitWidth() + 7) / 8;
+      if (Bytes && Bytes <= TRI.FullRegWidth &&
+          registerUntouchedFromEntry(*CurMedFunc, CurMedFunc->Blocks[RetBlkId],
+                                     RetRegOff, Bytes, TargetArch)) {
+        MedVar Incoming;
+        Incoming.Kind = MedVar::Reg;
+        Incoming.RegOff = RetRegOff;
+        Incoming.Size = Bytes;
+        Incoming.SSAVer = -1;
+        Incoming.TheArch = TargetArch;
+        RetVal = getIncomingParameter(Incoming, Builder);
       }
     }
 

@@ -29,11 +29,12 @@
 ///    `setcc` byte merged into the register;
 ///  - some other value.
 /// A function returns no value when every path hands back nothing defined.
-/// Unless a caller reads what a call to it returns, it also returns none
-/// when a path shows it means none, whatever the others hold (a constant
-/// beside such a path is what the code happened to hold, as `xor %eax,
-/// %eax` to store a zero), or when a path hands back nothing defined and
-/// none a deliberate value.
+/// A caller reading the result or a reachable branch choosing between
+/// distinct return-only constants keeps a defined result. Without either,
+/// a path that shows the function means no value outweighs incidental
+/// constants (such as `xor %eax, %eax` to store a zero). The function also
+/// returns none when a path hands back nothing defined and none a deliberate
+/// value.
 ///
 /// A caller reads a result where something it does depends on a byte of it
 /// (MedByteDemand): not the views of the return register the lift keeps in
@@ -79,8 +80,11 @@
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <map>
@@ -160,9 +164,13 @@ struct FunctionFacts {
     bool Returned = false;
   };
   std::map<va_t, ResultUse> CallResults;
-  /// What the return register holds at each return; none for the value it
-  /// entered the function with.
-  std::vector<std::optional<MedVar>> Returns;
+  /// The block and the value found by the shared return-register lookup.
+  struct ReturnSite {
+    const MedBlock *Block;
+    std::optional<MedVar> Value;
+  };
+  std::vector<ReturnSite> Returns;
+  bool SelectsReturnValue = false;
   /// Whether any operation or PHI writes the return register.  A return
   /// whose value no backward walk finds holds the entry value only when
   /// none does; otherwise a join can hide a value written before it.
@@ -303,7 +311,7 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
         const auto Returned = returnRegisterAt(
             Func, Block, static_cast<size_t>(&Op - Block.Ops.data()), TRI,
             Target);
-        Facts.Returns.push_back(Returned);
+        Facts.Returns.push_back({&Block, Returned});
         // classify sees through the views MedByteDemand::handBack follows.
         if (Returned)
           Demand.handBack(*Returned);
@@ -337,6 +345,98 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
     Use.Returned |= Demand.handsBack(Call->Output);
   }
   return Facts;
+}
+
+/// A leaf that only materializes an integer in the result register and
+/// returns it. Site.Value comes from the shared return-register lookup. On
+/// a link-register target the RETURN operand itself can be the return address.
+static std::optional<uint64_t>
+literalReturn(const FunctionFacts::ReturnSite &Site, const TargetRegInfo &TRI,
+              unsigned Bytes) {
+  const MedBlock &Block = *Site.Block;
+  if (!Site.Value || Site.Value->Size < Bytes || !Block.Succs.empty() ||
+      !Block.ExceptionalSuccs.empty() || !Block.Phis.empty() ||
+      Block.Ops.back().Opcode != NdOp::RETURN)
+    return std::nullopt;
+  const MedVar *Literal = Site.Value->isConst() ? &*Site.Value : nullptr;
+  for (const MedOp &Op : llvm::drop_end(Block.Ops)) {
+    if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
+        !Op.Inputs[0].isConst() || Op.Output.Kind != MedVar::Reg ||
+        Op.Output.RegOff != TRI.IntReturnReg)
+      return std::nullopt;
+    if (!Site.Value->isConst() && Op.Output == *Site.Value)
+      Literal = &Op.Inputs[0];
+  }
+  if (!Literal || Literal->Size < Bytes ||
+      (Literal->Provenance != ConstantAddressProvenance::Unknown &&
+       Literal->Provenance != ConstantAddressProvenance::Scalar))
+    return std::nullopt;
+  return Literal->ConstVal & llvm::maskTrailingOnes<uint64_t>(Bytes * 8);
+}
+
+/// A choice between two such leaves has an observable result. An indirect
+/// branch's CFG may retain labels for display or trapping, so only count
+/// successors that the published table binds to this very branch.
+static bool selectsLiteralReturns(const FunctionFacts &F,
+                                  const TargetRegInfo &TRI) {
+  const MedFunc &Func = *F.Func;
+  const unsigned Bytes =
+      Func.ReturnType ? Func.ReturnType->Size : TRI.FullRegWidth;
+  if (Func.AnalysisOnly || !Bytes || Bytes > sizeof(uint64_t))
+    return false;
+  llvm::SmallDenseMap<int, uint64_t, 4> Leaves;
+  for (const auto &Site : F.Returns)
+    if (const auto Value = literalReturn(Site, TRI, Bytes))
+      Leaves.try_emplace(Site.Block->Id, *Value);
+  if (Leaves.size() < 2)
+    return false;
+  llvm::DenseSet<std::pair<va_t, va_t>> TableEdges;
+  for (const JumpTable &Table : Func.JumpTables)
+    if (Table.IndexDomainAuthenticated && !Table.AnalysisOnly &&
+        !Table.MutatedUnsafe &&
+        !Func.UnsafeIndirectBranchAddresses.count(Table.InsnAddr))
+      for (va_t Target : Table.Targets)
+        TableEdges.insert({Table.InsnAddr, Target});
+  // Kept labels and exceptional continuations can be disconnected from
+  // ordinary execution. Follow the published edges from the entry.
+  llvm::SmallBitVector Visited(Func.Blocks.size());
+  llvm::SmallVector<unsigned, 16> Pending{0};
+  const auto Dynamic = [](const MedVar &V) {
+    return !V.isConst() && V.Kind != MedVar::Unspecified;
+  };
+  Visited.set(0);
+  while (!Pending.empty()) {
+    const MedBlock &Block = Func.Blocks[Pending.pop_back_val()];
+    if (Block.Succs.empty())
+      continue;
+    const MedOp *Branch = Block.Ops.empty() ? nullptr : &Block.Ops.back();
+    const bool Indirect = Branch && Branch->Opcode == NdOp::INDIR_BR;
+    const bool Choice = Branch && Branch->Opcode == NdOp::COND_BR &&
+                        Branch->NumInputs == 2 && Dynamic(Branch->Inputs[1]);
+    if (Indirect && (Branch->NumInputs != 1 || !Dynamic(Branch->Inputs[0])))
+      continue;
+    if (Block.Succs.size() > 1 && !Choice && !Indirect)
+      continue;
+    std::optional<uint64_t> First;
+    for (int Succ : Block.Succs) {
+      if (static_cast<unsigned>(Succ) >= Func.Blocks.size())
+        continue;
+      const MedBlock &Next = Func.Blocks[Succ];
+      if (Indirect && !TableEdges.contains({Branch->Addr, Next.StartAddr}))
+        continue;
+      if (!Visited.test(Succ)) {
+        Visited.set(Succ);
+        Pending.push_back(Succ);
+      }
+      const auto It = Leaves.find(Succ);
+      if (It == Leaves.end())
+        continue;
+      if (First && *First != It->second)
+        return true;
+      First = It->second;
+    }
+  }
+  return false;
 }
 
 bool isComparison(NdOp Opcode) {
@@ -520,7 +620,8 @@ private:
   void summarize(State &S) {
     FunctionFacts &F = S.Facts;
     if (S.Settles) {
-      for (const std::optional<MedVar> &Returned : F.Returns) {
+      for (const auto &Site : F.Returns) {
+        const auto &Returned = Site.Value;
         if (!Returned) {
           F.Paths.push_back(!entersReturnRegister(*S.Func)
                                 ? ReturnedValue::Unwritten
@@ -531,6 +632,14 @@ private:
         std::set<ValueKey> Seen;
         classify(F, *Returned, F.Paths, Seen, 0);
       }
+      // Only a mixed contract can lose defined results to an empty exit.
+      if (F.Returns.size() >= 2 &&
+          llvm::any_of(F.Paths, [](const ReturnPath &P) {
+            return P.Kind == ReturnedValue::Unwritten ||
+                   P.Kind == ReturnedValue::Nothing ||
+                   P.Kind == ReturnedValue::CalleeResult;
+          }))
+        F.SelectsReturnValue = selectsLiteralReturns(F, TRI);
       // No ordinary RETURN is not a proof of no return: an external catch
       // funclet can resume its parent and supply a value after attachment.
       // Use the shared proof, which includes exceptional edges and missing
@@ -1122,7 +1231,7 @@ private:
       Undefined += UnlessRead;
     if (Undefined == Paths.size())
       return {true, Shown};
-    if (Read)
+    if (Read || S.Facts.SelectsReturnValue)
       return {};
     // A constant left beside a path that shows the function means no value
     // is what the code happened to hold there (`xor %eax, %eax` to store a

@@ -10,6 +10,7 @@ add_neverd_component_library(NeverDIRMed
   MedDispatchSlots.cpp
   MedDynamicStack.cpp
   MedPointerAccesses.cpp
+  MedReturnArguments.cpp
   X86/RegistrationFrame.cpp
   X86/RegistrationDisplayJoins.cpp
   X86/RegistrationCallback.cpp

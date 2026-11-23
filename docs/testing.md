@@ -910,8 +910,10 @@ bytes, missing branch writes, disconnected cycles and exhausted work.
 `Win64CallContract.OverwrittenStackArgumentDoesNotDemandItsEntryBytes` executes
 both C routes at O0/O2, with selected and omitted callees and pipeline
 optimization on/off. Native x64 code varies the overwritten input while an
-independent seventh stack argument and pointer read remain observable. The
-omitted-callee case also checks that unprototyped wide immediates keep their
+independent seventh stack argument and pointer read remain observable.
+The full-width store consumes no incoming word. A 32-bit store reads the
+original word once at the call site and carries its upper half to the result.
+The omitted-callee case also checks that unprototyped wide immediates keep their
 full C carrier rather than relying on default int promotion.
 
 `X64ContinuationIntegerTest` in `NeverDX64ContinuationSourceTests` compares
@@ -9200,6 +9202,14 @@ result a caller reads; and
 `AConstantTheCodeHeldIsNoResult` and
 `AFloatResultReadsNoIntegerItsFunctionHandsBack` compile and run the C of
 such functions, which a null argument must not trap.
+`ReturnContracts.OnlyAProvenChoiceOfReturnValuesOutweighsABareReturn`
+checks distinct scalar results at their inferred width, incidental stores,
+disconnected blocks and the provenance of indirect edges.
+`COFFTableBaseCLI.BothSourceRoutesUseTheSharedBaseProof` executes all six
+selectors of both PE fixtures through HighC and LLVMC.
+`ReturnContract.BareAArch64ReturnKeepsTheIncomingIntegerArgument` runs
+both C outputs on a bare return carrying a 64-bit argument in x0 and on
+the two paths that replace it with a constant.
 `SysVCallContract.AnIntegerItsCallersReadIsTheResultBesideAReloadedDouble`
 runs a caller that tests the integer a function returns after reloading a
 double into XMM0: the function must not be typed as returning the double.

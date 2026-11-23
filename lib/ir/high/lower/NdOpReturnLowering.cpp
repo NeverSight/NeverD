@@ -26,7 +26,6 @@
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
-#include <map>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -47,72 +46,6 @@ ExprPtr parameterInRegister(const MedFunc &Med, uint64_t Reg) {
     return HighExpr::makeVar(Parameter, Med.TypedParams[I].Type);
   }
   return nullptr;
-}
-
-/// A SUBBYTES that re-views the low bytes of the register it reads is a view
-/// of that register, not a write. Defined with the other return helpers below.
-bool isRegisterLowView(const MedOp &Op);
-
-/// A copy of a register onto itself names the value that arrived in it.
-bool isIncomingRegisterCopy(const MedOp &Op) {
-  const MedVar &Out = Op.Output;
-  return Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
-         Op.Inputs[0].Kind == Out.Kind && Op.Inputs[0].RegOff == Out.RegOff &&
-         Op.Inputs[0].Size == Out.Size && Op.Inputs[0].Id == Out.Id &&
-         Op.Inputs[0].SSAVer == Out.SSAVer;
-}
-
-/// Whether every path from the function's entry into \p Block leaves the
-/// \p Width bytes of register at \p Reg as the caller passed them.  A phi or
-/// write of any of those bytes other than the copy that names the incoming
-/// value, a call whose callee may change them, an exceptional entry, which
-/// the unwinder fills, or an entry no predecessor explains, each leaves them
-/// otherwise. A compare's low view does not. A call that keeps the register
-/// does not.
-bool registerUntouchedFromEntry(const MedFunc &Med, const MedBlock &Block,
-                                uint64_t Reg, uint64_t Width, Arch TheArch) {
-  auto Overlaps = [&](const MedVar &V) {
-    return V.Kind == MedVar::Reg && V.Size > 0 && V.RegOff < Reg + Width &&
-           Reg < V.RegOff + V.Size;
-  };
-  auto CallKeeps = [&](const MedOp &Op) {
-    if (Op.PreservesCallerSaved)
-      return true;
-    if (Width == 0 || Width > 0xFFFF)
-      return false;
-    return callPreservesRegisterBytes(TheArch, Op.CallPreservedGPRs, Reg,
-                                      static_cast<uint16_t>(Width));
-  };
-  std::map<int, const MedBlock *> ById;
-  for (const MedBlock &Candidate : Med.Blocks)
-    ById.emplace(Candidate.Id, &Candidate);
-  std::set<int> Seen{Block.Id};
-  std::vector<const MedBlock *> Work{&Block};
-  while (!Work.empty()) {
-    const MedBlock &Current = *Work.back();
-    Work.pop_back();
-    if (!Current.ExceptionalPreds.empty())
-      return false;
-    for (const PhiNode &Phi : Current.Phis)
-      if (Overlaps(Phi.Output))
-        return false;
-    for (const MedOp &Op : Current.Ops)
-      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL
-              ? !CallKeeps(Op)
-              : (Overlaps(Op.Output) && !isIncomingRegisterCopy(Op) &&
-                 !isRegisterLowView(Op)))
-        return false;
-    if (Current.Preds.empty() && Current.StartAddr != Med.Entry)
-      return false;
-    for (const int Pred : Current.Preds) {
-      const auto It = ById.find(Pred);
-      if (It == ById.end())
-        return false;
-      if (Seen.insert(Pred).second)
-        Work.push_back(It->second);
-    }
-  }
-  return true;
 }
 
 /// A bare RET does not syntactically read the return-value register. A runtime
@@ -152,20 +85,6 @@ ExprPtr unchangedDeclaredReturnParameter(const MedFunc &Med,
     }
   }
   return parameterInRegister(Med, ReturnReg);
-}
-
-/// A SUBBYTES that re-views the low bytes of the register it writes (`w0`
-/// from `x0` after `add w0`, kept for a loop that reads w0 again) is a view
-/// of the register's value, not its definition: a result wider than the view
-/// is the register it was taken from.
-bool isRegisterLowView(const MedOp &Op) {
-  return Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 1 &&
-         Op.Inputs[0].Kind == MedVar::Reg &&
-         isSameRegisterLowSlice(Op.Output.RegOff, Op.Output.Size,
-                                Op.Inputs[0].RegOff, Op.Inputs[0].Size,
-                                Op.NumInputs < 2 || !Op.Inputs[1].isConst()
-                                    ? 0
-                                    : Op.Inputs[1].ConstVal);
 }
 
 /// A compare reads the low bytes through a view. That view is not a write:

@@ -414,20 +414,33 @@ TEST_F(COFFTableBaseCLI, BothSourceRoutesUseTheSharedBaseProof) {
       EXPECT_NE(Text.find("sub_140001000("), std::string::npos);
       EXPECT_NE(Text.find("return"), std::string::npos);
       if (hasCrossTargetClang()) {
-        // Zero is a valid argument for either the recovered integer or pointer
-        // spelling. It selects case zero and must return its machine value.
         const fs::path Program =
             tmpFile(Variant + (LLVM ? "-llvm.exe" : "-high.exe"));
         const fs::path Harness =
             tmpFile(Variant + (LLVM ? "-llvm-run.c" : "-high-run.c"));
         std::ofstream RunSource(Harness);
-        RunSource << Text
-                  << "\nint main(void) { return sub_140001000(0, 0) == 10 ? 0 "
-                     ": 1; }\n";
+        RunSource << Text << R"(
+int main(void) {
+    for (uintptr_t i = 0; i < 6; ++i)
+        if (sub_140001000((SELECTOR_TYPE)i, 0) != 10 + i)
+            return 1;
+    return 0;
+}
+)";
         RunSource.close();
-        const auto Built = exec(NEVERD_TEST_CLANG, {"-O0", Harness.string(),
-                                                    "-o", Program.string()});
-        ASSERT_TRUE(Built.ok()) << Built.err;
+        // Both an integer and a pointer can carry this fixture's selector.
+        // Let the C compiler check the call against the recovered prototype.
+        auto Build = [&](const char *Type) {
+          return exec(NEVERD_TEST_CLANG,
+                      {"-O0", "-Werror=int-conversion",
+                       std::string("-DSELECTOR_TYPE=") + Type, Harness.string(),
+                       "-o", Program.string()});
+        };
+        const auto Integer = Build("uintptr_t");
+        if (!Integer.ok()) {
+          const auto Pointer = Build("void *");
+          ASSERT_TRUE(Pointer.ok()) << Integer.err << Pointer.err;
+        }
         const auto Ran = exec(Program.string(), {});
         EXPECT_TRUE(Ran.ok()) << Ran.err;
       }

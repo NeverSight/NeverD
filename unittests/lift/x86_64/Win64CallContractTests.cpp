@@ -2919,6 +2919,7 @@ TEST(Win64CallContract, OverwrittenStackArgumentDoesNotDemandItsEntryBytes) {
         // The sixth argument is deliberately unwritten.
         0x48, 0xC7, 0x44, 0x24, 0x30, 29, 0, 0, 0, 0x48, 0xC7, 0x44, 0x24, 0x38,
         43, 0, 0, 0, 0x48, 0x8D, 0x4C, 0x24, 0x38, 0xE8};
+    const va_t CallSite = Text + Caller.size() - 1;
     const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
     Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
     Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x48, 0xC3});
@@ -2943,7 +2944,7 @@ TEST(Win64CallContract, OverwrittenStackArgumentDoesNotDemandItsEntryBytes) {
 #if defined(__linux__) && defined(__x86_64__)
 #include <sys/mman.h>
 #include <string.h>
-static int check_native(uint64_t seed) {
+static int check_native(uint64_t seed, uint64_t expected) {
   static const uint8_t original[] = {
 )";
     for (uint8_t Byte : Body)
@@ -2960,12 +2961,12 @@ static int check_native(uint64_t seed) {
       uint64_t *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
   uint64_t pointee = 43;
   uint64_t actual = ((callee_t)code)(&pointee, 11, 13, 17, 5, seed, 29);
-  int bad = actual != 79 || pointee != 43;
+  int bad = actual != expected || pointee != 43;
   if (munmap(mapping, 4096)) return 1;
   return bad;
 }
 #else
-static int check_native(uint64_t seed) { return 0; }
+static int check_native(uint64_t seed, uint64_t expected) { return 0; }
 #endif
 )";
     for (bool OmitCallee : {false, true})
@@ -2999,14 +3000,26 @@ static int check_native(uint64_t seed) { return 0; }
           } else
             ASSERT_TRUE(
                 HighCEmitter().emit(Result.HighFuncs, Output, COptions));
-          const bool Unknown =
-              Source.find("__builtin_trap") != std::string::npos;
-          EXPECT_EQ(Unknown, Partial) << Source;
-          if (Partial || Unknown)
-            continue;
-          std::string Oracle;
+          const std::string Site = "0x" + llvm::utohexstr(CallSite) + "ULL";
+          const std::string Operand =
+              "NEVERD_WIN64_CALL_STACK_U64(" + Site + ", 40U)";
+          ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          EXPECT_EQ(Source.find(Operand) != std::string::npos, Partial)
+              << Source;
+          std::string Oracle =
+              "\n#define LIVE_MASK " +
+              std::string(Partial ? "UINT64_C(0xffffffff00000000)" : "0") +
+              "\n#define CALL_SITE " + Site + R"(
+static uint64_t input_word;
+static unsigned reads;
+uint64_t neverd_win64_call_stack_u64(uint64_t pc, uint32_t offset) {
+  if (pc != CALL_SITE || offset != 40) __builtin_trap();
+  ++reads;
+  return input_word;
+}
+)";
           if (OmitCallee)
-            Oracle = R"(
+            Oracle += R"(
 #define SYMBOL_PREFIX_(prefix) #prefix
 #define SYMBOL_PREFIX(prefix) SYMBOL_PREFIX_(prefix)
 uint64_t stack_provider(uint64_t, uint64_t, uint64_t, uint64_t,
@@ -3014,16 +3027,20 @@ uint64_t stack_provider(uint64_t, uint64_t, uint64_t, uint64_t,
     __asm__(SYMBOL_PREFIX(__USER_LABEL_PREFIX__) "overwriting_consumer");
 uint64_t stack_provider(uint64_t pointer, uint64_t a1, uint64_t a2,
                         uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
-  return *(uint64_t *)(uintptr_t)pointer + 7 + a6;
+  return *(uint64_t *)(uintptr_t)pointer + (a5 & LIVE_MASK) + 7 + a6;
 }
 )";
           Oracle += R"(
-static int check_native(uint64_t seed);
+static int check_native(uint64_t seed, uint64_t expected);
 int main(void) {
   for (unsigned i = 0; i < 32; ++i) {
-    if (call_overwritten_stack() != 79) return 1;
-    if (check_native(UINT64_C(0xFEDCBA9876543210) ^
-                     (uint64_t)i * UINT64_C(0x100010001))) return 2;
+    input_word = UINT64_C(0xFEDCBA9876543210) ^
+                 (uint64_t)i * UINT64_C(0x100010001);
+    uint64_t expected = (input_word & LIVE_MASK) + 79;
+    reads = 0;
+    if ((uint64_t)call_overwritten_stack() != expected ||
+        reads != (LIVE_MASK != 0)) return 1;
+    if (check_native(input_word, expected)) return 2;
   }
   return 0;
 }

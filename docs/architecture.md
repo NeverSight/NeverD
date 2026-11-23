@@ -5520,7 +5520,8 @@ printed wrong code.
 A RETURN hands back the parameter that arrived in the result register when
 no path from the function's entry to it writes any byte of that register,
 calls a routine, which clobbers it, or enters through an exceptional edge
-(`registerUntouchedFromEntry` in `NdOpReturnLowering.cpp`). AArch64 and ARM
+(`registerUntouchedFromEntry` in `MedReturnArguments.cpp`). HighC and LLVM
+use the same proof for an incoming integer argument at a bare return. AArch64 and ARM
 pass the first argument in the result register, so the bare `ret` beside the
 tail call of `if (b) return g(b); return a;` returns `a`. A compare that only
 reads the low half of that register (`cbnz w0` after a call, or of the
@@ -5551,6 +5552,14 @@ results that function hands back. So a callee and the callers that hand its
 result back return no value together, as `sqlite3_free` and the functions
 that end in it do, and an operation that reads the result of a call that
 returns nothing, where no byte of it reaches anything, reads zero instead.
+
+A reachable branch whose arms only return distinct integer constants selects
+a result even when another exit leaves the register untouched. For an
+indirect branch, the jump table must prove its index domain and bind the
+return blocks to that instruction. The comparison uses the inferred result
+width. If the other exit needs an unspecified register, generated C traps
+on that path.
+
 The same demand (`MedByteDemand`) settles which register holds the result of
 a function whose returns leave a floating value in the vector return
 register beside an integer in the integer one. The type pass chooses from

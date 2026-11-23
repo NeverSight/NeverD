@@ -21,6 +21,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -33,6 +34,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -1327,6 +1329,82 @@ TEST(ReturnContracts, AConstantBesideAPathThatNeverWroteTheRegisterIsNoValue) {
       std::vector<bool>{true});
 }
 
+TEST(ReturnContracts, OnlyAProvenChoiceOfReturnValuesOutweighsABareReturn) {
+  const auto C = [](uint64_t Value) { return MedVar::makeConst(Value, 8); };
+  const auto Cond = [&](va_t Target, int Predicate) {
+    return operation(NdOp::COND_BR, {}, {C(Target), temporary(Predicate)});
+  };
+  // The guard's false arm leaves RAX as it entered. The other arm chooses
+  // between two blocks whose only effect is the integer they return.
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Cond(0x1020, 9)}, {}, {1, 2}),
+       block({returning(rax(0))}, {0}), block({Cond(0x1040, 10)}, {0}, {3, 4}),
+       block({returning(C(10))}, {2}),
+       block({operation(NdOp::COPY, rax(1), {C(15)}), returning(rax(1))},
+             {2})});
+  for (auto &B : F.Blocks)
+    B.StartAddr = CalleeEntry + 0x10 * B.Id;
+  F.Blocks[2].Ops.back().Addr = 0x1024;
+  auto IsVoid = [](const MedFunc &F) { return bool(settle({F}).front()); };
+  EXPECT_FALSE(IsVoid(F));
+  std::reverse(F.Blocks[2].Succs.begin(), F.Blocks[2].Succs.end());
+  EXPECT_FALSE(IsVoid(F));
+
+  MedFunc Same = F;
+  Same.Blocks[3].Ops.back() = returning(C(15));
+  EXPECT_TRUE(IsVoid(Same));
+  MedFunc Narrow = F;
+  Narrow.ReturnType = NdType::makeInt(1);
+  Narrow.Blocks[3].Ops.back() = returning(C(0x10f));
+  EXPECT_TRUE(IsVoid(Narrow));
+  MedFunc Address = F;
+  Address.Blocks[3].Ops.back().Inputs[0].Provenance =
+      ConstantAddressProvenance::CodeAddress;
+  EXPECT_TRUE(IsVoid(Address));
+  MedFunc Store = F;
+  auto &Ops = Store.Blocks[4].Ops;
+  Ops.insert(Ops.end() - 1, operation(NdOp::STORE, {}, {temporary(7), rax(1)}));
+  EXPECT_TRUE(IsVoid(Store));
+  MedFunc Fixed = F;
+  Fixed.Blocks[2].Ops.back().Inputs[1] = C(0);
+  EXPECT_TRUE(IsVoid(Fixed));
+  Fixed.Blocks[2].Ops.back().Inputs[1] = MedVar::makeUnspecified(1, Arch::X64);
+  EXPECT_TRUE(IsVoid(Fixed));
+  MedFunc Unreachable = F;
+  Unreachable.Blocks[0].Ops.back() = operation(NdOp::BRANCH, {}, {C(0x1010)});
+  Unreachable.Blocks[0].Succs = {1};
+  Unreachable.Blocks[2].Preds.clear();
+  EXPECT_TRUE(IsVoid(Unreachable));
+
+  auto &Branch = F.Blocks[2].Ops.back();
+  Branch = operation(NdOp::INDIR_BR, {}, {temporary(8)});
+  Branch.Addr = 0x1024;
+  EXPECT_TRUE(IsVoid(F));
+  JumpTable &Table = F.JumpTables.emplace_back();
+  Table.InsnAddr = Branch.Addr;
+  Table.IndexDomainAuthenticated = true;
+  Table.Targets = {0x1030, 0x1040};
+  EXPECT_FALSE(IsVoid(F));
+  ++Table.InsnAddr;
+  EXPECT_TRUE(IsVoid(F));
+  --Table.InsnAddr;
+  Table.Targets = {0x1030, 0x1030};
+  EXPECT_TRUE(IsVoid(F));
+  Table.Targets.back() = 0x1040;
+  Table.MutatedUnsafe = true;
+  EXPECT_TRUE(IsVoid(F));
+  Table.MutatedUnsafe = false;
+  Table.AnalysisOnly = true;
+  EXPECT_TRUE(IsVoid(F));
+  Table.AnalysisOnly = false;
+  Table.IndexDomainAuthenticated = false;
+  EXPECT_TRUE(IsVoid(F));
+  Table.IndexDomainAuthenticated = true;
+  F.UnsafeIndirectBranchAddresses.insert(Branch.Addr);
+  EXPECT_TRUE(IsVoid(F));
+}
+
 TEST(ReturnContracts, AFunctionThatNeverReturnsReturnsNoValue) {
   MedOp Abort = callTo(0x3000, 1);
   Abort.DoesNotReturn = true;
@@ -1541,6 +1619,80 @@ TEST(ReturnContract, PropagatedParametersOwnCompleteIntegerReturnValues) {
               TRI.ReturnOperandIsValue);
     Return.Inputs[0].RegOff = TRI.IntReturnReg;
     EXPECT_FALSE(hasPropagatedIntegerReturnValue(Return, A, Value.Size));
+  }
+}
+
+TEST(ReturnContract, IncomingRegisterNeedsAnEntryPathWithNoClobber) {
+  MedFunc F = function(CalleeEntry, {block({}, {}, {1}), block({}, {0})});
+  F.Blocks[0].StartAddr = F.Entry;
+  auto Untouched = [&] {
+    return registerUntouchedFromEntry(F, F.Blocks[1], x86reg::RAX, 8,
+                                      Arch::X64);
+  };
+  EXPECT_TRUE(Untouched());
+  F.Blocks[0].Ops = {operation(NdOp::SUBBYTES, sized(rax(1), 4),
+                               {rax(0), MedVar::makeConst(0, 4)})};
+  EXPECT_TRUE(Untouched());
+  F.Blocks[0].Ops.front().Inputs[1] = temporary(11);
+  EXPECT_FALSE(Untouched());
+  F.Blocks[0].Ops = {callTo(0x3000, 1)};
+  EXPECT_FALSE(Untouched());
+  F.Blocks[0].Ops.clear();
+  F.Blocks[0].Succs.clear();
+  F.Blocks[1].Preds = F.Blocks[1].Succs = {1};
+  EXPECT_FALSE(Untouched());
+}
+
+TEST(ReturnContract, BareAArch64ReturnKeepsTheIncomingIntegerArgument) {
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Bits = Bitness::Bits64;
+  Image.Base = Image.Entry = CalleeEntry;
+  Segment Code;
+  Code.VA = CalleeEntry;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  // cbnz w2,bare; cbz w1,ten; mov w0,#15; ret; ten: mov w0,#10; ret; bare: ret
+  Code.Data = {0xc2, 0x00, 0x00, 0x35, 0x61, 0x00, 0x00, 0x34, 0xe0, 0x01,
+               0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6, 0x40, 0x01, 0x80, 0x52,
+               0xc0, 0x03, 0x5f, 0xd6, 0xc0, 0x03, 0x5f, 0xd6};
+  Code.Size = Code.FileSz = Code.Data.size();
+  auto Sym = Symbol::makeFunc(CalleeEntry, Code.Size);
+  Sym.Name = "choose_result";
+  Image.Symbols.push_back(std::move(Sym));
+  Image.Segments.push_back(std::move(Code));
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  Options.OnlyFunctionEntries = {CalleeEntry};
+  llvm::LLVMContext Context;
+  auto Result = Pipeline().run(Image, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  CEmitterOptions COptions;
+  COptions.TheArch = Image.Arch;
+  COptions.Format = Image.Format;
+  COptions.Image = &Image;
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    if (LLVM) {
+      auto Module = MedLLVMEmitter().emit(Result.MedFuncs, Context, "choose",
+                                          Image.Arch, {}, &Image, Image.Format);
+      ASSERT_TRUE(Module);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, COptions));
+    } else {
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, COptions));
+    }
+    OS.flush();
+    Source += R"(
+int main(void) {
+    uint64_t value = UINT64_C(0x1234567887654321);
+    return (uint64_t)choose_result(value, 1, 1) != value ||
+           choose_result(value, 0, 0) != 10 || choose_result(value, 1, 0) != 15;
+}
+)";
+    source_call_execution_test::compileAndRun(Source, {"-O2"});
   }
 }
 
