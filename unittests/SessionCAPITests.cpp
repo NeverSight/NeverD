@@ -13159,7 +13159,8 @@ TEST_F(SessionCAPITest, CachedSourceCopiesHaveIndependentLifetimes) {
   for (auto Read : {neverd_decompile, neverd_decompile_llvm}) {
     const auto Expected = takeString(Read(Session, Entry));
     ASSERT_FALSE(Expected.empty());
-    using OwnedText = std::unique_ptr<const char, decltype(&neverd_free_string)>;
+    using OwnedText =
+        std::unique_ptr<const char, decltype(&neverd_free_string)>;
     OwnedText First(Read(Session, Entry), neverd_free_string);
     OwnedText Second(Read(Session, Entry), neverd_free_string);
     ASSERT_TRUE(First);
@@ -14031,8 +14032,10 @@ TEST_F(SessionCAPITest, BothCBackendsAgreeWhichFunctionsReturnAValue) {
     GTEST_SKIP() << "needs a GNU-style host C compiler";
   // Whether a function returns a value is settled once, on MedIR.  LLVM-C
   // once showed a function that hands back its callee's result as void while
-  // its callers used the result, and register_tm_clones, which returns 0,
-  // too; HighC showed register_tm_clones' branch on a link-time 0.
+  // its callers used the result.  register_tm_clones, which C declares
+  // void, leaves a link-time 0 in RAX where it returns and jumps through a
+  // pointer where it does not, and no caller reads a result: both routes
+  // show it void.  HighC once showed its branch on the link-time 0.
   const std::string Binary = buildProgram(
       "returns",
       "int g;\n"
@@ -14067,7 +14070,7 @@ TEST_F(SessionCAPITest, BothCBackendsAgreeWhichFunctionsReturnAValue) {
                                             {"tail_void", true},
                                             {"value", false},
                                             {"tail_value", false},
-                                            {"register_tm_clones", false}};
+                                            {"register_tm_clones", true}};
   for (const auto &[Name, IsVoid] : Void) {
     SCOPED_TRACE(Name);
     const int Index = neverd_func_find_by_name(Session, Name.c_str());
@@ -14079,7 +14082,7 @@ TEST_F(SessionCAPITest, BothCBackendsAgreeWhichFunctionsReturnAValue) {
     EXPECT_EQ(ReturnType(LLVMC, Name) == "void", IsVoid) << LLVMC;
     if (Name == "register_tm_clones") {
       EXPECT_EQ(HighC.find("if ("), std::string::npos) << HighC;
-      EXPECT_NE(LLVMC.find("return 0;"), std::string::npos) << LLVMC;
+      EXPECT_EQ(LLVMC.find("return 0;"), std::string::npos) << LLVMC;
     }
   }
 #endif
