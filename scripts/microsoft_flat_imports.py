@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 import build_wdk_driver_fixtures as wdk
+import microsoft_ordinal_imports as ordinal
 import microsoft_ucrt_types as ucrt
 
 
@@ -40,6 +41,7 @@ CURRENT = {
     "DeltaCompression": ("msdelta.lib", ("msdelta",)),
     "PatchAPI": ("mspatcha.lib", ("patchapi",)),
     "NetworkDiagnostics": ("ndfapi.lib", ("ndfapi",)),
+    "SetupAdministration": ("advpack.Lib", ("advpub",)),
     "ProcessStatus": ("psapi.lib", ("psapi",)),
     "ProcessSnapshots": ("kernel32.Lib", ("processsnapshot",)),
     "InternetControlMessage": ("iphlpapi.lib", ("iphlpapi", "icmpapi")),
@@ -126,6 +128,11 @@ def legacy_headers(root, cache):
 def read_symbols(inputs, directory, run):
     if wdk.digest(Path(inputs["file"])) != inputs["sha256"]:
         raise ValueError("Microsoft SDK import library changed: " + inputs["file"])
+    if witnessed := inputs.get("ordinal_export_witness"):
+        if inputs["module"] != witnessed["module"]:
+            raise ValueError("SDK ordinal witness belongs to a different DLL")
+        return ordinal.symbols(Path(inputs["file"]), inputs["architecture"],
+                               inputs["module"], witnessed["exports"], witnessed.get("pe_export_names"))
     text = run(inputs["command"], directory / (inputs["module"] + "-imports.log"))
     symbols = ucrt.module_import_symbols(text, inputs["architecture"], inputs["module"])
     if not symbols:
@@ -138,6 +145,9 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
     current = json.loads(ucrt.INPUTS.read_text(encoding="utf-8"))
     groups = {key: value for key, value in CURRENT.items()
               if architecture != "x86" or key not in WIDE_ONLY}
+    ordinal_profiles = ordinal.profiles()
+    groups.update({name: (profile["library"], tuple(profile["headers"]))
+                   for name, profile in ordinal_profiles.items() if architecture in profile["targets"]})
     specifications = [(current["import_packages"][architecture], groups, primary,
                        primary, "c", ("winsock2", "windows"))]
     if legacy is not None:
@@ -174,6 +184,9 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
             # SensorsUtils.lib carries short imports for the versioned system DLL.
             if name == "SensorUtilities":
                 identity["module"] = "sensorsutilsv2.dll"
+            if name in ordinal_profiles:
+                record = ordinal.witness(ordinal_profiles[name], architecture)
+                identity.update(module=record["module"], ordinal_export_witness=record)
             # Both SDK libraries decorate their unannotated x86 APIs as stdcall.
             # Keep the original compiler and the declaration reader on that
             # target convention. verify_abis checks every selected object symbol.
@@ -187,6 +200,8 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
             source.write_text(prelude + "".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
             prefixes = {"ProcessSnapshots": "Pss", "InternetControlMessage": "Icmp"}
             scope = {"import_prefix": prefixes[name]} if name in prefixes else {}
+            if name == "SetupAdministration":
+                scope["c_linkage_imports_only"] = True
             units.append({"name": name, "source": source, "compiler": compiler + defaults,
                           "headers": headers, "default_calling_convention": "__stdcall" if stdcall else "",
                           "bridge": {"source": str(source), "source_sha256": wdk.digest(source),
@@ -207,10 +222,21 @@ def select(proof, declared, directory, run):
         return names
     symbols = read_symbols(proof["import_library"], directory, run)
     eligible = {name for name in symbols if name.startswith(proof.get("import_prefix", ""))}
-    names = sorted(eligible & set(declared))
+    declarations = set(declared)
+    missing_declarations = sorted(eligible - declarations)
+    if proof.get("c_linkage_imports_only"):
+        # Advpack exports several C names whose SDK archive exposes exclusively
+        # C++ linker symbols. Preserve the archive evidence for those names.
+        cpp_only = {name: sorted(symbols[name]) for name in sorted(eligible)
+                    if all(symbol.startswith(("?", "__imp_?")) for symbol in symbols[name])}
+        proof["cpp_only_linker_symbols"] = cpp_only
+        eligible.difference_update(cpp_only)
+    names = sorted(eligible & declarations)
+    if "ordinal_export_witness" in proof["import_library"] and (missing := eligible - set(names)):
+        raise ValueError("Microsoft headers lack witnessed ordinal exports: " + ", ".join(sorted(missing)))
     if not names:
         raise ValueError("Microsoft SDK headers and import library share no named API")
-    proof.update(projected_functions=names, imports_without_declaration=sorted(eligible-set(names)))
+    proof.update(projected_functions=names, imports_without_declaration=missing_declarations)
     return names
 
 

@@ -43,13 +43,40 @@ namespace coff_loader {
 
 std::string ordinalImportName(Arch Architecture, llvm::StringRef Module,
                               uint16_t Ordinal) {
-  // Microsoft's 10.0.26100 import libraries bind this public API to ordinal
-  // 101 on x86, x64 and ARM64. The SDK caller/compiler checks use the actual
-  // target libraries; neither another DLL nor another ordinal supplies it.
-  if ((Architecture == Arch::X86 || Architecture == Arch::X64 ||
-       Architecture == Arch::AArch64) &&
-      Module.equals_insensitive("d3d12.dll") && Ordinal == 101)
-    return "D3D12CreateDevice";
+  struct Binding {
+    const char *ModuleName;
+    uint16_t Number;
+    const char *Names[3]; // x86, x64, ARM64
+  };
+  static constexpr Binding Bindings[] = {
+#include "WindowsOrdinalImports.inc"
+  };
+  const auto It = std::lower_bound(
+      std::begin(Bindings), std::end(Bindings), Ordinal,
+      [&](const Binding &Entry, uint16_t Number) {
+        const int Order =
+            llvm::StringRef(Entry.ModuleName).compare_insensitive(Module);
+        return Order < 0 || (Order == 0 && Entry.Number < Number);
+      });
+  if (It != std::end(Bindings) && It->Number == Ordinal &&
+      Module.equals_insensitive(It->ModuleName)) {
+    const char *Name = nullptr;
+    switch (Architecture) {
+    case Arch::X86:
+      Name = It->Names[0];
+      break;
+    case Arch::X64:
+      Name = It->Names[1];
+      break;
+    case Arch::AArch64:
+      Name = It->Names[2];
+      break;
+    default:
+      break;
+    }
+    if (Name)
+      return Name;
+  }
   return (kOrdinalPrefix + llvm::Twine(Ordinal)).str();
 }
 

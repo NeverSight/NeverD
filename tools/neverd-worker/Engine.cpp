@@ -1061,7 +1061,7 @@ Json Engine::keptFunctionGraph(std::uint64_t address) {
     if (validFunctionGraph(graph))
       return graph;
   }
-  if (keptOnly_)
+  if (viewRead_ == ViewRead::KeptOnly)
     throw Error("not_kept", "No session has kept this graph");
   return functionGraph(address);
 }
@@ -1962,7 +1962,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
       reused && reused->original.empty() ? &reused->enginePages
       : !renderedPages.empty()           ? &renderedPages
                                          : nullptr;
-  if (keptOnly_ && original.is_null() && !replay)
+  if (viewRead_ == ViewRead::KeptOnly && original.is_null() && !replay)
     throw Error("not_kept", "No session has kept this view");
   // A hit answers from its finished document without pretending the mutable
   // Session still holds this function. Graph/IR requests prepare it normally.
@@ -2042,7 +2042,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         const bool respelled = !keptRenamed_.is_null();
         if (!keptPageReadsCurrentNames(page) ||
             (respelled && !CodeEdits::respell(page, keptRenamed_))) {
-          if (keptOnly_)
+          if (viewRead_ == ViewRead::KeptOnly)
             throw Error("not_kept", "A kept view reads a name since changed");
           replay = nullptr;
           prepareFunction(address, prepareView);
@@ -8257,11 +8257,13 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
             {"also", others.size()},
             {"saved", true}};
   }
-  struct KeptOnly {
-    bool &flag;
-    ~KeptOnly() { flag = false; }
-  } keptOnlyScope{keptOnly_};
-  keptOnly_ = p.is_object() && p.value("kept_only", false);
+  struct RestoreRead {
+    ViewRead &read;
+    ViewRead previous;
+    ~RestoreRead() { read = previous; }
+  } restoreRead{viewRead_, viewRead_};
+  viewRead_ = p.is_object() && p.value("kept_only", false) ? ViewRead::KeptOnly
+                                                           : ViewRead::Normal;
   if (operation == "prepare_function") {
     // What the source view after an edit the user is making reads: the
     // function is analyzed and its source emitted now, as a visit would, and
@@ -8327,6 +8329,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       if (offset)
         throw Error("invalid_request",
                     "refresh requires the first source page");
+      if (viewRead_ == ViewRead::KeptOnly)
+        throw Error("not_kept", "Refreshing a function requires analysis");
+      viewRead_ = ViewRead::Refresh;
       using ForgetFunction = int (*)(neverd_session_t, neverd_va_t);
       static const auto forget =
           engineSymbol<ForgetFunction>("neverd_forget_function_analysis");
@@ -8376,7 +8381,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                                      options, etags ? nullptr : encoded,
                                      etags ? &known : nullptr, deltas, &p))
         return std::move(*named);
-      if (keptOnly_)
+      if (viewRead_ == ViewRead::KeptOnly)
         throw Error("not_kept", "No session has kept this view");
       if (!options.empty())
         throw Error("unavailable",

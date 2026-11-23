@@ -1,5 +1,6 @@
 """Official header generation rejects partial or ABI-changing inputs."""
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -18,6 +19,55 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_packaged_manifest_preserves_decorated_symbols(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = root / "sdk"
+            sdk.mkdir()
+            names = ["WindowsUserX86", "WindowsKernelX86"]
+            symbol = "?DoInfInstallW@@YGJPAU_ADVPACKARGSW@@@Z"
+            libraries = []
+            for name in names:
+                data = b"int example(void);\n"
+                (sdk / (name + ".h")).write_bytes(data)
+                libraries.append({"name": name, "sha256": hashlib.sha256(data).hexdigest(),
+                                  "symbols": [symbol, "__imp_" + symbol]})
+            manifest = {"provider": "Microsoft SDK/WDK", "architecture": "x86",
+                        "schema": 1, "libraries": libraries}
+            (sdk / "manifest.json").write_text(json.dumps(manifest))
+            # Configure the production packaging rules without building the compiler.
+            types = SCRIPTS.parent / "lib" / "types"
+            (root / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.20)\nproject(Manifest LANGUAGES CXX)\n"
+                "function(add_neverd_component_library target)\n"
+                '  add_library(${target} OBJECT "${CMAKE_CURRENT_SOURCE_DIR}/HeaderLibrary.cpp")\n'
+                "endfunction()\n"
+                f'add_subdirectory("{types.as_posix()}" types)\n')
+            build = root / "build"
+            subprocess.run(["cmake", "-S", str(root), "-B", str(build),
+                            "-DNEVERD_WINDOWS_TYPES_DIRECTORY=" + str(sdk)],
+                           check=True, capture_output=True)
+            packaged = json.loads((build / "neverd-windows-types-inputs.json").read_text())
+            self.assertEqual(packaged.pop("supplements"), {
+                name: hashlib.sha256((types / "headers" / (name + ".h")).read_bytes()).hexdigest()
+                for name in names})
+            self.assertEqual(packaged, manifest)
+
+    def test_c_import_profile_preserves_mixed_and_cpp_only_archive_evidence(self):
+        symbols = {"OnlyCpp": {"?OnlyCpp@@YAHXZ", "__imp_?OnlyCpp@@YAHXZ"},
+                   "Both": {"?Both@@YAHXZ", "_Both@0"}, "Plain": {"_Plain@4"},
+                   "NoDeclaration": {"?NoDeclaration@@YAHXZ"}}
+        proof = {"import_library": {}, "c_linkage_imports_only": True}
+        with patch.object(windows.flat, "read_symbols", return_value=symbols):
+            self.assertEqual(windows.flat.select(proof, ["OnlyCpp", "Both", "Plain"], None, None),
+                             ["Both", "Plain"])
+            self.assertEqual(proof["cpp_only_linker_symbols"],
+                             {"OnlyCpp": sorted(symbols["OnlyCpp"]),
+                              "NoDeclaration": sorted(symbols["NoDeclaration"])})
+            self.assertEqual(proof["imports_without_declaration"], ["NoDeclaration"])
+            self.assertEqual(windows.flat.select({"import_library": {}}, list(symbols),
+                                                 None, None), sorted(symbols))
+
     def test_documented_runtime_profile_requires_every_named_declaration(self):
         proof = {"runtime_exports": {"names": ["ApiB", "ApiA"]}}
         self.assertEqual(windows.flat.select(proof, ["Private", "ApiA", "ApiB"], None, None),
