@@ -1656,6 +1656,15 @@ order. Measuring elapsed hardware cycles requires a trace that records the
 TLB write and the first use of its new physical frame on the same clock.
 [R4000 manual, segment tables 4-1 through 4-5](https://techpubs.jurassic.nl/library/manuals/2000/007-2489-001/pdf/007-2489-001.pdf#page=98).
 
+On an N64, the registered `TLB64Execute` probe maps two 16 KiB pages
+with the same low address bits. The high page returns 64 and its low alias
+would return 32. The author reports zero failures in the hardware run.
+NeverD replays the two distinct instruction words through an R4000 MMU
+snapshot in both byte orders.
+[VR4300 probe](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/tlb64/mod.rs#L630-L710),
+[registered cases](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/testlist.rs#L1128-L1129),
+[hardware run](https://github.com/thelemmy/nemu64-test/commit/c918c15794bcc80483352e50905bec43025f739c).
+
 The snapshot executor leaves non-sign-extended addresses in 32-bit mode,
 reserved `xkphys` cache attributes and extended user addresses above the
 low 2 GiB under ERL unresolved. TLB management instructions, reverse-endian

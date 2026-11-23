@@ -1514,6 +1514,34 @@ TEST(MIPSHistoricalScheduling, R4000ExtendedFetchUsesTheReplacementFrame) {
   }
 }
 
+TEST(MIPSHistoricalScheduling, ExtendedFetchMatchesVR4300HighPCObservation) {
+  // TLB64Execute on N64 hardware returns 64 from the high page. Its 32-bit
+  // alias would execute a different ADDIU and return 32.
+  constexpr uint64_t High = UINT64_C(0xff80008000);
+  constexpr uint64_t Low = uint32_t(High);
+  constexpr uint32_t HighWord = 0x24020040, LowWord = 0x24020020;
+  for (Arch A : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Img = image(A, 3);
+    addCode(Img, 0x4000, {HighWord});
+    addCode(Img, 0x8000, {LowWord});
+    std::array<HistoricalTLBEntry, 48> Entries{};
+    Entries[4] = {High | 2, (0x4000 >> 6) | 6, (0x4000 >> 6) | 6, 0x6000};
+    Entries[5] = {Low | 2, (0x8000 >> 6) | 6, (0x8000 >> 6) | 6, 0x6000};
+    const HistoricalTLB MMU{Entries, 2};
+    MIPSSystemContext C;
+    C.HistoricalMMU = &MMU;
+    C.Historical = HistoricalSchedule::fromSnapshot(
+        3, {}, HistoricalCP0{HistoricalProcessor::R4000, 0x80, 0, 0, {}, {}});
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    ASSERT_TRUE(execute(lift(Img, Low, {LowWord}), E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 32u);
+    EXPECT_FALSE(execute(lift(Img, High, {LowWord}), E, C));
+    ASSERT_TRUE(execute(lift(Img, High, {HighWord}), E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 64u);
+  }
+}
+
 TEST(MIPSHistoricalScheduling, R4000ExtendedSegmentsRespectModeAndBounds) {
   using Result = HistoricalAddressResult;
   constexpr uint64_t User = UINT64_C(0x000000ffffffffff);
