@@ -136,14 +136,18 @@ llvm::KnownBits maskedWordBits(const llvm::Value *V, unsigned Depth,
         return Unknown;
       }
   }
-  // A literal scale leaves its trailing bits clear for every input word.
-  // This also admits InstCombine's disjoint OR of an offset into those bits.
+  // The guaranteed trailing zeros of a product add, even when one operand
+  // is a scaled signed field or a sum of multiples rather than a literal.
   if (I->getOpcode() == llvm::Instruction::Mul) {
-    for (const llvm::Value *Operand : I->operands())
-      if (const auto *K = llvm::dyn_cast<llvm::ConstantInt>(Operand)) {
-        Unknown.Zero.setLowBits(K->getValue().countr_zero());
-        break;
-      }
+    auto TrailingZeros = [&](const llvm::Value *Operand) {
+      if (const auto *K = llvm::dyn_cast<llvm::ConstantInt>(Operand))
+        return K->getValue().countr_zero();
+      return maskedWordBits(Operand, Depth - 1, Remaining)
+          .countMinTrailingZeros();
+    };
+    const unsigned Left = TrailingZeros(I->getOperand(0));
+    const unsigned Right = TrailingZeros(I->getOperand(1));
+    Unknown.Zero.setLowBits(std::min(Width, Left + Right));
     return Unknown;
   }
   if (I->getOpcode() == llvm::Instruction::Shl) {

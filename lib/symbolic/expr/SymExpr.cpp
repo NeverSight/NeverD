@@ -286,15 +286,22 @@ unsigned SymContext::constantRotateAmount(SymRef Count, unsigned Width) const {
 
 bool SymContext::isConstZero(SymRef R) const {
   const auto &N = node(R);
-  return N.Op == SymOp::Const &&
-         (N.Width <= 64 ? N.Aux == 0 : WideConsts[N.Aux].isZero());
+  if (N.Op != SymOp::Const)
+    return false;
+  if (N.Width <= 64)
+    return N.Aux == 0;
+  const auto &V = WideConsts[N.Aux];
+  return V.getRawData()[0] == 0 && V.isZero();
 }
 
 bool SymContext::isConstOnes(SymRef R) const {
   const auto &N = node(R);
-  return N.Op == SymOp::Const &&
-         (N.Width <= 64 ? N.Aux == (~uint64_t(0) >> (64 - N.Width))
-                        : WideConsts[N.Aux].isAllOnes());
+  if (N.Op != SymOp::Const)
+    return false;
+  if (N.Width <= 64)
+    return N.Aux == (~uint64_t(0) >> (64 - N.Width));
+  const auto &V = WideConsts[N.Aux];
+  return V.getRawData()[0] == ~uint64_t(0) && V.isAllOnes();
 }
 
 void SymContext::recordVariableName(llvm::StringRef Name, uint32_t Id) {

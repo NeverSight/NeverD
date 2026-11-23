@@ -1076,6 +1076,47 @@ TEST(SymSimplifyGuard, SignedFieldScaleOnlyFreesTheInsertedLowBits) {
   }
 }
 
+TEST(SymSimplifyGuard, ProductOffsetsRequireTheCombinedZeroSuffix) {
+  llvm::LLVMContext C;
+  llvm::Module M("product_low_bits", C);
+  auto *Ty = llvm::Type::getInt8Ty(C);
+  for (bool Dynamic : {false, true})
+    for (unsigned Offset : {3u, 7u, 8u})
+      for (bool NoWrap : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Dynamic << "," << Offset << "," << NoWrap);
+        auto *F =
+            llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty, Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", &M);
+        llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+        auto *L = B.CreateShl(F->getArg(0), B.getInt8(4), "", NoWrap);
+        auto *Field = B.CreateAShr(L, B.getInt8(2), "", true);
+        llvm::Value *Scale = B.getInt8(6);
+        if (Dynamic)
+          Scale = B.CreateAdd(Scale, B.CreateMul(F->getArg(1), B.getInt8(8)));
+        auto *Product = B.CreateMul(Field, Scale);
+        auto *K = B.getInt8(Offset);
+        auto *Root = B.CreateSub(B.CreateDisjointOr(Product, K),
+                                 B.CreateAdd(Product, K));
+        B.CreateRet(Root);
+        bool Defined = true;
+        for (unsigned X = 0; X != 256; ++X) {
+          const llvm::APInt V(8, X);
+          const auto SignedField = V.shl(4).ashr(2);
+          for (unsigned Y = 0; Y != (Dynamic ? 256u : 1u); ++Y) {
+            const auto Value = SignedField * (6 + 8 * Y);
+            Defined &= (!NoWrap || V.getActiveBits() <= 4) &&
+                       (Value & Offset).isZero();
+          }
+        }
+        const auto Result = SymSimplifyPass::constantValueOf(Root);
+        EXPECT_EQ(Result.has_value(), Defined) << printFunction(*F);
+        if (Result)
+          EXPECT_TRUE(Result->isZero());
+        EXPECT_FALSE(llvm::verifyFunction(*F, &llvm::errs()));
+      }
+}
+
 TEST(SymSimplifyGuard, MaskedDisjointOrMatchesExhaustiveByteDomains) {
   llvm::LLVMContext C;
   llvm::Module M("masked_or_domains", C);

@@ -414,6 +414,26 @@ TEST(SymExpr, ShiftsByConstantsBecomeProductsSoSumsCanCollectThem) {
   EXPECT_EQ(Ctx.mkLShr(X, Ctx.mkConst(W32, 99)), Ctx.mkZero(W32));
 }
 
+TEST(SymExpr, WideLogicalShiftsRetainSingleAndCombinedScales) {
+  constexpr unsigned W = 4097, Shift = 4079;
+  SymContext C;
+  const auto X = C.mkVar("x", W), Amount = C.mkConst(W, Shift);
+  const auto Right = C.mkLShr(X, Amount);
+  const auto Scale = llvm::APInt::getOneBitSet(W, Shift);
+  const auto Mask = C.mkConst(~llvm::APInt::getLowBitsSet(W, Shift));
+  const auto Half = C.mkConst(Scale.lshr(1)), Two = C.mkConst(W, 2);
+  EXPECT_EQ(C.mkMul(C.mkConst(Scale), Right), C.mkAnd(X, Mask));
+  EXPECT_EQ(C.mkMul({Right, Half, Two}), C.mkAnd(X, Mask));
+  const auto K = C.mkConst(Scale + 3);
+  const auto Other = C.mkMul(K, Right);
+  EXPECT_EQ(Other, C.mkMul(Right, K));
+  EXPECT_EQ(C.op(Other), SymOp::Mul);
+  EXPECT_EQ(C.operand(Other, 0), K);
+  EXPECT_EQ(C.operand(Other, 1), Right);
+  EXPECT_EQ(C.mkMul({C.mkZero(W), Right, Two}), C.mkZero(W));
+  EXPECT_EQ(C.mkMul(C.mkConst(W, 1), Right), Right);
+}
+
 TEST(SymExpr, RightShiftDiscardsOnlyNeutralBitwiseWindows) {
   for (unsigned Width : {8U, 16U, 32U, 64U, 128U}) {
     SCOPED_TRACE(Width);
@@ -2527,6 +2547,7 @@ TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
   // Some offsets share an even multiple of the same variable. Other rows
   // have distinct weights or retain a complete, repeated factor.
   auto Magnitude = [](unsigned I) { return 2 * (I < 8 ? I % 2 : I) + 1; };
+  auto Offset = [](unsigned I) { return I == 5 ? 6u : 2 * I + 1; };
   for (unsigned Bits : {65u, 127u, 129u, 207u, 257u}) {
     const unsigned Fourth = (Bits + 3) / 4;
     const unsigned Third = (Bits + 2) / 3;
@@ -2536,7 +2557,7 @@ TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
       llvm::SmallVector<SymRef> Factors{C.mkConst(Scale)};
       for (unsigned I = 0; I < 12; ++I) {
         const auto B = (-llvm::APInt(W, Magnitude(I))).shl(I == 8 ? 0 : Shift);
-        const auto F = C.mkAdd(C.mkConst(W, 2 * I + 1),
+        const auto F = C.mkAdd(C.mkConst(W, Offset(I)),
                                C.mkMul(C.mkConst(B), I % 2 ? X : Y));
         Factors.push_back(F);
         if (I == 5)
@@ -2555,7 +2576,7 @@ TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
         for (unsigned I = 0; I < 12; ++I) {
           auto Term =
               (Inputs[I % 2 ? 0 : 1] * Magnitude(I)).shl(I == 8 ? 0 : Shift);
-          Term = llvm::APInt(W, 2 * I + 1) - Term;
+          Term = llvm::APInt(W, Offset(I)) - Term;
           Expected *= Term;
           if (I == 5)
             Expected *= Term;
