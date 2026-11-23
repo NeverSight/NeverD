@@ -4651,6 +4651,14 @@ result in both decompiler source views. The repeated-offset variant packs
 nonoverlapping literals into a scaled signed field. Byte-wide LLVM guards
 exhaust its input domain, including overlapping literals and unsafe shifts.
 
+Use `--family terminal-field-product --count 16` for 96 products spanning 32
+to 65,536 bits and up to 5,179 factors. They mix top-of-word shifts, signed
+and unsigned extensions, concatenations with live upper bits and even offsets.
+Two 173-factor x86 fixtures exercise both source views through the CLI and
+the GUI worker. They check the compiled output against independent arithmetic.
+Byte-wide LLVM tests vary both multiplier inputs and the disjoint literal,
+including an overlapping bit and a shift with an unsafe no-wrap flag.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work

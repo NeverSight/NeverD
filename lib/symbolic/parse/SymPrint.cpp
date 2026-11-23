@@ -196,16 +196,16 @@ std::optional<Printer::Magnitude> Printer::negatedProduct(SymRef R) const {
   llvm::ArrayRef<SymRef> Ops = Ctx.operands(R);
   if (Ops.size() < 2 || !Ctx.isConst(Ops[0]))
     return std::nullopt;
-  llvm::APInt C = Ctx.constValue(Ops[0]);
-  if (!print_detail::hasSignedMagnitude(C))
+  const Fragment &Coefficient = frag(Ops[0]);
+  if (Coefficient.Prec != PrecUnary)
     return std::nullopt;
 
   Magnitude M;
-  M.CoeffLed = !C.isAllOnes();
+  M.CoeffLed = !Ctx.isConstOnes(Ops[0]);
   llvm::ArrayRef<SymRef> Factors = Ops.drop_front();
   std::string T;
   if (M.CoeffLed) {
-    T = literal(-C, C.getBitWidth()).Text;
+    T.assign(Coefficient.Text, 1, std::string::npos);
     T += " * ";
   }
   // Division sits at the same strength as multiplication but does not
@@ -229,8 +229,9 @@ std::optional<Printer::Magnitude> Printer::negatedProduct(SymRef R) const {
 /// magnitude.  Nothing is returned when the term reads better as written.
 std::optional<Printer::Magnitude> Printer::negatedTerm(SymRef R) const {
   if (Ctx.isConst(R)) {
-    if (std::optional<Fragment> Mag = negatedLiteral(Ctx.constValue(R)))
-      return Magnitude{std::move(*Mag), /*CoeffLed=*/true};
+    const Fragment &Value = frag(R);
+    if (Value.Prec == PrecUnary)
+      return Magnitude{{Value.Text.substr(1), PrecPrimary}, /*CoeffLed=*/true};
   } else if (Ctx.op(R) == SymOp::Mul) {
     return negatedProduct(R);
   }

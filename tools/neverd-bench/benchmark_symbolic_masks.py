@@ -1896,6 +1896,53 @@ def variable_width_product(width, case):
     return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
 
 
+def terminal_field_product(width, case):
+    """Scaled products with mixed extensions at the most significant source bit."""
+    variant = case % 4
+    if width <= 64:
+        degree = (137, 149, 163, 191)[variant]
+        bits = (6, 7, 9, 11)[variant]
+    else:
+        degree = ((251, 293, 337, 397) if width <= 513 else
+                  (4513, 4721, 4937, 5179))[variant]
+        bits = (17, 31, 49, 67)[variant]
+    rng = random.Random(0x46edf + case * 181 + width * 31)
+    axes = ("x", "(y+z)", "(u^v)", "((x&w)+z)")
+    rooms = (bits, max(2, bits - bits // 4), max(2, bits // 2 + 1),
+             max(2, bits // 3))
+    starts = (1 + case % (width - bits - 1), *(width - size for size in rooms[1:]))
+    factors = []
+    for i in range(degree):
+        k = (i + case) % len(axes)
+        room = rooms[k]
+        live = max(1, room - (i // 4 + case) % max(2, room // 2))
+        if k == 0 and i // 4 % 5 == 0:
+            live = bits
+        size = min(room, live + (0, 1, 3)[(i // 4 + case) % 3])
+        offset = rng.choice((1, -3, 5, -7, 9))
+        if variant == 3 and i == 11:
+            offset = 6
+        weight = rng.choice((1, -3, 3, 5)) << (2 * bits + 1 - live)
+        extension = (i // 4 + k + case) % 3
+        if case % 3 and i == degree // 3:
+            weight, extension = 12, 1
+        elif case % 3 == 2 and i == 2 * degree // 3:
+            size, extension = max(1, live - 1), 2
+
+        start, axis = starts[k], axes[k]
+        field = f"extract({axis},{start},{size})"
+        if case & 8 and extension != 2 and start + size == width:
+            word = f"{('lshr', 'ashr')[extension]}({axis},{start})"
+        elif extension == 2:
+            upper = f"extract((u+{2*(i%23)+1}*v),{size},{width-size})"
+            word = f"concat({upper},{field})"
+        else:
+            word = f"{('zext', 'sext')[extension]}({field},{width})"
+        factors.append(f"({offset}+({weight})*{word})")
+    scale = ((3, 5, -3, 7)[variant] << (width - 2 * bits - 1)) % (1 << width)
+    return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
+
+
 def overlapping_field(width, case):
     """Masked fields with two live operands and first-order modular products."""
     rng = random.Random(0x91A27 + 47 * width + 1889 * case)
@@ -2221,7 +2268,8 @@ def main():
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
                  "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field", "masked-join",
-                 "wrapped-masked-join", "mixed-valuation", "variable-width-product"),
+                 "wrapped-masked-join", "mixed-valuation", "variable-width-product",
+                 "terminal-field-product"),
         default="complement",
     )
     args = parser.parse_args()
@@ -2249,6 +2297,7 @@ def main():
             "wrapped-masked-join": (32, 64, 14337, 16385, 20481),
             "mixed-valuation": (32, 64, 24577, 28673, 32769),
             "variable-width-product": (32, 64, 36865, 40961, 49153),
+            "terminal-field-product": (32, 64, 513, 57345, 61441, 65536),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2311,6 +2360,7 @@ def main():
                 "wrapped-masked-join": lambda w, n: [masked_join_product(w, i, wrapped=True) for i in range(n)],
                 "mixed-valuation": lambda w, n: [mixed_valuation_product(w, i) for i in range(n)],
                 "variable-width-product": lambda w, n: [variable_width_product(w, i) for i in range(n)],
+                "terminal-field-product": lambda w, n: [terminal_field_product(w, i) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

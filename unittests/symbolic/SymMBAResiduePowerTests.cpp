@@ -369,17 +369,21 @@ TEST(SymMBAResiduePowers, DifferentFieldWidthsKeepEveryObservableBit) {
   std::mt19937_64 Random(0x534c494345574944);
   struct ShapeCase {
     unsigned Width, Bits;
-    bool Mixed;
+    bool Mixed, Terminal = false;
   };
-  for (const auto [Width, Bits, Mixed] :
+  for (const auto [Width, Bits, Mixed, Terminal] :
        {ShapeCase{32, 8, false}, ShapeCase{32, 8, true},
-        ShapeCase{129, 47, true}, ShapeCase{257, 67, true}}) {
-    SCOPED_TRACE(::testing::Message() << Width << '/' << Mixed);
+        ShapeCase{129, 47, true}, ShapeCase{257, 67, true},
+        ShapeCase{32, 8, true, true}, ShapeCase{129, 47, true, true},
+        ShapeCase{257, 67, true, true}}) {
+    SCOPED_TRACE(::testing::Message()
+                 << Width << '/' << Mixed << '/' << Terminal);
     const unsigned Shift = Bits + 1, Count = Width == 32 ? 137 : 537;
     const auto Scale = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
     SymContext C;
     const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
     llvm::SmallVector<SymRef, 128> Factors{C.mkConst(Scale)};
+    llvm::SmallVector<SymRef, 128> ExplicitFactors{C.mkConst(Scale)};
     auto Shape = [&](unsigned I) {
       const unsigned Extra = I % 5;
       const unsigned Size = Bits - Extra + I % 3;
@@ -389,7 +393,8 @@ TEST(SymMBAResiduePowers, DifferentFieldWidthsKeepEveryObservableBit) {
                        Mixed && (I == 19 || I == 103) ? 2u : Shift + Extra};
     };
     auto Start = [&](unsigned I, unsigned Size) {
-      return I == 127 ? Width - Size : (I % 2 ? 0u : 3u);
+      return I == 127 || (Terminal && I % 4 != 0) ? Width - Size
+                                                  : (I % 2 ? 0u : 3u);
     };
     auto Offset = [&](unsigned I) {
       return llvm::APInt(Width, I == 101 ? 6 : 1 + 2 * (I % 5));
@@ -401,20 +406,39 @@ TEST(SymMBAResiduePowers, DifferentFieldWidthsKeepEveryObservableBit) {
       const auto [Size, Zeros] = Shape(I);
       const auto Source = I % 2 ? C.mkXor(X, Y) : X;
       const auto Field = C.mkExtract(Source, Start(I, Size), Size);
-      const auto Word =
+      const auto Extended =
           I % 3 == 0   ? C.mkZExt(Field, Width)
           : I % 3 == 1 ? C.mkSExt(Field, Width)
                        : C.mkConcat(C.mkExtract(Y, Size, Width - Size), Field);
-      Factors.push_back(C.mkAdd(C.mkConst(Offset(I)),
-                                C.mkMul(C.mkConst(Weight(I, Zeros)), Word)));
+      const auto A = C.mkConst(Offset(I)), B = C.mkConst(Weight(I, Zeros));
+      auto Word = Extended;
+      if (Terminal) {
+        ExplicitFactors.push_back(C.mkAdd(A, C.mkMul(B, Extended)));
+        if (Start(I, Size) == Width - Size && I % 3 != 2 && (I & 1)) {
+          const auto Amount = C.mkConst(Width, Width - Size);
+          Word = I % 3 ? C.mkAShr(Source, Amount) : C.mkLShr(Source, Amount);
+        }
+      }
+      Factors.push_back(C.mkAdd(A, C.mkMul(B, Word)));
     }
     MBAOptions Options;
     Options.MaxWork = 65536;
     const auto Input = C.mkMul(Factors);
     const auto Result = simplifyMBADeep(C, Input, Options);
     EXPECT_LT(Result.Work, Options.MaxWork);
-    EXPECT_LT(Result.SizeAfter, 135u);
-    SymEvalPlan Plan(C, Result.Expr);
+    if (Terminal) {
+      // Ending slices of different sizes at the top creates distinct start
+      // positions. A direct shift should be as compact as explicitly extending
+      // each of those slices, and both forms should eliminate the long chain.
+      const auto Explicit =
+          simplifyMBADeep(C, C.mkMul(ExplicitFactors), Options);
+      EXPECT_LT(Explicit.Work, Options.MaxWork);
+      EXPECT_LE(Result.SizeAfter, Explicit.SizeAfter);
+      EXPECT_LT(Result.SizeAfter * 8, Result.SizeBefore);
+    } else {
+      EXPECT_LT(Result.SizeAfter, 135u);
+    }
+    SymEvalPlan Original(C, Input), Plan(C, Result.Expr);
     for (unsigned Trial = 0; Trial < 48; ++Trial) {
       std::array<llvm::APInt, 2> V;
       for (auto &Value : V) {
@@ -439,6 +463,7 @@ TEST(SymMBAResiduePowers, DifferentFieldWidthsKeepEveryObservableBit) {
                          : V[1].extractBits(Width - Size, Size).concat(Field);
         Expected *= Offset(I) + Weight(I, Zeros) * Word;
       }
+      EXPECT_EQ(Original.eval(V), Expected) << Trial;
       EXPECT_EQ(Plan.eval(V), Expected) << Trial;
     }
     Options.MaxTableBytes = 1;

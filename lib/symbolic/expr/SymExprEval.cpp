@@ -332,7 +332,7 @@ size_t prepareAffineFactors(
     const auto First = I++;
     while (I < Factors.size() && Factors[I] == F)
       ++I;
-    Words.push_back(I - First);
+    size_t Copies = I - First;
     llvm::APInt A(Bits, 0), B(Bits, 1);
     do {
       const auto Op = Ctx.op(F);
@@ -378,6 +378,16 @@ size_t prepareAffineFactors(
       if (Ctx.width(Low) >= Bits - B.countr_zero())
         F = Low;
     }
+    if (Copies > 1 && B.countr_zero() >= Bits - Bits / 2) {
+      // B squared is zero in this ring. The only nonconstant term of
+      // (A+B*x)^m is m*A^(m-1)*B*x, including when A is even.
+      const auto Others = llvm::APIntOps::pow(A, Copies - 1);
+      A *= Others;
+      B *= Others;
+      B *= Copies;
+      Copies = 1;
+    }
+    Words.push_back(Copies);
     Slots[Out++] = Slot.find(F.index())->second - 1;
     Words.append(A.getRawData(), A.getRawData() + N);
     Words.append(B.getRawData(), B.getRawData() + N);

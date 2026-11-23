@@ -316,7 +316,7 @@ def masked_join_elf(degree, *, wrapped=False, low_factors=()):
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
 
-def variable_field_elf(degree, *, repeated_offsets=False):
+def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0):
     scale = 3 << 13
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     weights = (1 if repeated_offsets else 3, -3, 5, 7, -5)
@@ -326,13 +326,20 @@ def variable_field_elf(degree, *, repeated_offsets=False):
         code += bytes.fromhex("89f1 01d1" if secondary else "89f9")
         word = "(y+z)" if secondary else "x"
         turn = 11 if secondary else 5
-        code += bytes.fromhex("c1c9") + bytes([turn])
         delta = (i // 2 + secondary) % 4
         bits = 16 if delta == 0 or i % 3 == 1 else 8
         signed = i % 3 != 2
-        code += bytes.fromhex({(16, True): "0fbfc9", (16, False): "0fb7c9",
-                               (8, True): "0fbec9", (8, False): "0fb6c9"}[bits, signed])
-        field = f"((({word}>>{turn})|({word}<<{32-turn}))&{(1<<bits)-1}U)"
+        if terminal_period and i % terminal_period:
+            # A logical or arithmetic shift reads the same top byte until a
+            # coefficient leaves the sign padding observable.
+            code += bytes.fromhex("c1f9" if signed else "c1e9") + bytes([24])
+            field = f"({word}>>24)"
+            bits = 8
+        else:
+            code += bytes.fromhex("c1c9") + bytes([turn])
+            code += bytes.fromhex({(16, True): "0fbfc9", (16, False): "0fb7c9",
+                                   (8, True): "0fbec9", (8, False): "0fb6c9"}[bits, signed])
+            field = f"((({word}>>{turn})|({word}<<{32-turn}))&{(1<<bits)-1}U)"
         if signed:
             sign = 1 << (bits - 1)
             field = f"(({field}^{sign}U)-{sign}U)"
@@ -714,6 +721,10 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "funnel-perturbation-terminal-product-173":
+            assert code.count("*") <= 12, text
+        elif kind == "funnel-perturbation-terminal-field-173":
+            assert code.count("*") <= 8, text
         elif kind.startswith("funnel-perturbation-variable-field-"):
             assert code.count("*") <= 12, text
         elif kind.startswith("funnel-perturbation-mixed-valuation-"):
@@ -908,6 +919,10 @@ if __name__ == "__main__":
                 81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
             ("funnel-perturbation-masked-join-89", *masked_join_elf(89)),
             ("funnel-perturbation-masked-wrap-103", *masked_join_elf(103, wrapped=True)),
+            ("funnel-perturbation-terminal-field-173",
+             *variable_field_elf(173, terminal_period=2, repeated_offsets=True)),
+            ("funnel-perturbation-terminal-product-173",
+             *variable_field_elf(173, terminal_period=7, repeated_offsets=True)),
             ("funnel-perturbation-variable-field-137", *variable_field_elf(137)),
             ("funnel-perturbation-variable-field-repeated-137",
              *variable_field_elf(137, repeated_offsets=True)),
