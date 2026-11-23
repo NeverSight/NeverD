@@ -240,25 +240,32 @@ void detectAndConvertLoops(HighFunc &Func,
       if (!Members ||
           !Evidence.startsAtHeader(Target, Func.Body[HeaderIdx].Addr))
         continue;
+      const va_t LatchAddr = LatchCond ? 0 : GotoStmt.Addr;
       bool OwnsRegion = true;
-      for (size_t K = HeaderIdx; K <= static_cast<size_t>(I); ++K)
-        if (Func.Body[K].Kind != StmtKind::Nop &&
-            !Evidence.contains(*Members, Func.Body[K].Addr)) {
+      bool HasLatchPrefix = false;
+      for (size_t K = HeaderIdx; K <= static_cast<size_t>(I); ++K) {
+        const auto &S = Func.Body[K];
+        if (S.Kind == StmtKind::Nop)
+          continue;
+        if (!Evidence.contains(*Members, S.Addr)) {
           OwnsRegion = false;
           break;
         }
+        if (K != static_cast<size_t>(I) && S.Addr == LatchAddr)
+          HasLatchPrefix = true;
+      }
       if (!OwnsRegion)
         continue;
 
-      // A jump to an unconditional latch runs on to the next iteration, as
-      // falling off the end of the body does; the latch's address stays as
-      // an anchor there.
-      const va_t LatchAddr = LatchCond ? 0 : Func.Body[I].Addr;
-      bool LatchEntered = false;
-      if (LatchAddr != 0 && LatchAddr != InvalidVA &&
+      // A jump directly to the terminal goto starts the next iteration.
+      // If its address labels an earlier statement, entering there must
+      // still execute the latch's delay-slot effects and edge copies.
+      bool BareLatchEntered = false;
+      if (!HasLatchPrefix && LatchAddr != 0 && LatchAddr != InvalidVA &&
           HeaderIdx != static_cast<size_t>(I))
         walkStmts(Func.Body, [&](const HighStmt &S) {
-          LatchEntered |= S.Kind == StmtKind::Goto && S.GotoTarget == LatchAddr;
+          BareLatchEntered |=
+              S.Kind == StmtKind::Goto && S.GotoTarget == LatchAddr;
         });
 
       std::vector<HighStmt> LoopBody;
@@ -340,7 +347,9 @@ void detectAndConvertLoops(HighFunc &Func,
         return false;
       };
 
-      auto ToLatch = [&](va_t GT) { return LatchEntered && GT == LatchAddr; };
+      auto ToLatch = [&](va_t GT) {
+        return BareLatchEntered && GT == LatchAddr;
+      };
 
       std::function<void(std::vector<HighStmt> &, va_t)> ConvertLoopGotos;
       ConvertLoopGotos = [&](std::vector<HighStmt> &Stmts, va_t Hdr) {
@@ -368,7 +377,7 @@ void detectAndConvertLoops(HighFunc &Func,
         }
       };
       ConvertLoopGotos(WhileStmt.Body, Target);
-      if (LatchEntered) {
+      if (BareLatchEntered) {
         HighStmt Anchor;
         Anchor.Kind = StmtKind::Block;
         Anchor.Addr = LatchAddr;
