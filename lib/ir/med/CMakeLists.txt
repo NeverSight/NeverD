@@ -65,6 +65,7 @@ add_neverd_component_library(NeverDIRMed
   abi/MedCallLeftovers.cpp
   abi/MedCallingConv.cpp
   abi/MedCallingConvFP.cpp
+  abi/GoStackResults.cpp
   abi/X86/MedCallingConvX86.cpp
   abi/ARM/MedSmcccConvention.cpp
   abi/MedSyscallConvention.cpp

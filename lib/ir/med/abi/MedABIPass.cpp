@@ -31,6 +31,7 @@
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedCallTarget.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -1094,7 +1095,7 @@ void recoverCallAbi(
     const RelocationSymbolIndex *RelocationSymbols,
     std::vector<va_t> *SummaryKeysRead,
     const std::map<va_t, std::map<uint64_t, uint16_t>> *CalleeFPScalarBytes,
-    const std::set<va_t> *StackArgumentCallees) {
+    const std::map<va_t, int> *StackArgumentCallees) {
   Func.CallInfos.clear();
   int LastStackInputVersion = 0;
   bool BoundFPResult = false;
@@ -1884,6 +1885,13 @@ void recoverCallAbi(
           CalleeArgs =
               CalleeArgs >= 0 ? std::min(CalleeArgs, FrameWords) : FrameWords;
         }
+        // A result is no argument: a callee whose results are known takes
+        // the words before them, whatever its own recovery passes on in a
+        // jump to the routine that returns them.
+        if (const int Arguments = StackArgumentCallees->at(CI.TargetAddr);
+            Arguments >= 0)
+          CalleeArgs =
+              CalleeArgs >= 0 ? std::min(CalleeArgs, Arguments) : Arguments;
         CI.ArgumentsFromPrototype = true;
         CI.ArgumentsInCalleeRegisterOrder = true;
       }
@@ -2917,6 +2925,14 @@ void recoverCallAbi(
       for (int J = static_cast<int>(OI) - 1; J >= StoreScanStart; --J) {
         auto &Prev = Blk.Ops[J];
         if (endsCallStackSetup(Prev))
+          break;
+        // The results an earlier Go call left in this frame
+        // (storeGoStackCallResults) are an argument where a callee is known
+        // to read their word: `g(f())` passes a result on in place, with no
+        // store of its own.  A call through a pointer takes what was stored
+        // for it, and no callee says it reads more.
+        if (CI.IsIndirect &&
+            storesGoStackCallResult(Blk.Ops, static_cast<size_t>(J)))
           break;
         if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
             Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)

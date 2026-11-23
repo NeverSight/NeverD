@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PipelineCallAbiDetail.h"
 #include "PipelineReturnModelingDetail.h"
 
 #include "neverd/ir/CallRegisterContract.h"
@@ -18,6 +19,7 @@
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedReturnValue.h"
+#include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
@@ -370,6 +372,205 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
       Return.push_back({Results[Position], Fields.Widths[Position], false});
     Funcs[Found->second].MultiReturn = std::move(Return);
   }
+}
+
+void materializeGoStackResults(const BinaryImage &Img, PipelineResult &Result,
+                               bool SourceDeclarations,
+                               bool SourceParameterReads) {
+  // Go's stack ABI, which Go code used before its internal ABI and Go
+  // assembly still does, returns a function's results in the words of its
+  // caller's frame after its arguments, and nothing in a register.  A C
+  // function has no such words: its store of a result was a dead store to a
+  // copy of its own, and its caller read a word the callee never wrote.  So
+  // a stack-ABI function returns the results it stores there as its value:
+  // each return hands them back in the result registers of Go's internal
+  // ABI, and every direct call of it stores them where the callee left them.
+  // The function's own stores name its results, so a caller copies exactly
+  // those, whichever of them it goes on to read.  A call through a function
+  // value names no callee and takes none this way.
+  const auto &Go = Img.ExceptionMetadata.GoModule;
+  if ((Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64) || !Go)
+    return;
+  const Arch A = Img.Arch;
+  const BinaryFormat Format = Img.abiFormat();
+  std::vector<MedFunc> &Funcs = Result.MedFuncs;
+  const size_t N = Funcs.size();
+  // Each route settles the same functions once.
+  if (llvm::any_of(Funcs, [](const MedFunc &Func) {
+        return !Func.GoStackResults.empty();
+      }))
+    return;
+  // The run's functions, and after them the callees it leaves out, where a
+  // function calls a stack-ABI routine among those: a run of some functions
+  // reads their bodies for their results as it does for their arguments
+  // (omittedCalleeBodies), and returns what a run of the whole image does.
+  std::vector<const MedFunc *> Bodies;
+  std::set<va_t> Present;
+  for (const MedFunc &Func : Funcs) {
+    Bodies.push_back(&Func);
+    Present.insert(Func.Entry);
+  }
+  if (llvm::any_of(Funcs, [&](const MedFunc &Func) {
+        return llvm::any_of(Func.Blocks, [&](const MedBlock &Block) {
+          return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+            return Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                   Op.Inputs[0].isConst() &&
+                   !Present.count(Op.Inputs[0].ConstVal) &&
+                   goTakesStackArguments(Img, Op.Inputs[0].ConstVal);
+          });
+        });
+      }))
+    for (const std::shared_ptr<const MedFunc> &Body :
+         omittedCalleeBodies(Img, Result, SourceDeclarations,
+                             SourceParameterReads)
+             .Bodies)
+      if (Present.insert(Body->Entry).second)
+        Bodies.push_back(Body.get());
+  const size_t Count = Bodies.size();
+  std::map<va_t, size_t> ByEntry;
+  for (size_t I = 0; I < Count; ++I)
+    if (Bodies[I]->StackArgumentsOnly && !Bodies[I]->SourceParametersBound)
+      ByEntry.emplace(Bodies[I]->Entry, I);
+  if (ByEntry.empty())
+    return;
+  std::vector<uint64_t> Weights(Count);
+  for (size_t I = 0; I < Count; ++I)
+    for (const MedBlock &Block : Bodies[I]->Blocks)
+      Weights[I] += Block.Ops.size() + Block.Phis.size() + 1;
+
+  // A return that jumps to a stack-ABI routine hands it the function's own
+  // argument words, and that routine returns its results in them.  One that
+  // jumps anywhere else returns what this function's frame holds: a body
+  // that takes registers of its own writes a result through the address it
+  // is handed (`memequal` passes `memeqbody` &ret in AX).  A target the run
+  // read no body of is a stack-ABI routine where the image says so.
+  const auto SharesFrame = [&](const GoStackFrameUse::Return &Return) {
+    if (!Return.Tail)
+      return false;
+    if (Return.Target == InvalidVA || ByEntry.count(Return.Target))
+      return true;
+    return !Present.count(Return.Target) &&
+           goTakesStackArguments(Img, Return.Target);
+  };
+  std::vector<GoStackFrameUse> Uses(Count);
+  std::vector<std::vector<MedGoStackResult>> Results(Count);
+  parallelForEachWeighted(Weights, [&](auto Claim, size_t Total) {
+    for (size_t I; (I = Claim()) < Total;) {
+      const MedFunc &Func = *Bodies[I];
+      if (!ByEntry.count(Func.Entry))
+        continue;
+      Uses[I] = goStackFrameUse(Func, A, Format,
+                                goFrameArgumentBytes(Img, Func.Entry));
+      Results[I] = goStackResults(Uses[I], A, SharesFrame);
+    }
+  });
+  // A routine that only jumps on returns what its targets do, where they
+  // agree.  One that also returns results of its own returns the same ones
+  // as each routine it jumps to, or the two disagree about which register a
+  // caller finds a result in: then it returns none this way.
+  const auto Jumps = [&](size_t I) {
+    llvm::SmallVector<size_t, 2> Targets;
+    for (const GoStackFrameUse::Return &Return : Uses[I].Returns)
+      if (Return.Tail && Return.Target != InvalidVA)
+        if (const auto Found = ByEntry.find(Return.Target);
+            Found != ByEntry.end())
+          Targets.push_back(Found->second);
+    return Targets;
+  };
+  const auto ReturnsOwn = [&](size_t I) {
+    return llvm::any_of(Uses[I].Returns,
+                        [&](const GoStackFrameUse::Return &Return) {
+                          return !SharesFrame(Return);
+                        });
+  };
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (const auto &[Entry, I] : ByEntry) {
+      if (ReturnsOwn(I))
+        continue;
+      const llvm::SmallVector<size_t, 2> Targets = Jumps(I);
+      if (Targets.empty())
+        continue;
+      std::vector<MedGoStackResult> Shared = Results[Targets.front()];
+      for (const size_t Target : Targets)
+        if (Results[Target] != Shared)
+          Shared.clear();
+      if (Shared != Results[I]) {
+        Results[I] = std::move(Shared);
+        Changed = true;
+      }
+    }
+  }
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (const auto &[Entry, I] : ByEntry) {
+      if (Results[I].empty())
+        continue;
+      for (const size_t Target : Jumps(I))
+        if (Results[Target] != Results[I]) {
+          Results[I].clear();
+          Changed = true;
+          break;
+        }
+    }
+  }
+  Result.GoStackArgumentWords.clear();
+  if (llvm::all_of(Results, [](const auto &R) { return R.empty(); }))
+    return;
+
+  const llvm::ArrayRef<uint64_t> Registers = goIntegerArgumentRegisters(A);
+  const uint16_t Word = getTargetRegInfo(A).PointerSize;
+  // A result is no argument.  A callee the run leaves out keeps the
+  // parameters its own recovery gave it, so call recovery is told where its
+  // arguments end; a function of the run drops them below.
+  for (size_t I = N; I < Count; ++I)
+    if (!Results[I].empty())
+      Result.GoStackArgumentWords[Bodies[I]->Entry] =
+          static_cast<int>(Results[I].front().Offset / Word);
+  Weights.resize(N);
+  parallelForEachWeighted(Weights, [&](auto Claim, size_t Total) {
+    for (size_t I; (I = Claim()) < Total;) {
+      MedFunc &Func = Funcs[I];
+      // The calls of routines that return results, each storing them where
+      // its callee left them.
+      std::map<uint32_t, GoStackCall> Sites;
+      for (const MedBlock &Block : Func.Blocks)
+        for (const MedOp &Op : Block.Ops) {
+          if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
+              !Op.Inputs[0].isConst() || !Op.CallSiteId || Op.SourceCallHint ||
+              Op.DoesNotReturn || Op.Dead)
+            continue;
+          const auto Callee = ByEntry.find(Op.Inputs[0].ConstVal);
+          if (Callee == ByEntry.end() || Results[Callee->second].empty())
+            continue;
+          Sites[Op.CallSiteId] = {Results[Callee->second], Op.IsTailCall};
+        }
+      storeGoStackCallResults(Func, A, Sites);
+      if (!ByEntry.count(Func.Entry) || Results[I].empty())
+        continue;
+      Func.GoStackResults = Results[I];
+      dropGoStackResultParameters(Func, A);
+      std::vector<size_t> Blocks;
+      for (const GoStackFrameUse::Return &Return : Uses[I].Returns)
+        if (!SharesFrame(Return))
+          Blocks.push_back(Return.Block);
+      returnGoStackResults(Func, A, Format, Uses[I].Bytes, Blocks);
+      // Its callers store the words its results are, as integers: a float
+      // the function holds in the vector return register at a return, as
+      // one that stores a float result does, is no result of its own.  One
+      // typed as returning that float is typed again.
+      Func.CallersReadIntegerResult = true;
+      if (Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Float)
+        inferMedTypes(Func, A, &Result.CallFloatReturns.get());
+      if (Results[I].size() < 2)
+        continue;
+      std::vector<MedReturnReg> Return;
+      for (size_t Position = 0; Position < Results[I].size(); ++Position)
+        Return.push_back({Registers[Position],
+                          Position ? Results[I][Position].Size : Word, false});
+      Func.MultiReturn = std::move(Return);
+    }
+  });
 }
 
 } // namespace neverd

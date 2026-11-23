@@ -4161,7 +4161,7 @@ TEST(GoStackArguments, ArgumentsAndTheirCallsAreOnTheStack) {
   // Call recovery passes the callee's arguments on the stack where its own
   // recovery found them there.
   // Its record's 24 bytes hold its result too, after the two it reads.
-  const std::set<va_t> StackCallees{Add};
+  const std::map<va_t, int> StackCallees{{Add, -1}};
   std::map<va_t, int> TotalArity{{Add, static_cast<int>(F.Params.size())}};
   MedFunc G = lift(T.Img, Caller);
   recoverCallAbi(G, T.Img.Arch, {}, &T.Img, nullptr, &TotalArity, nullptr,
@@ -4215,7 +4215,7 @@ TEST(GoStackArguments, ACalleeWithoutASizeTakesWhatItReads) {
       const MedFunc F = lift(T.Img, Add);
       EXPECT_TRUE(F.StackArgumentsOnly);
       ASSERT_EQ(F.Params.size(), 2u);
-      const std::set<va_t> StackCallees{Add};
+      const std::map<va_t, int> StackCallees{{Add, -1}};
       std::map<va_t, int> TotalArity{{Add, 2}};
       MedFunc G = lift(T.Img, Caller);
       recoverCallAbi(G, T.Img.Arch, {}, &T.Img, nullptr, &TotalArity, nullptr,

@@ -67,6 +67,7 @@
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedByteDemand.h"
+#include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedStackGuard.h"
@@ -186,6 +187,12 @@ struct FunctionFacts {
   std::vector<ReturnPath> Paths;
   /// Where no path returns: whether that is proven (hasProvenNoReturnExit).
   bool NeverReturns = false;
+  /// Some operation gives the stack pointer a value no constant away from
+  /// the one the function was entered with (goLeavesItsStack).  Assembly
+  /// that switches or realigns its stack stores a result through the
+  /// pointer it restores, at no offset from its entry that names the word
+  /// (`runtime.asmcgocall`, `runtime.callCgoMmap`).
+  bool LeavesItsStack = false;
 };
 
 /// A live-in self-copy names the value the register already holds.
@@ -714,6 +721,8 @@ private:
       if (F.Paths.empty())
         F.NeverReturns =
             S.Func->DoesNotReturn || hasProvenNoReturnExit(*S.Func, Img.Arch);
+      if (S.Func->StackArgumentsOnly)
+        F.LeavesItsStack = goLeavesItsStack(*S.Func, Img.Arch, Img.abiFormat());
     }
     for (const MedOp *Call : F.UnreadCalls) {
       const ReturnPath Path = callPath(F, *Call);
@@ -1261,6 +1270,26 @@ private:
   };
 
   Answer answer(const State &S) const {
+    // Go's stack ABI returns nothing in a register: a stack-ABI function
+    // returns the results it stores in its caller's frame
+    // (materializeGoStackResults), and no value where it stores none, in an
+    // image whose compiled code follows that ABI, and no caller reads what
+    // it leaves in the return register.  Assembly has conventions of its
+    // own that a caller does read: `return0` hands `deferproc`'s caller a
+    // zero in AX.  Under Go's internal ABI only assembly takes its
+    // arguments on the stack, and what it returns in a register may have no
+    // caller in the image to show it (x86-64's write barrier returns its
+    // buffer in R11).  And where a routine leaves its stack, the results it
+    // stores on its way back are not found.  What each of those returns is
+    // recovered as any function's is.
+    if (S.Func->StackArgumentsOnly) {
+      if (!S.Func->GoStackResults.empty())
+        return {};
+      const auto &Go = Img.ExceptionMetadata.GoModule;
+      if (Go && Go->StackArguments && !S.Facts.LeavesItsStack &&
+          !callerReadsResult(S, /*Shown=*/false))
+        return {true, true};
+    }
     const std::vector<ReturnPath> &Paths = S.Facts.Paths;
     if (Paths.empty())
       return {S.Facts.NeverReturns, false};

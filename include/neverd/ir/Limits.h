@@ -864,6 +864,9 @@ inline constexpr int kMedABIPassSupportResolveIndirectTargetArgIdxDepthLimit =
 /// How many blocks back from an indirect call goAssemblyCallsPlatformCode
 /// numbers values to find the load that defines the call's target.
 inline constexpr unsigned kGoIndirectCallTargetBlocks = 8;
+/// How many bytes of its caller's frame goStackFrameUse follows a Go
+/// stack-ABI function into where its record gives its arguments no size.
+inline constexpr uint32_t kGoUnrecordedFrameBytes = 0x400;
 inline constexpr int kMedABIPassSupportAuthenticatedStackOffsetDepthLimit = 128;
 inline constexpr int kMedABIPassSupportPreservesSpillAcrossCallDepthLimit = 16;
 inline constexpr int kMedABIPassSupportStackPtrDeltaAtDepthLimit = 128;

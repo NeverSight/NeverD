@@ -6659,6 +6659,84 @@ Go code is read for its own recovery, where a summary would count its stack
 words after the platform's register positions (`calleesToRead`). Before,
 `runtime_futex(0, 0, 0, 0, 0, 0, addr, op, ...)` printed alone beside
 `runtime_futex(addr, op, ...)` in the image.
+
+The stack ABI returns results where it takes arguments: in the words of the
+caller's frame after them, and nothing in a register. A C function has no
+such words. Its store of a result went to a copy of its own, a dead store,
+and its caller read a word of its frame that nobody wrote: `main_deepest(x);
+return var_m10 + 2;` printed with `var_m10` uninitialised, about 600 such
+reads in one Go 1.15 image, with no placeholder to mark them. So a stack-ABI
+function returns the results it stores there as its value
+(`materializeGoStackResults`, `MedFunc::GoStackResults`), and the same code
+prints `return main_deepest(x) + 2;`. The function's own stores name its
+results (`goStackFrameUse`, `goStackResults`): a result is the bytes of one
+store within a word, the widest where stores overlap, in a word no path reads
+before writing (that word is an argument, a modified one included), which
+every return has written, directly or by handing its address on. A return the
+runtime enters, as the one a recovered panic resumes at, counts as having run
+the function. A record of no bytes bounds nothing: `runtime.cputicks` is
+declared `$0-0` and stores `ret+0(FP)` all the same.
+
+Each return hands the results back in the result registers of Go's internal
+ABI (`returnGoStackResults`), a narrower one zero extended: the value the one
+store that reaches the return stored, or the word read back where paths store
+different values, a callee may write it through its address, or a vector
+register stored it (a float's bits return as the integer the caller's frame
+holds). The function then returns its first result as its value, or all of
+them as their record (`MedFunc::MultiReturn`), as a register-ABI function
+does. Every direct call of it returns that value or record
+(`defineGoCallResults`) and stores each result in the word of the caller's
+frame the callee left it in (`storeGoStackCallResults`). The caller's reads
+find it there, and so does the next call's argument scan: `g(f())` passes
+results on in place with no store of its own. A call whose callee writes no
+register defined none, and gets a value to return its result in. A caller
+copies exactly its callee's list, whichever results it goes on to read, and a
+result nothing reads leaves no store behind.
+
+A routine that only jumps to a stack-ABI routine returns what its target
+does, in the frame the two share; one that returns results of its own and
+also jumps returns the same ones as its target, or none this way. A jump to
+anything else returns what this function's frame holds: `runtime.memequal`
+hands `memeqbody` the address of its result in AX. A result is no argument:
+parameter recovery took its word for one where the function reads the result
+back, and where a routine that jumps on passes every word of its target's
+record (`detectStackParams`), which made each caller of
+`sync/atomic.LoadInt32` pass an unknown value for the result. A function of
+the run drops such a parameter (`dropGoStackResultParameters`); a callee the
+run leaves out keeps its own, so call recovery is told where its arguments
+end (`PipelineResult::GoStackArgumentWords`, recoverCallAbi's
+`StackArgumentCallees`). A run of some functions reads the bodies of the
+callees it leaves out for their results (`omittedCalleeBodies`), as it does
+for their arguments, and prints what a run of the image prints.
+
+The return contract of such a function is stated, not inferred
+(`settleReturnContracts`): it returns its stack results, and, in an image
+whose compiled code follows the stack ABI, no value where it stores none and
+no caller reads the return register. Assembly keeps conventions a caller does
+read (`return0` hands `deferproc`'s caller a zero in AX), and under the
+internal ABI only assembly takes its arguments on the stack, whose register
+results may have no caller in the image (x86-64's write barrier returns its
+buffer in R11): what those return is recovered as any function's is. So is what a routine that leaves its stack
+returns, since the results it stores through the stack pointer it restores
+are not found (`runtime.asmcgocall`, `runtime.callCgoMmap`).
+
+These stay as they were. A call through a function value names no callee: its
+results are not returned this way, and an earlier call's results are no
+argument of it (`storesGoStackCallResult`, in call recovery's scans and
+HighIR's). A result written only through an address, with no store of the
+function's own (`runtime.strhash` hands `&ret` to `aeshashbody`; arm64's
+`memequal`), is not found, nor is an argument read only through one
+(`concatstring2`). A function with more results than Go has result registers,
+nine on x86-64 and sixteen on arm64, returns none this way. A float result
+returns as an integer of the same bits.
+
+One thing is new. A function that now returns nothing leaves an unknown value
+where the code after its call passed the return register on, and where a C
+variable merges that register with values it does hold: `runtime.systemstack`
+hands `runtime.abort`, which no decode gives a signature, what
+`badsystemstack` left in X0, and `runtime.gcDrain` guards four reads of a
+variable its last call's result shares. Both carried a value no instruction
+means before.
 Under Go's internal ABI, Go assembly keeps the stack ABI (ABI0) unless it is
 declared `<ABIInternal>`, and Go's compiler calls it so: `mov %rax,(%rsp);
 ...; call madvise`, which reads `[rsp+8..24]` (`goTakesStackArguments`, the

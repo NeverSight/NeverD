@@ -21102,6 +21102,24 @@ arm64 trampoline that keeps its argument block in X19 across a call to code
 outside the pclntab: the call follows the platform's contract, the store
 after it traps nowhere, and a call into Go code or without the table of
 recorded functions stays Go's.
+`GoStackResults.*` (unittests/lift/core/GoStackResultsTests.cpp) compile and
+run the C of small stack-ABI routines.
+`ACallReturnsTheResultItsCalleeStores` checks, on x86-64 and arm64 and through
+both C routes, that `main.caller(x)` returns `main.add(x, 5) + 1`, where the
+caller read an unwritten word of its own frame before.
+`SeveralResultsReturnAsTheirRecord` returns an int and a one-byte bool.
+`AResultWrittenThroughItsAddressIsReturned` returns a named result a callee
+fills through its address. `AResultReadBackIsNoParameter` adds one to a result
+where it lies. `ARoutineThatJumpsOnReturnsWhatItsTargetDoes` goes through a
+wrapper that changes an argument in place and jumps, and takes two
+parameters, not its target's result word as a third.
+`AResultNoCallerReadsLeavesNoStore` prints a bare call.
+`AResultPassedOnInPlaceIsTheNextCallsArgument` runs `main.add(main.pair())`,
+which stores nothing between the two calls, and whose first callee writes no
+register. `ACallThroughAFunctionValueTakesNoEarlierResult` keeps one argument
+at an indirect call that follows a call with a result.
+`ARunOfOneRoutineReturnsWhatTheImageDoes` runs a caller alone, with its callee
+and that callee's jump target left out.
 `GoStackABI.ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters` lifts a
 stack-ABI routine that is one jump to such code: it takes the two registers
 its target reads and passes them on.

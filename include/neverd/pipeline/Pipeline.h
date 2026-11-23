@@ -412,6 +412,12 @@ struct PipelineResult {
   /// (the native LLVM route of a session) reuses them instead of lifting them
   /// again, which costs as much as the rest of recovery.
   std::shared_ptr<const OmittedCalleeBodies> OmittedCallees;
+  /// The words of arguments each Go stack-ABI callee the run leaves out
+  /// takes before its results (materializeGoStackResults).  Its own recovery
+  /// took a result's word for a parameter where it reads the result back or
+  /// passes its target's whole record on in a jump; call recovery passes it
+  /// no word past these (recoverCallAbi's StackArgumentCallees).
+  std::map<va_t, int> GoStackArgumentWords;
   /// Fixed machine-word declarations whose parameter carriers did not change
   /// during omitted-callee recovery. Source LLVM uses these types for direct
   /// calls; they supply neither bodies nor a source/native ABI proof.

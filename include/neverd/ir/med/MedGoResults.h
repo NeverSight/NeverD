@@ -17,12 +17,17 @@
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 namespace neverd {
 
@@ -90,6 +95,101 @@ goReturnedValue(const llvm::DenseMap<int, const MedBlock *> &ById,
 /// the record, each a float as wide as the shape says.
 void defineGoCallResults(MedFunc &Func, Arch A,
                          const std::map<uint32_t, GoCallShape> &Shapes);
+
+/// What a Go stack-ABI function does with the words of its caller's frame
+/// that hold its arguments and its results (goStackFrameUse).  Offsets count
+/// bytes from the first of those words.
+struct GoStackFrameUse {
+  /// The byte ranges it stores into, each once: an offset and a size.
+  std::vector<std::pair<uint32_t, uint16_t>> Stored;
+  /// The bytes some path reads before it has written them: an argument's.
+  llvm::BitVector Exposed;
+  struct Return {
+    /// The index of the returning block.
+    size_t Block = 0;
+    /// The return hands back what a tail call returns, to \ref Target where
+    /// the call names it.
+    bool Tail = false;
+    va_t Target = InvalidVA;
+    /// The bytes every path to the return has written: stored, or lying at
+    /// or above an address the function handed on, which a callee may have
+    /// written through.
+    llvm::BitVector Written;
+  };
+  std::vector<Return> Returns;
+  /// How many bytes were followed: those the function's record gives, or
+  /// limits::ir::kGoUnrecordedFrameBytes where it gives none or no size.
+  uint32_t Bytes = 0;
+};
+
+/// What the stack-ABI Go function \p Func, in SSA form after its parameters
+/// were recovered (detectStackParams), does with its argument words, of
+/// which its record gives \p FrameBytes, if it gives any
+/// (goFrameArgumentBytes).
+GoStackFrameUse goStackFrameUse(const MedFunc &Func, Arch A, BinaryFormat F,
+                                std::optional<uint32_t> FrameBytes);
+
+/// The results \p Use shows: Go's stack ABI returns each result in the words
+/// after the arguments, so a result is what the function stores there and no
+/// path reads first.  Each is the bytes of one store within a word that every
+/// return has written, the widest where stores overlap; a return for which
+/// \p SharesFrame holds hands the frame to the stack-ABI routine it jumps
+/// to, which returns its own.  In the order of their offsets, and none where
+/// there are more than Go's result registers (goIntegerArgumentRegisters).
+std::vector<MedGoStackResult> goStackResults(
+    const GoStackFrameUse &Use, Arch A,
+    llvm::function_ref<bool(const GoStackFrameUse::Return &)> SharesFrame);
+
+/// Make each return in \p Blocks (indices of returning blocks) hand back the
+/// function's results (MedFunc::GoStackResults) in Go's result registers,
+/// the first as the value the RETURN names and a narrower one zero extended.
+/// A result is the value the one store that reaches the return stored;
+/// where paths store different values, a store covers it in part, or the
+/// function hands the address of its word on, it is read from the word just
+/// before the return.  \p Bytes are the argument bytes followed
+/// (GoStackFrameUse::Bytes).  False, with nothing changed, where the
+/// function has no entry stack pointer to read them from.
+bool returnGoStackResults(MedFunc &Func, Arch A, BinaryFormat F, uint32_t Bytes,
+                          llvm::ArrayRef<size_t> Blocks);
+
+/// The results a call of a Go stack-ABI function returns, and whether the
+/// call is a jump that hands the caller's own argument words on, which then
+/// hold them already.
+struct GoStackCall {
+  llvm::ArrayRef<MedGoStackResult> Results;
+  bool SharesFrame = false;
+};
+
+/// Make each call of \p Func that \p Sites names return its results, one as
+/// the call's value and several as their record (defineGoCallResults), and
+/// store each in the word of the caller's frame the callee left it in: the
+/// machine's state after the call, which the caller's reads of its results
+/// then find, and the next call's argument scan, where it passes a result on
+/// in place.  A call whose stack pointer is not known stores none.
+void storeGoStackCallResults(MedFunc &Func, Arch A,
+                             const std::map<uint32_t, GoStackCall> &Sites);
+
+/// Whether the operation at \p Index of a block's \p Ops is a store
+/// storeGoStackCallResults added after a call: one at the call's address,
+/// after nothing but the call's own operations, of the call's value, a
+/// field of it or a view of one.
+bool storesGoStackCallResult(llvm::ArrayRef<MedOp> Ops, size_t Index);
+
+/// Whether some operation of \p Func gives the stack pointer a value that is
+/// no constant away from the one the function was entered with: it loads the
+/// pointer, masks it or takes another stack's.  The words a stack-ABI
+/// routine stores after that are at no offset from its entry that names
+/// them, its results among them.
+bool goLeavesItsStack(const MedFunc &Func, Arch A, BinaryFormat F);
+
+/// Drop the stack parameters of \p Func that lie in the words of its results
+/// (MedFunc::GoStackResults), from the last down, and say how many: a result
+/// is no argument.  Parameter recovery takes one for a parameter where the
+/// function reads it back after storing it, and where a routine that jumps
+/// on passes every word of its target's record on (detectStackParams), the
+/// results' too.  A word an operation reads as the function was entered
+/// stays, and ends the walk.
+unsigned dropGoStackResultParameters(MedFunc &Func, Arch A);
 
 } // namespace neverd
 

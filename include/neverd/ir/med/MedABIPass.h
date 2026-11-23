@@ -124,6 +124,11 @@ std::set<va_t> findFrameLocalLeafCallees(const std::vector<MedFunc> &Funcs,
 // (PipelineResult::CallPrototypeArguments): a
 // call to one passes what its summary counts, which the prototype gives,
 // however many arguments the arity tables give a routine of its name.
+// \p StackArgumentCallees holds the callees whose own recovery found every
+// argument on the stack (MedFunc::StackArgumentsOnly), each with the words of
+// arguments it takes before its results where those are known
+// (PipelineResult::GoStackArgumentWords), or -1: a call passes it no word
+// past them.
 // \p SummaryKeysRead, where given, gains every key at which the recovery
 // reads a callee summary, a user prototype or a name: \p Func's entry, the
 // only key at which it writes summaries, first.  A recovery of the same body
@@ -181,7 +186,7 @@ void recoverCallAbi(
     std::vector<va_t> *SummaryKeysRead = nullptr,
     const std::map<va_t, std::map<uint64_t, uint16_t>> *CalleeFPScalarBytes =
         nullptr,
-    const std::set<va_t> *StackArgumentCallees = nullptr);
+    const std::map<va_t, int> *StackArgumentCallees = nullptr);
 
 /// The integer argument layout \p Func takes its register arguments in: its
 /// own register order (MedFunc::IntegerArgumentRegisters) where it has one,

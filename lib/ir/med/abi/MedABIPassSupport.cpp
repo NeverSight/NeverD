@@ -24,6 +24,7 @@
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedCallTarget.h"
+#include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
@@ -229,6 +230,13 @@ callSetupStackStores(const AbiCallContext &C, CallSetupStackJoins *Joins,
           Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
           Op.MemoryOrdering != NdMemoryOrdering::None) {
         markIncomplete();
+        Inherit = false;
+        break;
+      }
+      // The results an earlier Go call left in the frame
+      // (storeGoStackCallResults) end the setup of a call through a pointer
+      // as that call does: no callee says it reads their words.
+      if (C.CI.IsIndirect && storesGoStackCallResult(B.Ops, I - 1)) {
         Inherit = false;
         break;
       }

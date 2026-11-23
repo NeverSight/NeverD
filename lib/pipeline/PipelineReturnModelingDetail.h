@@ -52,6 +52,18 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
 /// call it makes returns reads those results of that call.
 void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result);
 
+/// Return, from every Go stack-ABI function, the results it stores in its
+/// caller's frame, in the result registers of Go's internal ABI
+/// (MedFunc::GoStackResults), and store them in the caller's frame again
+/// after each direct call of it: the stack ABI returns nothing in a register,
+/// and a C function writes no word of its caller's frame.  A callee the run
+/// leaves out is read for its results as the run's call recovery reads it,
+/// with the same \p SourceDeclarations and \p SourceParameterReads
+/// (recoverModuleCallAbi).
+void materializeGoStackResults(const BinaryImage &Img, PipelineResult &Result,
+                               bool SourceDeclarations,
+                               bool SourceParameterReads);
+
 /// Learn each callee's multi-register return shape from its direct callers'
 /// field-extract remodeling and re-type the callee to match.  64-bit targets.
 void recoverStructReturnFromCallers(const BinaryImage &Img,
