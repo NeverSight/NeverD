@@ -365,6 +365,87 @@ TEST(SymMBAResiduePowers, MixedValuationsRetainTheCompleteLowWeightFactors) {
   }
 }
 
+TEST(SymMBAResiduePowers, DifferentFieldWidthsKeepEveryObservableBit) {
+  std::mt19937_64 Random(0x534c494345574944);
+  struct ShapeCase {
+    unsigned Width, Bits;
+    bool Mixed;
+  };
+  for (const auto [Width, Bits, Mixed] :
+       {ShapeCase{32, 8, false}, ShapeCase{32, 8, true},
+        ShapeCase{129, 47, true}, ShapeCase{257, 67, true}}) {
+    SCOPED_TRACE(::testing::Message() << Width << '/' << Mixed);
+    const unsigned Shift = Bits + 1, Count = Width == 32 ? 137 : 537;
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    llvm::SmallVector<SymRef, 128> Factors{C.mkConst(Scale)};
+    auto Shape = [&](unsigned I) {
+      const unsigned Extra = I % 5;
+      const unsigned Size = Bits - Extra + I % 3;
+      // One signed short field exposes its sign, another its concatenated
+      // upper lane. A third window ends at the top of the source.
+      return std::pair{I == 31 || I == 32 ? Size - 4 : Size,
+                       Mixed && (I == 19 || I == 103) ? 2u : Shift + Extra};
+    };
+    auto Start = [&](unsigned I, unsigned Size) {
+      return I == 127 ? Width - Size : (I % 2 ? 0u : 3u);
+    };
+    auto Offset = [&](unsigned I) {
+      return llvm::APInt(Width, I == 101 ? 6 : 1 + 2 * (I % 5));
+    };
+    auto Weight = [&](unsigned I, unsigned Zeros) {
+      return llvm::APInt(Width, I % 2 ? -3 : 5, true).shl(Zeros);
+    };
+    for (unsigned I = 0; I < Count; ++I) {
+      const auto [Size, Zeros] = Shape(I);
+      const auto Source = I % 2 ? C.mkXor(X, Y) : X;
+      const auto Field = C.mkExtract(Source, Start(I, Size), Size);
+      const auto Word =
+          I % 3 == 0   ? C.mkZExt(Field, Width)
+          : I % 3 == 1 ? C.mkSExt(Field, Width)
+                       : C.mkConcat(C.mkExtract(Y, Size, Width - Size), Field);
+      Factors.push_back(C.mkAdd(C.mkConst(Offset(I)),
+                                C.mkMul(C.mkConst(Weight(I, Zeros)), Word)));
+    }
+    MBAOptions Options;
+    Options.MaxWork = 65536;
+    const auto Input = C.mkMul(Factors);
+    const auto Result = simplifyMBADeep(C, Input, Options);
+    EXPECT_LT(Result.Work, Options.MaxWork);
+    EXPECT_LT(Result.SizeAfter, 135u);
+    SymEvalPlan Plan(C, Result.Expr);
+    for (unsigned Trial = 0; Trial < 48; ++Trial) {
+      std::array<llvm::APInt, 2> V;
+      for (auto &Value : V) {
+        std::array<uint64_t, 5> Digits;
+        std::generate(Digits.begin(), Digits.end(), [&] { return Random(); });
+        Value = llvm::APInt(Width, Digits);
+      }
+      if (Trial < 4) {
+        V[0] =
+            Trial & 1 ? llvm::APInt::getAllOnes(Width) : llvm::APInt(Width, 0);
+        V[1] =
+            Trial & 2 ? llvm::APInt::getAllOnes(Width) : llvm::APInt(Width, 0);
+      }
+      auto Expected = Scale;
+      for (unsigned I = 0; I < Count; ++I) {
+        const auto [Size, Zeros] = Shape(I);
+        const auto Field =
+            (I % 2 ? V[0] ^ V[1] : V[0]).extractBits(Size, Start(I, Size));
+        const auto Word =
+            I % 3 == 0   ? Field.zext(Width)
+            : I % 3 == 1 ? Field.sext(Width)
+                         : V[1].extractBits(Width - Size, Size).concat(Field);
+        Expected *= Offset(I) + Weight(I, Zeros) * Word;
+      }
+      EXPECT_EQ(Plan.eval(V), Expected) << Trial;
+    }
+    Options.MaxTableBytes = 1;
+    EXPECT_EQ(simplifyMBADeep(C, Input, Options).Expr, Input);
+  }
+}
+
 TEST(SymMBAResiduePowers, HighestFieldBitMovesIntoTheProductOffset) {
   constexpr unsigned Width = 257, Count = 65;
   for (unsigned Bits : {7u, 64u, 65u}) {

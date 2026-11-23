@@ -316,6 +316,42 @@ def masked_join_elf(degree, *, wrapped=False, low_factors=()):
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
 
+def variable_field_elf(degree, *, repeated_offsets=False):
+    scale = 3 << 13
+    code = bytearray.fromhex("b8") + struct.pack("<I", scale)
+    weights = (1 if repeated_offsets else 3, -3, 5, 7, -5)
+    factors = []
+    for i in range(degree):
+        secondary = i % 2
+        code += bytes.fromhex("89f1 01d1" if secondary else "89f9")
+        word = "(y+z)" if secondary else "x"
+        turn = 11 if secondary else 5
+        code += bytes.fromhex("c1c9") + bytes([turn])
+        delta = (i // 2 + secondary) % 4
+        bits = 16 if delta == 0 or i % 3 == 1 else 8
+        signed = i % 3 != 2
+        code += bytes.fromhex({(16, True): "0fbfc9", (16, False): "0fb7c9",
+                               (8, True): "0fbec9", (8, False): "0fb6c9"}[bits, signed])
+        field = f"((({word}>>{turn})|({word}<<{32-turn}))&{(1<<bits)-1}U)"
+        if signed:
+            sign = 1 << (bits - 1)
+            field = f"(({field}^{sign}U)-{sign}U)"
+        # The two low-weight factors keep sign and upper bits observable.
+        shift = {17: 2, 64: 3}.get(i, 10 + delta)
+        weight = weights[i % len(weights)] << shift
+        if repeated_offsets:
+            # A unit weight becomes a pair of shifts with different counts.
+            # LLVM can pack a small positive offset into the remaining zeros.
+            offset = 6 if i == 4 else (1, -3, 5, 9, -7)[i % 5]
+        else:
+            offset = -(2 * i + 3)
+        code += bytes.fromhex("69c9") + struct.pack("<i", weight)
+        code += bytes.fromhex("81c1") + struct.pack("<i", offset) + bytes.fromhex("0fafc1")
+        factors.append(f"({offset & 0xffffffff}U+{weight & 0xffffffff}U*{field})")
+    code += bytes.fromhex("01f8 01f0 01d0 c3")
+    return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
+
+
 def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=False,
                       *, interleaved=False, complemented=False, neighbor=False,
                       factor_mask=None, factor_order=None):
@@ -678,6 +714,8 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind.startswith("funnel-perturbation-variable-field-"):
+            assert code.count("*") <= 12, text
         elif kind.startswith("funnel-perturbation-mixed-valuation-"):
             limit = 5 if kind.endswith("-73") else 9
             assert code.count("*") <= limit + (2 if llvm else 0), text
@@ -870,6 +908,9 @@ if __name__ == "__main__":
                 81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
             ("funnel-perturbation-masked-join-89", *masked_join_elf(89)),
             ("funnel-perturbation-masked-wrap-103", *masked_join_elf(103, wrapped=True)),
+            ("funnel-perturbation-variable-field-137", *variable_field_elf(137)),
+            ("funnel-perturbation-variable-field-repeated-137",
+             *variable_field_elf(137, repeated_offsets=True)),
             ("funnel-perturbation-mixed-valuation-73",
              *masked_join_elf(73, wrapped=True, low_factors=(29,))),
             ("funnel-perturbation-mixed-valuation-117",

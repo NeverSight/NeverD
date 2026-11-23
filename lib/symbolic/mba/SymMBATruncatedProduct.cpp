@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -799,13 +800,15 @@ template <typename Coefficient>
 SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
                           SymRef Outer, unsigned Precision, unsigned Shift,
                           WorkBudget &Budget, size_t &Storage,
-                          llvm::ArrayRef<unsigned> Multiplicities = {}) {
+                          llvm::ArrayRef<unsigned> Multiplicities = {},
+                          llvm::ArrayRef<uint64_t> WeightSums = {}) {
   assert(Multiplicities.empty() || Multiplicities.size() == Rows.size());
   const unsigned Bits = Precision - Shift;
   constexpr bool Native = std::is_same_v<Coefficient, uint64_t>;
   assert(Bits && Shift >= Bits && Native == (Bits <= 64));
   const size_t Limbs = llvm::APInt::getNumWords(Bits);
   const size_t Words = llvm::APInt::getNumWords(Precision);
+  assert(WeightSums.empty() || WeightSums.size() == Rows.size() * Words);
   const size_t PerRow = sizeof(Coefficient) +
                         4 * sizeof(std::pair<uint32_t, Coefficient>) +
                         (Native ? 0 : 5 * Limbs * sizeof(uint64_t));
@@ -846,11 +849,14 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     Powers.emplace();
   if (!FlatFits && !Powers)
     return {};
-  // Extensions and concatenations preserve this complete low field. Check
-  // it once while counting offsets that could share a cofactor.
+  // Summed rows already name their field. Ordinary rows retain the complete
+  // carrier. Count offsets only after checking the projected width.
+  auto fieldOf = [&](const Factor &F) {
+    return WeightSums.empty() ? lowOperand(Ctx, F.Word) : F.Word;
+  };
   size_t Trial = 0;
   for (const auto &[I, F] : llvm::enumerate(Rows)) {
-    const auto Low = lowOperand(Ctx, F.Word);
+    const auto Low = fieldOf(F);
     if (!Low || Ctx.width(Low) != Bits) {
       Budget.consume(I + 1 + Trial);
       return {};
@@ -891,8 +897,11 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     else
       return C;
   };
-  auto LiveWeight = [&](SymRef V) -> Coefficient {
-    auto Full = Literal(V);
+  auto LiveWeight = [&](size_t I) -> Coefficient {
+    const auto Digits = WeightSums.empty()
+                            ? Ctx.constWords(Rows[I].Weight).take_front(Words)
+                            : WeightSums.slice(I * Words, Words);
+    const llvm::APInt Full(Precision, Digits);
     if constexpr (Native)
       return Full.extractBitsAsZExtValue(Bits, Shift);
     else
@@ -919,16 +928,17 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   bool FoldedSignBit = false;
   for (size_t I = Rows.size(); I-- != 0;) {
     const auto &F = Rows[I];
-    Coefficient C = LiveWeight(F.Weight);
+    Coefficient C = LiveWeight(I);
     if (Powers) {
       C *= Low(Powers->cofactor(F.Offset).getRawData());
-      if (!Multiplicities.empty() && Multiplicities[I] != 1)
+      if (WeightSums.empty() && !Multiplicities.empty() &&
+          Multiplicities[I] != 1)
         C *= static_cast<uint64_t>(Multiplicities[I]);
     } else {
       C *= Prefix[I] * Suffix;
       Suffix *= Low(Ctx.constWords(F.Offset).data());
     }
-    auto Word = lowOperand(Ctx, F.Word);
+    auto Word = fieldOf(F);
     if (Ctx.op(Word) == SymOp::Not) {
       Word = Ctx.operand(Word, 0);
       Correction += C;
@@ -964,12 +974,13 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   Storage -= Edges * PerEdge;
   const auto Offset = Product.extractBits(Bits, Shift);
   llvm::SmallVector<SymRef, 8> Sum{Ctx.mkConst(Offset)};
+  const bool MatchOffset = FoldedSignBit || !WeightSums.empty();
   SymRef Matched;
   size_t MatchIndex = 0;
   for (const auto &[Index, C] : Weights) {
     const auto K = Value(C);
     if (!K.isZero()) {
-      if (FoldedSignBit && K == Offset) {
+      if (MatchOffset && K == Offset) {
         Matched = SymRef(Index);
         MatchIndex = Sum.size();
       }
@@ -977,12 +988,12 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     }
   }
   auto Upper = Ctx.mkAdd(Sum);
-  if (FoldedSignBit && Sum.size() > 1 && (Matched || Offset.isAllOnes()) &&
+  if (MatchOffset && Sum.size() > 1 && (Matched || Offset.isAllOnes()) &&
       Edges <= Storage / PerEdge && Budget.canConsume(Edges * EdgeWork)) {
     Budget.consume(Edges * EdgeWork);
     Storage -= Edges * PerEdge;
-    // Flipping the sign bit can make the offset equal a surviving weight.
-    // k + k*x = -k*~x. With offset -1 the whole sum can be complemented.
+    // An offset that matches a weight gives k + k*x = -k*~x. With
+    // offset -1 the whole sum can be complemented.
     if (Matched)
       Sum[MatchIndex] = Ctx.mkMul(Ctx.mkConst(-Offset), Ctx.mkNot(Matched));
     else {
@@ -1010,10 +1021,12 @@ SymRef buildProjectedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
                                    SymRef Outer, unsigned Precision,
                                    unsigned Shift, WorkBudget &Budget,
                                    size_t &Storage,
-                                   llvm::ArrayRef<unsigned> Counts = {}) {
+                                   llvm::ArrayRef<unsigned> Counts = {},
+                                   llvm::ArrayRef<uint64_t> WeightSums = {}) {
   auto Build = Precision - Shift <= 64 ? buildLinearProduct<uint64_t>
                                        : buildLinearProduct<llvm::APInt>;
-  return Build(Ctx, Rows, Outer, Precision, Shift, Budget, Storage, Counts);
+  return Build(Ctx, Rows, Outer, Precision, Shift, Budget, Storage, Counts,
+               WeightSums);
 }
 
 // Isolate the high-weight subproduct. Every pair of its disturbances is zero
@@ -1066,6 +1079,102 @@ SymRef buildMixedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
       Count == High.size() ? llvm::ArrayRef<unsigned>{}
                            : llvm::ArrayRef(Counts));
   Storage += Temporary;
+  if (Sum)
+    Parts.append(Remainder.begin(), Remainder.end());
+  return Sum;
+}
+
+// A row with weight b reads only Precision - ctz(b) low bits. Extracts
+// starting at the same bit of the same source can therefore name a common
+// coordinate even when their widths or the enclosing extensions differ.
+SymRef buildSlicedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
+                                SymRef Outer, unsigned Precision,
+                                unsigned Shift,
+                                llvm::SmallVectorImpl<SymRef> &Parts,
+                                WorkBudget &Budget, size_t &Storage) {
+  using Key = std::tuple<uint32_t, uint32_t, uint32_t>;
+  const unsigned Bits = Precision - Shift;
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  const size_t PerRow = 2 * (sizeof(Factor) + sizeof(unsigned) +
+                             sizeof(SymRef) + Words * sizeof(uint64_t)) +
+                        4 * sizeof(std::pair<Key, unsigned>);
+  const size_t RowWork = 3 + Words;
+  if (Rows.size() > Storage / PerRow ||
+      Rows.size() > Budget.available() / RowWork)
+    return {};
+  llvm::SmallDenseMap<Key, unsigned, 16> Index;
+  llvm::SmallVector<Factor, 16> Groups;
+  llvm::SmallVector<unsigned, 16> Counts;
+  llvm::SmallVector<uint64_t, 32> Weights;
+  llvm::SmallVector<SymRef, 8> Remainder;
+  const size_t Temporary = Rows.size() * PerRow;
+  Storage -= Temporary;
+  const llvm::scope_exit Restore([&] { Storage += Temporary; });
+  llvm::DenseMap<uint32_t, SymRef> Widened;
+  Budget.consume(Rows.size() * RowWork);
+  for (const auto &F : Rows) {
+    const auto Low = F.Zeros >= Shift ? lowOperand(Ctx, F.Word) : SymRef{};
+    if (!Low ||
+        (Ctx.width(Low) < Bits && F.Zeros < Precision - Ctx.width(Low))) {
+      Remainder.push_back(F.Ref);
+      continue;
+    }
+    auto Source = Low;
+    unsigned Start = 0;
+    if (Ctx.op(Low) == SymOp::Extract) {
+      Source = Ctx.operand(Low, 0);
+      Start = Ctx.node(Low).Aux;
+    } else if (Ctx.op(Low) == SymOp::Add || Ctx.op(Low) == SymOp::Mul ||
+               isBitwise(Ctx.op(Low))) {
+      Source =
+          widenCoordinate(Ctx, Low, Ctx.width(Outer), Widened, Budget, Storage);
+      if (!Source)
+        return {};
+    }
+    if (Ctx.width(Source) - Start < Bits) {
+      // Widening would cross the end of the source, so retain the complete
+      // factor with its original sign or concatenated upper bits.
+      Remainder.push_back(F.Ref);
+      continue;
+    }
+    const auto [It, Inserted] = Index.try_emplace(
+        Key{F.Offset.index(), Source.index(), Start}, Groups.size());
+    const size_t I = It->second;
+    if (Inserted) {
+      Groups.push_back(F);
+      Groups.back().Word = {};
+      Counts.push_back(0);
+      Weights.resize(Weights.size() + Words, 0);
+    }
+    if (Ctx.width(Low) == Bits)
+      Groups[I].Word = Low;
+    ++Counts[I];
+    // All these rows have the same offset and coordinate. Their cofactor
+    // is shared even for an even offset. Add the weights without division.
+    llvm::APInt::tcAdd(Weights.data() + I * Words,
+                       Ctx.constWords(F.Weight).data(), 0, Words);
+  }
+  const auto Count = Rows.size() - Remainder.size();
+  if (Count < limits::kMinResidueProductFactors || Count <= Remainder.size())
+    return {};
+  for (const auto &[K, I] : Index) {
+    if (Groups[I].Word)
+      continue;
+    const SymRef Source(std::get<1>(K));
+    // A low extract can rebuild modular children. The printed tree count
+    // also bounds repeated edges of a variadic source.
+    const size_t Nodes = Ctx.readabilityCost(Source);
+    const size_t Bytes = 2 * sizeof(SymNode) + 4 * sizeof(SymRef);
+    if (Nodes > Storage / Bytes || !Budget.consume(2 * Nodes + 1))
+      return {};
+    Storage -= Nodes * Bytes;
+    Groups[I].Word = Ctx.mkExtract(Source, std::get<2>(K), Bits);
+  }
+  const auto Sum = buildProjectedLinearProduct(
+      Ctx, Groups, Outer, Precision, Shift, Budget, Storage,
+      Count == Groups.size() ? llvm::ArrayRef<unsigned>{}
+                             : llvm::ArrayRef(Counts),
+      Weights);
   if (Sum)
     Parts.append(Remainder.begin(), Remainder.end());
   return Sum;
@@ -1161,6 +1270,17 @@ SymRef projectedHighField(const SymContext &Ctx, SymRef Word, unsigned Zeros,
              : SymRef{};
 }
 
+unsigned slicedProductFieldWidth(const SymContext &Ctx, SymRef Perturbation) {
+  if (!Perturbation || Ctx.op(Perturbation) != SymOp::Mul ||
+      Ctx.numOperands(Perturbation) != 2)
+    return 0;
+  const auto Low = lowOperand(Ctx, Ctx.operand(Perturbation, 1));
+  return Low && (Ctx.op(Low) == SymOp::Extract || Ctx.op(Low) == SymOp::Add ||
+                 Ctx.op(Low) == SymOp::Mul || isBitwise(Ctx.op(Low)))
+             ? Ctx.width(Low)
+             : 0;
+}
+
 bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
                        unsigned Bits) {
   if (!Perturbation || Ctx.op(Perturbation) != SymOp::Mul ||
@@ -1186,6 +1306,9 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
   unsigned TotalZeros = 0, MinimumZeros = Observed, LowerZeros = 0;
   const unsigned Half = Observed - Observed / 2;
   size_t FirstHigh = N;
+  unsigned HighZeros = Observed, FirstFieldBits = 0;
+  bool DifferentFields = false;
+  size_t HighFields = 0;
   const auto Outer =
       Ctx.isConst(Ctx.operand(Root, 0)) ? Ctx.operand(Root, 0) : SymRef{};
   for (size_t I = bool(Outer); I < N; ++I) {
@@ -1224,8 +1347,11 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
     MinimumZeros = std::min(MinimumZeros, Zeros);
     if (Zeros < Half)
       LowerZeros += std::min(Observed - LowerZeros, Zeros);
-    else if (FirstHigh == N)
-      FirstHigh = Rows.size();
+    else {
+      HighZeros = std::min(HighZeros, Zeros);
+      if (FirstHigh == N)
+        FirstHigh = Rows.size();
+    }
     TotalZeros += std::min(Observed - TotalZeros, InitialContent);
     if (TotalZeros == Observed)
       return Ctx.mkZero(Width);
@@ -1235,6 +1361,16 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
       return Root;
     Storage -= Tail.size() * 3 * sizeof(SymRef);
     auto Word = Tail.size() == 1 ? Tail.front() : Ctx.mkMul(Tail);
+    if (Outer && Zeros >= Half) {
+      if (const auto Low = lowOperand(Ctx, Word)) {
+        const auto Size = Ctx.width(Low);
+        if (Size >= Observed - std::min(Observed, Zeros)) {
+          ++HighFields;
+          DifferentFields |= FirstFieldBits && Size != FirstFieldBits;
+          FirstFieldBits = Size;
+        }
+      }
+    }
     Rows.push_back({F, Word, Weight, Offset, Zeros, InitialContent, false});
   }
   auto Finish = [&]() {
@@ -1249,10 +1385,15 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
   const bool Linear = Outer && MinimumZeros < Observed &&
                       MinimumZeros >= Observed - MinimumZeros;
   SymRef LinearPart;
-  if (Linear) {
+  if (DifferentFields && HighFields > Rows.size() / 2 && HighZeros < Observed &&
+      Rows.size() >= limits::kMinResidueProductFactors)
+    LinearPart = buildSlicedLinearProduct(Ctx, Rows, Outer, Observed, HighZeros,
+                                          Parts, Budget, Storage);
+  if (!LinearPart && Linear) {
     LinearPart = buildProjectedLinearProduct(Ctx, Rows, Outer, Observed,
                                              MinimumZeros, Budget, Storage);
-  } else if (Outer && LowerZeros < Observed && FirstHigh < Rows.size() &&
+  } else if (!LinearPart && Outer && LowerZeros < Observed &&
+             FirstHigh < Rows.size() &&
              Rows.size() >= limits::kMinResidueProductFactors) {
     // If the lower-weight disturbances can themselves vanish together, let
     // the per-coordinate polynomial reader below reduce those groups too.

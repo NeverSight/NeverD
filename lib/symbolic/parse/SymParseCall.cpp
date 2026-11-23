@@ -31,17 +31,7 @@ bool takesBitCounts(llvm::StringRef F) {
   return F == "zext" || F == "sext" || F == "trunc" || F == "extract";
 }
 
-} // namespace
-
-SymRef Parser::makeLiteral(const Token &N) {
-  if (N.Digits.empty()) {
-    fail(N.Offset, "malformed numeric literal");
-    return {};
-  }
-  uint32_t W = parseWidthSuffix(Width);
-  if (Failed)
-    return {};
-
+SymRef literalValue(SymContext &Ctx, const Token &N, uint32_t W) {
   if (N.Radix == 10) {
     // The lexer already established every digit. A group of up to 19
     // decimal digits fits a limb. Longer literals denote a residue at W,
@@ -92,6 +82,29 @@ SymRef Parser::makeLiteral(const Token &N) {
   while (!Digits.empty())
     Words.push_back(TakeWord());
   return Ctx.mkConst(llvm::APInt(W, Words));
+}
+
+} // namespace
+
+SymRef Parser::makeLiteral(const Token &N, bool Negative) {
+  if (N.Digits.empty()) {
+    fail(N.Offset, "malformed numeric literal");
+    return {};
+  }
+  uint32_t W = parseWidthSuffix(Width);
+  if (Failed)
+    return {};
+
+  if (W == Width && W > 64) {
+    auto &[Value, Negated] = WideLiterals[{N.Digits, N.Radix}];
+    if (!Value)
+      Value = literalValue(Ctx, N, W);
+    if (Negative && !Negated)
+      Negated = Ctx.mkNeg(Value);
+    return Negative ? Negated : Value;
+  }
+  const auto Value = literalValue(Ctx, N, W);
+  return Negative ? Ctx.mkNeg(Value) : Value;
 }
 
 uint32_t Parser::parseWidthSuffix(uint32_t Default) {

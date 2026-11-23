@@ -4639,6 +4639,16 @@ and the GUI worker at Clang O0 and O2.
 Using `--count 32` exercises 160 distinct inputs, including 96 products
 above both 20,481 bits and 2,593 factors.
 
+Use `--family variable-width-product --count 32` for 160 mixed products
+at 32, 64, 36,865, 40,961 and 49,153 bits. The 96 wide products have
+3,671–4,327 factors. Each weight determines how many bits survive from its
+signed, unsigned or concatenated field. The regression tests include narrower
+fields with observable upper bits, even offsets and a slice ending at the
+source boundary. Two 137-factor x86 fixtures exercise a nine-bit arithmetic
+result in both decompiler source views. The repeated-offset variant packs
+nonoverlapping literals into a scaled signed field. Byte-wide LLVM guards
+exhaust its input domain, including overlapping literals and unsafe shifts.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work

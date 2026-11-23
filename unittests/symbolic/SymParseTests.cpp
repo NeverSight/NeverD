@@ -92,6 +92,15 @@ TEST(SymParse, SubtractionIsAdditionOfANegatedTerm) {
   EXPECT_EQ(parse(Ctx, "a + (a << 1)"), parse(Ctx, "3 * a"));
 }
 
+TEST(SymParse, RepeatedWideDigitsKeepTheirRadixSignAndDeclaredWidth) {
+  SymContext C;
+  for (unsigned Width : {65u, 129u, 513u}) {
+    const auto Result = parse(
+        C, "-10 + 0x10 + 0b10 + 10 - 0x10 + (-10) + (-10#5) + 0b10", Width);
+    EXPECT_EQ(Result, C.mkConst(Width, 16));
+  }
+}
+
 TEST(SymParse, WideDecimalLiteralsAccumulateAtTheirDeclaredWidth) {
   SymContext C;
   for (size_t Digits : {19u, 20u, 37u, 38u, 39u, 310u, 617u}) {

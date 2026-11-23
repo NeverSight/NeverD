@@ -1040,6 +1040,42 @@ TEST(SymSimplifyGuard, ScaledNarrowSignedWordsRequireProvenFlags) {
   }
 }
 
+TEST(SymSimplifyGuard, SignedFieldScaleOnlyFreesTheInsertedLowBits) {
+  llvm::LLVMContext C;
+  llvm::Module M("scaled_signed_field", C);
+  auto *Ty = llvm::Type::getInt8Ty(C);
+  for (unsigned Right : {1u, 2u, 4u, 5u}) {
+    for (unsigned Offset : {1u, 3u, 7u, 8u}) {
+      for (bool NoWrap : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Right << "," << Offset << "," << NoWrap);
+        auto *F =
+            llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", &M);
+        llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+        auto *L = B.CreateShl(F->getArg(0), B.getInt8(4), "", NoWrap);
+        auto *Field = B.CreateAShr(L, B.getInt8(Right), "", true);
+        auto *Root = B.CreateSub(B.CreateDisjointOr(Field, B.getInt8(Offset)),
+                                 B.CreateAdd(Field, B.getInt8(Offset)));
+        B.CreateRet(Root);
+        bool Defined = true;
+        for (unsigned X = 0; X < 256; ++X) {
+          llvm::APInt V(8, X);
+          const auto Shifted = V.shl(4);
+          Defined &= (!NoWrap || V.getActiveBits() <= 4) &&
+                     Shifted.countr_zero() >= Right &&
+                     (Shifted.ashr(Right).getZExtValue() & Offset) == 0;
+        }
+        const auto Result = SymSimplifyPass::constantValueOf(Root);
+        EXPECT_EQ(Result.has_value(), Defined);
+        if (Result)
+          EXPECT_TRUE(Result->isZero());
+        EXPECT_FALSE(llvm::verifyFunction(*F, &llvm::errs()));
+      }
+    }
+  }
+}
+
 TEST(SymSimplifyGuard, MaskedDisjointOrMatchesExhaustiveByteDomains) {
   llvm::LLVMContext C;
   llvm::Module M("masked_or_domains", C);

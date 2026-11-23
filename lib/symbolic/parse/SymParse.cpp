@@ -212,6 +212,8 @@ SymRef Parser::parseUnary() {
     DepthGuard Guard(*this, Offset);
     if (Failed)
       return {};
+    if (Width > 64 && S == "-" && Lex.peek().K == Token::Number)
+      return makeLiteral(Lex.take(), /*Negative=*/true);
     SymRef A = parseUnary();
     if (Failed)
       return {};

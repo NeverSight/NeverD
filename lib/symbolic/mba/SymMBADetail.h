@@ -646,6 +646,7 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 /// products of two such disturbances vanish at the observed precision.
 SymRef projectedHighField(const SymContext &Ctx, SymRef Word, unsigned Zeros,
                           unsigned Precision);
+unsigned slicedProductFieldWidth(const SymContext &Ctx, SymRef Perturbation);
 bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
                        unsigned Bits);
 
