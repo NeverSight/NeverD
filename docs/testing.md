@@ -26782,6 +26782,8 @@ permutation, floating-point and control-transfer instructions.
 `mips32r2fp`, `mips32r2fpel`, `mips64r2fp` and `mips64r2fpel` select classic
 pre-R6 FR=1 profiles. Newly admitted instructions have no successful baseline
 lift; report their throughput separately from comparisons of unchanged work.
+Historical profiles `mips1`, `mips2`, and `mips3` select MIPS I, II,
+and III. The `el` suffix selects little-endian bytes for each.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same

@@ -1561,6 +1561,11 @@ scheduling contract. Floating arithmetic additionally requires an executor
 that explicitly declares the historical ISA; the modern pre-R6 FPU does not
 claim R3000/R4000 floating-point exception, NaN or subnormal behavior.
 
+For a raw historical code span, `neverd-mips-bench` accepts `mips1`, `mips2`
+and `mips3`. Append `el` for little-endian bytes. The `capstone` and `decode`
+stages use the same configured Capstone handle. The `lift` stage includes
+the historical begin/retire operations and executed delay slots.
+
 A historical scheduling snapshot can additionally bind a processor's CP0 state.
 The R30xx and R4000 have distinct exception rules. A MIPS II CW4011 snapshot
 selects its R3000- or R4000-compatible exception mode. Historical CP0 moves use
@@ -1649,6 +1654,27 @@ The erratum specifies instruction order and the guest runs report architectural
 results. Neither supplies the clock edge at which the physical TLB changed.
 [MIPS R4000PC/SC errata, item 27, pp. 5–6](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=6).
 
+The VR4300 cross-page probe maps adjacent 4 KiB virtual pages to physical
+frames separated by an intervening frame. The probe expects `v0 = 0x300`
+after a taken branch at offset `0xffc` executes the odd page's delay slot
+and its target.
+The native regression replays the branch in both byte orders. It checks the
+old and replacement slots against distinct physical words, then invalidates
+the odd page and checks the fault address, branch EPC and Cause.BD. The MMU
+snapshots identify which frame the slot used. The time of the TLB write on
+silicon remains open.
+[VR4300 split-page probe](https://github.com/lemmy-64/n64-systemtest/blob/196f5421173220eb2f63a7a99c64795dc0ea0698/src/tests/tlb/cross_page_exec.rs#L112-L129).
+
+The N64 test maintainer reports a full hardware run with zero failures in
+3,935 cases. That revision registers the split-page branch test. Its separate
+timing group uses CP0 Count and expects one CPU cycle for a single `TLBWI`
+or `TLBWR` in the measured code. The timing group is opt-in and the run
+summary gives no per-case samples. Neither case records when a replacement
+entry became visible alongside the first access that used it.
+[N64 hardware run](https://github.com/thelemmy/nemu64-test/commit/c918c15794bcc80483352e50905bec43025f739c),
+[registered tests](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/testlist.rs#L1106),
+[TLB timing cases](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/timing/mod.rs#L517-L546).
+
 IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
 fetch at physical `0x1fc00000` supplies a jump, the read at `0x1fc00004`
 supplies its NOP delay slot, and the target at `0x1fc00220` supplies
@@ -1679,7 +1705,9 @@ request while the board is busy. The ranges reflect the resolution of the
 published waveforms. Board wait states, pipeline fetch and instruction
 retirement are separate events. Figure 4.3 of each manual supplies the boot
 jump, delay slot and target words used by the big- and little-endian lift
-tests. The tests exercise both byte encodings of each observed word sequence.
+tests. The tests bind the ROM at its physical addresses and check each
+instruction through the MIPS III unmapped reset segment in both byte orders.
+The compatible R4000 reset profile supplies the test's initial CP0 state.
 [R4300 probe manual, figure 5.1](https://archive.org/download/manualzilla-id-5722005/5722005.pdf#page=47),
 [R4XXX probe manual, R4600 figure 5.1](https://web.archive.org/web/20030728054757id_/http://www.c-h-s.com/r4xxxps.pdf#page=58).
 
@@ -1737,6 +1765,27 @@ the retirement count, exception vector and Status using representative
 instructions. The timing of the electrical IRQ pin was outside this probe.
 [Board and test description](https://psx.wiki/tests/irqsio/),
 [card-b](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt),
+[card-g](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g/irqsio/14IEX.txt),
+[card-g3](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g3/irqsio/14IEX.txt).
+
+In a separate `14IEX` trial, root counter 2 interrupts a three-word loop.
+Each of the three card reports records the same 16 EPC/BD pairs for timer
+targets 100 through 115. Five entries have BD set. At a branch and at its
+delay slot the saved EPC is word 2 relative to the mode write. Only the slot
+sets BD. The other instruction saves word 1. Both endian encodings of a
+representative loop reproduce those three exception states when the input
+is supplied at the observed instruction boundaries. The board ran
+little-endian. The reports record handler state and timer settings without
+an electrical timestamp for the CPU interrupt pin.
+[Original card report, timer loop](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt).
+
+In the two linear timer sweeps, each report lists 16 settings, 100–107
+and 150–157. Across all 48 observations the handler's timer 2 reading
+exceeds the programmed compare value by 35–46 system-clock counts, with a
+median of 40. For each column, subtract its programmed target from the
+reading to the right of `@`. The value to the left counts instructions.
+These are timer and handler measurements on the board's counter.
+[Timer sweeps on card-b](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt),
 [card-g](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g/irqsio/14IEX.txt),
 [card-g3](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g3/irqsio/14IEX.txt).
 
