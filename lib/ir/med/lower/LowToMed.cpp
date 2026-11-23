@@ -1629,6 +1629,18 @@ MedFunc LowToMedConverter::convertFunction(
                       LOp.Inputs[0].isConst()
                   ? LOp.Inputs[0].Offset
                   : InvalidVA);
+        // Assembly's call through a pointer that is no func value reaches the
+        // platform's code, which keeps the registers the platform's
+        // convention keeps: arm64's `runtime.nanotime1` holds its stack
+        // pointer in R20 across the vDSO routine it calls.  The summaries
+        // before this conversion still take the call for Go's, which keeps
+        // less.
+        if (Image && MOp.Opcode == NdOp::INDIR_CALL && !TailCall &&
+            MOp.RegisterContract == CallRegisterContract::GoCode &&
+            goAssemblyCallsPlatformCode(
+                *Image, Low.Entry, Low.Blocks,
+                static_cast<size_t>(&LB - Low.Blocks.data()), LowOpIndex))
+          MOp.RegisterContract = CallRegisterContract::Platform;
         if (BoundaryIndex < LB.InstructionBoundaries.size()) {
           const LowInstructionBoundary &Boundary =
               LB.InstructionBoundaries[BoundaryIndex];

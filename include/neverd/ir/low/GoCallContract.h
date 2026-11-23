@@ -64,6 +64,22 @@ bool goWriteBarrierKeeps(Arch A, GoWriteBarrierKind Kind, uint64_t Register);
 std::optional<FixedIntegerCallArguments>
 goWriteBarrierArguments(const BinaryImage &Img, va_t Entry);
 
+/// Whether the indirect call at \p Call of \p Blocks[\p Block], in arm64
+/// assembly at \p Caller of a register-ABI image, reaches code the Go
+/// toolchain did not build.  Assembly calls Go code by name or through a
+/// func value, whose
+/// code pointer is the word the closure context register points at when the
+/// call is made (`MOVD R3, R26; MOVD 0(R3), R3; BL (R3)`).  A call through
+/// any other pointer it loads is a call into the platform's code: a vDSO
+/// routine whose address a variable holds (`runtime.nanotime1`), a C
+/// function a cgo call passes (`runtime.asmcgocall`).  The target is
+/// followed to its load in the call's block or, with no call between, in
+/// the blocks that alone lead to it (kGoIndirectCallTargetBlocks); a target
+/// no such load defines says nothing, and the call stays Go's.
+bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
+                                 llvm::ArrayRef<LowBlock> Blocks, size_t Block,
+                                 size_t Call);
+
 /// The contract of a call the code at \p Caller makes to \p Callee, which is
 /// InvalidVA where the call names no fixed target.  Go code's call to a
 /// routine the `pclntab` does not record, as a libc routine's stub, follows

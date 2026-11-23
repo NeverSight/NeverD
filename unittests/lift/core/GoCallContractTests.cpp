@@ -4980,4 +4980,76 @@ TEST(GoStackABI, ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters) {
   EXPECT_NE(Text.find("helper(arg0, arg1)"), std::string::npos) << Text;
 }
 
+TEST(GoAssembly, ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform) {
+  // Assembly calls Go code by name or through a func value, whose code
+  // pointer is the word the closure context register points at.  A call
+  // through any other pointer it loads reaches the platform's code:
+  // runtime.nanotime1 calls the vDSO routine a variable holds, with its
+  // stack pointer in R20, which that routine keeps and Go code would not.
+  //   plat:  stp x29, x30, [sp, #-32]!; mov x20, x0; ldr x2, [x1]; blr x2
+  //          str x0, [x20]; ldp x29, x30, [sp], #32; ret
+  //   fval:  the same, with `mov x26, x1` before the load
+  //   cross: the same as plat, with `cbz x2` between the load and the call
+  constexpr va_t Plat = kTextVA + 0x100;
+  constexpr va_t FuncValue = kTextVA + 0x140;
+  constexpr va_t Cross = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Plat, words({0xA9BE7BFD, 0xAA0003F4, 0xF9400022, 0xD63F0040,
+                           0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
+  T.writeText(FuncValue,
+              words({0xA9BE7BFD, 0xAA0003F4, 0xAA0103FA, 0xF9400022, 0xD63F0040,
+                     0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
+  T.writeText(Cross, words({0xA9BE7BFD, 0xAA0003F4, 0xF9400022, 0xB4000062,
+                            0xD63F0040, 0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{Plat, "runtime.plat"}, std::pair{FuncValue, "runtime.fval"},
+        std::pair{Cross, "runtime.cross"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Plat, Plat + 0xC0}};
+  Module.FrameArguments = {{Plat, 0, 0}, {FuncValue, 0, 0}, {Cross, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  // The contract of the routine's one indirect call.
+  const auto Contract = [&](va_t Entry) {
+    const MedFunc F = lift(T.Img, Entry);
+    for (const MedBlock &Block : F.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INDIR_CALL)
+          return Op.RegisterContract;
+    ADD_FAILURE() << "no indirect call";
+    return CallRegisterContract::Platform;
+  };
+  EXPECT_EQ(Contract(Plat), CallRegisterContract::Platform);
+  EXPECT_EQ(Contract(Cross), CallRegisterContract::Platform);
+  EXPECT_EQ(Contract(FuncValue), CallRegisterContract::GoCode);
+  // Compiled code calls through method tables and func values alike: only
+  // assembly's pointers are told apart.
+  T.Img.ExceptionMetadata.GoModule->GoAssembly.clear();
+  EXPECT_EQ(Contract(Plat), CallRegisterContract::GoInternal);
+  T.Img.ExceptionMetadata.GoModule->GoAssembly = {{Plat, Plat + 0xC0}};
+
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  for (const char *Name : {"runtime_plat", "runtime_cross"}) {
+    const std::string Text = highCBody(R, T.Img, Name);
+    ASSERT_FALSE(Text.empty()) << Name;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+  // After a call into Go code X20 holds nothing.
+  const std::string Go = highCBody(R, T.Img, "runtime_fval");
+  ASSERT_FALSE(Go.empty());
+  EXPECT_NE(Go.find("__builtin_trap"), std::string::npos) << Go;
+}
+
 } // namespace

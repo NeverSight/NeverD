@@ -12,10 +12,12 @@
 
 #include "neverd/ir/low/GoCallContract.h"
 
+#include "neverd/ir/Limits.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <map>
@@ -191,6 +193,93 @@ goWriteBarrierArguments(const BinaryImage &Img, va_t Entry) {
     Arguments.Parameters.push_back(
         {SourceABICarrierKind::IntegerRegister, Register, 0, Bytes});
   return Arguments;
+}
+
+bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
+                                 llvm::ArrayRef<LowBlock> Blocks, size_t Block,
+                                 size_t Call) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  const std::optional<uint64_t> Context = goClosureContextRegister(Img.Arch);
+  // x86-64's routines of this kind switch to the system stack before the
+  // call (`runtime.nanotime1`, `time.now`).  With the stack pointer they
+  // hold in R12 kept, the frame they return to is known again, and the
+  // source frame check refuses them for the return address the call pushed
+  // on the other stack, which it cannot place.  Until it follows a stack
+  // switch, an x86-64 call of this kind stays Go's, which keeps less.
+  if (Img.Arch != Arch::AArch64)
+    return false;
+  if (!Module || !Module->RegisterArguments || !Context ||
+      !isGoCode(Img, Caller) || !inRanges(Module->GoAssembly, Caller) ||
+      Block >= Blocks.size() || Call >= Blocks[Block].Ops.size() ||
+      Blocks[Block].Ops[Call].Opcode != NdOp::INDIR_CALL ||
+      Blocks[Block].Ops[Call].NumInputs < 1)
+    return false;
+  // The blocks the call's block is reached through, each from the one
+  // before it alone, earliest first.
+  llvm::SmallVector<const LowBlock *, 8> Path{&Blocks[Block]};
+  while (Path.size() <= limits::ir::kGoIndirectCallTargetBlocks) {
+    const LowBlock &First = *Path.back();
+    if (First.Preds.size() != 1 || !First.ExceptionalPreds.empty())
+      break;
+    const auto Before = llvm::find_if(
+        Blocks, [&](const LowBlock &B) { return B.Id == First.Preds.front(); });
+    if (Before == Blocks.end() || llvm::is_contained(Path, &*Before))
+      break;
+    Path.push_back(&*Before);
+  }
+  // Each register and temporary holds a numbered value; a copy keeps the
+  // number, any other operation gives its result a new one, and a load's
+  // result remembers the number of the address it read.
+  using Key = std::pair<VnodeSpace, uint64_t>;
+  std::map<Key, unsigned> Values;
+  std::map<unsigned, unsigned> LoadedFrom;
+  unsigned Next = 0;
+  const auto ValueOf = [&](const NdVar &V) {
+    const auto [It, New] = Values.try_emplace(Key{V.Space, V.Offset}, Next);
+    Next += New;
+    return It->second;
+  };
+  const uint64_t Word = getTargetRegInfo(Img.Arch).PointerSize;
+  for (const LowBlock *At : llvm::reverse(Path)) {
+    const size_t End = At == &Blocks[Block] ? Call : At->Ops.size();
+    for (size_t I = 0; I < End; ++I) {
+      const LowOp &Op = At->Ops[I];
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        // A call may change any register, and may return the target.
+        Values.clear();
+        LoadedFrom.clear();
+        continue;
+      }
+      if (!Op.Output.isReg() && !Op.Output.isTemp())
+        continue;
+      const Key Out{Op.Output.Space, Op.Output.Offset};
+      const bool Whole = Op.Output.Size == Word;
+      // A copy, or the sum with zero an address without a displacement is.
+      const bool Same =
+          Whole && Op.NumInputs >= 1 && !Op.Inputs[0].isConst() &&
+          Op.Inputs[0].Size == Word &&
+          ((Op.Opcode == NdOp::COPY && Op.NumInputs == 1) ||
+           ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+            Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+            Op.Inputs[1].Offset == 0));
+      if (Same) {
+        Values[Out] = ValueOf(Op.Inputs[0]);
+      } else if (Whole && Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+                 Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+        const unsigned Address = ValueOf(Op.Inputs[0]);
+        Values[Out] = Next;
+        LoadedFrom[Next++] = Address;
+      } else {
+        Values[Out] = Next++;
+      }
+    }
+  }
+  const NdVar &Target = Blocks[Block].Ops[Call].Inputs[0];
+  if (Target.isConst())
+    return false;
+  const auto Loaded = LoadedFrom.find(ValueOf(Target));
+  return Loaded != LoadedFrom.end() &&
+         Loaded->second != ValueOf(NdVar::reg(*Context, Word));
 }
 
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,

@@ -6316,6 +6316,25 @@ registers it was entered with: Go 1.16's `syscall.libc_mmap_trampoline` is
 (arm64), nothing reads those registers, so `detectCc` takes such a routine
 for no stack-ABI one unless it loads a word of its caller's frame.
 
+Assembly reaches Go code by name or through a func value, whose code pointer
+is the word the closure context register points at when the call is made
+(`MOVD R3, R26; MOVD 0(R3), R3; BL (R3)`). A call through any other pointer
+it loads reaches the platform's code: `runtime.nanotime1`, `walltime` and
+`vgetrandom1` call the vDSO routine whose address a variable holds, with
+the goroutine's stack pointer in R20 and `m` in R21, which that routine
+keeps and Go code would not. `goAssemblyCallsPlatformCode` follows the call's
+target to the load that defines it, in the call's block or the blocks that
+alone lead to it, and compares the address it read with the context register
+at the call; `LowToMedConverter` gives such a call the platform's contract.
+A target no load in reach defines says nothing, and compiled code, which
+calls through method tables too, is not asked. On x86-64 the same routines
+switch to the system stack first: with R12 kept, the frame they return to
+is known again, and the source frame check refuses them for the return
+address the call pushed on the other stack. Until that check follows a stack
+switch, the rule is arm64's alone, and an x86-64 call of this kind stays
+Go's. The register summaries before the conversion take every such call for
+Go's, which keeps less.
+
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
 read of one after a call, before any write, is a result, and so is every

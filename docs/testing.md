@@ -21079,6 +21079,11 @@ recorded functions stays Go's.
 `GoStackABI.ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters` lifts a
 stack-ABI routine that is one jump to such code: it takes the two registers
 its target reads and passes them on.
+`GoAssembly.ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform` lifts
+three arm64 routines that hold a pointer in X20 across an indirect call: one
+whose target a plain pointer gives, in the call's block or the one before
+it, follows the platform's contract and stores through X20; one that calls
+through a func value stays Go's and traps; compiled code is not asked.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.
