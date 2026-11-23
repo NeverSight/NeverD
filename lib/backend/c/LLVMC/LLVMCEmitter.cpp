@@ -1464,8 +1464,17 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
         mips::modulePreservesDSPControl(Mod, Img ? Img : Opts.Image,
                                         Opts.TheArch),
         mips::moduleAvoidsMSA(Mod, Img ? Img : Opts.Image, Opts.TheArch));
-  if (NeedsWin64CallStackInput)
+  if (!NeedsWin64CallStackInput)
+    Opts.PrecallMemory = Win64PrecallMemory::None;
+  else if (Opts.PrecallMemory == Win64PrecallMemory::None)
     OS << Win64CallStackInputPrelude;
+  else {
+    if (!OnlyFunction)
+      throw std::invalid_argument(
+          "original_call_state requires one ordinary C definition");
+    writeWin64PrecallReader(OS.stream(), Opts.PrecallMemory,
+                            Img ? Img : Opts.Image);
+  }
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
   if (NeedsX86SegmentMoveDispatch)

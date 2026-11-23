@@ -17,6 +17,7 @@
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
+#include "../render/X86/Win64CallStackInput.h"
 #include "../render/X86/X86NativeFeatures.h"
 #include "LLVMCStackAllocation.h"
 #include "LLVMCStorage.h"
@@ -10761,7 +10762,15 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     // concatenating an abstract type and a name loses the C grouping.
     std::string Declarator;
     llvm::raw_string_ostream DeclaratorOS(Declarator);
-    DeclaratorOS << FName << "(";
+    const bool Precall =
+        Opts.PrecallMemory != Win64PrecallMemory::None && OnlyFunction == &Fn;
+    if (Precall && Fn.isVarArg())
+      throw std::invalid_argument(
+          "original_call_state requires a fixed C entry");
+    DeclaratorOS << FName;
+    if (Precall)
+      DeclaratorOS << Win64PrecallSuffix;
+    DeclaratorOS << "(";
 
     unsigned ParamIdx = 0;
     std::set<size_t> Declared;
@@ -10785,7 +10794,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           DeclaratorOS << declarationToC(
               Ty, Name.empty() ? "arg" + std::to_string(Index) : Name);
         }
-    if (ParamIdx == 0 && !Convention.empty())
+    if (Precall) {
+      if (ParamIdx)
+        DeclaratorOS << ", ";
+      DeclaratorOS << win64PrecallParameters(Opts.PrecallMemory);
+    } else if (ParamIdx == 0 && !Convention.empty())
       DeclaratorOS << "void";
     if (Fn.isVarArg() && ParamIdx != 0) {
       if (ParamIdx > 0)

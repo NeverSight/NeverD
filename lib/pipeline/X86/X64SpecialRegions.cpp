@@ -364,7 +364,8 @@ void emitX64SpecialRegionDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
     bool FollowInternalCalls, bool FunctionContext,
-    const X64FunctionCallSitePauses &CallSitePauses) {
+    const X64FunctionCallSitePauses &CallSitePauses,
+    const X64RtmAbortDispatch &Rtm) {
   using Exit = analysis::X64ContinuationExitV1;
   // One index for the immutable selection; no per-instruction linear search.
   std::map<va_t, size_t> ByAddress;
@@ -397,8 +398,9 @@ void emitX64SpecialRegionDriver(
        << "region_" << First / Chunk << "(neverd_x64_state_v" << Version
        << " *state, uint64_t *budget"
        << (FunctionContext ? ", neverd_x64_function_context_v1 *function" : "")
-       << ") {\n"
-          "    uint64_t last = 8, status;\n"
+       << ") {\n";
+    Rtm.declare(OS, Units.slice(First, End - First));
+    OS << "    uint64_t last = 8, status;\n"
           "dispatch:\n    switch (state->PC) {\n";
     for (size_t I = First; I < End; ++I)
       OS << "    case " << hex(Units[I].Address) << "ULL: goto step_" << I
@@ -409,7 +411,11 @@ void emitX64SpecialRegionDriver(
       OS << "step_" << I << ":\n    if (!*budget) return 9;\n";
       if (CallSitePauses.emit(OS, Unit.Address, "    "))
         continue;
-      if (FunctionContext)
+      if (Rtm.contains(Unit.Address)) {
+        OS << "    ";
+        Rtm.emit(OS, Unit.Function.Name);
+        OS << "\n";
+      } else if (FunctionContext)
         emitX64FunctionContextStep(OS, Unit, "    ");
       else
         OS << "    status = " << Unit.Function.Name << "((uint8_t *)state);\n";

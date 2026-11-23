@@ -8477,7 +8477,11 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
   }
   case ExprKind::Undef:
     if (auto Input = Win64CallStackInput::from(E.Var)) {
-      const auto Text = win64CallStackInputText(*Input);
+      if (Opts.PrecallMemory != Win64PrecallMemory::None &&
+          (!CurrentFunc || CurrentFunc->Entry != Opts.PrecallEntry))
+        throw std::invalid_argument(
+            "original_call_state cannot bind another function's stack");
+      const auto Text = win64CallStackInputText(*Input, Opts.PrecallMemory);
       return E.Type && E.Type->Kind == NdTypeKind::Ptr
                  ? "(" + typeToC(E.Type) + ")(uintptr_t)" + Text
                  : Text;

@@ -719,9 +719,10 @@ int auditEveryLoadedFunction(neverd_session_t Sess) {
       SourceLLVMControlFlow.getNumOccurrences() ||
       SourceLLVMLevel.getNumOccurrences() ||
       SourceLLVMPasses.getNumOccurrences() ||
-      StackFrameFile.getNumOccurrences() || StackFrameInfo || VMMachineState ||
-      VMMachineSourceABI.getNumOccurrences() || !VMControlRegisters.empty() ||
-      !VMControlFrameSlots.empty()) {
+      StackFrameFile.getNumOccurrences() ||
+      OriginalCallState.getNumOccurrences() || StackFrameInfo ||
+      VMMachineState || VMMachineSourceABI.getNumOccurrences() ||
+      !VMControlRegisters.empty() || !VMControlFrameSlots.empty()) {
     WithColor::error()
         << "--check-all decompiles every loaded function on the default C "
            "route; omit other decompile options\n";
@@ -864,6 +865,14 @@ int runDecompile(neverd_session_t Sess) {
                                     SourceLLVMPasses.getNumOccurrences();
   const bool SourceTransforms =
       SourceSymbolic.getNumOccurrences() || LLVMSourceTransforms;
+  const bool Precall = OriginalCallState.getNumOccurrences() != 0;
+  if (Precall &&
+      (ExportFunc.empty() || NoOpt || Devirtualize || DecompileCallees ||
+       StackFrameInfo || OutputLanguage != NEVERD_OUTPUT_C)) {
+    WithColor::error()
+        << "--original-call-state requires a single ordinary C function\n";
+    return 1;
+  }
   const bool HasStackFrame = StackFrameFile.getNumOccurrences() != 0;
   if ((StackFrameInfo || HasStackFrame) &&
       (ExportFunc.empty() || NoOpt || Devirtualize ||
@@ -897,6 +906,8 @@ int runDecompile(neverd_session_t Sess) {
     return 1;
   }
   json::Object ViewOptions;
+  if (Precall)
+    ViewOptions["original_call_state"] = OriginalCallState.getValue();
   if (SourceSymbolic.getNumOccurrences())
     ViewOptions["symbolic"] = bool(SourceSymbolic);
   if (SourceLLVMControlFlow.getNumOccurrences())
@@ -1214,7 +1225,7 @@ int runDecompile(neverd_session_t Sess) {
       size_t Offset = 0, Bytes = 0;
       for (;;) {
         const char *Raw =
-            SourceTransforms || HasStackFrame
+            SourceTransforms || HasStackFrame || Precall
                 ? neverd_ir_view_ex_json(Sess, Entry, Stage, Offset, 2048,
                                          ViewOptionsText.c_str())
                 : neverd_ir_view_json(Sess, Entry, Stage, Offset, 2048);
@@ -1379,8 +1390,11 @@ int runDecompile(neverd_session_t Sess) {
       }
       neverd_free_string(Report);
     } else {
-      Source = LlvmRoute ? neverd_decompile_llvm_ex(Sess, Entry, NoOpt)
-                         : neverd_decompile(Sess, Entry);
+      Source = Precall     ? neverd_decompile_precall_v6(
+                                 Sess, Entry, LlvmRoute,
+                                 OriginalCallState.getValue().c_str())
+               : LlvmRoute ? neverd_decompile_llvm_ex(Sess, Entry, NoOpt)
+                           : neverd_decompile(Sess, Entry);
     }
   } else {
     neverd_session_set_source_symbolic(Sess, SourceSymbolic ? 1 : 0);

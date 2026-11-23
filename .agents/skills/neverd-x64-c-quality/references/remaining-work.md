@@ -19,6 +19,14 @@ breakpoint from a post-commit trap. TPR aliases, device routing, source
 arbitration and complete environment import remain open. The registry inputs
 have the ordinary scalar binding below.
 
+The single-function ordinary C view can take an original V6 pre-CALL state
+directly, including a bounded stack window for offline analysis. Its checked
+64-bit load consumes one observation at the actual operand. The unbound
+ordinary ABI still requires an original input when this value is observed.
+Immediate-abort V6 steps can select from captured target CPUID at export,
+or check the original execution CPU on demand. Hidden or unavailable RTM
+retains its boundary; live availability never supplies an abort status.
+
 The ordinary HighC and LLVMC interfaces now expose an unresolved fixed
 Win64 outgoing word at its authenticated direct CALL. Bind
 `NEVERD_WIN64_CALL_STACK_U64(pc, offset)` to the original occurrence's

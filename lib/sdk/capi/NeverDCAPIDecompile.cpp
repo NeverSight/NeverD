@@ -1024,6 +1024,8 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   llvm::raw_string_ostream OS(Out);
 
   CEmitterOptions Opts;
+  Opts.PrecallMemory = S->SourceOptions.PrecallMemory;
+  Opts.PrecallEntry = FuncEntry;
   std::string VariableSnapshot =
       SourceMap || !S->SourceOptions.VariableTypes.empty() ||
               !S->SourceOptions.VariableEdits.empty()
@@ -1272,6 +1274,8 @@ static const char *decompileLlvmC(neverd_session_t Sess, neverd_va_t FuncEntry,
   std::string Out;
   llvm::raw_string_ostream OS(Out);
   CEmitterOptions Opts;
+  Opts.PrecallMemory = S->SourceOptions.PrecallMemory;
+  Opts.PrecallEntry = FuncEntry;
   std::string VariableIR;
   llvm::raw_string_ostream VariableOS(VariableIR);
   std::string VariableSnapshot;
@@ -1965,6 +1969,21 @@ const char *neverd_ir_med(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
 namespace {
 
+Win64PrecallMemory precallMemory(llvm::StringRef Mode) {
+  if (Mode == "v6")
+    return Win64PrecallMemory::FlatV6;
+  if (Mode == "v6-window")
+    return Win64PrecallMemory::WindowV6;
+  throw std::invalid_argument("original_call_state requires v6 or v6-window");
+}
+
+void requirePrecallImage(const BinaryImage &Image) {
+  if (Image.Arch != Arch::X64 || Image.Format != BinaryFormat::COFF ||
+      Image.IsRelocatable)
+    throw std::invalid_argument(
+        "original_call_state requires a linked Win64 image");
+}
+
 SourceViewOptions readSourceOptions(llvm::StringRef Text,
                                     llvm::StringRef Stage) {
   if (Text.size() > kMaxSourceOptionsBytes)
@@ -1983,12 +2002,20 @@ SourceViewOptions readSourceOptions(llvm::StringRef Text,
     if (Key != "symbolic" && Key != "llvm_optimization" &&
         Key != "llvm_passes" && Key != "llvm_control_flow" &&
         Key != "variable_types" && Key != "variable_edits" &&
-        Key != "call_types" && Key != "stack_frame")
+        Key != "call_types" && Key != "stack_frame" &&
+        Key != "original_call_state")
       throw std::invalid_argument("unknown source option: " + Key.str());
     if (Key != "symbolic" && Key != "variable_types" &&
         Key != "variable_edits" && Key != "call_types" &&
-        Key != "stack_frame" && Stage != "llvmc")
+        Key != "stack_frame" && Key != "original_call_state" &&
+        Stage != "llvmc")
       throw std::invalid_argument("LLVM options require llvmc");
+  }
+  if (Object->get("original_call_state")) {
+    const auto Mode = Object->getString("original_call_state");
+    if (Stage != "c" && Stage != "llvmc")
+      throw std::invalid_argument("original_call_state requires c or llvmc");
+    Options.PrecallMemory = precallMemory(Mode.value_or(""));
   }
   if (const auto *Frame = Object->getObject("stack_frame"))
     Options.StackFrame = readSourceStackFrame(*Frame);
@@ -2296,6 +2323,30 @@ llvm::json::Object llvmViewPage(const LLVMFunctionView &View, va_t Entry,
 
 } // namespace
 
+const char *neverd_decompile_precall_v6(neverd_session_t Sess,
+                                        neverd_va_t FuncEntry, int UseLLVM,
+                                        const char *Memory) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  try {
+    requirePrecallImage(S->Img);
+    // Only the emitted source changes. Reuse the session's original machine IR.
+    const auto Previous = S->SourceOptions.PrecallMemory;
+    const llvm::scope_exit Restore(
+        [&] { S->SourceOptions.PrecallMemory = Previous; });
+    S->SourceOptions.PrecallMemory = precallMemory(Memory ? Memory : "");
+    return UseLLVM ? neverd_decompile_llvm(Sess, FuncEntry)
+                   : neverd_decompile(Sess, FuncEntry);
+  } catch (const std::exception &E) {
+    S->setError(E.what());
+  } catch (...) {
+    S->setError("unexpected original CALL source failure");
+  }
+  return nullptr;
+}
+
 const char *neverd_ir_view_ex_json(neverd_session_t Sess, neverd_va_t FuncEntry,
                                    const char *Representation, size_t Offset,
                                    size_t Limit, const char *OptionsJSON) {
@@ -2313,6 +2364,8 @@ const char *neverd_ir_view_ex_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       throw std::invalid_argument("invalid source view or paging bounds");
     const auto Options =
         readSourceOptions(OptionsJSON ? OptionsJSON : "{}", Stage);
+    if (Options.PrecallMemory != Win64PrecallMemory::None)
+      requirePrecallImage(S->Img);
     const bool OriginalMIPSCalls =
         isMIPS(S->Img.Arch) && !Options.CallTypes.empty();
     if (!(OriginalMIPSCalls

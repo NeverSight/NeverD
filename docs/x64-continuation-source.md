@@ -112,6 +112,40 @@ call. The value belongs to the current invocation and occurrence, including
 loops, recursion and threads. An original whole-word store recovered by
 call-ABI analysis continues to supply the ordinary expression directly.
 
+#### Reading the original CALL state from ordinary C
+
+For a single Win64 function, `neverd decompile --func <entry>
+--original-call-state=v6` exports a C definition suffixed
+`_from_precall_v6` when a fixed outgoing word is observed. Add `--llvm` for
+LLVM C. The same option works with `neverd export --format decompile --func`.
+The SDK returns the complete translation unit through
+`neverd_decompile_precall_v6(session, entry, use_llvm, memory)`. Source views
+accept `"original_call_state":"v6"` or `"v6-window"`.
+
+The `v6` definition appends one parameter, a pointer to the V6 state paused
+immediately before the original CALL. Original RAM must be directly accessible
+at its x64 virtual addresses under the successful-RAM contract. The
+`v6-window` definition additionally accepts the guest base address, host
+byte buffer and byte count of a captured stack window from that same pause.
+Use this form for an offline dump. Keep the paused state and its stack bytes
+valid and immutable until the read. Both forms check the saved PC, read RSP
+from the V6 state, check the complete address range and copy the eight bytes
+at the original displacement. The snapshot is consumed at the first observed
+use. A different PC, repeated use, missing state, wrapping address or short
+window traps at the use. An unchosen path does not require an observation.
+For a relocated module, compile the translation unit with
+`NEVERD_WIN64_PRECALL_LOAD_BASE` set to its verified load address from the
+same capture. The reader compares module-relative CALL locations and keeps
+the raw RIP, RSP and guest stack addresses intact. The default uses the
+exported image addresses.
+
+The source invocation must correspond to that dynamic observation. A function
+entry snapshot cannot stand in for a later CALL. The variant projects the
+ordinary caller from its entry; use the existing continuation to resume a
+paused machine. Ordinary entries with fully recovered operands keep their
+original signatures. Both memory forms keep the original target arguments
+and require no scalar provider or thread-local state.
+
 An entry request can include `"callee_depth": 1` together with
 `"follow_internal_calls": true`. Each discovery wave selects original direct
 CALL targets in mapped image code. Repeated targets and recursive edges share
@@ -1194,6 +1228,27 @@ query is needed under the declared CPU binding. The
 and fallback. An independently selected XABORT retains its own boundary.
 Paged execution, scheduled events and another RTM binding are incompatible
 with this one-step interface.
+
+The same option accepts `"auto"` to check CPUID of the original executing CPU
+lazily at the selected pair after the V6 guard. A successful query is reused
+within that switch-driver invocation or direct-dispatch chunk. A new invocation
+queries again. CPU enumeration must remain stable for this interval. Use this
+when executing in the same
+CPU feature domain, outside RTM/HLE with successful fetch and no debug trap.
+An advertised RTM feature admits the native pair and its real EAX result.
+An absent leaf or a clear feature bit returns the original native boundary
+before changing state or charging a step. The manifest counts this potential
+boundary. Other instruction steps perform no feature query.
+
+A capture can instead bind the target feature information once during export.
+For example, `"native_rtm_abort_steps":{"max_basic_leaf":7,"leaf7_ebx":2048}`
+selects the native step from CPUID leaf 0 EAX and leaf 7 subleaf 0 EBX.
+Supply EBX exactly when the maximum basic leaf reaches 7. Export selects
+the boundary when RTM is unadvertised. Neither captured path emits a CPUID
+or runtime feature branch. The capture must describe the executing CPU for
+the invocation's lifetime. Intel's TSX controls can mask feature enumeration,
+so a clear bit alone cannot establish an abort value or an invalid-opcode fault.
+[Processor enumeration and TSX controls](https://www.intel.com/content/www/us/en/developer/articles/technical/software-security-guidance/technical-documentation/cpuid-enumeration-and-architectural-msrs.html).
 
 ## Complete selected RTM attempts
 
