@@ -9205,6 +9205,9 @@ caller that wrote XMM0 before.
 `AReturnThatHoldsACalleesLeftoverReturnsNoFloat` runs a function that jumps
 to a float helper on one path and returns after an integer helper on the
 other: it returns no float and no path reads one.
+`ARegisterACalleeNeverWritesKeepsTheCallersValue` runs callers that keep a
+value in RAX across calls to callees that write XMM0 and never RAX, one of
+which returns a double a wrapper hands back.
 `SysVCallContract.ACalleeThatLeavesForUnknownCodeStillReadsItsArguments`
 checks that a function which only hands its arguments to a callee ending in
 a jump through a pointer still takes them, and that a tail jump to it passes

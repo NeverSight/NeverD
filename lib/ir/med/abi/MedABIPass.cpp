@@ -911,6 +911,15 @@ bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OI,
   }
   const bool HasIntegerResult =
       Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == TRI.IntReturnReg;
+  // A call to a callee that never writes the integer return register has no
+  // output (LowToMed).  Where that callee writes the floating-point one, the
+  // result it is typed with is the call's only one.
+  const bool HasNoResultYet =
+      Op.Output.Kind == MedVar::Temp && Op.Output.Size == 0 &&
+      callPreservesRegisterBytes(TheArch, Op.CallPreservedGPRs,
+                                 TRI.IntReturnReg, TRI.FullRegWidth) &&
+      !callPreservesRegisterBytes(TheArch, Op.CallPreservedGPRs,
+                                  TRI.FPReturnReg, Size);
   const MedVar ExistingOutput = Op.Output;
   // The synthetic split is the call's 64-bit temp followed, at the call's
   // address, by the SUBBYTES that place its halves in the two integer return
@@ -954,7 +963,7 @@ bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OI,
       SyntheticWideHalves = 0;
   }
   const bool HasSyntheticWideResult = SyntheticWideHalves != 0;
-  if (!HasIntegerResult && !HasSyntheticWideResult)
+  if (!HasIntegerResult && !HasSyntheticWideResult && !HasNoResultYet)
     return false;
   auto ClobberIt = Func.CallClobbers.end();
   for (auto It = Func.CallClobbers.begin(); It != Func.CallClobbers.end();

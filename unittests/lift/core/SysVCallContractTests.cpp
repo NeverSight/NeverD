@@ -3336,4 +3336,74 @@ int main(void) {
 )");
 }
 
+TEST(SysVCallContract, ARegisterACalleeNeverWritesKeepsTheCallersValue) {
+  // step(sum, v) and scale(x) write XMM0 and never RAX.  A compiler that
+  // has their bodies in view keeps a value in RAX across a call to them
+  // (GCC's -fipa-ra, as sqlite's kahanBabuskaNeumaierStepInt64 does): both
+  // adds the high part of v, then the low part it left in RAX; mix adds n,
+  // which it left there, to what scale returns.  The integer after the
+  // call is the caller's, not a result, and the double scale leaves is one,
+  // also where wrap only hands it back.
+  constexpr va_t Step = Text, Both = Text + 0x10, Scale = Text + 0x40,
+                 Mix = Text + 0x50, Wrap = Text + 0x70;
+  const std::vector<uint8_t> Code = {
+      0xF2, 0x0F, 0x58, 0x07,                   // step: addsd xmm0, [rdi]
+      0xF2, 0x0F, 0x11, 0x07,                   // movsd [rdi], xmm0
+      0xC3,                                     // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0x48, 0x83, 0xEC, 0x08,                   // both: sub rsp, 8
+      0x48, 0x89, 0xF0,                         // mov rax, rsi
+      0x25, 0xFF, 0x3F, 0x00, 0x00,             // and eax, 0x3fff
+      0x48, 0x29, 0xC6,                         // sub rsi, rax
+      0x66, 0x0F, 0xEF, 0xC0,                   // pxor xmm0, xmm0
+      0xF2, 0x48, 0x0F, 0x2A, 0xC6,             // cvtsi2sd xmm0, rsi
+      0xE8, 0xD3, 0xFF, 0xFF, 0xFF,             // call step
+      0x66, 0x0F, 0xEF, 0xC0,                   // pxor xmm0, xmm0
+      0xF2, 0x48, 0x0F, 0x2A, 0xC0,             // cvtsi2sd xmm0, rax
+      0x48, 0x83, 0xC4, 0x08,                   // add rsp, 8
+      0xEB, 0xC4,                               // jmp step
+      0xCC, 0xCC, 0xCC, 0xCC,                   // padding
+      0xF2, 0x0F, 0x58, 0xC0,                   // scale: addsd xmm0, xmm0
+      0xC3,                                     // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,       // padding
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC,             // padding
+      0x48, 0x83, 0xEC, 0x08,                   // mix: sub rsp, 8
+      0x48, 0x89, 0xF8,                         // mov rax, rdi
+      0xE8, 0xE4, 0xFF, 0xFF, 0xFF,             // call scale
+      0x66, 0x0F, 0xEF, 0xC9,                   // pxor xmm1, xmm1
+      0xF2, 0x48, 0x0F, 0x2A, 0xC8,             // cvtsi2sd xmm1, rax
+      0xF2, 0x0F, 0x58, 0xC1,                   // addsd xmm0, xmm1
+      0x48, 0x83, 0xC4, 0x08,                   // add rsp, 8
+      0xC3,                                     // ret
+      0xCC, 0xCC,                               // padding
+      0x48, 0x83, 0xEC, 0x08,                   // wrap: sub rsp, 8
+      0xE8, 0xC7, 0xFF, 0xFF, 0xFF,             // call scale
+      0x48, 0x83, 0xC4, 0x08,                   // add rsp, 8
+      0xC3};                                    // ret
+  const BinaryImage Img = makeImportImage(Code,
+                                          {{Step, "step"},
+                                           {Both, "both"},
+                                           {Scale, "scale"},
+                                           {Mix, "mix"},
+                                           {Wrap, "wrap"}},
+                                          {});
+  const std::string Source = liftEntries(Img, {Step, Both, Scale, Mix, Wrap});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\ndouble scale(double"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\ndouble wrap(double"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  double sum = 0.5;
+  /* 0x12345 = 0x10000 + 0x2345: the high part, then the low one */
+  both((int64_t)&sum, 0x12345);
+  if (sum != 74565.5)
+    return 1;
+  if (mix(3, 1.25) != 5.5)
+    return 2;
+  return wrap(2.5) == 5.0 ? 0 : 3;
+}
+)");
+}
+
 } // namespace

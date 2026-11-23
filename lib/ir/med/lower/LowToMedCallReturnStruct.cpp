@@ -284,8 +284,15 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
         continue;
       // A call already remodeled (FP/x87/wide produce a non-register output) is
       // left alone; the default-modeled call writes the integer return
-      // register.
-      if (Op.Output.Kind != MedVar::Reg || TRI.isX87StackReg(Op.Output.RegOff))
+      // register.  One left with no output because its callee never writes
+      // that register (applyCallRegisterEffect) may still return fields in
+      // the others: a record of floats comes back in the vector registers.
+      const bool KeepsIntegerRegister =
+          Op.Output.Kind == MedVar::Temp && Op.Output.Size == 0 &&
+          callPreservesRegisterBytes(TargetArch, Op.CallPreservedGPRs,
+                                     TRI.IntReturnReg, TRI.PointerSize);
+      if (!KeepsIntegerRegister && (Op.Output.Kind != MedVar::Reg ||
+                                    TRI.isX87StackReg(Op.Output.RegOff)))
         continue;
 
       // A loader-bound scalar libm result cannot become a mixed aggregate
@@ -601,7 +608,9 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
       std::vector<std::pair<uint64_t, std::pair<int, int>>> NewVers;
       uint16_t Cum = 0;
       for (auto &F : Fields) {
-        int Id = (F.RegOff == OrigOut.RegOff) ? OrigOut.Id : NextId++;
+        int Id = OrigOut.Kind == MedVar::Reg && F.RegOff == OrigOut.RegOff
+                     ? OrigOut.Id
+                     : NextId++;
         int Ver = NextVer++;
         MedVar Out;
         Out.Kind = MedVar::Reg;
