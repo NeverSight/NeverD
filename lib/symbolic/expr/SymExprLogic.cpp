@@ -24,8 +24,10 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <limits>
+#include <optional>
 
 namespace neverd::symbolic {
 namespace {
@@ -188,6 +190,19 @@ SymRef removeDiscardedShiftTerms(SymContext &C, SymRef A, unsigned Amount) {
   return C.mkXor(Kept);
 }
 
+// Two distinct variables have no constants, nested bitwise operators or
+// complementary operands to fold. Keep their existing canonical order.
+std::optional<std::array<SymRef, 2>>
+wideVariablePair(const SymContext &Ctx, llvm::ArrayRef<SymRef> Ops,
+                 unsigned Width) {
+  if (Width <= 64 || Ops.size() != 2 || Ops[0] == Ops[1] ||
+      !Ctx.isVar(Ops[0]) || !Ctx.isVar(Ops[1]))
+    return std::nullopt;
+  assert(Ctx.width(Ops[1]) == Width);
+  const auto [A, B] = std::minmax(Ops[0], Ops[1]);
+  return std::array{A, B};
+}
+
 } // namespace
 
 /// Shared shape for And/Or/Xor: flatten the nested same-operator operands,
@@ -196,6 +211,8 @@ SymRef removeDiscardedShiftTerms(SymContext &C, SymRef A, unsigned Amount) {
 SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
   assert(!Ops.empty());
   uint32_t W = width(Ops[0]);
+  if (const auto Pair = wideVariablePair(*this, Ops, W))
+    return intern(SymOp::And, W, *Pair, 0);
 
   if (W > 64 && Ops.size() == 2) {
     auto Mask = Ops[0], Data = Ops[1];
@@ -380,6 +397,8 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
 SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
   assert(!Ops.empty());
   uint32_t W = width(Ops[0]);
+  if (const auto Pair = wideVariablePair(*this, Ops, W))
+    return intern(SymOp::Or, W, *Pair, 0);
 
   llvm::APInt Acc(W, 0);
   llvm::SmallVector<SymRef, 8> Rest;
@@ -588,6 +607,8 @@ static SymRef packedWordView(SymContext &C, SymRef Value) {
 SymRef SymContext::mkXor(llvm::ArrayRef<SymRef> Ops) {
   assert(!Ops.empty());
   uint32_t W = width(Ops[0]);
+  if (const auto Pair = wideVariablePair(*this, Ops, W))
+    return intern(SymOp::Xor, W, *Pair, 0);
 
   llvm::APInt Acc(W, 0);
   llvm::SmallVector<SymRef, 8> Flat;

@@ -521,6 +521,19 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     }
     if (High.size() < 2)
       return Root;
+    if (Scale && MiddleBits < Observed && High.size() > Remainder.size() &&
+        High.size() >= limits::kMinResidueProductFactors) {
+      const auto D = Disturbance(High.front());
+      if (Ctx.op(D) == SymOp::Mul && Ctx.numOperands(D) == 2 &&
+          projectedHighField(Ctx, Ctx.operand(D, 1),
+                             Ctx.constValue(Ctx.operand(D, 0)).countr_zero(),
+                             Observed)) {
+        const auto Compact = foldTruncatedProduct(Ctx, Root, Observed, Budget,
+                                                  Storage, EmittedReading);
+        if (Compact != Root || Budget.exhausted())
+          return Compact;
+      }
+    }
     Factors = High;
   }
 

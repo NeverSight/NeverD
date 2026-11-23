@@ -4622,6 +4622,17 @@ byte in both source views. The expression tests change a bit on each side of
 the wrap, and the product tests compare repeated odd and even offsets with
 direct full-width multiplication.
 
+Use `--family mixed-valuation --count 4` for 20 products at 32, 64,
+24577, 28673 and 32769 bits. The 12 wide products contain 2689–3529 factors.
+One to four lower-weight factors keep mixed terms observable. The other
+factors vary their upper lanes, offsets and coefficients while sharing
+wrapped low fields. The tests compare the complete product with independent
+multiplication, including even offsets and a change to a live bit. The 73-
+and 117-factor x86 fixtures also exercise both source views through the CLI
+and the GUI worker at Clang O0 and O2.
+Using `--count 32` exercises 160 distinct inputs, including 96 products
+above both 20,481 bits and 2,593 factors.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work

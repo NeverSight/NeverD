@@ -122,6 +122,38 @@ TEST(SymMBAHigherProduct, SharesProvedQuotientsAcrossSixtyFourProducts) {
   }
 }
 
+TEST(SymMBAHigherProduct, CommonFactorsExposeAnAffordableQuarticQuotient) {
+  std::mt19937_64 Random(0x71756f74);
+  for (unsigned Width : {8u, 32u, 64u}) {
+    SymContext C;
+    for (auto Name : {"x", "y", "z", "w"})
+      C.mkVar(Name, Width);
+    auto Input = parseSymExpr(C,
+                              "37*(x&y)*(x|y)*(z&~w)*(~z&w)*(x^z)*(y^z)"
+                              "+37*(x&~y)*(~x&y)*(z&~w)*(~z&w)*(x^z)*(y^z)"
+                              "+37*(x&~y)*(~x&y)*(z&w)*(z|w)*(x^z)*(y^z)"
+                              "+(x^y)+2*(x&y)",
+                              Width);
+    ASSERT_TRUE(Input.ok());
+    MBAOptions Options;
+    auto Result = simplifyMBADeep(C, Input.Root, Options);
+    EXPECT_LT(Result.Work, Options.MaxWork / 2);
+    EXPECT_LT(Result.SizeAfter, Result.SizeBefore);
+    for (unsigned Sample = 0; Sample != 96; ++Sample) {
+      llvm::APInt A(Width, Random(), false, true),
+          B(Width, Random(), false, true);
+      llvm::APInt D(Width, Random(), false, true),
+          E(Width, Random(), false, true);
+      auto Q =
+          A * B * (D & ~E) * (~D & E) + (A & ~B) * (~A & B) * (D & E) * (D | E);
+      auto Expected = A + B + llvm::APInt(Width, 37) * (A ^ D) * (B ^ D) * Q;
+      llvm::SmallVector<llvm::APInt, 4> Values{A, B, D, E};
+      EXPECT_EQ(C.eval(Input.Root, Values), Expected);
+      EXPECT_EQ(C.eval(Result.Expr, Values), Expected);
+    }
+  }
+}
+
 TEST(SymMBAHigherProduct, RecoversNonlinearQuotientsAndRepeatedFactors) {
   for (unsigned Width : {3u, 8u, 32u, 64u, 257u})
     for (const char *Text :
@@ -568,6 +600,43 @@ TEST(SymMBAHigherProduct, CancelsExactResidualsBeforePolynomialProofExpansion) {
     detail::WorkBudget NoStorage(4096);
     EXPECT_FALSE(
         detail::provePolynomialIdentity(C, Input, Expected, 3, NoStorage, 0));
+  }
+}
+
+TEST(SymMBAHigherProduct,
+     CubicCoordinateSlicesKeepFullWidthAndGeneralExpansion) {
+  for (unsigned Width : {3u, 65u}) {
+    SymContext C;
+    llvm::SmallVector<SymRef, 7> Vars;
+    for (unsigned I = 0; I != 7; ++I)
+      Vars.push_back(C.mkVar("v" + std::to_string(I), Width));
+    llvm::SmallVector<uint32_t, 7> Ids;
+    C.collectVars(C.mkAdd(Vars), Ids);
+    auto A = C.mkAnd({Vars[2], Vars[0], C.mkNot(Vars[1])});
+    auto B = C.mkAnd({Vars[2], Vars[1], C.mkNot(Vars[0])});
+    auto F = C.mkOr(A, B);
+    for (auto Scale :
+         {llvm::APInt(Width, 3), llvm::APInt::getSignMask(Width)}) {
+      llvm::SmallVector<detail::PolyTerm, 2> Split{{Scale, {A, F, F}},
+                                                   {Scale, {B, F, F}}};
+      detail::WorkBudget Product(65536), General(65536);
+      auto Expected = detail::expandOverMinterms(C, Split, Ids, Width, General);
+      auto Actual =
+          detail::expandOverMinterms(C, Split, Ids, Width, Product, true, true);
+      ASSERT_TRUE(Expected && Actual);
+      EXPECT_EQ(Actual->Higher, Expected->Higher);
+      // Two disjoint cubes have the same scale on every diagonal. A single
+      // product would also have mixed terms between these coordinates.
+      llvm::SmallVector<detail::PolyTerm, 2> Cubes{{Scale, {A, A, A}},
+                                                   {Scale, {B, B, B}}};
+      detail::WorkBudget Impossible(16384), Unrestricted(16384);
+      ASSERT_TRUE(
+          detail::expandOverMinterms(C, Cubes, Ids, Width, Unrestricted));
+      EXPECT_FALSE(detail::expandOverMinterms(C, Cubes, Ids, Width, Impossible,
+                                              true, true));
+      EXPECT_LT(Impossible.used(), Unrestricted.used());
+      EXPECT_FALSE(Impossible.exhausted());
+    }
   }
 }
 
