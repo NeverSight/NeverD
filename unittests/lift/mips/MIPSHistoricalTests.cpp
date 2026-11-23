@@ -123,6 +123,45 @@ TEST(MIPSHistorical, DecoderReuseAndDirectLiftEnforceTheSameProfile) {
     }
   }
 }
+TEST(MIPSHistorical, PhysicalEntryPointsRejectShortAndWrongLevelWords) {
+  for (const bool Little : {false, true}) {
+    Decoder D;
+    for (unsigned Level : {3u, 1u, 5u, 2u, 4u}) {
+      const Arch Target = Level < 3 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
+                                    : (Little ? Arch::MIPS64EL : Arch::MIPS64);
+      auto Img = historicalImage(Target, Level);
+      if (Level < 3) {
+        Img.Bits = Bitness::Bits32;
+        Img.MIPS->ABI = MIPSABI::O32;
+      }
+      ASSERT_TRUE(D.init(Img));
+      for (auto Decode : {&Decoder::decodeOne, &Decoder::decodeOneLight,
+                          &Decoder::decodeOneForLift}) {
+        DecodedInsn Out;
+        const auto Word = instruction(0x00851021, Target); // ADDU from MIPS I.
+        for (size_t Len = 0; Len < 4; ++Len)
+          EXPECT_EQ((D.*Decode)(Word.bytes + 4 - Len, Len, Word.address, Out),
+                    0);
+        EXPECT_EQ((D.*Decode)(Word.bytes, 4, Word.address + 2, Out), 0);
+        ASSERT_EQ((D.*Decode)(Word.bytes, 4, Word.address, Out), 4);
+        EXPECT_EQ(Out.Addr, Word.address);
+        EXPECT_EQ(Out.Size, 4u);
+        ASSERT_NE(Out.Raw, nullptr);
+        EXPECT_EQ(std::memcmp(Out.Raw->bytes, Word.bytes, 4), 0);
+        const auto Wide = instruction(0x0085102d, Target); // DADDU from III.
+        EXPECT_EQ((D.*Decode)(Wide.bytes, 4, Wide.address, Out),
+                  Level >= 3 ? 4 : 0);
+        const auto Modern = instruction(0x7c851000, Target); // EXT from R2.
+        EXPECT_EQ((D.*Decode)(Modern.bytes, 4, Modern.address, Out), 0);
+      }
+      ASSERT_TRUE(D.init(Target));
+      const auto Modern = instruction(0x7c851000, Target);
+      DecodedInsn Out;
+      EXPECT_EQ(D.decodeOne(Modern.bytes, 4, Modern.address, Out), 4);
+    }
+  }
+}
+
 TEST(MIPSHistorical, TimingAndCompressedProfilesCannotBypassAdmission) {
   const auto I = instruction(0x00851021, Arch::MIPS64);
   for (unsigned Level : {1u, 2u, 6u}) {

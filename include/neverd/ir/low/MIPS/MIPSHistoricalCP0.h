@@ -49,6 +49,8 @@ struct HistoricalCP0 {
            Processor == HistoricalProcessor::CW4011R4000;
   }
   bool canUseCP0() const;
+  /// Address width of the interrupted R4000 mode, including EXL/ERL.
+  bool usesExtendedAddressing() const;
   /// R4000 kernel instructions can use doubleword GPRs even when KX is zero.
   bool permitsDoublewordGPRs() const;
   std::optional<uint64_t> returnAddress() const {

@@ -84,6 +84,11 @@ bool HistoricalCP0::canUseCP0() const {
   return Kernel || (Status & (1u << 28));
 }
 
+bool HistoricalCP0::usesExtendedAddressing() const {
+  return Processor == HistoricalProcessor::R4000 &&
+         (Status & r4000AddressModeBit(Status));
+}
+
 bool HistoricalCP0::permitsDoublewordGPRs() const {
   if (Processor != HistoricalProcessor::R4000)
     return false;
@@ -389,9 +394,7 @@ bool HistoricalCP0::commitException(uint8_t Code, uint64_t PC,
     BadVAddr = FaultAddress;
   const bool BEV = Status & StatusBEV;
   // R4000 selects TLB/XTLB using the mode before the exception sets EXL.
-  const bool ExtendedRefill = Refill &&
-                              Processor == HistoricalProcessor::R4000 &&
-                              (Status & r4000AddressModeBit(Status));
+  const bool ExtendedRefill = Refill && usesExtendedAddressing();
   if (usesModeStack()) {
     Status = (Status & ~0x3fu) | ((Status << 2) & 0x3fu);
     restoreR30xxInterruptEnable();
