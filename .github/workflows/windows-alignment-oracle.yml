@@ -28,7 +28,7 @@ jobs:
         run: python scripts/check_windows_alignment.py --output build-windows-alignment
       - name: Preserve original native observations
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-alignment-x64
           path: build-windows-alignment/
@@ -53,7 +53,7 @@ jobs:
         run: python scripts/check_aarch64_atomics.py --output build-arm64-atomics
       - name: Preserve original ARM64 atomic observations
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-atomics-arm64
           path: build-arm64-atomics/
@@ -61,7 +61,7 @@ jobs:
           retention-days: 14
       - name: Preserve original ARM64 native observations
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-alignment-arm64
           path: build-arm64-alignment/

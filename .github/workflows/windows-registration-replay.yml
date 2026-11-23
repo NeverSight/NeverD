@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.evidence_run }}
@@ -37,7 +37,7 @@ jobs:
         run: python scripts/check_windows_registration_native_diagnostics.py --root build-windows-eh
       - name: Replay exact source and cookie evidence
         run: python scripts/replay_windows_registration.py --evidence-root build-windows-eh/evidence --source-profile '${{ inputs.source_profile }}' --output build-windows-eh/native-replay.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ always() }}
         with:
           name: windows-registration-replay

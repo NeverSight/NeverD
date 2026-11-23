@@ -1020,3 +1020,23 @@ find() { return 0; }
         self.assertNotIn("  push:\n", diagnostic)
         self.assertIn("scripts/diagnostics/RepFaultProbe.cpp", diagnostic)
         self.assertIn("WindowsAlignmentNative.RunsOriginalFaultAndRetryExecutable", diagnostic)
+
+    def test_third_party_actions_are_pinned_to_commit_shas(self):
+        uses = re.compile(r"^[ \t]*(?:- )?uses:\s+(\S+)")
+        mutable = []
+        paths = sorted((ROOT / ".github").rglob("*.yml"))
+        paths += sorted((ROOT / ".github").rglob("*.yaml"))
+        for path in paths:
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                match = uses.match(line.split(" #", 1)[0].rstrip())
+                if match is None:
+                    continue
+                reference = match.group(1)
+                if reference.startswith("./"):
+                    continue
+                revision = reference.rsplit("@", 1)[-1] if "@" in reference else ""
+                if re.fullmatch(r"[0-9a-f]{40}", revision):
+                    continue
+                mutable.append(
+                    f"{path.relative_to(ROOT).as_posix()}:{lineno}: {reference}")
+        self.assertEqual(mutable, [])
