@@ -376,24 +376,20 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
   if (Kind == ServiceKind::ReceiveFrom)
     return receiveSocket(I->second, A[1], A[2], Result, Thread, uint32_t(A[3]),
                          A[4], A[5]);
-  if (Datagram) {
-    if (Kind == ServiceKind::SendTo && A[4])
-      return unsupported(
-          Result, "UDP explicit destinations require a routing contract");
-    return transferDatagram(*Socket, Kind == ServiceKind::SendTo, A[1], A[2],
-                            Result, uint32_t(A[3]), A[4], A[5]);
-  }
-  if ((Kind == ServiceKind::SendTo || Kind == ServiceKind::ReceiveFrom) &&
-      (A[4] || A[5]))
+  // Linux sendto reads addrlen only when a destination address is supplied.
+  if (A[4])
     return unsupported(
-        Result, "TCP explicit peer output or send destination is unmodeled");
+        Result,
+        Datagram ? "UDP explicit destinations require a routing contract"
+                 : "TCP explicit peer output or send destination is unmodeled");
   const uint32_t Flags = A[3];
-  // MSG_NOSIGNAL changes only an EPIPE signal; this subset never fabricates
-  // that failure. MSG_DONTWAIT cannot invent missing receive readiness.
+  if (Datagram)
+    return transferDatagram(*Socket, true, A[1], A[2], Result, Flags);
+  // Admitted sends use the supplied byte contract. MSG_NOSIGNAL only affects
+  // signal delivery on EPIPE.
   if (Flags & ~uint32_t(0x4000 | 0x40))
     return unsupported(Result, "unmodeled TCP transfer flags");
-  return transferSocket(*Socket, Kind == ServiceKind::SendTo, A[1], A[2],
-                        Result, Flags);
+  return transferSocket(*Socket, true, A[1], A[2], Result, Flags);
 }
 
 std::optional<uint64_t>

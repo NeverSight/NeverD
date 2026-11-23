@@ -405,6 +405,19 @@ TEST_P(AndroidNetwork, StreamAliasesShortTransfersAndRawWrappersShareState) {
         std::equal(Guarded.begin(), Guarded.end(), Bytes.begin() + 128));
   }
 }
+TEST_P(AndroidNetwork, NullPeerIgnoresAddressLengthInNamedAndRawTransfers) {
+  for (unsigned Mode : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Mode);
+    auto R = run("network_null_peer", Mode);
+    ASSERT_NO_FATAL_FAILURE(returned(R));
+    EXPECT_EQ(word(R, 0), 2u);
+    EXPECT_EQ(word(R, 1), 16u);
+    const auto &Bytes = R.MemorySnapshots.at(0).Bytes;
+    EXPECT_EQ(Bytes[16], Mode < 2 ? 0xa5 : 0x31);
+    EXPECT_EQ(Bytes[17], Mode < 2 ? 0xa5 : 0);
+    EXPECT_EQ(Bytes[18], 0xa5);
+  }
+}
 TEST_P(AndroidNetwork, RefusalAndUnknownPeerStaySeparate) {
   auto &C = Options.LinuxNetwork->Connections.front();
   C.ConnectErrno = 111;

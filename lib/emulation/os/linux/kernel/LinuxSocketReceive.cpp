@@ -113,7 +113,7 @@ LinuxFiles::receiveSocket(std::shared_ptr<Descriptor> Owner, uint64_t Address,
   const uint32_t Allowed = Datagram ? 2 | 0x20 | 0x40 | 0x100 : 0x40 | 0x4000;
   if (Flags & ~Allowed)
     return unsupported(Result, "unmodeled socket receive flags");
-  if (!Datagram && (PeerAddress || PeerLength))
+  if (!Datagram && PeerAddress)
     return unsupported(Result, "TCP explicit peer output is unmodeled");
   if (Datagram ? !S.Datagram : !S.Connection)
     return unsupported(Result,

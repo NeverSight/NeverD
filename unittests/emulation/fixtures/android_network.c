@@ -289,6 +289,24 @@ u64 network_stream(u64 *out, u64 raw) {
   return 0;
 }
 
+u64 network_null_peer(u64 *out, u64 mode) {
+  const unsigned char peer[16] = {2, 0, 0x23, 0x29, 127, 0, 0, 1};
+  int fd = socket(2, 1, 6);
+  if (fd < 0 || connect(fd, peer, sizeof(peer)))
+    return 1;
+  u32 length = sizeof(peer);
+  if (mode < 2) {
+    const unsigned char bytes[] = {0, 0xff, 0x42};
+    out[0] = mode ? syscall(206, fd, bytes, sizeof(bytes), 0, 0UL, length)
+                  : sendto(fd, bytes, sizeof(bytes), 0, 0, length);
+  } else {
+    out[0] = mode == 3 ? syscall(207, fd, out + 2, 3UL, 0, 0UL, &length)
+                       : recvfrom(fd, out + 2, 3, 0, 0, &length);
+  }
+  out[1] = length;
+  return close(fd);
+}
+
 u64 network_stream_identity(u64 *out, u64 mode) {
   unsigned char peer[16] = {2, 0, 0x23, 0x29, 127, 0, 0, 1};
   int failed = socket(2, 1, 6);

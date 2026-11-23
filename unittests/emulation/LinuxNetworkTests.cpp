@@ -138,6 +138,24 @@ TEST_P(LinuxNetwork, FailedAdmissionDoesNotConsumeConnectionOrStream) {
   EXPECT_EQ(Read[1], 8);
   EXPECT_EQ(call(ServiceKind::ReceiveFrom, FD, 1, 2), 0u);
 }
+TEST_P(LinuxNetwork, NullPeerIgnoresAddressLengthForStreamTransfers) {
+  const auto FD = open();
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
+  const uint8_t Bytes[] = {1, 2, 3};
+  llvm::cantFail(cpu().write(Base + 64, Bytes));
+  EXPECT_FALSE(call(ServiceKind::SendTo, FD, Base + 64, 3, 0, Base, 16));
+  EXPECT_FALSE(
+      call(ServiceKind::ReceiveFrom, FD, Base + 128, 2, 0, Base, Base + 160));
+
+  ASSERT_EQ(call(ServiceKind::SendTo, FD, Base + 64, 3, 0, 0, UINT32_MAX), 2u);
+  EXPECT_EQ(call(ServiceKind::Write, FD, Base + 66, 1), 1u);
+  ASSERT_EQ(call(ServiceKind::ReceiveFrom, FD, Base + 128, 2, 0, 0, UINT64_MAX),
+            2u);
+  uint8_t Read[2];
+  llvm::cantFail(cpu().read(Base + 128, Read));
+  EXPECT_EQ(Read[0], 7);
+  EXPECT_EQ(Read[1], 8);
+}
 TEST_P(LinuxNetwork, MismatchOffsetsUseSharedCursorWithoutConsumingPrefix) {
   for (uint64_t Prefix : {1u, 2u}) {
     const auto FD = open();

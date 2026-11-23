@@ -62,6 +62,8 @@ and `recv` lower to that same owner. Connected TCP accepts no explicit peer
 argument in send/receive. Scalar `read` and `write` share stream cursors;
 `dup`/`dup3` aliases and closing/reusing descriptor numbers retain the same
 open-description lifetime. Bionic alone converts raw negative errors to errno.
+With a null peer address, `sendto` ignores the address length and `recvfrom`
+leaves the address-length storage untouched.
 
 An entry with just `peer_hex` supplies a successful TCP `connect`. A nonempty
 send or receive requires that entry's own transfer observations, even when
