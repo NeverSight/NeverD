@@ -1730,8 +1730,17 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
     // of the bytes it keeps (`sete r9b` keeps R9's upper bytes, which Go never
     // reads).
     Func.StackArgumentsOnly = true;
+    // A function that takes its record's words on the stack takes no
+    // register beside them, whatever it reads of one as it was entered
+    // (goRecordsStackArguments): what that holds is no argument.
+    // `runtime.netpoll` calls `runtime.epollwait`, which hands the kernel
+    // R9, the sixth operand of `epoll_pwait`, as it found it; the read made
+    // R9 a parameter of `netpoll` and of every caller up to
+    // `runtime.findrunnable`.  A stub that takes registers beside such a
+    // record was told apart above (GoFixedOperands).
+    const bool RecordsStackWords = goRecordsStackArguments(*Image, Func.Entry);
     for (const MedOp &Op : Func.Blocks.front().Ops) {
-      if (Op.Opcode != NdOp::COPY)
+      if (RecordsStackWords || Op.Opcode != NdOp::COPY)
         break;
       if (Op.Output.Kind == MedVar::Reg && Op.NumInputs >= 1 &&
           Op.Inputs[0].Id == Op.Output.Id &&

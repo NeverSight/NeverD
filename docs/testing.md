@@ -21120,6 +21120,13 @@ register. `ACallThroughAFunctionValueTakesNoEarlierResult` keeps one argument
 at an indirect call that follows a call with a result.
 `ARunOfOneRoutineReturnsWhatTheImageDoes` runs a caller alone, with its callee
 and that callee's jump target left out.
+`ARegisterACalleeKeepsIsNoArgument` runs callers of a count of trailing zeros
+(`bsf rdi, rsi; cmovz rdi, r8`), whose summary reads RDI: the one with a
+record takes its argument and returns its result, and the one whose record
+has no word takes no parameter. `ARecordOfStackWordsLeavesNoRegisterArgument`
+lifts a routine that adds R9 as it found it: it and its caller each take one
+stack parameter and return a stack result, the call passes no register, and
+the unknown value shows where it is read.
 `GoStackABI.ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters` lifts a
 stack-ABI routine that is one jump to such code: it takes the two registers
 its target reads and passes them on.

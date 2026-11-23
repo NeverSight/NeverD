@@ -748,6 +748,14 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
                     static_cast<int>(std::numeric_limits<int8_t>::max())))
               : 0;
     }
+  // A Go function that takes its record's words on the stack takes no
+  // register beside them (goRecordsStackArguments), whatever its summary
+  // reads of one.  Bound as an operand, the read made the caller's own
+  // incoming register a parameter, and a stack-ABI function of it one that
+  // takes the platform's registers.  A stub that does take registers was
+  // bound above from its own list (goRegisterStubArguments).
+  const bool GoStackCallee = Image && ConstantTarget && !GoCallee &&
+                             goRecordsStackArguments(*Image, Key);
   // An indirect-call dispatcher calls the function in its target register.
   // Its arguments are the registers this function set before the call, the
   // rule IDA uses; a register only passed through from this function's
@@ -768,7 +776,7 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
     MOp.CalleeRegisterArgs = Count;
   } else if (!MOp.IntegerCallSignature && Convention &&
              Convention->RegisterArgumentsFromCalleeSummary &&
-             CallEntryReadGPRs && MOp.NumInputs == 1)
+             CallEntryReadGPRs && MOp.NumInputs == 1 && !GoStackCallee)
     if (auto R = CallEntryReadGPRs->find(ArgumentsKey);
         R != CallEntryReadGPRs->end() &&
         !summaryListsNoParameters(*Convention, R->second, GoCallee)) {

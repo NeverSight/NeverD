@@ -6647,7 +6647,23 @@ whose incoming bytes only an x86-64 partial write keeps and only a return reads
 parameter first and moved every stack parameter one place, as in
 `runtime_mallocgc(?, size, typ, needzero)`. Go 1.16's register stubs
 (`panicIndex` takes AX and CX, `duffzero` DI and X0) and the trampolines the
-platform's code enters keep their registers. A call passes a callee's arguments on the stack only
+platform's code enters keep their registers.
+
+A function whose record gives it argument or result words takes them on the
+stack and no register at all, whatever its body reads of one as it was
+entered (`goRecordsStackArguments`). `bsf rdi, rsi` keeps RDI where RSI is
+zero, which Go's count of trailing zeros then replaces, and `runtime.netpoll`
+calls `runtime.epollwait`, which hands the kernel R9, the sixth operand of
+`epoll_pwait`, as it found it. Read as arguments, these made
+`(*pallocBits).find` and `netpoll` take the platform's registers, return no
+stack result, and take the register from every caller up to `findrunnable`.
+A call to such a function binds no register from the callee's summary either
+(`applyCallRegisterEffect`). The stubs are told apart first
+(`goRegisterStubArguments`); `duffzero`, the write barrier and the
+trampolines have a record of no words, or none. The value nothing set shows
+as unknown where it is read, once, in `netpoll`'s call.
+
+A call passes a callee's arguments on the stack only
 where the callee's own recovery found them there (the stack-argument callees
 PipelineCallAbi collects). It takes no more words than the callee reads,
 bounded by its record, and marks the list complete
