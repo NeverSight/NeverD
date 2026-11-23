@@ -3257,4 +3257,37 @@ TEST(SysVCallContract, WhatAStackProtectorCheckLeavesIsNoResult) {
   EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
 }
 
+TEST(SysVCallContract, AJumpToAFloatFunctionAfterAFloatWriteReturnsItsResult) {
+  // value(p, fn) loads a double into XMM0, returns it where p[0] is zero,
+  // and otherwise jumps to conv, which returns a double and calls through
+  // fn, so no summary lists its arguments: as sqlite3VdbeRealValue jumps to
+  // memRealValue.  The caller's SSA holds XMM0 by then, so the jump's
+  // result takes the value it has for the register after the call, and the
+  // return must read that same value.
+  constexpr va_t Conv = Text, Value = Text + 0x10;
+  std::vector<uint8_t> Code(0x30, 0xCC);
+  put(Code, Conv,
+      {0x48, 0x83, 0xEC, 0x08, // sub rsp, 8
+       0xFF, 0xD6,             // call rsi
+       0xF2, 0x0F, 0x58, 0xC0, // addsd xmm0, xmm0
+       0x48, 0x83, 0xC4, 0x08, // add rsp, 8
+       0xC3});                 // ret
+  put(Code, Value,
+      {0x48, 0x8B, 0x07,             // mov rax, [rdi]
+       0xF2, 0x0F, 0x10, 0x47, 0x08, // movsd xmm0, [rdi+8]
+       0x48, 0x85, 0xC0,             // test rax, rax
+       0x75, 0x01,                   // jne convert
+       0xC3,                         // ret
+       0x48, 0x89, 0xC7,             // convert: mov rdi, rax
+       0xEB, 0xDD});                 // jmp conv
+  const BinaryImage Img =
+      makeImportImage(Code, {{Conv, "conv"}, {Value, "value"}}, {});
+  const std::string Source = liftEntries(Img, {Conv, Value});
+  EXPECT_NE(Source.find("\ndouble value("), std::string::npos) << Source;
+  const std::string Body = body(Source, "value");
+  ASSERT_FALSE(Body.empty()) << Source;
+  EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("return conv("), std::string::npos) << Body;
+}
+
 } // namespace

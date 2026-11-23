@@ -4711,10 +4711,14 @@ void recoverCallAbi(
                                    ? TRI.FPABIRegWidth
                                    : static_cast<uint16_t>(TRI.VecRegStride))
                             : ForwarderFPRetSize;
+        // The RETURN reads what the call defines.  That is no longer the
+        // value the integer register named where the call's result was
+        // already moved to the one the caller's SSA holds for the register
+        // (promoteFloatCallResult).
         if (I + 1 < Blk.Ops.size() && Blk.Ops[I + 1].Opcode == NdOp::RETURN &&
             Blk.Ops[I + 1].NumInputs >= 1 &&
             Blk.Ops[I + 1].Inputs[0].Kind == MedVar::Reg) {
-          Blk.Ops[I + 1].Inputs[0].RegOff = TRI.FPReturnReg;
+          Blk.Ops[I + 1].Inputs[0] = O.Output;
           Blk.Ops[I + 1].Inputs[0].Size = ForwarderFPRetSize;
         }
         break;

@@ -5552,6 +5552,11 @@ by the double it left in XMM0, and the return contracts read such a return
 as showing the function means no value. The guard is found at `%fs:0x28` on
 x86-64 and `%gs:0x14` on i386, where the C libraries of Linux and Android
 keep it.
+A tail call that forwards a float is rewired to the vector register after
+its arguments are recovered. Where the call's result was already moved to
+the value the caller's SSA holds for that register after the call
+(`promoteFloatCallResult`), the return reads that same value, not the one
+the integer register named.
 An inferred integer result is as wide as the widest value some return path
 is seen to leave (`inferReturnType`). The write in the return's own block,
 the writes that reach a return without one from the blocks before it, and the

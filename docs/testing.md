@@ -9199,6 +9199,9 @@ function, beside another caller that tests its integer.
 `WhatAStackProtectorCheckLeavesIsNoResult` types a protected function by
 the double it returns and another as returning nothing, where each loads
 its guard copy into RAX and subtracts `%fs:0x28` before `ret`.
+`AJumpToAFloatFunctionAfterAFloatWriteReturnsItsResult` returns the result
+of a tail call to a float function whose arguments no summary lists, from a
+caller that wrote XMM0 before.
 `SysVCallContract.ACalleeThatLeavesForUnknownCodeStillReadsItsArguments`
 checks that a function which only hands its arguments to a callee ending in
 a jump through a pointer still takes them, and that a tail jump to it passes
