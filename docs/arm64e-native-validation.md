@@ -2016,6 +2016,17 @@ of these installed language frames. SP-based indexed frames with a saved LR
 exercise actual C++ and Objective-C cleanup delivery at a protected non-call
 instruction, at O0 and O2 and on ordinary and alternate signal stacks.
 
+Call-site tables using SLEB128, SDATA2, SDATA4 or SDATA8 can place a
+landing pad on either side of explicit LPStart. The reader resolves the
+displacement at the target pointer width. A zero field still denotes no
+handler. The guarded range stays relative to the function entry.
+`ItaniumLSDA.ResolvesSignedLandingPadsFromEitherSideOfLPStart` and
+`ItaniumLSDA.ChecksLandingPadArithmeticAtTheTargetWidth` exercise 32-bit and
+64-bit address arithmetic, including true overflow and underflow. The
+`NativeBackwardLandingPadRunsCleanups` and `LiftedBackwardLandingPadRunsCleanups`
+cases compare the original and published C++ and Objective-C cleanup paths at
+O0 and O2, on the ordinary and alternate signal stacks.
+
 The typed explicit-base fixture executes a nonmatching catch followed by cleanup;
 its additional specification-only type tests reconstruction without invoking an
 unexpected-exception path. The entry-handler case qualifies address serialization

@@ -16,6 +16,7 @@
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/ReturnAddressSigning.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/DwarfEH.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -866,6 +867,7 @@ enum class LanguageFrame {
   CompactLiveLRCatch,
   ExplicitLPStart,
   TypedExplicitLPStart,
+  BackwardLandingPad,
   EntryLandingPad
 };
 
@@ -881,8 +883,10 @@ static void verifySignalLanguageCleanup(
   const bool PCSigning = ExplicitPC || PACM;
   const bool NonCall = Kind != LanguageFrame::Call;
   const bool EntryPad = Kind == LanguageFrame::EntryLandingPad;
+  const bool BackwardPad = Kind == LanguageFrame::BackwardLandingPad;
   const bool Explicit = Kind == LanguageFrame::ExplicitLPStart ||
-                        Kind == LanguageFrame::TypedExplicitLPStart || EntryPad;
+                        Kind == LanguageFrame::TypedExplicitLPStart ||
+                        BackwardPad || EntryPad;
   const bool Typed = Kind == LanguageFrame::TypedExplicitLPStart;
   const bool CompactLiveLR = Kind == LanguageFrame::CompactLiveLR ||
                              Kind == LanguageFrame::CompactLiveLRCatch;
@@ -996,6 +1000,8 @@ static void verifySignalLanguageCleanup(
         Command.push_back(kSignalCompactFrame);
       if (Explicit)
         Command.push_back(kSignalExplicitLPStart);
+      if (BackwardPad)
+        Command.push_back(kSignalBackwardLandingPad);
       if (Typed)
         Command.push_back(kSignalTypedLSDA);
       if (EntryPad)
@@ -1048,6 +1054,16 @@ static void verifySignalLanguageCleanup(
     if (Explicit)
       ASSERT_NE(SourceFrame->Itanium->LandingPadBase,
                 SourceFrame->CodeRange.Begin);
+    if (BackwardPad) {
+      const auto &Table = *SourceFrame->Itanium;
+      ASSERT_EQ(SourceFrame->ParseStatus, ExceptionParseStatus::Complete);
+      ASSERT_EQ(Table.CallSiteEncoding, dweh::Sdata4);
+      ASSERT_FALSE(Table.CallSites.empty());
+      const auto &Site = Table.CallSites.front();
+      ASSERT_LT(Site.LandingPadVA, Table.LandingPadBase);
+      EXPECT_EQ(Site.NativeLandingPad,
+                Site.LandingPadVA - Table.LandingPadBase);
+    }
     if (Kind == LanguageFrame::FramelessNonCall) {
       ASSERT_TRUE(SourceFrame->Dwarf);
       EXPECT_TRUE(
@@ -1149,6 +1165,7 @@ static void verifySignalLanguageCleanup(
         const auto &After = Rebuilt->Itanium->CallSites[I];
         EXPECT_EQ(Before.GuardedRange.Begin - SourceFrame->CodeRange.Begin,
                   After.GuardedRange.Begin - Rebuilt->CodeRange.Begin);
+        EXPECT_EQ(Before.GuardedRange.size(), After.GuardedRange.size());
         if (Before.LandingPadVA)
           EXPECT_EQ(Before.LandingPadVA - SourceFrame->CodeRange.Begin,
                     After.LandingPadVA - Rebuilt->CodeRange.Begin);
@@ -1893,6 +1910,22 @@ TEST(AArch64AsyncUnwind, LiftedExplicitLPStartRunsLanguageCleanups) {
 
 TEST(AArch64AsyncUnwind, LiftedExplicitLPStartRunsObjCCleanups) {
   verifySignalLanguageCleanup(true, LanguageFrame::ExplicitLPStart, true);
+}
+
+TEST(AArch64AsyncUnwind, NativeBackwardLandingPadRunsCleanups) {
+  for (bool ObjectiveC : {false, true}) {
+    SCOPED_TRACE(ObjectiveC);
+    ASSERT_NO_FATAL_FAILURE(verifySignalLanguageCleanup(
+        ObjectiveC, LanguageFrame::BackwardLandingPad));
+  }
+}
+
+TEST(AArch64AsyncUnwind, LiftedBackwardLandingPadRunsCleanups) {
+  for (bool ObjectiveC : {false, true}) {
+    SCOPED_TRACE(ObjectiveC);
+    ASSERT_NO_FATAL_FAILURE(verifySignalLanguageCleanup(
+        ObjectiveC, LanguageFrame::BackwardLandingPad, true));
+  }
 }
 
 TEST(AArch64AsyncUnwind, InstructionAddressRecipesUseTheActualSigningPC) {
