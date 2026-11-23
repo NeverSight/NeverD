@@ -991,11 +991,26 @@ std::optional<SymRef> solvePolynomial(SymContext &Ctx, SymRef Body,
             return std::nullopt;
           Ctx.collectVars(Factor, DegreeIds);
         }
-    // Factoring can expose a previously unaffordable search. Keep the original
-    // bounded reading for wider residuals; the row reconstruction handles
-    // broad quadratic quotients, while cubic enumeration stays on few inputs.
+    // Keep a quartic quotient when the budget can cover the full Cartesian
+    // tables of every source term and one candidate expansion. An exact
+    // support reconstruction can then work on the smaller polynomial before
+    // the unchanged common factors are restored. The full proof still has
+    // its own coefficient, storage and work checks.
+    auto fitsQuarticQuotient = [&] {
+      if (Degree != 4)
+        return false;
+      const size_t Slots = DegreeTerms.size() + Degree + 2;
+      const size_t EntryBytes = 128 + 2 * Degree * sizeof(MintermIndex);
+      size_t Capacity =
+          std::min(Budget.available() / Slots, Opts.MaxTableBytes / EntryBytes);
+      // The outer synthesis already admitted this many input corners.
+      for (unsigned I = 0; I != Degree; ++I)
+        Capacity >>= DegreeIds.size();
+      return Capacity != 0;
+    };
     if (!Common.empty() &&
-        (Degree > limits::kMaxCofactorSearchDegree ||
+        ((Degree > limits::kMaxCofactorSearchDegree &&
+          !fitsQuarticQuotient()) ||
          (Degree == 3 &&
           DegreeIds.size() > limits::kMaxCubicCofactorSearchAtoms))) {
       for (SymRef Factor : Common) {

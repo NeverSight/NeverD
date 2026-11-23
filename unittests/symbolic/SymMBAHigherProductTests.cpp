@@ -122,6 +122,38 @@ TEST(SymMBAHigherProduct, SharesProvedQuotientsAcrossSixtyFourProducts) {
   }
 }
 
+TEST(SymMBAHigherProduct, CommonFactorsExposeAnAffordableQuarticQuotient) {
+  std::mt19937_64 Random(0x71756f74);
+  for (unsigned Width : {8u, 32u, 64u}) {
+    SymContext C;
+    for (auto Name : {"x", "y", "z", "w"})
+      C.mkVar(Name, Width);
+    auto Input = parseSymExpr(C,
+                              "37*(x&y)*(x|y)*(z&~w)*(~z&w)*(x^z)*(y^z)"
+                              "+37*(x&~y)*(~x&y)*(z&~w)*(~z&w)*(x^z)*(y^z)"
+                              "+37*(x&~y)*(~x&y)*(z&w)*(z|w)*(x^z)*(y^z)"
+                              "+(x^y)+2*(x&y)",
+                              Width);
+    ASSERT_TRUE(Input.ok());
+    MBAOptions Options;
+    auto Result = simplifyMBADeep(C, Input.Root, Options);
+    EXPECT_LT(Result.Work, Options.MaxWork / 2);
+    EXPECT_LT(Result.SizeAfter, Result.SizeBefore);
+    for (unsigned Sample = 0; Sample != 96; ++Sample) {
+      llvm::APInt A(Width, Random(), false, true),
+          B(Width, Random(), false, true);
+      llvm::APInt D(Width, Random(), false, true),
+          E(Width, Random(), false, true);
+      auto Q =
+          A * B * (D & ~E) * (~D & E) + (A & ~B) * (~A & B) * (D & E) * (D | E);
+      auto Expected = A + B + llvm::APInt(Width, 37) * (A ^ D) * (B ^ D) * Q;
+      llvm::SmallVector<llvm::APInt, 4> Values{A, B, D, E};
+      EXPECT_EQ(C.eval(Input.Root, Values), Expected);
+      EXPECT_EQ(C.eval(Result.Expr, Values), Expected);
+    }
+  }
+}
+
 TEST(SymMBAHigherProduct, RecoversNonlinearQuotientsAndRepeatedFactors) {
   for (unsigned Width : {3u, 8u, 32u, 64u, 257u})
     for (const char *Text :

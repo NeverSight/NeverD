@@ -7101,7 +7101,8 @@ expensive cubic search can first inspect two-coordinate slices. At a nonzero
 cube the coefficient fixes the scale, so a second coordinate that occurs in
 `n` factors must have the coefficients of `a^(3-n) * (a+b)^n` times that
 scale. An inconsistent slice leaves the original cubic available while the
-solver simplifies other terms.
+solver simplifies other terms. The same search can remove common multipliers
+from a quartic quotient when its Cartesian tables fit the available budget.
 A bitwise expression in which each abstract input occurs once
 already uses the minimum number of binary operations for that reading.
 The region solver can use it directly and still check alternative input
