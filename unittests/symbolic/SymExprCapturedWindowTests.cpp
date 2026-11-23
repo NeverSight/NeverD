@@ -484,6 +484,8 @@ TEST(SymExpr, WrappedMaskedJoinsKeepBothSidesOfBitZero) {
           return C.mkExtract(C.mkRor(Join(Parts), Turn), 0, Size);
         };
         const auto Field = Read(Wide);
+        EXPECT_EQ(C.projectMaskedBitwiseField(Join(Wide), At, Size), Field);
+        EXPECT_FALSE(C.projectMaskedBitwiseField(Join(Confined), At, Size));
         std::reverse(Other.begin(), Other.end());
         EXPECT_EQ(Field, Read(Other));
         const auto ConfinedField = Read(Confined);

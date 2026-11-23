@@ -7066,6 +7066,9 @@ mask already fits the field, one extraction after the join keeps a common
 shift shared. A field that wraps past the end of a rotated word reads the
 suffix and prefix of each mask in that order. The corresponding field of each
 source uses one rotation and one extraction, so a complex source appears once.
+When LLVM spells a signed or unsigned field with shifts, the modular product
+reader recovers the same bit coordinates and projects the wrapped join under
+its existing work and storage limits.
 For large products of affine factors, two perturbations can vanish together
 modulo the observed width. Prefix and suffix products then give the exact
 weight of each surviving low field, including for even offsets. When a long

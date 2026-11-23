@@ -546,6 +546,22 @@ void SymContext::retainLowWordProjection(SymRef Source, uint32_t Width,
   Entry = {Key, Image};
 }
 
+SymRef SymContext::projectMaskedBitwiseField(SymRef Join, uint32_t Low,
+                                             uint32_t Width) {
+  assert(Width && Width <= width(Join) && Low < width(Join));
+  const auto N = numOperands(Join);
+  if ((op(Join) != SymOp::Or && op(Join) != SymOp::Xor) || N <= 2)
+    return {};
+  unsigned Splits =
+      std::min(N - 1, ::neverd::limits::symbolic::kSymExprMaskedFieldMaxSplits);
+  auto Read = [&](SymRef Source, unsigned At, unsigned Bits) {
+    return extractWindow(Source, At, Bits, Splits);
+  };
+  if (auto Field = projectMaskedBitwise(*this, Join, Low, Width, Splits, Read))
+    return Field->Word;
+  return {};
+}
+
 SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
   unsigned RemainingSplits =
       ::neverd::limits::symbolic::kSymExprMaskedFieldMaxSplits;

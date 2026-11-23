@@ -313,6 +313,10 @@ public:
 
   /// Extract \p Width bits starting at bit \p Low of \p A.
   SymRef mkExtract(SymRef A, uint32_t Low, uint32_t Width);
+  /// Slice one masked OR/XOR join at circular bit coordinates. Returns an
+  /// invalid ref if sharing the original word is preferable. Nested masked
+  /// joins stay shared during this single-level projection.
+  SymRef projectMaskedBitwiseField(SymRef Join, uint32_t Low, uint32_t Width);
   /// Concatenate, most significant first.
   SymRef mkConcat(llvm::ArrayRef<SymRef> Ops);
   SymRef mkConcat(SymRef Hi, SymRef Lo) { return mkConcat({Hi, Lo}); }

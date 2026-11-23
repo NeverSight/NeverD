@@ -14,6 +14,8 @@
 #include "Limits.h"
 #include "SymMBADetail.h"
 
+#include "neverd/symbolic/Limits.h"
+
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -170,6 +172,27 @@ SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
   if (Storage < Extra || !Budget.consume(2 + Words))
     return {};
   Storage -= Extra;
+  // An instruction combiner can spell the field with shifts and masks.
+  // Once their coordinates are known, the same narrow join represents every
+  // copy when the selected bits wrap across bit zero.
+  const auto Kind = Ctx.op(Source);
+  if (Offset + Size > Width && (Kind == SymOp::Or || Kind == SymOp::Xor)) {
+    const size_t Arms = Ctx.numOperands(Source);
+    const size_t PerArm =
+        5 * sizeof(SymNode) + 10 * sizeof(SymRef) +
+        (Words + 2 * llvm::APInt::getNumWords(Size)) * sizeof(uint64_t);
+    const size_t ArmWork = 6 + 3 * Words;
+    if (Arms > 2 &&
+        Arms - 1 <= ::neverd::limits::symbolic::kSymExprMaskedFieldMaxSplits &&
+        Arms <= Storage / PerArm && Arms <= Budget.available() / ArmWork) {
+      Budget.consume(Arms * ArmWork);
+      if (const auto Field =
+              Ctx.projectMaskedBitwiseField(Source, Offset, Size)) {
+        Storage -= Arms * PerArm;
+        return Ctx.mkZExt(Field, Width);
+      }
+    }
+  }
   return Ctx.mkRor(Source, Ctx.mkConst(Width, Offset));
 }
 
