@@ -9237,6 +9237,9 @@ registers no parameter carries are read from the machine, the parameters
 arrive as passed, and RBP is the caller's frame.
 `SysVCallContract.FourStoredArgumentsAreNoContextSave` stores four
 arguments and R10 without RAX: R10 stays a value nothing defines.
+`AAPCS64CallContract.AContextSaveReadsTheVectorRegistersItStores` stores
+x9 to x12 with q16 and d17: both vector registers are read from the
+machine, and a q16 stored alone stays unknown.
 `SysVCallContract.TheFramePointerAFunctionOnlyStoresIsItsCallersFrame`
 and its `AAPCS64CallContract` counterpart run a function that stores the
 frame pointer it was entered with and compare the stored value with the

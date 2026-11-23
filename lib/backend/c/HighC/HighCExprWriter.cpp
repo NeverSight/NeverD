@@ -4074,6 +4074,40 @@ bool HighCWriter::ctorSourceExpr(const HighExpr *Op,
   return Rec(Rec, Op, 0);
 }
 
+/// The AArch64 vector register \p V is the whole of or the low double of,
+/// as its Q or D name in lower case; empty for any other view.
+static std::string aarch64VectorView(const MedVar &V) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  if (V.Kind != MedVar::Reg || !TRI.GetRegName || !TRI.isVectorReg(V.RegOff))
+    return {};
+  // GetRegName reuses one buffer. Copy it before any other call.
+  const std::string Reg(TRI.GetRegName(V.RegOff, V.Size));
+  if (Reg.size() < 2 || (Reg.front() != 'Q' && Reg.front() != 'D') ||
+      !llvm::all_of(llvm::StringRef(Reg).drop_front(),
+                    [](char Ch) { return Ch >= '0' && Ch <= '9'; }))
+    return {};
+  return llvm::StringRef(Reg).lower();
+}
+
+/// The read of the AArch64 vector register \p E names as the machine holds
+/// it: a Q register whole, a D register as the double or the bits its use
+/// reads.
+static std::string aarch64MachineVectorText(const HighExpr &E) {
+  const std::string View = aarch64VectorView(E.Var);
+  if (View.empty())
+    return {};
+  const std::string Number = View.substr(1);
+  if (View.front() == 'q')
+    return "({ unsigned __int128 __entry; __asm__ volatile(\"mov %0.16b, v" +
+           Number + ".16b\" : \"=w\"(__entry)); __entry; })";
+  if (E.Type && E.Type->Kind == NdTypeKind::Float &&
+      E.Type->Size == sizeof(double))
+    return "({ double __entry; __asm__ volatile(\"fmov %d0, d" + Number +
+           "\" : \"=w\"(__entry)); __entry; })";
+  return "({ uint64_t __entry; __asm__ volatile(\"fmov %0, d" + Number +
+         "\" : \"=r\"(__entry)); __entry; })";
+}
+
 void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
   CapturedEntryRegisters.clear();
   CapturedCallerFrame = false;
@@ -4103,7 +4137,10 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
     // this function was entered with. The incoming register has no tag.
     const X64MachineRegister Machine =
         X64 ? x64MachineRegister(V) : X64MachineRegister::None;
-    const bool Vector = Machine == X64MachineRegister::Vector;
+    // A vector register a context save stores with the general ones: an
+    // SSE register on x86-64, a Q or a D register on AArch64.
+    const bool Vector = X64 ? Machine == X64MachineRegister::Vector
+                            : !aarch64VectorView(V).empty();
     if (V.Kind != MedVar::Reg || V.SSAVer != 0 || V.RenameTag >= 0 ||
         (V.Size != TRI.PointerSize && !Vector))
       return std::nullopt;
@@ -4111,8 +4148,8 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
         TRI.isStackPointer(V.RegOff) || TRI.isFlag(V.RegOff, V.Size))
       return std::nullopt;
     const char *RegName = TRI.GetRegName(V.RegOff, V.Size);
-    if (!RegName ||
-        (X64 ? Machine == X64MachineRegister::None : RegName[0] != 'X'))
+    if (!RegName || (X64 ? Machine == X64MachineRegister::None
+                         : RegName[0] != 'X' && !Vector))
       return std::nullopt;
     const std::string Name = rawVarName(V);
     if (Name.empty() || isEmittedParamName(Name))
@@ -7049,6 +7086,9 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
         return "({ uint64_t __entry; __asm__ volatile(\"mov %0, " +
                llvm::StringRef(Reg).lower() +
                "\" : \"=r\"(__entry)); __entry; })";
+      } else if (std::string Read = aarch64MachineVectorText(E);
+                 !Read.empty()) {
+        return Read;
       }
     }
     // EOR and the other data uses read the same incoming Q that AESE does.

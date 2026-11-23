@@ -3678,4 +3678,31 @@ int main(void) {
 )C");
 }
 
+TEST(AAPCS64CallContract, AContextSaveReadsTheVectorRegistersItStores) {
+  // save_all(buf) stores x9 to x12, four caller-saved registers that are
+  // no parameters: a context save, as Go's asyncPreempt keeps the
+  // registers of the code it interrupts.  The vector registers stored
+  // with them are part of that context: q16 is read whole and d17 as its
+  // bits.  Alone, a stored vector register is a spill and stays unknown.
+  const BinaryImage Image = makeImage({{Text,
+                                        {0xA9002809u, // stp x9, x10, [x0]
+                                         0xA901300Bu, // stp x11, x12, [x0, #16]
+                                         0x3D800810u, // str q16, [x0, #32]
+                                         0xFD001811u, // str d17, [x0, #48]
+                                         Ret}}},
+                                      {{Text, "save_all"}}, {});
+  const std::string Source = highC(Image, {Text});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  for (const char *Read : {"mov %0, x9", "mov %0.16b, v16.16b", "d17"})
+    EXPECT_NE(Source.find(Read), std::string::npos) << Read << "\n" << Source;
+
+  const BinaryImage Spill = makeImage({{Text,
+                                        {0x3D800810u, // str q16, [x0, #32]
+                                         Ret}}},
+                                      {{Text, "spill"}}, {});
+  const std::string Alone = highC(Spill, {Text});
+  EXPECT_EQ(Alone.find("v16.16b"), std::string::npos) << Alone;
+  EXPECT_NE(Alone.find("__builtin_trap"), std::string::npos) << Alone;
+}
+
 } // namespace

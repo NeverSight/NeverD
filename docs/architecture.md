@@ -12314,7 +12314,11 @@ does not establish a source parameter. An AArch64 or x86-64 function that
 only stores four or more distinct caller-saved entry GPRs, and does not use
 those values as addresses or operands, is saving the architectural register
 context. HighC names each of those registers and the callee-saved entry
-registers stored with them. Most caller-saved registers of x86-64 carry
+registers stored with them. The vector registers it only stores are part of
+that context: an AArch64 Q register is read whole and a D register as its
+low double, as Go's arm64 `asyncPreempt` keeps V0 to V31, where a vector
+register stored alone is a spill and stays unknown
+(`collectEntryVectorSpills`). Most caller-saved registers of x86-64 carry
 arguments, and a register an argument arrives in is a parameter, not one of
 the four. Where the function only stores the RAX it was entered with, which
 no caller of a function that is not variadic gives a value, and reads

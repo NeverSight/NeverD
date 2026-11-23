@@ -935,9 +935,10 @@ public:
   /// or prints as a literal already.
   std::string stringArgumentNote(const HighExpr &Arg);
   void collectUnknownOnlyNames(const HighFunc &Func);
-  /// Full-width AArch64 entry GPRs whose only use is to be stored. A context
-  /// save stores the caller-saved bank this way; HighC then names those
-  /// registers instead of trapping.
+  /// Full-width entry GPRs whose only use is to be stored. A context save
+  /// stores the caller-saved bank this way; HighC then names those
+  /// registers, and the vector registers stored with them, instead of
+  /// trapping.
   void collectCapturedEntryRegisters(const HighFunc &Func);
   /// Entry Q registers printed as the value of a store. That spill stays
   /// unknown. A different use of the same register is not in this set.
@@ -1764,8 +1765,9 @@ public:
   /// Assigns are hidden; observable uses diagnose missing state.
   std::set<std::string> UnknownOnlyNames;
   /// AArch64 and x86-64 entry register offsets named as the architectural
-  /// register: general registers, and on x86-64 SSE registers too. Empty
-  /// unless collectCapturedEntryRegisters proved a context save.
+  /// register: general registers, and the vector registers stored with
+  /// them (SSE's on x86-64, Q and D views on AArch64). Empty unless
+  /// collectCapturedEntryRegisters proved a context save.
   std::set<uint64_t> CapturedEntryRegisters;
   /// The function only stores the frame pointer it was entered with: its
   /// caller's frame (collectCapturedEntryRegisters), on x86-64 and AArch64.
