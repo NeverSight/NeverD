@@ -3574,4 +3574,32 @@ TEST(SysVCallContract, AFrameBeyondTheLimitIsRefused) {
   }
 }
 
+TEST(SysVCallContract, TheFramePointerAFunctionOnlyStoresIsItsCallersFrame) {
+  // keep_frame(buf) stores the RBP and the stack pointer it was entered
+  // with, as Go's gosave, mcall and morestack keep them in the goroutine's
+  // gobuf.  RBP is no parameter, and the function reads it no other way:
+  // it is the caller's frame, which C reads with
+  // __builtin_frame_address(1).
+  const std::vector<uint8_t> Code = {0x48, 0x89, 0x2F, // mov [rdi], rbp
+                                     0x48, 0x8D, 0x44, 0x24,
+                                     0x08,                   // lea rax, [rsp+8]
+                                     0x48, 0x89, 0x47, 0x08, // mov [rdi+8], rax
+                                     0xC3};                  // ret
+  const BinaryImage Img = makeImportImage(Code, {{Text, "keep_frame"}}, {});
+  const std::string Source = liftEntries(Img, {Text});
+  EXPECT_NE(Source.find("__builtin_frame_address(1)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  uint64_t kept[2] = {0, 0};
+  /* A real call: inlined, the function would have no caller of its own. */
+  __typeof__(keep_frame) *volatile call = keep_frame;
+  call((void *)kept);
+  return kept[0] == (uintptr_t)__builtin_frame_address(0) ? 0 : 1;
+}
+)");
+}
+
 } // namespace

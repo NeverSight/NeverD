@@ -3654,4 +3654,28 @@ TEST(AAPCS64CallContract, AFrameSizeBuiltInARegisterBeyondTheLimitIsRefused) {
       << Result.Error;
 }
 
+TEST(AAPCS64CallContract, TheFramePointerAFunctionOnlyStoresIsItsCallersFrame) {
+  // keep_frame(buf) stores the x29 it was entered with, as Go's mcall and
+  // morestack keep it in the goroutine's gobuf.  The register is no
+  // parameter, and one register is no context save: it is the caller's
+  // frame, which C reads with __builtin_frame_address(1).
+  const BinaryImage Image = makeImage({{Text,
+                                        {0xF900001Du, // str x29, [x0]
+                                         Ret}}},
+                                      {{Text, "keep_frame"}}, {});
+  const std::string Source = highC(Image, {Text});
+  EXPECT_NE(Source.find("__builtin_frame_address(1)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  source_call_execution_test::compileAndRun(Source + R"C(
+int main(void) {
+  uint64_t kept = 0;
+  /* A real call: inlined, the function would have no caller of its own. */
+  __typeof__(keep_frame) *volatile call = keep_frame;
+  call((void *)&kept);
+  return kept != (uintptr_t)__builtin_frame_address(0);
+}
+)C");
+}
+
 } // namespace

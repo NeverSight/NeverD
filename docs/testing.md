@@ -9231,6 +9231,10 @@ which returns a double a wrapper hands back.
 `AAPCS64CallContract.SelectedFloatingRecordsKeepEveryObservedField` covers
 the record such a callee returns in the vector registers, which the call's
 output must stay for until it is bound.
+`SysVCallContract.TheFramePointerAFunctionOnlyStoresIsItsCallersFrame`
+and its `AAPCS64CallContract` counterpart run a function that stores the
+frame pointer it was entered with and compare the stored value with the
+caller's own frame address.
 `SysVCallContract.AFrameBeyondTheLimitIsRefused` and
 `AAPCS64CallContract.AFrameSizeBuiltInARegisterBeyondTheLimitIsRefused`
 refuse a frame of 32 MiB by name, moved by an immediate or by a constant a

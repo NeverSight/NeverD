@@ -1751,6 +1751,9 @@ public:
   /// AArch64 entry-GPR offsets named as the architectural register. Empty
   /// unless collectCapturedEntryRegisters proved a context save.
   std::set<uint64_t> CapturedEntryRegisters;
+  /// The function only stores the frame pointer it was entered with: its
+  /// caller's frame (collectCapturedEntryRegisters), on x86-64 and AArch64.
+  bool CapturedCallerFrame = false;
   /// Peeled entry-Q nodes that are the value of a store or a store intrinsic.
   std::unordered_set<const HighExpr *> EntryVectorSpills;
   /// Availability of mixed known/unknown integer PHIs and their copies.

@@ -12317,7 +12317,12 @@ names each of those registers and the callee-saved entry registers stored with
 them. A later definition of the same register is a different value: HighIR
 renames it and clears its SSA version, and that local is not a use of the
 incoming register. A variadic save, a prologue spill, and any incoming register
-that is also used as a value stay unknown. An entry Q register that a data
+that is also used as a value stay unknown. The frame pointer alone is still
+a context's: a function that only stores the RBP or x29 it was entered with
+keeps its caller's frame, as Go's `mcall`, `gosave` and `morestack` do in
+`gobuf.bp`, and HighC reads it as `__builtin_frame_address(1)`: the value
+the compiled prologue saved, whatever the caller keeps in the register.
+An entry Q register that a data
 intrinsic or another value use reads, and an entry GPR that a
 pointer-authentication operation reads as its modifier, are that architectural
 register. A 64-bit vector half, a vector the function wrote, a register used

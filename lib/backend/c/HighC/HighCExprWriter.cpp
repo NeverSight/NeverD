@@ -4076,7 +4076,10 @@ bool HighCWriter::ctorSourceExpr(const HighExpr *Op,
 
 void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
   CapturedEntryRegisters.clear();
-  if (Opts.TheArch != Arch::AArch64 || Func.IsVariadic)
+  CapturedCallerFrame = false;
+  // On x86-64 only the frame pointer is followed.
+  const bool FramePointerOnly = Opts.TheArch == Arch::X64;
+  if ((Opts.TheArch != Arch::AArch64 && !FramePointerOnly) || Func.IsVariadic)
     return;
   const auto &TRI = getTargetRegInfo(Opts.TheArch);
   if (!TRI.GetRegName || TRI.PointerSize == 0)
@@ -4097,7 +4100,8 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
         TRI.isStackPointer(V.RegOff) || TRI.isFlag(V.RegOff, V.Size))
       return std::nullopt;
     const char *RegName = TRI.GetRegName(V.RegOff, V.Size);
-    if (!RegName || RegName[0] != 'X')
+    if (FramePointerOnly ? !TRI.isFramePointer(V.RegOff)
+                         : !RegName || RegName[0] != 'X')
       return std::nullopt;
     const std::string Name = rawVarName(V);
     if (Name.empty() || isEmittedParamName(Name))
@@ -4227,8 +4231,16 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
   for (const auto &Item : Uses)
     if (Item.second.Capture && !Item.second.Other && Item.second.CallerSaved)
       ++CallerSaved;
-  if (CallerSaved < kContextSaveCallerSaved)
+  if (CallerSaved < kContextSaveCallerSaved) {
+    // The frame pointer alone is still a context's: a function that stores
+    // the one it was entered with and reads it no other way keeps its
+    // caller's frame, as Go's mcall, gosave and morestack do in gobuf.bp.
+    CapturedCallerFrame = llvm::any_of(Uses, [&](const auto &Item) {
+      return Item.second.Capture && !Item.second.Other &&
+             TRI.isFramePointer(Item.first);
+    });
     return;
+  }
   for (const auto &Item : Uses)
     if (Item.second.Capture && !Item.second.Other)
       CapturedEntryRegisters.insert(Item.first);
@@ -6989,6 +7001,13 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
              llvm::StringRef(TRI.GetRegName(E.Var.RegOff, E.Var.Size)).lower() +
              "\" : \"=r\"(__platform)); __platform; })";
     }
+    // The frame pointer a function was entered with is its caller's frame.
+    // The prologue the compiler gives a function that asks for it saves
+    // that register, and __builtin_frame_address(1) reads the saved value
+    // back, whatever the caller keeps in the register.
+    if (CapturedCallerFrame && E.Var.Kind == MedVar::Reg &&
+        TRI.isFramePointer(E.Var.RegOff) && E.Var.Size == TRI.PointerSize)
+      return "(uintptr_t)__builtin_frame_address(1)";
     // A context save stores the entry register and does not use it as a
     // value. The stored bits are that register, same as x18 above.
     if (E.Var.Kind == MedVar::Reg &&
