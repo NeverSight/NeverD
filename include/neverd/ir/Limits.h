@@ -542,6 +542,11 @@ inline constexpr int
 
 // lib/ir/high/lower/MedToHigh.cpp
 inline constexpr int kMedToHighHighConversionTraceMedNameSizeLimit = 256;
+
+// lib/ir/med/pass/MedByteDemand.cpp
+// The values worked out together when asking which bytes of one are zero
+// (a flag ANDed around a loop); past it nothing is known of them.
+inline constexpr unsigned kMedByteDemandZeroByteValues = 64;
 inline constexpr int kMedToHighHighWalkWalkDepthLimit = 32;
 inline constexpr int kMedToHighConverterSourceBitSliceDepthLimit = 40;
 inline constexpr int kMedToHighConverterForceInlineExprDepthLimit = 30;

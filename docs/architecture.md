@@ -5518,7 +5518,7 @@ keeps its value while a caller hands its result back: the caller may be
 returning what it passed. The same holds where the parameter is Go's
 first argument, which arrives in the register its first result leaves in: a
 Go function with no result returns with it as it came. A caller reads a result only where something it
-does depends on a byte of it (`ByteDemand`): the narrower views of the
+does depends on a byte of it (`MedByteDemand`): the narrower views of the
 register the lift keeps in step with it, the merges of those views, and the
 bytes a `setcc` writes one byte over read nothing unless they reach a store,
 a call, a branch or a return, and a read of a function's result reaches the

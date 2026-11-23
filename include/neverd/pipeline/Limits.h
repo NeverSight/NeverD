@@ -195,9 +195,6 @@ inline constexpr uint64_t kPipelineLowIRMaxDecodeWeight = 1ull << 20;
 // a degenerate image, which gets the answers no assumption supports.
 inline constexpr unsigned kPipelineReturnContractsMaxRounds = 8;
 inline constexpr unsigned kPipelineReturnContractsClassifyMaxDepth = 32;
-// The values worked out together when asking which bytes of one are zero
-// (a flag ANDed around a loop); past it nothing is known of them.
-inline constexpr unsigned kPipelineReturnContractsZeroByteValues = 64;
 
 // lib/pipeline/StateSourceBank.cpp
 inline constexpr unsigned kStateSourceBankBankOffsetsBudget = 128;

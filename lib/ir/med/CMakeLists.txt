@@ -97,6 +97,7 @@ add_neverd_component_library(NeverDIRMed
   lower/LowToMedMachineFlags.cpp
   pass/MedBoundCallStackArguments.cpp
   pass/MedCallReturnReads.cpp
+  pass/MedByteDemand.cpp
   pass/MedCFGSimplify.cpp
   pass/MedConstantPropagation.cpp
   pass/MedGoResults.cpp

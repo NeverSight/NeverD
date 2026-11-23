@@ -36,7 +36,7 @@
 /// none a deliberate value.
 ///
 /// A caller reads a result where something it does depends on a byte of it
-/// (ByteDemand): not the views of the return register the lift keeps in
+/// (MedByteDemand): not the views of the return register the lift keeps in
 /// step with it, nor the bytes a `setcc` merges a byte over where only that
 /// byte goes on.  A caller that only hands the result back reads it where
 /// it returns a value in the integer register itself, which is the other
@@ -65,6 +65,7 @@
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/ir/med/MedByteDemand.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
@@ -91,29 +92,11 @@ namespace neverd {
 
 namespace {
 
-using ValueKey = std::tuple<MedVar::VarKind, int, int>;
+using ValueKey = MedValueKey;
 
-ValueKey keyOf(const MedVar &Value) {
-  return {Value.Kind, Value.Id, Value.SSAVer};
-}
+ValueKey keyOf(const MedVar &Value) { return medValueKey(Value); }
 
-/// Hashes a value's key for the maps below.
-struct ValueKeyInfo {
-  static ValueKey getEmptyKey() {
-    return {static_cast<MedVar::VarKind>(0xFE), -1, -1};
-  }
-  static ValueKey getTombstoneKey() {
-    return {static_cast<MedVar::VarKind>(0xFF), -1, -1};
-  }
-  static unsigned getHashValue(const ValueKey &Key) {
-    return static_cast<unsigned>(
-        llvm::hash_combine(static_cast<unsigned>(std::get<0>(Key)),
-                           std::get<1>(Key), std::get<2>(Key)));
-  }
-  static bool isEqual(const ValueKey &A, const ValueKey &B) { return A == B; }
-};
-template <typename T>
-using ValueMap = llvm::DenseMap<ValueKey, T, ValueKeyInfo>;
+template <typename T> using ValueMap = MedValueMap<T>;
 
 enum class ReturnedValue : uint8_t {
   /// Nothing the function defines.
@@ -167,7 +150,7 @@ struct FunctionFacts {
   /// return: a direct call's target, or the routine an import's stub or slot
   /// reaches (ownRoutineOf).
   struct ResultUse {
-    /// Something the function does depends on a byte of one (ByteDemand).
+    /// Something the function does depends on a byte of one (MedByteDemand).
     bool Read = false;
     /// A return hands one back: directly, through the PHIs that merge it,
     /// or as the narrower or wider view of it a return reads.
@@ -191,467 +174,6 @@ struct FunctionFacts {
   std::vector<ReturnPath> Paths;
   /// Where no path returns: whether that is proven (hasProvenNoReturnExit).
   bool NeverReturns = false;
-};
-
-/// The bytes of a value something depends on: bit N for byte N, up to the
-/// 64 of the widest vector register.  A wider value is depended on whole.
-using ByteMask = uint64_t;
-constexpr unsigned kMaskBytes = 64;
-
-ByteMask bytesOf(const MedVar &Value) {
-  return !Value.Size || Value.Size >= kMaskBytes
-             ? ~ByteMask(0)
-             : (ByteMask(1) << Value.Size) - 1;
-}
-
-/// \p Bytes and every byte below its highest: what a carry chain reads.
-ByteMask throughHighest(ByteMask Bytes) {
-  return Bytes ? llvm::maskTrailingOnes<ByteMask>(llvm::Log2_64(Bytes) + 1) : 0;
-}
-
-/// Whether \p Op is run for more than the value it computes, or leaves that
-/// value where no operation shows who reads it: a store, a call, a branch,
-/// a load, a division, an intrinsic, and a write of anything but a register
-/// or a temporary.  Such an operation reads its inputs whole whatever reads
-/// its output.
-bool readsInputsWhole(const MedOp &Op) {
-  switch (Op.Opcode) {
-  case NdOp::LOAD:
-  case NdOp::STORE:
-  case NdOp::ATOMIC_XCHG:
-  case NdOp::ATOMIC_ADD:
-  case NdOp::ATOMIC_CMPXCHG:
-  case NdOp::INT_DIV:
-  case NdOp::INT_SDIV:
-  case NdOp::INT_REM:
-  case NdOp::INT_SREM:
-  case NdOp::BRANCH:
-  case NdOp::COND_BR:
-  case NdOp::INDIR_BR:
-  case NdOp::CALL:
-  case NdOp::INDIR_CALL:
-  case NdOp::RETURN:
-  case NdOp::NOP:
-  case NdOp::INTRINSIC:
-    return true;
-  default:
-    break;
-  }
-  if (Op.MemoryOrdering != NdMemoryOrdering::None || !Op.Output.Size ||
-      !Op.IntrinsicOutputs.empty())
-    return true;
-  return Op.Output.Kind != MedVar::Temp && Op.Output.Kind != MedVar::Reg;
-}
-
-/// The bytes of each input of \p Op that \p Bytes of its output depend on.
-/// A copy, a view, a byte merge, a bitwise operation, a carry chain and a
-/// left shift pass bytes on in place or upwards; any other operation reads
-/// its inputs whole.
-template <typename NeedFn, typename ZeroFn>
-void inputDemand(const MedOp &Op, ByteMask Bytes, NeedFn &&Need,
-                 ZeroFn &&ZeroBytes) {
-  // A value the mask covers, and one a machine word holds.
-  const auto Covered = [](const MedVar &Value) {
-    return Value.Size && Value.Size <= kMaskBytes;
-  };
-  const auto Word = [](const MedVar &Value) {
-    return Value.Size && Value.Size <= 8;
-  };
-  if (Covered(Op.Output))
-    switch (Op.Opcode) {
-    case NdOp::COPY:
-    case NdOp::INT_NOT:
-      if (Op.NumInputs == 1 && Op.Inputs[0].Size == Op.Output.Size) {
-        Need(Op.Inputs[0], Bytes);
-        return;
-      }
-      break;
-    case NdOp::INT_ZEXT:
-      if (Op.NumInputs == 1 && Covered(Op.Inputs[0])) {
-        Need(Op.Inputs[0], Bytes & bytesOf(Op.Inputs[0]));
-        return;
-      }
-      break;
-    case NdOp::INT_SEXT:
-      if (Op.NumInputs == 1 && Covered(Op.Inputs[0])) {
-        // The bytes above the source repeat its sign.
-        const ByteMask Low = bytesOf(Op.Inputs[0]);
-        Need(Op.Inputs[0],
-             (Bytes & Low) |
-                 (Bytes & ~Low ? ByteMask(1) << (Op.Inputs[0].Size - 1) : 0));
-        return;
-      }
-      break;
-    case NdOp::SUBBYTES:
-      if (Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
-          Covered(Op.Inputs[0]) && Op.Inputs[1].ConstVal < kMaskBytes) {
-        Need(Op.Inputs[0], Bytes << Op.Inputs[1].ConstVal);
-        return;
-      }
-      break;
-    case NdOp::CONCAT:
-      // The second operand is the low part.
-      if (Op.NumInputs == 2 && Covered(Op.Inputs[0]) && Covered(Op.Inputs[1]) &&
-          Op.Inputs[1].Size < kMaskBytes) {
-        Need(Op.Inputs[1], Bytes & bytesOf(Op.Inputs[1]));
-        Need(Op.Inputs[0], Bytes >> Op.Inputs[1].Size);
-        return;
-      }
-      break;
-    case NdOp::INT_AND:
-    case NdOp::INT_OR:
-    case NdOp::INT_XOR:
-      if (Op.NumInputs == 2 && Word(Op.Output)) {
-        for (unsigned I = 0; I < 2; ++I) {
-          const MedVar &Other = Op.Inputs[1 - I];
-          ByteMask Kept = Bytes;
-          // A byte ANDed with zero or ORed with ones shows nothing of the
-          // other operand: `and %eax, %ebx` reads only the low byte of an
-          // EAX a `setcc` wrote where EBX holds a zero-extended byte.
-          if (Other.isConst() && Op.Opcode == NdOp::INT_OR) {
-            for (unsigned Byte = 0; Byte < 8; ++Byte)
-              if (((Other.ConstVal >> (8 * Byte)) & 0xFF) == 0xFFu)
-                Kept &= ~(ByteMask(1) << Byte);
-          } else if (Op.Opcode == NdOp::INT_AND) {
-            Kept &= ~ZeroBytes(Other);
-          }
-          Need(Op.Inputs[I], Kept);
-        }
-        return;
-      }
-      break;
-    case NdOp::INT_ADD:
-    case NdOp::INT_SUB:
-    case NdOp::INT_MULT:
-      if (Op.NumInputs == 2 && Word(Op.Output)) {
-        Need(Op.Inputs[0], throughHighest(Bytes));
-        Need(Op.Inputs[1], throughHighest(Bytes));
-        return;
-      }
-      break;
-    case NdOp::INT_LEFT:
-      // A left shift moves bits up only, whatever the amount.
-      if (Op.NumInputs == 2 && Word(Op.Output)) {
-        Need(Op.Inputs[0], throughHighest(Bytes));
-        Need(Op.Inputs[1], bytesOf(Op.Inputs[1]));
-        return;
-      }
-      break;
-    default:
-      break;
-    }
-  for (uint8_t I = 0; I < Op.NumInputs; ++I)
-    Need(Op.Inputs[I], bytesOf(Op.Inputs[I]));
-}
-
-/// Which bytes of each value something the function does depends on.
-///
-/// An operation run for more than its value reads its inputs whole
-/// (readsInputsWhole).  One that only computes a value reads what the
-/// readers of that value need of it (inputDemand), and a PHI what its
-/// readers need: the views of the return register a call leaves (`eax`,
-/// `al`) and the PHIs that merge them read nothing where no operation reads
-/// them, and the bytes a `setcc` merges a byte over read nothing where only
-/// that byte is read.
-///
-/// No operation shows every reader.  A caller may take what a function
-/// leaves in a register other than the integer return register
-/// (MedFunc::MultiReturn, a floating-point result), and an exception
-/// handler lifted apart from its function reads the registers the function
-/// held when it threw.  So a value in such a register that nothing reads is
-/// read whole, unless the function is known to return an integer and has no
-/// exceptional edge (leavesOtherRegisters).  An unread value of the return
-/// register or of a temporary reads nothing: what a return hands back is
-/// known (returnRegisterAt), and a temporary goes nowhere else.
-class ByteDemand {
-public:
-  ByteDemand(const TargetRegInfo &TRI, bool OtherRegistersRead)
-      : TRI(TRI), OtherRegistersRead(OtherRegistersRead) {}
-
-  void define(const PhiNode &Phi) {
-    const unsigned Output = nodeOf(Phi.Output);
-    Nodes[Output].Phi = &Phi;
-    for (const auto &[Predecessor, Value] : Phi.Args) {
-      (void)Predecessor;
-      use(Value);
-    }
-    if (Phi.ExceptionalEntry)
-      use(*Phi.ExceptionalEntry);
-  }
-
-  void define(const MedOp &Op) {
-    if (Op.Output.Size && !Op.Output.isConst()) {
-      const unsigned Output = nodeOf(Op.Output);
-      if (!Nodes[Output].Op && !Nodes[Output].Phi)
-        Nodes[Output].Op = &Op;
-    }
-    const bool Whole = readsInputsWhole(Op);
-    for (uint8_t I = 0; I < Op.NumInputs; ++I) {
-      use(Op.Inputs[I]);
-      if (Whole)
-        need(Op.Inputs[I], bytesOf(Op.Inputs[I]));
-    }
-  }
-
-  /// Notes that an operation, a PHI or a return reads \p Value.
-  void use(const MedVar &Value) {
-    if (!Value.isConst())
-      Nodes[nodeOf(Value)].Used = true;
-  }
-
-  void need(const MedVar &Value, ByteMask Bytes) {
-    if (Value.isConst())
-      return;
-    Bytes = Value.Size > kMaskBytes && Bytes ? ~ByteMask(0)
-                                             : Bytes & bytesOf(Value);
-    const unsigned Index = nodeOf(Value);
-    Node &N = Nodes[Index];
-    if ((N.Bytes | Bytes) == N.Bytes)
-      return;
-    N.Bytes |= Bytes;
-    if (!N.Pending) {
-      N.Pending = true;
-      Pending.push_back(Index);
-    }
-  }
-
-  /// Reads whole each value nothing reads that something unseen may, then
-  /// carries every need back to the values it rests on.
-  void settle() {
-    const auto Seen = [&](const MedVar &Value) {
-      return Value.Kind == MedVar::Temp ||
-             (Value.Kind == MedVar::Reg &&
-              (Value.RegOff == TRI.IntReturnReg || !OtherRegistersRead));
-    };
-    for (size_t I = 0; I < Nodes.size(); ++I) {
-      if (Nodes[I].Used)
-        continue;
-      if (const MedOp *Op = Nodes[I].Op) {
-        if (!readsInputsWhole(*Op) && !Seen(Op->Output))
-          need(Op->Output, bytesOf(Op->Output));
-      } else if (const PhiNode *Phi = Nodes[I].Phi) {
-        if (!Seen(Phi->Output))
-          need(Phi->Output, bytesOf(Phi->Output));
-      }
-    }
-    while (!Pending.empty()) {
-      const unsigned Index = Pending.back();
-      Pending.pop_back();
-      Nodes[Index].Pending = false;
-      const ByteMask Bytes = Nodes[Index].Bytes;
-      if (const PhiNode *Phi = Nodes[Index].Phi) {
-        for (const auto &[Predecessor, Value] : Phi->Args) {
-          (void)Predecessor;
-          need(Value, Bytes);
-        }
-        if (Phi->ExceptionalEntry)
-          need(*Phi->ExceptionalEntry, Bytes);
-        continue;
-      }
-      const MedOp *Op = Nodes[Index].Op;
-      if (Op && !readsInputsWhole(*Op))
-        inputDemand(
-            *Op, Bytes,
-            [&](const MedVar &Input, ByteMask Needed) { need(Input, Needed); },
-            [&](const MedVar &Input) { return zeroBytes(Input); });
-    }
-  }
-
-  bool reads(const MedVar &Value) const {
-    const auto Found = Index.find(keyOf(Value));
-    return Found != Index.end() && Nodes[Found->second].Bytes;
-  }
-
-  /// Whether an operation, a PHI or a return reads \p Value.
-  bool used(const MedVar &Value) const {
-    const auto Found = Index.find(keyOf(Value));
-    return Found != Index.end() && Nodes[Found->second].Used;
-  }
-
-  /// The bytes of \p Value that are zero whatever the function runs on:
-  /// those of a constant, those a zero extension adds, and what a copy, a
-  /// view, a byte merge, a bitwise operation and a PHI make of them.  The
-  /// values \p Value rests on are worked out together, each PHI starting as
-  /// zero wherever its arms may be, until no answer changes: a flag ANDed
-  /// around a loop stays the byte it started as.  Nothing is known past the
-  /// bound.
-  ByteMask zeroBytes(const MedVar &Value) {
-    if (Value.isConst())
-      return zeroBytesOf(Value);
-    const auto Root = Index.find(keyOf(Value));
-    if (Root == Index.end())
-      return 0;
-    if (const auto Known = Zero.find(Root->second); Known != Zero.end())
-      return Known->second;
-    std::vector<unsigned> Slice, Work{Root->second};
-    llvm::DenseMap<unsigned, ByteMask> Answer;
-    while (!Work.empty()) {
-      const unsigned Each = Work.back();
-      Work.pop_back();
-      if (Answer.count(Each) || Zero.count(Each))
-        continue;
-      const Node &N = Nodes[Each];
-      if (!N.Phi && !(N.Op && passesZeroBytes(*N.Op))) {
-        Zero[Each] = 0;
-        continue;
-      }
-      if (Slice.size() >=
-          ::neverd::limits::pipeline::kPipelineReturnContractsZeroByteValues) {
-        // Past the bound nothing in the slice is known.
-        for (unsigned Seen : Slice)
-          Zero[Seen] = 0;
-        Zero[Each] = 0;
-        return Zero[Root->second] = 0;
-      }
-      Slice.push_back(Each);
-      Answer[Each] = N.Phi ? bytesOf(N.Phi->Output) : bytesOf(N.Op->Output);
-      const auto Push = [&](const MedVar &Input) {
-        if (Input.isConst())
-          return;
-        if (const auto Found = Index.find(keyOf(Input)); Found != Index.end())
-          Work.push_back(Found->second);
-      };
-      if (N.Phi) {
-        for (const auto &[Predecessor, Arm] : N.Phi->Args) {
-          (void)Predecessor;
-          Push(Arm);
-        }
-        if (N.Phi->ExceptionalEntry)
-          Push(*N.Phi->ExceptionalEntry);
-      } else {
-        for (uint8_t I = 0; I < N.Op->NumInputs; ++I)
-          Push(N.Op->Inputs[I]);
-      }
-    }
-    const auto Of = [&](const MedVar &Input) -> ByteMask {
-      if (Input.isConst())
-        return zeroBytesOf(Input);
-      const auto Found = Index.find(keyOf(Input));
-      if (Found == Index.end())
-        return 0;
-      if (const auto Now = Answer.find(Found->second); Now != Answer.end())
-        return Now->second;
-      const auto Known = Zero.find(Found->second);
-      return Known == Zero.end() ? ByteMask(0) : Known->second;
-    };
-    for (bool Changed = true; Changed;) {
-      Changed = false;
-      for (unsigned Each : Slice) {
-        const Node &N = Nodes[Each];
-        ByteMask Now;
-        if (N.Phi) {
-          Now = bytesOf(N.Phi->Output);
-          for (const auto &[Predecessor, Arm] : N.Phi->Args) {
-            (void)Predecessor;
-            Now &= Of(Arm);
-          }
-          if (N.Phi->ExceptionalEntry)
-            Now &= Of(*N.Phi->ExceptionalEntry);
-        } else {
-          Now = zeroBytesThrough(*N.Op, Of);
-        }
-        Now &= Answer[Each];
-        Changed |= Now != Answer[Each];
-        Answer[Each] = Now;
-      }
-    }
-    for (unsigned Each : Slice)
-      Zero[Each] = Answer[Each];
-    return Zero[Root->second];
-  }
-
-private:
-  struct Node {
-    const MedOp *Op = nullptr;
-    const PhiNode *Phi = nullptr;
-    ByteMask Bytes = 0;
-    /// An operation, a PHI or a return reads it.
-    bool Used = false;
-    bool Pending = false;
-  };
-
-  /// The zero bytes of the constant \p Value, among the bytes it has.
-  static ByteMask zeroBytesOf(const MedVar &Value) {
-    ByteMask Zero = 0;
-    for (unsigned Byte = 0; Byte < 8 && (!Value.Size || Byte < Value.Size);
-         ++Byte)
-      if (!((Value.ConstVal >> (8 * Byte)) & 0xFF))
-        Zero |= ByteMask(1) << Byte;
-    return Zero;
-  }
-
-  /// Whether zeroBytesThrough knows what \p Op makes of zero bytes.
-  static bool passesZeroBytes(const MedOp &Op) {
-    if (!Op.Output.Size || Op.Output.Size > 8 ||
-        Op.MemoryOrdering != NdMemoryOrdering::None)
-      return false;
-    const auto Narrow = [](const MedVar &Value) {
-      return Value.Size && Value.Size <= 8;
-    };
-    switch (Op.Opcode) {
-    case NdOp::COPY:
-      return Op.NumInputs == 1 && Op.Inputs[0].Size == Op.Output.Size;
-    case NdOp::INT_ZEXT:
-      return Op.NumInputs == 1 && Narrow(Op.Inputs[0]);
-    case NdOp::INT_AND:
-    case NdOp::INT_OR:
-    case NdOp::INT_XOR:
-      return Op.NumInputs == 2;
-    case NdOp::SUBBYTES:
-      return Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
-             Narrow(Op.Inputs[0]) && Op.Inputs[1].ConstVal < 8;
-    case NdOp::CONCAT:
-      return Op.NumInputs == 2 && Narrow(Op.Inputs[0]) &&
-             Narrow(Op.Inputs[1]) && Op.Inputs[1].Size < 8;
-    default:
-      return false;
-    }
-  }
-
-  /// The zero bytes of what \p Op computes, given its inputs' by \p Of.
-  template <typename OfFn>
-  static ByteMask zeroBytesThrough(const MedOp &Op, OfFn &&Of) {
-    const ByteMask Output = bytesOf(Op.Output);
-    switch (Op.Opcode) {
-    case NdOp::COPY:
-      return Of(Op.Inputs[0]) & Output;
-    case NdOp::INT_ZEXT: {
-      const ByteMask Low = bytesOf(Op.Inputs[0]);
-      return ((Of(Op.Inputs[0]) & Low) | ~Low) & Output;
-    }
-    case NdOp::INT_AND:
-      return (Of(Op.Inputs[0]) | Of(Op.Inputs[1])) & Output;
-    case NdOp::INT_OR:
-    case NdOp::INT_XOR:
-      return Of(Op.Inputs[0]) & Of(Op.Inputs[1]) & Output;
-    case NdOp::SUBBYTES:
-      return (Of(Op.Inputs[0]) >> Op.Inputs[1].ConstVal) & Output;
-    case NdOp::CONCAT:
-      return ((Of(Op.Inputs[0]) << Op.Inputs[1].Size) |
-              (Of(Op.Inputs[1]) & bytesOf(Op.Inputs[1]))) &
-             Output;
-    default:
-      return 0;
-    }
-  }
-
-  unsigned nodeOf(const MedVar &Value) {
-    const auto [Found, New] =
-        Index.try_emplace(keyOf(Value), static_cast<unsigned>(Nodes.size()));
-    if (New)
-      Nodes.emplace_back();
-    return Found->second;
-  }
-
-  const TargetRegInfo &TRI;
-  /// Whether something no operation shows may read a register other than
-  /// the integer return register (leavesOtherRegisters).
-  bool OtherRegistersRead;
-  ValueMap<unsigned> Index;
-  std::vector<Node> Nodes;
-  std::vector<unsigned> Pending;
-  /// The zero bytes of the values asked about, by node (zeroBytes).
-  llvm::DenseMap<unsigned, ByteMask> Zero;
 };
 
 /// A live-in self-copy names the value the register already holds.
@@ -745,27 +267,6 @@ std::optional<va_t> ownRoutineOf(const BinaryImage &Img,
                           Address.Target ? *Address.Target : *Address.Slot);
 }
 
-/// Whether something no operation of \p Func shows may read what it holds
-/// in a register other than the integer return register: a caller, where
-/// the function returns a record of registers or a floating-point or
-/// vector value, or nothing yet says it returns an integer; and an
-/// exception handler, where the function has an exceptional edge.
-bool leavesOtherRegisters(const MedFunc &Func) {
-  if (!Func.MultiReturn.empty() || Func.FPReturnViaX87 ||
-      Func.ExplicitX87ReturnValue || Func.ReturnsVectorRegister)
-    return true;
-  TypeRef Type = Func.ReturnType;
-  if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
-    Type = Func.SourceTypeHint->ReturnType;
-  if (!Type ||
-      (Type->Kind != NdTypeKind::Int && Type->Kind != NdTypeKind::Ptr &&
-       Type->Kind != NdTypeKind::Void))
-    return true;
-  return llvm::any_of(Func.Blocks, [](const MedBlock &Block) {
-    return !Block.ExceptionalSuccs.empty() || !Block.ExceptionalPreds.empty();
-  });
-}
-
 FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
                            const BinaryImage &Img,
                            const std::map<va_t, va_t> &ArgumentSources) {
@@ -773,8 +274,7 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
   FunctionFacts Facts;
   Facts.Func = &Func;
   std::vector<const MedOp *> Calls;
-  ByteDemand Demand(TRI, leavesOtherRegisters(Func));
-  std::vector<MedVar> HandedBack;
+  MedByteDemand Demand(TRI, medLeavesOtherRegisters(Func));
   for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis) {
       Facts.WritesReturnRegister |= Phi.Output.Kind == MedVar::Reg &&
@@ -800,10 +300,9 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
             Func, Block, static_cast<size_t>(&Op - Block.Ops.data()), TRI,
             Target);
         Facts.Returns.push_back(Returned);
-        if (Returned && !Returned->isConst()) {
-          HandedBack.push_back(*Returned);
-          Demand.use(*Returned);
-        }
+        // classify sees through the views MedByteDemand::handBack follows.
+        if (Returned)
+          Demand.handBack(*Returned);
         continue;
       }
       Demand.define(Op);
@@ -811,38 +310,6 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
           Op.Output.Size && !Op.Output.isConst())
         Calls.push_back(&Op);
     }
-  }
-  // What a return hands back: a call's result as it comes, through the PHIs
-  // that merge it and the views of it a return reads (classify sees through
-  // the same); any other value is one the function computes, read whole.
-  ValueMap<bool> Returned;
-  while (!HandedBack.empty()) {
-    const MedVar Value = HandedBack.back();
-    HandedBack.pop_back();
-    if (Value.isConst() || !Returned.try_emplace(keyOf(Value), true).second)
-      continue;
-    if (const auto Phi = Facts.Phis.find(keyOf(Value));
-        Phi != Facts.Phis.end()) {
-      for (const auto &[Predecessor, Arm] : Phi->second->Args) {
-        (void)Predecessor;
-        HandedBack.push_back(Arm);
-      }
-      continue;
-    }
-    const auto Def = Facts.Defs.find(keyOf(Value));
-    if (Def == Facts.Defs.end())
-      continue;
-    const MedOp &Op = *Def->second;
-    const bool View =
-        ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT ||
-          Op.Opcode == NdOp::INT_SEXT) &&
-         Op.NumInputs == 1) ||
-        (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
-         Op.Inputs[1].isConst() && Op.Inputs[1].ConstVal == 0);
-    if (View && !readsInputsWhole(Op))
-      HandedBack.push_back(Op.Inputs[0]);
-    else if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
-      Demand.need(Value, bytesOf(Value));
   }
   Demand.settle();
   // A call's callee is known once every definition is: an indirect call may
@@ -863,7 +330,7 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
       continue;
     FunctionFacts::ResultUse &Use = Facts.CallResults[*Callee];
     Use.Read |= Demand.reads(Call->Output);
-    Use.Returned |= Returned.count(keyOf(Call->Output)) != 0;
+    Use.Returned |= Demand.handsBack(Call->Output);
   }
   return Facts;
 }
@@ -1084,7 +551,7 @@ private:
 
   /// A call that returns no value leaves no result to read, and the C shows
   /// a read of one as unknown.  Where an operation reads such a result but
-  /// nothing depends on a byte of it (ByteDemand), the operation reads zero
+  /// nothing depends on a byte of it (MedByteDemand), the operation reads zero
   /// instead: the bytes it took from the result reach nothing.
   void zeroUnreadResults() {
     for (State &S : States) {
