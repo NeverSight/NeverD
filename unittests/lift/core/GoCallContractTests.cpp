@@ -4879,4 +4879,62 @@ TEST(GoAssembly, GoCodeHasNoVariadicPrologue) {
   EXPECT_FALSE(lift(T.Img, Preempt).IsVariadic);
 }
 
+TEST(GoAssembly, ACallToCodeTheGoToolchainDidNotBuildFollowsThePlatform) {
+  // A routine the pclntab does not record is none the Go toolchain built:
+  // a libc routine a Darwin trampoline reaches through its stub.  It keeps
+  // the registers the platform's convention keeps, and the trampoline
+  // holds its argument block in X19 across the call.  As a call into Go
+  // code, which keeps no register, the store through X19 was unknown.
+  //   runtime.tramp: stp x29, x30, [sp, #-16]!; mov x19, x0; ldr x0, [x19]
+  //                  bl helper; str x0, [x19, #8]
+  //                  ldp x29, x30, [sp], #16; ret
+  //   helper:        add x0, x0, #1; ret
+  constexpr va_t Tramp = kTextVA + 0x100;
+  constexpr va_t Helper = kTextVA + 0x200;
+  constexpr va_t Site = Tramp + 12;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call = 0x94000000u | (((Helper - Site) >> 2) & 0x3FFFFFFu);
+  T.writeText(Tramp, words({0xA9BF7BFD, 0xAA0003F3, 0xF9400260, Call,
+                            0xF9000660, 0xA8C17BFD, 0xD65F03C0}));
+  T.writeText(Helper, words({0x91000400, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{Tramp, "runtime.tramp"}, std::pair{Helper, "helper"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Tramp, Tramp + 0x40}};
+  Module.GoAssembly = {{Tramp, Tramp + 0x40}};
+  Module.FrameArguments = {{Tramp, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  EXPECT_EQ(callRegisterContractOf(T.Img, Tramp, Helper),
+            CallRegisterContract::Platform);
+  // A call into Go code, or one that names no target, stays Go's.
+  EXPECT_EQ(callRegisterContractOf(T.Img, Tramp, Tramp),
+            CallRegisterContract::GoCode);
+  EXPECT_EQ(callRegisterContractOf(T.Img, Tramp, InvalidVA),
+            CallRegisterContract::GoCode);
+
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "runtime_tramp");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("helper("), std::string::npos) << Text;
+
+  // Without the table of the functions the pclntab records, nothing tells
+  // code it left out from code inside a function: the call stays Go's.
+  T.Img.ExceptionMetadata.GoModule->FrameArguments.clear();
+  EXPECT_EQ(callRegisterContractOf(T.Img, Tramp, Helper),
+            CallRegisterContract::GoCode);
+}
+
 } // namespace

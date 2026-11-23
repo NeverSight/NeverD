@@ -197,6 +197,16 @@ CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
                                             va_t Callee) {
   if (!isGoCode(Img, Caller))
     return CallRegisterContract::Platform;
+  // A routine the pclntab does not record is none the Go toolchain built: a
+  // libc routine reached through its stub follows the platform's convention
+  // and keeps its callee-saved registers, as Darwin's
+  // `runtime.mmap_trampoline` expects of X19, where it holds its arguments.
+  // Code with a record but no frame data, as a linker trampoline into a Go
+  // function is, stays under Go's.
+  if (const auto &Module = Img.ExceptionMetadata.GoModule;
+      Callee != InvalidVA && Module && !Module->FrameArguments.empty() &&
+      !isGoCode(Img, Callee) && !goRecordsFunction(Img, Callee))
+    return CallRegisterContract::Platform;
   // Compiled code of a register-ABI image follows the internal ABI, so
   // its x86-64 calls keep X15 zero.
   const bool Internal = usesGoRegisterArguments(Img, Caller);

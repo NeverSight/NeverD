@@ -6303,6 +6303,15 @@ Darwin's `runtime.adjustSignalStack` and `runtime.entersyscallblock` for
 Darwin ones. A variadic function is no context save, so the thirty-two
 vector registers `asyncPreempt` keeps printed as registers nothing defines.
 
+A call Go code makes to a routine the `pclntab` does not record follows the
+platform's convention (`callRegisterContractOf`): the Go toolchain built no
+such routine. Darwin's `runtime.mmap_trampoline` holds its argument block in
+X19 across `BL libc_mmap(SB)`, which libc keeps and Go code would not, so
+every store after the call went through a register nothing defines. Code
+with a record but no frame data, as a linker trampoline into a Go function
+is, stays under Go's, and so does every call where the table of recorded
+functions is unproven.
+
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
 read of one after a call, before any write, is a result, and so is every

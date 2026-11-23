@@ -21071,6 +21071,11 @@ a point inside Duff's device does too, and the C traps nowhere.
 x86-64 routine gets no operands from its body.
 `GoAssembly.GoCodeHasNoVariadicPrologue` lifts arm64 code that stores X0 to
 X7 and Q0 to Q7: variadic as the platform's code, and not as Go code.
+`GoAssembly.ACallToCodeTheGoToolchainDidNotBuildFollowsThePlatform` lifts an
+arm64 trampoline that keeps its argument block in X19 across a call to code
+outside the pclntab: the call follows the platform's contract, the store
+after it traps nowhere, and a call into Go code or without the table of
+recorded functions stays Go's.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.

@@ -65,7 +65,9 @@ std::optional<FixedIntegerCallArguments>
 goWriteBarrierArguments(const BinaryImage &Img, va_t Entry);
 
 /// The contract of a call the code at \p Caller makes to \p Callee, which is
-/// InvalidVA where the call names no fixed target.
+/// InvalidVA where the call names no fixed target.  Go code's call to a
+/// routine the `pclntab` does not record, as a libc routine's stub, follows
+/// the platform's.
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
                                             va_t Callee);
 
