@@ -547,6 +547,51 @@ TEST(AArch64ImplicitUnwind, SynchronousDwarfLeavesPartialFrameRowsImplicit) {
   EXPECT_EQ(F.at(5).Status, Status::Unknown);
 }
 
+TEST(AArch64ImplicitUnwind, RegisterBranchesFollowLocalCodeAndCallerLR) {
+  Frame Local{SignB, ForwardThreeWordsInX9, Indirect, ClobberLR, AuthB, Ret};
+  auto Rows = recoverDarwinAArch64Unwind(Local.Image, Local.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  constexpr auto Word = sizeof(uint32_t);
+  EXPECT_EQ(aarch64UnwindRowAt(*Rows, 3 * Word).Signing.Status,
+            Status::Unknown);
+  ASSERT_TRUE(aarch64UnwindRowAt(*Rows, 4 * Word).Signing.State);
+  EXPECT_EQ(aarch64UnwindRowAt(*Rows, 4 * Word).Signing.State->Kind, Kind::SP);
+  ASSERT_TRUE(aarch64UnwindRowAt(*Rows, 5 * Word).Signing.State);
+  EXPECT_EQ(aarch64UnwindRowAt(*Rows, 5 * Word).Signing.State->Kind,
+            Kind::Unsigned);
+
+  Frame Caller{SaveInX9, Indirect, ClobberLR};
+  EXPECT_EQ(Caller.at(1).Status, Status::Known);
+  EXPECT_EQ(Caller.at(2).Status, Status::Unknown);
+
+  Frame SignedTarget{SignB, SaveInX9, AuthB, Indirect};
+  EXPECT_EQ(SignedTarget.at(3).Status, Status::Unsupported);
+}
+
+TEST(AArch64ImplicitUnwind, ObjectEpilogueIncludesAllCompatibleInteriorPCs) {
+  constexpr auto Word = sizeof(uint32_t);
+  Frame F{SignB, AuthB, Indirect, Nop, Ret};
+  EXPECT_EQ(F.at(2).Status, Status::Unsupported);
+  AArch64ClassicReturnCFI Source{{{Word, true}, {2 * Word, false}}, {2 * Word}};
+  auto Rows = recoverDarwinAArch64ObjectUnwind(F.Image, F.Function, Source);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  for (size_t PC : {2 * Word, 3 * Word, 4 * Word}) {
+    const auto &Row = aarch64UnwindRowAt(*Rows, PC);
+    ASSERT_TRUE(Row.Signing.State);
+    EXPECT_EQ(Row.Signing.State->Kind, Kind::Unsigned);
+    EXPECT_EQ(Row.StackOffset, 0);
+  }
+
+  // Another unsigned row is a possible landing point. Its PAC changes LR
+  // before RET, contradicting the claimed unsigned continuation.
+  Frame Conflict{SignB, AuthB, Indirect, SignB, Ret};
+  auto Bad = recoverDarwinAArch64ObjectUnwind(Conflict.Image, Conflict.Function,
+                                              Source);
+  EXPECT_FALSE(bool(Bad));
+  if (!Bad)
+    llvm::consumeError(Bad.takeError());
+}
+
 TEST(AArch64ImplicitUnwind, IncompleteFramesAndUnknownEdgesFailClosed) {
   for (auto Branch : {Indirect, LocalCall}) {
     Frame F{Branch, Nop, Ret};

@@ -480,14 +480,35 @@ installer replaces the redundant one-byte DWARF opcode with `DW_CFA_nop` in
 the output. Other register rules, pointer relocations and language tables
 keep their positions.
 
-An asynchronous r6 FDE can also mark LR unsigned before a return, a direct tail
-call, or a register tail call to a statically identified function. The installer
-evaluates remembered and restored CFI independently on each exit. It checks
-the installed authentication instruction, live LR,
-incoming SP and signing states. A mismatched key, an unexplained signing
-transition or a mixed signing-column rule leaves the candidate unpublished.
+An asynchronous r6 FDE can also mark LR unsigned after `AUTIBSP` and before
+a return or tail branch. The installer evaluates remembered and restored CFI
+at each exit and checks the installed instructions, incoming SP and live LR.
+A register branch with a known in-frame address follows that instruction and
+checks its declared return location, including a signed stack copy.
+A known separate target must identify a callable entry. An unsigned copy of
+the incoming LR leads back to the caller.
+
+For a runtime-selected target, including a callback read from a writable slot,
+the installer uses the original FDE to validate the conversion. The epilogue
+must restore the incoming LR, SP and ABI-preserved registers. Recovery follows
+every in-frame instruction compatible with that caller state and checks the
+CFA and signing rule at every instruction it reaches. A canonical FP-based
+row saves the caller's FP in the first word of its frame record. Entering
+that row with the caller's FP already restored would create a self-link.
+An ambiguous saved-LR row, a contradictory local edge or a mismatched key
+prevents publication. [Apple frame-pointer requirements](https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms) · [Arm frame record specification](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst#the-frame-pointer).
+The callback remains runtime-selected. Instruction-only analysis of an image
+without the source signing rows still reports an unresolved register branch.
 The LLVM source fork emits the implicit Darwin recipe directly.
 [LLVM fork change](https://github.com/NeverSight/llvm-project/pull/8).
+
+On macOS 26.7.2 and 27.0.1, each runner executed eight installed register-tail
+images and eight linked controls. The O0/O2 callbacks changed at runtime in
+both SP- and FP-based frames. The C++ driver caught an exception before the
+tail transfer and another in the selected callback. Two other inputs exercised
+an in-frame continuation alongside a separate function, and a local continuation
+that restored a signed LR from its frame record.
+[Native register-tail calls and exception checks](https://github.com/gmh5225/test_mac_intel/actions/runs/45103044214).
 
 The r6 emitter reproduced 14 O0/O2 fixture objects byte for byte. On macOS
 26.7.2 and 27.0.1, the installed images ran their constructor and destructor
