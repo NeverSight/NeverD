@@ -6322,10 +6322,11 @@ is the word the closure context register points at when the call is made
 it loads reaches the platform's code: `runtime.nanotime1`, `walltime` and
 `vgetrandom1` call the vDSO routine whose address a variable holds, with
 the goroutine's stack pointer in R20 and `m` in R21, which that routine
-keeps and Go code would not. `goAssemblyCallsPlatformCode` follows the call's
-target to the load that defines it, in the call's block or the blocks that
-alone lead to it, and compares the address it read with the context register
-at the call; `LowToMedConverter` gives such a call the platform's contract.
+keeps and Go code would not. `goAssemblyCallsPlatformCode` numbers the values
+of the blocks behind the call, a block keeping what every block that leads
+to it agrees on: where a load defines the target, it compares the address
+the load read with the context register at the call; `LowToMedConverter`
+gives such a call the platform's contract.
 A target no load in reach defines says nothing, and compiled code, which
 calls through method tables too, is not asked. On x86-64 the same routines
 switch to the system stack first: with R12 kept, the frame they return to

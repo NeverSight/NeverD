@@ -72,10 +72,13 @@ goWriteBarrierArguments(const BinaryImage &Img, va_t Entry);
 /// call is made (`MOVD R3, R26; MOVD 0(R3), R3; BL (R3)`).  A call through
 /// any other pointer it loads is a call into the platform's code: a vDSO
 /// routine whose address a variable holds (`runtime.nanotime1`), a C
-/// function a cgo call passes (`runtime.asmcgocall`).  The target is
-/// followed to its load in the call's block or, with no call between, in
-/// the blocks that alone lead to it (kGoIndirectCallTargetBlocks); a target
-/// no such load defines says nothing, and the call stays Go's.
+/// function a cgo call passes (`runtime.asmcgocall`).  The values of the
+/// blocks behind the call are numbered as far back as
+/// kGoIndirectCallTargetBlocks, a block keeping what every block that leads
+/// to it agrees on: the target must be the result of a load there, and the
+/// address the load read another value than the context register holds at
+/// the call.  A target no load in reach defines says nothing, and the call
+/// stays Go's.
 bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
                                  llvm::ArrayRef<LowBlock> Blocks, size_t Block,
                                  size_t Call);

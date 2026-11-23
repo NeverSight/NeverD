@@ -4990,12 +4990,18 @@ TEST(GoAssembly, ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform) {
   //          str x0, [x20]; ldp x29, x30, [sp], #32; ret
   //   fval:  the same, with `mov x26, x1` before the load
   //   cross: the same as plat, with `cbz x2` between the load and the call
+  //   join:  the same as plat, with `cbz x3, 1f; add x4, x4, #1; 1:` there,
+  //          so two blocks lead to the call's
   constexpr va_t Plat = kTextVA + 0x100;
   constexpr va_t FuncValue = kTextVA + 0x140;
   constexpr va_t Cross = kTextVA + 0x180;
+  constexpr va_t Joined = kTextVA + 0x1C0;
   GoTestImage T(Arch::AArch64);
   T.writeText(Plat, words({0xA9BE7BFD, 0xAA0003F4, 0xF9400022, 0xD63F0040,
                            0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
+  T.writeText(Joined,
+              words({0xA9BE7BFD, 0xAA0003F4, 0xF9400022, 0xB4000043, 0x91000484,
+                     0xD63F0040, 0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
   T.writeText(FuncValue,
               words({0xA9BE7BFD, 0xAA0003F4, 0xAA0103FA, 0xF9400022, 0xD63F0040,
                      0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
@@ -5003,7 +5009,7 @@ TEST(GoAssembly, ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform) {
                             0xD63F0040, 0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
   for (const auto &[Entry, Name] :
        {std::pair{Plat, "runtime.plat"}, std::pair{FuncValue, "runtime.fval"},
-        std::pair{Cross, "runtime.cross"}}) {
+        std::pair{Cross, "runtime.cross"}, std::pair{Joined, "runtime.join"}}) {
     Symbol Function = Symbol::makeFunc(Entry);
     Function.Name = Name;
     T.Img.Symbols.push_back(std::move(Function));
@@ -5012,8 +5018,9 @@ TEST(GoAssembly, ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform) {
   Module.PclnTabMagic = 0xFFFFFFF1u;
   Module.RegisterArguments = true;
   Module.GoCode = {{kTextVA, kTextVA + 0x400}};
-  Module.GoAssembly = {{Plat, Plat + 0xC0}};
-  Module.FrameArguments = {{Plat, 0, 0}, {FuncValue, 0, 0}, {Cross, 0, 0}};
+  Module.GoAssembly = {{Plat, Plat + 0x100}};
+  Module.FrameArguments = {
+      {Plat, 0, 0}, {FuncValue, 0, 0}, {Cross, 0, 0}, {Joined, 0, 0}};
   T.Img.ExceptionMetadata.GoModule = std::move(Module);
 
   // The contract of the routine's one indirect call.
@@ -5028,12 +5035,13 @@ TEST(GoAssembly, ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform) {
   };
   EXPECT_EQ(Contract(Plat), CallRegisterContract::Platform);
   EXPECT_EQ(Contract(Cross), CallRegisterContract::Platform);
+  EXPECT_EQ(Contract(Joined), CallRegisterContract::Platform);
   EXPECT_EQ(Contract(FuncValue), CallRegisterContract::GoCode);
   // Compiled code calls through method tables and func values alike: only
   // assembly's pointers are told apart.
   T.Img.ExceptionMetadata.GoModule->GoAssembly.clear();
   EXPECT_EQ(Contract(Plat), CallRegisterContract::GoInternal);
-  T.Img.ExceptionMetadata.GoModule->GoAssembly = {{Plat, Plat + 0xC0}};
+  T.Img.ExceptionMetadata.GoModule->GoAssembly = {{Plat, Plat + 0x100}};
 
   PipelineOptions Options;
   Options.EmitDumpOutput = false;
@@ -5041,7 +5049,7 @@ TEST(GoAssembly, ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform) {
   const PipelineResult R = Pipeline().run(T.Img, Context, Options);
   ASSERT_TRUE(R.Success) << R.Error;
   EXPECT_EQ(R.MedIRVerifierFailures, 0u);
-  for (const char *Name : {"runtime_plat", "runtime_cross"}) {
+  for (const char *Name : {"runtime_plat", "runtime_cross", "runtime_join"}) {
     const std::string Text = highCBody(R, T.Img, Name);
     ASSERT_FALSE(Text.empty()) << Name;
     EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
