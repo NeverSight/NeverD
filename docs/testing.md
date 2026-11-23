@@ -9240,6 +9240,9 @@ arguments and R10 without RAX: R10 stays a value nothing defines.
 `AAPCS64CallContract.AContextSaveReadsTheVectorRegistersItStores` stores
 x9 to x12 with q16 and d17: both vector registers are read from the
 machine, and a q16 stored alone stays unknown.
+`AArch64RegisterViews.ALoadedByteReachesAReadOfTheLowByteAfterAJoin` runs a
+function that loads a byte into w7 on one path, sets x7 on the other and
+extracts the low byte after the join: it must return the byte it loaded.
 `AAPCS64CallContract.AContextSaveStoresVectorRegistersWithWriteback`
 stores x9 to x12 and v16 to v19 with one post-indexed ST1: the four vector
 registers are read from the machine.

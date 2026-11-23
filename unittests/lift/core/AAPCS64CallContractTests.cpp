@@ -3726,4 +3726,34 @@ TEST(AAPCS64CallContract, AContextSaveStoresVectorRegistersWithWriteback) {
     EXPECT_NE(Source.find(Read), std::string::npos) << Read << "\n" << Source;
 }
 
+TEST(AArch64RegisterViews, ALoadedByteReachesAReadOfTheLowByteAfterAJoin) {
+  // One path loads a byte into w7 and the other sets x7 whole; after the
+  // join the code extracts x7's low byte.  The load writes w7 as the
+  // zero-extension of a temporary.  The pass that projects a block's last
+  // wide write onto the narrower views other blocks read took every
+  // zero-extension for one of the register's own slice and skipped it, so
+  // the byte view kept the 100 an earlier `mov w7, #100` gave it: the
+  // function returned 100 for whatever byte it loaded.
+  //   pick: mov w7, #100; cbz x1, 1f; ldrb w7, [x0]; b 2f
+  //   1:    orr x7, xzr, #0x30
+  //   2:    ubfx x0, x7, #0, #8; ret
+  const BinaryImage Image = makeImage({{Text,
+                                        {0x52800C87u, // mov w7, #100
+                                         0xB4000061u, // cbz x1, 1f
+                                         0x39400007u, // ldrb w7, [x0]
+                                         0x14000002u, // b 2f
+                                         0xB27C07E7u, // orr x7, xzr, #0x30
+                                         0xD3401CE0u, // ubfx x0, x7, #0, #8
+                                         Ret}}},
+                                      {{Text, "pick"}}, {});
+  const std::string Source = highC(Image, {Text});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  source_call_execution_test::compileAndRun(Source + R"C(
+int main(void) {
+  unsigned char byte = 0x41;
+  return pick(&byte, 1) == 0x41 && pick(&byte, 0) == 0x30 ? 0 : 1;
+}
+)C");
+}
+
 } // namespace

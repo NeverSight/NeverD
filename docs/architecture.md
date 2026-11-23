@@ -5682,6 +5682,21 @@ the same width leave none, and the access stays raw. A pointer names a
 member as the array it indexes only where it holds an array member's
 address (`s->heap[i]`), never the first member of the record it points to.
 
+A register's views share no variable: X7, W7 and the byte the code reads
+with `ubfx x10, x7, #0, #8` are three, and `fixupSubRegisters` keeps them in
+step before SSA. Within a block a narrow read after a wider write is an
+extraction from that write. Across blocks, a block's last wide write is
+projected onto each narrower view another block reads (Phase C), so the
+view's own chain carries the new low bytes through the PHIs. The
+zero-extension the pass inserts after a 32-bit write is no such write for a
+view its source covers: the source is that view's definition. A
+zero-extension of anything else defines the whole register, and its low
+bytes with it. AArch64's `ldrb w7, [x0]` is one, of the byte the load gave,
+and it was skipped with the others, so after a join with a path that set X7
+whole the byte view still held what an earlier write had left: Go's
+`strconv.roundShortest` compared a stale digit, and a function returned a
+constant for the byte it had just loaded.
+
 ## System boundary
 
 The Qt workbench keeps project writes and browsing in one `neverd-worker` and
