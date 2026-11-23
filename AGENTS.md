@@ -17,6 +17,7 @@ relevant symbols with `rg -n`, then read the surrounding section.
 | Change C/C++ code, headers, limits, or defaults | [Code style](CONTRIBUTING.md#code-style), including header layout and policy ownership |
 | Change a hot path, container, index, parallel loop, cache or threshold; claim or review a speedup | [Performance skill](.agents/skills/neverd-performance/SKILL.md) |
 | Change or review Windows SEH, `_local_unwind`, Control Flow Guard, or a rewrite of a PE with exception tables | [Windows SEH skill](.agents/skills/neverd-windows-seh/SKILL.md) |
+| Change a GitHub workflow, action pin, or workflow trigger | [Workflow trust skill](.agents/skills/neverd-workflow-trust/SKILL.md) |
 | Change CLI behavior or usage | [CLI usage](README.md#cli) |
 | Change GUI, SDK/plugins, or another subsystem | The matching guide in the [documentation index](docs/README.md) |
 | Prepare a PR, reuse external code, or update documentation | [Contributing](CONTRIBUTING.md) and [attribution](ATTRIBUTION.md) |
@@ -44,6 +45,9 @@ relevant symbols with `rg -n`, then read the surrounding section.
 - Make changes to LLVM itself in the [NeverSight LLVM fork](https://github.com/NeverSight/llvm-project).
   Commit, push and merge them there before updating NeverD's LLVM submodule.
   Do not add LLVM patch files or build-directory source overlays to NeverD.
+- A workflow that runs in this repository is the file on the trusted branch.
+  A fork must not be able to replace that file or the actions it runs. Follow
+  the [workflow trust skill](.agents/skills/neverd-workflow-trust/SKILL.md).
 
 ## Build, verify, finish
 
