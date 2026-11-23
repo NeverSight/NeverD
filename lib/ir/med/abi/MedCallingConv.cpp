@@ -713,14 +713,23 @@ static bool phiHoldsUnwrittenRegister(const MedFunc &Func, uint64_t Register) {
   return false;
 }
 
-void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
-                          llvm::ArrayRef<uint64_t> ParamRegs,
-                          llvm::ArrayRef<uint64_t> IntegerRegs,
-                          std::set<uint64_t> UsedParamRegs, Arch TargetArch,
-                          const CallArgumentConvention *Convention,
-                          const GPRReadWidths *EntryReadSummary,
-                          bool GoRegisterArguments,
-                          std::optional<size_t> ProtoArgs) {
+/// Whether \p Reads lists a read of \p Register.  The table has a row for
+/// each register a summary tracks; one past them, as arm64's X24 and up,
+/// is listed by none.
+static bool summaryReads(const GPRReadWidths &Reads, uint64_t Register) {
+  const uint64_t Row = Register / 8;
+  return Row < Reads.size() && Reads[Row];
+}
+
+/// \p FixedOperands: \p IntegerRegs are the operands a contract fixes, each
+/// of which the function takes whether or not \p EntryReadSummary has a row
+/// for its register (a Go write barrier's shared body takes arm64's X25).
+void detectRegisterParams(
+    MedFunc &Func, const TargetRegInfo &TRI, llvm::ArrayRef<uint64_t> ParamRegs,
+    llvm::ArrayRef<uint64_t> IntegerRegs, std::set<uint64_t> UsedParamRegs,
+    Arch TargetArch, const CallArgumentConvention *Convention,
+    const GPRReadWidths *EntryReadSummary, bool GoRegisterArguments,
+    std::optional<size_t> ProtoArgs, bool FixedOperands = false) {
   // A routine with a platform prototype (a documented WDK routine) takes
   // exactly its declared parameters, however its body forwards registers to
   // other calls.
@@ -748,7 +757,7 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
   } else if (FromSummary) {
     UsedParamRegs.clear();
     for (size_t I = 0; I < ParamRegs.size() && I < IntegerRegs.size(); ++I)
-      if ((*EntryReadSummary)[ParamRegs[I] / 8])
+      if (FixedOperands || summaryReads(*EntryReadSummary, ParamRegs[I]))
         UsedParamRegs.insert(ParamRegs[I]);
     // A positional convention's slot may carry a floating argument in its
     // vector register instead.
@@ -1846,8 +1855,11 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
     }
     GPRReadWidths FixedReads{};
     if (GoFixedOperands) {
+      // The table has no row for a register past those a summary tracks:
+      // detectRegisterParams takes the operands from the list itself.
       for (uint64_t Register : IntegerRegs)
-        FixedReads[Register / 8] = 8;
+        if (Register / 8 < FixedReads.size())
+          FixedReads[Register / 8] = 8;
       Summary = &FixedReads;
       Func.ExactRegisterParameters = true;
     }
@@ -1896,7 +1908,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
       if (Summary) {
         BoundedReads = *Summary;
         for (size_t K = *Bound; K < IntegerRegs.size(); ++K)
-          BoundedReads[IntegerRegs[K] / 8] = 0;
+          if (IntegerRegs[K] / 8 < BoundedReads.size())
+            BoundedReads[IntegerRegs[K] / 8] = 0;
         Summary = &BoundedReads;
       }
     }
@@ -1905,7 +1918,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
                          GoRegisterArguments || BufferBarrier ||
                              BoundsRoutine || GrowthRoutine ||
                              Func.StackArgumentsOnly || GoFixedOperands,
-                         BoundRegisters);
+                         BoundRegisters, GoFixedOperands);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
