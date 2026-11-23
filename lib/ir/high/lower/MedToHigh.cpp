@@ -553,6 +553,13 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
         return Scalar;
       return HighExpr::makeVar(Param, Type);
     }
+    // Call recovery names the entry value of a register a call passes on
+    // this way before it knows the function's parameters.  One no parameter
+    // arrives in is unknown, as the rename sentinel below is: a stack-ABI
+    // routine takes nothing in RDI, whatever its dispatch through a table
+    // passes on in it.
+    if (V.Id < 0 && V.RegOff != kNoParamReg)
+      return HighExpr::makeUndef(V.Size);
   }
 
   // SSA version -1 is the rename sentinel for a register no definition and
@@ -664,7 +671,7 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
                    (isEntryLiveInValue(*CurMed, Src, Src.RegOff) ||
                     (Src.SSAVer == 0 && !DefinedVersions.count(varKey(Src)) &&
                      !findCallClobber(Src))))
-            Idx = regToArgIdx(Src.RegOff);
+            Idx = abiParamIndex(Src);
           if (Idx >= 0 && static_cast<size_t>(Idx) < CurMed->Params.size())
             ParamSourceCopies.push_back({&Op, Idx});
         }
@@ -1983,7 +1990,12 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
                                 limits::kVariadicOverflowSlop);
   }
   Func.Name = Med.Name;
-  Func.DoesNotReturn = Med.DoesNotReturn;
+  // A routine whose calls resume at their return address is no `_Noreturn`
+  // function to C, though its own code never returns: the scheduler resumes
+  // the caller of `runtime.mcall` after the call (goCallResumesAfter), and a
+  // C compiler told otherwise would drop what follows.
+  Func.DoesNotReturn =
+      Med.DoesNotReturn && !(Image && goCallResumesAfter(*Image, Med.Entry));
   Func.ReturnsNoValue = Med.ReturnsNoValue;
   Func.IsVariadic = Med.IsVariadic;
   Func.UsesNativeVariadicStack = usesDarwinVariadicEntryStack(

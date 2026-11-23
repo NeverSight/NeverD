@@ -166,6 +166,14 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
        !Options.X64TerminalImports.empty()))
     return Invalid("machine regions exclude ordinary return-slot and terminal "
                    "import contracts");
+  if (Options.EntryReturnSlot &&
+      (Options.X64MachineExits.empty() || !Options.EntryFrameBounds ||
+       Options.EntryReturnSlot->Offset != 0 ||
+       Options.EntryReturnSlot->Bytes != 8 ||
+       Options.EntryFrameBounds->Begin > 0 ||
+       Options.EntryFrameBounds->End < 8))
+    return Invalid("entry return slot requires a complete x64 caller word "
+                   "within a machine-region entry frame");
   if ((!Options.EntryFrameExcludedObjects.empty() ||
        !Options.EntryFrameLoadedObjects.empty()) &&
       (!Options.EntryFrameBounds ||

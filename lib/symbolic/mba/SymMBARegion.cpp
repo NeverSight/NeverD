@@ -259,20 +259,69 @@ bool isMinimalVariableSum(const SymContext &Ctx, SymRef E,
                      [&](SymRef Term) { return Ctx.op(Term) == SymOp::Var; });
 }
 
-// A canonical affine sum already is its sparse conjunction-basis form:
-// only the constant and singleton coefficients are nonzero. Read those
-// coefficients structurally instead of allocating all 2^N Boolean corners.
-// The exact body remains the candidate; restoring opaque inputs and the
-// arithmetic pass retain coefficient factoring opportunities.
-bool isCanonicalAffineSum(const SymContext &Ctx, SymRef R, size_t Atoms) {
-  if (Atoms < limits::kMinCanonicalAffineAtoms || Ctx.op(R) != SymOp::Add)
-    return false;
-  return llvm::all_of(Ctx.operands(R), [&](SymRef Term) {
+// Return the work for a structural reading, or zero for the corner-table path.
+size_t directLinearWork(const SymContext &Ctx, SymRef R, size_t Atoms,
+                        SymRef Original) {
+  const auto Op = Ctx.op(R);
+  if (Atoms && (Op == SymOp::Or || Op == SymOp::And || Op == SymOp::Xor)) {
+    // For one-bit XOR the additive form is equally short. Restoring hidden
+    // inputs into that form can cancel a sum against its individual bits.
+    if (Op == SymOp::Xor && Ctx.width(R) == 1 && R != Original)
+      return 0;
+    if (Atoms < limits::kMinReadOnceAtoms &&
+        llvm::APInt::getNumWords(Ctx.width(R)) <
+            limits::kMinReadOnceWordLimbs) {
+      // A uniform mask column can be a small join of slices of very wide
+      // carriers. Their restoration would otherwise repeat the wide reading.
+      const auto Inputs = Ctx.operands(Original);
+      if (Inputs.size() < 2 || Inputs.size() > Atoms ||
+          Ctx.op(Inputs.front()) != SymOp::Extract)
+        return 0;
+      const auto First = Inputs.front();
+      const auto CarrierWidth = Ctx.width(Ctx.operand(First, 0));
+      if (llvm::APInt::getNumWords(CarrierWidth) <
+              limits::kMinReadOnceWordLimbs ||
+          !llvm::all_of(Inputs.drop_front(), [&](SymRef V) {
+            return Ctx.op(V) == SymOp::Extract &&
+                   Ctx.node(V).Aux == Ctx.node(First).Aux &&
+                   Ctx.width(Ctx.operand(V, 0)) == CarrierWidth;
+          }))
+        return 0;
+    }
+    // Each free variable in a read-once expression is essential. The other
+    // subtrees can independently supply the neutral word for each operation.
+    // This reading already has one leaf per input and one binary operation per
+    // additional leaf. Restoration and the other readings remain applicable.
+    size_t Remaining = Atoms - 1;
+    llvm::SmallVector<SymRef, 8> Pending{R};
+    size_t Work = 0;
+    while (!Pending.empty()) {
+      ++Work;
+      const auto V = Pending.pop_back_val();
+      if (Ctx.isVar(V))
+        continue;
+      const auto Kind = Ctx.op(V);
+      if (Kind != SymOp::And && Kind != SymOp::Or && Kind != SymOp::Xor &&
+          Kind != SymOp::Add)
+        return 0;
+      const auto Children = Ctx.operands(V);
+      if (Children.size() - 1 > Remaining)
+        return 0;
+      Remaining -= Children.size() - 1;
+      Pending.append(Children.begin(), Children.end());
+    }
+    return Remaining == 0 ? Work : 0;
+  }
+  if (Atoms < limits::kMinCanonicalAffineAtoms || Op != SymOp::Add)
+    return 0;
+  // Only the constant and singleton conjunction coefficients can be nonzero.
+  const bool Affine = llvm::all_of(Ctx.operands(R), [&](SymRef Term) {
     return Ctx.isVar(Term) || Ctx.isConst(Term) ||
            (Ctx.op(Term) == SymOp::Mul && Ctx.numOperands(Term) == 2 &&
             Ctx.isConst(Ctx.operand(Term, 0)) &&
             Ctx.isVar(Ctx.operand(Term, 1)));
   });
+  return Affine ? Ctx.numOperands(R) : 0;
 }
 
 std::optional<Region> readRegion(SymContext &Ctx, SymRef E,
@@ -459,17 +508,15 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
     TryCoarseMasks = NumAtoms > std::min(limits::kMaxResidualSynthesisAtoms,
                                          Limits.MaxOptimalSynthesisAtoms);
     std::optional<size_t> Corners = cornerCount(Linear->AtomIds.size());
-    const bool Direct =
-        isCanonicalAffineSum(Ctx, Linear->Abstract.Body, NumAtoms);
+    const size_t Direct =
+        directLinearWork(Ctx, Linear->Abstract.Body, NumAtoms, E);
     const bool Excluded =
         !Direct && Corners &&
         linearFormsCannotFit(Ctx, Linear->Abstract.Body, Linear->AtomIds,
                              *Corners, termBudget(Ctx, E, Opts), Limits, Budget,
                              ParityStorage);
     if (!Excluded &&
-        (!Corners ||
-         !Budget.consume(Direct ? Ctx.numOperands(Linear->Abstract.Body)
-                                : *Corners))) {
+        (!Corners || !Budget.consume(Direct ? Direct : *Corners))) {
       Rep.BudgetExhausted = true;
     } else if (!Excluded) {
       llvm::SmallVector<SymRef, 4> Forms;
@@ -555,16 +602,15 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
       const size_t WordBytes =
           sizeof(llvm::APInt) +
           (Width / 64 + (Width % 64 != 0)) * sizeof(uint64_t);
-      const bool Direct = isCanonicalAffineSum(Ctx, Coarse->Abstract.Body,
-                                               Coarse->AtomIds.size());
+      const size_t Direct = directLinearWork(Ctx, Coarse->Abstract.Body,
+                                             Coarse->AtomIds.size(), E);
       if (Corners &&
           (Direct || *Corners <= Opts.MaxTableBytes / 8 / WordBytes) &&
           (Direct ||
            !linearFormsCannotFit(Ctx, Coarse->Abstract.Body, Coarse->AtomIds,
                                  *Corners, termBudget(Ctx, E, Opts), Limits,
                                  Budget, ParityStorage)) &&
-          Budget.consume(Direct ? Ctx.numOperands(Coarse->Abstract.Body)
-                                : *Corners)) {
+          Budget.consume(Direct ? Direct : *Corners)) {
         llvm::SmallVector<SymRef, 4> Forms;
         if (Direct || Coarse->AtomIds.empty())
           Forms.push_back(Coarse->Abstract.Body);
@@ -603,8 +649,8 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
           (Width / 64 + (Width % 64 != 0)) * sizeof(uint64_t);
       // Cover measurement and basis-transform scratch before allocating the
       // additional reading. The opaque-input map remains owned by LinearRegion.
-      const bool Direct =
-          isCanonicalAffineSum(Ctx, Abstract.IndependentBody, AtomIds.size());
+      const size_t Direct =
+          directLinearWork(Ctx, Abstract.IndependentBody, AtomIds.size(), E);
       const bool StorageFits =
           Corners && (Direct || *Corners <= Opts.MaxTableBytes / 8 / WordBytes);
       if (AtomIds.size() <= Limits.MaxAtoms && StorageFits &&
@@ -612,8 +658,7 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
            !linearFormsCannotFit(Ctx, Abstract.IndependentBody, AtomIds,
                                  *Corners, termBudget(Ctx, E, Opts), Limits,
                                  Budget, ParityStorage)) &&
-          Budget.consume(Direct ? Ctx.numOperands(Abstract.IndependentBody)
-                                : *Corners)) {
+          Budget.consume(Direct ? Direct : *Corners)) {
         llvm::SmallVector<SymRef, 16> Atoms;
         for (uint32_t Id : AtomIds)
           Atoms.push_back(Ctx.varRef(Id));

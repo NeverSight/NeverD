@@ -142,14 +142,25 @@ TEST_P(AndroidPoll, EpollFailuresConvertErrnoInTheCallingThread) {
 TEST_P(AndroidPoll, ConnectRelativeSilenceExpiresAtTheGuestDeadline) {
   auto &C = Options.LinuxNetwork->Connections[0];
   C.ReceiveEvents.clear();
-  C.ReceiveQuietAfterConnectNS = 1000000;
-  for (uint64_t Route : {0u, 4u}) {
+  Options.Android->Memory.front().Bytes[4 * sizeof(uint64_t)] = 0xa5;
+  Options.Android->ObserveMemoryOnFailure = true;
+  for (uint64_t Route : {0u, 1u, 4u}) {
+    SCOPED_TRACE(Route);
+    C.ReceiveQuietAfterConnectNS = 1000000;
     auto R = run(Route, 0);
     completed(R);
     EXPECT_EQ(word(R, 0), 0u);
     EXPECT_EQ(word(R, 3), 1000000u);
     EXPECT_EQ(word(R, 4), 0u);
     EXPECT_EQ(word(R, 7), Route == 4 ? 0u : 1000000u);
+
+    C.ReceiveQuietAfterConnectNS = 999999;
+    auto Short = run(Route, 0);
+    ASSERT_EQ(Short.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(Short.Diagnostic, "socket readiness has no offline observation "
+                                "(TCP connection index 0, read readiness)");
+    ASSERT_EQ(Short.MemorySnapshots.size(), 1u);
+    EXPECT_EQ(word(Short, 4), 0xa5u);
   }
   Options.LinuxTime->AdvanceOnIdle = false;
   auto MissingClock =

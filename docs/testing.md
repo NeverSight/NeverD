@@ -2435,9 +2435,9 @@ separately; the model guests were not rerun for identical objects.
 The LowIR integration case checks the actual source-call binder and all three
 emission routes, retaining original input and result addresses without new
 logical copies or `byval`/`sret` promises. Named-function C output is compiled
-by Apple Clang directly; Apple Clang's legacy `llvm.ptrauth` globals remain
-unsupported by r6 IR import. Ordinary and rewrite code-generation boundaries
-now reject that representation before the incompatible backend can abort.
+by Apple Clang directly. The current NeverD backend imports Apple LLVM's
+legacy signing descriptors for object emission. Final-address MC rewrite
+requires the signing-recipe callback in the source LLVM fork.
 That receipt predates HVA transport. The vector-aggregate profile below extends
 its fixed-call coverage; whole-image authentication installation and signed
 exception execution remain separate, incomplete work.
@@ -4576,6 +4576,35 @@ rotate the joined word before reading a byte. They execute both emitted C
 views against the original 139–173-factor products at Clang O0 and O2.
 `LogicalShiftBoundsMatchDefinedByteAdditions` checks no-wrap and exact
 shift flags against all byte input pairs, including shift-by-width.
+
+Use `--family blended-field --count 8` for 24 products at 3329, 4097 and
+6145 bits with 823 to 1031 factors. Two masked operands are joined with OR,
+XOR or addition before rotating and extracting a field. The controls introduce
+a live mask bit, remove a copied bit or let a carry enter the field. The
+symbolic expression tests enumerate both masks and both inputs at four bits
+and exercise carry propagation across a 64-bit limb boundary. Parser tests
+cover mixed-case hexadecimal, binary, partial limbs and narrowed literals.
+The 47- and 99-factor native fixtures cover both source views with the CLI
+option and the worker option used by the GUI. Their generated C runs at
+Clang O0 and O2. The LLVM guard test checks the exact signed and unsigned
+overflow boundaries on byte-sized inputs. Generated LLVM C also exercises
+wrapping 9- and 17-bit sums and differences before right shifts.
+
+Use `--family overlapping-field --count 8` for 24 products at 4097, 7169
+and 9217 bits with 1051 to 1399 factors. Both masked operands supply live
+bits and selected additions carry into the field. The factors mix sign and
+zero extensions with concatenations and a one-bit perturbation. Regression
+tests cover 1, 31, 64 and 65 live coefficient bits, shared expression graphs
+and exhaustive byte inputs for LLVM exact-shift and overflow flags. An
+81-factor x86 fixture checks High C and LLVM C through the CLI and the worker
+used by the GUI. Its ordinary and optimized outputs execute at Clang O0 and O2.
+
+Use `--family masked-join --count 4` for 24 products at 32, 64, 1025,
+4097, 8193 and 12289 bits. Each field joins three to seven shuffled masked
+inputs. The largest product contains 1709 factors. Cases include a changed
+live bit, signed byte extensions and 65-bit coefficients. The 89-factor x86
+fixture checks both source views and executes the emitted C against the
+original multiplication at Clang O0 and O2.
 
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
@@ -9642,6 +9671,11 @@ This suite does not establish packed FP, VEX or x87 state coverage.
 
 `MedCallingConvValueFlow.VectorParameterBanksRespectTheImageABI` checks entry
 vector arguments for x86, x64, ARM and AArch64 across ELF, COFF and Mach-O.
+`MedABIPass.TheRegisterATargetIsLoadedThroughProvesNoArgument` recovers a
+call, as a tail jump and as a call, whose target is loaded through an address
+the function put in RDX, in a function that takes RDI: the call passes RDI
+alone and the function gains no parameter, and where the function sets RSI
+too the call passes all three.
 `MedABIPass.IndirectFPSetupUsesOnlyTheTargetArgumentBank` checks the outgoing
 bank on x64, ARM and AArch64. Win64 admits four floating slots while the other
 tested banks retain eight. `Win64CallContract.SavedXmmRegistersDoNotShiftTheFifthParameter`
@@ -18337,6 +18371,27 @@ low loads, disjoint OR, XOR and addition, and doubleword field insertion.
 One variant checks before packing. Another swaps the halves and forwards
 the newly checked word. The return-target tests reject forwarding a different
 word, a possible carry into the high half and an uncleared outgoing fragment.
+Byte and halfword store sequences cover a complete spill in both byte orders.
+Other variants compare the low and high halves in either order, test the
+bitwise OR of their XOR differences against zero, or check the
+whole word, compare its low half again, and forward the reconstructed word.
+The runtime harness varies both comparison outcomes independently and checks
+the argument observed at the next import. The return-target tests also cover
+a hole under overlapping writes, comparisons of different inputs, and branches
+that bypass one of the checks. Folded-guard cases cover word and doubleword
+spills, signed and unsigned reloads, a changed byte, a borrow into the high
+half, differences that cancel under XOR or are concealed by AND, and a
+changed delay-slot value. The PIC and CPIC fixtures carry a difference through
+a register join, a stack reload at the join, and a loop with zero to three
+iterations before testing it. One loop computes an XOR before entry and a
+modular subtraction of the same operands on each iteration. Return-target
+tests also change the difference on one arm or only on a taken backedge, and
+overwrite a single byte of its spill. Two register-join fixtures select a
+whole XOR or modular subtraction on one arm and the OR of separate low and
+high XORs on the other. The harness exercises all four combinations of half
+matches at each trip count, including both routes to the shared zero test.
+Return-target cases also swap the arm order, omit or cross halves, and change
+the sample before the test.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.
@@ -20793,6 +20848,11 @@ eleven.
 `GoStackGrowth.AGrowthRoutineTakesNoArgument` runs arm64's
 `runtime.morestack_noctxt`, which branches to a `runtime.morestack` that reads
 X3: alone and in the pipeline, neither takes a parameter, and both are exact.
+`GoStackGrowth.AFrameTooLargeForOneComparisonChecksTwice` lifts a function
+whose entry is `runtime.call1048576`'s (`mov r12, rsp; sub r12, 0xfff88; jb`
+then `cmp r12, [r14+0x10]; jbe`): the recognizer names the second check and
+the body keeps no call and no branch; with a store before the second
+comparison the path stays.
 `GoInternalABI.AStaleViewReadsNoResultOfTheCall` lifts an arm64 caller that,
 after a call, joins `ldrb w11` with `mov x11, #45` and reads the low byte:
 the call returns nothing it reads, though the stale arm of the W11 PHI is
@@ -20845,12 +20905,100 @@ the register at the entry and traps nowhere.
 `GoAssembly.AReflectCallHelperStoresWhatItsFuncValueReturns` lifts a helper that
 loads RAX, RBX and X0 with `runtime.unspillArgs`, calls a func value through
 RDX and stores them back with `runtime.spillArgs`: neither routine is called,
-and the C stores what the call returns, a double among it, trapping nowhere.
+the call takes the two words and the double the transfer loads and nothing the
+helper was entered with, the helper keeps its two parameters, and the C stores
+what the call returns, a double among it, trapping nowhere.
 `GoRegisterArgumentTransfers.AreFoundByName` checks that the pclntab names both
 routines' code.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.
+`GoInternalABI.AFuncValueCallTakesItsArgumentsInGoRegisters` lifts `main.g`,
+built as ELF and as PE, which sets RAX to 5 and RBX to 7 and calls a func value
+through RDX after storing a local above Win64's shadow space, RDI set before a
+branch: the call passes exactly 5 and 7.
+`GoInternalABI.AFuncValueSetBeforeTheCallsBlockIsStillOne` runs the pipeline
+over assembly shaped as `runtime.mcall`, which moves its func value into RDX
+at its entry and calls through it after a branch, and a caller: the routine
+takes RAX and RBX alone, its call passes the 5 it set, and the caller passes
+two arguments with no unknown value.
+`GoInternalABI.ARunWithoutIndirectCallsRecoversItsGoCalls` runs the pipeline,
+as ELF and as PE, over a Go function that sets seven registers and calls
+another, in an image with no indirect call: the call passes all seven.
+`GoInternalABI.ACallPassesGosNinthRegister` does so over a call that sets
+nine: the call passes R11's value too.
+`GoInternalABI.ACallKeepsTheSetupOfEveryGoRegister` runs register DCE over
+an arm64 block that moves X10 into X9 and calls: the move stays where the
+callee is code Go compiled and goes where it is not.
+`GoInternalABI.ACallPassesTheArgumentsGoAssignsTheStack` runs the pipeline,
+as ELF and as PE and for C and for LLVM, over a function that takes nine
+registers and two stack words, one that takes RAX and two stack words, a
+caller of each and a wrapper that jumps to the first: both functions declare
+exactly those parameters and read no local, the calls pass 1 to 11 and 1, 10,
+11, the wrapper takes and passes eleven, and the lifted callers return 66 and
+22, the sums, where arguments bound to the wrong parameters gave 45 and 0.
+`GoInternalABI.AnArm64StackArgumentFollowsNoPlatformPosition` does so on arm64
+over a function that reads the word above the stack pointer's and its caller:
+the function takes X0 and that word, the call passes 1 and 7, and the caller
+takes no parameter.
+`GoAssemblyOperands.ARoutineThatResumesSavedStateTakesWhatItReads` runs the
+pipeline, as ELF and as PE, over assembly shaped as `gogo<>` and
+`runtime.gogo` and over a routine that jumps through a loaded pointer without
+loading the stack pointer: the first takes RDX and RBX as its operands and
+its C names no undefined register and passes its jump nothing, the second
+passes the goroutine and the gobuf, and the third takes no operand of its
+own.
+`GoInternalABI.AFunctionThatPassesItsFirstArgumentOnReadsIt` runs the
+pipeline, as ELF and as PE, over a Go function that reads RAX, RBX and RCX
+and one that only jumps to it: the second's summary reads all three, each of
+its parameters has an entry value, and it passes `arg0, arg1, arg2`.
+`GoScheduleCalls.AreFoundByName` loads a pclntab that names `runtime.mcall`:
+the module records its entry and a call of it resumes, where one of
+`runtime.mcallx` or of any other function does not.
+`GoScheduleCalls.ACallOfMcallResumesAtItsReturnAddress` runs the pipeline
+over an `mcall` whose body ends in a routine that loops for ever, a function
+that calls it and returns 7, and a caller of that: the looping routine and
+`mcall` itself never return, both callers keep the code after their calls,
+and HighIR declares `mcall` no `_Noreturn` function.
+`GoInternalABI.AssemblyThatAddressesThroughR14ReadsTheGoroutine` runs the
+pipeline over two x86-64 assembly routines, built as ELF and as PE: one
+stores and loads through R14 and reads the goroutine register for both, the
+other stores R14 into a record it was handed, takes the register as an
+operand of its own and reads no goroutine.
+`GoInternalABI.AssemblyTakesFloatsInEveryGoRegister` runs the pipeline over
+assembly, built as ELF and as PE, that stores RAX, X0, X8 and X14 through
+R12: its parameters are those five registers and its C traps nowhere.
+`GoInternalABI.AnARM64RoutineThatReadsGoRegistersTakesGoFloats` runs it over
+two arm64 routines that store D8: the one that also reads X9 takes D8 as a
+parameter, the other takes X0 alone and prints D8 as unknown.
+`GoInternalABI.ARegisterNoParameterArrivesInIsNoPositionalParameter` runs the
+pipeline over two Go functions of two arguments, built as ELF and as PE, one
+that stores RCX through both and one that calls through it: neither names
+`arg0` for RCX, each prints the register as one with no definition, and both
+formats print the same.
+`GoStackABI.AnIndirectCallPassesNothingInARegister` runs it over three
+routines of a stack-ABI image: one with a stack check that calls through a
+method table passes the word it stored and nothing else, and reads no
+goroutine; one without that calls through a func value after loading RCX
+passes nothing; assembly without a check that calls through a pointer still
+passes what it set in RDI.
+`SysVCallContract.ArgumentsPassedOnToAnUnknownCallReachIt` lifts a routine
+shaped as `sqlite3AuthCheck`, which sets RDI and R9 and calls through a loaded
+pointer, and a caller that sets RSI, RDX, RCX and R8: the call passes 0x1A,
+2, 3 and 4 and no unknown value.
+`GoStackABI.AnArgumentNarrowerThanAWordIsStillOne` runs it over arm64
+assembly that reads an int32 from the stack, whose record gives four bytes,
+and a caller that stores 2 there: the call passes 2.
+`GoStackABI.ARegisterAStackRoutinePassesOnIsNoParameter` runs it over a
+stack-ABI routine that loads a word into RCX and calls through a table: the
+call passes three unknown values and that word, names none of the routine's
+stack words for a register, and prints no `arg-1`.
+`GoInternalABI.TheRegisterThatHoldsTheTargetEndsTheArguments` lifts a Go 1.21
+map access's call of its hasher through RCX after loading the seed into ESI:
+the call passes the key's address and the seed, and nothing in RCX or above.
+`GoInternalABI.AJoinOfWhatACallLeftIsNoFuncValueArgument` lifts a func value
+call one way to which zeroes X0 while the other calls `main.f`: the call
+passes RAX alone.
 `GoStackABI.AClosureReadsTheContextItsCallerPasses` lifts a Go 1.15-style
 closure with a frame that adds two words it loads through RDX, and its arm64
 twin through R26: its C reads the register, names no frame word for those
@@ -20897,6 +21045,34 @@ over a call to `runtime.gcWriteBarrierCX`, alone and in the whole image, as
 System V and Win64 x86-64 with Go's register ABI, as System V with the stack
 ABI, and as arm64 with X2 and X3: each call passes `(0x1000, 0x2000)`, and
 the barrier's parameters are its two registers.
+`GoWriteBarriers.TheSharedBodyTakesAndReturnsItsBufferRegister` runs the
+pipeline over Go 1.21's shared barrier body, a numbered barrier that jumps to
+it and the flush its slow path calls, with and without a func value call
+elsewhere and with and without a pclntab record for the flush: the body's one
+parameter is R11, its summary reads R11, its C reads R14 and the byte count,
+and the numbered barrier returns `gcWriteBarrier(0x10)`. Call recovery binds
+the flush's arguments in each, so the body traps nowhere and names no frame
+word.
+`GoWriteBarriers.AStackArgumentIsNoKeptRegister` makes the flush Go assembly
+that takes a word on the stack: the body's store at `[rsp]` and its reload
+stay and the call passes the word, while the save at `[rsp+0x10]` still goes.
+`GoWriteBarriers.AReloadNoSaveRanBeforeStays` lets the slow path skip its
+saves, so that the reloads may run first: both saves and both reloads stay.
+`GoWriteBarriers.UnwindDataAloneEntersNoBlock` gives the body a PE's unwind
+record: without a personality its saves still go, with one they stay.
+`GoWriteBarriers.KeepEveryRegisterButTheirResultAndArm64sTemporary` reads
+`goWriteBarrierKeeps` for each kind on both architectures, and
+`GoWriteBarriers.TheSharedBodyKeepsArm64sUpperRegisters` runs the pipeline
+over an arm64 body that saves X19, X20 and the pair X25, X26 round its
+flush: only the save and reload of X25, the bytes wanted, stay.
+`GoWriteBarriers.NameEachContractTheRuntimeDocuments` loads a pclntab that
+names each kind, the shared body `gcWriteBarrier` among them, and
+`GoWriteBarriers.ASharedBodyNeedsANumberedBarrier` one that names the body
+without a numbered barrier, which records none.
+`GoWriteBarriers.AStoringBarrierReadsItsGoroutine` runs the pipeline over a
+storing barrier that reads its buffer through R14 and saves R10 and R11 round
+its flush: its C reads R14, traps nowhere, drops the two saves nothing reads
+back and keeps the frame word the function fills.
 `GoNoReturn.AreListedWhereTheImagesArgumentPassingIsKnown` loads Go
 1.16 pclntabs: a thread-local g prologue lists `runtime.gopanic`, while a Go
 1.17 `cmp rsp, [r14+0x10]` beside it, or no prologue, lists nothing.
@@ -22605,7 +22781,10 @@ cases assert partial objects, newline/read-ahead, multiple suspensions, EOF,
 per-read timeout, thread-local errno and incomplete imports at unknown input.
 TCP quiet-duration cases cover a delayed connect, duplicate and reused descriptors,
 the first unknown nanosecond, and a schedule that becomes valid on a later
-connect attempt. Android callers exercise libc `poll` and raw `ppoll`.
+connect attempt. Android libc `poll`, `ppoll`, and raw `ppoll` callers read
+back `revents` at the exact deadline. Ending the quiet interval one nanosecond
+earlier leaves the wait unresolved. Zero-descriptor kernel tests check the
+output address range and remaining time after the deadline.
 Run affected Linux and Android owner suites before review; unavailable backend
 skips do not count as executed coverage. All fixtures use explicit offline data.
 
@@ -26677,6 +26856,11 @@ cross-object direct/indirect calls against GCC and Clang at O0/O2. For hidden
 results it also poisons v0 after the callee's return delay slot, before the
 caller consumes the result. The caller must use its original result buffer;
 a callee that happens to return that address in v0 is not an ABI guarantee.
+
+The `du` and `ud` cases use both member orders of a double/unsigned
+64-bit union. They check negative zero, infinities and distinct NaN payloads
+as object bytes. The `nested_du` case passes that union alongside a double
+inside a structure.
 
 Run the record roundtrip with both values of `--original-compiler`. GCC and
 Clang alternate as the callee and caller compiler. Only the reconstructed C

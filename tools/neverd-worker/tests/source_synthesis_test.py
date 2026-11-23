@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import random
 import re
 import shutil
 import struct
@@ -275,6 +276,39 @@ def multiple_residual_elf(degree, neighbor=False):
     return elf(code), "x+y+z+" + str(scale) + "U*" + "*".join(factors)
 
 
+def masked_join_elf(degree):
+    rng = random.Random(1971 + degree)
+    scale = 1 << 18
+    code = bytearray.fromhex("b8") + struct.pack("<I", scale)
+    factors = []
+    for i in range(degree):
+        axis = i % 2
+        at = (5, 17)[axis]
+        masks = [0xb3, 0x6d, 0xd6 ^ (8 if i == degree // 2 else 0)]
+        masks = [(rng.getrandbits(32) & ~(255 << at)) | (m << at) for m in masks]
+        # ECX = x ^ y, R8D = z + offset, R9D = y + z.
+        delta = 3 + 2 * axis
+        code += bytes.fromhex("89f9 31f1 81e1") + struct.pack("<I", masks[0])
+        code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", delta)
+        code += bytes.fromhex("4181e0") + struct.pack("<I", masks[1])
+        code += bytes.fromhex("4189f1 4101d1 4181e1") + struct.pack("<I", masks[2])
+        code += bytes.fromhex("4409c1 4409c9" if axis else "4431c1 4431c9")
+        code += bytes.fromhex("c1c9") + bytes([(at - 8) % 32])  # field in CH
+        code += bytes.fromhex("0fbecd" if i % 3 == 0 else "0fb6cd")
+        weight, offset = (2 * i + 3) << (6 + axis), 2 * i + 1
+        code += bytes.fromhex("69c9") + struct.pack("<I", weight)
+        code += bytes.fromhex("81c1") + struct.pack("<I", offset) + bytes.fromhex("0fafc1")
+        op = "|" if axis else "^"
+        word = op.join((f"((x^y)&{masks[0]}U)", f"((z+{delta}U)&{masks[1]}U)",
+                        f"((y+z)&{masks[2]}U)"))
+        field = f"((({word})>>{at})&255U)"
+        if i % 3 == 0:
+            field = f"(({field}^128U)-128U)"
+        factors.append(f"({offset}U+{weight}U*{field})")
+    code += bytes.fromhex("01f8 01f0 01d0 c3")
+    return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
+
+
 def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=False,
                       *, interleaved=False, complemented=False, neighbor=False,
                       factor_mask=None, factor_order=None):
@@ -320,7 +354,8 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                           observed=32, dynamic_masks=False, spliced_words=False,
                           rotated_bytes=False, shifted_bytes=False, funnel_bytes=False,
                           staggered_bytes=False, signed_bytes=False, joined_prefix=False,
-                          masked_window=False):
+                          masked_window=False, blended_fields=False, overlapping_fields=False):
+    blended_fields = blended_fields or overlapping_fields
     signed_bytes = signed_bytes or joined_prefix or masked_window
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
@@ -333,7 +368,8 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
         coefficient = ((2 * i + 1) << shift) & 0xffffffff
         offset = 2 * i + 1
         code += bytes.fromhex("89f9" + op)
-        if rotated_bytes or shifted_bytes or funnel_bytes or staggered_bytes or signed_bytes:
+        if (rotated_bytes or shifted_bytes or funnel_bytes or staggered_bytes
+                or signed_bytes or blended_fields):
             # Choose the source of CH, including a window wrapping past bit 31.
             source_bit = (0, 5, 29)[i % 3]
             distance = 1 + (i // 3) % 7 if shifted_bytes or funnel_bytes else 0
@@ -343,7 +379,9 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                 distance = 19 if i == degree // 2 else 1 + i % 11
             left_shift = i % 3 == 0 and not signed_bytes
             # The moving field reaches CH after a second rotation.
-            field_at = 2 + (5 * i) % 12 if masked_window else 8
+            field_at = 2 + (5 * i) % 12 if masked_window or blended_fields else 8
+            if overlapping_fields:
+                field_at = (5, 11, 19)[i % 3]
             start = field_at - distance if left_shift else field_at + distance
             left = (start - source_bit) % 32
             if left:
@@ -352,7 +390,39 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                 else:
                     code += bytes.fromhex("c1c9") + bytes([32 - left])  # ror ecx, imm8
                 value = f"(({value}<<{left})|({value}>>{32-left}))"
-            if signed_bytes:
+            if blended_fields:
+                # Select the rotated byte from two independently masked words.
+                # A hole below the byte stops carries, except at one boundary.
+                field = 255 << field_at
+                live = ((0x9e3779b9 * (i + 1)) | field) & 0xffffffff
+                other = (0x85ebca6b * (i + 3)) & ~field & 0xffffffff
+                join, symbol = (("4409c1", "|"), ("4431c1", "^"), ("4401c1", "+"))[i % 3]
+                if i % 3 == 2:
+                    stop = (i // 3) % field_at
+                    propagate = (1 << field_at) - (1 << stop)
+                    other = (other & ~propagate) | (~live & propagate)
+                    live &= ~(1 << stop)
+                    other &= ~(1 << stop)
+                if i == degree // 2:
+                    join, symbol = "4401c1", "+"
+                    live |= 1 << (field_at - 1)
+                    other |= 1 << (field_at - 1)
+                neighbor_offset = offset
+                if overlapping_fields:
+                    # Both inputs contribute inside CH. Changing bits outside
+                    # the byte preserves it except for an incoming carry.
+                    live = (live & ~field) | (0xb3 << field_at)
+                    other = (other & ~field) | (0x6d << field_at)
+                    neighbor_offset = 1 + 2 * (i % 3)
+                code += bytes.fromhex("81e1") + struct.pack("<I", live)
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", neighbor_offset)
+                code += bytes.fromhex("4181e0") + struct.pack("<I", other) + bytes.fromhex(join)
+                value = f"(({value}&{live}U){symbol}((z+{neighbor_offset}U)&{other}U))"
+                by = (field_at - 8) % 32
+                if by:
+                    code += bytes.fromhex("c1c9") + bytes([by])
+                    value = f"(({value}>>{by})|({value}<<{32-by}))"
+            elif signed_bytes:
                 # The neighbor leaves the observed window clear. The masked
                 # case also preserves unrelated low bits that may carry in an ADD.
                 cut = (field_at + 8 + (i // 3) % (24 - field_at) if masked_window
@@ -601,7 +671,9 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
-        elif kind.startswith("funnel-perturbation-masked-"):
+        elif kind == "funnel-perturbation-masked-join-89":
+            assert code.count("*") <= 6, text
+        elif kind.startswith(("funnel-perturbation-masked-", "funnel-perturbation-overlap-")):
             # The few surviving factors may include a live carry and shifts
             # printed as literal products. Bound the actual emitted expression.
             assert code.count("*") <= 14, text
@@ -784,6 +856,12 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("funnel-perturbation-overlap-81", *high_perturbation_elf(
+                81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
+            ("funnel-perturbation-masked-join-89", *masked_join_elf(89)),
+            *((f"funnel-perturbation-blended-{degree}", *high_perturbation_elf(
+                degree, shift_base=6, affine_depth=1, observed=14, blended_fields=True))
+              for degree in (47, 99)),
             *((f"funnel-perturbation-masked-{degree}", *high_perturbation_elf(
                 degree, shift_base=shift, affine_depth=1, observed=bits, masked_window=True))
               for degree, shift, bits in ((139, 5, 13), (141, 6, 14), (157, 7, 15), (173, 6, 14))),

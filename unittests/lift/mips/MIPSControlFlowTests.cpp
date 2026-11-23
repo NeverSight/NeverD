@@ -1336,22 +1336,23 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
     constexpr uint32_t Split = 0x0002603e; // dsrl32 t0,v0,0
     constexpr uint32_t Shift = 0x000e703c; // dsll32 t2,t2,0
     constexpr uint32_t Join = 0x01ae7825;  // or t3,t1,t2
-    const auto Check = [&](const char *Name, bool Proven,
-                           llvm::ArrayRef<uint32_t> Before,
-                           unsigned Compared = 15, unsigned Forwarded = 2,
-                           llvm::ArrayRef<uint32_t> After = {}) {
+    const auto Guard = [](unsigned Left, unsigned Right) {
+      return 0x14000000u | (Left << 21) | (Right << 16);
+    };
+    const auto CheckBody = [&](const char *Name, bool Proven,
+                               llvm::ArrayRef<uint32_t> Body,
+                               unsigned Forwarded) {
       SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << Name);
-      std::vector<uint32_t> Code{0x67bdffc0, 0xffbf0038,  0xffb00000,
-                                 0xffb10008, Move(16, 5), 0x0320f809,
-                                 0};
-      Code.insert(Code.end(), Before.begin(), Before.end());
-      const auto Exit = Code.size();
-      Code.insert(Code.end(),
-                  {0x14000000u | (Compared << 21) | (16u << 16), 0});
-      Code.insert(Code.end(), After.begin(), After.end());
+      std::vector<uint32_t> Code{
+          0x67bdffc0,  0xffbf0038,  0xffb00000, 0xffb10008,
+          Move(16, 5), Move(17, 6), 0x0320f809, 0};
+      Code.insert(Code.end(), Body.begin(), Body.end());
       Code.insert(Code.end(), {Move(4, Forwarded), 0x3c190002, Target,
                                0x0320f809, 0x6405000b});
-      Code[Exit] |= Code.size() - Exit - 1;
+      // Guard emits a BNE with an empty displacement to the common exit.
+      for (size_t I = 0; I < Code.size(); ++I)
+        if ((Code[I] & 0xfc00ffffu) == 0x14000000u)
+          Code[I] |= Code.size() - I - 1;
       Code.insert(Code.end(),
                   {0xdfb00000, 0xdfb10008, 0xdfbf0038, 0x03e00008, 0x67bd0040});
       const auto Lifted = build(image(Code, A));
@@ -1365,6 +1366,15 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
         EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
                             Error.what());
       }
+    };
+    const auto Check = [&](const char *Name, bool Proven,
+                           llvm::ArrayRef<uint32_t> Before,
+                           unsigned Compared = 15, unsigned Forwarded = 2,
+                           llvm::ArrayRef<uint32_t> After = {}) {
+      std::vector<uint32_t> Body(Before.begin(), Before.end());
+      Body.insert(Body.end(), {Guard(Compared, 16), 0});
+      Body.insert(Body.end(), After.begin(), After.end());
+      CheckBody(Name, Proven, Body, Forwarded);
     };
     Check("doubleword copied before source clear", true,
           {Full, Reload, Memory(63, 15, 40), Clear, Memory(55, 15, 40)});
@@ -1423,6 +1433,237 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
           {0x14500003, 0, 0x10000002, Move(15, 2), Move(15, 16),
            Memory(63, 15, 24), Memory(40, 0, Low)},
           2, 15);
+    for (unsigned Bytes : {1u, 2u}) {
+      SCOPED_TRACE(Bytes);
+      std::vector<uint32_t> Body{Full};
+      for (unsigned I = 0; I < 8; I += Bytes)
+        Body.push_back(Memory(Bytes == 1 ? 40 : 41, 0, 24 + I));
+      CheckBody("every byte overwritten", true, Body, 0);
+      Body.back() = Body[Body.size() - 2];
+      CheckBody("duplicate write leaves a hole", false, Body, 0);
+    }
+    CheckBody("overlapping writes cover the last byte", true,
+              {Full, Memory(43, 0, 24), Memory(41, 0, 28), Memory(41, 0, 30),
+               Memory(40, 0, 30)},
+              0);
+    // The conditional store must cover the last byte on every path.
+    CheckBody("only one predecessor clears the last byte", false,
+              {Full, Memory(43, 0, 24), Memory(41, 0, 28), Memory(40, 0, 30),
+               0x12000002, 0, Memory(40, 0, 31)},
+              0);
+
+    // t1:t2 contain the low and high patterns of v0, t0:t3 those of s0.
+    const auto SplitPeers = {Full,       LoadLow,     Memory(39, 14, High),
+                             Clear,      0x0010603cu, 0x000c603eu,
+                             0x0010783eu};
+    const auto CheckParts = [&](const char *Name, bool Proven,
+                                llvm::ArrayRef<uint32_t> Ops,
+                                unsigned Forwarded = 2) {
+      std::vector<uint32_t> Body(SplitPeers);
+      Body.insert(Body.end(), Ops.begin(), Ops.end());
+      CheckBody(Name, Proven, Body, Forwarded);
+    };
+    const auto LowEqual = Guard(13, 12), HighEqual = Guard(14, 15);
+    CheckParts("both halves equal the same input", true,
+               {LowEqual, 0, HighEqual, 0});
+    CheckParts("high half checked first", true,
+               {HighEqual, 0, LowEqual, 0, Shift, Join}, 15);
+    CheckParts("both halves zero", true, {Guard(13, 0), 0, Guard(14, 0), 0});
+    CheckParts("two distinct literal halves", true,
+               {0x640c0007, 0x640f0013, LowEqual, 0, HighEqual, 0});
+    CheckParts("all-ones and adjacent literal patterns", true,
+               {0x640cffff, 0x000c603c, 0x000c603e, LowEqual, 0, 0x640ffffe,
+                0x000f783c, 0x000f783e, HighEqual, 0});
+    CheckParts("only the literal low half", false, {0x640c0007, LowEqual, 0});
+    CheckParts("only high half checked", false, {HighEqual, 0});
+    CheckParts("same low half checked twice", false,
+               {LowEqual, 0, LowEqual, 0});
+    const auto Binary = [](unsigned Fn, unsigned Dst, unsigned L, unsigned R) {
+      return (L << 21) | (R << 16) | (Dst << 11) | Fn;
+    };
+    const auto LowDiff = Binary(0x26, 12, 12, 13);
+    const auto HighDiff = Binary(0x26, 15, 14, 15);
+    const auto EitherDiff = Binary(0x25, 24, 15, 12);
+    const auto ZeroDiff = Guard(24, 0);
+    CheckParts("whole XOR difference", true,
+               {Binary(0x26, 24, 2, 16), ZeroDiff, 0});
+    CheckParts("whole modular subtraction", true,
+               {Binary(0x2f, 24, 16, 2), ZeroDiff, 0});
+    CheckParts("folded differences after operand reuse", true,
+               {LowDiff, HighDiff, EitherDiff, Move(13, 0), ZeroDiff, 0});
+    CheckParts("folded differences and repack", true,
+               {LowDiff, HighDiff, EitherDiff, ZeroDiff, 0, Shift, Join}, 15);
+    // BEQ selects the right arm. Both arms reach the separate zero test.
+    constexpr uint32_t RightArm = 0x12200003, JoinArms = 0x10000002;
+    const auto Xor = Binary(0x26, 24, 2, 16);
+    const auto Sub = Binary(0x2f, 24, 16, 2);
+    CheckParts("each incoming difference proves the same equality", true,
+               {RightArm, 0, JoinArms, Xor, Sub, ZeroDiff, 0});
+    CheckParts(
+        "one incoming difference compares another word", false,
+        {RightArm, 0, JoinArms, Xor, Binary(0x2f, 24, 16, 17), ZeroDiff, 0});
+    // The fallthrough arm computes the full-width difference in its jump
+    // delay slot. The other arm folds the two 32-bit differences before
+    // the common zero test of the selected value.
+    const auto Mixed = [&](const char *Name, bool Proven, uint32_t Whole,
+                           uint32_t First, uint32_t Second, uint32_t Fold) {
+      CheckParts(
+          Name, Proven,
+          {RightArm, 0, 0x10000004, Whole, First, Second, Fold, ZeroDiff, 0});
+    };
+    Mixed("whole XOR or two folded halves", true, Xor, LowDiff, HighDiff,
+          EitherDiff);
+    Mixed("whole subtraction or reversed folded halves", true, Sub, HighDiff,
+          LowDiff, Binary(0x25, 24, 12, 15));
+    CheckParts("folded difference on the fallthrough edge", true,
+               {0x12200005, 0, LowDiff, HighDiff, JoinArms, EitherDiff, Xor,
+                ZeroDiff, 0});
+    CheckParts("whole subtraction or repacked XOR differences", true,
+               {RightArm, 0, 0x10000005, Sub, LowDiff, HighDiff,
+                Binary(0x3c, 15, 0, 15), EitherDiff, ZeroDiff, 0});
+    CheckParts("whole XOR with zero or folded raw halves", true,
+               {RightArm, 0, JoinArms, Binary(0x26, 24, 2, 0),
+                Binary(0x25, 24, 13, 14), ZeroDiff, 0});
+    CheckParts("whole XOR with zero or just the raw low half", false,
+               {RightArm, 0, JoinArms, Binary(0x26, 24, 2, 0), Move(24, 13),
+                ZeroDiff, 0});
+    Mixed("other arm only tests the low difference", false, Sub, LowDiff, 0,
+          Move(24, 12));
+    Mixed("other arm only tests the high difference", false, Xor, 0, HighDiff,
+          Move(24, 15));
+    Mixed("low difference occurs twice", false, Xor, LowDiff, Move(15, 12),
+          EitherDiff);
+    Mixed("folded halves are crossed", false, Sub, Binary(0x26, 12, 12, 14),
+          Binary(0x26, 15, 15, 13), EitherDiff);
+    Mixed("full-width arm overwrites the sample", false, Move(24, 0), LowDiff,
+          HighDiff, EitherDiff);
+    CheckParts("folded arm overwrites its completed difference", false,
+               {RightArm, 0, 0x10000005, Xor, LowDiff, HighDiff, EitherDiff,
+                Move(24, 0), ZeroDiff, 0});
+    // A scratch copy of each half changes on the folded edge. Both the
+    // scratch zeroes and the original operand equalities hold under the
+    // guard; retaining one pair of aliases must not displace the others.
+    CheckParts("mixed difference with reused operand copies", true,
+               {Move(1, 13), Move(3, 14), RightArm, 0, 0x10000006, Xor, LowDiff,
+                HighDiff, EitherDiff, Move(1, 0), Move(3, 0), ZeroDiff, 0});
+    CheckParts("intact stack sample of a mixed difference", true,
+               {RightArm, 0, 0x10000004, Sub, LowDiff, HighDiff, EitherDiff,
+                Memory(63, 24, 40), Move(24, 0), Memory(55, 24, 40), OtherClear,
+                ZeroDiff, 0});
+    CheckParts("mixed difference changed before testing zero", false,
+               {RightArm, 0, 0x10000004, Xor, LowDiff, HighDiff, EitherDiff,
+                0x3b180001, ZeroDiff, 0}); // xori t8,t8,1
+    CheckParts("word projection of a mixed difference", false,
+               {RightArm, 0, 0x10000004, Xor, LowDiff, HighDiff, EitherDiff,
+                0x0018c03c, 0x0018c03e, ZeroDiff, 0});
+    CheckParts("overwritten difference with an intact saved copy", true,
+               {LowDiff, HighDiff, EitherDiff, Move(12, 24), RightArm, 0,
+                JoinArms, Move(24, 0), Move(24, 17), Guard(12, 0), 0});
+    CheckParts("overwritten difference on one incoming edge", false,
+               {LowDiff, HighDiff, EitherDiff, RightArm, 0, JoinArms, 0,
+                Move(24, 0), ZeroDiff, 0});
+    // Skip the loop or decrement s1 until zero. The final BNE samples the
+    // difference after all executed backedges and their delay slots.
+    constexpr uint32_t SkipLoop = 0x12200004, Decrement = 0x6631ffff,
+                       Backedge = 0x1620fffe;
+    CheckParts("mixed zero evidence through a loop header", true,
+               {RightArm, 0, 0x10000004, Sub, LowDiff, HighDiff, EitherDiff,
+                SkipLoop, 0, Decrement, Backedge, 0, ZeroDiff, 0});
+    CheckParts("loop-invariant folded difference", true,
+               {LowDiff, HighDiff, EitherDiff, SkipLoop, 0, Decrement, Backedge,
+                0, ZeroDiff, 0});
+    CheckParts("backedge delay slot replaces the difference", false,
+               {LowDiff, HighDiff, EitherDiff, SkipLoop, 0, Decrement, Backedge,
+                Move(24, 0), ZeroDiff, 0});
+    CheckParts("loop recomputes an equivalent whole difference", true,
+               {Xor, SkipLoop, 0, Decrement, Backedge, Sub, ZeroDiff, 0});
+    CheckParts("only a taken backedge replaces the difference", false,
+               {Xor, 0x12200006, 0, Decrement, 0x12200003, 0, 0x1000fffc,
+                Move(24, 0), ZeroDiff, 0});
+    CheckParts("one path bypasses the zero test", false,
+               {Xor, 0x12200003, 0, ZeroDiff, 0});
+    CheckParts("fold half differences from the preceding block", true,
+               {LowDiff, HighDiff, RightArm, 0, JoinArms, 0, Move(12, 12),
+                EitherDiff, ZeroDiff, 0});
+    CheckParts("one arm changes a byte of the spilled difference", false,
+               {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40), RightArm, 0,
+                JoinArms, 0, Memory(40, 0, archLittleEndian(A) ? 40 : 47),
+                Memory(55, 24, 40), OtherClear, ZeroDiff, 0});
+    CheckParts("matching differences can cancel", false,
+               {LowDiff, HighDiff, Binary(0x26, 24, 15, 12), ZeroDiff, 0});
+    CheckParts("disjoint differences can mask each other", false,
+               {LowDiff, HighDiff, Binary(0x24, 24, 15, 12), ZeroDiff, 0});
+    CheckParts("repeated low difference misses high half", false,
+               {LowDiff, Binary(0x25, 24, 12, 12), ZeroDiff, 0});
+    CheckParts("word subtraction misses high half", false,
+               {Binary(0, 12, 0, 2), Binary(0, 15, 0, 16),
+                Binary(0x23, 24, 12, 15), ZeroDiff, 0});
+    CheckParts("zero high difference can include a borrow", false,
+               {Binary(0x2f, 24, 2, 16), 0x0018c03e, ZeroDiff, 0});
+    CheckParts(
+        "folded guard followed by changed high half", false,
+        {LowDiff, HighDiff, EitherDiff, ZeroDiff, Move(14, 13), Shift, Join},
+        15);
+    CheckParts("intact spilled difference", true,
+               {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40),
+                Memory(55, 24, 40), OtherClear, ZeroDiff, 0});
+    for (unsigned Load : {35u, 39u})
+      CheckParts("word spill of folded half differences", true,
+                 {LowDiff, HighDiff, EitherDiff, OtherClear, Memory(43, 24, 40),
+                  Memory(Load, 24, 40), ZeroDiff, 0});
+    CheckParts("word spill loses the high bits of a whole XOR", false,
+               {Binary(0x26, 24, 2, 16), Memory(43, 24, 40), Memory(39, 24, 40),
+                OtherClear, ZeroDiff, 0});
+    CheckParts(
+        "checked zero difference in outgoing slot", true,
+        {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40), ZeroDiff, 0});
+    CheckParts(
+        "untested difference in outgoing slot", false,
+        {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40), Guard(17, 0), 0},
+        0);
+    CheckParts("word spill of folded signed word comparisons", true,
+               {Binary(0, 12, 0, 12), Binary(0, 13, 0, 13),
+                Binary(0, 14, 0, 14), Binary(0, 15, 0, 15), LowDiff, HighDiff,
+                EitherDiff, OtherClear, Memory(43, 24, 40), Memory(35, 24, 40),
+                ZeroDiff, 0});
+    CheckParts("saved difference belongs to a previous call result", false,
+               {LowDiff, HighDiff, EitherDiff, Move(16, 24), 0x3c190002, Target,
+                0x0320f809, Move(4, 0), Guard(16, 0), 0});
+    CheckParts("partial overwrite of spilled difference", false,
+               {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40),
+                Memory(40, 0, archLittleEndian(A) ? 40 : 47),
+                Memory(55, 24, 40), OtherClear, ZeroDiff, 0});
+    CheckParts("halves compared to different inputs", false,
+               {LowEqual, 0, 0x0011783e, HighEqual, 0});
+    CheckParts("halves compared in the wrong positions", false,
+               {Guard(13, 15), 0, Guard(14, 12), 0});
+    CheckParts("one path bypasses the high comparison", false,
+               {LowEqual, 0, 0x12200003, 0, HighEqual, 0});
+    CheckParts("checks on mutually exclusive paths", false,
+               {0x12200005, 0, LowEqual, 0, 0x10000003, 0, HighEqual, 0});
+    CheckParts("whole check then low check and repack saved pieces", true,
+               {Guard(2, 16), Move(2, 0), Guard(13, 17), 0, Shift, Join}, 15);
+    CheckParts("both orders around a join", true,
+               {0x12200007, 0, LowEqual, 0, HighEqual, 0, 0x10000005, 0,
+                HighEqual, 0, LowEqual, 0, Shift, Join},
+               15);
+    CheckParts("path-specific whole peers followed by a low check", true,
+               {0x12200005, 0, Guard(2, 16), 0, 0x10000003, 0, Guard(2, 17), 0,
+                Guard(13, 17), Move(2, 0), Shift, Join},
+               15);
+    CheckParts("low check expired at another call", false,
+               {LowEqual, Move(17, 2), 0x3c190002, Target, 0x0320f809,
+                Move(4, 0), 0x0011703e, 0x0010783e, HighEqual, 0},
+               17);
+    CheckParts("whole check then low 16 bits and repack", true,
+               {Guard(2, 16), 0, 0x31acffff, Guard(12, 17), 0, Shift, Join},
+               15);
+    CheckParts("low 16 bits alone and repack", false,
+               {0x31acffff, Guard(12, 17), 0, Shift, Join}, 15);
+    CheckParts("low check then repack saved pieces", false,
+               {Guard(13, 17), 0, Shift, Join}, 15);
+    CheckParts("high replaced in equality delay slot", false,
+               {LowEqual, 0, HighEqual, Move(14, 13), Shift, Join}, 15);
     Check("mixed calls", false,
           {Move(17, 2), 0x3c190002, Target, 0x0320f809, 0x64040007, 0x0011603e,
            StoreLow, StoreHigh, Reload});

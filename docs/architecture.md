@@ -5790,6 +5790,19 @@ the same parameters. Read by position, a System V call passed
 `gcWriteBarrierCX(slot, 0, 0, value)`, a Win64 call `gcWriteBarrier()` and
 `gcWriteBarrierCX(value)`, and an AAPCS64 call a placeholder for X1.
 
+The numbered barriers jump to a body they share, an assembly local the
+`pclntab` names `gcWriteBarrier` (`GoWriteBarrierKind::BufferBody`), which the
+loader records only in a module that names a numbered barrier too. It takes
+the bytes of buffer space wanted in the register it returns that space in and
+nothing else (`goWriteBarrierArguments`), reads the goroutine in R14 as
+compiled code does, and keeps every other general-purpose register as the
+numbered barriers do. A barrier's return hands back its buffer register, where
+every later stage reads the platform's result register: LowToMed copies the
+one into the other before each RETURN, and a numbered barrier's jump to the
+body returns the body's space as it comes. Read by System V's positions, the
+body took the six registers its slow path saves as parameters, each numbered
+barrier passed it six unknown values, and it returned an RAX it never set.
+
 MedIR caches the decision on each call (`MedOp::RegisterContract`). From
 there `callClobbersRegister`, SSA's partial clobbers, sub-register merges and
 the code-pointer resolver read it. The rest asks the authority directly: the
@@ -5810,6 +5823,43 @@ incoming RBX, R12-R15 or X19-X28 as no save. In Go, RBX is the second integer
 argument. Read as System V's callee-saved register, `runtime.throw`'s store
 of its string length into the closure it hands `systemstack` disappeared
 from the C.
+
+A routine that calls out on the slow path of a loop saves the registers it
+keeps before the call and reloads them after it: Go 1.21's `gcWriteBarrier`
+saves ten round `wbBufFlush` and tries its buffer again. What such a save
+stores the next time round is the register's entry value joined with what the
+reload brought back, the entry value still, which the prologue rule does not
+see, since it reads a save of the entry value itself. Source mode marks those
+saves too and gives each reload the value its save stored
+(`markKeptRegisterSpills`). The bytes are the function's own, no other store
+writes them, every read of them is such a reload whose value reaches nothing
+but the save again, and no call takes one of those values as an argument: a
+store at a call's stack pointer may pass a stack argument, which the routine
+called may change before the reload reads it. The save also runs before each
+reload, earlier in the reload's block or in a block every way from the entry
+to the reload runs: a reload some way reaches without the save may read bytes
+nothing wrote, so both stay. The pass runs after call
+recovery, which binds those arguments; a call whose arguments nothing bound,
+to a routine whose `pclntab` record does not give it no argument word, may
+take any save, so a function that makes one keeps all of them. The registers
+are those the convention keeps, and those a write barrier keeps
+(`goWriteBarrierKeeps`): every general-purpose register but the stack
+pointer, the one it returns in and arm64's assembler temporary R27, X19 to
+X26 among them, which the call summaries track no family of. Go's linker
+gives every function of a PE unwind data and no personality; such data
+enters no block, so the pass still runs there, while a function with a
+personality, whose dispatcher may read what it saved, keeps its saves.
+Printed, each of the body's saves stored an unknown value.
+
+The storing barrier of a register-ABI image (Go 1.17 to 1.20) finds its buffer
+through R14 too, so LowToMed defines the goroutine at its entry as it does for
+compiled code, which alone calls it. That read is the function's first
+statement, and HighIR's prefix of frame addresses (`entryFrameAliases`) runs
+over it as it runs over a plain store: a read that changes nothing
+(`intrinsicReadIsDiscardable`) names no frame address and ends no prefix. A
+prefix it ended left every store through `v0 = RSP - N` without a frame
+offset, and the barrier's saves of R10 and R11, registers the convention gives
+no value, printed as stores of an unknown value.
 
 Go passes a func value its closure in a context register, RDX or arm64's
 R26, and it is no positional argument. MedABIPass recognizes an indirect call
@@ -5880,6 +5930,78 @@ prologue's vector count, which lists no parameters; a Go summary always lists
 them (`summaryListsNoParameters`), since a Go function's first argument may be
 a `bool`.
 
+`runtime.mcall` saves its caller's state in the goroutine, switches to the
+scheduler's stack and calls a function that never returns, so its own code
+never returns. The scheduler resumes the goroutine at the call's return
+address, as if the call had returned: `gogo` restores the saved PC. A call of
+it therefore resumes after it (`goCallResumesAfter`,
+`GoModuleInfo::ScheduleCallEntries`), as a call of a stack-growth routine
+does, and the proofs that find the calls that never return take that as
+stated of the routine (`goStatedCallReturns`), which no proof of its body
+overturns; the routine's own flag stays what its body proves, and HighIR
+declares it no `_Noreturn` function, which would let a C compiler drop what
+follows its calls. Proved terminal,
+the call ended `runtime.gopark`, so every blocking operation lost the code
+after it parks, and `runtime.exitsyscall` lost what follows
+`mcall(exitsyscall0)`.
+
+Compiled code reads the goroutine in R14 (R28 on arm64), which LowToMed
+defines at its entry (`defineGoCurrentGoroutine`). x86-64 assembly of a
+register-ABI image that Go code enters still finds it there, whatever ABI it
+declares, and its helpers rely on that: `runtime.mcall` and
+`gosave_systemstack_switch<>` save their caller's state in `g.sched` through
+R14. Assembly the platform enters, a signal trampoline or a callback, only
+saves R14 for its caller. So the assembly that addresses memory through the
+register as it was entered reads the goroutine
+(`addressesThroughEntryRegister`): a load or a store whose address is that
+value or a constant away from it. Those reads printed as a register with no
+definition.
+
+Go's internal ABI passes floating arguments in X0 to X14 (F0 to F15 on
+arm64), where System V passes eight, Win64 four and AAPCS64 eight. Code that
+takes Go's integer registers, or operands of its own, takes the floating ones
+in Go's (`detectFPParams` with `goFloatArgumentRegisters`):
+`runtime.spillArgs` stores every argument register through R12, and X8 to X14
+printed as registers with no definition. On arm64 the platform's integer
+positions are Go's first eight, so `detectCc` has no other function to tell
+assembly by; a routine that reads X9 to X15 at its entry, which carry Go's
+tenth to sixteenth argument and nothing the platform passes, follows Go's
+convention. Code the platform enters reads none of them and saves D8 to D15
+for its caller, as `runtime.sigtramp` does: read as Go's, those saves were
+eight floating parameters, and `cgoSigtramp` passed it eight unknown values.
+
+Such a function has no parameter at a platform position. HighIR names the
+entry value of a register as the parameter that arrives in it
+(`MedToHighConverter::abiParamIndex`), and falls back on the register's
+platform position only where the function takes its arguments at the
+platform's positions: not where it takes them in registers of its own or on
+the stack alone (`MedFunc::StackArgumentsOnly`). A PE's platform passes its
+first argument in RCX, Go's internal ABI its third, so in a PE a Go function
+of two arguments printed its entry RCX, a register no argument arrives in, as
+`arg0`: the copy index for Win64's entry copies read the position.
+
+Before the internal ABI every call into Go code passes its arguments on the
+stack, floating ones too, and nothing in a register. A direct call takes that
+layout from its callee (`MedFunc::StackArgumentsOnly`); an indirect one has no
+callee to ask. A function that begins with Go's stack check runs on a
+goroutine's stack, where Go code calls nothing but Go code
+(`MedFunc::ChecksGoStack`), so each indirect call it makes takes
+`goStackArgumentLayout`; so does a call any other Go routine of such an image
+makes through a func value (`goIndirectCallTakesStackArguments`). Assembly
+without the check may call another language's code through a pointer, on the
+system stack, with the registers it sets, and keeps the platform's layout. By
+the platform's positions `efaceeq`'s `eq(x, y)` passed six arguments: whatever
+RDI and RSI held, the closure in RDX and the goroutine the stack check left
+in RCX came before the two words it stored.
+
+Call recovery names the entry value of a register a call passes on as a
+parameter before it knows the function's parameters. Where none arrives in
+that register the value is unknown, and MedToHigh lowers it as it lowers the
+rename sentinel of such a register: a stack-ABI routine that sets RCX and
+calls through a table passes on, by the platform's positions, whatever RDI,
+RSI and RDX hold. Those printed as the stack words at their platform
+positions, and past the routine's last parameter as `arg-1`, which is no C.
+
 Assembly with no Go declaration of its own, whose record gives no argument
 word, takes its operands in registers of its own where it reads at entry one
 the platform passes no argument in: `internal/bytealg`'s `indexbytebody<>`
@@ -5894,7 +6016,18 @@ RCX and R8, and left the byte and the length undefined in each of its SIMD
 compares. A routine that calls out reads the registers it saves for its
 callee (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`), and assembly
 the platform's code enters reads its arguments where the platform passes them
-(`runtime.sigtramp`): both keep the platform's positions. Before Go 1.17 no
+(`runtime.sigtramp`): both keep the platform's positions. A routine that
+leaves only to resume saved state calls nothing either. A jump to code no
+summary describes passes the routine's argument registers on, so its entry
+reads are unknown (`LocalRegisterEffect::UnknownEntryReads`); one that
+follows a load of the stack pointer from memory in its block resumes state
+saved elsewhere, on that state's stack (`RegisterStep::ResumesContext`,
+`loadsStackPointerBefore`): it reads no register as the routine was entered
+with it, and call recovery passes it no argument. `gogo<>` loads the stack
+pointer, the closure context and the frame pointer from the gobuf in BX and
+jumps to the PC saved there, so it takes BX and the goroutine in DX; read as
+a tail call, it reached the gobuf through a register with no definition and
+`runtime.gogo` passed it two unknown values. Before Go 1.17 no
 amd64 Go code takes a register argument, so in such an image a routine that
 reads one is assembly, though no flag says so; there a read of RAX's low byte
 alone counts for none, since a compiled function's nil check makes one (`testb
@@ -5926,6 +6059,93 @@ them back, the same way (`goInlinedRoutineAt`): between the two a helper calls
 a func value, which enters Go code by the internal ABI, so its stores read
 what the call returns (`modelGoCallResults`). As calls, each of a Go image's
 27 helpers passed `spillArgs` sixteen unknown values, twelve on Windows.
+
+Such a call takes its arguments in Go's registers too, integer and floating
+(`goIntegerArgumentRegisters`, `goFloatArgumentRegisters`), as does every
+indirect call compiled code makes (`goIndirectCallTakesGoRegisters`).
+MedABIPass reads them there, MedDCE keeps what reaches the call in each, and
+HighIR's argument scan, which numbers registers in the platform's order, takes
+MedABIPass's list for a call in its callee's order
+(`MedCallInfo::ArgumentsInCalleeRegisterOrder`). Read in System V's, a helper
+passed its func value RDI, RSI, RDX, which holds the closure, RCX, R8, R9 and
+eight floating registers, of the nine and fifteen it loads. A closure call
+`mov eax, 5; mov ebx, 7; call [rdx]` passed nothing: dead code elimination
+deleted both writes, and the scan then made RDX an argument. Assembly passes a
+func value only what it sets in those registers. The values it was entered
+with, which it takes in the platform's order, sit in Go's by chance: a copy of
+one into its own register sets nothing, and one left there is no argument it
+passes on. Taken as forwarded, a helper's RDI and RSI, Go's fourth and fifth,
+reordered its own parameters to Go's.
+
+A call is one through a func value where it loads its target from the address
+in the context register (`callsThroughFuncValue`). The block of the call need
+not set that register: it holds what the one block that leads there left in
+it, and so on back, where no join, second way in or call lies between.
+`runtime.mcall` moves its fn into DX at its entry and calls through it two
+blocks later (`MOVQ 0(DX), R12; CALL R12`). Read by the platform's positions,
+that call passed on RDI and RSI, which became parameters of `mcall`, and each
+of its callers passed three unknown values.
+
+Go assigns its integer arguments to those registers in order, so the register
+that holds such a call's target ends them, whatever was set above it. Go
+1.21's map access loads the hash seed into ESI before RBX takes it, and RSI,
+Go's fifth register, gave the hasher it calls through RCX five arguments. A
+compiler sets each argument on every way to its call, so a join that brings,
+on one way, the register as the function was entered, where no parameter of
+it arrives, or what an earlier call left there, is no argument either
+(`setOnEveryWay`): where one way to Go 1.26's hasher calls
+`internal/runtime/maps.fatal` first, X0 and X1 gave it two unknown floating
+arguments. The stack arguments of such a call sit where Go's stack ABI puts
+them (`goStackArgumentLayout`), with no shadow space, and Go numbers its
+integer and floating registers apart, so Win64's positions apply neither to
+it nor to any call in its callee's own order. Read with them on Windows, a
+local stored above the shadow space proved every register an argument, and
+each hasher took nine.
+
+Call recovery gives a call of Go code its arguments in the callee's order;
+HighIR's own collection numbers a platform's registers and takes at most that
+many, System V's six of Go's nine. A HighIR run recovers its calls where one
+of them is a direct call of Go code, as it does where the run has an indirect
+call or the convention takes arguments from the call's setup. A run of one
+function with neither, as a user opens one, skipped recovery, and a call that
+set seven registers passed six and an unknown value.
+
+The operands a direct call's summary names count every register its callee
+takes arguments in (`goIntegerArgumentRegisters`), not the eight slots tracked
+for a dispatcher or a variadic call (`kTrackedArgSlots`), which hold a
+platform's. Counted over those, a call never bound R11, Go's ninth: the move
+that set it was dead, and `runtime.concatstring4`, which takes a buffer and
+four strings, got eight arguments and an unknown value.
+
+Where a call takes its arguments from the setup its caller writes, with no
+summary to bind them (arm64), MedDCE keeps the setup of every register Go
+passes an integer argument in live for a direct call of code Go compiled
+(`usesGoRegisterArguments`), as it keeps the platform's for any call, until
+call recovery reads them. X9 to X15 carry Go's tenth to sixteenth argument
+and nothing AAPCS64 passes: `strconv.formatDigits` shifts its parameters into
+place for `fmtE` (`MOVD R10, R9; MOVD R11, R10`), both moves were deleted as
+dead, and the call passed what R9 and R10 held on entry, two other parameters
+of the caller, in place of the precision and the format.
+
+Go assigns an argument the stack once its registers are taken, or where those
+left cannot hold it whole, in words above the return address, where the stack
+ABI puts every argument. `goRegisterArgumentLayout` is that layout: Go's
+registers and the stack ABI's bases, with no home space on Windows and no
+platform's register count. A function that takes Go's registers has it
+(`integerArgumentLayoutOf`), its stack parameters are found and numbered by it
+(`detectStackParams`), and a call of one reads its stack arguments by it. A
+stack argument there implies no register one, so the function takes no
+placeholder for a register it does not read, and a call passes no value for
+one. Read by the platform's layout, `strconv.fmtE`, whose precision and
+format follow nine registers, took a placeholder for each of System V's six
+registers ahead of its own: a lifted call, which passes Go's registers and
+the stack words in order, bound every argument to the wrong parameter. On
+Windows the two words lay in what Win64 calls home space, so the function
+read them as locals nothing wrote and no call passed them. On arm64, where
+AAPCS64's stack arguments start at the stack pointer and Go's a word above,
+past its saved link register, a function's first stack word was a tenth
+argument, and a caller passed X1 to X7 to reach it, taking them as parameters
+of its own.
 
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
@@ -6074,8 +6294,13 @@ seemed to end where its stack ran short. The path is left out only when the
 entry does nothing but compare and branch, so running it again is the same as
 running it once (`GoStackGrowth::Restarts`). The path must also call a routine
 that grows the stack rather than `runtime.morestackc`, which throws, and the
-entry alone must reach it. A frame larger than 4 KiB checks for underflow with
-a second branch to the path and keeps it. `g` is R14 from Go 1.17 and a
+checks alone must reach it. A frame too large for one comparison checks
+twice: the entry proves that the stack pointer less the frame does not wrap
+(`sub r12, N; jb`), and the block it falls into, which nothing else reaches
+and which computes nothing either, compares that with the guard
+(`GoStackGrowth::SecondCheck`). Each then branches straight to the block
+after it. Reflection's `runtime.callNNN` frames are such, up to a gibibyte,
+and each printed its body under the two comparisons. `g` is R14 from Go 1.17 and a
 thread-local load before it, and both forms qualify. The runtime's growth
 routines take no register argument, exactly (`MorestackEntries`): arm64's path
 hands them its own return address in R3, as any call does in LR, and their
@@ -6173,7 +6398,10 @@ The loader proves the stack ABI before anything relies on it
 prologues decide: Go 1.16 and earlier load g from thread-local storage
 (`mov rcx, fs:[-8]`), and no Go 1.17 prologue's `cmp rsp, [r14+0x10]` may
 appear. It also keeps each function's `_func.args`, the bytes of its arguments
-and results (`GoModuleInfo::FrameArguments`).
+and results (`GoModuleInfo::FrameArguments`). A call passes no more words than
+those bytes round up to: `runtime.exit(code int32)` records four, one word.
+Divided down, the record gave none, and every arm64 caller of that assembly,
+which reads its code from the stack, passed an unknown value.
 
 `detectCc` gives such a function no register parameter and numbers its stack
 parameters from the slot past its return address (`MedFunc::
@@ -6821,6 +7049,36 @@ rewrite; the full-width verifier must accept it before the normal type,
 effect and profitability checks can publish it. Exhaustion preserves the
 expression. GUI menu requests, CLI single-function options and whole-program
 source sessions all reach these same policies.
+The shared bitvector builder can read a field from two masked words joined by
+OR, XOR or addition. For an addition it checks both masks below the field. A
+pair of clear bits stops a carry, and a pair of set bits can generate one. If a
+carry can reach the field, the computation starts at the first possible
+generate after the last pair of clear bits. A field can pass through a widening
+conversion or the shifts that implement a rotation when its source coordinates
+are known. LLVM source translation admits a flagged constant left shift when
+the operand bounds prove each requested signed or unsigned no-wrap condition.
+Both inputs can contribute to the field. The builder slices both literal masks
+at the last relevant carry boundary and reuses a shared operand's field.
+A bounded number of splits per extraction keeps nested masked sums tractable.
+OR and XOR fields can also span several masked inputs. Each input supplies
+only its selected literal bits. When the bounded mask check shows that every
+mask already fits the field, one extraction after the join keeps a common
+shift shared.
+For large products of affine factors, two perturbations can vanish together
+modulo the observed width. Prefix and suffix products then give the exact
+weight of each surviving low field, including for even offsets. The solver
+combines equal fields at their live width and appends the constant low bits.
+This computation retains every live coefficient bit across machine-word
+boundaries. A bitwise expression in which each abstract input occurs once
+already uses the minimum number of binary operations for that reading.
+The region solver can use it directly and still check alternative input
+relations after restoring the original expressions. A one-bit XOR over
+abstracted inputs keeps its additive reading so a restored sum can cancel
+against its individual bits.
+LLVM source translation uses operand-derived zero bits to prove exact right
+shifts through overlapping masked OR and XOR expressions. The same facts bound
+flagged left shifts and arithmetic on logical shifts of those expressions.
+
 Expression interning beneath these passes uses a flat hash table, avoiding a
 separate allocation for each distinct node hash. Reserved key pairs use
 separate context-owned heads, so every 64-bit hash remains representable. Colliding
@@ -12369,8 +12627,14 @@ calls take their arguments from the caller's setup. A caller's pass-through
 registers and incoming stack slots then become its parameters. Without such
 evidence an indirect call uses its setup prefix. A later integer argument
 can establish untouched incoming slots before it, provided every path to the
-call preserves those inputs. The target's own register establishes no prefix;
-prior calls, exceptional roots and independent entries cannot invent one.
+call preserves those inputs. The target's own register establishes no prefix,
+nor does the register the target is loaded through: the call needs the
+address there whatever it passes. `sqlite3_free` loads its configuration's
+address into RDX and jumps through a slot of it (`mov rdx, [config]; jmp
+[rdx+0x28]`); RDX read as a third argument made RSI, which the function never
+touches, a second, and a parameter that each of its 964 callers passed an
+unknown value for. Prior calls, exceptional roots and independent entries
+cannot invent a prefix.
 Both C routes consume this shared Med ABI recovery, including System V x64.
 Physical integer slot width owns promoted carriers (eight bytes on n32),
 independently of pointer width. LLVM call argument symbolization only converts
@@ -12558,6 +12822,27 @@ the summary counts, though the callee's own recovery took more as forwarded
 parameters: those positions pass zero, before the floating arguments. A call
 whose block loads AL with no constant gives no count, and nothing changes for
 it.
+
+An unknown call that returns passes on the argument registers its setup
+leaves alone below one it sets (`forwardedArgumentRegisters`), and the summary
+counts them as the call's reads, so a function that passes them on reads them
+at its entry, as call recovery later makes them its parameters. A register
+the setup writes and then reads again holds the function's own value, a base
+its target is loaded through or the target, and proves nothing below it; Go
+code, which sets Go's registers, is left to Go's rules. `sqlite3AuthCheck`
+loads the authorizer's first and sixth arguments and calls it with RSI, RDX,
+RCX and R8 as it got them. Its summary read RDI alone, so in each of its
+callers the four moves that set them were dead before recovery knew the
+parameters, and its calls passed 139 unknown values.
+
+A callee reads what it was entered with before its call writes a result, so
+the summary ends what the call's own output defines before it joins the
+callee's entry reads, not after. Go passes its first argument in the register
+it returns its first result in: joined the other way round, a function that
+passes RAX on as it came, as `runtime.chansend1` jumps to `chansend`, read RBX
+and RCX at its entry and not RAX. It took RAX as a parameter only once call
+recovery promoted the register its call forwards, with no entry value to
+name, and HighIR passed a register with no definition.
 
 Past its register save area, a System V variadic routine of the image takes
 one trailing stack parameter per slot its widest call stores from the call's
@@ -20564,6 +20849,8 @@ Interpreter specialization retains full-width guest addresses. At publication, i
 `X64MachineExits` declares exact CALL, unconditional JMP, canonical near RET and resumable INT3/INT1 trap boundaries (including the two-byte INT 3 encoding) for a raw machine region. `NativeStackControl` strictly relifts the original bytes and retains the complete transfer: CALL captures its target before pushing the original fallthrough address; RET loads the actual stack word before advancing RSP by eight plus any unsigned cleanup. The final target remains a value, including for direct transfers. A trap instead retains its authenticated final intrinsic and ends the region without a next-PC or exception-continuation contract. Its exact architecture-owned undefined-output audit is retained: canonical INT3/INT 3 has Complete coverage and INT1 remains Missing. Neither supplies exception delivery or a continuation; invented undefined effects, changed audit grades and preservation claims are rejected. The architecture owner grants this terminal behavior, and ordinary trap intrinsics remain unsupported by the generic executor. This domain requires explicit nonfaulting CET-disabled x64 state and excludes the ordinary restored-return-slot and terminal-import contracts. Unknown stores retain their alias effects; every unlisted transfer still needs exhaustive internal analysis. The existing bounded raw requirement and receipt bind the declarations, graph and physical exit spans. Complete describes the declared region only. Callee effects, reentry, continuation composition, whole-function recovery and source/native certificates remain separate obligations; ordinary consumers reject this domain even when its declarations are unused.
 
 `X64ReturningCalls` opts an exact authenticated physical CALL into a conditional normal-return relation inside a declared raw machine region. The x64 owner validates the original target capture, push and fallthrough, and binds a unique residual call span to the complete native bytes and receipt. The common evaluator then forgets volatile registers and memory under the caller-declared relation, retaining only the architecture-owned preserved register ranges and current materialized entry-frame bytes above the outgoing call area. Arithmetic flags receive fresh defined values; the guest stack and PC return to the original fallthrough. Work and node budgets cover this transition. This relation assumes normal return without fault, unwind, reentry or callback and is not a learned import model. Unlisted calls still end only at declared machine exits or refuse. A completed raw region with such a call does not establish an ordinary source ABI, callee implementation or C/LLVM certificate; those consumers reject the retained marker.
+
+`EntryReturnSlot` is an explicit raw-domain caller-word premise. The x64 owner admits only a complete eight-byte word at entry RSP within declared frame bounds, and binds it to the architecture-owned domain digest. Core carries only a must-preserved opaque memory fact across projections, context keys, joins, proved disjoint stores and conditional returning-call effects. Any possible overlap retires the fact. A certified physical RET at the restored entry stack can then be an outer RETURN; the same native byte in another stack or memory context remains an internal transfer with its usual exhaustive target proof. The raw receipt still describes a conditional machine region. Source and native proof consumers reject this premise until they have an independent contract for it.
 
 Version 2 of this conditional relation can explicitly preserve sorted, disjoint entry-frame spans below the physical call push. It retains only bytes materialized immediately before each call. Admission checks the spans against the declared frame, then the evaluator proves the current caller stack offset and rejects any span that overlaps the push or outgoing area. The exact spans participate in the domain and call digests. This is a caller-supplied callee effect premise; a concrete trace cannot establish it for every invocation. Version 1 keeps its original memory effect and digest.
 

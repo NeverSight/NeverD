@@ -190,6 +190,31 @@ void markUnobservedBorrowedFrameStores(
 void markUndefinedScratchStores(MedFunc &Func, Arch Architecture,
                                 BinaryFormat Format);
 
+/// In source mode, mark each store that keeps a register round a loop as a
+/// PrologueSave, and give its reloads the value it stored.  A routine that
+/// calls out on the slow path of a loop saves the registers it keeps before
+/// the call and reloads them after it.  What it saves the next time round is
+/// the register's entry value joined with what the reload brought back, the
+/// entry value still, which the prologue rule does not see: that one reads a
+/// save of the entry value itself (markSourceStackAccesses).  The bytes are
+/// the function's own, no other store writes them, every read of them is such
+/// a reload, whose value reaches nothing but the save again, and no call
+/// takes one of those values as an argument: a store at a call's stack
+/// pointer may pass one.  The save runs before each reload, earlier in its
+/// block or in a block every way from the entry to the reload runs: a reload
+/// a way reaches without the save may read bytes nothing wrote, and stays
+/// with its save.  The registers are those the convention keeps, and
+/// those a Go write barrier keeps (goWriteBarrierKeeps): Go 1.21's
+/// `gcWriteBarrier` saves ten round `wbBufFlush`.  Run it where call
+/// recovery has bound each call's arguments: a call whose arguments nothing
+/// bound, to a routine whose pclntab record does not give it no argument
+/// word, may take any save.  Unwind data alone enters no block; a function
+/// with a personality, whose dispatcher may read what it saved, keeps its
+/// saves.
+void markKeptRegisterSpills(MedFunc &Func, Arch Architecture,
+                            BinaryFormat Format,
+                            const BinaryImage *Image = nullptr);
+
 /// In source mode, mark each store that saves a callee-saved register's entry
 /// value into prologue storage as a PrologueSave.  Prologue storage is the
 /// function's own frame below the entry stack pointer, or on Win64 the home

@@ -506,6 +506,10 @@ private:
   SymRef internMaskedSource(llvm::ArrayRef<SymRef> Source,
                             const llvm::APInt &Mask);
 
+  /// Share the masked-join split allowance across one field request.
+  SymRef extractWindow(SymRef A, uint32_t Low, uint32_t Width,
+                       unsigned &RemainingSplits);
+
   /// Completed, strictly narrowing projections of arithmetic/bitwise nodes.
   /// Other nodes can have different direct and in-walk canonical forms.
   SymRef findLowWordProjection(SymRef Source, uint32_t Width) const;
@@ -592,7 +596,7 @@ private:
   /// once more than one width uses it.  Name-only lookup must never choose one
   /// of several width-specific variables by accident.
   std::unordered_map<std::string, uint32_t> VarByName;
-  llvm::DenseMap<llvm::APInt, uint32_t> WideConstByValue;
+  llvm::DenseMap<llvm::APInt, SymRef> WideConstByValue;
 
   struct InputSpaceKey {
     SymInputKind Kind = SymInputKind::Register;

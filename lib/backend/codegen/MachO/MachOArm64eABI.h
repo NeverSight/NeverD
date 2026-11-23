@@ -17,6 +17,13 @@ namespace neverd::macho_arm64e_abi {
   inline constexpr Type Name = Value;
 #define MACHO_ARM64E_ABI_TEXT(Name, Text) inline constexpr char Name[] = Text;
 #include "MachOArm64eABI.def"
+
+enum class PAuthEncoding : uint32_t {
+#define NEVERD_A64_PAUTH_HINT(Name, Word, Operation, Pointer, Modifier)        \
+  Name = Word,
+#define NEVERD_A64_PAUTH_BRANCH(Name, Mask, Word, Key, Link, Kind) Name = Word,
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.def"
+};
 } // namespace neverd::macho_arm64e_abi
 
 #endif // NEVERD_BACKEND_CODEGEN_MACHO_MACHOARM64EABI_H

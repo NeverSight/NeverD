@@ -222,15 +222,14 @@ SymRef SymContext::internWideConst(const llvm::APInt &Val) {
   // APInt's key compares the width and every word. Lookups borrow the value;
   // only a new literal needs owned storage, with no decimal serialization.
   auto It = WideConstByValue.find(Val);
-  uint32_t Slot;
-  if (It != WideConstByValue.end()) {
-    Slot = It->second;
-  } else {
-    Slot = static_cast<uint32_t>(WideConsts.size());
-    WideConsts.push_back(Val);
-    WideConstByValue.try_emplace(Val, Slot);
-  }
-  return intern(SymOp::Const, Val.getBitWidth(), {}, Slot);
+  if (It != WideConstByValue.end())
+    return It->second;
+  const auto Slot = static_cast<uint32_t>(WideConsts.size());
+  WideConsts.push_back(Val);
+  const auto Ref =
+      intern(SymOp::Const, WideConsts[Slot].getBitWidth(), {}, Slot);
+  WideConstByValue.try_emplace(WideConsts[Slot], Ref);
+  return Ref;
 }
 
 SymRef SymContext::mkConst(uint32_t Width, uint64_t Val) {
@@ -271,11 +270,16 @@ std::optional<llvm::APInt> SymContext::asConst(SymRef R) const {
 }
 
 bool SymContext::isConstZero(SymRef R) const {
-  return isConst(R) && constValue(R).isZero();
+  const auto &N = node(R);
+  return N.Op == SymOp::Const &&
+         (N.Width <= 64 ? N.Aux == 0 : WideConsts[N.Aux].isZero());
 }
 
 bool SymContext::isConstOnes(SymRef R) const {
-  return isConst(R) && constValue(R).isAllOnes();
+  const auto &N = node(R);
+  return N.Op == SymOp::Const &&
+         (N.Width <= 64 ? N.Aux == (~uint64_t(0) >> (64 - N.Width))
+                        : WideConsts[N.Aux].isAllOnes());
 }
 
 void SymContext::recordVariableName(llvm::StringRef Name, uint32_t Id) {
@@ -285,14 +289,13 @@ void SymContext::recordVariableName(llvm::StringRef Name, uint32_t Id) {
 }
 
 SymRef SymContext::mkVar(llvm::StringRef Name, uint32_t Width) {
-  std::string Key = Name.str();
-  auto Identity = std::make_pair(Key, Width);
+  auto Identity = std::make_pair(Name.str(), Width);
   auto It = VarByNameAndWidth.find(Identity);
   if (It != VarByNameAndWidth.end())
     return It->second;
   auto Id = static_cast<uint32_t>(Vars.size());
-  Vars.push_back(SymVarInfo{Key, Width});
-  recordVariableName(Key, Id);
+  Vars.push_back(SymVarInfo{Identity.first, Width});
+  recordVariableName(Identity.first, Id);
   const auto Result = intern(SymOp::Var, Width, {}, Id);
   VarByNameAndWidth.emplace(std::move(Identity), Result);
   return Result;

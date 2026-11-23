@@ -7,12 +7,14 @@
 #include "LocalTypesDebugContext.h"
 #include "gtest/gtest.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/libc/LibCFixedIntegerArguments.h"
 #include "neverd/libc/LibCFloatingArguments.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/types/TypeParse.h"
 
 #include <algorithm>
@@ -893,6 +895,72 @@ TEST(LocalTypesDebugContext,
       ASSERT_TRUE(Type);
       EXPECT_TRUE(Type->Fields.empty());
     }
+  }
+}
+
+TEST(LocalTypesDebugContext, MIPSMixedUnionUsesIntegerObjectBits) {
+  using namespace neverd;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(unsigned(A));
+    types::TypeLibrary Library(isMIPSN64(A) ? types::DataModel::LP64
+                                            : types::DataModel::ILP32);
+    Library.setRecordABI(types::RecordABI::Itanium);
+    ASSERT_TRUE(types::parseCTypes(kMIPSMixedUnionDecls, Library).ok());
+    const auto *Function = Library.findPrototype("mix");
+    ASSERT_TRUE(Function);
+    const auto Result = sdk::sourceCallTypeOf(Library, *Function->Return);
+    std::vector<TypeRef> Params;
+    for (const auto &P : Function->Params) {
+      Params.push_back(sdk::sourceCallTypeOf(Library, *P.Type));
+      ASSERT_TRUE(Params.back());
+    }
+    ASSERT_TRUE(Result && Result->IsUnion);
+    ASSERT_EQ(Params.size(), 4u);
+    for (const auto &U : {Result, Params[0], Params[1]}) {
+      ASSERT_TRUE(U->IsUnion);
+      ASSERT_EQ(U->Fields.size(), 1u);
+      EXPECT_EQ(U->Fields[0]->Kind, NdTypeKind::Int);
+      EXPECT_EQ(U->Fields[0]->Size, 8);
+      EXPECT_FALSE(U->Fields[0]->IsSigned);
+      EXPECT_EQ(U->FieldDisplayTypes.size(), 2u);
+      EXPECT_TRUE(sourceAggregateMembers(U).empty());
+    }
+    EXPECT_TRUE(equalSourceTypes(Result, Params[0]));
+    EXPECT_FALSE(equalSourceTypes(Result, Params[3]));
+    const auto Call =
+        mips::placeRecordCall(A, BinaryFormat::ELF, Result, Params);
+    ASSERT_TRUE(Call);
+    const auto &Arg = Call->Arguments.Parameters.front();
+    if (isMIPSO32(A)) {
+      ASSERT_TRUE(Call->Arguments.ResultPointer);
+      EXPECT_TRUE(Call->ReturnsResultPointer);
+      ASSERT_EQ(Arg.size(), 2u);
+      EXPECT_EQ(Arg[0].Location.RegisterOffset, mipsreg::A2);
+      EXPECT_EQ(Arg[1].Location.RegisterOffset, mipsreg::A3);
+    } else {
+      ASSERT_FALSE(Call->Arguments.ResultPointer);
+      ASSERT_EQ(Call->Result.size(), 1u);
+      EXPECT_EQ(Call->Result[0].Location.RegisterOffset, mipsreg::V0);
+      ASSERT_EQ(Arg.size(), 1u);
+      EXPECT_EQ(Arg[0].Location.RegisterOffset, mipsreg::A0);
+      const auto &Nested = Call->Arguments.Parameters[2];
+      ASSERT_EQ(Nested.size(), 2u);
+      EXPECT_EQ(Nested[0].Location.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Nested[1].Location.Kind,
+                SourceABICarrierKind::FloatingRegister);
+    }
+    // A function declaration added to imported DWARF types does not supply
+    // the missing alignment of its packed or natural union.
+    auto Imported = *Library.find("Reverse");
+    auto Declaration = std::make_shared<types::RecordDef>(*Imported.Record);
+    Imported.Origin = types::TypeOrigin::DWARF;
+    Declaration->Alignment = 0;
+    Imported.Record = Declaration;
+    Library.define(Imported);
+    EXPECT_FALSE(sdk::sourceCallTypeOf(Library, *Function->Params[1].Type));
+    Declaration->Alignment = 8;
+    EXPECT_TRUE(sdk::sourceCallTypeOf(Library, *Function->Params[1].Type));
   }
 }
 

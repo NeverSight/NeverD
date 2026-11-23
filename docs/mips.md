@@ -66,8 +66,23 @@ after linking the object with the target linker.
   can carry a frame address. Replacing that argument before the call, including
   in its executed delay slot, removes the earlier value from the proof.
   On n32/n64 a full-GPR comparison can prove that an opaque result equals
-  a literal or an independently known non-frame word. Full-width moves carry
-  this fact across basic blocks. At a join, every incoming path must qualify
+  a literal or an independently known non-frame word. Separate comparisons
+  can establish the same fact when the low and high 32-bit patterns both
+  match the corresponding halves of that word on the path to the call.
+  Either comparison may come first. A zero test can also establish equality
+  from a full-width XOR or modular subtraction computed in an earlier block.
+  If the bitwise OR of two differences is zero, each difference is zero.
+  The proof uses the operands sampled when each difference was computed.
+  A register copy or stack reload preserves the test for the bits it carries.
+  At a merge or loop header, the selected difference must imply equality on
+  every incoming edge. One path can use a full-width XOR or subtraction while
+  another uses the OR of the low- and high-half XORs. Their zero tests establish
+  the same equality when both pairs refer to the corresponding sampled bits.
+  Replacing the difference on a single edge can invalidate the guard.
+  A single word can hold the OR of two 32-bit differences. A word
+  spill of a 64-bit XOR can leave its high half unchecked.
+  Full-width moves carry the established fact across basic blocks.
+  At a join, every incoming path must qualify
   the actual argument. A comparison after the join can also qualify two
   registers that carry the same selected return word on every incoming edge.
   A subsequent opaque call needs a fresh comparison.
@@ -82,13 +97,17 @@ after linking the object with the target linker.
   doubleword in memory. Two word loads can reconstruct it in a GPR when each
   half occupies its original bit positions. A signed high word is usable
   after shifting it left by 32. A signed low word must first have its upper
-  bits cleared. A guard can precede or follow this reconstruction.
+  bits cleared. A guard can precede or follow this reconstruction. Checking
+  the low half again after a whole-word match preserves the proof when the
+  original pieces are reassembled.
   Swapped, duplicated or mixed halves cannot establish equality with the
   original result. A fresh full-width guard can qualify the actual assembled
   value, including one changed by a narrow write. A store through an
   unresolved frame alias invalidates the sampled identities in memory.
   Before an open call, every exposed stack cell containing opaque bits must
-  itself be checked or have those bits overwritten. This includes fragments kept in separate cells.
+  itself be checked or have those bits overwritten. Byte and halfword stores
+  can collectively cover a slot. Every path to the call must overwrite each
+  outstanding byte, including fragments kept in separate cells.
   The call invalidates those slot identities. An earlier sample in a preserved
   register can be checked again. A call with a known argument extent can
   preserve a spill outside its outgoing area when the frame stays private.
@@ -1192,6 +1211,12 @@ outcomes are checked by original-target execution. Memory tests also compare
 literal 16/32-bit encodings with independent byte expectations and Unicorn,
 including sign extension, aliases, exact stores and failed/discarded loads.
 
+For MIPS16, the fixed-address decoder sends detailed no-text requests directly
+to the Capstone MIPS16 decoder and its shared instruction mapper. The
+`mips16` and `mips16el` profiles of `neverd-mips-bench` compare this path
+with the public Capstone iterator on the same bytes. Text output and skip-data
+use the ordinary Capstone path. [Capstone implementation and differential tests](https://github.com/NeverSight/capstone/pull/30).
+
 `neverd-mips-bench micromips|micromipsel capstone|decode|lift CODE REPEATS`
 uses matching microMIPS options for physical Capstone/Decoder comparisons.
 Decode plus lift is a separate workload. The paired regression runner continues
@@ -1574,12 +1599,67 @@ at physical address `0x1fc00000`. A bound MMU snapshot checks guest
 instruction fetches against physical bytes. Aligned and byte scalar integer
 transfers translate through a complete 64-entry R3000A or 48-entry R4000
 table. R4000 compatibility translations support even and odd pages, global
-pairs and variable page sizes. Misses, invalid entries, and writes to clean
-pages update the fault state before retirement. Optional Context and XContext
-samples preserve the board's page-table base. Extended R4000 address regions,
-TLB management instructions, reverse-endian user data, cache-isolation data
-accesses and CW4011 MMU
-behavior need additional processor-specific evidence.
+pairs and variable page sizes. On a miss to a sign-extended 32-bit address,
+the R4000 selects the refill vector from the interrupted mode's UX, SX or KX
+bit. Extended addressing adds `0x80` to the refill vector. A miss with EXL
+already set uses the general vector and preserves EPC. Invalid entries and
+writes to clean pages also use the general vector. The big- and little-endian
+system tests stamp the vector actually entered in the guest ROM. In QEMU
+8.2.2, a kernel miss at a low address follows UX when UX and KX differ.
+The native regression checks these split settings against the R4000 rule.
+[R4000 manual, chapters 4 and 5](https://www.cs.columbia.edu/~youngjin/download/MIPSR4000.pdf#page=152),
+[RM5200 manual, comparison with R4000 refill selection](https://erikarn.github.io/mips/cpu/rm5200um_v3.2.pdf).
+
+Optional Context and XContext samples preserve the board's page-table base.
+R4000PC/SC revisions 2.2 and 3.0 also have a documented load-interlock
+case at a page boundary that selects the general vector after an instruction
+cache miss. Replaying that silicon erratum requires the pipeline and cache
+state. The manufacturer's report gives no write-to-first-translation interval.
+[R4000PC/SC revision errata, item 11](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=3).
+
+Extended R4000 address regions, TLB management instructions, reverse-endian
+user data, cache-isolation data accesses and CW4011 MMU behavior need
+additional processor-specific evidence.
+
+On a 40 MHz R3000 DECstation 5000/240 running Mach 3.0, the IOASIC counter
+measured a first-level user TLB miss handler at 10 CPU cycles with a
+page-table load that hit in cache and 30–40 on a cache miss. On a 100 MHz
+R4000 SGI Indy, the Calibrator's pointer-chasing experiment reported a
+46-cycle TLB miss penalty. Both measurements include work beyond the TLB
+write. Neither timestamps the first fetch or load that sees the new mapping.
+[Bala et al., table 1](https://www.usenix.org/conference/osdi-94/software-prefetching-and-caching-translation-lookaside-buffers),
+[CWI measurements, SGI Indy “boktor”](https://homepages.cwi.nl/~manegold/Calibrator/DB/boktor.pdf).
+
+For R4000PC/SC revisions 2.2 and 3.0, item 27 of the silicon errata puts
+`TLBWR` in a taken branch-likely delay slot, followed by `NOP` and `ERET`.
+The R4000 guest test uses that sequence in both byte orders. A probe miss
+installs a new frame. A hit annuls the write and retains the old frame.
+Different trap instructions identify the first mapped fetch. A separate
+return to unmapped ROM checks the value of the first mapped load.
+The native lifter test checks fetch and load against successive MMU snapshots.
+The erratum specifies instruction order and the guest runs report architectural
+results. Neither supplies the clock edge at which the physical TLB changed.
+[MIPS R4000PC/SC errata, item 27, pp. 5–6](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=6).
+
+IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
+fetch at physical `0x1fc00000` supplies a jump, the read at `0x1fc00004`
+supplies its NOP delay slot, and the target at `0x1fc00220` supplies
+`lui v0,0x10`. Relative to the first read, the other two appear at 760 ns
+and 1.52 µs on that setup. The regression replays the captured words in
+both byte orders against the physical ROM addresses. The listing leaves
+the board's byte order and the time of reset release unspecified. The R3051
+hardware manual specifies that the CPU samples reset release against a
+falling SysClk edge and requests the vector word on the sixth rising edge
+after detection. The analyzer listing begins at the read.
+[IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf),
+[R3051 hardware manual, chapter 10, Reset Behavior](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/cpu/mips/r3051.pdf#page=131).
+
+A separate PlayStation logic-analyzer observation identifies the boot ROM
+timing change after the BIOS writes the memory controller. The fetch at
+`0xbfc00014` still uses the reset wait states, and `0xbfc00018` uses the
+new setting. The report gives the two fetch addresses without a timestamp
+for CPU reset release.
+[PlayStation bus investigation, Memory Control](https://github.com/psx-spx/psx-spx.github.io/blob/386f231a2176/docs/memorycontrol.md#L60-L74).
 
 The hardware regressions compare a little-endian DECstation 5000/133 load
 with its console instruction, EPC, fault address and exception fields. The SGI
@@ -1590,6 +1670,45 @@ edge against the instruction clock.
 [DECstation R3000A console](https://mail-index.netbsd.org/port-pmax/2011/04/21/msg000100.html),
 [SGI IP12 console](https://mail-index.netbsd.org/port-sgimips/2018/08/26/msg000766.html),
 [SGI IP20 R4000 console](https://mail-index.netbsd.org/netbsd-bugs/2018/08/13/msg058468.html).
+
+DEC measured interrupts on a DECstation 5000/200 running ULTRIX 4.2A. A
+TURBOchannel option recorded its interrupt assertion on a 25 MHz clock. In
+one refresh-synchronized run, 35% of 21,342 samples reached the device
+handler's timer read in 283 cycles (11.32 µs). In a separate run the option
+timestamped a write from a probe just after exception entry. Figure 9 places
+most of those writes within 20 cycles of assertion. That interval includes
+board delivery, exception entry, and the probe write. The experiment does
+not resolve the instruction at which the CPU recognized the input.
+[DEC PRL Research Report 19, sections 3.1–3.2, figures 6 and 9](https://ftpmirror.your.org/pub/misc/bitsavers/pdf/dec/tech_reports/PRL-RR-19.pdf#page=16).
+
+IDT gives separate R3051/2 pipeline latencies to the general exception
+vector while the pipeline runs. A direct, externally synchronized interrupt
+takes one cycle and an internally synchronized input takes two. A stalled
+pipeline defers recognition. The application note gives these values under
+stated conditions. A physical pin-to-recognition measurement still needs
+the CPU input transition and an identifiable recognition event on the same
+timebase. NeverD accepts the observed interrupt state at an instruction boundary.
+[IDT application note AN-131, Pipeline Latency, pp. 103–104](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/861.pdf#page=1).
+
+On a little-endian Sony SCPH-5501 (PRId 2, US ROM 3.0), the
+`irqsio` memory-card reports give the instruction count between enabling
+Status.IEc with IP2 pending and exception entry. All 18 trials in three
+distinct reports retired two instructions. The handler sampled Status
+`0x40000404` and root counter 2 at 54–68 clocks. The regression checks
+the retirement count, exception vector and Status using representative
+instructions. The timing of the electrical IRQ pin was outside this probe.
+[Board and test description](https://psx.wiki/tests/irqsio/),
+[card-b](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt),
+[card-g](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g/irqsio/14IEX.txt),
+[card-g3](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g3/irqsio/14IEX.txt).
+
+The same board's `04IP2` probe reads Cause after a peripheral write with
+IEc cleared. Enabling the pending source in I_MASK, or acknowledging it
+in I_STAT, changes the sampled IP2 after two intervening NOPs. Forcing
+the source in DICR first changes the sample after four NOPs. The separate
+DICR-to-handler experiment retired eight instructions. Replaying those
+device-triggered paths requires a model of the PlayStation interrupt controller.
+[Cause.IP2 samples](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/04IP2.txt).
 
 The CW4011 integration is described in the
 [LSI L64364 ATMizer II manual, chapter 4](https://www.ic72.com/pdf_file/l/123798.pdf).
@@ -1808,8 +1927,13 @@ Direct calls and explicitly typed indirect calls retain the register bank and
 byte offset of each independently placed field. A result written in the
 return delay slot is captured before SSA loses its physical register name. Reconstructing a source type requires an
 explicit local declaration or matching debug information and a complete
-by-value field layout. Unions and incomplete field graphs retain their display
-types.
+by-value field layout. An eight-byte union of `double` and an unsigned
+64-bit integer retains its C type for arguments and returns in either member
+order. n32/n64 carry its bits in the integer argument and result registers;
+o32 uses an aligned argument pair and a caller-provided result address.
+The local C declaration supplies alignment. DWARF-only value conversion
+requires explicit eight-byte alignment because packed and natural unions can
+have identical member DIEs. Other union shapes retain their display types.
 
 When HighC reconstructs a record from individual arguments or result words,
 it initializes nested structures and arrays in the enclosing member's type.

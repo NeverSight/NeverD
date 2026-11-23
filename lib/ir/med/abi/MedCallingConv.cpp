@@ -57,6 +57,11 @@ void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat);
+void detectFPParams(
+    MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
+    const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
+    Arch TargetArch, BinaryFormat TargetFormat,
+    llvm::ArrayRef<uint64_t> OwnRegisters);
 
 // ---- MIPS fixed hard-float parameter order (MIPS/MedCallConventionMIPS.cpp)
 // ----
@@ -999,10 +1004,15 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
     return;
   const auto &TRI = getTargetRegInfo(TargetArch);
   const uint64_t SpOff = TRI.StackPointer;
-  // A Go stack-ABI function's arguments are all on the stack.
+  // A Go stack-ABI function's arguments are all on the stack, and one that
+  // takes Go's registers takes the rest where that ABI puts them
+  // (goRegisterArgumentLayout).
+  const std::optional<IntegerArgumentLayout> GoRegisters =
+      goRegisterArgumentLayout(TargetArch, Func.IntegerArgumentRegisters);
   const auto Layout = Func.StackArgumentsOnly
                           ? goStackArgumentLayout(TargetArch)
-                          : TRI.integerArgumentLayout(Fmt);
+                      : GoRegisters ? *GoRegisters
+                                    : TRI.integerArgumentLayout(Fmt);
   const auto ParamRegs = Layout.Registers;
   const int MaxRegArgs = static_cast<int>(ParamRegs.size());
   const int Slot = Layout.SlotBytes;
@@ -1314,8 +1324,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   // A stack argument was found, so the function takes more than the register
   // arguments.  The stack-argument indices must align with a full parameter-
   // register prefix on the caller, so ensure all MaxRegArgs leading register
-  // slots are present.
-  if (Leading != MaxRegArgs) {
+  // slots are present.  Go assigns an argument the stack past its registers
+  // or where those left cannot take it whole, whatever the arguments around
+  // it take: there a stack argument implies no register one.
+  if (Leading != MaxRegArgs && !GoRegisters) {
     bool HasRegParam = false;
     for (const auto &P : Func.Params)
       if (P.RegOff != kNoParamReg && Layout.registerIndex(P.RegOff) >= 0) {
@@ -1909,7 +1921,36 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
     // promoted to double, and va_arg reads them from the area.
     // Go's stack ABI passes floating arguments on the stack too.
     if (!BoundRegisters && !Func.IsVariadic && !Func.StackArgumentsOnly) {
-      detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat);
+      // Code that takes Go's integer registers, or operands of its own in a
+      // Go image that passes arguments in registers, takes floating ones in
+      // Go's: `runtime.spillArgs` stores X0 to X14.  On arm64 the platform's
+      // integer positions are Go's first eight, so only a read of one past
+      // them tells Go's convention from the platform's: X9 to X15 carry Go's
+      // tenth to sixteenth argument and nothing the platform passes, and code
+      // the platform enters, which saves D8 to D15 for its caller
+      // (`runtime.sigtramp`), reads none of them.
+      bool GoArm64 = false;
+      if (TheArch == Arch::AArch64 && Image &&
+          Image->ExceptionMetadata.GoModule &&
+          Image->ExceptionMetadata.GoModule->RegisterArguments &&
+          isGoCode(*Image, Func.Entry))
+        // The entry's leading self-copies name each register the body reads
+        // before it writes it (findLiveInParamRegs).
+        for (const MedOp &Op : Entry.Ops) {
+          if (Op.Opcode != NdOp::COPY)
+            break;
+          GoArm64 |= Op.Output.Kind == MedVar::Reg && Op.NumInputs >= 1 &&
+                     Op.Inputs[0].Id == Op.Output.Id &&
+                     Op.Output.RegOff >= a64reg::X9 &&
+                     Op.Output.RegOff <= a64reg::X15 &&
+                     Op.Output.RegOff % 8 == 0;
+        }
+      const llvm::ArrayRef<uint64_t> GoFloats =
+          GoRegisterArguments || GoFixedOperands || GoArm64
+              ? goFloatArgumentRegisters(TheArch)
+              : llvm::ArrayRef<uint64_t>();
+      detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat,
+                     GoFloats);
       // Where a summary gives the floating arguments each in the next
       // vector register (System V x86-64), it lists those a variadic call
       // reads too, which no entry copy shows.
@@ -1992,7 +2033,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
                       : 0),
         Image, RecordABI);
   } else if (Convention && Convention->VariadicArgumentsOnStack &&
-           Func.VariadicOverflowBase > 0) {
+             Func.VariadicOverflowBase > 0) {
     // A variadic function (Darwin AArch64) with more than the register count
     // of named integer args: args 9.. are stack-passed FIXED args sitting
     // below the overflow pointer.  Recover that

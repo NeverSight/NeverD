@@ -1,5 +1,12 @@
 # NeverD Daily Progress
 
+## Current snapshot — 2026-11-23T01:05:00Z
+
+- Reviewed source: [f0a3d31a](https://github.com/NeverSight/NeverD/commit/f0a3d31ab59b5a7f2dbae69e1f4fe573a693c451). Bounded review covered the dedicated LoongArch register-formatting change at the Capstone pin and nearby call classification. No new confirmed bug or source change. Known-prototype entry reads mixed with speculative reads and same-stack indirect calls remain regression candidates, not reproduced defects.
+- GitHub search snapshot: 62 open ordinary issues, 2 open PRs; 15 PRs opened and 17 merged since 2026-11-22T01:00:00Z; no ordinary issues returned in the interval update query. Counts are point-in-time search results, not a full issue-by-issue review. [#2482](https://github.com/NeverSight/NeverD/pull/2482) reported non-mergeable at sampling; no independent acceptance conclusion for the other open PR.
+- [#2491](https://github.com/NeverSight/NeverD/pull/2491) is merged. An earlier exact candidate, [3d58324e workflow](https://github.com/NeverSight/NeverD/actions/runs/45064685032), passed provenance and Linux x64 focused emulation (24,819 passed, 26,967 skipped, no failures); broader selected profile remained in progress. macOS arm64 failed in linking with disk-space error, and Windows x64 was still compiling at sampling. These are existing CI records, not results for f0a3d31a. No exact-head check run was found.
+- Next: validate dedicated LoongArch printing with and without the dollar prefix; exercise known-prototype and genuinely unknown calls side by side; reproduce same-stack ordinary calls near saved-context controls. Accept only actual test results for the source and platform being claimed.
+
 ## Current snapshot — 2026-11-21T01:07:56Z
 
 - Reviewed dev: [5b37ceb1ae0f654698df23a0d18920795467f518](https://github.com/NeverSight/NeverD/commit/5b37ceb1ae0f654698df23a0d18920795467f518). GitHub compare reports 112 commits ahead of the last recorded dev commit before the preceding daily boundary, [b23569c9](https://github.com/NeverSight/NeverD/compare/b23569c92460337fc471613fd22a69b9cada5d97...5b37ceb1ae0f654698df23a0d18920795467f518), and 2,549 ahead of the source reviewed in the previous in-tree November 5 snapshot. These are ancestry counts, not source review coverage.
@@ -2899,3 +2906,8 @@ them are author reports unless separately confirmed by linked workflow results.
 ## Daily log — 2026-11-21T01:07:56Z
 
 Bounded static check of Go call contracts and Capstone pin context. No source changes or execution. Recorded PR-stack blockers and exact-source limits; proposed only this documentation update via a draft PR.
+
+
+## Daily log — 2026-11-23T01:05:00Z
+
+Bounded static review of the LoongArch dependency change and adjacent call-analysis candidates. No confirmed new source defect. Exact-head native test evidence was not established in this static pass.

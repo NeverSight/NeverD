@@ -437,6 +437,79 @@ TEST(SymExpr, RightShiftDiscardsOnlyNeutralBitwiseWindows) {
   }
 }
 
+TEST(SymExpr, MaskedFieldCarriesUseTheLastEqualMaskBitBelowTheField) {
+  SymContext C;
+  constexpr unsigned W = 193, Start = 127, Size = 66;
+  const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+  auto Live = llvm::APInt::getBitsSet(W, Start, Start + Size);
+  Live.setBit(3);
+  auto Other = llvm::APInt::getBitsSet(W, 1, Start);
+  Other.clearBit(70);
+  auto L = C.mkAnd(X, C.mkConst(Live));
+  const auto R = C.mkAnd(Y, C.mkConst(Other));
+  const auto Want = C.mkExtract(X, Start, Size);
+  for (auto Joined : {C.mkAdd(L, R), C.mkOr(R, L), C.mkXor(L, R)}) {
+    EXPECT_EQ(C.mkExtract(Joined, Start, Size), Want);
+    const auto Rotated = C.mkRor(Joined, C.mkConst(W, 89));
+    EXPECT_EQ(C.mkExtract(Rotated, Start - 89, Size), Want);
+  }
+  // A generate above the kill at bit 70 propagates into the field.
+  Live.setBit(71);
+  const auto Sum = C.mkAdd(C.mkAnd(X, C.mkConst(Live)), R);
+  const auto Carry = C.mkExtract(Sum, Start, Size);
+  EXPECT_NE(Carry, Want);
+  const std::array<llvm::APInt, 2> Ones{llvm::APInt::getAllOnes(W),
+                                        llvm::APInt::getAllOnes(W)};
+  EXPECT_EQ(C.eval(Carry, Ones), (Live + Other).extractBits(Size, Start));
+  EXPECT_NE(C.eval(Carry, Ones), Live.extractBits(Size, Start));
+}
+
+TEST(SymExpr, WidenedRotationsProjectInteriorAndWrappingFields) {
+  SymContext C;
+  const auto X = C.mkVar("x", 8);
+  const auto L = C.mkShl(X, C.mkConst(8, 3));
+  const auto R = C.mkLShr(X, C.mkConst(8, 5));
+  for (auto Join : {C.mkOr(L, R), C.mkXor(L, R), C.mkAdd(L, R)})
+    for (bool Signed : {false, true}) {
+      const auto Wide = Signed ? C.mkSExt(Join, 16) : C.mkZExt(Join, 16);
+      EXPECT_EQ(C.mkExtract(Wide, 4, 3), C.mkExtract(X, 1, 3));
+      const auto Wrap = C.mkExtract(Wide, 1, 5);
+      const auto CrossExtension = C.mkExtract(Wide, 6, 5);
+      for (uint64_t I = 0; I < 256; ++I) {
+        const std::array<uint64_t, 1> Args{I};
+        const unsigned Word = ((I << 3) | (I >> 5)) & 255;
+        const unsigned Extended = Signed && (Word & 128) ? Word | 0xff00 : Word;
+        EXPECT_EQ(C.evalU64(Wrap, Args), (Word >> 1) & 31);
+        EXPECT_EQ(C.evalU64(CrossExtension, Args), (Extended >> 6) & 31);
+      }
+    }
+}
+
+TEST(SymExpr, MaskedFieldSlicesMatchAllFourBitMasksAndInputs) {
+  SymContext C;
+  const auto X = C.mkVar("x", 4), Y = C.mkVar("y", 4);
+  for (unsigned A = 0; A < 16; ++A)
+    for (unsigned B = 0; B < 16; ++B) {
+      const auto L = C.mkAnd(X, C.mkConst(4, A));
+      const auto R = C.mkAnd(Y, C.mkConst(4, B));
+      for (unsigned At = 0; At < 4; ++At)
+        for (unsigned N = 1; N <= 4 - At; ++N) {
+          SymEvalPlan Sum(C, C.mkExtract(C.mkAdd(L, R), At, N));
+          SymEvalPlan Union(C, C.mkExtract(C.mkOr(L, R), At, N));
+          SymEvalPlan Diff(C, C.mkExtract(C.mkXor(L, R), At, N));
+          const auto Mask = (1u << N) - 1;
+          for (uint64_t I = 0; I < 16; ++I)
+            for (uint64_t J = 0; J < 16; ++J) {
+              const std::array<uint64_t, 2> Args{I, J};
+              const auto U = I & A, V = J & B;
+              ASSERT_EQ(Sum.evalU64(Args), ((U + V) >> At) & Mask);
+              ASSERT_EQ(Union.evalU64(Args), ((U | V) >> At) & Mask);
+              ASSERT_EQ(Diff.evalU64(Args), ((U ^ V) >> At) & Mask);
+            }
+        }
+    }
+}
+
 TEST(SymExpr, RightShiftWindowFoldsMatchIndependentByteArithmetic) {
   SymContext C;
   auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);

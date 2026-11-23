@@ -1034,6 +1034,9 @@ IntegerArgumentLayout integerArgumentLayoutOf(const MedFunc &Func,
                                               const TargetRegInfo &TRI) {
   if (Func.StackArgumentsOnly)
     return goStackArgumentLayout(TRI.TheArch);
+  if (const std::optional<IntegerArgumentLayout> Go =
+          goRegisterArgumentLayout(TRI.TheArch, Func.IntegerArgumentRegisters))
+    return *Go;
   IntegerArgumentLayout Layout =
       TRI.integerArgumentLayout(Func.CC == CallingConv::Win64);
   if (!Func.IntegerArgumentRegisters.empty())
@@ -1415,6 +1418,19 @@ void recoverCallAbi(
       // An ordinary SEH finally CALL uses the checked shared-frame protocol.
       // Its caller's private PUSHes are saved temporaries, not cdecl argument
       // setup. Native lowering supplies its separately proved frame operand.
+      // A jump that follows a load of the stack pointer from memory resumes
+      // state saved elsewhere, on that state's stack (`gogo<>`, longjmp): it
+      // calls no function and passes no argument.
+      if (CI.IsIndirect && OI + 1 < Blk.Ops.size() &&
+          Blk.Ops[OI + 1].Opcode == NdOp::RETURN &&
+          Blk.Ops[OI + 1].Addr == Op.Addr &&
+          loadsStackPointerBefore(Blk, OI, TRI)) {
+        CI.ArgumentsFromPrototype = true;
+        CI.IntegerRegisterArgCount = 0;
+        CI.FloatingRegisterArgCount = 0;
+        Func.CallInfos.push_back(std::move(CI));
+        continue;
+      }
       if (SEHReturns) {
         const auto Key = std::make_tuple(Blk.Id, Op.Addr, Op.OriginSeq);
         const auto Finally = SEHReturns->ReturningCalls.find(Key);
@@ -1661,14 +1677,55 @@ void recoverCallAbi(
             AIt != CalleeRegArity->end())
           CalleeRegArgs = AIt->second;
       // A direct callee with its own register order takes its register
-      // arguments in that order.
+      // arguments in that order.  One that takes Go's takes the rest as Go
+      // passes them (goRegisterArgumentLayout).
+      bool GoArgumentLayout = false;
       if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport && CalleeIntRegs)
         if (auto RIt = CalleeIntRegs->find(CI.TargetAddr);
             RIt != CalleeIntRegs->end() && !RIt->second.empty()) {
           IntegerLayout.Registers = RIt->second;
+          if (const std::optional<IntegerArgumentLayout> Go =
+                  goRegisterArgumentLayout(TheArch, RIt->second)) {
+            IntegerLayout = *Go;
+            GoArgumentLayout = true;
+          }
           IntParamRegs = IntegerLayout.Registers;
           CI.ArgumentsInCalleeRegisterOrder = true;
         }
+      // An indirect call into Go code by the internal ABI takes its
+      // arguments in Go's registers, integer and floating, whatever the
+      // platform's convention: compiled code's (CallRegisterContract::
+      // GoInternal), and a call Go assembly makes through a func value
+      // (callsThroughFuncValue), as reflection's call helpers load them.
+      // Its stack arguments sit where Go's stack ABI puts them, with no
+      // shadow space below.
+      bool GoRegisterCall = false;
+      if (CI.IsIndirect && Img &&
+          goIndirectCallTakesGoRegisters(*Img, Func, Blk, OI)) {
+        GoRegisterCall = true;
+        IntegerLayout = goRegisterArgumentLayout(TheArch);
+        IntParamRegs = IntegerLayout.Registers;
+        CI.ArgumentsInCalleeRegisterOrder = true;
+      }
+      // Go assembly passes a func value only what it sets in Go's registers.
+      // The values it was entered with, which it takes in the platform's
+      // order, sit in Go's by chance: they are no arguments it passes on, as
+      // compiled Go code's own parameters are.
+      const bool GoAssemblyFuncValueCall =
+          GoRegisterCall && !usesGoRegisterArguments(*Img, Func.Entry);
+      // Before the internal ABI an indirect call into Go code passes every
+      // argument on the stack, a floating one too, and nothing in a register
+      // (goIndirectCallTakesStackArguments).  By the platform's positions a
+      // call through a func value passed whatever RDI and RSI held, the
+      // closure in RDX and the goroutine the stack check left in RCX.
+      const bool GoStackIndirectCall =
+          CI.IsIndirect && Img &&
+          goIndirectCallTakesStackArguments(*Img, Func, Blk, OI);
+      if (GoStackIndirectCall) {
+        IntegerLayout = goStackArgumentLayout(TheArch);
+        IntParamRegs = IntegerLayout.Registers;
+        CI.ArgumentsInCalleeRegisterOrder = true;
+      }
 
       // The callee's full integer-argument count (register + stack), for
       // bounding a tail-call forwarder's passed-through stack arguments.
@@ -1810,9 +1867,11 @@ void recoverCallAbi(
         CalleeRegArgs = 0;
         // The callee's own recovery counts the arguments it reads; the rest
         // of the words its record gives are its results.
+        // A record of four bytes, one int32, is one word of arguments.
         if (GoFrameBytes) {
           const int FrameWords =
-              static_cast<int>(*GoFrameBytes / IntegerLayout.SlotBytes);
+              static_cast<int>((*GoFrameBytes + IntegerLayout.SlotBytes - 1) /
+                               IntegerLayout.SlotBytes);
           CalleeArgs =
               CalleeArgs >= 0 ? std::min(CalleeArgs, FrameWords) : FrameWords;
         }
@@ -1967,9 +2026,16 @@ void recoverCallAbi(
           if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0) {
             int ArgIdx = regToIntArgIdx(Prev.Output.RegOff);
             if (ArgIdx >= 0 && ArgIdx < MaxArgs && !FoundMask[ArgIdx]) {
-              Found[ArgIdx] =
+              const MedVar Source =
                   argRegSourceValueInBlock(Blk, J, TRI, IntegerLayout);
-              FoundMask[ArgIdx] = true;
+              // A copy of a register's entry value into it sets nothing.
+              const bool KeepsEntryValue = Source.Kind == MedVar::Reg &&
+                                           Source.SSAVer == 0 &&
+                                           Source.RegOff == Prev.Output.RegOff;
+              if (!(GoAssemblyFuncValueCall && KeepsEntryValue)) {
+                Found[ArgIdx] = Source;
+                FoundMask[ArgIdx] = true;
+              }
             }
           }
           if (IsCall)
@@ -2256,8 +2322,13 @@ void recoverCallAbi(
       // otherwise treated as unknown-arity: the later pred stack scan records
       // only slot 4, and assemble skips the integer gaps, so Concatenate
       // becomes a single ESI clobber.
-      const bool PositionalSlots =
-          Convention && Convention->PositionalArgumentSlots;
+      // The positions number the convention's registers: a call in its
+      // callee's own order has none, as Go's, which numbers its integer and
+      // floating registers apart, and a local below its frame is no
+      // argument that proves its registers live.
+      const bool PositionalSlots = Convention &&
+                                   Convention->PositionalArgumentSlots &&
+                                   !CI.ArgumentsInCalleeRegisterOrder;
       if (PositionalSlots && HasStackArg && IntRegArgsApply) {
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
           if (FoundMask[K])
@@ -2323,6 +2394,13 @@ void recoverCallAbi(
         if (CI.IsIndirect && llvm::any_of(Best->Args, [&](const auto &Arg) {
               return callLeftovers().contains(Arg.second);
             }))
+          break;
+        // So does one, for a call into Go code, that brings an entry value
+        // where no parameter arrives (setOnEveryWay): the join of what the
+        // function was entered with and what a call before it left on the
+        // other way.
+        if (GoRegisterCall &&
+            !setOnEveryWay(Func, Best->Output, callLeftovers()))
           break;
         Found[K] = Best->Output;
         FoundMask[K] = true;
@@ -2408,6 +2486,22 @@ void recoverCallAbi(
                 *Site.Block, int(Site.Op - Site.Block->Ops.data()), TRI,
                 IntegerLayout);
       }
+      // Nor does the register the target is loaded through
+      // (`mov rdx, [config]; jmp [rdx+0x28]`): the call needs the address
+      // there whatever it passes.
+      std::optional<MedVar> TargetLoadBase;
+      if (UnboundIndirect && Op.NumInputs && !Op.Inputs[0].isConst())
+        if (const auto Site = DefSites.find(Op.Inputs[0]);
+            !Site.Ambiguous && Site.Op && Site.Op->Opcode == NdOp::LOAD &&
+            Site.Op->NumInputs >= 1) {
+          MedVar Address = Site.Op->Inputs[0];
+          if (const auto Sum = DefSites.find(Address);
+              !Sum.Ambiguous && Sum.Op && Sum.Op->Opcode == NdOp::INT_ADD &&
+              Sum.Op->NumInputs >= 2 && Sum.Op->Inputs[1].isConst())
+            Address = Sum.Op->Inputs[0];
+          if (!Address.isConst())
+            TargetLoadBase = Address;
+        }
       int IndirectPrefix = -1;
       if (UnboundIndirect)
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K)
@@ -2416,7 +2510,8 @@ void recoverCallAbi(
               !(K == TargetSetupSlot && TargetSetupValue &&
                 Found[K] == *TargetSetupValue) &&
               !(Op.NumInputs && !Op.Inputs[0].isConst() &&
-                Found[K] == Op.Inputs[0]))
+                Found[K] == Op.Inputs[0]) &&
+              !(TargetLoadBase && Found[K] == *TargetLoadBase))
             IndirectPrefix = K;
       if (IntRegArgsApply)
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
@@ -2438,6 +2533,7 @@ void recoverCallAbi(
           const bool PastArity =
               CalleeRegArgs >= 0 && K >= CalleeRegArgs && !OpenVariadicArity;
           const bool AllowLiveIn =
+              !GoAssemblyFuncValueCall &&
               ((CalleeRegArgs >= 0 && K < CalleeRegArgs) ||
                ((UnboundIndirect ? IndirectPrefix : MaxRegArg) >= K &&
                 !PastArity)) &&
@@ -2458,7 +2554,7 @@ void recoverCallAbi(
               break;
           }
           if (CI.IsIndirect && (FromLiveIn || V->Kind == MedVar::Param) &&
-              !incomingArgumentReachesCall(Ctx, K))
+              (GoAssemblyFuncValueCall || !incomingArgumentReachesCall(Ctx, K)))
             break;
           // A direct callee's arity proves it reads a register, not that
           // this caller's entry value reaches it.  Calls and exceptional
@@ -2626,6 +2722,31 @@ void recoverCallAbi(
           FoundMask[Highest] = false;
           Found[Highest] = MedVar();
           CI.TargetRegisterArgIdx = Highest;
+        }
+      }
+      // Go assigns its integer arguments to its registers in order, so for a
+      // call into Go code the register that holds the target ends them,
+      // whatever was set above it: RSI, which Go 1.21's map access loads the
+      // seed into before RBX takes it, is no fifth argument of the hasher it
+      // calls through RCX.
+      if (GoRegisterCall && Op.NumInputs >= 1 && !Op.Inputs[0].isConst()) {
+        const MedVar &Target = Op.Inputs[0];
+        for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
+          if (!FoundMask[K] || FromStackScan[K] ||
+              Found[K].Kind != Target.Kind || Found[K].Id != Target.Id ||
+              Found[K].SSAVer != Target.SSAVer)
+            continue;
+          for (int J = K; J < NumIntParamRegs && J < MaxArgs; ++J) {
+            if (!FoundMask[J] || FromStackScan[J])
+              continue;
+            if (Found[J].Kind == MedVar::Param &&
+                !PromotedBefore.count(Found[J].RegOff))
+              PromoteParams.erase(Found[J].RegOff);
+            FoundMask[J] = false;
+            Found[J] = MedVar();
+          }
+          CI.TargetRegisterArgIdx = K;
+          break;
         }
       }
 
@@ -3380,6 +3501,13 @@ void recoverCallAbi(
           if (RIt != CalleeFPRegs->end() && !RIt->second.empty())
             FPRegs = RIt->second;
         }
+        if (GoRegisterCall) {
+          const llvm::ArrayRef<uint64_t> GoFloats =
+              goFloatArgumentRegisters(TheArch);
+          FPRegs.assign(GoFloats.begin(), GoFloats.end());
+        }
+        if (GoStackIndirectCall)
+          FPRegs.clear();
         int FPLimit = static_cast<int>(FPRegs.size());
         bool KnownFPCallee = false;
         if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport &&
@@ -3559,6 +3687,11 @@ void recoverCallAbi(
             // A known FP contract still observes the unavailable value;
             // mixed joins and partially preserved lanes remain inputs.
             if (V && !KnownFPCallee && callLeftovers().contains(*V))
+              V.reset();
+            // A call into Go code takes no join of an entry value where no
+            // parameter arrives either (setOnEveryWay).
+            if (V && GoRegisterCall &&
+                !setOnEveryWay(Func, *V, callLeftovers()))
               V.reset();
           }
           if (!V && !Clobber)
@@ -4009,9 +4142,11 @@ void recoverCallAbi(
         }
       }
       // A callee's stack parameters follow all of its register positions, read
-      // or not, so a call that reaches them passes those positions too.
+      // or not, so a call that reaches them passes those positions too.  Go's
+      // follow the registers the callee takes.
       if (!CI.IsIndirect && !PositionalSlots && !HeaderVariadic &&
-          !OpenVariadicArity && !StackPart.empty() && CalleeArgs > StackArgBase)
+          !OpenVariadicArity && !StackPart.empty() &&
+          CalleeArgs > StackArgBase && !GoArgumentLayout)
         ZeroedRegArgs = std::max(ZeroedRegArgs, StackArgBase);
       // A variadic routine of the image reads, past its named parameters, as
       // many arguments as its format names where the last of them is a

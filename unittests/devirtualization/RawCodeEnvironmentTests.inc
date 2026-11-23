@@ -1368,6 +1368,8 @@ TEST_F(PEFixedImageTest, RawCodeCmpxchgReceiptBindsOrdering) {
 
 #include "MachineExitEnvironmentTests.inc"
 #include "ReturningCallEnvironmentTests.inc"
+// The entry-return fixtures use helpers from both suites above.
+#include "EntryReturnSlotTests.inc"
 #include "WideImmutableImageTests.inc"
 
 // Entry-object fixtures reuse the machine-exit byte oracle above.
