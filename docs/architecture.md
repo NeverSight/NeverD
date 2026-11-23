@@ -5563,11 +5563,17 @@ that end in it do, and an operation that reads the result of a call that
 returns nothing, where no byte of it reaches anything, reads zero instead.
 
 A reachable branch whose arms only return distinct integer constants selects
-a result even when another exit leaves the register untouched. For an
-indirect branch, the jump table must prove its index domain and bind the
-return blocks to that instruction. The comparison uses the inferred result
-width. If the other exit needs an unspecified register, generated C traps
-on that path.
+a result even when another path leaves the register untouched. The arms may
+return separately or meet at a single return. At a shared return, each arm
+must supply its own input to the result PHI, and the arm and the common exit
+must be free of other effects. Copies through local temporaries preserve
+the observed bytes. Capturing the link for a delayed return and an empty
+delay slot leave the result intact. For an indirect branch, the jump table must
+prove its index domain and bind the selected arms to that instruction. The
+comparison uses the inferred result width. If another edge needs an
+unspecified register, generated C traps on that edge. LLVM source projection
+uses the same missing-value marker for a bare link-register return whose
+integer or pointer result has no reaching write or bound argument.
 
 The same demand (`MedByteDemand`) settles which register holds the result of
 a function whose returns leave a floating value in the vector return

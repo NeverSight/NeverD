@@ -114,15 +114,23 @@ Fixture makeFixture(unsigned FillerBlocks, const std::string &Variant) {
   const va_t Branch = Entry + W.Code.size();
   W.put({0xff, 0xe1});
   std::vector<va_t> Targets;
+  std::vector<size_t> ReturnJumps;
   for (int I = 0; I < 6; ++I) {
     Targets.push_back(Entry + W.Code.size());
     W.put({0xb8}); // mov eax, independently expected case result
     W.u32(10 + I);
-    W.put({0xc3, 0xcc});
+    if (Kind == "shared-return") {
+      W.put({0xe9});
+      ReturnJumps.push_back(W.u32(0));
+    } else {
+      W.put({0xc3, 0xcc});
+    }
   }
   size_t Default = W.Code.size();
   W.put({0xc3, 0xcc, 0xcc, 0xcc});
   W.branch(DefaultBranch, Default);
+  for (size_t Jump : ReturnJumps)
+    W.branch(Jump, Default);
   const size_t FunctionEnd = W.Code.size();
   const size_t Helper = W.Code.size();
   size_t NestedCall = 0;
@@ -390,7 +398,8 @@ void writePE(const Fixture &F, const fs::path &Path) {
 class COFFTableBaseCLI : public NeverDLiftTest {};
 
 TEST_F(COFFTableBaseCLI, BothSourceRoutesUseTheSharedBaseProof) {
-  for (const std::string Variant : {"decoy", "composite"}) {
+  for (const std::string Variant :
+       {"decoy", "composite", "composite-shared-return"}) {
     SCOPED_TRACE(Variant);
     const auto F = makeFixture(160, Variant);
     const fs::path Input = tmpFile(Variant + ".exe");

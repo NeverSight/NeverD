@@ -9205,8 +9205,20 @@ such functions, which a null argument must not trap.
 `ReturnContracts.OnlyAProvenChoiceOfReturnValuesOutweighsABareReturn`
 checks distinct scalar results at their inferred width, incidental stores,
 disconnected blocks and the provenance of indirect edges.
+`ReturnContracts.ASharedReturnTakesItsLiteralFromEachBranchArm` checks the
+same contract when the arms jump or fall through to a shared return. It
+covers reordered PHI inputs, values from the wrong predecessor, narrow
+inputs, stores, exceptional entry and the actual targets of an indirect
+branch. `ReturnContract.SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge`
+executes both C outputs on all three paths to a single x86-64 return and
+on MIPS64 branches that materialize the results through temporaries before
+a shared delayed return.
+`ReturnContract.MissingPointerResultUsesTheSourceABIPointerWidth` checks
+the four-byte n32 and eight-byte n64 source markers and native IR for
+the same bare pointer return.
 `COFFTableBaseCLI.BothSourceRoutesUseTheSharedBaseProof` executes all six
-selectors of both PE fixtures through HighC and LLVMC.
+selectors through HighC and LLVMC on three PE fixtures, including a
+two-level table whose cases and default all jump to the same return.
 `ReturnContract.BareAArch64ReturnKeepsTheIncomingIntegerArgument` runs
 both C outputs on a bare return carrying a 64-bit argument in x0 and on
 the two paths that replace it with a constant.

@@ -14,6 +14,7 @@
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -1405,6 +1406,89 @@ TEST(ReturnContracts, OnlyAProvenChoiceOfReturnValuesOutweighsABareReturn) {
   EXPECT_TRUE(IsVoid(F));
 }
 
+TEST(ReturnContracts, ASharedReturnTakesItsLiteralFromEachBranchArm) {
+  const auto C = [](uint64_t Value) { return MedVar::makeConst(Value, 8); };
+  const auto Jump = [&](int Id) {
+    return operation(NdOp::BRANCH, {}, {C(CalleeEntry + 16 * Id)});
+  };
+  const auto Choose = [&](int Id, int Condition) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Id), temporary(Condition)});
+  };
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Choose(2, 9)}, {}, {1, 2}),
+       block({returning(rax(0))}, {0}), block({Choose(4, 10)}, {0}, {3, 4}),
+       block({operation(NdOp::COPY, rax(1), {C(10)}), Jump(5)}, {2}, {5}),
+       block({operation(NdOp::COPY, rax(2), {C(15)})}, {2}, {5}),
+       block({returning(rax(3))}, {3, 4})});
+  for (auto &B : F.Blocks)
+    B.StartAddr = CalleeEntry + 16 * B.Id;
+  F.Blocks[5].Phis.push_back({rax(3), {{3, rax(1)}, {4, rax(2)}}, {}});
+  auto IsVoid = [](const MedFunc &F) { return bool(settle({F}).front()); };
+  EXPECT_FALSE(IsVoid(F));
+  std::reverse(F.Blocks[5].Phis.front().Args.begin(),
+               F.Blocks[5].Phis.front().Args.end());
+  std::reverse(F.Blocks[2].Succs.begin(), F.Blocks[2].Succs.end());
+  EXPECT_FALSE(IsVoid(F));
+
+  MedFunc SingleExit = F;
+  SingleExit.Blocks[1].Ops = {Jump(5)};
+  SingleExit.Blocks[1].Succs = {5};
+  SingleExit.Blocks[5].Preds.push_back(1);
+  SingleExit.Blocks[5].Phis.front().Args.push_back({1, rax(0)});
+  EXPECT_FALSE(IsVoid(SingleExit));
+
+  MedFunc Folded = F;
+  Folded.Blocks[5].Phis.front().Args = {{4, C(15)}, {3, C(10)}};
+  EXPECT_FALSE(IsVoid(Folded));
+  Folded.Blocks[3].Ops.front().Inputs[0] = C(0x10f);
+  Folded.Blocks[5].Phis.front().Args.back().second = C(0x10f);
+  Folded.ReturnType = NdType::makeInt(1);
+  EXPECT_TRUE(IsVoid(Folded));
+
+  MedFunc WrongArm = F;
+  WrongArm.Blocks[5].Phis.front().Args = {{3, rax(2)}, {4, rax(1)}};
+  EXPECT_TRUE(IsVoid(WrongArm));
+  MedFunc Copies = F;
+  Copies.Blocks[3].Ops = {operation(NdOp::COPY, temporary(14), {C(10)}),
+                          operation(NdOp::COPY, rax(1), {temporary(14)}),
+                          operation(NdOp::NOP, {}, {}), Jump(5)};
+  EXPECT_FALSE(IsVoid(Copies));
+  Copies.Blocks[3].Ops[1].Inputs[0] = temporary(15);
+  EXPECT_TRUE(IsVoid(Copies));
+  Copies.Blocks[3].Ops[1].Inputs[0] = sized(temporary(14), 4);
+  EXPECT_TRUE(IsVoid(Copies));
+  MedFunc Narrow = F;
+  Narrow.Blocks[5].Phis.front().Args.back().second.Size = 4;
+  EXPECT_TRUE(IsVoid(Narrow));
+  Narrow = F;
+  Narrow.Blocks[5].Phis.front().Output.Size = 4;
+  EXPECT_TRUE(IsVoid(Narrow));
+  const MedOp Store = operation(NdOp::STORE, {}, {temporary(11), rax(1)});
+  MedFunc Effect = F;
+  Effect.Blocks[3].Ops.insert(Effect.Blocks[3].Ops.begin() + 1, Store);
+  EXPECT_TRUE(IsVoid(Effect));
+  Effect = F;
+  Effect.Blocks[5].Ops.insert(Effect.Blocks[5].Ops.begin(), Store);
+  EXPECT_TRUE(IsVoid(Effect));
+  MedFunc Exceptional = F;
+  Exceptional.Blocks[5].Phis.front().ExceptionalEntry =
+      MedVar::makeUnspecified(8, Arch::X64);
+  EXPECT_TRUE(IsVoid(Exceptional));
+
+  // The table must bind the arms that set the results at their common return.
+  F.Blocks[2].Ops.back() = operation(NdOp::INDIR_BR, {}, {temporary(9)});
+  F.Blocks[2].Ops.back().Addr = F.Blocks[2].StartAddr;
+  JumpTable &Table = F.JumpTables.emplace_back();
+  Table.InsnAddr = F.Blocks[2].StartAddr;
+  Table.IndexDomainAuthenticated = true;
+  Table.Targets = {F.Blocks[3].StartAddr, F.Blocks[4].StartAddr};
+  EXPECT_FALSE(IsVoid(F));
+  Table.Targets.back() = F.Blocks[5].StartAddr;
+  EXPECT_TRUE(IsVoid(F));
+}
+
 TEST(ReturnContracts, AFunctionThatNeverReturnsReturnsNoValue) {
   MedOp Abort = callTo(0x3000, 1);
   Abort.DoesNotReturn = true;
@@ -1643,19 +1727,17 @@ TEST(ReturnContract, IncomingRegisterNeedsAnEntryPathWithNoClobber) {
   EXPECT_FALSE(Untouched());
 }
 
-TEST(ReturnContract, BareAArch64ReturnKeepsTheIncomingIntegerArgument) {
+void runIntegerReturnSources(Arch Target, std::vector<uint8_t> Bytes,
+                             const char *Oracle, const char *Preamble = "") {
   BinaryImage Image;
-  Image.Arch = Arch::AArch64;
+  Image.Arch = Target;
   Image.Format = BinaryFormat::ELF;
   Image.Bits = Bitness::Bits64;
   Image.Base = Image.Entry = CalleeEntry;
   Segment Code;
   Code.VA = CalleeEntry;
   Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-  // cbnz w2,bare; cbz w1,ten; mov w0,#15; ret; ten: mov w0,#10; ret; bare: ret
-  Code.Data = {0xc2, 0x00, 0x00, 0x35, 0x61, 0x00, 0x00, 0x34, 0xe0, 0x01,
-               0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6, 0x40, 0x01, 0x80, 0x52,
-               0xc0, 0x03, 0x5f, 0xd6, 0xc0, 0x03, 0x5f, 0xd6};
+  Code.Data = std::move(Bytes);
   Code.Size = Code.FileSz = Code.Data.size();
   auto Sym = Symbol::makeFunc(CalleeEntry, Code.Size);
   Sym.Name = "choose_result";
@@ -1664,35 +1746,111 @@ TEST(ReturnContract, BareAArch64ReturnKeepsTheIncomingIntegerArgument) {
   PipelineOptions Options;
   Options.EmitDumpOutput = false;
   Options.OnlyFunctionEntries = {CalleeEntry};
-  llvm::LLVMContext Context;
-  auto Result = Pipeline().run(Image, Context, Options);
-  ASSERT_TRUE(Result.Success) << Result.Error;
   CEmitterOptions COptions;
   COptions.TheArch = Image.Arch;
   COptions.Format = Image.Format;
   COptions.Image = &Image;
   for (bool LLVM : {false, true}) {
     SCOPED_TRACE(LLVM);
-    std::string Source;
+    Options.LiftMode = LLVM;
+    Options.SourceProjection = LLVM;
+    llvm::LLVMContext Context;
+    auto Result = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    std::string Source(Preamble);
     llvm::raw_string_ostream OS(Source);
     if (LLVM) {
-      auto Module = MedLLVMEmitter().emit(Result.MedFuncs, Context, "choose",
-                                          Image.Arch, {}, &Image, Image.Format);
-      ASSERT_TRUE(Module);
-      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
-      ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, COptions));
+      ASSERT_TRUE(Result.LlvmModule);
+      ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, OS, COptions));
     } else {
       ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, COptions));
     }
     OS.flush();
-    Source += R"(
+    source_call_execution_test::compileAndRun(Source + Oracle, {"-O2"});
+  }
+}
+
+TEST(ReturnContract, BareAArch64ReturnKeepsTheIncomingIntegerArgument) {
+  // cbnz w2,bare; cbz w1,ten; mov w0,#15; ret; ten: mov w0,#10; ret; bare: ret
+  runIntegerReturnSources(Arch::AArch64,
+                          {0xc2, 0x00, 0x00, 0x35, 0x61, 0x00, 0x00,
+                           0x34, 0xe0, 0x01, 0x80, 0x52, 0xc0, 0x03,
+                           0x5f, 0xd6, 0x40, 0x01, 0x80, 0x52, 0xc0,
+                           0x03, 0x5f, 0xd6, 0xc0, 0x03, 0x5f, 0xd6},
+                          R"(
 int main(void) {
     uint64_t value = UINT64_C(0x1234567887654321);
     return (uint64_t)choose_result(value, 1, 1) != value ||
            choose_result(value, 0, 0) != 10 || choose_result(value, 1, 0) != 15;
 }
+)");
+}
+
+TEST(ReturnContract, SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge) {
+  const char *Oracle = R"(
+int main(void) {
+    if (choose_result(0, 0) != 10 || choose_result(1, 0) != 15) return 1;
+    expect_missing = 1;
+    (void)choose_result(1, 1);
+    return 2;
+}
 )";
-    source_call_execution_test::compileAndRun(Source, {"-O2"});
+  const char *Preamble =
+      "#include <stdlib.h>\nstatic int expect_missing;\n"
+      "#define __builtin_trap() _Exit(expect_missing ? 0 : 3)\n";
+  // All three paths reach the final RET. Only the two MOVs define EAX.
+  runIntegerReturnSources(Arch::X64, {0x85, 0xf6, 0x75, 0x10, 0x85, 0xff, 0x74,
+                                      0x07, 0xb8, 0x0f, 0,    0,    0,    0xeb,
+                                      0x05, 0xb8, 0x0a, 0,    0,    0,    0xc3},
+                          Oracle, Preamble);
+  // On MIPS64 the DADDIU arms share a JR and its empty delay slot. The
+  // third arm executes its own JR without writing V0.
+  runIntegerReturnSources(Arch::MIPS64EL,
+                          {9,  0, 0xa0, 0x14, 0, 0, 0, 0, // bnez a1,bare; nop
+                           4,  0, 0x80, 0x10, 0, 0, 0, 0, // beqz a0,ten; nop
+                           15, 0, 2,    0x64,             // daddiu v0,zero,15
+                           6,  0, 0,    0x10, 0, 0, 0, 0, // b done; nop
+                           10, 0, 2,    0x64, // ten: daddiu v0,zero,10
+                           3,  0, 0,    0x10, 0, 0, 0, 0,  // b done; nop
+                           8,  0, 0xe0, 3,    0, 0, 0, 0,  // bare: jr ra; nop
+                           8,  0, 0xe0, 3,    0, 0, 0, 0}, // done: jr ra; nop
+                          Oracle, Preamble);
+}
+
+TEST(ReturnContract, MissingPointerResultUsesTheSourceABIPointerWidth) {
+  for (Arch Target : {Arch::MIPS64N32EL, Arch::MIPS64EL}) {
+    const auto &TRI = getTargetRegInfo(Target);
+    MedVar Link = inRegister(TRI.LinkRegister, TRI.FullRegWidth, 31, 0);
+    Link.TheArch = Target;
+    MedFunc F = function(CalleeEntry, {block({returning(Link)})});
+    F.ReturnType = NdType::makePtr();
+    F.Blocks.front().StartAddr = F.Entry;
+    for (bool Source : {false, true}) {
+      SCOPED_TRACE(testing::Message() << unsigned(Target) << " " << Source);
+      llvm::LLVMContext Context;
+      MedLLVMEmitter Emitter;
+      Emitter.setPreserveUnknownSourceValues(Source);
+      auto Module = Emitter.emit({F}, Context, "missing_pointer", Target, {},
+                                 nullptr, BinaryFormat::ELF);
+      ASSERT_TRUE(Module);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      const auto *Function = Module->getFunction(F.Name);
+      ASSERT_TRUE(Function);
+      const auto *Ret =
+          llvm::dyn_cast<llvm::ReturnInst>(Function->back().getTerminator());
+      ASSERT_TRUE(Ret);
+      const auto *Pointer = Ret->getReturnValue();
+      ASSERT_TRUE(Pointer && Pointer->getType()->isPointerTy());
+      if (Source) {
+        const auto *Cast = llvm::dyn_cast<llvm::IntToPtrInst>(Pointer);
+        ASSERT_TRUE(Cast);
+        EXPECT_TRUE(llvm_source_unknown::isValue(Cast->getOperand(0)));
+        EXPECT_TRUE(Cast->getSrcTy()->isIntegerTy(TRI.PointerSize * 8));
+      } else {
+        EXPECT_TRUE(llvm::isa<llvm::ConstantPointerNull>(Pointer));
+      }
+    }
   }
 }
 

@@ -12,6 +12,7 @@
 
 #include "../X86/MedLLVMSourceSEHFilter.h"
 
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
@@ -629,14 +630,20 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   if (!RetVal) {
     const auto &TRI = getTargetRegInfo(TargetArch);
-    // ARM/AArch64 RETURN operands are control-flow targets (LR or a pc value
-    // restored from the stack), never ABI return values.  If no write to the
-    // real return register was found above, materialize the neutral residual
-    // used by void inference instead of returning that branch target.  X86
-    // lifters put RAX/EAX in the RETURN operand, so retain their fallback.
-    if (TRI.LinkRegister != 0 || Op.NumInputs == 0)
-      RetVal = llvm::ConstantInt::get(RetTy, 0);
-    else {
+    // A link-register RETURN supplies the destination. With no reaching
+    // result or bound argument, source must observe a missing scalar on this
+    // path. Native lifting keeps its neutral residual.
+    if (TRI.LinkRegister != 0 || Op.NumInputs == 0) {
+      if (PreserveUnknownSourceValues &&
+          (RetTy->isIntegerTy() || RetTy->isPointerTy())) {
+        auto *Bits = RetTy->isPointerTy()
+                         ? Builder.getIntNTy(TRI.PointerSize * 8)
+                         : llvm::cast<llvm::IntegerType>(RetTy);
+        RetVal = llvm_source_unknown::create(Builder, Bits);
+      } else {
+        RetVal = llvm::Constant::getNullValue(RetTy);
+      }
+    } else {
       rejectEscapingAddressFragment(Op.Inputs[0], "a return value");
       RetVal = GetInput(0);
     }

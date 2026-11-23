@@ -79,6 +79,7 @@
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
@@ -347,34 +348,103 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
   return Facts;
 }
 
-/// A leaf that only materializes an integer in the result register and
-/// returns it. Site.Value comes from the shared return-register lookup. On
-/// a link-register target the RETURN operand itself can be the return address.
-static std::optional<uint64_t>
-literalReturn(const FunctionFacts::ReturnSite &Site, const TargetRegInfo &TRI,
-              unsigned Bytes) {
-  const MedBlock &Block = *Site.Block;
-  if (!Site.Value || Site.Value->Size < Bytes || !Block.Succs.empty() ||
-      !Block.ExceptionalSuccs.empty() || !Block.Phis.empty() ||
-      Block.Ops.back().Opcode != NdOp::RETURN)
-    return std::nullopt;
-  const MedVar *Literal = Site.Value->isConst() ? &*Site.Value : nullptr;
-  for (const MedOp &Op : llvm::drop_end(Block.Ops)) {
-    if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
-        !Op.Inputs[0].isConst() || Op.Output.Kind != MedVar::Reg ||
-        Op.Output.RegOff != TRI.IntReturnReg)
-      return std::nullopt;
-    if (!Site.Value->isConst() && Op.Output == *Site.Value)
-      Literal = &Op.Inputs[0];
-  }
-  if (!Literal || Literal->Size < Bytes ||
-      (Literal->Provenance != ConstantAddressProvenance::Unknown &&
-       Literal->Provenance != ConstantAddressProvenance::Scalar))
-    return std::nullopt;
-  return Literal->ConstVal & llvm::maskTrailingOnes<uint64_t>(Bytes * 8);
+/// A delayed return can copy its link into a temporary before an empty slot.
+static bool isReturnControlOp(const MedOp &Op, const MedOp *Ret,
+                              const TargetRegInfo &TRI) {
+  if (Op.Opcode == NdOp::NOP)
+    return true;
+  if (!Ret || Ret->NumInputs != 1 || Op.Opcode != NdOp::COPY ||
+      Op.NumInputs != 1 || Op.Output.Kind != MedVar::Temp)
+    return false;
+  const MedVar &Target = Ret->Inputs[0];
+  return Target.Kind == MedVar::Reg && TRI.isLinkRegister(Target.RegOff) &&
+         Op.Inputs[0] == Target && Op.Inputs[0].RegOff == Target.RegOff &&
+         Op.Inputs[0].Size == Target.Size && Op.Output.Size == Target.Size;
 }
 
-/// A choice between two such leaves has an observable result. An indirect
+/// Follow the returned bytes backwards through copies in this arm. The
+/// selected value must reach a literal before the walk leaves the block.
+static std::optional<uint64_t> literalResult(llvm::ArrayRef<MedOp> Ops,
+                                             const MedVar &Value,
+                                             const TargetRegInfo &TRI,
+                                             unsigned Bytes,
+                                             const MedOp *Ret = nullptr) {
+  if (Value.Size < Bytes)
+    return std::nullopt;
+  const MedVar *Source = &Value;
+  for (const MedOp &Op : llvm::reverse(Ops)) {
+    if (isReturnControlOp(Op, Ret, TRI))
+      continue;
+    if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
+        (!Op.Inputs[0].isConst() && Op.Inputs[0].Kind != MedVar::Temp) ||
+        (Op.Output.Kind != MedVar::Temp &&
+         !(Op.Output.Kind == MedVar::Reg &&
+           Op.Output.RegOff == TRI.IntReturnReg)))
+      return std::nullopt;
+    if (Op.Output == *Source) {
+      if (Op.Output.Size != Source->Size || Op.Inputs[0].Size < Bytes)
+        return std::nullopt;
+      Source = &Op.Inputs[0];
+    }
+  }
+  if (!Source->isConst() ||
+      (Source->Provenance != ConstantAddressProvenance::Unknown &&
+       Source->Provenance != ConstantAddressProvenance::Scalar))
+    return std::nullopt;
+  return Source->ConstVal & llvm::maskTrailingOnes<uint64_t>(Bytes * 8);
+}
+
+/// The blocks that return a literal directly or supply it to a shared RET.
+static llvm::SmallDenseMap<int, uint64_t, 4>
+literalReturnArms(const FunctionFacts &F, const TargetRegInfo &TRI,
+                  unsigned Bytes) {
+  const MedFunc &Func = *F.Func;
+  llvm::SmallDenseMap<int, uint64_t, 4> Arms;
+  for (const auto &Site : F.Returns) {
+    const MedBlock &Exit = *Site.Block;
+    if (!Site.Value || !Exit.Succs.empty() || !Exit.ExceptionalSuccs.empty() ||
+        Exit.Ops.back().Opcode != NdOp::RETURN)
+      continue;
+    const auto Body = llvm::ArrayRef(Exit.Ops).drop_back();
+    const MedOp &Ret = Exit.Ops.back();
+    if (Exit.Phis.empty()) {
+      if (const auto Value = literalResult(Body, *Site.Value, TRI, Bytes, &Ret))
+        Arms.try_emplace(Exit.Id, *Value);
+      continue;
+    }
+    // A shared RET selects the incoming value of its result PHI. A write on
+    // one predecessor says nothing about the value on a different edge.
+    if (!Exit.ExceptionalPreds.empty() || Site.Value->Kind != MedVar::Reg ||
+        Site.Value->RegOff != TRI.IntReturnReg || Site.Value->Size < Bytes ||
+        !llvm::all_of(
+            Body,
+            [&](const MedOp &Op) { return isReturnControlOp(Op, &Ret, TRI); }))
+      continue;
+    const auto Phi = llvm::find_if(Exit.Phis, [&](const PhiNode &P) {
+      return P.Output == *Site.Value && P.Output.Size == Site.Value->Size &&
+             P.Output.RegOff == TRI.IntReturnReg;
+    });
+    if (Phi == Exit.Phis.end() || Phi->ExceptionalEntry)
+      continue;
+    for (const auto &[Pred, Incoming] : Phi->Args) {
+      if (static_cast<unsigned>(Pred) >= Func.Blocks.size())
+        continue;
+      const MedBlock &Arm = Func.Blocks[Pred];
+      if (Arm.Succs.size() != 1 || Arm.Succs.front() != Exit.Id ||
+          !Arm.ExceptionalSuccs.empty() || !Arm.Phis.empty())
+        continue;
+      llvm::ArrayRef<MedOp> Ops(Arm.Ops);
+      if (!Ops.empty() && Ops.back().Opcode == NdOp::BRANCH &&
+          Ops.back().NumInputs == 1 && Ops.back().Inputs[0].isConst())
+        Ops = Ops.drop_back();
+      if (const auto Value = literalResult(Ops, Incoming, TRI, Bytes))
+        Arms.try_emplace(Pred, *Value);
+    }
+  }
+  return Arms;
+}
+
+/// A choice between two such arms has an observable result. An indirect
 /// branch's CFG may retain labels for display or trapping, so only count
 /// successors that the published table binds to this very branch.
 static bool selectsLiteralReturns(const FunctionFacts &F,
@@ -384,11 +454,8 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
       Func.ReturnType ? Func.ReturnType->Size : TRI.FullRegWidth;
   if (Func.AnalysisOnly || !Bytes || Bytes > sizeof(uint64_t))
     return false;
-  llvm::SmallDenseMap<int, uint64_t, 4> Leaves;
-  for (const auto &Site : F.Returns)
-    if (const auto Value = literalReturn(Site, TRI, Bytes))
-      Leaves.try_emplace(Site.Block->Id, *Value);
-  if (Leaves.size() < 2)
+  const auto Arms = literalReturnArms(F, TRI, Bytes);
+  if (Arms.size() < 2)
     return false;
   llvm::DenseSet<std::pair<va_t, va_t>> TableEdges;
   for (const JumpTable &Table : Func.JumpTables)
@@ -428,8 +495,8 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
         Visited.set(Succ);
         Pending.push_back(Succ);
       }
-      const auto It = Leaves.find(Succ);
-      if (It == Leaves.end())
+      const auto It = Arms.find(Succ);
+      if (It == Arms.end())
         continue;
       if (First && *First != It->second)
         return true;
@@ -632,9 +699,9 @@ private:
         std::set<ValueKey> Seen;
         classify(F, *Returned, F.Paths, Seen, 0);
       }
-      // Only a mixed contract can lose defined results to an empty exit.
-      if (F.Returns.size() >= 2 &&
-          llvm::any_of(F.Paths, [](const ReturnPath &P) {
+      // Two candidate values and a path with no settled result can all
+      // arrive at one RETURN.
+      if (F.Paths.size() >= 3 && llvm::any_of(F.Paths, [](const ReturnPath &P) {
             return P.Kind == ReturnedValue::Unwritten ||
                    P.Kind == ReturnedValue::Nothing ||
                    P.Kind == ReturnedValue::CalleeResult;
