@@ -144,6 +144,9 @@ public:
 signals:
   /// The disassembly painted its first content after a file opened.
   void firstContentPainted();
+  /// A code window accepted its source or IR command, including one deferred by
+  /// a jump.
+  void codeDocumentOpened(CodeView *view);
   /// The workbench accepted exit after save/worker checks and closed its panes.
   void shutdownAccepted();
 

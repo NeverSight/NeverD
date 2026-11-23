@@ -28,6 +28,7 @@ CASES = {
     # instead of allowing an incomplete published header to choose the tests.
     "NDIS": (),
     "GDIPlus": (),
+    "WebAuthenticationRuntime": (),
     **{provider: () for provider in (*flat.CURRENT, *flat.LEGACY)},
     **{provider: () for provider in PROVIDER_PREFIXES},
     "NetworkInterfaces": ("NmrRegisterClient", "WskRegister", "WskCaptureProviderNPI"),
@@ -249,7 +250,8 @@ def check(args: argparse.Namespace) -> dict:
                         raise ValueError(f"provider lacks its preprocessing command: {name}")
                     compiler = command[:-2]
                     metadata = provider.get("metadata", {})
-                    bridge = metadata.get("sdk_import_bridge") or metadata.get("cpp_header_bridge")
+                    bridge = (metadata.get("sdk_import_bridge") or metadata.get("sdk_runtime_bridge")
+                              or metadata.get("cpp_header_bridge"))
                     original = Path(bridge["source"] if bridge else command[-1])
                     row["original_source_sha256"] = digest(original)
                     if bridge and row["original_source_sha256"] != bridge["source_sha256"]:
@@ -271,6 +273,13 @@ def check(args: argparse.Namespace) -> dict:
                         names = tuple(flat.select(inventory, declared, directory, windows.run))
                         row.update(functions=names, inventory="original SDK headers and target import library",
                                    imports_without_declaration=inventory["imports_without_declaration"])
+                    elif "sdk_runtime_bridge" in metadata:
+                        declared = official_names(args, compiler, original, directory, row, arch, name, ("",))
+                        inputs = json.loads(flat.WEBAUTHN_INPUTS.read_text(encoding="utf-8"))
+                        inventory = {"runtime_exports": {"names": inputs["exports"]}}
+                        names = tuple(flat.select(inventory, declared, directory, windows.run))
+                        row.update(functions=names, inventory="Microsoft Win32 metadata and public headers",
+                                   module=inputs["module"])
                     elif name == "NDIS" or name in PROVIDER_PREFIXES:
                         prefixes = ("Ndis",) if name == "NDIS" else PROVIDER_PREFIXES[name]
                         names = official_names(args, compiler, original, directory,
@@ -288,7 +297,8 @@ def check(args: argparse.Namespace) -> dict:
                                  "--declare", str(header), "--merge-prototypes",
                                  "--all", "--prototypes", "--no-offsets",
                                  "-o", str(selected)]
-                    selection += ["--import-prototype=" + symbol for symbol in names]
+                    selection = windows.prototype_selection_command(selection, names,
+                                                                    directory / "selection.rsp")
                     row["commands"].append(selection)
                     result = subprocess.run(selection, capture_output=True, text=True,
                                             timeout=args.timeout)
@@ -354,6 +364,8 @@ def check(args: argparse.Namespace) -> dict:
                 expected.difference_update(flat.CURRENT.keys() - PROVIDER_PREFIXES.keys())
             if "legacy_sdk" not in profiles:
                 expected.difference_update(flat.LEGACY)
+            if "webauthn_runtime" not in profiles:
+                expected.discard("WebAuthenticationRuntime")
         if arch == "x86":
             expected.difference_update(flat.WIDE_ONLY)
         if {row["provider"] for row in rows if row["architecture"] == arch} != expected:

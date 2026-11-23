@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,32 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_documented_runtime_profile_requires_every_named_declaration(self):
+        proof = {"runtime_exports": {"names": ["ApiB", "ApiA"]}}
+        self.assertEqual(windows.flat.select(proof, ["Private", "ApiA", "ApiB"], None, None),
+                         ["ApiA", "ApiB"])
+        with self.assertRaisesRegex(ValueError, "lack documented runtime exports: ApiB"):
+            windows.flat.select(proof, ["ApiA"], None, None)
+        with self.assertRaisesRegex(ValueError, "exactly once"):
+            windows.flat.select({"runtime_exports": {"names": ["ApiA", "ApiA"]}},
+                                ["ApiA"], None, None)
+
+    def test_large_selection_preserves_every_prototype_in_a_response_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            response = Path(directory) / "SDK prototypes.rsp"
+            base = ["neverd", "types", "--declare", "SDK \U0001f4c1/declarations.h"]
+            names = ["NdisCloseConfiguration", "IcmpCloseHandle"]
+            expected = ["--import-prototype=" + name for name in names]
+            units = len(subprocess.list2cmdline(base + expected).encode("utf-16-le")) // 2 + 1
+            with patch.dict(windows.wdk.LIMITS, windows_command_line_units=units):
+                self.assertEqual(windows.prototype_selection_command(base, names, response),
+                                 base + expected)
+                self.assertFalse(response.exists())
+            with patch.dict(windows.wdk.LIMITS, windows_command_line_units=units - 1):
+                self.assertEqual(windows.prototype_selection_command(base, names, response),
+                                 base + ["@" + str(response.resolve())])
+                self.assertEqual(response.read_text(encoding="utf-8").splitlines(), expected)
+
     def test_rdbss_published_abi_must_pass_before_replacing_primary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -98,6 +125,42 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "fixture parser boundary reached"):
                     windows.prepare_provider("RDBSS", source, ["clang"], root,
                                              "neverd", "LLP64")
+
+    def test_original_wdk_sources_do_not_search_current_or_previous_provider_headers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = root / "WindowsKernel-providers"
+            legacy.mkdir()
+            (legacy / "TDI.h").write_text("old declarations")
+            providers = (windows.Provider("TDI", ("tdikrnl",)),
+                         windows.Provider("RDBSS", ("rxprocs",)))
+            prepare = windows.prepare_provider
+            generated = []
+
+            def compile_header(command, log, output=None):
+                if output:
+                    output.write_text("void TdiWitness(void);")
+                return "fixture layouts"
+
+            def check_location(name, source, arguments, directory, *args, **kwargs):
+                if name == "RDBSS":
+                    self.assertEqual(generated[0].name, "TDI.h")
+                    self.assertTrue(generated[0].is_file())
+                    self.assertFalse((source.parent / "TDI.h").exists())
+                    self.assertFalse((directory / "TDI.h").exists())
+                    raise RuntimeError("checked compiler search directories")
+                unit = prepare(name, source, arguments, directory, *args, **kwargs)
+                generated.append(unit["source"])
+                return unit
+
+            with patch.dict(windows.ISOLATED_PROVIDERS, WindowsKernel=providers), \
+                    patch.object(windows, "prepare_provider", side_effect=check_location), \
+                    patch.object(windows, "run", side_effect=compile_header), \
+                    patch.object(windows, "checked_types", return_value={"prototypes": ["TdiWitness"]}):
+                with self.assertRaisesRegex(RuntimeError, "checked compiler search directories"):
+                    windows.merge_providers("WindowsKernel", root / "primary.h", root,
+                                            ["clang"], ["clang"], "neverd", "LLP64", "layouts")
+            self.assertEqual((legacy / "TDI.h").read_text(), "old declarations")
 
     def test_dxgi_c_parameter_bridge_requires_the_original_cpp_contract(self):
         with tempfile.TemporaryDirectory() as directory:

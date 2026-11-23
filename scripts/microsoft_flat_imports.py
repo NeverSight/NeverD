@@ -11,8 +11,9 @@ import microsoft_ucrt_types as ucrt
 
 
 LEGACY_INPUTS = Path(__file__).with_name("MicrosoftLegacySDKInputs.json")
+WEBAUTHN_INPUTS = Path(__file__).with_name("MicrosoftWebAuthnInputs.json")
 # The 32-bit SDK has no host-compute or hypervisor-platform import library.
-WIDE_ONLY = {"HostCompute", "HostNetwork", "HypervisorPlatform"}
+WIDE_ONLY = {"HostCompute", "HostNetwork", "HypervisorPlatform", "ComputeStorage"}
 CURRENT = {
     "ColorManagement": ("Mscms.Lib", ("icm",)),
     "CatalogTrust": ("WinTrust.Lib", ("mscat",)),
@@ -41,12 +42,48 @@ CURRENT = {
     "NetworkDiagnostics": ("ndfapi.lib", ("ndfapi",)),
     "ProcessStatus": ("psapi.lib", ("psapi",)),
     "ProcessSnapshots": ("kernel32.Lib", ("processsnapshot",)),
+    "InternetControlMessage": ("iphlpapi.lib", ("iphlpapi", "icmpapi")),
+    "TransactionManager": ("ktmw32.lib", ("ktmw32",)),
+    "SNMPUtilities": ("SnmpAPI.Lib", ("snmp",)),
+    "WebAuthentication": ("webauthn.lib", ("webauthn",)),
+    "SensorUtilities": ("SensorsUtils.lib", ("sensorsdef", "sensorsutils")),
+    "EventCollector": ("wecapi.lib", ("evcoll",)),
+    "DeviceManagementRegistration": ("MDMRegistration.lib", ("mdmregistration",)),
+    "NetworkTrafficControl": ("Traffic.Lib", ("ntddndis", "traffic")),
+    "ComputeStorage": ("computestorage.lib", ("computestorage",)),
+    "WebSockets": ("websocket.lib", ("websocket",)),
+    "RestartManager": ("rstrtmgr.lib", ("restartmanager",)),
+    "FontEmbedding": ("t2embed.lib", ("t2embapi",)),
+    "PerformanceCounters": ("LoadPerf.Lib", ("loadperf",)),
+    "QoSTraffic": ("qwave.lib", ("qos2",)),
+    "OverlayFiles": ("wofutil.lib", ("wofapi",)),
 }
 LEGACY = {"AllJoyn": "MSAJApi.lib", "PeerNetworking": "p2p.lib", "PeerGraph": "p2pgraph.lib"}
 
 
 def package(cache, record):
     return wdk.download(cache, record["file"], record["url"], record["sha256"])
+
+
+def webauthn_runtime_unit(output, cache, compiler):
+    """Use Microsoft's public headers for APIs resolved from webauthn.dll at runtime."""
+    inputs = json.loads(WEBAUTHN_INPUTS.read_text(encoding="utf-8"))
+    headers = [package(cache, record) for record in inputs["headers"]]
+    license_path = package(cache, inputs["license"])
+    directory = output / "sdk-import-sources"
+    directory.mkdir(parents=True, exist_ok=True)
+    source = directory / (inputs["provider"] + "-sdk.c")
+    source.write_text("#include <winsock2.h>\n#include <windows.h>\n" +
+                      "".join(f'#include "{h.resolve().as_posix()}"\n' for h in headers),
+                      encoding="utf-8")
+    bridge = {"source": str(source), "source_sha256": wdk.digest(source),
+              "arguments": compiler, "language": "c", "commands": [],
+              "runtime_exports": {"module": inputs["module"], "names": inputs["exports"],
+                                  "metadata": inputs["metadata"]}}
+    unit = {"name": inputs["provider"], "source": source, "compiler": compiler,
+            "headers": [h.name for h in headers], "default_calling_convention": "",
+            "bridge": bridge}
+    return unit, inputs["headers"], license_path
 
 
 def alljoyn_notice(headers, output, record):
@@ -120,7 +157,7 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
                              "-fms-compatibility-version=19.44", "-x", "c++", "-std=c++17"]
         specifications.append((old["import_packages"][architecture], groups, sdk_c, sdk_cpp, "c++",
                                ("winsock2", "windows")))
-    directory = output / "WindowsUser-providers"
+    directory = output / "sdk-import-sources"
     directory.mkdir(parents=True, exist_ok=True)
     units, packages = [], []
     for record, groups, compiler, original, language, common_headers in specifications:
@@ -134,21 +171,40 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
             identity = {"module": Path(library).stem.lower() + ".dll", "file": str(path),
                         "architecture": architecture, "sha256": wdk.digest(path),
                         "command": [readobj, "--coff-imports", str(path)]}
+            # SensorsUtils.lib carries short imports for the versioned system DLL.
+            if name == "SensorUtilities":
+                identity["module"] = "sensorsutilsv2.dll"
+            # Both SDK libraries decorate their unannotated x86 APIs as stdcall.
+            # Keep the original compiler and the declaration reader on that
+            # target convention. verify_abis checks every selected object symbol.
+            stdcall = architecture == "x86" and name in ("TransactionManager", "SensorUtilities")
+            defaults = ["-Xclang", "-fdefault-calling-conv=stdcall"] if stdcall else []
             source = directory / (name + "-sdk.c")
             headers = common_headers + headers
             # The SDK maps the default PSAPI profile to Kernel32's K32*
             # exports. Version 1 declares the routines exported by PSAPI.dll.
             prelude = "#define PSAPI_VERSION 1\n" if name == "ProcessStatus" else ""
             source.write_text(prelude + "".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
-            scope = {"import_prefix": "Pss"} if name == "ProcessSnapshots" else {}
-            units.append({"name": name, "source": source, "compiler": compiler, "headers": headers,
+            prefixes = {"ProcessSnapshots": "Pss", "InternetControlMessage": "Icmp"}
+            scope = {"import_prefix": prefixes[name]} if name in prefixes else {}
+            units.append({"name": name, "source": source, "compiler": compiler + defaults,
+                          "headers": headers, "default_calling_convention": "__stdcall" if stdcall else "",
                           "bridge": {"source": str(source), "source_sha256": wdk.digest(source),
-                                     "arguments": original, "language": language,
+                                     "arguments": original + defaults, "language": language,
                                      "import_library": identity, "commands": [], **scope}})
     return units, packages
 
 
 def select(proof, declared, directory, run):
+    if "runtime_exports" in proof:
+        names = sorted(proof["runtime_exports"]["names"])
+        if not names or len(names) != len(set(names)):
+            raise ValueError("runtime export profile must name each routine exactly once")
+        if missing := set(names) - set(declared):
+            raise ValueError("Microsoft headers lack documented runtime exports: " +
+                             ", ".join(sorted(missing)))
+        proof["projected_functions"] = names
+        return names
     symbols = read_symbols(proof["import_library"], directory, run)
     eligible = {name for name in symbols if name.startswith(proof.get("import_prefix", ""))}
     names = sorted(eligible & set(declared))
@@ -162,13 +218,15 @@ def verify_abis(proof, header, compiler, directory, prototypes, run):
     names = proof["projected_functions"]
     if not set(names) <= set(prototypes):
         raise ValueError("published SDK import inventory is incomplete")
-    imports = read_symbols(proof["import_library"], directory, run)
+    library = proof.get("import_library")
+    imports = read_symbols(library, directory, run) if library else None
+    stem = library["module"] if library else proof["runtime_exports"]["module"] + "-runtime"
     bindings = "".join(f"__typeof__(&{name}) neverd_ucrt_abi_{i} = &{name};\n"
                        for i, name in enumerate(names))
     contracts = []
     for tag, include, options in (("original", proof["source"], proof["arguments"]),
                                   ("published", header, compiler)):
-        source = directory / (proof["import_library"]["module"] + "-" + tag + "-abi.c")
+        source = directory / (stem + "-" + tag + "-abi.c")
         body = ('extern "C" {\n' + bindings + '}\n'
                 if tag == "original" and proof["language"] == "c++" else bindings)
         source.write_text('#include "' + Path(include).as_posix() + '"\n' + body, encoding="utf-8")
@@ -179,11 +237,13 @@ def verify_abis(proof, header, compiler, directory, prototypes, run):
     for name in names:
         if contracts[0][name] != contracts[1][name]:
             raise ValueError("published compiler ABI differs from Microsoft SDK: " + name)
+        if imports is None:
+            continue
         symbol = contracts[0][name][0]
         if symbol.startswith('@"\\01') and symbol.endswith('"'):
             linker = symbol[5:-1]
         elif re.fullmatch(r"@[A-Za-z_]\w*", symbol):
-            linker = ("_" if proof["import_library"]["architecture"] == "x86" else "") + symbol[1:]
+            linker = ("_" if library["architecture"] == "x86" else "") + symbol[1:]
         else:
             raise ValueError("unrecognized Microsoft SDK linkage: " + symbol)
         if linker not in imports[name]:

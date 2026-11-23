@@ -24,6 +24,7 @@ class QWidget;
 
 namespace neverd::gui {
 
+class CodeView;
 class MainWindow;
 class Session;
 
@@ -35,7 +36,8 @@ class Session;
 class InteractionMetrics final : public QObject {
 public:
   InteractionMetrics(MainWindow &window, Session &session,
-                     const QString &output, int timeoutMs, QObject *parent);
+                     const QString &output, int timeoutMs, QObject *parent,
+                     std::optional<Address> function = std::nullopt);
 
 protected:
   bool eventFilter(QObject *object, QEvent *event) override;
@@ -59,7 +61,8 @@ private:
   Step jumpStep(const char *name,
                 std::optional<LinkResource> resource = std::nullopt);
   Step pseudocodeStep(const char *name);
-  void measurePseudocode(const char *name, Done done);
+  void measurePseudocode(CodeView *code, const char *name, Done done,
+                         std::optional<qint64> actionStart = std::nullopt);
   Step graphStep(const char *name);
   /// Call \p then at the backing-store flush after \p view next paints.
   void afterPaint(QWidget *view, Done then);
@@ -70,6 +73,7 @@ private:
   Session &session_;
   QString output_;
   int timeoutMs_;
+  std::optional<Address> function_;
   QElapsedTimer clock_;
   QVector<Address> samples_;
   QJsonObject phases_;

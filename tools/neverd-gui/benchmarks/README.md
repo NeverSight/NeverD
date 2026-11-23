@@ -255,6 +255,12 @@ result or failure of every sampled function. Like the startup benchmark it uses
 temporary settings and a fresh layout. `--interaction-benchmark-timeout`
 defaults to 600000 ms.
 
+For a single function, pass `--interaction-benchmark-function 0xADDRESS`
+with `--interaction-benchmark`. The workbench records the listing jump, then
+times the first F5 from disassembly, a second opening from disassembly, and
+an explicit F5 refresh inside the source pane. Each measurement ends when the
+complete source document at that entry paints.
+
 ## Against IDA
 
 Two runners measure the workbench against an installed IDA on the same

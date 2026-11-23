@@ -3985,12 +3985,13 @@ void MainWindow::showPseudocode(const QString &representation, CodeOpen mode) {
   // the only ordinary cursor action that selects an address in the other pane.
   if (!selectAssemblyAddress || view->text()->function() != function ||
       view->text()->interrupted())
-    view->showFunction(*function, mode == CodeOpen::Generate);
+    view->showFunction(*function, refreshOrigin);
   if (selectAssemblyAddress)
     if (const auto address = disassembly_->currentAddress())
       view->text()->selectAddress(*address);
   view->window()->activateWindow();
   view->text()->setFocus();
+  emit codeDocumentOpened(view);
 }
 
 void MainWindow::openCodeDock(Dock *dock) {

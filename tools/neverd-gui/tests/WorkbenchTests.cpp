@@ -158,11 +158,11 @@ struct InteractionMetricsTestAccess {
   static qsizetype samples(const InteractionMetrics &metrics) {
     return metrics.samples_.size();
   }
-  static void pseudocode(InteractionMetrics &metrics, Address address,
-                         std::function<void()> done) {
+  static void pseudocode(InteractionMetrics &metrics, CodeView *view,
+                         Address address, std::function<void()> done) {
     metrics.started_ = true;
     metrics.samples_ = {address};
-    metrics.measurePseudocode("pseudocode", std::move(done));
+    metrics.measurePseudocode(view, "pseudocode", std::move(done));
   }
   static void openPseudocode(InteractionMetrics &metrics, Address address,
                              std::function<void()> done) {
@@ -8349,6 +8349,20 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(view->text()->complete(), OpenTimeoutMs);
     QCOMPARE(diagnostics.join('\n').count(marker), prepared + 1);
     QCOMPARE(view->text()->allText(), original);
+    // An independent document of the same revision can display the result.
+    bench.action(ActionId::ViewDisassembly)->trigger();
+    bench.window->disassembly()->focusContent();
+    QTRY_VERIFY(bench.window->disassembly()->listing()->hasFocus());
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    CodeView *other = nullptr;
+    for (auto *candidate : bench.window->findChildren<CodeView *>())
+      if (candidate != view &&
+          candidate->representation() == view->representation())
+        other = candidate;
+    QVERIFY(other);
+    QTRY_VERIFY_WITH_TIMEOUT(other->text()->complete(), OpenTimeoutMs);
+    QCOMPARE(other->text()->allText(), original);
+    QCOMPARE(diagnostics.join('\n').count(marker), prepared + 1);
   }
 
   void ownerDoesNotWarmPipelinesUsedOnlyByAnalysisReplicas() {
@@ -8535,6 +8549,33 @@ private slots:
     editing.prepareFunctionRead(Base + 32);
     QVERIFY(editing.analysisReplicaStarted());
     QTRY_VERIFY_WITH_TIMEOUT(editing.analysisReplicaReady(), OpenTimeoutMs);
+  }
+
+  void idleProjectRendersBeforeTheFirstSourceView() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    QFile image(path);
+    QVERIFY(image.open(QIODevice::ReadWrite));
+    QVERIFY(image.resize(
+        ::neverd::limits::gui::kSessionIdleRenderMinimumImageBytes));
+    image.close();
+    {
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+    }
+    Session reader(QString::fromLocal8Bit(TEST_WORKER));
+    reader.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(reader.loaded(), OpenTimeoutMs);
+    QJsonObject kept;
+    reader.read(QStringLiteral("kept_renders"), {}, this,
+                [&](const QJsonObject &payload) { kept = payload; });
+    QTRY_VERIFY_WITH_TIMEOUT(kept.value("complete").toBool(), OpenTimeoutMs);
+    QVERIFY(!reader.analysisReplicaStarted());
   }
 
   void ownerAnswersForItsPagesWhileAReplicaIsReady() {
@@ -16012,14 +16053,22 @@ private slots:
     QVERIFY(listing->jumpPending());
     InteractionMetrics metrics(*bench.window, bench.session,
                                directory.filePath("interactions.json"),
-                               NativeOpenTimeoutMs, nullptr);
+                               NativeOpenTimeoutMs, nullptr, Base + 16);
     bool done = false;
+    connect(bench.window.get(), &MainWindow::codeDocumentOpened, this,
+            [](CodeView *opened) { opened->text()->clearFocus(); });
     InteractionMetricsTestAccess::openPseudocode(metrics, Base + 16,
                                                  [&] { done = true; });
     QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
     const auto result = InteractionMetricsTestAccess::pseudocodeResult(metrics);
     QCOMPARE(result.value("samples").toInt(), 1);
     QCOMPARE(result.value("missed").toInt(), 0);
+    QVERIFY(result.value("detail")
+                .toArray()
+                .first()
+                .toObject()
+                .value("bytes")
+                .toInt() > 0);
     auto *view = bench.codeView("source");
     QVERIFY(view);
     QVERIFY(view->text()->complete());
@@ -16051,7 +16100,7 @@ private slots:
                                directory.filePath("interactions.json"),
                                NativeOpenTimeoutMs, nullptr);
     bool done = false;
-    InteractionMetricsTestAccess::pseudocode(metrics, Base + 16,
+    InteractionMetricsTestAccess::pseudocode(metrics, view, Base + 16,
                                              [&] { done = true; });
     QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
     const auto result = InteractionMetricsTestAccess::pseudocodeResult(metrics);
