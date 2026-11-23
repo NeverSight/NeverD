@@ -15,6 +15,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -38,6 +39,11 @@ bool preservesLowBits(SymOp Op) {
          Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Not;
 }
 
+unsigned literalSuffixZeros(const SymContext &Ctx, SymRef R) {
+  const auto Words = Ctx.constWords(R);
+  return std::min(Ctx.width(R), llvm::APInt::tcLSB(Words.data(), Words.size()));
+}
+
 // A concatenated literal tail or the common scale of both addends supplies
 // a proven zero suffix. The coefficient itself still needs its complete value.
 unsigned factorScaleZeros(const SymContext &Ctx, SymRef S) {
@@ -45,9 +51,7 @@ unsigned factorScaleZeros(const SymContext &Ctx, SymRef S) {
     const auto Tail = Ctx.operands(S).back();
     if (!Ctx.isConst(Tail))
       return 0;
-    const auto Words = Ctx.constWords(Tail);
-    return std::min(Ctx.width(Tail),
-                    llvm::APInt::tcLSB(Words.data(), Words.size()));
+    return literalSuffixZeros(Ctx, Tail);
   }
   if (Ctx.op(S) != SymOp::Add || Ctx.numOperands(S) != 2)
     return 0;
@@ -57,7 +61,9 @@ unsigned factorScaleZeros(const SymContext &Ctx, SymRef S) {
       T = Ctx.operand(T, 0);
     if (!Ctx.isConst(T))
       return 0;
-    Zeros = std::min(Zeros, Ctx.constValue(T).countr_zero());
+    Zeros = std::min(Zeros, literalSuffixZeros(Ctx, T));
+    if (!Zeros)
+      break;
   }
   return Zeros;
 }
@@ -76,7 +82,7 @@ visitRequiredPrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
     const auto Operands = Ctx.operands(St.Node);
     unsigned Zeros = 0;
     if (St.Op == SymOp::Mul && Ctx.isConst(Operands.front()))
-      Zeros = Ctx.constValue(Operands.front()).countr_zero();
+      Zeros = literalSuffixZeros(Ctx, Operands.front());
     unsigned Coefficient = 0;
     if constexpr (Wide) {
       if (St.Op == SymOp::Mul && Demand > 64 && Zeros < Demand - 64) {
@@ -84,9 +90,8 @@ visitRequiredPrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
           const unsigned Candidate = factorScaleZeros(Ctx, Operands[I]);
           if (Candidate > Zeros &&
               (Candidate >= Demand - 64 ||
-               (St.NumArgs > 2 &&
-                llvm::APInt::getNumWords(Demand - Candidate) <
-                    llvm::APInt::getNumWords(Demand - Zeros)))) {
+               llvm::APInt::getNumWords(Demand - Candidate) <
+                   llvm::APInt::getNumWords(Demand - Zeros))) {
             Zeros = Candidate;
             Coefficient = I;
             if (Candidate >= Demand - 64)
@@ -195,9 +200,16 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
           St.Width = Demand;
         if (Zeros && Demand > 64) {
           const unsigned FactorBits = Demand - std::min(Demand - 1, Zeros);
+          // A flat product amortizes narrowing across its operands. For two
+          // factors, keep the cheap scalar-literal multiply and project a
+          // dynamic coefficient only when at least half the limbs disappear.
+          const size_t PrefixWords = llvm::APInt::getNumWords(FactorBits);
+          const size_t FullWords = llvm::APInt::getNumWords(St.Width);
           if (FactorBits <= 64 ||
-              (St.NumArgs > 2 && llvm::APInt::getNumWords(FactorBits) <
-                                     llvm::APInt::getNumWords(St.Width))) {
+              (St.NumArgs > 2
+                   ? PrefixWords < FullWords
+                   : !Ctx.isConst(Ctx.operand(St.Node, Coefficient)) &&
+                         PrefixWords <= FullWords / 2)) {
             St.Aux = FactorBits;
             std::swap(ArgSlots[St.FirstArg],
                       ArgSlots[St.FirstArg + Coefficient]);
@@ -278,11 +290,11 @@ size_t groupAffineFactors(llvm::MutableArrayRef<uint32_t> Slots,
 // can reach the result. Lower each literal affine chain once in that ring.
 // Each surviving source is still evaluated independently at every assignment.
 template <typename Step, typename SlotMap>
-size_t prepareAffineFactors(const SymContext &Ctx, SymRef Root,
-                            llvm::MutableArrayRef<Step> Steps,
-                            llvm::MutableArrayRef<uint32_t> Args,
-                            const SlotMap &Slot,
-                            llvm::SmallVectorImpl<uint64_t> &Words) {
+size_t prepareAffineFactors(
+    const SymContext &Ctx, SymRef Root, llvm::MutableArrayRef<Step> Steps,
+    llvm::MutableArrayRef<uint32_t> Args, const SlotMap &Slot,
+    llvm::SmallVectorImpl<uint64_t> &Words,
+    llvm::SmallVectorImpl<std::pair<uint32_t, SymRef>> &Constants) {
   const auto Factors = Ctx.operands(Root);
   const auto Width = Ctx.width(Root);
   if (Factors.size() < 3 || !Ctx.isConst(Factors.front()) ||
@@ -358,6 +370,14 @@ size_t prepareAffineFactors(const SymContext &Ctx, SymRef Root,
         F = Ctx.operand(F, 1);
       }
     }
+    // A shared scale or carrier can have other full-width consumers. Only
+    // this factor can read through it when the weight discards its upper bits.
+    if (Ctx.op(F) == SymOp::Concat || Ctx.op(F) == SymOp::ZExt ||
+        Ctx.op(F) == SymOp::SExt) {
+      const auto Low = Ctx.operands(F).back();
+      if (Ctx.width(Low) >= Bits - B.countr_zero())
+        F = Low;
+    }
     Slots[Out++] = Slot.find(F.index())->second - 1;
     Words.append(A.getRawData(), A.getRawData() + N);
     Words.append(B.getRawData(), B.getRawData() + N);
@@ -374,6 +394,7 @@ size_t prepareAffineFactors(const SymContext &Ctx, SymRef Root,
     if (Uses[St.OutputSlot])
       for (auto I : Args.slice(St.FirstArg, St.NumArgs))
         Uses[I] = 1;
+  llvm::erase_if(Constants, [&](const auto &C) { return !Uses[C.first]; });
   const auto RootStep = Steps.back();
   size_t Count = 0;
   for (const auto &St : Steps.drop_back())
@@ -505,9 +526,9 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     prepareWidePrefixes(Ctx, Root, RootSlot, NextSlot,
                         llvm::MutableArrayRef<Step>(Steps), ArgSlots);
     if (Ctx.op(Root) == SymOp::Mul)
-      Steps.resize(prepareAffineFactors(Ctx, Root,
-                                        llvm::MutableArrayRef<Step>(Steps),
-                                        ArgSlots, Slot, PlanWords));
+      Steps.resize(
+          prepareAffineFactors(Ctx, Root, llvm::MutableArrayRef<Step>(Steps),
+                               ArgSlots, Slot, PlanWords, ConstantSlots));
   }
 }
 
@@ -1048,7 +1069,9 @@ llvm::APInt SymEvalPlan::evalWith(
         ScratchAP[I] *= Product & (~uint64_t(0) >> (64 - Bits));
       } else {
         auto Prefix =
-            multiplyLowWords(ScratchAP, {A + 1, St.NumArgs - 1}, Bits);
+            St.NumArgs == 2
+                ? ScratchAP[A[1]].zextOrTrunc(Bits)
+                : multiplyLowWords(ScratchAP, {A + 1, St.NumArgs - 1}, Bits);
         const unsigned Shift = St.Width - Bits;
         if (ScratchAP[I].countr_zero() >= Shift) {
           ScratchAP[I] = multiplyShiftedPrefix(ScratchAP[I], std::move(Prefix));

@@ -7060,6 +7060,14 @@ proof-gated semantic synthesis in both HighC and LLVM-to-C. HighC tries
 synthesis after exact derivation, retaining the derivation if synthesis
 cannot improve it. Width conversions also start inner numeric regions, so
 extensions do not hide narrow arithmetic or change its overflow semantics.
+For a scaled product of affine factors, the surviving bits of each weight
+determine which input slice contributes to the result. When pairwise high
+terms vanish, rows with the same offset and slice share their cofactor.
+Lower-weight or partially observed factors can remain as complete operands.
+HighC can emit a non-byte-sized arithmetic field shifted above a constant
+tail in an unsigned source word. The LLVM reader carries the surviving zero
+suffix of a left shift followed by an arithmetic right shift into its
+disjoint-OR proof and checks the flags on each contributing instruction.
 Empty block anchors left by dead-store removal retain available scalar
 definitions. A referenced jump or exception entry still clears them; child
 scopes, expressions and effects keep their existing boundaries. Serial and

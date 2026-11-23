@@ -20,6 +20,7 @@
 #include "neverd/symbolic/SymParse.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 
@@ -27,6 +28,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace neverd::symbolic::detail {
 
@@ -127,7 +129,7 @@ private:
   SymRef parseCall(const Token &Name);
   SymRef parseVariadicCall(const Token &Name);
   SymRef parseWidthCall(const Token &Name);
-  SymRef makeLiteral(const Token &N);
+  SymRef makeLiteral(const Token &N, bool Negative = false);
 
   bool parsePlainInt(uint64_t &Out);
   uint32_t parseWidthSuffix(uint32_t Default);
@@ -194,6 +196,11 @@ private:
     ErrorOffset = Offset;
   }
 
+  // The spelling borrows the input for this parse. Explicitly different
+  // widths use the ordinary literal interner.
+  llvm::DenseMap<std::pair<llvm::StringRef, unsigned>,
+                 std::pair<SymRef, SymRef>>
+      WideLiterals;
   SymContext &Ctx;
   Lexer Lex;
   uint32_t Width;

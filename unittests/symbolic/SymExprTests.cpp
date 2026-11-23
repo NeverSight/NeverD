@@ -2636,6 +2636,8 @@ TEST(SymExpr, ConcatenatedProductScalePreservesPartialAndSharedDemands) {
     const unsigned Demand = Width - Bits / 2;
     const auto Narrow = C.mkZExt(C.mkExtract(Product, 0, Demand), Width);
     SymEvalPlan FullPlan(C, Product), PartialPlan(C, C.mkXor(Narrow, B));
+    const auto Binary = C.mkMul(B, Coeff);
+    SymEvalPlan BinaryPlan(C, C.mkXor(Binary, B));
     for (unsigned I = 0; I != 32; ++I) {
       std::array<llvm::APInt, 3> Values;
       for (auto &V : Values) {
@@ -2647,6 +2649,7 @@ TEST(SymExpr, ConcatenatedProductScalePreservesPartialAndSharedDemands) {
       const auto Scale = Values[0].extractBits(High, 9).concat(Tail);
       const auto Expected = (Values[0] ^ Values[1]) * Sum * Values[2] * Scale;
       EXPECT_EQ(FullPlan.eval(Values), Expected);
+      EXPECT_EQ(BinaryPlan.eval(Values), (Scale * Sum) ^ Sum);
       EXPECT_EQ(PartialPlan.eval(Values),
                 Expected.trunc(Demand).zext(Width) ^ Sum);
     }

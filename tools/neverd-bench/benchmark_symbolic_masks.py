@@ -1858,6 +1858,44 @@ def mixed_valuation_product(width, case):
     return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
 
 
+def variable_width_product(width, case):
+    """Affine factors whose weights expose different prefixes of the same slice."""
+    variant = case % 4
+    degree, bits = (((61, 4), (79, 6), (97, 8), (127, 11)) if width <= 64 else
+                    ((3671, 15), (3889, 29), (4099, 49), (4327, 67)))[variant]
+    rng = random.Random(0xacdc18b + 137 * case + 39 * width)
+    shift = bits + 1
+    axes = ("x", "(y+z)", "(u^v)", "(w|x)")
+    starts = [(width // 3 * k + 5 * case + 7) % (width - bits - 3)
+              for k in range(len(axes))]
+    residuals = {degree // (2 + case % 3) * (j + 1): j for j in range(1 + case % 3)}
+    factors = []
+    for i in range(degree):
+        k = (i + case) % len(axes)
+        if i in residuals:
+            j = residuals[i]
+            field = f"extract(rol(({axes[k]}^v),{2+j}),0,{bits-j})"
+            word = f"{('sext', 'zext')[j % 2]}({field},{width})"
+            offset, weight = -3 - 2 * j, 3 << (2 + j)
+        else:
+            extra_zeros = (i // 4 + 2 * k + case) % max(2, bits // 2)
+            size = bits - extra_zeros + (0, 1, 3)[(i // 3 + case) % 3]
+            field = f"extract({axes[k]},{starts[k]},{size})"
+            extension = (i + case) % 3
+            if extension == 2:
+                upper = f"extract((v+{2*(i%241)+1}*w),{size},{width-size})"
+                word = f"concat({upper},{field})"
+            else:
+                word = f"{('zext', 'sext')[extension]}({field},{width})"
+            offset = rng.choice((1, -3, 5, -7, 9))
+            weight = rng.choice((-3, 1, 3, 5)) << (shift + extra_zeros)
+            if variant == 3 and i == 2:
+                offset = 6
+        factors.append(f"({offset}+({weight})*{word})")
+    scale = (3, 5, 7, 9)[variant] << (width - bits - shift)
+    return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
+
+
 def overlapping_field(width, case):
     """Masked fields with two live operands and first-order modular products."""
     rng = random.Random(0x91A27 + 47 * width + 1889 * case)
@@ -2183,7 +2221,7 @@ def main():
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
                  "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field", "masked-join",
-                 "wrapped-masked-join", "mixed-valuation"),
+                 "wrapped-masked-join", "mixed-valuation", "variable-width-product"),
         default="complement",
     )
     args = parser.parse_args()
@@ -2210,6 +2248,7 @@ def main():
             "masked-join": (32, 64, 1025, 4097, 8193, 12289),
             "wrapped-masked-join": (32, 64, 14337, 16385, 20481),
             "mixed-valuation": (32, 64, 24577, 28673, 32769),
+            "variable-width-product": (32, 64, 36865, 40961, 49153),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2271,6 +2310,7 @@ def main():
                 "masked-join": lambda w, n: [masked_join_product(w, i) for i in range(n)],
                 "wrapped-masked-join": lambda w, n: [masked_join_product(w, i, wrapped=True) for i in range(n)],
                 "mixed-valuation": lambda w, n: [mixed_valuation_product(w, i) for i in range(n)],
+                "variable-width-product": lambda w, n: [variable_width_product(w, i) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]
