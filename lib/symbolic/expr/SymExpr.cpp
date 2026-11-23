@@ -27,6 +27,7 @@
 #include "llvm/Support/xxhash.h"
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <limits>
 #include <type_traits>
@@ -272,7 +273,15 @@ std::optional<llvm::APInt> SymContext::asConst(SymRef R) const {
 unsigned SymContext::constantRotateAmount(SymRef Count, unsigned Width) const {
   const auto &N = node(Count);
   assert(N.Op == SymOp::Const && Width);
-  return N.Width <= 64 ? N.Aux % Width : WideConsts[N.Aux].urem(Width);
+  if (N.Width <= 64)
+    return N.Aux % Width;
+  const auto &Value = WideConsts[N.Aux];
+  if (std::has_single_bit(Width))
+    return Value.getRawData()[0] & (Width - 1);
+  // A count written at the carrier width often has just one active limb.
+  if (auto Small = Value.tryZExtValue())
+    return *Small % Width;
+  return Value.urem(Width);
 }
 
 bool SymContext::isConstZero(SymRef R) const {
