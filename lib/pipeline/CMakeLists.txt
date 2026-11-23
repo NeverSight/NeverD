@@ -12,6 +12,7 @@ add_neverd_component_library(NeverDPipeline
   X86/X86LegacySourceExport.cpp
   X86/X64ContinuationSchedule.cpp
   X86/X64FunctionContext.cpp
+  X86/X64KeptReturnRegister.cpp
   X86/X64FunctionCalls.cpp
   X86/X64FunctionCallSites.cpp
   X86/X64FunctionCallHandlers.cpp

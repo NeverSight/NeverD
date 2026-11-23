@@ -9218,6 +9218,9 @@ other: it returns no float and no path reads one.
 `ARegisterACalleeNeverWritesKeepsTheCallersValue` runs callers that keep a
 value in RAX across calls to callees that write XMM0 and never RAX, one of
 which returns a double a wrapper hands back.
+`AAPCS64CallContract.SelectedFloatingRecordsKeepEveryObservedField` covers
+the record such a callee returns in the vector registers, which the call's
+output must stay for until it is bound.
 `TheVectorCountSetBeforeABranchReachesTheVariadicCall` passes a variadic
 callee no vector register where AL was cleared before the branch to the
 call's block, or tested zero by that branch.

@@ -284,6 +284,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   materializeKnownStructReturnCallSites(Img, Result);
 
   bindFloatCallResults(Img, Result);
+  keepCallersValueInReturnRegister(Img, Result);
 
   // LLVM-to-C uses the same declared source returns as HighC. Binary lifting
   // keeps its machine contract; a display prototype cannot authorize a

@@ -901,17 +901,13 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
   if (It == CallMayWriteGPRs->end())
     return;
   MOp.CallPreservedGPRs = ~It->second;
-  // A callee that never writes the integer return register returns nothing
-  // there, whatever it leaves in the floating-point one: the register still
-  // holds the caller's value, and a caller compiled with the callee's body
-  // in view keeps one there across the call (GCC's -fipa-ra).  A result in
-  // the floating-point register is bound where a caller reads it
-  // (modelCallFPReturn) or where the callee is typed
-  // (promoteFloatCallResult).  A Go write barrier returns its buffer space in
-  // a register of its own, which the lift hands back as the result
-  // (goWriteBarrierResult): the call's output is that contract's to decide.
-  if (MOp.Output.Kind == MedVar::Reg &&
-      !isGoWriteBarrierContract(MOp.RegisterContract))
+  // A callee that writes neither the integer nor the floating-point return
+  // register returns nothing: the register still holds the caller's value.
+  // One that writes only the floating-point register keeps its output until
+  // the recovery of float and record results has read it; an x86-64 caller's
+  // reads of RAX after such a call are settled later
+  // (keepCallersValueInReturnRegister).
+  if (MOp.Output.Kind == MedVar::Reg && !(It->second & kFPReturnWriteBit))
     if (auto Family = gprFamilyOf(TargetArch, MOp.Output.RegOff);
         Family && (MOp.CallPreservedGPRs >> *Family) & 1) {
       MOp.Output = MedVar{};

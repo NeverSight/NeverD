@@ -109,6 +109,12 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
 /// and propagate the resulting types through forwarding calls in both routes.
 void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result);
 
+/// Give each read of RAX after a call to a callee that never writes RAX the
+/// value the caller left there (GCC's -fipa-ra keeps one across such a
+/// call), once the calls' float and record results are bound.  x86-64 only.
+void keepCallersValueInReturnRegister(const BinaryImage &Img,
+                                      PipelineResult &Result);
+
 /// Settle which functions return no value a caller could rely on
 /// (MedFunc::ReturnsNoValue), once for both C backends.
 void settleReturnContracts(const BinaryImage &Img, PipelineResult &Result,

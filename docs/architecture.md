@@ -5584,17 +5584,21 @@ its arguments are recovered. Where the call's result was already moved to
 the value the caller's SSA holds for that register after the call
 (`promoteFloatCallResult`), the return reads that same value, not the one
 the integer register named.
-A callee whose summary shows it never writes the integer return register
-returns nothing there, whatever it leaves in the vector one
-(`applyCallRegisterEffect`): the register still holds the caller's value,
+A callee whose summary shows it never writes RAX returns nothing there,
+whatever it leaves in XMM0: the register still holds the caller's value,
 and a caller compiled with the callee's body in view keeps one there across
 the call, as GCC's `-fipa-ra` does in sqlite's
-`kahanBabuskaNeumaierStepInt64`. The call has no output until a result in
-the vector registers is bound: where a caller reads the vector return
-register, where the callee is typed as returning a float, or where the
-caller reads the fields of a record returned there. A Go write barrier
-returns its buffer space in a register of its own, so its call's output
-stays that contract's.
+`kahanBabuskaNeumaierStepInt64`. A callee that writes neither register
+gives its call no output from the start (`applyCallRegisterEffect`). One
+that writes XMM0 keeps the output while the recovery of float and record
+results reads it; once those are bound, `keepCallersValueInReturnRegister`
+gives each read of RAX after the call the value that reached the call, and
+the call no output. That value is the one definition every path brings: a
+PHI, or the same value from each predecessor; where paths bring different
+values no PHI merges, the read stays as it was. This is x86-64's: on
+AArch64 and in Go's register ABI the return register is also the first
+argument's, and a callee that never writes it hands that argument back,
+which the return contracts settle.
 An inferred integer result is as wide as the widest value some return path
 is seen to leave (`inferReturnType`). The write in the return's own block,
 the writes that reach a return without one from the blocks before it, and the

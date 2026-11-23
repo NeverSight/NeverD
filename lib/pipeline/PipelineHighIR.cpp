@@ -465,6 +465,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   recoverPackedScalarReturnFromCallers(Img, Result);
   materializeKnownStructReturnCallSites(Img, Result);
   bindFloatCallResults(Img, Result);
+  keepCallersValueInReturnRegister(Img, Result);
   settleReturnContracts(Img, Result, Dbg);
 
   // Imports name every selection the same way. The cache keeps that map;
