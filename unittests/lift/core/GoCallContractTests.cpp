@@ -4852,4 +4852,31 @@ TEST(GoAssembly, AnX64RoutineRunInPlaceTakesItsSummarysRegisters) {
   EXPECT_FALSE(goInlinedRoutineOperands(T.Img, Spill).has_value());
 }
 
+TEST(GoAssembly, GoCodeHasNoVariadicPrologue) {
+  // Go passes a variadic argument as a slice, so no Go function has the
+  // platform's variadic prologue.  arm64's runtime.asyncPreempt keeps X0
+  // to X7 and V0 to V7 for the code it interrupts, as an AAPCS64 variadic
+  // function fills its register save area with both argument files:
+  //   stur x30, [sp, #-0xf0]; sub sp, sp, #0xf0
+  //   stp x0, x1, [sp, #8]; stp x2, x3, [sp, #0x18]
+  //   stp x4, x5, [sp, #0x28]; stp x6, x7, [sp, #0x38]
+  //   stp q0, q1, [sp, #0x50]; stp q2, q3, [sp, #0x70]
+  //   stp q4, q5, [sp, #0x90]; stp q6, q7, [sp, #0xb0]
+  //   add sp, sp, #0xf0; ret
+  constexpr va_t Preempt = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Preempt, words({0xF81103FE, 0xD103C3FF, 0xA90087E0, 0xA9018FE2,
+                              0xA90297E4, 0xA9039FE6, 0xAD0287E0, 0xAD038FE2,
+                              0xAD0497E4, 0xAD059FE6, 0x9103C3FF, 0xD65F03C0}));
+  // Read as the platform's code, the function is variadic.
+  EXPECT_TRUE(lift(T.Img, Preempt).IsVariadic);
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Preempt, Preempt + 0x40}};
+  Module.GoAssembly = {{Preempt, Preempt + 0x40}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_FALSE(lift(T.Img, Preempt).IsVariadic);
+}
+
 } // namespace

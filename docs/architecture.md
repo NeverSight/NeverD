@@ -6287,7 +6287,12 @@ argument registers from the first variadic one through R9 into consecutive
 words that read no parameter: Go passes a variadic argument as a slice, and
 RAX is its first argument register. `findRegisterSaveAreaSpills` skips Go
 code, so `runtime.spillArgs`, which stores RAX and then R8 and R9 in a row,
-reads both.
+reads both. `detectCc` looks for no variadic prologue in Go code on any
+target: arm64's `runtime.asyncPreempt`, which keeps X0 to X7 and V0 to V7
+for the code it interrupts, was taken for an AAPCS64 variadic function, and
+Darwin's `runtime.adjustSignalStack` and `runtime.entersyscallblock` for
+Darwin ones. A variadic function is no context save, so the thirty-two
+vector registers `asyncPreempt` keeps printed as registers nothing defines.
 
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
@@ -12333,7 +12338,9 @@ registers stored with them. The vector registers it only stores are part of
 that context: an AArch64 Q register is read whole and a D register as its
 low double, as Go's arm64 `asyncPreempt` keeps V0 to V31, where a vector
 register stored alone is a spill and stays unknown
-(`collectEntryVectorSpills`). Most caller-saved registers of x86-64 carry
+(`collectEntryVectorSpills`). Go 1.26's `asyncPreempt` keeps them four at a
+time with ST1 and a post-index, each stored as a plain store's value is.
+Most caller-saved registers of x86-64 carry
 arguments, and a register an argument arrives in is a parameter, not one of
 the four. Where the function only stores the RAX it was entered with, which
 no caller of a function that is not variadic gives a value, and reads

@@ -1924,7 +1924,11 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
     // area is not mistaken for FP parameters and the overflow area is recovered
     // specially once all call sites are known (Pipeline
     // finalizeVariadicCallees).
-    if (!BoundRegisters)
+    // Go passes a variadic argument as a slice, so no Go function has the
+    // platform's variadic prologue, though one that stores both argument
+    // register files looks like one: arm64's `runtime.asyncPreempt` keeps
+    // X0 to X7 and V0 to V7 for the code it interrupts.
+    if (!BoundRegisters && !(Image && isGoCode(*Image, Func.Entry)))
       detectVariadic(Func, TRI, TargetArch, Fmt);
 
     // Recover floating/vector parameters in their target's register bank.

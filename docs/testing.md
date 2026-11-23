@@ -9240,6 +9240,9 @@ arguments and R10 without RAX: R10 stays a value nothing defines.
 `AAPCS64CallContract.AContextSaveReadsTheVectorRegistersItStores` stores
 x9 to x12 with q16 and d17: both vector registers are read from the
 machine, and a q16 stored alone stays unknown.
+`AAPCS64CallContract.AContextSaveStoresVectorRegistersWithWriteback`
+stores x9 to x12 and v16 to v19 with one post-indexed ST1: the four vector
+registers are read from the machine.
 `SysVCallContract.TheFramePointerAFunctionOnlyStoresIsItsCallersFrame`
 and its `AAPCS64CallContract` counterpart run a function that stores the
 frame pointer it was entered with and compare the stored value with the
@@ -21062,6 +21065,8 @@ own: each takes X20 as a parameter after the argument registers it reads,
 a point inside Duff's device does too, and the C traps nowhere.
 `GoAssembly.AnX64RoutineRunInPlaceTakesItsSummarysRegisters` checks that an
 x86-64 routine gets no operands from its body.
+`GoAssembly.GoCodeHasNoVariadicPrologue` lifts arm64 code that stores X0 to
+X7 and Q0 to Q7: variadic as the platform's code, and not as Go code.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.

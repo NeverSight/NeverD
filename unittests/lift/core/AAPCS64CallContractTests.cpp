@@ -3705,4 +3705,25 @@ TEST(AAPCS64CallContract, AContextSaveReadsTheVectorRegistersItStores) {
   EXPECT_NE(Alone.find("__builtin_trap"), std::string::npos) << Alone;
 }
 
+TEST(AAPCS64CallContract, AContextSaveStoresVectorRegistersWithWriteback) {
+  // Go's arm64 asyncPreempt keeps v0 to v31 four at a time, with ST1 and a
+  // post-index: each register it writes to memory is stored, as a plain
+  // store's value is, and read from the machine.
+  //   save_all: stp x9, x10, [x0]; stp x11, x12, [x0, #16]
+  //             add x1, x0, #32
+  //             st1 {v16.16b, v17.16b, v18.16b, v19.16b}, [x1], #64; ret
+  const BinaryImage Image =
+      makeImage({{Text,
+                  {0xA9002809u, // stp x9, x10, [x0]
+                   0xA901300Bu, // stp x11, x12, [x0, #16]
+                   0x91008001u, // add x1, x0, #32
+                   0x4C9F2030u, // st1 {v16-v19}, [x1], #64
+                   Ret}}},
+                {{Text, "save_all"}}, {});
+  const std::string Source = highC(Image, {Text});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  for (const char *Read : {"v16.16b", "v17.16b", "v18.16b", "v19.16b"})
+    EXPECT_NE(Source.find(Read), std::string::npos) << Read << "\n" << Source;
+}
+
 } // namespace
