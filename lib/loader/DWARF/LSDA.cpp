@@ -26,6 +26,26 @@ namespace {
 
 using namespace dweh;
 
+/// The pointer reader returns the displacement in the target's uintptr_t.
+/// A signed displacement may refer to a landing pad before LPStart.
+std::optional<va_t> resolveLandingPad(va_t Base, va_t Offset, uint8_t Format,
+                                      unsigned PtrSize) {
+  const va_t Max = PtrSize == sizeof(uint32_t)
+                       ? std::numeric_limits<uint32_t>::max()
+                       : std::numeric_limits<va_t>::max();
+  const bool Signed = Format == Sleb128 || Format == Sdata2 ||
+                      Format == Sdata4 || Format == Sdata8;
+  if (Signed && Offset > Max / 2) {
+    const va_t Distance = Max - Offset + 1;
+    if (Distance > Base)
+      return std::nullopt;
+    return Base - Distance;
+  }
+  if (Base > Max - Offset)
+    return std::nullopt;
+  return Base + Offset;
+}
+
 /// Largest run starting at \p Address, capped at \p Want, that a single
 /// \ref BinaryImage::readVA can hand back.  The decoder works on a bounded
 /// local buffer instead of chasing addresses field by field, so the length must
@@ -262,9 +282,11 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
       }
 
       if (LandingPad != 0) {
-        if (Info.LandingPadBase > InvalidVA - LandingPad)
+        auto Address = resolveLandingPad(Info.LandingPadBase, LandingPad,
+                                         CallSiteFormat, PtrSize);
+        if (!Address)
           return malformed("Itanium LSDA landing-pad address overflows");
-        Site.LandingPadVA = Info.LandingPadBase + LandingPad;
+        Site.LandingPadVA = *Address;
         if (Req.FunctionEnd != 0 && (Site.LandingPadVA < Req.FunctionStart ||
                                      Site.LandingPadVA >= Req.FunctionEnd))
           partial("Itanium LSDA landing pad leaves its function");
