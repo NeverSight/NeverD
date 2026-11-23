@@ -78,6 +78,9 @@ after linking the object with the target linker.
   every incoming edge. One path can use a full-width XOR or subtraction while
   another uses the OR of the low- and high-half XORs. Their zero tests establish
   the same equality when both pairs refer to the corresponding sampled bits.
+  This also holds at a loop header reached by an entry XOR, a subtraction
+  backedge and a folded-XOR backedge. On each backedge, the difference after
+  the jump delay slot must still prove equality of both operand halves at zero.
   Replacing the difference on a single edge can invalidate the guard.
   A single word can hold the OR of two 32-bit differences. A word
   spill of a 64-bit XOR can leave its high half unchecked.

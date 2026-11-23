@@ -15,6 +15,7 @@
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
+#include "../render/X86/Win64CallStackInput.h"
 #include "../render/X86/X86NativeFeatures.h"
 #include "HighCWriter.h"
 
@@ -6544,6 +6545,14 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   std::string FName = functionIdentifier(Func);
+  const bool PrecallEntry = Opts.PrecallMemory != Win64PrecallMemory::None &&
+                            Func.Entry == Opts.PrecallEntry;
+  if (PrecallEntry) {
+    if (currentVaStart() || Func.UsesNativeVariadicStack)
+      throw std::invalid_argument(
+          "original_call_state requires a fixed C entry");
+    FName += Win64PrecallSuffix;
+  }
   const auto RecordEntry =
       EmitFunctionWrapper && isMIPS(Opts.TheArch) && DebugFn
           ? mipsRecordEntry(Func, *DebugFn, ReturnType)
@@ -6737,7 +6746,11 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     }
     if ((currentVaStart() || Func.UsesNativeVariadicStack) && Emitted > 0)
       Declarator += ", ...";
-    if (Emitted == 0)
+    if (PrecallEntry) {
+      if (Emitted)
+        Declarator += ", ";
+      Declarator += win64PrecallParameters(Opts.PrecallMemory);
+    } else if (Emitted == 0)
       Declarator += "void";
     OS << declaredAs(ReturnType, Declarator + ")") << " {\n";
     if (Func.UsesNativeVariadicStack) {

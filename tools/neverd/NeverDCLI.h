@@ -375,6 +375,7 @@ extern llvm::cl::opt<bool> SourceSymbolic;
 extern llvm::cl::opt<bool> StackFrameInfo;
 extern llvm::cl::opt<std::string> StackFrameFile;
 extern llvm::cl::opt<bool> SourceLLVMControlFlow;
+extern llvm::cl::opt<std::string> OriginalCallState;
 extern llvm::cl::opt<std::string> SourceLLVMLevel;
 extern llvm::cl::list<std::string> SourceLLVMPasses;
 extern llvm::cl::opt<neverd_output_language_t> OutputLanguage;

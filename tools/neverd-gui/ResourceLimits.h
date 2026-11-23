@@ -327,6 +327,10 @@ inline constexpr int kSessionSendOpenLargeFunctionCountLimit = 65536;
 inline constexpr int kSessionSendOpenLargeQFileInfoFilePathSizeLimit =
     64 * 1024 * 1024;
 inline constexpr int kSessionSendOpenFunctionCountLimit = 4096;
+/// Start disk-backed idle rendering when local function work can amortize a
+/// second worker. Smaller images acquire that worker on a foreground read.
+inline constexpr int kSessionIdleRenderMinimumFunctions = 512;
+inline constexpr int kSessionIdleRenderMinimumImageBytes = 1 << 20;
 
 // tools/neverd-gui/main.cpp
 inline constexpr int kStartupMinBenchmarkTimeoutMilliseconds = 100;

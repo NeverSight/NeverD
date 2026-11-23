@@ -941,12 +941,12 @@ void Session::sendOpen(const QString &requested, const QString &path,
             arch == QLatin1String("x86") || arch == QLatin1String("x86_64") ||
             arch == QLatin1String("arm") || arch == QLatin1String("arm64") ||
             arch == QLatin1String("aarch64");
+        const auto imageBytes = QFileInfo(filePath_).size();
         const bool large =
             functionCount_ > ::neverd::limits::gui::
                                  kSessionSendOpenLargeFunctionCountLimit ||
-            QFileInfo(filePath_).size() >
-                ::neverd::limits::gui::
-                    kSessionSendOpenLargeQFileInfoFilePathSizeLimit;
+            imageBytes > ::neverd::limits::gui::
+                             kSessionSendOpenLargeQFileInfoFilePathSizeLimit;
         analysis_.setSingleReplica(large);
         analysis_.setSnapshotBlocked(options.analysis && native && large);
         // Idle-time work, which a file opened without idle analysis asks for
@@ -954,16 +954,29 @@ void Session::sendOpen(const QString &requested, const QString &path,
         analysis_.setRendersAhead(options.analysis);
         analysis_.setOwnerReadsKept(
             capabilities_.contains(QStringLiteral("kept_renders")));
-        if (options.analysis && native && !large &&
+        const bool prefetchEntry =
             functionCount_ >=
-                ::neverd::limits::gui::kSessionSendOpenFunctionCountLimit) {
-          // Speculative source preparation must follow the initial browsing
-          // reads instead of starting a replica and snapshot ahead of them.
+            ::neverd::limits::gui::kSessionSendOpenFunctionCountLimit;
+        const bool prepareProject =
+            functionCount_ >=
+                ::neverd::limits::gui::kSessionIdleRenderMinimumFunctions &&
+            imageBytes >=
+                ::neverd::limits::gui::kSessionIdleRenderMinimumImageBytes &&
+            capabilities_.contains(QStringLiteral("render_ahead")) &&
+            capabilities_.contains(QStringLiteral("prepare_call_summaries"));
+        if (options.analysis && native && !large &&
+            (prefetchEntry || prepareProject)) {
+          // Start after foreground browsing has drained. The store can answer
+          // a reopened project without allocating a second image session.
           connect(
               &queries_, &QueryService::idle, this,
-              [this, opened = epoch(), entry = entryAddress()] {
-                if (loaded_ && epoch() == opened)
+              [this, opened = epoch(), entry = entryAddress(), prefetchEntry] {
+                if (!loaded_ || epoch() != opened)
+                  return;
+                if (prefetchEntry)
                   analysis_.prefetchSource(entry);
+                else
+                  analysis_.startIdleRenders();
               },
               Qt::SingleShotConnection);
         }

@@ -1508,6 +1508,8 @@ struct Session {
     if (PipeRan && PipelineFeatureGeneration != SigDB.featureGeneration())
       clearPipeline();
     SourceViewOptions NativeOptions = SourceOptions;
+    // A C-only parameter and RAM binding do not change the lifted module.
+    NativeOptions.PrecallMemory = Win64PrecallMemory::None;
     NativeOptions.VariableTypes.clear();
     NativeOptions.VariableEdits.clear();
     for (auto It = FunctionLlvmModules.begin(); It != FunctionLlvmModules.end();

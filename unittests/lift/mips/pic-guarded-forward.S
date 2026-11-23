@@ -149,6 +149,7 @@ import_probe:
 #ifdef RESULT_SPILL
   spill_result
 #endif
+#if !defined(THREE_WAY_LOOP) && !defined(THREE_WAY_JOIN)
   beq $17,$zero,.Lcheck_result
   nop
 .Lrepeat:
@@ -174,6 +175,7 @@ import_probe:
   bne $17,$zero,.Lrepeat
   nop
 .Lcheck_result:
+#endif
 #if defined(CLEAR_BYTES)
 #if CLEAR_BYTES == 1
   .irp offset,40,41,42,43,44,45,46,47
@@ -199,7 +201,42 @@ import_probe:
   dsrl32 $19,$18,0
   dsll32 $24,$18,0
   dsrl32 $24,$24,0
-#if defined(OR_DIFFERENCES) || defined(RECOMPUTE_DIFFERENCE) || defined(MIXED_DIFFERENCE)
+#if defined(THREE_WAY_LOOP) || defined(THREE_WAY_JOIN)
+  or $12,$24,$zero
+  xor $24,$2,$18
+#ifdef THREE_WAY_LOOP
+.Lthree_way_join:
+#endif
+  beq $17,$zero,.Lthree_way_test
+  nop
+  daddiu $17,$17,-1
+#ifdef THREE_WAY_FOLD_FIRST
+  bne $20,$zero,guard_sub
+  xori $20,$20,1
+#else
+  beq $20,$zero,guard_fold
+  xori $20,$20,1
+guard_sub:
+  b .Lthree_way_join
+  dsubu $24,$18,$2
+#endif
+guard_fold:
+  xor $3,$13,$12
+  xor $15,$14,$19
+  b .Lthree_way_join
+  or $24,$3,$15
+#ifdef THREE_WAY_FOLD_FIRST
+guard_sub:
+  b .Lthree_way_join
+  dsubu $24,$2,$18
+#endif
+#ifndef THREE_WAY_LOOP
+.Lthree_way_join:
+#endif
+.Lthree_way_test:
+  bne $24,$zero,.Ldone
+  nop
+#elif defined(OR_DIFFERENCES) || defined(RECOMPUTE_DIFFERENCE) || defined(MIXED_DIFFERENCE)
 #ifdef MIXED_DIFFERENCE
   beq $20,$zero,.Lsplit_difference
   nop

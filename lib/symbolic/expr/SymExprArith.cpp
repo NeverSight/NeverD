@@ -66,7 +66,7 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
       const auto Op = op(B);
       if (Op != SymOp::Add && Op != SymOp::And && Op != SymOp::Or &&
           (Op != SymOp::Mul || numOperands(B) == 2)) {
-        if (constValue(A).isZero())
+        if (isConstZero(A))
           return B;
         const SymRef Pair[] = {A, B};
         return intern(SymOp::Add, W, Pair, 0);
@@ -303,10 +303,7 @@ SymRef SymContext::mkSub(SymRef A, SymRef B) {
   return mkAdd(A, mkNeg(B));
 }
 
-SymRef SymContext::mkNeg(SymRef A) {
-  uint32_t W = width(A);
-  return mkMul(mkConst(llvm::APInt::getAllOnes(W)), A);
-}
+SymRef SymContext::mkNeg(SymRef A) { return mkMul(mkOnes(width(A)), A); }
 
 SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
   assert(!Ops.empty() && "mkMul needs at least one operand");
@@ -334,15 +331,24 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
         const SymRef Factors[] = {Product, Atom};
         return intern(SymOp::Mul, W, Factors, 0);
       }
+      if (ProductConstant && AtomConstant) {
+        auto Value = constValue(Product);
+        if (isConstOnes(Atom))
+          Value.negate();
+        else
+          Value *= constValue(Atom);
+        return mkConst(Value);
+      }
       if (ProductConstant != AtomConstant) {
         if (AtomConstant)
           std::swap(Product, Atom);
         if (op(Atom) != SymOp::LShr) {
-          const auto Coefficient = constValue(Product);
-          if (Coefficient.isZero())
-            return Product;
-          if (Coefficient.isOne())
-            return Atom;
+          // Only zero and one need folding. Read the pooled literal in
+          // place before interning the product can relocate its storage.
+          const auto Digits = constWords(Product);
+          if (Digits.front() <= 1 &&
+              llvm::all_of(Digits.drop_front(), [](uint64_t V) { return !V; }))
+            return Digits.front() ? Atom : Product;
           const SymRef Factors[] = {Product, Atom};
           return intern(SymOp::Mul, W, Factors, 0);
         }

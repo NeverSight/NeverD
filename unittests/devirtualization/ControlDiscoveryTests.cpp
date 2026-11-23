@@ -892,12 +892,20 @@ TEST(ControlDiscovery, SumMasksBoundWideShiftAmountsAndKeepWideFallback) {
   EXPECT_EQ(Full.Visited, Precise.Visited);
   ASSERT_TRUE(Full.FrameRootBits);
   EXPECT_EQ(*Full.FrameRootBits, 0U);
+  ASSERT_GT(Full.Visited, 0U);
   const auto Exact =
       gatherControlDependencies(State, Slice, Root, Full.Visited);
   EXPECT_EQ(Exact.Status, ControlDiscoveryStatus::Complete);
-  for (uint64_t Budget : {uint64_t{8}, Full.Visited - 1}) {
+  EXPECT_EQ(Exact.Visited, Full.Visited);
+  EXPECT_EQ(Exact.FrameRootBits, Full.FrameRootBits);
+  // The canonical slice can cost less as the builder simplifies it. Check
+  // every genuinely insufficient budget instead of assuming a fixed cost.
+  for (uint64_t Budget = 0; Budget < Full.Visited; ++Budget) {
+    SCOPED_TRACE(testing::Message() << "Budget=" << Budget
+                                    << ", Full.Visited=" << Full.Visited);
     const auto Short = gatherControlDependencies(State, Slice, Root, Budget);
     EXPECT_EQ(Short.Status, ControlDiscoveryStatus::BudgetExceeded);
+    EXPECT_EQ(Short.Visited, Budget);
     EXPECT_TRUE(Short.RegisterRanges.empty());
     EXPECT_TRUE(Short.FrameSlots.empty());
     EXPECT_FALSE(Short.FrameRootBits);

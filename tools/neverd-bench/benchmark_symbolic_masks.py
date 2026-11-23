@@ -1754,16 +1754,23 @@ def blended_field(width, case):
     return f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
 
 
-def masked_join_product(width, case):
+def masked_join_product(width, case, *, wrapped=False):
     """Products of shuffled, independently masked OR/XOR fields."""
-    rng = random.Random(0x5A34F + width * 79 + case * 2647)
     variant = case % 4
-    if width <= 64:
+    seed = 0xDBF1 + width * 73 + case * 2381 if wrapped else 0x5A34F + width * 79 + case * 2647
+    rng = random.Random(seed)
+    if wrapped:
+        shape = ((71, 6), (83, 7), (97, 9), (107, 11)) if width <= 64 else (
+            (1871, 27), (2111, 39), (2333, 53), (2593, 65))
+        degree, size = shape[variant]
+    elif width <= 64:
         degree, size = ((67, 6), (73, 9), (89, 7), (97, 11))[variant]
     else:
         degree, size = ((1451, 31), (1511, 42), (1613, 65), (1709, 54))[variant]
     arity = (3, 4, 5, 7)[variant]
     starts = (width - size - 1, max(1, width // 2 - size // 2), min(63, width - size))
+    if wrapped:
+        starts = tuple(width - suffix for suffix in (size // 3, size - 1, 1))
     axes = ("(x^y)", "(u+v)", "((v|w)^(y+z))", "((x&z)^u)",
             "((v|y)+x)", "(w^(x+z))", "((u&w)+y)")
     masks = [[rng.getrandbits(size) | (1 << (j % size)) for j in range(arity)]
@@ -1777,20 +1784,34 @@ def masked_join_product(width, case):
         arms = []
         for j in order:
             live = masks[axis][j]
-            if i == degree // 2 and case % 3 and j == 0:
-                live ^= 1 << (size // 2)
-            outside = rng.getrandbits(width) & ~(((1 << size) - 1) << start)
-            mask = outside | (live << start)
+            if wrapped:
+                suffix = width - start
+                prefix = size - suffix
+                if i == degree // 2 and variant and j == case % arity:
+                    live ^= 1 << (suffix - case % 2)
+                mask = (live >> suffix) | ((live & ((1 << suffix) - 1)) << start)
+                mask |= rng.getrandbits(width - size) << prefix
+            else:
+                if i == degree // 2 and case % 3 and j == 0:
+                    live ^= 1 << (size // 2)
+                outside = rng.getrandbits(width) & ~(((1 << size) - 1) << start)
+                mask = outside | (live << start)
             arms.append(f"({axes[(j + axis) % len(axes)]}&{mask:#x})")
         at = rng.randrange(width - size + 1)
         op = "|" if (axis + case) % 2 else "^"
-        field = f"extract(ror(({op.join(arms)}),{(start - at) % width}),{at},{size})"
+        left = wrapped and i % 2 == 0
+        turn = (at - start if left else start - at) % width
+        field = f"extract({('ror', 'rol')[left]}(({op.join(arms)}),{turn}),{at},{size})"
         if i % 3 == 2:
             word = f"concat(extract(w,{size},{width - size}),{field})"
         else:
             word = f"{('zext', 'sext')[i % 3]}({field},{width})"
-        offset = rng.randrange(-35, 36) | 1
-        weight = (rng.randrange(-27, 28) | 1) << (size + 1)
+        if wrapped:
+            offset = rng.choice((-13, -7, -3, 1, 3, 5, 11, 17, 21))
+            weight = rng.choice((-11, -7, -3, 1, 3, 5, 9)) << (size + 1)
+        else:
+            offset = rng.randrange(-35, 36) | 1
+            weight = (rng.randrange(-27, 28) | 1) << (size + 1)
         factors.append(f"({offset}+({weight})*{word})")
     scale = 3 << (width - 2 * size - 1)
     return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
@@ -2120,7 +2141,8 @@ def main():
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
-                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field", "masked-join"),
+                 "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field", "masked-join",
+                 "wrapped-masked-join"),
         default="complement",
     )
     args = parser.parse_args()
@@ -2145,6 +2167,7 @@ def main():
             "blended-field": (3329, 4097, 6145),
             "overlapping-field": (4097, 7169, 9217),
             "masked-join": (32, 64, 1025, 4097, 8193, 12289),
+            "wrapped-masked-join": (32, 64, 14337, 16385, 20481),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2204,6 +2227,7 @@ def main():
                 "blended-field": lambda w, n: [blended_field(w, i) for i in range(n)],
                 "overlapping-field": lambda w, n: [overlapping_field(w, i) for i in range(n)],
                 "masked-join": lambda w, n: [masked_join_product(w, i) for i in range(n)],
+                "wrapped-masked-join": lambda w, n: [masked_join_product(w, i, wrapped=True) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

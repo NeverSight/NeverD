@@ -227,17 +227,34 @@ void AnalysisService::readKept() {
   askKeptState();
 }
 
-void AnalysisService::askKeptState() {
+bool AnalysisService::canRenderAhead() const {
+  return rendersAhead_ && owner_.projectId() != renderCrashProject_ &&
+         SourceDefaults::options(QStringLiteral("source")).isEmpty();
+}
+
+void AnalysisService::startIdleRenders() {
+  if (ownerReadsKept_ && !snapshotBlocked_ && !replicaStarted() &&
+      canRenderAhead())
+    askKeptState(QueryService::QuerySpec::Normal);
+}
+
+void AnalysisService::askKeptState(QueryService::QuerySpec::Priority priority) {
   if (keptState_ != KeptState::Unknown)
     return;
   keptState_ = KeptState::Asked;
   const auto serial = serial_;
+  auto query = visible(QStringLiteral("kept_renders"), {});
+  query.priority = priority;
   keptStateRequest_ = owner_.subscribe(
-      visible(QStringLiteral("kept_renders"), {}), this,
-      [this, serial](const QJsonObject &response) {
+      query, this, [this, serial, priority](const QJsonObject &response) {
         if (serial != serial_)
           return;
         keptStateRequest_ = 0;
+        if (priority == QueryService::QuerySpec::Normal &&
+            response.value("status") != QLatin1String("ok")) {
+          keptState_ = KeptState::Unknown;
+          return;
+        }
         keptState_ =
             response.value("payload").toObject().value("complete").toBool()
                 ? KeptState::Whole
@@ -491,9 +508,7 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
       restore["call_summaries"] = true;
     // The job renders what a view reads under no options; one that opens its
     // functions under others would read none of it.
-    if (solvesSummaries_ && rendersAhead_ &&
-        owner_.projectId() != renderCrashProject_ &&
-        SourceDefaults::options(QStringLiteral("source")).isEmpty() &&
+    if (solvesSummaries_ && canRenderAhead() &&
         message.value("capabilities")
             .toArray()
             .contains(QStringLiteral("render_ahead")))

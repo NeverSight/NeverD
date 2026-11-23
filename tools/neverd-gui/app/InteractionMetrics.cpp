@@ -20,6 +20,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -62,9 +63,10 @@ QJsonObject summary(QVector<double> ms, int missed) {
 
 InteractionMetrics::InteractionMetrics(MainWindow &window, Session &session,
                                        const QString &output, int timeoutMs,
-                                       QObject *parent)
+                                       QObject *parent,
+                                       std::optional<Address> function)
     : QObject(parent), window_(window), session_(session), output_(output),
-      timeoutMs_(timeoutMs) {
+      timeoutMs_(timeoutMs), function_(function) {
   clock_.start();
   connect(
       &window_, &MainWindow::firstContentPainted, this,
@@ -103,6 +105,13 @@ void InteractionMetrics::sampleFunctions(int count) {
   functionCount_ = count;
   if (count <= 0) {
     finish(false, QStringLiteral("no functions"));
+    return;
+  }
+  if (function_) {
+    samples_ = {*function_};
+    runSteps({jumpStep("jump_cold"), pseudocodeStep("pseudocode_cold"),
+              pseudocodeStep("pseudocode_warm"),
+              pseudocodeStep("pseudocode_refresh")});
     return;
   }
   // One page per sample, spread over the address-ordered list; its first
@@ -365,11 +374,48 @@ InteractionMetrics::Step InteractionMetrics::pseudocodeStep(const char *name) {
   return [this, name](Done done) {
     const auto open = [this, name, done] {
       // F5 opens the pseudocode window on the current function.
-      if (auto *action =
-              window_.findChild<QAction *>(QStringLiteral("ViewPseudocode")))
-        action->trigger();
-      QTimer::singleShot(0, this,
-                         [this, name, done] { measurePseudocode(name, done); });
+      auto *action =
+          window_.findChild<QAction *>(QStringLiteral("ViewPseudocode"));
+      if (!action) {
+        finish(false, QStringLiteral("no pseudocode action"));
+        return;
+      }
+      std::optional<qint64> actionStart;
+      if (function_) {
+        if (QLatin1String(name) == QLatin1String("pseudocode_warm")) {
+          auto *listing =
+              window_.findChild<QAction *>(QStringLiteral("ViewDisassembly"));
+          if (!listing) {
+            finish(false, QStringLiteral("no disassembly action"));
+            return;
+          }
+          listing->trigger();
+          window_.disassembly()->focusContent();
+        }
+        actionStart = clock_.nsecsElapsed();
+      }
+      // The action can wait for a listing jump or open a new dock before Qt
+      // gives it focus. Observe the document selected by the actual command.
+      auto *limit = new QTimer(this);
+      limit->setSingleShot(true);
+      connect(limit, &QTimer::timeout, this, [this, limit] {
+        limit->deleteLater();
+        finish(false,
+               QStringLiteral("pseudocode action did not open a window"));
+      });
+      connect(
+          &window_, &MainWindow::codeDocumentOpened, limit,
+          [this, name, done, actionStart, limit](CodeView *view) {
+            limit->stop();
+            limit->deleteLater();
+            QTimer::singleShot(
+                0, this, [=, this, code = QPointer<CodeView>(view)] {
+                  measurePseudocode(code, name, done, actionStart);
+                });
+          },
+          Qt::SingleShotConnection);
+      limit->start(::neverd::limits::gui::kInteractionMetricsSampleTimeoutMs);
+      action->trigger();
     };
     // Leaving the graph starts a listing jump. F5 itself defers until that
     // jump lands, so its window cannot be measured on the next timer yet.
@@ -382,14 +428,10 @@ InteractionMetrics::Step InteractionMetrics::pseudocodeStep(const char *name) {
   };
 }
 
-void InteractionMetrics::measurePseudocode(const char *name, Done done) {
+void InteractionMetrics::measurePseudocode(CodeView *code, const char *name,
+                                           Done done,
+                                           std::optional<qint64> actionStart) {
   {
-    CodeView *code = nullptr;
-    for (auto *view : window_.findChildren<CodeView *>())
-      if (view->isVisible() && CodeView::isSource(view->representation())) {
-        code = view;
-        break;
-      }
     if (!code) {
       phases_.insert(QLatin1String(name),
                      QJsonObject{{"error", "no pseudocode window"}});
@@ -405,7 +447,7 @@ void InteractionMetrics::measurePseudocode(const char *name, Done done) {
         done();
         return;
       }
-      const qint64 start = clock_.nsecsElapsed();
+      const qint64 start = actionStart.value_or(clock_.nsecsElapsed());
       auto over = std::make_shared<bool>(false);
       auto status = std::make_shared<QMetaObject::Connection>();
       auto *limit = new QTimer(this);
@@ -422,6 +464,13 @@ void InteractionMetrics::measurePseudocode(const char *name, Done done) {
           const double ms = (clock_.nsecsElapsed() - start) / 1.0e6;
           series->ms.append(ms);
           sample["ms"] = ms;
+          if (actionStart) {
+            const QByteArray source = text->allText().toUtf8();
+            sample["bytes"] = source.size();
+            sample["sha256"] = QString::fromLatin1(
+                QCryptographicHash::hash(source, QCryptographicHash::Sha256)
+                    .toHex());
+          }
         } else {
           ++series->missed;
           sample["missed"] = failure;
@@ -454,7 +503,8 @@ void InteractionMetrics::measurePseudocode(const char *name, Done done) {
       connect(limit, &QTimer::timeout, this,
               [complete] { complete(QStringLiteral("timeout")); });
       limit->start(::neverd::limits::gui::kInteractionMetricsSampleTimeoutMs);
-      code->showFunction(samples_[index]);
+      if (!actionStart)
+        code->showFunction(samples_[index]);
       *issued = true;
       observe();
     };

@@ -273,6 +273,12 @@ libraries below supply only declarations absent from the official inputs,
 without replacing official types or prototypes. See
 [local Microsoft type libraries](docs/microsoft-windows-types.md).
 
+The Windows user-mode type libraries also use Microsoft's MIT-licensed
+WebAuthn headers for documented runtime exports. The generator pins the
+headers and their notice in `scripts/MicrosoftWebAuthnInputs.json` and
+publishes `licenses/Microsoft-WebAuthn-LICENSE.txt` alongside the generated
+libraries. [Microsoft WebAuthn](https://github.com/microsoft/webauthn).
+
 The optional archived SDK profile reads the AllJoyn C declarations shipped
 in Microsoft Windows SDK 10.0.22621.3233. These headers carry the AllSeen
 Alliance copyright and permission notice. The generator verifies the original

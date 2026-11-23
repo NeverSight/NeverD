@@ -4606,6 +4606,14 @@ live bit, signed byte extensions and 65-bit coefficients. The 89-factor x86
 fixture checks both source views and executes the emitted C against the
 original multiplication at Clang O0 and O2.
 
+Use `--family wrapped-masked-join --count 4` for 20 products at 32, 64,
+14337, 16385 and 20481 bits. Their 3–7 masked inputs straddle bit zero after
+left or right rotation. The 12 wide products have 1871–2593 factors and up
+to 65 live coefficient bits. A 103-factor x86 fixture exercises the wrapped
+byte in both source views. The expression tests change a bit on each side of
+the wrap, and the product tests compare repeated odd and even offsets with
+direct full-width multiplication.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work
@@ -18392,6 +18400,16 @@ high XORs on the other. The harness exercises all four combinations of half
 matches at each trip count, including both routes to the shared zero test.
 Return-target cases also swap the arm order, omit or cross halves, and change
 the sample before the test.
+The three-way join and two-backedge fixtures start with a whole XOR, then
+select subtraction or the OR of the high and low 32-bit XORs. The original
+ELF trace checks both initial arm choices and zero to three iterations,
+including both orders of alternating backedges. Both physical orders of the
+two arithmetic blocks run through HighC and LLVMC. When subtraction lies in
+the final jump's delay slot, HighC must still execute it and the loop-carried
+assignments on that edge. The roundtrips check the forwarded word and the
+restored return address. Return-target tests
+replace either arm with a single-half check or flip the difference in its jump
+delay slot.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.

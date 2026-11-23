@@ -148,15 +148,20 @@ bool mirrorsImageStorage(const llvm::GlobalValue &Global) {
 // follow a referenced function into its body: that body is not being emitted,
 // nor into the image's storage, which is declared.
 std::set<const llvm::GlobalValue *>
-referencedGlobals(const llvm::Function &Function) {
+referencedGlobals(const llvm::Function &Function, const LLVMCWriter &Writer) {
   std::set<const llvm::GlobalValue *> Globals;
   llvm::SmallVector<const llvm::Value *, 32> Work;
   llvm::SmallPtrSet<const llvm::Value *, 32> Seen;
   for (const auto &Block : Function)
-    for (const auto &Instruction : Block)
+    for (const auto &Instruction : Block) {
+      if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+          Load && llvm::isa<llvm::Constant>(Load->getPointerOperand()) &&
+          Writer.isImportCalleeOnlyLoad(Load))
+        continue;
       for (const auto &Operand : Instruction.operands())
         if (llvm::isa<llvm::Constant>(Operand))
           Work.push_back(Operand);
+    }
   while (!Work.empty()) {
     const auto *Value = Work.pop_back_val();
     if (!Seen.insert(Value).second)
@@ -555,11 +560,12 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   };
   CRecordNameSpelling Names(TypeName);
   c_memory::applyMIPSVectorAlignment(Opts, Img ? Img : Opts.Image);
+  CurMod = &Mod;
   OnlyFunction = Only;
   SelectedFunctions = llvmc::SourceFunctions(Only);
   SelectedGlobals.clear();
   for (const auto *Function : SelectedFunctions.selected()) {
-    const auto Globals = referencedGlobals(*Function);
+    const auto Globals = referencedGlobals(*Function, *this);
     SelectedGlobals.insert(Globals.begin(), Globals.end());
   }
   EmittedGlobalNames.clear();
@@ -568,7 +574,6 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   HeaderCallRecords.clear();
   HeaderCallRecordTags.clear();
   DefinitionPointers.clear();
-  CurMod = &Mod;
   prepareFunctionIdentifiers(Mod);
   // Function bodies are written before the globals they name.
   collectLabelTables(Mod);
@@ -1464,8 +1469,17 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
         mips::modulePreservesDSPControl(Mod, Img ? Img : Opts.Image,
                                         Opts.TheArch),
         mips::moduleAvoidsMSA(Mod, Img ? Img : Opts.Image, Opts.TheArch));
-  if (NeedsWin64CallStackInput)
+  if (!NeedsWin64CallStackInput)
+    Opts.PrecallMemory = Win64PrecallMemory::None;
+  else if (Opts.PrecallMemory == Win64PrecallMemory::None)
     OS << Win64CallStackInputPrelude;
+  else {
+    if (!OnlyFunction)
+      throw std::invalid_argument(
+          "original_call_state requires one ordinary C definition");
+    writeWin64PrecallReader(OS.stream(), Opts.PrecallMemory,
+                            Img ? Img : Opts.Image);
+  }
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
   if (NeedsX86SegmentMoveDispatch)
@@ -2267,9 +2281,10 @@ void LLVMCWriter::writeReferencedImageObjects(
   for (const llvm::Function *Fn : Fns)
     for (const auto &BB : *Fn)
       for (const auto &Inst : BB) {
-        if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst))
-          Note(LI->getPointerOperand(), LI->getType(), LI->isSimple());
-        else if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst))
+        if (auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
+          if (!isImportCalleeOnlyLoad(LI))
+            Note(LI->getPointerOperand(), LI->getType(), LI->isSimple());
+        } else if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst))
           Note(SI->getPointerOperand(), SI->getValueOperand()->getType(),
                false);
       }

@@ -14,6 +14,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/SourceVariableEdits.h"
+#include "neverd/ir/X86/Win64PrecallMemory.h"
 #include "neverd/libc/LibCVariant.h"
 
 #include <functional>
@@ -111,6 +112,9 @@ struct CRecordDefinitions {
 };
 
 struct CEmitterOptions {
+  /// Borrow one original Win64 CALL observation in a single ordinary C view.
+  Win64PrecallMemory PrecallMemory = Win64PrecallMemory::None;
+  va_t PrecallEntry = InvalidVA;
   bool EmitIncludes = true;
   /// The unit is a whole program, which a C compiler takes as one: its main
   /// holds to the result and parameters C gives main.  A single function's

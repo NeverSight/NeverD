@@ -13,7 +13,9 @@
 #include "neverd/Common.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 
 #include <cstdint>
@@ -28,6 +30,16 @@ struct BinaryImage;
 namespace analysis {
 struct X64ContinuationInstructionSource;
 }
+
+/// Evidence belongs to the original execution CPU. An unadvertised feature
+/// alone cannot distinguish an unsupported instruction from TSX CPUID masking.
+struct X64RtmAbortSelection {
+  enum Mode { Off, Supported, Probe, Unadvertised } Kind = Off;
+  std::optional<uint32_t> MaxBasic;
+  std::optional<uint32_t> Leaf7EBX;
+  static llvm::Expected<X64RtmAbortSelection> read(const llvm::json::Value &V);
+  llvm::json::Object report(llvm::json::Array Regions) const;
+};
 
 struct X64RtmAbortRegion {
   va_t Address;
@@ -50,8 +62,26 @@ struct X64RtmAbortStep {
   X64RtmAbortRegion Region;
 };
 
+/// A successful live query is local to a driver activation (one bounded
+/// chunk in direct dispatch). A resumed or independent invocation probes anew.
+class X64RtmAbortDispatch {
+  llvm::DenseSet<va_t> Sites;
+
+public:
+  X64RtmAbortDispatch(X64RtmAbortSelection::Mode Mode,
+                      llvm::ArrayRef<X64RtmAbortStep> Steps);
+  void declare(
+      llvm::raw_ostream &OS,
+      llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units) const;
+  bool contains(va_t Site) const {
+    return !Sites.empty() && Sites.contains(Site);
+  }
+  void emit(llvm::raw_ostream &OS, llvm::StringRef Name) const;
+};
+
 llvm::json::Array emitX64RtmAbortSteps(llvm::raw_ostream &OS,
-                                       llvm::ArrayRef<X64RtmAbortStep> Steps);
+                                       llvm::ArrayRef<X64RtmAbortStep> Steps,
+                                       X64RtmAbortSelection::Mode Mode);
 
 /// Emit an explicit V6 environment callback and receipts for its accepted
 /// pairs. One environment invocation owns the complete pair. Instruction steps

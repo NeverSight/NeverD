@@ -16,7 +16,9 @@
 #include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
@@ -24,6 +26,68 @@
 #include <vector>
 
 namespace neverd {
+
+llvm::Expected<X64RtmAbortSelection>
+X64RtmAbortSelection::read(const llvm::json::Value &V) {
+  X64RtmAbortSelection Result;
+  if (const auto Flag = V.getAsBoolean()) {
+    Result.Kind = *Flag ? Supported : Off;
+    return Result;
+  }
+  if (V.getAsString() == "auto") {
+    Result.Kind = Probe;
+    return Result;
+  }
+  const auto *Record = V.getAsObject();
+  if (!Record)
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "native_rtm_abort_steps requires a boolean, "
+                                   "auto or target CPUID record");
+  const auto Word = [&](llvm::StringRef Key) -> std::optional<uint32_t> {
+    if (const auto *Value = Record->get(Key)) {
+      if (const auto Number = Value->getAsUINT64();
+          Number && *Number <= UINT32_MAX)
+        return uint32_t(*Number);
+      uint32_t Number;
+      if (const auto Text = Value->getAsString();
+          Text && !Text->empty() && !Text->starts_with('-') &&
+          !Text->getAsInteger(0, Number))
+        return Number;
+    }
+    return std::nullopt;
+  };
+  Result.MaxBasic = Word("max_basic_leaf");
+  Result.Leaf7EBX = Word("leaf7_ebx");
+  if (!Result.MaxBasic ||
+      (*Result.MaxBasic >= 7) != Result.Leaf7EBX.has_value() ||
+      Record->size() != 1u + Result.Leaf7EBX.has_value())
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "RTM CPUID requires max_basic_leaf and "
+                                   "leaf7_ebx exactly when leaf 7 exists");
+  Result.Kind =
+      (Result.Leaf7EBX.value_or(0) & (1U << 11)) ? Supported : Unadvertised;
+  return Result;
+}
+
+llvm::json::Object
+X64RtmAbortSelection::report(llvm::json::Array Regions) const {
+  llvm::json::Object R{
+      {"native_intrinsic", "llvm.x86.rtm.abort.pair"},
+      {"regions", std::move(Regions)},
+      {"domain", "original execution CPU, outside RTM/HLE, successful "
+                 "instruction fetch and no debug trap"},
+      {"budget",
+       "one translated step per attempted pair; zero on capability refusal"},
+      {"selection", Kind == Probe ? "executing-cpu-cpuid"
+                    : MaxBasic    ? "captured-cpuid"
+                                  : "declared-rtm"},
+      {"can_decline", Kind == Probe || Kind == Unadvertised}};
+  if (MaxBasic)
+    R["max_basic_leaf"] = *MaxBasic;
+  if (Leaf7EBX)
+    R["leaf7_ebx"] = *Leaf7EBX;
+  return R;
+}
 
 std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,
                                                        va_t Address,
@@ -61,6 +125,28 @@ std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,
 }
 
 namespace {
+void emitCpuHasRtm(llvm::raw_ostream &OS) {
+  OS << "static __inline__ __attribute__((__always_inline__)) int "
+        "__neverd_x64_cpu_has_rtm(void) {\n"
+        "#if __has_builtin(__builtin_ia32_cpuidex)\n"
+        "        int info[4];\n"
+        "        __builtin_ia32_cpuidex(info,0,0);\n"
+        "        if ((uint32_t)info[0] < 7) return 0;\n"
+        "        __builtin_ia32_cpuidex(info,7,0);\n"
+        "        return ((uint32_t)info[1] >> 11) & 1U;\n"
+        "#else\n"
+        "        uint32_t a,b,c,d;\n"
+        "        __asm__ volatile(\"cpuid\" : "
+        "\"=a\"(a),\"=b\"(b),\"=c\"(c),\"=d\"(d)\n"
+        "                         : \"0\"(0),\"2\"(0) : \"cc\");\n"
+        "        if (a < 7) return 0;\n"
+        "        __asm__ volatile(\"cpuid\" : "
+        "\"=a\"(a),\"=b\"(b),\"=c\"(c),\"=d\"(d)\n"
+        "                         : \"0\"(7),\"2\"(0) : \"cc\");\n"
+        "        return (b >> 11) & 1U;\n"
+        "#endif\n}\n";
+}
+
 /// Both owners issue the entire transaction in one compiler operation. EAX
 /// is the actual result, including an abort before XABORT is reached.
 void emitAbortPair(llvm::raw_ostream &OS, const X64RtmAbortRegion &Region) {
@@ -85,15 +171,45 @@ llvm::json::Object receipt(const X64RtmAbortRegion &Region) {
 }
 } // namespace
 
+X64RtmAbortDispatch::X64RtmAbortDispatch(
+    X64RtmAbortSelection::Mode Mode, llvm::ArrayRef<X64RtmAbortStep> Steps) {
+  if (Mode == X64RtmAbortSelection::Probe)
+    for (const auto &Step : Steps)
+      Sites.insert(Step.Region.Address);
+}
+
+void X64RtmAbortDispatch::declare(
+    llvm::raw_ostream &OS,
+    llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units) const {
+  if (!Sites.empty() && llvm::any_of(Units, [&](const auto &Unit) {
+        return Sites.contains(Unit.Address);
+      }))
+    OS << "    unsigned rtm_advertised = 0;\n";
+}
+
+void X64RtmAbortDispatch::emit(llvm::raw_ostream &OS,
+                               llvm::StringRef Name) const {
+  OS << "status = " << Name << "_checked((uint8_t *)state, &rtm_advertised);";
+}
+
 llvm::json::Array emitX64RtmAbortSteps(llvm::raw_ostream &OS,
-                                       llvm::ArrayRef<X64RtmAbortStep> Steps) {
+                                       llvm::ArrayRef<X64RtmAbortStep> Steps,
+                                       X64RtmAbortSelection::Mode Mode) {
   using Exit = analysis::X64ContinuationExitV1;
   llvm::json::Array Receipts;
+  if (Mode == X64RtmAbortSelection::Probe)
+    emitCpuHasRtm(OS);
   for (const auto &[Name, Region] : Steps) {
-    OS << "uint64_t " << Name
-       << "(uint8_t *raw) {\n"
-          "        uint64_t check="
-       << Name
+    Receipts.push_back(receipt(Region));
+    if (Mode == X64RtmAbortSelection::Unadvertised)
+      continue;
+    const bool Probe = Mode == X64RtmAbortSelection::Probe;
+    if (Probe)
+      OS << "static uint64_t " << Name
+         << "_checked(uint8_t *raw, unsigned *advertised)";
+    else
+      OS << "uint64_t " << Name << "(uint8_t *raw)";
+    OS << " {\n        uint64_t check=" << Name
        << "_guard(raw);\n"
           "        if (check!="
        << uint64_t(Exit::NativeInstruction)
@@ -101,9 +217,16 @@ llvm::json::Array emitX64RtmAbortSteps(llvm::raw_ostream &OS,
           "        neverd_x64_state_v6 *state=(neverd_x64_state_v6 *)(void "
           "*)raw;\n"
           "        uint32_t status;\n";
+    if (Probe)
+      OS << "        if (!*advertised) {\n"
+            "            if (!__neverd_x64_cpu_has_rtm()) return check;\n"
+            "            *advertised = 1;\n        }\n";
     emitAbortPair(OS, Region);
     OS << "        return " << uint64_t(Exit::Jump) << ";\n}\n";
-    Receipts.push_back(receipt(Region));
+    if (Probe)
+      OS << "uint64_t " << Name << "(uint8_t *raw) {\n"
+         << "    unsigned advertised = 0;\n    return " << Name
+         << "_checked(raw, &advertised);\n}\n";
   }
   return Receipts;
 }
@@ -119,6 +242,8 @@ llvm::json::Array emitX64RtmAbortEnvironment(
       if (auto Region = readX64RtmAbortRegion(Image, Unit.Address, AddressBits))
         Regions.push_back(*Region);
   llvm::json::Array Receipts;
+  if (!Regions.empty())
+    emitCpuHasRtm(OS);
   OS << R"C(
 /* Explicit immediate-abort RTM environment, for use with neverd_x64_run_v6.
  * Invoke outside RTM/HLE in the declared nonfaulting, no-debug-trap domain.
@@ -137,24 +262,7 @@ int neverd_x64_rtm_abort_environment_v6(neverd_x64_state_v6 *state,
     OS << "    case " << PC
        << "ULL: {\n"
           "        uint32_t status;\n"
-          "#if __has_builtin(__builtin_ia32_rtm_abort_pair) && "
-          "__has_builtin(__builtin_ia32_cpuidex)\n"
-          "        int info[4];\n"
-          "        __builtin_ia32_cpuidex(info,0,0);\n"
-          "        if ((uint32_t)info[0] < 7) return 0;\n"
-          "        __builtin_ia32_cpuidex(info,7,0);\n"
-          "        if (!((uint32_t)info[1] & (1U << 11))) return 0;\n"
-          "#else\n"
-          "        uint32_t a,b,c,d;\n"
-          "        __asm__ volatile(\"cpuid\" : "
-          "\"=a\"(a),\"=b\"(b),\"=c\"(c),\"=d\"(d)\n"
-          "                         : \"0\"(0),\"2\"(0) : \"cc\");\n"
-          "        if (a < 7) return 0;\n"
-          "        __asm__ volatile(\"cpuid\" : "
-          "\"=a\"(a),\"=b\"(b),\"=c\"(c),\"=d\"(d)\n"
-          "                         : \"0\"(7),\"2\"(0) : \"cc\");\n"
-          "        if (!(b & (1U << 11))) return 0;\n"
-          "#endif\n";
+          "        if (!__neverd_x64_cpu_has_rtm()) return 0;\n";
     emitAbortPair(OS, Region);
     OS << "        return 1;\n    }\n";
     Receipts.push_back(receipt(Region));

@@ -321,6 +321,7 @@ TEST_F(SessionLLVMTest, SourceBodyExpansionKeepsNativeAndUnoptimizedQueries) {
   ASSERT_TRUE(Expanded) << State.LastError;
   const std::string Source = Text(*Expanded->Module);
   EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("NEVERD_WIN64_CALL_STACK_U64"), std::string::npos);
   EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, false, true), Expanded);
   ASSERT_TRUE(Expanded->PreparedHigh);
   ASSERT_TRUE(State.ensurePipeline()) << State.LastError;
@@ -355,7 +356,13 @@ TEST_F(SessionLLVMTest, SourceBodyExpansionKeepsNativeAndUnoptimizedQueries) {
     const auto *Callee = Kept->Module->getFunction("body_callee");
     ASSERT_TRUE(Callee);
     EXPECT_EQ(Callee->arg_size(), 7u);
-    EXPECT_NE(Text(*Kept->Module).find("__builtin_trap"), std::string::npos);
+    const std::string OriginalSource = Text(*Kept->Module);
+    EXPECT_NE(
+        OriginalSource.find("NEVERD_WIN64_CALL_STACK_U64(0x1009ULL, 32U)"),
+        std::string::npos);
+    EXPECT_NE(
+        OriginalSource.find("NEVERD_WIN64_CALL_STACK_U64(0x1009ULL, 40U)"),
+        std::string::npos);
   }
   EXPECT_EQ(Text(*Expanded->Module), Source);
   const std::weak_ptr<SourceInlineHighPreparation> Kept =

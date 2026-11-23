@@ -276,16 +276,19 @@ def multiple_residual_elf(degree, neighbor=False):
     return elf(code), "x+y+z+" + str(scale) + "U*" + "*".join(factors)
 
 
-def masked_join_elf(degree):
+def masked_join_elf(degree, *, wrapped=False):
     rng = random.Random(1971 + degree)
     scale = 1 << 18
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
     for i in range(degree):
         axis = i % 2
-        at = (5, 17)[axis]
+        at = ((29, 27) if wrapped else (5, 17))[axis]
         masks = [0xb3, 0x6d, 0xd6 ^ (8 if i == degree // 2 else 0)]
-        masks = [(rng.getrandbits(32) & ~(255 << at)) | (m << at) for m in masks]
+        def place(byte):
+            return ((byte << at) | (byte >> (32 - at))) & 0xffffffff
+
+        masks = [(rng.getrandbits(32) & ~place(255)) | place(m) for m in masks]
         # ECX = x ^ y, R8D = z + offset, R9D = y + z.
         delta = 3 + 2 * axis
         code += bytes.fromhex("89f9 31f1 81e1") + struct.pack("<I", masks[0])
@@ -301,7 +304,8 @@ def masked_join_elf(degree):
         op = "|" if axis else "^"
         word = op.join((f"((x^y)&{masks[0]}U)", f"((z+{delta}U)&{masks[1]}U)",
                         f"((y+z)&{masks[2]}U)"))
-        field = f"((({word})>>{at})&255U)"
+        field = (f"(((({word})>>{at})|(({word})<<{32-at}))&255U)" if wrapped
+                 else f"((({word})>>{at})&255U)")
         if i % 3 == 0:
             field = f"(({field}^128U)-128U)"
         factors.append(f"({offset}U+{weight}U*{field})")
@@ -671,7 +675,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
-        elif kind == "funnel-perturbation-masked-join-89":
+        elif kind in ("funnel-perturbation-masked-join-89", "funnel-perturbation-masked-wrap-103"):
             assert code.count("*") <= 6, text
         elif kind.startswith(("funnel-perturbation-masked-", "funnel-perturbation-overlap-")):
             # The few surviving factors may include a live carry and shifts
@@ -859,6 +863,7 @@ if __name__ == "__main__":
             ("funnel-perturbation-overlap-81", *high_perturbation_elf(
                 81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
             ("funnel-perturbation-masked-join-89", *masked_join_elf(89)),
+            ("funnel-perturbation-masked-wrap-103", *masked_join_elf(103, wrapped=True)),
             *((f"funnel-perturbation-blended-{degree}", *high_perturbation_elf(
                 degree, shift_base=6, affine_depth=1, observed=14, blended_fields=True))
               for degree in (47, 99)),

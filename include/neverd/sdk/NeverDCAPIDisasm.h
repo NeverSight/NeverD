@@ -375,6 +375,16 @@ NEVERD_API int neverd_call_summaries_held(neverd_session_t Sess);
 NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
                                         neverd_va_t FuncEntry);
 
+/// Complete ordinary C for one original outgoing stack-word observation.
+/// Use "v6" for direct-mapped RAM or "v6-window" for saved stack bytes.
+/// The state-aware definition has the suffix _from_precall_v6. An entry with
+/// no observed hole retains its ordinary signature. Free with
+/// neverd_free_string.
+NEVERD_API const char *neverd_decompile_precall_v6(neverd_session_t Sess,
+                                                   neverd_va_t FuncEntry,
+                                                   int UseLLVM,
+                                                   const char *Memory);
+
 /// LLVM-to-C for one native function (`neverd decompile --llvm`).  Only its
 /// body is emitted, with the other functions declared, so a function the
 /// emitter refuses fails alone.  EVM and SBF have dedicated backends and

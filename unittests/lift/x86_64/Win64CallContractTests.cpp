@@ -2682,6 +2682,54 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
                     std::string::npos,
                 !Stored);
       EXPECT_NE(Source.find("take_stack("), std::string::npos);
+      for (const auto Memory :
+           {Win64PrecallMemory::FlatV6, Win64PrecallMemory::WindowV6}) {
+        COptions.PrecallMemory = Memory;
+        COptions.PrecallEntry = Text;
+        std::string Bound;
+        llvm::raw_string_ostream BoundOut(Bound);
+        if (LLVM) {
+          const auto *Entry = Result.LlvmModule->getFunction("pass_stack");
+          ASSERT_NE(Entry, nullptr);
+          ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, BoundOut,
+                                          COptions, nullptr, &Image, Entry));
+        } else {
+          auto Functions = Result.HighFuncs;
+          HighFunc Companion;
+          Companion.Entry = Target + 16;
+          Companion.Name = "stack_companion";
+          Companion.ReturnType = NdType::makeInt(8, false);
+          HighStmt Return;
+          Return.Kind = StmtKind::Return;
+          Return.RetVal = HighExpr::makeConst(17, 8);
+          Companion.Body.push_back(std::move(Return));
+          Functions.insert(Functions.begin(), std::move(Companion));
+          ASSERT_TRUE(HighCEmitter().emit(Functions, BoundOut, COptions));
+          EXPECT_TRUE(llvm::StringRef(Bound).contains("stack_companion("));
+          EXPECT_FALSE(llvm::StringRef(Bound).contains(
+              "stack_companion_from_precall_v6("));
+        }
+        EXPECT_EQ(
+            llvm::StringRef(Bound).contains("pass_stack_from_precall_v6("),
+            !Stored);
+        EXPECT_FALSE(
+            llvm::StringRef(Bound).contains("NEVERD_WIN64_CALL_STACK_U64"));
+        const std::string Read =
+            "__neverd_read_precall_word(&__neverd_precall, 0x" +
+            llvm::utohexstr(Site) + "ULL, 32U";
+        EXPECT_EQ(llvm::StringRef(Bound).contains(Read), !Stored);
+        EXPECT_EQ(llvm::StringRef(Bound).contains(
+                      "const uint64_t link_base = 0x" +
+                      llvm::utohexstr(Image.Base) + "ULL;"),
+                  !Stored);
+        EXPECT_EQ(llvm::StringRef(Bound).contains(
+                      "extern uint64_t neverd_win64_call_stack_u64("),
+                  false);
+        EXPECT_EQ(llvm::StringRef(Bound).contains(
+                      "address - base > size - sizeof(word)"),
+                  !Stored && Memory == Win64PrecallMemory::WindowV6);
+        EXPECT_EQ(llvm::StringRef(Bound).contains("*cursor = 0;"), !Stored);
+      }
     }
   }
 }

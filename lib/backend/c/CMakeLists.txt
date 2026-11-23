@@ -84,6 +84,7 @@ add_neverd_component_library(NeverDBackendC
   render/X86/X86APXAtomic.cpp
   render/X86/X86AtomicRmw.cpp
   render/X86/X86AmxState.cpp
+  render/X86/Win64CallStackInput.cpp
   render/X86/X86NativeFeatures.cpp
 
   LINK_COMPONENTS
