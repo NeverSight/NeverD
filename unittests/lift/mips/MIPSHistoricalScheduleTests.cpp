@@ -16,6 +16,9 @@
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include <algorithm>
+#include <array>
+#include <span>
 #include <vector>
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
@@ -301,6 +304,16 @@ std::vector<uint8_t> encode(Arch Target,
   return Bytes;
 }
 
+void addCode(BinaryImage &Img, uint64_t PA,
+             std::initializer_list<uint32_t> Words) {
+  Segment Code;
+  Code.VA = PA;
+  Code.Data = encode(Img.Arch, Words);
+  Code.Size = Code.FileSz = Code.Data.size();
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Segments.push_back(std::move(Code));
+}
+
 std::vector<LowOp> lift(const BinaryImage &Img, uint64_t PC,
                         std::initializer_list<uint32_t> Words) {
   const auto Bytes = encode(Img.Arch, Words);
@@ -314,7 +327,7 @@ std::vector<LowOp> lift(const BinaryImage &Img, uint64_t PC,
   return Ops;
 }
 
-bool execute(const std::vector<LowOp> &Ops, NdOpEmulator &E,
+bool execute(std::span<const LowOp> Ops, NdOpEmulator &E,
              MIPSSystemContext &Context) {
   for (const auto &Op : Ops) {
     if (Op.Opcode == NdOp::COND_BR) {
@@ -848,6 +861,52 @@ TEST(MIPSHistoricalScheduling, SCPH5501PendingIP2OnIEEnable) {
   EXPECT_EQ(CPU.Status, 0x40000404u);
 }
 
+// SCPH-5501 irqsio 14IEX: the timer interrupts a three-word loop. The
+// three distinct (EPC word relative to the mode write, Cause.BD) samples
+// repeat as (2,0), (2,1), (1,0). Replay those issue boundaries with a
+// representative loop; the console did not probe the electrical IP2 edge.
+TEST(MIPSHistoricalScheduling, SCPH5501TimerIRQRecordsTheInterruptedLoopWord) {
+  constexpr uint32_t ModePC = 0x80010000;
+  constexpr std::array<unsigned, 3> SavedWords{2, 2, 1};
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    auto Img = image(A, 1);
+    const auto Body = lift(Img, ModePC + 4, {0x24630002}); // ADDIU v1,v1,2.
+    const auto Branch = lift(Img, ModePC + 8, {0x1000fffe, 0x24420001});
+    const auto Slot =
+        std::find_if(Branch.begin(), Branch.end(), [](const LowOp &Op) {
+          return Op.Addr == ModePC + 12 && Op.Opcode == NdOp::INTRINSIC &&
+                 Op.Inputs[0].Offset ==
+                     unsigned(Intrinsic::MIPSHistoricalBegin);
+        });
+    ASSERT_NE(Slot, Branch.end());
+    const std::array<std::span<const LowOp>, 3> Phases{
+        std::span(Branch.begin(), Slot), std::span(Slot, Branch.end()), Body};
+    for (unsigned Phase = 0; Phase != Phases.size(); ++Phase) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << " phase=" << Phase);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(
+          1, {},
+          HistoricalCP0{HistoricalProcessor::R30xx, 0x40000401, 0, 0, {}, {}});
+      ASSERT_TRUE(C.Historical);
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::V0, 0);
+      E.setRegister(mipsreg::V1, 0);
+      for (unsigned I = 0; I != Phase; ++I)
+        ASSERT_TRUE(execute(Phases[I], E, C));
+      ASSERT_TRUE(C.Historical->setHardwareInterrupts(1));
+      EXPECT_FALSE(execute(Phases[Phase], E, C));
+      const auto &CPU = *C.Historical->system();
+      EXPECT_EQ(CPU.EPC, ModePC + 4 * SavedWords[Phase]);
+      EXPECT_EQ(CPU.Cause, Phase == 1 ? 0x80000400u : 0x400u);
+      EXPECT_EQ(CPU.Status, 0x40000404u);
+      EXPECT_EQ(CPU.ExceptionVector, 0x80000080u);
+      EXPECT_EQ(E.getRegister(mipsreg::V0), Phase == 2 ? 1u : 0u);
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 0u);
+    }
+  }
+}
+
 TEST(MIPSHistoricalScheduling, R30xxInterruptWindowIsSpecificToTheSource) {
   struct Transition {
     uint32_t Old, New;
@@ -1305,6 +1364,60 @@ TEST(MIPSHistoricalScheduling, FirstAccessUsesTheObservedReplacementFrame) {
   }
 }
 
+// The VR4300 cross-page probe maps the odd virtual page two physical frames
+// after the even page. Put a different legal slot in the intervening frame.
+TEST(MIPSHistoricalScheduling, SplitTLBTranslatesTheBranchSlotIndependently) {
+  constexpr uint32_t VA = 0x0dea0000, PC = VA + 0xffc;
+  constexpr uint32_t Branch = 0x10000001, Slot = 0x24420100,
+                     Target = 0x24420200;
+  constexpr uint32_t OldSlot = 0x24420010;
+  for (Arch A : {Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(unsigned(A));
+    auto Img = image(A, 3);
+    addCode(Img, 0x2ffc, {Branch});
+    addCode(Img, 0x3000, {OldSlot});
+    addCode(Img, 0x4000, {Slot, Target});
+    std::array<HistoricalTLBEntry, 48> Entries{};
+    Entries[11] = {VA, (0x2000 >> 6) | 0x16, (0x3000 >> 6) | 0x16, 0};
+    const HistoricalTLB MMU{Entries, 0};
+    MIPSSystemContext C;
+    C.HistoricalMMU = &MMU;
+    C.Historical = HistoricalSchedule::fromSnapshot(
+        3, {}, HistoricalCP0{HistoricalProcessor::R4000, 0, 0, 0, {}, {}});
+    ASSERT_TRUE(C.Historical);
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::V0, 0);
+    const auto Old = lift(Img, PC, {Branch, OldSlot});
+    const auto New = lift(Img, PC, {Branch, Slot});
+    ASSERT_FALSE(New.empty());
+    ASSERT_EQ(New.back().Opcode, NdOp::BRANCH);
+    ASSERT_TRUE(New.back().Inputs[0].isConst());
+    const auto Destination = New.back().Inputs[0].Offset;
+    ASSERT_EQ(Destination, PC + 8);
+    ASSERT_TRUE(execute(Old, E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x10u);
+
+    Entries[11].Lo1 = (0x4000 >> 6) | 0x16;
+    E.setRegister(mipsreg::V0, 0);
+    EXPECT_FALSE(execute(Old, E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0u);
+    EXPECT_FALSE(C.Historical->system()->ExceptionVector);
+    ASSERT_TRUE(execute(New, E, C));
+    ASSERT_TRUE(execute(lift(Img, Destination, {Target}), E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x300u);
+
+    Entries[11].Lo1 &= ~2u; // Invalidate only the slot's page.
+    EXPECT_FALSE(execute(New, E, C));
+    const auto &CPU = *C.Historical->system();
+    EXPECT_EQ(CPU.Cause, 0x80000008u);
+    EXPECT_EQ(CPU.EPC, PC);
+    EXPECT_EQ(CPU.BadVAddr, PC + 4);
+    EXPECT_EQ(CPU.ExceptionVector, UINT64_C(0xffffffff80000180));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x300u);
+  }
+}
+
 TEST(MIPSHistoricalScheduling, BoardLineSampleStaysAtTheObservedIssuePC) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     const bool Wide = isMIPS64(A);
@@ -1370,16 +1483,8 @@ TEST(MIPSHistoricalScheduling, R3051ResetVectorFetchesMatchBusCapture) {
   for (const Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
     SCOPED_TRACE(static_cast<unsigned>(A));
     auto Img = image(A, 1);
-    auto addROM = [&](uint32_t Address, std::initializer_list<uint32_t> Words) {
-      Segment Rom;
-      Rom.VA = Address;
-      Rom.Data = encode(A, Words);
-      Rom.Size = Rom.FileSz = Rom.Data.size();
-      Rom.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-      Img.Segments.push_back(std::move(Rom));
-    };
-    addROM(0x1fc00000, {Jump, Nop});
-    addROM(0x1fc00220, {Lui});
+    addCode(Img, 0x1fc00000, {Jump, Nop});
+    addCode(Img, 0x1fc00220, {Lui});
 
     MIPSSystemContext C;
     const HistoricalTLB NoMappedPages{{}, 0};
@@ -1432,6 +1537,8 @@ TEST(MIPSHistoricalScheduling, R4300AndR4600BootFetchesMatchBusCaptures) {
     for (const auto A : {Arch::MIPS64, Arch::MIPS64EL}) {
       SCOPED_TRACE(static_cast<unsigned>(A));
       auto Img = image(A, 3);
+      addCode(Img, 0x1fc00000, {Capture.Jump, Capture.Slot});
+      addCode(Img, Capture.Target & 0x1fffffff, {Capture.TargetWord});
       const auto Ops = lift(Img, ResetPC, {Capture.Jump, Capture.Slot});
       ASSERT_FALSE(Ops.empty());
       ASSERT_EQ(Ops.back().Opcode, NdOp::BRANCH);
@@ -1444,7 +1551,13 @@ TEST(MIPSHistoricalScheduling, R4300AndR4600BootFetchesMatchBusCaptures) {
       E.setRegister(mipsreg::K0, Initial);
       E.setRegister(mipsreg::V0, Initial);
       MIPSSystemContext C;
-      C.Historical = HistoricalSchedule::fromSnapshot(3, {});
+      // The probe supplied ROM words. The R4000 profile supplies the common
+      // MIPS III reset vector and unmapped kseg1 translation for this replay.
+      const HistoricalTLB NoMappedPages{{}, 0};
+      C.HistoricalMMU = &NoMappedPages;
+      C.Historical = HistoricalSchedule::fromColdReset(
+          {HistoricalProcessor::R4000, (1u << 22) | 4u, 0, 0, {}, {}});
+      ASSERT_TRUE(C.Historical);
       ASSERT_TRUE(execute(Ops, E, C));
       EXPECT_EQ(E.getRegister(mipsreg::K0), Capture.ExpectedK0);
       const auto TargetOps = lift(Img, Destination, {Capture.TargetWord});

@@ -1649,6 +1649,17 @@ The erratum specifies instruction order and the guest runs report architectural
 results. Neither supplies the clock edge at which the physical TLB changed.
 [MIPS R4000PC/SC errata, item 27, pp. 5–6](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=6).
 
+The VR4300 cross-page probe maps adjacent 4 KiB virtual pages to physical
+frames separated by an intervening frame. The probe expects `v0 = 0x300`
+after a taken branch at offset `0xffc` executes the odd page's delay slot
+and its target.
+The native regression replays the branch in both byte orders. It checks the
+old and replacement slots against distinct physical words, then invalidates
+the odd page and checks the fault address, branch EPC and Cause.BD. The MMU
+snapshots identify which frame the slot used. The time of the TLB write on
+silicon remains open.
+[VR4300 split-page probe](https://github.com/lemmy-64/n64-systemtest/blob/196f5421173220eb2f63a7a99c64795dc0ea0698/src/tests/tlb/cross_page_exec.rs#L112-L129).
+
 IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
 fetch at physical `0x1fc00000` supplies a jump, the read at `0x1fc00004`
 supplies its NOP delay slot, and the target at `0x1fc00220` supplies
@@ -1679,7 +1690,9 @@ request while the board is busy. The ranges reflect the resolution of the
 published waveforms. Board wait states, pipeline fetch and instruction
 retirement are separate events. Figure 4.3 of each manual supplies the boot
 jump, delay slot and target words used by the big- and little-endian lift
-tests. The tests exercise both byte encodings of each observed word sequence.
+tests. The tests bind the ROM at its physical addresses and check each
+instruction through the MIPS III unmapped reset segment in both byte orders.
+The compatible R4000 reset profile supplies the test's initial CP0 state.
 [R4300 probe manual, figure 5.1](https://archive.org/download/manualzilla-id-5722005/5722005.pdf#page=47),
 [R4XXX probe manual, R4600 figure 5.1](https://web.archive.org/web/20030728054757id_/http://www.c-h-s.com/r4xxxps.pdf#page=58).
 
@@ -1739,6 +1752,17 @@ instructions. The timing of the electrical IRQ pin was outside this probe.
 [card-b](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt),
 [card-g](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g/irqsio/14IEX.txt),
 [card-g3](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g3/irqsio/14IEX.txt).
+
+In a separate `14IEX` trial, root counter 2 interrupts a three-word loop.
+Each of the three card reports records the same 16 EPC/BD pairs for timer
+targets 100 through 115. Five entries have BD set. At a branch and at its
+delay slot the saved EPC is word 2 relative to the mode write. Only the slot
+sets BD. The other instruction saves word 1. Both endian encodings of a
+representative loop reproduce those three exception states when the input
+is supplied at the observed instruction boundaries. The board ran
+little-endian. The reports record handler state and timer settings without
+an electrical timestamp for the CPU interrupt pin.
+[Original card report, timer loop](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt).
 
 The same board's `04IP2` probe reads Cause after a peripheral write with
 IEc cleared. Enabling the pending source in I_MASK, or acknowledging it
