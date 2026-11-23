@@ -14,10 +14,12 @@
 
 #include "neverd/loader/BinaryImageFlags.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/SHA256.h"
 
+#include "llvm/Object/MachO.h"
 #include "llvm/Support/FormatVariadic.h"
 
 #include <algorithm>
@@ -486,7 +488,23 @@ DyldSharedCache::readImageLayout(size_t ImageIndex) const {
         Command.cmdsize % sizeof(uint64_t) ||
         !rangeInBounds(Offset, Command.cmdsize, Bytes->size()))
       return fail(kMalformedImageLayout);
-    if (Command.cmd == LC_SEGMENT_64) {
+    if (Command.cmd == LC_DYLD_EXPORTS_TRIE || Command.cmd == LC_DYLD_INFO ||
+        Command.cmd == LC_DYLD_INFO_ONLY) {
+      const bool Dedicated = Command.cmd == LC_DYLD_EXPORTS_TRIE;
+      if (Command.cmdsize < (Dedicated ? sizeof(linkedit_data_command)
+                                       : sizeof(dyld_info_command)))
+        return fail(kMalformedImageLayout);
+      const auto *Range = Bytes->data() + Offset +
+                          (Dedicated ? offsetof(linkedit_data_command, dataoff)
+                                     : offsetof(dyld_info_command, export_off));
+      const auto Size = readLE<uint32_t>(Range + sizeof(uint32_t));
+      if (Size) {
+        if (Layout.ExportTrieSize)
+          return fail(kMalformedImageLayout);
+        Layout.ExportTrieFileOffset = readLE<uint32_t>(Range);
+        Layout.ExportTrieSize = Size;
+      }
+    } else if (Command.cmd == LC_SEGMENT_64) {
       if (Command.cmdsize < sizeof(segment_command_64))
         return fail(kMalformedImageLayout);
       segment_command_64 Segment{};
@@ -505,6 +523,11 @@ DyldSharedCache::readImageLayout(size_t ImageIndex) const {
       };
       DyldCacheImageSegment Mapping;
       Mapping.Name = Name(Segment.segname, sizeof(Segment.segname));
+      if (Mapping.Name == section_names::macho::LinkeditSeg) {
+        if (Layout.LinkeditIndex)
+          return fail(kMalformedImageLayout);
+        Layout.LinkeditIndex = Layout.Segments.size();
+      }
       Mapping.Address = Segment.vmaddr;
       Mapping.Size = Segment.vmsize;
       Mapping.FileOffset = Segment.fileoff;
@@ -585,8 +608,22 @@ DyldSharedCache::readImageFileBytes(size_t ImageIndex, uint64_t Offset,
   auto Layout = readImageLayout(ImageIndex);
   if (!Layout)
     return Layout.takeError();
+  return readImageFileBytes(*Layout, Offset, Size,
+                            DyldCacheFileRange::AnySegment);
+}
+
+llvm::Expected<llvm::ArrayRef<uint8_t>>
+DyldSharedCache::readImageFileBytes(const DyldCacheImageLayout &Layout,
+                                    uint64_t Offset, uint64_t Size,
+                                    DyldCacheFileRange Owner) const {
+  llvm::ArrayRef<DyldCacheImageSegment> Segments = Layout.Segments;
+  if (Owner == DyldCacheFileRange::Linkedit) {
+    if (!Layout.LinkeditIndex || *Layout.LinkeditIndex >= Segments.size())
+      return fail(kAmbiguousImageFileRange);
+    Segments = Segments.slice(*Layout.LinkeditIndex, 1);
+  }
   std::optional<llvm::ArrayRef<uint8_t>> Result;
-  for (const auto &Segment : Layout->Segments) {
+  for (const auto &Segment : Segments) {
     if (Offset < Segment.FileOffset ||
         !rangeInBounds(Offset - Segment.FileOffset, Size, Segment.FileSize))
       continue;
@@ -599,6 +636,95 @@ DyldSharedCache::readImageFileBytes(size_t ImageIndex, uint64_t Offset,
   if (!Result)
     return fail(kAmbiguousImageFileRange);
   return *Result;
+}
+
+llvm::Expected<std::string>
+DyldSharedCache::readTextExportName(va_t Address) const {
+  using namespace llvm::MachO;
+  const auto *Mapping = mappingFor(Address);
+  if (!Mapping || !(Mapping->InitialProtection & VM_PROT_EXECUTE))
+    return std::string();
+  const auto ContainsCode = [&](const DyldCacheImageLayout &Layout) {
+    return llvm::any_of(Layout.Sections, [&](const Section &S) {
+      return S.isExecutable() && S.contains(Address) &&
+             Address - S.VA < S.FileSz &&
+             (S.Type & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS));
+    });
+  };
+  const Bytes Main = fileBytes(*Files.front());
+  const uint32_t HeaderSize = readLE<uint32_t>(Main.data() + kMappingOffset);
+  uint64_t Offset = 0, Count = 0;
+  if (rangeInBounds(kImagesTextCount, sizeof(uint64_t), HeaderSize)) {
+    Offset = readLE<uint64_t>(Main.data() + kImagesTextOffset);
+    Count = readLE<uint64_t>(Main.data() + kImagesTextCount);
+  }
+  if ((Offset == 0) != (Count == 0) || Count > kMaxImages ||
+      !rangeInBounds(Offset, Count * kImageTextRowBytes, Main.size()))
+    return fail(kMalformedImages);
+  std::optional<va_t> Owner;
+  for (uint64_t I = 0; I < Count; ++I) {
+    const auto *Row = Main.data() + Offset + I * kImageTextRowBytes;
+    const va_t Start = readLE<uint64_t>(Row + kImageTextLoadAddress);
+    const uint32_t Size = readLE<uint32_t>(Row + kImageTextSize);
+    if (Address < Start || Address - Start >= Size)
+      continue;
+    if (Owner && *Owner != Start)
+      return fail(kMalformedImages);
+    Owner = Start;
+  }
+  // Older caches omit the text directory. A regular export has a nonnegative
+  // image-relative address, so only earlier image headers can own it.
+  if (!Count) {
+    for (size_t I = 0; I < Images.size(); ++I) {
+      if (Images[I].Address > Address)
+        continue;
+      auto Layout = readImageLayout(I);
+      if (!Layout)
+        return Layout.takeError();
+      if (!ContainsCode(*Layout))
+        continue;
+      if (Owner && *Owner != Images[I].Address)
+        return fail(kMalformedImages);
+      Owner = Images[I].Address;
+    }
+  }
+  if (!Owner)
+    return std::string();
+  const auto Image = llvm::find_if(Images, [&](const DyldCacheImage &Entry) {
+    return Entry.Address == *Owner;
+  });
+  if (Image == Images.end())
+    return fail(kMalformedImages);
+  const size_t Index = Image - Images.begin();
+  auto Layout = readImageLayout(Index);
+  if (!Layout)
+    return Layout.takeError();
+  if (!ContainsCode(*Layout))
+    return std::string();
+
+  if (!Layout->ExportTrieSize)
+    return std::string();
+  auto Trie =
+      readImageFileBytes(*Layout, Layout->ExportTrieFileOffset,
+                         Layout->ExportTrieSize, DyldCacheFileRange::Linkedit);
+  if (!Trie)
+    return Trie.takeError();
+  llvm::Error Err = llvm::Error::success();
+  std::string Name;
+  bool Ambiguous = false;
+  for (const auto &Entry : llvm::object::MachOObjectFile::exports(Err, *Trie)) {
+    if ((Entry.flags() != EXPORT_SYMBOL_FLAGS_KIND_REGULAR &&
+         Entry.flags() != EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION) ||
+        Entry.address() != Address - *Owner)
+      continue;
+    if (!Name.empty() && Name != Entry.name())
+      Ambiguous = true;
+    else
+      Name = Entry.name().str();
+  }
+  if (Err)
+    return std::move(Err);
+  return Ambiguous ? std::string() : Name;
 }
 
 llvm::Expected<std::optional<DyldSharedCache::ObjCOptimization>>

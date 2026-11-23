@@ -63,7 +63,12 @@ struct DyldCacheImageLayout {
   llvm::ArrayRef<uint8_t> HeaderBytes;
   std::vector<DyldCacheImageSegment> Segments;
   std::vector<Section> Sections;
+  uint32_t ExportTrieFileOffset = 0;
+  uint32_t ExportTrieSize = 0;
+  std::optional<size_t> LinkeditIndex;
 };
+
+enum class DyldCacheFileRange { AnySegment, Linkedit };
 
 struct DyldCacheFixup {
   va_t Slot = 0;
@@ -103,6 +108,9 @@ public:
   std::optional<llvm::ArrayRef<uint8_t>> readBytes(va_t Address,
                                                    uint64_t Size) const;
   llvm::Expected<DyldCacheImageLayout> readImageLayout(size_t ImageIndex) const;
+  /// Look up an exact regular export in the owning cache image's executable
+  /// text. An empty result means the cache does not identify a unique name.
+  llvm::Expected<std::string> readTextExportName(va_t Address) const;
   /// A bounded contiguous view for ordinary Mach-O semantic readers. Keeps
   /// original VAs but packs file ranges and referenced symbol strings. This
   /// is an analysis projection, not a standalone or correctly signed dylib.
@@ -120,6 +128,12 @@ public:
   /// nor necessarily an offset in the file containing that header.
   llvm::Expected<llvm::ArrayRef<uint8_t>>
   readImageFileBytes(size_t ImageIndex, uint64_t Offset, uint64_t Size) const;
+  /// Use a layout from readImageLayout. Commands with a LINKEDIT payload
+  /// name its owner even when executable bytes in another subcache share
+  /// the same numeric file offsets.
+  llvm::Expected<llvm::ArrayRef<uint8_t>>
+  readImageFileBytes(const DyldCacheImageLayout &Layout, uint64_t Offset,
+                     uint64_t Size, DyldCacheFileRange Owner) const;
   /// Decode a complete mapping transactionally. Preserve original bytes and
   /// signing recipes; no offline reader can manufacture a process's PAC.
   llvm::Expected<std::vector<DyldCacheFixup>>

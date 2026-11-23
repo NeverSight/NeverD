@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/BinaryImageFlags.h"
+#include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/MachO/DyldSharedCache.h"
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
@@ -28,6 +29,8 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -39,6 +42,19 @@ using namespace neverd::macho_loader;
 namespace {
 
 constexpr va_t Base = 0x180000000;
+
+#define NEVERD_CACHE_BIND_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "DyldCacheBindFixtures.def"
+
+#define NEVERD_CACHE_UNWIND_VALUE(Type, Name, Value)                           \
+  constexpr Type Name = Value;
+#define NEVERD_CACHE_UNWIND_TEXT(Name, Value) constexpr char Name[] = Value;
+#include "DyldCacheUnwindFixtures.def"
+
+#define DARWIN_RTTI_CACHE_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define DARWIN_RTTI_TEXT(Name, Value)                                          \
+  [[maybe_unused]] constexpr char Name[] = Value;
+#include "../language/DarwinCxxRTTIFixtures.def"
 
 struct CacheFixture {
   std::vector<uint8_t> Data = std::vector<uint8_t>(0x5000);
@@ -717,6 +733,228 @@ TEST(DyldSharedCache, RangeReadsValidateWholePagesAndRetainOverlap) {
   }
 }
 
+TEST(DyldSharedCache, IdentifiesExactTextExportsAcrossImages) {
+  using namespace llvm::MachO;
+  CacheFixture Fixture;
+  Fixture.imageProjection();
+  Fixture.set<uint64_t>(kTextDirectoryField, kTextDirectory);
+  Fixture.set<uint64_t>(kTextCountField, 1);
+  Fixture.set<uint64_t>(kTextDirectory + kTextLoadAddress,
+                        Base + kHeaderOffset);
+  Fixture.set<uint32_t>(kTextDirectory + kTextSizeField, kTextBytes);
+  const size_t CountField = kHeaderOffset + offsetof(mach_header_64, ncmds);
+  const size_t SizeField = kHeaderOffset + offsetof(mach_header_64, sizeofcmds);
+  const auto *Data = Fixture.Data.data();
+  const uint32_t CmdBytes = readLE<uint32_t>(Data + SizeField);
+  const size_t Command = kHeaderOffset + sizeof(mach_header_64) + CmdBytes;
+  Fixture.set<uint32_t>(CountField, readLE<uint32_t>(Data + CountField) + 1);
+  Fixture.set<uint32_t>(SizeField, CmdBytes + sizeof(linkedit_data_command));
+  Fixture.set<uint32_t>(Command + offsetof(linkedit_data_command, cmd),
+                        LC_DYLD_EXPORTS_TRIE);
+  Fixture.set<uint32_t>(Command + offsetof(linkedit_data_command, cmdsize),
+                        sizeof(linkedit_data_command));
+  Fixture.set<uint32_t>(Command + offsetof(linkedit_data_command, dataoff),
+                        kTrieOffset);
+  Fixture.set<uint32_t>(Command + offsetof(linkedit_data_command, datasize),
+                        sizeof(kProviderTrie));
+  std::memcpy(Fixture.Data.data() + kTrieOffset, kProviderTrie,
+              sizeof(kProviderTrie));
+  auto Cache = Fixture.parse();
+  ASSERT_TRUE(bool(Cache)) << llvm::toString(Cache.takeError());
+  auto Name = Cache->readTextExportName(Base + kCodeOffset);
+  ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+  EXPECT_EQ(*Name, kProviderName);
+  auto Interior =
+      Cache->readTextExportName(Base + kCodeOffset + sizeof(uint32_t));
+  ASSERT_TRUE(bool(Interior)) << llvm::toString(Interior.takeError());
+  EXPECT_TRUE(Interior->empty());
+  const auto CheckProvider = [&](llvm::StringRef Expected) {
+    auto Parsed = Fixture.parse();
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+    auto Result = Parsed->readTextExportName(Base + kCodeOffset);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(*Result, Expected);
+  };
+  Fixture.set<uint8_t>(kTrieOffset + kTerminalFlagsOffset,
+                       EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE);
+  CheckProvider({});
+  Fixture.set<uint8_t>(kTrieOffset + kTerminalFlagsOffset,
+                       EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION);
+  CheckProvider(kProviderName);
+  Fixture.set<uint8_t>(kTrieOffset + kTerminalFlagsOffset,
+                       EXPORT_SYMBOL_FLAGS_KIND_REGULAR);
+  Fixture.set<uint32_t>(SizeField, CmdBytes + sizeof(dyld_info_command));
+  std::memset(Fixture.Data.data() + Command, 0, sizeof(dyld_info_command));
+  Fixture.set<uint32_t>(Command + offsetof(dyld_info_command, cmd),
+                        LC_DYLD_INFO_ONLY);
+  Fixture.set<uint32_t>(Command + offsetof(dyld_info_command, cmdsize),
+                        sizeof(dyld_info_command));
+  Fixture.set<uint32_t>(Command + offsetof(dyld_info_command, export_off),
+                        kTrieOffset);
+  Fixture.set<uint32_t>(Command + offsetof(dyld_info_command, export_size),
+                        sizeof(kProviderTrie));
+  CheckProvider(kProviderName);
+  Fixture.set<uint32_t>(kTextDirectory + kTextSizeField, 0);
+  CheckProvider({});
+  Fixture.set<uint64_t>(kTextCountField, 0);
+  Fixture.set<uint64_t>(kTextDirectoryField, 0);
+  CheckProvider(kProviderName);
+}
+
+TEST(DyldSharedCache, SplitLinkeditOwnsItsLoadCommandPayloads) {
+  using namespace llvm::MachO;
+  CacheFixture Main, Sub(kSplitSlideVersion, Base + kSubcacheBias);
+  Main.imageProjection();
+  Main.set<uint32_t>(kSubcacheDirectoryField, kSubcacheRow);
+  Main.set<uint32_t>(kSubcacheDirectoryField + sizeof(uint32_t), 1);
+  Main.Data[kSubcacheRow] = kSubcacheUUID;
+  Main.set<uint64_t>(kSubcacheVMField, kSubcacheBias);
+  std::memcpy(Main.Data.data() + kSubcacheSuffixField, kSubcacheExt,
+              sizeof(kSubcacheExt));
+  Main.set<uint64_t>(kLinkeditCommand + offsetof(segment_command_64, vmaddr),
+                     Base + kSubcacheBias + kSplitLinkedit);
+  Main.set<uint64_t>(kLinkeditCommand + offsetof(segment_command_64, fileoff),
+                     kSplitLinkedit);
+  for (size_t Field : {offsetof(segment_command_64, filesize),
+                       offsetof(segment_command_64, vmsize)})
+    Main.set<uint64_t>(kLinkeditCommand + Field, kSplitLinkeditBytes);
+  std::copy_n(Main.Data.data() + kOriginalLinkedit, kSplitLinkeditBytes,
+              Sub.Data.data() + kSplitLinkedit);
+  for (size_t Field :
+       {kSymbolCommand + offsetof(symtab_command, symoff),
+        kSymbolCommand + offsetof(symtab_command, stroff),
+        kDynamicSymbolCommand + offsetof(dysymtab_command, modtaboff),
+        kDynamicSymbolCommand + offsetof(dysymtab_command, indirectsymoff),
+        kDataInCodeCommand + offsetof(linkedit_data_command, dataoff),
+        kFunctionStartsCommand + offsetof(linkedit_data_command, dataoff)}) {
+    const auto Offset = readLE<uint32_t>(Main.Data.data() + Field);
+    Main.set<uint32_t>(Field, Offset - kOriginalLinkedit + kSplitLinkedit);
+  }
+  const auto Parse = [&] {
+    std::vector<std::unique_ptr<llvm::MemoryBuffer>> Files;
+    Files.push_back(Main.buffer());
+    Files.push_back(Sub.buffer());
+    return DyldSharedCache::parse(std::move(Files));
+  };
+  auto Cache = Parse();
+  ASSERT_TRUE(bool(Cache)) << llvm::toString(Cache.takeError());
+  const auto StartsField =
+      kFunctionStartsCommand + offsetof(linkedit_data_command, dataoff);
+  const auto Starts = readLE<uint32_t>(Main.Data.data() + StartsField);
+  const auto Size = readLE<uint32_t>(Main.Data.data() + kFunctionStartsCommand +
+                                     offsetof(linkedit_data_command, datasize));
+  auto Unscoped = Cache->readImageFileBytes(0, Starts, Size);
+  ASSERT_FALSE(bool(Unscoped));
+  llvm::consumeError(Unscoped.takeError());
+  auto Prepared = Cache->prepareImage(0);
+  ASSERT_TRUE(bool(Prepared)) << llvm::toString(Prepared.takeError());
+  const auto Offset =
+      readLE<uint32_t>(Prepared->data() + StartsField - kHeaderOffset);
+  ASSERT_LE(uint64_t(Offset) + Size, Prepared->size());
+  EXPECT_EQ(
+      std::memcmp(Prepared->data() + Offset, Sub.Data.data() + Starts, Size),
+      0);
+  EXPECT_NE(
+      std::memcmp(Sub.Data.data() + Starts, Main.Data.data() + Starts, Size),
+      0);
+
+  // An export command identifies the same provider even when the main
+  // subcache has unrelated bytes at its trie offset.
+  Main.set<uint32_t>(kFunctionStartsCommand, LC_DYLD_EXPORTS_TRIE);
+  Main.set<uint32_t>(kFunctionStartsCommand +
+                         offsetof(linkedit_data_command, datasize),
+                     sizeof(kProviderTrie));
+  std::memcpy(Sub.Data.data() + Starts, kProviderTrie, sizeof(kProviderTrie));
+  Cache = Parse();
+  ASSERT_TRUE(bool(Cache)) << llvm::toString(Cache.takeError());
+  auto Name = Cache->readTextExportName(Base + kCodeOffset);
+  ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+  EXPECT_EQ(*Name, kProviderName);
+
+  // A linkedit command cannot take its payload from a different segment.
+  // The first offset past LINKEDIT also names bytes in the main data segment.
+  Main.set<uint32_t>(StartsField, kSplitLinkedit + kSplitLinkeditBytes);
+  Cache = Parse();
+  ASSERT_TRUE(bool(Cache)) << llvm::toString(Cache.takeError());
+  auto Invalid = Cache->prepareImage(0);
+  ASSERT_FALSE(bool(Invalid));
+  llvm::consumeError(Invalid.takeError());
+}
+
+TEST(DyldSharedCache, ReadsNonUniqueCxxTypeNamesAcrossMappings) {
+  for (uint32_t Version : {kCacheV3, kCacheV5}) {
+    SCOPED_TRACE(Version);
+    CacheFixture Fixture(Version);
+    const uint64_t NameWord =
+        Version == kCacheV3 ? kCacheV3NameBits | (Base + kCacheNameStringOffset)
+                            : kCacheV5NameBits | kCacheNameStringOffset;
+    Fixture.set<uint64_t>(kCacheNameWordOffset, NameWord);
+    Fixture.set<uint64_t>(kCacheIndirectWordOffset,
+                          Version == kCacheV3 ? Base + kCacheDescriptorOffset
+                                              : kCacheDescriptorOffset);
+    std::memcpy(Fixture.Data.data() + kCacheNameStringOffset, kPublicTypeName,
+                sizeof(kPublicTypeName));
+    std::memcpy(Fixture.Data.data() + kCacheAuthStringOffset, kHiddenTypeName,
+                sizeof(kHiddenTypeName));
+    auto Parsed = Fixture.parse();
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+    BinaryImage Image;
+    Image.Format = BinaryFormat::MachO;
+    Image.Arch = Arch::AArch64;
+    Image.Bits = Bitness::Bits64;
+    Image.MachOSharedCache =
+        std::make_shared<DyldSharedCache>(std::move(*Parsed));
+    const va_t Descriptor = Base + kCacheDescriptorOffset;
+    const va_t Slot = Descriptor + sizeof(uint64_t);
+    EXPECT_FALSE(readMetadataPointerTarget(Image, Slot));
+    EXPECT_EQ(dwarf_eh::readItaniumTypeName(Image, Descriptor),
+              kPublicTypeName);
+    const va_t Auth = Base + kCacheAuthSlotOffset;
+    EXPECT_EQ(readMetadataPointerTarget(Image, Auth),
+              Base + kCacheAuthStringOffset);
+    EXPECT_TRUE(
+        dwarf_eh::readItaniumTypeName(Image, Auth - sizeof(uint64_t)).empty());
+
+    // Only the LSDA belongs to the selected image. Both the GOT slot and
+    // its descriptor lie outside that image.
+    Segment Table;
+    Table.VA = Base + kCacheLSDAOffset;
+    Table.Data.assign(kCacheCatchLSDA.begin(), kCacheCatchLSDA.end());
+    Table.Size = Table.FileSz = Table.Data.size();
+    Table.Flags = SegmentFlags::Readable;
+    Image.Segments.push_back(std::move(Table));
+    dwarf_eh::LSDAParseRequest Request;
+    Request.LSDAVA = Base + kCacheLSDAOffset;
+    Request.FunctionStart = Base;
+    Request.Personality = ExceptionPersonality::GxxPersonalityV0;
+    const auto ParsedLSDA = dwarf_eh::parseLSDA(Image, Request, {});
+    ASSERT_EQ(ParsedLSDA.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_TRUE(ParsedLSDA.Info);
+    ASSERT_EQ(ParsedLSDA.Info->TypeTable.size(), 1u);
+    const auto &Type = ParsedLSDA.Info->TypeTable.front();
+    EXPECT_EQ(Type.TypeInfoSlotVA, Base + kCacheIndirectSlotOffset);
+    EXPECT_EQ(Type.TypeInfoVA, Descriptor);
+    EXPECT_EQ(Type.TypeName, kPublicTypeName);
+    Image.ImportPtrSlots.emplace(Type.TypeInfoSlotVA, kPublicTypeInfo);
+    const auto Imported = dwarf_eh::parseLSDA(Image, Request, {});
+    ASSERT_EQ(Imported.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_TRUE(Imported.Info);
+    ASSERT_EQ(Imported.Info->TypeTable.size(), 1u);
+    const auto &Bound = Imported.Info->TypeTable.front();
+    EXPECT_FALSE(Bound.IsCatchAll);
+    EXPECT_EQ(Bound.TypeInfoVA, 0u);
+    EXPECT_EQ(Bound.TypeInfoSlotVA, Type.TypeInfoSlotVA);
+    EXPECT_EQ(Bound.TypeName, kPublicTypeInfo);
+    Image.ImportPtrSlots.clear();
+    Image.MachOChainedFixupsAmbiguous = true;
+    EXPECT_EQ(dwarf_eh::parseLSDA(Image, Request, {}).ParseStatus,
+              ExceptionParseStatus::Partial);
+    Image.MachOChainedFixupsAmbiguous = false;
+    Image.ImportPtrSlots.emplace(Slot, kPublicTypeInfo);
+    EXPECT_TRUE(dwarf_eh::readItaniumTypeName(Image, Descriptor).empty());
+  }
+}
+
 TEST(DyldSharedCache, MetadataRecipesResolveOutsideTheSelectedImage) {
   for (uint32_t Version : {2u, 3u, 5u}) {
     SCOPED_TRACE(Version);
@@ -1228,6 +1466,8 @@ TEST(DyldSharedCache, SelectedImageLoadingRetainsSlideAndInputIdentity) {
   Fixture.set<uint32_t>(0x730, 0x1008);
   Fixture.set<uint32_t>(0x734, 3);
   Fixture.set<uint32_t>(0x740, 6);
+  // The middle GOT entry is an absolute bind between two slide entries.
+  Fixture.set<uint64_t>(kAbsoluteBindFileOffset, kAbsoluteBindValue);
   // The isolated __LINKEDIT does not belong to the projected VM address space.
   Fixture.set<uint16_t>(0x441c, 0xffff);
   Fixture.set<uint32_t>(0x900, 0xd65f03c0);
@@ -1268,6 +1508,13 @@ TEST(DyldSharedCache, SelectedImageLoadingRetainsSlideAndInputIdentity) {
   EXPECT_FALSE(Image->ImportStorageSlots.count(Base + 0x2018));
   EXPECT_FALSE(Image->CodePtrRelocSlots.count(Base + 0x2018));
   EXPECT_FALSE(Image->DataPtrRelocSlots.count(Base + 0x2018));
+  const va_t AbsoluteSlot = Base + kAbsoluteBindVMOffset;
+  const auto *AbsoluteBytes = Image->readVA(AbsoluteSlot, sizeof(uint64_t));
+  ASSERT_TRUE(AbsoluteBytes);
+  EXPECT_EQ(readLE<uint64_t>(AbsoluteBytes), kAbsoluteBindValue);
+  EXPECT_FALSE(Image->MachOSharedCacheSymbolPointers.count(AbsoluteSlot));
+  EXPECT_FALSE(Image->MachOResolvedChainedPointerSlots.count(AbsoluteSlot));
+  EXPECT_FALSE(readMetadataPointerTarget(*Image, AbsoluteSlot));
   EXPECT_EQ(readMetadataPointerTarget(*Image, Base + 0x2018), Base + 0x700);
   EXPECT_FALSE(Image->getSegmentFor(Base + 0x4000));
   EXPECT_TRUE(readMetadataBytes(*Image, Base + 0x4000, 8));
@@ -1289,6 +1536,8 @@ TEST(DyldSharedCache, SelectedImageLoadingRetainsSlideAndInputIdentity) {
               "_import");
     EXPECT_TRUE(Optimized->ImportPtrSlots.empty());
     EXPECT_TRUE(Optimized->ImportStorageSlots.empty());
+    EXPECT_FALSE(Optimized->MachOSharedCacheSymbolPointers.count(AbsoluteSlot));
+    EXPECT_FALSE(readMetadataPointerTarget(*Optimized, AbsoluteSlot));
   }
   Fixture.set<uint32_t>(0x744, UINT32_MAX);
   {
@@ -1339,6 +1588,29 @@ TEST(DyldSharedCache, OptionalRealCacheAllImagesHaveValidAnalysisProjections) {
   }
   RecordProperty("images", Cache->images().size());
   RecordProperty("total_projection_bytes", BytesTotal);
+}
+
+TEST(DyldSharedCache, OptionalRealCacheIdentifiesLibCxxPersonality) {
+  const char *Path = std::getenv(kCacheEnvironment);
+  if (!Path)
+    GTEST_SKIP() << kCacheUnavailable;
+  BinaryLoadOptions Options;
+  Options.Choice.MachOSharedCacheImage = kRealLibCxx;
+  auto Image = loadBinary(Path, Options);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  size_t Count = 0;
+  for (const auto &Frame : Image->ExceptionMetadata.Functions) {
+    if (Frame.Personality != ExceptionPersonality::GxxPersonalityV0 ||
+        !Frame.Itanium || !Frame.Compact)
+      continue;
+    EXPECT_EQ(Frame.PersonalityName, kProviderName);
+    EXPECT_NE(Frame.PersonalityVA, 0u);
+    EXPECT_EQ(Frame.Itanium->TypeTableEntryKind,
+              ItaniumTypeTableEntryKind::CxxRTTI);
+    ++Count;
+  }
+  EXPECT_GT(Count, 0u);
+  RecordProperty(kProviderFramesProperty, Count);
 }
 
 TEST(DyldSharedCache, OptionalRealCacheLoadsFoundationThroughSharedLoader) {

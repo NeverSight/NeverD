@@ -1,0 +1,13 @@
+//===- DyldCacheBindFixtures.def - Cache absolute binds --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+// Value of libobjc's absolute packed ISA mask on Darwin arm64.
+NEVERD_CACHE_BIND_VALUE(uint64_t, kAbsoluteBindValue,
+                        UINT64_C(0x007ffffffffffff8))
+NEVERD_CACHE_BIND_VALUE(size_t, kAbsoluteBindFileOffset, 0x1010)
+NEVERD_CACHE_BIND_VALUE(va_t, kAbsoluteBindVMOffset, 0x2010)
+
+#undef NEVERD_CACHE_BIND_VALUE

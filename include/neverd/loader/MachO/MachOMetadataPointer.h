@@ -27,6 +27,10 @@ const uint8_t *readMetadataBytes(const BinaryImage &Image, va_t Address,
 /// signing recipe. Imports, stale recipes and ambiguous storage fail closed.
 std::optional<va_t> readMetadataPointerTarget(const BinaryImage &Image,
                                               va_t Slot);
+/// Decode the plain name word in an Apple arm64 C++ type_info descriptor.
+/// The field carries the non-unique RTTI flag alongside the string address.
+std::optional<va_t> readArm64TypeNameAddress(const BinaryImage &Image,
+                                             va_t Slot);
 } // namespace macho_loader
 } // namespace neverd
 
