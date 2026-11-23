@@ -26,6 +26,7 @@
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/LLVMContext.h"
@@ -61,6 +62,25 @@ MedVar temporary(int Id) {
   Value.Id = Id;
   Value.SSAVer = 1;
   Value.Size = 8;
+  return Value;
+}
+
+/// \p Value at \p Size bytes.
+MedVar sized(MedVar Value, uint16_t Size) {
+  Value.Size = Size;
+  return Value;
+}
+
+/// A value of \p Size bytes in the register at \p Offset, which \p Id names
+/// apart from the other values there (a register and its narrower views).
+MedVar inRegister(uint64_t Offset, uint16_t Size, int Id, int Version) {
+  MedVar Value;
+  Value.Kind = MedVar::Reg;
+  Value.TheArch = Arch::X64;
+  Value.Id = Id;
+  Value.SSAVer = Version;
+  Value.Size = Size;
+  Value.RegOff = Offset;
   return Value;
 }
 
@@ -200,6 +220,50 @@ std::vector<bool> settle(std::vector<MedFunc> Funcs,
   for (const MedFunc &Func : Result.MedFuncs)
     NoValue.push_back(Func.ReturnsNoValue);
   return NoValue;
+}
+
+/// As settle, returning the functions too.
+PipelineResult settled(std::vector<MedFunc> Funcs,
+                       BinaryFormat Format = BinaryFormat::ELF) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = Format;
+  PipelineResult Result;
+  Result.MedFuncs = std::move(Funcs);
+  settleReturnContracts(Image, Result, nullptr);
+  return Result;
+}
+
+/// A callee one path of which hands back RAX as it entered and the other
+/// what an unknown call left: no value unless a caller reads one.
+MedFunc releasing() {
+  return branching(CalleeEntry,
+                   operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}));
+}
+
+/// A caller that calls the callee, runs \p Ops on what RAX then holds
+/// (rax(1)) and returns zero.
+MedFunc callerRunning(std::vector<MedOp> Ops) {
+  std::vector<MedOp> All = {callTo(CalleeEntry, 1)};
+  for (MedOp &Op : Ops)
+    All.push_back(std::move(Op));
+  All.push_back(returning(MedVar::makeConst(0, 8)));
+  return function(CallerEntry, {block(std::move(All))});
+}
+
+/// `setcc %al` after the call: RAX keeps the bytes the call left above the
+/// one written.  The merged register is rax(2).
+std::vector<MedOp> byteSetOverTheResult() {
+  return {operation(NdOp::INT_AND, temporary(2),
+                    {rax(1), MedVar::makeConst(~0xFFull, 8)}),
+          operation(NdOp::INT_ZEXT, temporary(3), {sized(temporary(1), 1)}),
+          operation(NdOp::INT_OR, rax(2), {temporary(2), temporary(3)})};
+}
+
+std::vector<MedOp> operator+(std::vector<MedOp> Ops, std::vector<MedOp> More) {
+  for (MedOp &Op : More)
+    Ops.push_back(std::move(Op));
+  return Ops;
 }
 
 TEST(ReturnContracts, TheRegisterAsTheFunctionEnteredItIsNoValue) {
@@ -360,14 +424,629 @@ TEST(ReturnContracts, AResultOnlyADeadMergeReadsIsNoValue) {
 }
 
 TEST(ReturnContracts, AResultAMergeHandsBackIsReadByACallerThatReturnsAValue) {
-  // The caller returns 5 on the other path, so what it hands back from the
-  // callee is a value too.
-  MedFunc Callee = branching(
-      CalleeEntry, operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}));
+  // The caller returns 5 on the other path, and no path of the callee shows
+  // it means no value (one returns what an unknown call left, the other
+  // follows a call that does not return): what the caller hands back from
+  // it is a value too.
+  MedOp Abort = callTo(0x3000, 2);
+  Abort.DoesNotReturn = true;
+  MedFunc Callee =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0}),
+                block({Abort, returning(rax(2))}, {0})});
   MedFunc Caller =
       conditionalCaller(MedVar::makeConst(5, 8), returning(rax(2)));
   EXPECT_EQ(settle({std::move(Callee), std::move(Caller)}),
             (std::vector<bool>{false, false}));
+}
+
+TEST(ReturnContracts, ACalleeAndTheCallerThatHandsItsResultBackReturnNone) {
+  // sqlite3_free and sqlite3BtreeClearCursor: the callee's result is read
+  // only if the wrapper returns a value, and the wrapper returns one only if
+  // the callee does.  Neither does.
+  const MedFunc Wrapper = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1), returning(rax(1))})});
+  EXPECT_EQ(settle({releasing(), Wrapper}), (std::vector<bool>{true, true}));
+}
+
+TEST(ReturnContracts, AReadReachesDownThroughACallerThatHandsTheResultBack) {
+  // seh_probe: main compares what a wrapper returns, and the wrapper returns
+  // what its callee does.  The callee's result is read.
+  const MedFunc Wrapper = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1), returning(rax(1))})});
+  const MedFunc Reader = function(
+      0x3000, {block({callTo(CallerEntry, 1),
+                      operation(NdOp::STORE, {}, {temporary(7), rax(1)}),
+                      returning(MedVar::makeConst(0, 8))})});
+  EXPECT_EQ(settle({releasing(), Wrapper, Reader}),
+            (std::vector<bool>{false, false, false}));
+
+  // A read of the float a function returns is no read of the integer
+  // register it hands back.
+  MedFunc Measuring = Wrapper;
+  Measuring.ReturnType = NdType::makeFloat(8);
+  EXPECT_EQ(settle({releasing(), Measuring, Reader}),
+            (std::vector<bool>{true, false, false}));
+}
+
+TEST(ReturnContracts, ACalleeNoPathShowsMeansNoValueWaitsForItsCaller) {
+  // MSVC's AArch64 cookie check returns the X0 it was given unless the
+  // cookie is wrong, when it calls a routine that does not return; every
+  // function it guards returns through it.  No path of it shows it means
+  // no value, so a caller that hands its result back may be returning what
+  // it passed: both keep their values.
+  MedOp Abort = callTo(0x3000, 2);
+  Abort.DoesNotReturn = true;
+  const MedFunc Check =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0}),
+                block({Abort, returning(rax(2))}, {0})});
+  const MedFunc Guarded = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1), returning(rax(1))})});
+  EXPECT_EQ(settle({Check, Guarded}), (std::vector<bool>{false, false}));
+
+  // Nothing hands its result back: it returns none, as before.
+  EXPECT_EQ(settle({Check}), std::vector<bool>{true});
+
+  // Nor does a caller that is itself settled to return none, whichever of
+  // the two is looked at first: one of its paths never wrote the register.
+  const MedFunc Early =
+      function(CallerEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({returning(rax(0))}, {0}),
+                block({callTo(CalleeEntry, 1), returning(rax(1))}, {0})});
+  EXPECT_EQ(settle({Check, Early}), (std::vector<bool>{true, true}));
+  EXPECT_EQ(settle({Early, Check}), (std::vector<bool>{true, true}));
+}
+
+TEST(ReturnContracts, AFunctionThatReturnsWhatItsOwnCallReturnsShowsNothing) {
+  // One path returns what an unknown call left, the other what the function
+  // itself returns: that it may return nothing is no evidence that it does.
+  const MedFunc Recursive =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0}),
+                block({callTo(CalleeEntry, 2), returning(rax(2))}, {0})});
+  EXPECT_EQ(settle({Recursive}), std::vector<bool>{false});
+}
+
+TEST(ReturnContracts, AResultOnlyUnreadViewsOfTheRegisterReadIsNotRead) {
+  // sqlite3BtreeIndexMoveto: the lift keeps the narrower views of RAX a
+  // function reads anywhere (`eax`, `al`) in step with it, so a call's
+  // result is copied into each view and merged where paths join.  Nothing
+  // reads these merges.
+  const MedVar Entered = inRegister(x86reg::RAX, 4, 1, 0),
+               Left = inRegister(x86reg::RAX, 4, 1, 1),
+               Joined = inRegister(x86reg::RAX, 4, 1, 2);
+  PhiNode Merge;
+  Merge.Output = Joined;
+  Merge.Args = {{0, Entered}, {1, Left}};
+  MedBlock Join = block({returning(MedVar::makeConst(0, 8))}, {0, 1});
+  Join.Phis.push_back(std::move(Merge));
+  const MedFunc Caller =
+      function(CallerEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({callTo(CalleeEntry, 1),
+                       operation(NdOp::SUBBYTES, Left,
+                                 {rax(1), MedVar::makeConst(0, 4)})},
+                      {0}, {2}),
+                std::move(Join)});
+  EXPECT_EQ(settle({releasing(), Caller}), (std::vector<bool>{true, false}));
+}
+
+TEST(ReturnContracts, AnUnreadViewOfTheReturnRegisterReadsNothing) {
+  // sqlite3GenerateConstraintChecks: the view of a call's result that not
+  // even a merge reads.
+  const MedFunc Caller =
+      callerRunning({operation(NdOp::SUBBYTES, inRegister(x86reg::RAX, 4, 1, 1),
+                               {rax(1), MedVar::makeConst(0, 4)})});
+  EXPECT_EQ(settle({releasing(), Caller}), (std::vector<bool>{true, false}));
+}
+
+TEST(ReturnContracts, TheBytesASetccMergesOverReadNothing) {
+  // `call release; setne %al; mov %al, (%rbx)`: the store reads the byte
+  // written, not what the call left above it.  The merge then reads zero in
+  // place of the result of a call that returns none.
+  const MedVar Low = sized(temporary(4), 1);
+  const MedFunc Caller = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{
+          operation(NdOp::SUBBYTES, Low, {rax(2), MedVar::makeConst(0, 8)}),
+          operation(NdOp::STORE, {}, {temporary(7), Low})});
+  const PipelineResult Result = settled({releasing(), Caller});
+  EXPECT_TRUE(Result.MedFuncs[0].ReturnsNoValue);
+  const MedOp &Kept = Result.MedFuncs[1].Blocks[0].Ops[1];
+  ASSERT_EQ(Kept.Opcode, NdOp::INT_AND);
+  EXPECT_TRUE(Kept.Inputs[0].isConst() && Kept.Inputs[0].ConstVal == 0);
+
+  // A store of the whole register reads what the call left.
+  const MedFunc Whole = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{operation(NdOp::STORE, {}, {temporary(7), rax(2)})});
+  const PipelineResult Read = settled({releasing(), Whole});
+  EXPECT_FALSE(Read.MedFuncs[0].ReturnsNoValue);
+  EXPECT_FALSE(Read.MedFuncs[1].Blocks[0].Ops[1].Inputs[0].isConst());
+}
+
+TEST(ReturnContracts, AnAndWithAZeroExtendedByteReadsOneByte) {
+  // sub_59DC0: `call sqlite3_free; sete %al; and %eax, %ebx` where EBX holds
+  // a zero-extended flag.  The bytes of EAX above AL, which the call left,
+  // meet zero bytes; a 32-bit store of the result reads none of them.
+  const MedVar Eax = sized(temporary(4), 4);
+  const auto Ebx = [](int Version) {
+    return inRegister(x86reg::RBX, 4, 2, Version);
+  };
+  const std::vector<MedOp> Anded = {
+      operation(NdOp::SUBBYTES, Eax, {rax(2), MedVar::makeConst(0, 8)}),
+      operation(NdOp::INT_AND, Ebx(2), {Ebx(1), Eax}),
+      operation(NdOp::STORE, {}, {temporary(7), Ebx(2)})};
+  const MedFunc Flag =
+      callerRunning(std::vector<MedOp>{operation(NdOp::INT_ZEXT, Ebx(1),
+                                                 {sized(temporary(6), 1)})} +
+                    byteSetOverTheResult() + Anded);
+  EXPECT_EQ(settle({releasing(), Flag}), (std::vector<bool>{true, false}));
+
+  // An EBX of unknown bytes shows every byte of EAX.
+  const MedFunc Unknown = callerRunning(byteSetOverTheResult() + Anded);
+  EXPECT_EQ(settle({releasing(), Unknown}), (std::vector<bool>{false, false}));
+
+  // A flag ANDed around a loop stays the byte it started as: the merge at
+  // the loop's head is zero above its low byte because every arm is.
+  PhiNode Head;
+  Head.Output = Ebx(1);
+  Head.Args = {{0, Ebx(0)}, {1, Ebx(2)}};
+  std::vector<MedOp> Body = {callTo(CalleeEntry, 1)};
+  for (MedOp &Op : byteSetOverTheResult() + Anded)
+    Body.push_back(std::move(Op));
+  Body.push_back(operation(NdOp::COND_BR, {}, {temporary(9)}));
+  MedBlock Loop = block(std::move(Body), {0, 1}, {1, 2});
+  Loop.Phis.push_back(std::move(Head));
+  const MedFunc Looping = function(
+      CallerEntry,
+      {block({operation(NdOp::INT_ZEXT, Ebx(0), {sized(temporary(6), 1)})}, {},
+             {1}),
+       std::move(Loop), block({returning(MedVar::makeConst(0, 8))}, {1})});
+  EXPECT_EQ(settle({releasing(), Looping}), (std::vector<bool>{true, false}));
+}
+
+TEST(ReturnContracts, ALeftShiftReadsNothingAboveTheBytesRead) {
+  // sqlite3_progress_handler: `setne %al; shl $6, %eax; mov %al, 0x6e(%rbx)`.
+  // A left shift moves bits up only, so the byte stored comes from AL.
+  const MedVar Eax = sized(temporary(4), 4), Shifted = sized(temporary(5), 4),
+               Low = sized(temporary(6), 1);
+  const MedFunc Caller = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{
+          operation(NdOp::SUBBYTES, Eax, {rax(2), MedVar::makeConst(0, 8)}),
+          operation(NdOp::INT_LEFT, Shifted, {Eax, MedVar::makeConst(6, 4)}),
+          operation(NdOp::SUBBYTES, Low, {Shifted, MedVar::makeConst(0, 8)}),
+          operation(NdOp::STORE, {}, {temporary(7), Low})});
+  EXPECT_EQ(settle({releasing(), Caller}), (std::vector<bool>{true, false}));
+}
+
+TEST(ReturnContracts, AnOperationPassesOnOnlyTheBytesReadOfIt) {
+  // After `setcc %al` the register holds a known byte below the seven the
+  // call left.  Each case stores some bytes of what an operation makes of
+  // it: the call's result is read exactly where the operation carries one
+  // of its bytes into what is stored.
+  const MedVar Eax = sized(temporary(4), 4), Out = temporary(5),
+               Out4 = sized(temporary(5), 4), Stored = sized(temporary(6), 1);
+  const MedOp ViewOfEax =
+      operation(NdOp::SUBBYTES, Eax, {rax(2), MedVar::makeConst(0, 8)});
+  struct Case {
+    const char *Name;
+    std::vector<MedOp> Ops;
+    /// The operation's result and the byte of it stored.
+    MedVar Made;
+    uint64_t Byte;
+    bool ReadsResult;
+  };
+  const MedVar Ones = MedVar::makeConst(~0xFFull, 8);
+  const std::vector<Case> Cases = {
+      {"copy", {operation(NdOp::COPY, Out, {rax(2)})}, Out, 0, false},
+      {"copy", {operation(NdOp::COPY, Out, {rax(2)})}, Out, 1, true},
+      {"not", {operation(NdOp::INT_NOT, Out, {rax(2)})}, Out, 0, false},
+      {"not", {operation(NdOp::INT_NOT, Out, {rax(2)})}, Out, 1, true},
+      // A zero extension adds bytes that read nothing.
+      {"zext",
+       {ViewOfEax, operation(NdOp::INT_ZEXT, Out, {Eax})},
+       Out,
+       0,
+       false},
+      {"zext",
+       {ViewOfEax, operation(NdOp::INT_ZEXT, Out, {Eax})},
+       Out,
+       1,
+       true},
+      {"zext",
+       {ViewOfEax, operation(NdOp::INT_ZEXT, Out, {Eax})},
+       Out,
+       5,
+       false},
+      // A sign extension repeats the top byte of its source above it.
+      {"sext",
+       {ViewOfEax, operation(NdOp::INT_SEXT, Out, {Eax})},
+       Out,
+       0,
+       false},
+      {"sext",
+       {ViewOfEax, operation(NdOp::INT_SEXT, Out, {Eax})},
+       Out,
+       5,
+       true},
+      // The first operand is the high part: its low byte is the known one.
+      {"concat",
+       {ViewOfEax, operation(NdOp::CONCAT, Out, {Eax, sized(temporary(8), 4)})},
+       Out,
+       4,
+       false},
+      {"concat",
+       {ViewOfEax, operation(NdOp::CONCAT, Out, {Eax, sized(temporary(8), 4)})},
+       Out,
+       5,
+       true},
+      // A carry runs upwards only.
+      {"add",
+       {ViewOfEax,
+        operation(NdOp::INT_ADD, Out4, {Eax, MedVar::makeConst(1, 4)})},
+       Out4,
+       0,
+       false},
+      {"add",
+       {ViewOfEax,
+        operation(NdOp::INT_ADD, Out4, {Eax, MedVar::makeConst(1, 4)})},
+       Out4,
+       1,
+       true},
+      {"sub",
+       {ViewOfEax,
+        operation(NdOp::INT_SUB, Out4, {Eax, MedVar::makeConst(1, 4)})},
+       Out4,
+       0,
+       false},
+      {"sub",
+       {ViewOfEax,
+        operation(NdOp::INT_SUB, Out4, {Eax, MedVar::makeConst(1, 4)})},
+       Out4,
+       1,
+       true},
+      {"mult",
+       {ViewOfEax,
+        operation(NdOp::INT_MULT, Out4, {Eax, MedVar::makeConst(3, 4)})},
+       Out4,
+       0,
+       false},
+      {"mult",
+       {ViewOfEax,
+        operation(NdOp::INT_MULT, Out4, {Eax, MedVar::makeConst(3, 4)})},
+       Out4,
+       1,
+       true},
+      {"xor",
+       {operation(NdOp::INT_XOR, Out, {rax(2), temporary(8)})},
+       Out,
+       0,
+       false},
+      {"xor",
+       {operation(NdOp::INT_XOR, Out, {rax(2), temporary(8)})},
+       Out,
+       1,
+       true},
+      // A byte ORed with ones shows nothing of the other operand.
+      {"or ones",
+       {operation(NdOp::INT_OR, Out, {rax(2), Ones})},
+       Out,
+       1,
+       false},
+      {"or zero",
+       {operation(NdOp::INT_OR, Out, {rax(2), MedVar::makeConst(0, 8)})},
+       Out,
+       1,
+       true},
+  };
+  for (const Case &Each : Cases) {
+    const MedFunc Caller = callerRunning(
+        byteSetOverTheResult() + Each.Ops +
+        std::vector<MedOp>{
+            operation(NdOp::SUBBYTES, Stored,
+                      {Each.Made, MedVar::makeConst(Each.Byte, 8)}),
+            operation(NdOp::STORE, {}, {temporary(7), Stored})});
+    EXPECT_EQ(settle({releasing(), Caller}),
+              (std::vector<bool>{!Each.ReadsResult, false}))
+        << Each.Name << " byte " << Each.Byte;
+  }
+}
+
+TEST(ReturnContracts, AWordInsertedIntoAVectorReadsNoneOfItsOtherLanes) {
+  // sqlite3ExprListDelete's caller: `call f; pinsrw $0, mem, %xmm0; ...;
+  // movd %xmm0, mem`.  The insert keeps the other lanes of what the call
+  // left in XMM0, and the store reads the inserted word's bytes alone.
+  const MedVar Xmm = inRegister(x86reg::XMM0, 16, 3, 1);
+  const MedVar Word = sized(temporary(1), 2), Rest = sized(temporary(2), 14),
+               Inserted = sized(temporary(3), 16),
+               Stored = sized(temporary(4), 2);
+  const MedFunc Caller = function(
+      CallerEntry,
+      {block({operation(
+                  NdOp::CALL, Xmm,
+                  {MedVar::makeConst(CalleeEntry, 8,
+                                     ConstantAddressProvenance::CodeAddress)}),
+              operation(NdOp::SUBBYTES, Rest, {Xmm, MedVar::makeConst(2, 8)}),
+              operation(NdOp::CONCAT, Inserted, {Rest, Word}),
+              operation(NdOp::SUBBYTES, Stored,
+                        {Inserted, MedVar::makeConst(0, 8)}),
+              operation(NdOp::STORE, {}, {temporary(7), Stored}),
+              returning(MedVar::makeConst(0, 8))})});
+  const PipelineResult Result = settled({releasing(), Caller});
+  EXPECT_TRUE(Result.MedFuncs[0].ReturnsNoValue);
+  // That the callee returns no value says nothing of what it left in XMM0:
+  // the insert still reads the register.
+  const MedOp &Kept = Result.MedFuncs[1].Blocks[0].Ops[1];
+  ASSERT_EQ(Kept.Opcode, NdOp::SUBBYTES);
+  EXPECT_FALSE(Kept.Inputs[0].isConst());
+}
+
+TEST(ReturnContracts, AFunctionThatReturnsAFloatHandsBackNoInteger) {
+  // sqlite3_column_double ends in sqlite3_mutex_leave and returns XMM0:
+  // RAX is as the call left it at its return, which reads nothing.
+  const auto Measuring = [] {
+    return function(CallerEntry,
+                    {block({callTo(CalleeEntry, 1), returning(rax(1))})});
+  };
+  MedFunc Inferred = Measuring();
+  Inferred.ReturnType = NdType::makeFloat(8);
+  EXPECT_EQ(settle({releasing(), Inferred}), (std::vector<bool>{true, false}));
+
+  // A source signature and debug information say the same of theirs.
+  MedFunc Hinted = Measuring();
+  Hinted.SourceTypeHint.emplace();
+  Hinted.SourceTypeHint->ReturnType = NdType::makeFloat(8);
+  EXPECT_EQ(settle({releasing(), Hinted}), (std::vector<bool>{true, false}));
+  DeclaringDebugContext Debug;
+  Debug.Returns[CallerEntry] = NdType::makeFloat(8);
+  EXPECT_EQ(settle({releasing(), Measuring()}, BinaryFormat::ELF, &Debug),
+            (std::vector<bool>{true, false}));
+
+  // One declared to return an integer reads what it hands back.
+  Debug.Returns[CallerEntry] = NdType::makeInt(8);
+  EXPECT_EQ(settle({releasing(), Measuring()}, BinaryFormat::ELF, &Debug),
+            (std::vector<bool>{false, false}));
+
+  // A target that may return a float in the integer register: read.
+  BinaryImage Soft;
+  Soft.Arch = Arch::ARM;
+  Soft.Format = BinaryFormat::ELF;
+  const TargetRegInfo &ARM = getTargetRegInfo(Soft.Arch);
+  const auto R0 = [&](int Version) {
+    MedVar Value = inRegister(ARM.IntReturnReg, 4, 0, Version);
+    Value.TheArch = Soft.Arch;
+    return Value;
+  };
+  MedVar Link = sized(temporary(9), 4);
+  Link.TheArch = Soft.Arch;
+  const MedOp Seed = operation(NdOp::COPY, R0(0), {R0(0)});
+  MedFunc Callee = function(
+      CalleeEntry,
+      {block({Seed, operation(NdOp::COND_BR, {}, {temporary(8)})}, {}, {1, 2}),
+       block({returning(Link)}, {0}),
+       block({operation(NdOp::INDIR_CALL, R0(1), {temporary(5)}),
+              returning(Link)},
+             {0})});
+  Callee.ReturnType = NdType::makeInt(4);
+  MedFunc Caller = function(
+      CallerEntry,
+      {block({operation(
+                  NdOp::CALL, R0(1),
+                  {MedVar::makeConst(CalleeEntry, 4,
+                                     ConstantAddressProvenance::CodeAddress)}),
+              returning(Link)})});
+  Caller.ReturnType = NdType::makeFloat(4);
+  PipelineResult Result;
+  Result.MedFuncs = {Callee, Caller};
+  settleReturnContracts(Soft, Result);
+  EXPECT_FALSE(Result.MedFuncs[0].ReturnsNoValue);
+}
+
+TEST(ReturnContracts, WhatSomethingUnseenMayReadIsRead) {
+  // Memory is read through pointers, and a load or a division runs whatever
+  // reads its result: neither lets a call's result go unread.
+  const std::vector<std::pair<const char *, MedOp>> Cases = {
+      {"a load", operation(NdOp::LOAD, temporary(2), {rax(1)})},
+      {"a division",
+       operation(NdOp::INT_DIV, temporary(2), {temporary(8), rax(1)})},
+  };
+  for (const auto &[Name, Op] : Cases)
+    EXPECT_EQ(settle({releasing(), callerRunning({Op})}),
+              (std::vector<bool>{false, false}))
+        << Name;
+
+  // A frame slot is memory: reading one byte of it by name leaves the rest
+  // to whatever reads it through a pointer.
+  MedVar Slot = temporary(3);
+  Slot.Kind = MedVar::Stack;
+  const MedVar Low = sized(temporary(4), 1);
+  const MedFunc Spilling = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{
+          operation(NdOp::COPY, Slot, {rax(2)}),
+          operation(NdOp::SUBBYTES, Low, {Slot, MedVar::makeConst(0, 8)}),
+          operation(NdOp::STORE, {}, {temporary(7), Low})});
+  EXPECT_EQ(settle({releasing(), Spilling}), (std::vector<bool>{false, false}));
+
+  // The value an exception hands a merge is one of its arguments.
+  PhiNode Handler;
+  Handler.Output = temporary(4);
+  Handler.Args = {{0, temporary(2)}};
+  Handler.ExceptionalEntry = rax(1);
+  MedBlock Handling =
+      block({operation(NdOp::STORE, {}, {temporary(7), temporary(4)}),
+             returning(MedVar::makeConst(0, 8))},
+            {0});
+  Handling.Phis.push_back(Handler);
+  const MedFunc Catching = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1)}, {}, {1}), Handling});
+  EXPECT_EQ(settle({releasing(), Catching}), (std::vector<bool>{false, false}));
+}
+
+TEST(ReturnContracts, AnotherRegisterIsReadWhereSomethingUnseenMayTakeIt) {
+  // sqlite3WindowCodeInit: `call sqlite3ExprListDelete; pinsrw $0, mem,
+  // %xmm0`.  The insert keeps the lanes the call left, and XMM0 then reaches
+  // the function's end unread.  The function returns an integer and nothing
+  // catches an exception in it, so nothing takes XMM0 from it.
+  const MedVar Rdx = inRegister(x86reg::RDX, 8, 4, 1);
+  const auto Leaving = [&] {
+    return callerRunning({operation(NdOp::COPY, Rdx, {rax(1)})});
+  };
+  EXPECT_EQ(settle({releasing(), Leaving()}), (std::vector<bool>{true, false}));
+  for (const TypeRef &Type : {NdType::makePtr(nullptr), NdType::makeVoid()}) {
+    MedFunc Typed = Leaving();
+    Typed.ReturnType = Type;
+    EXPECT_EQ(settle({releasing(), Typed}), (std::vector<bool>{true, false}));
+  }
+
+  // A merge of the register that nothing reads is no more a reader.
+  PhiNode Merge;
+  Merge.Output = inRegister(x86reg::RDX, 8, 4, 2);
+  Merge.Args = {{0, inRegister(x86reg::RDX, 8, 4, 0)}, {1, Rdx}};
+  MedBlock Join = block({returning(MedVar::makeConst(0, 8))}, {0, 1});
+  Join.Phis.push_back(Merge);
+  const auto Merging = [&] {
+    return function(
+        CallerEntry,
+        {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})}, {},
+               {1, 2}),
+         block({callTo(CalleeEntry, 1), operation(NdOp::COPY, Rdx, {rax(1)})},
+               {0}, {2}),
+         Join});
+  };
+  EXPECT_EQ(settle({releasing(), Merging()}), (std::vector<bool>{true, false}));
+
+  // A caller takes the register from a function that returns a record of
+  // registers, a floating-point or vector value, or nothing typed yet; an
+  // exception handler lifted apart reads what the function held.
+  const std::vector<std::pair<const char *, void (*)(MedFunc &)>> Unseen = {
+      {"a record of registers",
+       [](MedFunc &F) {
+         F.MultiReturn = {{x86reg::RAX, 8, false}, {x86reg::RDX, 8, false}};
+       }},
+      {"an x87 result", [](MedFunc &F) { F.FPReturnViaX87 = true; }},
+      {"an explicit x87 result",
+       [](MedFunc &F) { F.ExplicitX87ReturnValue = true; }},
+      {"a vector result", [](MedFunc &F) { F.ReturnsVectorRegister = true; }},
+      {"an untyped result", [](MedFunc &F) { F.ReturnType = nullptr; }},
+      {"a float result",
+       [](MedFunc &F) { F.ReturnType = NdType::makeFloat(8); }},
+      {"a source signature's float",
+       [](MedFunc &F) {
+         F.SourceTypeHint.emplace();
+         F.SourceTypeHint->ReturnType = NdType::makeFloat(8);
+       }},
+      {"an exceptional edge",
+       [](MedFunc &F) {
+         F.Blocks.front().ExceptionalSuccs.push_back(
+             {-1, 0x4000, ExceptionalEdgeKind::CxxCatch});
+       }},
+      {"an exceptional entry",
+       [](MedFunc &F) {
+         F.Blocks.front().ExceptionalPreds.push_back(
+             {-1, 0x4000, ExceptionalEdgeKind::CxxCatch});
+       }},
+  };
+  for (const auto &[Name, Change] : Unseen) {
+    MedFunc Changed = Leaving(), Joined = Merging();
+    Change(Changed);
+    Change(Joined);
+    EXPECT_FALSE(settle({releasing(), Changed})[0]) << Name;
+    EXPECT_FALSE(settle({releasing(), Joined})[0]) << Name << " (merge)";
+  }
+}
+
+TEST(ReturnContracts, TheUnreadResultOfARoutineDeclaredVoidReadsZero) {
+  // `call _set_app_type; setne %al; mov %al, (%rbx)`: the routine is void by
+  // its prototype, and the merge reads zero in place of what it left.
+  MedFunc Routine = function(
+      CalleeEntry,
+      {block({seed(), operation(NdOp::COPY, rax(1), {MedVar::makeConst(7, 8)}),
+              returning(rax(1))})});
+  Routine.Name = "_set_app_type";
+  const MedVar Low = sized(temporary(4), 1);
+  const MedFunc Caller = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{
+          operation(NdOp::SUBBYTES, Low, {rax(2), MedVar::makeConst(0, 8)}),
+          operation(NdOp::STORE, {}, {temporary(7), Low})});
+  const PipelineResult Result = settled({Routine, Caller}, BinaryFormat::COFF);
+  EXPECT_TRUE(Result.MedFuncs[0].ReturnsNoValue);
+  const MedOp &Kept = Result.MedFuncs[1].Blocks[0].Ops[1];
+  ASSERT_EQ(Kept.Opcode, NdOp::INT_AND);
+  EXPECT_TRUE(Kept.Inputs[0].isConst() && Kept.Inputs[0].ConstVal == 0);
+}
+
+TEST(ReturnContracts,
+     AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt) {
+  // Go passes its first argument in RAX.  runtime.compute0 writes through
+  // its second and returns with RAX as it came: no result, unless a caller
+  // reads one, as it does of a function that returns its argument.
+  MedVar Argument = rax(0);
+  Argument.Kind = MedVar::Param;
+  MedFunc ByParameter = function(CalleeEntry, {block({returning(Argument)})});
+  ByParameter.Params.push_back(Argument);
+  MedFunc ByRegister =
+      function(CalleeEntry, {block({seed(), returning(rax(0))})});
+  ByRegister.Params.push_back(Argument);
+  const MedFunc Reader = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1),
+                           operation(NdOp::STORE, {}, {temporary(7), rax(1)}),
+                           returning(MedVar::makeConst(0, 8))})});
+  for (const MedFunc &Callee : {ByParameter, ByRegister}) {
+    EXPECT_EQ(settle({Callee}), std::vector<bool>{true});
+    EXPECT_EQ(settle({Callee, Reader}), (std::vector<bool>{false, false}));
+  }
+
+  // One that also writes the register hands the argument back as a value.
+  MedFunc Writing =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({returning(rax(0))}, {0}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0})});
+  Writing.Params.push_back(Argument);
+  EXPECT_EQ(settle({Writing}), std::vector<bool>{false});
+}
+
+TEST(ReturnContracts, AnotherRegisterAsEnteredShowsNothing) {
+  // `mov %rbx, %rax; ret` of an RBX the function never set leaves nothing
+  // defined, but the register was written: beside a `return 1` the function
+  // keeps its value, where a return that never wrote RAX would not.
+  const MedVar Rbx = inRegister(x86reg::RBX, 8, 2, 0);
+  const auto Beside = [](MedVar Entered) {
+    return function(
+        CalleeEntry,
+        {block({seed(), operation(NdOp::COPY, Entered, {Entered}),
+                operation(NdOp::COND_BR, {}, {temporary(9)})},
+               {}, {1, 2}),
+         block({returning(Entered)}, {0}),
+         block({operation(NdOp::COPY, rax(2), {MedVar::makeConst(1, 8)}),
+                returning(rax(2))},
+               {0})});
+  };
+  EXPECT_EQ(settle({Beside(Rbx)}), std::vector<bool>{false});
+  EXPECT_EQ(settle({Beside(rax(0))}), std::vector<bool>{true});
 }
 
 TEST(ReturnContracts, AReturnOfACopiedArgumentIsAValue) {
@@ -589,12 +1268,63 @@ TEST(ReturnContracts, AnInstructionRunForItsEffectIsNoValue) {
             std::vector<bool>{true});
 }
 
+/// One path hands back what a call to the function at 0x3000 left, the
+/// other a constant.
+MedFunc constantBesideACall() {
+  return function(
+      CalleeEntry,
+      {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})}, {},
+             {1, 2}),
+       block({callTo(0x3000, 1), returning(rax(1))}, {0}),
+       block({operation(NdOp::COPY, rax(2), {MedVar::makeConst(1, 8)}),
+              returning(rax(2))},
+             {0})});
+}
+
 TEST(ReturnContracts, AConstantIsADeliberateValue) {
-  // register_tm_clones' `return 0` beside the bare path: a value.
+  // A `return 1` beside the code after a call that does not return: that
+  // path shows nothing of the function, and the constant is its value.
+  MedOp Abort = callTo(0x3000, 1);
+  Abort.DoesNotReturn = true;
+  EXPECT_EQ(
+      settle({function(
+          CalleeEntry,
+          {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})}, {},
+                 {1, 2}),
+           block({Abort, returning(rax(1))}, {0}),
+           block({operation(NdOp::COPY, rax(2), {MedVar::makeConst(1, 8)}),
+                  returning(rax(2))},
+                 {0})})}),
+      std::vector<bool>{false});
+}
+
+TEST(ReturnContracts, AConstantBesideTheResultOfAFunctionThatReturnsNoneIsNot) {
+  // sqlite3ExprAttachSubtrees: `mov $1, %eax` to store a height on one path
+  // and `jmp sqlite3ExprDelete` on the other.  A function that means to
+  // return a value does not hand back the result of one that returns none:
+  // the constant is what the code happened to hold.
+  const MedFunc Sink = function(0x3000, {block({seed(), returning(rax(0))})});
+  EXPECT_EQ(settle({Sink, constantBesideACall()}),
+            (std::vector<bool>{true, true}));
+
+  // The result of a routine declared void shows the same.
+  MedFunc Routine = function(
+      0x3000,
+      {block({seed(), operation(NdOp::COPY, rax(1), {MedVar::makeConst(7, 8)}),
+              returning(rax(1))})});
+  Routine.Name = "_set_app_type";
+  EXPECT_EQ(settle({Routine, constantBesideACall()}, BinaryFormat::COFF),
+            (std::vector<bool>{true, true}));
+}
+
+TEST(ReturnContracts, AConstantBesideAPathThatNeverWroteTheRegisterIsNoValue) {
+  // sqlite3DeleteColumnNames: `xor %eax, %eax; mov %ax, 0x36(%r13)` on one
+  // path and an early `ret` that never wrote RAX on another.  Compiled code
+  // that means to return a value has no such path.
   EXPECT_EQ(
       settle({branching(CalleeEntry, operation(NdOp::COPY, rax(1),
                                                {MedVar::makeConst(0, 8)}))}),
-      std::vector<bool>{false});
+      std::vector<bool>{true});
 }
 
 TEST(ReturnContracts, AFunctionThatNeverReturnsReturnsNoValue) {

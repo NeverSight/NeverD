@@ -48901,10 +48901,14 @@ TEST(HighCPointerAddresses, RecursiveCallMatchesItsOwnSignature) {
       0xc3};
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
-  // One argument, converted to the definition's pointer parameter.
+  // One argument, converted to the definition's pointer parameter.  No path
+  // writes RAX but the recursive call, so the function returns no value and
+  // the call is a statement.
   EXPECT_TRUE(std::regex_search(
       HighC,
-      std::regex(R"(= sub_140001000\(\(void\*\)\(uintptr_t\)\([^,]+\)\);)")))
+      std::regex(R"(\n\s+sub_140001000\(\(void\*\)\(uintptr_t\)\([^,]+\)\);)")))
+      << HighC;
+  EXPECT_NE(HighC.find("void sub_140001000(void* arg0) {"), std::string::npos)
       << HighC;
   expectCompilesForMsvc(HighC);
 }

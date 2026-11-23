@@ -9160,7 +9160,34 @@ kernel's headers and `WindowsKernelRoutines.inc` agree on the bytes each
 parameter of a routine both know takes, and
 `ReturnContracts.ACallToAFunctionDeclaredVoidElsewhereHandsBackNoValue` and
 `AStubOfAnImportDeclaredVoidReturnsNoValue` cover the return contracts that
-read declarations. Copied import addresses and callable values use the same
+read declarations. `ReturnContracts.ACalleeAndTheCallerThatHandsItsResultBackReturnNone`,
+`AReadReachesDownThroughACallerThatHandsTheResultBack`,
+`ACalleeNoPathShowsMeansNoValueWaitsForItsCaller` and
+`AFunctionThatReturnsWhatItsOwnCallReturnsShowsNothing` cover how a callee and
+the callers that hand its result back are settled together;
+`AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt` and
+`AnotherRegisterAsEnteredShowsNothing` what a register handed back as the
+function entered it means;
+`AConstantBesideAPathThatNeverWroteTheRegisterIsNoValue`,
+`AConstantBesideTheResultOfAFunctionThatReturnsNoneIsNot` and
+`AConstantIsADeliberateValue` what a constant beside a path that hands back
+nothing means; `AResultOnlyUnreadViewsOfTheRegisterReadIsNotRead`,
+`TheBytesASetccMergesOverReadNothing`,
+`AnAndWithAZeroExtendedByteReadsOneByte`,
+`AnOperationPassesOnOnlyTheBytesReadOfIt`,
+`AWordInsertedIntoAVectorReadsNoneOfItsOtherLanes`,
+`WhatSomethingUnseenMayReadIsRead` and
+`AnotherRegisterIsReadWhereSomethingUnseenMayTakeIt` which bytes of a call's
+result a caller reads; and
+`SysVCallContract.AFunctionAndTheWrapperThatHandsItsResultBackRun`,
+`TheBytesACallThatReturnsNothingLeftReachNoValue`,
+`AConstantTheCodeHeldIsNoResult` and
+`AFloatResultReadsNoIntegerItsFunctionHandsBack` compile and run the C of
+such functions, which a null argument must not trap.
+`SysVCallContract.ACalleeThatLeavesForUnknownCodeStillReadsItsArguments`
+checks that a function which only hands its arguments to a callee ending in
+a jump through a pointer still takes them, and that a tail jump to it passes
+them. Copied import addresses and callable values use the same
 bounded slot proof as call ABI recovery. The x86/x64/ARM32/ARM64 cases cover
 COFF, ELF and Mach-O, including numeric collisions, dynamic addresses, cycles,
 segment overrides and nonvoid declarations.
