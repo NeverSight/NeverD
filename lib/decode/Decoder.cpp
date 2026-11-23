@@ -217,8 +217,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   MIPSISARevision = Revision;
   MIPSHistoricalISA = Historical;
   MIPSNeedsDecodeGuard =
-      NewMIPS &&
-      (Revision == 6 || (Revision == 5 && Mode == InstructionMode::MicroMIPS));
+      NewMIPS && (Revision == 6 || Historical ||
+                  (Revision == 5 && Mode == InstructionMode::MicroMIPS));
   MIPSInvalidAddressBits = mipsInvalidAddressBits(TheArch, Mode);
   Detail = true;
   Text = true;
@@ -239,9 +239,8 @@ void Decoder::configureFor(const BinaryImage &Img) {
     MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP,
                         Img.MIPS && Img.MIPS->HasDSPR2);
     MIPSNeedsDecodeGuard =
-        !MIPSHistoricalISA &&
-        (MIPSISARevision == 6 || MIPS->hasClassicDSP64() ||
-         (MIPSISARevision == 5 && CurrentMode == InstructionMode::MicroMIPS));
+        MIPSISARevision == 6 || MIPSHistoricalISA || MIPS->hasClassicDSP64() ||
+        (MIPSISARevision == 5 && CurrentMode == InstructionMode::MicroMIPS);
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
     MIPS->setScalarFPEnabled(Img.MIPS && Img.MIPS->hasScalarFPABI(Img.Arch),
                              Img.MIPS && Img.MIPS->hasScalarFP32ABI(Img.Arch));
@@ -326,6 +325,19 @@ bool Decoder::beginDecode(DecodedInsn &Out) {
   return advanceAArch64DecodeGeneration();
 }
 
+namespace {
+// The historical selector table must not expand every common decode entry.
+LLVM_ATTRIBUTE_NOINLINE bool historicalMIPSWordAvailable(const uint8_t *Bytes,
+                                                         size_t Len,
+                                                         Arch Target,
+                                                         unsigned Level) {
+  return Len >= 4 &&
+         mips::historicalInstructionAvailable(
+             readTargetEndian<uint32_t>(Bytes, archLittleEndian(Target)),
+             Level);
+}
+} // namespace
+
 LLVM_ATTRIBUTE_ALWAYS_INLINE bool
 Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   InsnBuf->illegal = false;
@@ -380,20 +392,21 @@ int Decoder::decodeMIPSOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   if (Addr & MIPSInvalidAddressBits)
     return 0;
   InsnBuf->illegal = false;
+  bool Decoded = false;
   if (MIPSNeedsDecodeGuard) {
-    if (!decodeMIPSProfile(Bytes, Len, Addr))
-      return 0;
-  } else {
-    if (MIPSHistoricalISA &&
-        (Len < 4 ||
-         !mips::historicalInstructionAvailable(
-             readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch)),
-             MIPSHistoricalISA)))
-      return 0;
-    if (!Mips_disasmOne(Handle, Bytes, Len, Addr, InsnBuf) &&
-        !decodeMIPSASE(Bytes, Len, Addr))
-      return 0;
+    if (MIPSHistoricalISA) {
+      if (!historicalMIPSWordAvailable(Bytes, Len, TargetArch,
+                                       MIPSHistoricalISA))
+        return 0;
+    } else {
+      if (!decodeMIPSProfile(Bytes, Len, Addr))
+        return 0;
+      Decoded = true;
+    }
   }
+  if (!Decoded && !Mips_disasmOne(Handle, Bytes, Len, Addr, InsnBuf) &&
+      !decodeMIPSASE(Bytes, Len, Addr))
+    return 0;
   Out.Addr = InsnBuf->address;
   Out.Size = InsnBuf->size;
   Out.Id = InsnBuf->id;
