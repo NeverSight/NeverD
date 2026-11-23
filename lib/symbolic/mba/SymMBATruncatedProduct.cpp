@@ -80,7 +80,7 @@ SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
         break;
       if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
         return {};
-      const uint64_t Shift = Ctx.constValue(Count).urem(Width);
+      const unsigned Shift = Ctx.constantRotateAmount(Count, Width);
       Offset = (Offset + (Op == SymOp::Ror ? Shift : Width - Shift)) % Width;
       Source = Ctx.operand(Source, 0);
       continue;

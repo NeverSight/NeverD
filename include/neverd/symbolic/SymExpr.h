@@ -360,6 +360,8 @@ public:
   /// Little-endian words of a constant. As with operands(), a builder that
   /// interns another node can invalidate this view.
   llvm::ArrayRef<uint64_t> constWords(SymRef R) const;
+  /// A constant rotation count reduced modulo the nonzero operand width.
+  unsigned constantRotateAmount(SymRef Count, unsigned Width) const;
   /// The value of \p R when it is a constant, otherwise nothing.
   std::optional<llvm::APInt> asConst(SymRef R) const;
   /// Prove an at-most-64-bit window constant without changing the DAG. Work

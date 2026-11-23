@@ -588,7 +588,7 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
       const auto Count = operand(A, 1);
       if (!isConst(Count))
         break;
-      const auto By = constValue(Count).urem(Have);
+      const auto By = constantRotateAmount(Count, Have);
       At = (At + (Outer == SymOp::Ror ? By : Have - By)) % Have;
     }
     std::optional<detail::WordWindow> Selected;
