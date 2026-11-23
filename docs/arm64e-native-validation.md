@@ -1757,6 +1757,14 @@ recipe with the signing-PC offset. Ordinary compact mode cannot authorize
 these PC-signed words. The final verifier checks the complete emitted recipe
 and rejects removal of the signing CFI.
 
+Frozen LLVM r6 emits an indexed DWARF fallback for the same retained bodies.
+NeverD compares the relocated B-key FDE with the source compact frame. The CFA,
+every GPR and D-register save, the PC-dependent signing row and the
+`PACIBSPPC` instruction must agree before publication uses mode 5. For a
+compact-only image this check uses private storage. Mixed
+images retain the indexed functions and relocate their CIE back-references,
+personality slots, LSDA fields and compact DWARF indexes.
+
 The Xcode 27 diagnostic reproduced a transport difference: the input object
 contained `0x05002515`, but the Apple-linked image contained `0x04000515`.
 Regular LLVM object emission therefore retains DWARF for nonzero signing-PC

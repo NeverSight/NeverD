@@ -12,6 +12,7 @@
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/analysis/LLVMPrivateFrameAccesses.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/codegen/DwarfEHFrame.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
@@ -27,10 +28,12 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -54,6 +57,7 @@
 
 #include <climits>
 #include <iterator>
+#include <map>
 #include <tuple>
 
 namespace neverd {
@@ -575,8 +579,8 @@ struct AddressExpansion {
 // can leave two DW_CFA_advance_loc instructions for one unchanged interval.
 bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
                     llvm::ArrayRef<CFIInstruction> New, uint64_t CodeSize = 0,
-                    uint64_t Alignment = 1,
-                    const AddressExpansion &Growth = {}) {
+                    uint64_t Alignment = 1, const AddressExpansion &Growth = {},
+                    bool AllowPCSigning = false) {
   // The decoder advances monotonically. Check even a final advance with no
   // subsequent rule, which would otherwise disappear from the comparison.
   const auto InRange = [Alignment](auto Program, uint64_t Size) {
@@ -595,7 +599,7 @@ bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
   auto Before = llvm::make_filter_range(Old, Effective);
   auto After = llvm::make_filter_range(New, Effective);
   return llvm::all_of(Before,
-                      [](const auto &I) {
+                      [AllowPCSigning](const auto &I) {
                         switch (I.Kind) {
                         case CFIOpKind::DefCFA:
                         case CFIOpKind::DefCFARegister:
@@ -607,6 +611,8 @@ bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
                         case CFIOpKind::RestoreState:
                         case CFIOpKind::GnuArgsSize:
                           return true;
+                        case CFIOpKind::NegateRAStateWithPC:
+                          return AllowPCSigning;
                         default:
                           return false;
                         }
@@ -772,8 +778,114 @@ bool sameCompactFrameRows(const ExceptionFunction &Original,
          CIE->UsesArm64eReturnAddressABI &&
          CIE->ReturnAddressRegister == aarch64_unwind::kLR &&
          sameSpillRules({Initial}, CIE->InitialInstructions) &&
-         sameSpillRules(Rows, Frame->Instructions, Frame->AddressRange,
-                        CIE->CodeAlignmentFactor);
+         sameSpillRules(
+             Rows, Frame->Instructions, Frame->AddressRange,
+             CIE->CodeAlignmentFactor, {},
+             Original.Compact->ReturnAddressSigningOffset.has_value());
+}
+
+// Discard just the fallback FDEs whose complete rules are represented by
+// compact unwind. A mixed object still needs its original indexed functions,
+// including their shared CIE, personality slots and LSDA pointers.
+llvm::Error
+retainIndexedFrames(CompiledSection &EH, va_t SectionVA,
+                    const dwarf_eh::ParseResult &Frames,
+                    const llvm::DenseSet<va_t> &Replaced,
+                    llvm::MutableArrayRef<NativeMachOCompactRange> Ranges) {
+  auto Records = decodeDwarfEHFrameRecords(EH.ExternalBytes, EH.VA, true);
+  if (!Records)
+    return Records.takeError();
+  if (Records->size() != Frames.FDEs.size())
+    return refuse(kIndexedFrameRelocation);
+  if (Replaced.size() == Records->size()) {
+    EH.ExternalBytes.clear();
+    EH.Size = 0;
+    return llvm::Error::success();
+  }
+  std::map<uint64_t, uint64_t> Kept;
+  llvm::DenseMap<uint64_t, uint64_t> CIEs;
+  for (const auto &F : Frames.FDEs) {
+    if (Replaced.contains(F.SectionOffset))
+      continue;
+    Kept.try_emplace(F.CIESectionOffset);
+    Kept.try_emplace(F.SectionOffset);
+    CIEs.try_emplace(F.SectionOffset, F.CIESectionOffset);
+  }
+  const llvm::ArrayRef<uint8_t> Bytes(EH.ExternalBytes);
+  std::vector<uint8_t> Packed;
+  for (auto &[Old, New] : Kept) {
+    New = Packed.size();
+    const auto *Header = Bytes.data() + Old;
+    const auto Length = readLE<uint32_t>(Header);
+    const auto Size =
+        Length == dweh::kDwarf64LengthEscape
+            ? dweh::kRecordLengthSize + dweh::kDwarf64LengthSize +
+                  readLE<uint64_t>(Header + dweh::kRecordLengthSize)
+            : dweh::kRecordLengthSize + Length;
+    llvm::append_range(Packed, Bytes.slice(Old, Size));
+  }
+  // A copied CFI program keeps its code-relative row locations. Only the
+  // CIE back-reference and section-relative pointer fields move.
+  const auto MovePointer = [&](const DwarfEHFramePointer &P, uint64_t Shift,
+                               bool Nullable) {
+    if (!Shift || (Nullable && !P.Value))
+      return true;
+    if (dweh::getApplication(P.Encoding) != dweh::PCRel)
+      return false;
+    const auto Offset = P.Offset - Shift;
+    const unsigned Wide = sizeof(va_t) * CHAR_BIT + 1;
+    const auto Delta =
+        llvm::APInt(Wide, P.Value) - llvm::APInt(Wide, EH.VA + Offset);
+    if (!Delta.isSignedIntN(P.Width * CHAR_BIT) || (Nullable && Delta.isZero()))
+      return false;
+    const auto Value = Delta.getLoBits(P.Width * CHAR_BIT).getZExtValue();
+    if (P.Width == sizeof(uint32_t))
+      writeLE<uint32_t>(Packed.data() + Offset, Value);
+    else if (P.Width == sizeof(uint64_t))
+      writeLE<uint64_t>(Packed.data() + Offset, Value);
+    else
+      return false;
+    return true;
+  };
+  for (const auto &F : *Records) {
+    const auto Old = F.RecordVA - EH.VA;
+    if (Replaced.contains(Old))
+      continue;
+    const auto Owner = CIEs.find(Old);
+    if (Owner == CIEs.end())
+      return refuse(kIndexedFrameRelocation);
+    const auto CIE = Owner->second;
+    const auto Shift = Old - Kept.at(Old);
+    const auto Field = F.InitialLocationOffset - Shift;
+    const bool Extended =
+        readLE<uint32_t>(Bytes.data() + Old) == dweh::kDwarf64LengthEscape;
+    const auto ID = Field - (Extended ? sizeof(uint64_t) : sizeof(uint32_t));
+    if (Extended)
+      writeLE<uint64_t>(Packed.data() + ID, ID - Kept.at(CIE));
+    else
+      writeLE<uint32_t>(Packed.data() + ID, ID - Kept.at(CIE));
+    if (!MovePointer({F.InitialLocationOffset, F.BeginVA,
+                      F.InitialLocationEncoding, F.InitialLocationWidth},
+                     Shift, false) ||
+        (F.Personality &&
+         !MovePointer(*F.Personality, CIE - Kept.at(CIE), true)) ||
+        (F.LSDA && !MovePointer(*F.LSDA, Shift, true)))
+      return refuse(kIndexedFrameRelocation);
+  }
+  const auto Base = EH.VA - SectionVA;
+  for (auto &Range : Ranges) {
+    if ((Range.Encoding & macho_unwind::kModeMask) !=
+        macho_unwind::kARM64ModeDwarf)
+      continue;
+    const auto Mask = macho_unwind::kDwarfSectionOffsetMask;
+    const auto It = Kept.find((Range.Encoding & Mask) - Base);
+    if (It == Kept.end())
+      return refuse(kIndexedFrameRelocation);
+    Range.Encoding = (Range.Encoding & ~Mask) | uint32_t(Base + It->second);
+  }
+  EH.ExternalBytes = std::move(Packed);
+  EH.Size = EH.ExternalBytes.size();
+  return llvm::Error::success();
 }
 
 // A classic PACIBSP frame may be indexed by DWARF even when the original
@@ -1377,6 +1489,63 @@ bool placeLiteralUsersLast(llvm::Module &M,
   return Changed;
 }
 } // namespace
+
+llvm::Error restoreMachOLiftedCompactFrames(
+    const BinaryImage &Original, const BinaryImage &Layout,
+    const llvm::DenseMap<va_t, const ExceptionFunction *> &Sources,
+    const CompiledImage &Image, va_t Slide, va_t EHSectionVA,
+    CompiledSection &EH,
+    llvm::MutableArrayRef<NativeMachOCompactRange> Ranges) {
+  const auto NeedsCompact = [&](const NativeMachOCompactRange &Range) {
+    return (Range.Encoding & macho_unwind::kModeMask) ==
+               macho_unwind::kARM64ModeDwarf &&
+           Sources.contains(Range.BeginVA);
+  };
+  if (llvm::none_of(Ranges, NeedsCompact))
+    return llvm::Error::success();
+
+  const auto Frames = dwarf_eh::parseEHFrame(
+      Layout, {EH.ExternalBytes.data(), EH.ExternalBytes.size(), EH.VA}, {});
+  llvm::DenseMap<va_t, const DwarfFDE *> FDEs;
+  for (const auto &Frame : Frames.FDEs)
+    FDEs.try_emplace(Frame.InitialLocation, &Frame);
+  Decoder Decode;
+  if (!Decode.init(Original))
+    return refuse(kLeafCode);
+  llvm::DenseSet<va_t> Replaced;
+  for (auto &Range : Ranges) {
+    if (!NeedsCompact(Range))
+      continue;
+    const auto &Source = *Sources.lookup(Range.BeginVA);
+    const auto &Compact = *Source.Compact;
+    const auto *FDE = FDEs.lookup(Range.BeginVA);
+    const auto Offset = *Compact.ReturnAddressSigningOffset;
+    constexpr auto Word = aarch64::kInsnSize;
+    if (Source.Dwarf || !FDE ||
+        (Range.Encoding & macho_unwind::kDwarfSectionOffsetMask) !=
+            EH.VA - EHSectionVA + FDE->SectionOffset ||
+        !rangeInBounds(Offset, Word, Range.EndVA - Range.BeginVA) ||
+        Range.BeginVA < Image.BaseVA ||
+        !rangeInBounds(Range.BeginVA - Image.BaseVA,
+                       Range.EndVA - Range.BeginVA, Image.Bytes.size()))
+      return refuse(kLeafFrame);
+    const auto *Sign =
+        Image.Bytes.data() + (Range.BeginVA - Image.BaseVA) + Offset;
+    DecodedInsn Insn{};
+    if (Decode.decodeOne(Sign, Word, Range.BeginVA + Offset, Insn) != Word ||
+        Insn.Id != AARCH64_INS_PACIBSPPC)
+      return refuse(kLeafFrame);
+    auto Rows = machOCompactFrameRows(Compact);
+    Rows.push_back(
+        {.Kind = CFIOpKind::NegateRAStateWithPC, .CodeOffset = Offset + Word});
+    if (!sameCompactFrameRows(Source, Frames, FDE, Range, Slide, Rows,
+                              kBKeyFrameAugmentation))
+      return refuse(kLeafFrame);
+    Range.Encoding = Compact.NativeEncoding & ~macho_unwind::kPersonalityMask;
+    Replaced.insert(FDE->SectionOffset);
+  }
+  return retainIndexedFrames(EH, EHSectionVA, Frames, Replaced, Ranges);
+}
 
 llvm::Expected<PatchResult>
 MachOPatcher::installLiftedLeaves(llvm::Module &Module,

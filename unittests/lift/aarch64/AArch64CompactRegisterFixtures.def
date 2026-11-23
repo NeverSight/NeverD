@@ -22,8 +22,6 @@ SAVED_TEXT(kLanguageFlag, "-DTEST_LANGUAGE_FRAME")
 SAVED_TEXT(kCXXRuntime, "-lc++")
 SAVED_TEXT(kPAuthLRFlag, "-DTEST_PAUTH_LR=")
 SAVED_TEXT(kPAuthLRImages, "structural_pauth_lr_images")
-SAVED_TEXT(kPAuthLRMCUnavailable,
-           "PAuth_LR compact publication requires the updated LLVM fork")
 SAVED_TEXT(kPAuthLRCFI, ".cfi_negate_ra_state_with_pc\n")
 SAVED_TEXT(kMissingPAuthLRCFI, "")
 SAVED_TEXT(kLinkerCompactWord, "linker_compact_word_before_fixture_encoding")
@@ -42,6 +40,8 @@ SAVED_VALUE(int, kPAuthLRUnavailableCode, 2)
 SAVED_VALUE(unsigned, kCompactPAuthLRMode, 0x05000000)
 SAVED_VALUE(unsigned, kPAuthLRShift, 12)
 SAVED_VALUE(unsigned, kPAuthLRNonzeroOffset, 8)
+// The signing row requires DW_CFA_advance_loc2 in the indexed fallback.
+SAVED_VALUE(unsigned, kPAuthLRWideOffset, 256)
 SAVED_TEXT(kCFISpill, ".cfi_offset ")
 SAVED_TEXT(kCFISeparator, ", ")
 SAVED_VALUE(unsigned, kCompactFrameMode, 0x04000000)
@@ -67,6 +67,48 @@ SAVED_VALUE(auto, kCompactPairCases,
                 {0x400, 12, true},
                 {0x800, 14, true},
             }}))
+
+SAVED_TEXT(kIndexedPeer, "leaf_indexed_cleanup")
+SAVED_TEXT(kIndexedPeerBody, R"asm(
+.text
+.globl _leaf_indexed_cleanup
+.p2align 2
+_leaf_indexed_cleanup:
+Lpeer_begin:
+.cfi_startproc
+.cfi_b_key_frame
+.cfi_personality 155, ___gxx_personality_v0
+.cfi_lsda 16, Lpeer_lsda
+  pacibsp
+  stp x29, x30, [sp, #-16]!
+  mov x29, sp
+.cfi_def_cfa x29, 16
+.cfi_offset x30, -8
+.cfi_offset x29, -16
+.cfi_escape 0x2e, 0
+Lpeer_guard:
+  add x0, x0, x1
+Lpeer_guard_end:
+  ldp x29, x30, [sp], #16
+  retab
+Lpeer_cleanup:
+  ldp x29, x30, [sp], #16
+  autibsp
+  b __Unwind_Resume
+.cfi_endproc
+.pushsection __TEXT,__gcc_except_tab
+.p2align 2
+Lpeer_lsda:
+.byte 255, 255, 1
+.uleb128 Lpeer_sites_end-Lpeer_sites
+Lpeer_sites:
+.uleb128 Lpeer_guard-Lpeer_begin
+.uleb128 Lpeer_guard_end-Lpeer_guard
+.uleb128 Lpeer_cleanup-Lpeer_begin
+.byte 0
+Lpeer_sites_end:
+.popsection
+)asm")
 
 // The frame pointer anchors the unwind recipe independently of a further
 // stack reservation. No DWARF-only operation forces a fallback from compact.
@@ -247,27 +289,38 @@ Lzero\@:
   restore
 #ifdef TEST_PAUTH_LR
   .long 0x5520001f | ((.-Lsign\@)/4)<<5
+#else
+  retab
+#endif
+#ifdef TEST_LANGUAGE_FRAME
+Lcleanup\@:
+  restore
+#ifdef TEST_PAUTH_LR
+  .long 0xf3a0001f | ((.-Lsign\@)/4)<<5
+#else
+  autibsp
+#endif
+  b __Unwind_Resume
+#endif
+#ifdef TEST_PAUTH_LR
 Lend\@:
-// Independently spell the source object's compact entry. This permits old
-// Apple assemblers to supply the new mode without using NeverD's MC producer.
+// Independently spell the source object's compact entry. Apple assemblers can
+// supply the new mode even when their MC compact encoder predates PAuth_LR.
 .section __LD,__compact_unwind,regular,debug
 .p2align 3
 .quad \name
 .long Lend\@-\name
+#ifdef TEST_LANGUAGE_FRAME
+.long 0x45000000 | TEST_COMPACT_PAIRS | (TEST_PAUTH_LR/4)<<12
+.quad ___gxx_personality_v0, Lexception\@
+#else
 .long 0x05000000 | TEST_COMPACT_PAIRS | (TEST_PAUTH_LR/4)<<12
 .quad 0, 0
+#endif
 .text
 #else
-  retab
-#ifdef TEST_LANGUAGE_FRAME
-// A leaf has no throwing call. Retain its cleanup region and personality for
-// system walks; live-LR exception delivery needs a separate validated bridge.
-Lcleanup\@:
-  restore
-  autibsp
-  b __Unwind_Resume
-#endif
 .cfi_endproc
+#endif
 #ifdef TEST_LANGUAGE_FRAME
 .pushsection __TEXT,__gcc_except_tab
 .p2align 2
@@ -281,7 +334,6 @@ Lsites\@:
 .byte 0
 Lsites_end\@:
 .popsection
-#endif
 #endif
 .endm
 function _leaf_sum, add
