@@ -642,10 +642,15 @@ SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                             size_t &Storage, bool *EmittedReading);
 
-/// Truncate products of repeated affine offsets on the same arbitrary word
-/// modulo the observed width. The caller has established a mixed product.
+/// Return the low field when the factor weight makes its upper lanes and
+/// products of two such disturbances vanish at the observed precision.
+SymRef projectedHighField(const SymContext &Ctx, SymRef Word, unsigned Zeros,
+                          unsigned Precision);
 bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
                        unsigned Bits);
+
+/// Truncate products of repeated affine offsets on the same arbitrary word
+/// modulo the observed width. The caller has established a mixed product.
 SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
                             WorkBudget &Budget, size_t &Storage,
                             bool *EmittedReading);

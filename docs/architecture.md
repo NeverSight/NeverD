@@ -7078,7 +7078,19 @@ bounded exponentiation and a prefix/suffix scan. It compares both methods
 against the remaining work and storage before constructing the result. The solver
 combines equal fields at their live width and appends the constant low bits.
 This computation retains every live coefficient bit across machine-word
-boundaries. A bitwise expression in which each abstract input occurs once
+boundaries. When only some pairs of perturbations vanish, the product reader
+can collect that subset and keep the other factors as full-width multipliers.
+Two high-weight factors can share a row when their offsets, weights and
+observable low fields agree. Their multiplicity contributes to both the offset
+product and its cofactor. The remaining factors may still observe differences
+between sign extensions, zero extensions and concatenations of the same field.
+A prepared evaluation plan can use the trailing zeros of a concatenated
+literal tail to multiply the other factors at the demanded precision.
+Constant rotation counts use native remainder when their value fits in a
+single limb. For power-of-two carrier widths, only the low count bits are
+needed. A pair of distinct wide variables has a canonical bitwise ordering
+without constructing a word-sized neutral mask.
+A bitwise expression in which each abstract input occurs once
 already uses the minimum number of binary operations for that reading.
 The region solver can use it directly and still check alternative input
 relations after restoring the original expressions. A one-bit XOR over

@@ -276,9 +276,9 @@ def multiple_residual_elf(degree, neighbor=False):
     return elf(code), "x+y+z+" + str(scale) + "U*" + "*".join(factors)
 
 
-def masked_join_elf(degree, *, wrapped=False):
+def masked_join_elf(degree, *, wrapped=False, low_factors=()):
     rng = random.Random(1971 + degree)
-    scale = 1 << 18
+    scale = 1 << (16 if low_factors else 18)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
     for i in range(degree):
@@ -298,7 +298,10 @@ def masked_join_elf(degree, *, wrapped=False):
         code += bytes.fromhex("4409c1 4409c9" if axis else "4431c1 4431c9")
         code += bytes.fromhex("c1c9") + bytes([(at - 8) % 32])  # field in CH
         code += bytes.fromhex("0fbecd" if i % 3 == 0 else "0fb6cd")
-        weight, offset = (2 * i + 3) << (6 + axis), 2 * i + 1
+        shift = 6 + axis
+        if low_factors:
+            shift = 1 + i % 3 if i in low_factors else 8
+        weight, offset = (2 * i + 3) << shift, 2 * i + 1
         code += bytes.fromhex("69c9") + struct.pack("<I", weight)
         code += bytes.fromhex("81c1") + struct.pack("<I", offset) + bytes.fromhex("0fafc1")
         op = "|" if axis else "^"
@@ -644,7 +647,7 @@ def source_operations(text):
 
 
 def run_fixture(worker, cli, compiler, kind, image, expected):
-    def enhanced_shape(text):
+    def enhanced_shape(text, llvm):
         code = source_operations(text)
         if kind in ("affine-residue-neighbor", "prefix-residue-neighbor"):
             assert ">>" in code, text
@@ -675,6 +678,9 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind.startswith("funnel-perturbation-mixed-valuation-"):
+            limit = 5 if kind.endswith("-73") else 9
+            assert code.count("*") <= limit + (2 if llvm else 0), text
         elif kind in ("funnel-perturbation-masked-join-89", "funnel-perturbation-masked-wrap-103"):
             assert code.count("*") <= 6, text
         elif kind.startswith(("funnel-perturbation-masked-", "funnel-perturbation-overlap-")):
@@ -744,7 +750,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 ordinary = source(client, representation, False)
                 enhanced = source(client, representation, True)
                 function_name(enhanced)
-                enhanced_shape(enhanced)
+                enhanced_shape(enhanced, representation == "llvmc")
                 if representation == "source":
                     code = source_operations(ordinary)
                     if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
@@ -785,7 +791,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                                    check=True, capture_output=True, text=True,
                                    timeout=DECOMPILE_TIMEOUT_SECONDS)
                     text = output.read_text(encoding="utf-8")
-                    enhanced_shape(text)
+                    enhanced_shape(text, llvm)
                     outputs[name] = text
 
         if compiler:
@@ -864,6 +870,10 @@ if __name__ == "__main__":
                 81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
             ("funnel-perturbation-masked-join-89", *masked_join_elf(89)),
             ("funnel-perturbation-masked-wrap-103", *masked_join_elf(103, wrapped=True)),
+            ("funnel-perturbation-mixed-valuation-73",
+             *masked_join_elf(73, wrapped=True, low_factors=(29,))),
+            ("funnel-perturbation-mixed-valuation-117",
+             *masked_join_elf(117, wrapped=True, low_factors=(19, 51, 93))),
             *((f"funnel-perturbation-blended-{degree}", *high_perturbation_elf(
                 degree, shift_base=6, affine_depth=1, observed=14, blended_fields=True))
               for degree in (47, 99)),
