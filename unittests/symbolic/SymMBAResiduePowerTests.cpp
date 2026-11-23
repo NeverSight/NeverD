@@ -310,7 +310,7 @@ TEST(SymMBAResiduePowers, MixedValuationsRetainTheCompleteLowWeightFactors) {
     const auto Upper = C.mkExtract(Y, Bits, Width - Bits);
     const auto Perturb = llvm::APInt::getSignMask(Bits);
     auto Offset = [&](unsigned I) {
-      return llvm::APInt(Width, I == 41 ? 6 : 2 * (I % 7) + 1);
+      return llvm::APInt(Width, I == 41 && Bits != 65 ? 6 : 2 * (I % 7) + 1);
     };
     auto Weight = [&](unsigned I) {
       const bool Residual = I == 19 || I == 80 || I == 277;
@@ -362,6 +362,51 @@ TEST(SymMBAResiduePowers, MixedValuationsRetainTheCompleteLowWeightFactors) {
     }
     Options.MaxTableBytes = 1;
     EXPECT_EQ(simplifyMBADeep(C, Input, Options).Expr, Input);
+  }
+}
+
+TEST(SymMBAResiduePowers, HighestFieldBitMovesIntoTheProductOffset) {
+  constexpr unsigned Width = 257, Count = 65;
+  for (unsigned Bits : {7u, 64u, 65u}) {
+    SCOPED_TRACE(Bits);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Field = C.mkExtract(X, 3, Bits);
+    const auto Flipped =
+        C.mkXor(Field, C.mkConst(llvm::APInt::getSignMask(Bits)));
+    const unsigned Shift = Bits + 1, Precision = Shift + Bits;
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Precision);
+    const auto Kept =
+        C.mkAdd(C.mkConst(Width, 5), C.mkMul(C.mkConst(Width, 6), Y));
+    llvm::SmallVector<SymRef, 128> Factors{C.mkConst(Scale), Kept};
+    // Each pair contributes 1 - weight * 2^(Bits-1); the two linear
+    // dependences on X cancel at the observed precision.
+    auto Reference = Scale;
+    for (unsigned I = 0; I < Count; ++I) {
+      const auto Weight = llvm::APInt(Width, 2 * I + 1).shl(Shift);
+      const auto Left = C.mkSExt(Field, Width);
+      const auto Right =
+          C.mkConcat(C.mkExtract(Y, Bits, Width - Bits), Flipped);
+      Factors.push_back(
+          C.mkAdd(C.mkConst(Width, 1), C.mkMul(C.mkConst(Weight), Left)));
+      Factors.push_back(
+          C.mkAdd(C.mkConst(Width, 1), C.mkMul(C.mkConst(-Weight), Right)));
+      Reference *= 1 - Weight.shl(Bits - 1);
+    }
+    MBAOptions Options;
+    Options.MaxWork = 65536;
+    const auto R = simplifyMBADeep(C, C.mkMul(Factors), Options);
+    llvm::SmallVector<uint32_t, 4> Live;
+    C.collectVars(R.Expr, Live);
+    ASSERT_EQ(Live.size(), 1u);
+    EXPECT_EQ(Live.front(), C.varId(Y));
+    EXPECT_LT(R.Work, Options.MaxWork);
+    SymEvalPlan Plan(C, R.Expr);
+    for (uint64_t I = 0; I != 32; ++I) {
+      const std::array Values{llvm::APInt(Width, I).shl(4),
+                              llvm::APInt(Width, 7 * I)};
+      EXPECT_EQ(Plan.eval(Values), Reference * (5 + 6 * Values[1]));
+    }
   }
 }
 

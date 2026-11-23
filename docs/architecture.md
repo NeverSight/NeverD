@@ -7081,7 +7081,10 @@ This computation retains every live coefficient bit across machine-word
 boundaries. When only some pairs of perturbations vanish, the product reader
 can collect that subset and keep the other factors as full-width multipliers.
 Two high-weight factors can share a row when their offsets, weights and
-observable low fields agree. Their multiplicity contributes to both the offset
+observable low fields agree. Toggling the highest bit of a field adds half
+its modulus. The reader moves that adjustment into the constant before
+combining weights, including when the two remaining coefficients cancel.
+The multiplicity of a shared row contributes to both the offset
 product and its cofactor. The remaining factors may still observe differences
 between sign extensions, zero extensions and concatenations of the same field.
 A prepared evaluation plan can use the trailing zeros of a concatenated

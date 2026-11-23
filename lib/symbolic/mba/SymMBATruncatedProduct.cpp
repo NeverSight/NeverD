@@ -916,6 +916,7 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   llvm::SmallDenseMap<uint32_t, Coefficient, 8> Weights;
   Coefficient Suffix = Low(Unit.getRawData());
   Coefficient Correction = Low(llvm::APInt::getZero(Bits).getRawData());
+  bool FoldedSignBit = false;
   for (size_t I = Rows.size(); I-- != 0;) {
     const auto &F = Rows[I];
     Coefficient C = LiveWeight(F.Weight);
@@ -932,6 +933,15 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
       Word = Ctx.operand(Word, 0);
       Correction += C;
       C = -C;
+    }
+    // Flipping the highest live bit adds half the modulus. Move this
+    // constant into the offset before combining weights of the same field.
+    if (Ctx.op(Word) == SymOp::Xor && Ctx.numOperands(Word) == 2 &&
+        Ctx.isConst(Ctx.operand(Word, 0)) &&
+        Ctx.constValue(Ctx.operand(Word, 0)).isSignMask()) {
+      Word = Ctx.operand(Word, 1);
+      Correction += C << (Bits - 1);
+      FoldedSignBit = true;
     }
     auto [It, Inserted] = Weights.try_emplace(Word.index(), C);
     if (!Inserted)
@@ -952,18 +962,46 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     return {};
   Budget.consume(Edges * EdgeWork);
   Storage -= Edges * PerEdge;
-  llvm::SmallVector<SymRef, 8> Sum{
-      Ctx.mkConst(Product.extractBits(Bits, Shift))};
+  const auto Offset = Product.extractBits(Bits, Shift);
+  llvm::SmallVector<SymRef, 8> Sum{Ctx.mkConst(Offset)};
+  SymRef Matched;
+  size_t MatchIndex = 0;
   for (const auto &[Index, C] : Weights) {
     const auto K = Value(C);
-    if (!K.isZero())
+    if (!K.isZero()) {
+      if (FoldedSignBit && K == Offset) {
+        Matched = SymRef(Index);
+        MatchIndex = Sum.size();
+      }
       Sum.push_back(Ctx.mkMul(Ctx.mkConst(K), SymRef(Index)));
+    }
+  }
+  auto Upper = Ctx.mkAdd(Sum);
+  if (FoldedSignBit && Sum.size() > 1 && (Matched || Offset.isAllOnes()) &&
+      Edges <= Storage / PerEdge && Budget.canConsume(Edges * EdgeWork)) {
+    Budget.consume(Edges * EdgeWork);
+    Storage -= Edges * PerEdge;
+    // Flipping the sign bit can make the offset equal a surviving weight.
+    // k + k*x = -k*~x. With offset -1 the whole sum can be complemented.
+    if (Matched)
+      Sum[MatchIndex] = Ctx.mkMul(Ctx.mkConst(-Offset), Ctx.mkNot(Matched));
+    else {
+      Sum.resize(1);
+      for (const auto &[Index, C] : Weights)
+        if (auto K = Value(C); !K.isZero())
+          Sum.push_back(Ctx.mkMul(Ctx.mkConst(-K), SymRef(Index)));
+    }
+    auto Alternative = Ctx.mkAdd(llvm::ArrayRef(Sum).drop_front());
+    if (!Matched)
+      Alternative = Ctx.mkNot(Alternative);
+    if (readingScore(Ctx, Alternative) < readingScore(Ctx, Upper))
+      Upper = Alternative;
   }
   // The bottom Shift bits are constant. The outer scale contributes the
   // remaining low zeros of the carrier, leaving just Bits arithmetic bits.
   const auto Tail =
       Product.trunc(Shift).zext(Width - Bits).shl(Width - Precision);
-  return Ctx.mkConcat(Ctx.mkAdd(Sum), Ctx.mkConst(Tail));
+  return Ctx.mkConcat(Upper, Ctx.mkConst(Tail));
 }
 
 // The shared cofactor accounts for every occurrence, including equal factors
