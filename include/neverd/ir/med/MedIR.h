@@ -695,6 +695,11 @@ struct MedFunc {
   /// register (settleFloatReturnsByCallers): a floating value its body
   /// holds at a return is no result.
   bool CallersReadIntegerResult = false;
+  /// Some return of this function holds in the floating-point return
+  /// register what a callee that returns no float left there
+  /// (bindFloatCallResults): the function returns none either, whatever
+  /// another of its returns holds.
+  bool ReturnHoldsNoFloat = false;
 
   std::vector<MedTypedParam> TypedParams;
   /// The width (4 or 8 bytes) of the scalar each floating-point argument

@@ -225,6 +225,84 @@ void settleFloatReturnsByCallers(const BinaryImage &Img, PipelineResult &Result,
       inferMedTypes(*MF, Img.Arch, &Result.CallFloatReturns.get());
     }
 }
+
+/// Whether some path to a RETURN of \p Func leaves in the vector return
+/// register what a call to a function of this image that returns no float
+/// left there (\p Lifted holds the image's functions, \p FloatReturns those
+/// that return one).  A function that returns a float holds one at every
+/// return.  sqlite's sumStep jumps to a helper whose body ends with a
+/// double in XMM0 on one path and returns after integer helpers on the
+/// others: it returns none, and its other returns must not read one.  Code
+/// this image does not hold, and a callee reached through a pointer, may
+/// return a float nothing has typed, so what such a call leaves shows
+/// nothing; neither does the register as the function was entered, which
+/// may be its own argument.
+bool returnHoldsACalleesLeftover(
+    const MedFunc &Func, const TargetRegInfo &TRI, Arch Target,
+    const std::map<va_t, uint16_t> &FloatReturns,
+    const std::map<va_t, const MedFunc *> &Lifted) {
+  const auto Writes = [&](const MedVar &Value) {
+    return Value.Kind == MedVar::Reg && Value.Size &&
+           Value.RegOff == TRI.FPReturnReg;
+  };
+  const auto LeavesNoFloat = [&](const MedOp &Call) {
+    if (Call.Opcode != NdOp::CALL || !Call.NumInputs ||
+        !Call.Inputs[0].isConst() || Call.SourceCallHint)
+      return false;
+    const va_t Callee = Call.Inputs[0].ConstVal;
+    const auto Body = Lifted.find(Callee);
+    return Callee != Func.Entry && Body != Lifted.end() &&
+           !FloatReturns.count(Callee) && Body->second->MultiReturn.empty() &&
+           !Body->second->ReturnsVectorRegister &&
+           !Body->second->FPReturnViaX87 &&
+           !(Body->second->ReturnType &&
+             Body->second->ReturnType->Kind == NdTypeKind::Float);
+  };
+  const size_t Count = Func.Blocks.size();
+  std::map<int, size_t> IndexOf;
+  for (size_t I = 0; I < Count; ++I)
+    IndexOf.emplace(Func.Blocks[I].Id, I);
+  // Per block, whether some path leaves such a leftover at its end.
+  std::vector<char> AtEnd(Count, 0), Queued(Count, 1);
+  std::vector<size_t> Work;
+  for (size_t I = Count; I-- > 0;)
+    Work.push_back(I);
+  while (!Work.empty()) {
+    const size_t I = Work.back();
+    Work.pop_back();
+    Queued[I] = 0;
+    const MedBlock &Block = Func.Blocks[I];
+    bool Left = false;
+    for (const int Pred : Block.Preds)
+      if (const auto From = IndexOf.find(Pred); From != IndexOf.end())
+        Left |= AtEnd[From->second] != 0;
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::RETURN) {
+        if (Left)
+          return true;
+        continue;
+      }
+      if (Writes(Op.Output) || llvm::any_of(Op.IntrinsicOutputs, Writes)) {
+        Left = false;
+        continue;
+      }
+      if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+          !callPreservesRegisterBytes(Target, Op.CallPreservedGPRs,
+                                      TRI.FPReturnReg, sizeof(double)))
+        Left = LeavesNoFloat(Op);
+    }
+    if (!Left || AtEnd[I])
+      continue;
+    AtEnd[I] = 1;
+    for (const int Succ : Block.Succs)
+      if (const auto To = IndexOf.find(Succ);
+          To != IndexOf.end() && !Queued[To->second]) {
+        Queued[To->second] = 1;
+        Work.push_back(To->second);
+      }
+  }
+  return false;
+}
 } // namespace
 
 void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result) {
@@ -235,9 +313,36 @@ void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result) {
   settleFloatReturnsByCallers(Img, Result, TRI);
   const auto FloatReturn = floatReturnBytes;
   std::map<va_t, uint16_t> FloatReturns = Result.CallFloatReturns;
-  for (const MedFunc &MF : Result.MedFuncs)
+  std::map<va_t, const MedFunc *> Lifted;
+  for (const MedFunc &MF : Result.MedFuncs) {
+    Lifted.emplace(MF.Entry, &MF);
     if (const uint16_t Bytes = FloatReturn(MF))
       FloatReturns.try_emplace(MF.Entry, Bytes);
+  }
+  // The float \p MF returns once a return that holds a callee's leftover
+  // has shown it returns none (returnHoldsACalleesLeftover).  That shows
+  // nothing of a function a declaration types.
+  const auto SettledFloatReturn = [&](MedFunc &MF) -> uint16_t {
+    const uint16_t Bytes = FloatReturn(MF);
+    if (!Bytes || MF.SourceTypeHint || MF.SourceParametersBound ||
+        Result.CallFloatReturns.get().count(MF.Entry) ||
+        !returnHoldsACalleesLeftover(MF, TRI, Img.Arch, FloatReturns, Lifted))
+      return Bytes;
+    MF.ReturnHoldsNoFloat = true;
+    inferMedTypes(MF, Img.Arch, &FloatReturns);
+    return FloatReturn(MF);
+  };
+  // Each function that then returns none may leave another's return with
+  // its leftover.
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (MedFunc &MF : Result.MedFuncs)
+      if (FloatReturns.count(MF.Entry) && FloatReturn(MF) &&
+          !SettledFloatReturn(MF)) {
+        FloatReturns.erase(MF.Entry);
+        Changed = true;
+      }
+  }
   for (size_t Round = 0; Round <= Result.MedFuncs.size(); ++Round) {
     bool Found = false;
     for (MedFunc &MF : Result.MedFuncs) {
@@ -255,8 +360,11 @@ void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result) {
         }
       if (!Bound || MF.SourceParametersBound)
         continue;
+      // A callee typed since may have turned what a return held from a
+      // leftover into a result.
+      MF.ReturnHoldsNoFloat = false;
       inferMedTypes(MF, Img.Arch, &FloatReturns);
-      if (const uint16_t Bytes = FloatReturn(MF))
+      if (const uint16_t Bytes = SettledFloatReturn(MF))
         Found |= FloatReturns.try_emplace(MF.Entry, Bytes).second;
     }
     if (!Found)

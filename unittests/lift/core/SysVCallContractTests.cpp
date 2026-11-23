@@ -3290,4 +3290,50 @@ TEST(SysVCallContract, AJumpToAFloatFunctionAfterAFloatWriteReturnsItsResult) {
   EXPECT_NE(Body.find("return conv("), std::string::npos) << Body;
 }
 
+TEST(SysVCallContract, AReturnThatHoldsACalleesLeftoverReturnsNoFloat) {
+  // step's body ends with a double in XMM0 and is typed as returning it.
+  // either jumps to step on one path and on the other returns after
+  // calling twice, which computes through XMM0 and returns an integer: at
+  // that return XMM0 holds what twice left.  A function that returns a
+  // float holds one at every return, so either returns none, as sqlite's
+  // sumStep, which ends in kahanBabuskaNeumaierStep on one path only.
+  constexpr va_t Step = Text, Twice = Text + 0x10, Either = Text + 0x30;
+  std::vector<uint8_t> Code(0x50, 0xCC);
+  put(Code, Step,
+      {0xF2, 0x0F, 0x58, 0x07, // addsd xmm0, [rdi]
+       0xF2, 0x0F, 0x11, 0x07, // movsd [rdi], xmm0
+       0xC3});                 // ret
+  put(Code, Twice,
+      {0xF2, 0x48, 0x0F, 0x2A, 0x07,               // cvtsi2sd xmm0, [rdi]
+       0xF2, 0x0F, 0x58, 0xC0,                     // addsd xmm0, xmm0
+       0xF2, 0x48, 0x0F, 0x2C, 0xC0,               // cvttsd2si rax, xmm0
+       0x48, 0x89, 0x07,                           // mov [rdi], rax
+       0xC3});                                     // ret
+  put(Code, Either, {0x48, 0x85, 0xD2,             // test rdx, rdx
+                     0x74, 0x02,                   // je count
+                     0xEB, 0xC9,                   // jmp step
+                     0x48, 0x83, 0xEC, 0x08,       // count: sub rsp, 8
+                     0x48, 0x89, 0xF7,             // mov rdi, rsi
+                     0xE8, 0xCD, 0xFF, 0xFF, 0xFF, // call twice
+                     0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+                     0xC3});                       // ret
+  const BinaryImage Img = makeImportImage(
+      Code, {{Step, "step"}, {Twice, "twice"}, {Either, "either"}}, {});
+  const std::string Source = liftEntries(Img, {Step, Twice, Either});
+  EXPECT_EQ(Source.find("\ndouble either("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  double sum = 1.5;
+  long n = 3;
+  either((int64_t)&sum, (int64_t)&n, 1, 2.0);
+  if (sum != 3.5 || n != 3)
+    return 1;
+  either((int64_t)&sum, (int64_t)&n, 0, 2.0);
+  return sum == 3.5 && n == 6 ? 0 : 2;
+}
+)");
+}
+
 } // namespace

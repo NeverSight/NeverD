@@ -5552,6 +5552,18 @@ by the double it left in XMM0, and the return contracts read such a return
 as showing the function means no value. The guard is found at `%fs:0x28` on
 x86-64 and `%gs:0x14` on i386, where the C libraries of Linux and Android
 keep it.
+A function that returns a float holds one at every return. Where some path
+to a return leaves in the vector return register what a call to a function
+of this image that returns no float left there, the function returns none
+either, whatever another of its returns holds
+(`returnHoldsACalleesLeftover`, `MedFunc::ReturnHoldsNoFloat`): sqlite's
+`sumStep` jumps to a helper whose body ends with a double in XMM0 on one
+path and returns after integer helpers on the others. Code this image does
+not hold and a callee reached through a pointer may return a float nothing
+has typed, so what such a call leaves shows nothing, and neither does the
+register as the function was entered, which may be its argument. The check
+is made again when a callee is typed later, since that turns a leftover
+into a result.
 A tail call that forwards a float is rewired to the vector register after
 its arguments are recovered. Where the call's result was already moved to
 the value the caller's SSA holds for that register after the call

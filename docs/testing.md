@@ -9202,6 +9202,9 @@ its guard copy into RAX and subtracts `%fs:0x28` before `ret`.
 `AJumpToAFloatFunctionAfterAFloatWriteReturnsItsResult` returns the result
 of a tail call to a float function whose arguments no summary lists, from a
 caller that wrote XMM0 before.
+`AReturnThatHoldsACalleesLeftoverReturnsNoFloat` runs a function that jumps
+to a float helper on one path and returns after an integer helper on the
+other: it returns no float and no path reads one.
 `SysVCallContract.ACalleeThatLeavesForUnknownCodeStillReadsItsArguments`
 checks that a function which only hands its arguments to a callee ending in
 a jump through a pointer still takes them, and that a tail jump to it passes

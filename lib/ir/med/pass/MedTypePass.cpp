@@ -1671,8 +1671,9 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         else if (FloatTested && !IntTested && OnlyReturned(IntWrite))
           UseFloat = false;
       }
-      // What the callers read settles it over anything the body shows.
-      if (Func.CallersReadIntegerResult)
+      // What the callers read settles it over anything the body shows, and
+      // so does a return that holds no float at all.
+      if (Func.CallersReadIntegerResult || Func.ReturnHoldsNoFloat)
         UseFloat = false;
       if (UseFloat) {
         AnyFloat = true;
