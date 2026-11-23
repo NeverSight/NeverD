@@ -67,6 +67,21 @@ AArch64RAQueryResult evaluateAArch64ReturnAddressState(
     Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
     const AArch64RAQueryLimits &Limits, bool &HasExplicitRule,
     AArch64RASigningVisitor VisitSigning) {
+  if (!VisitSigning)
+    return visitAArch64ReturnAddressTransitions(
+        Architecture, CIE, FDE, PC, Limits, HasExplicitRule, nullptr);
+  return visitAArch64ReturnAddressTransitions(
+      Architecture, CIE, FDE, PC, Limits, HasExplicitRule,
+      [&](const CFIInstruction &I, const AArch64ReturnAddressState &State) {
+        if (I.Kind != CFIOpKind::RestoreState)
+          VisitSigning(I, State);
+      });
+}
+
+AArch64RAQueryResult visitAArch64ReturnAddressTransitions(
+    Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
+    const AArch64RAQueryLimits &Limits, bool &HasExplicitRule,
+    AArch64RASigningVisitor VisitSigning) {
   HasExplicitRule = false;
   using namespace aarch64;
   using Status = AArch64RAQueryStatus;
@@ -162,6 +177,9 @@ AArch64RAQueryResult evaluateAArch64ReturnAddressState(
       case CFIOpKind::RestoreState:
         if (Remembered.empty())
           return reject(Status::Malformed, kRestore);
+        if (!IsInitial && VisitSigning && Remembered.back() &&
+            State != Remembered.back())
+          VisitSigning(I, *Remembered.back());
         State = Remembered.back();
         Remembered.pop_back();
         break;

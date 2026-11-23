@@ -16,6 +16,7 @@
 #include "neverd/runtime/DarwinArm64eUnwindRow.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 
 #include <array>
@@ -73,6 +74,25 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
 recoverDarwinAArch64Unwind(const BinaryImage &Image,
                            const ExceptionFunction &Function,
                            const AArch64UnwindRecoveryLimits &Limits = {});
+
+/// Effective source rows retained while installing a classic B-key/SP object.
+/// They include remembered-state restores. Epilogues are post-AUT directives.
+struct AArch64ClassicReturnCFI {
+  struct SigningRow {
+    uint64_t Offset;
+    bool Signed;
+  };
+  llvm::SmallVector<SigningRow, 2> SigningRows;
+  llvm::SmallVector<uint64_t, 1> Epilogues;
+};
+
+/// Replay the relocated frame with the validated input object's signing rows.
+/// At a dynamic epilogue include every in-frame PC compatible with the source
+/// unwind contract and the restored caller state.
+llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
+recoverDarwinAArch64ObjectUnwind(const BinaryImage &Image,
+                                 const ExceptionFunction &Function,
+                                 const AArch64ClassicReturnCFI &Source);
 
 /// The caller has already checked that Offset belongs to the recovered frame.
 const AArch64RecoveredUnwindRow &

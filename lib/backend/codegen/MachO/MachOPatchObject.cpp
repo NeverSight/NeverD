@@ -95,10 +95,8 @@ struct NativeMachO {
   std::vector<std::pair<size_t, MachODataInCodeRange>> Embedded;
   std::vector<NativeMachOCompactRange> Compact;
   std::vector<DwarfEHFrameRecord> OldFDEs;
-  // Each translated FDE needs an entry proof in the final image. A second
-  // transition also needs a live-LR proof at its terminal return.
-  // Later offsets are post-AUTIBSP rows on independent return paths.
-  llvm::DenseMap<va_t, llvm::SmallVector<uint64_t, 1>> ClassicReturnFrames;
+  // Check the source signing rows against the relocated code before publishing.
+  llvm::DenseMap<va_t, AArch64ClassicReturnCFI> ClassicReturnFrames;
   std::optional<size_t> EH, CompactSection;
   bool SjLj = false;
   bool CompactOnly = false;
@@ -1811,11 +1809,16 @@ void normalizeClassicReturnCFI(const BinaryImage &Original, NativeMachO &Object,
     // Generic CFI toggles depend on the remembered state at each exit. Use
     // the DWARF evaluator once, then compare every transition to final code.
     using namespace dwarf_eh;
-    llvm::SmallVector<uint64_t, 1> Epilogues;
+    AArch64ClassicReturnCFI Source;
+    auto &Epilogues = Source.Epilogues;
     bool Valid = true, Explicit;
-    auto Rule = evaluateAArch64ReturnAddressState(
+    auto Rule = visitAArch64ReturnAddressTransitions(
         Arch::AArch64, *CIE, FDE, FDE.InitialLocation, {}, Explicit,
         [&](const CFIInstruction &I, const AArch64ReturnAddressState &State) {
+          Source.SigningRows.push_back(
+              {I.CodeOffset, State.Kind == AArch64RASigningKind::SP});
+          if (I.Kind == CFIOpKind::RestoreState)
+            return;
           if (I.Kind != CFIOpKind::NegateRAState) {
             Valid = false;
             return;
@@ -1837,7 +1840,7 @@ void normalizeClassicReturnCFI(const BinaryImage &Original, NativeMachO &Object,
     for (size_t Offset : Found->second)
       EH.ExternalBytes[Offset] = llvm::dwarf::DW_CFA_nop;
     Object.ClassicReturnFrames.try_emplace(FDE.InitialLocation,
-                                           std::move(Epilogues));
+                                           std::move(Source));
   }
 }
 
@@ -2566,7 +2569,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
 
 llvm::Error verifyClassicReturnCFI(const BinaryImage &Image,
                                    const ExceptionFunction &Function,
-                                   llvm::ArrayRef<uint64_t> Epilogues) {
+                                   const AArch64ClassicReturnCFI &Source) {
   constexpr auto Word = aarch64::kInsnSize;
   const auto CodeWord = [&](va_t VA) -> std::optional<uint32_t> {
     const auto *Bytes = Image.readVA(VA, Word);
@@ -2577,26 +2580,23 @@ llvm::Error verifyClassicReturnCFI(const BinaryImage &Image,
   const va_t Start = Function.CodeRange.Begin;
   if (CodeWord(Start) != static_cast<uint32_t>(PAuthEncoding::PACIBSP))
     return fail(kClassicReturnCFI);
-  if (Epilogues.empty())
+  if (Source.Epilogues.empty())
     return llvm::Error::success();
-  auto Rows = recoverDarwinAArch64Unwind(Image, Function);
+  auto Rows = recoverDarwinAArch64ObjectUnwind(Image, Function, Source);
   if (!Rows)
     return llvm::joinErrors(fail(kClassicReturnCFI), Rows.takeError());
-  for (uint64_t Offset : Epilogues) {
+  for (uint64_t Offset : Source.Epilogues) {
     const auto PC = Start + Offset;
     const auto Exit = CodeWord(PC);
     if (CodeWord(PC - Word) != static_cast<uint32_t>(PAuthEncoding::AUTIBSP) ||
         !Exit)
       return fail(kClassicReturnCFI);
-    // Recovery admits BR only when its register names a separate callable.
+    // Recovery follows local register targets and checks dynamic re-entry.
     if (*Exit != macho_arm64e_abi::kReturnToLR &&
-        !branch::A64BranchRegister.matches(*Exit)) {
-      if (!branch::A64Branch.matches(*Exit))
-        return fail(kClassicReturnCFI);
-      const auto Target = branch::a64BranchTarget(*Exit, PC);
-      if (!Target || (*Target != Start && Function.CodeRange.contains(*Target)))
-        return fail(kClassicReturnCFI);
-    }
+        !branch::A64BranchRegister.matches(*Exit) &&
+        (!branch::A64Branch.matches(*Exit) ||
+         !branch::a64BranchTarget(*Exit, PC)))
+      return fail(kClassicReturnCFI);
     const auto &Signed = aarch64UnwindRowAt(*Rows, Offset - Word);
     const auto &Caller = aarch64UnwindRowAt(*Rows, Offset);
     using namespace dwarf_eh;
