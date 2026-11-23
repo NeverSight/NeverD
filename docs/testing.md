@@ -9183,7 +9183,11 @@ result a caller reads; and
 `TheBytesACallThatReturnsNothingLeftReachNoValue`,
 `AConstantTheCodeHeldIsNoResult` and
 `AFloatResultReadsNoIntegerItsFunctionHandsBack` compile and run the C of
-such functions, which a null argument must not trap. Copied import addresses and callable values use the same
+such functions, which a null argument must not trap.
+`SysVCallContract.ACalleeThatLeavesForUnknownCodeStillReadsItsArguments`
+checks that a function which only hands its arguments to a callee ending in
+a jump through a pointer still takes them, and that a tail jump to it passes
+them. Copied import addresses and callable values use the same
 bounded slot proof as call ABI recovery. The x86/x64/ARM32/ARM64 cases cover
 COFF, ELF and Mach-O, including numeric collisions, dynamic addresses, cycles,
 segment overrides and nonvoid declarations.

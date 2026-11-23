@@ -3061,4 +3061,60 @@ int main(void) {
 )");
 }
 
+TEST(SysVCallContract, ACalleeThatLeavesForUnknownCodeStillReadsItsArguments) {
+  // size(db, p): `cmp rsi, [rdi+8]; jae other; mov eax, 0x80; ret; other:
+  // mov rax, [rdi+0x18]; mov rdi, rsi; jmp rax`, as sqlite3DbMallocSize
+  // reads both its arguments before it jumps to the allocator's routine.
+  // What that routine reads is unknown, so size has no summary of its entry
+  // reads; it reads RDI and RSI for certain.  note(db, p) calls it with
+  // both as they came, and drop(db, p) jumps to note the same way: each
+  // passes both on.
+  constexpr va_t Size = Text, Note = Text + 0x20, Drop = Text + 0x30;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x3B, 0x77, 0x08,       // size: cmp rsi, [rdi+8]
+      0x73, 0x06,                   // jae other
+      0xB8, 0x80, 0x00, 0x00, 0x00, // mov eax, 0x80
+      0xC3,                         // ret
+      0x48, 0x8B, 0x47, 0x18,       // other: mov rax, [rdi+0x18]
+      0x48, 0x89, 0xF7,             // mov rdi, rsi
+      0xFF, 0xE0,                   // jmp rax
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+      0x53,                         // note: push rbx
+      0x48, 0x89, 0xFB,             // mov rbx, rdi
+      0xE8, 0xD7, 0xFF, 0xFF, 0xFF, // call size
+      0x01, 0x43, 0x10,             // add [rbx+16], eax
+      0x5B,                         // pop rbx
+      0xC3,                         // ret
+      0xCC, 0xCC, 0x48, 0x85, 0xFF, // drop: test rdi, rdi
+      0x74, 0x02,                   // je done
+      0xEB, 0xE9,                   // jmp note
+      0xC3};                        // done: ret
+  const BinaryImage Img = makeImportImage(
+      Code, {{Size, "size"}, {Note, "note"}, {Drop, "drop"}}, {});
+  const std::string Source = liftEntries(Img, {Size, Note, Drop});
+  const std::string Dropping = body(Source, "drop");
+  ASSERT_FALSE(Dropping.empty()) << Source;
+  EXPECT_NE(Dropping.find("arg1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+static uint64_t seven(void *p) { return p ? 7 : 0; }
+int main(void) {
+  struct {
+    int64_t first;
+    uint64_t limit;
+    int32_t count;
+    int32_t pad;
+    void *measure;
+  } db = {0, 100, 0, 0, (void *)seven};
+  drop(0, 0);
+  drop(&db, 5);
+  if (db.count != 0x80)
+    return 1;
+  drop(&db, 200);
+  return db.count == 0x87 ? 0 : 2;
+}
+)");
+}
+
 } // namespace

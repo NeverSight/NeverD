@@ -6039,7 +6039,14 @@ the platform's code enters reads its arguments where the platform passes them
 (`runtime.sigtramp`): both keep the platform's positions. A routine that
 leaves only to resume saved state calls nothing either. A jump to code no
 summary describes passes the routine's argument registers on, so its entry
-reads are unknown (`LocalRegisterEffect::UnknownEntryReads`); one that
+reads are unknown (`LocalRegisterEffect::UnknownEntryReads`) and no summary
+binds its callers' operands. What it reads before control leaves is read all
+the same: a function that calls it and returns passes those registers on, so
+they are its own entry reads, which its callers bind (`CertainReads` in
+`solveCallRegisterEffects`). `sqlite3DbMallocSize` reads both its arguments
+before it jumps to the allocator's size routine; the function that adds what
+it returns to a counter only hands it both, and a tail jump to that function
+passed the second as an unknown value. An unknown jump that
 follows a load of the stack pointer from memory in its block resumes state
 saved elsewhere, on that state's stack (`RegisterStep::ResumesContext`,
 `loadsStackPointerBefore`): it reads no register as the routine was entered

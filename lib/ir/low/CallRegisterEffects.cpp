@@ -2131,13 +2131,20 @@ static GPRReadWidths returnedVectorCopies(const RegisterBlock &Block) {
   return Live;
 }
 
+/// The registers \p F reads as it was entered with, at the widths it reads.
+/// \p CertainReads holds, for the callees whose entry reads are unknown
+/// (control leaves them for code no summary describes), what they read for
+/// certain before it does; with \p Certain the answer is that of \p F,
+/// itself such a function: what the code it leaves for reads is left out.
 GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
                               const std::map<va_t, GPRFamilyMask> &MayWrite,
                               const std::map<va_t, GPRReadWidths> &EntryReads,
                               GPRFamilyMask ConventionVolatile,
                               GPRFamilyMask ArgumentFamilies,
                               const std::set<va_t> &DispatchThunks,
-                              const std::set<va_t> &VectorArgumentCallees) {
+                              const std::set<va_t> &VectorArgumentCallees,
+                              const std::map<va_t, GPRReadWidths> &CertainReads,
+                              bool Certain) {
   const GPRFamilyMask VolatileFamilies =
       F.CallClobbers.value_or(ConventionVolatile);
   auto Clear = [](GPRReadWidths &Live, GPRFamilyMask Mask) {
@@ -2183,7 +2190,7 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
         Live.fill(0);
         if (ImportReads != EntryReads.end())
           joinReads(Live, ImportReads->second);
-        else if (!Step.ResumesContext)
+        else if (!Step.ResumesContext && !Certain)
           for (size_t I = 0; I < Live.size(); ++I)
             if ((ArgumentFamilies >> I) & 1)
               Live[I] = 8;
@@ -2205,6 +2212,11 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
               uint8_t &Width = Live[kX64VectorFamilyBase + K];
               Width = std::max<uint8_t>(Width, sizeof(double));
             }
+        } else if (auto R = CertainReads.find(Step.Callee);
+                   R != CertainReads.end()) {
+          // What the callee reads beyond these is unknown, and what it
+          // reads for certain is still read.
+          joinReads(Live, R->second);
         }
       }
       // The bytes of the copy that later reads need, before the copy's
@@ -2425,6 +2437,18 @@ CallRegisterSummaries solveCallRegisterEffects(
       Reads[Entry] = GPRReadWidths{};
   for (const auto &[Entry, Widths] : FixedEntryReads)
     Reads[Entry] = Widths;
+  // A function whose entry reads are unknown, as one that ends in a jump
+  // through a pointer, has no summary to bind its callers' operands from.
+  // What it reads before control leaves is read all the same: a function
+  // that calls it and returns passes those registers on, and its own
+  // callers bind them (sqlite3DbMallocSize reads its two arguments before
+  // it jumps to the allocator's size routine, and a caller that only hands
+  // it both reads both).
+  std::map<va_t, GPRReadWidths> CertainReads;
+  for (const auto &[Entry, Effect] : Funcs)
+    if (UnknownReads.count(Entry) && !Effect->Incomplete &&
+        !FixedEntryReads.count(Entry))
+      CertainReads[Entry] = GPRReadWidths{};
   std::set<va_t> VectorArgumentCallees;
   for (const auto &[Entry, Effect] : Funcs)
     if (Effect->SavesVectorArguments)
@@ -2440,6 +2464,10 @@ CallRegisterSummaries solveCallRegisterEffects(
       SolvedIndex.emplace(Entry, Solved.size());
       Solved.push_back(Entry);
     }
+  for (const auto &[Entry, Widths] : CertainReads) {
+    SolvedIndex.emplace(Entry, Solved.size());
+    Solved.push_back(Entry);
+  }
   std::vector<std::vector<size_t>> Named(Solved.size()), Readers(Solved.size());
   for (size_t I = 0; I < Solved.size(); ++I) {
     for (const RegisterBlock &Block : Funcs.at(Solved[I])->Blocks)
@@ -2483,11 +2511,14 @@ CallRegisterSummaries solveCallRegisterEffects(
     const size_t I = Pending.front();
     Pending.pop_front();
     Queued[I] = 0;
-    GPRReadWidths &Widths = Reads[Solved[I]];
+    const auto Unknown = CertainReads.find(Solved[I]);
+    GPRReadWidths &Widths =
+        Unknown != CertainReads.end() ? Unknown->second : Reads[Solved[I]];
     GPRReadWidths Next = Widths;
-    joinReads(Next, entryLiveWidths(*Funcs.at(Solved[I]), Writes, Reads,
-                                    VolatileFamilies, ArgumentFamilies,
-                                    DispatchThunks, VectorArgumentCallees));
+    joinReads(Next, entryLiveWidths(
+                        *Funcs.at(Solved[I]), Writes, Reads, VolatileFamilies,
+                        ArgumentFamilies, DispatchThunks, VectorArgumentCallees,
+                        CertainReads, Unknown != CertainReads.end()));
     if (Next == Widths)
       continue;
     Widths = Next;
