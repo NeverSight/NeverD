@@ -37,6 +37,7 @@
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/GoCallContract.h"
+#include "neverd/ir/low/GoInlinedRoutine.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
@@ -2526,6 +2527,10 @@ MedFunc LowToMedConverter::convertFunction(
       if (!GoFixedArguments)
         GoFixedArguments =
             goRegisterStubArguments(*Image, Low.Entry, Low.Blocks);
+      // A routine that runs in its caller's place takes the registers its
+      // body reads (goInlinedRoutineOperands).
+      if (!GoFixedArguments)
+        GoFixedArguments = goInlinedRoutineOperands(*Image, Low.Entry);
       // Go assembly that takes registers of its own takes those its callers
       // bind (goEntryRegisterOperands).
       if (!GoFixedArguments && CallEntryReadGPRs && CallEntryIntegerArguments)

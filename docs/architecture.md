@@ -6179,6 +6179,21 @@ a func value, which enters Go code by the internal ABI, so its stores read
 what the call returns (`modelGoCallResults`). As calls, each of a Go image's
 27 helpers passed `spillArgs` sixteen unknown values, twelve on Windows.
 
+Standing alone, such a routine takes the registers its body reads before it
+writes them. An x86-64 routine's summary gives them
+(`goEntryRegisterOperands`). arm64 summaries publish no entry reads and
+track no register past X15, so an arm64 routine's own body gives them
+(`goInlinedRoutineOperands`): each general-purpose register it reads first,
+but those Go code keeps a role for, in the platform's argument order, then
+Go's, then the others'. The routine must read one that neither the internal
+ABI nor AAPCS64 passes an argument in: X20 holds the internal/abi.RegArgs of
+the transfers and the words `runtime.duffzero` zeroes, and X21 the
+destination of `runtime.duffcopy`. Read as AAPCS64 code, `runtime.spillArgs`
+stored thirty-two values through a register nothing defines.
+`localRegisterEffect` publishes the operands for a call that does reach the
+routine, and `LowToMedConverter` gives them to `detectCc` as the routine's
+exact parameters.
+
 Such a call takes its arguments in Go's registers too, integer and floating
 (`goIntegerArgumentRegisters`, `goFloatArgumentRegisters`), as does every
 indirect call compiled code makes (`goIndirectCallTakesGoRegisters`).

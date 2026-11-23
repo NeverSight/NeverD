@@ -15,6 +15,7 @@
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/low/GoCallContract.h"
+#include "neverd/ir/low/GoInlinedRoutine.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/libc/LibCNames.h"
@@ -1723,6 +1724,13 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
       addRead(Img.Arch, Reads, Parameter.Register, Parameter.Bytes);
     Effect.GoArgumentReads = Reads;
     Effect.GoFixedArguments = std::move(Stub);
+    return Effect;
+  }
+  // A routine that runs in its caller's place takes the registers its body
+  // reads where a call does reach it (goInlinedRoutineOperands).
+  if (std::optional<FixedIntegerCallArguments> Own =
+          goInlinedRoutineOperands(Img, Entry)) {
+    Effect.GoFixedArguments = std::move(Own);
     return Effect;
   }
   // A Go function takes exactly the register arguments its stack-growth

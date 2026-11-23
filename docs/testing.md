@@ -21056,6 +21056,12 @@ helper was entered with, the helper keeps its two parameters, and the C stores
 what the call returns, a double among it, trapping nowhere.
 `GoRegisterArgumentTransfers.AreFoundByName` checks that the pclntab names both
 routines' code.
+`GoAssembly.AnARM64RoutineRunInPlaceTakesTheRegistersItReads` lifts arm64
+`runtime.spillArgs`, `runtime.unspillArgs` and `runtime.duffzero` on their
+own: each takes X20 as a parameter after the argument registers it reads,
+a point inside Duff's device does too, and the C traps nowhere.
+`GoAssembly.AnX64RoutineRunInPlaceTakesItsSummarysRegisters` checks that an
+x86-64 routine gets no operands from its body.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.

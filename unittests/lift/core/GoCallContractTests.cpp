@@ -21,6 +21,7 @@
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/GoCallContract.h"
+#include "neverd/ir/low/GoInlinedRoutine.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
@@ -4760,6 +4761,95 @@ TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
     else
       EXPECT_EQ(Argument.RegOff, I == 1 ? x86reg::RAX : x86reg::RBX);
   }
+}
+
+TEST(GoAssembly, AnARM64RoutineRunInPlaceTakesTheRegistersItReads) {
+  // Reflection's register transfers and Duff's device run in their caller's
+  // place.  Standing alone, each takes the registers its body reads before
+  // it writes them: on arm64 that is X20, which neither Go's internal ABI
+  // nor AAPCS64 passes an argument in, so each printed it as a register
+  // nothing defines.
+  //   runtime.spillArgs:   stp x0, x1, [x20]; str x9, [x20, #72]; ret
+  //   runtime.unspillArgs: ldp x0, x1, [x20]; ret
+  //   runtime.duffzero:    stp xzr, xzr, [x20], #16 (twice); ret
+  constexpr va_t Spill = kTextVA + 0x100;
+  constexpr va_t Unspill = kTextVA + 0x140;
+  constexpr va_t Zero = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Spill, words({0xA9000680, 0xF9002689, 0xD65F03C0}));
+  T.writeText(Unspill, words({0xA9400680, 0xD65F03C0}));
+  T.writeText(Zero, words({0xA8817E9F, 0xA8817E9F, 0xD65F03C0}));
+  for (const auto &[Entry, Name] : {std::pair{Spill, "runtime.spillArgs"},
+                                    std::pair{Unspill, "runtime.unspillArgs"},
+                                    std::pair{Zero, "runtime.duffzero"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {
+      {Spill, Spill + 0x40}, {Unspill, Unspill + 0x40}, {Zero, Zero + 0x40}};
+  Module.RegisterArgumentTransfers = {{Spill, Spill + 0x40},
+                                      {Unspill, Unspill + 0x40}};
+  Module.DuffDevices = {{Zero, Zero + 0x40}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  const auto Registers = [&](va_t Entry) {
+    std::vector<uint64_t> Found;
+    if (const auto Operands = goInlinedRoutineOperands(T.Img, Entry))
+      for (const auto &Parameter : Operands->Parameters)
+        Found.push_back(Parameter.Register);
+    return Found;
+  };
+  // The platform's registers first, then Go's, then the others'.
+  EXPECT_EQ(Registers(Spill), (std::vector<uint64_t>{a64reg::X0, a64reg::X1,
+                                                     a64reg::X9, a64reg::X20}));
+  EXPECT_EQ(Registers(Unspill), (std::vector<uint64_t>{a64reg::X20}));
+  EXPECT_EQ(Registers(Zero), (std::vector<uint64_t>{a64reg::X20}));
+  // A point inside Duff's device begins a routine of its own.
+  EXPECT_EQ(Registers(Zero + 4), (std::vector<uint64_t>{a64reg::X20}));
+  EXPECT_FALSE(goInlinedRoutineOperands(T.Img, kTextVA + 0x300).has_value());
+
+  const MedFunc Stores = lift(T.Img, Spill);
+  ASSERT_EQ(Stores.Params.size(), 4u);
+  EXPECT_EQ(Stores.Params[3].RegOff, a64reg::X20);
+  EXPECT_TRUE(Stores.ExactRegisterParameters);
+
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  for (const char *Name :
+       {"runtime_spillArgs", "runtime_unspillArgs", "runtime_duffzero"}) {
+    const std::string Text = highCBody(R, T.Img, Name);
+    ASSERT_FALSE(Text.empty()) << Name;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+  EXPECT_NE(highCBody(R, T.Img, "runtime_spillArgs").find("*(int64_t *)arg3"),
+            std::string::npos)
+      << highCBody(R, T.Img, "runtime_spillArgs");
+}
+
+TEST(GoAssembly, AnX64RoutineRunInPlaceTakesItsSummarysRegisters) {
+  // x86-64 routines take the registers their summaries read
+  // (goEntryRegisterOperands), so the body gives none.
+  //   runtime.spillArgs: mov [r12], rax; ret
+  constexpr va_t Spill = kTextVA + 0x100;
+  GoTestImage T(Arch::X64);
+  T.writeText(Spill, {0x49, 0x89, 0x04, 0x24, 0xC3});
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Spill, Spill + 0x40}};
+  Module.RegisterArgumentTransfers = {{Spill, Spill + 0x40}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_FALSE(goInlinedRoutineOperands(T.Img, Spill).has_value());
 }
 
 } // namespace
