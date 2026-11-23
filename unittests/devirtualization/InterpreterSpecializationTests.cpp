@@ -5500,6 +5500,9 @@ TEST(InterpreterSpecialization, TimestampTransitionMatchesCompleteStateOracle) {
 // These fixtures use the scalar and runtime-control helpers above.
 #include "ReturningCallStateTests.inc"
 
+// These fixtures reuse the exact native-call provider above.
+#include "EntryReturnSlotInterpreterTests.inc"
+
 // Both groups below use ReturningCallProvider and returningStateOptions.
 #include "ReturningCallReplayJoinTests.inc"
 #include "ReturningCallStateEffectTests.inc"
