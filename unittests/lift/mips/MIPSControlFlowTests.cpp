@@ -1636,6 +1636,28 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
                 0, LikelyBack, Move(24, 0));
     SharedLatch("ordinary slot clobber reaches the exit", false, Sub, Fold, 0,
                 AlwaysSlotBack, Move(24, 0));
+    // The initial BEQ either skips to the guard or enters the BNEL's slot
+    // directly. Only the path through the branch can jump to the repair.
+    constexpr uint32_t EnterSlot = 0x12200002, SkipToGuard = 0x12200006;
+    constexpr uint32_t LikelyToRepair = 0x56200003, LikelyToSlot = 0x56200000;
+    const auto SlotPath = [&](const char *Name, bool Proven, uint32_t Entry,
+                              uint32_t Back, uint32_t Slot) {
+      CheckParts(Name, Proven,
+                 {Xor, Entry, 0, Back, Slot, 0x10000002, 0, Sub, ZeroDiff, 0});
+    };
+    SlotPath("clobber repaired before the guard", true, SkipToGuard,
+             LikelyToRepair, Move(24, 0));
+    for (uint32_t Branch : {LikelyToRepair, LikelyToSlot}) {
+      SCOPED_TRACE(Branch);
+      SlotPath("independent slot compares the entire word", true, EnterSlot,
+               Branch, Sub);
+      SlotPath("independent slot checks only low bits", false, EnterSlot,
+               Branch, Binary(0x26, 24, 12, 13));
+      SlotPath("independent slot checks only high bits", false, EnterSlot,
+               Branch, Binary(0x26, 24, 14, 15));
+      SlotPath("independent slot changes the difference", false, EnterSlot,
+               Branch, 0x3b180001);
+    }
     CheckParts("mixed zero evidence through a loop header", true,
                {RightArm, 0, 0x10000004, Sub, LowDiff, HighDiff, EitherDiff,
                 SkipLoop, 0, Decrement, Backedge, 0, ZeroDiff, 0});

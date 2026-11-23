@@ -5117,6 +5117,62 @@ TEST(HighControlFlowSemantics, ParallelPhiCyclesRunOnlyOnTheirTakenEdge) {
     }
 }
 
+TEST(HighControlFlowSemantics, BranchAndIndependentSlotTakeTheirOwnPhiEdges) {
+  constexpr Arch A = Arch::MIPS64EL;
+  MedFunc M;
+  M.Name = "independent_slot";
+  M.Entry = 0x1000;
+  M.ReturnType = NdType::makeInt(8, false);
+  auto Input = machineValue(0, A);
+  Input.Kind = MedVar::Param;
+  Input.RegOff = getTargetRegInfo(A).IntParamRegs[0];
+  M.Params = {Input};
+  for (va_t Start : {0x1000, 0x1010, 0x1020, 0x1100, 0x1104}) {
+    auto &B = M.Blocks.emplace_back();
+    B.Id = static_cast<int>(M.Blocks.size()) - 1;
+    B.StartAddr = Start;
+    B.EndAddr = Start + 8;
+  }
+  const auto C = [](uint64_t Value) { return MedVar::makeConst(Value, 8); };
+  auto Seed = machineValue(1, A), Direct = machineValue(2, A);
+  Seed.Size = Direct.Size = 1;
+  auto &Entry = M.Blocks[0], &Setup = M.Blocks[1], &Select = M.Blocks[2];
+  Entry.Succs = {1, 2};
+  Entry.Ops = {operation(NdOp::INT_EQUAL, 0x1000, Seed, {Input, C(2)}),
+               operation(NdOp::COND_BR, 0x1004, {}, {C(0x1010), Seed})};
+  Setup.Preds = {0};
+  Setup.Succs = {3};
+  Setup.Ops = {operation(NdOp::BRANCH, 0x1010, {}, {C(0x1100)})};
+  Select.Preds = {0};
+  Select.Succs = {3, 4};
+  Select.Ops = {operation(NdOp::INT_EQUAL, 0x1020, Direct, {Input, C(0)}),
+                operation(NdOp::COND_BR, 0x1024, {}, {C(0x1104), Direct})};
+
+  // The jump executes the addition at 0x1104 and lands on it again. A
+  // direct jump from Select enters after the jump's outgoing PHI copies.
+  auto &Jump = M.Blocks[3], &Slot = M.Blocks[4];
+  auto Base = machineValue(3, A), Added = machineValue(4, A);
+  auto Incoming = machineValue(5, A), Result = machineValue(6, A);
+  Result.Kind = MedVar::Reg;
+  Result.RegOff = getTargetRegInfo(A).IntReturnReg;
+  Jump.Preds = {1, 2};
+  Jump.Succs = {4};
+  Jump.Phis = {{Base, {{1, C(40)}, {2, C(3)}}}};
+  Jump.Ops = {operation(NdOp::INT_ADD, 0x1104, Added, {Base, C(7)}),
+              operation(NdOp::BRANCH, 0x1100, {}, {C(0x1104)})};
+  Slot.Preds = {2, 3};
+  Slot.Phis = {{Incoming, {{2, C(100)}, {3, Added}}}};
+  Slot.Ops = {operation(NdOp::INT_ADD, 0x1104, Result, {Incoming, C(7)}),
+              operation(NdOp::RETURN, 0x1108, {}, {Result})};
+  for (int Order = 0; Order < 2; ++Order) {
+    const HighFunc F = MedToHighConverter().convert(M, A);
+    EXPECT_EQ(execute(F, 0, true), 107u);
+    EXPECT_EQ(execute(F, 1, true), 17u);
+    EXPECT_EQ(execute(F, 2, true), 54u);
+    std::reverse(Select.Succs.begin(), Select.Succs.end());
+  }
+}
+
 TEST(HighControlFlowSemantics, ConditionalLatchPreservesExitPhiAndBypass) {
   for (auto Architecture : {Arch::AArch64, Arch::X64}) {
     auto Med = loopFunction(Architecture, false, false);

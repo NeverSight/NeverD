@@ -105,12 +105,13 @@ std::optional<sigs::LibraryOccurrence>
 HighStatementSourceIndex::lookup(va_t Function, const HighStmt &S) const {
   if (S.IsPhiCopy)
     return {};
+  const va_t Address = S.sourceAddress();
   if (S.Kind == StmtKind::Store) {
     auto Origins = [&](const auto &Index, const ExprPtr &E) {
       std::set<sigs::LibraryOccurrence> Result;
       if (!E)
         return Result;
-      if (const auto At = Index.find({Function, S.Addr, E.get()});
+      if (const auto At = Index.find({Function, Address, E.get()});
           At != Index.end())
         for (const auto &O : At->second)
           if (O.Expression.lock() == E && O.StatementKind == S.Kind &&
@@ -131,7 +132,7 @@ HighStatementSourceIndex::lookup(va_t Function, const HighStmt &S) const {
       return {};
   }
   if (const auto E = statementExpression(S)) {
-    const auto At = Expressions.find({Function, S.Addr, E.get()});
+    const auto At = Expressions.find({Function, Address, E.get()});
     if (At != Expressions.end()) {
       std::set<sigs::LibraryOccurrence> Origins;
       for (const auto &O : At->second)
@@ -149,10 +150,10 @@ HighStatementSourceIndex::lookup(va_t Function, const HighStmt &S) const {
       return {};
     }
     if (S.Kind != StmtKind::Store && !conditionalStatement(S.Kind) &&
-        ExpressionSites.contains({Function, S.Addr}))
+        ExpressionSites.contains({Function, Address}))
       return {};
   }
-  const auto At = Statements.find({Function, S.Addr, S.Kind});
+  const auto At = Statements.find({Function, Address, S.Kind});
   if (At != Statements.end() && At->second.size() == 1)
     return *At->second.begin();
   return {};

@@ -839,7 +839,7 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
           walkStmts(HF.Body, [&](const HighStmt &S) {
             if (!S.Cond)
               return;
-            auto At = Branches.find(S.Addr);
+            auto At = Branches.find(S.sourceAddress());
             if (At != Branches.end() && At->second.size() == 1)
               Observe(At->second.front(), S.Cond);
           });

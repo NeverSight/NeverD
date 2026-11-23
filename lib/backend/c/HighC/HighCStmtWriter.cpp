@@ -560,8 +560,8 @@ std::string HighCWriter::failClosedComment(llvm::StringRef Reason,
 
 void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
   llvm::SaveAndRestore<const HighStmt *> Observation(EmittingStmt, &Stmt);
-  llvm::SaveAndRestore<va_t> Site(EmittingAddr,
-                                  Stmt.Addr ? Stmt.Addr : EmittingAddr);
+  llvm::SaveAndRestore<va_t> Site(
+      EmittingAddr, Stmt.sourceAddress() ? Stmt.sourceAddress() : EmittingAddr);
   auto Event = SourceRecorder && CurrentFunc
                    ? SourceRecorder->statement(CurrentFunc->Entry, Stmt)
                    : std::nullopt;
@@ -1604,7 +1604,8 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
                 (Stmt.RetVal->Var.Kind != MedVar::Param ||
                  (InEHClauseBody && !exceptionClausesUseFunctionFrame()))))
       OS << "__builtin_trap(); "
-         << failClosedComment("no recovered result", Stmt.Addr) << "\n";
+         << failClosedComment("no recovered result", Stmt.sourceAddress())
+         << "\n";
     else
       OS << "return " << formatReturnExpr(*Stmt.RetVal) << ";\n";
     if (!IndirectReturnName.empty() && !InEHClauseBody && !InCxxCleanupBody)
@@ -1741,12 +1742,13 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     // proven. There is no label to name; the failure stays at run time.
     if (Stmt.GotoTarget == InvalidVA) {
       if (Stmt.LeftImageAt != InvalidVA)
-        OS << "__builtin_trap(); /* 0x" << llvm::utohexstr(Stmt.Addr)
+        OS << "__builtin_trap(); /* 0x" << llvm::utohexstr(Stmt.sourceAddress())
            << " goes on at 0x" << llvm::utohexstr(Stmt.LeftImageAt)
            << ", where the image maps no code */\n";
       else
         OS << "__builtin_trap(); "
-           << failClosedComment("indirect targets not proved", Stmt.Addr)
+           << failClosedComment("indirect targets not proved",
+                                Stmt.sourceAddress())
            << "\n";
       break;
     }

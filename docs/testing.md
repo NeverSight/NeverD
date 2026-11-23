@@ -18475,6 +18475,14 @@ and selected full-width difference to the return value, so the HighC and
 LLVMC roundtrips detect a skipped, duplicated or reordered update. Ordinary
 BNE supplies the always-executed delay-slot control. The return-target cases
 also check whether a clobber in the slot can reach the final zero test.
+The relay fixtures branch directly into a delay slot on zero trips.
+With a nonzero count, one relay jumps to the loop header and the other
+conditionally branches to its own slot. The accumulator records two updates
+when that branch is taken, one on direct entry, and zero on its untaken edge.
+One variant makes the branch and its physical slot successors of the same
+predecessor, so each edge must also initialize the correct PHI values.
+Return-target tests also let a single-half comparison or a changed difference
+reach the guard through the independent entry.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.

@@ -344,7 +344,7 @@ CSourceRecorder::instruction(const llvm::Instruction &Value) {
 
 std::optional<size_t> CSourceRecorder::statement(va_t Function,
                                                  const HighStmt &Stmt) {
-  const auto At = HighStores.find({Function, Stmt.Addr});
+  const auto At = HighStores.find({Function, Stmt.sourceAddress()});
   if (recordsInstructions() && HighStatements) {
     std::vector<sigs::LibraryOccurrence> Origins;
     if (const auto Origin = HighStatements->lookup(Function, Stmt))

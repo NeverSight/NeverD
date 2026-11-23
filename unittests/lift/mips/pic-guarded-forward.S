@@ -21,6 +21,11 @@
 #define LOW_AT(base) base+4
 #define HIGH_AT(base) base
 #endif
+#ifdef SHARED_LATCH_RELAY
+#define BACKEDGE_TARGET .Lbackedge_relay
+#else
+#define BACKEDGE_TARGET guard_header
+#endif
 #ifndef COMBINE_WORDS
 #define COMBINE_WORDS or
 #endif
@@ -209,8 +214,24 @@ import_probe:
 #elif defined(THREE_WAY_LOOP)
 .Lthree_way_join:
 #endif
+#ifdef SHARED_LATCH_RELAY
+  /* With no iterations, enter either physical slot as a normal instruction. */
+  bne $17,$zero,guard_header
+  nop
+#ifdef RELAY_ENTRY_PAIR
+  bne $20,$zero,.Lrelay_slot
+  nop
+  b .Lbackedge_relay
+#else
+  beq $20,$zero,.Lconditional_slot
+  nop
+  b .Lrelay_slot
+#endif
+  nop
+#else
   beq $17,$zero,.Lthree_way_test
   nop
+#endif
 #ifdef SHARED_LATCH
 guard_header:
   daddu $25,$25,$24
@@ -254,15 +275,21 @@ guard_sub:
 #ifdef LIKELY_DIFFERENCE
   daddiu $17,$17,-1
   sltiu $15,$17,1
-  beql $15,$zero,guard_header
+  beql $15,$zero,BACKEDGE_TARGET
+.Lconditional_slot:
+#ifdef SHARED_LATCH_RELAY
+  dsubu $24,$18,$2
+#else
   xor $24,$2,$18
+#endif
 #else
   daddiu $15,$17,-1
 #ifdef LIKELY_COUNT
-  bnel $15,$zero,guard_header
+  bnel $15,$zero,BACKEDGE_TARGET
 #else
-  bne $15,$zero,guard_header
+  bne $15,$zero,BACKEDGE_TARGET
 #endif
+.Lconditional_slot:
   daddiu $17,$17,-1
 #endif
 #endif
@@ -270,6 +297,21 @@ guard_sub:
   b .Lthree_way_test
   nop
   folded_arm
+#endif
+#ifdef SHARED_LATCH_RELAY
+.Lbackedge_relay:
+#ifdef LIKELY_DIFFERENCE
+  /* A taken branch executes the slot and then lands on it a second time. */
+  bnel $20,$zero,.Lrelay_slot
+#else
+  b guard_header
+#endif
+.Lrelay_slot:
+  daddiu $25,$25,7
+#ifdef LIKELY_DIFFERENCE
+  bne $17,$zero,guard_header
+  nop
+#endif
 #endif
 .Lthree_way_test:
 #ifdef SHARED_LATCH

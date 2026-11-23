@@ -87,6 +87,11 @@ SPILL_GUARDS = {
        for layout, placement in (("", []), ("-late", ["-DLATE_FOLDED_ARM"]))
        for slot, effect in (("", []), ("-likely-count", ["-DLIKELY_COUNT"]),
                             ("-likely-difference", ["-DLIKELY_DIFFERENCE"]))},
+    **{"chain-spill-guard-relay-" + variant:
+       ["-DGUARD_HALVES", "-DSHARED_LATCH", "-DLATE_FOLDED_ARM", "-DSHARED_LATCH_RELAY", *flags]
+       for variant, flags in (("count", ["-DLIKELY_COUNT"]),
+                              ("difference", ["-DLIKELY_DIFFERENCE"]),
+                              ("entries", ["-DLIKELY_DIFFERENCE", "-DRELAY_ENTRY_PAIR"]))},
     "chain-spill-recheck-pack": ["-DRECHECK_LOW"],
 }
 
@@ -107,6 +112,9 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     guard_flags = SPILL_GUARDS.get(form, ())
     split_guard = "-DGUARD_HALVES" in guard_flags
     shared_latch = "-DSHARED_LATCH" in guard_flags
+    relay = "-DSHARED_LATCH_RELAY" in guard_flags
+    likely_count = "-DLIKELY_COUNT" in guard_flags
+    likely_difference = "-DLIKELY_DIFFERENCE" in guard_flags
     three_way = shared_latch or form.startswith("chain-spill-guard-three-")
     recheck_low = form == "chain-spill-recheck-pack"
     loop_guard = (form in SPILL_TRANSFERS or form in SPILL_GUARDS or repeated or
@@ -304,15 +312,29 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                 # Each visit samples the incoming difference, then the arm's
                 # difference and the counter before executing the backedge.
                 xor = dispatch_result ^ arguments[1]
+                subtraction = arguments[1] - dispatch_result
                 difference, accumulator = xor, 0
                 for i in range(trips):
+                    scalar_arm = first_arm ^ (i & 1)
                     accumulator = 2 * (accumulator + difference) + trips - i
-                    difference = (arguments[1] - dispatch_result if first_arm ^ (i & 1)
-                                  else (xor >> 32) | (xor & 0xffffffff))
+                    difference = subtraction if scalar_arm else (xor >> 32) | (xor & 0xffffffff)
                     accumulator = 2 * accumulator + difference
-                    if "-DLIKELY_DIFFERENCE" in guard_flags and i + 1 < trips:
-                        difference = xor
-                remaining = int("-DLIKELY_COUNT" in guard_flags and trips > 0)
+                    if i + 1 < trips:
+                        if likely_difference:
+                            difference = subtraction if relay else xor
+                        if relay:
+                            # BNEL tests the toggled arm and targets its own slot.
+                            updates = 2 * (scalar_arm ^ 1) if likely_difference else 1
+                            accumulator += 7 * updates
+                remaining = int(likely_count and trips > 0)
+                if relay and not trips:
+                    # A direct slot entry falls through after the single update.
+                    if first_arm:
+                        accumulator += 7
+                    elif likely_count:
+                        remaining = -1
+                    elif "-DRELAY_ENTRY_PAIR" not in guard_flags:
+                        difference = subtraction
                 last += accumulator + remaining + difference
             expected = (last + 1) & 0xffffffffffffffff
             if not value and form in ("guarded", "likely-taken", "likely-skipped",
