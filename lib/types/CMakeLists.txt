@@ -55,8 +55,9 @@ if(NEVERD_WINDOWS_TYPES_DIRECTORY)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${Compatibility}")
   endforeach()
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WindowsManifest}")
+  # Substitute the complete JSON once. MSVC symbols can themselves contain @name@.
   file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/neverd-windows-types-inputs.json"
-       CONTENT "${WindowsInputs}\n" @ONLY)
+       CONTENT "@WindowsInputs@\n" @ONLY)
 else()
   file(REMOVE "${CMAKE_BINARY_DIR}/neverd-windows-types-inputs.json")
 endif()
