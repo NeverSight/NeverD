@@ -1260,6 +1260,51 @@ TEST(MIPSHistoricalScheduling, TranslatedLoadAndStoreReachThePhysicalFrame) {
   }
 }
 
+TEST(MIPSHistoricalScheduling, FirstAccessUsesTheObservedReplacementFrame) {
+  // These are instruction-boundary MMU snapshots. The guest ROM separately
+  // executes the TLBWR. Distinct offsets and data detect stale fetches and
+  // stale translations of the load independently.
+  constexpr uint32_t VA = 0x01234000;
+  constexpr uint32_t OldLoad = 0x8c820004, NewLoad = 0x8c820008;
+  for (Arch A : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Img = image(A, 3);
+    for (bool New : {false, true}) {
+      Segment Page;
+      Page.VA = New ? 0x4000 : 0x2000;
+      Page.Data = New ? encode(A, {NewLoad, 0xdead, 0x2468})
+                      : encode(A, {OldLoad, 0x1357, 0xbeef});
+      Page.Size = Page.FileSz = Page.Data.size();
+      Page.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Img.Segments.push_back(std::move(Page));
+    }
+    const auto OldOps = lift(Img, VA, {OldLoad});
+    const auto NewOps = lift(Img, VA, {NewLoad});
+    ASSERT_FALSE(OldOps.empty());
+    ASSERT_FALSE(NewOps.empty());
+    std::array<HistoricalTLBEntry, 48> Entries{};
+    for (unsigned I = 0; I < Entries.size(); ++I)
+      Entries[I].Hi = 0x10000000u + (I << 13);
+    const HistoricalTLB MMU{Entries, 0};
+    MIPSSystemContext C;
+    C.HistoricalMMU = &MMU;
+    C.Historical = HistoricalSchedule::fromSnapshot(
+        3, {}, HistoricalCP0{HistoricalProcessor::R4000, 0, 0, 0, {}, {}});
+    ASSERT_TRUE(C.Historical);
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, VA);
+    for (bool New : {false, true, false}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << " new=" << New);
+      Entries[0] = {VA, ((New ? 0x4000u : 0x2000u) >> 6) | 0x12u, 0, 0};
+      E.setRegister(mipsreg::V0, 0xa55a);
+      EXPECT_FALSE(execute(New ? OldOps : NewOps, E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 0xa55au);
+      ASSERT_TRUE(execute(New ? NewOps : OldOps, E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), New ? 0x2468u : 0x1357u);
+    }
+  }
+}
+
 TEST(MIPSHistoricalScheduling, BoardLineSampleStaysAtTheObservedIssuePC) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     const bool Wide = isMIPS64(A);

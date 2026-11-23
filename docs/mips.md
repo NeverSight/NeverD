@@ -1630,6 +1630,17 @@ write. Neither timestamps the first fetch or load that sees the new mapping.
 [Bala et al., table 1](https://www.usenix.org/conference/osdi-94/software-prefetching-and-caching-translation-lookaside-buffers),
 [CWI measurements, SGI Indy “boktor”](https://homepages.cwi.nl/~manegold/Calibrator/DB/boktor.pdf).
 
+For R4000PC/SC revisions 2.2 and 3.0, item 27 of the silicon errata puts
+`TLBWR` in a taken branch-likely delay slot, followed by `NOP` and `ERET`.
+The R4000 guest test uses that sequence in both byte orders. A probe miss
+installs a new frame. A hit annuls the write and retains the old frame.
+Different trap instructions identify the first mapped fetch. A separate
+return to unmapped ROM checks the value of the first mapped load.
+The native lifter test checks fetch and load against successive MMU snapshots.
+The erratum specifies instruction order and the guest runs report architectural
+results. Neither supplies the clock edge at which the physical TLB changed.
+[MIPS R4000PC/SC errata, item 27, pp. 5–6](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=6).
+
 IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
 fetch at physical `0x1fc00000` supplies a jump, the read at `0x1fc00004`
 supplies its NOP delay slot, and the target at `0x1fc00220` supplies
@@ -1642,6 +1653,13 @@ falling SysClk edge and requests the vector word on the sixth rising edge
 after detection. The analyzer listing begins at the read.
 [IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf),
 [R3051 hardware manual, chapter 10, Reset Behavior](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/cpu/mips/r3051.pdf#page=131).
+
+A separate PlayStation logic-analyzer observation identifies the boot ROM
+timing change after the BIOS writes the memory controller. The fetch at
+`0xbfc00014` still uses the reset wait states, and `0xbfc00018` uses the
+new setting. The report gives the two fetch addresses without a timestamp
+for CPU reset release.
+[PlayStation bus investigation, Memory Control](https://github.com/psx-spx/psx-spx.github.io/blob/386f231a2176/docs/memorycontrol.md#L60-L74).
 
 The hardware regressions compare a little-endian DECstation 5000/133 load
 with its console instruction, EPC, fault address and exception fields. The SGI
@@ -1662,6 +1680,15 @@ most of those writes within 20 cycles of assertion. That interval includes
 board delivery, exception entry, and the probe write. The experiment does
 not resolve the instruction at which the CPU recognized the input.
 [DEC PRL Research Report 19, sections 3.1–3.2, figures 6 and 9](https://ftpmirror.your.org/pub/misc/bitsavers/pdf/dec/tech_reports/PRL-RR-19.pdf#page=16).
+
+IDT gives separate R3051/2 pipeline latencies to the general exception
+vector while the pipeline runs. A direct, externally synchronized interrupt
+takes one cycle and an internally synchronized input takes two. A stalled
+pipeline defers recognition. The application note gives these values under
+stated conditions. A physical pin-to-recognition measurement still needs
+the CPU input transition and an identifiable recognition event on the same
+timebase. NeverD accepts the observed interrupt state at an instruction boundary.
+[IDT application note AN-131, Pipeline Latency, pp. 103–104](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/861.pdf#page=1).
 
 On a little-endian Sony SCPH-5501 (PRId 2, US ROM 3.0), the
 `irqsio` memory-card reports give the instruction count between enabling
