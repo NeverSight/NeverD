@@ -1705,9 +1705,21 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
       Image && Image->ExceptionMetadata.GoModule &&
       Image->ExceptionMetadata.GoModule->RegisterArguments && Convention &&
       Convention->ArgumentsFromCallSetup;
+  // A routine that jumps to code the Go toolchain did not build hands it
+  // the registers it was entered with, where the platform passes that code
+  // its arguments: `syscall.libc_mmap_trampoline` is `B libc_mmap(SB)`.  The
+  // jump reads none of them either.
+  const bool JumpsToPlatformCode =
+      Convention && Convention->ArgumentsFromCallSetup &&
+      llvm::any_of(Func.Blocks, [](const MedBlock &Block) {
+        return llvm::any_of(Block.Ops, [](const MedOp &Op) {
+          return Op.Opcode == NdOp::CALL && Op.IsTailCall &&
+                 Op.RegisterContract == CallRegisterContract::Platform;
+        });
+      });
   if (Image && !GoRegisterArguments && !GoFixedOperands &&
       !Func.Blocks.empty() && goTakesStackArguments(*Image, Func.Entry) &&
-      (!CallsHideForwarding ||
+      (!(CallsHideForwarding || JumpsToPlatformCode) ||
        loadsIncomingStackWord(Func, TheArch, Fmt,
                               goStackArgumentLayout(TheArch).EntryStackBase))) {
     // The entry's leading self-copies name every register read before the

@@ -6310,7 +6310,11 @@ X19 across `BL libc_mmap(SB)`, which libc keeps and Go code would not, so
 every store after the call went through a register nothing defines. Code
 with a record but no frame data, as a linker trampoline into a Go function
 is, stays under Go's, and so does every call where the table of recorded
-functions is unproven.
+functions is unproven. A routine that only jumps to such code hands it the
+registers it was entered with: Go 1.16's `syscall.libc_mmap_trampoline` is
+`B libc_mmap(SB)`. Where a call takes its arguments from its caller's setup
+(arm64), nothing reads those registers, so `detectCc` takes such a routine
+for no stack-ABI one unless it loads a word of its caller's frame.
 
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a

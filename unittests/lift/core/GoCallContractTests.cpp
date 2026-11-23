@@ -4937,4 +4937,47 @@ TEST(GoAssembly, ACallToCodeTheGoToolchainDidNotBuildFollowsThePlatform) {
             CallRegisterContract::GoCode);
 }
 
+TEST(GoStackABI, ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters) {
+  // Go 1.16's syscall.libc_mmap_trampoline is `B libc_mmap(SB)`: the libc
+  // routine takes its arguments in the platform's registers, which the
+  // trampoline was entered with and hands on.  It reads none of them, so
+  // as stack-ABI code it took no register argument and passed six unknown
+  // values.
+  //   syscall.libc_add_trampoline: b helper
+  //   helper:                      add x0, x0, x1; ret
+  constexpr va_t Tramp = kTextVA + 0x100;
+  constexpr va_t Helper = kTextVA + 0x200;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Tramp,
+              words({0x14000000u | (((Helper - Tramp) >> 2) & 0x3FFFFFFu)}));
+  T.writeText(Helper, words({0x8B010000, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{Tramp, "syscall.libc_add_trampoline"},
+        std::pair{Helper, "helper"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{Tramp, Tramp + 0x10}};
+  Module.FrameArguments = {{Tramp, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const auto It = llvm::find_if(
+      R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Tramp; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_FALSE(It->StackArgumentsOnly);
+  const std::string Text = highCBody(R, T.Img, "syscall_libc_add_trampoline");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("helper(arg0, arg1)"), std::string::npos) << Text;
+}
+
 } // namespace

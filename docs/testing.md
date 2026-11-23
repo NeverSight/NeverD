@@ -21076,6 +21076,9 @@ arm64 trampoline that keeps its argument block in X19 across a call to code
 outside the pclntab: the call follows the platform's contract, the store
 after it traps nowhere, and a call into Go code or without the table of
 recorded functions stays Go's.
+`GoStackABI.ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters` lifts a
+stack-ABI routine that is one jump to such code: it takes the two registers
+its target reads and passes them on.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.
