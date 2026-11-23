@@ -11,6 +11,7 @@
 #include "neverd/loader/MachO/MachOExceptions.h"
 #include "neverd/loader/SourceUnwind.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/DwarfEH.h"
 
 #include <cstring>
 #include <limits>
@@ -153,11 +154,13 @@ std::vector<uint8_t> buildRawCompressedInfo() {
   return B.data();
 }
 
-std::vector<uint8_t> buildRawRegularWithLSDAs() {
+std::vector<uint8_t>
+buildRawRegularWithLSDAs(uint32_t FirstMode = kX86_64ModeRBPFrame,
+                         uint32_t SecondMode = kX86_64ModeRBPFrame) {
+  using namespace fixture;
   constexpr uint32_t IndexOffset = 28;
   constexpr uint32_t LSDAOffset = IndexOffset + 24;
   constexpr uint32_t PageOffset = LSDAOffset + 16;
-  const uint32_t Encoding = kX86_64ModeRBPFrame | kHasLSDA;
 
   ByteBuilder B;
   B.u32(kUnwindSectionVersion);
@@ -167,23 +170,23 @@ std::vector<uint8_t> buildRawRegularWithLSDAs() {
   B.u32(0);
   B.u32(IndexOffset);
   B.u32(2);
-  B.u32(0x100);
+  B.u32(kOwnerFirstRVA);
   B.u32(PageOffset);
   B.u32(LSDAOffset);
   B.u32(0x300);
   B.u32(0);
   B.u32(PageOffset);
-  B.u32(0x100);
-  B.u32(0x800);
-  B.u32(0x200);
-  B.u32(0x900);
+  B.u32(kOwnerFirstRVA);
+  B.u32(kOwnerLSDARVA);
+  B.u32(kOwnerPeerRVA);
+  B.u32(kOwnerPeerLSDARVA);
   B.u32(kSecondLevelRegular);
   B.u16(8);
   B.u16(2);
-  B.u32(0x100);
-  B.u32(Encoding);
-  B.u32(0x200);
-  B.u32(Encoding);
+  B.u32(kOwnerFirstRVA);
+  B.u32(FirstMode | kHasLSDA);
+  B.u32(kOwnerPeerRVA);
+  B.u32(SecondMode | kHasLSDA);
   return B.data();
 }
 
@@ -1126,6 +1129,79 @@ TEST(DarwinUnwindSymbols, CompactAndDwarfLanguageDescriptionsMustAgree) {
               return D.find("disagree") != std::string::npos;
             }));
     }
+}
+
+TEST(DarwinUnwindSymbols, IndexedLanguageTableUsesItsFDEExtent) {
+  using namespace fixture;
+  const uint8_t Last = kOwnerShortFrameSize - kOwnerGuardSize;
+  struct Site {
+    uint8_t Length, Pad;
+    bool InFrame;
+  };
+  for (Arch Target : {Arch::AArch64, Arch::X64}) {
+    const uint32_t NativeMode =
+        Target == Arch::AArch64 ? kARM64ModeFrame : kX86_64ModeRBPFrame;
+    const uint32_t DwarfMode =
+        Target == Arch::AArch64 ? kARM64ModeDwarf : kX86_64ModeDwarf;
+    for (bool Indexed : {true, false})
+      for (bool Descriptor : {true, false})
+        for (const Site S :
+             {Site{kOwnerGuardSize, Last, true}, Site{0, 0, true},
+              Site{uint8_t(kOwnerGuardSize + 1), Last, false},
+              Site{kOwnerGuardSize, kOwnerShortFrameSize, false}}) {
+          SCOPED_TRACE(static_cast<unsigned>(Target));
+          SCOPED_TRACE(Indexed);
+          SCOPED_TRACE(Descriptor);
+          SCOPED_TRACE(unsigned(S.Length));
+          SCOPED_TRACE(unsigned(S.Pad));
+          auto Image = makeImage(Target);
+          const auto Start = kImageBase + kOwnerFirstRVA;
+          const auto LSDA = kImageBase + kOwnerLSDARVA;
+          const uint8_t Bytes[] = {
+              dweh::Omit, dweh::Omit, dweh::Uleb128, kOwnerCallSiteBytes,
+              Last,       S.Length,   S.Pad,         0};
+          ASSERT_TRUE(Image.writeVA(LSDA, Bytes, sizeof(Bytes)));
+          Section Frames;
+          Frames.Name = section_names::macho::EhFrame;
+          Frames.VA = kImageBase + kOwnerFrameRVA;
+          auto Frame = language_eh_test::buildSimpleFrame(
+              Frames.VA, Start, kOwnerShortFrameSize, kOwnerLSDAAugmentation, 0,
+              LSDA);
+          Frames.Data = std::move(Frame.Bytes);
+          Frames.Size = Frames.Data.size();
+          Image.Sections.push_back(std::move(Frames));
+          const uint32_t Mode =
+              Indexed ? DwarfMode | uint32_t(Frame.FDEOffset) : NativeMode;
+          if (Descriptor) {
+            ASSERT_TRUE(Image.writeVA(kImageBase + kOwnerPeerLSDARVA, Bytes,
+                                      sizeof(Bytes)));
+            attachUnwindInfo(Image, buildRawRegularWithLSDAs(Mode, NativeMode));
+          } else {
+            attachUnwindInfo(
+                Image, buildUnwindInfo({{kOwnerFirstRVA, Mode}},
+                                       kOwnerFirstRVA + kOwnerFunctionSize));
+          }
+          parseDarwinExceptions(Image);
+          const auto *Owner = Image.ExceptionMetadata.findFunctionEntry(Start);
+          ASSERT_TRUE(Owner && Owner->Compact && Owner->Dwarf &&
+                      Owner->Itanium);
+          EXPECT_GE(Owner->Compact->CodeRange.End, Start + kOwnerFunctionSize);
+          EXPECT_EQ(Owner->Compact->LSDAVA, Descriptor ? LSDA : 0u);
+          EXPECT_EQ(Owner->Dwarf->AddressRange, kOwnerShortFrameSize);
+          EXPECT_EQ(Owner->Itanium->LSDAVA, LSDA);
+          EXPECT_EQ(Owner->ParseStatus, (S.InFrame || (!Indexed && Descriptor))
+                                            ? ExceptionParseStatus::Complete
+                                            : ExceptionParseStatus::Partial);
+          EXPECT_EQ(Image.ExceptionMetadata.ParseStatus, Owner->ParseStatus);
+          if (Descriptor) {
+            const auto *Peer = Image.ExceptionMetadata.findFunctionEntry(
+                kImageBase + kOwnerPeerRVA);
+            ASSERT_TRUE(Peer && Peer->Itanium);
+            EXPECT_EQ(Peer->ParseStatus, ExceptionParseStatus::Complete);
+            EXPECT_EQ(Peer->Itanium->LSDAVA, kImageBase + kOwnerPeerLSDARVA);
+          }
+        }
+  }
 }
 
 TEST(DarwinUnwindSymbols, MissingDeclaredPersonalityCannotBecomePlain) {

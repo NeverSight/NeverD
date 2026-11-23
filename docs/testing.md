@@ -1988,17 +1988,23 @@ names while preserving stated, analysis and user names.
 The `AArch64CompactRegisters.*PAuthLR*` filter in
 `NeverDArm64eLiftedImageTests` runs the same structural checks with frozen r6
 and source-built LLVM. It publishes all-pair, sparse and frame-only recipes,
-including a signing PC at byte 256, a PC-signed C++ cleanup, and a mixed
-image with an independently indexed cleanup. The two system-walk cases record the number of native PAuth_LR steps
-after a hardware probe. The original and published images can both pass their
+including a signing PC at byte 256 and PC-signed C++ cleanups. Mixed-image
+cases publish two PC-signed owners beside two DWARF-indexed functions at O0
+and O2, then publish each output again. They check each signing instruction,
+FDE, CIE and landing pad with shared and distinct language tables.
+The two system-walk cases record the number of native PAuth_LR steps after a
+hardware probe. The original and published images can both pass their
 structural checks on a host reporting zero native steps.
 
 `NeverDLanguageEHTests` also covers compact PAuth_LR frame recipes with zero,
 middle and final signing-instruction offsets, register pairs, reserved bits,
-range truncation, alignment and arithmetic overflow. Shared raw/semantic page
-tests reject overflowing compressed deltas, incorrect first rows, duplicates
-and out-of-page records for signed ARM64, ordinary ARM64 and x86-64; a discarded
-middle page cannot widen a valid neighbor. `AArch64DwarfReturnAddress` uses
+range truncation, alignment and arithmetic overflow. The Darwin loader tests
+also check guarded ranges ending precisely at an indexed FDE's end and reject
+guarded ranges or landing pads extending into compact lookup padding. Shared
+raw/semantic page tests reject overflowing compressed deltas, incorrect first
+rows, duplicates and out-of-page records for signed ARM64, ordinary ARM64 and
+x86-64. A discarded middle page cannot widen a valid neighbor.
+`AArch64DwarfReturnAddress` uses
 independent CFI bytes to check absolute states, both keys, HINT/non-HINT
 recipes, legacy toggles, CIE/FDE remember/restore, unknown runtime rules,
 signed displacement overflow, strict set_loc (including base zero), reserved
