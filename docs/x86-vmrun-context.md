@@ -45,10 +45,28 @@ revision produced the same machine objects and guest images as the hosted
 fixtures.
 [AMD KVM execution and byte hashes](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
 
+A [November 22 repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45107766727)
+again passed all twelve guest images and 200 generated contexts on an AMD EPYC
+9V45 runner. The other runner was assigned an Intel processor without guest
+SVM and reported that capability as unavailable. The original two-AMD run
+remains the complete two-host comparison.
+
 These results establish the tested nested KVM profile. The generated path
 preserves the full RAX value and emits the original address-size prefix; the
 CPU environment selects the VMCB address or raises the observed exception.
 The compiler receives an initialized VMCB and explicit xstate in each case.
+
+AMD's [APM Volume 2](https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24593.pdf)
+and [VMRUN instruction reference](https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24594.pdf)
+make the effective address width determine which part of RAX forms the VMCB
+physical address. In contrast, Linux KVM's
+[nested SVM handler](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/svm/nested.c#L872-L903)
+reads the full saved RAX as a guest physical address and injects `#GP(0)` when
+mapping rejects it. That source path explains the hosted high-half observation;
+the runner's exact host-kernel revision was not recorded. QEMU TCG's original
+addr32 fixture returns with the tagged high half. The hosted fault comparison
+therefore qualifies parity within nested KVM, not a universal bare-metal
+address-width or fault rule.
 
 ## Current compiler and production LLVM
 
@@ -74,8 +92,9 @@ RBX, RCX, RDX, RSI, RDI, RBP and R8..R15 as fourteen u64 input/output fields.
 Guest RAX/RSP/RIP/RFLAGS and exit information stay in the VMCB. An invalid
 VMCB exit must not be interpreted as successful execution of its guest state.
 
-Both widths execute in 64-bit code. Addr32 truncates the VMCB physical address;
-the context and XSAVE addresses remain full-width linear pointers. The native
+Both widths execute in 64-bit code. Addr32 emits the original `67` prefix and
+leaves RAX intact for the execution environment to interpret; the context and
+XSAVE addresses remain full-width linear pointers. The native
 backend isolates an RSP-based helper frame, transports every GPR regardless
 of ordinary source liveness, saves guest xstate and restores host user xstate
 and the compiler's GPR ABI. No inline assembly or unresolved runtime helper is
@@ -153,9 +172,10 @@ components whose XSAVE bit is clear. Unrepresented upper-vector storage is
 preserved. Other SVM context fields are exchange outputs/scratch, not another
 set of instruction inputs.
 
-Host RAX and RSP remain unchanged. Addr32 truncates only the VMCB physical
-address, not restored host RAX. Host RFLAGS retain their values except RF;
-guest RAX/RSP/RIP/RFLAGS and exit information remain in the VMCB. After all
+Host RAX and RSP remain unchanged after a successful VMEXIT. Addr32 changes
+only the instruction's effective address size, not the saved host RAX or the
+full-width context and XSAVE addresses. Host RFLAGS retain their values except
+RF; guest RAX/RSP/RIP/RFLAGS and exit information remain in the VMCB. After all
 control validation, the transition installs the explicit CR2 input before
 native entry and reads the actual CPU CR2 after VMEXIT. An invalid VMCB may
 exit before installing guest CR2, so this path must preserve the original
@@ -183,11 +203,11 @@ VMM owns VMCB/VM_HSAVE_PA, GIF, intercepts, debug/supervisor banks and mappings.
 FS/GS/KernelGSBase and CR8 must agree with the explicit cells and remain
 guest-preserved; other system changes must preserve the compiler's host ABI.
 Generated code, state, buffers and compiler stack stay mapped and disjoint
-from guest writes and hardware-written VMCB/VM_HSAVE_PA pages. Successful
-ordinary RAM, immutable original code, no
-concurrent writers, asynchronous events, faults, nested SVM, SEV-ES, SMM or
-CET are part of the invocation domain. **Ordinary function-ABI lifting of
-arbitrary VMRUN remains refused**: environmental facts are never inferred.
+from guest writes and hardware-written VMCB/VM_HSAVE_PA pages. The invocation
+domain assumes successful ordinary RAM accesses, immutable original code and
+no concurrent writers. Asynchronous events, faults, nested SVM, SEV-ES, SMM
+and CET remain outside it. **Ordinary function-ABI lifting of arbitrary VMRUN
+remains refused**: environmental facts are never inferred.
 
 The original-byte qualification runs both actual exported C forms through
 NeverC and through NeverC bitcode followed by either pass manager in the full

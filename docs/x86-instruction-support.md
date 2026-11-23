@@ -15,6 +15,12 @@ The floating-point follow-up also integrates `39d727a54`, with Capstone
 the Windows type/ABI update merged in `5a3354cad`.
 Before publication, `c17776c92` also advances the decoder to
 `9d458aa76ce3b294d6ffea9f16a5b5d0cd2a6eae`.
+The November 22 integration at `d45fe8b1fb` uses Capstone
+`aa095ef5688bfc49b8ba0c5e5a7648faa7ed6877`. Its
+[four-platform decoder contract](https://github.com/NeverSight/NeverD/actions/runs/45107341681)
+passed 131/131 checks on Linux x64 and 130/131 on each of macOS arm64,
+Windows MSVC and Windows clang-cl; the one explicitly unavailable check on
+those platforms requires a POSIX x64 host to observe x87 hardware behavior.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 

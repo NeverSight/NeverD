@@ -6,13 +6,14 @@
   "fixture_manifest_sha256": "4a8863177c8b90fd897d9cc3a21759a52b5d662d755ebcc477aabe7125609e7b",
   "compiler_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
   "neverd_fixture_export_commit": "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
-  "current_neverd_export_commit": "bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557",
+  "current_neverd_export_commit": "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
   "matching_neverd_export_commits": [
     "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
     "6f81b8559bac0dd326d9426269b5b7d48c03b343",
     "bf4da7c3f95673955e451e6cb436da736769b4a6",
     "7c35482dc19fe0aea7f45e3623d461af3965c299",
-    "bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557"
+    "bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557",
+    "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2"
   ],
   "current_neverd_export_sha256": {
     "high": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
@@ -552,5 +553,25 @@
   "limits": [
     "The AMD processors are exposed through hosted nested KVM.",
     "The returning and faulting VMRUN streams use an imported initialized SVM VMCB and explicit guest xstate."
-  ]
+  ],
+  "repeat_run": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45107766727",
+    "hosted_commit": "866d665e64f06388b4b18bc6e57152bcd3679047",
+    "amd_cpu": "AMD EPYC 9V45 96-Core Processor",
+    "amd_report_sha256": "57e1e18603154d1e17a06d43a3babc77e816374f2fd35eb3b2ba170e4f0217e1",
+    "mapped_guest_runs_completed": 6,
+    "tagged_addr32_gp_observed": 6,
+    "generated_contexts_completed": 200,
+    "other_runner_cpu": "Intel(R) Xeon(R) 6975P-C",
+    "other_runner_status": "unavailable",
+    "other_runner_report_sha256": "c6c176716ab6ac1028232f3e06b1de10be4af9764a443423c1fc962a34f37d3b"
+  },
+  "addr32_environment_difference": {
+    "amd_apm_volume_2": "https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24593.pdf",
+    "amd_apm_volume_3": "https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24594.pdf",
+    "linux_kvm_nested_handler": "https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/svm/nested.c#L872-L903",
+    "qemu_tcg_original_tagged_rax_returned": true,
+    "hosted_nested_kvm_original_tagged_rax_gp": true,
+    "inference": "The v6.18 KVM handler reads full saved RAX as GPA without an address-size mask; this explains the hosted fault profile but the runner host-kernel revision was not captured."
+  }
 }
