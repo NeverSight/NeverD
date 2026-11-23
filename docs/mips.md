@@ -82,6 +82,11 @@ after linking the object with the target linker.
   backedge and a folded-XOR backedge. On each backedge, the difference after
   the jump delay slot must still prove equality of both operand halves at zero.
   Replacing the difference on a single edge can invalidate the guard.
+  When two paths share a latch, a branch-likely executes its delay slot
+  only on the taken backedge. The untaken edge carries the pre-slot counter
+  and difference to the exit test, including across a jump over the other arm.
+  A value changed only on the backedge can qualify again if every path
+  recomputes the full comparison before reaching the call.
   A single word can hold the OR of two 32-bit differences. A word
   spill of a 64-bit XOR can leave its high half unchecked.
   Full-width moves carry the established fact across basic blocks.
