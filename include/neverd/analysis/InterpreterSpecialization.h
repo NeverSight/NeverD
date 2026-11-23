@@ -369,8 +369,8 @@ struct SpecializationOptions {
   /// transfers retain their ordinary exhaustive-analysis obligations.
   std::vector<SpecializationX64MachineExit> X64MachineExits;
   /// Conditional raw returning calls. Requires nonempty X64MachineExits and
-  /// EntryFrameBounds; excludes restored-return/return-slot/terminal-import
-  /// contracts. The physical invocation remains a side-effecting raw event.
+  /// EntryFrameBounds; excludes restored-return, unchecked return-slot and
+  /// terminal-import contracts. The invocation remains a physical raw event.
   /// Ordinary proof, execution and source APIs reject even unused declarations.
   std::vector<SpecializationX64ReturningCall> X64ReturningCalls;
   /// Raw-only supplemental code domain. Requires explicit nonfaulting,
@@ -553,10 +553,19 @@ struct SpecializationOptions {
   /// changing this field alone does not enable native recovery for that ISA.
   Arch Architecture = Arch::X64;
 
+  /// Explicit raw-region entry contract: the complete entry-relative word is
+  /// the caller's return address. The word's value remains arbitrary. A
+  /// physical RET is an outer return only after the engine proves that the
+  /// current stack points to this word and no possible write or call effect
+  /// has replaced it. X64 currently admits only [entry RSP, entry RSP + 8).
+  /// Source and native proof interfaces reject this raw-only contract.
+  std::optional<SpecializationFrameSlot> EntryReturnSlot;
+
   bool hasRawEnvironment() const {
     return !X64CodeRegions.empty() || !X64ImportBindings.empty() ||
            !X64MachineExits.empty() || !EntryFrameExcludedObjects.empty() ||
            !EntryFrameLoadedObjects.empty() || !X64ReturningCalls.empty() ||
+           EntryReturnSlot.has_value() ||
            UndefinedModel != SpecializationUndefinedModel::SelectedLowIR;
   }
 

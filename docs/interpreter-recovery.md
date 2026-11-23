@@ -622,6 +622,8 @@ An incomplete address domain or unavailable immutable span retains the whole run
 
 Explicit raw machine regions can follow internal near CALL and RET instructions when the current stack pointer is no longer an entry-relative value. The architecture adapter retains the physical target capture, push, return-word read and pop. Every internal return still requires an exhaustive finite target proof from the actual stack word. Only proved entry-relative return cells enter the frame projection and preservation inventory; losing an unrelated stack relation at a graph boundary can still cause recovery to refuse. Ordinary function recovery retains its restored-frame requirements. This capability supplies a raw region result; whole-function composition and source or native equivalence remain separate obligations.
 
+The optional `EntryReturnSlot` raw contract declares that the complete entry `[RSP, RSP + 8)` word is the caller's return address. Its value stays symbolic. A physical RET at the restored entry stack becomes an outer return only while a must-preserved fact proves that no possible write or conditional callee effect replaced that word. Internal RETs at the same native address still load and prove their actual stack targets. Unknown aliasing writes clear the fact; proved disjoint writes and complete declared call preservation may keep it. The declaration is an environment precondition, not an inference from one execution, and participates in the raw-domain digest. It does not make a raw result into a C or native-equivalence certificate.
+
 <!-- i18n-section: store-separation-proofs -->
 
 ## Optional store separation proofs

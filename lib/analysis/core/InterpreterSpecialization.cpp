@@ -102,6 +102,8 @@ struct FrameFacts {
   /// Exact, complete entry pointers stored at frame-relative addresses.
   /// Partial and potentially aliasing writes invalidate the complete pointer.
   std::map<uint64_t, EntryPointer> AffineValues;
+  /// All incoming paths still hold the original opaque caller return word.
+  bool EntryReturnSlotIntact = false;
   bool NativeStackActive = false;
   std::set<uint64_t> NativeReturnSlots;
 };
@@ -159,18 +161,19 @@ struct ContextKey {
   // cursor can distinguish contexts without fixing the invocation's address.
   std::vector<std::optional<EntryPointer>> FrameControls;
   bool NativeStackActive = false;
+  bool EntryReturnSlotIntact = false;
   std::optional<uint64_t> StackDisplacement;
   std::vector<std::pair<uint64_t, std::optional<uint64_t>>> ReturnSlots;
   uint32_t FrameResidue = 0;
 
   bool operator<(const ContextKey &Other) const {
     return std::tie(Cursor.Address, Cursor.Mode, Controls, FrameControls,
-                    NativeStackActive, StackDisplacement, ReturnSlots,
-                    FrameResidue) <
+                    NativeStackActive, EntryReturnSlotIntact, StackDisplacement,
+                    ReturnSlots, FrameResidue) <
            std::tie(Other.Cursor.Address, Other.Cursor.Mode, Other.Controls,
                     Other.FrameControls, Other.NativeStackActive,
-                    Other.StackDisplacement, Other.ReturnSlots,
-                    Other.FrameResidue);
+                    Other.EntryReturnSlotIntact, Other.StackDisplacement,
+                    Other.ReturnSlots, Other.FrameResidue);
   }
 };
 
@@ -230,7 +233,8 @@ SymRef entryPointerValue(SymContext &Ctx, SymRef FrameRoot,
 }
 
 void seed(SymContext &Ctx, SymState &State, SymRef Root,
-          llvm::ArrayRef<SymRef> ObjectRoots, const Projection &Values) {
+          llvm::ArrayRef<SymRef> ObjectRoots, const Projection &Values,
+          const std::optional<SpecializationFrameSlot> &EntryReturnSlot) {
   for (const auto &[Key, Value] : Values.Scalars)
     State.write(Key.first, Key.second, Ctx.mkConst(8, Value));
   if (Root) {
@@ -250,6 +254,12 @@ void seed(SymContext &Ctx, SymState &State, SymRef Root,
     for (const auto &[Offset, Pointer] : Values.Frame.AffineValues)
       State.store(Ctx.mkAdd(Root, Ctx.mkConst(64, Offset)),
                   entryPointerValue(Ctx, Root, ObjectRoots, Pointer));
+    if (Values.Frame.EntryReturnSlotIntact) {
+      const auto &Slot = *EntryReturnSlot;
+      State.store(
+          Ctx.mkAdd(Root, Ctx.mkConst(64, static_cast<uint64_t>(Slot.Offset))),
+          Ctx.mkFreshVar(Slot.Bytes * 8, "entry_return_word"));
+    }
   }
   // These are current predecessor facts, intersected after all guest writes.
   // Seed the absolute bank directly: a program STORE would invalidate frame
@@ -459,6 +469,11 @@ bool intersect(Projection &Into, const Projection &Incoming,
   Changed |=
       intersectMap(Into.AbsoluteAffineValues, Incoming.AbsoluteAffineValues);
   Changed |= intersectMap(Into.Frame.AffineValues, Incoming.Frame.AffineValues);
+  if (Into.Frame.EntryReturnSlotIntact &&
+      !Incoming.Frame.EntryReturnSlotIntact) {
+    Into.Frame.EntryReturnSlotIntact = false;
+    Changed = true;
+  }
   Changed |=
       joinControls(Into.Controls, Incoming.Controls, TupleLimit, Widenings);
   Changed |= joinControlPairs(Into.ControlPairs, Incoming.ControlPairs,
@@ -1011,7 +1026,7 @@ private:
                    SymContext &Ctx, SymState &State, SymRef FrameRoot,
                    llvm::ArrayRef<SymRef> ObjectRoots,
                    const FrameOrigins &Origins, const FrameFacts &Frame,
-                   StepResult Flow);
+                   StepResult Flow, bool CertifiedOuterReturn);
   bool publish();
   SymRef controlValue(SymState &State, SymRef Root, uint32_t Field);
   SymRef controlPredicate(SymState &State, SymRef Root,
@@ -1201,6 +1216,11 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
       return false;
   FrameFacts NextFrame;
   NextFrame.NativeStackActive = Frame.NativeStackActive;
+  if (Frame.EntryReturnSlotIntact) {
+    const auto &Slot = *Options.EntryReturnSlot;
+    NextFrame.EntryReturnSlotIntact =
+        Keep(static_cast<uint64_t>(Slot.Offset), Slot.Bytes);
+  }
   for (const auto &[Offset, Value] : Frame.AffineValues)
     if (Keep(Offset, Policy.Stack.Size))
       NextFrame.AffineValues.emplace(Offset, Value);
@@ -2435,6 +2455,7 @@ int Specializer::enqueue(SpecializationCursor Cursor,
   for (const auto &Slot : Refinement.ContextSlots)
     SlotControl(Slot);
   Key.NativeStackActive = Incoming.Frame.NativeStackActive;
+  Key.EntryReturnSlotIntact = Incoming.Frame.EntryReturnSlotIntact;
   if (Key.NativeStackActive) {
     const auto At =
         Incoming.AffineRegisters.find(Options.FrameBaseRegister->Offset);
@@ -2569,7 +2590,8 @@ bool Specializer::emitTargets(
     Node &Draft, const SpecializationInstruction &Instruction,
     const LowOp &Original, LowOp Residual, SymExec &Exec, SymContext &Ctx,
     SymState &State, SymRef FrameRoot, llvm::ArrayRef<SymRef> ObjectRoots,
-    const FrameOrigins &Origins, const FrameFacts &Frame, StepResult Flow) {
+    const FrameOrigins &Origins, const FrameFacts &Frame, StepResult Flow,
+    bool CertifiedOuterReturn) {
   std::optional<detail::ControlDependencyCache> LocalDependencies;
   llvm::SaveAndRestore<detail::ControlDependencyCache *> RestoreDependencies(
       DependencyCache, nullptr);
@@ -2594,9 +2616,9 @@ bool Specializer::emitTargets(
     return true;
   }
   if (Flow == StepResult::Return) {
-    if (!Options.X64MachineExits.empty())
+    if (!Options.X64MachineExits.empty() && !CertifiedOuterReturn)
       return fail(SpecializationStatus::UnresolvedControl,
-                  "machine region has no implicit ordinary RETURN boundary");
+                  "machine region has no proved outer RETURN boundary");
     if (Options.RequireRestoredFrameAtReturn) {
       const auto &Base = *Options.FrameBaseRegister;
       const auto StackValue =
@@ -2881,10 +2903,17 @@ bool Specializer::evaluate(int Id) {
        !chargeObjectWork(Draft.Incoming.Frame.AffineValues.size()) ||
        !chargeObjectWork(Draft.Incoming.AbsoluteAffineValues.size())))
     return false;
-  seed(Ctx, State, FrameRoot, ObjectRoots, Draft.Incoming);
-  if (!ObjectRoots.empty() && Ctx.numNodes() > Options.MaxSymbolicNodes)
+  if (Draft.Incoming.Frame.EntryReturnSlotIntact &&
+      !chargeCallWork(Options.EntryReturnSlot->Bytes))
+    return false;
+  seed(Ctx, State, FrameRoot, ObjectRoots, Draft.Incoming,
+       Options.EntryReturnSlot);
+  if ((!ObjectRoots.empty() || Options.EntryReturnSlot) &&
+      Ctx.numNodes() > Options.MaxSymbolicNodes)
     return fail(SpecializationStatus::BudgetExceeded,
-                "entry object seeding symbolic-node budget exhausted");
+                Options.EntryReturnSlot
+                    ? "entry return-slot seeding symbolic-node budget exhausted"
+                    : "entry object seeding symbolic-node budget exhausted");
   seedRuntimeMemoryState(Ctx, State, Options);
   auto RuntimeControls = seedRuntimeControlState(Ctx, State, Options);
   // Rebuilt nodes forget correlations, including prior writes, but retain the
@@ -3126,6 +3155,7 @@ bool Specializer::evaluate(int Id) {
       ExternalExit->Original = Instruction;
     }
     bool ExpandedReturn = false;
+    bool CertifiedOuterReturn = false;
     bool ExpandedIndirectCall = false;
     bool RetainedTerminator = false;
     size_t NativeCallPrefixSize = 0;
@@ -3252,11 +3282,13 @@ bool Specializer::evaluate(int Id) {
           NdVar::tmp(DispatchTemp, 8), NdVar::tmp(ReadAddressTemp, 8),
           NdVar::tmp(ReadConditionTemp, 8),
           NdVar::tmp(IsReturn ? NativeCallTargetTemp : NativeReturnTemp, 8)};
+      CertifiedOuterReturn = IsReturn && Displacement == 0 &&
+                             (!RawRegion || (Options.EntryReturnSlot &&
+                                             Frame.EntryReturnSlotIntact));
       auto Expanded = expandNativeStackControl(
           Instruction, Stack, Scratch,
-          IsReturn && Displacement == 0 && !RawRegion
-              ? NativeReturnExpansion::OuterFunctionBoundary
-              : NativeReturnExpansion::InternalTransfer,
+          CertifiedOuterReturn ? NativeReturnExpansion::OuterFunctionBoundary
+                               : NativeReturnExpansion::InternalTransfer,
           Reserved);
       if (!Expanded)
         return fail(SpecializationStatus::InvalidInput,
@@ -4095,6 +4127,21 @@ bool Specializer::evaluate(int Id) {
                 ++It;
             }
           }
+          if (Frame.EntryReturnSlotIntact) {
+            const auto &Slot = *Options.EntryReturnSlot;
+            const uint64_t Offset = static_cast<uint64_t>(Slot.Offset);
+            if (Displacement) {
+              for (unsigned B = 0; B < Memory.AccessSize; ++B)
+                if (*Displacement + B - Offset < Slot.Bytes)
+                  Frame.EntryReturnSlotIntact = false;
+            } else {
+              if (!PreservationMetadataWork())
+                return fail(SpecializationStatus::BudgetExceeded,
+                            "entry return-slot preservation budget exhausted");
+              if (!InPreservedFrame(Offset, Slot.Bytes))
+                Frame.EntryReturnSlotIntact = false;
+            }
+          }
           // A complete frame proof also covers its contained entry return
           // word. Unchecked preservation and bounds that omit any return byte
           // still require the independent control-slot check.
@@ -4692,8 +4739,8 @@ bool Specializer::evaluate(int Id) {
         }
       }
       if (!emitTargets(Draft, Instruction, Original, std::move(Residual), Exec,
-                       Ctx, State, FrameRoot, ObjectRoots, Origins, Frame,
-                       Flow))
+                       Ctx, State, FrameRoot, ObjectRoots, Origins, Frame, Flow,
+                       CertifiedOuterReturn))
         return false;
       Finished = true;
     }
@@ -4723,7 +4770,8 @@ bool Specializer::evaluate(int Id) {
       ++Result.EvaluatedOperations;
       const size_t First = Draft.Block.Ops.size();
       if (!emitTargets(Draft, Instruction, {}, {}, Exec, Ctx, State, FrameRoot,
-                       ObjectRoots, Origins, Frame, StepResult::Continue))
+                       ObjectRoots, Origins, Frame, StepResult::Continue,
+                       false))
         return false;
       Draft.Slices.push_back({{}, First, Draft.Block.Ops.size() - First, true});
       Finished = true;
@@ -5620,8 +5668,10 @@ SpecializationResult Specializer::run() {
     Refinement.ReturningCalls = std::move(*Index);
   }
   std::vector<int> Entries;
-  auto InitialProjection =
-      project(Initial, FrameRoot, AffineCandidates, InitialOrigins, {});
+  FrameFacts InitialFrame;
+  InitialFrame.EntryReturnSlotIntact = Options.EntryReturnSlot.has_value();
+  auto InitialProjection = project(Initial, FrameRoot, AffineCandidates,
+                                   InitialOrigins, InitialFrame);
   if (!projectObjects(Initial, ObjectRoots, InitialProjection))
     return std::move(Result);
   const uint64_t FirstResidue =

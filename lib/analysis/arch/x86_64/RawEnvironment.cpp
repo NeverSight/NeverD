@@ -60,6 +60,11 @@ std::string optionsDigest(const SpecializationOptions &O) {
     for (const auto &C : O.X64ReturningCalls)
       x64::appendReturningCallDeclaration(H, C);
   }
+  if (O.EntryReturnSlot) {
+    H.text("x64-entry-return-slot-v1");
+    H.number(O.EntryReturnSlot->Offset);
+    H.number(O.EntryReturnSlot->Bytes);
+  }
   H.number(O.X64TerminalImports.size());
   for (const auto &B : O.X64TerminalImports) {
     H.number(B.Version);
