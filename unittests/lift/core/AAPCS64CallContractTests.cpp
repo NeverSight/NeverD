@@ -3630,4 +3630,28 @@ int main(void) {
       }
 }
 
+TEST(AAPCS64CallContract, AFrameSizeBuiltInARegisterBeyondTheLimitIsRefused) {
+  // A frame beyond an immediate's reach is subtracted through a register,
+  // as Go's runtime.call16777216 does: mov x27, #0x10; movk x27, #0x100,
+  // lsl #16; sub x20, sp, x27; mov sp, x20.  The block's constant moves the
+  // stack pointer further than a frame may span, so the function is
+  // refused by name.
+  const BinaryImage Image =
+      makeImage({{Text,
+                  {0xD280021Bu, // mov x27, #0x10
+                   0xF2A0201Bu, // movk x27, #0x100, lsl #16
+                   0xCB3B63F4u, // sub x20, sp, x27
+                   0x9100029Fu, // mov sp, x20
+                   0xF94003E0u, // ldr x0, [sp]
+                   0x8B3B63F4u, // add x20, sp, x27
+                   0x9100029Fu, // mov sp, x20
+                   Ret}}},
+                {{Text, "big"}}, {});
+  llvm::LLVMContext Context;
+  const auto Result = run(Image, Context, {Text});
+  EXPECT_FALSE(Result.Success);
+  EXPECT_NE(Result.Error.find("Stack frame larger than"), std::string::npos)
+      << Result.Error;
+}
+
 } // namespace

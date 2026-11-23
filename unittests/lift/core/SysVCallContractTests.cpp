@@ -3530,4 +3530,48 @@ TEST(SysVCallContract, TheVectorCountSetBeforeABranchReachesTheVariadicCall) {
   }
 }
 
+TEST(SysVCallContract, AFrameBeyondTheLimitIsRefused) {
+  // big reserves 32 MiB with one `sub rsp`, as Go's reflect call
+  // trampolines from runtime.call16777216 up do, and reads an argument
+  // above it.  No stage follows a frame that large: the function is
+  // refused by name, not read with a stack pointer nothing tracks.  edge,
+  // whose frame is just inside the limit, converts.
+  constexpr va_t Big = Text, Edge = Text + 0x20;
+  std::vector<uint8_t> Code(0x40, 0xCC);
+  put(Code, Big,
+      {0x55,                                     // push rbp
+       0x48, 0x89, 0xE5,                         // mov rbp, rsp
+       0x48, 0x81, 0xEC, 0x00, 0x00, 0x00, 0x02, // sub rsp, 0x2000000
+       0x48, 0x8B, 0x84, 0x24, 0x10, 0x00, 0x00,
+       0x02,                                     // mov rax, [rsp+0x2000010]
+       0x48, 0x89, 0x04, 0x24,                   // mov [rsp], rax
+       0x48, 0x81, 0xC4, 0x00, 0x00, 0x00, 0x02, // add rsp, 0x2000000
+       0x5D,                                     // pop rbp
+       0xC3});                                   // ret
+  put(Code, Edge,
+      {0x55,                                     // push rbp
+       0x48, 0x89, 0xE5,                         // mov rbp, rsp
+       0x48, 0x81, 0xEC, 0xF0, 0xFF, 0xFF, 0x00, // sub rsp, 0xfffff0
+       0x48, 0x89, 0x7C, 0x24, 0x08,             // mov [rsp+8], rdi
+       0x48, 0x8B, 0x44, 0x24, 0x08,             // mov rax, [rsp+8]
+       0x48, 0x81, 0xC4, 0xF0, 0xFF, 0xFF, 0x00, // add rsp, 0xfffff0
+       0x5D,                                     // pop rbp
+       0xC3});                                   // ret
+  const BinaryImage Img =
+      makeImportImage(Code, {{Big, "big"}, {Edge, "edge"}}, {});
+  for (const auto &[Entry, Converts] :
+       {std::pair{Big, false}, std::pair{Edge, true}}) {
+    SCOPED_TRACE(Entry);
+    llvm::LLVMContext Ctx;
+    PipelineOptions Opts;
+    Opts.EmitDumpOutput = false;
+    Opts.OnlyFunctionEntries = {Entry};
+    const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+    EXPECT_EQ(Result.Success, Converts) << Result.Error;
+    if (!Converts)
+      EXPECT_NE(Result.Error.find("Stack frame larger than"), std::string::npos)
+          << Result.Error;
+  }
+}
+
 } // namespace

@@ -5507,6 +5507,16 @@ the count a variadic callee reads all eight vector registers, its caller
 gains eight double parameters, and each caller of that passes eight values
 it never had.
 
+A function whose stack pointer moves further than a frame may span
+(`kMaxFrameSize`, 16 MiB) is refused by name (`analyzeStack`): by a constant
+on the stack pointer itself, or by one the block loaded into a register
+(AArch64's `mov x27, #N; sub x20, sp, x27; mov sp, x20`). Go's reflect call
+trampolines from `runtime.call16777216` to `runtime.call1073741824` reserve
+such frames. The bound also drops stale frame associations on registers
+reused for data, which keep being ignored; on the stack pointer it is the
+function's real frame, and reading on with a stack pointer nothing tracks
+printed wrong code.
+
 A RETURN hands back the parameter that arrived in the result register when
 no path from the function's entry to it writes any byte of that register,
 calls a routine, which clobbers it, or enters through an exceptional edge

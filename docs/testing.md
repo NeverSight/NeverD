@@ -9221,6 +9221,10 @@ which returns a double a wrapper hands back.
 `AAPCS64CallContract.SelectedFloatingRecordsKeepEveryObservedField` covers
 the record such a callee returns in the vector registers, which the call's
 output must stay for until it is bound.
+`SysVCallContract.AFrameBeyondTheLimitIsRefused` and
+`AAPCS64CallContract.AFrameSizeBuiltInARegisterBeyondTheLimitIsRefused`
+refuse a frame of 32 MiB by name, moved by an immediate or by a constant a
+register holds, and convert a frame just inside the limit.
 `TheVectorCountSetBeforeABranchReachesTheVariadicCall` passes a variadic
 callee no vector register where AL was cleared before the branch to the
 call's block, or tested zero by that branch.
