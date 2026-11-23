@@ -52,6 +52,14 @@ struct CallRegisterBodyView {
         HasIndependentRoots(F.HasIndependentRoots) {}
 };
 
+/// Whether every way into a block of \p F is one its predecessors show:
+/// every instruction is lifted, every indirect branch resolved, and nothing
+/// else enters but at the first block.  A fact carried from block to block
+/// (LowByteConstantsAtCalls) holds only then.
+inline bool lowBlocksShowEveryEntry(const CallRegisterBodyView &F) {
+  return F.Complete && !F.UnsafeIndirectBranches && !F.HasIndependentRoots;
+}
+
 } // namespace neverd
 
 #endif // NEVERD_IR_LOW_CALLREGISTERBODY_H

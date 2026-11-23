@@ -1794,11 +1794,11 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
       Img.Arch == Arch::X64 && Img.abiFormat() != BinaryFormat::COFF
           ? getTargetRegInfo(Img.Arch).floatingParamRegs(Img.abiFormat()).size()
           : 0;
+  LowByteConstantsAtCalls VectorCounts(F.Blocks, x86reg::RAX,
+                                       lowBlocksShowEveryEntry(F));
   auto VectorCountAt = [&](const LowBlock &Block, size_t Call) -> int8_t {
     if (const std::optional<uint8_t> Count =
-            VectorArguments
-                ? lowByteConstantAtCall(Block.Ops, Call, x86reg::RAX)
-                : std::nullopt;
+            VectorArguments ? VectorCounts.at(Block, Call) : std::nullopt;
         Count && *Count <= VectorArguments)
       return static_cast<int8_t>(*Count);
     return -1;

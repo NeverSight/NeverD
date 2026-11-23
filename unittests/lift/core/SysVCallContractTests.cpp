@@ -3406,4 +3406,128 @@ int main(void) {
 )");
 }
 
+TEST(SysVCallContract, TheVectorCountSetBeforeABranchReachesTheVariadicCall) {
+  // report(ctx, fmt, ...) is variadic as GCC builds sqlite3ErrorMsg: it
+  // tests AL, saves the eight vector registers for va_arg and calls through
+  // a pointer of ctx, so no summary says what it reads.  check clears EAX
+  // once, as the result of the path that returns and as the count of the
+  // call in the block the branch selects, the way GCC compiles
+  // sqlite3ExprCheckHeight.  tested passes the EAX a `test eax, eax; je`
+  // has just found zero.  Neither call passes a vector register, so check
+  // and tested take two integers, and run and runs, which call them, have
+  // no double to pass.
+  constexpr va_t Report = Text, Check = Text + 0xA0, Run = Text + 0xD0,
+                 Tested = Text + 0xF0, Runs = Text + 0x110;
+  std::vector<uint8_t> Code(0x130, 0xCC);
+  put(Code, Report,
+      {0x55,                                     // push rbp
+       0x48, 0x89, 0xE5,                         // mov rbp, rsp
+       0x41, 0x54,                               // push r12
+       0x49, 0x89, 0xFC,                         // mov r12, rdi
+       0x53,                                     // push rbx
+       0x48, 0x81, 0xEC, 0xE0, 0x00, 0x00, 0x00, // sub rsp, 0xe0
+       0x48, 0x89, 0x95, 0x50, 0xFF, 0xFF, 0xFF, // mov [rbp-0xb0], rdx
+       0x48, 0x89, 0x8D, 0x58, 0xFF, 0xFF, 0xFF, // mov [rbp-0xa8], rcx
+       0x4C, 0x89, 0x85, 0x60, 0xFF, 0xFF, 0xFF, // mov [rbp-0xa0], r8
+       0x4C, 0x89, 0x8D, 0x68, 0xFF, 0xFF, 0xFF, // mov [rbp-0x98], r9
+       0x84, 0xC0,                               // test al, al
+       0x74, 0x23,                               // je spilled
+       0x0F, 0x29, 0x85, 0x70, 0xFF, 0xFF, 0xFF, // movaps [rbp-0x90], xmm0
+       0x0F, 0x29, 0x4D, 0x80,                   // movaps [rbp-0x80], xmm1
+       0x0F, 0x29, 0x55, 0x90,                   // movaps [rbp-0x70], xmm2
+       0x0F, 0x29, 0x5D, 0xA0,                   // movaps [rbp-0x60], xmm3
+       0x0F, 0x29, 0x65, 0xB0,                   // movaps [rbp-0x50], xmm4
+       0x0F, 0x29, 0x6D, 0xC0,                   // movaps [rbp-0x40], xmm5
+       0x0F, 0x29, 0x75, 0xD0,                   // movaps [rbp-0x30], xmm6
+       0x0F, 0x29, 0x7D, 0xE0,                   // movaps [rbp-0x20], xmm7
+       0x48, 0x8D, 0x45, 0x10,                   // spilled: lea rax, [rbp+0x10]
+       0x48, 0x8D, 0x95, 0x20, 0xFF, 0xFF, 0xFF, // lea rdx, [rbp-0xe0]
+       0xC7, 0x85, 0x20, 0xFF, 0xFF, 0xFF, 0x10,
+       0x00, 0x00, 0x00,                         // mov dword [rbp-0xe0], 0x10
+       0x48, 0x89, 0x85, 0x28, 0xFF, 0xFF, 0xFF, // mov [rbp-0xd8], rax
+       0x48, 0x8D, 0x85, 0x40, 0xFF, 0xFF, 0xFF, // lea rax, [rbp-0xc0]
+       0xC7, 0x85, 0x24, 0xFF, 0xFF, 0xFF, 0x30,
+       0x00, 0x00, 0x00,                         // mov dword [rbp-0xdc], 0x30
+       0x48, 0x89, 0x85, 0x30, 0xFF, 0xFF, 0xFF, // mov [rbp-0xd0], rax
+       0x48, 0x89, 0xF7,                         // mov rdi, rsi
+       0x48, 0x89, 0xD6,                         // mov rsi, rdx
+       0x41, 0xFF, 0x14, 0x24,                   // call [r12]
+       0x48, 0x81, 0xC4, 0xE0, 0x00, 0x00, 0x00, // add rsp, 0xe0
+       0x5B,                                     // pop rbx
+       0x41, 0x5C,                               // pop r12
+       0x5D,                                     // pop rbp
+       0xC3});                                   // ret
+  put(Code, Check, {0x31, 0xC0,                  // xor eax, eax
+                    0x48, 0x83, 0xFE, 0x07,      // cmp rsi, 0x7
+                    0x7F, 0x01,                  // jg report_it
+                    0xC3,                        // ret
+                    0x55,                        // report_it: push rbp
+                    0x48, 0x89, 0xF2,            // mov rdx, rsi
+                    0x48, 0x8D, 0x35, 0x00, 0x10, 0x00, 0x00, // lea rsi, [fmt]
+                    0x48, 0x89, 0xE5,                         // mov rbp, rsp
+                    0xE8, 0x44, 0xFF, 0xFF, 0xFF,             // call report
+                    0xB8, 0x01, 0x00, 0x00, 0x00,             // mov eax, 0x1
+                    0x5D,                                     // pop rbp
+                    0xC3});                                   // ret
+  put(Code, Run,
+      {0x48, 0x83, 0xEC, 0x08,       // sub rsp, 0x8
+       0xE8, 0xC7, 0xFF, 0xFF, 0xFF, // call check
+       0x48, 0x83, 0xC0, 0x01,       // add rax, 0x1
+       0x48, 0x83, 0xC4, 0x08,       // add rsp, 0x8
+       0xC3});                       // ret
+  put(Code, Tested, {0x89, 0xF0,     // mov eax, esi
+                     0x85, 0xC0,     // test eax, eax
+                     0x74, 0x01,     // je report_it
+                     0xC3,           // ret
+                     0x55,           // report_it: push rbp
+                     0x48, 0x8D, 0x35, 0x00, 0x10, 0x00, 0x00, // lea rsi, [fmt]
+                     0x48, 0x89, 0xE5,                         // mov rbp, rsp
+                     0xE8, 0xF9, 0xFE, 0xFF, 0xFF,             // call report
+                     0xB8, 0x01, 0x00, 0x00, 0x00,             // mov eax, 1
+                     0x5D,                                     // pop rbp
+                     0xC3});                                   // ret
+  put(Code, Runs,
+      {0x48, 0x83, 0xEC, 0x08,       // sub rsp, 8
+       0xE8, 0xD7, 0xFF, 0xFF, 0xFF, // call tested
+       0x48, 0x83, 0xC0, 0x01,       // add rax, 1
+       0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+       0xC3});                       // ret
+  const BinaryImage Img = makeImportImage(Code,
+                                          {{Report, "report"},
+                                           {Check, "check"},
+                                           {Run, "run"},
+                                           {Tested, "tested"},
+                                           {Runs, "runs"}},
+                                          {});
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries = {Report, Check, Run, Tested, Runs};
+  const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  for (const va_t Entry : {Check, Tested}) {
+    SCOPED_TRACE(Entry);
+    const auto Func = llvm::find_if(
+        Result.MedFuncs, [&](const MedFunc &F) { return F.Entry == Entry; });
+    ASSERT_NE(Func, Result.MedFuncs.end());
+    EXPECT_FALSE(llvm::any_of(Func->Params, [](const MedVar &P) {
+      return P.RegOff >= x86reg::VectorBase;
+    }));
+  }
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Img.Arch;
+  Options.Format = Img.Format;
+  Options.Image = &Img;
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  for (const char *Name : {"check", "run", "tested", "runs"}) {
+    SCOPED_TRACE(Name);
+    const std::string Body = body(Source, Name);
+    ASSERT_FALSE(Body.empty()) << Source;
+    EXPECT_EQ(Body.find("double"), std::string::npos) << Body;
+    EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+  }
+}
+
 } // namespace

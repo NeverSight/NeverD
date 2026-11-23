@@ -9208,6 +9208,9 @@ other: it returns no float and no path reads one.
 `ARegisterACalleeNeverWritesKeepsTheCallersValue` runs callers that keep a
 value in RAX across calls to callees that write XMM0 and never RAX, one of
 which returns a double a wrapper hands back.
+`TheVectorCountSetBeforeABranchReachesTheVariadicCall` passes a variadic
+callee no vector register where AL was cleared before the branch to the
+call's block, or tested zero by that branch.
 `SysVCallContract.ACalleeThatLeavesForUnknownCodeStillReadsItsArguments`
 checks that a function which only hands its arguments to a callee ending in
 a jump through a pointer still takes them, and that a tail jump to it passes

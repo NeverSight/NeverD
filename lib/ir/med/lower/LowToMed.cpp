@@ -1426,6 +1426,14 @@ MedFunc LowToMedConverter::convertFunction(
     if (const GoWriteBarrier *Barrier = goWriteBarrierAt(*Image, Low.Entry))
       GoBarrierResult = goWriteBarrierResult(TheArch, Barrier->Kind);
 
+  // System V's AL at each call, across the function's blocks.
+  std::optional<LowByteConstantsAtCalls> VariadicVectorCounts;
+  if (Convention && Convention->VariadicVectorCountRegister)
+    VariadicVectorCounts.emplace(
+        Low.Blocks, *Convention->VariadicVectorCountRegister,
+        !Low.Blocks.empty() && Low.Blocks.front().StartAddr == Low.Entry &&
+            lowBlocksShowEveryEntry(CallRegisterBodyView(Low)));
+
   for (const auto &LB : Low.Blocks) {
     uint8_t DispatchDefined =
         TrackDispatchArgs ? DispatchDefinedIn[LowBlockIndex] : 0;
@@ -1826,10 +1834,10 @@ MedFunc LowToMedConverter::convertFunction(
           CallArgumentsFrom = *Own;
       // How many vector registers the call tells a variadic callee it
       // passes, at most (System V AL).
-      if (Convention && Convention->VariadicVectorCountRegister &&
+      if (VariadicVectorCounts &&
           (LOp.Opcode == NdOp::CALL || LOp.Opcode == NdOp::INDIR_CALL))
-        if (const std::optional<uint8_t> Count = lowByteConstantAtCall(
-                LB.Ops, LowOpIndex, *Convention->VariadicVectorCountRegister);
+        if (const std::optional<uint8_t> Count =
+                VariadicVectorCounts->at(LB, LowOpIndex);
             Count && *Count <= ConventionRegs.floatingParamRegs(Fmt).size())
           MOp.VariadicVectorCount = static_cast<int8_t>(*Count);
       // Bind ordinary register arguments first. The checked stack argument

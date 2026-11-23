@@ -5492,6 +5492,21 @@ keeps the ordinary arguments for both C backends. Explicit call-site source
 contracts retain their authority. Prototypes without supported argument summaries
 keep the existing SDK binding.
 
+System V's AL, the count of vector registers a call passes a variadic
+callee, is read across the blocks of a function
+(`LowByteConstantsAtCalls`), by MedIR and the callee read summaries alike.
+Where the start of the call's block comes before any write of AL, the count
+is the one constant every way into that block leaves there: GCC clears EAX
+once, as the result of the path that returns and as the count of the call
+in the block a branch selects (`sqlite3ExprCheckHeight`), and passes the EAX
+a `test eax, eax; je` has just found zero. The byte is unknown at the
+function's entry, in a block no other leads to and in one an exception
+enters, and nothing is carried across blocks where a block may be entered
+some way its predecessors do not show (`lowBlocksShowEveryEntry`). Without
+the count a variadic callee reads all eight vector registers, its caller
+gains eight double parameters, and each caller of that passes eight values
+it never had.
+
 A RETURN hands back the parameter that arrived in the result register when
 no path from the function's entry to it writes any byte of that register,
 calls a routine, which clobbers it, or enters through an exceptional edge
