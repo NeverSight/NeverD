@@ -7093,6 +7093,15 @@ Constant rotation counts use native remainder when their value fits in a
 single limb. For power-of-two carrier widths, only the low count bits are
 needed. A pair of distinct wide variables has a canonical bitwise ordering
 without constructing a word-sized neutral mask.
+For expanded products with many active minterms, the maximum degree over a
+set of coordinates counts the factors containing any of those coordinates.
+Successive restrictions recover overlapping factors and their multiplicities.
+The solver checks every recovered coefficient, including modular zeros. An
+expensive cubic search can first inspect two-coordinate slices. At a nonzero
+cube the coefficient fixes the scale, so a second coordinate that occurs in
+`n` factors must have the coefficients of `a^(3-n) * (a+b)^n` times that
+scale. An inconsistent slice leaves the original cubic available while the
+solver simplifies other terms.
 A bitwise expression in which each abstract input occurs once
 already uses the minimum number of binary operations for that reading.
 The region solver can use it directly and still check alternative input

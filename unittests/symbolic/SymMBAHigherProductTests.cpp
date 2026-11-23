@@ -571,6 +571,43 @@ TEST(SymMBAHigherProduct, CancelsExactResidualsBeforePolynomialProofExpansion) {
   }
 }
 
+TEST(SymMBAHigherProduct,
+     CubicCoordinateSlicesKeepFullWidthAndGeneralExpansion) {
+  for (unsigned Width : {3u, 65u}) {
+    SymContext C;
+    llvm::SmallVector<SymRef, 7> Vars;
+    for (unsigned I = 0; I != 7; ++I)
+      Vars.push_back(C.mkVar("v" + std::to_string(I), Width));
+    llvm::SmallVector<uint32_t, 7> Ids;
+    C.collectVars(C.mkAdd(Vars), Ids);
+    auto A = C.mkAnd({Vars[2], Vars[0], C.mkNot(Vars[1])});
+    auto B = C.mkAnd({Vars[2], Vars[1], C.mkNot(Vars[0])});
+    auto F = C.mkOr(A, B);
+    for (auto Scale :
+         {llvm::APInt(Width, 3), llvm::APInt::getSignMask(Width)}) {
+      llvm::SmallVector<detail::PolyTerm, 2> Split{{Scale, {A, F, F}},
+                                                   {Scale, {B, F, F}}};
+      detail::WorkBudget Product(65536), General(65536);
+      auto Expected = detail::expandOverMinterms(C, Split, Ids, Width, General);
+      auto Actual =
+          detail::expandOverMinterms(C, Split, Ids, Width, Product, true, true);
+      ASSERT_TRUE(Expected && Actual);
+      EXPECT_EQ(Actual->Higher, Expected->Higher);
+      // Two disjoint cubes have the same scale on every diagonal. A single
+      // product would also have mixed terms between these coordinates.
+      llvm::SmallVector<detail::PolyTerm, 2> Cubes{{Scale, {A, A, A}},
+                                                   {Scale, {B, B, B}}};
+      detail::WorkBudget Impossible(16384), Unrestricted(16384);
+      ASSERT_TRUE(
+          detail::expandOverMinterms(C, Cubes, Ids, Width, Unrestricted));
+      EXPECT_FALSE(detail::expandOverMinterms(C, Cubes, Ids, Width, Impossible,
+                                              true, true));
+      EXPECT_LT(Impossible.used(), Unrestricted.used());
+      EXPECT_FALSE(Impossible.exhausted());
+    }
+  }
+}
+
 TEST(SymMBAHigherProduct, ExtremalScaleRejectionKeepsGeneralExpansionExact) {
   for (unsigned Width : {3u, 8u, 32u, 64u, 257u})
     for (unsigned Degree : {3u, 4u}) {

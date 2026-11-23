@@ -4622,6 +4622,8 @@ wrapped low fields. The tests compare the complete product with independent
 multiplication, including even offsets and a change to a live bit. The 73-
 and 117-factor x86 fixtures also exercise both source views through the CLI
 and the GUI worker at Clang O0 and O2.
+Using `--count 32` exercises 160 distinct inputs, including 96 products
+above both 20,481 bits and 2,593 factors.
 
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,

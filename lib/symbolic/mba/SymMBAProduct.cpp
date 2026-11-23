@@ -355,6 +355,84 @@ void forEachProductMatch(const HigherCoefficients &Higher, unsigned Degree,
 
 } // namespace
 
+// The largest degree in a set S of minterms counts the factors meeting S.
+// Order variables in S first: the leading monomial has a unique choice in
+// each factor, so its coefficient survives even for a nonunit scale. Adding
+// one minterm therefore counts the factors that contain it but avoid S.
+static std::optional<llvm::SmallVector<TruthTable, 4>>
+recoverSupportByDegree(const HigherCoefficients &Higher, unsigned Degree,
+                       unsigned NumAtoms, llvm::ArrayRef<MintermIndex> Selected,
+                       size_t Corners, WorkBudget &Budget, size_t MaxBytes) {
+  const size_t Overhead = 256 + (2 * Degree + 3) * sizeof(TruthTable);
+  if (Overhead > MaxBytes ||
+      Corners > (MaxBytes - Overhead) / (sizeof(unsigned) + 2 * Degree))
+    return std::nullopt;
+  // A proper split removes at least one factor. Across all factors this
+  // bounds the complete number of scans before any table is allocated.
+  const size_t Scans = Degree * (Degree + 1) / 2;
+  const size_t Fixed = Corners + Selected.size() * (Degree + 2);
+  const size_t PerTerm = 2 * Degree + 2;
+  const size_t Available = Budget.available() / Scans;
+  if (Fixed > Available || Higher.size() > (Available - Fixed) / PerTerm)
+    return std::nullopt;
+
+  llvm::SmallVector<TruthTable, 4> Recovered;
+  llvm::SmallVector<unsigned, 64> Maximum(Corners);
+  while (Recovered.size() < Degree) {
+    unsigned Live = Degree - Recovered.size();
+    TruthTable Excluded = TruthTable::zero(NumAtoms);
+    TruthTable Factor = TruthTable::zero(NumAtoms);
+    llvm::SmallVector<bool, 8> Prior(Recovered.size(), true);
+    unsigned Base = 0;
+    bool NewGroup = true;
+    for (auto M : Selected) {
+      if (NewGroup) {
+        Budget.consume(Fixed + PerTerm * Higher.size());
+        llvm::fill(Maximum, 0);
+        Base = 0;
+        for (const auto &[Key, Coeff] : Higher) {
+          unsigned InSet = 0;
+          for (auto V : Key)
+            InSet += Excluded.at(V);
+          Base = std::max(Base, InSet);
+          // Keys are sorted. Add each distinct minterm's multiplicity in
+          // this monomial to the rank already supplied by Excluded.
+          for (size_t I = 0; I < Key.size();) {
+            const auto First = I++;
+            while (I < Key.size() && Key[I] == Key[First])
+              ++I;
+            auto &Rank = Maximum[Key[First]];
+            Rank = std::max(Rank, InSet + unsigned(I - First));
+          }
+        }
+        NewGroup = false;
+      }
+      unsigned Count = std::max(Base, Maximum[M]) - Base;
+      unsigned Previous = 0;
+      for (size_t I = 0; I < Recovered.size(); ++I)
+        Previous += Prior[I] && Recovered[I].at(M);
+      if (Count < Previous || Count - Previous > Live)
+        return llvm::SmallVector<TruthTable, 4>{};
+      Count -= Previous;
+      if (Count == Live)
+        Factor.set(M);
+      else if (Count) {
+        // Choose the group that excludes M. All earlier unanimous bits
+        // survive the split, and at least one factor remains.
+        Live -= Count;
+        Excluded.set(M);
+        for (size_t I = 0; I < Recovered.size(); ++I)
+          Prior[I] = Prior[I] && !Recovered[I].at(M);
+        NewGroup = true;
+      }
+    }
+    if (Factor.isZero())
+      return llvm::SmallVector<TruthTable, 4>{};
+    Recovered.append(Live, Factor);
+  }
+  return Recovered;
+}
+
 std::optional<llvm::SmallVector<TruthTable, 4>>
 recoverProductSupport(const HigherCoefficients &Higher, unsigned Degree,
                       unsigned NumAtoms, WorkBudget &Budget, size_t MaxBytes) {
@@ -372,7 +450,8 @@ recoverProductSupport(const HigherCoefficients &Higher, unsigned Degree,
   }
   const auto Selected = selectedMinterms(Active);
   if (Selected.size() > 8)
-    return std::nullopt;
+    return recoverSupportByDegree(Higher, Degree, NumAtoms, Selected, *Corners,
+                                  Budget, MaxBytes);
   const size_t Subsets = size_t(1) << Selected.size();
   const size_t PerTerm = (size_t(1) << Degree) + Degree * Selected.size();
   const size_t TailWork = Subsets * (2 * Selected.size() + Degree + 2);
