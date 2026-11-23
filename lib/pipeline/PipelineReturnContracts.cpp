@@ -1380,6 +1380,14 @@ private:
     case GOTAddressKind::None:
       break;
     }
+    // The parameter that arrived in the return register, handed back by a
+    // function that never writes the register: Go passes its first argument
+    // there, and a function with no result returns with it as it came.
+    if (Value.Kind == MedVar::Param && Value.RegOff == TRI.IntReturnReg &&
+        !F.WritesReturnRegister) {
+      Paths.push_back(ReturnedValue::Incoming);
+      return;
+    }
     if (Value.Kind == MedVar::Param ||
         Depth > ::neverd::limits::pipeline::
                     kPipelineReturnContractsClassifyMaxDepth ||
@@ -1409,15 +1417,24 @@ private:
         (Def->second->Opcode == NdOp::COPY && Def->second->NumInputs == 1 &&
          keyOf(Def->second->Inputs[0]) == keyOf(Value))) {
       // A register as the function entered it: no value, unless a
-      // parameter arrives in it.
-      const bool Parameter = Value.Kind == MedVar::Reg &&
-                             llvm::any_of(F.Func->Params, [&](const MedVar &P) {
-                               return P.RegOff == Value.RegOff;
-                             });
-      Paths.push_back(Value.Kind == MedVar::Reg && Value.SSAVer == 0 &&
-                              !Parameter
-                          ? ReturnedValue::Unwritten
-                          : ReturnedValue::Other);
+      // parameter arrives in it.  Only the return register itself shows the
+      // function means none: another register's entry value was copied
+      // there, by code whose reason this pass does not know.  A parameter
+      // that arrived in the return register of a function that never writes
+      // it is a value where a caller reads it.
+      if (Value.Kind != MedVar::Reg || Value.SSAVer != 0) {
+        Paths.push_back(ReturnedValue::Other);
+        return;
+      }
+      const bool Parameter = llvm::any_of(F.Func->Params, [&](const MedVar &P) {
+        return P.RegOff == Value.RegOff;
+      });
+      const bool ReturnRegister = Value.RegOff == TRI.IntReturnReg;
+      Paths.push_back(Parameter ? ReturnRegister && !F.WritesReturnRegister
+                                      ? ReturnedValue::Incoming
+                                      : ReturnedValue::Other
+                      : ReturnRegister ? ReturnedValue::Unwritten
+                                       : ReturnedValue::Undefined);
       return;
     }
     const MedOp &Op = *Def->second;

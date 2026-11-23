@@ -995,6 +995,60 @@ TEST(ReturnContracts, TheUnreadResultOfARoutineDeclaredVoidReadsZero) {
   EXPECT_TRUE(Kept.Inputs[0].isConst() && Kept.Inputs[0].ConstVal == 0);
 }
 
+TEST(ReturnContracts,
+     AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt) {
+  // Go passes its first argument in RAX.  runtime.compute0 writes through
+  // its second and returns with RAX as it came: no result, unless a caller
+  // reads one, as it does of a function that returns its argument.
+  MedVar Argument = rax(0);
+  Argument.Kind = MedVar::Param;
+  MedFunc ByParameter = function(CalleeEntry, {block({returning(Argument)})});
+  ByParameter.Params.push_back(Argument);
+  MedFunc ByRegister =
+      function(CalleeEntry, {block({seed(), returning(rax(0))})});
+  ByRegister.Params.push_back(Argument);
+  const MedFunc Reader = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1),
+                           operation(NdOp::STORE, {}, {temporary(7), rax(1)}),
+                           returning(MedVar::makeConst(0, 8))})});
+  for (const MedFunc &Callee : {ByParameter, ByRegister}) {
+    EXPECT_EQ(settle({Callee}), std::vector<bool>{true});
+    EXPECT_EQ(settle({Callee, Reader}), (std::vector<bool>{false, false}));
+  }
+
+  // One that also writes the register hands the argument back as a value.
+  MedFunc Writing =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({returning(rax(0))}, {0}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0})});
+  Writing.Params.push_back(Argument);
+  EXPECT_EQ(settle({Writing}), std::vector<bool>{false});
+}
+
+TEST(ReturnContracts, AnotherRegisterAsEnteredShowsNothing) {
+  // `mov %rbx, %rax; ret` of an RBX the function never set leaves nothing
+  // defined, but the register was written: beside a `return 1` the function
+  // keeps its value, where a return that never wrote RAX would not.
+  const MedVar Rbx = inRegister(x86reg::RBX, 8, 2, 0);
+  const auto Beside = [](MedVar Entered) {
+    return function(
+        CalleeEntry,
+        {block({seed(), operation(NdOp::COPY, Entered, {Entered}),
+                operation(NdOp::COND_BR, {}, {temporary(9)})},
+               {}, {1, 2}),
+         block({returning(Entered)}, {0}),
+         block({operation(NdOp::COPY, rax(2), {MedVar::makeConst(1, 8)}),
+                returning(rax(2))},
+               {0})});
+  };
+  EXPECT_EQ(settle({Beside(Rbx)}), std::vector<bool>{false});
+  EXPECT_EQ(settle({Beside(rax(0))}), std::vector<bool>{true});
+}
+
 TEST(ReturnContracts, AReturnOfACopiedArgumentIsAValue) {
   // `mov %rdi, %rax; ret`: copy propagation left the RETURN reading RDI,
   // the argument, where the register holds it.

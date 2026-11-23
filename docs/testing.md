@@ -9165,6 +9165,9 @@ read declarations. `ReturnContracts.ACalleeAndTheCallerThatHandsItsResultBackRet
 `ACalleeNoPathShowsMeansNoValueWaitsForItsCaller` and
 `AFunctionThatReturnsWhatItsOwnCallReturnsShowsNothing` cover how a callee and
 the callers that hand its result back are settled together;
+`AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt` and
+`AnotherRegisterAsEnteredShowsNothing` what a register handed back as the
+function entered it means;
 `AConstantBesideAPathThatNeverWroteTheRegisterIsNoValue`,
 `AConstantBesideTheResultOfAFunctionThatReturnsNoneIsNot` and
 `AConstantIsADeliberateValue` what a constant beside a path that hands back
