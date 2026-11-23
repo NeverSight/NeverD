@@ -4077,9 +4077,8 @@ bool HighCWriter::ctorSourceExpr(const HighExpr *Op,
 void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
   CapturedEntryRegisters.clear();
   CapturedCallerFrame = false;
-  // On x86-64 only the frame pointer is followed.
-  const bool FramePointerOnly = Opts.TheArch == Arch::X64;
-  if ((Opts.TheArch != Arch::AArch64 && !FramePointerOnly) || Func.IsVariadic)
+  const bool X64 = Opts.TheArch == Arch::X64;
+  if ((Opts.TheArch != Arch::AArch64 && !X64) || Func.IsVariadic)
     return;
   const auto &TRI = getTargetRegInfo(Opts.TheArch);
   if (!TRI.GetRegName || TRI.PointerSize == 0)
@@ -4087,26 +4086,39 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
 
   struct CandidateReg {
     uint64_t Offset = 0;
+    /// A caller-saved general register: the kind whose saving shows a
+    /// context save.
     bool CallerSaved = false;
+    /// A register parameter of the printed signature: it counts as saved,
+    /// and stays that parameter.
+    bool Parameter = false;
   };
   const auto AsEntry = [&](const MedVar &V) -> std::optional<CandidateReg> {
+    // A register parameter a context save stores is one of its registers.
+    if (X64 && V.Kind == MedVar::Param && V.RegOff != kNoParamReg &&
+        x64MachineRegister(V) == X64MachineRegister::General)
+      return CandidateReg{V.RegOff, !TRI.isCalleeSaveReg(V.RegOff), true};
     // HighVarRename keeps a later definition's register offset, clears its
     // SSA version, and gives it a rename tag. That local is not the value
     // this function was entered with. The incoming register has no tag.
+    const X64MachineRegister Machine =
+        X64 ? x64MachineRegister(V) : X64MachineRegister::None;
+    const bool Vector = Machine == X64MachineRegister::Vector;
     if (V.Kind != MedVar::Reg || V.SSAVer != 0 || V.RenameTag >= 0 ||
-        V.Size != TRI.PointerSize)
+        (V.Size != TRI.PointerSize && !Vector))
       return std::nullopt;
     if (TRI.isLinkRegister(V.RegOff) || TRI.isPlatformRegister(V.RegOff) ||
         TRI.isStackPointer(V.RegOff) || TRI.isFlag(V.RegOff, V.Size))
       return std::nullopt;
     const char *RegName = TRI.GetRegName(V.RegOff, V.Size);
-    if (FramePointerOnly ? !TRI.isFramePointer(V.RegOff)
-                         : !RegName || RegName[0] != 'X')
+    if (!RegName ||
+        (X64 ? Machine == X64MachineRegister::None : RegName[0] != 'X'))
       return std::nullopt;
     const std::string Name = rawVarName(V);
     if (Name.empty() || isEmittedParamName(Name))
       return std::nullopt;
-    return CandidateReg{V.RegOff, !TRI.isCalleeSaveReg(V.RegOff)};
+    return CandidateReg{V.RegOff, !Vector && !TRI.isCalleeSaveReg(V.RegOff),
+                        false};
   };
   const auto PeeledVar = [&](const HighExpr *E) -> const HighExpr * {
     const HighExpr *Inner = unwrapIntegerView(E);
@@ -4158,11 +4170,13 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
     bool Capture = false;
     bool Other = false;
     bool CallerSaved = false;
+    bool Parameter = false;
   };
   std::map<uint64_t, Use> Uses;
   const auto Note = [&](CandidateReg Entry, bool Capture) {
     Use &U = Uses[Entry.Offset];
     U.CallerSaved = Entry.CallerSaved;
+    U.Parameter = Entry.Parameter;
     if (Capture)
       U.Capture = true;
     else
@@ -4227,10 +4241,23 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
   // save rather than one lost temporary. x9-x12 are that group; the kernel
   // entry saves x9-x17. Fewer stay unknown.
   constexpr unsigned kContextSaveCallerSaved = 4;
-  unsigned CallerSaved = 0;
+  unsigned CallerSaved = 0, CallerSavedParameters = 0;
   for (const auto &Item : Uses)
     if (Item.second.Capture && !Item.second.Other && Item.second.CallerSaved)
-      ++CallerSaved;
+      ++(Item.second.Parameter ? CallerSavedParameters : CallerSaved);
+  // Most caller-saved registers of x86-64 carry arguments, and a function
+  // that stores four arguments keeps no context. A parameter it only stores
+  // counts where the function stores a register no caller gives it.
+  if (X64 && x64SavesUngivenRegister([&](uint64_t Register) {
+        const auto Used = Uses.find(Register);
+        if (Used == Uses.end())
+          return X64EntryUse::None;
+        return Used->second.Capture && !Used->second.Other &&
+                       !Used->second.Parameter
+                   ? X64EntryUse::Stored
+                   : X64EntryUse::Read;
+      }))
+    CallerSaved += CallerSavedParameters;
   if (CallerSaved < kContextSaveCallerSaved) {
     // The frame pointer alone is still a context's: a function that stores
     // the one it was entered with and reads it no other way keeps its
@@ -4242,7 +4269,7 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
     return;
   }
   for (const auto &Item : Uses)
-    if (Item.second.Capture && !Item.second.Other)
+    if (Item.second.Capture && !Item.second.Other && !Item.second.Parameter)
       CapturedEntryRegisters.insert(Item.first);
 }
 
@@ -7005,18 +7032,24 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
     // The prologue the compiler gives a function that asks for it saves
     // that register, and __builtin_frame_address(1) reads the saved value
     // back, whatever the caller keeps in the register.
-    if (CapturedCallerFrame && E.Var.Kind == MedVar::Reg &&
-        TRI.isFramePointer(E.Var.RegOff) && E.Var.Size == TRI.PointerSize)
+    if ((CapturedCallerFrame || (Opts.TheArch == Arch::X64 &&
+                                 CapturedEntryRegisters.count(E.Var.RegOff))) &&
+        E.Var.Kind == MedVar::Reg && TRI.isFramePointer(E.Var.RegOff) &&
+        E.Var.Size == TRI.PointerSize)
       return "(uintptr_t)__builtin_frame_address(1)";
     // A context save stores the entry register and does not use it as a
     // value. The stored bits are that register, same as x18 above.
     if (E.Var.Kind == MedVar::Reg &&
         CapturedEntryRegisters.count(E.Var.RegOff) && TRI.GetRegName) {
       const std::string Reg(TRI.GetRegName(E.Var.RegOff, E.Var.Size));
-      if (!Reg.empty() && Reg.front() == 'X')
+      if (Opts.TheArch == Arch::X64) {
+        if (std::string Read = x64MachineRegisterText(E.Var); !Read.empty())
+          return Read;
+      } else if (!Reg.empty() && Reg.front() == 'X') {
         return "({ uint64_t __entry; __asm__ volatile(\"mov %0, " +
                llvm::StringRef(Reg).lower() +
                "\" : \"=r\"(__entry)); __entry; })";
+      }
     }
     // EOR and the other data uses read the same incoming Q that AESE does.
     // The node recorded for a store is the spill and stays a trap.

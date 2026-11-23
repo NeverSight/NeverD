@@ -9231,6 +9231,12 @@ which returns a double a wrapper hands back.
 `AAPCS64CallContract.SelectedFloatingRecordsKeepEveryObservedField` covers
 the record such a callee returns in the vector registers, which the call's
 output must stay for until it is bound.
+`SysVCallContract.AFunctionThatOnlyStoresItsRegistersSavesAContext` runs
+an x86-64 function that stores ten general registers and XMM8: the
+registers no parameter carries are read from the machine, the parameters
+arrive as passed, and RBP is the caller's frame.
+`SysVCallContract.FourStoredArgumentsAreNoContextSave` stores four
+arguments and R10 without RAX: R10 stays a value nothing defines.
 `SysVCallContract.TheFramePointerAFunctionOnlyStoresIsItsCallersFrame`
 and its `AAPCS64CallContract` counterpart run a function that stores the
 frame pointer it was entered with and compare the stored value with the

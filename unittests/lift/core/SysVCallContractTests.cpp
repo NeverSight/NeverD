@@ -3602,4 +3602,66 @@ int main(void) {
 )");
 }
 
+TEST(SysVCallContract, AFunctionThatOnlyStoresItsRegistersSavesAContext) {
+  // save_all(buf) stores the registers it was entered with, as a signal
+  // trampoline or Go's asyncPreempt and panicBounds keep the register
+  // file of the code they interrupt.  No caller gives a function a value
+  // in RAX: one that only stores it, and other caller-saved registers
+  // with it, saves a context.  RCX, RDX, RSI and R8 would carry arguments
+  // and stay parameters.  The registers no parameter carries are read
+  // from the machine, RBP as the caller's frame.
+  const std::vector<uint8_t> Code = {
+      0x48, 0x89, 0x07,                   // mov [rdi], rax
+      0x48, 0x89, 0x4F, 0x08,             // mov [rdi+8], rcx
+      0x48, 0x89, 0x57, 0x10,             // mov [rdi+0x10], rdx
+      0x48, 0x89, 0x5F, 0x18,             // mov [rdi+0x18], rbx
+      0x48, 0x89, 0x6F, 0x20,             // mov [rdi+0x20], rbp
+      0x48, 0x89, 0x77, 0x28,             // mov [rdi+0x28], rsi
+      0x4C, 0x89, 0x47, 0x30,             // mov [rdi+0x30], r8
+      0x4C, 0x89, 0x57, 0x38,             // mov [rdi+0x38], r10
+      0x4C, 0x89, 0x5F, 0x40,             // mov [rdi+0x40], r11
+      0x4C, 0x89, 0x67, 0x48,             // mov [rdi+0x48], r12
+      0xF3, 0x44, 0x0F, 0x7F, 0x47, 0x50, // movdqu [rdi+0x50], xmm8
+      0xC3};                              // ret
+  const BinaryImage Img = makeImportImage(Code, {{Text, "save_all"}}, {});
+  const std::string Source = liftEntries(Img, {Text});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  for (const char *Read :
+       {"%%rax, %0", "%%r10, %0", "%%r11, %0", "%%rbx, %0", "%%r12, %0",
+        "movdqu {%%xmm8, %0", "__builtin_frame_address(1)"})
+    EXPECT_NE(Source.find(Read), std::string::npos) << Read << "\n" << Source;
+  SCOPED_TRACE(Source);
+  // What the scratch registers hold is the machine's; the parameters and
+  // the caller's frame are what the caller gave.
+  compileAndRun(Source + R"(
+int main(void) {
+  _Alignas(16) uint64_t kept[12] = {0};
+  __typeof__(save_all) *volatile call = save_all;
+  call((void *)kept, 1, 2, 3, 4);
+  return kept[1] == 3 && kept[2] == 2 && kept[5] == 1 && kept[6] == 4 &&
+                 kept[4] == (uintptr_t)__builtin_frame_address(0)
+             ? 0
+             : 1;
+}
+)");
+}
+
+TEST(SysVCallContract, FourStoredArgumentsAreNoContextSave) {
+  // set4(obj, a, b, c, d) stores its four arguments, as any constructor
+  // does, and R10, which holds nothing it was given.  Four caller-saved
+  // registers are stored, but not RAX: the function keeps no register
+  // file, and R10 stays a value nothing defines.
+  const std::vector<uint8_t> Code = {
+      0x48, 0x89, 0x37,       // mov [rdi], rsi
+      0x48, 0x89, 0x57, 0x08, // mov [rdi+8], rdx
+      0x48, 0x89, 0x4F, 0x10, // mov [rdi+0x10], rcx
+      0x4C, 0x89, 0x47, 0x18, // mov [rdi+0x18], r8
+      0x4C, 0x89, 0x57, 0x20, // mov [rdi+0x20], r10
+      0xC3};                  // ret
+  const BinaryImage Img = makeImportImage(Code, {{Text, "set4"}}, {});
+  const std::string Source = liftEntries(Img, {Text});
+  EXPECT_EQ(Source.find("%%r10"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_trap"), std::string::npos) << Source;
+}
+
 } // namespace

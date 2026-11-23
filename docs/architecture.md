@@ -12310,11 +12310,22 @@ When an unrelated unresolved value prevents a complete entry-demand graph,
 native helper inference may retain an independent full-word, call-preserved
 entry register used directly by an effect. LowIR must confirm the same read and
 the existing preserved-state proof still applies. A prologue spill value alone
-does not establish a source parameter. An AArch64 function that only stores
-four or more distinct caller-saved entry GPRs, and does not use those values
-as addresses or operands, is saving the architectural register context. HighC
-names each of those registers and the callee-saved entry registers stored with
-them. A later definition of the same register is a different value: HighIR
+does not establish a source parameter. An AArch64 or x86-64 function that
+only stores four or more distinct caller-saved entry GPRs, and does not use
+those values as addresses or operands, is saving the architectural register
+context. HighC names each of those registers and the callee-saved entry
+registers stored with them. Most caller-saved registers of x86-64 carry
+arguments, and a register an argument arrives in is a parameter, not one of
+the four. Where the function only stores the RAX it was entered with, which
+no caller of a function that is not variadic gives a value, and reads
+neither R10 nor R11 (`HighC/X86/HighCContextSave.cpp`), the register
+parameters it only stores count too and stay parameters; an SSE register it
+only stores is read whole. Go's `asyncPreempt` keeps the general registers
+in its frame and XMM0 to XMM15 in the P's scratch area, and `debugCallV2`
+keeps them for the debugger; `panicBounds`, whose two parameters are bound
+at its calls, hands the six other argument registers it saved to
+`panicBounds64`. Four stored arguments without RAX are a constructor, and a
+register stored with them stays unknown. A later definition of the same register is a different value: HighIR
 renames it and clears its SSA version, and that local is not a use of the
 incoming register. A variadic save, a prologue spill, and any incoming register
 that is also used as a value stay unknown. The frame pointer alone is still
