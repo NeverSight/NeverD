@@ -21,10 +21,16 @@ namespace {
 
 bool isDigit(char C) { return C >= '0' && C <= '9'; }
 
+bool isHexDigit(unsigned C) {
+  // Fold ASCII case. Both range tests are unsigned and independent, so a
+  // run of digits and letters can be checked together.
+  return (C - '0' < 10) | ((C | 0x20U) - 'a' < 6);
+}
+
 bool isRadixDigit(char C, unsigned Radix) {
   switch (Radix) {
   case 16:
-    return isDigit(C) || (C >= 'a' && C <= 'f') || (C >= 'A' && C <= 'F');
+    return isHexDigit(static_cast<unsigned char>(C));
   case 2:
     return C == '0' || C == '1';
   default:
@@ -67,6 +73,19 @@ void Lexer::advance() {
         Pos += 2;
     }
     size_t Start = Pos;
+    if (Radix == 16) {
+      // Scan complete blocks of a wide literal. The scalar tail stops at the
+      // first invalid byte, including a delimiter inside a partial block.
+      constexpr size_t Block = 16;
+      while (Text.size() - Pos >= Block) {
+        bool Valid = true;
+        for (size_t I = 0; I < Block; ++I)
+          Valid &= isHexDigit(static_cast<unsigned char>(Text[Pos + I]));
+        if (!Valid)
+          break;
+        Pos += Block;
+      }
+    }
     while (Pos < Text.size() && isRadixDigit(Text[Pos], Radix))
       ++Pos;
     Cur.K = Token::Number;

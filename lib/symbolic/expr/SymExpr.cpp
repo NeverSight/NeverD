@@ -269,6 +269,12 @@ std::optional<llvm::APInt> SymContext::asConst(SymRef R) const {
   return constValue(R);
 }
 
+unsigned SymContext::constantRotateAmount(SymRef Count, unsigned Width) const {
+  const auto &N = node(Count);
+  assert(N.Op == SymOp::Const && Width);
+  return N.Width <= 64 ? N.Aux % Width : WideConsts[N.Aux].urem(Width);
+}
+
 bool SymContext::isConstZero(SymRef R) const {
   const auto &N = node(R);
   return N.Op == SymOp::Const &&

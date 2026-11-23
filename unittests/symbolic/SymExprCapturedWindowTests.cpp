@@ -446,6 +446,68 @@ TEST(SymExpr, MaskedBitwiseJoinsShareOnlyTheObservedLanes) {
   }
 }
 
+TEST(SymExpr, WrappedMaskedJoinsKeepBothSidesOfBitZero) {
+  for (unsigned Width : {32u, 65u, 193u}) {
+    SymContext C;
+    const std::array Vars{C.mkVar("x", Width), C.mkVar("y", Width),
+                          C.mkVar("z", Width)};
+    const unsigned Size = Width == 193 ? 73 : 17;
+    const auto Full = llvm::APInt::getAllOnes(Width);
+    for (unsigned Suffix : {1u, Size / 2, Size - 1}) {
+      const unsigned At = Width - Suffix;
+      auto Count = llvm::APInt(Width, At);
+      // On non-power-of-two widths, a high count limb changes the rotation.
+      auto Large = llvm::APInt::getSignMask(Width);
+      Count += Large - llvm::APInt(Width, Large.urem(Width));
+      const auto Turn = C.mkConst(Count);
+      const auto Live = llvm::APInt::getLowBitsSet(Width, Size).rotl(At);
+      for (auto Op : {SymOp::Or, SymOp::Xor}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ',' << Suffix << ',' << unsigned(Op));
+        auto Join = [&](llvm::ArrayRef<SymRef> Arms) {
+          return Op == SymOp::Or ? C.mkOr(Arms) : C.mkXor(Arms);
+        };
+        llvm::SmallVector<SymRef, 4> Wide, Other, Confined;
+        std::array<llvm::APInt, 3> Masks;
+        for (unsigned J = 0; J < Vars.size(); ++J) {
+          auto Mask = Live;
+          Mask.clearBit((At + 2 + J) % Width);
+          Masks[J] = Mask | ~Live;
+          Wide.push_back(C.mkAnd(Vars[J], C.mkConst(Masks[J])));
+          Other.push_back(C.mkAnd(
+              Vars[J], C.mkConst(Mask | llvm::APInt::getOneBitSet(
+                                            Width, Size - Suffix +
+                                                       J % (Width - Size)))));
+          Confined.push_back(C.mkAnd(Vars[J], C.mkConst(Mask)));
+        }
+        auto Read = [&](llvm::ArrayRef<SymRef> Parts) {
+          return C.mkExtract(C.mkRor(Join(Parts), Turn), 0, Size);
+        };
+        const auto Field = Read(Wide);
+        EXPECT_EQ(C.projectMaskedBitwiseField(Join(Wide), At, Size), Field);
+        EXPECT_FALSE(C.projectMaskedBitwiseField(Join(Confined), At, Size));
+        std::reverse(Other.begin(), Other.end());
+        EXPECT_EQ(Field, Read(Other));
+        const auto ConfinedField = Read(Confined);
+        for (unsigned Bit : {0u, Width - 1, At, Size - Suffix - 1}) {
+          auto Changed = Wide;
+          auto Perturbed = Masks[0];
+          Perturbed.flipBit(Bit);
+          Changed[0] = C.mkAnd(Vars[0], C.mkConst(Perturbed));
+          const std::array Inputs{Full, llvm::APInt(Width, 0),
+                                  llvm::APInt(Width, 0)};
+          const auto Expected = Masks[0].rotr(At).trunc(Size);
+          EXPECT_EQ(C.eval(Field, Inputs), Expected);
+          EXPECT_EQ(C.eval(ConfinedField, Inputs), Expected);
+          EXPECT_EQ(C.eval(Read(Changed), Inputs),
+                    Perturbed.rotr(At).trunc(Size));
+          EXPECT_NE(C.eval(Read(Changed), Inputs), Expected);
+        }
+      }
+    }
+  }
+}
+
 TEST(SymExpr, SharedMaskedSumsKeepNestedFieldProjectionBounded) {
   constexpr unsigned Width = 193, Depth = 36;
   for (bool SameSource : {true, false}) {

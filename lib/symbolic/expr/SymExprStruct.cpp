@@ -209,9 +209,14 @@ projectMaskedBitwise(SymContext &Ctx, SymRef Join, uint64_t At, unsigned Size,
                      unsigned &RemainingSplits, Extract Read) {
   const unsigned Width = Ctx.width(Join);
   const unsigned N = Ctx.numOperands(Join);
-  if (At + Size > Width || Size == Width || N - 1 > RemainingSplits)
+  if (Size == Width || N - 1 > RemainingSplits)
     return std::nullopt;
-  const auto Words = (At + Size - 1) / 64 - At / 64 + 1;
+  // The low end of a rotated field comes from At. A field crossing bit
+  // zero takes its more significant bits from the word's low prefix.
+  const unsigned Suffix = std::min<unsigned>(Size, Width - At);
+  const unsigned Prefix = Size - Suffix;
+  const auto Words =
+      (At + Suffix - 1) / 64 - At / 64 + 1 + llvm::APInt::getNumWords(Prefix);
   constexpr auto Limit = ::neverd::limits::symbolic::
       kSymExprStructSymContextConstantWindowRemaining;
   if (N > Limit / Words)
@@ -227,29 +232,37 @@ projectMaskedBitwise(SymContext &Ctx, SymRef Join, uint64_t At, unsigned Size,
     if (AlreadyNarrow) {
       const auto Digits =
           Ctx.constWords(Ctx.isConst(Term) ? Term : Ctx.operand(Term, 0));
-      AlreadyNarrow = (!At || detail::zeroBitWindow(Digits, 0, At)) &&
-                      (At + Size == Width ||
-                       detail::zeroBitWindow(Digits, At + Size, Width));
+      AlreadyNarrow =
+          Prefix ? detail::zeroBitWindow(Digits, Prefix, At)
+                 : (!At || detail::zeroBitWindow(Digits, 0, At)) &&
+                       (At + Size == Width ||
+                        detail::zeroBitWindow(Digits, At + Size, Width));
     }
   }
   if (AlreadyNarrow)
     return std::nullopt;
 
   RemainingSplits -= N - 1;
+  const auto Turn = Prefix ? Ctx.mkConst(Width, At) : SymRef{};
   llvm::SmallVector<SymRef, 8> Parts;
   for (unsigned I = 0; I < N; ++I) {
     // Interning a slice can move both operands and literals in the arena.
     const auto Term = Ctx.operand(Join, I);
     const bool Constant = Ctx.isConst(Term);
     const auto Literal = Constant ? Term : Ctx.operand(Term, 0);
-    const auto Mask = literalField(Ctx.constWords(Literal), At, Size);
+    const auto Digits = Ctx.constWords(Literal);
+    auto Mask = literalField(Digits, At, Suffix);
+    if (Prefix)
+      Mask = literalField(Digits, 0, Prefix).concat(Mask);
     if (Mask.isZero())
       continue;
     if (Constant) {
       Parts.push_back(Ctx.mkConst(Mask));
       continue;
     }
-    const auto Field = Read(Ctx.operand(Term, 1), At, Size);
+    const auto Source = Ctx.operand(Term, 1);
+    const auto Field = Prefix ? Read(Ctx.mkRor(Source, Turn), 0, Size)
+                              : Read(Source, At, Size);
     Parts.push_back(Mask.isAllOnes() ? Field
                                      : Ctx.mkAnd(Field, Ctx.mkConst(Mask)));
   }
@@ -533,6 +546,22 @@ void SymContext::retainLowWordProjection(SymRef Source, uint32_t Width,
   Entry = {Key, Image};
 }
 
+SymRef SymContext::projectMaskedBitwiseField(SymRef Join, uint32_t Low,
+                                             uint32_t Width) {
+  assert(Width && Width <= width(Join) && Low < width(Join));
+  const auto N = numOperands(Join);
+  if ((op(Join) != SymOp::Or && op(Join) != SymOp::Xor) || N <= 2)
+    return {};
+  unsigned Splits =
+      std::min(N - 1, ::neverd::limits::symbolic::kSymExprMaskedFieldMaxSplits);
+  auto Read = [&](SymRef Source, unsigned At, unsigned Bits) {
+    return extractWindow(Source, At, Bits, Splits);
+  };
+  if (auto Field = projectMaskedBitwise(*this, Join, Low, Width, Splits, Read))
+    return Field->Word;
+  return {};
+}
+
 SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
   unsigned RemainingSplits =
       ::neverd::limits::symbolic::kSymExprMaskedFieldMaxSplits;
@@ -588,7 +617,7 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
       const auto Count = operand(A, 1);
       if (!isConst(Count))
         break;
-      const auto By = constValue(Count).urem(Have);
+      const auto By = constantRotateAmount(Count, Have);
       At = (At + (Outer == SymOp::Ror ? By : Have - By)) % Have;
     }
     std::optional<detail::WordWindow> Selected;
@@ -614,7 +643,7 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
     const auto Motion = op(A);
     if ((Motion == SymOp::Rol || Motion == SymOp::Ror) &&
         isConst(operand(A, 1))) {
-      const auto By = constValue(operand(A, 1)).urem(Have);
+      const auto By = constantRotateAmount(operand(A, 1), Have);
       At = (uint64_t(Low) + (Motion == SymOp::Ror ? By : Have - By)) % Have;
       A = operand(A, 0);
       Low = At;

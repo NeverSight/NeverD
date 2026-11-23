@@ -217,11 +217,11 @@ TEST(SymMBAResiduePowers, ProjectedFactorsRetainLowDisturbances) {
     }
 }
 
-TEST(SymMBAResiduePowers, LinearProductsPreserveAllLiveFieldBits) {
-  constexpr unsigned Count = 521;
+static void checkLinearProducts(unsigned Count, bool RepeatOffsets,
+                                llvm::ArrayRef<unsigned> Widths) {
   std::mt19937_64 Random(0x2516412);
-  for (unsigned Bits : {1u, 31u, 64u, 65u, 97u, 129u}) {
-    SCOPED_TRACE(Bits);
+  for (unsigned Bits : Widths) {
+    SCOPED_TRACE(::testing::Message() << Count << "," << Bits);
     const unsigned Width = Bits <= 65 ? 193 : 321;
     const unsigned Shift = Bits + 1, Precision = Shift + Bits;
     SymContext Ctx;
@@ -232,7 +232,9 @@ TEST(SymMBAResiduePowers, LinearProductsPreserveAllLiveFieldBits) {
     const auto Scale = llvm::APInt(Width, 5).shl(Width - Precision);
     // The top coefficient bits and the even offset both affect the product.
     auto Offset = [&](unsigned I) {
-      auto A = llvm::APInt(Width, I == 20 ? 6 : 2 * I + 1);
+      const unsigned K = RepeatOffsets ? I % 7 : I;
+      const bool Even = I == 20 || (RepeatOffsets && I == 72);
+      auto A = llvm::APInt(Width, Even ? 6 : 2 * K + 1);
       if (I % 5 == 2)
         A.setBit(Bits);
       return A;
@@ -285,6 +287,14 @@ TEST(SymMBAResiduePowers, LinearProductsPreserveAllLiveFieldBits) {
       EXPECT_EQ(simplifyMBADeep(Ctx, Input, Opts).Expr, Input);
     }
   }
+}
+
+TEST(SymMBAResiduePowers, LinearProductsPreserveAllLiveFieldBits) {
+  checkLinearProducts(521, false, {1, 31, 64, 65, 97, 129});
+}
+
+TEST(SymMBAResiduePowers, RepeatedOffsetPowersKeepEvenCofactors) {
+  checkLinearProducts(2111, true, {31, 65, 97});
 }
 
 TEST(SymMBAResiduePowers, DominantPrefixesRetainDisturbedAndIndependentWords) {

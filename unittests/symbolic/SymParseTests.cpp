@@ -216,6 +216,24 @@ TEST(SymParse, PowerOfTwoRadicesKeepOnlyDeclaredLimbsAndRoundTripEveryNibble) {
             "0x1ABCDEF01234567890000000000000000FEDCBA9876543210");
 }
 
+TEST(SymParse, WideHexScanStopsAtTheFirstNonDigitInEveryLane) {
+  for (unsigned I = 0; I < 32; ++I) {
+    const std::string Left = "0x1" + std::string(I, 'A');
+    const std::string Right = "0xF" + std::string(32 - I, 'f');
+    SymContext C;
+    EXPECT_EQ(C.constValue(parse(C, Left + "+" + Right, 193)),
+              llvm::APInt(193, llvm::StringRef(Left).drop_front(2), 16) +
+                  llvm::APInt(193, llvm::StringRef(Right).drop_front(2), 16));
+    for (char Bad :
+         {char(0), ':', '@', 'G', '`', 'g', char(0x80), char(0xff)}) {
+      auto Spelling = Left + Bad + "1234567890abcdef";
+      const auto R = parseSymExpr(C, Spelling, 193);
+      EXPECT_FALSE(R.ok());
+      EXPECT_EQ(R.ErrorOffset, Left.size());
+    }
+  }
+}
+
 TEST(SymParse, AWidthSuffixOverridesTheParseWidth) {
   SymContext Ctx;
   EXPECT_EQ(Ctx.width(parse(Ctx, "255#8")), 8u);
