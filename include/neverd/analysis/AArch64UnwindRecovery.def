@@ -35,6 +35,9 @@ NEVERD_UNWIND_TEXT(
     kCFI, "implicit unwind recovery cannot resolve this CFA or register rule")
 NEVERD_UNWIND_TEXT(
     kCode, "implicit unwind recovery cannot decode the complete control flow")
+NEVERD_UNWIND_TEXT(kTailReentry,
+                   "arm64e tail transfer cannot reconcile its possible targets "
+                   "with the source unwind rows and restored caller state")
 NEVERD_UNWIND_TEXT(kLandingPad, "implicit unwind recovery cannot resolve this "
                                 "personality or landing-pad table")
 NEVERD_UNWIND_TEXT(

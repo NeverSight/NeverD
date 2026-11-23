@@ -141,8 +141,20 @@ MACHO_AUTH_NATIVE_TEXT(kClassicReturnCFIOption, "-DNEVERD_CLASSIC_RETURN_CFI")
 MACHO_AUTH_NATIVE_TEXT(kClassicAsyncCFIOption, "-DNEVERD_CLASSIC_ASYNC_CFI")
 MACHO_AUTH_NATIVE_TEXT(kWrongEpilogueCFIOption, "-DNEVERD_WRONG_EPILOGUE_CFI")
 MACHO_AUTH_NATIVE_TEXT(kMultiExitCFIOption, "-DNEVERD_MULTI_EXIT_CFI")
+MACHO_AUTH_NATIVE_TEXT(kMultiRegisterCFIOption, "-DNEVERD_MULTI_REGISTER_CFI")
 MACHO_AUTH_NATIVE_TEXT(kRegisterTailCFIOption, "-DNEVERD_REGISTER_TAIL_CFI")
 MACHO_AUTH_NATIVE_TEXT(kOpaqueTailCFIOption, "-DNEVERD_OPAQUE_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kMutableTailCFIOption, "-DNEVERD_MUTABLE_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kAmbiguousMutableTailCFIOption,
+                       "-DNEVERD_AMBIGUOUS_MUTABLE_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kLocalTailCFIOption, "-DNEVERD_LOCAL_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kMixedTargetsCFIOption, "-DNEVERD_MIXED_TARGETS_CFI")
+MACHO_AUTH_NATIVE_TEXT(kSignedLocalTailCFIOption, "-DNEVERD_SIGNED_LOCAL_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kSavedLocalTailCFIOption, "-DNEVERD_SAVED_LOCAL_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kFramePointerTailCFIOption, "-DNEVERD_FP_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kAmbiguousTailCFIOption, "-DNEVERD_AMBIGUOUS_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kClobberedTailCFIOption, "-DNEVERD_CLOBBERED_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kUnmarkedTailCFIOption, "-DNEVERD_UNMARKED_TAIL_CFI")
 MACHO_AUTH_NATIVE_TEXT(kMissingRestoreCFIOption, "-DNEVERD_MISSING_RESTORE_CFI")
 MACHO_AUTH_NATIVE_VALUE(uint64_t, kClassicCFIOperand, 0x2d)
 MACHO_AUTH_NATIVE_TEXT(kWrongKeyCFIOption, "-DNEVERD_WRONG_KEY_CFI")
@@ -642,13 +654,26 @@ int main(int argc, char **argv) {
 
 MACHO_AUTH_NATIVE_TEXT(kObjectSource, R"cpp(
 #include <ptrauth.h>
+#ifdef NEVERD_MULTI_REGISTER_CFI
+#define NEVERD_MULTI_EXIT_CFI
+#endif
 #if defined(NEVERD_MULTI_EXIT_CFI) || defined(NEVERD_MISSING_RESTORE_CFI)
 #define NEVERD_CLASSIC_ALTERNATE_EXIT
 #endif
-#if defined(NEVERD_REGISTER_TAIL_CFI) || defined(NEVERD_OPAQUE_TAIL_CFI)
+#ifdef NEVERD_AMBIGUOUS_MUTABLE_TAIL_CFI
+#define NEVERD_MUTABLE_TAIL_CFI
+#define NEVERD_AMBIGUOUS_TAIL_CFI
+#endif
+#if defined(NEVERD_SAVED_LOCAL_TAIL_CFI) || defined(NEVERD_LOCAL_TAIL_CFI) || defined(NEVERD_SIGNED_LOCAL_TAIL_CFI) || defined(NEVERD_MIXED_TARGETS_CFI)
+#define NEVERD_CLASSIC_LOCAL_EXIT
+#endif
+#if defined(NEVERD_FP_TAIL_CFI) || defined(NEVERD_MUTABLE_TAIL_CFI) || defined(NEVERD_CLASSIC_LOCAL_EXIT) || defined(NEVERD_AMBIGUOUS_TAIL_CFI) || defined(NEVERD_CLOBBERED_TAIL_CFI) || defined(NEVERD_UNMARKED_TAIL_CFI) || defined(NEVERD_REGISTER_TAIL_CFI) || defined(NEVERD_OPAQUE_TAIL_CFI)
 #define NEVERD_CLASSIC_REGISTER_EXIT
 #endif
 #if defined(NEVERD_CLASSIC_REGISTER_EXIT) || defined(NEVERD_CLASSIC_ALTERNATE_EXIT) || defined(NEVERD_CLASSIC_RETURN_CFI) || defined(NEVERD_CLASSIC_ASYNC_CFI) || defined(NEVERD_WRONG_KEY_CFI) || defined(NEVERD_MIXED_RETURN_CFI) || defined(NEVERD_WRONG_EPILOGUE_CFI)
+#ifdef NEVERD_MUTABLE_TAIL_CFI
+asm(".data\n.p2align 3\nLmutable_slot: .quad _native_target\n.text\n");
+#endif
 asm(".text\n.p2align 2\n.globl _classic_frame\n_classic_frame:\n"
     ".cfi_startproc\n"
 #ifdef NEVERD_WRONG_KEY_CFI
@@ -656,7 +681,7 @@ asm(".text\n.p2align 2\n.globl _classic_frame\n_classic_frame:\n"
 #else
     "pacibsp\n"
 #endif
-    ".cfi_negate_ra_state\n"
+    ".cfi_negate_ra_state\n2:\n"
     "stp x29, x30, [sp, #-16]!\n.cfi_def_cfa_offset 16\n"
     ".cfi_offset x29, -16\n.cfi_offset x30, -8\n"
     // GNU_args_size with an operand identical to the generic signing opcode.
@@ -664,7 +689,34 @@ asm(".text\n.p2align 2\n.globl _classic_frame\n_classic_frame:\n"
 #ifdef NEVERD_MIXED_RETURN_CFI
     ".cfi_same_value 34\n"
 #endif
-#ifdef NEVERD_REGISTER_TAIL_CFI
+#ifdef NEVERD_SAVED_LOCAL_TAIL_CFI
+    "mov x29, sp\nadr x16, 1f\n.cfi_def_cfa x29, 16\n.cfi_remember_state\n"
+    "add sp, sp, #16\n.cfi_def_cfa sp, 0\n.cfi_restore x30\n"
+    "autibsp\n.cfi_negate_ra_state\nbr x16\n1:\n.cfi_restore_state\n"
+    "ldp x29, x30, [x29]\n.cfi_def_cfa sp, 0\n.cfi_restore x29\n.cfi_restore x30\n"
+    "autibsp\n.cfi_negate_ra_state\nret\n"
+#else
+#ifdef NEVERD_MUTABLE_TAIL_CFI
+    "adrp x16, Lmutable_slot@PAGE\nldr x16, [x16, Lmutable_slot@PAGEOFF]\n"
+#endif
+#if defined(NEVERD_MIXED_TARGETS_CFI)
+    "adr x16, 1f\nadrp x17, _native_target@PAGE\n"
+    "add x17, x17, _native_target@PAGEOFF\ncmp w0, #0\ncsel x16, x16, x17, ge\n"
+#elif defined(NEVERD_LOCAL_TAIL_CFI)
+    "adr x16, 1f\n"
+#elif defined(NEVERD_SIGNED_LOCAL_TAIL_CFI)
+    "adr x16, 2b\n"
+#elif defined(NEVERD_FP_TAIL_CFI) || defined(NEVERD_AMBIGUOUS_TAIL_CFI)
+    "mov x29, sp\n.cfi_def_cfa x29, 16\n"
+#ifdef NEVERD_AMBIGUOUS_TAIL_CFI
+    ".cfi_undefined x29\n"
+#endif
+    "nop\n"
+#elif defined(NEVERD_CLOBBERED_TAIL_CFI)
+    "mov x19, x0\n"
+#elif defined(NEVERD_UNMARKED_TAIL_CFI)
+    "br x0\n"
+#elif defined(NEVERD_REGISTER_TAIL_CFI)
     "adrp x16, _native_target@PAGE\nadd x16, x16, _native_target@PAGEOFF\n"
 #endif
 #ifdef NEVERD_MULTI_EXIT_CFI
@@ -683,13 +735,23 @@ asm(".text\n.p2align 2\n.globl _classic_frame\n_classic_frame:\n"
     "autibsp\n.cfi_negate_ra_state\nret\n"
 #elif defined(NEVERD_CLASSIC_REGISTER_EXIT)
     "autibsp\n.cfi_negate_ra_state\n"
-#ifdef NEVERD_REGISTER_TAIL_CFI
+#if defined(NEVERD_MUTABLE_TAIL_CFI) || defined(NEVERD_REGISTER_TAIL_CFI) || defined(NEVERD_CLASSIC_LOCAL_EXIT)
     "br x16\n"
+#ifdef NEVERD_MIXED_TARGETS_CFI
+    "1: add w0, w0, #3\nret\n"
+#elif defined(NEVERD_LOCAL_TAIL_CFI)
+    "1: ret\n"
+#endif
 #else
     "br x0\n"
 #endif
 #elif defined(NEVERD_CLASSIC_ALTERNATE_EXIT)
-    "autibsp\n.cfi_negate_ra_state\nret\n1:\n"
+    "autibsp\n.cfi_negate_ra_state\n"
+#ifdef NEVERD_MULTI_REGISTER_CFI
+    "br x0\n1:\n"
+#else
+    "ret\n1:\n"
+#endif
 #ifdef NEVERD_MULTI_EXIT_CFI
     ".cfi_restore_state\n"
 #else
@@ -702,6 +764,7 @@ asm(".text\n.p2align 2\n.globl _classic_frame\n_classic_frame:\n"
     "retaa\n"
 #else
     "retab\n"
+#endif
 #endif
     ".cfi_endproc\n");
 #endif

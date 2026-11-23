@@ -91,6 +91,13 @@ AArch64RAQueryResult evaluateAArch64ReturnAddressState(
     const AArch64RAQueryLimits &Limits, bool &HasExplicitRule,
     AArch64RASigningVisitor VisitSigning);
 
+/// Additionally notify the visitor when DW_CFA_restore_state restores a
+/// different known signing state. A producer can then compare whole PC ranges.
+AArch64RAQueryResult visitAArch64ReturnAddressTransitions(
+    Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
+    const AArch64RAQueryLimits &Limits, bool &HasExplicitRule,
+    AArch64RASigningVisitor VisitSigning);
+
 } // namespace neverd::dwarf_eh
 
 #endif // NEVERD_LOADER_DWARF_AARCH64RETURNADDRESSSTATE_H

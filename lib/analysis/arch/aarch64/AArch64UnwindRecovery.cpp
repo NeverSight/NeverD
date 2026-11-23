@@ -754,9 +754,85 @@ AArch64RecoveredUnwindRow forwardingRow(uint64_t Offset) {
   return Row;
 }
 
+// A restored caller can re-enter this activation only where the input FDE
+// describes that same CFA and return address. A signed live LR or a different
+// SP-based CFA contradicts it. A saved LR with an unknown CFA proves neither.
+enum class ClassicReentry { Incompatible, Caller, Unresolved };
+
+bool sourceSignsLR(const AArch64ClassicReturnCFI &Source, uint64_t Offset) {
+  const auto Next = llvm::upper_bound(
+      Source.SigningRows, Offset,
+      [](uint64_t PC, const auto &Row) { return PC < Row.Offset; });
+  return Next != Source.SigningRows.begin() && std::prev(Next)->Signed;
+}
+
+std::optional<AArch64ReturnAddressState> savedReturn(const State &S,
+                                                     const FrameRow &Row) {
+  if (!Row.CFARegister)
+    return std::nullopt;
+  const auto &LR = Row.Registers[kLR];
+  if (LR.Location == AArch64UnwindRegister::SameValue)
+    return S.Registers[kLR].Return;
+  if (LR.Location == AArch64UnwindRegister::AtCFA) {
+    const auto Slot = S.Stack.find(LR.Offset);
+    if (Slot != S.Stack.end())
+      return Slot->second.Return;
+  }
+  return std::nullopt;
+}
+
+bool matchesClassicRow(const State &S, const FrameRow &Row,
+                       const std::optional<AArch64ReturnAddressState> &Signing,
+                       bool Signed) {
+  if (!Signing ||
+      add(S.Registers[*Row.CFARegister].StackOffset, Row.CFAOffset) != 0)
+    return false;
+  if (!Signed)
+    return Signing->Kind == AArch64RASigningKind::Unsigned;
+  return Signing->Kind == AArch64RASigningKind::SP &&
+         Signing->Key == AArch64RAKey::B &&
+         Signing->Recipe == AArch64RARecipe::HintPACM;
+}
+
+ClassicReentry classicReentry(const std::map<uint64_t, FrameRow> &Rules,
+                              const AArch64ClassicReturnCFI &Source,
+                              uint64_t Offset) {
+  const FrameRow &Row = std::prev(Rules.upper_bound(Offset))->second;
+  if (Row.CFARegister == kSP && Row.CFAOffset != 0)
+    return ClassicReentry::Incompatible;
+  // With the incoming FP restored, a row that saves the caller's FP at
+  // [FP] would make the caller's Darwin frame record point to itself.
+  const auto &SavedFP = Row.Registers[kFP];
+  if (Row.CFARegister == kFP &&
+      SavedFP.Location == AArch64UnwindRegister::AtCFA &&
+      add(Row.CFAOffset, SavedFP.Offset) == 0)
+    return ClassicReentry::Incompatible;
+  if (Row.Registers[kLR].Location != AArch64UnwindRegister::SameValue)
+    return ClassicReentry::Unresolved;
+  if (sourceSignsLR(Source, Offset))
+    return ClassicReentry::Incompatible;
+  return Row.CFARegister == kSP ? ClassicReentry::Caller
+                                : ClassicReentry::Unresolved;
+}
+
+bool hasRestoredCaller(const State &S) {
+  const auto &LR = S.Registers[kLR].Return;
+  if (S.Registers[kSP].StackOffset != 0 || !LR ||
+      LR->Kind != AArch64RASigningKind::Unsigned)
+    return false;
+  for (unsigned R = NDArm64eFirstPreservedGPR; R <= kFP; ++R)
+    if (S.Registers[R].IncomingRegister != R)
+      return false;
+  for (unsigned R = kFirstDSlot; R < kFirstHighSlot; ++R)
+    if (S.Registers[R].IncomingRegister != R)
+      return false;
+  return true;
+}
+
 llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     const BinaryImage &Image, const ExceptionFunction &Function,
-    llvm::ArrayRef<va_t> Roots, const AArch64UnwindRecoveryLimits &Limits) {
+    llvm::ArrayRef<va_t> Roots, const AArch64UnwindRecoveryLimits &Limits,
+    const AArch64ClassicReturnCFI *Source = nullptr) {
   const auto Start = Function.CodeRange.Begin;
   const uint64_t Size = Function.Dwarf ? Function.Dwarf->AddressRange
                                        : Function.Compact->CodeRange.size();
@@ -825,6 +901,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     Work.push_back(Index);
   }
   Entries.push_back(Count);
+  std::optional<llvm::SmallVector<size_t>> Reentries;
+  bool CheckSourceRows = false;
   size_t Transitions = 0;
   while (!Work.empty()) {
     if (++Transitions > Limits.MaxTransitions)
@@ -856,6 +934,26 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       } else if (merge(*States[Next], Incoming)) {
         Work.push_back(Next);
       }
+    };
+    const bool IsEpilogue =
+        Source && llvm::binary_search(Source->Epilogues, Offset);
+    const auto QueueLocal = [&](va_t Target) {
+      const auto Distance = Target - Start;
+      if (Distance % neverd::aarch64::kInsnSize)
+        return false;
+      if (IsEpilogue) {
+        const auto &Row = std::prev(Rules.upper_bound(Distance))->second;
+        if (!matchesClassicRow(After, Row, savedReturn(After, Row),
+                               sourceSignsLR(*Source, Distance)))
+          return false;
+        CheckSourceRows = true;
+      }
+      const size_t Next = Distance / neverd::aarch64::kInsnSize;
+      if (Next >= Begin && Next < End)
+        Queue(Next, After);
+      else if (!llvm::binary_search(Entries, Next))
+        return false;
+      return true;
     };
     const bool IsCall = cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL);
     if (!Pads->empty() && (*Pads)[Index] != Count) {
@@ -889,15 +987,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       if (Ops.empty() || Ops.back().type != AARCH64_OP_IMM)
         return fail(kCode);
       const auto Target = va_t(Ops.back().imm);
-      if (Target >= Start && Target - Start < Size) {
-        if ((Target - Start) % neverd::aarch64::kInsnSize)
-          return fail(kCode);
-        const size_t Next = (Target - Start) / neverd::aarch64::kInsnSize;
-        if (Next >= Begin && Next < End)
-          Queue(Next, After);
-        else if (!llvm::binary_search(Entries, Next))
-          return fail(kCode);
-      }
+      if (Target >= Start && Target - Start < Size && !QueueLocal(Target))
+        return fail(kCode);
       if (I.Id != AARCH64_INS_B ||
           (D.cc != AArch64CC_Invalid && D.cc != AArch64CC_AL &&
            D.cc != AArch64CC_NV)) {
@@ -925,15 +1016,48 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       Queue(Index + 1, After);
     } else if (I.Id == AARCH64_INS_BR && Ops.size() == 1 &&
                Ops.front().type == AARCH64_OP_REG) {
-      // A register can carry a relocated ADR/ADRP function address. A known
-      // separate callable has no successor in this FDE. An opaque register
-      // could also reach an interior instruction, so keep that edge unknown.
       const auto R = reg(Ops.front().reg);
-      const auto Target =
-          R ? States[Index]->Registers[*R].CodeAddress : std::nullopt;
-      if (!Target || Function.CodeRange.contains(*Target) ||
-          !Image.hasAuthenticatedFunctionEntryAt(*Target))
+      if (!R)
         return fail(kCode);
+      const Value &Destination = States[Index]->Registers[*R];
+      if (const auto Target = Destination.CodeAddress) {
+        if (*Target >= Start && *Target - Start < Size) {
+          if (!QueueLocal(*Target))
+            return fail(kCode);
+        } else if (!Image.hasAuthenticatedFunctionEntryAt(*Target)) {
+          return fail(kCode);
+        }
+      } else if (Destination.Return) {
+        if (Destination.Return->Kind != AArch64RASigningKind::Unsigned)
+          return fail(kCode);
+      } else {
+        // An opaque target can be outside this FDE, at its entry or inside it.
+        // The input object's original rows constrain only the in-frame edges.
+        // Never infer a mutable function pointer's value from its initializer.
+        if (!IsEpilogue || Destination.StackOffset || !hasRestoredCaller(After))
+          return fail(IsEpilogue ? kTailReentry : kCode);
+        CheckSourceRows = true;
+        if (!Reentries) {
+          Reentries.emplace();
+          for (size_t Next = 0; Next < Count; ++Next) {
+            switch (classicReentry(Rules, *Source,
+                                   Next * neverd::aarch64::kInsnSize)) {
+            case ClassicReentry::Incompatible:
+              break;
+            case ClassicReentry::Caller:
+              Reentries->push_back(Next);
+              break;
+            case ClassicReentry::Unresolved:
+              return fail(kTailReentry);
+            }
+          }
+        }
+        if (Reentries->size() > Limits.MaxTransitions - Transitions)
+          return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
+        Transitions += Reentries->size();
+        for (size_t Next : *Reentries)
+          Queue(Next, After);
+      }
     } else if (I.Id == AARCH64_INS_HLT || I.Id == AARCH64_INS_UDF ||
                (I.Id == AARCH64_INS_BRK && Ops.size() == 1 &&
                 Ops.front().type == AARCH64_OP_IMM &&
@@ -962,16 +1086,12 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       const auto &S = *States[I];
       Rule = instructionFrameRow(
           S, Declared, Function.Compact ? &*Function.Compact : nullptr);
-      if (Rule.CFARegister) {
-        const auto &LR = Rule.Registers[kLR];
-        if (LR.Location == AArch64UnwindRegister::SameValue)
-          Signing = S.Registers[kLR].Return;
-        else if (LR.Location == AArch64UnwindRegister::AtCFA) {
-          const auto Slot = S.Stack.find(LR.Offset);
-          if (Slot != S.Stack.end())
-            Signing = Slot->second.Return;
-        }
-      }
+      Signing = savedReturn(S, Rule);
+      // Local epilogue edges use the source unwind contract. Check that
+      // every reached instruction also reproduces its effective source row.
+      if (CheckSourceRows && !matchesClassicRow(S, *Declared, Signing,
+                                                sourceSignsLR(*Source, Offset)))
+        return fail(kTailReentry);
     } else if (Declared) {
       Rule = *Declared;
     }
@@ -1103,6 +1223,19 @@ recoverDarwinAArch64Unwind(const BinaryImage &Image,
     }
   }
   return Rows;
+}
+
+llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
+recoverDarwinAArch64ObjectUnwind(const BinaryImage &Image,
+                                 const ExceptionFunction &Function,
+                                 const AArch64ClassicReturnCFI &Source) {
+  const auto Range = Function.CodeRange;
+  if (!Image.isArm64e() || !Function.Dwarf || Range.End <= Range.Begin ||
+      !queryAArch64UnwindSigning(Image, Function, Range.Begin)
+           .HasImplicitDarwinSigning)
+    return fail(kProfile);
+  return recoverImplicitFrame(Image, Function, frameEntries(Image, Range), {},
+                              &Source);
 }
 
 const AArch64RecoveredUnwindRow &
