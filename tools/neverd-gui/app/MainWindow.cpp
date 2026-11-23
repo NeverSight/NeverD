@@ -3991,6 +3991,7 @@ void MainWindow::showPseudocode(const QString &representation, CodeOpen mode) {
       view->text()->selectAddress(*address);
   view->window()->activateWindow();
   view->text()->setFocus();
+  emit codeDocumentOpened(view);
 }
 
 void MainWindow::openCodeDock(Dock *dock) {

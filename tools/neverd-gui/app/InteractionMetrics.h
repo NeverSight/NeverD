@@ -24,6 +24,7 @@ class QWidget;
 
 namespace neverd::gui {
 
+class CodeView;
 class MainWindow;
 class Session;
 
@@ -60,7 +61,7 @@ private:
   Step jumpStep(const char *name,
                 std::optional<LinkResource> resource = std::nullopt);
   Step pseudocodeStep(const char *name);
-  void measurePseudocode(const char *name, Done done,
+  void measurePseudocode(CodeView *code, const char *name, Done done,
                          std::optional<qint64> actionStart = std::nullopt);
   Step graphStep(const char *name);
   /// Call \p then at the backing-store flush after \p view next paints.

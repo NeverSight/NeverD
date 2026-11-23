@@ -394,10 +394,28 @@ InteractionMetrics::Step InteractionMetrics::pseudocodeStep(const char *name) {
         }
         actionStart = clock_.nsecsElapsed();
       }
-      action->trigger();
-      QTimer::singleShot(0, this, [this, name, done, actionStart] {
-        measurePseudocode(name, done, actionStart);
+      // The action can wait for a listing jump or open a new dock before Qt
+      // gives it focus. Observe the document selected by the actual command.
+      auto *limit = new QTimer(this);
+      limit->setSingleShot(true);
+      connect(limit, &QTimer::timeout, this, [this, limit] {
+        limit->deleteLater();
+        finish(false,
+               QStringLiteral("pseudocode action did not open a window"));
       });
+      connect(
+          &window_, &MainWindow::codeDocumentOpened, limit,
+          [this, name, done, actionStart, limit](CodeView *view) {
+            limit->stop();
+            limit->deleteLater();
+            QTimer::singleShot(
+                0, this, [=, this, code = QPointer<CodeView>(view)] {
+                  measurePseudocode(code, name, done, actionStart);
+                });
+          },
+          Qt::SingleShotConnection);
+      limit->start(::neverd::limits::gui::kInteractionMetricsSampleTimeoutMs);
+      action->trigger();
     };
     // Leaving the graph starts a listing jump. F5 itself defers until that
     // jump lands, so its window cannot be measured on the next timer yet.
@@ -410,16 +428,10 @@ InteractionMetrics::Step InteractionMetrics::pseudocodeStep(const char *name) {
   };
 }
 
-void InteractionMetrics::measurePseudocode(const char *name, Done done,
+void InteractionMetrics::measurePseudocode(CodeView *code, const char *name,
+                                           Done done,
                                            std::optional<qint64> actionStart) {
   {
-    CodeView *code = nullptr;
-    for (auto *view : window_.findChildren<CodeView *>())
-      if (view->isVisible() && CodeView::isSource(view->representation()) &&
-          (!actionStart || view->isAncestorOf(QApplication::focusWidget()))) {
-        code = view;
-        break;
-      }
     if (!code) {
       phases_.insert(QLatin1String(name),
                      QJsonObject{{"error", "no pseudocode window"}});

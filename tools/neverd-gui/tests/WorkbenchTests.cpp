@@ -158,11 +158,11 @@ struct InteractionMetricsTestAccess {
   static qsizetype samples(const InteractionMetrics &metrics) {
     return metrics.samples_.size();
   }
-  static void pseudocode(InteractionMetrics &metrics, Address address,
-                         std::function<void()> done) {
+  static void pseudocode(InteractionMetrics &metrics, CodeView *view,
+                         Address address, std::function<void()> done) {
     metrics.started_ = true;
     metrics.samples_ = {address};
-    metrics.measurePseudocode("pseudocode", std::move(done));
+    metrics.measurePseudocode(view, "pseudocode", std::move(done));
   }
   static void openPseudocode(InteractionMetrics &metrics, Address address,
                              std::function<void()> done) {
@@ -16053,14 +16053,22 @@ private slots:
     QVERIFY(listing->jumpPending());
     InteractionMetrics metrics(*bench.window, bench.session,
                                directory.filePath("interactions.json"),
-                               NativeOpenTimeoutMs, nullptr);
+                               NativeOpenTimeoutMs, nullptr, Base + 16);
     bool done = false;
+    connect(bench.window.get(), &MainWindow::codeDocumentOpened, this,
+            [](CodeView *opened) { opened->text()->clearFocus(); });
     InteractionMetricsTestAccess::openPseudocode(metrics, Base + 16,
                                                  [&] { done = true; });
     QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
     const auto result = InteractionMetricsTestAccess::pseudocodeResult(metrics);
     QCOMPARE(result.value("samples").toInt(), 1);
     QCOMPARE(result.value("missed").toInt(), 0);
+    QVERIFY(result.value("detail")
+                .toArray()
+                .first()
+                .toObject()
+                .value("bytes")
+                .toInt() > 0);
     auto *view = bench.codeView("source");
     QVERIFY(view);
     QVERIFY(view->text()->complete());
@@ -16092,7 +16100,7 @@ private slots:
                                directory.filePath("interactions.json"),
                                NativeOpenTimeoutMs, nullptr);
     bool done = false;
-    InteractionMetricsTestAccess::pseudocode(metrics, Base + 16,
+    InteractionMetricsTestAccess::pseudocode(metrics, view, Base + 16,
                                              [&] { done = true; });
     QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
     const auto result = InteractionMetricsTestAccess::pseudocodeResult(metrics);
