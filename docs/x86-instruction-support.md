@@ -21,6 +21,12 @@ The November 22 integration at `d45fe8b1fb` uses Capstone
 passed 131/131 checks on Linux x64 and 130/131 on each of macOS arm64,
 Windows MSVC and Windows clang-cl; the one explicitly unavailable check on
 those platforms requires a POSIX x64 host to observe x87 hardware behavior.
+The following `dev` pin, `372fbd2d967c5023371a12e0e406f8be2ec84ae5`,
+corrects the dedicated i386 writer for base-only SIB operands. Its
+[four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45114911896)
+again passed 131/131 on Linux and 130/131 on each other platform, with the
+same explicit POSIX x64 hardware skip. The change is in Capstone's output
+writer; NeverD's mixed-mode execution qualification is recorded separately.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 

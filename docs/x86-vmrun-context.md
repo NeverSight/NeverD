@@ -45,6 +45,13 @@ revision produced the same machine objects and guest images as the hosted
 fixtures.
 [AMD KVM execution and byte hashes](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
 
+After integrating `dev` through `dbed3c1ba2`, a fresh r7 SDK shared library
+exported the identical HighC and LLVM-to-C source bytes. The portable x64
+NeverC reproduced the same four IR and object hashes at O0/O2, and the r7
+backend reproduced the same four guest-image hashes. The hosted instruction
+and fault-site comparison therefore
+uses the exact generated code still emitted by that integration.
+
 A [November 22 repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45107766727)
 again passed all twelve guest images and 200 generated contexts on an AMD EPYC
 9V45 runner. The other runner was assigned an Intel processor without guest

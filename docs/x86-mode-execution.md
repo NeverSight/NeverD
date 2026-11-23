@@ -369,6 +369,18 @@ with two LA57 capability skips, 253/253 generated-C source cases and 4/4
 Python SDK integrations each. The opposite-core selections also passed. The
 HighC and LLVM-to-C VMRUN exports kept their exact source hashes.
 
+After the later `dev` integrations at `d45fe8b1fb` and `dbed3c1ba2`, both
+published r7 and local LLVM SDKs repeated the complete matrix at each source.
+At `dbed3c1ba2` each SDK passed 243/243 execution, 853/855 paging, 48/48
+opposite-core execution, 4/4 opposite-core paging, 253/253 generated-C and 4/4
+Python integration cases. The only skips require LA57, which the bound CPU
+does not expose. The portable x64 NeverC compiler emitted native
+`vmrun.context`, `vmread`, `vmwrite`, `rsm.context` and
+`enclu.transfer.context` calls; the installed r7 backend produced the native
+VMRUN, VMREAD, VMWRITE, ENCLU, XRSTOR64 and RSM opcodes. It completed 200
+returning VMRUN contexts in QEMU TCG across HighC/LLVM-to-C and O0/O2. Its
+i386, i686 and x32 target requests failed explicitly.
+
 The Linux Actions job built the pinned x64 NeverC revision and passed 27
 required software cases. The signed Intel simulation enclave completed three
 calls, including two nested exception repairs. Both Intel macOS runners and
