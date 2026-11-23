@@ -32,7 +32,7 @@ def mfc0(rt, rd):
     return 0x40000000 | rt << 16 | rd << 11
 
 
-def boot_rom(order, prefix, instructions, return_offset, *, reset=False):
+def boot_rom(order, prefix, instructions, return_offset, *, reset=False, return_words=(12,)):
     rom = bytearray(4096)
 
     def place(offset, words):
@@ -47,7 +47,7 @@ def boot_rom(order, prefix, instructions, return_offset, *, reset=False):
     epc = BOOT + len(start) * 4
     if return_offset is not None:
         if return_offset % 4 == 0:
-            place(return_offset, [12])  # SYSCALL at an aligned destination.
+            place(return_offset, return_words)
         epc = BOOT + return_offset
 
     # Each possible entry stamps its own offset in the branch delay slot.
@@ -134,8 +134,12 @@ def qualify(executable, order):
     rows = []
 
     def check(name, prefix, instructions, code, *, slot=False, address=None,
-              coprocessor=None, pending=0, return_offset=None, vector=0x380):
-        rom, expected_epc = boot_rom(order, prefix, instructions, return_offset)
+              coprocessor=None, pending=0, return_offset=None, vector=0x380,
+              return_words=(12,), trap_pc=None):
+        rom, expected_epc = boot_rom(order, prefix, instructions, return_offset,
+                                     return_words=return_words)
+        if trap_pc is not None:
+            expected_epc = trap_pc
         status, cause, epc, bad, observed = run_machine(executable, rom)
         row = dict(order=order, scenario=name, handler=BOOT + observed, status=status, cause=cause,
                    epc=epc, badvaddr=bad, expected_epc=expected_epc,
@@ -182,6 +186,38 @@ def qualify(executable, order):
               [immediate(35, 10, 2, 0)], 2, address=va, vector=vector)
     clean = [immediate(13, 0, 8, 2), mtc0(8, 2), *indexed]
     check('clean-store', tlb + clean, [immediate(43, 10, 2, 0)], 1, address=va)
+
+    # R4000PC/SC erratum 27. Probe first. A hit annuls the TLBWR, avoiding a
+    # duplicate tag. On a miss its result is used after NOP and ERET. Keep
+    # the instructions and data in two uncached physical frames distinct.
+    frames = [immediate(15, 0, 9, 0xa000)]
+    for frame, trap, marker in ((0x2000, 12, 0x1357), (0x4000, 13, 0x2468)):
+        for offset, word in ((0, trap), (8, marker)):
+            frames += [immediate(13, 0, 8, word), immediate(43, 9, 8, frame + offset)]
+    for existing in (False, True):
+        setup = tlb + frames
+        if existing:
+            setup += [immediate(13, 0, 8, (0x2000 >> 6) | 0x12), mtc0(8, 2), *indexed]
+        setup += [immediate(13, 0, 8, (0x4000 >> 6) | 0x12), mtc0(8, 2),
+                  *[0] * 6, 0x42000008, *[0] * 6, mfc0(27, 0)]  # TLBP, then Index.
+        # The first fetch at va traps on a different opcode in each frame.
+        # For a data access, return to unmapped ROM and read the mapped word
+        # before any other data access. Unexpected values reach BREAK.
+        for fetch in (True, False):
+            dest = va if fetch else BOOT + 0x400
+            prefix = setup + [immediate(15, 0, 8, dest >> 16),
+                              immediate(13, 8, 8, dest), mtc0(8, 14),
+                              immediate(15, 0, 8, 0x40), immediate(13, 8, 8, 2),
+                              mtc0(8, 12), immediate(13, 0, 11, 0x1357 if existing else 0x2468),
+                              *[0] * 6]
+            tail = [immediate(1, 27, 2, 1), 0x42000006, 0, 0x42000018]  # BLTZL; TLBWR; NOP; ERET.
+            name = 'tlbwr-' + ('annulled-' if existing else 'taken-')
+            if fetch:
+                check(name + 'fetch', prefix, tail, 8 if existing else 9, trap_pc=va)
+            else:
+                probe = [immediate(35, 10, 2, 8), 0, immediate(5, 2, 11, 2), 0, 12, 13]
+                check(name + 'load', prefix, tail, 8, return_offset=0x400,
+                      return_words=probe, trap_pc=dest + 16)
 
     for name, opcode, code in [('syscall', 12, 8), ('break', 13, 9)]:
         check(name, [], [opcode], code)
