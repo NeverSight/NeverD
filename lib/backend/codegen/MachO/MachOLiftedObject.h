@@ -10,9 +10,12 @@
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/loader/MachO/DataInCode.h"
 
+#include "llvm/ADT/DenseMap.h"
+
 #include <vector>
 
 namespace neverd {
+struct ExceptionFunction;
 struct MachOLiftedSourceAddress;
 
 /// A one-word address site could not reach its dyld pointer cell.
@@ -34,6 +37,14 @@ using MachOLiftedObjectVerifier = llvm::function_ref<llvm::Error(
     const CompiledImage &, const BinaryImage &Installed,
     va_t OriginalSectionSlide, llvm::ArrayRef<NativeMachOCompactRange>,
     const CompiledSection *AddressPool)>;
+
+/// Reconstruct compact PAuth_LR records from a producer's indexed fallback
+/// when its signing PC, B-key CFI and saved columns agree with the source.
+llvm::Error restoreMachOLiftedCompactFrames(
+    const BinaryImage &Original, const BinaryImage &Layout,
+    const llvm::DenseMap<va_t, const ExceptionFunction *> &Sources,
+    const CompiledImage &Image, va_t Slide, va_t EHSectionVA,
+    CompiledSection &EH, llvm::MutableArrayRef<NativeMachOCompactRange> Ranges);
 
 llvm::Expected<PatchResult>
 installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,

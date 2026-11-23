@@ -98,6 +98,7 @@ struct NativeMachO {
   // Check the source signing rows against the relocated code before publishing.
   llvm::DenseMap<va_t, AArch64ClassicReturnCFI> ClassicReturnFrames;
   std::optional<size_t> EH, CompactSection;
+  va_t EHSectionVA = 0;
   bool SjLj = false;
   bool CompactOnly = false;
   std::map<unsigned, SourcePatchImport> Imports;
@@ -1492,7 +1493,8 @@ llvm::Error prepareThreadLocals(NativeMachO &Object,
 }
 
 llvm::Error place(NativeMachO &Object, uint64_t Base, uint64_t OriginalSlide,
-                  const std::optional<MachOEHFrameRegion> &EH) {
+                  const std::optional<MachOEHFrameRegion> &EH,
+                  bool PrivateFrames = false) {
   auto &Image = Object.Image;
   Image.BaseVA = Base;
   uint64_t Cursor = Base;
@@ -1565,9 +1567,11 @@ llvm::Error place(NativeMachO &Object, uint64_t Base, uint64_t OriginalSlide,
     // Darwin commonly links away redundant DWARF when every function has a
     // compact encoding. In that image, retain native compact evidence for
     // every replacement instead of requiring an unused DWARF registration.
-    Object.CompactOnly = !EH;
-    if (EH)
-      Image.Sections[*Object.EH].VA = EH->AppendVA;
+    Object.CompactOnly = !PrivateFrames && !EH;
+    if (!Object.CompactOnly) {
+      Image.Sections[*Object.EH].VA = PrivateFrames ? Cursor : EH->AppendVA;
+      Object.EHSectionVA = PrivateFrames ? Cursor : EH->SectionVA;
+    }
   }
   for (const auto &[Index, S] : Object.Symbols)
     if (S.Section && Object.Sections.contains(S.Section) &&
@@ -2484,11 +2488,8 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       if (!Added && It->second != R.EndVA)
         return fail("native DWARF and compact extents disagree");
     }
-    // Placement supplies the registered section identity, including new
-    // storage.
-    const auto Region = findMachOEHFrameRegion(Original.Raw);
-    if (!Region)
-      return fail("producer FDEs need a registered frame section");
+    // Placement owns the index base for both registered and private frames.
+    const va_t SectionVA = Object.EHSectionVA;
     for (const auto &R : *Records) {
       auto Compact = llvm::find_if(Object.Compact, [&](const auto &C) {
         return C.BeginVA == R.BeginVA;
@@ -2498,14 +2499,14 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
               (A == Arch::AArch64 ? macho_unwind::kARM64ModeDwarf
                                   : macho_unwind::kX86ModeDwarf))
         continue;
-      if (R.RecordVA < Region->SectionVA ||
-          R.RecordVA - Region->SectionVA > 0xffffff)
-        return fail("producer FDE exceeds compact encoding");
-      NativeMachOCompactRange Range{
-          R.BeginVA, R.EndVA,
-          (A == Arch::AArch64 ? macho_unwind::kARM64ModeDwarf
-                              : macho_unwind::kX86ModeDwarf) |
-              uint32_t(R.RecordVA - Region->SectionVA)};
+      if (R.RecordVA < SectionVA ||
+          R.RecordVA - SectionVA > macho_unwind::kDwarfSectionOffsetMask)
+        return fail(kFDEIndexOverflow);
+      NativeMachOCompactRange Range{R.BeginVA, R.EndVA,
+                                    (A == Arch::AArch64
+                                         ? macho_unwind::kARM64ModeDwarf
+                                         : macho_unwind::kX86ModeDwarf) |
+                                        uint32_t(R.RecordVA - SectionVA)};
       if (R.Personality && R.Personality->Value)
         Range.PersonalitySlotVA = R.Personality->Value;
       if (R.LSDA && R.LSDA->Value) {
@@ -2985,6 +2986,7 @@ static llvm::Expected<PatchResult> installObject(
   Dependencies = RuntimeDependencies;
   std::set<std::string> Entries;
   std::set<uint64_t> Addresses;
+  llvm::DenseMap<va_t, const ExceptionFunction *> SigningFrames;
   for (const auto &M : Mappings) {
     if (!Object->Names.contains(M.Symbol) || !Entries.insert(M.Symbol).second ||
         !Addresses.insert(M.OriginalVA).second ||
@@ -2994,6 +2996,15 @@ static llvm::Expected<PatchResult> installObject(
     const auto &S = Object->Symbols.at(Object->Names.at(M.Symbol));
     if (!S.Function || !S.Section)
       return fail("entry needs a native function definition");
+    if (VerifyLiftedImage && !Object->OldFDEs.empty()) {
+      const auto *Source =
+          Original.ExceptionMetadata.findFunction(M.OriginalVA);
+      if (Source && Source->Compact &&
+          Source->Compact->ReturnAddressSigningOffset &&
+          Source->CodeRange.Begin == M.OriginalVA)
+        SigningFrames.try_emplace(
+            Object->OldSectionVAs.at(S.Section) + S.Offset, Source);
+    }
   }
   BinaryImage References = Original;
   scanImportThunks(References);
@@ -3016,7 +3027,15 @@ static llvm::Expected<PatchResult> installObject(
     if (auto E = prepareArm64eGOT(*Object, Original, Dependencies,
                                   RequestedBindings))
       return E;
-  const uint64_t ExtraEH = requiredNativeEHBytes(*Object, LayoutBytes);
+  // If every FDE has a source PAuth_LR compact owner, verify it in private
+  // storage. A compact-only image then needs no DWARF section or header slide.
+  const bool PrivateFrames =
+      !SigningFrames.empty() && Object->Thunks.empty() &&
+      llvm::all_of(Object->OldFDEs, [&](const auto &FDE) {
+        return SigningFrames.contains(FDE.BeginVA);
+      });
+  const uint64_t ExtraEH =
+      PrivateFrames ? 0 : requiredNativeEHBytes(*Object, LayoutBytes);
   std::optional<MachODependencyState> SlidDependencies;
   const auto LibraryCommands =
       machOSourceLibraryCommandBytes(Original, Dependencies);
@@ -3075,7 +3094,7 @@ static llvm::Expected<PatchResult> installObject(
     return E;
   if (auto E = prepareMainRelro(*Object, LayoutBytes, *LayoutImage))
     return E;
-  if (auto E = place(*Object, Base, *Slide, EH))
+  if (auto E = place(*Object, Base, *Slide, EH, PrivateFrames))
     return std::move(E);
   if (auto E = relocate(*Object, *LayoutImage, Bindings))
     return std::move(E);
@@ -3094,6 +3113,23 @@ static llvm::Expected<PatchResult> installObject(
       return fail("import thunks need registered native DWARF storage");
     if (auto E = finalizeImports(*Object, *EH))
       return E;
+  }
+  if (!SigningFrames.empty() && !Object->CompactOnly) {
+    llvm::DenseMap<va_t, const ExceptionFunction *> Placed;
+    for (const auto &[OldVA, Source] : SigningFrames) {
+      auto VA = mapOldVA(*Object, OldVA);
+      if (!VA)
+        return VA.takeError();
+      Placed.try_emplace(*VA, Source);
+    }
+    auto &Frames = Object->Image.Sections[*Object->EH];
+    if (auto E = restoreMachOLiftedCompactFrames(
+            Original, *LayoutImage, Placed, Object->Image, *Slide,
+            Object->EHSectionVA, Frames, Object->Compact))
+      return E;
+    Object->CompactOnly = Frames.ExternalBytes.empty();
+    if (PrivateFrames && !Object->CompactOnly)
+      return fail(kPrivateSigningFrames);
   }
   if (VerifyGenerated)
     if (auto E = VerifyGenerated(Object->Image, Object->Compact))

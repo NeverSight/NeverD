@@ -1985,6 +1985,14 @@ metadata. Category fixtures exercise authenticated class, metaclass and method r
 reconstruction restriction. Metadata names replace synthesized function-start
 names while preserving stated, analysis and user names.
 
+The `AArch64CompactRegisters.*PAuthLR*` filter in
+`NeverDArm64eLiftedImageTests` runs the same structural checks with frozen r6
+and source-built LLVM. It publishes all-pair, sparse and frame-only recipes,
+including a signing PC at byte 256, a PC-signed C++ cleanup, and a mixed
+image with an independently indexed cleanup. The two system-walk cases record the number of native PAuth_LR steps
+after a hardware probe. The original and published images can both pass their
+structural checks on a host reporting zero native steps.
+
 `NeverDLanguageEHTests` also covers compact PAuth_LR frame recipes with zero,
 middle and final signing-instruction offsets, register pairs, reserved bits,
 range truncation, alignment and arithmetic overflow. Shared raw/semantic page
@@ -18421,6 +18429,13 @@ assignments on that edge. The roundtrips check the forwarded word and the
 restored return address. Return-target tests
 replace either arm with a single-half check or flip the difference in its jump
 delay slot.
+The shared-latch variants place the folded arm before or after the latch.
+On exit from a BNEL or BEQL, the latter layout jumps over that arm to the
+final zero test. Each iteration contributes its incoming difference, counter
+and selected full-width difference to the return value, so the HighC and
+LLVMC roundtrips detect a skipped, duplicated or reordered update. Ordinary
+BNE supplies the always-executed delay-slot control. The return-target cases
+also check whether a clobber in the slot can reach the final zero test.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.

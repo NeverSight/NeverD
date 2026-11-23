@@ -520,34 +520,6 @@ bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
   }
 }
 
-// MC recognizes the compact frame from a canonical CFA and descending slots.
-// Emit its recipe without inventing instruction-specific DWARF rows. The
-// linked-image verifier requires the original compact word and machine body.
-void emitCompactFrame(const CompactUnwindEntry &Compact,
-                      llvm::raw_ostream &OS) {
-  constexpr int SlotSize = sizeof(uint64_t);
-  constexpr int FrameSize = NDArm64eFrameRecordWords * SlotSize;
-  int Offset = 0;
-  if (Compact.Kind == CompactUnwindKind::FramePointer) {
-    OS << kCFA << kDwarfFP << kSeparator << FrameSize << '\n';
-    // The compact encoder requires the return address before the frame pointer.
-    OS << kSpill << kDwarfLR << kSeparator << -SlotSize << '\n';
-    OS << kSpill << kDwarfFP << kSeparator << -FrameSize << '\n';
-    Offset = -FrameSize;
-  } else if (Compact.StackSize) {
-    OS << kCFAOffset << Compact.StackSize << '\n';
-  }
-  for (const auto &Slot : Compact.SavedRegisterSlots) {
-    const unsigned Register =
-        Slot.Register +
-        (Slot.RegisterClass == UnwindRegisterClass::FloatingPoint
-             ? aarch64_unwind::kDwarfV0
-             : 0);
-    Offset -= SlotSize;
-    OS << kSpill << Register << kSeparator << Offset << '\n';
-  }
-}
-
 bool canCopyLanguageTables(const BinaryImage &Image,
                            const ItaniumEHInfo &Table) {
   for (auto Range : {Table.ActionTableRange, Table.ExceptionSpecRange})
@@ -835,8 +807,11 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     // MC must retain the source FDE even when all of its effective rules are
     // inherited from the CIE. An escaped DW_CFA_nop keeps the DWARF index.
     OS << kEscape << unsigned(llvm::dwarf::DW_CFA_nop) << '\n';
-  } else
-    emitCompactFrame(Compact, OS);
+  } else {
+    for (const auto &Row : machOCompactFrameRows(Compact))
+      if (!emitFrameRow(Row, OS))
+        return std::nullopt;
+  }
   const uint8_t *Code = Source->Bytes.data();
   bool HasCall = false;
   for (size_t Offset = 0; Offset < End - Start; Offset += Word)
@@ -1295,7 +1270,43 @@ llvm::InlineAsm *assembly(llvm::Function &F, const RegisterBody &Body) {
                                      Parameters, false);
   return llvm::InlineAsm::get(Ty, Body.Assembly, Body.Constraints, true);
 }
+
+void appendCompactSpills(const CompactUnwindEntry &Compact, int64_t Offset,
+                         auto &Rows) {
+  for (const auto &Save : Compact.SavedRegisterSlots) {
+    const unsigned Register =
+        Save.Register +
+        (Save.RegisterClass == UnwindRegisterClass::FloatingPoint
+             ? aarch64_unwind::kDwarfV0
+             : 0);
+    Offset -= int64_t(sizeof(uint64_t));
+    Rows.push_back(
+        {.Kind = CFIOpKind::Offset, .Register = Register, .Offset = Offset});
+  }
+}
+
 } // namespace
+
+llvm::SmallVector<CFIInstruction>
+machOCompactFrameRows(const CompactUnwindEntry &Compact) {
+  constexpr int64_t Slot = sizeof(uint64_t);
+  llvm::SmallVector<CFIInstruction> Rows;
+  int64_t Offset = 0;
+  if (Compact.Kind == CompactUnwindKind::FramePointer) {
+    Offset = -Slot * NDArm64eFrameRecordWords;
+    Rows.push_back(
+        {.Kind = CFIOpKind::DefCFA, .Register = kDwarfFP, .Offset = -Offset});
+    Rows.push_back(
+        {.Kind = CFIOpKind::Offset, .Register = kDwarfLR, .Offset = -Slot});
+    Rows.push_back(
+        {.Kind = CFIOpKind::Offset, .Register = kDwarfFP, .Offset = Offset});
+  } else if (Compact.StackSize) {
+    Rows.push_back(
+        {.Kind = CFIOpKind::DefCFAOffset, .Offset = Compact.StackSize});
+  }
+  appendCompactSpills(Compact, Offset, Rows);
+  return Rows;
+}
 
 std::vector<CFIInstruction>
 machOFramelessSpillRows(const CompactUnwindEntry &Compact) {
@@ -1306,17 +1317,7 @@ machOFramelessSpillRows(const CompactUnwindEntry &Compact) {
   std::vector<CFIInstruction> Rows{
       {.Kind = CFIOpKind::GnuArgsSize},
       {.Kind = CFIOpKind::DefCFAOffset, .Offset = Compact.StackSize}};
-  int64_t Offset = 0;
-  for (const auto &Slot : Compact.SavedRegisterSlots) {
-    Offset -= sizeof(uint64_t);
-    Rows.push_back(
-        {.Kind = CFIOpKind::Offset,
-         .Register = Slot.Register +
-                     (Slot.RegisterClass == UnwindRegisterClass::FloatingPoint
-                          ? aarch64_unwind::kDwarfV0
-                          : 0),
-         .Offset = Offset});
-  }
+  appendCompactSpills(Compact, 0, Rows);
   return Rows;
 }
 
