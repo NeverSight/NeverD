@@ -1561,6 +1561,11 @@ scheduling contract. Floating arithmetic additionally requires an executor
 that explicitly declares the historical ISA; the modern pre-R6 FPU does not
 claim R3000/R4000 floating-point exception, NaN or subnormal behavior.
 
+For a raw historical code span, `neverd-mips-bench` accepts `mips1`, `mips2`
+and `mips3`. Append `el` for little-endian bytes. The `capstone` and `decode`
+stages use the same configured Capstone handle. The `lift` stage includes
+the historical begin/retire operations and executed delay slots.
+
 A historical scheduling snapshot can additionally bind a processor's CP0 state.
 The R30xx and R4000 have distinct exception rules. A MIPS II CW4011 snapshot
 selects its R3000- or R4000-compatible exception mode. Historical CP0 moves use

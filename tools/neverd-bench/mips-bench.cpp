@@ -11,6 +11,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <charconv>
@@ -30,17 +31,6 @@ namespace {
 enum class Stage {
 #define NEVERD_MIPS_BENCH_STAGE(Name, Spelling) Name,
 #include "mips-bench.def"
-};
-
-struct Capstone {
-  csh Handle = 0;
-  cs_insn *Instruction = nullptr;
-  ~Capstone() {
-    if (Instruction)
-      cs_free(Instruction, 1);
-    if (Handle)
-      cs_close(&Handle);
-  }
 };
 
 struct Result {
@@ -64,7 +54,7 @@ int main(int Argc, char **Argv) try {
   InstructionMode Encoding = InstructionMode::Default;
   bool DSP = false, DSPR2 = false, MSA = false, MIPS16E2 = false,
        ScalarFP = false;
-  unsigned Revision = 2;
+  unsigned Revision = 2, HistoricalISA = 0;
 #define NEVERD_MIPS_BENCH_PROFILE(Name, ArchName, Mode, Rev, Dsp, Dspr2, Msa,  \
                                   E2, FP)                                      \
   if (std::string_view(Argv[1]) == #Name) {                                    \
@@ -76,6 +66,12 @@ int main(int Argc, char **Argv) try {
     MSA = Msa;                                                                 \
     ScalarFP = FP;                                                             \
     MIPS16E2 = E2;                                                             \
+  }
+#define NEVERD_MIPS_BENCH_HISTORICAL(Name, ArchName, Level)                    \
+  if (std::string_view(Argv[1]) == #Name) {                                    \
+    Target = Arch::ArchName;                                                   \
+    Revision = 0;                                                              \
+    HistoricalISA = Level;                                                     \
   }
 #include "mips-bench.def"
   if (!isMIPS(Target))
@@ -112,6 +108,7 @@ int main(int Argc, char **Argv) try {
   Profile.MIPS->HasMIPS16E2 = MIPS16E2;
   Profile.MIPS->HasMSA = MSA;
   Profile.MIPS->ISARevision = Revision;
+  Profile.MIPS->HistoricalISA = HistoricalISA;
   if (ScalarFP)
     Profile.MIPS->FPABI = isMIPS64(Target) ? 1 : 6;
   Profile.MIPS->HasMicroMIPS = Encoding == InstructionMode::MicroMIPS;
@@ -120,22 +117,11 @@ int main(int Argc, char **Argv) try {
     throw std::runtime_error("decoder initialization failed");
   Decode.setDetail(true);
   Decode.setText(false);
-  Capstone Reference;
-  const auto Mode = static_cast<cs_mode>(
-      (Revision == 6 ? (isMIPS64(Target) ? CS_MODE_MIPS64R6 : CS_MODE_MIPS32R6)
-       : MSA         ? (isMIPS64(Target) ? CS_MODE_MIPS64R5 : CS_MODE_MIPS32R5)
-       : isMIPS64(Target) ? CS_MODE_MIPS64R2
-                          : CS_MODE_MIPS32R2) |
-      (Revision == 6 && isMIPS64(Target) ? CS_MODE_MIPS_PTR64 : 0) |
-      (Encoding == InstructionMode::MicroMIPS ? CS_MODE_MICRO
-       : Encoding == InstructionMode::MIPS16  ? CS_MODE_MIPS16
-                                              : 0) |
-      (archLittleEndian(Target) ? CS_MODE_LITTLE_ENDIAN : CS_MODE_BIG_ENDIAN));
-  if (cs_open(CS_ARCH_MIPS, Mode, &Reference.Handle) != CS_ERR_OK ||
-      cs_option(Reference.Handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK ||
-      cs_option(Reference.Handle, CS_OPT_TEXT, CS_OPT_OFF) != CS_ERR_OK ||
-      !(Reference.Instruction = cs_malloc(Reference.Handle)))
-    throw std::runtime_error("Capstone initialization failed");
+  const csh Handle = Decode.getHandle();
+  cs_insn *Reference = cs_malloc(Handle);
+  if (!Reference)
+    throw std::runtime_error("Capstone instruction allocation failed");
+  const auto FreeReference = llvm::scope_exit([&] { cs_free(Reference, 1); });
   std::vector<LowOp> Ops;
   const auto Run = [&](bool Fingerprint) {
     Result R;
@@ -148,13 +134,12 @@ int main(int Argc, char **Argv) try {
       unsigned Size = 0;
       unsigned Count = 1;
       if (*Selected == Stage::Capstone) {
-        Reference.Instruction->illegal = false;
-        if (!cs_disasm_iter(Reference.Handle, &Code, &Remaining, &Address,
-                            Reference.Instruction))
+        Reference->illegal = false;
+        if (!cs_disasm_iter(Handle, &Code, &Remaining, &Address, Reference))
           throw std::runtime_error("Capstone rejected input");
-        Size = Reference.Instruction->size;
+        Size = Reference->size;
         if (Fingerprint)
-          R.mix(Reference.Instruction->id);
+          R.mix(Reference->id);
       } else if (*Selected == Stage::Decode) {
         DecodedInsn Instruction{};
         Size = Decode.decodeOneForLift(Code, Remaining, Address, Instruction);
