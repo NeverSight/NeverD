@@ -1055,6 +1055,115 @@ TEST(MIPSHistoricalScheduling, AddressAndArithmeticFaultsPrecedeWriteback) {
     }
 }
 
+TEST(MIPSHistoricalScheduling, R4000DataFaultsPrecedeInterruptAtSameIssue) {
+  constexpr uint64_t BranchPC = UINT64_C(0xffffffff80001000);
+  constexpr uint32_t Page = 0x40000, Frame = 0x9000;
+  constexpr uint32_t Branch = 0x10000001, Load = 0x8c820000, Store = 0xac820000;
+  constexpr uint32_t Original = 0x13572468, Marker = 0x56781234;
+  struct Case {
+    uint32_t Word, Address, Flags, Code, VectorOffset;
+  };
+  for (Arch A : {Arch::MIPS64, Arch::MIPS64EL}) {
+    for (auto T :
+         {Case{Load, Page + 0x2000, 6, 2, 0}, // Refill.
+          Case{Store, Page + 0x2000, 6, 3, 0},
+          Case{Load, Page + 0x1000, 6, 2, 0x180}, // Invalid odd page.
+          Case{Store, Page + 0x1000, 6, 3, 0x180},
+          Case{Store, Page, 2, 1, 0x180}, // Clean even page.
+          Case{Load, Page + 1, 6, 4, 0x180}, Case{Store, Page + 1, 2, 5, 0x180},
+          Case{Load, Page, 6, 0, 0x180}, // Valid access loses to IRQ.
+          Case{Store, Page, 6, 0, 0x180}}) {
+      auto Img = image(A, 3);
+      addCode(Img, 0x1000, {Branch, T.Word, Load});
+      addCode(Img, Frame, {Original});
+      Img.Segments.back().Flags =
+          SegmentFlags::Readable | SegmentFlags::Writable;
+      std::array<HistoricalTLBEntry, 48> Entries{};
+      Entries[0] = {Page, (Frame >> 6) | T.Flags, 0, 0};
+      const HistoricalTLB MMU{Entries, 0};
+      for (bool InSlot : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << " word=" << T.Word << " va=" << T.Address
+                     << " code=" << T.Code << " slot=" << InSlot);
+        MIPSSystemContext C;
+        C.HistoricalMMU = &MMU;
+        C.Historical = HistoricalSchedule::fromSnapshot(
+            3, {},
+            HistoricalCP0{
+                HistoricalProcessor::R4000, 0x401, 0, 0, 0xfeed0000, {}});
+        NdOpEmulator E(Img);
+        E.setStrictMode(true);
+        E.setRegister(mipsreg::A0, T.Address);
+        E.setRegister(mipsreg::V0, Marker);
+        const auto Ops = InSlot ? lift(Img, BranchPC, {Branch, T.Word})
+                                : lift(Img, BranchPC + 4, {T.Word});
+        const auto Issue =
+            std::find_if(Ops.begin(), Ops.end(), [](const LowOp &Op) {
+              return Op.Addr == BranchPC + 4 && Op.Opcode == NdOp::INTRINSIC &&
+                     Op.Inputs[0].Offset ==
+                         unsigned(Intrinsic::MIPSHistoricalBegin);
+            });
+        ASSERT_NE(Issue, Ops.end());
+        ASSERT_TRUE(execute(std::span(Ops.begin(), Issue), E, C));
+        ASSERT_TRUE(C.Historical->setHardwareInterrupts(1, BranchPC + 4));
+        EXPECT_FALSE(execute(std::span(Issue, Ops.end()), E, C));
+        const auto &CPU = *C.Historical->system();
+        EXPECT_EQ(CPU.Cause, (InSlot ? 0x80000400u : 0x400u) | T.Code << 2);
+        EXPECT_EQ(CPU.EPC, InSlot ? BranchPC : BranchPC + 4);
+        EXPECT_EQ(CPU.BadVAddr, T.Code ? T.Address : 0xfeed0000u);
+        EXPECT_EQ(CPU.ExceptionVector,
+                  UINT64_C(0xffffffff80000000) + T.VectorOffset);
+        EXPECT_FALSE(C.Historical->hasActiveInstruction());
+        EXPECT_EQ(E.getRegister(mipsreg::V0), Marker);
+        E.setRegister(mipsreg::A0, Page);
+        ASSERT_TRUE(execute(lift(Img, BranchPC + 8, {Load}), E, C));
+        EXPECT_EQ(E.getRegister(mipsreg::V0), Original);
+      }
+    }
+  }
+}
+
+TEST(MIPSHistoricalScheduling, R4000SynchronousExceptionsPrecedeInterrupt) {
+  struct Case {
+    uint32_t Word, Status, Code;
+  };
+  for (Arch A : {Arch::MIPS64O32, Arch::MIPS64O32EL}) {
+    auto Img = image(A, 3);
+    Img.MIPS->FPABI = 1;
+    for (auto T : {Case{0x0000000c, 0x401, 8},    // SYSCALL
+                   Case{0x0003454d, 0x401, 9},    // BREAK with a code
+                   Case{0x20820001, 0x401, 12},   // ADDI overflows
+                   Case{0x20820000, 0x401, 0},    // ADDI succeeds
+                   Case{0x00850034, 0x401, 13},   // TEQ true
+                   Case{0x00850036, 0x401, 0},    // TNE false
+                   Case{0x44020000, 0x401, 11},   // MFC1, CU1 disabled
+                   Case{0x0085102d, 0x411, 10},   // DADDU in 32-bit user mode
+                   Case{0x0085102d, 0x431, 0},    // DADDU, UX enabled
+                   Case{0x24020001, 0x401, 0}}) { // ADDIU
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(A) << " word=" << T.Word << " code=" << T.Code);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(
+          3, {},
+          HistoricalCP0{HistoricalProcessor::R4000, T.Status, 0, 0, {}, {}});
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::V0, 0xabcd);
+      E.setRegister(mipsreg::A0, 0x7fffffff);
+      E.setRegister(mipsreg::A1, 0x7fffffff);
+      ASSERT_TRUE(C.Historical->setHardwareInterrupts(1, 0x2000));
+      EXPECT_FALSE(execute(lift(Img, 0x2000, {T.Word}), E, C));
+      const auto &CPU = *C.Historical->system();
+      EXPECT_EQ(CPU.Cause,
+                0x400u | (T.Code << 2) | (T.Code == 11 ? 1u << 28 : 0u));
+      EXPECT_EQ(CPU.EPC, 0x2000u);
+      EXPECT_EQ(CPU.ExceptionVector, UINT64_C(0xffffffff80000180));
+      EXPECT_FALSE(C.Historical->hasActiveInstruction());
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 0xabcdu);
+    }
+  }
+}
+
 TEST(MIPSHistoricalScheduling,
      UnusableCoprocessorSuppliesCauseBeforeDestination) {
   for (bool Little : {false, true}) {

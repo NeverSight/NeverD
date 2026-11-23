@@ -647,10 +647,11 @@ bool MIPSLifter::liftHistoricalSystem(State &S, uint32_t Word) const {
   }
   if (Word >> 26 == 16)
     return liftSystem(S, Word);
-  if (Word >> 26 || ((Word & 63) != 12 && (Word & 63) != 13))
+  const auto Code = mips::historicalSoftwareExceptionCode(Word);
+  if (!Code)
     return false;
   S.emitIntrinsic(Intrinsic::MIPSHistoricalException, {},
-                  {NdVar::cst((Word & 1) ? 9 : 8, 1)});
+                  {NdVar::cst(Code, 1)});
   return true;
 }
 

@@ -1606,6 +1606,19 @@ hardware interrupt lines between physical instructions. A recorded issue PC can
 bind that sample to an instruction or an executed delay slot. A failed issue
 preserves the sample for retry.
 
+When an IRQ and a modeled synchronous fault belong to the same R4000
+instruction, the synchronous fault supplies the exception code and the IRQ
+remains visible in Cause.IP. This includes instruction fetch, scalar integer
+data alignment and translation, integer overflow and trap, SYSCALL/BREAK,
+unusable coprocessors and restricted doubleword operations. A successful
+operand check lets the IRQ enter before a load, store or GPR write takes
+effect. In an executed delay slot, EPC names the branch and Cause.BD is set.
+The issue sample establishes which instruction competes with the IRQ.
+Measuring the time from the CPU pin to recognition still requires a common
+hardware clock for both events. Cause.IP reflects the current line levels. A line may have fallen by the time the handler reads Cause.
+[R4000 exception priorities](https://www.eecg.utoronto.ca/~moshovos/ACA/R4000.pdf#page=153),
+[R4000 interrupt exception](https://www.eecg.utoronto.ca/~moshovos/ACA/R4000.pdf#page=173).
+
 A cold-reset snapshot for R30xx or R4000 supplies the unspecified register
 values. The first physical instruction must come from the uncached boot ROM
 at physical address `0x1fc00000`. A bound MMU snapshot checks guest
@@ -1755,6 +1768,12 @@ stated conditions. A physical pin-to-recognition measurement still needs
 the CPU input transition and an identifiable recognition event on the same
 timebase. NeverD accepts the observed interrupt state at an instruction boundary.
 [IDT application note AN-131, Pipeline Latency, pp. 103–104](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/861.pdf#page=1).
+
+The VR4300 test ROM also compares back-to-back writes that assert and clear
+a software interrupt with a sequence that inserts one NOP. The latter checks
+that EPC identifies the clearing instruction. Both sequences drive Cause
+from software, so the recorded instruction boundary carries no CPU-pin time.
+[VR4300 software interrupt probes](https://github.com/thelemmy/nemu64-test/blob/9a8b9f7d94ee2f6f57d7feed70c98c22cdc30e6c/src/tests/exception_instructions/mod.rs#L641-L748).
 
 On a little-endian Sony SCPH-5501 (PRId 2, US ROM 3.0), the
 `irqsio` memory-card reports give the instruction count between enabling
