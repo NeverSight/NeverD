@@ -4520,6 +4520,15 @@ name (`machOCommandPlatform`, `MachOPlatform.h`, which the emulator's images
 read too), and `darwinPlatform` (`DarwinOperatingSystem.h`) tells macOS
 programs from iOS ones; a program for Mac Catalyst, tvOS or watchOS, or one
 that names no platform or several, joins no library.
+A Mach-O symbol stub names the import its indirect symbol gives it, and the
+stub section's header gives the bytes of a stub. Go's linker writes 6,
+x86-64's stub size, on arm64 too, where a stub is three instructions, so by
+its header `__symbol_stub1` holds twice its stubs and takes the symbols of
+the `__got` after it: every stub but the first named another import, and
+`runtime.mmap_trampoline` called `mach_timebase_info`. The indirect symbol
+table holds one run of symbols per section; where the header's size has the
+stub section claim more than its run, `stubRun` (`MachOLoaderUtils.h`) takes
+the stub size the run gives.
 `scripts/generate_freebsd_types.py` renders what FreeBSD's headers declare
 for a program into `FreeBSDX64.h`, `FreeBSDX86.h`, `FreeBSDARM64.h` and
 `FreeBSDARM.h`, from the /usr/include of FreeBSD 15.1-RELEASE's base.txz for

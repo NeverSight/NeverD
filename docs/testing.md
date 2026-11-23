@@ -15530,6 +15530,10 @@ stripped Thumb library whose tail call to `puts` goes through lld's thunk: the
 thunk and the PLT entry must both stand for `puts`, and the decompiled caller
 must call `puts` with its string. `LinkerThunk.*` checks each long-branch
 form's target, state and size, and that a direct jump is never a long branch.
+`MachOStubRun.*` checks the stubs a Mach-O stub section holds: the header's
+stub size where the indirect symbol table agrees with it, and the size the
+section's own run of symbols gives where the header claims more, as Go's
+arm64 linker has it.
 
 `LLVMCValues.ImageStringsInACodeSegmentFollowTheirSection` requires a string
 in `.rodata` inside an R+X segment to print, its bytes in `.text` not to, and
