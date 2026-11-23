@@ -21,6 +21,8 @@ extern long send(int, const void *, u64, int);
 extern long recv(int, void *, u64, int);
 extern long recvfrom(int, void *, u64, int, void *, u32 *);
 extern long sendto(int, const void *, u64, int, const void *, u32);
+extern long __recvfrom_chk(int, void *, u64, u64, int, void *, u32 *);
+extern long __sendto_chk(int, const void *, u64, u64, int, const void *, u32);
 extern int close(int);
 extern int dup(int);
 extern long write(int, const void *, u64);
@@ -167,8 +169,11 @@ u64 network_datagram(u64 *out, u64 mode) {
                : sendto(alias, packet, 3, 0, 0, 0);
   unsigned char *payload = (void *)(out + 32), *source = (void *)(out + 40);
   u32 length = 3;
-  out[5] = raw ? syscall(207, alias, payload, 2, 2 | 0x20, source, &length)
-               : recvfrom(alias, payload, 2, 2 | 0x20, source, &length);
+  if (mode & 4)
+    out[5] = __recvfrom_chk(alias, payload, 2, 2, 2 | 0x20, source, &length);
+  else
+    out[5] = raw ? syscall(207, alias, payload, 2, 2 | 0x20, source, &length)
+                 : recvfrom(alias, payload, 2, 2 | 0x20, source, &length);
   out[6] = length;
   out[7] = recv(alias, payload + 8, 1, 0);      /* discard packet suffix */
   out[8] = send(alias, (void *)1, 0, 0);        /* a genuine empty datagram */
@@ -295,8 +300,13 @@ u64 network_null_peer(u64 *out, u64 mode) {
   if (fd < 0 || connect(fd, peer, sizeof(peer)))
     return 1;
   u32 length = sizeof(peer);
-  if (mode < 2) {
-    const unsigned char bytes[] = {0, 0xff, 0x42};
+  const unsigned char bytes[] = {0, 0xff, 0x42};
+  if (mode == 4) {
+    out[0] = __sendto_chk(fd, bytes, sizeof(bytes), sizeof(bytes), 0x4000, 0,
+                          length);
+  } else if (mode == 5) {
+    out[0] = __recvfrom_chk(fd, out + 2, 3, 1UL << 32, 0, 0, &length);
+  } else if (mode < 2) {
     out[0] = mode ? syscall(206, fd, bytes, sizeof(bytes), 0, 0UL, length)
                   : sendto(fd, bytes, sizeof(bytes), 0, 0, length);
   } else {

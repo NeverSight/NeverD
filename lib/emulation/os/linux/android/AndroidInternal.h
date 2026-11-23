@@ -453,6 +453,7 @@ private:
   llvm::Error propertyCallbackEntry(uint64_t Entry);
   BionicResult syscall(const NativeCallEvent &Call);
   BionicResult socketTransfer(const NativeCallEvent &Call);
+  BionicResult checkedSocketTransfer(const NativeCallEvent &Call);
   BionicResult addressText(const NativeCallEvent &Call);
   BionicResult resolveAddress(const NativeCallEvent &Call);
   BionicResult freeAddresses(const NativeCallEvent &Call);

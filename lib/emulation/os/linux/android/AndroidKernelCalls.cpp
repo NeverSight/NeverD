@@ -167,6 +167,20 @@ BionicResult Bionic::socketTransfer(const NativeCallEvent &Call) {
                     Adapted);
 }
 
+BionicResult Bionic::checkedSocketTransfer(const NativeCallEvent &Call) {
+  const auto &A = Call.Arguments;
+  const bool Send = Call.Name == symbol::SendToChk;
+  if (A[2] > A[3])
+    return fortifyBufferFailure(Call, Send ? "sendto" : "recvfrom", A[2], A[3],
+                                Send);
+  // Bionic inserts the buffer extent between the length and the flags.
+  auto Adapted = Call;
+  std::copy_n(A.begin() + 4, 3, Adapted.Arguments.begin() + 3);
+  return kernelCall(Send ? linux_model::ServiceKind::SendTo
+                         : linux_model::ServiceKind::ReceiveFrom,
+                    Adapted);
+}
+
 BionicResult Bionic::syscall(const NativeCallEvent &Call) {
   return kernelCall(std::nullopt, Call);
 }

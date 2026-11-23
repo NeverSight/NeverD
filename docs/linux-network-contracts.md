@@ -65,6 +65,12 @@ open-description lifetime. Bionic alone converts raw negative errors to errno.
 With a null peer address, `sendto` ignores the address length and `recvfrom`
 leaves the address-length storage untouched.
 
+Bionic's `__sendto_chk` and `__recvfrom_chk` compare the requested byte count
+with the caller's buffer extent before descriptor lookup or guest memory access.
+An oversized request enters the shared FORTIFY diagnostic and abort path.
+An admitted call forwards the flags, peer address and address length to the
+ordinary Linux transfer, including its short counts and pending observations.
+
 An entry with just `peer_hex` supplies a successful TCP `connect`. A nonempty
 send or receive requires that entry's own transfer observations, even when
 the guest reuses the same peer and descriptor number.
