@@ -2832,4 +2832,233 @@ TEST(SysVCallContract, ErrorCheckingWrapperEndsAtItsExitHelper) {
   EXPECT_EQ(Body.find("unknown value"), std::string::npos) << Body;
 }
 
+// release(p): `test rdi, rdi; je done; mov rax, [rdi]; mov qword [rdi], 0;
+// done: ret`.  As sqlite3_free does, it returns without writing RAX where
+// its argument is null.
+constexpr uint8_t ReleaseCode[] = {0x48, 0x85, 0xFF, 0x74, 0x0A, 0x48,
+                                   0x8B, 0x07, 0x48, 0xC7, 0x07, 0x00,
+                                   0x00, 0x00, 0x00, 0xC3};
+
+/// \p Code after ReleaseCode, which it calls at Text.
+std::vector<uint8_t> afterRelease(std::initializer_list<uint8_t> Code) {
+  std::vector<uint8_t> All(std::begin(ReleaseCode), std::end(ReleaseCode));
+  All.insert(All.end(), Code);
+  return All;
+}
+
+TEST(SysVCallContract, AFunctionAndTheWrapperThatHandsItsResultBackRun) {
+  // drop(o): `mov rdi, [rdi+8]; jmp release`, as sqlite3BtreeClearCursor
+  // ends in sqlite3_free.  The wrapper returns a value only if release
+  // does, and release's result is read only if the wrapper returns one:
+  // neither does, and a null argument is no trap.
+  // user(o): `call drop; call release; xor eax, eax; ret`.
+  constexpr va_t Release = Text, Drop = Text + 0x10, User = Text + 0x20;
+  const BinaryImage Img = makeImportImage(
+      afterRelease({0x48, 0x8B, 0x7F, 0x08, // drop: mov rdi, [rdi+8]
+                    0xEB, 0xEA,             // jmp release
+                    0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+                    0x53,                         // user: push rbx
+                    0x48, 0x89, 0xFB,             // mov rbx, rdi
+                    0xE8, 0xE7, 0xFF, 0xFF, 0xFF, // call drop
+                    0x48, 0x89, 0xDF,             // mov rdi, rbx
+                    0xE8, 0xCF, 0xFF, 0xFF, 0xFF, // call release
+                    0x31, 0xC0,                   // xor eax, eax
+                    0x5B,                         // pop rbx
+                    0xC3}),                       // ret
+      {{Release, "release"}, {Drop, "drop"}, {User, "user"}}, {});
+  const std::string Source = liftEntries(Img, {Release, Drop, User});
+  EXPECT_NE(Source.find("\nvoid release("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\nvoid drop("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  int64_t cell = 7;
+  struct { int64_t first; void *owned; } o = {9, 0};
+  drop(&o);
+  if (o.first != 9)
+    return 1;
+  o.owned = &cell;
+  drop(&o);
+  if (cell != 0)
+    return 2;
+  cell = 3;
+  if (user((int64_t)(intptr_t)&o) != 0 || cell != 0 || o.first != 0)
+    return 3;
+  return 0;
+}
+)");
+}
+
+TEST(SysVCallContract, TheBytesACallThatReturnsNothingLeftReachNoValue) {
+  // both(p, a, b): `xor ebx, ebx; test esi, esi; sete bl; call release;
+  // test r12d, r12d; setne al; and ebx, eax; mov eax, ebx`.  EAX above AL is
+  // what release left; EBX holds a zero-extended flag, so the AND reads AL
+  // alone.  mark(p, q, a): `call release; test r12d, r12d; setne al;
+  // shl eax, 6; mov [rbx], al; xor eax, eax`: the shift moves nothing down
+  // into AL.
+  // Neither reads a result of release, which returns none.
+  constexpr va_t Release = Text, Both = Text + 0x10, Mark = Text + 0x40;
+  const BinaryImage Img = makeImportImage(
+      afterRelease({0x53,                         // both: push rbx
+                    0x41, 0x54,                   // push r12
+                    0x48, 0x83, 0xEC, 0x08,       // sub rsp, 8
+                    0x41, 0x89, 0xD4,             // mov r12d, edx
+                    0x31, 0xDB,                   // xor ebx, ebx
+                    0x85, 0xF6,                   // test esi, esi
+                    0x0F, 0x94, 0xC3,             // sete bl
+                    0xE8, 0xDA, 0xFF, 0xFF, 0xFF, // call release
+                    0x45, 0x85, 0xE4,             // test r12d, r12d
+                    0x0F, 0x95, 0xC0,             // setne al
+                    0x21, 0xC3,                   // and ebx, eax
+                    0x89, 0xD8,                   // mov eax, ebx
+                    0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+                    0x41, 0x5C,                   // pop r12
+                    0x5B,                         // pop rbx
+                    0xC3,                         // ret
+                    0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+                    0x53,                         // mark: push rbx
+                    0x41, 0x54,                   // push r12
+                    0x48, 0x83, 0xEC, 0x08,       // sub rsp, 8
+                    0x48, 0x89, 0xF3,             // mov rbx, rsi
+                    0x41, 0x89, 0xD4,             // mov r12d, edx
+                    0xE8, 0xAE, 0xFF, 0xFF, 0xFF, // call release
+                    0x45, 0x85, 0xE4,             // test r12d, r12d
+                    0x0F, 0x95, 0xC0,             // setne al
+                    0xC1, 0xE0, 0x06,             // shl eax, 6
+                    0x88, 0x03,                   // mov [rbx], al
+                    0x31, 0xC0,                   // xor eax, eax
+                    0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+                    0x41, 0x5C,                   // pop r12
+                    0x5B,                         // pop rbx
+                    0xC3}),                       // ret
+      {{Release, "release"}, {Both, "both"}, {Mark, "mark"}}, {});
+  const std::string Source = liftEntries(Img, {Release, Both, Mark});
+  EXPECT_NE(Source.find("\nvoid release("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  int64_t cell = 5;
+  unsigned char flag = 0xFF;
+  if (both((int64_t)(intptr_t)&cell, 0, 3) != 1 || cell != 0)
+    return 1;
+  if (both(0, 0, 0) != 0 || both(0, 2, 5) != 0 || both(0, 0, 1) != 1)
+    return 2;
+  mark(0, &flag, 1);
+  if (flag != 0x40)
+    return 3;
+  mark(0, &flag, 0);
+  return flag;
+}
+)");
+}
+
+TEST(SysVCallContract, AConstantTheCodeHeldIsNoResult) {
+  // reset(p): `test rdi, rdi; je done; xor eax, eax; mov [rdi], ax;
+  // mov qword [rdi+8], 0; done: ret`, as sqlite3DeleteColumnNames: the zero
+  // in EAX is what the store needed, beside a path that never wrote RAX.
+  // finish(p, f): `test esi, esi; je tail; mov eax, 1; mov [rdi+16], eax;
+  // ret; tail: jmp release`, as sqlite3ExprAttachSubtrees: a function that
+  // meant to return the one would not hand back what release left.
+  constexpr va_t Reset = Text, Release = Text + 0x20, Finish = Text + 0x30,
+                 User = Text + 0x40;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x85, 0xFF,                               // reset: test rdi, rdi
+      0x74, 0x0D,                                     // je done
+      0x31, 0xC0,                                     // xor eax, eax
+      0x66, 0x89, 0x07,                               // mov [rdi], ax
+      0x48, 0xC7, 0x47, 0x08, 0x00, 0x00, 0x00, 0x00, // mov qword [rdi+8], 0
+      0xC3,                                           // done: ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x48, 0x85, 0xFF, // release: test rdi, rdi
+      0x74, 0x0A,                                     // je done
+      0x48, 0x8B, 0x07,                               // mov rax, [rdi]
+      0x48, 0xC7, 0x07, 0x00, 0x00, 0x00, 0x00,       // mov qword [rdi], 0
+      0xC3,                                           // done: ret
+      0x85, 0xF6,                                     // finish: test esi, esi
+      0x74, 0x09,                                     // je tail
+      0xB8, 0x01, 0x00, 0x00, 0x00,                   // mov eax, 1
+      0x89, 0x47, 0x10,                               // mov [rdi+16], eax
+      0xC3,                                           // ret
+      0xEB, 0xE1,                                     // tail: jmp release
+      0xCC,
+      0x53,                         // user: push rbx
+      0x48, 0x89, 0xFB,             // mov rbx, rdi
+      0xE8, 0xB7, 0xFF, 0xFF, 0xFF, // call reset
+      0x48, 0x89, 0xDF,             // mov rdi, rbx
+      0xBE, 0x01, 0x00, 0x00, 0x00, // mov esi, 1
+      0xE8, 0xDA, 0xFF, 0xFF, 0xFF, // call finish
+      0x48, 0x89, 0xDF,             // mov rdi, rbx
+      0x31, 0xF6,                   // xor esi, esi
+      0xE8, 0xD0, 0xFF, 0xFF, 0xFF, // call finish
+      0x31, 0xC0,                   // xor eax, eax
+      0x5B,                         // pop rbx
+      0xC3};                        // ret
+  const BinaryImage Img = makeImportImage(Code,
+                                          {{Reset, "reset"},
+                                           {Release, "release"},
+                                           {Finish, "finish"},
+                                           {User, "user"}},
+                                          {});
+  const std::string Source = liftEntries(Img, {Reset, Release, Finish, User});
+  EXPECT_NE(Source.find("\nvoid reset("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\nvoid finish("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  struct { int64_t first; int64_t second; int32_t third; } o = {0x71111,
+                                                                0x2222, 3};
+  reset(0);
+  finish(0, 0);
+  if (user((int64_t)(intptr_t)&o) != 0)
+    return 1;
+  return o.first == 0 && o.second == 0 && o.third == 1 ? 0 : 2;
+}
+)");
+}
+
+TEST(SysVCallContract, AFloatResultReadsNoIntegerItsFunctionHandsBack) {
+  // measure(p): `movsd xmm0, [rdi+8]; ...; mov rdi, [rdi]; call release;
+  // movsd xmm0, [rsp+8]; ret`, as sqlite3_column_double ends in
+  // sqlite3_mutex_leave: it returns XMM0, and RAX is as release left it.
+  // whole(p) reads the double.  release still returns no value.
+  constexpr va_t Release = Text, Measure = Text + 0x10, Whole = Text + 0x40;
+  const BinaryImage Img = makeImportImage(
+      afterRelease(
+          {0x53,                               // measure: push rbx
+           0x48, 0x83, 0xEC, 0x10,             // sub rsp, 16
+           0xF2, 0x0F, 0x10, 0x47, 0x08,       // movsd xmm0, [rdi+8]
+           0xF2, 0x0F, 0x11, 0x44, 0x24, 0x08, // movsd [rsp+8], xmm0
+           0x48, 0x8B, 0x3F,                   // mov rdi, [rdi]
+           0xE8, 0xD8, 0xFF, 0xFF, 0xFF,       // call release
+           0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, // movsd xmm0, [rsp+8]
+           0x48, 0x83, 0xC4, 0x10,             // add rsp, 16
+           0x5B,                               // pop rbx
+           0xC3,                               // ret
+           0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+           0xCC, 0xCC, 0xCC, 0xCC, 0x48, 0x83, 0xEC, 0x08, // whole: sub rsp, 8
+           0xE8, 0xC7, 0xFF, 0xFF, 0xFF,                   // call measure
+           0xF2, 0x0F, 0x2C, 0xC0, // cvttsd2si eax, xmm0
+           0x48, 0x83, 0xC4, 0x08, // add rsp, 8
+           0xC3}),                 // ret
+      {{Release, "release"}, {Measure, "measure"}, {Whole, "whole"}}, {});
+  const std::string Source = liftEntries(Img, {Release, Measure, Whole});
+  EXPECT_NE(Source.find("\nvoid release("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\ndouble measure("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  int64_t cell = 6;
+  struct { void *owned; double value; } o = {0, 42.5};
+  if (whole((int64_t)(intptr_t)&o) != 42)
+    return 1;
+  o.owned = &cell;
+  return whole((int64_t)(intptr_t)&o) == 42 && cell == 0 ? 0 : 2;
+}
+)");
+}
+
 } // namespace

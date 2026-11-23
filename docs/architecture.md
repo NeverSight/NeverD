@@ -5506,6 +5506,24 @@ return is not in the compare's block. A real 32-bit write is a
 definition, and the zeros it writes are the high bits. High bits no write
 produced are not invented. Whether the function returns a value at all stays
 with the return contracts (`settleReturnContracts`).
+The return contracts settle that from each function's return paths, its
+callees and its callers together (`PipelineReturnContracts.cpp`). A path that
+never wrote the result register, where no parameter arrives in it, shows the
+function means no value, and so does a path that hands back what a callee
+left when that callee returned and returns nothing; a constant another path
+holds is then what the code happened to hold (`xor eax, eax` to store a
+zero). A function no path of which shows that, such as one that returns the
+register a parameter arrived in or ends after a call that does not return,
+keeps its value while a caller hands its result back: the caller may be
+returning what it passed. A caller reads a result only where something it
+does depends on a byte of it (`ByteDemand`): the narrower views of the
+register the lift keeps in step with it, the merges of those views, and the
+bytes a `setcc` writes one byte over read nothing unless they reach a store,
+a call, a branch or a return, and a read of a function's result reaches the
+results that function hands back. So a callee and the callers that hand its
+result back return no value together, as `sqlite3_free` and the functions
+that end in it do, and an operation that reads the result of a call that
+returns nothing, where no byte of it reaches anything, reads zero instead.
 An inferred integer result is as wide as the widest value some return path
 is seen to leave (`inferReturnType`). The write in the return's own block,
 the writes that reach a return without one from the blocks before it, and the

@@ -190,10 +190,14 @@ inline constexpr uint64_t kPipelineLowIRMinParallelBytes = 4096;
 inline constexpr uint64_t kPipelineLowIRMaxDecodeWeight = 1ull << 20;
 
 // lib/pipeline/PipelineReturnContracts.cpp
-// Each function's answer reads its callees' and its callers': repeat
-// until no answer changes, within a bound for call-graph cycles.
+// Each function's answer reads its callees' and its callers'.  The callers
+// taken to return no value only shrink from round to round; the bound stops
+// a degenerate image, which gets the answers no assumption supports.
 inline constexpr unsigned kPipelineReturnContractsMaxRounds = 8;
 inline constexpr unsigned kPipelineReturnContractsClassifyMaxDepth = 32;
+// The values worked out together when asking which bytes of one are zero
+// (a flag ANDed around a loop); past it nothing is known of them.
+inline constexpr unsigned kPipelineReturnContractsZeroByteValues = 64;
 
 // lib/pipeline/StateSourceBank.cpp
 inline constexpr unsigned kStateSourceBankBankOffsetsBudget = 128;
