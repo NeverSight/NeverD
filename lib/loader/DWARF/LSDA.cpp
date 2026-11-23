@@ -90,35 +90,6 @@ std::string readMappedCString(const BinaryImage &Img, va_t Address) {
   return std::string(reinterpret_cast<const char *>(Bytes), Length);
 }
 
-bool readTypeTablePointer(const BinaryImage &Img, const uint8_t *Bytes,
-                          size_t Size, va_t EntryVA, uint8_t Encoding,
-                          const PointerBases &Bases, unsigned PtrSize,
-                          va_t &Target, va_t &IndirectSlot) {
-  // Cache slide info owns the dereference, including slots outside the
-  // selected Mach-O image. DWARF still owns the address of the slot.
-  const bool CacheIndirect = Img.MachOSharedCache && (Encoding & Indirect);
-  size_t Cursor = 0;
-  if (!readEncodedPointer(Bytes, Size, Cursor, EntryVA,
-                          CacheIndirect ? Encoding & ~Indirect : Encoding,
-                          Bases, PtrSize, &Img, Target, &IndirectSlot))
-    return false;
-  if (CacheIndirect && Target) {
-    IndirectSlot = Target;
-    if (auto Address =
-            macho_loader::readMetadataPointerTarget(Img, IndirectSlot)) {
-      Target = *Address;
-      return true;
-    }
-    Target = 0;
-    return !resolveRoutineName(Img, 0, IndirectSlot).empty();
-  }
-  // A bound slot can contain an ordinal or an unmapped link-time placeholder.
-  // Its binding still identifies the type.
-  if (Target && IndirectSlot && !Img.readVA(Target, 1))
-    Target = 0;
-  return true;
-}
-
 } // namespace
 
 std::string readItaniumTypeName(const BinaryImage &Img, va_t TypeInfoVA) {
@@ -512,11 +483,19 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
         }
         va_t TypeInfo = 0;
         va_t IndirectSlot = 0;
-        if (!readTypeTablePointer(Img, Slot, EntrySize, EntryVA, SlotEncoding,
-                                  Bases, PtrSize, TypeInfo, IndirectSlot)) {
+        size_t SlotCursor = 0;
+        if (!readEncodedPointer(Slot, EntrySize, SlotCursor, EntryVA,
+                                SlotEncoding, Bases, PtrSize, &Img, TypeInfo,
+                                &IndirectSlot)) {
           partial("unresolved Itanium LSDA type-table entry");
           break;
         }
+        // Standalone images can carry a bound ordinal or link-time placeholder.
+        // Shared-cache indirect targets have already been validated by dyld
+        // metadata.
+        if (TypeInfo && IndirectSlot && !Img.MachOSharedCache &&
+            !Img.readVA(TypeInfo, 1))
+          TypeInfo = 0;
 
         ItaniumTypeEntry Entry;
         Entry.Index = Index;

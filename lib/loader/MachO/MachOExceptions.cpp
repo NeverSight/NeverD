@@ -10,6 +10,7 @@
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/DyldSharedCache.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -157,6 +158,16 @@ void parseDarwinExceptions(BinaryImage &Img) {
     auto It = NameCache.find(Key);
     if (It == NameCache.end()) {
       std::string Resolved = resolveRoutineName(Img, Routine, Slot);
+      if (Resolved.empty() && Routine && Img.MachOSharedCache) {
+        auto Export = Img.MachOSharedCache->readTextExportName(Routine);
+        if (Export) {
+          Resolved = std::move(*Export);
+        } else {
+          Out.ParseStatus = mergeExceptionParseStatus(
+              Out.ParseStatus, ExceptionParseStatus::Partial);
+          Out.Diagnostics.push_back(llvm::toString(Export.takeError()));
+        }
+      }
       It = NameCache
                .emplace(Key,
                         std::make_pair(Resolved,

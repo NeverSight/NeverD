@@ -42,6 +42,14 @@ namespace {
 
 constexpr va_t Base = 0x180000000;
 
+#define NEVERD_CACHE_BIND_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "DyldCacheBindFixtures.def"
+
+#define NEVERD_CACHE_UNWIND_VALUE(Type, Name, Value)                           \
+  constexpr Type Name = Value;
+#define NEVERD_CACHE_UNWIND_TEXT(Name, Value) constexpr char Name[] = Value;
+#include "DyldCacheUnwindFixtures.def"
+
 #define DARWIN_RTTI_CACHE_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define DARWIN_RTTI_TEXT(Name, Value)                                          \
   [[maybe_unused]] constexpr char Name[] = Value;
@@ -724,6 +732,74 @@ TEST(DyldSharedCache, RangeReadsValidateWholePagesAndRetainOverlap) {
   }
 }
 
+TEST(DyldSharedCache, IdentifiesExactTextExportsAcrossImages) {
+  using namespace llvm::MachO;
+  CacheFixture Fixture;
+  Fixture.imageProjection();
+  Fixture.set<uint64_t>(kTextDirectoryField, kTextDirectory);
+  Fixture.set<uint64_t>(kTextCountField, 1);
+  Fixture.set<uint64_t>(kTextDirectory + kTextLoadAddress,
+                        Base + kHeaderOffset);
+  Fixture.set<uint32_t>(kTextDirectory + kTextSizeField, kTextBytes);
+  const size_t CountField = kHeaderOffset + offsetof(mach_header_64, ncmds);
+  const size_t SizeField = kHeaderOffset + offsetof(mach_header_64, sizeofcmds);
+  const auto *Data = Fixture.Data.data();
+  const uint32_t CmdBytes = readLE<uint32_t>(Data + SizeField);
+  const size_t Command = kHeaderOffset + sizeof(mach_header_64) + CmdBytes;
+  Fixture.set<uint32_t>(CountField, readLE<uint32_t>(Data + CountField) + 1);
+  Fixture.set<uint32_t>(SizeField, CmdBytes + sizeof(linkedit_data_command));
+  Fixture.set<uint32_t>(Command + offsetof(linkedit_data_command, cmd),
+                        LC_DYLD_EXPORTS_TRIE);
+  Fixture.set<uint32_t>(Command + offsetof(linkedit_data_command, cmdsize),
+                        sizeof(linkedit_data_command));
+  Fixture.set<uint32_t>(Command + offsetof(linkedit_data_command, dataoff),
+                        kTrieOffset);
+  Fixture.set<uint32_t>(Command + offsetof(linkedit_data_command, datasize),
+                        sizeof(kProviderTrie));
+  std::memcpy(Fixture.Data.data() + kTrieOffset, kProviderTrie,
+              sizeof(kProviderTrie));
+  auto Cache = Fixture.parse();
+  ASSERT_TRUE(bool(Cache)) << llvm::toString(Cache.takeError());
+  auto Name = Cache->readTextExportName(Base + kCodeOffset);
+  ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+  EXPECT_EQ(*Name, kProviderName);
+  auto Interior =
+      Cache->readTextExportName(Base + kCodeOffset + sizeof(uint32_t));
+  ASSERT_TRUE(bool(Interior)) << llvm::toString(Interior.takeError());
+  EXPECT_TRUE(Interior->empty());
+  const auto CheckProvider = [&](llvm::StringRef Expected) {
+    auto Parsed = Fixture.parse();
+    ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+    auto Result = Parsed->readTextExportName(Base + kCodeOffset);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(*Result, Expected);
+  };
+  Fixture.set<uint8_t>(kTrieOffset + kTerminalFlagsOffset,
+                       EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE);
+  CheckProvider({});
+  Fixture.set<uint8_t>(kTrieOffset + kTerminalFlagsOffset,
+                       EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION);
+  CheckProvider(kProviderName);
+  Fixture.set<uint8_t>(kTrieOffset + kTerminalFlagsOffset,
+                       EXPORT_SYMBOL_FLAGS_KIND_REGULAR);
+  Fixture.set<uint32_t>(SizeField, CmdBytes + sizeof(dyld_info_command));
+  std::memset(Fixture.Data.data() + Command, 0, sizeof(dyld_info_command));
+  Fixture.set<uint32_t>(Command + offsetof(dyld_info_command, cmd),
+                        LC_DYLD_INFO_ONLY);
+  Fixture.set<uint32_t>(Command + offsetof(dyld_info_command, cmdsize),
+                        sizeof(dyld_info_command));
+  Fixture.set<uint32_t>(Command + offsetof(dyld_info_command, export_off),
+                        kTrieOffset);
+  Fixture.set<uint32_t>(Command + offsetof(dyld_info_command, export_size),
+                        sizeof(kProviderTrie));
+  CheckProvider(kProviderName);
+  Fixture.set<uint32_t>(kTextDirectory + kTextSizeField, 0);
+  CheckProvider({});
+  Fixture.set<uint64_t>(kTextCountField, 0);
+  Fixture.set<uint64_t>(kTextDirectoryField, 0);
+  CheckProvider(kProviderName);
+}
+
 TEST(DyldSharedCache, ReadsNonUniqueCxxTypeNamesAcrossMappings) {
   for (uint32_t Version : {kCacheV3, kCacheV5}) {
     SCOPED_TRACE(Version);
@@ -1309,6 +1385,8 @@ TEST(DyldSharedCache, SelectedImageLoadingRetainsSlideAndInputIdentity) {
   Fixture.set<uint32_t>(0x730, 0x1008);
   Fixture.set<uint32_t>(0x734, 3);
   Fixture.set<uint32_t>(0x740, 6);
+  // The middle GOT entry is an absolute bind between two slide entries.
+  Fixture.set<uint64_t>(kAbsoluteBindFileOffset, kAbsoluteBindValue);
   // The isolated __LINKEDIT does not belong to the projected VM address space.
   Fixture.set<uint16_t>(0x441c, 0xffff);
   Fixture.set<uint32_t>(0x900, 0xd65f03c0);
@@ -1349,6 +1427,13 @@ TEST(DyldSharedCache, SelectedImageLoadingRetainsSlideAndInputIdentity) {
   EXPECT_FALSE(Image->ImportStorageSlots.count(Base + 0x2018));
   EXPECT_FALSE(Image->CodePtrRelocSlots.count(Base + 0x2018));
   EXPECT_FALSE(Image->DataPtrRelocSlots.count(Base + 0x2018));
+  const va_t AbsoluteSlot = Base + kAbsoluteBindVMOffset;
+  const auto *AbsoluteBytes = Image->readVA(AbsoluteSlot, sizeof(uint64_t));
+  ASSERT_TRUE(AbsoluteBytes);
+  EXPECT_EQ(readLE<uint64_t>(AbsoluteBytes), kAbsoluteBindValue);
+  EXPECT_FALSE(Image->MachOSharedCacheSymbolPointers.count(AbsoluteSlot));
+  EXPECT_FALSE(Image->MachOResolvedChainedPointerSlots.count(AbsoluteSlot));
+  EXPECT_FALSE(readMetadataPointerTarget(*Image, AbsoluteSlot));
   EXPECT_EQ(readMetadataPointerTarget(*Image, Base + 0x2018), Base + 0x700);
   EXPECT_FALSE(Image->getSegmentFor(Base + 0x4000));
   EXPECT_TRUE(readMetadataBytes(*Image, Base + 0x4000, 8));
@@ -1370,6 +1455,8 @@ TEST(DyldSharedCache, SelectedImageLoadingRetainsSlideAndInputIdentity) {
               "_import");
     EXPECT_TRUE(Optimized->ImportPtrSlots.empty());
     EXPECT_TRUE(Optimized->ImportStorageSlots.empty());
+    EXPECT_FALSE(Optimized->MachOSharedCacheSymbolPointers.count(AbsoluteSlot));
+    EXPECT_FALSE(readMetadataPointerTarget(*Optimized, AbsoluteSlot));
   }
   Fixture.set<uint32_t>(0x744, UINT32_MAX);
   {
@@ -1420,6 +1507,29 @@ TEST(DyldSharedCache, OptionalRealCacheAllImagesHaveValidAnalysisProjections) {
   }
   RecordProperty("images", Cache->images().size());
   RecordProperty("total_projection_bytes", BytesTotal);
+}
+
+TEST(DyldSharedCache, OptionalRealCacheIdentifiesLibCxxPersonality) {
+  const char *Path = std::getenv(kCacheEnvironment);
+  if (!Path)
+    GTEST_SKIP() << kCacheUnavailable;
+  BinaryLoadOptions Options;
+  Options.Choice.MachOSharedCacheImage = kRealLibCxx;
+  auto Image = loadBinary(Path, Options);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  size_t Count = 0;
+  for (const auto &Frame : Image->ExceptionMetadata.Functions) {
+    if (Frame.Personality != ExceptionPersonality::GxxPersonalityV0 ||
+        !Frame.Itanium || !Frame.Compact)
+      continue;
+    EXPECT_EQ(Frame.PersonalityName, kProviderName);
+    EXPECT_NE(Frame.PersonalityVA, 0u);
+    EXPECT_EQ(Frame.Itanium->TypeTableEntryKind,
+              ItaniumTypeTableEntryKind::CxxRTTI);
+    ++Count;
+  }
+  EXPECT_GT(Count, 0u);
+  RecordProperty(kProviderFramesProperty, Count);
 }
 
 TEST(DyldSharedCache, OptionalRealCacheLoadsFoundationThroughSharedLoader) {

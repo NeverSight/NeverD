@@ -2791,13 +2791,22 @@ cache slide reader supplies pointer semantics before metadata and discovery;
 authenticated bytes remain encoded, and only unsigned slide slots are patched.
 Indirect-table names are separate cache symbol references, never ordinary
 import-storage proof. Optimized `__got`/`__auth_got` sections retain names only
-for nonzero surviving slots validated against slide records; coalesced holes
-are not pointers. This follows Apple's [cache binding](https://github.com/apple-oss-distributions/dyld/blob/main/cache_builder/CacheDylib.cpp)
+for nonzero surviving slots validated against slide records. A cache absolute
+bind keeps its original integer value. dyld removes its slide entry, so a
+positional symbol on that slot provides no pointer identity. This follows Apple's [cache binding](https://github.com/apple-oss-distributions/dyld/blob/main/cache_builder/CacheDylib.cpp)
 and [section adjustment](https://github.com/apple-oss-distributions/dyld/blob/main/cache_builder/NewAdjustDylibSegments.cpp). `InputFileSHA256` hashes the exact main file, while the
 image retains every input file digest and its install name. `Raw` is explicitly
 an analysis projection. Module and source-replacement guards apply even when
 a cached image's subtype is ordinary arm64. The layouts follow
 [Apple's cache definitions](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/dyld_cache_format.h).
+
+A cached compact-unwind or DWARF personality can reside in another image.
+The slide record identifies the routine address. To recover its name the
+reader consults the cache text-image directory or the image layouts in older
+caches, checks the executable
+instruction section and looks for a unique regular export at that exact
+address. This also lets an LSDA use its C++ personality to interpret typed
+catches across image boundaries.
 `BinaryImage::MachOSharedCache` retains that immutable address space for
 analysis-only metadata reads. Selected segment bytes take precedence; edits,
 overlapping ownership and stale signing recipes fail validation. Range slide
