@@ -65,7 +65,10 @@ struct DyldCacheImageLayout {
   std::vector<Section> Sections;
   uint32_t ExportTrieFileOffset = 0;
   uint32_t ExportTrieSize = 0;
+  std::optional<size_t> LinkeditIndex;
 };
+
+enum class DyldCacheFileRange { AnySegment, Linkedit };
 
 struct DyldCacheFixup {
   va_t Slot = 0;
@@ -125,6 +128,12 @@ public:
   /// nor necessarily an offset in the file containing that header.
   llvm::Expected<llvm::ArrayRef<uint8_t>>
   readImageFileBytes(size_t ImageIndex, uint64_t Offset, uint64_t Size) const;
+  /// Use a layout from readImageLayout. Commands with a LINKEDIT payload
+  /// name its owner even when executable bytes in another subcache share
+  /// the same numeric file offsets.
+  llvm::Expected<llvm::ArrayRef<uint8_t>>
+  readImageFileBytes(const DyldCacheImageLayout &Layout, uint64_t Offset,
+                     uint64_t Size, DyldCacheFileRange Owner) const;
   /// Decode a complete mapping transactionally. Preserve original bytes and
   /// signing recipes; no offline reader can manufacture a process's PAC.
   llvm::Expected<std::vector<DyldCacheFixup>>

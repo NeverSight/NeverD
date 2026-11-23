@@ -61,27 +61,16 @@ class ImageBuilder {
   std::vector<uint8_t> Output;
   std::vector<Command> Commands;
   std::vector<uint64_t> SegmentOffsets;
-  std::optional<size_t> LinkeditIndex;
   Bytes OriginalStrings;
   std::vector<uint8_t> Strings{0};
   llvm::StringMap<uint32_t> StringIndices;
 
-  llvm::Expected<Bytes> fileRange(uint64_t Offset, uint64_t Size) const {
+  llvm::Expected<Bytes>
+  fileRange(uint64_t Offset, uint64_t Size,
+            DyldCacheFileRange Owner = DyldCacheFileRange::Linkedit) const {
     if (!Size)
       return Bytes();
-    std::optional<Bytes> Result;
-    for (const auto &Segment : Layout.Segments) {
-      if (Offset < Segment.FileOffset ||
-          !rangeInBounds(Offset - Segment.FileOffset, Size, Segment.FileSize))
-        continue;
-      if (Result)
-        return fail();
-      Result =
-          Cache.readBytes(Segment.Address + Offset - Segment.FileOffset, Size);
-      if (!Result)
-        return fail();
-    }
-    return Result ? llvm::Expected<Bytes>(*Result) : fail();
+    return Cache.readImageFileBytes(Layout, Offset, Size, Owner);
   }
 
   llvm::Expected<uint32_t> append(Bytes Data) {
@@ -101,10 +90,12 @@ class ImageBuilder {
     return static_cast<uint32_t>(Offset);
   }
 
-  llvm::Expected<uint32_t> copyRange(uint64_t Offset, uint64_t Size) {
+  llvm::Expected<uint32_t>
+  copyRange(uint64_t Offset, uint64_t Size,
+            DyldCacheFileRange Owner = DyldCacheFileRange::Linkedit) {
     if (!Size)
       return 0;
-    auto Data = fileRange(Offset, Size);
+    auto Data = fileRange(Offset, Size, Owner);
     if (!Data)
       return Data.takeError();
     return append(*Data);
@@ -227,7 +218,7 @@ class ImageBuilder {
     std::optional<uint64_t> Result;
     for (size_t I = 0; I < Layout.Segments.size(); ++I) {
       const auto &S = Layout.Segments[I];
-      if (I == LinkeditIndex || Offset < S.FileOffset ||
+      if (I == Layout.LinkeditIndex || Offset < S.FileOffset ||
           !rangeInBounds(Offset - S.FileOffset, Size, S.FileSize))
         continue;
       if (Result)
@@ -319,7 +310,8 @@ class ImageBuilder {
       if (C.Data.size() < sizeof(note_command))
         return fail();
       auto New = copyRange(C.get<uint64_t>(offsetof(note_command, offset)),
-                           C.get<uint64_t>(offsetof(note_command, size)));
+                           C.get<uint64_t>(offsetof(note_command, size)),
+                           DyldCacheFileRange::AnySegment);
       if (!New)
         return New.takeError();
       C.set<uint64_t>(offsetof(note_command, offset), *New);
@@ -383,13 +375,7 @@ public:
     for (size_t I = 0; I < Layout.Segments.size(); ++I) {
       Progress.check();
       const auto &S = Layout.Segments[I];
-      if (S.Name == section_names::macho::LinkeditSeg) {
-        if (LinkeditIndex)
-          return fail();
-        LinkeditIndex = I;
-        continue;
-      }
-      if (I == HeaderIndex)
+      if (I == Layout.LinkeditIndex || I == HeaderIndex)
         continue;
       auto New = append(S.FileSize ? *Cache.readBytes(S.Address, S.FileSize)
                                    : Bytes());
@@ -399,8 +385,8 @@ public:
     }
     const size_t LinkeditStart = llvm::alignTo(Output.size(), sizeof(uint64_t));
     Output.resize(LinkeditStart);
-    if (LinkeditIndex)
-      SegmentOffsets[*LinkeditIndex] = LinkeditStart;
+    if (Layout.LinkeditIndex)
+      SegmentOffsets[*Layout.LinkeditIndex] = LinkeditStart;
     std::optional<size_t> Symbols;
     for (size_t At = sizeof(mach_header_64); At < Layout.HeaderBytes.size();) {
       const uint32_t Size = readLE<uint32_t>(Layout.HeaderBytes.data() + At +
@@ -431,7 +417,7 @@ public:
       Commands[*Symbols].set<uint32_t>(offsetof(symtab_command, strsize),
                                        Strings.size());
     }
-    if (Output.size() > LinkeditStart && !LinkeditIndex)
+    if (Output.size() > LinkeditStart && !Layout.LinkeditIndex)
       return fail();
     size_t SegmentIndex = 0;
     for (auto &C : Commands) {
@@ -440,7 +426,7 @@ public:
         const uint64_t Offset = SegmentOffsets[SegmentIndex];
         C.set(offsetof(segment_command_64, fileoff),
               S.FileSize ? Offset : uint64_t(0));
-        if (SegmentIndex == LinkeditIndex) {
+        if (SegmentIndex == Layout.LinkeditIndex) {
           const uint64_t Size = Output.size() - LinkeditStart;
           if (Size > S.Size)
             return fail();
@@ -459,7 +445,7 @@ public:
               C.get<uint32_t>(At + offsetof(section_64, flags)) & SECTION_TYPE;
           const bool Zero = Type == S_ZEROFILL || Type == S_GB_ZEROFILL ||
                             Type == S_THREAD_LOCAL_ZEROFILL;
-          if (SegmentIndex == LinkeditIndex)
+          if (SegmentIndex == Layout.LinkeditIndex)
             return fail();
           C.set<uint32_t>(At + offsetof(section_64, offset),
                           Zero ? 0 : Offset + Address - S.Address);

@@ -29,6 +29,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -798,6 +799,86 @@ TEST(DyldSharedCache, IdentifiesExactTextExportsAcrossImages) {
   Fixture.set<uint64_t>(kTextCountField, 0);
   Fixture.set<uint64_t>(kTextDirectoryField, 0);
   CheckProvider(kProviderName);
+}
+
+TEST(DyldSharedCache, SplitLinkeditOwnsItsLoadCommandPayloads) {
+  using namespace llvm::MachO;
+  CacheFixture Main, Sub(kSplitSlideVersion, Base + kSubcacheBias);
+  Main.imageProjection();
+  Main.set<uint32_t>(kSubcacheDirectoryField, kSubcacheRow);
+  Main.set<uint32_t>(kSubcacheDirectoryField + sizeof(uint32_t), 1);
+  Main.Data[kSubcacheRow] = kSubcacheUUID;
+  Main.set<uint64_t>(kSubcacheVMField, kSubcacheBias);
+  std::memcpy(Main.Data.data() + kSubcacheSuffixField, kSubcacheExt,
+              sizeof(kSubcacheExt));
+  Main.set<uint64_t>(kLinkeditCommand + offsetof(segment_command_64, vmaddr),
+                     Base + kSubcacheBias + kSplitLinkedit);
+  Main.set<uint64_t>(kLinkeditCommand + offsetof(segment_command_64, fileoff),
+                     kSplitLinkedit);
+  for (size_t Field : {offsetof(segment_command_64, filesize),
+                       offsetof(segment_command_64, vmsize)})
+    Main.set<uint64_t>(kLinkeditCommand + Field, kSplitLinkeditBytes);
+  std::copy_n(Main.Data.data() + kOriginalLinkedit, kSplitLinkeditBytes,
+              Sub.Data.data() + kSplitLinkedit);
+  for (size_t Field :
+       {kSymbolCommand + offsetof(symtab_command, symoff),
+        kSymbolCommand + offsetof(symtab_command, stroff),
+        kDynamicSymbolCommand + offsetof(dysymtab_command, modtaboff),
+        kDynamicSymbolCommand + offsetof(dysymtab_command, indirectsymoff),
+        kDataInCodeCommand + offsetof(linkedit_data_command, dataoff),
+        kFunctionStartsCommand + offsetof(linkedit_data_command, dataoff)}) {
+    const auto Offset = readLE<uint32_t>(Main.Data.data() + Field);
+    Main.set<uint32_t>(Field, Offset - kOriginalLinkedit + kSplitLinkedit);
+  }
+  const auto Parse = [&] {
+    std::vector<std::unique_ptr<llvm::MemoryBuffer>> Files;
+    Files.push_back(Main.buffer());
+    Files.push_back(Sub.buffer());
+    return DyldSharedCache::parse(std::move(Files));
+  };
+  auto Cache = Parse();
+  ASSERT_TRUE(bool(Cache)) << llvm::toString(Cache.takeError());
+  const auto StartsField =
+      kFunctionStartsCommand + offsetof(linkedit_data_command, dataoff);
+  const auto Starts = readLE<uint32_t>(Main.Data.data() + StartsField);
+  const auto Size = readLE<uint32_t>(Main.Data.data() + kFunctionStartsCommand +
+                                     offsetof(linkedit_data_command, datasize));
+  auto Unscoped = Cache->readImageFileBytes(0, Starts, Size);
+  ASSERT_FALSE(bool(Unscoped));
+  llvm::consumeError(Unscoped.takeError());
+  auto Prepared = Cache->prepareImage(0);
+  ASSERT_TRUE(bool(Prepared)) << llvm::toString(Prepared.takeError());
+  const auto Offset =
+      readLE<uint32_t>(Prepared->data() + StartsField - kHeaderOffset);
+  ASSERT_LE(uint64_t(Offset) + Size, Prepared->size());
+  EXPECT_EQ(
+      std::memcmp(Prepared->data() + Offset, Sub.Data.data() + Starts, Size),
+      0);
+  EXPECT_NE(
+      std::memcmp(Sub.Data.data() + Starts, Main.Data.data() + Starts, Size),
+      0);
+
+  // An export command identifies the same provider even when the main
+  // subcache has unrelated bytes at its trie offset.
+  Main.set<uint32_t>(kFunctionStartsCommand, LC_DYLD_EXPORTS_TRIE);
+  Main.set<uint32_t>(kFunctionStartsCommand +
+                         offsetof(linkedit_data_command, datasize),
+                     sizeof(kProviderTrie));
+  std::memcpy(Sub.Data.data() + Starts, kProviderTrie, sizeof(kProviderTrie));
+  Cache = Parse();
+  ASSERT_TRUE(bool(Cache)) << llvm::toString(Cache.takeError());
+  auto Name = Cache->readTextExportName(Base + kCodeOffset);
+  ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+  EXPECT_EQ(*Name, kProviderName);
+
+  // A linkedit command cannot take its payload from a different segment.
+  // The first offset past LINKEDIT also names bytes in the main data segment.
+  Main.set<uint32_t>(StartsField, kSplitLinkedit + kSplitLinkeditBytes);
+  Cache = Parse();
+  ASSERT_TRUE(bool(Cache)) << llvm::toString(Cache.takeError());
+  auto Invalid = Cache->prepareImage(0);
+  ASSERT_FALSE(bool(Invalid));
+  llvm::consumeError(Invalid.takeError());
 }
 
 TEST(DyldSharedCache, ReadsNonUniqueCxxTypeNamesAcrossMappings) {

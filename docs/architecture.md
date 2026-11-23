@@ -2785,8 +2785,15 @@ some real signed images retain original section offsets in their headers.
 `MachOLoader` selects an exact catalogue install name and reuses the ordinary
 Mach-O readers through `prepareImage`. The bounded analysis projection retains
 virtual addresses, symbol indices and alias/module names while packing only
-referenced linkedit bytes and strings. Packed linkedit has no projected VM
-ownership. Its original addresses remain readable through the cache. The
+referenced linkedit bytes and strings. The symbol tables, relocations, function
+starts and export trie use the file offsets of their image's `__LINKEDIT`.
+Text and linkedit subcaches can use identical numeric offsets. A command with
+unspecified segment ownership still requires a unique source range. Apple's
+extractor uses the linkedit segment's VM address and file offset for this
+translation. [Apple dyld cache extractor](https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/dsc_extractor.cpp)
+
+Packed linkedit has no projected VM ownership. Its original addresses remain
+readable through the cache. The
 cache slide reader supplies pointer semantics before metadata and discovery;
 authenticated bytes remain encoded, and only unsigned slide slots are patched.
 Indirect-table names are separate cache symbol references, never ordinary

@@ -14,6 +14,7 @@
 
 #include "neverd/loader/BinaryImageFlags.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/SHA256.h"
@@ -522,6 +523,11 @@ DyldSharedCache::readImageLayout(size_t ImageIndex) const {
       };
       DyldCacheImageSegment Mapping;
       Mapping.Name = Name(Segment.segname, sizeof(Segment.segname));
+      if (Mapping.Name == section_names::macho::LinkeditSeg) {
+        if (Layout.LinkeditIndex)
+          return fail(kMalformedImageLayout);
+        Layout.LinkeditIndex = Layout.Segments.size();
+      }
       Mapping.Address = Segment.vmaddr;
       Mapping.Size = Segment.vmsize;
       Mapping.FileOffset = Segment.fileoff;
@@ -602,8 +608,22 @@ DyldSharedCache::readImageFileBytes(size_t ImageIndex, uint64_t Offset,
   auto Layout = readImageLayout(ImageIndex);
   if (!Layout)
     return Layout.takeError();
+  return readImageFileBytes(*Layout, Offset, Size,
+                            DyldCacheFileRange::AnySegment);
+}
+
+llvm::Expected<llvm::ArrayRef<uint8_t>>
+DyldSharedCache::readImageFileBytes(const DyldCacheImageLayout &Layout,
+                                    uint64_t Offset, uint64_t Size,
+                                    DyldCacheFileRange Owner) const {
+  llvm::ArrayRef<DyldCacheImageSegment> Segments = Layout.Segments;
+  if (Owner == DyldCacheFileRange::Linkedit) {
+    if (!Layout.LinkeditIndex || *Layout.LinkeditIndex >= Segments.size())
+      return fail(kAmbiguousImageFileRange);
+    Segments = Segments.slice(*Layout.LinkeditIndex, 1);
+  }
   std::optional<llvm::ArrayRef<uint8_t>> Result;
-  for (const auto &Segment : Layout->Segments) {
+  for (const auto &Segment : Segments) {
     if (Offset < Segment.FileOffset ||
         !rangeInBounds(Offset - Segment.FileOffset, Size, Segment.FileSize))
       continue;
@@ -684,8 +704,9 @@ DyldSharedCache::readTextExportName(va_t Address) const {
 
   if (!Layout->ExportTrieSize)
     return std::string();
-  auto Trie = readImageFileBytes(Index, Layout->ExportTrieFileOffset,
-                                 Layout->ExportTrieSize);
+  auto Trie =
+      readImageFileBytes(*Layout, Layout->ExportTrieFileOffset,
+                         Layout->ExportTrieSize, DyldCacheFileRange::Linkedit);
   if (!Trie)
     return Trie.takeError();
   llvm::Error Err = llvm::Error::success();
