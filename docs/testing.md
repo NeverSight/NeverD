@@ -1985,6 +1985,14 @@ metadata. Category fixtures exercise authenticated class, metaclass and method r
 reconstruction restriction. Metadata names replace synthesized function-start
 names while preserving stated, analysis and user names.
 
+The `AArch64CompactRegisters.*PAuthLR*` filter in
+`NeverDArm64eLiftedImageTests` runs the same structural checks with frozen r6
+and source-built LLVM. It publishes all-pair, sparse and frame-only recipes,
+including a signing PC at byte 256, a PC-signed C++ cleanup, and a mixed
+image with an independently indexed cleanup. The two system-walk cases record the number of native PAuth_LR steps
+after a hardware probe. The original and published images can both pass their
+structural checks on a host reporting zero native steps.
+
 `NeverDLanguageEHTests` also covers compact PAuth_LR frame recipes with zero,
 middle and final signing-instruction offsets, register pairs, reserved bits,
 range truncation, alignment and arithmetic overflow. Shared raw/semantic page

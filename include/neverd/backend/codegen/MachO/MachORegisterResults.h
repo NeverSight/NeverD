@@ -20,6 +20,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
@@ -36,6 +37,10 @@ struct ExceptionFunction;
 struct ItaniumEHInfo;
 struct LowFunc;
 struct MedFunc;
+
+/// The Darwin frame record and its descending compact save slots at entry.
+llvm::SmallVector<CFIInstruction>
+machOCompactFrameRows(const CompactUnwindEntry &Compact);
 
 /// Complete-prologue DWARF for a frameless compact recipe with saved pairs.
 /// Darwin's system compact walker cannot restore that layout correctly.

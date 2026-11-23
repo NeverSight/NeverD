@@ -13,9 +13,10 @@
 #endif
 
 MACHO_OBJECT_TEXT(kObjectErrorPrefix, "Mach-O patch object: ")
-MACHO_OBJECT_TEXT(kAddressSourceWord,
-                  "lifted source address differs from its emitted instruction or "
-                  "function extent")
+MACHO_OBJECT_TEXT(
+    kAddressSourceWord,
+    "lifted source address differs from its emitted instruction or "
+    "function extent")
 MACHO_OBJECT_TEXT(kAddressReach,
                   "source address literal pool is out of instruction range")
 MACHO_OBJECT_TEXT(kAddressPageReach,
@@ -150,6 +151,10 @@ MACHO_OBJECT_TEXT(kDependencyProfile,
 MACHO_OBJECT_TEXT(kPublishedPointer,
                   "published native pointer is not file-backed")
 
+MACHO_OBJECT_TEXT(kFDEIndexOverflow, "producer FDE exceeds compact encoding")
+MACHO_OBJECT_TEXT(
+    kPrivateSigningFrames,
+    "lifted signing frames still require a registered DWARF record")
 MACHO_OBJECT_TEXT(kPublishedCompact,
                   "final native compact table cannot be decoded completely")
 MACHO_OBJECT_TEXT(kPublishedRange,
