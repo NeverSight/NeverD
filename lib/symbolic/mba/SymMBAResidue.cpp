@@ -113,21 +113,33 @@ SymRef foldOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     // A scaled disturbance can admit a truncated polynomial even beyond
     // the general affine search's factor limit. Its reader accounts for
     // every factor, including those outside the first coordinate.
-    const auto F = Ctx.operand(Root, 1);
-    if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) != 2 ||
-        !Ctx.isConst(Ctx.operand(F, 0)))
-      return Root;
-    const auto D = Ctx.operand(F, 1);
-    if (Ctx.op(D) != SymOp::Mul || !Ctx.isConst(Ctx.operand(D, 0)) ||
-        (Ctx.constWords(Ctx.operand(D, 0)).front() & 1))
+    auto Disturbance = [&](SymRef F) -> SymRef {
+      if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) != 2 ||
+          !Ctx.isConst(Ctx.operand(F, 0)))
+        return {};
+      const auto D = Ctx.operand(F, 1);
+      if (Ctx.op(D) != SymOp::Mul || !Ctx.isConst(Ctx.operand(D, 0)) ||
+          (Ctx.constWords(Ctx.operand(D, 0)).front() & 1))
+        return {};
+      return D;
+    };
+    auto D = Disturbance(Ctx.operand(Root, 1));
+    if (!D)
+      D = Disturbance(Ctx.operands(Root).back());
+    if (!D)
       return Root;
     const auto Digits = Ctx.constWords(Scale);
     if (!Budget.consume(Digits.size()))
       return Root;
     const auto Zeros = llvm::APInt::tcLSB(Digits.data(), Digits.size());
     const unsigned Bits = Ctx.width(Root) - Zeros;
-    if (!Zeros || Bits <= limits::kMaxAffineResidueTableBits)
+    if (!Zeros)
       return Root;
+    if (Bits <= limits::kMaxAffineResidueTableBits) {
+      const auto Op = Ctx.op(Ctx.operand(D, 1));
+      if (Op != SymOp::ZExt && Op != SymOp::SExt && Op != SymOp::Concat)
+        return Root;
+    }
     return foldTruncatedProduct(Ctx, Root, Bits, Budget, Storage,
                                 EmittedReading);
   }

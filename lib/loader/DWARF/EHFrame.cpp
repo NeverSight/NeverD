@@ -209,14 +209,15 @@ bool parseCIE(const uint8_t *Buf, size_t Size, size_t Cursor, size_t End,
       CIE.FDEPointerEncoding == Omit ? uint8_t(Absptr) : CIE.FDEPointerEncoding;
   if (DecodeCFI)
     detail::decodeCFIProgram(Buf, Size, Cursor, End, CIE, FDEEncoding, BufVA,
-                             Bases, PtrSize, std::nullopt, Img, Limits,
+                             Bases, PtrSize, nullptr, Img, Limits,
                              CIE.InitialInstructions, Status, Diagnostics);
   return true;
 }
 
 ParseResult parseFrameSection(const BinaryImage &Img, const FrameSection &Sec,
                               const PointerBases &Bases,
-                              const ParseLimits &Limits, bool DecodeCFI) {
+                              const ParseLimits &Limits, bool DecodeCFI,
+                              FDEOpcodeVisitor VisitOpcode = nullptr) {
   ParseResult Result;
   if (!Sec.Data || Sec.Size < 4)
     return Result;
@@ -380,10 +381,10 @@ ParseResult parseFrameSection(const BinaryImage &Img, const FrameSection &Sec,
     if (DecodeCFI) {
       PointerBases FDEBases = Bases;
       FDEBases.Func = FDE.InitialLocation;
-      detail::decodeCFIProgram(
-          Buf, Size, ProgramStart, EntryEnd, *CIE, Encoding, Sec.VA, FDEBases,
-          PtrSize, FDE.InitialLocation, &Img, Limits, FDE.Instructions,
-          FDE.ParseStatus, Result.Diagnostics);
+      detail::decodeCFIProgram(Buf, Size, ProgramStart, EntryEnd, *CIE,
+                               Encoding, Sec.VA, FDEBases, PtrSize, &FDE, &Img,
+                               Limits, FDE.Instructions, FDE.ParseStatus,
+                               Result.Diagnostics, VisitOpcode);
     }
     Result.ParseStatus =
         mergeExceptionParseStatus(Result.ParseStatus, FDE.ParseStatus);
@@ -404,6 +405,13 @@ ParseResult parseFrameSection(const BinaryImage &Img, const FrameSection &Sec,
 ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
                          const PointerBases &Bases, const ParseLimits &Limits) {
   return parseFrameSection(Img, Sec, Bases, Limits, /*DecodeCFI=*/true);
+}
+
+ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
+                         const PointerBases &Bases, const ParseLimits &Limits,
+                         FDEOpcodeVisitor VisitOpcode) {
+  return parseFrameSection(Img, Sec, Bases, Limits, /*DecodeCFI=*/true,
+                           VisitOpcode);
 }
 
 ParseResult detail::parseFrameHeaders(const BinaryImage &Img,

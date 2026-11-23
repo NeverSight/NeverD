@@ -16,18 +16,29 @@ the documented ignored width prefixes. A privilege or reserved-bit fault
 raises #GP(0) before the transfer publishes any effects. The scheduler reads
 one progress receipt to charge the attempt and distinguish an execution
 breakpoint from a post-commit trap. TPR aliases, device routing, source
-arbitration, complete environment import and both ordinary registry inputs
-remain open.
+arbitration and complete environment import remain open. The registry inputs
+have the ordinary scalar binding below.
+
+The ordinary HighC and LLVMC interfaces now expose an unresolved fixed
+Win64 outgoing word at its authenticated direct CALL. Bind
+`NEVERD_WIN64_CALL_STACK_U64(pc, offset)` to the original occurrence's
+64 bits to pass the fifth argument in both registry calls. The sixth argument
+retains its recovered value. The default source imports the original word
+and preserves the registry call through optimization. The physical word
+can differ across invocations with identical ordinary entry parameters.
+The V6 `native_rtm_abort_steps` binding handles an authenticated immediate
+abort pair under declared RTM support as one translated step. It preserves
+early-abort EAX and the original fallback. The earlier environment-budget
+interface remains available when capability needs to be checked at the step.
 
 Ordinary Win64 calls can again retain the previous call's physical RCX on
 large dependency graphs. The unread-register proof propagates only incoming
 families that can reach each call, within the same work limit. On the five
 original ordinary roots this reduced missing arguments from four to two per C
-route. Both remaining registry calls initialize only the low half of the fifth
-outgoing slot. The paged V6 function-call interface retains that slot in the
-original machine state and exports both call sites without a missing argument.
-An ordinary scalar value still needs the original four upper bytes or a proof
-covering all observers.
+route. The instruction and observer checks could not establish a complete
+fifth outgoing word for either registry call. The paged V6 function-call
+interface retains that slot in the original machine state. Ordinary C takes
+the full word from the binding at the corresponding CALL.
 
 The independent `X86LocalApicFixed` component now owns enabled fixed-message
 reception/coalescing, priority, nonconsuming selection, exact acknowledgment

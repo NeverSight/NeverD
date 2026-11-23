@@ -5,9 +5,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/analysis/arch/x86_64/X64CallContinuation.h"
 #include "../../lib/analysis/arch/x86_64/X64ControlTransitions.h"
 #include "../../lib/analysis/arch/x86_64/X64Recovery.h"
 #include "../../lib/analysis/arch/x86_64/X64TaskPriority.h"
+#include "../../lib/analysis/core/RawEnvironment.h"
+#include "../../lib/analysis/core/ReturningCallState.h"
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/InterpreterSpecialization.h"
@@ -24,6 +27,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -5492,5 +5496,12 @@ TEST(InterpreterSpecialization, TimestampTransitionMatchesCompleteStateOracle) {
 #include "SavedScalarCellsTests.inc"
 #include "SegmentedStoreTests.inc"
 #include "SupervisorReadRecoveryTests.inc"
+
+// These fixtures use the scalar and runtime-control helpers above.
+#include "ReturningCallStateTests.inc"
+
+// Both groups below use ReturningCallProvider and returningStateOptions.
+#include "ReturningCallReplayJoinTests.inc"
+#include "ReturningCallStateEffectTests.inc"
 
 } // namespace

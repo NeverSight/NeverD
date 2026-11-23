@@ -95,6 +95,7 @@ bool hasCRecordMembers(const TypeRef &Type) {
   if (Type->Kind != NdTypeKind::Struct)
     return !sourceAArch64VectorBytes(Type);
   return !Type->IsEnum && !Type->RegisterReturnRecord &&
+         (!Type->IsUnion || !Type->SourceName.empty()) &&
          Type->Passing == NdRecordPassing::ByValue &&
          Type->FieldDisplayBits.empty() &&
          std::all_of(Type->Fields.begin(), Type->Fields.end(),

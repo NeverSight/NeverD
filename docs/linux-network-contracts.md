@@ -231,9 +231,11 @@ Readiness is rescanned on wake and wins at an exact deadline tie. Querying never
 consumes a receive event; partial TCP reads and UDP peeks retain readiness.
 When a connected TCP socket lacks a readiness observation, the diagnostic
 identifies the zero-based `connections` index and the read, write or exceptional
-interest that stopped the wait. For read interest on a connection with
-`receive_events`, it also reports the accepted send byte count and the number
-of consumed events out of the total. If an event remains, the diagnostic names
+interest that stopped the wait. After a successful nonempty send, a missing
+read observation reports how many bytes the connection has accepted across
+its descriptor aliases. With `receive_events`, it reports the send count even
+at zero, along with the number of consumed events out of the total.
+If an event remains, the diagnostic names
 its zero-based index and `after_send` threshold. The connection index and
 cursors follow the open socket description across duplication and FD reuse.
 A nonblocking receive before a declared arrival returns EAGAIN without consuming

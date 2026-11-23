@@ -7,11 +7,31 @@
 /// Legacy Apple LLVM globals are not the upstream LLVM ptrauth constants.
 //===----------------------------------------------------------------------===//
 
+CODEGEN_PAUTH_TEXT(
+    kInvalidDarwinDtors,
+    "codegen: invalid Darwin destructor entry or registration ABI\n")
 CODEGEN_PAUTH_TEXT(kLegacyApplePAuthSection, "llvm.ptrauth")
-CODEGEN_PAUTH_TEXT(kLegacyApplePAuthUnsupported,
-                   "codegen: legacy Apple pointer authentication globals are "
-                   "unsupported by the configured LLVM; native C object "
-                   "compilation remains separate\n")
+CODEGEN_PAUTH_TEXT(kLegacyApplePAuthInvalid,
+                   "codegen: invalid legacy Apple pointer authentication "
+                   "descriptor or signing address: ")
+CODEGEN_PAUTH_TEXT(kInvalidCallKey,
+                   "codegen: invalid AArch64 authenticated call key on ")
+CODEGEN_PAUTH_TEXT(kUnsupportedPAuthLRMustTail,
+                   "codegen: configured LLVM lacks authenticated PAuth_LR "
+                   "musttail support on ")
+
+#ifdef CODEGEN_PAUTH_FIELD
+CODEGEN_PAUTH_FIELD(kStructorPriority, 0)
+CODEGEN_PAUTH_FIELD(kStructorFunction, 1)
+CODEGEN_PAUTH_FIELD(kStructorAssociation, 2)
+CODEGEN_PAUTH_FIELD(kCallKey, 0)
+CODEGEN_PAUTH_FIELD(kCallDiscriminator, 1)
+CODEGEN_PAUTH_FIELD(kLegacyTarget, 0)
+CODEGEN_PAUTH_FIELD(kLegacyKey, 1)
+CODEGEN_PAUTH_FIELD(kLegacyAddress, 2)
+CODEGEN_PAUTH_FIELD(kLegacyDiscriminator, 3)
+#undef CODEGEN_PAUTH_FIELD
+#endif
 
 CODEGEN_PAUTH_TEXT(kPAuthInstallationOwner,
                    "codegen: pointer authentication requires an arm64e Mach-O "

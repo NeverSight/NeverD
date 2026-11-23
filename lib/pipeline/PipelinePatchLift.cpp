@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedABIPass.h"
@@ -308,7 +309,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     propagateForwardedPointerParams(Result.MedFuncs, Img.Arch);
   // Late ABI remodelling may reconvert a function from LowIR.  Refresh the
   // interprocedural facts before either serial or sharded LLVM emission.
-  propagateInternalNoReturn(Result.MedFuncs, Img.Arch, Img.UserNoReturn,
+  propagateInternalNoReturn(Result.MedFuncs, Img.Arch, goStatedCallReturns(Img),
                             importCallAddresses(Img));
   // Call-setup recovery adds parameters the first settlement could not see.
   settleReturnContracts(Img, Result, Opts.SourceProjection ? Dbg : nullptr);

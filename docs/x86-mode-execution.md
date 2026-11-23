@@ -352,6 +352,30 @@ This profile accepts one logical processor outside VMX operation.
 [Linux KVM INIT and SIPI](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/lapic.c)
 [Intel SGX section 40.9](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
 
+## Qualification at `6f81b8559b`
+
+| Build | Machine execution | Paging | C source regression | Python SDK integration |
+| --- | ---: | ---: | ---: | ---: |
+| Published r7 SDK | 243/243 | 853/855 | 253/253 | 4/4 |
+| Locally built LLVM SDK | 243/243 | 853/855 | 253/253 | 4/4 |
+
+Entries count passed and registered cases. The JSON records the LA57 skips,
+both hybrid-core replays, binary and XML hashes, and KVM save images and fault
+frames. [Qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+
+After merging 77 subsequent `dev` commits at `bf4da7c3f9`, both SDKs repeated
+the same complete matrix: 243/243 machine-execution cases, 853/855 paging cases
+with two LA57 capability skips, 253/253 generated-C source cases and 4/4
+Python SDK integrations each. The opposite-core selections also passed. The
+HighC and LLVM-to-C VMRUN exports kept their exact source hashes.
+
+The Linux Actions job built the pinned x64 NeverC revision and passed 27
+required software cases. The signed Intel simulation enclave completed three
+calls, including two nested exception repairs. Both Intel macOS runners and
+the Linux runner enumerated zero EPC sections.
+[Hosted software and hardware probes](https://github.com/gmh5225/test_mac_intel/actions/runs/44886176997) ·
+[Intel SDK simulation](https://github.com/gmh5225/test_mac_intel/actions/runs/44873573672)
+
 ## Earlier qualification records
 
 The November 11 regression stream performs protected32 → compatibility32 → code64 →

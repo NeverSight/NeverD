@@ -30,6 +30,13 @@ struct MedFunc;
 /// the call.  Dead code elimination drops one nothing comes to use.
 void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register);
 
+/// Whether \p Func, in SSA form, addresses memory through \p Register as it
+/// was entered: a load or a store whose address is that value, or a constant
+/// away from it.  Assembly Go code enters holds the goroutine there and reads
+/// its fields so (`MOVQ BX, (g_sched+gobuf_pc)(R14)`); assembly the platform
+/// enters only saves the register for its caller.
+bool addressesThroughEntryRegister(const MedFunc &Func, uint64_t Register);
+
 /// Give the incoming value of the closure context register \p Register in
 /// \p Func, a function in SSA form that Go's compiler compiled for its
 /// internal ABI, the context its caller passed (Intrinsic::GoClosureContext):

@@ -177,6 +177,28 @@ std::shared_ptr<NdType> NdType::makeComplex(uint16_t ComponentBytes) {
   return T;
 }
 
+bool NdType::setUnionValueLayout() {
+  if (!IsUnion || Size != 8 || Alignment != 8 ||
+      FieldDisplayTypes.size() != 2 || FieldDisplayNames.size() != 2 ||
+      FieldDisplayOffsets.size() != 2 || !FieldDisplayBits.empty() ||
+      FieldDisplayNames[0] == FieldDisplayNames[1])
+    return false;
+  for (unsigned I = 0; I != 2; ++I) {
+    const auto &Integer = FieldDisplayTypes[I];
+    const auto &Real = FieldDisplayTypes[1 - I];
+    if (Integer && Real && Integer->Kind == NdTypeKind::Int &&
+        !Integer->IsSigned && Integer->Size == Size &&
+        Real->Kind == NdTypeKind::Float && Real->Size == Size &&
+        FieldDisplayOffsets[I] == 0 && FieldDisplayOffsets[1 - I] == 0 &&
+        !FieldDisplayNames[I].empty() && !FieldDisplayNames[1 - I].empty()) {
+      Fields = {Integer};
+      FieldOffsets = {0};
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string NdType::str() const {
   switch (Kind) {
   case NdTypeKind::Void:

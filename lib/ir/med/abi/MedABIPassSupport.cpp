@@ -19,6 +19,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
@@ -1166,6 +1167,24 @@ resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
   }
 }
 
+bool loadsStackPointerBefore(const MedBlock &Block, size_t Index,
+                             const TargetRegInfo &TRI) {
+  std::set<std::tuple<MedVar::VarKind, int, int>> Loaded;
+  for (size_t I = 0; I < Index && I < Block.Ops.size(); ++I) {
+    const MedOp &Op = Block.Ops[I];
+    const bool Loads = Op.Opcode == NdOp::LOAD;
+    if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == TRI.StackPointer &&
+        Op.Output.Size >= 4 &&
+        (Loads || (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+                   Loaded.count({Op.Inputs[0].Kind, Op.Inputs[0].Id,
+                                 Op.Inputs[0].SSAVer}))))
+      return true;
+    if (Loads && !Op.Output.isConst())
+      Loaded.insert({Op.Output.Kind, Op.Output.Id, Op.Output.SSAVer});
+  }
+  return false;
+}
+
 // Offset of \p V relative to the function-entry stack pointer, following the SP
 // definition chain through constant add/sub decrements (cdecl `push`/`sub esp`)
 // and width casts.  Lets the stack-argument scan place each pushed argument at
@@ -1797,40 +1816,187 @@ int wholeArgRegWriteInBlock(const MedBlock &Blk, int J,
   return -1;
 }
 
-bool callsThroughContext(const MedBlock &Blk, int CallIdx, const MedVar &Target,
-                         const MedVar &Context) {
-  // The value \p V names before \p Before, past the block's copies, and the
-  // operation that defines it there, if any.
-  const auto Trace = [&](MedVar V, int Before) {
-    for (int Depth = 0;
-         Depth <= ::neverd::limits::ir::
-                      kMedABIPassSupportResolveIndirectTargetArgIdxDepthLimit;
-         ++Depth) {
-      int J = Before - 1;
-      while (J >= 0 && !(Blk.Ops[J].Output.Kind == V.Kind &&
-                         Blk.Ops[J].Output.Id == V.Id &&
-                         Blk.Ops[J].Output.SSAVer == V.SSAVer))
-        --J;
-      if (J < 0)
-        break;
-      const MedOp &Def = Blk.Ops[J];
-      // An entry live-in is its own copy.
-      if (Def.Opcode != NdOp::COPY || Def.NumInputs < 1 || Def.Inputs[0] == V)
-        return std::pair<MedVar, const MedOp *>{V, &Def};
-      V = Def.Inputs[0];
-      Before = J;
-    }
-    return std::pair<MedVar, const MedOp *>{V, nullptr};
-  };
-  const auto [Loaded, Load] = Trace(Target, CallIdx);
-  (void)Loaded;
+namespace {
+/// The value \p V names before \p Before in \p Blk, past the block's copies,
+/// and the operation that defines it there, if any.
+std::pair<MedVar, const MedOp *> pastBlockCopies(const MedBlock &Blk, MedVar V,
+                                                 int Before) {
+  for (int Depth = 0;
+       Depth <= ::neverd::limits::ir::
+                    kMedABIPassSupportResolveIndirectTargetArgIdxDepthLimit;
+       ++Depth) {
+    int J = Before - 1;
+    while (J >= 0 &&
+           !(Blk.Ops[J].Output.Kind == V.Kind && Blk.Ops[J].Output.Id == V.Id &&
+             Blk.Ops[J].Output.SSAVer == V.SSAVer))
+      --J;
+    if (J < 0)
+      break;
+    const MedOp &Def = Blk.Ops[J];
+    // An entry live-in is its own copy.
+    if (Def.Opcode != NdOp::COPY || Def.NumInputs < 1 || Def.Inputs[0] == V)
+      return {V, &Def};
+    V = Def.Inputs[0];
+    Before = J;
+  }
+  return {V, nullptr};
+}
+
+/// The address \p Blk loads \p Target, the target of the call at
+/// \p CallIdx, from, past the block's copies, or none where the block does
+/// not load it.
+std::optional<MedVar> targetLoadAddress(const MedBlock &Blk, int CallIdx,
+                                        const MedVar &Target) {
+  const MedOp *Load = pastBlockCopies(Blk, Target, CallIdx).second;
   if (!Load || Load->Opcode != NdOp::LOAD || Load->NumInputs < 1 ||
       Load->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       Load->MemoryOrdering != NdMemoryOrdering::None)
-    return false;
+    return std::nullopt;
   const MedVar Address =
-      Trace(Load->Inputs[0], static_cast<int>(Load - Blk.Ops.data())).first;
-  return !Address.isConst() && Address == Trace(Context, CallIdx).first;
+      pastBlockCopies(Blk, Load->Inputs[0],
+                      static_cast<int>(Load - Blk.Ops.data()))
+          .first;
+  if (Address.isConst())
+    return std::nullopt;
+  return Address;
+}
+} // namespace
+
+bool callsThroughContext(const MedBlock &Blk, int CallIdx, const MedVar &Target,
+                         const MedVar &Context) {
+  const std::optional<MedVar> Address = targetLoadAddress(Blk, CallIdx, Target);
+  return Address && *Address == pastBlockCopies(Blk, Context, CallIdx).first;
+}
+
+bool callsThroughFuncValue(const MedBlock &Block, size_t CallIdx,
+                           uint64_t Context, const MedFunc *Func) {
+  if (CallIdx >= Block.Ops.size() || Block.Ops[CallIdx].NumInputs < 1)
+    return false;
+  for (size_t J = CallIdx; J-- > 0;) {
+    const MedVar &Out = Block.Ops[J].Output;
+    if (Out.Kind != MedVar::Reg || Out.RegOff != Context)
+      continue;
+    return Out.Size >= 8 &&
+           callsThroughContext(Block, static_cast<int>(CallIdx),
+                               Block.Ops[CallIdx].Inputs[0], Out);
+  }
+  if (!Func)
+    return false;
+  // The block sets the register nowhere before the call.  It holds what the
+  // one block that leads here left in it, and so on back, where nothing on
+  // the way joins another value into it or calls.
+  const std::optional<MedVar> Address = targetLoadAddress(
+      Block, static_cast<int>(CallIdx), Block.Ops[CallIdx].Inputs[0]);
+  if (!Address)
+    return false;
+  const auto Sets = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.RegOff == Context;
+  };
+  const MedBlock *At = &Block;
+  size_t Before = CallIdx;
+  for (unsigned Hops = 0;
+       Hops <= static_cast<unsigned>(
+                   ::neverd::limits::ir::
+                       kMedABIPassSupportResolveIndirectTargetArgIdxDepthLimit);
+       ++Hops) {
+    for (size_t J = Before; J-- > 0;) {
+      const MedOp &Op = At->Ops[J];
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        return false;
+      if (!Sets(Op.Output))
+        continue;
+      return Op.Output.Size >= 8 &&
+             (*Address == Op.Output ||
+              *Address ==
+                  pastBlockCopies(*At, Op.Output, static_cast<int>(J) + 1)
+                      .first);
+    }
+    if (llvm::any_of(At->Phis,
+                     [&](const PhiNode &Phi) { return Sets(Phi.Output); }) ||
+        At->Preds.size() != 1 || !At->ExceptionalPreds.empty())
+      return false;
+    const int Pred = At->Preds.front();
+    const auto Found = llvm::find_if(
+        Func->Blocks, [&](const MedBlock &B) { return B.Id == Pred; });
+    if (Found == Func->Blocks.end() || &*Found == At)
+      return false;
+    At = &*Found;
+    Before = At->Ops.size();
+  }
+  return false;
+}
+
+bool goIndirectCallTakesGoRegisters(const BinaryImage &Img, const MedFunc &Func,
+                                    const MedBlock &Block, size_t CallIdx) {
+  if (CallIdx >= Block.Ops.size() ||
+      Block.Ops[CallIdx].Opcode != NdOp::INDIR_CALL ||
+      !Img.ExceptionMetadata.GoModule ||
+      !Img.ExceptionMetadata.GoModule->RegisterArguments ||
+      !isGoCode(Img, Func.Entry))
+    return false;
+  if (usesGoRegisterArguments(Img, Func.Entry))
+    return Block.Ops[CallIdx].RegisterContract ==
+           CallRegisterContract::GoInternal;
+  const std::optional<uint64_t> Context = goClosureContextRegister(Img.Arch);
+  return Context && callsThroughFuncValue(Block, CallIdx, *Context, &Func);
+}
+
+bool goIndirectCallTakesStackArguments(const BinaryImage &Img,
+                                       const MedFunc &Func,
+                                       const MedBlock &Block, size_t CallIdx) {
+  if (CallIdx >= Block.Ops.size() ||
+      Block.Ops[CallIdx].Opcode != NdOp::INDIR_CALL ||
+      !Img.ExceptionMetadata.GoModule ||
+      !Img.ExceptionMetadata.GoModule->StackArguments ||
+      !isGoCode(Img, Func.Entry))
+    return false;
+  if (Func.ChecksGoStack)
+    return true;
+  const std::optional<uint64_t> Context = goClosureContextRegister(Img.Arch);
+  return Context && callsThroughFuncValue(Block, CallIdx, *Context, &Func);
+}
+
+bool setOnEveryWay(const MedFunc &Func, const MedVar &V,
+                   const ValuesLeftByCalls &LeftByCalls) {
+  using Key = std::tuple<int, int, int, uint64_t, uint16_t>;
+  auto keyOf = [](const MedVar &Value) {
+    return Key{static_cast<int>(Value.Kind), Value.Id, Value.SSAVer,
+               Value.Kind == MedVar::Reg ? Value.RegOff : 0, Value.Size};
+  };
+  auto unset = [&](const MedVar &Value) {
+    if (Value.Kind == MedVar::Unspecified || LeftByCalls.contains(Value))
+      return true;
+    return Value.Kind == MedVar::Reg && Value.SSAVer == 0 &&
+           llvm::none_of(Func.Params, [&](const MedVar &Param) {
+             return Param.RegOff == Value.RegOff;
+           });
+  };
+  // The PHIs, by the value each defines, once a value may be one.
+  std::map<Key, const PhiNode *> Joins;
+  bool Indexed = false;
+  std::set<Key> Seen;
+  llvm::SmallVector<MedVar, 8> Work{V};
+  while (!Work.empty()) {
+    const MedVar Value = Work.pop_back_val();
+    if (unset(Value))
+      return false;
+    if ((Value.Kind != MedVar::Reg && Value.Kind != MedVar::Temp) ||
+        !Seen.insert(keyOf(Value)).second)
+      continue;
+    if (!Indexed) {
+      for (const MedBlock &Block : Func.Blocks)
+        for (const PhiNode &Phi : Block.Phis)
+          Joins.emplace(keyOf(Phi.Output), &Phi);
+      Indexed = true;
+    }
+    if (const auto It = Joins.find(keyOf(Value)); It != Joins.end()) {
+      for (const auto &Arm : It->second->Args)
+        Work.push_back(Arm.second);
+      if (It->second->ExceptionalEntry)
+        Work.push_back(*It->second->ExceptionalEntry);
+    }
+  }
+  return true;
 }
 
 MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,

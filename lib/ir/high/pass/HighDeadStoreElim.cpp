@@ -1130,6 +1130,9 @@ void narrowUnreadRegisterBytes(HighFunc &Func, Arch Architecture) {
 /// address-register-width assignments names (`v0 = RSP - 32`). \p Statements
 /// receives those assignments. With \p PastStores the prefix also runs over
 /// plain stores, which assign no variable (`*(v0 - 4) = EAX; t1 = v0 - 4`).
+/// It runs over a read that changes nothing too (intrinsicReadIsDiscardable):
+/// Go code reads its goroutine register first (`R14 = __neverd_go_getg()`),
+/// which names no frame address and ends no prefix.
 static VarKeyMap<ExprPtr>
 entryFrameAliases(const HighFunc &Func, Arch Architecture, size_t &Budget,
                   std::unordered_set<const HighStmt *> *Statements = nullptr,
@@ -1153,6 +1156,12 @@ entryFrameAliases(const HighFunc &Func, Arch Architecture, size_t &Budget,
     if (PastStores && S.Kind == StmtKind::Store && S.Body.empty() &&
         S.ElseBody.empty() && S.Cases.empty() && S.DefaultBody.empty() &&
         S.EHClauseBodies.empty())
+      continue;
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
+        S.Dst->Kind == ExprKind::Var && S.Val->Kind == ExprKind::Call &&
+        intrinsicReadIsDiscardable(S.Val->IntrinsicId) &&
+        S.Val->Operands.empty() && S.Body.empty() && S.ElseBody.empty() &&
+        S.Cases.empty() && S.DefaultBody.empty() && S.EHClauseBodies.empty())
       continue;
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
         S.Dst->Kind != ExprKind::Var || !S.Dst->Type ||

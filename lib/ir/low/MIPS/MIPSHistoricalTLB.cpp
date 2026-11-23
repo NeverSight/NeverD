@@ -42,8 +42,7 @@ HistoricalTLB::translate(const HistoricalCP0 &CPU, uint64_t VA,
   if (!R3000 && (CPU.Status & 4) && Address < 0x80000000u)
     return HistoricalTranslation{HistoricalAddressResult::Mapped, Address};
 
-  if (Entries.size() != (R3000 ? 64u : 48u) || (R3000 && ASID >= 64) ||
-      (!R3000 && (CPU.Status & 0xe0)))
+  if (Entries.size() != (R3000 ? 64u : 48u) || (R3000 && ASID >= 64))
     return std::nullopt;
   if (CPU.Status & (1u << 21))
     return std::nullopt; // Translation is unavailable with TS set.

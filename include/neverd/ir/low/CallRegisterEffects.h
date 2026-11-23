@@ -123,6 +123,11 @@ struct RegisterStep {
   /// Control leaves for code that no summary describes: an import tail
   /// call or an indirect tail jump.
   bool UnknownTailCall = false;
+  /// That jump follows a load of the stack pointer from memory in its block
+  /// (`mov rsp, [rbx]; ...; jmp rcx`): it resumes state saved elsewhere, on
+  /// that state's stack, and reads no register as this function was entered
+  /// with it.
+  bool ResumesContext = false;
   /// A copy of a whole vector register into another (destination, source
   /// family): the source is read as wide as the destination is live.
   std::optional<std::pair<uint8_t, uint8_t>> VectorCopy;
@@ -208,6 +213,10 @@ struct LocalRegisterEffect {
   /// this to the solver, which knows the prototypes (RegisterStep::
   /// ImportCallee).
   bool UnknownEntryReads = false;
+  /// The body leaves for code no summary describes only by resuming saved
+  /// state (RegisterStep::ResumesContext): what it writes is unknown, what
+  /// it reads at its entry is not.
+  bool OnlyResumesContext = false;
   /// Independent entries, exceptional edges or malformed successors are not
   /// represented by the ordinary register-flow graph. They forbid an absence
   /// of observations proof without changing the argument-inference contract.

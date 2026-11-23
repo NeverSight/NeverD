@@ -783,8 +783,12 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
                    ? R->second[kX64VectorFamilyBase + I]
                    : 0;
       };
+      // The summary reads every register the callee takes arguments in:
+      // Go's nine, one more than the slots tracked for a dispatcher or a
+      // variadic call, which count a platform's.
+      const auto SummarySlots = static_cast<int8_t>(ArgRegs.size());
       int8_t Count = 0;
-      for (int8_t I = 0; I < Slots; ++I)
+      for (int8_t I = 0; I < SummarySlots; ++I)
         if (R->second[ArgRegs[I] / 8] || SlotVectorWidth(I))
           Count = I + 1;
       // Stack arguments in a positional ABI retain every preceding register
@@ -995,7 +999,7 @@ MedFunc LowToMedConverter::convertFunction(
   bool HasMIPSAccumulatorTransport = false;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
-      if (isLowRawEnvironmentRequirement(Op) ||
+      if (isLowRawAnalysisOperation(Op) ||
           (Op.Opcode == NdOp::INTRINSIC &&
            isArchitecturalValueId(Op.Inputs[0].Offset)))
         throw LowToMedConversionError(
@@ -1404,6 +1408,16 @@ MedFunc LowToMedConverter::convertFunction(
     return *WrittenSmcccArguments;
   };
 
+  // The register a Go write barrier returns its buffer space in, where this
+  // function is one that returns some (goWriteBarrierResult).  Its return
+  // hands that register back, where every later stage reads the platform's
+  // result register: a copy before each RETURN gives it the value.  A
+  // barrier that jumps to another returns that one's space as it comes.
+  std::optional<uint64_t> GoBarrierResult;
+  if (Image)
+    if (const GoWriteBarrier *Barrier = goWriteBarrierAt(*Image, Low.Entry))
+      GoBarrierResult = goWriteBarrierResult(TheArch, Barrier->Kind);
+
   for (const auto &LB : Low.Blocks) {
     uint8_t DispatchDefined =
         TrackDispatchArgs ? DispatchDefinedIn[LowBlockIndex] : 0;
@@ -1575,6 +1589,15 @@ MedFunc LowToMedConverter::convertFunction(
           }
           continue;
         }
+      }
+      if (GoBarrierResult && LOp.Opcode == NdOp::RETURN && !TailCall) {
+        MedOp Result;
+        Result.Opcode = NdOp::COPY;
+        Result.Addr = LOp.Addr;
+        Result.Output = ndVarToMedVar(
+            NdVar::reg(getTargetRegInfo(TheArch).IntReturnReg, 8));
+        Result.addInput(ndVarToMedVar(NdVar::reg(*GoBarrierResult, 8)));
+        MB.Ops.push_back(std::move(Result));
       }
       MOp.Opcode = LOp.Opcode;
       MOp.MemoryOrdering = LOp.MemoryOrdering;
@@ -1830,7 +1853,8 @@ MedFunc LowToMedConverter::convertFunction(
                 goWriteBarrierAt(*Image, MOp.Inputs[0].ConstVal)) {
           if (const std::optional<uint64_t> Buffer =
                   goWriteBarrierResult(TheArch, Barrier->Kind)) {
-            MOp.Output = ndVarToMedVar(NdVar::reg(*Buffer, 8));
+            if (!(TailCall && GoBarrierResult == Buffer))
+              MOp.Output = ndVarToMedVar(NdVar::reg(*Buffer, 8));
           } else {
             MOp.Output = MedVar{};
             MOp.Output.Id = -1;
@@ -2224,8 +2248,9 @@ MedFunc LowToMedConverter::convertFunction(
     // it unchanged (GoStackGrowth::Restarts).
     const std::optional<GoStackGrowth> GoGrowth =
         Image ? goStackGrowth(*Image, Low.Blocks) : std::nullopt;
+    Func.ChecksGoStack = GoGrowth.has_value();
     if (GoGrowth && GoGrowth->Restarts)
-      elideGoStackGrowth(Func, GoGrowth->GrowthStart);
+      elideGoStackGrowth(Func, GoGrowth->GrowthStart, GoGrowth->SecondCheck);
     // Go's internal ABI enters a function with X15 zero, and its calls keep
     // it so (CallRegisterContract::GoInternal).  Assembly that takes Go's
     // argument registers follows that ABI (goAssemblyTakesRegisterArguments):
@@ -2526,8 +2551,27 @@ MedFunc LowToMedConverter::convertFunction(
     // arm64 every Go function does, before the internal ABI too: Go has kept
     // the goroutine in R28 since its arm64 port, where x86-64 kept it in
     // thread-local storage until R14 took it.
-    if (Image && (usesGoRegisterArguments(*Image, Low.Entry) ||
-                  (TheArch == Arch::AArch64 && isGoCode(*Image, Low.Entry))))
+    // A write barrier of a register-ABI image finds its buffer through it
+    // too (`MOVQ g_m(R14), R13`): compiled code alone calls it.
+    // So does any other x86-64 assembly of such an image that Go code
+    // enters, whatever ABI it declares: the register still holds what the
+    // caller's internal ABI keeps there.  Assembly the platform enters, a
+    // signal trampoline or a callback, only saves R14 for its caller, so the
+    // one that addresses memory through the register as it was entered reads
+    // the goroutine (addressesThroughEntryRegister): `runtime.mcall` saves
+    // its caller's state in `g.sched` so.
+    const std::optional<uint64_t> GoroutineRegister =
+        goRoutineRegister(TheArch);
+    const bool RegisterABIGoCode =
+        Image && Image->ExceptionMetadata.GoModule &&
+        Image->ExceptionMetadata.GoModule->RegisterArguments &&
+        isGoCode(*Image, Low.Entry);
+    if (Image &&
+        (usesGoRegisterArguments(*Image, Low.Entry) ||
+         (TheArch == Arch::AArch64 && isGoCode(*Image, Low.Entry)) ||
+         (RegisterABIGoCode && goWriteBarrierAt(*Image, Low.Entry)) ||
+         (RegisterABIGoCode && TheArch == Arch::X64 && GoroutineRegister &&
+          addressesThroughEntryRegister(Func, *GoroutineRegister))))
       if (const std::optional<uint64_t> Goroutine =
               goRoutineRegister(TheArch)) {
         defineGoCurrentGoroutine(Func, *Goroutine);

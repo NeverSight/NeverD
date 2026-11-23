@@ -25,6 +25,7 @@
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86/LLVMWin64CallStackInput.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/ir/med/X86/X87ControlWord.h"
@@ -1069,8 +1070,11 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
     // unspecified state never becomes a parameter merely by sharing its
     // register; neither a zero fill nor another path's definition is valid.
     auto *Type = llvm::Type::getIntNTy(*Ctx, std::max<unsigned>(V.Size, 1) * 8);
-    if (PreserveUnknownSourceValues)
+    if (PreserveUnknownSourceValues) {
+      if (auto Input = Win64CallStackInput::from(V))
+        return llvm_win64_call_stack::create(Builder, *Input);
       return llvm_source_unknown::create(Builder, Type);
+    }
     return Builder.CreateFreeze(llvm::PoisonValue::get(Type));
   }
   if (V.Kind == MedVar::SEHExceptionCode) {

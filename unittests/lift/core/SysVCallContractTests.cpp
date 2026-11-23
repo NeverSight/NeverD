@@ -678,6 +678,63 @@ TEST(SysVCallContract, PassThroughArgumentsReachAPrototypedImport) {
   }
 }
 
+TEST(SysVCallContract, ArgumentsPassedOnToAnUnknownCallReachIt) {
+  // check(p, code, a, b, c) calls p->db->auth(p->db->arg, code, a, b, c,
+  // p->ctx), as sqlite3AuthCheck calls the authorizer: it loads the first and
+  // the sixth argument and leaves RSI, RDX, RCX and R8 as its caller set
+  // them.  Its summary read RDI alone, so the moves that set the other four
+  // in each caller were dead before call recovery made them check's
+  // parameters, and the call passed four unknown values.
+  constexpr va_t Check = Text, User = Text + 0x40;
+  std::vector<uint8_t> Code(0x80, 0xCC);
+  put(Code, Check, {0x49, 0x89,
+                    0xF9, // mov r9, rdi
+                    0x48, 0x8B,
+                    0x3F, // mov rdi, [rdi]
+                    0x4C, 0x8B,
+                    0x97, 0x10,
+                    0x02, 0x00,
+                    0x00, // mov r10, [rdi+0x210]
+                    0x4D, 0x85,
+                    0xD2,                               // test r10, r10
+                    0x74, rel8(Check + 18, Check + 44), // je none
+                    0x48, 0x83,
+                    0xEC, 0x08, // sub rsp, 8
+                    0x48, 0x8B,
+                    0xBF, 0x18,
+                    0x02, 0x00,
+                    0x00, // mov rdi, [rdi+0x218]
+                    0x4D, 0x8B,
+                    0x89, 0x78,
+                    0x01, 0x00,
+                    0x00, // mov r9, [r9+0x178]
+                    0x41, 0xFF,
+                    0xD2, // call r10
+                    0x48, 0x83,
+                    0xC4, 0x08, // add rsp, 8
+                    0xC3,       // ret
+                    0x31, 0xC0, // none: xor eax, eax
+                    0xC3});     // ret
+  std::vector<uint8_t> UserCode = {0xBE, 0x1A, 0x00, 0x00, 0x00, // mov esi, 26
+                                   0xBA, 0x02, 0x00, 0x00, 0x00, // mov edx, 2
+                                   0xB9, 0x03, 0x00, 0x00, 0x00, // mov ecx, 3
+                                   0x41, 0xB8, 0x04, 0x00, 0x00,
+                                   0x00,  // mov r8d, 4
+                                   0xE8}; // call check
+  for (uint8_t B : rel32(User + 26, Check))
+    UserCode.push_back(B);
+  UserCode.push_back(0xC3); // ret
+  put(Code, User, UserCode);
+  const BinaryImage Img =
+      makeImportImage(Code, {{Check, "check"}, {User, "user"}}, {});
+  const std::string Source = liftEntries(Img, {Check, User});
+  const std::string Body = body(Source, "user");
+  ASSERT_FALSE(Body.empty()) << Source;
+  EXPECT_NE(Body.find("check("), std::string::npos) << Body;
+  EXPECT_NE(Body.find(", 0x1A, 2, 3, 4)"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+}
+
 TEST(SysVCallContract, AFloatArgumentReachesTheCalleeThatReadsIt) {
   // twice(x) = x + x; quadruple(x) doubles twice(x), passing x on in xmm0
   // without touching it. The alignment `push rax` reads all of rax: it is no

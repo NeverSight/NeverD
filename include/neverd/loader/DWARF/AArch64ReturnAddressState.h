@@ -15,6 +15,8 @@
 #include "neverd/loader/LanguageEHDwarf.h"
 #include "neverd/loader/Limits.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -78,6 +80,16 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
 AArch64RAQueryResult evaluateAArch64ReturnAddressState(
     Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
     const AArch64RAQueryLimits &Limits, bool &HasExplicitRule);
+
+/// Observe each decoded signing directive after applying it, including the
+/// effects of earlier remembered or restored CFI states. Offsets are relative
+/// to the FDE. Use the observations only after a successful evaluation.
+using AArch64RASigningVisitor = llvm::function_ref<void(
+    const CFIInstruction &, const AArch64ReturnAddressState &)>;
+AArch64RAQueryResult evaluateAArch64ReturnAddressState(
+    Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
+    const AArch64RAQueryLimits &Limits, bool &HasExplicitRule,
+    AArch64RASigningVisitor VisitSigning);
 
 } // namespace neverd::dwarf_eh
 

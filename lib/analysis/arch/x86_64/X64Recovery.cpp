@@ -7,6 +7,7 @@
 
 #include "../../../lift/X86/X86CetEncoding.h"
 #include "NativeStackControl.h"
+#include "X64CallContinuation.h"
 #include "X64MachineFlags.h"
 
 #include "neverd/analysis/Limits.h"
@@ -101,8 +102,10 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
   for (size_t Count :
        {Options.X64CodeRegions.size(), Options.X64ImportBindings.size(),
         Options.X64TerminalImports.size(), Options.X64MachineExits.size(),
-        Options.ControlRegisters.size(), Options.ControlFrameSlots.size(),
-        Options.EntryConstants.size(), Options.EntryFrameExcludedObjects.size(),
+        Options.X64ReturningCalls.size(), Options.ControlRegisters.size(),
+        Options.ControlFrameSlots.size(), Options.EntryConstants.size(),
+        Options.EntryFrameExcludedObjects.size(),
+        Options.EntryFrameLoadedObjects.size(),
         Options.EntryFrameBounds
             ? Options.EntryFrameBounds->ExcludedAddressRanges.size()
             : size_t{0}}) {
@@ -163,7 +166,8 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
        !Options.X64TerminalImports.empty()))
     return Invalid("machine regions exclude ordinary return-slot and terminal "
                    "import contracts");
-  if (!Options.EntryFrameExcludedObjects.empty() &&
+  if ((!Options.EntryFrameExcludedObjects.empty() ||
+       !Options.EntryFrameLoadedObjects.empty()) &&
       (!Options.EntryFrameBounds ||
        Options.EntryFrameBounds->Begin >= Options.EntryFrameBounds->End))
     return Invalid("entry objects require nonempty entry frame bounds");
@@ -189,6 +193,23 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
         return Invalid("entry object overlaps an entry constant binding");
     }
   }
+  for (size_t I = 0; I < Options.EntryFrameLoadedObjects.size(); ++I) {
+    const auto &Object = Options.EntryFrameLoadedObjects[I];
+    if (Object.PointerAddress > UINT64_MAX - 8 || Object.Begin >= Object.End ||
+        !llvm::any_of(Options.EntryFrameBounds->ExcludedAddressRanges,
+                      [&](const auto &Range) {
+                        return Range.Begin <= Object.PointerAddress &&
+                               Object.PointerAddress + 8 <= Range.End;
+                      }))
+      return Invalid("loaded entry object requires a complete excluded "
+                     "pointer field and nonempty relative bounds");
+    for (size_t J = 0; J < I; ++J) {
+      const auto &Other = Options.EntryFrameLoadedObjects[J];
+      if (Object.PointerAddress < Other.PointerAddress + 8 &&
+          Other.PointerAddress < Object.PointerAddress + 8)
+        return Invalid("loaded entry object pointer fields overlap");
+    }
+  }
   for (size_t I = 0; I < Options.X64MachineExits.size(); ++I) {
     const auto &E = Options.X64MachineExits[I];
     if (E.Version != 1 || E.Address == InvalidVA ||
@@ -202,6 +223,8 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
         return Invalid("duplicate machine-exit declaration");
   }
   if (auto Error = validateX64TerminalImportDomain(Options))
+    return std::move(Error);
+  if (auto Error = validateReturningCallDeclarations(Options))
     return std::move(Error);
   const auto Text = [](llvm::StringRef S, bool AllowSpace = false) {
     return !S.empty() &&

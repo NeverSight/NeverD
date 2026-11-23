@@ -60,6 +60,27 @@ SPILL_TRANSFERS = {
     "chain-spill-xor": ["-DLOAD_HALVES", "-DCOMBINE_WORDS=xor"],
 }
 
+SPILL_GUARDS = {
+    "chain-spill-clear-bytes": ["-DCLEAR_BYTES=1"],
+    "chain-spill-clear-halfwords": ["-DCLEAR_BYTES=2"],
+    "chain-spill-guard-halves": ["-DGUARD_HALVES"],
+    "chain-spill-guard-high-first": ["-DGUARD_HALVES", "-DHIGH_FIRST"],
+    "chain-spill-guard-folded": ["-DGUARD_HALVES", "-DOR_DIFFERENCES"],
+    "chain-spill-guard-folded-reload": ["-DGUARD_HALVES", "-DOR_DIFFERENCES",
+                                        "-DSPILL_DIFFERENCE=8"],
+    "chain-spill-guard-folded-word": ["-DGUARD_HALVES", "-DOR_DIFFERENCES",
+                                      "-DSPILL_DIFFERENCE=4"],
+    "chain-spill-guard-join": ["-DGUARD_HALVES", "-DOR_DIFFERENCES", "-DCROSS_JOIN"],
+    "chain-spill-guard-join-reload": ["-DGUARD_HALVES", "-DOR_DIFFERENCES",
+                                      "-DCROSS_JOIN", "-DSPILL_DIFFERENCE=8"],
+    "chain-spill-guard-loop": ["-DGUARD_HALVES", "-DOR_DIFFERENCES", "-DCROSS_LOOP"],
+    "chain-spill-guard-loop-recompute": ["-DGUARD_HALVES", "-DCROSS_LOOP",
+                                        "-DRECOMPUTE_DIFFERENCE"],
+    "chain-spill-guard-mixed-xor": ["-DGUARD_HALVES", "-DMIXED_DIFFERENCE=xor"],
+    "chain-spill-guard-mixed-sub": ["-DGUARD_HALVES", "-DMIXED_DIFFERENCE=dsubu"],
+    "chain-spill-recheck-pack": ["-DRECHECK_LOW"],
+}
+
 
 def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                  provider, companions, callbacks, little, values, results, linker, form):
@@ -74,12 +95,15 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                          "chain-spill-recheck")
     self_forward = form == "loop-self-forward"
     repeated = form in ("chain-loop-result", "chain-loop-spill")
-    loop_guard = (form in SPILL_TRANSFERS or repeated or
+    split_guard = "-DGUARD_HALVES" in SPILL_GUARDS.get(form, ())
+    recheck_low = form == "chain-spill-recheck-pack"
+    loop_guard = (form in SPILL_TRANSFERS or form in SPILL_GUARDS or repeated or
                   form in ("chain-spill-check", "chain-spill-recheck", "chain-spill-byte"))
     joined = form == "chain-join" or (rechecked and not loop_guard)
     if joined or loop_guard or self_forward:
         fixture = "pic-guarded-forward.S"
-        values = [*values, *range(16 if form == "chain-spill-recheck" else 8)]
+        vary_both_checks = split_guard or recheck_low or form == "chain-spill-recheck"
+        values = [*values, *range(16 if vary_both_checks else 8)]
     if form == "chain-guard-zero":
         values = [*values, 37, (-37) & 0xffffffffffffffff]
     flags = {
@@ -96,6 +120,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
         "loop-self-forward": ["-DSELF_FORWARD"],
         "chain-loop-result": ["-DREPEAT_PRODUCER"],
         **{k: ["-DRESULT_SPILL", "-DTRANSFER_SPILL", *v] for k, v in SPILL_TRANSFERS.items()},
+        **{k: ["-DRESULT_SPILL", *v] for k, v in SPILL_GUARDS.items()},
         "chain-spill-check": ["-DRESULT_SPILL"],
         "chain-spill-byte": ["-DRESULT_SPILL", "-DWRITE_SPILL_BYTE"],
         "chain-loop-spill": ["-DREPEAT_PRODUCER", "-DRESULT_SPILL"],
@@ -166,6 +191,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             saved.update({19: 0x456789, 20: 0xabcdef})
         guarded_chain = form in ("chain-guard-zero", "chain-guard-match")
         guard_outcomes = set()
+        half_outcomes = set()
         changed_word_forwarded = False
         for value in values:
             if rebind:
@@ -198,7 +224,12 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                 if dispatch_result == value:
                     producer_args = [value] * (trips + 1)
             elif loop_guard:
-                arguments.extend([forwarded ^ ((value & 1) << 32), trips])
+                peer = forwarded ^ ((value & 1) << 32)
+                if split_guard:
+                    peer ^= (value >> 3) & 1
+                arguments.extend([peer, trips])
+                if recheck_low:
+                    arguments.append((forwarded & 0xffffffff) ^ ((value >> 3) & 1))
                 if rechecked:
                     third_argument = dispatch_result
                     arguments.append(dispatch_result ^ (((value >> 3) & 1) << 32))
@@ -221,6 +252,11 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             last = dispatch_result
             forward = ((form != "chain-guard-zero" or dispatch_result == 0) and
                        (not (form == "chain-guard-match" or joined or loop_guard) or forwarded == arguments[1]))
+            if split_guard or recheck_low:
+                low_peer = arguments[3] if recheck_low else arguments[1] & 0xffffffff
+                low_equal = (forwarded & 0xffffffff) == low_peer
+                half_outcomes.add((trips, forwarded >> 32 == arguments[1] >> 32, low_equal))
+                forward &= low_equal
             if chain and forward:
                 argument = forwarded
                 changed_word_forwarded |= forwarded != dispatch_result
@@ -264,6 +300,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             raise AssertionError(f"{name} did not exercise both branch outcomes for {binding}")
         if self_forward and guard_outcomes != {(n, calls) for n in range(4) for calls in (1, n + 1)}:
             raise AssertionError(f"{name} missed a self-call backedge for {binding}")
+        if (split_guard or recheck_low) and half_outcomes != set(product(range(4), (False, True), (False, True))):
+            raise AssertionError(f"{name} missed a high/low comparison outcome at a loop count for {binding}")
         if loop_guard and guard_outcomes != set(product(range(4), range(len(imports)))):
             raise AssertionError(f"{name} missed a loop count or guard outcome for {binding}")
         if joined and guard_outcomes != set(product(range(2), range(1, len(imports) + 1))):
@@ -553,7 +591,7 @@ word probe(word value) { return target(value, 37) + 1; }
                          "chain-guard-zero", "chain-guard-match", "chain-join", "chain-join-check",
                          "chain-recheck-first", "chain-recheck-second", "chain-loop-result",
                          "chain-spill-check", "chain-loop-spill", "chain-spill-recheck", "chain-spill-byte",
-                         *SPILL_TRANSFERS, "loop-self-forward"):
+                         *SPILL_TRANSFERS, *SPILL_GUARDS, "loop-self-forward"):
                 check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                              original, companions, callbacks, little, values, results, linker, form)
         artifacts.discard(original, *companions)

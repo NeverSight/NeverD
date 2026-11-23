@@ -5317,11 +5317,14 @@ bool computeCallRegisterEffects(
   // it reads, which its callers bind in its order (goEntryRegisterOperands).
   // Only a complete body that calls nothing reads no register but as an
   // operand: a routine that calls out saves the registers its callee may
-  // change (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`).
+  // change (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`).  One
+  // that leaves only to resume saved state calls nothing either: `gogo<>`
+  // takes the gobuf in BX and the goroutine in DX.
   if (Img.ExceptionMetadata.GoModule)
     for (const auto &[Entry, Reads] : Result.CallEntryReadGPRs.get())
       if (const auto Effect = Effects.find(Entry);
-          Effect != Effects.end() && !Effect->second->Unknown &&
+          Effect != Effects.end() &&
+          (!Effect->second->Unknown || Effect->second->OnlyResumesContext) &&
           !Effect->second->Incomplete && Effect->second->Callees.empty() &&
           Effect->second->NoReturnCallees.empty())
         if (std::optional<FixedIntegerCallArguments> Operands =

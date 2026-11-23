@@ -425,6 +425,27 @@ class HistoryAllowance:
 
 HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
     HistoryAllowance(
+        path="docs/evidence/x86-mode-smm-sgx-events-2026-11-21.json",
+        rule="private-path",
+        commits=frozenset({"5cea55c481916a6c959960bb9f08199f4d9256b2"}),
+        line="",
+        reason=(
+            "Reviewed removal of machine paths from x86 mode evidence. "
+            "Only the exact deleted lines in the cleanup commit are covered. "
+            "Test outcomes, artifact hashes and source revisions are unchanged; "
+            "current and future private paths remain findings."
+        ),
+        line_sha256=frozenset({
+            "051a8609db59425cd7c5ebde5bc0f6b49070dfe21234b8c73decb049b36dee40",
+            "122ff02efcb01535a72d74ce403715dcc4ca152d3db112786a526ab4e0e99186",
+            "592bba1b149e02f5447a993ddc937c1fc4490ee7e855f573cb923fad41829386",
+            "931b0c544ab55800fdd19db14df987fef17ceea36c61debfaaa899f9bca6b801",
+            "98ad6c28039334ae64db158d9715a03411741017bac8767d3d4e27c72e1076d4",
+            "c7f34d71b956f9fc970c6bc624f1bd81caeb7993248f5a709304b53bfb1c0f4d",
+            "dcd6dd64992b3cdb53443fa47c9128b4b4ed088fe117ccbfb7b275223fe57294",
+        }),
+    ),
+    HistoryAllowance(
         path='docs/evidence/x86-lss-event-boundary-2026-11-02.json',
         rule="private-path",
         commits=frozenset({

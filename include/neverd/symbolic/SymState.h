@@ -149,8 +149,15 @@ enum class SymMemoryPreservationStatus : uint8_t {
   BudgetExceeded,
 };
 
+/// One half-open byte interval in an exact symbolic memory region.
+struct SymMemoryRange {
+  int64_t Begin = 0;
+  int64_t End = 0;
+};
+
 /// Forget memory except current materialized bytes in one exact region's
-/// [Begin, End) interval. The caller owns the validity of every retained fact;
+/// [Begin, End) interval and optional earlier disjoint intervals. The caller
+/// owns the validity of every retained fact;
 /// this supplies no accessibility, alias, write-footprint or call contract.
 /// Empty Base denotes absolute memory. Other bases must be nonconstant 64-bit
 /// references in this context; indices cannot authenticate foreign contexts.
@@ -159,8 +166,9 @@ enum class SymMemoryPreservationStatus : uint8_t {
 /// inside the interval. Historical origins and shared lazy caches are not
 /// current materialized bytes. All other memory receives a fresh unknown epoch.
 ///
-/// Work charges one request, one region lookup, one default epoch, one per
-/// existing bank, every current/cache byte, every default-cache region, and
+/// Work charges one request, one per earlier interval, one region lookup, one
+/// default epoch, one per existing bank, every current/cache byte, one check
+/// per earlier interval per protected byte, every default-cache region, and
 /// two per saved byte. Shared cache bytes are conservatively charged for each
 /// owning bank/default-cache entry. These charges cover epoch allocation,
 /// staging, retirement and failed-plan cleanup. No expression is constructed.
@@ -174,6 +182,37 @@ struct SymMemoryPreservation {
   uint64_t MaxWork = 0;
   uint64_t WorkUsed = 0;
   SymMemoryPreservationStatus Status = SymMemoryPreservationStatus::Invalid;
+  /// Sorted, disjoint, nonempty intervals ending at or before Begin.
+  llvm::ArrayRef<SymMemoryRange> EarlierRanges;
+};
+
+enum class SymRegisterPreservationStatus : uint8_t {
+  Invalid,
+  Applied,
+  BudgetExceeded,
+};
+
+/// Bounded forgetting of registers and all temporaries. Preserved ranges must
+/// be nonempty, sorted, disjoint and nonwrapping. Unlike memory preservation,
+/// unread retained register bytes still denote their prior inputs and are
+/// materialized before replacing the default epoch. Shared sibling identities
+/// remain intact. No memory, segment binding or historical origin is changed.
+///
+/// Work counts one request, each descriptor, two new epochs, each current or
+/// shared-cache byte retired, and three units per retained byte (lookup,
+/// staging and publication). Missing bytes reserve at most one new expression
+/// each, even when the context already has a canonical entry input. All work,
+/// node allowance and replacement storage are prepared before materialization.
+/// Invalid input or exhaustion changes neither state nor context. MaxNewNodes
+/// is an additional allowance, not a total context limit; NodesCreated reports
+/// actual growth. This primitive supplies no architectural call contract.
+struct SymRegisterPreservation {
+  llvm::ArrayRef<SymRegisterRange> Ranges;
+  uint64_t MaxWork = 0;
+  uint64_t MaxNewNodes = 0;
+  uint64_t WorkUsed = 0;
+  uint64_t NodesCreated = 0;
+  SymRegisterPreservationStatus Status = SymRegisterPreservationStatus::Invalid;
 };
 
 /// The state is a regular value: copying one is what forking a path is, so it
@@ -391,6 +430,9 @@ public:
   /// Forget the registers a call is allowed to overwrite, keeping the ones it
   /// is not.  Passing an empty list forgets all of them.
   void clobberRegistersExcept(llvm::ArrayRef<SymRegisterRange> PreservedRanges);
+
+  /// Bounded variant; inspect Control.Status before using the post-state.
+  void clobberRegistersExcept(SymRegisterPreservation &Control);
 
   /// Continue \p Other as part of this state when the two hold the same value
   /// in every location, and report whether they did.

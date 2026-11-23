@@ -41,13 +41,112 @@ MACHO_AUTH_NATIVE_VALUE(unsigned, kImportSymbol, 1)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kImportFrom, 2)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kImportModule, 3)
 MACHO_AUTH_NATIVE_TEXT(kCompiler, "/usr/bin/clang++")
+MACHO_AUTH_NATIVE_TEXT(kLegacyBindingImage, R"cpp(
+extern "C" {
+extern const int bias = 5;
+int entry(int x) { return x + 1; }
+int (*original_entry)(int) = entry;
+}
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kLegacyBindingSource, R"c(
+extern const int retained;
+typedef int (*Fn)(int);
+static const int *volatile plain = &retained;
+static const int *__ptrauth(2, 1, 0x3197) volatile checked = &retained;
+static int plus(int x) {
+  const int *value = plain;
+  return value == &retained && checked == value ? x + *value : x;
+}
+static Fn __ptrauth(1, 1, 0x5371) volatile slot = plus;
+extern int neverd_provider(void);
+static __thread volatile int per_thread = 1;
+static volatile int ready;
+__attribute__((constructor)) static void initialize(void) { ready = 1; }
+int entry(int x) { return slot(x) + neverd_provider() + per_thread - ready; }
+)c")
+MACHO_AUTH_NATIVE_TEXT(kGOTOnlySource, R"c(
+extern int neverd_provider_data;
+int entry(int x) { return x + neverd_provider_data; }
+)c")
+MACHO_AUTH_NATIVE_TEXT(kRecordEvent, "record_event")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kRegisteredInitializers, 3)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kRegisteredDestructors, 2)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kIRConstructorPriority, 0)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kIRConstructorFunction, 1)
+MACHO_AUTH_NATIVE_TEXT(kMachOSymbolPrefix, "_")
+MACHO_AUTH_NATIVE_TEXT(kIRConstructorList, "llvm.global_ctors")
+MACHO_AUTH_NATIVE_TEXT(kDarwinRegisterName, "__cxa_atexit")
+MACHO_AUTH_NATIVE_TEXT(kDarwinDestructorIR, R"ir(
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "arm64e-apple-macosx14.0.0"
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [
+  { i32, ptr, ptr } { i32 65535, ptr @start, ptr null }
+]
+@llvm.global_dtors = appending global [2 x { i32, ptr, ptr }] [
+  { i32, ptr, ptr } { i32 100, ptr @late, ptr null },
+  { i32, ptr, ptr } { i32 300, ptr @early, ptr @entry }
+]
+
+declare void @record_event(i32)
+
+define internal void @start() #0 {
+  call void @record_event(i32 1)
+  ret void
+}
+define internal void @early() #0 {
+  call void @record_event(i32 3)
+  ret void
+}
+define internal void @late() #0 {
+  call void @record_event(i32 2)
+  ret void
+}
+define i32 @entry(i32 %x) #0 {
+  ret i32 %x
+}
+
+attributes #0 = { nounwind uwtable(sync) "ptrauth-returns" }
+!llvm.module.flags = !{!0, !3}
+!0 = !{i32 6, !"ptrauth.abi-version", !1}
+!1 = !{!2}
+!2 = !{i32 0, i1 false}
+!3 = !{i32 7, !"uwtable", i32 1}
+)ir")
+MACHO_AUTH_NATIVE_TEXT(kInvalidDestructorIR, R"ir(
+target triple = "arm64e-apple-macosx14.0.0"
+@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] [
+  { i32, ptr, ptr } { i32 100, ptr @entry, ptr null }
+]
+define i32 @entry(i32 %x) {
+  ret i32 %x
+}
+)ir")
+MACHO_AUTH_NATIVE_TEXT(kBindingEntry, "entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingEntrySymbol, "_entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingBiasSymbol, "_bias")
+MACHO_AUTH_NATIVE_TEXT(kBindingRetained, "retained")
+MACHO_AUTH_NATIVE_TEXT(kBoundObjectOutput, "bound-object.dylib")
+MACHO_AUTH_NATIVE_ARGS(kBoundImageArgs, "-target", "arm64e-apple-macos15",
+                       "-dynamiclib", "-Wl,-headerpad,0")
+MACHO_AUTH_NATIVE_TEXT(kBindingRows, "bindings")
+MACHO_AUTH_NATIVE_TEXT(kBoundAddressField, "resolved_va")
+MACHO_AUTH_NATIVE_TEXT(kFreestandingSource, "-ffreestanding")
 MACHO_AUTH_NATIVE_TEXT(kIRCompilerEnvironment, "NEVERD_ARM64E_IR_COMPILER")
 MACHO_AUTH_NATIVE_TEXT(kMissingIRCompiler,
                        "requires an explicit canonical LLVM IR frontend")
 MACHO_AUTH_NATIVE_TEXT(kClassicReturnCFIDiagnostic,
                        "classic arm64e requires implicit signed-return CFI")
-MACHO_AUTH_NATIVE_TEXT(kMissingCompatibleIRProducer,
-                       "requires the LLVM fork's Darwin signed-return CFI fix")
+MACHO_AUTH_NATIVE_TEXT(kClassicReturnCFIOption, "-DNEVERD_CLASSIC_RETURN_CFI")
+MACHO_AUTH_NATIVE_TEXT(kClassicAsyncCFIOption, "-DNEVERD_CLASSIC_ASYNC_CFI")
+MACHO_AUTH_NATIVE_TEXT(kWrongEpilogueCFIOption, "-DNEVERD_WRONG_EPILOGUE_CFI")
+MACHO_AUTH_NATIVE_TEXT(kMultiExitCFIOption, "-DNEVERD_MULTI_EXIT_CFI")
+MACHO_AUTH_NATIVE_TEXT(kRegisterTailCFIOption, "-DNEVERD_REGISTER_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kOpaqueTailCFIOption, "-DNEVERD_OPAQUE_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kMissingRestoreCFIOption, "-DNEVERD_MISSING_RESTORE_CFI")
+MACHO_AUTH_NATIVE_VALUE(uint64_t, kClassicCFIOperand, 0x2d)
+MACHO_AUTH_NATIVE_TEXT(kWrongKeyCFIOption, "-DNEVERD_WRONG_KEY_CFI")
+MACHO_AUTH_NATIVE_TEXT(kMixedReturnCFIOption, "-DNEVERD_MIXED_RETURN_CFI")
 MACHO_AUTH_NATIVE_TEXT(kExplicitReturnCFIOption, "-DNEVERD_EXPLICIT_RETURN_CFI")
 MACHO_AUTH_NATIVE_TEXT(kObjectIRFile, "native-object.ll")
 MACHO_AUTH_NATIVE_TEXT(kGeneratedIRProperty, "neverd_generated_ir")
@@ -180,7 +279,7 @@ MACHO_AUTH_NATIVE_VALUE(uint32_t, kMacOSMainSubtype, 0x81000002u)
 MACHO_AUTH_NATIVE_VALUE(uint32_t, kUnsupportedObjectSubtype, 0x82000002u)
 MACHO_AUTH_NATIVE_VALUE(uint32_t, kKernelMainSubtype, 0xc1000002u)
 MACHO_AUTH_NATIVE_ARGS(kOutputArgs, "-o")
-MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-imports",
+MACHO_AUTH_NATIVE_ARGS(kInfoArgs, "dyld_info", "-imports", "-fixups",
                        "-fixup_chain_details")
 
 MACHO_AUTH_NATIVE_TEXT(kClassicLinker, "ld-classic")
@@ -543,6 +642,69 @@ int main(int argc, char **argv) {
 
 MACHO_AUTH_NATIVE_TEXT(kObjectSource, R"cpp(
 #include <ptrauth.h>
+#if defined(NEVERD_MULTI_EXIT_CFI) || defined(NEVERD_MISSING_RESTORE_CFI)
+#define NEVERD_CLASSIC_ALTERNATE_EXIT
+#endif
+#if defined(NEVERD_REGISTER_TAIL_CFI) || defined(NEVERD_OPAQUE_TAIL_CFI)
+#define NEVERD_CLASSIC_REGISTER_EXIT
+#endif
+#if defined(NEVERD_CLASSIC_REGISTER_EXIT) || defined(NEVERD_CLASSIC_ALTERNATE_EXIT) || defined(NEVERD_CLASSIC_RETURN_CFI) || defined(NEVERD_CLASSIC_ASYNC_CFI) || defined(NEVERD_WRONG_KEY_CFI) || defined(NEVERD_MIXED_RETURN_CFI) || defined(NEVERD_WRONG_EPILOGUE_CFI)
+asm(".text\n.p2align 2\n.globl _classic_frame\n_classic_frame:\n"
+    ".cfi_startproc\n"
+#ifdef NEVERD_WRONG_KEY_CFI
+    "paciasp\n"
+#else
+    "pacibsp\n"
+#endif
+    ".cfi_negate_ra_state\n"
+    "stp x29, x30, [sp, #-16]!\n.cfi_def_cfa_offset 16\n"
+    ".cfi_offset x29, -16\n.cfi_offset x30, -8\n"
+    // GNU_args_size with an operand identical to the generic signing opcode.
+    ".cfi_escape 0x2e, 0x2d\n.cfi_escape 0x2e, 0\n"
+#ifdef NEVERD_MIXED_RETURN_CFI
+    ".cfi_same_value 34\n"
+#endif
+#ifdef NEVERD_REGISTER_TAIL_CFI
+    "adrp x16, _native_target@PAGE\nadd x16, x16, _native_target@PAGEOFF\n"
+#endif
+#ifdef NEVERD_MULTI_EXIT_CFI
+    ".cfi_remember_state\n"
+#endif
+#ifdef NEVERD_CLASSIC_ALTERNATE_EXIT
+    "cbz x0, 1f\n"
+#endif
+#ifdef NEVERD_WRONG_EPILOGUE_CFI
+    "ldp x29, x30, [sp]\n"
+#else
+    "ldp x29, x30, [sp], #16\n"
+#endif
+    ".cfi_def_cfa sp, 0\n.cfi_restore x29\n.cfi_restore x30\n"
+#if defined(NEVERD_CLASSIC_ASYNC_CFI) || defined(NEVERD_WRONG_EPILOGUE_CFI)
+    "autibsp\n.cfi_negate_ra_state\nret\n"
+#elif defined(NEVERD_CLASSIC_REGISTER_EXIT)
+    "autibsp\n.cfi_negate_ra_state\n"
+#ifdef NEVERD_REGISTER_TAIL_CFI
+    "br x16\n"
+#else
+    "br x0\n"
+#endif
+#elif defined(NEVERD_CLASSIC_ALTERNATE_EXIT)
+    "autibsp\n.cfi_negate_ra_state\nret\n1:\n"
+#ifdef NEVERD_MULTI_EXIT_CFI
+    ".cfi_restore_state\n"
+#else
+    ".cfi_def_cfa_offset 16\n.cfi_offset x29, -16\n.cfi_offset x30, -8\n"
+#endif
+    "ldp x29, x30, [sp], #16\n.cfi_def_cfa sp, 0\n"
+    ".cfi_restore x29\n.cfi_restore x30\n"
+    "autibsp\n.cfi_negate_ra_state\nb _native_target\n"
+#elif defined(NEVERD_WRONG_KEY_CFI)
+    "retaa\n"
+#else
+    "retab\n"
+#endif
+    ".cfi_endproc\n");
+#endif
 extern "C" {
 int neverd_provider();
 extern int neverd_provider_data[2];

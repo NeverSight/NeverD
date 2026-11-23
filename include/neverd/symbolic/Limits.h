@@ -82,6 +82,8 @@ inline constexpr unsigned kSymExprExtensionEqualityMaxSteps = 32;
 // lib/symbolic/expr/SymExprStruct.cpp
 inline constexpr int kSymExprStructConstantBitSliceDepthLimit = 32;
 inline constexpr unsigned kSymExprStructSymContextConstantWindowRemaining = 256;
+// Bound the total additional arms opened by masked joins in one field request.
+inline constexpr unsigned kSymExprMaskedFieldMaxSplits = 64;
 inline constexpr unsigned
     kSymExprStructSymContextConstantWindowAvailableMinArgument2 = 256U;
 

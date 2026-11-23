@@ -45,6 +45,14 @@ LOCAL_SOURCE_CALL_TEXT(kMIPSRecordValueDeclarations, R"(
   struct AnonymousUnionRecord { union { double value; } member; };
   union NamedSingleUnion { double value; };
 )")
+LOCAL_SOURCE_CALL_TEXT(kMIPSMixedUnionDecls, R"(
+  typedef unsigned long long U64;
+  typedef union { double real; U64 bits; } Number;
+  union Reverse { U64 raw; double value; };
+  struct Pair { Number first; double second; };
+  struct IntegerBox { U64 bits; };
+  Number mix(Number x, union Reverse y, struct Pair z, struct IntegerBox box);
+)")
 LOCAL_SOURCE_CALL_TEXT(
     kMIPSRecordValueCall,
     "struct PointerRecord transport(struct DoubleRecord direct, "

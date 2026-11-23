@@ -161,7 +161,11 @@ struct ValueReads {
   /// again). Each such value must be dead itself. Scratch restores still use
   /// unread(): later ABI recovery can observe their register writes implicitly,
   /// so they need the separate overwrite proof.
-  bool onlyDeadCopiesAndExtensions(const MedVar &V, size_t &Budget) const {
+  /// A routine that keeps a register round a loop saves again what it
+  /// reloaded: \p SavedAgainBy, the save of the bytes the value came from,
+  /// may store it there once more (markKeptRegisterSpills).
+  bool onlyDeadCopiesAndExtensions(const MedVar &V, size_t &Budget,
+                                   const MedOp *SavedAgainBy = nullptr) const {
     std::vector<ValueKey> Pending{keyOf(V)};
     std::set<ValueKey> Seen;
     while (!Pending.empty()) {
@@ -176,6 +180,10 @@ struct ValueReads {
         return false;
       if (const auto It = Ops.find(Key); It != Ops.end())
         for (const MedOp *Read : It->second) {
+          if (Read == SavedAgainBy && Read->Opcode == NdOp::STORE &&
+              Read->NumInputs >= 2 && keyOf(Read->Inputs[1]) == Key &&
+              keyOf(Read->Inputs[0]) != Key)
+            continue;
           const bool Unary =
               (Read->Opcode == NdOp::COPY || Read->Opcode == NdOp::INT_ZEXT) &&
               Read->NumInputs == 1;
@@ -3487,6 +3495,236 @@ void markUndefinedScratchStores(MedFunc &Func, Arch Architecture,
           slotAddressReachesCallFirst(Func, Architecture, Store, Positions,
                                       LoadAt, Offsets, Calls, Budget))))
       Store.Op->PrologueSave = true;
+}
+
+void markKeptRegisterSpills(MedFunc &Func, Arch Architecture,
+                            BinaryFormat Format, const BinaryImage *Image) {
+  // Unwind data alone enters no block of the function: a personality's
+  // dispatcher does, and may read what the function saved.
+  if (Func.Blocks.empty() || Func.SkippedSSA || Func.AnalystStackFrame ||
+      Func.FrameSize <= 0 ||
+      (Func.ExceptionMetadata &&
+       (Func.ExceptionMetadata->Personality != ExceptionPersonality::None ||
+        Func.ExceptionMetadata->ParseStatus !=
+            ExceptionParseStatus::Complete)) ||
+      llvm::any_of(Func.Blocks, [](const MedBlock &Block) {
+        return !Block.ExceptionalPreds.empty() ||
+               !Block.ExceptionalSuccs.empty();
+      }))
+    return;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  const BinaryFormat Convention =
+      Func.CC == CallingConv::Win64 ? BinaryFormat::COFF : BinaryFormat::ELF;
+  // Go code keeps no register for its caller but the stack and frame
+  // pointers (markCalleeSavePrologueSaves).  A Go write barrier keeps every
+  // general-purpose register but the one it returns buffer space in
+  // (GoWriteBarrierKind).
+  const bool KeepsOnlyFrame = Image && isGoCode(*Image, Func.Entry);
+  const GoWriteBarrier *Barrier =
+      Image ? goWriteBarrierAt(*Image, Func.Entry) : nullptr;
+  const auto Keeps = [&](const MedVar &Saved) {
+    if (TRI.isFramePointer(Saved.RegOff) || TRI.isLinkRegister(Saved.RegOff))
+      return true;
+    if (Barrier)
+      return goWriteBarrierKeeps(Architecture, Barrier->Kind, Saved.RegOff);
+    return !KeepsOnlyFrame &&
+           TRI.isCallPreserved(Saved.RegOff, Saved.Size, Convention);
+  };
+  // Only a join brings a reload back to its save.
+  std::map<ValueKey, const PhiNode *> Joins;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const PhiNode &Phi : Block.Phis)
+      if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size &&
+          !Phi.ExceptionalEntry)
+        Joins.emplace(keyOf(Phi.Output), &Phi);
+  const auto Candidate = [&](const MedOp &Op) {
+    return Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 && !Op.PrologueSave &&
+           Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].Size &&
+           Joins.count(keyOf(Op.Inputs[1])) && Keeps(Op.Inputs[1]);
+  };
+  if (Joins.empty() || llvm::none_of(Func.Blocks, [&](const MedBlock &Block) {
+        return llvm::any_of(Block.Ops, Candidate);
+      }))
+    return;
+  std::vector<FrameAccess> Loads, Stores;
+  frameAccessesOf(Func, Architecture, Format, Func.EntryKind, Loads, Stores);
+  const IntegerArgumentLayout Layout =
+      TRI.integerArgumentLayout(Convention == BinaryFormat::COFF);
+  const ValueReads Reads(Func);
+  std::map<ValueKey, const MedOp *> Definitions;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Output.Size && Op.Output.Id >= 0)
+        Definitions.emplace(keyOf(Op.Output), &Op);
+  std::map<const MedOp *, const FrameAccess *> LoadAt;
+  for (const FrameAccess &Load : Loads)
+    LoadAt.emplace(Load.Op, &Load);
+  size_t Budget = limits::ir::kSourceEntrySpillWork;
+  // A reload reads what its save stored only where the save ran first:
+  // earlier in the reload's own block, or in a block every way from the
+  // entry to the reload runs.  Elsewhere it may read bytes nothing wrote.
+  std::map<int, size_t> BlockIndex;
+  std::map<const MedOp *, std::pair<size_t, size_t>> Places;
+  for (size_t B = 0; B < Func.Blocks.size(); ++B) {
+    BlockIndex.emplace(Func.Blocks[B].Id, B);
+    for (size_t I = 0; I < Func.Blocks[B].Ops.size(); ++I)
+      Places.emplace(&Func.Blocks[B].Ops[I], std::pair(B, I));
+  }
+  // A store at a call's stack pointer may pass a stack argument, which the
+  // routine called may change before the reload reads it.  What a call takes
+  // there is known where call recovery bound its arguments, which each save
+  // is checked against below, or where the routine's pclntab record gives it
+  // no argument word.  A call nothing says that of may take any save.
+  std::set<const MedOp *> BoundCalls;
+  for (const MedCallInfo &Call : Func.CallInfos)
+    if (const auto Block = BlockIndex.find(Call.BlockId);
+        Block != BlockIndex.end() && Call.OpIdx >= 0 &&
+        size_t(Call.OpIdx) < Func.Blocks[Block->second].Ops.size())
+      BoundCalls.insert(&Func.Blocks[Block->second].Ops[Call.OpIdx]);
+  const auto TakesNoStackWord = [&](const MedOp &Op) {
+    return Image && Op.Opcode == NdOp::CALL && Op.NumInputs &&
+           Op.Inputs[0].isConst() &&
+           goFrameArgumentBytes(*Image, Op.Inputs[0].ConstVal) == 0u;
+  };
+  if (llvm::any_of(Func.Blocks, [&](const MedBlock &Block) {
+        return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+          return (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+                 !BoundCalls.count(&Op) && !TakesNoStackWord(Op);
+        });
+      }))
+    return;
+  // The blocks the entry reaches without running the block of that index.
+  std::map<size_t, std::vector<bool>> ReachedWithout;
+  const auto RunsFirst = [&](const MedOp *Save, const MedOp *Reload) {
+    const auto SaveAt = Places.find(Save);
+    const auto ReloadAt = Places.find(Reload);
+    if (SaveAt == Places.end() || ReloadAt == Places.end())
+      return false;
+    const size_t Block = SaveAt->second.first;
+    if (ReloadAt->second.first == Block)
+      return SaveAt->second.second < ReloadAt->second.second;
+    const auto [Reached, New] = ReachedWithout.try_emplace(Block);
+    if (New) {
+      Reached->second.assign(Func.Blocks.size(), false);
+      std::vector<size_t> Pending;
+      if (Block) {
+        Reached->second[0] = true;
+        Pending.push_back(0);
+      }
+      while (!Pending.empty()) {
+        const MedBlock &From = Func.Blocks[Pending.back()];
+        Pending.pop_back();
+        const size_t Cost = 1 + From.Succs.size();
+        const bool Known =
+            Cost <= Budget && llvm::all_of(From.Succs, [&](int Successor) {
+              return BlockIndex.count(Successor);
+            });
+        if (!Known) {
+          // Unproven: every block may run before the save.
+          Budget = 0;
+          Reached->second.assign(Func.Blocks.size(), true);
+          break;
+        }
+        Budget -= Cost;
+        for (int Successor : From.Succs) {
+          const size_t Next = BlockIndex.find(Successor)->second;
+          if (Next != Block && !Reached->second[Next]) {
+            Reached->second[Next] = true;
+            Pending.push_back(Next);
+          }
+        }
+      }
+    }
+    return !Reached->second[ReloadAt->second.first];
+  };
+  std::vector<MedOp *> Saves;
+  std::vector<CalleeSaveRead> Reloads;
+  for (const FrameAccess &Save : Stores) {
+    if (!Candidate(*Save.Op))
+      continue;
+    const MedVar &Saved = Save.Op->Inputs[1];
+    const int64_t End = Save.Offset + Saved.Size;
+    if (!isPrivateFrameAccess(Func, Layout, Save.Offset, Saved.Size) ||
+        llvm::any_of(Stores, [&](const FrameAccess &Other) {
+          return Other.Op != Save.Op && Other.overlaps(Save.Offset, End);
+        }))
+      continue;
+    // What the save stores is the register's entry value joined, through
+    // copies, with reloads of these bytes: the entry value still.
+    std::set<ValueKey> Kept;
+    std::vector<MedVar> Pending{Saved};
+    bool EntryValue = true;
+    while (EntryValue && !Pending.empty()) {
+      const MedVar V = Pending.back();
+      Pending.pop_back();
+      if (!Kept.insert(keyOf(V)).second)
+        continue;
+      if (!Budget || V.isConst() || V.Size != Saved.Size) {
+        EntryValue = false;
+        break;
+      }
+      --Budget;
+      if (V.Kind == MedVar::Reg && V.RegOff == Saved.RegOff &&
+          (V.SSAVer == 0 || isEntryLiveInValue(Func, V, Saved.RegOff)))
+        continue;
+      if (const auto Join = Joins.find(keyOf(V)); Join != Joins.end()) {
+        if (V.RegOff != Saved.RegOff) {
+          EntryValue = false;
+          break;
+        }
+        for (const auto &Arm : Join->second->Args)
+          Pending.push_back(Arm.second);
+        continue;
+      }
+      const auto Definition = Definitions.find(keyOf(V));
+      if (Definition == Definitions.end()) {
+        EntryValue = false;
+        break;
+      }
+      const MedOp &Op = *Definition->second;
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
+        Pending.push_back(Op.Inputs[0]);
+        continue;
+      }
+      const auto Load = LoadAt.find(&Op);
+      EntryValue = Op.Opcode == NdOp::LOAD && Load != LoadAt.end() &&
+                   Load->second->Offset == Save.Offset &&
+                   Load->second->Size == Saved.Size;
+    }
+    // A call that takes one of those values, as the stack argument a store
+    // at its stack pointer passes, reads the save.
+    if (!EntryValue ||
+        llvm::any_of(Func.CallInfos, [&](const MedCallInfo &Call) {
+          return llvm::any_of(Call.Args, [&](const MedVar &Argument) {
+            return !Argument.isConst() && Argument.Id >= 0 &&
+                   Kept.count(keyOf(Argument));
+          });
+        }))
+      continue;
+    // Each read of the bytes is a reload whose value reaches nothing but
+    // this save again.
+    std::vector<MedOp *> Restores;
+    if (!llvm::all_of(Loads, [&](const FrameAccess &Read) {
+          if (!Read.overlaps(Save.Offset, End))
+            return true;
+          if (Read.Offset != Save.Offset || Read.Size != Saved.Size ||
+              !RunsFirst(Save.Op, Read.Op) ||
+              !Reads.onlyDeadCopiesAndExtensions(Read.Op->Output, Budget,
+                                                 Save.Op))
+            return false;
+          Restores.push_back(Read.Op);
+          return true;
+        }))
+      continue;
+    Saves.push_back(Save.Op);
+    for (MedOp *Restore : Restores)
+      Reloads.push_back({Restore, Saved});
+  }
+  for (MedOp *Save : Saves)
+    Save->PrologueSave = true;
+  // No read of the bytes outlives the saves: each reload takes the value
+  // its save stored.
+  forwardCalleeSaveReads(Reloads);
 }
 
 } // namespace neverd

@@ -751,6 +751,7 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
       markUnobservedBorrowedFrameStores(Func, Image.Arch, Image.abiFormat(),
                                         Callees);
     markUndefinedScratchStores(Func, Image.Arch, Image.abiFormat());
+    markKeptRegisterSpills(Func, Image.Arch, Image.abiFormat(), &Image);
   }
   // A pair-aligned wide argument leaves the lane before it unset.  Where a
   // callee's body never reads such a position, its callers pass zero there

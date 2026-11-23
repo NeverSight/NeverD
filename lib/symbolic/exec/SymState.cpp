@@ -500,6 +500,15 @@ void SymState::clobberMemory(SymMemoryPreservation &Preservation) {
                              Ctx->width(Preservation.Base) != kMaxAddressBits ||
                              Ctx->isConst(Preservation.Base))))
     return;
+  int64_t PreviousEnd = INT64_MIN;
+  for (const auto &Range : Preservation.EarlierRanges) {
+    if (!Charge(1))
+      return;
+    if (Range.Begin >= Range.End || Range.Begin < PreviousEnd ||
+        Range.End > Preservation.Begin)
+      return;
+    PreviousEnd = Range.End;
+  }
   if (!Charge(1))
     return;
   Bank *Protected = &AbsoluteMemory;
@@ -540,12 +549,21 @@ void SymState::clobberMemory(SymMemoryPreservation &Preservation) {
   const auto Begin = static_cast<uint64_t>(Preservation.Begin);
   const auto Size = static_cast<uint64_t>(Preservation.End) - Begin;
   if (Protected)
-    for (const auto &[Offset, Byte] : Protected->Bytes)
-      if (Offset - Begin < Size) {
+    for (const auto &[Offset, Byte] : Protected->Bytes) {
+      bool Keep = Offset - Begin < Size;
+      for (const auto &Range : Preservation.EarlierRanges) {
+        if (!Charge(1))
+          return;
+        const auto EarlierBegin = static_cast<uint64_t>(Range.Begin);
+        Keep |= Offset - EarlierBegin <
+                static_cast<uint64_t>(Range.End) - EarlierBegin;
+      }
+      if (Keep) {
         if (!Charge(2))
           return;
         Saved.emplace_hint(Saved.end(), Offset, Byte);
       }
+    }
 
   // All potentially allocating preparation is complete. Only exact current
   // ByteViews survive; neither old unknown epochs nor provenance seed memory.
@@ -1097,6 +1115,66 @@ bool SymState::mergeIdentical(const SymState &Other) {
     for (const MemoryInputOrigin &Origin : Entry.second)
       recordMemoryInputOrigin(SymRef(Entry.first), Origin);
   return true;
+}
+
+void SymState::clobberRegistersExcept(SymRegisterPreservation &Control) {
+  Control.WorkUsed = 0;
+  Control.NodesCreated = 0;
+  Control.Status = SymRegisterPreservationStatus::Invalid;
+  const auto Charge = [&](uint64_t Count) {
+    if (Count > Control.MaxWork - Control.WorkUsed) {
+      Control.Status = SymRegisterPreservationStatus::BudgetExceeded;
+      return false;
+    }
+    Control.WorkUsed += Count;
+    return true;
+  };
+  if (!Charge(1))
+    return;
+  std::optional<uint64_t> PreviousEnd;
+  for (const auto &Range : Control.Ranges) {
+    if (!Charge(1))
+      return;
+    if (!Range.Bytes || Range.Bytes > UINT64_MAX - Range.Offset ||
+        (PreviousEnd && Range.Offset < *PreviousEnd))
+      return;
+    PreviousEnd = Range.Offset + Range.Bytes;
+  }
+  if (!Charge(2) || !Charge(Registers.Bytes.size()) ||
+      !Charge(Temporaries.Bytes.size()) ||
+      (Registers.Unknowns && !Charge(Registers.Unknowns->Values.size())) ||
+      (Temporaries.Unknowns && !Charge(Temporaries.Unknowns->Values.size())))
+    return;
+  uint64_t NewNodes = 0;
+  std::map<uint64_t, ByteView> Saved;
+  for (const auto &Range : Control.Ranges)
+    for (uint16_t I = 0; I < Range.Bytes; ++I) {
+      if (!Charge(3))
+        return;
+      const uint64_t Offset = Range.Offset + I;
+      if (!Registers.Bytes.count(Offset) &&
+          (!Registers.Unknowns || !Registers.Unknowns->Values.count(Offset))) {
+        if (NewNodes == Control.MaxNewNodes) {
+          Control.Status = SymRegisterPreservationStatus::BudgetExceeded;
+          return;
+        }
+        ++NewNodes;
+      }
+      Saved.emplace_hint(Saved.end(), Offset, ByteView{});
+    }
+  auto RegisterEpoch = std::make_shared<UnknownBytes>();
+  auto TemporaryEpoch = std::make_shared<UnknownBytes>();
+  // No fallible policy check follows this point. byteAt preserves exact byte
+  // views, including sibling-populated lazy values, without wide concatenation.
+  const uint64_t Before = Ctx->numNodes();
+  for (auto &[Offset, Byte] : Saved)
+    Byte = byteAt(Registers, Offset);
+  Control.NodesCreated = Ctx->numNodes() - Before;
+  assert(Control.NodesCreated <= NewNodes);
+  forget(Registers, std::move(RegisterEpoch));
+  Registers.Bytes.swap(Saved);
+  forget(Temporaries, std::move(TemporaryEpoch));
+  Control.Status = SymRegisterPreservationStatus::Applied;
 }
 
 void SymState::clobberRegistersExcept(

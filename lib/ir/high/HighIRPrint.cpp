@@ -16,6 +16,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/ir/med/X86/Win64CallStackInput.h"
 
 #include "llvm/ADT/StringExtras.h"
 
@@ -107,6 +108,9 @@ std::string HighExpr::str() const {
     return "0x" + llvm::utohexstr(ConstVal);
   }
   case ExprKind::Undef:
+    if (auto Input = Win64CallStackInput::from(Var))
+      return "win64_call_stack_u64(0x" + llvm::utohexstr(Input->Site) + ", " +
+             std::to_string(Input->Offset) + ")";
     return "undef";
   case ExprKind::IncomingStack:
     return kIncomingStack;
@@ -232,6 +236,8 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
            ConstProvenance == Other.ConstProvenance &&
            AddressOwnerVA == Other.AddressOwnerVA;
   case ExprKind::Undef:
+    return Var == Other.Var && Win64CallStackInput::from(Var) ==
+                                   Win64CallStackInput::from(Other.Var);
   case ExprKind::IncomingStack:
     return true;
   case ExprKind::Call:

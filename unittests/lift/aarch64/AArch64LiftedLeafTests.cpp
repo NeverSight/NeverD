@@ -21,6 +21,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/DWARF/EHFrame.h"
+#include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
@@ -34,6 +35,7 @@
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
@@ -2403,6 +2405,158 @@ static void verifyWideAddressReturns(bool OmitDataRecords) {
 
 TEST(AArch64LiftedImage, RepublishesAddressReturnsBeyondLiteralPoolReach) {
   verifyWideAddressReturns(false);
+}
+
+enum class WideFrame { Dwarf, Cleanup, TypedCatch };
+
+static void verifyWideSignedFrame(WideFrame Kind) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  const bool Language = Kind != WideFrame::Dwarf;
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kAssemblyName).string();
+  const auto Driver = (Root / kDriver).string();
+  const auto Caller = (Root / kWideLanguageDriverFile).string();
+  const auto Input = (Root / kOriginal).string();
+  const std::string Defines = Kind == WideFrame::TypedCatch ? kWideTypedOption
+                              : Language                    ? kWideLSDAOption
+                                                            : std::string();
+  std::ofstream(Source) << Defines << kWideLanguageFrame;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                kCompiler, {kCompiler, kTargetFlag, kTarget, kDylib,
+                            kDataLinker, Source, kLinkCxx, kOut, Input}),
+            0);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                kCodesign, {kCodesign, kForceSign, kSign, kAdHocIdentity,
+                            kSignIdentifier, kRepeatIdentity, Input}),
+            0);
+  const bool Native = std::getenv(kExecute) != nullptr;
+  if (Native) {
+    std::ofstream(Caller) << Defines << kWideLanguageDriver;
+    ASSERT_EQ(
+        llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, kTarget,
+                                              Caller, kLinkCxx, kOut, Driver}),
+        0);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
+  }
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto Original = Reader->load(Input);
+  ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+  const auto *Entry = Original->findSymbol(kWideEntry);
+  ASSERT_NE(Entry, nullptr);
+  const auto *Frame = Original->ExceptionMetadata.findFunction(Entry->Addr);
+  ASSERT_TRUE(Frame && Frame->Dwarf);
+  ASSERT_EQ(Frame->Itanium.has_value(), Language);
+  if (Language) {
+    ASSERT_EQ(Frame->Itanium->CallSites.size(), kWideLanguageCallSites);
+    EXPECT_EQ(Frame->Itanium->isCleanupOnly(), Kind == WideFrame::Cleanup);
+    if (Kind == WideFrame::TypedCatch) {
+      ASSERT_FALSE(Frame->Itanium->TypeTable.empty());
+      EXPECT_NE(Frame->Itanium->TypeTable.front().TypeInfoSlotVA, 0u);
+    }
+  }
+  unsigned Executions = Native ? 1 : 0;
+  for (bool NoOpt : {true, false}) {
+    SCOPED_TRACE(NoOpt);
+    PipelineOptions Options;
+    Options.PatchMode = true;
+    Options.NoOpt = NoOpt;
+    Options.EmitDumpOutput = false;
+    auto Previous = Input;
+    for (unsigned I = 0; I != kRepeatedPublications; ++I) {
+      SCOPED_TRACE(I);
+      const auto Output = (Root / (kRepeatedPrefix + std::to_string(I) +
+                                   (NoOpt ? kUnoptimized : kOptimize)))
+                              .string();
+      auto Before = Reader->load(Previous);
+      ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+      llvm::LLVMContext Context;
+      auto Lifted = Pipeline().run(*Before, Context, Options);
+      ASSERT_TRUE(Lifted.Success && Lifted.LlvmModule) << Lifted.Error;
+      symbolizeImageAbsolutePointers(*Lifted.LlvmModule, *Before);
+      std::vector<MachOLiftedSourceAddress> Sites;
+      auto Entries = validateMachORegisterResults(*Lifted.LlvmModule, *Before,
+                                                  nullptr, &Sites);
+      ASSERT_TRUE(bool(Entries)) << llvm::toString(Entries.takeError());
+      ASSERT_EQ(Sites.size(), kWideLanguageSites);
+      for (const auto &Site : Sites)
+        EXPECT_EQ(Site.Form,
+                  I ? MachOAddressForm::PagePair : MachOAddressForm::Single);
+      MachOPatcher Patcher;
+      Patcher.setImageContext(&*Before);
+      ASSERT_TRUE(
+          Patcher.patch(Previous, Output, *Lifted.LlvmModule, Before->Arch)
+              .Success);
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                    kCodesign, {kCodesign, kVerify, kStrict, Output}),
+                0);
+      auto Image = Reader->load(Output);
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      // Follow the exported entry through the published forwarding chain.
+      const auto *Export = Image->findSymbol(kWideEntry);
+      ASSERT_NE(Export, nullptr);
+      va_t Placed = Export->Addr;
+      llvm::DenseSet<va_t> Visited;
+      for (;;) {
+        ASSERT_TRUE(Visited.insert(Placed).second);
+        const auto *Word = Image->readVA(Placed, aarch64::kInsnSize);
+        ASSERT_NE(Word, nullptr);
+        const auto Branch =
+            decodeDirectBranch(Image->Arch, InstructionMode::Default, Word,
+                               aarch64::kInsnSize, Placed, {.Jumps = true});
+        if (!Branch)
+          break;
+        ASSERT_TRUE(Branch->target());
+        Placed = *Branch->target();
+      }
+      ASSERT_NE(Placed, Export->Addr);
+      const auto *After = Image->ExceptionMetadata.findFunction(Placed);
+      ASSERT_TRUE(After && After->Dwarf);
+      ASSERT_EQ(After->Itanium.has_value(), Language);
+      const auto Growth = Sites.size() * aarch64::kInsnSize;
+      EXPECT_EQ(After->Dwarf->AddressRange,
+                Frame->Dwarf->AddressRange + Growth);
+      if (Language) {
+        ASSERT_EQ(After->Itanium->CallSites.size(), kWideLanguageCallSites);
+        const auto &BeforeSite = Frame->Itanium->CallSites.front();
+        const auto &AfterSite = After->Itanium->CallSites.front();
+        EXPECT_EQ(AfterSite.GuardedRange.Begin - Placed,
+                  BeforeSite.GuardedRange.Begin - Entry->Addr + Growth);
+        EXPECT_EQ(AfterSite.GuardedRange.size(),
+                  BeforeSite.GuardedRange.size());
+        EXPECT_EQ(AfterSite.LandingPadVA - Placed,
+                  BeforeSite.LandingPadVA - Entry->Addr + Growth);
+        EXPECT_EQ(After->Itanium->CallSites.back().LandingPadVA, 0u);
+        EXPECT_EQ(After->Itanium->isCleanupOnly(),
+                  Frame->Itanium->isCleanupOnly());
+        EXPECT_EQ(After->Itanium->TypeTable.size(),
+                  Frame->Itanium->TypeTable.size());
+      }
+      if (Native) {
+        ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
+        ++Executions;
+      }
+      Previous = Output;
+    }
+  }
+  testing::Test::RecordProperty(kNativeImages, Executions);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
+TEST(AArch64LiftedImage, WidensTwoAddressesAcrossIndexedDwarfFrame) {
+  verifyWideSignedFrame(WideFrame::Dwarf);
+}
+
+TEST(AArch64LiftedImage, WidensTwoAddressesAcrossSignedLanguageFrame) {
+  verifyWideSignedFrame(WideFrame::Cleanup);
+}
+
+TEST(AArch64LiftedImage, WidensTwoAddressesAcrossTypedCatchAndCleanup) {
+  verifyWideSignedFrame(WideFrame::TypedCatch);
 }
 
 TEST(AArch64LiftedImage, KeepsAddressOnlyTailsWithoutDataInCode) {

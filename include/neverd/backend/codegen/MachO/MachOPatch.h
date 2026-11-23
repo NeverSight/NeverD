@@ -114,6 +114,7 @@ private:
     uint64_t WritableSize = 0;
     uint32_t WritableSections = 0;
     uint64_t RelroSize = 0;
+    uint32_t RelroSections = 0;
     uint64_t LinkeditVA = 0;
     uint64_t LinkeditVMSize = 0;
     uint64_t LinkeditFileOff = 0;
@@ -131,7 +132,8 @@ private:
                                  ExecSegmentInstallReceipt *Receipt,
                                  uint64_t WritableOffset = 0,
                                  uint64_t RelroSize = 0,
-                                 const MachORuntimeSections *Runtime = nullptr);
+                                 const MachORuntimeSections *Runtime = nullptr,
+                                 llvm::ArrayRef<CompiledSection> Sections = {});
   bool validateExecSegmentInstall(const std::vector<uint8_t> &Binary,
                                   Arch TargetArch,
                                   const ExecSegmentInstallReceipt &Receipt);

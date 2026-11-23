@@ -51,6 +51,7 @@ namespace neverd {
 
 struct BinaryImage;
 class MedEntryStackOffsets;
+class ValuesLeftByCalls;
 
 /// Whether an operation prevents recovering an earlier ABI value: where it
 /// ends a later call's argument setup (endsCallArgumentSetup), as call
@@ -258,6 +259,45 @@ resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
 bool callsThroughContext(const MedBlock &Blk, int CallIdx, const MedVar &Target,
                          const MedVar &Context);
 
+/// Whether the indirect call at \p CallIdx in \p Block calls a func value:
+/// it loads its target from the address in the closure context register
+/// \p Context, as the block last sets that register (callsThroughContext).
+/// Where the block sets it nowhere before the call and \p Func is given, the
+/// register holds what the one block that leads here left in it, and so on
+/// back: `runtime.mcall` moves its fn into DX at its entry and calls through
+/// it two blocks later.  A join, a second way in or a call on the way ends
+/// the search.
+bool callsThroughFuncValue(const MedBlock &Block, size_t CallIdx,
+                           uint64_t Context, const MedFunc *Func = nullptr);
+
+/// Whether the indirect call at \p CallIdx in \p Block of \p Func enters Go
+/// code by the internal ABI, taking its arguments in Go's registers: a call
+/// compiled code of a register-ABI image makes (CallRegisterContract::
+/// GoInternal), or one Go assembly makes through a func value
+/// (callsThroughFuncValue).
+bool goIndirectCallTakesGoRegisters(const BinaryImage &Img, const MedFunc &Func,
+                                    const MedBlock &Block, size_t CallIdx);
+
+/// Whether the indirect call at \p CallIdx in \p Block of \p Func enters Go
+/// code of an image older than the internal ABI, which takes every argument
+/// on the stack and none in a register (goStackArgumentLayout): any call of
+/// a function that checks its goroutine's stack, which calls nothing but Go
+/// code (MedFunc::ChecksGoStack), and one any other Go routine makes through
+/// a func value (callsThroughFuncValue).  Assembly without that check may
+/// call another language's code, with the registers it sets.
+bool goIndirectCallTakesStackArguments(const BinaryImage &Img,
+                                       const MedFunc &Func,
+                                       const MedBlock &Block, size_t CallIdx);
+
+/// Whether \p Func set \p V, a value reaching a call, on every way to it.
+/// \p V and each value a PHI joins into it, directly or through other joins,
+/// is neither the register as \p Func was entered, where no parameter of it
+/// arrives, nor what an earlier call left there (\p LeftByCalls).  A compiler
+/// sets an argument on every way to its call: a callee that read the register
+/// would read nothing on the way that leaves it.
+bool setOnEveryWay(const MedFunc &Func, const MedVar &V,
+                   const ValuesLeftByCalls &LeftByCalls);
+
 /// Physical first argument of a vfptr slot `(*(*obj + imm))`, including slot
 /// zero without an ADD. Both loads must sit in \p Blk before \p CallIdx, and
 /// the object observed by the vfptr load must still occupy the first argument
@@ -276,6 +316,12 @@ vtableCallObject(const MedFunc &Func, const MedBlock &Blk, int CallIdx,
 
 /// Where a value is defined: its one operation or PHI anywhere in the
 /// function, or Ambiguous when more than one defines it.
+/// Whether the code of \p Block before op \p Index loads the stack pointer
+/// from memory (`mov rsp, [rbx]`), as a routine that resumes saved state does
+/// before it jumps there (RegisterStep::ResumesContext).
+bool loadsStackPointerBefore(const MedBlock &Block, size_t Index,
+                             const TargetRegInfo &TRI);
+
 struct MedDefSite {
   const MedBlock *Block = nullptr;
   const MedOp *Op = nullptr;

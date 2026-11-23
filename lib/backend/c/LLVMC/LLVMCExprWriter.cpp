@@ -13,6 +13,7 @@
 #include "../CDeferredValue.h"
 #include "../CDisplayFieldPath.h"
 #include "../CDisplayFrameRecord.h"
+#include "../render/X86/Win64CallStackInput.h"
 #include "LLVMCAtomicOrdering.h"
 #include "LLVMCFrameLayout.h"
 #include "LLVMCStorage.h"
@@ -3626,8 +3627,24 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
     return "(" + Flag->second + " ? " + getName(V) + " : " +
            unknownValueText("no recovered machine state") + ")";
   }
-  if (llvm_source_unknown::isValue(V))
-    return unknownValueText("no recovered machine state");
+  if (llvm_source_unknown::isValue(V)) {
+    const auto *Call = llvm::cast<llvm::CallInst>(V);
+    if (Call->arg_empty())
+      return unknownValueText("no recovered machine state");
+    const auto *Site =
+        llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(0));
+    const auto *Slot =
+        llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(1));
+    if ((Site && Site->getZExtValue() == InvalidVA) ||
+        (Slot && !Win64CallStackInput::validOffset(Slot->getZExtValue())))
+      throw std::runtime_error("invalid original Win64 CALL stack coordinate");
+    if (Site && Slot)
+      return win64CallStackInputText(
+          {Site->getZExtValue(), uint32_t(Slot->getZExtValue())});
+    return "((uint64_t)NEVERD_WIN64_CALL_STACK_U64(" +
+           valueStr(Call->getArgOperand(0)) + ", " +
+           valueStr(Call->getArgOperand(1)) + "))";
+  }
   // A parameter the signature types as a pointer is the integer the code
   // computes with.
   if (const auto *Arg = llvm::dyn_cast<llvm::Argument>(V);
@@ -3960,10 +3977,10 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
                ? "(" + typeToCLLVM(Ty) + ")(" + Text + ")"
                : Text;
   };
-  auto Bitwise = [&](const char *Operator) {
+  auto Modular = [&](const char *Operator) {
     std::string Text = LHS + Operator + RHS;
     // Bits outside a rounded C carrier's LLVM width do not belong to the
-    // result, including sign-extension bits in a printed negative constant.
+    // result. Normalize carries, borrows and sign bits of negative constants.
     if (Ty->isIntegerTy() && !Ty->isIntegerTy(1)) {
       const unsigned Width = Ty->getIntegerBitWidth();
       if (Width != signedIntegerCarrierWidth(Width))
@@ -3981,9 +3998,9 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
   case llvm::Instruction::FDiv:
     return Floating(" / ");
   case llvm::Instruction::Add:
-    return LHS + " + " + RHS;
+    return Modular(" + ");
   case llvm::Instruction::Sub:
-    return LHS + " - " + RHS;
+    return Modular(" - ");
   case llvm::Instruction::Mul:
     // A full u16 product can overflow C's signed integer promotion even
     // though the LLVM bitvector multiplication is defined.
@@ -4027,11 +4044,11 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
                    signedIntegerOperand(Ty, LHS) + " >> " + ShiftCount(), Ty,
                    Ty);
   case llvm::Instruction::And:
-    return Bitwise(" & ");
+    return Modular(" & ");
   case llvm::Instruction::Or:
-    return Bitwise(" | ");
+    return Modular(" | ");
   case llvm::Instruction::Xor:
-    return Bitwise(" ^ ");
+    return Modular(" ^ ");
   default:
     return LHS + " /* no recovered operator at 0x0 */ " + RHS;
   }

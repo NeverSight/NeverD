@@ -108,8 +108,8 @@ bool isX86AlignmentNop(const DecodedInsn &Insn) {
 size_t
 Decoder::classifyX86Prefix(llvm::ArrayRef<uint8_t> Bytes, va_t Addr,
                            llvm::MutableArrayRef<uint32_t> Output) const {
-  return X86_scanBatch(Handle, Bytes.data(), Bytes.size(), Addr, Output.data(),
-                       Output.size())
+  return X86_scanNativeBatch(Handle, Bytes.data(), Bytes.size(), Addr,
+                             Output.data(), Output.size())
       .count;
 }
 

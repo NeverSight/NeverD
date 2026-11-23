@@ -73,6 +73,45 @@ struct SpecializationX64MachineExit {
   bool operator==(const SpecializationX64MachineExit &) const = default;
 };
 
+enum class SpecializationX64CallProfile : uint8_t {
+  None,
+  /// Explicit conditional machine relation, not an inferred ABI or import
+  /// summary: eventual normal return, no faults/unwind/reentry/callbacks, and
+  /// preservation of the complete declared ambient code/object/control domain.
+  /// COFF callee-preserved bytes, DF and FPCW survive; other register bytes and
+  /// memory are fresh except current materialized bytes above OutgoingBytes
+  /// within the entry frame. Arithmetic flags are fresh defined one-bit values.
+  /// RSP and guest PC return exactly; all runtime controls/segment roots
+  /// survive.
+  ConditionalNormalReturnV1,
+  /// V1 plus caller-declared entry-frame spans whose current materialized
+  /// bytes survive each call. The extra preservation is an explicit callee
+  /// effect precondition, never inferred from an observed address or ABI.
+  ConditionalNormalReturnFrameSpansV2,
+};
+
+struct SpecializationCallPreservedFrameRange {
+  int64_t Begin = 0;
+  int64_t End = 0;
+  bool
+  operator==(const SpecializationCallPreservedFrameRange &) const = default;
+};
+
+/// Opt-in relation at an exact native CALL. Every dynamic invocation has fresh
+/// permitted outcomes. Version/profile/extent must be explicitly supplied;
+/// defaults never establish a contract, including at an unused site. The first
+/// version requires a raw machine region with nonempty entry-frame bounds.
+struct SpecializationX64ReturningCall {
+  uint32_t Version = 0;
+  va_t Address = InvalidVA;
+  SpecializationX64CallProfile Profile = SpecializationX64CallProfile::None;
+  uint64_t OutgoingBytes = 0;
+  /// Version 2 only. Sorted, disjoint, nonempty entry-frame-relative spans.
+  /// Only bytes materialized immediately before the call are retained.
+  std::vector<SpecializationCallPreservedFrameRange> PreservedFrameRanges;
+  bool operator==(const SpecializationX64ReturningCall &) const = default;
+};
+
 /// Caller-owned original x64 code at a runtime address. The complete range is
 /// executable, readable, nonfaulting and immutable across every possible writer
 /// for the whole supported execution. This is an explicit environment domain,
@@ -225,6 +264,17 @@ struct SpecializationEntryObject {
   int64_t End = 0;
 };
 
+/// An entry memory word that contains a symbolic object pointer. The complete
+/// eight-byte source field is an explicit input relation, not an immutable
+/// read or an address observed during one execution. Its object extent must
+/// be nonwrapping and disjoint from the declared entry frame. The source field
+/// itself must lie in a declared absolute frame exclusion.
+struct SpecializationEntryLoadedObject {
+  va_t PointerAddress = 0;
+  int64_t Begin = 0;
+  int64_t End = 0;
+};
+
 enum class SpecializationUndefinedModel : uint8_t {
   SelectedLowIR,
   /// Checked raw x64 regions only. Complete scalar sidecars supply independent
@@ -318,6 +368,11 @@ struct SpecializationOptions {
   /// excludes RequireRestoredFrameAtReturn and X64TerminalImports. All other
   /// transfers retain their ordinary exhaustive-analysis obligations.
   std::vector<SpecializationX64MachineExit> X64MachineExits;
+  /// Conditional raw returning calls. Requires nonempty X64MachineExits and
+  /// EntryFrameBounds; excludes restored-return/return-slot/terminal-import
+  /// contracts. The physical invocation remains a side-effecting raw event.
+  /// Ordinary proof, execution and source APIs reject even unused declarations.
+  std::vector<SpecializationX64ReturningCall> X64ReturningCalls;
   /// Raw-only supplemental code domain. Requires explicit nonfaulting,
   /// CET-disabled x64 state and an eight-byte entry RSP root. Ordinary domains
   /// require restored returns; X64MachineExits declares machine regions. The
@@ -365,6 +420,10 @@ struct SpecializationOptions {
   /// overlapping EntryConstants. Machine-region source checks these complete
   /// ranges before guest effects; ordinary source/native consumers refuse.
   std::vector<SpecializationEntryObject> EntryFrameExcludedObjects;
+  /// Explicit raw-domain pointer relations at fixed entry memory addresses.
+  /// The pointer contents remain symbolic and may be overwritten by guest
+  /// code; only their initial object bounds and frame separation are assumed.
+  std::vector<SpecializationEntryLoadedObject> EntryFrameLoadedObjects;
   /// Optional congruence domain for the entry frame root. Requires explicit
   /// machine state and an RSP FrameBaseRegister. Raw residual consumers enforce
   /// it; machine source rejects other roots before guest effects. Native proof
@@ -497,6 +556,7 @@ struct SpecializationOptions {
   bool hasRawEnvironment() const {
     return !X64CodeRegions.empty() || !X64ImportBindings.empty() ||
            !X64MachineExits.empty() || !EntryFrameExcludedObjects.empty() ||
+           !EntryFrameLoadedObjects.empty() || !X64ReturningCalls.empty() ||
            UndefinedModel != SpecializationUndefinedModel::SelectedLowIR;
   }
 
@@ -572,6 +632,21 @@ struct SpecializationExternalExit {
   std::optional<SpecializationX64MachineExit> MachineExit;
 };
 
+/// One final static event span. A loop can execute it repeatedly with fresh
+/// choices; receipts do not cache dynamic results or grow with loop iterations.
+/// Residual placement and original native evidence identify the span together.
+struct SpecializationReturningCall {
+  uint32_t Version = 1;
+  va_t ResidualAddress = 0;
+  SpecializationX64ReturningCall Declaration;
+  SpecializationInstruction Original;
+  NdVar ExpansionScratch;
+  std::string OriginalOperationDigest;
+  std::string ExpandedOperationDigest;
+  std::string ResidualOperationDigest;
+  std::string IdentityDigest;
+};
+
 struct SpecializationResult {
   SpecializationStatus Status = SpecializationStatus::InvalidInput;
   /// Populated only on Complete, within the declared domain and boundaries.
@@ -581,6 +656,7 @@ struct SpecializationResult {
   std::vector<SpecializationOrigin> Origins;
   std::vector<SpecializationReadWitness> Reads;
   std::vector<SpecializationExternalExit> ExternalExits;
+  std::vector<SpecializationReturningCall> ReturningCalls;
   std::optional<SpecializationRawEnvironmentReceipt> RawEnvironment;
   std::string Diagnostic;
   /// Includes the additional pure operations generated for certified reads

@@ -356,6 +356,48 @@ int main(void) {
     compileAndRun(Source, Level, {}, true);
 }
 
+TEST(LLVMCValues, RoundedArithmeticWrapsBeforeLogicalRightShifts) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("rounded_arithmetic", Context);
+  llvm::IRBuilder<> B(Context);
+  auto *I32 = B.getInt32Ty();
+  for (unsigned Width : {9u, 17u}) {
+    auto *Ty = B.getIntNTy(Width);
+    for (bool Add : {true, false}) {
+      const std::string Name = (Add ? "sum" : "diff") + std::to_string(Width);
+      auto *F = llvm::Function::Create(
+          llvm::FunctionType::get(I32, {I32, I32}, false),
+          llvm::GlobalValue::ExternalLinkage, Name, Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
+      auto *X = B.CreateTrunc(F->getArg(0), Ty);
+      auto *Y = B.CreateTrunc(F->getArg(1), Ty);
+      auto *Word = Add ? B.CreateAdd(X, Y) : B.CreateSub(X, Y);
+      B.CreateRet(B.CreateZExt(B.CreateLShr(Word, 1), I32));
+    }
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+  Source += R"(
+int main(void) {
+  for (uint32_t x = 0; x < 512; ++x)
+    for (uint32_t y = 0; y < 512; ++y) {
+      if (sum9(x, y) != (((x + y) & 511u) >> 1) ||
+          diff9(x, y) != (((x - y) & 511u) >> 1)) return 1;
+      uint32_t a = 257u * x, b = 263u * y;
+      if (sum17(a, b) != (((a + b) & 131071u) >> 1) ||
+          diff17(a, b) != (((a - b) & 131071u) >> 1)) return 2;
+    }
+  return 0;
+}
+)";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
+}
+
 TEST(LLVMCValues, RepeatedVolatileByteStoresStayObservable) {
   llvm::LLVMContext Context;
   llvm::Module Module("volatile_bytes", Context);

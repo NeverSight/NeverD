@@ -3,10 +3,12 @@
 add_neverd_component_library(NeverDInterpreterSpecialization
   InterpreterSpecialization.cpp
   RawEnvironment.cpp
+  ReturningCallState.cpp
   ../arch/RecoveryArchitecture.cpp
   ../arch/x86_64/RawEnvironment.cpp
   ../arch/x86_64/ExternalExits.cpp
   ../arch/x86_64/NativeStackControl.cpp
+  ../arch/x86_64/X64CallContinuation.cpp
   ../arch/x86_64/X64Recovery.cpp
   ../arch/x86_64/X64MXCSR.cpp
   ../arch/x86_64/X64PageGlobal.cpp

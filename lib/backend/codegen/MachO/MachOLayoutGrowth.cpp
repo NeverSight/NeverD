@@ -214,12 +214,16 @@ findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity,
 // the other table already fits. Keeping the existing mapping is preferable
 // when it contains an aligned gap large enough for the complete section.
 bool growTextForMetadata(std::vector<uint8_t> &Binary, Arch A,
-                         uint64_t Capacity,
+                         uint64_t Capacity, uint64_t FirstOffset,
                          llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
-  if (findTextMetadataStorage(Binary, Capacity))
+  if (findTextMetadataStorage(Binary, Capacity, FirstOffset))
     return false;
+  const auto H = parseMachOHeader(Binary.data(), Binary.size());
+  const uint64_t HeaderEnd = uint64_t(H.HeaderSize) + H.SizeOfCmds;
+  const uint64_t Begin =
+      std::max(HeaderEnd + kMetadataCommandReserve, FirstOffset);
   auto Grown = reserveMachOHeaderStorage(
-      Binary, A, kMetadataCommandReserve + Capacity, RecoveredData);
+      Binary, A, Begin - HeaderEnd + Capacity, RecoveredData);
   if (!Grown) {
     // A terminal TEXT segment may still extend into LINKEDIT.
     llvm::consumeError(Grown.takeError());
@@ -582,7 +586,7 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
 namespace {
 llvm::Expected<uint64_t>
 declareMachOMetadata(std::vector<uint8_t> &Binary, Arch A, llvm::StringRef Name,
-                     uint64_t Size, bool Relro,
+                     uint64_t Size, bool Relro, uint64_t FirstOffset = 0,
                      llvm::ArrayRef<MachODataInCodeRange> RecoveredData = {}) {
   using namespace llvm::MachO;
   if (Name.empty() || Name.size() > 16 || !Size ||
@@ -599,8 +603,8 @@ declareMachOMetadata(std::vector<uint8_t> &Binary, Arch A, llvm::StringRef Name,
         B, A, getMachOSectionSize(Original.Is64), RecoveredData);
     if (!Header)
       return Header.takeError();
-    growTextForMetadata(B, A, Size, RecoveredData);
-    Storage = findTextMetadataStorage(B, Size);
+    growTextForMetadata(B, A, Size, FirstOffset, RecoveredData);
+    Storage = findTextMetadataStorage(B, Size, FirstOffset);
   }
   std::vector<macho_patch_detail::MachOFileRange> Segments, Sections;
   if (!macho_patch_detail::collectMachOFileRanges(B, Segments, Sections))
@@ -703,9 +707,10 @@ declareMachOMetadata(std::vector<uint8_t> &Binary, Arch A, llvm::StringRef Name,
       llvm::any_of(llvm::ArrayRef<uint8_t>(B).slice(End, SS),
                    [](uint8_t V) { return V != 0; }))
     return fail(kMetadataCapacity);
-  uint64_t Off = Storage
-                     ? Storage->FileOffset
-                     : llvm::alignTo(std::max({Last, TextOff, End + SS}), 8);
+  uint64_t Off =
+      Storage
+          ? Storage->FileOffset
+          : llvm::alignTo(std::max({Last, TextOff, End + SS, FirstOffset}), 8);
   uint64_t VA = TextVA + Off - TextOff;
   if (Off < TextOff || !rangeInBounds(Off - TextOff, Size, TextSize) ||
       !rangeInBounds(Off, Size, B.size()) ||
@@ -819,6 +824,7 @@ llvm::Expected<uint64_t> declareMachOReadOnlyData(std::vector<uint8_t> &Binary,
 static bool tryPackAdjacentFrames(std::vector<uint8_t> &Binary, Arch A,
                                   const MachOCompactUnwindRegion &Compact,
                                   uint64_t CompactSize, uint64_t AdditionalEH,
+                                  uint64_t FirstOffset,
                                   const MachOUnwindRelocationLimits &Limits) {
   // A zero-base image has no address space for a downward header extension.
   if (!AdditionalEH || Compact.MachHeaderVA)
@@ -833,7 +839,8 @@ static bool tryPackAdjacentFrames(std::vector<uint8_t> &Binary, Arch A,
   const auto Used = EH->AppendFileOff - EH->SectionFileOff;
   const auto Capacity =
       llvm::alignTo(Used + AdditionalEH + sizeof(uint32_t), alignof(uint64_t));
-  const auto Space = findTextMetadataStorage(Binary, Capacity, End);
+  const auto Begin = std::max(End, FirstOffset);
+  const auto Space = findTextMetadataStorage(Binary, Capacity, Begin);
   if (!Space)
     return false;
   auto Frames = relocatedFrames(Binary, *EH, Space->VA, Limits);
@@ -843,7 +850,7 @@ static bool tryPackAdjacentFrames(std::vector<uint8_t> &Binary, Arch A,
   }
   auto Packed = Binary;
   auto Moved =
-      moveTextSection(Packed, A, kFrameSection, *Frames, Capacity, End);
+      moveTextSection(Packed, A, kFrameSection, *Frames, Capacity, Begin);
   if (!Moved) {
     llvm::consumeError(Moved.takeError());
     return false;
@@ -895,13 +902,26 @@ restoreTerminalDwarfBoundary(std::vector<uint8_t> &Bytes, Arch A,
   return llvm::Error::success();
 }
 
+// Keep newly allocated unwind bytes beyond the final load commands, including
+// the section descriptor for a frame table that has yet to be declared.
+static uint64_t unwindStorageBegin(llvm::ArrayRef<uint8_t> Binary,
+                                   uint64_t ExtraFrameBytes,
+                                   uint64_t CommandBytes) {
+  const auto H = parseMachOHeader(Binary.data(), Binary.size());
+  if (ExtraFrameBytes && !findMachOEHFrameRegion(Binary))
+    CommandBytes += getMachOSectionSize(H.Is64);
+  return uint64_t(H.HeaderSize) + H.SizeOfCmds +
+         std::max(kMetadataCommandReserve, CommandBytes);
+}
+
 static llvm::Expected<bool> reserveUnwindAndCommands(
     std::vector<uint8_t> &Binary, Arch A, uint64_t AdditionalEHBytes,
     MachOUnwindFunctionCounts Additional, uint64_t CommandBytes,
     const MachOUnwindRelocationLimits &Limits,
     llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
   const uint64_t AdditionalFunctions = Additional.Functions;
-  if (AdditionalEHBytes >
+  if (CommandBytes > limits::backend::kMaxMachOHeaderGrowthBytes ||
+      AdditionalEHBytes >
           ::neverd::limits::backend::
               kMachOLayoutGrowthReserveMachOSourceUnwindAdditionalEHBytesLimit ||
       AdditionalFunctions >
@@ -983,6 +1003,8 @@ static llvm::Expected<bool> reserveUnwindAndCommands(
     if (!Compact)
       return Compact.takeError();
   }
+  const auto FirstOffset =
+      unwindStorageBegin(Candidate, AdditionalEHBytes, CommandBytes);
   if (*Compact && (AdditionalFunctions || AdditionalEHBytes || CommandBytes))
     if (auto E = restoreTerminalDwarfBoundary(Candidate, A, **Compact))
       return E;
@@ -1003,12 +1025,13 @@ static llvm::Expected<bool> reserveUnwindAndCommands(
         llvm::consumeError(std::move(E));
         const uint64_t Capacity = llvm::alignTo(Required, alignof(uint64_t));
         if (tryPackAdjacentFrames(Candidate, A, R, Capacity, AdditionalEHBytes,
-                                  Limits))
+                                  FirstOffset, Limits))
           return Commit();
         // Adopt checked prefix growth before placing the compact registry.
         // The growth owner rebases its TEXT-relative records, so refresh the
         // payload instead of copying the pre-growth offsets into the new map.
-        if (growTextForMetadata(Candidate, A, Capacity, RecoveredData)) {
+        if (growTextForMetadata(Candidate, A, Capacity, FirstOffset,
+                                RecoveredData)) {
           auto Updated = findMachOCompactUnwindRegion(Candidate);
           if (!Updated)
             return Updated.takeError();
@@ -1022,7 +1045,7 @@ static llvm::Expected<bool> reserveUnwindAndCommands(
             return Raw.takeError();
         }
         auto Moved = moveTextSection(Candidate, A, kCompactSection,
-                                     Raw->OriginalBytes, Capacity);
+                                     Raw->OriginalBytes, Capacity, FirstOffset);
         if (!Moved)
           return Moved.takeError();
       }
@@ -1035,7 +1058,7 @@ static llvm::Expected<bool> reserveUnwindAndCommands(
           Candidate, A, kFrameSection,
           llvm::alignTo(AdditionalEHBytes + sizeof(uint32_t),
                         alignof(uint64_t)),
-          false, RecoveredData);
+          false, FirstOffset, RecoveredData);
       if (!Declared)
         return Declared.takeError();
       R = findMachOEHFrameRegion(Candidate);
@@ -1054,13 +1077,15 @@ static llvm::Expected<bool> reserveUnwindAndCommands(
           llvm::alignTo(R->AppendFileOff - R->SectionFileOff +
                             AdditionalEHBytes + sizeof(uint32_t),
                         alignof(uint64_t));
-      if (growTextForMetadata(Candidate, A, Capacity, RecoveredData)) {
+      if (growTextForMetadata(Candidate, A, Capacity, FirstOffset,
+                              RecoveredData)) {
         // The code VAs are stable but the old section moved in the file.
         R = findMachOEHFrameRegion(Candidate);
         if (!R)
           return fail(kLostFrameSection);
       }
-      const auto Storage = findTextMetadataStorage(Candidate, Capacity);
+      const auto Storage =
+          findTextMetadataStorage(Candidate, Capacity, FirstOffset);
       const uint64_t VA =
           Storage ? Storage->VA : P.plannedExecSegmentVA(Candidate, A);
       if (!VA)
@@ -1068,8 +1093,8 @@ static llvm::Expected<bool> reserveUnwindAndCommands(
       auto Frames = relocatedFrames(Candidate, *R, VA, Limits);
       if (!Frames)
         return Frames.takeError();
-      auto Moved =
-          moveTextSection(Candidate, A, kFrameSection, *Frames, Capacity);
+      auto Moved = moveTextSection(Candidate, A, kFrameSection, *Frames,
+                                   Capacity, FirstOffset);
       if (!Moved)
         return Moved.takeError();
       if (*Moved != VA)
@@ -1134,8 +1159,8 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
     return Compact.takeError();
   const auto H = parseMachOHeader(Binary.data(), Binary.size());
   const uint64_t HeaderEnd = uint64_t(H.HeaderSize) + H.SizeOfCmds;
-  uint64_t Bytes = llvm::alignTo(HeaderEnd + std::max(kMetadataCommandReserve,
-                                                      AdditionalCommandBytes),
+  uint64_t Bytes = llvm::alignTo(unwindStorageBegin(Binary, ExtraFrameBytes,
+                                                    AdditionalCommandBytes),
                                  alignof(uint64_t)) +
                    llvm::alignTo(*Compact, alignof(uint64_t));
   auto EH = findMachOEHFrameRegion(Binary);
@@ -1164,8 +1189,8 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
     return Prefix.takeError();
   if (!*Prefix)
     return fail(kUnwindPrefix);
-  Reserved = reserveMachOSourceUnwind(Candidate, A, ExtraFrameBytes, Additional,
-                                      {}, SlidData);
+  Reserved = reserveUnwindAndCommands(Candidate, A, ExtraFrameBytes, Additional,
+                                      AdditionalCommandBytes, {}, SlidData);
   if (!Reserved)
     return Reserved.takeError();
   SlidDependencies.emplace(std::move(*Before));

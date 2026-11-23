@@ -36,7 +36,9 @@ import_probe:
   or $16,$25,$zero
   or $17,$6,$zero
   or $18,$5,$zero
-#ifdef REPEAT_PRODUCER
+#if defined(CROSS_JOIN) || defined(CROSS_LOOP) || defined(MIXED_DIFFERENCE)
+  or $20,$6,$zero
+#elif defined(REPEAT_PRODUCER)
   or $20,$4,$zero
 #else
   or $20,$7,$zero
@@ -172,7 +174,102 @@ import_probe:
   bne $17,$zero,.Lrepeat
   nop
 .Lcheck_result:
-#ifdef RESULT_SPILL
+#if defined(CLEAR_BYTES)
+#if CLEAR_BYTES == 1
+  .irp offset,40,41,42,43,44,45,46,47
+    sb $zero,\offset($sp)
+  .endr
+#else
+  .irp offset,40,42,44,46
+    sh $zero,\offset($sp)
+  .endr
+#endif
+  bne $2,$18,.Ldone
+  or $4,$2,$zero
+#elif defined(GUARD_HALVES) || defined(RECHECK_LOW)
+  lwu $13,LOW_AT(40)($sp)
+  lwu $14,HIGH_AT(40)($sp)
+  sd $zero,40($sp)
+#ifdef RECHECK_LOW
+  bne $2,$18,.Ldone
+  nop
+  bne $13,$20,.Ldone
+  nop
+#else
+  dsrl32 $19,$18,0
+  dsll32 $24,$18,0
+  dsrl32 $24,$24,0
+#if defined(OR_DIFFERENCES) || defined(RECOMPUTE_DIFFERENCE) || defined(MIXED_DIFFERENCE)
+#ifdef MIXED_DIFFERENCE
+  beq $20,$zero,.Lsplit_difference
+  nop
+  b .Lmixed_zero
+  MIXED_DIFFERENCE $24,$18,$2
+.Lsplit_difference:
+#endif
+#ifdef RECOMPUTE_DIFFERENCE
+  xor $24,$2,$18
+#else
+  xor $24,$13,$24
+  xor $19,$14,$19
+  or $24,$24,$19
+#endif
+#ifdef MIXED_DIFFERENCE
+.Lmixed_zero:
+#endif
+#if SPILL_DIFFERENCE == 4
+  sw $24,40($sp)
+#elif SPILL_DIFFERENCE == 8
+  sd $24,40($sp)
+#endif
+#ifdef SPILL_DIFFERENCE
+  or $24,$zero,$zero
+#endif
+#ifdef CROSS_JOIN
+  beq $20,$zero,.Lcopy_difference
+  or $12,$24,$zero
+  b .Ltest_difference
+  nop
+.Lcopy_difference:
+  dsll32 $12,$24,0
+  dsrl32 $12,$12,0
+.Ltest_difference:
+  or $24,$12,$zero
+#elif defined(CROSS_LOOP)
+  beq $20,$zero,.Ltest_difference
+  nop
+.Lcarry_difference:
+  daddiu $20,$20,-1
+  bne $20,$zero,.Lcarry_difference
+#ifdef RECOMPUTE_DIFFERENCE
+  dsubu $24,$18,$2
+#else
+  nop
+#endif
+.Ltest_difference:
+#endif
+#if SPILL_DIFFERENCE == 4
+  lw $24,40($sp)
+#elif SPILL_DIFFERENCE == 8
+  ld $24,40($sp)
+#endif
+  bne $24,$zero,.Ldone
+  nop
+#elif defined(HIGH_FIRST)
+  bne $14,$19,.Ldone
+  nop
+  bne $13,$24,.Ldone
+  nop
+#else
+  bne $13,$24,.Ldone
+  nop
+  bne $14,$19,.Ldone
+  nop
+#endif
+#endif
+  dsll32 $14,$14,0
+  or $4,$14,$13
+#elif defined(RESULT_SPILL)
   check_spill
 #else
   bne $19,$18,.Ldone

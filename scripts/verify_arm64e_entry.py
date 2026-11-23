@@ -97,18 +97,34 @@ def image_base(text):
     return int(addresses[0], POLICY["hex_radix"])
 
 
-def check_unwind(text, dwarf, installed=None, base=0):
+def object_dwarf_entries(text):
+    symbols = {name: int(address, POLICY["hex_radix"])
+               for address, name in re.findall(POLICY["symbol_pattern"], text, re.MULTILINE)}
+    rows = {int(address, POLICY["hex_radix"]): int(encoding, POLICY["hex_radix"]) & POLICY["unwind_mode_mask"]
+            for address, encoding in re.findall(POLICY["object_unwind_pattern"], text, re.MULTILINE)}
+    indexed = set()
+    for name in exception_frames():
+        mode = rows.get(symbols.get(name))
+        if mode in POLICY["dwarf_unwind_modes"]:
+            indexed.add(name)
+        elif mode not in POLICY["compact_unwind_modes"]:
+            raise ValueError(POLICY["errors"]["unwind_records"].format(function=name))
+    return indexed
+
+
+def check_unwind(text, dwarf, installed=None, base=0, object_dwarf=()):
     symbols = {name: int(address, POLICY["hex_radix"])
                for address, name in re.findall(POLICY["symbol_pattern"], text, re.MULTILINE)}
     if installed is not None:
         symbols.update(installed)
     records = {base + int(address, POLICY["hex_radix"]): int(encoding, POLICY["hex_radix"])
                for address, encoding in re.findall(POLICY["unwind_pattern"], text)}
-    modes = (POLICY["dwarf_unwind_modes"] if dwarf else POLICY["compact_unwind_modes"])
     for name in exception_frames() + POLICY["native_exception_functions"]:
+        indexed = dwarf or name in object_dwarf
+        modes = POLICY["dwarf_unwind_modes"] if indexed else POLICY["compact_unwind_modes"]
         # Adjacent compact entries with the same encoding may be coalesced.
         starts = [address for address in records if address <= symbols.get(name, -1)]
-        if (not starts or (dwarf and symbols[name] not in records) or
+        if (not starts or (indexed and symbols[name] not in records) or
                 records[max(starts)] & POLICY["unwind_mode_mask"] not in modes):
             raise ValueError(POLICY["errors"]["unwind_records"].format(function=name))
 
@@ -247,7 +263,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
             # them before export so a failed CFI check also cleans partial output.
             environment.pop(POLICY["backend_environment"], None)
             if backend:
-                environment[POLICY["backend_environment"]] = POLICY["enabled_environment_value"]
+                environment[POLICY["backend_environment"]] = (POLICY["published_backend_export"] if publish
+                                                               else POLICY["enabled_environment_value"])
                 for name in (POLICY["backend_object"], POLICY["backend_dwarf_object"]):
                     products.append(output / name)
             command(POLICY["export_label"], [binary, POLICY["export_filter"],
@@ -286,6 +303,11 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                                     *POLICY["object_args"], original_ir,
                                                     POLICY["output_option"], original_obj])
                     object_identity = check_classic(obj)
+                    object_dwarf = set()
+                    if backend and publish and not dwarf:
+                        listing = command(obj.name + POLICY["object_unwind_suffix"],
+                                          [*POLICY["unwind_command"], obj])
+                        object_dwarf = object_dwarf_entries(listing.stdout)
                     for key in POLICY["keys"]:
                         fields = dict(optimization=optimization, key=key, dwarf=dwarf)
                         layout = publication_layout(optimization, dwarf, zero_base)
@@ -375,7 +397,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                             check_disassembly(assembly.stdout, key)
                         sections = command(label + POLICY["sections_suffix"],
                                            [*POLICY["sections_command"], library])
-                        check_sections(sections.stdout, dwarf)
+                        check_sections(sections.stdout, dwarf or bool(object_dwarf))
                         unwind = command(label + POLICY["unwind_suffix"],
                                          [*POLICY["unwind_command"], library])
                         base = image_base(sections.stdout)
@@ -383,7 +405,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                             raise ValueError(POLICY["errors"]["zero_base"])
                         if publish and layout.get("require_prefix") and base >= original_base:
                             raise ValueError(POLICY["errors"]["prefix"])
-                        check_unwind(unwind.stdout, dwarf, installed, base)
+                        check_unwind(unwind.stdout, dwarf, installed, base, object_dwarf)
                         row = {**fields, **check_classic(library),
                                "object": object_identity, "executed": False,
                                "publication_layout": layout if publish else None,

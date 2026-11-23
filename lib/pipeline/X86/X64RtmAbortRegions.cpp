@@ -60,6 +60,54 @@ std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,
   return Region;
 }
 
+namespace {
+/// Both owners issue the entire transaction in one compiler operation. EAX
+/// is the actual result, including an abort before XABORT is reached.
+void emitAbortPair(llvm::raw_ostream &OS, const X64RtmAbortRegion &Region) {
+  const auto Code = unsigned(Region.Bytes.back());
+  OS << "#if __has_builtin(__builtin_ia32_rtm_abort_pair)\n"
+        "        status=__builtin_ia32_rtm_abort_pair("
+     << Code
+     << ");\n#else\n"
+        "        __asm__ volatile(\"xbegin 1f; xabort $"
+     << Code
+     << "; 1:\" : \"=a\"(status) : : \"memory\",\"cc\");\n#endif\n"
+        "        state->GPR[0]=status;\n        state->PC=0x"
+     << llvm::utohexstr(Region.Fallback) << "ULL;\n";
+}
+
+llvm::json::Object receipt(const X64RtmAbortRegion &Region) {
+  return llvm::json::Object{
+      {"pc", "0x" + llvm::utohexstr(Region.Address)},
+      {"bytes", llvm::toHex(Region.Bytes)},
+      {"fallback", "0x" + llvm::utohexstr(Region.Fallback)},
+      {"abort_code", unsigned(Region.Bytes.back())}};
+}
+} // namespace
+
+llvm::json::Array emitX64RtmAbortSteps(llvm::raw_ostream &OS,
+                                       llvm::ArrayRef<X64RtmAbortStep> Steps) {
+  using Exit = analysis::X64ContinuationExitV1;
+  llvm::json::Array Receipts;
+  for (const auto &[Name, Region] : Steps) {
+    OS << "uint64_t " << Name
+       << "(uint8_t *raw) {\n"
+          "        uint64_t check="
+       << Name
+       << "_guard(raw);\n"
+          "        if (check!="
+       << uint64_t(Exit::NativeInstruction)
+       << ") return check;\n"
+          "        neverd_x64_state_v6 *state=(neverd_x64_state_v6 *)(void "
+          "*)raw;\n"
+          "        uint32_t status;\n";
+    emitAbortPair(OS, Region);
+    OS << "        return " << uint64_t(Exit::Jump) << ";\n}\n";
+    Receipts.push_back(receipt(Region));
+  }
+  return Receipts;
+}
+
 llvm::json::Array emitX64RtmAbortEnvironment(
     llvm::raw_ostream &OS, const BinaryImage &Image,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
@@ -86,7 +134,6 @@ int neverd_x64_rtm_abort_environment_v6(neverd_x64_state_v6 *state,
 )C";
   for (const auto &Region : Regions) {
     const auto PC = "0x" + llvm::utohexstr(Region.Address);
-    const auto Fallback = "0x" + llvm::utohexstr(Region.Fallback);
     OS << "    case " << PC
        << "ULL: {\n"
           "        uint32_t status;\n"
@@ -97,9 +144,6 @@ int neverd_x64_rtm_abort_environment_v6(neverd_x64_state_v6 *state,
           "        if ((uint32_t)info[0] < 7) return 0;\n"
           "        __builtin_ia32_cpuidex(info,7,0);\n"
           "        if (!((uint32_t)info[1] & (1U << 11))) return 0;\n"
-          "        status=__builtin_ia32_rtm_abort_pair("
-       << unsigned(Region.Bytes.back())
-       << ");\n"
           "#else\n"
           "        uint32_t a,b,c,d;\n"
           "        __asm__ volatile(\"cpuid\" : "
@@ -110,18 +154,10 @@ int neverd_x64_rtm_abort_environment_v6(neverd_x64_state_v6 *state,
           "\"=a\"(a),\"=b\"(b),\"=c\"(c),\"=d\"(d)\n"
           "                         : \"0\"(7),\"2\"(0) : \"cc\");\n"
           "        if (!(b & (1U << 11))) return 0;\n"
-          "        __asm__ volatile(\"xbegin 1f; xabort $"
-       << unsigned(Region.Bytes.back())
-       << "; 1:\" : \"=a\"(status) : : \"memory\",\"cc\");\n"
-          "#endif\n"
-          "        state->GPR[0]=status;\n"
-          "        state->PC="
-       << Fallback << "ULL;\n        return 1;\n    }\n";
-    Receipts.push_back(
-        llvm::json::Object{{"pc", PC},
-                           {"bytes", llvm::toHex(Region.Bytes)},
-                           {"fallback", Fallback},
-                           {"abort_code", unsigned(Region.Bytes.back())}});
+          "#endif\n";
+    emitAbortPair(OS, Region);
+    OS << "        return 1;\n    }\n";
+    Receipts.push_back(receipt(Region));
   }
   OS << "    default: return 0;\n    }\n}\n";
   return Receipts;

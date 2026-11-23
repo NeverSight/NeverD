@@ -8,12 +8,19 @@
 
 #include "neverd/sdk/NeverDCAPI.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/DebugInfo/DWARF/DWARFDebugFrame.h"
+#include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
@@ -22,6 +29,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <optional>
+#include <string>
 
 namespace {
 #define MACHO_AUTH_NATIVE_TEXT(Name, Value) constexpr char Name[] = Value;
@@ -30,7 +38,12 @@ namespace {
   constexpr llvm::StringLiteral Name[] = {__VA_ARGS__};
 #include "lift/format/MachOAuthenticatedNativeFixtures.def"
 
-enum class ArtifactProfile { GeneratedIR, NativeObject, IncompatibleCFI };
+enum class ReturnCFI { Native, Normalize, Reject };
+struct ArtifactProfile {
+  const char *CompilerArg = nullptr;
+  bool Generated = false;
+  ReturnCFI Rule = ReturnCFI::Native;
+};
 class SourcePatchArm64e : public testing::TestWithParam<ArtifactProfile> {};
 
 TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
@@ -38,8 +51,7 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
   GTEST_SKIP() << kMissingHost;
 #else
   const auto *IRCompiler = std::getenv(kIRCompilerEnvironment);
-  const bool Generated = GetParam() == ArtifactProfile::GeneratedIR;
-  const bool Incompatible = GetParam() == ArtifactProfile::IncompatibleCFI;
+  const auto [CompilerArg, Generated, Rule] = GetParam();
   if (Generated && !IRCompiler)
     GTEST_SKIP() << kMissingIRCompiler;
   llvm::SmallString<kPathCapacity> Directory;
@@ -104,11 +116,9 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
   Options.compiler_path = Generated ? IRCompiler : kCompiler;
   Options.artifact = Generated ? NEVERD_SOURCE_PATCH_ARTIFACT_IR
                                : NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT;
-  const char *CompilerArgs[] = {Incompatible ? kExplicitReturnCFIOption
-                                             : kDwarfLanguageOption};
-  if (Generated || Incompatible) {
-    Options.compiler_args = CompilerArgs;
-    Options.compiler_arg_count = std::size(CompilerArgs);
+  if (CompilerArg) {
+    Options.compiler_args = &CompilerArg;
+    Options.compiler_arg_count = 1;
   }
   Options.mappings = Mappings;
   Options.mapping_count = std::size(Mappings);
@@ -123,20 +133,16 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
   auto After = llvm::MemoryBuffer::getFile(Original);
   ASSERT_TRUE(bool(After));
   EXPECT_EQ((*After)->getBuffer(), (*Before)->getBuffer());
-  if (Incompatible || (Generated && !Result &&
-                       llvm::StringRef(neverd_last_error(Session))
-                           .contains(kClassicReturnCFIDiagnostic))) {
+  if (Rule == ReturnCFI::Reject) {
     EXPECT_EQ(Result, 0);
     EXPECT_FALSE(llvm::sys::fs::exists(Output));
     EXPECT_TRUE(llvm::StringRef(neverd_last_error(Session))
                     .contains(kClassicReturnCFIDiagnostic));
-    if (Generated)
-      GTEST_SKIP() << kMissingCompatibleIRProducer;
     return;
   }
   ASSERT_EQ(Result, 1) << neverd_last_error(Session);
   EXPECT_TRUE(llvm::sys::fs::exists(Output));
-  if (Generated) {
+  if (Generated || Rule == ReturnCFI::Normalize) {
     auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
     ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
     bool Found = false;
@@ -146,6 +152,26 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
       Found |= *Name == kEHFrameSection && Section.getSize() != 0;
     }
     EXPECT_TRUE(Found);
+    if (Rule == ReturnCFI::Normalize) {
+      auto Debug = llvm::DWARFContext::create(*Installed->getBinary());
+      auto Frames = Debug->getEHFrame();
+      ASSERT_TRUE(bool(Frames)) << llvm::toString(Frames.takeError());
+      bool FoundOperand = false;
+      for (const auto &Frame : (*Frames)->entries()) {
+        const auto &CFI = Frame.cfis();
+        if (llvm::none_of(CFI, [](const auto &I) {
+              return I.Opcode == llvm::dwarf::DW_CFA_GNU_args_size &&
+                     I.Ops.front() == kClassicCFIOperand;
+            }))
+          continue;
+        EXPECT_FALSE(FoundOperand);
+        FoundOperand = true;
+        EXPECT_TRUE(llvm::none_of(CFI, [](const auto &I) {
+          return I.Opcode == llvm::dwarf::DW_CFA_AARCH64_negate_ra_state;
+        }));
+      }
+      EXPECT_TRUE(FoundOperand);
+    }
   }
   EXPECT_EQ(neverd_patch_source(Session, kObjectSource,
                                 sizeof(kObjectSource) - 1, &Options,
@@ -154,8 +180,263 @@ TEST_P(SourcePatchArm64e, SourceCompilerEnforcesAuthenticatedProviderABI) {
 #endif
 }
 
-INSTANTIATE_TEST_SUITE_P(Native, SourcePatchArm64e,
-                         ::testing::Values(ArtifactProfile::GeneratedIR,
-                                           ArtifactProfile::NativeObject,
-                                           ArtifactProfile::IncompatibleCFI));
+class SourcePatchArm64eSDK : public testing::Test {
+protected:
+  llvm::SmallString<kPathCapacity> Directory;
+  neverd_session_t Session = nullptr;
+  neverd_source_patch_mapping_v1 Mapping{kBindingEntry, 0};
+  neverd_source_patch_binding_v1 Binding{
+      kBindingRetained, NEVERD_SOURCE_BIND_READ_ONLY_DATA, 0, sizeof(int)};
+
+  std::string path(llvm::StringRef Name) const {
+    auto Value = Directory;
+    llvm::sys::path::append(Value, Name);
+    return Value.str().str();
+  }
+
+  void SetUp() override {
+#ifndef __APPLE__
+    GTEST_SKIP() << kMissingHost;
+#else
+    ASSERT_FALSE(
+        llvm::sys::fs::createUniqueDirectory(kObjectArtifactPrefix, Directory));
+    const auto Source = path(kSourceFile);
+    const auto Original = path(kOriginalFile);
+    std::error_code Error;
+    llvm::raw_fd_ostream OS(Source, Error);
+    ASSERT_FALSE(Error);
+    OS << kLegacyBindingImage;
+    OS.close();
+    ASSERT_FALSE(OS.has_error());
+    llvm::SmallVector<llvm::StringRef> Args{kCompiler};
+    Args.append(std::begin(kBoundImageArgs), std::end(kBoundImageArgs));
+    Args.append({kO0, Source});
+    Args.append(std::begin(kOutputArgs), std::end(kOutputArgs));
+    Args.push_back(Original);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Args, std::nullopt, {},
+                                        kToolTimeout),
+              0);
+    auto Before = llvm::object::ObjectFile::createObjectFile(Original);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    for (const auto &Symbol : Before->getBinary()->symbols()) {
+      auto Name = Symbol.getName();
+      ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+      if (*Name != kBindingEntrySymbol && *Name != kBindingBiasSymbol)
+        continue;
+      auto Address = Symbol.getAddress();
+      ASSERT_TRUE(bool(Address)) << llvm::toString(Address.takeError());
+      if (*Name == kBindingEntrySymbol)
+        Mapping.original_va = *Address;
+      else
+        Binding.original_va = *Address;
+    }
+    ASSERT_NE(Mapping.original_va, 0u);
+    ASSERT_NE(Binding.original_va, 0u);
+    Session = neverd_session_create();
+    ASSERT_NE(Session, nullptr);
+    ASSERT_EQ(neverd_session_load(Session, Original.c_str()), 1)
+        << neverd_last_error(Session);
+#endif
+  }
+
+  void TearDown() override {
+    if (Session)
+      neverd_session_destroy(Session);
+    if (!Directory.empty())
+      EXPECT_FALSE(llvm::sys::fs::remove_directories(Directory));
+  }
+
+  neverd_source_patch_options_v1 options() const {
+    neverd_source_patch_options_v1 Options{};
+    Options.struct_size = sizeof(Options);
+    Options.language = NEVERD_SOURCE_PATCH_C;
+    Options.compiler_path = kCompiler;
+    Options.mappings = &Mapping;
+    Options.mapping_count = 1;
+    return Options;
+  }
+};
+
+TEST_F(SourcePatchArm64eSDK, InstallsLegacyIRWithDeferredDataBinding) {
+  const char *Flags[] = {kFreestandingSource};
+  auto Options = options();
+  Options.compiler_args = Flags;
+  Options.compiler_arg_count = std::size(Flags);
+  Options.bindings = &Binding;
+  Options.binding_count = 1;
+  const neverd_source_patch_dependency_v1 Provider{
+      kProviderLibrary, kProviderFunction, NEVERD_SOURCE_DEPENDENCY_FUNCTION};
+  Options.dependencies = &Provider;
+  Options.dependency_count = 1;
+  for (auto Artifact :
+       {NEVERD_SOURCE_PATCH_ARTIFACT_IR, NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT}) {
+    SCOPED_TRACE(Artifact);
+    Options.artifact = Artifact;
+    const auto Output =
+        path(Artifact == NEVERD_SOURCE_PATCH_ARTIFACT_IR ? kInstalledFile
+                                                         : kBoundObjectOutput);
+    ASSERT_EQ(neverd_patch_source(Session, kLegacyBindingSource,
+                                  sizeof(kLegacyBindingSource) - 1, &Options,
+                                  Output.c_str()),
+              1)
+        << neverd_last_error(Session);
+    auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
+    ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+    const auto *MachO =
+        llvm::dyn_cast<llvm::object::MachOObjectFile>(Installed->getBinary());
+    ASSERT_NE(MachO, nullptr);
+    bool Descriptors = false, Template = false, Initializers = false;
+    for (const auto &S : MachO->sections()) {
+      const auto Type = MachO->getSection64(S.getRawDataRefImpl()).flags &
+                        llvm::MachO::SECTION_TYPE;
+      Descriptors |= Type == llvm::MachO::S_THREAD_LOCAL_VARIABLES;
+      Template |= Type == llvm::MachO::S_THREAD_LOCAL_REGULAR;
+      Initializers |= Type == llvm::MachO::S_INIT_FUNC_OFFSETS;
+    }
+    EXPECT_TRUE(Descriptors);
+    EXPECT_TRUE(Template);
+    EXPECT_TRUE(Initializers);
+    unsigned Providers = 0;
+    for (const auto &LC : MachO->load_commands()) {
+      if (LC.C.cmd != llvm::MachO::LC_LOAD_DYLIB)
+        continue;
+      const auto D = MachO->getDylibIDLoadCommand(LC);
+      ASSERT_LT(D.dylib.name, LC.C.cmdsize);
+      const auto Payload =
+          llvm::StringRef(LC.Ptr, LC.C.cmdsize).drop_front(D.dylib.name);
+      Providers += Payload.split('\0').first == kProviderLibrary;
+    }
+    EXPECT_EQ(Providers, 1u);
+    std::optional<uint64_t> FinalVA;
+    for (const auto &Symbol : Installed->getBinary()->symbols()) {
+      auto Name = Symbol.getName();
+      ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+      if (*Name != kBindingBiasSymbol)
+        continue;
+      auto Address = Symbol.getAddress();
+      ASSERT_TRUE(bool(Address)) << llvm::toString(Address.takeError());
+      FinalVA = *Address;
+    }
+    ASSERT_TRUE(FinalVA.has_value());
+    EXPECT_GT(*FinalVA, Binding.original_va);
+    const char *Text = neverd_patch_source_report(Session);
+    ASSERT_NE(Text, nullptr);
+    const auto Release = llvm::scope_exit([&] { neverd_free_string(Text); });
+    auto Receipt = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(Receipt)) << llvm::toString(Receipt.takeError());
+    ASSERT_NE(Receipt->getAsObject(), nullptr);
+    const auto *Rows = Receipt->getAsObject()->getArray(kBindingRows);
+    ASSERT_NE(Rows, nullptr);
+    ASSERT_EQ(Rows->size(), 1u);
+    ASSERT_NE(Rows->front().getAsObject(), nullptr);
+    EXPECT_EQ(Rows->front().getAsObject()->getInteger(kBoundAddressField),
+              *FinalVA);
+  }
+}
+
+TEST_F(SourcePatchArm64eSDK, ReservesTheFirstGOTSlotForCodeOnlyObjects) {
+  const neverd_source_patch_dependency_v1 Data{kProviderLibrary, kProviderData,
+                                               NEVERD_SOURCE_DEPENDENCY_DATA};
+  auto Options = options();
+  const char *Flags[] = {kFreestandingSource};
+  Options.compiler_args = Flags;
+  Options.compiler_arg_count = std::size(Flags);
+  Options.dependencies = &Data;
+  Options.dependency_count = 1;
+  for (auto Artifact :
+       {NEVERD_SOURCE_PATCH_ARTIFACT_IR, NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT}) {
+    SCOPED_TRACE(Artifact);
+    Options.artifact = Artifact;
+    const auto Output =
+        path(Artifact == NEVERD_SOURCE_PATCH_ARTIFACT_IR ? kInstalledFile
+                                                         : kBoundObjectOutput);
+    ASSERT_EQ(neverd_patch_source(Session, kGOTOnlySource,
+                                  sizeof(kGOTOnlySource) - 1, &Options,
+                                  Output.c_str()),
+              1)
+        << neverd_last_error(Session);
+    auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
+    ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+    const auto &MachO =
+        llvm::cast<llvm::object::MachOObjectFile>(*Installed->getBinary());
+    size_t Slots = 0;
+    for (const auto &Section : MachO.sections()) {
+      auto Segment =
+          MachO.getSectionFinalSegmentName(Section.getRawDataRefImpl());
+      EXPECT_NE(Segment, kNewDataSegment);
+      if (Segment == kNewConstSegment) {
+        EXPECT_EQ(Section.getSize(), kPointerBytes);
+        ++Slots;
+      }
+    }
+    EXPECT_EQ(Slots, 1u);
+  }
+}
+
+TEST_F(SourcePatchArm64eSDK, RegistersPrioritizedIRDestructorsWithLibSystem) {
+  const neverd_source_patch_dependency_v1 Record{
+      kProviderLibrary, kRecordEvent, NEVERD_SOURCE_DEPENDENCY_FUNCTION};
+  auto Options = options();
+  Options.input_kind = NEVERD_SOURCE_PATCH_LLVM_IR;
+  Options.dependencies = &Record;
+  Options.dependency_count = 1;
+  const auto Output = path(kInstalledFile);
+  ASSERT_EQ(neverd_patch_source(Session, kDarwinDestructorIR,
+                                sizeof(kDarwinDestructorIR) - 1, &Options,
+                                Output.c_str()),
+            1)
+      << neverd_last_error(Session);
+  auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
+  ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+  const auto &MachO =
+      llvm::cast<llvm::object::MachOObjectFile>(*Installed->getBinary());
+  std::optional<uint64_t> HeaderVA;
+  for (const auto &Command : MachO.load_commands()) {
+    if (Command.C.cmd != llvm::MachO::LC_SEGMENT_64)
+      continue;
+    const auto Segment = MachO.getSegment64LoadCommand(Command);
+    if (Segment.fileoff == 0 && Segment.filesize)
+      HeaderVA = Segment.vmaddr;
+  }
+  ASSERT_TRUE(HeaderVA.has_value());
+  llvm::SmallVector<uint64_t> Entries;
+  for (const auto &Section : MachO.sections()) {
+    const auto Flags = MachO.getSection64(Section.getRawDataRefImpl()).flags;
+    const auto Type = Flags & llvm::MachO::SECTION_TYPE;
+    EXPECT_NE(Type, llvm::MachO::S_MOD_TERM_FUNC_POINTERS);
+    if (Type != llvm::MachO::S_INIT_FUNC_OFFSETS)
+      continue;
+    EXPECT_EQ(Flags & (llvm::MachO::S_ATTR_SOME_INSTRUCTIONS |
+                       llvm::MachO::S_ATTR_PURE_INSTRUCTIONS),
+              0u);
+    auto Bytes = Section.getContents();
+    ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+    ASSERT_EQ(Bytes->size() % sizeof(uint32_t), 0u);
+    for (size_t I = 0; I < Bytes->size(); I += sizeof(uint32_t))
+      Entries.push_back(*HeaderVA +
+                        llvm::support::endian::read32le(Bytes->data() + I));
+  }
+  ASSERT_EQ(Entries.size(), kRegisteredInitializers);
+  for (uint64_t VA : Entries)
+    EXPECT_TRUE(llvm::any_of(MachO.sections(), [&](const auto &Section) {
+      const auto S = MachO.getSection64(Section.getRawDataRefImpl());
+      return VA >= S.addr && VA - S.addr < S.size &&
+             (S.flags & llvm::MachO::S_ATTR_SOME_INSTRUCTIONS);
+    })) << VA;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Native, SourcePatchArm64e,
+    ::testing::Values(
+        ArtifactProfile{kDwarfLanguageOption, true}, ArtifactProfile{},
+        ArtifactProfile{kExplicitReturnCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kClassicReturnCFIOption, false, ReturnCFI::Normalize},
+        ArtifactProfile{kWrongKeyCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kMixedReturnCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kClassicAsyncCFIOption, false, ReturnCFI::Normalize},
+        ArtifactProfile{kRegisterTailCFIOption, false, ReturnCFI::Normalize},
+        ArtifactProfile{kOpaqueTailCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kMultiExitCFIOption, false, ReturnCFI::Normalize},
+        ArtifactProfile{kMissingRestoreCFIOption, false, ReturnCFI::Reject},
+        ArtifactProfile{kWrongEpilogueCFIOption, false, ReturnCFI::Reject}));
 } // namespace

@@ -57,7 +57,7 @@ static void *waiter(void *arg) {
   s->out[1] = (unsigned)*__errno();
   clock_gettime(1, s->out + 2);
   int epoll = s->route == 2 || s->route == 3 || s->route == 5;
-  if ((long)s->out[0] > 0) {
+  if (!epoll || (long)s->out[0] > 0) {
     s->out[4] = epoll ? event.events : p.revents;
     s->out[5] = epoll ? event.data : 0;
   }
