@@ -69,16 +69,24 @@ SAVED_VALUE(auto, kCompactPairCases,
             }}))
 
 SAVED_TEXT(kIndexedPeer, "leaf_indexed_cleanup")
+SAVED_TEXT(kSecondIndexedSymbol, "_leaf_second_cleanup")
+SAVED_TEXT(kFirstIndexedSymbol, "_leaf_indexed_cleanup")
+SAVED_TEXT(kSharedCleanupFlag, "-DTEST_SHARED_CLEANUP")
+SAVED_TEXT(kDistinctCleanupFlag, "-DTEST_DISTINCT_CLEANUP")
+SAVED_TEXT(kMixedPublications, "published_mixed_cleanup_images")
+SAVED_TEXT(kRepublished, "republished.dylib")
+SAVED_VALUE(uint32_t, kSigningInstruction, 0xdac1a7fe)
 SAVED_TEXT(kIndexedPeerBody, R"asm(
 .text
-.globl _leaf_indexed_cleanup
+.macro indexed_cleanup name, table, emit, shift
+.globl \name
 .p2align 2
-_leaf_indexed_cleanup:
-Lpeer_begin:
+\name:
+Lpeer_begin\@:
 .cfi_startproc
 .cfi_b_key_frame
 .cfi_personality 155, ___gxx_personality_v0
-.cfi_lsda 16, Lpeer_lsda
+.cfi_lsda 16, \table
   pacibsp
   stp x29, x30, [sp, #-16]!
   mov x29, sp
@@ -86,28 +94,40 @@ Lpeer_begin:
 .cfi_offset x30, -8
 .cfi_offset x29, -16
 .cfi_escape 0x2e, 0
-Lpeer_guard:
+.if \shift
+  mov x0, x0
+.endif
+Lpeer_guard\@:
   add x0, x0, x1
-Lpeer_guard_end:
+Lpeer_guard_end\@:
   ldp x29, x30, [sp], #16
   retab
-Lpeer_cleanup:
+Lpeer_cleanup\@:
   ldp x29, x30, [sp], #16
   autibsp
   b __Unwind_Resume
 .cfi_endproc
+.if \emit
 .pushsection __TEXT,__gcc_except_tab
 .p2align 2
-Lpeer_lsda:
+\table:
 .byte 255, 255, 1
-.uleb128 Lpeer_sites_end-Lpeer_sites
-Lpeer_sites:
-.uleb128 Lpeer_guard-Lpeer_begin
-.uleb128 Lpeer_guard_end-Lpeer_guard
-.uleb128 Lpeer_cleanup-Lpeer_begin
+.uleb128 Lpeer_sites_end\@-Lpeer_sites\@
+Lpeer_sites\@:
+.uleb128 Lpeer_guard\@-Lpeer_begin\@
+.uleb128 Lpeer_guard_end\@-Lpeer_guard\@
+.uleb128 Lpeer_cleanup\@-Lpeer_begin\@
 .byte 0
-Lpeer_sites_end:
+Lpeer_sites_end\@:
 .popsection
+.endif
+.endm
+indexed_cleanup _leaf_indexed_cleanup, GCC_except_table_peer, 1, 0
+#ifdef TEST_SHARED_CLEANUP
+indexed_cleanup _leaf_second_cleanup, GCC_except_table_peer, 0, 0
+#elif defined(TEST_DISTINCT_CLEANUP)
+indexed_cleanup _leaf_second_cleanup, GCC_except_table_second, 1, 1
+#endif
 )asm")
 
 // The frame pointer anchors the unwind recipe independently of a further
@@ -324,6 +344,9 @@ Lend\@:
 #ifdef TEST_LANGUAGE_FRAME
 .pushsection __TEXT,__gcc_except_tab
 .p2align 2
+#if defined(TEST_SHARED_CLEANUP) || defined(TEST_DISTINCT_CLEANUP)
+GCC_except_table_\name:
+#endif
 Lexception\@:
 .byte 255, 255, 1
 .uleb128 Lsites_end\@-Lsites\@

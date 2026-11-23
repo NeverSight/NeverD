@@ -65,6 +65,12 @@ void attachLSDA(const BinaryImage &Img, const dwarf_eh::PointerBases &Bases,
   Req.LSDAVA = LSDAVA;
   Req.FunctionStart = F.CodeRange.Begin;
   Req.FunctionEnd = F.CodeRange.End;
+  // Compact lookup can include padding before the next entry. An indexed FDE
+  // owns its LSDA's code extent, as does a supplemental FDE supplying the
+  // only language table. A native compact recipe can own its own LSDA.
+  if (F.Dwarf && F.Compact &&
+      (F.Compact->Kind == CompactUnwindKind::DwarfFDE || !F.Compact->LSDAVA))
+    Req.FunctionEnd = F.Dwarf->InitialLocation + F.Dwarf->AddressRange;
   Req.Personality = F.Personality;
   Req.IsSJLJ = isSJLJPersonality(F.Personality);
   dwarf_eh::PointerBases LSDABases = Bases;

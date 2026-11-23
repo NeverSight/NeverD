@@ -1763,7 +1763,10 @@ every GPR and D-register save, the PC-dependent signing row and the
 `PACIBSPPC` instruction must agree before publication uses mode 5. For a
 compact-only image this check uses private storage. Mixed
 images retain the indexed functions and relocate their CIE back-references,
-personality slots, LSDA fields and compact DWARF indexes.
+personality slots, LSDA fields and compact DWARF indexes. Each indexed FDE
+bounds its own guarded ranges and landing pads, including when multiple
+functions share a language table. The compact lookup can extend past that
+FDE to the next entry.
 
 The Xcode 27 diagnostic reproduced a transport difference: the input object
 contained `0x05002515`, but the Apple-linked image contained `0x04000515`.
@@ -2281,10 +2284,10 @@ published signed images. They explicitly sign execution copies after publication
 strictly verify them and recover the execution plans again from those copies;
 the unsigned source fixture remains unchanged through publication. They separately count normal calls, caller resumptions
 and public system-unwinder steps. Six classic compact signal controls also
-exercise the saved-LR system-step path on ordinary arm64e hosts. Unsupported
-hardware still reports zero
-native PAuth_LR executions. The r6 prebuilt remains unchanged and skips these
-four cases because its MC producer lacks mode-5 support.
+exercise the saved-LR system-step path on ordinary arm64e hosts. Hosts without
+the feature report zero native PAuth_LR executions. The original r6 baseline
+skipped four cases. The same r6 prebuilt now runs their structural checks
+using its verified DWARF fallback. [PR #2506](https://github.com/NeverSight/NeverD/pull/2506)
 
 The aggregate probe qualifies only the checked environment controls. It does
 not establish complete arm64e instruction, arbitrary-image publication or
