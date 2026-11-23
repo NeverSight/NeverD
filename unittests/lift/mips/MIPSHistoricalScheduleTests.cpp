@@ -1411,6 +1411,50 @@ TEST(MIPSHistoricalScheduling, R3051ResetVectorFetchesMatchBusCapture) {
   }
 }
 
+// Crescent Heart R4300 and R4XXX manuals, figure 4.3 in each. The timing
+// acquisitions identify the first vector read; these listings supply the
+// words fetched from the vector, its delay slot, and the branch target.
+TEST(MIPSHistoricalScheduling, R4300AndR4600BootFetchesMatchBusCaptures) {
+  constexpr uint64_t ResetPC = UINT64_C(0xffffffffbfc00000);
+  constexpr uint32_t Initial = 0x12345678;
+  struct BootFetch {
+    uint32_t Jump, Slot;
+    uint64_t Target;
+    uint32_t TargetWord, ExpectedK0, ExpectedV0;
+  };
+  constexpr BootFetch Captures[] = {
+      {0x0bf00158, 0x0000d021, UINT64_C(0xffffffffbfc00560), 0x00000021, 0,
+       Initial},
+      {0x0bf000e2, 0x00000000, UINT64_C(0xffffffffbfc00388), 0x3c022001,
+       Initial, 0x20010000}};
+  for (const auto &Capture : Captures) {
+    SCOPED_TRACE(Capture.Target);
+    for (const auto A : {Arch::MIPS64, Arch::MIPS64EL}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      auto Img = image(A, 3);
+      const auto Ops = lift(Img, ResetPC, {Capture.Jump, Capture.Slot});
+      ASSERT_FALSE(Ops.empty());
+      ASSERT_EQ(Ops.back().Opcode, NdOp::BRANCH);
+      ASSERT_TRUE(Ops.back().Inputs[0].isConst());
+      const auto Destination = Ops.back().Inputs[0].Offset;
+      ASSERT_EQ(Destination, Capture.Target);
+
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::K0, Initial);
+      E.setRegister(mipsreg::V0, Initial);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(3, {});
+      ASSERT_TRUE(execute(Ops, E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::K0), Capture.ExpectedK0);
+      const auto TargetOps = lift(Img, Destination, {Capture.TargetWord});
+      ASSERT_FALSE(TargetOps.empty());
+      ASSERT_TRUE(execute(TargetOps, E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), Capture.ExpectedV0);
+    }
+  }
+}
+
 void data(BinaryImage &Img) {
   Segment S;
   S.VA = 0x2000;

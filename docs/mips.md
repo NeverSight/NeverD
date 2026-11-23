@@ -1657,6 +1657,36 @@ after detection. The analyzer listing begins at the read.
 [IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf),
 [R3051 hardware manual, chapter 10, Reset Behavior](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/cpu/mips/r3051.pdf#page=131).
 
+Crescent Heart recorded reset release and the first boot instruction read on
+the same asynchronous logic-analyzer timebase for two MIPS III processors.
+Each interval starts at the rising edge of `ResetB` and ends when the CPU
+first presents the read on its external bus.
+
+| Processor | First request in figure 5.1 | Time from reset release | Range read from the published pixels |
+| --- | --- | ---: | ---: |
+| R4300 | `PValidB` falls on the first `ReadReq` | 200 ns | 196–204 ns |
+| R4600 | `ValidOutB` falls on the four-byte read of `0x1fc00000` | 64 ns | 62–66 ns |
+
+The R4300 capture also shows the ROM response `0x0bf00158`. Its cursors at
+238 and 598 ns identify the request and response transactions. The first
+request edge precedes the 238 ns cursor. On the R4600 the CPU holds the
+request while the board is busy. The ranges reflect the resolution of the
+published waveforms. Board wait states, pipeline fetch and instruction
+retirement are separate events. Figure 4.3 of each manual supplies the boot
+jump, delay slot and target words used by the big- and little-endian lift
+tests. The tests exercise both byte encodings of each observed word sequence.
+[R4300 probe manual, figure 5.1](https://archive.org/download/manualzilla-id-5722005/5722005.pdf#page=47),
+[R4XXX probe manual, R4600 figure 5.1](https://web.archive.org/web/20030728054757id_/http://www.c-h-s.com/r4xxxps.pdf#page=58).
+
+To reproduce the intervals, download both linked manuals and run the
+[waveform reader](../unittests/lift/mips/historical-reset-capture.py) with
+Python and PyMuPDF. It checks each PDF's SHA-256 and reports the pixels
+bracketing both transitions and their separation in nanoseconds.
+
+```sh
+python3 unittests/lift/mips/historical-reset-capture.py r4300ps.pdf r4xxxps.pdf
+```
+
 A separate PlayStation logic-analyzer observation identifies the boot ROM
 timing change after the BIOS writes the memory controller. The fetch at
 `0xbfc00014` still uses the reset wait states, and `0xbfc00018` uses the
