@@ -861,8 +861,8 @@ inline constexpr int kMedABIPassSupportResolveIndirectTargetAddrDepthLimit = 16;
 inline constexpr int kMedABIPassSupportPeelCopyDefIndexDepthLimit = 16;
 inline constexpr int kMedABIPassSupportResolveIndirectTargetArgIdxDepthLimit =
     16;
-/// The blocks behind an indirect call goAssemblyCallsPlatformCode follows
-/// the call's target through, each the only one that leads to the next.
+/// How many blocks back from an indirect call goAssemblyCallsPlatformCode
+/// numbers values to find the load that defines the call's target.
 inline constexpr unsigned kGoIndirectCallTargetBlocks = 8;
 inline constexpr int kMedABIPassSupportAuthenticatedStackOffsetDepthLimit = 128;
 inline constexpr int kMedABIPassSupportPreservesSpillAcrossCallDepthLimit = 16;

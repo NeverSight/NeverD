@@ -214,40 +214,53 @@ bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
       Blocks[Block].Ops[Call].Opcode != NdOp::INDIR_CALL ||
       Blocks[Block].Ops[Call].NumInputs < 1)
     return false;
-  // The blocks the call's block is reached through, each from the one
-  // before it alone, earliest first.
-  llvm::SmallVector<const LowBlock *, 8> Path{&Blocks[Block]};
-  while (Path.size() <= limits::ir::kGoIndirectCallTargetBlocks) {
-    const LowBlock &First = *Path.back();
-    if (First.Preds.size() != 1 || !First.ExceptionalPreds.empty())
-      break;
-    const auto Before = llvm::find_if(
-        Blocks, [&](const LowBlock &B) { return B.Id == First.Preds.front(); });
-    if (Before == Blocks.end() || llvm::is_contained(Path, &*Before))
-      break;
-    Path.push_back(&*Before);
+  // The blocks behind the call, as far back as the limit, by index.
+  std::map<int, size_t> IndexOf;
+  for (size_t I = 0; I < Blocks.size(); ++I)
+    IndexOf.emplace(Blocks[I].Id, I);
+  std::map<size_t, unsigned> Depth{{Block, 0}};
+  for (std::vector<size_t> Work{Block}; !Work.empty();) {
+    const size_t At = Work.back();
+    Work.pop_back();
+    if (Depth[At] >= limits::ir::kGoIndirectCallTargetBlocks)
+      continue;
+    for (const int Pred : Blocks[At].Preds)
+      if (const auto It = IndexOf.find(Pred); It != IndexOf.end())
+        if (Depth.try_emplace(It->second, Depth[At] + 1).second)
+          Work.push_back(It->second);
   }
-  // Each register and temporary holds a numbered value; a copy keeps the
-  // number, any other operation gives its result a new one, and a load's
-  // result remembers the number of the address it read.
+  // Each register and temporary holds a numbered value.  A copy keeps the
+  // number and any other operation gives its result its own; a load's
+  // result remembers the number of the address it read.  A register no
+  // operation has written since the last point that changed them all, the
+  // edge of these blocks, a call or a join of blocks that disagree, holds
+  // the value that point gave it.
   using Key = std::pair<VnodeSpace, uint64_t>;
-  std::map<Key, unsigned> Values;
-  std::map<unsigned, unsigned> LoadedFrom;
-  unsigned Next = 0;
-  const auto ValueOf = [&](const NdVar &V) {
-    const auto [It, New] = Values.try_emplace(Key{V.Space, V.Offset}, Next);
-    Next += New;
-    return It->second;
+  struct State {
+    std::map<Key, unsigned> Known;
+    unsigned Since = 0;
+    bool operator==(const State &) const = default;
+  };
+  enum : unsigned { Held, Result, Edge, AfterCall, Join, Merged };
+  std::map<std::tuple<unsigned, size_t, size_t, Key>, unsigned> Numbers;
+  const auto Number = [&](unsigned Kind, size_t A, size_t B, Key K = {}) {
+    return Numbers.try_emplace({Kind, A, B, K}, Numbers.size()).first->second;
+  };
+  const auto ValueOf = [&](const State &S, const NdVar &V) {
+    const Key K{V.Space, V.Offset};
+    if (const auto It = S.Known.find(K); It != S.Known.end())
+      return It->second;
+    return Number(Held, S.Since, 0, K);
   };
   const uint64_t Word = getTargetRegInfo(Img.Arch).PointerSize;
-  for (const LowBlock *At : llvm::reverse(Path)) {
-    const size_t End = At == &Blocks[Block] ? Call : At->Ops.size();
+  std::map<unsigned, unsigned> LoadedFrom;
+  const auto Run = [&](State &S, size_t At, size_t End) {
     for (size_t I = 0; I < End; ++I) {
-      const LowOp &Op = At->Ops[I];
+      const LowOp &Op = Blocks[At].Ops[I];
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         // A call may change any register, and may return the target.
-        Values.clear();
-        LoadedFrom.clear();
+        S.Known.clear();
+        S.Since = Number(AfterCall, At, I);
         continue;
       }
       if (!Op.Output.isReg() && !Op.Output.isTemp())
@@ -263,23 +276,90 @@ bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
             Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
             Op.Inputs[1].Offset == 0));
       if (Same) {
-        Values[Out] = ValueOf(Op.Inputs[0]);
-      } else if (Whole && Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-                 Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-        const unsigned Address = ValueOf(Op.Inputs[0]);
-        Values[Out] = Next;
-        LoadedFrom[Next++] = Address;
+        const unsigned Value = ValueOf(S, Op.Inputs[0]);
+        S.Known[Out] = Value;
       } else {
-        Values[Out] = Next++;
+        const unsigned Value = Number(Result, At, I);
+        if (Whole && Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+          LoadedFrom[Value] = ValueOf(S, Op.Inputs[0]);
+        S.Known[Out] = Value;
       }
     }
+  };
+  // What the registers hold where a block begins: what every block that
+  // leads to it leaves, where they agree.
+  std::map<size_t, State> Leaves;
+  const auto Enters = [&](size_t At) -> std::optional<State> {
+    const LowBlock &B = Blocks[At];
+    State Unknown;
+    Unknown.Since = Number(Edge, At, 0);
+    if (B.Preds.empty() || !B.ExceptionalPreds.empty() ||
+        Depth.at(At) >= limits::ir::kGoIndirectCallTargetBlocks)
+      return Unknown;
+    llvm::SmallVector<const State *, 4> From;
+    for (const int Pred : B.Preds) {
+      const auto Index = IndexOf.find(Pred);
+      if (Index == IndexOf.end() || !Depth.count(Index->second))
+        return Unknown;
+      if (const auto It = Leaves.find(Index->second); It != Leaves.end())
+        From.push_back(&It->second);
+    }
+    if (From.empty())
+      return std::nullopt;
+    State S = *From.front();
+    if (llvm::all_of(From, [&](const State *P) { return *P == S; }))
+      return S;
+    const bool SameSince =
+        llvm::all_of(From, [&](const State *P) { return P->Since == S.Since; });
+    std::set<Key> Keys;
+    for (const State *P : From)
+      for (const auto &Item : P->Known)
+        Keys.insert(Item.first);
+    S.Known.clear();
+    if (!SameSince)
+      S.Since = Number(Join, At, 0);
+    for (const Key &K : Keys) {
+      const NdVar V{K.first, K.second, static_cast<uint16_t>(Word)};
+      const unsigned First = ValueOf(*From.front(), V);
+      if (llvm::all_of(From,
+                       [&](const State *P) { return ValueOf(*P, V) == First; }))
+        S.Known[K] = First;
+      else if (SameSince)
+        S.Known[K] = Number(Merged, At, 0, K);
+    }
+    return S;
+  };
+  // Each pass settles at least one more block or changes nothing; a value
+  // changes at most twice, from unset to a number to the block's own.
+  bool Changed = true;
+  for (size_t Pass = 0; Changed && Pass <= 2 * Depth.size() + 1; ++Pass) {
+    Changed = false;
+    for (const auto &[At, Level] : Depth) {
+      (void)Level;
+      std::optional<State> S = Enters(At);
+      if (!S)
+        continue;
+      Run(*S, At, Blocks[At].Ops.size());
+      const auto [It, New] = Leaves.try_emplace(At, *S);
+      if (!New && It->second == *S)
+        continue;
+      It->second = std::move(*S);
+      Changed = true;
+    }
   }
+  if (Changed)
+    return false;
+  std::optional<State> S = Enters(Block);
+  if (!S)
+    return false;
+  Run(*S, Block, Call);
   const NdVar &Target = Blocks[Block].Ops[Call].Inputs[0];
   if (Target.isConst())
     return false;
-  const auto Loaded = LoadedFrom.find(ValueOf(Target));
+  const auto Loaded = LoadedFrom.find(ValueOf(*S, Target));
   return Loaded != LoadedFrom.end() &&
-         Loaded->second != ValueOf(NdVar::reg(*Context, Word));
+         Loaded->second != ValueOf(*S, NdVar::reg(*Context, Word));
 }
 
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
