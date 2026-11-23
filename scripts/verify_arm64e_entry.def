@@ -144,6 +144,8 @@
     "--unwind-info"
   ],
   "unwind_suffix": "-unwind",
+  "object_unwind_suffix": "-object-unwind",
+  "object_unwind_pattern": "^\\s*start:\\s*(0x[0-9a-fA-F]+)[^\\n]*\\n\\s*length:[^\\n]*\\n\\s*compact encoding:\\s*(0x[0-9a-fA-F]+)",
   "symbol_pattern": "^([0-9a-fA-F]+)\\s+.*\\bF\\s+__TEXT,__text\\s+(\\S+)\\s*$",
   "unwind_pattern": "function offset=(0x[0-9a-fA-F]+), encoding(?:\\[\\d+\\])?=(0x[0-9a-fA-F]+)",
   "hex_radix": 16,
@@ -200,6 +202,7 @@
   "fixup_counts_field": "original_dyld_fixups_replayed",
   "dense_rebase_option": "-DNEVERD_ENTRY_LOCAL_REBASE",
   "publication_argument": "--publish",
+  "published_backend_export": "publish",
   "backend_environment": "NEVERD_ARM64E_ENTRY_BACKEND",
   "backend_object": "entry-backend.o",
   "backend_dwarf_object": "entry-backend-dwarf.o",

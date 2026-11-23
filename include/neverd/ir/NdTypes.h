@@ -88,6 +88,7 @@ struct NdType {
   NdTypeKind Kind = NdTypeKind::Unknown;
   uint16_t Size = 0;
   bool IsSigned = false;
+  bool IsUnion = false;
 
   /// For Ptr
   std::shared_ptr<NdType> Pointee;
@@ -539,6 +540,10 @@ struct NdType {
   static std::shared_ptr<NdType>
   makeStruct(std::vector<std::shared_ptr<NdType>> Fields,
              uint16_t PointerBytes = 8);
+  /// Establish a by-value representation for a union with a full-width
+  /// unsigned integer and a double at offset zero. Display fields retain
+  /// both declared alternatives; Fields describes its object bits once.
+  bool setUnionValueLayout();
   /// A C complex value with two binary32 or binary64 components. Its
   /// calling convention remains distinct from a two-field C record.
   static std::shared_ptr<NdType> makeComplex(uint16_t ComponentBytes);

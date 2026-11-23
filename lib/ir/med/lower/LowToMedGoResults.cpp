@@ -24,24 +24,6 @@
 
 namespace neverd {
 
-namespace {
-/// Whether the indirect call at \p CallIdx in \p Block calls a func value:
-/// it loads its target from the address in the closure context register
-/// \p Context, as the block last sets that register (callsThroughContext).
-bool callsThroughFuncValue(const MedBlock &Block, size_t CallIdx,
-                           uint64_t Context) {
-  for (size_t J = CallIdx; J-- > 0;) {
-    const MedVar &Out = Block.Ops[J].Output;
-    if (Out.Kind != MedVar::Reg || Out.RegOff != Context)
-      continue;
-    return Out.Size >= 8 &&
-           callsThroughContext(Block, static_cast<int>(CallIdx),
-                               Block.Ops[CallIdx].Inputs[0], Out);
-  }
-  return false;
-}
-} // namespace
-
 void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
   // Go's internal ABI (src/cmd/compile/abi-internal.md) returns a call's
   // integer results in RAX, RBX, RCX, RDI, RSI and R8-R11, in that order, and
@@ -75,8 +57,9 @@ void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
           Op.Output.Kind != MedVar::Reg ||
           Op.Output.RegOff != goIntegerArgumentRegisters(TargetArch)[0])
         continue;
-      if (Compiled ? Op.RegisterContract == CallRegisterContract::GoInternal
-                   : Context && callsThroughFuncValue(Block, I, *Context))
+      if (Compiled
+              ? Op.RegisterContract == CallRegisterContract::GoInternal
+              : Context && callsThroughFuncValue(Block, I, *Context, &Func))
         Sites.insert(Op.CallSiteId);
     }
   // An indirect call's results are words: no callee shares its record, and

@@ -28,6 +28,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86/LLVMWin64CallStackInput.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
@@ -35,12 +36,14 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedPrologueSaves.h"
+#include "neverd/ir/med/X86/Win64CallStackInput.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -2511,6 +2514,176 @@ int main(void) {
             Source + Oracle,
             {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
     }
+}
+
+TEST(Win64CallContract, StackInputRequiresPhysicalDirectCallAndSlot) {
+  constexpr va_t Target = Text + 5;
+  auto Image = makeImage({0xe8, 0, 0, 0, 0, 0xc3},
+                         {{Text, "caller"}, {Target, "callee"}}, {});
+  int LastVersion = 0;
+  const auto Input = [&](va_t Site, va_t Callee, int64_t Offset,
+                         uint16_t Bytes) {
+    auto V = MedVar::makeUnspecified(Bytes, Arch::X64);
+    Win64CallStackInput::bind(V, &Image, Site, Callee, Offset, LastVersion);
+    return V;
+  };
+  const auto Fifth = Input(Text, Target, 32, 8);
+  const auto Sixth = Input(Text, Target, 40, 8);
+  ASSERT_TRUE(Win64CallStackInput::from(Fifth));
+  EXPECT_NE(Fifth, Sixth);
+  auto HighFifth = HighExpr::makeUndef(8);
+  auto HighSixth = HighExpr::makeUndef(8);
+  HighFifth->Var = Fifth;
+  HighSixth->Var = Sixth;
+  EXPECT_TRUE(HighFifth->structuralEq(*HighFifth));
+  EXPECT_FALSE(HighFifth->structuralEq(*HighSixth));
+  EXPECT_FALSE(HighFifth->structuralEq(*HighExpr::makeUndef(8)));
+  EXPECT_FALSE(Win64CallStackInput::from(Input(Text, Target, 24, 8)));
+  EXPECT_FALSE(Win64CallStackInput::from(Input(Text, Target, 33, 8)));
+  EXPECT_FALSE(Win64CallStackInput::from(Input(Text, Target, 32, 4)));
+  EXPECT_FALSE(Win64CallStackInput::from(Input(Text, Text, 32, 8)));
+  EXPECT_FALSE(Win64CallStackInput::from(Input(Target, Target, 32, 8)));
+  Image.IsRelocatable = true;
+  EXPECT_FALSE(Win64CallStackInput::from(Input(Text, Target, 32, 8)));
+  EXPECT_EQ(LastVersion, 2);
+}
+
+TEST(Win64CallContract, UnusedOriginalStackWordRequiresNoBinding) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("unused-slot", Context);
+  llvm::IRBuilder<> B(Context);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(B.getVoidTy(), false),
+      llvm::GlobalValue::ExternalLinkage, "ignore_original_word", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
+  auto *Word = llvm_win64_call_stack::create(B, {Text, 32});
+  EXPECT_TRUE(llvm_source_unknown::isValue(Word));
+  B.CreateRetVoid();
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, {}));
+  EXPECT_EQ(Source.find("NEVERD_WIN64_CALL_STACK_U64"), std::string::npos);
+  EXPECT_EQ(Source.find(llvm_win64_call_stack::Name.str()), std::string::npos);
+}
+
+TEST(Win64CallContract, JoinedSourceObservationsKeepTheirCallCoordinates) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("original-slots", Context);
+  llvm::IRBuilder<> B(Context);
+  // The image can already own this spelling. It keeps its own signature.
+  auto *Collision = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt32Ty(), false),
+      llvm::GlobalValue::ExternalLinkage, llvm_win64_call_stack::Name, Module);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt64Ty(), {B.getInt1Ty()}, false),
+      llvm::GlobalValue::ExternalLinkage, "choose_original_slot", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  auto *Left = llvm::BasicBlock::Create(Context, "left", F);
+  auto *Right = llvm::BasicBlock::Create(Context, "right", F);
+  B.SetInsertPoint(Entry);
+  B.CreateCondBr(F->getArg(0), Left, Right);
+  B.SetInsertPoint(Left);
+  B.CreateRet(llvm_win64_call_stack::create(B, {Text, 32}));
+  B.SetInsertPoint(Right);
+  B.CreateRet(llvm_win64_call_stack::create(B, {Text + 17, 32}));
+  EXPECT_FALSE(llvm_win64_call_stack::isProvider(*Collision));
+  Pipeline::optimizeOrPromoteModule(Module);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
+  std::set<va_t> Sites;
+  auto Note = [&](const llvm::Value *V) {
+    const auto *I = llvm::dyn_cast<llvm::ConstantInt>(V);
+    ASSERT_NE(I, nullptr);
+    Sites.insert(I->getZExtValue());
+  };
+  const auto *Optimized = Module.getFunction("choose_original_slot");
+  ASSERT_NE(Optimized, nullptr);
+  for (const auto &Block : *Optimized)
+    for (const auto &Inst : Block) {
+      const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+      if (!Call || !Call->getCalledFunction() ||
+          !llvm_win64_call_stack::isProvider(*Call->getCalledFunction()))
+        continue;
+      const auto *Slot =
+          llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(1));
+      ASSERT_NE(Slot, nullptr);
+      EXPECT_EQ(Slot->getZExtValue(), 32u);
+      auto *PC = Call->getArgOperand(0);
+      if (auto *Select = llvm::dyn_cast<llvm::SelectInst>(PC)) {
+        Note(Select->getTrueValue());
+        Note(Select->getFalseValue());
+      } else if (auto *Phi = llvm::dyn_cast<llvm::PHINode>(PC)) {
+        for (const auto &Incoming : Phi->incoming_values())
+          Note(Incoming.get());
+      } else {
+        Note(PC);
+      }
+    }
+  EXPECT_EQ(Sites, (std::set<va_t>{Text, Text + 17}));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, {}));
+  EXPECT_NE(Source.find("NEVERD_WIN64_CALL_STACK_U64("), std::string::npos);
+  EXPECT_EQ(Source.find("__builtin_trap()"), std::string::npos);
+}
+
+TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
+  constexpr va_t Target = Text + 0x80;
+  for (bool Stored : {false, true}) {
+    std::vector<uint8_t> Code(0xa0, 0xcc);
+    std::vector<uint8_t> Caller = {0x48, 0x83, 0xec, 0x38}; // sub rsp,38h
+    if (Stored)
+      Caller.insert(Caller.end(),
+                    {0x48, 0x89, 0x4c, 0x24, 0x20});          // slot 5 = rcx
+    Caller.insert(Caller.end(), {0xc6, 0x44, 0x24, 0x28, 1}); // slot 6 = byte 1
+    const va_t Site = Text + Caller.size();
+    Caller.push_back(0xe8);
+    const auto Displacement = rel32(Site + 5, Target);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xc4, 0x38, 0xc3});
+    put(Code, Text, Caller);
+    put(Code, Target,
+        {0x0f, 0xb6, 0x44, 0x24, 0x30, // movzx eax,byte [rsp+30h]
+         0x48, 0x33, 0x44, 0x24, 0x28, // xor rax,[rsp+28h]
+         0xc3});
+    auto Image =
+        makeImage(Code, {{Text, "pass_stack"}, {Target, "take_stack"}}, {});
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "stored=" << Stored << " LLVM=" << LLVM);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.OnlyFunctionEntries = {Text};
+      Options.LiftMode = LLVM;
+      Options.SourceProjection = true;
+      auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      CEmitterOptions COptions;
+      COptions.TheArch = Image.Arch;
+      COptions.Format = Image.Format;
+      COptions.Image = &Image;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
+      } else {
+        ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+      }
+      const std::string Operand = "NEVERD_WIN64_CALL_STACK_U64(0x" +
+                                  llvm::utohexstr(Site) + "ULL, 32U)";
+      EXPECT_EQ(Source.find(Operand) != std::string::npos, !Stored) << Source;
+      EXPECT_EQ(Source.find("#ifndef NEVERD_WIN64_CALL_STACK_U64") !=
+                    std::string::npos,
+                !Stored);
+      EXPECT_EQ(Source.find("extern uint64_t neverd_win64_call_stack_u64(") !=
+                    std::string::npos,
+                !Stored);
+      EXPECT_NE(Source.find("take_stack("), std::string::npos);
+    }
+  }
 }
 
 TEST(Win64CallContract, MissingInteriorStackSlotCannotDiscardLaterArguments) {

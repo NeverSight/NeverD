@@ -28,6 +28,7 @@
 #include "../pass/LLVMC/LLVMCCommonBranches.h"
 #include "../pass/LLVMC/LLVMCLoopPhases.h"
 #include "../pass/LLVMC/LLVMCScalarLoopRecovery.h"
+#include "../render/X86/Win64CallStackInput.h"
 #include "../render/X86/X86AmxState.h"
 #include "../render/X86/X86AtomicRmw.h"
 #include "../render/X86/X86Bound.h"
@@ -80,6 +81,7 @@
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
+#include "neverd/backend/llvm/X86/LLVMWin64CallStackInput.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86SHA.h"
@@ -1021,6 +1023,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool NeedsX86SegmentMoveDispatch = false;
   bool NeedsX86VirtualizationDispatch = false;
   bool NeedsX86SystemStateDispatch = false;
+  bool NeedsWin64CallStackInput = false;
   bool HasFloatingArithmetic = false;
   bool HasWin64Call = false;
   std::set<X87CHelper> X87PrecisionHelpers;
@@ -1087,6 +1090,13 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     if (NeedsWideCarrierAlias)
       for (const auto &Arg : Fn.args())
         NoteWideInteger(Arg.getType());
+    if (!NeedsWin64CallStackInput && llvm_win64_call_stack::isProvider(Fn))
+      NeedsWin64CallStackInput =
+          llvm::any_of(Fn.users(), [&](const llvm::User *U) {
+            const auto *Call = llvm::dyn_cast<llvm::CallBase>(U);
+            return Call && !Call->use_empty() &&
+                   SelectedFunctions.contains(*Call->getFunction());
+          });
     if (!SelectedFunctions.contains(Fn))
       continue;
     if (Fn.isDeclaration() && !Fn.isIntrinsic() &&
@@ -1459,6 +1469,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
         mips::modulePreservesDSPControl(Mod, Img ? Img : Opts.Image,
                                         Opts.TheArch),
         mips::moduleAvoidsMSA(Mod, Img ? Img : Opts.Image, Opts.TheArch));
+  if (NeedsWin64CallStackInput)
+    OS << Win64CallStackInputPrelude;
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
   if (NeedsX86SegmentMoveDispatch)
@@ -3032,6 +3044,7 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
         continue;
     }
     if (Fn.isIntrinsic() || llvm_source_unknown::isFunction(Fn) ||
+        llvm_win64_call_stack::isProvider(Fn) ||
         Fn.getName() == "llvm.x86.rsm.context" ||
         Fn.getName() == "llvm.x86.enclu.transfer.at.context" ||
         Fn.getName() == "llvm.x86.vmrun.context" ||

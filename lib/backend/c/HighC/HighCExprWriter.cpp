@@ -19,6 +19,7 @@
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../render/MIPS/MIPSScalar.h"
+#include "../render/X86/Win64CallStackInput.h"
 #include "../render/X86/X64CallRCX.h"
 #include "../render/X86/X86APXAtomic.h"
 #include "../render/X86/X86AmxState.h"
@@ -8475,6 +8476,12 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     return constStr(E.ConstVal, E.Type);
   }
   case ExprKind::Undef:
+    if (auto Input = Win64CallStackInput::from(E.Var)) {
+      const auto Text = win64CallStackInputText(*Input);
+      return E.Type && E.Type->Kind == NdTypeKind::Ptr
+                 ? "(" + typeToC(E.Type) + ")(uintptr_t)" + Text
+                 : Text;
+    }
     // An observed unknown value has no recovered semantics. Fail at this
     // use; an unchosen conditional operand must not fail eagerly.
     return unknownValueText(E, "value");
@@ -8885,6 +8892,13 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         llvm::report_fatal_error(c_detail::kInvalidSourceRecordFieldType);
       if (I)
         Result += ", ";
+      if (E.Type->IsUnion) {
+        const auto Name =
+            E.Type->displayFieldNameAt(0, Field->Size, NdAccessClass::Integer);
+        if (!Name)
+          throw std::runtime_error(c_detail::kUnknownNamedRecordField.str());
+        Result += "." + *Name + " = ";
+      }
       if (Reinterpreted) {
         Result += integerView(*Operand, Field, /*ParentPrec=*/0);
         continue;
@@ -8942,7 +8956,8 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         !Base->Type->SourceName.empty()) {
       const auto Field = Record->displayFieldPathAt(
           Record->FieldOffsets[E.ConstVal], E.Type->Size,
-          /*EnterNestedAtZero=*/false);
+          /*EnterNestedAtZero=*/false, /*ArrayElements=*/true,
+          Record->IsUnion ? NdAccessClass::Integer : NdAccessClass::Unknown);
       if (!Field)
         throw std::runtime_error(c_detail::kUnknownNamedRecordField.str());
       return "(" + exprStr(*E.Operands[0]) + ")." + *Field;

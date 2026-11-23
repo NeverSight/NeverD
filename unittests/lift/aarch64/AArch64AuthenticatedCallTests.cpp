@@ -13,6 +13,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -24,15 +25,18 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/loader/Loader.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/BinaryRewrite.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
@@ -46,6 +50,7 @@
 #include <array>
 #include <cstdlib>
 #include <functional>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -365,8 +370,7 @@ void compile(const std::string &Source,
          llvm::formatv(kCompiledIR, Route, Optimization.drop_front()).str(),
          IR);
     if (CompilerObject) {
-      // A native C compiler owns its object and PAC IR dialect. The r6 LLVM
-      // importer separately refuses Apple Clang's legacy llvm.ptrauth globals.
+      // Keep the frontend's native object as an independent ABI control.
       for (const auto Flag : {kAssemblyOption, kLLVMOption})
         Arguments.erase(std::remove(Arguments.begin(), Arguments.end(), Flag),
                         Arguments.end());
@@ -1454,19 +1458,186 @@ TEST(AArch64AuthenticatedCall, LoweringRetainsHVAAndOriginalX8) {
 #include "AArch64AuthenticatedCallFixtures.def"
 }
 
-TEST(AArch64AuthenticatedCall,
-     LegacyApplePACGlobalsRefuseBeforeCodeGeneration) {
+TEST(AArch64AuthenticatedCall, ImportsAppleSigningDescriptorsIntoMachO) {
   llvm::LLVMContext Context;
-  llvm::SMDiagnostic Diagnostic;
-  auto Module = llvm::parseIR(llvm::MemoryBufferRef(kLegacyPAuthIR, kFunction),
-                              Diagnostic, Context);
-  ASSERT_TRUE(Module);
-  ASSERT_FALSE(llvm::verifyModule(*Module));
+  llvm::SMDiagnostic Diag;
+  auto Parse = [&](const char *IR) {
+    return llvm::parseIR(llvm::MemoryBufferRef(IR, kFunction), Diag, Context);
+  };
+  auto Legacy = Parse(kLegacyPAuthIR);
+  auto Canonical = Parse(kCanonicalPAuthIR);
+  ASSERT_TRUE(Legacy && Canonical);
+  const auto Compile = [&](llvm::Module &M) {
+    return Codegen().compile(M, Arch::AArch64, BinaryFormat::MachO, kTriple);
+  };
+  const auto Old = Compile(*Legacy);
+  const auto New = Compile(*Canonical);
+  ASSERT_TRUE(Old.Success && New.Success);
+  EXPECT_EQ(Old.ObjectData, New.ObjectData);
+  save(kLegacyGlobalCase, kMachOObject,
+       llvm::toStringRef(llvm::ArrayRef(Old.ObjectData)));
+  auto Object =
+      Loader::create(BinaryFormat::MachO)
+          ->loadBuffer(llvm::MemoryBufferRef(
+              llvm::toStringRef(llvm::ArrayRef(Old.ObjectData)), kFunction));
+  ASSERT_TRUE(bool(Object)) << llvm::toString(Object.takeError());
+  std::set<unsigned> Keys;
+  for (const auto &[Address, Recipe] : Object->MachOAuthenticatedPointers)
+    Keys.insert(Recipe.Key);
+  EXPECT_EQ(Keys, (std::set<unsigned>{kAArch64PAuthKeyIA, kAArch64PAuthKeyIB,
+                                      kAArch64PAuthKeyDA, kAArch64PAuthKeyDB}));
+
+  Legacy = Parse(kLegacyPAuthIR);
+  Canonical = Parse(kCanonicalPAuthIR);
+  const auto Rewrite = [&](llvm::Module &M) {
+    return compileImageForPatch(
+        M, Arch::AArch64, BinaryFormat::MachO, kEntryAddress,
+        PatchSymbolResolver(
+            [](llvm::StringRef, uint32_t) -> std::optional<uint64_t> {
+              return kCalleeAddress;
+            }),
+        kEntryAddress, kTriple, RewriteInputKind::ReplacementIR);
+  };
+  const auto Original = Rewrite(*Legacy);
+  const auto Expected = Rewrite(*Canonical);
+#if __has_include("llvm/MC/MCPointerAuthInfo.h")
+  ASSERT_TRUE(Original.Success && Expected.Success);
+  ASSERT_EQ(Original.Sections.size(), Expected.Sections.size());
+  EXPECT_EQ(Original.Bytes, Expected.Bytes);
+  unsigned Recipes = 0;
+  for (const auto &Section : Original.Sections)
+    for (const auto &Ref : Section.FixupReferences)
+      Recipes += Ref.PointerAuth.has_value();
+  EXPECT_EQ(Recipes, kLegacyAuthRecipes);
+#else
+  EXPECT_FALSE(Original.Success);
+  EXPECT_FALSE(Expected.Success);
+#endif
+}
+
+TEST(AArch64AuthenticatedCall, AuthenticatesDirectDataKeyCallsInMachineCode) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diag;
+  auto M = llvm::parseIR(llvm::MemoryBufferRef(kDirectDataKeyIR, kFunction),
+                         Diag, Context);
+  ASSERT_TRUE(M);
+  const auto Compiled =
+      Codegen().compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple);
+  ASSERT_TRUE(Compiled.Success);
+  auto Object =
+      llvm::object::ObjectFile::createObjectFile(llvm::MemoryBufferRef(
+          llvm::toStringRef(llvm::ArrayRef(Compiled.ObjectData)), kFunction));
+  ASSERT_TRUE(bool(Object)) << llvm::toString(Object.takeError());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  std::set<std::string> Mnemonics;
+  for (const auto &Section : (*Object)->sections()) {
+    if (!Section.isText())
+      continue;
+    auto Bytes = Section.getContents();
+    ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+    for (size_t Offset = 0; Offset < Bytes->size();) {
+      const auto Insns = llvm::arrayRefFromStringRef(Bytes->drop_front(Offset));
+      DecodedInsn I;
+      const auto Size = Dec.decodeOne(Insns.data(), Insns.size(), Offset, I);
+      ASSERT_GT(Size, 0);
+      Mnemonics.insert(I.Raw->mnemonic);
+      Offset += Size;
+    }
+  }
+  EXPECT_TRUE(Mnemonics.contains(kAuthenticateDB));
+  EXPECT_TRUE(Mnemonics.contains(kAuthenticateZeroDA));
+}
+
+TEST(AArch64AuthenticatedCall, ValidatesAuthenticatedTailCallRequirements) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diag;
+  auto Compile = [&](const char *IR) {
+    auto M = llvm::parseIR(llvm::MemoryBufferRef(IR, kFunction), Diag, Context);
+    EXPECT_TRUE(M);
+    return M && Codegen()
+                    .compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple)
+                    .Success;
+  };
+  EXPECT_FALSE(Compile(kInvalidCallKeyIR));
+#if __has_include("llvm/BinaryFormat/AArch64AuthenticatedCalls.def")
+  EXPECT_TRUE(Compile(kDataKeyLRTailIR));
+#else
+  EXPECT_FALSE(Compile(kDataKeyLRTailIR));
+#endif
+}
+
+TEST(AArch64AuthenticatedCall, PreservesNamedDarwinStackProbe) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diag;
+  auto M = llvm::parseIR(llvm::MemoryBufferRef(kDarwinProbeIR, kFunction), Diag,
+                         Context);
+  ASSERT_TRUE(M);
   const auto Object =
-      Codegen().compile(*Module, Arch::AArch64, BinaryFormat::MachO, kTriple);
+      Codegen().compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple);
+#if __has_include("llvm/BinaryFormat/AArch64DarwinStackProbe.def")
+  ASSERT_TRUE(Object.Success);
+  for (const auto *Symbol :
+       {kDarwinHelperSymbol, kDarwinGuardSymbol, kDarwinFailureSymbol})
+    EXPECT_TRUE(llvm::any_of(Object.Relocations, [&](const auto &R) {
+      return R.Symbol == Symbol;
+    })) << Symbol;
+  save(kDarwinProbeCase, kMachOObject,
+       llvm::toStringRef(llvm::ArrayRef(Object.ObjectData)));
+#else
   EXPECT_FALSE(Object.Success);
   EXPECT_TRUE(Object.ObjectData.empty());
+#endif
+  for (auto &F : *M)
+    if (!F.isDeclaration())
+      F.addFnAttr(kProbeMethodAttribute, kUnknownProbeMethod);
+  EXPECT_FALSE(Codegen()
+                   .compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple)
+                   .Success);
   const auto Rewrite = Codegen().compileForRewrite(
-      *Module, Arch::AArch64, {}, BinaryFormat::MachO, kTriple);
+      *M, Arch::AArch64, {}, BinaryFormat::MachO, kTriple);
   EXPECT_FALSE(Rewrite.ImageValid);
+  for (const auto &F : *M)
+    if (!F.isDeclaration())
+      EXPECT_EQ(F.getFnAttribute(kProbeMethodAttribute).getValueAsString(),
+                kUnknownProbeMethod);
+}
+
+TEST(AArch64AuthenticatedCall, ImportsTypedPointerGlobalConstructor) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diag;
+  auto Old = llvm::parseIR(llvm::MemoryBufferRef(kTypedStructorIR, kFunction),
+                           Diag, Context);
+  auto New = llvm::parseIR(
+      llvm::MemoryBufferRef(kCanonicalStructorIR, kFunction), Diag, Context);
+  ASSERT_TRUE(Old && New);
+  auto Legacy =
+      Codegen().compile(*Old, Arch::AArch64, BinaryFormat::MachO, kTriple);
+  auto Canonical =
+      Codegen().compile(*New, Arch::AArch64, BinaryFormat::MachO, kTriple);
+  ASSERT_TRUE(Legacy.Success && Canonical.Success);
+  EXPECT_EQ(Legacy.ObjectData, Canonical.ObjectData);
+}
+
+TEST(AArch64AuthenticatedCall, CompilesFrontendAuthenticatedGlobals) {
+  save(kLegacyFrontendCase, kLegacyDriverName, kLegacyFrontendDriver);
+  compile(
+      kLegacyFrontendGlobals,
+      [](llvm::Module &M) { EXPECT_FALSE(llvm::verifyModule(M)); },
+      kLegacyFrontendCase, true, true);
+}
+
+TEST(AArch64AuthenticatedCall, RejectsMismatchedSigningStorageBeforeMutation) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diag;
+  auto M = llvm::parseIR(llvm::MemoryBufferRef(kConflictingPAuthIR, kFunction),
+                         Diag, Context);
+  ASSERT_TRUE(M);
+  const auto Result =
+      Codegen().compile(*M, Arch::AArch64, BinaryFormat::MachO, kTriple);
+  EXPECT_FALSE(Result.Success);
+  EXPECT_TRUE(Result.ObjectData.empty());
+  EXPECT_TRUE(M->getNamedGlobal(kFirstAuthDescriptor));
+  EXPECT_EQ(M->getNamedGlobal(kDataAuthSlot)->getInitializer(),
+            M->getNamedGlobal(kSecondAuthDescriptor));
 }

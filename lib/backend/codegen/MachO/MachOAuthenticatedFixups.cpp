@@ -55,6 +55,56 @@ llvm::Error fail(llvm::StringRef Message) {
                                  llvm::Twine(kErrorPrefix) + Message);
 }
 
+// Retain an existing format, including threaded ARM64E. An empty chained
+// table carries no format. Choose the userland encoding dyld can load on
+// every deployment platform declared by the image.
+llvm::Expected<uint16_t>
+installationPointerFormat(llvm::ArrayRef<uint8_t> Binary,
+                          const MachOChainedFixups &Chains) {
+  for (const auto &Segment : Chains.Segments)
+    if (Segment.PointerFormat)
+      return Segment.PointerFormat;
+  if (Chains.Threaded)
+    return DYLD_CHAINED_PTR_ARM64E;
+  struct Deployment {
+    uint32_t Platform, LegacyCommand, Major;
+  };
+  static constexpr Deployment Versions[] = {
+#define MACHO_AUTH_USERLAND24(Platform, Cmd, Major) {Platform, Cmd, Major},
+#include "MachOAuthenticatedFixups.def"
+  };
+  bool Found = false, Wide = true, Malformed = false;
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *C, uint32_t Cmd, uint32_t Size, bool) {
+        const bool Build = Cmd == LC_BUILD_VERSION;
+        const auto *V = reinterpret_cast<const build_version_command *>(C);
+        if (Build && Size < sizeof(*V)) {
+          Malformed = true;
+          return;
+        }
+        const auto *D = llvm::find_if(Versions, [&](const Deployment &D) {
+          return Build ? D.Platform == V->platform
+                       : D.LegacyCommand && D.LegacyCommand == Cmd;
+        });
+        if (!Build && D == std::end(Versions))
+          return;
+        const auto *Legacy = reinterpret_cast<const version_min_command *>(C);
+        if (!Build && Size < sizeof(*Legacy)) {
+          Malformed = true;
+          return;
+        }
+        Found = true;
+        const auto Version = Build ? V->minos : Legacy->version;
+        Wide &= D != std::end(Versions) &&
+                packed_version::getMajor(Version) >= D->Major;
+      });
+  if (Malformed)
+    return fail(kVersionCommand);
+  return Found && Wide ? DYLD_CHAINED_PTR_ARM64E_USERLAND24
+                       : DYLD_CHAINED_PTR_ARM64E;
+}
+
 uint64_t maximum(arm64e::PointerField Field) {
   return llvm::maskTrailingOnes<uint64_t>(Field.Width);
 }
@@ -424,12 +474,10 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
       });
   if (BadSignature)
     return fail(kSignature);
-  uint16_t PointerFormat =
-      Chains.Threaded ? DYLD_CHAINED_PTR_ARM64E : kDefaultPointerFormat;
-  for (const auto &Segment : Chains.Segments)
-    if (Segment.PointerFormat)
-      PointerFormat = Segment.PointerFormat;
-  const auto Format = arm64e::chainFormat(PointerFormat);
+  auto PointerFormat = installationPointerFormat(Binary, Chains);
+  if (!PointerFormat)
+    return PointerFormat.takeError();
+  const auto Format = arm64e::chainFormat(*PointerFormat);
   if (!Format)
     return fail(kPointerFormat);
   const auto Index = segmentIndex(Chains);
@@ -447,8 +495,7 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
   for (const auto *F : Requests) {
     if (!F->ReplacesTLVBootstrap)
       continue;
-    const auto Lib =
-        llvm::find(Chains.Libraries, macho_arm64e_abi::kTLVProvider);
+    const auto Lib = llvm::find(Chains.Libraries, macho_arm64e_abi::kLibSystem);
     if (Lib == Chains.Libraries.end())
       return fail(kRecipe);
     MachOAuthenticatedPointer Old;
@@ -485,7 +532,7 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
     auto Word = encode(*Fixup, Chains, Index, *Format, Imports);
     if (!Word)
       return Word.takeError();
-    Segment.PointerFormat = PointerFormat;
+    Segment.PointerFormat = *PointerFormat;
     Segment.PageSize = Page;
     if (Fixup->ReplacesTLVBootstrap)
       Segment.Slots[OldIndices.at(Fixup->Address)].Raw = *Word;

@@ -24,9 +24,12 @@ struct MedFunc;
 /// block after it, and the growth block at \p GrowthStart, which spills the
 /// register arguments, calls the runtime's morestack and starts the function
 /// again (GoStackGrowth::Restarts), is emptied for simplifyCfg to drop.
-/// False, leaving \p Func as it was, where the entry does not branch to that
-/// block or the body.
-bool elideGoStackGrowth(MedFunc &Func, va_t GrowthStart);
+/// Where the entry checks twice, the block at \p SecondCheck, which the
+/// entry falls into, branches straight to the block after it too
+/// (GoStackGrowth::SecondCheck).  False, leaving \p Func as it was, where
+/// the entry does not branch to that block or the body.
+bool elideGoStackGrowth(MedFunc &Func, va_t GrowthStart,
+                        va_t SecondCheck = InvalidVA);
 } // namespace neverd
 
 #endif // NEVERD_LIB_IR_MED_LOWER_GOSTACKGROWTH_H

@@ -24,10 +24,12 @@ LinuxFiles::ReadinessFailure::stop(ProcessResult &Result) const {
   OS << Reason << " (TCP connection index " << TCPSocket->ConnectionIndex
      << ", " << TCPInterest << " readiness)";
   const auto &Events = TCPSocket->Connection->ReceiveEvents;
-  if (llvm::StringRef(TCPInterest) == "read" && !Events.empty()) {
+  const bool Read = llvm::StringRef(TCPInterest) == "read";
+  if (Read && (TCPSocket->Sent || !Events.empty()))
+    OS << ", sent bytes " << TCPSocket->Sent;
+  if (Read && !Events.empty()) {
     const auto Next = TCPSocket->ReceiveEvent;
-    OS << ", sent bytes " << TCPSocket->Sent << ", receive events consumed "
-       << Next << '/' << Events.size();
+    OS << ", receive events consumed " << Next << '/' << Events.size();
     if (Next < Events.size())
       OS << ", receive_events[" << Next
          << "].after_send=" << Events[Next].AfterSend;

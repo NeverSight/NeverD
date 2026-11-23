@@ -217,6 +217,76 @@ TEST(SymMBAResiduePowers, ProjectedFactorsRetainLowDisturbances) {
     }
 }
 
+TEST(SymMBAResiduePowers, LinearProductsPreserveAllLiveFieldBits) {
+  constexpr unsigned Count = 521;
+  std::mt19937_64 Random(0x2516412);
+  for (unsigned Bits : {1u, 31u, 64u, 65u, 97u, 129u}) {
+    SCOPED_TRACE(Bits);
+    const unsigned Width = Bits <= 65 ? 193 : 321;
+    const unsigned Shift = Bits + 1, Precision = Shift + Bits;
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    auto Field = Ctx.mkExtract(X, 62, Bits);
+    const auto Other = Ctx.mkExtract(Y, 7, Bits);
+    const auto High = Ctx.mkExtract(Y, Bits, Width - Bits);
+    const auto Scale = llvm::APInt(Width, 5).shl(Width - Precision);
+    // The top coefficient bits and the even offset both affect the product.
+    auto Offset = [&](unsigned I) {
+      auto A = llvm::APInt(Width, I == 20 ? 6 : 2 * I + 1);
+      if (I % 5 == 2)
+        A.setBit(Bits);
+      return A;
+    };
+    auto Weight = [&](unsigned I) {
+      auto B = llvm::APInt(Width, 2 * I + 3);
+      if (I % 7 == 1)
+        B.setBit(Bits - 1);
+      return (I % 5 == 3 ? -B : B).shl(Shift + I % 2);
+    };
+    llvm::SmallVector<SymRef, 128> Factors{Ctx.mkConst(Scale), Y};
+    for (unsigned I = 0; I < Count; ++I) {
+      const auto Low = I % 3 == 0   ? Ctx.mkNot(Field)
+                       : I % 3 == 1 ? Other
+                                    : Field;
+      const auto Word = I % 3 == 0   ? Ctx.mkZExt(Low, Width)
+                        : I % 3 == 1 ? Ctx.mkSExt(Low, Width)
+                                     : Ctx.mkConcat(High, Low);
+      const auto A = Ctx.mkConst(Offset(I)), B = Ctx.mkConst(Weight(I));
+      Factors.push_back(Ctx.mkAdd(A, Ctx.mkMul(B, Word)));
+    }
+    const auto Input = Ctx.mkMul(Factors);
+    MBAOptions Opts;
+    Opts.MaxWork = 65536;
+    const auto R = simplifyMBADeep(Ctx, Input, Opts);
+    EXPECT_LT(R.SizeAfter, 64u);
+    EXPECT_LT(R.Work, Opts.MaxWork);
+    SymEvalPlan Plan(Ctx, R.Expr);
+    for (unsigned J = 0; J < 32; ++J) {
+      std::array<uint64_t, 6> XL, YL;
+      std::generate(XL.begin(), XL.end(), [&] { return Random(); });
+      std::generate(YL.begin(), YL.end(), [&] { return Random(); });
+      const std::array<llvm::APInt, 2> Values{llvm::APInt(Width, XL),
+                                              llvm::APInt(Width, YL)};
+      auto Expected = Scale * Values[1];
+      for (unsigned I = 0; I < Count; ++I) {
+        auto V = I % 3 == 1 ? Values[1].extractBits(Bits, 7)
+                            : Values[0].extractBits(Bits, 62);
+        if (I % 3 == 0)
+          V.flipAllBits();
+        Expected *= Offset(I) + V.zext(Width) * Weight(I);
+      }
+      EXPECT_EQ(Plan.eval(Values), Expected);
+    }
+    if (Bits == 31 || Bits == 97) {
+      Opts.MaxWork = 1;
+      EXPECT_EQ(simplifyMBADeep(Ctx, Input, Opts).Expr, Input);
+      Opts.MaxWork = 65536;
+      Opts.MaxTableBytes = 1;
+      EXPECT_EQ(simplifyMBADeep(Ctx, Input, Opts).Expr, Input);
+    }
+  }
+}
+
 TEST(SymMBAResiduePowers, DominantPrefixesRetainDisturbedAndIndependentWords) {
   std::mt19937_64 Random(0x524553494455414c);
   for (unsigned Width : {8u, 32u, 65u, 257u})

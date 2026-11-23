@@ -3300,6 +3300,96 @@ TEST(MedABIPass, Win64UnknownCalleeRecoversUnwrittenLiveInRcx) {
   EXPECT_EQ(TwoArgCalls, 1u);
 }
 
+TEST(MedABIPass, TheRegisterATargetIsLoadedThroughProvesNoArgument) {
+  // An indirect call whose arity nothing gives passes the registers its
+  // setup writes, and a written one establishes the untouched incoming ones
+  // below it.  The register the target itself is loaded through is no such
+  // setup: the call needs the address there whatever it passes.
+  // `sqlite3_free` loads its configuration's address into RDX and jumps
+  // through a slot of it (`mov rdx, [config]; jmp [rdx+0x28]`).  RDX read as
+  // a third argument made RSI, which the function never touches, a second,
+  // and so a parameter each of its callers passed an unknown value for.
+  // Where the function sets RSI itself the call passes all three as before.
+  //   test rdi, rdi; je out; [mov esi, 7;] mov rdx, [slot]; jmp [rdx+0x28]
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  const MedVar RDI0 = reg(10, 0, 8, x86reg::RDI, Arch::X64);
+  const MedVar RSI1 = reg(12, 1, 8, x86reg::RSI, Arch::X64);
+  const MedVar RDX1 = reg(11, 1, 8, x86reg::RDX, Arch::X64);
+  const MedVar Zero = temp(49, 1, 1, Arch::X64);
+  const MedVar Base = temp(50, 1, 8, Arch::X64);
+  const MedVar Slot = temp(51, 1, 8, Arch::X64);
+  const MedVar Fn = temp(52, 1, 8, Arch::X64);
+  for (const bool Tail : {true, false})
+    for (const bool SetsSecond : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "tail=" << Tail << " sets-second=" << SetsSecond);
+      MedFunc Func;
+      Func.Entry = 0x1000;
+      Func.Name = "release";
+      MedVar P;
+      P.Kind = MedVar::Param;
+      P.TheArch = Arch::X64;
+      P.Id = 10;
+      P.Size = 8;
+      P.RegOff = x86reg::RDI;
+      Func.Params.push_back(P);
+      Func.Blocks.resize(3);
+      Func.Blocks[0].Id = 0;
+      Func.Blocks[0].Succs = {1, 2};
+      addLiveIn(Func.Blocks[0], RDI0);
+      Func.Blocks[0].Ops.push_back(
+          binary(NdOp::INT_EQUAL, Zero, RDI0, MedVar::makeConst(0, 8)));
+      MedOp Branch;
+      Branch.Opcode = NdOp::COND_BR;
+      Branch.addInput(MedVar::makeConst(0x1020, 8));
+      Branch.addInput(Zero);
+      Func.Blocks[0].Ops.push_back(Branch);
+      Func.Blocks[1].Id = 1;
+      Func.Blocks[1].Preds = {0};
+      if (SetsSecond)
+        Func.Blocks[1].Ops.push_back(
+            unary(NdOp::COPY, RSI1, MedVar::makeConst(7, 8)));
+      Func.Blocks[1].Ops.push_back(
+          unary(NdOp::LOAD, Base, MedVar::makeConst(0x4000, 8)));
+      Func.Blocks[1].Ops.push_back(unary(NdOp::COPY, RDX1, Base));
+      Func.Blocks[1].Ops.push_back(
+          binary(NdOp::INT_ADD, Slot, Base, MedVar::makeConst(0x28, 8)));
+      Func.Blocks[1].Ops.push_back(unary(NdOp::LOAD, Fn, Slot));
+      MedOp Call;
+      Call.Opcode = NdOp::INDIR_CALL;
+      Call.Addr = 0x1010;
+      Call.Output = reg(1, 1, 8, TRI.IntReturnReg, Arch::X64);
+      Call.addInput(Fn);
+      Func.Blocks[1].Ops.push_back(Call);
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = Tail ? 0x1010 : 0x1013;
+      Func.Blocks[1].Ops.push_back(Return);
+      Func.Blocks[2].Id = 2;
+      Func.Blocks[2].Preds = {0};
+      Func.Blocks[2].StartAddr = 0x1020;
+      MedOp Out;
+      Out.Opcode = NdOp::RETURN;
+      Out.Addr = 0x1020;
+      Func.Blocks[2].Ops.push_back(Out);
+
+      BinaryImage Img;
+      Img.Arch = Arch::X64;
+      Img.Bits = Bitness::Bits64;
+      Img.Format = BinaryFormat::ELF;
+      recoverCallAbi(Func, Arch::X64, {}, &Img);
+      EXPECT_EQ(Func.Params.size(), 1u);
+      ASSERT_EQ(Func.CallInfos.size(), 1u);
+      const std::vector<MedVar> &Arguments = Func.CallInfos[0].Args;
+      ASSERT_EQ(Arguments.size(), SetsSecond ? 3u : 1u);
+      EXPECT_EQ(Arguments[0].RegOff, x86reg::RDI);
+      if (SetsSecond) {
+        EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 7);
+        EXPECT_EQ(Arguments[2], Base);
+      }
+    }
+}
+
 TEST(MedABIPass, Win64VTableIndirectRecoversThisAndSret) {
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
   const MedVar RCX0 = reg(10, 0, 8, x86reg::RCX, Arch::X64);

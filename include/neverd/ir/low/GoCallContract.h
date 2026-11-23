@@ -26,6 +26,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -42,14 +43,24 @@ bool isGoCode(const BinaryImage &Img, va_t Address);
 const GoWriteBarrier *goWriteBarrierAt(const BinaryImage &Img, va_t Entry);
 
 /// The register a write barrier of \p Kind leaves its buffer space in on
-/// \p A: R11 or X25 for GoWriteBarrierKind::Buffer, none for Store.
+/// \p A: R11 or X25 for GoWriteBarrierKind::Buffer and BufferBody, none for
+/// Store.
 std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind);
+
+/// Whether a write barrier of \p Kind keeps the register at \p Register on
+/// \p A for its caller: every general-purpose register but the stack pointer,
+/// the one it returns buffer space in (goWriteBarrierResult) and arm64's
+/// assembler temporary R27 (GoWriteBarrierKind).
+bool goWriteBarrierKeeps(Arch A, GoWriteBarrierKind Kind, uint64_t Register);
 
 /// The operands of the write barrier at \p Entry where it performs the store
 /// itself (GoWriteBarrierKind::Store), in its own order: the address it writes
 /// at and the pointer it writes there (GoWriteBarrier::Destination, Value).
-/// They follow neither the platform's argument order nor Go's.  None for a
-/// Buffer barrier, which takes no argument, or for any other routine.
+/// They follow neither the platform's argument order nor Go's.  The shared
+/// body of the buffer barriers (BufferBody) takes one, the bytes of buffer
+/// space wanted, in the register it returns that space in
+/// (goWriteBarrierResult).  None for a Buffer barrier, which takes no
+/// argument, or for any other routine.
 std::optional<FixedIntegerCallArguments>
 goWriteBarrierArguments(const BinaryImage &Img, va_t Entry);
 
@@ -86,6 +97,10 @@ bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
 /// The integer argument registers of Go's internal ABI on \p A, in order
 /// (abi-internal.md: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11), or none.
 llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A);
+
+/// Go's floating argument and result registers on \p A, in order: X0-X14 on
+/// amd64 (X15 holds zero), F0-F15 (V0-V15) on arm64.  Empty elsewhere.
+llvm::ArrayRef<uint64_t> goFloatArgumentRegisters(Arch A);
 
 /// The registers x86-64 Go assembly at \p Entry takes its arguments in where
 /// neither of Go's ABIs nor the platform's convention passes them: assembly
@@ -155,6 +170,12 @@ struct GoStackGrowth {
   /// the path changes nothing the function computes; `runtime.morestackc`
   /// throws instead (GoModuleInfo::ThrowingMorestackEntries).
   bool Restarts = false;
+  /// Where the entry's second check starts, for a frame too large for one
+  /// comparison: the entry proves the stack pointer less the frame does not
+  /// wrap (`sub r12, N; jb`), and the block after it compares that with the
+  /// guard (`cmp r12, [r14+16]; jbe`), each branching to the growth block.
+  /// InvalidVA where the entry checks once.
+  va_t SecondCheck = InvalidVA;
 };
 
 /// The stack-growth path of a function whose entry is block 0 of \p Blocks,
@@ -187,8 +208,16 @@ std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
 /// Whether a call to \p Callee resumes at its return address although the
 /// callee's own code never returns: Go's stack-growth routines, whose
 /// `newstack` resumes the goroutine at the call's return address once the
-/// stack has grown (src/runtime/stack.go).  `runtime.morestackc` throws.
+/// stack has grown (src/runtime/stack.go), and `runtime.mcall`, whose caller
+/// the scheduler resumes there when it runs the goroutine again
+/// (GoModuleInfo::ScheduleCallEntries).  `runtime.morestackc` throws.
 bool goCallResumesAfter(const BinaryImage &Img, va_t Callee);
+
+/// What is stated of each function's calls in \p Img, for the proofs that
+/// find the calls that never return: what the user states
+/// (BinaryImage::UserNoReturn), and that a call of a routine above returns
+/// (goCallResumesAfter), which no proof of its body may overturn.
+std::map<va_t, bool> goStatedCallReturns(const BinaryImage &Img);
 
 /// Whether the Go function at \p Entry takes every argument and returns every
 /// result on the stack, as Go code did before its internal register ABI
@@ -210,6 +239,21 @@ bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register);
 /// lowest one the callee saves its link register in), which the callee finds
 /// past its return address.
 IntegerArgumentLayout goStackArgumentLayout(Arch A);
+
+/// The layout of a Go call by Go's internal ABI, on \p A: the integer
+/// arguments in Go's registers (goIntegerArgumentRegisters), and the ones Go
+/// assigns no register, past the last or too large for those left, in words
+/// where the stack ABI puts every argument (goStackArgumentLayout).  Go
+/// reserves no home space, on Windows either, and a stack argument follows
+/// Go's registers whichever of them the routine takes: none implies a
+/// register argument.
+IntegerArgumentLayout goRegisterArgumentLayout(Arch A);
+
+/// goRegisterArgumentLayout where \p Registers are the registers Go passes
+/// integer arguments in on \p A: a routine that takes its arguments in them
+/// (MedFunc::IntegerArgumentRegisters) takes the rest so.
+std::optional<IntegerArgumentLayout>
+goRegisterArgumentLayout(Arch A, llvm::ArrayRef<uint64_t> Registers);
 
 /// The bytes of arguments and results the Go function at \p Entry takes on
 /// its caller's frame, as its `pclntab` record says (GoFrameArguments), if

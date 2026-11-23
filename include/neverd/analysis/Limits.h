@@ -66,6 +66,9 @@ inline constexpr unsigned kLLVMScalarLoopUnpeelingMaxCuts = 8;
 inline constexpr int
     kX64RecoveryValidateRawEnvironmentDeclarationsTextTextSSizeLimit = 4096;
 
+// lib/analysis/arch/x86_64/X64CallContinuation.cpp
+inline constexpr size_t kX64ReturningCallPreservedFrameRangesLimit = 64;
+
 // lib/analysis/bytecode/BytecodeDecoder.cpp
 inline constexpr int kMaxBytecodeLookupValues = 65536;
 inline constexpr int kBytecodeDecoderValidateLayoutPTemporaryBytesLimit = 65536;

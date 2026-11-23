@@ -664,6 +664,11 @@ struct MedFunc {
   /// address, and no register carries one: Go code before Go's internal ABI
   /// (goTakesStackArguments).  integerArgumentLayoutOf gives its layout.
   bool StackArgumentsOnly = false;
+  /// The function begins with Go's stack check (goStackGrowth): it runs on a
+  /// goroutine's stack, where Go code calls nothing but Go code.  Code of
+  /// another language runs on the system stack, which assembly that has no
+  /// such check switches to.
+  bool ChecksGoStack = false;
 
   /// Trusted return-value evidence for consumers that need declaration
   /// semantics rather than a code-generation type.  Debug providers remain

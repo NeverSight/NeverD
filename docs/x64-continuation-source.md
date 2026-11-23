@@ -95,6 +95,23 @@ unknown values. The native ABI, unknown spilled bytes, incomplete helper inputs
 and external service implementations still require their own proofs. Public
 execution controls are in `NeverDSourceInlineCallsTests`.
 
+For ordinary Win64 C, an unresolved fixed scalar stack operand at a verified
+direct CALL in a linked image can be expressed as
+`NEVERD_WIN64_CALL_STACK_U64(pc, offset)`. Both source routes pass its 64 bits
+in the original argument position and retain subsequent arguments. The default
+C declaration imports `uint64_t neverd_win64_call_stack_u64(uint64_t call_pc,
+uint32_t rsp_offset)`. Its implementation supplies the original word for this
+dynamic occurrence. The PC identifies the instruction in the linked image,
+and the byte offset is relative to pre-CALL RSP. Without that implementation
+a reachable use is an unresolved symbol at link time. The compiler preserves
+the original call and its operand in the relocatable object.
+
+A producer that already holds the captured word can define the macro before
+compilation as a scalar lvalue or inline expression. This avoids a provider
+call. The value belongs to the current invocation and occurrence, including
+loops, recursion and threads. An original whole-word store recovered by
+call-ABI analysis continues to supply the ordinary expression directly.
+
 An entry request can include `"callee_depth": 1` together with
 `"follow_internal_calls": true`. Each discovery wave selects original direct
 CALL targets in mapped image code. Repeated targets and recursive edges share
@@ -1160,6 +1177,23 @@ explicit state. It never substitutes a constant abort status. Other transaction
 bodies require the complete-region binding below. Invalid encodings remain
 unsupported. The instruction
 behavior and abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
+
+### Immediate abort as a bound instruction step
+
+A successful-RAM `kernel-events-v6` request can select
+`"native_rtm_abort_steps": true` when the invocation guarantees RTM support
+on the executing CPU, outside RTM/HLE, with successful instruction fetch and
+no debug trap. This binding uses the same byte proof and indivisible native
+operation as the immediate-abort provider. The public step first checks the
+original V6 entry state, writes the actual zero-extended abort status to RAX,
+sets the original fallback PC and returns the jump exit. All other state is
+preserved. Both dispatchers charge one translated step, even on early abort
+or a fallback to the same XBEGIN. No environment callback or per-step CPUID
+query is needed under the declared CPU binding. The
+`native_rtm_abort_steps.regions` receipt records each pair's bytes, immediate
+and fallback. An independently selected XABORT retains its own boundary.
+Paged execution, scheduled events and another RTM binding are incompatible
+with this one-step interface.
 
 ## Complete selected RTM attempts
 

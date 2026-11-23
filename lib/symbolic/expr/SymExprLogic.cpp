@@ -822,20 +822,31 @@ SymRef SymContext::mkNot(SymRef A) {
   return intern(SymOp::Not, W, {A}, 0);
 }
 
+// All shifts saturate at the operand width. Inspect the borrowed limbs before
+// narrowing so a count with a set upper limb cannot wrap to a small shift.
+static unsigned boundedShiftAmount(const SymContext &Ctx, SymRef Count,
+                                   unsigned Width) {
+  const auto Words = Ctx.constWords(Count);
+  if (Words.front() >= Width ||
+      llvm::any_of(Words.drop_front(), [](uint64_t V) { return V != 0; }))
+    return Width;
+  return static_cast<unsigned>(Words.front());
+}
+
 SymRef SymContext::mkShl(SymRef A, SymRef B) {
   uint32_t W = width(A);
   if (isConst(B)) {
-    llvm::APInt Amt = constValue(B);
-    if (Amt.uge(W))
+    const unsigned Amt = boundedShiftAmount(*this, B, W);
+    if (Amt == W)
       return mkZero(W);
-    if (Amt.isZero())
+    if (!Amt)
       return A;
     if (isConst(A))
-      return mkConst(constValue(A).shl(Amt.getZExtValue()));
+      return mkConst(constValue(A).shl(Amt));
     // A left shift is a multiply by a power of two.  Normalising to Mul lets
     // the sum canonicalisation collect `x + (x << 1)` into `3*x`, which is a
     // very common obfuscation shape.
-    return mkMul(mkConst(llvm::APInt(W, 1).shl(Amt.getZExtValue())), A);
+    return mkMul(mkConst(llvm::APInt::getOneBitSet(W, Amt)), A);
   }
   if (isConstZero(A))
     return mkZero(W);
@@ -845,23 +856,23 @@ SymRef SymContext::mkShl(SymRef A, SymRef B) {
 SymRef SymContext::mkLShr(SymRef A, SymRef B) {
   uint32_t W = width(A);
   if (isConst(B)) {
-    llvm::APInt Amt = constValue(B);
-    if (Amt.uge(W))
+    const unsigned Amt = boundedShiftAmount(*this, B, W);
+    if (Amt == W)
       return mkZero(W);
-    if (Amt.isZero())
+    if (!Amt)
       return A;
     if (isConst(A))
-      return mkConst(constValue(A).lshr(Amt.getZExtValue()));
+      return mkConst(constValue(A).lshr(Amt));
     // Compare the full unsigned count before canonicalizing its storage
     // width. Equal in-range counts must denote the same shift expression.
-    B = mkConst(W, Amt.getZExtValue());
-    A = removeDiscardedShiftTerms(*this, A, Amt.getZExtValue());
+    if (width(B) != W)
+      B = mkConst(W, Amt);
+    A = removeDiscardedShiftTerms(*this, A, Amt);
     if (isConst(A))
-      return mkConst(constValue(A).lshr(Amt.getZExtValue()));
+      return mkConst(constValue(A).lshr(Amt));
     if (op(A) == SymOp::And && operands(A).size() == 2 &&
         isConst(operand(A, 0)) &&
-        constValue(operand(A, 0)).countLeadingOnes() >=
-            W - Amt.getZExtValue()) {
+        constValue(operand(A, 0)).countLeadingOnes() >= W - Amt) {
       // The mask changes only bits discarded by this logical right shift.
       // Keep the original count and source; this says nothing about signed
       // shifts, other masks, or LLVM's separate definedness obligations.
@@ -892,21 +903,18 @@ SymRef SymContext::mkAShr(SymRef A, SymRef B) {
   if (W == 1)
     return A;
   if (isConst(B)) {
-    llvm::APInt Amt = constValue(B);
-    if (isConst(A)) {
-      llvm::APInt V = constValue(A);
-      return mkConst(Amt.uge(W) ? (V.isNegative() ? llvm::APInt::getAllOnes(W)
-                                                  : llvm::APInt(W, 0))
-                                : V.ashr(Amt.getZExtValue()));
-    }
-    if (Amt.isZero())
+    const unsigned Amt = boundedShiftAmount(*this, B, W);
+    if (isConst(A))
+      return mkConst(constValue(A).ashr(std::min(Amt, W - 1)));
+    if (!Amt)
       return A;
-    if (Amt.uge(W - 1))
+    if (Amt >= W - 1)
       if (SymRef Predicate = detail::recoverSignComparison(*this, A))
         return mkSExt(Predicate, W);
     // Arithmetic overshifts saturate at the sign bit. Inspect the complete
     // count before narrowing so large counts cannot wrap to a smaller shift.
-    B = mkConst(W, Amt.uge(W - 1) ? W - 1 : Amt.getZExtValue());
+    if (width(B) != W || Amt == W)
+      B = mkConst(W, std::min(Amt, W - 1));
   }
   if (isConstZero(A))
     return mkZero(W);

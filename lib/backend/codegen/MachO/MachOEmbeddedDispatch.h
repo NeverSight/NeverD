@@ -19,12 +19,13 @@ namespace neverd {
 class Decoder;
 struct BinaryImage;
 struct LowFunc;
+struct JumpTable;
 
 /// Borrowed targets from the source CFG. Only these table-address producers
 /// and indirect transfers can move with the copied function.
 struct MachOEmbeddedDispatch {
   llvm::DenseSet<va_t> TableAddresses;
-  llvm::DenseMap<va_t, llvm::ArrayRef<va_t>> BranchTargets;
+  llvm::DenseMap<va_t, const JumpTable *> BranchTables;
   std::vector<MachODataInCodeRange> Recovered;
   /// Whole instruction intervals outside the entry CFG and the data records.
   llvm::SmallVector<std::pair<va_t, va_t>, 0> UnreachedCode;

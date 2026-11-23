@@ -281,13 +281,38 @@ TEST_P(LinuxPoll, SuspendedInputsAreCopiedButOutputPermissionsAreRechecked) {
 }
 TEST_P(LinuxPoll, ZeroCountDeadlinesAndMillisAdapterDoNotNeedGKI) {
   word(Base + 104, 7);
-  EXPECT_EQ(poll(0, 0), 0u);
+  EXPECT_EQ(poll(1, 0), 0u);
+  EXPECT_EQ(word(Base + 104), 0u);
   EXPECT_EQ(Kernel->clock().elapsed(), 7u);
+  word(Base + 104, 7);
+  EXPECT_EQ(poll(Layout.UserLimit + 1, 0), uint64_t(-14));
+  EXPECT_EQ(word(Base + 104), 0u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 14u);
   EXPECT_EQ(call(ServiceKind::Poll, 0, 0, 2), 0u);
-  EXPECT_EQ(Kernel->clock().elapsed(), 2000007u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 2000014u);
   EXPECT_FALSE(call(ServiceKind::Poll, 0, 0, uint32_t(-1)));
   EXPECT_NE(Report.Diagnostic.find("readiness schedule"), std::string::npos);
 }
+TEST_P(LinuxPoll, MissingReadObservationReportsAcceptedBytesAcrossAliases) {
+  auto &C = Options.LinuxNetwork->Connections.front();
+  C.Receive.clear();
+  C.ReceiveEOF = false;
+  C.MaxSend = 2;
+  ASSERT_EQ(socket(), 3u);
+  ASSERT_EQ(call(ServiceKind::Dup, 3), 4u);
+  require(cpu().write(Base + 128, C.ExpectedSend));
+  ASSERT_EQ(call(ServiceKind::SendTo, 4, Base + 128, C.ExpectedSend.size()),
+            2u);
+
+  entry(0, 3, 1);
+  EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 1));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, read readiness), "
+                               "sent bytes 2");
+  EXPECT_EQ(events(0), 0xa5a5u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 0u);
+}
+
 TEST_P(LinuxPoll, UnknownReadinessAndClosedDescriptorsNeverBecomeTimeouts) {
   auto &C = Options.LinuxNetwork->Connections[0];
   C.Receive.clear();
@@ -311,7 +336,6 @@ TEST_P(LinuxPoll, UnknownReadinessAndClosedDescriptorsNeverBecomeTimeouts) {
 TEST_P(LinuxPoll, PollAdmissionAndOrderedCopiesPreserveEarlierFields) {
   EXPECT_EQ(poll(Base + 256, 17), uint64_t(-22));
   EXPECT_EQ(poll(1, 1), uint64_t(-14));
-  EXPECT_EQ(poll(Layout.UserLimit + 1, 0), uint64_t(-14));
   word(Base + 96, UINT64_MAX);
   EXPECT_EQ(poll(1, 17), uint64_t(-22));
   word(Base + 96, 0);

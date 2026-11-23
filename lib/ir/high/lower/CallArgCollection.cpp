@@ -1691,7 +1691,14 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                       Required == 0 && !ParamRegs.empty() &&
                                       FoundSource[0] &&
                                       LeftByCall(*FoundSource[0], ParamRegs[0]);
-      if (CompleteSetup || EmptyClobberPrefix ||
+      // The scan below numbers registers in the convention's order, which
+      // does not index arguments passed in the callee's own: recovery, which
+      // reads the callee's registers, gives such a call all of them, none
+      // included (MedCallInfo::ArgumentsInCalleeRegisterOrder).  A Go func
+      // value takes RAX, RBX and RCX, and RDX, System V's third, holds its
+      // closure.
+      const bool CalleeOrder = CI->ArgumentsInCalleeRegisterOrder;
+      if (CompleteSetup || EmptyClobberPrefix || CalleeOrder ||
           (SetupConvention
                ? Recovered || TargetLimit < static_cast<size_t>(MaxArgs)
                : !CI->Args.empty())) {
@@ -1743,9 +1750,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                  Source->SSAVer == Target.SSAVer;
         };
         size_t End = FromABI.size();
-        while (!CompleteSetup && !KnownImport && End < SetupLimit &&
-               Found[End] && Found[End]->Kind != ExprKind::Undef &&
-               !HoldsTarget(End))
+        while (!CompleteSetup && !KnownImport && !CalleeOrder &&
+               End < SetupLimit && Found[End] &&
+               Found[End]->Kind != ExprKind::Undef && !HoldsTarget(End))
           ++End;
         // COPY transport found by this scan is no fresh argument setup.
         if (HeuristicRegisterTail && End <= ParamRegs.size())
@@ -2206,6 +2213,14 @@ int MedToHighConverter::abiParamIndex(const MedVar &V) const {
     for (size_t I = 0; I < CurMed->Params.size(); ++I)
       if (CurMed->Params[I].RegOff == RegOff)
         return static_cast<int>(I);
+    // A position names a parameter only where the function takes its
+    // arguments at the platform's positions.  One that takes them in
+    // registers of its own (MedFunc::IntegerArgumentRegisters: Go's internal
+    // ABI, a write barrier's operands) or on the stack alone
+    // (StackArgumentsOnly) has none at a register's position: there RCX's
+    // entry value is no `arg0`.
+    if (!CurMed->IntegerArgumentRegisters.empty() || CurMed->StackArgumentsOnly)
+      return -1;
     const int Idx = regToArgIdx(RegOff);
     if (Idx >= 0 && static_cast<size_t>(Idx) < CurMed->Params.size())
       return Idx;

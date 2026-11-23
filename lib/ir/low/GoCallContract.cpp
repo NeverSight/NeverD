@@ -151,7 +151,8 @@ const GoWriteBarrier *goWriteBarrierAt(const BinaryImage &Img, va_t Entry) {
 }
 
 std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind) {
-  if (Kind != GoWriteBarrierKind::Buffer)
+  if (Kind != GoWriteBarrierKind::Buffer &&
+      Kind != GoWriteBarrierKind::BufferBody)
     return std::nullopt;
   if (A == Arch::X64)
     return x86reg::R11;
@@ -160,14 +161,32 @@ std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind) {
   return std::nullopt;
 }
 
+bool goWriteBarrierKeeps(Arch A, GoWriteBarrierKind Kind, uint64_t Register) {
+  if (Register % 8 != 0 || goWriteBarrierResult(A, Kind) == Register)
+    return false;
+  // RAX to R15 but the stack pointer; X0 to X30 but the assembler's R27.
+  if (A == Arch::X64)
+    return Register <= x86reg::R15 && Register != x86reg::RSP;
+  if (A == Arch::AArch64)
+    return Register <= a64reg::X30 && Register != a64reg::X27;
+  return false;
+}
+
 std::optional<FixedIntegerCallArguments>
 goWriteBarrierArguments(const BinaryImage &Img, va_t Entry) {
   const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Entry);
-  if (!Barrier || Barrier->Kind != GoWriteBarrierKind::Store)
+  if (!Barrier || Barrier->Kind == GoWriteBarrierKind::Buffer)
     return std::nullopt;
   const auto Bytes =
       static_cast<uint16_t>(getTargetRegInfo(Img.Arch).PointerSize);
   FixedIntegerCallArguments Arguments;
+  if (Barrier->Kind == GoWriteBarrierKind::BufferBody) {
+    if (const std::optional<uint64_t> Size =
+            goWriteBarrierResult(Img.Arch, Barrier->Kind))
+      Arguments.Parameters.push_back(
+          {SourceABICarrierKind::IntegerRegister, *Size, 0, Bytes});
+    return Arguments;
+  }
   for (const uint64_t Register : {Barrier->Destination, Barrier->Value})
     Arguments.Parameters.push_back(
         {SourceABICarrierKind::IntegerRegister, Register, 0, Bytes});
@@ -214,6 +233,25 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
       a64reg::X4,  a64reg::X5,  a64reg::X6,  a64reg::X7,
       a64reg::X8,  a64reg::X9,  a64reg::X10, a64reg::X11,
       a64reg::X12, a64reg::X13, a64reg::X14, a64reg::X15};
+  if (A == Arch::X64)
+    return X64;
+  if (A == Arch::AArch64)
+    return AArch64;
+  return {};
+}
+
+llvm::ArrayRef<uint64_t> goFloatArgumentRegisters(Arch A) {
+  static constexpr uint64_t X64[] = {
+      x86reg::vectorReg(0),  x86reg::vectorReg(1),  x86reg::vectorReg(2),
+      x86reg::vectorReg(3),  x86reg::vectorReg(4),  x86reg::vectorReg(5),
+      x86reg::vectorReg(6),  x86reg::vectorReg(7),  x86reg::vectorReg(8),
+      x86reg::vectorReg(9),  x86reg::vectorReg(10), x86reg::vectorReg(11),
+      x86reg::vectorReg(12), x86reg::vectorReg(13), x86reg::vectorReg(14)};
+  static constexpr uint64_t AArch64[] = {
+      a64reg::V(0),  a64reg::V(1),  a64reg::V(2),  a64reg::V(3),
+      a64reg::V(4),  a64reg::V(5),  a64reg::V(6),  a64reg::V(7),
+      a64reg::V(8),  a64reg::V(9),  a64reg::V(10), a64reg::V(11),
+      a64reg::V(12), a64reg::V(13), a64reg::V(14), a64reg::V(15)};
   if (A == Arch::X64)
     return X64;
   if (A == Arch::AArch64)
@@ -418,11 +456,27 @@ std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
 
 bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (!Module)
+    return false;
+  if (std::binary_search(Module->ScheduleCallEntries.begin(),
+                         Module->ScheduleCallEntries.end(), Callee))
+    return true;
   return goGrowthPathsModeled(Img) &&
          std::binary_search(Module->MorestackEntries.begin(),
                             Module->MorestackEntries.end(), Callee) &&
          !std::binary_search(Module->ThrowingMorestackEntries.begin(),
                              Module->ThrowingMorestackEntries.end(), Callee);
+}
+
+std::map<va_t, bool> goStatedCallReturns(const BinaryImage &Img) {
+  std::map<va_t, bool> Stated = Img.UserNoReturn;
+  if (const auto &Module = Img.ExceptionMetadata.GoModule)
+    for (const std::vector<va_t> *Entries :
+         {&Module->MorestackEntries, &Module->ScheduleCallEntries})
+      for (const va_t Entry : *Entries)
+        if (goCallResumesAfter(Img, Entry))
+          Stated.try_emplace(Entry, false);
+  return Stated;
 }
 
 bool goTakesStackArguments(const BinaryImage &Img, va_t Entry) {
@@ -462,6 +516,20 @@ IntegerArgumentLayout goStackArgumentLayout(Arch A) {
   Layout.CallStackBase = A == Arch::AArch64 ? 8 : 0;
   Layout.EntryStackBase = 8;
   return Layout;
+}
+
+IntegerArgumentLayout goRegisterArgumentLayout(Arch A) {
+  IntegerArgumentLayout Layout = goStackArgumentLayout(A);
+  Layout.Registers = goIntegerArgumentRegisters(A);
+  return Layout;
+}
+
+std::optional<IntegerArgumentLayout>
+goRegisterArgumentLayout(Arch A, llvm::ArrayRef<uint64_t> Registers) {
+  const llvm::ArrayRef<uint64_t> Go = goIntegerArgumentRegisters(A);
+  if (Go.empty() || Registers != Go)
+    return std::nullopt;
+  return goRegisterArgumentLayout(A);
 }
 
 namespace {
@@ -741,6 +809,22 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
   Result.Spills = std::move(Spills);
   Result.GrowthStart = Growth->StartAddr;
   Result.Restarts = !Throws;
+  // A frame too large for one comparison checks twice: the block the entry
+  // falls into, which nothing else reaches, computes nothing either and
+  // branches to the same growth block.
+  const auto Second =
+      llvm::find_if(Blocks.drop_front(), [&](const LowBlock &Block) {
+        return Block.StartAddr == Entry.EndAddr;
+      });
+  if (Second != Blocks.end() && Second != Growth && !Second->Ops.empty() &&
+      Second->Preds == std::vector<int>{Entry.Id}) {
+    const LowOp &Again = Second->Ops.back();
+    if (Again.Opcode == NdOp::COND_BR && Again.NumInputs >= 1 &&
+        Again.Inputs[0].isConst() &&
+        Again.Inputs[0].Offset == Check.Inputs[0].Offset &&
+        llvm::all_of(llvm::ArrayRef(Second->Ops).drop_back(), isStackCheckStep))
+      Result.SecondCheck = Second->StartAddr;
+  }
   return Result;
 }
 

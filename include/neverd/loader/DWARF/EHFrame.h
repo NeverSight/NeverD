@@ -23,6 +23,8 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -79,6 +81,14 @@ bool sameCFIInstruction(const CFIInstruction &A, const CFIInstruction &B);
 ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
                          const PointerBases &Bases,
                          const ParseLimits &Limits = {});
+
+/// Visit encoded FDE opcode boundaries during the same decode. The visitor
+/// receives the FDE section offset, opcode section offset and raw opcode.
+/// Consumers must check the frame's parse status before using these offsets.
+using FDEOpcodeVisitor = llvm::function_ref<void(uint64_t, size_t, uint8_t)>;
+ParseResult parseEHFrame(const BinaryImage &Img, const FrameSection &Sec,
+                         const PointerBases &Bases, const ParseLimits &Limits,
+                         FDEOpcodeVisitor VisitOpcode);
 
 /// Carry incomplete section decoding into each normalized FDE-backed function.
 /// The decoder currently reports completeness for the whole section. Preserve

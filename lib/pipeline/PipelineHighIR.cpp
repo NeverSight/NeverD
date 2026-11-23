@@ -230,20 +230,13 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   // Before Go's internal ABI a call passes its arguments on the stack, as
   // call recovery reads them (MedFunc::StackArgumentsOnly) and the HighIR
   // collection does not: a run of one Go function takes them so too, as a
-  // run of the whole image does.  Under the internal ABI a call to Go
-  // assembly does that takes none of Go's argument registers (ABI0).
+  // run of the whole image does.  Under the internal ABI a call of Go code
+  // passes them in Go's registers, in the callee's order
+  // (MedCallInfo::ArgumentsInCalleeRegisterOrder), and on the stack past
+  // those or where the callee is assembly that takes none (ABI0): the
+  // collection numbers a platform's registers, System V's six of Go's nine.
   const auto &Go = Img.ExceptionMetadata.GoModule;
-  const auto ABI0Callee = [&](va_t Callee) {
-    if (!goTakesStackArguments(Img, Callee))
-      return false;
-    const auto Summary = Result.CallEntryReadGPRs.find(Callee);
-    return Summary == Result.CallEntryReadGPRs.end() ||
-           llvm::none_of(goIntegerArgumentRegisters(Img.Arch),
-                         [&](uint64_t Register) {
-                           return Summary->second[Register / 8] != 0;
-                         });
-  };
-  const bool GoStackArguments =
+  const bool GoArguments =
       Go && (Go->StackArguments ||
              (Go->RegisterArguments &&
               llvm::any_of(Result.MedFuncs, [&](const MedFunc &F) {
@@ -251,11 +244,11 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
                   return llvm::any_of(B.Ops, [&](const MedOp &Op) {
                     return Op.Opcode == NdOp::CALL && Op.NumInputs &&
                            Op.Inputs[0].isConst() &&
-                           ABI0Callee(Op.Inputs[0].ConstVal);
+                           isGoCode(Img, Op.Inputs[0].ConstVal);
                   });
                 });
               })));
-  if (SetupArguments || HasIndirectCalls || GoStackArguments) {
+  if (SetupArguments || HasIndirectCalls || GoArguments) {
     recoverModuleCallAbi(Img, Result, AllFuncNames,
                          /*SourceDeclarations=*/false,
                          /*SourceParameterReads=*/true);

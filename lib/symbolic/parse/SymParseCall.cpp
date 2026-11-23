@@ -15,6 +15,7 @@
 #include "SymParseDetail.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 
 #include <algorithm>
 
@@ -71,12 +72,26 @@ SymRef Parser::makeLiteral(const Token &N) {
     return Ctx.mkConst(V);
   }
 
-  uint64_t Native;
-  if (!N.Digits.getAsInteger(N.Radix, Native))
-    return Ctx.mkConst(W, Native);
-  unsigned Needed = llvm::APInt::getBitsNeeded(N.Digits, N.Radix);
-  llvm::APInt V(std::max(Needed, W), N.Digits, N.Radix);
-  return Ctx.mkConst(V.zextOrTrunc(W));
+  // Binary and hexadecimal digits occupy fixed bit positions. The lexer has
+  // validated the whole token, including any high digits discarded at W.
+  const unsigned DigitBits = N.Radix == 16 ? 4 : 1;
+  const unsigned PerWord = 64 / DigitBits;
+  auto Digits = N.Digits.take_back(1 + (W - 1) / DigitBits);
+  auto TakeWord = [&]() {
+    const auto Tail = Digits.take_back(PerWord);
+    uint64_t Word = 0;
+    for (char D : Tail)
+      Word = (Word << DigitBits) | llvm::hexDigitValue(D);
+    Digits = Digits.drop_back(Tail.size());
+    return Word;
+  };
+  if (Digits.size() <= PerWord)
+    return Ctx.mkConst(W, TakeWord());
+  llvm::SmallVector<uint64_t, 8> Words;
+  Words.reserve(1 + (Digits.size() - 1) / PerWord);
+  while (!Digits.empty())
+    Words.push_back(TakeWord());
+  return Ctx.mkConst(llvm::APInt(W, Words));
 }
 
 uint32_t Parser::parseWidthSuffix(uint32_t Default) {

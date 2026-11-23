@@ -923,6 +923,17 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       if (Index + 1 == End)
         return fail(kCode);
       Queue(Index + 1, After);
+    } else if (I.Id == AARCH64_INS_BR && Ops.size() == 1 &&
+               Ops.front().type == AARCH64_OP_REG) {
+      // A register can carry a relocated ADR/ADRP function address. A known
+      // separate callable has no successor in this FDE. An opaque register
+      // could also reach an interior instruction, so keep that edge unknown.
+      const auto R = reg(Ops.front().reg);
+      const auto Target =
+          R ? States[Index]->Registers[*R].CodeAddress : std::nullopt;
+      if (!Target || Function.CodeRange.contains(*Target) ||
+          !Image.hasAuthenticatedFunctionEntryAt(*Target))
+        return fail(kCode);
     } else if (I.Id == AARCH64_INS_HLT || I.Id == AARCH64_INS_UDF ||
                (I.Id == AARCH64_INS_BRK && Ops.size() == 1 &&
                 Ops.front().type == AARCH64_OP_IMM &&

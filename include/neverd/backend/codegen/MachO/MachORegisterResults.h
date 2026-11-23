@@ -33,6 +33,7 @@ namespace neverd {
 struct BinaryImage;
 struct CompactUnwindEntry;
 struct ExceptionFunction;
+struct ItaniumEHInfo;
 struct LowFunc;
 struct MedFunc;
 
@@ -44,9 +45,14 @@ machOFramelessSpillRows(const CompactUnwindEntry &Compact);
 
 /// A complete C++/Objective-C frame whose language table can be preserved or
 /// rebuilt with a function-relative landing-pad base. Publication separately
-/// proves that every native instruction keeps its original offset.
+/// proves the installed instruction, CFI and landing-pad offsets.
 bool canPublishMachOLanguageFrame(const BinaryImage &Image,
                                   const ExceptionFunction &Frame);
+
+/// A function-relative table in an original data section can be referenced
+/// directly. A table in a sectionless published segment needs a new owner.
+bool canBindMachOLanguageTable(const BinaryImage &Image,
+                               const ItaniumEHInfo &Table);
 
 /// An indexed access using the physical SP cannot use a reconstructed stack.
 bool needsMachONativeStackIndex(const MedFunc &Function);
@@ -76,6 +82,8 @@ struct MachOLiftedSourceAddress {
   MachOAddressForm Form = MachOAddressForm::Single;
   /// Byte position of the instruction in the verified inline assembly.
   uint64_t AssemblyOffset = 0;
+  /// Inserting a word here preserves the body's local PC-relative encodings.
+  bool CanExpand = true;
 };
 
 /// Check each register body and its symbolic call operands against the image

@@ -16,6 +16,14 @@ import verify_arm64e_entry as entry
 CASES = json.loads(Path(__file__).with_suffix(".def").read_text())
 
 
+def object_listing(indexed=()):
+    symbols = CASES["unwind_compact"]
+    rows = [CASES["object_record"].format(
+        address=address, mode=entry.POLICY["dwarf_unwind_modes" if name in indexed else "compact_unwind_modes"][0])
+            for address, name in re.findall(entry.POLICY["symbol_pattern"], symbols, re.MULTILINE)]
+    return symbols + "\n" + "".join(rows)
+
+
 class EntryQualificationTests(unittest.TestCase):
     def test_cli_preserves_cxx_driver_symlink_name(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -104,6 +112,8 @@ class EntryQualificationTests(unittest.TestCase):
                                 (output / name).write_text(CASES["binary_bytes"])
                             self.assertEqual(entry.POLICY["backend_environment"] in env, backend)
                             if backend:
+                                mode = "published_backend_export" if publish else "enabled_environment_value"
+                                self.assertEqual(env[entry.POLICY["backend_environment"]], entry.POLICY[mode])
                                 for key in ("backend_object", "backend_dwarf_object", "original_ir", "original_dwarf_ir"):
                                     (output / entry.POLICY[key]).write_text(CASES["binary_bytes"])
                     elif entry.POLICY["output_option"] in argv:
@@ -124,6 +134,8 @@ class EntryQualificationTests(unittest.TestCase):
                         original = label.endswith(entry.POLICY["baseline_suffix"] + entry.POLICY["sections_suffix"])
                         stdout = CASES["nonzero_text_base"] if original and not zero_base else CASES["text_base"]
                         stdout += CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
+                    elif label.endswith(entry.POLICY["object_unwind_suffix"]):
+                        stdout = object_listing()
                     elif label.endswith(entry.POLICY["unwind_suffix"]):
                         stdout = CASES["unwind_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["unwind_compact"]
                     elif argv[0] == str(output / entry.POLICY["loader_binary"]):
@@ -267,6 +279,14 @@ class EntryQualificationTests(unittest.TestCase):
             if entry.re.search(entry.POLICY["unwind_pattern"], line):
                 with self.subTest(line=line), self.assertRaises(ValueError):
                     entry.check_unwind(CASES["unwind_dwarf"].replace(line, ""), True)
+
+    def test_publication_matches_each_raw_object_mode(self):
+        indexed = set(entry.exception_frames()[::2])
+        self.assertEqual(entry.object_dwarf_entries(object_listing(indexed)), indexed)
+        with self.assertRaises(ValueError):
+            entry.object_dwarf_entries(CASES["unwind_compact"])
+        with self.assertRaises(ValueError):
+            entry.check_unwind(CASES["unwind_compact"], False, object_dwarf=indexed)
 
     def test_abi_subtype_is_exact_without_rewriting_the_object(self):
         for subtype in (entry.native.POLICY["cpu_subtype"], entry.POLICY["classic_subtype"]):

@@ -203,7 +203,9 @@ SymRef projectBitWindow(SymContext &Ctx, SymRef Source, unsigned Low,
                         unsigned Width, WorkBudget &Budget, size_t &Storage,
                         unsigned Depth = 0) {
   auto Original = [&] { return Ctx.mkExtract(Source, Low, Width); };
-  const size_t Words = (size_t(Ctx.width(Source)) - 1) / 64 + 1;
+  // A variable slice interns just its source and two indices, at any width.
+  const size_t Words =
+      Ctx.isVar(Source) ? 0 : llvm::APInt::getNumWords(Ctx.width(Source));
   constexpr size_t NodeBytes = 128;
   if (Depth >= ::neverd::symbolic::detail::limits::
                    kSymMBAProjectBitWindowDepthLimit ||
@@ -212,6 +214,8 @@ SymRef projectBitWindow(SymContext &Ctx, SymRef Source, unsigned Low,
     return Original();
   Storage -= NodeBytes + Words * sizeof(uint64_t);
   const SymOp Op = Ctx.op(Source);
+  if (Op == SymOp::Var)
+    return Original();
   auto Part = [&](SymRef Value, unsigned Begin, unsigned Bits) {
     return projectBitWindow(Ctx, Value, Begin, Bits, Budget, Storage,
                             Depth + 1);
