@@ -5540,6 +5540,18 @@ returns counts for the function it came from, so the double a wrapper
 passes on to a reader stays a result. This is settled only on x86-64, where
 a call's register arguments are its operands by then and a result handed
 straight to the next call is a read like any other.
+What a stack protector check leaves in the return register is no result
+(`MedStackGuard`). A protected function keeps the thread's guard in its
+frame and compares the two before it returns; GCC loads the copy into RAX
+and subtracts the live guard (`sub rax, fs:0x28`), and Clang loads the guard
+there, exactly where RAX holds no result. The guard, its copies, the
+difference or exclusive OR the check makes, and a value only the check reads
+are the check's own: the type pass takes none for an integer result
+(`inferReturnType`), so a protected function that returns a double is typed
+by the double it left in XMM0, and the return contracts read such a return
+as showing the function means no value. The guard is found at `%fs:0x28` on
+x86-64 and `%gs:0x14` on i386, where the C libraries of Linux and Android
+keep it.
 An inferred integer result is as wide as the widest value some return path
 is seen to leave (`inferReturnType`). The write in the return's own block,
 the writes that reach a return without one from the blocks before it, and the

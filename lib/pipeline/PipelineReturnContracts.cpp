@@ -68,6 +68,7 @@
 #include "neverd/ir/med/MedByteDemand.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
+#include "neverd/ir/med/MedStackGuard.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/ir/med/X86/X86RegistrationFrame.h"
 #include "neverd/libc/LibCNames.h"
@@ -142,6 +143,8 @@ struct ReturnPath {
 /// One function's SSA definitions and what it does with its calls' results.
 struct FunctionFacts {
   const MedFunc *Func = nullptr;
+  /// The values the function's stack protector check makes.
+  MedStackGuard StackGuard;
   ValueMap<const MedOp *> Defs;
   /// The intrinsic each bound output of a multi-output intrinsic comes from.
   ValueMap<const MedOp *> IntrinsicOutputDefs;
@@ -273,6 +276,7 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
   const Arch Target = Img.Arch;
   FunctionFacts Facts;
   Facts.Func = &Func;
+  Facts.StackGuard = MedStackGuard(Func, Target);
   std::vector<const MedOp *> Calls;
   MedByteDemand Demand(TRI, medLeavesOtherRegisters(Func));
   for (const MedBlock &Block : Func.Blocks) {
@@ -834,6 +838,13 @@ private:
     }
     if (Value.Kind == MedVar::Unspecified) {
       Paths.push_back(ReturnedValue::Undefined);
+      return;
+    }
+    // What a stack protector check leaves in the register shows the
+    // function means no value: a compiler makes the check there only where
+    // the register holds no result.
+    if (F.StackGuard.holds(Value)) {
+      Paths.push_back(ReturnedValue::Unwritten);
       return;
     }
     // The GOT address computed from the PC is nothing the function means.

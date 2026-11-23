@@ -26,6 +26,7 @@
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/ir/med/MedStackGuard.h"
 #include "neverd/ir/med/X86/X86NativeMemory.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -1350,9 +1351,14 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   // usually a narrower view of the register, which writes nothing.  One that
   // fills the whole register is a write: a division's quotient comes out of
   // its double-width result that way.
+  // What a stack protector check leaves in the return register is no
+  // result: GCC makes it there where the function returns none in it, as
+  // in a function that returns a double.
+  const MedStackGuard StackGuard(Func, TheArch);
   auto WritesIntegerResult = [&](const MedBlock &Block, const MedOp &Op) {
     return Op.Output.Kind == MedVar::Reg && Op.Output.Size != 0 &&
            Op.Output.RegOff == TRI.IntReturnReg &&
+           !StackGuard.holds(Op.Output) &&
            (Op.Opcode != NdOp::SUBBYTES || Op.Output.Size == TRI.PointerSize) &&
            !(FilterRestore &&
              isReturnRegRestore(Defs, Block, Op, TRI, HasComputedStackWrite));

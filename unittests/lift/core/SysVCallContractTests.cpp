@@ -3211,4 +3211,50 @@ int main(void) { return twice(3, 2.75) == 5 ? 0 : 1; }
 )");
 }
 
+TEST(SysVCallContract, WhatAStackProtectorCheckLeavesIsNoResult) {
+  // half(v) and bump(p) are protected as GCC protects them: each keeps the
+  // thread's guard in its frame and, before it returns, loads that copy
+  // into RAX and subtracts the live guard, leaving for __stack_chk_fail
+  // where they differ.  The difference is no value: GCC makes it in RAX
+  // where the function returns none there.  half returns the double it
+  // left in XMM0 and bump returns nothing.
+  constexpr va_t Half = Text, Bump = Text + 0x40, Fail = Text + 0x100;
+  std::vector<uint8_t> Code(0x110, 0xCC);
+  put(Code, Half,
+      {0x55,                                                 // push rbp
+       0x48, 0x89, 0xE5,                                     // mov rbp, rsp
+       0x48, 0x83, 0xEC, 0x10,                               // sub rsp, 0x10
+       0x64, 0x48, 0x8B, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, // mov rax, fs:0x28
+       0x48, 0x89, 0x45, 0xF8,                               // mov [rbp-8], rax
+       0xF2, 0x48, 0x0F, 0x2A, 0xC7, // cvtsi2sd xmm0, rdi
+       0xF2, 0x0F, 0x11, 0x45, 0xF0, // movsd [rbp-0x10], xmm0
+       0xF2, 0x0F, 0x10, 0x45, 0xF0, // movsd xmm0, [rbp-0x10]
+       0x48, 0x8B, 0x45, 0xF8,       // mov rax, [rbp-8]
+       0x64, 0x48, 0x2B, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, // sub rax, fs:0x28
+       0x75, 0x02,                                           // jne fail
+       0xC9,                                                 // leave
+       0xC3,                                                 // ret
+       0xE8, 0xC6, 0x00, 0x00, 0x00}); // call __stack_chk_fail
+  put(Code, Bump,
+      {0x55,                                                 // push rbp
+       0x48, 0x89, 0xE5,                                     // mov rbp, rsp
+       0x48, 0x83, 0xEC, 0x10,                               // sub rsp, 0x10
+       0x64, 0x48, 0x8B, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, // mov rax, fs:0x28
+       0x48, 0x89, 0x45, 0xF8,                               // mov [rbp-8], rax
+       0x48, 0x83, 0x07, 0x01,                               // add [rdi], 1
+       0x48, 0x8B, 0x45, 0xF8,                               // mov rax, [rbp-8]
+       0x64, 0x48, 0x2B, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, // sub rax, fs:0x28
+       0x75, 0x02,                                           // jne fail
+       0xC9,                                                 // leave
+       0xC3,                                                 // ret
+       0xE8, 0x91, 0x00, 0x00, 0x00}); // call __stack_chk_fail
+  put(Code, Fail, {0xC3});             // the stub
+  const BinaryImage Img = makeImportImage(
+      Code, {{Half, "half"}, {Bump, "bump"}}, {{Fail, "__stack_chk_fail"}});
+  const std::string Source = liftEntries(Img, {Half, Bump});
+  EXPECT_NE(Source.find("\ndouble half("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\nvoid bump("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+}
+
 } // namespace
