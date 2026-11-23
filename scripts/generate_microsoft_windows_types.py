@@ -385,6 +385,7 @@ PROVIDER_INLINE_ROUTINES = {
 # The SDK uses an empty C parameter list for these no-argument C++ exports.
 # Authenticate every redeclaration against the target SDK before using (void).
 CPP_NOARG_PROVIDERS = {
+    "SetupAdministration": {"NeedRebootInit": "DWORD WINAPI"},
     "SNMPUtilities": {"SnmpSvcGetUptime": "DWORD __stdcall"},
     "WebAuthentication": {"WebAuthNGetApiVersionNumber": "DWORD WINAPI"},
     "DeviceManagementRegistration": {
@@ -894,6 +895,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                          rdbss=wdk.digest(Path(rdbss.__file__)),
                          gdiplus=wdk.digest(Path(gdiplus.__file__)),
                          flat_imports=wdk.digest(Path(flat.__file__)),
+                         ordinal_imports=wdk.digest(flat.ordinal.INPUTS),
                          webauthn_runtime=wdk.digest(flat.WEBAUTHN_INPUTS),
                          **({"legacy_sdk": wdk.digest(flat.LEGACY_INPUTS)} if legacy_sdk else {})),
         "inputs": inputs,

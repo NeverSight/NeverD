@@ -383,9 +383,8 @@ private:
   }
   /// Opens the store a restore asks for by \p mode: "read", "write" or empty.
   void openRenderStore(const std::string &mode);
-  /// A request that takes only what is kept (kept_only): what no session kept
-  /// is refused as "not_kept", and the engine is not asked.
-  bool keptOnly_ = false;
+  enum class ViewRead { Normal, KeptOnly, Refresh };
+  ViewRead viewRead_ = ViewRead::Normal;
   /// The store a view reads.  A restored one follows its job.  An owner holds
   /// one to read only, and follows what the identity reads, as for the facts.
   RenderStore *storeOfViews();

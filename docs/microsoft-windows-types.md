@@ -218,6 +218,13 @@ public code import names with that SDK's declarations, checks the compiler's
 exact linker spelling, and compares the original and published compiler ABI
 before and after the merge. Ordinal-only imports carry no public name.
 
+The `SetupAdministration` profile checks the declarations in `advpub.h`
+against the target SDK's `advpack.lib`. The profile records the archive
+symbols for exports that have exclusively C++ linkage. For each published C
+declaration it verifies the exact linker spelling and compiler ABI.
+It also checks the zero-argument declaration of `NeedRebootInit` with the
+Microsoft header in C++ mode.
+
 The `ProcessStatus` profile selects `PSAPI_VERSION=1` before including the
 SDK headers and verifies those declarations against `psapi.lib`. The
 `ProcessSnapshots` profile verifies the `Pss*` routines in `processsnapshot.h`
@@ -283,11 +290,22 @@ the original SDK in C++ before adding a compatible C `(void)` redeclaration.
 The SDK's `()` spelling alone does not establish a C parameter list. The proof
 and source hash are retained in the manifest; see Microsoft's
 [declaration](https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport).
-Ordinary and delayed PE imports share the SDK's `d3d12.dll` ordinal-101 name
-contract on x86, x64 and ARM64. The original module, ordinal and exact IAT slot
-remain intact; other modules, ordinals and targets retain their ordinal names.
-The device-creation fixture links the original target SDK import library,
-whose ordinal import must recover the same complete source prototype.
+Ordinary and delayed PE imports use the same module, target architecture and
+ordinal lookup. Its inputs include `d3d12.dll` ordinal 101 and public APIs in
+Cabinet, HLink, PrintTicket, XInput and the other DLLs recorded in
+`scripts/MicrosoftOrdinalSDKInputs.json`. Each profile records the original
+exporting image's SHA-256 for the target, the public Win32Metadata release
+and the selected export names and ordinals. The SDK generator reads executable
+ordinal members from the target's Microsoft import archive and checks the
+original compiler's exact linker spelling and ABI against the published declaration.
+The x86 MAPI profile also checks the decorated export spelling. For example,
+the SDK calls `GetTnefStreamCodepage@12` at ordinal 153. The same DLL
+exports the undecorated name separately at ordinal 154.
+An import retains its module, ordinal and IAT address. An unrecognized
+target or module/ordinal pair displays its numeric name. Run
+`check_windows_provider_calls.py --sdk-ordinal` with the generated catalog
+and package cache to recompile the Cabinet, PrintTicket, XInput and MAPI callers
+and compare the ordinal imports of the original and regenerated DLLs.
 
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with
 `UNICODE`, including in declarations with an explicit `_W` name. An exact

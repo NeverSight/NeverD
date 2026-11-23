@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Checks the module and target scope of the SDK's D3D12 ordinal contract.
+/// Checks the module and target scope of Microsoft SDK ordinal imports.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -24,6 +24,31 @@
 
 namespace {
 using namespace neverd;
+
+TEST(COFFOrdinalImports, SDKNamesUseTheirModuleAndVerifiedTarget) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    EXPECT_EQ(coff_loader::ordinalImportName(Architecture, "CABINET.DlL", 35),
+              "CloseCompressor");
+    EXPECT_EQ(coff_loader::ordinalImportName(Architecture, "prntvpt.dll", 4),
+              "PTCloseProvider");
+    EXPECT_EQ(coff_loader::ordinalImportName(Architecture, "xinput1_4.dll", 4),
+              "XInputGetCapabilities");
+    EXPECT_EQ(coff_loader::ordinalImportName(Architecture, "another.dll", 35),
+              "ord_35");
+  }
+  EXPECT_EQ(coff_loader::ordinalImportName(Arch::X86, "MAPI32.DLL", 46),
+            "BuildDisplayTable");
+  EXPECT_EQ(coff_loader::ordinalImportName(Arch::X86, "MAPI32.DLL", 153),
+            "GetTnefStreamCodepage");
+  EXPECT_EQ(coff_loader::ordinalImportName(Arch::X86, "MAPI32.DLL", 154),
+            "ord_154");
+  EXPECT_EQ(coff_loader::ordinalImportName(Arch::AArch64, "mscms.dll", 236),
+            "ColorProfileGetDeviceCapabilities");
+  EXPECT_EQ(coff_loader::ordinalImportName(Arch::X64, "mscms.dll", 236),
+            "ord_236");
+  EXPECT_EQ(coff_loader::ordinalImportName(Arch::ARM, "cabinet.dll", 35),
+            "ord_35");
+}
 
 TEST(COFFOrdinalImports, DelayImportsKeepTheModuleOrdinalAndExactSlot) {
   for (Arch Architecture : {Arch::X86, Arch::X64, Arch::AArch64, Arch::ARM}) {

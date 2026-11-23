@@ -14,6 +14,16 @@ add_custom_command(
   COMMENT "Embedding the binary-file ISA model"
   VERBATIM)
 
+set(NEVERD_WINDOWS_ORDINALS "${CMAKE_CURRENT_BINARY_DIR}/COFF/WindowsOrdinalImports.inc")
+add_custom_command(
+  OUTPUT "${NEVERD_WINDOWS_ORDINALS}"
+  COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/microsoft_ordinal_imports.py"
+          "${NEVERD_WINDOWS_ORDINALS}"
+  DEPENDS "${PROJECT_SOURCE_DIR}/scripts/microsoft_ordinal_imports.py"
+          "${PROJECT_SOURCE_DIR}/scripts/MicrosoftOrdinalSDKInputs.json"
+  COMMENT "Generating Windows SDK ordinal import names"
+  VERBATIM)
+
 # The fixed frame Windows x64 unwind codes record, which the lift's frame
 # proof and the output gate both read; it needs nothing of the loader.
 add_neverd_component_library(NeverDX64UnwindFrame
@@ -107,6 +117,7 @@ add_neverd_component_library(NeverDLoader
   Raw/RawFingerprints.cpp
   Raw/RawLoader.cpp
   ${NEVERD_ISA_MODEL_INC}
+  ${NEVERD_WINDOWS_ORDINALS}
   ExecutableCodeOwnerIndex.cpp
   ImageProfile.cpp
   ExceptionEdge.cpp
@@ -216,3 +227,4 @@ add_neverd_component_library(NeverDLoader
 )
 
 target_include_directories(NeverDLoader PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Raw")
+target_include_directories(NeverDLoader PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/COFF")

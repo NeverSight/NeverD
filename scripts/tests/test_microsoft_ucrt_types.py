@@ -63,6 +63,21 @@ class MicrosoftUCRTTypes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unique compiler ABI"):
             ucrt.bridge_abis(ir.replace('align 4)', 'align 4'), ["routine"])
 
+    def test_compiler_contracts_compare_aggregate_layout_after_header_merge(self):
+        ir = ('%Color = type { [4 x %"First channel"], i16 }\n'
+              '%"First channel" = type { float, i32 }\n'
+              '@neverd_ucrt_abi_0 = global ptr @color, align 4\n'
+              'declare dllimport x86_stdcallcc void @color(ptr sret(%Color) align 4)\n')
+        expected = ucrt.normalized_bridge_abis(ir, ["color"])
+        renamed = ir.replace("%Color", "%SDK.Color").replace('%"First channel"', "%SDK.Channel")
+        self.assertEqual(ucrt.normalized_bridge_abis(renamed, ["color"]), expected)
+        for before, after in [("float, i32", "i32, float"), ("i16", "i32"), ("[4 x", "[3 x"),
+                              ("{ float, i32 }", "<{ float, i32 }>"), ("sret(", "byval("),
+                              ("align 4)", "align 8)"), ("x86_stdcallcc ", "")]:
+            with self.subTest(change=after):
+                self.assertNotEqual(ucrt.normalized_bridge_abis(ir.replace(before, after), ["color"]),
+                                    expected)
+
     def test_dll_inventory_selects_executable_extent_and_records_other_exports(self):
         text = ("File: ucrtbase.dll\nFormat: COFF-ARM64\nSections [\n"
                 "  Section {\n    VirtualAddress: 0x1000\n    VirtualSize: 0x20\n"

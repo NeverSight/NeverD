@@ -29,7 +29,7 @@ CASES = {
     "NDIS": (),
     "GDIPlus": (),
     "WebAuthenticationRuntime": (),
-    **{provider: () for provider in (*flat.CURRENT, *flat.LEGACY)},
+    **{provider: () for provider in (*flat.CURRENT, *flat.LEGACY, *flat.ordinal.profiles())},
     **{provider: () for provider in PROVIDER_PREFIXES},
     "NetworkInterfaces": ("NmrRegisterClient", "WskRegister", "WskCaptureProviderNPI"),
     "KernelStreaming": ("KsCreatePin", "KsAddEvent", "KsAcquireControl"),
@@ -270,6 +270,10 @@ def check(args: argparse.Namespace) -> dict:
                     elif "sdk_import_bridge" in metadata:
                         declared = official_names(args, compiler, original, directory, row, arch, name, ("",))
                         inventory = dict(bridge)
+                        if witness := inventory["import_library"].get("ordinal_export_witness"):
+                            if flat.ordinal.witness(flat.ordinal.profiles()[name], arch) != witness:
+                                raise ValueError("published ordinal export witness differs from its qualified input")
+                            row.update(module=witness["module"], export_image_sha256=witness["image_sha256"])
                         names = tuple(flat.select(inventory, declared, directory, windows.run))
                         row.update(functions=names, inventory="original SDK headers and target import library",
                                    imports_without_declaration=inventory["imports_without_declaration"])
@@ -364,8 +368,12 @@ def check(args: argparse.Namespace) -> dict:
                 expected.difference_update(flat.CURRENT.keys() - PROVIDER_PREFIXES.keys())
             if "legacy_sdk" not in profiles:
                 expected.difference_update(flat.LEGACY)
+            if "ordinal_imports" not in profiles:
+                expected.difference_update(flat.ordinal.profiles())
             if "webauthn_runtime" not in profiles:
                 expected.discard("WebAuthenticationRuntime")
+        expected.difference_update(name for name, profile in flat.ordinal.profiles().items()
+                                   if arch not in profile["targets"])
         if arch == "x86":
             expected.difference_update(flat.WIDE_ONLY)
         if {row["provider"] for row in rows if row["architecture"] == arch} != expected:

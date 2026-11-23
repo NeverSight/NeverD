@@ -721,6 +721,8 @@ std::vector<std::string> Engine::renderedAheadPages(
     const std::string &optionText, const std::string &sourceKey) {
   std::vector<std::string> pages, stored;
   renderFailedAddress_.reset();
+  if (viewRead_ == ViewRead::Refresh)
+    return pages;
   const auto kept = renderedAhead_.find(sourceKey);
   if (kept == renderedAhead_.end() && declaredRender_ &&
       declaredRender_->address == address &&
@@ -737,7 +739,9 @@ std::vector<std::string> Engine::renderedAheadPages(
   } else if (kept == renderedAhead_.end()) {
     // An owner reads the store only for a request that asks for that.
     if (auto *store =
-            renderStoreMode_.empty() && !keptOnly_ ? nullptr : storeOfViews()) {
+            renderStoreMode_.empty() && viewRead_ != ViewRead::KeptOnly
+                ? nullptr
+                : storeOfViews()) {
       const auto key = renderStoreKey(address, representation, optionText);
       stored = store->read(key);
       if (stored.empty() && store->contains(key))

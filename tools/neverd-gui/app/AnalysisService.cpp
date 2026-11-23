@@ -180,11 +180,12 @@ QString AnalysisService::send(const QString &operation,
            tr("Only analysis reads are allowed."));
       return;
     }
+    const bool useKept = ownerReadsKept_ && !payload_.value("refresh").toBool();
     if (ready_) {
       // A page the owner gave names the document the owner kept, which the
       // replica would read whole: the owner answers for it while it keeps
       // it.  A graph stays with the replica.
-      if (ownerReadsKept_ && operation_ == QLatin1String("decompile") &&
+      if (useKept && operation_ == QLatin1String("decompile") &&
           ownerPages_.contains(payload_.value("if_none_match").toString())) {
         askOwner();
         return;
@@ -192,9 +193,9 @@ QString AnalysisService::send(const QString &operation,
       dispatch();
       return;
     }
-    if (ownerReadsKept_ && (operation_ == QLatin1String("decompile") ||
-                            operation_ == QLatin1String("cfg_summary") ||
-                            operation_ == QLatin1String("cfg_viewport"))) {
+    if (useKept && (operation_ == QLatin1String("decompile") ||
+                    operation_ == QLatin1String("cfg_summary") ||
+                    operation_ == QLatin1String("cfg_viewport"))) {
       readKept();
       return;
     }
