@@ -3631,6 +3631,10 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
     const auto *Call = llvm::cast<llvm::CallInst>(V);
     if (Call->arg_empty())
       return unknownValueText("no recovered machine state");
+    if (Opts.PrecallMemory != Win64PrecallMemory::None &&
+        Call->getFunction() != OnlyFunction)
+      throw std::invalid_argument(
+          "original_call_state cannot bind another function's stack");
     const auto *Site =
         llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(0));
     const auto *Slot =
@@ -3640,10 +3644,11 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
       throw std::runtime_error("invalid original Win64 CALL stack coordinate");
     if (Site && Slot)
       return win64CallStackInputText(
-          {Site->getZExtValue(), uint32_t(Slot->getZExtValue())});
-    return "((uint64_t)NEVERD_WIN64_CALL_STACK_U64(" +
-           valueStr(Call->getArgOperand(0)) + ", " +
-           valueStr(Call->getArgOperand(1)) + "))";
+          {Site->getZExtValue(), uint32_t(Slot->getZExtValue())},
+          Opts.PrecallMemory);
+    return win64CallStackInputText(valueStr(Call->getArgOperand(0)),
+                                   valueStr(Call->getArgOperand(1)),
+                                   Opts.PrecallMemory);
   }
   // A parameter the signature types as a pointer is the integer the code
   // computes with.

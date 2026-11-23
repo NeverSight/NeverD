@@ -827,6 +827,10 @@ cl::opt<bool> Devirtualize(
     "devirtualize",
     cl::desc("Recover an x64 interpreter (experimental; requires --func)"),
     cl::sub(DecompileCmd));
+cl::opt<std::string> OriginalCallState(
+    "original-call-state",
+    cl::desc("Read one original Win64 stack operand from pre-CALL V6 state"),
+    cl::value_desc("v6|v6-window"), cl::sub(DecompileCmd), cl::sub(ExportCmd));
 cl::opt<bool> SourceSymbolic(
     "symbolic-simplify",
     cl::desc("Symbolically simplify the source: the function --func selects, "

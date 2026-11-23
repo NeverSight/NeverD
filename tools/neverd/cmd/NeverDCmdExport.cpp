@@ -76,6 +76,12 @@ int runExport(neverd_session_t Sess) {
     }
   }
 
+  if (OriginalCallState.getNumOccurrences() &&
+      (ExportFunc.empty() || ExportFmt != FmtDecompile)) {
+    WithColor::error()
+        << "--original-call-state requires --func and --format decompile\n";
+    return 1;
+  }
   if (LlvmRoute && ExportFmt != FmtDecompile) {
     WithColor::error() << "--llvm only applies to --format decompile\n";
     return 1;
@@ -92,7 +98,10 @@ int runExport(neverd_session_t Sess) {
     uint64_t Entry =
         FuncIdx >= 0 ? neverd_func_entry(Sess, FuncIdx) : DirectAddr;
     const char *Text = nullptr;
-    if (ExportFmt == FmtDecompile)
+    if (OriginalCallState.getNumOccurrences())
+      Text = neverd_decompile_precall_v6(Sess, Entry, LlvmRoute,
+                                         OriginalCallState.getValue().c_str());
+    else if (ExportFmt == FmtDecompile)
       Text = LlvmRoute ? neverd_decompile_llvm(Sess, Entry)
                        : neverd_decompile(Sess, Entry);
     else

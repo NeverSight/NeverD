@@ -7,6 +7,64 @@
 /// Exact pair selection, unsupported-host refusal and complete resumption.
 //===----------------------------------------------------------------------===//
 
+TEST_F(X64ContinuationExportTest, AutoRtmAbortUsesOriginalCpuEvidence) {
+  load({0xc7, 0xf8, 3, 0, 0, 0, 0xc6, 0xf8, 0, 0xc3});
+  for (bool LLVM : {false, true})
+    for (auto Dispatch : {"switch", "direct"})
+      for (llvm::StringRef Mode :
+           {R"("auto")", R"({"max_basic_leaf":6})",
+            R"({"max_basic_leaf":7,"leaf7_ebx":0})",
+            R"({"max_basic_leaf":"0x7","leaf7_ebx":"0x800"})"}) {
+        auto [Source, Manifest] = source(
+            request((llvm::Twine(R"("instructions":[4096,4105],"dispatch":")") +
+                     Dispatch + R"(","native_rtm_abort_steps":)" + Mode)
+                        .str()),
+            LLVM);
+        auto Parsed = llvm::json::parse(Manifest);
+        ASSERT_TRUE(bool(Parsed));
+        const auto *Report = Parsed->getAsObject();
+        ASSERT_NE(Report, nullptr);
+        const bool Probe = Mode == R"("auto")";
+        const bool Bound = Mode.contains("0x800");
+        EXPECT_EQ(Report->getInteger("native_requests"), Bound ? 0 : 1);
+        const auto *Binding = Report->getObject("native_rtm_abort_steps");
+        ASSERT_NE(Binding, nullptr);
+        EXPECT_EQ(Binding->getBoolean("can_decline"), !Bound);
+        EXPECT_EQ(llvm::StringRef(Source).contains("__builtin_ia32_cpuidex"),
+                  Probe);
+        EXPECT_EQ(llvm::StringRef(Source).contains(
+                      "__builtin_ia32_rtm_abort_pair(0)"),
+                  Probe || Bound);
+        if (Probe) {
+          const auto Guard = Source.find("if (check!=");
+          const auto Check =
+              Source.find("if (!__neverd_x64_cpu_has_rtm()) return check;");
+          EXPECT_NE(Source.find("_checked((uint8_t *)state, &rtm_advertised)"),
+                    std::string::npos);
+          EXPECT_NE(Source.find("if (!*advertised)"), std::string::npos);
+          EXPECT_LT(Guard, Check);
+          EXPECT_LT(Check,
+                    Source.find("status=__builtin_ia32_rtm_abort_pair(0)"));
+        }
+      }
+  for (llvm::StringRef Mode :
+       {R"("unknown")", "1", "{}", R"({"max_basic_leaf":7})",
+        R"({"max_basic_leaf":6,"leaf7_ebx":2048})",
+        R"({"max_basic_leaf":7,"leaf7_ebx":-1})",
+        R"({"max_basic_leaf":7,"leaf7_ebx":4294967296})",
+        R"({"max_basic_leaf":6,"unused":0})"}) {
+    const auto Query = request(
+        (llvm::Twine(R"("instructions":[4096],"native_rtm_abort_steps":)") +
+         Mode)
+            .str());
+    const char *Report = nullptr;
+    EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Query.data(),
+                                                Query.size(), 0, &Report),
+              nullptr);
+    EXPECT_EQ(Report, nullptr);
+  }
+}
+
 TEST_F(X64ContinuationExportTest, BoundRtmAbortStepsProjectActualStatus) {
   // The abort instruction can also be selected independently. Only the
   // XBEGIN entry owns the authenticated adjacent pair and its fallback.

@@ -32,6 +32,7 @@ int runContinuation(neverd_session_t Sess) {
       Devirtualize || DecompileCallees || StackFrameInfo ||
       StackFrameFile.getNumOccurrences() ||
       SourceSymbolic.getNumOccurrences() ||
+      OriginalCallState.getNumOccurrences() ||
       SourceLLVMControlFlow.getNumOccurrences() ||
       SourceLLVMLevel.getNumOccurrences() ||
       SourceLLVMPasses.getNumOccurrences() || MaxFunc.getNumOccurrences()) {

@@ -14,6 +14,7 @@
 #include "neverd/ir/SourceCallEdits.h"
 #include "neverd/ir/SourceStackFrame.h"
 #include "neverd/ir/SourceVariableEdits.h"
+#include "neverd/ir/X86/Win64PrecallMemory.h"
 
 #include <cstdint>
 #include <string>
@@ -54,6 +55,7 @@ struct SourceViewOptions {
   std::vector<SourceVariableEdit> VariableEdits;
   std::vector<SourceCallEdit> CallTypes;
   SourceStackFrame StackFrame;
+  Win64PrecallMemory PrecallMemory = Win64PrecallMemory::None;
   bool operator==(const SourceViewOptions &) const = default;
 };
 

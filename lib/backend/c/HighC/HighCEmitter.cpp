@@ -5452,8 +5452,18 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
               [&](const HighStmt &Stmt) { forEachExpr(Stmt, Visit); });
   }
   writeX87CHelpers(OS, UsesX87Extended, X87Helpers);
-  if (NeedsWin64CallStackInput)
+  if (!NeedsWin64CallStackInput)
+    Opts.PrecallMemory = Win64PrecallMemory::None;
+  else if (Opts.PrecallMemory == Win64PrecallMemory::None)
     OS << Win64CallStackInputPrelude;
+  else {
+    if (llvm::none_of(Funcs, [&](const auto &Func) {
+          return Func.Entry == Opts.PrecallEntry;
+        }))
+      throw std::invalid_argument(
+          "original_call_state requires its selected ordinary C entry");
+    writeWin64PrecallReader(OS, Opts.PrecallMemory, Opts.Image);
+  }
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
   if (NeedsX86SegmentMoveDispatch)
