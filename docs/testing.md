@@ -1985,6 +1985,14 @@ metadata. Category fixtures exercise authenticated class, metaclass and method r
 reconstruction restriction. Metadata names replace synthesized function-start
 names while preserving stated, analysis and user names.
 
+The `AArch64CompactRegisters.*PAuthLR*` filter in
+`NeverDArm64eLiftedImageTests` runs the same structural checks with frozen r6
+and source-built LLVM. It publishes all-pair, sparse and frame-only recipes,
+including a signing PC at byte 256, a PC-signed C++ cleanup, and a mixed
+image with an independently indexed cleanup. The two system-walk cases record the number of native PAuth_LR steps
+after a hardware probe. The original and published images can both pass their
+structural checks on a host reporting zero native steps.
+
 `NeverDLanguageEHTests` also covers compact PAuth_LR frame recipes with zero,
 middle and final signing-instruction offsets, register pairs, reserved bits,
 range truncation, alignment and arithmetic overflow. Shared raw/semantic page
@@ -4613,6 +4621,17 @@ to 65 live coefficient bits. A 103-factor x86 fixture exercises the wrapped
 byte in both source views. The expression tests change a bit on each side of
 the wrap, and the product tests compare repeated odd and even offsets with
 direct full-width multiplication.
+
+Use `--family mixed-valuation --count 4` for 20 products at 32, 64,
+24577, 28673 and 32769 bits. The 12 wide products contain 2689–3529 factors.
+One to four lower-weight factors keep mixed terms observable. The other
+factors vary their upper lanes, offsets and coefficients while sharing
+wrapped low fields. The tests compare the complete product with independent
+multiplication, including even offsets and a change to a live bit. The 73-
+and 117-factor x86 fixtures also exercise both source views through the CLI
+and the GUI worker at Clang O0 and O2.
+Using `--count 32` exercises 160 distinct inputs, including 96 products
+above both 20,481 bits and 2,593 factors.
 
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
@@ -18410,6 +18429,13 @@ assignments on that edge. The roundtrips check the forwarded word and the
 restored return address. Return-target tests
 replace either arm with a single-half check or flip the difference in its jump
 delay slot.
+The shared-latch variants place the folded arm before or after the latch.
+On exit from a BNEL or BEQL, the latter layout jumps over that arm to the
+final zero test. Each iteration contributes its incoming difference, counter
+and selected full-width difference to the return value, so the HighC and
+LLVMC roundtrips detect a skipped, duplicated or reordered update. Ordinary
+BNE supplies the always-executed delay-slot control. The return-target cases
+also check whether a clobber in the slot can reach the final zero test.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.

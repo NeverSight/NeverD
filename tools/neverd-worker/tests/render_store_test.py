@@ -146,6 +146,18 @@ def run(executable):
         assert done(state) and not state["rendered"], state
         assert len(files(binary)) == 1
 
+        # An explicit refresh computes every time, even if the store has the
+        # requested source. An ordinary visit can use the new document.
+        refresh = {"address": B, "representation": "source", "limit": 4, "refresh": True}
+        refused = second.call("decompile", {**refresh, "kept_only": True})
+        assert refused["status"] == "error" and refused["error"]["code"] == "not_kept", refused
+        for expected_pages in (2, 3):
+            page = ok(second, "decompile", refresh)
+            assert page["fixture_pages"] == expected_pages, page
+            assert page["text"] == fresh[B]["text"]
+            assert source(second, B)["fixture_pages"] == expected_pages
+        assert latest(second)["hits"] == state["hits"]
+
         # An owner answers what is kept, asks the engine nothing, and says what it
         # has not kept.
         end(second, owner)

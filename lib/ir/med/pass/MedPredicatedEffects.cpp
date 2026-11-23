@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedCodeIdentity.h"
 
 #include "llvm/Support/ErrorHandling.h"
 
@@ -54,15 +55,9 @@ bool isNoReturnCall(const MedOp &Op) {
          (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL);
 }
 
-va_t blockAddress(const MedBlock &Block) {
-  if (Block.StartAddr != 0 || Block.Ops.empty())
-    return Block.StartAddr;
-  return Block.Ops.front().Addr;
-}
-
 std::optional<int> blockAtAddress(const MedFunc &Func, va_t Address) {
   for (const MedBlock &Block : Func.Blocks)
-    if (blockAddress(Block) == Address)
+    if (medBlockCodeAddress(Block) == Address)
       return Block.Id;
   return std::nullopt;
 }
@@ -71,7 +66,7 @@ std::optional<int> successorAtAddress(const MedFunc &Func,
                                       const MedBlock &Block, va_t Address) {
   for (int Successor : Block.Succs)
     if (Successor >= 0 && static_cast<size_t>(Successor) < Func.Blocks.size() &&
-        blockAddress(Func.Blocks[Successor]) == Address)
+        medBlockCodeAddress(Func.Blocks[Successor]) == Address)
       return Successor;
   return std::nullopt;
 }

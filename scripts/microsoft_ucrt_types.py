@@ -8,6 +8,7 @@ All downloaded sources, notices and generated declarations remain local.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -174,9 +175,34 @@ def bridge_abis(ir: str, names=CPP_FUNCTIONS) -> dict:
 
 
 def normalized_bridge_abis(ir, names):
-    """Ignore DLL visibility while retaining symbol, convention, widths and parameter attributes."""
-    return {name: (symbol, prefix.removeprefix("dllimport ").removeprefix("dso_local "), parameters)
-            for name, (symbol, prefix, parameters) in bridge_abis(ir, names).items()}
+    """Compare compiler-emitted record layouts across independently named SDK headers."""
+    identifier = re.compile(r'%(?:"[^"\n]+"|[-A-Za-z0-9$._]+)')
+    definitions = dict(re.findall(r'^(' + identifier.pattern + r') = type (.+)$', ir, re.M))
+    layouts = {}
+    visiting = set()
+
+    def record_layout(match):
+        name = match[0]
+        body = definitions.get(name)
+        if body is None or body == "opaque":
+            return name
+        if name in visiting:
+            raise ValueError(f"recursive by-value compiler ABI record: {name}")
+        if name not in layouts:
+            visiting.add(name)
+            # Modern Clang prints pointer fields as ptr. Remaining record references
+            # are embedded by value, including fields of nested arrays and structs.
+            fields = identifier.sub(record_layout, body)
+            visiting.remove(name)
+            layouts[name] = "#" + hashlib.sha256(fields.encode()).hexdigest()
+        return layouts[name]
+
+    result = {}
+    for name, (symbol, prefix, parameters) in bridge_abis(ir, names).items():
+        prefix = prefix.removeprefix("dllimport ").removeprefix("dso_local ")
+        result[name] = (symbol, identifier.sub(record_layout, prefix),
+                        identifier.sub(record_layout, parameters))
+    return result
 
 
 def module_import_symbols(text, architecture, module):

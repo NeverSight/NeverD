@@ -38,9 +38,17 @@ bool preservesLowBits(SymOp Op) {
          Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Not;
 }
 
-// A sum of two scaled words retains their common low zero bits. Its
-// complete value is still needed as one factor of the outer product.
-unsigned sumScaleZeros(const SymContext &Ctx, SymRef S) {
+// A concatenated literal tail or the common scale of both addends supplies
+// a proven zero suffix. The coefficient itself still needs its complete value.
+unsigned factorScaleZeros(const SymContext &Ctx, SymRef S) {
+  if (Ctx.op(S) == SymOp::Concat) {
+    const auto Tail = Ctx.operands(S).back();
+    if (!Ctx.isConst(Tail))
+      return 0;
+    const auto Words = Ctx.constWords(Tail);
+    return std::min(Ctx.width(Tail),
+                    llvm::APInt::tcLSB(Words.data(), Words.size()));
+  }
   if (Ctx.op(S) != SymOp::Add || Ctx.numOperands(S) != 2)
     return 0;
   unsigned Zeros = Ctx.width(S);
@@ -73,11 +81,16 @@ visitRequiredPrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
     if constexpr (Wide) {
       if (St.Op == SymOp::Mul && Demand > 64 && Zeros < Demand - 64) {
         for (unsigned I = 0; I < Operands.size(); ++I) {
-          unsigned Candidate = sumScaleZeros(Ctx, Operands[I]);
-          if (Candidate >= Demand - 64) {
+          const unsigned Candidate = factorScaleZeros(Ctx, Operands[I]);
+          if (Candidate > Zeros &&
+              (Candidate >= Demand - 64 ||
+               (St.NumArgs > 2 &&
+                llvm::APInt::getNumWords(Demand - Candidate) <
+                    llvm::APInt::getNumWords(Demand - Zeros)))) {
             Zeros = Candidate;
             Coefficient = I;
-            break;
+            if (Candidate >= Demand - 64)
+              break;
           }
         }
       }
@@ -276,7 +289,7 @@ size_t prepareAffineFactors(const SymContext &Ctx, SymRef Root,
       Ctx.op(Factors[1]) != SymOp::Add)
     return Steps.size();
   const unsigned Bits = Width - Ctx.constValue(Factors.front()).countr_zero();
-  if (Bits <= 64 || Bits == Width)
+  if (Bits == Width)
     return Steps.size();
 
   // The ordinary DAG already shares identical factors. Allocate one row
@@ -903,6 +916,15 @@ llvm::APInt multiplyLowWords(llvm::ArrayRef<llvm::APInt> Values,
   }
   return llvm::APInt(Bits, llvm::ArrayRef(Product, Words));
 }
+// The low (Width - Bits) bits of Scale are zero. Multiply just its
+// remaining bits and restore the scale in the original ring.
+llvm::APInt multiplyShiftedPrefix(const llvm::APInt &Scale,
+                                  llvm::APInt Prefix) {
+  const unsigned Shift = Scale.getBitWidth() - Prefix.getBitWidth();
+  Prefix *= Scale.extractBits(Prefix.getBitWidth(), Shift);
+  return Prefix.zext(Scale.getBitWidth()).shl(Shift);
+}
+
 // Evaluate the literal affine factors directly in their common modulus.
 // All three products use disjoint buffers, including arbitrary partial limbs.
 llvm::APInt evaluateAffineFactors(llvm::ArrayRef<llvm::APInt> Values,
@@ -941,8 +963,8 @@ llvm::APInt evaluateAffineFactors(llvm::ArrayRef<llvm::APInt> Values,
     Coefficients = Coefficients.drop_front((Degree + 1) * N);
   }
   const auto &Scale = Values[Sources.front()];
-  return Scale * llvm::APInt(Bits, llvm::ArrayRef(Product, N))
-                     .zext(Scale.getBitWidth());
+  return multiplyShiftedPrefix(Scale,
+                               llvm::APInt(Bits, llvm::ArrayRef(Product, N)));
 }
 
 } // namespace
@@ -1025,9 +1047,14 @@ llvm::APInt SymEvalPlan::evalWith(
           Product *= ScratchAP[A[K]].getRawData()[0];
         ScratchAP[I] *= Product & (~uint64_t(0) >> (64 - Bits));
       } else {
-        const auto Prefix =
+        auto Prefix =
             multiplyLowWords(ScratchAP, {A + 1, St.NumArgs - 1}, Bits);
-        ScratchAP[I] *= Prefix.zext(St.Width);
+        const unsigned Shift = St.Width - Bits;
+        if (ScratchAP[I].countr_zero() >= Shift) {
+          ScratchAP[I] = multiplyShiftedPrefix(ScratchAP[I], std::move(Prefix));
+        } else {
+          ScratchAP[I] *= Prefix.zext(St.Width);
+        }
       }
       continue;
     }

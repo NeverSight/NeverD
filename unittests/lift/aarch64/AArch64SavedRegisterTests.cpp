@@ -74,16 +74,32 @@ void writeCompactFixture(const std::string &Path, const BinaryImage &Image,
   ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
   ASSERT_EQ(Raw->Pages.size(), 1u);
   const auto &Page = Raw->Pages.front();
-  ASSERT_EQ(Page.Kind, macho_unwind::kSecondLevelCompressed);
-  ASSERT_EQ(Page.CompressedEntries.size(), 1u);
-  const auto &Entry = Page.CompressedEntries.front();
-  ASSERT_EQ(Entry.FunctionOffset + Image.Base, Symbol->Addr);
-  const auto Index = Entry.EncodingIndex;
-  const size_t Offset =
-      Index < Raw->CommonEncodings.size()
-          ? Raw->Header.CommonEncodingsSectionOffset + Index * sizeof(uint32_t)
-          : Page.SectionOffset + Page.EncodingsPageOffset +
-                (Index - Raw->CommonEncodings.size()) * sizeof(uint32_t);
+  const auto Owns = [&](const auto &Entry) {
+    return Entry.FunctionOffset + Image.Base == Symbol->Addr;
+  };
+  size_t Offset = 0;
+  if (Page.Kind == macho_unwind::kSecondLevelRegular) {
+    const auto Entry = llvm::find_if(Page.RegularEntries, Owns);
+    ASSERT_NE(Entry, Page.RegularEntries.end());
+    Offset = Page.SectionOffset + Page.EntryPageOffset +
+             (Entry - Page.RegularEntries.begin()) *
+                 sizeof(macho_unwind::CompactUnwindRawRegularEntry) +
+             sizeof(uint32_t);
+  } else {
+    ASSERT_EQ(Page.Kind, macho_unwind::kSecondLevelCompressed);
+    const auto Entry = llvm::find_if(Page.CompressedEntries, Owns);
+    ASSERT_NE(Entry, Page.CompressedEntries.end());
+    const auto Index = Entry->EncodingIndex;
+    ASSERT_EQ(
+        llvm::count_if(Page.CompressedEntries,
+                       [&](const auto &E) { return E.EncodingIndex == Index; }),
+        1);
+    Offset = Index < Raw->CommonEncodings.size()
+                 ? Raw->Header.CommonEncodingsSectionOffset +
+                       Index * sizeof(uint32_t)
+                 : Page.SectionOffset + Page.EncodingsPageOffset +
+                       (Index - Raw->CommonEncodings.size()) * sizeof(uint32_t);
+  }
   auto Bytes = Image.Raw;
   writeLE<uint32_t>(Bytes.data() + Section->FileOff + Offset, Encoding);
   std::ofstream File(Path, std::ios::binary | std::ios::trunc);
@@ -98,12 +114,8 @@ void verifySavedRegisters(bool Quad, bool Signal,
                           bool ExtraStack = false, bool Coalesced = false,
                           bool Frameless = false,
                           std::optional<unsigned> SigningOffset = std::nullopt,
-                          bool Language = false) {
+                          bool Language = false, bool IndexedPeer = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
-#if !__has_include("llvm/BinaryFormat/AArch64CompactUnwind.def")
-  if (SigningOffset)
-    GTEST_SKIP() << kPAuthLRMCUnavailable;
-#endif
   const bool Compact = CompactPairs.has_value();
   const unsigned Functions = Compact && !Coalesced ? 1 : kFunctions;
   const char *Names[] = {kSum, kDifference};
@@ -136,7 +148,12 @@ void verifySavedRegisters(bool Quad, bool Signal,
   const auto Output = (Root / kPublished).string();
   const auto Rejected = (Root / kRejected).string();
   const auto RulesPath = (Root / kRules).string();
-  std::ofstream(Source) << (Compact ? kCompactBody : kBody);
+  {
+    std::ofstream Assembly(Source);
+    Assembly << (Compact ? kCompactBody : kBody);
+    if (IndexedPeer)
+      Assembly << kIndexedPeerBody;
+  }
   std::ofstream(Wrapper) << kObserver;
   std::ofstream(Caller) << kDriverBody;
   llvm::SmallVector<llvm::StringRef> Common{kCompiler, kTargetFlag, kTarget,
@@ -162,7 +179,7 @@ void verifySavedRegisters(bool Quad, bool Signal,
   if (Language)
     Common.push_back(kLanguageFlag);
   auto Compile = Common;
-  if (Language)
+  if (Language || IndexedPeer)
     Compile.push_back(kCXXRuntime);
   Compile.append({kDylib, kTight, Source, kOutputFlag, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
@@ -193,34 +210,39 @@ void verifySavedRegisters(bool Quad, bool Signal,
     ASSERT_TRUE(OriginalFrame && OriginalFrame->Compact);
     testing::Test::RecordProperty(kLinkerCompactWord,
                                   OriginalFrame->Compact->NativeEncoding);
-    // A classic FP recipe must not authorize copying PC-signed return words.
-    ASSERT_NO_FATAL_FAILURE(
-        writeCompactFixture(Input, *Image, kCompactFrameMode | *CompactPairs));
-    auto Contradictory = Reader->load(Input);
-    ASSERT_TRUE(bool(Contradictory))
-        << llvm::toString(Contradictory.takeError());
-    llvm::LLVMContext BadContext;
-    PipelineOptions BadOptions;
-    BadOptions.PatchMode = true;
-    BadOptions.EmitDumpOutput = false;
-    auto Bad = Pipeline().run(*Contradictory, BadContext, BadOptions);
-    if (Bad.Success) {
-      ASSERT_TRUE(Bad.LlvmModule);
-      MachOPatcher BadPatcher;
-      BadPatcher.setImageContext(&*Contradictory);
-      EXPECT_FALSE(
-          BadPatcher
-              .patch(Input, Rejected, *Bad.LlvmModule, Contradictory->Arch)
-              .Success);
-    } else {
-      EXPECT_FALSE(Bad.Error.empty());
+    const uint32_t LanguageBits =
+        OriginalFrame->Compact->NativeEncoding &
+        (macho_unwind::kPersonalityMask | macho_unwind::kHasLSDA);
+    const uint32_t Encoding =
+        kCompactPAuthLRMode | *CompactPairs | LanguageBits |
+        ((*SigningOffset / aarch64::kInsnSize) << kPAuthLRShift);
+    // Both an ordinary FP recipe and a PC field naming the next instruction
+    // disagree with the actual PACIBSPPC site.
+    for (const auto Wrong : {kCompactFrameMode | *CompactPairs | LanguageBits,
+                             Encoding + (1u << kPAuthLRShift)}) {
+      ASSERT_NO_FATAL_FAILURE(writeCompactFixture(Input, *Image, Wrong));
+      auto Contradictory = Reader->load(Input);
+      ASSERT_TRUE(bool(Contradictory))
+          << llvm::toString(Contradictory.takeError());
+      llvm::LLVMContext BadContext;
+      PipelineOptions BadOptions;
+      BadOptions.PatchMode = true;
+      BadOptions.EmitDumpOutput = false;
+      auto Bad = Pipeline().run(*Contradictory, BadContext, BadOptions);
+      if (Bad.Success) {
+        ASSERT_TRUE(Bad.LlvmModule);
+        MachOPatcher BadPatcher;
+        BadPatcher.setImageContext(&*Contradictory);
+        EXPECT_FALSE(
+            BadPatcher
+                .patch(Input, Rejected, *Bad.LlvmModule, Contradictory->Arch)
+                .Success);
+      } else {
+        EXPECT_FALSE(Bad.Error.empty());
+      }
+      EXPECT_FALSE(std::filesystem::exists(Rejected));
     }
-    EXPECT_FALSE(std::filesystem::exists(Rejected));
-    const auto Encoding = kCompactPAuthLRMode | *CompactPairs |
-                          (*SigningOffset / aarch64::kInsnSize)
-                              << kPAuthLRShift;
-    ASSERT_NO_FATAL_FAILURE(
-        writeCompactFixture(Input, *Contradictory, Encoding));
+    ASSERT_NO_FATAL_FAILURE(writeCompactFixture(Input, *Image, Encoding));
     Image = Reader->load(Input);
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
     const auto *Symbol = Image->findSymbol(kSumSymbol);
@@ -304,11 +326,15 @@ void verifySavedRegisters(bool Quad, bool Signal,
 
   auto Installed = Patcher.patch(Input, Output, Module, Image->Arch);
   ASSERT_TRUE(Installed.Success);
-  ASSERT_EQ(Installed.PatchedFunctions.size(), Functions);
+  ASSERT_EQ(Installed.PatchedFunctions.size(),
+            Functions + unsigned(IndexedPeer));
   auto Published = Reader->load(Output);
   ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
   EXPECT_TRUE(Published->isArm64e());
   EXPECT_NE(Published->Raw, Snapshot);
+  if (SigningOffset && !IndexedPeer &&
+      !Image->getSectionByName(section_names::macho::EhFrame))
+    EXPECT_FALSE(Published->getSectionByName(section_names::macho::EhFrame));
   for (const auto &Entry : Installed.PatchedFunctions) {
     EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
     const auto *Before =
@@ -316,6 +342,24 @@ void verifySavedRegisters(bool Quad, bool Signal,
     const auto *After =
         Published->ExceptionMetadata.findFunction(Entry.OwnerVA);
     ASSERT_TRUE(Before && After);
+    if (IndexedPeer && Entry.SourceFunction == kIndexedPeer) {
+      ASSERT_TRUE(Before->Dwarf && After->Dwarf && After->Compact);
+      ASSERT_TRUE(Before->Itanium && After->Itanium);
+      EXPECT_EQ(After->Compact->NativeEncoding & macho_unwind::kModeMask,
+                macho_unwind::kARM64ModeDwarf);
+      EXPECT_EQ(After->Compact->NativeEncoding &
+                    macho_unwind::kDwarfSectionOffsetMask,
+                After->Dwarf->SectionOffset);
+      EXPECT_EQ(After->Dwarf->InitialLocation, Entry.OwnerVA);
+      EXPECT_EQ(After->Personality, Before->Personality);
+      EXPECT_EQ(After->Dwarf->LSDAVA, After->Itanium->LSDAVA);
+      ASSERT_EQ(Before->Itanium->CallSites.size(), 1u);
+      ASSERT_EQ(After->Itanium->CallSites.size(), 1u);
+      EXPECT_EQ(After->Itanium->CallSites.front().LandingPadVA - Entry.OwnerVA,
+                Before->Itanium->CallSites.front().LandingPadVA -
+                    Entry.OriginalVA);
+      continue;
+    }
     if (Compact) {
       ASSERT_TRUE(Before->Compact && After->Compact);
       EXPECT_FALSE(Before->Dwarf);
@@ -691,6 +735,21 @@ TEST(AArch64CompactRegisters, PublishesPAuthLROffsetAndSparsePairs) {
   verifySavedRegisters(false, false, kCompactSparsePairs, true, false, false,
                        kPAuthLRNonzeroOffset);
 }
+TEST(AArch64CompactRegisters, PublishesPAuthLRFrameOnlyWithWidePC) {
+  verifySavedRegisters(false, false, 0, false, false, false,
+                       kPAuthLRWideOffset);
+}
+
+TEST(AArch64CompactRegisters, PublishesPAuthLRLanguageCleanup) {
+  verifySavedRegisters(false, false, kCompactSparsePairs, true, false, false,
+                       kPAuthLRNonzeroOffset, true);
+}
+
+TEST(AArch64CompactRegisters, PublishesPAuthLRBesideIndexedCleanup) {
+  verifySavedRegisters(false, false, kCompactSparsePairs, true, false, false,
+                       kPAuthLRNonzeroOffset, false, true);
+}
+
 TEST(AArch64CompactRegisters, SystemUnwindsPAuthLRAllPairs) {
   verifySavedRegisters(false, true, kCompactAllPairs, false, false, false, 0);
 }

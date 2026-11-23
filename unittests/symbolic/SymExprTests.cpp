@@ -1899,6 +1899,26 @@ TEST(SymExpr, NativeNormalizedResultsRetainWidthBoundaries) {
   }
 }
 
+TEST(SymExpr, WideConstantRotationCountsIncludeEveryActiveLimb) {
+  SymContext C;
+  for (unsigned W : {65u, 128u, 257u, 1024u}) {
+    const auto X = C.mkVar("x", W);
+    const auto Pattern = llvm::APInt::getSignMask(W) | llvm::APInt(W, 5);
+    for (auto Count :
+         {llvm::APInt(W, 0), llvm::APInt(W, W + 1),
+          llvm::APInt(W, ~uint64_t(0)), llvm::APInt::getOneBitSet(W, 64) + W,
+          llvm::APInt::getSignMask(W) + 7}) {
+      const auto Literal = C.mkConst(Count);
+      const auto Amount = Count.urem(W);
+      EXPECT_EQ(C.constantRotateAmount(Literal, W), Amount);
+      EXPECT_EQ(C.constValue(C.mkRol(C.mkConst(Pattern), Literal)),
+                Pattern.rotl(Amount));
+      if (!Amount)
+        EXPECT_EQ(C.mkRor(X, Literal), X);
+    }
+  }
+}
+
 TEST(SymExpr, NativeRotationsAndSignExtensionMatchEveryWordWidth) {
   std::mt19937_64 Random(0xf012e);
   for (unsigned Width = 1; Width <= 64; ++Width) {
@@ -2447,7 +2467,7 @@ TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
 
 TEST(SymExpr, AffineProductPlansKeepLiveLaneBitsAndRepeatedFactors) {
   std::mt19937_64 Random(0xaff1ae);
-  for (unsigned Bits : {65u, 127u, 128u, 129u, 171u, 257u}) {
+  for (unsigned Bits : {34u, 63u, 64u, 65u, 127u, 128u, 129u, 171u, 257u}) {
     constexpr unsigned W = 513;
     const unsigned FieldWidth = Bits - 33;
     SymContext C;
@@ -2583,6 +2603,54 @@ TEST(SymExpr, WideProductsKeepDynamicCoefficientsAndSharedFactorPrecision) {
         }
       }
     }
+}
+
+TEST(SymExpr, WideBitwiseVariablePairsShareTheVariadicIdentity) {
+  for (unsigned Width : {65u, 257u, 32769u}) {
+    SymContext C;
+    const auto Y = C.mkVar("y", Width), X = C.mkVar("x", Width);
+    const auto Zero = C.mkZero(Width), Ones = C.mkOnes(Width);
+    EXPECT_EQ(C.mkAnd(X, Y), C.mkAnd({Y, Ones, X, X}));
+    EXPECT_EQ(C.mkOr(X, Y), C.mkOr({Y, Zero, Y, X}));
+    EXPECT_EQ(C.mkXor(X, Y), C.mkXor({Y, X, X, Zero, X}));
+    EXPECT_EQ(C.mkAnd(Y, Y), Y);
+    EXPECT_EQ(C.mkOr(X, X), X);
+    EXPECT_EQ(C.mkXor(Y, Y), Zero);
+  }
+}
+
+TEST(SymExpr, ConcatenatedProductScalePreservesPartialAndSharedDemands) {
+  constexpr unsigned Width = 385, High = 7;
+  std::mt19937_64 Random(0x434f4e434154);
+  for (unsigned Bits : {8u, 63u, 64u, 65u, 97u, 129u}) {
+    SCOPED_TRACE(Bits);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    const auto Tail = llvm::APInt(Width - High, 3).shl(Width - Bits);
+    const auto Coeff = C.mkConcat(C.mkExtract(X, 9, High), C.mkConst(Tail));
+    const auto A = C.mkXor(X, Y), B = C.mkAdd(Y, Z);
+    const auto Product = C.mkMul({A, B, Z, Coeff});
+    // Truncation can require less than the full product. A second observer
+    // still reads the high bits of B from the same plan.
+    const unsigned Demand = Width - Bits / 2;
+    const auto Narrow = C.mkZExt(C.mkExtract(Product, 0, Demand), Width);
+    SymEvalPlan FullPlan(C, Product), PartialPlan(C, C.mkXor(Narrow, B));
+    for (unsigned I = 0; I != 32; ++I) {
+      std::array<llvm::APInt, 3> Values;
+      for (auto &V : Values) {
+        std::array<uint64_t, 7> Limbs;
+        std::generate(Limbs.begin(), Limbs.end(), [&] { return Random(); });
+        V = llvm::APInt(Width, Limbs);
+      }
+      const auto Sum = Values[1] + Values[2];
+      const auto Scale = Values[0].extractBits(High, 9).concat(Tail);
+      const auto Expected = (Values[0] ^ Values[1]) * Sum * Values[2] * Scale;
+      EXPECT_EQ(FullPlan.eval(Values), Expected);
+      EXPECT_EQ(PartialPlan.eval(Values),
+                Expected.trunc(Demand).zext(Width) ^ Sum);
+    }
+  }
 }
 
 TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {

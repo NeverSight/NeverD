@@ -7078,7 +7078,32 @@ bounded exponentiation and a prefix/suffix scan. It compares both methods
 against the remaining work and storage before constructing the result. The solver
 combines equal fields at their live width and appends the constant low bits.
 This computation retains every live coefficient bit across machine-word
-boundaries. A bitwise expression in which each abstract input occurs once
+boundaries. When only some pairs of perturbations vanish, the product reader
+can collect that subset and keep the other factors as full-width multipliers.
+Two high-weight factors can share a row when their offsets, weights and
+observable low fields agree. Toggling the highest bit of a field adds half
+its modulus. The reader moves that adjustment into the constant before
+combining weights, including when the two remaining coefficients cancel.
+The multiplicity of a shared row contributes to both the offset
+product and its cofactor. The remaining factors may still observe differences
+between sign extensions, zero extensions and concatenations of the same field.
+A prepared evaluation plan can use the trailing zeros of a concatenated
+literal tail to multiply the other factors at the demanded precision.
+Constant rotation counts use native remainder when their value fits in a
+single limb. For power-of-two carrier widths, only the low count bits are
+needed. A pair of distinct wide variables has a canonical bitwise ordering
+without constructing a word-sized neutral mask.
+For expanded products with many active minterms, the maximum degree over a
+set of coordinates counts the factors containing any of those coordinates.
+Successive restrictions recover overlapping factors and their multiplicities.
+The solver checks every recovered coefficient, including modular zeros. An
+expensive cubic search can first inspect two-coordinate slices. At a nonzero
+cube the coefficient fixes the scale, so a second coordinate that occurs in
+`n` factors must have the coefficients of `a^(3-n) * (a+b)^n` times that
+scale. An inconsistent slice leaves the original cubic available while the
+solver simplifies other terms. The same search can remove common multipliers
+from a quartic quotient when its Cartesian tables fit the available budget.
+A bitwise expression in which each abstract input occurs once
 already uses the minimum number of binary operations for that reading.
 The region solver can use it directly and still check alternative input
 relations after restoring the original expressions. A one-bit XOR over

@@ -259,6 +259,28 @@ bool isMinimalVariableSum(const SymContext &Ctx, SymRef E,
                      [&](SymRef Term) { return Ctx.op(Term) == SymOp::Var; });
 }
 
+// A scaled lane has one constant and one singleton coefficient in the
+// abstract ring. The odd offset and even slope rule out a zero offset or
+// absorbing an equal offset into a complemented input. Keep the all-ones
+// offset eligible for a complemented sum. Independent input relations are
+// still checked when the original words are restored.
+bool isSingleAffineLane(const SymContext &Ctx, SymRef Body, SymRef Original) {
+  if (Ctx.numOperands(Body) != 2 || Ctx.op(Original) != SymOp::Add ||
+      Ctx.numOperands(Original) != 2)
+    return false;
+  const auto Offset = Ctx.operand(Body, 0), Scaled = Ctx.operand(Body, 1);
+  const auto Raw = Ctx.operand(Original, 1);
+  if (!Ctx.isConst(Offset) || !(Ctx.constWords(Offset).front() & 1) ||
+      Ctx.isConstOnes(Offset) || Ctx.op(Scaled) != SymOp::Mul ||
+      Ctx.numOperands(Scaled) != 2 || !Ctx.isVar(Ctx.operand(Scaled, 1)) ||
+      Ctx.op(Raw) != SymOp::Mul || Ctx.numOperands(Raw) != 2)
+    return false;
+  const auto Weight = Ctx.operand(Scaled, 0);
+  const auto Lane = Ctx.op(Ctx.operand(Raw, 1));
+  return Ctx.isConst(Weight) && !(Ctx.constWords(Weight).front() & 1) &&
+         (Lane == SymOp::ZExt || Lane == SymOp::SExt || Lane == SymOp::Concat);
+}
+
 // Return the work for a structural reading, or zero for the corner-table path.
 size_t directLinearWork(const SymContext &Ctx, SymRef R, size_t Atoms,
                         SymRef Original) {
@@ -312,6 +334,10 @@ size_t directLinearWork(const SymContext &Ctx, SymRef R, size_t Atoms,
     }
     return Remaining == 0 ? Work : 0;
   }
+  if (Atoms == 1 && Op == SymOp::Add &&
+      llvm::APInt::getNumWords(Ctx.width(R)) >= limits::kMinReadOnceWordLimbs &&
+      isSingleAffineLane(Ctx, R, Original))
+    return 5; // One variable, two literals and two operations.
   if (Atoms < limits::kMinCanonicalAffineAtoms || Op != SymOp::Add)
     return 0;
   // Only the constant and singleton conjunction coefficients can be nonzero.
