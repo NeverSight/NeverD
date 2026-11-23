@@ -385,6 +385,7 @@ PROVIDER_INLINE_ROUTINES = {
 # The SDK uses an empty C parameter list for these no-argument C++ exports.
 # Authenticate every redeclaration against the target SDK before using (void).
 CPP_NOARG_PROVIDERS = {
+    "SetupAdministration": {"NeedRebootInit": "DWORD WINAPI"},
     "SNMPUtilities": {"SnmpSvcGetUptime": "DWORD __stdcall"},
     "WebAuthentication": {"WebAuthNGetApiVersionNumber": "DWORD WINAPI"},
     "DeviceManagementRegistration": {

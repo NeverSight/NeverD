@@ -41,6 +41,7 @@ CURRENT = {
     "DeltaCompression": ("msdelta.lib", ("msdelta",)),
     "PatchAPI": ("mspatcha.lib", ("patchapi",)),
     "NetworkDiagnostics": ("ndfapi.lib", ("ndfapi",)),
+    "SetupAdministration": ("advpack.Lib", ("advpub",)),
     "ProcessStatus": ("psapi.lib", ("psapi",)),
     "ProcessSnapshots": ("kernel32.Lib", ("processsnapshot",)),
     "InternetControlMessage": ("iphlpapi.lib", ("iphlpapi", "icmpapi")),
@@ -199,6 +200,8 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
             source.write_text(prelude + "".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
             prefixes = {"ProcessSnapshots": "Pss", "InternetControlMessage": "Icmp"}
             scope = {"import_prefix": prefixes[name]} if name in prefixes else {}
+            if name == "SetupAdministration":
+                scope["c_linkage_imports_only"] = True
             units.append({"name": name, "source": source, "compiler": compiler + defaults,
                           "headers": headers, "default_calling_convention": "__stdcall" if stdcall else "",
                           "bridge": {"source": str(source), "source_sha256": wdk.digest(source),
@@ -219,12 +222,21 @@ def select(proof, declared, directory, run):
         return names
     symbols = read_symbols(proof["import_library"], directory, run)
     eligible = {name for name in symbols if name.startswith(proof.get("import_prefix", ""))}
-    names = sorted(eligible & set(declared))
+    declarations = set(declared)
+    missing_declarations = sorted(eligible - declarations)
+    if proof.get("c_linkage_imports_only"):
+        # Advpack exports several C names whose SDK archive exposes exclusively
+        # C++ linker symbols. Preserve the archive evidence for those names.
+        cpp_only = {name: sorted(symbols[name]) for name in sorted(eligible)
+                    if all(symbol.startswith(("?", "__imp_?")) for symbol in symbols[name])}
+        proof["cpp_only_linker_symbols"] = cpp_only
+        eligible.difference_update(cpp_only)
+    names = sorted(eligible & declarations)
     if "ordinal_export_witness" in proof["import_library"] and (missing := eligible - set(names)):
         raise ValueError("Microsoft headers lack witnessed ordinal exports: " + ", ".join(sorted(missing)))
     if not names:
         raise ValueError("Microsoft SDK headers and import library share no named API")
-    proof.update(projected_functions=names, imports_without_declaration=sorted(eligible-set(names)))
+    proof.update(projected_functions=names, imports_without_declaration=missing_declarations)
     return names
 
 

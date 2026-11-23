@@ -18,6 +18,21 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_c_import_profile_preserves_mixed_and_cpp_only_archive_evidence(self):
+        symbols = {"OnlyCpp": {"?OnlyCpp@@YAHXZ", "__imp_?OnlyCpp@@YAHXZ"},
+                   "Both": {"?Both@@YAHXZ", "_Both@0"}, "Plain": {"_Plain@4"},
+                   "NoDeclaration": {"?NoDeclaration@@YAHXZ"}}
+        proof = {"import_library": {}, "c_linkage_imports_only": True}
+        with patch.object(windows.flat, "read_symbols", return_value=symbols):
+            self.assertEqual(windows.flat.select(proof, ["OnlyCpp", "Both", "Plain"], None, None),
+                             ["Both", "Plain"])
+            self.assertEqual(proof["cpp_only_linker_symbols"],
+                             {"OnlyCpp": sorted(symbols["OnlyCpp"]),
+                              "NoDeclaration": sorted(symbols["NoDeclaration"])})
+            self.assertEqual(proof["imports_without_declaration"], ["NoDeclaration"])
+            self.assertEqual(windows.flat.select({"import_library": {}}, list(symbols),
+                                                 None, None), sorted(symbols))
+
     def test_documented_runtime_profile_requires_every_named_declaration(self):
         proof = {"runtime_exports": {"names": ["ApiB", "ApiA"]}}
         self.assertEqual(windows.flat.select(proof, ["Private", "ApiA", "ApiB"], None, None),
