@@ -14,6 +14,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../LLVMHostFixture.h"
 #include "../../../lib/backend/llvm/resolve/MedLLVMScalarProof.h"
 #include "../../../lib/ir/low/jumptable/JumpTableResolverDetail.h"
 #include "NeverDLiftFixture.h"
@@ -31,7 +32,9 @@
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
@@ -341,7 +344,11 @@ TEST(JumpTableHighSelector, MissingExactSelectorRemainsAnUnresolvedGoto) {
 // i386
 //===----------------------------------------------------------------------===//
 
-class JTE_X86_32 : public NeverDLiftTest {};
+class JTE_X86_32 : public NeverDLiftTest {
+protected:
+  void expectBiasedSelectArmUsesItsOwner(const fs::path &Source,
+                                        const fs::path &Object, bool PIC);
+};
 
 // A guard over the final index has already accounted for subtraction and
 // shifting. Applying source-label normalization again truncates live cases.
@@ -579,95 +586,115 @@ int selected_function_table(int input) {
       << "a data-pointer slot cannot supply an indirect-call target";
 }
 
-// `t[(j + 5) % 13]` becomes a select between two addresses: t + 0x14 when
-// j < 8 and t - 0x20 otherwise.  The second lies before .rodata; the loader
-// anchors that exact operand, GOTOFF or absolute, to the table's segment, so
-// the select arm is rebuilt from its owner.
-static const char *const BiasedSelectArmSource = R"(
-static const unsigned t[13] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41};
-int biased_select_arm(int input) {
-  unsigned s = (unsigned)input, h = 0;
-  for (int i = 0; i < 190; ++i) {
-    s = s * 1103515245u + 12345u;
-    unsigned j = ((s >> 5) * 7u + 3u) % 13u;
-    h = h * 131u + t[j] + t[(j + 5) % 13u];
-    h ^= h >> 7;
-  }
-  return (int)h;
-}
+// Force the two address arms of t[(j + 5) % 13], independently of
+// the fixture compiler's optimization choices. The second arm carries a
+// negative relocation addend and must remain tied to the table's owner.
+static const char *const BiasedSelectArmAssembly = R"(
+.text
+.globl biased_select_arm
+.type biased_select_arm,@function
+biased_select_arm:
+  movl 4(%esp), %eax
+  andl $15, %eax
+#ifdef PIC_FORM
+  calll 1f
+1:
+  popl %ecx
+  addl $_GLOBAL_OFFSET_TABLE_+(.-1b), %ecx
+  leal .Ltable@GOTOFF+20(%ecx,%eax,4), %edx
+  leal .Ltable@GOTOFF-32(%ecx,%eax,4), %ecx
+#else
+  leal .Ltable+20(,%eax,4), %edx
+  leal .Ltable-32(,%eax,4), %ecx
+#endif
+  cmpl $8, %eax
+  cmovbl %edx, %ecx
+  movl (%ecx), %eax
+  retl
+.size biased_select_arm, .-biased_select_arm
+
+.section .rodata,"a",@progbits
+.type .Ltable,@object
+.Ltable:
+  .long 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41
+.size .Ltable, .-.Ltable
+.section .note.GNU-stack,"",@progbits
 )";
 
-// The biased arm is a choice of the optimizer. Apple Clang reads both table
-// entries directly, so its image has nothing to anchor, and the arm stays
-// covered where a newer Clang builds it.
-static bool compilerBuiltABiasedSelectArm(const neverd::BinaryImage &Image) {
-#ifdef __APPLE__
-  return !Image.RodataAnchorSeg.empty();
-#else
-  (void)Image;
-  return true;
-#endif
+void JTE_X86_32::expectBiasedSelectArmUsesItsOwner(const fs::path &Source,
+                                                 const fs::path &Object,
+                                                 bool PIC) {
+  {
+    std::ofstream File(Source);
+    File << BiasedSelectArmAssembly;
+  }
+  std::vector<std::string> Args{"-target", "i386-linux-gnu", "-c", "-Wa,-L"};
+  if (PIC)
+    Args.push_back("-DPIC_FORM");
+  Args.insert(Args.end(), {Source.string(), "-o", Object.string()});
+  const auto Assembled = exec(NEVERD_TEST_CLANG, Args);
+  ASSERT_TRUE(Assembled.ok()) << Assembled.err;
+  auto ImageOrErr = neverd::loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  auto &Image = *ImageOrErr;
+  ASSERT_EQ(Image.RodataAnchorSeg.size(), 1u)
+      << "expected exactly one select arm biased before the table";
+  auto Anchored = runPipelineWithEvidenceBudget(Image, 256);
+  ASSERT_TRUE(Anchored.Result.Success) << Anchored.Result.Error;
+  ASSERT_NE(Anchored.Result.LlvmModule, nullptr);
+  const auto &Module = *Anchored.Result.LlvmModule;
+  const auto *Function = Module.getFunction("biased_select_arm");
+  ASSERT_NE(Function, nullptr);
+  const auto &Layout = Module.getDataLayout();
+  auto isAnchoredArm = [&](const llvm::Value *Arm) {
+    llvm::SmallVector<const llvm::Value *, 16> Pending{Arm};
+    llvm::SmallPtrSet<const llvm::Value *, 16> Seen;
+    while (!Pending.empty()) {
+      const auto *Value = Pending.pop_back_val();
+      if (!Seen.insert(Value).second)
+        continue;
+      if (const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(Value)) {
+        const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(
+            GEP->getPointerOperand()->stripPointerCasts());
+        llvm::APInt Offset(
+            Layout.getIndexSizeInBits(GEP->getPointerAddressSpace()), 0);
+        if (Global && Global->getName().ends_with(".rodata") &&
+            GEP->accumulateConstantOffset(Layout, Offset) &&
+            Offset.getSExtValue() == -32)
+          return true;
+      }
+      if (llvm::isa<llvm::CastInst, llvm::BinaryOperator, llvm::ConstantExpr>(
+              Value))
+        for (const auto &Operand : llvm::cast<llvm::User>(Value)->operands())
+          Pending.push_back(Operand.get());
+    }
+    return false;
+  };
+  bool HasAnchoredSelectArm = false;
+  for (const auto &Block : *Function)
+    for (const auto &Instruction : Block)
+      if (const auto *Select = llvm::dyn_cast<llvm::SelectInst>(&Instruction))
+        HasAnchoredSelectArm |= isAnchoredArm(Select->getTrueValue()) ||
+                                isAnchoredArm(Select->getFalseValue());
+  EXPECT_TRUE(HasAnchoredSelectArm)
+      << "the biased arm must be rebuilt from its owner\n"
+      << Anchored.LLVMIR;
 }
 
 TEST_F(JTE_X86_32, SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner) {
-  // PIC: both arms are GOTOFF fields; without the anchor this arm is refused.
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "cross-target Clang unavailable";
-  const fs::path Source = tmpFile("biased_select_arm.c");
-  const fs::path Object = tmpFile("biased_select_arm.o");
-  {
-    std::ofstream File(Source);
-    File << BiasedSelectArmSource;
-  }
-  auto Compiled = exec(NEVERD_TEST_CLANG,
-                       {"-target", "i386-linux-gnu", "-march=pentium4", "-O2",
-                        "-fPIC", "-c", Source.string(), "-o", Object.string()});
-  ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
-  auto ImageOrErr = neverd::loadBinary(Object);
-  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
-      << llvm::toString(ImageOrErr.takeError());
-  auto &Image = *ImageOrErr;
-  if (!compilerBuiltABiasedSelectArm(Image))
-    GTEST_SKIP() << "this compiler reads both table entries directly";
-  ASSERT_EQ(Image.RodataAnchorSeg.size(), 1u)
-      << "expected exactly one select arm biased before the table";
-  auto Anchored = runPipelineWithEvidenceBudget(Image, 256);
-  ASSERT_TRUE(Anchored.Result.Success) << Anchored.Result.Error;
-  EXPECT_NE(Anchored.LLVMIR.find(".rodata, i64 -32)"), std::string::npos)
-      << "the biased arm must be rebuilt from its owner\n"
-      << Anchored.LLVMIR;
+  expectBiasedSelectArmUsesItsOwner(tmpFile("biased_select_arm.S"),
+                                    tmpFile("biased_select_arm.o"), true);
 }
 
 TEST_F(JTE_X86_32, AbsoluteSelectArmBiasedBeforeItsTableKeepsTheOwner) {
-  // Non-PIC: the arms are R_386_32 operands.  Without the anchor the biased
-  // arm was emitted as its raw original address, which the recompiled code
-  // dereferenced.
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "cross-target Clang unavailable";
-  const fs::path Source = tmpFile("absolute_biased_select_arm.c");
-  const fs::path Object = tmpFile("absolute_biased_select_arm.o");
-  {
-    std::ofstream File(Source);
-    File << BiasedSelectArmSource;
-  }
-  auto Compiled =
-      exec(NEVERD_TEST_CLANG,
-           {"-target", "i386-linux-gnu", "-march=pentium4", "-O2", "-fno-pic",
-            "-c", Source.string(), "-o", Object.string()});
-  ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
-  auto ImageOrErr = neverd::loadBinary(Object);
-  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
-      << llvm::toString(ImageOrErr.takeError());
-  auto &Image = *ImageOrErr;
-  if (!compilerBuiltABiasedSelectArm(Image))
-    GTEST_SKIP() << "this compiler reads both table entries directly";
-  ASSERT_EQ(Image.RodataAnchorSeg.size(), 1u)
-      << "expected exactly one select arm biased before the table";
-  auto Anchored = runPipelineWithEvidenceBudget(Image, 256);
-  ASSERT_TRUE(Anchored.Result.Success) << Anchored.Result.Error;
-  EXPECT_NE(Anchored.LLVMIR.find(".rodata, i64 -32)"), std::string::npos)
-      << "the biased arm must be rebuilt from its owner\n"
-      << Anchored.LLVMIR;
+  expectBiasedSelectArmUsesItsOwner(tmpFile("absolute_biased_select_arm.S"),
+                                    tmpFile("absolute_biased_select_arm.o"),
+                                    false);
 }
 
 TEST_F(JTE_X86_32, SpilledGOTBaseSurvivesFloatingMemoryOperands) {
@@ -6320,10 +6347,11 @@ int main(void) {
     EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
     const auto IRFile = tmpFile("reloaded-guard.ll");
     {
-      std::string IR;
-      llvm::raw_string_ostream Stream(IR);
-      Result.LlvmModule->print(Stream, nullptr);
-      std::ofstream(IRFile) << IR;
+      // The external compiler is the host execution oracle, not the
+      // embedded LLVM parser. Print the established host-fixture copy;
+      // verification above still checks the original module.
+      std::ofstream(IRFile)
+          << neverd::test::printHostCompilerFixture(*Result.LlvmModule);
     }
     for (const char *Optimization : {"-O0", "-O2"})
       for (const auto &Input : {Object, IRFile}) {
