@@ -23,6 +23,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <type_traits>
 #include <utility>
 
@@ -708,6 +709,65 @@ void multiplyProjectedFactors(
   }
 }
 
+struct OffsetPower {
+  SymRef Offset;
+  unsigned Count = 0;
+  llvm::APInt Product{1, 0}, Cofactor{1, 0};
+};
+
+size_t offsetPowerWork(unsigned Count, size_t Words, size_t LowProduct) {
+  // Square and multiply for a^(m-1), then form a^m and update the full
+  // product. The three prefix/suffix products use only the surviving limbs.
+  const unsigned Exponent = Count - 1;
+  const size_t Multiplies = 2 + std::popcount(Exponent) +
+                            (Exponent ? std::bit_width(Exponent) - 1 : 0);
+  return 6 + 4 * Words + Multiplies * Words * Words + 3 * LowProduct;
+}
+
+struct OffsetPowers {
+  llvm::SmallDenseMap<uint32_t, unsigned, 8> ByOffset;
+  llvm::SmallVector<OffsetPower, 8> Groups;
+
+  bool count(SymRef Offset, size_t Limit) {
+    auto It = ByOffset.find(Offset.index());
+    if (It != ByOffset.end()) {
+      ++Groups[It->second].Count;
+      return true;
+    }
+    if (Groups.size() == Limit)
+      return false;
+    ByOffset.try_emplace(Offset.index(), Groups.size());
+    Groups.push_back({Offset, 1});
+    return true;
+  }
+
+  const llvm::APInt &cofactor(SymRef Offset) const {
+    return Groups[ByOffset.lookup(Offset.index())].Cofactor;
+  }
+};
+
+// Offsets occurring m times have the same leave-one-out product. Keep
+// a^(m-1) even when a is even. Division by a would lose information.
+void buildOffsetPowers(const SymContext &Ctx,
+                       llvm::MutableArrayRef<OffsetPower> Groups,
+                       unsigned Precision, unsigned Bits,
+                       const llvm::APInt &Unit, llvm::APInt &Product) {
+  const auto Words = llvm::APInt::getNumWords(Precision);
+  for (auto &G : Groups) {
+    llvm::APInt A(Precision, Ctx.constWords(G.Offset).take_front(Words));
+    auto Others = llvm::APIntOps::pow(A, G.Count - 1);
+    G.Cofactor = Product.trunc(Bits) * Others.trunc(Bits);
+    Others *= A;
+    G.Product = Others.trunc(Bits);
+    Product *= Others;
+  }
+  auto Suffix = Unit.trunc(Bits);
+  for (auto &G : llvm::reverse(Groups)) {
+    G.Cofactor *= Suffix;
+    Suffix *= G.Product;
+  }
+}
+
 // If two perturbations cannot survive the outer scale, the coefficient of
 // each word is its weight times all the other offsets. Prefix and suffix
 // products avoid division, including when an offset is even or zero.
@@ -732,21 +792,59 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   // those operations in its scalar cost.
   const size_t Work = 9 + 2 * Words + Words * Words +
                       (Native ? 0 : 3 * (Limbs * (Limbs + 1) / 2 - 1));
+  const size_t LowProduct = Limbs * (Limbs + 1) / 2;
+  const size_t GroupedRowWork = 7 + Words + LowProduct;
+  const bool Long = Rows.size() > limits::kMaxResidueProductFactors;
   if (FixedBytes > Storage || Rows.size() > (Storage - FixedBytes) / PerRow ||
-      !Budget.canConsume(FixedWork) ||
-      Rows.size() > (Budget.available() - FixedWork) / Work)
+      !Budget.canConsume(FixedWork))
     return {};
-  // Extensions and concatenations preserve this complete low field. Reuse it
-  // directly without walking into the field's operands.
+  const size_t Available = Budget.available() - FixedWork;
+  if (Rows.size() > Available / (Long ? GroupedRowWork : Work))
+    return {};
+  const bool FlatFits = Rows.size() <= Available / Work;
+  const size_t Goal = FlatFits ? Rows.size() * Work : Available;
+  // Include vector and hash bucket growth as well as the two stored low
+  // residues per offset. The flat method remains available if a trial fails.
+  const size_t GroupBytes = 4 * sizeof(OffsetPower) + 8 * sizeof(uint64_t) +
+                            2 * Limbs * sizeof(uint64_t);
+  const size_t RowBytes = FixedBytes + Rows.size() * PerRow;
+  size_t GroupWork = Rows.size() * GroupedRowWork;
+  const size_t MaxGroups =
+      std::min((Storage - RowBytes) / GroupBytes,
+               (Goal - GroupWork) / offsetPowerWork(1, Words, LowProduct));
+  std::optional<OffsetPowers> Powers;
+  if (Long && MaxGroups)
+    Powers.emplace();
+  if (!FlatFits && !Powers)
+    return {};
+  // Extensions and concatenations preserve this complete low field. Check
+  // it once while counting offsets that could share a cofactor.
+  size_t Trial = 0;
   for (const auto &F : Rows) {
     const auto Low = lowOperand(Ctx, F.Word);
     if (!Low || Ctx.width(Low) != Bits) {
-      Budget.consume(size_t(&F - Rows.data()) + 1);
+      Budget.consume(size_t(&F - Rows.data()) + 1 + Trial);
       return {};
     }
+    if (Powers) {
+      ++Trial;
+      if (!Powers->count(F.Offset, MaxGroups))
+        Powers.reset();
+    }
   }
-  Budget.consume(FixedWork + Rows.size() * Work);
-  Storage -= FixedBytes + Rows.size() * PerRow;
+  if (Powers) {
+    for (const auto &G : Powers->Groups)
+      GroupWork = llvm::SaturatingAdd(
+          GroupWork, offsetPowerWork(G.Count, Words, LowProduct));
+    if (GroupWork > Goal || (FlatFits && GroupWork == Goal))
+      Powers.reset();
+  }
+  if (!Powers && (!FlatFits || Trial > Available - Goal)) {
+    Budget.consume(Rows.size() + Trial);
+    return {};
+  }
+  Budget.consume(FixedWork + (Powers ? GroupWork : Goal + Trial));
+  Storage -= RowBytes + (Powers ? Powers->Groups.size() * GroupBytes : 0);
 
   auto Literal = [&](SymRef V) {
     return llvm::APInt(Precision, Ctx.constWords(V).take_front(Words));
@@ -771,24 +869,32 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
       return Full.extractBits(Bits, Shift);
   };
   llvm::SmallVector<Coefficient, 16> Prefix;
-  Prefix.reserve(Rows.size());
   llvm::APInt Product(Precision, 1);
-  for (const auto &F : Rows) {
-    Prefix.push_back(Low(Product.getRawData()));
-    Product *= Literal(F.Offset);
+  const auto Unit =
+      Ctx.constValue(Outer).extractBits(Precision, Width - Precision);
+  if (Powers) {
+    buildOffsetPowers(Ctx, Powers->Groups, Precision, Bits, Unit, Product);
+  } else {
+    Prefix.reserve(Rows.size());
+    for (const auto &F : Rows) {
+      Prefix.push_back(Low(Product.getRawData()));
+      Product *= Literal(F.Offset);
+    }
   }
-
   // Once 2^Shift has been factored out, only Bits low bits of a
   // coefficient can survive. Unsigned limb arithmetic preserves all of them.
   llvm::SmallDenseMap<uint32_t, Coefficient, 8> Weights;
-  const auto Unit =
-      Ctx.constValue(Outer).extractBits(Precision, Width - Precision);
   Coefficient Suffix = Low(Unit.getRawData());
   Coefficient Correction = Low(llvm::APInt::getZero(Bits).getRawData());
   for (size_t I = Rows.size(); I-- != 0;) {
     const auto &F = Rows[I];
-    Coefficient C = LiveWeight(F.Weight) * Prefix[I] * Suffix;
-    Suffix *= Low(Ctx.constWords(F.Offset).data());
+    Coefficient C = LiveWeight(F.Weight);
+    if (Powers) {
+      C *= Low(Powers->cofactor(F.Offset).getRawData());
+    } else {
+      C *= Prefix[I] * Suffix;
+      Suffix *= Low(Ctx.constWords(F.Offset).data());
+    }
     auto Word = lowOperand(Ctx, F.Word);
     if (Ctx.op(Word) == SymOp::Not) {
       Word = Ctx.operand(Word, 0);

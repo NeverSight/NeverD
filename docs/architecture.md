@@ -7063,10 +7063,16 @@ A bounded number of splits per extraction keeps nested masked sums tractable.
 OR and XOR fields can also span several masked inputs. Each input supplies
 only its selected literal bits. When the bounded mask check shows that every
 mask already fits the field, one extraction after the join keeps a common
-shift shared.
+shift shared. A field that wraps past the end of a rotated word reads the
+suffix and prefix of each mask in that order. The corresponding field of each
+source uses one rotation and one extraction, so a complex source appears once.
 For large products of affine factors, two perturbations can vanish together
 modulo the observed width. Prefix and suffix products then give the exact
-weight of each surviving low field, including for even offsets. The solver
+weight of each surviving low field, including for even offsets. When a long
+product repeats an offset, all occurrences share its product of the other
+offsets. The solver can compute that cofactor once per distinct offset by
+bounded exponentiation and a prefix/suffix scan. It compares both methods
+against the remaining work and storage before constructing the result. The solver
 combines equal fields at their live width and appends the constant low bits.
 This computation retains every live coefficient bit across machine-word
 boundaries. A bitwise expression in which each abstract input occurs once
