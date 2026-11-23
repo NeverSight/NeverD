@@ -14,6 +14,7 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <initializer_list>
 #include <tuple>
 
 namespace neverd::emulation {
@@ -57,11 +58,14 @@ protected:
     Options.LinuxNetwork.emplace().Connections = {C0};
 #endif
   }
-  ProcessResult run(uint64_t Route, uint64_t Capacity) {
-    Options.Android->EntrySymbol = "poll_workers";
-    Options.Android->Arguments = {Buffer, Route, Capacity};
+  ProcessResult run(const char *Entry, std::initializer_list<uint64_t> Args) {
+    Options.Android->EntrySymbol = Entry;
+    Options.Android->Arguments = Args;
     return llvm::cantFail(
         emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options));
+  }
+  ProcessResult run(uint64_t Route, uint64_t Capacity) {
+    return run("poll_workers", {Buffer, Route, Capacity});
   }
   uint64_t word(const ProcessResult &R, unsigned I) {
     return llvm::support::endian::read64le(
@@ -116,6 +120,33 @@ TEST_P(AndroidPoll, MissingReadinessIdentifiesTheTCPConnection) {
     ASSERT_FALSE(R.NativeCalls.empty());
     EXPECT_FALSE(R.NativeCalls.back().Result);
   }
+}
+
+TEST_P(AndroidPoll, FortifiedWaitsPreserveTimeoutAndPollOnlyDeclaredEntries) {
+  auto &C = Options.LinuxNetwork->Connections[0];
+  C.ReceiveEvents.clear();
+  C.ReceiveQuietAfterConnectNS = 1000000;
+  struct Case {
+    uint32_t Count;
+    uint64_t Extent;
+  };
+  for (unsigned UsePPoll : {0u, 1u})
+    for (Case Input : {Case{0, 0}, Case{1, 8}, Case{2, uint64_t(1) << 32}}) {
+      SCOPED_TRACE(UsePPoll);
+      SCOPED_TRACE(Input.Count);
+      auto R =
+          run("poll_checked", {Buffer, UsePPoll, Input.Count, Input.Extent});
+      ASSERT_EQ(R.Stop, ProcessStopReason::Returned) << R.Diagnostic;
+      EXPECT_EQ(R.ReturnValue, 0u);
+      EXPECT_EQ(word(R, 0), 0u);
+      EXPECT_EQ(word(R, 1), 73u);
+      EXPECT_EQ(word(R, 2), 100u);
+      EXPECT_EQ(word(R, 3), 1000000u);
+      EXPECT_EQ(word(R, 4), Input.Count ? 0u : 0xa5a5u);
+      EXPECT_EQ(word(R, 5), Input.Count == 2 ? 0u : 0x5a5au);
+      EXPECT_EQ(word(R, 6), 0u);
+      EXPECT_EQ(word(R, 7), 1000000u);
+    }
 }
 
 TEST_P(AndroidPoll, TimeoutsPreserveLibcTimespecAndUseVirtualMilliseconds) {

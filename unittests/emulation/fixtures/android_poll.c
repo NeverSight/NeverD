@@ -13,6 +13,9 @@ extern int socket(int, int, int);
 extern int connect(int, const void *, unsigned);
 extern int poll(struct PollFD *, unsigned, int);
 extern int ppoll(struct PollFD *, unsigned, const void *, const void *);
+extern int __poll_chk(struct PollFD *, unsigned, int, U);
+extern int __ppoll_chk(struct PollFD *, unsigned, const void *, const void *,
+                       U);
 extern int epoll_create1(int);
 extern int epoll_ctl(int, int, int, const struct Event *);
 extern int epoll_wait(int, struct Event *, int, int);
@@ -23,6 +26,25 @@ extern int pthread_join(U, void **);
 extern int nanosleep(const void *, void *);
 extern int clock_gettime(int, void *);
 static const unsigned char peer[16] = {2, 0, 0x23, 0x29, 127, 0, 0, 1};
+
+U poll_checked(U *out, U use_ppoll, unsigned count, U extent) {
+  int fd = socket(2, 1, 6);
+  if (fd < 0 || connect(fd, peer, sizeof(peer)))
+    return 1;
+  struct PollFD fds[2] = {{fd, 1, 0xa5a5}, {-1, 0, 0x5a5a}};
+  U timeout[2] = {0, 1000000};
+  *__errno() = 73;
+  out[0] = use_ppoll ? __ppoll_chk(fds, count, timeout, 0, extent)
+                     : __poll_chk(fds, count, 1, extent);
+  out[1] = (unsigned)*__errno();
+  clock_gettime(1, out + 2);
+  out[4] = fds[0].revents;
+  out[5] = fds[1].revents;
+  out[6] = timeout[0];
+  out[7] = timeout[1];
+  return 0;
+}
+
 struct State {
   U *out;
   U route;

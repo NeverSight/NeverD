@@ -297,6 +297,12 @@ AArch64 uses its native `ppoll`/`epoll_pwait` trap numbers; Android's `poll`,
 `ppoll`/`ppoll64` and epoll imports adapt to the same owner. No host socket,
 polling API or wall-clock wait supplies readiness.
 
+The Bionic `__poll_chk` and `__ppoll_chk` imports check the unsigned descriptor
+count against the number of complete eight-byte `pollfd` entries in the supplied
+object extent. An undersized array enters the shared FORTIFY diagnostic and
+abort path before Bionic reads the descriptors, timeout or signal mask. An
+admitted call uses the ordinary `poll` or `ppoll` wait and writeback semantics.
+
 Ordinary IN/OUT and RDNORM/WRNORM queries use the socket's existing offline
 arrival and expected-send state. Regular files, directories and modeled proc
 files are immediately ready for ordinary reads/writes. Admitted live process

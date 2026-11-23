@@ -73,7 +73,8 @@ constexpr const char *FortifySymbols[] = {
     "__strcpy_chk",    "__strncpy_chk", "__strncpy_chk2", "__strlcpy_chk",
     "__strcat_chk",    "__strncat_chk", "__strchr_chk",   "__strrchr_chk",
     "__read_chk",      "__fgets_chk",   "__fread_chk",    "__snprintf_chk",
-    "__vsnprintf_chk", "__sprintf_chk", "__vsprintf_chk"};
+    "__vsnprintf_chk", "__sprintf_chk", "__vsprintf_chk", "__poll_chk",
+    "__ppoll_chk"};
 class AndroidLog : public testing::TestWithParam<
                        std::tuple<const char *, ExecutionBackendKind>> {
 protected:
@@ -1442,7 +1443,15 @@ TEST_P(AndroidLog, FortifyDiagnosticsAndRetainedWritesMatchAPI28) {
       {22,
        {D, F, 0, 3, S},
        "vsprintf: prevented 4-byte write into 3-byte buffer",
-       {'a', 'b', 0}}};
+       {'a', 'b', 0}},
+      {23,
+       {1, 2, 1, 15},
+       "poll: 1-element pollfd array too small for 2 fds",
+       {}},
+      {24,
+       {1, UINT32_MAX, 1, 1, 7},
+       "ppoll: 0-element pollfd array too small for 4294967295 fds",
+       {}}};
   for (const auto &C : Cases)
     for (unsigned Dynamic : {0u, 1u}) {
       SCOPED_TRACE(C.Detail);
