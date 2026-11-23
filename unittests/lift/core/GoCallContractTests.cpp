@@ -5060,4 +5060,45 @@ TEST(GoAssembly, ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform) {
   EXPECT_NE(Go.find("__builtin_trap"), std::string::npos) << Go;
 }
 
+TEST(GoAssembly, AssemblyEnteredAsAClosureReadsItsContext) {
+  // The compiler's closures for comparing values of a size they hold jump
+  // to runtime.memequal_varlen, internal-ABI assembly that reads the size
+  // through the closure context.  The context was defined for compiled
+  // code alone, so the read went through a register nothing defines.
+  //   main.eq: mov rcx, [rdx+8]; add rax, rbx; add rax, rcx; ret
+  //   (arm64)  ldr x2, [x26, #8]; add x0, x0, x1; add x0, x0, x2; ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t F = kTextVA + 0x100;
+    GoTestImage T(A);
+    if (A == Arch::X64)
+      T.writeText(F, {0x48, 0x8B, 0x4A, 0x08, 0x48, 0x01, 0xD8, 0x48, 0x01,
+                      0xC8, 0xC3});
+    else
+      T.writeText(F, words({0xF9400742, 0x8B010000, 0x8B020000, 0xD65F03C0}));
+    Symbol Function = Symbol::makeFunc(F);
+    Function.Name = "main.eq";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.GoAssembly = {{F, F + 0x20}};
+    Module.FrameArguments = {{F, 0, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_eq");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_NE(Text.find(A == Arch::X64 ? "movq %%rdx" : "mov %0, x26"),
+              std::string::npos)
+        << Text;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+}
+
 } // namespace

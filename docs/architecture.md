@@ -6039,7 +6039,15 @@ is the closure context (`defineGoClosureContext`,
 clobbers the register, so no read follows one. Go code before the internal
 ABI that takes no register argument (`MedFunc::StackArgumentsOnly`) reads its
 context the same way; a stub that takes registers, as Go 1.16's
-`panicSliceAlen` takes CX and DX, reads those instead. For either register the
+`panicSliceAlen` takes CX and DX, reads those instead. Assembly Go code
+enters by the internal ABI is a closure's body too: the closures the compiler
+makes for comparing values of a size they hold jump to
+`runtime.memequal_varlen`, which reads the size through the context
+(`MOVQ 8(DX), BX`). x86-64 assembly that takes Go's argument registers is such
+code (`goAssemblyTakesRegisterArguments`); on arm64, whose summaries list no
+entry reads, it is assembly that addresses memory through R26 as it was
+entered, since what the platform enters only saves that register for its
+caller. For either register the
 incoming value is the version nothing in the function defines: where a
 function reads the register only after a call that writes it, its first SSA
 version is that call's clobber, and stays the call's. Calls from assembly, which may

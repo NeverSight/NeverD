@@ -21058,6 +21058,9 @@ the goroutine at its entry and again after the call.
 `GoInternalABI.AClosureReadsTheContextItsCallerPasses` lifts a closure that adds
 two words it loads through RDX, and its arm64 twin through R26: its C reads
 the register at the entry and traps nowhere.
+`GoAssembly.AssemblyEnteredAsAClosureReadsItsContext` lifts internal-ABI
+assembly that loads a word through the context register on x86-64 and arm64:
+it reads the register the same way.
 `GoAssembly.AReflectCallHelperStoresWhatItsFuncValueReturns` lifts a helper that
 loads RAX, RBX and X0 with `runtime.unspillArgs`, calls a func value through
 RDX and stores them back with `runtime.spillArgs`: neither routine is called,

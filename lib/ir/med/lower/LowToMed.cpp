@@ -2610,13 +2610,30 @@ MedFunc LowToMedConverter::convertFunction(
     // register, as does Go code before its internal ABI that takes no
     // register argument (MedFunc::StackArgumentsOnly): a stub that takes some,
     // as Go 1.16's panicSliceAlen takes CX and DX, reads those instead.
-    if (Image &&
-        (Func.StackArgumentsOnly || usesGoRegisterArguments(*Image, Low.Entry)))
-      if (const std::optional<uint64_t> Context =
-              goClosureContextRegister(TheArch)) {
-        defineGoClosureContext(Func, *Context);
-        debugVerifyMedFunc(Func, "defineGoClosureContext");
-      }
+    // Assembly Go code enters by the internal ABI is a closure's body too:
+    // the compiler's closures for comparing values of a size they hold jump
+    // to `runtime.memequal_varlen`, which reads it through the context
+    // (`MOVQ 8(DX), BX`).  x86-64 assembly that takes Go's argument registers
+    // is such code (goAssemblyTakesRegisterArguments).  arm64 summaries list
+    // no entry reads, and there it is assembly that addresses memory through
+    // the register as it was entered: what the platform enters only saves
+    // X26 for its caller.
+    const std::optional<uint64_t> ClosureContext =
+        goClosureContextRegister(TheArch);
+    const bool ClosureAssembly =
+        RegisterABIGoCode && ClosureContext &&
+        !usesGoRegisterArguments(*Image, Low.Entry) &&
+        (TheArch == Arch::X64
+             ? OwnEntryReads && goAssemblyTakesRegisterArguments(
+                                    *Image, Low.Entry, *OwnEntryReads)
+             : TheArch == Arch::AArch64 &&
+                   addressesThroughEntryRegister(Func, *ClosureContext));
+    if (Image && ClosureContext &&
+        (Func.StackArgumentsOnly ||
+         usesGoRegisterArguments(*Image, Low.Entry) || ClosureAssembly)) {
+      defineGoClosureContext(Func, *ClosureContext);
+      debugVerifyMedFunc(Func, "defineGoClosureContext");
+    }
 
     // Bind public LowIR selector occurrences only after every MedIR rewrite and
     // SSA/propagation pass has finished.  A source op that disappeared, was
