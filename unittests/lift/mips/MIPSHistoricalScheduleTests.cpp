@@ -999,7 +999,7 @@ TEST(MIPSHistoricalScheduling, R30xxPendingDisableCanInterruptABranchSlot) {
         Delivered = true;
         break;
       }
-      ASSERT_TRUE(execute({Op}, E, C));
+      ASSERT_TRUE(execute(std::span(&Op, 1), E, C));
     }
     EXPECT_TRUE(Delivered);
     EXPECT_EQ(S.system()->EPC, 0x1004u);
