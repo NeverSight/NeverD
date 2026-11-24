@@ -205,6 +205,155 @@ TEST(SymConditionalStore, SmallSolverProvesBothAliasAndNonaliasEffects) {
   expectUnsat(C, C.mkAnd(C.mkNe(A, D), C.mkNe(After, Old)));
 }
 
+TEST(SymConditionalStore, SelectedRegionCoexistsWithProvedPreservation) {
+  SymContext C;
+  SymState S(C);
+  const auto Frame = C.mkVar("frame", 64);
+  const auto Watched = C.mkVar("watched", 64);
+  const auto Untracked = C.mkVar("untracked", 64);
+  const auto Destination = C.mkVar("destination", 64);
+  const auto OldFrame = S.load(Frame, 1);
+  const auto OldWatched = S.load(Watched, 2);
+  const auto OldUntracked = S.load(Untracked, 1);
+  const std::array<SymStorePreservationRegion, 1> Tracked{
+      SymStorePreservationRegion{Watched, 0, 2}};
+  SymStorePreservation Preservation{Frame, 0, 1, 100};
+  SymConditionalStore Control{100};
+  Control.TrackedRegions = Tracked;
+  EXPECT_FALSE(S.storeConditionalPreserving(Destination, C.mkConst(8, 0x91),
+                                            Preservation, Control));
+  ASSERT_EQ(Preservation.Status, SymStorePreservationStatus::Applied);
+  ASSERT_EQ(Control.Status, SymConditionalStoreStatus::Applied);
+  EXPECT_EQ(Control.WorkUsed, 13u);
+  EXPECT_EQ(S.load(Frame, 1), OldFrame);
+  EXPECT_NE(S.load(Untracked, 1), OldUntracked);
+
+  const auto NewWatched = S.load(Watched, 2);
+  expectUnsat(
+      C, C.mkAnd({C.mkNe(Destination, Frame), C.mkEq(Watched, Destination),
+                  C.mkNe(C.mkExtract(NewWatched, 0, 8), C.mkConst(8, 0x91))}));
+  expectUnsat(C,
+              C.mkAnd({C.mkNe(Destination, Frame), C.mkEq(Watched, Destination),
+                       C.mkNe(C.mkExtract(NewWatched, 8, 8),
+                              C.mkExtract(OldWatched, 8, 8))}));
+  expectUnsat(C,
+              C.mkAnd({C.mkNe(Watched, Destination),
+                       C.mkNe(C.mkAdd(Watched, C.mkConst(64, 1)), Destination),
+                       C.mkNe(NewWatched, OldWatched)}));
+}
+
+TEST(SymConditionalStore, SelectedRegionBudgetsAndRefusalsAreTransactional) {
+  SymContext C;
+  SymState Initial(C);
+  const auto Frame = C.mkVar("frame", 64);
+  const auto Watched = C.mkVar("watched", 64);
+  const auto Destination = C.mkVar("destination", 64);
+  const auto Value = C.mkVar("value", 8);
+  Initial.load(Frame, 1);
+  Initial.load(Watched, 2);
+  const std::array<SymStorePreservationRegion, 1> Tracked{
+      SymStorePreservationRegion{Watched, 0, 2}};
+  for (const uint64_t Budget : {uint64_t(12), uint64_t(13)}) {
+    auto S = Initial;
+    const auto Nodes = C.numNodes();
+    SymStorePreservation Preservation{Frame, 0, 1, 100};
+    SymConditionalStore Control{Budget};
+    Control.TrackedRegions = Tracked;
+    S.storeConditionalPreserving(Destination, Value, Preservation, Control);
+    EXPECT_LE(Control.WorkUsed, Budget);
+    if (Budget == 12) {
+      EXPECT_EQ(Control.Status, SymConditionalStoreStatus::BudgetExceeded);
+      EXPECT_EQ(Preservation.Status, SymStorePreservationStatus::Invalid);
+      EXPECT_EQ(C.numNodes(), Nodes);
+      EXPECT_TRUE(S.mergeIdentical(Initial));
+    } else {
+      EXPECT_EQ(Control.Status, SymConditionalStoreStatus::Applied);
+      EXPECT_EQ(Preservation.Status, SymStorePreservationStatus::Applied);
+    }
+  }
+  {
+    auto S = Initial;
+    const auto Nodes = C.numNodes();
+    SymStorePreservation Preservation{Frame, 0, 1, 0};
+    SymConditionalStore Control{13};
+    Control.TrackedRegions = Tracked;
+    S.storeConditionalPreserving(Destination, Value, Preservation, Control);
+    EXPECT_EQ(Control.Status, SymConditionalStoreStatus::Invalid);
+    EXPECT_EQ(Preservation.Status, SymStorePreservationStatus::BudgetExceeded);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_TRUE(S.mergeIdentical(Initial));
+  }
+  {
+    auto S = Initial;
+    const auto Nodes = C.numNodes();
+    const std::array<SymStorePreservationRegion, 1> Invalid{
+        SymStorePreservationRegion{Watched, 2, 2}};
+    SymStorePreservation Preservation{Frame, 0, 1, 100};
+    SymConditionalStore Control{100};
+    Control.TrackedRegions = Invalid;
+    S.storeConditionalPreserving(Destination, Value, Preservation, Control);
+    EXPECT_EQ(Control.Status, SymConditionalStoreStatus::Invalid);
+    EXPECT_EQ(Preservation.Status, SymStorePreservationStatus::Invalid);
+    EXPECT_EQ(C.numNodes(), Nodes);
+    EXPECT_TRUE(S.mergeIdentical(Initial));
+  }
+}
+
+TEST(SymConditionalStore, SelectedRegionPreservesBigEndianNeighbor) {
+  SymContext C;
+  SymState S(C, llvm::endianness::big);
+  const auto Frame = C.mkVar("frame", 64);
+  const auto Watched = C.mkVar("watched", 64);
+  const auto Destination = C.mkVar("destination", 64);
+  S.load(Frame, 1);
+  const auto Old = S.load(Watched, 2);
+  const std::array<SymStorePreservationRegion, 1> Tracked{
+      SymStorePreservationRegion{Watched, 0, 2}};
+  SymStorePreservation Preservation{Frame, 0, 1, 100};
+  SymConditionalStore Control{100};
+  Control.TrackedRegions = Tracked;
+  S.storeConditionalPreserving(Destination, C.mkConst(8, 0x52), Preservation,
+                               Control);
+  ASSERT_EQ(Control.Status, SymConditionalStoreStatus::Applied);
+  const auto After = S.load(Watched, 2);
+  const auto DisjointFrame = C.mkNe(Destination, Frame);
+  expectUnsat(C,
+              C.mkAnd({DisjointFrame, C.mkEq(Destination, Watched),
+                       C.mkNe(C.mkExtract(After, 8, 8), C.mkConst(8, 0x52))}));
+  expectUnsat(
+      C, C.mkAnd({DisjointFrame, C.mkEq(Destination, Watched),
+                  C.mkNe(C.mkExtract(After, 0, 8), C.mkExtract(Old, 0, 8))}));
+}
+
+TEST(SymConditionalStore, SelectedRegionWrapsRelativeCoordinates) {
+  SymContext C;
+  SymState S(C);
+  const auto Frame = C.mkVar("frame", 64);
+  const auto Watched = C.mkVar("watched", 64);
+  const auto Destination = C.mkVar("destination", 64);
+  const auto Before = C.mkAdd(Watched, C.mkConst(64, UINT64_MAX));
+  S.load(Frame, 1);
+  const auto OldBefore = S.load(Before, 1);
+  const auto OldAt = S.load(Watched, 1);
+  const std::array<SymStorePreservationRegion, 1> Tracked{
+      SymStorePreservationRegion{Watched, -1, 1}};
+  SymStorePreservation Preservation{Frame, 0, 1, 100};
+  SymConditionalStore Control{100};
+  Control.TrackedRegions = Tracked;
+  S.storeConditionalPreserving(Destination, C.mkConst(8, 0x73), Preservation,
+                               Control);
+  ASSERT_EQ(Control.Status, SymConditionalStoreStatus::Applied);
+  const auto DisjointFrame = C.mkNe(Destination, Frame);
+  expectUnsat(C, C.mkAnd({DisjointFrame, C.mkEq(Destination, Before),
+                          C.mkNe(S.load(Before, 1), C.mkConst(8, 0x73))}));
+  expectUnsat(C, C.mkAnd({DisjointFrame, C.mkEq(Destination, Before),
+                          C.mkNe(S.load(Watched, 1), OldAt)}));
+  expectUnsat(C, C.mkAnd({DisjointFrame, C.mkEq(Destination, Watched),
+                          C.mkNe(S.load(Before, 1), OldBefore)}));
+  expectUnsat(C, C.mkAnd({DisjointFrame, C.mkEq(Destination, Watched),
+                          C.mkNe(S.load(Watched, 1), C.mkConst(8, 0x73))}));
+}
+
 TEST(SymConditionalStore, KeepsCurrentBytesWithoutRevivingHistoryOrEpochs) {
   SymContext C;
   SymState S(C);
@@ -347,6 +496,66 @@ TEST(SymConditionalStore, ExecutorUsesEffectiveGSAddressAndOrdinaryMemory) {
     if (!SymbolicBase)
       EXPECT_EQ(S.load(C.mkConst(64, 0x40), 1), C.mkConst(8, 7));
   }
+}
+
+TEST(SymConditionalStore, ExecutorCombinesTrackedAndPreservedAtomicBytes) {
+  SymContext C;
+  SymState S(C);
+  SymExec E(C, S);
+  const auto Frame = C.mkVar("frame", 64);
+  const auto Watched = C.mkVar("watched", 64);
+  const auto Address = C.mkConst(64, 0x4000);
+  S.store(Address, C.mkConst(8, 0x31));
+  const auto OldFrame = S.load(Frame, 1);
+  const auto OldWatched = S.load(Watched, 1);
+  const std::array<SymStorePreservationRegion, 1> Tracked{
+      SymStorePreservationRegion{Watched, 0, 1}};
+  SymStorePreservation Preservation{Frame, 0, 1, 100};
+  SymConditionalStore Control{100};
+  Control.TrackedRegions = Tracked;
+  auto Op = memoryOp(NdOp::ATOMIC_XCHG, NdVar::reg(0, 1),
+                     {NdVar::scalar(0x4000, 8), NdVar::scalar(0x72, 1)});
+  Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  EXPECT_EQ(E.stepWithConditionalStore(Op, Control, Preservation),
+            StepResult::Continue);
+  ASSERT_EQ(Control.Status, SymConditionalStoreStatus::Applied);
+  ASSERT_EQ(Preservation.Status, SymStorePreservationStatus::Applied);
+  EXPECT_EQ(S.read(SymSpace::Register, 0, 1), C.mkConst(8, 0x31));
+  EXPECT_EQ(S.load(Address, 1), C.mkConst(8, 0x72));
+  EXPECT_EQ(S.load(Frame, 1), OldFrame);
+  const auto DisjointFrame = C.mkNe(Frame, Address);
+  expectUnsat(C, C.mkAnd({DisjointFrame, C.mkEq(Watched, Address),
+                          C.mkNe(S.load(Watched, 1), C.mkConst(8, 0x72))}));
+  expectUnsat(C, C.mkAnd({DisjointFrame, C.mkNe(Watched, Address),
+                          C.mkNe(S.load(Watched, 1), OldWatched)}));
+}
+
+TEST(SymConditionalStore, CombinedAtomicRefusalDoesNotPublishOldValue) {
+  SymContext C;
+  SymState S(C);
+  SymExec E(C, S);
+  const auto Frame = C.mkVar("frame", 64);
+  const auto Watched = C.mkVar("watched", 64);
+  const auto Address = C.mkConst(64, 0x4000);
+  S.store(Address, C.mkConst(8, 0x31));
+  S.load(Frame, 1);
+  S.load(Watched, 1);
+  S.write(SymSpace::Register, 0, C.mkConst(8, 0xfe));
+  const std::array<SymStorePreservationRegion, 1> Tracked{
+      SymStorePreservationRegion{Watched, 0, 1}};
+  SymStorePreservation Preservation{Frame, 0, 1, 0};
+  SymConditionalStore Control{100};
+  Control.TrackedRegions = Tracked;
+  auto Op = memoryOp(NdOp::ATOMIC_XCHG, NdVar::reg(0, 1),
+                     {NdVar::scalar(0x4000, 8), NdVar::scalar(0x72, 1)});
+  Op.MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  EXPECT_EQ(E.stepWithConditionalStore(Op, Control, Preservation),
+            StepResult::Unmodelled);
+  EXPECT_EQ(Preservation.Status, SymStorePreservationStatus::BudgetExceeded);
+  EXPECT_EQ(Control.Status, SymConditionalStoreStatus::Invalid);
+  EXPECT_FALSE(C.isConst(S.read(SymSpace::Register, 0, 1)));
+  EXPECT_EQ(E.memoryHavocCount(), 1u);
+  EXPECT_FALSE(C.isConst(S.load(Address, 1)));
 }
 
 TEST(SymConditionalStore, ExecutorCmpxchgSelectsOneWriteBeforePublishingOld) {

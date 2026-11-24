@@ -2136,6 +2136,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NeverDSymConditionalStoreTests`는 절대·기호 메모리의 제한된 바이트 효과, 양쪽 바이트 순서, 겹침, 순환, 알 수 없는 세대와 정확한 예산을 검증한다. 실행기 검사는 STORE, 스칼라 원자 ADD/XCHG/CMPXCHG, 주소·값·출력 레지스터 겹침, Old의 지연 공개, 잘못된 형식과 거부 시 havoc을 포함한다. `SymStorePreservation`은 명시적인 프레임 보존 계약 및 정확한 예산과 한 단위 부족한 예산으로 같은 원자 쓰기 경로를 검증한다. 설명자 없는 일반 실행은 기존 동작을 유지하며 접근 권한이나 전체 프로그램 복구를 인증하지 않는다.
 
+`NeverDSymConditionalStoreTests`는 증명된 보존과 선택한 조건부 영역을 함께 사용할 때의 부분 바이트 별칭, 미추적 영역의 미지 세대, 정확한 예산과 한 단위 부족한 예산, 잘못된 영역, 원자 연산 이전 값의 공개 또는 거부도 검사한다.
+
 
 `AbsoluteMemoryFactsTests.inc`는 노드 간 절대 대상, 합류 충돌, 부분 중첩과 미지의 별칭 쓰기, 두 바이트 순서 및 연결 활성화/비활성화에서 스택 분리를 검사한다. 독립 바이트 실행기가 효과를 확인하며 제외 범위 누락과 예산 부족은 거부해야 한다. `SymStorePreservation.Absolute*`와 `SymState.AbsoluteProjections*`는 영역 공존, 높은 주소, 순수한 유한 투영, 미지 세대 및 원자적 거부를 검사한다. `NeverDInterpreterSpecializationTests`, `NeverDSymbolicIntegerIntrinsicTests`, `NeverDSymMemoryKnowledgeTests` 실행 후 네이티브 독립성과 LowIR 정제 모음을 실행한다.
 

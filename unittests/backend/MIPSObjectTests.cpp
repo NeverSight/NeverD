@@ -335,7 +335,7 @@ TEST(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
       for (const auto &Symbol : ELF.symbols()) {
         auto Name = Symbol.getName();
         ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
-        if (*Name == "leaf") {
+        if (Symbol.getELFType() == llvm::ELF::STT_FUNC && *Name == "leaf") {
           FoundLeaf = true;
           EXPECT_EQ(Symbol.getOther(), Mips16 ? llvm::ELF::STO_MIPS_MIPS16
                                               : llvm::ELF::STO_MIPS_MICROMIPS);

@@ -9271,8 +9271,15 @@ loop proof, a mask in a later return block and a discarded shift.
 `ReturnContract.SharedX86VariableShiftCrossesTwoJoins`
 checks edge pairing through successive joins in machine code.
 `ReturnContract.SharedX86ReturnObservesBothShiftDirectionsAfterTheJoin`
-runs both C outputs with left and right shifts on separate predecessors.
+runs both C outputs with left and right shifts on separate predecessors,
+using either RAX directly or a final copy from EDX.
 Removing bit eight from the final mask makes the left-shift path overlap.
+`ReturnContracts.LateReturnCopyChecksTheScratchRegisterOnItsOwnEdge` checks
+the high byte of RDX as data and as a count, reordered PHIs, conflicting
+bytes and an unknown full-register input.
+`ReturnContract.I386LoopReusesTheCounterRegisterForTheFinalResult` executes
+zero through three trips with EAX as the counter. At the exit it compares
+the masked result copied from EDX, including a one-trip collision.
 `ReturnContract.SharedAArch64WordShiftKeepsEachLatchAndTheIncomingX0`
 checks a word shift after either latch and a bare path returning the full X0.
 `ReturnContract.SharedMIPSShiftCountChangesInTheBackedgeSlot` runs both C
@@ -23232,6 +23239,8 @@ ctest --test-dir build-release -L "^(NeverDPEFixedImageTests|NeverDInterpreterSp
 ```
 
 `NeverDSymConditionalStoreTests` covers bounded byte effects across absolute and symbolic banks, both byte orders, overlap, wrapping, unknown epochs and exact budgets. Executor tests cover STORE, scalar atomic ADD/XCHG/CMPXCHG, aliased address/value/output registers, delayed Old publication, malformed shapes and refusal havoc. `SymStorePreservation` checks the same atomic write path with explicit frame preservation and exact versus one-short budgets. Ordinary execution without a descriptor retains its existing behavior; these checks do not certify access permissions or whole-program recovery.
+
+`NeverDSymConditionalStoreTests` also covers selected conditional regions beside proved preservation: partial-byte aliases, untracked unknown epochs, exact and one-short budgets, malformed regions, and atomic old-value publication or refusal.
 
 ## Runtime module resources and persistent buffers
 

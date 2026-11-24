@@ -617,6 +617,15 @@ IMMEDIATE_MEMORY_TEXT(kImmediateImageArtifactProperty,
 IMMEDIATE_MEMORY_TEXT(kImmediateHighCArtifact, "high.c")
 IMMEDIATE_MEMORY_TEXT(kImmediateLLVMCArtifact, "llvm.c")
 IMMEDIATE_MEMORY_TEXT(kImmediateELFArtifact, "llvm.o")
+IMMEDIATE_MEMORY_TEXT(kImmediateOrderedDispatchArtifact, "ordered-dispatch.c")
+IMMEDIATE_MEMORY_TEXT(kImmediateOrderedLoadCall, "{0}(base, lane)")
+IMMEDIATE_MEMORY_TEXT(kImmediateOrderedDispatchCase, "case {0}U: return {1};\n")
+IMMEDIATE_MEMORY_TEXT(
+    kImmediateOrderedDispatchBegin,
+    "uint64_t generatedOrdered(uint32_t word, uintptr_t base, "
+    "uint64_t lane, uint64_t low, uint64_t high) {\n"
+    "switch (word) {\n")
+IMMEDIATE_MEMORY_TEXT(kImmediateOrderedDispatchEnd, "}\n__builtin_trap();\n}\n")
 IMMEDIATE_MEMORY_TEXT(kImmediateArm64eTriple, "arm64e-apple-macos15")
 IMMEDIATE_MEMORY_TEXT(kImmediateArm64eArtifact, "llvm-arm64e.o")
 IMMEDIATE_MEMORY_TEXT(kImmediateMachOArtifact, "llvm-macho.o")
