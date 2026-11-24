@@ -23,9 +23,12 @@ The single-function ordinary C view can take an original V6 pre-CALL state
 directly, including a bounded stack window for offline analysis. Its checked
 64-bit load consumes one observation at the actual operand. The unbound
 ordinary ABI still requires an original input when this value is observed.
-Immediate-abort V6 steps can select from captured target CPUID at export,
-or check the original execution CPU on demand. Hidden or unavailable RTM
-retains its boundary; live availability never supplies an abort status.
+Immediate-abort V6 steps admit the native pair when RTM or RTM_ALWAYS_ABORT
+is enumerated on the original CPU. Captured RTM_DISABLE, an active
+IA32_TSX_FORCE_ABORT bit 0, or the combination of the RTM_ALWAYS_ABORT and
+RTM_FORCE_ABORT CPUID bits fixes RAX at zero and selects the
+original fallback during export. With hidden RTM and insufficient evidence,
+the step retains the original native boundary.
 
 The ordinary HighC and LLVMC interfaces now expose an unresolved fixed
 Win64 outgoing word at its authenticated direct CALL. Bind

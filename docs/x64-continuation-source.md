@@ -1205,12 +1205,12 @@ it retains actual abort status and ordered memory effects. Older C compilers
 use the original single assembly block. Neither route splits the pair into
 independent C calls to `_xbegin` and `_xabort`.
 
-Execution requires an RTM-capable host outside RTM/HLE, with no debug traps or
-faults. If CPUID does not advertise RTM, the provider declines without changing
-explicit state. It never substitutes a constant abort status. Other transaction
-bodies require the complete-region binding below. Invalid encodings remain
-unsupported. The instruction
-behavior and abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
+The provider runs outside RTM/HLE with successful fetch and no debug trap.
+It admits the pair when CPUID leaf 7 subleaf 0 advertises RTM (EBX bit 11)
+or RTM_ALWAYS_ABORT (EDX bit 11). Both paths obtain EAX from the native
+operation. With neither bit it declines before changing explicit state.
+Other transaction bodies require the complete-region binding below.
+[Intel instruction-set reference](https://cdrdv2-public.intel.com/868137/325462-089-sdm-vol-1-2abcd-3abcd-4.pdf).
 
 ### Immediate abort as a bound instruction step
 
@@ -1235,19 +1235,36 @@ within that switch-driver invocation or direct-dispatch chunk. A new invocation
 queries again. CPU enumeration must remain stable for this interval. Use this
 when executing in the same
 CPU feature domain, outside RTM/HLE with successful fetch and no debug trap.
-An advertised RTM feature admits the native pair and its real EAX result.
-An absent leaf or a clear feature bit returns the original native boundary
-before changing state or charging a step. The manifest counts this potential
-boundary. Other instruction steps perform no feature query.
+The same leaf 7 query checks RTM and RTM_ALWAYS_ABORT. Either bit admits
+the native pair and its real EAX result. An absent leaf or two clear bits
+return the original native boundary before changing state or charging a
+step. The manifest counts this potential boundary. Other instruction steps
+perform no feature query.
 
 A capture can instead bind the target feature information once during export.
 For example, `"native_rtm_abort_steps":{"max_basic_leaf":7,"leaf7_ebx":2048}`
 selects the native step from CPUID leaf 0 EAX and leaf 7 subleaf 0 EBX.
-Supply EBX exactly when the maximum basic leaf reaches 7. Export selects
-the boundary when RTM is unadvertised. Neither captured path emits a CPUID
-or runtime feature branch. The capture must describe the executing CPU for
-the invocation's lifetime. Intel's TSX controls can mask feature enumeration,
-so a clear bit alone cannot establish an abort value or an invalid-opcode fault.
+Supply EBX exactly when the maximum basic leaf reaches 7. A capture of
+that leaf may also include `leaf7_edx`. Either bit 11 admits the native
+pair on the original execution CPU. The following captured states fix the
+entire outcome at export, including on a machine with hidden RTM.
+
+- If EDX bits 11 and 13 are both set (`"leaf7_edx":"0x2800"`), the
+  processor hardwires IA32_TSX_FORCE_ABORT bit 0 to one.
+- If EDX bit 13 enumerates IA32_TSX_FORCE_ABORT, a captured
+  `"ia32_tsx_force_abort":1` also proves a zero status. The register may be
+  writable on this CPU, so its value must cover the original invocation.
+- If EDX bit 29 enumerates IA32_ARCH_CAPABILITIES and its bit 7 enumerates
+  IA32_TSX_CTRL, a set RTM_DISABLE bit proves the same result. For example,
+  `{"max_basic_leaf":7,"leaf7_ebx":0,"leaf7_edx":"0x20000000","ia32_arch_capabilities":"0x80","ia32_tsx_ctrl":3}`
+  records a disabled transaction with hidden RTM and HLE.
+
+With any of these proofs the guarded step sets RAX to zero and jumps to the original
+fallback. Its receipt gives the status and the evidence. This step emits no
+CPUID, MSR read or transaction. Every captured selection avoids a runtime
+feature branch. The capture must describe the original CPU for the invocation.
+A clear RTM bit or TSX_CPUID_CLEAR alone leaves the status undetermined.
+With no qualifying evidence the original native boundary remains in the manifest.
 [Processor enumeration and TSX controls](https://www.intel.com/content/www/us/en/developer/articles/technical/software-security-guidance/technical-documentation/cpuid-enumeration-and-architectural-msrs.html).
 
 ## Complete selected RTM attempts
