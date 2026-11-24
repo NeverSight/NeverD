@@ -4067,6 +4067,79 @@ bool Specializer::evaluate(int Id) {
                 }
               }
               if (!StorePreservation) {
+                const size_t ReturnBegin =
+                    Options.EntryFrameExcludedObjects.size() +
+                    Options.EntryFrameLoadedObjects.size();
+                for (const auto &[Index, ObjectBytes] :
+                     Frame.ReturnedObjectSizes) {
+                  if (!chargeObjectWork(1))
+                    return false;
+                  if (Memory.AccessSize > ObjectBytes ||
+                      ReturnBegin + Index >= ObjectRoots.size())
+                    continue;
+                  const SymRef Root = ObjectRoots[ReturnBegin + Index];
+                  if (!Ctx.isVar(Root) ||
+                      !Ctx.containsVariable(Address, Ctx.varId(Root)))
+                    continue;
+                  // Relative containment is valid for a symbolic offset too.
+                  // The declared object is nonwrapping, so a modular distance
+                  // no greater than size minus access denotes a complete
+                  // in-object write on every nonnull execution.
+                  const SymRef Offset = Ctx.mkSub(Address, Root);
+                  const SymRef InObject = Ctx.mkUle(
+                      Offset, Ctx.mkConst(64, ObjectBytes - Memory.AccessSize));
+                  if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+                    return fail(SpecializationStatus::BudgetExceeded,
+                                "returned object containment node budget "
+                                "exhausted");
+                  const auto Containment =
+                      enumerate(Ctx, Exec.pathPredicate(), {InObject}, 1);
+                  if (Failed)
+                    return false;
+                  if (Containment.Status != FiniteValueStatus::Complete ||
+                      Containment.Tuples !=
+                          std::vector<std::vector<uint64_t>>{{1}})
+                    continue;
+                  // A null result has no object. Its contained write lies in
+                  // [0, ObjectBytes), so only an explicit exclusion of that
+                  // entire low range can establish frame separation without
+                  // a nonnull proof.
+                  if (!chargeObjectWork(Bounds.ExcludedAddressRanges.size()))
+                    return false;
+                  bool NullCaseDisjoint = llvm::any_of(
+                      Bounds.ExcludedAddressRanges, [&](const auto &Range) {
+                        return Range.Begin == 0 && Range.End >= ObjectBytes;
+                      });
+                  if (!NullCaseDisjoint) {
+                    const auto Known = Frame.ReturnedObjectNonNull.find(Index);
+                    NullCaseDisjoint =
+                        Known != Frame.ReturnedObjectNonNull.end() &&
+                        Known->second;
+                  }
+                  if (!NullCaseDisjoint) {
+                    const SymRef IsNull = Ctx.mkEq(Root, Ctx.mkConst(64, 0));
+                    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+                      return fail(SpecializationStatus::BudgetExceeded,
+                                  "returned object nullness node budget "
+                                  "exhausted");
+                    const auto Nullness =
+                        enumerate(Ctx, Exec.pathPredicate(), {IsNull}, 1);
+                    if (Failed)
+                      return false;
+                    NullCaseDisjoint =
+                        Nullness.Status == FiniteValueStatus::Complete &&
+                        Nullness.Tuples ==
+                            std::vector<std::vector<uint64_t>>{{0}};
+                  }
+                  if (!NullCaseDisjoint)
+                    continue;
+                  StorePreservation =
+                      SymStorePreservation{FrameRoot, Bounds.Begin, Bounds.End};
+                  ProvedFrameSeparation = true;
+                  break;
+                }
+              }
+              if (!StorePreservation) {
                 if (Object)
                   Distance = Ctx.mkAdd(
                       Ctx.mkSub(ObjectRoots[Object->Root - 1], FrameRoot),
