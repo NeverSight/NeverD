@@ -42,6 +42,8 @@ CURRENT = {
     "PatchAPI": ("mspatcha.lib", ("patchapi",)),
     "NetworkDiagnostics": ("ndfapi.lib", ("ndfapi",)),
     "SetupAdministration": ("advpack.Lib", ("advpub",)),
+    "RealtimeWorkQueue": ("RTWorkQ.lib", ("RTWorkQ",)),
+    "WindowsRemoteManagement": ("wsmsvc.lib", ("wsman",)),
     "ProcessStatus": ("psapi.lib", ("psapi",)),
     "ProcessSnapshots": ("kernel32.Lib", ("processsnapshot",)),
     "InternetControlMessage": ("iphlpapi.lib", ("iphlpapi", "icmpapi")),
@@ -61,10 +63,70 @@ CURRENT = {
     "OverlayFiles": ("wofutil.lib", ("wofapi",)),
 }
 LEGACY = {"AllJoyn": "MSAJApi.lib", "PeerNetworking": "p2p.lib", "PeerGraph": "p2pgraph.lib"}
+WORK_QUEUE_END = "RtwqEndUnregisterWorkQueueWithMMCSS"
+WORK_QUEUE_END_DOC = ("https://learn.microsoft.com/en-us/windows/win32/procthread/"
+                      "rtwqendunregisterworkqueuewithmmcss")
+CPP_IMPORT_PREFIXES = {"RealtimeWorkQueue": "Rtwq", "WindowsRemoteManagement": "WSMan"}
 
 
 def package(cache, record):
     return wdk.download(cache, record["file"], record["url"], record["sha256"])
+
+
+def work_queue_c_types(header):
+    """Give the three COM interfaces their C object layout for the flat API."""
+    text = header.read_text(encoding="utf-8")
+    # RTWorkQ.h declares the same derived interfaces even when preprocessed as C.
+    # None is passed by value. The original C++ compiler verifies the flat ABI.
+    for tag in ("IRtwqAsyncResult", "IRtwqAsyncCallback", "IRtwqPlatformEvents"):
+        pattern = rf"\bstruct\s+{tag}\s*:\s*public\s+IUnknown\s*\{{[^{{}}]*\}}\s*;"
+        layout = f"typedef struct {tag} {{ const struct {tag}Vtbl *lpVtbl; }} {tag};"
+        text, count = re.subn(pattern, layout, text)
+        if count != 1:
+            raise ValueError(f"unexpected RTWorkQ SDK declaration for {tag}")
+    derived = r"(typedef\s+struct\s+tagRTWQASYNCRESULT)\s*:\s*public\s+IRtwqAsyncResult\s*\{"
+    text, count = re.subn(derived, r"\1 { IRtwqAsyncResult base;", text)
+    if count != 1:
+        raise ValueError("unexpected RTWorkQ SDK async result record")
+    # An empty parameter list in the original C++ declaration means zero arguments.
+    text = re.sub(r"\b(Rtwq\w+)\s*\(\s*\)\s*;", r"\1(void);", text)
+    header.write_text(text, encoding="utf-8")
+
+
+def wsman_c_types(header):
+    """Project the SDK 1.1 startup record with its inherited 1.0 field names."""
+    text = header.read_text(encoding="utf-8")
+    base = r"typedef\s+struct\s+_WSMAN_SHELL_STARTUP_INFO_V10\s*\{([^{}]+)\}\s*WSMAN_SHELL_STARTUP_INFO_V10\s*;"
+    derived = (r"(typedef\s+struct\s+_WSMAN_SHELL_STARTUP_INFO_V11)\s*:\s*_WSMAN_SHELL_STARTUP_INFO_V10"
+               r"\s*\{([^{}]+)\}\s*WSMAN_SHELL_STARTUP_INFO_V11\s*;")
+    fields = re.findall(base, text)
+    if len(fields) != 1:
+        raise ValueError("unexpected WSMan SDK 1.0 startup record")
+    text, count = re.subn(derived, lambda m: m[1] + " {" + fields[0] + m[2] +
+                          "} WSMAN_SHELL_STARTUP_INFO_V11;", text)
+    if count != 1:
+        raise ValueError("unexpected WSMan SDK 1.1 startup record")
+    header.write_text(text, encoding="utf-8")
+
+
+def cpp_import_names(name, proof, directory, commands, run):
+    """Inventory the original C++ translation unit independently of the C projection."""
+    prefix = CPP_IMPORT_PREFIXES[name]
+    command = proof["arguments"] + ["-fsyntax-only", "-Xclang", "-ast-dump=json",
+                                    "-Xclang", "-ast-dump-filter=" + prefix, proof["source"]]
+    commands.append(command)
+    dump = run(command, directory / "original-cpp-ast.log")
+    decoder = json.JSONDecoder()
+    names = set()
+    offset = 0
+    while offset < len(dump):
+        if dump[offset].isspace():
+            offset += 1
+            continue
+        node, offset = decoder.raw_decode(dump, offset)
+        if node["kind"] == "FunctionDecl" and node["name"].startswith(prefix):
+            names.add(node["name"])
+    return names
 
 
 def webauthn_runtime_unit(output, cache, compiler):
@@ -194,18 +256,31 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
             defaults = ["-Xclang", "-fdefault-calling-conv=stdcall"] if stdcall else []
             source = directory / (name + "-sdk.c")
             headers = common_headers + headers
-            # The SDK maps the default PSAPI profile to Kernel32's K32*
-            # exports. Version 1 declares the routines exported by PSAPI.dll.
-            prelude = "#define PSAPI_VERSION 1\n" if name == "ProcessStatus" else ""
-            source.write_text(prelude + "".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
-            prefixes = {"ProcessSnapshots": "Pss", "InternetControlMessage": "Icmp"}
+            # PSAPI v1 selects PSAPI.dll. WinRM requires an explicit API version.
+            preludes = {"ProcessStatus": "#define PSAPI_VERSION 1\n",
+                        "WindowsRemoteManagement": "#define WSMAN_API_VERSION_1_1\n"}
+            prelude = preludes.get(name, "")
+            body = prelude + "".join(f"#include <{h}.h>\n" for h in headers)
+            prefixes = {"ProcessSnapshots": "Pss", "InternetControlMessage": "Icmp", **CPP_IMPORT_PREFIXES}
             scope = {"import_prefix": prefixes[name]} if name in prefixes else {}
             if name == "SetupAdministration":
                 scope["c_linkage_imports_only"] = True
+            if name == "RealtimeWorkQueue":
+                # Microsoft documents this import without an SDK header. Its
+                # callback result is IMFAsyncResult in that public declaration.
+                body += ("struct IMFAsyncResult;\n"
+                         f"STDAPI {WORK_QUEUE_END}(struct IMFAsyncResult *pResult);\n")
+                scope["documented_declarations"] = {WORK_QUEUE_END: WORK_QUEUE_END_DOC}
+            source.write_text(body, encoding="utf-8")
+            cpp_header = name in CPP_IMPORT_PREFIXES
+            original_options = original + defaults
+            if cpp_header:
+                original_options += ["-x", "c++", "-std=c++17"]
             units.append({"name": name, "source": source, "compiler": compiler + defaults,
                           "headers": headers, "default_calling_convention": "__stdcall" if stdcall else "",
                           "bridge": {"source": str(source), "source_sha256": wdk.digest(source),
-                                     "arguments": original + defaults, "language": language,
+                                     "arguments": original_options,
+                                     "language": "c++" if cpp_header else language,
                                      "import_library": identity, "commands": [], **scope}})
     return units, packages
 

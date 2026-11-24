@@ -19,6 +19,40 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_work_queue_keeps_flat_parameters_and_derived_members(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            header = Path(temporary) / "work.h"
+            interface = "struct {} : public IUnknown {{ void (*Invoke)()=0; }};\n"
+            source = "".join(interface.format(tag) for tag in (
+                "IRtwqAsyncCallback", "IRtwqAsyncResult", "IRtwqPlatformEvents"))
+            source += ("typedef struct tagRTWQASYNCRESULT : public IRtwqAsyncResult "
+                       "{ int result; } RTWQASYNCRESULT;\n"
+                       "int RtwqStart(); int RtwqRead(IRtwqAsyncResult *r); int Other();\n")
+            header.write_text(source, encoding="utf-8")
+            windows.flat.work_queue_c_types(header)
+            result = header.read_text(encoding="utf-8")
+            self.assertIn("const struct IRtwqAsyncResultVtbl *lpVtbl", result)
+            self.assertIn("IRtwqAsyncResult base; int result;", result)
+            self.assertIn("RtwqStart(void); int RtwqRead(IRtwqAsyncResult *r); int Other();", result)
+            header.write_text(source.replace("public IUnknown", "public Different", 1), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "IRtwqAsyncCallback"):
+                windows.flat.work_queue_c_types(header)
+
+    def test_wsman_preserves_inherited_fields_in_declaration_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            header = Path(temporary) / "wsman.h"
+            base = ("typedef struct _WSMAN_SHELL_STARTUP_INFO_V10 { int a; void *b; } "
+                    "WSMAN_SHELL_STARTUP_INFO_V10;\n")
+            derived = ("typedef struct _WSMAN_SHELL_STARTUP_INFO_V11 : _WSMAN_SHELL_STARTUP_INFO_V10 "
+                       "{ void *name; } WSMAN_SHELL_STARTUP_INFO_V11;\n")
+            header.write_text(base + derived, encoding="utf-8")
+            windows.flat.wsman_c_types(header)
+            normalized = " ".join(header.read_text(encoding="utf-8").split())
+            self.assertIn("_WSMAN_SHELL_STARTUP_INFO_V11 { int a; void *b; void *name; }", normalized)
+            header.write_text(base + base + derived, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "1.0 startup record"):
+                windows.flat.wsman_c_types(header)
+
     def test_packaged_manifest_preserves_decorated_symbols(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

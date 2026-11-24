@@ -460,6 +460,10 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
     preprocessed = declarations / (name + ".h")
     command = arguments + ["-E", str(source)]
     run(command, directory / (name + ".pre.log"), preprocessed)
+    if name == "RealtimeWorkQueue":
+        flat.work_queue_c_types(preprocessed)
+    elif name == "WindowsRemoteManagement":
+        flat.wsman_c_types(preprocessed)
     if name == "RDBSS":
         cpp_bridge = rdbss.prepare(source, preprocessed, arguments, directory, run)
     parser_convention(preprocessed, convention)
