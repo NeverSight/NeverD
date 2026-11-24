@@ -1841,6 +1841,11 @@ conditional memory, invocation lifetime and both C routes remain open.
   narrow multiplication, boolean masks and reversed subtraction left explicit.
   O0/O2 regressions cover wrapping counters, escaping values and old-value reads.
 
+- HighC compares each complete operand of logical XOR with zero. A compile-time
+  truth table covers independent high-bit masks on both operands. Mixed logical
+  conditions group conjunctions in HighC values and branches. LLVM-to-C uses
+  the same grouping when consecutive branches share a target.
+
 - Typed scalar expressions now distinguish LLVM width from the promoted C
   type and operator precedence. Redundant unsigned casts are omitted, while
   narrow wrapping, signed interpretation and widened arithmetic/shift carriers

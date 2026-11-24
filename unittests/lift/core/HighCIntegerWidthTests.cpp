@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
@@ -1820,6 +1821,67 @@ TEST(HighCIntegerWidths, LargeSignedLiteralsCompileWithTheirDeclaredWidths) {
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
     compileAndExecute(Source, false, true, Optimization);
 }
+
+TEST(HighCIntegerWidths, MixedLogicalOperatorsGroupValuesAndBranchConditions) {
+  const auto Word = NdType::makeInt(4, false);
+  const auto Mixed = [&](NdOp Outer, NdOp Inner) {
+    return HighExpr::makeBinop(
+        Outer, parameter(0, Word),
+        HighExpr::makeBinop(Inner, parameter(1, Word), parameter(2, Word)));
+  };
+  std::vector<HighFunc> Functions;
+  for (bool Invert : {false, true}) {
+    HighFunc Func;
+    Func.Name = Invert ? "inverted_condition" : "direct_condition";
+    Func.Params = {{"arg0", Word}, {"arg1", Word}, {"arg2", Word}};
+    Func.ReturnType = Word;
+    HighStmt Branch;
+    Branch.Kind = Invert ? StmtKind::IfElse : StmtKind::If;
+    Branch.Cond = Invert ? Mixed(NdOp::BOOL_AND, NdOp::BOOL_OR)
+                         : Mixed(NdOp::BOOL_OR, NdOp::BOOL_AND);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = Mixed(NdOp::BOOL_OR, NdOp::BOOL_AND);
+    (Invert ? Branch.ElseBody : Branch.Body).push_back(std::move(Return));
+    Func.Body.push_back(std::move(Branch));
+    returnValue(Func, HighExpr::makeConst(2, Word->Size));
+    Functions.push_back(std::move(Func));
+  }
+  source_call_execution_test::checkSyntax(emitFunctions(Functions),
+                                          {"-Werror=logical-op-parentheses"});
+}
+
+TEST(HighCIntegerWidths, BooleanXorTestsBothMaskedOperandsForNonzero) {
+  const auto Word = NdType::makeInt(4, false);
+  HighFunc Func;
+  Func.Name = "masked_xor";
+  Func.Params = {{"arg0", Word}, {"arg1", Word}};
+  Func.ReturnType = Word;
+  auto Masked = [&](unsigned Id, uint32_t Mask) {
+    return HighExpr::makeBinop(
+        NdOp::INT_AND, parameter(Id, Word),
+        HighExpr::makeConst(Mask, Word->Size,
+                            ConstantAddressProvenance::Scalar));
+  };
+  returnValue(Func, HighExpr::makeBinop(NdOp::BOOL_XOR, Masked(0, 0x80),
+                                        Masked(1, 0x20)));
+  const std::string Source = emitFunctions({Func});
+  // Let the C compiler evaluate the emitted return expression on all four
+  // truth combinations, including inputs with only an unrelated low bit.
+  const auto Expr =
+      llvm::StringRef(Source).rsplit("return ").second.split(';').first;
+  ASSERT_FALSE(Expr.empty()) << Source;
+  source_call_execution_test::checkSyntax(
+      Source + "\n#define MASKED_XOR(arg0, arg1) (" + Expr.str() + ")\n" +
+          R"(
+_Static_assert(MASKED_XOR(1, 1) == 0, "unselected bits");
+_Static_assert(MASKED_XOR(0x80, 0) == 1, "left mask");
+_Static_assert(MASKED_XOR(0, 0x20) == 1, "right mask");
+_Static_assert(MASKED_XOR(0x80, 0x20) == 0, "both masks");
+)",
+      {"-Werror=parentheses"});
+}
+
 TEST(HighCIntegerWidths, BooleanXorAndWideInplaceMasksKeepExactBits) {
   const auto Word = NdType::makeInt(8, false);
   const auto Wide = NdType::makeInt(16, false);

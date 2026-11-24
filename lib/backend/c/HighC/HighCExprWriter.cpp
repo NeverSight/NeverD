@@ -12,6 +12,7 @@
 
 #include "../CDisplayFieldPath.h"
 #include "../CDisplayFrameRecord.h"
+#include "../CLogicalCondition.h"
 #include "../CRecordCall.h"
 #include "../CVaList.h"
 #include "../HeaderPrototype.h"
@@ -10326,13 +10327,9 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
         return L + " > 0";
       if (isNotBelowZeroOf(L, R))
         return R + " > 0";
-      if (L.find(" || ") != std::string::npos)
-        L = "(" + L + ")";
-      if (R.find(" || ") != std::string::npos)
-        R = "(" + R + ")";
-      return L + " && " + R;
     }
-    return L + " || " + R;
+    return joinLogicalConditions(std::move(L), std::move(R),
+                                 Cur->Op == NdOp::BOOL_AND);
   }
   // Boolean context: a view the test keeps whether it reads zero through is
   // no sanitizer wrap. Keep wraps on add/sub/mul.
@@ -10652,13 +10649,8 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
           return L + " > 0";
         if (isNotBelowZeroOf(L, R))
           return R + " > 0";
-        if (L.find(" || ") != std::string::npos)
-          L = "(" + L + ")";
-        if (R.find(" || ") != std::string::npos)
-          R = "(" + R + ")";
-        return L + " && " + R;
       }
-      return L + " || " + R;
+      return joinLogicalConditions(std::move(L), std::move(R), BoolOr);
     }
     if (Cur->Op == NdOp::INT_EQUAL) {
       const HighExpr *X = nullptr;

@@ -11,6 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../CLogicalCondition.h"
 #include "../CRecordCall.h"
 #include "../CVaList.h"
 #include "../HeaderPrototype.h"
@@ -455,20 +456,14 @@ std::optional<std::string> peelWrappedNot(const std::string &S) {
   return S.substr(2, S.size() - 3);
 }
 
-std::string orSkipConds(const std::string &A, const std::string &B) {
-  const auto Left = peelWrappedNot(A);
-  const auto Right = peelWrappedNot(B);
-  if (Left && Right)
-    return "!(" + *Left + " && " + *Right + ")";
-  auto Group = [](const std::string &S) {
-    if (S.empty() || S.front() == '(' || S.front() == '!')
-      return S;
-    // && binds tighter than ||. A comparison or call does not.
-    if (S.find("&&") != std::string::npos)
-      return "(" + S + ")";
-    return S;
-  };
-  return Group(A) + " || " + Group(B);
+std::string orSkipConds(std::string A, std::string B) {
+  if (auto Left = peelWrappedNot(A))
+    if (auto Right = peelWrappedNot(B))
+      return "!(" +
+             joinLogicalConditions(std::move(*Left), std::move(*Right),
+                                   /*IsAnd=*/true) +
+             ")";
+  return joinLogicalConditions(std::move(A), std::move(B), /*IsAnd=*/false);
 }
 
 bool isCIdentifier(llvm::StringRef Name) {
@@ -3165,7 +3160,7 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
                     asAllocaPointer(SI->getPointerOperand()))
               AllocaLastValues[Slot] = SI->getValueOperand();
           }
-          const std::string NextCond = condStr(NextBr->getCondition());
+          std::string NextCond = condStr(NextBr->getCondition());
           AllocaLastValues = SavedLast;
           if (NextCond.empty() || !SeenConds.insert(NextCond).second)
             break;
@@ -3199,7 +3194,7 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
           }
           if (MentionsLocal)
             break;
-          Cond = orSkipConds(Cond, NextCond);
+          Cond = orSkipConds(std::move(Cond), std::move(NextCond));
           InlinedFallthroughBlocks.insert(Next);
           OrSkips.insert(Next);
           Pred = Next;

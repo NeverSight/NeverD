@@ -29,7 +29,7 @@ namespace {
 /// The precedence of a cast expression, above every binary operator.
 constexpr int kCastPrecedence = 11;
 
-int getOpPrecedence(NdOp Op) {
+constexpr int getOpPrecedence(NdOp Op) {
   switch (Op) {
   case NdOp::BOOL_OR:
     return 1;
@@ -38,7 +38,6 @@ int getOpPrecedence(NdOp Op) {
   case NdOp::INT_OR:
     return 3;
   case NdOp::INT_XOR:
-  case NdOp::BOOL_XOR:
     return 4;
   case NdOp::INT_AND:
     return 5;
@@ -215,11 +214,13 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
 
 std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
                                              int ParentPrec) {
-  if (E.Op == NdOp::BOOL_XOR)
+  if (E.Op == NdOp::BOOL_XOR) {
+    constexpr int TruthPrec = getOpPrecedence(NdOp::INT_NOTEQUAL);
     return typedText(E,
-                     "((" + exprStr(*E.Operands[0]) + " != 0) != (" +
-                         exprStr(*E.Operands[1]) + " != 0))",
+                     "((" + exprStr(*E.Operands[0], TruthPrec) + " != 0) != (" +
+                         exprStr(*E.Operands[1], TruthPrec) + " != 0))",
                      sizeof(int32_t), true);
+  }
   if ((E.Op == NdOp::INT_AND || E.Op == NdOp::INT_OR) && E.Type &&
       E.Type->Kind == NdTypeKind::Int && !E.Type->IsEnum &&
       (E.Type->Size == 1 || E.Type->Size == 2 || E.Type->Size == 4 ||
@@ -1082,9 +1083,6 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
   case NdOp::BOOL_OR:
     OpSym = " || ";
     break;
-  case NdOp::BOOL_XOR:
-    OpSym = " ^ ";
-    break;
   case NdOp::FLOAT_ADD:
     OpSym = " + ";
     break;
@@ -1118,11 +1116,13 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
   }
 
   int MyPrec = getOpPrecedence(E.Op);
-  // Comparisons bind more tightly than bitwise operators, but spelling them
-  // without parentheses is ambiguous to readers and triggers -Wparentheses.
-  const bool Bitwise = E.Op == NdOp::INT_AND || E.Op == NdOp::INT_OR ||
-                       E.Op == NdOp::INT_XOR || E.Op == NdOp::BOOL_XOR;
-  const int OperandPrec = Bitwise ? getOpPrecedence(NdOp::INT_LESS) : MyPrec;
+  // Group comparisons inside bitwise operators and conjunctions inside
+  // disjunctions so the reader sees how C parses each operand.
+  const bool Bitwise =
+      E.Op == NdOp::INT_AND || E.Op == NdOp::INT_OR || E.Op == NdOp::INT_XOR;
+  const int OperandPrec =
+      Bitwise ? getOpPrecedence(NdOp::INT_LESS)
+              : std::max(MyPrec, getOpPrecedence(NdOp::BOOL_AND));
   std::string LHS = floatOperandStr(*E.Operands[0], OperandPrec);
   std::string RHS = floatOperandStr(*E.Operands[1], OperandPrec);
   if (E.Op == NdOp::INT_EQUAL || E.Op == NdOp::INT_NOTEQUAL) {
