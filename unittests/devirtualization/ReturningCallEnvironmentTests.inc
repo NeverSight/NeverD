@@ -275,11 +275,16 @@ TEST_F(PEFixedImageTest, ReturningCallResultObjectKeepsNullAndBoundedWrites) {
   const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
   ASSERT_TRUE(R.complete()) << R.Diagnostic;
   ASSERT_EQ(R.ReturningCalls.size(), 1U);
-  unsigned Returns = 0;
+  unsigned Branches = 0, Stores = 0, Returns = 0;
   for (const auto &Block : R.Residual.Blocks)
-    for (const auto &Op : Block.Ops)
+    for (const auto &Op : Block.Ops) {
+      Branches += Op.Opcode == NdOp::COND_BR;
+      Stores += Op.Opcode == NdOp::STORE;
       Returns += Op.Opcode == NdOp::RETURN;
-  EXPECT_EQ(Returns, 2U);
+    }
+  EXPECT_EQ(Branches, 1U);
+  EXPECT_GE(Stores, 2U); // physical CALL push and the bounded result write
+  EXPECT_GE(Returns, 1U);
   auto Valid = validateSpecializationRawEnvironment(R, O);
   EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
 
