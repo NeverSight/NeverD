@@ -17,6 +17,11 @@
 #ifndef NEVERD_BACKEND_CODEGEN_CODEGENDETAIL_H
 #define NEVERD_BACKEND_CODEGEN_CODEGENDETAIL_H
 
+#include "neverd/Common.h"
+
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Error.h"
+
 #include <optional>
 #include <set>
 #include <string>
@@ -25,12 +30,27 @@
 namespace llvm {
 class Triple;
 class Module;
+class Target;
 namespace mc_rewrite {
 struct RewriteOptions;
 } // namespace mc_rewrite
 } // namespace llvm
 
 namespace neverd {
+
+struct MIPSImageMetadata;
+
+struct MIPSELFCodegenTarget {
+  std::string CPU;
+  std::string Features;
+  llvm::Reloc::Model Relocation;
+};
+
+/// Apply the image profile beneath the function's local instruction-mode
+/// features.
+llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
+    llvm::Module &Module, Arch Target, const llvm::Target &Backend,
+    const MIPSImageMetadata *Profile, llvm::Reloc::Model DefaultRelocation);
 
 /// Prepare authenticated globals and calls for the configured target backend.
 bool preparePointerAuthentication(llvm::Module &M, const llvm::Triple &Triple,

@@ -26144,11 +26144,13 @@ The experimental [MIPS analysis](mips.md) path has focused targets
 `NeverDMIPSTests` (ELF admission, endian data, GOT/PLT and unwind records),
 `NeverDMIPSIntegerTests` (integer semantics and pinned Unicorn),
 `NeverDMIPSFlowTests` (delay-slot ownership, capture and annulment),
-`NeverDMIPSSDKTests` (physical disassembly rows and flow) and
-`NeverDMIPSPipelineTests` (ABI recovery and both source paths).
+`NeverDMIPSSDKTests` (physical disassembly rows, flow and the public ELF
+object roundtrip), `NeverDMIPSPipelineTests` (ABI recovery and both source
+paths), and `NeverDMIPSObjectTests` (native ELF flags, ABI records,
+instruction modes, fixed-address output and code generation diagnostics).
 
 ```sh
-python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
+python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests NeverDMIPSObjectTests neverd --parallel 4
 ctest --test-dir build-mips --build-config Release -L '^NeverDMIPS.*Tests$' --output-on-failure --parallel 4
 ```
 

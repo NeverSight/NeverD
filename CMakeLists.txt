@@ -19,7 +19,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDZlib.cmake)
 set(HAVE_ZLIB 1)
 
 # --- LLVM ---
-# Backends: X86 (i386+x86_64), ARM (arm32), AArch64 (arm64). See docs/targets.md.
+# LLVMCodegenTargets.def selects the backends for both LLVM build paths.
 # Two ways to get LLVM (both expose the same LLVM_LIBS to the rest of the build):
 #   default                : build our LLVM fork locally from the
 #                            third_party/llvm-project submodule (integrated build;

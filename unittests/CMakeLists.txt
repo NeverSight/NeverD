@@ -231,6 +231,10 @@ add_neverd_unittest(NeverDCodegenDiagnosticTests
   backend/CodegenDiagnosticTests.cpp
   LINK_COMPONENTS CodeGen
 )
+add_neverd_unittest(NeverDMIPSObjectTests
+  backend/MIPSObjectTests.cpp
+  LINK_COMPONENTS CodeGen
+)
 add_neverd_unittest(NeverDItaniumHandlerTests
   lift/eh/ItaniumHandlerBodiesTests.cpp
   LINK_COMPONENTS BackendC Types

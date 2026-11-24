@@ -22,6 +22,36 @@ For unlinked n32 ELF objects, the LLVM source build reads debug string offsets
 from explicit relocation addends. The r7 prebuilt package can read these types
 after linking the object with the target linker.
 
+## Native LLVM output
+
+`neverd_lift_to_obj` passes the loaded ELF profile to the NeverSight LLVM
+Mips backend. `neverd_roundtrip_obj` returns an ELF relocatable object.
+The roundtrip function list reports defined function symbols with their ELF
+sizes. Use the target linker to place the sections and resolve relocations.
+
+| Input ABI | Registers and pointers | Native output |
+| --- | --- | --- |
+| o32 | 32-bit pointers and four argument words, including on MIPS III with 64-bit GPRs | ELF32, both byte orders |
+| n32 | 64-bit GPRs with 32-bit pointers | ELF32 with `EF_MIPS_ABI2`, both byte orders |
+| n64 | 64-bit GPRs and pointers | ELF64, both byte orders |
+
+The backend selects the historical ISA or release, floating-point ABI and
+position-independent addressing from the input. Function attributes select
+classic, MIPS16 or microMIPS encoding. MIPS16 and microMIPS o32 entry symbols
+carry their instruction mode so a native linker can construct callable
+pointers. LLVM emits microMIPS objects for o32. A microMIPS n32 or n64 input
+can use the analysis paths described below.
+
+The fork also emits fixed-address code and data through
+`addPassesToEmitBinaryRewrite`. It reports function ranges at their physical
+byte addresses and tags pointers to compressed functions. The native checks
+cover n64 addresses above 4 GiB. Direct calls check alignment and the jump
+region selected by PC+4, including mode exchanges. Fixed-address emission
+reports jumps that require a veneer and references that require linker-owned
+GOT, GP or TLS state. Installing the resulting
+sections into an existing MIPS executable needs MIPS-specific layout,
+relocation and interworking support in the file patcher.
+
 ## Implementation boundaries
 
 - ELF identification and loading share class, ISA, ABI and encoding checks.
