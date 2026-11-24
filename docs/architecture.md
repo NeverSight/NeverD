@@ -12643,6 +12643,12 @@ a context's: a function that only stores the RBP or x29 it was entered with
 keeps its caller's frame, as Go's `mcall`, `gosave` and `morestack` do in
 `gobuf.bp`, and HighC reads it as `__builtin_frame_address(1)`: the value
 the compiled prologue saved, whatever the caller keeps in the register.
+A function that hands that frame pointer back keeps its caller's frame the
+same way (`isCallerFrameEntry`): Go's `runtime.getfp` is `mov rax, rbp;
+ret`, from which `getcallerfp` and `traceStack` walk the frames. The return
+contract takes the frame pointer Go code was entered with for a value, where
+a register no argument arrives in is none: getfp returned nothing, and every
+read of its result was unknown.
 An entry Q register that a data
 intrinsic or another value use reads, and an entry GPR that a
 pointer-authentication operation reads as its modifier, are that architectural

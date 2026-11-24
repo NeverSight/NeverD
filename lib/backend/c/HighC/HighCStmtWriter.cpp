@@ -1600,6 +1600,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     } else if (!Stmt.RetVal || Stmt.RetVal->Kind == ExprKind::Undef ||
                (Stmt.RetVal->Kind == ExprKind::Var &&
                 !isPlatformRegisterEntry(*Stmt.RetVal) &&
+                !isCallerFrameEntry(*Stmt.RetVal) &&
                 !Analysis.AssignedVars.count(varName(Stmt.RetVal->Var)) &&
                 (Stmt.RetVal->Var.Kind != MedVar::Param ||
                  (InEHClauseBody && !exceptionClausesUseFunctionFrame()))))

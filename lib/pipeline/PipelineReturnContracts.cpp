@@ -63,6 +63,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -1707,6 +1708,14 @@ private:
       // that arrived in the return register of a function that never writes
       // it is a value where a caller reads it.
       if (Value.Kind != MedVar::Reg || Value.SSAVer != 0) {
+        Paths.push_back(ReturnedValue::Other);
+        return;
+      }
+      // The frame pointer Go code was entered with is its caller's frame,
+      // which Go keeps on amd64 and arm64: `runtime.getfp` is `mov rax,
+      // rbp; ret`, and its callers walk the frames from what it returns.
+      if (TRI.FramePointer && TRI.isFramePointer(Value.RegOff) &&
+          isGoCode(Img, F.Func->Entry)) {
         Paths.push_back(ReturnedValue::Other);
         return;
       }

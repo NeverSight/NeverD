@@ -2119,6 +2119,52 @@ TEST(GoInternalABI, ABranchDecidesTheSelectionBelowIt) {
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
 }
 
+TEST(GoInternalABI, TheFramePointerAFunctionEntersWithIsItsCallersFrame) {
+  // runtime.getfp: mov rax, rbp; ret
+  // main.g:        push rbp; mov rbp, rsp; call runtime.getfp
+  //                mov rax, [rax]; pop rbp; ret
+  // getfp returns its caller's frame, from which `runtime.traceStack` and
+  // `getcallerfp` walk the frames.  Taken for a register no argument set,
+  // it made getfp return nothing, and each read of its result unknown.
+  constexpr va_t GetFp = kTextVA + 0x100;
+  constexpr va_t G = GetFp + 0x10;
+  GoTestImage T;
+  T.writeText(GetFp, {0x48, 0x89, 0xE8, 0xC3});
+  std::vector<uint8_t> Caller = {0x55, 0x48, 0x89, 0xE5};
+  const std::vector<uint8_t> Call = makeCall(G + Caller.size(), GetFp);
+  Caller.insert(Caller.end(), Call.begin(), Call.end());
+  Caller.insert(Caller.end(), {0x48, 0x8B, 0x00, 0x5D, 0xC3});
+  T.writeText(G, Caller);
+  for (const auto &[Entry, Name] :
+       {std::pair{GetFp, "runtime.getfp"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const auto Function = llvm::find_if(
+      R.MedFuncs, [&](const MedFunc &M) { return M.Entry == GetFp; });
+  ASSERT_NE(Function, R.MedFuncs.end());
+  ASSERT_TRUE(Function->ReturnType);
+  EXPECT_NE(Function->ReturnType->Kind, NdTypeKind::Void);
+  const std::string Text = highCBody(R, T.Img, "runtime_getfp");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_NE(Text.find("__builtin_frame_address(1)"), std::string::npos) << Text;
+  const std::string CallerText = highCBody(R, T.Img, "main_g");
+  ASSERT_FALSE(CallerText.empty());
+  EXPECT_EQ(CallerText.find("__builtin_trap"), std::string::npos) << CallerText;
+}
+
 TEST(GoStackGrowth, AFunctionOfFloatsEntersItsBodyDirectly) {
   // main.m(x float64) (float64, float64) returns (x, x) for zero, (0, x)
   // otherwise, and for a negative x the results of m(-x) the other way

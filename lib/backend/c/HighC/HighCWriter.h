@@ -738,6 +738,10 @@ public:
   /// The failure an unknown value prints at its use, or empty when \p E
   /// names a value the function defines.
   bool isPlatformRegisterEntry(const HighExpr &E) const;
+  /// Whether \p E is the frame pointer the function was entered with, kept
+  /// as its caller's frame (collectCapturedEntryRegisters): it prints as
+  /// `__builtin_frame_address(1)`.
+  bool isCallerFrameEntry(const HighExpr &E) const;
   std::string unknownVarUse(const HighExpr &E, const std::string &Name,
                             const std::string &RawName);
   /// Pointer-sized Load chain used as a callee: `*(void **)p` / `**(void
