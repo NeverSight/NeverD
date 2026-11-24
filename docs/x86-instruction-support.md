@@ -15,6 +15,63 @@ The floating-point follow-up also integrates `39d727a54`, with Capstone
 the Windows type/ABI update merged in `5a3354cad`.
 Before publication, `c17776c92` also advances the decoder to
 `9d458aa76ce3b294d6ffea9f16a5b5d0cd2a6eae`.
+The November 22 integration at `d45fe8b1fb` uses Capstone
+`aa095ef5688bfc49b8ba0c5e5a7648faa7ed6877`. Its
+[four-platform decoder contract](https://github.com/NeverSight/NeverD/actions/runs/45107341681)
+passed 131/131 checks on Linux x64 and 130/131 on each of macOS arm64,
+Windows MSVC and Windows clang-cl; the one explicitly unavailable check on
+those platforms requires a POSIX x64 host to observe x87 hardware behavior.
+The following `dev` pin, `372fbd2d967c5023371a12e0e406f8be2ec84ae5`,
+corrects the dedicated i386 writer for base-only SIB operands. Its
+[four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45114911896)
+again passed 131/131 on Linux and 130/131 on each other platform, with the
+same explicit POSIX x64 hardware skip. The change is in Capstone's output
+writer; NeverD's mixed-mode execution qualification is recorded separately.
+At the integrated `074c7618f6` source, NeverD's local instruction-coverage,
+decode-detail and no-index SIB suites passed 7/7, 6/6 and 9/9 respectively
+against this pin.
+The next `dev` pin, `3a67e7f8ff2fc6265dc86c115c7989e47c8a7ee2`, passed
+the [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45324143563):
+131/131 on Linux x64 and 130/131 on macOS arm64, Windows MSVC and Windows
+clang-cl, with the same explicit POSIX x64 x87-hardware skip. At integrated
+`d7c5338cf5`, NeverD's three local decoder suites passed 7/7, 6/6 and 9/9
+against this pin.
+The later `dev` pin `17d578259c044cad6ade810870f2aa1e7d33724a` adds
+standalone x86 batch formatting. Its
+[four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45339485141)
+passed 131/131 on Linux x64 and 130/131 on macOS arm64, Windows MSVC and
+Windows clang-cl; each non-Linux job explicitly skipped the POSIX x64 x87
+hardware case. At integrated `106f1921bf`, NeverD's same three local decoder
+suites passed 7/7, 6/6 and 9/9, and its VMRUN C export retained both hosted
+source hashes.
+The `a02363b36b` integration adopts Capstone `75dded738b11353eb9aa5fa07b249f4acabfc33f`,
+which corrects masked scalar vector-move access metadata. Its
+[four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45342565427)
+passed 132/132 on Linux and 131/132 on macOS arm64 and both Windows compilers;
+the one explicit skip on each of those platforms requires POSIX x64 x87
+hardware. Both local SDKs passed the three NeverD x86 decoder suites
+(7/7, 6/6, 9/9) at this exact pin.
+The following `dev` pin `d3dcfa80afcb4d0786308a2938659998c54a1453`
+changes only Capstone's MIPS scanning and printing. The
+[four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45346520785)
+again passed 132/132 on Linux and 131/132 on the other platforms with their
+single POSIX-x64 x87 skip. At `1bfbe32497`, both local SDKs repeated the
+22 x86 decoder checks and exported the same two VMRUN C sources.
+The next pin, `8347e89a4e9a9e1618009fb8a496e335e857d00f`, corrects
+mask-register memory-store access metadata. At integrated `9a1252f88b`,
+both SDKs passed 25/25 local x86 decoder checks, including the three APX
+KMOV cases, and retained the hosted VMRUN source hashes. The
+[merged-source qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+also records 243 complete mode-execution and 27 selected SMM/SGX/event
+software passes per SDK. NeverC supports x86-64 and AArch64 sources, both
+64-bit, and rejects i386, i686 and x32. NeverD uses the x64 NeverC compiler
+for these generated host bodies.
+
+The [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45348733110)
+passed 132/132 on Linux and 131/132 on macOS arm64 and both Windows
+compilers. Each non-Linux job skipped only the declared POSIX-x64 x87
+hardware case; the decoder and ARM-detail artifacts retain their hashes in
+the merged-source qualification.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 
@@ -29,6 +86,42 @@ Generated host C uses x64 Clang or x64 NeverC. NeverC rejects i386, i686 and
 the x32 ABI. The three designated Actions runners reported zero EPC sections.
 Intel’s signed simulation enclave and the Linux software regressions have
 independent execution records. [Test results and hardware discovery](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+
+After the `0d5a4ee1df` merge, each SDK again passed 243 complete mode-execution
+cases, 853 paging cases with two LA57-only skips, 48 alternate-core execution
+cases, four alternate-core paging cases, 253 generated-C source cases and four
+Python integrations. The shared return, pipeline and x64 continuation suites
+also passed 73, 81 and 122 cases per SDK after the temporary relink race was
+removed. The current HighC and LLVM-to-C VMRUN source bytes match the hosted
+KVM fixtures, and [the AMD repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45334702918)
+passed all twelve original/generated O0/O2 guest images on its SVM runner.
+
+At integrated `a02363b36b`, each SDK repeated the same complete execution,
+paging, alternate-core, generated-C and SDK matrix with exactly the same two
+LA57 hardware skips. Return-contract, pipeline-outcome and x64 continuation
+suites passed 73/73, 81/81 and 122/122 per SDK. The local 27-case
+mode/SMM/SGX/event subset passed on both SDKs; the
+[hosted software run](https://github.com/gmh5225/test_mac_intel/actions/runs/45334574616)
+passed 27/27 at its declared `0d5a4ee1df` source with a freshly built x64
+NeverC compiler. The current compiler emitted native VMREAD, VMWRITE, VMRUN,
+ENCLU, XRSTOR64 and RSM instructions, rejected i386/i686/x32 source targets,
+and completed 200 QEMU TCG returning VMRUN contexts. The current HighC and
+LLVM-to-C C sources and all four tagged-input object/guest-image hashes match
+the [hosted AMD KVM comparison](evidence/x86-vmrun-hosted-kvm-2026-11-21.json).
+Native SGX remains unavailable on all three designated runners, so these
+results do not authorize a new LLVM release or production pin.
+The later `1bfbe32497` shared-analysis merge again passed 243/243 complete
+mode execution, 253/253 generated-C source, 4/4 Python SDK, 27/27 selected
+mode/SMM/SGX/event software, 73/73 return-contract, 81/81 pipeline-outcome
+and 122/122 x64 continuation cases per SDK. Its new returning-call and
+interpreter specialization checks passed 13/13 and 669/669 per SDK. The
+[qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+keeps this focused merge result separate from the earlier full paging matrix.
+The subsequent `9a1252f88b` merge repeated those same 243 mode, 253
+generated-C, four Python SDK, 27 software, 73 return, 81 pipeline and
+122 continuation checks on both SDKs. Its new Capstone pin also passed
+25 x86 decoder checks per SDK. Native SGX still has zero EPC on the designated
+runners; final LLVM release and production pin remain gated.
 
 ## Support is a pipeline property
 

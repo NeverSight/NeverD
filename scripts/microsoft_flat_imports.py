@@ -14,6 +14,11 @@ import microsoft_ucrt_types as ucrt
 LEGACY_INPUTS = Path(__file__).with_name("MicrosoftLegacySDKInputs.json")
 WEBAUTHN_INPUTS = Path(__file__).with_name("MicrosoftWebAuthnInputs.json")
 NAMED_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftNamedRuntimeSDKInputs.json")
+SYSTEM_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftSystemRuntimeSDKInputs.json")
+NAMED_RUNTIME = json.loads(NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
+SYSTEM_RUNTIME = json.loads(SYSTEM_RUNTIME_INPUTS.read_text(encoding="utf-8"))["providers"]
+RUNTIME_PROFILES = NAMED_RUNTIME["providers"] | SYSTEM_RUNTIME
+
 # The 32-bit SDK has no host-compute or hypervisor-platform import library.
 WIDE_ONLY = {"HostCompute", "HostNetwork", "HypervisorPlatform", "ComputeStorage"}
 CURRENT = {
@@ -140,12 +145,13 @@ def named_runtime_exports(profile, target, metadata):
 
 
 def named_runtime_units(output, architecture, compiler):
-    """Project documented named PE exports whose SDK import libraries can omit them."""
-    inputs = json.loads(NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
+    """Project documented named PE exports qualified for this target."""
     directory = output / "sdk-import-sources"
     directory.mkdir(parents=True, exist_ok=True)
     units = []
-    for name, profile in inputs["providers"].items():
+    for name, profile in RUNTIME_PROFILES.items():
+        if architecture not in profile["targets"]:
+            continue
         target = profile["targets"][architecture]
         headers = ["winsock2", "windows", *profile["headers"]]
         source = directory / (name + "-sdk.c")
@@ -154,7 +160,7 @@ def named_runtime_units(output, architecture, compiler):
         # Bind the published prototype against the original C declaration in that dialect.
         bridge = {"source": str(source), "source_sha256": wdk.digest(source),
                   "arguments": [*compiler, "-std=c23"], "language": "c", "commands": [],
-                  "runtime_exports": named_runtime_exports(profile, target, inputs["win32_metadata"])}
+                  "runtime_exports": named_runtime_exports(profile, target, NAMED_RUNTIME["win32_metadata"])}
         units.append({"name": name, "source": source, "compiler": compiler, "headers": headers,
                       "default_calling_convention": "", "bridge": bridge})
     return units
@@ -346,18 +352,43 @@ def select(proof, declared, directory, run):
     return names
 
 
+def verify_parameter_counts(header, compiler, counts, source, commands, run):
+    """Count fixed source parameters, before the target lowers aggregates or adds an sret pointer."""
+    aliases = {f"neverd_api_{i}": name for i, name in enumerate(counts)}
+    declarations = "".join(f"  extern __typeof__({name}) {alias};\n" for alias, name in aliases.items())
+    probe = "neverd_check_parameters"
+    source.write_text(f'#include "{Path(header).as_posix()}"\nvoid {probe}(void) {{\n' +
+                      declarations + "}\n", encoding="utf-8")
+    command = compiler + ["-fsyntax-only", "-Xclang", "-ast-dump=json", "-Xclang",
+                          "-ast-dump-filter=" + probe, str(source)]
+    commands.append(command)
+    tree = json.loads(run(command, source.with_suffix(".log")))
+    body = next(child for child in tree["inner"] if child["kind"] == "CompoundStmt")
+    actual = {decl["name"]: sum(p["kind"] == "ParmVarDecl" for p in decl.get("inner", ()))
+              for stmt in body.get("inner", ()) for decl in stmt["inner"]
+              if decl["kind"] == "FunctionDecl"}
+    for alias, name in aliases.items():
+        if actual.get(alias) != counts[name]:
+            raise ValueError(f"parameter list disagrees with Win32 metadata for {name}: "
+                             f"expected {counts[name]}, got {actual.get(alias)} in {header}")
+
+
 def verify_abis(proof, header, compiler, directory, prototypes, run):
     names = proof["projected_functions"]
     if not set(names) <= set(prototypes):
         raise ValueError("published SDK import inventory is incomplete")
     library = proof.get("import_library")
     imports = read_symbols(library, directory, run) if library else None
-    stem = library["module"] if library else proof["runtime_exports"]["module"] + "-runtime"
+    stem = library["module"] if library else header.stem + "-runtime"
     bindings = "".join(f"__typeof__(&{name}) neverd_ucrt_abi_{i} = &{name};\n"
                        for i, name in enumerate(names))
     contracts = []
+    counts = proof.get("runtime_exports", {}).get("parameter_counts")
     for tag, include, options in (("original", proof["source"], proof["arguments"]),
                                   ("published", header, compiler)):
+        if counts is not None:
+            verify_parameter_counts(include, options, counts, directory / (stem + "-" + tag + "-arity.c"),
+                                    proof["commands"], run)
         source = directory / (stem + "-" + tag + "-abi.c")
         body = ('extern "C" {\n' + bindings + '}\n'
                 if tag == "original" and proof["language"] == "c++" else bindings)
@@ -366,12 +397,9 @@ def verify_abis(proof, header, compiler, directory, prototypes, run):
         ir = run(command, source.with_suffix(".log"), source.with_suffix(".ll"))
         proof["commands"].append(command)
         contracts.append(ucrt.normalized_bridge_abis(ir, names))
-    counts = proof.get("runtime_exports", {}).get("parameter_counts")
     for name in names:
         if contracts[0][name] != contracts[1][name]:
             raise ValueError("published compiler ABI differs from Microsoft SDK: " + name)
-        if counts is not None and counts[name] and not contracts[0][name][2].strip():
-            raise ValueError("empty SDK parameter list disagrees with Win32 metadata: " + name)
         if imports is None:
             continue
         symbol = contracts[0][name][0]

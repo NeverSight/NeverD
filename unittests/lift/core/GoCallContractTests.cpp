@@ -5425,4 +5425,169 @@ TEST(GoAssembly, AssemblyEnteredAsAClosureReadsItsContext) {
   }
 }
 
+enum class JoinedClosureOperand { Context, LoadAddress, AgreedContext };
+
+void expectJoinedClosure(JoinedClosureOperand Operand) {
+  constexpr va_t Caller = kTextVA + 0x100;
+  constexpr va_t Callee = kTextVA + 0x200;
+  GoTestImage T(Arch::AArch64);
+
+  // Callers enter with x1/x4 pointing at the two descriptors in the image.
+  // Both describe this same closure body. Only the captured word differs.
+  T.writeText(Callee, words({0xF9400740, 0xD65F03C0})); // ldr x0,[x26,#8]; ret
+  const auto descriptor = [&](uint32_t Capture) {
+    return T.addPayload(words({uint32_t(Callee), uint32_t(Callee >> 32),
+                               Capture, 0}));
+  };
+  const va_t First = descriptor(7), Second = descriptor(41);
+  ASSERT_NE(First, Second);
+  const bool ChangeAddress = Operand == JoinedClosureOperand::LoadAddress;
+  const bool ChangeContext = Operand == JoinedClosureOperand::Context;
+  const uint32_t BeforeBranch = ChangeAddress ? 0xAA0103E6 : 0xF9400022;
+  const uint32_t OnFallthrough = ChangeAddress ? 0xAA0403E6
+                                  : ChangeContext ? 0xAA0403FA : 0xAA0103FA;
+  // Save LR/frame. Set x26=x1. Preserve the shared call target when x26
+  // changes, or load the shared target through the merged x6 when x26 agrees.
+  // The two arms are selected by an independent x3, not by the call target.
+  T.writeText(Caller, words({0xA9BE7BFD, 0xAA0103FA, BeforeBranch,
+                             0xB4000043, OnFallthrough,
+                             ChangeAddress ? 0xF94000C2u : 0xD503201Fu,
+                             0xD63F0040, 0xA8C27BFD, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{Caller, "runtime.joinedClosure"},
+        std::pair{Callee, "main.makeClosure.func1"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Caller, Caller + 0x24}};
+  Module.FrameArguments = {{Caller, 0, 0}, {Callee, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  const MedFunc F = lift(T.Img, Caller);
+  const MedOp *Call = nullptr;
+  for (const MedBlock &Block : F.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::INDIR_CALL) {
+        ASSERT_EQ(Call, nullptr);
+        ASSERT_EQ(Block.Preds.size(), 2u);
+        ASSERT_NE(Block.Preds[0], Block.Preds[1]);
+        Call = &Op;
+      }
+  ASSERT_NE(Call, nullptr);
+  ASSERT_EQ(Call->Addr, Caller + 24);
+  EXPECT_EQ(Call->RegisterContract, CallRegisterContract::GoCode);
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
+  EXPECT_TRUE(callClobbersRegister(*Call, a64reg::X20, 8, TRI, T.Img.Format));
+  EXPECT_FALSE(callClobbersRegister(*Call, TRI.StackPointer, 8, TRI,
+                                    T.Img.Format));
+  EXPECT_FALSE(callClobbersRegister(*Call, TRI.FramePointer, 8, TRI,
+                                    T.Img.Format));
+}
+
+TEST(GoAssembly, MixedIncomingClosureContextIsNotProofOfAPlatformCall) {
+  expectJoinedClosure(JoinedClosureOperand::Context);
+}
+
+TEST(GoAssembly, MixedIncomingLoadAddressIsNotProofOfAPlatformCall) {
+  expectJoinedClosure(JoinedClosureOperand::LoadAddress);
+}
+
+TEST(GoAssembly, AgreedIncomingClosureContextRetainsTheGoContract) {
+  expectJoinedClosure(JoinedClosureOperand::AgreedContext);
+}
+
+TEST(GoAssembly, ACallOnOneIncomingEdgeCannotProveAPlatformCall) {
+  constexpr va_t Caller = kTextVA + 0x100;
+  constexpr va_t Helper = Caller + 0x80;
+  constexpr va_t Closure = kTextVA + 0x200;
+  GoTestImage T(Arch::AArch64);
+  // Incoming x1 points at the descriptor below. Save it in a private stack
+  // slot. The helper really overwrites x26; the caller restores it only on
+  // that edge. Without the helper, the original x26 reaches the join.
+  // Both edges therefore pass the same valid descriptor to the same closure.
+  T.writeText(Caller, words({
+      0xA9BE7BFD, // stp x29, x30, [sp, #-32]!
+      0xAA0103FA, // mov x26, x1
+      0xF9000BE1, // str x1, [sp, #16]
+      0xB4000063, // cbz x3, join
+      0x9400001C, // bl Helper
+      0xF9400BFA, // ldr x26, [sp, #16]
+      0xF9400BE6, // join: ldr x6, [sp, #16]
+      0xF94000C2, // ldr x2, [x6]
+      0xD63F0040, // blr x2
+      0xA8C27BFD, // ldp x29, x30, [sp], #32
+      0xD65F03C0  // ret
+  }));
+  T.writeText(Helper, words({0xAA1F03FA, 0xD65F03C0})); // mov x26,xzr; ret
+  T.writeText(Closure, words({0xF9400740, 0xD65F03C0})); // ldr x0,[x26,#8]; ret
+  const va_t Descriptor = T.addPayload(words(
+      {uint32_t(Closure), uint32_t(Closure >> 32), 63, 0}));
+  ASSERT_NE(Descriptor, 0u);
+  for (const auto &[Entry, Name] :
+       {std::pair{Caller, "runtime.joinedClosureAfterCall"},
+        std::pair{Helper, "runtime.clearContext"},
+        std::pair{Closure, "main.makeClosure.func1"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Caller, Caller + 44}, {Helper, Helper + 8}};
+  Module.FrameArguments = {{Caller, 0, 0}, {Helper, 0, 0}, {Closure, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  const LowFunc Low = build(T.Img, Caller);
+  const LowBlock *CallBlock = nullptr;
+  const LowBlock *JoinBlock = nullptr;
+  for (const LowBlock &Block : Low.Blocks)
+    for (const LowOp &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::CALL) {
+        ASSERT_EQ(CallBlock, nullptr);
+        ASSERT_EQ(Op.Addr, Caller + 16);
+        CallBlock = &Block;
+      }
+      if (Op.Opcode == NdOp::INDIR_CALL) {
+        ASSERT_EQ(JoinBlock, nullptr);
+        ASSERT_EQ(Op.Addr, Caller + 32);
+        JoinBlock = &Block;
+      }
+    }
+  ASSERT_NE(CallBlock, nullptr);
+  ASSERT_NE(JoinBlock, nullptr);
+  ASSERT_EQ(JoinBlock->Preds.size(), 2u);
+  EXPECT_TRUE(llvm::is_contained(JoinBlock->Preds, CallBlock->Id));
+  for (const va_t Address : {Caller + 24, Caller + 28})
+    EXPECT_TRUE(llvm::any_of(JoinBlock->Ops, [&](const LowOp &Op) {
+      return Op.Addr == Address && Op.Opcode == NdOp::LOAD;
+    })) << Address;
+
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&T.Img);
+  const MedFunc F = Converter.convert(Low, T.Img.Arch, T.Img.Format);
+  const MedOp *Call = nullptr;
+  for (const MedBlock &Block : F.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::INDIR_CALL) {
+        ASSERT_EQ(Call, nullptr);
+        Call = &Op;
+      }
+  ASSERT_NE(Call, nullptr);
+  ASSERT_EQ(Call->Addr, Caller + 32);
+  EXPECT_EQ(Call->RegisterContract, CallRegisterContract::GoCode);
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
+  EXPECT_TRUE(callClobbersRegister(*Call, a64reg::X20, 8, TRI, T.Img.Format));
+  EXPECT_FALSE(callClobbersRegister(*Call, TRI.StackPointer, 8, TRI,
+                                    T.Img.Format));
+  EXPECT_FALSE(callClobbersRegister(*Call, TRI.FramePointer, 8, TRI,
+                                    T.Img.Format));
+}
+
 } // namespace

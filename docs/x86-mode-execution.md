@@ -369,12 +369,107 @@ with two LA57 capability skips, 253/253 generated-C source cases and 4/4
 Python SDK integrations each. The opposite-core selections also passed. The
 HighC and LLVM-to-C VMRUN exports kept their exact source hashes.
 
+After the later `dev` integrations at `d45fe8b1fb` and `dbed3c1ba2`, both
+published r7 and local LLVM SDKs repeated the complete matrix at each source.
+At `dbed3c1ba2` each SDK passed 243/243 execution, 853/855 paging, 48/48
+opposite-core execution, 4/4 opposite-core paging, 253/253 generated-C and 4/4
+Python integration cases. The only skips require LA57, which the bound CPU
+does not expose. The portable x64 NeverC compiler emitted native
+`vmrun.context`, `vmread`, `vmwrite`, `rsm.context` and
+`enclu.transfer.context` calls; the installed r7 backend produced the native
+VMRUN, VMREAD, VMWRITE, ENCLU, XRSTOR64 and RSM opcodes. It completed 200
+returning VMRUN contexts in QEMU TCG across HighC/LLVM-to-C and O0/O2. Its
+i386, i686 and x32 target requests failed explicitly.
+
 The Linux Actions job built the pinned x64 NeverC revision and passed 27
 required software cases. The signed Intel simulation enclave completed three
 calls, including two nested exception repairs. Both Intel macOS runners and
 the Linux runner enumerated zero EPC sections.
 [Hosted software and hardware probes](https://github.com/gmh5225/test_mac_intel/actions/runs/44886176997) ·
 [Intel SDK simulation](https://github.com/gmh5225/test_mac_intel/actions/runs/44873573672)
+
+The [November 22 hosted repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45107252887)
+passed 27/27 software cases at `d45fe8b1fb` with the pinned portable x64
+NeverC compiler. All three designated runner images again exposed zero EPC
+sections and executed zero native enclave cases.
+
+The [November 23 hosted run](https://github.com/gmh5225/test_mac_intel/actions/runs/45325488567)
+tested integrated NeverD `d7c5338cf5` with a freshly built x64 NeverC at
+`f3eb95aa50`. Its 27/27 selected software cases passed. The downloaded
+compiler artifact matches the CI receipt. Ubuntu 24.04 and both Intel macOS
+images again exposed zero EPC sections; no native enclave case executed.
+
+At the same `d7c5338cf5` source, both the published r7 SDK and the local LLVM
+SDK passed 243/243 full-mode execution, 853/855 paging (the same two LA57
+capability skips), 48/48 opposite-core execution, 4/4 opposite-core paging,
+253/253 generated-C source and 4/4 Python SDK checks. The portable x64
+NeverC and published r7 backend completed another 200 VMRUN contexts in QEMU
+TCG; their native object and guest-image bytes match the hosted KVM fixtures.
+The [current qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+retains source, compiler, binary, XML and runner hashes separately.
+
+At merged source `0d5a4ee1df`, both SDKs repeated the complete matrix:
+243/243 full-mode execution, 853/855 paging with the same two LA57 hardware
+skips, 48/48 execution and 4/4 paging on the alternate core, 253/253
+generated-C source, and 4/4 Python SDK checks. Each SDK also passed 73
+return-contract, 81 pipeline-outcome and 122 x64 continuation-export tests.
+The first regular-SDK continuation run hit a temporary `libneverd.so` load
+error while an independent build relinked that file; an isolated full rerun
+passed 122/122. The portable x64 NeverC/r7 backend executed 200 more QEMU
+TCG VMRUN contexts from the byte-identical current C export. The linked
+[evidence record](evidence/x86-mode-smm-sgx-events-2026-11-21.json) records
+the full XML and binary digests as well as the initial race and rerun.
+
+The subsequent `106f1921bf` merge adopted Capstone `17d578259c` and shared
+parallel/GUI updates. Its focused local checks passed the three x86 decoder
+suites (7/7, 6/6, 9/9), return contracts (73/73), pipeline outcomes (81/81)
+and selected VMRUN/RTM continuation exports (16/16). Re-exporting HighC and
+LLVM-to-C produced the same VMRUN C hashes as the full matrix above. The
+[four-platform Capstone contract](https://github.com/NeverSight/NeverD/actions/runs/45339485141)
+also passed with only the three declared POSIX-x64 x87 hardware skips on
+other platforms.
+
+At `a02363b36b`, both SDKs repeated the full matrix: 243/243 mode execution,
+853/855 paging with the same two LA57-only skips, 48/48 alternate-core mode
+execution, 4/4 alternate-core paging, 253/253 generated-C source and 4/4 Python
+SDK checks. Each also passed 73 return-contract, 81 pipeline-outcome, 122 x64
+continuation-export, 27 selected mode/SMM/SGX/event software and 22 x86
+decoder checks. The portable x64 NeverC compiler emitted native virtualization,
+SMM and SGX intrinsic instructions and completed 200 more VMRUN contexts;
+the HighC/LLVM-to-C source and tagged guest-image hashes match the hosted AMD
+KVM fixture. The [current evidence](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+binds the exact source, binary and report hashes. Capstone `75dded738b` passed
+the [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45342565427):
+132/132 on Linux and 131/132 on each other platform, with only the declared
+POSIX-x64 x87 hardware skip.
+
+The `1bfbe32497` merge includes the next Capstone pin `d3dcfa80af` and a
+shared nullable-result proof. Both SDKs rebuilt and passed the complete
+243-case mode execution owner, 253 generated-C source cases, four Python SDK
+checks, 27 selected mode/SMM/SGX/event cases, all 22 x86 decoder checks,
+73 return-contract tests, 81 pipeline-outcome tests, 122 x64 continuation
+exports, 13 returning-call result-object checks and 669 interpreter
+specialization checks. HighC and LLVM-to-C VMRUN C hashes remained identical
+to the hosted AMD inputs. The [four-platform pin check](https://github.com/NeverSight/NeverD/actions/runs/45346520785)
+passed 132/132 on Linux and 131/132 on the other platforms, with the same
+single declared x87 hardware skip per platform. The preceding `a02363b36b`
+source retains the complete 853/855 paging qualification; this later merge
+replayed the execution and shared consumers.
+
+At `9a1252f88b`, the next `dev` integration adopts Capstone
+`8347e89a4e` for mask-register memory-store access metadata and includes
+shared Go/ABI changes. Both SDKs rebuilt and passed 243/243 complete mode
+execution, 253/253 generated-C source, 4/4 Python SDK, 27/27 selected
+mode/SMM/SGX/event software, 25/25 x86 decoder, 73/73 return-contract,
+81/81 pipeline-outcome and 122/122 x64 continuation-export cases. The HighC
+and LLVM-to-C VMRUN exports still have the hosted AMD source hashes. The
+[qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+keeps the earlier full paging matrix and this merged-source replay distinct.
+Native SGX execution remains unavailable on the designated runners, so this
+integration does not authorize a final LLVM release or production pin update.
+The [Capstone four-platform run](https://github.com/NeverSight/NeverD/actions/runs/45348733110)
+passed 132/132 checks on Linux and 131/132 on macOS arm64 and each Windows
+compiler, with one declared POSIX-x64 x87 hardware skip per non-Linux job.
 
 ## Earlier qualification records
 

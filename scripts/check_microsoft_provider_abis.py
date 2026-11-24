@@ -23,14 +23,13 @@ import microsoft_flat_imports as flat
 import microsoft_ucrt_types as ucrt
 
 
-NAMED_RUNTIME = json.loads(flat.NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
 CASES = {
     # NDIS belongs to the primary kernel unit. Enumerate its original profile
     # instead of allowing an incomplete published header to choose the tests.
     "NDIS": (),
     "GDIPlus": (),
     "WebAuthenticationRuntime": (),
-    **{name: () for name in NAMED_RUNTIME["providers"]},
+    **{name: () for name in flat.RUNTIME_PROFILES},
     **{provider: () for provider in (*flat.CURRENT, *flat.LEGACY, *flat.ordinal.profiles())},
     **{provider: () for provider in PROVIDER_PREFIXES},
     "NetworkInterfaces": ("NmrRegisterClient", "WskRegister", "WskCaptureProviderNPI"),
@@ -289,10 +288,9 @@ def check(args: argparse.Namespace) -> dict:
                             exports = {"module": inputs["module"], "names": inputs["exports"],
                                        "metadata": inputs["metadata"]}
                         else:
-                            inputs = NAMED_RUNTIME
-                            profile = inputs["providers"][name]
+                            profile = flat.RUNTIME_PROFILES[name]
                             exports = flat.named_runtime_exports(profile, profile["targets"][arch],
-                                                                 inputs["win32_metadata"])
+                                                                 flat.NAMED_RUNTIME["win32_metadata"])
                         if exports != bridge["runtime_exports"]:
                             raise ValueError("published named export inventory differs from its qualified input")
                         inventory = {"runtime_exports": exports}
@@ -353,6 +351,11 @@ def check(args: argparse.Namespace) -> dict:
                             flags = generated_compiler(compiler)
                         else:
                             flags = bridge["arguments"] if bridge else compiler
+                        counts = (bridge or {}).get("runtime_exports", {}).get("parameter_counts")
+                        if counts is not None:
+                            flat.verify_parameter_counts(include, flags, counts,
+                                                         directory / (view + "-arity.c"),
+                                                         row["commands"], windows.run)
                         invocation = flags + ["-S", "-emit-llvm", "-O0", str(source), "-o", "-"]
                         row["commands"].append(invocation)
                         result = subprocess.run(invocation, capture_output=True, text=True,
@@ -386,10 +389,14 @@ def check(args: argparse.Namespace) -> dict:
             if "ordinal_imports" not in profiles:
                 expected.difference_update(flat.ordinal.profiles())
             if "named_runtime" not in profiles:
-                expected.difference_update(NAMED_RUNTIME["providers"])
+                expected.difference_update(flat.NAMED_RUNTIME["providers"])
+            if "system_runtime" not in profiles:
+                expected.difference_update(flat.SYSTEM_RUNTIME)
             if "webauthn_runtime" not in profiles:
                 expected.discard("WebAuthenticationRuntime")
         expected.difference_update(name for name, profile in flat.ordinal.profiles().items()
+                                   if arch not in profile["targets"])
+        expected.difference_update(name for name, profile in flat.RUNTIME_PROFILES.items()
                                    if arch not in profile["targets"])
         if arch == "x86":
             expected.difference_update(flat.WIDE_ONLY)
