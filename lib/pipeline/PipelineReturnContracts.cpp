@@ -51,6 +51,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PipelineReturnModelingDetail.h"
+#include "PipelineShiftedReturnPaths.h"
 
 #include "neverd/Common.h"
 #include "neverd/backend/c/MsvcCallee.h"
@@ -104,6 +105,8 @@ namespace neverd {
 namespace {
 
 using ValueKey = MedValueKey;
+using return_contract::isScalarLiteral;
+using return_contract::scalarShiftShape;
 
 ValueKey keyOf(const MedVar &Value) { return medValueKey(Value); }
 
@@ -159,10 +162,7 @@ struct FunctionFacts {
   ValueMap<const MedOp *> Defs;
   /// The intrinsic each bound output of a multi-output intrinsic comes from.
   ValueMap<const MedOp *> IntrinsicOutputDefs;
-  struct Join {
-    const PhiNode *Phi;
-    const MedBlock *Block;
-  };
+  using Join = return_contract::PhiSite;
   ValueMap<Join> Phis;
   /// How this function uses what its calls to one function of this image
   /// return: a direct call's target, or the routine an import's stub or slot
@@ -380,11 +380,6 @@ static bool isReturnControlOp(const MedOp &Op, const MedOp *Ret,
          Op.Inputs[0].Size == Target.Size && Op.Output.Size == Target.Size;
 }
 
-static bool isScalarLiteral(const MedVar &V) {
-  return V.isConst() && (V.Provenance == ConstantAddressProvenance::Unknown ||
-                         V.Provenance == ConstantAddressProvenance::Scalar);
-}
-
 static bool writesOutsideIntegerResult(const MedOp &Op,
                                        const TargetRegInfo &TRI) {
   const MedVar &V = Op.Output;
@@ -502,14 +497,6 @@ static uint64_t observedExtensionBits(uint64_t Bits, unsigned InputBits,
   const uint64_t Low = llvm::maskTrailingOnes<uint64_t>(InputBits);
   return (Bits & Low) |
          (Signed && (Bits & ~Low) ? uint64_t{1} << (InputBits - 1) : 0);
-}
-
-static bool scalarShiftShape(const MedOp &Op) {
-  if (Op.NumInputs != 2)
-    return false;
-  const auto &Value = Op.Inputs[0], &Count = Op.Inputs[1];
-  return Count.Size && Count.Size <= Value.Size &&
-         Value.Size == Op.Output.Size && Value.Size <= 8;
 }
 
 static std::optional<uint64_t> fixedShiftCount(const MedOp &Op) {
@@ -910,12 +897,8 @@ static void collectShiftedReturns(const FunctionFacts &F, const MedBlock &Join,
         (*V >> (8 * ShiftByte)) & llvm::maskTrailingOnes<uint64_t>(Width);
     auto &Result = Arms.Shifts[Id].emplace_back(ShiftedReturn{Shift, Mask, {}});
     const auto Add = [&](unsigned N) {
-      uint64_t Bits = 0;
-      if (Shift->Opcode == NdOp::INT_ASHR)
-        Bits = llvm::SignExtend64(Value, Width) >> std::min(N, Width - 1);
-      else if (N < Width)
-        Bits = Shift->Opcode == NdOp::INT_LEFT ? Value << N : Value >> N;
-      Result.Values.push_back(Bits & Mask);
+      Result.Values.push_back(
+          return_contract::shiftedBits(Shift->Opcode, Width, Value, N) & Mask);
     };
     for (uint64_t Set = Counts.InRange; Set; Set &= Set - 1)
       Add(llvm::countr_zero(Set));
@@ -1073,7 +1056,13 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
   if (Func.AnalysisOnly || !Bytes || Bytes > sizeof(uint64_t))
     return false;
   const auto Arms = literalReturnArms(F, TRI, Bytes);
-  if (Arms.Literals.size() < 2 && Arms.Shifts.size() < 2)
+  llvm::SmallVector<const FunctionFacts::ReturnSite *, 2> ShiftExits;
+  for (const auto &Site : F.Returns)
+    if (Site.Value && Site.Value->Size >= Bytes && Site.Block->Succs.empty() &&
+        Site.Block->ExceptionalSuccs.empty() &&
+        llvm::any_of(Site.Block->Ops, return_contract::isVariableShift))
+      ShiftExits.push_back(&Site);
+  if (Arms.Literals.size() < 2 && Arms.Shifts.size() < 2 && ShiftExits.empty())
     return false;
   llvm::DenseSet<std::pair<va_t, va_t>> TableEdges;
   for (const JumpTable &Table : Func.JumpTables)
@@ -1128,6 +1117,13 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
         First.try_emplace(Observation, Bits);
     }
   }
+  unsigned Work = limits::pipeline::kPipelineReturnShiftPathWork;
+  for (const auto *Site : ShiftExits)
+    if (Visited.test(Site->Block->Id) &&
+        return_contract::selectsShiftedReturnAcrossJoins(
+            Func, *Site->Block, *Site->Value, TRI, F.Format, Bytes, F.Defs,
+            F.Phis, Visited, Work))
+      return true;
   return false;
 }
 

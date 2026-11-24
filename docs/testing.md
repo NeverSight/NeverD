@@ -9254,6 +9254,16 @@ and `SharedMIPSRegisterShiftObservesTheDelaySlotMask` run both C outputs.
 Each pairs a proven result with a case where legal counts erase the observed
 difference. `SharedMIPSWordShiftChecksTheOperandOnEachArm` pairs a word
 right shift with a separate count write and checks both orders of the counts.
+`ReturnContracts.PairedShiftPathsCloseEveryBackedgeBeforeSelectingAValue`
+checks a count changed on a backedge, simultaneous PHI reads and an
+unfinished loop proof. `ReturnContract.SharedX86VariableShiftCrossesTwoJoins`
+checks edge pairing through successive joins in machine code.
+`ReturnContract.SharedAArch64WordShiftKeepsEachLatchAndTheIncomingX0`
+checks a word shift after either latch and a bare path returning the full X0.
+`ReturnContract.SharedMIPSShiftCountChangesInTheBackedgeSlot` runs both C
+routes with the count update in the backedge delay slot and the shift in the
+return delay slot. Changing one count makes the two arms return the same
+value after an odd number of iterations.
 The [return recovery skill](../.agents/skills/neverd-return-recovery/SKILL.md)
 describes the corresponding original-machine checks.
 `ReturnContract.SharedX86ReturnKeepsTheShiftedLowNibble` executes both C
