@@ -291,6 +291,59 @@
       "source_commit": "e6e6ac13dffab7b13d1ecc32e51124cd2f53c534",
       "passed": 6,
       "failed": 0
+    },
+    "generated_c_cross_page_followup": {
+      "source_commit": "c3663bdafaf4a0268144bd696d5464fb59593c48",
+      "states_per_compiler_lane": 12,
+      "compiler_lanes": [
+        "ClangO0",
+        "ClangO2",
+        "NeverCO0",
+        "NeverCO2"
+      ],
+      "profiles": [
+        "OpcodeOnly",
+        "CompleteModRM"
+      ],
+      "address_forms": [
+        "ModRM",
+        "SIB/disp32",
+        "ModRM/disp32"
+      ],
+      "reports": {
+        "ud0-cross-page-r7.xml": {
+          "tests": 4,
+          "passed": 4,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "8bc137b4350e07b31c760f09709a47335bd888c0b27c4336d05afd60dd4093db"
+        },
+        "ud0-cross-page-native.xml": {
+          "tests": 4,
+          "passed": 4,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "630174b5aaf8b12f0917571ef8fd562e7a1956768e1af7b99f1d9b371491230b"
+        },
+        "ud0-cross-page-full-r7.xml": {
+          "tests": 265,
+          "passed": 265,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "40b9f3dfb2f58792b851d1e63d3e2ea1d6f8276248bbe8bbe029a7de80073aab"
+        },
+        "ud0-cross-page-full-native.xml": {
+          "tests": 265,
+          "passed": 265,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "195f0ef40405c3f8eb4f9c980bc265f8e15d79d424179d81a5a97e5e998a8b7a"
+        }
+      }
     }
   },
   "hosted": {

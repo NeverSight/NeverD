@@ -110,6 +110,11 @@ passed 37 of 38 selected cases at `eff781e8b3`; the remaining original-mode
 KVM case skipped because that runner could not open `/dev/kvm`. All three
 hosted SGX probes found zero EPC sections, so native enclave execution and
 the final LLVM release remain unqualified.
+At `c3663bdafa`, both SDKs' complete generated-C suites pass 265/265 after
+adding a cross-page UD0 source case. Each Clang/NeverC O0/O2 lane checks twelve
+code16/code32, profile and address-form combinations, including SIB and disp32,
+for the original fault PC, vector and CR2. The report digests are in the
+same qualification record.
 
 | Execution domain | Verified behavior |
 | --- | --- |
