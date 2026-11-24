@@ -20735,7 +20735,15 @@ A Windows x64, ARM or AArch64 SEH handler root gives each nonvolatile register
 the one SSA version it has on entry to every protected block when no protected
 operation writes it, and an unknown value otherwise (`MedSSA`). ARM and AArch64
 have no decoded-frame proof, so their handler roots take the SP of the
-protected range the same way. A termination handler's `__except`
+protected range the same way. The return register holds the exception code:
+`__C_specific_handler` resumes an `__except` arm through `RtlUnwindEx` with
+the code as the return value, zero-extended to a pointer, so EAX and RAX on
+x64, w0 and x0 on ARM64 and r0 on ARM take one `MedVar::SEHExceptionCode` per
+handler entry, and the other volatile registers what the unwinder left.
+Without that on ARM and ARM64 the CRT startup's `__except` arm passed an
+unknown value where its source passes `GetExceptionCode()` to `_exit`: the EH
+corpus's ARM64 images printed 784 placeholders and print 416, its ARM ones
+2,103 and 1,943. A termination handler's `__except`
 arm thus keeps the RBP its prologue copied from RDX. HighC rebases `rdx + k`
 into the printed function's frame only in a clause body of a function without
 an SEH scope table or Itanium LSDA, where `attachCxxFuncletBodies` places catch

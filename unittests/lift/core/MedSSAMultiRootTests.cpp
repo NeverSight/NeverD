@@ -2049,6 +2049,137 @@ TEST(MedSEHHandlerEntry, EAXHoldsTheExceptionCode) {
   EXPECT_EQ(Code->ConstVal, Img.Entry + 0x20);
 }
 
+/// An ARM64 parent whose handler stores w0 and w1 and joins the ordinary
+/// path: stp x29,x30,[sp,#-0x20]!; mov x29,sp; mov w8,#1; str w8,[x29,#16];
+/// nop (guarded); b join | handler: str w0,[x29,#16]; str w1,[x29,#20];
+/// b join | join: ldr w0,[x29,#16]; ldp x29,x30,[sp],#0x20; ret
+BinaryImage makeARM64SEHHandlerImage() {
+  constexpr va_t Entry = 0x140001000;
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = Entry;
+  const uint32_t Words[] = {0xa9be7bfd, 0x910003fd, 0x52800028, 0xb90013a8,
+                            0xd503201f, 0x14000004, 0xb90013a0, 0xb90017a1,
+                            0x14000001, 0xb94013a0, 0xa8c27bfd, 0xd65f03c0};
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Entry;
+  Text.Size = sizeof(Words);
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  std::memcpy(Text.Data.data(), Words, Text.Size);
+  Img.Segments.push_back(std::move(Text));
+  Section Code;
+  Code.Name = ".text";
+  Code.VA = Entry;
+  Code.Size = sizeof(Words);
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Code));
+  Img.Symbols.push_back(Symbol::makeFunc(Entry, sizeof(Words)));
+  ExceptionFunction EH;
+  EH.CodeRange = {Entry, Entry + sizeof(Words)};
+  EH.Encoding = ExceptionEncoding::ARM64Unpacked;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  // The codes run from the prologue's last instruction to its first.
+  UnwindOperation SetFP;
+  SetFP.Kind = UnwindOperationKind::SetFramePointer;
+  SetFP.Register = 29;
+  SetFP.RegisterClass = UnwindRegisterClass::GeneralPurpose;
+  EH.UnwindOperations.push_back(SetFP);
+  UnwindOperation Pair;
+  Pair.Kind = UnwindOperationKind::SaveRegisterPairPreIndexed;
+  Pair.StackOffset = 0x20;
+  Pair.Register = 29;
+  Pair.RegisterClass = UnwindRegisterClass::GeneralPurpose;
+  EH.UnwindOperations.push_back(Pair);
+  UnwindOperation End;
+  End.Kind = UnwindOperationKind::End;
+  EH.UnwindOperations.push_back(End);
+  EH.PrologueSize = 8;
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {Entry + 0x10, Entry + 0x14};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = Entry + 0x18;
+  EH.SEH->Scopes.push_back(Scope);
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  Img.ExceptionMetadata.rebuildIndex();
+  return Img;
+}
+
+/// The same in Thumb: push {r4,lr}; sub sp,#8; movs r0,#1; str r0,[sp];
+/// nop (guarded); b join | handler: str r0,[sp]; str r1,[sp,#4]; b join;
+/// nop | join: ldr r0,[sp]; add sp,#8; pop {r4,pc}
+BinaryImage makeThumbSEHHandlerImage() {
+  constexpr va_t Entry = 0x401000;
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Bits = Bitness::Bits32;
+  Img.Mode = InstructionMode::Thumb;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x400000;
+  Img.Entry = Entry;
+  const uint16_t Halves[] = {0xb510, 0xb082, 0x2001, 0x9000, 0xbf00,
+                             0xe003, 0x9000, 0x9101, 0xe000, 0xbf00,
+                             0x9800, 0xb002, 0xbd10};
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Entry;
+  Text.Size = sizeof(Halves);
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  std::memcpy(Text.Data.data(), Halves, Text.Size);
+  Img.Segments.push_back(std::move(Text));
+  Section Code;
+  Code.Name = ".text";
+  Code.VA = Entry;
+  Code.Size = sizeof(Halves);
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Code));
+  Img.Symbols.push_back(Symbol::makeFunc(Entry, sizeof(Halves)));
+  ExceptionFunction EH;
+  EH.CodeRange = {Entry, Entry + sizeof(Halves)};
+  EH.Encoding = ExceptionEncoding::ARM32Unpacked;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {Entry + 0x08, Entry + 0x0a};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = Entry + 0x0c;
+  EH.SEH->Scopes.push_back(Scope);
+  Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  Img.ExceptionMetadata.rebuildIndex();
+  return Img;
+}
+
+TEST(MedSEHHandlerEntry, ARMRegisterZeroHoldsTheExceptionCode) {
+  // __C_specific_handler resumes an ARM64 handler with the code in x0 and an
+  // ARM one with it in r0, as an x64 one with it in EAX; the other scratch
+  // registers hold what the unwinder left.
+  for (const bool Thumb : {false, true}) {
+    SCOPED_TRACE(Thumb ? "ARM" : "ARM64");
+    const BinaryImage Img =
+        Thumb ? makeThumbSEHHandlerImage() : makeARM64SEHHandlerImage();
+    Decoder Dec;
+    ASSERT_TRUE(Thumb ? Dec.init(Arch::ARM, InstructionMode::Thumb)
+                      : Dec.init(Arch::AArch64));
+    auto Low = CFGBuilder().build(Img, Dec, Img.Entry, "arm_seh_handler");
+    auto Med = LowToMedConverter().convert(Low, Img.Arch, BinaryFormat::COFF);
+    ASSERT_TRUE(verifyMedFunc(Med, "arm-seh-handler-entry"));
+    const va_t Handler = Img.Entry + (Thumb ? 0x0c : 0x18);
+    auto Code = storedValueAt(Med, Handler);
+    ASSERT_TRUE(Code);
+    EXPECT_EQ(Code->Kind, MedVar::SEHExceptionCode) << Code->display();
+    EXPECT_EQ(Code->ConstVal, Handler);
+    auto Scratch = storedValueAt(Med, Handler + (Thumb ? 2 : 4));
+    ASSERT_TRUE(Scratch);
+    EXPECT_EQ(Scratch->Kind, MedVar::Unspecified) << Scratch->display();
+  }
+}
+
 // A second scope guards the nop before the first one and resumes at 0x13,
 // before the first handler.
 BinaryImage makeTwoSEHHandlerImage() {

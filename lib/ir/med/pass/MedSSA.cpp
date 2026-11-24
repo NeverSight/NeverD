@@ -375,12 +375,14 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
 
   // Handler blocks that ordinary flow also enters, with their exception code.
   std::vector<std::pair<int, MedVar>> SharedHandlerCodes;
-  // __C_specific_handler resumes a Windows x64 __except handler through
-  // RtlUnwindEx with the exception code as the return value: EAX holds the
-  // code and the upper half of RAX is zero.  Define those views at each
-  // handler entry so the handler never reads an ordinary path's RAX.
-  if (TargetArch == Arch::X64 && Low.ExceptionMetadata &&
-      Low.ExceptionMetadata->SEH) {
+  // __C_specific_handler resumes a Windows x64, ARM64 or ARM __except
+  // handler through RtlUnwindEx with the exception code as the return value,
+  // zero-extended to a pointer: EAX holds the code and the upper half of RAX
+  // is zero, as w0 and x0 on ARM64 and r0 on ARM.  Define those views at each
+  // handler entry so the handler never reads an ordinary path's.
+  if ((TargetArch == Arch::X64 || TargetArch == Arch::AArch64 ||
+       TargetArch == Arch::ARM) &&
+      Low.ExceptionMetadata && Low.ExceptionMetadata->SEH) {
     auto IdsIt = RegOffToIds.find(TRI.IntReturnReg);
     // Each handler entry receives its own code.  One shared value would let a
     // later handler's code stand in for an earlier one that is still live.
