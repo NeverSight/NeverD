@@ -107,7 +107,7 @@ TEST_P(LinuxNetwork, TimeoutOptionsShareAliasesAndPreserveFailedWrites) {
 TEST_P(LinuxNetwork, FailedAdmissionDoesNotConsumeConnectionOrStream) {
   const auto FD = open();
   EXPECT_EQ(call(ServiceKind::Connect, 99, 1, 16), uint64_t(-9));
-  EXPECT_EQ(call(ServiceKind::Connect, 1, 1, 16), uint64_t(-88));
+  EXPECT_EQ(call(ServiceKind::Connect, 1, Base, 16), uint64_t(-88));
   EXPECT_EQ(call(ServiceKind::Connect, FD, 1, 129), uint64_t(-22));
   EXPECT_EQ(call(ServiceKind::Connect, FD, 1, 16), uint64_t(-14));
   EXPECT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
@@ -138,6 +138,28 @@ TEST_P(LinuxNetwork, FailedAdmissionDoesNotConsumeConnectionOrStream) {
   EXPECT_EQ(Read[0], 7);
   EXPECT_EQ(Read[1], 8);
   EXPECT_EQ(call(ServiceKind::ReceiveFrom, FD, 1, 2), 0u);
+}
+TEST_P(LinuxNetwork, ConnectImportsAddressBeforeFileTypeAndSocketState) {
+  EXPECT_EQ(call(ServiceKind::Connect, 99, 1, UINT32_MAX), uint64_t(-9));
+  EXPECT_EQ(call(ServiceKind::Connect, 1, 1, UINT32_MAX), uint64_t(-22));
+  EXPECT_EQ(call(ServiceKind::Connect, 1, Base, 129), uint64_t(-22));
+  EXPECT_EQ(call(ServiceKind::Connect, 1, Base, 128), uint64_t(-88));
+  EXPECT_EQ(call(ServiceKind::Connect, 1, UINT64_MAX, 0), uint64_t(-88));
+  EXPECT_EQ(call(ServiceKind::Connect, 1, Base + 8191, 2), uint64_t(-14));
+
+  const auto FD = open();
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
+  EXPECT_EQ(call(ServiceKind::Connect, FD, UINT64_MAX, 0), uint64_t(-22));
+  EXPECT_EQ(call(ServiceKind::Connect, FD, UINT64_MAX, 1), uint64_t(-14));
+  EXPECT_EQ(call(ServiceKind::Connect, FD, Base, 1), uint64_t(-22));
+  EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 8191, 16), uint64_t(-14));
+  EXPECT_EQ(call(ServiceKind::Connect, FD, Base, 2), uint64_t(-106));
+  const uint8_t Unspecified[] = {0, 0};
+  llvm::cantFail(cpu().write(Base + 64, Unspecified));
+  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base + 64, 2));
+  EXPECT_EQ(Report.Diagnostic, "AF_UNSPEC socket disconnect is unmodeled");
+  EXPECT_EQ(call(ServiceKind::Read, FD, Base + 128, 2), 2u);
+  EXPECT_EQ(call(ServiceKind::Connect, open(), Base, 16), 0u);
 }
 TEST_P(LinuxNetwork, NullPeerIgnoresAddressLengthForStreamTransfers) {
   const auto FD = open();
@@ -338,6 +360,8 @@ TEST_P(LinuxNetwork, DatagramBoundariesPeekTruncationAndAliasesAreShared) {
   Options.LinuxNetwork->DatagramConnections = {D, D};
   const auto FD = call(ServiceKind::Socket, 2, 2, 17).value();
   ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
+  EXPECT_EQ(call(ServiceKind::Connect, FD, 1, 0), uint64_t(-22));
+  EXPECT_EQ(call(ServiceKind::Connect, FD, 1, 16), uint64_t(-14));
   EXPECT_FALSE(call(ServiceKind::ReceiveFrom, FD, Base + 128, 3));
   const uint8_t Wrong[] = {1, 2, 4}, Right[] = {1, 2, 3};
   llvm::cantFail(cpu().write(Base + 64, Wrong));
@@ -467,7 +491,7 @@ TEST_P(LinuxNetwork, TCPConnectFailuresPreserveAdmissionAndBoundedOwnership) {
   EXPECT_EQ(call(ServiceKind::Close, FD), 0u);
   FD = open();
   EXPECT_EQ(call(ServiceKind::Connect, 99, 1, 16), uint64_t(-9));
-  EXPECT_EQ(call(ServiceKind::Connect, 1, 1, 16), uint64_t(-88));
+  EXPECT_EQ(call(ServiceKind::Connect, 1, 1, 16), uint64_t(-14));
   EXPECT_EQ(call(ServiceKind::Connect, FD, 1, 129), uint64_t(-22));
   EXPECT_EQ(call(ServiceKind::Connect, FD, 1, 16), uint64_t(-14));
   EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 8191, 16), uint64_t(-14));
@@ -477,6 +501,7 @@ TEST_P(LinuxNetwork, TCPConnectFailuresPreserveAdmissionAndBoundedOwnership) {
   Other[0] = 2;
   llvm::cantFail(cpu().write(Base + 32, Other));
   auto Nonblocking = call(ServiceKind::Socket, 2, 1 | 0x800, 0).value();
+  EXPECT_EQ(call(ServiceKind::Connect, Nonblocking, 1, 16), uint64_t(-14));
   EXPECT_FALSE(call(ServiceKind::Connect, Nonblocking, Base, 16));
   EXPECT_EQ(call(ServiceKind::Close, Nonblocking), 0u);
   auto UDP = call(ServiceKind::Socket, 2, 2, 17).value();
@@ -485,6 +510,7 @@ TEST_P(LinuxNetwork, TCPConnectFailuresPreserveAdmissionAndBoundedOwnership) {
   EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 32, 16), uint64_t(-101));
   const auto Alias = call(ServiceKind::Dup, FD).value();
   EXPECT_EQ(call(ServiceKind::Close, FD), 0u);
+  EXPECT_EQ(call(ServiceKind::Connect, Alias, 1, 16), uint64_t(-14));
   EXPECT_FALSE(call(ServiceKind::Connect, Alias, Base, 16));
   EXPECT_FALSE(call(ServiceKind::Read, Alias, Base + 128, 1));
   EXPECT_EQ(call(ServiceKind::Close, Alias), 0u);

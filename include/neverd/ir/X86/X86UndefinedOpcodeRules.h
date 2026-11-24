@@ -24,16 +24,40 @@ enum class X86UD0FetchProfile : uint8_t {
   CompleteModRM,
 };
 
-/// Paged code64 has qualified the bare UD0 and one address-size override.
-/// Other prefixes remain native boundaries until their original fetch priority
-/// is measured. Capstone reports only these opcode bytes, not the address tail.
+/// Qualified code64 UD0 prefixes exclude LOCK. The original P/E-core oracle
+/// covers zero, one or two such prefixes; Capstone reports the opcode without
+/// the ModR/M address tail for every admitted combination.
+inline constexpr unsigned X86PagedCode64UD0QualifiedPrefixLimit = 2;
+
+constexpr bool x86PagedCode64UD0Prefix(uint8_t Byte) {
+  if (Byte >= 0x40 && Byte <= 0x4f)
+    return true; // REX
+  switch (Byte) {
+  case 0x26:
+  case 0x2e:
+  case 0x36:
+  case 0x3e:
+  case 0x64:
+  case 0x65: // Segment override.
+  case 0x66: // Operand size.
+  case 0x67: // Address size.
+  case 0xf2:
+  case 0xf3: // REP/REPNZ.
+    return true;
+  default:
+    return false;
+  }
+}
+
 constexpr std::optional<unsigned>
 x86PagedCode64UD0OpcodeOffset(const uint8_t *Bytes, size_t Size) {
-  if (Size >= 2 && Bytes[0] == 0x0f && Bytes[1] == 0xff)
-    return 0;
-  if (Size >= 3 && Bytes[0] == 0x67 && Bytes[1] == 0x0f && Bytes[2] == 0xff)
-    return 1;
-  return std::nullopt;
+  unsigned Offset = 0;
+  while (Offset < X86PagedCode64UD0QualifiedPrefixLimit && Offset < Size &&
+         x86PagedCode64UD0Prefix(Bytes[Offset]))
+    ++Offset;
+  if (Size < Offset + 2 || Bytes[Offset] != 0x0f || Bytes[Offset + 1] != 0xff)
+    return std::nullopt;
+  return Offset;
 }
 
 /// The encoded address extent after UD0's two opcode bytes in 32/64-bit

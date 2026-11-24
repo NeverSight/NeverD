@@ -210,8 +210,10 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
   if (I == Descriptors.end())
     return Reply(uint64_t(0) - BadDescriptor);
   auto *Socket = std::get_if<OpenSocket>(I->second.get());
+  if (Kind == ServiceKind::Connect)
+    return connectSocket(Socket, A[1], uint32_t(A[2]), *Network, Result);
   if (!Socket)
-    return Reply(uint64_t(0) - 88); // ENOTSOCK
+    return Reply(uint64_t(0) - NotSocket);
   const bool Datagram = (Socket->Flags & 0xf) == 2;
   if (Kind == ServiceKind::SetSocketOption ||
       Kind == ServiceKind::GetSocketOption) {
@@ -276,104 +278,6 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
       return std::move(E);
     return Reply(0);
   }
-  if (Kind == ServiceKind::Connect) {
-    if (Socket->Datagram)
-      return unsupported(Result, "UDP reconnect requires a new route contract");
-    if (Socket->Connection)
-      return Reply(uint64_t(0) - 106); // EISCONN
-    if (Socket->Failed)
-      return unsupported(Result, "a failed socket must be closed before reuse");
-    if (!Datagram && (Socket->Flags & OpenNonBlock))
-      return unsupported(Result,
-                         "asynchronous TCP connection completion is unmodeled");
-    const uint32_t Size = A[2];
-    if (Size < 2 || Size > ::neverd::limits::emulation::
-                               kLinuxNetworkLinuxFilesNetworkSizeLimit)
-      return Reply(uint64_t(0) - InvalidArgument);
-    if (A[1] > Layout.UserLimit || Size > Layout.UserLimit - A[1])
-      return Reply(uint64_t(0) - BadAddress);
-    auto Accessible = CPU.canAccess(A[1], Size, Read | UserAccessible);
-    if (!Accessible)
-      return Accessible.takeError();
-    if (!*Accessible)
-      return Reply(uint64_t(0) - BadAddress);
-    std::vector<uint8_t> Peer(Size);
-    if (auto E = CPU.read(A[1], Peer))
-      return std::move(E);
-    if (networkAddressFamily(Peer) != Socket->Family)
-      return unsupported(Result, "peer requires a canonical matching sockaddr");
-    if (Datagram) {
-      if (NextDatagramConnection == Network->DatagramConnections.size() ||
-          Network->DatagramConnections[NextDatagramConnection].Peer != Peer)
-        return unsupported(
-            Result, "UDP peer has no matching offline route observation");
-      const auto &C = Network->DatagramConnections[NextDatagramConnection++];
-      if (C.ConnectErrno) {
-        // EINTR can be retried on this description. No successful route or
-        // packet state is published by a failed attempt.
-        Socket->Failed = C.ConnectErrno != 4;
-        return Reply(uint64_t(0) - C.ConnectErrno);
-      }
-      Socket->Datagram = &C;
-      return Reply(0);
-    }
-    const uint64_t AttemptNumber =
-        uint64_t(TCPConnectFailuresConsumed) + NextConnection + 1;
-    if (const auto &F = Network->TCPConnectFailures;
-        F && NextConnection ==
-                 F->AfterConnections.value_or(Network->Connections.size())) {
-      if (TCPConnectFailuresConsumed < F->Count) {
-        ++TCPConnectFailuresConsumed;
-        Socket->Failed = true;
-        return Reply(uint64_t(0) - F->Error);
-      }
-      if (NextConnection == Network->Connections.size()) {
-        const auto Reason =
-            llvm::formatv(
-                "TCP connection failure contract exhausted after {0} "
-                "supplied failures (attempt {1} has no supplied result), "
-                "peer_hex={2}",
-                TCPConnectFailuresConsumed, AttemptNumber,
-                llvm::toHex(Peer, true))
-                .str();
-        return unsupported(Result, Reason.c_str());
-      }
-    }
-    const bool MissingResult = NextConnection == Network->Connections.size();
-    if (MissingResult || Network->Connections[NextConnection].Peer != Peer) {
-      const auto Reason =
-          llvm::formatv("TCP peer has no matching offline connection attempt "
-                        "(attempt {0}, connection index {1} {2}), peer_hex={3}",
-                        AttemptNumber, NextConnection,
-                        MissingResult ? "has no supplied result"
-                                      : "has a different peer",
-                        llvm::toHex(Peer, true))
-              .str();
-      return unsupported(Result, Reason.c_str());
-    }
-    const auto &C = Network->Connections[NextConnection];
-    if (C.ConnectErrno) {
-      ++NextConnection;
-      Socket->Failed = true;
-      return Reply(uint64_t(0) - C.ConnectErrno);
-    }
-    if (C.ReceiveQuietAfterConnectNS) {
-      if (!Clock || !Clock->advancesOnIdle())
-        return unsupported(Result,
-                           "timed network input requires virtual idle time");
-      const uint64_t Start = Clock->elapsed();
-      if (*C.ReceiveQuietAfterConnectNS >= uint64_t(INT64_MAX) - Start)
-        return unsupported(Result,
-                           "offline receive quiet interval has no finite end");
-      const uint64_t End = Start + *C.ReceiveQuietAfterConnectNS;
-      if (auto E = receiveEnd(C.ReceiveEvents, {}, End))
-        return unsupported(Result, llvm::toString(std::move(E)).c_str());
-      Socket->ConnectQuietEnd = End;
-    }
-    Socket->Connection = &C;
-    Socket->ConnectionIndex = NextConnection++;
-    return Reply(0);
-  }
   if (Kind == ServiceKind::ReceiveFrom)
     return receiveSocket(I->second, A[1], TransferSize, Result, Thread,
                          uint32_t(A[3]), A[4], A[5]);
@@ -391,6 +295,120 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
   if (Flags & ~uint32_t(0x4000 | 0x40))
     return unsupported(Result, "unmodeled TCP transfer flags");
   return transferSocket(*Socket, true, A[1], TransferSize, Result, Flags);
+}
+
+llvm::Expected<std::optional<uint64_t>>
+LinuxFiles::connectSocket(OpenSocket *Socket, uint64_t Address, uint32_t Size,
+                          const LinuxNetworkOptions &Network,
+                          ProcessResult &Result) {
+  using Reply = std::optional<uint64_t>;
+  // __sys_connect looks up the FD, then imports the sockaddr before
+  // sock_from_file or the protocol's connect operation can report errors.
+  using ::neverd::limits::emulation::kLinuxNetworkLinuxFilesNetworkSizeLimit;
+  uint8_t Storage[kLinuxNetworkLinuxFilesNetworkSizeLimit];
+  if (Size > sizeof(Storage))
+    return Reply(uint64_t(0) - InvalidArgument);
+  llvm::MutableArrayRef<uint8_t> Peer(Storage, Size);
+  if (Size) {
+    if (!Layout.containsUserRange(Address, Size))
+      return Reply(uint64_t(0) - BadAddress);
+    auto Accessible = CPU.canAccess(Address, Size, Read | UserAccessible);
+    if (!Accessible)
+      return Accessible.takeError();
+    if (!*Accessible)
+      return Reply(uint64_t(0) - BadAddress);
+    if (auto E = CPU.read(Address, Peer))
+      return std::move(E);
+  }
+  if (!Socket)
+    return Reply(uint64_t(0) - NotSocket);
+  if (Size < sizeof(uint16_t))
+    return Reply(uint64_t(0) - InvalidArgument);
+  if (llvm::support::endian::read16le(Peer.data()) == 0)
+    return unsupported(Result, "AF_UNSPEC socket disconnect is unmodeled");
+  const bool Datagram = (Socket->Flags & 0xf) == 2;
+  if (Socket->Datagram)
+    return unsupported(Result, "UDP reconnect requires a new route contract");
+  if (Socket->Connection)
+    return Reply(uint64_t(0) - 106); // EISCONN
+  if (Socket->Failed)
+    return unsupported(Result, "a failed socket must be closed before reuse");
+  if (!Datagram && (Socket->Flags & OpenNonBlock))
+    return unsupported(Result,
+                       "asynchronous TCP connection completion is unmodeled");
+  if (networkAddressFamily(Peer) != Socket->Family)
+    return unsupported(Result, "peer requires a canonical matching sockaddr");
+  if (Datagram) {
+    if (NextDatagramConnection == Network.DatagramConnections.size() ||
+        !Peer.equals(Network.DatagramConnections[NextDatagramConnection].Peer))
+      return unsupported(Result,
+                         "UDP peer has no matching offline route observation");
+    const auto &C = Network.DatagramConnections[NextDatagramConnection++];
+    if (C.ConnectErrno) {
+      // EINTR can be retried on this description. No successful route or
+      // packet state is published by a failed attempt.
+      Socket->Failed = C.ConnectErrno != 4;
+      return Reply(uint64_t(0) - C.ConnectErrno);
+    }
+    Socket->Datagram = &C;
+    return Reply(0);
+  }
+  const uint64_t AttemptNumber =
+      uint64_t(TCPConnectFailuresConsumed) + NextConnection + 1;
+  if (const auto &F = Network.TCPConnectFailures;
+      F && NextConnection ==
+               F->AfterConnections.value_or(Network.Connections.size())) {
+    if (TCPConnectFailuresConsumed < F->Count) {
+      ++TCPConnectFailuresConsumed;
+      Socket->Failed = true;
+      return Reply(uint64_t(0) - F->Error);
+    }
+    if (NextConnection == Network.Connections.size()) {
+      const auto Reason =
+          llvm::formatv(
+              "TCP connection failure contract exhausted after {0} "
+              "supplied failures (attempt {1} has no supplied result), "
+              "peer_hex={2}",
+              TCPConnectFailuresConsumed, AttemptNumber,
+              llvm::toHex(Peer, true))
+              .str();
+      return unsupported(Result, Reason.c_str());
+    }
+  }
+  const bool MissingResult = NextConnection == Network.Connections.size();
+  if (MissingResult || !Peer.equals(Network.Connections[NextConnection].Peer)) {
+    const auto Reason =
+        llvm::formatv("TCP peer has no matching offline connection attempt "
+                      "(attempt {0}, connection index {1} {2}), peer_hex={3}",
+                      AttemptNumber, NextConnection,
+                      MissingResult ? "has no supplied result"
+                                    : "has a different peer",
+                      llvm::toHex(Peer, true))
+            .str();
+    return unsupported(Result, Reason.c_str());
+  }
+  const auto &C = Network.Connections[NextConnection];
+  if (C.ConnectErrno) {
+    ++NextConnection;
+    Socket->Failed = true;
+    return Reply(uint64_t(0) - C.ConnectErrno);
+  }
+  if (C.ReceiveQuietAfterConnectNS) {
+    if (!Clock || !Clock->advancesOnIdle())
+      return unsupported(Result,
+                         "timed network input requires virtual idle time");
+    const uint64_t Start = Clock->elapsed();
+    if (*C.ReceiveQuietAfterConnectNS >= uint64_t(INT64_MAX) - Start)
+      return unsupported(Result,
+                         "offline receive quiet interval has no finite end");
+    const uint64_t End = Start + *C.ReceiveQuietAfterConnectNS;
+    if (auto E = receiveEnd(C.ReceiveEvents, {}, End))
+      return unsupported(Result, llvm::toString(std::move(E)).c_str());
+    Socket->ConnectQuietEnd = End;
+  }
+  Socket->Connection = &C;
+  Socket->ConnectionIndex = NextConnection++;
+  return Reply(0);
 }
 
 std::optional<uint64_t>

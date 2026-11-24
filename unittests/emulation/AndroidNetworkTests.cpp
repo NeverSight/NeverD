@@ -15,6 +15,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <cstring>
+#include <iterator>
 #include <tuple>
 #include <utility>
 namespace neverd::emulation {
@@ -434,6 +435,16 @@ TEST_P(AndroidNetwork, RefusalAndUnknownPeerStaySeparate) {
   EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
   EXPECT_NE(R.Diagnostic.find("matching offline connection"),
             std::string::npos);
+}
+TEST_P(AndroidNetwork, ConnectAddressErrorsReachNamedAndRawBionicCallers) {
+  const uint64_t Expected[] = {9, 22, 14, 88, 88, 14, 22, 14, 22, 106};
+  for (uint64_t Raw : {0u, 1u}) {
+    SCOPED_TRACE(Raw);
+    auto R = run("network_connect_address_errors", Raw);
+    ASSERT_NO_FATAL_FAILURE(returned(R));
+    for (unsigned I = 0; I < std::size(Expected); ++I)
+      EXPECT_EQ(word(R, I), Expected[I]) << I;
+  }
 }
 TEST_P(AndroidNetwork, SocketBufferExtentPreservesBionicErrnoAndShortIO) {
   for (unsigned Mode : {0u, 1u, 2u, 3u}) {

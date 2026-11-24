@@ -590,7 +590,7 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   }
   if (UD0 && *Options.UD0Fetch == X86UD0FetchProfile::CompleteModRM &&
       T.Access.Status == X86PageWalkStatus::Completed) {
-    // The x64 decoder records the UD0 opcode and optional 67 prefix without
+    // The x64 decoder records the UD0 opcode and qualified prefixes without
     // its encoded address. A processor that fetches that address determines the
     // remaining extent from live instruction bytes, even when the image ends
     // after the opcode or later bytes have changed. No data read is implied.

@@ -124,11 +124,16 @@ independently for MIPS before this code64 change; it does not qualify a final
 x86 release.
 The code64 paged continuation also admits the measured `67 UD0` address-size
 form. Both hybrid CPU classes retain their existing #UD versus instruction-fetch
-#PF choice, and generated HighC/LLVM-to-C uses the original fault PC. Other
-prefixes stay at the explicit native boundary.
+#PF choice, and generated HighC/LLVM-to-C uses the original fault PC.
 The [address-size override qualification](evidence/x86-code64-ud0-addr32-2026-11-24.json)
 records the P/E original-CPU matrices, full paging run and exact dependency and
 report digests.
+The paged code64 binding now recognizes the 703 zero-to-two-prefix UD0 forms
+decoded by Capstone, excluding LOCK. The processor-bound fetch rule applies to
+operand/address-size, segment, REP and REX prefixes in the qualified set.
+Longer prefix sequences remain native boundaries. The
+[prefix qualification](evidence/x86-code64-ud0-prefixes-2026-11-24.json)
+records the original P/E-core matrix and generated-C comparisons.
 
 | Execution domain | Verified behavior |
 | --- | --- |
@@ -562,7 +567,7 @@ families remain separate work.
 
 | Instructions or family | Missing contract |
 | --- | --- |
-| UD0 in ordinary x64 executable output | The ordinary lifter records a terminal UD0 intrinsic without an invented RAX write, but its LLVM emitter still lowers that intrinsic to `llvm.trap`. The resulting executable does not retain the original UD0 bytes or processor-specific fetch priority. The explicit paged code64 continuation now accepts bare and `67` original UD0 and binds opcode-only versus complete ModR/M/SIB/displacement fetch at execution time. That path delivers the original #UD or earlier instruction-fetch #PF through HighC and LLVM-to-C; the runtime reads live instruction bytes beyond Capstone's opcode decode and never reads the encoded data operand. Ordinary x64 executable replay, other prefixed forms and CPUs without a qualified fetch profile remain open. |
+| UD0 in ordinary x64 executable output | The ordinary lifter records a terminal UD0 intrinsic without an invented RAX write, but its LLVM emitter still lowers that intrinsic to `llvm.trap`. The resulting executable does not retain the original UD0 bytes or processor-specific fetch priority. The explicit paged code64 continuation accepts zero to two qualified non-LOCK prefixes and binds opcode-only versus complete ModR/M/SIB/displacement fetch at execution time. That path delivers the original #UD or earlier instruction-fetch #PF through HighC and LLVM-to-C; the runtime reads live instruction bytes beyond Capstone's opcode decode and never reads the encoded data operand. Ordinary x64 executable replay, longer prefix sequences and CPUs without a qualified fetch profile remain open. |
 | REP beyond the explicit paged memory-string binding | Long-mode MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS own element progress, page/alignment faults, handler repair/IRET/retry and producer-selected IRQ/NMI boundaries through both C routes. The local processor profile binds addr32 entry normalization and destination-first CMPS reads. The [protected legacy memory-string executor](x86-legacy-segments.md#protected-memory-strings) adds segmented 16/32-bit progress, exact operand faults, original handler repair and IRQ/NMI restart through the internal C++ state interface. Long-mode INS/OUTS use the explicit paged device binding. The [protected legacy port binding](x86-legacy-segments.md#protected-port-devices) adds IN/OUT/INS/OUTS with segmented progress, TSS permission checks and retained input effects across fault delivery. The explicit protected source dispatcher now retains these pauses. Ordinary function projection, physical device read-ahead, fast-string event timing and other processor profiles remain separate. Native LLVM/NeverC completion interfaces continue to own all seven families in their executing environment. |
 | SNP/RMP and VMGEXIT outside explicit native bindings | Nine appended decoder IDs and native LLVM/NeverC APIs now retain exact register/flag completion and memory effects. The [explicit SNP/SEV-ES source bindings](x86-snp-state.md) connect canonical x64 bytes to both C routes, including PVALIDATE address32 and both VMGEXIT prefixes. Unbound ordinary ABI lifting, other source prefixes/modes, faults/restart and physical RMP/SEV-ES service execution remain unqualified. The [dated census](evidence/x86-snp-census-2026-10-31.json) records the earlier missing implementation. |
 | LDS, LES, LSS, LFS, LGS | LLVM provides thirteen native interfaces; NeverC provides the nine long-mode forms. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. The [protected legacy transition](x86-legacy-segments.md#explicit-selector-instructions) now owns all five i386 LxS forms with staged cache/GPR publication over paged RAM. The [protected legacy executor](x86-legacy-segments.md#protected-instruction-and-event-execution) now connects these instructions to original-byte fetch, IDT fault delivery and IRET/RETF. The explicit protected source dispatcher connects this owner; ordinary legacy function projection, compatibility source dispatch and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |

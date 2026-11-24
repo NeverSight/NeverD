@@ -16,6 +16,8 @@
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
@@ -586,7 +588,8 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
            {0xf0, 0x48, 0x01,
             0x07},             // Native LOCK is not a host-pointer operation.
            {0x0f, 0x20, 0xd8}, // Native CR3 needs its architectural transition.
-           {0x66, 0x0f, 0xff, 0x00}, // Other UD0 prefixes remain unqualified.
+           {0x66, 0x67, 0x66, 0x0f, 0xff,
+            0x00}, // Longer UD0 prefix sequences remain unqualified.
            {0xfb},
            {0x66, 0xfb}}) {
     auto Units = buildX64ContinuationSource(image(Code), {0x1000}, O);
@@ -607,6 +610,50 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
   auto Bad = buildX64ContinuationSource(image({0x90}), {0x1000}, O);
   ASSERT_FALSE(bool(Bad));
   llvm::consumeError(Bad.takeError());
+}
+
+TEST(X64PagedUD0PrefixTest, QualifiedPrefixesMatchTheDecoder) {
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Arch::X64));
+  constexpr std::array<uint8_t, 26> Prefixes{
+      0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65, 0x66, 0x67, 0xf2,
+      0xf3, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+      0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f};
+  unsigned Checked = 0;
+  for (unsigned PrefixCount = 0;
+       PrefixCount <= X86PagedCode64UD0QualifiedPrefixLimit; ++PrefixCount) {
+    const unsigned FirstCount = PrefixCount ? Prefixes.size() : 1;
+    const unsigned SecondCount = PrefixCount == 2 ? Prefixes.size() : 1;
+    for (unsigned First = 0; First != FirstCount; ++First)
+      for (unsigned Second = 0; Second != SecondCount; ++Second) {
+        std::vector<uint8_t> Code;
+        if (PrefixCount)
+          Code.push_back(Prefixes[First]);
+        if (PrefixCount == 2)
+          Code.push_back(Prefixes[Second]);
+        Code.insert(Code.end(), {0x0f, 0xff, 0xc0});
+        SCOPED_TRACE(testing::Message()
+                     << "first=" << First << " second=" << Second);
+        const auto Offset =
+            x86PagedCode64UD0OpcodeOffset(Code.data(), Code.size() - 1);
+        ASSERT_TRUE(Offset);
+        EXPECT_EQ(*Offset, PrefixCount);
+        const auto WithAddressTail =
+            x86PagedCode64UD0OpcodeOffset(Code.data(), Code.size());
+        ASSERT_TRUE(WithAddressTail);
+        EXPECT_EQ(*WithAddressTail, PrefixCount);
+        DecodedInsn Instruction;
+        ASSERT_EQ(Decode.decodeOneForLift(Code.data(), Code.size(), 0x1000,
+                                          Instruction),
+                  PrefixCount + 2);
+        EXPECT_EQ(Instruction.Id, X86_INS_UD0);
+        ++Checked;
+      }
+  }
+  EXPECT_EQ(Checked, 703u);
+  for (const auto &Code : {std::vector<uint8_t>{0xf0, 0x0f, 0xff},
+                           std::vector<uint8_t>{0xf0, 0x66, 0x0f, 0xff}})
+    EXPECT_FALSE(x86PagedCode64UD0OpcodeOffset(Code.data(), Code.size()));
 }
 
 TEST_F(X64PagedExecutionTest, UD0CrossPageFetchUsesTheBoundProcessor) {
@@ -723,7 +770,9 @@ TEST_F(X64PagedExecutionTest, UD0RefusesMissingOrInvalidFetchProfile) {
     GTEST_SKIP() << "No test Clang";
   for (const auto &Code :
        {std::vector<uint8_t>{0x0f, 0xff, 0xc0},
-        std::vector<uint8_t>{0x67, 0x0f, 0xff, 0xc0}}) {
+        std::vector<uint8_t>{0x67, 0x0f, 0xff, 0xc0},
+        std::vector<uint8_t>{0x66, 0x0f, 0xff, 0xc0},
+        std::vector<uint8_t>{0x66, 0x67, 0x0f, 0xff, 0xc0}}) {
     for (bool LLVM : {false, true}) {
       Run Driver = nullptr;
       ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
@@ -823,7 +872,13 @@ TEST_F(X64PagedExecutionTest, UD0FetchPriorityMatchesOriginalHybridCPU) {
     Compilers.push_back(NeverC);
   unsigned Comparisons = 0;
   for (const auto &Prefix :
-       {std::vector<uint8_t>{}, std::vector<uint8_t>{0x67}}) {
+       {std::vector<uint8_t>{}, std::vector<uint8_t>{0x66},
+        std::vector<uint8_t>{0x67}, std::vector<uint8_t>{0xf2},
+        std::vector<uint8_t>{0xf3}, std::vector<uint8_t>{0x2e},
+        std::vector<uint8_t>{0x65}, std::vector<uint8_t>{0x40},
+        std::vector<uint8_t>{0x4f}, std::vector<uint8_t>{0x66, 0x66},
+        std::vector<uint8_t>{0x66, 0x67}, std::vector<uint8_t>{0x67, 0x66},
+        std::vector<uint8_t>{0x67, 0x67}}) {
     for (unsigned Form = 0; Form != EncodedAddresses.size(); ++Form) {
       const uint64_t PC = 0x1ffe - Form - Prefix.size();
       const auto &Address = EncodedAddresses[Form];
