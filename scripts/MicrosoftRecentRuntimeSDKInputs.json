@@ -6,6 +6,12 @@
     "sha256": "f0a200dae58858f418b30dc9e2f52b4188f97eb7837bd4f73074652a01937ddd"
   },
   "import_packages": {
+    "x86": {
+      "file": "microsoft.windows.sdk.cpp.x86.10.0.28000.2957.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.x86/10.0.28000.2957/microsoft.windows.sdk.cpp.x86.10.0.28000.2957.nupkg",
+      "sha256": "b8abfb58309c3caa289371f0378731140722720b89a63ca4e9b92603411cfd19",
+      "architecture": "x86"
+    },
     "x64": {
       "file": "microsoft.windows.sdk.cpp.x64.10.0.28000.2957.nupkg",
       "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.x64/10.0.28000.2957/microsoft.windows.sdk.cpp.x64.10.0.28000.2957.nupkg",
@@ -30,6 +36,16 @@
         "BCryptEncapsulate": 8
       },
       "targets": {
+        "x86": {
+          "image_sha256": "45ea76a56e3aa9916967f6cad1a4ae0d8c2d0e0afaca9fcf9639ac44c15cbafe",
+          "additional_exports": {},
+          "import_library": "bcrypt.lib"
+        },
+        "x64": {
+          "image_sha256": "bf61d1427e6c8d246ae97371638b4dae1c04cdb754445520fd751c0ff020cc63",
+          "additional_exports": {},
+          "import_library": "bcrypt.lib"
+        },
         "arm64": {
           "image_sha256": "0caadd679fc2ed6d4136d1500bbfd353e60a5180e62abc7204c61345e01ab18e",
           "additional_exports": {},
@@ -69,6 +85,16 @@
         "NCryptEncapsulate": 8
       },
       "targets": {
+        "x86": {
+          "image_sha256": "00cbd97c8ec5265ba4f6398cdba25373e5c5479b18bdc979566d4b96de4a8451",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        },
+        "x64": {
+          "image_sha256": "ceb32c0afecb21eda7c3ac378ac6f7d77fefcccf8599bd0579c3528a7d610673",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        },
         "arm64": {
           "image_sha256": "ddd975d066e84d59c6f2d4f06035b546d359528476161aa66868cf3436955ae1",
           "additional_exports": {},
@@ -86,6 +112,11 @@
         "RtlVirtualUnwind2": 13
       },
       "targets": {
+        "x64": {
+          "image_sha256": "77e618cfe3bbeef3211655d1b0b0dad622a2cfe5405f1fc4d5e63e48b3c35283",
+          "additional_exports": {},
+          "import_library": "kernel32.Lib"
+        },
         "arm64": {
           "image_sha256": "3b05fea371380c19022ca18c8ece9690057108954794038e9818f0dfeaf1cb46",
           "additional_exports": {},
@@ -100,22 +131,31 @@
         "winuser"
       ],
       "exports": {
-        "ConvertPrimaryPointerToMouseDrag": 0,
         "CreateSyntheticPointerDevice2": 1,
         "GetPointerFrameTouchpadInfo": 3,
         "GetPointerFrameTouchpadInfoHistory": 4,
         "GetPointerTouchpadInfo": 2,
         "GetPointerTouchpadInfoHistory": 3,
-        "InjectTouchpadAction": 2,
         "RegisterTouchpadCapableThread": 1,
         "RegisterTouchpadCapableWindow": 2,
-        "ReportWindowContentInertia": 2,
         "SetMaxTouchpadSensitivity": 1
       },
       "targets": {
+        "x86": {
+          "image_sha256": "41a7f65dcc6ac4cf6c51cc6b107373df1ef48e149ebee90f4a613cd211a81583",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "d2bcc3d2fc93d4c237eade68ea6a6599ed3db8afef1e8b9bf0dd4874e1ed1dff",
+          "additional_exports": {}
+        },
         "arm64": {
           "image_sha256": "5d26276f596482c2e6474689e0dd72f885549f313bdac6ae91f4c706f9307b5a",
-          "additional_exports": {}
+          "additional_exports": {
+            "ConvertPrimaryPointerToMouseDrag": 0,
+            "InjectTouchpadAction": 2,
+            "ReportWindowContentInertia": 2
+          }
         }
       },
       "kit_ntddi": true

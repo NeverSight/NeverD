@@ -213,8 +213,19 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             with patch.object(windows.flat, "package", side_effect=lambda cache, rec: cache / rec["file"]):
                 units, packages = windows.flat.recent_runtime_units(
                     root / arch, root, arch, "llvm-readobj", compiler, root / "wdk")
-                self.assertEqual(windows.flat.recent_runtime_units(
-                    root / "x86", root, "x86", "llvm-readobj", compiler, root / "wdk"), ([], []))
+                x86 = root / recent["import_packages"]["x86"]["file"]
+                with zipfile.ZipFile(x86, "w") as package:
+                    for name in ("bcrypt.lib", "ncrypt.lib"):
+                        package.writestr("c/um/x86/" + name, name)
+                x86_units, x86_packages = windows.flat.recent_runtime_units(
+                    root / "x86", root, "x86", "llvm-readobj",
+                    ["clang", "--target=i686-pc-windows-msvc"], root / "wdk")
+            self.assertEqual(x86_packages, [recent["import_packages"]["x86"]])
+            x86_exports = {unit["name"]: unit["bridge"]["runtime_exports"]["names"]
+                           for unit in x86_units}
+            self.assertEqual(set(x86_exports), {"CryptographyKEM", "KeyStorageKEM", "TouchpadInput"})
+            self.assertIn("GetPointerTouchpadInfo", x86_exports["TouchpadInput"])
+            self.assertNotIn("InjectTouchpadAction", x86_exports["TouchpadInput"])
             self.assertEqual(packages, [recent["import_packages"][arch]])
             self.assertEqual({u["name"] for u in units}, {"CryptographyKEM", "KeyStorageKEM",
                                                         "TouchpadInput", "RuntimeUnwindV2"})

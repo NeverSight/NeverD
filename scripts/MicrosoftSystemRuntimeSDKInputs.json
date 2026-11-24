@@ -2621,6 +2621,11 @@
           "image_sha256": "0455a236233fd1c285fde9a6b1e5e1c9c3d81981948a3d4c006fa6c8e89728fb",
           "additional_exports": {},
           "import_library": "rometadata.lib"
+        },
+        "arm64": {
+          "image_sha256": "e94f0e502a59a1c526d5129378b327450e95ea694c61b609579e09627c117876",
+          "additional_exports": {},
+          "import_library": "rometadata.lib"
         }
       }
     },
