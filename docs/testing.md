@@ -9238,6 +9238,16 @@ XOR followed by an AH write and a zero-extended EAX address calculation.
 `ReturnContracts.SharedShiftsProveOnlyObservableDifferences` checks retained
 and discarded bits, sign fill, zero and oversized shifts, and shift counts
 whose scalar value is unknown.
+`ReturnContracts.VariableShiftsNeedDisjointObservedResults` covers a
+register count, sparse masks, sign fill, missing and mispaired PHI inputs,
+and a store on an incoming arm. The `ReturnContract` cases
+`SharedX86ShiftPairsCLWithItsOwnArm`, `SharedX86ShiftUsesEveryEarlierCount`
+and `SharedMIPSRegisterShiftObservesTheDelaySlotMask` run both C outputs.
+Each pairs a proven result with a case where legal counts erase the observed
+difference. `SharedMIPSWordShiftChecksTheOperandOnEachArm` pairs a word
+right shift with a separate count write and checks both orders of the counts.
+The [return recovery skill](../.agents/skills/neverd-return-recovery/SKILL.md)
+describes the corresponding original-machine checks.
 `ReturnContract.SharedX86ReturnKeepsTheShiftedLowNibble` executes both C
 outputs after a shared shift by 60.
 `ReturnContract.SharedMIPSSignExtensionRequiresAWordOnEachArm` checks a

@@ -195,6 +195,8 @@ inline constexpr uint64_t kPipelineLowIRMaxDecodeWeight = 1ull << 20;
 // a degenerate image, which gets the answers no assumption supports.
 inline constexpr unsigned kPipelineReturnContractsMaxRounds = 8;
 inline constexpr unsigned kPipelineReturnContractsClassifyMaxDepth = 32;
+/// SSA count definitions and PHI inputs inspected for one variable-shift arm.
+inline constexpr unsigned kPipelineReturnShiftCountWork = 128;
 
 // lib/pipeline/StateSourceBank.cpp
 inline constexpr unsigned kStateSourceBankBankOffsetsBudget = 128;

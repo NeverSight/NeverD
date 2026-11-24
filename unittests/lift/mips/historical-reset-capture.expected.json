@@ -1,0 +1,22 @@
+{
+  "R4300": {
+    "pdf_page": 47,
+    "ns_per_pixel": 2,
+    "start_event": {"kind": "reset_release", "signal": "ResetB", "edge": "rising"},
+    "end_event": {"kind": "external_boot_read_request", "signal": "PValidB", "edge": "falling"},
+    "reset_release_x_px": [127, 129],
+    "first_valid_request_x_px": [227, 229],
+    "interval_ns": 200,
+    "raster_bounds_ns": [196, 204]
+  },
+  "R4600": {
+    "pdf_page": 58,
+    "ns_per_pixel": 1,
+    "start_event": {"kind": "reset_release", "signal": "ResetB", "edge": "rising"},
+    "end_event": {"kind": "external_boot_read_request", "signal": "ValidOutB", "edge": "falling"},
+    "reset_release_x_px": [179, 181],
+    "first_valid_request_x_px": [243, 245],
+    "interval_ns": 64,
+    "raster_bounds_ns": [62, 66]
+  }
+}
