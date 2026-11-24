@@ -101,6 +101,16 @@ through x64 Clang and x64 NeverC at O0/O2. The
 also documents that some processors decode UD0 without ModR/M; callers must
 bind the target processor rather than infer this choice from the host.
 
+The [UD0 and integration qualification](evidence/x86-ud0-fetch-and-integration-2026-11-24.json)
+binds the P/E-core KVM comparisons, both SDKs' full paging and mode suites,
+and the latest `e6e6ac13df` generated-C and selected software regressions to
+their exact source commits and report hashes. The hosted
+[`test_mac_intel` run](https://github.com/gmh5225/test_mac_intel/actions/runs/45371725990)
+passed 37 of 38 selected cases at `eff781e8b3`; the remaining original-mode
+KVM case skipped because that runner could not open `/dev/kvm`. All three
+hosted SGX probes found zero EPC sections, so native enclave execution and
+the final LLVM release remain unqualified.
+
 | Execution domain | Verified behavior |
 | --- | --- |
 | Real, virtual-8086, protected, compatibility and 64-bit code | Control-register and far transfers, task gates and nested IRET, Intel SYSENTER and SYSEXIT, and original-IDT fault frames. An incoming task or a backing pause preserves the completed stores and the original restart point. |

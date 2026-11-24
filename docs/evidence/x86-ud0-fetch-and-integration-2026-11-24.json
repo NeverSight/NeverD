@@ -1,0 +1,363 @@
+{
+  "local_date": "2026-11-23",
+  "generated_utc_date": "2026-11-24",
+  "scope": "UD0 processor-bound original fetch priority and current mixed-mode/SMM/SGX/event integration; no claim of global x86 or native SGX completion",
+  "implementation_commits": [
+    "838dcbf688",
+    "aa480c0ef6"
+  ],
+  "sdks": {
+    "production_llvm": "neverd-llvm-v23.0.0-r7 / 0fc04bcc24c22f759f3dbddaa3bbd202563c01fb",
+    "candidate_native_llvm": "e7c81b978b440561583eeb43771cb9d486e3f8ff",
+    "neverc": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+    "neverc_source_targets": "x86-64 and AArch64 only; both 64-bit"
+  },
+  "qualification": {
+    "full_paging_p_and_e_per_sdk": {
+      "source_commit": "f695264ca91c3d3dceba1d901767eeb39149c625",
+      "tests_per_core": 861,
+      "passed_per_core": 859,
+      "la57_hardware_skips_per_core": 2,
+      "production_sdk_reports": {
+        "ud0-latest-paging-r7-e0.xml": {
+          "tests": 216,
+          "passed": 216,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "31e9c2705ad8f4602712dfd6410372573496cb8d39df904a1642d2750d655ecc"
+        },
+        "ud0-latest-paging-r7-e1.xml": {
+          "tests": 215,
+          "passed": 214,
+          "skipped": 1,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "ff8b2aac0c489b7957ab05d83c078426b41ce1b2bfe29a593e4595d607b8b3a8"
+        },
+        "ud0-latest-paging-r7-e2.xml": {
+          "tests": 215,
+          "passed": 215,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "c92e5ec42901b444cf63f64a3fcefed5f3d0805735df0cc8e6d1823b4f1bc8d0"
+        },
+        "ud0-latest-paging-r7-e3.xml": {
+          "tests": 215,
+          "passed": 214,
+          "skipped": 1,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "3458bf6b6db115cdb340c163ef02dffa1b8a03f50aa71eea772e4b2a5f5c3cb8"
+        },
+        "ud0-latest-paging-r7-p0.xml": {
+          "tests": 216,
+          "passed": 216,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "3dac430cc9f09df24db19c8999840a82e3b10c4127cb68af9aa71b59831f47aa"
+        },
+        "ud0-latest-paging-r7-p1.xml": {
+          "tests": 215,
+          "passed": 214,
+          "skipped": 1,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "38bcd4460d96bc287adfc475fc44975fe4c4243060481ba0287cd9eb20f64e57"
+        },
+        "ud0-latest-paging-r7-p2.xml": {
+          "tests": 215,
+          "passed": 215,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "cae69f2063dbdfb6d0c7b5001a9ec6057b36b210b9fd1ae1c081973f9eed2a44"
+        },
+        "ud0-latest-paging-r7-p3.xml": {
+          "tests": 215,
+          "passed": 214,
+          "skipped": 1,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "487b57ee5899d1dd252f22d1540d7c6a448e8dd20bdec63dd4334058f53b29bb"
+        }
+      },
+      "candidate_native_sdk_reports": {
+        "source_commit": "3a33b6b4cf298450c4592629d95e5ec8f6d42733",
+        "reports": {
+          "ud0-full-paging-native-e0.xml": {
+            "tests": 216,
+            "passed": 216,
+            "skipped": 0,
+            "failures": 0,
+            "errors": 0,
+            "sha256": "8ebd76c04fb71d9f2b7f4e758d9b9543a55d9d6ba70c98ba7bfb932f5fa872d0"
+          },
+          "ud0-full-paging-native-e1.xml": {
+            "tests": 215,
+            "passed": 214,
+            "skipped": 1,
+            "failures": 0,
+            "errors": 0,
+            "sha256": "5b9f14d2361e29d572fa0097abf1ae2eb06310f67bc98528593bf0c71fbed683"
+          },
+          "ud0-full-paging-native-e2.xml": {
+            "tests": 215,
+            "passed": 215,
+            "skipped": 0,
+            "failures": 0,
+            "errors": 0,
+            "sha256": "3f4b5be2a331e73481c9a8832e438d88bf62730c4d7abc16eabd50ceb305d8c8"
+          },
+          "ud0-full-paging-native-e3.xml": {
+            "tests": 215,
+            "passed": 214,
+            "skipped": 1,
+            "failures": 0,
+            "errors": 0,
+            "sha256": "1c44421596ee7cbfde7231589a0895bdaa94938f42f0ecb2cb7c639819f11d36"
+          },
+          "ud0-full-paging-native-p0.xml": {
+            "tests": 216,
+            "passed": 216,
+            "skipped": 0,
+            "failures": 0,
+            "errors": 0,
+            "sha256": "43f949e5a7d2596e76c1e9b2b70b22decbaf94835b5b943e5041af1484a0616b"
+          },
+          "ud0-full-paging-native-p1.xml": {
+            "tests": 215,
+            "passed": 214,
+            "skipped": 1,
+            "failures": 0,
+            "errors": 0,
+            "sha256": "f3fd650efde88234b9ebc053611f2afdc34f2519a90914007c603ea2edc51ed1"
+          },
+          "ud0-full-paging-native-p2.xml": {
+            "tests": 215,
+            "passed": 215,
+            "skipped": 0,
+            "failures": 0,
+            "errors": 0,
+            "sha256": "50d1d907c9403212aaae5ba43d7f54b2659f8ecbeceea3c6e12093bd2b16ce01"
+          },
+          "ud0-full-paging-native-p3.xml": {
+            "tests": 215,
+            "passed": 214,
+            "skipped": 1,
+            "failures": 0,
+            "errors": 0,
+            "sha256": "88b7ad7f6902f0ac1e3c32c07df9b263d229ef85870c07f9dd6dd11e0e578346"
+          }
+        }
+      }
+    },
+    "complete_mode_execution_at_eff781": {
+      "source_commit": "eff781e8b3bb6720eddbce83dc1cf22082fe4d9d",
+      "reports": {
+        "ud0-eff781-mode-native.xml": {
+          "tests": 243,
+          "passed": 243,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "973004b14e757063ec9f4dcb07fd53c0853c62b7a7fdb87c6463a78b839ae704"
+        },
+        "ud0-eff781-mode-r7.xml": {
+          "tests": 243,
+          "passed": 243,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "3809ad37cc071a617f9dbca7565a5633fa5ba5dee4284ad9a4f785a2b3a93819"
+        }
+      }
+    },
+    "current_generated_c_and_software": {
+      "source_commit": "e6e6ac13dffab7b13d1ecc32e51124cd2f53c534",
+      "reports": {
+        "ud0-e6e6-source-native.xml": {
+          "tests": 261,
+          "passed": 261,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "4d2330eecfba2d2aeae617ac1e1cd576f4c344d0ae5b0505321dfbfd172d616c"
+        },
+        "ud0-e6e6-source-r7.xml": {
+          "tests": 261,
+          "passed": 261,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "b5860fc49b8825fd29d3bc1e9d8e2b53884848e8d6fa049a6836e68113293eab"
+        },
+        "ud0-e6e6-software-native/software.json": {
+          "tests": 38,
+          "passed": 38,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "45a36af7d098951f237ec6796881b0724f6ad5bd2cedad146d9edc36417f2fd4"
+        },
+        "ud0-e6e6-software-r7/software.json": {
+          "tests": 38,
+          "passed": 38,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "45a36af7d098951f237ec6796881b0724f6ad5bd2cedad146d9edc36417f2fd4"
+        }
+      }
+    },
+    "current_ud0_p_and_e": {
+      "source_commit": "e6e6ac13dffab7b13d1ecc32e51124cd2f53c534",
+      "original_kvm_comparisons_per_core_per_sdk": 24,
+      "reports": {
+        "ud0-e6e6-focused-native-e.xml": {
+          "tests": 3,
+          "passed": 3,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "10277496695b916504ef98abb1c57466c1d3d372d94a923f8913376c6af58a42"
+        },
+        "ud0-e6e6-focused-native-p.xml": {
+          "tests": 3,
+          "passed": 3,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "4b958f3b4ab3571341bbe3d5e48895a1bf139488cbd6db49ad9b89f179aa9995"
+        },
+        "ud0-e6e6-focused-r7-e.xml": {
+          "tests": 3,
+          "passed": 3,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "a112a827154adf7872295d15c92b449d40e77107fc52a5fa9bb8cf9cbc851bc6"
+        },
+        "ud0-e6e6-focused-r7-p.xml": {
+          "tests": 3,
+          "passed": 3,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "02336299b59403ca88024db6d98b77d6fb88c17cd6a079ee0bf1218862949b18"
+        }
+      }
+    },
+    "current_decoder_and_return": {
+      "source_commit": "e6e6ac13dffab7b13d1ecc32e51124cd2f53c534",
+      "reports": {
+        "ud0-e6e6-coverage-r7.xml": {
+          "tests": 7,
+          "passed": 7,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "21d0057ceabe12a156f4f7eac3934e638f41f2b4ff296f1d62953146d34885cc"
+        },
+        "ud0-e6e6-detail-r7.xml": {
+          "tests": 6,
+          "passed": 6,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "7adefa062b8b62a7f27492dd3da55080ade70f6aeb092dfd53fe701074ca5ace"
+        },
+        "ud0-e6e6-noindex-r7.xml": {
+          "tests": 9,
+          "passed": 9,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "1789e7639a37a5906cd350e3234b053ddf7d82bb704067016ed979c7e4f996a0"
+        },
+        "ud0-e6e6-return-r7.xml": {
+          "tests": 1,
+          "passed": 1,
+          "skipped": 0,
+          "failures": 0,
+          "errors": 0,
+          "sha256": "c6c24f484e9f51b294e01064634e9252f3db98fe8e476650f20049348aec6792"
+        }
+      }
+    },
+    "xbegin_manifest_probe": {
+      "source_commit": "e6e6ac13dffab7b13d1ecc32e51124cd2f53c534",
+      "passed": 6,
+      "failed": 0
+    }
+  },
+  "hosted": {
+    "runner_repo": "gmh5225/test_mac_intel",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45371725990",
+    "workflow_source_commit": "8bdae2df84d68eccb6d28f0d794f7274f40bed24",
+    "neverd_source_commit": "eff781e8b3bb6720eddbce83dc1cf22082fe4d9d",
+    "software_passed": 37,
+    "software_expected": 38,
+    "original_kvm_mode_skipped": 1,
+    "original_kvm_skip_reason": "/dev/kvm open returned errno 13 on Ubuntu hosted runner",
+    "software_report_sha256": "c80452cc9b5cbec0f68b3ec6ec6b04d7dde6ab02d4c63c1fadf18df4d3af357d",
+    "neverc_compiler_preflight_sha256": "a9be8693132faeb5a954aa181ef65ae2013898c50b75a23407d9017dc5d8010d",
+    "neverc_binary_sha256": "bacea5fe079c961ec2778287badff9b45b0e37e5fb5a9de016aa8e47b01f3cc2",
+    "native_sgx": {
+      "macos-15-intel": {
+        "sgx1": false,
+        "accessible_device": false,
+        "enclave_instruction_executions": 0,
+        "report_sha256": "c340b894291d7cde087414365235bc7903b971cbd959c7e601b1ce10ad169204",
+        "first_epc_section_type": 0
+      },
+      "macos-26-intel": {
+        "sgx1": false,
+        "accessible_device": false,
+        "enclave_instruction_executions": 0,
+        "report_sha256": "8628f93e057e95eb6c7759d7ff5d7a7df9be766be9b0834e91c07d5fa2e8b8d1",
+        "first_epc_section_type": 0
+      },
+      "ubuntu-24.04": {
+        "sgx1": false,
+        "accessible_device": false,
+        "enclave_instruction_executions": 0,
+        "report_sha256": "b96cabda6ccd2bd4a0c9c8fac163b96dd7ed8256ddf505a2d92031d0796a7fa7",
+        "first_epc_section_type": 0
+      }
+    }
+  },
+  "vmrun_addr32": {
+    "hosted_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45334702918",
+    "comparison_record": "docs/evidence/x86-vmrun-hosted-kvm-2026-11-21.json",
+    "original_and_generated_guest_images": 12,
+    "generated_contexts_per_host": 200,
+    "rax_high32_zero": "returns with VMEXIT 0x81 and RCX 0x5678",
+    "rax_high32_nonzero": "#GP(0) at 67 0f 01 d8, including generated provenance",
+    "current_export_source_commit": "e6e6ac13dffab7b13d1ecc32e51124cd2f53c534",
+    "current_export_sha256": {
+      "highc": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+      "llvm_to_c": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1"
+    },
+    "current_export_test": {
+      "ud0-e6e6-vmrun-export-r7.xml": {
+        "tests": 1,
+        "passed": 1,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "a8b94046aa6698720239bfabe38d036508bb309a6481d11ede12a354fd544bdb"
+      }
+    }
+  },
+  "release_gate": {
+    "native_sgx_executed": false,
+    "global_x86_complete": false,
+    "new_llvm_release_published": false,
+    "production_pin_updated": false,
+    "reason": "Designated hosted runners expose no SGX1/EPC or accessible enclave device. Native enclave behavior remains unverified, and explicit ordinary-source and processor-environment gaps remain."
+  },
+  "tested_dev_commit": "e6e6ac13dffab7b13d1ecc32e51124cd2f53c534"
+}
