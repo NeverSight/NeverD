@@ -1,16 +1,16 @@
-//===- Arm64eOrderedModel.c - Compare signed-offset LRCPC3 quadwords -----===//
+//===- Arm64eOrderedModel.c - Compare signed-offset ordered accesses ------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Exercise each byte alignment in Normal memory and inspect the hardware
+/// Exercise every address residue in Normal memory and inspect the hardware
 /// exception state before resuming past an expected alignment fault.
 //===----------------------------------------------------------------------===//
 
 #include "Arm64eOrderedModel.def"
 
-#include "Arm64eReturnModel.def"
+#include "Arm64eOrderedAccess.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -19,84 +19,116 @@
 typedef uint64_t Quadword __attribute__((vector_size(ORDERED_QUAD_BYTES)));
 
 typedef struct {
-  uint64_t Armed, ESR, FAR, Word;
-} FaultRecord;
-_Static_assert(offsetof(FaultRecord, Armed) == ORDERED_ARMED_SLOT &&
-                   offsetof(FaultRecord, ESR) == ORDERED_ESR_SLOT &&
-                   offsetof(FaultRecord, FAR) == ORDERED_FAR_SLOT &&
-                   offsetof(FaultRecord, Word) == ORDERED_WORD_SLOT,
-               ORDERED_LAYOUT_ERROR);
+  uint32_t Word;
+  int Offset;
+  unsigned Width, ResultBytes;
+  bool Vector, Signed;
+} OrderedCase;
 
-#define DECLARE(Index, Offset, LD, ST)                                         \
-  extern uint64_t ORDERED_SYMBOL(LD)(uintptr_t, uint64_t);                     \
-  extern uint64_t ORDERED_SYMBOL(ST)(uintptr_t, uint64_t, uint64_t, uint64_t);
-ORDERED_CASES(DECLARE)
-#undef DECLARE
+static const OrderedCase Cases[] = {
+#define ORDERED_MEMORY_CASE(Word, Scratch, Vector, Access, Result, Signed,     \
+                            Offset)                                            \
+  {Word, Offset, Access, Result, Vector, Signed},
+#include "AArch64OrderedMemoryFixtures.def"
+};
+_Static_assert(sizeof(Cases) / sizeof(*Cases) == ORDERED_CASE_COUNT,
+               ORDERED_CASE_ERROR);
 
-static uint64_t accessQuadword(unsigned Case, bool Original, bool Load,
-                               uintptr_t Base, unsigned Lane) {
-  Quadword Value = {ORDERED_STORE_LOW, ORDERED_STORE_HIGH};
-  switch (Case) {
-#define ACCESS(Index, Offset, LD, ST)                                          \
-  case Index:                                                                  \
-    if (Original) {                                                            \
-      if (Load) {                                                              \
-        __asm__ volatile(ORDERED_LOAD_ASM                                      \
-                         : "+w"(Value)                                         \
-                         : "r"(Base), "i"(Offset)                              \
-                         : "memory");                                          \
-        return Value[Lane];                                                    \
-      }                                                                        \
-      __asm__ volatile(ORDERED_STORE_ASM ::"w"(Value), "r"(Base), "i"(Offset)  \
+extern uint64_t generatedOrdered(uint32_t Word, uintptr_t Base, uint64_t Lane,
+                                 uint64_t Low, uint64_t High);
+
+// Execute the independently assembled fixture word as supplied. Explicit
+// register operands match the encoded Rn and Rt and inform the host compiler
+// about both the inputs and the effects of the original instruction.
+static uint64_t originalOrdered(uint32_t Word, uintptr_t Base, unsigned Lane) {
+  register uintptr_t X1 __asm__(ORDERED_BASE_REGISTER) = Base;
+  switch (Word) {
+#define ORDERED_MEMORY_CASE(Bits, Scratch, Vector, Access, Result, Signed,     \
+                            Offset)                                            \
+  case Bits: {                                                                 \
+    _Static_assert(((Bits) & ORDERED_REGISTER_MASK) ==                         \
+                       ORDERED_REGISTER_FIELDS,                                \
+                   ORDERED_REGISTER_ERROR);                                    \
+    if (Vector) {                                                              \
+      register Quadword V0 __asm__(ORDERED_VECTOR_REGISTER) =                  \
+          (Quadword){ORDERED_STORE_LOW, ORDERED_STORE_HIGH};                   \
+      __asm__ volatile(ORDERED_INSTRUCTION                                     \
+                       : "+w"(V0)                                              \
+                       : "r"(X1), [encoding] "i"(Bits)                         \
                        : "memory");                                            \
-      return 0;                                                                \
+      return V0[Lane];                                                         \
     }                                                                          \
-    if (Load)                                                                  \
-      return ORDERED_SYMBOL(LD)(Base, Lane);                                   \
-    return ORDERED_SYMBOL(ST)(Base, 0, Value[0], Value[1]);
-    ORDERED_CASES(ACCESS)
-#undef ACCESS
+    register uint64_t X0 __asm__(ORDERED_DATA_REGISTER) = ORDERED_STORE_LOW;   \
+    __asm__ volatile(ORDERED_INSTRUCTION                                       \
+                     : "+r"(X0)                                                \
+                     : "r"(X1), [encoding] "i"(Bits)                           \
+                     : "memory");                                              \
+    return X0;                                                                 \
+  }
+#include "AArch64OrderedMemoryFixtures.def"
   }
   __builtin_unreachable();
 }
 
-static bool checkAccess(unsigned Case, int Offset, uint32_t Word,
-                        unsigned Misalignment, bool Original, bool Load,
-                        bool Relaxed, unsigned EL) {
+uint64_t accessOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
+                       bool Original) {
+  if (Original)
+    return originalOrdered(Word, Base, Lane);
+  return generatedOrdered(Word, Base, Lane, ORDERED_STORE_LOW,
+                          ORDERED_STORE_HIGH);
+}
+
+static uint64_t expectedLane(const OrderedCase *Case, const uint8_t *Address,
+                             unsigned Lane) {
+  uint64_t Value = 0;
+  unsigned Start = Lane * sizeof(Value);
+  for (unsigned I = 0; I < sizeof(Value) && Start + I < Case->Width; ++I)
+    Value |= (uint64_t)Address[Start + I] << (I * __CHAR_BIT__);
+  if (Case->Signed) {
+    const uint64_t Sign = UINT64_C(1) << (Case->Width * __CHAR_BIT__ - 1);
+    Value = (Value ^ Sign) - Sign;
+  }
+  return Case->ResultBytes == sizeof(uint32_t) ? (uint32_t)Value : Value;
+}
+
+static bool checkAccess(const OrderedCase *Case, unsigned Residue,
+                        bool Original, unsigned Mode, unsigned EL) {
   _Alignas(ORDERED_QUAD_BYTES)
       uint8_t Bytes[ORDERED_QUAD_BYTES * ORDERED_GUARD_QUADS];
   for (unsigned I = 0; I != sizeof(Bytes); ++I)
     Bytes[I] = (uint8_t)(I * ORDERED_DATA_STEP + ORDERED_DATA_SEED);
-  uint8_t *Address = Bytes + ORDERED_QUAD_BYTES + Misalignment;
-  const uintptr_t Base = (uintptr_t)Address - Offset;
-  const bool ExpectFault = Misalignment && !Relaxed;
-  volatile FaultRecord *Fault = (volatile FaultRecord *)RETURN_MODEL_EL0_DATA;
-  // The lifted load exposes one lane per call. Validate both independently.
-  for (unsigned Lane = 0; Lane != (Load ? ORDERED_LANES : 1); ++Lane) {
-    Fault->Armed = ExpectFault;
-    const uint64_t Result = accessQuadword(Case, Original, Load, Base, Lane);
+  uint8_t *Address = Bytes + ORDERED_QUAD_BYTES + Residue;
+  const uintptr_t Base = (uintptr_t)Address - Case->Offset;
+  const bool Load = Case->ResultBytes != 0;
+  const bool Unaligned = Residue % Case->Width != 0;
+  const bool Crosses = Residue + Case->Width > ORDERED_QUAD_BYTES;
+  const bool ExpectFault = (Unaligned && (Mode & ORDERED_MODE_A)) ||
+                           (Crosses && !(Mode & ORDERED_MODE_NAA));
+  const unsigned Lanes = Case->Vector && Load ? ORDERED_LANES : 1;
+  for (unsigned Lane = 0; Lane != Lanes; ++Lane) {
+    OrderedAbort Abort;
+    uint64_t Result;
+    if (observeOrdered(Case->Word, Base, Lane, Original, ExpectFault, &Result,
+                       &Abort) != ExpectFault)
+      return false;
     if (ExpectFault) {
-      const uint64_t ESR = Fault->ESR;
-      if (Fault->Armed || Fault->FAR != (uintptr_t)Address ||
+      const uint64_t ESR = Abort.ESR;
+      if (Abort.FAR != (uintptr_t)Address ||
           (ESR >> ORDERED_EC_SHIFT) !=
               (EL ? ORDERED_ABORT_EL1 : ORDERED_ABORT_EL0) ||
           (ESR & (ORDERED_DFSC_MASK | ORDERED_FNV)) !=
               ORDERED_ALIGNMENT_FAULT ||
           !!(ESR & ORDERED_WRITE) == Load ||
-          ((Fault->Word ^ Word) & ~ORDERED_REGISTER_MASK))
+          ((Abort.Word ^ Case->Word) & ~ORDERED_REGISTER_MASK))
         return false;
-    } else if (Load) {
-      uint64_t Expected;
-      __builtin_memcpy_inline(&Expected, Address + Lane * sizeof(Expected),
-                              sizeof(Expected));
-      if (Result != Expected)
-        return false;
+    } else if (Load && Result != expectedLane(Case, Address, Lane)) {
+      return false;
     }
   }
   for (unsigned I = 0; I != sizeof(Bytes); ++I) {
     uint8_t Expected = (uint8_t)(I * ORDERED_DATA_STEP + ORDERED_DATA_SEED);
     const ptrdiff_t Pos = Bytes + I - Address;
-    if (!Load && !ExpectFault && Pos >= 0 && Pos < ORDERED_QUAD_BYTES) {
+    if (!Load && !ExpectFault && Pos >= 0 && (size_t)Pos < Case->Width) {
       const uint64_t Half = Pos < (ptrdiff_t)sizeof(uint64_t)
                                 ? ORDERED_STORE_LOW
                                 : ORDERED_STORE_HIGH;
@@ -108,29 +140,18 @@ static bool checkAccess(unsigned Case, int Offset, uint32_t Word,
   return true;
 }
 
-int compareOrdered(unsigned Mode, unsigned EL) {
-  static const struct {
-    int Offset;
-    uint32_t Load, Store;
-  } Cases[] = {
-#define ITEM(Index, Offset, LD, ST)                                            \
-  {Offset, ORDERED_WORD(LD), ORDERED_WORD(ST)},
-      ORDERED_CASES(ITEM)
-#undef ITEM
-  };
-  _Static_assert(sizeof(Cases) / sizeof(*Cases) == ORDERED_CASE_COUNT,
-                 ORDERED_CASE_ERROR);
-  const bool Relaxed = Mode == ORDERED_MODE_NAA;
+int compareOrdered(unsigned Mode, unsigned EL, bool WithSIMD) {
   int Check = 0;
-  for (unsigned Case = 0; Case != ORDERED_CASE_COUNT; ++Case)
-    for (unsigned Align = 0; Align != ORDERED_QUAD_BYTES; ++Align)
-      for (unsigned Original = 0; Original != ORDERED_SOURCE_COUNT; ++Original)
-        for (unsigned Load = 0; Load != ORDERED_DIRECTION_COUNT; ++Load) {
-          ++Check;
-          if (!checkAccess(Case, Cases[Case].Offset,
-                           Load ? Cases[Case].Load : Cases[Case].Store, Align,
-                           Original, Load, Relaxed, EL))
-            return Check;
-        }
+  for (unsigned I = 0; I != ORDERED_CASE_COUNT; ++I) {
+    if (Cases[I].Vector && !WithSIMD)
+      continue;
+    for (unsigned Residue = 0; Residue != ORDERED_QUAD_BYTES; ++Residue)
+      for (unsigned Original = 0; Original != ORDERED_SOURCE_COUNT;
+           ++Original) {
+        ++Check;
+        if (!checkAccess(&Cases[I], Residue, Original, Mode, EL))
+          return Check;
+      }
+  }
   return 0;
 }

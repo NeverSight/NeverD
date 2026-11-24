@@ -101,7 +101,7 @@
   "size_pattern": "^Segment (\\S+): \\d+ \\(vmaddr (0x[0-9a-fA-F]+) fileoff (\\d+)\\)$",
   "test_filter_flag": "--gtest_filter=",
   "test_report_flag": "--gtest_output=json:",
-  "bad_header": "Unexpected arm64e Mach-O header in {path} ({header})",
+  "bad_header": "Unexpected Mach-O header in {path} ({header})",
   "test_failed": "Oracle did not complete exactly once: {name}",
   "bad_export": "Unexpected object directory: {path}",
   "bad_tests": "Incomplete oracle test inventory: {names}",
@@ -161,7 +161,9 @@
     "build_cursor": "build-cursor",
     "run_cursor": "run-cursor",
     "build_ordered": "build-ordered",
-    "run_ordered": "run-ordered"
+    "run_ordered": "run-ordered",
+    "build_native_ordered": "build-native-ordered",
+    "run_native_ordered": "run-native-ordered"
   },
   "compile_only": "-c",
   "output_option": "-o",
@@ -195,6 +197,13 @@
     },
     "object_route": "llvm-object",
     "object_file": "llvm-arm64e.o",
+    "dispatch": "ordered-dispatch.c",
+    "interface": "Arm64eOrderedAccess.h",
+    "fixture_directory": "unittests/lift/aarch64",
+    "fixture": "AArch64OrderedMemoryFixtures.def",
+    "include_option": "-I",
+    "profile": "signed-offset-gpr-simd",
+    "legacy_passed": "ORDERED-MODEL passed quadword comparisons",
     "march": "-march=armv8.3-a+rcpc3",
     "parameters": {
       "cluster0.has_lrcpc3": 1
@@ -210,7 +219,24 @@
       "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=0",
       "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=1"
     ],
-    "passed": "ORDERED-MODEL passed quadword comparisons",
-    "alignment_flag": "-mstrict-align"
+    "passed": "ORDERED-MODEL passed GPR and SIMD comparisons",
+    "alignment_flag": "-mstrict-align",
+    "native": {
+      "target": "arm64-apple-macos15",
+      "subtype": 0,
+      "driver": "Arm64eOrderedNative.c",
+      "object_file": "llvm-macho.o",
+      "profile": "darwin-signed-offset-gpr-simd",
+      "skip_exit": 77,
+      "unavailable": "ORDERED-NATIVE LSE2 or LRCPC2 unavailable",
+      "gpr": "ORDERED-NATIVE GPR, aligned Q instructions unavailable",
+      "simd": "ORDERED-NATIVE GPR and SIMD",
+      "rules": [
+        "ORDERED-NATIVE within one granule",
+        "ORDERED-NATIVE unrestricted Normal-memory alignment",
+        "ORDERED-NATIVE natural alignment"
+      ],
+      "inconsistent": "Darwin ordered-memory routes reported different outcomes"
+    }
   }
 }

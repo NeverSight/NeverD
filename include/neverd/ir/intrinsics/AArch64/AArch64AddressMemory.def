@@ -367,6 +367,7 @@ NEVERD_A64_ADDRESS_UNSCALED_MEMORY_ENCODING(A64_VectorStoreImmediate,
 NEVERD_A64_ADDRESS_UNSCALED_MEMORY_ENCODING(A64_VectorLoadImmediate,
                                             0xdd400800U, 8, 16, false)
 // Effective SCTLR alignment controls for Normal-memory LRCPC3 quadwords.
+NEVERD_A64_ADDRESS_MEMORY_VALUE(unsigned, kAddressMemoryOrderedGranuleBytes, 16)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(uint64_t, kAddressMemorySCTLRAlign, 0x2ULL)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(uint64_t, kAddressMemorySCTLRnAA, 0x40ULL)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(uint32_t, kAddressMemoryOrderedClassMask,

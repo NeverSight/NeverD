@@ -2422,6 +2422,64 @@ and passed individually under the same limit. Exact inputs and outcomes are in t
 [qualification record](evidence/arm64e-lrcpc3-quadword-2026-11-24.json) and
 [hosted replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45362122292).
 
+### Ordered accesses within and across a 16-byte boundary
+
+The signed-offset model now exercises all 115 fixture encodings. These cover
+the 13 GPR and 10 SIMD/FP load and store forms, each at displacements −256,
+−1, 0, 1 and 255. The original path executes the fixture instruction with its
+encoded registers. The generated path calls the exported HighC, LLVM-to-C or
+backend function for the same word. The guest checks each byte residue, both
+SIMD lanes, signed and unsigned results, guard bytes and precise alignment
+aborts at EL0 and EL1. It reads back both FEAT_LSE2 and the alignment controls.
+The preceding `build-ordered` and `run-ordered` commands build and run this
+matrix. Manifests from the original Q-only matrix retain their original
+completion record.
+
+For a supported ordered unscaled access to Normal memory on a PE with
+FEAT_LSE2, pass the effective SCTLR to
+`NdOpEmulator::stepWithAArch64LSE2OrderedSCTLR`. With A set the access must
+be naturally aligned. With A and nAA clear all accessed bytes must fit within
+one aligned 16-byte region. Setting nAA with A clear also permits crossings.
+The observation applies to one instruction. Mapped bytes and access
+permissions still determine whether tracing can commit an effect.
+[Arm SCTLR_EL1](https://support.arm.com/documentation/ddi0601/2026-09/AArch64-Registers/SCTLR-EL1--System-Control-Register--EL1-).
+
+On Apple Silicon the native driver runs ordinary arm64 Mach-O executables.
+It observes the alignment rule with original GPR loads, then checks each
+generated route under that rule. Darwin supplies the signal code, fault
+address, opcode and syndrome. Aligned Q load and store probes independently
+determine whether the SIMD sweep can execute. The report identifies the
+register classes exercised on that machine.
+
+```sh
+python3 scripts/verify_arm64e_return_model.py build-native-ordered \
+  --tests build-release/bin/NeverDArm64eAnalysisTests --output darwin-ordered
+python3 scripts/verify_arm64e_return_model.py run-native-ordered \
+  --guests darwin-ordered --output darwin-ordered-results
+```
+
+The local and hosted Arm models agreed on all 73,600 comparisons of an
+original and a generated access in this matrix. On an M4 Max and on M1
+virtual CPUs provided by macOS 15, macOS 26 and Xcode 27 runners, all five
+routes passed the 65 GPR encodings at every address residue. The aligned Q
+load and store each raised SIGILL on those hosts. Three controls changed a
+generated function's alignment behavior, faulting opcode or signed result.
+The Arm model and the M4 Max caught each change at the same comparison.
+[Hosted model and Darwin results](https://github.com/gmh5225/test_mac_intel/actions/runs/45377564656).
+
+On this integrated r6 build, macOS 26 and Xcode 27 each passed 36 of the
+39 previously skipped cases. Their remaining native comparisons require
+the 128-bit SIMD ordered instructions, explicit two-modifier PAuth_LR and
+PC-dependent PACM. Six image-publication cases that reached the local
+timeout also completed on macOS 26, executing 26 published images.
+Across both local Release targets, 1,034 of 1,070 cases passed and 36 skipped.
+Seven cases reached the timeout during the parallel run and all passed
+individually under the same 120-second limit. The hosted tests supplied
+passes for 33 of those 36 skips. All 56 arm64e Python tests passed.
+[Installation and instruction replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45379254463),
+[native publication replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45379983555)
+and [qualification record](evidence/arm64e-ordered-granules-2026-11-24.json).
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs

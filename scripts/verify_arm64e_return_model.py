@@ -30,11 +30,11 @@ def cases():
                 yield family, route, optimization
 
 
-def check_macho(path, kind):
+def check_macho(path, kind, subtype=CONFIG["arm64e_subtype"]):
     header = struct.unpack_from(CONFIG["macho_header"], path.read_bytes())
-    magic, cpu, subtype, filetype = header
+    magic, cpu, actual_subtype, filetype = header
     if (magic != CONFIG["macho_magic"] or cpu != CONFIG["arm64_cpu"] or
-            subtype & CONFIG["subtype_mask"] != CONFIG["arm64e_subtype"] or filetype != kind):
+            actual_subtype & CONFIG["subtype_mask"] != subtype or filetype != kind):
         raise ValueError(CONFIG["bad_header"].format(path=path, header=header))
 
 
@@ -59,8 +59,8 @@ def export_cases(binary, scratch, names, environment, artifact_property, extra_e
     return exported
 
 
-def compile_object(source, obj, flags=()):
-    subprocess.run([*CONFIG["compiler"], CONFIG["target"], CONFIG["march"], *flags,
+def compile_object(source, obj, flags=(), target=CONFIG["target"]):
+    subprocess.run([*CONFIG["compiler"], target, CONFIG["march"], *flags,
                     CONFIG["compile_only"], source, CONFIG["output_option"], obj], check=True)
 
 
@@ -149,21 +149,29 @@ def build_cursor(output):
         staged.rename(output)
 
 
-def ordered_routes(policy):
+def ordered_routes(object_file):
+    policy = CONFIG["ordered"]
     for route, source in policy["sources"].items():
         for optimization in CONFIG["optimizations"]:
             yield route + "-" + optimization, source, "-" + optimization
-    yield policy["object_route"], policy["object_file"], None
+    yield policy["object_route"], object_file, None
 
 
-def build_ordered(binary, output):
+def build_ordered(binary, output, native=False):
     if output.exists():
         raise FileExistsError(output)
     policy = CONFIG["ordered"]
+    target = policy["native"] if native else policy
+    triple = target["target"] if native else CONFIG["target"]
+    subtype = target["subtype"] if native else CONFIG["arm64e_subtype"]
     source = ROOT / CONFIG["guest_directory"]
-    inputs = [CONFIG[key] for key in ("guest_entry", "guest_driver", "guest_constants")]
-    inputs.extend((policy["driver"], policy["constants"]))
+    fixtures = ROOT.parent / policy["fixture_directory"]
+    inputs = [policy["driver"], policy["constants"], policy["interface"]]
+    inputs.extend([target["driver"]] if native else
+                  [CONFIG[key] for key in ("guest_entry", "guest_driver", "guest_constants")])
     manifest = {"test_binary_sha256": digest(binary), "guests": {},
+                "ordered_profile": target["profile"],
+                "fixtures": {policy["fixture"]: digest(fixtures / policy["fixture"])},
                 "sources": {name: digest(source / name) for name in inputs}}
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         scratch = Path(temporary).resolve()
@@ -172,23 +180,73 @@ def build_ordered(binary, output):
         exports = export_cases(binary, scratch, [policy["test"]],
                                policy["artifact_environment"], policy["artifact_property"])[policy["test"]]
         manifest["exports"] = {name: digest(exports / name)
-                               for name in [*policy["sources"].values(), policy["object_file"]]}
-        entry = scratch / CONFIG["entry_object"]
-        flags = [*CONFIG["driver_flags"], policy["define"], policy["alignment_flag"]]
-        compile_object(source / CONFIG["guest_entry"], entry, [policy["define"]])
-        driver = scratch / (Path(CONFIG["guest_driver"]).stem + CONFIG["test_object_extension"])
+                               for name in [*policy["sources"].values(), target["object_file"], policy["dispatch"]]}
+        flags = [*CONFIG["driver_flags"], policy["alignment_flag"]]
+        if not native:
+            flags.append(policy["define"])
+            entry = scratch / CONFIG["entry_object"]
+            compile_object(source / CONFIG["guest_entry"], entry, [policy["define"]])
+        driver_source = target["driver"] if native else CONFIG["guest_driver"]
+        driver = scratch / (Path(driver_source).stem + CONFIG["test_object_extension"])
         oracle = scratch / (Path(policy["driver"]).stem + CONFIG["test_object_extension"])
-        compile_object(source / CONFIG["guest_driver"], driver, flags)
-        compile_object(source / policy["driver"], oracle, [*flags, policy["march"]])
-        for label, filename, optimization in ordered_routes(policy):
+        dispatch = scratch / (Path(policy["dispatch"]).stem + CONFIG["test_object_extension"])
+        compile_object(source / driver_source, driver, flags, triple)
+        compile_object(source / policy["driver"], oracle,
+                       [*flags, policy["march"], policy["include_option"], fixtures], triple)
+        compile_object(exports / policy["dispatch"], dispatch, flags, triple)
+        for label, filename, optimization in ordered_routes(target["object_file"]):
             obj = exports / filename
             if optimization:
                 obj = scratch / (label + CONFIG["test_object_extension"])
-                compile_object(exports / filename, obj, [*CONFIG["driver_flags"], optimization])
-            check_macho(obj, CONFIG["object_kind"])
-            manifest["guests"][label] = link_guest(staged / label, entry, driver, obj, [oracle])
+                compile_object(exports / filename, obj, [*CONFIG["driver_flags"], optimization], triple)
+            check_macho(obj, CONFIG["object_kind"], subtype)
+            image = staged / label
+            if native:
+                subprocess.run([*CONFIG["compiler"], triple, driver, oracle, dispatch, obj,
+                                CONFIG["output_option"], image], check=True)
+                check_macho(image, CONFIG["executable_kind"], subtype)
+                item = {"sha256": digest(image), "object_sha256": digest(obj)}
+            else:
+                item = link_guest(image, entry, driver, obj, [oracle, dispatch])
+            manifest["guests"][label] = item
         write_json(staged / CONFIG["manifest"], manifest)
         staged.rename(output)
+
+
+def run_native_ordered(guests, output):
+    policy = CONFIG["ordered"]
+    target = policy["native"]
+    manifest = json.loads((guests / CONFIG["manifest"]).read_text())
+    names = [label for label, _, _ in ordered_routes(target["object_file"])]
+    if manifest.get("ordered_profile") != target["profile"] or set(manifest["guests"]) != set(names):
+        raise ValueError(CONFIG["bad_inventory"])
+    output.mkdir()
+    result = {"manifest_sha256": digest(guests / CONFIG["manifest"]), "observations": {}}
+    for name in names:
+        image = guests / name
+        if digest(image) != manifest["guests"][name]["sha256"]:
+            raise ValueError(CONFIG["bad_hash"].format(name=name))
+        check_macho(image, CONFIG["executable_kind"], target["subtype"])
+        observed = subprocess.run([image], capture_output=True, text=True, timeout=CONFIG["process_timeout"])
+        (output / (name + CONFIG["model_log_extension"])).write_text(observed.stdout + observed.stderr)
+        records = observed.stdout.splitlines()
+        if observed.returncode == target["skip_exit"]:
+            valid = records == [target["unavailable"]]
+        else:
+            valid = (observed.returncode == 0 and len(records) == 2 and
+                     records[0] in (target["gpr"], target["simd"]) and records[1] in target["rules"])
+        if not valid:
+            raise RuntimeError(CONFIG["bad_observation"].format(
+                label=name, status=observed.returncode, records=records))
+        item = {"records": records, "exit_code": observed.returncode}
+        if name != names[0] and item != result["observations"][names[0]]:
+            raise ValueError(target["inconsistent"])
+        result["observations"][name] = item
+    first = result["observations"][names[0]]
+    result["gpr_executed"] = first["exit_code"] == 0
+    result["simd_executed"] = first["records"][0] == target["simd"]
+    write_json(output / CONFIG["report"], result)
+    return first["exit_code"]
 
 
 def run(model, guests, output, cursor=False, ordered=False):
@@ -200,11 +258,17 @@ def run(model, guests, output, cursor=False, ordered=False):
     manifest = json.loads((guests / CONFIG["manifest"]).read_text())
     policy = CONFIG["ordered"] if ordered else CONFIG
     if ordered:
-        names = [label for label, _, _ in ordered_routes(policy)]
+        names = [label for label, _, _ in ordered_routes(policy["object_file"])]
     elif cursor:
         names = [CONFIG["cursor"]["name"].format(optimization=opt) for opt in CONFIG["optimizations"]]
     else:
         names = ["-".join(case) for case in cases()]
+    passed = policy["passed"]
+    if ordered:
+        if "ordered_profile" not in manifest:
+            passed = policy["legacy_passed"]
+        elif manifest["ordered_profile"] != policy["profile"]:
+            raise ValueError(CONFIG["bad_inventory"])
     if set(manifest["guests"]) != set(names):
         raise ValueError(CONFIG["bad_inventory"])
     result = {"model_version": CONFIG["model_version"], "model_sha256": digest(model),
@@ -233,7 +297,7 @@ def run(model, guests, output, cursor=False, ordered=False):
         records = [line for line in log.read_text().splitlines()
                    if line.startswith(policy["record_prefix"])]
         expected = ([policy["feature_mismatch"]] if negative
-                    else [*policy["control_records"], policy["passed"]])
+                    else [*policy["control_records"], passed])
         if records != expected or observed.returncode != (CONFIG["unsupported_exit"] if negative else 0):
             raise RuntimeError(CONFIG["bad_observation"].format(
                 label=label, status=observed.returncode, records=records))
@@ -247,7 +311,9 @@ if __name__ == "__main__":
     options = CONFIG["commands"]
     link = commands.add_parser(options["build"])
     ordered_link = commands.add_parser(options["build_ordered"])
-    for command in (link, ordered_link):
+    native_link = commands.add_parser(options["build_native_ordered"])
+    native_execute = commands.add_parser(options["run_native_ordered"])
+    for command in (link, ordered_link, native_link):
         command.add_argument(options["tests"], type=Path, required=True)
     cursor_link = commands.add_parser(options["build_cursor"])
     execute = commands.add_parser(options["run"])
@@ -255,14 +321,17 @@ if __name__ == "__main__":
     ordered_execute = commands.add_parser(options["run_ordered"])
     for command in (execute, cursor_execute, ordered_execute):
         command.add_argument(options["model"], type=Path, required=True)
+    for command in (execute, cursor_execute, ordered_execute, native_execute):
         command.add_argument(options["guests"], type=Path, required=True)
-    for command in (link, cursor_link, ordered_link, execute, cursor_execute, ordered_execute):
+    for command in (link, cursor_link, ordered_link, native_link, execute, cursor_execute, ordered_execute, native_execute):
         command.add_argument(options["output"], type=Path, required=True)
     args = parser.parse_args()
     if args.command == options["build"]:
         build(args.tests.resolve(), args.output.resolve())
-    elif args.command == options["build_ordered"]:
-        build_ordered(args.tests.resolve(), args.output.resolve())
+    elif args.command in (options["build_ordered"], options["build_native_ordered"]):
+        build_ordered(args.tests.resolve(), args.output.resolve(), native=args.command == options["build_native_ordered"])
+    elif args.command == options["run_native_ordered"]:
+        raise SystemExit(run_native_ordered(args.guests.resolve(), args.output.resolve()))
     elif args.command == options["build_cursor"]:
         build_cursor(args.output.resolve())
     else:
