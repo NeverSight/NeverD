@@ -115,6 +115,13 @@ adding a cross-page UD0 source case. Each Clang/NeverC O0/O2 lane checks twelve
 code16/code32, profile and address-form combinations, including SIB and disp32,
 for the original fault PC, vector and CR2. The report digests are in the
 same qualification record.
+The [current code64 UD0 qualification](evidence/x86-code64-ud0-fetch-2026-11-24.json)
+records the NeverD dev commit, LLVM r8 and NeverC revisions, P/E-core original
+comparisons, full r8 paging result and separate REP watchpoint runs with their
+required group boundaries. The merged dev revision passed all 247 P-core
+paged tests with its bound group profile. LLVM r8 was released and pinned
+independently for MIPS before this code64 change; it does not qualify a final
+x86 release.
 
 | Execution domain | Verified behavior |
 | --- | --- |

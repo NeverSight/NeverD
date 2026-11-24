@@ -1,0 +1,303 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-24",
+  "scope": "Processor-bound unprefixed code64 UD0 instruction fetch and terminal lowering on current NeverD dev; incremental qualification only",
+  "neverd_code_commit": "e0c792dac62404d726d43586330ee4ad7d842f86",
+  "toolchains": {
+    "current_production_llvm": {
+      "tag": "neverd-llvm-v23.0.0-r8",
+      "commit": "e03b3a2cd27615bd9a8d193b37f36da80d56355b",
+      "published_for_other_work": "https://github.com/gmh5225/test_mac_intel/actions/runs/45373589385"
+    },
+    "earlier_production_llvm": {
+      "tag": "neverd-llvm-v23.0.0-r7",
+      "commit": "0fc04bcc24c22f759f3dbddaa3bbd202563c01fb"
+    },
+    "x86_candidate_llvm": {
+      "commit": "e7c81b978b440561583eeb43771cb9d486e3f8ff"
+    },
+    "neverc": {
+      "source_commit": "e065e748414253c7bae8b580cbde5dbd37975dfe",
+      "binary_sha256": "f7541c872306d9f0461cebc07b17aafae10e9b037c5fbb0bf181924d7fbf9a94",
+      "supported_targets": [
+        "x86_64",
+        "aarch64"
+      ],
+      "rejected_targets": [
+        "i386",
+        "i686",
+        "x32"
+      ]
+    }
+  },
+  "qualified_profiles": {
+    "intel_p_core_4": "complete encoded ModRM/SIB/displacement instruction fetch, data operand unread",
+    "intel_e_core_12": "opcode-only instruction fetch, data operand unread",
+    "generated_c": "HighC and LLVM-to-C, Clang and NeverC, O0/O2; KVM original vector, error code, CR2, fault PC and machine state compared",
+    "noncanonical_rax": "0x0000800000000000 tested; UD0 never consumes the encoded data operand",
+    "missing_profile": "explicit refusal before execution"
+  },
+  "reports": {
+    "r8_full_p": {
+      "file": "ud0-r8-full-p.xml",
+      "tests": 247,
+      "passed": 245,
+      "skipped": 2,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "5c7875d7bd59b522f7cef0e831b9d515a6d4cde88362abe5639107e4e8c3397e",
+      "original_cpu_comparisons": 24
+    },
+    "r8_focused_p": {
+      "file": "ud0-r8-focused-p.xml",
+      "tests": 4,
+      "passed": 4,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "4e5d2bacdd9f8a458b3ffff0d95b0c6e6dafc15f8cafd2a18cd991bce521a319",
+      "original_cpu_comparisons": 24
+    },
+    "r8_focused_e": {
+      "file": "ud0-r8-focused-e.xml",
+      "tests": 4,
+      "passed": 4,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "590ec748d87f74cf6b9ed656eee55dfb1013cd81d4783613ff596861846e8ea0",
+      "original_cpu_comparisons": 24
+    },
+    "r8_watchpoint_p_group_1": {
+      "file": "ud0-r8-watchpoint-p.xml",
+      "tests": 2,
+      "passed": 2,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "94d0f263447336a6db9ccc2fd13a4bd4a1b29abac7befa95783bdcaf10e5da67"
+    },
+    "r8_watchpoint_e_group_16": {
+      "file": "ud0-r8-watchpoint-e.xml",
+      "tests": 2,
+      "passed": 2,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "3ea4e6251910766b563acc17e443c313a701b77da183ed45149c178ce60a726e"
+    },
+    "r8_encoding": {
+      "file": "ud0-r8-encoding-full.xml",
+      "tests": 9,
+      "passed": 9,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "b51b92001cdb9786b307e2d667bad6949bd7bc478958c1079fcce328d96a6fa0"
+    },
+    "r8_instruction_text": {
+      "file": "ud0-r8-text-full.xml",
+      "tests": 21,
+      "passed": 21,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "07e374f81fe78b9718f1b9edd53f58c38e5a86c89ad74c1750064ba1718ca3a9"
+    },
+    "r8_legacy_paging": {
+      "file": "ud0-r8-legacy-paging.xml",
+      "tests": 1,
+      "passed": 1,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "b0ba666c9ad3da3a9df8a157b0b3911af94d06ca91fdfe173086d8447c4eacf9"
+    },
+    "r7_full_p": {
+      "file": "ud0-x64-full-r7-p.xml",
+      "tests": 246,
+      "passed": 244,
+      "skipped": 2,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "e733ad2d3b2daac1306d3c1345a81ac7bb05685105eeb2d89e303a5dd2b9cad3",
+      "original_cpu_comparisons": 24
+    },
+    "candidate_full_e": {
+      "file": "ud0-x64-full-native-e.xml",
+      "tests": 246,
+      "passed": 244,
+      "skipped": 2,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "996fe591de8abf82bca39744bd1473a99f9ebe5eafce2c4614e2ec966ba71d34",
+      "original_cpu_comparisons": 24
+    },
+    "candidate_noncanonical_p": {
+      "file": "ud0-noncanonical-native-p.xml",
+      "tests": 1,
+      "passed": 1,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "eb14d1f260c8a63493806eece6574dccb31703db9d9cee3f81b7034110fde491",
+      "original_cpu_comparisons": 12
+    },
+    "candidate_noncanonical_e": {
+      "file": "ud0-noncanonical-native-e.xml",
+      "tests": 2,
+      "passed": 2,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "b2136c2adeffe005854fbc94740c77bf2ea6792c816788e6e3ecaf818241e983",
+      "original_cpu_comparisons": 12
+    },
+    "latest_neverc_candidate_p": {
+      "file": "ud0-neverc-latest-native-p.xml",
+      "tests": 3,
+      "passed": 3,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "f07e16d077a202a64c21651ca439e29e9f338085fe0279726eb0a5f68e80a408",
+      "original_cpu_comparisons": 24
+    },
+    "latest_neverc_candidate_e": {
+      "file": "ud0-neverc-latest-native-e.xml",
+      "tests": 3,
+      "passed": 3,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "444935d2d2864877532f5d25edb5123636634a985cac489f0612cd1c3805ce8d",
+      "original_cpu_comparisons": 24
+    },
+    "latest_neverc_r7_legacy_source": {
+      "file": "ud0-neverc-latest-legacy-r7.xml",
+      "tests": 8,
+      "passed": 8,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "6759ceb1bcd7fd9c75d8381a3246a335fa1c60c6b1c21c5dc355ff8017d1bf1b"
+    },
+    "latest_neverc_candidate_legacy_source": {
+      "file": "ud0-neverc-latest-legacy-native.xml",
+      "tests": 8,
+      "passed": 8,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "4a3b8ed1b4d44895f5578790f4ee505c37a2426c9b96d9528a166f226aa28b86"
+    },
+    "r7_trap_boundary": {
+      "file": "ud0-trap-boundary-full-r7.xml",
+      "tests": 54,
+      "passed": 53,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "bdd556626f5ed83eb657ae3e3cf6ecd4a6d794e8f42c4da337476abae0b0796a"
+    },
+    "r7_coff_parser": {
+      "file": "ud0-coff-parser-r7.xml",
+      "tests": 1,
+      "passed": 1,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "45535443750992c2a6f7e51b03247fb7913c386727aacd9a42df3666b41b1d75"
+    }
+  },
+  "full_r8_p_skip_reason": "REP watchpoint oracle requires an explicit group boundary; both skipped cases passed separately on P (1 byte) and E (16 bytes) bound profiles",
+  "related_evidence": [
+    "docs/evidence/x86-ud0-fetch-and-integration-2026-11-24.json",
+    "docs/evidence/x86-vmrun-hosted-kvm-2026-11-21.json",
+    "docs/evidence/x86-sgx-runner-discovery-2026-11-09.json"
+  ],
+  "release_gate": {
+    "global_x86_semantics_complete": false,
+    "native_sgx_enclave_qualified": false,
+    "new_x86_llvm_release_from_this_change": false,
+    "production_llvm_pin_changed_by_this_change": false,
+    "current_pin_note": "r8 was released and pinned independently for MIPS before this NeverD code commit",
+    "remaining_gaps": [
+      "ordinary x64 executable UD0 emitter still uses llvm.trap",
+      "prefixed UD0 variants lack original-byte continuation",
+      "unqualified CPUs lack a bound UD0 fetch profile",
+      "native SGX enclave execution unavailable on designated hosted runners",
+      "broader x86 mode, SMM, SGX, and asynchronous behavior remains partially specified and qualified"
+    ]
+  },
+  "post_merge_qualification": {
+    "tested_dev_base_commit": "593d548ebcd5c90f795a1084a98fbfabf2e127fa",
+    "includes_neverd_code_commit": "e0c792dac62404d726d43586330ee4ad7d842f86",
+    "production_llvm_tag": "neverd-llvm-v23.0.0-r8",
+    "neverc_source_commit": "e065e748414253c7bae8b580cbde5dbd37975dfe",
+    "core_binding": {
+      "p_core": "CPU 4, repeat debug group 1",
+      "e_core": "CPU 12, UD0 and repeat debug group 16 focused"
+    },
+    "reports": {
+      "full_p_group_1": {
+        "file": "ud0-r8-postrebase-full-p.xml",
+        "tests": 247,
+        "passed": 247,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "84805fbf98bc7682ac64da18a828977b27ba5f6249b69b8a2eaf4782a9e0e9b2",
+        "original_cpu_comparisons": 24
+      },
+      "focused_p": {
+        "file": "ud0-r8-postrebase-p.xml",
+        "tests": 4,
+        "passed": 4,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "15122da242ba596614c3d9f65b6f1103fb9e073115daea509613988aacffd971",
+        "original_cpu_comparisons": 24
+      },
+      "focused_e": {
+        "file": "ud0-r8-postrebase-e.xml",
+        "tests": 4,
+        "passed": 4,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "24e6f178cbaba8c69988242e91954e3c98b3631cae0e38e93a0e95ae1ee33d66",
+        "original_cpu_comparisons": 24
+      },
+      "encoding": {
+        "file": "ud0-r8-postrebase-encoding.xml",
+        "tests": 9,
+        "passed": 9,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "4f851672dbdb664a7c69877349386bccf30d05d57d4744232b655582f6f647e1"
+      },
+      "legacy_paging": {
+        "file": "ud0-r8-postrebase-legacy.xml",
+        "tests": 1,
+        "passed": 1,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "5e3831285f54f6a8da47e9af21fffec675b199d551d314864382b42889b2be72"
+      },
+      "watchpoint_e_group_16": {
+        "file": "ud0-r8-postrebase-watchpoint-e.xml",
+        "tests": 2,
+        "passed": 2,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "b4cb953915c8d592fed1deb203a3aba2c8e91e68e06f9704625b234d48944d69"
+      }
+    },
+    "interpretation": "The full P-core suite has no skipped tests with its recorded REP debug group boundary; focused UD0 KVM comparisons pass on both processor types."
+  }
+}

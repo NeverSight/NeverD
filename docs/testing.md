@@ -10395,6 +10395,12 @@ separately; compare the original KVM handler,
 fault stack RIP/error code, CR2, all GPRs, flags and RAM with each generated
 lane. The model's execution binding is intentionally independent of the host
 core used to compile its C source. Missing KVM is an oracle skip, not a pass.
+The [code64 UD0 qualification](evidence/x86-code64-ud0-fetch-2026-11-24.json)
+records full and focused XML digests for LLVM r8, the native LLVM candidate,
+and the current 64-bit NeverC. The two REP watchpoint tests skipped by the
+unbound full-suite run pass separately with the recorded P/E group boundaries.
+After merging current dev, the P-core full suite passes 247/247 with its
+recorded group binding and no skips.
 
 ```sh
 cmake --build build-release --target NeverDX86EncodingAccuracyTests
