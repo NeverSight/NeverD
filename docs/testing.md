@@ -10353,6 +10353,11 @@ the P core fetches the missing ModR/M page and the E core raises #UD from the
 opcode. Each compares code16/code32 and CPL0/CPL3 under legacy and PAE paging.
 `X86LegacySourceTest.OriginalUD0UsesTheBoundFetchProfile` compiles both
 bindings through x64 Clang/NeverC at O0/O2 and checks the original #UD frame.
+`X86LegacySourceTest.OriginalUD0CrossPageFetchUsesTheBoundProfile` places the
+ModR/M byte across an absent page after the opcode. Its three address forms
+cover simple ModR/M, SIB and disp32; code16/code32 and both bound processor
+profiles check #UD versus #PF, CR2 and the original return PC through the same
+four compiler lanes.
 
 ```sh
 cmake --build build-release --target NeverDX86EncodingAccuracyTests
