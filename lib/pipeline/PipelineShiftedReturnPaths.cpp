@@ -42,6 +42,12 @@ using Locals = MedValueMap<Binding>;
 using Views = llvm::SmallDenseMap<std::pair<uint64_t, unsigned>, unsigned, 8>;
 using Outcomes = llvm::SmallVector<uint64_t, 4>;
 
+struct JoinedView {
+  unsigned Whole;
+  unsigned ByteOffset;
+  bool CarriesValue;
+};
+
 bool sameView(const MedVar &A, const MedVar &B) {
   return A == B && A.Size == B.Size &&
          (A.Kind != MedVar::Reg || A.RegOff == B.RegOff);
@@ -62,7 +68,7 @@ struct ShiftPaths {
   unsigned Bytes;
   unsigned &Work;
   Views Registers{};
-  llvm::SmallPtrSet<const PhiNode *, 8> NeededPhis;
+  llvm::SmallDenseMap<const PhiNode *, JoinedView, 8> JoinedViews{};
   llvm::SmallPtrSet<const MedBlock *, 8> CheckedJoins;
 
   bool spend(size_t Amount) {
@@ -74,16 +80,46 @@ struct ShiftPaths {
     return true;
   }
 
+  bool mustPreserve(uint64_t Reg, unsigned Width) const {
+    return TRI.isReturnControlReg(Reg) || TRI.isPlatformRegister(Reg, Format) ||
+           TRI.callPreservedPrefixSize(Reg, Width, Format);
+  }
+
+  bool recordJoinedView(const PhiNode &Phi, bool CarriesValue) {
+    const MedVar &V = Phi.Output;
+    if (V.Kind != MedVar::Reg)
+      return true;
+    const auto [Reg, Width] = TRI.findWideReg(V.RegOff, V.Size);
+    if (Width != TRI.FullRegWidth)
+      return true;
+    if (mustPreserve(Reg, Width))
+      return false;
+    if (!CarriesValue && V.Size == Width)
+      return true;
+    const int Offset = V.Size == Width
+                           ? 0
+                           : TRI.subRegByteOffset(V.RegOff, V.Size, Reg, Width);
+    if (Offset < 0)
+      return false;
+    const auto Whole =
+        Registers.try_emplace({Reg, Width}, Registers.size()).first->second;
+    JoinedViews.try_emplace(&Phi,
+                            JoinedView{Whole, unsigned(Offset), CarriesValue});
+    return true;
+  }
+
   // Only register views feeding the returned expression live across an edge.
   // In particular a changing loop induction variable need not enter the key.
   bool prepare(const MedValueMap<const MedOp *> &Defs,
                const MedValueMap<PhiSite> &Phis) {
     bool HasShift = false;
     bool HasEarlierJoin = false;
-    llvm::SmallVector<const MedVar *, 12> Pending{&Result};
+    llvm::SmallVector<const MedVar *, 12> Values{&Result}, Counts;
     MedValueMap<const MedVar *> Seen;
-    Registers.try_emplace({TRI.IntReturnReg, TRI.FullRegWidth}, 0);
-    while (!Pending.empty()) {
+    // Visit data before counts so a value used in both roles is recorded once.
+    while (!Values.empty() || !Counts.empty()) {
+      const bool CarriesValue = !Values.empty();
+      auto &Pending = CarriesValue ? Values : Counts;
       const auto &V = *Pending.pop_back_val();
       if (!spend(1))
         return false;
@@ -99,10 +135,11 @@ struct ShiftPaths {
         Registers.try_emplace({V.RegOff, V.Size}, Registers.size());
       if (const auto P = Phis.find(medValueKey(V)); P != Phis.end()) {
         const auto &[Phi, Block] = P->second;
-        if (!sameView(Phi->Output, V) || !spend(Phi->Args.size()))
+        if (!sameView(Phi->Output, V) || !spend(Phi->Args.size()) ||
+            !recordJoinedView(*Phi, CarriesValue))
           return false;
-        HasEarlierJoin |= Block != &Exit && Block->Preds.size() > 1;
-        NeededPhis.insert(Phi);
+        HasEarlierJoin |=
+            CarriesValue && Block != &Exit && Block->Preds.size() > 1;
         for (const auto &Arg : Phi->Args)
           Pending.push_back(&Arg.second);
       } else if (const MedOp *Op = Defs.lookup(medValueKey(V))) {
@@ -110,8 +147,10 @@ struct ShiftPaths {
           return false;
         // A predecessor may shift before another join or a final byte mask.
         HasShift |= isVariableShift(*Op);
-        for (unsigned I = 0; I < Op->NumInputs; ++I)
-          Pending.push_back(&Op->Inputs[I]);
+        for (unsigned I = 0; I < Op->NumInputs; ++I) {
+          auto &Inputs = I == 1 && isScalarShift(*Op) ? Counts : Pending;
+          Inputs.push_back(&Op->Inputs[I]);
+        }
       }
     }
     return HasShift && HasEarlierJoin;
@@ -209,8 +248,7 @@ struct ShiftPaths {
       return false;
     if (V.Kind == MedVar::Reg) {
       const auto [Reg, Width] = TRI.findWideReg(V.RegOff, V.Size);
-      if (TRI.isReturnControlReg(Reg) || TRI.isPlatformRegister(Reg, Format) ||
-          TRI.callPreservedPrefixSize(Reg, Width, Format))
+      if (mustPreserve(Reg, Width))
         return false;
       if (Seed && view(V) == Registers.end() &&
           !llvm::any_of(Registers, [&](const auto &P) {
@@ -251,9 +289,6 @@ struct ShiftPaths {
       }
       CheckedJoins.insert(&Next);
     }
-    const unsigned Carrier =
-        Registers.lookup({TRI.IntReturnReg, TRI.FullRegWidth});
-    bool MergesCarrier = false;
     for (const PhiNode &Phi : Next.Phis) {
       const auto At = view(Phi.Output);
       if (At == Registers.end())
@@ -264,29 +299,33 @@ struct ShiftPaths {
           Phi.Args, [&](const auto &A) { return A.first == Pred; });
       const auto N = read(Arg->second, Before, Local);
       const auto &[Previous, Written] = Before[At->second];
-      if (Previous && Local.count(medValueKey(*Previous)) &&
-          (!N || Written != N))
+      // The same SSA definition agrees even when it holds an unknown loop
+      // counter. A folded or renamed input still needs a concrete match.
+      if (Previous && !sameView(*Previous, Arg->second) &&
+          Local.count(medValueKey(*Previous)) && (!N || Written != N))
         return false;
       After[At->second] = {&Phi.Output, N};
-      MergesCarrier |= At->second == Carrier && Next.Preds.size() > 1;
     }
-    const auto &Whole = After[Carrier];
-    if ((MergesCarrier || &Next == &Exit) && !Whole.second)
-      return false;
-    CrossedResultJoin |= MergesCarrier && &Next != &Exit;
     for (const PhiNode &Phi : Next.Phis) {
-      if (!NeededPhis.contains(&Phi) || Phi.Output.Kind != MedVar::Reg ||
-          Phi.Output.Size >= TRI.FullRegWidth)
+      const auto It = JoinedViews.find(&Phi);
+      if (It == JoinedViews.end())
         continue;
-      int Offset = TRI.subRegByteOffset(Phi.Output.RegOff, Phi.Output.Size,
-                                        TRI.IntReturnReg, TRI.FullRegWidth);
-      if (Offset < 0)
-        continue;
+      const auto &[WholeIndex, Offset, CarriesValue] = It->second;
       const auto &N = After[view(Phi.Output)->second].second;
-      if (!Whole.second || !N ||
-          *N != ((*Whole.second >> (8 * Offset)) &
-                 llvm::maskTrailingOnes<uint64_t>(8 * Phi.Output.Size)))
+      if (!N)
         return false;
+      const auto &Whole = After[WholeIndex];
+      // A separately joined byte must match its architectural parent on this
+      // edge, including when the byte supplies the count for that same word.
+      if (Phi.Output.Size < TRI.FullRegWidth &&
+          (Whole.first || TRI.isSubRegOf(Phi.Output.RegOff, Phi.Output.Size,
+                                         TRI.IntReturnReg, TRI.FullRegWidth)) &&
+          (!Whole.second ||
+           *N != ((*Whole.second >> (8 * Offset)) &
+                  llvm::maskTrailingOnes<uint64_t>(8 * Phi.Output.Size))))
+        return false;
+      CrossedResultJoin |=
+          CarriesValue && Next.Preds.size() > 1 && &Next != &Exit;
     }
     return true;
   }
