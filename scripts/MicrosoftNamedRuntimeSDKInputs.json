@@ -190,6 +190,132 @@
           }
         }
       }
+    },
+    "DirectVideoAcceleration": {
+      "module": "dxva2.dll",
+      "headers": [
+        "d3d9",
+        "opmapi"
+      ],
+      "exports": {
+        "OPMGetVideoOutputForTarget": 4,
+        "OPMGetVideoOutputsFromHMONITOR": 4,
+        "OPMGetVideoOutputsFromIDirect3DDevice9Object": 4
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "9aa1cf331a1fecb46a35c38ac5ee5ce51a205b25155001a8292131abddbe6790",
+          "additional_exports": {},
+          "import_library": "dxva2.lib"
+        },
+        "x64": {
+          "image_sha256": "5f61f0d9fbf7ec6b137b995cc9d1901d4c4c333877c619c5e6f56bac967cbb6e",
+          "additional_exports": {},
+          "import_library": "dxva2.lib"
+        },
+        "arm64": {
+          "image_sha256": "03b17d6c63730ff8b476049602543a642d22048033bc0b5f8c3d3194fe36abf3",
+          "additional_exports": {},
+          "import_library": "dxva2.lib"
+        }
+      }
+    },
+    "DirectoryPropertySheets": {
+      "module": "dsprop.dll",
+      "headers": [
+        "activeds",
+        "AdsProp"
+      ],
+      "exports": {
+        "ADsPropCheckIfWritable": 2,
+        "ADsPropCreateNotifyObj": 3,
+        "ADsPropGetInitInfo": 2,
+        "ADsPropSendErrorMessage": 2,
+        "ADsPropSetHwnd": 2,
+        "ADsPropSetHwndWithTitle": 3,
+        "ADsPropShowErrorDialog": 2
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "fe31f0b2de9dd77d5c621106e103a6c3d0696f668b0233d50e96d51be36eeabf",
+          "additional_exports": {},
+          "import_library": "DSProp.Lib"
+        },
+        "x64": {
+          "image_sha256": "3d3b50e15a9be91c9f71f2eddf25ee902bd0c7f658a01ca43f2c200c70aabc82",
+          "additional_exports": {},
+          "import_library": "DSProp.Lib"
+        },
+        "arm64": {
+          "image_sha256": "c34ef5b5256f9be36fb6387a0e075c933fc7909cd5449f10e43db3410ca8fd03",
+          "additional_exports": {},
+          "import_library": "DSProp.Lib"
+        }
+      }
+    },
+    "MediaReadWrite": {
+      "module": "mfreadwrite.dll",
+      "headers": [
+        "mfidl",
+        "mfreadwrite"
+      ],
+      "exports": {
+        "MFCreateSinkWriterFromMediaSink": 3,
+        "MFCreateSinkWriterFromURL": 4,
+        "MFCreateSourceReaderFromByteStream": 3,
+        "MFCreateSourceReaderFromMediaSource": 3,
+        "MFCreateSourceReaderFromURL": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "9a5c4f58bbad9fc612f4f70a18ade3e4f8667f818f48eeff972960e6c0c4f6b5",
+          "additional_exports": {},
+          "import_library": "mfreadwrite.lib"
+        },
+        "x64": {
+          "image_sha256": "a96f5d2e82d2828fd7c71c56c0a1f7be7dd398f114d6ef34c2cd4e68d9de3ad3",
+          "additional_exports": {},
+          "import_library": "mfreadwrite.lib"
+        },
+        "arm64": {
+          "image_sha256": "9603a44e1af51e75f20814a22a1350562188c9a877ce433979cf34e069ac2651",
+          "additional_exports": {},
+          "import_library": "mfreadwrite.lib"
+        }
+      }
+    },
+    "MulticastClient": {
+      "module": "dhcpcsvc.dll",
+      "headers": [
+        "winternl",
+        "madcapcl"
+      ],
+      "exports": {
+        "McastApiCleanup": 0,
+        "McastApiStartup": 1,
+        "McastEnumerateScopes": 5,
+        "McastGenUID": 1,
+        "McastReleaseAddress": 3,
+        "McastRenewAddress": 4,
+        "McastRequestAddress": 5
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "9497d7ba94dfb3327ec40f4cc45f6e015e1d4d332d2a97547a8f5498ee73caf6",
+          "additional_exports": {},
+          "import_library": "DhcpCSvc.Lib"
+        },
+        "x64": {
+          "image_sha256": "aff701161faf234560448049199620f7db4ec262aa0132aa504cefb289d96d87",
+          "additional_exports": {},
+          "import_library": "DhcpCSvc.Lib"
+        },
+        "arm64": {
+          "image_sha256": "3266ed0420672cb8e3e2bdea2ea3d08c78259187f24fec993214fe199d90277e",
+          "additional_exports": {},
+          "import_library": "DhcpCSvc.Lib"
+        }
+      }
     }
   }
 }
