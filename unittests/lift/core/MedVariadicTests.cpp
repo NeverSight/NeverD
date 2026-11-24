@@ -666,4 +666,144 @@ TEST(MedVariadic, AAPCS64DropsTheVectorSaveAreaNoReadObserves) {
   }
 }
 
+/// How a Windows ARM64 va_start hands on its va_list.
+enum class WindowsVaList {
+  /// MSVC and clang-cl /O0: `add x8, sp, #off; str x8, [sp, #ap]`.
+  KeptInALocal,
+  /// MSVC /O2, past a second `sub sp`: `add x3, sp, #off` for the call.
+  FormedInAnArgumentRegister,
+  /// An operand of the call.
+  PassedToACall,
+};
+
+/// A Windows ARM64 variadic prologue: a frame below the entry stack pointer,
+/// with x(First) through x7 saved in consecutive doublewords whose last ends
+/// \p Top bytes below it.
+struct WindowsVaStart {
+  static constexpr int64_t Frame = 0x80;
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
+  MedFunc F;
+  const MedVar SP = reg(100, 0, 8, TRI.StackPointer);
+  const MedVar FrameSP = reg(100, 1, 8, TRI.StackPointer);
+  int NextTemp = 1;
+
+  explicit WindowsVaStart(int First, int64_t Top = 0) {
+    F.Blocks.resize(1);
+    add(op(NdOp::INT_SUB, FrameSP, {SP, MedVar::makeConst(Frame, 8)}));
+    for (int I = First; I < 8; ++I)
+      add(op(NdOp::STORE, {},
+             {at(slot(I) - Top), reg(1 + I, 0, 8, TRI.IntParamRegs[I])}));
+  }
+
+  /// x(I)'s slot, as a displacement from the entry stack pointer.
+  static int64_t slot(int I) { return -8 * (8 - I); }
+
+  void add(MedOp Op) { F.Blocks[0].Ops.push_back(std::move(Op)); }
+
+  /// The address \p Delta bytes from the entry stack pointer, formed from
+  /// the frame's.
+  MedVar at(int64_t Delta) {
+    const MedVar Address = temp(NextTemp++);
+    add(op(
+        NdOp::INT_ADD, Address,
+        {FrameSP, MedVar::makeConst(static_cast<uint64_t>(Frame + Delta), 8)}));
+    return Address;
+  }
+
+  void handOn(int64_t Delta, WindowsVaList How) {
+    const MedVar Callee = MedVar::makeConst(0x140004000, 8);
+    switch (How) {
+    case WindowsVaList::KeptInALocal:
+      add(op(NdOp::STORE, {}, {at(-Frame + 0x20), at(Delta)}));
+      break;
+    case WindowsVaList::FormedInAnArgumentRegister: {
+      const MedVar CallSP = reg(100, 2, 8, TRI.StackPointer);
+      add(op(NdOp::INT_SUB, CallSP, {FrameSP, MedVar::makeConst(0x10, 8)}));
+      add(op(NdOp::INT_ADD, reg(4, 1, 8, TRI.IntParamRegs[3]),
+             {CallSP, MedVar::makeConst(
+                          static_cast<uint64_t>(Frame + 0x10 + Delta), 8)}));
+      add(op(NdOp::CALL, {}, {Callee}));
+      break;
+    }
+    case WindowsVaList::PassedToACall:
+      add(op(NdOp::CALL, {}, {Callee, at(Delta)}));
+      break;
+    }
+  }
+
+  bool classify(BinaryFormat Format = BinaryFormat::COFF) {
+    F.IsVariadic = false;
+    F.VariadicOverflowBase = -1;
+    F.VariadicFirstRegister = -1;
+    detectVariadic(F, TRI, Arch::AArch64, Format);
+    return F.IsVariadic;
+  }
+};
+
+TEST(MedVariadic, WindowsARM64VaListPointsAtTheFirstUnnamedRegister) {
+  for (const int First : {1, 2, 3})
+    for (const WindowsVaList How : {WindowsVaList::KeptInALocal,
+                                    WindowsVaList::FormedInAnArgumentRegister,
+                                    WindowsVaList::PassedToACall}) {
+      SCOPED_TRACE(testing::Message() << First << " " << static_cast<int>(How));
+      WindowsVaStart V(First);
+      V.handOn(WindowsVaStart::slot(First), How);
+      ASSERT_TRUE(V.classify());
+      EXPECT_EQ(V.F.VariadicFirstRegister, First);
+      // va_arg walks on from x7's slot into the caller's stack arguments.
+      EXPECT_EQ(V.F.VariadicOverflowBase, 0);
+    }
+}
+
+TEST(MedVariadic, WindowsARM64NamedHomeContinuingTheRunStaysNamed) {
+  // x0 homed just below x1's slot continues the run, but the va_list starts
+  // at x1.
+  WindowsVaStart V(1);
+  V.add(
+      op(NdOp::STORE, {},
+         {V.at(WindowsVaStart::slot(0)), reg(1, 0, 8, V.TRI.IntParamRegs[0])}));
+  V.handOn(WindowsVaStart::slot(1), WindowsVaList::KeptInALocal);
+  ASSERT_TRUE(V.classify());
+  EXPECT_EQ(V.F.VariadicFirstRegister, 1);
+}
+
+TEST(MedVariadic, WindowsARM64SpillsWithNoVaListAreNoSaveArea) {
+  for (int Mode = 0; Mode < 7; ++Mode) {
+    SCOPED_TRACE(Mode);
+    WindowsVaStart V(2, Mode == 1 ? 8 : 0);
+    const int64_t First = WindowsVaStart::slot(2);
+    BinaryFormat Format = BinaryFormat::COFF;
+    switch (Mode) {
+    case 0: // An -O0 function reading its homed parameters back.
+      for (int I = 2; I < 8; ++I)
+        V.add(op(NdOp::LOAD, temp(50 + I), {V.at(WindowsVaStart::slot(I))}));
+      break;
+    case 1: // x7 a doubleword short of the entry stack pointer.
+      V.handOn(First, WindowsVaList::KeptInALocal);
+      break;
+    case 2: // The slot below the run, which nothing saved.
+      V.handOn(WindowsVaStart::slot(1), WindowsVaList::KeptInALocal);
+      break;
+    case 3: // x7 no longer holding its entry value.
+      for (MedOp &Op : V.F.Blocks[0].Ops)
+        if (Op.Opcode == NdOp::STORE &&
+            Op.Inputs[1].RegOff == V.TRI.IntParamRegs[7])
+          Op.Inputs[1].SSAVer = 1;
+      V.handOn(First, WindowsVaList::KeptInALocal);
+      break;
+    case 4: // An AAPCS64 va_list is a record.
+      V.handOn(First, WindowsVaList::KeptInALocal);
+      Format = BinaryFormat::ELF;
+      break;
+    case 5: // Inside a slot.
+      V.handOn(First + 4, WindowsVaList::KeptInALocal);
+      break;
+    case 6: // Only addressing a load.
+      V.add(op(NdOp::LOAD, temp(60), {V.at(First)}));
+      break;
+    }
+    EXPECT_FALSE(V.classify(Format));
+  }
+}
+
 } // namespace

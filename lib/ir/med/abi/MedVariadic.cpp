@@ -315,16 +315,24 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
   case Arch::AArch64:
     if (Convention && Convention->VariadicArgumentsOnStack) {
       Marked = hasDarwinVariadicPrologue(S);
-    } else {
-      Marked = hasAAPCS64VariadicPrologue(S);
-      if (Marked) {
-        FirstVariadicRegister = aapcs64FirstVariadicRegister(S);
-        UnreadVectorSpills =
-            unreadAAPCS64VectorSpills(S, FirstVariadicRegister.value_or(-1));
-      } else if (const auto First = aapcs64IntegerVariadicRegister(S)) {
+      break;
+    }
+    // A Windows va_list is one pointer into the saved registers, an AAPCS64
+    // one a record whose fields point at them.
+    if (Fmt == BinaryFormat::COFF)
+      if (const auto First = windowsAArch64FirstVariadicRegister(S)) {
         Marked = true;
         FirstVariadicRegister = *First;
+        break;
       }
+    Marked = hasAAPCS64VariadicPrologue(S);
+    if (Marked) {
+      FirstVariadicRegister = aapcs64FirstVariadicRegister(S);
+      UnreadVectorSpills =
+          unreadAAPCS64VectorSpills(S, FirstVariadicRegister.value_or(-1));
+    } else if (const auto First = aapcs64IntegerVariadicRegister(S)) {
+      Marked = true;
+      FirstVariadicRegister = *First;
     }
     break;
   case Arch::ARM:

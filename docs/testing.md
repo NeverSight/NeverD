@@ -1331,6 +1331,16 @@ return, a vector register, an intrinsic, other memory or a va_list pointer
 other than the one va_start stores there, a load's frame address has no fixed
 offset or an edge is exceptional, and where Apple's arm64 recognizer, which
 reads no save area, applies.
+`MedVariadic.WindowsARM64VaListPointsAtTheFirstUnnamedRegister` takes a
+Windows ARM64 save area of one, two or three named registers whose first
+unnamed slot's address is kept in a local (`/O0`), formed in an argument
+register past a second `sub sp` (MSVC `/O2`) or passed to a call, with the
+overflow at the entry stack pointer.
+`WindowsARM64NamedHomeContinuingTheRunStaysNamed` keeps x0 named where its
+home continues the run, and `WindowsARM64SpillsWithNoVaListAreNoSaveArea`
+takes no save area from homes read back, a run a doubleword short of the
+entry stack pointer, an address below the run or inside a slot, x7 no longer
+holding its entry value, an ELF image or an address only a load uses.
 
 `AArch64_VariadicSaveArea` compiles AAPCS64 variadic routines. One whose
 va_arg reads ints only leaves its vector half unread: MedIR keeps no q0-q7

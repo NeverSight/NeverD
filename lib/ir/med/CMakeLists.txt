@@ -73,6 +73,7 @@ add_neverd_component_library(NeverDIRMed
   abi/MedSyscallConventionLinux.cpp
   abi/MedVariadic.cpp
   abi/AArch64/MedVariadicAArch64.cpp
+  abi/AArch64/MedVariadicWindowsAArch64.cpp
   abi/ARM/MedVariadicARM.cpp
   abi/AArch64/MedVariadicDarwin.cpp
   abi/X86/MedVariadicX86.cpp

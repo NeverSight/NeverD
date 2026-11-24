@@ -13406,9 +13406,25 @@ those slots shows they are no arguments (an -O0 spill near the call), so they
 end with it.
 That count is the named parameters of a variadic callee and zero for a callee
 nothing describes. Below it the callee reads the register, and the unknown
-value stays. The named count of an AAPCS64 or AAPCS32 variadic routine comes
-from its register save area, which spills the argument registers from the
-first unnamed one to the last (`MedFunc::VariadicFirstRegister`). Recovery
+value stays. The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
+routine comes from its register save area, which spills the argument registers
+from the first unnamed one to the last (`MedFunc::VariadicFirstRegister`).
+Windows ARM64 has no va_list record: va_start spills x(first) through x7 to
+consecutive doublewords ending at the entry stack pointer, and the va_list is
+the address of the first, from which va_arg walks on into the caller's stack
+arguments. `windowsAArch64FirstVariadicRegister`
+(`MedVariadicWindowsAArch64.cpp`) takes that run, x7 just below the entry
+stack pointer, as a save area only where the function passes on the address
+of a slot in it: stored as a value, an operand of a call or a return, or
+formed in an argument register for a call, as MSVC's `/O2` passes it to
+`_vfprintf_l` (`add x3, sp, #off`). Code that homes named parameters in that
+layout passes none of their addresses on, and the lowest slot whose address
+goes on starts the variadic registers, so a named parameter homed where it
+continues the run stays named. A COFF function without that shape still gets
+the AAPCS64 recognizers. Before the rule a Windows ARM64 printf wrapper took
+all eight registers as parameters, and a call whose format reads none of them
+passed seven unknown values: the Windows EH corpus's 96 ARM64 images printed
+29,710 placeholders, 784 with it. Recovery
 applies the rule to `MedCallInfo::Args`, and HighIR's hole filling and
 positional fill use the same predicate, since x86-64 HighC builds its call
 arguments with its own scan. Because a variadic routine of the image keeps its
