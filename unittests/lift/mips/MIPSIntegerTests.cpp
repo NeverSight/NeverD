@@ -60,10 +60,10 @@ struct CapstoneReference {
 TEST(MIPSPhysicalDecode, ClassicRecordsMatchTheIteratorAcrossISAAndByteOrder) {
   constexpr cs_mode Modes[] = {CS_MODE_MIPS64R2, CS_MODE_MIPS1, CS_MODE_MIPS2,
                                CS_MODE_MIPS3,    CS_MODE_MIPS4, CS_MODE_MIPS5};
-  // Alternate fixed forms and table-decoded forms on the same records. LW/SW
-  // can share a public ID with a DSP encoding and still have different groups.
-  constexpr unsigned Major[] = {4,  35, 5,  43, 8,  9,  10, 11, 12,
-                                13, 14, 32, 33, 36, 37, 40, 41};
+  // Interleave DSP-mapped LW/SW and ordinary unaligned transfers so reused
+  // records must expose the groups selected for each individual instruction.
+  constexpr unsigned Major[] = {4,  35, 34, 5,  43, 42, 8,  9,  10, 11, 12,
+                                13, 14, 32, 33, 36, 37, 38, 40, 41, 46};
   constexpr unsigned Alu[] = {0x20, 0x21, 0x22, 0x23, 0x24,
                               0x25, 0x26, 0x27, 0x2a, 0x2b};
   for (bool Little : {false, true}) {
@@ -88,7 +88,7 @@ TEST(MIPSPhysicalDecode, ClassicRecordsMatchTheIteratorAcrossISAAndByteOrder) {
       Ref.Insn = cs_malloc(Ref.Handle);
       ASSERT_NE(Ref.Insn, nullptr);
       std::vector<uint32_t> Words;
-      for (uint32_t Fields : {0u, 0x00a28000u, 0x03ffffffu}) {
+      for (uint32_t Fields : {0u, 0x00a28000u, 0x03e07fffu, 0x03ffffffu}) {
         for (unsigned Op : Major)
           Words.push_back((Op << 26) | Fields);
         for (unsigned Fn : Alu)
