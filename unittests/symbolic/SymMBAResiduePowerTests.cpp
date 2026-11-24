@@ -873,4 +873,67 @@ TEST(SymMBAResiduePowers, ParityMajorityDoesNotReplaceTheZeroBranchProof) {
     }
 }
 
+TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
+  for (const unsigned Bits : {4u, 17u, 65u}) {
+    const unsigned Width = 3 * Bits + 2, Shift = Bits + 1;
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto LowX = Ctx.mkExtract(X, 2, Bits);
+    const auto LowY = Ctx.mkExtract(Y, 1, Bits);
+    const auto SX = Ctx.mkSExt(LowX, Width);
+    const auto CY = Ctx.mkConcat(Ctx.mkExtract(X, 0, Width - Bits), LowY);
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
+    llvm::SmallVector<SymRef, 128> Factors{Ctx.mkConst(Scale)};
+    constexpr unsigned Degree = 113;
+    for (unsigned I = 0; I < Degree; ++I) {
+      const unsigned Offset = I == 29 ? 6 : 1 + 2 * (I % 5);
+      const unsigned K = I % 4 + 1, J = 3 + I % 7;
+      // One lower-weight term makes the whole factor a residual; its other
+      // field must remain inside it too. The near miss is not linear.
+      const auto A = llvm::APInt(Width, K).shl(I == 37 ? 1 : Shift);
+      const auto B = -llvm::APInt(Width, J).shl(Shift);
+      Factors.push_back(
+          Ctx.mkAdd({Ctx.mkConst(Width, Offset), Ctx.mkMul(Ctx.mkConst(A), SX),
+                     Ctx.mkMul(Ctx.mkConst(B), CY)}));
+    }
+    const auto Input = Ctx.mkMul(Factors);
+    size_t Storage = 1u << 20;
+    detail::WorkBudget Tiny(8);
+    EXPECT_EQ(detail::foldResidueDecisions(Ctx, Input, Tiny, Storage), Input);
+    EXPECT_LE(Tiny.used(), 8u);
+
+    detail::WorkBudget Budget(65536);
+    Storage = 1u << 20;
+    const auto Reduced =
+        detail::foldResidueDecisions(Ctx, Input, Budget, Storage);
+    ASSERT_NE(Reduced, Input);
+    EXPECT_LT(Ctx.readabilityCost(Reduced), Ctx.readabilityCost(Input) / 4);
+    if (Bits == 4 && solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+      solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 10000);
+      EXPECT_EQ(Verify(Ctx, Input, Reduced), SynthVerification::Equivalent);
+    }
+    SymEvalPlan Plan(Ctx, Reduced);
+    std::mt19937_64 Random(0x668d5);
+    for (unsigned Trial = 0; Trial < 256; ++Trial) {
+      auto Draw = [&] {
+        llvm::SmallVector<uint64_t, 4> Words(llvm::APInt::getNumWords(Width));
+        for (auto &Word : Words)
+          Word = Random();
+        return llvm::APInt(Width, Words);
+      };
+      const std::array Values{Draw(), Draw()};
+      const auto A = Values[0].extractBits(Bits, 2).sext(Width);
+      const auto B =
+          Values[0].trunc(Width - Bits).concat(Values[1].extractBits(Bits, 1));
+      auto Expected = Scale;
+      for (unsigned I = 0; I < Degree; ++I)
+        Expected *= (I == 29 ? 6 : 1 + 2 * (I % 5)) +
+                    (A * (I % 4 + 1)).shl(I == 37 ? 1 : Shift) -
+                    (B * (3 + I % 7)).shl(Shift);
+      EXPECT_EQ(Plan.eval(Values), Expected)
+          << Bits << " bits, trial " << Trial;
+    }
+  }
+}
+
 } // namespace
