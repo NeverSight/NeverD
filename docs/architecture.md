@@ -6704,6 +6704,12 @@ loader reads every function's table (`GoModuleInfo::PanicBounds`), and
 passes exactly that index and bound, the call summaries take them as the call's
 fixed reads, and the routine's own two parameters stand for them, so a call
 prints `runtime_panicBounds(i, n)` rather than the registers the routine saves.
+The fixed reads hold for the run's own functions as for the callees it takes
+in (`appendGoBoundsCallReads`). A whole image is all its own functions, and
+there each bounds check read every register the routine saves: a function
+read RBX, RCX, RDI, RSI and R8-R11 at its entry, its callers passed them, and
+those reads made an earlier call's records grow, `runtime.showfuncinfo`
+returning `{RAX, RBX}` where its declaration returns a `bool`.
 An arm64 call takes the registers set before it, so LowToMed copies the index
 and the bound into X0 and X1 before the call, through temporaries that keep a
 swapped pair apart. The call never returns, so nothing after it reads them.

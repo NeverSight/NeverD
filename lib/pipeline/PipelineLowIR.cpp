@@ -3703,6 +3703,33 @@ formattedCallReadsOf(const BinaryImage &Img,
   return Reads;
 }
 
+/// The registers each call to Go 1.26's runtime.panicBounds in \p Blocks
+/// reads, appended to \p Reads: the index and the bound its
+/// PCDATA_PanicBounds entry names, and no register else (goBoundsFailureAt).
+/// The routine itself saves every register to find those two, which as its
+/// summary made each function that checks a bound read them all.
+void appendGoBoundsCallReads(
+    const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks,
+    std::vector<std::pair<va_t, GPRReadWidths>> &Reads) {
+  const auto &Go = Img.ExceptionMetadata.GoModule;
+  if (!Go || Go->PanicBoundsEntry == InvalidVA || Img.Arch != Arch::X64)
+    return;
+  for (const LowBlock &Block : Blocks)
+    for (const LowOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+          Op.Inputs[0].isConst())
+        if (const std::optional<GoBoundsFailure> Failure =
+                goBoundsFailureAt(Img, Op.Addr, Op.Inputs[0].Offset)) {
+          GPRReadWidths Widths{};
+          for (const GoBoundsOperand &Operand :
+               {Failure->Index, Failure->Bound})
+            if (Operand.Register)
+              if (const auto Family = registerFamilyOf(Img.Arch, Operand.Value))
+                Widths[Family->first] = 8;
+          Reads.emplace_back(Op.Addr, Widths);
+        }
+}
+
 std::vector<std::pair<va_t, GPRReadWidths>>
 formattedCallReads(const BinaryImage &Img, const CallRegisterBodyView &Body,
                    std::map<va_t, FormattedCall> *Converted) {
@@ -3713,26 +3740,7 @@ formattedCallReads(const BinaryImage &Img, const CallRegisterBodyView &Body,
   if (Converted)
     for (auto &[Address, Call] : Calls)
       Converted->emplace(Address, std::move(Call));
-  // A call to Go 1.26's runtime.panicBounds reads the index and the bound
-  // its PCDATA_PanicBounds entry names, and no register else
-  // (goBoundsFailureAt).
-  if (const auto &Go = Img.ExceptionMetadata.GoModule;
-      Go && Go->PanicBoundsEntry != InvalidVA && Img.Arch == Arch::X64)
-    for (const LowBlock &Block : Body.Blocks)
-      for (const LowOp &Op : Block.Ops)
-        if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
-            Op.Inputs[0].isConst())
-          if (const std::optional<GoBoundsFailure> Failure =
-                  goBoundsFailureAt(Img, Op.Addr, Op.Inputs[0].Offset)) {
-            GPRReadWidths Widths{};
-            for (const GoBoundsOperand &Operand :
-                 {Failure->Index, Failure->Bound})
-              if (Operand.Register)
-                if (const auto Family =
-                        registerFamilyOf(Img.Arch, Operand.Value))
-                  Widths[Family->first] = 8;
-            Reads.emplace_back(Op.Addr, Widths);
-          }
+  appendGoBoundsCallReads(Img, Body.Blocks, Reads);
   return Reads;
 }
 
@@ -4878,6 +4886,10 @@ bool computeCallRegisterEffects(
       pipeline_detail::collectFormattedCalls(Img, Body.Blocks, OwnCalls[I],
                                              Body.HasIndependentRoots);
       OwnReads[I] = pipeline_detail::formattedCallReadsOf(Img, OwnCalls[I]);
+      // The run's own bounds checks read as a callee's do
+      // (formattedCallReads), where every function of a whole image is the
+      // run's own.
+      pipeline_detail::appendGoBoundsCallReads(Img, Body.Blocks, OwnReads[I]);
     }
   });
   // Each site's reads by function, in order, and the last function whose

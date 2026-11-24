@@ -5028,6 +5028,84 @@ TEST(GoPanicBounds, AnARM64CallMovesItsOperandsIntoTheParameters) {
   EXPECT_TRUE(Routine.ExactRegisterParameters);
 }
 
+TEST(GoPanicBounds, AWholeRunReadsABoundsCheckAsARunOfOneDoes) {
+  // runtime.panicBounds saves every register its PCDATA_PanicBounds entry
+  // may name, so its own summary reads them all.  A run read the entry at
+  // a call only where the caller was a callee it took in, not where it was
+  // one of the run's own functions, as every function of a whole image is:
+  // main.f, whose failed bounds check names RBX and a constant, read RCX,
+  // RDX, RSI, RDI and R8-R11 too, and main.g's call passed them.
+  //   main.f(p *[4]int, i int) int: cmp rbx, 4; jae 1f
+  //                         mov rax, [rax+rbx*8]; ret; 1: call panicBounds
+  //   main.g(p *[4]int) int: push rbp; mov rbp, rsp; mov ebx, 2; call main.f
+  //                         inc rax; pop rbp; ret
+  //   runtime.panicBounds:  push rbp; mov rbp, rsp; sub rsp, 128
+  //                         mov [rsp+8*k], each of RAX..R11; ud2
+  constexpr va_t F = kTextVA + 0x100, G = kTextVA + 0x140;
+  constexpr va_t PanicBounds = kTextVA + 0x180;
+  GoTestImage T;
+  T.writeText(
+      F,
+      {0x48, 0x83, 0xFB, 0x04, 0x73, 0x05, 0x48, 0x8B, 0x04, 0xD8, 0xC3, 0xE8,
+       0x70, 0x00, 0x00, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+       0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+       0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+       0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+       0xCC, 0xCC, 0xCC, 0xCC, 0x55, 0x48, 0x89, 0xE5, 0xBB, 0x02, 0x00, 0x00,
+       0x00, 0xE8, 0xB2, 0xFF, 0xFF, 0xFF, 0x48, 0xFF, 0xC0, 0x5D, 0xC3, 0xCC,
+       0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+       0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+       0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+       0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x55, 0x48, 0x89, 0xE5,
+       0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48, 0x89, 0x04, 0x24, 0x48,
+       0x89, 0x4C, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89, 0x5C,
+       0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x48, 0x89, 0x7C, 0x24, 0x28,
+       0x4C, 0x89, 0x44, 0x24, 0x30, 0x4C, 0x89, 0x4C, 0x24, 0x38, 0x4C, 0x89,
+       0x54, 0x24, 0x40, 0x4C, 0x89, 0x5C, 0x24, 0x48, 0x0F, 0x0B});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"},
+        std::pair{PanicBounds, "runtime.panicBounds"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, PanicBounds}};
+  Module.GoAssembly = {{PanicBounds, PanicBounds + 0x40}};
+  Module.PanicBoundsEntry = PanicBounds;
+  // abi.BoundsEncode(BoundsIndex, signed, BX, 4).
+  Module.PanicBounds = {{{F + 0xB, F + 0x10}, (1 | 4 | 3 << 3 | 4 << 7) * 9}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  for (const bool Whole : {true, false}) {
+    SCOPED_TRACE(Whole);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (!Whole)
+      Options.OnlyFunctionEntries = {G};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const auto Function = [&](va_t Entry) -> const MedFunc * {
+      const auto It = llvm::find_if(
+          R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Entry; });
+      return It == R.MedFuncs.end() ? nullptr : &*It;
+    };
+    const MedFunc *Caller = Function(G);
+    ASSERT_NE(Caller, nullptr);
+    const MedOp *Call = onlyCall(*Caller);
+    ASSERT_NE(Call, nullptr);
+    EXPECT_EQ(Call->CalleeRegisterArgs, 2) << int(Call->CalleeRegisterArgs);
+    EXPECT_EQ(Call->NumInputs, 3u);
+    if (Whole) {
+      const MedFunc *Callee = Function(F);
+      ASSERT_NE(Callee, nullptr);
+      EXPECT_EQ(Callee->Params.size(), 2u);
+    }
+  }
+}
+
 TEST(GoRegisterArguments, ARunOfTheCallerAloneSummarizesAListedRoutine) {
   // registerArgumentImage's main.f, listed as never returning as
   // runtime.throw is (GoModuleInfo::NoReturnEntries).  A call into a listed
@@ -5436,23 +5514,24 @@ void expectJoinedClosure(JoinedClosureOperand Operand) {
   // Both describe this same closure body. Only the captured word differs.
   T.writeText(Callee, words({0xF9400740, 0xD65F03C0})); // ldr x0,[x26,#8]; ret
   const auto descriptor = [&](uint32_t Capture) {
-    return T.addPayload(words({uint32_t(Callee), uint32_t(Callee >> 32),
-                               Capture, 0}));
+    return T.addPayload(
+        words({uint32_t(Callee), uint32_t(Callee >> 32), Capture, 0}));
   };
   const va_t First = descriptor(7), Second = descriptor(41);
   ASSERT_NE(First, Second);
   const bool ChangeAddress = Operand == JoinedClosureOperand::LoadAddress;
   const bool ChangeContext = Operand == JoinedClosureOperand::Context;
   const uint32_t BeforeBranch = ChangeAddress ? 0xAA0103E6 : 0xF9400022;
-  const uint32_t OnFallthrough = ChangeAddress ? 0xAA0403E6
-                                  : ChangeContext ? 0xAA0403FA : 0xAA0103FA;
+  const uint32_t OnFallthrough = ChangeAddress   ? 0xAA0403E6
+                                 : ChangeContext ? 0xAA0403FA
+                                                 : 0xAA0103FA;
   // Save LR/frame. Set x26=x1. Preserve the shared call target when x26
   // changes, or load the shared target through the merged x6 when x26 agrees.
   // The two arms are selected by an independent x3, not by the call target.
-  T.writeText(Caller, words({0xA9BE7BFD, 0xAA0103FA, BeforeBranch,
-                             0xB4000043, OnFallthrough,
-                             ChangeAddress ? 0xF94000C2u : 0xD503201Fu,
-                             0xD63F0040, 0xA8C27BFD, 0xD65F03C0}));
+  T.writeText(Caller,
+              words({0xA9BE7BFD, 0xAA0103FA, BeforeBranch, 0xB4000043,
+                     OnFallthrough, ChangeAddress ? 0xF94000C2u : 0xD503201Fu,
+                     0xD63F0040, 0xA8C27BFD, 0xD65F03C0}));
   for (const auto &[Entry, Name] :
        {std::pair{Caller, "runtime.joinedClosure"},
         std::pair{Callee, "main.makeClosure.func1"}}) {
@@ -5483,10 +5562,10 @@ void expectJoinedClosure(JoinedClosureOperand Operand) {
   EXPECT_EQ(Call->RegisterContract, CallRegisterContract::GoCode);
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
   EXPECT_TRUE(callClobbersRegister(*Call, a64reg::X20, 8, TRI, T.Img.Format));
-  EXPECT_FALSE(callClobbersRegister(*Call, TRI.StackPointer, 8, TRI,
-                                    T.Img.Format));
-  EXPECT_FALSE(callClobbersRegister(*Call, TRI.FramePointer, 8, TRI,
-                                    T.Img.Format));
+  EXPECT_FALSE(
+      callClobbersRegister(*Call, TRI.StackPointer, 8, TRI, T.Img.Format));
+  EXPECT_FALSE(
+      callClobbersRegister(*Call, TRI.FramePointer, 8, TRI, T.Img.Format));
 }
 
 TEST(GoAssembly, MixedIncomingClosureContextIsNotProofOfAPlatformCall) {
@@ -5511,22 +5590,22 @@ TEST(GoAssembly, ACallOnOneIncomingEdgeCannotProveAPlatformCall) {
   // that edge. Without the helper, the original x26 reaches the join.
   // Both edges therefore pass the same valid descriptor to the same closure.
   T.writeText(Caller, words({
-      0xA9BE7BFD, // stp x29, x30, [sp, #-32]!
-      0xAA0103FA, // mov x26, x1
-      0xF9000BE1, // str x1, [sp, #16]
-      0xB4000063, // cbz x3, join
-      0x9400001C, // bl Helper
-      0xF9400BFA, // ldr x26, [sp, #16]
-      0xF9400BE6, // join: ldr x6, [sp, #16]
-      0xF94000C2, // ldr x2, [x6]
-      0xD63F0040, // blr x2
-      0xA8C27BFD, // ldp x29, x30, [sp], #32
-      0xD65F03C0  // ret
-  }));
-  T.writeText(Helper, words({0xAA1F03FA, 0xD65F03C0})); // mov x26,xzr; ret
+                          0xA9BE7BFD, // stp x29, x30, [sp, #-32]!
+                          0xAA0103FA, // mov x26, x1
+                          0xF9000BE1, // str x1, [sp, #16]
+                          0xB4000063, // cbz x3, join
+                          0x9400001C, // bl Helper
+                          0xF9400BFA, // ldr x26, [sp, #16]
+                          0xF9400BE6, // join: ldr x6, [sp, #16]
+                          0xF94000C2, // ldr x2, [x6]
+                          0xD63F0040, // blr x2
+                          0xA8C27BFD, // ldp x29, x30, [sp], #32
+                          0xD65F03C0  // ret
+                      }));
+  T.writeText(Helper, words({0xAA1F03FA, 0xD65F03C0}));  // mov x26,xzr; ret
   T.writeText(Closure, words({0xF9400740, 0xD65F03C0})); // ldr x0,[x26,#8]; ret
-  const va_t Descriptor = T.addPayload(words(
-      {uint32_t(Closure), uint32_t(Closure >> 32), 63, 0}));
+  const va_t Descriptor =
+      T.addPayload(words({uint32_t(Closure), uint32_t(Closure >> 32), 63, 0}));
   ASSERT_NE(Descriptor, 0u);
   for (const auto &[Entry, Name] :
        {std::pair{Caller, "runtime.joinedClosureAfterCall"},
@@ -5584,10 +5663,10 @@ TEST(GoAssembly, ACallOnOneIncomingEdgeCannotProveAPlatformCall) {
   EXPECT_EQ(Call->RegisterContract, CallRegisterContract::GoCode);
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
   EXPECT_TRUE(callClobbersRegister(*Call, a64reg::X20, 8, TRI, T.Img.Format));
-  EXPECT_FALSE(callClobbersRegister(*Call, TRI.StackPointer, 8, TRI,
-                                    T.Img.Format));
-  EXPECT_FALSE(callClobbersRegister(*Call, TRI.FramePointer, 8, TRI,
-                                    T.Img.Format));
+  EXPECT_FALSE(
+      callClobbersRegister(*Call, TRI.StackPointer, 8, TRI, T.Img.Format));
+  EXPECT_FALSE(
+      callClobbersRegister(*Call, TRI.FramePointer, 8, TRI, T.Img.Format));
 }
 
 } // namespace

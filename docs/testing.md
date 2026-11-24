@@ -21413,6 +21413,12 @@ caller alone. Both publish (AX, CX) for the stub, and the caller's call binds
 lists a Go 1.18 function that grows its stack as never returning, as
 `runtime.throw` is: a run of its caller alone summarizes it as the whole run
 does, reading RAX and RBX.
+`GoPanicBounds.AWholeRunReadsABoundsCheckAsARunOfOneDoes` runs the pipeline
+over `main.f`, whose failed bounds check calls a `runtime.panicBounds` that
+saves every register while its `PCDATA_PanicBounds` entry names RBX and a
+constant, and `main.g`, which calls `main.f`: in a whole run and in a run of
+`main.g` alone the call passes exactly RAX and RBX and `main.f` takes two
+parameters; it fails where a run's own functions read the routine's summary.
 `GoWriteBarriers.AStoringBarrierTakesItsAddressAndPointer` runs the pipeline
 over a call to `runtime.gcWriteBarrierCX`, alone and in the whole image, as
 System V and Win64 x86-64 with Go's register ABI, as System V with the stack
