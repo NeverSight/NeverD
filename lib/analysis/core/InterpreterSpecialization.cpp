@@ -148,8 +148,9 @@ struct Projection {
   /// Exact physical CALL words relative to the current RSP. These facts are
   /// kept only while every intervening write is proved to miss their bytes.
   std::vector<std::pair<uint64_t, va_t>> NativeCallReturnCells;
-  /// Current complete pointer words at declared entry memory fields. Guest
-  /// writes may erase these facts; no initial relation is recreated at joins.
+  /// Current complete pointer words in absolute memory, each equal to a
+  /// declared object root plus a displacement. Guest writes may erase these
+  /// facts; joins retain only relations common to every incoming edge.
   std::map<uint64_t, EntryPointer> AbsoluteAffineValues;
   FrameFacts Frame;
   FrameOrigins Origins;
@@ -1467,6 +1468,41 @@ bool Specializer::projectObjects(SymState &State, llvm::ArrayRef<SymRef> Roots,
       return fail(SpecializationStatus::BudgetExceeded,
                   "loaded entry object projection symbolic-node budget "
                   "exhausted");
+  }
+  // A guest can write an object pointer to absolute memory after entry.
+  // Project only complete current words that are exactly one declared root
+  // plus a displacement. Joins intersect these facts before another node
+  // can use them.
+  uint64_t Work = Options.MaxOperations - Result.EvaluatedOperations;
+  const auto Ranges = State.materializedAbsoluteRanges(Work);
+  Result.EvaluatedOperations = Options.MaxOperations - Work;
+  if (!Ranges)
+    return true;
+  SymContext &Ctx = State.context();
+  const uint16_t PointerBytes = Ctx.width(Roots.front()) / 8;
+  for (const auto &Range : *Ranges) {
+    if (Range.Bytes < PointerBytes)
+      continue;
+    for (uint64_t I = 0; I <= Range.Bytes - PointerBytes; ++I) {
+      const uint64_t Address = Range.Offset + I;
+      if (Out.AbsoluteAffineValues.count(Address))
+        continue;
+      if (Roots.size() >= Options.MaxOperations - Result.EvaluatedOperations)
+        return true;
+      ++Result.EvaluatedOperations;
+      const auto Value = State.loadMaterialized(
+          Ctx.mkConst(Ctx.width(Roots.front()), Address), PointerBytes);
+      if (!Value)
+        continue;
+      if (const auto Pointer = objectPointer(Ctx, Value, Roots))
+        Out.AbsoluteAffineValues.emplace(Address, *Pointer);
+      if (Failed)
+        return false;
+      if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "current object projection symbolic-node budget "
+                    "exhausted");
+    }
   }
   return true;
 }
