@@ -268,14 +268,14 @@ SymRef Parser::parsePrimary() {
     // Width-specific and structured identities can coexist internally, but a
     // textual name with one unambiguous declaration must not silently change
     // meaning across occurrences.
-    if (std::optional<uint32_t> Existing = Ctx.findVar(Id.Text)) {
-      uint32_t Have = Ctx.varInfo(*Existing).Width;
+    if (const auto Existing = Ctx.findVarRef(Id.Text)) {
+      const uint32_t Have = Ctx.width(Existing);
       if (Have != W) {
         fail(Id.Offset, "'" + Id.Text + "' was already declared at width " +
                             llvm::Twine(Have));
         return {};
       }
-      return Ctx.varRef(*Existing);
+      return Existing;
     }
     if (Ctx.hasVarName(Id.Text)) {
       fail(Id.Offset,

@@ -8080,6 +8080,9 @@ remain factored beside independent scaled variables or XOR words. An AND
 addend can also stay separate when its operands and the other addends are
 absent from the product's arithmetic leaves and none of those leaves is an
 AND partition.
+The symbolic context indexes unique variable nodes by name. Parsing another
+occurrence reuses its node after checking the declaration width. Ambiguous
+widths or input origins retain their exact variable IDs.
 The LLVM translator proves a disjoint OR of shifted lanes when their guaranteed
 zero bits cover the word. An in-range logical right shift supplies high zeros.
 Its child instructions still have to satisfy their own definedness checks.

@@ -157,12 +157,16 @@ std::string Printer::join(llvm::ArrayRef<SymRef> Ops, std::string_view Sep,
 
 void Printer::appendJoined(std::string &Text, llvm::ArrayRef<SymRef> Ops,
                            std::string_view Sep, int Need) const {
-  size_t Length = Text.size() + (Ops.size() - 1) * Sep.size();
-  for (auto Operand : Ops) {
-    const auto &Child = frag(Operand);
-    Length += Child.Text.size() + 2 * (Child.Prec < Need);
+  // Long joins benefit from reserving once. Ordinary binary fragments
+  // often fit in the inline string and only need one operand traversal.
+  if (Ops.size() > 2) {
+    size_t Length = Text.size() + (Ops.size() - 1) * Sep.size();
+    for (auto Operand : Ops) {
+      const auto &Child = frag(Operand);
+      Length += Child.Text.size() + 2 * (Child.Prec < Need);
+    }
+    Text.reserve(Length);
   }
-  Text.reserve(Length);
   for (size_t I = 0; I < Ops.size(); ++I) {
     if (I)
       Text += Sep;
@@ -228,19 +232,20 @@ Fragment Printer::render(SymRef R) const {
   case SymOp::Var: {
     const uint32_t Id = Ctx.varId(R);
     const SymVarInfo &Info = Ctx.varInfo(Id);
-    const std::optional<uint32_t> Unique = Ctx.findVar(Info.Name);
-    if (Unique && *Unique == Id && isTextIdentifier(Info.Name))
+    if (Ctx.findVarRef(Info.Name) == R && isTextIdentifier(Info.Name))
       return leaf(Info.Name, N.Width);
     return {"varid(" + std::to_string(Id) + ")", PrecPrimary};
   }
 
   case SymOp::Add: {
     unsigned Lead = print_detail::leadingAddOperand(Ctx, Ops);
-    size_t Size = 3 * (Ops.size() - 1);
-    for (auto Operand : Ops)
-      Size += arg(Operand).size();
     std::string T;
-    T.reserve(Size);
+    if (Ops.size() > 2) {
+      size_t Size = 3 * (Ops.size() - 1);
+      for (auto Operand : Ops)
+        Size += arg(Operand).size();
+      T.reserve(Size);
+    }
     appendWrapped(T, frag(Ops[Lead]), PrecAdditive);
     for (unsigned I = 0, E = Ops.size(); I < E; ++I) {
       if (I == Lead)

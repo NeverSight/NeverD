@@ -393,6 +393,9 @@ public:
   /// Whether any variable carries \p Name, including an ambiguous name shared
   /// by multiple widths or input origins.
   bool hasVarName(llvm::StringRef Name) const;
+  /// Returns the sole node with this name, or an invalid ref for a missing or
+  /// ambiguous declaration.
+  SymRef findVarRef(llvm::StringRef Name) const;
   /// The id of the sole variable named \p Name.  Returns nothing when the name
   /// is absent or belongs to more than one width, so name-only callers cannot
   /// silently select an arbitrary width-specific declaration.
@@ -496,7 +499,7 @@ private:
   /// the hash has no table entry yet; existing heads retain collision chains.
   SymRef appendInterned(SymOp Op, uint32_t Width, llvm::ArrayRef<SymRef> Ops,
                         uint64_t Aux, uint64_t Hash, SymRef *Head);
-  void recordVariableName(llvm::StringRef Name, uint32_t Id);
+  void recordVariableName(llvm::StringRef Name, SymRef Variable);
 
   /// Split \p R into a coefficient and a base so that `R == Coeff * Base`.
   /// A node that is not a constant multiple yields a coefficient of one.
@@ -599,10 +602,9 @@ private:
   /// Replayable inputs are separate from plain variables even when their
   /// diagnostic name and width collide.
   std::map<InputVariableKey, uint32_t> InputVarByIdentity;
-  /// The sole declaration for a diagnostic name, or an ambiguity sentinel
-  /// once more than one width uses it.  Name-only lookup must never choose one
-  /// of several width-specific variables by accident.
-  std::unordered_map<std::string, uint32_t> VarByName;
+  /// The sole variable node for a name. An invalid ref records ambiguity
+  /// across widths or structured input origins.
+  std::unordered_map<std::string, SymRef> VarByName;
   llvm::DenseMap<llvm::APInt, SymRef> WideConstByValue;
 
   struct InputSpaceKey {

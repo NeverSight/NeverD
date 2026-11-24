@@ -1255,6 +1255,8 @@ TEST(SymExpr, FindVarSeesDeclarationsAndNothingElse) {
   SymRef X32 = Ctx.mkVar("x", W32);
   EXPECT_TRUE(Ctx.hasVarName("x"));
   EXPECT_FALSE(Ctx.hasVarName("nope"));
+  EXPECT_EQ(Ctx.findVarRef("x"), X32);
+  EXPECT_FALSE(Ctx.findVarRef("nope"));
   ASSERT_TRUE(Ctx.findVar("x").has_value());
   EXPECT_EQ(*Ctx.findVar("x"), Ctx.varId(X32));
   EXPECT_EQ(Ctx.varInfo(*Ctx.findVar("x")).Width, W32);
@@ -1263,6 +1265,7 @@ TEST(SymExpr, FindVarSeesDeclarationsAndNothingElse) {
   Ctx.mkVar("x", 8);
   EXPECT_TRUE(Ctx.hasVarName("x"));
   EXPECT_FALSE(Ctx.findVar("x").has_value());
+  EXPECT_FALSE(Ctx.findVarRef("x"));
 }
 
 TEST(SymExpr, FreshVariablesCarryExplicitOrigin) {
@@ -1286,6 +1289,7 @@ TEST(SymExpr, StructuredInputNeverMutatesAPlainVariableIdentity) {
   EXPECT_EQ(Input, Ctx.varRef(Ctx.varId(Input)));
   EXPECT_TRUE(Ctx.hasVarName("reg$24"));
   EXPECT_FALSE(Ctx.findVar("reg$24").has_value());
+  EXPECT_FALSE(Ctx.findVarRef("reg$24"));
   EXPECT_FALSE(Ctx.varRef(Ctx.numVars()).isValid());
   EXPECT_FALSE(Ctx.mkInputVar("zero-width", 0,
                               SymInputOrigin{SymInputKind::Register, 0, 1, 0})
