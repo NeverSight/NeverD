@@ -20,8 +20,8 @@ TEST(LLVMTargetInitialization, RegistersExactlyTheLinkedCodegenBackends) {
   neverd::initializeLLVMCodegenTargets();
   neverd::initializeLLVMCodegenTargets();
   const std::set<std::string> Expected = {
-#define NEVERD_LLVM_CODEGEN_TARGET(Name) #Name,
-#include "neverd/support/LLVMCodegenTargets.def"
+#define NEVERD_LLVM_CODEGEN_TARGET(Name, Availability, Supports) #Name,
+#include "LLVMCodegenTargets.inc"
   };
   std::set<std::string> Actual;
   for (const llvm::Target &Target : llvm::TargetRegistry::targets()) {
