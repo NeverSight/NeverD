@@ -21313,6 +21313,11 @@ nowhere.
 `GoInternalABI.ARegisterReadAfterACallIsNoContext` lifts `main.g`, which reads
 RDX (arm64 R26) only after a call to a function that writes it: MedIR verifies
 and the C reads no context.
+`GoAssembly.AVectorRegisterKeptInPlaceOnOneWayIsNoArgument` runs the pipeline
+over an assembly helper shaped as `memeqbody<>`, which compares with SSE on
+one way and only runs `vzeroupper` on the other before both return: the
+helper takes RDI, RSI and RBX and no vector register, and its call passes the
+three values its caller sets.
 `GoRegisterArguments.RegistersStoredInARowAreNoVariadicSaveArea` lifts
 `main.g`, which stores RAX, R8 and R9 into consecutive words off RDI, and a
 caller that sets all seven of Go's first argument registers: `main.g` takes

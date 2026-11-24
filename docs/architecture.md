@@ -20334,6 +20334,15 @@ also remain possible reads at CALL before ABI recovery supplies explicit
 operands. A vector register widened from its own low bytes (`vzeroupper`) keeps
 only its own incoming bytes in place; bytes moved in from another register
 reach the return as any other write does.
+A join of values that hold the incoming bytes in place (the live-in itself,
+such a widening, or another such join) and of values that carry none is in
+place too: on each way to it the register holds a value the code computed or
+what the caller left there, so a return reads nothing new from it. Go's
+`memeqbody<>` and `cmpbody<>` write X0 and X1 on one way and only clear their
+upper lanes with `vzeroupper` on another; the join reached the return and made
+both registers arguments, which every call passed as unknown values. SQLite's
+`sqlite3Fts3SegReaderStep(p, pCsr)` took a third, `__int128` parameter the
+same way.
 ARM32's register owner describes the
 complete D0-D31 bank independently of its D0-D7 argument bank.
 
