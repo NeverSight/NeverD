@@ -21271,6 +21271,12 @@ which passes Go code's arguments on the stack and marks no assembly, where
 `GoStackGrowth.AnARM64StackABIPathRestartsTheFunction` lifts a Go 1.16 arm64
 function whose growth path spills nothing: the path is recognised, restarts
 the function, and leaves no call or conditional branch.
+`GoAssembly.ALegacyARM64UndefTrapsAsUdfDoes` lifts an arm64 `main.stop` that
+ends in Go's legacy UNDEF word and a `main.f` whose last instruction calls it,
+in Go's text and outside it. The decoder configured from the image names the
+word `udf` in Go's text only, and one initialized from the architecture alone
+does not; in Go's text `main.stop` traps and `main.f` decompiles. It fails
+where the word stays undecoded in Go's text.
 `GoAssembly.ABIInternalAssemblyEntersWithZeroInX15` lifts assembly that takes
 RAX and RBX and stores X15 through RAX: it takes the two registers, and its C
 stores zero and traps nowhere.

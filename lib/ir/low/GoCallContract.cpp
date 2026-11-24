@@ -15,6 +15,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/loader/Go/GoCode.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -138,7 +139,7 @@ bool isGoCode(const BinaryImage &Img, va_t Address) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
   if (!Module || (Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64))
     return false;
-  return inRanges(Module->GoCode, Address);
+  return holdsGoCode(*Module, Address);
 }
 
 const GoWriteBarrier *goWriteBarrierAt(const BinaryImage &Img, va_t Entry) {
@@ -258,8 +259,8 @@ bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
     const Key K{V.Space, V.Offset};
     if (const auto It = S.Known.find(K); It != S.Known.end())
       return It->second;
-    return Number(NumberKinds[S.Since] == Join ? HeldAtJoin : Held,
-                  S.Since, 0, K);
+    return Number(NumberKinds[S.Since] == Join ? HeldAtJoin : Held, S.Since, 0,
+                  K);
   };
   const uint64_t Word = getTargetRegInfo(Img.Arch).PointerSize;
   std::map<unsigned, unsigned> LoadedFrom;

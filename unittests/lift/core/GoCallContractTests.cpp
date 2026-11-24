@@ -515,6 +515,86 @@ std::vector<uint8_t> words(std::initializer_list<uint32_t> Words) {
   return Bytes;
 }
 
+TEST(GoAssembly, ALegacyARM64UndefTrapsAsUdfDoes) {
+  // Go's arm64 assembler encoded UNDEF as 0xbea71700, a word no decoder
+  // names, through Go 1.20 at least: runtime.abort, rt0_go, morestack and
+  // systemstack_switch, each holding one, were left undecompiled.  It traps
+  // as `udf #0` does.
+  //   main.stop: mov x1, #7; str x1, [x0]; UNDEF
+  //   main.f:    cbz x0, 1f; ret; 1: bl main.stop
+  // main.f's call is its last instruction, so it decompiles only where the
+  // screen of main.stop decodes the word too and proves the call never
+  // returns.  Outside Go's text the word stays undecoded.
+  for (const bool GoText : {true, false}) {
+    SCOPED_TRACE(GoText);
+    constexpr va_t Stop = kTextVA + 0x100;
+    constexpr va_t Caller = kTextVA + 0x140;
+    GoTestImage T(Arch::AArch64);
+    T.writeText(Stop, words({0xD28000E1, 0xF9000001, 0xBEA71700}));
+    T.writeText(Caller, words({0xB4000040, 0xD65F03C0, 0x97FFFFEE}));
+    for (const auto &[Entry, Name] :
+         {std::pair<va_t, const char *>{Stop, "main.stop"},
+          std::pair<va_t, const char *>{Caller, "main.f"}}) {
+      Symbol Function = Symbol::makeFunc(Entry, 12);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    if (GoText)
+      Module.GoCode = {{Stop, kTextVA + 0x200}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    // The decoder every analysis lifts with names it, where it reads the
+    // image's Go text; one initialized from an architecture alone does not.
+    const std::vector<uint8_t> Undef = words({0xBEA71700});
+    Decoder Dec;
+    DecodedExecutionUnit Unit;
+    ASSERT_TRUE(Dec.init(T.Img));
+    const int Size =
+        Dec.decodeUnitForLift(Undef.data(), Undef.size(), Stop + 8, Unit);
+    EXPECT_EQ(Size, GoText ? 4 : 0);
+    if (GoText)
+      EXPECT_EQ(Unit.Head.Id, unsigned(AARCH64_INS_UDF));
+    ASSERT_TRUE(Dec.init(Arch::AArch64));
+    EXPECT_EQ(Dec.decodeUnitForLift(Undef.data(), Undef.size(), Stop + 8, Unit),
+              0);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    bool Trap = false;
+    for (const MedFunc &M : R.MedFuncs)
+      if (M.Entry == Stop)
+        for (const MedBlock &Block : M.Blocks)
+          for (const MedOp &Op : Block.Ops)
+            Trap |= Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                    Op.Inputs[0].isConst() &&
+                    static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+                        Intrinsic::Udf_A64;
+    EXPECT_EQ(Trap, GoText);
+    if (!GoText)
+      continue;
+    ASSERT_TRUE(R.Success) << R.Error;
+    for (const PipelineFunctionAudit &Audit : R.FunctionAudits) {
+      SCOPED_TRACE(Audit.Name);
+      EXPECT_TRUE(Audit.DecodeFailures.empty());
+      EXPECT_EQ(Audit.Disposition, PipelineFunctionDisposition::Accepted);
+    }
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions C;
+    C.TheArch = T.Img.Arch;
+    C.Format = T.Img.Format;
+    C.Image = &T.Img;
+    ASSERT_TRUE(HighCEmitter().emit(R.HighFuncs, OS, C));
+    OS.flush();
+    EXPECT_NE(Source.find("__builtin_trap()"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("= 7"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("main_stop("), std::string::npos) << Source;
+  }
+}
+
 TEST(GoStackGrowth, AnARM64PathRestartsTheFunctionToo) {
   // main.f: ldr x16, [x28, #16]; cmp sp, x16; b.ls grow; add x0, x0, x1; ret
   //   grow: stp x0, x1, [sp, #8]; mov x3, x30; bl morestack_noctxt

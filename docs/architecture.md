@@ -6040,6 +6040,17 @@ no Go frame data for. So C code that an internally linked cgo image lists
 keeps the platform contract, and with external linking it has no record at
 all.
 
+Go's arm64 assembler encoded UNDEF as `0xbea71700` through Go 1.20 at least,
+a word in no allocated encoding that no decoder names; Go 1.26 assembles
+`udf #0`. It traps as that does, and Go relies on it: `runtime.abort`,
+`rt0_go`, `morestack` and `systemstack_switch` end in one, and the Go 1.15
+and Go 1.16 arm64 images left those four undecompiled. The AArch64 lift decode
+(`decodeAArch64ForLift`) reads the word as `udf #0` where the image's Go text
+holds it (`holdsGoCode`, which `isGoCode` asks too). The decoder takes the Go
+module from the image it is configured for, so the CFG, the no-return screen
+and every other decode that lifts agree. Elsewhere the word stays undecoded:
+only Go's toolchain is known to mean a trap by it.
+
 A call to a runtime write barrier (`GoModuleInfo::WriteBarriers`) follows the
 contract Go documents beside the routine (`src/runtime/asm_amd64.s`,
 `asm_arm64.s`). Go 1.11-1.20 `runtime.gcWriteBarrier` and its amd64 register
@@ -6911,11 +6922,9 @@ returns as an integer of the same bits.
 
 One thing is new. A function that now returns nothing leaves an unknown value
 where the code after its call passed the return register on, and where a C
-variable merges that register with values it does hold: `runtime.systemstack`
-hands `runtime.abort`, which no decode gives a signature, what
-`badsystemstack` left in X0, and `runtime.gcDrain` guards four reads of a
-variable its last call's result shares. Both carried a value no instruction
-means before.
+variable merges that register with values it does hold: `runtime.gcDrain`
+guards four reads of a variable its last call's result shares, which carried
+a value no instruction means before.
 Under Go's internal ABI, Go assembly keeps the stack ABI (ABI0) unless it is
 declared `<ABIInternal>`, and Go's compiler calls it so: `mov %rax,(%rsp);
 ...; call madvise`, which reads `[rsp+8..24]` (`goTakesStackArguments`, the

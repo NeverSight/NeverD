@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64SVEPrefix.h"
 #include "neverd/lift/AArch64/AArch64Lifter.h"
+#include "neverd/loader/Go/GoCode.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <atomic>
@@ -20,6 +21,11 @@
 #include <limits>
 
 namespace neverd {
+
+namespace {
+/// The word Go's arm64 assembler encoded UNDEF as (cmd/internal/obj/arm64).
+constexpr uint32_t kGoLegacyUndefinedWord = 0xbea71700u;
+} // namespace
 
 uint64_t Decoder::nextAArch64DecodeIdentity() {
   // Allocate once per Decoder, not per instruction: independent decoder
@@ -102,6 +108,19 @@ int Decoder::decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                                   DecodedInsn &Out) {
   if (!beginDecode(Out))
     return 0;
+  // Go's arm64 assembler encoded UNDEF as 0xbea71700 through Go 1.20 at
+  // least ("guaranteed to raise undefined instruction"), a word in no
+  // allocated encoding, which no decoder names; Go 1.26 assembles `udf #0`.
+  // It traps as that does, and Go relies on it: runtime.abort, and
+  // runtime.morestack after its call of newstack, which never returns.  Only
+  // in Go's text is the word known to be that: elsewhere it stays undecoded.
+  static constexpr uint8_t UndefinedInstruction[4] = {};
+  if (GoModule && Len >= 4 &&
+      readLE<uint32_t>(Bytes) == kGoLegacyUndefinedWord &&
+      holdsGoCode(*GoModule, Addr)) {
+    Bytes = UndefinedInstruction;
+    Len = sizeof(UndefinedInstruction);
+  }
   // AArch64 is fixed 4-byte width and 4-byte aligned; the common instruction
   // classes decode with a few mask+shift extractions straight into InsnBuf,
   // bypassing Capstone's DFA (the front-end throughput ceiling).  The native

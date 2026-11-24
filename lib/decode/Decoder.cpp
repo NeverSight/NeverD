@@ -100,6 +100,7 @@ void Decoder::reset() {
   ARM.reset();
   AArch64.reset();
   MIPS.reset();
+  GoModule = nullptr;
 }
 
 // The parallel phases each build a per-thread Decoder, so a failure here can be
@@ -262,6 +263,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   AArch64 = std::move(NewAArch64);
   MIPS = std::move(NewMIPS);
   RISCV = {};
+  GoModule = nullptr;
   return true;
 }
 
@@ -288,6 +290,9 @@ void Decoder::configureFor(const BinaryImage &Img) {
         Img.isArm64e() &&
         (Img.MachOCPUSubtype & ~uint32_t(llvm::MachO::CPU_SUBTYPE_MASK)) ==
             macho_loader::arm64e::kCPUSubtypeX1);
+  GoModule = AArch64 && Img.ExceptionMetadata.GoModule
+                 ? &*Img.ExceptionMetadata.GoModule
+                 : nullptr;
 }
 
 bool Decoder::init(const BinaryImage &Img) {

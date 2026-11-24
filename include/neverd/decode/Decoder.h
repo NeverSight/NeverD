@@ -413,6 +413,10 @@ private:
   /// architecture lifter's fixup.
   void fixupDecodedInsn(cs_insn *I) const;
 
+  /// The Go module of the AArch64 image configureFor last applied, if Go
+  /// built it: in its text, Go's legacy UNDEF word decodes for lifting as
+  /// `udf #0` (decodeAArch64ForLift).
+  const GoModuleInfo *GoModule = nullptr;
   csh Handle = 0;
   csh MicroASEHandle = 0;
   cs_insn *InsnBuf = nullptr;
