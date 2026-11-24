@@ -369,84 +369,250 @@ static bool isReturnControlOp(const MedOp &Op, const MedOp *Ret,
          Op.Inputs[0].Size == Target.Size && Op.Output.Size == Target.Size;
 }
 
-/// Follow the returned bytes backwards through copies in this arm. The
-/// selected value must reach a literal before the walk leaves the block.
+static bool isScalarLiteral(const MedVar &V) {
+  return V.isConst() && (V.Provenance == ConstantAddressProvenance::Unknown ||
+                         V.Provenance == ConstantAddressProvenance::Scalar);
+}
+
+/// Resolve every returned byte to a scalar literal written on this arm. A
+/// partial write may take the other bytes from an earlier local definition.
 static std::optional<uint64_t> literalResult(llvm::ArrayRef<MedOp> Ops,
                                              const MedVar &Value,
                                              const TargetRegInfo &TRI,
                                              unsigned Bytes,
                                              const MedOp *Ret = nullptr) {
-  if (Value.Size < Bytes)
-    return std::nullopt;
-  const MedVar *Source = &Value;
+  struct ByteSource {
+    const MedVar *Value;
+    unsigned Offset;
+  };
+  llvm::SmallVector<ByteSource, 8> Sources;
+  for (unsigned I = 0; I < Bytes; ++I)
+    Sources.push_back({&Value, I});
   for (const MedOp &Op : llvm::reverse(Ops)) {
     if (isReturnControlOp(Op, Ret, TRI))
       continue;
-    if (Op.Opcode != NdOp::COPY || Op.NumInputs != 1 ||
-        (!Op.Inputs[0].isConst() && Op.Inputs[0].Kind != MedVar::Temp) ||
-        (Op.Output.Kind != MedVar::Temp &&
-         !(Op.Output.Kind == MedVar::Reg &&
-           Op.Output.RegOff == TRI.IntReturnReg)))
-      return std::nullopt;
-    if (Op.Output == *Source) {
-      if (Op.Output.Size != Source->Size || Op.Inputs[0].Size < Bytes)
-        return std::nullopt;
-      Source = &Op.Inputs[0];
+    if (medReadsInputsWhole(Op) ||
+        (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff != TRI.IntReturnReg))
+      return {};
+    const auto &In = Op.Inputs;
+    const bool Copy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1;
+    const bool Slice = Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+                       isScalarLiteral(In[1]) && In[0].Size >= Op.Output.Size &&
+                       In[1].ConstVal <= unsigned(In[0].Size - Op.Output.Size);
+    const bool Join = Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 &&
+                      In[0].Size && In[1].Size &&
+                      In[0].Size + In[1].Size == Op.Output.Size;
+    if (!Copy && !Slice && !Join)
+      return {};
+    for (auto &[Source, Offset] : Sources) {
+      if (!(Op.Output == *Source))
+        continue;
+      if (Op.Output.Size != Source->Size)
+        return {};
+      Source = &In[0];
+      if (Slice)
+        Offset += In[1].ConstVal;
+      else if (Join) {
+        if (Offset < In[1].Size)
+          Source = &In[1];
+        else
+          Offset -= In[1].Size;
+      }
+      if (Offset >= Source->Size)
+        return {};
     }
   }
-  if (!Source->isConst() ||
-      (Source->Provenance != ConstantAddressProvenance::Unknown &&
-       Source->Provenance != ConstantAddressProvenance::Scalar))
-    return std::nullopt;
-  return Source->ConstVal & llvm::maskTrailingOnes<uint64_t>(Bytes * 8);
+  uint64_t Literal = 0;
+  for (unsigned I = 0; I < Bytes; ++I) {
+    const auto &[Source, Offset] = Sources[I];
+    if (!isScalarLiteral(*Source) || Offset >= Source->Size || Offset >= 8)
+      return {};
+    Literal |= ((Source->ConstVal >> (8 * Offset)) & 0xff) << (8 * I);
+  }
+  return Literal;
 }
 
-/// The blocks that return a literal directly or supply it to a shared RET.
-static llvm::SmallDenseMap<int, uint64_t, 4>
+/// Bits an OR cannot set from this operand. A shifted, masked replacement
+/// field leaves both the upper and lower bits of the old register visible.
+static uint64_t zeroBitsAtOr(const FunctionFacts &F, const MedVar &V) {
+  if (V.isConst())
+    return isScalarLiteral(V) ? ~V.ConstVal : 0;
+  const auto Definition = [&](const MedVar &Value) -> const MedOp * {
+    auto It = F.Defs.find(keyOf(Value));
+    if (It == F.Defs.end() || It->second->Output.Size != Value.Size ||
+        It->second->NumInputs != 2)
+      return nullptr;
+    return It->second;
+  };
+  const MedOp *Op = Definition(V);
+  unsigned Shift = 0;
+  if (Op && Op->Opcode == NdOp::INT_LEFT && Op->Inputs[0].Size == V.Size &&
+      isScalarLiteral(Op->Inputs[1]) && Op->Inputs[1].ConstVal < V.Size * 8) {
+    Shift = static_cast<unsigned>(Op->Inputs[1].ConstVal);
+    Op = Definition(Op->Inputs[0]);
+  }
+  uint64_t Field = UINT64_MAX;
+  if (Op && Op->Opcode == NdOp::INT_AND)
+    for (const MedVar &In : llvm::ArrayRef(Op->Inputs).take_front(2))
+      if (In.Size == V.Size && isScalarLiteral(In))
+        Field &= In.ConstVal;
+  return ~(Field << Shift);
+}
+
+/// Trace only bits whose *difference* guarantees a different result. Demand
+/// alone is insufficient: an OR may hide a read bit, and a carry can change
+/// an observed high byte even when two inputs agree in that byte.
+static std::pair<const PhiNode *, uint64_t>
+observedReturnPhi(const FunctionFacts &F, const MedBlock &Block,
+                  llvm::ArrayRef<MedOp> Ops, const MedVar &Result,
+                  uint64_t Mask, const TargetRegInfo &TRI, const MedOp *Ret) {
+  struct Observation {
+    const MedVar *Value;
+    uint64_t Bits;
+  };
+  ValueMap<Observation> Seen;
+  auto Observe = [&](const MedVar &V, uint64_t Bits) {
+    if (!Bits || V.isConst())
+      return;
+    auto [It, Inserted] = Seen.try_emplace(keyOf(V), Observation{&V, Bits});
+    if (!Inserted && It->second.Value->Size == V.Size)
+      It->second.Bits |= Bits;
+  };
+  Observe(Result, Mask);
+  for (const MedOp &Op : llvm::reverse(Ops)) {
+    if (isReturnControlOp(Op, Ret, TRI))
+      continue;
+    if (medReadsInputsWhole(Op) ||
+        (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff != TRI.IntReturnReg))
+      return {};
+    const auto It = Seen.find(keyOf(Op.Output));
+    if (It == Seen.end())
+      continue;
+    const uint64_t Bits = It->second.Bits;
+    if (Op.Output.Size != It->second.Value->Size || Op.Output.Size > 8)
+      return {};
+    Seen.erase(It);
+    if (Op.Opcode == NdOp::COPY) {
+      if (Op.NumInputs == 1 && Op.Inputs[0].Size == Op.Output.Size)
+        Observe(Op.Inputs[0], Bits);
+      continue;
+    }
+    if (Op.NumInputs != 2)
+      continue;
+    const MedVar &A = Op.Inputs[0], &B = Op.Inputs[1];
+    switch (Op.Opcode) {
+    case NdOp::SUBBYTES:
+      if (isScalarLiteral(B) && A.Size <= 8 && A.Size >= Op.Output.Size &&
+          B.ConstVal <= static_cast<unsigned>(A.Size - Op.Output.Size))
+        Observe(A, Bits << (8 * B.ConstVal));
+      break;
+    case NdOp::CONCAT:
+      if (A.Size && B.Size && A.Size + B.Size == Op.Output.Size) {
+        Observe(A, Bits >> (8 * B.Size));
+        Observe(B, Bits & llvm::maskTrailingOnes<uint64_t>(8 * B.Size));
+      }
+      break;
+    case NdOp::INT_AND:
+    case NdOp::INT_OR:
+    case NdOp::INT_ADD:
+      if (A.Size != Op.Output.Size || B.Size != A.Size)
+        break;
+      for (unsigned I = 0; I < 2; ++I) {
+        const MedVar &Input = Op.Inputs[I], &Other = Op.Inputs[1 - I];
+        if (Op.Opcode == NdOp::INT_OR)
+          Observe(Input, Bits & zeroBitsAtOr(F, Other));
+        else if (isScalarLiteral(Other)) {
+          // Adding a fixed integer is one-to-one modulo any power of two.
+          const uint64_t Kept =
+              Op.Opcode == NdOp::INT_AND ? Other.ConstVal : Bits & ~(Bits + 1);
+          Observe(Input, Bits & Kept);
+        }
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  for (const PhiNode &Phi : Block.Phis) {
+    if (Phi.ExceptionalEntry || Phi.Output.Kind != MedVar::Reg ||
+        Phi.Output.RegOff != TRI.IntReturnReg)
+      continue;
+    const auto It = Seen.find(keyOf(Phi.Output));
+    if (It != Seen.end() && It->second.Value->Size == Phi.Output.Size &&
+        It->second.Value->RegOff == Phi.Output.RegOff)
+      return {&Phi, It->second.Bits};
+  }
+  return {};
+}
+
+/// Literals compared before a common computation must undergo that same
+/// computation. Distinct constants entering different overwrites prove nothing.
+struct ReturnLiteral {
+  const MedBlock *CommonComputation;
+  uint64_t Bits;
+};
+
+static llvm::SmallDenseMap<int, ReturnLiteral, 4>
 literalReturnArms(const FunctionFacts &F, const TargetRegInfo &TRI,
                   unsigned Bytes) {
   const MedFunc &Func = *F.Func;
-  llvm::SmallDenseMap<int, uint64_t, 4> Arms;
-  for (const auto &Site : F.Returns) {
-    const MedBlock &Exit = *Site.Block;
-    if (!Site.Value || !Exit.Succs.empty() || !Exit.ExceptionalSuccs.empty() ||
-        Exit.Ops.back().Opcode != NdOp::RETURN)
+  llvm::SmallDenseMap<int, ReturnLiteral, 4> Arms;
+  struct IncomingResult {
+    const MedBlock *Block;
+    const MedVar *Result;
+    uint64_t Mask;
+    const MedBlock *CommonComputation;
+  };
+  llvm::SmallVector<IncomingResult, 8> Pending;
+  for (const auto &Site : F.Returns)
+    if (Site.Value && Site.Block->Succs.empty() &&
+        Site.Block->ExceptionalSuccs.empty() &&
+        Site.Block->Ops.back().Opcode == NdOp::RETURN)
+      Pending.push_back({Site.Block, &*Site.Value,
+                         llvm::maskTrailingOnes<uint64_t>(8 * Bytes), nullptr});
+
+  // Every predecessor followed here has one successor leading to a return.
+  // These chains can merge, but cannot cycle or lead to two different exits.
+  while (!Pending.empty()) {
+    auto [Block, Result, Mask, Common] = Pending.pop_back_val();
+    const unsigned Needed =
+        std::max(Bytes, (unsigned(llvm::Log2_64(Mask)) / 8 + 1));
+    if (Result->Size < Needed || !Block->ExceptionalPreds.empty())
       continue;
-    const auto Body = llvm::ArrayRef(Exit.Ops).drop_back();
-    const MedOp &Ret = Exit.Ops.back();
-    if (Exit.Phis.empty()) {
-      if (const auto Value = literalResult(Body, *Site.Value, TRI, Bytes, &Ret))
-        Arms.try_emplace(Exit.Id, *Value);
+    llvm::ArrayRef<MedOp> Ops(Block->Ops);
+    const MedOp *Ret = nullptr;
+    if (!Ops.empty() && Ops.back().Opcode == NdOp::RETURN) {
+      Ret = &Ops.back();
+      Ops = Ops.drop_back();
+    } else if (!Ops.empty() && Ops.back().Opcode == NdOp::BRANCH &&
+               Ops.back().NumInputs == 1 && Ops.back().Inputs[0].isConst())
+      Ops = Ops.drop_back();
+    const auto Follow = [&](int Id, const MedVar &Incoming, uint64_t Bits) {
+      if (static_cast<unsigned>(Id) >= Func.Blocks.size())
+        return;
+      const MedBlock &Pred = Func.Blocks[Id];
+      if (Pred.Succs.size() == 1 && Pred.Succs.front() == Block->Id &&
+          Pred.ExceptionalSuccs.empty())
+        Pending.push_back({&Pred, &Incoming, Bits, Common});
+    };
+    if (Block->Phis.empty()) {
+      if (const auto V = literalResult(Ops, *Result, TRI, Needed, Ret))
+        Arms.try_emplace(Block->Id, ReturnLiteral{Common, *V & Mask});
+      else if (Block->Preds.size() == 1 &&
+               llvm::all_of(Ops, [&](const MedOp &Op) {
+                 return isReturnControlOp(Op, Ret, TRI);
+               }))
+        Follow(Block->Preds.front(), *Result, Mask);
       continue;
     }
-    // A shared RET selects the incoming value of its result PHI. A write on
-    // one predecessor says nothing about the value on a different edge.
-    if (!Exit.ExceptionalPreds.empty() || Site.Value->Kind != MedVar::Reg ||
-        Site.Value->RegOff != TRI.IntReturnReg || Site.Value->Size < Bytes ||
-        !llvm::all_of(
-            Body,
-            [&](const MedOp &Op) { return isReturnControlOp(Op, &Ret, TRI); }))
+    const auto [Phi, Bits] =
+        observedReturnPhi(F, *Block, Ops, *Result, Mask, TRI, Ret);
+    if (!Phi || Phi->Output.Size < Bytes)
       continue;
-    const auto Phi = llvm::find_if(Exit.Phis, [&](const PhiNode &P) {
-      return P.Output == *Site.Value && P.Output.Size == Site.Value->Size &&
-             P.Output.RegOff == TRI.IntReturnReg;
-    });
-    if (Phi == Exit.Phis.end() || Phi->ExceptionalEntry)
-      continue;
-    for (const auto &[Pred, Incoming] : Phi->Args) {
-      if (static_cast<unsigned>(Pred) >= Func.Blocks.size())
-        continue;
-      const MedBlock &Arm = Func.Blocks[Pred];
-      if (Arm.Succs.size() != 1 || Arm.Succs.front() != Exit.Id ||
-          !Arm.ExceptionalSuccs.empty() || !Arm.Phis.empty())
-        continue;
-      llvm::ArrayRef<MedOp> Ops(Arm.Ops);
-      if (!Ops.empty() && Ops.back().Opcode == NdOp::BRANCH &&
-          Ops.back().NumInputs == 1 && Ops.back().Inputs[0].isConst())
-        Ops = Ops.drop_back();
-      if (const auto Value = literalResult(Ops, Incoming, TRI, Bytes))
-        Arms.try_emplace(Pred, *Value);
-    }
+    if (!(Phi->Output == *Result))
+      Common = Block;
+    for (const auto &[PredId, Incoming] : Phi->Args)
+      Follow(PredId, Incoming, Bits);
   }
   return Arms;
 }
@@ -491,7 +657,7 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
       continue;
     if (Block.Succs.size() > 1 && !Choice && !Indirect)
       continue;
-    std::optional<uint64_t> First;
+    llvm::SmallDenseMap<const MedBlock *, uint64_t, 4> First;
     for (int Succ : Block.Succs) {
       if (static_cast<unsigned>(Succ) >= Func.Blocks.size())
         continue;
@@ -505,9 +671,10 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
       const auto It = Arms.find(Succ);
       if (It == Arms.end())
         continue;
-      if (First && *First != It->second)
+      const auto &[Common, Bits] = It->second;
+      const auto [Previous, Inserted] = First.try_emplace(Common, Bits);
+      if (!Inserted && Previous->second != Bits)
         return true;
-      First = It->second;
     }
   }
   return false;
@@ -706,9 +873,9 @@ private:
         std::set<ValueKey> Seen;
         classify(F, *Returned, F.Paths, Seen, 0);
       }
-      // Two candidate values and a path with no settled result can all
-      // arrive at one RETURN.
-      if (F.Paths.size() >= 3 && llvm::any_of(F.Paths, [](const ReturnPath &P) {
+      // A common write can hide an entire choice behind one classified path.
+      if ((F.Paths.size() >= 3 || (F.Paths.size() == 2 && !F.Phis.empty())) &&
+          llvm::any_of(F.Paths, [](const ReturnPath &P) {
             return P.Kind == ReturnedValue::Unwritten ||
                    P.Kind == ReturnedValue::Nothing ||
                    P.Kind == ReturnedValue::CalleeResult;

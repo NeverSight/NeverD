@@ -5580,16 +5580,23 @@ returns nothing, where no byte of it reaches anything, reads zero instead.
 
 A reachable branch whose arms only return distinct integer constants selects
 a result even when another path leaves the register untouched. The arms may
-return separately or meet at a single return. At a shared return, each arm
-must supply its own input to the result PHI, and the arm and the common exit
-must be free of other effects. Copies through local temporaries preserve
-the observed bytes. Capturing the link for a delayed return and an empty
-delay slot leave the result intact. For an indirect branch, the jump table must
-prove its index domain and bind the selected arms to that instruction. The
+return separately or pass through successive result PHIs on the way to a
+common return. Each arm must supply its own input, and each block followed
+to the exit must be free of other effects. A partial register write can
+assemble a literal from bytes already defined on that arm. Across a join,
+only differences that survive the shared computation count. Replacing a
+field erases differences in that field. Adding a constant in a return delay
+slot preserves differences modulo the observed low bits. For an indirect
+branch, the jump table must prove its index domain and bind the selected
+arms to that instruction. The
 comparison uses the inferred result width. If another edge needs an
 unspecified register, generated C traps on that edge. LLVM source projection
 uses the same missing-value marker for a bare link-register return whose
 integer or pointer result has no reaching write or bound argument.
+For a conditional delay slot, HighIR keeps the shared guard address on the
+guard. Two consecutive equal conditions stay separate when a jump can
+enter the second test. The slot's computation and edge copies execute only
+when the original branch executes its slot.
 
 The same demand (`MedByteDemand`) settles which register holds the result of
 a function whose returns leave a floating value in the vector return
@@ -6647,7 +6654,23 @@ whose incoming bytes only an x86-64 partial write keeps and only a return reads
 parameter first and moved every stack parameter one place, as in
 `runtime_mallocgc(?, size, typ, needzero)`. Go 1.16's register stubs
 (`panicIndex` takes AX and CX, `duffzero` DI and X0) and the trampolines the
-platform's code enters keep their registers. A call passes a callee's arguments on the stack only
+platform's code enters keep their registers.
+
+A function whose record gives it argument or result words takes them on the
+stack and no register at all, whatever its body reads of one as it was
+entered (`goRecordsStackArguments`). `bsf rdi, rsi` keeps RDI where RSI is
+zero, which Go's count of trailing zeros then replaces, and `runtime.netpoll`
+calls `runtime.epollwait`, which hands the kernel R9, the sixth operand of
+`epoll_pwait`, as it found it. Read as arguments, these made
+`(*pallocBits).find` and `netpoll` take the platform's registers, return no
+stack result, and take the register from every caller up to `findrunnable`.
+A call to such a function binds no register from the callee's summary either
+(`applyCallRegisterEffect`). The stubs are told apart first
+(`goRegisterStubArguments`); `duffzero`, the write barrier and the
+trampolines have a record of no words, or none. The value nothing set shows
+as unknown where it is read, once, in `netpoll`'s call.
+
+A call passes a callee's arguments on the stack only
 where the callee's own recovery found them there (the stack-argument callees
 PipelineCallAbi collects). It takes no more words than the callee reads,
 bounded by its record, and marks the list complete

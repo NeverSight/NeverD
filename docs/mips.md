@@ -1687,7 +1687,7 @@ The SGI kernel emitted the TLB index, virtual and physical page numbers, and
 process ID through additional uncached reads. Neither record pairs a TLB
 array write with the first translation using that entry. A first use that
 hits in cache can be absent from the SGI bus trace.
-[Nagle et al., section 3.1](https://tnm.engin.umich.edu/wp-content/uploads/sites/353/2021/03/1992.12.SoftwareTLB_Management.pdf#page=2),
+[Nagle et al., section 3.1](https://tnm.engin.umich.edu/wp-content/uploads/sites/353/2021/03/1992.12.SoftwareTLB_Management.pdf#page=3),
 [Torrellas et al., section 2.2](https://courses.grainger.illinois.edu/CS533/sp2025/reading_list/10a.pdf#page=2).
 
 For R4000PC/SC revisions 2.2 and 3.0, item 27 of the silicon errata puts

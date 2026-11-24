@@ -21,9 +21,9 @@ import json
 import re
 from pathlib import Path
 
-REVISION = "b0a4f598cc076a8c2ff4b1b90850004bc17da31c"
+REVISION = "787e9abe64e3a0c56947a4388e9c3a351b35a158"
 SOURCE = "https://github.com/dishather/richprint/blob/" + REVISION + "/comp_id.txt"
-SOURCE_SHA256 = "61b88ed326eece56ab6007ec1fd00ae43b9acc2ee8a1c77111cca7e2da01760f"
+SOURCE_SHA256 = "74c01fcf97e9152337c45fa63b8947a2621af4b95a501fb3c21f76223190b89f"
 
 # richprint's marks, from the legend at the top of comp_id.txt.  The "Std" and
 # "Book" editions of the old compilers produce code like the others.

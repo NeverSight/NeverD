@@ -9221,6 +9221,14 @@ branch. `ReturnContract.SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge`
 executes both C outputs on all three paths to a single x86-64 return and
 on MIPS64 branches that materialize the results through temporaries before
 a shared delayed return.
+`ReturnContracts.NestedReturnsCompareOnlyBitsThatReachTheCaller`
+covers a second merge, a difference erased by a mask or the return width,
+and an incomplete incoming value.
+`ReturnContract.NestedSharedReturnOverwritesOnlyAH` executes both C outputs
+on the two paths that update AH and the path that bypasses it.
+`ReturnContract.SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot` runs both
+polarities of the branch after the inner merge and checks the returned value
+for the taken edge, the annulled edge and the path that bypasses the slot.
 `ReturnContract.MissingPointerResultUsesTheSourceABIPointerWidth` checks
 the four-byte n32 and eight-byte n64 source markers and native IR for
 the same bare pointer return.
@@ -21120,6 +21128,13 @@ register. `ACallThroughAFunctionValueTakesNoEarlierResult` keeps one argument
 at an indirect call that follows a call with a result.
 `ARunOfOneRoutineReturnsWhatTheImageDoes` runs a caller alone, with its callee
 and that callee's jump target left out.
+`ARegisterACalleeKeepsIsNoArgument` runs callers of a count of trailing zeros
+(`bsf rdi, rsi; cmovz rdi, r8`), whose summary reads RDI: the one with a
+record takes its argument and returns its result, and the one whose record
+has no word takes no parameter. `ARecordOfStackWordsLeavesNoRegisterArgument`
+lifts a routine that adds R9 as it found it: it and its caller each take one
+stack parameter and return a stack result, the call passes no register, and
+the unknown value shows where it is read.
 `GoStackABI.ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters` lifts a
 stack-ABI routine that is one jump to such code: it takes the two registers
 its target reads and passes them on.

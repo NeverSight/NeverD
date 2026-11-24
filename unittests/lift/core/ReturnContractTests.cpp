@@ -1489,6 +1489,48 @@ TEST(ReturnContracts, ASharedReturnTakesItsLiteralFromEachBranchArm) {
   EXPECT_TRUE(IsVoid(F));
 }
 
+TEST(ReturnContracts, NestedReturnsCompareOnlyBitsThatReachTheCaller) {
+  const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
+  const auto Choose = [&](int Id) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Id), temporary(Id)});
+  };
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Choose(2)}, {}, {1, 2}), block({}, {0}, {6}),
+       block({Choose(4)}, {0}, {3, 4}),
+       block({operation(NdOp::COPY, rax(1), {C(0x10a)})}, {2}, {5}),
+       block({operation(NdOp::COPY, rax(2), {C(15)})}, {2}, {5}),
+       block({operation(NdOp::INT_AND, rax(4), {rax(3), C(~0xff00ULL)})},
+             {3, 4}, {6}),
+       block({returning(rax(5))}, {1, 5})});
+  for (auto &B : F.Blocks)
+    B.StartAddr = CalleeEntry + 16 * B.Id;
+  F.Blocks[5].Phis.push_back({rax(3), {{4, rax(2)}, {3, rax(1)}}, {}});
+  F.Blocks[6].Phis.push_back({rax(5), {{5, rax(4)}, {1, rax(0)}}, {}});
+  auto IsVoid = [&] { return bool(settle({F}).front()); };
+  EXPECT_FALSE(IsVoid());
+  F.Blocks[4].Ops.front().Inputs[0] = C(10);
+  EXPECT_TRUE(IsVoid()); // The differing byte was overwritten.
+  F.Blocks[5].Ops.front() = operation(NdOp::INT_ADD, rax(4), {rax(3), C(7)});
+  EXPECT_FALSE(IsVoid());
+  F.ReturnType = NdType::makeInt(1);
+  EXPECT_TRUE(IsVoid()); // Addition preserves the equal low bytes.
+  F.ReturnType = NdType::makeInt(8);
+  F.Blocks[5].Phis.front().Args[0].second.Size = 1;
+  EXPECT_TRUE(IsVoid()); // One incoming byte cannot establish the register.
+
+  F.Blocks[5].Phis.front().Args[0].second = rax(2);
+  const auto Pair = sized(temporary(12), 2);
+  F.Blocks[3].Ops = {
+      operation(NdOp::CONCAT, Pair,
+                {MedVar::makeConst(0x62, 1), MedVar::makeConst(15, 1)}),
+      operation(NdOp::CONCAT, rax(1), {MedVar::makeConst(0, 6), Pair})};
+  EXPECT_FALSE(IsVoid()); // This arm supplied all bytes locally.
+  F.Blocks[3].Ops.back().Inputs[0] = sized(temporary(13), 6);
+  EXPECT_TRUE(IsVoid()); // The upper bytes have no source on this arm.
+}
+
 TEST(ReturnContracts, AFunctionThatNeverReturnsReturnsNoValue) {
   MedOp Abort = callTo(0x3000, 1);
   Abort.DoesNotReturn = true;
@@ -1816,6 +1858,70 @@ int main(void) {
                            8,  0, 0xe0, 3,    0, 0, 0, 0,  // bare: jr ra; nop
                            8,  0, 0xe0, 3,    0, 0, 0, 0}, // done: jr ra; nop
                           Oracle, Preamble);
+}
+
+TEST(ReturnContract, NestedSharedReturnOverwritesOnlyAH) {
+  runIntegerReturnSources(
+      Arch::X64,
+      {0x48, 0x83, 0xfe, 2,    0x74, 0x20,       // cmp rsi,2; je bare
+       0x48, 0x83, 0xfe, 1,    0x74, 0x13,       // cmp rsi,1; je third
+       0x48, 0x85, 0xff, 0x74, 7,                // test rdi,rdi; je ten
+       0xb8, 15,   0,    0,    0,    0xeb, 0x10, // mov eax,15; jmp inner
+       0xb8, 10,   0,    0,    0,    0xeb, 9,    // ten: mov eax,10; jmp inner
+       0xb8, 31,   0,    0,    0,    0xeb, 6,    // third: mov eax,31; jmp done
+       0xeb, 4,                                  // bare: jmp done
+       0xb4, 0x62, 0xeb, 0,    0xc3}, // inner: mov ah,0x62; jmp done; ret
+      R"(
+int main(void) {
+    return choose_result(0, 0) != 0x620a || choose_result(1, 0) != 0x620f ||
+           choose_result(0, 1) != 31;
+}
+)");
+}
+
+TEST(ReturnContract, SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot) {
+  for (bool BranchOnZero : {true, false}) {
+    SCOPED_TRACE(BranchOnZero);
+    const uint32_t Words[] = {
+        0x640c0002,
+        0x10ac000f,
+        0, // mode 2 branches to the bare path
+        0x640c0001,
+        0x10ac0009,
+        0, // mode 1 branches to the third constant
+        0x10800004,
+        0, // beqz a0,ten
+        0x6402000f,
+        0x10000009,
+        0, // v0 = 15; b inner
+        0x6402000a,
+        0x10000006,
+        0, // ten: v0 = 10; b inner
+        0x6402001f,
+        0x10000007,
+        0, // v0 = 31; b done
+        0x10000005,
+        0,                                        // bare: b done
+        BranchOnZero ? 0x50800003u : 0x54800003u, // inner: beqzl/bnezl a0,done
+        0x64420007,                               // taken slot: daddiu v0,v0,7
+        0x10000001,
+        0,
+        0x03e00008,
+        0}; // b done; done: jr ra
+    std::vector<uint8_t> Code;
+    for (uint32_t Word : Words)
+      for (unsigned Shift = 0; Shift < 32; Shift += 8)
+        Code.push_back(static_cast<uint8_t>(Word >> Shift));
+    runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != (ON_ZERO ? 17 : 10) ||
+           choose_result(1, 0) != (ON_ZERO ? 15 : 22) ||
+           choose_result(0, 1) != 31;
+}
+)",
+                            BranchOnZero ? "#define ON_ZERO 1\n"
+                                         : "#define ON_ZERO 0\n");
+  }
 }
 
 TEST(ReturnContract, MissingPointerResultUsesTheSourceABIPointerWidth) {

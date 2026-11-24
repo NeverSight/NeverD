@@ -182,6 +182,9 @@ extern int __vsnprintf_chk(char *, U64, int, U64, const char *,
 extern int __vsprintf_chk(char *, int, U64, const char *, __builtin_va_list);
 extern int __poll_chk(void *, unsigned, int, U64);
 extern int __ppoll_chk(void *, unsigned, const void *, const void *, U64);
+extern long __sendto_chk(int, const void *, U64, U64, int, const void *,
+                         unsigned);
+extern long __recvfrom_chk(int, void *, U64, U64, int, void *, unsigned *);
 #define FORTIFY_CALL(Name, ...)                                                \
   (Library ? ((__typeof__(&Name))dlsym(Library, #Name))(__VA_ARGS__)           \
            : Name(__VA_ARGS__))
@@ -269,6 +272,14 @@ static void fortify_dispatch(U64 Function, void *Library, const U64 *A) {
   case 24:
     FORTIFY_CALL(__ppoll_chk, (void *)A[0], (unsigned)A[1], (void *)A[2],
                  (void *)A[3], A[4]);
+    break;
+  case 25:
+    FORTIFY_CALL(__sendto_chk, (int)A[0], (void *)A[1], A[2], A[3], (int)A[4],
+                 (void *)A[5], (unsigned)A[6]);
+    break;
+  case 26:
+    FORTIFY_CALL(__recvfrom_chk, (int)A[0], (void *)A[1], A[2], A[3], (int)A[4],
+                 (void *)A[5], (unsigned *)A[6]);
     break;
   default:
     fortify_va(Function, Library, A, (void *)A[4]);

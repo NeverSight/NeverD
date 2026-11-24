@@ -410,6 +410,95 @@ TEST(GoStackResults, ACallThroughAFunctionValueTakesNoEarlierResult) {
   EXPECT_NE(Body.find(")(arg1);"), std::string::npos) << Body;
 }
 
+TEST(GoStackResults, ARegisterACalleeKeepsIsNoArgument) {
+  // `bsf rdi, rsi` keeps RDI where RSI is zero, and Go's count of trailing
+  // zeros replaces it there: `main.ctz` reads no register as it was entered.
+  // Its summary lists the read all the same, and a caller bound RDI as an
+  // operand of the call: the caller's own RDI became a parameter, and a
+  // function that takes the platform's registers returns no stack result.
+  // `main.probe`, whose record has no word to say it takes none, shows the
+  // call binds nothing.
+  //   main.ctz(x) int:    mov rsi, [rsp+8]; bsf rdi, rsi; mov r8d, 0x40
+  //                       cmovz rdi, r8; mov [rsp+16], rdi; ret
+  //   main.viaCtz(x) int: sub rsp, 0x18; mov rax, [rsp+0x20]; mov [rsp], rax
+  //                       call main.ctz; mov rax, [rsp+8]; inc rax
+  //                       mov [rsp+0x28], rax; add rsp, 0x18; ret
+  //   main.probe():       sub rsp, 0x18; mov qword ptr [rsp], 8
+  //                       call main.ctz; add rsp, 0x18; ret
+  const std::vector<uint8_t> Code = {
+      0x48, 0x8B, 0x74, 0x24, 0x08, 0x48, 0x0F, 0xBC, 0xFE, 0x41, 0xB8, 0x40,
+      0x00, 0x00, 0x00, 0x49, 0x0F, 0x44, 0xF8, 0x48, 0x89, 0x7C, 0x24, 0x10,
+      0xC3, 0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00, 0x48, 0x83, 0xEC, 0x18,
+      0x48, 0x8B, 0x44, 0x24, 0x20, 0x48, 0x89, 0x04, 0x24, 0xE8, 0xCE, 0xFF,
+      0xFF, 0xFF, 0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0xFF, 0xC0, 0x48, 0x89,
+      0x44, 0x24, 0x28, 0x48, 0x83, 0xC4, 0x18, 0xC3, 0x90, 0x66, 0x66, 0x2E,
+      0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x83, 0xEC, 0x18,
+      0x48, 0xC7, 0x04, 0x24, 0x08, 0x00, 0x00, 0x00, 0xE8, 0x9F, 0xFF, 0xFF,
+      0xFF, 0x48, 0x83, 0xC4, 0x18, 0xC3};
+  const Routine Routines[] = {{"main.ctz", 0x00, 16},
+                              {"main.viaCtz", 0x20, 16},
+                              {"main.probe", 0x50, 0}};
+  for (const bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    const Decompiled D(Arch::X64, Code, Routines, LLVM);
+    ASSERT_TRUE(D.Result.Success) << D.Result.Error;
+    const MedFunc *Via = D.function("main.viaCtz");
+    ASSERT_NE(Via, nullptr);
+    EXPECT_TRUE(Via->StackArgumentsOnly);
+    EXPECT_EQ(Via->Params.size(), 1u);
+    EXPECT_EQ(Via->GoStackResults.size(), 1u);
+    const MedFunc *Probe = D.function("main.probe");
+    ASSERT_NE(Probe, nullptr);
+    EXPECT_TRUE(Probe->StackArgumentsOnly);
+    EXPECT_TRUE(Probe->Params.empty());
+    source_call_execution_test::compileAndRun(D.Source + R"C(
+int main(void) {
+  main_probe();
+  return main_viaCtz(8) != 4 || main_viaCtz(1) != 1 || main_viaCtz(0) != 65 ||
+         main_viaCtz(-1) != 1 || main_viaCtz((int64_t)1 << 62) != 63;
+}
+)C");
+  }
+}
+
+TEST(GoStackResults, ARecordOfStackWordsLeavesNoRegisterArgument) {
+  // `main.leaves` adds R9 as it found it: under the stack ABI that is no
+  // argument, whatever its caller left there.  Read as one, it made the
+  // function take the platform's registers, its caller pass R9 on as a
+  // parameter of its own, and neither return its stack result.
+  //   main.leaves(x) int: mov rax, [rsp+8]; add rax, r9; mov [rsp+16], rax
+  //                       ret
+  //   main.user(x) int:   sub rsp, 0x18; mov rax, [rsp+0x20]; mov [rsp], rax
+  //                       call main.leaves; mov rax, [rsp+8]
+  //                       mov [rsp+0x28], rax; add rsp, 0x18; ret
+  const std::vector<uint8_t> Code = {
+      0x48, 0x8B, 0x44, 0x24, 0x08, 0x4C, 0x01, 0xC8, 0x48, 0x89,
+      0x44, 0x24, 0x10, 0xC3, 0x66, 0x90, 0x48, 0x83, 0xEC, 0x18,
+      0x48, 0x8B, 0x44, 0x24, 0x20, 0x48, 0x89, 0x04, 0x24, 0xE8,
+      0xDE, 0xFF, 0xFF, 0xFF, 0x48, 0x8B, 0x44, 0x24, 0x08, 0x48,
+      0x89, 0x44, 0x24, 0x28, 0x48, 0x83, 0xC4, 0x18, 0xC3};
+  const Routine Routines[] = {{"main.leaves", 0x00, 16},
+                              {"main.user", 0x10, 16}};
+  const Decompiled D(Arch::X64, Code, Routines);
+  ASSERT_TRUE(D.Result.Success) << D.Result.Error;
+  for (const char *Name : {"main.leaves", "main.user"}) {
+    SCOPED_TRACE(Name);
+    const MedFunc *F = D.function(Name);
+    ASSERT_NE(F, nullptr);
+    EXPECT_TRUE(F->StackArgumentsOnly);
+    EXPECT_EQ(F->Params.size(), 1u);
+    EXPECT_EQ(F->GoStackResults.size(), 1u);
+  }
+  // The caller passes its one argument and returns the result; the unknown
+  // value is where it is read.
+  const std::string User = D.body("main_user");
+  EXPECT_NE(User.find("main_leaves(arg0)"), std::string::npos) << User;
+  EXPECT_EQ(User.find("__builtin_trap"), std::string::npos) << User;
+  EXPECT_NE(D.body("main_leaves").find("incoming register has no definition"),
+            std::string::npos)
+      << D.Source;
+}
+
 TEST(GoStackResults, ARunOfOneRoutineReturnsWhatTheImageDoes) {
   // The callee is left out of the run: its body is read for its results as
   // it is for its arguments, the routine it jumps to as well.

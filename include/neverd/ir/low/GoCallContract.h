@@ -247,12 +247,25 @@ std::map<va_t, bool> goStatedCallReturns(const BinaryImage &Img);
 /// they take Go's argument registers (goAssemblyTakesRegisterArguments).
 bool goTakesStackArguments(const BinaryImage &Img, va_t Entry);
 
+/// Whether the Go function at \p Entry, in an image whose compiled code
+/// follows the stack ABI (GoModuleInfo::StackArguments), has a record that
+/// gives it argument or result words (goFrameArgumentBytes).  It takes them
+/// on the stack and no register beside them, whatever register its body
+/// reads as it was entered: `bsf` keeps a destination that Go's count of
+/// trailing zeros then replaces, and `runtime.epollwait` hands the kernel a
+/// sixth operand it never set.  A stub that passes registers on has such a
+/// record too (goRegisterStubArguments): callers tell it apart first.
+/// Assembly that takes only registers has a record of no words, or none,
+/// and under the internal ABI a record says nothing of registers.
+bool goRecordsStackArguments(const BinaryImage &Img, va_t Entry);
+
 /// Whether Go code before its internal ABI reads \p Register's incoming value
 /// without taking an argument in it: the stack and frame pointers, the link
 /// register, the closure context, arm64's goroutine register R28, and every
 /// vector register, since floating arguments are on the stack too.  Code
-/// that reads any other register at its entry, as a register stub or a
-/// trampoline the platform's code calls does, takes arguments there.
+/// whose record gives it no word (goRecordsStackArguments) and that reads
+/// any other register at its entry, as a trampoline the platform's code
+/// calls does, takes arguments there.
 bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register);
 
 /// The layout of a Go call before Go's internal ABI, on \p A: no register,

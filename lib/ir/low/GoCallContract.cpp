@@ -665,6 +665,12 @@ bool goTakesStackArguments(const BinaryImage &Img, va_t Entry) {
           (Module->RegisterArguments && inRanges(Module->GoAssembly, Entry)));
 }
 
+bool goRecordsStackArguments(const BinaryImage &Img, va_t Entry) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && Module->StackArguments && isGoCode(Img, Entry) &&
+         goFrameArgumentBytes(Img, Entry).value_or(0) != 0;
+}
+
 bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register) {
   const Arch A = TRI.TheArch;
   // The stack ABI passes floating arguments on the stack too: a vector
