@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/ucontext.h>
 
 /// Register state at the exact interrupted PC, or at an authenticated return.

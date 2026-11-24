@@ -291,6 +291,7 @@ SAVED_TEXT(kDriverBody, R"c(
 #ifdef TEST_PAUTH_LR
 #include "neverd/runtime/DarwinArm64eSignalCursor.h"
 #include <signal.h>
+#include <string.h>
 #include <unistd.h>
 static void unavailablePAuthLR(int Signal) {
   (void)Signal;
