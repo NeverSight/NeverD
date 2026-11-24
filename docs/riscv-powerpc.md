@@ -135,7 +135,10 @@ python3 unittests/lift/elf-integer/roundtrip.py \
 The ELFv1 qualification uses Clang with `-mabi=elfv1` in both byte orders,
 a GNU PowerPC64 linker with `elf64ppc` and `elf64lppc` emulations, and the
 same Python packages as the integer roundtrip above. Rebuilt programs link at
-a different address. The fixtures check mutable TOC data, taking a function's
+a different address. Single-function LLVM C can declare the loaded image as
+external storage. The test supplies its data from the input ELF and lets GNU ld
+apply the retained function-pointer relocation at the new address. The
+fixtures check mutable TOC data, taking a function's
 address, calling and replacing a stored pointer, the ninth integer argument
 and a callback with its own TOC and static chain.
 

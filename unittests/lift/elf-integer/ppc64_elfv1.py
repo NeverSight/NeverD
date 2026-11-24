@@ -3,9 +3,12 @@
 
 import argparse
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
+from elftools.elf.elffile import ELFFile
+from elftools.elf.enums import ENUM_RELOC_TYPE_PPC64
 from unicorn import ppc_const
 
 from roundtrip import DATA, RETURN, STACK, machine
@@ -24,6 +27,39 @@ def compile_elf(clang, linker, target, sources, entry, output, optimize,
          *sources, "-o", output],
         check=True,
     )
+
+
+def llvmc_image_storage(source, original):
+    # The public single-function LLVM C view declares its original image as
+    # external storage. Supply the fixture's data at the new link address and
+    # let GNU ld relocate its function pointer to the rebuilt descriptor.
+    decl = re.search(r"/\* neverd\.image: (0x[0-9A-Fa-f]+) \(original loaded image storage\) \*/\n"
+                     r"extern uint8_t (\w+)\[(\d+)\];", source.read_text())
+    if not decl:
+        return []
+    base, name, size = int(decl[1], 16), decl[2], int(decl[3])
+    with original.open("rb") as stream:
+        elf = ELFFile(stream)
+        data = elf.get_section_by_name(".data")
+        relocs = elf.get_section_by_name(".rela.data")
+        symbols = elf.get_section(relocs["sh_link"])
+        offset = data["sh_addr"] - base
+        if not 0 <= offset <= size - data["sh_size"]:
+            raise ValueError("LLVM C image declaration does not cover the fixture data")
+        lines = [".data", ".balign 8", f".globl {name}", f"{name}:",
+                 f".space {offset}", ".Lfixture_data:",
+                 ".byte " + ", ".join(map(str, data.data())), f".org {name} + {size}"]
+        for reloc in relocs.iter_relocations():
+            symbol = symbols.get_symbol(reloc["r_info_sym"])
+            if (reloc["r_info_type"] != ENUM_RELOC_TYPE_PPC64["R_PPC64_ADDR64"]
+                    or symbol["st_info"]["type"] != "STT_FUNC"):
+                raise ValueError("unexpected fixture data relocation")
+            field = reloc["r_offset"] - data["sh_addr"]
+            lines.extend([f".globl {symbol.name}", f".reloc .Lfixture_data + {field}, "
+                          f"R_PPC64_ADDR64, {symbol.name} + {reloc['r_addend']}"])
+    storage = source.with_suffix(".image.s")
+    storage.write_text("\n".join(lines) + "\n")
+    return [storage]
 
 
 def execute(path, target, name, args):
@@ -134,6 +170,8 @@ def main():
                     subprocess.run([args.neverd, "decompile", "--func", name, *switches,
                                     "-o", source, original], check=True)
                     sources = [source] if name == "load_counter" else [source, support]
+                    if route == "llvmc":
+                        sources.extend(llvmc_image_storage(source, original))
                     for opt in ("-O0", "-O2"):
                         rebuilt = source.with_suffix(".elf")
                         compile_elf(args.clang, args.ld, target, sources, name, rebuilt, opt,
