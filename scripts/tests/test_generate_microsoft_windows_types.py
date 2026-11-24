@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -20,6 +21,33 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_cpdk_members_keep_the_vendor_notice_and_verify_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original = root / "filoriginal"
+            original.write_bytes(b"checked header")
+            notice = root / "filnotice"
+            notice.write_bytes(b"original notice")
+            archive = root / "payload.tar"
+            with tarfile.open(archive, "w") as output:
+                for item in (original, notice):
+                    output.add(item, arcname=item.name)
+            license_name = "CPDK-License.rtf"
+            members = {name: {"member": path.name, "sha256": windows.wdk.digest(path)}
+                       for name, path in (("sslprovider.h", original), (license_name, notice))}
+            record = {"file": archive.name, "url": archive.as_uri(),
+                      "sha256": windows.wdk.digest(archive), "members": members}
+            licenses = root / "licenses"
+            licenses.mkdir()
+            with patch.object(windows.flat, "CPDK", {"packages": [record], "license": license_name}):
+                packages = windows.flat.cpdk_headers(root, root, licenses)
+                self.assertEqual(packages[0]["sha256"], windows.wdk.digest(archive))
+                self.assertEqual((root / "cpdk-headers" / "sslprovider.h").read_bytes(), original.read_bytes())
+                self.assertEqual((licenses / license_name).read_bytes(), notice.read_bytes())
+                members["sslprovider.h"]["sha256"] = "0" * 64
+                with self.assertRaisesRegex(ValueError, "CPDK member hash mismatch"):
+                    windows.flat.cpdk_headers(root, root, licenses)
+
     def test_work_queue_keeps_flat_parameters_and_derived_members(self):
         with tempfile.TemporaryDirectory() as temporary:
             header = Path(temporary) / "work.h"
@@ -94,6 +122,9 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                 libraries = {name: {} for name, profile in windows.flat.RUNTIME_PROFILES.items()
                              if "import_library" in profile["targets"].get(arch, {})}
                 units = windows.flat.named_runtime_units(Path(tmp) / arch, arch, ["clang"], libraries)
+                ssl = next(u for u in units if u["name"] == "SslProvider")
+                self.assertIn(str(Path(tmp) / arch / "cpdk-headers"), ssl["compiler"])
+                self.assertEqual(ssl["bridge"]["runtime_exports"]["parameter_counts"]["SslEnumCipherSuites"], 5)
                 routing = next(u for u in units if u["name"] == "RtmRuntime")
                 self.assertEqual(routing["default_calling_convention"], "__stdcall" if arch == "x86" else "")
                 self.assertEqual("runtime_import_library" in routing["bridge"], arch == "x86")
