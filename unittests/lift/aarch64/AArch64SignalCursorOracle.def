@@ -12,7 +12,7 @@
 
 #include "neverd/runtime/DarwinArm64eSignalCursor.h"
 
-enum { Samples = 64 };
+enum { Samples = 64, CursorKeyCount = 2, CursorRecipeCount = 2 };
 typedef struct {
   uintptr_t LR, CFA, PC;
 } Signature;
@@ -77,8 +77,9 @@ __asm__(".text\n"
 
 typedef struct {
   unsigned Checks, FirstFailure;
-  unsigned Signed[2], CFARejected[2], PCRejected[2], KeyRejected[2],
-      RecipeRejected[2];
+  unsigned Signed[CursorKeyCount], CFARejected[CursorKeyCount],
+      PCRejected[CursorKeyCount], KeyRejected[CursorKeyCount],
+      RecipeRejected[CursorKeyCount];
 } CursorResults;
 
 static void check(CursorResults *Result, bool Condition) {
@@ -165,12 +166,12 @@ static void checkStackRows(CursorResults *Result) {
   check(Result,
         PackedInput.PC == PC && PackedInput.SP == PackedLow && !PackedInput.LR);
   // An explicit recipe must be refused before any unsupported instruction.
-  for (unsigned Key = 0; Key != 2; ++Key) {
+  for (unsigned Key = 0; Key != CursorKeyCount; ++Key) {
     Row.Signing = Key ? NDArm64eSignedIBWithCFAPC : NDArm64eSignedIAWithCFAPC;
     check(Result, !step(Result, &Cursor, Row, Low, High, false));
     check(Result, !ndDarwinArm64eStepFrame(&Cursor, Row, Low, High));
   }
-  for (unsigned Key = 0; Key != 2; ++Key) {
+  for (unsigned Key = 0; Key != CursorKeyCount; ++Key) {
     Row.Signing = Key ? NDArm64eSignedIBWithCFA : NDArm64eSignedIAWithCFA;
     Cursor.LR = (uintptr_t)(Key ? ptrauth_sign_unauthenticated(
                                       (void *)PC, ptrauth_key_asib, CFA)
@@ -233,7 +234,7 @@ static void checkSpilled(CursorResults *Result, Signature Value, uintptr_t PC,
 static void checkRecipes(CursorResults *Result, bool Explicit, uintptr_t Low,
                          uintptr_t High) {
   SavedFrames Frames;
-  for (unsigned Key = 0; Key != 2; ++Key) {
+  for (unsigned Key = 0; Key != CursorKeyCount; ++Key) {
     for (unsigned I = 0; I != Samples; ++I) {
       const uintptr_t PC = 0x12340 + I * sizeof(uint32_t);
       Signature Value;

@@ -12,13 +12,13 @@
 
 int compareCursorModes(int Enabled, uintptr_t High) {
   const uintptr_t Low = High - RETURN_MODEL_STACK_BYTES;
-  for (unsigned Explicit = 0; Explicit != 2; ++Explicit) {
+  for (unsigned Explicit = 0; Explicit != CursorRecipeCount; ++Explicit) {
     CursorResults Result = {.Checks = 0};
     const uintptr_t StackAddress = (uintptr_t)&Result;
     check(&Result, StackAddress >= Low && StackAddress < High);
     checkStackRows(&Result);
     checkRecipes(&Result, Explicit != 0, Low, High);
-    for (unsigned Key = 0; Key != 2; ++Key) {
+    for (unsigned Key = 0; Key != CursorKeyCount; ++Key) {
       const bool UsesPC = Explicit || Enabled;
       check(&Result, (Result.PCRejected[Key] != 0) == UsesPC);
       check(&Result, (Result.RecipeRejected[Key] != 0) == UsesPC);
