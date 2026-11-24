@@ -18,6 +18,7 @@
 #include <mach-o/compact_unwind_encoding.h>
 #include <signal.h>
 #include <stddef.h>
+#include <string.h>
 #include <unwind.h>
 
 #define NEVERD_SYSTEM_UNWIND_BRIDGE(Name, Symbol, Assembly)                    \

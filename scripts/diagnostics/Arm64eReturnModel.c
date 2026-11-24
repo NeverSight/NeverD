@@ -6,11 +6,32 @@
 
 #include "Arm64eReturnModel.def"
 
+#include <stddef.h>
 #include <stdint.h>
 
 extern int main(void);
-extern int runAtEL0(int Enabled);
-#ifdef RETURN_MODEL_PREFIX
+extern int runAtEL0(int Enabled, uintptr_t StackTop);
+#if defined(RETURN_MODEL_CURSOR)
+extern int compareCursorModes(int Enabled, uintptr_t StackTop);
+
+// Clang can lower aggregate copies and initializers to these C runtime calls
+// in the O0 guest. The flat Mach-O image has no dynamic loader.
+void *memcpy(void *Dest, const void *Source, size_t Size) {
+  unsigned char *Out = Dest;
+  const unsigned char *In = Source;
+  for (size_t I = 0; I < Size; ++I)
+    Out[I] = In[I];
+  return Dest;
+}
+
+void *memset(void *Dest, int Byte, size_t Size) {
+  unsigned char *Out = Dest;
+  for (size_t I = 0; I < Size; ++I)
+    Out[I] = (unsigned char)Byte;
+  return Dest;
+}
+
+#elif defined(RETURN_MODEL_PREFIX)
 extern int comparePrefixModes(int Enabled);
 #endif
 
@@ -64,13 +85,27 @@ static void checkOracle(int Status, unsigned Mode, const char *Error) {
   finish(Error, 1);
 }
 
-void unexpectedReturnException(void) { finish(RETURN_MODEL_EXCEPTION, 1); }
+void unexpectedReturnException(void) {
+  uint64_t ESR, ELR, FAR;
+  __asm__ volatile(RETURN_MODEL_READ(ESR_EL1) : "=r"(ESR));
+  __asm__ volatile(RETURN_MODEL_READ(ELR_EL1) : "=r"(ELR));
+  __asm__ volatile(RETURN_MODEL_READ(FAR_EL1) : "=r"(FAR));
+  writeValue(RETURN_MODEL_ESR, ESR);
+  writeValue(RETURN_MODEL_ELR, ELR);
+  writeValue(RETURN_MODEL_FAR, FAR);
+  writeText(RETURN_MODEL_NEWLINE);
+  finish(RETURN_MODEL_EXCEPTION, 1);
+}
 
-int runReturnOracle(int Enabled) {
-#ifdef RETURN_MODEL_PREFIX
+int runReturnOracle(int Enabled, uintptr_t StackTop) {
+#ifdef RETURN_MODEL_CURSOR
+  return compareCursorModes(Enabled, StackTop);
+#elif defined(RETURN_MODEL_PREFIX)
+  (void)StackTop;
   return comparePrefixModes(Enabled);
 #else
   (void)Enabled;
+  (void)StackTop;
   return main();
 #endif
 }
@@ -108,8 +143,10 @@ void runReturnModel(void) {
     __asm__ volatile(RETURN_MODEL_READ(RETURN_MODEL_SCTLR2) : "=r"(Value));
     if (((Value & Mask) >> RETURN_MODEL_ENPACM_SHIFT) != Mode)
       finish(RETURN_MODEL_CONTROL_ERROR, 1);
-    checkOracle(runReturnOracle(Mode & 1), Mode, RETURN_MODEL_EL1_ERROR);
-    checkOracle(runAtEL0(Mode >> 1), Mode, RETURN_MODEL_EL0_ERROR);
+    checkOracle(runReturnOracle(Mode & 1, RETURN_MODEL_STACK_EL1), Mode,
+                RETURN_MODEL_EL1_ERROR);
+    checkOracle(runAtEL0(Mode >> 1, RETURN_MODEL_STACK_EL0), Mode,
+                RETURN_MODEL_EL0_ERROR);
     const char Setting[] = {RETURN_MODEL_ZERO + (Mode & 1),
                             RETURN_MODEL_ZERO + (Mode >> 1), '\n', 0};
     writeText(RETURN_MODEL_OBSERVATION);
