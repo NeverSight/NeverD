@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <string>
@@ -853,10 +854,12 @@ TEST(MachOSignaturePolicy, CanonicalCodesignOutputCanBeResignedAgain) {
 
 TEST(MachOSignaturePolicy, CanonicalEmptySlotsDoNotDiscardSigningPolicy) {
   using namespace llvm::MachO;
-  for (uint32_t Flags :
-       {CS_ADHOC | CS_RUNTIME, CS_ADHOC | CS_GET_TASK_ALLOW,
-        CS_ADHOC | CS_INSTALLER, CS_ADHOC | CS_REQUIRE_LV,
-        CS_ADHOC | CS_ENFORCEMENT, uint32_t(CS_LINKER_SIGNED)}) {
+  // Typed: the flags are enumerators and the last a uint32_t, from which
+  // MSVC deduces no initializer list (C3535).
+  for (uint32_t Flags : std::initializer_list<uint32_t>{
+           CS_ADHOC | CS_RUNTIME, CS_ADHOC | CS_GET_TASK_ALLOW,
+           CS_ADHOC | CS_INSTALLER, CS_ADHOC | CS_REQUIRE_LV,
+           CS_ADHOC | CS_ENFORCEMENT, uint32_t(CS_LINKER_SIGNED)}) {
     SCOPED_TRACE(Flags);
     auto Slots = canonicalCodesignOutputSlots();
     writeBE32(Slots.front().Blob, offsetof(CS_CodeDirectory, flags), Flags);

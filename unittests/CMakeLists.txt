@@ -432,7 +432,7 @@ if(TARGET neverd_shared)
   )
   add_neverd_unittest(NeverDSessionEmbeddedObjectTests
     SessionEmbeddedObjectTests.cpp
-    LINK_LIBS neverd_shared
+    LINK_LIBS neverd_shared LLVMSupport
   )
   target_include_directories(NeverDSessionEmbeddedObjectTests PRIVATE
     "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
