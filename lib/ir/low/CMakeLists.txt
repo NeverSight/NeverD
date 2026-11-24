@@ -134,6 +134,7 @@ add_neverd_component_library(NeverDIRLow
   CircleRange.cpp
   FuncDetector.cpp
   FuncDetectorMIPS.cpp
+  FuncDetectorELFInteger.cpp
   X86/FuncDetectorX86.cpp
   ARM/FuncDetectorARM.cpp
   AArch64/FuncDetectorAArch64.cpp
@@ -182,6 +183,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationEntryABI.cpp
   NdOpEmulator.cpp
   NdOpEmulatorExec.cpp
+  NdOpEmulatorIntegerMemory.cpp
   NdOpEmulatorValues.cpp
   MIPS/MIPSHistoricalCP0.cpp
   MIPS/MIPSHistoricalTLB.cpp

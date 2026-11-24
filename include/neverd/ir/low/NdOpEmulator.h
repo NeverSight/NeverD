@@ -298,6 +298,11 @@ private:
   std::optional<uint8_t> X86LinearAddressBits;
   const X86LegacySegmentCache *X86OperandSegment = nullptr;
   std::optional<X86FullSegmentLimitChoice> X86OperandSegmentChoice;
+  // Single-hart RISC-V/PowerPC reservation. Entry has no proven monitor state.
+  bool IntegerReservationKnown = false;
+  std::optional<std::pair<uint64_t, uint16_t>> IntegerReservation;
+  bool executeIntegerMemory(const LowOp &Op, Intrinsic Id);
+  void forgetReservations();
   std::optional<uint32_t> MIPSReservationGranule;
   bool MIPSReservationKnown = false;
   struct MIPSLinkedAccess {

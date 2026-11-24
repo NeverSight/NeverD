@@ -19,6 +19,16 @@ extern const CallArgumentConvention AAPCS64CallArguments;
   extern const CallArgumentConvention Name##CallArguments;
 #include "neverd/MIPSTargets.def"
 
+#define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling)                    \
+  static const CallArgumentConvention Name##Arguments = {                      \
+      .TheArch = Arch::Name,                                                   \
+      .Format = BinaryFormat::ELF,                                             \
+      .ImportArgumentsFromPrototype = true,                                    \
+      .IntegerParametersUseFullRegisters = true,                               \
+      .ArgumentsFromCallSetup = true,                                          \
+  };
+#include "neverd/ELFIntegerTargets.def"
+
 bool summaryListsNoParameters(const CallArgumentConvention &Convention,
                               const GPRReadWidths &Reads,
                               bool GoRegisterArguments) {
@@ -34,6 +44,8 @@ const CallArgumentConvention *callArgumentConvention(Arch A, BinaryFormat F) {
       &AAPCS64CallArguments,
 #define NEVERD_MIPS_TARGET(Name, Spelling, Triple) &Name##CallArguments,
 #include "neverd/MIPSTargets.def"
+#define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling) &Name##Arguments,
+#include "neverd/ELFIntegerTargets.def"
   };
   for (BinaryFormat Wanted : {F, BinaryFormat::Unknown})
     for (const CallArgumentConvention *C : Conventions)

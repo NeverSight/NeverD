@@ -14,8 +14,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/backend/IntegerMemorySource.h"
 #include "neverd/backend/llvm/LLVMSyscallAsm.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X86FPState.h"
 #include "neverd/ir/X86/X87BCD.h"
 #include "neverd/ir/X86/X87Constant.h"
@@ -124,6 +126,38 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
         " n_in=" + std::to_string(Op.NumInputs) +
         " target=" + std::to_string(static_cast<unsigned>(TargetArch)));
   };
+  if (integer_memory::owns(IC)) {
+    if (Op.NumInputs < 2 || !Op.Inputs[1].isConst())
+      return refuseUnhandled();
+    const uint64_t Key = Op.Inputs[1].ConstVal;
+    auto F = integer_memory::form(TargetArch, IC, Key);
+    const unsigned Bytes = getTargetRegInfo(TargetArch).PointerSize;
+    if (!F || !F->matchesSignature(Op.NumInputs, Op.Output.Size, Bytes))
+      return refuseUnhandled();
+    auto *Word = Builder.getIntNTy(Bytes * 8);
+    llvm::SmallVector<llvm::Type *, 2> Types(F->inputs(), Word);
+    llvm::SmallVector<llvm::Value *, 2> Args;
+    for (unsigned I = 2; I < Op.NumInputs; ++I) {
+      llvm::Value *V = getVar(Op.Inputs[I], Builder);
+      Args.push_back(V->getType()->isPointerTy()
+                         ? Builder.CreatePtrToInt(V, Word)
+                         : Builder.CreateZExtOrTrunc(V, Word));
+    }
+    auto *Ty = llvm::FunctionType::get(
+        F->inputs() ? static_cast<llvm::Type *>(Word) : Builder.getVoidTy(),
+        Types, false);
+    auto *Asm = llvm::InlineAsm::get(
+        Ty, integer_memory::assembly(TargetArch, *F, Key, '$'),
+        integer_memory::constraints(TargetArch, *F), true);
+    auto *Call = Builder.CreateCall(Asm, Args);
+    Call->setMetadata(
+        integer_memory::SourceMarker,
+        llvm::MDNode::get(
+            *Ctx,
+            {llvm::ConstantAsMetadata::get(Builder.getInt32(unsigned(IC))),
+             llvm::ConstantAsMetadata::get(Builder.getInt32(Key))}));
+    return Call;
+  }
   if (isPortableX87Intrinsic(IC))
     return emitPortableX87Intrinsic(Op, Builder);
   if (mips::isScalarIntrinsic(IC))

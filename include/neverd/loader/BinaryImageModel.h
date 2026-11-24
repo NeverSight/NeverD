@@ -19,6 +19,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/evm/EVMImageMetadata.h"
+#include "neverd/lift/RISCV/RISCVProfile.h"
 #include "neverd/loader/BinaryImageDynamic.h"
 #include "neverd/loader/BinaryImageRelocation.h"
 #include "neverd/loader/BinaryImageSection.h"
@@ -324,6 +325,7 @@ struct BinaryImage {
   std::optional<bool> X87ContextOverride;
   Bitness Bits = Bitness::Unknown;
   std::optional<MIPSImageMetadata> MIPS;
+  RISCVProfile RISCV;
   bool IsRelocatable = false;
   /// The image runs at its link-time addresses: no loader rebases it, so an
   /// absolute address its code or data holds stays valid without a
@@ -2074,7 +2076,9 @@ struct BinaryImage {
       return LocalMode &&
              Normalized % (isMIPSCompressedMode(*LocalMode) ? 2 : 4) == 0;
     }
-    if (Arch == neverd::Arch::AArch64)
+    if (isRISCV(Arch))
+      return Normalized % (RISCV.Compressed ? 2 : 4) == 0;
+    if (Arch == neverd::Arch::AArch64 || isPowerPC(Arch))
       return Normalized % 4 == 0;
     if (Arch == neverd::Arch::ARM) {
       const auto LocalMode = instructionModeAt(Normalized);

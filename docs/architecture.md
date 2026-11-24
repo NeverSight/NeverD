@@ -18985,6 +18985,17 @@ for linked Mach-O, and
 [`PatchFullSubstRTTests.cpp`](../unittests/semantic/probe/patchfull/PatchFullSubstRTTests.cpp)
 for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
+### Experimental RISC-V and PowerPC ELF analysis
+
+The ELF loader admits little-endian RV32I/ILP32 and RV64I/LP64, classic PPC32
+System V in either byte order, and explicitly marked PPC64 ELFv2 in either byte
+order. RISC-V extension evidence belongs to the image. Decode, lift and function
+discovery share the physical instruction size and control-transfer semantics.
+Both families feed the existing LowIR, ABI recovery, HighC and LLVM backends.
+Target inline assembly carries the ordering and reservation effects through
+both C projections. Native rewriting has a separate admission gate.
+See the [target profiles, gaps and roundtrip fixtures](riscv-powerpc.md).
+
 ### Experimental MIPS ELF analysis
 
 MIPS32/o32, MIPS64/n32 and MIPS64/n64 have separate big- and
@@ -19362,7 +19373,7 @@ assignments. Functions without record bitfield stores skip the capture analysis.
 
 | Change | Start here | Minimum focused verification |
 |--------|------------|------------------------------|
-| Add or fix an instruction | Matching files in `lib/lift/X86`, `AArch64`, `ARM`, or `MIPS`; public lifter header if dispatch changes | Architecture test in `unittests/lift`; semantic roundtrip in `unittests/semantic` |
+| Add or fix an instruction | Matching files in `lib/lift/X86`, `AArch64`, `ARM`, `MIPS`, `RISCV`, or `PowerPC`; public lifter header if dispatch changes | Architecture test in `unittests/lift`; semantic roundtrip in `unittests/semantic` |
 | Add an `NdOp` | `include/neverd/ir/NdOps.h`, then audit Low-to-Med, emitters/renderers, verifier/emulator, and dumps | `NeverDLiftTests` + relevant `NeverDSemanticTests` cases |
 | Change CFG or function discovery | `lib/ir/low`, `lib/loader/FunctionDiscovery*.cpp`, `lib/pipeline/PipelineFuncDetect.cpp` | Lift CFG/jump-table tests and focused semantic transform suite |
 | Add a PE input relocation or unwind rule | `lib/loader/COFF` | `COFFARMFormatTests` or a new focused loader fixture |

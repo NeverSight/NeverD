@@ -241,7 +241,10 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
           if (!FrameOffset(Op.Inputs[I], Base))
             continue;
 
-          int64_t Disp = static_cast<int64_t>(Op.Inputs[Other].Offset);
+          // Address arithmetic wraps at the operation's result width. A
+          // 32-bit SP plus 0xfffffff0 allocates sixteen bytes in its frame.
+          int64_t Disp =
+              AsWideAsItsOperand(Op.Inputs[Other].Offset, Op.Output.Size);
           if (Op.Opcode == NdOp::INT_SUB && I == 0) {
             if (Disp == std::numeric_limits<int64_t>::min())
               continue;
@@ -271,15 +274,8 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
             // may span, as Go's reflect call trampolines do with frames of
             // 16 MiB to 1 GiB.  No stage follows such a frame, and reading on
             // with a stack pointer nothing tracks prints wrong code.
-            if (IsImplicitFrameBase(Op.Inputs[I])) {
-              int64_t Moved = AsWideAsItsOperand(Op.Inputs[Other].Offset,
-                                                 Op.Inputs[Other].Size);
-              if (Op.Opcode == NdOp::INT_SUB)
-                Moved = -Moved;
-              if (Base + Moved > limits::kMaxFrameSize ||
-                  Base + Moved < -limits::kMaxFrameSize)
-                RefuseFrameBeyondLimit();
-            }
+            if (IsImplicitFrameBase(Op.Inputs[I]))
+              RefuseFrameBeyondLimit();
             continue;
           }
 

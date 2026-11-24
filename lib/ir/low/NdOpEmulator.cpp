@@ -23,6 +23,7 @@
 #include "neverd/ir/X86/X87Stack.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
@@ -118,9 +119,15 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
 
 } // namespace
 
-void NdOpEmulator::reset() {
+void NdOpEmulator::forgetReservations() {
+  IntegerReservationKnown = false;
+  IntegerReservation.reset();
   MIPSReservationKnown = false;
   MIPSReservation.reset();
+}
+
+void NdOpEmulator::reset() {
+  forgetReservations();
   UnknownBits.clear();
   Registers.clear();
   WideRegisters.clear();
@@ -487,6 +494,11 @@ bool NdOpEmulator::storeMemoryBytes(uint64_t Addr,
   std::memcpy(&Low, Value.data(), std::min<size_t>(Value.size(), sizeof(Low)));
   // All committed ordinary writes share this owner, including partial and
   // vector stores. Comparing the granule rather than the old word detects ABA.
+  if (IntegerReservation) {
+    const auto [Start, Count] = *IntegerReservation;
+    if (Addr < Start ? Start - Addr < Size : Addr - Start < Count)
+      IntegerReservation.reset();
+  }
   if (MIPSReservation) {
     const uint64_t Span =
         std::max<uint64_t>(*MIPSReservationGranule, MIPSReservation->Bytes);
@@ -523,8 +535,7 @@ void NdOpEmulator::setCallPreservedRegisters(std::vector<uint64_t> Regs) {
 }
 
 void NdOpEmulator::clobberVolatileRegisters() {
-  MIPSReservationKnown = false;
-  MIPSReservation.reset();
+  forgetReservations();
   // An unknown callee may change MXCSR status. Do not publish the stale word
   // as an authenticated input to an explicit FP state operation.
   MXCSRKnown = false;
@@ -1035,6 +1046,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
   case NdOp::INTRINSIC:
     if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+      if (integer_memory::owns(Id))
+        return executeIntegerMemory(Op, Id);
       // The explicit portable x87 profile cannot silently skip an unmodeled
       // state boundary, even when the surrounding scalar tracer is lenient.
       if (X87PortableMode && x87ContextSynchronizesExternalState(Id))
@@ -1104,8 +1117,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
     // base in a GP register materialised by a later `lea`) are preserved.
     if (StrictMode)
       return false;
-    MIPSReservationKnown = false;
-    MIPSReservation.reset();
+    forgetReservations();
     ++Skips.ApproximatedOps;
     if (Op.Output.isReg() || Op.Output.isTemp()) {
       Registers.erase(Op.Output.Offset);
@@ -1285,8 +1297,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
     // something on its way here.
     ++Skips.UnsupportedOps;
     if (!StrictMode) {
-      MIPSReservationKnown = false;
-      MIPSReservation.reset();
+      forgetReservations();
     }
     return !StrictMode;
   }

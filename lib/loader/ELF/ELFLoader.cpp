@@ -18,6 +18,7 @@
 
 #include "neverd/loader/ELF/ELFLoader.h"
 
+#include "ELFIntegerProfile.h"
 #include "ELFLoaderDetail.h"
 #include "ELFMIPSInstructionRelocations.h"
 #include "ELFMIPSProfile.h"
@@ -67,6 +68,10 @@ Arch tripleToArch(llvm::Triple::ArchType TA) {
   case llvm::Triple::arm:
   case llvm::Triple::thumb:
     return Arch::ARM;
+#define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling)                    \
+  case llvm::Triple::LLVMArch:                                                 \
+    return Arch::Name;
+#include "neverd/ELFIntegerTargets.def"
   case llvm::Triple::mips:
     return Arch::MIPS32;
   case llvm::Triple::mipsel:
@@ -110,9 +115,12 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     Img.MIPS = *Profile;
     if (Profile->HasMicroMIPS || Profile->HasMIPS16)
       Img.Mode = InstructionMode::MixedMIPS;
+  } else if (isRISCV(Img.Arch) || isPowerPC(Img.Arch)) {
+    if (auto E = elf_loader::readIntegerProfile(Obj, Img.Arch, Img.RISCV))
+      return E;
   } else if constexpr (ELFT::Endianness == llvm::endianness::big) {
     return llvm::make_error<llvm::StringError>(
-        "elf: big-endian is only supported for admitted MIPS profiles",
+        "elf: unsupported big-endian architecture",
         llvm::inconvertibleErrorCode());
   }
 
@@ -538,6 +546,13 @@ void ELFLoader::identify(llvm::MemoryBufferRef Buffer,
         Row.Reason = llvm::toString(Profile.takeError());
       } else {
         Row.TheArch = Profile->architecture(!Row.BigEndian);
+      }
+    } else if (isRISCV(Row.TheArch) || isPowerPC(Row.TheArch)) {
+      RISCVProfile Profile;
+      auto E = elf_loader::readIntegerProfile(**Obj, Row.TheArch, Profile);
+      if (E) {
+        Row.Loadable = false;
+        Row.Reason = llvm::toString(std::move(E));
       }
     } else if (Row.BigEndian) {
       Row.Loadable = false;

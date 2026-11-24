@@ -156,6 +156,10 @@ void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
 /// moved past a frame-free early return.
 bool aarch64MarkedEntryAfterFunctionEnd(const BinaryImage &Img, va_t Addr);
 
+void scanELFIntegerCalls(const BinaryImage &Img, Decoder &Dec,
+                         const Segment *Seg, va_t Start, va_t End,
+                         std::set<va_t> &Out, const Cancellation *Control);
+
 inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
                              const Segment *Seg, va_t Start, va_t End,
                              std::set<va_t> &Out,
@@ -168,6 +172,10 @@ inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
     return;
   case Arch::ARM:
     scanSegmentCallsARM(Img, Dec, Seg, Start, End, Out, Control);
+    return;
+#define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling) case Arch::Name:
+#include "neverd/ELFIntegerTargets.def"
+    scanELFIntegerCalls(Img, Dec, Seg, Start, End, Out, Control);
     return;
   case Arch::MIPS32:
   case Arch::MIPS32EL:

@@ -46,6 +46,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/IntegerMemorySource.h"
 #include "neverd/backend/LLVMControlFlowFailure.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
@@ -80,6 +81,7 @@
 #include "neverd/backend/llvm/X86/X86SgxNative.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceCallABI.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/libc/LibCRecordArguments.h"
@@ -5028,6 +5030,42 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   if (!IA)
     return false;
+  if (auto *MD = Call.getMetadata(integer_memory::SourceMarker)) {
+    auto *Id =
+        MD->getNumOperands() == 2
+            ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(0))
+            : nullptr;
+    auto *Selector =
+        MD->getNumOperands() == 2
+            ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(1))
+            : nullptr;
+    if (!Id || !Selector || Id->getValue().uge(unsigned(Intrinsic::_Count)) ||
+        Selector->getValue().ugt(255))
+      throw std::invalid_argument("invalid native integer memory metadata");
+    const unsigned Key = Selector->getZExtValue();
+    auto F = integer_memory::form(
+        Opts.TheArch, static_cast<Intrinsic>(Id->getZExtValue()), Key);
+    const unsigned Bits = getTargetRegInfo(Opts.TheArch).PointerSize * 8;
+    if (!F || Call.arg_size() != F->inputs() || !IA->hasSideEffects() ||
+        IA->getAsmString() !=
+            integer_memory::assembly(Opts.TheArch, *F, Key, '$') ||
+        IA->getConstraintString() !=
+            integer_memory::constraints(Opts.TheArch, *F) ||
+        (F->inputs() ? !Call.getType()->isIntegerTy(Bits)
+                     : !Call.getType()->isVoidTy()))
+      throw std::invalid_argument("invalid native integer memory assembly");
+    llvm::SmallVector<std::string, 2> Args;
+    for (const auto &Arg : Call.args()) {
+      if (!Arg->getType()->isIntegerTy(Bits))
+        throw std::invalid_argument("invalid native integer memory operand");
+      Args.push_back(valueStr(Arg.get()));
+    }
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << Name << " = ";
+    OS << integer_memory::source(Opts.TheArch, *F, Key, Args) << ";\n";
+    return true;
+  }
   if (const auto Assembly = mips::nativeBarrierSource(Call)) {
     if (!isMIPS(Opts.TheArch))
       throw std::invalid_argument(mips::MalformedBarrierSource);

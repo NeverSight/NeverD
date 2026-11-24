@@ -1,4 +1,7 @@
 add_neverd_component_library(NeverDLift
+  RISCV/RISCVCompressed.cpp
+  RISCV/RISCVLifter.cpp
+  PowerPC/PowerPCLifter.cpp
   MIPS/MIPSLifter.cpp
   MIPS/MIPSLiftR6.cpp
   MIPS/MIPSLiftSystem.cpp

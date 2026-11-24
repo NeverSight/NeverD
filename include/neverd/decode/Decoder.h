@@ -419,6 +419,7 @@ private:
   const uint64_t AArch64DecodeIdentity;
   uint64_t AArch64DecodeGeneration = 0;
   va_t MIPSInvalidAddressBits = 0;
+  RISCVProfile RISCV;
   Arch TargetArch = Arch::Unknown;
   InstructionMode CurrentMode = InstructionMode::Default;
   uint8_t MIPSISARevision = 2;

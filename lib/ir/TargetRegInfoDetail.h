@@ -37,6 +37,7 @@ extern TargetRegInfo A64RegInfo;
 /// ARM32 register info (TargetRegInfoARM.cpp).
 extern TargetRegInfo ARMRegInfo;
 
+const TargetRegInfo &getELFIntegerRegInfo(Arch Target);
 const TargetRegInfo &getMIPSRegInfo(Arch Target);
 
 // The table fields that cannot be set from the static initializer — the
