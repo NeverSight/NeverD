@@ -56,6 +56,14 @@ success. A failed connection cannot carry stream data, and its socket must be
 closed before retry. There are at most 4,096 stored TCP/UDP entries and 1 MiB of
 payload bytes combined. Counted failures use separate finite counters.
 
+`connect` looks up the FD first and returns EBADF for a missing descriptor.
+For an open descriptor it imports the socket address before checking the file
+type or connection state. An oversized or negative address length returns
+EINVAL. Any unreadable byte in a nonempty address returns EFAULT. Zero length
+skips the copy. After import a non-socket returns ENOTSOCK, and an Internet
+socket requires at least the two-byte address family. AF_UNSPEC disconnects
+remain an explicit unsupported operation.
+
 `socket`, `connect`, `sendto` and `recvfrom` share one implementation across raw
 x64/AArch64 Linux syscalls, Android named wrappers and `syscall`. Bionic `send`
 and `recv` lower to that same owner. Connected TCP accepts no explicit peer

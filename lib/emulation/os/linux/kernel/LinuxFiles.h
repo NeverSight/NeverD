@@ -181,6 +181,9 @@ private:
                                              bool MayReturnAgain,
                                              ProcessResult &Result);
   llvm::Expected<std::optional<uint64_t>>
+  connectSocket(OpenSocket *Socket, uint64_t Address, uint32_t Size,
+                const LinuxNetworkOptions &Network, ProcessResult &Result);
+  llvm::Expected<std::optional<uint64_t>>
   transferSocket(OpenSocket &Socket, bool Send, uint64_t Address, uint64_t Size,
                  ProcessResult &Result, uint32_t Flags = 0);
   llvm::Expected<std::optional<uint64_t>>
