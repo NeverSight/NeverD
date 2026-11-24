@@ -48,9 +48,9 @@ classic, MIPS16 or microMIPS encoding. A function override that changes the
 input ISA or calling convention produces a diagnostic. Compressed function
 symbols carry their instruction mode so a native linker can construct callable
 pointers. The r8 SDK supports MIPS III/o32, MIPS V, MIPS16 and microMIPS o32,
-and fixed-address output. A fork exposing `LLVM_NEVERD_MICROMIPS64_PRE_R6`
-also emits scalar microMIPS64 bodies for Releases 2, 3 and 5 in both byte orders.
-n32 retains ELF32 pointers and n64 retains ELF64 pointers. Release 6 microMIPS64
+and fixed-address output. The r9 SDK also emits scalar microMIPS64 bodies
+for Releases 2, 3 and 5 in both byte orders. n32 retains ELF32 pointers and n64
+retains ELF64 pointers. Release 6 microMIPS64
 native emission requires additional backend support. Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
