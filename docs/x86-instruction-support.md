@@ -51,6 +51,12 @@ passed 132/132 on Linux and 131/132 on macOS arm64 and both Windows compilers;
 the one explicit skip on each of those platforms requires POSIX x64 x87
 hardware. Both local SDKs passed the three NeverD x86 decoder suites
 (7/7, 6/6, 9/9) at this exact pin.
+The following `dev` pin `d3dcfa80afcb4d0786308a2938659998c54a1453`
+changes only Capstone's MIPS scanning and printing. The
+[four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45346520785)
+again passed 132/132 on Linux and 131/132 on the other platforms with their
+single POSIX-x64 x87 skip. At `1bfbe32497`, both local SDKs repeated the
+22 x86 decoder checks and exported the same two VMRUN C sources.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 
@@ -89,6 +95,13 @@ LLVM-to-C C sources and all four tagged-input object/guest-image hashes match
 the [hosted AMD KVM comparison](evidence/x86-vmrun-hosted-kvm-2026-11-21.json).
 Native SGX remains unavailable on all three designated runners, so these
 results do not authorize a new LLVM release or production pin.
+The later `1bfbe32497` shared-analysis merge again passed 243/243 complete
+mode execution, 253/253 generated-C source, 4/4 Python SDK, 27/27 selected
+mode/SMM/SGX/event software, 73/73 return-contract, 81/81 pipeline-outcome
+and 122/122 x64 continuation cases per SDK. Its new returning-call and
+interpreter specialization checks passed 13/13 and 669/669 per SDK. The
+[qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+keeps this focused merge result separate from the earlier full paging matrix.
 
 ## Support is a pipeline property
 

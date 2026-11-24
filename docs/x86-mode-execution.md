@@ -443,6 +443,19 @@ the [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/4
 132/132 on Linux and 131/132 on each other platform, with only the declared
 POSIX-x64 x87 hardware skip.
 
+The `1bfbe32497` merge includes the next Capstone pin `d3dcfa80af` and a
+shared nullable-result proof. Both SDKs rebuilt and passed the complete
+243-case mode execution owner, 253 generated-C source cases, four Python SDK
+checks, 27 selected mode/SMM/SGX/event cases, all 22 x86 decoder checks,
+73 return-contract tests, 81 pipeline-outcome tests, 122 x64 continuation
+exports, 13 returning-call result-object checks and 669 interpreter
+specialization checks. HighC and LLVM-to-C VMRUN C hashes remained identical
+to the hosted AMD inputs. The [four-platform pin check](https://github.com/NeverSight/NeverD/actions/runs/45346520785)
+passed 132/132 on Linux and 131/132 on the other platforms, with the same
+single declared x87 hardware skip per platform. The preceding `a02363b36b`
+source retains the complete 853/855 paging qualification; this later merge
+replayed the execution and shared consumers.
+
 ## Earlier qualification records
 
 The November 11 regression stream performs protected32 → compatibility32 → code64 →

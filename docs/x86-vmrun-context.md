@@ -76,6 +76,11 @@ contexts and reproduced all four tagged-input hosted object and guest-image
 hashes. Its local decoder, mode, generated-C and continuation regressions are
 recorded in the [merged-source qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json).
 
+The following `1bfbe32497` shared-analysis merge also retained both source
+hashes, after full mode execution and x64 continuation suites passed on both
+SDKs. The [VMRUN evidence](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
+records that later export identity separately from the hosted guest run.
+
 These results establish the tested nested KVM profile. The generated path
 preserves the full RAX value and emits the original address-size prefix; the
 CPU environment selects the VMCB address or raises the observed exception.

@@ -5669,5 +5669,282 @@
     },
     "release_gate": "No new LLVM release or NeverD pin change: native SGX is unavailable on all designated runners."
   },
-  "latest_integrated_head": "a02363b36b289a54c2b3546649ab93ca593a80df"
+  "latest_integrated_head": "1bfbe324973924e2bc32af3d44c975028909e345",
+  "final_dev_merge_20261123": {
+    "date_local": "2026-11-23",
+    "neverd": "1bfbe324973924e2bc32af3d44c975028909e345",
+    "neverd_commit": "https://github.com/NeverSight/NeverD/commit/1bfbe324973924e2bc32af3d44c975028909e345",
+    "full_matrix_source": "a02363b36b289a54c2b3546649ab93ca593a80df",
+    "capstone": "d3dcfa80afcb4d0786308a2938659998c54a1453",
+    "capstone_ci": {
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/45346520785",
+      "neverd": "1bfbe324973924e2bc32af3d44c975028909e345",
+      "capstone": "d3dcfa80afcb4d0786308a2938659998c54a1453",
+      "jobs": {
+        "Linux x64": {
+          "passed": 132,
+          "failed": 0,
+          "skipped": [],
+          "source": "d3dcfa80afcb4d0786308a2938659998c54a1453",
+          "results_sha256": "c6fdefd16f552de0f0cd4d4d923e411262f39858eb42ff599fb9585c141c6a6b",
+          "integration_sha256": "c25a461fe7a8882f956cc85c59505fb87c88ea9a54c92b2c34087e6a2e3c566e",
+          "arm_details_sha256": "691d2db4f6b5b88c299e8a5b0085293cfdce85a2d2aeab49911da275713ffa92",
+          "arm_details": {
+            "Valid files": 2,
+            "Invalid files": 0,
+            "Errors": 0,
+            "Total": 133,
+            "Successful": 133,
+            "Skipped": 0,
+            "Failed": 0
+          }
+        },
+        "Windows x64 MSVC": {
+          "passed": 131,
+          "failed": 0,
+          "skipped": [
+            "unit_x86_x87_environment_hardware"
+          ],
+          "source": "d3dcfa80afcb4d0786308a2938659998c54a1453",
+          "results_sha256": "41e3d7d3ba5ad43ef67870e81e3564c7ae4c24d4b426a1b9078c28d8a35ae47d",
+          "integration_sha256": "368bc7c80b13d3997c1bbfe2610efe34fb4b4a91829b27dcbd6262482dc1095b",
+          "arm_details_sha256": "38b5e75bb72bdbd6829df07e7bc31c9ceeb0c5ddde7121d09453509d3cc2a12b",
+          "arm_details": {
+            "Valid files": 2,
+            "Invalid files": 0,
+            "Errors": 0,
+            "Total": 133,
+            "Successful": 133,
+            "Skipped": 0,
+            "Failed": 0
+          }
+        },
+        "Windows x64 clang-cl": {
+          "passed": 131,
+          "failed": 0,
+          "skipped": [
+            "unit_x86_x87_environment_hardware"
+          ],
+          "source": "d3dcfa80afcb4d0786308a2938659998c54a1453",
+          "results_sha256": "b056a70e434efeee2f8c0d9f529a6541e2e51defaad308cb403af46d4a2fe676",
+          "integration_sha256": "0dc4a8d06898c8c624d1c1aee91213ae51aa8d8219be587ac5c8370569681f92",
+          "arm_details_sha256": "38b5e75bb72bdbd6829df07e7bc31c9ceeb0c5ddde7121d09453509d3cc2a12b",
+          "arm_details": {
+            "Valid files": 2,
+            "Invalid files": 0,
+            "Errors": 0,
+            "Total": 133,
+            "Successful": 133,
+            "Skipped": 0,
+            "Failed": 0
+          }
+        },
+        "macOS arm64": {
+          "passed": 131,
+          "failed": 0,
+          "skipped": [
+            "unit_x86_x87_environment_hardware"
+          ],
+          "source": "d3dcfa80afcb4d0786308a2938659998c54a1453",
+          "results_sha256": "4f2d9ba7e731986754e4ddc3f6e7151ae625465e906abee8ed3f5aa686ab1721",
+          "integration_sha256": "dfa4f7e310d2cba65a5f28e0df6701542b3b693b0850522eae882738cab1dc4e",
+          "arm_details_sha256": "691d2db4f6b5b88c299e8a5b0085293cfdce85a2d2aeab49911da275713ffa92",
+          "arm_details": {
+            "Valid files": 2,
+            "Invalid files": 0,
+            "Errors": 0,
+            "Total": 133,
+            "Successful": 133,
+            "Skipped": 0,
+            "Failed": 0
+          }
+        }
+      }
+    },
+    "neverc_compiler_source": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+    "neverc_dev_target_owner_checked": "71c4e8f9f88c916901292684f4621102a0650a61",
+    "neverc_target_owner_changes": [],
+    "sdks": {
+      "build-x86": {
+        "decoder": {
+          "NeverDX86InstructionCoverageTests": {
+            "passed": 7,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "4092bd4aeff4cc5a4ea8e2915204713760a073e1049b9b8a13efe7d6f585690d",
+            "xml_sha256": "463972af1a5a367bb466e7822c549a7efd548fb0c0d0b965052e81131c694bc3"
+          },
+          "NeverDX86DecodeDetailTests": {
+            "passed": 6,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "8cda4ab383d972f27ea1e056f3e2e271c1196414d8bfddf20f7d2fe68bd50b6a",
+            "xml_sha256": "d250b69a4800fe0c2daab834f19bfed28894f32abcc96cae6f048c0f6fa1b462"
+          },
+          "NeverDX86NoIndexAddressTests": {
+            "passed": 9,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "8a2a2fe229bb89c23113a8f0648546e96230c2265d7cd113d67dfe038b67103c",
+            "xml_sha256": "452159ff231b5b220ff18738d4a629f4ea1d0c005b5c3ac40fc972c5a630ddcd"
+          }
+        },
+        "software_passed": 27,
+        "source_passed": 253,
+        "sdk_integration_passed": 4,
+        "full_mode_execution_passed": 243,
+        "shared_consumers": {
+          "NeverDReturnContractTests": {
+            "exit": 0,
+            "registered": 73,
+            "passed": 73,
+            "failures": [],
+            "skips": [],
+            "binary_sha256": "8fa9b079ba88e8932d73cf554a60b3156875adedc4cff130943c18be4ed22467"
+          },
+          "NeverDPipelineOutcomeTests": {
+            "exit": 0,
+            "registered": 81,
+            "passed": 81,
+            "failures": [],
+            "skips": [],
+            "binary_sha256": "15812226d5efaf45bfe0e45a42bd65d565d0f5ff819c3c649d055fb90bfa0b3e"
+          },
+          "NeverDX64ContinuationExportTests": {
+            "exit": 0,
+            "registered": 122,
+            "passed": 122,
+            "failures": [],
+            "skips": [],
+            "binary_sha256": "c470df34e4116152747ed0353cdf20ed85007e1422ce23b135e4e50a6e795dc7"
+          }
+        },
+        "new_shared_analysis": {
+          "NeverDPEFixedImageTests": {
+            "registered": 13,
+            "passed": 13,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "f106bddca1fba9129b99558b61b1416bd967673d8c630eae1594619c6a6d625e",
+            "xml_sha256": "90668f0c8dd0739b24722620fb8bf05351c5f9a0750919f32bcbc04b0ffd2ca6"
+          },
+          "NeverDInterpreterSpecializationTests": {
+            "registered": 669,
+            "passed": 669,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "76992372fd9d649dcef766a3c424d219df4eb173d64e19ecf4ef2caeea39c7ce",
+            "xml_sha256": "d134e4c2a49546c415c68b465f1b254af62fa454a3cfd1faca6569cb9ba13b15"
+          }
+        },
+        "libneverd_sha256": "a2b2fefd138f1e899ddc8d57ed03b97f4c82f604d55476956a28051dee998183",
+        "report_sha256": {
+          "decoder": "f754c309ff101e892db72bfcd10319643c2b924fab412bd60ac6bf0eb5541907",
+          "software": "bd13d1b6caa3307a37fb902fd179d31990bc1ed58d6590876751a415c11ab138",
+          "source": "c6748bf352f8e66f3dadf0c57deba0461194f6b3115ba7491b0319d2f939aaa1",
+          "execution": "6c8284c90f85a4ecce710eb69917bce767b8b18e0d84c922c140e48cffe78320",
+          "shared": "f06d3428e30e70e3933d956b017fb54dfd2d86e0bc361dbd7dc7eb51dc42a7fb",
+          "analysis": "77b612cdc6d73e0838cd9c42c02346cdbd2a87bb894fbfcfa49309fa14ce4f3b"
+        }
+      },
+      "build-x86-native": {
+        "decoder": {
+          "NeverDX86InstructionCoverageTests": {
+            "passed": 7,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "874cd9a4b79a61767c85f0f2e02773173a238e5fd7121af529962068888b7410",
+            "xml_sha256": "c93b62e8feb597ab517e96232320b4195039ba35bd5020ab593547606fe0ab71"
+          },
+          "NeverDX86DecodeDetailTests": {
+            "passed": 6,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "ed7c2704f03882b859444a1e3caad93727dec129071e8fd8ff788e58b87e28eb",
+            "xml_sha256": "4c71a8128c093ce2f385970ef5da68c7bcfee4f45b4f267f807a6d8bb8176b0e"
+          },
+          "NeverDX86NoIndexAddressTests": {
+            "passed": 9,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "86627cddebcf0ad4dc6b1d8cbe7efad310ea975676bc1dbd02be3112cf5cc8f2",
+            "xml_sha256": "8a3b56957f75103d096d43b60642ca22226da275d1ff649f7aed9945ef56aaba"
+          }
+        },
+        "software_passed": 27,
+        "source_passed": 253,
+        "sdk_integration_passed": 4,
+        "full_mode_execution_passed": 243,
+        "shared_consumers": {
+          "NeverDReturnContractTests": {
+            "exit": 0,
+            "registered": 73,
+            "passed": 73,
+            "failures": [],
+            "skips": [],
+            "binary_sha256": "e991edbdc6ffdbad8786ff430752a6a049f2c46cd6d6c1c708ee6a0624ca3d88"
+          },
+          "NeverDPipelineOutcomeTests": {
+            "exit": 0,
+            "registered": 81,
+            "passed": 81,
+            "failures": [],
+            "skips": [],
+            "binary_sha256": "a2fbefeb56a855bcb64bd33341410085441b0beeed47a7b44cdc04e7fb994dbc"
+          },
+          "NeverDX64ContinuationExportTests": {
+            "exit": 0,
+            "registered": 122,
+            "passed": 122,
+            "failures": [],
+            "skips": [],
+            "binary_sha256": "62922e777c7509e2fc32e27b82edcfbfac3a3f921c7583483b12a99d1383b523"
+          }
+        },
+        "new_shared_analysis": {
+          "NeverDPEFixedImageTests": {
+            "registered": 13,
+            "passed": 13,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "5c735d0a939e34a8bba3a0d61837dde40037a0c45991ade156bac6d7a8ebefa8",
+            "xml_sha256": "4bfcf4dfc35daaa1abc43aa0df5b4e6471b6f87de2f1897eb3f08abb7ef150b7"
+          },
+          "NeverDInterpreterSpecializationTests": {
+            "registered": 669,
+            "passed": 669,
+            "failed": [],
+            "skipped": [],
+            "exit": 0,
+            "binary_sha256": "112d0654743c1990bc04da7cfb791926c3f6248a306c9e972f1d67235fb00668",
+            "xml_sha256": "468bc73d14e03355e25cdece5deb6a9a4ce4940166b0b88e8802a190d28454f5"
+          }
+        },
+        "libneverd_sha256": "948b4de4ce1b414de496432a791ecf8bc65461c52942577dbd13a10acb7b0ad2",
+        "report_sha256": {
+          "decoder": "4d98cc1cd815fa1c9b554f98d6a40d1e726db5bee2d4d7fe5c255caed6670020",
+          "software": "bd13d1b6caa3307a37fb902fd179d31990bc1ed58d6590876751a415c11ab138",
+          "source": "361f3e6e73060675d7b52d4354b8ada15e5abb4eed05d3af163367fd8c7a55eb",
+          "execution": "d89a9dcdae6f913036f99393f9fbef9906101014fb89b49d798ba730013ec268",
+          "shared": "5963516cf050220965c1ac36b659b625e18b04cadb600f8e8ff926ec4b292f59",
+          "analysis": "7552145debbf06f576996e5f5dc1cea3dabdb83a2df916e05e91c095b6c5f42d"
+        }
+      }
+    },
+    "vmrun_export_sha256": {
+      "high": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+      "llvm": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1"
+    },
+    "release_gate": "No new LLVM release or production pin: designated SGX runners execute zero native enclave instructions."
+  },
+  "latest_focused_source": "1bfbe324973924e2bc32af3d44c975028909e345"
 }

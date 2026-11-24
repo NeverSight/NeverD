@@ -150,6 +150,8 @@ zero available cases. Its freshly built x64 NeverC compiler passed the target
 audit and all 27 selected software mode/SMM/SGX/event cases at NeverD
 `0d5a4ee1df`; the compiler artifact hash matches the CI receipt. The later
 `a02363b36b` source passed the same 27 software cases on both local SDKs.
+The later `1bfbe32497` shared-analysis merge repeated those 27 cases on both
+SDKs together with the complete 243-case mode execution owner.
 These are software and capability results, not native enclave execution passes.
 The [qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json) retains
 the runner, compiler and test-report digests separately.
