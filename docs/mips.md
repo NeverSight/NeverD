@@ -1690,6 +1690,15 @@ hits in cache can be absent from the SGI bus trace.
 [Nagle et al., section 3.1](https://tnm.engin.umich.edu/wp-content/uploads/sites/353/2021/03/1992.12.SoftwareTLB_Management.pdf#page=3),
 [Torrellas et al., section 2.2](https://courses.grainger.illinois.edu/CS533/sp2025/reading_list/10a.pdf#page=2).
 
+The R6000 power-on diagnostic writes a translation with `SCACHE`, reads the
+mapped virtual address and compares the result with an uncached physical
+alias. On this processor the full translation resides in secondary-cache
+SRAM. The diagnostic identifies the mapping and readback but supplies no
+timestamps for the entry update and its first use.
+[R6000 cache design, slides 16–20](https://old.hotchips.org/wp-content/uploads/hc_archives/hc02/2_Mon/HC2.S1/HC2.1.3.pdf#page=8),
+[TLB write routine](https://github.com/calmsacibis995/RISC_os-src/blob/acfe9c314eedb635713ed5ebd31c00e09bec2eb0/SA/diags/pon/pon_tlb_6000.s#L85-L107),
+[power-on readback](https://github.com/calmsacibis995/RISC_os-src/blob/acfe9c314eedb635713ed5ebd31c00e09bec2eb0/SA/diags/pon/pon_vm_6000.c#L149-L167).
+
 For R4000PC/SC revisions 2.2 and 3.0, item 27 of the silicon errata puts
 `TLBWR` in a taken branch-likely delay slot, followed by `NOP` and `ERET`.
 The R4000 guest test uses that sequence in both byte orders. A probe miss
@@ -1767,8 +1776,10 @@ The compatible R4000 reset profile supplies the test's initial CP0 state.
 
 To reproduce the intervals, download both linked manuals and run the
 [waveform reader](../unittests/lift/mips/historical-reset-capture.py) with
-Python and PyMuPDF. It checks each PDF's SHA-256 and reports the pixels
-bracketing both transitions and their separation in nanoseconds.
+Python and PyMuPDF. It checks each PDF's SHA-256 and reports the signal name,
+edge polarity and pixel bracket for each endpoint, plus their separation in
+nanoseconds. The [expected measurements](../unittests/lift/mips/historical-reset-capture.expected.json)
+record the readings from both figures.
 
 ```sh
 python3 unittests/lift/mips/historical-reset-capture.py r4300ps.pdf r4xxxps.pdf
@@ -1806,6 +1817,13 @@ exception-handler stores of EPC and Cause to locate the interrupted
 instruction. The capture omitted the originating interrupt signal. Its
 instruction boundary therefore has no corresponding pin-edge timestamp.
 [Rose, section 4.3](https://charltonrose.com/citcat/msthesis/msthesis.pdf#page=31).
+
+The HP E2401A R3000 inverse-assembler disk contains three HP 16500 analyzer
+setups with labels for reset, interrupt and exception signals. All three
+contain channel configuration and symbols. None contains an acquisition
+record with the interrupt edge and CPU recognition on a common clock.
+[HP E2401A disk image](https://ftpmirror.your.org/pub/misc/bitsavers/test_equipment/hp/logic_analyzer_preprocessors/inv_asm/R3000.IMD),
+[original disk label](https://ftpmirror.your.org/pub/misc/bitsavers/test_equipment/hp/logic_analyzer_preprocessors/inv_asm/R3000.jpg).
 
 IDT gives separate R3051/2 pipeline latencies to the general exception
 vector while the pipeline runs. A direct, externally synchronized interrupt
