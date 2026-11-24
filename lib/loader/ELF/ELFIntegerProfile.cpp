@@ -13,6 +13,7 @@
 #include "ELFIntegerProfile.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/loader/ELF/PowerPCABI.h"
 
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -20,12 +21,100 @@
 #include "llvm/Support/RISCVAttributeParser.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
 
+#include <cstring>
+#include <optional>
+
 namespace neverd::elf_loader {
 namespace {
+template <typename ELFT>
+llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
+                             llvm::ArrayRef<typename ELFT::Shdr> Sections,
+                             Arch &A, PPC64DescriptorTable *Descriptors) {
+  using namespace llvm::ELF;
+  const auto &Header = File.getHeader();
+  llvm::StringRef SectionNames;
+  if (Header.e_shstrndx != SHN_UNDEF) {
+    auto Names = File.getSectionStringTable(Sections);
+    if (!Names)
+      return Names.takeError();
+    SectionNames = *Names;
+  }
+  PPC64DescriptorTable OPD;
+  for (const auto &S : Sections) {
+    if (SectionNames.empty() || !S.sh_name)
+      continue;
+    auto Name = File.getSectionName(S, SectionNames);
+    if (!Name)
+      return Name.takeError();
+    if (*Name != ppc_elf::DescriptorSection)
+      continue;
+    if (OPD.Size || S.sh_type != SHT_PROGBITS ||
+        (S.sh_flags & (SHF_ALLOC | SHF_EXECINSTR)) != SHF_ALLOC || !S.sh_size ||
+        (S.sh_entsize && ((S.sh_entsize != ppc_elf::EnvironmentOffset &&
+                           S.sh_entsize != ppc_elf::DescriptorSize) ||
+                          S.sh_size % S.sh_entsize)))
+      return llvm::createStringError("elf: invalid PPC64 .opd section");
+    OPD = {S.sh_addr, S.sh_size, static_cast<unsigned>(S.sh_entsize)};
+  }
+  std::optional<va_t> Address, Size;
+  auto Segments = File.program_headers();
+  if (!Segments)
+    return Segments.takeError();
+  for (const auto &P : *Segments) {
+    if (P.p_type != PT_DYNAMIC)
+      continue;
+    auto Bytes = File.getSegmentContents(P);
+    if (!Bytes)
+      return Bytes.takeError();
+    if (Bytes->size() % sizeof(typename ELFT::Dyn))
+      return llvm::createStringError("elf: truncated PPC64 dynamic table");
+    bool Terminated = false;
+    for (size_t I = 0; I + sizeof(typename ELFT::Dyn) <= Bytes->size();
+         I += sizeof(typename ELFT::Dyn)) {
+      typename ELFT::Dyn D;
+      std::memcpy(&D, Bytes->data() + I, sizeof(D));
+      if (D.d_tag == DT_NULL) {
+        Terminated = true;
+        break;
+      }
+      if (D.d_tag != ppc_elf::DynamicOPD && D.d_tag != ppc_elf::DynamicOPDSize)
+        continue;
+      auto &Field = D.d_tag == ppc_elf::DynamicOPD ? Address : Size;
+      if (Field)
+        return llvm::createStringError("elf: duplicate PPC64 descriptor tag");
+      Field = D.d_un.d_val;
+    }
+    if (!Terminated)
+      return llvm::createStringError("elf: unterminated PPC64 dynamic table");
+  }
+  if (Address || Size) {
+    if (!Address || !Size || !*Size ||
+        (OPD.Size && (OPD.Address != *Address || OPD.Size != *Size)))
+      return llvm::createStringError(
+          "elf: conflicting PPC64 descriptor tables");
+    OPD = {*Address, *Size, OPD.EntrySize, true};
+  }
+  if (OPD.Size && Header.e_flags == ppc_elf::ELFv2)
+    return llvm::createStringError("elf: PPC64 ELFv2 conflicts with .opd");
+  if (OPD.Size) {
+    if (OPD.Address % ppc_elf::WordSize || OPD.Size % ppc_elf::WordSize ||
+        OPD.Size < ppc_elf::EnvironmentOffset ||
+        OPD.Size > InvalidVA - OPD.Address)
+      return llvm::createStringError(
+          "elf: invalid PPC64 descriptor table bounds");
+    A = ELFT::Endianness == llvm::endianness::little ? Arch::PPC64LEELFv1
+                                                     : Arch::PPC64ELFv1;
+    if (Descriptors)
+      *Descriptors = OPD;
+  } else if (Header.e_flags != ppc_elf::ELFv2)
+    return llvm::createStringError("elf: missing PPC64 ABI or .opd evidence");
+  return llvm::Error::success();
+}
+
 // Identify and load must agree even when ELF machine, class and flags conflict.
 template <typename ELFT>
-llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
-                        RISCVProfile &RV) {
+llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
+                        RISCVProfile &RV, PPC64DescriptorTable *Descriptors) {
   using namespace llvm::ELF;
   const auto &File = Obj.getELFFile();
   const auto &Header = File.getHeader();
@@ -38,7 +127,6 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
       Header.e_ident[EI_OSABI] != ELFOSABI_LINUX)
     return llvm::createStringError("elf: unsupported integer ELF platform ABI");
 
-  constexpr uint32_t VLE = 0x10000000; // PF_PPC_VLE and SHF_PPC_VLE
   if (isRISCV(A)) {
     if constexpr (ELFT::Endianness != llvm::endianness::little)
       return llvm::createStringError("elf: unsupported big-endian RISC-V");
@@ -46,16 +134,14 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
       return llvm::createStringError(
           "elf: RISC-V requires the integer ILP32 or LP64 ABI");
   } else {
-    // ELFv1 points function symbols at descriptors. An unspecified ABI
-    // cannot establish that a symbol is an ELFv2 code entry.
-    if (isPowerPC64(A) ? Header.e_flags != 2 : Header.e_flags != 0)
-      return llvm::createStringError("elf: PowerPC requires classic PPC32 "
-                                     "System V or explicit PPC64 ELFv2");
+    if (isPowerPC64(A) ? Header.e_flags > ppc_elf::ELFv2 : Header.e_flags != 0)
+      return llvm::createStringError("elf: unsupported PowerPC ABI flags");
     auto Segments = File.program_headers();
     if (!Segments)
       return Segments.takeError();
     for (const auto &P : *Segments)
-      if (P.p_type == PT_LOAD && (P.p_flags & PF_X) && (P.p_flags & VLE))
+      if (P.p_type == PT_LOAD && (P.p_flags & PF_X) &&
+          (P.p_flags & ppc_elf::VLE))
         return llvm::createStringError(
             "elf: PowerPC VLE segments are unsupported");
   }
@@ -123,7 +209,8 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
         }
       }
     }
-    if (isPowerPC(A) && (S.sh_flags & SHF_EXECINSTR) && (S.sh_flags & VLE))
+    if (isPowerPC(A) && (S.sh_flags & SHF_EXECINSTR) &&
+        (S.sh_flags & ppc_elf::VLE))
       return llvm::createStringError(
           "elf: PowerPC VLE sections are unsupported");
     if ((S.sh_type == SHT_REL || S.sh_type == SHT_RELA) && S.sh_size &&
@@ -136,6 +223,8 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
                                        "relocations before native analysis");
     }
   }
+  if (isPowerPC64(A))
+    return readPPC64Profile(File, *Sections, A, Descriptors);
   if (isRISCV(A) && (Header.e_flags & EF_RISCV_RVC) && !RV.Zca)
     RV.Compressed = true;
   return llvm::Error::success();
@@ -143,13 +232,15 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
 
 } // namespace
 
-llvm::Error readIntegerProfile(const llvm::object::ObjectFile &Object, Arch A,
-                               RISCVProfile &Profile) {
+llvm::Error readIntegerProfile(const llvm::object::ObjectFile &Object, Arch &A,
+                               RISCVProfile &Profile,
+                               PPC64DescriptorTable *Descriptors) {
   using namespace llvm::object;
   return llvm::TypeSwitch<const ObjectFile *, llvm::Error>(&Object)
       .Case<ELF32LEObjectFile, ELF32BEObjectFile, ELF64LEObjectFile,
-            ELF64BEObjectFile>(
-          [&](const auto *ELF) { return readProfile(*ELF, A, Profile); })
+            ELF64BEObjectFile>([&](const auto *ELF) {
+        return readProfile(*ELF, A, Profile, Descriptors);
+      })
       .Default([](const ObjectFile *) {
         return llvm::createStringError("elf: unsupported class");
       });

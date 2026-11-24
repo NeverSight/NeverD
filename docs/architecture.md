@@ -19055,9 +19055,12 @@ for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 ### Experimental RISC-V and PowerPC ELF analysis
 
 The ELF loader admits little-endian RV32I/ILP32 and RV64I/LP64, classic PPC32
-System V in either byte order, and explicitly marked PPC64 ELFv2 in either byte
-order. RISC-V extension evidence belongs to the image. Decode, lift and function
-discovery share the physical instruction size and control-transfer semantics.
+System V, and PPC64 ELFv1 and ELFv2 in either byte order. The ELFv1 loader
+keeps descriptor addresses and code entries distinct. MedIR uses the entry's
+TOC and static chain for incoming registers, and binds a descriptor call from
+its reaching loads. RISC-V extension evidence belongs to the image. Decode,
+lift and function discovery share the physical instruction size and
+control-transfer semantics.
 Both families feed the existing LowIR, ABI recovery, HighC and LLVM backends.
 Target inline assembly carries the ordering and reservation effects through
 both C projections. Native rewriting has a separate admission gate.

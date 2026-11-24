@@ -27,9 +27,11 @@
 #include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/X86RegistrationDisplayJoins.h"
+#include "neverd/lift/IntegerRegisters.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImageModel.h"
+#include "neverd/loader/ELF/LinkedGlobalPointer.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -445,6 +447,17 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   // move operations and SSA renames their values, but neither changes a
   // call's preservation contract or the register views collected above.
   // Reuse its complete clobber set across liveness, PHI placement and rename.
+  const auto PPCContextAt =
+      [&](va_t Entry) -> const BinaryImage::PPC64EntryContext * {
+    if (Image && Image->Arch == TargetArch && isPowerPC64ELFv1(TargetArch)) {
+      const auto It = Image->PPC64EntryContexts.find(Entry);
+      if (It != Image->PPC64EntryContexts.end())
+        return &It->second;
+    }
+    return nullptr;
+  };
+  const auto *EntryContext = PPCContextAt(Func.Entry);
+  constexpr auto TOCRegister = integerreg::gpr(ppc_elf::TOCRegister);
   llvm::DenseMap<uint32_t, llvm::SmallVector<int, 8>> CallClobbers;
   auto CallClobberedIds = [&](const MedOp &Op) -> llvm::ArrayRef<int> {
     if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
@@ -454,10 +467,16 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     if (!Inserted)
       return Cached->second;
     auto &Result = Cached->second;
+    const auto *CalleeContext = EntryContext && Op.Opcode == NdOp::CALL &&
+                                        Op.NumInputs && Op.Inputs[0].isConst()
+                                    ? PPCContextAt(Op.Inputs[0].ConstVal)
+                                    : nullptr;
+    const bool SharesTOC = CalleeContext && EntryContext->TOC &&
+                           EntryContext->TOC == CalleeContext->TOC;
     for (const auto &[RegOff, Ids] : RegOffToIds)
       for (int Id : Ids)
         if (const auto It = RegVarOfId.find(Id);
-            It != RegVarOfId.end() &&
+            It != RegVarOfId.end() && !(SharesTOC && RegOff == TOCRegister) &&
             callClobbersRegister(Op, RegOff, It->second.Size, TRI,
                                  TargetFormat))
           Result.push_back(Id);
@@ -887,6 +906,36 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
             Input.Size == TRI.FullRegWidth)
           Input = MedVar::makeConst(*EntryGP, Input.Size,
                                     ConstantAddressProvenance::Address);
+        if (isPowerPC64ELFv1(TargetArch) && Input.Kind == MedVar::Reg &&
+            Input.RegOff == TOCRegister && Input.Size == ppc_elf::WordSize) {
+          if (Root != 0 || !EntryContext || !EntryContext->TOC)
+            throw LowToMedConversionError(
+                "PPC64 ELFv1 entry TOC is unresolved");
+          // TOCs commonly sit 32 KiB beyond the GOT, outside any mapped byte.
+          // The signed displacement in the code identifies the final object.
+          const va_t TOC = *EntryContext->TOC;
+          const auto Anchor = linkedGlobalPointerAnchor(*Image, TOC);
+          Input = MedVar::makeConst(
+              TOC, Input.Size,
+              Anchor || Image->isDataAddress(TOC)
+                  ? ConstantAddressProvenance::DataAddress
+                  : ConstantAddressProvenance::AddressFragment,
+              Anchor.value_or(InvalidVA));
+        }
+        if (isPowerPC64ELFv1(TargetArch) && Input.Kind == MedVar::Reg &&
+            Input.RegOff == integerreg::gpr(ppc_elf::EnvironmentRegister) &&
+            Input.Size == ppc_elf::WordSize) {
+          if (Root != 0 || !EntryContext || !EntryContext->Environment ||
+              (*EntryContext->Environment &&
+               !Image->isDataAddress(*EntryContext->Environment)))
+            throw LowToMedConversionError(
+                "PPC64 ELFv1 entry environment is unresolved");
+          const va_t Environment = *EntryContext->Environment;
+          Input = MedVar::makeConst(Environment, Input.Size,
+                                    Environment
+                                        ? ConstantAddressProvenance::DataAddress
+                                        : ConstantAddressProvenance::Scalar);
+        }
         const bool Callback =
             SEHEntry.value_or(false) || IsCxxHandlerRoot ||
             std::any_of(Func.Blocks[Root].ExceptionalPreds.begin(),

@@ -15,4 +15,12 @@ NEVERD_ELF_INTEGER_TARGET(PPC32, ppc, "powerpc")
 NEVERD_ELF_INTEGER_TARGET(PPC32LE, ppcle, "powerpcle")
 NEVERD_ELF_INTEGER_TARGET(PPC64, ppc64, "powerpc64")
 NEVERD_ELF_INTEGER_TARGET(PPC64LE, ppc64le, "powerpc64le")
+// These ABIs share an ELF machine and an LLVM triple with ELFv2.
+#ifndef NEVERD_ELF_INTEGER_ABI_TARGET
+#define NEVERD_ELF_INTEGER_ABI_TARGET(Name, LLVMArch, Spelling, Suffix)        \
+  NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling)
+#endif
+NEVERD_ELF_INTEGER_ABI_TARGET(PPC64ELFv1, ppc64, "powerpc64", "-elfv1")
+NEVERD_ELF_INTEGER_ABI_TARGET(PPC64LEELFv1, ppc64le, "powerpc64le", "-elfv1")
+#undef NEVERD_ELF_INTEGER_ABI_TARGET
 #undef NEVERD_ELF_INTEGER_TARGET

@@ -7,6 +7,7 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
+#include "neverd/loader/ELF/PPC64FunctionDescriptor.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/ELF.h"
@@ -163,6 +164,8 @@ std::optional<va_t> relocatedCodeTarget(const BinaryImage &Image, va_t Slot) {
   const va_t Target = normalizeCodeAddress(
       readPtr(Bytes, Image.is64Bit(), archLittleEndian(Image.Arch)), Image.Arch,
       Image.Mode);
+  if (auto Entry = nativePPC64DescriptorEntry(Image, Target))
+    return Entry;
   if (!Image.isCodeAddress(Target))
     return std::nullopt;
   return Target;

@@ -13,6 +13,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/lift/IntegerRegisters.h"
+#include "neverd/loader/ELF/PowerPCABI.h"
 
 #include <array>
 #include <cstddef>
@@ -90,9 +91,11 @@ TargetRegInfo integerInfo(Arch A) {
   Info.GeneralRegs =
       RV ? llvm::ArrayRef(GPRs).drop_front() : llvm::ArrayRef(GPRs);
   Info.GetRegName = RV ? rvName : ppcName;
-  // PPC32 has a two-word linkage area. ELFv2 stack parameter 9 is
-  // above the four-word linkage area and eight doubleword parameters.
-  Info.CallStackArgumentBase = RV ? 0 : isPowerPC64(A) ? 96 : 8;
+  if (!RV)
+    Info.CallStackArgumentBase =
+        isPowerPC64ELFv1(A) ? ppc_elf::ELFv1StackArgumentBase
+        : isPowerPC64(A)    ? ppc_elf::ELFv2StackArgumentBase
+                            : ppc_elf::PPC32StackArgumentBase;
   return Info;
 }
 } // namespace

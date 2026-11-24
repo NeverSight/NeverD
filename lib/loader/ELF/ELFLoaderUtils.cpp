@@ -35,7 +35,14 @@ using namespace llvm::ELF;
 
 namespace {
 
-va_t normalizeELFFunctionAddress(va_t Addr, const BinaryImage &Img) {
+std::optional<va_t> normalizeELFFunctionAddress(va_t Addr,
+                                                const BinaryImage &Img) {
+  if (isPowerPC64ELFv1(Img.Arch)) {
+    auto It = Img.PPC64Descriptors.find(Addr);
+    if (It != Img.PPC64Descriptors.end())
+      return It->second.Entry;
+    return std::nullopt;
+  }
   return Img.Arch == Arch::ARM ? clearThumbBit(Addr)
                                : normalizeCodeAddress(Addr, Img.Arch, Img.Mode);
 }
@@ -191,11 +198,11 @@ void recordRuntimePointerArray(va_t Addr, uint64_t Size, std::vector<va_t> &Out,
     if (Target == 0)
       continue;
     recordARMCodePointerMode(Img, Target, ARMCodePointerUse::Called);
-    Target = normalizeELFFunctionAddress(Target, Img);
-    if (!Img.recordRuntimeFunction(Target))
+    auto Code = normalizeELFFunctionAddress(Target, Img);
+    if (!Code || !Img.recordRuntimeFunction(*Code))
       continue;
-    if (std::find(Out.begin(), Out.end(), Target) == Out.end())
-      Out.push_back(Target);
+    if (std::find(Out.begin(), Out.end(), *Code) == Out.end())
+      Out.push_back(*Code);
   }
 }
 
@@ -252,7 +259,8 @@ bool recordIRelativeResolver(uint32_t RelocType, va_t Slot,
     Resolver = static_cast<va_t>(
         readPtr(P, Img.is64Bit(), archLittleEndian(Img.Arch)));
   }
-  return Img.recordRuntimeFunction(normalizeELFFunctionAddress(Resolver, Img));
+  auto Code = normalizeELFFunctionAddress(Resolver, Img);
+  return Code && Img.recordRuntimeFunction(*Code);
 }
 
 bool recordRuntimeCallableRelocation(uint32_t RelocType, va_t Slot,
@@ -352,13 +360,17 @@ void parseDynamic(const llvm::object::ELFFile<ELFT> &ELF,
     }
     switch (E.Tag) {
     case DT_INIT:
-      Img.DynInfo.InitAddr = normalizeELFFunctionAddress(E.Val, Img);
-      Img.recordRuntimeFunction(Img.DynInfo.InitAddr);
+      if (auto Code = normalizeELFFunctionAddress(E.Val, Img)) {
+        Img.DynInfo.InitAddr = *Code;
+        Img.recordRuntimeFunction(*Code);
+      }
       recordARMCodePointerMode(Img, E.Val, ARMCodePointerUse::Called);
       break;
     case DT_FINI:
-      Img.DynInfo.FiniAddr = normalizeELFFunctionAddress(E.Val, Img);
-      Img.recordRuntimeFunction(Img.DynInfo.FiniAddr);
+      if (auto Code = normalizeELFFunctionAddress(E.Val, Img)) {
+        Img.DynInfo.FiniAddr = *Code;
+        Img.recordRuntimeFunction(*Code);
+      }
       recordARMCodePointerMode(Img, E.Val, ARMCodePointerUse::Called);
       break;
     case DT_PREINIT_ARRAY:

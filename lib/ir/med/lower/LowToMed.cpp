@@ -22,6 +22,7 @@
 #include "GoCurrentGoroutine.h"
 #include "GoStackGrowth.h"
 #include "MIPS/PICGlobalPointer.h"
+#include "PowerPC/ELFv1Calls.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -1472,7 +1473,8 @@ MedFunc LowToMedConverter::convertFunction(
               "MIPS direct call target has conflicting or unknown instruction "
               "mode");
       if (const LowOp &Call = LB.Ops[LowOpIndex];
-          Image && Call.Opcode == NdOp::INDIR_CALL && Call.NumInputs == 1 &&
+          Image && !isPowerPC64ELFv1(TheArch) &&
+          Call.Opcode == NdOp::INDIR_CALL && Call.NumInputs == 1 &&
           !Call.Inputs[0].isConst()) {
         CachedTarget = CallTargets.resolve(MB, ndVarToMedVar(Call.Inputs[0]),
                                            &CallTargetWork);
@@ -1509,7 +1511,8 @@ MedFunc LowToMedConverter::convertFunction(
         }
       }
       if (const LowOp &Call = LB.Ops[LowOpIndex];
-          Image && Call.Opcode == NdOp::INDIR_CALL && Call.NumInputs >= 1 &&
+          Image && !isPowerPC64ELFv1(TheArch) &&
+          Call.Opcode == NdOp::INDIR_CALL && Call.NumInputs >= 1 &&
           Call.Inputs[0].isConst())
         if (auto It = Image->ConstantCodeSlots.find(Call.Inputs[0].Offset);
             It != Image->ConstantCodeSlots.end()) {
@@ -2203,6 +2206,9 @@ MedFunc LowToMedConverter::convertFunction(
     // The unoptimized ops still carry their LowIR occurrences, so switch
     // selectors bind exactly as they would after the full pipeline.
     resolveSwitchSelectorPlans(Func);
+    if (isPowerPC64ELFv1(TheArch))
+      throw LowToMedConversionError(
+          "PPC64 ELFv1 descriptor and TOC recovery requires SSA");
     Func.SkippedSSA = true;
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
@@ -2337,6 +2343,8 @@ MedFunc LowToMedConverter::convertFunction(
     splitEntryLoopHeader(Func);
     debugVerifyMedFunc(Func, "splitEntryLoopHeader");
     buildSsa(Func, Low);
+    if (isPowerPC64ELFv1(TheArch))
+      recoverPPC64ELFv1(Func, Image);
     debugVerifyMedFunc(Func, "buildSsa");
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);

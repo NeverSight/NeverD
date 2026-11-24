@@ -73,10 +73,9 @@ structured C, LLVM IR and LLVM-derived C for these profiles.
 | Target | Qualified ELF profiles |
 |---|---|
 | RISC-V | Little-endian RV32I/ILP32 and RV64I/LP64. ELF evidence selects M, A and integer C, or the individual Zmmul, Zaamo, Zalrsc and Zca extensions. |
-| PowerPC | Big- and little-endian PPC32 System V and PPC64 ELFv2. The qualified scalar subset includes signed and unsigned division, its recorded CR0 result and XER overflow effects. |
+| PowerPC | Big- and little-endian PPC32 System V and PPC64 ELFv1/ELFv2. ELFv1 function descriptors supply the code entry and TOC. The qualified scalar subset includes signed and unsigned division, its recorded CR0 result and XER overflow effects. |
 
-Native rewriting, PPC64 ELFv1 function descriptors and cross-module TOC
-recovery remain open. See [RISC-V and PowerPC coverage](docs/riscv-powerpc.md).
+Native rewriting and dynamic linkage across modules remain open. See [RISC-V and PowerPC coverage](docs/riscv-powerpc.md).
 
 Legacy EVM bytecode is supported independently of native containers: all 150 assigned opcodes through Fusaka feed dedicated Low/Med/High IR, verified LLVM `i256`, C23 `_BitInt(256)`, and Solidity output. See [EVM decompilation](docs/evm.md).
 

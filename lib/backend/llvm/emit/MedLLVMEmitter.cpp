@@ -61,6 +61,7 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/AArch64MemoryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/loader/X86/X64DispatchFrame.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-emitter"
@@ -1125,7 +1126,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     // Address folding, aggregate layout and C projection run before native
     // codegen. They need the same target layout on every architecture/format,
     // not LLVM's generic default until a TargetMachine happens to be created.
-    Mod_->setDataLayout(Mod_->getTargetTriple().computeDataLayout());
+    llvm::StringRef ABI;
+    if (isPowerPC64(TheArch))
+      ABI = isPowerPC64ELFv1(TheArch) ? ppc_elf::ELFv1Name : ppc_elf::ELFv2Name;
+    Mod_->setDataLayout(Mod_->getTargetTriple().computeDataLayout(ABI));
   }
   if (!PortableBody && isRISCV(TheArch))
     Mod_->addModuleFlag(

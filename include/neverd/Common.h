@@ -344,8 +344,12 @@ constexpr bool isRISCV(Arch A) {
   return A == Arch::RISCV32 || A == Arch::RISCV64;
 }
 
+constexpr bool isPowerPC64ELFv1(Arch A) {
+  return A == Arch::PPC64ELFv1 || A == Arch::PPC64LEELFv1;
+}
+
 constexpr bool isPowerPC64(Arch A) {
-  return A == Arch::PPC64 || A == Arch::PPC64LE;
+  return A == Arch::PPC64 || A == Arch::PPC64LE || isPowerPC64ELFv1(A);
 }
 
 constexpr bool isPowerPC(Arch A) {
@@ -441,6 +445,9 @@ inline const char *getArchName(Arch A) {
 #define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling)                    \
   case Arch::Name:                                                             \
     return Spelling;
+#define NEVERD_ELF_INTEGER_ABI_TARGET(Name, LLVMArch, Spelling, Suffix)        \
+  case Arch::Name:                                                             \
+    return Spelling Suffix;
 #include "neverd/ELFIntegerTargets.def"
   case Arch::EVM:
     return kEVMArchName.data();
