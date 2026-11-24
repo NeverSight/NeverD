@@ -562,3 +562,25 @@ TEST(ARM32_ImportCalls, ADoublewordArgumentTakesAnEvenOddPair) {
             std::string::npos)
       << Source;
 }
+
+// No Windows header library covers an ARM32 image, so no header declares
+// its UCRT imports: the C library's prototype table does, with
+// `__stdio_common_vfprintf`'s options a uint64_t, and the call takes them
+// as the pair.  With the table's parameter count alone, the options' high
+// word was the stream.
+TEST(ARM32_ImportCalls, AnImportNoHeaderDeclaresTakesItsTablesTypes) {
+  std::vector<uint8_t> Code(0x40, 0x00);
+  const std::vector<uint8_t> F = {0xB0, 0xB5, 0x82, 0xB0, 0x00, 0x24, 0x00,
+                                  0x94, 0x01, 0x94, 0x02, 0x46, 0x0B, 0x46,
+                                  0x01, 0x20, 0x02, 0x21, 0xFF, 0xF7, 0xED,
+                                  0xFF, 0x02, 0xB0, 0xB0, 0xBD};
+  std::copy(F.begin(), F.end(), Code.begin() + 0x10);
+  const BinaryImage Img =
+      thumbThunkImage(Code, "__stdio_common_vfprintf", 0x401010, "f");
+  NullDebugContext NoHeaders;
+  const std::string Source = thumbHighC(Img, NoHeaders);
+  EXPECT_NE(Source.find("__stdio_common_vfprintf(((uint64_t)2 << 32 | 1), "
+                        "(FILE *)arg0, (const char *)arg1, 0, 0)"),
+            std::string::npos)
+      << Source;
+}

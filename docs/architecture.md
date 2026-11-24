@@ -5358,6 +5358,16 @@ the row's width. Its calls passed `log` and `exp` no argument, the double in
 XMM0 being no integer register a Win64 call takes by position. A row with an
 integer or a pointer among its arguments gives none: no count tells the two
 apart.
+A routine of the C library's prototype table that no header declares for the
+image, with a parameter wider than an argument word, takes the table's
+declaration (`tablePrototype`): each spelling's own type, a pointer for any
+spelling with a `*`, the integer types at their widths, and the UCRT's pointer
+and enumeration typedefs. Counted a word each, as the table's parameter count
+alone places them, `__stdio_common_vfprintf`'s 64-bit options were two
+arguments: on ARM32, which no Windows header library covers, the options' high
+word was the stream, and on x86 the format, locale and `va_list` were values
+not recovered. A routine of word-sized parameters keeps its count, which
+places them. A variadic routine, or a spelling of no certain type, gives none.
 `floatingCallTypes` reconstructs and reclassifies complete scalar/HFA groups;
 bound call validation and cached-pointer analysis share it. `importedCallSlotFacts`
 uses exact import declarations to cross ABI-preserved registers, and delegates

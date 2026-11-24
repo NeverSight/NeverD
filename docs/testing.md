@@ -27151,6 +27151,12 @@ its thunk with the options 1 and 2 in r0 and r1: the call passes the options
 `va_list` the function stores. It fails where the call is matched to the
 words one register each.
 
+`ARM32_ImportCalls.AnImportNoHeaderDeclaresTakesItsTablesTypes` decompiles
+the same function with no header declaring the import, as no Windows header
+library covers an ARM32 image: the C library's prototype table declares it,
+and the call passes the options as the pair. It fails where the table's
+parameter count alone matches the options to one register.
+
 `SourceParameterPlacement.MIPSScalarOnlyCallsKeepCompleteSignatures` covers
 integer, pointer and void signatures without any floating parameters in all
 six MIPS ABI/byte-order profiles. `MIPSScalarCalls` checks integer/pointer/void

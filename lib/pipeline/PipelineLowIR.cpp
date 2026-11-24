@@ -42,6 +42,7 @@
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCRecordArguments.h"
+#include "neverd/libc/LibCTablePrototype.h"
 #include "neverd/libc/LibCVariadicArguments.h"
 #include "neverd/libc/StackProbeIndex.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -4267,6 +4268,18 @@ ImportPrototypeArguments importPrototypeArguments(
       // no integer register a Win64 call takes positionally.
       if (!Function)
         Function = libc::arityFloatPrototype(Name, libc::libcVariantOf(Img));
+      // A routine of the C library's prototype table no header declares
+      // here, with a parameter wider than an argument word, which its count
+      // alone cannot place: the table's types.  Counted a word each,
+      // `__stdio_common_vfprintf`'s 64-bit options were two arguments, on
+      // ARM32 (which no Windows header library covers) and x86 alike.
+      if (!Function)
+        if (std::optional<FunctionSym> Table =
+                libc::tablePrototype(Name, Img.abiFormat(), Img.Arch);
+            Table && llvm::any_of(Table->Params, [&](const auto &Param) {
+              return Param.second->Size > TRI.PointerSize;
+            }))
+          Function = std::move(Table);
       // The base AAPCS returns a routine's floating value in the integer
       // registers the call already writes: the floating bank holds none of it.
       const bool ReturnsInCoreRegisters =
