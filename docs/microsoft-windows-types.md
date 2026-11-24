@@ -225,6 +225,17 @@ declaration it verifies the exact linker spelling and compiler ABI.
 It also checks the zero-argument declaration of `NeedRebootInit` with the
 Microsoft header in C++ mode.
 
+The `RealtimeWorkQueue` profile uses the target SDK's `RTWorkQ.lib` and C++
+declarations. Each C interface object holds its virtual table pointer.
+Microsoft publishes the signature of one additional import,
+`RtwqEndUnregisterWorkQueueWithMMCSS`, in its [API reference](https://learn.microsoft.com/en-us/windows/win32/procthread/rtwqendunregisterworkqueuewithmmcss).
+The manifest records this source separately.
+
+The `WindowsRemoteManagement` profile selects version 1.1 of `wsman.h` and
+checks its exports against `wsmsvc.lib`. The C startup record preserves the
+fields inherited from version 1.0. Both profiles use the original C++ compiler
+contracts to verify the published C declarations on x86, x64 and ARM64.
+
 The `ProcessStatus` profile selects `PSAPI_VERSION=1` before including the
 SDK headers and verifies those declarations against `psapi.lib`. The
 `ProcessSnapshots` profile verifies the `Pss*` routines in `processsnapshot.h`
