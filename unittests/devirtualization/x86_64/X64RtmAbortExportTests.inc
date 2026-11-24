@@ -37,22 +37,37 @@ TEST_F(X64ContinuationExportTest, AutoRtmAbortUsesOriginalCpuEvidence) {
                   Probe || Bound);
         if (Probe) {
           const auto Guard = Source.find("if (check!=");
-          const auto Check =
-              Source.find("if (!__neverd_x64_cpu_has_rtm()) return check;");
-          EXPECT_NE(Source.find("_checked((uint8_t *)state, &rtm_advertised)"),
+          const auto Check = Source.find(
+              "if (!__neverd_x64_can_run_abort_pair()) return check;");
+          EXPECT_NE(
+              Source.find("_checked((uint8_t *)state, &rtm_pair_admitted)"),
+              std::string::npos);
+          EXPECT_NE(Source.find("if (!*admitted)"), std::string::npos);
+          EXPECT_NE(Source.find("return ((b | d) >> 11) & 1U;"),
                     std::string::npos);
-          EXPECT_NE(Source.find("if (!*advertised)"), std::string::npos);
           EXPECT_LT(Guard, Check);
           EXPECT_LT(Check,
                     Source.find("status=__builtin_ia32_rtm_abort_pair(0)"));
         }
       }
-  for (llvm::StringRef Mode :
-       {R"("unknown")", "1", "{}", R"({"max_basic_leaf":7})",
-        R"({"max_basic_leaf":6,"leaf7_ebx":2048})",
-        R"({"max_basic_leaf":7,"leaf7_ebx":-1})",
-        R"({"max_basic_leaf":7,"leaf7_ebx":4294967296})",
-        R"({"max_basic_leaf":6,"unused":0})"}) {
+  for (
+      llvm::StringRef Mode :
+      {R"("unknown")", "1", "{}", R"({"max_basic_leaf":7})",
+       R"({"max_basic_leaf":6,"leaf7_ebx":2048})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":-1})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":4294967296})",
+       R"({"max_basic_leaf":6,"unused":0})",
+       R"({"max_basic_leaf":6,"leaf7_edx":0})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":0,"leaf7_edx":"0x100000000"})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":0,"leaf7_edx":-1})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":0,"ia32_arch_capabilities":128})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":0,"leaf7_edx":0,"ia32_tsx_ctrl":0})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":0,"leaf7_edx":"0x20000000","ia32_arch_capabilities":0,"ia32_tsx_ctrl":1})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":0,"leaf7_edx":"0x20000000","ia32_arch_capabilities":"0x10000000000000000"})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":0,"leaf7_edx":"0x20000000","ia32_arch_capabilities":128,"ia32_tsx_ctrl":4})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":16,"leaf7_edx":"0x20000000","ia32_arch_capabilities":128,"ia32_tsx_ctrl":2})",
+       R"({"max_basic_leaf":7,"leaf7_ebx":2048,"leaf7_edx":"0x20000000","ia32_arch_capabilities":128,"ia32_tsx_ctrl":3})"}) {
+    SCOPED_TRACE(Mode.str());
     const auto Query = request(
         (llvm::Twine(R"("instructions":[4096],"native_rtm_abort_steps":)") +
          Mode)
@@ -62,6 +77,83 @@ TEST_F(X64ContinuationExportTest, AutoRtmAbortUsesOriginalCpuEvidence) {
                                                 Query.size(), 0, &Report),
               nullptr);
     EXPECT_EQ(Report, nullptr);
+  }
+}
+
+TEST_F(X64ContinuationExportTest, CapturedRtmAbortBindsOnlyProvenStatus) {
+  // The second XBEGIN is separated from XABORT by a NOP. Both displacements
+  // target the RET at 0x1013, but only the first pair has an admitted body.
+  load({0xc7, 0xf8, 13, 0, 0, 0,    0xc6, 0xf8, 0xa7, 0xc7,
+        0xf8, 4,    0,  0, 0, 0x90, 0xc6, 0xf8, 0xa7, 0xc3});
+  struct Case {
+    uint32_t EBX;
+    uint32_t EDX;
+    llvm::StringRef Msrs;
+    bool Admitted;
+    llvm::StringRef ZeroEvidence;
+  };
+  const Case Cases[] = {
+      {0, 0x800, "", true, ""},
+      {0, 0x2000, "", false, ""},
+      {0, 0x2800, "", true, "rtm_always_abort+rtm_force_abort"},
+      {0x800, 0x2800, "", true, "rtm_always_abort+rtm_force_abort"},
+      {0, 0x20000000, R"(,"ia32_arch_capabilities":128)", false, ""},
+      {0, 0x20000000, R"(,"ia32_arch_capabilities":128,"ia32_tsx_ctrl":2)",
+       false, ""},
+      {0, 0x20000000,
+       R"(,"ia32_arch_capabilities":"0x8000000000000080","ia32_tsx_ctrl":3)",
+       true, "ia32_tsx_ctrl.rtm_disable"},
+      {0x800, 0x20000000, R"(,"ia32_arch_capabilities":128,"ia32_tsx_ctrl":1)",
+       true, "ia32_tsx_ctrl.rtm_disable"},
+      {0x800, 0x20000000, R"(,"ia32_arch_capabilities":128,"ia32_tsx_ctrl":0)",
+       true, ""}};
+  for (const auto &C : Cases) {
+    const auto Fields =
+        (llvm::Twine(R"("max_basic_leaf":7,"leaf7_ebx":)") +
+         llvm::Twine(C.EBX) + R"(,"leaf7_edx":)" + llvm::Twine(C.EDX) + C.Msrs)
+            .str();
+    SCOPED_TRACE(Fields);
+    for (bool LLVM : {false, true})
+      for (auto Dispatch : {"switch", "direct"}) {
+        auto [Source, Manifest] = source(
+            request((llvm::Twine(R"("instructions":[4096,4105],"dispatch":")") +
+                     Dispatch + R"(","native_rtm_abort_steps":{)" + Fields +
+                     "}")
+                        .str()),
+            LLVM);
+        auto Parsed = llvm::json::parse(Manifest);
+        ASSERT_TRUE(bool(Parsed));
+        const auto *Report = Parsed->getAsObject();
+        ASSERT_NE(Report, nullptr);
+        EXPECT_EQ(Report->getInteger("native_requests"), C.Admitted ? 1 : 2);
+        const auto *Bound = Report->getObject("native_rtm_abort_steps");
+        ASSERT_NE(Bound, nullptr);
+        EXPECT_EQ(Bound->getBoolean("can_decline"), !C.Admitted);
+        EXPECT_EQ(Bound->getInteger("leaf7_edx"), C.EDX);
+        EXPECT_EQ(Bound->getString("selection"),
+                  C.Msrs.empty() ? "captured-cpuid" : "captured-cpu-state");
+        const auto *Regions = Bound->getArray("regions");
+        ASSERT_NE(Regions, nullptr);
+        ASSERT_EQ(Regions->size(), 1u);
+        const bool Zero = !C.ZeroEvidence.empty();
+        EXPECT_EQ(Bound->get("native_intrinsic") == nullptr, Zero);
+        if (Zero) {
+          EXPECT_EQ(Bound->getInteger("forced_abort_status"), 0);
+          EXPECT_EQ(Bound->getString("forced_abort_evidence"), C.ZeroEvidence);
+        } else {
+          EXPECT_EQ(Bound->get("forced_abort_status"), nullptr);
+          EXPECT_EQ(Bound->get("forced_abort_evidence"), nullptr);
+        }
+        llvm::StringRef Text(Source);
+        EXPECT_FALSE(Text.contains("cpuidex"));
+        EXPECT_EQ(Text.contains("__builtin_ia32_rtm_abort_pair(167)"),
+                  C.Admitted && !Zero);
+        EXPECT_EQ(
+            Text.contains("state->GPR[0]=0;\n        state->PC=0x1013ULL;"),
+            Zero);
+        EXPECT_EQ(Text.contains("neverd_step_v6_1000_guard(raw)"), C.Admitted);
+        EXPECT_FALSE(Text.contains("neverd_step_v6_1009_guard(raw)"));
+      }
   }
 }
 
@@ -198,7 +290,7 @@ TEST_F(X64ContinuationExportTest, RtmAbortRegionsResumeWithIndependentBudgets) {
 #include <cpuid.h>
 int main(void) {
   unsigned a,b,c,d;
-  const int supported=__get_cpuid_count(7,0,&a,&b,&c,&d) && (b&(1u<<11));
+  const int supported=__get_cpuid_count(7,0,&a,&b,&c,&d) && ((b|d)&(1u<<11));
   const unsigned flag_bits[]={0,2,4,6,7,11};
   for(unsigned pattern=0;pattern<64;++pattern) {
     neverd_x64_state_v6 s=seed();uint64_t stack[9],saved_stack[9];
@@ -245,7 +337,7 @@ TEST_F(X64ContinuationExportTest, RtmAbortLoopConsumesEveryProviderAttempt) {
 #include <cpuid.h>
 int main(void) {
   unsigned a,b,c,d;
-  const int supported=__get_cpuid_count(7,0,&a,&b,&c,&d) && (b&(1u<<11));
+  const int supported=__get_cpuid_count(7,0,&a,&b,&c,&d) && ((b|d)&(1u<<11));
   neverd_x64_state_v6 s=seed(),before=s;uint64_t budget=7,environment=3;
   CHECK(neverd_x64_run_v6(&s,&budget,&environment,neverd_x64_rtm_abort_environment_v6,0)==4);
   CHECK(budget==7 && s.PC==before.PC);
@@ -270,7 +362,7 @@ TEST_F(X64ContinuationExportTest,
 int main(void) {
   int info[4];__builtin_ia32_cpuidex(info,0,0);
   int supported=(unsigned)info[0]>=7;
-  if(supported){__builtin_ia32_cpuidex(info,7,0);supported=((unsigned)info[1]>>11)&1;}
+  if(supported){__builtin_ia32_cpuidex(info,7,0);supported=(((unsigned)info[1]|(unsigned)info[3])>>11)&1;}
   for(unsigned n=0;n<64;++n) {
     neverd_x64_state_v6 s={0};
     for(unsigned i=0;i<sizeof(s);++i)((unsigned char*)&s)[i]=n+i*17;
