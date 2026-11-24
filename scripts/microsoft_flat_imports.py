@@ -296,8 +296,22 @@ def named_runtime_units(output, architecture, compiler, libraries, *, profiles=N
             options = [*options, "-I", str(output / "win32-metadata-headers")]
             if name == "ConsolePrivateExports":
                 options = [*options, "-DFE_IME=1"]
+        language = "c"
+        arguments = [*options, "-std=c23"]
+        if name in ("AudioStateMonitors", "MediaFoundationCollection"):
+            # These headers expose the flat functions to C++ callers. The C
+            # reader handles the audio COM declaration. MF declares its
+            # collection factory only inside the C++ section of mfapi.h.
+            language = "c++"
+            arguments = [*options, "-x", "c++", "-std=c++17"]
+            if name == "MediaFoundationCollection":
+                original = source
+                source = directory / (name + "-c.c")
+                source.write_text(include_headers(headers) +
+                                  "HRESULT __stdcall MFCreateCollection(IMFCollection **ppIMFCollection);\n",
+                                  encoding="utf-8")
         bridge = {"source": str(original), "source_sha256": wdk.digest(original),
-                  "arguments": [*options, "-std=c23"], "language": "c", "commands": [],
+                  "arguments": arguments, "language": language, "commands": [],
                   "runtime_exports": named_runtime_exports(profile, target, NAMED_RUNTIME["win32_metadata"])}
         if "import_library" in target:
             bridge["runtime_import_library"] = libraries[name]

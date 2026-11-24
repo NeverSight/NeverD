@@ -238,6 +238,26 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             self.assertEqual(Path(unwind["runtime_import_library"]["file"]).read_bytes(), b"kernel32.Lib")
             self.assertFalse(set(windows.flat.primary_runtime_profiles()).intersection(recent["providers"]))
 
+    def test_cpp_media_headers_verify_the_published_c_prototypes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            groups = {name: windows.flat.RUNTIME_PROFILES[name]
+                      for name in ("AudioStateMonitors", "MediaFoundationCollection")}
+            units = windows.flat.named_runtime_units(Path(tmp), "arm64", ["clang"],
+                                                     dict.fromkeys(groups, {}), profiles=groups)
+            for unit in units:
+                bridge = unit["bridge"]
+                self.assertEqual(bridge["language"], "c++")
+                self.assertEqual(bridge["arguments"], ["clang", "-x", "c++", "-std=c++17"])
+                original = Path(bridge["source"]).read_text()
+                if unit["name"] == "MediaFoundationCollection":
+                    self.assertIn("#include <mfapi.h>", original)
+                    self.assertNotIn("MFCreateCollection(", original)
+                    self.assertIn("MFCreateCollection(IMFCollection **", unit["source"].read_text())
+                else:
+                    self.assertIn("#include <mmdeviceapi.h>", original)
+                    self.assertIn("#include <audiostatemonitorapi.h>", original)
+        self.assertNotIn("x86", windows.flat.RUNTIME_PROFILES["WindowControl"]["targets"])
+
     def test_named_runtime_archive_coexists_with_other_sdk_imports(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

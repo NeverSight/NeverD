@@ -109,6 +109,41 @@
         }
       }
     },
+    "AudioStateMonitors": {
+      "module": "windows.media.mediacontrol.dll",
+      "headers": [
+        "mmdeviceapi",
+        "AudioSessionTypes",
+        "audiostatemonitorapi"
+      ],
+      "exports": {
+        "CreateCaptureAudioStateMonitor": 1,
+        "CreateCaptureAudioStateMonitorForCategory": 2,
+        "CreateCaptureAudioStateMonitorForCategoryAndDeviceId": 3,
+        "CreateCaptureAudioStateMonitorForCategoryAndDeviceRole": 3,
+        "CreateRenderAudioStateMonitor": 1,
+        "CreateRenderAudioStateMonitorForCategory": 2,
+        "CreateRenderAudioStateMonitorForCategoryAndDeviceId": 3,
+        "CreateRenderAudioStateMonitorForCategoryAndDeviceRole": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "2c0abe626c4deb39a99ba2cd63a227d077fa7c095ed33d7266696f5d163751cd",
+          "additional_exports": {},
+          "import_library": "windows.media.mediacontrol.lib"
+        },
+        "x64": {
+          "image_sha256": "f9e14fcad5925f9914bc55024a37c869deb7bae595cedc8775573e6a0f0189ff",
+          "additional_exports": {},
+          "import_library": "windows.media.mediacontrol.lib"
+        },
+        "arm64": {
+          "image_sha256": "e1ef203abbe3f37adbeaef78ec4add3cf5df8b33731371749cd483857b087a5e",
+          "additional_exports": {},
+          "import_library": "windows.media.mediacontrol.lib"
+        }
+      }
+    },
     "Avifil32Runtime": {
       "module": "avifil32.dll",
       "headers": [
@@ -1681,6 +1716,32 @@
         }
       }
     },
+    "MediaFoundationCollection": {
+      "module": "mfplat.dll",
+      "headers": [
+        "mfapi"
+      ],
+      "exports": {
+        "MFCreateCollection": 1
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "581be1eb6bc4f78b9d45bfa207a69c3c826da42bef5848c147ad66c1f2b967bf",
+          "additional_exports": {},
+          "import_library": "Mfplat.lib"
+        },
+        "x64": {
+          "image_sha256": "e8c6b702173aba871d64bafab609d92cba6f167eaba8211a3546bf0ed7a5dda0",
+          "additional_exports": {},
+          "import_library": "Mfplat.lib"
+        },
+        "arm64": {
+          "image_sha256": "0524309ecac464ee3b3dced91e63406d02050d5773c4ac55b25b7a6c9c87512c",
+          "additional_exports": {},
+          "import_library": "Mfplat.lib"
+        }
+      }
+    },
     "MediaFoundationGraphicsDevices": {
       "module": "mfplat.dll",
       "headers": [
@@ -2729,6 +2790,30 @@
         }
       }
     },
+    "SpatialAudioApo": {
+      "module": "hrtfapo.dll",
+      "headers": [
+        "xapo",
+        "hrtfapoapi"
+      ],
+      "exports": {
+        "CreateHrtfApo": 2
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "fa7dec66a6a536a986312b5cd2b6bbef3e57b6b75287edce011b0892d28a35ef",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "e503c8179b348ec42836ad25b3b9cb74dd1bcfd597f57ac1bf217d34a4733b15",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "bdbbd2b11ee6a327cb21c8465814a7b31bf2b387512d5e04526adf23faad954c",
+          "additional_exports": {}
+        }
+      }
+    },
     "SpoolssRuntime": {
       "module": "spoolss.dll",
       "headers": [
@@ -3034,6 +3119,26 @@
           "additional_exports": {},
           "image_sha256": "3b05fea371380c19022ca18c8ece9690057108954794038e9818f0dfeaf1cb46",
           "import_library": "kernel32.Lib"
+        }
+      }
+    },
+    "WindowControl": {
+      "module": "windows.ui.dll",
+      "headers": [
+        "CoreWindow"
+      ],
+      "exports": {
+        "CreateControlInput": 2,
+        "CreateControlInputEx": 3
+      },
+      "targets": {
+        "x64": {
+          "image_sha256": "b57cdb3838bc6d174d7de6191d15564370190de5b6d45c3570188ca2f6d91fd7",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "6e05eb82688a3ae7ebac0a922225e503ac69ad86e07c3bd671d8de26d3b8cbb8",
+          "additional_exports": {}
         }
       }
     },
