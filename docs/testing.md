@@ -7540,6 +7540,10 @@ checks exact masked status bits, signed extensions, shared expressions and
 effect preservation without the symbolic bridge. An 8,192-level worker-thread
 regression checks iterative operand traversal for both pure rewrites and
 ordered-memory ancestors that must remain intact.
+`HighControlFlowSemantics.AJumpToWhatFollowsItsTryTakesNoCopy` ends an
+`__except` handler, and an `if` arm, with a jump to the statement after them:
+tail copying copies nothing there and the arm still computes the same; it
+fails where the pass copies the tail over such a jump.
 `HighControlFlowSemantics.MemoryBoundaryLeavesRetainTheirAncestors` checks
 boundary-bearing leaves, shared parents and indirect call targets, including
 fresh analysis after boundary metadata changes and root-order reversal.

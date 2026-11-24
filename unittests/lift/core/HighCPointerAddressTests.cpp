@@ -43249,10 +43249,8 @@ TEST(HighCPointerAddresses, CorpusFuncLoadSehProbeRaisesImmediate) {
   const std::string ReturnText = "return var_m18 + 1;";
   const size_t FirstReturn = Source.find(ReturnText);
   ASSERT_NE(FirstReturn, std::string::npos) << Source;
-  const size_t SecondReturn =
-      Source.find(ReturnText, FirstReturn + ReturnText.size());
-  ASSERT_NE(SecondReturn, std::string::npos) << Source;
-  EXPECT_EQ(Source.find(ReturnText, SecondReturn + ReturnText.size()),
+  // The handler falls into the code after the try, which prints once.
+  EXPECT_EQ(Source.find(ReturnText, FirstReturn + ReturnText.size()),
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("(int64_t)(uint32_t)(int32_t)"), std::string::npos)
@@ -43265,15 +43263,18 @@ TEST(HighCPointerAddresses, CorpusFuncLoadSehProbeRaisesImmediate) {
   ASSERT_TRUE(Stored.consume_front("dword_1400050E0 = ")) << Source;
   ASSERT_TRUE(Stored.consume_back(";")) << Source;
   const std::string Name = Stored.trim().str();
-  const std::string Declaration = "int32_t " + Name + ";";
-  ASSERT_EQ(llvm::StringRef(sourceLineContaining(Source, Declaration)).trim(),
-            Declaration)
-      << Source;
-  const auto Copy = sourceLineContaining(Source, Name + " = var_m18;");
-  ASSERT_FALSE(Copy.empty()) << Source;
+  std::string Continuation = "uint32_t var_m18 = bits;\n";
+  if (Name != "var_m18") {
+    const std::string Declaration = "int32_t " + Name + ";";
+    ASSERT_EQ(llvm::StringRef(sourceLineContaining(Source, Declaration)).trim(),
+              Declaration)
+        << Source;
+    const auto Copy = sourceLineContaining(Source, Name + " = var_m18;");
+    ASSERT_FALSE(Copy.empty()) << Source;
+    Continuation += Declaration + "\n" + std::string(Copy) + "\n";
+  }
   compileAndRunSehContinuation(
-      "uint32_t var_m18 = bits;\n" + Declaration + "\n" + std::string(Copy) +
-          "\n" + std::string(GlobalStore) + "\n" +
+      Continuation + std::string(GlobalStore) + "\n" +
           std::string(sourceLineContaining(Source, ReturnText)),
       "dword_1400050E0", /*Portable=*/false);
 }

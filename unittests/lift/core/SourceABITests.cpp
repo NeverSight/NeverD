@@ -4739,8 +4739,10 @@ TEST(SourceABI, OnlyUnobservedParameterPhiCarrierBytesCanBeDiscarded) {
       auto High = MedToHighConverter().convert(Function, Architecture);
       narrowSourceConcatLocals(High);
       unsigned NarrowCopies = 0, FullCopies = 0, UnknownEdges = 0;
-      // A small return tail may be copied to each jump into it; count each
-      // distinct store once.
+      unsigned NarrowUnknownEdges = 0;
+      // The two edges carry the same parameter, so their copies may be one
+      // after the join, and a small return tail may be copied to each jump
+      // into it; count each distinct store once.
       std::set<std::string> Stores, FullStores;
       walkStmts(High.Body, [&](const HighStmt &Statement) {
         if (Statement.Kind == StmtKind::Store) {
@@ -4764,20 +4766,24 @@ TEST(SourceABI, OnlyUnobservedParameterPhiCarrierBytesCanBeDiscarded) {
         auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
           if (!E)
             return;
-          if (E->Kind == ExprKind::Undef)
+          if (E->Kind == ExprKind::Undef) {
             ++UnknownEdges;
+            NarrowUnknownEdges += Bytes == 4U;
+          }
           for (const auto &Input : E->Operands)
             Self(Self, Input);
         };
         Visit(Visit, Statement.Val);
       });
-      // A full-width use retains its original copies, while the low store
-      // has independent narrow copies that never observe the unknown suffix.
-      EXPECT_EQ(NarrowCopies, 2U);
-      EXPECT_EQ(FullCopies, FullWidthRead ? 2U : 0U);
+      // A full-width use retains its original copies, each with the unknown
+      // suffix, while the low store has independent narrow copies that never
+      // observe it.
+      EXPECT_GE(NarrowCopies, 1U);
+      EXPECT_EQ(NarrowUnknownEdges, 0U);
+      EXPECT_EQ(FullCopies > 0, FullWidthRead);
+      EXPECT_EQ(UnknownEdges, FullCopies);
       EXPECT_EQ(Stores.size(), FullWidthRead ? 2U : 1U);
       EXPECT_EQ(FullStores.size(), FullWidthRead ? 1U : 0U);
-      EXPECT_EQ(UnknownEdges, FullWidthRead ? 2U : 0U);
     }
 }
 

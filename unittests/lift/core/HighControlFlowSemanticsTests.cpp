@@ -10526,6 +10526,48 @@ TEST(HighControlFlowSemantics, ExceptHandlerJumpToAReturnTailBecomesItsCopy) {
   EXPECT_EQ(countKind(F, StmtKind::Goto), 0u);
 }
 
+TEST(HighControlFlowSemantics, AJumpToWhatFollowsItsTryTakesNoCopy) {
+  // __try { v = 1; } __except (...) { v = 2; goto T; } T: v = v + 3;
+  // return v; -- falling off the handler reaches T too, so the jump is the
+  // fall-through a later pass drops.  A copy of the tail in the handler
+  // printed the code after the try twice.  So in an arm of an if.
+  const auto Add = [] {
+    auto S = assign(0x1010, 1, 0);
+    S.Val =
+        HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(3, 8));
+    return S;
+  };
+  HighStmt Try;
+  Try.Kind = StmtKind::SEHTry;
+  Try.Addr = 0x1000;
+  Try.Body = {assign(0x1000, 1, 1)};
+  HighEHClause Except;
+  Except.Kind = HighEHClauseKind::SEHExcept;
+  Except.HandlerVA = 0x1040;
+  Try.EHClauses = {Except};
+  Try.EHClauseBodies = {{assign(0x1040, 1, 2), jump(0x1044, 0x1010)}};
+  HighFunc F;
+  F.Body = {Try, Add(), result(0x1020, local(1))};
+  EXPECT_FALSE(duplicateSmallReturnTails(F.Body));
+  EXPECT_EQ(countKind(F, StmtKind::Return), 1u);
+
+  HighStmt Arm;
+  Arm.Kind = StmtKind::If;
+  Arm.Addr = 0x1004;
+  Arm.Cond = local(0);
+  Arm.Body = {assign(0x1008, 1, 2), jump(0x100C, 0x1010)};
+  HighFunc G;
+  G.Body = {assign(0x1000, 1, 1), Arm, Add(), result(0x1020, local(1))};
+  const uint64_t Inputs[] = {0, 1};
+  const uint64_t Results[] = {4, 5};
+  for (size_t I = 0; I < 2; ++I)
+    ASSERT_EQ(execute(G, Inputs[I]), Results[I]) << Inputs[I];
+  EXPECT_FALSE(duplicateSmallReturnTails(G.Body));
+  EXPECT_EQ(countKind(G, StmtKind::Return), 1u);
+  for (size_t I = 0; I < 2; ++I)
+    EXPECT_EQ(execute(G, Inputs[I]), Results[I]) << Inputs[I];
+}
+
 TEST(HighControlFlowSemantics, CodeAfterALoopInAnArmMovesToItsOnlyBreak) {
   // v = c; if (c) { while (1) { ... goto out; ... break; } v = v + 100; }
   // out: return v; -- the jump's target is what follows the arm, which the
