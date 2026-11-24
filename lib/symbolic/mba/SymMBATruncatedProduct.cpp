@@ -1122,10 +1122,12 @@ SymRef buildSlicedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   llvm::SmallVector<uint64_t, 32> Weights;
   llvm::SmallVector<const Factor *, 8> Remainder;
   size_t Remaining = 0;
-  const size_t Temporary = Rows.size() * PerRow;
+  size_t Temporary = Rows.size() * PerRow;
   Storage -= Temporary;
   const llvm::scope_exit Restore([&] { Storage += Temporary; });
   llvm::DenseMap<uint32_t, SymRef> Widened;
+  using Coordinate = std::pair<uint32_t, unsigned>;
+  llvm::SmallDenseMap<Coordinate, SymRef, 8> Wraps;
   Budget.consume(Rows.size() * RowWork);
   for (const auto &F : Rows) {
     if (F.Zeros < Shift) {
@@ -1137,7 +1139,11 @@ SymRef buildSlicedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     auto Low = Field.Low;
     unsigned Start = Field.Start;
     auto Source = F.Word;
-    if (Field.Size < Bits && F.Zeros < Precision - Field.Size) {
+    const unsigned Live = Precision - std::min(Precision, F.Zeros);
+    const bool Rotation =
+        Ctx.op(Source) == SymOp::Rol || Ctx.op(Source) == SymOp::Ror;
+    bool Circular = Rotation && Start;
+    if (Field.Size < Live && !Circular) {
       // The complete carrier supplies any live sign or concatenated bits.
       Low = {};
       Start = 0;
@@ -1147,6 +1153,12 @@ SymRef buildSlicedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     } else if (Ctx.op(Low) == SymOp::Extract) {
       Source = Ctx.operand(Low, 0);
       Start = Ctx.node(Low).Aux;
+      const auto Op = Ctx.op(Source);
+      if ((Op == SymOp::Rol || Op == SymOp::Ror) && Ctx.node(Source).Aux) {
+        Start = (uint64_t(Start) + Ctx.node(Source).Aux) % Ctx.width(Source);
+        Source = Ctx.operand(Source, 0);
+        Circular = true;
+      }
     } else if (Ctx.op(Low) == SymOp::Add || Ctx.op(Low) == SymOp::Mul ||
                isBitwise(Ctx.op(Low))) {
       Source =
@@ -1155,6 +1167,21 @@ SymRef buildSlicedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
         return {};
     } else {
       Source = Low;
+    }
+    // A higher weight can hide the wrap in one row while another offset
+    // still observes it. All offsets must then use the same cyclic field.
+    if (Circular && Live > Ctx.width(Source) - Start) {
+      constexpr size_t Entry = 4 * sizeof(std::pair<Coordinate, SymRef>);
+      if (!Budget.consume())
+        return {};
+      const Coordinate Position{Source.index(), Start};
+      if (!Wraps.contains(Position)) {
+        if (Storage < Entry)
+          return {};
+        Wraps.try_emplace(Position);
+        Storage -= Entry;
+        Temporary += Entry;
+      }
     }
     const auto [It, Inserted] = Index.try_emplace(
         Key{F.Offset.index(), Source.index(), Start}, Groups.size());
@@ -1184,13 +1211,18 @@ SymRef buildSlicedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   if (Count < limits::kMinResidueProductFactors || Count <= Remaining)
     return {};
   for (const auto &[K, I] : Index) {
+    const SymRef Source(std::get<1>(K));
+    const unsigned Start = std::get<2>(K);
+    auto Wrap = Wraps.find({Source.index(), Start});
+    const bool Crosses = Wrap != Wraps.end();
+    if (Crosses)
+      Groups[I].Word = Wrap->second;
     if (Groups[I].Word)
       continue;
-    const SymRef Source(std::get<1>(K));
     // A low extract can rebuild modular children. The printed tree count
     // also bounds repeated edges of a variadic source.
-    const unsigned Start = std::get<2>(K);
-    const unsigned Available = std::min(Bits, Ctx.width(Source) - Start);
+    const unsigned Available =
+        std::min(Bits, Ctx.width(Source) - (Crosses ? 0 : Start));
     // When the observed slice reaches the top, its missing bits have zero
     // coefficient. A zero extension gives the group a common representative.
     const size_t Nodes = llvm::SaturatingAdd(Ctx.readabilityCost(Source),
@@ -1199,8 +1231,20 @@ SymRef buildSlicedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     if (Nodes > Storage / Bytes || !Budget.consume(2 * Nodes + 1))
       return {};
     Storage -= Nodes * Bytes;
-    const auto Field = Ctx.mkExtract(Source, Start, Available);
+    SymRef Input = Source;
+    if (Crosses) {
+      const size_t W = llvm::APInt::getNumWords(Ctx.width(Source));
+      const size_t Extra =
+          2 * sizeof(SymNode) + 2 * sizeof(SymRef) + 2 * W * sizeof(uint64_t);
+      if (Storage < Extra || !Budget.consume(2 + W))
+        return {};
+      Storage -= Extra;
+      Input = Ctx.mkRor(Source, Ctx.mkConst(Ctx.width(Source), Start));
+    }
+    const auto Field = Ctx.mkExtract(Input, Crosses ? 0 : Start, Available);
     Groups[I].Word = Available == Bits ? Field : Ctx.mkZExt(Field, Bits);
+    if (Crosses)
+      Wrap->second = Groups[I].Word;
   }
   const auto Sum = buildProjectedLinearProduct(
       Ctx, Groups, Outer, Precision, Shift, Budget, Storage,

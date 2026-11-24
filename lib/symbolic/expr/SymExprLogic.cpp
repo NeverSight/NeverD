@@ -14,6 +14,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../SymFunnel.h"
 #include "SymExprCompare.h"
 #include "SymExprMask.h"
 
@@ -395,6 +396,10 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
 }
 
 SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
+  if (Ops.size() == 2)
+    if (const auto Rotated =
+            detail::joinedRotation(*this, SymOp::Or, Ops[0], Ops[1]))
+      return Rotated;
   assert(!Ops.empty());
   uint32_t W = width(Ops[0]);
   if (const auto Pair = wideVariablePair(*this, Ops, W))
@@ -605,6 +610,10 @@ static SymRef packedWordView(SymContext &C, SymRef Value) {
 }
 
 SymRef SymContext::mkXor(llvm::ArrayRef<SymRef> Ops) {
+  if (Ops.size() == 2)
+    if (const auto Rotated =
+            detail::joinedRotation(*this, SymOp::Xor, Ops[0], Ops[1]))
+      return Rotated;
   assert(!Ops.empty());
   uint32_t W = width(Ops[0]);
   if (const auto Pair = wideVariablePair(*this, Ops, W))
@@ -942,30 +951,37 @@ SymRef SymContext::mkAShr(SymRef A, SymRef B) {
   return intern(SymOp::AShr, W, {A, B}, 0);
 }
 
-SymRef SymContext::mkRol(SymRef A, SymRef B) {
-  uint32_t W = width(A);
-  if (isConst(B)) {
-    const unsigned Amt = constantRotateAmount(B, W);
-    if (Amt == 0)
-      return A;
-    if (isConst(A))
-      return mkConst(constValue(A).rotl(Amt));
-    return intern(SymOp::Rol, W, {A, B}, W - Amt);
+SymRef SymContext::mkRotate(SymOp Op, SymRef A, SymRef B) {
+  const unsigned W = width(A);
+  if (!isConst(B))
+    return intern(Op, W, {A, B}, 0);
+  const unsigned Amount = constantRotateAmount(B, W);
+  if (!Amount)
+    return A;
+  const unsigned Right = Op == SymOp::Ror ? Amount : W - Amount;
+  if (isConst(A))
+    return mkConst(constValue(A).rotr(Right));
+
+  // Aux is the source position of bit zero. A dynamic rotation has no
+  // fixed position; a constant rotation by zero has already folded away.
+  const auto &Inner = node(A);
+  if ((Inner.Op == SymOp::Rol || Inner.Op == SymOp::Ror) && Inner.Aux) {
+    const auto Source = operand(A, 0);
+    const uint64_t Total = Inner.Aux + Right;
+    const unsigned Start = Total >= W ? Total - W : Total;
+    if (!Start)
+      return Source;
+    return intern(SymOp::Ror, W, {Source, mkConst(W, Start)}, Start);
   }
-  return intern(SymOp::Rol, W, {A, B}, 0);
+  return intern(Op, W, {A, B}, Right);
+}
+
+SymRef SymContext::mkRol(SymRef A, SymRef B) {
+  return mkRotate(SymOp::Rol, A, B);
 }
 
 SymRef SymContext::mkRor(SymRef A, SymRef B) {
-  uint32_t W = width(A);
-  if (isConst(B)) {
-    const unsigned Amt = constantRotateAmount(B, W);
-    if (Amt == 0)
-      return A;
-    if (isConst(A))
-      return mkConst(constValue(A).rotr(Amt));
-    return intern(SymOp::Ror, W, {A, B}, Amt);
-  }
-  return intern(SymOp::Ror, W, {A, B}, 0);
+  return mkRotate(SymOp::Ror, A, B);
 }
 
 } // namespace neverd::symbolic

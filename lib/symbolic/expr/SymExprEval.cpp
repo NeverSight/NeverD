@@ -198,6 +198,19 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
   visitRequiredPrefixes<true>(
       Ctx, Root, RootSlot, NumSlots, Steps, ArgSlots,
       [&](Step &St, unsigned Demand, unsigned Zeros, unsigned Coefficient) {
+        // If a product observes only the low lane, extension bits and the
+        // other concatenated lanes cannot reach any use of this output.
+        if (Demand <= 64 && Demand < St.Width &&
+            (St.Op == SymOp::ZExt || St.Op == SymOp::SExt ||
+             St.Op == SymOp::Concat) &&
+            Demand <= Ctx.width(Ctx.operands(St.Node).back())) {
+          St.FirstArg += St.NumArgs - 1;
+          St.NumArgs = 1;
+          St.Op = SymOp::Extract;
+          St.Aux = 0;
+          St.Width = Demand;
+          return;
+        }
         if (preservesLowBits(St.Op) && Demand <= 64)
           St.Width = Demand;
         if (Zeros && Demand > 64) {
@@ -1039,10 +1052,20 @@ llvm::APInt multiplyLowWords(llvm::ArrayRef<llvm::APInt> Values,
 // The low (Width - Bits) bits of Scale are zero. Multiply just its
 // remaining bits and restore the scale in the original ring.
 llvm::APInt multiplyShiftedPrefix(const llvm::APInt &Scale,
-                                  llvm::APInt Prefix) {
-  const unsigned Shift = Scale.getBitWidth() - Prefix.getBitWidth();
-  Prefix *= Scale.extractBits(Prefix.getBitWidth(), Shift);
-  return Prefix.zext(Scale.getBitWidth()).shl(Shift);
+                                  const llvm::APInt &Prefix) {
+  const unsigned Bits = Prefix.getBitWidth();
+  const unsigned Shift = Scale.getBitWidth() - Bits;
+  const unsigned N = Prefix.getNumWords();
+  llvm::SmallVector<uint64_t, 8> Scratch(2 * size_t(N));
+  auto *High = Scratch.data(), *Product = High + N;
+  llvm::APInt::tcExtract(High, N, Scale.getRawData(), Bits, Shift);
+  llvm::APInt::tcMultiply(Product, High, Prefix.getRawData(), N);
+  llvm::APInt Result(Scale.getBitWidth(), 0);
+  for (unsigned I = 0; I < N; ++I) {
+    const unsigned Offset = I * 64;
+    Result.insertBits(Product[I], Shift + Offset, std::min(64u, Bits - Offset));
+  }
+  return Result;
 }
 
 // Evaluate the literal affine factors directly in their common modulus.
@@ -1122,6 +1145,13 @@ llvm::APInt SymEvalPlan::evalWith(
       continue;
     }
 
+    if (St.Op == SymOp::Extract && St.Width <= 64) {
+      const auto &Word = ScratchAP[A[0]];
+      ScratchAP[I] =
+          llvm::APInt(St.Width, Word.extractBitsAsZExtValue(St.Width, St.Aux));
+      continue;
+    }
+
     if (St.Width <= 64 && preservesLowBits(St.Op)) {
       auto Word = [&](size_t K) { return ScratchAP[A[K]].getRawData()[0]; };
       uint64_t Value = Word(0);
@@ -1173,7 +1203,7 @@ llvm::APInt SymEvalPlan::evalWith(
                 : multiplyLowWords(ScratchAP, {A + 1, St.NumArgs - 1}, Bits);
         const unsigned Shift = St.Width - Bits;
         if (ScratchAP[I].countr_zero() >= Shift) {
-          ScratchAP[I] = multiplyShiftedPrefix(ScratchAP[I], std::move(Prefix));
+          ScratchAP[I] = multiplyShiftedPrefix(ScratchAP[I], Prefix);
         } else {
           ScratchAP[I] *= Prefix.zext(St.Width);
         }

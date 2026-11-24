@@ -73,7 +73,11 @@ struct FunnelShifts {
     if ((Op != SymOp::Or && Op != SymOp::Xor && Op != SymOp::Add) ||
         Ctx.numOperands(V) != 2)
       return std::nullopt;
-    auto H = Ctx.operand(V, 0), R = Ctx.operand(V, 1);
+    return matchPair(Ctx, Op, Ctx.operand(V, 0), Ctx.operand(V, 1));
+  }
+
+  static std::optional<FunnelShifts> matchPair(const SymContext &Ctx, SymOp Op,
+                                               SymRef H, SymRef R) {
     if (Ctx.op(H) == SymOp::LShr || Ctx.op(H) == SymOp::AShr)
       std::swap(H, R);
     if ((Ctx.op(R) != SymOp::LShr && Ctx.op(R) != SymOp::AShr) ||
@@ -122,6 +126,17 @@ struct FunnelShifts {
     return WordWindow{Ctx.operand(High, 1), At - Cut};
   }
 };
+
+// A complete window of two complementary logical shifts on the same word
+// is exactly one rotation. OR, XOR and addition agree on these disjoint bits.
+inline SymRef joinedRotation(SymContext &Ctx, SymOp Op, SymRef A, SymRef B) {
+  const auto Shifts = FunnelShifts::matchPair(Ctx, Op, A, B);
+  if (!Shifts || !Shifts->sharesSource(Ctx) ||
+      !Shifts->project(Ctx, 0, Ctx.width(A)))
+    return {};
+  return Ctx.mkRor(Ctx.operand(Shifts->Right, 0),
+                   Ctx.operand(Shifts->Right, 1));
+}
 
 } // namespace neverd::symbolic::detail
 

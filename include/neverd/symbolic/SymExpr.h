@@ -516,6 +516,9 @@ private:
   SymRef internMaskedSource(llvm::ArrayRef<SymRef> Source,
                             const llvm::APInt &Mask);
 
+  /// Compose fixed rotations at the word width, using a rightward offset.
+  SymRef mkRotate(SymOp Op, SymRef A, SymRef B);
+
   /// Share the masked-join split allowance across one field request.
   SymRef extractWindow(SymRef A, uint32_t Low, uint32_t Width,
                        unsigned &RemainingSplits);

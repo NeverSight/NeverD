@@ -317,7 +317,7 @@ def masked_join_elf(degree, *, wrapped=False, low_factors=()):
 
 
 def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0,
-                       raw_rotations=False):
+                       raw_rotations=False, composed_rotations=False):
     scale = 3 << 13
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     weights = (1 if repeated_offsets else 3, -3, 5, 7, -5)
@@ -335,8 +335,16 @@ def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0,
             # observed window crosses bit 31 its wrapped low bits stay live.
             start = 24 if i % 3 else turn
             left = i % 2 == 0
+            remaining = start
+            if composed_rotations:
+                # The intermediate lanes move in both directions. Their
+                # combined rightward distance must still equal start.
+                first, second = 1 + 7 * i % 31, 1 + 11 * i % 31
+                code += bytes.fromhex("c1c1") + bytes([first])
+                code += bytes.fromhex("c1c9") + bytes([second])
+                remaining = (start + first - second) % 32
             code += bytes.fromhex("c1c1" if left else "c1c9")
-            code += bytes([32 - start if left else start])
+            code += bytes([(-remaining if left else remaining) % 32])
             field = f"(({word}>>{start})|({word}<<{32-start}))"
             signed = False
         elif terminal_period and i % terminal_period:
@@ -731,8 +739,10 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "funnel-perturbation-composed-product-283":
+            assert code.count("*") <= (19 if llvm else 21), text
         elif kind == "funnel-perturbation-rotated-product-239":
-            assert code.count("*") <= (9 if llvm else 15), text
+            assert code.count("*") <= (7 if llvm else 12), text
         elif kind == "funnel-perturbation-terminal-product-173":
             assert code.count("*") <= 12, text
         elif kind == "funnel-perturbation-terminal-field-173":
@@ -931,6 +941,9 @@ if __name__ == "__main__":
                 81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
             ("funnel-perturbation-masked-join-89", *masked_join_elf(89)),
             ("funnel-perturbation-masked-wrap-103", *masked_join_elf(103, wrapped=True)),
+            ("funnel-perturbation-composed-product-283",
+             *variable_field_elf(283, terminal_period=3, repeated_offsets=True,
+                                 raw_rotations=True, composed_rotations=True)),
             ("funnel-perturbation-rotated-product-239",
              *variable_field_elf(239, terminal_period=3, repeated_offsets=True,
                                  raw_rotations=True)),

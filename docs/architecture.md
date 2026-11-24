@@ -8128,6 +8128,16 @@ even when the window wraps. Constant shifts translate the window only when
 every bit comes from the source. A mask can be peeled when it preserves
 every bit of the window, including both sides of a wrapped interval.
 Variable counts and observable zero or sign padding stay in the source word.
+A complete pair of complementary logical shifts of one word is a rotation
+under addition, OR and XOR. Fixed rotations compose before extracting a
+field. If any coefficient observes both ends of the word, product recovery
+uses that same circular field for every offset at the coordinate. A signed
+extension or concatenation keeps its upper bits when a weight observes them.
+For a scaled product that reads only the low lane of an extension or
+concatenation, the evaluation plan can read that lane directly. A shared
+use that observes more bits keeps the wider value.
+Repeated long factor calls share a parse result after their complete spelling
+and the applicable nesting depth have been checked.
 A sum, OR or XOR can also supply a field from one right shift when every
 other term is zero below the end of that field. For OR and XOR, a mask
 only needs to be zero inside the field. A sum can carry from lower bits.
