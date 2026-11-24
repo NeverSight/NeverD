@@ -268,7 +268,10 @@ def check(args: argparse.Namespace) -> dict:
                                    declarations_without_import=sorted(functions.keys() - imported.keys()),
                                    reference_parameters=sorted(imported.keys() - set(names)))
                     elif "sdk_import_bridge" in metadata:
-                        declared = official_names(args, compiler, original, directory, row, arch, name, ("",))
+                        if name in flat.CPP_IMPORT_PREFIXES:
+                            declared = flat.cpp_import_names(name, bridge, directory, row["commands"], windows.run)
+                        else:
+                            declared = official_names(args, compiler, original, directory, row, arch, name, ("",))
                         inventory = dict(bridge)
                         if witness := inventory["import_library"].get("ordinal_export_witness"):
                             if flat.ordinal.witness(flat.ordinal.profiles()[name], arch) != witness:
