@@ -1881,6 +1881,23 @@ DICR-to-handler experiment retired eight instructions. Replaying those
 device-triggered paths requires a model of the PlayStation interrupt controller.
 [Cause.IP2 samples](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/04IP2.txt).
 
+Sony's DTL-H2700 tutorial capture records two VBLANK rising edges, at
+zero-based samples 1 and 566104. The first subsequent samples with BIOS
+`/CS2` and sub-bus `/RD` both asserted are 19 and 566128. Both reads show
+`0xc2035c` on address pins A23–A0. The observed intervals are 18 and 24
+sample clocks. The four recorded peripheral IRQ inputs stay high throughout
+the 1,131,520 examined frames. The recording has no channel for the CPU's
+interrupt recognition, internal fetch, or TLB write.
+[Sony's analyzer technical reference, p. 1](https://psx.arthus.net/sdk/Psy-Q/DOCS/Devrefs/tech205.pdf#page=9),
+[signal assignments and PAD format](https://github.com/psx-spx/psx-spx.github.io/blob/1e53a60b7e1f62e73b0d710250e52216150617b6/docs/psxdevboardprotocol.md#pa-capture-frame-format).
+
+Run the [capture reader](../unittests/lift/mips/historical-pa-capture.py) on
+`psyq/PA/DATA/TUTO3.PAD` from the [archived SDK](https://psx.arthus.net/sdk/Psy-Q/PSYQ_SDK.zip).
+It verifies the file hash and excludes the trailing 1,024-frame block, in
+which all 128 inputs read high. Including that block creates an extra VBLANK
+edge. The [expected readings](../unittests/lift/mips/historical-pa-capture.expected.json)
+include the PAD frame count and both pairs of sample indices.
+
 The CW4011 integration is described in the
 [LSI L64364 ATMizer II manual, chapter 4](https://www.ic72.com/pdf_file/l/123798.pdf).
 
