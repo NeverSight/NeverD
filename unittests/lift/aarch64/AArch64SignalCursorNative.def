@@ -13,7 +13,9 @@
 #include "AArch64SignalCursorOracle.def"
 
 #include <pthread.h>
+#include <setjmp.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,9 +23,42 @@
 
 enum { Unavailable = 2 };
 
-static void unavailable(int Signal) {
-  (void)Signal;
-  _Exit(Unavailable);
+extern const uint32_t signExplicitIASite, signExplicitIBSite;
+static sigjmp_buf Recovery;
+static _Atomic(uintptr_t) ExpectedPC;
+
+static void illegalInstruction(int Number, siginfo_t *Info, void *Context) {
+  (void)Info;
+  const mcontext_t MC = ((ucontext_t *)Context)->uc_mcontext;
+  if (Number != SIGILL ||
+      arm_thread_state64_get_pc(MC->__ss) !=
+          atomic_load_explicit(&ExpectedPC, memory_order_relaxed))
+    _Exit(EXIT_FAILURE);
+  siglongjmp(Recovery, 1);
+}
+
+static bool canSign(void (*Sign)(uintptr_t, Signature *),
+                    const uint32_t *Site) {
+  Signature Probe;
+  atomic_store_explicit(&ExpectedPC, (uintptr_t)Site, memory_order_relaxed);
+  if (sigsetjmp(Recovery, 1))
+    return false;
+  Sign(0x12340, &Probe);
+  return true;
+}
+
+static int probeExplicit(void) {
+  struct sigaction Action = {0}, Previous;
+  Action.sa_sigaction = illegalInstruction;
+  Action.sa_flags = SA_SIGINFO;
+  sigemptyset(&Action.sa_mask);
+  if (sigaction(SIGILL, &Action, &Previous))
+    return EXIT_FAILURE;
+  const bool IA = canSign(signExplicitIA, &signExplicitIASite);
+  const bool IB = canSign(signExplicitIB, &signExplicitIBSite);
+  if (sigaction(SIGILL, &Previous, NULL) || IA != IB)
+    return EXIT_FAILURE;
+  return IA ? EXIT_SUCCESS : Unavailable;
 }
 
 int main(int Argc, char **Argv) {
@@ -33,11 +68,9 @@ int main(int Argc, char **Argv) {
   fflush(stdout);
   const bool Explicit = !strcmp(Argv[1], "explicit");
   if (Explicit) {
-    signal(SIGILL, unavailable);
-    Signature Probe;
-    signExplicitIA(0x12340, &Probe);
-    signExplicitIB(0x12340, &Probe);
-    signal(SIGILL, SIG_DFL);
+    const int Status = probeExplicit();
+    if (Status != EXIT_SUCCESS)
+      return Status;
   }
   const uintptr_t High = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
   const uintptr_t Low = High - pthread_get_stacksize_np(pthread_self());
