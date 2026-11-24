@@ -338,7 +338,15 @@ is included only where the system image and its target SDK declaration were
 both verified. The generated manifest records this input digest separately so
 archives can be checked against the provider groups used to create them.
 The expected source parameter counts come from Microsoft's pinned
-[Win32 metadata](https://github.com/microsoft/win32metadata).
+[Win32 metadata](https://github.com/microsoft/win32metadata). Where a named
+x86 provider carries a target import library, the generator and the independent
+verifier also compare the emitted COFF linker spellings with that archive.
+The six profiles whose unannotated declarations require the SDK stdcall
+default apply it to the original header and preserve it explicitly in the
+published prototypes. The Ethernet address routines use
+`netiodef.h`, which defines the six-byte `DL_EUI48` record used by both the
+user SDK and the WDK. The routing, EAP, kernel streaming, log management and
+iSCSI units include their SDK prerequisites before projecting their exports.
 
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with
 `UNICODE`, including in declarations with an explicit `_W` name. An exact

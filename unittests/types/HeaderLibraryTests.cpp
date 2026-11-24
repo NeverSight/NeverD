@@ -57,6 +57,18 @@ std::optional<uint64_t> win64Bytes(const TypeLibrary &Library,
 
 } // namespace
 
+TEST(HeaderLibrary, WindowsEthernetAddressRoutinesCarryTheAddressLayout) {
+  for (HeaderLibrary Id :
+       {HeaderLibrary::WindowsUserX86, HeaderLibrary::WindowsUserX64,
+        HeaderLibrary::WindowsUserARM64}) {
+    SCOPED_TRACE(headerLibraryName(Id).str());
+    const TypeLibrary *User = headerLibrary(Id);
+    ASSERT_NE(User, nullptr);
+    if (User->findPrototype("RtlEthernetStringToAddressW"))
+      EXPECT_EQ(sizeOf(*User, "DL_EUI48"), 6u);
+  }
+}
+
 TEST(HeaderLibrary, TheKernelsReadsAsADriverDeclaresIt) {
   std::string Error;
   const TypeLibrary *Kernel =

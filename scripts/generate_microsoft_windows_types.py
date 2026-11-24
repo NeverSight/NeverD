@@ -863,7 +863,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                 target_packages.append(gdiplus_imports["package"])
             flat_units, archives = flat.source_units(output, cache, architecture, readobj,
                                                      arguments, legacy_profile)
-            flat_units.extend(flat.named_runtime_units(output, architecture, arguments))
+            named_libraries = flat.named_runtime_libraries(output, cache, architecture, readobj)
+            flat_units.extend(flat.named_runtime_units(output, architecture, arguments, named_libraries))
             webauthn, headers, notice = flat.webauthn_runtime_unit(output, cache, arguments)
             flat_units.append(webauthn)
             runtime_packages.extend(headers)

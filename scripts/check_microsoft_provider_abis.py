@@ -225,6 +225,7 @@ def check(args: argparse.Namespace) -> dict:
     report = {"schema": 1, "scope": "compiler ABI; no native driver execution",
               "generated_manifest_sha256": digest(args.generated / "manifest.json"),
               "cases": rows}
+    system_runtime_digest = digest(flat.SYSTEM_RUNTIME_INPUTS)
     for arch in args.architecture or ("x86", "x64", "arm64"):
         target = args.generated / arch
         manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
@@ -289,6 +290,11 @@ def check(args: argparse.Namespace) -> dict:
                                        "metadata": inputs["metadata"]}
                         else:
                             profile = flat.RUNTIME_PROFILES[name]
+                            target_profile = profile["targets"][arch]
+                            if ("import_library" in target_profile and
+                                    manifest.get("profiles", {}).get("system_runtime") == system_runtime_digest and
+                                    "runtime_import_library" not in bridge):
+                                raise ValueError("missing named runtime import library for " + name)
                             exports = flat.named_runtime_exports(profile, profile["targets"][arch],
                                                                  flat.NAMED_RUNTIME["win32_metadata"])
                         if exports != bridge["runtime_exports"]:
@@ -366,6 +372,15 @@ def check(args: argparse.Namespace) -> dict:
                         compared = compiler_contracts(result.stdout, bindings)
                         contracts.append({symbol: compared[alias]
                                           for symbol, alias in zip(names, bindings)})
+                    if bridge and "runtime_import_library" in bridge:
+                        witness = bridge["runtime_import_library"]
+                        profile = flat.RUNTIME_PROFILES[name]
+                        if (witness["architecture"] != arch or witness["module"] != profile["module"] or
+                                Path(witness["file"]).name != profile["targets"][arch]["import_library"]):
+                            raise ValueError("incorrect named runtime import library for " + name)
+                        symbols = flat.read_symbols(witness, directory, windows.run)
+                        flat.verify_linkage(contracts[0], symbols, witness)
+                        row["commands"].append(witness["command"])
                     row["contracts"] = contracts
                     row["passed"] = contracts[0] == contracts[1]
                     if not row["passed"]:
