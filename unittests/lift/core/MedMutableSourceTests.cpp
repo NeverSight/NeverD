@@ -1022,6 +1022,9 @@ TEST(MedMutableSource, LargeRepeatedWritesNeedNoPerOperationSSAProofGraph) {
   LowFunc Low;
   Low.Entry = 0x1000;
   Low.Name = "mutable_probe";
+  // Model a function over the SSA construction limit without storing four
+  // million operations. Keep the repeated writes below as real source work.
+  Low.DecodedInstructionCount = limits::kMaxSSABuildOps + 1;
   Low.Blocks.resize(1);
   auto &B = Low.Blocks.front();
   B.Id = 0;
