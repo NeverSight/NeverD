@@ -1725,6 +1725,13 @@ after detection. The analyzer listing begins at the read.
 [IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf),
 [R3051 hardware manual, chapter 10, Reset Behavior](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/cpu/mips/r3051.pdf#page=131).
 
+On Stanford's FAST board, an oscilloscope recorded the R3000's 25 MHz
+system clock, its instruction-request output and the FPGA's instruction-ready
+signal. Three uncached bus reads are visible. The instrument captured a
+steady-state read every three clocks (120 ns). The trace omits reset release
+and the internal fetch stage, so it gives no reset-to-first-fetch interval.
+[Davis et al., figure 5](https://www.microsoft.com/en-us/research/wp-content/uploads/2005/11/DASCMP2005_FAST.pdf#page=7).
+
 Crescent Heart recorded reset release and the first boot instruction read on
 the same asynchronous logic-analyzer timebase for two MIPS III processors.
 Each interval starts at the rising edge of `ResetB` and ends when the CPU
@@ -1783,6 +1790,12 @@ most of those writes within 20 cycles of assertion. That interval includes
 board delivery, exception entry, and the probe write. The experiment does
 not resolve the instruction at which the CPU recognized the input.
 [DEC PRL Research Report 19, sections 3.1–3.2, figures 6 and 9](https://ftpmirror.your.org/pub/misc/bitsavers/pdf/dec/tech_reports/PRL-RR-19.pdf#page=16).
+
+On a Tandem R4400, CITCAT used a hardware branch counter and uncached
+exception-handler stores of EPC and Cause to locate the interrupted
+instruction. The capture omitted the originating interrupt signal. Its
+instruction boundary therefore has no corresponding pin-edge timestamp.
+[Rose, section 4.3](https://charltonrose.com/citcat/msthesis/msthesis.pdf#page=31).
 
 IDT gives separate R3051/2 pipeline latencies to the general exception
 vector while the pipeline runs. A direct, externally synchronized interrupt
@@ -2157,6 +2170,13 @@ Single-instruction MIPS decoding uses the static Capstone entry for classic and
 compressed profiles. The streaming iterator supplies the operand and text
 reference. Historical admission, Release 6 forbidden followers and NeverD ASE
 adapters still run at their profile boundaries.
+
+With assembly text disabled and detail enabled, classic MIPS I–V and Release
+2/5 can map common scalar encodings without building printer operands. The
+fixed-address decoder uses Capstone's regular instruction and implicit-effect
+tables. Encodings with feature-dependent aliases, including word loads and
+stores, go through the generated decoder. The public iterator is the comparison
+for IDs, groups, register effects, physical bytes and alias state.
 
 The baseline for decoder measurements is
 bcef8d07e1, with matched Release compiler and dependency inputs except for
