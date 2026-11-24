@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -109,6 +110,23 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             self.assertEqual(arm64["LockdownPolicy"]["parameter_counts"][reset], 0)
             self.assertNotEqual(x64["DisplayControl"]["image_sha256"],
                                 arm64["DisplayControl"]["image_sha256"])
+
+    def test_named_runtime_archive_coexists_with_other_sdk_imports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = json.loads(windows.ucrt.INPUTS.read_text())["import_packages"]["x86"]
+            archive = root / record["file"]
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("c/um/x86/public.lib", b"ordinary import library")
+                package.writestr("c/um/x86/named.lib", b"named import library")
+            ordinary = root / (archive.stem + "-imports")
+            windows.wdk.extract([archive], ordinary, ["c/um/x86/public.lib"])
+            profile = {"module": "named.dll", "targets": {"x86": {"import_library": "named.lib"}}}
+            with (patch.object(windows.flat, "RUNTIME_PROFILES", {"Named": profile}),
+                  patch.object(windows.flat, "package", return_value=archive)):
+                libraries = windows.flat.named_runtime_libraries(root, root, "x86", "llvm-readobj")
+            self.assertEqual(Path(libraries["Named"]["file"]).read_bytes(), b"named import library")
+            self.assertEqual([p.name for p in ordinary.rglob("*.lib")], ["public.lib"])
 
     def test_runtime_archive_refuses_same_arity_with_the_wrong_x86_linker_spelling(self):
         symbols = {"Read": {"_Read@4"}}

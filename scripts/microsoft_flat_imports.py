@@ -151,7 +151,7 @@ def named_runtime_libraries(output, cache, architecture, readobj):
     if not targets:
         return {}
     record = json.loads(ucrt.INPUTS.read_text(encoding="utf-8"))["import_packages"][architecture]
-    kit = output / (Path(record["file"]).stem + "-imports")
+    kit = output / (Path(record["file"]).stem + "-named-runtime-imports")
     prefix = f"c/um/{architecture}/"
     wdk.extract([package(cache, record)], kit, sorted({prefix + name for name in targets.values()}))
     return {name: import_identity(kit / (prefix + filename), RUNTIME_PROFILES[name]["module"],
