@@ -9315,13 +9315,23 @@ TEST_F(SessionCAPITest, X86ImportsTakeTheirStdcallPrototypes) {
             std::string::npos)
       << Finish;
   EXPECT_EQ(Finish.find("return (int32_t)sub_"), std::string::npos) << Finish;
-  // SetFilePointerEx takes its LARGE_INTEGER in two of the five slots it
-  // pops; the local stored above them is no argument.
+  // The two distance words form one LARGE_INTEGER. The remaining arguments
+  // are the address of Position and the zero move method.
   const std::string Seek = decompile("Seek");
-  EXPECT_NE(Seek.find("SetFilePointerEx(arg0, arg1, arg2, "), std::string::npos)
-      << Seek;
-  EXPECT_NE(Seek.find(", 0);"), std::string::npos) << Seek;
-  EXPECT_EQ(Seek.find(", 0, 0"), std::string::npos) << Seek;
+  const auto Call = llvm::StringRef(Seek)
+                        .rsplit("= SetFilePointerEx(")
+                        .second.split('\n')
+                        .first;
+  const auto [File, Tail] = Call.split(", ");
+  const auto [Inputs, Method] = Tail.rsplit(", ");
+  const auto [Distance, Position] = Inputs.rsplit(", ");
+  EXPECT_TRUE(File.contains("arg0")) << Seek;
+  EXPECT_TRUE(Distance.contains("_LARGE_INTEGER")) << Seek;
+  EXPECT_TRUE(Distance.ends_with("})")) << Seek;
+  ASSERT_NE(Distance.find("arg2"), llvm::StringRef::npos) << Seek;
+  EXPECT_LT(Distance.find("arg1"), Distance.find("arg2")) << Seek;
+  EXPECT_TRUE(Position.contains("&stack_storage.")) << Seek;
+  EXPECT_EQ(Method, "0);") << Seek;
 }
 
 TEST_F(SessionCAPITest, ARM64ImportsPassWhatTheirPrototypesCount) {
