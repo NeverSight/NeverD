@@ -853,6 +853,11 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             runtime_packages.extend(flat.metadata_headers(output, cache, licenses))
             named_libraries = flat.named_runtime_libraries(output, cache, architecture, readobj)
             flat_units.extend(flat.named_runtime_units(output, architecture, arguments, named_libraries))
+            recent, recent_imports = flat.recent_runtime_units(output, cache, architecture, readobj,
+                                                               common, include)
+            flat_units.extend(recent)
+            runtime_packages.append(flat.RECENT_RUNTIME["headers"])
+            target_packages.extend(recent_imports)
             webauthn, headers, notice = flat.webauthn_runtime_unit(output, cache, arguments)
             flat_units.append(webauthn)
             runtime_packages.extend(headers)
@@ -891,6 +896,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                          flat_imports=wdk.digest(Path(flat.__file__)),
                          ordinal_imports=wdk.digest(flat.ordinal.INPUTS),
                          named_runtime=wdk.digest(flat.NAMED_RUNTIME_INPUTS),
+                         recent_runtime=wdk.digest(flat.RECENT_RUNTIME_INPUTS),
                          system_runtime=wdk.digest(flat.SYSTEM_RUNTIME_INPUTS),
                          cpdk_runtime=wdk.digest(flat.CPDK_INPUTS),
                          metadata_headers=wdk.digest(flat.METADATA_HEADER_INPUTS),
