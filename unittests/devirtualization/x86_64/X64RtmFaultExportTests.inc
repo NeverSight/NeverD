@@ -75,7 +75,63 @@ TEST_F(X64ContinuationExportTest,
       EXPECT_FALSE(C.contains("cpuid") || C.contains("rdmsr") ||
                    C.contains("xbegin ") || C.contains("rtm_abort_pair") ||
                    C.contains_insensitive("c0de123456789abc"));
+      const auto WithAuto = source(
+          request((llvm::Twine(R"("instructions":[4096,4102],"dispatch":")") +
+                   Dispatch + R"(","native_rtm_abort_steps":"auto",)" + Fields)
+                      .str()),
+          LLVM);
+      EXPECT_TRUE(WithAuto.first == Source)
+          << "an empty automatic selection must emit the same instruction code";
     }
+}
+
+TEST_F(X64ContinuationExportTest, QemuXbeginFaultKeepsAutoOnOtherEntries) {
+  // Both entries have an immediate XABORT. Only the first XBEGIN faulted.
+  const std::vector<uint8_t> Pair{0xc7, 0xf8, 5,    0,    0,    0,
+                                  0xc6, 0xf8, 0x42, 0x90, 0x90, 0xc3};
+  auto Code = Pair;
+  Code.resize(16, 0x90);
+  Code.insert(Code.end(), Pair.begin(), Pair.end());
+  load(Code, {{0x1000, Pair.size()}, {0x1010, Pair.size()}});
+  for (bool LLVM : {false, true}) {
+    for (auto Dispatch : {"direct", "switch"}) {
+      const auto Fields = xbeginFaultFields(xbeginFaultObservation());
+      const auto [C, Manifest] = source(
+          request((llvm::Twine(R"("entries":[4112,4096],"dispatch":")") +
+                   Dispatch + R"(","native_rtm_abort_steps":"auto",)" + Fields)
+                      .str()),
+          LLVM);
+      auto Parsed = llvm::json::parse(Manifest);
+      ASSERT_TRUE(bool(Parsed));
+      const auto *Report = Parsed->getAsObject();
+      ASSERT_NE(Report, nullptr);
+      const auto *Fault = Report->getObject("qemu_xbegin_fault_v1");
+      ASSERT_NE(Fault, nullptr);
+      EXPECT_EQ(Fault->getString("image_pc"), "0x1000");
+      const auto *Auto = Report->getObject("native_rtm_abort_steps");
+      ASSERT_NE(Auto, nullptr);
+      const auto *Pairs = Auto->getArray("regions");
+      ASSERT_NE(Pairs, nullptr);
+      ASSERT_EQ(Pairs->size(), 1u);
+      ASSERT_NE(Pairs->front().getAsObject(), nullptr);
+      EXPECT_EQ(Pairs->front().getAsObject()->getString("pc"), "0x1010");
+      const auto *Regions = Report->getArray("regions");
+      ASSERT_NE(Regions, nullptr);
+      std::vector<std::string> Fallbacks;
+      for (const auto &Value : *Regions) {
+        const auto *Region = Value.getAsObject();
+        ASSERT_NE(Region, nullptr);
+        if (const auto *Edges = Region->getArray("rtm_abort_successors")) {
+          EXPECT_EQ(Region->getString("entry"), "0x1010");
+          for (const auto &PC : *Edges)
+            Fallbacks.push_back(PC.getAsString().value_or("").str());
+        }
+      }
+      EXPECT_EQ(Fallbacks, (std::vector<std::string>{"0x101B"}));
+      EXPECT_FALSE(llvm::StringRef(C).contains("neverd_step_v6_1000_checked"));
+      EXPECT_TRUE(llvm::StringRef(C).contains("neverd_step_v6_1010_checked"));
+    }
+  }
 }
 
 TEST_F(X64ContinuationExportTest, QemuXbeginFaultRejectsContradictoryStops) {
@@ -137,7 +193,10 @@ TEST_F(X64ContinuationExportTest, QemuXbeginFaultRejectsContradictoryStops) {
   Refuse(std::move(WrongBase));
   Refuse(xbeginFaultObservation(), R"("instructions":[4102])");
   Refuse(xbeginFaultObservation(),
-         R"("instructions":[4096],"native_rtm_abort_steps":"auto")");
+         R"("instructions":[4096],"native_rtm_abort_steps":true)");
+  Refuse(
+      xbeginFaultObservation(),
+      R"("instructions":[4096],"native_rtm_abort_steps":{"max_basic_leaf":7,"leaf7_ebx":0})");
   Refuse(xbeginFaultObservation(),
          R"("instructions":[4096],"paged_memory":true)");
 }

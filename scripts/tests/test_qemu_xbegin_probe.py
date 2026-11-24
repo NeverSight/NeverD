@@ -56,14 +56,15 @@ class QemuXbeginProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unique site"):
             probe.select_site(source, SITE)
 
-    def test_only_single_site_auto_selection_can_be_rebound(self):
-        source = manifest(unit(), native_rtm_abort_steps="auto")
-        original = deepcopy(source)
-        _, request = probe.select_site(source)
-        self.assertNotIn("native_rtm_abort_steps", request)
-        self.assertEqual(source, original)
-        for r in (manifest(unit(), unit(SITE - 16), native_rtm_abort_steps="auto"),
-                  manifest(unit(), native_rtm_abort_steps={"max_basic_leaf": 7, "leaf7_ebx": 0}),
+    def test_site_observation_preserves_automatic_selection_elsewhere(self):
+        for source in (manifest(unit(), native_rtm_abort_steps="auto"),
+                       manifest(unit(), unit(SITE - 16), native_rtm_abort_steps="auto")):
+            original = deepcopy(source)
+            site, request = probe.select_site(source, SITE)
+            self.assertEqual(site, (SITE, CODE))
+            self.assertEqual(request, original["request"])
+            self.assertEqual(source, original)
+        for r in (manifest(unit(), native_rtm_abort_steps={"max_basic_leaf": 7, "leaf7_ebx": 0}),
                   manifest(unit(), native_rtm_abort_steps=True),
                   manifest(unit(), native_rtm_abort_steps={}),
                   manifest(unit(), native_rtm_abort_regions=True),
@@ -119,7 +120,7 @@ class QemuXbeginProbeTests(unittest.TestCase):
                 probe.fixture_ram(pc, b"\xc7\xf8" + struct.pack("<i", displacement), bits)
 
     def test_writes_a_new_complete_request_only_after_a_fault(self):
-        source = manifest(unit())
+        source = manifest(unit(), unit(SITE - 16, native=False), native_rtm_abort_steps="auto")
         original = deepcopy(source)
         record = {"frame": "fixture"}
         with tempfile.TemporaryDirectory() as directory:

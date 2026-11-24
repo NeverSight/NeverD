@@ -1320,10 +1320,11 @@ paging mode requires LA57 on the realized vCPU.
 [QEMU raw loader](https://www.qemu.org/docs/master/system/generic-loader.html)
 
 At a dedicated vector 6 landing the probe adds the observed evidence to the
-embedded request and publishes the new file. This preserves the entry
-selection, dispatch and other options. It can replace the `"auto"` setting of
-`native_rtm_abort_steps` for a sole explicitly requested instruction. Explicit
-CPU bindings and multi-site RTM bindings require their original configuration.
+embedded request and publishes the new file. It preserves the requested
+entries, dispatch and `"native_rtm_abort_steps": "auto"`. The observed PC
+delivers the fault directly. Other immediate-abort pairs keep their automatic
+admission and fallback edges. Explicit CPU and region bindings still require
+their original configuration.
 A distinct abort target reports EAX for the instrumented attempt. A debug
 breakpoint inside a transaction can itself cause an abort. An ambiguous stop
 produces no binding. The result describes the fresh vCPU. Ordinary exports

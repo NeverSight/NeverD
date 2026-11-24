@@ -42,6 +42,9 @@ def select_site(manifest, pc=None):
     if ("qemu_xbegin_fault_v1" in request or request.get("native_rtm_abort_regions") or
             request.get("native_rtm_regions")):
         raise ValueError("the request already has a competing RTM binding")
+    steps = request.get("native_rtm_abort_steps", False)
+    if steps is not False and steps != "auto":
+        raise ValueError("a declared or captured RTM binding belongs to its original CPU")
     selected = None
     for unit in manifest["units"]:
         if not isinstance(unit, dict):
@@ -64,15 +67,6 @@ def select_site(manifest, pc=None):
         selected = address, code
     if selected is None:
         raise ValueError("no unresolved unprefixed XBEGIN rel32 matches the selection")
-    if request.get("native_rtm_abort_steps", False) is not False:
-        if request["native_rtm_abort_steps"] != "auto":
-            raise ValueError("a declared or captured RTM binding belongs to its original CPU")
-        # An automatic check at the sole requested instruction can use this new observation.
-        instructions = request.get("instructions")
-        if (not isinstance(instructions, list) or len(instructions) != 1 or len(manifest["units"]) != 1 or
-                _address(instructions[0]) != selected[0]):
-            raise ValueError("a multi-site RTM step binding cannot be replaced by one observed exception")
-        del request["native_rtm_abort_steps"]
     return selected, request
 
 

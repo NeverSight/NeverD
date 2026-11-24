@@ -207,7 +207,8 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         for (va_t Address : RtmSteps.sitesIn(Audit.NativeInstructionAddresses))
           if (auto Abort = readX64RtmAbortRegion(
                   Image, Address, *SourceOptions.PagingAddressBits);
-              Abort && Image.isCodeAddress(Abort->Fallback)) {
+              Abort && !SourceOptions.observedXbeginFaultAt(Address) &&
+              Image.isCodeAddress(Abort->Fallback)) {
             if (auto Error = Enqueue(Abort->Fallback, Depth))
               return std::move(Error);
             Resumes.push_back(hex(Abort->Fallback));
