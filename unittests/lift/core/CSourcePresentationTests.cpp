@@ -173,6 +173,69 @@ TEST(CSourcePresentation, CCallsKeepTheirNamesAcrossImplementationVeneers) {
   }
 }
 
+TEST(CSourcePresentation, AnImportSlotsPrototypeDeclaresItsRecords) {
+  // A unit that reads an import's slot declares the slot a pointer to the
+  // routine its prototype gives.  Go's Windows syscalls read
+  // `__imp_GetThreadContext`, whose prototype names `_CONTEXT`: the unit
+  // spelled the record with no declaration, an unknown type to C.
+  constexpr va_t Slot = 0x3000;
+  class SlotDebug final : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Slot)
+        return std::nullopt;
+      auto Context = std::make_shared<NdType>();
+      Context->Kind = NdTypeKind::Struct;
+      Context->SourceName = "_CONTEXT";
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = "GetThreadContext";
+      Function.ReturnType = NdType::makeInt(4, true);
+      Function.Params = {{"hThread", NdType::makePtr()},
+                         {"lpContext", NdType::makePtr(Context)}};
+      return Function;
+    }
+  } Debug;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  Import GetThreadContext;
+  GetThreadContext.Module = "KERNEL32.dll";
+  GetThreadContext.Name = "GetThreadContext";
+  GetThreadContext.IATAddr = Slot;
+  Image.Imports.push_back(GetThreadContext);
+  // keep(void **out): *out = __imp_GetThreadContext.
+  MedVar Out;
+  Out.Kind = MedVar::Param;
+  Out.Id = 0;
+  Out.Size = 8;
+  Out.TheArch = Arch::X64;
+  HighFunc Function;
+  Function.Name = "keep";
+  Function.Entry = 0x1000;
+  Function.ReturnType = NdType::makeVoid();
+  Function.Params = {{"arg0", NdType::makeInt(8, false)}};
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.StoreAddr = HighExpr::makeVar(Out, NdType::makeInt(8, false));
+  Store.StoreVal = HighExpr::makeLoad(HighExpr::makeConst(Slot, 8),
+                                      NdType::makeInt(8, false));
+  Function.Body.push_back(Store);
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  Options.Image = &Image;
+  std::string Text;
+  llvm::raw_string_ostream Out2(Text);
+  ASSERT_TRUE(HighCEmitter().emit({Function}, Out2, Options, &Debug));
+  const size_t Slots = Text.find("__imp_GetThreadContext");
+  ASSERT_NE(Slots, std::string::npos) << Text;
+  const size_t Record = Text.find("typedef struct _CONTEXT _CONTEXT;");
+  EXPECT_LT(Record, Slots) << Text;
+  source_call_execution_test::checkSyntax(Text);
+}
+
 TEST(CSourcePresentation, ExternalCallAddressesSurviveCProjection) {
   for (const bool Ambiguous : {false, true}) {
     HighFunc Function;

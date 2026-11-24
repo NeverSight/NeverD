@@ -4850,7 +4850,10 @@ records:
   header's.
 - HighC asks for the records and enumerations its types reach before it
   writes, and the typedefs and enumerators the definitions declare reserve
-  their names from the unit's own. LLVM-C asks after it writes for every
+  their names from the unit's own. The types it reaches include the
+  prototypes of the routines whose import slots it reads, which it declares
+  as pointers to them: Go's Windows syscalls read `__imp_GetThreadContext`,
+  and the unit named `_CONTEXT` and `HINSTANCE__` with no declaration. LLVM-C asks after it writes for every
   name its text spells: a record's or an enumeration's, or an enumerator of
   an enumeration the decompiler displays, which stands for it. It declares a
   typedef of each tag it spells, an enumeration's after its definition, and

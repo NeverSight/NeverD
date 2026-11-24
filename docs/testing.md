@@ -18750,6 +18750,10 @@ CTest reserves six slots for independent fixtures on hosts with at least six
 available processors and three slots on smaller hosts. Each fixture builds
 and executes all six generated C outputs at O0 and O2 when Clang and the CLI
 are available.
+`CSourcePresentation.AnImportSlotsPrototypeDeclaresItsRecords` emits a
+function that stores the value of `__imp_GetThreadContext`, whose prototype
+names `_CONTEXT`: the unit declares `typedef struct _CONTEXT _CONTEXT;` before
+the slot and compiles; it fails where the walk skips the slots' prototypes.
 `CSourcePresentation.IndexedRelocationsPreserveStringStorageProofs` compares
 indexed range queries with individual-byte provenance across ELF, PE and Mach-O,
 including unsorted and duplicate fixups, invalid import slots and a relocation

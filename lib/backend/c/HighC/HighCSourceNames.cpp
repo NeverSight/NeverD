@@ -347,6 +347,18 @@ void HighCWriter::writeSourceRecordDeclarations(
     if (!CallTargets.count(Name) || isOwnFunctionName(Name, Funcs) ||
         calleeHeaders(Name).empty())
       Signature(Function);
+  // And those of the routines whose import slots the unit reads, which it
+  // declares as pointers to them (writeForwardDecls): Go's Windows syscalls
+  // read `__imp_GetThreadContext` and named `_CONTEXT` undeclared.
+  for (va_t Slot : ImportDataSlotReads) {
+    HighExpr Query;
+    Query.Kind = ExprKind::Call;
+    Query.CallAddr = Slot;
+    Query.CallTarget = "indirect";
+    Query.IsIndirectCall = true;
+    if (const auto Callee = debugCallee(Query))
+      Visit(fixedCalleeFunctionType(*Callee));
+  }
   // And those its objects point to.
   for (const auto &[Address, Object] : ImageObjects)
     Visit(Object.Type);
