@@ -5328,6 +5328,13 @@ the typed callee, including immutable import identities absent from libc tables.
 Windows x64 and ARM64 publish these operands before SSA and record the scalar
 return width; later call setup recovery preserves them. Writable import slots
 retain their runtime target even when the declaration establishes its ABI.
+A C library routine of only floating arguments that no header declares for
+the image, as an MSVC image's UCRT math is, takes the declaration its arity
+table gives (`arityFloatPrototype`): its arguments and its floating return of
+the row's width. Its calls passed `log` and `exp` no argument, the double in
+XMM0 being no integer register a Win64 call takes by position. A row with an
+integer or a pointer among its arguments gives none: no count tells the two
+apart.
 `floatingCallTypes` reconstructs and reclassifies complete scalar/HFA groups;
 bound call validation and cached-pointer analysis share it. `importedCallSlotFacts`
 uses exact import declarations to cross ABI-preserved registers, and delegates

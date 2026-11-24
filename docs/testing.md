@@ -21147,6 +21147,10 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`Win64CallContract.AMathImportNoHeaderDeclaresTakesItsFloat` decompiles a
+PE32+ image whose functions call `log`, an msvcrt import no header declares,
+directly and through a `jmp [__imp_log]` thunk, on both routes, and runs the
+C: each call passes its double; it fails where the import takes no argument.
 `GoOpenCodedDefers.TheUnwindRecordOfTheSameFunctionCarriesThem` loads a
 deferring function that a `.pdata`-style unwind record also describes, one
 that ends short of the pclntab range: the record the lookup finds carries

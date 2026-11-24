@@ -1174,6 +1174,69 @@ PipelineResult run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   return Result;
 }
 
+TEST(Win64CallContract, AMathImportNoHeaderDeclaresTakesItsFloat) {
+  // An MSVC image's UCRT math names `log` by its import alone, and no
+  // header NeverD reads declares it for COFF: each call passed it no
+  // argument, the double in XMM0 being no integer register a Win64 call
+  // takes by position.  Its arity table types it (arityFloatPrototype), on
+  // both routes and through a thunk too.
+  //   f:     sub rsp, 28h; call [__imp_log]; add rsp, 28h; ret
+  //   thunk: jmp [__imp_log]
+  //   g:     sub rsp, 28h; addsd xmm0, xmm0; call thunk; add rsp, 28h; ret
+  constexpr va_t F = Text;
+  constexpr va_t Thunk = Text + 0x20;
+  constexpr va_t G = Text + 0x40;
+  std::vector<uint8_t> Code(0x60, 0xCC);
+  const auto Put = [&](va_t At, const std::vector<uint8_t> &Bytes) {
+    std::copy(Bytes.begin(), Bytes.end(), Code.begin() + (At - Text));
+  };
+  Put(F, framed({throughSlot(F + 4, slot(0))}));
+  Put(Thunk, throughSlot(Thunk, slot(0), /*Jump=*/true));
+  std::vector<uint8_t> CallThunk = {0xF2, 0x0F, 0x58, 0xC0, 0xE8};
+  for (uint8_t B : rel32(G + 13, Thunk))
+    CallThunk.push_back(B);
+  Put(G, framed({CallThunk}));
+  const BinaryImage Img = makeImage(Code, {{F, "f"}, {G, "g"}}, {"log"});
+  for (const bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    llvm::LLVMContext Ctx;
+    PipelineOptions Opts;
+    Opts.EmitDumpOutput = false;
+    Opts.LiftMode = LLVM;
+    const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    CEmitterOptions COptions;
+    COptions.TheArch = Img.Arch;
+    COptions.Format = Img.Format;
+    COptions.Image = &Img;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (LLVM)
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions));
+    else
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+    Out.flush();
+    EXPECT_EQ(Source.find("log()"), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+    // LLVM C keeps a whole vector register a function passes on as its
+    // parameter, which a double does not convert to: its text compiles, and
+    // HighC's runs.
+    if (LLVM) {
+      EXPECT_NE(Source.find("log(fp_"), std::string::npos) << Source;
+      source_call_execution_test::checkSyntax(Source);
+      continue;
+    }
+    source_call_execution_test::compileAndRun(Source + R"C(
+#include <math.h>
+int main(void) {
+  return fabs(f(2.718281828459045) - 1.0) > 1e-12 ||
+         fabs(g(1.3591409142295225) - 1.0) > 1e-12;
+}
+)C",
+                                              {"-Wl,--no-as-needed", "-lm"});
+  }
+}
+
 TEST(Win64CallContract, StackTransportedIntegerWinsOverAScratchFloat) {
   for (unsigned Mode = 0; Mode != 3; ++Mode)
     for (BinaryFormat Format :

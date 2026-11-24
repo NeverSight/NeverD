@@ -37,6 +37,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
+#include "neverd/libc/LibCArityPrototype.h"
 #include "neverd/libc/LibCFixedIntegerArguments.h"
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/libc/LibCNames.h"
@@ -4260,6 +4261,12 @@ ImportPrototypeArguments importPrototypeArguments(
       if (!Function)
         Function =
             libc::runtimeVariadicPrototype(Name, Img.Arch, Img.abiFormat());
+      // A C library routine of floating arguments no header declares here,
+      // as an MSVC image's UCRT math is: its arity table types them.  Its
+      // calls passed `log` and `exp` no argument, the double in XMM0 being
+      // no integer register a Win64 call takes positionally.
+      if (!Function)
+        Function = libc::arityFloatPrototype(Name, libc::libcVariantOf(Img));
       // The base AAPCS returns a routine's floating value in the integer
       // registers the call already writes: the floating bank holds none of it.
       const bool ReturnsInCoreRegisters =
