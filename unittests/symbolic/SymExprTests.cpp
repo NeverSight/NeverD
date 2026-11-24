@@ -2594,9 +2594,10 @@ TEST(SymExpr, ScaledMotionWindowsRetainPaddingWrapsAndVariableCounts) {
 }
 
 TEST(SymExpr, WeightedSumsEvaluateTheObservedBitsOfEverySource) {
-  constexpr unsigned Width = 321, Shift = 73;
+  constexpr unsigned Width = 321;
   std::mt19937_64 Random(0x744aa9);
-  for (unsigned Bits : {31u, 64u, 65u, 97u, 129u}) {
+  for (unsigned Bits : {17u, 31u, 61u, 64u, 65u, 97u, 129u}) {
+    const unsigned Shift = Bits < 64 ? 3 : 73;
     for (bool LargeWeight : {false, true}) {
       SCOPED_TRACE(::testing::Message() << Bits << ':' << LargeWeight);
       SymContext C;

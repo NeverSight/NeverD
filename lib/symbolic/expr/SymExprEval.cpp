@@ -234,13 +234,13 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
             return;
           }
         }
-        if (preservesLowBits(St.Op) && Demand <= 64)
-          St.Width = Demand;
-        else if (ScaledProduct && St.Op == SymOp::Add && Demand < St.Width &&
-                 Ctx.op(Ctx.operand(St.Node, 0)) == SymOp::Mul) {
+        if (ScaledProduct && St.Op == SymOp::Add && Demand < St.Width &&
+            Ctx.op(Ctx.operand(St.Node, 0)) == SymOp::Mul) {
           St.Aux = Demand;
           Weighted = true;
         }
+        if (preservesLowBits(St.Op) && Demand <= 64)
+          St.Width = Demand;
         if (Zeros && Demand > 64) {
           const unsigned FactorBits = Demand - std::min(Demand - 1, Zeros);
           // A flat product amortizes narrowing across its operands. For two
@@ -1392,6 +1392,12 @@ llvm::APInt SymEvalPlan::evalWith(
       continue;
     }
 
+    if (St.Op == SymOp::Add && St.Aux) {
+      evaluateWeightedSum(ScratchAP[I], ScratchAP, A, St.NumArgs, St.Aux >> 32,
+                          uint32_t(St.Aux));
+      continue;
+    }
+
     if (St.Width <= 64 && preservesLowBits(St.Op)) {
       auto Word = [&](size_t K) { return ScratchAP[A[K]].getRawData()[0]; };
       uint64_t Value = Word(0);
@@ -1423,12 +1429,6 @@ llvm::APInt SymEvalPlan::evalWith(
         llvm_unreachable("not a low-prefix operator");
       }
       ScratchAP[I] = Value & (~uint64_t(0) >> (64 - St.Width));
-      continue;
-    }
-
-    if (St.Op == SymOp::Add && St.Aux) {
-      evaluateWeightedSum(ScratchAP[I], ScratchAP, A, St.NumArgs, St.Aux >> 32,
-                          uint32_t(St.Aux));
       continue;
     }
 
