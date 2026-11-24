@@ -1838,9 +1838,12 @@ Missing/conflicting providers, unresolved or
 subtracted expressions, non-writable storage and stale placement fail before
 mutation. A source build of the fork exercises both IR and assembly producers
 through final placement in chained and threaded images. The bounded handoff
-retains nested signing constants and verifies the installed recipes. The r6
-build lacks the callback and explicitly skips that integration test; this
-handoff does not reconstruct the ABI of arbitrary lifted modules.
+retains nested signing constants and verifies the installed recipes. With r6,
+the native Mach-O object writer carries the same signing information in
+relocations. Its direct image writer exposes the authenticated specifier but
+omits the key and discriminator. NeverD rejects that output, including signing
+expressions introduced by assembly. Both toolchains exercise the native
+object installer with a local rebase and an external bind.
 
 `MachOAuthenticatedFixups` installs final-address signing recipes in linked
 arm64e chained and legacy threaded images. It reuses the strict dependency

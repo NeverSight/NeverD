@@ -580,12 +580,16 @@ pass all 36 native cases and both six-control prerequisites, with no failures
 or skips. The temporary delivery binds source-file, manifest, archive and
 test-binary hashes; it is recorded separately from the cold builds.
 
-A source build also exercises `MCProducerCapturesRecipesThroughFinalPlacement`
-for IR and assembly producers with chained and threaded installers, plus
-nested signing constants. This proves the bounded raw MC signing-recipe
-handoff offline. r6 lacks that callback. Neither this handoff nor canonical
-replacement IR supplies the missing ABI reconstruction for arbitrary
-`neverd.arm64e-analysis` lifted modules.
+`MCProducerCapturesRecipesThroughFinalPlacement` exercises IR and assembly
+producers with both chained and threaded installers. The native-object
+path runs with r6 and the source-built fork. It checks the installed IA
+rebase and DB bind, including their discriminator, address diversity,
+provider and signed addend. The source-built fork also supplies the signing
+recipe through its direct MC callback. On r6 the direct writer rejects
+authenticated expressions whose signing fields it cannot report.
+`ClassifiesEachAssembledSigningSpecifier` checks an ordinary pointer and
+each authenticated specifier independently. Lifted analysis modules also
+require the source ABI reconstruction described below.
 
 Run the new matrices using a source build of the corrected fork and a successful
 same-source system preflight:
