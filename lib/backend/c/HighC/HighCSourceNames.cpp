@@ -12,7 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "../LibraryPrototype.h"
+#include "../HeaderPrototype.h"
 #include "HighCWriter.h"
 
 #include "neverd/backend/c/CSourceMap.h"
@@ -157,13 +157,20 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
         // Definitions are collected before headers are written. Known
         // library headers supply their own value records, but cannot supply
         // a user declaration's records merely because its name matches.
-        if (const auto Floating = libc::floatingCallArguments(
-                *Callee, Opts.TheArch, Opts.Format, Dbg);
-            Floating &&
-            (Callee->PrototypeLibrary == UserPrototypeLibrary ||
-             !libc::headerFor(Callee->Name)) &&
-            (!Floating->ParameterElements.empty() ||
-             Floating->ReturnElements)) {
+        const bool StandaloneRecord =
+            NeedsDeclaration &&
+            c_library::standaloneRegisterRecord(*Callee, Opts);
+        if (StandaloneRecord) {
+          for (const auto &[Name, Type] : Callee->Params)
+            if (Type->Kind == NdTypeKind::Struct && !Type->IsEnum)
+              Visit(Type);
+        } else if (const auto Floating = libc::floatingCallArguments(
+                       *Callee, Opts.TheArch, Opts.Format, Dbg);
+                   Floating &&
+                   (Callee->PrototypeLibrary == UserPrototypeLibrary ||
+                    !libc::headerFor(Callee->Name)) &&
+                   (!Floating->ParameterElements.empty() ||
+                    Floating->ReturnElements)) {
           Visit(Callee->ReturnType);
           for (const auto &[Name, Type] : Callee->Params)
             Visit(Type);
