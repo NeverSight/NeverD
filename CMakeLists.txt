@@ -28,12 +28,14 @@ set(HAVE_ZLIB 1)
 #                            and use it via find_package (no local LLVM compile).
 #                            Switch to this once the fork is stable.
 option(NEVERD_LLVM_PREBUILT "Use the CI/CD prebuilt NeverD LLVM release instead of building the fork locally" OFF)
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDLLVMTargets.cmake)
-
 if(NEVERD_LLVM_PREBUILT)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDLLVMPrebuilt.cmake)
     neverd_fetch_prebuilt_llvm()
     find_package(LLVM REQUIRED CONFIG)
+endif()
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDLLVMTargets.cmake)
+
+if(NEVERD_LLVM_PREBUILT)
     message(STATUS "Using prebuilt NeverD LLVM ${LLVM_PACKAGE_VERSION} (${LLVM_DIR})")
     llvm_map_components_to_libnames(LLVM_LIBS
         core support demangle irreader bitwriter bitreader linker
