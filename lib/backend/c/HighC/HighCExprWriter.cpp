@@ -4233,6 +4233,15 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
     Note(Copied->second, Capture);
     return true;
   };
+  const auto returnsEntryFramePointer = [&](const HighExpr *E) {
+    const auto Entry = AsEntry(E->Var);
+    const auto Copied = CopiedEntry.find(rawVarName(E->Var));
+    const uint64_t Offset = Entry ? Entry->Offset
+                            : Copied != CopiedEntry.end()
+                                ? Copied->second.Offset
+                                : ~0ull;
+    return TRI.isFramePointer(Offset);
+  };
   const auto Walk = [&](auto &&Self, const HighExpr *E,
                         bool CapturePos) -> void {
     if (!E)
@@ -4264,6 +4273,13 @@ void HighCWriter::collectCapturedEntryRegisters(const HighFunc &Func) {
       Walk(Walk, S.Val.get(), true);
     } else if (RegisterCopy) {
       // Defining the copy is not a use of the saved register.
+    } else if (const HighExpr *Returned = S.Kind == StmtKind::Return
+                                              ? PeeledVar(S.RetVal.get())
+                                              : nullptr;
+               Returned && returnsEntryFramePointer(Returned)) {
+      // Handing back the frame pointer the function was entered with hands
+      // back its caller's frame, as Go's `getfp` does.
+      NoteExpr(Returned, /*Capture=*/true);
     } else {
       for (const ExprPtr *E : {&S.Cond, &S.Dst, &S.Val, &S.CallExpr, &S.RetVal,
                                &S.StoreAddr, &S.StoreVal, &S.SwitchExpr})
@@ -7011,6 +7027,16 @@ std::string HighCWriter::unknownValueText(const HighExpr &E,
   if (E.Type && E.Type->Kind == NdTypeKind::Ptr)
     return "(" + typeToC(E.Type) + ")(uintptr_t)" + Text;
   return Text;
+}
+
+bool HighCWriter::isCallerFrameEntry(const HighExpr &E) const {
+  const auto &TRI = getTargetRegInfo(Opts.TheArch);
+  return E.Kind == ExprKind::Var && E.Var.Kind == MedVar::Reg &&
+         E.Var.SSAVer == 0 && E.Var.RenameTag < 0 &&
+         E.Var.Size == TRI.PointerSize && TRI.FramePointer &&
+         TRI.isFramePointer(E.Var.RegOff) &&
+         (CapturedCallerFrame || (Opts.TheArch == Arch::X64 &&
+                                  CapturedEntryRegisters.count(E.Var.RegOff)));
 }
 
 bool HighCWriter::isPlatformRegisterEntry(const HighExpr &E) const {

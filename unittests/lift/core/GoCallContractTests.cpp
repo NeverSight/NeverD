@@ -1090,6 +1090,56 @@ TEST(GoAssembly, AHelperTakesTheRegistersItReads) {
   }
 }
 
+TEST(GoAssembly, AVectorRegisterKeptInPlaceOnOneWayIsNoArgument) {
+  // An assembly helper shaped as memeqbody<>: it compares 16 bytes at SI
+  // and DI with SSE where BX says there are as many, and only clears the
+  // vector registers' upper lanes with `vzeroupper` where there are fewer.
+  // X0 at its return joins a value it computed and the register as its
+  // caller left it, which hands the caller back nothing new: X0 and X1 are
+  // no arguments, as they were, and the call passed two unknown values.
+  //   main.f: mov esi, 1; mov edi, 2; mov ebx, 3; call h; ret
+  //   h:      cmp rbx, 16; jb small; movdqu xmm0, [rsi]; movdqu xmm1, [rdi]
+  //           pcmpeqb xmm0, xmm1; pmovmskb eax, xmm0; cmp eax, 0xffff
+  //           sete al; jmp done
+  //   small:  vzeroupper; xor eax, eax
+  //   done:   ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t H = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body = {0xBE, 1, 0,    0, 0, 0xBF, 2, 0,
+                               0,    0, 0xBB, 3, 0, 0,    0};
+  const std::vector<uint8_t> Call = makeCall(F + Body.size(), H);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.push_back(0xC3);
+  T.writeText(F, Body);
+  T.writeText(H, {0x48, 0x83, 0xFB, 0x10, 0x72, 0x1A, 0xF3, 0x0F, 0x6F, 0x06,
+                  0xF3, 0x0F, 0x6F, 0x0F, 0x66, 0x0F, 0x74, 0xC1, 0x66, 0x0F,
+                  0xD7, 0xC0, 0x3D, 0xFF, 0xFF, 0x00, 0x00, 0x0F, 0x94, 0xC0,
+                  0xEB, 0x05, 0xC5, 0xF8, 0x77, 0x31, 0xC0, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{H, "main.h"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.GoAssembly = {{H, H + 0x30}};
+  Module.FrameArguments = {{F, 0, 0}, {H, std::nullopt, std::nullopt}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  using namespace x86reg;
+  // In the platform's order, then Go's.
+  EXPECT_EQ(parameterRegisters(R, H), (std::vector<uint64_t>{RDI, RSI, RBX}));
+  EXPECT_EQ(constantArguments(R, F), (std::vector<uint64_t>{2, 1, 3}));
+}
+
 TEST(GoRegisterArguments, RegistersStoredInARowAreNoVariadicSaveArea) {
   // System V reads RAX before a write as a variadic prologue's vector count,
   // and the argument registers it then stores into consecutive words, from
@@ -2117,6 +2167,52 @@ TEST(GoInternalABI, ABranchDecidesTheSelectionBelowIt) {
   const std::string Text = highCBody(R, T.Img, "main_f");
   ASSERT_FALSE(Text.empty());
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
+TEST(GoInternalABI, TheFramePointerAFunctionEntersWithIsItsCallersFrame) {
+  // runtime.getfp: mov rax, rbp; ret
+  // main.g:        push rbp; mov rbp, rsp; call runtime.getfp
+  //                mov rax, [rax]; pop rbp; ret
+  // getfp returns its caller's frame, from which `runtime.traceStack` and
+  // `getcallerfp` walk the frames.  Taken for a register no argument set,
+  // it made getfp return nothing, and each read of its result unknown.
+  constexpr va_t GetFp = kTextVA + 0x100;
+  constexpr va_t G = GetFp + 0x10;
+  GoTestImage T;
+  T.writeText(GetFp, {0x48, 0x89, 0xE8, 0xC3});
+  std::vector<uint8_t> Caller = {0x55, 0x48, 0x89, 0xE5};
+  const std::vector<uint8_t> Call = makeCall(G + Caller.size(), GetFp);
+  Caller.insert(Caller.end(), Call.begin(), Call.end());
+  Caller.insert(Caller.end(), {0x48, 0x8B, 0x00, 0x5D, 0xC3});
+  T.writeText(G, Caller);
+  for (const auto &[Entry, Name] :
+       {std::pair{GetFp, "runtime.getfp"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const auto Function = llvm::find_if(
+      R.MedFuncs, [&](const MedFunc &M) { return M.Entry == GetFp; });
+  ASSERT_NE(Function, R.MedFuncs.end());
+  ASSERT_TRUE(Function->ReturnType);
+  EXPECT_NE(Function->ReturnType->Kind, NdTypeKind::Void);
+  const std::string Text = highCBody(R, T.Img, "runtime_getfp");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_NE(Text.find("__builtin_frame_address(1)"), std::string::npos) << Text;
+  const std::string CallerText = highCBody(R, T.Img, "main_g");
+  ASSERT_FALSE(CallerText.empty());
+  EXPECT_EQ(CallerText.find("__builtin_trap"), std::string::npos) << CallerText;
 }
 
 TEST(GoStackGrowth, AFunctionOfFloatsEntersItsBodyDirectly) {

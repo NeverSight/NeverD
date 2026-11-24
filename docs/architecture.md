@@ -12643,6 +12643,12 @@ a context's: a function that only stores the RBP or x29 it was entered with
 keeps its caller's frame, as Go's `mcall`, `gosave` and `morestack` do in
 `gobuf.bp`, and HighC reads it as `__builtin_frame_address(1)`: the value
 the compiled prologue saved, whatever the caller keeps in the register.
+A function that hands that frame pointer back keeps its caller's frame the
+same way (`isCallerFrameEntry`): Go's `runtime.getfp` is `mov rax, rbp;
+ret`, from which `getcallerfp` and `traceStack` walk the frames. The return
+contract takes the frame pointer Go code was entered with for a value, where
+a register no argument arrives in is none: getfp returned nothing, and every
+read of its result was unknown.
 An entry Q register that a data
 intrinsic or another value use reads, and an entry GPR that a
 pointer-authentication operation reads as its modifier, are that architectural
@@ -20328,6 +20334,15 @@ also remain possible reads at CALL before ABI recovery supplies explicit
 operands. A vector register widened from its own low bytes (`vzeroupper`) keeps
 only its own incoming bytes in place; bytes moved in from another register
 reach the return as any other write does.
+A join of values that hold the incoming bytes in place (the live-in itself,
+such a widening, or another such join) and of values that carry none is in
+place too: on each way to it the register holds a value the code computed or
+what the caller left there, so a return reads nothing new from it. Go's
+`memeqbody<>` and `cmpbody<>` write X0 and X1 on one way and only clear their
+upper lanes with `vzeroupper` on another; the join reached the return and made
+both registers arguments, which every call passed as unknown values. SQLite's
+`sqlite3Fts3SegReaderStep(p, pCsr)` took a third, `__int128` parameter the
+same way.
 ARM32's register owner describes the
 complete D0-D31 bank independently of its D0-D7 argument bank.
 

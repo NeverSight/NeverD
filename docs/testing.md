@@ -15814,7 +15814,11 @@ selection two blocks below the test that decides it, take the other arm for
 the negated comparison, and keep it where the other edge joins in or the
 comparison is another. `GoInternalABI.ABranchDecidesTheSelectionBelowIt`
 runs the pipeline over a Go function shaped as `(*pageCache).alloc`: no
-selection is left, and its C traps nowhere. The default
+selection is left, and its C traps nowhere.
+`GoInternalABI.TheFramePointerAFunctionEntersWithIsItsCallersFrame` runs it
+over `runtime.getfp` (`mov rax, rbp; ret`) and a caller that loads through
+its result: getfp returns a value, its C returns
+`__builtin_frame_address(1)`, and the caller traps nowhere. The default
 LowIR conversion case verifies pipeline integration. Run this target,
 the shared ABI suite and HighIR/control-flow regressions after changing
 the recomposition owner.
@@ -21309,6 +21313,11 @@ nowhere.
 `GoInternalABI.ARegisterReadAfterACallIsNoContext` lifts `main.g`, which reads
 RDX (arm64 R26) only after a call to a function that writes it: MedIR verifies
 and the C reads no context.
+`GoAssembly.AVectorRegisterKeptInPlaceOnOneWayIsNoArgument` runs the pipeline
+over an assembly helper shaped as `memeqbody<>`, which compares with SSE on
+one way and only runs `vzeroupper` on the other before both return: the
+helper takes RDI, RSI and RBX and no vector register, and its call passes the
+three values its caller sets.
 `GoRegisterArguments.RegistersStoredInARowAreNoVariadicSaveArea` lifts
 `main.g`, which stores RAX, R8 and R9 into consecutive words off RDI, and a
 caller that sets all seven of Go's first argument registers: `main.g` takes

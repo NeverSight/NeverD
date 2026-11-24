@@ -361,6 +361,11 @@ void detectFPParams(
   auto liveInBytesUsed = [&](const MedVar &LiveIn, uint64_t Initial) {
     llvm::DenseMap<ValueKey, uint64_t> Carried;
     llvm::SmallVector<ValueKey, 16> Work;
+    // The values that hold the incoming bytes they carry in place: the
+    // live-in itself, its widening from its own low bytes (`vzeroupper`),
+    // and a join only of such values and values that carry none.  Like a
+    // register the code leaves alone, they hand a caller back nothing new.
+    llvm::DenseSet<ValueKey> InPlace{valueKey(LiveIn)};
     auto carried = [&](const MedVar &V) -> uint64_t {
       if (V.Kind != MedVar::Reg && V.Kind != MedVar::Temp)
         return 0;
@@ -429,6 +434,8 @@ void detectFPParams(
             (Op.Opcode == NdOp::INT_ZEXT && Op.Output.Size < Op.Inputs[0].Size))
           return true;
         if (isSelfCopy(Op)) {
+          if (InPlace.contains(valueKey(Op.Inputs[0])))
+            InPlace.insert(valueKey(Op.Output));
           record(Op.Output, In[0] & byteMask(Op.Output.Size));
           return false;
         }
@@ -443,6 +450,8 @@ void detectFPParams(
             Op.Output.RegOff == Op.Inputs[0].RegOff &&
             Op.Output.RegOff == LiveIn.RegOff &&
             TRI.isVectorReg(Op.Output.RegOff) && Op.Output.Size <= MaskBytes) {
+          if (InPlace.contains(valueKey(Op.Inputs[0])))
+            InPlace.insert(valueKey(Op.Output));
           record(Op.Output, In[0] & byteMask(Op.Inputs[0].Size));
           return false;
         }
@@ -600,9 +609,25 @@ void detectFPParams(
           continue;
         }
         uint64_t Mask = 0;
+        bool AllInPlace = true;
         for (const auto &[Pred, Arg] : Use.Phi->Args) {
           (void)Pred;
-          Mask |= carried(Arg);
+          const uint64_t Bytes = carried(Arg);
+          Mask |= Bytes;
+          AllInPlace &= !Bytes || InPlace.contains(valueKey(Arg));
+        }
+        // A join of the live-in where the code left it alone and of values
+        // the code wrote holds, on each way to it, either a value the code
+        // computed or the register as the caller left it: no return reads
+        // an incoming byte from it that the caller did not already hold.
+        // `memeqbody` writes X0 on one way and only clears the upper lanes
+        // with `vzeroupper` on another; X0 is no argument.
+        if (AllInPlace && Use.Phi->Output.Kind == MedVar::Reg &&
+            Use.Phi->Output.RegOff == LiveIn.RegOff &&
+            Use.Phi->Output.Size <= MaskBytes) {
+          InPlace.insert(valueKey(Use.Phi->Output));
+          record(Use.Phi->Output, Mask & byteMask(Use.Phi->Output.Size));
+          continue;
         }
         if (!carry(Use.Phi->Output, Mask))
           return true;
