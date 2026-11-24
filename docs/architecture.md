@@ -5745,6 +5745,10 @@ debug signature is not positional and therefore cannot declare that flat call.
 Scalar temporaries used through a same-width floating view may be declared as
 float or double; integer uses still reinterpret their bits. Conflicting widths,
 address-taken storage and explicit type edits keep their existing declarations.
+A function returning a float returns the bits it holds reinterpreted,
+those of a vector register wider than the float from their low bytes:
+`runtime.floor` returned `v1 ^ 0x8000000000000000`, its 16-byte value with
+the sign flipped, as C's numeric conversion of that integer.
 Readonly floating constants and constant conditional-move arms print as
 floating values while retaining the original condition. Shared floating
 computations remain materialized through register-width views, preserving FMA

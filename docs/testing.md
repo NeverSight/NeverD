@@ -12287,6 +12287,10 @@ changing integer uses or the selected branch.
 `SharedFloatingComputationSurvivesRegisterViews` starts from MedIR, keeps one
 shared FMA through widened/sliced register views and executes its generated C.
 These checks run at O0/O2 with undefined-behavior traps.
+`AFloatReturnTakesTheLowBytesOfWiderBits` returns a double from a 16-byte
+register value with its sign flipped, as `runtime.floor` does, and from bits
+as wide as the double: both return the reinterpreted low eight bytes, where C
+converted the wider integer numerically.
 
 `AArch64_FP.AngleReductionKeepsFloatingViewsAndRounding` assembles an independent
 FMUL/FCSEL/FCVTZS/SCVTF/FMADD kernel and executes both C routes at O0/O2 for 1,039
