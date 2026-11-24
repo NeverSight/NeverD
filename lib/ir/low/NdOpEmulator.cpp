@@ -561,11 +561,24 @@ bool NdOpEmulator::stepWithAArch64OrderedQuadwordSCTLR(const LowOp &Op,
                                                        uint64_t SCTLR) {
   const auto Alignment =
       SCTLR & (kAddressMemorySCTLRAlign | kAddressMemorySCTLRnAA);
-  return stepImpl(Op, {}, Alignment == kAddressMemorySCTLRnAA);
+  return stepImpl(Op, {},
+                  Alignment == kAddressMemorySCTLRnAA
+                      ? OrderedAlignment::UnalignedQuadword
+                      : OrderedAlignment::Natural);
+}
+
+bool NdOpEmulator::stepWithAArch64LSE2OrderedSCTLR(const LowOp &Op,
+                                                   uint64_t SCTLR) {
+  if (SCTLR & kAddressMemorySCTLRAlign)
+    return step(Op);
+  return stepImpl(Op, {},
+                  SCTLR & kAddressMemorySCTLRnAA
+                      ? OrderedAlignment::Any
+                      : OrderedAlignment::WithinGranule);
 }
 
 bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
-                            bool UnalignedOrderedQuadword) {
+                            OrderedAlignment Alignment) {
   if (isLowRawAnalysisOperation(Op) || isLowArchitecturalValue(Op))
     return false;
   if (X87ContextKnown && Op.Output.isReg() &&
@@ -849,14 +862,19 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
           Op.Inputs[kAddressMemoryWordOperand + 1].Offset);
       const auto Address = Instruction->controlIndependentAddress(
           readOperand(Base), readOperand(Index));
-      // A misaligned Q always crosses a 16-byte granule. It can complete in
-      // Normal memory only when the effective SCTLR has A=0 and nAA=1.
-      if (!Address ||
-          (isAArch64OrderedUnscaledMemoryEncoding(Instruction->Word) &&
-           *Address % Instruction->accessBytes() &&
-           !(UnalignedOrderedQuadword &&
-             Instruction->accessBytes() == kAddressMemoryVectorBytes)))
+      if (!Address)
         return false;
+      const unsigned Width = Instruction->accessBytes();
+      if (isAArch64OrderedUnscaledMemoryEncoding(Instruction->Word) &&
+          *Address % Width) {
+        if (Alignment == OrderedAlignment::Natural ||
+            (Alignment == OrderedAlignment::UnalignedQuadword &&
+             Width != kAddressMemoryVectorBytes) ||
+            (Alignment == OrderedAlignment::WithinGranule &&
+             *Address % kAddressMemoryOrderedGranuleBytes >
+                 kAddressMemoryOrderedGranuleBytes - Width))
+          return false;
+      }
       if (!Instruction->isLoad()) {
         const auto &Data = Op.Inputs[kAddressMemoryDataOperand + 1];
         if (!Known(Data))

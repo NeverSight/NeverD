@@ -6,6 +6,7 @@
 
 #include "Arm64eReturnModel.def"
 #ifdef RETURN_MODEL_ORDERED
+#include "Arm64eOrderedAccess.h"
 #include "Arm64eOrderedModel.def"
 #endif
 
@@ -16,7 +17,30 @@ extern int main(void);
 extern int runAtEL0(int Enabled, uintptr_t StackTop);
 #if defined(RETURN_MODEL_NORMAL_MEMORY)
 #ifdef RETURN_MODEL_ORDERED
-extern int compareOrdered(unsigned Mode, unsigned ExceptionLevel);
+typedef struct {
+  uint64_t Armed;
+  OrderedAbort Abort;
+} OrderedMailbox;
+
+_Static_assert(offsetof(OrderedMailbox, Armed) == ORDERED_ARMED_SLOT &&
+                   offsetof(OrderedMailbox, Abort.ESR) == ORDERED_ESR_SLOT &&
+                   offsetof(OrderedMailbox, Abort.FAR) == ORDERED_FAR_SLOT &&
+                   offsetof(OrderedMailbox, Abort.Word) == ORDERED_WORD_SLOT,
+               ORDERED_LAYOUT_ERROR);
+
+bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane, bool Original,
+                    bool MayFault, uint64_t *Result, OrderedAbort *Abort) {
+  volatile OrderedMailbox *Mailbox =
+      (volatile OrderedMailbox *)RETURN_MODEL_EL0_DATA;
+  Mailbox->Armed = MayFault;
+  *Result = accessOrdered(Word, Base, Lane, Original);
+  if (!MayFault || Mailbox->Armed)
+    return false;
+  Abort->ESR = Mailbox->Abort.ESR;
+  Abort->FAR = Mailbox->Abort.FAR;
+  Abort->Word = Mailbox->Abort.Word;
+  return true;
+}
 #else
 extern int compareCursorModes(int Enabled, uintptr_t StackTop);
 #endif
@@ -107,7 +131,7 @@ void unexpectedReturnException(void) {
 int runReturnOracle(int Enabled, uintptr_t StackTop) {
 #ifdef RETURN_MODEL_ORDERED
   (void)StackTop;
-  return compareOrdered(Enabled, ORDERED_EL0);
+  return compareOrdered(Enabled, ORDERED_EL0, true);
 #elif defined(RETURN_MODEL_CURSOR)
   return compareCursorModes(Enabled, StackTop);
 #elif defined(RETURN_MODEL_PREFIX)
@@ -122,11 +146,15 @@ int runReturnOracle(int Enabled, uintptr_t StackTop) {
 
 void runReturnModel(void) {
 #ifdef RETURN_MODEL_ORDERED
-  uint64_t ISAR1, Control;
+  uint64_t ISAR1, MMFR2, Control;
   __asm__ volatile(RETURN_MODEL_READ(ID_AA64ISAR1_EL1) : "=r"(ISAR1));
   if (((ISAR1 >> ORDERED_LRCPC_SHIFT) & RETURN_MODEL_NIBBLE_MASK) <
       ORDERED_LRCPC_LEVEL)
     finish(ORDERED_FEATURE_ERROR, 1);
+  __asm__ volatile(RETURN_MODEL_READ(ID_AA64MMFR2_EL1) : "=r"(MMFR2));
+  if (((MMFR2 >> ORDERED_LSE2_SHIFT) & RETURN_MODEL_NIBBLE_MASK) !=
+      ORDERED_LSE2_LEVEL)
+    finish(ORDERED_LSE2_ERROR, 1);
   for (unsigned Mode = 0; Mode != ORDERED_MODE_COUNT; ++Mode) {
     __asm__ volatile(RETURN_MODEL_READ(SCTLR_EL1) : "=r"(Control));
     // The abort handler reads shared Normal memory at both exception levels.
@@ -139,7 +167,7 @@ void runReturnModel(void) {
     if ((Control & (ORDERED_SPAN | ORDERED_ALIGNMENT | ORDERED_NAA)) !=
         (ORDERED_SPAN | Bits))
       finish(ORDERED_CONTROL_ERROR, 1);
-    checkOracle(compareOrdered(Mode, ORDERED_EL1), Mode,
+    checkOracle(compareOrdered(Mode, ORDERED_EL1, true), Mode,
                 RETURN_MODEL_EL1_ERROR);
     checkOracle(runAtEL0(Mode, RETURN_MODEL_STACK_EL0), Mode,
                 RETURN_MODEL_EL0_ERROR);

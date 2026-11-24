@@ -2422,6 +2422,42 @@ and passed individually under the same limit. Exact inputs and outcomes are in t
 [qualification record](evidence/arm64e-lrcpc3-quadword-2026-11-24.json) and
 [hosted replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45362122292).
 
+### Ordered accesses within and across a 16-byte boundary
+
+The signed-offset model now exercises all 115 fixture encodings. These cover
+the 13 GPR and 10 SIMD/FP load and store forms, each at displacements −256,
+−1, 0, 1 and 255. The original path executes the fixture instruction with its
+encoded registers. The generated path calls the exported HighC, LLVM-to-C or
+backend function for the same word. The guest checks each byte residue, both
+SIMD lanes, signed and unsigned results, guard bytes and precise alignment
+aborts at EL0 and EL1. It reads back both FEAT_LSE2 and the alignment controls.
+The preceding `build-ordered` and `run-ordered` commands build and run this
+matrix. Manifests from the original Q-only matrix retain their original
+completion record.
+
+For a supported ordered unscaled access to Normal memory on a PE with
+FEAT_LSE2, pass the effective SCTLR to
+`NdOpEmulator::stepWithAArch64LSE2OrderedSCTLR`. With A set the access must
+be naturally aligned. With A and nAA clear all accessed bytes must fit within
+one aligned 16-byte region. Setting nAA with A clear also permits crossings.
+The observation applies to one instruction. Mapped bytes and access
+permissions still determine whether tracing can commit an effect.
+[Arm SCTLR_EL1](https://support.arm.com/documentation/ddi0601/2026-09/AArch64-Registers/SCTLR-EL1--System-Control-Register--EL1-).
+
+On Apple Silicon the native driver runs ordinary arm64 Mach-O executables.
+It observes the alignment rule with original GPR loads, then checks each
+generated route under that rule. Darwin supplies the signal code, fault
+address, opcode and syndrome. Aligned Q load and store probes independently
+determine whether the SIMD sweep can execute. The report identifies the
+register classes exercised on that machine.
+
+```sh
+python3 scripts/verify_arm64e_return_model.py build-native-ordered \
+  --tests build-release/bin/NeverDArm64eAnalysisTests --output darwin-ordered
+python3 scripts/verify_arm64e_return_model.py run-native-ordered \
+  --guests darwin-ordered --output darwin-ordered-results
+```
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs
