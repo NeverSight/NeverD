@@ -2509,6 +2509,82 @@ TEST(SymExpr, NativeProductsKeepAllInputsAfterModularOverflow) {
   }
 }
 
+TEST(SymExpr, ScaledProductOverwritesItsObservedSliceBetweenEvaluations) {
+  constexpr unsigned Width = 257;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  const auto Z = C.mkVar("z", Width);
+  std::mt19937_64 Random(0x2315abcd);
+  for (unsigned Bits : {1u, 33u, 64u}) {
+    constexpr unsigned Shift = 71;
+    const auto Scale =
+        C.mkConcat(C.mkExtract(X, 0, Width - Shift), C.mkZero(Shift));
+    const auto Product = C.mkMul(Scale, Y);
+    const auto Outer = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
+    const auto Root = C.mkMul(C.mkConst(Outer), C.mkXor(Product, Z));
+    SymEvalPlan Partial(C, Root),
+        Shared(C, C.mkAdd(Root, C.mkLShr(Product, C.mkConst(Width, 127))));
+    for (unsigned I = 0; I < 60; ++I) {
+      std::array<llvm::APInt, 3> Inputs;
+      for (auto &Input : Inputs) {
+        std::array<uint64_t, 5> Words;
+        for (auto &Word : Words)
+          Word = I % 3 == 0 ? 0 : I % 3 == 1 ? UINT64_MAX : Random();
+        Input = llvm::APInt(Width, Words);
+      }
+      const auto Full = Inputs[0].shl(Shift) * Inputs[1];
+      const auto Expected = Outer * (Full ^ Inputs[2]);
+      EXPECT_EQ(Partial.eval(Inputs), Expected);
+      EXPECT_EQ(Shared.eval(Inputs), Expected + Full.lshr(127));
+    }
+  }
+}
+
+TEST(SymExpr, RepeatedWideFactorsUseTheirExactMultiplicities) {
+  constexpr unsigned Width = 321;
+  std::mt19937_64 Random(0x65ab193);
+  for (unsigned Bits : {65u, 128u, 193u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Bits);
+    llvm::SmallVector<SymRef, 64> Factors{C.mkConst(Scale)};
+    Factors.append(17, C.mkXor(X, Y));
+    Factors.append(8, C.mkOr(Y, Z));
+    Factors.append(5, C.mkAdd(X, Z));
+    Factors.push_back(X);
+    const auto Root = C.mkMul(Factors);
+    SymEvalPlan Plan(C, Root);
+    for (unsigned Trial = 0; Trial < 64; ++Trial) {
+      std::array<llvm::APInt, 3> Inputs;
+      for (auto &V : Inputs) {
+        std::array<uint64_t, 6> Words;
+        for (auto &Word : Words)
+          Word = Random();
+        V = llvm::APInt(Width, Words);
+      }
+      if (Trial % 8 == 0)
+        Inputs[0] = Inputs[1];
+      if (Trial % 8 == 1)
+        Inputs[2].setAllBits();
+      auto Expected = Scale * Inputs[0];
+      for (unsigned I = 0; I < 17; ++I)
+        Expected *= Inputs[0] ^ Inputs[1];
+      for (unsigned I = 0; I < 8; ++I)
+        Expected *= Inputs[1] | Inputs[2];
+      for (unsigned I = 0; I < 5; ++I)
+        Expected *= Inputs[0] + Inputs[2];
+      std::array<unsigned, 3> Reads{};
+      const auto Actual = Plan.evalWith([&](uint32_t Id) {
+        ++Reads[Id];
+        return &Inputs[Id];
+      });
+      EXPECT_EQ(Reads, (std::array<unsigned, 3>{1, 1, 1}));
+      EXPECT_EQ(Actual, Expected) << Bits << " bits, trial " << Trial;
+    }
+  }
+}
+
 TEST(SymExpr, WideSignedCoefficientsKeepTheirSignAcrossWordBoundaries) {
   std::mt19937_64 Random(0x5731436f656666);
   for (unsigned Width : {65u, 129u, 257u, 513u}) {

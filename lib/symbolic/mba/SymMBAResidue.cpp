@@ -314,7 +314,8 @@ SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
         if (Ctx.numOperands(Term) > limits::kMaxResidueProductFactors)
           return Ctx.isConst(Ctx.operand(Term, 0));
         return hasOffsetFactors(Ctx, Term) ||
-               hasProjectedResidueFactors(Ctx, Term);
+               hasProjectedResidueFactors(Ctx, Term) ||
+               hasDistributedFactors(Ctx, Term);
       }))
     return Root;
   if (N > Storage / (2 * sizeof(SymRef)) || !Budget.consume(2 * N))

@@ -6,7 +6,7 @@ import random
 from collections import Counter
 
 
-def distributed_product(width, case, *, reference=False, counted=False):
+def distributed_product(width, case, *, reference=False, counted=False, joined_offsets=False):
     """Return one input, its affine reference, or its counted evaluation form."""
     variant = case % 4
     bits = ((5, 7, 9, 11) if width <= 32 else (17, 37, 65, 97))[variant]
@@ -15,6 +15,10 @@ def distributed_product(width, case, *, reference=False, counted=False):
     degree = ((103, 149, 211, 277) if width <= 32 else
               (283, 389, 461, 557) if width <= 513 else
               (12011, 14009, 16001, 18013))[variant]
+    if joined_offsets:
+        degree = ((127, 179, 229, 317) if width <= 32 else
+                  (307, 419, 503, 601) if width <= 513 else
+                  (20011, 23003, 26003, 29009))[variant]
     shift = bits + case % 2
     precision = shift + bits
     mask = (1 << precision) - 1
@@ -36,6 +40,10 @@ def distributed_product(width, case, *, reference=False, counted=False):
     pool = []
     for j in range((31, 47, 67, 89)[variant]):
         offset = rng.choice((-9, -5, -1, 1, 3, 7, 11))
+        if joined_offsets:
+            offset = abs(offset)
+            if j % 3 == 0:
+                offset |= 1 << (precision + 1 + j % 5)
         row = []
         for axis in rng.sample(range(len(fields)), 2 + j % 3):
             weight = rng.choice((-11, -7, -3, 1, 3, 5, 9)) << rng.randrange(4)
@@ -57,21 +65,31 @@ def distributed_product(width, case, *, reference=False, counted=False):
         offset, row = pool[j % len(pool)]
         if variant == 3 and j == degree // 3:
             offset = 6
+        overlapping = joined_offsets and variant >= 2 and j == degree // 4
+        if overlapping:
+            offset |= 1 << shift
+        live_overlap = overlapping and any(weight & 1 for _, weight, _ in row)
         if variant and j == degree // 2:
             field = fields[(j + case) % len(fields)]
             factor = f"(3+12*sext({field},{width}))"
             residuals.append(factor)
+        elif reference and not live_overlap:
+            # Multiply the old polynomial by this factor in Z/(2^precision).
+            # Every product of two shifted weights vanishes in this ring.
+            linear = [v * offset & field_mask for v in linear]
+            for axis, weight, _ in row:
+                linear[axis] = (linear[axis] + constant * weight) & field_mask
+            constant = constant * offset & mask
+            continue
         else:
-            if reference:
-                # Multiply the old polynomial by this factor in Z/(2^precision).
-                # Every product of two shifted weights vanishes in this ring.
-                linear = [v * offset & field_mask for v in linear]
-                for axis, weight, _ in row:
-                    linear[axis] = (linear[axis] + constant * weight) & field_mask
-                constant = constant * offset & mask
-                continue
-            terms = "".join(f"+({weight << shift})*{word}" for _, weight, word in row)
-            factor = f"({offset}{terms})"
+            terms = [f"({weight << shift})*{word}" for _, weight, word in row]
+            if joined_offsets:
+                op = ("|", "^")[(row[0][0] + offset) % 2]
+                factor = f"({offset}{op}({'+'.join(terms)}))"
+                if live_overlap:
+                    residuals.append(factor)
+            else:
+                factor = f"({offset}+{'+'.join(terms)})"
         factors.append(factor)
 
     if reference:
@@ -96,6 +114,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--width", required=True, type=int)
     parser.add_argument("--case", type=int, default=0)
+    parser.add_argument("--joined-offsets", action="store_true",
+                        help="join constants to weighted fields with OR and XOR")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--reference", action="store_true",
                         help="emit the independently calculated reference expression")
@@ -103,6 +123,7 @@ if __name__ == "__main__":
                         help="emit repeated factors for the benchmark modular evaluator")
     args = parser.parse_args()
     try:
-        print(distributed_product(args.width, args.case, reference=args.reference, counted=args.counted))
+        print(distributed_product(args.width, args.case, reference=args.reference, counted=args.counted,
+                                  joined_offsets=args.joined_offsets))
     except ValueError as error:
         parser.error(str(error))

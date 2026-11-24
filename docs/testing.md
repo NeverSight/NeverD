@@ -4661,6 +4661,11 @@ require `--exhaustive`, which also selects the exhaustive work policy.
 The 32- through 65,536-bit controls run with `--max-work=65536`. A
 73-factor machine-code fixture checks both decompilers against the original
 signed-byte products and a low-weight residual at Clang O0 and O2.
+With `--joined-offsets --width 262147 --case 3`, the generator emits 29,009
+factors with OR and XOR offsets. The suite covers discarded literal bits,
+live overlap, even offsets and a surviving low-weight product. The 97-factor
+x86 fixture exercises the same joins through the CLI and worker for both
+source views. The independent oracle executes the original multiplications.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
