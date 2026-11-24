@@ -273,10 +273,10 @@ void MIPSObjectSDK::checkObjectRoundTrip(bool Micro, unsigned Revision) {
   Output.close();
 
   const int Status = neverd_lift_to_obj(Session, Path.c_str(), 0, 1);
-#ifndef LLVM_NEVERD_MICROMIPS32_R6_COMPACT_RETURN
-  if (Micro && Revision == 6 && !isMIPS64(Target)) {
+#ifndef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
+  if (Micro && Revision == 6) {
     EXPECT_NE(Status, 0);
-    EXPECT_NE(take(neverd_last_error(Session)).find("compact returns"),
+    EXPECT_NE(take(neverd_last_error(Session)).find("compact branches"),
               std::string::npos);
     EXPECT_EQ(neverd_roundtrip_func_count(Session), 0);
     return;

@@ -256,7 +256,7 @@ TEST(MIPSObject, RejectsWrongTriplesAndUnsupportedInstructionSelectors) {
   auto MicroR6 =
       Codegen().compile(F.Module, Arch::MIPS64N32, BinaryFormat::ELF, {},
                         ObjectConsumer::PlatformLinker, &Profile, Diagnostic);
-#ifdef LLVM_NEVERD_MICROMIPS64_R6
+#ifdef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
   EXPECT_TRUE(MicroR6.Success) << Diagnostic;
 #else
   EXPECT_FALSE(MicroR6.Success);
@@ -482,7 +482,7 @@ void checkFixedMicroMIPS64Leaf(unsigned Revision) {
 #ifndef LLVM_NEVERD_MICROMIPS64_PRE_R6
     EXPECT_FALSE(Result.ImageValid);
     continue;
-#elif !defined(LLVM_NEVERD_MICROMIPS64_R6)
+#elif !defined(LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES)
     if (Revision == 6) {
       EXPECT_FALSE(Result.ImageValid);
       continue;
@@ -536,7 +536,7 @@ TEST(MIPSObject, FixedAddressMicroMIPS32R6LeafEndsWithCompactReturn) {
     const auto Result = Codegen().compileForRewrite(
         F.Module, Target, Opt, BinaryFormat::ELF, {},
         RewriteInputKind::LiftedIR, &Profile);
-#ifdef LLVM_NEVERD_MICROMIPS32_R6_COMPACT_RETURN
+#ifdef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
     ASSERT_TRUE(Result.ImageValid);
     ASSERT_TRUE(Result.FunctionRangesValid);
     ASSERT_EQ(Result.FunctionRanges.size(), 1u);
@@ -591,7 +591,7 @@ TEST(MIPSObject, PlacedR6ImageUsesELFProfileForCodeAndFunctionPointers) {
                                    : std::nullopt;
           },
           0, {}, RewriteInputKind::LiftedIR, &Profile);
-#ifndef LLVM_NEVERD_MICROMIPS64_R6
+#ifndef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
       EXPECT_FALSE(Result.Success);
       continue;
 #endif
