@@ -13,12 +13,12 @@
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Timer.h"
 
 #include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <ctime>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -176,14 +176,15 @@ int main(int Argc, char **Argv) try {
   };
   const auto Expected = Run(true); // Validate and warm before timing.
   const auto Start = std::chrono::steady_clock::now();
-  const auto CPUStart = std::clock();
+  const double CPUStart = llvm::TimeRecord::getCurrentTime().getProcessTime();
   for (uint64_t I = 0; I < Repeats; ++I) {
     const auto Actual = Run(false);
     if (Actual.Instructions != Expected.Instructions ||
         Actual.Operations != Expected.Operations)
       throw std::runtime_error("nondeterministic measurement output");
   }
-  const double CPU = double(std::clock() - CPUStart) / CLOCKS_PER_SEC;
+  const double CPU =
+      llvm::TimeRecord::getCurrentTime(false).getProcessTime() - CPUStart;
   const double Wall =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - Start)
           .count();
