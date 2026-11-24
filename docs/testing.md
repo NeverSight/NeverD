@@ -26155,9 +26155,12 @@ ctest --test-dir build-mips --build-config Release -L '^NeverDMIPS.*Tests$' --ou
 ```
 
 The native object roundtrip runs a GNU-assembled function and the object from
-`neverd_lift_to_obj` with the same caller under QEMU. Its 14 profiles cover
-classic o32/n32/n64, MIPS16 and microMIPS o32, and historical MIPS V n32/n64,
-each in both byte orders. On Linux it uses `qemu-user` and GNU binutils for
+`neverd_lift_to_obj` with the same caller under QEMU. Its 32 profiles cover
+classic Release 2 and Release 6 o32/n32/n64, MIPS16 and microMIPS o32,
+historical MIPS I/II o32, and historical MIPS III/IV/V n32/n64, each in both
+byte orders. All 32 GNU originals run on compatible QEMU CPUs. The SDK objects
+run for 24 profiles. The other eight verify the missing historical execution
+context diagnostic and an empty object for I–III inputs. On Linux it uses `qemu-user` and GNU binutils for
 `mips-linux-gnu`, `mipsel-linux-gnu`, `mips64-linux-gnuabi64` and
 `mips64el-linux-gnuabi64`. Each case removes its temporary ELF files after
 execution.

@@ -46,6 +46,11 @@ r7 limits native object output to classic profiles with a qualified ABI.
 MIPS III/o32, MIPS V, compressed bodies and fixed-address output require the
 updated fork.
 
+The fork can compile ordinary LLVM functions for historical I–III ISAs.
+Lifting an existing I–III function also carries its incoming pipeline state.
+The SDK reports a missing execution context when that state reaches native
+source lowering. Its roundtrip result then contains no object.
+
 The fork also emits fixed-address code and data through
 `addPassesToEmitBinaryRewrite`. It reports function ranges at their physical
 byte addresses and tags pointers to compressed functions. The native checks
@@ -1818,6 +1823,14 @@ record the readings from both figures.
 ```sh
 python3 unittests/lift/mips/historical-reset-capture.py r4300ps.pdf r4xxxps.pdf
 ```
+
+The R3051 debug interface exposes instruction-cache address bits during idle
+bus cycles. The tag is sampled half a clock after the index. IDT documents
+that stalls, including micro-TLB misses, can produce erroneous addresses and
+that the interface does not signal exception recognition. Figure 11.1 gives
+the signal timing. A physical reset-to-fetch or interrupt measurement still
+requires a capture with both endpoints.
+[IDT R3051/2 hardware user's manual, chapter 11](https://www.bitsavers.org/components/idt/risc/1992_IDTR3051_R3052_RISController_Hardware_Users_Manual_Rev1.3_19920821.pdf).
 
 A separate PlayStation logic-analyzer observation identifies the boot ROM
 timing change after the BIOS writes the memory controller. The fetch at

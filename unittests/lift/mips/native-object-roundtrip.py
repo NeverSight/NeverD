@@ -20,7 +20,12 @@ def lift_object(api, work):
         raise RuntimeError("cannot open NeverD session")
     try:
         if api.call("neverd_lift_to_obj", session, os.fsencode(work / "input.elf"), 0, 1):
-            raise RuntimeError(api.owned_string("neverd_last_error", session))
+            diagnostic = api.owned_string("neverd_last_error", session)
+            if api.borrowed_bytes("neverd_roundtrip_obj", session) or api.call(
+                "neverd_roundtrip_func_count", session
+            ):
+                raise ValueError("failed lift published a partial object")
+            return None, None, diagnostic
         if api.call("neverd_roundtrip_func_count", session) != 1:
             raise ValueError("expected one defined function")
         name = api.owned_string("neverd_roundtrip_func_name", session, 0)
@@ -29,7 +34,7 @@ def lift_object(api, work):
         if not name or not size or not data:
             raise ValueError("missing native entry or ELF object")
         (work / "rebuilt.o").write_bytes(data)
-        return name, hashlib.sha256(data).hexdigest()
+        return name, hashlib.sha256(data).hexdigest(), None
     finally:
         api.call("neverd_session_destroy", session)
 
@@ -38,14 +43,24 @@ def execute_profile(api, work, abi, little, mode):
     wide = abi != "o32"
     suffix = "el" if little else ""
     prefix = f"mips{'64' if wide else ''}{suffix}-linux-gnu{'abi64' if wide else ''}-"
-    cpu = "MIPS64R2-generic" if wide else "M14Kc" if mode == "micromips" else "74Kf"
-    isa = "mips5" if mode == "mips5" else "mips64r2" if wide else "mips32r2"
+    cpu = "MIPS64R2-generic" if wide else "74Kf"
+    isa = "mips64r2" if wide else "mips32r2"
+    float_flags = ["-msoft-float"]
+    if mode == "micromips":
+        cpu = "M14Kc"
+    elif mode in ("mips1", "mips2", "mips3", "mips4", "mips5"):
+        isa = mode
+        float_flags = ["-mhard-float"]
+    elif mode == "r6":
+        cpu = "I6400" if wide else "mips32r6-generic"
+        isa = "mips64r6" if wide else "mips32r6"
+        float_flags = ["-mhard-float", "-mfp64", "-mnan=2008"]
     emulator = "qemu-mips" + {"o32": "", "n32": "n32", "n64": "64"}[abi] + suffix
     emulation = ("elf64" if abi == "n64" else "elf32") + ("ltsmip" if little else "btsmip")
     if abi == "n32":
         emulation += "n32"
     assembler = [prefix + "as", {"o32": "-32", "n32": "-n32", "n64": "-64"}[abi],
-                 "-march=" + isa, "-mhard-float" if mode == "mips5" else "-msoft-float"]
+                 "-march=" + isa, *float_flags]
     linker = [prefix + "ld", "-m", emulation, "-Ttext", "0x410000", "--build-id=none"]
 
     def run(command):
@@ -55,9 +70,11 @@ def execute_profile(api, work, abi, little, mode):
     body = "jr $31\n addiu $2,$4,7"
     argument = "addiu $4,$0,30"
     check = ""
+    if mode == "r6":
+        body = "addiu $2,$4,7\n jrc $31"
     if mode == "mips16":
         body = "li $2,37\n jrc $31"
-    if mode == "mips5":
+    if wide and mode in ("mips3", "mips4", "mips5"):
         # Check both words of the n32/n64 result on a compatible 64-bit CPU.
         body = "dsrl32 $3,$4,0\n jr $31\n daddu $2,$3,$4"
         argument = "ori $4,$0,7\n dsll32 $4,$4,0\n ori $4,$4,30"
@@ -73,9 +90,21 @@ leaf:
 """)
     run([*assembler, "leaf.s", "-o", "original.o"])
     run([*linker, "-e", "leaf", "original.o", "-o", "input.elf"])
-    entry, digest = lift_object(api, work)
+    entry, digest, diagnostic = lift_object(api, work)
+    variants = [("original", "leaf")]
+    if mode in ("mips1", "mips2", "mips3"):
+        # Function entry cannot establish the incoming I–III pipeline state.
+        context_error = "requires an authenticated execution context"
+        if entry or context_error not in (diagnostic or ""):
+            raise RuntimeError(
+                f"{abi}/{mode}: expected historical execution context diagnostic, got {diagnostic!r}"
+            )
+    elif not entry:
+        raise RuntimeError(f"{abi}/{mode}: {diagnostic}")
+    else:
+        variants.append(("rebuilt", entry))
     exit_syscall = {"o32": 4001, "n32": 6058, "n64": 5058}[abi]
-    for variant, symbol in (("original", "leaf"), ("rebuilt", entry)):
+    for variant, symbol in variants:
         (work / "start.s").write_text(f""".set noreorder
 .option pic0
 .text
@@ -102,8 +131,12 @@ failed:
         result = subprocess.run([emulator, "-cpu", cpu, "program.elf"], cwd=work, timeout=10)
         if result.returncode != 37:
             raise RuntimeError(f"{abi} {suffix or 'be'} {mode} {variant}: exit {result.returncode}")
-    return dict(abi=abi, endian="little" if little else "big", mode=mode, cpu=cpu,
-                entry=entry, object_sha256=digest, original=37, rebuilt=37)
+    row = dict(abi=abi, endian="little" if little else "big", mode=mode, cpu=cpu, original=37)
+    if entry:
+        row.update(entry=entry, object_sha256=digest, rebuilt=37)
+    else:
+        row["diagnostic"] = diagnostic
+    return row
 
 
 def main():
@@ -114,13 +147,18 @@ def main():
     api = HostAPI(ctypes.CDLL(str(args.sdk.resolve())))
     rows = []
     for abi in ("o32", "n32", "n64"):
-        modes = ("classic", "micromips", "mips16") if abi == "o32" else ("classic", "mips5")
+        if abi == "o32":
+            modes = ("classic", "micromips", "mips16", "mips1", "mips2", "r6")
+        else:
+            modes = ("classic", "mips3", "mips4", "mips5", "r6")
         for little in (False, True):
             for mode in modes:
                 with tempfile.TemporaryDirectory(prefix="neverd-mips-native-") as directory:
                     rows.append(execute_profile(api, Path(directory), abi, little, mode))
     args.output.write_text(json.dumps(rows, indent=2) + "\n")
-    print(f"{len(rows)} GNU originals and {len(rows)} SDK objects passed")
+    rebuilt = sum("rebuilt" in row for row in rows)
+    print(f"{len(rows)} GNU originals, {rebuilt} SDK objects and "
+          f"{len(rows) - rebuilt} historical context diagnostics passed")
 
 
 if __name__ == "__main__":
