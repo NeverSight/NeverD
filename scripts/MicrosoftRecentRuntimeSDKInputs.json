@@ -1,0 +1,124 @@
+{
+  "sdk_version": "10.0.28000.0",
+  "headers": {
+    "file": "microsoft.windows.sdk.cpp.10.0.28000.2957.nupkg",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp/10.0.28000.2957/microsoft.windows.sdk.cpp.10.0.28000.2957.nupkg",
+    "sha256": "f0a200dae58858f418b30dc9e2f52b4188f97eb7837bd4f73074652a01937ddd"
+  },
+  "import_packages": {
+    "x64": {
+      "file": "microsoft.windows.sdk.cpp.x64.10.0.28000.2957.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.x64/10.0.28000.2957/microsoft.windows.sdk.cpp.x64.10.0.28000.2957.nupkg",
+      "sha256": "7ca47e7345dcbdf36ec4c3c4cd59ab9cb5c9f620a2e785cc4fa641509647cc5a",
+      "architecture": "x64"
+    },
+    "arm64": {
+      "file": "microsoft.windows.sdk.cpp.arm64.10.0.28000.2957.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.arm64/10.0.28000.2957/microsoft.windows.sdk.cpp.arm64.10.0.28000.2957.nupkg",
+      "sha256": "ee1770d19d84a80281f82ccf38e7d863ae653edc6eebed02fbe77dc900b10f8d",
+      "architecture": "arm64"
+    }
+  },
+  "providers": {
+    "CryptographyKEM": {
+      "module": "bcrypt.dll",
+      "headers": [
+        "bcrypt"
+      ],
+      "exports": {
+        "BCryptDecapsulate": 7,
+        "BCryptEncapsulate": 8
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "0caadd679fc2ed6d4136d1500bbfd353e60a5180e62abc7204c61345e01ab18e",
+          "additional_exports": {},
+          "import_library": "bcrypt.lib"
+        }
+      },
+      "kit_ntddi": true
+    },
+    "HypervisorEmulator": {
+      "module": "winhvemulation.dll",
+      "headers": [
+        "WinHvPlatform",
+        "WinHvEmulation"
+      ],
+      "exports": {
+        "WHvEmulatorCreateEmulator": 2,
+        "WHvEmulatorDestroyEmulator": 1,
+        "WHvEmulatorTryIoEmulation": 5,
+        "WHvEmulatorTryMmioEmulation": 5
+      },
+      "targets": {
+        "x64": {
+          "image_sha256": "44c68e25b84226572e6970572272e26720eb6b4d5e88aaa0c0ece954025049e9",
+          "additional_exports": {},
+          "import_library": "WinHvEmulation.lib"
+        }
+      },
+      "kit_ntddi": true
+    },
+    "KeyStorageKEM": {
+      "module": "ncrypt.dll",
+      "headers": [
+        "ncrypt"
+      ],
+      "exports": {
+        "NCryptDecapsulate": 7,
+        "NCryptEncapsulate": 8
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "ddd975d066e84d59c6f2d4f06035b546d359528476161aa66868cf3436955ae1",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        }
+      },
+      "kit_ntddi": true
+    },
+    "RuntimeUnwindV2": {
+      "module": "kernel32.dll",
+      "headers": [
+        "rtlsupportapi"
+      ],
+      "exports": {
+        "RtlVirtualUnwind2": 13
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "3b05fea371380c19022ca18c8ece9690057108954794038e9818f0dfeaf1cb46",
+          "additional_exports": {},
+          "import_library": "kernel32.Lib"
+        }
+      },
+      "kit_ntddi": true
+    },
+    "TouchpadInput": {
+      "module": "user32.dll",
+      "headers": [
+        "winuser"
+      ],
+      "exports": {
+        "ConvertPrimaryPointerToMouseDrag": 0,
+        "CreateSyntheticPointerDevice2": 1,
+        "GetPointerFrameTouchpadInfo": 3,
+        "GetPointerFrameTouchpadInfoHistory": 4,
+        "GetPointerTouchpadInfo": 2,
+        "GetPointerTouchpadInfoHistory": 3,
+        "InjectTouchpadAction": 2,
+        "RegisterTouchpadCapableThread": 1,
+        "RegisterTouchpadCapableWindow": 2,
+        "ReportWindowContentInertia": 2,
+        "SetMaxTouchpadSensitivity": 1
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "5d26276f596482c2e6474689e0dd72f885549f313bdac6ae91f4c706f9307b5a",
+          "additional_exports": {}
+        }
+      },
+      "kit_ntddi": true
+    }
+  }
+}

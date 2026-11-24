@@ -196,6 +196,37 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             self.assertNotIn("EnclaveCopyIntoEnclave", x64["EnclaveServices"]["names"])
             self.assertIn("EnclaveCopyIntoEnclave", arm64["EnclaveServices"]["names"])
 
+    def test_recent_sdk_profiles_use_their_header_and_target_imports(self):
+        recent = windows.flat.RECENT_RUNTIME
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / recent["headers"]["file"]
+            with zipfile.ZipFile(archive, "w") as package:
+                for part in ("um", "shared", "winrt"):
+                    package.writestr("c/Include/" + recent["sdk_version"] + "/" + part + "/Test.h", part)
+            arch = "arm64"
+            imports = root / recent["import_packages"][arch]["file"]
+            with zipfile.ZipFile(imports, "w") as package:
+                for name in ("bcrypt.lib", "kernel32.Lib", "ncrypt.lib"):
+                    package.writestr("c/um/arm64/" + name, name)
+            compiler = ["clang", "--target=aarch64-pc-windows-msvc"]
+            with patch.object(windows.flat, "package", side_effect=lambda cache, rec: cache / rec["file"]):
+                units, packages = windows.flat.recent_runtime_units(
+                    root / arch, root, arch, "llvm-readobj", compiler, root / "wdk")
+                self.assertEqual(windows.flat.recent_runtime_units(
+                    root / "x86", root, "x86", "llvm-readobj", compiler, root / "wdk"), ([], []))
+            self.assertEqual(packages, [recent["import_packages"][arch]])
+            self.assertEqual({u["name"] for u in units}, {"CryptographyKEM", "KeyStorageKEM",
+                                                        "TouchpadInput", "RuntimeUnwindV2"})
+            for unit in units:
+                self.assertIn(str(root / arch / "recent-sdk-vfs.json"), unit["compiler"])
+                self.assertIn("-UNTDDI_VERSION", unit["compiler"])
+                self.assertEqual(unit["bridge"]["arguments"], [*unit["compiler"], "-std=c23"])
+            unwind = next(u["bridge"] for u in units if u["name"] == "RuntimeUnwindV2")
+            self.assertEqual(unwind["runtime_exports"]["parameter_counts"]["RtlVirtualUnwind2"], 13)
+            self.assertEqual(Path(unwind["runtime_import_library"]["file"]).read_bytes(), b"kernel32.Lib")
+            self.assertFalse(set(windows.flat.primary_runtime_profiles()).intersection(recent["providers"]))
+
     def test_named_runtime_archive_coexists_with_other_sdk_imports(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

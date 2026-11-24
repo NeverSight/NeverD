@@ -1054,6 +1054,36 @@
         }
       }
     },
+    "EnhancedVideo": {
+      "module": "evr.dll",
+      "headers": [
+        "evr"
+      ],
+      "exports": {
+        "MFCreateVideoMixer": 4,
+        "MFCreateVideoMixerAndPresenter": 6,
+        "MFCreateVideoPresenter": 4,
+        "MFCreateVideoSampleAllocator": 2,
+        "MFCreateVideoSampleFromSurface": 2
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "33718896a58b5182be760ef54582c9547546e24aa5c8a10a67e4d1d04f14e4eb",
+          "additional_exports": {},
+          "import_library": "evr.lib"
+        },
+        "x64": {
+          "image_sha256": "928d54c84eebf6ed32ecf0345f6c4791b93868b38210a221448f7065168d119e",
+          "additional_exports": {},
+          "import_library": "evr.lib"
+        },
+        "arm64": {
+          "image_sha256": "436297554b4b7cf1f59a3fac182accbd9acc48e6d450c5edf36abda1591fb785",
+          "additional_exports": {},
+          "import_library": "evr.lib"
+        }
+      }
+    },
     "ExtendedSecurityNames": {
       "module": "secur32.dll",
       "headers": [
@@ -1667,6 +1697,32 @@
           "additional_exports": {},
           "image_sha256": "0524309ecac464ee3b3dced91e63406d02050d5773c4ac55b25b7a6c9c87512c",
           "import_library": "Mfplat.lib"
+        }
+      }
+    },
+    "MediaFoundationVideo": {
+      "module": "mf.dll",
+      "headers": [
+        "evr"
+      ],
+      "exports": {
+        "MFCreateVideoRenderer": 2
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "d689ddffe0e08173564b003eb4f37962231583c9ddcaea42fb06ca1059223db4",
+          "additional_exports": {},
+          "import_library": "Mf.lib"
+        },
+        "x64": {
+          "image_sha256": "7aed8616c10fefddcb444514c13d32de9002e559f0e4bd0eb5b8abc6534f34fc",
+          "additional_exports": {},
+          "import_library": "Mf.lib"
+        },
+        "arm64": {
+          "image_sha256": "a1a9b5140f5e2296f3b08ae2be047c15b7126149e7670d14e953efff38c23061",
+          "additional_exports": {},
+          "import_library": "Mf.lib"
         }
       }
     },
@@ -2544,6 +2600,27 @@
         "arm64": {
           "image_sha256": "2976f8502bed5d01d3de9126e73bd2fd296154ceccd1d461ef9215aa6af29810",
           "additional_exports": {}
+        }
+      }
+    },
+    "RuntimeDataDispenser": {
+      "module": "rometadata.dll",
+      "headers": [
+        "rometadata"
+      ],
+      "exports": {
+        "MetaDataGetDispenser": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "2b35b287fd0658f568bca4a0392d2d99efeee1ab90d748e790cd793c2565e3fc",
+          "additional_exports": {},
+          "import_library": "rometadata.lib"
+        },
+        "x64": {
+          "image_sha256": "0455a236233fd1c285fde9a6b1e5e1c9c3d81981948a3d4c006fa6c8e89728fb",
+          "additional_exports": {},
+          "import_library": "rometadata.lib"
         }
       }
     },

@@ -21,11 +21,13 @@ SYSTEM_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftSystemRuntimeSDKInput
 METADATA_HEADER_INPUTS = Path(__file__).with_name("MicrosoftMetadataHeaderInputs.json")
 CPDK_INPUTS = Path(__file__).with_name("MicrosoftCPDKInputs.json")
 NAMED_RUNTIME = json.loads(NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
+RECENT_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftRecentRuntimeSDKInputs.json")
+RECENT_RUNTIME = json.loads(RECENT_RUNTIME_INPUTS.read_text(encoding="utf-8"))
 SYSTEM_RUNTIME = json.loads(SYSTEM_RUNTIME_INPUTS.read_text(encoding="utf-8"))["providers"]
 CPDK = json.loads(CPDK_INPUTS.read_text(encoding="utf-8"))
 METADATA_HEADERS = json.loads(METADATA_HEADER_INPUTS.read_text(encoding="utf-8"))
 RUNTIME_PROFILES = (NAMED_RUNTIME["providers"] | SYSTEM_RUNTIME | CPDK["providers"] |
-                    METADATA_HEADERS["providers"])
+                    METADATA_HEADERS["providers"] | RECENT_RUNTIME["providers"])
 
 # The 32-bit SDK has no host-compute or hypervisor-platform import library.
 WIDE_ONLY = {"HostCompute", "HostNetwork", "HypervisorPlatform", "ComputeStorage"}
@@ -216,17 +218,25 @@ def named_runtime_exports(profile, target, metadata):
             "image_sha256": target["image_sha256"], "metadata": metadata}
 
 
-def named_runtime_libraries(output, cache, architecture, readobj):
+def primary_runtime_profiles():
+    return {name: profile for name, profile in RUNTIME_PROFILES.items()
+            if name not in RECENT_RUNTIME["providers"]}
+
+
+def named_runtime_libraries(output, cache, architecture, readobj, *, profiles=None, record=None):
+    if profiles is None:
+        profiles = primary_runtime_profiles()
     targets = {name: profile["targets"][architecture]["import_library"]
-               for name, profile in RUNTIME_PROFILES.items()
+               for name, profile in profiles.items()
                if "import_library" in profile["targets"].get(architecture, {})}
     if not targets:
         return {}
-    record = json.loads(ucrt.INPUTS.read_text(encoding="utf-8"))["import_packages"][architecture]
+    if record is None:
+        record = json.loads(ucrt.INPUTS.read_text(encoding="utf-8"))["import_packages"][architecture]
     kit = output / (Path(record["file"]).stem + "-named-runtime-imports")
     prefix = f"c/um/{architecture}/"
     wdk.extract([package(cache, record)], kit, sorted({prefix + name for name in targets.values()}))
-    return {name: import_identity(kit / (prefix + filename), RUNTIME_PROFILES[name]["module"],
+    return {name: import_identity(kit / (prefix + filename), profiles[name]["module"],
                                   architecture, readobj) for name, filename in targets.items()}
 
 
@@ -249,12 +259,14 @@ def include_headers(headers) -> str:
     return "\n".join(lines) + "\n"
 
 
-def named_runtime_units(output, architecture, compiler, libraries):
+def named_runtime_units(output, architecture, compiler, libraries, *, profiles=None):
     """Project documented named PE exports qualified for this target."""
     directory = output / "sdk-import-sources"
     directory.mkdir(parents=True, exist_ok=True)
     units = []
-    for name, profile in RUNTIME_PROFILES.items():
+    if profiles is None:
+        profiles = primary_runtime_profiles()
+    for name, profile in profiles.items():
         if architecture not in profile["targets"]:
             continue
         target = profile["targets"][architecture]
@@ -292,6 +304,32 @@ def named_runtime_units(output, architecture, compiler, libraries):
         units.append({"name": name, "source": source, "compiler": options, "headers": headers,
                       "default_calling_convention": convention, "bridge": bridge})
     return units
+
+
+def recent_runtime_units(output, cache, architecture, readobj, common, wdk_include):
+    """Compile newer named APIs with their matching SDK header and import package."""
+    inputs = RECENT_RUNTIME
+    archive = package(cache, inputs["headers"])
+    profiles = {name: profile for name, profile in inputs["providers"].items()
+                if architecture in profile["targets"]}
+    if not profiles:
+        return [], []
+    kit = output / "recent-sdk-headers"
+    relative = "c/Include/" + inputs["sdk_version"] + "/"
+    parts = ("um", "shared", "winrt")
+    wdk.extract([archive], kit, [relative + part + "/" for part in parts])
+    include = kit / relative
+    overlay = output / "recent-sdk-vfs.json"
+    overlay.write_text(json.dumps({"version": 0, "case-sensitive": False,
+                                  "roots": [wdk.overlay_directory(include, True)]}), encoding="utf-8")
+    # Win32 headers and SdkDdkVer are from this SDK. The WDK still owns km/crt.
+    options = [*common, "-DSECURITY_WIN32=1", "-ivfsoverlay", str(overlay)]
+    for directory in [*(include / part for part in parts), wdk_include / "km/crt"]:
+        options.extend(["-I", str(directory)])
+    record = inputs["import_packages"][architecture]
+    libraries = named_runtime_libraries(output, cache, architecture, readobj,
+                                        profiles=profiles, record=record)
+    return named_runtime_units(output, architecture, options, libraries, profiles=profiles), [record]
 
 
 def webauthn_runtime_unit(output, cache, compiler):
