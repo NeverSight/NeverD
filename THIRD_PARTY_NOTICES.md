@@ -230,8 +230,8 @@ parameter attributes assigned to `swift_willThrow` by
 
 `lib/loader/COFF/RichCompIds.inc` derives the tool kind, Visual Studio year
 and description of each @comp.id record from richprint's
-[`comp_id.txt`](https://github.com/dishather/richprint/blob/b0a4f598cc076a8c2ff4b1b90850004bc17da31c/comp_id.txt)
-at revision `b0a4f598cc076a8c2ff4b1b90850004bc17da31c`.
+[`comp_id.txt`](https://github.com/dishather/richprint/blob/787e9abe64e3a0c56947a4388e9c3a351b35a158/comp_id.txt)
+at revision `787e9abe64e3a0c56947a4388e9c3a351b35a158`.
 The table was updated on 2026-10-19 by
 `scripts/generate_rich_comp_ids.py`'s deterministic record mapping.
 
