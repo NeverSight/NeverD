@@ -2504,6 +2504,13 @@ for 128-bit LRCPC3, explicit PAuth_LR and PC-sensitive PACM skipped on
 each hosted runner. [Hosted model and native tests](https://github.com/gmh5225/test_mac_intel/actions/runs/45398004352)
 and [qualification record](evidence/arm64e-direct-backend-2026-11-24.json).
 
+The integrated build reproduced all 20 signing programs and all six ordered-memory
+model programs byte for byte after the default SDK moved to r8. The explicitly
+pinned r6 build also reproduced and ran all six Darwin memory programs. With
+an explicit IR frontend and a real arm64e code section, the Release analysis
+suite passed 749 cases and skipped 37. All eleven MIPS object cases passed
+with r8. The r6 package registered X86, ARM and AArch64.
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites compare the same six IA/IB operations in the C

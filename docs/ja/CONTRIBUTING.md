@@ -1,6 +1,6 @@
 **Languages**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
+<!-- i18n-source: 84aa4f365a5d005f98dd8331f3fc33f326c2dc20c9c4d64a7c7ede509dbd0f82 -->
 
 # NeverD への貢献
 
@@ -179,6 +179,12 @@ CMake はリポジトリで設定されたリリースパッケージをダウ�
 デフォルトのローカル LLVM ビルドを使用してください。`NEVERD_LLVM_PREBUILT_TAG`、
 ミラー URL、キャッシュディレクトリ、明示的なチェックサムなどの高度な上書きは
 `cmake/NeverDLLVMPrebuilt.cmake` に記載されています。
+
+r6 を使い続けるには、`NEVERD_LLVM_PREBUILT_TAG` に `neverd-llvm-v23.0.0-r6` を、
+`NEVERD_LLVM_PREBUILT_SHA256` にホスト用アーカイブの SHA-256 ダイジェストを指定します。
+このパッケージは X86、ARM、AArch64 のコード生成に対応し、arm64e も扱えます。
+MIPS オブジェクトファイルの生成には、r8 などの MIPS バックエンドを含むパッケージか、
+ソースからビルドした LLVM が必要です。
 
 LLVM の修正は [NeverSight LLVM fork](https://github.com/NeverSight/llvm-project) で管理します。
 まず fork にコミットしてマージし、NeverD の LLVM サブモジュールのリビジョンを更新します。

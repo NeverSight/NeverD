@@ -1,6 +1,6 @@
 **語言**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
+<!-- i18n-source: 84aa4f365a5d005f98dd8331f3fc33f326c2dc20c9c4d64a7c7ede509dbd0f82 -->
 
 # 為 NeverD 做出貢獻
 
@@ -162,6 +162,11 @@ CMake 會下載儲存庫設定的發行套件、驗證 SHA-256，並在後續建
 使用者快取。預先建置通道僅支援 macOS arm64；Intel Mac 與通用二進位建置必須
 使用預設的本機 LLVM 建置。`NEVERD_LLVM_PREBUILT_TAG`、鏡像 URL、快取目錄和
 明確校驗和等進階覆寫項記錄於 `cmake/NeverDLLVMPrebuilt.cmake`。
+
+若要繼續使用 r6，將 `NEVERD_LLVM_PREBUILT_TAG` 設為 `neverd-llvm-v23.0.0-r6`，
+並將 `NEVERD_LLVM_PREBUILT_SHA256` 設為對應主機發行套件的 SHA-256 摘要。
+此套件支援 X86、ARM 和 AArch64 程式碼產生，包含 arm64e。產生 MIPS 目的檔需要
+含 MIPS 後端的發行套件（例如 r8），或從原始碼建置 LLVM。
 
 LLVM 修正應在 [NeverSight LLVM fork](https://github.com/NeverSight/llvm-project) 中維護。
 先將修正提交並合併到 fork，再更新 NeverD 的 LLVM 子模組版本。

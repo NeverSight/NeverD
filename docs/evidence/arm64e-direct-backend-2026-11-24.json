@@ -242,5 +242,102 @@
     "darwin_q_controls_per_optimization": 7
   },
   "native_feature_probe_before_merge": "https://github.com/gmh5225/test_mac_intel/actions/runs/45389484047",
-  "configured_self_hosted_runners": 0
+  "configured_self_hosted_runners": 0,
+  "integration": {
+    "tested_revision": "306326c456cf196d1a4e6cfe8a46f423ed34ef9e",
+    "dev_base": "593d548ebcd5c90f795a1084a98fbfabf2e127fa",
+    "test_binary_sha256": "ab9b0289ff6f9b665e1948b916e46271a9018a9c3be83fa5d070ce8ebad26c6e",
+    "pinned_package": "neverd-llvm-v23.0.0-r6",
+    "default_package": "neverd-llvm-v23.0.0-r8",
+    "release_analysis_tests": {
+      "passed": 749,
+      "skipped": 37,
+      "failed": 0
+    },
+    "release_mips_object_tests_with_r6": {
+      "passed": 1,
+      "skipped": 0,
+      "failed": 0
+    },
+    "release_mips_object_tests_with_r8": 11,
+    "initial_failures": [],
+    "individual_reruns": {},
+    "explicit_parity_corpus": {
+      "input": "scripts/diagnostics/Arm64eOrderedQ.c",
+      "source_sha256": "951cc2737e6228c54d0893979306e275cece541a34c409150e9e3ac6c2b3e3ec",
+      "object_sha256": "6055c6400f090d8c0d78e4c7ba77dd55a4e99cac26f9cd3b2d4394b4b9c09705",
+      "text_sha256": "adb679161e9d3cfd01db7ebc5e8aa71b687bd3843b7bce6c06aecc4be6f6b169",
+      "words": 177
+    },
+    "offline_publications_and_parity": 9,
+    "arm64e_python_tests": 61,
+    "identical_programs_and_objects": {
+      "returns": 20,
+      "ordered": 6,
+      "native": 6
+    },
+    "darwin_ordered_replay": {
+      "routes": 6,
+      "report_sha256": "95f36431a5fed97084ff51b3bf4bf93d1279261d9a84498c7f4965bc2555695c"
+    },
+    "required_backend_policy": {
+      "r6": [
+        "aarch64",
+        "aarch64_32",
+        "aarch64_be",
+        "arm",
+        "arm64",
+        "arm64_32",
+        "armeb",
+        "thumb",
+        "thumbeb",
+        "x86",
+        "x86-64"
+      ],
+      "r8": [
+        "aarch64",
+        "aarch64_32",
+        "aarch64_be",
+        "arm",
+        "arm64",
+        "arm64_32",
+        "armeb",
+        "mips",
+        "mips64",
+        "mips64el",
+        "mipsel",
+        "thumb",
+        "thumbeb",
+        "x86",
+        "x86-64"
+      ],
+      "source_target_count": 4,
+      "incomplete_default_package_rejected": true
+    },
+    "r6_macos_archive": {
+      "archive": {
+        "digest": "sha256:ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+        "name": "neverd-llvm-macos-arm64.tar.xz",
+        "size": 30216568
+      },
+      "tag": "neverd-llvm-v23.0.0-r6",
+      "url": "https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r6"
+    },
+    "localized_contributor_guides": 10,
+    "mips_conflict_resolution": {
+      "upstream_object_test_file_unchanged": true,
+      "r6_capability_tests": 1,
+      "r8_object_and_capability_tests": 11,
+      "upstream_object_test_blob": "7c2889257587a508b882468863b2a93e9699b910",
+      "configured_sources": {
+        "r6": [
+          "backend/MIPSObjectCapabilityTests.cpp"
+        ],
+        "r8": [
+          "backend/MIPSObjectCapabilityTests.cpp",
+          "backend/MIPSObjectTests.cpp"
+        ]
+      }
+    }
+  }
 }

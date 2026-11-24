@@ -1,6 +1,6 @@
 **Langues**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
+<!-- i18n-source: 84aa4f365a5d005f98dd8331f3fc33f326c2dc20c9c4d64a7c7ede509dbd0f82 -->
 
 # Contribuer à NeverD
 
@@ -193,6 +193,12 @@ prend uniquement en charge macOS arm64. Les Mac Intel et les builds universels
 doivent employer la compilation LLVM locale par défaut. Les options avancées,
 comme `NEVERD_LLVM_PREBUILT_TAG`, l’URL du miroir, le répertoire de cache et une
 somme explicite, sont documentées dans `cmake/NeverDLLVMPrebuilt.cmake`.
+
+Pour conserver r6, fixez `NEVERD_LLVM_PREBUILT_TAG` à `neverd-llvm-v23.0.0-r6`
+et `NEVERD_LLVM_PREBUILT_SHA256` à l’empreinte SHA-256 de l’archive de votre hôte.
+Ce paquet permet de générer du code X86, ARM et AArch64, y compris pour arm64e.
+La génération de fichiers objets MIPS exige un paquet contenant le backend MIPS,
+comme r8, ou une compilation de LLVM à partir des sources.
 
 Les corrections LLVM appartiennent au [fork LLVM NeverSight](https://github.com/NeverSight/llvm-project).
 Commitez-les et fusionnez-les dans ce fork, puis mettez à jour la révision du sous-module LLVM de NeverD.
