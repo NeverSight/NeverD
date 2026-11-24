@@ -1337,6 +1337,72 @@ SymRef buildTruncatedGroup(SymContext &Ctx, llvm::ArrayRef<Factor> Group,
                                  Bytes, Budget, Storage);
 }
 
+struct WeightedFactor {
+  SymRef Offset;
+  llvm::ArrayRef<SymRef> Terms;
+  bool Joined = false;
+};
+
+WeightedFactor readWeightedFactor(const SymContext &Ctx, SymRef F) {
+  const auto Op = Ctx.op(F);
+  if (Op != SymOp::Add && Op != SymOp::Or && Op != SymOp::Xor)
+    return {};
+  const auto Args = Ctx.operands(F);
+  if (!Ctx.isConst(Args.front()))
+    return {};
+  if (Op == SymOp::Add)
+    return {Args.front(), Args.drop_front()};
+  if (Args.size() == 2 && Ctx.op(Args.back()) == SymOp::Add)
+    return {Args.front(), Ctx.operands(Args.back()), true};
+  return {};
+}
+
+// Equal factors form one contiguous run in a canonical product. When even
+// the worst-case binary search costs less than this run, skip its interior.
+size_t equalFactorRun(llvm::ArrayRef<SymRef> Remaining, WorkBudget &Budget) {
+  const auto F = Remaining.front();
+  const size_t Probe = std::bit_width(Remaining.size());
+  if (Probe < Remaining.size() && Remaining[Probe] == F) {
+    const auto Tail = Remaining.drop_front(Probe + 1);
+    if (!Budget.consume(1 + std::bit_width(Tail.size())))
+      return 0;
+    const auto End = std::partition_point(Tail.begin(), Tail.end(),
+                                          [&](SymRef V) { return V == F; });
+    return Probe + 1 + size_t(End - Tail.begin());
+  }
+  const auto Prefix = Remaining.take_front(std::min(Probe, Remaining.size()));
+  const auto End =
+      llvm::find_if(Prefix.drop_front(), [&](SymRef V) { return V != F; });
+  const auto Copies = size_t(End - Prefix.begin());
+  return Budget.consume(Copies + (Probe < Remaining.size())) ? Copies : 0;
+}
+
+// The factor is c OP (2^Shift * h). Its low Shift bits are the
+// literal suffix; its remaining Bits are (c >> Shift) OP h.
+SymRef joinedHighField(SymContext &Ctx, SymRef F, const llvm::APInt &Literal,
+                       unsigned Shift, unsigned Bits) {
+  const auto Terms = readWeightedFactor(Ctx, F).Terms;
+  llvm::SmallVector<SymRef, 8> Weighted(Terms);
+  for (auto &Term : Weighted) {
+    const auto Scale = Ctx.operand(Term, 0);
+    const auto Carrier = Ctx.operand(Term, 1);
+    const auto Low = lowOperand(Ctx, Carrier);
+    const auto Coefficient =
+        llvm::APInt(Literal.getBitWidth(),
+                    Ctx.constWords(Scale).take_front(Literal.getNumWords()));
+    const auto Field =
+        Low && Ctx.width(Low) == Bits ? Low : Ctx.mkExtract(Carrier, 0, Bits);
+    Term = Ctx.mkMul(Ctx.mkConst(Coefficient.extractBits(Bits, Shift)), Field);
+  }
+  const auto High = Ctx.mkConst(Literal.extractBits(Bits, Shift));
+  const auto Sum = Ctx.mkAdd(Weighted);
+  return Ctx.op(F) == SymOp::Or ? Ctx.mkOr(High, Sum) : Ctx.mkXor(High, Sum);
+}
+
+bool scaledWord(const SymContext &Ctx, SymRef Term) {
+  return Ctx.op(Term) == SymOp::Mul && Ctx.numOperands(Term) == 2 &&
+         Ctx.isConst(Ctx.operand(Term, 0));
+}
 } // namespace
 
 SymRef projectedHighField(const SymContext &Ctx, SymRef Word, unsigned Zeros,
@@ -1374,45 +1440,56 @@ bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
          (Ctx.op(Field) == SymOp::Xor || Ctx.op(Field) == SymOp::Or);
 }
 
-// In the observed ring, perturbations divisible by 2^ceil(Precision/2)
-// annihilate one another. A factor can contribute several field coefficients
-// but its scalar offset contributes to the product exactly once.
-SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
-                              size_t &Storage, bool *EmittedReading) {
-  const auto Scale = Ctx.operand(Root, 0);
-  if (!Ctx.isConst(Scale))
-    return Root;
-  const auto Factors = Ctx.operands(Root).drop_front();
-  const auto Digits = Ctx.constWords(Scale);
-  if (Digits.front() & 1)
-    return Root;
-  auto Scaled = [&](SymRef Term) {
-    return Ctx.op(Term) == SymOp::Mul && Ctx.numOperands(Term) == 2 &&
-           Ctx.isConst(Ctx.operand(Term, 0));
-  };
+bool hasDistributedFactors(const SymContext &Ctx, SymRef Root) {
+  const auto Operands = Ctx.operands(Root);
+  if (!Ctx.isConst(Operands.front()) ||
+      (Ctx.constWords(Operands.front()).front() & 1))
+    return false;
+  const auto Factors = Operands.drop_front();
   auto HasSum = [&](SymRef F) {
-    if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) < 3 ||
-        !Ctx.isConst(Ctx.operand(F, 0)))
+    const auto Terms = readWeightedFactor(Ctx, F).Terms;
+    if (Terms.size() < 2)
       return false;
-    const auto A = Ctx.operand(F, 1), B = Ctx.operand(F, 2);
-    if (!Scaled(A) || !Scaled(B))
+    const auto A = Terms[0], B = Terms[1];
+    if (!scaledWord(Ctx, A) || !scaledWord(Ctx, B))
       return false;
     // A projected coordinate distinguishes this case from ordinary products
     // of scalar affine forms, which already have a less expensive reader.
     return lowOperand(Ctx, Ctx.operand(A, 1)) ||
            lowOperand(Ctx, Ctx.operand(B, 1));
   };
-  if (!HasSum(Factors.front()) && !HasSum(Factors.back()) &&
-      !HasSum(Factors[Factors.size() / 2]))
+  return HasSum(Factors.front()) || HasSum(Factors.back()) ||
+         HasSum(Factors[Factors.size() / 2]);
+}
+
+// In the observed ring, perturbations divisible by 2^ceil(Precision/2)
+// annihilate one another. A factor can contribute several field coefficients
+// but its scalar offset contributes to the product exactly once.
+SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                              size_t &Storage, bool *EmittedReading) {
+  const auto Scale = Ctx.operand(Root, 0);
+  if (!hasDistributedFactors(Ctx, Root))
     return Root;
+  const auto Factors = Ctx.operands(Root).drop_front();
+  const auto Digits = Ctx.constWords(Scale);
   if (!Budget.consume(Digits.size()))
     return Root;
   const unsigned Width = Ctx.width(Scale);
   const unsigned Precision =
       Width - llvm::APInt::tcLSB(Digits.data(), Digits.size());
   const unsigned Bits = Precision / 2, Shift = Precision - Bits;
-  if (!Bits || Factors.size() > Storage / (2 * sizeof(SymRef)) ||
-      !Budget.consume(Factors.size()))
+  if (!Bits || Factors.size() > Storage / (2 * sizeof(SymRef)))
+    return Root;
+
+  // Several short runs fit one contiguous scan. Switch to charged searches
+  // only when a sampled run is longer than a binary search of the product.
+  const size_t Probe = std::bit_width(Factors.size()),
+               Middle = Factors.size() / 2;
+  const bool LongRuns =
+      Probe < Middle && (Factors.front() == Factors[Probe] ||
+                         Factors[Middle] == Factors[Middle + Probe] ||
+                         Factors.back() == Factors[Factors.size() - 1 - Probe]);
+  if (!LongRuns && !Budget.consume(Factors.size()))
     return Root;
 
   const size_t Words = llvm::APInt::getNumWords(Precision);
@@ -1425,31 +1502,63 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   llvm::SmallVector<unsigned, 16> Counts;
   llvm::SmallVector<uint64_t, 32> Weights;
   llvm::SmallVector<SymRef, 16> Parts;
+  llvm::SmallVector<std::pair<SymRef, unsigned>, 4> Overlaps;
   Storage -= 2 * Factors.size() * sizeof(SymRef);
   for (size_t I = 0; I != Factors.size();) {
-    const auto F = Factors[I++];
-    const size_t First = I - 1;
-    while (I != Factors.size() && Factors[I] == F)
-      ++I;
-    const auto Copies = static_cast<unsigned>(I - First);
-    auto Terms = Ctx.operands(F);
-    if (Ctx.op(F) != SymOp::Add || !Ctx.isConst(Terms.front())) {
+    const auto F = Factors[I];
+    const auto Remaining = Factors.drop_front(I);
+    const auto Copies = static_cast<unsigned>(
+        LongRuns ? equalFactorRun(Remaining, Budget)
+                 : llvm::find_if(Remaining.drop_front(), [&](SymRef V) {
+                     return V != F;
+                   }) - Remaining.begin());
+    if (!Copies)
+      return Root;
+    I += Copies;
+    const auto [Offset, Terms, Joined] = readWeightedFactor(Ctx, F);
+    if (!Offset) {
+      if (LongRuns && !Budget.consume(Copies))
+        return Root;
       Parts.append(Copies, F);
       continue;
     }
-    const auto Offset = Terms.front();
-    Terms = Terms.drop_front();
     if (Terms.size() > Budget.available() / (4 + 2 * Words))
       return Root;
     Budget.consume(Terms.size() * (4 + 2 * Words));
-    // Validate every term before publishing a contribution from this factor.
-    if (!llvm::all_of(Terms, [&](SymRef D) {
-          return Scaled(D) &&
-                 llvm::APInt::tcLSB(Ctx.constWords(Ctx.operand(D, 0)).data(),
-                                    Words) >= Shift;
-        })) {
+    unsigned Zeros = Precision;
+    for (const auto D : Terms) {
+      if (!scaledWord(Ctx, D)) {
+        Zeros = 0;
+        break;
+      }
+      Zeros = std::min(
+          Zeros,
+          llvm::APInt::tcLSB(Ctx.constWords(Ctx.operand(D, 0)).data(), Words));
+      if (Zeros < Shift)
+        break;
+    }
+    if (Zeros < Shift) {
+      if (LongRuns && !Budget.consume(Copies))
+        return Root;
       Parts.append(Copies, F);
       continue;
+    }
+    if (Joined) {
+      if (!Budget.consume(Words))
+        return Root;
+      const llvm::APInt Literal(Precision,
+                                Ctx.constWords(Offset).take_front(Words));
+      if (Literal.getActiveBits() > Zeros) {
+        const size_t NodeBytes = 4 * (sizeof(SymNode) + 4 * sizeof(SymRef) +
+                                      Words * sizeof(uint64_t));
+        if (Bytes > Storage ||
+            Terms.size() + 2 > (Storage - Bytes) / NodeBytes ||
+            !Budget.consume((Terms.size() + 2) * (5 + Words)))
+          return Root;
+        Storage -= Bytes + (Terms.size() + 2) * NodeBytes;
+        Overlaps.emplace_back(F, Copies);
+        continue;
+      }
     }
     unsigned Multiplicity = Copies;
     for (const auto D : Terms) {
@@ -1487,6 +1596,17 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
         return Root;
       Row.Word = Ctx.mkExtract(Row.Word, 0, Bits);
     }
+  }
+  for (auto [F, Copies] : Overlaps) {
+    const auto Offset = Ctx.operand(F, 0);
+    const llvm::APInt Literal(Precision,
+                              Ctx.constWords(Offset).take_front(Words));
+    const auto Field = joinedHighField(Ctx, F, Literal, Shift, Bits);
+    const auto Suffix = Ctx.mkConst(Literal.trunc(Shift).zext(Precision));
+    Rows.push_back({F, Field, {}, Suffix, Shift, 0, 0, false});
+    Counts.push_back(Copies);
+    const auto Weight = llvm::APInt(Precision, Copies).shl(Shift);
+    Weights.append(Weight.getRawData(), Weight.getRawData() + Words);
   }
   const auto Sum = buildProjectedLinearProduct(
       Ctx, Rows, Scale, Precision, Shift, Budget, Storage, Counts, Weights);

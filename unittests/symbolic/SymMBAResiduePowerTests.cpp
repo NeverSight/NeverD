@@ -936,4 +936,45 @@ TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
   }
 }
 
+TEST(SymMBAResiduePowers, BitwiseOffsetsPreserveLiveOverlapAndLowerCarries) {
+  constexpr unsigned Width = 21, Bits = 4, Shift = 5;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  const auto SX = Ctx.mkSExt(Ctx.mkExtract(X, 1, Bits), Width);
+  const auto ZY = Ctx.mkZExt(Ctx.mkExtract(Y, 1, Bits), Width);
+  const auto Scale = llvm::APInt(Width, 3).shl(Width - Bits - Shift);
+  llvm::SmallVector<SymRef, 128> Factors{Ctx.mkConst(Scale)};
+  for (unsigned I = 0; I < 117; ++I) {
+    const auto A =
+        Ctx.mkMul(Ctx.mkConst(Width, 3u << (I == 29 ? 1 : Shift)), SX);
+    const auto B = Ctx.mkMul(Ctx.mkConst(Width, 5u << Shift), ZY);
+    const unsigned Offset =
+        (I == 17 ? 6 : 3) | (1u << 18) | (I % 13 == 0 ? 1u << Shift : 0);
+    auto C = Ctx.mkConst(Width, Offset), Sum = Ctx.mkAdd(A, B);
+    Factors.push_back(I % 2 ? Ctx.mkOr(C, Sum) : Ctx.mkXor(C, Sum));
+  }
+  const auto Root = Ctx.mkAdd(Ctx.mkMul(Factors), X);
+  size_t Storage = 1u << 20;
+  detail::WorkBudget Budget(65536);
+  const auto Reduced = detail::foldProductResidues(Ctx, Root, Budget, Storage);
+  ASSERT_LT(Ctx.readabilityCost(Reduced), Ctx.readabilityCost(Root) / 3);
+  EXPECT_LT(Budget.used(), 65536u);
+  SymEvalPlan Plan(Ctx, Reduced);
+  for (unsigned Xv = 0; Xv < 32; ++Xv) {
+    for (unsigned Yv = 0; Yv < 32; ++Yv) {
+      const std::array Inputs{llvm::APInt(Width, Xv), llvm::APInt(Width, Yv)};
+      const auto A = Inputs[0].extractBits(Bits, 1).sext(Width);
+      const auto B = Inputs[1].extractBits(Bits, 1).zext(Width);
+      auto Expected = Scale;
+      for (unsigned I = 0; I < 117; ++I) {
+        const auto D = (A * 3).shl(I == 29 ? 1 : Shift) + (B * 5).shl(Shift);
+        const llvm::APInt C(Width, (I == 17 ? 6u : 3u) | (1u << 18) |
+                                       (I % 13 == 0 ? 1u << Shift : 0));
+        Expected *= I % 2 ? C | D : C ^ D;
+      }
+      EXPECT_EQ(Plan.eval(Inputs), Expected + Inputs[0]);
+    }
+  }
+}
+
 } // namespace

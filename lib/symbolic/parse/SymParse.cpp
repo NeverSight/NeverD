@@ -139,9 +139,14 @@ SymRef Parser::parseBinary(int MinPrec) {
         // The initial product already exposes the shape of its first two
         // factors. Reuse complete multi-term sums with independent field calls.
         const auto First = Ctx.operands(L).back();
-        Mode = Ctx.op(First) == SymOp::Add && Ctx.numOperands(First) > 2
-                   ? CallReuse::SumFactor
-                   : CallReuse::Factor;
+        const auto Op = Ctx.op(First);
+        const bool AffineSum = Op == SymOp::Add && Ctx.numOperands(First) > 2;
+        const bool JoinedSum = (Op == SymOp::Or || Op == SymOp::Xor) &&
+                               Ctx.numOperands(First) == 2 &&
+                               Ctx.isConst(Ctx.operand(First, 0)) &&
+                               Ctx.op(Ctx.operand(First, 1)) == SymOp::Add;
+        Mode =
+            AffineSum || JoinedSum ? CallReuse::SumFactor : CallReuse::Factor;
       }
       llvm::SaveAndRestore Scope(Reuse, Mode);
       llvm::SmallVector<SymRef, 16> Factors{L};

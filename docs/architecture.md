@@ -8213,6 +8213,13 @@ the outer scale leaves `p` bits and every weight is divisible by
 surviving weights by field and scalar offset, counts each accepted factor's
 offset once, and retains any factor containing an observable cross term.
 The cofactor calculation supports even offsets without modular division.
+A constant joined to the perturbation by OR or XOR contributes the same
+offset when all of its observed set bits lie below the perturbation. When
+they overlap, the literal supplies the low suffix and the original OR or
+XOR combines the surviving upper fields. Coefficients below the required
+shift keep the complete factor. Independent evaluation of a wide scaled
+product can combine repeated factors by binary exponentiation across their
+multiplicities while checking the original operand values.
 When translating flagged LLVM arithmetic, the source width of a sign or zero
 extension bounds its result. Those bounds can justify a surrounding no-wrap
 sum or product while keeping every operand's definedness checks.

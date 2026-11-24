@@ -516,6 +516,42 @@ size_t prepareAffineFactors(
   return Count;
 }
 
+// Multiply equal factors across each binary digit of their multiplicities.
+// A square incorporates the next digit for every base at once. The schedule
+// uses original operand slots, including even factors and partial high limbs.
+bool preparePowerColumns(llvm::MutableArrayRef<uint32_t> Factors,
+                         llvm::SmallVectorImpl<uint64_t> &Columns,
+                         uint32_t &NumArgs) {
+  if (std::adjacent_find(Factors.begin(), Factors.end()) == Factors.end())
+    return false;
+  llvm::SmallVector<std::pair<uint32_t, unsigned>, 16> Runs;
+  unsigned MaxCount = 0;
+  size_t Terms = 0;
+  for (size_t I = 0; I != Factors.size();) {
+    const size_t Begin = I;
+    const auto Slot = Factors[I++];
+    while (I != Factors.size() && Factors[I] == Slot)
+      ++I;
+    const auto Count = static_cast<unsigned>(I - Begin);
+    Runs.emplace_back(Slot, Count);
+    MaxCount = std::max(MaxCount, Count);
+    Terms += std::popcount(Count);
+  }
+  const unsigned Highest = std::bit_width(MaxCount);
+  if (Terms + Highest - 1 >= Factors.size())
+    return false;
+  size_t Out = 0;
+  for (unsigned Bit = Highest; Bit--;) {
+    const size_t Begin = Out;
+    for (auto [Slot, Count] : Runs)
+      if (Count & (1U << Bit))
+        Factors[Out++] = Slot;
+    Columns.push_back(Out - Begin);
+  }
+  NumArgs = 1 + Out;
+  return true;
+}
+
 } // namespace
 
 bool SymContext::fitsU64(SymRef R) const {
@@ -637,10 +673,19 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     // the lowest result bit of a comparison, division or right shift.
     prepareWidePrefixes(Ctx, Root, RootSlot, NextSlot,
                         llvm::MutableArrayRef<Step>(Steps), ArgSlots);
-    if (Ctx.op(Root) == SymOp::Mul)
+    if (Ctx.op(Root) == SymOp::Mul) {
       Steps.resize(
           prepareAffineFactors(Ctx, Root, llvm::MutableArrayRef<Step>(Steps),
                                ArgSlots, Slot, PlanWords, ConstantSlots));
+      auto &Product = Steps.back();
+      if (PlanWords.empty() && Product.Width > 64 && Product.Aux > 64 &&
+          Product.NumArgs > 3) {
+        auto Factors = llvm::MutableArrayRef(ArgSlots).slice(
+            Product.FirstArg + 1, Product.NumArgs - 1);
+        HasPowerColumns =
+            preparePowerColumns(Factors, PlanWords, Product.NumArgs);
+      }
+    }
   }
 }
 
@@ -1048,15 +1093,28 @@ void evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
 // tcMultiply writes the low words into a disjoint destination. Alternating
 // the buffers avoids allocating a full-width APInt for each factor.
 llvm::APInt multiplyLowWords(llvm::ArrayRef<llvm::APInt> Values,
-                             llvm::ArrayRef<uint32_t> Factors, unsigned Bits) {
+                             llvm::ArrayRef<uint32_t> Factors, unsigned Bits,
+                             llvm::ArrayRef<uint64_t> Columns = {}) {
   const unsigned Words = llvm::APInt::getNumWords(Bits);
   llvm::SmallVector<uint64_t, 16> Storage(2 * size_t(Words));
   auto *Product = Storage.data();
   auto *Next = Product + Words;
   std::copy_n(Values[Factors.front()].getRawData(), Words, Product);
-  for (auto Slot : Factors.drop_front()) {
-    llvm::APInt::tcMultiply(Next, Product, Values[Slot].getRawData(), Words);
+  auto Multiply = [&](const uint64_t *Right) {
+    llvm::APInt::tcMultiply(Next, Product, Right, Words);
     std::swap(Product, Next);
+  };
+  const auto First = Columns.empty() ? Factors.size() : Columns.front();
+  for (auto Slot : Factors.slice(1, First - 1))
+    Multiply(Values[Slot].getRawData());
+  if (!Columns.empty()) {
+    Factors = Factors.drop_front(First);
+    for (auto Count : Columns.drop_front()) {
+      Multiply(Product);
+      for (auto Slot : Factors.take_front(Count))
+        Multiply(Values[Slot].getRawData());
+      Factors = Factors.drop_front(Count);
+    }
   }
   return llvm::APInt(Bits, llvm::ArrayRef(Product, Words));
 }
@@ -1161,8 +1219,8 @@ llvm::APInt SymEvalPlan::evalWith(
       if (St.Width <= 64 && preservesLowBits(St.Op))
         ScratchAP[St.OutputSlot] = llvm::APInt(St.Width, 0);
   }
-  const bool AffineProduct = !FitsU64 && !PlanWords.empty();
-  for (const Step &St : llvm::ArrayRef(Steps).drop_back(AffineProduct)) {
+  const bool PreparedProduct = !FitsU64 && !PlanWords.empty();
+  for (const Step &St : llvm::ArrayRef(Steps).drop_back(PreparedProduct)) {
     const auto I = St.OutputSlot;
     const uint32_t *A = ArgSlots.data() + St.FirstArg;
 
@@ -1249,8 +1307,15 @@ llvm::APInt SymEvalPlan::evalWith(
         [&](size_t K) -> const llvm::APInt & { return ScratchAP[A[K]]; });
   }
 
-  if (AffineProduct) {
+  if (PreparedProduct) {
     const auto &St = Steps.back();
+    if (HasPowerColumns) {
+      const auto Slots =
+          llvm::ArrayRef(ArgSlots).slice(St.FirstArg, St.NumArgs);
+      return multiplyShiftedPrefix(
+          ScratchAP[Slots.front()],
+          multiplyLowWords(ScratchAP, Slots.drop_front(), St.Aux, PlanWords));
+    }
     return evaluateAffineFactors(
         ScratchAP, llvm::ArrayRef(ArgSlots).slice(St.FirstArg, St.NumArgs),
         PlanWords, St.Aux);
