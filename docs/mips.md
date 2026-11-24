@@ -69,6 +69,16 @@ GOT, GP or TLS state. Installing the resulting
 sections into an existing MIPS executable needs MIPS-specific layout,
 relocation and interworking support in the file patcher.
 
+GNU binutils linked 48 rebuilt microMIPS64 objects across Releases 2, 3 and 5,
+both byte orders, n32 and n64. GNU sim checked 288 returned values. A second
+test placed a caller, a leaf and a function pointer at fixed addresses.
+All 32 combinations of ABI, byte order, instruction modes and function order
+preserved the two function ranges and passed 192 return-value checks.
+The paired CPU measurements compare the fork's disassembly of byte-identical
+classic n64 and microMIPS o32 inputs. Each 95% interval for the r9/r8 time
+ratio included 1.
+[ELF execution and performance results](evidence/mips-llvm-r9-micromips64.json).
+
 ## Implementation boundaries
 
 - ELF identification and loading share class, ISA, ABI and encoding checks.
