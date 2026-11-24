@@ -18750,6 +18750,11 @@ CTest reserves six slots for independent fixtures on hosts with at least six
 available processors and three slots on smaller hosts. Each fixture builds
 and executes all six generated C outputs at O0 and O2 when Clang and the CLI
 are available.
+`HighCPointerAddresses.AnIntegerLocalIndexesThroughThePointerItHolds` joins
+a record's bins pointer with zero in a local typed `uint64_t` and returns an
+element through it: the element is read through the pointer the local holds,
+and the unit compiles; it fails with C's "subscripted value is not an array"
+where the integer is subscripted.
 `CSourcePresentation.AnImportSlotsPrototypeDeclaresItsRecords` emits a
 function that stores the value of `__imp_GetThreadContext`, whose prototype
 names `_CONTEXT`: the unit declares `typedef struct _CONTEXT _CONTEXT;` before

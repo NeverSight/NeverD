@@ -27706,6 +27706,79 @@ TEST(HighCPointerAddresses, TypedPointerIndexLoadPrintsBucketsAndNodeFields) {
   EXPECT_EQ(Source.find("t34 ="), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, AnIntegerLocalIndexesThroughThePointerItHolds) {
+  // The bins pointer of the test above, taken one way and zero the other:
+  // the join is a local the unit declares an integer, as Go's itabsinit
+  // printed `uint64_t v6` for `modules.array`.  Its element was printed
+  // `t2[i]`, a subscript of an integer that C rejects.  It is indexed
+  // through the pointer it holds.
+  RecursiveDisplayRecords Records;
+  auto Node = Records.makeRecord("CNode", 24);
+  auto NodePtr = NdType::makePtr(Node);
+  Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
+  Node->FieldDisplayOffsets = {0, 4, 8, 16};
+  Node->FieldDisplayTypes = {NdType::makeInt(4, false),
+                             NdType::makeInt(4, false), NodePtr,
+                             NdType::makeInt(4, false)};
+  auto BinsPtr = NdType::makePtr(NodePtr);
+  auto Map = NdType::makeNamedRecord("CAtlMap", 72);
+  Map->FieldDisplayNames = {"m_ppBins", "m_nBins"};
+  Map->FieldDisplayOffsets = {0, 16};
+  Map->FieldDisplayTypes = {BinsPtr, NdType::makeInt(4, false)};
+  HighFunc Func;
+  Func.Name = "Pick";
+  Func.ReturnType = NodePtr;
+  Func.Params = {{"map", NdType::makePtr(Map)},
+                 {"slot", NdType::makeInt(8, false)}};
+  auto Word = NdType::makeInt(8, false);
+  MedVar BinsVar;
+  BinsVar.Kind = MedVar::Temp;
+  BinsVar.Id = 2;
+  BinsVar.Size = 8;
+  BinsVar.TheArch = Arch::X64;
+  MedVar SlotVar;
+  SlotVar.Kind = MedVar::Param;
+  SlotVar.Id = 1;
+  SlotVar.Size = 8;
+  SlotVar.TheArch = Arch::X64;
+  auto MapArg = parameter(0, Func.Params[0].Type);
+  HighStmt Take;
+  Take.Kind = StmtKind::Assign;
+  Take.Dst = HighExpr::makeVar(BinsVar, Word);
+  Take.Val = HighExpr::makeLoad(MapArg, BinsPtr);
+  HighStmt Zero;
+  Zero.Kind = StmtKind::Assign;
+  Zero.Dst = HighExpr::makeVar(BinsVar, Word);
+  Zero.Val = HighExpr::makeConst(0, 8);
+  HighStmt Choose;
+  Choose.Kind = StmtKind::If;
+  Choose.Cond =
+      HighExpr::makeBinop(NdOp::INT_NOTEQUAL, HighExpr::makeVar(SlotVar, Word),
+                          HighExpr::makeConst(0, 8));
+  Choose.Body.push_back(Take);
+  Choose.ElseBody.push_back(Zero);
+  auto Scale =
+      HighExpr::makeBinop(NdOp::INT_MULT, HighExpr::makeVar(SlotVar, Word),
+                          HighExpr::makeConst(8, 8));
+  auto Element = HighExpr::makeBinop(
+      NdOp::INT_ADD, HighExpr::makeVar(BinsVar, Word), std::move(Scale));
+  Element->Type = Word;
+  HighStmt Result;
+  Result.Kind = StmtKind::Return;
+  Result.RetVal = HighExpr::makeLoad(std::move(Element), NodePtr);
+  Func.Body = {Choose, Result};
+  const std::string Source = emitFunctions({Func});
+  EXPECT_EQ(Source.find(" t2["), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("(t2["), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uintptr_t)t2)["), std::string::npos) << Source;
+  // The emitter has no debug context to define the records from.
+  source_call_execution_test::checkSyntax(R"c(
+#include <stdint.h>
+typedef struct CNode CNode;
+struct CAtlMap { CNode **m_ppBins; uint64_t m_pad; uint32_t m_nBins; };
+)c" + Source);
+}
+
 TEST(HighCPointerAddresses, TypedMapCursorComposesHashKeyNextValue) {
   RecursiveDisplayRecords Records;
   // Guest LookupColor HighIR: untyped temps, RenameTag cursor, nested

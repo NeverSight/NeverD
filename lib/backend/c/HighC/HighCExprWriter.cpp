@@ -6263,6 +6263,14 @@ HighCWriter::typedIndexAccess(const HighExpr &Addr, uint16_t AccessSize,
              !Out.ElemType->IsEnum) {
     return std::nullopt;
   }
+  // A local the unit declares an integer holds the pointer's bits, as one
+  // a join of a member's pointer and zero gives (`v6 = s->array` one way,
+  // `v6 = 0` the other): the element is indexed through the pointer it is.
+  if ((Base->Kind == ExprKind::Var || Base->Kind == ExprKind::Phi) &&
+      BasePath == copyForwardName(varName(Base->Var)))
+    if (const TypeRef Declared = declaredTypeOf(*Base, BasePath);
+        Declared && Declared->Kind == NdTypeKind::Int)
+      BasePath = "((" + typeToC(PtrTy) + ")(uintptr_t)" + BasePath + ")";
   Out.Base = std::move(BasePath);
   Out.Index = exprStr(*Index);
   return Out;

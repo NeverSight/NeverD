@@ -5781,6 +5781,10 @@ that width at the element's start (`tree[n].freq`); union alternatives of
 the same width leave none, and the access stays raw. A pointer names a
 member as the array it indexes only where it holds an array member's
 address (`s->heap[i]`), never the first member of the record it points to.
+A local the unit declares an integer that holds the pointer, as the join
+of `modules.array` and zero Go's `itabsinit` keeps, is indexed through the
+pointer it is (`((runtime_moduledata**)(uintptr_t)v6)[i]`): C subscripts
+no integer.
 
 A register's views share no variable: X7, W7 and the byte the code reads
 with `ubfx x10, x7, #0, #8` are three, and `fixupSubRegisters` keeps them in
