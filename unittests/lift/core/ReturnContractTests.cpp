@@ -1512,6 +1512,15 @@ TEST(ReturnContracts, NestedReturnsCompareOnlyBitsThatReachTheCaller) {
   EXPECT_FALSE(IsVoid());
   F.Blocks[4].Ops.front().Inputs[0] = C(10);
   EXPECT_TRUE(IsVoid()); // The differing byte was overwritten.
+  for (NdOp Opcode : {NdOp::INT_XOR, NdOp::INT_SUB}) {
+    F.Blocks[5].Ops.front() = operation(Opcode, rax(4), {C(7), rax(3)});
+    EXPECT_FALSE(IsVoid());
+    F.ReturnType = NdType::makeInt(1);
+    EXPECT_TRUE(IsVoid());
+    F.ReturnType = NdType::makeInt(8);
+  }
+  F.Blocks[5].Ops.front() = operation(NdOp::INT_XOR, rax(4), {rax(3), rax(3)});
+  EXPECT_TRUE(IsVoid()); // Both inputs change together and cancel.
   F.Blocks[5].Ops.front() = operation(NdOp::INT_ADD, rax(4), {rax(3), C(7)});
   EXPECT_FALSE(IsVoid());
   F.ReturnType = NdType::makeInt(1);
@@ -1529,6 +1538,54 @@ TEST(ReturnContracts, NestedReturnsCompareOnlyBitsThatReachTheCaller) {
   EXPECT_FALSE(IsVoid()); // This arm supplied all bytes locally.
   F.Blocks[3].Ops.back().Inputs[0] = sized(temporary(13), 6);
   EXPECT_TRUE(IsVoid()); // The upper bytes have no source on this arm.
+}
+
+TEST(ReturnContracts, SharedRegisterViewsNeedTheirOwnCompleteIncomingValue) {
+  const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
+  const auto Byte = [](unsigned V) { return MedVar::makeConst(V, 1); };
+  const auto Choose = [&](int Id) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Id), temporary(Id)});
+  };
+  for (const unsigned Offset : {0u, 1u}) {
+    SCOPED_TRACE(Offset);
+    const auto View = [Offset](int Version) {
+      return inRegister(x86reg::RAX + Offset, 1, 11, Version);
+    };
+    const auto Left = Byte(Offset ? 0x23 : 0x1a);
+    const auto Right = Byte(Offset ? 0x34 : 0x1b);
+    auto Result = sized(temporary(12), 1);
+    MedFunc F = function(
+        CalleeEntry,
+        {block({seed(), Choose(2)}, {}, {1, 2}),
+         block({returning(rax(0))}, {0}), block({Choose(4)}, {0}, {3, 4}),
+         block({operation(NdOp::COPY, rax(1), {C(0x231a)}),
+                operation(NdOp::COPY, View(1), {Left})},
+               {2}, {5}),
+         block({operation(NdOp::COPY, rax(2), {C(0x341b)}),
+                operation(NdOp::COPY, View(2), {Right})},
+               {2}, {5}),
+         block({operation(NdOp::INT_XOR, Result, {View(3), Byte(0xa5)}),
+                operation(NdOp::INT_ZEXT, rax(4), {Result}), returning(rax(4))},
+               {3, 4})});
+    auto &Phis = F.Blocks[5].Phis;
+    Phis.push_back({rax(3), {{3, rax(1)}, {4, rax(2)}}, {}});
+    Phis.push_back({View(3), {{4, View(2)}, {3, View(1)}}, {}});
+    auto IsVoid = [&] { return bool(settle({F}).front()); };
+    EXPECT_FALSE(IsVoid());
+    std::reverse(Phis.begin(), Phis.end());
+    EXPECT_FALSE(IsVoid());
+    auto &Input = Phis.back().Args.front().second;
+    Input = sized(rax(1), 1);
+    EXPECT_TRUE(IsVoid());
+    Input = rax(1);
+    F.Blocks[3].Ops.back().Inputs[0] = Byte(0xcc);
+    EXPECT_TRUE(
+        IsVoid()); // The view and the full register disagree on this edge.
+    F.Blocks[3].Ops.back().Inputs[0] = Left;
+    std::swap(Phis.front().Args[0].second, Phis.front().Args[1].second);
+    EXPECT_TRUE(IsVoid());
+  }
 }
 
 TEST(ReturnContracts, AFunctionThatNeverReturnsReturnsNoValue) {
@@ -1875,6 +1932,56 @@ TEST(ReturnContract, NestedSharedReturnOverwritesOnlyAH) {
 int main(void) {
     return choose_result(0, 0) != 0x620a || choose_result(1, 0) != 0x620f ||
            choose_result(0, 1) != 31;
+}
+)");
+}
+
+TEST(ReturnContract, SharedX86ReturnUsesTheChangedRegisterView) {
+  // The two MOVs write the whole register. A third path returns it unwritten.
+  const std::vector<uint8_t> Arms = {
+      0x48, 0x83, 0xfe, 2, 0x74, 0x14, // cmp rsi,2; je bare
+      0x48, 0x83, 0xff, 0, 0x74, 7,    // cmp rdi,0; je left
+      0xb8, 0x15, 3,    0, 0,    0xeb, 8,   0xb8,
+      0x14, 2,    0,    0, 0xeb, 1,    0xc3}; // bare: ret
+  auto Code = Arms;
+  Code.insert(Code.end(), {0x34, 0xa5, 0xb4, 0x62, 0xc3}); // xor al; mov ah
+  runIntegerReturnSources(Arch::X64, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0x62b1 || choose_result(1, 0) != 0x62b0;
+}
+)");
+  Code = Arms;
+  Code.insert(Code.end(), {0x67, 0x8d, 0x40, 0xf9, 0xc3}); // lea eax,[eax-7]
+  runIntegerReturnSources(Arch::X64, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0x20d || choose_result(1, 0) != 0x30e;
+}
+)");
+}
+
+TEST(ReturnContract, SharedMIPSReturnAppliesTheDelaySlotXor) {
+  const std::vector<uint8_t> Arms = {
+      2,    0,    12,   0x64, 9, 0, 0xac, 0x10,
+      0,    0,    0,    0,                   // mode 2 branches to bare
+      4,    0,    0x80, 0x10, 0, 0, 0,    0, // beqz a0,left
+      0x15, 0x31, 2,    0x64, 6, 0, 0,    0x10,
+      0,    0,    0,    0, // v0 = 0x3115; b shared
+      0x14, 0x22, 2,    0x64, 3, 0, 0,    0x10,
+      0,    0,    0,    0,                    // v0 = 0x2214; b shared
+      8,    0,    0xe0, 3,    0, 0, 0,    0}; // bare: jr ra; nop
+  auto Code = Arms;
+  Code.insert(Code.end(), {8, 0, 0xe0, 3, 0xa5, 0, 0x42, 0x38}); // jr ra; xori
+  runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0x22b1 || choose_result(1, 0) != 0x31b0;
+}
+)");
+  Code = Arms;
+  Code.insert(Code.end(), {0xa5, 0, 0x42, 0x38, 8, 0, 0xe0, 3, 7, 0x7b, 2,
+                           0x7c}); // xori; jr ra; dins v0,zero,12,4
+  runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0x2b1 || choose_result(1, 0) != 0x1b0;
 }
 )");
 }

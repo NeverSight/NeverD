@@ -9226,6 +9226,14 @@ covers a second merge, a difference erased by a mask or the return width,
 and an incomplete incoming value.
 `ReturnContract.NestedSharedReturnOverwritesOnlyAH` executes both C outputs
 on the two paths that update AH and the path that bypasses it.
+`ReturnContract.SharedX86ReturnUsesTheChangedRegisterView` covers a low-byte
+XOR followed by an AH write and a zero-extended EAX address calculation.
+`ReturnContracts.SharedRegisterViewsNeedTheirOwnCompleteIncomingValue`
+checks both byte offsets, reversed PHIs, missing upper bytes, mismatched
+values and inputs from the wrong predecessor.
+`ReturnContract.SharedMIPSReturnAppliesTheDelaySlotXor` executes a common
+return with XOR in its delay slot and a second version in which a four-bit
+field write in the delay slot follows the XOR.
 `ReturnContract.SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot` runs both
 polarities of the branch after the inner merge and checks the returned value
 for the taken edge, the annulled edge and the path that bypasses the slot.

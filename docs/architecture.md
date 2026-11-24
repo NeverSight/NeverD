@@ -5588,8 +5588,12 @@ common return. Each arm must supply its own input, and each block followed
 to the exit must be free of other effects. A partial register write can
 assemble a literal from bytes already defined on that arm. Across a join,
 only differences that survive the shared computation count. Replacing a
-field erases differences in that field. Adding a constant in a return delay
-slot preserves differences modulo the observed low bits. For an indirect
+field erases differences in that field. XOR with a scalar literal preserves
+differences in each observed bit. Addition and subtraction with a fixed
+operand preserve differences modulo the observed low bits. A zero extension
+contributes only the bits of its input. If a narrower view has its own PHI,
+its incoming value and the complete return register must agree on that
+predecessor before that view can prove a branch choice. For an indirect
 branch, the jump table must prove its index domain and bind the selected
 arms to that instruction. The
 comparison uses the inferred result width. If another edge needs an
