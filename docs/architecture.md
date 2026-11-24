@@ -5580,12 +5580,15 @@ returns nothing, where no byte of it reaches anything, reads zero instead.
 
 A reachable branch whose arms only return distinct integer constants selects
 a result even when another path leaves the register untouched. The arms may
-return separately or meet at a single return. At a shared return, each arm
-must supply its own input to the result PHI, and the arm and the common exit
-must be free of other effects. Copies through local temporaries preserve
-the observed bytes. Capturing the link for a delayed return and an empty
-delay slot leave the result intact. For an indirect branch, the jump table must
-prove its index domain and bind the selected arms to that instruction. The
+return separately or pass through successive result PHIs on the way to a
+common return. Each arm must supply its own input, and each block followed
+to the exit must be free of other effects. A partial register write can
+assemble a literal from bytes already defined on that arm. Across a join,
+only differences that survive the shared computation count. Replacing a
+field erases differences in that field. Adding a constant in a return delay
+slot preserves differences modulo the observed low bits. For an indirect
+branch, the jump table must prove its index domain and bind the selected
+arms to that instruction. The
 comparison uses the inferred result width. If another edge needs an
 unspecified register, generated C traps on that edge. LLVM source projection
 uses the same missing-value marker for a bare link-register return whose

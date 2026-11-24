@@ -9221,6 +9221,11 @@ branch. `ReturnContract.SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge`
 executes both C outputs on all three paths to a single x86-64 return and
 on MIPS64 branches that materialize the results through temporaries before
 a shared delayed return.
+`ReturnContracts.NestedReturnsCompareOnlyBitsThatReachTheCaller`
+covers a second merge, a difference erased by a mask or the return width,
+and an incomplete incoming value.
+`ReturnContract.NestedSharedReturnOverwritesOnlyAH` executes both C outputs
+on the two paths that update AH and the path that bypasses it.
 `ReturnContract.MissingPointerResultUsesTheSourceABIPointerWidth` checks
 the four-byte n32 and eight-byte n64 source markers and native IR for
 the same bare pointer return.
