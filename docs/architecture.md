@@ -13252,7 +13252,12 @@ lists floating arguments, that recovery passes no integer register past those
 the summary counts, though the callee's own recovery took more as forwarded
 parameters: those positions pass zero, before the floating arguments. A call
 whose block loads AL with no constant gives no count, and nothing changes for
-it.
+it. Such a summary still bound each integer operand as an input of the call,
+and a register whose setup the recovery's scans do not find carries that
+operand. Register DCE keeps the setup of the platform's argument registers
+alone, so Go's RAX and RBX showed no write once the call's own results ended
+them: `strconv.genericFtoa(buf[:0], x, 'g', -1, 64)` printed its buffer and
+its length as unknown.
 
 An unknown call that returns passes on the argument registers its setup
 leaves alone below one it sets (`forwardedArgumentRegisters`), and the summary

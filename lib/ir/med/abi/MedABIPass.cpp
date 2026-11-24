@@ -2423,6 +2423,27 @@ void recoverCallAbi(
         FoundMask[K] = true;
       }
 
+      // A summary that lists floating arguments beside the integer ones is
+      // no claim of the whole list (IntegerSummary), yet it bound each
+      // integer operand as an input of the call, which SSA renamed to the
+      // value that reaches it (LowToMed).  Register DCE keeps the setup of
+      // the platform's argument registers alone, so a register that is none
+      // of them shows the scans above no write: Go's RAX and RBX in
+      // `lea rax, [rsp+0x38]; xor ebx, ebx; ...; call strconv.genericFtoa`,
+      // whose buffer and length printed unknown.  Such a slot carries the
+      // bound operand.
+      if (!SummarizedIntegerOperands && !HeaderVariadic && Convention &&
+          Convention->RegisterArgumentsFromCalleeSummary &&
+          Op.CalleeRegisterArgs > 0 && Op.CalleeVectorSlots == 0 &&
+          Op.CalleeVectorArgs > 0 &&
+          Op.CalleeRegisterArgs <= static_cast<int>(IntParamRegs.size()) &&
+          Op.NumInputs >= 1u + Op.CalleeRegisterArgs)
+        for (int K = 0; K < Op.CalleeRegisterArgs && K < MaxArgs; ++K)
+          if (!FoundMask[K]) {
+            Found[K] = Op.Inputs[K + 1];
+            FoundMask[K] = true;
+          }
+
       // A register argument can be materialised in a block that dominates the
       // call rather than the call's own block (e.g. a loop-invariant count set
       // before a vectorised loop whose predicated branches push the call into a

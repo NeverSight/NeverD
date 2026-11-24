@@ -21168,6 +21168,11 @@ whose target a plain pointer gives, in the call's block, the one before it
 or before a join, follows the platform's contract and stores through X20;
 one that calls through a func value stays Go's and traps; compiled code is
 not asked.
+`GoInternalABI.ACallWithAFloatPassesTheIntegersItsSummaryBound` runs the
+pipeline over `main.f(p, n, c, x float64)`, which returns in RAX and RBX, and
+a caller that sets RAX with `lea`, RBX with `xor` and RCX with `mov` before
+the call: the call passes the buffer, 0, 5 and the double, and its C holds no
+unknown value.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.

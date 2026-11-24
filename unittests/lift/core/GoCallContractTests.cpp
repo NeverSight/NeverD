@@ -2155,6 +2155,56 @@ TEST(GoStackGrowth, AFunctionOfFloatsEntersItsBodyDirectly) {
   EXPECT_EQ(Caller.find("morestack"), std::string::npos) << Caller;
 }
 
+TEST(GoInternalABI, ACallWithAFloatPassesTheIntegersItsSummaryBound) {
+  // main.f(p, n, c, x float64) stores n, c and x through p and returns
+  // p + 24 and c + 1; main.g(x) passes it a buffer of its own, 0, 5 and x,
+  // and stores the second result through the first.
+  //   main.f: mov [rax], rbx; mov [rax+8], rcx; movsd [rax+16], xmm0
+  //           add rax, 24; lea rbx, [rcx+1]; ret
+  //   main.g: sub rsp, 0x28; lea rax, [rsp]; xor ebx, ebx; mov ecx, 5
+  //           call main.f; mov [rax], rbx; add rsp, 0x28; ret
+  // A summary that lists a floating argument was no integer summary to call
+  // recovery, which scanned for the registers' setup instead of taking the
+  // operands the summary bound.  Register DCE keeps that setup for the
+  // platform's argument registers alone, and the call's own results end
+  // what RAX and RBX held, which are none of System V's: the buffer and the
+  // 0 printed unknown, as `strconv.genericFtoa(?, ?, 24, 'g', -1, 64, x)`.
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = F + 0x20;
+  GoTestImage T =
+      goFunctions({{{F, "main.f"}, {0x48, 0x89, 0x18, 0x48, 0x89, 0x48, 0x08,
+                                    0xF2, 0x0F, 0x11, 0x40, 0x10, 0x48, 0x83,
+                                    0xC0, 0x18, 0x48, 0x8D, 0x59, 0x01, 0xC3}},
+                   {{G, "main.g"},
+                    {0x48, 0x83, 0xEC, 0x28, 0x48, 0x8D, 0x04, 0x24, 0x31, 0xDB,
+                     0xB9, 0x05, 0x00, 0x00, 0x00, 0xE8, 0xCC, 0xFF, 0xFF, 0xFF,
+                     0x48, 0x89, 0x18, 0x48, 0x83, 0xC4, 0x28, 0xC3}}});
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const auto Caller =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == G; });
+  ASSERT_NE(Caller, R.MedFuncs.end());
+  const auto Info =
+      llvm::find_if(Caller->CallInfos, [&](const MedCallInfo &Call) {
+        return Call.TargetAddr == F;
+      });
+  ASSERT_NE(Info, Caller->CallInfos.end());
+  ASSERT_GE(Info->Args.size(), 3u);
+  ASSERT_TRUE(Info->Args[1].isConst());
+  EXPECT_EQ(Info->Args[1].ConstVal, 0u);
+  ASSERT_TRUE(Info->Args[2].isConst());
+  EXPECT_EQ(Info->Args[2].ConstVal, 5u);
+  const std::string Text = highCBody(R, T.Img, "main_g");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("&stack_storage"), std::string::npos) << Text;
+  EXPECT_NE(Text.find(", 0, 5, arg0)"), std::string::npos) << Text;
+}
+
 TEST(GoInternalABI, AFuncValueCallReturnsItsFloatResults) {
   // Go's internal ABI returns floating results in X0-X14 (arm64 F0-F15),
   // numbered apart from its integer ones.  A call through a func value
