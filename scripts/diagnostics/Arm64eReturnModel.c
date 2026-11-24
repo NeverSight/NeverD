@@ -5,14 +5,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "Arm64eReturnModel.def"
+#ifdef RETURN_MODEL_ORDERED
+#include "Arm64eOrderedModel.def"
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
 
 extern int main(void);
 extern int runAtEL0(int Enabled, uintptr_t StackTop);
-#if defined(RETURN_MODEL_CURSOR)
+#if defined(RETURN_MODEL_NORMAL_MEMORY)
+#ifdef RETURN_MODEL_ORDERED
+extern int compareOrdered(unsigned Mode, unsigned ExceptionLevel);
+#else
 extern int compareCursorModes(int Enabled, uintptr_t StackTop);
+#endif
 
 // Clang can lower aggregate copies and initializers to these C runtime calls
 // in the O0 guest. The flat Mach-O image has no dynamic loader.
@@ -98,7 +105,10 @@ void unexpectedReturnException(void) {
 }
 
 int runReturnOracle(int Enabled, uintptr_t StackTop) {
-#ifdef RETURN_MODEL_CURSOR
+#ifdef RETURN_MODEL_ORDERED
+  (void)StackTop;
+  return compareOrdered(Enabled, ORDERED_EL0);
+#elif defined(RETURN_MODEL_CURSOR)
   return compareCursorModes(Enabled, StackTop);
 #elif defined(RETURN_MODEL_PREFIX)
   (void)StackTop;
@@ -111,6 +121,35 @@ int runReturnOracle(int Enabled, uintptr_t StackTop) {
 }
 
 void runReturnModel(void) {
+#ifdef RETURN_MODEL_ORDERED
+  uint64_t ISAR1, Control;
+  __asm__ volatile(RETURN_MODEL_READ(ID_AA64ISAR1_EL1) : "=r"(ISAR1));
+  if (((ISAR1 >> ORDERED_LRCPC_SHIFT) & RETURN_MODEL_NIBBLE_MASK) <
+      ORDERED_LRCPC_LEVEL)
+    finish(ORDERED_FEATURE_ERROR, 1);
+  for (unsigned Mode = 0; Mode != ORDERED_MODE_COUNT; ++Mode) {
+    __asm__ volatile(RETURN_MODEL_READ(SCTLR_EL1) : "=r"(Control));
+    // The abort handler reads shared Normal memory at both exception levels.
+    Control |= ORDERED_SPAN;
+    const uint64_t Bits = ((Mode & ORDERED_MODE_NAA) ? ORDERED_NAA : 0) |
+                          ((Mode & ORDERED_MODE_A) ? ORDERED_ALIGNMENT : 0);
+    Control = (Control & ~(ORDERED_ALIGNMENT | ORDERED_NAA)) | Bits;
+    __asm__ volatile(RETURN_MODEL_WRITE(SCTLR_EL1)::"r"(Control) : "memory");
+    __asm__ volatile(RETURN_MODEL_READ(SCTLR_EL1) : "=r"(Control));
+    if ((Control & (ORDERED_SPAN | ORDERED_ALIGNMENT | ORDERED_NAA)) !=
+        (ORDERED_SPAN | Bits))
+      finish(ORDERED_CONTROL_ERROR, 1);
+    checkOracle(compareOrdered(Mode, ORDERED_EL1), Mode,
+                RETURN_MODEL_EL1_ERROR);
+    checkOracle(runAtEL0(Mode, RETURN_MODEL_STACK_EL0), Mode,
+                RETURN_MODEL_EL0_ERROR);
+    if (Mode & ORDERED_MODE_A)
+      writeText((Mode & ORDERED_MODE_NAA) ? ORDERED_11_PASS : ORDERED_10_PASS);
+    else
+      writeText((Mode & ORDERED_MODE_NAA) ? ORDERED_01_PASS : ORDERED_00_PASS);
+  }
+  finish(ORDERED_PASS, 0);
+#else
   uint64_t ISAR1, ISAR2, ISAR3, Control;
   __asm__ volatile(RETURN_MODEL_READ(ID_AA64ISAR1_EL1) : "=r"(ISAR1));
   __asm__ volatile(RETURN_MODEL_READ(RETURN_MODEL_ISAR2) : "=r"(ISAR2));
@@ -153,4 +192,5 @@ void runReturnModel(void) {
     writeText(Setting);
   }
   finish(RETURN_MODEL_PASS, 0);
+#endif
 }

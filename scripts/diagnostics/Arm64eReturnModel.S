@@ -5,6 +5,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "Arm64eReturnModel.def"
+#ifdef RETURN_MODEL_ORDERED
+#include "Arm64eOrderedModel.def"
+#endif
 
 .text
 .globl _start
@@ -26,7 +29,7 @@ _start:
   msr APIBKeyLo_EL1, x0
   ldr x0, =RETURN_MODEL_KEY_B_HI
   msr APIBKeyHi_EL1, x0
-#ifdef RETURN_MODEL_CURSOR
+#ifdef RETURN_MODEL_NORMAL_MEMORY
   adrp x0, LcursorL0@PAGE
   add x0, x0, LcursorL0@PAGEOFF
   msr TTBR0_EL1, x0
@@ -40,7 +43,7 @@ _start:
 #endif
   mrs x0, SCTLR_EL1
   orr x0, x0, #RETURN_MODEL_ENIA_IB
-#ifdef RETURN_MODEL_CURSOR
+#ifdef RETURN_MODEL_NORMAL_MEMORY
   orr x0, x0, #RETURN_MODEL_MMU
 #endif
   msr SCTLR_EL1, x0
@@ -75,6 +78,17 @@ Lvectors:
   .space RETURN_MODEL_VECTOR_SLOT - RETURN_MODEL_INSN_BYTES
 .endr
 Lexception:
+#ifdef RETURN_MODEL_ORDERED
+  // Keep all interrupted registers intact when a data abort resumes the guest.
+  stp x9, x10, [sp, #-RETURN_MODEL_STACK_ALIGNMENT]!
+  mrs x9, ESR_EL1
+  lsr x10, x9, #ORDERED_EC_SHIFT
+  cmp x10, #ORDERED_ABORT_EL0
+  b.eq LorderedAbort
+  cmp x10, #ORDERED_ABORT_EL1
+  b.eq LorderedAbort
+  ldp x9, x10, [sp], #RETURN_MODEL_STACK_ALIGNMENT
+#endif
   mrs x9, ESR_EL1
   ldr x10, =RETURN_MODEL_SVC_ESR
   cmp x9, x10
@@ -91,10 +105,28 @@ Lexception:
   adr x9, Lresume
   msr ELR_EL1, x9
   eret
+#ifdef RETURN_MODEL_ORDERED
+LorderedAbort:
+  ldr x10, =RETURN_MODEL_EL0_DATA
+  str x9, [x10, #ORDERED_ESR_SLOT]
+  ldr x9, [x10, #ORDERED_ARMED_SLOT]
+  cbz x9, Lunexpected
+  str xzr, [x10, #ORDERED_ARMED_SLOT]
+  mrs x9, FAR_EL1
+  str x9, [x10, #ORDERED_FAR_SLOT]
+  mrs x9, ELR_EL1
+  ldr w9, [x9]
+  str x9, [x10, #ORDERED_WORD_SLOT]
+  mrs x9, ELR_EL1
+  add x9, x9, #RETURN_MODEL_INSN_BYTES
+  msr ELR_EL1, x9
+  ldp x9, x10, [sp], #RETURN_MODEL_STACK_ALIGNMENT
+  eret
+#endif
 Lunexpected:
   b _unexpectedReturnException
 
-#ifdef RETURN_MODEL_CURSOR
+#ifdef RETURN_MODEL_NORMAL_MEMORY
 // Identity-map the image and the two stacks as Normal memory. Apple Clang can
 // legally access stack aggregates with unaligned loads and stores.
 .const

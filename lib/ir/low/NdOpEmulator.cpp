@@ -557,7 +557,15 @@ void NdOpEmulator::clobberVolatileRegisters() {
 
 bool NdOpEmulator::step(const LowOp &Op) { return stepImpl(Op, {}); }
 
-bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
+bool NdOpEmulator::stepWithAArch64OrderedQuadwordSCTLR(const LowOp &Op,
+                                                       uint64_t SCTLR) {
+  const auto Alignment =
+      SCTLR & (kAddressMemorySCTLRAlign | kAddressMemorySCTLRnAA);
+  return stepImpl(Op, {}, Alignment == kAddressMemorySCTLRnAA);
+}
+
+bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
+                            bool UnalignedOrderedQuadword) {
   if (isLowRawAnalysisOperation(Op) || isLowArchitecturalValue(Op))
     return false;
   if (X87ContextKnown && Op.Output.isReg() &&
@@ -841,11 +849,13 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
           Op.Inputs[kAddressMemoryWordOperand + 1].Offset);
       const auto Address = Instruction->controlIndependentAddress(
           readOperand(Base), readOperand(Index));
-      // Without the original alignment controls, an ordered unaligned access
-      // may fault. Do not publish bytes or a result from the finite snapshot.
+      // A misaligned Q always crosses a 16-byte granule. It can complete in
+      // Normal memory only when the effective SCTLR has A=0 and nAA=1.
       if (!Address ||
           (isAArch64OrderedUnscaledMemoryEncoding(Instruction->Word) &&
-           *Address % Instruction->accessBytes()))
+           *Address % Instruction->accessBytes() &&
+           !(UnalignedOrderedQuadword &&
+             Instruction->accessBytes() == kAddressMemoryVectorBytes)))
         return false;
       if (!Instruction->isLoad()) {
         const auto &Data = Op.Inputs[kAddressMemoryDataOperand + 1];

@@ -152,6 +152,9 @@ ORDERED_MEMORY_REJECT(0x9dc00820U)
 ORDERED_MEMORY_REJECT(0xdd800820U)
 ORDERED_MEMORY_REJECT(0xddc00820U)
 
+// Independent SCTLR settings used by the Arm model.
+ORDERED_MEMORY_VALUE(uint64_t, kOrderedAlignment, 0x2ULL)
+ORDERED_MEMORY_VALUE(uint64_t, kOrderedNAA, 0x40ULL)
 ORDERED_MEMORY_VALUE(unsigned, kOrderedCaseCount, 115)
 ORDERED_MEMORY_VALUE(unsigned, kOrderedFamilyCount, 23)
 ORDERED_MEMORY_VALUE(unsigned, kOrderedEncodingCount, 11776)
