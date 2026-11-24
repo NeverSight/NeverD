@@ -78,7 +78,14 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
         !D.PreservedFrameRanges.empty() &&
         D.PreservedFrameRanges.size() <=
             limits::analysis::kX64ReturningCallPreservedFrameRangesLimit;
-    if ((!V1 && !V2) || D.Address == InvalidVA ||
+    const bool V3 =
+        D.Version == 3 &&
+        D.Profile == SpecializationX64CallProfile::
+                         ConditionalNormalReturnResultObjectV3 &&
+        !D.PreservedFrameRanges.empty() &&
+        D.PreservedFrameRanges.size() <=
+            limits::analysis::kX64ReturningCallPreservedFrameRangesLimit;
+    if ((!V1 && !V2 && !V3) || D.Address == InvalidVA ||
         D.OutgoingBytes < kHomeBytes || D.OutgoingBytes > INT64_MAX ||
         D.OutgoingBytes % kAddressBytes)
       return invalid("invalid explicit returning-call relation");
@@ -102,9 +109,10 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
 
 std::array<uint64_t, 4>
 returningCallDeclarationWords(const SpecializationX64ReturningCall &D) {
-  RecoveryDigest H(D.Version == 1
-                       ? "neverd-x64-conditional-normal-return-v1"
-                       : "neverd-x64-conditional-normal-return-frame-v2");
+  RecoveryDigest H(D.Version == 1 ? "neverd-x64-conditional-normal-return-v1"
+                   : D.Version == 2
+                       ? "neverd-x64-conditional-normal-return-frame-v2"
+                       : "neverd-x64-conditional-normal-return-object-v3");
   appendReturningCallDeclaration(H, D);
   const auto Bytes = llvm::fromHex(H.finish());
   std::array<uint64_t, 4> Words;
@@ -137,6 +145,10 @@ returningCallTransition(const SpecializationX64ReturningCall &D) {
   Policy.PreservedFrameRanges.reserve(D.PreservedFrameRanges.size());
   for (const auto &Range : D.PreservedFrameRanges)
     Policy.PreservedFrameRanges.push_back({Range.Begin, Range.End});
+  if (D.Version == 3)
+    Policy.ReturnedObject = RecoveryCallTransition::ResultObject{
+        NdVar::reg(x86reg::RAX, kAddressBytes),
+        NdVar::reg(x86reg::RDX, kAddressBytes)};
   return Policy;
 }
 

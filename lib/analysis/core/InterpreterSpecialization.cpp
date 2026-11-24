@@ -106,6 +106,9 @@ struct FrameFacts {
   bool EntryReturnSlotIntact = false;
   bool NativeStackActive = false;
   std::set<uint64_t> NativeReturnSlots;
+  /// Exact size of each currently live nullable call-result object. A later
+  /// invocation at the same site replaces its identity and size.
+  std::map<size_t, uint64_t> ReturnedObjectSizes;
 };
 
 struct ControlMarginal {
@@ -164,16 +167,18 @@ struct ContextKey {
   bool EntryReturnSlotIntact = false;
   std::optional<uint64_t> StackDisplacement;
   std::vector<std::pair<uint64_t, std::optional<uint64_t>>> ReturnSlots;
+  std::vector<std::optional<uint64_t>> ReturnedObjectSizes;
   uint32_t FrameResidue = 0;
 
   bool operator<(const ContextKey &Other) const {
     return std::tie(Cursor.Address, Cursor.Mode, Controls, FrameControls,
                     NativeStackActive, EntryReturnSlotIntact, StackDisplacement,
-                    ReturnSlots, FrameResidue) <
+                    ReturnSlots, ReturnedObjectSizes, FrameResidue) <
            std::tie(Other.Cursor.Address, Other.Cursor.Mode, Other.Controls,
                     Other.FrameControls, Other.NativeStackActive,
                     Other.EntryReturnSlotIntact, Other.StackDisplacement,
-                    Other.ReturnSlots, Other.FrameResidue);
+                    Other.ReturnSlots, Other.ReturnedObjectSizes,
+                    Other.FrameResidue);
   }
 };
 
@@ -469,6 +474,8 @@ bool intersect(Projection &Into, const Projection &Incoming,
   Changed |=
       intersectMap(Into.AbsoluteAffineValues, Incoming.AbsoluteAffineValues);
   Changed |= intersectMap(Into.Frame.AffineValues, Incoming.Frame.AffineValues);
+  Changed |= intersectMap(Into.Frame.ReturnedObjectSizes,
+                          Incoming.Frame.ReturnedObjectSizes);
   if (Into.Frame.EntryReturnSlotIntact &&
       !Incoming.Frame.EntryReturnSlotIntact) {
     Into.Frame.EntryReturnSlotIntact = false;
@@ -1063,7 +1070,14 @@ private:
   bool applyReturningCall(SymState &State, SymRef FrameRoot, SymRef CallerStack,
                           int64_t PreservedBegin,
                           const SpecializationReturningCall &Call,
+                          const RecoveryCallTransition &Policy,
                           FrameOrigins &Origins, FrameFacts &Frame);
+  bool applyReturningResultObject(SymExec &Exec, SymState &State,
+                                  SymRef FrameRoot,
+                                  std::vector<SymRef> &ObjectRoots,
+                                  const SpecializationReturningCall &Call,
+                                  const RecoveryCallTransition &Policy,
+                                  SymRef SizeValue, FrameFacts &Frame);
   bool createObjectRoots(SymContext &Ctx, std::vector<SymRef> &Roots);
   std::optional<EntryPointer> objectPointer(SymContext &Ctx, SymRef Value,
                                             llvm::ArrayRef<SymRef> Roots);
@@ -1078,6 +1092,7 @@ private:
   SpecializationCursor Entry;
   const SpecializationOptions &Options;
   const std::shared_ptr<const SpecializationRawEnvironment> RawDomain;
+  std::vector<RecoveryResultObjectSite> ReturnedObjects;
   const size_t ManualRegisters;
   const size_t ManualSlots;
   ControlRefinement &Refinement;
@@ -1161,12 +1176,8 @@ bool Specializer::chargeCallWork(uint64_t Count) {
 bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
                                      SymRef CallerStack, int64_t PreservedBegin,
                                      const SpecializationReturningCall &Call,
+                                     const RecoveryCallTransition &Policy,
                                      FrameOrigins &Origins, FrameFacts &Frame) {
-  auto Architecture = recoveryArchitecture(Options.Architecture);
-  if (!Architecture)
-    return fail(SpecializationStatus::InvalidInput,
-                llvm::toString(Architecture.takeError()));
-  const auto Policy = (*Architecture)->returningCallTransition(Call);
   const uint64_t Begin = static_cast<uint64_t>(PreservedBegin);
   const uint64_t Size =
       static_cast<uint64_t>(Options.EntryFrameBounds->End) - Begin;
@@ -1211,11 +1222,12 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
        {Origins.UnsafeScalars.size(), Origins.SafeRegisters.size(),
         Origins.ExternalTemporaries.size(), Origins.ExternalFrameBytes.size(),
         Origins.UndefinedFlags.size(), Frame.AffineValues.size(),
-        Frame.NativeReturnSlots.size()})
+        Frame.NativeReturnSlots.size(), Frame.ReturnedObjectSizes.size()})
     if (!chargeCallWork(Count) || !chargeCallWork(Count))
       return false;
   FrameFacts NextFrame;
   NextFrame.NativeStackActive = Frame.NativeStackActive;
+  NextFrame.ReturnedObjectSizes = Frame.ReturnedObjectSizes;
   if (Frame.EntryReturnSlotIntact) {
     const auto &Slot = *Options.EntryReturnSlot;
     NextFrame.EntryReturnSlotIntact =
@@ -1266,10 +1278,78 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
   return true;
 }
 
+bool Specializer::applyReturningResultObject(
+    SymExec &Exec, SymState &State, SymRef FrameRoot,
+    std::vector<SymRef> &ObjectRoots, const SpecializationReturningCall &Call,
+    const RecoveryCallTransition &Policy, SymRef SizeValue, FrameFacts &Frame) {
+  if (!Policy.ReturnedObject)
+    return true;
+  const auto &Object = *Policy.ReturnedObject;
+  if (!FrameRoot || !Options.EntryFrameBounds || !Policy.Stack.Size ||
+      !Object.Result.isReg() || Object.Result.Size != Policy.Stack.Size ||
+      !Object.Size.isReg() || Object.Size.Size != Policy.Stack.Size ||
+      !SizeValue)
+    return fail(SpecializationStatus::InvalidInput,
+                "invalid returning-call result-object locations");
+  auto &Ctx = State.context();
+  const auto ExactSize = enumerate(Ctx, Exec.pathPredicate(), {SizeValue}, 1);
+  if (Failed)
+    return false;
+  if (ExactSize.Status != FiniteValueStatus::Complete ||
+      ExactSize.Tuples.size() != 1 || ExactSize.Tuples.front().size() != 1 ||
+      !ExactSize.Tuples.front().front() ||
+      ExactSize.Tuples.front().front() > INT64_MAX)
+    return fail(SpecializationStatus::Unsupported,
+                "returning-call result-object size is not an exact positive "
+                "finite value");
+  const uint64_t Size = ExactSize.Tuples.front().front();
+  size_t Index = 0;
+  for (; Index < ReturnedObjects.size(); ++Index) {
+    if (!chargeObjectWork(1))
+      return false;
+    if (ReturnedObjects[Index].CallAddress == Call.Original.Origin.Address)
+      break;
+  }
+  if (Index == ReturnedObjects.size() ||
+      ReturnedObjects[Index].Locations.Result != Object.Result ||
+      ReturnedObjects[Index].Locations.Size != Object.Size)
+    return fail(SpecializationStatus::InvalidInput,
+                "returning-call result object has no architecture owner");
+  const size_t RootIndex = Options.EntryFrameExcludedObjects.size() +
+                           Options.EntryFrameLoadedObjects.size() + Index;
+  if (RootIndex >= ObjectRoots.size() || !chargeObjectWork(3))
+    return false;
+  const size_t RootIdentity = RootIndex + 1;
+  for (auto It = Frame.AffineValues.begin(); It != Frame.AffineValues.end();) {
+    if (!chargeObjectWork(1))
+      return false;
+    if (It->second.Root == RootIdentity)
+      It = Frame.AffineValues.erase(It);
+    else
+      ++It;
+  }
+  // A repeated call is independent of its predecessor, including any older
+  // result from the same static site that remains in preserved memory.
+  const SymRef Root = Ctx.mkFreshVar(64, "returning_call_object");
+  ObjectRoots[RootIndex] = Root;
+  State.write(SymSpace::Register, Object.Result.Offset, Root);
+  Frame.ReturnedObjectSizes[Index] = Size;
+  const auto &Bounds = *Options.EntryFrameBounds;
+  Exec.assume(detail::nullableObjectFramePredicate(Ctx, FrameRoot, Bounds.Begin,
+                                                   Bounds.End, Root,
+                                                   static_cast<int64_t>(Size)));
+  AffineCandidates.insert(Object.Result.Offset);
+  if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+    return fail(SpecializationStatus::BudgetExceeded,
+                "returning-call result-object node budget exhausted");
+  return true;
+}
+
 bool Specializer::createObjectRoots(SymContext &Ctx,
                                     std::vector<SymRef> &Roots) {
   const size_t Count = Options.EntryFrameExcludedObjects.size() +
-                       Options.EntryFrameLoadedObjects.size();
+                       Options.EntryFrameLoadedObjects.size() +
+                       ReturnedObjects.size();
   if (!chargeObjectWork(Count))
     return false;
   Roots.reserve(Count);
@@ -2456,6 +2536,14 @@ int Specializer::enqueue(SpecializationCursor Cursor,
     SlotControl(Slot);
   Key.NativeStackActive = Incoming.Frame.NativeStackActive;
   Key.EntryReturnSlotIntact = Incoming.Frame.EntryReturnSlotIntact;
+  Key.ReturnedObjectSizes.reserve(ReturnedObjects.size());
+  for (size_t I = 0; I < ReturnedObjects.size(); ++I) {
+    const auto At = Incoming.Frame.ReturnedObjectSizes.find(I);
+    Key.ReturnedObjectSizes.push_back(
+        At == Incoming.Frame.ReturnedObjectSizes.end()
+            ? std::nullopt
+            : std::optional<uint64_t>(At->second));
+  }
   if (Key.NativeStackActive) {
     const auto At =
         Incoming.AffineRegisters.find(Options.FrameBaseRegister->Offset);
@@ -2992,13 +3080,30 @@ bool Specializer::evaluate(int Id) {
     if (!chargeObjectWork(1))
       return false;
     const auto DirectCount = Options.EntryFrameExcludedObjects.size();
+    const auto LoadedCount = Options.EntryFrameLoadedObjects.size();
+    const auto &Bounds = *Options.EntryFrameBounds;
+    if (I >= DirectCount + LoadedCount) {
+      const auto At = Draft.Incoming.Frame.ReturnedObjectSizes.find(
+          I - DirectCount - LoadedCount);
+      if (At == Draft.Incoming.Frame.ReturnedObjectSizes.end())
+        continue;
+      IncomingPredicate =
+          Ctx.mkAnd(IncomingPredicate,
+                    detail::nullableObjectFramePredicate(
+                        Ctx, FrameRoot, Bounds.Begin, Bounds.End,
+                        ObjectRoots[I], static_cast<int64_t>(At->second)));
+      if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "returned object predicate symbolic-node budget "
+                    "exhausted");
+      continue;
+    }
     const auto [Begin, End] =
         I < DirectCount
             ? std::pair{Options.EntryFrameExcludedObjects[I].Begin,
                         Options.EntryFrameExcludedObjects[I].End}
             : std::pair{Options.EntryFrameLoadedObjects[I - DirectCount].Begin,
                         Options.EntryFrameLoadedObjects[I - DirectCount].End};
-    const auto &Bounds = *Options.EntryFrameBounds;
     IncomingPredicate = Ctx.mkAnd(
         IncomingPredicate,
         detail::nonwrappingFramePredicate(Ctx, ObjectRoots[I], Begin, End));
@@ -3486,8 +3591,26 @@ bool Specializer::evaluate(int Id) {
         if (!lowRawReturningCallShapeIsValid(Original))
           return fail(SpecializationStatus::InvalidInput,
                       "returning-call expansion has a malformed raw event");
+        auto Architecture = recoveryArchitecture(Options.Architecture);
+        if (!Architecture)
+          return fail(SpecializationStatus::InvalidInput,
+                      llvm::toString(Architecture.takeError()));
+        const auto Policy =
+            (*Architecture)->returningCallTransition(*ReturningCall);
+        const SymRef ResultSize =
+            Policy.ReturnedObject
+                ? State.read(Policy.ReturnedObject->Size.isReg()
+                                 ? SymSpace::Register
+                                 : SymSpace::Temporary,
+                             Policy.ReturnedObject->Size.Offset,
+                             Policy.ReturnedObject->Size.Size)
+                : SymRef();
         if (!applyReturningCall(State, FrameRoot, CallerStack, PreservedBegin,
-                                *ReturningCall, Origins, Frame))
+                                *ReturningCall, Policy, Origins, Frame))
+          return false;
+        if (!applyReturningResultObject(Exec, State, FrameRoot, ObjectRoots,
+                                        *ReturningCall, Policy, ResultSize,
+                                        Frame))
           return false;
         Draft.Block.Ops.push_back(Original);
         continue;
@@ -5544,6 +5667,17 @@ SpecializationResult Specializer::run() {
            "invalid entry-relative control frame slot");
       return std::move(Result);
     }
+  if (RawDomain) {
+    auto Architecture = recoveryArchitecture(Options.Architecture);
+    if (!Architecture) {
+      fail(SpecializationStatus::InvalidInput,
+           llvm::toString(Architecture.takeError()));
+      return std::move(Result);
+    }
+    ReturnedObjects = (*Architecture)->returningCallResultObjects(Options);
+    if (!chargeObjectWork(ReturnedObjects.size()))
+      return std::move(Result);
+  }
   SymContext Ctx;
   SymState Initial(Ctx, Options.ByteOrder);
   std::set<ByteKey> Seeded;

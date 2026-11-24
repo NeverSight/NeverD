@@ -151,6 +151,16 @@ struct RecoveryCallTransition {
   NdVar Stack;
   NdVar ProgramCounter;
   std::vector<symbolic::SymMemoryRange> PreservedFrameRanges;
+  struct ResultObject {
+    NdVar Result;
+    NdVar Size;
+  };
+  std::optional<ResultObject> ReturnedObject;
+};
+
+struct RecoveryResultObjectSite {
+  va_t CallAddress = InvalidVA;
+  RecoveryCallTransition::ResultObject Locations;
 };
 
 /// Native policies live under arch/<isa>. Core owns graph/evidence integrity
@@ -171,6 +181,9 @@ public:
                              uint64_t &Work) const = 0;
   virtual RecoveryCallTransition
   returningCallTransition(const SpecializationReturningCall &Call) const = 0;
+  /// Architecture-owned locations for exact conditional call-result objects.
+  virtual std::vector<RecoveryResultObjectSite>
+  returningCallResultObjects(const SpecializationOptions &Options) const = 0;
   virtual std::string
   returningCallDigest(const SpecializationReturningCall &Call) const = 0;
   virtual llvm::Error

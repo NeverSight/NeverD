@@ -1823,7 +1823,8 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
       Expected.X64CR4PGEState != PageGlobal || Expected.X64MXCSRMask ||
       Expected.EntryReturnSlot || !Expected.X64CodeRegions.empty() ||
       !Expected.X64ImportBindings.empty() ||
-      !Expected.X64TerminalImports.empty())
+      !Expected.X64TerminalImports.empty() ||
+      !Expected.X64ReturningCalls.empty() || !Result.ReturningCalls.empty())
     return invalid("unsupported machine-region source environment");
   for (const auto &Exit : Expected.X64MachineExits)
     if (Exit.Kind == SpecializationX64MachineExitKind::Trap &&
