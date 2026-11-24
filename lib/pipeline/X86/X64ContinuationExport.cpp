@@ -16,6 +16,7 @@
 #include "X64FunctionCalls.h"
 #include "X64FunctionContext.h"
 #include "X64RtmAbortRegions.h"
+#include "X64RtmCapture.h"
 #include "X64RtmRegions.h"
 #include "X64SpecialRegions.h"
 #include "X64StateObjectPointers.h"
@@ -84,6 +85,7 @@ struct Request {
   bool FollowDirectJumps = false;
   bool NativeRtmAbortRegions = false;
   X64RtmAbortSelection RtmSteps;
+  std::optional<llvm::json::Object> XbeginFaultReceipt;
   bool NativeRtmRegions = false;
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
@@ -121,6 +123,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
                                        "native_page_global_access",
                                        "native_rtm_abort_regions",
                                        "native_rtm_abort_steps",
+                                       "qemu_xbegin_fault_v1",
                                        "native_rtm_regions",
                                        "native_kvm_hypercalls",
                                        "native_hle_steps",
@@ -269,6 +272,20 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
     return invalid(
         "native RTM abort steps require successful-RAM kernel-events-v6 "
         "with a single RTM binding and no event scheduler");
+  if (const auto *V = Object->get("qemu_xbegin_fault_v1")) {
+    if (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
+        Options.PagedMemory || Options.ScheduledEvents ||
+        Result.NativeRtmRegions || Result.NativeRtmAbortRegions ||
+        Result.RtmSteps.Kind != X64RtmAbortSelection::Off)
+      return invalid("observed XBEGIN fault requires successful-RAM V6 with a "
+                     "single RTM binding and no event scheduler");
+    auto Capture =
+        X64RtmFaultCapture::read(*V, ImageBase, *Options.PagingAddressBits);
+    if (!Capture)
+      return Capture.takeError();
+    Options.ObservedXbeginFault = Capture->Site;
+    Result.XbeginFaultReceipt = std::move(Capture->Receipt);
+  }
   if (Result.NativeRtmAbortRegions &&
       Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6)
     return invalid("native RTM abort regions require kernel-events-v6");
@@ -1275,6 +1292,8 @@ typedef struct neverd_x64_event_v1 {
                     "initial CPU/controller coherence is caller-owned; "
                     "raw steps and unscheduled drivers do not notify"}};
   }
+  if (Request->XbeginFaultReceipt)
+    Report["qemu_xbegin_fault_v1"] = std::move(*Request->XbeginFaultReceipt);
   if (Request->RtmSteps.Kind != X64RtmAbortSelection::Off)
     Report["native_rtm_abort_steps"] =
         Request->RtmSteps.report(std::move(RtmStepReceipts));

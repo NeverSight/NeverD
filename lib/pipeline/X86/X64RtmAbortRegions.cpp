@@ -10,6 +10,7 @@
 
 #include "X64RtmAbortRegions.h"
 
+#include "X64RtmCapture.h"
 #include "X64RtmRegions.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -44,23 +45,6 @@ constexpr uint64_t kTsxCpuidClear = 2;
 constexpr uint64_t kForceAbort = 1;
 constexpr uint64_t kSdvEnableRtm = 4;
 
-template <typename T>
-std::optional<T> cpuWord(const llvm::json::Object &Record,
-                         llvm::StringRef Key) {
-  const auto *Value = Record.get(Key);
-  if (!Value)
-    return std::nullopt;
-  if (const auto Number = Value->getAsUINT64();
-      Number && *Number <= std::numeric_limits<T>::max())
-    return static_cast<T>(*Number);
-  const auto Text = Value->getAsString();
-  T Number;
-  if (Text && !Text->empty() && !Text->starts_with('-') &&
-      !Text->getAsInteger(0, Number))
-    return Number;
-  return std::nullopt;
-}
-
 llvm::StringRef forcedAbortEvidence(const X64RtmAbortSelection &CPU) {
   if (CPU.TsxCtrl.value_or(0) & kRtmDisable)
     return "ia32_tsx_ctrl.rtm_disable";
@@ -74,12 +58,14 @@ llvm::StringRef forcedAbortEvidence(const X64RtmAbortSelection &CPU) {
 
 llvm::Error readCpuidRecord(const llvm::json::Object &Record,
                             X64RtmAbortSelection &Result) {
-  Result.MaxBasic = cpuWord<uint32_t>(Record, "max_basic_leaf");
-  Result.Leaf7EBX = cpuWord<uint32_t>(Record, "leaf7_ebx");
-  Result.Leaf7EDX = cpuWord<uint32_t>(Record, "leaf7_edx");
-  Result.ArchCapabilities = cpuWord<uint64_t>(Record, "ia32_arch_capabilities");
-  Result.TsxCtrl = cpuWord<uint64_t>(Record, "ia32_tsx_ctrl");
-  Result.TsxForceAbort = cpuWord<uint64_t>(Record, "ia32_tsx_force_abort");
+  Result.MaxBasic = rtmCaptureWord<uint32_t>(Record, "max_basic_leaf");
+  Result.Leaf7EBX = rtmCaptureWord<uint32_t>(Record, "leaf7_ebx");
+  Result.Leaf7EDX = rtmCaptureWord<uint32_t>(Record, "leaf7_edx");
+  Result.ArchCapabilities =
+      rtmCaptureWord<uint64_t>(Record, "ia32_arch_capabilities");
+  Result.TsxCtrl = rtmCaptureWord<uint64_t>(Record, "ia32_tsx_ctrl");
+  Result.TsxForceAbort =
+      rtmCaptureWord<uint64_t>(Record, "ia32_tsx_force_abort");
   const unsigned Fields =
       Result.MaxBasic.has_value() + Result.Leaf7EBX.has_value() +
       Result.Leaf7EDX.has_value() + Result.ArchCapabilities.has_value() +
@@ -109,25 +95,19 @@ llvm::Error readQemuSite(const llvm::json::Object &Record, va_t ImageBase,
   if (Record.size() != 1 || !Site)
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "expected one QEMU TSX_CTRL capture");
-  const auto Cpu = cpuWord<uint32_t>(*Site, "cpu");
-  const auto Rip = cpuWord<va_t>(*Site, "rip");
-  const auto LoadBase = cpuWord<va_t>(*Site, "load_base");
+  const auto Cpu = rtmCaptureWord<uint32_t>(*Site, "cpu");
+  const auto Rip = rtmCaptureWord<va_t>(*Site, "rip");
+  const auto LoadBase = rtmCaptureWord<va_t>(*Site, "load_base");
   const auto *Value = Site->get("value");
-  Result.TsxCtrl = cpuWord<uint32_t>(*Site, "value");
+  Result.TsxCtrl = rtmCaptureWord<uint32_t>(*Site, "value");
   if (!Cpu || !Rip || !Value || (!Value->getAsNull() && !Result.TsxCtrl) ||
       Site->size() != 3 + unsigned(LoadBase.has_value()))
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "invalid QEMU TSX_CTRL capture fields");
-  va_t PC = *Rip;
-  if (LoadBase) {
-    if (*Rip < *LoadBase ||
-        *Rip - *LoadBase > std::numeric_limits<va_t>::max() - ImageBase)
-      return llvm::createStringError(
-          llvm::errc::invalid_argument,
-          "captured RIP is outside the image mapping");
-    PC = ImageBase + (*Rip - *LoadBase);
-  }
-  Result.Qemu = X64RtmAbortSelection::SaveSite{*Cpu, *Rip, PC, LoadBase};
+  auto PC = rtmCaptureImagePC(*Rip, LoadBase, ImageBase);
+  if (!PC)
+    return PC.takeError();
+  Result.Qemu = X64RtmAbortSelection::SaveSite{*Cpu, *Rip, *PC, LoadBase};
   return llvm::Error::success();
 }
 } // namespace

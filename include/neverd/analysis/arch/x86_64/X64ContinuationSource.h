@@ -20,6 +20,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -417,6 +418,13 @@ enum class X64ContinuationProfile : uint8_t {
 /// FS/GS base remains architectural and follows this declared policy.
 using X64NullSegmentBasePolicy = X86NullSegmentBasePolicy;
 
+/// One original unprefixed XBEGIN rel32 that delivered #UD in the observed
+/// 64-bit CPU configuration. The instruction reader authenticates its bytes.
+struct X64XbeginFaultSite {
+  va_t Address;
+  std::array<uint8_t, 6> Bytes;
+};
+
 struct X64ContinuationSourceOptions {
   X64ContinuationProfile Profile = X64ContinuationProfile::Unspecified;
   std::optional<uint32_t> MXCSRMask;
@@ -513,6 +521,9 @@ struct X64ContinuationSourceOptions {
   /// DIV/IDIV at 8/16/32/64 bits directly deliver #UD/#DE; other domains
   /// remain.
   bool EventDelivery = false;
+  /// Replay this site under the same RTM configuration, outside a transaction.
+  /// Its fault enters the live V6 IDT with the original PC and RF set on stack.
+  std::optional<X64XbeginFaultSite> ObservedXbeginFault;
   /// V6 scalar source uses an explicit second pointer and the paged executor.
   /// Memory, #DE/#UD/#GP/#SS/#PF/#AC, fetch authentication and restart state
   /// belong to that executor. ScheduledEvents selects its faultable scheduler;

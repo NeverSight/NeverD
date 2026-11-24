@@ -36,6 +36,7 @@
 #include "X64TaskPriority.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
+#include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -1369,19 +1370,29 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.Ops.front().Inputs[2] ==
           NdVar::reg(x86reg::RCX, Instruction.Ops.front().Inputs[1].Size) &&
       Instruction.Origin.Control == LowInstructionControl::Terminator;
-  const bool UndefinedInstruction =
-      (Options.EventDelivery || Options.PagedMemory) &&
-      Instruction.NativeBytes.size() == 2 &&
-      Instruction.NativeBytes[0] == 0x0f &&
-      Instruction.NativeBytes[1] == 0x0b && Instruction.Ops.size() == 1 &&
-      eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud2, 1);
+  const bool ObservedXbegin =
+      Options.ObservedXbeginFault &&
+      Options.ObservedXbeginFault->Address == Result.Address;
+  if (ObservedXbegin && (!llvm::equal(Instruction.NativeBytes,
+                                      Options.ObservedXbeginFault->Bytes) ||
+                         !x86TransactionBeginEncoding(Instruction.NativeBytes,
+                                                      Result.Address, true) ||
+                         Instruction.NativeBytes.front() != 0xc7))
+    return invalid(
+        "observed XBEGIN bytes do not match the selected instruction");
+  const bool Ud2 = (Options.EventDelivery || Options.PagedMemory) &&
+                   Instruction.NativeBytes.size() == 2 &&
+                   Instruction.NativeBytes[0] == 0x0f &&
+                   Instruction.NativeBytes[1] == 0x0b &&
+                   Instruction.Ops.size() == 1 &&
+                   eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud2, 1);
+  const bool UndefinedInstruction = Ud2 || ObservedXbegin;
   // These unprefixed encodings have the same meaning in compatibility mode.
   // REX-prefixed forms cannot share that entry domain: there REX is an opcode.
   const bool CompatibilityFastEntry =
-      UndefinedInstruction ||
-      ((Sysenter || Sysexit) && Instruction.NativeBytes.size() == 2 &&
-       Instruction.NativeBytes[0] == 0x0f &&
-       Instruction.NativeBytes[1] == (Sysenter ? 0x34 : 0x35));
+      Ud2 || ((Sysenter || Sysexit) && Instruction.NativeBytes.size() == 2 &&
+              Instruction.NativeBytes[0] == 0x0f &&
+              Instruction.NativeBytes[1] == (Sysenter ? 0x34 : 0x35));
   const auto Return =
       Events ? frameReturnInstruction(Instruction) : std::nullopt;
   const bool Iret = Return && Return->Interrupt;
@@ -1624,6 +1635,7 @@ buildInstruction(SpecializationInstruction Instruction,
   // virtualizing their writes must not turn a native abort into a commit.
   Result.SupportsRtmBody =
       !Options.PagedMemory && !Result.RequiresNativeExecution &&
+      !UndefinedInstruction &&
       Instruction.ProfileProjection == InterpreterProfileProjection::None &&
       Kind <= Exit::Return &&
       std::all_of(Instruction.Ops.begin(), Instruction.Ops.end(),
@@ -1692,7 +1704,7 @@ buildInstruction(SpecializationInstruction Instruction,
                      ? 0x4000
                      : 0)
       : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
-      : (Interrupt || FredReturn || UndefinedInstruction ||
+      : (Interrupt || FredReturn || Ud2 ||
          UserInterrupt == detail::X64UserInterrupt::Return)
           ? 0x3d7fd7
       : (UserInterrupt || Iret || FarReturn || Sysret || Sysenter || Sysexit ||
@@ -1729,8 +1741,7 @@ buildInstruction(SpecializationInstruction Instruction,
         NdOp::INT_AND, RPL,
         {Guard.load(offsetof(StateV5, CS) + offsetof(Segment, Selector), 2),
          constant(3, 2)});
-    if (Sysenter || UserInterrupt || UndefinedInstruction ||
-        Options.PagedMemory) {
+    if (Sysenter || UserInterrupt || Ud2 || Options.PagedMemory) {
       // Conforming code retains the caller's CPL even when CS.DPL is lower.
       const NdVar Shifted = Guard.temporary(2), DPL = Guard.temporary(2);
       const NdVar ConformingBits = Guard.temporary(2);
@@ -1749,13 +1760,12 @@ buildInstruction(SpecializationInstruction Instruction,
     } else {
       Guard.emit(NdOp::INT_NOTEQUAL, CPLBad, {RPL, constant(0, 2)});
     }
-    Guard.emit(
-        NdOp::INT_AND, SegmentBits,
-        {Attributes, constant((Sysenter || UserInterrupt ||
-                               UndefinedInstruction || Options.PagedMemory)
-                                  ? 0x6098
-                                  : 0x60f8,
-                              2)});
+    Guard.emit(NdOp::INT_AND, SegmentBits,
+               {Attributes, constant((Sysenter || UserInterrupt || Ud2 ||
+                                      Options.PagedMemory)
+                                         ? 0x6098
+                                         : 0x60f8,
+                                     2)});
     const NdVar LongModeBad =
         CompatibilityFastEntry ? Guard.temporary(1) : ModeBad;
     Guard.emit(NdOp::INT_NOTEQUAL, LongModeBad,
@@ -1771,8 +1781,7 @@ buildInstruction(SpecializationInstruction Instruction,
       const auto CompatibilityBad = Guard.temporary(1);
       Guard.emit(
           NdOp::INT_AND, LegacyBits,
-          {Attributes,
-           constant((Sysenter || UndefinedInstruction) ? 0x2098 : 0x20f8, 2)});
+          {Attributes, constant((Sysenter || Ud2) ? 0x2098 : 0x20f8, 2)});
       Guard.emit(NdOp::INT_NOTEQUAL, LegacyModeBad,
                  {LegacyBits, constant(0x98, 2)});
       Guard.emit(NdOp::INT_NOTEQUAL, BaseBad,
@@ -2152,6 +2161,12 @@ buildX64ContinuationSource(const BinaryImage &Image,
   for (va_t Address : Addresses)
     if (Address >= InvalidVA - 3 || !Unique.insert(Address).second)
       return invalid("invalid or duplicate continuation instruction address");
+  if (Options.ObservedXbeginFault &&
+      (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
+       Options.PagedMemory || Options.ScheduledEvents ||
+       !Unique.contains(Options.ObservedXbeginFault->Address)))
+    return invalid(
+        "observed XBEGIN requires its selected successful-RAM V6 site");
   auto Instructions = readBinaryX64ContinuationInstructions(Image, Addresses,
                                                             Options.PagedDebug);
   if (!Instructions)
