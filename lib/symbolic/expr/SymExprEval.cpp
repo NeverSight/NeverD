@@ -191,25 +191,53 @@ LLVM_ATTRIBUTE_NOINLINE size_t prepareNativeResidues(
 // Keeping this pass out of the constructor also keeps its scratch storage and
 // register saves out of native plans. Step is SymEvalPlan's private step type.
 template <typename Step>
-LLVM_ATTRIBUTE_NOINLINE void
+LLVM_ATTRIBUTE_NOINLINE bool
 prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
                     size_t NumSlots, llvm::MutableArrayRef<Step> Steps,
                     llvm::MutableArrayRef<uint32_t> ArgSlots) {
+  bool Weighted = false;
+  const bool ScaledProduct = Ctx.op(Root) == SymOp::Mul &&
+                             Ctx.numOperands(Root) > 2 &&
+                             Ctx.isConst(Ctx.operand(Root, 0));
   visitRequiredPrefixes<true>(
       Ctx, Root, RootSlot, NumSlots, Steps, ArgSlots,
       [&](Step &St, unsigned Demand, unsigned Zeros, unsigned Coefficient) {
-        // If a product observes only the low lane, extension bits and the
-        // other concatenated lanes cannot reach any use of this output.
-        if (Demand <= 64 && Demand < St.Width &&
-            (St.Op == SymOp::ZExt || St.Op == SymOp::SExt ||
-             St.Op == SymOp::Concat) &&
-            Demand <= Ctx.width(Ctx.operands(St.Node).back())) {
-          St.FirstArg += St.NumArgs - 1;
-          St.NumArgs = 1;
-          St.Op = SymOp::Extract;
-          St.Aux = 0;
-          St.Width = Demand;
-          return;
+        if (Demand <= 64 && Demand < St.Width) {
+          // The low lane can come directly from a carrier, or from the
+          // unwrapped input suffix of a constant right shift or rotation.
+          unsigned Start = 0;
+          bool Extract = false;
+          switch (St.Op) {
+          case SymOp::ZExt:
+          case SymOp::SExt:
+          case SymOp::Concat:
+            if (Demand <= Ctx.width(Ctx.operands(St.Node).back())) {
+              St.FirstArg += St.NumArgs - 1;
+              Extract = true;
+            }
+            break;
+          case SymOp::LShr:
+          case SymOp::AShr:
+          case SymOp::Rol:
+          case SymOp::Ror:
+            Start = detail::sourceSuffixStart(Ctx, St.Node);
+            Extract = Start && Start <= St.Width - Demand;
+            break;
+          default:
+            break;
+          }
+          if (Extract) {
+            St.NumArgs = 1;
+            St.Op = SymOp::Extract;
+            St.Aux = Start;
+            St.Width = Demand;
+            return;
+          }
+        }
+        if (ScaledProduct && St.Op == SymOp::Add && Demand < St.Width &&
+            Ctx.op(Ctx.operand(St.Node, 0)) == SymOp::Mul) {
+          St.Aux = Demand;
+          Weighted = true;
         }
         if (preservesLowBits(St.Op) && Demand <= 64)
           St.Width = Demand;
@@ -234,6 +262,7 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
           }
         }
       });
+  return Weighted;
 }
 
 // If any four weights on the same evaluation slot multiply to zero modulo
@@ -328,6 +357,28 @@ size_t groupAffineFactors(llvm::MutableArrayRef<uint32_t> Slots,
   return Kept + 1;
 }
 
+// Prune the newly bypassed arithmetic, preserving variable lookup order and
+// all slots reachable from other consumers. A lowered row starts with its
+// source slots; coefficient words stored after those slots are immediates.
+template <typename Step>
+size_t retainLiveWideSteps(
+    llvm::MutableArrayRef<Step> Steps, llvm::ArrayRef<uint32_t> Args,
+    llvm::MutableArrayRef<uint8_t> Needed,
+    llvm::SmallVectorImpl<std::pair<uint32_t, SymRef>> &Constants) {
+  llvm::fill(Needed, 0);
+  Needed[Steps.back().OutputSlot] = 1;
+  for (const auto &St : llvm::reverse(Steps))
+    if (Needed[St.OutputSlot])
+      for (auto Slot : Args.slice(St.FirstArg, St.NumArgs))
+        Needed[Slot] = 1;
+  llvm::erase_if(Constants, [&](const auto &C) { return !Needed[C.first]; });
+  size_t Count = 0;
+  for (const auto &St : Steps)
+    if (St.Op == SymOp::Var || Needed[St.OutputSlot])
+      Steps[Count++] = St;
+  return Count;
+}
+
 // In C * product(A + B*x) only the low W-ctz(C) bits of each factor
 // can reach the result. Lower each literal affine chain once in that ring.
 // Each surviving source is still evaluated independently at every assignment.
@@ -378,8 +429,8 @@ size_t prepareAffineFactors(
   size_t Out = 1;
   auto AppendSource = [&](SymRef F, unsigned Live) {
     const auto SourceSlot = Slot.find(F.index())->second - 1;
-    // Only these low source bits survive multiplication. An existing wider
-    // slice at the same position can supply them for every assignment.
+    // A row guarantees its requested bits, even when the evaluation plan
+    // already narrowed the motion. Keep the largest such request at a start.
     const bool Extract = Ctx.op(F) == SymOp::Extract;
     const unsigned Start =
         Extract ? Ctx.node(F).Aux : detail::sourceSuffixStart(Ctx, F);
@@ -392,9 +443,9 @@ size_t prepareAffineFactors(
             SliceIndex.try_emplace({Source.index(), Start}, Slices.size());
         const auto Index = It->second;
         if (New)
-          Slices.push_back({Available, SourceSlot});
-        else if (Available > Slices[Index].Bits)
-          Slices[Index] = {Available, SourceSlot};
+          Slices.push_back({Live, SourceSlot});
+        else if (Live > Slices[Index].Bits)
+          Slices[Index] = {Live, SourceSlot};
         SliceRows.emplace_back(Out, Index);
       }
     }
@@ -500,23 +551,70 @@ size_t prepareAffineFactors(
   Slots = Slots.take_front(groupAffineFactors(Slots, Words, Uses, Bits));
   Steps.back().NumArgs = Slots.size();
   Steps.back().Aux = Bits;
-  // Consumers outside a factor still need their complete inputs. Every
-  // variable lookup retains its original position, including discarded lanes.
-  llvm::fill(Uses, 0);
-  for (auto I : Slots)
-    Uses[I] = 1;
-  for (const auto &St : llvm::reverse(Steps.drop_back()))
-    if (Uses[St.OutputSlot])
-      for (auto I : Args.slice(St.FirstArg, St.NumArgs))
-        Uses[I] = 1;
-  llvm::erase_if(Constants, [&](const auto &C) { return !Uses[C.first]; });
-  const auto RootStep = Steps.back();
-  size_t Count = 0;
-  for (const auto &St : Steps.drop_back())
-    if (St.Op == SymOp::Var || Uses[St.OutputSlot])
-      Steps[Count++] = St;
-  Steps[Count++] = RootStep;
-  return Count;
+  return retainLiveWideSteps(Steps, Args, Uses, Constants);
+}
+
+// Lower an observed sum of scaled words to a dot product in its exact
+// residue. The row stores source slots and signed word coefficients. Upper
+// lanes retain their original computation wherever a second consumer needs
+// them.
+template <typename Step, typename Slots>
+void prepareWeightedSums(
+    const SymContext &Ctx, size_t NumSlots, llvm::SmallVectorImpl<Step> &Steps,
+    llvm::SmallVectorImpl<uint32_t> &Args, const Slots &Slot,
+    llvm::SmallVectorImpl<std::pair<uint32_t, SymRef>> &Constants) {
+  bool Fused = false;
+  llvm::SmallVector<uint32_t, 8> Fields, Weights;
+  for (auto &St : Steps) {
+    if (St.Op != SymOp::Add || !St.Aux)
+      continue;
+    const unsigned Demand = std::exchange(St.Aux, uint64_t(0));
+    const auto Terms = Ctx.operands(St.Node);
+    unsigned Shift = Demand;
+    for (auto T : Terms) {
+      if (Ctx.op(T) != SymOp::Mul || Ctx.numOperands(T) != 2 ||
+          !Ctx.isConst(Ctx.operand(T, 0))) {
+        Shift = 0;
+        break;
+      }
+      Shift = std::min(Shift, literalSuffixZeros(Ctx, Ctx.operand(T, 0)));
+    }
+    if (!Shift || Shift == Demand ||
+        !llvm::isUInt<32>(uint64_t(Args.size()) + 2 * uint64_t(Terms.size())))
+      continue;
+    const unsigned Bits = Demand - Shift,
+                   Limbs = llvm::APInt::getNumWords(Demand);
+    Fields.clear();
+    Weights.clear();
+    for (auto T : Terms) {
+      const auto K = Ctx.operand(T, 0);
+      const llvm::APInt Full(Demand, Ctx.constWords(K).take_front(Limbs));
+      const auto Weight = Full.extractBits(Bits, Shift);
+      if (!Weight.isSignedIntN(32))
+        break;
+      auto Word = Ctx.operand(T, 1);
+      const auto Op = Ctx.op(Word);
+      if (Op == SymOp::Concat || Op == SymOp::SExt || Op == SymOp::ZExt) {
+        const auto Low = Ctx.operands(Word).back();
+        if (Ctx.width(Low) >= Bits - Weight.countr_zero())
+          Word = Low;
+      }
+      Fields.push_back(Slot.find(Word.index())->second - 1);
+      Weights.push_back(static_cast<uint32_t>(Weight.getSExtValue()));
+    }
+    if (Fields.size() != Terms.size())
+      continue;
+    St.FirstArg = Args.size();
+    St.Aux = (uint64_t(Shift) << 32) | Bits;
+    Args.append(Fields.begin(), Fields.end());
+    Args.append(Weights.begin(), Weights.end());
+    Fused = true;
+  }
+  if (!Fused)
+    return;
+  llvm::SmallVector<uint8_t, 64> Needed(NumSlots);
+  Steps.resize(retainLiveWideSteps(llvm::MutableArrayRef<Step>(Steps), Args,
+                                   Needed, Constants));
 }
 
 // Multiply equal factors across each binary digit of their multiplicities.
@@ -674,8 +772,9 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     // A scaled wide product observes only a prefix of each remaining factor.
     // Other operators retain complete operands: a high bit can affect even
     // the lowest result bit of a comparison, division or right shift.
-    prepareWidePrefixes(Ctx, Root, RootSlot, NextSlot,
-                        llvm::MutableArrayRef<Step>(Steps), ArgSlots);
+    const bool Weighted =
+        prepareWidePrefixes(Ctx, Root, RootSlot, NextSlot,
+                            llvm::MutableArrayRef<Step>(Steps), ArgSlots);
     if (Ctx.op(Root) == SymOp::Mul) {
       Steps.resize(
           prepareAffineFactors(Ctx, Root, llvm::MutableArrayRef<Step>(Steps),
@@ -689,6 +788,8 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
             preparePowerColumns(Factors, PlanWords, Product.NumArgs);
       }
     }
+    if (Weighted)
+      prepareWeightedSums(Ctx, NextSlot, Steps, ArgSlots, Slot, ConstantSlots);
   }
 }
 
@@ -1207,6 +1308,44 @@ llvm::APInt evaluateAffineFactors(llvm::ArrayRef<llvm::APInt> Values,
                                llvm::APInt(Bits, llvm::ArrayRef(Product, N)));
 }
 
+void evaluateWeightedSum(llvm::APInt &Result,
+                         llvm::ArrayRef<llvm::APInt> Values,
+                         const uint32_t *Slots, size_t Count, unsigned Shift,
+                         unsigned Bits) {
+  auto Weight = [&](size_t I) {
+    return std::bit_cast<int32_t>(Slots[Count + I]);
+  };
+  if (Bits <= 64) {
+    uint64_t Sum = 0;
+    for (size_t I = 0; I < Count; ++I)
+      Sum += uint64_t(int64_t(Weight(I))) * Values[Slots[I]].getRawData()[0];
+    Result.insertBits(Sum, Shift, Bits);
+    return;
+  }
+  const unsigned N = llvm::APInt::getNumWords(Bits);
+  llvm::SmallVector<uint64_t, 8> Sums(2 * size_t(N), 0);
+  llvm::SmallVector<uint64_t, 4> Padded;
+  // Accumulate both signs as unsigned limbs, then subtract in the same ring.
+  auto *Positive = Sums.data(), *Negative = Positive + N;
+  for (size_t I = 0; I < Count; ++I) {
+    const auto &Value = Values[Slots[I]];
+    const auto *Raw = Value.getRawData();
+    if (Value.getNumWords() < N) {
+      Padded.assign(Raw, Raw + Value.getNumWords());
+      Padded.resize(N, 0);
+      Raw = Padded.data();
+    }
+    const int64_t K = Weight(I);
+    llvm::APInt::tcMultiplyPart(K < 0 ? Negative : Positive, Raw,
+                                K < 0 ? -K : K, 0, N, N, true);
+  }
+  llvm::APInt::tcSubtract(Positive, Negative, 0, N);
+  for (unsigned I = 0; I < N; ++I) {
+    const unsigned Start = I * 64;
+    Result.insertBits(Positive[I], Shift + Start, std::min(64u, Bits - Start));
+  }
+}
+
 } // namespace
 
 llvm::APInt SymEvalPlan::evalWith(
@@ -1229,7 +1368,8 @@ llvm::APInt SymEvalPlan::evalWith(
     for (const Step &St : OrdinarySteps)
       if (St.Width <= 64 && preservesLowBits(St.Op))
         ScratchAP[St.OutputSlot] = llvm::APInt(St.Width, 0);
-      else if (St.Op == SymOp::Mul && St.Aux && St.Aux <= 64)
+      else if ((St.Op == SymOp::Add && St.Aux) ||
+               (St.Op == SymOp::Mul && St.Aux && St.Aux <= 64))
         ScratchAP[St.OutputSlot] = llvm::APInt(Ctx.width(St.Node), 0);
   }
   for (const Step &St : OrdinarySteps) {
@@ -1249,6 +1389,12 @@ llvm::APInt SymEvalPlan::evalWith(
       const auto &Word = ScratchAP[A[0]];
       ScratchAP[I] =
           llvm::APInt(St.Width, Word.extractBitsAsZExtValue(St.Width, St.Aux));
+      continue;
+    }
+
+    if (St.Op == SymOp::Add && St.Aux) {
+      evaluateWeightedSum(ScratchAP[I], ScratchAP, A, St.NumArgs, St.Aux >> 32,
+                          uint32_t(St.Aux));
       continue;
     }
 

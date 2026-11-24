@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../SymFunnel.h"
+#include "../SymWeightedFactor.h"
 #include "Limits.h"
 #include "SymMBADetail.h"
 
@@ -1337,26 +1338,6 @@ SymRef buildTruncatedGroup(SymContext &Ctx, llvm::ArrayRef<Factor> Group,
                                  Bytes, Budget, Storage);
 }
 
-struct WeightedFactor {
-  SymRef Offset;
-  llvm::ArrayRef<SymRef> Terms;
-  bool Joined = false;
-};
-
-WeightedFactor readWeightedFactor(const SymContext &Ctx, SymRef F) {
-  const auto Op = Ctx.op(F);
-  if (Op != SymOp::Add && Op != SymOp::Or && Op != SymOp::Xor)
-    return {};
-  const auto Args = Ctx.operands(F);
-  if (!Ctx.isConst(Args.front()))
-    return {};
-  if (Op == SymOp::Add)
-    return {Args.front(), Args.drop_front()};
-  if (Args.size() == 2 && Ctx.op(Args.back()) == SymOp::Add)
-    return {Args.front(), Ctx.operands(Args.back()), true};
-  return {};
-}
-
 // Equal factors form one contiguous run in a canonical product. When even
 // the worst-case binary search costs less than this run, skip its interior.
 size_t equalFactorRun(llvm::ArrayRef<SymRef> Remaining, WorkBudget &Budget) {
@@ -1377,12 +1358,34 @@ size_t equalFactorRun(llvm::ArrayRef<SymRef> Remaining, WorkBudget &Budget) {
   return Budget.consume(Copies + (Probe < Remaining.size())) ? Copies : 0;
 }
 
+// A uniform field changes a factor by exactly 0, D or -D in the observed
+// ring. A mixed field keeps the original bit operation on the live bits.
+std::optional<int> uniformJoinSlope(SymOp Op, const llvm::APInt &Literal,
+                                    unsigned Zeros,
+                                    llvm::ArrayRef<uint64_t> Toggle) {
+  const unsigned Live = Literal.getBitWidth() - Zeros;
+  if (!Live)
+    return 0;
+  if (!Toggle.empty()) {
+    const llvm::APInt Mask(Literal.getBitWidth(), Toggle);
+    if (Mask.getActiveBits() <= Zeros)
+      return 0;
+    if (Mask.countl_one() < Live)
+      return std::nullopt;
+  }
+  if (Literal.getActiveBits() <= Zeros)
+    return Op == SymOp::And ? 0 : 1;
+  if (Literal.countl_one() >= Live)
+    return Op == SymOp::Or ? 0 : -1;
+  return std::nullopt;
+}
+
 // The factor is c OP (2^Shift * h). Its low Shift bits are the
-// literal suffix; its remaining Bits are (c >> Shift) OP h.
+// literal suffix; its remaining Bits join c >> Shift to h (or its complement).
 SymRef joinedHighField(SymContext &Ctx, SymRef F, const llvm::APInt &Literal,
                        unsigned Shift, unsigned Bits) {
-  const auto Terms = readWeightedFactor(Ctx, F).Terms;
-  llvm::SmallVector<SymRef, 8> Weighted(Terms);
+  const auto Factor = readWeightedFactor(Ctx, F);
+  llvm::SmallVector<SymRef, 8> Weighted(Factor.Terms);
   for (auto &Term : Weighted) {
     const auto Scale = Ctx.operand(Term, 0);
     const auto Carrier = Ctx.operand(Term, 1);
@@ -1396,6 +1399,15 @@ SymRef joinedHighField(SymContext &Ctx, SymRef F, const llvm::APInt &Literal,
   }
   const auto High = Ctx.mkConst(Literal.extractBits(Bits, Shift));
   const auto Sum = Ctx.mkAdd(Weighted);
+  if (Factor.ToggleMask) {
+    const llvm::APInt Mask(
+        Literal.getBitWidth(),
+        Ctx.constWords(Factor.ToggleMask).take_front(Literal.getNumWords()));
+    return Ctx.mkXor(
+        High, Ctx.mkAnd(Ctx.mkConst(Mask.extractBits(Bits, Shift)), Sum));
+  }
+  if (Ctx.op(F) == SymOp::And)
+    return Ctx.mkAnd(High, Ctx.mkNot(Sum));
   return Ctx.op(F) == SymOp::Or ? Ctx.mkOr(High, Sum) : Ctx.mkXor(High, Sum);
 }
 
@@ -1515,7 +1527,7 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     if (!Copies)
       return Root;
     I += Copies;
-    const auto [Offset, Terms, Joined] = readWeightedFactor(Ctx, F);
+    const auto [Offset, Terms, ToggleMask] = readWeightedFactor(Ctx, F);
     if (!Offset) {
       if (LongRuns && !Budget.consume(Copies))
         return Root;
@@ -1543,19 +1555,27 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       Parts.append(Copies, F);
       continue;
     }
-    if (Joined) {
-      if (!Budget.consume(Words))
+    int Direction = 1;
+    const auto Op = Ctx.op(F);
+    if (Op != SymOp::Add) {
+      if (!Budget.consume(ToggleMask ? 2 * Words : Words))
         return Root;
       const llvm::APInt Literal(Precision,
                                 Ctx.constWords(Offset).take_front(Words));
-      if (Literal.getActiveBits() > Zeros) {
+      const auto Toggle = ToggleMask
+                              ? Ctx.constWords(ToggleMask).take_front(Words)
+                              : llvm::ArrayRef<uint64_t>{};
+      if (const auto Slope = uniformJoinSlope(Op, Literal, Zeros, Toggle)) {
+        Direction = *Slope;
+      } else {
+        const size_t Nodes =
+            Terms.size() + 2 + (ToggleMask || Op == SymOp::And);
         const size_t NodeBytes = 4 * (sizeof(SymNode) + 4 * sizeof(SymRef) +
                                       Words * sizeof(uint64_t));
-        if (Bytes > Storage ||
-            Terms.size() + 2 > (Storage - Bytes) / NodeBytes ||
-            !Budget.consume((Terms.size() + 2) * (5 + Words)))
+        if (Bytes > Storage || Nodes > (Storage - Bytes) / NodeBytes ||
+            !Budget.consume(Nodes * (5 + Words)))
           return Root;
-        Storage -= Bytes + (Terms.size() + 2) * NodeBytes;
+        Storage -= Bytes + Nodes * NodeBytes;
         Overlaps.emplace_back(F, Copies);
         continue;
       }
@@ -1579,9 +1599,20 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       const unsigned Row = It->second;
       Counts[Row] += Multiplicity;
       Multiplicity = 0;
-      llvm::APInt::tcMultiplyPart(Weights.data() + Row * Words,
-                                  Ctx.constWords(K).data(), Copies, 0, Words,
-                                  Words, true);
+      if (!Direction)
+        break; // This row retains the scalar offset and its multiplicity.
+      auto *Sum = Weights.data() + Row * Words;
+      // Negating the accumulator on both sides subtracts the whole
+      // multi-limb weight without truncating a negative multiplier to 64 bits.
+      if (Direction < 0) {
+        if (!Budget.consume(2 * Words))
+          return Root;
+        llvm::APInt::tcNegate(Sum, Words);
+      }
+      llvm::APInt::tcMultiplyPart(Sum, Ctx.constWords(K).data(), Copies, 0,
+                                  Words, Words, true);
+      if (Direction < 0)
+        llvm::APInt::tcNegate(Sum, Words);
     }
   }
   if (Factors.size() - Parts.size() < limits::kMinResidueProductFactors)

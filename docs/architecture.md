@@ -8247,7 +8247,9 @@ uses that same circular field for every offset at the coordinate. A signed
 extension or concatenation keeps its upper bits when a weight observes them.
 For a scaled product that reads only the low lane of an extension or
 concatenation, the evaluation plan can read that lane directly. A shared
-use that observes more bits keeps the wider value.
+use that observes more bits keeps the wider value. A fixed shift or rotation
+can supply a low word from its source when every observed bit precedes the
+first padding or wrapped bit.
 Repeated long factor calls share a parse result after their complete spelling
 and the applicable nesting depth have been checked.
 A scaled product can also contain several weighted fields per factor. If
@@ -8256,15 +8258,20 @@ the outer scale leaves `p` bits and every weight is divisible by
 surviving weights by field and scalar offset, counts each accepted factor's
 offset once, and retains any factor containing an observable cross term.
 The cofactor calculation supports even offsets without modular division.
-A constant joined to the perturbation by OR or XOR contributes the same
-offset when all of its observed set bits lie below the perturbation. When
-they overlap, the literal supplies the low suffix and the original OR or
-XOR combines the surviving upper fields. Coefficients below the required
-shift keep the complete factor. Independent evaluation of a wide scaled
-product can combine repeated factors by binary exponentiation across their
-multiplicities while checking the original operand values. For a product
-whose coefficient leaves at most one live machine word, the evaluator
-rewrites just that bit slice of its scratch result on each assignment.
+A factor can also set, flip or clear weighted bits with a constant offset
+as `C | D`, `C ^ D` or `C & ~D`. Where the weighted sum `D` can affect
+the product, a uniform mask yields exactly `C`, `C + D` or `C - D` in
+the observed precision. A mixed mask retains its original operation on
+the overlapping field. In the equivalent spelling `C ^ (M & D)`, the
+toggle mask `M` is projected independently of `C`. A weight below the required shift keeps the entire
+factor, including its cross terms.
+Independent evaluation of a wide scaled product can combine repeated
+factors by binary exponentiation. When a sum of weighted words has a common
+power of two and its observed coefficients fit a signed 32-bit word, the
+evaluator accumulates that sum at the required precision using the original
+input slots. A shared use that observes more bits increases this precision.
+For a product whose coefficient leaves at most one live machine word, the
+evaluator rewrites just that bit slice of its scratch result on each assignment.
 For enumerated candidates, a bounded hash spans the measurement grid. A
 matching hash still requires equality of the complete measurement vectors
 before a candidate reaches independent validation.

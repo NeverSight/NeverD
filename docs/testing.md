@@ -4670,6 +4670,12 @@ factors with OR and XOR offsets. The suite covers discarded literal bits,
 live overlap, even offsets and a surviving low-weight product. The 97-factor
 x86 fixture exercises the same joins through the CLI and worker for both
 source views. The independent oracle executes the original multiplications.
+With `--masked-offsets --width 393241 --case 3`, the generator emits
+43,003 factors with AND-complement, XOR and OR offsets. Cases 0 through 3
+exercise uniform masks, partial overlap, an even offset and a factor with
+a lower-weight field. The 113-factor x86 fixture applies the same operations
+to signed bytes. The worker and CLI run both source views and compile the
+results at Clang O0 and O2 for comparison with the original product.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping

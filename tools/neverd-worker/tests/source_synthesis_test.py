@@ -377,7 +377,7 @@ def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0,
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
 
-def distributed_field_elf(degree, *, joined_offsets=False):
+def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False):
     # Each factor reads independently signed bytes of x and y+z. The low
     # weight in one row preserves cross terms with the rest of the product.
     scale = 3 << 16
@@ -393,7 +393,15 @@ def distributed_field_elf(degree, *, joined_offsets=False):
         code += bytes.fromhex("0fbec9 69c9") + struct.pack("<i", left_weight)
         code += bytes.fromhex("448d0416 41c1c8") + bytes([right])
         code += bytes.fromhex("450fbec0 4569c0") + struct.pack("<i", right_weight)
-        if joined_offsets:
+        invert = False
+        if masked_offsets:
+            high = 0xff00 if (i // 3) % 2 else 0
+            if i == degree // 3:
+                high = 0x5500
+            offset = abs(offset) | high | ((1 << 23) if i % 4 == 0 else 0)
+            operator, opcode = (("&", "f7d181e1"), ("^", "81f1"), ("|", "81c9"))[i % 3]
+            invert = operator == "&"
+        elif joined_offsets:
             offset = abs(offset) | ((1 << 23) if i % 3 == 0 else 0)
             if i == degree // 3:
                 offset |= 1 << 8
@@ -405,6 +413,8 @@ def distributed_field_elf(degree, *, joined_offsets=False):
         x_field = f"((((x>>{left})&255U)^128U)-128U)"
         y_field = f"(((((y+z)>>{right})&255U)^128U)-128U)"
         fields = f"({left_weight & 0xffffffff}U*{x_field}+{right_weight & 0xffffffff}U*{y_field})"
+        if invert:
+            fields = "~" + fields
         factors.append(f"({offset & 0xffffffff}U{operator}{fields})")
     code += bytes.fromhex("01f8 01f0 01d0 c3")
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
@@ -772,6 +782,8 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "masked-field-product-113":
+            assert code.count("*") <= (9 if llvm else 12), text
         elif kind == "joined-field-product-97":
             assert code.count("*") <= (13 if llvm else 14), text
         elif kind == "distributed-field-product-73":
@@ -980,6 +992,7 @@ if __name__ == "__main__":
             ("funnel-perturbation-masked-wrap-103", *masked_join_elf(103, wrapped=True)),
             ("distributed-field-product-73", *distributed_field_elf(73)),
             ("joined-field-product-97", *distributed_field_elf(97, joined_offsets=True)),
+            ("masked-field-product-113", *distributed_field_elf(113, masked_offsets=True)),
             ("funnel-perturbation-composed-product-283",
              *variable_field_elf(283, terminal_period=3, repeated_offsets=True,
                                  raw_rotations=True, composed_rotations=True)),
