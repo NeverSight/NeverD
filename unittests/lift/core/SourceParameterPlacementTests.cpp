@@ -20,6 +20,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <iterator>
@@ -93,6 +94,70 @@ constexpr auto IntegerReg = SourceABICarrierKind::IntegerRegister;
 constexpr auto FloatingReg = SourceABICarrierKind::FloatingRegister;
 constexpr Arch X64 = Arch::X64;
 constexpr BinaryFormat ELF = BinaryFormat::ELF;
+
+constexpr Arch ARM32 = Arch::ARM;
+constexpr BinaryFormat COFF = BinaryFormat::COFF;
+
+TEST(SourceParameterPlacement, AAPCSPairsADoublewordAtAnEvenRegister) {
+  // f(int a, long long b, int c): b skips r1 for r2:r3, its low word first
+  // (C.3, C.4), and c, with no core register left, takes the first stack
+  // slot.
+  const auto P =
+      place(ARM32, ELF, intType(4), {intType(4), intType(8), intType(4)});
+  ASSERT_EQ(P.Parameters.size(), 3u);
+  ASSERT_EQ(P.Parameters[0].size(), 1u);
+  expectRegister(P.Parameters[0][0], IntegerReg, integerRegister(ARM32, ELF, 0),
+                 0, 4);
+  ASSERT_EQ(P.Parameters[1].size(), 2u);
+  expectRegister(P.Parameters[1][0], IntegerReg, integerRegister(ARM32, ELF, 2),
+                 0, 4);
+  expectRegister(P.Parameters[1][1], IntegerReg, integerRegister(ARM32, ELF, 3),
+                 4, 4);
+  ASSERT_EQ(P.Parameters[2].size(), 1u);
+  expectStack(P.Parameters[2][0], stackBase(ARM32, ELF), 4);
+}
+
+TEST(SourceParameterPlacement, AAPCSNeverSplitsADoublewordNorBackFillsACore) {
+  // f(int, int, int, long long d, int e): d does not fit r3 and goes on the
+  // stack whole; e follows it there, although r3 is free (C.6-C.8).
+  const auto P =
+      place(ARM32, ELF, intType(4),
+            {intType(4), intType(4), intType(4), intType(8), intType(4)});
+  ASSERT_EQ(P.Parameters.size(), 5u);
+  expectRegister(P.Parameters[2][0], IntegerReg, integerRegister(ARM32, ELF, 2),
+                 0, 4);
+  ASSERT_EQ(P.Parameters[3].size(), 1u);
+  expectStack(P.Parameters[3][0], stackBase(ARM32, ELF), 8);
+  ASSERT_EQ(P.Parameters[4].size(), 1u);
+  expectStack(P.Parameters[4][0], stackBase(ARM32, ELF) + 8, 4);
+  // A doubleword after one stack word starts at the next 8-byte slot.
+  const auto Q = place(
+      ARM32, ELF, NdType::makeVoid(),
+      {intType(4), intType(4), intType(4), intType(4), intType(4), intType(8)});
+  ASSERT_EQ(Q.Parameters.size(), 6u);
+  expectStack(Q.Parameters[4][0], stackBase(ARM32, ELF), 4);
+  expectStack(Q.Parameters[5][0], stackBase(ARM32, ELF) + 8, 8);
+}
+
+TEST(SourceParameterPlacement, AAPCSVFPBackFillsASingleADoubleSkipped) {
+  // Windows on ARM passes f(float a, double b, float c, int n) with a in
+  // s0, b in d1, c back in s1 and n in r0 (C.1).
+  const auto P = place(ARM32, COFF, intType(4),
+                       {floatType(4), floatType(8), floatType(4), intType(4)});
+  ASSERT_EQ(P.Parameters.size(), 4u);
+  expectRegister(P.Parameters[0][0], FloatingReg, armreg::D(0), 0, 4);
+  expectRegister(P.Parameters[1][0], FloatingReg, armreg::D(1), 0, 8);
+  expectRegister(P.Parameters[2][0], FloatingReg, armreg::D(0) + 4, 0, 4);
+  expectRegister(P.Parameters[3][0], IntegerReg,
+                 integerRegister(ARM32, COFF, 0), 0, 4);
+}
+
+TEST(SourceParameterPlacement, AAPCSPlacesNoFloatWhereTheVariantIsUnknown) {
+  // An ELF image's header says which variant it calls with, which these
+  // rules do not read: placement stops at the double.
+  const auto P = place(ARM32, ELF, intType(4), {intType(4), floatType(8)});
+  EXPECT_EQ(P.Parameters.size(), 1u);
+}
 
 TEST(SourceParameterPlacement, SysVPassesIntegersAndFloatsInTheirOwnRegisters) {
   const auto P = place(X64, ELF, floatType(8), {floatType(8), intType(4)});

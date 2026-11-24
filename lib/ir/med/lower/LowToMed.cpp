@@ -529,6 +529,22 @@ void LowToMedConverter::bindIntegerCall(
       MOp.CalleeStackArgs = Signature.Parameters.size();
       MOp.addInput(loadCallStackArgument(Block, LOp, Parameter.StackOffset,
                                          Parameter.Bytes, TailCall));
+    } else if (TargetArch == Arch::ARM && Parameter.Bytes == 8) {
+      // An AAPCS doubleword in an even-odd pair, the low word in the first
+      // register (fixedIntegerCallArguments): one operand of both.
+      MedOp Join;
+      Join.Opcode = NdOp::CONCAT;
+      Join.Output.Kind = MedVar::Temp;
+      Join.Output.Id = allocVarId();
+      Join.Output.Size = 8;
+      Join.Output.TheArch = TargetArch;
+      Join.Addr = LOp.Addr;
+      Join.OriginSeq = LOp.Seq;
+      Join.addInput(ndVarToMedVar(NdVar::reg(Parameter.Register + 4, 4)));
+      Join.addInput(ndVarToMedVar(NdVar::reg(Parameter.Register, 4)));
+      MOp.addInput(Join.Output);
+      Block.Ops.push_back(std::move(Join));
+      MOp.CalleeRegisterArgs += 2;
     } else {
       MOp.addInput(ndVarToMedVar(NdVar::reg(
           Parameter.Register, TargetArch == Arch::AArch64

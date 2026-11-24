@@ -27137,6 +27137,20 @@ integer identity from a NaN payload constant in the same module, across all
 six ABI/byte-order targets and classic/micro attributes. Only the selected
 constant body requires the GCC compatibility prelude.
 
+`SourceParameterPlacement.AAPCSPairsADoublewordAtAnEvenRegister`,
+`AAPCSNeverSplitsADoublewordNorBackFillsACore`,
+`AAPCSVFPBackFillsASingleADoubleSkipped` and
+`AAPCSPlacesNoFloatWhereTheVariantIsUnknown` place ARM signatures: a long long
+skips r1 for r2:r3, one that no longer fits goes on the stack whole and later
+arguments follow it there, a stacked doubleword starts at the next 8-byte
+slot, Windows on ARM back-fills a float into s1, and an ELF signature's float
+ends the placement. `ARM32_ImportCalls.ADoublewordArgumentTakesAnEvenOddPair`
+decompiles a Thumb PE function that calls `__stdio_common_vfprintf` through
+its thunk with the options 1 and 2 in r0 and r1: the call passes the options
+`(uint64_t)2 << 32 | 1`, then the stream, the format, and the zero locale and
+`va_list` the function stores. It fails where the call is matched to the
+words one register each.
+
 `SourceParameterPlacement.MIPSScalarOnlyCallsKeepCompleteSignatures` covers
 integer, pointer and void signatures without any floating parameters in all
 six MIPS ABI/byte-order profiles. `MIPSScalarCalls` checks integer/pointer/void

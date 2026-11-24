@@ -27,7 +27,8 @@ std::optional<FixedIntegerCallArguments>
 neverd::fixedIntegerCallArguments(Arch A, BinaryFormat F,
                                   const TypeRef &ReturnType,
                                   llvm::ArrayRef<TypeRef> Parameters) {
-  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A)) ||
+  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 &&
+       A != Arch::ARM && !isMIPS(A)) ||
       !ReturnType ||
       Parameters.size() > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
     return std::nullopt;
@@ -50,6 +51,25 @@ neverd::fixedIntegerCallArguments(Arch A, BinaryFormat F,
   FixedIntegerCallArguments Result;
   for (size_t I = 0; I < Parameters.size(); ++I) {
     const auto &Pieces = Placement->Parameters[I];
+    // AAPCS passes a 64-bit integer in an even-odd register pair, its low
+    // word in the first: one parameter of both, which a call binds joined
+    // (LowToMedConverter::bindIntegerCall).
+    if (A == Arch::ARM && archLittleEndian(A) && Parameters[I]->Size == 8 &&
+        Pieces.size() == 2 &&
+        llvm::none_of(Pieces,
+                      [](const auto &Piece) {
+                        return Piece.Indirect ||
+                               Piece.Location.Kind !=
+                                   SourceABICarrierKind::IntegerRegister ||
+                               Piece.Location.ValueBytes != 4;
+                      }) &&
+        Pieces[0].Offset == 0 && Pieces[1].Offset == 4 &&
+        Pieces[1].Location.RegisterOffset ==
+            Pieces[0].Location.RegisterOffset + 4) {
+      Result.Parameters.push_back({SourceABICarrierKind::IntegerRegister,
+                                   Pieces[0].Location.RegisterOffset, 0, 8});
+      continue;
+    }
     if (Pieces.size() != 1 || Pieces[0].Indirect || Pieces[0].Offset ||
         Pieces[0].Location.ValueBytes != Parameters[I]->Size)
       return std::nullopt;

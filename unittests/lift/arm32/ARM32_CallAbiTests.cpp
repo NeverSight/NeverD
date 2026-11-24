@@ -1,6 +1,15 @@
 #include "HighCHostExecution.h"
 #include "NeverDLiftFixture.h"
 
+#include "neverd/backend/c/CEmitterOptions.h"
+#include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/FunctionDiscovery.h"
+#include "neverd/pipeline/Pipeline.h"
+
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/raw_ostream.h"
+
 #include <fstream>
 #include <iterator>
 #include <regex>
@@ -431,4 +440,125 @@ NK int only_tested(int a, int b) { __asm__("push {r4, r9, lr}\n\ttst r0, #1\n\tl
   const std::string Tested = definitionOf(C, "only_tested");
   ASSERT_FALSE(Tested.empty()) << C;
   EXPECT_EQ(Tested.find("__builtin_trap"), std::string::npos) << Tested;
+}
+
+using namespace neverd;
+
+namespace {
+/// A Thumb PE image of \p Code at 0x401000, which starts with the thunk of
+/// the import \p Imported, `movw ip, #0x2000; movt ip, #0x40; ldr.w pc,
+/// [ip]`, registered as the loader registers it, and the function \p Name
+/// at \p Entry when given.
+BinaryImage thumbThunkImage(std::vector<uint8_t> Code, const char *Imported,
+                            va_t Entry = 0, const char *Name = nullptr) {
+  constexpr va_t Text = 0x401000, Slot = 0x402000;
+  const std::vector<uint8_t> Thunk = {0x42, 0xF2, 0x00, 0x0C, 0xC0, 0xF2,
+                                      0x40, 0x0C, 0xDC, 0xF8, 0x00, 0xF0};
+  std::copy(Thunk.begin(), Thunk.end(), Code.begin());
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Mode = InstructionMode::Thumb;
+  Img.Bits = Bitness::Bits32;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x400000;
+  Img.Entry = Entry ? Entry : Text;
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = Text;
+  Seg.Size = Seg.FileSz = Code.size();
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data = std::move(Code);
+  Img.Segments.push_back(std::move(Seg));
+  Segment Idata;
+  Idata.Name = ".idata";
+  Idata.VA = Slot;
+  Idata.Size = Idata.FileSz = 4;
+  Idata.Data.resize(4);
+  Idata.Flags = SegmentFlags::Readable;
+  Img.Segments.push_back(std::move(Idata));
+  Import Imp;
+  Imp.Module = "api-ms-win-crt-stdio-l1-1-0.dll";
+  Imp.Name = Imported;
+  Imp.IATAddr = Slot;
+  Img.Imports.push_back(std::move(Imp));
+  if (Entry) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    Img.Symbols.push_back(std::move(Function));
+  }
+  scanImportThunks(Img);
+  EXPECT_EQ(Img.ImportStubIndices.count(Text), 1u);
+  return Img;
+}
+
+/// The UCRT's header declaration of `__stdio_common_vfprintf`, which a
+/// Windows image's calls of it follow.
+class StdioHeader final : public NullDebugContext {
+public:
+  std::optional<FunctionSym>
+  resolvePrototype(llvm::StringRef Name) const override {
+    if (Name != "__stdio_common_vfprintf")
+      return std::nullopt;
+    FunctionSym Function;
+    Function.Name = Name.str();
+    Function.ReturnType = NdType::makeInt(4, true);
+    Function.CallConv = DebugCallConv::Cdecl;
+    Function.PrototypeFromHeader = true;
+    // An ARM pointer is four bytes.
+    const auto Pointer = [] {
+      TypeRef Type = NdType::makePtr();
+      Type->Size = 4;
+      return Type;
+    };
+    Function.Params = {{"_Options", NdType::makeInt(8, false)},
+                       {"_Stream", Pointer()},
+                       {"_Format", Pointer()},
+                       {"_Locale", Pointer()},
+                       {"_ArgList", Pointer()}};
+    return Function;
+  }
+};
+
+/// The HighC of \p Img, whose imports \p Debug declares.
+std::string thumbHighC(const BinaryImage &Img, DebugContext &Debug) {
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  const PipelineResult Result = Pipeline().run(Img, Context, Options, &Debug);
+  EXPECT_TRUE(Result.Success) << Result.Error;
+  CEmitterOptions C;
+  C.TheArch = Img.Arch;
+  C.Format = Img.Format;
+  C.Image = &Img;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  EXPECT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, C, &Debug));
+  Out.flush();
+  return Source;
+}
+} // namespace
+
+// AAPCS passes a 64-bit integer in an even-odd register pair, its low word
+// first.  `__stdio_common_vfprintf(unsigned __int64 options, FILE *stream,
+// ...)` takes the options in r0:r1 and the stream in r2: matched to its
+// parameters one register each, a call passed the options' high word as
+// the stream and dropped the va_list.
+//   f: push {r4, r5, r7, lr}; sub sp, #8; movs r4, #0; str r4, [sp];
+//      str r4, [sp, #4]; mov r2, r0; mov r3, r1; movs r0, #1; movs r1, #2;
+//      bl thunk; add sp, #8; pop {r4, r5, r7, pc}
+TEST(ARM32_ImportCalls, ADoublewordArgumentTakesAnEvenOddPair) {
+  std::vector<uint8_t> Code(0x40, 0x00);
+  const std::vector<uint8_t> F = {0xB0, 0xB5, 0x82, 0xB0, 0x00, 0x24, 0x00,
+                                  0x94, 0x01, 0x94, 0x02, 0x46, 0x0B, 0x46,
+                                  0x01, 0x20, 0x02, 0x21, 0xFF, 0xF7, 0xED,
+                                  0xFF, 0x02, 0xB0, 0xB0, 0xBD};
+  std::copy(F.begin(), F.end(), Code.begin() + 0x10);
+  const BinaryImage Img =
+      thumbThunkImage(Code, "__stdio_common_vfprintf", 0x401010, "f");
+  StdioHeader Header;
+  const std::string Source = thumbHighC(Img, Header);
+  EXPECT_NE(Source.find("__stdio_common_vfprintf(((uint64_t)2 << 32 | 1), "
+                        "(FILE *)arg0, (const char *)arg1, 0, 0)"),
+            std::string::npos)
+      << Source;
 }

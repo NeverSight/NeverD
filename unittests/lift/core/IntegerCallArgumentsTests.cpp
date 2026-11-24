@@ -16,6 +16,7 @@
 #include "neverd/libc/LibCFixedIntegerArguments.h"
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/libc/LibCVariadicArguments.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 
 using namespace neverd;
 
@@ -107,8 +108,23 @@ TEST(FixedIntegerCallArguments, RequiresCompleteOrdinaryDeclarations) {
   Function.ReturnType = NdType::makeInt(16);
   EXPECT_FALSE(Supported());
   Function.ReturnType = NdType::makeInt(4);
-  EXPECT_FALSE(
-      libc::fixedIntegerCallArguments(Function, Arch::ARM, BinaryFormat::COFF));
+  // AAPCS places the five doublewords in r0:r1, r2:r3 and three 8-byte
+  // stack slots: a pair is one parameter of its first register.
+  const auto ARM =
+      libc::fixedIntegerCallArguments(Function, Arch::ARM, BinaryFormat::COFF);
+  ASSERT_TRUE(ARM);
+  ASSERT_EQ(ARM->Parameters.size(), 5u);
+  using Parameter = FixedIntegerCallArguments::Parameter;
+  EXPECT_EQ(
+      ARM->Parameters[0],
+      (Parameter{SourceABICarrierKind::IntegerRegister, armreg::R0, 0, 8}));
+  EXPECT_EQ(
+      ARM->Parameters[1],
+      (Parameter{SourceABICarrierKind::IntegerRegister, armreg::R2, 0, 8}));
+  for (unsigned I = 2; I != 5; ++I)
+    EXPECT_EQ(ARM->Parameters[I],
+              (Parameter{SourceABICarrierKind::Stack, 0,
+                         static_cast<int64_t>(8 * (I - 2)), 8}));
 }
 
 TEST(FixedIntegerCallArguments, I386UsesDeclaredStackWidthsWithoutRegparm) {

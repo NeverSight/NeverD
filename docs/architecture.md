@@ -5295,7 +5295,7 @@ Unsupported record carriers fail explicitly. This does not add ARM32 record
 placement or general mixed floating record-call support.
 
 Complete scalar integer/pointer declarations bind through
-`fixedIntegerCallArguments` before SSA on x86, x64 and AArch64. This includes
+`fixedIntegerCallArguments` before SSA on x86, x64, AArch64 and ARM. This includes
 register-only and empty signatures: incidental register setup and frame stores
 cannot enlarge an authenticated fixed argument list. The same operand contract
 owns explicit stack loads and declared byte widths, and both source routes
@@ -5314,6 +5314,20 @@ body cannot erase a parameter its final callee does not read.
 Internal Windows routines authenticated by the platform prototype registry
 publish the same full operand contract as imported routines. Register-read
 and stack-arity summaries alone cannot enforce this boundary in either emitter.
+
+ARM places a declaration by AAPCS (`placeAAPCS32`): integers and pointers in
+r0-r3 and then 4-byte stack slots, a 64-bit integer in an even-odd register
+pair, its low word first, or in an 8-byte aligned stack slot, never in one
+register and the stack, and no core register after an argument the stack
+takes. The VFP variant's floats and doubles take s0-s15, a float back-filling
+the single register a double skipped, for COFF alone: an ELF image's header
+says which variant it calls with, and Apple's armv7 calls with the base one.
+A pair is one fixed parameter, which `bindIntegerCall` binds as its two
+registers joined. Matched to its words one register each,
+`__stdio_common_vfprintf(unsigned __int64, FILE *, ...)` took the options'
+high word as its stream and lost its `va_list` in every MSVC ARM printf
+wrapper. Records are not placed, and floating declarations bind no ARM
+operands yet: `floatingCallArguments` takes no ARM.
 
 Selected platform headers have their own prototype provenance, separate from
 the host C-library inclusion policy. Windows SDK records therefore use the

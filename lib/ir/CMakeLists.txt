@@ -16,6 +16,7 @@ add_neverd_component_library(NeverDIR
   SourceParameterPlacement.cpp
   MIPS/SourceParameterPlacementMIPS.cpp
   AArch64/SourceParameterPlacementAAPCS64.cpp
+  ARM/SourceParameterPlacementAAPCS32.cpp
   X86/SourceParameterPlacementI386.cpp
   X86/SourceParameterPlacementSysV.cpp
   X86/SourceParameterPlacementWin64.cpp

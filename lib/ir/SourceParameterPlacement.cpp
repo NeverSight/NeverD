@@ -169,6 +169,8 @@ neverd::placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                                    : placeSysV(TRI, F, ReturnType, ParamTypes);
   case Arch::AArch64:
     return placeAAPCS64(TRI, F, ReturnType, ParamTypes, Variadic);
+  case Arch::ARM:
+    return placeAAPCS32(TRI, F, ReturnType, ParamTypes);
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64O32:

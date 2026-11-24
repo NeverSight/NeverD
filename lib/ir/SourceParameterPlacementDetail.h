@@ -51,6 +51,11 @@ std::optional<SourceParameterPlacement>
 placeAAPCS64(const TargetRegInfo &TRI, BinaryFormat F,
              const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> ParamTypes,
              bool Variadic = false);
+/// AAPCS scalar placement (SourceParameterPlacementAAPCS32.cpp): the VFP
+/// variant's floating registers for COFF only, and no records.
+std::optional<SourceParameterPlacement>
+placeAAPCS32(const TargetRegInfo &TRI, BinaryFormat F,
+             const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> ParamTypes);
 std::optional<SourceParameterPlacement>
 placeMIPS(const TargetRegInfo &TRI, BinaryFormat F, const TypeRef &ReturnType,
           llvm::ArrayRef<TypeRef> ParamTypes,
