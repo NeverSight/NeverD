@@ -286,6 +286,41 @@ void checkFullWidthOracle(SymContext &Ctx, const Fixture &F, SymRef Result) {
   EXPECT_TRUE(Nonzero);
 }
 
+TEST(SymMBALazyPolynomial, WeightsShareCircularFieldsAcrossDifferentOffsets) {
+  for (bool ObserveSign : {false, true}) {
+    SymContext C;
+    const std::string Input =
+        "(128*(1+96*ror(x,14))*(3+128*zext(extract(x,14,2),16))"
+        "*(5+32*zext(extract(rol(x,2),0,4),16))*(7+" +
+        std::string(ObserveSign ? "32" : "128") +
+        "*sext(extract(x,14,2),16))*(9+32*ror(x,30))"
+        "*(1+384*ror(rol(x,7),5)))";
+    const auto Parsed = parseSymExpr(C, Input, 16);
+    ASSERT_TRUE(Parsed.ok()) << Parsed.Error;
+    const auto Result = simplifyMBADeep(C, Parsed.Root);
+    ASSERT_TRUE(Result.Changed);
+    if (!ObserveSign) {
+      const auto Compact =
+          parseSymExpr(C, "concat(3#4*~extract(ror(x,14),0,4),2176#12)", 16);
+      ASSERT_TRUE(Compact.ok());
+      EXPECT_LE(C.readabilityCost(Result.Expr),
+                C.readabilityCost(Compact.Root));
+    }
+    SymEvalPlan Plan(C, Result.Expr);
+    for (uint32_t X = 0; X < 65536; ++X) {
+      const uint32_t Rotated = ((X >> 14) | (X << 2)) & 0xffff;
+      const uint32_t Suffix = X >> 14;
+      const uint32_t Signed = (Suffix ^ 2u) - 2u;
+      const uint32_t Expected = 128u * (1 + 96 * Rotated) * (3 + 128 * Suffix) *
+                                (5 + 32 * (Rotated & 15)) *
+                                (7 + (ObserveSign ? 32 : 128) * Signed) *
+                                (9 + 32 * Rotated) * (1 + 384 * Rotated);
+      const std::array<uint64_t, 1> Args{X};
+      ASSERT_EQ(Plan.evalU64(Args), Expected & 0xffff) << X;
+    }
+  }
+}
+
 TEST(SymMBALazyPolynomial, DenseCarryEmissionKeepsMeasuredWorkCeilings) {
   // Sharing the parity guard and evaluating odd squares at reduced precision
   // removes repeated bit-level work. Preserve the complete public-entry cost

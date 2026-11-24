@@ -17,6 +17,7 @@
 #ifndef NEVERD_SYMBOLIC_PARSE_SYMPARSEDETAIL_H
 #define NEVERD_SYMBOLIC_PARSE_SYMPARSEDETAIL_H
 
+#include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymParse.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -79,6 +80,7 @@ public:
   explicit Lexer(llvm::StringRef T) : Text(T) { advance(); }
 
   llvm::StringRef parenthesizedSpelling(size_t Begin) const;
+  llvm::StringRef from(size_t Begin) const { return Text.drop_front(Begin); }
   void skipSpelling(llvm::StringRef Spelling) {
     Pos = Spelling.end() - Text.begin();
     advance();
@@ -141,7 +143,7 @@ private:
   SymRef reuseProductTerm(size_t Begin, Parse ParseNormally) {
     const auto Spelling = Lex.parenthesizedSpelling(Begin);
     if (Spelling.empty())
-      return ParseNormally();
+      return reuseLongProductTerm(Begin, ParseNormally);
     const auto It = ProductTerms.find(Spelling);
     if (It != ProductTerms.end() && Depth <= It->second.Depth) {
       Lex.skipSpelling(Spelling);
@@ -150,6 +152,30 @@ private:
     const SymRef Result = ParseNormally();
     if (Result)
       ProductTerms[Spelling] = {Result, Depth};
+    return Result;
+  }
+
+  // Longer fields often share a prefix. Only an exact match through the
+  // closing delimiter of a previously validated field can skip the grammar.
+  template <typename Parse>
+  SymRef reuseLongProductTerm(size_t Begin, Parse ParseNormally) {
+    const auto Input = Lex.from(Begin);
+    const auto Prefix =
+        Input.take_front(limits::symbolic::kSymParseProductSpellingBytes);
+    const auto It = LongProductTerms.find(Prefix);
+    if (It != LongProductTerms.end() && Depth <= It->second.Term.Depth) {
+      const auto Saved = It->second.Spelling;
+      if (Input.drop_front(Prefix.size())
+              .starts_with(Saved.drop_front(Prefix.size()))) {
+        Lex.skipSpelling(Input.take_front(Saved.size()));
+        return It->second.Term.Value;
+      }
+    }
+    const auto Result = ParseNormally();
+    if (Result) {
+      const auto Full = Input.take_front(Lex.peek().Offset - Begin).rtrim();
+      LongProductTerms[Prefix] = {Full, {Result, Depth}};
+    }
     return Result;
   }
   SymRef parseCall(const Token &Name);
@@ -241,6 +267,11 @@ private:
     size_t Depth;
   };
   llvm::DenseMap<llvm::StringRef, ParsedTerm> ProductTerms;
+  struct LongTerm {
+    llvm::StringRef Spelling;
+    ParsedTerm Term;
+  };
+  llvm::DenseMap<llvm::StringRef, LongTerm> LongProductTerms;
   SymContext &Ctx;
   Lexer Lex;
   uint32_t Width;
