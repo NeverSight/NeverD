@@ -118,6 +118,13 @@ void runTaskWorkers(unsigned Count, void (*Body)(void *), void *Context) {
     runWithLargeStackThreads(1, Nested);
     return;
   }
+  const bool ReuseCaller = hasSpareWorkerStack();
+  if (Count == 1 && ReuseCaller) {
+    // A serial outer loop occupies no pool worker. Its independent inner
+    // batches can use the scheduler, which checks their remaining headroom.
+    Body(Context);
+    return;
+  }
   // Keep workers available between synchronous pipeline phases.
   static SchedulerLifetime Lifetime;
   auto Coordinate = [&] {
@@ -168,7 +175,7 @@ void runTaskWorkers(unsigned Count, void (*Body)(void *), void *Context) {
   };
   // The CLI already has a 128 MiB stack. Reuse that headroom; small SDK
   // callers still receive a fresh coordinator because wait() executes tasks.
-  if (hasSpareWorkerStack())
+  if (ReuseCaller)
     Coordinate();
   else
     runWithLargeStackThreads(1, Coordinate);
