@@ -26421,6 +26421,10 @@ The four `mips_ddiv*` kernels return the quotient or remainder of a signed
 or unsigned doubleword division. Their edge cases include MIN64/-1, operands
 with significant high words, and signed remainders of both signs. The classic
 n64 runner also checks seeded random inputs against Python integer arithmetic.
+`MicroMIPS64.DoublewordProductsWriteBothAccumulatorHalves` decodes the GNU
+`dmult` and `dmultu` encodings in n32 and n64, in both byte orders. It checks
+the operand registers and both halves of a product whose high word depends on
+signedness.
 For physical microMIPS64, run `micro64-merge-store-roundtrip.py` from the same
 directory with `--neverd`, `--cc` (MIPS64 GNU C), `--assembler`, `--linker` and
 `--simulator` (GNU sim for `mipsisa64r2-mti-elf`). It checks the function tags
