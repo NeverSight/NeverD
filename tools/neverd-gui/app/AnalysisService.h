@@ -218,7 +218,8 @@ public:
   }
   /// Prepare one native entry in the same replica later source reads use.
   /// This is speculative read-only work; context changes cancel it normally.
-  void prefetchSource(quint64 address);
+  /// A navigation read uses an idle, loaded replica and an existing entry.
+  void prefetchSource(quint64 address, bool listedOnly = false);
   /// Finish restoring and preparing the reusable source executor. This read
   /// is handled locally after restore, without decompiling an arbitrary entry.
   void prepareViews(QObject *owner, QueryService::Completion complete);

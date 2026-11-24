@@ -182,9 +182,13 @@ void DisassemblyView::navigate(Address address, bool record,
         listing_->jumpTo(address);
       emit locationChanged(address);
     }
-  } else {
-    if (!listing_->revealItem(address))
-      listing_->jumpTo(address);
+  } else if (!listing_->revealItem(address)) {
+    if (record) {
+      const auto *region = space_.regionOf(address);
+      if (region && region->exec)
+        session_.prefetchListedSource(address);
+    }
+    listing_->jumpTo(address);
   }
   updateStatus();
 }

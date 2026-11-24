@@ -10266,6 +10266,10 @@ private slots:
     QStringList diagnostics;
     connect(&pool, &AnalysisPool::diagnostic, this,
             [&](const QString &text) { diagnostics.append(text); });
+    // A disassembly jump only borrows a worker already serving the project.
+    pool.prefetchSource(Base, /*listedOnly=*/true);
+    QVERIFY(!pool.replicaStarted());
+    QVERIFY(!pool.externalQueries().hasPending());
     pool.prefetchSource(Base);
     QTRY_VERIFY_WITH_TIMEOUT(
         diagnostics.join('\n').contains("fixture parallel decompile " +
