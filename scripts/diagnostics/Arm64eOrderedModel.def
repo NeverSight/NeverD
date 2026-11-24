@@ -1,4 +1,4 @@
-//===- Arm64eOrderedModel.def - LRCPC3 quadword model controls -*- C -*-===//
+//===- Arm64eOrderedModel.def - Ordered memory model controls -*- C -*-===//
 //
 // NeverD Decompiler
 //
@@ -16,12 +16,13 @@
 #define ORDERED_MODE_A 2
 #define ORDERED_QUAD_BYTES 16
 #define ORDERED_LANES 2
-#define ORDERED_CASE_COUNT 5
+#define ORDERED_CASE_COUNT 115
+#define ORDERED_LSE2_SHIFT 32
+#define ORDERED_LSE2_LEVEL 1
 #define ORDERED_GUARD_QUADS 3
 #define ORDERED_SOURCE_COUNT 2
-#define ORDERED_DIRECTION_COUNT 2
 #define ORDERED_LAYOUT_ERROR "ordered abort record layout"
-#define ORDERED_CASE_ERROR "ordered displacement cases"
+#define ORDERED_CASE_ERROR "ordered model inventory"
 #define ORDERED_STORE_LOW 0xfedcba987654b381ULL
 #define ORDERED_STORE_HIGH 0x91a2b3c4d5e6f708ULL
 #define ORDERED_DATA_STEP 13
@@ -40,21 +41,13 @@
 #define ORDERED_FAR_SLOT 16
 #define ORDERED_WORD_SLOT 24
 #define ORDERED_REGISTER_MASK 0x3ff
-#define ORDERED_LOAD_ASM "ldapur %q0, [%1, %2]"
-#define ORDERED_STORE_ASM "stlur %q0, [%1, %2]"
-#define ORDERED_SYMBOL_IMPL(Word) original_immediate_memory_##Word
-#define ORDERED_SYMBOL(Word) ORDERED_SYMBOL_IMPL(Word)
-#define ORDERED_WORD_IMPL(Word) 0x##Word##U
-#define ORDERED_WORD(Word) ORDERED_WORD_IMPL(Word)
-
-// Original encodings for Q0 and X1. The reference assembler chooses its own
-// registers. The faulting instruction must retain the complete signed imm9.
-#define ORDERED_CASES(M)                                                       \
-  M(0, -256, 1DD00820, 1D900820)                                               \
-  M(1, -1, 1DDFF820, 1D9FF820)                                                 \
-  M(2, 0, 1DC00820, 1D800820)                                                  \
-  M(3, 1, 1DC01820, 1D801820)                                                  \
-  M(4, 255, 1DCFF820, 1D8FF820)
+#define ORDERED_INSTRUCTION ".inst %c[encoding]"
+#define ORDERED_BASE_REGISTER "x1"
+#define ORDERED_DATA_REGISTER "x0"
+#define ORDERED_VECTOR_REGISTER "v0"
+#define ORDERED_REGISTER_FIELDS 0x20
+#define ORDERED_REGISTER_ERROR "ordered fixture must use Rn=1 and Rt=0"
+#define ORDERED_LSE2_ERROR "ORDERED-MODEL LSE2 unavailable\n"
 
 #define ORDERED_FEATURE_ERROR "ORDERED-MODEL LRCPC3 unavailable\n"
 #define ORDERED_CONTROL_ERROR "ORDERED-MODEL SCTLR alignment control mismatch\n"
@@ -62,4 +55,19 @@
 #define ORDERED_01_PASS "ORDERED-MODEL compared EL1 and EL0 A=0 nAA=1\n"
 #define ORDERED_10_PASS "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=0\n"
 #define ORDERED_11_PASS "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=1\n"
-#define ORDERED_PASS "ORDERED-MODEL passed quadword comparisons\n"
+#define ORDERED_PASS "ORDERED-MODEL passed GPR and SIMD comparisons\n"
+
+#define ORDERED_NATIVE_LSE2 "hw.optional.arm.FEAT_LSE2"
+#define ORDERED_NATIVE_LRCPC2 "hw.optional.arm.FEAT_LRCPC2"
+#define ORDERED_NATIVE_X_LOAD 0xd9400020U
+#define ORDERED_NATIVE_Q_STORE 0x1d800820U
+#define ORDERED_NATIVE_Q_LOAD 0x1dc00820U
+#define ORDERED_NATIVE_SKIP 77
+#define ORDERED_NATIVE_ATOMIC_ERROR "Darwin signal observations must be lock-free"
+#define ORDERED_NATIVE_UNAVAILABLE "ORDERED-NATIVE LSE2 or LRCPC2 unavailable"
+#define ORDERED_NATIVE_GPR "ORDERED-NATIVE GPR, aligned Q instructions unavailable"
+#define ORDERED_NATIVE_GPR_SIMD "ORDERED-NATIVE GPR and SIMD"
+#define ORDERED_NATIVE_NATURAL "ORDERED-NATIVE natural alignment"
+#define ORDERED_NATIVE_GRANULE "ORDERED-NATIVE within one granule"
+#define ORDERED_NATIVE_UNALIGNED "ORDERED-NATIVE unrestricted Normal-memory alignment"
+#define ORDERED_NATIVE_MISMATCH "%s differs at comparison %d\n"

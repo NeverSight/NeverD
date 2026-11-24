@@ -175,6 +175,10 @@ public:
   /// applies only to this operation and does not carry into a later step.
   bool stepWithAArch64OrderedQuadwordSCTLR(const LowOp &Op, uint64_t SCTLR);
 
+  /// Step a supported GPR or SIMD ordered unscaled access to Normal memory
+  /// with FEAT_LSE2 and the caller's effective SCTLR for this instruction.
+  bool stepWithAArch64LSE2OrderedSCTLR(const LowOp &Op, uint64_t SCTLR);
+
   /// Execute one MIPS32 RDHWR/DI/EI or EHB with a caller-authenticated context.
   /// A successful RDHWR consumes the observation. Pending hazards require EHB
   /// before another system observation; SYNC does not clear them. Failed
@@ -354,8 +358,14 @@ private:
   bool storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value,
                    bool Wrap32 = false);
 
+  enum class OrderedAlignment {
+    Natural,
+    UnalignedQuadword,
+    WithinGranule,
+    Any
+  };
   bool stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
-                bool UnalignedOrderedQuadword = false);
+                OrderedAlignment Alignment = OrderedAlignment::Natural);
   bool executeArith(const LowOp &Op);
   bool executeFloatArith(const LowOp &Op);
   bool executeFloatConvert(const LowOp &Op);

@@ -2115,6 +2115,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NeverDSymConditionalStoreTests` 覆盖绝对及符号存储区的有界字节效果、双端序、重叠、环绕、未知时期和精确预算。执行器测试包含 STORE、标量原子 ADD/XCHG/CMPXCHG、地址/值/输出寄存器重叠、Old 延后发布、非法形状及拒绝时 havoc。`SymStorePreservation` 以显式栈帧保留契约检查同一原子写入路径，以及精确和少一单位预算。无描述符的普通执行行为不变；这些检查不认证访问权限或完整程序恢复。
 
+`NeverDSymConditionalStoreTests` 还覆盖已证明保留与指定条件区域并存时的部分字节别名、未跟踪区域的未知世代、精确与少一单位预算、非法区域，以及原子旧值的发布或拒绝。
+
 
 `AbsoluteMemoryFactsTests.inc` 覆盖绝对地址目标跨节点传递、冲突汇合、部分重叠及未知别名写入，以及两种字节序和启用/禁用串接时的栈分离证明。独立字节执行器检查保留的副作用；缺少排除范围或预算不足时必须拒绝。`SymStorePreservation.Absolute*` 与 `SymState.AbsoluteProjections*` 检查绝对/符号区域共存、高地址、纯只读有界投影、写入后的未知值世代和事务性拒绝。运行 `NeverDInterpreterSpecializationTests`、`NeverDSymbolicIntegerIntrinsicTests`、`NeverDSymMemoryKnowledgeTests`，随后运行原生独立性与 LowIR 精化测试。
 

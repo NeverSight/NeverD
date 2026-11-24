@@ -3189,7 +3189,7 @@ void executeImmediateMemoryFamilies(llvm::ArrayRef<ImmediateMemoryCase> Cases,
     EXPECT_FALSE(Output.has_error());
   };
   std::vector<MedFunc> Functions;
-  std::string Wrappers, Entries;
+  std::string Wrappers, Entries, OrderedDispatch;
   std::string Declarations = kVectorNativeIncludes;
   const auto BasePosition = [&](const ImmediateMemoryCase &Case) {
     return kImmediateBasePosition +
@@ -3250,6 +3250,15 @@ void executeImmediateMemoryFamilies(llvm::ArrayRef<ImmediateMemoryCase> Cases,
                                     : kImmediateNativeStoreScalarCall,
                       Function.Name)
             .str();
+    if (Execution.ExportArm64eObject && !ArtifactDirectory.empty()) {
+      const auto Observed =
+          Case.Result
+              ? llvm::formatv(kImmediateOrderedLoadCall, Function.Name).str()
+              : Call;
+      OrderedDispatch +=
+          llvm::formatv(kImmediateOrderedDispatchCase, Case.Word, Observed)
+              .str();
+    }
     Wrappers +=
         Case.Vector && Case.Result
             ? llvm::formatv(kImmediateNativeVectorLoadWrapper, I, Function.Name)
@@ -3381,6 +3390,9 @@ void executeImmediateMemoryFamilies(llvm::ArrayRef<ImmediateMemoryCase> Cases,
 #endif
   if (!ArtifactDirectory.empty()) {
     if (Execution.ExportArm64eObject) {
+      SaveArtifact(kImmediateOrderedDispatchArtifact,
+                   Declarations + kImmediateOrderedDispatchBegin +
+                       OrderedDispatch + kImmediateOrderedDispatchEnd);
       const auto Darwin = Codegen().compile(
           *Module, Arch::AArch64, BinaryFormat::MachO, kImmediateArm64eTriple);
       ASSERT_TRUE(Darwin.Success);
@@ -7136,7 +7148,9 @@ TEST(AArch64OrderedMemory, TracerUsesExactOriginalMemoryShapes) {
     }
 }
 
-TEST(AArch64OrderedMemory, QuadwordAlignmentUsesOnlyTheCurrentSCTLR) {
+static void checkOrderedTraceAlignment(bool LSE2) {
+  const auto Step = LSE2 ? &NdOpEmulator::stepWithAArch64LSE2OrderedSCTLR
+                         : &NdOpEmulator::stepWithAArch64OrderedQuadwordSCTLR;
   BinaryImage Image;
   Image.Arch = Arch::AArch64;
   Segment Data;
@@ -7153,10 +7167,10 @@ TEST(AArch64OrderedMemory, QuadwordAlignmentUsesOnlyTheCurrentSCTLR) {
   const uint64_t Controls[] = {0, kOrderedNAA, kOrderedAlignment,
                                kOrderedAlignment | kOrderedNAA};
   for (const auto &Case : OrderedMemoryCases) {
-    if (Case.Access != kVectorBytes)
+    if (!LSE2 && Case.Access != kVectorBytes)
       continue;
     auto Op = originalMemoryOperation(liftMemory(Case.Word, false));
-    const auto Vector = NdVar::reg(a64reg::V0, kVectorBytes);
+    const auto Vector = NdVar::reg(a64reg::V0, Case.Access);
     if (Case.Result)
       Op.Output = Vector;
     else
@@ -7173,16 +7187,23 @@ TEST(AArch64OrderedMemory, QuadwordAlignmentUsesOnlyTheCurrentSCTLR) {
         Emulator.setLoadCollect(true);
         Emulator.setRegister(a64reg::X1, Address - Case.Offset);
         Emulator.setRegisterBytes(a64reg::V0, Seed);
-        const bool Runs = !Misalign || SCTLR == kOrderedNAA;
-        ASSERT_EQ(Emulator.stepWithAArch64OrderedQuadwordSCTLR(Op, SCTLR),
-                  Runs);
-        if (Misalign)
+        const bool Unaligned = Misalign % Case.Access;
+        const bool WithinGranule = Misalign + Case.Access <= kVectorBytes;
+        const bool Runs = !Unaligned || SCTLR == kOrderedNAA ||
+                          (LSE2 && !SCTLR && WithinGranule);
+        ASSERT_EQ((Emulator.*Step)(Op, SCTLR), Runs);
+        if (Unaligned) {
           EXPECT_FALSE(Emulator.step(Op));
+          if (Case.Access < kVectorBytes)
+            EXPECT_FALSE(
+                Emulator.stepWithAArch64OrderedQuadwordSCTLR(Op, kOrderedNAA));
+        }
         const auto Value = Emulator.getRegisterBytes(a64reg::V0);
         ASSERT_TRUE(Value);
         EXPECT_EQ(Emulator.getLoadRecords().size(),
                   unsigned(Runs && Case.Result));
-        for (unsigned I = 0; I != kVectorBytes; ++I)
+        ASSERT_GE(Value->size(), Case.Access);
+        for (unsigned I = 0; I != Case.Access; ++I)
           EXPECT_EQ((*Value)[I],
                     Runs && Case.Result ? Data.Data[At + I] : Seed[I]);
         for (const auto Start : {At - 1, At + 1}) {
@@ -7197,7 +7218,7 @@ TEST(AArch64OrderedMemory, QuadwordAlignmentUsesOnlyTheCurrentSCTLR) {
           for (unsigned I = 0; I != kVectorBytes; ++I) {
             const auto Byte = Start + I;
             const bool Stored =
-                Runs && !Case.Result && Byte >= At && Byte - At < kVectorBytes;
+                Runs && !Case.Result && Byte >= At && Byte - At < Case.Access;
             EXPECT_EQ((*Bytes)[I], Stored ? Seed[Byte - At] : Data.Data[Byte]);
           }
         }
@@ -7207,15 +7228,16 @@ TEST(AArch64OrderedMemory, QuadwordAlignmentUsesOnlyTheCurrentSCTLR) {
     NdOpEmulator Emulator(Image);
     Emulator.setStrictMode(true);
     Emulator.setLoadCollect(true);
-    Emulator.setRegister(a64reg::X1, LastQuad + 1 - Case.Offset);
+    Emulator.setRegister(a64reg::X1,
+                         Data.VA + Data.Size - Case.Access + 1 - Case.Offset);
     Emulator.setRegisterBytes(a64reg::V0, Seed);
     const auto Before = Emulator.getRegisterBytes(a64reg::V0);
-    EXPECT_FALSE(Emulator.stepWithAArch64OrderedQuadwordSCTLR(Op, kOrderedNAA));
+    EXPECT_FALSE((Emulator.*Step)(Op, kOrderedNAA));
     EXPECT_TRUE(Emulator.getLoadRecords().empty());
     EXPECT_EQ(Emulator.getRegisterBytes(a64reg::V0), Before);
     LowOp Tail;
     Tail.Opcode = NdOp::LOAD;
-    Tail.Output = Vector;
+    Tail.Output = NdVar::reg(a64reg::V0, kVectorBytes);
     Tail.addInput(NdVar::dataAddress(LastQuad, kScalarBytes));
     ASSERT_TRUE(Emulator.step(Tail));
     const auto Bytes = Emulator.getRegisterBytes(a64reg::V0);
@@ -7223,6 +7245,14 @@ TEST(AArch64OrderedMemory, QuadwordAlignmentUsesOnlyTheCurrentSCTLR) {
     EXPECT_TRUE(std::equal(Bytes->begin(), Bytes->end(),
                            Data.Data.end() - kVectorBytes));
   }
+}
+
+TEST(AArch64OrderedMemory, QuadwordAlignmentUsesOnlyTheCurrentSCTLR) {
+  checkOrderedTraceAlignment(false);
+}
+
+TEST(AArch64OrderedMemory, LSE2AlignmentUsesTheCompleteAccessWithinOneGranule) {
+  checkOrderedTraceAlignment(true);
 }
 
 TEST(AArch64OrderedMemory, MalformedOperationsFailBeforeSourceFiltering) {

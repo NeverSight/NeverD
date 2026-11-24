@@ -990,6 +990,8 @@ bool SymState::storeConditional(SymRef Addr, SymRef Value,
                                 SymConditionalStore &Control) {
   Control.WorkUsed = 0;
   Control.Status = SymConditionalStoreStatus::Invalid;
+  if (!Control.TrackedRegions.empty())
+    return false;
   const auto ValidRef = [&](SymRef Ref) {
     return Ref && Ref.index() < Ctx->numNodes();
   };
@@ -1059,6 +1061,102 @@ bool SymState::storeConditional(SymRef Addr, SymRef Value,
   const bool Absolute = store(Addr, Value);
   for (const auto &Entry : Plan)
     Entry.Storage->Bytes.emplace(Entry.Offset, Entry.Byte);
+  Control.Status = SymConditionalStoreStatus::Applied;
+  return Absolute;
+}
+
+bool SymState::storeConditionalPreserving(SymRef Addr, SymRef Value,
+                                          SymStorePreservation &Preservation,
+                                          SymConditionalStore &Control) {
+  Control.WorkUsed = 0;
+  Control.Status = SymConditionalStoreStatus::Invalid;
+  Preservation.WorkUsed = 0;
+  Preservation.Status = SymStorePreservationStatus::Invalid;
+  const auto ValidRef = [&](SymRef Ref) {
+    return Ref && Ref.index() < Ctx->numNodes();
+  };
+  const auto ValidBase = [&](SymRef Base) {
+    return !Base ||
+           (ValidRef(Base) && Ctx->width(Base) == 64 && !Ctx->isConst(Base));
+  };
+  if (!ValidRef(Addr) || Ctx->width(Addr) != 64 || !ValidRef(Value) ||
+      Control.TrackedRegions.empty())
+    return false;
+  const Location Where = locate(Addr);
+  if (!validBankWrite(*Ctx, Where.Base, Where.Offset, Value))
+    return false;
+  const uint32_t Width = Ctx->width(Value);
+  const uint64_t Bytes = Width / kByteBits;
+  const auto Charge = [&](uint64_t Work) {
+    if (Work > Control.MaxWork - Control.WorkUsed) {
+      Control.Status = SymConditionalStoreStatus::BudgetExceeded;
+      return false;
+    }
+    Control.WorkUsed += Work;
+    return true;
+  };
+  if (!Charge(Bytes) || !Charge(Control.TrackedRegions.size()))
+    return false;
+
+  struct PlannedByte {
+    Bank *Storage;
+    SymRef Base;
+    uint64_t Offset;
+    ByteView Old;
+  };
+  llvm::SmallVector<PlannedByte, 32> Plan;
+  for (const auto &Region : Control.TrackedRegions) {
+    if (!ValidBase(Region.Base) || Region.Begin >= Region.End)
+      return false;
+    if (!Charge(1))
+      return false;
+    if (Region.Base == Where.Base)
+      continue;
+    Bank *Storage = &AbsoluteMemory;
+    if (Region.Base) {
+      const auto Found = Regions.find(Region.Base.index());
+      if (Found == Regions.end())
+        continue;
+      Storage = &Found->second;
+    }
+    const uint64_t Begin = static_cast<uint64_t>(Region.Begin);
+    const uint64_t Size = static_cast<uint64_t>(Region.End) - Begin;
+    for (const auto &[Offset, Byte] : Storage->Bytes) {
+      if (!Charge(1))
+        return false;
+      if (Offset - Begin < Size) {
+        if (!Charge(Bytes + 3))
+          return false;
+        Plan.push_back({Storage, Region.Base, Offset, Byte});
+      }
+    }
+  }
+
+  // The preservation owner validates its own contract and budget before it
+  // mutates state. The conditional plan above created no expressions or bytes.
+  const bool Absolute = store(Addr, Value, Preservation);
+  if (Preservation.Status != SymStorePreservationStatus::Applied)
+    return false;
+  if (!Plan.empty()) {
+    llvm::SmallVector<std::pair<SymRef, SymRef>, 8> WriteBytes;
+    for (uint64_t I = 0; I != Bytes; ++I) {
+      const auto Address = Ctx->mkAdd(Addr, Ctx->mkConst(64, I));
+      const uint32_t Low = Order == llvm::endianness::little
+                               ? uint32_t(I) * kByteBits
+                               : Width - (uint32_t(I) + 1) * kByteBits;
+      WriteBytes.emplace_back(Address, Ctx->mkExtract(Value, Low, kByteBits));
+    }
+    for (const auto &Entry : Plan) {
+      const auto Offset = Ctx->mkConst(64, Entry.Offset);
+      const auto Address = Entry.Base ? Ctx->mkAdd(Entry.Base, Offset) : Offset;
+      auto Updated = Ctx->mkExtract(Entry.Old.Value, Entry.Old.Low, kByteBits);
+      for (const auto &[WriteAddress, Byte] : WriteBytes)
+        Updated = Ctx->mkIte(Ctx->mkEq(Address, WriteAddress), Byte, Updated);
+      // A preservation range may also name this byte. Its restored old value
+      // must not suppress the tracked region's conditional write effect.
+      Entry.Storage->Bytes.insert_or_assign(Entry.Offset, ByteView{Updated});
+    }
+  }
   Control.Status = SymConditionalStoreStatus::Applied;
   return Absolute;
 }

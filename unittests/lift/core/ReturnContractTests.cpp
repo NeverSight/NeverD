@@ -1818,6 +1818,66 @@ TEST(ReturnContracts, PairedShiftPathsCloseEveryBackedgeBeforeSelectingAValue) {
   EXPECT_TRUE(IsVoid());
 }
 
+TEST(ReturnContracts, LateReturnCopyChecksTheScratchRegisterOnItsOwnEdge) {
+  const auto C = [](uint64_t N) { return MedVar::makeConst(N, 8); };
+  const auto Byte = [](unsigned N) { return MedVar::makeConst(N, 1); };
+  const auto RDX = [](int V) { return inRegister(x86reg::RDX, 8, 20, V); };
+  const auto DH = [](int V) { return inRegister(x86reg::RDX + 1, 1, 21, V); };
+  const auto RCX = [](int V) { return inRegister(x86reg::RCX, 8, 22, V); };
+  const auto Choose = [&](int Target, int Cond) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Target), temporary(Cond)});
+  };
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Choose(4, 11)}, {}, {1, 4}),
+       block({Choose(3, 12)}, {0}, {2, 3}), block({}, {1}, {5}),
+       block({}, {1}, {5}), block({returning(rax(0))}, {0}),
+       block({operation(NdOp::INT_ZEXT, temporary(13), {DH(1)}),
+              operation(NdOp::INT_LEFT, RDX(2), {temporary(13), RCX(1)})},
+             {2, 3}, {6}),
+       block({operation(NdOp::INT_AND, rax(1), {RDX(2), C(511)}),
+              returning(rax(1))},
+             {5})});
+  for (auto &B : F.Blocks)
+    B.StartAddr = CalleeEntry + 16 * B.Id;
+  auto &Phis = F.Blocks[5].Phis;
+  Phis.push_back({DH(1), {{2, Byte(2)}, {3, Byte(129)}}, {}});
+  Phis.push_back({RCX(1), {{3, C(1)}, {2, C(0)}}, {}});
+  Phis.push_back({RDX(1), {{3, C(0x8100)}, {2, C(0x0200)}}, {}});
+  const auto IsVoid = [&] { return bool(settle({F}).front()); };
+  EXPECT_FALSE(IsVoid()); // No path has written RAX before the exit block.
+  F.Blocks.back().Ops.front().Inputs[1] = C(255);
+  EXPECT_TRUE(IsVoid());
+  F.Blocks.back().Ops.front().Inputs[1] = C(511);
+  std::reverse(Phis.begin(), Phis.end());
+  EXPECT_FALSE(IsVoid());
+  Phis.front().Args.front().second = C(0x8000);
+  EXPECT_TRUE(IsVoid()); // The full RDX disagrees with DH on predecessor 3.
+  Phis.front().Args.front().second = RDX(0);
+  EXPECT_TRUE(
+      IsVoid()); // An unknown full-register input cannot corroborate DH.
+  Phis.front().Args.front().second = C(0x8100);
+  Phis.back().Args.pop_back();
+  EXPECT_TRUE(IsVoid());
+
+  // Use RDX as the value and its high byte as the count. The byte is an
+  // independent PHI after folding, but it still refers to the same register.
+  F.Blocks[5].Ops.back().Inputs = {RDX(1), temporary(13)};
+  F.Blocks.back().Ops.front().Inputs[1] = C(255);
+  Phis = {{RDX(1), {{2, C(2)}, {3, C(257)}}, {}},
+          {DH(1), {{3, Byte(1)}, {2, Byte(0)}}, {}}};
+  EXPECT_TRUE(IsVoid()); // 2 and 514 both end in two.
+  Phis.back().Args.front().second = Byte(0);
+  EXPECT_TRUE(IsVoid()); // RDX on this edge actually contains 0x0101.
+  Phis.front().Args.front().second = C(3);
+  Phis.back().Args.front().second = Byte(1);
+  EXPECT_FALSE(IsVoid()); // The low bytes are now three and two.
+  const auto Saved = inRegister(x86reg::RBX, 8, 23, 1);
+  Phis.front().Output = F.Blocks[5].Ops.back().Inputs[0] = Saved;
+  EXPECT_TRUE(IsVoid()); // Folded constants cannot hide a callee-saved write.
+}
+
 TEST(ReturnContracts, SharedRegisterViewsNeedTheirOwnCompleteIncomingValue) {
   const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
   const auto Byte = [](unsigned V) { return MedVar::makeConst(V, 1); };
@@ -2120,7 +2180,8 @@ void runIntegerReturnSources(Arch Target, std::vector<uint8_t> Bytes,
   BinaryImage Image;
   Image.Arch = Target;
   Image.Format = BinaryFormat::ELF;
-  Image.Bits = Bitness::Bits64;
+  Image.Bits = getTargetRegInfo(Target).PointerSize == 4 ? Bitness::Bits32
+                                                         : Bitness::Bits64;
   Image.Base = Image.Entry = CalleeEntry;
   Segment Code;
   Code.VA = CalleeEntry;
@@ -2355,37 +2416,80 @@ int main(void) { choose_result(1,0); choose_result(0,257); return 0; }
 }
 
 TEST(ReturnContract, SharedX86ReturnObservesBothShiftDirectionsAfterTheJoin) {
-  const auto WithMask = [](uint8_t HighByte) {
-    return std::vector<uint8_t>{
+  const auto WithMask = [](uint8_t HighByte, bool UseRDX) {
+    const uint8_t Mov = UseRDX ? 0xc2 : 0xc0;
+    const uint8_t Shl = UseRDX ? 0xe2 : 0xe0;
+    const uint8_t Shr = UseRDX ? 0xea : 0xe8;
+    std::vector<uint8_t> Code{
         // cmp rsi,257; je bare; test esi,8; jnz third
         0x48, 0x81, 0xfe, 1, 1, 0, 0, 0x74, 42, 0xf7, 0xc6, 8, 0, 0, 0, 0x75,
         35,
         // cmp rdi,0; je left
         0x48, 0x83, 0xff, 0, 0x74, 14,
-        // (rax,ecx) = (129,1); jump to the direction test
-        0x48, 0xc7, 0xc0, 129, 0, 0, 0, 0xb9, 1, 0, 0, 0, 0xeb, 24,
-        // left: (rax,ecx) = (2,0); jump to the direction test
-        0x48, 0xc7, 0xc0, 2, 0, 0, 0, 0xb9, 0, 0, 0, 0, 0xeb, 10,
-        // bare: ret; third: mov rax,2; jmp observe
-        0xc3, 0x48, 0xc7, 0xc0, 2, 0, 0, 0, 0xeb, 18,
-        // test esi,1; jnz right; shl rax,cl; jmp observe
-        0xf7, 0xc6, 1, 0, 0, 0, 0x75, 5, 0x48, 0xd3, 0xe0, 0xeb, 5,
-        // right: shr rax,cl; jmp observe
-        0x48, 0xd3, 0xe8, 0xeb, 0,
-        // observe: and eax,mask; ret
-        0x25, 0xff, HighByte, 0, 0, 0xc3};
+        // Set (value,ecx) to (129,1) or (2,0) in the chosen registers.
+        0x48, 0xc7, Mov, 129, 0, 0, 0, 0xb9, 1, 0, 0, 0, 0xeb, 24, 0x48, 0xc7,
+        Mov, 2, 0, 0, 0, 0xb9, 0, 0, 0, 0, 0xeb, 10,
+        // bare: ret; third: set value to two; jmp observe
+        0xc3, 0x48, 0xc7, Mov, 2, 0, 0, 0, 0xeb, 18,
+        // test esi,1; jnz right; shl value,cl; jmp observe
+        0xf7, 0xc6, 1, 0, 0, 0, 0x75, 5, 0x48, 0xd3, Shl, 0xeb, 5,
+        // right: shr value,cl; jmp observe
+        0x48, 0xd3, Shr, 0xeb, 0};
+    if (UseRDX)
+      Code.insert(Code.end(), {0x89, 0xd0}); // observe: mov eax,edx
+    Code.insert(Code.end(),
+                {0x25, 0xff, HighByte, 0, 0, 0xc3}); // and eax,mask; ret
+    return Code;
   };
-  runIntegerReturnSources(Arch::X64, WithMask(1), R"(
+  for (bool UseRDX : {false, true}) {
+    SCOPED_TRACE(UseRDX);
+    runIntegerReturnSources(Arch::X64, WithMask(1, UseRDX), R"(
 int main(void) {
     return choose_result(0,0)!=2 || choose_result(0,1)!=2 ||
            choose_result(1,0)!=258 || choose_result(1,1)!=64 ||
            choose_result(1,8)!=2;
 }
 )");
-  runIntegerReturnSources(Arch::X64, WithMask(0), R"(
+    runIntegerReturnSources(Arch::X64, WithMask(0, UseRDX), R"(
 _Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
                "the left shift can also return two after the byte mask");
 int main(void) { choose_result(1,0); choose_result(0,257); return 0; }
+)");
+  }
+}
+
+TEST(ReturnContract, I386LoopReusesTheCounterRegisterForTheFinalResult) {
+  const auto WithMask = [](uint8_t Mask) {
+    return std::vector<uint8_t>{
+        // mode 257 returns directly; mode bit three selects a literal zero.
+        0x81, 0x7c, 0x24, 8, 1, 1, 0, 0, 0x74, 48, 0xf7, 0x44, 0x24, 8, 8, 0, 0,
+        0, 0x75, 39,
+        // eax = mode & 3; select the (edx,ecx) pair by the first argument.
+        0x8b, 0x44, 0x24, 8, 0x83, 0xe0, 3, 0x83, 0x7c, 0x24, 4, 0, 0x74, 12,
+        0xba, 4, 0, 0, 0, 0xb9, 1, 0, 0, 0, 0xeb, 20, 0xba, 1, 0, 0, 0, 0xb9, 0,
+        0, 0, 0, 0xeb, 8,
+        // bare: ret; third: mov edx,0; jmp observe
+        0xc3, 0xba, 0, 0, 0, 0, 0xeb, 19,
+        // head: test eax,eax; jz shift; xor edx,2; xor ecx,2; sub eax,1; jmp
+        // head
+        0x85, 0xc0, 0x74, 11, 0x83, 0xf2, 2, 0x83, 0xf1, 2, 0x83, 0xe8, 1, 0xeb,
+        0xf1,
+        // shift: shl edx,cl; jmp observe; observe: mov eax,edx; and eax,mask;
+        // ret
+        0xd3, 0xe2, 0xeb, 0, 0x89, 0xd0, 0x83, 0xe0, Mask, 0xc3};
+  };
+  runIntegerReturnSources(Arch::X86, WithMask(7), R"(
+int main(void) {
+    for (unsigned n = 0; n < 4; ++n)
+        if (choose_result(0,n) != (n % 2 ? 4 : 1) || choose_result(1,n) != 0)
+            return 1;
+    return choose_result(0,8) != 0;
+}
+)");
+  runIntegerReturnSources(Arch::X86, WithMask(3), R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "both input paths can return zero after one trip");
+int main(void) { choose_result(0,1); choose_result(1,257); return 0; }
 )");
 }
 

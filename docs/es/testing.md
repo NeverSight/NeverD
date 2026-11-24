@@ -2247,6 +2247,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NeverDSymConditionalStoreTests` comprueba efectos acotados por byte en bancos absolutos y simbólicos, ambos órdenes de bytes, solapamiento, vuelta modular, épocas desconocidas y presupuestos exactos. Las pruebas del ejecutor cubren STORE, ADD/XCHG/CMPXCHG atómicos escalares, registros de dirección/valor/salida solapados, publicación diferida de Old, formas inválidas y havoc por rechazo. `SymStorePreservation` comprueba la misma escritura atómica con conservación explícita del marco y presupuestos exactos o inferiores en una unidad. La ejecución sin descriptor mantiene su comportamiento; no se certifican permisos de acceso ni recuperación completa del programa.
 
+`NeverDSymConditionalStoreTests` también cubre regiones condicionales seleccionadas junto a conservación demostrada: alias parciales de bytes, épocas desconocidas de regiones no seguidas, presupuestos exactos y una unidad menores, regiones inválidas y publicación o rechazo del valor atómico anterior.
+
 
 `AbsoluteMemoryFactsTests.inc` comprueba objetivos absolutos entre nodos, uniones contradictorias, escrituras con alias parciales o desconocidos y separación de pila en ambos órdenes de bytes, con o sin encadenamiento. Un ejecutor independiente verifica efectos; deben rechazarse exclusiones ausentes y presupuestos cortos. `SymStorePreservation.Absolute*` y `SymState.AbsoluteProjections*` cubren coexistencia, direcciones altas, proyecciones puras acotadas, épocas desconocidas y rechazo transaccional. Ejecutar `NeverDInterpreterSpecializationTests`, `NeverDSymbolicIntegerIntrinsicTests`, `NeverDSymMemoryKnowledgeTests` y después independencia nativa y refinamiento LowIR.
 

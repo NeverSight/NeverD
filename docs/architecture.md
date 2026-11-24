@@ -5633,6 +5633,11 @@ a choice. An overlap leaves that choice unproven. A word shift on a wide
 register uses the width of the shift operand.
 Across successive joins, the return-contract pass follows the value and count
 on the same predecessor. Every PHI reads the state before entry to its block.
+The selected data may occupy a scratch register until the epilogue writes the
+ABI result. A separately merged byte must agree with its represented parent
+on the incoming edge, including when that byte supplies the shift count.
+An unrelated loop counter may remain unknown while the proof checks both
+continuations and the value after the final write.
 An outer choice can distinguish a third arm even when the inner arms return
 the same bits. A loop header can receive new bindings on each latch. The proof
 compares the observable outcomes after closing both sets under those
@@ -15602,6 +15607,8 @@ Shared `SymContext::constantWindow` reports a bitwise window only when every res
 `SymState::materializedRegionRanges` exports only the current extents of one exact symbolic region, charging its lookup and bytes before allocation. It reads no missing memory and constructs no expressions. Recovery splits those extents into bounded cells and uses the existing complete-write overlap proof before preserving each cell. Adjacent proved intervals may coalesce; a gap or possibly overlapping cell remains unprotected. Later writes and projection retain their normal invalidation rules. This precision strategy supplies no external-pointer identity or new alias premise; the binary adapter's ordinary ABI return-slot condition remains a separate documented domain.
 
 `SymStorePreservation::AdditionalRegions` extends that single-store contract to independently based current regions. `AdditionalRanges` remains relative to the primary base. Each declared exact symbolic base and half-open modular interval requires a caller-established separation proof for the complete actual write; no fixed relation among bases is inferred. References belong to the state context by caller contract: index, validity and width checks cannot authenticate an in-range reference from another context. A declaration naming the actual store's canonical base is rejected; ordinary same-region byte overlap already owns that region. Repeated or overlapping declarations form a union and are validated and scanned separately under the same budget. Complete validation and capture/restore accounting precede the one ordinary STORE. Only saved current byte views are restored afterward, without importing historical facts, materializing missing bytes or resetting the store's unknown epochs. Empty `AdditionalRegions` retains existing work accounting. Invalid or insufficient-budget `SymState::store` requests do not mutate state; `SymExec` retains its existing fail-closed behavior on refusal.
+
+`SymState::storeConditionalPreserving` combines a proved preservation descriptor with exact conditional updates to already materialized bytes in `SymConditionalStore::TrackedRegions`. A tracked region needs no separation premise: each byte retains both alias outcomes. Untracked memory keeps ordinary unknown epochs. Both budgets are checked before mutation. State-owner refusal changes no bytes; `SymExec` still havocs memory and withholds an atomic old value.
 
 `StringTransfer` owns bounded ordered scalar lowering. Recovery owns value proofs, shared budgets and re-certification of complete copied frame pointers; generated accesses reuse ordinary memory checks.
 

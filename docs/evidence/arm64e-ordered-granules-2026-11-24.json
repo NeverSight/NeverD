@@ -1,0 +1,378 @@
+{
+  "neverd_code_revision": "e72a60037e677048b4f4ded8383b60a2436ba15a",
+  "llvm_prebuilt": "r6",
+  "test_executable_sha256": "46bed013b824bcc92e45160311b84c30ae4c54b6f1645892e99e055947b734f6",
+  "release_tests": {
+    "total": 1070,
+    "passed": 1034,
+    "failed": 0,
+    "skipped": 36,
+    "skips_by_suite": {
+      "AArch64OrderedMemoryNative": 1,
+      "AArch64PACMSemantics": 1,
+      "AArch64PAuthLRSemantics": 1,
+      "AArch64PAuthSemantics": 1,
+      "AppleClang/MachOArm64eNativeObjectInstallation": 32
+    },
+    "initial_failures_rechecked": [
+      "AArch64LiftedImage.RelativeSwitchDispatchSurvivesAutomaticRelifting",
+      "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting",
+      "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables",
+      "AArch64LiftedImage.PreservesSourceAddressesBeyondADRReach",
+      "AArch64LiftedImage.WidensTwoAddressesAcrossIndexedDwarfFrame",
+      "AArch64LiftedImage.WidensTwoAddressesAcrossTypedCatchAndCleanup",
+      "AArch64LiftedImage.SharesDistantInteriorAddressAcrossFunctions"
+    ],
+    "python_tests": 56,
+    "raw_parity_bytes": 11972,
+    "local_skips_passed_by_hosted_comparisons": 33,
+    "local_skips_without_hosted_native_pass": [
+      "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+      "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections"
+    ],
+    "timeout_enumeration": "The local CTest timeout handler stalled while enumerating processes. The affected cases were recorded as timeouts and run individually.",
+    "stalled_enumerations": 2
+  },
+  "signed_offset_forms": {
+    "gpr": 13,
+    "simd_fp": 10,
+    "encoded_displacements": [
+      -256,
+      -1,
+      0,
+      1,
+      255
+    ],
+    "encodings": 115,
+    "effective_address_residues": 16,
+    "controls": [
+      "A=0,nAA=0",
+      "A=0,nAA=1",
+      "A=1,nAA=0",
+      "A=1,nAA=1"
+    ],
+    "exception_levels": [
+      0,
+      1
+    ],
+    "generated_routes": [
+      "high-O0",
+      "high-O2",
+      "llvm-c-O0",
+      "llvm-c-O2",
+      "llvm-object"
+    ],
+    "reference": "Original fixture encodings and independent expected data, guard bytes, syndrome, FAR and fault instruction. Single-core Normal memory."
+  },
+  "hosted_replay": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45377564656",
+    "bundle_sha256": "8ed8184b4a4157fc76a508b2aedbd7555ae8cac0dbdeb721a20503b5c8669b79",
+    "jobs": {
+      "model": "https://github.com/gmh5225/test_mac_intel/actions/runs/45377564656/job/138387789018",
+      "darwin (macos-26, macos-26)": "https://github.com/gmh5225/test_mac_intel/actions/runs/45377564656/job/138387789128",
+      "darwin (xcode-27, xcode-27)": "https://github.com/gmh5225/test_mac_intel/actions/runs/45377564656/job/138387789225",
+      "darwin (macos-15, macos-15)": "https://github.com/gmh5225/test_mac_intel/actions/runs/45377564656/job/138387789291"
+    }
+  },
+  "arm_model": {
+    "version": "11.32+19",
+    "sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "identical_local_and_hosted": {
+      "ordered": {
+        "guests": 5,
+        "el0_el1_control_combinations": 40,
+        "manifest_sha256": "8131a885ac2df737f8e3227539ea2d115922a98ff4dcea7f401d61f2e011f678",
+        "qualification_controls": {
+          "high-O0-unsupported": {
+            "records": [
+              "ORDERED-MODEL LRCPC3 unavailable"
+            ],
+            "exit_code": 1
+          }
+        }
+      },
+      "returns": {
+        "guests": 12,
+        "el0_el1_control_combinations": 96,
+        "manifest_sha256": "a835dc36201e201cb5df368b18dd310674f2818779cbc6b9cf9c47809e291881",
+        "qualification_controls": {
+          "prefix-high-O0-unsupported": {
+            "records": [
+              "RETURN-MODEL feature mismatch"
+            ],
+            "exit_code": 1
+          }
+        }
+      },
+      "cursor": {
+        "guests": 2,
+        "el0_el1_control_combinations": 16,
+        "manifest_sha256": "cf5300f3b1e7820e9e909919ef79eeb9951b33edd800fa6af53c8f4581000736",
+        "qualification_controls": {
+          "cursor-O0-unsupported": {
+            "records": [
+              "RETURN-MODEL feature mismatch"
+            ],
+            "exit_code": 1
+          }
+        }
+      }
+    },
+    "legacy_quadword_manifest_sha256": "97c2a656494611be05eb061d098ea4bb5b0223354355f9d10663cad2c1a1f024",
+    "legacy_quadword_el0_el1_control_combinations": 40,
+    "mutation_controls": {
+      "ordinary-gpr-load": {
+        "symbol": "_original_immediate_memory_D9400020",
+        "word": "0xd9400211",
+        "replacement": "0xf9400211",
+        "sha256": "1a95b4b3dcf89718ac9ce0fc45b1572d5a6c079c93f822cb11f17fed7632a9de",
+        "bytes": 55560,
+        "exit": 1,
+        "records": [
+          "oracle status=0000000000000233 alignment control index=0000000000000000 TCR_EL1=0000000080100010 SCTLR_EL1=00000000f0900001",
+          "ORDERED-MODEL EL1 comparison failed"
+        ]
+      },
+      "unsigned-gpr-load": {
+        "symbol": "_original_immediate_memory_59800020",
+        "word": "0x59800211",
+        "replacement": "0x59400211",
+        "sha256": "a37a9e84b481b2337c9df586448b3cac7d09845b53967fc434ea923573293905",
+        "bytes": 55560,
+        "exit": 1,
+        "records": [
+          "oracle status=00000000000004bf alignment control index=0000000000000000 TCR_EL1=0000000080100010 SCTLR_EL1=00000000f0900001",
+          "ORDERED-MODEL EL1 comparison failed"
+        ]
+      },
+      "zero-extended-result": {
+        "symbol": "_original_immediate_memory_59800020",
+        "word": "0x93403e20",
+        "replacement": "0x53003e20",
+        "sha256": "5c3d58f92b65b1c0c6370cab74cca940a8826f6169400caa518b32f845d2c009",
+        "bytes": 55560,
+        "exit": 1,
+        "records": [
+          "oracle status=00000000000004a7 alignment control index=0000000000000000 TCR_EL1=0000000080100010 SCTLR_EL1=00000000f0900001",
+          "ORDERED-MODEL EL1 comparison failed"
+        ]
+      }
+    },
+    "lse2_disabled_control": {
+      "guest_executed": false,
+      "reason": "The model rejected disabling FEAT_LSE2 in this configuration before reset."
+    }
+  },
+  "native_ordered_accesses": {
+    "manifest_sha256": "584a48447f1c498a5ea87c0de4607b4b01140be90bfb4c811dfee6df16bc90a8",
+    "hosts": {
+      "local": {
+        "cpu": "Apple M4 Max",
+        "gpr": true,
+        "simd": false,
+        "rule": "ORDERED-NATIVE within one granule",
+        "routes": 5
+      },
+      "darwin-macos-15": {
+        "cpu": "Apple M1 (Virtual)",
+        "optional": {
+          "FEAT_LSE2": "1",
+          "FEAT_LRCPC2": "1",
+          "FEAT_LRCPC3": null
+        },
+        "gpr": true,
+        "simd": false,
+        "rule": "ORDERED-NATIVE within one granule",
+        "routes": 5
+      },
+      "darwin-macos-26": {
+        "cpu": "Apple M1 (Virtual)",
+        "optional": {
+          "FEAT_LSE2": "1",
+          "FEAT_LRCPC2": "1",
+          "FEAT_LRCPC3": null
+        },
+        "gpr": true,
+        "simd": false,
+        "rule": "ORDERED-NATIVE within one granule",
+        "routes": 5
+      },
+      "darwin-xcode-27": {
+        "cpu": "Apple M1 (Virtual)",
+        "optional": {
+          "FEAT_LSE2": "1",
+          "FEAT_LRCPC2": "1",
+          "FEAT_LRCPC3": null
+        },
+        "gpr": true,
+        "simd": false,
+        "rule": "ORDERED-NATIVE within one granule",
+        "routes": 5
+      }
+    },
+    "independent_local_raw_instructions": {
+      "O0": {
+        "sha256": "45ffc4475d7d3a3fb61c2c56f98427de59245cd8f418ff4f5f505c6bb2f004fb",
+        "original_widths_bytes": [
+          2,
+          4,
+          8
+        ],
+        "reads_and_writes": true,
+        "residues_checked": 16
+      },
+      "O2": {
+        "sha256": "81cd3f6f1fbde475af518c3e85272ef32cb45cb1c4f70b6144e79812ee5c9305",
+        "original_widths_bytes": [
+          2,
+          4,
+          8
+        ],
+        "reads_and_writes": true,
+        "residues_checked": 16
+      }
+    },
+    "mutation_controls": {
+      "ordinary-gpr-load": {
+        "symbol": "_original_immediate_memory_D9400020",
+        "original_word": "0xd9400211",
+        "substitute": "0xf9400211",
+        "exit": 1,
+        "comparison": 563,
+        "fault_or_value_mismatch_at_residue": 9,
+        "bytes": 77040,
+        "sha256": "66b6aab1de9bab34fe13cb6b9160407e7a89b5093739c0ca7f73100e5bb2efb1"
+      },
+      "unsigned-gpr-load": {
+        "symbol": "_original_immediate_memory_59800020",
+        "original_word": "0x59800211",
+        "substitute": "0x59400211",
+        "exit": 1,
+        "comparison": 1215,
+        "fault_or_value_mismatch_at_residue": 15,
+        "bytes": 77040,
+        "sha256": "b9a8ba589130e01088b9e46fbb22c82ff6a9665ce8c7825643091a85de914d04"
+      },
+      "zero-extended-result": {
+        "symbol": "_original_immediate_memory_59800020",
+        "original_word": "0x93403e20",
+        "substitute": "0x53003e20",
+        "exit": 1,
+        "comparison": 1191,
+        "fault_or_value_mismatch_at_residue": 3,
+        "bytes": 77040,
+        "sha256": "0398e55f2271f6b0a119b00049d8cc731c9d1935c142e504b12d7d3efef9de4c"
+      }
+    }
+  },
+  "previously_skipped_cases_replayed": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45379254463",
+    "profiles": {
+      "arm64e-skips-xcode-27": {
+        "passed": 36,
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ],
+        "entry_images_executed": 8,
+        "modes": {
+          "probe": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "run": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "run-default-executable": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "run-generated": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "run-generated-executable": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "entries": {
+            "status": "passed",
+            "returncode": 0
+          }
+        },
+        "test_executable_sha256": "46bed013b824bcc92e45160311b84c30ae4c54b6f1645892e99e055947b734f6"
+      },
+      "arm64e-skips-macos-26": {
+        "passed": 36,
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ],
+        "entry_images_executed": 8,
+        "modes": {
+          "probe": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "run": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "run-default-executable": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "run-generated": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "run-generated-executable": {
+            "status": "passed",
+            "returncode": 0
+          },
+          "entries": {
+            "status": "passed",
+            "returncode": 0
+          }
+        },
+        "test_executable_sha256": "46bed013b824bcc92e45160311b84c30ae4c54b6f1645892e99e055947b734f6"
+      }
+    }
+  },
+  "native_publication_rechecks": {
+    "revision": "e72a60037e677048b4f4ded8383b60a2436ba15a",
+    "test_executable_sha256": "c1092cf9378979dd28864ced8bd1620b3596a3343bfe9d542df9b266ef8c0e4d",
+    "cases": {
+      "AArch64LiftedImage.SharesDistantInteriorAddressAcrossFunctions": {
+        "images_executed": 4,
+        "time": "2.995s"
+      },
+      "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+        "images_executed": 4,
+        "time": "0.756s"
+      },
+      "AArch64LiftedImage.WidensTwoAddressesAcrossTypedCatchAndCleanup": {
+        "images_executed": 5,
+        "time": "6.932s"
+      },
+      "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+        "images_executed": 4,
+        "time": "0.878s"
+      },
+      "AArch64LiftedImage.PreservesSourceAddressesBeyondADRReach": {
+        "images_executed": 4,
+        "time": "0.678s"
+      },
+      "AArch64LiftedImage.WidensTwoAddressesAcrossIndexedDwarfFrame": {
+        "images_executed": 5,
+        "time": "6.123s"
+      }
+    },
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45379983555"
+  },
+  "integrated_dev_parent": "ba65fecde36393ab67160b70f2eb3f1e37812d2e"
+}
