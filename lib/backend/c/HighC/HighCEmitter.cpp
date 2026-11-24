@@ -1728,7 +1728,7 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
                 Name == importSlotIdentifier(Ex))
               ImportSlotIdentifiers.insert(Name);
             if (auto FS = debugCallee(Ex)) {
-              noteDebugExtern(Name, *FS);
+              noteDebugExtern(Name, *FS, Ex);
               noteDebugExternCallSret(Name, *FS, Ex);
             }
           }
@@ -4135,7 +4135,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     for (size_t I = 0; I < E.Operands.size(); ++I) {
       if (!E.Operands[I])
         continue;
-      const TypeRef Expected = expectedDebugCallArgType(*Callee, I);
+      const TypeRef Expected = expectedDebugCallArgType(*Callee, I, &E);
       if (!Expected || Expected->Kind != NdTypeKind::Ptr ||
           !Expected->Pointee || Expected->Pointee->SourceName.empty())
         continue;

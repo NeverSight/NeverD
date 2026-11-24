@@ -6965,8 +6965,13 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     }
     if (SourceImport && ArgIdx < SourceImport->Params.size()) {
       const auto &Type = SourceImport->Params[ArgIdx].second;
+      // A register-sized scalar can pass through uintptr_t. Converting a
+      // multiword integer through it would discard the upper stack word.
+      const bool WordInteger =
+          Integer &&
+          Type->Size <= Call.getModule()->getDataLayout().getPointerSize();
       const std::string Bridge =
-          Integer || PointerSpelling || Operand->getType()->isPointerTy()
+          WordInteger || PointerSpelling || Operand->getType()->isPointerTy()
               ? "(uintptr_t)"
               : "";
       const llvm::StringRef Spelled =

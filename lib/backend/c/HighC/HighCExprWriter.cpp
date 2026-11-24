@@ -971,7 +971,7 @@ TypeRef HighCWriter::outParameterRecordPointer(const HighExpr &Call,
                                                size_t Index) const {
   // `T **`, a pointer to a named record's pointer, which the callee stores.
   auto FromFS = [&](const FunctionSym &FS) -> TypeRef {
-    const TypeRef Parameter = (expectedDebugCallArgType(FS, Index));
+    const TypeRef Parameter = (expectedDebugCallArgType(FS, Index, &Call));
     if (!Parameter || Parameter->Kind != NdTypeKind::Ptr)
       return nullptr;
     const TypeRef Pointer = Parameter->Pointee;
@@ -3010,7 +3010,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           Defined ? emittedParamTypeAt(*Defined, I)
           : IndirectPrototype && I < IndirectPrototype->ParamTypes.size()
               ? IndirectPrototype->ParamTypes[I]
-              : expectedDebugCallArgType(*Callee, I);
+              : expectedDebugCallArgType(*Callee, I, &E);
       // An array parameter is the pointer to its element that C passes.
       if (!Expected && Array)
         Expected = NdType::makePtr(Declared->ElemType);
@@ -3135,7 +3135,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // recovered scalar prototype used by writeForwardDecls owns its argument
     // conversions even when the original source signature is also known.
     if (!Defined && E.SourceCalleeType &&
-        (!Callee || !positionalDebugSignature(*Callee))) {
+        (!Callee || !positionalDebugSignature(*Callee, &E))) {
       S += exprStrAsTypedArg(*Op, E.SourceCalleeType->ParamTypes[I]);
       continue;
     }
@@ -4983,7 +4983,7 @@ size_t HighCWriter::debugCallArgLimit(const HighExpr &E) const {
         return Layout->Positions;
     // The call passes the machine arguments of another signature, whatever
     // their count.
-    if (Callee->IsVariadic || !positionalDebugSignature(*Callee))
+    if (Callee->IsVariadic || !positionalDebugSignature(*Callee, &E))
       return Have;
     const bool Indirect =
         isMsvcIndirectReturn(Callee->ReturnType, Opts.TheArch, Opts.Format);
@@ -5096,7 +5096,7 @@ bool isNamedPointerDisplay(const TypeRef &Ty) {
 TypeRef HighCWriter::displayCallArgType(const HighExpr &Call,
                                         size_t Index) const {
   auto FromFS = [&](const FunctionSym &FS) -> TypeRef {
-    TypeRef Ty = (expectedDebugCallArgType(FS, Index));
+    TypeRef Ty = (expectedDebugCallArgType(FS, Index, &Call));
     return isNamedPointerDisplay(Ty) && !headerTypeOfCallee(Call, Ty)
                ? Ty
                : TypeRef{};
@@ -5123,10 +5123,11 @@ TypeRef HighCWriter::displayCallArgType(const HighExpr &Call,
 }
 
 TypeRef HighCWriter::expectedDebugCallArgType(const FunctionSym &FS,
-                                              size_t Index) const {
+                                              size_t Index,
+                                              const HighExpr *Call) const {
   // A call's arguments come in the convention's order, which matches the
   // signature's only for a positional one.
-  if (!positionalDebugSignature(FS))
+  if (!positionalDebugSignature(FS, Call))
     return nullptr;
   const bool Indirect =
       isMsvcIndirectReturn(FS.ReturnType, Opts.TheArch, Opts.Format);

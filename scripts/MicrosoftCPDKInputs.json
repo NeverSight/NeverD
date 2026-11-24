@@ -1,0 +1,199 @@
+{
+  "source": "https://www.microsoft.com/en-us/download/details.aspx?id=30688",
+  "setup_sha256": "76d6f7580fce9bb1045b5f0871718342443ec5d99c316489ef8c7bc83d4dd6ed",
+  "license": "Microsoft-CPDK-License.rtf",
+  "packages": [
+    {
+      "file": "4c9acdde8c6aed110d8dac9ace60b90a.cab",
+      "url": "https://download.microsoft.com/download/1/7/6/176909B0-50F2-4DF3-B29B-830A17EA7E38/CPDK_RELEASE_UPDATE/Installers/4c9acdde8c6aed110d8dac9ace60b90a.cab",
+      "sha256": "84549b70cc6fe2911f936478b546c6fc0766019605d43da8cfc54f660af2296a",
+      "members": {
+        "bcrypt_provider.h": {
+          "member": "fil8884c48b58db6020c0830a488b0403b8",
+          "sha256": "4eff88988ed32ef17d00ccaa5e759c127e1aaab7d8db46965a6104accdbbfcf0"
+        },
+        "ncrypt_provider.h": {
+          "member": "fil40040441155b4474e733d2f466b2805e",
+          "sha256": "8bc38aae4405708f14b91817f7f2c4c07a1a0cc28ca4b900038a11200ec51a66"
+        },
+        "sslprovider.h": {
+          "member": "fildd47991a7afcffcab80e5cb8bc278bce",
+          "sha256": "75b84d16e8a1c7fc6e2362b13c5b34404e6f491138e4da079da6d9d3a3c612d7"
+        }
+      }
+    },
+    {
+      "file": "590f6252ddbdad72fe9ef48c3839bf57.cab",
+      "url": "https://download.microsoft.com/download/1/7/6/176909B0-50F2-4DF3-B29B-830A17EA7E38/CPDK_RELEASE_UPDATE/Installers/590f6252ddbdad72fe9ef48c3839bf57.cab",
+      "sha256": "d63912944a129119ac4e08476962cbcf7a1c09dd909b89bda6230f77ffd76b0e",
+      "members": {
+        "Microsoft-CPDK-License.rtf": {
+          "member": "fil1d85c40dfab158d28b8ded211fd9724a",
+          "sha256": "6d3d8f3a850c653ac7ab2511f31f9a639f8b87a38d1cd55fef8c9c87c8404bd7"
+        }
+      }
+    }
+  ],
+  "providers": {
+    "SslProvider": {
+      "module": "ncrypt.dll",
+      "headers": [
+        "bcrypt",
+        "ncrypt",
+        "sslprovider"
+      ],
+      "exports": {
+        "GetSChannelInterface": 3,
+        "SslChangeNotify": 2,
+        "SslComputeClientAuthHash": 8,
+        "SslComputeEapKeyBlock": 8,
+        "SslComputeFinishedHash": 6,
+        "SslComputeSessionHash": 7,
+        "SslCreateClientAuthHash": 6,
+        "SslCreateEphemeralKey": 9,
+        "SslCreateHandshakeHash": 5,
+        "SslDecrementProviderReferenceCount": 1,
+        "SslDecryptPacket": 9,
+        "SslDuplicateTranscriptHash": 4,
+        "SslEncryptPacket": 10,
+        "SslEnumCipherSuites": 5,
+        "SslEnumCipherSuitesEx": 5,
+        "SslEnumEccCurves": 4,
+        "SslEnumProtocolProviders": 3,
+        "SslExpandBinderKey": 5,
+        "SslExpandExporterMasterKey": 6,
+        "SslExpandPreSharedKey": 7,
+        "SslExpandResumptionMasterKey": 6,
+        "SslExpandTrafficKeys": 7,
+        "SslExpandWriteKey": 5,
+        "SslExportKey": 7,
+        "SslExportKeyingMaterial": 10,
+        "SslExtractEarlyKey": 7,
+        "SslExtractHandshakeKey": 7,
+        "SslExtractMasterKey": 5,
+        "SslFreeBuffer": 1,
+        "SslFreeObject": 2,
+        "SslGenerateMasterKey": 11,
+        "SslGeneratePreMasterKey": 10,
+        "SslGenerateSessionKeys": 6,
+        "SslGetCipherSuitePRFHashAlgorithm": 6,
+        "SslGetKeyProperty": 5,
+        "SslGetProviderProperty": 6,
+        "SslHashHandshake": 5,
+        "SslImportKey": 6,
+        "SslImportMasterKey": 9,
+        "SslIncrementProviderReferenceCount": 1,
+        "SslLookupCipherLengths": 7,
+        "SslLookupCipherSuiteInfo": 6,
+        "SslOpenPrivateKey": 4,
+        "SslOpenProvider": 3,
+        "SslSignHash": 8,
+        "SslVerifySignature": 7
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "f3807268099a0391ec8fabd1b1ee520a05a070f345828b6b0986dee0c2000cac",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        },
+        "x64": {
+          "image_sha256": "fcdb979a66b03a411ae26f79ec49ce7f64b52ed8347c3f9b1ca0fd139d87b7fa",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        },
+        "arm64": {
+          "image_sha256": "ddd975d066e84d59c6f2d4f06035b546d359528476161aa66868cf3436955ae1",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        }
+      }
+    },
+    "KeyStorageProvider": {
+      "module": "ncrypt.dll",
+      "headers": [
+        "bcrypt",
+        "ncrypt",
+        "ncrypt_provider"
+      ],
+      "exports": {
+        "GetKeyStorageInterface": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "f3807268099a0391ec8fabd1b1ee520a05a070f345828b6b0986dee0c2000cac",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        },
+        "x64": {
+          "image_sha256": "fcdb979a66b03a411ae26f79ec49ce7f64b52ed8347c3f9b1ca0fd139d87b7fa",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        },
+        "arm64": {
+          "image_sha256": "ddd975d066e84d59c6f2d4f06035b546d359528476161aa66868cf3436955ae1",
+          "additional_exports": {},
+          "import_library": "ncrypt.lib"
+        }
+      }
+    },
+    "CngConfig": {
+      "module": "bcrypt.dll",
+      "headers": [
+        "bcrypt",
+        "ncrypt",
+        "bcrypt_provider"
+      ],
+      "exports": {
+        "BCryptAddContextFunctionProvider": 6,
+        "BCryptRegisterProvider": 3,
+        "BCryptRemoveContextFunctionProvider": 5,
+        "BCryptUnregisterProvider": 1
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "f80c1eaa0cdba48b85199588ce544cc52374301ab58af9e1bc9f1a938609653f",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "811af66dd7e323a74db80648610bbebb956093ae7bd91c5b950ed6aca13d8026",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "0caadd679fc2ed6d4136d1500bbfd353e60a5180e62abc7204c61345e01ab18e",
+          "additional_exports": {}
+        }
+      }
+    },
+    "CngPrimitives": {
+      "module": "bcryptprimitives.dll",
+      "headers": [
+        "bcrypt",
+        "ncrypt",
+        "bcrypt_provider"
+      ],
+      "exports": {
+        "GetAsymmetricEncryptionInterface": 4,
+        "GetCipherInterface": 4,
+        "GetHashInterface": 4,
+        "GetKeyDerivationInterface": 4,
+        "GetRngInterface": 3,
+        "GetSecretAgreementInterface": 4,
+        "GetSignatureInterface": 4
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "270b79643a27f11bf8793cc47fd12e4c8284970f0b41151f7582ab0fc8d3cdb9",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "f0a1662d0f55533a21d609f8dc737288ede77d314d90e885ca9e6ef79d429c3b",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "a1701249dba4a66ff513dc6179f02e26ab4f73e94bf9d94aa3a09046e68aa5df",
+          "additional_exports": {}
+        }
+      }
+    }
+  }
+}

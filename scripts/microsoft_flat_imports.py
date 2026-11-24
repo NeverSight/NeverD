@@ -5,6 +5,9 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import tempfile
 
 import build_wdk_driver_fixtures as wdk
 import microsoft_ordinal_imports as ordinal
@@ -15,9 +18,11 @@ LEGACY_INPUTS = Path(__file__).with_name("MicrosoftLegacySDKInputs.json")
 WEBAUTHN_INPUTS = Path(__file__).with_name("MicrosoftWebAuthnInputs.json")
 NAMED_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftNamedRuntimeSDKInputs.json")
 SYSTEM_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftSystemRuntimeSDKInputs.json")
+CPDK_INPUTS = Path(__file__).with_name("MicrosoftCPDKInputs.json")
 NAMED_RUNTIME = json.loads(NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
 SYSTEM_RUNTIME = json.loads(SYSTEM_RUNTIME_INPUTS.read_text(encoding="utf-8"))["providers"]
-RUNTIME_PROFILES = NAMED_RUNTIME["providers"] | SYSTEM_RUNTIME
+CPDK = json.loads(CPDK_INPUTS.read_text(encoding="utf-8"))
+RUNTIME_PROFILES = NAMED_RUNTIME["providers"] | SYSTEM_RUNTIME | CPDK["providers"]
 
 # The 32-bit SDK has no host-compute or hypervisor-platform import library.
 WIDE_ONLY = {"HostCompute", "HostNetwork", "HypervisorPlatform", "ComputeStorage"}
@@ -77,6 +82,25 @@ CPP_IMPORT_PREFIXES = {"RealtimeWorkQueue": "Rtwq", "WindowsRemoteManagement": "
 
 def package(cache, record):
     return wdk.download(cache, record["file"], record["url"], record["sha256"])
+
+
+def cpdk_headers(output, cache, licenses):
+    """Extract the selected original CPDK headers and their accompanying license."""
+    include = output / "cpdk-headers"
+    include.mkdir(exist_ok=True)
+    for record in CPDK["packages"]:
+        archive = package(cache, record).resolve()
+        members = record["members"]
+        with tempfile.TemporaryDirectory(dir=output) as work:
+            subprocess.run(["cmake", "-E", "tar", "xf", str(archive),
+                            *(entry["member"] for entry in members.values())], cwd=work, check=True)
+            for name, entry in members.items():
+                extracted = Path(work) / entry["member"]
+                if wdk.digest(extracted) != entry["sha256"]:
+                    raise ValueError("Microsoft CPDK member hash mismatch: " + name)
+                directory = licenses if name == CPDK["license"] else include
+                shutil.copyfile(extracted, directory / name)
+    return [{key: record[key] for key in ("file", "url", "sha256")} for record in CPDK["packages"]]
 
 
 def work_queue_c_types(header):
@@ -181,6 +205,8 @@ def named_runtime_units(output, architecture, compiler, libraries):
         if convention and (architecture != "x86" or convention != "__stdcall" or name not in libraries):
             raise ValueError("unverified default calling convention for " + name)
         options = compiler + (["-Xclang", "-fdefault-calling-conv=stdcall"] if convention else [])
+        if name in CPDK["providers"]:
+            options = [*options, "-I", str(output / "cpdk-headers")]
         bridge = {"source": str(source), "source_sha256": wdk.digest(source),
                   "arguments": [*options, "-std=c23"], "language": "c", "commands": [],
                   "runtime_exports": named_runtime_exports(profile, target, NAMED_RUNTIME["win32_metadata"])}
