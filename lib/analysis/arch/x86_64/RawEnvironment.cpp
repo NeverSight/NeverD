@@ -157,6 +157,9 @@ public:
       if (At->PreservedFrameRanges.size() > Work)
         return false;
       Work -= At->PreservedFrameRanges.size();
+      if (At->ResultObjectExclusions.size() > Work)
+        return false;
+      Work -= At->ResultObjectExclusions.size();
       Call.emplace();
       Call->Declaration = *At;
     }
@@ -198,6 +201,11 @@ public:
             std::errc::value_too_large,
             "returning-call frame-range index budget exhausted");
       Work -= Call.PreservedFrameRanges.size();
+      if (Call.ResultObjectExclusions.size() > Work)
+        return llvm::createStringError(
+            std::errc::value_too_large,
+            "returning-call object-exclusion index budget exhausted");
+      Work -= Call.ResultObjectExclusions.size();
     }
     return std::make_unique<X64ReturningCallLookup>(Options.X64ReturningCalls);
   }
@@ -310,16 +318,18 @@ public:
       if (Calls > Budget.Records / Lookups ||
           !Budget.records(Calls * Lookups, 32))
         return RecoveryValidationBudget::exhausted();
-      uint64_t FrameRanges = 0;
+      uint64_t Ranges = 0;
       for (const auto &Declaration : Expected.X64ReturningCalls) {
-        if (Declaration.PreservedFrameRanges.size() >
-            Budget.Records - FrameRanges)
+        if (Declaration.PreservedFrameRanges.size() > Budget.Records - Ranges)
           return RecoveryValidationBudget::exhausted();
-        FrameRanges += Declaration.PreservedFrameRanges.size();
+        Ranges += Declaration.PreservedFrameRanges.size();
+        if (Declaration.ResultObjectExclusions.size() > Budget.Records - Ranges)
+          return RecoveryValidationBudget::exhausted();
+        Ranges += Declaration.ResultObjectExclusions.size();
       }
-      if (Calls && FrameRanges > Budget.Records / Calls)
+      if (Calls && Ranges > Budget.Records / Calls)
         return RecoveryValidationBudget::exhausted();
-      if (!Budget.records(Calls * FrameRanges, 32))
+      if (!Budget.records(Calls * Ranges, 32))
         return RecoveryValidationBudget::exhausted();
       const uint64_t CallLookups = std::bit_width(Calls) + 1;
       for (const auto &B : R.Residual.Blocks)

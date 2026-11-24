@@ -1363,9 +1363,12 @@ bool Specializer::applyReturningResultObject(
   }
   if (Index == ReturnedObjects.size() ||
       ReturnedObjects[Index].Locations.Result != Object.Result ||
-      ReturnedObjects[Index].Locations.Size != Object.Size)
+      ReturnedObjects[Index].Locations.Size != Object.Size ||
+      ReturnedObjects[Index].Locations.Exclusions != Object.Exclusions)
     return fail(SpecializationStatus::InvalidInput,
                 "returning-call result object has no architecture owner");
+  if (!chargeObjectWork(Object.Exclusions.size()))
+    return false;
   const size_t RootIndex = Options.EntryFrameExcludedObjects.size() +
                            Options.EntryFrameLoadedObjects.size() + Index;
   if (RootIndex >= ObjectRoots.size() || !chargeObjectWork(3))
@@ -1390,6 +1393,9 @@ bool Specializer::applyReturningResultObject(
   Exec.assume(detail::nullableObjectFramePredicate(Ctx, FrameRoot, Bounds.Begin,
                                                    Bounds.End, Root,
                                                    static_cast<int64_t>(Size)));
+  for (const auto &Range : Object.Exclusions)
+    Exec.assume(detail::nullableObjectExclusionPredicate(
+        Ctx, Root, static_cast<int64_t>(Size), Range.Begin, Range.End));
   AffineCandidates.insert(Object.Result.Offset);
   if (Ctx.numNodes() > Options.MaxSymbolicNodes)
     return fail(SpecializationStatus::BudgetExceeded,
@@ -3237,8 +3243,8 @@ bool Specializer::evaluate(int Id) {
     const auto LoadedCount = Options.EntryFrameLoadedObjects.size();
     const auto &Bounds = *Options.EntryFrameBounds;
     if (I >= DirectCount + LoadedCount) {
-      const auto At = Draft.Incoming.Frame.ReturnedObjectSizes.find(
-          I - DirectCount - LoadedCount);
+      const size_t Index = I - DirectCount - LoadedCount;
+      const auto At = Draft.Incoming.Frame.ReturnedObjectSizes.find(Index);
       if (At == Draft.Incoming.Frame.ReturnedObjectSizes.end())
         continue;
       IncomingPredicate =
@@ -3246,8 +3252,17 @@ bool Specializer::evaluate(int Id) {
                     detail::nullableObjectFramePredicate(
                         Ctx, FrameRoot, Bounds.Begin, Bounds.End,
                         ObjectRoots[I], static_cast<int64_t>(At->second)));
-      const auto Nullness = Draft.Incoming.Frame.ReturnedObjectNonNull.find(
-          I - DirectCount - LoadedCount);
+      const auto &Exclusions = ReturnedObjects[Index].Locations.Exclusions;
+      if (!chargeObjectWork(Exclusions.size()))
+        return false;
+      for (const auto &Range : Exclusions)
+        IncomingPredicate =
+            Ctx.mkAnd(IncomingPredicate,
+                      detail::nullableObjectExclusionPredicate(
+                          Ctx, ObjectRoots[I], static_cast<int64_t>(At->second),
+                          Range.Begin, Range.End));
+      const auto Nullness =
+          Draft.Incoming.Frame.ReturnedObjectNonNull.find(Index);
       if (Nullness != Draft.Incoming.Frame.ReturnedObjectNonNull.end()) {
         const auto IsNull = Ctx.mkEq(ObjectRoots[I], Ctx.mkConst(64, 0));
         IncomingPredicate = Ctx.mkAnd(
@@ -4029,6 +4044,7 @@ bool Specializer::evaluate(int Id) {
       SymRef FiniteFrameReadValue;
       bool StoreWithinEntryFrame = false;
       bool ProvedFrameSeparation = false;
+      std::optional<size_t> ProvedReturnedObjectWrite;
       std::optional<SymStorePreservation> StorePreservation;
       llvm::SmallVector<SymStorePreservationRange, 4> ProvedStoreRanges;
       llvm::SmallVector<SymStorePreservationRegion, 4> ProvedAbsoluteRanges;
@@ -4253,6 +4269,7 @@ bool Specializer::evaluate(int Id) {
                       StorePreservation = SymStorePreservation{
                           FrameRoot, Bounds.Begin, Bounds.End};
                       ProvedFrameSeparation = true;
+                      ProvedReturnedObjectWrite = Index;
                     }
                   }
                 }
@@ -4301,11 +4318,12 @@ bool Specializer::evaluate(int Id) {
                       Bounds.ExcludedAddressRanges, [&](const auto &Range) {
                         return Range.Begin == 0 && Range.End >= ObjectBytes;
                       });
+                  bool Nonnull = false;
                   if (!NullCaseDisjoint) {
                     const auto Known = Frame.ReturnedObjectNonNull.find(Index);
-                    NullCaseDisjoint =
-                        Known != Frame.ReturnedObjectNonNull.end() &&
-                        Known->second;
+                    Nonnull = Known != Frame.ReturnedObjectNonNull.end() &&
+                              Known->second;
+                    NullCaseDisjoint = Nonnull;
                   }
                   if (!NullCaseDisjoint) {
                     const SymRef IsNull = Ctx.mkEq(Root, Ctx.mkConst(64, 0));
@@ -4317,16 +4335,18 @@ bool Specializer::evaluate(int Id) {
                         enumerate(Ctx, Exec.pathPredicate(), {IsNull}, 1);
                     if (Failed)
                       return false;
-                    NullCaseDisjoint =
-                        Nullness.Status == FiniteValueStatus::Complete &&
-                        Nullness.Tuples ==
-                            std::vector<std::vector<uint64_t>>{{0}};
+                    Nonnull = Nullness.Status == FiniteValueStatus::Complete &&
+                              Nullness.Tuples ==
+                                  std::vector<std::vector<uint64_t>>{{0}};
+                    NullCaseDisjoint = Nonnull;
                   }
                   if (!NullCaseDisjoint)
                     continue;
                   StorePreservation =
                       SymStorePreservation{FrameRoot, Bounds.Begin, Bounds.End};
                   ProvedFrameSeparation = true;
+                  if (Nonnull)
+                    ProvedReturnedObjectWrite = Index;
                   break;
                 }
               }
@@ -4748,6 +4768,21 @@ bool Specializer::evaluate(int Id) {
                       Bytes <= Excluded.End - First) {
                     // Both complete extents lie in regions already declared
                     // disjoint by the nonwrapping entry-frame predicate.
+                    Disjoint = true;
+                    break;
+                  }
+                }
+              if (!Disjoint && ProvedReturnedObjectWrite)
+                for (const auto &Excluded :
+                     ReturnedObjects[*ProvedReturnedObjectWrite]
+                         .Locations.Exclusions) {
+                  if (!chargeObjectWork(1))
+                    return false;
+                  const auto First = static_cast<uint64_t>(Begin);
+                  if (First >= Excluded.Begin && First < Excluded.End &&
+                      Bytes <= Excluded.End - First) {
+                    // The complete write is inside the current nonnull
+                    // result object, which the callee contract excludes here.
                     Disjoint = true;
                     break;
                   }
