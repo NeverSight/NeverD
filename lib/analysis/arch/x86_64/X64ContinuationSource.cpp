@@ -1628,6 +1628,8 @@ buildInstruction(SpecializationInstruction Instruction,
                     }))
       RequireNative("paged STI requires persistent interrupt scheduling");
   }
+  if (ObservedXbegin && Result.RequiresNativeExecution)
+    return invalid(Result.Diagnostic);
   // Admission belongs to the original semantic operations, before state
   // rewriting hides a system-register update behind ordinary RAM stores.
   // Alignment checks only validate the existing nonfaulting RAM domain.

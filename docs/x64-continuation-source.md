@@ -1308,7 +1308,9 @@ guest addresses. [QEMU debugger](https://www.qemu.org/docs/master/system/gdb.htm
 The exporter checks these fields against one another and the selected image
 bytes. The manifest records the captured vCPU, image PC, bytes, vector and
 observed handler. Replay reads its own V6 descriptor tables and stack. The
-record fits inside the request and can be reused offline. Ordinary exports
+record fits inside the request and can be reused offline. The exporter renders
+the V6 fault step directly from its scalar LowIR. Both C routes reuse its
+entry guards, memory accesses and exits. Ordinary exports
 do not contact QEMU. A capture from a new vCPU describes that experiment.
 An older VM invocation requires its own evidence.
 

@@ -121,8 +121,11 @@ TEST_F(X64ContinuationExportTest, QemuXbeginFaultRejectsContradictoryStops) {
     Refuse(std::move(Capture));
   }
   auto Reserved = xbeginFaultObservation();
-  (*Reserved.getObject("before"))["eflags"] = 0x12a;
-  (*Reserved.getObject("after"))["eflags"] = 0x12a;
+  (*Reserved.getObject("before"))["eflags"] = 0x4a;
+  (*Reserved.getObject("after"))["eflags"] = 0x4a;
+  auto ReservedFrame = Reserved.getString("frame")->str();
+  ReservedFrame.replace(32, 2, "4a");
+  Reserved["frame"] = std::move(ReservedFrame);
   Refuse(std::move(Reserved));
   auto Shared = xbeginFaultObservation();
   auto Gates = Shared.getString("exception_idt")->str();
@@ -137,4 +140,80 @@ TEST_F(X64ContinuationExportTest, QemuXbeginFaultRejectsContradictoryStops) {
          R"("instructions":[4096],"native_rtm_abort_steps":"auto")");
   Refuse(xbeginFaultObservation(),
          R"("instructions":[4096],"paged_memory":true)");
+}
+
+TEST_F(X64ContinuationExportTest, QemuXbeginFaultFrameFoldsToTheObservedState) {
+  if (!neverd::test::compilerReadsCurrentIR(NEVERD_TEST_CLANG))
+    GTEST_SKIP() << "fixture compiler and project LLVM IR differ";
+  load({0xc7, 0xf8, 5, 0, 0, 0, 0xc3});
+  const auto Query = request(R"("instructions":[4096],)" +
+                             xbeginFaultFields(xbeginFaultObservation()));
+  const auto [Source, Manifest] = source(Query, false);
+  // One scalar step takes exactly the same entry guards and memory operations
+  // through either route. This also catches accidental general-backend work.
+  EXPECT_EQ(source(Query, true).first, Source);
+  const auto C = tmpFile("xbegin-fault.c"), IR = tmpFile("xbegin-fault.ll");
+  const auto Folded = tmpFile("xbegin-fault-folded.ll");
+  // Only guest memory addressing is mapped to a byte array. Compile twice to
+  // inline the step and propagate its descriptor/stack stores through the CFG.
+  // The input RAX stays symbolic. No generated instruction or program runs.
+  std::ofstream(C) << R"C(
+#include <stdint.h>
+#include <string.h>
+uint64_t neverd_step_v6_1000(uint8_t *) __attribute__((always_inline));
+static uint8_t ram[0xc000];
+static inline __attribute__((always_inline))
+void read_ram(void *to, const void *addr, size_t n) {
+    __builtin_memcpy(to, ram + (uintptr_t)addr, n);
+}
+static inline __attribute__((always_inline))
+void write_ram(void *addr, const void *from, size_t n) {
+    __builtin_memcpy(ram + (uintptr_t)addr, from, n);
+}
+#define __builtin_memcpy(d,s,n) _Generic((d), void *: write_ram, default: read_ram)((d),(s),(n))
+)C" << Source << R"C(
+#undef __builtin_memcpy
+int proof_frame(uint64_t rax) {
+    neverd_x64_state_v6 s = {0};
+    s.PC=0x1000; s.GPR[0]=rax; s.GPR[4]=0x900b; s.RFlags=0x42;
+    s.CS=(neverd_x64_segment){0,0xffffffff,0x18,0xa09b};
+    s.SS=(neverd_x64_segment){0,0xffffffff,0x20,0xc093};
+    s.GDTR.Limit=s.IDTR.Limit=0xffff;
+    const uint64_t code=0x00af9b000000ffffULL, hi=0;
+    // A different live handler from the recorded gate.
+    const uint64_t gate=0x00008e0000184900ULL;
+    __builtin_memcpy(ram+0x18,&code,8);
+    __builtin_memcpy(ram+96,&gate,8);
+    __builtin_memcpy(ram+104,&hi,8);
+    __builtin_memcpy(ram+0xa000,&s,sizeof s);
+    uint64_t status=neverd_step_v6_1000((uint8_t *)(uintptr_t)0xa000);
+    uint64_t frame[5];
+    __builtin_memcpy(&s,ram+0xa000,sizeof s);
+    __builtin_memcpy(frame,ram+0x8fd8,sizeof frame);
+    return status==7 && s.PC==0x4900 && s.GPR[0]==rax && s.GPR[4]==0x8fd8 &&
+           s.RFlags==0x42 && frame[0]==0x1000 && frame[1]==0x18 &&
+           frame[2]==0x10042 && frame[3]==0x900b && frame[4]==0x20;
+}
+)C";
+  const auto Built =
+      exec(NEVERD_TEST_CLANG, {"-std=c11", "-O3", "-ffreestanding", "-S",
+                               "-emit-llvm", C.string(), "-o", IR.string()});
+  ASSERT_TRUE(Built.ok()) << Built.err;
+  const auto Optimized =
+      exec(NEVERD_TEST_CLANG, {"-O2", "-S", "-emit-llvm", "-x", "ir",
+                               IR.string(), "-o", Folded.string()});
+  ASSERT_TRUE(Optimized.ok()) << Optimized.err;
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  const auto Module = llvm::parseIRFile(Folded.string(), Diagnostic, Context);
+  ASSERT_NE(Module, nullptr);
+  const auto *Proof = Module->getFunction("proof_frame");
+  ASSERT_NE(Proof, nullptr);
+  ASSERT_EQ(Proof->size(), 1u);
+  const auto *Ret =
+      llvm::dyn_cast<llvm::ReturnInst>(Proof->front().getTerminator());
+  ASSERT_NE(Ret, nullptr);
+  const auto *Result = llvm::dyn_cast<llvm::ConstantInt>(Ret->getReturnValue());
+  ASSERT_NE(Result, nullptr);
+  EXPECT_TRUE(Result->isOne());
 }

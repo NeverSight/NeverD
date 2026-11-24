@@ -12,6 +12,8 @@
 
 #include "neverd/lift/X86/X86Regs.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -80,12 +82,33 @@ std::optional<std::string> renderX64RtmFaultStep(const LowFunc &F) {
       Decl << "    " << scalarType(V.Size) << " " << Name << ";\n";
     return Name;
   };
+  llvm::SmallBitVector Labels(F.Blocks.size());
+  for (const auto &Block : F.Blocks) {
+    for (int Target : Block.Succs)
+      if (Target != Block.Id + 1)
+        Labels.set(Target);
+    if (Block.Succs.size() == 2)
+      Labels.set(Block.Succs[1]);
+  }
   for (const LowBlock &Block : F.Blocks) {
-    Body << "block_" << Block.Id << ":\n";
+    if (Labels.test(Block.Id))
+      Body << "block_" << Block.Id << ":\n";
     for (const LowOp &Op : Block.Ops) {
       const auto A = [&] { return Value(Op.Inputs[0]); };
       const auto B = [&] { return Value(Op.Inputs[1]); };
+      if (Op.MemoryOrdering != NdMemoryOrdering::None ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return std::nullopt;
+      const auto Scalar = [](NdVar V) {
+        return (V.isConst() || V.isReg() || V.isTemp()) &&
+               (V.Size == 1 || V.Size == 2 || V.Size == 4 || V.Size == 8);
+      };
+      if ((Op.Output.Size && !Scalar(Op.Output)) ||
+          !llvm::all_of(llvm::ArrayRef(Op.Inputs, Op.NumInputs), Scalar))
+        return std::nullopt;
       auto Token = binaryToken(Op.Opcode);
+      if (Op.Opcode == NdOp::BRANCH && Block.Succs[0] == Block.Id + 1)
+        continue;
       Body << "    ";
       if (!Token.empty()) {
         // A uint64_t first operand also keeps the C integer promotions from
