@@ -29,6 +29,11 @@ IA32_TSX_FORCE_ABORT bit 0, or the combination of the RTM_ALWAYS_ABORT and
 RTM_FORCE_ABORT CPUID bits fixes RAX at zero and selects the
 original fallback during export. With hidden RTM and insufficient evidence,
 the step retains the original native boundary.
+An isolated QEMU/KVM vector 6 stop at the selected XBEGIN can supply the
+missing evidence. The [GDB capture command](../../../../scripts/gdb_xbegin_capture.py)
+collects the two register banks, original bytes, exception gates and hardware
+frame for the existing V6 export validator. An observed fallback EAX belongs
+to that attempt. Ordinary exports perform no debugger queries.
 
 The ordinary HighC and LLVMC interfaces now expose an unresolved fixed
 Win64 outgoing word at its authenticated direct CALL. Bind

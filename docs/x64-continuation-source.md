@@ -1297,6 +1297,37 @@ entry without IST and a quiescent guest. The producer owns the breakpoint
 setup, capture identity and the association between raw bytes and their
 guest addresses. [QEMU debugger](https://www.qemu.org/docs/master/system/gdb.html)
 
+The GDB command reads both stops and writes the request fragment. Start with
+the isolated vCPU stopped at the original XBEGIN. Give vector 6 its own landing
+pad and direct the other present exception gates to a shared pad. The two
+successors and the landing pads must fit the four x86 hardware breakpoint
+slots. Disable any breakpoint at the starting RIP so GDB can resume directly.
+[Sourcing a Python command in GDB](https://sourceware.org/gdb/current/onlinedocs/gdb.html/CLI-Commands-In-Python.html)
+
+```text
+(gdb) source scripts/gdb_xbegin_capture.py
+(gdb) neverd-xbegin-capture /tmp/xbegin.json
+(gdb) continue
+```
+
+The command reads QEMU's synchronized registers and original virtual memory
+and arms hardware breakpoints on that inferior. It matches the synchronized
+RIP to the breakpoint GDB reports. The operator issues the single resume.
+The first stop removes the capture breakpoints. A stop at the dedicated vector
+6 entry records the original bytes, IDT and frame. At the distinct abort
+target GDB prints that attempt's EAX. Coincident successors remain
+undetermined. Only a vector 6 observation produces a JSON fragment.
+The exporter verifies it against the image and the V6 request.
+
+Pass the observed load base as a second argument when the image was relocated.
+Use `neverd-xbegin-capture cancel` to disarm before resuming. The destination
+file must be new. The resulting fragment can be reused in an existing request
+without a debugger connection.
+
+```sh
+jq --slurpfile capture /tmp/xbegin.json '. + $capture[0]' request.json > bound-request.json
+```
+
 | Capture field | Contents |
 | --- | --- |
 | `before`, `after` | Each object contains `cpu`, `rip`, `rsp`, `rax`, `eflags`, `cs`, `ss`, `cs_ar`, `cr4` and `efer`. `cs_ar` is the access-rights word (QEMU HMP segment flags shifted right by eight). |
