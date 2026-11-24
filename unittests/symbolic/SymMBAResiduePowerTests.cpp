@@ -899,13 +899,13 @@ TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
     const auto Input = Ctx.mkMul(Factors);
     size_t Storage = 1u << 20;
     detail::WorkBudget Tiny(8);
-    EXPECT_EQ(detail::foldResidueDecisions(Ctx, Input, Tiny, Storage), Input);
+    EXPECT_EQ(detail::foldProductResidues(Ctx, Input, Tiny, Storage), Input);
     EXPECT_LE(Tiny.used(), 8u);
 
     detail::WorkBudget Budget(65536);
     Storage = 1u << 20;
     const auto Reduced =
-        detail::foldResidueDecisions(Ctx, Input, Budget, Storage);
+        detail::foldProductResidues(Ctx, Input, Budget, Storage);
     ASSERT_NE(Reduced, Input);
     EXPECT_LT(Ctx.readabilityCost(Reduced), Ctx.readabilityCost(Input) / 4);
     if (Bits == 4 && solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
