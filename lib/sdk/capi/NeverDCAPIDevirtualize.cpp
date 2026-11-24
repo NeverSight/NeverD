@@ -298,7 +298,8 @@ static const char *devirtualizeSource(
     const neverd_devirtualize_options_v8 *ChainOptions = nullptr,
     const neverd_devirtualize_options_v9 *ProofOptions = nullptr,
     const neverd_devirtualize_options_v10 *SourceOptions = nullptr,
-    const neverd_devirtualize_options_v11 *HintOptions = nullptr) {
+    const neverd_devirtualize_options_v11 *HintOptions = nullptr,
+    const neverd_devirtualize_options_v12 *PartitionOptions = nullptr) {
   if (Report)
     *Report = nullptr;
   auto *S = toSession(Session);
@@ -348,11 +349,12 @@ static const char *devirtualizeSource(
           "disjoint from "
           "guest memory; fixed original mappings; little-endian 64-bit host";
     if (Options) {
-      const size_t RequiredSize = HintOptions     ? sizeof(*HintOptions)
-                                  : SourceOptions ? sizeof(*SourceOptions)
-                                  : ProofOptions  ? sizeof(*ProofOptions)
-                                  : ChainOptions  ? sizeof(*ChainOptions)
-                                  : WorkOptions   ? sizeof(*WorkOptions)
+      const size_t RequiredSize = PartitionOptions ? sizeof(*PartitionOptions)
+                                  : HintOptions    ? sizeof(*HintOptions)
+                                  : SourceOptions  ? sizeof(*SourceOptions)
+                                  : ProofOptions   ? sizeof(*ProofOptions)
+                                  : ChainOptions   ? sizeof(*ChainOptions)
+                                  : WorkOptions    ? sizeof(*WorkOptions)
                                   : SeparationOptions
                                       ? sizeof(*SeparationOptions)
                                   : AlignmentOptions ? sizeof(*AlignmentOptions)
@@ -362,7 +364,9 @@ static const char *devirtualizeSource(
                                                      : sizeof(*Options);
       if (Options->struct_size < RequiredSize)
         return Fail(
-            HintOptions
+            PartitionOptions
+                ? "devirtualize options do not cover the complete v12 structure"
+            : HintOptions
                 ? "devirtualize options do not cover the complete v11 structure"
             : SourceOptions
                 ? "devirtualize options do not cover the complete v10 structure"
@@ -420,6 +424,24 @@ static const char *devirtualizeSource(
                Hint.offset,
                Hint.bytes,
                Hint.demanded_bits});
+        }
+      }
+      if (PartitionOptions) {
+        if (PartitionOptions->reserved ||
+            PartitionOptions->partition_hint_count >
+                limits::analysis::kMaxControlPartitionHints ||
+            (PartitionOptions->partition_hint_count &&
+             !PartitionOptions->partition_hints))
+          return Fail("invalid devirtualize v12 partition hint list");
+        for (size_t I = 0; I < PartitionOptions->partition_hint_count; ++I) {
+          const auto &Hint = PartitionOptions->partition_hints[I];
+          for (uint8_t Byte : Hint.reserved)
+            if (Byte)
+              return Fail("invalid devirtualize v12 partition hint reserved "
+                          "byte");
+          Config.ControlPartitionHints.push_back(
+              {{Hint.address, InstructionMode::Default},
+               {Hint.register_offset, Hint.bytes}});
         }
       }
       if (ProofOptions) {
@@ -587,6 +609,13 @@ static const char *devirtualizeSource(
                              {"bytes", Hint.Bytes},
                              {"bits", vaHex(Hint.DemandedBits)}});
     Evidence["controlProducerHints"] = std::move(ProducerHints);
+    llvm::json::Array PartitionHints;
+    for (const auto &Hint : Config.ControlPartitionHints)
+      PartitionHints.push_back(
+          llvm::json::Object{{"address", vaHex(Hint.Cursor.Address)},
+                             {"registerOffset", vaHex(Hint.Register.Offset)},
+                             {"bytes", Hint.Register.Bytes}});
+    Evidence["controlPartitionHints"] = std::move(PartitionHints);
     Evidence["frameRoot"] = "entry-rsp";
     Evidence["returnContract"] =
         "ordinary ABI return; every external-origin store target range, "
@@ -688,6 +717,16 @@ static const char *devirtualizeSource(
       Evidence["nextControlProducerHints"] = std::move(DiscoveredProducerHints);
       Evidence["controlProducerHintsTruncated"] =
           R.ControlProducerHintsTruncated;
+      llvm::json::Array DiscoveredPartitionHints;
+      for (const auto &Hint : R.ControlPartitionHints)
+        DiscoveredPartitionHints.push_back(
+            llvm::json::Object{{"address", vaHex(Hint.Cursor.Address)},
+                               {"registerOffset", vaHex(Hint.Register.Offset)},
+                               {"bytes", Hint.Register.Bytes}});
+      Evidence["nextControlPartitionHints"] =
+          std::move(DiscoveredPartitionHints);
+      Evidence["controlPartitionHintsTruncated"] =
+          R.ControlPartitionHintsTruncated;
       Evidence["residualBlocks"] =
           static_cast<int64_t>(R.Residual.Blocks.size());
       llvm::json::Array Reads;
@@ -1125,4 +1164,41 @@ extern "C" const char *neverd_devirtualize_machine_source_v11(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v11 *Options, const char **Report) {
   return devirtualizeSourceV11(Session, Entry, Options, Report, true);
+}
+
+static const char *
+devirtualizeSourceV12(neverd_session_t Session, neverd_va_t Entry,
+                      const neverd_devirtualize_options_v12 *Options,
+                      const char **Report, bool MachineState) {
+  neverd_devirtualize_options_v12 Defaults{};
+  Defaults.base.base.base.base.base.base.base.base.base.base.base.struct_size =
+      sizeof(Defaults);
+  if (!Options)
+    Options = &Defaults;
+  const auto &V11 = Options->base;
+  const auto &V10 = V11.base;
+  const auto &V9 = V10.base;
+  const auto &V8 = V9.base;
+  const auto &V7 = V8.base;
+  const auto &V6 = V7.base;
+  const auto &V5 = V6.base;
+  const auto &V4 = V5.base;
+  const auto &V3 = V4.base;
+  const auto &V2 = V3.base;
+  const auto &V1 = V2.base;
+  return devirtualizeSource(Session, Entry, &V1, Report, MachineState, &V2, &V3,
+                            &V4, &V5, &V6, &V7, &V8, &V9, &V10, &V11, Options);
+}
+
+extern "C" const char *
+neverd_devirtualize_source_v12(neverd_session_t Session, neverd_va_t Entry,
+                               const neverd_devirtualize_options_v12 *Options,
+                               const char **Report) {
+  return devirtualizeSourceV12(Session, Entry, Options, Report, false);
+}
+
+extern "C" const char *neverd_devirtualize_machine_source_v12(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v12 *Options, const char **Report) {
+  return devirtualizeSourceV12(Session, Entry, Options, Report, true);
 }

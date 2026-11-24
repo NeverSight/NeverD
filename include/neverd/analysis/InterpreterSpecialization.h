@@ -44,6 +44,19 @@ struct SpecializationControlProducerHint {
   bool operator==(const SpecializationControlProducerHint &) const = default;
 };
 
+/// Candidate register split at one physical successor. This carries only a
+/// location: every incoming edge must prove its complete finite value domain
+/// before emitting runtime guards. No observed value or path is imported.
+struct SpecializationControlPartitionHint {
+  SpecializationCursor Cursor;
+  symbolic::SymRegisterRange Register;
+
+  bool operator==(const SpecializationControlPartitionHint &Other) const {
+    return Cursor == Other.Cursor && Register.Offset == Other.Register.Offset &&
+           Register.Bytes == Other.Register.Bytes;
+  }
+};
+
 /// Provider certificate for the omitted physical effects of a native near
 /// CALL/RETURN. The instruction uses the configured eight-byte frame register
 /// as its stack pointer. CALL pushes its exact fallthrough address. Internal
@@ -441,6 +454,10 @@ struct SpecializationOptions {
   /// They affect only dependency projection and are never an environment
   /// premise. A fresh run must still prove every edge and final fixed point.
   std::vector<SpecializationControlProducerHint> ControlProducerHints;
+  /// Optional candidate successor splits. Each nominated register range also
+  /// becomes a context field, within MaxControlFields. An incomplete domain
+  /// retains the ordinary conservative edge and cannot publish a partial graph.
+  std::vector<SpecializationControlPartitionHint> ControlPartitionHints;
   /// Optional entry-relative frame identity. This enables affine pointers,
   /// complete affine pointer spills, and constant frame-byte propagation.
   /// Bounded alignment refinements cover every entry-root residue; they do
@@ -712,6 +729,8 @@ struct SpecializationResult {
   /// attempt. These are not a partial residual or a proof certificate.
   std::vector<SpecializationControlProducerHint> ControlProducerHints;
   bool ControlProducerHintsTruncated = false;
+  std::vector<SpecializationControlPartitionHint> ControlPartitionHints;
+  bool ControlPartitionHintsTruncated = false;
   /// Includes the additional pure operations generated for certified reads
   /// and finite dispatch, plus optional frame-normalization strategy units;
   /// fixed-point reevaluations and normalization retries are charged again.

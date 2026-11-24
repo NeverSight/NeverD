@@ -141,6 +141,8 @@ JSON 报告新增 `discoverControlState`、`maxControlRefinements`、`maxDiscove
 
 `EntryFrameBounds::ExcludedAddressRanges` 还可显式声明整个入口帧必须避开的绝对、不回绕地址区间。这些是调用者前置条件，不能从一次观测地址或指针来源推断。`ProveStoreFrameSeparation` 只有证明写入的完整范围与声明帧不相交后，才保留当前帧字节和已保存的仿射指针；未证明分离的写入仍按普通别名规则使知识失效，证明未知或预算耗尽时拒绝。检查覆盖 CMPXCHG 的完整写入阶段。原生证明要求帧契约中的排除列表完全一致；原始结果凭据绑定排除列表及证明策略，残留代码的消费者必须保留这些输入前提。
 
+`SpecializationOptions::ControlPartitionHints` 和 v12 源码接口接收有界的“物理后继地址＋寄存器字节范围”候选。CLI 可重复使用 `--vm-partition-hint=地址:寄存器库偏移:字节数`。报告记录 `controlPartitionHints`、`nextControlPartitionHints`，列表被截断时标记 `controlPartitionHintsTruncated`。复用候选前须核对物理镜像。每条入边都要重新证明寄存器的完整有限值域，并为所有取值生成运行时比较；无法完整枚举时保留普通保守边。候选不提供运行值、可达路径、内存事实或环境前提，且计入发现访问量和控制字段预算；完整结果仍须证明全部可达图。
+
 <!-- i18n-section: execution-contract -->
 
 ## 执行契约

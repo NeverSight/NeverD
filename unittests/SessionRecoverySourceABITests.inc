@@ -163,3 +163,57 @@ TEST_F(SessionCAPITest, InterpreterRecoveryV11KeepsProducerHintsAsCandidates) {
     EXPECT_FALSE(
         takeString(Recover(Session, Entry, &Options.base, nullptr)).empty());
 }
+
+TEST_F(SessionCAPITest, InterpreterRecoveryV12KeepsPartitionHintsAsCandidates) {
+  const auto Input = write("partition-hints.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  neverd_devirtualize_partition_hint_v1 Hint{Entry + 0x100, 0, 1, {}};
+  neverd_devirtualize_options_v12 Options{};
+  Options.base.base.base.base.base.base.base.base.base.base.base.struct_size =
+      sizeof(Options);
+  Options.partition_hints = &Hint;
+  Options.partition_hint_count = 1;
+  for (bool Machine : {false, true}) {
+    auto Recover = Machine ? neverd_devirtualize_machine_source_v12
+                           : neverd_devirtualize_source_v12;
+    const char *Report = nullptr;
+    EXPECT_FALSE(takeString(Recover(Session, Entry, nullptr, &Report)).empty());
+    EXPECT_TRUE(bool(llvm::json::parse(takeString(Report))));
+    EXPECT_FALSE(
+        takeString(Recover(Session, Entry, &Options, &Report)).empty());
+    auto Parsed = llvm::json::parse(takeString(Report));
+    ASSERT_TRUE(bool(Parsed));
+    const auto *Object = Parsed->getAsObject();
+    ASSERT_NE(Object, nullptr);
+    EXPECT_EQ(Object->getBoolean("complete"), true);
+    EXPECT_EQ(Object->getBoolean("controlPartitionHintsTruncated"), false);
+    const auto *Inputs = Object->getArray("controlPartitionHints");
+    const auto *Next = Object->getArray("nextControlPartitionHints");
+    ASSERT_NE(Inputs, nullptr);
+    ASSERT_NE(Next, nullptr);
+    EXPECT_EQ(Inputs->size(), 1u);
+    EXPECT_EQ(Next->size(), 1u);
+
+    Options.base.base.base.base.base.base.base.base.base.base.base.struct_size =
+        sizeof(Options) - 1;
+    EXPECT_EQ(Recover(Session, Entry, &Options, &Report), nullptr);
+    EXPECT_NE(takeString(Report).find("complete v12 structure"),
+              std::string::npos);
+    Options.base.base.base.base.base.base.base.base.base.base.base.struct_size =
+        sizeof(Options);
+    Hint.reserved[0] = 1;
+    EXPECT_EQ(Recover(Session, Entry, &Options, nullptr), nullptr);
+    Hint.reserved[0] = 0;
+    Hint.bytes = 0;
+    EXPECT_EQ(Recover(Session, Entry, &Options, &Report), nullptr);
+    EXPECT_NE(takeString(Report).find("invalid control partition hint"),
+              std::string::npos);
+    Hint.bytes = 1;
+  }
+  Options.reserved = UINT64_MAX;
+  for (auto Recover :
+       {neverd_devirtualize_source_v11, neverd_devirtualize_machine_source_v11})
+    EXPECT_FALSE(
+        takeString(Recover(Session, Entry, &Options.base, nullptr)).empty());
+}

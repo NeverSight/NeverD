@@ -139,6 +139,8 @@ JSON 報告新增 `discoverControlState`、`maxControlRefinements`、`maxDiscove
 
 `EntryFrameBounds::ExcludedAddressRanges` 也可明確宣告整個入口框架必須避開的絕對、不回繞位址區間。這些是呼叫者前置條件，不能從一次觀測位址或指標來源推斷。`ProveStoreFrameSeparation` 只有證明寫入的完整範圍與宣告框架不相交後，才保留目前框架位元組及已儲存的仿射指標；未證明分離的寫入仍依一般別名規則使資訊失效，證明未知或預算耗盡時拒絕。檢查涵蓋 CMPXCHG 的完整寫入階段。原生證明要求框架契約中的排除清單完全一致；原始結果憑據綁定清單與證明策略，殘留程式碼的使用者必須保留這些輸入前提。
 
+`SpecializationOptions::ControlPartitionHints` 與 v12 原始碼 API 接受有界的實體後繼位址及暫存器位元組範圍候選；CLI 可重複指定 `--vm-partition-hint=位址:暫存器庫偏移:位元組數`。報告包含 `controlPartitionHints`、`nextControlPartitionHints`，清單受限時標記 `controlPartitionHintsTruncated`。重用前須核對實體映像。每條入邊都須重新證明完整有限值域，並為所有情況產生執行時比較；無法完整列舉時保留保守邊。候選不提供數值、可達路徑、記憶體事實或環境前提，且計入探索與控制欄位預算；完整結果仍須證明全部可達圖。
+
 <!-- i18n-section: execution-contract -->
 
 ## 執行契約

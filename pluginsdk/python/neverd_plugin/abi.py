@@ -809,6 +809,28 @@ class NeverDDevirtualizeOptionsV11(ctypes.Structure):
     ]
 
 
+class NeverDDevirtualizePartitionHintV1(ctypes.Structure):
+    """Physical successor and register range; no value or path is assumed."""
+
+    _fields_ = [
+        ("address", ctypes.c_uint64),
+        ("register_offset", ctypes.c_uint64),
+        ("bytes", ctypes.c_uint16),
+        ("reserved", ctypes.c_uint8 * 6),
+    ]
+
+
+class NeverDDevirtualizeOptionsV12(ctypes.Structure):
+    """v11 prefix plus bounded register partition candidates."""
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV11),
+        ("partition_hints", ctypes.POINTER(NeverDDevirtualizePartitionHintV1)),
+        ("partition_hint_count", ctypes.c_size_t),
+        ("reserved", ctypes.c_uint64),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -1080,6 +1102,9 @@ _C_TYPES: dict[str, object] = {
     ),
     "const neverd_devirtualize_options_v11 *": ctypes.POINTER(
         NeverDDevirtualizeOptionsV11
+    ),
+    "const neverd_devirtualize_options_v12 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV12
     ),
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -2747,6 +2772,20 @@ _declare(
      "const neverd_devirtualize_options_v11 *", "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_devirtualize_source_v12",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v12 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v12",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v12 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_comparison_create", "neverd_comparison_t", [])
 _declare("neverd_comparison_destroy", "void", ["neverd_comparison_t"])
 _declare("neverd_comparison_cancel", "void", ["neverd_comparison_t"])
@@ -2841,6 +2880,8 @@ __all__ = [
     "NeverDDevirtualizeOptionsV10",
     "NeverDDevirtualizeProducerHintV1",
     "NeverDDevirtualizeOptionsV11",
+    "NeverDDevirtualizePartitionHintV1",
+    "NeverDDevirtualizeOptionsV12",
     "DevirtualizeMachineSourceABI",
     "DevirtualizeFlagsV6",
     "DevirtualizeFlagsV7",

@@ -156,6 +156,8 @@ Se una destinazione rimane irrisolta dopo l’esaurimento dei candidati di raffi
 
 `EntryFrameBounds::ExcludedAddressRanges` può inoltre dichiarare intervalli assoluti, non vuoti e senza riavvolgimento, disgiunti dall’intero frame iniziale. Sono precondizioni esplicite del chiamante, mai dedotte da indirizzi osservati o dalla provenienza dei puntatori. `ProveStoreFrameSeparation` conserva i byte correnti del frame e i puntatori affini salvati solo dopo aver provato la separazione dell’intera scrittura. Le scritture non provate mantengono la normale invalidazione degli alias; prove sconosciute o budget esauriti causano un rifiuto. È inclusa tutta la fase di scrittura CMPXCHG. La prova nativa richiede lo stesso elenco di esclusioni nel contratto del frame. Le ricevute grezze vincolano elenco e strategia; chi usa il codice residuo deve mantenere le precondizioni.
 
+`SpecializationOptions::ControlPartitionHints` e le API sorgente v12 accettano candidati limitati composti da successore fisico e intervallo di byte del registro. La CLI accetta più opzioni `--vm-partition-hint=indirizzo:offset-registro:byte`. Il rapporto contiene `controlPartitionHints` e `nextControlPartitionHints`; `controlPartitionHintsTruncated` segnala un elenco limitato. Verificare l’identità dell’immagine prima del riuso. Ogni arco entrante deve dimostrare nuovamente il dominio finito completo ed emettere un confronto per ogni caso. Se il dominio è incompleto, resta l’arco conservativo. I candidati non forniscono valori, percorsi raggiungibili, fatti di memoria o precondizioni e consumano i budget di scoperta e campi di controllo. Un risultato completo richiede ancora la prova dell’intero grafo raggiungibile.
+
 <!-- i18n-section: execution-contract -->
 
 ## Contratto di esecuzione

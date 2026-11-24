@@ -27,6 +27,7 @@ namespace neverd::limits::analysis {
 
 // include/neverd/analysis/InterpreterSpecialization.h
 inline constexpr size_t kMaxControlProducerHints = 4096;
+inline constexpr size_t kMaxControlPartitionHints = 256;
 
 // Read-only scalar model construction and equivalence queries.
 inline constexpr uint64_t kLLVMScalarStopPollWork = 1024;

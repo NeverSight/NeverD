@@ -623,6 +623,7 @@ TEST_F(DevirtualizationSourceTest, CLIEmitsSourceAndEvidenceOnlyOnSuccess) {
       exec(ndBin(), {"decompile", "--func", "generic_vm_register_arithmetic",
                      "--devirtualize", "--vm-control=r10",
                      "--vm-producer-hint=0xdead:r:0:1:0x1",
+                     "--vm-partition-hint=0xdead:0:1",
                      "--recovery-report=" + HintedReport.string(), "-o",
                      HintedSource.string(), Binary.string()});
   ASSERT_TRUE(Hinted.ok()) << Hinted.err;
@@ -639,6 +640,13 @@ TEST_F(DevirtualizationSourceTest, CLIEmitsSourceAndEvidenceOnlyOnSuccess) {
   ASSERT_NE(NextHints, nullptr);
   EXPECT_EQ(InputHints->size(), 1u);
   EXPECT_EQ(NextHints->size(), 1u);
+  const auto *PartitionInputs = HintedObject->getArray("controlPartitionHints");
+  const auto *PartitionNext =
+      HintedObject->getArray("nextControlPartitionHints");
+  ASSERT_NE(PartitionInputs, nullptr);
+  ASSERT_NE(PartitionNext, nullptr);
+  EXPECT_EQ(PartitionInputs->size(), 1u);
+  EXPECT_EQ(PartitionNext->size(), 1u);
 
   const auto InvalidSource = tmpFile("invalid.c");
   const auto InvalidReport = tmpFile("invalid.json");

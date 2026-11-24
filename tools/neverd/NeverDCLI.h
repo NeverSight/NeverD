@@ -281,6 +281,7 @@ extern llvm::cl::opt<bool> Devirtualize;
 extern llvm::cl::list<std::string> VMControlRegisters;
 extern llvm::cl::list<std::string> VMControlFrameSlots;
 extern llvm::cl::list<std::string> VMProducerHints;
+extern llvm::cl::list<std::string> VMPartitionHints;
 extern llvm::cl::opt<unsigned> VMMaxNodes;
 extern llvm::cl::opt<unsigned> VMMaxContexts;
 extern llvm::cl::opt<std::string> VMMaxRefinements;

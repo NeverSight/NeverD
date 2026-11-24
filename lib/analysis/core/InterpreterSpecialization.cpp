@@ -6302,10 +6302,14 @@ specializeInterpreter(SpecializationProvider &Provider,
   ControlRefinement Refinement(Options.MaxSymbolicNodes);
   if (Options.ControlProducerHints.size() >
           limits::analysis::kMaxControlProducerHints ||
-      Options.ControlProducerHints.size() > Options.MaxDiscoveryVisits) {
+      Options.ControlPartitionHints.size() >
+          limits::analysis::kMaxControlPartitionHints ||
+      Options.ControlProducerHints.size() > Options.MaxDiscoveryVisits ||
+      Options.ControlPartitionHints.size() >
+          Options.MaxDiscoveryVisits - Options.ControlProducerHints.size()) {
     SpecializationResult Limited;
     Limited.Status = SpecializationStatus::BudgetExceeded;
-    Limited.Diagnostic = "control producer hint budget exhausted";
+    Limited.Diagnostic = "control precision hint budget exhausted";
     return Limited;
   }
   for (const auto &Hint : Options.ControlProducerHints) {
@@ -6324,7 +6328,48 @@ specializeInterpreter(SpecializationProvider &Provider,
                                 Hint.Register, Hint.Offset, Hint.Bytes}] |=
         Hint.DemandedBits;
   }
-  Refinement.Visits = Options.ControlProducerHints.size();
+  for (const auto &Hint : Options.ControlPartitionHints) {
+    const auto &Range = Hint.Register;
+    if (Hint.Cursor.Address == InvalidVA || Hint.Cursor == Entry ||
+        !isSingleInstructionMode(Hint.Cursor.Mode) || !Range.Bytes ||
+        Range.Bytes > 8 || Range.Offset > InvalidVA - (Range.Bytes - 1)) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "invalid control partition hint";
+      return Invalid;
+    }
+    const auto Point = std::make_pair(Hint.Cursor.Address, Hint.Cursor.Mode);
+    const auto [At, Added] =
+        Refinement.RegisterPartitions.emplace(Point, Range);
+    if (!Added && (At->second.Offset != Range.Offset ||
+                   At->second.Bytes != Range.Bytes)) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "conflicting control partition hints";
+      return Invalid;
+    }
+    const auto Same = [&](const auto &Other) {
+      return Other.Offset == Range.Offset && Other.Bytes == Range.Bytes;
+    };
+    if (std::none_of(Options.ControlRegisters.begin(),
+                     Options.ControlRegisters.end(), Same) &&
+        std::none_of(Refinement.ContextRegisters.begin(),
+                     Refinement.ContextRegisters.end(), Same))
+      Refinement.ContextRegisters.push_back(Range);
+  }
+  Effective.ControlRegisters = canonicalControlFields(
+      Effective.ControlRegisters, Refinement.Registers,
+      Options.ControlRegisters.size(), Refinement.ContextRegisters,
+      Refinement.PendingContextRegisters, Refinement.AddressRegisters);
+  if (Effective.ControlRegisters.size() + Effective.ControlFrameSlots.size() >
+      Options.MaxControlFields) {
+    SpecializationResult Limited;
+    Limited.Status = SpecializationStatus::BudgetExceeded;
+    Limited.Diagnostic = "control partition field budget exhausted";
+    return Limited;
+  }
+  Refinement.Visits = Options.ControlProducerHints.size() +
+                      Options.ControlPartitionHints.size();
   if (Options.EntryFrameAlignment && Options.EntryFrameAlignment->valid())
     Refinement.FrameMask = Options.EntryFrameAlignment->Alignment - 1;
   SpecializationResult Result;
@@ -6343,6 +6388,16 @@ specializeInterpreter(SpecializationProvider &Provider,
       const auto &[Address, Mode, Register, Offset, Bytes] = Demand;
       Result.ControlProducerHints.push_back(
           {{Address, Mode}, Register, Offset, Bytes, Bits});
+    }
+    Result.ControlPartitionHintsTruncated =
+        Refinement.RegisterPartitions.size() >
+        limits::analysis::kMaxControlPartitionHints;
+    for (const auto &[Point, Range] : Refinement.RegisterPartitions) {
+      if (Result.ControlPartitionHints.size() ==
+          limits::analysis::kMaxControlPartitionHints)
+        break;
+      Result.ControlPartitionHints.push_back(
+          {{Point.first, Point.second}, Range});
     }
     // Refinement can exhaust a shared ledger while replaying an earlier
     // prefix. Keep the last semantic failure as context for that limit,
