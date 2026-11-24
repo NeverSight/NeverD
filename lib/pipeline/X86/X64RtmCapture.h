@@ -17,6 +17,7 @@
 
 #include <limits>
 #include <optional>
+#include <string>
 
 namespace neverd {
 
@@ -39,6 +40,10 @@ std::optional<T> rtmCaptureWord(const llvm::json::Object &Record,
 
 llvm::Expected<va_t> rtmCaptureImagePC(va_t Rip, std::optional<va_t> LoadBase,
                                        va_t ImageBase);
+
+/// Emit the V6 owner's scalar step directly. Unsupported future operations
+/// fall back to the requested general backend.
+std::optional<std::string> renderX64RtmFaultStep(const LowFunc &F);
 
 struct X64RtmFaultCapture {
   analysis::X64XbeginFaultSite Site;

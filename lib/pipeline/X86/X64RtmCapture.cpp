@@ -49,10 +49,14 @@ std::optional<Stop> readStop(const llvm::json::Object *O,
   const auto CS = rtmCaptureWord<uint16_t>(*O, "cs");
   const auto SS = rtmCaptureWord<uint16_t>(*O, "ss");
   const auto Access = rtmCaptureWord<uint16_t>(*O, "cs_ar");
-  // LMA, present ring-zero long code, IF/TF clear, fixed RFLAGS bit 1.
+  // The stopped ring-zero fixture admits arithmetic flags, DF, AC and ID.
+  // IF, TF and RF are clear. Reserved RFLAGS bits cannot certify a stop.
+  constexpr uint32_t StoppedFlags = 0x240cd7;
+  // LMA, present ring-zero long code, fixed RFLAGS bit 1.
   if (!Cpu || !Rip || !Rsp || !Rax || !Flags || !Efer || !Cr4 || !CS || !SS ||
       !Access || (*Efer & 0x400) == 0 || (*Access & 0x60f8) != 0x2098 ||
-      !(*CS & 0xfffc) || ((*CS | *SS) & 3) || (*Flags & 0x34302) != 2 ||
+      !(*CS & 0xfffc) || ((*CS | *SS) & 3) ||
+      ((*Flags & ~StoppedFlags) != 0 || (*Flags & 2) == 0) ||
       (((*Cr4 >> 12) & 1) != unsigned(AddressBits == 57)) ||
       !llvm::isIntN(AddressBits, static_cast<int64_t>(*Rip)) ||
       !llvm::isIntN(AddressBits, static_cast<int64_t>(*Rsp)))
@@ -141,6 +145,10 @@ X64RtmFaultCapture::read(const llvm::json::Value &Value, va_t ImageBase,
   auto PC = rtmCaptureImagePC(Before->Rip, LoadBase, ImageBase);
   if (!PC)
     return PC.takeError();
+  if (*PC > InvalidVA - Bytes.size() ||
+      !llvm::isIntN(AddressBits, static_cast<int64_t>(*PC)) ||
+      !llvm::isIntN(AddressBits, static_cast<int64_t>(*PC + Bytes.size() - 1)))
+    return invalid("captured XBEGIN is outside canonical image addresses");
   Capture.Site.Address = *PC;
   Capture.Receipt = llvm::json::Object{
       {"cpu", Before->Cpu},

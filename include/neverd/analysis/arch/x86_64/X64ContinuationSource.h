@@ -521,9 +521,6 @@ struct X64ContinuationSourceOptions {
   /// DIV/IDIV at 8/16/32/64 bits directly deliver #UD/#DE; other domains
   /// remain.
   bool EventDelivery = false;
-  /// Replay this site under the same RTM configuration, outside a transaction.
-  /// Its fault enters the live V6 IDT with the original PC and RF set on stack.
-  std::optional<X64XbeginFaultSite> ObservedXbeginFault;
   /// V6 scalar source uses an explicit second pointer and the paged executor.
   /// Memory, #DE/#UD/#GP/#SS/#PF/#AC, fetch authentication and restart state
   /// belong to that executor. ScheduledEvents selects its faultable scheduler;
@@ -545,6 +542,9 @@ struct X64ContinuationSourceOptions {
   bool NotifyCr8Writes = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;
+  /// Replay this site under the same RTM configuration, outside a transaction.
+  /// Its fault enters the live V6 IDT with the original PC and RF set on stack.
+  std::optional<X64XbeginFaultSite> ObservedXbeginFault;
 };
 
 /// A profile-owned choice of a legacy GPR's upper 32 bits on a successful

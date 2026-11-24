@@ -120,6 +120,10 @@ TEST_F(X64ContinuationExportTest, QemuXbeginFaultRejectsContradictoryStops) {
     Capture["bytes"] = Bytes;
     Refuse(std::move(Capture));
   }
+  auto Reserved = xbeginFaultObservation();
+  (*Reserved.getObject("before"))["eflags"] = 0x12a;
+  (*Reserved.getObject("after"))["eflags"] = 0x12a;
+  Refuse(std::move(Reserved));
   auto Shared = xbeginFaultObservation();
   auto Gates = Shared.getString("exception_idt")->str();
   Gates.replace(1 * 32, 32, Gates.substr(6 * 32, 32));
