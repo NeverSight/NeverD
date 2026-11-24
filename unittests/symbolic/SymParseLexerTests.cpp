@@ -78,16 +78,25 @@ TEST(SymParseLexer, EveryPunctuationPairKeepsMaximalMunchAndOffsets) {
 }
 
 TEST(SymParseLexer, RepeatedAffineSumsKeepTheirClosingDelimiterAndDepth) {
-  for (char Operator : {'+', '|', '^'}) {
-    const std::string Start = std::string("(1") + Operator +
-                              (Operator == '+' ? "" : "(") +
+  struct Form {
+    const char *Prefix;
+    const char *Closing;
+    unsigned Depth;
+  };
+  constexpr Form Forms[]{{"(1+", ")", 3},
+                         {"(1|(", "))", 4},
+                         {"(1^(", "))", 4},
+                         {"(65281&~(", "))", 5},
+                         {"(65281^(65280&(", ")))", 5}};
+  for (const auto &F : Forms) {
+    const std::string Start = std::string(F.Prefix) +
                               "256*zext(extract(x,1,3),16)+" +
                               std::string(72, ' ') + "512*zext(extract(";
-    const std::string End = Operator == '+' ? "),16))" : "),16)))";
+    const auto End = std::string("),16)") + F.Closing;
     const auto A = Start + "y,1,4" + End;
     const auto B = Start + "z,2,4" + End;
     SymParseOptions Options;
-    Options.MaxNesting = Operator == '+' ? 3 : 4;
+    Options.MaxNesting = F.Depth;
     for (const auto &Tail : {A + "*" + B, B + "*" + A}) {
       const auto Product = "3*" + A + "*" + B + "*" + Tail;
       for (const auto &Text : {Product, Product + "*(" + A + ")",

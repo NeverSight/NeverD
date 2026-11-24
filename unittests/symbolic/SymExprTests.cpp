@@ -2540,6 +2540,65 @@ TEST(SymExpr, ScaledProductOverwritesItsObservedSliceBetweenEvaluations) {
   }
 }
 
+TEST(SymExpr, WeightedSumsEvaluateTheObservedBitsOfEverySource) {
+  constexpr unsigned Width = 321, Shift = 73;
+  std::mt19937_64 Random(0x744aa9);
+  for (unsigned Bits : {31u, 64u, 65u, 97u, 129u}) {
+    for (bool LargeWeight : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Bits << ':' << LargeWeight);
+      SymContext C;
+      const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      const auto Z = C.mkVar("z", Width);
+      const auto Low = C.mkExtract(Y, 5, 37);
+      const auto Lane = C.mkConcat(C.mkExtract(Z, 0, Width - 37), Low);
+      const auto Narrow = C.mkZExt(C.mkExtract(X, 1, Bits - 1), Width);
+      const auto A = llvm::APInt(Width, INT32_MAX);
+      const auto B = -llvm::APInt::getOneBitSet(Width, LargeWeight ? 36 : 31);
+      const auto D = -llvm::APInt(Width, 2);
+      const auto Sum = C.mkAdd({C.mkMul(C.mkConst(A.shl(Shift)), X),
+                                C.mkMul(C.mkConst(B.shl(Shift)), Lane),
+                                C.mkMul(C.mkConst(D.shl(Shift)), Narrow)});
+      const auto Scale = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
+      const auto Offset = llvm::APInt::getOneBitSet(Width, Shift) + 5;
+      const auto Factor = C.mkOr(C.mkConst(Offset), Sum);
+      // One product reads only a prefix. A sibling factor in the other reads
+      // high bits of the same sum, forcing a complete evaluation there.
+      const auto Tail = C.mkXor(Y, C.mkConst(Width, 3));
+      const auto High = C.mkLShr(Sum, C.mkConst(Width, 119));
+      SymEvalPlan Plan(C, C.mkMul({C.mkConst(Scale), Factor, Factor, Tail}));
+      SymEvalPlan Shared(C, C.mkMul({C.mkConst(Scale), Factor, Tail, High}));
+      for (unsigned Trial = 0; Trial < 64; ++Trial) {
+        std::array<llvm::APInt, 3> Inputs;
+        for (auto &V : Inputs) {
+          std::array<uint64_t, 6> Words;
+          for (auto &Word : Words)
+            Word = Trial % 4 == 0 ? 0 : Trial % 4 == 1 ? UINT64_MAX : Random();
+          V = llvm::APInt(Width, Words);
+        }
+        const bool Missing = Trial % 7 == 0;
+        if (Missing)
+          Inputs[2].clearAllBits();
+        const auto FullLane =
+            Inputs[2].trunc(Width - 37).concat(Inputs[1].extractBits(37, 5));
+        const auto FullSum =
+            (A * Inputs[0] + B * FullLane +
+             D * Inputs[0].extractBits(Bits - 1, 1).zext(Width))
+                .shl(Shift);
+        const auto F = Offset | FullSum;
+        const auto End = Inputs[1] ^ llvm::APInt(Width, 3);
+        std::array<unsigned, 3> Reads{};
+        EXPECT_EQ(Plan.evalWith([&](uint32_t Id) -> const llvm::APInt * {
+          ++Reads[Id];
+          return Missing && Id == 2 ? nullptr : &Inputs[Id];
+        }),
+                  Scale * F * F * End);
+        EXPECT_EQ(Reads, (std::array<unsigned, 3>{1, 1, 1}));
+        EXPECT_EQ(Shared.eval(Inputs), Scale * F * End * FullSum.lshr(119));
+      }
+    }
+  }
+}
+
 TEST(SymExpr, RepeatedWideFactorsUseTheirExactMultiplicities) {
   constexpr unsigned Width = 321;
   std::mt19937_64 Random(0x65ab193);
