@@ -771,14 +771,12 @@ private:
             const Json &options = Json::object(),
             const Json *variableEdits = nullptr,
             const Json *callTypes = nullptr, const Json *stackFrame = nullptr);
-  std::optional<Json> namedViewPage(std::uint64_t address,
-                                    const std::string &representation,
-                                    std::size_t offset, std::size_t limit,
-                                    const Json &options = Json::object(),
-                                    EncodedPayload *encoded = nullptr,
-                                    const std::string *ifNoneMatch = nullptr,
-                                    bool pageDelta = false,
-                                    const Json *request = nullptr);
+  std::optional<Json> namedViewPage(
+      std::uint64_t address, const std::string &representation,
+      std::size_t offset, std::size_t limit, std::size_t wholeDocumentLimit,
+      const Json &options = Json::object(), EncodedPayload *encoded = nullptr,
+      const std::string *ifNoneMatch = nullptr, bool pageDelta = false,
+      const Json *request = nullptr);
   std::uint64_t namedViewIds_ = 0;
   /// The page the last view read gave, of which document, and the read that
   /// follows it: kept on the document once the page reaches the client.
