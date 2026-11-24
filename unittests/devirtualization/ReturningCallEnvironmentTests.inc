@@ -325,6 +325,78 @@ TEST_F(PEFixedImageTest, ReturningCallResultObjectKeepsNullAndBoundedWrites) {
   EXPECT_TRUE(Outside.Residual.Blocks.empty());
 }
 
+TEST_F(PEFixedImageTest, ReturningCallResultPointerSurvivesWritableGlobal) {
+  // The old image word could name the entry frame. The program replaces it
+  // with the returned object pointer before a later node reloads and writes.
+  std::vector<uint8_t> Code{
+      0x48, 0x89, 0x64, 0x24, 0x90,       // mov [rsp-112],rsp
+      0xba, 0x40, 0,    0,    0,          // mov edx,64
+      0x48, 0x83, 0xec, 0x40,             // sub rsp,64
+      0xff, 0xd7,                         // call rdi
+      0x48, 0x83, 0xc4, 0x40,             // add rsp,64
+      0x48, 0x85, 0xc0,                   // test rax,rax
+      0x74, 0x18,                         // je restore
+      0x48, 0x89, 0x05, 0,    0,    0, 0, // mov [global],rax
+      0x31, 0xc0,                         // xor eax,eax
+      0xeb, 0x00,                         // jmp reload
+      0x48, 0x8b, 0x1d, 0,    0,    0, 0, // mov rbx,[global]
+      0x48, 0x89, 0x4b, 0x38,             // mov [rbx+56],rcx
+      0xeb, 0x00,                         // jmp restore
+      0x48, 0x8b, 0x5c, 0x24, 0x90,       // mov rbx,[rsp-112]
+      0x48, 0x39, 0xe3,                   // cmp rbx,rsp
+      0x75, 0x01,                         // jne trap
+      0xc3,                               // ret
+      0xcc};                              // trap
+  constexpr va_t Global = Base + 0x30a0;
+  put32(Code, 28, Global - (Base + 0x1000 + 32));
+  put32(Code, 39, Global - (Base + 0x1000 + 43));
+  auto Image = machineExitFixture(Code);
+  put64(Image, IData + 0xa0, 0x800000);
+  auto Loaded = load(Image);
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x100e, Base + 0x103b);
+  O.X64MachineExits = {{1, Base + 0x103b, MachineExitKind::Return},
+                       {1, Base + 0x103c, MachineExitKind::Trap}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryFrameBounds->ExcludedAddressRanges.push_back({Global, Global + 8});
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  O.MaxChainedTransfers = 0;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 3;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  const auto NativeAddress = [&](va_t ResidualAddress) {
+    const auto It = std::find_if(
+        R.Origins.begin(), R.Origins.end(), [&](const auto &Origin) {
+          return Origin.ResidualAddress == ResidualAddress;
+        });
+    return It == R.Origins.end() ? InvalidVA : It->NativeInstruction.Address;
+  };
+  unsigned Branches = 0, Stores = 0;
+  bool WroteGlobal = false, WroteObject = false;
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops) {
+      Branches += Op.Opcode == NdOp::COND_BR;
+      Stores += Op.Opcode == NdOp::STORE;
+      if (Op.Opcode == NdOp::STORE) {
+        WroteGlobal |= NativeAddress(Op.Addr) == Base + 0x1019;
+        WroteObject |= NativeAddress(Op.Addr) == Base + 0x102b;
+      }
+    }
+  EXPECT_EQ(Branches, 1U);
+  EXPECT_GE(Stores, 3U);
+  EXPECT_TRUE(WroteGlobal);
+  EXPECT_TRUE(WroteObject);
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+}
+
 TEST_F(PEFixedImageTest, ReturningCallResultObjectBoundsSymbolicOffset) {
   // The index is symbolic but masked into the declared 64-byte extent. A null
   // result writes in the low address range; an explicit frame exclusion is
