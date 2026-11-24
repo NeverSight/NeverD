@@ -484,9 +484,11 @@ void LowToMedConverter::bindScalarCall(MedBlock &Block, MedOp &MOp,
       continue;
     }
     if (Parameter.Kind != SourceABICarrierKind::Stack) {
+      // An ARM float is its S register, a view of half a D register.
       MOp.addInput(ndVarToMedVar(NdVar::reg(
           Parameter.Register,
-          Parameter.Kind == SourceABICarrierKind::FloatingRegister
+          Parameter.Kind == SourceABICarrierKind::FloatingRegister &&
+                  TargetArch != Arch::ARM
               ? TRI.FPABIRegWidth
           : TargetArch == Arch::AArch64 ? std::max<uint16_t>(4, Parameter.Bytes)
                                         : Parameter.Bytes)));
@@ -501,8 +503,9 @@ void LowToMedConverter::bindScalarCall(MedBlock &Block, MedOp &MOp,
   } else if (Signature.ReturnKind == NdTypeKind::Float) {
     MOp.CalleeFloatReturnBytes = Signature.ReturnBytes;
     MOp.Output =
-        TargetArch == Arch::X86
-            ? ndVarToMedVar(LOp.Output)
+        TargetArch == Arch::X86 ? ndVarToMedVar(LOp.Output)
+        : TargetArch == Arch::ARM
+            ? ndVarToMedVar(NdVar::reg(TRI.FPReturnReg, Signature.ReturnBytes))
             : ndVarToMedVar(NdVar::reg(TRI.FPReturnReg, TRI.FPABIRegWidth));
   } else if (Signature.ReturnKind == NdTypeKind::Void) {
     MOp.Output = {};

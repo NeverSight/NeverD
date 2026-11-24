@@ -5326,8 +5326,11 @@ A pair is one fixed parameter, which `bindIntegerCall` binds as its two
 registers joined. Matched to its words one register each,
 `__stdio_common_vfprintf(unsigned __int64, FILE *, ...)` took the options'
 high word as its stream and lost its `va_list` in every MSVC ARM printf
-wrapper. Records are not placed, and floating declarations bind no ARM
-operands yet: `floatingCallArguments` takes no ARM.
+wrapper. A floating declaration binds a COFF image's calls by the same
+placement (`floatingCallArguments`), each argument in its own S or D register,
+since a back-filled float has no position in the bank, and the result in s0 or
+d0: a Windows on ARM thunk of `exp` returned the double's bits from r0, no read
+of d0 after its jump showing the result. Records are not placed.
 
 Selected platform headers have their own prototype provenance, separate from
 the host C-library inclusion policy. Windows SDK records therefore use the

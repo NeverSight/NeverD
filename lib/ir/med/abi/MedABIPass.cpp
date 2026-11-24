@@ -758,8 +758,8 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
         Signature.ReturnElements > Registers.FPReturnRegs.size())
       return std::nullopt;
   } else if (Signature.ReturnKind != NdTypeKind::Float) {
-    if ((!isMIPS(A) && A != Arch::AArch64 && A != Arch::X64 &&
-         A != Arch::X86) ||
+    if ((!isMIPS(A) && A != Arch::AArch64 && A != Arch::X64 && A != Arch::X86 &&
+         A != Arch::ARM) ||
         Op.CalleeFloatReturnBytes ||
         (Signature.ReturnKind == NdTypeKind::Void
              ? Op.Output.Size != 0
@@ -879,7 +879,10 @@ recoveredFloatingCallArguments(const MedOp &Op, const MedCallInfo &Call, Arch A,
     }
     return floatingCallArguments(A, F, Result, Parameters);
   }
-  if (!Op.CalleeFloatReturnBytes || Op.SourceCallHint ||
+  // ARM's recovered floating operands are whole D registers, which the
+  // placement's back-filled S registers need not be: only a bound signature
+  // types an ARM call.
+  if (A == Arch::ARM || !Op.CalleeFloatReturnBytes || Op.SourceCallHint ||
       Call.VarArgFixedCount >= 0 || Call.IntegerRegisterArgCount != 0 ||
       Call.FloatingRegisterArgCount != static_cast<int>(Call.Args.size()) ||
       Call.ArgReadBytes.size() != Call.Args.size() ||

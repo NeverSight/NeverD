@@ -1,3 +1,4 @@
+#include "../core/SourceCallExecution.h"
 #include "HighCHostExecution.h"
 #include "NeverDLiftFixture.h"
 
@@ -602,4 +603,29 @@ TEST(ARM32_ImportThunks, AThunkComposingItsSlotForwardsItsArguments) {
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+}
+
+// Windows on ARM passes and returns a double in d0 (AAPCS-VFP).  The
+// arity table declares `exp`, which no header declares for an ARM32 image,
+// yet no ARM declaration bound a floating call, and a thunk's jump to it
+// read the result from r0: `int32_t thunk(double) { return bit_cast(exp()) }`.
+//   f: push {r7, lr}; vadd.f64 d0, d0, d0; bl thunk; pop {r7, pc}
+TEST(ARM32_ImportCalls, AFloatingImportTakesAndReturnsItsDoubleInD0) {
+  std::vector<uint8_t> Code(0x20, 0x00);
+  const std::vector<uint8_t> F = {0x80, 0xB5, 0x30, 0xEE, 0x00, 0x0B,
+                                  0xFF, 0xF7, 0xF3, 0xFF, 0x80, 0xBD};
+  std::copy(F.begin(), F.end(), Code.begin() + 0x10);
+  BinaryImage Img = thumbThunkImage(Code, "exp", 0x401010, "f");
+  Img.Imports.front().Module = "api-ms-win-crt-math-l1-1-0.dll";
+  NullDebugContext NoHeaders;
+  const std::string Source = thumbHighC(Img, NoHeaders);
+  EXPECT_EQ(Source.find("__builtin_bit_cast"), std::string::npos) << Source;
+  source_call_execution_test::compileAndRun(Source + R"C(
+#include <math.h>
+int main(void) {
+  return fabs(sub_401000(1.0) - 2.718281828459045) > 1e-12 ||
+         fabs(f(0.5) - 2.718281828459045) > 1e-12;
+}
+)C",
+                                            {"-Wl,--no-as-needed", "-lm"});
 }

@@ -31,7 +31,8 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   if (FixedCount &&
       (!isMIPS(A) || !*FixedCount || *FixedCount > Parameters.size()))
     return std::nullopt;
-  if (A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A))
+  if (A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 &&
+      A != Arch::ARM && !isMIPS(A))
     return std::nullopt;
   // The o32 MIPS16 result contract defines f0 and the matching v0/v1 bits.
   // A source body must prove its runtime transfer; a declaration alone does
@@ -158,7 +159,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
         ReturnType->Size == 2 * getTargetRegInfo(A).integerReturnWordBytes();
     const bool ScalarIntegerResult =
         (A == Arch::X64 || A == Arch::AArch64 ||
-         (A == Arch::X86 && ReturnType &&
+         ((A == Arch::X86 || A == Arch::ARM) && ReturnType &&
           ReturnType->Size <= getTargetRegInfo(A).FullRegWidth)) &&
         ScalarParameter(ReturnType);
     if ((!isMIPS(A) && !VoidReturn && !ScalarIntegerResult) || !ReturnType ||
@@ -201,7 +202,10 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   Result.SignedResult = MIPSSignedInteger(ReturnType);
   Result.FixedCount = FixedCount;
   Result.MIPS16Parameters = isMIPS(A) && EntryMode == InstructionMode::MIPS16;
-  if (A == Arch::X86 || !AllFloating || !Scalar(ReturnType) || isMIPS(A)) {
+  // AAPCS-VFP back-fills a float into the single register a double skipped,
+  // which no position in the argument bank names: ARM keeps each carrier.
+  if (A == Arch::X86 || A == Arch::ARM || !AllFloating || !Scalar(ReturnType) ||
+      isMIPS(A)) {
     for (size_t I = 0; I < Parameters.size(); ++I) {
       const auto &Pieces = Placement->Parameters[I];
       // o32 passes an eight-byte scalar outside the FP prefix as two
@@ -255,7 +259,8 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
 std::optional<FloatingCallTypes>
 floatingCallTypes(Arch A, BinaryFormat F,
                   const FloatingCallArguments &Signature) {
-  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A)) ||
+  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 &&
+       A != Arch::ARM && !isMIPS(A)) ||
       Signature.Scalars.size() >
           static_cast<size_t>(limits::kMaxBoundSourceCallArgs) ||
       Signature.ParameterBytes.size() >
