@@ -19,6 +19,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/MC/BinaryRewrite.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/LowerGlobalDtors.h"
@@ -334,6 +335,27 @@ bool hasRecipeCallbacksFor(const llvm::Module &Module) {
 }
 #endif
 } // namespace
+
+#if !__has_include("llvm/MC/MCPointerAuthInfo.h")
+llvm::mc_rewrite::RewriteOptions
+guardMachOAuthenticatedFixups(const llvm::mc_rewrite::RewriteOptions &Options,
+                              bool &MissingRecipe) {
+  auto Checked = Options;
+  Checked.onFixup = [&Options,
+                     &MissingRecipe](const llvm::mc_rewrite::FixupCtx &Fixup,
+                                     uint64_t Value) -> uint64_t {
+    if (Fixup.Specifier == kMachOAuthSpecifier ||
+        Fixup.Specifier == kMachOAuthAddressSpecifier) {
+      if (!MissingRecipe)
+        llvm::WithColor::error() << kPAuthRecipeCallbackMissing;
+      MissingRecipe = true;
+      return 0;
+    }
+    return Options.onFixup ? Options.onFixup(Fixup, Value) : Value;
+  };
+  return Checked;
+}
+#endif
 
 bool preparePointerAuthentication(llvm::Module &Module,
                                   const llvm::Triple &Triple,

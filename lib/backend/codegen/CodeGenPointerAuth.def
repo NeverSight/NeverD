@@ -30,6 +30,10 @@ CODEGEN_PAUTH_FIELD(kLegacyTarget, 0)
 CODEGEN_PAUTH_FIELD(kLegacyKey, 1)
 CODEGEN_PAUTH_FIELD(kLegacyAddress, 2)
 CODEGEN_PAUTH_FIELD(kLegacyDiscriminator, 3)
+// AArch64::S_AUTH and S_AUTHADDR in the frozen r6 MC expression ABI.
+// The prebuilt package does not export AArch64MCAsmInfo.h.
+CODEGEN_PAUTH_FIELD(kMachOAuthSpecifier, 0x00a)
+CODEGEN_PAUTH_FIELD(kMachOAuthAddressSpecifier, 0x00b)
 #undef CODEGEN_PAUTH_FIELD
 #endif
 

@@ -839,14 +839,32 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     }
   }
 
-  llvm::legacy::PassManager PM;
-  if (TM->addPassesToEmitBinaryRewrite(PM, Opts, Result)) {
-    llvm::WithColor::error()
-        << "codegen: addPassesToEmitBinaryRewrite failed\n";
-    return Result;
+  const auto *EmitOptions = &Opts;
+#if !__has_include("llvm/MC/MCPointerAuthInfo.h")
+  bool MissingRecipe = false;
+  std::optional<llvm::mc_rewrite::RewriteOptions> CheckedOptions;
+  if (TT.isAArch64() && TT.isOSBinFormatMachO()) {
+    CheckedOptions = guardMachOAuthenticatedFixups(Opts, MissingRecipe);
+    EmitOptions = &*CheckedOptions;
+  }
+#endif
+  {
+    llvm::legacy::PassManager PM;
+    if (TM->addPassesToEmitBinaryRewrite(PM, *EmitOptions, Result)) {
+      llvm::WithColor::error()
+          << "codegen: addPassesToEmitBinaryRewrite failed\n";
+      return Result;
+    }
+    PM.run(Mod);
   }
 
-  PM.run(Mod);
+#if !__has_include("llvm/MC/MCPointerAuthInfo.h")
+  if (MissingRecipe) {
+    Result = {};
+    Result.ImageValid = false;
+    return Result;
+  }
+#endif
 
   LLVM_DEBUG({
     llvm::dbgs() << "codegen: " << Result.Sections.size() << " sections";
