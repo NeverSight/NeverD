@@ -1890,7 +1890,9 @@ separate timing acquisition, the six-bit input group stays at `0x37` throughout
 samples 137–159 in figure 5-1. Figure 5-2 displays the exception signal and
 a 530 ns trigger-to-cursor interval. Neither figure locates an input edge
 against CPU recognition. The original reference memories are named
-`R3000_Demo` and `R3K_Timg_96`.
+`R3000_Demo` and `R3K_Timg_96`. The 92DM74 application disk also uses
+`R3K_Timg_96` for a module setup and a display format. The reference-memory
+file holds the channel samples.
 [Tektronix 92DM74, figure 4-10](https://download.tek.com/manual/070809000.pdf#page=70),
 [figures 5-1 and 5-2](https://download.tek.com/manual/070809000.pdf#page=80).
 
