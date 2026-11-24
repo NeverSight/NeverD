@@ -197,7 +197,8 @@ struct SymNode {
   uint32_t FirstOperand = 0;
   uint32_t NumOperands = 0;
   /// Operator-specific payload: the inline value of a narrow \c Const, the
-  /// variable id of a \c Var, or the low bit index of an \c Extract.
+  /// variable id of a \c Var, the low bit index of an \c Extract, or the
+  /// source offset of bit zero for a constant rotation (zero for dynamic).
   uint64_t Aux = 0;
 };
 

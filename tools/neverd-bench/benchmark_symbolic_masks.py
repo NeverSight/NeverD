@@ -1943,6 +1943,60 @@ def terminal_field_product(width, case):
     return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
 
 
+def rotated_field_product(width, case):
+    """Products of recurring field expressions with both rotation directions."""
+    variant = case % 4
+    if width <= 64:
+        degree = (211, 233, 277, 307)[variant]
+        bits = (6, 8, 10, 12)[variant]
+    else:
+        degree = ((421, 509, 601, 739) if width <= 513 else
+                  (5527, 6143, 6827, 7573))[variant]
+        bits = (19, 33, 53, 71)[variant]
+    rng = random.Random(0xD50F3 + width * 23 + case * 673)
+    axes = ("x", "(y+z)", "(u^v)", "((x&w)+z)", "((u|y)^x)", "((v-x)&w)")
+    rooms = (bits, bits - 1, max(2, 3 * bits // 4), max(2, bits // 2),
+             max(2, bits // 3), max(2, bits // 4))
+    starts = (1 + case % (width - bits - 1), width - rooms[1],
+              width - rooms[2], width // 3, width - rooms[4], width - rooms[5])
+    pool = []
+    pool_size = ((37, 53, 73, 97) if case < 12 else (331, 521, 787, 1193))[variant]
+    for j in range(pool_size):
+        axis = j % len(axes)
+        room = rooms[axis]
+        live = room if j < len(axes) else rng.randrange(max(1, room // 3), room + 1)
+        size = min(room, live + j % 4)
+        weight = rng.choice((-7, -3, 3, 5)) << (2 * bits + 1 - live)
+        offset = rng.choice((-9, -5, 1, 3, 7, 11))
+        pool.append((axis, size, offset, weight, (j // 6 + axis + case) % 3,
+                     1 + 2 * (j % 19)))
+
+    factors = []
+    for j in range(degree):
+        if j % pool_size == 0:
+            rng.shuffle(pool)
+        k, size, offset, weight, extension, key = pool[j % pool_size]
+        if case % 3 and j == degree // 2:
+            offset, weight, extension = 13, 12, 1
+        if variant == 3 and j == degree - 2:
+            offset = 6
+        axis, start = axes[k], starts[k]
+        field = f"extract({axis},{start},{size})"
+        rotation = (key + case) % 5
+        if weight != 12 and rotation < 2:
+            amount = (width - start if rotation == 0 else start) + width * (1 + key % 3)
+            word = f"{('rol', 'ror')[rotation]}({axis},{amount})"
+        elif extension != 2 and start + size == width and case % 2:
+            word = f"{('lshr', 'ashr')[extension]}({axis},{start})"
+        elif extension == 2:
+            word = f"concat(extract((u+{key}*v),{size},{width-size}),{field})"
+        else:
+            word = f"{('zext', 'sext')[extension]}({field},{width})"
+        factors.append(f"({offset}+({weight})*{word})")
+    scale = ((3, 5, 7, -3)[variant] << (width - 2 * bits - 1)) % (1 << width)
+    return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
+
+
 def overlapping_field(width, case):
     """Masked fields with two live operands and first-order modular products."""
     rng = random.Random(0x91A27 + 47 * width + 1889 * case)
@@ -2269,7 +2323,7 @@ def main():
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
                  "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field", "masked-join",
                  "wrapped-masked-join", "mixed-valuation", "variable-width-product",
-                 "terminal-field-product"),
+                 "terminal-field-product", "rotated-field-product"),
         default="complement",
     )
     args = parser.parse_args()
@@ -2298,6 +2352,7 @@ def main():
             "mixed-valuation": (32, 64, 24577, 28673, 32769),
             "variable-width-product": (32, 64, 36865, 40961, 49153),
             "terminal-field-product": (32, 64, 513, 57345, 61441, 65536),
+            "rotated-field-product": (32, 64, 513, 32769, 57345, 65536),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2360,6 +2415,7 @@ def main():
                 "wrapped-masked-join": lambda w, n: [masked_join_product(w, i, wrapped=True) for i in range(n)],
                 "mixed-valuation": lambda w, n: [mixed_valuation_product(w, i) for i in range(n)],
                 "variable-width-product": lambda w, n: [variable_width_product(w, i) for i in range(n)],
+                "rotated-field-product": lambda w, n: [rotated_field_product(w, i) for i in range(n)],
                 "terminal-field-product": lambda w, n: [terminal_field_product(w, i) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,

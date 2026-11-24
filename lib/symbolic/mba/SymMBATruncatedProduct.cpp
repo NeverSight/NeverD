@@ -60,17 +60,12 @@ struct ProductField {
 };
 
 // An extension or concatenation preserves its low operand. A canonical
-// constant right shift preserves the source suffix up to the sign/zero fill.
+// fixed motion preserves its source suffix up to the fill or wrap boundary.
 ProductField productField(const SymContext &Ctx, SymRef Word) {
   if (const auto Low = lowOperand(Ctx, Word))
     return {Low, 0, Ctx.width(Low)};
-  if (Ctx.op(Word) == SymOp::LShr || Ctx.op(Word) == SymOp::AShr) {
-    const auto Count = Ctx.operand(Word, 1);
-    if (Ctx.isConst(Count)) {
-      const unsigned Start = Ctx.constWords(Count).front();
-      return {{}, Start, Ctx.width(Word) - Start};
-    }
-  }
+  if (const unsigned Start = detail::sourceSuffixStart(Ctx, Word))
+    return {{}, Start, Ctx.width(Word) - Start};
   return {};
 }
 
@@ -105,8 +100,7 @@ SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
         break;
       if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
         return {};
-      const unsigned Shift = Ctx.constantRotateAmount(Count, Width);
-      Offset = (Offset + (Op == SymOp::Ror ? Shift : Width - Shift)) % Width;
+      Offset = (Offset + Ctx.node(Source).Aux) % Width;
       Source = Ctx.operand(Source, 0);
       continue;
     }

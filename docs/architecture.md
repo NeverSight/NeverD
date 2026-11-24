@@ -8080,6 +8080,12 @@ remain factored beside independent scaled variables or XOR words. An AND
 addend can also stay separate when its operands and the other addends are
 absent from the product's arithmetic leaves and none of those leaves is an
 AND partition.
+The LLVM translator proves a disjoint OR of shifted lanes when their guaranteed
+zero bits cover the word. An in-range logical right shift supplies high zeros.
+Its child instructions still have to satisfy their own definedness checks.
+For a fixed whole-word rotation, the symbolic builder records which source
+bit becomes bit zero. Product recovery uses the resulting suffix when the
+coefficient discards all wrapped bits.
 A product can also group different views of a word when their live low bits
 agree. An interior window starting at bit `i` has the same low bits as a
 right rotation by `i`. Constant rotations compose modulo the word width
@@ -18235,6 +18241,12 @@ versions that counted n-ary nodes once and omitted all all-ones literals.
 Verification samples reuse the compiled evaluator's word-sized path when both
 plans and all context variables fit in 64 bits. Corner assignments and the
 random stream stay unchanged; wider inputs retain arbitrary-width evaluation.
+Wide affine-product evaluation can share a slot between fields starting at
+the same bit of the same source. A literal weight determines the number of
+observable low bits in each field. An existing wider slot supplies those bits
+only when the interval ends before sign fill, zero fill or rotation wrap.
+A live wrapped bit keeps its complete rotated word.
+
 A wide product can combine three or more distinct affine factors that each
 occur once and read the same input slot. A shared literal scale can expose
 that common input. When each weight has at least `ceil(P/4)` low zero bits,
@@ -18421,8 +18433,11 @@ Opaque-input enumeration and sampling share one candidate checker within a
 request. It remembers counterexamples and validation-grid mismatches for
 canonical candidates, but never caches inconclusive proof results or shares
 rejections across requests.
-Repeated offers still spend search work; only actual verifier calls count as
-proof queries.
+Repeated offers still spend search work. Only actual verifier calls count as
+proof queries. Enumeration records the grammar operation and its operand
+indices for each new sampled behaviour. On a target match it builds pending
+representatives in discovery order before offering the candidate. An
+unsuccessful search can discard its recipes without interning those nodes.
 
 Before composite grammar enumeration, semantic synthesis can fit an entire
 modular affine vector from the oracle's zero and unit-vector responses. Equal

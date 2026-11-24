@@ -150,10 +150,16 @@ llvm::KnownBits maskedWordBits(const llvm::Value *V, unsigned Depth,
     Unknown.Zero.setLowBits(std::min(Width, Left + Right));
     return Unknown;
   }
-  if (I->getOpcode() == llvm::Instruction::Shl) {
+  if (I->getOpcode() == llvm::Instruction::Shl ||
+      I->getOpcode() == llvm::Instruction::LShr) {
     const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(1));
-    if (K && K->getValue().ult(Width))
-      Unknown.Zero.setLowBits(K->getZExtValue());
+    if (K && K->getValue().ult(Width)) {
+      const unsigned Amount = K->getZExtValue();
+      if (I->getOpcode() == llvm::Instruction::Shl)
+        Unknown.Zero.setLowBits(Amount);
+      else
+        Unknown.Zero.setHighBits(Amount);
+    }
     return Unknown;
   }
   if (I->getOpcode() == llvm::Instruction::AShr) {

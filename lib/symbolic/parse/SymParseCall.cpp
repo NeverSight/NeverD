@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 
@@ -128,6 +129,13 @@ bool Parser::parsePlainInt(uint64_t &Out) {
     return false;
   }
   Token N = Lex.take();
+  // Up to nineteen validated decimal digits fit a 64-bit bit count.
+  if (N.Radix == 10 && N.Digits.size() <= 19) {
+    Out = 0;
+    for (char C : N.Digits)
+      Out = Out * 10 + (C - '0');
+    return true;
+  }
   if (N.Digits.getAsInteger(N.Radix, Out)) {
     fail(N.Offset, "bit count is out of range");
     return false;
@@ -139,7 +147,18 @@ SymRef Parser::parseCall(const Token &Name) {
   DepthGuard Guard(*this, Name.Offset);
   if (Failed)
     return {};
-  Lex.take(); // '('
+  if (Reuse != CallReuse::Factor || Name.Text == "concat")
+    return parseCallArguments(Name);
+  // Read the two field calls inside a concatenation independently. Each
+  // outer call and its disjoint parenthesized operands are scanned once.
+  llvm::SaveAndRestore Scope(Reuse, CallReuse::InsideCall);
+  return reuseProductTerm(Name.Offset,
+                          [&] { return parseCallArguments(Name); });
+}
+
+SymRef Parser::parseCallArguments(const Token &Name) {
+  Lex.take(); // opening parenthesis
+
   if (Name.Text == "varid") {
     const size_t IdOffset = Lex.peek().Offset;
     uint64_t Id = 0;

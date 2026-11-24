@@ -469,6 +469,42 @@ TEST(SymSimplifyGuard, RewritesCarrySaveAdditionWithAConstantLeftShift) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
+TEST(SymSimplifyGuard, DisjointShiftWindowsRequireEveryOutputBitToBeSeparate) {
+  llvm::LLVMContext C;
+  llvm::Module M("shift-windows", C);
+  auto *Ty = llvm::Type::getInt8Ty(C);
+  auto *F = llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty, Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", M);
+  llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+  auto *X = F->getArg(0), *Y = F->getArg(1);
+  for (unsigned L = 1; L < 8; ++L) {
+    for (unsigned R = 1; R < 8; ++R) {
+      auto *Join = B.CreateDisjointOr(B.CreateShl(X, L), B.CreateLShr(Y, R));
+      symbolic::SymContext Ctx;
+      Translator Xlat(Ctx);
+      const auto Expr = Xlat.in(Join);
+      const bool Disjoint = ((0xffu << L) & (0xffu >> R)) == 0;
+      ASSERT_EQ(Expr.isValid(), Disjoint) << L << "," << R;
+      if (Disjoint) {
+        symbolic::SymEvalPlan Plan(Ctx, Expr);
+        for (unsigned A : {0u, 1u, 127u, 128u, 255u})
+          for (unsigned D : {0u, 1u, 127u, 128u, 255u})
+            EXPECT_EQ(Plan.evalU64({A, D}), ((A << L) | (D >> R)) & 255u);
+      }
+    }
+  }
+  // Matching lane widths alone cannot justify sign fill or a poison child.
+  symbolic::SymContext Ctx;
+  Translator Xlat(Ctx);
+  auto *High = B.CreateShl(X, 4);
+  EXPECT_FALSE(Xlat.in(B.CreateDisjointOr(High, B.CreateAShr(Y, 4))));
+  auto *Exact = llvm::cast<llvm::BinaryOperator>(B.CreateLShr(Y, 4));
+  Exact->setIsExact(true);
+  EXPECT_FALSE(Xlat.in(B.CreateDisjointOr(High, Exact)));
+  B.CreateRet(X);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
 TEST(SymSimplifyGuard, ProvesPackedDisjointOrAndUnsignedWidenedShift) {
   llvm::LLVMContext C;
   llvm::Module M("m", C);

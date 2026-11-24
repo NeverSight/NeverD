@@ -352,6 +352,29 @@ TEST(SymParse, MalformedInputIsADiagnosticRatherThanACrash) {
   EXPECT_NE(errorOf(Deep).find("nests too deeply"), std::string::npos);
 }
 
+TEST(SymParse, RepeatedProductFieldsHonorDepthAndReportTheOriginalToken) {
+  const std::string Field = "zext(extract((a+b),2,3),16)";
+  const std::string Product = "a*b*c*" + Field + "*" + Field;
+  SymParseOptions Options;
+  Options.MaxNesting = 3;
+  SymContext Ctx;
+  const auto Good = parseSymExpr(Ctx, Product, 16, Options);
+  ASSERT_TRUE(Good.ok()) << Good.Error;
+  const auto A = Ctx.mkVar("a", 16), B = Ctx.mkVar("b", 16);
+  const auto F = Ctx.mkZExt(Ctx.mkExtract(Ctx.mkAdd(A, B), 2, 3), 16);
+  EXPECT_EQ(Good.Root, Ctx.mkMul({A, B, Ctx.mkVar("c", 16), F, F}));
+
+  const auto Deep =
+      parseSymExpr(Ctx, Product + "*(" + Field + ")", 16, Options);
+  EXPECT_FALSE(Deep.ok());
+  EXPECT_NE(Deep.Error.find("nests too deeply"), std::string::npos);
+  const auto BadText = Product + "*extract((a+b),2,?)";
+  const auto Bad = parseSymExpr(Ctx, BadText, 16, Options);
+  EXPECT_FALSE(Bad.ok());
+  EXPECT_EQ(Bad.ErrorOffset, BadText.find('?'));
+  EXPECT_FALSE(parseSymExpr(Ctx, Product + "*varid(100)", 16, Options).ok());
+}
+
 TEST(SymParse, CallerOwnsTheNestingAndWidthPolicy) {
   SymContext Ctx;
 

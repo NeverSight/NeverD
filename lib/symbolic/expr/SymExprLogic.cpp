@@ -950,6 +950,7 @@ SymRef SymContext::mkRol(SymRef A, SymRef B) {
       return A;
     if (isConst(A))
       return mkConst(constValue(A).rotl(Amt));
+    return intern(SymOp::Rol, W, {A, B}, W - Amt);
   }
   return intern(SymOp::Rol, W, {A, B}, 0);
 }
@@ -962,6 +963,7 @@ SymRef SymContext::mkRor(SymRef A, SymRef B) {
       return A;
     if (isConst(A))
       return mkConst(constValue(A).rotr(Amt));
+    return intern(SymOp::Ror, W, {A, B}, Amt);
   }
   return intern(SymOp::Ror, W, {A, B}, 0);
 }
