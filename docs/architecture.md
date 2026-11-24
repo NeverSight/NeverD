@@ -6712,6 +6712,12 @@ SSA enters it as a root with the SP the function's pcsp table reaches
 frame. Entered with the function's own entry SP, the reloads read the caller's
 frame, and arm64's `main.namedResultRewrite` took a stack argument no caller
 passed.
+A Windows image also describes how to unwind each function in its `.pdata`,
+a record that ends where the code does, short of the padding the function's
+pclntab range takes in, so the lookup finds that record first. The Go loader
+attaches the runtime's records to it (`parseGoExceptions`): without them
+`main.panicDuringDefer`, which recovers in its deferred call, had no edge to
+its `deferreturn`, and it and its caller were taken never to return.
 
 On Windows, `runtime.callbackasm` is a table of 2,000 entries, one per
 callback, each a `CALL runtime.callbackasm1`. The call only leaves the entry's

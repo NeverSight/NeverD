@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "GoRuntimeEHTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -29,8 +28,9 @@ using namespace neverd::go_eh_test;
 /// An image whose functions each carry one open-coded defer record.  Every
 /// offset in such a record has to land inside the frame, so the frame size is
 /// what bounds how deep a slot a test can describe.
-GoTestImage buildDeferInfoImage(const std::vector<std::vector<uint8_t>> &Records,
-                                int32_t FrameSize = 0x30) {
+GoTestImage
+buildDeferInfoImage(const std::vector<std::vector<uint8_t>> &Records,
+                    int32_t FrameSize = 0x30) {
   GoTestImage T;
   std::vector<GoFuncSpec> Funcs;
   for (size_t I = 0; I < Records.size(); ++I) {
@@ -43,15 +43,14 @@ GoTestImage buildDeferInfoImage(const std::vector<std::vector<uint8_t>> &Records
     Funcs.push_back(std::move(Work));
   }
   T.installPclnTab(
-      buildPclnTab(kGo116Magic, Funcs,
-                   kTextVA + 0x100 * (Records.size() + 1))
+      buildPclnTab(kGo116Magic, Funcs, kTextVA + 0x100 * (Records.size() + 1))
           .Bytes);
   return T;
 }
 
 TEST(GoOpenCodedDefers, ReadsTheEnumeratedRecordWrittenBeforeGo122) {
-  GoTestImage T = buildDeferInfoImage(
-      {buildEnumeratedDeferInfo(0x28, {0x18, 0x10, 0x08})});
+  GoTestImage T =
+      buildDeferInfoImage({buildEnumeratedDeferInfo(0x28, {0x18, 0x10, 0x08})});
 
   parseGoExceptions(T.Img);
 
@@ -70,6 +69,35 @@ TEST(GoOpenCodedDefers, ReadsTheEnumeratedRecordWrittenBeforeGo122) {
   EXPECT_EQ(F->Go->OpenCodedDefers[0].ClosureOffset, -0x18);
   EXPECT_EQ(F->Go->OpenCodedDefers[1].ClosureOffset, -0x10);
   EXPECT_EQ(F->Go->OpenCodedDefers[2].ClosureOffset, -0x08);
+  EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Complete);
+}
+
+// A Windows image describes how to unwind each function in its .pdata, a
+// record that ends where the code does, short of the padding the function's
+// pclntab range takes in, so the lookup the CFG builder makes finds that
+// record.  The runtime's records go with it: without them
+// `main.panicDuringDefer`, which panics and recovers in its deferred call,
+// had no edge to its deferreturn and was taken never to return.
+TEST(GoOpenCodedDefers, TheUnwindRecordOfTheSameFunctionCarriesThem) {
+  GoTestImage T =
+      buildDeferInfoImage({buildEnumeratedDeferInfo(0x28, {0x18, 0x10, 0x08})});
+  ExceptionFunction Unwind;
+  Unwind.CodeRange = {kTextVA + 0x100, kTextVA + 0x1F8};
+  Unwind.Encoding = ExceptionEncoding::X64UnwindV1;
+  Unwind.ParseStatus = ExceptionParseStatus::Complete;
+  T.Img.ExceptionMetadata.Functions.push_back(Unwind);
+  T.Img.ExceptionMetadata.rebuildIndex();
+
+  parseGoExceptions(T.Img);
+
+  const ExceptionFunction *F =
+      T.Img.ExceptionMetadata.findFunction(kTextVA + 0x100);
+  ASSERT_NE(F, nullptr);
+  EXPECT_EQ(F->Encoding, ExceptionEncoding::X64UnwindV1);
+  ASSERT_TRUE(F->Go.has_value());
+  EXPECT_EQ(F->Go->DeferReturnOffset, std::optional<uint32_t>(0x20));
+  ASSERT_TRUE(F->Go->OpenCodedDeferInfo.has_value());
+  EXPECT_EQ(F->Go->OpenCodedDefers.size(), 3u);
   EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Complete);
 }
 
@@ -148,8 +176,8 @@ TEST(GoOpenCodedDefers, WalksTheArgumentListSeparatingTwoLegacyDefers) {
 TEST(GoOpenCodedDefers, PicksTheLayoutTheRecordsProveNotTheMagic) {
   GoTestImage Legacy = buildDeferInfoImage({buildLegacyEnumeratedDeferInfo(
       0x10, 0x28, {LegacyDefer{0x10, 0x18, {}}, LegacyDefer{0, 0x08, {}}})});
-  GoTestImage Old = buildDeferInfoImage(
-      {buildEnumeratedDeferInfo(0x28, {0x18, 0x10, 0x08})});
+  GoTestImage Old =
+      buildDeferInfoImage({buildEnumeratedDeferInfo(0x28, {0x18, 0x10, 0x08})});
   GoTestImage New = buildDeferInfoImage({buildContiguousDeferInfo(0x28, 0x18)});
 
   parseGoExceptions(Legacy.Img);
@@ -233,8 +261,8 @@ TEST(GoOpenCodedDefers, ReportsARecordNoLayoutCanRead) {
   EXPECT_TRUE(F->Go->UsesOpenCodedDefers);
   EXPECT_FALSE(F->Go->OpenCodedDeferInfo.has_value());
   EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Partial);
-  EXPECT_TRUE(anyDiagnosticContains(F->Diagnostics,
-                                    "does not describe a frame"));
+  EXPECT_TRUE(
+      anyDiagnosticContains(F->Diagnostics, "does not describe a frame"));
 }
 
 } // namespace

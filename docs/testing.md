@@ -21141,6 +21141,11 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`GoOpenCodedDefers.TheUnwindRecordOfTheSameFunctionCarriesThem` loads a
+deferring function that a `.pdata`-style unwind record also describes, one
+that ends short of the pclntab range: the record the lookup finds carries
+the function's defers and `deferreturn`; it fails where the Go loader adds
+them as a second record the lookup never reaches.
 `GoStackResults.AnAssemblyRoutineReturnsTheRecordItsCallsRead` decompiles an
 arm64 image of the internal ABI whose assembly routine still returns two
 stack words to compiled code, on both routes: the routine returns the record

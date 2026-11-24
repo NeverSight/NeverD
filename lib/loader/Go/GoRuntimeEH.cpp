@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -556,6 +557,20 @@ void parseGoExceptions(BinaryImage &Img) {
   const unsigned Stride = getBranchScanStride(Img.Arch, Img.Mode);
   const size_t BranchLength = getDirectBranchLength(Img.Arch);
   size_t RecordsAdded = 0;
+  // A Windows image describes how to unwind each function in its .pdata, a
+  // record that ends where the code does, short of the padding the
+  // function's own range takes in: the lookup finds that smaller record
+  // first.  The runtime's records go with it, so the frame's defer and
+  // panic sites reach its deferreturn there too.  Without them
+  // `main.panicDuringDefer`, which recovers in its deferred call, had no
+  // way to return and was taken never to, and so was its caller.
+  std::map<va_t, size_t> Unwinding;
+  for (size_t I = 0; I < Info.Functions.size(); ++I) {
+    const ExceptionFunction &F = Info.Functions[I];
+    if (F.Kind == RuntimeFunctionKind::Primary && F.CodeRange.isValid() &&
+        !F.Go)
+      Unwinding.try_emplace(F.CodeRange.Begin, I);
+  }
   for (const GoFunction &G : Funcs) {
     GoFunctionEH EH;
     EH.EntryVA = G.CodeRange.Begin;
@@ -714,8 +729,19 @@ void parseGoExceptions(BinaryImage &Img) {
       F.ParseStatus = mergeExceptionParseStatus(F.ParseStatus,
                                                 ExceptionParseStatus::Partial);
     F.Go = std::move(EH);
-    Info.Functions.push_back(std::move(F));
     ++RecordsAdded;
+    if (const auto Same = Unwinding.find(G.CodeRange.Begin);
+        Same != Unwinding.end() &&
+        Info.Functions[Same->second].CodeRange.End <= G.CodeRange.End) {
+      ExceptionFunction &Unwind = Info.Functions[Same->second];
+      Unwind.Go = std::move(F.Go);
+      Unwind.ParseStatus =
+          mergeExceptionParseStatus(Unwind.ParseStatus, F.ParseStatus);
+      Unwind.Diagnostics.insert(Unwind.Diagnostics.end(), F.Diagnostics.begin(),
+                                F.Diagnostics.end());
+      continue;
+    }
+    Info.Functions.push_back(std::move(F));
   }
 
   Info.GoModule = std::move(Module);
