@@ -90,6 +90,25 @@
         }
       }
     },
+    "ApplicationExecutionPolicy": {
+      "module": "wldp.dll",
+      "headers": [
+        "wldp"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "WldpCanExecuteFileFromDetachedSignature": 6,
+        "WldpGetApplicationSettingBoolean": 3,
+        "WldpGetApplicationSettingStringList": 5,
+        "WldpGetApplicationSettingStringSet": 5
+      },
+      "targets": {
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "218b33e84dfb38ccb3fc98a83b8c0e0b5e07a734e4ec36e2d2d52754da6933f6"
+        }
+      }
+    },
     "Avifil32Runtime": {
       "module": "avifil32.dll",
       "headers": [
@@ -136,6 +155,44 @@
         "arm64": {
           "image_sha256": "b0826e44064894a17f5568090f7557e515e12a8d6739beef3ae4c58bf6cf73f1",
           "additional_exports": {}
+        }
+      }
+    },
+    "CertificateEnrollmentPolicy": {
+      "module": "certpoleng.dll",
+      "headers": [
+        "winternl",
+        "security",
+        "ntsecapi",
+        "ntsecpkg",
+        "schannel",
+        "CertPolEng"
+      ],
+      "exports": {
+        "PstAcquirePrivateKey": 1,
+        "PstGetCertificateChain": 3,
+        "PstGetCertificates": 6,
+        "PstGetTrustAnchors": 4,
+        "PstGetTrustAnchorsEx": 5,
+        "PstGetUserNameForCertificate": 2,
+        "PstMapCertificate": 3,
+        "PstValidate": 6
+      },
+      "targets": {
+        "x86": {
+          "additional_exports": {},
+          "image_sha256": "8c04c3bf3fa9f561d50d083b7c4518faa5cd676c305e4c05513a82b81b1a1d10",
+          "import_library": "CertPolEng.Lib"
+        },
+        "x64": {
+          "additional_exports": {},
+          "image_sha256": "da8e46767b6794b63602a7a552beb702503cf2980ccba29626a4f40e23e98ac3",
+          "import_library": "CertPolEng.Lib"
+        },
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "490f5651ad449e77e3bb93adfa19da2f9e783718d4ba5b3445811e6d22f55b71",
+          "import_library": "CertPolEng.Lib"
         }
       }
     },
@@ -206,6 +263,28 @@
         }
       }
     },
+    "CloudAuthentication": {
+      "module": "wtsapi32.dll",
+      "headers": [
+        "WtsApi32"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "WTSCloudAuthClose": 1,
+        "WTSCloudAuthConvertAssertionToSerializedUserCredential": 5,
+        "WTSCloudAuthDuplicateSerializedUserCredential": 2,
+        "WTSCloudAuthGetServerNonce": 2,
+        "WTSCloudAuthNetworkLogonWithSerializedCredential": 3,
+        "WTSCloudAuthOpen": 1
+      },
+      "targets": {
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "420d054f6012860823b3dde8dd33c5d6ee445d704c69b4b6a647f12296b93217",
+          "import_library": "WtsApi32.Lib"
+        }
+      }
+    },
     "CompstuiRuntime": {
       "module": "compstui.dll",
       "headers": [
@@ -260,6 +339,26 @@
         "arm64": {
           "image_sha256": "a2bd6e55c8a90add92870c6aaaf46d83af90f9cc4cd1947fd5758ad4961b044d",
           "additional_exports": {}
+        }
+      }
+    },
+    "ConfiguredPowerMode": {
+      "module": "powrprof.dll",
+      "headers": [
+        "powrprof"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "PowerGetUserConfiguredACPowerMode": 1,
+        "PowerGetUserConfiguredDCPowerMode": 1,
+        "PowerSetUserConfiguredACPowerMode": 1,
+        "PowerSetUserConfiguredDCPowerMode": 1
+      },
+      "targets": {
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "418706d740c61a2e54f0b3c7d8bcc827796ccddc6777cda667939a5af613162a",
+          "import_library": "powrprof.lib"
         }
       }
     },
@@ -552,6 +651,55 @@
         }
       }
     },
+    "DesktopWindowActions": {
+      "module": "user32.dll",
+      "headers": [
+        "winuser"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "ApplyWindowAction": 2,
+        "ConvertToInterceptWindow": 1,
+        "EnterMoveSizeLoop": 3,
+        "GetCurrentMonitorTopologyId": 0,
+        "IsInterceptWindow": 2,
+        "RegisterCloakedNotification": 2
+      },
+      "targets": {
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "5d26276f596482c2e6474689e0dd72f885549f313bdac6ae91f4c706f9307b5a"
+        }
+      }
+    },
+    "DeveloperLicensing": {
+      "module": "wsclient.dll",
+      "headers": [
+        "Wsdevlicensing"
+      ],
+      "exports": {
+        "AcquireDeveloperLicense": 2,
+        "CheckDeveloperLicense": 1,
+        "RemoveDeveloperLicense": 1
+      },
+      "targets": {
+        "x86": {
+          "additional_exports": {},
+          "image_sha256": "c17ae52f0447a7b1e7150849260a7b0f05786bb275a03d6e4f4b2663f332d715",
+          "import_library": "wsclient.lib"
+        },
+        "x64": {
+          "additional_exports": {},
+          "image_sha256": "65ee192fbb82b41bb18eebd019929793fe150d6224c8107f5619dd1410359c6a",
+          "import_library": "wsclient.lib"
+        },
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "1751ccb306e072546455b0aae61e82ff7e979362a0009d619f7e6988dcdf1a53",
+          "import_library": "wsclient.lib"
+        }
+      }
+    },
     "DeviceaccessRuntime": {
       "module": "deviceaccess.dll",
       "headers": [
@@ -626,6 +774,34 @@
         "arm64": {
           "image_sha256": "1ccce54424c83ab6fa201e8fee2d65a222813d45b14b99d525c64cf86644405e",
           "additional_exports": {}
+        }
+      }
+    },
+    "DirectoryBrowser": {
+      "module": "dsuiext.dll",
+      "headers": [
+        "shlobj",
+        "activeds",
+        "dsclient"
+      ],
+      "exports": {
+        "DsBrowseForContainerA": 1,
+        "DsBrowseForContainerW": 1,
+        "DsGetFriendlyClassName": 3,
+        "DsGetIcon": 4
+      },
+      "targets": {
+        "x86": {
+          "additional_exports": {},
+          "image_sha256": "c07238e5b7e133937ef74218b65cf7e8cfbe12a58104664fd410fca745bd47f2"
+        },
+        "x64": {
+          "additional_exports": {},
+          "image_sha256": "466ed7f7eaae391c22a966b8563a3ec2bc6bd59fe4ebecb20d583333563f9a26"
+        },
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "d40eccc4ad78926b083e9146016590442e19a27144ce1b7d5924d05d7f79062c"
         }
       }
     },
@@ -802,6 +978,70 @@
         }
       }
     },
+    "EnclaveServices": {
+      "module": "vertdll.dll",
+      "headers": [
+        "ntenclv",
+        "enclaveium",
+        "winenclaveapi"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "EnclaveGetAttestationReport": 4,
+        "EnclaveGetEnclaveInformation": 2,
+        "EnclaveSealData": 7,
+        "EnclaveUnsealData": 7,
+        "EnclaveVerifyAttestationReport": 3
+      },
+      "targets": {
+        "x64": {
+          "additional_exports": {},
+          "image_sha256": "d0919f7fbc1446783bb0ebac9a343c6de7d4777df7aab7ab381dcda6e1040e07",
+          "import_library": "vertdll.lib"
+        },
+        "arm64": {
+          "additional_exports": {
+            "EnclaveCopyIntoEnclave": 3,
+            "EnclaveCopyOutOfEnclave": 3,
+            "EnclaveEncryptDataForTrustlet": 6,
+            "EnclaveRestrictContainingProcessAccess": 2,
+            "EnclaveUsesAttestedKeys": 0
+          },
+          "image_sha256": "83d1836a981b5afbee1871c4397647c9f617a08f829bbcdaaedd1b1b6d3ee5e6",
+          "import_library": "vertdll.lib"
+        }
+      }
+    },
+    "ExtendedSecurityNames": {
+      "module": "secur32.dll",
+      "headers": [
+        "security",
+        "secext"
+      ],
+      "exports": {
+        "GetComputerObjectNameA": 3,
+        "GetComputerObjectNameW": 3,
+        "TranslateNameA": 5,
+        "TranslateNameW": 5
+      },
+      "targets": {
+        "x86": {
+          "additional_exports": {},
+          "image_sha256": "96c9d894215fa2126a9b8aea45d27614a46443ca15e42e5ba0251d5d4c79fad8",
+          "import_library": "Secur32.Lib"
+        },
+        "x64": {
+          "additional_exports": {},
+          "image_sha256": "431ac7f960847784cff8235b3e61359283070788810d43f1690ec9aebb9d4a81",
+          "import_library": "Secur32.Lib"
+        },
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "9ae2b61f75baf78657a999ea6f47da6ee6430f8e7ae8461f4c7f92491611c3a5",
+          "import_library": "Secur32.Lib"
+        }
+      }
+    },
     "FaultrepRuntime": {
       "module": "faultrep.dll",
       "headers": [
@@ -847,6 +1087,42 @@
         "x64": {
           "image_sha256": "d6fb177e856adf9a5fa32045c444647549d2f825f3457a3d3bce21c00bc4011c",
           "additional_exports": {}
+        }
+      }
+    },
+    "FileSystemBindLinks": {
+      "module": "bindfltapi.dll",
+      "headers": [
+        "bindlink"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "CreateBindLink": 5,
+        "RemoveBindLink": 1
+      },
+      "targets": {
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "72fbcc17e931fd923e2c5d9ae63124e2d23e8dcb8a01b6f2f2d3b553db220fe5",
+          "import_library": "bindlink.lib"
+        }
+      }
+    },
+    "FilteringConnectionPolicies": {
+      "module": "fwpuclnt.dll",
+      "headers": [
+        "fwpmu"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "FwpmConnectionPolicyAdd0": 7,
+        "FwpmConnectionPolicyDeleteByKey0": 2
+      },
+      "targets": {
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "72d1448711969a3851ceb56a32bff06eefd691253497ac662be39fd8daf3c1e7",
+          "import_library": "fwpuclnt.lib"
         }
       }
     },
@@ -1330,6 +1606,25 @@
         "arm64": {
           "image_sha256": "1022a68b58301bb8c675f61d3e06a7903334b24d70ffbd366118dc55720a2e86",
           "additional_exports": {}
+        }
+      }
+    },
+    "MediaFoundationGraphicsDevices": {
+      "module": "mfplat.dll",
+      "headers": [
+        "mfidl",
+        "mfapi"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "MFCreateDXGICrossAdapterBuffer": 5,
+        "MFGetDXGIDeviceManageMode": 2
+      },
+      "targets": {
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "0524309ecac464ee3b3dced91e63406d02050d5773c4ac55b25b7a6c9c87512c",
+          "import_library": "Mfplat.lib"
         }
       }
     },
@@ -1899,6 +2194,34 @@
         }
       }
     },
+    "NetworkStringParser": {
+      "module": "iphlpapi.dll",
+      "headers": [
+        "ws2tcpip",
+        "windns",
+        "iphlpapi"
+      ],
+      "exports": {
+        "ParseNetworkString": 5
+      },
+      "targets": {
+        "x86": {
+          "additional_exports": {},
+          "image_sha256": "dd3d073e10f6cbaee11d73702eb99ae8a9dd73d2fc7fb37b165dd0b04be7fe5e",
+          "import_library": "iphlpapi.lib"
+        },
+        "x64": {
+          "additional_exports": {},
+          "image_sha256": "12cfa67d12cb37a6473411479b2afe30afa6a4e68b0fa17ec83de09d39a2d469",
+          "import_library": "iphlpapi.lib"
+        },
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "ffddabddeab71cc03dd6ebcc21a343fc5637ba7ca5e3749df7cf6039973d91f1",
+          "import_library": "iphlpapi.lib"
+        }
+      }
+    },
     "NtdllRuntime": {
       "module": "ntdll.dll",
       "headers": [
@@ -2004,6 +2327,28 @@
         "arm64": {
           "image_sha256": "ad57f7437839c0a01ea8cc0966e45f3adc2f757ba6f921749f66c4dd41e2d797",
           "additional_exports": {}
+        }
+      }
+    },
+    "PrintRouterNotifications": {
+      "module": "spoolss.dll",
+      "headers": [
+        "prnasnot",
+        "prnasntp"
+      ],
+      "exports": {
+        "RouterCreatePrintAsyncNotificationChannel": 6,
+        "RouterGetPrintClassObject": 3,
+        "RouterUnregisterForPrintAsyncNotifications": 1
+      },
+      "targets": {
+        "x64": {
+          "additional_exports": {},
+          "image_sha256": "e9fab9535c18a7a5b0b77f286ce51be9b1c8712e84240681c3e60f794e86c3ac"
+        },
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "44f063fd9f26e8191bac0a64668e52cc4cf862b6ebc6b3cd469ef4798873caff"
         }
       }
     },
@@ -2230,6 +2575,33 @@
         "arm64": {
           "image_sha256": "8fabf51d1b41ae6c290d96763b5cd811961ffd3bd557840e13b50c37b4b723d4",
           "additional_exports": {}
+        }
+      }
+    },
+    "SocketPeerTarget": {
+      "module": "fwpuclnt.dll",
+      "headers": [
+        "mstcpip",
+        "ws2tcpip"
+      ],
+      "exports": {
+        "WSADeleteSocketPeerTargetName": 5
+      },
+      "targets": {
+        "x86": {
+          "additional_exports": {},
+          "image_sha256": "057c7342804cad7fda6200858d6362aaf3abb10b526c0c1146a7020fb43be197",
+          "import_library": "fwpuclnt.lib"
+        },
+        "x64": {
+          "additional_exports": {},
+          "image_sha256": "0e9567e63e8102e8910bd50f600107118b7ab5a17aaf72abc2381ccf29112499",
+          "import_library": "fwpuclnt.lib"
+        },
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "72d1448711969a3851ceb56a32bff06eefd691253497ac662be39fd8daf3c1e7",
+          "import_library": "fwpuclnt.lib"
         }
       }
     },
@@ -2515,6 +2887,29 @@
           "additional_exports": {
             "HdvInitializeDeviceHostEx": 3
           }
+        }
+      }
+    },
+    "Win11FileOperations": {
+      "module": "kernel32.dll",
+      "headers": [
+        "fileapi"
+      ],
+      "kit_ntddi": true,
+      "exports": {
+        "CreateDirectory2A": 5,
+        "CreateDirectory2W": 5,
+        "CreateFile3": 5,
+        "DeleteFile2A": 2,
+        "DeleteFile2W": 2,
+        "RemoveDirectory2A": 2,
+        "RemoveDirectory2W": 2
+      },
+      "targets": {
+        "arm64": {
+          "additional_exports": {},
+          "image_sha256": "3b05fea371380c19022ca18c8ece9690057108954794038e9818f0dfeaf1cb46",
+          "import_library": "kernel32.Lib"
         }
       }
     },

@@ -2604,13 +2604,12 @@ PageSource Engine::namedViewLines(const NamedView &document, std::size_t start,
   return page;
 }
 
-std::optional<Json> Engine::namedViewPage(std::uint64_t address,
-                                          const std::string &representation,
-                                          std::size_t offset, std::size_t limit,
-                                          const Json &options,
-                                          EncodedPayload *encoded,
-                                          const std::string *ifNoneMatch,
-                                          bool pageDelta, const Json *request) {
+std::optional<Json>
+Engine::namedViewPage(std::uint64_t address, const std::string &representation,
+                      std::size_t offset, std::size_t limit,
+                      std::size_t wholeDocumentLimit, const Json &options,
+                      EncodedPayload *encoded, const std::string *ifNoneMatch,
+                      bool pageDelta, const Json *request) {
   // The document whose page the client names for what changed of it: a patch
   // may be written into it (namedView).
   const auto named = pageDelta && ifNoneMatch && !ifNoneMatch->empty()
@@ -2633,6 +2632,9 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
       document->storage ? document->storedText.size : text.size();
   const std::size_t total = textSize == 0 ? 0 : namedViewLines_.size();
   const auto start = std::min(offset, total);
+  if (!offset && total <= wholeDocumentLimit &&
+      textSize <= ::neverd::limits::worker::kEngineMaxCodePageBytes)
+    limit = total;
   auto end = start + std::min(limit, total - start);
   const auto byteAt = [&](std::size_t line) {
     return line < namedViewLines_.size() ? namedViewLines_[line] : textSize;
@@ -8322,6 +8324,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         ::neverd::limits::worker::kEngineExecuteImplDecompileLimitSizeFieldMax);
     if (!limit)
       throw Error("invalid_request", "limit must be at least 1");
+    const auto wholeDocumentLimit = sizeField(
+        p, "whole_document_limit", 0,
+        ::neverd::limits::worker::kEngineExecuteImplDecompileLimitSizeFieldMax);
     if (p.contains("listed_entry_only") &&
         !p.at("listed_entry_only").is_boolean())
       throw Error("invalid_request", "listed_entry_only must be true or false");
@@ -8383,9 +8388,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       // A client that applies what changed to the page it keeps asks for
       // that (page_delta).
       const bool deltas = etags && p.value("page_delta", false);
-      if (auto named = namedViewPage(entry, representation, offset, limit,
-                                     options, etags ? nullptr : encoded,
-                                     etags ? &known : nullptr, deltas, &p))
+      if (auto named = namedViewPage(
+              entry, representation, offset, limit, wholeDocumentLimit, options,
+              etags ? nullptr : encoded, etags ? &known : nullptr, deltas, &p))
         return std::move(*named);
       if (viewRead_ == ViewRead::KeptOnly)
         throw Error("not_kept", "No session has kept this view");

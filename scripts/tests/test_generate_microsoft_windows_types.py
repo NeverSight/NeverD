@@ -121,7 +121,14 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             def exports(arch):
                 libraries = {name: {} for name, profile in windows.flat.RUNTIME_PROFILES.items()
                              if "import_library" in profile["targets"].get(arch, {})}
-                units = windows.flat.named_runtime_units(Path(tmp) / arch, arch, ["clang"], libraries)
+                compiler = ["clang", "-DNTDDI_VERSION=0x0A00000C"]
+                units = windows.flat.named_runtime_units(Path(tmp) / arch, arch, compiler, libraries)
+                security = next(u for u in units if u["name"] == "ExtendedSecurityNames")
+                self.assertNotIn("-UNTDDI_VERSION", security["compiler"])
+                if arch == "arm64":
+                    cloud = next(u for u in units if u["name"] == "CloudAuthentication")
+                    self.assertEqual(cloud["compiler"][-1], "-UNTDDI_VERSION")
+                    self.assertEqual(cloud["bridge"]["arguments"], [*cloud["compiler"], "-std=c23"])
                 ssl = next(u for u in units if u["name"] == "SslProvider")
                 self.assertIn(str(Path(tmp) / arch / "cpdk-headers"), ssl["compiler"])
                 self.assertEqual(ssl["bridge"]["runtime_exports"]["parameter_counts"]["SslEnumCipherSuites"], 5)
@@ -141,6 +148,10 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             self.assertEqual(arm64["LockdownPolicy"]["parameter_counts"][reset], 0)
             self.assertNotEqual(x64["DisplayControl"]["image_sha256"],
                                 arm64["DisplayControl"]["image_sha256"])
+            self.assertNotIn("CloudAuthentication", x64)
+            self.assertEqual(arm64["CloudAuthentication"]["parameter_counts"]["WTSCloudAuthClose"], 1)
+            self.assertNotIn("EnclaveCopyIntoEnclave", x64["EnclaveServices"]["names"])
+            self.assertIn("EnclaveCopyIntoEnclave", arm64["EnclaveServices"]["names"])
 
     def test_named_runtime_archive_coexists_with_other_sdk_imports(self):
         with tempfile.TemporaryDirectory() as directory:

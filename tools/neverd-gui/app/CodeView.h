@@ -323,7 +323,8 @@ private:
   quint64 beginLoad(Address function, const QString &representation,
                     std::optional<QJsonObject> options, bool here,
                     bool refresh = false);
-  void request(int offset, quint64 serial, bool refresh = false);
+  void request(int offset, quint64 serial, bool refresh = false,
+               bool allowWholeSource = true);
   /// Takes a page of the text being read, at \p offset: the offset of the
   /// page to take next, or none once the text is whole or cannot be.
   std::optional<int> takePage(const QJsonObject &payload, int offset);

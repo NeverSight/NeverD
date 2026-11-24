@@ -14,8 +14,10 @@
 
 #include "LibraryPrototype.h"
 
+#include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/debug/UserPrototype.h"
+#include "neverd/libc/LibCRecordArguments.h"
 
 #include "llvm/ADT/StringRef.h"
 
@@ -23,6 +25,44 @@
 #include <set>
 
 namespace neverd::c_library {
+/// A standalone Windows ARM64 prototype may spell a by-value record when
+/// each source parameter occupies one integer register in declaration order.
+/// The target classifier distinguishes these records from HFAs, register
+/// pairs, indirect copies and hidden results.
+inline bool standaloneRegisterRecord(const FunctionSym &Function,
+                                     const CEmitterOptions &Options) {
+  if (Options.TheArch != Arch::AArch64 ||
+      Options.Format != BinaryFormat::COFF || !Options.EmitIncludes ||
+      !Options.RecordDefinitions || !Function.PrototypeFromHeader ||
+      !Function.ParamEntryLocations.empty() || !Function.ReturnType ||
+      !libc::hasRecordCallParameters(Function, Options.libcVariant()))
+    return false;
+  const TypeRef &Result = Function.ReturnType;
+  if (Result->Kind != NdTypeKind::Void && Result->Kind != NdTypeKind::Ptr &&
+      Result->Kind != NdTypeKind::Int && !Result->IsEnum)
+    return false;
+  if (Result->Size > getTargetRegInfo(Options.TheArch).PointerSize)
+    return false;
+  const auto Layout = libc::recordCallArguments(
+      Function, Options.TheArch, Options.Format, Options.libcVariant());
+  if (!Layout || Layout->ResultPointer || Layout->FloatingResult ||
+      Layout->Registers != Function.Params.size() ||
+      Layout->Positions != Function.Params.size())
+    return false;
+  for (size_t I = 0; I < Layout->Parameters.size(); ++I) {
+    const auto &Type = Function.Params[I].second;
+    if (libc::isRecordCallParameter(Function, I, Options.libcVariant()) &&
+        Type->SourceName.empty())
+      return false;
+    const auto &P = Layout->Parameters[I];
+    if (P.Indirect || P.Pieces.size() != 1 || P.Pieces[0].Floating ||
+        P.Pieces[0].Argument != I || P.Pieces[0].Offset ||
+        P.Pieces[0].Bytes != Type->Size)
+      return false;
+  }
+  return true;
+}
+
 /// Source qualifiers belong to the selected header or local declaration,
 /// not to the machine carrier type. Reuse that spelling after checking the
 /// call layout, and never replace an aggregate's lowered ABI with its source

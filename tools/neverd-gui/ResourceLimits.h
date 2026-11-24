@@ -147,6 +147,8 @@ inline constexpr int kChooserViewChooserModelRequestPageTextLimit = 400;
 
 // tools/neverd-gui/app/CodeView.cpp
 inline constexpr int kCodeViewPageLines = 256;
+/// Read a short source document in one reply while keeping larger views paged.
+inline constexpr int kCodeViewWholeSourceLines = 2 * kCodeViewPageLines;
 /// A read nobody waits for any more runs to its end in the analysis worker,
 /// since stopping the worker loses everything it has analyzed.  It is stopped
 /// once the read has run this long, or as many times what restoring it took.

@@ -2555,7 +2555,8 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
           }
           continue;
         }
-        Fits &= ScalarParameters;
+        Fits &= ScalarParameters ||
+                c_library::standaloneRegisterRecord(*Source, Opts);
         const auto Layout =
             Fits && !Floating
                 ? integerCallArguments(Opts.TheArch, Opts.Format,
@@ -2674,7 +2675,11 @@ std::string LLVMCWriter::sourceImportDeclaration(const FunctionSym &Function,
     if (!Params.empty())
       Params += ", ";
     NotePointers(Type);
-    Params += declarationToC(Type, Names.allocate(ParamName, "arg"));
+    const std::string ParameterName = Names.allocate(ParamName, "arg");
+    Params += Type->Kind == NdTypeKind::Struct && !Type->IsEnum &&
+                      c_library::standaloneRegisterRecord(Function, Opts)
+                  ? c_detail::recordCallType(Type, Opts) + " " + ParameterName
+                  : declarationToC(Type, ParameterName);
   }
   if (Function.IsVariadic)
     Params += Params.empty() ? "..." : ", ...";

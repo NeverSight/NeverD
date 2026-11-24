@@ -254,6 +254,15 @@ def run(executable):
             full = source(paged, representation="low", limit=4)
             lines = full["text"].splitlines(keepends=True)
             assert len(lines) == 4
+            request = {"address": A, "representation": "low", "limit": 2,
+                       "whole_document_limit": 4}
+            assert ok(paged, "decompile", request) == full
+            assert ok(paged, "decompile", dict(request, whole_document_limit=3)) == source(
+                paged, representation="low", limit=2)
+            assert ok(paged, "decompile", dict(request, offset=1)) == source(
+                paged, representation="low", limit=2, offset=1)
+            invalid = paged.call("decompile", dict(request, whole_document_limit="4"))
+            assert invalid["status"] == "error" and invalid["error"]["code"] == "invalid_request"
             assert len(full["rows"]) == 4 and len(full["references"]) == 8
             assert len(full["source_names"]) == len(full["code_names"]) == 4
             for offset in (0, 1, 2, 3, 4, 7):
@@ -315,6 +324,8 @@ def run(executable):
         ok(huge, "open", {"path": str(huge_file), "analysis": False})
         head = source(huge, representation="llvmc")
         assert head["total_lines"] == 20008, head
+        assert ok(huge, "decompile", {"address": A, "representation": "llvmc",
+                                      "limit": 4, "whole_document_limit": 512}) == head
         tail = source(huge, representation="llvmc", offset=20000, limit=16)
         assert tail["complete"] and "code line 19999" in tail["text"], tail
         assert tail["fixture_pages"] == head["fixture_pages"], (head, tail)

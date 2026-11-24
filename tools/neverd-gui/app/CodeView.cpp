@@ -1014,7 +1014,8 @@ void CodeText::makeReadyFor(Address address, const QString &name, int most) {
   }
 }
 
-void CodeText::request(int offset, quint64 serial, bool refresh) {
+void CodeText::request(int offset, quint64 serial, bool refresh,
+                       bool allowWholeSource) {
   if (!function_)
     return;
   QJsonObject payload{{"address", hexAddress(*function_)},
@@ -1022,6 +1023,13 @@ void CodeText::request(int offset, quint64 serial, bool refresh) {
                       {"source_options", sourceOptions_},
                       {"offset", offset},
                       {"limit", pageLines_}};
+  const bool wholeSource =
+      allowWholeSource && offset == 0 &&
+      pageLines_ == ::neverd::limits::gui::kCodeViewPageLines &&
+      CodeView::isSource(representation_);
+  if (wholeSource)
+    payload["whole_document_limit"] =
+        ::neverd::limits::gui::kCodeViewWholeSourceLines;
   if (refresh)
     payload["refresh"] = true;
   session_.read(
@@ -1032,13 +1040,15 @@ void CodeText::request(int offset, quint64 serial, bool refresh) {
         if (const auto next = takePage(payload, offset))
           request(*next, serial);
       },
-      [this, offset, serial](const QString &code, const QString &message) {
+      [this, offset, serial, refresh, wholeSource](const QString &code,
+                                                   const QString &message) {
         if (serial != serial_)
           return;
         if (code == QLatin1String("budget_exceeded") &&
-            pageLines_ > ::neverd::limits::gui::kCodeViewPageLines) {
+            (wholeSource ||
+             pageLines_ > ::neverd::limits::gui::kCodeViewPageLines)) {
           pageLines_ = ::neverd::limits::gui::kCodeViewPageLines;
-          request(offset, serial);
+          request(offset, serial, refresh, false);
           return;
         }
         loading_ = false;

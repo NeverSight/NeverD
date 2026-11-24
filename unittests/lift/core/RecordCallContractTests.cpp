@@ -1029,6 +1029,84 @@ TEST(RecordCallContract, FloatingRecordResultsKeepIntegerExpressionCarriers) {
   checkFloatingRecordResult(true);
 }
 
+TEST(RecordCallContract, StandaloneARM64HeaderRecordCallsPreserveObjectBytes) {
+  const auto Header = types::HeaderLibrary::WindowsUserARM64;
+  const auto *Library = types::headerLibrary(Header);
+  ASSERT_NE(Library, nullptr);
+  auto Types = std::make_shared<types::TypeLibrary>(Library->dataModel());
+  Types->setRecordABI(Library->recordABI());
+  types::mergeHeaderTypes(*Types, *Library);
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  Import Imported;
+  Imported.Name = "MenuItemFromPoint";
+  Imported.Module = "user32.dll";
+  Imported.IATAddr = 0x2000;
+  Image.Imports.push_back(Imported);
+  EmptyDebug Empty;
+  sdk::LocalTypesDebugContext Debug(Empty, Types, {}, &Image, {Header});
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  Options.Image = &Image;
+  Options.RecordDefinitions = [&](const std::vector<TypeRef> &Records) {
+    return Debug.definitions(Records);
+  };
+  constexpr uint64_t Packed = 0x7ABCDEF080000001ULL;
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM ? "LLVM-C" : "HighC");
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (LLVM) {
+      llvm::LLVMContext Context;
+      llvm::Module Module("standalone-win32-record", Context);
+      llvm::IRBuilder<> Builder(Context);
+      auto *Word = Builder.getInt64Ty();
+      auto *Callee = llvm::Function::Create(
+          llvm::FunctionType::get(Word, {Word, Word, Word}, false),
+          llvm::GlobalValue::ExternalLinkage, Imported.Name, Module);
+      auto *Probe = llvm::Function::Create(llvm::FunctionType::get(Word, false),
+                                           llvm::GlobalValue::ExternalLinkage,
+                                           "point_probe", Module);
+      Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Probe));
+      auto *Call = Builder.CreateCall(Callee, {Builder.getInt64(0x12340),
+                                               Builder.getInt64(0x56780),
+                                               Builder.getInt64(Packed)});
+      setLLVMArgumentBanks(*Call, 3, 0, {}, 8);
+      Builder.CreateRet(Call);
+      ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options, &Debug, &Image));
+    } else {
+      HighFunc Probe;
+      Probe.Name = "point_probe";
+      Probe.Entry = 0x1000;
+      Probe.ReturnType = NdType::makeInt(8, false);
+      HighStmt Return;
+      Return.Kind = StmtKind::Return;
+      Return.RetVal = HighExpr::makeCall(Imported.Name, Imported.IATAddr,
+                                         {HighExpr::makeConst(0x12340, 8),
+                                          HighExpr::makeConst(0x56780, 8),
+                                          HighExpr::makeConst(Packed, 8)});
+      Return.RetVal->Type = Probe.ReturnType;
+      Probe.Body.push_back(Return);
+      ASSERT_TRUE(HighCEmitter().emit({Probe}, Out, Options, &Debug));
+    }
+    // Compiling the independent provider also checks the emitted prototype.
+    // A negative INT result writes W0 and zeroes the upper half of X0.
+    Source += R"(
+int32_t MenuItemFromPoint(struct HWND__ *window, struct HMENU__ *menu,
+                          struct tagPOINT pt) {
+  return (uintptr_t)window == 0x12340 && (uintptr_t)menu == 0x56780 &&
+         pt.x == -2147483647 && pt.y == 0x7abcdef0 ? -2 : 0;
+}
+int main(void) { return (uint64_t)point_probe() != UINT64_C(0xfffffffe); }
+)";
+    ASSERT_NO_FATAL_FAILURE(
+        source_call_execution_test::compileAndRun(Source, {}));
+  }
+}
+
 TEST(RecordCallContract, WindowsRecordResultsPreserveEveryByte) {
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "Host execution of the generated C requires Linux x86-64";

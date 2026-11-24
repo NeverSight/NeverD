@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CDeferredValue.h"
+#include "../HeaderPrototype.h"
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
@@ -2861,7 +2862,8 @@ void HighCWriter::noteDebugExtern(const std::string &Name,
   // A prototype in signature order would not take a call's arguments, which
   // come in the convention's order; the callee is declared without it.
   if (!positionalDebugSignature(FS, &Call)) {
-    if (i386WideStackArguments(FS, Opts.TheArch, Opts.Format))
+    if (i386WideStackArguments(FS, Opts.TheArch, Opts.Format) ||
+        c_library::standaloneRegisterRecord(FS, Opts))
       ConflictingDebugExternSigs.insert(Name);
     return;
   }
@@ -5049,7 +5051,11 @@ bool HighCWriter::sourceRecordCallee(llvm::StringRef Name,
       (!Definition || !Definition->SourceTypeHint))
     return true;
   return !Definition &&
-         ((Name == Callee.Name && includesHeaderOf(Name)) ||
+         ((Name == Callee.Name &&
+           (includesHeaderOf(Name) ||
+            (DebugExternSigs.count(Callee.Name) &&
+             !ConflictingDebugExternSigs.count(Callee.Name) &&
+             c_library::standaloneRegisterRecord(Callee, Opts)))) ||
           libc::floatingCallArguments(Callee, Opts.TheArch, Opts.Format, Dbg));
 }
 
@@ -5284,6 +5290,21 @@ bool HighCWriter::positionalDebugSignature(const FunctionSym &FS,
   }
   if (Integers || Floats)
     return true;
+  if (c_library::standaloneRegisterRecord(FS, Opts)) {
+    if (!Call)
+      return true;
+    if (Call->Operands.size() != FS.Params.size())
+      return false;
+    for (size_t I = 0; I < Call->Operands.size(); ++I) {
+      const auto &Arg = Call->Operands[I];
+      if (!Arg || !Arg->Type ||
+          (Arg->Type->Kind != NdTypeKind::Int &&
+           Arg->Type->Kind != NdTypeKind::Ptr && !Arg->Type->IsEnum) ||
+          Arg->Type->Size < FS.Params[I].second->Size)
+        return false;
+    }
+    return true;
+  }
   if (const auto Wide = i386WideStackArguments(FS, Opts.TheArch, Opts.Format))
     return !Call || matchesWholeStackArguments(
                         *Wide, Call->Operands.size(), [&](size_t I) {
