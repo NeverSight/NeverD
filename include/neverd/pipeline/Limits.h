@@ -197,9 +197,6 @@ inline constexpr unsigned kPipelineReturnContractsMaxRounds = 8;
 inline constexpr unsigned kPipelineReturnContractsClassifyMaxDepth = 32;
 /// SSA count definitions and PHI inputs inspected for one variable-shift arm.
 inline constexpr unsigned kPipelineReturnShiftCountWork = 128;
-/// SSA dependencies and CFG transfers for all shared-shift choices in one
-/// function. A growing loop or an unfinished arm supplies no evidence.
-inline constexpr unsigned kPipelineReturnShiftPathWork = 4096;
 
 // lib/pipeline/StateSourceBank.cpp
 inline constexpr unsigned kStateSourceBankBankOffsetsBudget = 128;

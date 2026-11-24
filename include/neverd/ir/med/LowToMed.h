@@ -114,6 +114,11 @@ public:
   void setSEHSourceProjectionEnabled(bool Enabled) {
     SEHSourceProjectionEnabled = Enabled;
   }
+  /// Resolve unobserved integer return carriers before inferring source
+  /// arguments.
+  void setSourceReturnProjectionEnabled(bool Enabled) {
+    SourceReturnProjectionEnabled = Enabled;
+  }
   void setObjCBlockCaptureCallFields(
       const std::map<va_t, ObjCBlockCaptureCallFields> *Fields) {
     ObjCBlockCaptureFields = Fields;
@@ -501,6 +506,7 @@ private:
   const std::map<SourceCallOccurrenceKey, SourceCallTypeHint>
       *SourceCallSiteHints = nullptr;
   bool SEHSourceProjectionEnabled = false;
+  bool SourceReturnProjectionEnabled = false;
   llvm::ArrayRef<MedReturnReg> MIPSRecordResult;
   const std::map<va_t, SourceFunctionTypeHint> *SourceEntryTypeHints = nullptr;
   const std::map<va_t, SourceFunctionTypeHint> *SourceCalleeTypeHints = nullptr;

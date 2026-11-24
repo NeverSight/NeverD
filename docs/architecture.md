@@ -5659,6 +5659,14 @@ ABI result. A separately merged byte must agree with its represented parent
 on the incoming edge, including when that byte supplies the shift count.
 An unrelated loop counter may remain unknown while the proof checks both
 continuations and the value after the final write.
+One arm may write the ABI result directly while another supplies a scratch
+register that a later block copies. Source conversion follows the selector
+through each latch before inferring parameters. It can replace an unobserved
+PHI input with the defined carrier on that particular edge when every
+continuation preserves its observations. Ordinary uses of the incoming value,
+including a store or a selector change that exposes it, prevent the replacement.
+The module return contract uses the same MedIR path evaluator to compare the
+final results.
 An outer choice can distinguish a third arm even when the inner arms return
 the same bits. A loop header can receive new bindings on each latch. The proof
 compares the observable outcomes after closing both sets under those

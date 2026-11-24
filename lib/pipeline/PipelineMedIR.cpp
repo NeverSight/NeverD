@@ -1278,6 +1278,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setSourceCalleeFunctions(&SourceCalleeFunctions);
     Local.setSEHFrameCallees(&SourceCalleeFunctions);
     Local.setSEHSourceProjectionEnabled(!Opts.usesMachineMedIR());
+    Local.setSourceReturnProjectionEnabled(Opts.usesSourceDeclarations());
     Local.setSEHRuntimeMemory(&SEHRuntimeMemory);
     Local.setObjCBlockCaptureCallFields(&Opts.ObjCBlockCaptureFields);
     Local.setObjCBlockParameterReceivers(&Opts.ObjCBlockParameterReceivers);

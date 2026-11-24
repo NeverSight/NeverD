@@ -1,4 +1,4 @@
-//===- PipelineShiftedReturnPaths.h - Shared integer returns ----*- C++ -*-===//
+//===- MedShiftedReturnPaths.h - Shared integer returns ---------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -7,8 +7,8 @@
 /// Integer shift observations at a shared return and the SSA joins they use.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_LIB_PIPELINE_PIPELINESHIFTEDRETURNPATHS_H
-#define NEVERD_LIB_PIPELINE_PIPELINESHIFTEDRETURNPATHS_H
+#ifndef NEVERD_IR_MED_MEDSHIFTEDRETURNPATHS_H
+#define NEVERD_IR_MED_MEDSHIFTEDRETURNPATHS_H
 
 #include "neverd/ir/med/MedByteDemand.h"
 
@@ -43,6 +43,11 @@ inline bool isScalarShift(const MedOp &Op) {
 inline bool isVariableShift(const MedOp &Op) {
   return isScalarShift(Op) && !Op.Inputs[1].isConst();
 }
+
+/// Coalesce an unused incoming carrier with the active one on that edge
+/// when all observations through the shared return have been checked.
+bool foldUnusedShiftCarriers(MedFunc &Func, const TargetRegInfo &TRI,
+                             BinaryFormat Format);
 
 uint64_t shiftedBits(NdOp Opcode, unsigned Width, uint64_t Value,
                      uint64_t Count);

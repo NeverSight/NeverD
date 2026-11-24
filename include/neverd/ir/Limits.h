@@ -86,6 +86,10 @@ inline constexpr unsigned kNdTypesNdTypeStrBudget = 4096;
 // lib/ir/RegisterFlow.cpp
 inline constexpr size_t kRegisterFlowQueryRegisterFlowBudget = 1000000;
 
+/// SSA dependencies and CFG transfers for shared-shift proofs in one function.
+/// A growing loop or an unfinished arm supplies no evidence.
+inline constexpr unsigned kMedShiftedReturnPathWork = 4096;
+
 // lib/ir/low/CallRegisterUnread.cpp
 /// Whole-query ceiling for conservative callee input-observation proofs.
 inline constexpr size_t kCallRegisterUnreadWork = 1000000;
