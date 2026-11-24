@@ -65,6 +65,7 @@
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
@@ -1802,6 +1803,12 @@ private:
                                : Intrinsic::None;
       if (intrinsicReturnsSystemCallResult(Id)) {
         Paths.push_back(ReturnedValue::SystemCallResult);
+        return;
+      }
+      if (const auto D = ppc::division(Id)) {
+        Paths.push_back(powerPCDivisionMedShapeIsValid(Op, Img.Arch, *D)
+                            ? ReturnedValue::Other
+                            : ReturnedValue::Undefined);
         return;
       }
       // An atomic read or conditional store can return its old value or

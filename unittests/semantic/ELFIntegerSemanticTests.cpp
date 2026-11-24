@@ -18,8 +18,11 @@
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/IntegerRegisters.h"
 
+#include "llvm/Support/Endian.h"
+
 #include <array>
 #include <memory>
+#include <optional>
 #include <vector>
 
 using namespace neverd;
@@ -34,6 +37,13 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
   Img.Arch = A;
   Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
   Img.RISCV = {.Multiply = true, .Atomic = true, .Compressed = true};
+  if (!RV) {
+    Segment &Data = Img.Segments.emplace_back();
+    Data.VA = 0x2000;
+    Data.Size = Data.FileSz = 256;
+    Data.Data.assign(Data.Size, 0x91);
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  }
   Decoder D;
   ASSERT_TRUE(D.init(Img));
 
@@ -82,6 +92,31 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
     XO(232, 26, 0);            // subfme.
     XO(200, 27, 0);            // subfze.
     XO(202, 28, 0);            // addze.
+    // Clang-assembled GPR and CR forms use different XO fields. Compare
+    // both destinations and all CR bits with independent target execution.
+    Words.insert(Words.end(), {0x7cc53839, 0x4d8a8a02,   // and. / crand
+                               0x7cc53879, 0x4d8a8902,   // andc. / crandc
+                               0x7cc53bb9, 0x4d8a89c2,   // nand. / crnand
+                               0x7cc53b79, 0x4d8a8b82,   // or. / cror
+                               0x7cc53b39, 0x4d8a8b42,   // orc. / crorc
+                               0x7cc538f9, 0x4d8a8842,   // nor. / crnor
+                               0x7cc53a79, 0x4d8a8982,   // xor. / crxor
+                               0x7cc53a39, 0x4d8a8a42}); // eqv. / creqv
+    // Read back stores through different addressing forms and widths.
+    Words.insert(Words.end(), {0x3ba02080,   // li r29,0x2080
+                               0x3bc00008,   // li r30,8
+                               0x9cfdfff8,   // stbu r7,-8(r29)
+                               0x8ffd0000,   // lbzu r31,0(r29)
+                               0x7cddf36e,   // sthux r6,r29,r30
+                               0x7ffdf2ee,   // lhaux r31,r29,r30
+                               0x87fdfff8,   // lwzu r31,-8(r29)
+                               0x7cddf12e,   // stwx r6,r29,r30
+                               0x7ffdf06e}); // lwzux r31,r29,r30
+    if (Wide)
+      Words.insert(Words.end(), {0xf8fdfff9,   // stdu r7,-8(r29)
+                                 0xebfd0001,   // ldu r31,0(r29)
+                                 0xebfd0002,   // lwa r31,0(r29)
+                                 0x7ffdf2ea}); // lwaux r31,r29,r30
   }
   std::vector<uint8_t> Bytes;
   for (auto W : Words)
@@ -112,6 +147,10 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
       ASSERT_EQ(uc_mem_write(Engine, PC, Bytes.data(), Bytes.size()),
                 UC_ERR_OK);
       if (!RV) {
+        const Segment &Data = Img.Segments.front();
+        ASSERT_EQ(uc_mem_map(Engine, Data.VA, 4096, UC_PROT_ALL), UC_ERR_OK);
+        ASSERT_EQ(uc_mem_write(Engine, Data.VA, Data.Data.data(), Data.Size),
+                  UC_ERR_OK);
         // Unicorn opens PowerPC in big-endian mode. MSR.LE sets the actual
         // instruction/data order, and MSR.SF selects 64-bit integer execution.
         uint64_t MSR =
@@ -268,6 +307,106 @@ TEST_P(ELFIntegerSemantic, IndirectCallUsesOldLinkAndPhysicalReturnAddress) {
   EXPECT_EQ(Emu.getRegister(Link), 0x1000u + Bytes);
   EXPECT_EQ(Emu.getRegister(Ops.back().Inputs[0].Offset),
             RV ? 0x2002u : 0x2000u);
+}
+
+TEST(PowerPCDivision, QuotientDefinedBitsAndStickyOverflow) {
+  struct Encoding {
+    unsigned XO;
+    unsigned Bytes;
+    bool Signed;
+  };
+  constexpr Encoding Divides[] = {
+#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, RecordValue, XO, Bytes, Signed, \
+                          Mnemonic)                                            \
+  {XO, Bytes, Signed},
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
+  };
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    const unsigned Width = isPowerPC64(A) ? 8 : 4;
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    for (const Encoding F : Divides) {
+      if (F.Bytes > Width)
+        continue;
+      const uint64_t Min = uint64_t(1) << (F.Bytes * 8 - 1);
+      const uint64_t Mask = Min | (Min - 1);
+      struct Inputs {
+        uint64_t Left, Right;
+        std::optional<uint64_t> Quotient;
+      };
+      const Inputs Cases[] = {
+          {63, 9, 7},
+          {0, 7, 0},
+          {1, 0, std::nullopt},
+          {Min, Mask, F.Signed ? std::nullopt : std::optional<uint64_t>(0)},
+          {Mask - 62, 9, F.Signed ? (Mask - 6) : (Mask - 62) / 9}};
+      for (unsigned Variant = 0; Variant != 4; ++Variant) {
+        const bool OE = Variant & 2, Record = Variant & 1;
+        uint8_t Code[4];
+        // The destination aliases RA. The overflow test observes its old value.
+        const uint32_t Word = 31u << 26 | 6 << 21 | 6 << 16 | 7 << 11 |
+                              unsigned(OE) << 10 | F.XO << 1 | unsigned(Record);
+        llvm::support::endian::write32(Code, Word,
+                                       archLittleEndian(A)
+                                           ? llvm::endianness::little
+                                           : llvm::endianness::big);
+        DecodedInsn I;
+        ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, I), 4);
+        std::vector<LowOp> Ops;
+        ASSERT_NO_THROW(D.liftToLow(I, Ops));
+        for (const auto &C : Cases) {
+          SCOPED_TRACE(::testing::Message()
+                       << I.Raw->mnemonic << " " << C.Left << "/" << C.Right);
+          for (bool OldSO : {false, true}) {
+            NdOpEmulator Emu(Img);
+            Emu.setStrictMode(true);
+            Emu.setRegister(integerreg::gpr(6), C.Left);
+            Emu.setRegister(integerreg::gpr(7), C.Right);
+            const uint64_t OldXER = uint64_t(OldSO) << 31 | uint64_t(3) << 29;
+            Emu.setRegister(integerreg::ppc::XER, OldXER);
+            for (unsigned I = 0; I != 4; ++I)
+              Emu.setRegister(integerreg::ppc::crBit(I), 1);
+            ASSERT_EQ(Emu.run(Ops), Ops.size());
+            const bool Overflow = !C.Quotient.has_value();
+            const uint64_t XER = uint64_t(OldSO || Overflow) << 31 |
+                                 uint64_t(Overflow) << 30 | uint64_t(1) << 29;
+            EXPECT_EQ(Emu.getRegister(integerreg::ppc::XER), OE ? XER : OldXER);
+            EXPECT_EQ(Emu.getRegister(integerreg::gpr(6)),
+                      Width == F.Bytes ? C.Quotient : std::nullopt);
+            for (unsigned I = 0; I != 3; ++I) {
+              std::optional<uint64_t> Bit = 1;
+              if (Record) {
+                if (Width != F.Bytes || !C.Quotient)
+                  Bit.reset();
+                else {
+                  const bool Negative = (*C.Quotient & Min) != 0;
+                  Bit = I == 0   ? Negative
+                        : I == 1 ? (!Negative && *C.Quotient != 0)
+                                 : *C.Quotient == 0;
+                }
+              }
+              EXPECT_EQ(Emu.getRegister(integerreg::ppc::crBit(I)), Bit);
+            }
+            EXPECT_EQ(Emu.getRegister(integerreg::ppc::crBit(3)),
+                      Record ? OldSO || (OE && Overflow) : true);
+            if (Width != F.Bytes) {
+              LowOp Low;
+              Low.Opcode = NdOp::SUBBYTES;
+              Low.Output = NdVar::reg(integerreg::gpr(8), F.Bytes);
+              Low.Inputs[0] = NdVar::reg(integerreg::gpr(6), Width);
+              Low.Inputs[1] = NdVar::scalar(0, 4);
+              Low.NumInputs = 2;
+              ASSERT_TRUE(Emu.step(Low));
+              EXPECT_EQ(Emu.getRegister(integerreg::gpr(8)), C.Quotient);
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(Profiles, ELFIntegerSemantic,

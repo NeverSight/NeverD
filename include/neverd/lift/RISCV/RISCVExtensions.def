@@ -1,0 +1,29 @@
+//===- RISCVExtensions.def - Qualified integer ISA attributes -------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// NEVERD_RISCV_BASE(Name, Major, MaxMinor) identifies the required base.
+/// NEVERD_RISCV_EXTENSION(Member, Name, Major, MaxMinor, Emit) binds a
+/// normalized ELF attribute to its accepted versions and LLVM feature.
+/// Emit is evaluated against the profile P to omit redundant subextensions.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_RISCV_BASE
+#define NEVERD_RISCV_BASE(Name, Major, MaxMinor)
+#endif
+
+NEVERD_RISCV_BASE("i", 2, 1)
+NEVERD_RISCV_EXTENSION(Multiply, "m", 2, 0, P.Multiply)
+NEVERD_RISCV_EXTENSION(Atomic, "a", 2, 1, P.Atomic)
+NEVERD_RISCV_EXTENSION(Compressed, "c", 2, 0, P.Compressed)
+NEVERD_RISCV_EXTENSION(Zmmul, "zmmul", 1, 0, P.Zmmul && !P.Multiply)
+NEVERD_RISCV_EXTENSION(Zaamo, "zaamo", 1, 0, P.Zaamo && !P.Atomic)
+NEVERD_RISCV_EXTENSION(Zalrsc, "zalrsc", 1, 0, P.Zalrsc && !P.Atomic)
+NEVERD_RISCV_EXTENSION(Zca, "zca", 1, 0, P.Zca && !P.Compressed)
+
+#undef NEVERD_RISCV_BASE
+#undef NEVERD_RISCV_EXTENSION

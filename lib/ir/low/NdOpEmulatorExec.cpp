@@ -20,12 +20,16 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
+#include "neverd/ir/low/LowIntrinsicOutputs.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/low/X86/X86CompactShape.h"
+#include "neverd/lift/IntegerRegisters.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
@@ -583,6 +587,60 @@ bool NdOpEmulator::executeStore(const LowOp &Op) {
     }
     return !strictMode();
   }
+  return true;
+}
+
+bool NdOpEmulator::executePowerPCDivision(const LowOp &Op,
+                                          const ppc::Division &D,
+                                          llvm::ArrayRef<LowOp> Following) {
+  using namespace integerreg::ppc;
+  const NdVar &Left = Op.Inputs[1], &Right = Op.Inputs[2];
+  if (Op.Inputs[0].Size != 2 ||
+      Op.Inputs[0].Offset != static_cast<uint64_t>(D.Id) || Op.NumInputs != 3 ||
+      (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+      Op.MemoryOrdering != NdMemoryOrdering::None ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      !D.matches(Img.Arch, Op.Output.Size, Left.Size, Right.Size) ||
+      !knownOperandBytes(Left, 0, D.Bytes) ||
+      !knownOperandBytes(Right, 0, D.Bytes))
+    return false;
+  std::optional<NdVar> Condition;
+  if (D.Record) {
+    const auto Outputs = collectLowIntrinsicOutputBindings(Op, Following, 1);
+    if (Outputs.size() != 1 || Outputs[0].Size != Op.Output.Size ||
+        Outputs[0] == Op.Output)
+      return false;
+    Condition = Outputs.front();
+  }
+  const llvm::APInt Dividend(D.Bytes * 8, readOperand(Left));
+  const llvm::APInt Divisor(D.Bytes * 8, readOperand(Right));
+  const bool Invalid =
+      Divisor.isZero() ||
+      (D.Signed && Dividend.isMinSignedValue() && Divisor.isAllOnes());
+  const bool PartialWord = D.Bytes < Op.Output.Size;
+  if (Invalid) {
+    writeOutput(Op.Output, 0,
+                llvm::maskTrailingOnes<uint64_t>(Op.Output.Size * 8));
+    if (Condition)
+      writeOutput(*Condition, 0, CR0ComparisonMask);
+    return true;
+  }
+  const auto Quotient =
+      D.Signed ? Dividend.sdiv(Divisor) : Dividend.udiv(Divisor);
+  if (Condition) {
+    if (PartialWord)
+      writeOutput(*Condition, 0, CR0ComparisonMask);
+    else {
+      const unsigned BI = Quotient.isNegative() ? CRLT
+                          : Quotient.isZero()   ? CREQ
+                                                : CRGT;
+      writeOutput(*Condition, uint64_t(1) << crShift(BI));
+    }
+  }
+  // Word forms define only the low word on the common Power ISA profile.
+  const uint64_t Unknown =
+      PartialWord ? ~llvm::maskTrailingOnes<uint64_t>(D.Bytes * 8) : 0;
+  writeOutput(Op.Output, Quotient.getZExtValue(), Unknown);
   return true;
 }
 

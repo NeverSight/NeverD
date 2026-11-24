@@ -17,7 +17,6 @@
 #include "neverd/Common.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
-#include <iterator>
 #include <optional>
 
 namespace neverd::integer_memory {
@@ -50,53 +49,50 @@ struct Form {
   }
 };
 constexpr bool owns(Intrinsic Id) {
-  return Id == Intrinsic::RISCVAtomic || Id == Intrinsic::RISCVFence ||
-         Id == Intrinsic::PPCReservation || Id == Intrinsic::PPCBarrier;
+  switch (Id) {
+#define NEVERD_INTEGER_MEMORY_INTRINSIC(Name, Value, CName)                    \
+  case Intrinsic::Name:
+#include "neverd/ir/intrinsics/IntegerMemory.def"
+    return true;
+  default:
+    return false;
+  }
 }
 inline std::optional<Form> form(Arch A, Intrinsic Id, uint64_t Key) {
   using O = Operation;
   if (Id == Intrinsic::RISCVFence && isRISCV(A) && Key <= 255)
     return Form{O::Fence, "fence", 0};
   if (Id == Intrinsic::PPCBarrier && isPowerPC(A)) {
-    constexpr const char *Names[] = {"sync", "lwsync", "isync", "eieio"};
-    if (Key < std::size(Names))
-      return Form{O::Fence, Names[Key], 0};
+    switch (Key) {
+#define NEVERD_PPC_BARRIER(Word, Selector, Mnemonic)                           \
+  case Selector:                                                               \
+    return Form{O::Fence, Mnemonic, 0};
+#include "neverd/ir/intrinsics/IntegerMemory.def"
+    default:
+      return std::nullopt;
+    }
   }
-  if (Id == Intrinsic::PPCReservation && isPowerPC(A) && Key < 4) {
-    const bool Wide = Key & 1, Store = Key & 2;
-    if (!Wide || isPowerPC64(A))
-      return Form{Store ? O::Conditional : O::Reserve,
-                  Store ? (Wide ? "stdcx." : "stwcx.")
-                        : (Wide ? "ldarx" : "lwarx"),
-                  Wide ? 8u : 4u};
+  if (Id == Intrinsic::PPCReservation && isPowerPC(A)) {
+    switch (Key) {
+#define NEVERD_PPC_RESERVATION(XO, Selector, Op, Bytes, Mnemonic)              \
+  case Selector:                                                               \
+    if (Bytes == 8 && !isPowerPC64(A))                                         \
+      return std::nullopt;                                                     \
+    return Form{O::Op, Mnemonic, Bytes};
+#include "neverd/ir/intrinsics/IntegerMemory.def"
+    default:
+      return std::nullopt;
+    }
   }
   if (Id != Intrinsic::RISCVAtomic || !isRISCV(A) || Key > 255 ||
       ((Key & 1) && A == Arch::RISCV32))
     return std::nullopt;
   const unsigned Bytes = Key & 1 ? 8 : 4, Order = Key >> 1 & 3;
   switch (Key >> 3) {
-  case 0:
-    return Form{O::Add, "amoadd", Bytes, Order};
-  case 1:
-    return Form{O::Swap, "amoswap", Bytes, Order};
-  case 2:
-    return Form{O::Reserve, "lr", Bytes, Order};
-  case 3:
-    return Form{O::Conditional, "sc", Bytes, Order};
-  case 4:
-    return Form{O::Xor, "amoxor", Bytes, Order};
-  case 8:
-    return Form{O::Or, "amoor", Bytes, Order};
-  case 12:
-    return Form{O::And, "amoand", Bytes, Order};
-  case 16:
-    return Form{O::SMin, "amomin", Bytes, Order};
-  case 20:
-    return Form{O::SMax, "amomax", Bytes, Order};
-  case 24:
-    return Form{O::UMin, "amominu", Bytes, Order};
-  case 28:
-    return Form{O::UMax, "amomaxu", Bytes, Order};
+#define NEVERD_RISCV_ATOMIC(Funct5, Op, Mnemonic)                              \
+  case Funct5:                                                                 \
+    return Form{O::Op, Mnemonic, Bytes, Order};
+#include "neverd/ir/intrinsics/IntegerMemory.def"
   default:
     return std::nullopt;
   }

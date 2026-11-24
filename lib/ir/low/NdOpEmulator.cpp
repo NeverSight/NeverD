@@ -25,6 +25,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
 #include "neverd/ir/low/LowArchitecturalValue.h"
@@ -603,6 +604,11 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
   // Never approximate an invalid address-space tag as ordinary memory.
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
     return false;
+  if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs && Op.Inputs[0].isConst()) {
+    if (const auto D =
+            ppc::division(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
+      return executePowerPCDivision(Op, *D, Following);
+  }
   if (MIPSReservationGranule) {
     if (Op.NumInputs > std::size(Op.Inputs))
       return false;
@@ -632,6 +638,24 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
           mips::isScalarIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
         return executeMIPSScalar(Op);
       switch (Op.Opcode) {
+      case NdOp::INT_RIGHT: {
+        const auto &Value = Op.Inputs[0], &Count = Op.Inputs[1];
+        if (Op.NumInputs != 2 || !Value.Size || Value.Size > 8 ||
+            Op.Output.Size != Value.Size ||
+            Op.MemoryOrdering != NdMemoryOrdering::None ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+            (!Op.Output.isReg() && !Op.Output.isTemp()) || !Count.Size ||
+            Count.Size > 8 || !availableOperandBytes(Value, 0, Value.Size) ||
+            !knownOperandBytes(Count, 0, Count.Size))
+          return false;
+        const uint64_t Shift = readOperand(Count);
+        if (Shift >= 8u * Value.Size)
+          writeOutput(Op.Output, 0);
+        else
+          writeOutput(Op.Output, readOperand(Value) >> Shift,
+                      unknownOperandBits(Value) >> Shift);
+        return true;
+      }
       case NdOp::INT_AND:
       case NdOp::INT_OR: {
         const auto &A = Op.Inputs[0], &B = Op.Inputs[1];

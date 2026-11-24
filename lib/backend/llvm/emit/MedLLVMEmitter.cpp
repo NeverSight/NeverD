@@ -879,13 +879,14 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   // call targets keep default visibility (declared elsewhere, may be imports).
   LLVMFunc->setDSOLocal(true);
   if (!PortableBody && isRISCV(TargetArch)) {
-    std::string Features = "+i";
-    if (Img && Img->RISCV.Multiply)
-      Features += ",+m";
-    if (Img && Img->RISCV.Atomic)
-      Features += ",+a";
-    if (Img && Img->RISCV.Compressed)
-      Features += ",+c";
+    std::string Features = RISCVProfile::BaseFeature;
+    if (Img) {
+      const auto &P = Img->RISCV;
+#define NEVERD_RISCV_EXTENSION(Member, Name, Major, MaxMinor, Emit)            \
+  if (Emit)                                                                    \
+    Features += ",+" Name;
+#include "neverd/lift/RISCV/RISCVExtensions.def"
+    }
     LLVMFunc->addFnAttr("target-features", Features);
   }
   LLVMFunc->addFnAttr(llvm::Attribute::NullPointerIsValid);
