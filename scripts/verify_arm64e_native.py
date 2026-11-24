@@ -85,6 +85,8 @@ def provenance():
 
 def check_binary(binary, subtype=POLICY["cpu_subtype"]):
     raw = binary.read_bytes()
+    if len(raw) < struct.calcsize(POLICY["header_format"]):
+        raise ValueError(POLICY["errors"]["binary"])
     fields = struct.unpack_from(POLICY["header_format"], raw)
     if (fields[0] != POLICY["macho_magic"] or
             fields[1] != POLICY["cpu_type"] or
@@ -126,7 +128,7 @@ def probe_signal_cursor(output):
     source = ROOT / policy["source"]
     report = {**provenance(), "platform": platform.platform(), "profiles": {},
               "status": POLICY["failed"], policy["baseline_key"]: False,
-              policy["explicit_key"]: False, policy["pacm_pc_key"]: False}
+              policy["explicit_key"]: False, policy["pacm_pc_key"]: False, policy["pacm_hint_key"]: False}
     report["source_sha256"].update(
         {name: digest(ROOT / name) for name in [policy["source"], *policy["source_files"]]})
     try:
@@ -157,8 +159,14 @@ def probe_signal_cursor(output):
             report[policy["pacm_pc_key"]] = all(
                 p["status"] == POLICY["passed"] and all(all(p[name]) for name in policy["pc_controls"])
                 for p in pacm)
-            report[policy["explicit_key"]] = all(
-                p["status"] == POLICY["passed"] for p in observations(policy["recipe_explicit"]))
+            report[policy["pacm_hint_key"]] = report[policy["baseline_key"]] and all(
+                not any(p[name]) for p in pacm for name in policy["pc_controls"])
+            explicit = observations(policy["recipe_explicit"])
+            report[policy["explicit_key"]] = all(p["status"] == POLICY["passed"] for p in explicit)
+            if (len({p["status"] for p in pacm}) != 1 or len({p["status"] for p in explicit}) != 1 or
+                    (report[policy["baseline_key"]] and
+                     not (report[policy["pacm_pc_key"]] or report[policy["pacm_hint_key"]]))):
+                return report
             report["status"] = POLICY["passed"] if report[policy["baseline_key"]] else POLICY["unavailable"]
         return report
     finally:
@@ -192,13 +200,77 @@ def sign_cpta_slice(products, output, binary, policy):
     return None
 
 
+def cpta_observation(products, output, label, argv, mode, policy):
+    try:
+        result = command(products, output, label, argv, POLICY["tool_timeout"])
+    except OSError as error:
+        if error.errno != policy["bad_cpu_type_errno"]:
+            raise
+        save(output / (label + POLICY["command_suffix"]), {"argv": list(map(str, argv)), "errno": error.errno})
+        return policy["loader_unavailable"], []
+    if killed_before_entry(result):
+        return policy["loader_unavailable"], []
+    lines = result.stdout.splitlines()
+    if mode == policy["writeback_mode"]:
+        for marker, outcome in ((policy["writeback_checked"], policy["checked"]),
+                                (policy["writeback_unchecked"], policy["unchecked"])):
+            if result.returncode == 0 and lines == [policy["writeback_started"], marker]:
+                return outcome, []
+    elif lines[:1] == [mode]:
+        values = lines[1:]
+        if result.returncode == policy["undefined_instruction"] and not values:
+            return policy["isa_unavailable"], []
+        if result.returncode == 0:
+            for column, outcome in ((3, policy["checked"]), (2, policy["unchecked"])):
+                if values == [vector[column] for vector in policy["vectors"]]:
+                    return outcome, values
+    return policy["unexpected"], lines
+
+
+def measure_cpta_slice(products, output, arch, subtype, optimization, policy):
+    binary = output / (arch + POLICY["binary_suffix"])
+    products.append(binary)
+    argv = [arg.format(arch=arch, optimization=optimization, source=ROOT / policy["source"],
+                       binary=binary) for arg in policy["compile"]]
+    built = command(products, output, arch + POLICY["compile_suffix"], argv, POLICY["tool_timeout"])
+    profile = {"outcome": policy["unexpected"]}
+    if built.returncode:
+        if (arch == policy["x1"] and arch in built.stderr and
+                any(t in built.stderr.lower() for t in policy["unsupported_compiler"])):
+            profile["outcome"] = policy["slice_unavailable"]
+        return profile
+    if arch == policy["x1"]:
+        signed = sign_cpta_slice(products, output, binary, policy)
+        if signed is None:
+            return profile
+        profile[policy["entitlements_key"]] = signed
+    profile.update(check_binary(binary, subtype))
+    operands = [v for row in policy["vectors"] for v in row[:2]]
+    states, results = {}, {}
+    for instruction in policy["instructions"]:
+        label = policy["instruction_label"].format(arch=arch, instruction=instruction)
+        states[instruction], results[instruction] = cpta_observation(
+            products, output, label, [binary, instruction, *operands], instruction, policy)
+    profile[policy["scalar_outcomes_key"]] = states
+    profile[policy["scalar_results_key"]] = results
+    if len(set(states.values())) == 1:
+        profile["outcome"] = next(iter(states.values()))
+    if profile["outcome"] in (policy["checked"], policy["unchecked"]):
+        # Preserve the original vector-major result order for report consumers.
+        profile["results"] = [value for vector in zip(*results.values()) for value in vector]
+    mode = policy["writeback_mode"]
+    profile[policy["writeback_key"]], _ = cpta_observation(
+        products, output, arch + policy["writeback_suffix"], [binary, mode], mode, policy)
+    return profile
+
+
 def probe_cpta(output):
     policy = POLICY["cpta_probe"]
-    source = ROOT / policy["source"]
-    report = {**provenance(), "platform": platform.platform(), "profiles": {},
-              "status": POLICY["failed"], policy["observed_key"]: False,
-              policy["qualified_key"]: False, policy["writeback_qualified_key"]: False}
-    report["source_sha256"][policy["source"]] = digest(source)
+    scalar, writeback = policy["scalar_qualified_key"], policy["writeback_qualified_key"]
+    report = {**provenance(), "platform": platform.platform(), "profiles": {}, "optimization_reports": {},
+              "status": POLICY["failed"], policy["observed_key"]: False, scalar: False,
+              policy["qualified_key"]: False, writeback: False}
+    report["source_sha256"][policy["source"]] = digest(ROOT / policy["source"])
     try:
         if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
             report["status"] = POLICY["unavailable"]
@@ -206,75 +278,37 @@ def probe_cpta(output):
         with OwnedProducts(output, False) as products:
             for name, argv in POLICY["environment_commands"].items():
                 command(products, output, name, argv, POLICY["tool_timeout"])
-            for arch, subtype in policy["profiles"].items():
-                binary = output / (arch + POLICY["binary_suffix"])
-                products.append(binary)
-                argv = [arg.format(arch=arch, source=source, binary=binary) for arg in policy["compile"]]
-                built = command(products, output, arch + POLICY["compile_suffix"], argv, POLICY["tool_timeout"])
-                profile = report["profiles"][arch] = {"outcome": policy["unexpected"]}
-                if built.returncode:
-                    if (arch == policy["x1"] and arch in built.stderr and
-                            any(t in built.stderr.lower() for t in policy["unsupported_compiler"])):
-                        profile["outcome"] = policy["slice_unavailable"]
-                    continue
-                if arch == policy["x1"]:
-                    signed = sign_cpta_slice(products, output, binary, policy)
-                    if signed is None:
-                        continue
-                    profile[policy["entitlements_key"]] = signed
-                raw = binary.read_bytes()
-                magic, cpu, actual = struct.unpack_from(POLICY["header_format"], raw)
-                profile.update(sha256=digest(binary), cpu_subtype=actual)
-                if (magic, cpu, actual & POLICY["subtype_mask"]) != (POLICY["macho_magic"], POLICY["cpu_type"], subtype):
-                    continue
-                vectors = policy["vectors"]
-                arguments = [binary, *(v for row in vectors for v in row[:2])]
-                try:
-                    result = command(products, output, arch, arguments, POLICY["tool_timeout"])
-                except OSError as error:
-                    if error.errno != policy["bad_cpu_type_errno"]:
-                        raise
-                    profile.update(outcome=policy["loader_unavailable"], errno=error.errno)
-                    continue
-                lines = result.stdout.splitlines()
-                if not lines:
-                    if killed_before_entry(result):
-                        profile["outcome"] = policy["loader_unavailable"]
-                    continue
-                if lines[0] != policy["started"]:
-                    continue
-                profile["results"] = lines[1:]
-                if result.returncode == policy["undefined_instruction"] and len(lines) == 1:
-                    profile["outcome"] = policy["isa_unavailable"]
-                elif result.returncode == 0:
-                    instructions = policy["instructions"]
-                    if len(lines) == 1 + len(vectors) * len(instructions):
-                        by_instruction = {name: lines[index + 1::len(instructions)]
-                                          for index, name in enumerate(instructions)}
-                        profile[policy["scalar_results_key"]] = by_instruction
-                        if all(values == [row[3] for row in vectors] for values in by_instruction.values()):
-                            profile["outcome"] = policy["checked"]
-                        elif all(values == [row[2] for row in vectors] for values in by_instruction.values()):
-                            profile["outcome"] = policy["unchecked"]
-                if profile["outcome"] in (policy["checked"], policy["unchecked"], policy["isa_unavailable"]):
-                    writeback = command(products, output, arch + policy["writeback_suffix"],
-                                        [binary, policy["writeback_mode"]], POLICY["tool_timeout"])
-                    state = policy["unexpected"]
-                    if writeback.returncode == 0:
-                        state = {policy["writeback_checked"]: policy["checked"],
-                                 policy["writeback_unchecked"]: policy["unchecked"]}.get(
-                                     writeback.stdout.strip(), policy["unexpected"])
-                    profile[policy["writeback_key"]] = state
-            outcomes = {name: profile["outcome"] for name, profile in report["profiles"].items()}
-            report[policy["observed_key"]] = policy["checked"] in outcomes.values()
-            writebacks = {arch: p.get(policy["writeback_key"]) for arch, p in report["profiles"].items()}
-            report[policy["writeback_qualified_key"]] = writebacks[policy["x1"]] == policy["checked"]
-            report[policy["qualified_key"]] = (outcomes[policy["x1"]] == policy["checked"] and
-                                                report[policy["writeback_qualified_key"]])
-            if policy["unexpected"] in outcomes.values() or policy["unexpected"] in writebacks.values():
-                report["status"] = POLICY["failed"]
-            else:
-                report["status"] = POLICY["passed"] if report[policy["qualified_key"]] else POLICY["unavailable"]
+            observations = {arch: [] for arch in policy["profiles"]}
+            for optimization in POLICY["optimizations"]:
+                directory = output / optimization.removeprefix("-")
+                directory.mkdir()
+                profiles = {arch: measure_cpta_slice(products, directory, arch, subtype, optimization, policy)
+                            for arch, subtype in policy["profiles"].items()}
+                path = directory / POLICY["report_name"]
+                save(path, {"source_revision": report["source_revision"],
+                            "optimization": optimization, "profiles": profiles})
+                report["optimization_reports"][optimization] = {
+                    "report": path.relative_to(output).as_posix(), "sha256": digest(path)}
+                for arch, profile in profiles.items():
+                    observations[arch].append((profile["outcome"], profile.get(policy["writeback_key"])))
+                # The original public per-slice profiles are the O2 observations.
+                if optimization == policy["report_optimization"]:
+                    report["profiles"] = profiles
+            checked = policy["checked"]
+            x1 = observations[policy["x1"]]
+            report[policy["observed_key"]] = any(all(s == checked for s, _ in rows)
+                                                  for rows in observations.values())
+            report[scalar] = all(s == checked for s, _ in x1)
+            report[writeback] = all(w == checked for _, w in x1)
+            report[policy["qualified_key"]] = report[scalar] and report[writeback]
+            for rows in observations.values():
+                if len(set(rows)) != 1:
+                    return report
+                state, wb = rows[0]
+                if (policy["unexpected"] in (state, wb) or
+                        (state == policy["loader_unavailable"]) != (wb == policy["loader_unavailable"])):
+                    return report
+            report["status"] = POLICY["passed"] if report[policy["qualified_key"]] else POLICY["unavailable"]
         return report
     finally:
         save(output / POLICY["report_name"], report)
@@ -323,28 +357,41 @@ def qualify_x1(output):
               policy["qualified_key"]: False, ordered["qualified_key"]: False, "probes": {}, "missing": []}
     try:
         statuses = set()
+        first_error = None
         for mode, run in ((POLICY["probe_mode"], probe),
                           (POLICY["cursor_probe"]["mode"], probe_signal_cursor),
                           (POLICY["cpta_probe"]["mode"], probe_cpta),
                           (ordered["mode"], probe_ordered_q)):
             directory = output / mode
             directory.mkdir()
-            result = run(directory)
             path = directory / POLICY["report_name"]
+            try:
+                result = run(directory)
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+                # A broken tool or observation in one family must leave the other
+                # native instruction probes runnable on this same host.
+                if first_error is None:
+                    first_error = error
+                result = {"status": POLICY["failed"], "source_revision": report["source_revision"]}
+                if not path.exists():
+                    save(path, result)
+                save(directory / POLICY["error_name"], {"error": str(error)})
             report["probes"][mode] = {"status": result["status"],
                                       "report": path.relative_to(output).as_posix(),
                                       "sha256": digest(path)}
             if mode == ordered["mode"]:
                 # Q instructions have their own architectural feature and can
                 # qualify on a host without the arm64e.x1 execution environment.
-                report[ordered["qualified_key"]] = result[ordered["qualified_key"]]
+                report[ordered["qualified_key"]] = result.get(ordered["qualified_key"], False)
                 if result["status"] == POLICY["failed"]:
-                    return report
+                    statuses.add(POLICY["failed"])
                 continue
             statuses.add(result["status"])
             report["missing"].extend(
                 {"probe": mode, "feature": feature}
-                for feature in policy["requirements"][mode] if not result[feature])
+                for feature in policy["requirements"][mode] if not result.get(feature, False))
+        if first_error is not None:
+            raise first_error
         if POLICY["failed"] in statuses:
             return report
         if statuses == {POLICY["passed"]} and not report["missing"]:

@@ -2532,6 +2532,24 @@ register lanes with distinct values and preserve memory. Both children must
 identify the original faulting instruction on SIGILL to report the feature
 unavailable. Mixed results fail the probe.
 
+The native cursor probes the IA and IB explicit instructions separately before
+walking frames. An unsupported result requires a synchronous fault at each
+signer's instruction address. Mixed availability or disagreement between O0
+and O2 fails the probe. The public cursor reports `pacm_hint_qualified` when
+both signing keys are active and neither PC control distinguishes any of the
+samples at either optimization. PC-sensitive PACM requires both controls to
+distinguish samples for both keys at both optimizations.
+
+The CPTA probe builds arm64, arm64e and arm64e.x1 at O0 and O2. Each scalar
+instruction runs in its own process with four input vectors. A SIGILL counts
+as unavailable only at that instruction's address before the first result.
+A separate process executes the structure load and store writeback controls
+even when scalar instructions are unavailable. The x1 report records checked
+scalar arithmetic and checked writeback independently. Both must pass at both
+optimizations for `x1_el0_cpta_qualified`. The per-optimization reports bind
+each executable and observed result to its build. The existing `profiles`
+field retains the O2 observations.
+
 Apple specifies M6 or later Macs and A20 Pro or later iPhones for arm64e.x1;
 the simulator cannot execute this ABI. Standard GitHub macOS ARM runners use
 M1, and larger ARM runners use M2. Changing their image to Xcode 27 therefore

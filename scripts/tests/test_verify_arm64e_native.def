@@ -481,6 +481,38 @@
       ["udf", "udf", "unavailable"]
     ]
   },
+  "cursor_native_controls": {
+    "driver_name": "cursor-control.c",
+    "native": "AArch64SignalCursorNative.def",
+    "oracle": "AArch64SignalCursorOracle.def",
+    "driver": "#define main cursorMain\n#include \"AArch64SignalCursorNative.def\"\n#undef main\nint main(void) { puts(\"cursor-started\"); fflush(stdout); return probeExplicit(); }\n",
+    "words": [
+      "0xdac1a3fe",
+      "0xdac1a7fe"
+    ],
+    "baseline": [
+      "0xd503233f",
+      "0xd503237f"
+    ],
+    "undefined": "0x00000000",
+    "site": "1: .inst \\\\word\\n",
+    "wrong_site": "1: .inst \\\\word\\n.inst 0\\n",
+    "cannot_launch": "host rejected the arm64e control before entry"
+  },
+  "cpta_controls": {
+    "native_arch": "arm64",
+    "plain_words": {
+      "0x9a012000": "0x8b010000",
+      "0xda012000": "0xcb010000",
+      "0x9b620020": "0x9b020020",
+      "0x9b628020": "0x9b028020"
+    },
+    "return_site": "\\nret\\n",
+    "late_fault": "\\n.inst 0\\nret\\n",
+    "source_name": "scalar-controls.c",
+    "udf": "0x00000000",
+    "wrong_result": "0xd503201f"
+  },
   "x1_claim": "native_arm64e_x1_environment_qualified",
   "cursor_prelaunch_failures": [
     -11,
