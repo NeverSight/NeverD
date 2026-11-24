@@ -26252,8 +26252,13 @@ I–III inputs. On Linux it uses `qemu-user` and GNU binutils for
 execution.
 
 ```sh
-python3 unittests/lift/mips/native-object-roundtrip.py --sdk build-mips/bin/libneverd.so --output build-mips/mips-native-execution.json
+python3 unittests/lift/mips/native-object-roundtrip.py --sdk build-mips/bin/libneverd.so --clang clang-18 --output build-mips/mips-native-execution.json
 ```
+
+With `--clang`, the same caller also runs HighC and LLVM C for the 24
+classic Release 1, 2, 3 and 5 profiles. Clang compiles both sources for the
+original ABI and byte order. The Release 1, 3 and 5 wide-register callers
+check the upper word of the result before returning its low byte.
 
 `unittests/lift/mips/roundtrip.py` is an additional standalone differential
 runner. It needs clang and lld with MIPS targets, pyelftools, and the repository's

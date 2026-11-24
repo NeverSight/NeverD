@@ -39,7 +39,26 @@ def lift_object(api, work):
         api.call("neverd_session_destroy", session)
 
 
-def execute_profile(api, work, abi, little, mode):
+def decompile_entry(api, work):
+    session = api.call("neverd_session_create")
+    if not session:
+        raise RuntimeError("cannot open NeverD session")
+    try:
+        if not api.call("neverd_session_load", session, os.fsencode(work / "input.elf")):
+            raise RuntimeError(api.owned_string("neverd_last_error", session))
+        entry = api.call("neverd_session_entry_addr", session)
+        sources = {}
+        for name, method in (("high_c", "neverd_decompile"), ("llvm_c", "neverd_decompile_llvm")):
+            source = api.owned_string(method, session, entry)
+            if not source:
+                raise RuntimeError(f"{name}: {api.owned_string('neverd_last_error', session)}")
+            sources[name] = source
+        return sources
+    finally:
+        api.call("neverd_session_destroy", session)
+
+
+def execute_profile(api, work, abi, little, mode, clang=None):
     wide = abi != "o32"
     suffix = "el" if little else ""
     prefix = f"mips{'64' if wide else ''}{suffix}-linux-gnu{'abi64' if wide else ''}-"
@@ -117,7 +136,16 @@ leaf:
                 )
                 if f"ISA: {expected_isa}" not in attrs.splitlines():
                     raise ValueError(f"{abi}/{mode}: wrong ISA in {filename}\n{attrs}")
+    if clang and mode in ("classic", "r1", "r3", "r5"):
+        clang_abi = {"o32": "32", "n32": "n32", "n64": "64"}[abi]
+        for name, source in decompile_entry(api, work).items():
+            (work / f"{name}.c").write_text(source)
+            run([clang, "--target=" + prefix.rstrip("-"), "-march=" + isa,
+                 "-mabi=" + clang_abi, "-msoft-float", "-mno-abicalls", "-fno-pic",
+                 "-ffreestanding", "-std=gnu11", "-O2", "-c", f"{name}.c", "-o", f"{name}.o"])
+            variants.append((name, "leaf"))
     exit_syscall = {"o32": 4001, "n32": 6058, "n64": 5058}[abi]
+    outcomes = {}
     for variant, symbol in variants:
         (work / "start.s").write_text(f""".set noreorder
 .option pic0
@@ -145,9 +173,10 @@ failed:
         result = subprocess.run([emulator, "-cpu", cpu, "program.elf"], cwd=work, timeout=10)
         if result.returncode != 37:
             raise RuntimeError(f"{abi} {suffix or 'be'} {mode} {variant}: exit {result.returncode}")
-    row = dict(abi=abi, endian="little" if little else "big", mode=mode, cpu=cpu, original=37)
+        outcomes[variant] = result.returncode
+    row = dict(abi=abi, endian="little" if little else "big", mode=mode, cpu=cpu, **outcomes)
     if entry:
-        row.update(entry=entry, object_sha256=digest, rebuilt=37)
+        row.update(entry=entry, object_sha256=digest)
     else:
         row["diagnostic"] = diagnostic
     return row
@@ -156,6 +185,7 @@ failed:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", type=Path, required=True)
+    parser.add_argument("--clang", help="cross-compile and execute both C views of classic R1/R2/R3/R5")
     parser.add_argument("--output", type=Path, required=True, help="JSON result file")
     args = parser.parse_args()
     api = HostAPI(ctypes.CDLL(str(args.sdk.resolve())))
@@ -168,7 +198,7 @@ def main():
         for little in (False, True):
             for mode in modes:
                 with tempfile.TemporaryDirectory(prefix="neverd-mips-native-") as directory:
-                    rows.append(execute_profile(api, Path(directory), abi, little, mode))
+                    rows.append(execute_profile(api, Path(directory), abi, little, mode, args.clang))
     args.output.write_text(json.dumps(rows, indent=2) + "\n")
     rebuilt = sum("rebuilt" in row for row in rows)
     print(f"{len(rows)} GNU originals, {rebuilt} SDK objects and "
