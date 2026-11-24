@@ -1255,6 +1255,8 @@ TEST(SymExpr, FindVarSeesDeclarationsAndNothingElse) {
   SymRef X32 = Ctx.mkVar("x", W32);
   EXPECT_TRUE(Ctx.hasVarName("x"));
   EXPECT_FALSE(Ctx.hasVarName("nope"));
+  EXPECT_EQ(Ctx.findVarRef("x"), X32);
+  EXPECT_FALSE(Ctx.findVarRef("nope"));
   ASSERT_TRUE(Ctx.findVar("x").has_value());
   EXPECT_EQ(*Ctx.findVar("x"), Ctx.varId(X32));
   EXPECT_EQ(Ctx.varInfo(*Ctx.findVar("x")).Width, W32);
@@ -1263,6 +1265,7 @@ TEST(SymExpr, FindVarSeesDeclarationsAndNothingElse) {
   Ctx.mkVar("x", 8);
   EXPECT_TRUE(Ctx.hasVarName("x"));
   EXPECT_FALSE(Ctx.findVar("x").has_value());
+  EXPECT_FALSE(Ctx.findVarRef("x"));
 }
 
 TEST(SymExpr, FreshVariablesCarryExplicitOrigin) {
@@ -1286,6 +1289,7 @@ TEST(SymExpr, StructuredInputNeverMutatesAPlainVariableIdentity) {
   EXPECT_EQ(Input, Ctx.varRef(Ctx.varId(Input)));
   EXPECT_TRUE(Ctx.hasVarName("reg$24"));
   EXPECT_FALSE(Ctx.findVar("reg$24").has_value());
+  EXPECT_FALSE(Ctx.findVarRef("reg$24"));
   EXPECT_FALSE(Ctx.varRef(Ctx.numVars()).isValid());
   EXPECT_FALSE(Ctx.mkInputVar("zero-width", 0,
                               SymInputOrigin{SymInputKind::Register, 0, 1, 0})
@@ -2536,6 +2540,57 @@ TEST(SymExpr, AffineProductPlansKeepLiveLaneBitsAndRepeatedFactors) {
         EXPECT_EQ(Plan.numSteps(), Steps);
       }
     }
+  }
+}
+
+TEST(SymExpr, RotatedProductFieldsKeepWrappedSignedAndDynamicBits) {
+  constexpr unsigned W = 513;
+  SymContext C;
+  const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+  auto Count = llvm::APInt::getOneBitSet(W, 150) + 7;
+  const unsigned Turn = Count.urem(W);
+  const auto Right = C.mkRor(X, C.mkConst(Count));
+  const auto Left = C.mkRol(X, C.mkConst(W, W - Turn));
+  const unsigned Size = 39;
+  ASSERT_LT(Turn + Size, W);
+  const auto Slice = C.mkExtract(X, Turn, Size);
+  const auto End = C.mkRor(X, C.mkConst(W, W - 5));
+  const auto Signed = C.mkAShr(X, C.mkConst(W, W - 5));
+  const auto Dynamic = C.mkRor(X, Y);
+  const auto Narrow = C.mkZExt(Slice, W);
+  const auto Sign = C.mkSExt(Slice, W);
+  const auto Scale = llvm::APInt::getOneBitSet(W, W - 77);
+  const std::array Sources{Right, Left, Narrow, Sign, End, Signed, Dynamic};
+  const std::array Shifts{40u, 43u, 41u, 38u, 70u, 71u, 20u};
+  llvm::SmallVector<SymRef> Factors{C.mkConst(Scale)};
+  for (unsigned I = 0; I < Sources.size(); ++I) {
+    const auto Weight = llvm::APInt(W, 2 * I + 1).shl(Shifts[I]);
+    Factors.push_back(C.mkAdd(C.mkConst(W, 2 * I + 3),
+                              C.mkMul(C.mkConst(Weight), Sources[I])));
+  }
+  Factors.push_back(Factors[4]);
+  const auto Product = C.mkMul(Factors);
+  SymEvalPlan Plan(C, Product);
+  std::mt19937_64 Random(0xda237);
+  for (unsigned I = 0; I < 64; ++I) {
+    std::array<uint64_t, 9> Words;
+    for (auto &Word : Words)
+      Word = Random();
+    const auto A = I == 0 ? llvm::APInt::getSignMask(W) : llvm::APInt(W, Words);
+    const auto B = llvm::APInt(W, Random());
+    const auto Field = A.extractBits(Size, Turn);
+    const std::array Values{A.rotr(Turn),     A.rotl(W - Turn), Field.zext(W),
+                            Field.sext(W),    A.rotr(W - 5),    A.ashr(W - 5),
+                            A.rotr(B.urem(W))};
+    auto Expected = Scale;
+    for (unsigned J = 0; J < Values.size(); ++J) {
+      const auto Factor =
+          (Values[J] * (2 * J + 1)).shl(Shifts[J]) + (2 * J + 3);
+      Expected *= Factor;
+      if (J == 3)
+        Expected *= Factor;
+    }
+    EXPECT_EQ(Plan.eval({A, B}), Expected);
   }
 }
 

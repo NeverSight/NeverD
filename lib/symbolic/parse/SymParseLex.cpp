@@ -13,6 +13,9 @@
 
 #include "SymParseDetail.h"
 
+#include "neverd/symbolic/Limits.h"
+
+#include <algorithm>
 #include <cctype>
 
 namespace neverd::symbolic::detail {
@@ -40,10 +43,32 @@ bool isRadixDigit(char C, unsigned Radix) {
 
 } // namespace
 
+llvm::StringRef Lexer::parenthesizedSpelling(size_t Begin) const {
+  size_t Open = 1;
+  const size_t End =
+      Begin + std::min(Text.size() - Begin,
+                       limits::symbolic::kSymParseProductSpellingBytes);
+  for (size_t I = Pos; I < End; ++I) {
+    if (Text[I] == '(')
+      ++Open;
+    else if (Text[I] == ')' && !--Open)
+      return Text.slice(Begin, I + 1);
+  }
+  return {};
+}
+
 void Lexer::advance() {
-  while (Pos < Text.size() &&
-         std::isspace(static_cast<unsigned char>(Text[Pos])))
+  while (Pos < Text.size()) {
+    const unsigned char Byte = Text[Pos];
+    if (Byte == ' ') {
+      ++Pos;
+      continue;
+    }
+    // Printable ASCII tokens never require a locale lookup.
+    if ((Byte > ' ' && Byte < 128) || !std::isspace(Byte))
+      break;
     ++Pos;
+  }
 
   Cur = Token{};
   Cur.Offset = Pos;

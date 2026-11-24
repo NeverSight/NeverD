@@ -617,8 +617,7 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
       const auto Count = operand(A, 1);
       if (!isConst(Count))
         break;
-      const auto By = constantRotateAmount(Count, Have);
-      At = (At + (Outer == SymOp::Ror ? By : Have - By)) % Have;
+      At = (At + node(A).Aux) % Have;
     }
     std::optional<detail::WordWindow> Selected;
     if (Shifts)
@@ -643,8 +642,7 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
     const auto Motion = op(A);
     if ((Motion == SymOp::Rol || Motion == SymOp::Ror) &&
         isConst(operand(A, 1))) {
-      const auto By = constantRotateAmount(operand(A, 1), Have);
-      At = (uint64_t(Low) + (Motion == SymOp::Ror ? By : Have - By)) % Have;
+      At = (uint64_t(Low) + node(A).Aux) % Have;
       A = operand(A, 0);
       Low = At;
     }

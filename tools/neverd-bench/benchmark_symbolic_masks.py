@@ -9,6 +9,7 @@ is descriptive rather than a machine-dependent pass/fail threshold.
 
 import argparse
 import ast
+from collections import Counter
 import hashlib
 import itertools
 import json
@@ -1943,6 +1944,67 @@ def terminal_field_product(width, case):
     return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
 
 
+def rotated_field_product(width, case, *, counted=False):
+    """Products of recurring field expressions with both rotation directions."""
+    variant = case % 4
+    if width <= 64:
+        degree = (211, 233, 277, 307)[variant]
+        bits = (6, 8, 10, 12)[variant]
+    else:
+        degree = ((421, 509, 601, 739) if width <= 513 else
+                  (5527, 6143, 6827, 7573))[variant]
+        bits = (19, 33, 53, 71)[variant]
+    rng = random.Random(0xD50F3 + width * 23 + case * 673)
+    axes = ("x", "(y+z)", "(u^v)", "((x&w)+z)", "((u|y)^x)", "((v-x)&w)")
+    rooms = (bits, bits - 1, max(2, 3 * bits // 4), max(2, bits // 2),
+             max(2, bits // 3), max(2, bits // 4))
+    starts = (1 + case % (width - bits - 1), width - rooms[1],
+              width - rooms[2], width // 3, width - rooms[4], width - rooms[5])
+    pool = []
+    pool_size = ((37, 53, 73, 97) if case < 12 else (331, 521, 787, 1193))[variant]
+    for j in range(pool_size):
+        axis = j % len(axes)
+        room = rooms[axis]
+        live = room if j < len(axes) else rng.randrange(max(1, room // 3), room + 1)
+        size = min(room, live + j % 4)
+        weight = rng.choice((-7, -3, 3, 5)) << (2 * bits + 1 - live)
+        offset = rng.choice((-9, -5, 1, 3, 7, 11))
+        pool.append((axis, size, offset, weight, (j // 6 + axis + case) % 3,
+                     1 + 2 * (j % 19)))
+
+    factors = []
+    for j in range(degree):
+        if j % pool_size == 0:
+            rng.shuffle(pool)
+        k, size, offset, weight, extension, key = pool[j % pool_size]
+        if case % 3 and j == degree // 2:
+            offset, weight, extension = 13, 12, 1
+        if variant == 3 and j == degree - 2:
+            offset = 6
+        axis, start = axes[k], starts[k]
+        field = f"extract({axis},{start},{size})"
+        rotation = (key + case) % 5
+        if weight != 12 and rotation < 2:
+            amount = (width - start if rotation == 0 else start) + width * (1 + key % 3)
+            word = f"{('rol', 'ror')[rotation]}({axis},{amount})"
+        elif extension != 2 and start + size == width and case % 2:
+            word = f"{('lshr', 'ashr')[extension]}({axis},{start})"
+        elif extension == 2:
+            word = f"concat(extract((u+{key}*v),{size},{width-size}),{field})"
+        else:
+            word = f"{('zext', 'sext')[extension]}({field},{width})"
+        factors.append(f"({offset}+({weight})*{word})")
+    scale = ((3, 5, 7, -3)[variant] << (width - 2 * bits - 1)) % (1 << width)
+    if counted:
+        # Every factor has the full word width. A counted product gives the
+        # independent evaluator the exact multiset without a 7,573-deep AST.
+        terms = ",".join(f"{term},{copies}" for term, copies in Counter(factors).items())
+        product = f"scaled_product({scale:#x},{terms})"
+    else:
+        product = f"({scale:#x}*" + "*".join(factors) + ")"
+    return product + "+(x^y)+2*(x&y)+(u|v)"
+
+
 def overlapping_field(width, case):
     """Masked fields with two live operands and first-order modular products."""
     rng = random.Random(0x91A27 + 47 * width + 1889 * case)
@@ -2124,12 +2186,24 @@ def check_semantics(expressions, results, width):
                         return value.value & ((1 << bits.value) - 1), bits.value
                     if isinstance(value, ast.Name) and value.id in values:
                         return values[value.id] & ((1 << bits.value) - 1), bits.value
-            if name == "ashr" and len(node.args) == 2:
+            if name == "scaled_product":
+                scale, bits = evaluated[node.args[0]]
+                # After multiplying by scale, only this residue of the
+                # unscaled product can affect the full-width answer.
+                modulus = (1 << bits) // (scale & -scale)
+                product = 1
+                for term, copies in zip(node.args[1::2], node.args[2::2]):
+                    value, factor_bits = evaluated[term]
+                    if factor_bits != bits or not isinstance(copies, ast.Constant):
+                        raise ValueError("Expected a repeated full-width factor")
+                    product = product * pow(value % modulus, copies.value, modulus) % modulus
+                return (scale * product) & ((1 << bits) - 1), bits
+            if name in ("ashr", "lshr") and len(node.args) == 2:
                 value, bits = evaluated[node.args[0]]
-                count = min(evaluated[node.args[1]][0], bits - 1)
-                if value & (1 << (bits - 1)):
+                count = evaluated[node.args[1]][0]
+                if name == "ashr" and value & (1 << (bits - 1)):
                     value -= 1 << bits
-                return (value >> count) & ((1 << bits) - 1), bits
+                return (value >> min(count, bits)) & ((1 << bits) - 1), bits
             if name in ("rol", "ror") and len(node.args) == 2:
                 value, bits = evaluated[node.args[0]]
                 count = evaluated[node.args[1]][0] % bits
@@ -2175,7 +2249,11 @@ def check_semantics(expressions, results, width):
             elif isinstance(current, ast.UnaryOp):
                 pending.append((current.operand, False))
             elif (isinstance(current, ast.Call) and isinstance(current.func, ast.Name)
-                  and current.func.id in ("concat", "rol", "ror", "ashr")):
+                  and current.func.id == "scaled_product"):
+                pending.extend((arg, False) for arg in reversed(current.args[1::2]))
+                pending.append((current.args[0], False))
+            elif (isinstance(current, ast.Call) and isinstance(current.func, ast.Name)
+                  and current.func.id in ("concat", "rol", "ror", "ashr", "lshr")):
                 pending.extend((arg, False) for arg in reversed(current.args))
             elif (isinstance(current, ast.Call)
                   and isinstance(current.func, ast.Name)
@@ -2195,7 +2273,7 @@ def check_semantics(expressions, results, width):
     names = sorted({
         node.id for expression in [*expressions, *(r["output"] for r in results)]
         for node in ast.walk(parse(expression))
-        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror", "ashr")
+        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror", "ashr", "lshr", "scaled_product")
     })
     assignments = [
         {name: (x if index % 2 == 0 else y)
@@ -2269,7 +2347,7 @@ def main():
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
                  "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field", "masked-join",
                  "wrapped-masked-join", "mixed-valuation", "variable-width-product",
-                 "terminal-field-product"),
+                 "terminal-field-product", "rotated-field-product"),
         default="complement",
     )
     args = parser.parse_args()
@@ -2298,6 +2376,7 @@ def main():
             "mixed-valuation": (32, 64, 24577, 28673, 32769),
             "variable-width-product": (32, 64, 36865, 40961, 49153),
             "terminal-field-product": (32, 64, 513, 57345, 61441, 65536),
+            "rotated-field-product": (32, 64, 513, 32769, 57345, 65536),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2360,12 +2439,17 @@ def main():
                 "wrapped-masked-join": lambda w, n: [masked_join_product(w, i, wrapped=True) for i in range(n)],
                 "mixed-valuation": lambda w, n: [mixed_valuation_product(w, i) for i in range(n)],
                 "variable-width-product": lambda w, n: [variable_width_product(w, i) for i in range(n)],
+                "rotated-field-product": lambda w, n: [rotated_field_product(w, i) for i in range(n)],
                 "terminal-field-product": lambda w, n: [terminal_field_product(w, i) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]
             expressions = generate(width, args.count)
             path.write_text("\n".join(expressions) + "\n", encoding="utf-8")
+            semantic_inputs = (
+                [rotated_field_product(width, i, counted=True) for i in range(args.count)]
+                if args.family == "rotated-field-product" else expressions
+            )
             row = {
                 "width": width,
                 "corpusSha256": digest(path),
@@ -2375,7 +2459,7 @@ def main():
             # Warm both processes, then alternate order to reduce thermal/load bias.
             for info in engines.values():
                 warm = run(info, path, width)
-                check_semantics(expressions, warm["results"], width)
+                check_semantics(semantic_inputs, warm["results"], width)
             for iteration in range(args.rounds):
                 for name in (
                     list(engines) if iteration % 2 == 0 else list(reversed(engines))

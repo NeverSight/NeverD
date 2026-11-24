@@ -22,6 +22,24 @@ struct WordWindow {
   uint64_t Offset;
 };
 
+// A constant right shift or rotation begins with this suffix of its source.
+// Above the suffix come zero, sign or wrapped bits. Zero denotes no such
+// window: constant zero-distance motions have already folded to their input.
+inline unsigned sourceSuffixStart(const SymContext &Ctx, SymRef Motion) {
+  switch (Ctx.op(Motion)) {
+  case SymOp::Rol:
+  case SymOp::Ror:
+    return Ctx.node(Motion).Aux;
+  case SymOp::AShr:
+  case SymOp::LShr: {
+    const auto Count = Ctx.operand(Motion, 1);
+    return Ctx.isConst(Count) ? Ctx.constWords(Count).front() : 0;
+  }
+  default:
+    return 0;
+  }
+}
+
 // Bits outside a bitwise field cannot flow into it. Read only the limbs
 // intersecting [Begin, End), masking off the bits below the first position.
 inline bool zeroBitWindow(llvm::ArrayRef<uint64_t> Words, unsigned Begin,

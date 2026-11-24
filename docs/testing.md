@@ -4651,6 +4651,13 @@ result in both decompiler source views. The repeated-offset variant packs
 nonoverlapping literals into a scaled signed field. Byte-wide LLVM guards
 exhaust its input domain, including overlapping literals and unsafe shifts.
 
+Use `--family rotated-field-product --count 24` for 144 products spanning
+32 to 65,536 bits with up to 7,573 factors. Six source expressions feed
+overlapping fields, whole-word rotations and signed or zero-extended slices.
+The rotation counts include values larger than the word width. A 239-factor
+x86 fixture compares both source views against native-width arithmetic at
+`-O0` and `-O2`.
+
 Use `--family terminal-field-product --count 16` for 96 products spanning 32
 to 65,536 bits and up to 5,179 factors. They mix top-of-word shifts, signed
 and unsigned extensions, concatenations with live upper bits and even offsets.

@@ -46,6 +46,11 @@ inline constexpr size_t kSymMBAMBARewriteCacheCapacity = 65536;
 // normally when a graph needs more entries; this is not an analysis limit.
 inline constexpr unsigned kSymExprTraversalInlineBuckets = 32;
 
+// lib/symbolic/parse/SymParseLex.cpp
+// A short field is cheaper to recognize than to parse repeatedly. Longer
+// spans are often unique nested expressions and go directly to the grammar.
+inline constexpr size_t kSymParseProductSpellingBytes = 64;
+
 // lib/symbolic/expr/SymExpr.cpp
 /// Operand count at which block hashing replaces the short inline fold.
 inline constexpr unsigned kSymExprBlockHashMinOperands = 8;

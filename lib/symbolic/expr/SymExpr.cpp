@@ -36,8 +36,6 @@ namespace neverd::symbolic {
 
 namespace {
 
-constexpr uint32_t kAmbiguousVariable = std::numeric_limits<uint32_t>::max();
-
 /// Mix one word into a running hash.  The constant is the golden-ratio odd
 /// integer used by boost::hash_combine and llvm::hash_combine alike.
 inline uint64_t mixHash(uint64_t H, uint64_t V) {
@@ -304,10 +302,10 @@ bool SymContext::isConstOnes(SymRef R) const {
   return V.getRawData()[0] == ~uint64_t(0) && V.isAllOnes();
 }
 
-void SymContext::recordVariableName(llvm::StringRef Name, uint32_t Id) {
-  auto [It, Inserted] = VarByName.try_emplace(Name.str(), Id);
-  if (!Inserted && It->second != Id)
-    It->second = kAmbiguousVariable;
+void SymContext::recordVariableName(llvm::StringRef Name, SymRef Variable) {
+  auto [It, Inserted] = VarByName.try_emplace(Name.str(), Variable);
+  if (!Inserted && It->second != Variable)
+    It->second = {};
 }
 
 SymRef SymContext::mkVar(llvm::StringRef Name, uint32_t Width) {
@@ -317,8 +315,8 @@ SymRef SymContext::mkVar(llvm::StringRef Name, uint32_t Width) {
     return It->second;
   auto Id = static_cast<uint32_t>(Vars.size());
   Vars.push_back(SymVarInfo{Identity.first, Width});
-  recordVariableName(Identity.first, Id);
   const auto Result = intern(SymOp::Var, Width, {}, Id);
+  recordVariableName(Identity.first, Result);
   VarByNameAndWidth.emplace(std::move(Identity), Result);
   return Result;
 }
@@ -338,9 +336,10 @@ SymRef SymContext::mkInputVar(llvm::StringRef Name, uint32_t Width,
 
     const auto Id = static_cast<uint32_t>(Vars.size());
     Vars.push_back(SymVarInfo{Key, SegmentWidth, false, Segment});
-    recordVariableName(Key, Id);
+    const auto Result = intern(SymOp::Var, SegmentWidth, {}, Id);
+    recordVariableName(Key, Result);
     InputVarByIdentity.emplace(std::move(Identity), Id);
-    return intern(SymOp::Var, SegmentWidth, {}, Id);
+    return Result;
   };
 
   const bool ValidKind = Origin.Kind == SymInputKind::Register ||
@@ -445,11 +444,15 @@ bool SymContext::hasVarName(llvm::StringRef Name) const {
   return VarByName.count(Name.str()) != 0;
 }
 
+SymRef SymContext::findVarRef(llvm::StringRef Name) const {
+  const auto It = VarByName.find(Name.str());
+  return It == VarByName.end() ? SymRef{} : It->second;
+}
+
 std::optional<uint32_t> SymContext::findVar(llvm::StringRef Name) const {
-  auto It = VarByName.find(Name.str());
-  if (It == VarByName.end() || It->second == kAmbiguousVariable)
-    return std::nullopt;
-  return It->second;
+  if (const auto Variable = findVarRef(Name))
+    return varId(Variable);
+  return std::nullopt;
 }
 
 SymRef SymContext::mkFreshVar(uint32_t Width, llvm::StringRef Prefix) {
