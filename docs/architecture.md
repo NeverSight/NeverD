@@ -5594,6 +5594,14 @@ operand preserve differences modulo the observed low bits. A fixed shift
 maps observed result bits back to their input positions. A sign extension
 or arithmetic right shift can expose the input sign through any observed
 sign-fill bit. Zero-filled and discarded bits cannot distinguish the arms.
+A register-controlled shift can also distinguish the arms. Pair the full
+return-register literal with the shift count on its incoming edge. An
+earlier join contributes every possible count, and a scalar mask can
+exclude individual counts inside its range. The lifter supplies the
+instruction's count mask. An oversized MedIR shift yields zero or sign fill.
+Compare the sets of observable results after the shift. Disjoint sets prove
+a choice. An overlap leaves that choice unproven. A word shift on a wide
+register uses the width of the shift operand.
 A MIPS64 word check in the common computation needs a valid sign-extended
 word on every incoming arm, including after a logical right shift. If a
 narrower view has its own PHI, its incoming value and the complete return
