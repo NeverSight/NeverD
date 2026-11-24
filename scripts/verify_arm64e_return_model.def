@@ -159,7 +159,9 @@
     "model": "--model",
     "output": "--output",
     "build_cursor": "build-cursor",
-    "run_cursor": "run-cursor"
+    "run_cursor": "run-cursor",
+    "build_ordered": "build-ordered",
+    "run_ordered": "run-ordered"
   },
   "compile_only": "-c",
   "output_option": "-o",
@@ -179,5 +181,36 @@
     "name": "cursor-{optimization}",
     "include_option": "-I",
     "optimization_option": "-{optimization}"
+  },
+  "ordered": {
+    "define": "-DRETURN_MODEL_ORDERED",
+    "driver": "Arm64eOrderedModel.c",
+    "constants": "Arm64eOrderedModel.def",
+    "test": "AArch64OrderedMemory.BothCProjectionsAndLLVMRetainOrderedInstructions",
+    "artifact_environment": "NEVERD_ARM64E_CPTA_ARTIFACT_DIR",
+    "artifact_property": "arm64e_ordered_memory_artifact_directory",
+    "sources": {
+      "high": "high.c",
+      "llvm-c": "llvm.c"
+    },
+    "object_route": "llvm-object",
+    "object_file": "llvm-arm64e.o",
+    "march": "-march=armv8.3-a+rcpc3",
+    "parameters": {
+      "cluster0.has_lrcpc3": 1
+    },
+    "negative_parameters": {
+      "cluster0.has_lrcpc3": 0
+    },
+    "record_prefix": "ORDERED-MODEL ",
+    "feature_mismatch": "ORDERED-MODEL LRCPC3 unavailable",
+    "control_records": [
+      "ORDERED-MODEL compared EL1 and EL0 A=0 nAA=0",
+      "ORDERED-MODEL compared EL1 and EL0 A=0 nAA=1",
+      "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=0",
+      "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=1"
+    ],
+    "passed": "ORDERED-MODEL passed quadword comparisons",
+    "alignment_flag": "-mstrict-align"
   }
 }

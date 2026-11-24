@@ -170,6 +170,11 @@ public:
   /// Without those bindings step() refuses before any effect.
   bool step(const LowOp &Op);
 
+  /// Step with the effective SCTLR of this LRCPC3 Normal-memory Q access.
+  /// Other operations retain their usual step semantics. The observation
+  /// applies only to this operation and does not carry into a later step.
+  bool stepWithAArch64OrderedQuadwordSCTLR(const LowOp &Op, uint64_t SCTLR);
+
   /// Execute one MIPS32 RDHWR/DI/EI or EHB with a caller-authenticated context.
   /// A successful RDHWR consumes the observation. Pending hazards require EHB
   /// before another system observation; SYNC does not clear them. Failed
@@ -349,7 +354,8 @@ private:
   bool storeMemory(uint64_t Addr, uint16_t Size, uint64_t Value,
                    bool Wrap32 = false);
 
-  bool stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following);
+  bool stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
+                bool UnalignedOrderedQuadword = false);
   bool executeArith(const LowOp &Op);
   bool executeFloatArith(const LowOp &Op);
   bool executeFloatConvert(const LowOp &Op);

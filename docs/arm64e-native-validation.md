@@ -2379,6 +2379,36 @@ timeouts passed on a lower-concurrency rerun. Both hosted Mac runners covered
 33 of the 36 local skips. The [validation record](evidence/arm64e-signal-cursor-2026-11-24.json)
 includes the rerun list, executable hashes and remaining native comparisons.
 
+### 128-bit LRCPC3 loads and stores on the Arm model
+
+Build the signed-offset `LDAPUR Q` and `STLUR Q` comparisons on Darwin
+with the Release analysis test executable. Run the resulting Mach-O images
+on Arm FVP Base RevC 11.32+19.
+
+```sh
+python3 scripts/verify_arm64e_return_model.py build-ordered \
+  --tests build-release/bin/NeverDArm64eAnalysisTests --output ordered-guests
+python3 scripts/verify_arm64e_return_model.py run-ordered \
+  --model /path/to/FVP_Base_RevC-2xAEMvA --guests ordered-guests --output ordered-results
+```
+
+The five images contain HighC and LLVM-to-C at O0/O2 and the NeverD backend's
+arm64e Mach-O object. An independently assembled reference uses the same five
+signed displacements and all sixteen address alignments. The guest reads back
+the LRCPC feature level and the effective SCTLR settings. At EL0 and EL1 it
+compares both loaded lanes, stored bytes and the surrounding memory. For a
+crossing that faults it checks the exception level, alignment syndrome, access
+direction, fault address, and the opcode and displacement at the trapped PC.
+A feature-disabled run must stop before any comparison. The matrix uses
+single-core Normal memory. Arm defines the instruction family and the
+applicable alignment controls in the architecture reference.
+[Arm architecture extensions](https://support.arm.com/documentation/ddi0487/mb/-Part-A-Arm-Architecture-Introduction-and-Overview/-Chapter-A2-A-profile-Architecture-Extensions/-A2-2-Armv8-A-architecture-extensions/-A2-2-10-The-Armv8-9-architecture-extension).
+
+For a known LRCPC3 Normal-memory Q access, a tracer can supply the effective
+SCTLR to `NdOpEmulator::stepWithAArch64OrderedQuadwordSCTLR`. An unaligned
+access can complete with A clear and nAA set. The observation lasts for one
+step. Ordinary tracing continues to require natural alignment for these accesses.
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs
@@ -2386,7 +2416,11 @@ with HighC, LLVM-to-C and LLVM-to-C after IR optimization. Each program builds
 at O0 and O2 using the same six IA/IB operations and independent instruction
 oracle as its native test. Native qualification additionally executes those
 programs on a process that demonstrates active keys and the required modifier
-behavior.
+behavior. At O0 and O2 the capability probe records entry before executing
+the instructions. Both builds must agree. A launch killed before entry,
+inactive keys, or an illegal instruction in an explicit optional-instruction
+probe can skip the native comparison. An unexpected signal after entry fails
+the test.
 
 Apple specifies M6 or later Macs and A20 Pro or later iPhones for arm64e.x1;
 the simulator cannot execute this ABI. Standard GitHub macOS ARM runners use
