@@ -26,8 +26,22 @@ _start:
   msr APIBKeyLo_EL1, x0
   ldr x0, =RETURN_MODEL_KEY_B_HI
   msr APIBKeyHi_EL1, x0
+#ifdef RETURN_MODEL_CURSOR
+  adr x0, LcursorL0
+  msr TTBR0_EL1, x0
+  mov x0, #RETURN_MODEL_NORMAL_WB
+  msr MAIR_EL1, x0
+  dsb sy
+  isb
+  tlbi vmalle1
+  dsb sy
+  isb
+#endif
   mrs x0, SCTLR_EL1
   orr x0, x0, #RETURN_MODEL_ENIA_IB
+#ifdef RETURN_MODEL_CURSOR
+  orr x0, x0, #RETURN_MODEL_MMU
+#endif
   msr SCTLR_EL1, x0
   isb
   b _runReturnModel
@@ -44,6 +58,7 @@ _runAtEL0:
   msr ELR_EL1, x9
   eret
 Lapplication:
+  // x0 and x1 carry the expected enable control and EL0 stack top.
   bl _runReturnOracle
   svc #RETURN_MODEL_SVC
 LafterSVC:
@@ -77,3 +92,21 @@ Lexception:
   eret
 Lunexpected:
   b _unexpectedReturnException
+
+#ifdef RETURN_MODEL_CURSOR
+// Identity-map the image and the two stacks as Normal memory. Apple Clang can
+// legally access stack aggregates with unaligned loads and stores.
+.p2align RETURN_MODEL_PAGE_SHIFT
+LcursorL0:
+  .quad LcursorL1 + RETURN_MODEL_TABLE
+  .space (RETURN_MODEL_TABLE_ENTRIES - 1) * RETURN_MODEL_ENTRY_BYTES
+LcursorL1:
+  .space (RETURN_MODEL_TEXT_BASE >> RETURN_MODEL_L1_SHIFT) * RETURN_MODEL_ENTRY_BYTES
+  .quad LcursorL2 + RETURN_MODEL_TABLE
+  .p2align RETURN_MODEL_PAGE_SHIFT
+LcursorL2:
+  .quad RETURN_MODEL_TEXT_BASE | RETURN_MODEL_BLOCK | RETURN_MODEL_EL0_ACCESS | RETURN_MODEL_READ_ONLY
+  .quad RETURN_MODEL_EL0_DATA | RETURN_MODEL_BLOCK | RETURN_MODEL_EL0_ACCESS | RETURN_MODEL_DATA_XN
+  .quad RETURN_MODEL_EL1_DATA | RETURN_MODEL_BLOCK | RETURN_MODEL_DATA_XN
+  .p2align RETURN_MODEL_PAGE_SHIFT
+#endif

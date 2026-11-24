@@ -71,6 +71,18 @@
       "status": "unavailable"
     },
     {
+      "name": "startup-crash",
+      "returncode": -11,
+      "markers": [],
+      "status": "failed"
+    },
+    {
+      "name": "trap-before-entry",
+      "returncode": -5,
+      "markers": [],
+      "status": "failed"
+    },
+    {
       "name": "running-crash",
       "returncode": -11,
       "markers": [
@@ -437,5 +449,10 @@
     "probe-cpta": "probe_cpta"
   },
   "x1_failed_tool": "controlled x1 compiler failure",
-  "x1_claim": "native_arm64e_x1_environment_qualified"
+  "x1_claim": "native_arm64e_x1_environment_qualified",
+  "cursor_prelaunch_failures": [
+    -11,
+    -5,
+    -4
+  ]
 }

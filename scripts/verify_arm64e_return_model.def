@@ -157,10 +157,27 @@
     "tests": "--tests",
     "guests": "--guests",
     "model": "--model",
-    "output": "--output"
+    "output": "--output",
+    "build_cursor": "build-cursor",
+    "run_cursor": "run-cursor"
   },
   "compile_only": "-c",
   "output_option": "-o",
   "segment_address": "-segaddr",
-  "test_completed": "COMPLETED"
+  "test_completed": "COMPLETED",
+  "cursor": {
+    "driver": "Arm64eCursorModel.c",
+    "native_policy": "verify_arm64e_native.def",
+    "flags": [
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-fno-stack-protector"
+    ],
+    "define": "-DRETURN_MODEL_CURSOR",
+    "name": "cursor-{optimization}",
+    "include_option": "-I",
+    "optimization_option": "-{optimization}"
+  }
 }
