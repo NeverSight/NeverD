@@ -2438,8 +2438,8 @@ backend function for the same word. The guest checks each byte residue, both
 SIMD lanes, signed and unsigned results, guard bytes and precise alignment
 aborts at EL0 and EL1. It reads back both FEAT_LSE2 and the alignment controls.
 The preceding `build-ordered` and `run-ordered` commands build and run this
-matrix. Manifests from the original Q-only matrix retain their original
-completion record.
+matrix. The verifier also replays the earlier five-image GPR/SIMD and Q-only
+manifests using the inventory and completion record for each generation.
 
 For a supported ordered unscaled access to Normal memory on a PE with
 FEAT_LSE2, pass the effective SCTLR to
@@ -2485,6 +2485,24 @@ passes for 33 of those 36 skips. All 56 arm64e Python tests passed.
 [Installation and instruction replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45379254463),
 [native publication replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45379983555)
 and [qualification record](evidence/arm64e-ordered-granules-2026-11-24.json).
+
+### Direct backend comparisons on r6
+
+The hosted Arm model executed 20 signing programs across 160 combinations
+of image, exception level and control setting. Each independent caller
+imports all six IA/IB functions from its backend object. Reversing the two
+modifier arguments in the caller made all four direct backend variants fail
+the comparison on the local model.
+
+The six ordered-memory routes covered 88,320 original-versus-generated
+comparisons in single-core Normal memory, including 7,680 for the 128-bit
+load and store. The local M4 Max and each hosted M1 passed 6,240 GPR
+comparisons. Aligned 128-bit LRCPC3 remained unavailable. On the macOS 26
+and Xcode 27 M1 runners, ordinary PACM HINT behavior passed with active IA
+and IB across all ten C and direct-object programs. The three native tests
+for 128-bit LRCPC3, explicit PAuth_LR and PC-sensitive PACM skipped on
+each hosted runner. [Hosted model and native tests](https://github.com/gmh5225/test_mac_intel/actions/runs/45398004352)
+and [qualification record](evidence/arm64e-direct-backend-2026-11-24.json).
 
 ### Native x1 runner qualification
 
