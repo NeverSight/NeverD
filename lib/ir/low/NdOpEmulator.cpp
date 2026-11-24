@@ -32,6 +32,7 @@
 #include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
+#include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -1472,8 +1473,8 @@ NdOpEmulator::computeTarget(const LowBlock &Block, uint64_t IndexRegOff,
   const std::optional<uint64_t> RawTarget = reachedIndirectTarget();
   if (!RawTarget || !ReachedSourceMode || !ReachedTargetMode)
     return std::nullopt;
-  llvm::Expected<LowControlTarget> Target = canonicalizeLowControlTarget(
-      *RawTarget, *ReachedSourceMode, *ReachedTargetMode, Img.getPointerSize());
+  llvm::Expected<LowControlTarget> Target = canonicalizeImageControlTarget(
+      Img, *ReachedSourceMode, *ReachedTargetMode, *RawTarget);
   if (!Target) {
     llvm::consumeError(Target.takeError());
     return std::nullopt;

@@ -18,6 +18,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/AArch64AddressResult.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/CodePointerSources.h"
@@ -735,8 +736,8 @@ bool CFGBuilder::resolveRelocatedInteriorBranch(const BinaryImage &Img,
   va_t Target = normalizeCodeAddress(RawTarget, Img.Arch, Img.Mode);
   std::optional<InstructionMode> MIPSMode;
   if (hasCompressedMIPSCode(Img.Mode)) {
-    auto Destination = canonicalizeLowControlTarget(
-        RawTarget, Rec.Mode, Rec.TargetMode, Img.getPointerSize());
+    auto Destination = canonicalizeImageControlTarget(
+        Img, Rec.Mode, Rec.TargetMode, RawTarget);
     if (!Destination) {
       llvm::consumeError(Destination.takeError());
       return false;
