@@ -12,6 +12,7 @@
 
 #include "../CDisplayFieldPath.h"
 #include "../CDisplayFrameRecord.h"
+#include "../CLogicalCondition.h"
 #include "../CRecordCall.h"
 #include "../CVaList.h"
 #include "../HeaderPrototype.h"
@@ -6669,7 +6670,31 @@ HighCWriter::typedMemberAccess(const HighExpr &Addr, uint16_t AccessSize,
   auto Path = canonicalizeDisplayPath(*Field);
   if (!Path)
     return std::nullopt;
-  return recordMemberAccess(*Base, *Path);
+  auto Access = recordMemberAccess(*Base, *Path);
+  // An array read or written whole as one scalar, as Go copies a `sigset`
+  // ([2]uint32) in one word: C assigns no array, and an array read as a
+  // value is its address.  The access goes through a scalar of its width
+  // at the array's place, of the class the access reads.
+  if (Access && AccessSize)
+    if (const TypeRef FieldTy = Record->displayFieldTypeAt(
+            Peeled->second, AccessSize, /*ArrayElements=*/true, Class);
+        FieldTy && FieldTy->Kind == NdTypeKind::Array) {
+      TypeRef Scalar;
+      if (Class == NdAccessClass::Floating)
+        Scalar = AccessSize == 4 || AccessSize == 8
+                     ? NdType::makeFloat(AccessSize)
+                     : nullptr;
+      else if (Class == NdAccessClass::Pointer)
+        Scalar = Opts.Image && AccessSize == Opts.Image->getPointerSize()
+                     ? NdType::makePtr()
+                     : nullptr;
+      else if (AccessSize <= 8 && llvm::isPowerOf2_32(AccessSize))
+        Scalar = NdType::makeInt(AccessSize, false);
+      if (!Scalar)
+        return std::nullopt;
+      return "(*(" + typeToC(NdType::makePtr(Scalar)) + ")&" + *Access + ")";
+    }
+  return Access;
 }
 
 std::optional<std::string>
@@ -10326,13 +10351,9 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
         return L + " > 0";
       if (isNotBelowZeroOf(L, R))
         return R + " > 0";
-      if (L.find(" || ") != std::string::npos)
-        L = "(" + L + ")";
-      if (R.find(" || ") != std::string::npos)
-        R = "(" + R + ")";
-      return L + " && " + R;
     }
-    return L + " || " + R;
+    return joinLogicalConditions(std::move(L), std::move(R),
+                                 Cur->Op == NdOp::BOOL_AND);
   }
   // Boolean context: a view the test keeps whether it reads zero through is
   // no sanitizer wrap. Keep wraps on add/sub/mul.
@@ -10652,13 +10673,8 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
           return L + " > 0";
         if (isNotBelowZeroOf(L, R))
           return R + " > 0";
-        if (L.find(" || ") != std::string::npos)
-          L = "(" + L + ")";
-        if (R.find(" || ") != std::string::npos)
-          R = "(" + R + ")";
-        return L + " && " + R;
       }
-      return L + " || " + R;
+      return joinLogicalConditions(std::move(L), std::move(R), BoolOr);
     }
     if (Cur->Op == NdOp::INT_EQUAL) {
       const HighExpr *X = nullptr;

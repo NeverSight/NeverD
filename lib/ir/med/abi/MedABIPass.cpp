@@ -4129,9 +4129,45 @@ void recoverCallAbi(
         for (size_t I = 0; I < IntPart.size(); ++I) {
           if (IntPartSlots[I] < Known)
             continue;
-          if (!callLeftovers().containsForRegister(
-                  IntPart[I], IntParamRegs[IntPartSlots[I]]))
-            continue;
+          const MedVar &Argument = IntPart[I];
+          const bool LeftByCall = callLeftovers().containsForRegister(
+              Argument, IntParamRegs[IntPartSlots[I]]);
+          // An unresolved SysV call has no proof that it consumes a slot
+          // supplied only on some edges. Keep it in its machine position
+          // until here so later scratch writes cannot slide into its place.
+          const bool CheckJoin = CI.IsIndirect && TheArch == Arch::X64 &&
+                                 Fmt == BinaryFormat::ELF &&
+                                 !CI.ArgumentsInCalleeRegisterOrder &&
+                                 !UseExternalArity && !UseVariableArity &&
+                                 !IntegerSummary && !HeaderVariadic;
+          if (!LeftByCall) {
+            if (!CheckJoin)
+              continue;
+            const auto Site = DefSites.find(Argument);
+            if (!Site.Phi || Site.Ambiguous ||
+                !llvm::any_of(Site.Phi->Args, [&](const auto &Arm) {
+                  const auto &[Pred, Value] = Arm;
+                  const auto *Entry = BlockIds.first(Pred);
+                  if (!Entry || Entry->StartAddr != Func.Entry ||
+                      !Entry->Preds.empty() || !Entry->ExceptionalPreds.empty() ||
+                      Value.Kind != MedVar::Reg || Value.SSAVer > 0 ||
+                      Value.RegOff != IntParamRegs[IntPartSlots[I]])
+                    return false;
+                  // SSA version zero can also name the first real write.
+                  // Do not treat such a definition as an entry register.
+                  const auto Definition = DefSites.find(Value);
+                  if (Definition.Ambiguous || Definition.Phi ||
+                      (Definition.Op &&
+                       (Definition.Block != Entry ||
+                        !med_calling_conv_detail::isEntryLiveInCopy(
+                            *Definition.Op, Value.RegOff))))
+                    return false;
+                  return llvm::none_of(Func.Params, [&](const MedVar &Param) {
+                    return Param.RegOff == Value.RegOff;
+                  });
+                }))
+              continue;
+          }
           // An indirect call has no callee to say its stack slots are
           // arguments, nor has a variadic one for those past its named
           // parameters.  Where integer arguments fill every register before

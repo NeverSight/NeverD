@@ -13,6 +13,8 @@
 
 #include "HighCHostExecution.h"
 
+#include <fstream>
+
 class AArch64_StructReturn : public HighCHostExecutionTest {
 protected:
   void expectRunsLikeSource(const std::string &Kernel, const std::string &Entry,
@@ -96,4 +98,104 @@ v4su mk4(unsigned x) {
 }
 )C",
                        "use4", {"use4", "mk4", "v4su"});
+}
+
+
+// A leaf can preserve the default GP result without forfeiting a floating
+// record. Only real reads of both result fields warrant the aggregate.
+TEST_F(AArch64_StructReturn, BareReturnRequiresTwoObservedFPFields) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Source = tmpFile("hfa-passthrough.s");
+  const auto Object = tmpFile("hfa-passthrough.o");
+  std::ofstream(Source) << R"asm(
+.text
+.macro leaf name
+.p2align 2
+.globl \name
+.type \name,%function
+\name:
+ret
+.size \name,.-\name
+.endm
+leaf identity_pair
+leaf identity_scalar
+.macro caller name, target, extra
+.p2align 2
+.globl \name
+.type \name,%function
+\name:
+stp x29,x30,[sp,#-16]!
+mov x29,sp
+bl \target
+.if \extra
+fadd d0,d0,d1
+.else
+fadd d0,d0,d0
+.endif
+ldp x29,x30,[sp],#16
+ret
+.size \name,.-\name
+.endm
+caller use_pair,identity_pair,1
+caller use_scalar,identity_scalar,0
+leaf identity_only_d1
+.p2align 2
+.globl use_only_d1
+.type use_only_d1,%function
+use_only_d1:
+stp x29,x30,[sp,#-16]!
+mov x29,sp
+bl identity_only_d1
+fmov d0,d1
+ldp x29,x30,[sp],#16
+ret
+.size use_only_d1,.-use_only_d1
+leaf identity_redefined_d1
+.p2align 2
+.globl use_redefined_d1
+.type use_redefined_d1,%function
+use_redefined_d1:
+stp x29,x30,[sp,#-16]!
+mov x29,sp
+bl identity_redefined_d1
+fmov d1,#16.0
+fadd d0,d0,d1
+ldp x29,x30,[sp],#16
+ret
+.size use_redefined_d1,.-use_redefined_d1
+)asm";
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG, {"-target", "aarch64-linux-gnu", "-c",
+                               Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  const auto IR = liftToLLVMIRUnopt(Object);
+  ASSERT_EQ(IR.exitCode, 0) << IR.err;
+  const auto Pair = IR.out.find(
+      "define dso_local { double, double } @identity_pair(double %arg0, "
+      "double %arg1)");
+  ASSERT_NE(Pair, std::string::npos) << IR.out;
+  const auto End = IR.out.find("\n}", Pair);
+  ASSERT_NE(End, std::string::npos) << IR.out;
+  const auto Body = IR.out.substr(Pair, End - Pair);
+  EXPECT_NE(Body.find("ret { double, double }"), std::string::npos) << Body;
+  EXPECT_NE(IR.out.find("call { double, double } @identity_pair(double "),
+            std::string::npos)
+      << IR.out;
+
+  // Observing only D0, only D1, or a freshly written D1 must not infer both
+  // arguments as an HFA. Require a definition so dropping the negative
+  // function entirely cannot satisfy the test.
+  for (const char *Control : {"identity_scalar", "identity_only_d1",
+                              "identity_redefined_d1"}) {
+    SCOPED_TRACE(Control);
+    const auto Name = std::string(" @") + Control + "(";
+    const auto Definition = IR.out.find(Name);
+    ASSERT_NE(Definition, std::string::npos) << IR.out;
+    const auto Line = IR.out.rfind('\n', Definition);
+    ASSERT_NE(Line, std::string::npos) << IR.out;
+    const auto Header = IR.out.substr(Line + 1, Definition - Line - 1);
+    ASSERT_TRUE(Header.starts_with("define ")) << Header;
+    EXPECT_EQ(Header.find('{'), std::string::npos) << Header;
+  }
 }

@@ -237,10 +237,31 @@ TEST(X86EncodingAccuracy, Ud1OperandsDoNotBecomeMemoryOrArithmeticEffects) {
       Decode.liftToLow(Instruction, Ops);
       ASSERT_EQ(Ops.size(), 1U);
       EXPECT_EQ(Ops[0].Opcode, NdOp::INTRINSIC);
+      EXPECT_EQ(Ops[0].Output.Size, 0);
       ASSERT_EQ(Ops[0].NumInputs, 1);
       EXPECT_TRUE(Ops[0].Inputs[0].isConst());
       EXPECT_EQ(Ops[0].Inputs[0].Offset, static_cast<uint64_t>(Intrinsic::Ud1));
     }
+  }
+}
+
+TEST(X86EncodingAccuracy, Ud0TerminalDoesNotSynthesizeRAXOutput) {
+  for (Arch Target : {Arch::X86, Arch::X64}) {
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Target));
+    const std::vector<uint8_t> Bytes{0x0f, 0xff};
+    DecodedInsn Instruction;
+    ASSERT_EQ(Decode.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000,
+                                      Instruction),
+              2);
+    std::vector<LowOp> Ops;
+    Decode.liftToLow(Instruction, Ops);
+    ASSERT_EQ(Ops.size(), 1U);
+    EXPECT_EQ(Ops[0].Opcode, NdOp::INTRINSIC);
+    EXPECT_EQ(Ops[0].Output.Size, 0);
+    ASSERT_EQ(Ops[0].NumInputs, 1);
+    EXPECT_TRUE(Ops[0].Inputs[0].isConst());
+    EXPECT_EQ(Ops[0].Inputs[0].Offset, static_cast<uint64_t>(Intrinsic::Ud0));
   }
 }
 

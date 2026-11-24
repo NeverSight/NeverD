@@ -2863,6 +2863,10 @@ they do not qualify native execution or standalone cache reconstruction.
 `NeverDDebugInfoTests` rejects automatic container companion discovery while
 retaining explicit per-image debug-file diagnostics.
 
+`HighCPointerAddresses.AnArrayAccessedWholeGoesThroughAScalar` loads and
+stores eight bytes over a `[2]uint32` member and runs the C: both go through
+`(*(uint64_t*)&m->sigmask)`; it fails where the member is assigned or read as
+an array.
 `HighCPointerAddresses.AGlobalOfAnUnspellableCallbackKeepsItsAccessType`
 gives a global the debug type of a callback returning an array: the unit is
 written, the global declared with the type its load gives.
@@ -7540,6 +7544,10 @@ checks exact masked status bits, signed extensions, shared expressions and
 effect preservation without the symbolic bridge. An 8,192-level worker-thread
 regression checks iterative operand traversal for both pure rewrites and
 ordered-memory ancestors that must remain intact.
+`HighControlFlowSemantics.AJumpToWhatFollowsItsTryTakesNoCopy` ends an
+`__except` handler, and an `if` arm, with a jump to the statement after them:
+tail copying copies nothing there and the arm still computes the same; it
+fails where the pass copies the tail over such a jump.
 `HighControlFlowSemantics.MemoryBoundaryLeavesRetainTheirAncestors` checks
 boundary-bearing leaves, shared parents and indirect call targets, including
 fresh analysis after boundary metadata changes and root-order reversal.
@@ -10350,6 +10358,10 @@ with its shared legacy grammar. NeverD has no duplicate LOCK/MOV-to-CS
 predicate. UD1 operands remain an
 unconditional invalid-opcode intrinsic without ordinary memory or arithmetic
 operations; this suite does not select a processor's UD0 policy.
+`X86EncodingAccuracy.Ud0TerminalDoesNotSynthesizeRAXOutput` and
+`Ud1OperandsDoNotBecomeMemoryOrArithmeticEffects` require terminal LowIR
+intrinsics to have no fabricated register output. The instruction-text suite
+still checks clang's UD1 sanitizer displacement.
 `X86LegacyExecutionTest.UD1FaultsWithoutReadingItsAddress` checks complete
 and malformed UD1 byte extents. `LegacyEvents/*OriginalUD1*` compares the
 original instruction and the protected 16/32-bit executor at CPL0/CPL3 over
@@ -10370,6 +10382,19 @@ ModR/M byte across an absent page after the opcode. Its three address forms
 cover simple ModR/M, SIB and disp32; code16/code32 and both bound processor
 profiles check #UD versus #PF, CR2 and the original return PC through the same
 four compiler lanes.
+`X64PagedExecutionTest.UD0CrossPageFetchUsesTheBoundProcessor` places the
+ModR/M, SIB or first displacement byte on an absent page in code64. Both
+fetch profiles run through HighC and LLVM-to-C, Clang and 64-bit NeverC at
+O0/O2. `UD0RefusesMissingOrInvalidFetchProfile` checks fail-loud admission
+before CPU or RAM effects. `UD0AddressExtentUsesLiveBytesAfterTheOpcode`
+exports an image ending at the two-byte opcode, then changes its live ModR/M
+and SIB to distinguish #UD from a displacement-fetch #PF without relifting;
+the register-indirect data address is noncanonical and is never read.
+Pin `UD0FetchPriorityMatchesOriginalHybridCPU` to the qualified P and E cores
+separately; compare the original KVM handler,
+fault stack RIP/error code, CR2, all GPRs, flags and RAM with each generated
+lane. The model's execution binding is intentionally independent of the host
+core used to compile its C source. Missing KVM is an oracle skip, not a pass.
 
 ```sh
 cmake --build build-release --target NeverDX86EncodingAccuracyTests
@@ -21116,6 +21141,21 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`GoOpenCodedDefers.TheUnwindRecordOfTheSameFunctionCarriesThem` loads a
+deferring function that a `.pdata`-style unwind record also describes, one
+that ends short of the pclntab range: the record the lookup finds carries
+the function's defers and `deferreturn`; it fails where the Go loader adds
+them as a second record the lookup never reaches.
+`GoStackResults.AnAssemblyRoutineReturnsTheRecordItsCallsRead` decompiles an
+arm64 image of the internal ABI whose assembly routine still returns two
+stack words to compiled code, on both routes: the routine returns the record
+its call reads, and the C runs; it fails where the routine returns
+`__int128` (X0 and X1 as AAPCS64's pair).
+`GoInternalABI.ASetupWriteALaterOneReplacesReadsNoResult` runs a Go caller
+that computes `bsr rsi, rax; mov r8, -1; cmove rsi, r8` from a call's result
+before another call: the first call returns one result and the caller
+computes the highest bit; it fails where dead-code elimination keeps the
+covered selection, which reads the callee's RSI as a fifth result.
 `GoInternalABI.AnIndirectCallReturnsEveryResultItsCallerReads` lifts a Go
 1.18 function that calls through a function value and stores RBX: the call
 returns RAX and RBX packed, every later read of RBX is its second field, and
@@ -26253,19 +26293,26 @@ ctest --test-dir build-mips --build-config Release -L '^NeverDMIPS.*Tests$' --ou
 ```
 
 The native object roundtrip runs a GNU-assembled function and the object from
-`neverd_lift_to_obj` with the same caller under QEMU. Its 32 profiles cover
-classic Release 2 and Release 6 o32/n32/n64, MIPS16 and microMIPS o32,
+`neverd_lift_to_obj` with the same caller under QEMU. Its 50 profiles cover
+classic Releases 1, 2, 3, 5 and 6 o32/n32/n64, MIPS16 and microMIPS o32,
 historical MIPS I/II o32, and historical MIPS III/IV/V n32/n64, each in both
-byte orders. All 32 GNU originals run on compatible QEMU CPUs. The SDK objects
-run for 24 profiles. The other eight verify the missing historical execution
-context diagnostic and an empty object for I–III inputs. On Linux it uses `qemu-user` and GNU binutils for
+byte orders. All 50 GNU originals run on compatible QEMU CPUs. The SDK objects
+run for 42 profiles. GNU readelf verifies the precise Release 1, 3 and 5
+revision in the original and rebuilt ELF ABI records. The other eight verify
+the missing historical execution context diagnostic and an empty object for
+I–III inputs. On Linux it uses `qemu-user` and GNU binutils for
 `mips-linux-gnu`, `mipsel-linux-gnu`, `mips64-linux-gnuabi64` and
 `mips64el-linux-gnuabi64`. Each case removes its temporary ELF files after
 execution.
 
 ```sh
-python3 unittests/lift/mips/native-object-roundtrip.py --sdk build-mips/bin/libneverd.so --output build-mips/mips-native-execution.json
+python3 unittests/lift/mips/native-object-roundtrip.py --sdk build-mips/bin/libneverd.so --clang clang-18 --output build-mips/mips-native-execution.json
 ```
+
+With `--clang`, the same caller also runs HighC and LLVM C for the 24
+classic Release 1, 2, 3 and 5 profiles. Clang compiles both sources for the
+original ABI and byte order. The Release 1, 3 and 5 wide-register callers
+check the upper word of the result before returning its low byte.
 
 `unittests/lift/mips/roundtrip.py` is an additional standalone differential
 runner. It needs clang and lld with MIPS targets, pyelftools, and the repository's

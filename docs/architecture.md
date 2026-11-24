@@ -325,7 +325,17 @@ with exact scalar values and this memory binding; source and concrete execution
 share descriptor/frame decisions. Recursive delivery owns #DF classification,
 CR2 publication and shutdown. `X64PagedExecution` binds generated scalar steps
 to that memory, authenticates instruction fetches, stages restart state and
-commits prepared stores. Faultable IRET and RETF reuse the same continuation
+commits prepared stores. `ir/X86/X86UndefinedOpcodeRules` owns the explicit
+processor choice for UD0 fetch priority. The paged code64 continuation admits
+only original unprefixed UD0 bytes with the audited terminal intrinsic;
+`X64PagedExecution` requires the target CPU's choice before fetch, then
+authenticates the two opcode bytes and, for the complete-fetch choice, reads
+the remaining ModR/M, SIB and displacement bytes from live executable RAM.
+No data operand is read, and the existing fault owner delivers #UD or a
+preceding instruction-fetch fault. The legacy protected executor uses the
+same profile type for its segmented original-byte fetch.
+
+Faultable IRET and RETF reuse the same continuation
 return and descriptor templates through that concrete evaluator. Their bound
 processor profiles preserve ordered descriptor writes on a later failure;
 IRET also unblocks NMI, while RETF retains inhibition. Register/segment
@@ -5781,6 +5791,10 @@ that width at the element's start (`tree[n].freq`); union alternatives of
 the same width leave none, and the access stays raw. A pointer names a
 member as the array it indexes only where it holds an array member's
 address (`s->heap[i]`), never the first member of the record it points to.
+A member array read or written whole as one scalar, as Go copies a
+`sigset` (`[2]uint32`) in one word, goes through a scalar of the access's
+width and class at the array's place (`(*(uint64_t*)&m->sigmask) = mask`):
+C assigns no array, and an array read as a value is its address.
 A local the unit declares an integer that holds the pointer, as the join
 of `modules.array` and zero Go's `itabsinit` keeps, is indexed through the
 pointer it is (`((runtime_moduledata**)(uintptr_t)v6)[i]`): C subscripts
@@ -6564,7 +6578,11 @@ and an indirect call's results stay words. Two results are a record too where
 they take X0 and X1, which AAPCS64 also returns a double-word integer in: Go
 returns a list of values, and as one `__int128` `runtime.makeAddrRange`, which
 returns its two arguments, was refused, its high word being no value the
-function computed (`returnsGoResults`).
+function computed (`returnsGoResults`). Any code in Go's text returns such a
+record, and a direct call takes its callee's: assembly that still takes the
+stack ABI returns its stored results as a record too (`runtime.sysMmap`,
+`syscall.rawVforkSyscall`), which returned an `__int128` to calls that read
+its record, an assignment C rejects.
 
 No register carries a value into Go code but its arguments. A field of a
 register record that a return leaves as the function was entered with, where
@@ -6694,6 +6712,12 @@ SSA enters it as a root with the SP the function's pcsp table reaches
 frame. Entered with the function's own entry SP, the reloads read the caller's
 frame, and arm64's `main.namedResultRewrite` took a stack argument no caller
 passed.
+A Windows image also describes how to unwind each function in its `.pdata`,
+a record that ends where the code does, short of the padding the function's
+pclntab range takes in, so the lookup finds that record first. The Go loader
+attaches the runtime's records to it (`parseGoExceptions`): without them
+`main.panicDuringDefer`, which recovers in its deferred call, had no edge to
+its `deferreturn`, and it and its caller were taken never to return.
 
 On Windows, `runtime.callbackasm` is a table of 2,000 entries, one per
 callback, each a `CALL runtime.callbackasm1`. The call only leaves the entry's
@@ -13254,6 +13278,15 @@ that passes a two-load target's object finds none in a register that holds the
 target. HighIR's stack scan takes no prologue save for an indirect call either
 (`isIncomingRegisterSave`, shared with recovery).
 
+Before ABI recovery binds a call's register arguments, MedIR dead-code
+elimination keeps the writes of argument registers that the call's setup
+makes, but only the newest of each register: a write that a later one covers
+before the call is no argument. Go's `bsr rsi, rax; mov r8, -1;
+cmove rsi, r8` ahead of a call left the first selection, whose read of what
+an earlier call left in RSI made a fifth result of that call:
+`runtime.extractHeapBitsSmall`, which returns one word, returned five, and its
+callers read a record that its declaration does not return.
+
 Dedicated indirect-result registers are separate from ordinary parameter
 registers. MedIR dead-code elimination keeps their reaching definitions at
 calls and tails until ABI recovery binds the hidden result argument. This
@@ -18798,7 +18831,8 @@ instruction extent and operand details. NeverD's detailed, lightweight and
 lifting decode routes consume that result, including REX2 forms. Illegal
 encodings fail decoding even when strict lifting is disabled. UD1 remains an
 explicit invalid-opcode intrinsic; its encoded operands do not imply an
-ordinary memory access.
+ordinary memory access. UD0 and UD1 are terminal intrinsics with no fabricated
+RAX output; a sanitizer displacement remains an intrinsic input for printing.
 
 For an x86 function-discovery scan with operand detail disabled, the decoder
 resolves a near CALL from the exact bytes of the classified instruction. The
@@ -19914,6 +19948,12 @@ Native zero-argument Swift class methods share one complete ABI declaration owne
 Finite multi-target indirect dispatch also retains deferred guard dependencies: a join can keep a finite target set while admitting infeasible arms. Failed-attempt reverse search skips guards that cannot nominate a new field, context or producer bit, allowing useful outer guards to be considered. Selection and activation share one rule and discovery budget. These nominations never remove edges; publication still requires fresh proofs for the complete reachable graph. The finite-dispatch dependency walk starts only after existing precision refinements stall. Enabling it consumes one fresh refinement under the same cumulative work limits, so unrelated selectors cannot preempt an existing producer or native-guard refinement. Exhausted guard nominations still leave deferred producers and other precision fallbacks eligible; only a new proof can close the failure.
 
 HighIR tail copying consults `SourceCallTypeHint::requiresUniqueSourceOccurrence` before duplicating a call. Boolean, callback-parameter, immutable-target, frame-witness, virtual-dispatch and native-Swift-receiver receipts each name one original machine occurrence; return tails, jump tails and nested exit rewrites keep that evaluation shared, even when source copies would execute on mutually exclusive paths. Ordinary call declarations retain the existing copying rules. Publication still rebuilds the current machine, ABI, operands and dynamic target proof and requires one source evaluation. Tests cover all receipt kinds, nested expressions, unchanged plain-call optimization, and a complete ARM64 shared-store/callback tail against generated C at O0/O2.
+
+A jump that ends an `if`/`else` arm, a block, or the body or a handler of a
+try with only `__except` clauses, and lands where falling off it goes, is
+that fall-through: tail copying (`duplicateSmallReturnTails`) leaves it to
+the later jump removal and copies no tail there: a copy only repeated the
+tail that follows, and the code after an `__except` handler printed twice.
 
 The shared `SourceABI` owner distinguishes a logical by-value record from its physical address carrier. Darwin ARM64 C declarations for six or sixteen doubles keep the complete record type and use an eight-byte integer-register or naturally aligned stack carrier, independently of floating argument registers and the x8 result pointer. ABI equality and projection batching retain this distinction, calling convention and parameter roles. Partial, overlapping, incompatible or stale carriers are rejected. This declaration alone does not bind LowIR calls, project entries, emit HighC calls or authorize frame borrows: those require a separate copy-storage proof. Compiler and native ABI tests cover register exhaustion, stack packing, arbitrary floating bits, copy mutation isolation and independent indirect results; they are not a complete `setTransform:` recovery test.
 

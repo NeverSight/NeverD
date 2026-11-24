@@ -1384,7 +1384,12 @@ buildInstruction(SpecializationInstruction Instruction,
                    Instruction.NativeBytes[1] == 0x0b &&
                    Instruction.Ops.size() == 1 &&
                    eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud2, 1);
-  const bool UndefinedInstruction = Ud2 || ObservedXbegin;
+  const bool Ud0 = Options.PagedMemory && Instruction.NativeBytes.size() >= 2 &&
+                   Instruction.NativeBytes[0] == 0x0f &&
+                   Instruction.NativeBytes[1] == 0xff &&
+                   Instruction.Ops.size() == 1 &&
+                   eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud0, 1);
+  const bool UndefinedInstruction = Ud0 || Ud2 || ObservedXbegin;
   // These unprefixed encodings have the same meaning in compatibility mode.
   // REX-prefixed forms cannot share that entry domain: there REX is an opcode.
   const bool CompatibilityFastEntry =
@@ -1589,7 +1594,7 @@ buildInstruction(SpecializationInstruction Instruction,
   if (Options.PagedMemory) {
     // Audited MOV CR8 has one register operand and no data memory. Its
     // undefined-effects certificate already checked the original encoding.
-    PagedRoles = (Repeated || PortIO || DebugRegister || PagedTaskPriority)
+    PagedRoles = (Repeated || PortIO || DebugRegister || PagedTaskPriority || Ud0)
                      ? detail::X64PagedMemoryRoles{.Supported = true}
                      : detail::x64PagedMemoryRoles(Instruction);
     if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer &&

@@ -285,7 +285,13 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
       // A call already remodeled (FP/x87/wide produce a non-register output) is
       // left alone; the default-modeled call writes the integer return
       // register.
-      if (Op.Output.Kind != MedVar::Reg || TRI.isX87StackReg(Op.Output.RegOff))
+      // The direct callee may preserve the default integer return register
+      // while its callers consume an HFA in the floating return bank.
+      const bool NoPrimaryOutput =
+          TargetArch == Arch::AArch64 && Op.Opcode == NdOp::CALL &&
+          Op.Inputs[0].isConst() && Op.Output.Size == 0;
+      if (!NoPrimaryOutput &&
+          (Op.Output.Kind != MedVar::Reg || TRI.isX87StackReg(Op.Output.RegOff)))
         continue;
 
       // A loader-bound scalar libm result cannot become a mixed aggregate
@@ -570,6 +576,15 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
           std::any_of(Fields.begin(), Fields.end(), [&](const FieldRead &F) {
             return isCallClobber(F.Value, Op.CallSiteId);
           });
+      // With no primary output, only a complete observation of this call's
+      // own floating clobbers can propose a shape. The callee must still
+      // prove all returned fields before the pipeline can bind any of them.
+      if (NoPrimaryOutput &&
+          (AnyInt || HasUnobservedFields ||
+           !llvm::all_of(Fields, [&](const auto &Field) {
+             return isCallClobber(Field.Value, Op.CallSiteId);
+           })))
+        continue;
       if (TRI.ReturnAggregatesSingleClass && Op.Opcode == NdOp::CALL &&
           HasImplicitField) {
         MedStructReturnCandidate Candidate;

@@ -48,6 +48,63 @@ BinaryImage historicalImage(Arch Target, unsigned Level) {
   Image.MIPS->FPABI = 1;
   return Image;
 }
+TEST(MIPSClassicRelease, ReleaseOneWordsKeepTheirOwnMeaningAcrossEntryPoints) {
+  for (auto Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const bool Wide = isMIPS64(Target);
+    BinaryImage Image;
+    Image.Arch = Target;
+    Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+    Image.MIPS.emplace();
+    Image.MIPS->ABI = Wide ? MIPSABI::N64 : MIPSABI::O32;
+    Decoder D;
+    for (unsigned Revision : {2u, 1u, 3u, 5u, 1u}) {
+      Image.MIPS->ISARevision = Revision;
+      ASSERT_TRUE(D.init(Image));
+      MIPSLifter L(Target, InstructionMode::MIPSClassic, Revision);
+      for (auto Decode : {&Decoder::decodeOne, &Decoder::decodeOneLight,
+                          &Decoder::decodeOneForLift}) {
+        DecodedInsn Out;
+        for (auto Word : {0x00851021u, 0x70851002u, 0x00251082u, 0x7c851000u}) {
+          SCOPED_TRACE(::testing::Message()
+                       << std::hex << Word << " r" << Revision);
+          const auto I = instruction(Word, Target);
+          const bool Supported =
+              Revision != 1 || Word == 0x00851021 || Word == 0x70851002;
+          EXPECT_EQ((D.*Decode)(I.bytes, I.size, I.address, Out),
+                    Supported ? 4 : 0);
+          std::vector<LowOp> Ops;
+          if (Supported) {
+            EXPECT_NO_THROW(L.lift(I, Ops));
+            EXPECT_FALSE(Ops.empty());
+          } else {
+            EXPECT_THROW(L.lift(I, Ops), UnliftedInstruction);
+            EXPECT_TRUE(Ops.empty());
+          }
+        }
+        if (Revision == 1) {
+          for (uint32_t Word : {0xc0u, 0x140u}) {
+            const auto I = instruction(Word, Target);
+            ASSERT_EQ((D.*Decode)(I.bytes, I.size, I.address, Out), 4);
+            EXPECT_EQ(std::memcmp(Out.Raw->bytes, I.bytes, 4), 0);
+            EXPECT_NE(Out.Id, MIPS_INS_EHB);
+            EXPECT_NE(Out.Id, MIPS_INS_PAUSE);
+            std::vector<LowOp> Ops;
+            ASSERT_NO_THROW(L.lift(I, Ops));
+            for (const auto &Op : Ops)
+              EXPECT_NE(Op.Opcode, NdOp::INTRINSIC);
+          }
+          for (uint32_t Word : {0x41606000u, 0x44622000u, 0x7c02183bu,
+                                0x003ffc09u, 0x78000000u}) {
+            const auto I = instruction(Word, Target);
+            EXPECT_EQ((D.*Decode)(I.bytes, I.size, I.address, Out), 0);
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(MIPSHistorical, AvailabilityUsesPhysicalISAInsteadOfReleaseNumbers) {
   struct Case {
     uint32_t Word;

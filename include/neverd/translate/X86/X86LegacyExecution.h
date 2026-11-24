@@ -13,6 +13,7 @@
 #include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/X86/X86MpxContext.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 #include "neverd/translate/X86/X86EventDeliveryOptions.h"
 #include "neverd/translate/X86/X86LegacySegmentExecution.h"
 #include "neverd/translate/X86/X86PortIO.h"
@@ -197,13 +198,8 @@ enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 /// PVI, independently of IOPL. These CPU choices need explicit target binding.
 enum class X86LegacyVM86Profile : uint8_t { IntelVME };
 
-/// UD0 can fault after its opcode or after the encoded ModR/M address bytes.
-/// Bind the target CPU's instruction-fetch behavior explicitly. Both forms
-/// raise #UD without reading the encoded data operand once fetch succeeds.
-enum class X86LegacyUD0FetchProfile : uint8_t {
-  OpcodeOnly,
-  CompleteModRM,
-};
+/// Legacy spelling retained for existing protected execution callers.
+using X86LegacyUD0FetchProfile = X86UD0FetchProfile;
 
 /// Confined ordinary RAM. POP memory uses incremented ESP, with SS.B-sized
 /// stack advancement preserving high ESP on a word wrap. PUSHA/ENTER stores

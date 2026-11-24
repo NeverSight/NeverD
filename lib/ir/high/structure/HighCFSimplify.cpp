@@ -1244,9 +1244,36 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
     return !tailMayFault(Tail);
   };
   bool Changed = false;
-  std::function<void(std::vector<HighStmt> &, const TryContext &)> Rewrite =
-      [&](std::vector<HighStmt> &Stmts, const TryContext &Ctx) {
+  // \p FallsTo is where falling off the end of \p Stmts goes, or 0: past an
+  // if/else arm, a block, or the body or a handler of a try with only
+  // __except clauses, the statement after it.  A jump there that ends the
+  // list goes where the list would anyway, and a copy of the tail there
+  // would only repeat the tail that follows: an __except handler printed
+  // the code after its try twice.
+  std::function<void(std::vector<HighStmt> &, const TryContext &, va_t)>
+      Rewrite = [&](std::vector<HighStmt> &Stmts, const TryContext &Ctx,
+                    va_t FallsTo) {
+        // Whether Stmts[I] ends the list, past removed statements.
+        const auto EndsList = [&](size_t I) {
+          size_t Next = I + 1;
+          while (Next < Stmts.size() && Stmts[Next].Kind == StmtKind::Nop &&
+                 (Stmts[Next].Addr == 0 || Stmts[Next].Addr == InvalidVA))
+            ++Next;
+          return Next == Stmts.size();
+        };
+        // The address after Stmts[I]: its next statement's, past removed
+        // ones, or where the list falls.
+        const auto After = [&](size_t I) -> va_t {
+          for (size_t Next = I + 1; Next < Stmts.size(); ++Next)
+            if (Stmts[Next].Addr != 0 && Stmts[Next].Addr != InvalidVA)
+              return Stmts[Next].Addr;
+          return FallsTo;
+        };
         for (size_t I = 0; I < Stmts.size(); ++I) {
+          if (Stmts[I].Kind == StmtKind::Goto && FallsTo &&
+              Stmts[I].GotoTarget == FallsTo && Starts.unique(FallsTo) &&
+              EndsList(I))
+            continue;
           if (Stmts[I].Kind == StmtKind::Goto) {
             auto It = Tails.find(Stmts[I].GotoTarget);
             if (It != Tails.end() &&
@@ -1268,17 +1295,27 @@ bool duplicateSmallReturnTails(std::vector<HighStmt> &Body, bool PrintedSize,
             }
           }
           const TryContext Inner = bodyTryContext(Ctx, Stmts[I]);
-          Rewrite(Stmts[I].Body, Inner);
-          Rewrite(Stmts[I].ElseBody, Ctx);
+          const StmtKind K = Stmts[I].Kind;
+          const bool ExceptOnly =
+              K == StmtKind::SEHTry && !Stmts[I].EHClauses.empty() &&
+              llvm::all_of(Stmts[I].EHClauses, [](const HighEHClause &Clause) {
+                return Clause.Kind == HighEHClauseKind::SEHExcept;
+              });
+          const va_t Follow = K == StmtKind::If || K == StmtKind::IfElse ||
+                                      K == StmtKind::Block || ExceptOnly
+                                  ? After(I)
+                                  : 0;
+          Rewrite(Stmts[I].Body, Inner, Follow);
+          Rewrite(Stmts[I].ElseBody, Ctx, Follow);
           for (auto &C : Stmts[I].Cases)
-            Rewrite(C.Body, Ctx);
-          Rewrite(Stmts[I].DefaultBody, Ctx);
+            Rewrite(C.Body, Ctx, 0);
+          Rewrite(Stmts[I].DefaultBody, Ctx, 0);
           // A handler that jumps to a return tail returns as the copy does.
           for (auto &ClauseBody : Stmts[I].EHClauseBodies)
-            Rewrite(ClauseBody, Ctx);
+            Rewrite(ClauseBody, Ctx, ExceptOnly ? Follow : 0);
         }
       };
-  Rewrite(Body, TryContext());
+  Rewrite(Body, TryContext(), 0);
   return Changed;
 }
 

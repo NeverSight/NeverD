@@ -119,6 +119,13 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
   auto Validate = [&]() -> llvm::Error {
     if (Subtarget->checkFeatures("+gp64") != isMIPS64(Target))
       return Unsupported("GPR width disagrees with the ELF target");
+    if (Revision == 1 && !HistoricalISA && !isMIPS64(Target) &&
+        Subtarget->checkFeatures("+fp64"))
+      return Unsupported("MIPS32 Release 1 requires 32-bit floating registers");
+    if (Revision == 1 && !HistoricalISA &&
+        (Subtarget->checkFeatures("+abs2008") ||
+         Subtarget->checkFeatures("+use-indirect-jump-hazard")))
+      return Unsupported("function requires a later MIPS ISA release");
     if (Subtarget->checkFeatures("+msa,-fp64"))
       return Unsupported("MSA requires 64-bit floating registers");
     if (!isMIPSO32(Target) && (Subtarget->checkFeatures("+fpxx") ||
