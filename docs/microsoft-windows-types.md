@@ -323,9 +323,22 @@ cover display DDI exports in GDI32, display control in DCIMAN32 and Windows
 lockdown policy in WLDP. Each profile records the original system DLL hash
 for each architecture and the parameter counts from the pinned Microsoft
 Win32 metadata. The generator compares the original SDK and published C
-declarations with Clang. It checks empty C parameter lists against the metadata.
+declarations with Clang. It counts the fixed parameters in each source
+declaration before the target ABI lowers structures or inserts a return pointer.
+The standalone provider and the final combined header both undergo this check.
 These profiles apply to published export names. Import-by-ordinal resolution
 uses the separately witnessed mappings above.
+
+`scripts/MicrosoftSystemRuntimeSDKInputs.json` extends the same checks to
+named exports observed in Windows 10 x64, its x86 system libraries, and
+Windows 11 ARM64. It covers APIs such as `SwDeviceCreate` in CFGMGR32,
+`D3DPERF_EndEvent` in D3D9 and the print-router entries in SPOOLSS.
+Each target entry identifies the original DLL by its SHA-256. An architecture
+is included only where the system image and its target SDK declaration were
+both verified. The generated manifest records this input digest separately so
+archives can be checked against the provider groups used to create them.
+The expected source parameter counts come from Microsoft's pinned
+[Win32 metadata](https://github.com/microsoft/win32metadata).
 
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with
 `UNICODE`, including in declarations with an explicit `_W` name. An exact

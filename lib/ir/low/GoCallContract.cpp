@@ -241,16 +241,25 @@ bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
     unsigned Since = 0;
     bool operator==(const State &) const = default;
   };
-  enum : unsigned { Held, Result, Edge, AfterCall, Join, Merged };
+  enum : unsigned { Held, Result, Edge, AfterCall, Join, Merged, HeldAtJoin };
   std::map<std::tuple<unsigned, size_t, size_t, Key>, unsigned> Numbers;
+  std::vector<unsigned> NumberKinds;
   const auto Number = [&](unsigned Kind, size_t A, size_t B, Key K = {}) {
-    return Numbers.try_emplace({Kind, A, B, K}, Numbers.size()).first->second;
+    const auto [It, New] =
+        Numbers.try_emplace({Kind, A, B, K}, NumberKinds.size());
+    if (New)
+      NumberKinds.push_back(Kind);
+    return It->second;
+  };
+  const auto IsJoinOpaque = [&](unsigned Value) {
+    return NumberKinds[Value] == Merged || NumberKinds[Value] == HeldAtJoin;
   };
   const auto ValueOf = [&](const State &S, const NdVar &V) {
     const Key K{V.Space, V.Offset};
     if (const auto It = S.Known.find(K); It != S.Known.end())
       return It->second;
-    return Number(Held, S.Since, 0, K);
+    return Number(NumberKinds[S.Since] == Join ? HeldAtJoin : Held,
+                  S.Since, 0, K);
   };
   const uint64_t Word = getTargetRegInfo(Img.Arch).PointerSize;
   std::map<unsigned, unsigned> LoadedFrom;
@@ -358,8 +367,13 @@ bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
   if (Target.isConst())
     return false;
   const auto Loaded = LoadedFrom.find(ValueOf(*S, Target));
-  return Loaded != LoadedFrom.end() &&
-         Loaded->second != ValueOf(*S, NdVar::reg(*Context, Word));
+  if (Loaded == LoadedFrom.end())
+    return false;
+  const unsigned ContextValue = ValueOf(*S, NdVar::reg(*Context, Word));
+  // A fresh number for disagreeing inputs is not evidence that a closure
+  // descriptor and the context passed to the call differ on every path.
+  return !IsJoinOpaque(Loaded->second) && !IsJoinOpaque(ContextValue) &&
+         Loaded->second != ContextValue;
 }
 
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
