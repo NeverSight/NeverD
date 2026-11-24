@@ -435,6 +435,16 @@ struct TargetRegInfo {
     return integerArgumentLayout(Format == BinaryFormat::COFF);
   }
 
+  /// Integer carriers of a platform C declaration. On i386 cdecl and stdcall
+  /// put all parameters on the stack. Internal regparm and explicit register
+  /// conventions use their own bindings.
+  IntegerArgumentLayout sourceIntegerArgumentLayout(BinaryFormat Format) const {
+    auto Layout = integerArgumentLayout(Format);
+    if (TheArch == Arch::X86)
+      Layout.Registers = {};
+    return Layout;
+  }
+
   /// Map a register offset to a parameter index, or -1 if not a param reg.
   int regToArgIdx(uint64_t RegOff) const;
 

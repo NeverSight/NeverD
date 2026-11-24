@@ -4381,7 +4381,16 @@ void recoverCallAbi(
         StackPartOffsets.resize(
             std::min(StackPartOffsets.size(), StackPart.size()));
       }
-      if (!PositionalSlots) {
+      // A fixed positional call with a proved, full integer register prefix
+      // also has an unambiguous stack tail. Retain its observed byte offsets
+      // for source records passed after the Win64 home area.
+      const bool IntegerOnlyTail =
+          CI.ArgumentsFromPrototype && NoVectorArguments && !HeaderVariadic &&
+          !CI.ArgumentsInCalleeRegisterOrder && !HasResultPointer &&
+          Op.CalleeRegisterArgs == static_cast<int>(IntParamRegs.size()) &&
+          IntPart.size() == IntParamRegs.size() && FoundFP.empty() &&
+          !StackPart.empty();
+      if (!PositionalSlots || IntegerOnlyTail) {
         CI.IntegerRegisterArgCount = static_cast<int>(IntPart.size());
         CI.FloatingRegisterArgCount =
             static_cast<int>(std::min(FoundFP.size(), FPParamRegs.size()));

@@ -1,0 +1,310 @@
+{
+  "revision": "ae66c067ff3e9516fcc9cda09204bf72a9d57e56",
+  "tag": "v71.0.45-preview",
+  "files": [
+    {
+      "name": "LICENSE",
+      "file": "microsoft-win32metadata-LICENSE",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/LICENSE",
+      "sha256": "f77e90e19aa86612b0d6f3c8b25e0289590e73c841e2e6c80dad0072d3b2a69b"
+    },
+    {
+      "name": "calendarapis.h",
+      "file": "microsoft-win32metadata-calendarapis.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/calendarapis.h",
+      "sha256": "99c01f550346d8c45c5a74cce4c1ec0f2bfb230e3589336e22b6881061492bc9"
+    },
+    {
+      "name": "cryptcat.h",
+      "file": "microsoft-win32metadata-cryptcat.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/cryptcat.h",
+      "sha256": "bc6c737dd6f40da01f9f1940157bd2b255f0791c87398125dcfb01941f3392fb"
+    },
+    {
+      "name": "gchost.h",
+      "file": "microsoft-win32metadata-gchost.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/gchost.h",
+      "sha256": "41fa126e5c9c781b4473df68e5552e8f7bcbfb9ae23b1a145561efddb1322eac"
+    },
+    {
+      "name": "getprocesshandlefromhwnd.h",
+      "file": "microsoft-win32metadata-getprocesshandlefromhwnd.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/getprocesshandlefromhwnd.h",
+      "sha256": "d727edc1d9e256bf269f48cbf72a364091c846b54d2681b9b7b34005f08d6af6"
+    },
+    {
+      "name": "ivalidator.h",
+      "file": "microsoft-win32metadata-ivalidator.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/ivalidator.h",
+      "sha256": "264d3cd9d4bf4cb673d8cb9ac23a6b5f25e140a1f93698bec901057f88f11bdd"
+    },
+    {
+      "name": "ivehandler.h",
+      "file": "microsoft-win32metadata-ivehandler.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/ivehandler.h",
+      "sha256": "286c83a7926b792d708062c3040448f7c011b7b4b84bd4fbd078d8ba61707eea"
+    },
+    {
+      "name": "metahost.h",
+      "file": "microsoft-win32metadata-metahost.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/metahost.h",
+      "sha256": "0a1b1a6f98eab20c3439b3b68437c7a215594dd8af753fc55017855f18003af9"
+    },
+    {
+      "name": "mscoree.h",
+      "file": "microsoft-win32metadata-mscoree.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/mscoree.h",
+      "sha256": "6c4710c5cde0809360c0094f390c2c53e251c99486f3d35f26339af4590f284c"
+    },
+    {
+      "name": "mssign.h",
+      "file": "microsoft-win32metadata-mssign.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/mssign.h",
+      "sha256": "2b80a3e1c46952d939bc998303aeda8f6b698abe26c5b184e3d36923288b8e35"
+    },
+    {
+      "name": "winconp.h",
+      "file": "microsoft-win32metadata-winconp.h",
+      "url": "https://raw.githubusercontent.com/microsoft/win32metadata/ae66c067ff3e9516fcc9cda09204bf72a9d57e56/generation/WinSDK/AdditionalHeaders/winconp.h",
+      "sha256": "0831901f0f8d24eb36b3c70c8484e2f09d0c25b82407c55fe97f4355b0aedf94"
+    }
+  ],
+  "providers": {
+    "AccessibleWindowProcess": {
+      "module": "oleacc.dll",
+      "headers": [
+        "getprocesshandlefromhwnd"
+      ],
+      "exports": {
+        "GetProcessHandleFromHwnd": 1
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "6c87529c880ecd5ce5b88ce4c5590ece65b717b1a7ea9360062a585ec9a59111",
+          "additional_exports": {},
+          "import_library": "OleAcc.Lib"
+        },
+        "x64": {
+          "image_sha256": "eae80a9aaeaa3cf42a5fb81c2e188ee22b3da5a48a6be779d6d899c5adc85ee9",
+          "additional_exports": {},
+          "import_library": "OleAcc.Lib"
+        },
+        "arm64": {
+          "image_sha256": "6ab46f32ce301ae11a7accb9e3be81c2987460349a990e8a89bd9c9f211eb6a7",
+          "additional_exports": {},
+          "import_library": "OleAcc.Lib"
+        }
+      }
+    },
+    "CLRMetaHostExports": {
+      "module": "mscoree.dll",
+      "headers": [
+        "metahost"
+      ],
+      "exports": {
+        "CLRCreateInstance": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "57efa31b9f0116e46ab5e46c2e1764a79c507f751995db2e1c8727bdceb0c576",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "8828de042d008783ba5b31c82935a3ed38d5996927c3399b3e1fc6fe723fc84e",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "6a29186e7e3d0285fa313cb77b99fcfb7eba2b9c850976af664e7c861e3fef35",
+          "additional_exports": {}
+        }
+      }
+    },
+    "CLRShimExports": {
+      "module": "mscoree.dll",
+      "headers": [
+        "mscoree"
+      ],
+      "exports": {
+        "CallFunctionShim": 6,
+        "ClrCreateManagedInstance": 3,
+        "CorBindToCurrentRuntime": 4,
+        "CorBindToRuntime": 5,
+        "CorBindToRuntimeByCfg": 6,
+        "CorBindToRuntimeEx": 6,
+        "CorBindToRuntimeHost": 8,
+        "CorExitProcess": 1,
+        "CorMarkThreadInThreadPool": 0,
+        "CreateDebuggingInterfaceFromVersion": 3,
+        "GetCORRequiredVersion": 3,
+        "GetCORSystemDirectory": 3,
+        "GetCORVersion": 3,
+        "GetFileVersion": 4,
+        "GetRealProcAddress": 2,
+        "GetRequestedRuntimeInfo": 11,
+        "GetRequestedRuntimeVersion": 4,
+        "GetRequestedRuntimeVersionForCLSID": 5,
+        "GetVersionFromProcess": 4,
+        "LoadLibraryShim": 4,
+        "LoadStringRC": 4,
+        "LoadStringRCEx": 6,
+        "LockClrVersion": 3,
+        "RunDll32ShimW": 4
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "57efa31b9f0116e46ab5e46c2e1764a79c507f751995db2e1c8727bdceb0c576",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "8828de042d008783ba5b31c82935a3ed38d5996927c3399b3e1fc6fe723fc84e",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "6a29186e7e3d0285fa313cb77b99fcfb7eba2b9c850976af664e7c861e3fef35",
+          "additional_exports": {}
+        }
+      }
+    },
+    "CalendarExports": {
+      "module": "kernel32.dll",
+      "headers": [
+        "calendarapis"
+      ],
+      "exports": {
+        "AdjustCalendarDate": 3,
+        "ConvertCalDateTimeToSystemTime": 2,
+        "ConvertSystemTimeToCalDateTime": 3,
+        "GetCalendarDateFormatEx": 6,
+        "GetCalendarSupportedDateRange": 3,
+        "IsCalendarLeapYear": 3,
+        "UpdateCalendarDayOfWeek": 1
+      },
+      "targets": {
+        "x64": {
+          "image_sha256": "4636f65d449b1353100578c6cb139933cf2b134f5e246119d18968873a058bed",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "3b05fea371380c19022ca18c8ece9690057108954794038e9818f0dfeaf1cb46",
+          "additional_exports": {}
+        }
+      }
+    },
+    "CatalogDefinitionExports": {
+      "module": "wintrust.dll",
+      "headers": [
+        "cryptcat"
+      ],
+      "exports": {
+        "CryptCATCDFEnumAttributesWithCDFTag": 5,
+        "CryptCATCDFEnumMembersByCDFTagEx": 6
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "3be70167bcfe1b4868c7d977801ea9c7d9d4f5440a9e75e24fc33dd9a6bb4715",
+          "additional_exports": {},
+          "import_library": "WinTrust.Lib"
+        },
+        "x64": {
+          "image_sha256": "6f1abf056c68312dda14fe183494d8ab62a24be95bf45e3873ddabc563c04a07",
+          "additional_exports": {},
+          "import_library": "WinTrust.Lib"
+        },
+        "arm64": {
+          "image_sha256": "410d896ddade7d91962ed1e528f591ea955dbc45d8ea0fb7d1cd754b875567a3",
+          "additional_exports": {},
+          "import_library": "WinTrust.Lib"
+        }
+      }
+    },
+    "ConsolePrivateExports": {
+      "module": "kernel32.dll",
+      "headers": [
+        "winconp"
+      ],
+      "exports": {
+        "CloseConsoleHandle": 1,
+        "ConsoleMenuControl": 3,
+        "DuplicateConsoleHandle": 4,
+        "GetConsoleCharType": 3,
+        "GetConsoleCursorMode": 3,
+        "GetConsoleFontInfo": 4,
+        "GetConsoleHardwareState": 3,
+        "GetConsoleInputWaitHandle": 0,
+        "GetConsoleNlsMode": 2,
+        "GetNumberOfConsoleFonts": 0,
+        "InvalidateConsoleDIBits": 2,
+        "OpenConsoleW": 4,
+        "RegisterConsoleIME": 2,
+        "RegisterConsoleOS2": 1,
+        "RegisterConsoleVDM": 9,
+        "SetConsoleCursor": 2,
+        "SetConsoleCursorMode": 3,
+        "SetConsoleFont": 2,
+        "SetConsoleHardwareState": 3,
+        "SetConsoleIcon": 1,
+        "SetConsoleKeyShortcuts": 4,
+        "SetConsoleLocalEUDC": 4,
+        "SetConsoleMenuClose": 1,
+        "SetConsoleNlsMode": 2,
+        "SetConsoleOS2OemFormat": 1,
+        "ShowConsoleCursor": 2,
+        "UnregisterConsoleIME": 0,
+        "VDMConsoleOperation": 2,
+        "VerifyConsoleIoHandle": 1,
+        "WriteConsoleInputVDMA": 4,
+        "WriteConsoleInputVDMW": 4
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "d62d3ca4f677eb06ba81b1eba82f375c0c345f0e8f8097c92fc5e36e4d72294e",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "4636f65d449b1353100578c6cb139933cf2b134f5e246119d18968873a058bed",
+          "additional_exports": {
+            "SetConsolePalette": 3
+          }
+        },
+        "arm64": {
+          "image_sha256": "3b05fea371380c19022ca18c8ece9690057108954794038e9818f0dfeaf1cb46",
+          "additional_exports": {
+            "SetConsolePalette": 3
+          }
+        }
+      }
+    },
+    "SignerExports": {
+      "module": "mssign32.dll",
+      "headers": [
+        "mssign"
+      ],
+      "exports": {
+        "SignError": 0,
+        "SignerFreeSignerContext": 1,
+        "SignerSign": 7,
+        "SignerSignEx": 9,
+        "SignerSignEx2": 13,
+        "SignerSignEx3": 14,
+        "SignerTimeStamp": 4,
+        "SignerTimeStampEx": 6,
+        "SignerTimeStampEx2": 7,
+        "SignerTimeStampEx3": 10
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "3689d9c9bd5cd8c68a4fcfda3544df478e86e13bc5666d511d00bc4da424f607",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "d8632345802607314f5c4d1fd05c82181321b2a0ba7f355735f61be639ae6a64",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "04b59fc22a9f1dd748389713c4dea16e4aee49a1f1071ececbe52b8daea92c6d",
+          "additional_exports": {}
+        }
+      }
+    }
+  }
+}

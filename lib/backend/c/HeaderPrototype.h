@@ -26,12 +26,20 @@
 #include <set>
 
 namespace neverd::c_library {
+/// The outer convention of a qualified platform header declaration.
+inline llvm::StringRef headerConvention(const FunctionSym &Function, Arch A) {
+  return A == Arch::X86 && Function.CallConv == DebugCallConv::Stdcall
+             ? "__attribute__((stdcall)) "
+             : "";
+}
+
 /// Named value records may span consecutive integer argument positions.
 /// Keep the physical layout so both emitters validate every source byte.
 inline std::optional<libc::RecordCallArguments>
 standaloneIntegerRecord(const FunctionSym &Function,
                         const CEmitterOptions &Options) {
-  if (Options.TheArch != Arch::AArch64 ||
+  if ((Options.TheArch != Arch::X86 && Options.TheArch != Arch::X64 &&
+       Options.TheArch != Arch::AArch64) ||
       Options.Format != BinaryFormat::COFF || !Options.EmitIncludes ||
       !Options.RecordDefinitions || !Function.PrototypeFromHeader ||
       !Function.ParamEntryLocations.empty() || !Function.ReturnType ||

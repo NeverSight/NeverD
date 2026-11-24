@@ -5637,15 +5637,12 @@ std::string
 HighCWriter::debugExternPrototype(const FunctionSym &FS,
                                   const std::string &Identifier,
                                   llvm::StringRef ExternName) const {
+  const std::string HeaderPrefix =
+      "extern " + c_library::headerConvention(FS, Opts.TheArch).str();
   if (const auto Declaration =
           c_library::portableScalarDeclaration(FS, Identifier);
-      !Declaration.empty() && positionalDebugSignature(FS)) {
-    const std::string Convention =
-        Opts.TheArch == Arch::X86 && FS.CallConv == DebugCallConv::Stdcall
-            ? debugCallConvAttribute(FS.CallConv).str()
-            : "";
-    return "extern " + Convention + Declaration.str();
-  }
+      !Declaration.empty() && positionalDebugSignature(FS))
+    return HeaderPrefix + Declaration.str();
   if (const auto Floating =
           libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format, Dbg);
       (Floating &&
@@ -5665,7 +5662,7 @@ HighCWriter::debugExternPrototype(const FunctionSym &FS,
           Declare(Type, Name.empty() ? "arg" + std::to_string(I) : Name);
     }
     Signature += FS.Params.empty() ? "void)" : ")";
-    return "extern " + Declare(FS.ReturnType, Signature);
+    return HeaderPrefix + Declare(FS.ReturnType, Signature);
   }
   // A symbol the debug information names without a type returns what its
   // register holds, whole: a narrower type would drop the upper bytes of a

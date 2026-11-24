@@ -1108,6 +1108,115 @@ int main(void) { return (uint64_t)point_probe() != UINT64_C(0xfffffffe); }
   }
 }
 
+TEST(RecordCallContract, WindowsConsoleRecordAndTrailingPointerKeepTheirABI) {
+  const auto Linker = llvm::sys::findProgramByName("lld-link");
+  if (!Linker)
+    GTEST_SKIP() << "lld-link is required for the PE import fixture";
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  constexpr char Prototype[] =
+      "int __stdcall ReadConsoleOutputCharacterW(void *, unsigned short *, "
+      "unsigned long, struct _COORD, unsigned long *);\n";
+  for (bool X86 : {true, false}) {
+    const std::string Target = X86 ? "--target=i686-pc-windows-msvc"
+                                   : "--target=x86_64-pc-windows-msvc";
+    SCOPED_TRACE(Target);
+    llvm::SmallString<128> Directory;
+    ASSERT_FALSE(
+        llvm::sys::fs::createUniqueDirectory("neverd-console", Directory));
+    const auto Cleanup = llvm::make_scope_exit(
+        [&] { llvm::sys::fs::remove_directories(Directory); });
+    const auto Path = [&](llvm::StringRef Name) {
+      return (Directory + "/" + Name).str();
+    };
+    const auto Input = Path("input.c"), Object = Path("input.obj"),
+               DLL = Path("input.dll"), Def = Path("imports.def"),
+               Lib = Path("kernel32.lib"), Errors = Path("errors.txt");
+    write(Def, std::string("LIBRARY kernel32.dll\nEXPORTS\n") +
+                   (X86 ? "_ReadConsoleOutputCharacterW@20 EXPORTAS " : "") +
+                   "ReadConsoleOutputCharacterW\n");
+    write(Input, std::string("struct _COORD { short X, Y; };\n"
+                             "__declspec(dllimport) ") +
+                     Prototype + R"(
+__declspec(dllexport) int probe(void *h, unsigned short *buf, unsigned long n,
+                                struct _COORD pt, unsigned long *written) {
+  return ReadConsoleOutputCharacterW(h, buf, n, pt, written);
+}
+)");
+    const std::string Definition = "/def:" + Def, ImportLibrary = "/out:" + Lib,
+                      Product = "/out:" + DLL;
+    ASSERT_TRUE(execute(*Linker,
+                        {*Linker, "/lib", X86 ? "/machine:x86" : "/machine:x64",
+                         Definition, ImportLibrary},
+                        Errors));
+    ASSERT_TRUE(execute(Compiler,
+                        {Compiler, Target, "-O1", "-fno-optimize-sibling-calls",
+                         "-c", Input, "-o", Object},
+                        Errors));
+    ASSERT_TRUE(execute(
+        *Linker,
+        {*Linker, "/dll", "/noentry", "/nodefaultlib", Product, Object, Lib},
+        Errors));
+    auto Reader = Loader::create(DLL);
+    ASSERT_TRUE(bool(Reader));
+    auto Loaded = Reader->load(DLL);
+    ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+    const auto Header = X86 ? types::HeaderLibrary::WindowsUserX86
+                            : types::HeaderLibrary::WindowsUserX64;
+    const auto *Library = types::headerLibrary(Header);
+    ASSERT_NE(Library, nullptr);
+    auto Types = std::make_shared<types::TypeLibrary>(Library->dataModel());
+    Types->setRecordABI(Library->recordABI());
+    types::mergeHeaderTypes(*Types, *Library);
+    EmptyDebug Empty;
+    sdk::LocalTypesDebugContext Debug(Empty, Types, {}, &*Loaded, {Header});
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(LLVM ? "LLVM-C" : "HighC");
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = Options.SourceProjection = LLVM;
+      for (const auto &Symbol : Loaded->Exports)
+        if (Symbol.Name == "probe")
+          Options.OnlyFunctionEntries.insert(Symbol.Addr);
+      ASSERT_EQ(Options.OnlyFunctionEntries.size(), 1u);
+      auto Result = Pipeline().run(*Loaded, Context, Options, &Debug);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      CEmitterOptions COptions;
+      COptions.TheArch = Loaded->Arch;
+      COptions.Format = Loaded->Format;
+      COptions.Image = &*Loaded;
+      COptions.RecordDefinitions = [&](const std::vector<TypeRef> &Records) {
+        return Debug.definitions(Records);
+      };
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions,
+                                        &Debug, &*Loaded));
+      } else {
+        ASSERT_TRUE(
+            HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
+      }
+      // The compiler checks the record, the pointer that follows it and the
+      // outer calling convention against the independent declaration.
+      const auto Generated = Path("result.c");
+      const auto Rebuilt = "/out:" + Path("result.dll");
+      write(Generated, Source + "\n" + Prototype);
+      ASSERT_TRUE(
+          execute(Compiler,
+                  {Compiler, Target, "-O2", "-Werror=ignored-attributes", "-c",
+                   Generated, "-o", Object},
+                  Errors))
+          << Source;
+      ASSERT_TRUE(execute(
+          *Linker,
+          {*Linker, "/dll", "/noentry", "/nodefaultlib", Rebuilt, Object, Lib},
+          Errors));
+    }
+  }
+}
+
 TEST(RecordCallContract, ARM64RecordPairKeepsBothWordsAndItsLocatedStackTail) {
   constexpr uint64_t Words[] = {
       0x89abcdef01234567ULL, 0xfedcba9876543210ULL, 3, 4, 5, 6, 7, 8, 9};

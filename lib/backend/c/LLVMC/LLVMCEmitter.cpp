@@ -2710,9 +2710,7 @@ std::string LLVMCWriter::sourceImportDeclaration(const FunctionSym &Function,
     Params += Params.empty() ? "..." : ", ...";
   NotePointers(Function.ReturnType);
   const std::string Convention =
-      Opts.TheArch == Arch::X86 && Function.CallConv == DebugCallConv::Stdcall
-          ? "__attribute__((stdcall)) "
-          : "";
+      c_library::headerConvention(Function, Opts.TheArch).str();
   if (const auto Declaration =
           c_library::portableScalarDeclaration(Function, Name);
       !Declaration.empty())

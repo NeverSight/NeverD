@@ -116,6 +116,40 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                 for name in names})
             self.assertEqual(packaged, manifest)
 
+    def test_additional_metadata_preserves_catalog_input_and_i386_calling_convention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            cache = directory / "cache"
+            licenses = directory / "licenses"
+            cache.mkdir()
+            licenses.mkdir()
+            raw = "unsigned int\u00a0Catalog(void);\n".encode()
+            records = []
+            for name, data in (("cryptcat.h", raw), ("LICENSE", b"source notice")):
+                path = cache / ("metadata-" + name)
+                path.write_bytes(data)
+                records.append({"file": path.name, "name": name, "url": "unused",
+                                "sha256": hashlib.sha256(data).hexdigest()})
+            with patch.object(windows.flat, "METADATA_HEADERS", {"files": records}):
+                windows.flat.metadata_headers(directory, cache, licenses)
+            include = directory / "win32-metadata-headers"
+            self.assertEqual((include / "cryptcat.h").read_bytes(), raw)
+            self.assertEqual((include / "cryptcat-c.h").read_bytes(), b"unsigned int Catalog(void);\n")
+            self.assertEqual((licenses / "Microsoft-Win32Metadata-LICENSE.txt").read_bytes(),
+                             b"source notice")
+            (directory / "sdk-import-sources").mkdir()
+            projected, original = windows.flat.metadata_header_source(
+                directory, "CatalogDefinitionExports", {"headers": ["cryptcat"]})
+            self.assertIn("cryptcat-c.h", projected.read_text())
+            self.assertIn("cryptcat.h", original.read_text())
+
+        groups = windows.flat.METADATA_HEADERS["providers"]
+        self.assertNotIn("x86", groups["CalendarExports"]["targets"])
+        console = groups["ConsolePrivateExports"]
+        self.assertNotIn("SetConsolePalette", console["exports"])
+        self.assertNotIn("SetConsolePalette", console["targets"]["x86"]["additional_exports"])
+        self.assertEqual(console["targets"]["arm64"]["additional_exports"]["SetConsolePalette"], 3)
+
     def test_named_runtime_profiles_preserve_target_exports_and_parameter_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             def exports(arch):
