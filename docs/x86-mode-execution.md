@@ -429,6 +429,20 @@ LLVM-to-C produced the same VMRUN C hashes as the full matrix above. The
 also passed with only the three declared POSIX-x64 x87 hardware skips on
 other platforms.
 
+At `a02363b36b`, both SDKs repeated the full matrix: 243/243 mode execution,
+853/855 paging with the same two LA57-only skips, 48/48 alternate-core mode
+execution, 4/4 alternate-core paging, 253/253 generated-C source and 4/4 Python
+SDK checks. Each also passed 73 return-contract, 81 pipeline-outcome, 122 x64
+continuation-export, 27 selected mode/SMM/SGX/event software and 22 x86
+decoder checks. The portable x64 NeverC compiler emitted native virtualization,
+SMM and SGX intrinsic instructions and completed 200 more VMRUN contexts;
+the HighC/LLVM-to-C source and tagged guest-image hashes match the hosted AMD
+KVM fixture. The [current evidence](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+binds the exact source, binary and report hashes. Capstone `75dded738b` passed
+the [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45342565427):
+132/132 on Linux and 131/132 on each other platform, with only the declared
+POSIX-x64 x87 hardware skip.
+
 ## Earlier qualification records
 
 The November 11 regression stream performs protected32 → compatibility32 → code64 →

@@ -70,6 +70,12 @@ routes, and the portable NeverC/r7 backend reproduces the tagged-input hosted
 native object and guest-image hashes. The [evidence record](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
 retains the new report and source digests.
 
+The later `a02363b36b` merge still exports the same HighC and LLVM-to-C bytes.
+The current portable x64 NeverC and r7 backend repeated 200 returning VMRUN
+contexts and reproduced all four tagged-input hosted object and guest-image
+hashes. Its local decoder, mode, generated-C and continuation regressions are
+recorded in the [merged-source qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json).
+
 These results establish the tested nested KVM profile. The generated path
 preserves the full RAX value and emits the original address-size prefix; the
 CPU environment selects the VMCB address or raises the observed exception.

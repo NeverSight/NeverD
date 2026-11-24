@@ -6,7 +6,7 @@
   "fixture_manifest_sha256": "4a8863177c8b90fd897d9cc3a21759a52b5d662d755ebcc477aabe7125609e7b",
   "compiler_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
   "neverd_fixture_export_commit": "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
-  "current_neverd_export_commit": "d7c5338cf5c65149570a113ad383e249401db5e2",
+  "current_neverd_export_commit": "a02363b36b289a54c2b3546649ab93ca593a80df",
   "matching_neverd_export_commits": [
     "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
     "6f81b8559bac0dd326d9426269b5b7d48c03b343",
@@ -16,7 +16,9 @@
     "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
     "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
     "074c7618f6d1da49ba043445b336bb3beefe9d3f",
-    "d7c5338cf5c65149570a113ad383e249401db5e2"
+    "d7c5338cf5c65149570a113ad383e249401db5e2",
+    "0d5a4ee1df986128fce8ee42a98d27cc4f280f47",
+    "a02363b36b289a54c2b3546649ab93ca593a80df"
   ],
   "current_neverd_export_sha256": {
     "high": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
@@ -576,5 +578,17 @@
     "qemu_tcg_original_tagged_rax_returned": true,
     "hosted_nested_kvm_original_tagged_rax_gp": true,
     "inference": "The v6.18 KVM handler reads full saved RAX as GPA without an address-size mask; this explains the hosted fault profile but the runner host-kernel revision was not captured."
+  },
+  "latest_repeat": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45334702918",
+    "workflow_commit": "d6e2a9109b02352c4a3267674e8206f8c261bd4e",
+    "amd_cpu": "AMD EPYC 9V45 96-Core Processor",
+    "amd_report_sha256": "57e1e18603154d1e17a06d43a3babc77e816374f2fd35eb3b2ba170e4f0217e1",
+    "mapped_returns": 6,
+    "tagged_gp0": 6,
+    "generated_contexts": 200,
+    "other_cpu": "Intel(R) Xeon(R) 6975P-C",
+    "other_status": "unavailable",
+    "other_report_sha256": "c6c176716ab6ac1028232f3e06b1de10be4af9764a443423c1fc962a34f37d3b"
   }
 }

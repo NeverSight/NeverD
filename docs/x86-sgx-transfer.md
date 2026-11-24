@@ -146,9 +146,13 @@ revision and artifact hash are retained in the
 The [merged-source repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45334574616)
 again found SGX1 false, zero EPC sections and zero native enclave instruction
 executions on all three designated runners. The Linux native selftest recorded
-zero available cases. These are capability results, not enclave execution
-passes; the current software-mode result is recorded separately in the linked
-qualification after its job completes.
+zero available cases. Its freshly built x64 NeverC compiler passed the target
+audit and all 27 selected software mode/SMM/SGX/event cases at NeverD
+`0d5a4ee1df`; the compiler artifact hash matches the CI receipt. The later
+`a02363b36b` source passed the same 27 software cases on both local SDKs.
+These are software and capability results, not native enclave execution passes.
+The [qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json) retains
+the runner, compiler and test-report digests separately.
 
 Architectural ownership follows Intel SDM revision 090, ENCLU/EENTER/ERESUME/
 EEXIT and enclave entry/exit chapters, available from the

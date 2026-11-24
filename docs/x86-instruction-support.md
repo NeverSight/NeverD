@@ -44,6 +44,13 @@ Windows clang-cl; each non-Linux job explicitly skipped the POSIX x64 x87
 hardware case. At integrated `106f1921bf`, NeverD's same three local decoder
 suites passed 7/7, 6/6 and 9/9, and its VMRUN C export retained both hosted
 source hashes.
+The `a02363b36b` integration adopts Capstone `75dded738b11353eb9aa5fa07b249f4acabfc33f`,
+which corrects masked scalar vector-move access metadata. Its
+[four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45342565427)
+passed 132/132 on Linux and 131/132 on macOS arm64 and both Windows compilers;
+the one explicit skip on each of those platforms requires POSIX x64 x87
+hardware. Both local SDKs passed the three NeverD x86 decoder suites
+(7/7, 6/6, 9/9) at this exact pin.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 
@@ -67,6 +74,21 @@ also passed 73, 81 and 122 cases per SDK after the temporary relink race was
 removed. The current HighC and LLVM-to-C VMRUN source bytes match the hosted
 KVM fixtures, and [the AMD repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45334702918)
 passed all twelve original/generated O0/O2 guest images on its SVM runner.
+
+At integrated `a02363b36b`, each SDK repeated the same complete execution,
+paging, alternate-core, generated-C and SDK matrix with exactly the same two
+LA57 hardware skips. Return-contract, pipeline-outcome and x64 continuation
+suites passed 73/73, 81/81 and 122/122 per SDK. The local 27-case
+mode/SMM/SGX/event subset passed on both SDKs; the
+[hosted software run](https://github.com/gmh5225/test_mac_intel/actions/runs/45334574616)
+passed 27/27 at its declared `0d5a4ee1df` source with a freshly built x64
+NeverC compiler. The current compiler emitted native VMREAD, VMWRITE, VMRUN,
+ENCLU, XRSTOR64 and RSM instructions, rejected i386/i686/x32 source targets,
+and completed 200 QEMU TCG returning VMRUN contexts. The current HighC and
+LLVM-to-C C sources and all four tagged-input object/guest-image hashes match
+the [hosted AMD KVM comparison](evidence/x86-vmrun-hosted-kvm-2026-11-21.json).
+Native SGX remains unavailable on all three designated runners, so these
+results do not authorize a new LLVM release or production pin.
 
 ## Support is a pipeline property
 
