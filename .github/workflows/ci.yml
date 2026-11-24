@@ -303,8 +303,16 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          # Keep and remove only the downloads made by this step, not
+          # installed toolchains or any pre-existing Homebrew cache.
+          brew_cache="$(mktemp -d "${RUNNER_TEMP:?}/neverd-brew-cache.XXXXXXXX")"
+          export HOMEBREW_CACHE="$brew_cache"
+          trap 'rm -rf -- "$brew_cache"' EXIT
           brew install cmake lld ninja llvm@22
-          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          lld_prefix="$(brew --prefix lld)"
+          printf '%s/bin\n' "$lld_prefix" >> "$GITHUB_PATH"
+          echo "Disposable Homebrew cache (KiB):"
+          du -sk "$brew_cache" || :
 
       - name: Prepare current hosted account KVM access
         if: runner.os == 'Linux'
@@ -468,6 +476,13 @@ jobs:
           CXX: ${{ matrix.cxx }}
           PYTHON: ${{ matrix.python }}
 
+      - name: Report macOS disk capacity before build
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-/tmp}" || :
+          df -ik "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-/tmp}" || :
+
       - name: Build default targets
         id: default_build
         shell: bash
@@ -478,6 +493,19 @@ jobs:
           cmake -E touch build-ci/.neverd-capability-build-complete
         env:
           BUILD_PARALLEL: ${{ matrix.parallel }}
+
+      - name: Report macOS disk capacity after build
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.default_build.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-/tmp}" || :
+          df -ik "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "${TMPDIR:-/tmp}" || :
+          for path in build-ci build-ci/bin build-ci/third_party/llvm-project \
+            build-ci/.neverd-deps third_party/llvm-project .git/modules/third_party/llvm-project; do
+            if [ -d "$path" ]; then
+              du -sk "$path" || :
+            fi
+          done
 
       - name: Generate native source dialect corpus
         if: ${{ !cancelled() && steps.default_build.outcome == 'success' }}
