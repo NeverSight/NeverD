@@ -2178,12 +2178,12 @@ def check_semantics(expressions, results, width):
                         return value.value & ((1 << bits.value) - 1), bits.value
                     if isinstance(value, ast.Name) and value.id in values:
                         return values[value.id] & ((1 << bits.value) - 1), bits.value
-            if name == "ashr" and len(node.args) == 2:
+            if name in ("ashr", "lshr") and len(node.args) == 2:
                 value, bits = evaluated[node.args[0]]
-                count = min(evaluated[node.args[1]][0], bits - 1)
-                if value & (1 << (bits - 1)):
+                count = evaluated[node.args[1]][0]
+                if name == "ashr" and value & (1 << (bits - 1)):
                     value -= 1 << bits
-                return (value >> count) & ((1 << bits) - 1), bits
+                return (value >> min(count, bits)) & ((1 << bits) - 1), bits
             if name in ("rol", "ror") and len(node.args) == 2:
                 value, bits = evaluated[node.args[0]]
                 count = evaluated[node.args[1]][0] % bits
@@ -2229,7 +2229,7 @@ def check_semantics(expressions, results, width):
             elif isinstance(current, ast.UnaryOp):
                 pending.append((current.operand, False))
             elif (isinstance(current, ast.Call) and isinstance(current.func, ast.Name)
-                  and current.func.id in ("concat", "rol", "ror", "ashr")):
+                  and current.func.id in ("concat", "rol", "ror", "ashr", "lshr")):
                 pending.extend((arg, False) for arg in reversed(current.args))
             elif (isinstance(current, ast.Call)
                   and isinstance(current.func, ast.Name)
@@ -2249,7 +2249,7 @@ def check_semantics(expressions, results, width):
     names = sorted({
         node.id for expression in [*expressions, *(r["output"] for r in results)]
         for node in ast.walk(parse(expression))
-        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror", "ashr")
+        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror", "ashr", "lshr")
     })
     assignments = [
         {name: (x if index % 2 == 0 else y)
