@@ -54,6 +54,8 @@ public:
   }
   LowInstructionTargetMode controlTargetMode(const cs_insn &Instruction) const;
   bool isReturn(const cs_insn &Instruction) const;
+  /// Qualify a physical R1 word and resolve its backward-compatible hints.
+  std::optional<uint32_t> classicReleaseOneEncoding(uint32_t Word) const;
   bool isAlignmentNop(const cs_insn &Instruction) const;
   bool isFunctionTerminator(const cs_insn &Instruction) const;
   va_t directCallTarget(const cs_insn &Instruction) const;

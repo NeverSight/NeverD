@@ -81,18 +81,71 @@ historicalEncodingAvailable(Arch Target, unsigned Revision, unsigned Level,
 }
 } // namespace
 
+/// MIPS32/64 Volume II-A, appendix A. The classic integer and COP1 encodings
+/// shared with the earlier ISA retain their existing operand checks.
+LLVM_ATTRIBUTE_NOINLINE std::optional<uint32_t>
+MIPSLifter::classicReleaseOneEncoding(uint32_t Word) const {
+  const bool Wide = RegisterBytes == 8;
+  const unsigned Op = Word >> 26, RS = Word >> 21 & 31, Fn = Word & 63;
+  if (Word == 0xc0)
+    return 0x40; // EHB executes as SSNOP on Release 1.
+  if (Word == 0x140)
+    return 0; // PAUSE executes as a NOP on a core without the instruction.
+  if (!Wide && mips::historicalDoublewordGPRInstruction(Word))
+    return std::nullopt;
+  if (!Op && (Fn == 8 || Fn == 9) && (Word & 0x7c0))
+    return std::nullopt; // Release 1 defines only the zero JR/JALR hint.
+  if (Op == 16) {
+    // Base CP0 moves and privileged CO operations. Shadow GPR and interrupt
+    // enable/disable transfers have different selectors, introduced in R2.
+    if (RS == 0 || RS == 4 || (Wide && (RS == 1 || RS == 5)))
+      return Word;
+    if (Word == 0x42000001 || Word == 0x42000002 || Word == 0x42000006 ||
+        Word == 0x42000008 || Word == 0x42000018 || Word == 0x4200001f ||
+        (Word & 0xffe0003f) == 0x42000020)
+      return Word; // TLBR/WI/WR/P, ERET, DERET, WAIT.
+    return std::nullopt;
+  }
+  if (Op == 28) { // SPECIAL2 adds multiply/accumulate and count leading bits.
+    if (Fn == 0 || Fn == 1 || Fn == 2 || Fn == 4 || Fn == 5 || Fn == 32 ||
+        Fn == 33 || (Wide && (Fn == 36 || Fn == 37)) || Fn == 63)
+      return Word;
+    return std::nullopt;
+  }
+  if (Op == 47) // CACHE
+    return Word;
+  if (!Wide) {
+    // COP1X, long conversions, paired-single and reciprocal operations
+    // require MIPS64 on Release 1. MIPS32 has a 32-bit FPR file.
+    if (Op == 19 ||
+        (Op == 17 && (RS == 21 || RS == 22 ||
+                      (RS >= 16 && ((Fn >= 8 && Fn <= 11) || Fn == 21 ||
+                                    Fn == 22 || Fn == 37 || Fn == 38)))))
+      return std::nullopt;
+  }
+  if (mips::historicalInstructionAvailable(Word, 5))
+    return Word;
+  return std::nullopt;
+}
+
 LLVM_ATTRIBUTE_ALWAYS_INLINE std::optional<MIPSLifter::Encoding>
 MIPSLifter::encoding(const cs_insn &Instruction) const {
   if (Mode == InstructionMode::MicroMIPS)
     return HistoricalISA ? std::nullopt : microEncoding(Instruction);
   if (Mode == InstructionMode::MIPS16)
     return HistoricalISA ? std::nullopt : mips16Encoding(Instruction);
-  const uint32_t Word = word(Instruction);
+  uint32_t Word = word(Instruction);
   // Classify the immutable profile once at construction; the common r2 path
   // uses one load/comparison without admitting contradictory historical data.
   if (EncodingProfile != 2) {
     if (EncodingProfile == 6)
       return release6Encoding(Word);
+    if (EncodingProfile == 1) {
+      const auto Canonical = classicReleaseOneEncoding(Word);
+      if (!Canonical)
+        return std::nullopt;
+      Word = *Canonical;
+    }
     if (HistoricalISA &&
         !historicalEncodingAvailable(Target, ISARevision, HistoricalISA, Word,
                                      FP32Registers))

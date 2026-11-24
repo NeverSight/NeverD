@@ -420,6 +420,49 @@ TEST_P(MIPSLoader, DSPCapabilityUsesWidthAndEncodingEvidence) {
   }
 }
 
+TEST_P(MIPSLoader, ClassicReleaseIsEstablishedByHeaderAndABIRecord) {
+  ELFLoader Loader;
+  for (bool N32 : {false, true}) {
+    ELFBytes File(GetParam());
+    if (N32 && File.Is64)
+      continue;
+    const bool Wide = File.Is64 || N32;
+    const uint32_t ABI = N32 ? 0x20u : File.Is64 ? 0u : 0x1000u;
+    for (bool First : {false, true}) {
+      const uint32_t Flags = (Wide ? (First ? 6u : 8u) : (First ? 5u : 7u))
+                             << 28;
+      auto Input = File;
+      Input.put(Input.Is64 ? 48 : 36, Flags | ABI, 4);
+      auto HeaderOnly = Loader.loadBuffer(Input.buffer());
+      ASSERT_TRUE(bool(HeaderOnly)) << llvm::toString(HeaderOnly.takeError());
+      EXPECT_EQ(HeaderOnly->MIPS->ISARevision, First ? 1 : 2);
+      Input.abiFlags();
+      Input.Bytes[0xe2] = Wide ? 64 : 32;
+      Input.Bytes[0xe4] = Wide ? 2 : 1;
+      for (unsigned Revision : {0u, 1u, 2u, 3u, 4u, 5u, 6u}) {
+        SCOPED_TRACE(Revision);
+        Input.Bytes[0xe3] = Revision;
+        const bool Match =
+            First ? Revision == 1
+                  : Revision == 2 || Revision == 3 || Revision == 5;
+        auto Image = Loader.loadBuffer(Input.buffer());
+        std::vector<LoadCandidate> Rows;
+        ELFLoader::identify(Input.buffer(), Rows);
+        ASSERT_EQ(Rows.size(), 1u);
+        EXPECT_EQ(Rows.front().Loadable, Match);
+        ASSERT_EQ(bool(Image), Match);
+        if (Match) {
+          EXPECT_EQ(Image->MIPS->ISARevision, Revision);
+          EXPECT_EQ(Image->MIPS->HistoricalISA, 0);
+          EXPECT_EQ(isMIPS64(Image->Arch), Wide);
+        } else {
+          llvm::consumeError(Image.takeError());
+        }
+      }
+    }
+  }
+}
+
 TEST_P(MIPSLoader, MSARequiresRevisionFiveAndFP64VectorEvidence) {
   for (unsigned Variant = 0; Variant != 7; ++Variant) {
     ELFBytes File(GetParam());

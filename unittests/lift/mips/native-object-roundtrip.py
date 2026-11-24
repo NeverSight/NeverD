@@ -39,7 +39,26 @@ def lift_object(api, work):
         api.call("neverd_session_destroy", session)
 
 
-def execute_profile(api, work, abi, little, mode):
+def decompile_entry(api, work):
+    session = api.call("neverd_session_create")
+    if not session:
+        raise RuntimeError("cannot open NeverD session")
+    try:
+        if not api.call("neverd_session_load", session, os.fsencode(work / "input.elf")):
+            raise RuntimeError(api.owned_string("neverd_last_error", session))
+        entry = api.call("neverd_session_entry_addr", session)
+        sources = {}
+        for name, method in (("high_c", "neverd_decompile"), ("llvm_c", "neverd_decompile_llvm")):
+            source = api.owned_string(method, session, entry)
+            if not source:
+                raise RuntimeError(f"{name}: {api.owned_string('neverd_last_error', session)}")
+            sources[name] = source
+        return sources
+    finally:
+        api.call("neverd_session_destroy", session)
+
+
+def execute_profile(api, work, abi, little, mode, clang=None):
     wide = abi != "o32"
     suffix = "el" if little else ""
     prefix = f"mips{'64' if wide else ''}{suffix}-linux-gnu{'abi64' if wide else ''}-"
@@ -51,6 +70,10 @@ def execute_profile(api, work, abi, little, mode):
     elif mode in ("mips1", "mips2", "mips3", "mips4", "mips5"):
         isa = mode
         float_flags = ["-mhard-float"]
+    elif mode in ("r1", "r3", "r5"):
+        isa = ("mips64" if wide else "mips32") + ("" if mode == "r1" else mode)
+        if mode == "r1":
+            cpu = "5Kc" if wide else "4Kc"
     elif mode == "r6":
         cpu = "I6400" if wide else "mips32r6-generic"
         isa = "mips64r6" if wide else "mips32r6"
@@ -74,7 +97,7 @@ def execute_profile(api, work, abi, little, mode):
         body = "addiu $2,$4,7\n jrc $31"
     if mode == "mips16":
         body = "li $2,37\n jrc $31"
-    if wide and mode in ("mips3", "mips4", "mips5"):
+    if wide and mode in ("mips3", "mips4", "mips5", "r1", "r3", "r5"):
         # Check both words of the n32/n64 result on a compatible 64-bit CPU.
         body = "dsrl32 $3,$4,0\n jr $31\n daddu $2,$3,$4"
         argument = "ori $4,$0,7\n dsll32 $4,$4,0\n ori $4,$4,30"
@@ -103,7 +126,26 @@ leaf:
         raise RuntimeError(f"{abi}/{mode}: {diagnostic}")
     else:
         variants.append(("rebuilt", entry))
+        if mode in ("r1", "r3", "r5"):
+            # e_flags alone cannot distinguish R3 and R5 from R2.
+            expected_isa = ("MIPS64" if wide else "MIPS32") + ("" if mode == "r1" else mode)
+            for filename in ("input.elf", "rebuilt.o"):
+                attrs = subprocess.check_output(
+                    [prefix + "readelf", "-A", filename], cwd=work,
+                    env={**os.environ, "LC_ALL": "C"}, text=True, timeout=30,
+                )
+                if f"ISA: {expected_isa}" not in attrs.splitlines():
+                    raise ValueError(f"{abi}/{mode}: wrong ISA in {filename}\n{attrs}")
+    if clang and mode in ("classic", "r1", "r3", "r5"):
+        clang_abi = {"o32": "32", "n32": "n32", "n64": "64"}[abi]
+        for name, source in decompile_entry(api, work).items():
+            (work / f"{name}.c").write_text(source)
+            run([clang, "--target=" + prefix.rstrip("-"), "-march=" + isa,
+                 "-mabi=" + clang_abi, "-msoft-float", "-mno-abicalls", "-fno-pic",
+                 "-ffreestanding", "-std=gnu11", "-O2", "-c", f"{name}.c", "-o", f"{name}.o"])
+            variants.append((name, "leaf"))
     exit_syscall = {"o32": 4001, "n32": 6058, "n64": 5058}[abi]
+    outcomes = {}
     for variant, symbol in variants:
         (work / "start.s").write_text(f""".set noreorder
 .option pic0
@@ -131,9 +173,10 @@ failed:
         result = subprocess.run([emulator, "-cpu", cpu, "program.elf"], cwd=work, timeout=10)
         if result.returncode != 37:
             raise RuntimeError(f"{abi} {suffix or 'be'} {mode} {variant}: exit {result.returncode}")
-    row = dict(abi=abi, endian="little" if little else "big", mode=mode, cpu=cpu, original=37)
+        outcomes[variant] = result.returncode
+    row = dict(abi=abi, endian="little" if little else "big", mode=mode, cpu=cpu, **outcomes)
     if entry:
-        row.update(entry=entry, object_sha256=digest, rebuilt=37)
+        row.update(entry=entry, object_sha256=digest)
     else:
         row["diagnostic"] = diagnostic
     return row
@@ -142,19 +185,20 @@ failed:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", type=Path, required=True)
+    parser.add_argument("--clang", help="cross-compile and execute both C views of classic R1/R2/R3/R5")
     parser.add_argument("--output", type=Path, required=True, help="JSON result file")
     args = parser.parse_args()
     api = HostAPI(ctypes.CDLL(str(args.sdk.resolve())))
     rows = []
     for abi in ("o32", "n32", "n64"):
         if abi == "o32":
-            modes = ("classic", "micromips", "mips16", "mips1", "mips2", "r6")
+            modes = ("classic", "micromips", "mips16", "mips1", "mips2", "r1", "r3", "r5", "r6")
         else:
-            modes = ("classic", "mips3", "mips4", "mips5", "r6")
+            modes = ("classic", "mips3", "mips4", "mips5", "r1", "r3", "r5", "r6")
         for little in (False, True):
             for mode in modes:
                 with tempfile.TemporaryDirectory(prefix="neverd-mips-native-") as directory:
-                    rows.append(execute_profile(api, Path(directory), abi, little, mode))
+                    rows.append(execute_profile(api, Path(directory), abi, little, mode, args.clang))
     args.output.write_text(json.dumps(rows, indent=2) + "\n")
     rebuilt = sum("rebuilt" in row for row in rows)
     print(f"{len(rows)} GNU originals, {rebuilt} SDK objects and "

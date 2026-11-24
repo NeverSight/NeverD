@@ -106,16 +106,17 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   const uint32_t ISA = Flags & EF_MIPS_ARCH;
   const unsigned Historical = ISA <= EF_MIPS_ARCH_5 ? (ISA >> 28) + 1 : 0;
   const bool HistoricalO32 = !Wide && Historical == 3;
+  const bool R1 = ISA == (Wide ? EF_MIPS_ARCH_64 : EF_MIPS_ARCH_32);
   const bool R6 = ISA == (Wide ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
   if (Historical &&
       ((!HistoricalO32 && Wide != (Historical >= 3)) ||
        (Flags & (EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16 | EF_MIPS_NAN2008))))
     return profileError(
         "historical ISA requires classic MIPS I-III o32 or III-V n32/n64");
-  if (!Historical && !R6 &&
+  if (!Historical && !R1 && !R6 &&
       ISA != (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
     return profileError(
-        "requires matching ELF class and MIPS32/MIPS64 r2 or r6");
+        "requires matching ELF class and MIPS32/MIPS64 release flags");
   if ((Flags & EF_MIPS_ABI) != (Wide ? 0u : EF_MIPS_ABI_O32) ||
       (!HistoricalO32 && (Flags & EF_MIPS_32BITMODE)))
     return profileError("requires ELF32/o32, ELF32/n32 or ELF64/n64 ABI");
@@ -129,11 +130,15 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   MIPSImageMetadata Profile;
   Profile.ABI = N32 ? MIPSABI::N32 : Wide ? MIPSABI::N64 : MIPSABI::O32;
   Profile.ELFFlags = Flags;
-  Profile.ISARevision = Historical ? 0 : R6 ? 6 : 2;
+  Profile.ISARevision = Historical ? 0 : R1 ? 1 : R6 ? 6 : 2;
   Profile.HistoricalISA = Historical;
   Profile.HasMicroMIPS = Flags & EF_MIPS_MICROMIPS;
   Profile.HasMIPS16 = Flags & EF_MIPS_ARCH_ASE_M16;
   const bool Compressed = Profile.HasMicroMIPS || Profile.HasMIPS16;
+  if (R1 && (Compressed || (Flags & EF_MIPS_NAN2008)))
+    return profileError("Release 1 requires classic encoding and legacy NaNs");
+  if (R1 && !Wide && (Flags & EF_MIPS_FP64))
+    return profileError("MIPS32 Release 1 requires 32-bit floating registers");
   if (R6 && Profile.HasMIPS16)
     return profileError("Release 6 compressed profile is unsupported");
   const auto CompressedMode =
@@ -306,6 +311,10 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     if (llvm::support::endian::read16<ELFT::Endianness>(Bytes.data()) != 0)
       return profileError("unsupported .MIPS.abiflags version");
     const uint32_t ASE = Read32(12);
+    if (R1 && (ASE || (!Wide && (Bytes[5] > 1 || Bytes[7] == 4 ||
+                                 Bytes[7] == 6 || Bytes[7] == 7))))
+      return profileError(
+          "unsupported Release 1 extension or FP register width");
     if (Historical && ASE)
       return profileError(
           "historical ISA does not admit release-based extensions");
@@ -334,13 +343,15 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
         (R6 || Bytes[5] != 1 || (Flags & EF_MIPS_FP64)))
       return profileError(
           "FP32 hard-float ABI requires pre-R6 and 32-bit CPR1");
+    // GNU e_flags use the R2 encoding for R2, R3 and R5. Only the ABI
+    // record distinguishes a later ISA, including on a scalar-only CPU.
+    const bool LaterClassic = Profile.ISARevision == 2 && !Compressed && !ASE &&
+                              (Bytes[3] == 3 || Bytes[3] == 5);
     if (Bytes[2] != (Historical ? Historical
                      : Wide     ? 64
                                 : 32) ||
-        Bytes[3] != (Historical       ? 0
-                     : R6             ? 6
-                     : Profile.HasMSA ? 5
-                                      : 2) ||
+        (!LaterClassic &&
+         Bytes[3] != (Profile.HasMSA ? 5 : Profile.ISARevision)) ||
         (Bytes[4] != (Wide ? 2 : 1) && !(HistoricalO32 && Bytes[4] == 2)))
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||

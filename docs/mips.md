@@ -2,7 +2,7 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32/o32 and MIPS64/n32 or n64 instructions in either byte order. The profiles below
-cover classic Release 2 integer, FR=0/FR=1 scalar floating-point and FR=1
+cover classic Release 1, 2, 3 and 5 integer instructions, FR=0/FR=1 scalar floating-point and FR=1
 paired-single instructions,
 classic and microMIPS Release 6 integer and FR=1 floating-point instructions,
 pre-R6 microMIPS scalar/paired-single floating-point and integer profiles,
@@ -33,6 +33,14 @@ sizes. Use the target linker to place the sections and resolve relocations.
 | o32 | 32-bit pointers and four argument words, including on MIPS III with 64-bit GPRs | ELF32, both byte orders |
 | n32 | 64-bit GPRs with 32-bit pointers | ELF32 with `EF_MIPS_ABI2`, both byte orders |
 | n64 | 64-bit GPRs and pointers | ELF64, both byte orders |
+
+For scalar classic MIPS32 and MIPS64, the ELF header identifies Release 1.
+Releases 3 and 5 share the Release 2 header flags. Their ISA revision comes
+from `.MIPS.abiflags`. Without this record the loader admits the Release 2
+subset. Release 1 uses its own instruction encodings in disassembly and lift.
+For example, the encoding later assigned to EHB acts as SSNOP on Release 1.
+ROTR requires Release 2 or a separately identified SmartMIPS extension.
+[MIPS32 instruction set, EHB and ROTR](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00086-2B-MIPS32BIS-AFP-05.04.pdf).
 
 The backend selects the historical ISA or release, floating-point ABI and
 position-independent addressing from the input. Function attributes can select
