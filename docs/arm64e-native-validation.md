@@ -2409,6 +2409,19 @@ SCTLR to `NdOpEmulator::stepWithAArch64OrderedQuadwordSCTLR`. An unaligned
 access can complete with A clear and nAA set. The observation lasts for one
 step. Ordinary tracing continues to require natural alignment for these accesses.
 
+The local and hosted FVPs agreed on all 40 ordered-memory comparisons. With
+LRCPC3 disabled, the feature probe stopped the guest. Two additional controls,
+a narrowed load and an ordinary store substituted in the generated HighC
+image, failed the EL1 comparison as expected. On an M4 Max, independent
+arm64 programs reached main at O0 and O2. The baseline completed and each
+aligned Q instruction raised SIGILL when executed on its own. The two hosted
+Darwin profiles still skipped the native LRCPC3, PAuth_LR and PACM-PC
+comparisons. The two Release targets passed 1,033 of 1,069 tests, with 36
+skips. Four image-publication tests reached the timeout in the first run
+and passed individually under the same limit. Exact inputs and outcomes are in the
+[qualification record](evidence/arm64e-lrcpc3-quadword-2026-11-24.json) and
+[hosted replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45362122292).
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs
