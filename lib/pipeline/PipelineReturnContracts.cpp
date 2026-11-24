@@ -67,6 +67,7 @@
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedByteDemand.h"
+#include "neverd/ir/med/MedConstantPropagation.h"
 #include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
@@ -471,6 +472,85 @@ static uint64_t zeroBitsAtOr(const FunctionFacts &F, const MedVar &V) {
 using PhiObservations =
     llvm::SmallVector<std::pair<const PhiNode *, uint64_t>, 2>;
 
+/// Only the low input bits and, for a signed extension, the sign copied
+/// into an observed high bit can distinguish two extended results.
+static uint64_t observedExtensionBits(uint64_t Bits, unsigned InputBits,
+                                      bool Signed) {
+  const uint64_t Low = llvm::maskTrailingOnes<uint64_t>(InputBits);
+  return (Bits & Low) |
+         (Signed && (Bits & ~Low) ? uint64_t{1} << (InputBits - 1) : 0);
+}
+
+static std::optional<uint64_t> fixedShiftCount(const MedOp &Op) {
+  if (Op.NumInputs != 2)
+    return {};
+  const auto &Value = Op.Inputs[0], &Count = Op.Inputs[1];
+  if (!Count.Size || Count.Size > Value.Size || Value.Size != Op.Output.Size ||
+      Value.Size > 8 || !isScalarLiteral(Count) ||
+      !llvm::isUIntN(8 * Count.Size, Count.ConstVal))
+    return {};
+  return Count.ConstVal;
+}
+
+static llvm::ArrayRef<MedOp> beforeDirectBranch(llvm::ArrayRef<MedOp> Ops) {
+  if (!Ops.empty() && Ops.back().Opcode == NdOp::BRANCH &&
+      Ops.back().NumInputs == 1 && Ops.back().Inputs[0].isConst())
+    return Ops.drop_back();
+  return Ops;
+}
+
+/// A MIPS64 word instruction may trap on a non-word input. Its check has no
+/// effect here only if every incoming literal, after any common logical right
+/// shift, already is a sign-extended word.
+static bool provenReturnWordCheck(const FunctionFacts &F, const MedBlock &Block,
+                                  const MedOp &Op, const TargetRegInfo &TRI) {
+  if (!hasValidMedIntrinsicId(Op) ||
+      Op.Inputs[0].ConstVal != uint64_t(Intrinsic::MIPSRequireWord) ||
+      !mipsScalarMedShapeIsValid(Op, TRI.TheArch))
+    return false;
+  const MedVar *Value = &Op.Inputs[1];
+  unsigned Shift = 0;
+  if (!Value->isConst()) {
+    const MedOp *Def = F.Defs.lookup(keyOf(*Value));
+    if (Def && Def->Output.Size == Value->Size &&
+        Def->Opcode == NdOp::INT_RIGHT) {
+      const auto Count = fixedShiftCount(*Def);
+      if (!Count)
+        return false;
+      if (*Count >= 33)
+        return true; // At most 31 unsigned bits remain.
+      Shift = static_cast<unsigned>(*Count);
+      Value = &Def->Inputs[0];
+    }
+  }
+  const auto IsWord = [Shift](uint64_t V) {
+    return llvm::isInt<32>(static_cast<int64_t>(V >> Shift));
+  };
+  if (Value->isConst())
+    return isScalarLiteral(*Value) && IsWord(Value->ConstVal);
+  if (Value->Kind != MedVar::Reg || Value->RegOff != TRI.IntReturnReg)
+    return false;
+  const auto Phi = llvm::find_if(Block.Phis, [&](const PhiNode &P) {
+    return P.Output == *Value && P.Output.Size == Value->Size &&
+           P.Output.RegOff == Value->RegOff;
+  });
+  if (Phi == Block.Phis.end() ||
+      !hasCompleteOrdinaryPhiInputs(Block, *Phi,
+                                    {Block.Preds.begin(), Block.Preds.end()}))
+    return false;
+  return llvm::all_of(Phi->Args, [&](const auto &Arg) {
+    const auto &[Id, In] = Arg;
+    if (static_cast<unsigned>(Id) >= F.Func->Blocks.size())
+      return false;
+    const MedBlock &Pred = F.Func->Blocks[Id];
+    if (Pred.Succs.size() != 1 || Pred.Succs.front() != Block.Id ||
+        !Pred.ExceptionalSuccs.empty())
+      return false;
+    const auto V = literalResult(beforeDirectBranch(Pred.Ops), In, TRI, 8);
+    return V && IsWord(*V);
+  });
+}
+
 /// Trace only bits whose *difference* guarantees a different result. Demand
 /// alone is insufficient: an OR may hide a read bit, and a carry can change
 /// an observed high byte even when two inputs agree in that byte.
@@ -492,7 +572,9 @@ observedReturnPhis(const FunctionFacts &F, const MedBlock &Block,
   };
   Observe(Result, Mask);
   for (const MedOp &Op : llvm::reverse(Ops)) {
-    if (isReturnControlOp(Op, Ret, TRI))
+    if (isReturnControlOp(Op, Ret, TRI) ||
+        (Op.Opcode == NdOp::INTRINSIC &&
+         provenReturnWordCheck(F, Block, Op, TRI)))
       continue;
     if (medReadsInputsWhole(Op) || writesOutsideIntegerResult(Op, TRI))
       return {};
@@ -508,16 +590,37 @@ observedReturnPhis(const FunctionFacts &F, const MedBlock &Block,
         Observe(Op.Inputs[0], Bits);
       continue;
     }
-    if (Op.Opcode == NdOp::INT_ZEXT) {
-      if (Op.NumInputs == 1 && Op.Inputs[0].Size <= Op.Output.Size)
+    if (Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT) {
+      if (Op.NumInputs == 1 && Op.Inputs[0].Size &&
+          Op.Inputs[0].Size <= Op.Output.Size)
         Observe(Op.Inputs[0],
-                Bits & llvm::maskTrailingOnes<uint64_t>(8 * Op.Inputs[0].Size));
+                observedExtensionBits(Bits, 8 * Op.Inputs[0].Size,
+                                      Op.Opcode == NdOp::INT_SEXT));
       continue;
     }
     if (Op.NumInputs != 2)
       continue;
     const MedVar &A = Op.Inputs[0], &B = Op.Inputs[1];
     switch (Op.Opcode) {
+    case NdOp::INT_LEFT:
+    case NdOp::INT_RIGHT:
+    case NdOp::INT_ASHR: {
+      const auto Count = fixedShiftCount(Op);
+      if (!Count)
+        break;
+      const unsigned Width = 8 * A.Size;
+      if (Op.Opcode == NdOp::INT_LEFT) {
+        if (*Count < Width)
+          Observe(A, Bits >> *Count);
+      } else if (*Count < Width || Op.Opcode == NdOp::INT_ASHR) {
+        // An oversized arithmetic shift copies the sign into every bit.
+        const unsigned Shift = std::min<uint64_t>(*Count, Width - 1);
+        Observe(A, observedExtensionBits(Bits, Width - Shift,
+                                         Op.Opcode == NdOp::INT_ASHR)
+                       << Shift);
+      }
+      break;
+    }
     case NdOp::SUBBYTES:
       if (isScalarLiteral(B) && A.Size <= 8 && A.Size >= Op.Output.Size &&
           B.ConstVal <= static_cast<unsigned>(A.Size - Op.Output.Size))
@@ -613,9 +716,8 @@ static LiteralArms literalReturnArms(const FunctionFacts &F,
     if (!Ops.empty() && Ops.back().Opcode == NdOp::RETURN) {
       Ret = &Ops.back();
       Ops = Ops.drop_back();
-    } else if (!Ops.empty() && Ops.back().Opcode == NdOp::BRANCH &&
-               Ops.back().NumInputs == 1 && Ops.back().Inputs[0].isConst())
-      Ops = Ops.drop_back();
+    } else
+      Ops = beforeDirectBranch(Ops);
     const auto Follow = [&](int Id, const MedVar &Incoming, uint64_t Bits,
                             const PhiNode *Computation, const MedVar *Parent,
                             unsigned Offset) {

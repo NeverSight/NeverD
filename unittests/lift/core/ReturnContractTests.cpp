@@ -1540,6 +1540,62 @@ TEST(ReturnContracts, NestedReturnsCompareOnlyBitsThatReachTheCaller) {
   EXPECT_TRUE(IsVoid()); // The upper bytes have no source on this arm.
 }
 
+TEST(ReturnContracts, SharedShiftsProveOnlyObservableDifferences) {
+  const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
+  const auto Choose = [&](int Id) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Id), temporary(Id)});
+  };
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Choose(2)}, {}, {1, 2}), block({returning(rax(0))}, {0}),
+       block({Choose(4)}, {0}, {3, 4}),
+       block({operation(NdOp::COPY, rax(1), {C(0)})}, {2}, {5}),
+       block({operation(NdOp::COPY, rax(2), {C(0)})}, {2}, {5}),
+       block({}, {3, 4})});
+  F.Blocks[5].Phis.push_back({rax(3), {{4, rax(2)}, {3, rax(1)}}, {}});
+  auto Distinguishes = [&](NdOp Opcode, const MedVar &Count, uint64_t Delta,
+                           uint64_t Mask) {
+    F.Blocks[4].Ops.front().Inputs[0] = C(Delta);
+    F.Blocks[5].Ops = {operation(Opcode, rax(4), {rax(3), Count}),
+                       operation(NdOp::INT_AND, rax(5), {rax(4), C(Mask)}),
+                       returning(rax(5))};
+    return !settle({F}).front();
+  };
+  constexpr uint64_t Sign = uint64_t{1} << 63;
+  EXPECT_TRUE(Distinguishes(NdOp::INT_LEFT, C(60), 8, Sign));
+  EXPECT_FALSE(Distinguishes(NdOp::INT_LEFT, C(60), 16, UINT64_MAX));
+  EXPECT_TRUE(Distinguishes(NdOp::INT_RIGHT, C(4), 16, 1));
+  EXPECT_FALSE(Distinguishes(NdOp::INT_RIGHT, C(4), 15, UINT64_MAX));
+  EXPECT_TRUE(Distinguishes(NdOp::INT_ASHR, C(7), Sign, Sign));
+  EXPECT_FALSE(Distinguishes(NdOp::INT_ASHR, C(7), Sign >> 1, Sign));
+  for (NdOp Opcode : {NdOp::INT_LEFT, NdOp::INT_RIGHT, NdOp::INT_ASHR}) {
+    SCOPED_TRACE(static_cast<unsigned>(Opcode));
+    EXPECT_TRUE(Distinguishes(Opcode, C(0), Sign, Sign));
+    for (uint64_t Count : {uint64_t{64}, uint64_t{65}, UINT64_MAX})
+      EXPECT_EQ(Distinguishes(Opcode, C(Count), Sign, 1),
+                Opcode == NdOp::INT_ASHR);
+    EXPECT_FALSE(Distinguishes(Opcode, temporary(9), Sign, UINT64_MAX));
+    EXPECT_FALSE(Distinguishes(
+        Opcode,
+        MedVar::makeConst(1, 8, ConstantAddressProvenance::AddressFragment),
+        Sign, UINT64_MAX));
+    EXPECT_FALSE(
+        Distinguishes(Opcode, MedVar::makeConst(256, 1), Sign, UINT64_MAX));
+  }
+  const auto Byte = sized(temporary(12), 1);
+  for (NdOp Opcode : {NdOp::INT_ZEXT, NdOp::INT_SEXT}) {
+    F.Blocks[5].Ops = {operation(NdOp::SUBBYTES, Byte, {rax(3), C(1)}),
+                       operation(Opcode, rax(4), {Byte}),
+                       operation(NdOp::INT_AND, rax(5), {rax(4), C(Sign)}),
+                       returning(rax(5))};
+    F.Blocks[4].Ops.front().Inputs[0] = C(0x8000);
+    EXPECT_EQ(!settle({F}).front(), Opcode == NdOp::INT_SEXT);
+    F.Blocks[4].Ops.front().Inputs[0] = C(0x4080);
+    EXPECT_TRUE(settle({F}).front());
+  }
+}
+
 TEST(ReturnContracts, SharedRegisterViewsNeedTheirOwnCompleteIncomingValue) {
   const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
   const auto Byte = [](unsigned V) { return MedVar::makeConst(V, 1); };
@@ -1955,6 +2011,72 @@ int main(void) {
   runIntegerReturnSources(Arch::X64, std::move(Code), R"(
 int main(void) {
     return choose_result(0, 0) != 0x20d || choose_result(1, 0) != 0x30e;
+}
+)");
+}
+
+TEST(ReturnContract, SharedX86ReturnKeepsTheShiftedLowNibble) {
+  runIntegerReturnSources(Arch::X64,
+                          {0x48, 0x83, 0xfe, 2,
+                           0x74, 0x14, // cmp rsi,2; je bare
+                           0x48, 0x83, 0xff, 0,
+                           0x74, 7, // cmp rdi,0; je left
+                           0xb8, 0x23, 0x31, 0,
+                           0,    0xeb, 8, // mov eax,0x3123; jmp shared
+                           0xb8, 1,    0x21, 0,
+                           0,    0xeb, 1, // left: mov eax,0x2101; jmp shared
+                           0xc3, 0x48, 0xc1, 0xe0,
+                           60,   0xc3}, // bare: ret; shared: shl rax,60; ret
+                          R"(
+int main(void) {
+    return choose_result(0, 0) != UINT64_C(0x1000000000000000) ||
+           choose_result(1, 0) != UINT64_C(0x3000000000000000);
+}
+)");
+}
+
+TEST(ReturnContract, SharedMIPSSignExtensionRequiresAWordOnEachArm) {
+  std::vector<uint8_t> Code = {
+      2,    0,    12,   0x64, 9,    0,    0xac, 0x10,
+      0,    0,    0,    0,                         // mode 2 goes to bare
+      4,    0,    0x80, 0x10, 0,    0,    0,    0, // beqz a0,left; nop
+      0xf9, 3,    2,    0x64, 6,    0,    0,    0x10,
+      0,    0,    0,    0, // v0 = 0x3f9; b shared
+      1,    4,    2,    0x64, 3,    0,    0,    0x10,
+      0,    0,    0,    0,                            // left: v0 = 0x401
+      8,    0,    0xe0, 3,    0,    0,    0,    0,    // bare: jr ra; nop
+      0xfa, 0x10, 2,    0,    0x20, 0x14, 2,    0x7c, // dsrl v0,3; seb v0,v0
+      8,    0,    0xe0, 3,    0xfe, 0x17, 2,    0};   // jr ra; dsrl32 v0,31
+  runIntegerReturnSources(Arch::MIPS64EL, Code, R"(
+int main(void) {
+    return choose_result(0, 0) != 1 || choose_result(1, 0) != 0;
+}
+)");
+  // Shifting -8 by 3 or 32 still leaves a value outside SEB's word domain.
+  Code[20] = 0xf8;
+  Code[21] = 0xff;
+  auto &ShiftEncoding = Code[Code.size() - 16];
+  for (uint8_t Shift : {0xfa, 0x3e}) {
+    SCOPED_TRACE(static_cast<unsigned>(Shift));
+    ShiftEncoding = Shift;
+    runIntegerReturnSources(
+        Arch::MIPS64EL, Code, R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0, 0)), void),
+               "one valid result cannot prove a choice");
+int main(void) {
+    choose_result(0, 0);
+    expect_word_trap = 1;
+    choose_result(1, 0);
+    return 2;
+}
+)",
+        "#include <stdlib.h>\nstatic int expect_word_trap;\n"
+        "#define __builtin_trap() _Exit(expect_word_trap ? 0 : 3)\n");
+  }
+  ShiftEncoding = 0x7e; // dsrl32 v0,v0,1 leaves at most 31 bits.
+  runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0 || choose_result(1, 0) != 1;
 }
 )");
 }

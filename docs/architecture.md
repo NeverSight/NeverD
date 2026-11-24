@@ -5590,10 +5590,15 @@ assemble a literal from bytes already defined on that arm. Across a join,
 only differences that survive the shared computation count. Replacing a
 field erases differences in that field. XOR with a scalar literal preserves
 differences in each observed bit. Addition and subtraction with a fixed
-operand preserve differences modulo the observed low bits. A zero extension
-contributes only the bits of its input. If a narrower view has its own PHI,
-its incoming value and the complete return register must agree on that
-predecessor before that view can prove a branch choice. For an indirect
+operand preserve differences modulo the observed low bits. A fixed shift
+maps observed result bits back to their input positions. A sign extension
+or arithmetic right shift can expose the input sign through any observed
+sign-fill bit. Zero-filled and discarded bits cannot distinguish the arms.
+A MIPS64 word check in the common computation needs a valid sign-extended
+word on every incoming arm, including after a logical right shift. If a
+narrower view has its own PHI, its incoming value and the complete return
+register must agree on that predecessor before that view can prove a branch
+choice. For an indirect
 branch, the jump table must prove its index domain and bind the selected
 arms to that instruction. The
 comparison uses the inferred result width. If another edge needs an

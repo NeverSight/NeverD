@@ -9235,6 +9235,14 @@ and an incomplete incoming value.
 on the two paths that update AH and the path that bypasses it.
 `ReturnContract.SharedX86ReturnUsesTheChangedRegisterView` covers a low-byte
 XOR followed by an AH write and a zero-extended EAX address calculation.
+`ReturnContracts.SharedShiftsProveOnlyObservableDifferences` checks retained
+and discarded bits, sign fill, zero and oversized shifts, and shift counts
+whose scalar value is unknown.
+`ReturnContract.SharedX86ReturnKeepsTheShiftedLowNibble` executes both C
+outputs after a shared shift by 60.
+`ReturnContract.SharedMIPSSignExtensionRequiresAWordOnEachArm` checks a
+signed byte followed by a delay-slot shift and the word-domain trap when
+one incoming value makes the byte instruction unpredictable.
 `ReturnContracts.SharedRegisterViewsNeedTheirOwnCompleteIncomingValue`
 checks both byte offsets, reversed PHIs, missing upper bytes, mismatched
 values and inputs from the wrong predecessor.
