@@ -1370,9 +1370,7 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.Ops.front().Inputs[2] ==
           NdVar::reg(x86reg::RCX, Instruction.Ops.front().Inputs[1].Size) &&
       Instruction.Origin.Control == LowInstructionControl::Terminator;
-  const bool ObservedXbegin =
-      Options.ObservedXbeginFault &&
-      Options.ObservedXbeginFault->Address == Result.Address;
+  const bool ObservedXbegin = Options.observedXbeginFaultAt(Result.Address);
   if (ObservedXbegin && (!llvm::equal(Instruction.NativeBytes,
                                       Options.ObservedXbeginFault->Bytes) ||
                          !x86TransactionBeginEncoding(Instruction.NativeBytes,
