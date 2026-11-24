@@ -216,7 +216,10 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
                          "NeverSight LLVM MIPS backend");
 #endif
     if (Micro && !isMIPSO32(Target)) {
-#ifdef LLVM_NEVERD_MICROMIPS64_PRE_R6
+#if defined(LLVM_NEVERD_MICROMIPS64_R6)
+      if (!Subtarget->checkFeatures("+mips64r2"))
+        return Unsupported("microMIPS64 requires MIPS64 Release 2 or later");
+#elif defined(LLVM_NEVERD_MICROMIPS64_PRE_R6)
       if (!Subtarget->checkFeatures("+mips64r2,-mips64r6"))
         return Unsupported("microMIPS64 requires MIPS64 Release 2, 3 or 5");
 #else

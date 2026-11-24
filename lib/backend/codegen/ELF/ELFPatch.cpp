@@ -579,13 +579,15 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
         std::optional<ELFARMEHABIRegion> EHABIRegion =
             findELFARMEHABIRegion(Binary);
 
+        const auto *MIPSProfile =
+            CachedImage && CachedImage->MIPS ? &*CachedImage->MIPS : nullptr;
         CompiledImage Img = compileImageForPatchWithFixedSectionVAs(
             *CompileMod, TargetArch, BinaryFormat::ELF, CodeStartVA, Resolve,
             FixedSectionVA, 0,
             InputKind == RewriteInputKind::ReplacementIR
                 ? CompileMod->getTargetTriple().str()
                 : std::string(),
-            InputKind);
+            InputKind, MIPSProfile);
         if (SymbolResolutionFailure) {
           llvm::WithColor::error() << *SymbolResolutionFailure << "\n";
           return false;
@@ -635,7 +637,7 @@ PatchResult ELFPatcher::patch(const std::filesystem::path &InputPath,
               InputKind == RewriteInputKind::ReplacementIR
                   ? CompileMod->getTargetTriple().str()
                   : std::string(),
-              InputKind);
+              InputKind, MIPSProfile);
           if (!Img.Success || Img.Bytes.empty()) {
             llvm::WithColor::error()
                 << "elf_patch: compileImageForPatch failed after "
