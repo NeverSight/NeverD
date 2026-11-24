@@ -9266,9 +9266,13 @@ Each pairs a proven result with a case where legal counts erase the observed
 difference. `SharedMIPSWordShiftChecksTheOperandOnEachArm` pairs a word
 right shift with a separate count write and checks both orders of the counts.
 `ReturnContracts.PairedShiftPathsCloseEveryBackedgeBeforeSelectingAValue`
-checks a count changed on a backedge, simultaneous PHI reads and an
-unfinished loop proof. `ReturnContract.SharedX86VariableShiftCrossesTwoJoins`
+checks a count changed on a backedge, simultaneous PHI reads, an unfinished
+loop proof, a mask in a later return block and a discarded shift.
+`ReturnContract.SharedX86VariableShiftCrossesTwoJoins`
 checks edge pairing through successive joins in machine code.
+`ReturnContract.SharedX86ReturnObservesBothShiftDirectionsAfterTheJoin`
+runs both C outputs with left and right shifts on separate predecessors.
+Removing bit eight from the final mask makes the left-shift path overlap.
 `ReturnContract.SharedAArch64WordShiftKeepsEachLatchAndTheIncomingX0`
 checks a word shift after either latch and a bare path returning the full X0.
 `ReturnContract.SharedMIPSShiftCountChangesInTheBackedgeSlot` runs both C

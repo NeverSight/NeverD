@@ -25,16 +25,6 @@
 
 namespace neverd::return_contract {
 
-static bool isScalarShift(const MedOp &Op) {
-  return (Op.Opcode == NdOp::INT_LEFT || Op.Opcode == NdOp::INT_RIGHT ||
-          Op.Opcode == NdOp::INT_ASHR) &&
-         scalarShiftShape(Op);
-}
-
-bool isVariableShift(const MedOp &Op) {
-  return isScalarShift(Op) && !Op.Inputs[1].isConst();
-}
-
 uint64_t shiftedBits(NdOp Opcode, unsigned Width, uint64_t V, uint64_t Count) {
   if (Opcode == NdOp::INT_ASHR)
     return llvm::SignExtend64(V, Width) >> std::min<uint64_t>(Count, Width - 1);
@@ -88,12 +78,6 @@ struct ShiftPaths {
   // In particular a changing loop induction variable need not enter the key.
   bool prepare(const MedValueMap<const MedOp *> &Defs,
                const MedValueMap<PhiSite> &Phis) {
-    if (!spend(Exit.Ops.size()))
-      return false;
-    llvm::SmallPtrSet<const MedOp *, 4> ExitShifts;
-    for (const MedOp &Op : Exit.Ops)
-      if (isVariableShift(Op))
-        ExitShifts.insert(&Op);
     bool HasShift = false;
     bool HasEarlierJoin = false;
     llvm::SmallVector<const MedVar *, 12> Pending{&Result};
@@ -124,7 +108,8 @@ struct ShiftPaths {
       } else if (const MedOp *Op = Defs.lookup(medValueKey(V))) {
         if (!sameView(Op->Output, V))
           return false;
-        HasShift |= ExitShifts.contains(Op);
+        // A predecessor may shift before another join or a final byte mask.
+        HasShift |= isVariableShift(*Op);
         for (unsigned I = 0; I < Op->NumInputs; ++I)
           Pending.push_back(&Op->Inputs[I]);
       }

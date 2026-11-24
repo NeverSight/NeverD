@@ -34,7 +34,16 @@ inline bool scalarShiftShape(const MedOp &Op) {
          Value.Size == Op.Output.Size && Value.Size <= 8;
 }
 
-bool isVariableShift(const MedOp &Op);
+inline bool isScalarShift(const MedOp &Op) {
+  return (Op.Opcode == NdOp::INT_LEFT || Op.Opcode == NdOp::INT_RIGHT ||
+          Op.Opcode == NdOp::INT_ASHR) &&
+         scalarShiftShape(Op);
+}
+
+inline bool isVariableShift(const MedOp &Op) {
+  return isScalarShift(Op) && !Op.Inputs[1].isConst();
+}
+
 uint64_t shiftedBits(NdOp Opcode, unsigned Width, uint64_t Value,
                      uint64_t Count);
 
