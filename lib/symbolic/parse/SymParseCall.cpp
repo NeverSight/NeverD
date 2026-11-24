@@ -147,7 +147,8 @@ SymRef Parser::parseCall(const Token &Name) {
   DepthGuard Guard(*this, Name.Offset);
   if (Failed)
     return {};
-  if (Reuse != CallReuse::Factor || Name.Text == "concat")
+  if ((Reuse != CallReuse::Factor && Reuse != CallReuse::SumFactor) ||
+      Name.Text == "concat")
     return parseCallArguments(Name);
   // Read the two field calls inside a concatenation independently. Each
   // outer call and its disjoint parenthesized operands are scanned once.

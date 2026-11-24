@@ -258,6 +258,7 @@ private:
     Disabled,
     OutsideProduct,
     Factor,
+    SumFactor,
     InsideCall,
     InsideGroup
   };

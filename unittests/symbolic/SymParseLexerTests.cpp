@@ -77,6 +77,34 @@ TEST(SymParseLexer, EveryPunctuationPairKeepsMaximalMunchAndOffsets) {
     }
 }
 
+TEST(SymParseLexer, RepeatedAffineSumsKeepTheirClosingDelimiterAndDepth) {
+  const std::string Start = "(1+256*zext(extract(x,1,3),16)+" +
+                            std::string(72, ' ') + "512*zext(extract(";
+  const auto A = Start + "y,1,4),16))";
+  const auto B = Start + "z,2,4),16))";
+  SymParseOptions Options;
+  Options.MaxNesting = 3;
+  for (const auto &Tail : {A + "*" + B, B + "*" + A}) {
+    const auto Product = "3*" + A + "*" + B + "*" + Tail;
+    for (const auto &Text : {Product, Product + "*(" + A + ")",
+                             Product + "*" + Start + "z,?),16))",
+                             Product + "*" + B.substr(0, B.size() - 1)}) {
+      SymContext Plain, Reused;
+      const auto Expected =
+          detail::Parser(Plain, Text, 16, Options, false).run();
+      const auto Actual = detail::Parser(Reused, Text, 16, Options).run();
+      ASSERT_EQ(Actual.ok(), Text == Product);
+      ASSERT_EQ(Actual.ok(), Expected.ok());
+      if (Actual.ok())
+        EXPECT_EQ(Plain.toString(Expected.Root), Reused.toString(Actual.Root));
+      else {
+        EXPECT_EQ(Actual.ErrorOffset, Expected.ErrorOffset);
+        EXPECT_EQ(Actual.Error, Expected.Error);
+      }
+    }
+  }
+}
+
 TEST(SymParseLexer, UnknownBytesAdvanceAndKeepParserDiagnostics) {
   for (unsigned Byte : {0u, 0x80u, 0xffu}) {
     std::string Text(1, static_cast<char>(Byte));
