@@ -420,6 +420,15 @@ TCG VMRUN contexts from the byte-identical current C export. The linked
 [evidence record](evidence/x86-mode-smm-sgx-events-2026-11-21.json) records
 the full XML and binary digests as well as the initial race and rerun.
 
+The subsequent `106f1921bf` merge adopted Capstone `17d578259c` and shared
+parallel/GUI updates. Its focused local checks passed the three x86 decoder
+suites (7/7, 6/6, 9/9), return contracts (73/73), pipeline outcomes (81/81)
+and selected VMRUN/RTM continuation exports (16/16). Re-exporting HighC and
+LLVM-to-C produced the same VMRUN C hashes as the full matrix above. The
+[four-platform Capstone contract](https://github.com/NeverSight/NeverD/actions/runs/45339485141)
+also passed with only the three declared POSIX-x64 x87 hardware skips on
+other platforms.
+
 ## Earlier qualification records
 
 The November 11 regression stream performs protected32 → compatibility32 → code64 →

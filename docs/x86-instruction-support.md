@@ -36,6 +36,14 @@ the [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/4
 clang-cl, with the same explicit POSIX x64 x87-hardware skip. At integrated
 `d7c5338cf5`, NeverD's three local decoder suites passed 7/7, 6/6 and 9/9
 against this pin.
+The later `dev` pin `17d578259c044cad6ade810870f2aa1e7d33724a` adds
+standalone x86 batch formatting. Its
+[four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45339485141)
+passed 131/131 on Linux x64 and 130/131 on macOS arm64, Windows MSVC and
+Windows clang-cl; each non-Linux job explicitly skipped the POSIX x64 x87
+hardware case. At integrated `106f1921bf`, NeverD's same three local decoder
+suites passed 7/7, 6/6 and 9/9, and its VMRUN C export retained both hosted
+source hashes.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 
