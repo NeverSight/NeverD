@@ -306,16 +306,11 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E, int ParentPrec,
   };
   if (E.Operands.size() == 2 && E.Operands[0] && E.Operands[1] &&
       (E.Op == NdOp::INT_NOTEQUAL || E.Op == NdOp::INT_EQUAL)) {
-    const HighExpr *A = unwrapIntegerView(E.Operands[0].get());
-    const HighExpr *B = unwrapIntegerView(E.Operands[1].get());
-    const HighExpr *Cmp = nullptr;
-    if (A && A->Kind == ExprKind::BinOp && IsCompareOp(A->Op) &&
-        IsZeroLike(E.Operands[1]))
-      Cmp = E.Operands[0].get();
-    else if (B && B->Kind == ExprKind::BinOp && IsCompareOp(B->Op) &&
-             IsZeroLike(E.Operands[0]))
-      Cmp = E.Operands[1].get();
-    if (Cmp) {
+    const HighExpr *Cmp =
+        IsZeroLike(E.Operands[1])   ? truthTestedValue(E.Operands[0].get())
+        : IsZeroLike(E.Operands[0]) ? truthTestedValue(E.Operands[1].get())
+                                    : nullptr;
+    if (Cmp && Cmp->Kind == ExprKind::BinOp && IsCompareOp(Cmp->Op)) {
       if (E.Op == NdOp::INT_NOTEQUAL)
         return exprStr(*Cmp, ParentPrec);
       return invertedTruthValue(*Cmp, E, ParentPrec);

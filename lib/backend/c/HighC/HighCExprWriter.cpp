@@ -1438,7 +1438,7 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
     return renderBinOp(*Negation, ParentPrec);
   }
   case NdOp::BOOL_NOT: {
-    const HighExpr *Inner = forwardedExpr(E.Operands[0].get());
+    const HighExpr *Inner = truthTestedValue(E.Operands[0].get());
     auto IsZero = [&](const ExprPtr &Op) {
       const HighExpr *Cur = unwrapIntegerView(Op.get());
       return Cur && Cur->Kind == ExprKind::Const && Cur->ConstVal == 0;
@@ -7670,8 +7670,6 @@ static uint16_t integerViewWidth(const HighExpr &E) {
 
 bool HighCWriter::valueFitsInBytes(const HighExpr &E, uint16_t Bytes,
                                    unsigned Depth) const {
-  if (Bytes >= 8)
-    return true;
   if (Depth > limits::kMaxIntegerViewUnwrapDepth)
     return false;
   if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) {
@@ -7700,7 +7698,7 @@ bool HighCWriter::valueFitsInBytes(const HighExpr &E, uint16_t Bytes,
   };
   switch (E.Kind) {
   case ExprKind::Const:
-    return (E.ConstVal >> (8 * Bytes)) == 0;
+    return Bytes >= sizeof(E.ConstVal) || (E.ConstVal >> (8 * Bytes)) == 0;
   case ExprKind::Cast:
   case ExprKind::BitCast:
     return ExtensionFits(E.Operands.empty() || !E.Operands[0] ||
@@ -7761,15 +7759,13 @@ const HighExpr *HighCWriter::truthTestedValue(const HighExpr *E) const {
           E->Operands[1]->ConstVal == 0));
     if (!View)
       return E;
-    // An extension, or a reinterpretation of the same bits, is zero just
-    // where its operand is; a conversion or a byte view may narrow it.
+    // Integer extensions preserve zero. A narrower view can discard the
+    // only set bits, and floating negative zero has a nonzero bit pattern.
     const HighExpr &Inner = *E->Operands[0];
-    if (E->Kind != ExprKind::BitCast && E->Kind != ExprKind::UnaryOp) {
-      const uint16_t Outer = integerViewWidth(*E);
-      const uint16_t In = integerViewWidth(Inner);
-      if (!Outer || !In || (Outer < In && !valueFitsInBytes(Inner, Outer)))
-        return E;
-    }
+    const uint16_t Outer = integerViewWidth(*E);
+    const uint16_t In = integerViewWidth(Inner);
+    if (!Outer || !In || (Outer < In && !valueFitsInBytes(Inner, Outer)))
+      return E;
     E = &Inner;
   }
   return E;
@@ -10195,7 +10191,7 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
       // `0 <= x`, and the width of that test.
       auto NonNegativeValue = [&](const HighExpr *E,
                                   uint16_t &Bytes) -> ExprPtr {
-        E = unwrapIntegerView(forwardedExpr(E));
+        E = truthTestedValue(E);
         if (!E || E->Operands.empty() || !E->Operands[0])
           return nullptr;
         if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_SLESSEQUAL &&
@@ -10214,7 +10210,7 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
                                                : nullptr;
         if (!Below)
           return nullptr;
-        const HighExpr *Cmp = unwrapIntegerView(forwardedExpr(Below));
+        const HighExpr *Cmp = truthTestedValue(Below);
         if (!Cmp || Cmp->Kind != ExprKind::BinOp ||
             Cmp->Op != NdOp::INT_SLESS || Cmp->Operands.size() != 2 ||
             !Cmp->Operands[0] || !IsZeroLike(Cmp->Operands[1]))
@@ -10258,13 +10254,17 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
                  Cur->Op == NdOp::INT_SLESSEQUAL)))
           ? Cur
           : &E;
+  return truthOperandStr(*Tested);
+}
+
+std::string HighCWriter::truthOperandStr(const HighExpr &E) {
   const HighExpr *Enclosing = TruthTested;
-  TruthTested = Tested;
-  std::string Text = exprStr(*Tested);
+  TruthTested = &E;
+  std::string Text = exprStr(E);
   TruthTested = Enclosing;
   // A name declared wider than its value has bytes the test does not read.
-  if (printsWiderThanItsValue(*Tested))
-    return "(" + typeToC(NdType::makeInt(Tested->Type->Size, false)) + ")" +
+  if (printsWiderThanItsValue(E))
+    return "(" + typeToC(NdType::makeInt(E.Type->Size, false)) + ")" +
            castOperandText(std::move(Text));
   return Text;
 }
@@ -10272,27 +10272,23 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
 std::string HighCWriter::invertedTruthValue(const HighExpr &Test,
                                             const HighExpr &Node,
                                             int ParentPrec) {
-  // Inverting `x == 0` leaves the condition `x`, whose value is not 0 or 1.
-  const HighExpr *Compare = unwrapIntegerView(forwardedExpr(&Test));
-  if (&Node != TruthTested && Compare && Compare->Kind == ExprKind::BinOp &&
-      Compare->Op == NdOp::INT_EQUAL && Compare->Operands.size() == 2 &&
-      Compare->Operands[0] && Compare->Operands[1]) {
+  // A branch can test x directly. A returned or stored truth value is 0 or 1.
+  if (&Node != TruthTested && Test.Kind == ExprKind::UnaryOp &&
+      Test.Op == NdOp::BOOL_NOT && Test.Operands.size() == 1 &&
+      Test.Operands[0])
+    return "!!(" + condStr(*Test.Operands[0]) + ")";
+  if (&Node != TruthTested && Test.Kind == ExprKind::BinOp &&
+      Test.Op == NdOp::INT_EQUAL && Test.Operands.size() == 2 &&
+      Test.Operands[0] && Test.Operands[1]) {
     const auto IsZero = [&](const ExprPtr &Op) {
       const HighExpr *Literal = unwrapIntegerView(Op.get());
       return Literal && Literal->Kind == ExprKind::Const &&
              Literal->ConstVal == 0;
     };
-    const HighExpr *Value =
-        IsZero(Compare->Operands[1])   ? Compare->Operands[0].get()
-        : IsZero(Compare->Operands[0]) ? Compare->Operands[1].get()
-                                       : nullptr;
-    const HighExpr *Shown =
-        Value ? unwrapIntegerView(forwardedExpr(Value)) : nullptr;
-    if (Value && (!Shown || !printsTruthValue(*Shown))) {
-      auto NotZero = HighExpr::makeBinop(
-          NdOp::INT_NOTEQUAL, Compare->Operands[0], Compare->Operands[1]);
-      NotZero->Type = Compare->Type;
-      return renderBinOp(*NotZero, ParentPrec);
+    if (IsZero(Test.Operands[0]) || IsZero(Test.Operands[1])) {
+      HighExpr NotZero = Test;
+      NotZero.Op = NdOp::INT_NOTEQUAL;
+      return renderBinOp(NotZero, ParentPrec);
     }
   }
   // The inverse is a condition of its own, `!a && !b` of `!(a || b)` or
@@ -10365,8 +10361,7 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
             ::neverd::limits::backend::
                 kHighCExprWriterHighCWriterInvertCondStrImplLooksBoolDepthLimit)
       return false;
-    Op = forwardedExpr(Op);
-    Op = unwrapIntegerView(Op);
+    Op = truthTestedValue(Op);
     if (!Op)
       return false;
     if (Op->Kind == ExprKind::UnaryOp && Op->Op == NdOp::BOOL_NOT)
@@ -10440,7 +10435,7 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
       return exprStr(Flipped);
     }
   }
-  return "!(" + exprStr(*Cur) + ")";
+  return "!(" + truthOperandStr(*Cur) + ")";
 }
 
 bool HighCWriter::stmtSuppressedAsDead(const HighStmt &Stmt) const {
