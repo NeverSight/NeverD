@@ -215,8 +215,15 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
       return Unsupported("compressed function entry modes require the updated "
                          "NeverSight LLVM MIPS backend");
 #endif
-    if (Micro && !isMIPSO32(Target))
-      return Unsupported("the LLVM backend cannot generate microMIPS64 bodies");
+    if (Micro && !isMIPSO32(Target)) {
+#ifdef LLVM_NEVERD_MICROMIPS64_PRE_R6
+      if (!Subtarget->checkFeatures("+mips64r2,-mips64r6"))
+        return Unsupported("microMIPS64 requires MIPS64 Release 2, 3 or 5");
+#else
+      return Unsupported(
+          "microMIPS64 bodies require the updated NeverSight LLVM backend");
+#endif
+    }
     if (Mips16 && (!isMIPSO32(Target) || Revision == 6 || Micro))
       return Unsupported("MIPS16 requires pre-R6 o32 without microMIPS");
   }

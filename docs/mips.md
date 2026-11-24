@@ -45,13 +45,14 @@ ROTR requires Release 2 or a separately identified SmartMIPS extension.
 The backend selects the historical ISA or release, floating-point ABI and
 position-independent addressing from the input. Function attributes can select
 classic, MIPS16 or microMIPS encoding. A function override that changes the
-input ISA or calling convention produces a diagnostic. MIPS16 and microMIPS o32 entry symbols
-carry their instruction mode so a native linker can construct callable
-pointers. LLVM emits microMIPS objects for o32. A microMIPS n32 or n64 input
-can use the analysis paths described below. Selecting an older SDK such as
-r7 limits native object output to classic profiles with a qualified ABI.
-MIPS III/o32, MIPS V, compressed bodies and fixed-address output are
-available in the r8 SDK.
+input ISA or calling convention produces a diagnostic. Compressed function
+symbols carry their instruction mode so a native linker can construct callable
+pointers. The r8 SDK supports MIPS III/o32, MIPS V, MIPS16 and microMIPS o32,
+and fixed-address output. A fork exposing `LLVM_NEVERD_MICROMIPS64_PRE_R6`
+also emits scalar microMIPS64 bodies for Releases 2, 3 and 5 in both byte orders.
+n32 retains ELF32 pointers and n64 retains ELF64 pointers. Release 6 microMIPS64
+native emission requires additional backend support. Selecting r7 limits
+native object output to classic profiles with a qualified ABI.
 
 The fork can compile ordinary LLVM functions for historical I–III ISAs.
 Lifting an existing I–III function also carries its incoming pipeline state.

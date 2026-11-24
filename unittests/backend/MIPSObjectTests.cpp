@@ -238,12 +238,23 @@ TEST(MIPSObject, RejectsWrongTriplesAndUnsupportedInstructionSelectors) {
                             Diagnostic)
                    .Success);
   F.Leaf->addFnAttr("micromips");
-  EXPECT_FALSE(
-      Codegen().compile(F.Module, Arch::MIPS64, BinaryFormat::ELF).Success);
+  Profile.ABI = MIPSABI::N64;
+  Profile.ISARevision = 1;
+  EXPECT_FALSE(Codegen()
+                   .compile(F.Module, Arch::MIPS64, BinaryFormat::ELF, {},
+                            ObjectConsumer::PlatformLinker, &Profile,
+                            Diagnostic)
+                   .Success);
   F.Leaf->removeFnAttr("micromips");
   F.Leaf->addFnAttr("target-features", "+micromips");
-  EXPECT_FALSE(
-      Codegen().compile(F.Module, Arch::MIPS64N32, BinaryFormat::ELF).Success);
+  Profile.ABI = MIPSABI::N32;
+  Profile.ISARevision = 6;
+  Profile.ELFFlags = llvm::ELF::EF_MIPS_NAN2008;
+  EXPECT_FALSE(Codegen()
+                   .compile(F.Module, Arch::MIPS64N32, BinaryFormat::ELF, {},
+                            ObjectConsumer::PlatformLinker, &Profile,
+                            Diagnostic)
+                   .Success);
   F.Leaf->addFnAttr("target-features", "+noabicalls");
   EXPECT_FALSE(
       Codegen().compile(F.Module, Arch::MIPS32, BinaryFormat::ELF).Success);
@@ -301,16 +312,26 @@ TEST(MIPSObject, InvalidFunctionFeaturesReturnDiagnosticsToTheCaller) {
 
 TEST(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
   for (bool Mips16 : {false, true})
-    for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                        Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+      if (Mips16 && !isMIPSO32(Target))
+        continue;
       SCOPED_TRACE(getArchName(Target));
       SCOPED_TRACE(Mips16);
       ObjectFixture F;
       MIPSImageMetadata Profile;
+      Profile.ABI = isMIPSN64(Target)   ? MIPSABI::N64
+                    : isMIPSN32(Target) ? MIPSABI::N32
+                                        : MIPSABI::O32;
       Profile.HasMicroMIPS = !Mips16;
       Profile.HasMIPS16 = Mips16;
       Profile.FPABI = llvm::Mips::Val_GNU_MIPS_ABI_FP_SOFT;
-      F.Leaf->addFnAttr(Mips16 ? "mips16" : "micromips");
-      F.Leaf->addFnAttr("target-features", "-msa");
+      if (isMIPSN32(Target)) {
+        F.Leaf->addFnAttr("target-features", "-msa,+micromips");
+      } else {
+        F.Leaf->addFnAttr(Mips16 ? "mips16" : "micromips");
+        F.Leaf->addFnAttr("target-features", "-msa");
+      }
       std::string Diagnostic;
       auto Result = Codegen().compile(F.Module, Target, BinaryFormat::ELF, {},
                                       ObjectConsumer::PlatformLinker, &Profile,
@@ -321,6 +342,13 @@ TEST(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
       EXPECT_NE(Diagnostic.find("compressed function entry modes"),
                 std::string::npos);
       continue;
+#elif !defined(LLVM_NEVERD_MICROMIPS64_PRE_R6)
+      if (!isMIPSO32(Target)) {
+        EXPECT_FALSE(Result.Success);
+        EXPECT_TRUE(Result.ObjectData.empty());
+        EXPECT_NE(Diagnostic.find("microMIPS64"), std::string::npos);
+        continue;
+      }
 #endif
       ASSERT_TRUE(Result.Success) << Diagnostic;
       ASSERT_EQ(Result.Functions.size(), 1u);
@@ -331,6 +359,10 @@ TEST(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
           llvm::MemoryBufferRef(Bytes, "compressed.o"));
       ASSERT_TRUE(bool(Obj)) << llvm::toString(Obj.takeError());
       const auto &ELF = llvm::cast<llvm::object::ELFObjectFileBase>(**Obj);
+      EXPECT_EQ(ELF.getBytesInAddress(), isMIPSN64(Target) ? 8u : 4u);
+      EXPECT_EQ(ELF.isLittleEndian(), archLittleEndian(Target));
+      EXPECT_EQ(bool(ELF.getPlatformFlags() & llvm::ELF::EF_MIPS_ABI2),
+                isMIPSN32(Target));
       bool FoundABI = false, FoundLeaf = false;
       for (const auto &Symbol : ELF.symbols()) {
         auto Name = Symbol.getName();
@@ -403,6 +435,61 @@ TEST(MIPSObject, FixedAddressEmissionKeepsEntryPointersAndFunctionRanges) {
                   ? llvm::support::endian::read64(Data->Bytes.data(), Endian)
                   : llvm::support::endian::read32(Data->Bytes.data(), Endian),
               Base);
+  }
+}
+
+TEST(MIPSObject, FixedAddressMicroMIPS64LeafWithoutUnwindHasAnExactRange) {
+  for (Arch Target :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    llvm::LLVMContext Context;
+    llvm::Module M("wide", Context);
+    llvm::IRBuilder<> B(Context);
+    auto *I64 = B.getInt64Ty();
+    auto *F = llvm::Function::Create(
+        llvm::FunctionType::get(I64, {I64, I64}, false),
+        llvm::GlobalValue::ExternalLinkage, "wide_add", M);
+    F->addFnAttr("micromips");
+    F->setDoesNotThrow();
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
+    B.CreateRet(B.CreateAdd(F->getArg(0), F->getArg(1)));
+
+    const uint64_t Base = isMIPSN64(Target) ? 0x1200010000ULL : 0x10000;
+    llvm::mc_rewrite::RewriteOptions Opt;
+    Opt.Model.TextVA = Base;
+    Opt.Model.getSectionVA = [Base](llvm::StringRef Section) {
+      return Section == ".text" ? Base : Base + 0x10000;
+    };
+    auto Result =
+        Codegen().compileForRewrite(M, Target, Opt, BinaryFormat::ELF);
+#ifndef LLVM_NEVERD_MICROMIPS64_PRE_R6
+    EXPECT_FALSE(Result.ImageValid);
+    continue;
+#endif
+    ASSERT_TRUE(Result.ImageValid);
+    EXPECT_TRUE(Result.Unresolved.empty());
+    ASSERT_TRUE(Result.FunctionRangesValid);
+    ASSERT_EQ(Result.FunctionRanges.size(), 1u);
+    const auto &Range = Result.FunctionRanges.front();
+    EXPECT_EQ(Range.OwnerSymbol, "wide_add");
+    EXPECT_EQ(Range.BeginVA, Base);
+    EXPECT_EQ(Range.EndVA, Base + 8);
+    const auto Text = llvm::find_if(Result.Sections, [](const auto &Section) {
+      return Section.Name == ".text";
+    });
+    ASSERT_NE(Text, Result.Sections.end());
+    ASSERT_GE(Text->Bytes.size(), 8u);
+    const auto Endian = archLittleEndian(Target) ? llvm::endianness::little
+                                                 : llvm::endianness::big;
+    // GNU as encodes JR $ra with a full-width DADDU in its delay slot.
+    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data(), Endian),
+              0x001f);
+    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data() + 2, Endian),
+              0x0f3c);
+    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data() + 4, Endian),
+              0x58a4);
+    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data() + 6, Endian),
+              0x1150);
   }
 }
 

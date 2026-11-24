@@ -16,9 +16,11 @@
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/MC/BinaryRewrite.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MipsABIFlags.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <filesystem>
@@ -211,9 +213,12 @@ TEST_P(MIPSSDK, FileInstallationRequiresAnArchitectureSpecificWriter) {
 
 class MicroMIPSSDK : public MIPSSDK {};
 
-class MIPSObjectSDK : public MIPSSDK {};
+class MIPSObjectSDK : public MIPSSDK {
+protected:
+  void checkObjectRoundTrip(bool Micro);
+};
 
-TEST_P(MIPSObjectSDK, LiftToObjectRetainsABIAndReportsTheEntryBody) {
+void MIPSObjectSDK::checkObjectRoundTrip(bool Micro) {
   auto Target = GetParam();
   // n32 uses the ELF32 header but has the same 64-bit GPR file as n64.
   mips_test::ELFBytes File(
@@ -221,12 +226,29 @@ TEST_P(MIPSObjectSDK, LiftToObjectRetainsABIAndReportsTheEntryBody) {
           ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
           : Target);
   File.abiFlags();
+  uint32_t InputFlags = isMIPS64(Target) ? llvm::ELF::EF_MIPS_ARCH_64R2
+                                         : llvm::ELF::EF_MIPS_ARCH_32R2 |
+                                               llvm::ELF::EF_MIPS_ABI_O32;
   if (isMIPSN32(Target)) {
-    File.put(36, llvm::ELF::EF_MIPS_ARCH_64R2 | llvm::ELF::EF_MIPS_ABI2, 4);
+    InputFlags |= llvm::ELF::EF_MIPS_ABI2;
     File.Bytes[0xe2] = 64;
     File.Bytes[0xe4] = 2;
   }
-  File.put(0x104, 0x24020025, 4); // addiu v0,zero,37 in the return slot
+  if (Micro) {
+    InputFlags |= llvm::ELF::EF_MIPS_MICROMIPS;
+    File.put(24, 0x10101, File.Is64 ? 8 : 4);
+    File.put(0xec, llvm::Mips::AFL_ASE_MICROMIPS, 4);
+    File.put(0x100, 0x459f, 2); // jr16 ra
+    if (isMIPS64(Target)) {
+      File.put(0x102, 0x58a4, 2); // daddu v0,a0,a1 (GNU as 2.42)
+      File.put(0x104, 0x1150, 2);
+    } else {
+      File.put(0x102, 0x0558, 2); // addu16 v0,a0,a1
+    }
+  } else {
+    File.put(0x104, 0x24020025, 4); // addiu v0,zero,37 in the return slot
+  }
+  File.put(File.Is64 ? 48 : 36, InputFlags, 4);
   const auto Path =
       (std::filesystem::path(Directory.str().str()) / "leaf.elf").string();
   std::error_code Error;
@@ -254,9 +276,20 @@ TEST_P(MIPSObjectSDK, LiftToObjectRetainsABIAndReportsTheEntryBody) {
   const auto Flags =
       llvm::support::endian::read32(Obj + (File.Is64 ? 48 : 36), Endian);
   EXPECT_EQ(bool(Flags & llvm::ELF::EF_MIPS_ABI2), isMIPSN32(Target));
+  EXPECT_EQ(bool(Flags & llvm::ELF::EF_MIPS_MICROMIPS), Micro);
   ASSERT_EQ(neverd_roundtrip_func_count(Session), 1);
   EXPECT_GT(neverd_roundtrip_func_size(Session, 0), 0u);
 }
+
+TEST_P(MIPSObjectSDK, LiftToObjectRetainsABIAndReportsTheEntryBody) {
+  checkObjectRoundTrip(false);
+}
+
+#ifdef LLVM_NEVERD_MICROMIPS64_PRE_R6
+TEST_P(MIPSObjectSDK, LiftToObjectPreservesMicroEntryAndDelaySlot) {
+  checkObjectRoundTrip(true);
+}
+#endif
 
 INSTANTIATE_TEST_SUITE_P(ABIAndByteOrder, MIPSObjectSDK,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
