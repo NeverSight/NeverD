@@ -35,6 +35,15 @@ struct X64ContinuationInstructionSource;
 /// alone cannot distinguish an unsupported instruction from TSX CPUID masking.
 struct X64RtmAbortSelection {
   enum Mode { Off, Supported, Probe, Unadvertised, ForcedAbort } Kind = Off;
+  struct SaveSite {
+    uint32_t Cpu;
+    va_t Rip;
+    va_t ImagePC;
+    std::optional<va_t> LoadBase;
+    bool admitsAddresses(llvm::ArrayRef<uint8_t> Begin, unsigned PairBytes,
+                         unsigned AddressBits) const;
+  };
+  std::optional<SaveSite> Qemu;
   std::optional<uint32_t> MaxBasic;
   std::optional<uint32_t> Leaf7EBX;
   std::optional<uint32_t> Leaf7EDX;
@@ -42,7 +51,10 @@ struct X64RtmAbortSelection {
   std::optional<uint64_t> TsxCtrl;
   std::optional<uint64_t> TsxForceAbort;
   bool canDecline() const { return Kind == Probe || Kind == Unadvertised; }
-  static llvm::Expected<X64RtmAbortSelection> read(const llvm::json::Value &V);
+  bool covers(va_t PC) const { return !Qemu || Qemu->ImagePC == PC; }
+  llvm::ArrayRef<va_t> sitesIn(llvm::ArrayRef<va_t> SortedPCs) const;
+  static llvm::Expected<X64RtmAbortSelection> read(const llvm::json::Value &V,
+                                                   va_t ImageBase);
   llvm::json::Object report(llvm::json::Array Regions) const;
 };
 

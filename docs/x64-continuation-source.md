@@ -1267,6 +1267,16 @@ A clear RTM bit or TSX_CPUID_CLEAR alone leaves the status undetermined.
 With no qualifying evidence the original native boundary remains in the manifest.
 [Processor enumeration and TSX controls](https://www.intel.com/content/www/us/en/developer/articles/technical/software-security-guidance/technical-documentation/cpuid-enumeration-and-architectural-msrs.html).
 
+The offline QEMU adapter can bind the original vCPU directly at a selected
+XBEGIN. Its `qemu_tsx_ctrl_v1` record contains the saved RIP, CPU instance,
+captured word (or `null` for an absent subsection), and optional original
+load base. The manifest records the captured and image addresses. Only the
+matching pair can consume the evidence or add its fallback during entry
+discovery. Each region looks up that site in its sorted instruction list.
+The generated step has the same code
+as the corresponding captured CPU selection and adds no runtime check.
+See the [QEMU capture procedure](qemu-save-snapshot.md#immediate-rtm-abort-at-the-saved-rip).
+
 ## Complete selected RTM attempts
 
 `native_rtm_regions: true` separately binds complete transactions, nested

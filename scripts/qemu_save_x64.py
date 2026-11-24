@@ -135,9 +135,7 @@ class V6RegisterProjection:
         )
 
 
-def _captured_cpu(snapshot: QemuSaveSnapshot, profile: str, cpu: int,
-                  expected_pc: int) -> tuple[dict, list[dict]]:
-    """Share the producer, CPU version and original code-coordinate checks."""
+def _check_x64_domain(snapshot: QemuSaveSnapshot, profile: str):
     if profile != PROFILE:
         raise SnapshotError("unsupported QEMU x64 register profile")
     try:
@@ -148,8 +146,9 @@ def _captured_cpu(snapshot: QemuSaveSnapshot, profile: str, cpu: int,
     if (domain.tag != "domain" or domain.get("type") != "kvm" or
             machine is None or machine.get("arch") != "x86_64"):
         raise SnapshotError("register projection requires a saved x86_64 KVM domain")
-    snapshot.expect_pc(cpu, expected_pc)
-    record = snapshot.cpus[cpu]
+
+
+def _captured_code_segments(record: dict) -> list[dict]:
     if record["version"] != 12:
         raise SnapshotError("register profile requires CPU v12")
     fields = record["fields"]
@@ -158,7 +157,16 @@ def _captured_cpu(snapshot: QemuSaveSnapshot, profile: str, cpu: int,
     # EFER.LMA authenticate the coordinate system; no rebasing is performed.
     if not segments[1]["Attributes"] & 0x2000 or not _uint(fields, "env.efer") & 0x400:
         raise SnapshotError("V6 register projection requires captured 64-bit code")
-    return record, segments
+    return segments
+
+
+def _captured_cpu(snapshot: QemuSaveSnapshot, profile: str, cpu: int,
+                  expected_pc: int) -> tuple[dict, list[dict]]:
+    """Share the producer, CPU version and original code-coordinate checks."""
+    _check_x64_domain(snapshot, profile)
+    snapshot.expect_pc(cpu, expected_pc)
+    record = snapshot.cpus[cpu]
+    return record, _captured_code_segments(record)
 
 
 def project_v6(snapshot: QemuSaveSnapshot, *, profile: str, cpu: int, apic: int,

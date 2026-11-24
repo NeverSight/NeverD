@@ -59,8 +59,11 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,
     unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
-    bool NativeRtmRegions, DebugContext *Debug) {
+    const X64RtmAbortSelection &RtmSteps, bool NativeRtmRegions,
+    DebugContext *Debug) {
   X64SpecialRegionSelection Selection;
+  const bool FollowImmediateAborts =
+      NativeRtmAbortRegions || RtmSteps.Kind != X64RtmAbortSelection::Off;
   if (SourceOptions.Profile ==
           analysis::X64ContinuationProfile::NativeSgxNoFaultV13 ||
       SourceOptions.Profile ==
@@ -199,9 +202,9 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         Region["callee_depth"] = Depth;
       if (!DirectJumps.empty())
         Region["direct_jump_successors"] = std::move(DirectJumps);
-      if (NativeRtmAbortRegions) {
+      if (FollowImmediateAborts) {
         llvm::json::Array Resumes;
-        for (va_t Address : Audit.NativeInstructionAddresses)
+        for (va_t Address : RtmSteps.sitesIn(Audit.NativeInstructionAddresses))
           if (auto Abort = readX64RtmAbortRegion(
                   Image, Address, *SourceOptions.PagingAddressBits);
               Abort && Image.isCodeAddress(Abort->Fallback)) {

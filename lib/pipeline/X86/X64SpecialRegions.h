@@ -27,6 +27,7 @@ struct BinaryImage;
 class DebugContext;
 class X64FunctionCallSitePauses;
 class X64RtmAbortDispatch;
+struct X64RtmAbortSelection;
 namespace analysis {
 struct X64ContinuationInstructionSource;
 struct X64ContinuationSourceOptions;
@@ -61,7 +62,8 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const BinaryImage &Image, llvm::ArrayRef<va_t> Entries,
     const analysis::X64ContinuationSourceOptions &SourceOptions,
     unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
-    bool NativeRtmRegions, DebugContext *Debug);
+    const X64RtmAbortSelection &RtmSteps, bool NativeRtmRegions,
+    DebugContext *Debug);
 
 /// Connect adjacent selected instructions after checking their actual next PC.
 /// All other transfers use the common indexed dispatch. Keep instruction exits,

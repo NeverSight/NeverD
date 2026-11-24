@@ -92,7 +92,7 @@ struct Request {
   std::vector<X64FunctionCallInterface> FunctionCalls;
 };
 
-llvm::Expected<Request> readRequest(llvm::StringRef Text) {
+llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
   if (Text.empty() ||
       Text.size() > limits::pipeline::kX64ContinuationRequestBytes)
     return invalid(
@@ -257,7 +257,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       *Destination = *Flag;
     }
   if (const auto *V = Object->get("native_rtm_abort_steps")) {
-    auto Selection = X64RtmAbortSelection::read(*V);
+    auto Selection = X64RtmAbortSelection::read(*V, ImageBase);
     if (!Selection)
       return Selection.takeError();
     Result.RtmSteps = *Selection;
@@ -678,7 +678,7 @@ void driver(llvm::raw_ostream &OS,
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug) {
-  auto Request = readRequest(RequestJSON);
+  auto Request = readRequest(RequestJSON, Image.Base);
   if (!Request)
     return Request.takeError();
   if (Image.Arch != Arch::X64)
@@ -688,10 +688,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   if (Request->Entries) {
     auto Selection = selectX64SpecialRegions(
         Image, Addresses, Request->Options, Request->CalleeDepth,
-        Request->FollowDirectJumps,
-        Request->NativeRtmAbortRegions ||
-            Request->RtmSteps.Kind != X64RtmAbortSelection::Off,
-        Request->NativeRtmRegions, Debug);
+        Request->FollowDirectJumps, Request->NativeRtmAbortRegions,
+        Request->RtmSteps, Request->NativeRtmRegions, Debug);
     if (!Selection)
       return Selection.takeError();
     Addresses = std::move(Selection->Addresses);
@@ -771,9 +769,15 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       return std::move(Error);
     bool NativeBoundary = Unit.RequiresNativeExecution;
     if (NativeBoundary && Request->RtmSteps.Kind != X64RtmAbortSelection::Off &&
-        x86TransactionBeginEncoding(Unit.Bytes, Unit.Address, true)) {
+        x86TransactionBeginEncoding(Unit.Bytes, Unit.Address, true) &&
+        Request->RtmSteps.covers(Unit.Address)) {
       if (auto Pair = readX64RtmAbortRegion(
               Image, Unit.Address, *Request->Options.PagingAddressBits)) {
+        if (Request->RtmSteps.Qemu && !Request->RtmSteps.Qemu->admitsAddresses(
+                                          Unit.Bytes, Pair->Bytes.size(),
+                                          *Request->Options.PagingAddressBits))
+          return invalid(
+              "captured RTM instruction or fallback address is invalid");
         // The existing instruction function validates all V6 state before
         // returning NativeInstruction. Keep it as the guard for the bound step.
         if (Request->RtmSteps.Kind != X64RtmAbortSelection::Unadvertised)
@@ -794,6 +798,9 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
         {"name", Unit.Function.Name},
         {"arbitrary_effects", effects(Unit)}});
   }
+  if (Request->RtmSteps.Qemu && RtmSteps.empty())
+    return invalid(
+        "captured RIP does not select an immediate XBEGIN/XABORT pair");
   X64ContinuationExport Result;
   llvm::raw_string_ostream OS(Result.Source);
   const auto Version = Units->front().StateVersion;

@@ -15,10 +15,12 @@
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/support/SortedSearch.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
@@ -69,10 +71,91 @@ llvm::StringRef forcedAbortEvidence(const X64RtmAbortSelection &CPU) {
     return "rtm_always_abort+rtm_force_abort";
   return {};
 }
+
+llvm::Error readCpuidRecord(const llvm::json::Object &Record,
+                            X64RtmAbortSelection &Result) {
+  Result.MaxBasic = cpuWord<uint32_t>(Record, "max_basic_leaf");
+  Result.Leaf7EBX = cpuWord<uint32_t>(Record, "leaf7_ebx");
+  Result.Leaf7EDX = cpuWord<uint32_t>(Record, "leaf7_edx");
+  Result.ArchCapabilities = cpuWord<uint64_t>(Record, "ia32_arch_capabilities");
+  Result.TsxCtrl = cpuWord<uint64_t>(Record, "ia32_tsx_ctrl");
+  Result.TsxForceAbort = cpuWord<uint64_t>(Record, "ia32_tsx_force_abort");
+  const unsigned Fields =
+      Result.MaxBasic.has_value() + Result.Leaf7EBX.has_value() +
+      Result.Leaf7EDX.has_value() + Result.ArchCapabilities.has_value() +
+      Result.TsxCtrl.has_value() + Result.TsxForceAbort.has_value();
+  if (Record.size() != Fields)
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "unknown or invalid RTM CPU record field");
+  if (!Result.MaxBasic ||
+      (*Result.MaxBasic >= 7) != Result.Leaf7EBX.has_value() ||
+      (Result.Leaf7EDX && !Result.Leaf7EBX))
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "RTM CPUID requires max_basic_leaf and "
+                                   "leaf7_ebx exactly when leaf 7 exists");
+  const uint32_t EDX = Result.Leaf7EDX.value_or(0);
+  if ((Result.ArchCapabilities && !(EDX & kArchCapabilitiesMsr)) ||
+      (Result.TsxCtrl &&
+       !(Result.ArchCapabilities.value_or(0) & kTsxCtrlMsr)) ||
+      (Result.TsxForceAbort && !(EDX & kRtmForceAbortMsr)))
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "RTM CPU record uses an unenumerated MSR");
+  return llvm::Error::success();
+}
+
+llvm::Error readQemuSite(const llvm::json::Object &Record, va_t ImageBase,
+                         X64RtmAbortSelection &Result) {
+  const auto *Site = Record.getObject("qemu_tsx_ctrl_v1");
+  if (Record.size() != 1 || !Site)
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "expected one QEMU TSX_CTRL capture");
+  const auto Cpu = cpuWord<uint32_t>(*Site, "cpu");
+  const auto Rip = cpuWord<va_t>(*Site, "rip");
+  const auto LoadBase = cpuWord<va_t>(*Site, "load_base");
+  const auto *Value = Site->get("value");
+  Result.TsxCtrl = cpuWord<uint32_t>(*Site, "value");
+  if (!Cpu || !Rip || !Value || (!Value->getAsNull() && !Result.TsxCtrl) ||
+      Site->size() != 3 + unsigned(LoadBase.has_value()))
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "invalid QEMU TSX_CTRL capture fields");
+  va_t PC = *Rip;
+  if (LoadBase) {
+    if (*Rip < *LoadBase ||
+        *Rip - *LoadBase > std::numeric_limits<va_t>::max() - ImageBase)
+      return llvm::createStringError(
+          llvm::errc::invalid_argument,
+          "captured RIP is outside the image mapping");
+    PC = ImageBase + (*Rip - *LoadBase);
+  }
+  Result.Qemu = X64RtmAbortSelection::SaveSite{*Cpu, *Rip, PC, LoadBase};
+  return llvm::Error::success();
+}
 } // namespace
 
+bool X64RtmAbortSelection::SaveSite::admitsAddresses(
+    llvm::ArrayRef<uint8_t> Begin, unsigned PairBytes,
+    unsigned AddressBits) const {
+  return PairBytes &&
+         Rip <= std::numeric_limits<va_t>::max() - (PairBytes - 1) &&
+         llvm::isIntN(AddressBits, static_cast<int64_t>(Rip)) &&
+         llvm::isIntN(AddressBits, static_cast<int64_t>(Rip + PairBytes - 1)) &&
+         x64RtmFallback(Begin, Rip, AddressBits).has_value();
+}
+
+llvm::ArrayRef<va_t>
+X64RtmAbortSelection::sitesIn(llvm::ArrayRef<va_t> SortedPCs) const {
+  if (!Qemu || SortedPCs.empty())
+    return SortedPCs;
+  // A captured instruction can add only its own fallback to this audit.
+  const auto I =
+      sorted::lowerBound64(SortedPCs.data(), SortedPCs.size(), Qemu->ImagePC);
+  if (I < SortedPCs.size() && SortedPCs[I] == Qemu->ImagePC)
+    return SortedPCs.slice(I, 1);
+  return {};
+}
+
 llvm::Expected<X64RtmAbortSelection>
-X64RtmAbortSelection::read(const llvm::json::Value &V) {
+X64RtmAbortSelection::read(const llvm::json::Value &V, va_t ImageBase) {
   X64RtmAbortSelection Result;
   if (const auto Flag = V.getAsBoolean()) {
     Result.Kind = *Flag ? Supported : Off;
@@ -87,36 +170,14 @@ X64RtmAbortSelection::read(const llvm::json::Value &V) {
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "native_rtm_abort_steps requires a boolean, "
                                    "auto or target CPU record");
-  Result.MaxBasic = cpuWord<uint32_t>(*Record, "max_basic_leaf");
-  Result.Leaf7EBX = cpuWord<uint32_t>(*Record, "leaf7_ebx");
-  Result.Leaf7EDX = cpuWord<uint32_t>(*Record, "leaf7_edx");
-  Result.ArchCapabilities =
-      cpuWord<uint64_t>(*Record, "ia32_arch_capabilities");
-  Result.TsxCtrl = cpuWord<uint64_t>(*Record, "ia32_tsx_ctrl");
-  Result.TsxForceAbort = cpuWord<uint64_t>(*Record, "ia32_tsx_force_abort");
-  const unsigned Fields =
-      Result.MaxBasic.has_value() + Result.Leaf7EBX.has_value() +
-      Result.Leaf7EDX.has_value() + Result.ArchCapabilities.has_value() +
-      Result.TsxCtrl.has_value() + Result.TsxForceAbort.has_value();
-  if (Record->size() != Fields)
-    return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "unknown or invalid RTM CPU record field");
-  if (!Result.MaxBasic ||
-      (*Result.MaxBasic >= 7) != Result.Leaf7EBX.has_value() ||
-      (Result.Leaf7EDX && !Result.Leaf7EBX))
-    return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "RTM CPUID requires max_basic_leaf and "
-                                   "leaf7_ebx exactly when leaf 7 exists");
+  if (auto Error = Record->get("qemu_tsx_ctrl_v1")
+                       ? readQemuSite(*Record, ImageBase, Result)
+                       : readCpuidRecord(*Record, Result))
+    return std::move(Error);
   const uint32_t EBX = Result.Leaf7EBX.value_or(0);
   const uint32_t EDX = Result.Leaf7EDX.value_or(0);
   const uint64_t Ctrl = Result.TsxCtrl.value_or(0);
   const uint64_t Force = Result.TsxForceAbort.value_or(0);
-  if ((Result.ArchCapabilities && !(EDX & kArchCapabilitiesMsr)) ||
-      (Result.TsxCtrl &&
-       !(Result.ArchCapabilities.value_or(0) & kTsxCtrlMsr)) ||
-      (Result.TsxForceAbort && !(EDX & kRtmForceAbortMsr)))
-    return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "RTM CPU record uses an unenumerated MSR");
   if (Ctrl & ~(kRtmDisable | kTsxCpuidClear))
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "reserved IA32_TSX_CTRL bits");
@@ -151,7 +212,8 @@ X64RtmAbortSelection::report(llvm::json::Array Regions) const {
                  "instruction fetch and no debug trap"},
       {"budget",
        "one translated step per attempted pair; zero on capability refusal"},
-      {"selection", Kind == Probe                       ? "executing-cpu-cpuid"
+      {"selection", Qemu                                ? "qemu-10.2-kvm-x64"
+                    : Kind == Probe                     ? "executing-cpu-cpuid"
                     : ArchCapabilities || TsxForceAbort ? "captured-cpu-state"
                     : MaxBasic                          ? "captured-cpuid"
                                                         : "declared-rtm"},
@@ -159,7 +221,7 @@ X64RtmAbortSelection::report(llvm::json::Array Regions) const {
   if (Kind == ForcedAbort) {
     R["forced_abort_status"] = 0;
     R["forced_abort_evidence"] = forcedAbortEvidence(*this);
-  } else {
+  } else if (!Qemu || Kind != Unadvertised) {
     R["native_intrinsic"] = "llvm.x86.rtm.abort.pair";
   }
   if (MaxBasic)
@@ -174,6 +236,16 @@ X64RtmAbortSelection::report(llvm::json::Array Regions) const {
     R["ia32_tsx_ctrl"] = "0x" + llvm::utohexstr(*TsxCtrl);
   if (TsxForceAbort)
     R["ia32_tsx_force_abort"] = "0x" + llvm::utohexstr(*TsxForceAbort);
+  if (Qemu) {
+    llvm::json::Object Capture{
+        {"cpu", Qemu->Cpu},
+        {"rip", "0x" + llvm::utohexstr(Qemu->Rip)},
+        {"image_pc", "0x" + llvm::utohexstr(Qemu->ImagePC)},
+        {"tsx_ctrl_present", TsxCtrl.has_value()}};
+    if (Qemu->LoadBase)
+      Capture["load_base"] = "0x" + llvm::utohexstr(*Qemu->LoadBase);
+    R["capture"] = std::move(Capture);
+  }
   return R;
 }
 
