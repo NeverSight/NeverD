@@ -51,6 +51,10 @@ def execute_profile(api, work, abi, little, mode):
     elif mode in ("mips1", "mips2", "mips3", "mips4", "mips5"):
         isa = mode
         float_flags = ["-mhard-float"]
+    elif mode in ("r1", "r3", "r5"):
+        isa = ("mips64" if wide else "mips32") + ("" if mode == "r1" else mode)
+        if mode == "r1":
+            cpu = "5Kc" if wide else "4Kc"
     elif mode == "r6":
         cpu = "I6400" if wide else "mips32r6-generic"
         isa = "mips64r6" if wide else "mips32r6"
@@ -74,7 +78,7 @@ def execute_profile(api, work, abi, little, mode):
         body = "addiu $2,$4,7\n jrc $31"
     if mode == "mips16":
         body = "li $2,37\n jrc $31"
-    if wide and mode in ("mips3", "mips4", "mips5"):
+    if wide and mode in ("mips3", "mips4", "mips5", "r1", "r3", "r5"):
         # Check both words of the n32/n64 result on a compatible 64-bit CPU.
         body = "dsrl32 $3,$4,0\n jr $31\n daddu $2,$3,$4"
         argument = "ori $4,$0,7\n dsll32 $4,$4,0\n ori $4,$4,30"
@@ -103,6 +107,16 @@ leaf:
         raise RuntimeError(f"{abi}/{mode}: {diagnostic}")
     else:
         variants.append(("rebuilt", entry))
+        if mode in ("r1", "r3", "r5"):
+            # e_flags alone cannot distinguish R3 and R5 from R2.
+            expected_isa = ("MIPS64" if wide else "MIPS32") + ("" if mode == "r1" else mode)
+            for filename in ("input.elf", "rebuilt.o"):
+                attrs = subprocess.check_output(
+                    [prefix + "readelf", "-A", filename], cwd=work,
+                    env={**os.environ, "LC_ALL": "C"}, text=True, timeout=30,
+                )
+                if f"ISA: {expected_isa}" not in attrs.splitlines():
+                    raise ValueError(f"{abi}/{mode}: wrong ISA in {filename}\n{attrs}")
     exit_syscall = {"o32": 4001, "n32": 6058, "n64": 5058}[abi]
     for variant, symbol in variants:
         (work / "start.s").write_text(f""".set noreorder
@@ -148,9 +162,9 @@ def main():
     rows = []
     for abi in ("o32", "n32", "n64"):
         if abi == "o32":
-            modes = ("classic", "micromips", "mips16", "mips1", "mips2", "r6")
+            modes = ("classic", "micromips", "mips16", "mips1", "mips2", "r1", "r3", "r5", "r6")
         else:
-            modes = ("classic", "mips3", "mips4", "mips5", "r6")
+            modes = ("classic", "mips3", "mips4", "mips5", "r1", "r3", "r5", "r6")
         for little in (False, True):
             for mode in modes:
                 with tempfile.TemporaryDirectory(prefix="neverd-mips-native-") as directory:

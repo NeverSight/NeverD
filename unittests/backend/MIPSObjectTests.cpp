@@ -162,6 +162,22 @@ TEST(MIPSObject, ImageRevisionAndFPABIReachTheObjectWriter) {
   }
 }
 
+TEST(MIPSObject, ScalarClassicReleasesPreserveISAAndABIRecords) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    MIPSImageMetadata Profile;
+    Profile.ABI = isMIPSN64(A)   ? MIPSABI::N64
+                  : isMIPSN32(A) ? MIPSABI::N32
+                                 : MIPSABI::O32;
+    Profile.FPABI = llvm::Mips::Val_GNU_MIPS_ABI_FP_SOFT;
+    for (unsigned Revision : {1u, 3u, 5u}) {
+      Profile.ISARevision = Revision;
+      checkObject(A, &Profile, isMIPS64(A) ? 64 : 32, Revision,
+                  llvm::Mips::Val_GNU_MIPS_ABI_FP_SOFT);
+    }
+  }
+}
+
 TEST(MIPSObject, MSAUsesTheRelease5ABIInBothByteOrders) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
@@ -260,6 +276,9 @@ TEST(MIPSObject, InvalidFunctionFeaturesReturnDiagnosticsToTheCaller) {
   Check(Arch::MIPS64N32EL, "+unknown-isa", "unknown target feature");
   Profile.HasMSA = false;
   Profile.ABI = MIPSABI::O32;
+  Profile.ISARevision = 1;
+  Check(Arch::MIPS32EL, "+fp64", "32-bit floating registers");
+  Check(Arch::MIPS32, "+use-indirect-jump-hazard", "later MIPS ISA release");
   Profile.ISARevision = 2;
   Check(Arch::MIPS32EL, "+soft-float", "change the input ELF ISA or ABI");
   Check(Arch::MIPS32, "+mips32r6", "change the input ELF ISA or ABI");

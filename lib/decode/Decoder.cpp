@@ -153,7 +153,9 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
         (Historical ? (Historical > 5 || Revision ||
                        isMIPS64(TheArch) != (Historical >= 3) ||
                        isMIPSCompressedMode(Mode))
-                    : (Revision != 2 && Revision != 5 && Revision != 6)) ||
+                    : (Revision != 1 && Revision != 2 && Revision != 3 &&
+                       Revision != 5 && Revision != 6)) ||
+        ((Revision == 1 || Revision == 3) && isMIPSCompressedMode(Mode)) ||
         (Revision != 2 && Mode == InstructionMode::MIPS16)) {
       syncError() << "unsupported MIPS instruction mode\n";
       return false;
@@ -169,6 +171,9 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
              ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R6 : CS_MODE_MIPS32R6)
          : Revision == 5
              ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R5 : CS_MODE_MIPS32R5)
+         : Revision == 3
+             ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R3 : CS_MODE_MIPS32R3)
+         : Revision == 1 ? (isMIPS64(TheArch) ? CS_MODE_MIPS64 : CS_MODE_MIPS32)
          : isMIPS64(TheArch) ? CS_MODE_MIPS64R2
                              : CS_MODE_MIPS32R2) |
         (Revision == 6 && isMIPS64(TheArch) && !isMIPSN32(TheArch)
@@ -217,7 +222,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   MIPSISARevision = Revision;
   MIPSHistoricalISA = Historical;
   MIPSNeedsDecodeGuard =
-      NewMIPS && (Revision == 6 || Historical ||
+      NewMIPS && (Revision == 1 || Revision == 6 || Historical ||
                   (Revision == 5 && Mode == InstructionMode::MicroMIPS));
   MIPSInvalidAddressBits = mipsInvalidAddressBits(TheArch, Mode);
   Detail = true;
@@ -239,7 +244,8 @@ void Decoder::configureFor(const BinaryImage &Img) {
     MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP,
                         Img.MIPS && Img.MIPS->HasDSPR2);
     MIPSNeedsDecodeGuard =
-        MIPSISARevision == 6 || MIPSHistoricalISA || MIPS->hasClassicDSP64() ||
+        MIPSISARevision == 1 || MIPSISARevision == 6 || MIPSHistoricalISA ||
+        MIPS->hasClassicDSP64() ||
         (MIPSISARevision == 5 && CurrentMode == InstructionMode::MicroMIPS);
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
     MIPS->setScalarFPEnabled(Img.MIPS && Img.MIPS->hasScalarFPABI(Img.Arch),
@@ -353,6 +359,17 @@ Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
 
 LLVM_ATTRIBUTE_NOINLINE bool Decoder::decodeMIPSProfile(const uint8_t *Bytes,
                                                         size_t Len, va_t Addr) {
+  if (MIPSISARevision == 1) {
+    if (Len < 4)
+      return false;
+    const auto Physical =
+        readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
+    const auto Word = MIPS->classicReleaseOneEncoding(Physical);
+    if (!Word)
+      return false;
+    if (*Word != Physical)
+      return decodeMIPSEquivalent(Bytes, *Word, Addr);
+  }
   if (MIPS->hasClassicDSP64() && MIPSISARevision != 6) {
     // Only the admitted classic DSP64 profile reaches this branch. Its
     // legacy packed forms otherwise pay for a failed physical decode
