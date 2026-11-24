@@ -14,6 +14,7 @@
 #include "neverd/analysis/arch/x86_64/X64PagedPortIO.h"
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 #include "neverd/ir/X86/X86DebugRules.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -83,6 +84,9 @@ struct X64PagedExecutionOptions {
   /// Required only for MOVUPS/MOVDQU memory operands with CPL3/AM/AC active.
   /// Register forms and supervisor operands do not require this binding.
   std::optional<X64PagedSseAlignment> SseAlignment;
+  /// Required for original-byte UD0. The target CPU selects whether an
+  /// inaccessible ModR/M address faults before #UD; no data operand is read.
+  std::optional<X86UD0FetchProfile> UD0Fetch;
   X64PagedDebugState *Debug = nullptr;
   X86InstructionDebugProfile DebugProfile =
       X86InstructionDebugProfile::InstructionStep;

@@ -325,7 +325,17 @@ with exact scalar values and this memory binding; source and concrete execution
 share descriptor/frame decisions. Recursive delivery owns #DF classification,
 CR2 publication and shutdown. `X64PagedExecution` binds generated scalar steps
 to that memory, authenticates instruction fetches, stages restart state and
-commits prepared stores. Faultable IRET and RETF reuse the same continuation
+commits prepared stores. `ir/X86/X86UndefinedOpcodeRules` owns the explicit
+processor choice for UD0 fetch priority. The paged code64 continuation admits
+only original unprefixed UD0 bytes with the audited terminal intrinsic;
+`X64PagedExecution` requires the target CPU's choice before fetch, then
+authenticates the two opcode bytes and, for the complete-fetch choice, reads
+the remaining ModR/M, SIB and displacement bytes from live executable RAM.
+No data operand is read, and the existing fault owner delivers #UD or a
+preceding instruction-fetch fault. The legacy protected executor uses the
+same profile type for its segmented original-byte fetch.
+
+Faultable IRET and RETF reuse the same continuation
 return and descriptor templates through that concrete evaluator. Their bound
 processor profiles preserve ordered descriptor writes on a later failure;
 IRET also unblocks NMI, while RETF retains inhibition. Register/segment
@@ -18798,7 +18808,8 @@ instruction extent and operand details. NeverD's detailed, lightweight and
 lifting decode routes consume that result, including REX2 forms. Illegal
 encodings fail decoding even when strict lifting is disabled. UD1 remains an
 explicit invalid-opcode intrinsic; its encoded operands do not imply an
-ordinary memory access.
+ordinary memory access. UD0 and UD1 are terminal intrinsics with no fabricated
+RAX output; a sanitizer displacement remains an intrinsic input for printing.
 
 For an x86 function-discovery scan with operand detail disabled, the decoder
 resolves a near CALL from the exact bytes of the classified instruction. The

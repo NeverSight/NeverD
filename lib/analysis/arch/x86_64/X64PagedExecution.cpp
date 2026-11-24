@@ -523,6 +523,12 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
           "paged instruction resume changed body, bytes, mask or shadow");
     return executeTransition(State, *P);
   }
+  const bool UD0 = Bytes.size() >= 2 && Bytes[0] == 0x0f && Bytes[1] == 0xff;
+  if (UD0 && (!Options.UD0Fetch ||
+              (*Options.UD0Fetch != X86UD0FetchProfile::OpcodeOnly &&
+               *Options.UD0Fetch != X86UD0FetchProfile::CompleteModRM)))
+    return invalid("paged UD0 requires a bound instruction-fetch profile");
+  const unsigned FetchBytes = UD0 ? 2 : Bytes.size();
   auto Controls = Memory.controls();
   const auto &Original = State.Core.Core.Core.Core;
   const bool SingleStep = Original.RFlags & 0x100;
@@ -569,7 +575,7 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   // byte. The environment must relift changed code; it is never executed as
   // the stale source instruction or skipped as a NOP.
   for (unsigned I = 0;
-       T.Access.Status == X86PageWalkStatus::Completed && I != Bytes.size();
+       T.Access.Status == X86PageWalkStatus::Completed && I != FetchBytes;
        ++I) {
     uint8_t Byte;
     if (!T.accept(Memory.load({Address + I, MemoryAccessKind::Execute, T.CPL},
@@ -578,6 +584,30 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     if (Byte != Bytes[I]) {
       Last.Exit = uint64_t(X64PagedExit::CodeChanged);
       return Last;
+    }
+  }
+  if (UD0 && *Options.UD0Fetch == X86UD0FetchProfile::CompleteModRM &&
+      T.Access.Status == X86PageWalkStatus::Completed) {
+    // The x64 decoder conservatively records UD0 as a two-byte terminal
+    // opcode. A processor that fetches its encoded address determines the
+    // remaining extent from live instruction bytes, even when the image ends
+    // after the opcode or later bytes have changed. No data read is implied.
+    const auto Fetch = [&](unsigned Offset, uint8_t &Byte) {
+      return T.accept(
+          Memory.load({Address + Offset, MemoryAccessKind::Execute, T.CPL},
+                      llvm::MutableArrayRef(&Byte, 1)));
+    };
+    uint8_t ModRM = 0, SIB = 0, Byte = 0;
+    if (Fetch(2, ModRM)) {
+      const bool HasSIB = x86UD0NeedsSIB32Or64(ModRM);
+      if (!HasSIB || Fetch(3, SIB)) {
+        const unsigned AddressBytes = x86UD0AddressBytes32Or64(ModRM, SIB);
+        for (unsigned I = 1 + HasSIB;
+             I != AddressBytes &&
+             T.Access.Status == X86PageWalkStatus::Completed;
+             ++I)
+          Fetch(2 + I, Byte);
+      }
     }
   }
   if (!T.Error && T.Access.Status == X86PageWalkStatus::Completed &&

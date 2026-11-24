@@ -10350,6 +10350,10 @@ with its shared legacy grammar. NeverD has no duplicate LOCK/MOV-to-CS
 predicate. UD1 operands remain an
 unconditional invalid-opcode intrinsic without ordinary memory or arithmetic
 operations; this suite does not select a processor's UD0 policy.
+`X86EncodingAccuracy.Ud0TerminalDoesNotSynthesizeRAXOutput` and
+`Ud1OperandsDoNotBecomeMemoryOrArithmeticEffects` require terminal LowIR
+intrinsics to have no fabricated register output. The instruction-text suite
+still checks clang's UD1 sanitizer displacement.
 `X86LegacyExecutionTest.UD1FaultsWithoutReadingItsAddress` checks complete
 and malformed UD1 byte extents. `LegacyEvents/*OriginalUD1*` compares the
 original instruction and the protected 16/32-bit executor at CPL0/CPL3 over
@@ -10370,6 +10374,19 @@ ModR/M byte across an absent page after the opcode. Its three address forms
 cover simple ModR/M, SIB and disp32; code16/code32 and both bound processor
 profiles check #UD versus #PF, CR2 and the original return PC through the same
 four compiler lanes.
+`X64PagedExecutionTest.UD0CrossPageFetchUsesTheBoundProcessor` places the
+ModR/M, SIB or first displacement byte on an absent page in code64. Both
+fetch profiles run through HighC and LLVM-to-C, Clang and 64-bit NeverC at
+O0/O2. `UD0RefusesMissingOrInvalidFetchProfile` checks fail-loud admission
+before CPU or RAM effects. `UD0AddressExtentUsesLiveBytesAfterTheOpcode`
+exports an image ending at the two-byte opcode, then changes its live ModR/M
+and SIB to distinguish #UD from a displacement-fetch #PF without relifting;
+the register-indirect data address is noncanonical and is never read.
+Pin `UD0FetchPriorityMatchesOriginalHybridCPU` to the qualified P and E cores
+separately; compare the original KVM handler,
+fault stack RIP/error code, CR2, all GPRs, flags and RAM with each generated
+lane. The model's execution binding is intentionally independent of the host
+core used to compile its C source. Missing KVM is an oracle skip, not a pass.
 
 ```sh
 cmake --build build-release --target NeverDX86EncodingAccuracyTests

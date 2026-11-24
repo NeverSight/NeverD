@@ -395,10 +395,10 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         X86.operands[1].mem.disp >= 0 && X86.operands[1].mem.disp <= 0xFF;
     if (SanitizerForm)
       S.emitIntrinsic(
-          Id, NdVar::reg(x86reg::RAX, 8),
+          Id, NdVar(),
           {NdVar::cst(static_cast<uint64_t>(X86.operands[1].mem.disp), 1)});
     else
-      S.emitIntrinsic(Id);
+      S.emitIntrinsic(Id, NdVar());
     break;
   }
 
