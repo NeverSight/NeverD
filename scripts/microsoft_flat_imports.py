@@ -219,6 +219,10 @@ def named_runtime_units(output, architecture, compiler, libraries):
         if convention and (architecture != "x86" or convention != "__stdcall" or name not in libraries):
             raise ValueError("unverified default calling convention for " + name)
         options = compiler + (["-Xclang", "-fdefault-calling-conv=stdcall"] if convention else [])
+        if name == "DbgHelpLegacy":
+            # DbgHelp.h selects the original 32-bit-address entry points and
+            # their record layouts in this view, even when HANDLE is 64 bits.
+            options = [*options, "-D_IMAGEHLP_SOURCE_"]
         if profile.get("kit_ntddi"):
             # SdkDdkVer.h selects the pinned kit's feature level for these declarations.
             options = [*options, "-UNTDDI_VERSION"]
