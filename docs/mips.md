@@ -1864,6 +1864,17 @@ instruction. The capture omitted the originating interrupt signal. Its
 instruction boundary therefore has no corresponding pin-edge timestamp.
 [Rose, section 4.3](https://charltonrose.com/citcat/msthesis/msthesis.pdf#page=31).
 
+Tektronix captured an R3000/A exception in its DAS 9200 reference memory.
+Figure 4-10 shows the interrupted instruction stream at sample 703 and the
+general vector at sample 709. The display omits the interrupt input. In the
+separate timing acquisition, the six-bit input group stays at `0x37` throughout
+samples 137–159 in figure 5-1. Figure 5-2 displays the exception signal and
+a 530 ns trigger-to-cursor interval. Neither figure locates an input edge
+against CPU recognition. The original reference memories are named
+`R3000_Demo` and `R3K_Timg_96`.
+[Tektronix 92DM74, figure 4-10](https://download.tek.com/manual/070809000.pdf#page=70),
+[figures 5-1 and 5-2](https://download.tek.com/manual/070809000.pdf#page=80).
+
 The HP E2401A R3000 inverse-assembler disk contains three HP 16500 analyzer
 setups with labels for reset, interrupt and exception signals. All three
 contain channel configuration and symbols. None contains an acquisition
