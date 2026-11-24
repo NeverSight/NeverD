@@ -47,6 +47,8 @@ Win64 outgoing word at its authenticated direct CALL. Bind
 retains its recovered value. The default source imports the original word
 and preserves the registry call through optimization. The physical word
 can differ across invocations with identical ordinary entry parameters.
+Single-entry HighC exports also keep mapped direct callees distinct from
+MinGW header declarations when only the PDB names the omitted routine.
 The V6 `native_rtm_abort_steps` binding handles an authenticated immediate
 abort pair under declared RTM support as one translated step. It preserves
 early-abort EAX and the original fallback. The earlier environment-budget
