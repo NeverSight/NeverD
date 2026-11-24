@@ -5763,6 +5763,22 @@
     },
     "neverc_compiler_source": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
     "neverc_dev_target_owner_checked": "71c4e8f9f88c916901292684f4621102a0650a61",
+    "neverc_target_owner_paths_checked": [
+      "neverc/Driver",
+      "neverc/lib/Compiler",
+      "neverc/lib/Build",
+      "neverc/lib/Linker",
+      "neverc/lib/Foundation",
+      "neverc/include/neverc/Foundation",
+      "neverc/lib/Emit",
+      "llvm/lib/Frontend",
+      "llvm/lib/Target/X86",
+      "llvm/include/llvm/IR"
+    ],
+    "neverc_source_architectures": [
+      "x86_64",
+      "aarch64"
+    ],
     "neverc_target_owner_changes": [],
     "sdks": {
       "build-x86": {
@@ -6203,6 +6219,22 @@
     },
     "neverc_compiler_source": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
     "neverc_dev_target_owner_checked": "71c4e8f9f88c916901292684f4621102a0650a61",
+    "neverc_target_owner_paths_checked": [
+      "neverc/Driver",
+      "neverc/lib/Compiler",
+      "neverc/lib/Build",
+      "neverc/lib/Linker",
+      "neverc/lib/Foundation",
+      "neverc/include/neverc/Foundation",
+      "neverc/lib/Emit",
+      "llvm/lib/Frontend",
+      "llvm/lib/Target/X86",
+      "llvm/include/llvm/IR"
+    ],
+    "neverc_source_architectures": [
+      "x86_64",
+      "aarch64"
+    ],
     "neverc_target_owner_changes": [],
     "release_gate": "No new LLVM release or production pin: designated SGX runners execute zero native enclave instructions."
   }

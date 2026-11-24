@@ -63,7 +63,10 @@ both SDKs passed 25/25 local x86 decoder checks, including the three APX
 KMOV cases, and retained the hosted VMRUN source hashes. The
 [merged-source qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
 also records 243 complete mode-execution and 27 selected SMM/SGX/event
-software passes per SDK. NeverC continues to accept only x64 source targets.
+software passes per SDK. NeverC supports x86-64 and AArch64 sources, both
+64-bit, and rejects i386, i686 and x32. NeverD uses the x64 NeverC compiler
+for these generated host bodies.
+
 The [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45348733110)
 passed 132/132 on Linux and 131/132 on macOS arm64 and both Windows
 compilers. Each non-Linux job skipped only the declared POSIX-x64 x87
