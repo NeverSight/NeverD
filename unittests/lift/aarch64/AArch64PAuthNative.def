@@ -14,6 +14,15 @@
 
 NEVERD_PAUTH_NATIVE_TEXT(kPAuthCompiler, "clang")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleModule, "native")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleArtifactEnvironment,
+                         "NEVERD_ARM64E_RETURN_OBJECTS")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleArtifactProperty,
+                         "arm64e_return_object_directory")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleHighRoute, "high")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleLLVMRoute, "llvm")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleOptimizedLLVMRoute, "llvm-opt")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleObjectExtension, "o")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleCLanguage, "c")
 NEVERD_PAUTH_NATIVE_TEXT(
     kPAuthCompilerUnavailable,
     "clang is required for the arm64e source compilation check")

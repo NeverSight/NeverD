@@ -1,0 +1,58 @@
+//===- pauth_pc_oracle.def - Independent SP/PC signing sites ----*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#include <stdint.h>
+
+typedef struct {
+  uint64_t Value, SP, PC;
+} OraclePCSignature;
+
+enum { OracleInactive = 4, OraclePCMismatch = 5, OraclePCInsensitive = 6 };
+
+// Capture the address of the signing instruction itself. The C projection
+// receives that original address when it materializes the second modifier.
+#define RETURN_ORACLE_PC_SIGNER(Name, Prefix, Word)                            \
+  static OraclePCSignature Name(uint64_t Pointer) {                            \
+    OraclePCSignature S;                                                       \
+    __asm__ volatile("mov x30,%3\nmov %1,sp\nadr %2,1f\n" Prefix               \
+                     "1: .inst " #Word "\nmov %0,x30"                          \
+                     : "=r"(S.Value), "=&r"(S.SP), "=&r"(S.PC)                 \
+                     : "r"(Pointer)                                            \
+                     : "x30");                                                 \
+    return S;                                                                  \
+  }
+
+#ifdef RETURN_ORACLE_PREFIX
+RETURN_ORACLE_PC_SIGNER(oracle_pc_a, ".inst 0xd50324ff\n", 0xd503233f)
+RETURN_ORACLE_PC_SIGNER(oracle_pc_b, ".inst 0xd50324ff\n", 0xd503237f)
+#define RETURN_ORACLE_PROJECT_PC(Op, P, SP, PC) test_##Op##_m(P, SP, PC, 1)
+#undef RETURN_ORACLE_PREFIX
+#else
+RETURN_ORACLE_PC_SIGNER(oracle_pc_a, "", 0xdac1a3fe)
+RETURN_ORACLE_PC_SIGNER(oracle_pc_b, "", 0xdac1a7fe)
+#define RETURN_ORACLE_PROJECT_PC(Op, P, SP, PC) test_##Op##2(P, SP, PC)
+#endif
+#undef RETURN_ORACLE_PC_SIGNER
+
+// A pair of adjacent PCs can sign alike. Compare the actual signing site on
+// every sample, then measure sensitivity across a range of aligned PCs.
+static int check_pc(uint64_t Pointer, uint64_t Sample, int *ChangesA,
+                    int *ChangesB) {
+  OraclePCSignature A = oracle_pc_a(Pointer), B = oracle_pc_b(Pointer);
+  if (RETURN_ORACLE_PROJECT_PC(pacia, Pointer, A.SP, A.PC) != A.Value ||
+      RETURN_ORACLE_PROJECT_PC(pacib, Pointer, B.SP, B.PC) != B.Value ||
+      RETURN_ORACLE_PROJECT_PC(returnia, A.Value, A.SP, A.PC) != Pointer ||
+      RETURN_ORACLE_PROJECT_PC(returnib, B.Value, B.SP, B.PC) != Pointer)
+    return OraclePCMismatch;
+  const uint64_t Offset = (Sample + 1) * sizeof(uint32_t);
+  *ChangesA |=
+      RETURN_ORACLE_PROJECT_PC(pacia, Pointer, A.SP, A.PC + Offset) != A.Value;
+  *ChangesB |=
+      RETURN_ORACLE_PROJECT_PC(pacib, Pointer, B.SP, B.PC + Offset) != B.Value;
+  return 0;
+}
+
+#undef RETURN_ORACLE_PROJECT_PC

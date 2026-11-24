@@ -8,7 +8,7 @@
 /// LLVM and C projections. Included after the generated test functions.
 //===----------------------------------------------------------------------===//
 
-#include <stdint.h>
+#include "pauth_pc_oracle.def"
 
 static uint64_t oracle_sign_a(uint64_t pointer, uint64_t first,
                               uint64_t second) {
@@ -34,6 +34,7 @@ static uint64_t oracle_sign_b(uint64_t pointer, uint64_t first,
 
 int main(void) {
   int a_changes = 0, b_changes = 0, a_diversifies = 0, b_diversifies = 0;
+  int pc_a_changes = 0, pc_b_changes = 0;
   for (uint64_t i = 0; i != 64; ++i) {
     uint64_t pointer = 0x12340 + i * 16;
     uint64_t first = i * 0x12345678;
@@ -53,6 +54,10 @@ int main(void) {
     if (test_returnia2(a, first, second) != pointer ||
         test_returnib2(b, first, second) != pointer)
       return 3;
+    if (check_pc(pointer, i, &pc_a_changes, &pc_b_changes))
+      return OraclePCMismatch;
   }
-  return !(a_changes && b_changes && a_diversifies && b_diversifies);
+  if (!(a_changes && b_changes && a_diversifies && b_diversifies))
+    return OracleInactive;
+  return pc_a_changes && pc_b_changes ? 0 : OraclePCInsensitive;
 }

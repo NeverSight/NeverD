@@ -2297,6 +2297,43 @@ explicit PAuth_LR, effective PACM or 128-bit LRCPC3. The Arm model ran
 the generated ordered-memory code at EL0 and EL1 across four CPTA settings.
 [Individual outcomes and execution records](evidence/arm64e-skipped-regression-2026-11-24.json).
 
+### Executing both return-signing oracles on the Arm model
+
+The Release test binary can export the exact arm64e Mach-O objects it compiled
+for HighC, LLVM-to-C and LLVM-to-C after IR optimization. Each route produces
+an O0 and an O2 object for explicit PAuth_LR and conditional PACM.
+On macOS, link those objects to the freestanding comparison driver.
+
+```sh
+python3 scripts/verify_arm64e_return_model.py build \
+  --tests build-release/bin/NeverDArm64eAnalysisTests --output return-guests
+```
+
+Copy the guest directory to the Linux machine with Arm FVP Base RevC 11.32+19.
+The second command checks the guest hashes, runs each linked Mach-O at its
+original text address and writes the per-image results to a fresh directory.
+
+```sh
+python3 scripts/verify_arm64e_return_model.py run \
+  --model /path/to/FVP_Base_RevC-2xAEMvA --guests return-guests --output return-results
+```
+
+Each guest calls the comparison program from EL1 and EL0 at all four
+`SCTLR2_EL1.EnPACM` / `EnPACM0` settings. The EL0 return verifies the
+hardware-saved exception origin and SVC address. The original signing
+instructions supply the signed value, SP and signing PC. The generated
+code must reproduce the value for IA and IB, authenticate it and recover
+the expected return target. The prefix oracle also checks active keys while
+the prefix is disabled. A separate guest run with PAuth_LR disabled must
+report the feature mismatch. Apple's native qualification is recorded by
+the hosted runner probe below.
+
+The hosted Arm model executed all 12 images from frozen r6 and all 12 from the
+LLVM source fork, with 96 EL/control combinations per toolchain. Both runs
+rejected the unsupported control.
+[Hosted model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45323031302) and
+[per-toolchain results](evidence/arm64e-return-oracles-2026-11-24.json).
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs

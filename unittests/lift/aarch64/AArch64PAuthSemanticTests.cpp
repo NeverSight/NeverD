@@ -128,7 +128,8 @@ void compileArm64eC(const std::string &Source,
                     const std::function<void(llvm::StringRef)> &Inspect = {},
                     bool EmitLLVM = false, llvm::StringRef ExecuteTarget = {},
                     bool *ExecutionAvailable = nullptr,
-                    llvm::StringRef Language = "c") {
+                    llvm::StringRef Language = kOracleCLanguage,
+                    llvm::StringRef ObjectDirectory = {}) {
   const bool ExecuteNative = !ExecuteTarget.empty();
 #ifdef NEVERD_TEST_CLANG
   const std::string HostCompiler = NEVERD_TEST_CLANG;
@@ -195,6 +196,12 @@ void compileArm64eC(const std::string &Source,
     ASSERT_EQ(Status, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "")
                          << Source;
+    if (!ObjectDirectory.empty()) {
+      llvm::SmallString<128> Saved(ObjectDirectory);
+      llvm::sys::path::append(Saved, Optimization.drop_front());
+      llvm::sys::path::replace_extension(Saved, kOracleObjectExtension);
+      ASSERT_FALSE(llvm::sys::fs::copy_file(ObjectPath, Saved));
+    }
     if (Inspect)
       Inspect(ObjectPath);
     if (ExecuteNative) {
@@ -1682,31 +1689,54 @@ void checkCProjections(const std::vector<MedFunc> &Functions,
   CEmitterOptions Options;
   Options.TheArch = Arch::AArch64;
   Options.Format = BinaryFormat::MachO;
-  for (bool LLVMRoute : {false, true})
-    for (bool Optimize : {false, true}) {
-      if (!LLVMRoute && Optimize)
-        continue;
-      SCOPED_TRACE(testing::Message() << LLVMRoute << " " << Optimize);
-      std::string Source;
-      llvm::raw_string_ostream Out(Source);
-      if (LLVMRoute) {
-        llvm::LLVMContext Context;
-        auto Module = MedLLVMEmitter().emit(Functions, Context, kOracleModule,
-                                            Arch::AArch64);
-        ASSERT_TRUE(Module);
-        if (Optimize)
-          optimize(*Module);
-        ASSERT_FALSE(llvm::verifyModule(*Module));
-        ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
-      } else {
-        std::vector<HighFunc> High;
-        for (const auto &F : Functions)
-          High.push_back(MedToHighConverter().convert(F, Arch::AArch64));
-        ASSERT_TRUE(HighCEmitter().emit(High, Out, Options));
-      }
-      Source.append(Oracle.data(), Oracle.size());
-      compileArm64eC(Source, {}, /*EmitLLVM=*/false, ExecuteTarget);
+  llvm::SmallString<128> Directory;
+  if (ExecuteTarget.empty()) {
+    if (const char *Root = std::getenv(kOracleArtifactEnvironment);
+        Root && *Root) {
+      const auto *Test = testing::UnitTest::GetInstance()->current_test_info();
+      llvm::SmallString<128> Prefix(Root);
+      ASSERT_FALSE(llvm::sys::fs::create_directories(Prefix));
+      llvm::sys::path::append(Prefix, Test->test_suite_name());
+      ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+      testing::Test::RecordProperty(kOracleArtifactProperty,
+                                    Directory.str().str());
     }
+  }
+  constexpr struct {
+    const char *Name;
+    bool LLVMRoute;
+    bool Optimize;
+  } Routes[] = {{kOracleHighRoute, false, false},
+                {kOracleLLVMRoute, true, false},
+                {kOracleOptimizedLLVMRoute, true, true}};
+  for (const auto &[Name, LLVMRoute, Optimize] : Routes) {
+    SCOPED_TRACE(Name);
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (LLVMRoute) {
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(Functions, Context, kOracleModule,
+                                          Arch::AArch64);
+      ASSERT_TRUE(Module);
+      if (Optimize)
+        optimize(*Module);
+      ASSERT_FALSE(llvm::verifyModule(*Module));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+    } else {
+      std::vector<HighFunc> High;
+      for (const auto &F : Functions)
+        High.push_back(MedToHighConverter().convert(F, Arch::AArch64));
+      ASSERT_TRUE(HighCEmitter().emit(High, Out, Options));
+    }
+    Source.append(Oracle.data(), Oracle.size());
+    llvm::SmallString<128> Route(Directory);
+    if (!Directory.empty()) {
+      llvm::sys::path::append(Route, Name);
+      ASSERT_FALSE(llvm::sys::fs::create_directory(Route));
+    }
+    compileArm64eC(Source, {}, /*EmitLLVM=*/false, ExecuteTarget,
+                   /*ExecutionAvailable=*/nullptr, kOracleCLanguage, Route);
+  }
 }
 
 struct OracleFunction {
