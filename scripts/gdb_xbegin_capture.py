@@ -32,6 +32,14 @@ def _registers(text):
     return bank, tuple(int(word, 16) for word in table.groups())
 
 
+def xbegin_successors(pc, code):
+    """Return the fallthrough and signed fallback of an unprefixed XBEGIN rel32."""
+    if len(code) != XBEGIN_BYTES or code[:2] != b"\xc7\xf8":
+        return None
+    fallthrough = (pc + XBEGIN_BYTES) & U64_MAX
+    return fallthrough, (fallthrough + int.from_bytes(code[2:], "little", signed=True)) & U64_MAX
+
+
 def _gate_address(gate):
     return int.from_bytes(gate[:2] + gate[6:12], "little")
 
@@ -60,10 +68,10 @@ class XbeginObservation:
             raise ValueError("IF and TF must be clear before observing XBEGIN")
         pc = bank["rip"]
         code = read(pc, XBEGIN_BYTES)
-        if code[:2] != b"\xc7\xf8":
+        successors = xbegin_successors(pc, code)
+        if successors is None:
             raise ValueError("the stopped RIP must contain an unprefixed XBEGIN rel32")
-        fallthrough = (pc + XBEGIN_BYTES) & U64_MAX
-        fallback = (fallthrough + int.from_bytes(code[2:], "little", signed=True)) & U64_MAX
+        fallthrough, fallback = successors
         size = EXCEPTION_VECTORS * GATE_BYTES
         if idtr[1] < size - 1:
             raise ValueError("the IDT limit does not cover the exception gates")
