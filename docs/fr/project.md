@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 26bbbe32fa118fe31d79cefefa50beec2c54d4f406c2aa1c363edee7565ff5b6 -->
+<!-- i18n-source: 3d16cd0744810e185f3095c75abab93e54271d90e83f7f2335755c2c18b48c42 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Consultez les guides [EVM](evm.md), [Solana SBF](sbf.md), [récupération de sou
 
 > Chaque cellule de la matrice est implémentée, mais la profondeur des tests d’intégration varie. Consultez la [matrice de couverture de l’architecture](architecture.md#support-and-test-depth). Mach-O i386 utilise des objets relogeables `thin`, car macOS moderne ne peut pas lier les anciens exécutables i386.
 
-**L’analyse ELF MIPS est expérimentale :** MIPS32r2/o32 et MIPS64r2/n64, dans les deux ordres d’octets, prennent en charge un sous-ensemble strict d’instructions entières pour le désassemblage, la reconstruction du CFG et les sorties C et LLVM. La réécriture de code natif n’est pas prise en charge. Voir [la couverture MIPS et l’exemple de firmware (anglais)](../mips.md) pour les sous-ensembles microMIPS32, MIPS16e/e2, DSP et MIPS32r5 MSA validés séparément et leurs restrictions de sortie source.
+**MIPS ELF** prend en charge le désassemblage, la reconstruction du flot de contrôle et les sorties C et LLVM. Le SDK recompile les fonctions prises en charge en objets ELF relogeables avec le backend Mips de la version de LLVM de NeverSight. Il conserve l’ordre des octets et la convention d’appel o32, n32 ou n64. L’insertion du code dans un exécutable nécessite encore la prise en charge de l’écriture des fichiers ELF MIPS. [Profils MIPS et sortie native (en anglais)](../mips.md)
 
 Le bytecode EVM legacy est pris en charge indépendamment des conteneurs natifs :
 les 150 opcodes attribués de Frontier à Fusaka alimentent Low/Med/High IR,
@@ -203,7 +203,7 @@ La première configuration compile le fork LLVM localement (souvent 30–60 min)
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r7
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r8
 cmake --build build
 ```
 
@@ -219,19 +219,19 @@ Le paquet publié est choisi selon l'hôte qui exécute CMake :
 
 Chaque archive est vérifiée avec le condensat fixé dans `cmake/NeverDLLVMPrebuilt.cmake`, ou son fichier `.sha256` publié pour un tag non décrit par ces valeurs, avant extraction sous `~/.cache/neverd-llvm/<tag>/<arch>/` ou `NEVERD_LLVM_PREBUILT_CACHE_DIR`. Pour la version fixée par défaut, `BUILDINFO.txt` doit aussi nommer le commit exact du sous-module LLVM. Les builds de publication utilisent ccache sur macOS/Linux et sccache avec le cache GitHub Actions pour clang-cl sous Windows. Ces caches accélèrent seulement la reconstruction et ne sont jamais publiés comme artefacts.
 
-La révision par défaut est `neverd-llvm-v23.0.0-r7` : tag Git, cible de publication, commit source et trois condensats d’archives forment une référence source versionnée immuable. Les builds qui conservent l’ancien tag de base, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5` ou `neverd-llvm-v23.0.0-r6` migrent automatiquement vers `r7`, sauf surcharge explicite `NEVERD_LLVM_PREBUILT_SHA256`. Le workflow `Prebuilt LLVM Audit` s’exécute lors des push, des pull requests et toutes les six heures. Il appelle `scripts/audit_prebuilt_llvm_release.py` pour comparer cette référence à la publication GitHub actuelle et à chaque fichier de somme de contrôle.
+La révision par défaut est `neverd-llvm-v23.0.0-r8` : tag Git, cible de publication, commit source et trois condensats d’archives forment une référence source versionnée immuable. Les builds qui conservent l’ancien tag de base, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6` ou `neverd-llvm-v23.0.0-r7` migrent automatiquement vers `r8`, sauf surcharge explicite `NEVERD_LLVM_PREBUILT_SHA256`. Le workflow `Prebuilt LLVM Audit` s’exécute lors des push, des pull requests et toutes les six heures. Il appelle `scripts/audit_prebuilt_llvm_release.py` pour comparer cette référence à la publication GitHub actuelle et à chaque fichier de somme de contrôle.
 
-Si le fork LLVM change tout en annonçant `23.0.0`, publiez la révision de paquet suivante, `neverd-llvm-v23.0.0-r8`, puis `-r9`, sans écraser une publication existante ni inventer la version LLVM `23.0.1` :
+Si le fork LLVM change tout en annonçant `23.0.0`, publiez la révision de paquet suivante, `neverd-llvm-v23.0.0-r9`, puis `-r10`, sans écraser une publication existante ni inventer la version LLVM `23.0.1` :
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r8 \
+  -f release_tag=neverd-llvm-v23.0.0-r9 \
   -f overwrite_existing_assets=false
 ```
 
-Après réussite, mettez à jour ensemble le tag par défaut, le commit fixé et les trois condensats dans `cmake/NeverDLLVMPrebuilt.cmake`. Chaque révision du paquet utilise son propre répertoire de cache ; la révision par défaut actuelle se trouve sous `.cache/neverd-llvm/neverd-llvm-v23.0.0-r7`. Une archive périmée ou republiée échoue avant extraction. `overwrite_existing_assets` sert uniquement à la récupération historique et reste désactivé dans le workflow normal.
+Après réussite, mettez à jour ensemble le tag par défaut, le commit fixé et les trois condensats dans `cmake/NeverDLLVMPrebuilt.cmake`. Chaque révision du paquet utilise son propre répertoire de cache ; la révision par défaut actuelle se trouve sous `.cache/neverd-llvm/neverd-llvm-v23.0.0-r8`. Une archive périmée ou republiée échoue avant extraction. `overwrite_existing_assets` sert uniquement à la récupération historique et reste désactivé dans le workflow normal.
 
 **Artefacts**
 

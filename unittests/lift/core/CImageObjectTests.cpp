@@ -279,24 +279,58 @@ int main(void) {
 }
 
 TEST(CImageObjects, WrittenSlotsKeepTheirMachineValue) {
-  BinaryImage Img = objectImage();
-  // A slot the code stores to is no constant string's pointer.
-  HighFunc Func = function("replace", NdType::makeVoid(), TextVA);
-  HighStmt Store;
-  Store.Kind = StmtKind::Store;
-  Store.StoreAddr = HighExpr::makeConst(Utf8Slot, 8);
-  Store.StoreVal = HighExpr::makeConst(0, 8);
-  Store.StoreVal->Type = NdType::makeInt(8, true);
-  Func.Body = {std::move(Store)};
-  CEmitterOptions Options;
-  Options.TheArch = Arch::X64;
-  Options.Format = BinaryFormat::ELF;
-  Options.Image = &Img;
-  std::string Source;
-  llvm::raw_string_ostream OS(Source);
-  ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
-  EXPECT_NE(Source.find("int64_t u8s = 0x2010;"), NotFound) << Source;
-  EXPECT_EQ(Source.find("\"中文 hello\""), NotFound) << Source;
+  for (const bool Relocated : {false, true}) {
+    SCOPED_TRACE(Relocated);
+    BinaryImage Img = objectImage();
+    // The same initial bits are a scalar unless the loader relocates them.
+    // A store requires writable integer storage in either case.
+    if (!Relocated)
+      Img.DataPtrRelocSlots.erase(Utf8Slot);
+    HighFunc Func = function("replace", NdType::makeVoid(), TextVA);
+    HighStmt Store;
+    Store.Kind = StmtKind::Store;
+    Store.StoreAddr = HighExpr::makeConst(Utf8Slot, 8);
+    Store.StoreVal = HighExpr::makeConst(0, 8);
+    Store.StoreVal->Type = NdType::makeInt(8, true);
+    Func.Body = {std::move(Store)};
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::ELF;
+    Options.Image = &Img;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
+    OS.flush();
+    if (Relocated) {
+      EXPECT_NE(Source.find("int64_t u8s = (uintptr_t)"), NotFound) << Source;
+      EXPECT_EQ(Source.find("int64_t u8s = 0x2010;"), NotFound) << Source;
+    } else {
+      EXPECT_NE(Source.find("int64_t u8s = 0x2010;"), NotFound) << Source;
+      EXPECT_EQ(Source.find("\"中文 hello\""), NotFound) << Source;
+    }
+    std::string Check = Source + R"(
+#include <string.h>
+int main(void) {
+)";
+    if (Relocated)
+      Check += R"(
+  if (u8s == 0 || u8s == 0x2010 ||
+      strcmp((const char *)(uintptr_t)u8s, "\xE4\xB8\xAD\xE6\x96\x87 hello"))
+    return 1;
+)";
+    else
+      Check += R"(
+  if (u8s != 0x2010)
+    return 1;
+)";
+    Check += R"(
+  replace();
+  return u8s != 0;
+}
+)";
+    source_call_execution_test::compileAndRun(
+        Check, {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+  }
 }
 
 TEST(CImageObjects, WideAndNonFiniteValuesKeepTheirBytes) {

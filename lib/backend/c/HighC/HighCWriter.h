@@ -614,7 +614,8 @@ public:
   /// integer or one floating value each, and no hidden result pointer.  A
   /// call's arguments come in the convention's order, integer registers
   /// first, so another signature cannot type them by position.
-  bool positionalDebugSignature(const FunctionSym &FS) const;
+  bool positionalDebugSignature(const FunctionSym &FS,
+                                const HighExpr *Call = nullptr) const;
   TypeRef debugParamType(const MedVar &V) const;
   TypeRef declaredRecordPointee(const HighExpr &Base) const;
   std::optional<std::pair<const HighExpr *, uint64_t>>
@@ -910,7 +911,8 @@ public:
   /// (userPrototype): the unit declares it as the user does, not through
   /// the header that declares the C library's routine of the name.
   bool userDeclaresCallee(llvm::StringRef Name) const;
-  TypeRef expectedDebugCallArgType(const FunctionSym &FS, size_t Index) const;
+  TypeRef expectedDebugCallArgType(const FunctionSym &FS, size_t Index,
+                                   const HighExpr *Call = nullptr) const;
   TypeRef displayCallArgType(const HighExpr &Call, size_t Index) const;
   /// Display-only printed arity from TPI/PDB or \ref msvcCallee.
   /// MSVC member rows live in MsvcCallees.def; `_ctor` keeps this plus a
@@ -1256,7 +1258,8 @@ public:
   void collectFieldLoadForward(const HighFunc &Func);
   void collectEnumConstForward(const HighFunc &Func);
   void collectTypedPointerArgDests(const HighFunc &Func);
-  void noteDebugExtern(const std::string &Name, const FunctionSym &FS);
+  void noteDebugExtern(const std::string &Name, const FunctionSym &FS,
+                       const HighExpr &Call);
   std::optional<std::string> enumeratorDisplay(const TypeRef &Ty,
                                                uint64_t Val) const;
   TypeRef enumTypeOfExpr(const HighExpr &E) const;

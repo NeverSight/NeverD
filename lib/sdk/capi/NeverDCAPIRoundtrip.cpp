@@ -64,11 +64,11 @@ int neverd_lift_to_obj(neverd_session_t Sess, const char *InputPath, int NoOpt,
         static_cast<int>(R.Result.MedFuncs[I].Params.size());
 
   Codegen CG;
-  S->RoundTrip.CG =
-      CG.compile(*R.Result.LlvmModule, R.Img.Arch, BinaryFormat::ELF);
+  S->RoundTrip.CG = CG.compile(
+      *R.Result.LlvmModule, R.Img.Arch, BinaryFormat::ELF, {},
+      ObjectConsumer::PlatformLinker, R.Img.MIPS ? &*R.Img.MIPS : nullptr, Err);
   if (!S->RoundTrip.CG.Success) {
-    if (S)
-      S->setError("codegen failed");
+    S->setError(Err.empty() ? "codegen failed" : Err);
     return 1;
   }
 

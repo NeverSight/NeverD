@@ -25,14 +25,14 @@ test_call_leaf:
     ret
     .size test_call_leaf, .-test_call_leaf
 
-// x1 is caller-saved.  Branching on it only after a call must not make it an
-// incoming parameter of this function, and the unknown value stays observable.
+// x1 is caller-saved. The unresolved callee supplies no write-set proof,
+// so observing x1 after the call does not make it an incoming parameter.
     .globl test_post_call_x1
     .type test_post_call_x1, %function
 test_post_call_x1:
     str x30, [sp, #-16]!
     mov x0, #0
-    bl test_call_leaf
+    bl test_unproved_call_leaf
     cbz x1, .Lzero
     cbnz x1, .Lone
     mov x0, #2
@@ -122,3 +122,19 @@ test_fminnm_f64:
     fminnm d0, d0, d1
     ret
     .size test_fminnm_f64, .-test_fminnm_f64
+// A resolved local callee proven not to write x1 retains the caller's input.
+    .globl test_post_local_call_x1
+    .type test_post_local_call_x1, %function
+test_post_local_call_x1:
+    str x30, [sp, #-16]!
+    mov x0, #0
+    bl test_call_leaf
+    cbz x1, .Llocal_zero
+    mov x0, #1
+    b .Llocal_done
+.Llocal_zero:
+    mov x0, #0
+.Llocal_done:
+    ldr x30, [sp], #16
+    ret
+    .size test_post_local_call_x1, .-test_post_local_call_x1

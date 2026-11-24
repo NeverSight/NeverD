@@ -52,7 +52,17 @@ llvm::Value *MedLLVMEmitter::emitX86RepState(const MedOp &Op, Intrinsic Id,
     if (Id == Intrinsic::X86RepStosState && I == 3 && V.isConst() &&
         !isExactAddressProvenance(V.Provenance))
       return getRawSegmentOffset(V, B);
-    if (BoundedMemory && I <= (Copy ? 2u : 1u)) {
+    const bool AddressOperand =
+        (Copy || Id == Intrinsic::X86RepStosState) && I <= (Copy ? 2u : 1u);
+    // Zero-count operations do not access memory. A segment override or
+    // reduced address width also makes this operand a register offset.
+    // Preserve an immediate's bits in these forms rather than letting getVar
+    // turn its image provenance into a host pointer.
+    if (AddressOperand && V.isConst() &&
+        ((Count.isConst() && !Count.ConstVal) || P.Control.Segment ||
+         P.Control.AddressBytes != P.WordBytes))
+      return getRawSegmentOffset(V, B);
+    if (BoundedMemory && AddressOperand) {
       const auto Address =
           V.isConst() ? std::optional<uint64_t>(V.ConstVal) : traceSSAConst(V);
       const auto *Segment = Address ? Img->getSegmentFor(*Address) : nullptr;

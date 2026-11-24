@@ -349,11 +349,13 @@ int (*hook)(int);
   for (const char *Reader : {"rdpad", "fwd", "esc", "rdr1", "retr1", "ind"}) {
     const std::string Body = definitionOf(C, Reader);
     ASSERT_FALSE(Body.empty()) << Reader << C;
-    EXPECT_NE(Body.find("unknown value"), std::string::npos) << Reader << Body;
+    EXPECT_NE(Body.find("(__builtin_trap(), 0 /* no recovered semantics"),
+              std::string::npos)
+        << Reader << Body;
   }
   const std::string Unread = definitionOf(C, "ok");
   ASSERT_FALSE(Unread.empty()) << C;
-  EXPECT_EQ(Unread.find("unknown value"), std::string::npos) << Unread;
+  EXPECT_EQ(Unread.find("__builtin_trap()"), std::string::npos) << Unread;
 }
 
 // `lsreq r9, r1, r10; tsteq r9, #1` tests the value the first instruction
@@ -421,7 +423,9 @@ NK int only_tested(int a, int b) { __asm__("push {r4, r9, lr}\n\ttst r0, #1\n\tl
   for (const char *Observer : {"later_read", "stored"}) {
     const std::string Body = definitionOf(C, Observer);
     ASSERT_FALSE(Body.empty()) << Observer << C;
-    EXPECT_NE(Body.find("unknown register"), std::string::npos)
+    EXPECT_NE(Body.find("(__builtin_trap(), 0 /* incoming register has no "
+                        "definition"),
+              std::string::npos)
         << Observer << Body;
   }
   const std::string Tested = definitionOf(C, "only_tested");

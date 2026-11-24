@@ -466,13 +466,14 @@ TEST_F(AArch64_FP, FjcvtzsHighCUsesBuiltinAndCompiles) {
   ASSERT_TRUE(input.good());
   std::string source((std::istreambuf_iterator<char>(input)),
                      std::istreambuf_iterator<char>());
-  EXPECT_NE(source.find("__jcvt(__builtin_bit_cast(double"), std::string::npos)
-      << source;
-  EXPECT_NE(source.find("0x8000000000000000"), std::string::npos) << source;
-  EXPECT_EQ(source.find("__neverd"), std::string::npos) << source;
   auto F = functionSource(source, "test_fjcvtzs_z_a64");
   ASSERT_FALSE(F.empty()) << source;
   EXPECT_NE(F.find("int32_t test_fjcvtzs_z_a64"), std::string::npos) << F;
+  EXPECT_NE(F.find("__jcvt(__builtin_bit_cast(double"), std::string::npos)
+      << F;
+  EXPECT_NE(F.find("0x8000000000000000"), std::string::npos) << F;
+  EXPECT_EQ(F.find("__neverd"), std::string::npos) << F;
+  EXPECT_EQ(F.find("__builtin_trap"), std::string::npos) << F;
   expectPairedClangSyntax(cFile, source);
 
   llvm::LLVMContext Context;

@@ -18,9 +18,47 @@ order in both MIPS byte orders, including fields that span bytes.
 Legacy packed bit-fields may cross that unit. For example, a
 12-bit field following 27 bits starts at bit 27 in both byte orders, even when
 the little-endian debug entry encodes a high-bit offset of −7.
-For unlinked n32 ELF objects, the LLVM source build reads debug string offsets
-from explicit relocation addends. The r7 prebuilt package can read these types
-after linking the object with the target linker.
+For unlinked n32 ELF objects, the LLVM source build and the r8 SDK read debug
+string offsets from explicit relocation addends. With r7, link the object first.
+
+## Native LLVM output
+
+`neverd_lift_to_obj` passes the loaded ELF profile to the NeverSight LLVM
+Mips backend. `neverd_roundtrip_obj` returns an ELF relocatable object.
+The roundtrip function list reports defined function symbols with their ELF
+sizes. Use the target linker to place the sections and resolve relocations.
+
+| Input ABI | Registers and pointers | Native output |
+| --- | --- | --- |
+| o32 | 32-bit pointers and four argument words, including on MIPS III with 64-bit GPRs | ELF32, both byte orders |
+| n32 | 64-bit GPRs with 32-bit pointers | ELF32 with `EF_MIPS_ABI2`, both byte orders |
+| n64 | 64-bit GPRs and pointers | ELF64, both byte orders |
+
+The backend selects the historical ISA or release, floating-point ABI and
+position-independent addressing from the input. Function attributes can select
+classic, MIPS16 or microMIPS encoding. A function override that changes the
+input ISA or calling convention produces a diagnostic. MIPS16 and microMIPS o32 entry symbols
+carry their instruction mode so a native linker can construct callable
+pointers. LLVM emits microMIPS objects for o32. A microMIPS n32 or n64 input
+can use the analysis paths described below. Selecting an older SDK such as
+r7 limits native object output to classic profiles with a qualified ABI.
+MIPS III/o32, MIPS V, compressed bodies and fixed-address output are
+available in the r8 SDK.
+
+The fork can compile ordinary LLVM functions for historical I–III ISAs.
+Lifting an existing I–III function also carries its incoming pipeline state.
+The SDK reports a missing execution context when that state reaches native
+source lowering. Its roundtrip result then contains no object.
+
+The fork also emits fixed-address code and data through
+`addPassesToEmitBinaryRewrite`. It reports function ranges at their physical
+byte addresses and tags pointers to compressed functions. The native checks
+cover n64 addresses above 4 GiB. Direct calls check alignment and the jump
+region selected by PC+4, including mode exchanges. Fixed-address emission
+reports jumps that require a veneer and references that require linker-owned
+GOT, GP or TLS state. Installing the resulting
+sections into an existing MIPS executable needs MIPS-specific layout,
+relocation and interworking support in the file patcher.
 
 ## Implementation boundaries
 
@@ -712,7 +750,7 @@ explicit ELF mode evidence in o32, n32 and n64. MIPS16 numerical identities
 remain limited to r2/o32. Both source backends share this boundary; unknown-mode
 imports, including whole or partial GOT reads, remain refused. Direct control
 identities, serialized callables and code-byte/data addresses retain distinct
-roles. The LLVM r7 SDK uses the fork's `Fi8` data layout, so stronger function
+roles. The NeverSight LLVM SDK uses the fork's `Fi8` data layout, so stronger function
 code alignment cannot clear the callable ISA tag during LLVM optimization.
 Recompiling numeric observations requires NeverSight Clang with the qualified
 [MIPS function-pointer layout fix](https://github.com/NeverSight/llvm-project/commit/df115daf54a117501223f3a6a88bfcd9bf4fa5a8):
@@ -1785,6 +1823,14 @@ record the readings from both figures.
 python3 unittests/lift/mips/historical-reset-capture.py r4300ps.pdf r4xxxps.pdf
 ```
 
+The R3051 debug interface exposes instruction-cache address bits during idle
+bus cycles. The tag is sampled half a clock after the index. IDT documents
+that stalls, including micro-TLB misses, can produce erroneous addresses and
+that the interface does not signal exception recognition. Figure 11.1 gives
+the signal timing. A physical reset-to-fetch or interrupt measurement still
+requires a capture with both endpoints.
+[IDT R3051/2 hardware user's manual, chapter 11](https://www.bitsavers.org/components/idt/risc/1992_IDTR3051_R3052_RISController_Hardware_Users_Manual_Rev1.3_19920821.pdf).
+
 A separate PlayStation logic-analyzer observation identifies the boot ROM
 timing change after the BIOS writes the memory controller. The fetch at
 `0xbfc00014` still uses the reset wait states, and `0xbfc00018` uses the
@@ -1817,6 +1863,17 @@ exception-handler stores of EPC and Cause to locate the interrupted
 instruction. The capture omitted the originating interrupt signal. Its
 instruction boundary therefore has no corresponding pin-edge timestamp.
 [Rose, section 4.3](https://charltonrose.com/citcat/msthesis/msthesis.pdf#page=31).
+
+Tektronix captured an R3000/A exception in its DAS 9200 reference memory.
+Figure 4-10 shows the interrupted instruction stream at sample 703 and the
+general vector at sample 709. The display omits the interrupt input. In the
+separate timing acquisition, the six-bit input group stays at `0x37` throughout
+samples 137–159 in figure 5-1. Figure 5-2 displays the exception signal and
+a 530 ns trigger-to-cursor interval. Neither figure locates an input edge
+against CPU recognition. The original reference memories are named
+`R3000_Demo` and `R3K_Timg_96`.
+[Tektronix 92DM74, figure 4-10](https://download.tek.com/manual/070809000.pdf#page=70),
+[figures 5-1 and 5-2](https://download.tek.com/manual/070809000.pdf#page=80).
 
 The HP E2401A R3000 inverse-assembler disk contains three HP 16500 analyzer
 setups with labels for reset, interrupt and exception signals. All three
@@ -1880,6 +1937,23 @@ the source in DICR first changes the sample after four NOPs. The separate
 DICR-to-handler experiment retired eight instructions. Replaying those
 device-triggered paths requires a model of the PlayStation interrupt controller.
 [Cause.IP2 samples](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/04IP2.txt).
+
+Sony's DTL-H2700 tutorial capture records two VBLANK rising edges, at
+zero-based samples 1 and 566104. The first subsequent samples with BIOS
+`/CS2` and sub-bus `/RD` both asserted are 19 and 566128. Both reads show
+`0xc2035c` on address pins A23–A0. The observed intervals are 18 and 24
+sample clocks. The four recorded peripheral IRQ inputs stay high throughout
+the 1,131,520 examined frames. The recording has no channel for the CPU's
+interrupt recognition, internal fetch, or TLB write.
+[Sony's analyzer technical reference, p. 1](https://psx.arthus.net/sdk/Psy-Q/DOCS/Devrefs/tech205.pdf#page=9),
+[signal assignments and PAD format](https://github.com/psx-spx/psx-spx.github.io/blob/1e53a60b7e1f62e73b0d710250e52216150617b6/docs/psxdevboardprotocol.md#pa-capture-frame-format).
+
+Run the [capture reader](../unittests/lift/mips/historical-pa-capture.py) on
+`psyq/PA/DATA/TUTO3.PAD` from the [archived SDK](https://psx.arthus.net/sdk/Psy-Q/PSYQ_SDK.zip).
+It verifies the file hash and excludes the trailing 1,024-frame block, in
+which all 128 inputs read high. Including that block creates an extra VBLANK
+edge. The [expected readings](../unittests/lift/mips/historical-pa-capture.expected.json)
+include the PAD frame count and both pairs of sample indices.
 
 The CW4011 integration is described in the
 [LSI L64364 ATMizer II manual, chapter 4](https://www.ic72.com/pdf_file/l/123798.pdf).
