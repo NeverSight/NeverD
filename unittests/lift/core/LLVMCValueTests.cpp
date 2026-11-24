@@ -826,6 +826,43 @@ TEST(LLVMCValues, VectorTrailingZeroElementsPreserveLaneOrderAndZeroPolicy) {
     compileAndRun(Source + Main, Level, {}, true);
 }
 
+TEST(LLVMCValues, SameTargetBranchesGroupCompoundSkipConditions) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare void @taken_step()
+declare void @tail_step()
+declare void @skip_step()
+define void @skip_when(i32 %a, i32 %b, i32 %c) {
+entry:
+  %masked = and i32 %a, 255
+  %first = icmp eq i32 %masked, 7
+  %second = icmp ult i32 %b, 11
+  %both = and i1 %first, %second
+  br i1 %both, label %skip, label %check
+check:
+  %last = icmp ult i32 %c, 13
+  br i1 %last, label %skip, label %work
+work:
+  call void @taken_step()
+  br label %tail
+tail:
+  call void @tail_step()
+  ret void
+skip:
+  call void @skip_step()
+  ret void
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, {}));
+  source_call_execution_test::checkSyntax(Source,
+                                          {"-Werror=logical-op-parentheses"});
+}
+
 TEST(LLVMCValues, VmrunContextKeepsGuestRegisterOutputs) {
   llvm::LLVMContext Context;
   llvm::SMDiagnostic Error;
