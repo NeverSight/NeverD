@@ -27,23 +27,31 @@
 #include <vector>
 
 namespace neverd {
-namespace {
-using Key = std::tuple<MedVar::VarKind, int, int, uint16_t>;
-Key key(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer, V.Size}; }
 
-bool scalarOperation(const MedOp &Op) {
+bool hasTotalBranchScalarShape(const MedOp &Op) {
   if (!Op.IntrinsicOutputs.empty() || Op.NumInputs > 2 ||
       Op.MemoryOrdering != NdMemoryOrdering::None ||
-      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Op.RegistrationRoot != MedOp::RegistrationRootKind::None)
     return false;
   LowOp Shape;
   Shape.Opcode = Op.Opcode;
   Shape.Output = NdVar::tmp(0, Op.Output.Size);
-  for (unsigned I = 0; I < Op.NumInputs; ++I)
-    Shape.addInput(NdVar::cst(1, Op.Inputs[I].Size));
-  return bool(lowScalarConstantResult(
-      Shape, [](const NdVar &V) { return std::optional<uint64_t>{V.Offset}; }));
+  for (unsigned I = 0; I < Op.NumInputs; ++I) {
+    const auto &Input = Op.Inputs[I];
+    auto Operand = Input.isConst() ? NdVar::cst(Input.ConstVal, Input.Size)
+                                   : NdVar::tmp(I, Input.Size);
+    Operand.Provenance = Input.Provenance;
+    Shape.addInput(Operand);
+  }
+  return bool(lowScalarConstantResult(Shape, [](const NdVar &V) {
+    return std::optional<uint64_t>{V.isConst() ? V.Offset : 0};
+  }));
 }
+
+namespace {
+using Key = std::tuple<MedVar::VarKind, int, int, uint16_t>;
+Key key(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer, V.Size}; }
 
 bool physicalTargetSelector(const JumpTable &JT) {
   // A dispatch by value compares what the jump read from the image's slots,
@@ -165,7 +173,7 @@ bool preserveComputedBranchScalars(MedFunc &F, const BinaryImage &Image) {
             return false;
           Collect(Input, N.Phi->Output, Original, false);
         }
-      } else if (scalarOperation(*N.Op))
+      } else if (hasTotalBranchScalarShape(*N.Op))
         for (unsigned I = 0; I < N.Op->NumInputs; ++I)
           Collect(N.Op->Inputs[I], N.Op->Output, Original,
                   N.Op->Opcode != NdOp::COPY);
@@ -187,7 +195,7 @@ bool preserveComputedBranchScalars(MedFunc &F, const BinaryImage &Image) {
         Forward.emplace_back(key(N.Phi->Output), Original, Arithmetic);
         Backward.emplace_back(N.Phi->Output, Original);
       } else {
-        if (!scalarOperation(*N.Op)) {
+        if (!hasTotalBranchScalarShape(*N.Op)) {
           // The original-address projector can duplicate an exact pointer
           // COPY/PHI for the selector while preserving its observable identity.
           // Arithmetic in original code coordinates cannot escape that way:

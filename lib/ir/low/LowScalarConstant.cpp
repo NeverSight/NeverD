@@ -81,6 +81,19 @@ std::optional<uint64_t> lowScalarConstantResult(
       else
         Result = Op.Opcode == NdOp::BOOL_NOT ? !Bits : Bits;
     }
+  } else if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2) {
+    const unsigned Width = Op.Inputs[0].Size;
+    const auto &Offset = Op.Inputs[1];
+    if (Width < Op.Output.Size || Width > sizeof(uint64_t) ||
+        !Offset.isConst() || !Offset.Size || Offset.Size > sizeof(uint64_t) ||
+        isAddressProvenance(Offset.Provenance))
+      return std::nullopt;
+    // A literal in-range offset defines a total slice even for an unknown
+    // input word. Shape queries keep the actual offset when testing the op.
+    const uint64_t Byte = Offset.Offset & Mask(Offset.Size);
+    if (Byte <= Width - Op.Output.Size)
+      if (const auto Value = ValueOf(Op.Inputs[0]))
+        Result = *Value >> (8 * Byte);
   } else if (Op.NumInputs == 2 && Op.Output.Size == 1 && Op.Inputs[0].Size &&
              Op.Inputs[0].Size <= 8 && Op.Inputs[0].Size == Op.Inputs[1].Size &&
              (Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_NOTEQUAL ||

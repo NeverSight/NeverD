@@ -6,8 +6,9 @@
 /// \file
 /// Preserve original numeric coordinates for certified finite dispatches.
 
+#include "ComputedBranchScalars.h"
+
 #include "neverd/Limits.h"
-#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/med/LowToMed.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -126,23 +127,7 @@ void LowToMedConverter::projectOriginalAddressSelectors(MedFunc &Func) {
     // Duplicate only total scalar operations, using the same shape authority
     // as LowIR recovery. Loads, calls and other observations keep their one
     // original evaluation; this pass never replays effects or dereferences.
-    LowOp Shape;
-    Shape.Opcode = Op.Opcode;
-    Shape.Output = NdVar::tmp(0, Op.Output.Size);
-    if (Op.NumInputs > std::size(Shape.Inputs) ||
-        Op.MemoryOrdering != NdMemoryOrdering::None ||
-        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-        Op.RegistrationRoot != MedOp::RegistrationRootKind::None)
-      return Projected[K] = Value;
-    Shape.NumInputs = Op.NumInputs;
-    for (unsigned I = 0; I != Op.NumInputs; ++I)
-      Shape.Inputs[I] =
-          Op.Inputs[I].isConst()
-              ? NdVar::cst(Op.Inputs[I].ConstVal, Op.Inputs[I].Size)
-              : NdVar::tmp(I, Op.Inputs[I].Size);
-    if (!lowScalarConstantResult(Shape, [](const NdVar &Input) {
-          return std::optional<uint64_t>(Input.isConst() ? Input.Offset : 0);
-        }))
+    if (!hasTotalBranchScalarShape(Op))
       return Projected[K] = Value;
 
     MedOp Copy = Op;
