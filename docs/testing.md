@@ -12325,6 +12325,11 @@ changing integer uses or the selected branch.
 `SharedFloatingComputationSurvivesRegisterViews` starts from MedIR, keeps one
 shared FMA through widened/sliced register views and executes its generated C.
 These checks run at O0/O2 with undefined-behavior traps.
+`HighCPointerAddresses.AVectorRegisterParameterIsAFloat` decompiles a double
+function that flips its XMM0 parameter's sign with `xorpd` and checks the
+parameter is a `double` (it fails where a vector register's scalar parameter
+is an integer), then runs it; `MergedXmm0ResultIsTheDoubleReturnValue` reads
+that parameter's bits through `__builtin_bit_cast`.
 `AFloatReturnTakesTheLowBytesOfWiderBits` returns a double from a 16-byte
 register value with its sign flipped, as `runtime.floor` does, and from bits
 as wide as the double: both return the reinterpreted low eight bytes, where C

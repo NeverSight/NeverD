@@ -13137,6 +13137,12 @@ source policy independently of analyst call-signature overrides. It supplies
 no dynamic callee result, native reconstruction contract or partially preserved
 vector-suffix proof. Ordinary LLVM undef/poison/freeze keep their own semantics.
 
+A scalar parameter a vector register carries is a float of its width in both
+routes (`inferParamTypes`), as the LLVM route's declaration already was: a
+`double` the code also uses as bits (`xorpd xmm0, mask` to flip its sign)
+was declared `int64_t` in HighC, which C passes in an integer register,
+where its integer uses now reinterpret its bits.
+
 A floating argument's vector register is wider than the scalar most callees
 read in it. Parameter detection records the width of the scalar a vector
 argument register carries in its low lane where the function reads no other

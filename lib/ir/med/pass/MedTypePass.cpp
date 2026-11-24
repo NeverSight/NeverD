@@ -1967,6 +1967,14 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI,
       TP.Type->Size = TRI.PointerSize;
     } else if (Scalar != Func.FPParamScalarBytes.end())
       TP.Type = NdType::makeFloat(Scalar->second);
+    // A scalar a vector register carries is a float of its width, as the
+    // ABI passes it there (MedLLVMEmitter's fpAbiType): declared an integer
+    // it would arrive in an integer register.  The code's integer uses of
+    // it reinterpret its bits.
+    else if (MP.RegOff != kNoParamReg &&
+             (TRI.isVectorReg(MP.RegOff) || TRI.isFPArgReg(MP.RegOff)) &&
+             (MP.Size == 4 || MP.Size == 8))
+      TP.Type = NdType::makeFloat(MP.Size);
     else
       TP.Type = NdType::makeInt(MP.Size);
     Func.TypedParams.push_back(TP);

@@ -47296,8 +47296,10 @@ TEST(HighCPointerAddresses, MergedXmm0ResultIsTheDoubleReturnValue) {
       << HighC;
   // Both conversions complete MXCSR state, so the rounding path prints as
   // the state helpers rather than as a bare C cast.
-  const auto ToInteger =
-      HighC.find("neverd_x86_fp_cvt_to_int_state_f64_i64(arg0, ");
+  // The double parameter's bits (AVectorRegisterParameterIsAFloat).
+  const auto ToInteger = HighC.find(
+      "neverd_x86_fp_cvt_to_int_state_f64_i64(__builtin_bit_cast(uint64_t, "
+      "(double)(arg0)), ");
   ASSERT_NE(ToInteger, std::string::npos) << HighC;
   EXPECT_NE(HighC.find("neverd_x86_cvtsi2sd_source64(", ToInteger),
             std::string::npos)
@@ -47308,6 +47310,42 @@ TEST(HighCPointerAddresses, MergedXmm0ResultIsTheDoubleReturnValue) {
       HighC, std::regex(R"(return __builtin_bit_cast\(double)")))
       << HighC;
   expectCompilesForMsvc(HighC);
+}
+
+TEST(HighCPointerAddresses, AVectorRegisterParameterIsAFloat) {
+  // The double above, its sign flipped at the shared `ret` (`xorpd`): the
+  // code uses XMM0's bits as an integer too.  HighC declared the parameter
+  // `int64_t`, which C passes in RCX (or RDI), while the code reads XMM0;
+  // LLVM C declared it a double already.  Its bits are reinterpreted where
+  // the code uses them as an integer.
+  constexpr va_t Entry = 0x140001000;
+  const std::vector<uint8_t> Code = {
+      0x66, 0x0f, 0x57, 0xc9,       // xorpd xmm1, xmm1
+      0x66, 0x0f, 0x2e, 0xc1,       // ucomisd xmm0, xmm1
+      0x76, 0x0a,                   // jbe flip
+      0xf2, 0x48, 0x0f, 0x2d, 0xc8, // cvtsd2si rcx, xmm0
+      0xf2, 0x48, 0x0f, 0x2a, 0xc1, // cvtsi2sd xmm0, rcx
+      // flip: mov rdx, 0x8000000000000000; movq xmm1, rdx (RAX unwritten)
+      0x48, 0xba, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x66, 0x48, 0x0f, 0x6e, 0xca, 0x66,
+      0x0f, 0x57, 0xc1, // xorpd xmm0, xmm1
+      0xc3};
+  const std::string HighC =
+      highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
+  ASSERT_NE(HighC.find("double sub_140001000(double arg0)"), std::string::npos)
+      << HighC;
+#if defined(__x86_64__) || defined(_M_X64)
+  // The state helpers of the conversions are x86-64 inline assembly.
+  source_call_execution_test::compileAndRun("#include <stdint.h>\n" + HighC +
+                                            R"C(
+int main(void) {
+  // cvtsd2si rounds to nearest: 2.25 to 2, 2.75 to 3.
+  if (sub_140001000(2.25) != -2.0 || sub_140001000(2.75) != -3.0 ||
+      sub_140001000(-1.5) != 1.5)
+    return 1;
+  return 0;
+}
+)C");
+#endif
 }
 
 TEST(HighCPointerAddresses, IntegerVectorIntrinsicsTakeVectorOperands) {
