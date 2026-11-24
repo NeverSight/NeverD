@@ -2458,6 +2458,28 @@ python3 scripts/verify_arm64e_return_model.py run-native-ordered \
   --guests darwin-ordered --output darwin-ordered-results
 ```
 
+The local and hosted Arm models agreed on all 73,600 comparisons of an
+original and a generated access in this matrix. On an M4 Max and on M1
+virtual CPUs provided by macOS 15, macOS 26 and Xcode 27 runners, all five
+routes passed the 65 GPR encodings at every address residue. The aligned Q
+load and store each raised SIGILL on those hosts. Three controls changed a
+generated function's alignment behavior, faulting opcode or signed result.
+The Arm model and the M4 Max caught each change at the same comparison.
+[Hosted model and Darwin results](https://github.com/gmh5225/test_mac_intel/actions/runs/45377564656).
+
+On this integrated r6 build, macOS 26 and Xcode 27 each passed 36 of the
+39 previously skipped cases. Their remaining native comparisons require
+the 128-bit SIMD ordered instructions, explicit two-modifier PAuth_LR and
+PC-dependent PACM. Six image-publication cases that reached the local
+timeout also completed on macOS 26, executing 26 published images.
+Across both local Release targets, 1,034 of 1,070 cases passed and 36 skipped.
+Seven cases reached the timeout during the parallel run and all passed
+individually under the same 120-second limit. The hosted tests supplied
+passes for 33 of those 36 skips. All 56 arm64e Python tests passed.
+[Installation and instruction replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45379254463),
+[native publication replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45379983555)
+and [qualification record](evidence/arm64e-ordered-granules-2026-11-24.json).
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs
