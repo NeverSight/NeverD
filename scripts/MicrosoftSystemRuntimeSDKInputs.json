@@ -165,6 +165,40 @@
         }
       }
     },
+    "Clfsw32Runtime": {
+      "module": "clfsw32.dll",
+      "headers": [
+        "clfs",
+        "clfsw32",
+        "clfsmgmtw32"
+      ],
+      "exports": {
+        "DeregisterManageableLogClient": 1,
+        "HandleLogFull": 1,
+        "InstallLogPolicy": 2,
+        "LogTailAdvanceFailure": 2,
+        "QueryLogPolicy": 4,
+        "ReadLogNotification": 3,
+        "RegisterForLogWriteNotification": 3,
+        "RegisterManageableLogClient": 2,
+        "RemoveLogPolicy": 2,
+        "SetLogFileSizeWithPolicy": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "cfaa414c7dfa942739c6b4d0e539ec313372b785935cca8713044d170777da5a",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "3db655cea75b9a58ef6cadd339a215c1cbe2de827711dfc31457d304593f1ac3",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "42b589b68efe1711cc1ea4d2b059d0e6e38d8731d1790f524b8046672a8eb9dc",
+          "additional_exports": {}
+        }
+      }
+    },
     "CompstuiRuntime": {
       "module": "compstui.dll",
       "headers": [
@@ -648,6 +682,48 @@
         }
       }
     },
+    "EappprxyRuntime": {
+      "module": "eappprxy.dll",
+      "headers": [
+        "eaptypes",
+        "EapHostPeerTypes",
+        "eappapis"
+      ],
+      "exports": {
+        "EapHostPeerBeginSession": 14,
+        "EapHostPeerClearConnection": 2,
+        "EapHostPeerEndSession": 2,
+        "EapHostPeerFreeEapError": 1,
+        "EapHostPeerFreeRuntimeMemory": 1,
+        "EapHostPeerGetAuthStatus": 5,
+        "EapHostPeerGetDataToUnplumbCredentials": 5,
+        "EapHostPeerGetEncryptedPassword": 3,
+        "EapHostPeerGetIdentity": 14,
+        "EapHostPeerGetResponseAttributes": 3,
+        "EapHostPeerGetResult": 4,
+        "EapHostPeerGetSendPacket": 4,
+        "EapHostPeerGetUIContext": 4,
+        "EapHostPeerInitialize": 0,
+        "EapHostPeerProcessReceivedPacket": 5,
+        "EapHostPeerSetResponseAttributes": 4,
+        "EapHostPeerSetUIContext": 5,
+        "EapHostPeerUninitialize": 0
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "7a67fcfbd2792f94f3640c00ffe07e579d3bc685262017a846e3710281d324ef",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "650641e94af4ebd6675aa95becaa2aadad1b2c88f71dbdcc6f7441d17e992d79",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "f9d22a5708bfa1c64db7333281825ef2bc435d00e6b11707eb7d8b803bf3afb8",
+          "additional_exports": {}
+        }
+      }
+    },
     "EfswrtRuntime": {
       "module": "efswrt.dll",
       "headers": [
@@ -1039,6 +1115,42 @@
         }
       }
     },
+    "IscsidscRuntime": {
+      "module": "iscsidsc.dll",
+      "headers": [
+        "iscsierr",
+        "iscsidsc"
+      ],
+      "exports": {
+        "AddPersistentIScsiDeviceA": 1,
+        "AddPersistentIScsiDeviceW": 1,
+        "AddRadiusServerA": 1,
+        "AddRadiusServerW": 1,
+        "ClearPersistentIScsiDevices": 0,
+        "GetDevicesForIScsiSessionA": 3,
+        "GetDevicesForIScsiSessionW": 3,
+        "RemovePersistentIScsiDeviceA": 1,
+        "RemovePersistentIScsiDeviceW": 1,
+        "RemoveRadiusServerA": 1,
+        "RemoveRadiusServerW": 1,
+        "ReportISNSServerListA": 2,
+        "ReportISNSServerListW": 2,
+        "ReportPersistentIScsiDevicesA": 2,
+        "ReportPersistentIScsiDevicesW": 2,
+        "ReportRadiusServerListA": 2,
+        "ReportRadiusServerListW": 2
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "77c42216cac648d0826f898c866395888c03407439f3e2782b96361bb93fbfc6",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "9e121f94602f8cbc555982480b3d51bdd68d74a9b189531fed81599996f93af0",
+          "additional_exports": {}
+        }
+      }
+    },
     "Kernel32RuntimeARM64": {
       "module": "kernel32.dll",
       "headers": [
@@ -1107,6 +1219,36 @@
         },
         "arm64": {
           "image_sha256": "8496cc22815d0771b5b9b7fedbb9ad643cee5080e7ac2d2b4cb680b27339c1a2",
+          "additional_exports": {}
+        }
+      }
+    },
+    "KsuserRuntime": {
+      "module": "ksuser.dll",
+      "headers": [
+        "ks"
+      ],
+      "exports": {
+        "KsCreateAllocator": 3,
+        "KsCreateAllocator2": 3,
+        "KsCreateClock": 3,
+        "KsCreateClock2": 3,
+        "KsCreatePin": 4,
+        "KsCreatePin2": 4,
+        "KsCreateTopologyNode": 4,
+        "KsCreateTopologyNode2": 4
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "dd28805fc6f5fd70ddc8c87fe1f5561d8614bdba65284cd6a7c0c73aea427a07",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "d284e0301679ecef1b763addd6bece589bb16e4b7d5c4fbe3d8684121e8f0b74",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "29fa4eb9129bebd06caa97e3c6d9ae32ef2267b9e94814434ec6ef4591753adf",
           "additional_exports": {}
         }
       }
@@ -1703,7 +1845,7 @@
     "NtdllRuntime": {
       "module": "ntdll.dll",
       "headers": [
-        "mstcpip"
+        "netiodef"
       ],
       "exports": {
         "RtlEthernetAddressToStringA": 2,
@@ -1907,6 +2049,45 @@
         },
         "arm64": {
           "image_sha256": "e5309dd573924320098acbb53703df2f00d9fef1112fb23d69a504b03dff812a",
+          "additional_exports": {}
+        }
+      }
+    },
+    "RtmRuntime": {
+      "module": "rtm.dll",
+      "headers": [
+        "iphlpapi",
+        "Mgm"
+      ],
+      "exports": {
+        "MgmAddGroupMembershipEntry": 8,
+        "MgmDeRegisterMProtocol": 1,
+        "MgmDeleteGroupMembershipEntry": 8,
+        "MgmGetFirstMfe": 3,
+        "MgmGetFirstMfeStats": 4,
+        "MgmGetMfe": 3,
+        "MgmGetMfeStats": 4,
+        "MgmGetNextMfe": 4,
+        "MgmGetNextMfeStats": 5,
+        "MgmGetProtocolOnInterface": 4,
+        "MgmGroupEnumerationEnd": 1,
+        "MgmGroupEnumerationGetNext": 4,
+        "MgmGroupEnumerationStart": 3,
+        "MgmRegisterMProtocol": 4,
+        "MgmReleaseInterfaceOwnership": 3,
+        "MgmTakeInterfaceOwnership": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "32007a77ad4315f7bcaf64c82ed904afeba394fff9c90d88c76c9fafe63efe38",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "20fb33c442ec1ecac170d05e1b557c5114ea80802055ed11055e963d85b6dc09",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "2976f8502bed5d01d3de9126e73bd2fd296154ceccd1d461ef9215aa6af29810",
           "additional_exports": {}
         }
       }
