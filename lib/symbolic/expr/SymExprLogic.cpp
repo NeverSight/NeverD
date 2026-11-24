@@ -489,6 +489,34 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
     // every XOR arm too, including ~(K | X), whose possible bits lie in ~K.
     if (!Acc.isZero() && llvm::all_of(operands(Value), CoveredByConstant))
       return true;
+    // X ^ (X | Y) can set bits only from Y. The outer OR already covers
+    // those bits when every extra union term is present or masked by Acc.
+    const auto DifferenceWithinUnion = [&](SymRef Base, SymRef Union) {
+      if (op(Union) != SymOp::Or)
+        return false;
+      bool FoundBase = false;
+      for (SymRef Term : operands(Union)) {
+        if (!SubsetWork)
+          return false;
+        --SubsetWork;
+        if (Term == Base) {
+          FoundBase = true;
+          continue;
+        }
+        if (isConst(Term)) {
+          if ((constValue(Term) & ~Acc).isZero())
+            continue;
+          return false;
+        }
+        if (!std::binary_search(Rest.begin(), Rest.end(), Term))
+          return false;
+      }
+      return FoundBase;
+    };
+    if (numOperands(Value) == 2 &&
+        (DifferenceWithinUnion(operand(Value, 0), operand(Value, 1)) ||
+         DifferenceWithinUnion(operand(Value, 1), operand(Value, 0))))
+      return true;
     for (SymRef Cover : Rest) {
       if (!SubsetWork)
         return false;
@@ -548,6 +576,19 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
           });
         });
     Absorbed |= CoveredXor(R);
+    // ~(~x | y) is a subset of x even when the inner AND has not been
+    // normalized through De Morgan's law.
+    if (op(R) == SymOp::Not && op(operand(R, 0)) == SymOp::Or)
+      for (SymRef Term : operands(operand(R, 0))) {
+        if (!SubsetWork)
+          break;
+        --SubsetWork;
+        if (op(Term) == SymOp::Not &&
+            std::binary_search(Rest.begin(), Rest.end(), operand(Term, 0))) {
+          Absorbed = true;
+          break;
+        }
+      }
     // A masked value cannot add any bit already set by the folded constant.
     Absorbed |= op(R) == SymOp::And && isConst(operand(R, 0)) &&
                 (constValue(operand(R, 0)) & ~Acc).isZero();
