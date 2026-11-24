@@ -5581,6 +5581,21 @@ result back return no value together, as `sqlite3_free` and the functions
 that end in it do, and an operation that reads the result of a call that
 returns nothing, where no byte of it reaches anything, reads zero instead.
 
+A result is no wider than the bytes every return defines (`MedTypePass`'s
+`DefinedLowBytes`): `mov al, 1; ret` over a RAX no argument set returns one
+byte, as a compiler returning `bool` guarantees no more. A byte or word write
+defines what it writes and keeps what the register held above it; a view, a
+zero extension, a selection and a join pass on what their inputs define; and a
+bitwise operation defines each byte as far as both of its operands do, all of
+them where a mask clears the bytes above an operand's defined ones, and all
+where it XORs a value with itself. So `sete al; setnp cl; and eax, ecx`, how
+Go's `f64equal` returns its bool, defines one byte, and the function returns
+`int8_t` without the entry RAX's and RCX's upper bytes, which printed as
+unknown. The values an operation defines beside its output
+(`MedOp::IntrinsicOutputs`) are defined whole: taken for values nothing
+defines, the pointers a `rep movsq` leaves made a later byte write the whole
+of Go's `memmove` result.
+
 A reachable branch whose arms only return distinct integer constants selects
 a result even when another path leaves the register untouched. The arms may
 return separately or pass through successive result PHIs on the way to a

@@ -6315,6 +6315,147 @@ TEST(MedTypePass, ByteResultOnOnePathBoundsEveryPath) {
   EXPECT_EQ(Func.ReturnType->Size, 1u);
 }
 
+TEST(MedTypePass, BytesJoinedBitwiseAreOneByteWhereEitherIs) {
+  // `sete al; setnp cl; and eax, ecx; ret`, as Go's f64equal returns its
+  // bool: each byte write keeps what its register held above it, which no
+  // argument set, and a bitwise operation computes each byte from the same
+  // byte of its operands.  Only AL is defined; read whole, the result was
+  // four bytes, three of them the entry RAX's and RCX's.
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  const MedVar EntryRAX = reg(1, 0, 8, TRI.IntReturnReg, TheArch);
+  const MedVar EntryRCX = reg(3, 0, 8, x86reg::RCX, TheArch);
+  addLiveIn(Block, EntryRAX);
+  addLiveIn(Block, EntryRCX);
+  const MedVar AL = reg(2, 1, 1, TRI.IntReturnReg, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, AL, MedVar::makeConst(1, 1)));
+  const MedVar CL = reg(4, 1, 1, x86reg::RCX, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, CL, MedVar::makeConst(0, 1)));
+  const auto Merge = [&](const MedVar &Upper, const MedVar &Low, int Id) {
+    const MedVar Kept = temp(Id, 0, 8, TheArch);
+    Block.Ops.push_back(binary(NdOp::INT_AND, Kept, Upper,
+                               MedVar::makeConst(~uint64_t{0xff}, 8)));
+    const MedVar Byte = temp(Id + 1, 0, 8, TheArch);
+    Block.Ops.push_back(unary(NdOp::INT_ZEXT, Byte, Low));
+    const MedVar Merged = temp(Id + 2, 0, 8, TheArch);
+    Block.Ops.push_back(binary(NdOp::INT_OR, Merged, Kept, Byte));
+    const MedVar Word = temp(Id + 3, 0, 4, TheArch);
+    Block.Ops.push_back(
+        binary(NdOp::SUBBYTES, Word, Merged, MedVar::makeConst(0, 4)));
+    return Word;
+  };
+  const MedVar EAX = Merge(EntryRAX, AL, 10);
+  const MedVar ECX = Merge(EntryRCX, CL, 20);
+  const MedVar Joined = temp(30, 0, 4, TheArch);
+  Block.Ops.push_back(binary(NdOp::INT_AND, Joined, EAX, ECX));
+  const MedVar Result = reg(1, 2, 8, TRI.IntReturnReg, TheArch);
+  Block.Ops.push_back(unary(NdOp::INT_ZEXT, Result, Joined));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Result);
+  Block.Ops.push_back(Return);
+
+  inferMedTypes(Func, TheArch);
+
+  ASSERT_TRUE(Func.ReturnType);
+  EXPECT_EQ(Func.ReturnType->Kind, NdTypeKind::Int);
+  EXPECT_EQ(Func.ReturnType->Size, 1u);
+}
+
+TEST(MedTypePass, BytesJoinedBitwiseOverArgumentsKeepTheirWidth) {
+  // The same `sete al; setnp cl; and eax, ecx; ret` where RAX and RCX each
+  // carry an argument: every byte the byte writes keep is defined, so the
+  // result keeps its four bytes.
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  const MedVar EntryRAX = reg(1, 0, 8, TRI.IntReturnReg, TheArch);
+  const MedVar EntryRCX = reg(3, 0, 8, x86reg::RCX, TheArch);
+  addLiveIn(Block, EntryRAX);
+  addLiveIn(Block, EntryRCX);
+  Func.Params.push_back(registerParam(EntryRAX));
+  Func.Params.push_back(registerParam(EntryRCX));
+  const MedVar AL = reg(2, 1, 1, TRI.IntReturnReg, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, AL, MedVar::makeConst(1, 1)));
+  const MedVar CL = reg(4, 1, 1, x86reg::RCX, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, CL, MedVar::makeConst(0, 1)));
+  const auto Merge = [&](const MedVar &Upper, const MedVar &Low, int Id) {
+    const MedVar Kept = temp(Id, 0, 8, TheArch);
+    Block.Ops.push_back(binary(NdOp::INT_AND, Kept, Upper,
+                               MedVar::makeConst(~uint64_t{0xff}, 8)));
+    const MedVar Byte = temp(Id + 1, 0, 8, TheArch);
+    Block.Ops.push_back(unary(NdOp::INT_ZEXT, Byte, Low));
+    const MedVar Merged = temp(Id + 2, 0, 8, TheArch);
+    Block.Ops.push_back(binary(NdOp::INT_OR, Merged, Kept, Byte));
+    const MedVar Word = temp(Id + 3, 0, 4, TheArch);
+    Block.Ops.push_back(
+        binary(NdOp::SUBBYTES, Word, Merged, MedVar::makeConst(0, 4)));
+    return Word;
+  };
+  const MedVar EAX = Merge(EntryRAX, AL, 10);
+  const MedVar ECX = Merge(EntryRCX, CL, 20);
+  const MedVar Joined = temp(30, 0, 4, TheArch);
+  Block.Ops.push_back(binary(NdOp::INT_AND, Joined, EAX, ECX));
+  const MedVar Result = reg(1, 2, 8, TRI.IntReturnReg, TheArch);
+  Block.Ops.push_back(unary(NdOp::INT_ZEXT, Result, Joined));
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.addInput(Result);
+  Block.Ops.push_back(Return);
+
+  inferMedTypes(Func, TheArch);
+
+  ASSERT_TRUE(Func.ReturnType);
+  EXPECT_EQ(Func.ReturnType->Size, 4u);
+}
+
+TEST(MedTypePass, AnIntrinsicsOtherOutputsAreDefined) {
+  // `cpuid; mov eax, ebx; or eax, ecx; mov al, 1; ret`: CPUID defines EBX
+  // and ECX beside EAX (MedOp::IntrinsicOutputs), so the 32-bit result is
+  // defined whole.  Taken for values nothing defines, they made the byte
+  // write the whole result, as Go's memmove returned `int8_t` where a `rep
+  // movsq` left RSI and RDI.
+  constexpr Arch TheArch = Arch::X64;
+  const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.Blocks.resize(1);
+  MedBlock &Block = Func.Blocks[0];
+  const MedVar EntryRAX = reg(1, 0, 8, TRI.IntReturnReg, TheArch);
+  addLiveIn(Block, EntryRAX);
+  const MedVar EAX = reg(5, 1, 4, TRI.IntReturnReg, TheArch);
+  const MedVar EBX = reg(6, 1, 4, x86reg::RBX, TheArch);
+  const MedVar ECX = reg(7, 1, 4, x86reg::RCX, TheArch);
+  const MedVar EDX = reg(8, 1, 4, x86reg::RDX, TheArch);
+  MedOp Cpuid;
+  Cpuid.Opcode = NdOp::INTRINSIC;
+  Cpuid.Output = EAX;
+  Cpuid.addInput(MedVar::makeConst(static_cast<uint64_t>(Intrinsic::Cpuid), 2));
+  Cpuid.addInput(MedVar::makeConst(0, 4));
+  Cpuid.addInput(MedVar::makeConst(0, 4));
+  Cpuid.IntrinsicOutputs = {EBX, ECX, EDX};
+  Block.Ops.push_back(Cpuid);
+  const MedVar Joined = temp(10, 0, 4, TheArch);
+  Block.Ops.push_back(binary(NdOp::INT_OR, Joined, EBX, ECX));
+  const MedVar RAX = reg(1, 1, 8, TRI.IntReturnReg, TheArch);
+  Block.Ops.push_back(unary(NdOp::INT_ZEXT, RAX, Joined));
+  const MedVar AL = reg(2, 1, 1, TRI.IntReturnReg, TheArch);
+  Block.Ops.push_back(unary(NdOp::COPY, AL, MedVar::makeConst(1, 1)));
+  pushByteMerge(Block, RAX, AL, 20, TheArch);
+
+  inferMedTypes(Func, TheArch);
+
+  ASSERT_TRUE(Func.ReturnType);
+  EXPECT_EQ(Func.ReturnType->Size, 4u);
+}
+
 TEST(MedTypePass, ByteResultOverParameterRegisterKeepsItsWidth) {
   // AArch64 passes and returns in X0: its entry value is an argument.
   constexpr Arch TheArch = Arch::AArch64;

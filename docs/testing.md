@@ -9967,6 +9967,12 @@ undefined entry arms. Run the ABI suite alongside the x64 boolean-after-float
 call and AArch64 strtof/strtod execution tests when changing this admission.
 `FloatCallsDefineOnlyTheirDeclaredScalarWidth` checks mixed float/double
 carriers in both input orders, using both call-site and callee-summary types.
+`BytesJoinedBitwiseAreOneByteWhereEitherIs` returns `sete al; setnp cl; and
+eax, ecx` over entry registers no argument set: the result is one byte.
+`BytesJoinedBitwiseOverArgumentsKeepTheirWidth` makes RAX and RCX arguments:
+the result keeps its four bytes.
+`AnIntrinsicsOtherOutputsAreDefined` returns a byte written over the 32-bit
+OR of the EBX and ECX a CPUID defines: the result keeps its four bytes.
 The shared HighC host fixture reports native `-m32` execution unavailable on
 macOS, where a 64-bit build would truncate the kernels' addresses, and on any
 other non-Linux host whose test Clang builds no runnable `-m32` program: the
