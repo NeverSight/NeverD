@@ -59,6 +59,23 @@ class MicrosoftProviderABIs(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, "matrix is incomplete"):
                             provider.check(args)
 
+    def test_older_named_runtime_catalog_skips_new_system_profiles_by_default(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
+                provider.CASES, {"Cfgmgr32Runtime": ()}, clear=True):
+            root = Path(temporary)
+            (root / "arm64").mkdir()
+            (root / "manifest.json").write_text("{}")
+            manifest = root / "arm64/manifest.json"
+            for key in ("named_runtime", "system_runtime"):
+                manifest.write_text(json.dumps({"libraries": [], "profiles": {key: "present"}}))
+                args = argparse.Namespace(generated=root, output=root / key,
+                                          architecture=["arm64"], provider=None)
+                if key == "named_runtime":
+                    self.assertFalse(provider.check(args)["passed"])
+                else:
+                    with self.assertRaisesRegex(ValueError, "matrix is incomplete"):
+                        provider.check(args)
+
     def test_generated_declarations_do_not_inherit_the_wdk_default_calling_convention(self):
         compiler = ['clang', '--target=i686-pc-windows-msvc', '-I', 'wdk',
                     '-ivfsoverlay', 'headers.json', '-Xclang', '-fdefault-calling-conv=stdcall',
