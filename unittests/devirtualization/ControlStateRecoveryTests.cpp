@@ -1449,6 +1449,44 @@ TEST(ControlStateRecovery, ProducerClosureChargesWorkBeforeAnotherRestart) {
   }
 }
 
+TEST(ControlStateRecovery, ProducerHintsRequireFreshProof) {
+  auto Provider = makeLongControlLoop();
+  auto Options = automaticBankOptions();
+  Options.MaxContextsPerAddress = 1;
+  const auto Baseline = specializeInterpreter(Provider, {Entry}, Options);
+  ASSERT_TRUE(Baseline.complete()) << Baseline.Diagnostic;
+  ASSERT_FALSE(Baseline.ControlProducerHints.empty());
+  EXPECT_FALSE(Baseline.ControlProducerHintsTruncated);
+
+  Options.ControlProducerHints = Baseline.ControlProducerHints;
+  const auto Hinted = specializeInterpreter(Provider, {Entry}, Options);
+  ASSERT_TRUE(Hinted.complete()) << Hinted.Diagnostic;
+  EXPECT_LE(Hinted.ControlRefinements, Baseline.ControlRefinements);
+  EXPECT_FALSE(Hinted.ControlProducerHintsTruncated);
+  for (uint64_t Input : {0ULL, 1ULL, 17ULL, ~0ULL})
+    for (uint64_t Limit : {1ULL, 5ULL, 13ULL}) {
+      uint64_t Expected = 0;
+      for (uint64_t I = 0; I != Limit; ++I)
+        Expected += (Input ^ 45) + 3 + 11 * ((Input + I) & 3);
+      EXPECT_EQ(run(Hinted.Residual, Input, Limit), Expected);
+    }
+
+  // A valid hint cannot turn an exhausted graph into a partial certificate.
+  Options.MaxOperations = 1;
+  const auto Limited = specializeInterpreter(Provider, {Entry}, Options);
+  expectBudgetRefusal(Limited);
+  EXPECT_TRUE(Limited.Residual.Blocks.empty());
+  EXPECT_FALSE(Limited.ControlProducerHints.empty());
+
+  auto Malformed = automaticBankOptions();
+  Malformed.ControlProducerHints = Baseline.ControlProducerHints;
+  Malformed.ControlProducerHints.front().Bytes = 0;
+  const auto Invalid = specializeInterpreter(Provider, {Entry}, Malformed);
+  EXPECT_EQ(Invalid.Status, SpecializationStatus::InvalidInput);
+  EXPECT_TRUE(Invalid.Residual.Blocks.empty());
+  EXPECT_TRUE(Invalid.ControlProducerHints.empty());
+}
+
 TEST(ControlStateRecovery, DiscoveryIgnoresUnrelatedControlRegisterReuse) {
   auto Provider = makeBankProgram(false);
   constexpr va_t BranchEntry = 0x400;

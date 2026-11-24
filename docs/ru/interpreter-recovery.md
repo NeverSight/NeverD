@@ -357,6 +357,8 @@ API v9 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9` 
 
 C API v10 `neverd_devirtualize_source_v10()` и `neverd_devirtualize_machine_source_v10()` принимают `neverd_devirtualize_options_v10`. Обнулите структуру, задайте в `struct_size` префикса v1 полный размер и выберите `machine_source_abi` через `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` или `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2`. Неизвестные значения, ненулевые резервные поля и расширенные структуры для обычного исходного кода отвергаются. Старые API игнорируют новый хвост, v10 — будущие хвосты. Нулевой указатель настроек сохраняет скалярные значения по умолчанию. Python предоставляет `NeverDDevirtualizeOptionsV10` и `DevirtualizeMachineSourceABI`. Нативная сертификация не меняется.
 
+C API v11 `neverd_devirtualize_source_v11()` и `neverd_devirtualize_machine_source_v11()` принимают кандидаты из `nextControlProducerHints`; CLI допускает повторение `--vm-producer-hint=адрес:r|s:смещение:байты:маска`. Перед повторным использованием привяжите их к тому же физическому образу по хешу из отчёта. Подсказки лишь запрашивают точность, расходуют бюджет поиска и не доказывают значения или достижимость пути: при каждом запуске весь достижимый граф доказывается заново. `controlProducerHintsTruncated` отмечает усечённый список.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## Восстановление интерпретатора в приложении

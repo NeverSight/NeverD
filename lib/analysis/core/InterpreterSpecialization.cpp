@@ -20,6 +20,7 @@
 #include "RecoveryArchitecture.h"
 #include "ReturningCallState.h"
 
+#include "neverd/analysis/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowArchitecturalValue.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
@@ -6299,11 +6300,50 @@ specializeInterpreter(SpecializationProvider &Provider,
   }
   SpecializationOptions Effective = Options;
   ControlRefinement Refinement(Options.MaxSymbolicNodes);
+  if (Options.ControlProducerHints.size() >
+          limits::analysis::kMaxControlProducerHints ||
+      Options.ControlProducerHints.size() > Options.MaxDiscoveryVisits) {
+    SpecializationResult Limited;
+    Limited.Status = SpecializationStatus::BudgetExceeded;
+    Limited.Diagnostic = "control producer hint budget exhausted";
+    return Limited;
+  }
+  for (const auto &Hint : Options.ControlProducerHints) {
+    if (Hint.Cursor.Address == InvalidVA ||
+        !isSingleInstructionMode(Hint.Cursor.Mode) || !Hint.Bytes ||
+        Hint.Bytes > 8 || !Hint.DemandedBits ||
+        (Hint.Bytes < 8 && Hint.DemandedBits >> (8 * Hint.Bytes)) ||
+        Hint.Offset > InvalidVA - (Hint.Bytes - 1) ||
+        (!Hint.Register && !Options.FrameBaseRegister)) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "invalid control producer hint";
+      return Invalid;
+    }
+    Refinement.ProducerDemands[{Hint.Cursor.Address, Hint.Cursor.Mode,
+                                Hint.Register, Hint.Offset, Hint.Bytes}] |=
+        Hint.DemandedBits;
+  }
+  Refinement.Visits = Options.ControlProducerHints.size();
   if (Options.EntryFrameAlignment && Options.EntryFrameAlignment->valid())
     Refinement.FrameMask = Options.EntryFrameAlignment->Alignment - 1;
   SpecializationResult Result;
+  Result.DiscoveryVisits = Refinement.Visits;
   std::string LastRecoveryFrontier;
   const auto Finish = [&]() {
+    std::map<ProducerDemand, uint64_t> Hints = Refinement.ProducerDemands;
+    for (const auto &[Demand, Bits] : Refinement.PendingProducerDemands)
+      Hints[Demand] |= Bits;
+    Result.ControlProducerHintsTruncated =
+        Hints.size() > limits::analysis::kMaxControlProducerHints;
+    for (const auto &[Demand, Bits] : Hints) {
+      if (Result.ControlProducerHints.size() ==
+          limits::analysis::kMaxControlProducerHints)
+        break;
+      const auto &[Address, Mode, Register, Offset, Bytes] = Demand;
+      Result.ControlProducerHints.push_back(
+          {{Address, Mode}, Register, Offset, Bytes, Bits});
+    }
     // Refinement can exhaust a shared ledger while replaying an earlier
     // prefix. Keep the last semantic failure as context for that limit,
     // without treating its abstract path as a feasible execution or changing

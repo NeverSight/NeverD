@@ -15629,6 +15629,12 @@ demands after a failed attempt. It reuses the scalar evaluator without changing
 graph facts or allocating control fields or contexts; all work remains
 budgeted and publication requires a fresh complete proof.
 
+The same owner accepts optional physical-point producer-bit hints and returns
+the merged bounded set on completion or refusal. A hint names a location and
+bit mask, never a value or a feasible edge. Importing a prior set charges the
+discovery budget and restarts the full graph proof; malformed ranges refuse.
+Reports label these as reusable candidates, not residual or source evidence.
+
 Context refinement may additionally nominate a tracked eight-byte address carrier when a later memory demand uses only its byte slice. The original narrow producer coordinates remain authoritative; only enqueue forms keys from proved constants or frame offsets.
 
 `ControlDependencyCache` reuses completed dependency walks only among sibling

@@ -357,6 +357,8 @@ v9 API `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9` 
 
 v10 C API の `neverd_devirtualize_source_v10()` と `neverd_devirtualize_machine_source_v10()` は `neverd_devirtualize_options_v10` を受け取ります。ゼロ初期化し、v1 接頭部の `struct_size` に全体サイズを設定します。`machine_source_abi` には `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`、`NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1`、`NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2` を指定します。不明な値、非ゼロの予約フィールド、通常ソースでの拡張配置は拒否されます。旧 API は新しい末尾を、v10 は将来の末尾を無視します。ヌル設定はスカラーの既定値を維持します。Python では `NeverDDevirtualizeOptionsV10` と `DevirtualizeMachineSourceABI` を公開します。ネイティブ認証は変わりません。
 
+v11 C API の `neverd_devirtualize_source_v11()` と `neverd_devirtualize_machine_source_v11()` は `nextControlProducerHints` の候補を受け取ります。CLI では `--vm-producer-hint=アドレス:r|s:オフセット:バイト数:ビットマスク` を繰り返し指定できます。再利用前に、報告のイメージハッシュで同じ物理イメージに結び付けてください。候補は精度だけを要求し、発見予算を消費します。値や到達可能経路の証拠にはならず、毎回、到達可能なグラフ全体を改めて証明します。`controlProducerHintsTruncated` は一覧の切り詰めを示します。
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## デスクトップでのインタープリター復元

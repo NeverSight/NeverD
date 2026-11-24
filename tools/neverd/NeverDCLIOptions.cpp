@@ -878,6 +878,11 @@ cl::list<std::string> VMControlFrameSlots(
     "vm-control-stack",
     cl::desc("Entry-RSP-relative context slot offset:bytes (repeatable)"),
     cl::ZeroOrMore, cl::sub(DecompileCmd));
+cl::list<std::string> VMProducerHints(
+    "vm-producer-hint",
+    cl::desc("Candidate address:r|s:offset:bytes:bit-mask (repeatable; "
+             "does not assume a value or path)"),
+    cl::ZeroOrMore, cl::sub(DecompileCmd));
 cl::opt<unsigned>
     VMMaxNodes("vm-max-nodes", cl::desc("Recovery node budget"),
                cl::init(::neverd::limits::cli::kDefaultVMMaxNodes),

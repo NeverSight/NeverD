@@ -617,6 +617,29 @@ TEST_F(DevirtualizationSourceTest, CLIEmitsSourceAndEvidenceOnlyOnSuccess) {
   EXPECT_EQ(Control->getInteger("offset"), x86reg::R10);
   EXPECT_EQ(Control->getInteger("bytes"), 8);
 
+  const auto HintedSource = tmpFile("hinted.c");
+  const auto HintedReport = tmpFile("hinted.json");
+  const auto Hinted =
+      exec(ndBin(), {"decompile", "--func", "generic_vm_register_arithmetic",
+                     "--devirtualize", "--vm-control=r10",
+                     "--vm-producer-hint=0xdead:r:0:1:0x1",
+                     "--recovery-report=" + HintedReport.string(), "-o",
+                     HintedSource.string(), Binary.string()});
+  ASSERT_TRUE(Hinted.ok()) << Hinted.err;
+  EXPECT_FALSE(readSource(HintedSource).empty());
+  auto HintedJSON = llvm::json::parse(readSource(HintedReport));
+  ASSERT_TRUE(static_cast<bool>(HintedJSON))
+      << llvm::toString(HintedJSON.takeError());
+  const auto *HintedObject = HintedJSON->getAsObject();
+  ASSERT_NE(HintedObject, nullptr);
+  EXPECT_EQ(HintedObject->getBoolean("complete"), true);
+  const auto *InputHints = HintedObject->getArray("controlProducerHints");
+  const auto *NextHints = HintedObject->getArray("nextControlProducerHints");
+  ASSERT_NE(InputHints, nullptr);
+  ASSERT_NE(NextHints, nullptr);
+  EXPECT_EQ(InputHints->size(), 1u);
+  EXPECT_EQ(NextHints->size(), 1u);
+
   const auto InvalidSource = tmpFile("invalid.c");
   const auto InvalidReport = tmpFile("invalid.json");
   const auto Refused =

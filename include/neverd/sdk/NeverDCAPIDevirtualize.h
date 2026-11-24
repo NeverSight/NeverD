@@ -217,6 +217,31 @@ typedef struct neverd_devirtualize_options_v10 {
   uint32_t reserved;
 } neverd_devirtualize_options_v10;
 
+/// One candidate dependency bit range at a physical instruction address.
+/// is_register selects a register-bank offset (1) or an entry-frame-relative
+/// offset represented as two's-complement uint64_t (0). The bit mask uses the
+/// low bytes of that range. Candidates do not supply machine facts or bypass
+/// complete control-flow proof. All reserved bytes must be zero.
+typedef struct neverd_devirtualize_producer_hint_v1 {
+  neverd_va_t address;
+  uint64_t offset;
+  uint64_t demanded_bits;
+  uint16_t bytes;
+  uint8_t is_register;
+  uint8_t reserved[5];
+} neverd_devirtualize_producer_hint_v1;
+
+/// Version 11 accepts bounded candidate bit demands from an earlier report.
+/// The report returns the merged candidates on success or refusal. Reusing
+/// candidates requires the caller to bind them to the same physical image;
+/// each invocation still proves every edge. v1-v10 ignore this tail.
+typedef struct neverd_devirtualize_options_v11 {
+  neverd_devirtualize_options_v10 base;
+  const neverd_devirtualize_producer_hint_v1 *producer_hints;
+  size_t producer_hint_count;
+  uint64_t reserved;
+} neverd_devirtualize_options_v11;
+
 /// Return recovered C only when all reachable control targets are resolved.
 /// The contract fixes mapped image bytes and permissions, excludes concurrent
 /// mutation and calls, and does not certify binary patching or unwind behavior.
@@ -357,6 +382,17 @@ neverd_devirtualize_source_v10(neverd_session_t Session, neverd_va_t Entry,
 NEVERD_API const char *neverd_devirtualize_machine_source_v10(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v10 *Options, const char **Report);
+
+/// Source contracts and ownership match v10. Candidate hints are optional;
+/// omitted hints retain existing behavior and report an empty or newly
+/// discovered candidate list.
+NEVERD_API const char *
+neverd_devirtualize_source_v11(neverd_session_t Session, neverd_va_t Entry,
+                               const neverd_devirtualize_options_v11 *Options,
+                               const char **Report);
+NEVERD_API const char *neverd_devirtualize_machine_source_v11(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v11 *Options, const char **Report);
 
 #ifdef __cplusplus
 }
