@@ -16,6 +16,7 @@
 #include "neverd/backend/c/CSourceMap.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/pipeline/Limits.h"
@@ -234,6 +235,39 @@ std::string source(const SourceInlineHighView &View, const BinaryImage &Image,
   return Text;
 }
 
+bool hasOriginalStackInput(const llvm::Module &Module,
+                           llvm::StringRef Caller, llvm::StringRef Callee) {
+  const auto *From = Module.getFunction(Caller);
+  const auto *To = Module.getFunction(Callee);
+  if (!From || !To)
+    return false;
+  for (const auto &Block : *From)
+    for (const auto &Instruction : Block) {
+      const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+      if (!Call || Call->getCalledFunction() != To)
+        continue;
+      // The fixtures leave the fifth or sixth argument unavailable. Require
+      // a coordinate-bearing observation at that operand, not a declaration
+      // or an anonymous unknown somewhere else in the module.
+      for (unsigned I = 4; I < 6 && I < Call->arg_size(); ++I) {
+        const auto *Arg = Call->getArgOperand(I);
+        if (!llvm_source_unknown::isValue(Arg))
+          continue;
+        const auto *Input = llvm::cast<llvm::CallInst>(Arg);
+        if (Input->arg_size() != 2)
+          continue;
+        const auto *Site =
+            llvm::dyn_cast<llvm::ConstantInt>(Input->getArgOperand(0));
+        const auto *Slot =
+            llvm::dyn_cast<llvm::ConstantInt>(Input->getArgOperand(1));
+        if (Site && Site->getZExtValue() != InvalidVA && Slot &&
+            Slot->getZExtValue() == I * 8)
+          return true;
+      }
+    }
+  return false;
+}
+
 TEST(SourceInlineCalls, KeepsActualPointerReadsWritesAndOutgoingAliases) {
   for (unsigned Mode = 0; Mode != 3; ++Mode) {
     SCOPED_TRACE(Mode);
@@ -247,7 +281,8 @@ TEST(SourceInlineCalls, KeepsActualPointerReadsWritesAndOutgoingAliases) {
     ASSERT_TRUE(Original.Success) << Original.Error;
     ASSERT_TRUE(Original.LlvmModule);
     const auto Before = source(*Original.LlvmModule);
-    ASSERT_NE(Before.find("__builtin_trap"), std::string::npos) << Before;
+    ASSERT_TRUE(hasOriginalStackInput(
+        *Original.LlvmModule, "caller_probe", "callee_probe")) << Before;
     PipelineOptions HighOptions;
     HighOptions.EmitDumpOutput = false;
     HighOptions.OnlyFunctionEntries = {Image.Entry};
@@ -348,8 +383,8 @@ TEST(SourceInlineCalls, ObservedMissingSlotsRemainUnavailable) {
   auto Specialized = specializeUnavailableSourceCalls(
       Image, Original, *Original.LlvmModule, nullptr, {}, {});
   EXPECT_FALSE(Specialized.Module);
-  EXPECT_NE(source(*Original.LlvmModule).find("__builtin_trap"),
-            std::string::npos);
+  EXPECT_TRUE(hasOriginalStackInput(
+      *Original.LlvmModule, "caller_probe", "callee_probe"));
 }
 
 TEST(SourceInlineCalls, NestedMissingInputsDoNotBecomeNewFailures) {
@@ -365,8 +400,8 @@ TEST(SourceInlineCalls, NestedMissingInputsDoNotBecomeNewFailures) {
   auto Specialized = specializeUnavailableSourceCalls(
       Image, Original, *Original.LlvmModule, nullptr, {}, {});
   EXPECT_FALSE(Specialized.Module);
-  EXPECT_NE(source(*Original.LlvmModule).find("__builtin_trap"),
-            std::string::npos);
+  EXPECT_TRUE(hasOriginalStackInput(
+      *Original.LlvmModule, "caller_probe", "callee_probe"));
 }
 
 TEST(SourceInlineCalls, NestedUnusedInputsKeepEveryMemoryEffect) {
@@ -389,7 +424,8 @@ TEST(SourceInlineCalls, NestedUnusedInputsKeepEveryMemoryEffect) {
         ASSERT_TRUE(Original.Success) << Original.Error;
         ASSERT_TRUE(Original.LlvmModule);
         const auto Before = source(*Original.LlvmModule);
-        ASSERT_NE(Before.find("__builtin_trap"), std::string::npos) << Before;
+        ASSERT_TRUE(hasOriginalStackInput(
+            *Original.LlvmModule, "nested_caller", "nested_body_0")) << Before;
         PipelineOptions HighOptions;
         HighOptions.EmitDumpOutput = false;
         HighOptions.OnlyFunctionEntries = {Image.Entry};
@@ -515,7 +551,8 @@ TEST(SourceInlineCalls, NestedObserversCyclesAndLimitsRetainTheOriginalView) {
         Image, Original, *Original.LlvmModule, nullptr, {}, {});
     EXPECT_FALSE(Specialized.Module);
     EXPECT_EQ(source(*Original.LlvmModule), Before);
-    EXPECT_NE(Before.find("__builtin_trap"), std::string::npos);
+    EXPECT_TRUE(hasOriginalStackInput(
+        *Original.LlvmModule, "nested_caller", "nested_body_0"));
   }
 }
 
@@ -859,7 +896,8 @@ TEST(SourceInlineCalls, LargeCandidateScaffoldingStillNeedsTheActualBody) {
     ASSERT_TRUE(Original.Success) << Original.Error;
     ASSERT_TRUE(Original.LlvmModule);
     const auto Before = source(*Original.LlvmModule);
-    ASSERT_NE(Before.find("__builtin_trap"), std::string::npos);
+    ASSERT_TRUE(hasOriginalStackInput(
+        *Original.LlvmModule, "caller_probe", "callee_probe"));
 
     // Deliberately incomplete candidate information cannot authorize dropping
     // a native input. Only recovering the original bytes below can do that.
