@@ -67,6 +67,8 @@ add_neverd_unittest(NeverDLLVMTargetInitializationTests
   LLVMTargetInitializationTests.cpp
   LINK_COMPONENTS Support
 )
+target_include_directories(NeverDLLVMTargetInitializationTests PRIVATE
+  "${NEVERD_LLVM_TARGET_INCLUDE_DIR}")
 
 if(TARGET NeverDProjectDatabase)
   add_neverd_unittest(NeverDProjectDatabaseTests

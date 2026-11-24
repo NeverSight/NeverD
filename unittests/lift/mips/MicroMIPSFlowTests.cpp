@@ -185,6 +185,67 @@ TEST(MicroMIPS64, FullWidthTargetsRegistersAndScalarMemory) {
   }
 }
 
+TEST(MicroMIPS64, DoublewordProductsWriteBothAccumulatorHalves) {
+  // GNU as -mips64r2 emits 58a4 8b3c / 58a4 9b3c for $a0 * $a1.
+  for (const auto Target :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    Decoder Micro;
+    ASSERT_TRUE(Micro.init(Target, InstructionMode::MicroMIPS));
+    for (bool Signed : {true, false}) {
+      const uint16_t Minor = Signed ? 0x8b3c : 0x9b3c;
+      auto Image = microImage(Target, {0x58a4, Minor});
+      const auto &Bytes = Image.Segments.front().Data;
+      DecodedInsn Insn{};
+      ASSERT_EQ(Micro.decodeOne(Bytes.data(), Bytes.size(), Image.Entry, Insn),
+                4);
+      EXPECT_EQ(Insn.Id, Signed ? MIPS_INS_DMULT : MIPS_INS_DMULTU);
+      EXPECT_TRUE(std::equal(Bytes.begin(), Bytes.end(), Insn.Raw->bytes));
+      const auto &Detail = Insn.Raw->detail->mips;
+      ASSERT_EQ(Detail.op_count, 2u);
+      ASSERT_EQ(Detail.operands[0].type, MIPS_OP_REG);
+      ASSERT_EQ(Detail.operands[1].type, MIPS_OP_REG);
+      EXPECT_EQ(Detail.operands[0].reg, MIPS_REG_A0_64);
+      EXPECT_EQ(Detail.operands[1].reg, MIPS_REG_A1_64);
+
+      ASSERT_EQ(
+          Micro.decodeOneForLift(Bytes.data(), Bytes.size(), Image.Entry, Insn),
+          4);
+      std::vector<LowOp> Ops;
+      Micro.liftToLow(Insn, Ops);
+      ASSERT_FALSE(Ops.empty());
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(true);
+      Emulator.setRegister(mipsreg::A0, UINT64_MAX);
+      Emulator.setRegister(mipsreg::A1, 0x100000001ull);
+      for (const auto &Op : Ops)
+        ASSERT_TRUE(Emulator.step(Op));
+      EXPECT_EQ(Emulator.getRegister(mipsreg::LO), 0xfffffffeffffffffull);
+      EXPECT_EQ(Emulator.getRegister(mipsreg::HI),
+                Signed ? UINT64_MAX : 0x100000000ull);
+    }
+  }
+}
+
+TEST(MicroMIPS64, DoublewordProductsRequirePreR6WideGPRs) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    for (unsigned Revision : {2u, 6u}) {
+      if (isMIPS64(Target) && Revision == 2)
+        continue;
+      MIPSLifter Lifter(Target, InstructionMode::MicroMIPS, Revision);
+      for (uint16_t Minor : {0x8b3c, 0x9b3c}) {
+        auto Image = microImage(Target, {0x58a4, Minor});
+        cs_insn Insn{};
+        Insn.size = 4;
+        llvm::copy(Image.Segments.front().Data, Insn.bytes);
+        std::vector<LowOp> Ops;
+        EXPECT_THROW(Lifter.lift(Insn, Ops), UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+      }
+    }
+  }
+}
+
 TEST(MicroMIPS64, DoublewordMergeStoresKeepPhysicalBytesAndSignedDisplacement) {
   // GNU as -mips64r2, including the two signed 12-bit displacement limits.
   constexpr struct {
