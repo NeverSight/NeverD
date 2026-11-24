@@ -246,8 +246,9 @@ void MIPSObjectSDK::checkObjectRoundTrip(bool Micro, unsigned Revision) {
     File.put(24, 0x10101, File.Is64 ? 8 : 4);
     File.put(0xec, llvm::Mips::AFL_ASE_MICROMIPS, 4);
     if (Revision == 6) {
-      File.put(0x100, isMIPS64(Target) ? 0x58a4 : 0x00a4, 2);
-      File.put(0x102, 0x1150, 2); // daddu/addu v0,a0,a1
+      // SLL by zero sign-extends the low word in a 64-bit GPR.
+      File.put(0x100, 0x0044, 2);
+      File.put(0x102, 0, 2); // sll v0,a0,0
       File.put(0x104, 0x801f, 2);
       File.put(0x106, 0, 2); // jrc ra
     } else if (isMIPS64(Target)) {
