@@ -1064,6 +1064,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   // through their imports.
   std::set<const llvm::Function *> UserFunctions;
   std::set<std::string> UserImports;
+  // Portable C declarations can retain the source spelling of _Bool.
+  Headers.insert("stdbool.h");
   Headers.insert("stdint.h");
   NeedsUnalignedTypes = false;
   std::map<std::string, std::pair<llvm::IntegerType *, bool>> FunnelShifts;

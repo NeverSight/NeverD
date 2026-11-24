@@ -186,6 +186,41 @@ define i32 @also_pass_pointer() {
   }
 }
 
+TEST(LLVMCSourcePointers, StandaloneHeaderBooleanCompilesAsC17) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"(
+    declare i8 @check_name(ptr)
+    define i8 @use_check(ptr %name) {
+      %result = call i8 @check_name(ptr %name)
+      ret i8 %result
+    }
+  )",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  PointerContext Debug;
+  auto &Check = Debug.Functions[0x2000];
+  Check.Name = "check_name";
+  Check.ReturnType = NdType::makeInt(1, false);
+  Check.ReturnType->SourceName = "bool";
+  Check.Params = {{"name", NdType::makePtr(NdType::makeInt(2, false))}};
+  Check.PrototypeLibrary = "fixture-header";
+  Check.PrototypeFromHeader = true;
+  Check.PortablePrototypeDeclaration = "bool check_name(uint16_t *name)";
+  Check.PortableParameterTypes = {"uint16_t *"};
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.Format = BinaryFormat::COFF;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options, &Debug));
+  OS.flush();
+  ASSERT_NE(Source.find("bool check_name("), std::string::npos) << Source;
+  source_call_execution_test::checkSyntax(
+      Source,
+      {"--target=aarch64-pc-windows-msvc", "-std=c17", "-ffreestanding"});
+}
+
 TEST(LLVMCSourcePointers, AddressBoundZeroArgumentStdcallKeepsItsLinkage) {
   constexpr va_t Entry = 0x2000;
   llvm::LLVMContext Context;
