@@ -213,6 +213,10 @@ private:
   /// The call's value no one has read yet: nothing else that can be seen can
   /// run first, since it would then run after the call.
   std::optional<VarKey> Unread;
+  /// The same for a call's value in a word of the filter's own.
+  std::optional<int64_t> UnreadWord;
+
+  bool unreadCall() const { return Unread || UnreadWord; }
 
   void countReads(const HighExpr &E) {
     if (E.Kind == ExprKind::Var)
@@ -249,8 +253,11 @@ private:
           Word && Words.count(*Word)) {
         ExprPtr Value = Words.at(*Word);
         // A second read would run the call again.
-        if (Value && hasCall(Value))
+        if (Value && hasCall(Value)) {
           Words[*Word] = nullptr;
+          if (UnreadWord == *Word)
+            UnreadWord.reset();
+        }
         return Value;
       }
     switch (E->Kind) {
@@ -462,7 +469,7 @@ private:
         }
         const bool Calls = hasCall(Value);
         // The call before this has to run first, and a load read after it.
-        if (Unread && (Calls || hasLoad(Value)))
+        if (unreadCall() && (Calls || hasLoad(Value)))
           return nullptr;
         // What a load read before a call has to run before it.
         if (Calls)
@@ -495,12 +502,28 @@ private:
         if (!Value)
           return nullptr;
         forgetLoads();
-        if (Word)
+        const bool Calls = hasCall(Value);
+        // The filter's own word goes: the read of it takes the value, a
+        // call's before anything else can be seen to run.
+        if (Word && IsPrivate && IsPrivate(*Word, *Value)) {
+          if (Calls) {
+            if (unreadCall())
+              return nullptr;
+            UnreadWord = *Word;
+          }
           Words[*Word] = Value;
-        if (Word && IsPrivate && IsPrivate(*Word, *Value))
           continue;
-        if (Unread)
+        }
+        if (unreadCall())
           return nullptr;
+        // A write that stays runs its call: a read of the word after it
+        // reads the word, or it would run the call again.
+        if (Word) {
+          if (Calls)
+            Words.erase(*Word);
+          else
+            Words[*Word] = Value;
+        }
         auto Write = std::make_shared<HighExpr>();
         Write->Kind = ExprKind::Store;
         Write->Type = Value->Type;
@@ -513,7 +536,7 @@ private:
         // A call run for what it does, whose value nothing reads.
         ExprPtr Effect =
             substitute(S.Kind == StmtKind::Call ? S.CallExpr : S.Val);
-        if (!Effect || Unread)
+        if (!Effect || unreadCall())
           return nullptr;
         forgetLoads();
         ExprPtr Rest = foldList(List, I + 1, Next);
@@ -521,7 +544,8 @@ private:
       }
       case StmtKind::Return: {
         ExprPtr Value = S.RetVal ? substitute(S.RetVal) : nullptr;
-        return Value && !Unread ? comparisonOf(std::move(Value)) : nullptr;
+        return Value && !unreadCall() ? comparisonOf(std::move(Value))
+                                      : nullptr;
       }
       case StmtKind::Goto: {
         const auto Target = Labels.find(S.GotoTarget);
@@ -534,7 +558,7 @@ private:
       case StmtKind::If:
       case StmtKind::IfElse: {
         ExprPtr Cond = substitute(S.Cond);
-        if (!Cond || hasCall(Cond) || Unread)
+        if (!Cond || hasCall(Cond) || unreadCall())
           return nullptr;
         const auto Before = Values;
         const auto WordsBefore = Words;

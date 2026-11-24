@@ -1221,11 +1221,22 @@ enum class FilterShape {
   TemporariesInTheParentsFrame,
   /// The same, with the parent reading the decision's slot after the try.
   ParentReadsATemporary,
+  /// Decides what a call returns, kept in that slot and read back from it.
+  ACallsValueInATemporaryTheParentReads,
+  /// The same through a temporary nothing else touches.
+  ACallsValueInATemporary,
+  /// The same with another call between the temporary's write and its read.
+  ACallBetweenATemporaryAndItsRead,
 };
 
 BinaryImage makeFilterImage(FilterShape Kind) {
-  const bool Temporaries = Kind == FilterShape::TemporariesInTheParentsFrame ||
-                           Kind == FilterShape::ParentReadsATemporary;
+  const bool ParentReads =
+      Kind == FilterShape::ParentReadsATemporary ||
+      Kind == FilterShape::ACallsValueInATemporaryTheParentReads;
+  const bool Temporaries =
+      ParentReads || Kind == FilterShape::TemporariesInTheParentsFrame ||
+      Kind == FilterShape::ACallsValueInATemporary ||
+      Kind == FilterShape::ACallBetweenATemporaryAndItsRead;
   BinaryImage Img;
   Img.Arch = Arch::X64;
   Img.Bits = Bitness::Bits64;
@@ -1246,7 +1257,7 @@ BinaryImage makeFilterImage(FilterShape Kind) {
                   Allocation, 0x48, 0x8b, 0xda, 0xe8, 0x2e, 0,    0,    0,
                   0x90,       0xeb, 0x06, 0xc7, 0x03, 0x63, 0,    0,    0});
   size_t Done = 0x1b;
-  if (Kind == FilterShape::ParentReadsATemporary) {
+  if (ParentReads) {
     // mov eax,[rsp+0x2c]; mov [rbx],eax: the decision's slot.
     place(D, Done, {0x8b, 0x44, 0x24, 0x2c, 0x89, 0x03});
     Done += 6;
@@ -1256,6 +1267,8 @@ BinaryImage makeFilterImage(FilterShape Kind) {
   const va_t End = Entry + Done + 6;
   // foo: ret
   place(D, 0x40, {0xc3});
+  // decide: mov eax,1; ret
+  place(D, 0x48, {0xb8, 0x01, 0, 0, 0, 0xc3});
   size_t Length = 0;
   bool Leaf = false;
   switch (Kind) {
@@ -1296,6 +1309,24 @@ BinaryImage makeFilterImage(FilterShape Kind) {
                     0x8b, 0x45, 0x2c, 0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
     Length = 0x3b;
     break;
+  case FilterShape::ACallsValueInATemporaryTheParentReads:
+  case FilterShape::ACallsValueInATemporary:
+    // push rbp; sub rsp,0x20; mov rbp,rdx; call decide; mov [rbp+0x2c],eax;
+    // mov eax,[rbp+0x2c]; add rsp,0x20; pop rbp; ret
+    place(D, 0x80, {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea,
+                    0xe8, 0xba, 0xff, 0xff, 0xff, 0x89, 0x45, 0x2c, 0x8b,
+                    0x45, 0x2c, 0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
+    Length = 0x1a;
+    break;
+  case FilterShape::ACallBetweenATemporaryAndItsRead:
+    // push rbp; sub rsp,0x20; mov rbp,rdx; call decide; mov [rbp+0x2c],eax;
+    // call foo; mov eax,[rbp+0x2c]; add rsp,0x20; pop rbp; ret
+    place(D, 0x80,
+          {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea, 0xe8, 0xba,
+           0xff, 0xff, 0xff, 0x89, 0x45, 0x2c, 0xe8, 0xaa, 0xff, 0xff, 0xff,
+           0x8b, 0x45, 0x2c, 0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
+    Length = 0x1f;
+    break;
   }
   Img.Segments.push_back(std::move(Text));
   Section Code;
@@ -1306,6 +1337,7 @@ BinaryImage makeFilterImage(FilterShape Kind) {
   Img.Sections.push_back(std::move(Code));
   Img.Symbols.push_back(Symbol::makeFunc(Entry, End - Entry));
   Img.Symbols.push_back(Symbol::makeFunc(Entry + 0x40, 1));
+  Img.Symbols.push_back(Symbol::makeFunc(Entry + 0x48, 6));
   Img.Symbols.push_back(Symbol::makeFunc(FilterCallback, Length));
 
   ExceptionFunction Parent;
@@ -1418,6 +1450,47 @@ TEST(SEHFilterValue, ATemporaryTheParentReadsStays) {
   EXPECT_NE(E.find(" = 0"), std::string::npos) << P;
   EXPECT_EQ(E.find("GetExceptionInformation"), std::string::npos) << P;
   EXPECT_EQ(E.find("sub_"), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, AWriteKeepsItsCallAndTheReadReadsTheSlot) {
+  // The callback keeps what a call returned in the slot the parent reads,
+  // then returns the slot: the call runs once, in the write.
+  const std::string P = parentText(decompileHighC(
+      makeFilterImage(FilterShape::ACallsValueInATemporaryTheParentReads)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  const size_t Call = E.find("sub_140001048()");
+  ASSERT_NE(Call, std::string::npos) << P;
+  EXPECT_EQ(E.find("sub_140001048()", Call + 1), std::string::npos) << P;
+  EXPECT_NE(E.find(" = "), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, ATemporaryNothingElseTouchesCarriesTheCallOnce) {
+  const std::string P = parentText(
+      decompileHighC(makeFilterImage(FilterShape::ACallsValueInATemporary)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  const size_t Call = E.find("sub_140001048()");
+  ASSERT_NE(Call, std::string::npos) << P;
+  EXPECT_EQ(E.find("sub_140001048()", Call + 1), std::string::npos) << P;
+  EXPECT_EQ(E.find(" = "), std::string::npos) << P;
+  EXPECT_EQ(E.find("sub_140001080"), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, ACallBetweenATemporaryAndItsReadRunsInOrder) {
+  // decide() runs before foo(): its value cannot wait in the temporary for
+  // the read after foo(), so the callback keeps its call.
+  const std::string P = parentText(decompileHighC(
+      makeFilterImage(FilterShape::ACallBetweenATemporaryAndItsRead)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  const size_t Decide = E.find("sub_140001048()");
+  const size_t Effect = E.find("sub_140001040()");
+  if (Effect != std::string::npos) {
+    ASSERT_NE(Decide, std::string::npos) << P;
+    EXPECT_LT(Decide, Effect) << P;
+  }
+  EXPECT_NE(E.find("sub_140001080("), std::string::npos) << P;
 }
 
 } // namespace

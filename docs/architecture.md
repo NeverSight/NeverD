@@ -20784,7 +20784,15 @@ of the callback with one of its two arguments. A write it makes to the
 parent's frame stays in the expression unless nothing else can read those
 bytes: no statement of the parent, no other filter and no handler still out of
 line touches them, and no address of the frame goes anywhere else, as with the
-temporaries MSVC's `/Od` keeps for a filter in its parent's frame. The
+temporaries MSVC's `/Od` keeps for a filter in its parent's frame. A call in
+the callback runs once, where the callback ran it: a word the expression
+leaves out carries a call's value only to the one read of it, with nothing
+that can be seen to run between the write and that read, and a write that
+stays keeps its call, after which the word reads as itself. `/Od` keeps a
+filter's result in such a word and returns it; the folder put a call's value
+both into the write that stays and into the read, calling the function twice
+(52 filters of the x64 and ARM32 EH corpus images), and ran a call between a left-out write and
+its read before the call whose value the write held. The
 expression must also print as C that evaluates as the callback did, or the
 callback keeps its call: an integer, reading no value of a function whose
 result the writer leaves out (`analyzeVoidReturn`), and reaching the frame only
