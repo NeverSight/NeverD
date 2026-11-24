@@ -23,9 +23,14 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
-def cases():
+def cases(profile):
+    if profile not in (CONFIG["previous_return_profile"], CONFIG["return_profile"]):
+        raise ValueError(CONFIG["bad_inventory"])
+    routes = list(CONFIG["routes"])
+    if profile == CONFIG["return_profile"]:
+        routes.extend(CONFIG["backend_objects"])
     for family in CONFIG["cases"]:
-        for route in CONFIG["routes"]:
+        for route in routes:
             for optimization in CONFIG["optimizations"]:
                 yield family, route, optimization
 
@@ -90,6 +95,7 @@ def build(binary, output):
     source = ROOT / CONFIG["guest_directory"]
     fixtures = ROOT.parent / CONFIG["fixture_directory"]
     manifest = {"test_binary_sha256": digest(binary), "guests": {},
+                "return_profile": CONFIG["return_profile"],
                 "sources": {CONFIG[key]: digest(source / CONFIG[key])
                             for key in ("guest_entry", "guest_driver", "guest_constants")}}
     manifest["fixtures"] = {name: digest(fixtures / name) for name in CONFIG["fixture_files"]}
@@ -108,12 +114,23 @@ def build(binary, output):
             flags = CONFIG["cases"][family]["defines"]
             compile_object(source / CONFIG["guest_driver"], driver, [*CONFIG["driver_flags"], *flags])
             drivers[family] = driver
-        for family, route, optimization in cases():
+        for family, route, optimization in cases(manifest["return_profile"]):
             name = "-".join((family, route, optimization))
-            obj = exports[names[family]] / route / (optimization + CONFIG["test_object_extension"])
+            directory = exports[names[family]]
+            compiled = optimization + CONFIG["test_object_extension"]
+            support = []
+            if route in CONFIG["backend_objects"]:
+                obj = directory / CONFIG["backend_objects"][route]
+                caller = directory / CONFIG["caller_directory"] / compiled
+                check_macho(caller, CONFIG["object_kind"])
+                support.append(caller)
+            else:
+                obj = directory / route / compiled
             check_macho(obj, CONFIG["object_kind"])
-            guest = staged / name
-            manifest["guests"][name] = link_guest(guest, entry, drivers[family], obj)
+            item = link_guest(staged / name, entry, drivers[family], obj, support)
+            if support:
+                item[CONFIG["caller_hash_field"]] = digest(caller)
+            manifest["guests"][name] = item
         write_json(staged / CONFIG["manifest"], manifest)
         staged.rename(output)
 
@@ -149,12 +166,18 @@ def build_cursor(output):
         staged.rename(output)
 
 
-def ordered_routes(object_file):
+def ordered_routes(target, profile):
     policy = CONFIG["ordered"]
+    # The first model guests (Q forms only) predate named profiles.
+    if profile not in (target["previous_profile"], target["profile"]) and not (
+            "quadword_profile" in target and profile == target["quadword_profile"]):
+        raise ValueError(CONFIG["bad_inventory"])
     for route, source in policy["sources"].items():
         for optimization in CONFIG["optimizations"]:
             yield route + "-" + optimization, source, "-" + optimization
-    yield policy["object_route"], object_file, None
+    yield policy["object_route"], target["object_file"], None
+    if profile == target["profile"]:
+        yield policy["raw_object_route"], target["raw_object_file"], None
 
 
 def build_ordered(binary, output, native=False):
@@ -167,7 +190,7 @@ def build_ordered(binary, output, native=False):
     source = ROOT / CONFIG["guest_directory"]
     fixtures = ROOT.parent / policy["fixture_directory"]
     inputs = [policy["driver"], policy["constants"], policy["interface"]]
-    inputs.extend([target["driver"]] if native else
+    inputs.extend([target["driver"], target["probe"]] if native else
                   [CONFIG[key] for key in ("guest_entry", "guest_driver", "guest_constants")])
     manifest = {"test_binary_sha256": digest(binary), "guests": {},
                 "ordered_profile": target["profile"],
@@ -179,8 +202,9 @@ def build_ordered(binary, output, native=False):
         staged.mkdir()
         exports = export_cases(binary, scratch, [policy["test"]],
                                policy["artifact_environment"], policy["artifact_property"])[policy["test"]]
-        manifest["exports"] = {name: digest(exports / name)
-                               for name in [*policy["sources"].values(), target["object_file"], policy["dispatch"]]}
+        routes = list(ordered_routes(target, manifest["ordered_profile"]))
+        filenames = {filename for _, filename, _ in routes}
+        manifest["exports"] = {name: digest(exports / name) for name in sorted(filenames | {policy["dispatch"]})}
         flags = [*CONFIG["driver_flags"], policy["alignment_flag"]]
         if not native:
             flags.append(policy["define"])
@@ -194,7 +218,10 @@ def build_ordered(binary, output, native=False):
         compile_object(source / policy["driver"], oracle,
                        [*flags, policy["march"], policy["include_option"], fixtures], triple)
         compile_object(exports / policy["dispatch"], dispatch, flags, triple)
-        for label, filename, optimization in ordered_routes(target["object_file"]):
+        if native:
+            probe = scratch / (Path(target["probe"]).stem + CONFIG["test_object_extension"])
+            compile_object(source / target["probe"], probe, flags, triple)
+        for label, filename, optimization in routes:
             obj = exports / filename
             if optimization:
                 obj = scratch / (label + CONFIG["test_object_extension"])
@@ -202,7 +229,7 @@ def build_ordered(binary, output, native=False):
             check_macho(obj, CONFIG["object_kind"], subtype)
             image = staged / label
             if native:
-                subprocess.run([*CONFIG["compiler"], triple, driver, oracle, dispatch, obj,
+                subprocess.run([*CONFIG["compiler"], triple, driver, probe, oracle, dispatch, obj,
                                 CONFIG["output_option"], image], check=True)
                 check_macho(image, CONFIG["executable_kind"], subtype)
                 item = {"sha256": digest(image), "object_sha256": digest(obj)}
@@ -217,8 +244,8 @@ def run_native_ordered(guests, output):
     policy = CONFIG["ordered"]
     target = policy["native"]
     manifest = json.loads((guests / CONFIG["manifest"]).read_text())
-    names = [label for label, _, _ in ordered_routes(target["object_file"])]
-    if manifest.get("ordered_profile") != target["profile"] or set(manifest["guests"]) != set(names):
+    names = [label for label, _, _ in ordered_routes(target, manifest.get("ordered_profile"))]
+    if set(manifest["guests"]) != set(names):
         raise ValueError(CONFIG["bad_inventory"])
     output.mkdir()
     result = {"manifest_sha256": digest(guests / CONFIG["manifest"]), "observations": {}}
@@ -257,18 +284,17 @@ def run(model, guests, output, cursor=False, ordered=False):
         raise ValueError(CONFIG["bad_version"].format(version=version.strip()))
     manifest = json.loads((guests / CONFIG["manifest"]).read_text())
     policy = CONFIG["ordered"] if ordered else CONFIG
+    passed = policy["passed"]
     if ordered:
-        names = [label for label, _, _ in ordered_routes(policy["object_file"])]
+        profile = manifest.get("ordered_profile", policy["quadword_profile"])
+        names = [label for label, _, _ in ordered_routes(policy, profile)]
+        if profile == policy["quadword_profile"]:
+            passed = policy["legacy_passed"]
     elif cursor:
         names = [CONFIG["cursor"]["name"].format(optimization=opt) for opt in CONFIG["optimizations"]]
     else:
-        names = ["-".join(case) for case in cases()]
-    passed = policy["passed"]
-    if ordered:
-        if "ordered_profile" not in manifest:
-            passed = policy["legacy_passed"]
-        elif manifest["ordered_profile"] != policy["profile"]:
-            raise ValueError(CONFIG["bad_inventory"])
+        profile = manifest.get("return_profile", CONFIG["previous_return_profile"])
+        names = ["-".join(case) for case in cases(profile)]
     if set(manifest["guests"]) != set(names):
         raise ValueError(CONFIG["bad_inventory"])
     result = {"model_version": CONFIG["model_version"], "model_sha256": digest(model),

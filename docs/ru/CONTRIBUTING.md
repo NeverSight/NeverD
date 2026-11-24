@@ -1,6 +1,6 @@
 **Языки**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
+<!-- i18n-source: 84aa4f365a5d005f98dd8331f3fc33f326c2dc20c9c4d64a7c7ede509dbd0f82 -->
 
 # Участие в разработке NeverD
 
@@ -186,6 +186,12 @@ CMake загружает настроенный в репозитории пак
 сборки должны использовать локальную сборку LLVM по умолчанию. Расширенные
 переопределения, включая `NEVERD_LLVM_PREBUILT_TAG`, URL зеркала, каталог кеша
 и явную контрольную сумму, описаны в `cmake/NeverDLLVMPrebuilt.cmake`.
+
+Чтобы сохранить r6, задайте для `NEVERD_LLVM_PREBUILT_TAG` значение
+`neverd-llvm-v23.0.0-r6`, а для `NEVERD_LLVM_PREBUILT_SHA256` — контрольную
+сумму SHA-256 архива для вашей платформы. Этот пакет поддерживает генерацию
+кода для X86, ARM и AArch64, включая arm64e. Для создания объектных файлов
+MIPS нужен пакет с бэкендом MIPS, например r8, или сборка LLVM из исходного кода.
 
 Исправления LLVM должны находиться в [форке LLVM NeverSight](https://github.com/NeverSight/llvm-project).
 Сначала закоммитьте и объедините их в форке, затем обновите ревизию подмодуля LLVM в NeverD.

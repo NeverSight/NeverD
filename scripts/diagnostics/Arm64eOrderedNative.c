@@ -20,7 +20,7 @@
 #include <sys/ucontext.h>
 
 static sigjmp_buf Recovery;
-static volatile sig_atomic_t Active, Signal, ProbingSIMD;
+static volatile sig_atomic_t Active;
 static _Atomic uint64_t SavedESR, SavedFAR, SavedWord;
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, ORDERED_NATIVE_ATOMIC_ERROR);
 
@@ -28,18 +28,13 @@ static void catchAccess(int Number, siginfo_t *Info, void *Context) {
   if (!Active)
     _Exit(EXIT_FAILURE);
   const mcontext_t MC = ((ucontext_t *)Context)->uc_mcontext;
-  if (Number == SIGBUS) {
-    if (Info->si_code != BUS_ADRALN ||
-        (uintptr_t)Info->si_addr != MC->__es.__far)
-      _Exit(EXIT_FAILURE);
-  } else if (Number != SIGILL || !ProbingSIMD) {
+  if (Number != SIGBUS || Info->si_code != BUS_ADRALN ||
+      (uintptr_t)Info->si_addr != MC->__es.__far)
     _Exit(EXIT_FAILURE);
-  }
   atomic_store_explicit(&SavedESR, MC->__es.__esr, memory_order_relaxed);
   atomic_store_explicit(&SavedFAR, MC->__es.__far, memory_order_relaxed);
   atomic_store_explicit(&SavedWord, *(const uint32_t *)(uintptr_t)MC->__ss.__pc,
                         memory_order_relaxed);
-  Signal = Number;
   siglongjmp(Recovery, 1);
 }
 
@@ -75,31 +70,12 @@ int main(void) {
   Action.sa_sigaction = catchAccess;
   Action.sa_flags = SA_SIGINFO;
   sigemptyset(&Action.sa_mask);
-  if (sigaction(SIGBUS, &Action, NULL) || sigaction(SIGILL, &Action, NULL))
+  if (sigaction(SIGBUS, &Action, NULL))
     return EXIT_FAILURE;
-
-  // Darwin may omit the optional feature sysctl. Require both aligned Q
-  // instructions to agree and identify the exact original word on SIGILL.
-  _Alignas(ORDERED_QUAD_BYTES) uint64_t Data[ORDERED_LANES] = {0};
-  const uint32_t Words[] = {ORDERED_NATIVE_Q_STORE, ORDERED_NATIVE_Q_LOAD};
-  bool WithSIMD = false;
-  ProbingSIMD = 1;
-  for (unsigned I = 0; I != sizeof(Words) / sizeof(*Words); ++I) {
-    uint64_t Result;
-    OrderedAbort Abort;
-    const bool Fault = observeOrdered(Words[I], (uintptr_t)Data, 0, true, true,
-                                      &Result, &Abort);
-    if (Fault && (Signal != SIGILL || Abort.Word != Words[I]))
-      return EXIT_FAILURE;
-    if (I == 0)
-      WithSIMD = !Fault;
-    else if (WithSIMD != !Fault || (WithSIMD && Result != ORDERED_STORE_LOW))
-      return EXIT_FAILURE;
-  }
-  ProbingSIMD = 0;
-  if (Data[0] != (WithSIMD ? ORDERED_STORE_LOW : 0) ||
-      Data[1] != (WithSIMD ? ORDERED_STORE_HIGH : 0))
+  const OrderedQStatus Status = probeDarwinOrderedQ();
+  if (Status == OrderedQFailed)
     return EXIT_FAILURE;
+  const bool WithSIMD = Status == OrderedQPassed;
   puts(WithSIMD ? ORDERED_NATIVE_GPR_SIMD : ORDERED_NATIVE_GPR);
 
   // EL0 cannot read SCTLR_EL1. First observe two original GPR loads, then

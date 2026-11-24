@@ -232,9 +232,12 @@ add_neverd_unittest(NeverDCodegenDiagnosticTests
   LINK_COMPONENTS CodeGen
 )
 add_neverd_unittest(NeverDMIPSObjectTests
-  backend/MIPSObjectTests.cpp
+  backend/MIPSObjectCapabilityTests.cpp
   LINK_COMPONENTS CodeGen
 )
+if(TARGET LLVMMipsCodeGen)
+  target_sources(NeverDMIPSObjectTests PRIVATE backend/MIPSObjectTests.cpp)
+endif()
 add_neverd_unittest(NeverDItaniumHandlerTests
   lift/eh/ItaniumHandlerBodiesTests.cpp
   LINK_COMPONENTS BackendC Types

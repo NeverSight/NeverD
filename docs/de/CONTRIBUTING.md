@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
+<!-- i18n-source: 84aa4f365a5d005f98dd8331f3fc33f326c2dc20c9c4d64a7c7ede509dbd0f82 -->
 
 # Zu NeverD beitragen
 
@@ -194,6 +194,13 @@ und Universal-Builds müssen den lokalen LLVM-Standardbuild verwenden.
 Erweiterte Überschreibungen wie `NEVERD_LLVM_PREBUILT_TAG`, Spiegel-URL,
 Cache-Verzeichnis und explizite Prüfsumme sind in
 `cmake/NeverDLLVMPrebuilt.cmake` dokumentiert.
+
+Um r6 beizubehalten, setzen Sie `NEVERD_LLVM_PREBUILT_TAG` auf
+`neverd-llvm-v23.0.0-r6` und `NEVERD_LLVM_PREBUILT_SHA256` auf die
+SHA-256-Prüfsumme des Archivs für Ihr Hostsystem. Dieses Paket unterstützt
+die Codegenerierung für X86, ARM und AArch64 einschließlich arm64e. Für
+MIPS-Objektdateien benötigen Sie ein Paket mit MIPS-Backend wie r8 oder
+ein aus den Quellen gebautes LLVM.
 
 LLVM-Korrekturen gehören in den [NeverSight-LLVM-Fork](https://github.com/NeverSight/llvm-project).
 Committen und mergen Sie sie dort und aktualisieren Sie danach NeverDs LLVM-Submodulrevision.

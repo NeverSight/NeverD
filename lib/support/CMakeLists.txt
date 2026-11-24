@@ -21,3 +21,4 @@ add_neverd_component_library(NeverDSupport
 
   LINK_LIBS neverd_text_acceleration
 )
+target_include_directories(NeverDSupport PRIVATE "${NEVERD_LLVM_TARGET_INCLUDE_DIR}")

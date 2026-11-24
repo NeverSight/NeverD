@@ -1,6 +1,6 @@
 **اللغات**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](../ko/CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](CONTRIBUTING.md)
 
-<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
+<!-- i18n-source: 84aa4f365a5d005f98dd8331f3fc33f326c2dc20c9c4d64a7c7ede509dbd0f82 -->
 
 # المساهمة في NeverD
 
@@ -176,6 +176,12 @@ python scripts/build.py build-release --parallel
 LLVM المحلي الافتراضي. توثّق الخيارات المتقدمة مثل
 `NEVERD_LLVM_PREBUILT_TAG`، وعنوان المرآة، ودليل الذاكرة المؤقتة، والمجموع
 الصريح في `cmake/NeverDLLVMPrebuilt.cmake`.
+
+لمواصلة استخدام r6، اضبط `NEVERD_LLVM_PREBUILT_TAG` على `neverd-llvm-v23.0.0-r6`
+واضبط `NEVERD_LLVM_PREBUILT_SHA256` على قيمة SHA-256 لأرشيف النظام المضيف.
+تدعم هذه الحزمة توليد الشيفرة لمعالجات X86 وARM وAArch64، بما في ذلك arm64e.
+لتوليد ملفات كائنات MIPS، يلزم استخدام حزمة تتضمن الواجهة الخلفية لـ MIPS مثل r8،
+أو بناء LLVM من المصدر.
 
 تُنشر إصلاحات LLVM في [فرع LLVM الخاص بـ NeverSight](https://github.com/NeverSight/llvm-project).
 سجل الإصلاحات وادمجها هناك، ثم حدّث مراجعة الوحدة الفرعية LLVM في NeverD.

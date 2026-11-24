@@ -196,7 +196,12 @@ SHA-256 checksum, and reuses the extracted user cache on later builds. The
 prebuilt channel supports macOS arm64 only. Intel Macs and universal builds
 must use the default local LLVM build. Advanced overrides such as
 `NEVERD_LLVM_PREBUILT_TAG`, mirror URL, cache directory, and an explicit
-checksum are documented in `cmake/NeverDLLVMPrebuilt.cmake`.
+checksum are documented in `cmake/NeverDLLVMPrebuilt.cmake`. To retain r6,
+set `NEVERD_LLVM_PREBUILT_TAG` to `neverd-llvm-v23.0.0-r6` and set
+`NEVERD_LLVM_PREBUILT_SHA256` to its archive digest for your host. This package
+supports X86, ARM and AArch64 code generation, including arm64e. MIPS object
+emission requires a package that includes the MIPS backend, such as r8, or
+a source build.
 
 LLVM fixes belong in the [NeverSight LLVM fork](https://github.com/NeverSight/llvm-project).
 Commit and merge them there, then update NeverD's LLVM submodule revision.

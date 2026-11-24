@@ -2527,6 +2527,7 @@ set(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE
   "${NEVERD_TEST_CLANG_EXECUTABLE}" CACHE FILEPATH
   "Clang frontend for Darwin arm64e pointer authentication fixtures")
 add_neverd_unittest(NeverDArm64eAnalysisTests
+  ${CMAKE_SOURCE_DIR}/scripts/diagnostics/Arm64eOrderedQ.c
   aarch64/AArch64EntryABITests.cpp
   aarch64/AArch64AddressMemoryTests.cpp
   aarch64/AArch64RawSPProvenanceTests.cpp
@@ -2546,6 +2547,8 @@ target_include_directories(NeverDArm64eAnalysisTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/backend)
 target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
   NEVERD_ARM64E_TEST_HEADERS="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arm64e")
+set_property(SOURCE aarch64/AArch64AddressMemoryTests.cpp APPEND
+  PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/scripts/diagnostics")
 if(NEVERD_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
     NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")

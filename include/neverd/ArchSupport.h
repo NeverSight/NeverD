@@ -28,10 +28,8 @@ inline bool archFileRewriteSupported(Arch A) {
          A == Arch::ARM;
 }
 
-/// MIPS has a relocatable ELF writer in the linked LLVM backend.
-inline bool archCodegenSupported(Arch A) {
-  return archFileRewriteSupported(A) || isMIPS(A);
-}
+/// Whether the linked backends can emit object code for this architecture.
+bool archCodegenSupported(Arch A);
 
 /// Whether every instruction of an \p A image decodes in the one mode the
 /// image's bitness gives it.  AArch32 interworks ARM and Thumb code, whose

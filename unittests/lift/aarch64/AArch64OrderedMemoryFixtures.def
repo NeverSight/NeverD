@@ -166,10 +166,12 @@ ORDERED_MEMORY_TEXT(kOrderedImageArtifactProperty,
 ORDERED_MEMORY_TEXT(kOrderedRelocatedArtifactProperty,
                     "arm64e_ordered_memory_relocated_artifact_directory")
 ORDERED_MEMORY_TEXT(kOrderedRCPC2Feature, "hw.optional.arm.FEAT_LRCPC2")
-ORDERED_MEMORY_TEXT(kOrderedRCPC3Feature, "hw.optional.arm.FEAT_LRCPC3")
 ORDERED_MEMORY_TEXT(
     kOrderedUnsupported,
     "The execution host does not report the required ordered-memory feature")
+ORDERED_MEMORY_TEXT(
+    kOrderedSIMDUnavailable,
+    "Native 128-bit ordered loads and stores are unavailable on this host")
 
 #undef ORDERED_MEMORY_CASE
 #undef ORDERED_MEMORY_REJECT

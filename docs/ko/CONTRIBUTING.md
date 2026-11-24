@@ -1,6 +1,6 @@
 **언어**: [English](../../CONTRIBUTING.md) | [简体中文](../zh-CN/CONTRIBUTING.md) | [繁體中文](../zh-TW/CONTRIBUTING.md) | [日本語](../ja/CONTRIBUTING.md) | [한국어](CONTRIBUTING.md) | [Français](../fr/CONTRIBUTING.md) | [Deutsch](../de/CONTRIBUTING.md) | [Español](../es/CONTRIBUTING.md) | [Italiano](../it/CONTRIBUTING.md) | [Русский](../ru/CONTRIBUTING.md) | [العربية](../ar/CONTRIBUTING.md)
 
-<!-- i18n-source: af6c34901bacab00e5d1ed68b031f0a48a3ff64ac85ee208695647ec935b9790 -->
+<!-- i18n-source: 84aa4f365a5d005f98dd8331f3fc33f326c2dc20c9c4d64a7c7ede509dbd0f82 -->
 
 # NeverD 기여 가이드
 
@@ -166,6 +166,11 @@ CMake는 저장소에 설정된 릴리스 패키지를 내려받고 SHA-256을 �
 Intel Mac과 universal 빌드는 기본 로컬 LLVM 빌드를 사용해야 합니다.
 `NEVERD_LLVM_PREBUILT_TAG`, 미러 URL, 캐시 디렉터리, 명시적 checksum 같은 고급
 override는 `cmake/NeverDLLVMPrebuilt.cmake`에 문서화되어 있습니다.
+
+r6를 계속 사용하려면 `NEVERD_LLVM_PREBUILT_TAG`를 `neverd-llvm-v23.0.0-r6`로 설정하고
+`NEVERD_LLVM_PREBUILT_SHA256`에 호스트용 아카이브의 SHA-256 해시를 지정하세요.
+이 패키지는 X86, ARM, AArch64 코드 생성을 지원하며 arm64e도 지원합니다.
+MIPS 오브젝트 파일을 생성하려면 r8처럼 MIPS 백엔드를 포함한 패키지나 소스에서 빌드한 LLVM이 필요합니다.
 
 LLVM 수정은 [NeverSight LLVM fork](https://github.com/NeverSight/llvm-project)에서 관리합니다.
 먼저 fork에 커밋하고 병합한 다음 NeverD의 LLVM 서브모듈 버전을 업데이트합니다.

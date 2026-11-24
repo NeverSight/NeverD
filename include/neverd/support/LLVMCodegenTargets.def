@@ -4,17 +4,19 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// LLVM backends linked by NeverD and registered for code generation.
-/// CMake consumes the same entries for source and prebuilt LLVM builds.
+/// Source builds and the default prebuilt release require every backend.
+/// An explicitly selected SDK may omit an IfAvailable entry. CMake copies
+/// the selected rows into a private include for target registration and
+/// architecture queries.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LLVM_CODEGEN_TARGET
-#define NEVERD_LLVM_CODEGEN_TARGET(Name)
+#define NEVERD_LLVM_CODEGEN_TARGET(Name, Availability, Supports)
 #endif
 
-NEVERD_LLVM_CODEGEN_TARGET(X86)
-NEVERD_LLVM_CODEGEN_TARGET(ARM)
-NEVERD_LLVM_CODEGEN_TARGET(AArch64)
-NEVERD_LLVM_CODEGEN_TARGET(Mips)
+NEVERD_LLVM_CODEGEN_TARGET(X86, Required, A == Arch::X86 || A == Arch::X64)
+NEVERD_LLVM_CODEGEN_TARGET(ARM, Required, A == Arch::ARM)
+NEVERD_LLVM_CODEGEN_TARGET(AArch64, Required, A == Arch::AArch64)
+NEVERD_LLVM_CODEGEN_TARGET(Mips, IfAvailable, isMIPS(A))
 
 #undef NEVERD_LLVM_CODEGEN_TARGET
