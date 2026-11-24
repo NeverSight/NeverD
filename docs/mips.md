@@ -2256,8 +2256,12 @@ assembly. LLVMC copies floating views of integer storage as object bytes;
 ordinary C assignment would change these bit patterns numerically.
 
 The independent GNU/LLVM encoding fixtures cover both byte orders. Original
-execution covers classic MIPS32/64 and physical microMIPS32/64. I6400 supplies
-the classic 64-bit reference. The pinned Unicorn fork adds a
+execution covers classic MIPS32/64 and physical microMIPS32/64. The pinned
+generic microMIPS64r2 model executes signed and unsigned doubleword products
+and quotients through HI/LO, leading-bit counts and the DSBH/DSHD permutations.
+[Pre-R6 execution tests](https://github.com/NeverSight/unicorn/pull/38).
+
+I6400 supplies the classic 64-bit reference. The pinned Unicorn fork adds a
 [generic microMIPS64 R6 model](https://github.com/NeverSight/unicorn/pull/23)
 using its existing QEMU micro decoder; it is not a claim about I6400 hardware.
 The 112 FP forms execute their original micro bytes in both GPR widths and byte
