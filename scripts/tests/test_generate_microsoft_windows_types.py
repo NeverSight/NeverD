@@ -92,7 +92,11 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             def exports(arch):
                 return {u["name"]: u["bridge"]["runtime_exports"] for u in
                         windows.flat.named_runtime_units(Path(tmp) / arch, arch, ["clang"])}
-            x64, arm64 = exports("x64"), exports("arm64")
+            x86, x64, arm64 = exports("x86"), exports("x64"), exports("arm64")
+            self.assertEqual(x86["D3d9Runtime"]["parameter_counts"]["D3DPERF_EndEvent"], 0)
+            self.assertEqual(arm64["Cfgmgr32Runtime"]["parameter_counts"]["SwDeviceCreate"], 8)
+            self.assertIn("SpoolssRuntime", x64)
+            self.assertNotIn("SpoolssRuntime", x86)
             self.assertEqual(x64["DisplayControl"]["parameter_counts"]["DCIOpenProvider"], 0)
             self.assertEqual(arm64["DisplayDriverFunctions"]["parameter_counts"]["EngCreateClip"], 0)
             reset = "WldpResetProductionConfiguration"
@@ -113,6 +117,27 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                      "runtime_exports": {"module": "example.dll", "parameter_counts": {"ReadEntry": 2}}}
             with self.assertRaisesRegex(ValueError, "parameter list disagrees"):
                 windows.flat.verify_abis(proof, published, flags, root, {"ReadEntry"}, windows.run)
+
+    def test_runtime_parameter_counts_are_source_level(self):
+        # On x86 this aggregate result adds a hidden return pointer to LLVM IR.
+        sdk = ("struct Result { long value[8]; };\n"
+               "struct Result __stdcall Query(int, void (__stdcall *)(char, char));\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            header = root / "sdk.h"
+            header.write_text(sdk, encoding="utf-8")
+            flags = ["clang", "--target=i686-pc-windows-msvc", "-std=c23"]
+            for count in (2, 1, 3, 0):
+                with self.subTest(metadata_count=count):
+                    proof = {"source": str(header), "arguments": flags, "language": "c",
+                             "commands": [], "projected_functions": ["Query"],
+                             "runtime_exports": {"module": "example.dll",
+                                                 "parameter_counts": {"Query": count}}}
+                    if count == 2:
+                        windows.flat.verify_abis(proof, header, flags, root, {"Query"}, windows.run)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "parameter list disagrees.*Query"):
+                            windows.flat.verify_abis(proof, header, flags, root, {"Query"}, windows.run)
 
     def test_c_import_profile_preserves_mixed_and_cpp_only_archive_evidence(self):
         symbols = {"OnlyCpp": {"?OnlyCpp@@YAHXZ", "__imp_?OnlyCpp@@YAHXZ"},
