@@ -174,6 +174,127 @@ TEST_F(X64ContinuationExportTest, CapturedRtmAbortBindsOnlyProvenStatus) {
   }
 }
 
+TEST_F(X64ContinuationExportTest, QemuRtmEvidenceIsLocalToTheSavedRip) {
+  load({0xc7, 0xf8, 3, 0, 0, 0, 0xc6, 0xf8, 0xa7, 0xc7, 0xf8, 3, 0, 0, 0, 0xc6,
+        0xf8, 0, 0xc3});
+  for (llvm::StringRef Value : {"null", "0", "1", "2", "3"}) {
+    const bool Forced = Value == "1" || Value == "3";
+    const auto Fields =
+        (llvm::Twine(
+             R"("qemu_tsx_ctrl_v1":{"cpu":3,"rip":"0xffff800000002009","load_base":"0xffff800000002000","value":)") +
+         Value)
+            .str();
+    for (bool LLVM : {false, true})
+      for (auto Dispatch : {"switch", "direct"}) {
+        SCOPED_TRACE(Value.str());
+        const auto Query =
+            (llvm::Twine(R"("instructions":[4096,4105],"dispatch":")") +
+             Dispatch + R"(","native_rtm_abort_steps":{)" + Fields + "}}")
+                .str();
+        const auto [Source, Manifest] = source(request(Query), LLVM);
+        auto Parsed = llvm::json::parse(Manifest);
+        ASSERT_TRUE(bool(Parsed));
+        const auto *Report = Parsed->getAsObject();
+        ASSERT_NE(Report, nullptr);
+        EXPECT_EQ(Report->getInteger("native_requests"), Forced ? 1 : 2);
+        const auto *Bound = Report->getObject("native_rtm_abort_steps");
+        ASSERT_NE(Bound, nullptr);
+        EXPECT_EQ(Bound->getString("selection"), "qemu-10.2-kvm-x64");
+        EXPECT_EQ(Bound->getBoolean("can_decline"), !Forced);
+        EXPECT_FALSE(Bound->get("max_basic_leaf") || Bound->get("leaf7_ebx") ||
+                     Bound->get("leaf7_edx") ||
+                     Bound->get("ia32_arch_capabilities"));
+        EXPECT_EQ(Bound->get("ia32_tsx_ctrl") != nullptr, Value != "null");
+        const auto *Capture = Bound->getObject("capture");
+        ASSERT_NE(Capture, nullptr);
+        EXPECT_EQ(Capture->getInteger("cpu"), 3);
+        EXPECT_EQ(Capture->getString("image_pc"), "0x1009");
+        EXPECT_EQ(Capture->getBoolean("tsx_ctrl_present"), Value != "null");
+        const auto *Regions = Bound->getArray("regions");
+        ASSERT_NE(Regions, nullptr);
+        ASSERT_EQ(Regions->size(), 1u);
+        ASSERT_NE(Regions->front().getAsObject(), nullptr);
+        EXPECT_EQ(Regions->front().getAsObject()->getString("pc"), "0x1009");
+        llvm::StringRef Text(Source);
+        EXPECT_FALSE(Text.contains("cpuidex") ||
+                     Text.contains("rtm_abort_pair("));
+        EXPECT_FALSE(Text.contains("neverd_step_v6_1000_guard(raw)"));
+        EXPECT_EQ(Text.contains("neverd_step_v6_1009_guard(raw)"), Forced);
+        EXPECT_EQ(
+            Text.contains("state->GPR[0]=0;\n        state->PC=0x1012ULL;"),
+            Forced);
+      }
+  }
+}
+
+TEST_F(X64ContinuationExportTest, QemuRtmRejectsMismatchedCaptures) {
+  load({0xc7, 0xf8, 3, 0, 0, 0, 0xc6, 0xf8, 7, 0xc3});
+  for (
+      llvm::StringRef Fields :
+      {R"({"qemu_tsx_ctrl_v1":{"cpu":0,"rip":4096}})",
+       R"({"qemu_tsx_ctrl_v1":{"cpu":4294967296,"rip":4096,"value":1}})",
+       R"({"qemu_tsx_ctrl_v1":{"cpu":0,"rip":4096,"value":4}})",
+       R"({"qemu_tsx_ctrl_v1":{"cpu":0,"rip":4096,"value":true}})",
+       R"({"qemu_tsx_ctrl_v1":{"cpu":0,"rip":4096,"value":1,"load_base":4100}})",
+       R"({"qemu_tsx_ctrl_v1":{"cpu":0,"rip":"0xfffffffffffffff0","value":1,"load_base":0}})",
+       R"({"qemu_tsx_ctrl_v1":{"cpu":0,"rip":"0x7ffffffffff7","value":1,"load_base":"0x7ffffffffff7"}})",
+       R"({"qemu_tsx_ctrl_v1":{"cpu":0,"rip":4105,"value":1}})",
+       R"({"qemu_tsx_ctrl_v1":{"cpu":0,"rip":4096,"value":1},"max_basic_leaf":0})"}) {
+    SCOPED_TRACE(Fields.str());
+    const auto Query = request(
+        (llvm::Twine(
+             R"("instructions":[4096,4105],"native_rtm_abort_steps":)") +
+         Fields)
+            .str());
+    const char *Report = nullptr;
+    EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Query.data(),
+                                                Query.size(), 0, &Report),
+              nullptr);
+    EXPECT_EQ(Report, nullptr);
+  }
+}
+
+TEST_F(X64ContinuationExportTest, QemuRtmFollowsOnlyTheCapturedEntryFallback) {
+  const std::vector<uint8_t> Pair{0xc7, 0xf8, 3, 0, 0, 0, 0xc6, 0xf8, 0, 0xc3};
+  auto Code = Pair;
+  Code.resize(16, 0x90);
+  Code.insert(Code.end(), Pair.begin(), Pair.end());
+  load(Code, {{0x1000, Pair.size()}, {0x1010, Pair.size()}});
+  const auto [Source, Manifest] = source(
+      request(
+          R"("entries":[4096,4112],"native_rtm_abort_steps":{"qemu_tsx_ctrl_v1":{"cpu":0,"rip":4096,"value":3}})"),
+      false);
+  auto Parsed = llvm::json::parse(Manifest);
+  ASSERT_TRUE(bool(Parsed));
+  const auto *Report = Parsed->getAsObject();
+  ASSERT_NE(Report, nullptr);
+  const auto *Regions = Report->getArray("regions");
+  ASSERT_NE(Regions, nullptr);
+  unsigned Resumes = 0;
+  for (const auto &Value : *Regions) {
+    const auto *Region = Value.getAsObject();
+    ASSERT_NE(Region, nullptr);
+    if (const auto *Successors = Region->getArray("rtm_abort_successors")) {
+      EXPECT_EQ(Region->getString("entry"), "0x1000");
+      ASSERT_EQ(Successors->size(), 1u);
+      EXPECT_EQ(Successors->front().getAsString(), "0x1009");
+      ++Resumes;
+    }
+  }
+  EXPECT_EQ(Resumes, 1u);
+  const auto *Units = Report->getArray("units");
+  ASSERT_NE(Units, nullptr);
+  std::vector<std::string> Native;
+  for (const auto &Value : *Units) {
+    const auto *Unit = Value.getAsObject();
+    ASSERT_NE(Unit, nullptr);
+    if (Unit->getBoolean("native_boundary") == true)
+      Native.push_back(Unit->getString("pc").value_or("").str());
+  }
+  // Independently entered XABORTs keep their own instruction contracts.
+  EXPECT_EQ(Native, (std::vector<std::string>{"0x1006", "0x1010", "0x1016"}));
+}
+
 TEST_F(X64ContinuationExportTest, BoundRtmAbortStepsProjectActualStatus) {
   // The abort instruction can also be selected independently. Only the
   // XBEGIN entry owns the authenticated adjacent pair and its fallback.

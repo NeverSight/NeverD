@@ -126,33 +126,124 @@ TEST_F(PEFixedImageTest, MachineRegionUnrootedNestedCallsReadBothActualSlots) {
   Code.insert(Code.end(), {0x48, 0x8b, 0x14, 0x24, 0xc3});
   auto Loaded = load(machineExitFixture(Code));
   ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
-  auto O = machineExitOptions(Base + 0x1008, MachineExitKind::Return);
+  for (uint32_t Chaining : {0u, 1024u}) {
+    auto O = machineExitOptions(Base + 0x1008, MachineExitKind::Return);
+    O.MaxChainedTransfers = Chaining;
+    const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+    ASSERT_TRUE(R.complete()) << R.Diagnostic;
+    for (uint64_t Stack : {uint64_t{0x800000}, uint64_t{0x900000}}) {
+      auto Actual = machineExitState(0x800000);
+      Actual.write(NdVar::reg(x86reg::RCX, 8), Stack);
+      Actual.memory(Stack, 0x12340, 8);
+      auto Expected = Actual;
+      Expected.memory(Stack - 8, Base + 0x1008, 8);
+      Expected.memory(Stack - 16, Base + 0x1045, 8);
+      Expected.write(NdVar::reg(x86reg::RAX, 8), Base + 0x1008);
+      Expected.write(NdVar::reg(x86reg::RDX, 8), Base + 0x1045);
+      Expected.write(NdVar::reg(x86reg::RSP, 8), Stack + 8);
+      ASSERT_TRUE(Actual.run(R, O)) << Actual.Diagnostic;
+      expectMachineExitState(Actual, Expected, 0x12340);
+    }
+  }
+}
+
+TEST_F(PEFixedImageTest, MachineRegionUnrootedSharedCalleeKeepsBothCallers) {
+  // jrcxz second; mov rsp,rdx; call helper; ret. Both callers use the same
+  // physical helper and different return words on a rebased stack.
+  std::vector<uint8_t> Code{0xe3, 0x1e, 0x48, 0x89, 0xd4, 0xe8,
+                            0x36, 0,    0,    0,    0xc3};
+  Code.resize(0x20, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x89, 0xd4, 0xe8, 0x18, 0, 0, 0, 0xc3});
+  Code.resize(0x40, 0xcc);
+  Code.push_back(0xc3);
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = machineExitOptions(Base + 0x100a, MachineExitKind::Return);
+  O.X64MachineExits.push_back({1, Base + 0x1028, MachineExitKind::Return});
+  O.MaxChainedTransfers = 0;
   const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
   ASSERT_TRUE(R.complete()) << R.Diagnostic;
-  for (uint64_t Stack : {uint64_t{0x800000}, uint64_t{0x900000}}) {
+  ASSERT_EQ(R.ExternalExits.size(), 2U);
+  for (uint64_t Choice : {uint64_t{0}, uint64_t{1}}) {
+    const auto Continuation = Base + (Choice ? 0x100a : 0x1028);
+    auto Actual = machineExitState(0x800000);
+    Actual.write(NdVar::reg(x86reg::RCX, 8), Choice);
+    Actual.write(NdVar::reg(x86reg::RDX, 8), 0x900000);
+    Actual.memory(0x900000, 0x12340, 8);
+    auto Expected = Actual;
+    Expected.memory(0x8ffff8, Continuation, 8);
+    Expected.write(NdVar::reg(x86reg::RSP, 8), 0x900008);
+    ASSERT_TRUE(Actual.run(R, O)) << Actual.Diagnostic;
+    expectMachineExitState(Actual, Expected, 0x12340);
+  }
+}
+
+TEST_F(PEFixedImageTest, MachineRegionUnrootedProjectionKeepsPushedReturnCell) {
+  auto Loaded = load(unrootedStackFixture(false, 0));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = machineExitOptions(Base + 0x1008, MachineExitKind::Return);
+  O.MaxChainedTransfers = 0;
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ExternalExits.size(), 1U);
+  for (uint64_t Stack :
+       {uint64_t{0}, uint64_t{0x800000}, uint64_t{0x900000}, UINT64_MAX - 31}) {
     auto Actual = machineExitState(0x800000);
     Actual.write(NdVar::reg(x86reg::RCX, 8), Stack);
     Actual.memory(Stack, 0x12340, 8);
     auto Expected = Actual;
     Expected.memory(Stack - 8, Base + 0x1008, 8);
-    Expected.memory(Stack - 16, Base + 0x1045, 8);
     Expected.write(NdVar::reg(x86reg::RAX, 8), Base + 0x1008);
-    Expected.write(NdVar::reg(x86reg::RDX, 8), Base + 0x1045);
+    Expected.write(NdVar::reg(x86reg::RDX, 8),
+                   Expected.read(NdVar::reg(x86reg::RDX, 8)) + 7);
     Expected.write(NdVar::reg(x86reg::RSP, 8), Stack + 8);
     ASSERT_TRUE(Actual.run(R, O)) << Actual.Diagnostic;
     expectMachineExitState(Actual, Expected, 0x12340);
   }
 }
 
-TEST_F(PEFixedImageTest, MachineRegionUnrootedProjectionForgetsUnprovedCells) {
-  auto Loaded = load(unrootedStackFixture(false, 0));
+TEST_F(PEFixedImageTest, MachineRegionUnrootedDisjointWriteKeepsReturnCell) {
+  std::vector<uint8_t> Code{0x48, 0x89, 0xcc, 0xe8, 0x38, 0, 0, 0, 0xc3};
+  Code.resize(0x40, 0xcc);
+  // mov byte ptr [rsp-9],dl; ret. The write misses the pushed word.
+  Code.insert(Code.end(), {0x88, 0x54, 0x24, 0xf7, 0xc3});
+  auto Loaded = load(machineExitFixture(Code));
   ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
   auto O = machineExitOptions(Base + 0x1008, MachineExitKind::Return);
   O.MaxChainedTransfers = 0;
   const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
-  EXPECT_EQ(R.Status, SpecializationStatus::UnresolvedControl) << R.Diagnostic;
-  EXPECT_TRUE(R.Residual.Blocks.empty());
-  EXPECT_TRUE(R.ExternalExits.empty());
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  for (uint64_t Stack : {uint64_t{0}, uint64_t{0x900000}}) {
+    auto Actual = machineExitState(0x800000);
+    Actual.write(NdVar::reg(x86reg::RCX, 8), Stack);
+    Actual.memory(Stack, 0x12340, 8);
+    auto Expected = Actual;
+    Expected.memory(Stack - 8, Base + 0x1008, 8);
+    Expected.memory(Stack - 17,
+                    Expected.read(NdVar::reg(x86reg::RDX, 8)) & 0xff, 1);
+    Expected.write(NdVar::reg(x86reg::RSP, 8), Stack + 8);
+    ASSERT_TRUE(Actual.run(R, O)) << Actual.Diagnostic;
+    expectMachineExitState(Actual, Expected, 0x12340);
+  }
+}
+
+TEST_F(PEFixedImageTest, MachineRegionUnrootedProjectionRejectsSlotOverwrite) {
+  std::vector<uint8_t> Partial{0x48, 0x89, 0xcc, 0xe8, 0x38, 0, 0, 0, 0xc3};
+  Partial.resize(0x40, 0xcc);
+  // A single changed byte of the physical return word must revoke the fact.
+  Partial.insert(Partial.end(), {0x88, 0x54, 0x24, 0x01, 0xc3});
+  for (const auto &Image : {unrootedStackFixture(false, 0, false, true),
+                            machineExitFixture(Partial)}) {
+    auto Loaded = load(Image);
+    ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+    auto O = machineExitOptions(Base + 0x1008, MachineExitKind::Return);
+    O.MaxChainedTransfers = 0;
+    const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+    EXPECT_EQ(R.Status, SpecializationStatus::UnresolvedControl)
+        << R.Diagnostic;
+    EXPECT_TRUE(R.Residual.Blocks.empty());
+    EXPECT_TRUE(R.ExternalExits.empty());
+  }
 }
 
 TEST_F(PEFixedImageTest, UnrootedStackKeepsOrdinaryFunctionRequirements) {

@@ -20,6 +20,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -417,6 +418,13 @@ enum class X64ContinuationProfile : uint8_t {
 /// FS/GS base remains architectural and follows this declared policy.
 using X64NullSegmentBasePolicy = X86NullSegmentBasePolicy;
 
+/// One original unprefixed XBEGIN rel32 that delivered #UD in the observed
+/// 64-bit CPU configuration. The instruction reader authenticates its bytes.
+struct X64XbeginFaultSite {
+  va_t Address;
+  std::array<uint8_t, 6> Bytes;
+};
+
 struct X64ContinuationSourceOptions {
   X64ContinuationProfile Profile = X64ContinuationProfile::Unspecified;
   std::optional<uint32_t> MXCSRMask;
@@ -534,6 +542,9 @@ struct X64ContinuationSourceOptions {
   bool NotifyCr8Writes = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
   uint64_t MaxOperations = limits::analysis::kX64ContinuationMaxOperations;
+  /// Replay this site under the same RTM configuration, outside a transaction.
+  /// Its fault enters the live V6 IDT with the original PC and RF set on stack.
+  std::optional<X64XbeginFaultSite> ObservedXbeginFault;
 };
 
 /// A profile-owned choice of a legacy GPR's upper 32 bits on a successful

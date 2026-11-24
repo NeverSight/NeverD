@@ -40,6 +40,11 @@ constexpr int ReportSchema = 2;
 constexpr int ScrollTicks = 300;
 constexpr int FrameMs = 16;
 
+qint64 paintedMonotonicNs() {
+  const auto elapsed = std::chrono::steady_clock::now().time_since_epoch();
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+}
+
 /// Nearest-rank percentiles of \p ms.
 QJsonObject summary(QVector<double> ms, int missed) {
   std::sort(ms.begin(), ms.end());
@@ -272,6 +277,7 @@ InteractionMetrics::jumpStep(const char *name,
           const double ms = (clock_.nsecsElapsed() - start) / 1.0e6;
           series->ms.append(ms);
           sample["ms"] = ms;
+          sample["painted_monotonic_ns"] = paintedMonotonicNs();
         } else {
           ++series->missed;
           sample["missed"] = failure;
@@ -465,11 +471,7 @@ void InteractionMetrics::measurePseudocode(CodeView *code, const char *name,
           const double ms = (clock_.nsecsElapsed() - start) / 1.0e6;
           series->ms.append(ms);
           sample["ms"] = ms;
-          const auto painted =
-              std::chrono::steady_clock::now().time_since_epoch();
-          sample["painted_monotonic_ns"] = static_cast<qint64>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(painted)
-                  .count());
+          sample["painted_monotonic_ns"] = paintedMonotonicNs();
           if (actionStart) {
             const QByteArray source = text->allText().toUtf8();
             sample["bytes"] = source.size();
