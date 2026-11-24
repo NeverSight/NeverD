@@ -79,5 +79,104 @@
     "independent_results": 570,
     "ambiguous_controls": 1554
   },
-  "native_apple_arm64e_x1_qualified_by_model": false
+  "native_apple_arm64e_x1_qualified_by_model": false,
+  "apple_verification": {
+    "implementation_merge": "28189d5b4cde48d62181b6ce98dcb3c422ccc749",
+    "candidate_revision": "bcf9e4016fc61d0a480126eab4962827919c0982",
+    "r6_archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+    "analysis_test_sha256": "e2fb44e98c2c609c18950fdb1f4fec862bb47e4fc67aee1f87cdcb5a5f8349c4",
+    "local_ctest": {
+      "total": 847,
+      "passed": 809,
+      "skipped": 38,
+      "failed": 0,
+      "source_revision": "b3d0450098a1cc96c915d779d8182cb2c5de4068"
+    },
+    "real_text_parity": {
+      "instructions": 4064,
+      "digest": "03b12a15172cdaca372d5d80acb6a329a21fda994d115f7f931cdd2ff918e642",
+      "tests": 1
+    },
+    "native_regression": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45466050718",
+      "selected": 37,
+      "by_host": {
+        "macos-15": {
+          "passed": 0,
+          "skipped": 37
+        },
+        "macos-26": {
+          "passed": 34,
+          "skipped": 3
+        },
+        "xcode-27": {
+          "passed": 34,
+          "skipped": 3
+        }
+      },
+      "verified_across_local_and_hosted": 844,
+      "remaining": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections"
+      ]
+    },
+    "native_instruction_matrix": {
+      "profiles": {
+        "macos-15": {
+          "soc": "Apple M1 (Virtual)",
+          "features": {
+            "128-bit LRCPC3": false,
+            "Two-modifier PAuth_LR": false,
+            "PC-sensitive PACM": false,
+            "PACM HINT with active IA and IB": false,
+            "EL0 checked scalar arithmetic on arm64e.x1": false,
+            "EL0 checked signed-product overflow on arm64e.x1": false,
+            "EL0 checked writeback on arm64e.x1": false
+          },
+          "qualification": "unavailable",
+          "x1_slice_at_O0_and_O2": "slice-unavailable"
+        },
+        "macos-26": {
+          "soc": "Apple M1 (Virtual)",
+          "features": {
+            "128-bit LRCPC3": false,
+            "Two-modifier PAuth_LR": false,
+            "PC-sensitive PACM": false,
+            "PACM HINT with active IA and IB": true,
+            "EL0 checked scalar arithmetic on arm64e.x1": false,
+            "EL0 checked signed-product overflow on arm64e.x1": false,
+            "EL0 checked writeback on arm64e.x1": false
+          },
+          "qualification": "unavailable",
+          "x1_slice_at_O0_and_O2": "slice-unavailable"
+        },
+        "xcode-27": {
+          "soc": "Apple M1 (Virtual)",
+          "features": {
+            "128-bit LRCPC3": false,
+            "Two-modifier PAuth_LR": false,
+            "PC-sensitive PACM": false,
+            "PACM HINT with active IA and IB": true,
+            "EL0 checked scalar arithmetic on arm64e.x1": false,
+            "EL0 checked signed-product overflow on arm64e.x1": false,
+            "EL0 checked writeback on arm64e.x1": false
+          },
+          "qualification": "unavailable",
+          "x1_slice_at_O0_and_O2": "did-not-start"
+        }
+      },
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45466131403",
+      "source_revisions": [
+        "28189d5b4cde48d62181b6ce98dcb3c422ccc749"
+      ],
+      "self_hosted_runner_count": 0
+    },
+    "candidate_retest": {
+      "analysis": 17,
+      "emulator": 58,
+      "failures": 0,
+      "skipped": 0
+    }
+  }
 }
