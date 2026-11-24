@@ -9271,8 +9271,15 @@ loop proof, a mask in a later return block and a discarded shift.
 `ReturnContract.SharedX86VariableShiftCrossesTwoJoins`
 checks edge pairing through successive joins in machine code.
 `ReturnContract.SharedX86ReturnObservesBothShiftDirectionsAfterTheJoin`
-runs both C outputs with left and right shifts on separate predecessors.
+runs both C outputs with left and right shifts on separate predecessors,
+using either RAX directly or a final copy from EDX.
 Removing bit eight from the final mask makes the left-shift path overlap.
+`ReturnContracts.LateReturnCopyChecksTheScratchRegisterOnItsOwnEdge` checks
+the high byte of RDX as data and as a count, reordered PHIs, conflicting
+bytes and an unknown full-register input.
+`ReturnContract.I386LoopReusesTheCounterRegisterForTheFinalResult` executes
+zero through three trips with EAX as the counter. At the exit it compares
+the masked result copied from EDX, including a one-trip collision.
 `ReturnContract.SharedAArch64WordShiftKeepsEachLatchAndTheIncomingX0`
 checks a word shift after either latch and a bare path returning the full X0.
 `ReturnContract.SharedMIPSShiftCountChangesInTheBackedgeSlot` runs both C

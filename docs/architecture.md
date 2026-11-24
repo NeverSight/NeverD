@@ -5633,6 +5633,11 @@ a choice. An overlap leaves that choice unproven. A word shift on a wide
 register uses the width of the shift operand.
 Across successive joins, the return-contract pass follows the value and count
 on the same predecessor. Every PHI reads the state before entry to its block.
+The selected data may occupy a scratch register until the epilogue writes the
+ABI result. A separately merged byte must agree with its represented parent
+on the incoming edge, including when that byte supplies the shift count.
+An unrelated loop counter may remain unknown while the proof checks both
+continuations and the value after the final write.
 An outer choice can distinguish a third arm even when the inner arms return
 the same bits. A loop header can receive new bindings on each latch. The proof
 compares the observable outcomes after closing both sets under those
