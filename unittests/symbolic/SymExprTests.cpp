@@ -1701,6 +1701,26 @@ TEST(SymExpr, NativeResiduesKeepSharedFullWidthUses) {
   }
 }
 
+TEST(SymExpr, ConcatenationOverwritesAlignedAndUnalignedLanesOnReuse) {
+  for (const unsigned LowBits : {1u, 63u, 64u, 65u, 129u}) {
+    SymContext Ctx;
+    const auto H = Ctx.mkVar("h", 513), M = Ctx.mkVar("m", 65);
+    const auto L = Ctx.mkVar("l", LowBits);
+    SymEvalPlan Plan(Ctx, Ctx.mkConcat({H, M, L}));
+    const unsigned Width = 513 + 65 + LowBits;
+    for (const unsigned Shift : {0u, 1u, 63u, 64u, 127u, 512u}) {
+      const llvm::APInt Values[] = {
+          ~llvm::APInt::getOneBitSet(513, Shift),
+          llvm::APInt::getOneBitSet(65, Shift % 65),
+          ~llvm::APInt::getOneBitSet(LowBits, Shift % LowBits)};
+      const auto Expected = Values[0].zext(Width).shl(65 + LowBits) |
+                            Values[1].zext(Width).shl(LowBits) |
+                            Values[2].zext(Width);
+      EXPECT_EQ(Plan.eval(Values), Expected);
+    }
+  }
+}
+
 TEST(SymExpr, RepeatedProductResiduesRespectAllObserverWidths) {
   for (unsigned Width : {8u, 16u, 64u}) {
     SCOPED_TRACE(Width);
