@@ -27,7 +27,8 @@ _start:
   ldr x0, =RETURN_MODEL_KEY_B_HI
   msr APIBKeyHi_EL1, x0
 #ifdef RETURN_MODEL_CURSOR
-  adr x0, LcursorL0
+  adrp x0, LcursorL0@PAGE
+  add x0, x0, LcursorL0@PAGEOFF
   msr TTBR0_EL1, x0
   mov x0, #RETURN_MODEL_NORMAL_WB
   msr MAIR_EL1, x0
@@ -96,17 +97,18 @@ Lunexpected:
 #ifdef RETURN_MODEL_CURSOR
 // Identity-map the image and the two stacks as Normal memory. Apple Clang can
 // legally access stack aggregates with unaligned loads and stores.
-.p2align RETURN_MODEL_PAGE_SHIFT
+.const
+.p2align RETURN_MODEL_PAGE_SHIFT, 0
 LcursorL0:
   .quad LcursorL1 + RETURN_MODEL_TABLE
   .space (RETURN_MODEL_TABLE_ENTRIES - 1) * RETURN_MODEL_ENTRY_BYTES
 LcursorL1:
   .space (RETURN_MODEL_TEXT_BASE >> RETURN_MODEL_L1_SHIFT) * RETURN_MODEL_ENTRY_BYTES
   .quad LcursorL2 + RETURN_MODEL_TABLE
-  .p2align RETURN_MODEL_PAGE_SHIFT
+  .p2align RETURN_MODEL_PAGE_SHIFT, 0
 LcursorL2:
   .quad RETURN_MODEL_TEXT_BASE | RETURN_MODEL_BLOCK | RETURN_MODEL_EL0_ACCESS | RETURN_MODEL_READ_ONLY
   .quad RETURN_MODEL_EL0_DATA | RETURN_MODEL_BLOCK | RETURN_MODEL_EL0_ACCESS | RETURN_MODEL_DATA_XN
   .quad RETURN_MODEL_EL1_DATA | RETURN_MODEL_BLOCK | RETURN_MODEL_DATA_XN
-  .p2align RETURN_MODEL_PAGE_SHIFT
+  .p2align RETURN_MODEL_PAGE_SHIFT, 0
 #endif
