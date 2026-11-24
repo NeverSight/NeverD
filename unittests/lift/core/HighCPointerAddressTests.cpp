@@ -27779,6 +27779,72 @@ struct CAtlMap { CNode **m_ppBins; uint64_t m_pad; uint32_t m_nBins; };
 )c" + Source);
 }
 
+TEST(HighCPointerAddresses, AnArrayAccessedWholeGoesThroughAScalar) {
+  // Go copies a `sigset` ([2]uint32) in one word: `m.sigmask = initSigmask`
+  // stores eight bytes over the array member, which printed
+  // `m->sigmask = v`, an assignment of an array C rejects; read whole, the
+  // array would be its address.  Both go through a word at its place.
+  auto Mask = NdType::makeArray(NdType::makeInt(4, false), 2, 8);
+  auto Thread = NdType::makeNamedRecord("runtime_m", 0x80);
+  Thread->FieldDisplayNames = {"id", "sigmask"};
+  Thread->FieldDisplayOffsets = {0, 0x78};
+  Thread->FieldDisplayTypes = {NdType::makeInt(8, true), Mask};
+  HighFunc Func;
+  Func.Name = "swap";
+  Func.ReturnType = NdType::makeInt(8, false);
+  Func.Params = {{"m", NdType::makePtr(Thread)},
+                 {"mask", NdType::makeInt(8, false)}};
+  auto M = parameter(0, Func.Params[0].Type);
+  MedVar MaskVar;
+  MaskVar.Kind = MedVar::Param;
+  MaskVar.Id = 1;
+  MaskVar.Size = 8;
+  MaskVar.TheArch = Arch::X64;
+  MedVar OldVar;
+  OldVar.Kind = MedVar::Temp;
+  OldVar.Id = 3;
+  OldVar.Size = 8;
+  OldVar.TheArch = Arch::X64;
+  auto Word = NdType::makeInt(8, false);
+  auto Field = [&] {
+    auto E =
+        HighExpr::makeBinop(NdOp::INT_ADD, M, HighExpr::makeConst(0x78, 8));
+    E->Type = Word;
+    return E;
+  };
+  HighStmt Old;
+  Old.Kind = StmtKind::Assign;
+  Old.Dst = HighExpr::makeVar(OldVar, Word);
+  Old.Val = HighExpr::makeLoad(Field(), Word);
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.StoreAddr = Field();
+  Store.StoreVal = HighExpr::makeVar(MaskVar, Word);
+  HighStmt Result;
+  Result.Kind = StmtKind::Return;
+  Result.RetVal = HighExpr::makeVar(OldVar, Word);
+  Func.Body = {Old, Store, Result};
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("(*(uint64_t*)&m->sigmask) = mask"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("= (*(uint64_t*)&m->sigmask)"), std::string::npos)
+      << Source;
+  // The emitter has no debug context to define the record from.
+  source_call_execution_test::compileAndRun(R"c(
+#include <stdint.h>
+struct runtime_m { int64_t id; uint8_t pad[0x70]; uint32_t sigmask[2]; };
+)c" + Source + R"c(
+int main(void) {
+  struct runtime_m m = {0};
+  m.sigmask[0] = 1;
+  m.sigmask[1] = 2;
+  uint64_t old = swap(&m, UINT64_C(0x0000000400000003));
+  return old != UINT64_C(0x0000000200000001) || m.sigmask[0] != 3 ||
+         m.sigmask[1] != 4;
+}
+)c");
+}
+
 TEST(HighCPointerAddresses, TypedMapCursorComposesHashKeyNextValue) {
   RecursiveDisplayRecords Records;
   // Guest LookupColor HighIR: untyped temps, RenameTag cursor, nested

@@ -5791,6 +5791,10 @@ that width at the element's start (`tree[n].freq`); union alternatives of
 the same width leave none, and the access stays raw. A pointer names a
 member as the array it indexes only where it holds an array member's
 address (`s->heap[i]`), never the first member of the record it points to.
+A member array read or written whole as one scalar, as Go copies a
+`sigset` (`[2]uint32`) in one word, goes through a scalar of the access's
+width and class at the array's place (`(*(uint64_t*)&m->sigmask) = mask`):
+C assigns no array, and an array read as a value is its address.
 A local the unit declares an integer that holds the pointer, as the join
 of `modules.array` and zero Go's `itabsinit` keeps, is indexed through the
 pointer it is (`((runtime_moduledata**)(uintptr_t)v6)[i]`): C subscripts

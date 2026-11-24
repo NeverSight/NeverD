@@ -6670,7 +6670,31 @@ HighCWriter::typedMemberAccess(const HighExpr &Addr, uint16_t AccessSize,
   auto Path = canonicalizeDisplayPath(*Field);
   if (!Path)
     return std::nullopt;
-  return recordMemberAccess(*Base, *Path);
+  auto Access = recordMemberAccess(*Base, *Path);
+  // An array read or written whole as one scalar, as Go copies a `sigset`
+  // ([2]uint32) in one word: C assigns no array, and an array read as a
+  // value is its address.  The access goes through a scalar of its width
+  // at the array's place, of the class the access reads.
+  if (Access && AccessSize)
+    if (const TypeRef FieldTy = Record->displayFieldTypeAt(
+            Peeled->second, AccessSize, /*ArrayElements=*/true, Class);
+        FieldTy && FieldTy->Kind == NdTypeKind::Array) {
+      TypeRef Scalar;
+      if (Class == NdAccessClass::Floating)
+        Scalar = AccessSize == 4 || AccessSize == 8
+                     ? NdType::makeFloat(AccessSize)
+                     : nullptr;
+      else if (Class == NdAccessClass::Pointer)
+        Scalar = Opts.Image && AccessSize == Opts.Image->getPointerSize()
+                     ? NdType::makePtr()
+                     : nullptr;
+      else if (AccessSize <= 8 && llvm::isPowerOf2_32(AccessSize))
+        Scalar = NdType::makeInt(AccessSize, false);
+      if (!Scalar)
+        return std::nullopt;
+      return "(*(" + typeToC(NdType::makePtr(Scalar)) + ")&" + *Access + ")";
+    }
+  return Access;
 }
 
 std::optional<std::string>

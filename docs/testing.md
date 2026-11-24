@@ -2863,6 +2863,10 @@ they do not qualify native execution or standalone cache reconstruction.
 `NeverDDebugInfoTests` rejects automatic container companion discovery while
 retaining explicit per-image debug-file diagnostics.
 
+`HighCPointerAddresses.AnArrayAccessedWholeGoesThroughAScalar` loads and
+stores eight bytes over a `[2]uint32` member and runs the C: both go through
+`(*(uint64_t*)&m->sigmask)`; it fails where the member is assigned or read as
+an array.
 `HighCPointerAddresses.AGlobalOfAnUnspellableCallbackKeepsItsAccessType`
 gives a global the debug type of a callback returning an array: the unit is
 written, the global declared with the type its load gives.
