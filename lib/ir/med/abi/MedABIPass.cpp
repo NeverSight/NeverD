@@ -1419,6 +1419,14 @@ void recoverCallAbi(
           FnIt != FuncNames.end()
               ? FnIt->second
               : (kAutoFuncPrefix + llvm::utohexstr(CI.TargetAddr)).str();
+      // A single-function projection omits the callee body. Its descriptor
+      // still identifies the named routine at this code entry.
+      if (FnIt == FuncNames.end() && Img && !CI.IsIndirect &&
+          isPowerPC64ELFv1(TheArch) &&
+          Img->PPC64EntryContexts.contains(CI.TargetAddr))
+        if (const auto Name = Img->statedFunctionNameAt(CI.TargetAddr);
+            !Name.empty())
+          CI.TargetName = Name.str();
       // A stub the names leave unnamed still reaches its import, whose name
       // its prototype and va_list contract go by.
       if (Img && !CI.IsIndirect && CI.TargetName.starts_with(kAutoFuncPrefix))
@@ -4149,7 +4157,8 @@ void recoverCallAbi(
                   const auto &[Pred, Value] = Arm;
                   const auto *Entry = BlockIds.first(Pred);
                   if (!Entry || Entry->StartAddr != Func.Entry ||
-                      !Entry->Preds.empty() || !Entry->ExceptionalPreds.empty() ||
+                      !Entry->Preds.empty() ||
+                      !Entry->ExceptionalPreds.empty() ||
                       Value.Kind != MedVar::Reg || Value.SSAVer > 0 ||
                       Value.RegOff != IntParamRegs[IntPartSlots[I]])
                     return false;

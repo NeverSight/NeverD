@@ -326,6 +326,22 @@ struct BinaryImage {
   Bitness Bits = Bitness::Unknown;
   std::optional<MIPSImageMetadata> MIPS;
   RISCVProfile RISCV;
+  /// ELFv1 function pointers name .opd storage. Keep that identity separate
+  /// from code addresses used by symbol lookup and function discovery.
+  struct PPC64FunctionDescriptor {
+    va_t Entry;
+    va_t TOC;
+    std::optional<va_t> Environment;
+  };
+  std::map<va_t, PPC64FunctionDescriptor> PPC64Descriptors;
+  /// Aliases of a code entry may agree on only one of its two registers.
+  struct PPC64EntryContext {
+    std::optional<va_t> TOC;
+    std::optional<va_t> Environment;
+    /// A native function pointer can reproduce one descriptor identity.
+    va_t Descriptor = InvalidVA;
+  };
+  std::map<va_t, PPC64EntryContext> PPC64EntryContexts;
   bool IsRelocatable = false;
   /// The image runs at its link-time addresses: no loader rebases it, so an
   /// absolute address its code or data holds stays valid without a

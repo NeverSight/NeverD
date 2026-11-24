@@ -7,7 +7,7 @@
 | RISC-V | ELF32, little-endian | ILP32, a0–a7, result in a0 | RV32I, M, A, integer C |
 | RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C |
 | PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, result in r3 | Fixed-width scalar subset |
-| PowerPC64 | ELF64, big- or little-endian | Explicit ELFv2, r3–r10, result in r3 | Fixed-width scalar subset |
+| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Fixed-width scalar subset |
 
 For RISC-V, the ELF class selects XLEN. The loader accepts the integer ABI and
 reads normalized `Tag_RISCV_arch` attributes for M, A and their integer
@@ -28,7 +28,26 @@ uses the physical instruction length for the link address.
 | PPC32 System V | ELF32 and zero processor flags. The ninth integer argument begins eight bytes above the caller's stack pointer on entry. |
 | PPC32 EABI | Unsupported. Embedded flags and VLE executable regions fail admission. |
 | PPC64 ELFv2 | Requires ABI flag 2 in either byte order. The ninth integer argument begins at offset 96. The execution fixtures enter through the global entry with its address in r12 and require no incoming TOC. Cross-module TOC recovery, global/local entry equivalence and PLT calls remain unqualified. |
-| PPC64 ELFv1 | Unsupported. Its function descriptors and TOC have a separate calling convention. An unspecified ELF64 ABI also fails admission. |
+| PPC64 ELFv1 | A linked image identifies its descriptor table with an allocated `.opd` section or the paired `DT_PPC64_OPD` and `DT_PPC64_OPDSZ` tags. Flags 0 and 1 admit that layout in either byte order. The ninth integer argument begins at offset 112. |
+
+An ELFv1 function pointer is the address of a descriptor. The loader retains
+that address and reads the descriptor's code address, TOC and optional static
+chain in target byte order. The ELF entry point, function symbols, exports and
+initializer arrays lead discovery to the code. A stripped table can contain
+both 24-byte entries and 16-byte entries with an omitted environment word.
+The loader requires a unique layout and an executable target for each entry.
+[ELFv1 function descriptors](https://refspecs.linuxfoundation.org/ELF/ppc64/PPC-elf64abi.html).
+[GNU ld descriptor layout](https://sourceware.org/binutils/docs/ld/PowerPC64-ELF64.html).
+
+The incoming r2 belongs to the particular code entry. A signed displacement
+from this TOC can address mapped storage even when r2 itself lies beyond the
+image. A descriptor call through CTR uses the code, TOC and static chain
+loaded from the same descriptor. A relocated function-pointer variable keeps
+its writable storage and starts at the rebuilt function's native descriptor.
+A linked executable can retain this evidence with `--emit-relocs`. A call
+through an unrelocated descriptor-valued initializer reports the missing
+relocation. ELFv1 PLT jump slots, direct calls across different TOCs and
+ambiguous entry contexts require additional binding evidence.
 
 PPC64 arithmetic models the common CA, OV and SO bits. A full XER read
 requires processor evidence for the ISA 3.0 CA32 and OV32 fields and is
@@ -111,4 +130,17 @@ rebuilding target-dependent source. For big-endian PowerPC64, pass
 ```sh
 python3 unittests/lift/elf-integer/roundtrip.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
+```
+
+The ELFv1 qualification uses Clang with `-mabi=elfv1` in both byte orders,
+a GNU PowerPC64 linker with `elf64ppc` and `elf64lppc` emulations, and the
+same Python packages as the integer roundtrip above. Rebuilt programs link at
+a different address. The fixtures check mutable TOC data, taking a function's
+address, calling and replacing a stored pointer, the ninth integer argument
+and a callback with its own TOC and static chain.
+
+```sh
+python3 unittests/lift/elf-integer/ppc64_elfv1.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang \
+  --ld /path/to/powerpc64-linux-gnu-ld
 ```

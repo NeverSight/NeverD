@@ -1,6 +1,8 @@
 add_neverd_unittest(NeverDELFIntegerTargetTests
   ELFIntegerTargetTests.cpp
-  LINK_COMPONENTS Pipeline BackendLLVM BackendC)
+  PPC64ELFv1Tests.cpp
+  LINK_COMPONENTS Pipeline BackendLLVM BackendC
+  LINK_LIBS LLVMObjectYAML)
 
 add_neverd_unittest(NeverDMIPSPipelineTests
   mips/MIPS16PipelineTests.cpp

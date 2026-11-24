@@ -44,7 +44,7 @@ constexpr bool archLittleEndian(Arch A) {
          A == Arch::ARM || A == Arch::SBF || A == Arch::MIPS32EL ||
          A == Arch::MIPS64EL || A == Arch::MIPS64N32EL ||
          A == Arch::MIPS64O32EL || isRISCV(A) || A == Arch::PPC32LE ||
-         A == Arch::PPC64LE;
+         A == Arch::PPC64LE || A == Arch::PPC64LEELFv1;
 }
 
 inline bool archMachOPatchSupported(Arch A) {

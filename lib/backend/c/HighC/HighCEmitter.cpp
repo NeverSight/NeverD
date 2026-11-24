@@ -58,6 +58,7 @@
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
 #include "neverd/ir/med/MedDynamicStack.h"
 #include "neverd/loader/AArch64MemoryImage.h"
+#include "neverd/loader/ELF/PPC64FunctionDescriptor.h"
 
 #define DEBUG_TYPE "neverd-highc-emitter"
 #include "neverd/ArchSupport.h"
@@ -4465,12 +4466,14 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         const uint8_t *Bytes = Opts.Image->readVA(*Slot, PointerBytes);
         if (!Bytes)
           continue;
-        const va_t Target =
+        va_t Target =
             readPtr(Bytes, PointerBytes == 8, archLittleEndian(Opts.TheArch));
         // A slot holding a header address holds `__ImageBase`'s.
         const bool HeaderTarget = !Opts.Image->CodePtrRelocSlots.count(*Slot) &&
                                   Opts.Image->imageBaseOffset(Target);
         if (Opts.Image->CodePtrRelocSlots.count(*Slot)) {
+          Target =
+              nativePPC64DescriptorEntry(*Opts.Image, Target).value_or(Target);
           noteFunctionAddress(Target, Funcs);
           noteFunctionAddress(Target & ~va_t{1}, Funcs);
         } else if (HeaderTarget) {
@@ -5122,9 +5125,10 @@ std::optional<std::string> HighCWriter::relocatedSlotTarget(va_t Slot) const {
   const uint8_t *Bytes = Opts.Image->readVA(Slot, PointerBytes);
   if (!Bytes)
     return std::nullopt;
-  const va_t Target =
+  va_t Target =
       readPtr(Bytes, PointerBytes == 8, archLittleEndian(Opts.TheArch));
   if (Opts.Image->CodePtrRelocSlots.count(Slot)) {
+    Target = nativePPC64DescriptorEntry(*Opts.Image, Target).value_or(Target);
     if (hasCompressedMIPSCode(Opts.Image->Mode)) {
       const auto Entry = mips::serializedCodeTarget(*Opts.Image, Target);
       if (!Entry)

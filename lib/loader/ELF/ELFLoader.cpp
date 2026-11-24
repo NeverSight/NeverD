@@ -71,6 +71,7 @@ Arch tripleToArch(llvm::Triple::ArchType TA) {
 #define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling)                    \
   case llvm::Triple::LLVMArch:                                                 \
     return Arch::Name;
+#define NEVERD_ELF_INTEGER_ABI_TARGET(Name, LLVMArch, Spelling, Suffix)
 #include "neverd/ELFIntegerTargets.def"
   case llvm::Triple::mips:
     return Arch::MIPS32;
@@ -106,6 +107,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     return llvm::make_error<llvm::StringError>("elf: unsupported architecture",
                                                llvm::inconvertibleErrorCode());
 
+  elf_loader::PPC64DescriptorTable Descriptors;
   if (isMIPS(Img.Arch)) {
     auto Profile = elf_loader::readMIPSProfile(Obj);
     if (!Profile)
@@ -116,7 +118,8 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     if (Profile->HasMicroMIPS || Profile->HasMIPS16)
       Img.Mode = InstructionMode::MixedMIPS;
   } else if (isRISCV(Img.Arch) || isPowerPC(Img.Arch)) {
-    if (auto E = elf_loader::readIntegerProfile(Obj, Img.Arch, Img.RISCV))
+    if (auto E = elf_loader::readIntegerProfile(Obj, Img.Arch, Img.RISCV,
+                                                &Descriptors))
       return E;
   } else if constexpr (ELFT::Endianness == llvm::endianness::big) {
     return llvm::make_error<llvm::StringError>(
@@ -279,6 +282,10 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     return E;
 
   Progress.check();
+  if (isPowerPC64ELFv1(Img.Arch))
+    if (auto E = elf_loader::readPPC64Descriptors(Img, Descriptors))
+      return E;
+
   // --- .dynamic ---
   for (const Elf_Shdr &SH : Tables) {
     Progress.check();

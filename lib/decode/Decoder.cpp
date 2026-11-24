@@ -162,6 +162,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   case Arch::PPC32LE:
   case Arch::PPC64:
   case Arch::PPC64LE:
+  case Arch::PPC64ELFv1:
+  case Arch::PPC64LEELFv1:
     if (Mode != InstructionMode::Default)
       return false;
     CsArch = CS_ARCH_PPC;

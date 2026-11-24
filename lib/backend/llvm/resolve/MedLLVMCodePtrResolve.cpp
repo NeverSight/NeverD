@@ -28,6 +28,7 @@
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/ELF/PPC64FunctionDescriptor.h"
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -280,7 +281,22 @@ MedLLVMEmitter::materializeImageFunctionDeclaration(va_t Entry,
     Emitted = (kAutoFuncPrefix + llvm::utohexstr(Entry)).str();
   if (llvm::Function *Existing = Mod->getFunction(Emitted))
     return Existing;
-  auto *FT = llvm::FunctionType::get(llvm::Type::getInt64Ty(*Ctx), false);
+  llvm::Type *Word = llvm::Type::getInt64Ty(*Ctx);
+  llvm::SmallVector<llvm::Type *, 8> Parameters;
+  bool Variadic = false;
+  // A relocated ELFv1 pointer can take an omitted routine's address before
+  // its direct call is emitted. Preserve the integer call operands already
+  // recovered for that entry when declaring the initializer's target.
+  if (Img && isPowerPC64ELFv1(Img->Arch) &&
+      Img->PPC64EntryContexts.contains(Entry)) {
+    if (auto It = DirectCallArgumentCounts.find(Entry);
+        It != DirectCallArgumentCounts.end()) {
+      auto [Minimum, Maximum] = It->second;
+      Parameters.assign(Minimum, Word);
+      Variadic = Minimum != Maximum;
+    }
+  }
+  auto *FT = llvm::FunctionType::get(Word, Parameters, Variadic);
   auto *Function = llvm::Function::Create(
       FT, llvm::GlobalValue::ExternalLinkage, Emitted, Mod);
   Function->addFnAttr(llvm::Attribute::NullPointerIsValid);
@@ -846,6 +862,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     PtrSlotKind Kind = Slot.Kind;
     std::string ImportName = Slot.ImportName;
     if (Kind == PtrSlotKind::Code) {
+      TargetVA = nativePPC64DescriptorEntry(*Img, TargetVA).value_or(TargetVA);
       const auto Target = mips::serializedCodeTarget(*Img, TargetVA);
       if (!Target) {
         syncError() << "med_llvm_emitter: MIPS code pointer tag conflicts with "
