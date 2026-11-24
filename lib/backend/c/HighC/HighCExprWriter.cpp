@@ -5636,7 +5636,7 @@ HighCWriter::debugExternPrototype(const FunctionSym &FS,
           libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format, Dbg);
       (Floating &&
        (!Floating->ParameterElements.empty() || Floating->ReturnElements)) ||
-      c_library::standaloneRegisterRecord(FS, Opts)) {
+      c_library::standaloneIntegerRecord(FS, Opts)) {
     const auto Declare = [&](const TypeRef &Type, const std::string &Name) {
       return Type->Kind == NdTypeKind::Struct && !Type->IsEnum
                  ? c_detail::recordCallType(Type, Opts) + " " + Name

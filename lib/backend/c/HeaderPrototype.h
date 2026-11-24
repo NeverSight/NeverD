@@ -22,44 +22,63 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <cstddef>
+#include <optional>
 #include <set>
 
 namespace neverd::c_library {
-/// A standalone Windows ARM64 prototype may spell a by-value record when
-/// each source parameter occupies one integer register in declaration order.
-/// The target classifier distinguishes these records from HFAs, register
-/// pairs, indirect copies and hidden results.
-inline bool standaloneRegisterRecord(const FunctionSym &Function,
-                                     const CEmitterOptions &Options) {
+/// Named value records may span consecutive integer argument positions.
+/// Keep the physical layout so both emitters validate every source byte.
+inline std::optional<libc::RecordCallArguments>
+standaloneIntegerRecord(const FunctionSym &Function,
+                        const CEmitterOptions &Options) {
   if (Options.TheArch != Arch::AArch64 ||
       Options.Format != BinaryFormat::COFF || !Options.EmitIncludes ||
       !Options.RecordDefinitions || !Function.PrototypeFromHeader ||
       !Function.ParamEntryLocations.empty() || !Function.ReturnType ||
       !libc::hasRecordCallParameters(Function, Options.libcVariant()))
-    return false;
+    return std::nullopt;
   const TypeRef &Result = Function.ReturnType;
   if (Result->Kind != NdTypeKind::Void && Result->Kind != NdTypeKind::Ptr &&
       Result->Kind != NdTypeKind::Int && !Result->IsEnum)
-    return false;
+    return std::nullopt;
   if (Result->Size > getTargetRegInfo(Options.TheArch).PointerSize)
-    return false;
-  const auto Layout = libc::recordCallArguments(
+    return std::nullopt;
+  auto Layout = libc::recordCallArguments(
       Function, Options.TheArch, Options.Format, Options.libcVariant());
-  if (!Layout || Layout->ResultPointer || Layout->FloatingResult ||
-      Layout->Registers != Function.Params.size() ||
-      Layout->Positions != Function.Params.size())
-    return false;
+  if (!Layout || Layout->ResultPointer || Layout->FloatingResult)
+    return std::nullopt;
+  unsigned Position = 0;
   for (size_t I = 0; I < Layout->Parameters.size(); ++I) {
     const auto &Type = Function.Params[I].second;
     if (libc::isRecordCallParameter(Function, I, Options.libcVariant()) &&
         Type->SourceName.empty())
-      return false;
+      return std::nullopt;
     const auto &P = Layout->Parameters[I];
-    if (P.Indirect || P.Pieces.size() != 1 || P.Pieces[0].Floating ||
-        P.Pieces[0].Argument != I || P.Pieces[0].Offset ||
-        P.Pieces[0].Bytes != Type->Size)
-      return false;
+    if (P.Indirect || P.Pieces.empty())
+      return std::nullopt;
+    unsigned Offset = 0;
+    for (const auto &Piece : P.Pieces) {
+      if (Piece.Floating || Piece.BitOffset || Piece.CarrierBytes ||
+          !Piece.Bytes || Piece.Argument != Position || Piece.Offset != Offset)
+        return std::nullopt;
+      Offset += Piece.Bytes;
+      ++Position;
+    }
+    if (Offset != Type->Size)
+      return std::nullopt;
   }
+  return Position == Layout->Positions ? Layout : std::nullopt;
+}
+
+template <typename WidthOf>
+bool matchesIntegerRecordOperands(const IntegerCallArguments &Layout,
+                                  size_t Count, WidthOf Width) {
+  if (Count != Layout.Positions)
+    return false;
+  for (const auto &Parameter : Layout.Parameters)
+    for (const auto &Piece : Parameter.Pieces)
+      if (Width(Piece.Argument) < Piece.Bytes)
+        return false;
   return true;
 }
 

@@ -359,6 +359,10 @@ void MedToHighConverter::lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
   auto Call = HighExpr::makeCall(
       Target.Name, Target.Addr ? Target.Addr : CurOp.Addr, std::move(Args));
   Call->CallSiteAddr = CurOp.Addr;
+  if (CurMed)
+    if (const auto *Info = CurMed->findCall(CurBlock.Id, CI))
+      Call->DenseIntegerStackArguments =
+          hasDenseIntegerCallStack(*Info, Call->Operands.size());
   Call->IsIndirectCall = Target.IsIndirect;
   Call->IndirectParamIdx = Target.IndirectParam;
   Call->DoesNotReturn = CurOp.DoesNotReturn;

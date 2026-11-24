@@ -202,8 +202,11 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
   CallExpr->CallSiteAddr = CurOp.Addr;
   CallExpr->SourceCallHint = CurOp.SourceCallHint;
   if (CurMed)
-    if (const auto *Info = CurMed->findCall(CurBlock.Id, CallIdx))
+    if (const auto *Info = CurMed->findCall(CurBlock.Id, CallIdx)) {
       CallExpr->SourceCalleeType = Info->SourceCalleeType;
+      CallExpr->DenseIntegerStackArguments =
+          hasDenseIntegerCallStack(*Info, CallExpr->Operands.size());
+    }
   if (auto Signature = boundFloatingCallArguments(
           CurOp, TargetArch,
           Image ? Image->abiFormat() : BinaryFormat::Unknown))

@@ -76,6 +76,7 @@
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64AuthenticatedCall.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
+#include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
@@ -2557,8 +2558,11 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
           }
           continue;
         }
-        Fits &= ScalarParameters ||
-                c_library::standaloneRegisterRecord(*Source, Opts);
+        const auto Record =
+            Fits && !ScalarParameters
+                ? c_library::standaloneIntegerRecord(*Source, Opts)
+                : std::nullopt;
+        Fits &= ScalarParameters || Record.has_value();
         const auto Layout =
             Fits && !Floating
                 ? integerCallArguments(Opts.TheArch, Opts.Format,
@@ -2577,11 +2581,30 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
         if (isUserFunctionDeclaration(*Source) && !Floating && !FixedInteger &&
             !ScalarRegisters)
           continue;
-        Fits &= (Floating || Whole ||
-                 (Layout && Layout->Positions == Parameters.size())) &&
-                (Source->IsVariadic ? Parameters.size() <= Call->arg_size()
-                                    : Parameters.size() == Call->arg_size());
-        for (unsigned I = 0; Fits && I < Parameters.size(); ++I) {
+        if (Record) {
+          const auto Bound = bindLLVMIntegerCallArguments(
+              *Call, *Record, Opts.TheArch, Opts.Format);
+          const bool Located = Record->Positions == Record->Registers ||
+                               getLLVMArgumentStackLayout(*Call).SlotBytes != 0;
+          Fits &=
+              Located && Bound &&
+              c_library::matchesIntegerRecordOperands(
+                  *Bound, Call->arg_size(), [&](unsigned Index) -> uint64_t {
+                    auto *T = Call->getArgOperand(Index)->getType();
+                    if (!T->isIntegerTy() && !T->isPointerTy())
+                      return 0;
+                    if (T->isPointerTy() && T->getPointerAddressSpace())
+                      return 0;
+                    return Mod.getDataLayout()
+                        .getTypeStoreSize(T)
+                        .getFixedValue();
+                  });
+        } else
+          Fits &= (Floating || Whole ||
+                   (Layout && Layout->Positions == Parameters.size())) &&
+                  (Source->IsVariadic ? Parameters.size() <= Call->arg_size()
+                                      : Parameters.size() == Call->arg_size());
+        for (unsigned I = 0; Fits && !Record && I < Parameters.size(); ++I) {
           auto *Carrier = Call->getArgOperand(I)->getType();
           if (Parameters[I]->Kind == NdTypeKind::Float) {
             Fits &= Floating && Carrier->isFloatingPointTy() &&
@@ -2679,7 +2702,7 @@ std::string LLVMCWriter::sourceImportDeclaration(const FunctionSym &Function,
     NotePointers(Type);
     const std::string ParameterName = Names.allocate(ParamName, "arg");
     Params += Type->Kind == NdTypeKind::Struct && !Type->IsEnum &&
-                      c_library::standaloneRegisterRecord(Function, Opts)
+                      c_library::standaloneIntegerRecord(Function, Opts)
                   ? c_detail::recordCallType(Type, Opts) + " " + ParameterName
                   : declarationToC(Type, ParameterName);
   }

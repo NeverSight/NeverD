@@ -538,7 +538,8 @@ _Dcomplex cpow(_Dcomplex, _Dcomplex);
 class DeclaredHeaderDebug final : public NullDebugContext {
   const sdk::LocalTypesDebugContext &Inner;
   static std::optional<FunctionSym> asHeader(std::optional<FunctionSym> F) {
-    if (F && (F->Name == "cpow" || F->Name == "fixture_hfa")) {
+    if (F && (F->Name == "cpow" || F->Name == "fixture_hfa" ||
+              F->Name == "fixture_pair")) {
       F->PrototypeFromHeader = true;
       F->PrototypeLibrary = "test-windows-header";
     }
@@ -1104,6 +1105,101 @@ int main(void) { return (uint64_t)point_probe() != UINT64_C(0xfffffffe); }
 )";
     ASSERT_NO_FATAL_FAILURE(
         source_call_execution_test::compileAndRun(Source, {}));
+  }
+}
+
+TEST(RecordCallContract, ARM64RecordPairKeepsBothWordsAndItsLocatedStackTail) {
+  constexpr uint64_t Words[] = {
+      0x89abcdef01234567ULL, 0xfedcba9876543210ULL, 3, 4, 5, 6, 7, 8, 9};
+  constexpr char Header[] = R"(
+struct WordPair { unsigned long long a, b; };
+int fixture_pair(struct WordPair p, int c, int d, int e, int f, int g, int h, int i);
+)";
+  auto Types = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  Types->setRecordABI(types::RecordABI::Microsoft);
+  ASSERT_TRUE(types::parseCTypes(Header, *Types).ok());
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  Import Imported;
+  Imported.Name = "fixture_pair";
+  Imported.Module = "fixture.dll";
+  Imported.IATAddr = 0x2000;
+  Image.Imports.push_back(Imported);
+  EmptyDebug Empty;
+  sdk::LocalTypesDebugContext Local(Empty, Types, {}, &Image);
+  DeclaredHeaderDebug Debug(Local);
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  Options.Image = &Image;
+  Options.RecordDefinitions = [&](const std::vector<TypeRef> &Records) {
+    return Local.definitions(Records);
+  };
+  for (bool LLVM : {false, true}) {
+    for (bool Located : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      SCOPED_TRACE(Located);
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      if (LLVM) {
+        llvm::LLVMContext Context;
+        llvm::Module Mod("record-pair", Context);
+        llvm::IRBuilder<> Builder(Context);
+        auto *Word = Builder.getInt64Ty();
+        auto *Callee = llvm::Function::Create(
+            llvm::FunctionType::get(
+                Word, std::vector<llvm::Type *>(std::size(Words), Word), false),
+            llvm::GlobalValue::ExternalLinkage, Imported.Name, Mod);
+        auto *Probe = llvm::Function::Create(
+            llvm::FunctionType::get(Word, false),
+            llvm::GlobalValue::ExternalLinkage, "probe", Mod);
+        Builder.SetInsertPoint(
+            llvm::BasicBlock::Create(Context, "entry", Probe));
+        std::vector<llvm::Value *> Args;
+        for (auto Value : Words)
+          Args.push_back(Builder.getInt64(Value));
+        auto *Call = Builder.CreateCall(Callee, Args);
+        setLLVMArgumentBanks(*Call, 8, 0, {Located ? 0 : 16}, 8);
+        Builder.CreateRet(Call);
+        ASSERT_TRUE(LLVMCEmitter().emit(Mod, Out, Options, &Debug, &Image));
+      } else {
+        HighFunc Probe;
+        Probe.Name = "probe";
+        Probe.Entry = 0x1000;
+        Probe.ReturnType = NdType::makeInt(8, false);
+        std::vector<ExprPtr> Args;
+        for (auto Value : Words)
+          Args.push_back(HighExpr::makeConst(Value, 8));
+        HighStmt Return;
+        Return.Kind = StmtKind::Return;
+        Return.RetVal = HighExpr::makeCall(Imported.Name, Imported.IATAddr,
+                                           std::move(Args));
+        Return.RetVal->DenseIntegerStackArguments = Located;
+        Return.RetVal->Type = Probe.ReturnType;
+        Probe.Body.push_back(Return);
+        ASSERT_TRUE(HighCEmitter().emit({Probe}, Out, Options, &Debug));
+      }
+      Out.flush();
+      EXPECT_EQ(Source.find("fixture_pair(struct WordPair ") !=
+                    std::string::npos,
+                Located)
+          << Source;
+      if (!Located)
+        continue;
+      Source += R"(
+int32_t fixture_pair(struct WordPair pair, int32_t c, int32_t d, int32_t e,
+                     int32_t f, int32_t g, int32_t h, int32_t i) {
+  return pair.a == UINT64_C(0x89abcdef01234567) &&
+         pair.b == UINT64_C(0xfedcba9876543210) && c == 3 && d == 4 &&
+         e == 5 && f == 6 && g == 7 && h == 8 && i == 9 ? -2 : 0;
+}
+int main(void) { return (uint64_t)probe() != UINT64_C(0xfffffffe); }
+)";
+      ASSERT_NO_FATAL_FAILURE(
+          source_call_execution_test::compileAndRun(Source, {}));
+    }
   }
 }
 

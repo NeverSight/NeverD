@@ -143,6 +143,9 @@ struct HighExpr {
   /// sunk into both arms has none.  0 for a call no instruction makes.
   va_t CallSiteAddr = 0;
   bool IsIndirectCall = false;
+  /// The recovered integer register run is complete and the remaining
+  /// operands occupy consecutive, individually located ABI stack slots.
+  bool DenseIntegerStackArguments = false;
   int IndirectParamIdx = -1;
   /// Unresolved `INDIR_CALL` callee.  Not a printed argument.
   std::shared_ptr<HighExpr> IndirectTarget;
