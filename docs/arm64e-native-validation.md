@@ -2546,9 +2546,25 @@ as unavailable only at that instruction's address before the first result.
 A separate process executes the structure load and store writeback controls
 even when scalar instructions are unavailable. The x1 report records checked
 scalar arithmetic and checked writeback independently. Both must pass at both
-optimizations for `x1_el0_cpta_qualified`. The per-optimization reports bind
+optimizations for `x1_el0_cpta_qualified`. Two additional processes execute
+`MADDPT` and `MSUBPT` with independent signed operands. Their inputs include
+positive and negative products that overflow without changing the pointer's
+top byte, a negative product that fits, and a zero product. Both operations
+must show the checked result at O0 and O2 for
+`x1_el0_checked_product_qualified`. This separately measures effective CPTM
+on an execution with effective CPTA enabled. The per-optimization reports bind
 each executable and observed result to its build. The existing `profiles`
 field retains the O2 observations.
+
+Both NeverD decoders traced a 1,062-input corpus under all three effective
+scalar settings using r6. The original instruction words produced the same
+values on the Arm FVP at EL1 and EL0 across all 16 raw control combinations
+at O0 and O2. On the instruction-only FEAT_CPA profile the same corpus yielded
+unchecked results at both exception levels. The model exposed zero in the four
+control fields. The CPA2 and instruction-only guests each rejected a profile
+that lacked their required feature.
+[Scalar trace and model results](evidence/arm64e-scalar-cpa-tracing-2026-11-25.json).
+[Arm A64 instruction set](https://documentation-service.arm.com/static/67e40f3398aa3c3b6eea6a85).
 
 Apple specifies M6 or later Macs and A20 Pro or later iPhones for arm64e.x1;
 the simulator cannot execute this ABI. Standard GitHub macOS ARM runners use

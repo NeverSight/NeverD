@@ -2317,6 +2317,13 @@ explicit operand and clobber constraints. Compilation does not establish CPU
 feature availability. These operations preserve call argument setup and frame taint,
 without proving a checked result is an ordinary arithmetic value. Their explicit
 results remain return values; discarded C expressions retain the instruction.
+The finite LowIR tracer evaluates a scalar CPA instruction from the operand
+values available at that step. A caller can supply the effective addition and signed-product
+checks for one step. Without controls the tracer returns an exact result
+when every effective setting agrees. Strict tracing stops on ambiguity and
+lenient tracing invalidates the destination. Multiply forms check the full
+signed product before truncation and use the third operand as the pointer.
+Scalar CPA and ordinary address tracing share the tag and poison rule.
 
 `AArch64AddressMemory.def` owns original ordinary-memory encodings and shapes.
 `AArch64AddressMemoryOperations.def` owns their identities, direction and

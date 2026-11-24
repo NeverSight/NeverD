@@ -1925,7 +1925,11 @@ signatures. An ineligible host explicitly skips this oracle. These tests do
 not certify arm64e ABI reconstruction or invalid-signature traps.
 
 The same target checks scalar CPA instructions through both decoder routes,
-including shifts, SP, XZR and overlapping operands. Malformed widths and
+including shifts, SP, XZR and overlapping operands. The finite-trace cases
+check all three effective CPTA/CPTM settings, signed product overflow with an
+unchanged top byte, previously poisoned bases and input availability. An
+unknown control can yield a value when all three expected results agree.
+Malformed widths and
 arities cannot grant call-argument proofs. LLVM O2 and both C projections
 retain the actual instruction even with a dead result; generated C compiles
 at O0/O2, with parameter-flow checks for temporary-name collisions. Vector

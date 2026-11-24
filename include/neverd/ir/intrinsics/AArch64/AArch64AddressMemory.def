@@ -112,14 +112,6 @@ NEVERD_A64_ADDRESS_MEMORY_VALUE(unsigned, kAddressMemoryIndexOperand, 1)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(unsigned, kAddressMemoryWordOperand, 2)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(uint32_t, kAddressMemoryScaleMask, 0x1000U)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(unsigned, kAddressMemoryScaleShift, 3)
-NEVERD_A64_ADDRESS_MEMORY_VALUE(uint64_t, kAddressMemoryTagMask,
-                                0xff00000000000000ULL)
-NEVERD_A64_ADDRESS_MEMORY_VALUE(uint64_t, kAddressMemoryPreservedMask,
-                                0xff80000000000000ULL)
-NEVERD_A64_ADDRESS_MEMORY_VALUE(uint64_t, kAddressMemoryPoisonBit,
-                                0x0040000000000000ULL)
-NEVERD_A64_ADDRESS_MEMORY_VALUE(uint64_t, kAddressMemorySignBit,
-                                0x0080000000000000ULL)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(unsigned, kAddressMemoryScratchBase, 16)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(unsigned, kAddressMemoryScratchIndex, 15)
 NEVERD_A64_ADDRESS_MEMORY_VALUE(unsigned, kAddressMemoryScratchValue, 17)

@@ -11,6 +11,7 @@
 #ifndef NEVERD_IR_INTRINSICS_AARCH64_AARCH64ADDRESSMEMORY_H
 #define NEVERD_IR_INTRINSICS_AARCH64_AARCH64ADDRESSMEMORY_H
 
+#include "neverd/ir/intrinsics/AArch64/AArch64CPA.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
 #include <algorithm>
@@ -43,15 +44,7 @@ inline std::optional<uint64_t>
 aarch64ControlIndependentAddress(uint64_t Base, uint64_t Offset,
                                  unsigned AccessBytes) {
   const uint64_t Address = Base + Offset;
-  const bool PreviousDetection = bool(Base & kAddressMemorySignBit) !=
-                                 bool(Base & kAddressMemoryPoisonBit);
-  const bool Detected =
-      ((Address ^ Base) & kAddressMemoryTagMask) || PreviousDetection;
-  const uint64_t Checked =
-      (Address & ~(kAddressMemoryPreservedMask | kAddressMemoryPoisonBit)) |
-      (Base & kAddressMemoryPreservedMask) |
-      (Base & kAddressMemorySignBit ? 0 : kAddressMemoryPoisonBit);
-  if (Detected && Address != Checked)
+  if (aarch64CheckedPointerResult(Base, Address) != Address)
     return std::nullopt;
   constexpr uint64_t Region =
       kAddressMemoryPreservedMask | kAddressMemoryPoisonBit;

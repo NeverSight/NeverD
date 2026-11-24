@@ -22,6 +22,7 @@
 #include "neverd/ir/X86/X87GuardedValue.h"
 #include "neverd/ir/X86/X87Stack.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64CPA.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -35,16 +36,45 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <utility>
 
 namespace neverd {
 
 namespace {
+
+std::optional<uint64_t>
+scalarCPAResult(const AArch64CPAOperation &Operation, uint64_t First,
+                uint64_t Second, uint64_t Accumulator,
+                std::optional<AArch64ScalarCPAControl> Checks) {
+  uint64_t Base = First, Offset = Second;
+  bool Overflow = false;
+  if (Operation.Sources == 3) {
+    int64_t Product;
+    Overflow = llvm::MulOverflow(std::bit_cast<int64_t>(First),
+                                 std::bit_cast<int64_t>(Second), Product);
+    Offset = static_cast<uint64_t>(Product);
+    Base = Accumulator;
+  }
+  const bool Subtract = Operation.Id == Intrinsic::A64_Subpt ||
+                        Operation.Id == Intrinsic::A64_Msubpt;
+  const uint64_t Result = Subtract ? Base - Offset : Base + Offset;
+  if (Checks == AArch64ScalarCPAControl::Unchecked)
+    return Result;
+  const uint64_t Checked = aarch64CheckedPointerResult(
+      Base, Result, Overflow && Checks != AArch64ScalarCPAControl::Addition);
+  // Addition and product detection both select the same poisoned result.
+  // If the extremes agree, the addition-only setting must agree as well.
+  if (!Checks && Checked != Result)
+    return std::nullopt;
+  return Checked;
+}
 
 bool isInstructionControl(NdOp Opcode) {
   switch (Opcode) {
@@ -569,6 +599,11 @@ void NdOpEmulator::clobberVolatileRegisters() {
 
 bool NdOpEmulator::step(const LowOp &Op) { return stepImpl(Op, {}); }
 
+bool NdOpEmulator::stepWithAArch64ScalarCPA(const LowOp &Op,
+                                            AArch64ScalarCPAControl Checks) {
+  return stepImpl(Op, {}, OrderedAlignment::Natural, Checks);
+}
+
 bool NdOpEmulator::stepWithAArch64OrderedQuadwordSCTLR(const LowOp &Op,
                                                        uint64_t SCTLR) {
   const auto Alignment =
@@ -590,7 +625,8 @@ bool NdOpEmulator::stepWithAArch64LSE2OrderedSCTLR(const LowOp &Op,
 }
 
 bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
-                            OrderedAlignment Alignment) {
+                            OrderedAlignment Alignment,
+                            std::optional<AArch64ScalarCPAControl> CPAChecks) {
   if (isLowRawAnalysisOperation(Op) || isLowArchitecturalValue(Op))
     return false;
   if (X87ContextKnown && Op.Output.isReg() &&
@@ -1070,6 +1106,26 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
   case NdOp::INTRINSIC:
     if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
       const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+      if (const auto CPA = aarch64CPAOperation(Id)) {
+        if (Img.Arch != Arch::AArch64 || !lowAArch64CPAShapeIsValid(Op))
+          return false;
+        if (llvm::all_of(llvm::ArrayRef(Op.Inputs).slice(1, CPA->Sources),
+                         [&](const NdVar &Input) {
+                           return knownOperandBytes(Input, 0, Input.Size);
+                         })) {
+          const auto Result = scalarCPAResult(
+              *CPA, readOperand(Op.Inputs[1]), readOperand(Op.Inputs[2]),
+              CPA->Sources == 3 ? readOperand(Op.Inputs[3]) : 0, CPAChecks);
+          if (Result) {
+            writeOutput(Op.Output, *Result);
+            return true;
+          }
+        }
+        if (CPAChecks)
+          return false;
+        // Without a proven value, preserve the ordinary strict/lenient
+        // handling of an unknown intrinsic output below.
+      }
       if (integer_memory::owns(Id))
         return executeIntegerMemory(Op, Id);
       // The explicit portable x87 profile cannot silently skip an unmodeled
