@@ -1169,6 +1169,7 @@ public:
   std::string unwrapCastVar(const HighExpr &E);
   std::string invertCondStr(const HighExpr &E);
   std::string condStr(const HighExpr &E);
+  std::string truthOperandStr(const HighExpr &E);
   std::string condStrImpl(const HighExpr &E);
   std::string invertCondStrImpl(const HighExpr &E);
   /// The logical inverse of \p Test as the rendering of \p Node. A value is 0

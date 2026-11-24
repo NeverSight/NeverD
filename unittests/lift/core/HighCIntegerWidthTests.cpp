@@ -1882,6 +1882,90 @@ _Static_assert(MASKED_XOR(0x80, 0x20) == 0, "both masks");
       {"-Werror=parentheses"});
 }
 
+TEST(HighCIntegerWidths, TruthTestsPreserveTheOperandAndNormalizeValues) {
+  const auto Byte = NdType::makeInt(1, false);
+  const auto Word = NdType::makeInt(4, false);
+  const auto Quad = NdType::makeInt(8, false);
+  const auto Wide = NdType::makeInt(16, false);
+  const auto Float = NdType::makeFloat(4);
+  auto Cast = [](ExprPtr Value, TypeRef Type) {
+    auto E = std::make_shared<HighExpr>();
+    E->Kind = ExprKind::Cast;
+    E->Type = E->CastTo = Type;
+    E->Operands = {std::move(Value)};
+    return E;
+  };
+  auto Not = [](ExprPtr Value) {
+    return HighExpr::makeUnary(NdOp::BOOL_NOT, std::move(Value));
+  };
+  auto Check = [&](const char *Name, TypeRef Param, ExprPtr Value,
+                   bool InBranch, const char *Assertion) {
+    SCOPED_TRACE(Name);
+    HighFunc Func;
+    Func.Name = Name;
+    Func.Params = {{"arg0", Param}};
+    Func.ReturnType = Word;
+    if (InBranch) {
+      HighStmt Branch, One;
+      Branch.Kind = StmtKind::If;
+      Branch.Cond = Value;
+      One.Kind = StmtKind::Return;
+      One.RetVal = HighExpr::makeConst(1, Word->Size);
+      Branch.Body.push_back(std::move(One));
+      Func.Body.push_back(std::move(Branch));
+      returnValue(Func, HighExpr::makeConst(0, Word->Size));
+    } else {
+      returnValue(Func, Value);
+    }
+    const std::string Source = emitFunctions({Func});
+    const llvm::StringRef Text(Source);
+    const auto Expr = InBranch ? Text.rsplit("if (").second.split(") {").first
+                               : Text.rsplit("return ").second.split(';').first;
+    ASSERT_FALSE(Expr.empty()) << Source;
+    source_call_execution_test::checkSyntax(
+        Source + "\n#define RESULT(arg0) (" + Expr.str() +
+        ")\n_Static_assert(" + Assertion + ", \"" + Name + "\");\n");
+  };
+  const auto Low = Cast(parameter(0, Word), Byte);
+  const char *LowIsZero = "RESULT(256u) == 1 && RESULT(258u) == 0";
+  Check("negate_low_byte", Word, Not(Low), false, LowIsZero);
+  Check("negate_byte_parameter_view", Word, Not(parameter(0, Byte)), false,
+        LowIsZero);
+  Check("double_negation", Word, Not(Not(Low)), false,
+        "RESULT(256u) == 0 && RESULT(258u) == 1");
+  const auto Nonzero =
+      HighExpr::makeBinop(NdOp::INT_NOTEQUAL, parameter(0, Word),
+                          HighExpr::makeConst(0, Word->Size));
+  Check("negate_false_comparison", Word,
+        Not(HighExpr::makeBinop(NdOp::INT_EQUAL, Nonzero,
+                                HighExpr::makeConst(0, Byte->Size))),
+        false, "RESULT(0u) == 0 && RESULT(2u) == 1");
+  Check("branch_on_low_quad", Wide, Cast(parameter(0, Wide), Quad), true,
+        "!RESULT(((unsigned __int128)1 << 64)) && RESULT(9u)");
+  const auto Bits = HighExpr::makeBitCast(parameter(0, Float), Word);
+  Check("branch_on_float_bits", Float, Bits, true,
+        "RESULT(-0.0f) && !RESULT(0.0f)");
+  Check("negate_float_bits", Float, Not(Bits), false,
+        "RESULT(-0.0f) == 0 && RESULT(0.0f) == 1");
+  const auto FloatFlag = HighExpr::makeBitCast(Cast(Nonzero, Float), Word);
+  Check("negate_bitwise_flag_mask", Word,
+        Not(HighExpr::makeBinop(NdOp::INT_AND, FloatFlag, Cast(Nonzero, Word))),
+        false, "RESULT(0u) == 1 && RESULT(2u) == 1");
+  const auto Below = HighExpr::makeBinop(NdOp::INT_SLESS, parameter(0, Word),
+                                         HighExpr::makeConst(0, Word->Size));
+  auto ThroughFloat = [&](ExprPtr Flag) {
+    return Cast(HighExpr::makeBitCast(Cast(Flag, Word), Float), Word);
+  };
+  Check("converted_nonnegative", Word,
+        HighExpr::makeBinop(NdOp::BOOL_AND, parameter(0, Word),
+                            ThroughFloat(Not(Below))),
+        true, "!RESULT(2u)");
+  Check("converted_negative", Word,
+        HighExpr::makeBinop(NdOp::BOOL_AND, parameter(0, Word),
+                            Not(ThroughFloat(Below))),
+        true, "RESULT(0xffffffffu)");
+}
+
 TEST(HighCIntegerWidths, CompoundComparisonsPreserveTheTestedValues) {
   const auto Word = NdType::makeInt(4, false);
   const auto X = parameter(0, Word), Y = parameter(1, Word);
