@@ -144,7 +144,26 @@ def named_runtime_exports(profile, target, metadata):
             "image_sha256": target["image_sha256"], "metadata": metadata}
 
 
-def named_runtime_units(output, architecture, compiler):
+def named_runtime_libraries(output, cache, architecture, readobj):
+    targets = {name: profile["targets"][architecture]["import_library"]
+               for name, profile in RUNTIME_PROFILES.items()
+               if "import_library" in profile["targets"].get(architecture, {})}
+    if not targets:
+        return {}
+    record = json.loads(ucrt.INPUTS.read_text(encoding="utf-8"))["import_packages"][architecture]
+    kit = output / (Path(record["file"]).stem + "-imports")
+    prefix = f"c/um/{architecture}/"
+    wdk.extract([package(cache, record)], kit, sorted({prefix + name for name in targets.values()}))
+    return {name: import_identity(kit / (prefix + filename), RUNTIME_PROFILES[name]["module"],
+                                  architecture, readobj) for name, filename in targets.items()}
+
+
+def import_identity(path, module, architecture, readobj):
+    return {"module": module, "file": str(path), "architecture": architecture,
+            "sha256": wdk.digest(path), "command": [readobj, "--coff-imports", str(path)]}
+
+
+def named_runtime_units(output, architecture, compiler, libraries):
     """Project documented named PE exports qualified for this target."""
     directory = output / "sdk-import-sources"
     directory.mkdir(parents=True, exist_ok=True)
@@ -158,11 +177,17 @@ def named_runtime_units(output, architecture, compiler):
         source.write_text("".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
         # In C23 an SDK declaration such as EngCreateClip() has zero parameters.
         # Bind the published prototype against the original C declaration in that dialect.
+        convention = target.get("default_calling_convention", "")
+        if convention and (architecture != "x86" or convention != "__stdcall" or name not in libraries):
+            raise ValueError("unverified default calling convention for " + name)
+        options = compiler + (["-Xclang", "-fdefault-calling-conv=stdcall"] if convention else [])
         bridge = {"source": str(source), "source_sha256": wdk.digest(source),
-                  "arguments": [*compiler, "-std=c23"], "language": "c", "commands": [],
+                  "arguments": [*options, "-std=c23"], "language": "c", "commands": [],
                   "runtime_exports": named_runtime_exports(profile, target, NAMED_RUNTIME["win32_metadata"])}
-        units.append({"name": name, "source": source, "compiler": compiler, "headers": headers,
-                      "default_calling_convention": "", "bridge": bridge})
+        if "import_library" in target:
+            bridge["runtime_import_library"] = libraries[name]
+        units.append({"name": name, "source": source, "compiler": options, "headers": headers,
+                      "default_calling_convention": convention, "bridge": bridge})
     return units
 
 
@@ -277,9 +302,7 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
         packages.append(dict(record, architecture=architecture))
         for name, (library, headers) in groups.items():
             path = kit / (arch_dir + library)
-            identity = {"module": Path(library).stem.lower() + ".dll", "file": str(path),
-                        "architecture": architecture, "sha256": wdk.digest(path),
-                        "command": [readobj, "--coff-imports", str(path)]}
+            identity = import_identity(path, Path(library).stem.lower() + ".dll", architecture, readobj)
             # SensorsUtils.lib carries short imports for the versioned system DLL.
             if name == "SensorUtilities":
                 identity["module"] = "sensorsutilsv2.dll"
@@ -373,13 +396,28 @@ def verify_parameter_counts(header, compiler, counts, source, commands, run):
                              f"expected {counts[name]}, got {actual.get(alias)} in {header}")
 
 
+def verify_linkage(contracts, imports, library):
+    for name, contract in contracts.items():
+        symbol = contract[0]
+        if symbol.startswith('@"\\01') and symbol.endswith('"'):
+            linker = symbol[5:-1]
+        elif re.fullmatch(r"@[A-Za-z_]\w*", symbol):
+            linker = ("_" if library["architecture"] == "x86" else "") + symbol[1:]
+        else:
+            raise ValueError("unrecognized Microsoft SDK linkage: " + symbol)
+        if linker not in imports.get(name, ()):
+            raise ValueError("original Microsoft ABI cannot link to its SDK import: " + name)
+
+
 def verify_abis(proof, header, compiler, directory, prototypes, run):
     names = proof["projected_functions"]
     if not set(names) <= set(prototypes):
         raise ValueError("published SDK import inventory is incomplete")
-    library = proof.get("import_library")
+    library = proof.get("import_library") or proof.get("runtime_import_library")
     imports = read_symbols(library, directory, run) if library else None
-    stem = library["module"] if library else header.stem + "-runtime"
+    if "runtime_import_library" in proof:
+        proof["commands"].append(library["command"])
+    stem = library["module"] if "import_library" in proof else header.stem + "-runtime"
     bindings = "".join(f"__typeof__(&{name}) neverd_ucrt_abi_{i} = &{name};\n"
                        for i, name in enumerate(names))
     contracts = []
@@ -400,15 +438,6 @@ def verify_abis(proof, header, compiler, directory, prototypes, run):
     for name in names:
         if contracts[0][name] != contracts[1][name]:
             raise ValueError("published compiler ABI differs from Microsoft SDK: " + name)
-        if imports is None:
-            continue
-        symbol = contracts[0][name][0]
-        if symbol.startswith('@"\\01') and symbol.endswith('"'):
-            linker = symbol[5:-1]
-        elif re.fullmatch(r"@[A-Za-z_]\w*", symbol):
-            linker = ("_" if library["architecture"] == "x86" else "") + symbol[1:]
-        else:
-            raise ValueError("unrecognized Microsoft SDK linkage: " + symbol)
-        if linker not in imports[name]:
-            raise ValueError("original Microsoft ABI cannot link to its SDK import: " + name)
+    if library:
+        verify_linkage(contracts[0], imports, library)
     proof.update(verified_functions=list(names), c_declaration_sha256=wdk.digest(header))

@@ -90,8 +90,13 @@ class MicrosoftWindowsTypes(unittest.TestCase):
     def test_named_runtime_profiles_preserve_target_exports_and_parameter_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             def exports(arch):
-                return {u["name"]: u["bridge"]["runtime_exports"] for u in
-                        windows.flat.named_runtime_units(Path(tmp) / arch, arch, ["clang"])}
+                libraries = {name: {} for name, profile in windows.flat.RUNTIME_PROFILES.items()
+                             if "import_library" in profile["targets"].get(arch, {})}
+                units = windows.flat.named_runtime_units(Path(tmp) / arch, arch, ["clang"], libraries)
+                routing = next(u for u in units if u["name"] == "RtmRuntime")
+                self.assertEqual(routing["default_calling_convention"], "__stdcall" if arch == "x86" else "")
+                self.assertEqual("runtime_import_library" in routing["bridge"], arch == "x86")
+                return {u["name"]: u["bridge"]["runtime_exports"] for u in units}
             x86, x64, arm64 = exports("x86"), exports("x64"), exports("arm64")
             self.assertEqual(x86["D3d9Runtime"]["parameter_counts"]["D3DPERF_EndEvent"], 0)
             self.assertEqual(arm64["Cfgmgr32Runtime"]["parameter_counts"]["SwDeviceCreate"], 8)
@@ -104,6 +109,13 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             self.assertEqual(arm64["LockdownPolicy"]["parameter_counts"][reset], 0)
             self.assertNotEqual(x64["DisplayControl"]["image_sha256"],
                                 arm64["DisplayControl"]["image_sha256"])
+
+    def test_runtime_archive_refuses_same_arity_with_the_wrong_x86_linker_spelling(self):
+        symbols = {"Read": {"_Read@4"}}
+        target = {"architecture": "x86"}
+        with self.assertRaisesRegex(ValueError, "cannot link"):
+            windows.flat.verify_linkage({"Read": ("@Read", "i32", "ptr")}, symbols, target)
+        windows.flat.verify_linkage({"Read": ('@"\\01_Read@4"', "i32", "ptr")}, symbols, target)
 
     def test_runtime_abi_rejects_truncating_an_unspecified_parameter_list(self):
         with tempfile.TemporaryDirectory() as tmp:

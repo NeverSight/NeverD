@@ -22,7 +22,8 @@
       "targets": {
         "x86": {
           "image_sha256": "20e2c93010771a529ae82b8122baf5e1d5ec24efc0649ea658b304a5a98d2aa5",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "AdvAPI32.Lib"
         },
         "x64": {
           "image_sha256": "bde5f0e6f36a706a8a2e0fab1b362eea267aa6ee9f18aab1f899f38888c21280",
@@ -50,7 +51,8 @@
       "targets": {
         "x86": {
           "image_sha256": "78250252f016973a2255f8d9aa19fdae424154634a005960196479233a13345a",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "amsi.lib"
         },
         "x64": {
           "image_sha256": "66f7a134f6a4d9fe63dd7d6ff88dded5796e4d5c7e33ba606dff4d87d9258c0d",
@@ -75,7 +77,8 @@
       "targets": {
         "x86": {
           "image_sha256": "c38fe87c23ef4c35807027681ed894b3b605b00c1a258637df8d24968705a45f",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "OneCoreUAP_downlevel.Lib"
         },
         "x64": {
           "image_sha256": "9ac3ea9a7b061460d621983ae4bebf4d36cc47e81c51fc07ac2853e8879685b4",
@@ -98,7 +101,8 @@
       "targets": {
         "x86": {
           "image_sha256": "c81c89be3b8fcff5cb76b96d481ac3208fda37cfe4a4693d43cfed25db4bf5b5",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "avifil32.Lib"
         },
         "x64": {
           "image_sha256": "9ce16f1915b22fbd6ecf8332a4531049ab67a3d97b1f4037415d2e90958e6925",
@@ -122,7 +126,8 @@
       "targets": {
         "x86": {
           "image_sha256": "ee79aeddf4fb7f9560ef3d07a8c4ae0eb9d3d3ad4ac629d5064874616bfb992c",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "bcp47mrm.Lib"
         },
         "x64": {
           "image_sha256": "ad49ca6522353da54ca117aedb839621233f1ce97dec3e3ec7739b06e29bc5ea",
@@ -153,7 +158,8 @@
       "targets": {
         "x86": {
           "image_sha256": "8440d611230b121f525033b26d6774ec781ba4339b34ff82bb21f3f54b2c6eb0",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "swdevice.lib"
         },
         "x64": {
           "image_sha256": "7fefd329b398827d6babf33973eaa2c0dc580fe1f3b291efa4793e795e4df8fa",
@@ -187,7 +193,8 @@
       "targets": {
         "x86": {
           "image_sha256": "cfaa414c7dfa942739c6b4d0e539ec313372b785935cca8713044d170777da5a",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "clfsw32.lib"
         },
         "x64": {
           "image_sha256": "3db655cea75b9a58ef6cadd339a215c1cbe2de827711dfc31457d304593f1ac3",
@@ -213,7 +220,8 @@
       "targets": {
         "x86": {
           "image_sha256": "3c15d9de1982c8ccf985a181eb1a688e4847d41283cb7b63fb981c5ada231f00",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "compstui.lib"
         },
         "x64": {
           "image_sha256": "f7a4a5243ee0e21bf426c77b0d3aac27afb4a2583102358040b6bcfd189fb2ff",
@@ -242,7 +250,8 @@
       "targets": {
         "x86": {
           "image_sha256": "5b57c93e8092fa4420360c7067e073a771fe7696bba72f460a644c9b8d1f6cb8",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "ComSvcs.Lib"
         },
         "x64": {
           "image_sha256": "c67f64745f886699a029028a8b0fc3eb8d6294665ea89ba646200a8eec1644e9",
@@ -269,7 +278,8 @@
       "targets": {
         "x86": {
           "image_sha256": "10244a6fbebde6a46c055d2011399ba5387aaff60931c0a10a794779c2f264fa",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Crypt32.Lib"
         },
         "x64": {
           "image_sha256": "c692af3f8741669cd1b517c461e80bce19ad6e8608c81066cde9786f17be0099",
@@ -301,7 +311,8 @@
       "targets": {
         "x86": {
           "image_sha256": "85603f5bb22f985e585c156a582574e41cc1c633931163a33d4f7c48600861b6",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "cryptui.lib"
         },
         "x64": {
           "image_sha256": "5e266a2a4020e13702d91fe37d49bfd4ce3c6143403793bfdb8e0903411aa818",
@@ -327,7 +338,8 @@
       "targets": {
         "x86": {
           "image_sha256": "7fa69ce0022452912fc332d5b26137cb5b9040b205e3a6996311ac5ee179160d",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "cscapi.lib"
         },
         "x64": {
           "image_sha256": "aeea7e32449005cd90d8a2883fca30869d19d0236c662aeb99a0ff71e3db535f",
@@ -351,7 +363,8 @@
       "targets": {
         "x86": {
           "image_sha256": "6d013bac984afd6affa05581b84d66dda964f328319c0d91ab48d9bf2e8ea6a3",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "d3d10_1.lib"
         },
         "x64": {
           "image_sha256": "86f371bd23f0f0ed3422c14d2d34a706c42948d174b811d14cd15e6f76bab245",
@@ -377,7 +390,8 @@
       "targets": {
         "x86": {
           "image_sha256": "e24fc34b7fe2519c183385032f8fb9040538b447795007365821abb1ae005c40",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "d3d11.lib"
         },
         "x64": {
           "image_sha256": "2359b84d482cc1b45966db45823aa6963bb58e16702ee3babc6b639597fa2539",
@@ -408,7 +422,8 @@
       "targets": {
         "x86": {
           "image_sha256": "210e52314d24bdc8492e5185674626225af2c030ff51d13c01155aedb2d248ad",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "d3d9.lib"
         },
         "x64": {
           "image_sha256": "05cca6e73ae6cb02c1513b78517e103742ac07e8580ff67225ba2260d2c9c12b",
@@ -431,7 +446,8 @@
       "targets": {
         "x86": {
           "image_sha256": "07a7aa27d4ee2f90effac07b7703393361365de29b3dc3220f0ebbbbb028ddca",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "d3dcompiler.lib"
         },
         "x64": {
           "image_sha256": "f642940ffb5dca7e548ba2270686798cf6b4c74b60e88bbb22f0991868cae3e5",
@@ -466,7 +482,8 @@
       "targets": {
         "x86": {
           "image_sha256": "f7b638a4baa5162b20a71ad703e4cb3097e8f0fb5a9174573ffe1d817de14b2d",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "davclnt.lib"
         },
         "x64": {
           "image_sha256": "710c6a468f06a8bb104a7c3f14fc4811f52d8b91d7f8b1adbd023bc7c79b833e",
@@ -492,7 +509,8 @@
       "targets": {
         "x86": {
           "image_sha256": "ba7f1b036cc8146f32c73faa7776594e626c5bb8758245950c99935d969c8bc9",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "DbgEng.Lib"
         },
         "x64": {
           "image_sha256": "33408b1f7f5c4325960040e2b643f444311d200add17bf4b7fc072a50f93f6f3",
@@ -521,7 +539,8 @@
       "targets": {
         "x86": {
           "image_sha256": "d24c374a10138e4ffdf7b2dd68cff5687d3dff28b2b15279a241788a12d51c55",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "ddraw.lib"
         },
         "x64": {
           "image_sha256": "c3a8f35dccf2da4ebb72e38d07dc44b0cd4b9571afdcf8455faaf0f0ebf2171a",
@@ -544,7 +563,8 @@
       "targets": {
         "x86": {
           "image_sha256": "0a3430ed37df42393de1163be540135116630bd4adb1ceea6c0282840265912c",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "deviceaccess.lib"
         },
         "x64": {
           "image_sha256": "064041a99ceea9a079ef0807b403f78e42adc420fad3f8adbcf8837fa4e60cc1",
@@ -572,7 +592,8 @@
       "targets": {
         "x86": {
           "image_sha256": "9857e276b9ec864d051abbc71368a22b7fcbfc6cd42e3a139e6776798b2c8396",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "DhcpCSvc6.Lib"
         },
         "x64": {
           "image_sha256": "177c5be020c643651ba871c6f7f60088fcf30988031f4c71ec32bd39a7ebf489",
@@ -595,7 +616,8 @@
       "targets": {
         "x86": {
           "image_sha256": "b287dd87985f07a4c23e39ede02ff6d4311d8ab7aa177fc29f5401dc1f8f5fbd",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "dinput8.lib"
         },
         "x64": {
           "image_sha256": "70c438b760ed306896f4d99b9a5f322e64fe000724729691a5673d59475dd431",
@@ -618,7 +640,8 @@
       "targets": {
         "x86": {
           "image_sha256": "faab22ac3d9db20a2de6bc6d0c6dc0cb5143112d0c01d34be144b2c9703661ca",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "dmprocessxmlfiltered.lib"
         },
         "x64": {
           "image_sha256": "d67096ba6e99884258fd30e1c098b64610cb852ae21faa6774b66639d6f8fc19",
@@ -670,7 +693,8 @@
       "targets": {
         "x86": {
           "image_sha256": "bfe9e5322a3e443b5b07b61a89565434443855e3930a39f743833130cb4a83b1",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "eappcfg.lib"
         },
         "x64": {
           "image_sha256": "3e919feaab9184a72260b6921c77603ca3a76ea30369038762d9cdbb4add1ef0",
@@ -712,7 +736,8 @@
       "targets": {
         "x86": {
           "image_sha256": "7a67fcfbd2792f94f3640c00ffe07e579d3bc685262017a846e3710281d324ef",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "eappprxy.lib"
         },
         "x64": {
           "image_sha256": "650641e94af4ebd6675aa95becaa2aadad1b2c88f71dbdcc6f7441d17e992d79",
@@ -736,7 +761,8 @@
       "targets": {
         "x86": {
           "image_sha256": "61fa70d82ac4a49070bd5f12546596c4e7deb313b8f3d5ade9604667438b03df",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "efswrt.lib"
         },
         "x64": {
           "image_sha256": "6c0538086d6fb6ed2a8c70b566d434d85e0e4e61542dc6a724726fa6fbf14522",
@@ -763,7 +789,8 @@
       "targets": {
         "x86": {
           "image_sha256": "4df69d443faecf963ec92063832fbaf4c578899f557a8a4e536d98d5cb4ccc81",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "ElsCore.lib"
         },
         "x64": {
           "image_sha256": "a5a60686d18f98bfe118944a36aa0dd0500ab492e1e3ba0901dad2ea2cb36c0d",
@@ -789,7 +816,8 @@
       "targets": {
         "x86": {
           "image_sha256": "b64dc51ae7deae051a122a1fa00729eafbf7d0976d7333c4ef5c42d4e23fb95f",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "FaultRep.Lib"
         },
         "x64": {
           "image_sha256": "4ef91c125bc88f631131cea9ccec3e2cbab3907f4b48ca4e2e04bcf0ed1807ba",
@@ -859,7 +887,8 @@
       "targets": {
         "x86": {
           "image_sha256": "5f032f51f9aacbe87726f1742b3510b4ae68e7b589d4f11241d7a77e58c8af00",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "fontsub.lib"
         },
         "x64": {
           "image_sha256": "6941caeded3476d0b2066770d95ed1a6363a5c070508ef17d5a8b8891fb1f4aa",
@@ -933,7 +962,8 @@
       "targets": {
         "x86": {
           "image_sha256": "f0c42611c13c3995fede747e932fcbe8db5dfb8efb8baddadbe62ec90af450cd",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Gdi32.Lib"
         },
         "x64": {
           "image_sha256": "b5f5a3f16d03366cdb02020fc4dadceb0892e243f8aa94d205e124045da9457f",
@@ -961,7 +991,8 @@
       "targets": {
         "x86": {
           "image_sha256": "a871a946d8e7b9c8d485a9ec4b04d473c9a7459af011b869bfa9f97944a94634",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "GPEdit.lib"
         },
         "x64": {
           "image_sha256": "3740334a1b8bde7cc6f1272b5a3ff4683e8f7a230d6a2022d5806ef5fa5eb338",
@@ -985,7 +1016,8 @@
       "targets": {
         "x86": {
           "image_sha256": "564e2f4eb0a68fc49c4cda49febf74b78d72774879f4b1394f2ec199174b1f34",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Icmui.Lib"
         },
         "x64": {
           "image_sha256": "5a8e287dfea8b07d146a08b1ec972f9bd56a77f088fb4e4cd90429a844cf60b2",
@@ -1068,7 +1100,8 @@
       "targets": {
         "x86": {
           "image_sha256": "695704813e5aa042bc3da681e67f0a939051953d960b206683262822fdd55dad",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "imgutil.Lib"
         },
         "x64": {
           "image_sha256": "e5ff846fe9c37f4ebb13d1f27d0189d59314986e3cd6c5e056c7186a87ba7d9a",
@@ -1143,7 +1176,8 @@
       "targets": {
         "x86": {
           "image_sha256": "77c42216cac648d0826f898c866395888c03407439f3e2782b96361bb93fbfc6",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "iscsidsc.lib"
         },
         "x64": {
           "image_sha256": "9e121f94602f8cbc555982480b3d51bdd68d74a9b189531fed81599996f93af0",
@@ -1189,7 +1223,8 @@
       "targets": {
         "x86": {
           "image_sha256": "d62d3ca4f677eb06ba81b1eba82f375c0c345f0e8f8097c92fc5e36e4d72294e",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "kernel32.Lib"
         },
         "x64": {
           "image_sha256": "4636f65d449b1353100578c6cb139933cf2b134f5e246119d18968873a058bed",
@@ -1211,7 +1246,9 @@
       "targets": {
         "x86": {
           "image_sha256": "c6a1e9e8114cdc89a8bf30b24a2f06cdfeb2277be1e3bc67c61088a9bf3de76c",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "keycredmgr.lib",
+          "default_calling_convention": "__stdcall"
         },
         "x64": {
           "image_sha256": "8418185247bf286a5c91de2ca8ad821f7ab34d567c17cea0a6252260b87aa730",
@@ -1241,7 +1278,8 @@
       "targets": {
         "x86": {
           "image_sha256": "dd28805fc6f5fd70ddc8c87fe1f5561d8614bdba65284cd6a7c0c73aea427a07",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "ksuser.lib"
         },
         "x64": {
           "image_sha256": "d284e0301679ecef1b763addd6bece589bb16e4b7d5c4fbe3d8684121e8f0b74",
@@ -1282,7 +1320,8 @@
       "targets": {
         "x86": {
           "image_sha256": "1fdb67d68b44c95d99affcb516223af477d820cf57052c37da07534145ac9211",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "mdmlocalmanagement.lib"
         },
         "x64": {
           "image_sha256": "7bf556f0bcd877e0f2983401b5725f790dc106280311bc9eb5576c0a5077a692",
@@ -1319,7 +1358,8 @@
       "targets": {
         "x86": {
           "image_sha256": "d689ddffe0e08173564b003eb4f37962231583c9ddcaea42fb06ca1059223db4",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Mf.lib"
         },
         "x64": {
           "image_sha256": "7aed8616c10fefddcb444514c13d32de9002e559f0e4bd0eb5b8abc6534f34fc",
@@ -1342,7 +1382,9 @@
       "targets": {
         "x86": {
           "image_sha256": "581be1eb6bc4f78b9d45bfa207a69c3c826da42bef5848c147ad66c1f2b967bf",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Mfplat.lib",
+          "default_calling_convention": "__stdcall"
         },
         "x64": {
           "image_sha256": "e8c6b702173aba871d64bafab609d92cba6f167eaba8211a3546bf0ed7a5dda0",
@@ -1365,7 +1407,8 @@
       "targets": {
         "x86": {
           "image_sha256": "79bc66abc8760be1941e753480ba53a8e14dcaef8342fc78178eab6c777e1df3",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "mfplay.lib"
         },
         "x64": {
           "image_sha256": "05d862fd65d33b536e247f978fa98ed2b5bad477da052b8d8cb1b1fca5b18d60",
@@ -1412,7 +1455,8 @@
       "targets": {
         "x86": {
           "image_sha256": "c81a41b50c0dfaad98805342e1b3eba6068479a91719c1d8efc3ba11001bf5af",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "MgmtAPI.Lib"
         },
         "x64": {
           "image_sha256": "601b02e4a5bcfb3e898482dee4a7707eb5335731b79eeeb7bc003e1c4f39cd12",
@@ -1435,7 +1479,8 @@
       "targets": {
         "x86": {
           "image_sha256": "7e3cda9567930fe1d802c1008c28e02ebc08018fbfd1166b67518e9171857ff1",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "mi.lib"
         },
         "x64": {
           "image_sha256": "2272e87c90837df2f2945c38e33f6feddd7b3daf9cb37932d6e258ffd57f609f",
@@ -1482,7 +1527,9 @@
       "targets": {
         "x86": {
           "image_sha256": "dd378cbc3424eb958da4c78babc0dffa44e5ab10a304b37f0df82161cc013512",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Mpr.Lib",
+          "default_calling_convention": "__stdcall"
         },
         "x64": {
           "image_sha256": "c88767385db737683142ef952a595ca9d882bafc6fb1d327651bee8fa0acc55b",
@@ -1509,7 +1556,8 @@
       "targets": {
         "x86": {
           "image_sha256": "2b6210bea16faf41d2797f2ecc93e9d2af336908f34da46e58028504051d2b06",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Mprapi.Lib"
         },
         "x64": {
           "image_sha256": "2be5548035e7767a3240e35bf6d5f19c7abe558c0877d2e40420ca2377f8facc",
@@ -1534,7 +1582,8 @@
       "targets": {
         "x86": {
           "image_sha256": "be8b0c33b2f589e0d4a9ae7e5017040031651fd36e83a9d37c4b09e55837594d",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Mscms.Lib"
         },
         "x64": {
           "image_sha256": "05de48bbd8b2a4c5d1d147ef6adaf992de2bee022094a0f986ed946d320d6690",
@@ -1559,7 +1608,8 @@
       "targets": {
         "x86": {
           "image_sha256": "c5c8f2baba352c06ba396bc37a8e8905899bb616a3dc17a1527466db92dfd5fc",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "MsCtfMonitor.lib"
         },
         "x64": {
           "image_sha256": "7411b79f473403d920d7d05568b63445dc2ae6d948d0a79197faa3c2d289f113",
@@ -1594,7 +1644,8 @@
       "targets": {
         "x86": {
           "image_sha256": "ee1efd4467be4246a368c94eb74bb205c0050e846559bbd7db8b98d5ba76f148",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "msdmo.lib"
         },
         "x64": {
           "image_sha256": "155cb3e8e57d23234708471e3cdde5bae48eb25aa3b6949d6aad03dc3eca3574",
@@ -1625,7 +1676,8 @@
       "targets": {
         "x86": {
           "image_sha256": "ca94401d7739df4a4e7e8759aa66cb640334ba248b4f8655805410a575dcbcb3",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "mspatchc.lib"
         },
         "x64": {
           "image_sha256": "4dab8cad76bcd7fb4d8d7c27fc96e52182f6f5e80cf7896c07b01817636f698b",
@@ -1654,7 +1706,8 @@
       "targets": {
         "x86": {
           "image_sha256": "dbbc37e32d66a27f1f4a174b3f237859ef1d770260c836d9856035d988350b11",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "msports.lib"
         },
         "x64": {
           "image_sha256": "93247247d9c3a7268c0638ecca1fdf31a161e028ad89e9dd5d71b97131113797",
@@ -1695,7 +1748,8 @@
       "targets": {
         "x86": {
           "image_sha256": "9dbbd6d2fda114e2e2827f566b83efe90dabfe599d95361c515eedea325472c4",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "MSRating.Lib"
         },
         "x64": {
           "image_sha256": "d83a2e45c5d59df3e1cddf1182ac32114425759e93709fcd5360e572af079773",
@@ -1748,7 +1802,8 @@
       "targets": {
         "x86": {
           "image_sha256": "a521d6b2a6684b4c50bef0335e61546d998f30680378ff11a8ffbbf782a7af9d",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "msvfw32.Lib"
         },
         "x64": {
           "image_sha256": "7e09b985d0ce2e6cab125bfb88ea3f3f85e9de065bcf2c140c7ba6ca82ad5dc0",
@@ -1783,7 +1838,8 @@
       "targets": {
         "x86": {
           "image_sha256": "7737de64a4d0e2dd42343cfb6720744d9d54420e08bc69f13bf5f739de65c61d",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "MsWSock.Lib"
         },
         "x64": {
           "image_sha256": "c9e2f1db19b8cf9de4fec0425c43cf221c3b65db1d0eb43d5f0563474bce2909",
@@ -1806,7 +1862,8 @@
       "targets": {
         "x86": {
           "image_sha256": "d453924833a72516ee691412cf384c5b21673f892e9063641b1fe4cedb4865d2",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "mtxdm.lib"
         },
         "x64": {
           "image_sha256": "8f88d3ac38a38ff107f1bea0206fa2b6bbb2407ba100ee1837d4ae8c9e06dbc8",
@@ -1856,7 +1913,8 @@
       "targets": {
         "x86": {
           "image_sha256": "baeb10cd5b9a00a47f6fc53cf088f6cf708d18a499fbb66457f8dd82f641b368",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "ntdll.lib"
         },
         "x64": {
           "image_sha256": "36b1a62e4bf6bf7d68458fff6e8a33b39f6527ec6a46e55ecdd12cde83894c8d",
@@ -1883,7 +1941,8 @@
       "targets": {
         "x86": {
           "image_sha256": "e9de064ab731d6e8d6c88a974ff51c9ecb469564d4c1cf046b3b1924890c9bab",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "ntlanman.lib"
         },
         "x64": {
           "image_sha256": "64ee1a30e7e2775b4c31aeea74d888a64544b8f198c2eee94c81b3f9a6e7e9b6",
@@ -1907,7 +1966,8 @@
       "targets": {
         "x86": {
           "image_sha256": "60bc39af69692154c27788a7facd84648febb4151966751d06c95b46c09b7b2e",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Ole32.Lib"
         },
         "x64": {
           "image_sha256": "4a7b8ed9f2aeca875f948d9a1bce8b8d177744475f253704362792d7182d55f2",
@@ -1934,7 +1994,8 @@
       "targets": {
         "x86": {
           "image_sha256": "e4abff60b7e034914390007a9119a63e03fff7fb69bb455138236bce89d5c94e",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "ondemandconnroutehelper.lib"
         },
         "x64": {
           "image_sha256": "2dbe0374cc23f11f663e72b6b9b8209041570b6604dc946fc092705d38b36c0c",
@@ -1958,7 +2019,8 @@
       "targets": {
         "x86": {
           "image_sha256": "efb091f71c099534c72b8711b3d034094a4067fbf201a3b3596b1ce9b9339085",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "quartz.lib"
         },
         "x64": {
           "image_sha256": "e8eacee085b3ace74088060e5f8f9d2127b7c96f533a487fbe8f998ca6761146",
@@ -1984,7 +2046,8 @@
       "targets": {
         "x86": {
           "image_sha256": "6651a74da5872aa670bf9be53047bf02d6b67797a512bb685582742a6ba5d610",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "NtQuery.Lib"
         },
         "x64": {
           "image_sha256": "c627ddc66f835bf1b55ccbbb7f838ebb0a20c77e0b0bc05f707438ea9df2469c",
@@ -2017,7 +2080,9 @@
       "targets": {
         "x86": {
           "image_sha256": "ecce24cd3cef65e48ef5c299074a9bbae8a33f1d7c2433eb0d90e9a20bf7e578",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "resutils.lib",
+          "default_calling_convention": "__stdcall"
         },
         "x64": {
           "image_sha256": "dabb1fef3075981d33b63bc125f1da568b30988dfb74453cd84e7c44fbd9c5c6",
@@ -2041,7 +2106,8 @@
       "targets": {
         "x86": {
           "image_sha256": "07839fdd20e9524fdd1d154f0c32a8289f719f2ea268d07857d98b903804522b",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "RpcRT4.Lib"
         },
         "x64": {
           "image_sha256": "b9decb81fcf8ef9a6b674072da5676322b925c73b3c8c9253805db7510d9c493",
@@ -2080,7 +2146,9 @@
       "targets": {
         "x86": {
           "image_sha256": "32007a77ad4315f7bcaf64c82ed904afeba394fff9c90d88c76c9fafe63efe38",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Rtm.Lib",
+          "default_calling_convention": "__stdcall"
         },
         "x64": {
           "image_sha256": "20fb33c442ec1ecac170d05e1b557c5114ea80802055ed11055e963d85b6dc09",
@@ -2103,7 +2171,8 @@
       "targets": {
         "x86": {
           "image_sha256": "b5c5970704ec006c7fc2c88301161ac158ce4e9ee08634755e3687556f8d64a9",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "sas.lib"
         },
         "x64": {
           "image_sha256": "7d78f5e2102c8e12b591e8c38c95f400a4b3cc3ce911f26b9453d5aaf7f8532d",
@@ -2127,7 +2196,8 @@
       "targets": {
         "x86": {
           "image_sha256": "90e1ccf2764e5f70bfc7c6b6c7bb7d29714c419a97f6d7a01bbfc87f9514063e",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "slc.lib"
         },
         "x64": {
           "image_sha256": "8628e22850356640d33e5cbd7f4a5699785c3792131c9e7d9a37352b1b2d9cb7",
@@ -2150,7 +2220,8 @@
       "targets": {
         "x86": {
           "image_sha256": "8ea06003522d6c637bad885c63c00caeb59c1d8b9c7e02817c90723cdcf18a8b",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "slwga.lib"
         },
         "x64": {
           "image_sha256": "20f76a3e051cdc46c8ccf77e4128f210e9778fbec501d19f81ba81e61f815859",
@@ -2250,7 +2321,9 @@
       "targets": {
         "x86": {
           "image_sha256": "ad77972e6cbc273a58b35c725168e88dea2c2ab3e915d16f851dba7d2b98ce6d",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "srpapi.lib",
+          "default_calling_convention": "__stdcall"
         },
         "x64": {
           "image_sha256": "2d031c6965bf307399e5b5307d33206738636df55ad97607f5a75141c1d0e6ca",
@@ -2276,7 +2349,8 @@
       "targets": {
         "x86": {
           "image_sha256": "979a5274bf7f760b83f6c5fdcccc262618c1dd41424b018387ba52a29ba0b339",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "Sti.Lib"
         },
         "x64": {
           "image_sha256": "5a20d3ad955715e2dafc3fef7f498d0ef71b06f2f4cda1c75349b03ded0d59df",
@@ -2308,7 +2382,8 @@
       "targets": {
         "x86": {
           "image_sha256": "dc472bcdef413022290805b91acd29d7d456655f8f78abf3bd2416cf41120e8e",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "tokenbinding.lib"
         },
         "x64": {
           "image_sha256": "65ffb0b3dd6aedd3a78a61a71be95bb77e2653fdf8b710306c07897c9000d438",
@@ -2340,7 +2415,8 @@
       "targets": {
         "x86": {
           "image_sha256": "f96ca53f2e7df341ef752f112571ecf7e8d44d0a67ccdc9c5d3fe7079fd09d82",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "txfw32.lib"
         },
         "x64": {
           "image_sha256": "ba00c1d623677d8cc119945c5729c5fc8edfa7fa8a45293d74c73518734a98d8",
@@ -2374,7 +2450,8 @@
       "targets": {
         "x86": {
           "image_sha256": "2bd19b9d79a354d7c2ccd4593f104839e98ab3ffc68d64e1f21b97f8c7a78dc9",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "User32.Lib"
         },
         "x64": {
           "image_sha256": "82870be1e008d5232cb175ebc815f645a2add4c0b164fd4ba20744192c1c81f7",
@@ -2452,7 +2529,8 @@
       "targets": {
         "x86": {
           "image_sha256": "59289a4e20a4bbf5be345a30bd1aefafcd10d3d323e681018904280b325a1616",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "windows.data.pdf.lib"
         },
         "x64": {
           "image_sha256": "d632d345f54e0ecd6fe37e92d3c6f5d23e0744bc195c5abeb891b3a168ec2eb9",
@@ -2475,7 +2553,8 @@
       "targets": {
         "x86": {
           "image_sha256": "8c2f633db21a04d17d465898ed387b44f0f74f7ed45c6843589fb1e286a3fd1b",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "windows.networking.lib"
         },
         "x64": {
           "image_sha256": "88de4d4a3c288564112dda38f624cf0b4b8a03f8a200197ac7e5a85ca4cad8a0",
@@ -2530,7 +2609,8 @@
       "targets": {
         "x86": {
           "image_sha256": "ee1ef1f05ef33b288e1f1d379c2c0ff019a9fac02c2d97d9888b36dcbcc17ecf",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "windowscodecs.lib"
         },
         "x64": {
           "image_sha256": "1c0dfa27db2b4af2e26d822badb470800a2c547554e6b23cf5f76108e475e005",
@@ -2565,7 +2645,8 @@
       "targets": {
         "x86": {
           "image_sha256": "12e7dd0c6cda6a3c172da583adb558b5446807388f37717d6e411ccb31109fad",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "wininet.Lib"
         },
         "x64": {
           "image_sha256": "948589c349b0205ff73c7049b0d2e5c4faffb64271c64ee0033e384f61cf51d6",
@@ -2588,7 +2669,8 @@
       "targets": {
         "x86": {
           "image_sha256": "8de8a4f1d908ea3ac48014b7e3c0677246b9f1dbc08002fb082d4efdc6180cd9",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "winml.lib"
         },
         "x64": {
           "image_sha256": "8883c4a1ef1f5c9b8bdd82d64e8cf0e4bb70c37295baadf2260d377643620362",
@@ -2615,7 +2697,8 @@
       "targets": {
         "x86": {
           "image_sha256": "6729816e459be41ae1726438b95d207a3a626ff7b87ebeb8d569f740dcbc7f51",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "WinMM.Lib"
         },
         "x64": {
           "image_sha256": "ead9055dc522bcab041c8eb7b875adb681a2f1fa851d4075789d78d0242711a0",
@@ -2648,7 +2731,8 @@
       "targets": {
         "x86": {
           "image_sha256": "2d9132e23f97213c08864ef27f69da25fde9b5ba6d8dbd142204ea0a48e3c4c2",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "wmvcore.lib"
         },
         "x64": {
           "image_sha256": "fb9abb0711d3d0cee1829c6ddcbd46829b9197a1f1aa0aa634e085ce7df2ddca",
@@ -2676,7 +2760,8 @@
       "targets": {
         "x86": {
           "image_sha256": "06bb406ee7f35d74fee2bbb7e715e215b126ac15e1ae152d4898dadeb38da2e8",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "wscapi.lib"
         },
         "x64": {
           "image_sha256": "5b97d3eec44f53e2a373004cfb52830d082b3dfc039fcb3af39af878ea618613",
@@ -2699,7 +2784,8 @@
       "targets": {
         "x86": {
           "image_sha256": "0f936043b11a3dabfd8f8270f0477ef0cdfebc68be12882abe17b6c02d2e940d",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "WtsApi32.Lib"
         },
         "x64": {
           "image_sha256": "70c4f49b0851fc7353deb25a6cb95ef52646b7f08bfe20a5ed62536737d12fdc",
@@ -2749,7 +2835,8 @@
       "targets": {
         "x86": {
           "image_sha256": "d5562603962f0e7e12893a734c6614b88179293d7e65785747c61c75ff1ff668",
-          "additional_exports": {}
+          "additional_exports": {},
+          "import_library": "xpsprint.lib"
         },
         "x64": {
           "image_sha256": "298295464ac3da34dbee585b908a00e7eff054eb981d3ec37ae421aab9419a69",
