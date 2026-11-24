@@ -1852,6 +1852,11 @@ conditional memory, invocation lifetime and both C routes remain open.
   survive two-arm branch rendering. Compile-time regressions cover the
   comparison results and branch direction.
 
+- HighC truth tests retain the low bytes read from a wider parameter and
+  distinguish floating negative zero from its integer bit pattern. Double
+  negation yields 0 or 1 in value expressions. Compile-time regressions
+  include narrowing a 128-bit input to 64 bits and testing a bitwise flag mask.
+
 - Typed scalar expressions now distinguish LLVM width from the promoted C
   type and operator precedence. Redundant unsigned casts are omitted, while
   narrow wrapping, signed interpretation and widened arithmetic/shift carriers
