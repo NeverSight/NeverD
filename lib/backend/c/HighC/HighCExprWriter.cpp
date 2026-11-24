@@ -9191,8 +9191,11 @@ std::string HighCWriter::formatReturnExpr(const HighExpr &Expr) {
         !Raw->Operands.empty() && Raw->Operands[0] && Raw->Operands[0]->Type &&
         Raw->Operands[0]->Type->Size == FuncReturnType->Size)
       Raw = Raw->Operands[0].get();
+    // Integer bits are the float's: those of a vector register, wider than
+    // the float, hold it in their low bytes.  C converts an integer it
+    // returns as a float numerically, so they are reinterpreted.
     if (Raw->Type && Raw->Type->Kind == NdTypeKind::Int &&
-        Raw->Type->Size == FuncReturnType->Size) {
+        Raw->Type->Size >= FuncReturnType->Size) {
       auto RawType = NdType::makeInt(FuncReturnType->Size, false);
       return "__builtin_bit_cast(" + typeToC(FuncReturnType) + ", (" +
              typeToC(RawType) + ")(" + exprStr(*Raw) + "))";

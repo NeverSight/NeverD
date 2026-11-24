@@ -79,6 +79,11 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   // result each reads.  Each function is its own.
   std::vector<std::map<uint32_t, va_t>> Calls(N);
   std::vector<std::map<uint32_t, GoCallShape>> FirstReads(N);
+  // Go numbers its integer and floating results apart (goCallResultsRead's
+  // BothBanks): a call the type pass gave a floating value returns X0, and
+  // its readers may take RAX beside it.  The calls of each function whose
+  // value is X0 alone.
+  std::vector<std::set<uint32_t>> FloatValues(N);
   parallelForEachWeighted(Weights, [&](auto Claim, size_t Count) {
     for (size_t I; (I = Claim()) < Count;) {
       const MedFunc &Func = Funcs[I];
@@ -117,13 +122,21 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
                   *Op.RegisterReturnFields, [&](const MedReturnReg &F) {
                     return !F.IsFP && goResultPosition(A, F.RegOff) >= 0;
                   });
-          if (ModelledAlone || GoFields) {
+          const bool FloatValue =
+              Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
+              !Op.RegisterReturnFields &&
+              goFloatResultPosition(A, Op.Output.RegOff) == 0;
+          if (ModelledAlone || GoFields || FloatValue) {
             Calls[I].emplace(Op.CallSiteId, Callee);
             Sites.insert(Op.CallSiteId);
+            if (FloatValue)
+              FloatValues[I].insert(Op.CallSiteId);
           }
         }
       if (!Sites.empty())
-        FirstReads[I] = goCallResultsRead(Func, A, Sites);
+        FirstReads[I] = goCallResultsRead(Func, A, Sites, {},
+                                          /*Floats=*/false,
+                                          /*BothBanks=*/true);
     }
   });
   if (llvm::all_of(Calls, [](const auto &Sites) { return Sites.empty(); }))
@@ -144,10 +157,21 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
     for (size_t Position = 0; Position < Read.Widths.size(); ++Position)
       Known.Widths[Position] =
           std::max(Known.Widths[Position], Read.Widths[Position]);
-    if (Read.Last <= Known.Last)
-      return false;
-    Known.Last = Read.Last;
-    return true;
+    if (Known.FloatWidths.size() < Read.FloatWidths.size())
+      Known.FloatWidths.resize(Read.FloatWidths.size(), 0);
+    for (size_t Position = 0; Position < Read.FloatWidths.size(); ++Position)
+      Known.FloatWidths[Position] =
+          std::max(Known.FloatWidths[Position], Read.FloatWidths[Position]);
+    bool Grew = false;
+    if (Read.LastFloat > Known.LastFloat) {
+      Known.LastFloat = Read.LastFloat;
+      Grew = true;
+    }
+    if (Read.Last > Known.Last) {
+      Known.Last = Read.Last;
+      Grew = true;
+    }
+    return Grew;
   };
   const auto Raise = [&](size_t I,
                          const std::map<uint32_t, GoCallShape> &Read) {
@@ -176,14 +200,15 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
     std::set<uint32_t> Sites;
     for (const auto &[Site, Target] : Calls[I])
       Sites.insert(Site);
-    return Raise(I, goCallResultsRead(Funcs[I], A, Sites, Returned[I]));
+    return Raise(I, goCallResultsRead(Funcs[I], A, Sites, Returned[I],
+                                      /*Floats=*/false, /*BothBanks=*/true));
   };
   for (bool Grew = true; Grew;) {
     Grew = false;
     for (const auto &[Entry, Shape] : std::map<va_t, GoCallShape>(Callee)) {
       const int Last = Shape.Last;
       const auto Found = ByEntry.find(Entry);
-      if (Found == ByEntry.end() || Last <= 0)
+      if (Found == ByEntry.end() || (Last <= 0 && Shape.LastFloat < 0))
         continue;
       const size_t I = Found->second;
       const auto &ById = BlocksOf(I);
@@ -192,7 +217,39 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
       for (const MedBlock &Block : Funcs[I].Blocks) {
         if (Block.Ops.empty() || Block.Ops.back().Opcode != NdOp::RETURN)
           continue;
-        for (int Position = 1; Position <= Last; ++Position) {
+        // Floating results: what a call returns there is that call's.
+        for (int Position = 0; Position <= Shape.LastFloat; ++Position) {
+          const GoReturnedValue Value =
+              goReturnedValue(ById, Block, goFloatResultRegister(A, Position),
+                              A, /*Floating=*/true);
+          if (Value.What == GoReturnedValue::Phi) {
+            if (llvm::none_of(Values, [&](const MedVar &V) {
+                  return identity(V) == identity(*Value.Value);
+                }))
+              Values.push_back(*Value.Value);
+            continue;
+          }
+          if (Value.What != GoReturnedValue::Call)
+            continue;
+          const auto Site = Calls[I].find(Value.Caller->CallSiteId);
+          if (Site == Calls[I].end())
+            continue;
+          GoCallShape Forwarded;
+          Forwarded.LastFloat = Position;
+          Forwarded.FloatWidths.assign(Position + 1, 0);
+          Forwarded.FloatWidths[Position] =
+              static_cast<size_t>(Position) < Shape.FloatWidths.size() &&
+                      Shape.FloatWidths[Position] == 4
+                  ? 4
+                  : 8;
+          Grew |= Merge(Site->second == InvalidVA ? Indirect[{I, Site->first}]
+                                                  : Callee[Site->second],
+                        Forwarded);
+        }
+        // RAX is every call's result but one valued X0's, which a record
+        // with floats in it then takes too.
+        for (int Position = Shape.LastFloat >= 0 ? 0 : 1; Position <= Last;
+             ++Position) {
           const GoReturnedValue Value =
               goReturnedValue(ById, Block, Results[Position], A);
           if (Value.What == GoReturnedValue::Phi) {
@@ -243,9 +300,21 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
     const auto Shape = Callee.find(Found->second);
     return Shape == Callee.end() ? nullptr : &Shape->second;
   };
+  // The last integer result a call returns, RAX for one whose value it is,
+  // and the last floating one, X0 for one whose value that is; a record
+  // with floats in it may hold no integer result.
   const auto CallResults = [&](size_t I, uint32_t Site) {
     const GoCallShape *Shape = ShapeOf(I, Site);
-    return Shape ? std::max(Shape->Last, 0) : 0;
+    const bool FloatValue = FloatValues[I].count(Site);
+    if (!Shape)
+      return FloatValue ? -1 : 0;
+    return Shape->LastFloat >= 0 || FloatValue ? Shape->Last
+                                               : std::max(Shape->Last, 0);
+  };
+  const auto CallFloatResults = [&](size_t I, uint32_t Site) {
+    const GoCallShape *Shape = ShapeOf(I, Site);
+    const int Value = FloatValues[I].count(Site) ? 0 : -1;
+    return Shape ? std::max(Shape->LastFloat, Value) : Value;
   };
   struct Definitions {
     llvm::DenseMap<ValueKey, const MedOp *> Ops;
@@ -317,17 +386,81 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
     }
     return true;
   };
+  // Each return supplies the floating result at \p Position the same way:
+  // the vector register's newest write, a parameter the function leaves
+  // unchanged, or what a call it makes returns there.
+  const auto FloatSupplied = [&](size_t I, int Position) {
+    const MedFunc &Func = Funcs[I];
+    const uint64_t Register = goFloatResultRegister(A, Position);
+    const bool Parameter = llvm::any_of(Func.Params, [&](const MedVar &P) {
+      return P.Kind == MedVar::Param && P.RegOff == Register;
+    });
+    const Definitions &Def = DefinitionsOf(I);
+    std::set<ValueKey> Seen;
+    std::function<bool(const MedVar &)> Value = [&](const MedVar &V) {
+      const ValueKey Key = identity(V);
+      if (!Seen.insert(Key).second)
+        return true;
+      if (const auto Site = Def.Clobbered.find(Key);
+          Site != Def.Clobbered.end())
+        return CallFloatResults(I, Site->second) >= Position;
+      if (const auto Phi = Def.Phis.find(Key); Phi != Def.Phis.end())
+        return llvm::all_of(Phi->second->Args,
+                            [&](const auto &Arg) { return Value(Arg.second); });
+      if (const auto Op = Def.Ops.find(Key); Op != Def.Ops.end())
+        return !entryCopy(*Op->second) || Parameter;
+      return V.Kind != MedVar::Reg || Parameter;
+    };
+    const auto &ById = BlocksOf(I);
+    for (const MedBlock &Block : Func.Blocks) {
+      if (Block.Ops.empty() || Block.Ops.back().Opcode != NdOp::RETURN)
+        continue;
+      const GoReturnedValue Returned =
+          goReturnedValue(ById, Block, Register, A, /*Floating=*/true);
+      bool Ok = false;
+      switch (Returned.What) {
+      case GoReturnedValue::Defined:
+      case GoReturnedValue::Phi:
+        Ok = Value(*Returned.Value);
+        break;
+      case GoReturnedValue::Call:
+        Ok = CallFloatResults(I, Returned.Caller->CallSiteId) >= Position;
+        break;
+      case GoReturnedValue::Entry:
+        Ok = Parameter;
+        break;
+      case GoReturnedValue::Unknown:
+        break;
+      }
+      if (!Ok)
+        return false;
+    }
+    return true;
+  };
+  // A record with floats in it holds the results each bank's prefix that
+  // every return supplies, which may hold no integer one; one of integers
+  // alone keeps RAX.
   for (bool Shrank = true; Shrank;) {
     Shrank = false;
     for (auto &[Entry, Shape] : Callee) {
       const auto Found = ByEntry.find(Entry);
-      if (Found == ByEntry.end() || Shape.Last <= 0)
+      if (Found == ByEntry.end() || (Shape.Last <= 0 && Shape.LastFloat < 0))
         continue;
+      if (Shape.LastFloat >= 0) {
+        int Supply = -1;
+        while (Supply < Shape.LastFloat &&
+               FloatSupplied(Found->second, Supply + 1))
+          ++Supply;
+        if (Supply < Shape.LastFloat) {
+          Shape.LastFloat = Supply;
+          Shrank = true;
+        }
+      }
       int Supply = -1;
       while (Supply < Shape.Last && Supplied(Found->second, Supply + 1))
         ++Supply;
       if (Supply < Shape.Last) {
-        Shape.Last = std::max(Supply, 0);
+        Shape.Last = Shape.LastFloat >= 0 ? Supply : std::max(Supply, 0);
         Shrank = true;
       }
     }
@@ -347,7 +480,20 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
               : 0;
       Result.Widths.push_back(Width ? Width : Word);
     }
+    // Each float a float32 where every reader takes four bytes, else a
+    // float64.
+    Result.LastFloat = Shape.LastFloat;
+    for (int Position = 0; Position <= Shape.LastFloat; ++Position)
+      Result.FloatWidths.push_back(static_cast<size_t>(Position) <
+                                               Shape.FloatWidths.size() &&
+                                           Shape.FloatWidths[Position] == 4
+                                       ? 4
+                                       : 8);
     return Result;
+  };
+  // Two results or more make a record.
+  const auto Record = [](const GoCallShape &Shape) {
+    return Shape.Last + Shape.LastFloat >= 0;
   };
   // Each function's calls return what their callees do, rewritten in the
   // function alone.
@@ -356,7 +502,7 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
       std::map<uint32_t, GoCallShape> Shapes;
       for (const auto &[Site, Target] : Calls[I])
         if (const GoCallShape *Shape = ShapeOf(I, Site);
-            Shape && Shape->Last > 0)
+            Shape && Record(*Shape))
           Shapes.emplace(Site, Settled(*Shape));
       if (!Shapes.empty())
         defineGoCallResults(Funcs[I], A, Shapes);
@@ -364,12 +510,15 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   });
   for (const auto &[Entry, Shape] : Callee) {
     const auto Found = ByEntry.find(Entry);
-    if (Found == ByEntry.end() || Shape.Last <= 0)
+    if (Found == ByEntry.end() || !Record(Shape))
       continue;
     const GoCallShape Fields = Settled(Shape);
     std::vector<MedReturnReg> Return;
     for (int Position = 0; Position <= Fields.Last; ++Position)
       Return.push_back({Results[Position], Fields.Widths[Position], false});
+    for (int Position = 0; Position <= Fields.LastFloat; ++Position)
+      Return.push_back({goFloatResultRegister(A, Position),
+                        Fields.FloatWidths[Position], true});
     Funcs[Found->second].MultiReturn = std::move(Return);
   }
 }

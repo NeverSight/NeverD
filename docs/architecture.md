@@ -5745,6 +5745,10 @@ debug signature is not positional and therefore cannot declare that flat call.
 Scalar temporaries used through a same-width floating view may be declared as
 float or double; integer uses still reinterpret their bits. Conflicting widths,
 address-taken storage and explicit type edits keep their existing declarations.
+A function returning a float returns the bits it holds reinterpreted,
+those of a vector register wider than the float from their low bytes:
+`runtime.floor` returned `v1 ^ 0x8000000000000000`, its 16-byte value with
+the sign flipped, as C's numeric conversion of that integer.
 Readonly floating constants and constant conditional-move arms print as
 floating values while retaining the original condition. Shared floating
 computations remain materialized through register-width views, preserving FMA
@@ -6462,8 +6466,25 @@ float32 or a float64 as its widest read takes (`GoCallShape::LastFloat`): a
 func value returning a float64 left X0 to a read of what the call clobbered.
 A record holds as many as Go returns: up to nine integer and fifteen floating
 results on amd64, sixteen of each on arm64 (`kSourceMaxRegisterReturnMembers`).
-Direct calls, whose callee returns their record, still return integer results
-alone. RDX, the closure context, is no result of such a call; read as System
+Direct calls return floating results too, the two banks counted apart, each
+from its first register (`goCallResultsRead` with `BothBanks`): a call the
+type pass gave a floating value returns X0 (arm64 F0), and a read of RAX
+beside it is a result as well, while the RAX conversion gives every call is
+one only where something reads it, a return's default operand aside. A
+record of floats alone holds no integer field: `runtime.modf` returns `{X0,
+X1}`, and `runtime.(*scavengerState).run`, typed `double`, returns `{RAX,
+X0}`, whose RAX `bgscavenge` read as what the call clobbered. Each floating
+result must be supplied by every return as an integer one is
+(`goReturnedValue` with `Floating`): the vector register's newest write of
+four bytes or more, as MOVSD's, its PHI, a call that returns it, or an
+argument the path leaves unchanged; a function returns no float a return
+leaves undefined, though a caller reads the register, and a single result is
+no record. The struct-return heuristic leaves calls into Go code to this
+authority (`modelCallStructReturn`): from one block's reads and the return's
+default RAX it gave `modf`'s recursive call `{RAX, X0, X1}`, which
+`recoverStructReturnFromCallers` then gave `modf`, while `runtime.floor`, which
+reads X1 after the call and X0 only below a branch, kept a call of RAX and
+printed `return runtime_modf(arg0);` from a `double` function. RDX, the closure context, is no result of such a call; read as System
 V's second result, it gave one a field. A shape other than the
 platform's integer pair is a record at a call as in the function it calls
 (`integerReturnPair`): arm64 printed `__int128` at each call of a function
@@ -6526,10 +6547,9 @@ function computed (`returnsGoResults`).
 No register carries a value into Go code but its arguments. A field of a
 register record that a return leaves as the function was entered with, where
 no argument arrives, is therefore unknown, in a record with floating fields
-too (`NdOpReturnLowering`): `runtime.modf` returns X0 and X1, and RAX beside
-them only where its own call left it. Its return that two paths reach with
-RAX untouched hands back an unknown value there. Before, the lowering found
-no value and refused the function once its growth path was gone.
+too (`NdOpReturnLowering`). Before, the lowering found no value and refused
+such a function once its growth path was gone: `runtime.modf`, while its
+record still held a RAX that two of its returns leave untouched.
 
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a

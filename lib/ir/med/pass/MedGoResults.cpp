@@ -64,13 +64,6 @@ int returnedLast(Arch A, const MedOp &Op) {
   return static_cast<int>(Integers) - 1;
 }
 
-/// The register of Go's floating result at \p Position on \p A.
-uint64_t goFloatResultRegister(Arch A, int Position) {
-  return A == Arch::X64
-             ? x86reg::VectorBase + uint64_t(Position) * x86reg::VectorRegStride
-             : a64reg::V0 + uint64_t(Position) * (a64reg::V(1) - a64reg::V0);
-}
-
 /// The floating results \p Op already returns: the position of the last, or
 /// -1 (returnedLast).
 int returnedLastFloat(Arch A, const MedOp &Op) {
@@ -83,13 +76,34 @@ int returnedLastFloat(Arch A, const MedOp &Op) {
   return Last;
 }
 
+/// Whether \p Op returns Go's first floating result alone, as its value:
+/// the call the type pass gives a callee whose result it found floating.
+bool goReturnsFloatAlone(Arch A, const MedOp &Op) {
+  return (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+         !Op.RegisterReturnFields && Op.Output.Kind == MedVar::Reg &&
+         Op.Output.Size && goFloatResultPosition(A, Op.Output.RegOff) == 0;
+}
+
 } // namespace
 
 GoReturnedValue
 goReturnedValue(const llvm::DenseMap<int, const MedBlock *> &ById,
-                const MedBlock &Block, uint64_t RegOff, Arch A) {
+                const MedBlock &Block, uint64_t RegOff, Arch A, bool Floating) {
   GoReturnedValue Found;
   const uint16_t Width = getTargetRegInfo(A).FullRegWidth;
+  // The write that defines the result: the whole general-purpose register,
+  // or four bytes of a vector register or more that are no view of its own
+  // value.
+  const auto Defines = [&](const MedOp &Op) {
+    if (Op.Opcode == NdOp::RETURN || Op.Output.Kind != MedVar::Reg ||
+        Op.Output.RegOff != RegOff)
+      return false;
+    if (!Floating)
+      return Op.Output.Size == Width;
+    return Op.Output.Size >= 4 &&
+           !(Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 1 &&
+             Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].RegOff == RegOff);
+  };
   std::set<int> Seen;
   llvm::SmallVector<const MedBlock *, 8> Work{&Block};
   while (!Work.empty()) {
@@ -97,8 +111,7 @@ goReturnedValue(const llvm::DenseMap<int, const MedBlock *> &ById,
     if (!Seen.insert(B->Id).second)
       continue;
     for (auto It = B->Ops.rbegin(); It != B->Ops.rend(); ++It) {
-      if (It->Opcode != NdOp::RETURN && It->Output.Kind == MedVar::Reg &&
-          It->Output.RegOff == RegOff && It->Output.Size == Width) {
+      if (Defines(*It)) {
         Found.What = It->Opcode == NdOp::COPY && It->NumInputs == 1 &&
                              identity(It->Inputs[0]) == identity(It->Output)
                          ? GoReturnedValue::Entry
@@ -116,7 +129,7 @@ goReturnedValue(const llvm::DenseMap<int, const MedBlock *> &ById,
       }
     }
     if (const PhiNode *Phi = aggregateReturnPhi(*B, RegOff);
-        Phi && Phi->Output.Size == Width) {
+        Phi && (Floating ? Phi->Output.Size >= 4 : Phi->Output.Size == Width)) {
       Found.What = GoReturnedValue::Phi;
       Found.Value = &Phi->Output;
       return Found;
@@ -137,6 +150,12 @@ int goResultPosition(Arch A, uint64_t RegOff) {
   const llvm::ArrayRef<uint64_t> Results = goIntegerArgumentRegisters(A);
   const auto *It = llvm::find(Results, RegOff);
   return It == Results.end() ? -1 : static_cast<int>(It - Results.begin());
+}
+
+uint64_t goFloatResultRegister(Arch A, int Position) {
+  return A == Arch::X64
+             ? x86reg::VectorBase + uint64_t(Position) * x86reg::VectorRegStride
+             : a64reg::V0 + uint64_t(Position) * (a64reg::V(1) - a64reg::V0);
 }
 
 int goFloatResultPosition(Arch A, uint64_t RegOff) {
@@ -160,17 +179,45 @@ int goFloatResultPosition(Arch A, uint64_t RegOff) {
 
 std::map<uint32_t, GoCallShape>
 goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
-                  llvm::ArrayRef<MedVar> Returned, bool Floats) {
+                  llvm::ArrayRef<MedVar> Returned, bool Floats,
+                  bool BothBanks) {
   // The result registers a reader may take past the first: Go's integer
-  // ones after RAX and, with Floats, its floating ones.
+  // ones after RAX and, with Floats, its floating ones.  With BothBanks RAX
+  // too, where a call's value is X0.
+  const bool Floating = Floats || BothBanks;
   const auto ResultRegister = [&](uint64_t RegOff) {
-    return goResultPosition(A, RegOff) > 0 ||
-           (Floats && goFloatResultPosition(A, RegOff) >= 0);
+    return goResultPosition(A, RegOff) > (BothBanks ? -1 : 0) ||
+           (Floating && goFloatResultPosition(A, RegOff) >= 0);
   };
   std::map<uint32_t, GoCallShape> Shapes;
   if (Sites.empty())
     return Shapes;
   const uint16_t Word = getTargetRegInfo(A).PointerSize;
+  // With BothBanks, the last result of each bank each call returns already
+  // (-1 for none), and the bytes of the float a call's value X0 holds.  A
+  // value X0 the type pass gave the call is a result; the RAX conversion
+  // gives every call is one where something reads it (RaxValues).
+  std::map<uint32_t, std::pair<int, int>> Returns;
+  std::map<uint32_t, uint16_t> FloatValueBytes;
+  std::map<uint32_t, MedVar> RaxValues;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (BothBanks &&
+          (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+          Sites.count(Op.CallSiteId)) {
+        std::pair<int, int> &Returned = Returns[Op.CallSiteId];
+        Returned = {-1, -1};
+        if (const int Last = returnedLast(A, Op); Last >= 0) {
+          Returned = {Last, returnedLastFloat(A, Op)};
+        } else if (Op.Output.Kind == MedVar::Reg &&
+                   goResultPosition(A, Op.Output.RegOff) == 0) {
+          RaxValues.emplace(Op.CallSiteId, Op.Output);
+        } else if (goReturnsFloatAlone(A, Op)) {
+          Returned.second = 0;
+          FloatValueBytes[Op.CallSiteId] =
+              Op.CalleeFloatReturnBytes == 4 ? 4 : 8;
+        }
+      }
   for (const MedBlock &Block : Func.Blocks)
     for (const MedOp &Op : Block.Ops)
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
@@ -202,22 +249,46 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
   llvm::DenseMap<ValueKey, uint16_t> ViewWidths;
   llvm::DenseMap<ValueKey, const PhiNode *> PhiDefinitions;
   llvm::SmallVector<ValueKey, 16> Work;
-  const auto Observe = [&](const MedVar &Value, uint16_t Bytes) {
-    if (Value.Kind != MedVar::Reg || !ResultRegister(Value.RegOff))
-      return;
-    const ValueKey Key = identity(Value);
-    Bytes = std::min(Bytes, Value.Size);
-    uint16_t &Width = ReadWidths[Key];
-    if (Bytes > Width) {
-      Width = Bytes;
-      Work.push_back(Key);
+  // With BothBanks, the value each view of a register's own value takes its
+  // bytes from: a read of the view reads those bytes of that value (`test
+  // al, al` after a call reads RAX's low byte as the call left it).
+  llvm::DenseMap<ValueKey, MedVar> ViewSources;
+  const auto Observe = [&](MedVar Value, uint16_t Bytes) {
+    for (unsigned Depth = 0; Depth < 4; ++Depth) {
+      if (Value.Kind != MedVar::Reg || !ResultRegister(Value.RegOff))
+        return;
+      const ValueKey Key = identity(Value);
+      Bytes = std::min(Bytes, Value.Size);
+      uint16_t &Width = ReadWidths[Key];
+      if (Bytes > Width) {
+        Width = Bytes;
+        Work.push_back(Key);
+      }
+      const auto Source = ViewSources.find(Key);
+      if (Source == ViewSources.end())
+        return;
+      Value = Source->second;
     }
   };
+  // A temporary's offset is no register's, though RAX's is zero too.
   const auto SelfView = [](const MedOp &Op) {
     return Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 1 &&
-           Op.Inputs[0].Kind == MedVar::Reg &&
+           Op.Inputs[0].Kind == MedVar::Reg && Op.Output.Kind == MedVar::Reg &&
            Op.Inputs[0].RegOff == Op.Output.RegOff;
   };
+  // With BothBanks, whether an input is the first register of a bank, which
+  // a return's default operand names whatever the function returns: Go's
+  // results are its record's, and a return hands back a call's only as
+  // forwarding finds (Returned).
+  const auto FirstOfBank = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && (goResultPosition(A, V.RegOff) == 0 ||
+                                     goFloatResultPosition(A, V.RegOff) == 0);
+  };
+  if (BothBanks)
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (SelfView(Op) && ResultRegister(Op.Output.RegOff))
+          ViewSources.try_emplace(identity(Op.Output), Op.Inputs[0]);
   for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis)
       if (Phi.Output.Kind == MedVar::Reg && ResultRegister(Phi.Output.RegOff))
@@ -240,7 +311,9 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
            Read.Inputs[0].SSAVer == Read.Inputs[1].SSAVer))
         continue;
       for (uint8_t J = 0; J < Read.NumInputs; ++J)
-        Observe(Read.Inputs[J], Read.Inputs[J].Size);
+        if (!(BothBanks && Read.Opcode == NdOp::RETURN &&
+              FirstOfBank(Read.Inputs[J])))
+          Observe(Read.Inputs[J], Read.Inputs[J].Size);
     }
   }
   for (const MedVar &Value : Returned)
@@ -284,6 +357,10 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
       if (Phi.Output.Size >= Whole || Current(Pred, Input, Phi.Output.RegOff))
         Observe(Input, Width);
   }
+  // A call returns RAX, its value, where it or a view of it is read.
+  for (const auto &[Site, Value] : RaxValues)
+    if (ReadWidths.count(identity(Value)))
+      Returns[Site].first = 0;
   for (const auto &[Site, Values] : Clobbers) {
     int Last = -1, LastFloat = -1;
     for (const MedVar &Value : Values)
@@ -291,6 +368,60 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
         Last = std::max(Last, goResultPosition(A, Value.RegOff));
         LastFloat = std::max(LastFloat, goFloatResultPosition(A, Value.RegOff));
       }
+    if (BothBanks) {
+      // Each bank's results through the last one read or returned: an
+      // integer as wide as its widest read or view in the register widths
+      // C has, RAX whole, one no reader takes a word; a float a float32
+      // where no read takes more of it, else a float64.
+      const auto Call = Returns.find(Site);
+      if (Call == Returns.end())
+        continue;
+      const auto [Returning, ReturningFloat] = Call->second;
+      const int IntLast = std::max(Returning, Last);
+      const int FloatLast = std::max(ReturningFloat, LastFloat);
+      if (IntLast <= Returning && FloatLast <= ReturningFloat)
+        continue;
+      GoCallShape &Shape = Shapes[Site];
+      Shape.Widths.resize(IntLast + 1, 0);
+      Shape.FloatWidths.resize(FloatLast + 1, 0);
+      for (const MedVar &Value : Values) {
+        uint16_t Bytes = 0;
+        if (const auto Read = ReadWidths.find(identity(Value));
+            Read != ReadWidths.end())
+          Bytes = Read->second;
+        if (const int Position = goResultPosition(A, Value.RegOff);
+            Position > Returning && Position <= IntLast) {
+          if (const auto View = ViewWidths.find(identity(Value));
+              View != ViewWidths.end())
+            Bytes = std::max(Bytes, View->second);
+          Shape.Widths[Position] = std::max(Shape.Widths[Position], Bytes);
+        } else if (const int Float = goFloatResultPosition(A, Value.RegOff);
+                   Float > ReturningFloat && Float <= FloatLast) {
+          Shape.FloatWidths[Float] = std::max(Shape.FloatWidths[Float], Bytes);
+        }
+      }
+      for (int Position = std::max(Returning + 1, 0); Position <= IntLast;
+           ++Position) {
+        uint16_t &Width = Shape.Widths[Position];
+        uint16_t Rounded = 1;
+        while (Rounded < Width && Rounded < Word)
+          Rounded *= 2;
+        Width = Position == 0 || !Width ? Word : std::min(Rounded, Word);
+      }
+      for (int Position = std::max(ReturningFloat + 1, 0);
+           Position <= FloatLast; ++Position) {
+        uint16_t &Width = Shape.FloatWidths[Position];
+        Width = Width == 4 ? 4 : 8;
+      }
+      if (const auto Bytes = FloatValueBytes.find(Site);
+          Bytes != FloatValueBytes.end() && FloatLast >= 0)
+        Shape.FloatWidths[0] = Bytes->second;
+      if (IntLast >= 0 && !Shape.Widths[0])
+        Shape.Widths[0] = Word;
+      Shape.Last = IntLast;
+      Shape.LastFloat = FloatLast;
+      continue;
+    }
     const auto Known = Shapes.find(Site);
     const int Returning = Known == Shapes.end() ? 0 : Known->second.Last;
     const int ReturningFloat =
@@ -368,23 +499,27 @@ void defineGoCallResults(MedFunc &Func, Arch A,
       return nullptr;
     const GoCallShape &Shape = Found->second;
     const bool Floats = Shape.LastFloat >= 0;
-    if ((Shape.Last <= 0 && !Floats) || Shape.Last < 0 ||
+    // A record holds two results or more; one of floating results alone
+    // holds no integer one (Last -1).
+    if ((Shape.Last <= 0 && !Floats) || Shape.Last < (Floats ? -1 : 0) ||
+        Shape.Last + Shape.LastFloat < 0 ||
         Shape.Last >= static_cast<int>(Results.size()) ||
-        Shape.Widths.size() != static_cast<size_t>(Shape.Last) + 1 ||
-        Shape.Widths[0] != Word ||
+        Shape.Widths.size() != static_cast<size_t>(Shape.Last + 1) ||
+        (Shape.Last >= 0 && Shape.Widths[0] != Word) ||
         Shape.FloatWidths.size() != static_cast<size_t>(Shape.LastFloat + 1) ||
         Shape.Widths.size() + Shape.FloatWidths.size() >
             kSourceMaxRegisterReturnMembers)
       return nullptr;
     const int Returning = returnedLast(A, Op);
-    if (Returning < 0 &&
+    // A call's value is RAX, or X0 where it returns a float alone.
+    if (Returning < 0 && !(Floats && goReturnsFloatAlone(A, Op)) &&
         (Op.Output.Kind != MedVar::Reg || Op.Output.RegOff != Results[0]))
       return nullptr;
     // A call that returns floating results already keeps its record: the
     // integer ones it would take past them come first in it.
     if (returnedLastFloat(A, Op) >= 0)
       return nullptr;
-    if (Returning >= Shape.Last && !Floats)
+    if ((Returning >= Shape.Last && !Floats) || Returning > Shape.Last)
       return nullptr;
     // The results a call returns already are words, which the packed value
     // keeps where it has them.
@@ -419,12 +554,26 @@ void defineGoCallResults(MedFunc &Func, Arch A,
     Bump(Clobber.Value);
     Bump(Clobber.PreservedInput);
   }
+  // The calls whose value was X0, which leave RAX as a result the record
+  // now defines.
+  std::set<uint32_t> FloatValues;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (goReturnsFloatAlone(A, Op) && Wanted(Op))
+        FloatValues.insert(Op.CallSiteId);
+  // The first integer result a call's clobbers may hold.
+  const auto FirstLeft = [&](uint32_t Site) {
+    return FloatValues.count(Site) ? 0 : 1;
+  };
   std::map<uint32_t, std::vector<MedVar>> Left;
   for (const MedCallClobber &Clobber : Func.CallClobbers)
     if (Shapes.count(Clobber.CallSiteId) && Clobber.Value.Kind == MedVar::Reg &&
-        (goResultPosition(A, Clobber.Value.RegOff) > 0 ||
+        (goResultPosition(A, Clobber.Value.RegOff) >=
+             FirstLeft(Clobber.CallSiteId) ||
          goFloatResultPosition(A, Clobber.Value.RegOff) >= 0))
       Left[Clobber.CallSiteId].push_back(Clobber.Value);
+  // The values calls returned as RAX that their records no longer hold.
+  std::vector<MedCallClobber> Dropped;
   // The positions each call now defines, and the packed values that grow.
   std::map<uint32_t, std::pair<int, int>> Defined;
   std::map<uint32_t, int> DefinedFloat;
@@ -491,6 +640,16 @@ void defineGoCallResults(MedFunc &Func, Arch A,
       }
       Packed.Size = Bytes;
       const MedVar First = Op.Output;
+      // A call whose value was X0 returns it as its first floating result;
+      // one whose value was RAX, in a record without RAX, leaves RAX as a
+      // call leaves a register it returns nothing in.
+      const bool FirstFloat = Fresh && goReturnsFloatAlone(A, Op);
+      if (Fresh && !FirstFloat && Last < 0 && First.Size) {
+        MedCallClobber Unreturned;
+        Unreturned.Value = First;
+        Unreturned.CallSiteId = Op.CallSiteId;
+        Dropped.push_back(Unreturned);
+      }
       Op.Output = Packed;
       const uint32_t Site = Op.CallSiteId;
       Defined[Site] = {FirstNew, Last};
@@ -502,7 +661,7 @@ void defineGoCallResults(MedFunc &Func, Arch A,
         const uint16_t Width = Wants->Widths[Position];
         Shape->push_back({Register, Width, false});
         MedVar Field;
-        if (Position == 0) {
+        if (Position == 0 && !FirstFloat) {
           Field = First;
         } else {
           const MedVar *Exact = nullptr;
@@ -574,7 +733,12 @@ void defineGoCallResults(MedFunc &Func, Arch A,
         Extract.addInput(MedVar::makeConst(
             Record->FieldOffsets[Wants->Widths.size() + Position], Word));
         Fields.push_back(Extract);
-        for (const MedVar &Value : Values) {
+        // The call's value X0 is the first float, in its register's low
+        // bytes.
+        llvm::SmallVector<MedVar, 4> Readers(Values.begin(), Values.end());
+        if (FirstFloat && Position == 0)
+          Readers.push_back(First);
+        for (const MedVar &Value : Readers) {
           if (Value.RegOff != Register || identity(Value) == identity(Field))
             continue;
           MedOp View;
@@ -618,9 +782,11 @@ void defineGoCallResults(MedFunc &Func, Arch A,
     if (Range == Defined.end() || Clobber.Value.Kind != MedVar::Reg)
       return false;
     const int Position = goResultPosition(A, Clobber.Value.RegOff);
-    return Position > 0 && Position >= Range->second.first &&
-           Position <= Range->second.second;
+    return Position >= FirstLeft(Clobber.CallSiteId) &&
+           Position >= Range->second.first && Position <= Range->second.second;
   });
+  Func.CallClobbers.insert(Func.CallClobbers.end(), Dropped.begin(),
+                           Dropped.end());
 }
 
 } // namespace neverd
