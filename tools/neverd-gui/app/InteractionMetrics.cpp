@@ -29,6 +29,7 @@
 #include <QTimer>
 #include <QWheelEvent>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
 
@@ -464,6 +465,11 @@ void InteractionMetrics::measurePseudocode(CodeView *code, const char *name,
           const double ms = (clock_.nsecsElapsed() - start) / 1.0e6;
           series->ms.append(ms);
           sample["ms"] = ms;
+          const auto painted =
+              std::chrono::steady_clock::now().time_since_epoch();
+          sample["painted_monotonic_ns"] = static_cast<qint64>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(painted)
+                  .count());
           if (actionStart) {
             const QByteArray source = text->allText().toUtf8();
             sample["bytes"] = source.size();

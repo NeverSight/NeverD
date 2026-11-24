@@ -16111,6 +16111,7 @@ private slots:
     const auto detail = result.value("detail").toArray();
     QCOMPARE(detail.size(), 1);
     QCOMPARE(detail[0].toObject().contains("ms"), success);
+    QCOMPARE(detail[0].toObject().contains("painted_monotonic_ns"), success);
     if (!success)
       QVERIFY(detail[0].toObject().value("missed").toString().contains(
           "fixture export preparation failed"));
