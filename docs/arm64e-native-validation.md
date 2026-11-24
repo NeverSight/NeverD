@@ -2277,6 +2277,13 @@ removed after recording its hash. The active build and prebuilt r6 are retained.
 
 ### Native x1 runner qualification
 
+The PAuth_LR and PACM suites cross-compile their complete comparison programs
+with HighC, LLVM-to-C and LLVM-to-C after IR optimization. Each program builds
+at O0 and O2 using the same six IA/IB operations and independent instruction
+oracle as its native test. Native qualification additionally executes those
+programs on a process that demonstrates active keys and the required modifier
+behavior.
+
 Apple specifies M6 or later Macs and A20 Pro or later iPhones for arm64e.x1;
 the simulator cannot execute this ABI. Standard GitHub macOS ARM runners use
 M1, and larger ARM runners use M2. Changing their image to Xcode 27 therefore
