@@ -6,6 +6,7 @@
 
 #include "neverd/types/HeaderLibrary.h"
 
+#include "neverd/support/Parallel.h"
 #include "neverd/types/TypeLayout.h"
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
@@ -14,10 +15,12 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace neverd::types {
 /// lib/types/headers/<File>.h, as the build embeds it, each in a unit of its
@@ -183,22 +186,39 @@ const TypeLibrary *headerLibrary(HeaderLibrary Library, std::string *Error) {
     Types.setRecordABI(headerLibraryRecordABI(Library));
     ParseOptions Options;
     Options.Origin = TypeOrigin::Header;
-    const ParseResult Result =
-        parseCTypes(headerLibrarySource(Library), Types, Options);
-    if (!Result.ok()) {
-      const SourceProblem &First = Result.Problems.front();
+    const auto Primary = headerLibrarySource(Library);
+    const auto Extra = supplementSource(Library);
+    TypeLibrary Supplement(headerLibraryModel(Library));
+    Supplement.setRecordABI(headerLibraryRecordABI(Library));
+    ParseResult PrimaryResult, SupplementResult;
+    if (Extra.empty()) {
+      PrimaryResult = parseCTypes(Primary, Types, Options);
+    } else {
+      // The providers are parsed in independent type libraries before merging.
+      const std::vector<uint64_t> Sizes{Primary.size(), Extra.size()};
+      parallelForEachWeighted(
+          Sizes,
+          [&](auto Claim, size_t Count) {
+            for (size_t I = Claim(); I < Count; I = Claim()) {
+              if (I == 0)
+                PrimaryResult = parseCTypes(Primary, Types, Options);
+              else
+                SupplementResult = parseCTypes(Extra, Supplement, Options);
+            }
+          },
+          Sizes.size());
+    }
+    if (!PrimaryResult.ok()) {
+      const SourceProblem &First = PrimaryResult.Problems.front();
       Entry.Error = headerLibraryName(Library).str() + ":" +
                     std::to_string(First.Line) + ":" +
                     std::to_string(First.Column) + ": " + First.Message;
       return;
     }
-    if (const auto Source = supplementSource(Library); !Source.empty()) {
-      TypeLibrary Supplement(headerLibraryModel(Library));
-      Supplement.setRecordABI(headerLibraryRecordABI(Library));
-      const auto Parsed = parseCTypes(Source, Supplement, Options);
-      if (!Parsed.ok()) {
-        Entry.Error = headerLibraryName(Library).str() +
-                      " supplement: " + Parsed.Problems.front().Message;
+    if (!Extra.empty()) {
+      if (!SupplementResult.ok()) {
+        Entry.Error = headerLibraryName(Library).str() + " supplement: " +
+                      SupplementResult.Problems.front().Message;
         return;
       }
       // Official declarations own every existing name. Compatibility sources
