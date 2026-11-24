@@ -7,6 +7,7 @@
 /// Check AArch64 memory operands and ordering through the public pipeline.
 //===----------------------------------------------------------------------===//
 
+#include "CSourceText.h"
 #include "NeverDLiftFixture.h"
 
 #include "neverd/decode/Decoder.h"
@@ -46,7 +47,7 @@ static std::string functionIR(const std::string &IR, const std::string &Name) {
 
 static std::string functionC(const std::string &Source,
                              const std::string &Name) {
-  auto NamePos = Source.find(Name + "(");
+  auto NamePos = neverd::test::cDefinitionAt(Source, Name);
   if (NamePos == std::string::npos)
     return {};
   auto Begin = Source.rfind('\n', NamePos);
@@ -228,16 +229,30 @@ TEST_F(AArch64_Mem, StlurHighCRetainsReleaseWordsAndCompiles) {
   const struct {
     const char *Name;
     uint32_t Word;
-  } Cases[] = {{"test_stlur_a64", 0xd9000211U},
-               {"test_stlurb_a64", 0x19000211U},
-               {"test_stlurh_a64", 0x59000211U}};
+    const char *Helper;
+  } Cases[] = {{"test_stlur_a64", 0xd9000211U,
+                "neverd_aarch64_store_u64_D9000211"},
+               {"test_stlurb_a64", 0x19000211U,
+                "neverd_aarch64_store_u8_19000211"},
+               {"test_stlurh_a64", 0x59000211U,
+                "neverd_aarch64_store_u16_59000211"}};
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Name);
     auto F = functionC(source, Case.Name);
     ASSERT_FALSE(F.empty()) << source;
-    EXPECT_NE(F.find("__asm__ volatile(\".inst"), std::string::npos) << F;
-    EXPECT_NE(F.find("\"memory\""), std::string::npos) << F;
-    EXPECT_NE(F.find(std::to_string(Case.Word)), std::string::npos) << F;
+    // HighC may factor the exact instruction into a shared inline helper.
+    auto Instruction = F;
+    if (F.find(std::string(Case.Helper) + "(") != std::string::npos) {
+      Instruction = functionC(source, Case.Helper);
+      ASSERT_FALSE(Instruction.empty()) << source;
+    }
+    EXPECT_NE(Instruction.find("__asm__ volatile(\".inst"), std::string::npos)
+        << Instruction;
+    EXPECT_NE(Instruction.find("\"memory\""), std::string::npos)
+        << Instruction;
+    EXPECT_NE(Instruction.find("\"i\"(" + std::to_string(Case.Word) + ")"),
+              std::string::npos)
+        << Instruction;
     EXPECT_EQ(F.find("neverd_mem_store_release_"), std::string::npos) << F;
   }
 

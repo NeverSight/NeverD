@@ -1,3 +1,4 @@
+#include "CSourceText.h"
 #include "NeverDLiftFixture.h"
 
 class AArch64_MTE : public NeverDLiftTest {
@@ -65,15 +66,32 @@ TEST_F(AArch64_MTE, HighCUsesACLEAndCompiles) {
   ASSERT_TRUE(input.good());
   std::string source((std::istreambuf_iterator<char>(input)),
                      std::istreambuf_iterator<char>());
-  EXPECT_NE(source.find("__arm_mte_set_tag"), std::string::npos) << source;
-  EXPECT_NE(source.find("__arm_mte_get_tag"), std::string::npos) << source;
-  EXPECT_NE(source.find("__builtin_arm_addg"), std::string::npos) << source;
-  EXPECT_NE(source.find("__builtin_arm_subg"), std::string::npos) << source;
-  EXPECT_NE(source.find(" + 0x30"), std::string::npos) << source;
-  EXPECT_NE(source.find(", 5)"), std::string::npos) << source;
-  EXPECT_NE(source.find(", 0x70, 9)"), std::string::npos) << source;
-  EXPECT_EQ(source.find("__neverd"), std::string::npos) << source;
-  EXPECT_EQ(source.find("return arg0;"), std::string::npos) << source;
+  const auto Body = [&](const char *Name) {
+    const auto Begin = neverd::test::cDefinitionAt(source, Name);
+    if (Begin == std::string::npos)
+      return std::string();
+    const auto End = source.find("\n}", Begin);
+    return End == std::string::npos ? std::string()
+                                    : source.substr(Begin, End + 2 - Begin);
+  };
+  const auto Add = Body("test_addg_immediates_a64");
+  const auto Sub = Body("test_subg_immediates_a64");
+  const auto LoadStore = Body("test_ldg_after_stg_a64");
+  for (const auto *F : {&Add, &Sub, &LoadStore}) {
+    ASSERT_FALSE(F->empty()) << source;
+    EXPECT_EQ(F->find("__neverd"), std::string::npos) << *F;
+    EXPECT_EQ(F->find("__builtin_trap"), std::string::npos) << *F;
+    EXPECT_EQ(F->find("return arg0;"), std::string::npos) << *F;
+  }
+  EXPECT_NE(LoadStore.find("__arm_mte_set_tag"), std::string::npos)
+      << LoadStore;
+  EXPECT_NE(LoadStore.find("__arm_mte_get_tag"), std::string::npos)
+      << LoadStore;
+  EXPECT_NE(Add.find("__builtin_arm_addg"), std::string::npos) << Add;
+  EXPECT_NE(Add.find(" + 0x30"), std::string::npos) << Add;
+  EXPECT_NE(Add.find(", 5)"), std::string::npos) << Add;
+  EXPECT_NE(Sub.find("__builtin_arm_subg"), std::string::npos) << Sub;
+  EXPECT_NE(Sub.find(", 0x70, 9)"), std::string::npos) << Sub;
 
   expectPairedClangSyntax(cFile, source);
 }
