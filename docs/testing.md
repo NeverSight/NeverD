@@ -10396,12 +10396,14 @@ four compiler lanes.
 ModR/M, SIB or first displacement byte on an absent page in code64. Both
 fetch profiles run through HighC and LLVM-to-C, Clang and 64-bit NeverC at
 O0/O2. `UD0RefusesMissingOrInvalidFetchProfile` checks fail-loud admission
-before CPU or RAM effects. `UD0AddressExtentUsesLiveBytesAfterTheOpcode`
+for bare and `67` UD0 before CPU or RAM effects.
+`UD0AddressExtentUsesLiveBytesAfterTheOpcode`
 exports an image ending at the two-byte opcode, then changes its live ModR/M
 and SIB to distinguish #UD from a displacement-fetch #PF without relifting;
-the register-indirect data address is noncanonical and is never read.
+the same case uses a three-byte `67` prefix-plus-opcode image in code64.
+The register-indirect data address is noncanonical and is never read.
 Pin `UD0FetchPriorityMatchesOriginalHybridCPU` to the qualified P and E cores
-separately; compare the original KVM handler,
+separately; compare bare and `67` UD0 through the original KVM handler,
 fault stack RIP/error code, CR2, all GPRs, flags and RAM with each generated
 lane. The model's execution binding is intentionally independent of the host
 core used to compile its C source. Missing KVM is an oracle skip, not a pass.

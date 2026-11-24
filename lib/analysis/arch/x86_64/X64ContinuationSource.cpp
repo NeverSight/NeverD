@@ -39,6 +39,7 @@
 #include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X86SystemState.h"
 #include "neverd/ir/low/LowScalarConstant.h"
@@ -1384,11 +1385,12 @@ buildInstruction(SpecializationInstruction Instruction,
                    Instruction.NativeBytes[1] == 0x0b &&
                    Instruction.Ops.size() == 1 &&
                    eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud2, 1);
-  const bool Ud0 = Options.PagedMemory && Instruction.NativeBytes.size() >= 2 &&
-                   Instruction.NativeBytes[0] == 0x0f &&
-                   Instruction.NativeBytes[1] == 0xff &&
-                   Instruction.Ops.size() == 1 &&
-                   eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud0, 1);
+  const bool Ud0 =
+      Options.PagedMemory &&
+      x86PagedCode64UD0OpcodeOffset(Instruction.NativeBytes.data(),
+                                    Instruction.NativeBytes.size()) &&
+      Instruction.Ops.size() == 1 &&
+      eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud0, 1);
   const bool UndefinedInstruction = Ud0 || Ud2 || ObservedXbegin;
   // These unprefixed encodings have the same meaning in compatibility mode.
   // REX-prefixed forms cannot share that entry domain: there REX is an opcode.

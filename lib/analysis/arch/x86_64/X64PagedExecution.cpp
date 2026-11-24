@@ -523,12 +523,14 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
           "paged instruction resume changed body, bytes, mask or shadow");
     return executeTransition(State, *P);
   }
-  const bool UD0 = Bytes.size() >= 2 && Bytes[0] == 0x0f && Bytes[1] == 0xff;
+  const auto UD0Offset =
+      x86PagedCode64UD0OpcodeOffset(Bytes.data(), Bytes.size());
+  const bool UD0 = UD0Offset.has_value();
   if (UD0 && (!Options.UD0Fetch ||
               (*Options.UD0Fetch != X86UD0FetchProfile::OpcodeOnly &&
                *Options.UD0Fetch != X86UD0FetchProfile::CompleteModRM)))
     return invalid("paged UD0 requires a bound instruction-fetch profile");
-  const unsigned FetchBytes = UD0 ? 2 : Bytes.size();
+  const unsigned FetchBytes = UD0 ? *UD0Offset + 2 : Bytes.size();
   auto Controls = Memory.controls();
   const auto &Original = State.Core.Core.Core.Core;
   const bool SingleStep = Original.RFlags & 0x100;
@@ -588,8 +590,8 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   }
   if (UD0 && *Options.UD0Fetch == X86UD0FetchProfile::CompleteModRM &&
       T.Access.Status == X86PageWalkStatus::Completed) {
-    // The x64 decoder conservatively records UD0 as a two-byte terminal
-    // opcode. A processor that fetches its encoded address determines the
+    // The x64 decoder records the UD0 opcode and optional 67 prefix without
+    // its encoded address. A processor that fetches that address determines the
     // remaining extent from live instruction bytes, even when the image ends
     // after the opcode or later bytes have changed. No data read is implied.
     const auto Fetch = [&](unsigned Offset, uint8_t &Byte) {
@@ -598,15 +600,15 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
                       llvm::MutableArrayRef(&Byte, 1)));
     };
     uint8_t ModRM = 0, SIB = 0, Byte = 0;
-    if (Fetch(2, ModRM)) {
+    if (Fetch(FetchBytes, ModRM)) {
       const bool HasSIB = x86UD0NeedsSIB32Or64(ModRM);
-      if (!HasSIB || Fetch(3, SIB)) {
+      if (!HasSIB || Fetch(FetchBytes + 1, SIB)) {
         const unsigned AddressBytes = x86UD0AddressBytes32Or64(ModRM, SIB);
         for (unsigned I = 1 + HasSIB;
              I != AddressBytes &&
              T.Access.Status == X86PageWalkStatus::Completed;
              ++I)
-          Fetch(2 + I, Byte);
+          Fetch(FetchBytes + I, Byte);
       }
     }
   }

@@ -586,6 +586,7 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
            {0xf0, 0x48, 0x01,
             0x07},             // Native LOCK is not a host-pointer operation.
            {0x0f, 0x20, 0xd8}, // Native CR3 needs its architectural transition.
+           {0x66, 0x0f, 0xff, 0x00}, // Other UD0 prefixes remain unqualified.
            {0xfb},
            {0x66, 0xfb}}) {
     auto Units = buildX64ContinuationSource(image(Code), {0x1000}, O);
@@ -668,74 +669,84 @@ TEST_F(X64PagedExecutionTest, UD0CrossPageFetchUsesTheBoundProcessor) {
 TEST_F(X64PagedExecutionTest, UD0AddressExtentUsesLiveBytesAfterTheOpcode) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
-  const uint64_t PC = 0x1ffc;
-  std::vector<uint8_t> Code(PC - 0x1000 + 2, 0x90);
-  Code.back() = 0xff;
-  Code[Code.size() - 2] = 0x0f;
-  for (bool LLVM : {false, true}) {
-    Run Driver = nullptr;
-    ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver, {PC}));
-    for (uint8_t ModRM : {uint8_t{0xc0}, uint8_t{0x84}, uint8_t{0x00}})
-      for (auto Profile : {X86UD0FetchProfile::OpcodeOnly,
-                           X86UD0FetchProfile::CompleteModRM}) {
-        SCOPED_TRACE(testing::Message()
-                     << "route=" << LLVM << " modrm=" << unsigned(ModRM)
-                     << " profile=" << unsigned(Profile));
-        reset(Code);
-        State.Core.Core.Core.Core.PC = PC;
-        // A register-indirect UD0 never resolves or reads its data operand.
-        State.Core.Core.Core.Core.GPR[0] = 0x0000800000000000ULL;
-        RAM.Memory.front().Bytes[0x1ffe] = ModRM;
-        RAM.Memory.front().Bytes[0x1fff] = 0x20; // SIB before the absent page.
-        put(0x13010, 0);
-        Memory =
-            llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
-        X64PagedExecutionOptions Options;
-        Options.UD0Fetch = Profile;
-        X64PagedExecution Context(*Memory, Options);
-        uint64_t Budget = 1;
-        const auto Exit =
-            Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
-        ASSERT_TRUE(Context.lastError().empty()) << Context.lastError();
-        EXPECT_EQ(Exit, 7u);
-        EXPECT_EQ(Budget, 0u);
-        ASSERT_TRUE(Context.lastResult().Exception);
-        const bool PageFault =
-            ModRM == 0x84 && Profile == X86UD0FetchProfile::CompleteModRM;
-        EXPECT_EQ(Context.lastResult().Exception->Vector, PageFault ? 14 : 6);
-        EXPECT_EQ(Context.lastResult().Exception->ErrorCode,
-                  PageFault ? 0x10u : 0u);
-        EXPECT_EQ(State.Core.Core.CR2, PageFault ? 0x2000u : 0u);
-        EXPECT_EQ(State.Core.Core.Core.Core.PC,
-                  0x4000u + (PageFault ? 14u : 6u) * 16u);
-      }
+  for (bool Addr32 : {false, true}) {
+    const uint64_t PC = 0x1ffc - Addr32;
+    std::vector<uint8_t> Code(PC - 0x1000 + 2 + Addr32, 0x90);
+    Code.back() = 0xff;
+    Code[Code.size() - 2] = 0x0f;
+    if (Addr32)
+      Code[Code.size() - 3] = 0x67;
+    for (bool LLVM : {false, true}) {
+      Run Driver = nullptr;
+      ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver, {PC}));
+      for (uint8_t ModRM : {uint8_t{0xc0}, uint8_t{0x84}, uint8_t{0x00}})
+        for (auto Profile : {X86UD0FetchProfile::OpcodeOnly,
+                             X86UD0FetchProfile::CompleteModRM}) {
+          SCOPED_TRACE(testing::Message()
+                       << "route=" << LLVM << " addr32=" << Addr32 << " modrm="
+                       << unsigned(ModRM) << " profile=" << unsigned(Profile));
+          reset(Code);
+          State.Core.Core.Core.Core.PC = PC;
+          // A register-indirect UD0 never resolves or reads its data operand.
+          State.Core.Core.Core.Core.GPR[0] = 0x0000800000000000ULL;
+          RAM.Memory.front().Bytes[0x1ffe] = ModRM;
+          RAM.Memory.front().Bytes[0x1fff] =
+              0x20; // SIB before the absent page.
+          put(0x13010, 0);
+          Memory =
+              llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+          X64PagedExecutionOptions Options;
+          Options.UD0Fetch = Profile;
+          X64PagedExecution Context(*Memory, Options);
+          uint64_t Budget = 1;
+          const auto Exit =
+              Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
+          ASSERT_TRUE(Context.lastError().empty()) << Context.lastError();
+          EXPECT_EQ(Exit, 7u);
+          EXPECT_EQ(Budget, 0u);
+          ASSERT_TRUE(Context.lastResult().Exception);
+          const bool PageFault =
+              ModRM == 0x84 && Profile == X86UD0FetchProfile::CompleteModRM;
+          EXPECT_EQ(Context.lastResult().Exception->Vector, PageFault ? 14 : 6);
+          EXPECT_EQ(Context.lastResult().Exception->ErrorCode,
+                    PageFault ? 0x10u : 0u);
+          EXPECT_EQ(State.Core.Core.CR2, PageFault ? 0x2000u : 0u);
+          EXPECT_EQ(State.Core.Core.Core.Core.PC,
+                    0x4000u + (PageFault ? 14u : 6u) * 16u);
+        }
+    }
   }
 }
 
 TEST_F(X64PagedExecutionTest, UD0RefusesMissingOrInvalidFetchProfile) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
-  const std::vector<uint8_t> Code{0x0f, 0xff, 0xc0};
-  for (bool LLVM : {false, true}) {
-    Run Driver = nullptr;
-    ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
-    for (auto Profile : {std::optional<X86UD0FetchProfile>{},
-                         std::optional{X86UD0FetchProfile(0xff)}}) {
-      reset(Code);
-      const auto Before = State;
-      Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
-      X64PagedExecutionOptions Options;
-      Options.UD0Fetch = Profile;
-      X64PagedExecution Context(*Memory, Options);
-      uint64_t Budget = 1;
-      EXPECT_EQ(Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget),
-                5u);
-      EXPECT_EQ(Budget, 1u);
-      EXPECT_NE(Context.lastError().find("bound instruction-fetch profile"),
-                std::string::npos);
-      EXPECT_EQ(std::memcmp(&State, &Before, sizeof(State)), 0);
-      EXPECT_EQ(Memory->physicalMemory().snapshotMemoryRegions().front().Bytes,
-                RAM.Memory.front().Bytes);
+  for (const auto &Code :
+       {std::vector<uint8_t>{0x0f, 0xff, 0xc0},
+        std::vector<uint8_t>{0x67, 0x0f, 0xff, 0xc0}}) {
+    for (bool LLVM : {false, true}) {
+      Run Driver = nullptr;
+      ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
+      for (auto Profile : {std::optional<X86UD0FetchProfile>{},
+                           std::optional{X86UD0FetchProfile(0xff)}}) {
+        reset(Code);
+        const auto Before = State;
+        Memory =
+            llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+        X64PagedExecutionOptions Options;
+        Options.UD0Fetch = Profile;
+        X64PagedExecution Context(*Memory, Options);
+        uint64_t Budget = 1;
+        EXPECT_EQ(
+            Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget), 5u);
+        EXPECT_EQ(Budget, 1u);
+        EXPECT_NE(Context.lastError().find("bound instruction-fetch profile"),
+                  std::string::npos);
+        EXPECT_EQ(std::memcmp(&State, &Before, sizeof(State)), 0);
+        EXPECT_EQ(
+            Memory->physicalMemory().snapshotMemoryRegions().front().Bytes,
+            RAM.Memory.front().Bytes);
+      }
     }
   }
 }
@@ -811,85 +822,92 @@ TEST_F(X64PagedExecutionTest, UD0FetchPriorityMatchesOriginalHybridCPU) {
   if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
     Compilers.push_back(NeverC);
   unsigned Comparisons = 0;
-  for (unsigned Form = 0; Form != EncodedAddresses.size(); ++Form) {
-    const uint64_t PC = 0x1ffe - Form;
-    const auto &Address = EncodedAddresses[Form];
-    const size_t Offset = PC - 0x1000;
-    std::vector<uint8_t> Code(Offset + 2 + Address.size(), 0x90);
-    Code[Offset] = 0x0f;
-    Code[Offset + 1] = 0xff;
-    std::copy(Address.begin(), Address.end(), Code.begin() + Offset + 2);
-    reset(Code);
-    State.Core.Core.Core.Core.PC = PC;
-    State.Core.Core.Core.Core.GPR[0] = 0x0000800000000000ULL;
-    put(0x13010, 0);
-    X64ContinuationStateV6 Native;
-    bool Handler = false;
-    ASSERT_NO_FATAL_FAILURE(CPU.execute(RAM.Memory.front().Bytes, State,
-                                        Controls.CR0, 2 + Address.size(),
-                                        Native, Handler, true));
-    ASSERT_TRUE(Handler);
-    EXPECT_EQ(Native.Core.Core.Core.Core.PC, 0x4000u + Vector * 16u);
-    EXPECT_EQ(Native.Core.Core.CR2, Vector == 14 ? 0x2000u : 0u);
-    const uint64_t NativeSP = Native.Core.Core.Core.Core.GPR[4];
-    ASSERT_LE(NativeSP + (Vector == 14 ? 16u : 8u),
-              uint64_t(X64PagedNativeCPU::Size));
-    const auto FrameWord = [&](unsigned Offset) {
-      uint64_t Value;
-      std::memcpy(&Value, CPU.RAM + NativeSP + Offset, sizeof(Value));
-      return Value;
-    };
-    EXPECT_EQ(FrameWord(Vector == 14 ? 8 : 0), PC);
-    if (Vector == 14)
-      EXPECT_EQ(FrameWord(0), 0x10u); // Non-present instruction fetch.
-    for (const auto &Compiler : Compilers)
-      for (bool LLVM : {false, true})
-        for (const std::string Optimization : {"-O0", "-O2"}) {
-          SCOPED_TRACE(testing::Message()
-                       << "core=" << CPU.ReturnCoreType << " form=" << Form
-                       << ' ' << Compiler << ' ' << LLVM << ' '
-                       << Optimization);
-          Run Driver = nullptr;
-          ASSERT_NO_FATAL_FAILURE(
-              compile(Code, LLVM, Optimization, Driver, {PC}, Compiler));
-          reset(Code);
-          State.Core.Core.Core.Core.PC = PC;
-          State.Core.Core.Core.Core.GPR[0] = 0x0000800000000000ULL;
-          put(0x13010, 0);
-          Memory =
-              llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
-          X64PagedExecutionOptions Options;
-          Options.UD0Fetch = Profile;
-          X64PagedExecution Context(*Memory, Options);
-          uint64_t Budget = 1;
-          const auto Exit =
-              Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
-          ASSERT_TRUE(Context.lastError().empty()) << Context.lastError();
-          EXPECT_EQ(Exit, 7u);
-          EXPECT_EQ(Budget, 0u);
-          ASSERT_TRUE(Context.lastResult().Exception);
-          EXPECT_EQ(Context.lastResult().Exception->Vector, Vector);
-          EXPECT_EQ(Context.lastResult().Exception->ErrorCode,
-                    Vector == 14 ? 0x10u : 0u);
-          EXPECT_FALSE(Context.lastResult().InstructionCompleted);
-          const auto &Core = State.Core.Core.Core.Core;
-          const auto &Original = Native.Core.Core.Core.Core;
-          EXPECT_EQ(Core.PC, Original.PC);
-          EXPECT_EQ(Core.RFlags, Original.RFlags);
-          for (unsigned I = 0; I != 16; ++I)
-            EXPECT_EQ(Core.GPR[I], Original.GPR[I]) << I;
-          EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
-          EXPECT_EQ(State.Core.CS.Selector, Native.Core.CS.Selector);
-          EXPECT_EQ(State.Core.SS.Selector, Native.Core.SS.Selector);
-          const auto Actual = Memory->physicalMemory().snapshotMemoryRegions();
-          EXPECT_EQ(std::memcmp(Actual.front().Bytes.data(), CPU.RAM, 0x10000),
-                    0);
-          EXPECT_EQ(std::memcmp(Actual.front().Bytes.data() + 0x14000,
-                                CPU.RAM + 0x14000,
-                                X64PagedNativeCPU::Size - 0x14000),
-                    0);
-          ++Comparisons;
-        }
+  for (const auto &Prefix :
+       {std::vector<uint8_t>{}, std::vector<uint8_t>{0x67}}) {
+    for (unsigned Form = 0; Form != EncodedAddresses.size(); ++Form) {
+      const uint64_t PC = 0x1ffe - Form - Prefix.size();
+      const auto &Address = EncodedAddresses[Form];
+      const size_t Offset = PC - 0x1000;
+      std::vector<uint8_t> Code(Offset + Prefix.size() + 2 + Address.size(),
+                                0x90);
+      std::copy(Prefix.begin(), Prefix.end(), Code.begin() + Offset);
+      Code[Offset + Prefix.size()] = 0x0f;
+      Code[Offset + Prefix.size() + 1] = 0xff;
+      std::copy(Address.begin(), Address.end(),
+                Code.begin() + Offset + Prefix.size() + 2);
+      reset(Code);
+      State.Core.Core.Core.Core.PC = PC;
+      State.Core.Core.Core.Core.GPR[0] = 0x0000800000000000ULL;
+      put(0x13010, 0);
+      X64ContinuationStateV6 Native;
+      bool Handler = false;
+      ASSERT_NO_FATAL_FAILURE(CPU.execute(
+          RAM.Memory.front().Bytes, State, Controls.CR0,
+          Prefix.size() + 2 + Address.size(), Native, Handler, true));
+      ASSERT_TRUE(Handler);
+      EXPECT_EQ(Native.Core.Core.Core.Core.PC, 0x4000u + Vector * 16u);
+      EXPECT_EQ(Native.Core.Core.CR2, Vector == 14 ? 0x2000u : 0u);
+      const uint64_t NativeSP = Native.Core.Core.Core.Core.GPR[4];
+      ASSERT_LE(NativeSP + (Vector == 14 ? 16u : 8u),
+                uint64_t(X64PagedNativeCPU::Size));
+      const auto FrameWord = [&](unsigned Offset) {
+        uint64_t Value;
+        std::memcpy(&Value, CPU.RAM + NativeSP + Offset, sizeof(Value));
+        return Value;
+      };
+      EXPECT_EQ(FrameWord(Vector == 14 ? 8 : 0), PC);
+      if (Vector == 14)
+        EXPECT_EQ(FrameWord(0), 0x10u); // Non-present instruction fetch.
+      for (const auto &Compiler : Compilers)
+        for (bool LLVM : {false, true})
+          for (const std::string Optimization : {"-O0", "-O2"}) {
+            SCOPED_TRACE(testing::Message()
+                         << "core=" << CPU.ReturnCoreType << " form=" << Form
+                         << " prefix=" << Prefix.size() << ' ' << Compiler
+                         << ' ' << LLVM << ' ' << Optimization);
+            Run Driver = nullptr;
+            ASSERT_NO_FATAL_FAILURE(
+                compile(Code, LLVM, Optimization, Driver, {PC}, Compiler));
+            reset(Code);
+            State.Core.Core.Core.Core.PC = PC;
+            State.Core.Core.Core.Core.GPR[0] = 0x0000800000000000ULL;
+            put(0x13010, 0);
+            Memory =
+                llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+            X64PagedExecutionOptions Options;
+            Options.UD0Fetch = Profile;
+            X64PagedExecution Context(*Memory, Options);
+            uint64_t Budget = 1;
+            const auto Exit =
+                Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
+            ASSERT_TRUE(Context.lastError().empty()) << Context.lastError();
+            EXPECT_EQ(Exit, 7u);
+            EXPECT_EQ(Budget, 0u);
+            ASSERT_TRUE(Context.lastResult().Exception);
+            EXPECT_EQ(Context.lastResult().Exception->Vector, Vector);
+            EXPECT_EQ(Context.lastResult().Exception->ErrorCode,
+                      Vector == 14 ? 0x10u : 0u);
+            EXPECT_FALSE(Context.lastResult().InstructionCompleted);
+            const auto &Core = State.Core.Core.Core.Core;
+            const auto &Original = Native.Core.Core.Core.Core;
+            EXPECT_EQ(Core.PC, Original.PC);
+            EXPECT_EQ(Core.RFlags, Original.RFlags);
+            for (unsigned I = 0; I != 16; ++I)
+              EXPECT_EQ(Core.GPR[I], Original.GPR[I]) << I;
+            EXPECT_EQ(State.Core.Core.CR2, Native.Core.Core.CR2);
+            EXPECT_EQ(State.Core.CS.Selector, Native.Core.CS.Selector);
+            EXPECT_EQ(State.Core.SS.Selector, Native.Core.SS.Selector);
+            const auto Actual =
+                Memory->physicalMemory().snapshotMemoryRegions();
+            EXPECT_EQ(
+                std::memcmp(Actual.front().Bytes.data(), CPU.RAM, 0x10000), 0);
+            EXPECT_EQ(std::memcmp(Actual.front().Bytes.data() + 0x14000,
+                                  CPU.RAM + 0x14000,
+                                  X64PagedNativeCPU::Size - 0x14000),
+                      0);
+            ++Comparisons;
+          }
+    }
   }
   RecordProperty("cpu_comparisons", Comparisons);
 }

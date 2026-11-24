@@ -10,7 +10,9 @@
 #ifndef NEVERD_IR_X86_X86UNDEFINEDOPCODERULES_H
 #define NEVERD_IR_X86_X86UNDEFINEDOPCODERULES_H
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace neverd {
 
@@ -21,6 +23,18 @@ enum class X86UD0FetchProfile : uint8_t {
   OpcodeOnly,
   CompleteModRM,
 };
+
+/// Paged code64 has qualified the bare UD0 and one address-size override.
+/// Other prefixes remain native boundaries until their original fetch priority
+/// is measured. Capstone reports only these opcode bytes, not the address tail.
+constexpr std::optional<unsigned>
+x86PagedCode64UD0OpcodeOffset(const uint8_t *Bytes, size_t Size) {
+  if (Size >= 2 && Bytes[0] == 0x0f && Bytes[1] == 0xff)
+    return 0;
+  if (Size >= 3 && Bytes[0] == 0x67 && Bytes[1] == 0x0f && Bytes[2] == 0xff)
+    return 1;
+  return std::nullopt;
+}
 
 /// The encoded address extent after UD0's two opcode bytes in 32/64-bit
 /// addressing. SIB is needed only when x86UD0NeedsSIB32Or64 returns true.
