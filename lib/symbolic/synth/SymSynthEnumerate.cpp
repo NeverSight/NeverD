@@ -46,8 +46,10 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/xxhash.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <unordered_map>
 #include <utility>
@@ -61,15 +63,23 @@ namespace {
 using Behaviour = llvm::ArrayRef<uint64_t>;
 
 uint64_t hashBehaviour(Behaviour Words) {
-  uint64_t Hash = 0xCBF29CE484222325ull;
-  const size_t Step = std::max<size_t>(
-      Words.size() / limits::symbolic::kSynthBehaviourHashWords, 1);
-  for (size_t I = 0; I < Words.size(); I += Step) {
-    Hash ^= Words[I];
-    Hash *= 0x100000001B3ull;
+  // Contiguous blocks let the word hash process a bounded sample while
+  // including both measured corners and the random end of the column.
+  constexpr size_t Samples = limits::symbolic::kSynthBehaviourHashWords;
+  constexpr size_t Blocks = limits::symbolic::kSynthBehaviourHashBlocks;
+  static_assert(Samples % Blocks == 0);
+  constexpr size_t Length = Samples / Blocks;
+  std::array<uint64_t, Samples> Sample;
+  if (Words.size() > Samples) {
+    for (size_t I = 0; I != Blocks; ++I)
+      std::copy_n(Words.data() + (Words.size() - Length) * I / (Blocks - 1),
+                  Length, Sample.data() + I * Length);
+    Words = Sample;
   }
-  // Clear of the two keys a DenseMap keeps for itself.
-  return Hash >> 1;
+  // Reserve the sentinel keys of the behaviour index.
+  return llvm::xxh3_64bits(reinterpret_cast<const uint8_t *>(Words.data()),
+                           Words.size() * sizeof(uint64_t)) >>
+         1;
 }
 
 /// The behaviour array this thread keeps between searches.  Growing a new one
@@ -111,7 +121,7 @@ public:
   /// Record \p Node under \p Words at \p Cost, unless something already behaves
   /// that way.  True when it was recorded.
   bool insert(SymRef Node, Behaviour Words, size_t Cost) {
-    if (!remember(Words))
+    if (!remember(Words, hashBehaviour(Words)))
       return false;
     llvm::copy(Words, nextBehaviour().begin());
     addMaterialized(Node, Cost);
@@ -147,8 +157,8 @@ public:
 
   // Heads and links are one-based so zero terminates a collision chain.
   // Reserve the next index only after comparing the complete signatures.
-  bool remember(Behaviour Words) {
-    auto &Head = ByHash[hashBehaviour(Words)];
+  bool remember(Behaviour Words, uint64_t Hash) {
+    auto &Head = ByHash[Hash];
     for (size_t I = Head; I; I = Previous[I - 1])
       if (behaviour(I - 1) == Words)
         return false;
@@ -341,6 +351,7 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
   // only if that behaviour is worth having.  Returns false to say the caller
   // should stop, either because the budget is gone or because an answer was
   // accepted.
+  const uint64_t TargetHash = hashBehaviour(Target);
   auto consider = [&](GramOp Op, llvm::ArrayRef<size_t> Operands, size_t Cost) {
     if (!Effort.spend())
       return false;
@@ -348,8 +359,10 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     const auto Column = Bank.nextBehaviour();
     measure(Op, Operands, Column);
 
-    const bool Matches = Behaviour(Column) == Behaviour(Target);
-    const bool Fresh = Bank.remember(Column);
+    const uint64_t Hash = hashBehaviour(Column);
+    const bool Matches =
+        Hash == TargetHash && Behaviour(Column) == Behaviour(Target);
+    const bool Fresh = Bank.remember(Column, Hash);
     if (!Matches) {
       if (Fresh)
         Bank.defer(Op, Operands, Cost);

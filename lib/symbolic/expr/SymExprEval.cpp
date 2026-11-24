@@ -226,6 +226,9 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
                    : !Ctx.isConst(Ctx.operand(St.Node, Coefficient)) &&
                          PrefixWords <= FullWords / 2)) {
             St.Aux = FactorBits;
+            // A native residue needs only this slice of the full coefficient.
+            if (FactorBits <= 64)
+              St.Width = Demand;
             std::swap(ArgSlots[St.FirstArg],
                       ArgSlots[St.FirstArg + Coefficient]);
           }
@@ -1124,6 +1127,12 @@ llvm::APInt multiplyShiftedPrefix(const llvm::APInt &Scale,
                                   const llvm::APInt &Prefix) {
   const unsigned Bits = Prefix.getBitWidth();
   const unsigned Shift = Scale.getBitWidth() - Bits;
+  if (Bits <= 64) {
+    const uint64_t Unit = Scale.extractBitsAsZExtValue(Bits, Shift);
+    llvm::APInt Result(Scale.getBitWidth(), 0);
+    Result.insertBits(Unit * Prefix.getZExtValue(), Shift, Bits);
+    return Result;
+  }
   const unsigned N = Prefix.getNumWords();
   llvm::SmallVector<uint64_t, 8> Scratch(2 * size_t(N));
   auto *High = Scratch.data(), *Product = High + N;
@@ -1204,6 +1213,8 @@ llvm::APInt SymEvalPlan::evalWith(
     llvm::function_ref<const llvm::APInt *(uint32_t)> Lookup) {
   if (NativeState != NativePreparation::Done)
     prepareNativeReuse();
+  const bool PreparedProduct = !FitsU64 && !PlanWords.empty();
+  const auto OrdinarySteps = llvm::ArrayRef(Steps).drop_back(PreparedProduct);
   // Native-width measurements never use APInt scratch. Allocate it only
   // when this entry point is called, retaining it for subsequent evaluations.
   if (ScratchAP.empty()) {
@@ -1215,12 +1226,13 @@ llvm::APInt SymEvalPlan::evalWith(
     // Prefix slots fit in APInt's inline word. Their scaled-product consumers
     // multiply the complete prefix before restoring the wide coefficient;
     // every other full-width use already prevented this narrowing.
-    for (const Step &St : Steps)
+    for (const Step &St : OrdinarySteps)
       if (St.Width <= 64 && preservesLowBits(St.Op))
         ScratchAP[St.OutputSlot] = llvm::APInt(St.Width, 0);
+      else if (St.Op == SymOp::Mul && St.Aux && St.Aux <= 64)
+        ScratchAP[St.OutputSlot] = llvm::APInt(Ctx.width(St.Node), 0);
   }
-  const bool PreparedProduct = !FitsU64 && !PlanWords.empty();
-  for (const Step &St : llvm::ArrayRef(Steps).drop_back(PreparedProduct)) {
+  for (const Step &St : OrdinarySteps) {
     const auto I = St.OutputSlot;
     const uint32_t *A = ArgSlots.data() + St.FirstArg;
 
@@ -1278,13 +1290,18 @@ llvm::APInt SymEvalPlan::evalWith(
       // Evaluate the remaining factors in their common low-bit modulus.
       // Only the coefficient needs its original width to restore the result.
       const unsigned Bits = St.Aux;
-      ScratchAP[I] = ScratchAP[A[0]];
       if (Bits <= 64) {
         uint64_t Product = ScratchAP[A[1]].getRawData()[0];
         for (size_t K = 2; K < St.NumArgs; ++K)
           Product *= ScratchAP[A[K]].getRawData()[0];
-        ScratchAP[I] *= Product & (~uint64_t(0) >> (64 - Bits));
+        // These are the only bits of the coefficient that can reach a user.
+        const unsigned Shift = St.Width - Bits;
+        const auto Unit = ScratchAP[A[0]].extractBitsAsZExtValue(Bits, Shift);
+        // This fixed slice is the only part of the zero-initialized output
+        // slot written by any assignment.
+        ScratchAP[I].insertBits(Unit * Product, Shift, Bits);
       } else {
+        ScratchAP[I] = ScratchAP[A[0]];
         auto Prefix =
             St.NumArgs == 2
                 ? ScratchAP[A[1]].zextOrTrunc(Bits)

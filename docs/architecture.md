@@ -8219,7 +8219,12 @@ they overlap, the literal supplies the low suffix and the original OR or
 XOR combines the surviving upper fields. Coefficients below the required
 shift keep the complete factor. Independent evaluation of a wide scaled
 product can combine repeated factors by binary exponentiation across their
-multiplicities while checking the original operand values.
+multiplicities while checking the original operand values. For a product
+whose coefficient leaves at most one live machine word, the evaluator
+rewrites just that bit slice of its scratch result on each assignment.
+For enumerated candidates, a bounded hash spans the measurement grid. A
+matching hash still requires equality of the complete measurement vectors
+before a candidate reaches independent validation.
 When translating flagged LLVM arithmetic, the source width of a sign or zero
 extension bounds its result. Those bounds can justify a surrounding no-wrap
 sum or product while keeping every operand's definedness checks.

@@ -773,7 +773,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # nonzero residual without prescribing a particular spelling.
             pass
         elif kind == "joined-field-product-97":
-            assert code.count("*") <= 20, text
+            assert code.count("*") <= (13 if llvm else 14), text
         elif kind == "distributed-field-product-73":
             assert code.count("*") <= (13 if llvm else 11), text
         elif kind == "funnel-perturbation-composed-product-283":

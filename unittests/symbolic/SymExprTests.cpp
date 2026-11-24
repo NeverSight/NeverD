@@ -2509,6 +2509,37 @@ TEST(SymExpr, NativeProductsKeepAllInputsAfterModularOverflow) {
   }
 }
 
+TEST(SymExpr, ScaledProductOverwritesItsObservedSliceBetweenEvaluations) {
+  constexpr unsigned Width = 257;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  const auto Z = C.mkVar("z", Width);
+  std::mt19937_64 Random(0x2315abcd);
+  for (unsigned Bits : {1u, 33u, 64u}) {
+    constexpr unsigned Shift = 71;
+    const auto Scale =
+        C.mkConcat(C.mkExtract(X, 0, Width - Shift), C.mkZero(Shift));
+    const auto Product = C.mkMul(Scale, Y);
+    const auto Outer = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
+    const auto Root = C.mkMul(C.mkConst(Outer), C.mkXor(Product, Z));
+    SymEvalPlan Partial(C, Root),
+        Shared(C, C.mkAdd(Root, C.mkLShr(Product, C.mkConst(Width, 127))));
+    for (unsigned I = 0; I < 60; ++I) {
+      std::array<llvm::APInt, 3> Inputs;
+      for (auto &Input : Inputs) {
+        std::array<uint64_t, 5> Words;
+        for (auto &Word : Words)
+          Word = I % 3 == 0 ? 0 : I % 3 == 1 ? UINT64_MAX : Random();
+        Input = llvm::APInt(Width, Words);
+      }
+      const auto Full = Inputs[0].shl(Shift) * Inputs[1];
+      const auto Expected = Outer * (Full ^ Inputs[2]);
+      EXPECT_EQ(Partial.eval(Inputs), Expected);
+      EXPECT_EQ(Shared.eval(Inputs), Expected + Full.lshr(127));
+    }
+  }
+}
+
 TEST(SymExpr, RepeatedWideFactorsUseTheirExactMultiplicities) {
   constexpr unsigned Width = 321;
   std::mt19937_64 Random(0x65ab193);

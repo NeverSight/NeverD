@@ -101,6 +101,8 @@ inline constexpr int kMaxDiscardedShiftWidth = 128;
 /// Words of a behaviour its hash reads.  The hash runs for every candidate, and
 /// a collision costs only the comparison that settles it.
 inline constexpr size_t kSynthBehaviourHashWords = 16;
+/// Read the sampled words in four contiguous blocks spread across the column.
+inline constexpr size_t kSynthBehaviourHashBlocks = 4;
 /// Largest behaviour array a thread keeps for its next search, 16 MiB.  A
 /// source view's budget fits; a larger search gives its memory back.  A lower
 /// limit regrows the array, costing CPU and usually peak memory too.
