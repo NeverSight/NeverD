@@ -2052,8 +2052,10 @@ TEST(MedSEHHandlerEntry, EAXHoldsTheExceptionCode) {
 /// An ARM64 parent whose handler stores w0 and w1 and joins the ordinary
 /// path: stp x29,x30,[sp,#-0x20]!; mov x29,sp; mov w8,#1; str w8,[x29,#16];
 /// nop (guarded); b join | handler: str w0,[x29,#16]; str w1,[x29,#20];
-/// b join | join: ldr w0,[x29,#16]; ldp x29,x30,[sp],#0x20; ret
-BinaryImage makeARM64SEHHandlerImage() {
+/// b join | join: ldr w0,[x29,#16]; ldp x29,x30,[sp],#0x20; ret.
+/// \p SetsW1 makes the ordinary path `nop (guarded); mov w1,#7; b join` and
+/// the handler `str w0,[x29,#16]; b join`, so only one way sets w1.
+BinaryImage makeARM64SEHHandlerImage(bool SetsW1 = false) {
   constexpr va_t Entry = 0x140001000;
   BinaryImage Img;
   Img.Arch = Arch::AArch64;
@@ -2061,9 +2063,14 @@ BinaryImage makeARM64SEHHandlerImage() {
   Img.Format = BinaryFormat::COFF;
   Img.Base = 0x140000000;
   Img.Entry = Entry;
-  const uint32_t Words[] = {0xa9be7bfd, 0x910003fd, 0x52800028, 0xb90013a8,
-                            0xd503201f, 0x14000004, 0xb90013a0, 0xb90017a1,
-                            0x14000001, 0xb94013a0, 0xa8c27bfd, 0xd65f03c0};
+  uint32_t Words[] = {0xa9be7bfd, 0x910003fd, 0x52800028, 0xb90013a8,
+                      0xd503201f, 0x14000004, 0xb90013a0, 0xb90017a1,
+                      0x14000001, 0xb94013a0, 0xa8c27bfd, 0xd65f03c0};
+  if (SetsW1) {
+    Words[5] = 0x528000e1; // mov w1,#7
+    Words[6] = 0x14000003; // b join
+    Words[7] = 0xb90013a0; // handler: str w0,[x29,#16]
+  }
   Segment Text;
   Text.Name = ".text";
   Text.VA = Entry;
@@ -2103,7 +2110,7 @@ BinaryImage makeARM64SEHHandlerImage() {
   SEHScopeRecord Scope;
   Scope.GuardedRange = {Entry + 0x10, Entry + 0x14};
   Scope.Kind = SEHScopeKind::CatchAll;
-  Scope.HandlerVA = Entry + 0x18;
+  Scope.HandlerVA = Entry + (SetsW1 ? 0x1c : 0x18);
   EH.SEH->Scopes.push_back(Scope);
   Img.ExceptionMetadata.Functions.push_back(std::move(EH));
   Img.ExceptionMetadata.rebuildIndex();
@@ -2178,6 +2185,41 @@ TEST(MedSEHHandlerEntry, ARMRegisterZeroHoldsTheExceptionCode) {
     ASSERT_TRUE(Scratch);
     EXPECT_EQ(Scratch->Kind, MedVar::Unspecified) << Scratch->display();
   }
+}
+
+TEST(MedSEHHandlerEntry, AJoinTakesWhatTheUnwinderLeftFromTheHandler) {
+  // No instruction reads w1 after the join, which still merges it: the
+  // ordinary way's `mov w1,#7` and what the unwinder left in it on the
+  // handler's way, not the value the function was entered with.
+  const BinaryImage Img = makeARM64SEHHandlerImage(/*SetsW1=*/true);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::AArch64));
+  auto Low = CFGBuilder().build(Img, Dec, Img.Entry, "arm64_seh_join");
+  auto Med =
+      LowToMedConverter().convert(Low, Arch::AArch64, BinaryFormat::COFF);
+  ASSERT_TRUE(verifyMedFunc(Med, "arm64-seh-join"));
+  const uint64_t W1 = getTargetRegInfo(Arch::AArch64).IntParamRegs[1];
+  int Handler = -1;
+  const MedBlock *Join = nullptr;
+  for (const MedBlock &B : Med.Blocks) {
+    if (B.StartAddr == Img.Entry + 0x1c)
+      Handler = B.Id;
+    if (B.StartAddr == Img.Entry + 0x24)
+      Join = &B;
+  }
+  ASSERT_GE(Handler, 0);
+  ASSERT_TRUE(Join);
+  size_t Checked = 0;
+  for (const PhiNode &Phi : Join->Phis) {
+    if (Phi.Output.Kind != MedVar::Reg || Phi.Output.RegOff != W1)
+      continue;
+    for (const auto &[Pred, Value] : Phi.Args)
+      if (Pred == Handler) {
+        EXPECT_EQ(Value.Kind, MedVar::Unspecified) << Value.display();
+        ++Checked;
+      }
+  }
+  EXPECT_GT(Checked, 0u);
 }
 
 // A second scope guards the nop before the first one and resumes at 0x13,

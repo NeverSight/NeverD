@@ -514,6 +514,14 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
                                                               TargetFormat);
   const bool HasX86SEHFrame = RegistrationRoots.hasSEHFrame();
   const bool HasX86RegistrationFrame = RegistrationRoots.hasFrame();
+  // The unwinder enters an SEH handler with its own values in the flags and
+  // in the registers the calling convention does not preserve.
+  auto UnwinderSets = [&](const MedVar &V) {
+    return (V.Kind == MedVar::Reg && !TRI.isStackPointer(V.RegOff) &&
+            !TRI.isFrameOrLinkReg(V.RegOff) &&
+            (HasX86RegistrationFrame || !IsNonvolatile(V))) ||
+           V.Kind == MedVar::Flag;
+  };
   auto IsSEHRestored = [&](const MedVar &V) {
     if (TargetArch == Arch::X86)
       return HasX86RegistrationFrame && V.Kind == MedVar::Reg &&
@@ -971,14 +979,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
             Func.Blocks[Root].ExceptionalPreds.empty() && Root == 0)
           Input = MedVar::makeConst(0, Input.Size,
                                     ConstantAddressProvenance::Scalar);
-        // The unwinder enters an SEH handler with its own values in the
-        // flags and in the registers the calling convention does not
-        // preserve; EAX, the exception code, is defined separately.
-        if (IsWindowsRuntimeRoot &&
-            ((Input.Kind == MedVar::Reg && !TRI.isStackPointer(Input.RegOff) &&
-              !TRI.isFrameOrLinkReg(Input.RegOff) &&
-              (HasX86RegistrationFrame || !IsNonvolatile(Input))) ||
-             Input.Kind == MedVar::Flag))
+        // EAX, the exception code, is defined separately.
+        if (IsWindowsRuntimeRoot && UnwinderSets(Input))
           Input = MedVar::makeUnspecified(Input.Size, TargetArch);
         Init.addInput(Input);
         if (Input.Kind == MedVar::Reg && Input.RegOff == TRI.StackPointer) {
@@ -1156,9 +1158,20 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   };
 
   std::vector<std::vector<int>> DomChildren(GraphN);
+  // The root that dominates each block, from which its ways start.
+  std::vector<int> RootOf(GraphN, VirtualRoot);
   for (int C = 0; C < GraphN; ++C) {
     if (C != VirtualRoot && IDom[C] != -1 && IDom[C] != C)
       DomChildren[IDom[C]].push_back(C);
+  }
+  for (int Top : DomChildren[VirtualRoot]) {
+    std::vector<int> Work{Top};
+    while (!Work.empty()) {
+      const int B = Work.back();
+      Work.pop_back();
+      RootOf[B] = Top;
+      Work.insert(Work.end(), DomChildren[B].begin(), DomChildren[B].end());
+    }
   }
 
   // ARM and AArch64 termination handlers are separate functions that read
@@ -1394,8 +1407,16 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         // that sibling's constant for this path. The same rejection applies
         // when another width at this register already has a dominating write.
         // Otherwise the edge still holds the bits the function was entered
-        // with. SSA version -1 names that fact and is not version 0.
-        if (VarStack[Arg.Id].empty()) {
+        // with, on a way from its entry. SSA version -1 names that fact and is
+        // not version 0. A way from a handler the table-based unwinder of x64,
+        // ARM or ARM64 enters holds what the unwinder left (UnwinderSets), as
+        // that root's live-ins do.  An x86 registration frame keeps the entry
+        // value: its finally blocks are tails the function's own code also
+        // calls with an argument in a register, which no root certifies.
+        if (VarStack[Arg.Id].empty() && TargetArch != Arch::X86 &&
+            SEHHandlerRoots.count(RootOf[F.B]) && UnwinderSets(Arg)) {
+          Arg = MedVar::makeUnspecified(Arg.Size, TargetArch);
+        } else if (VarStack[Arg.Id].empty()) {
           auto HoldsEntry = [&](int Id) {
             if (VarStack[Id].empty())
               return true;

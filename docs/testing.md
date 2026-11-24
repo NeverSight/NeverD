@@ -21703,7 +21703,9 @@ that an AArch64 `__except` body reads x19 as the protected range left it,
 through the frame its prologue set. A range that writes x19 leaves x19
 unknown. `ARMRegisterZeroHoldsTheExceptionCode` reads the exception code
 from x0 and r0 at an ARM64 and an ARM handler entry, and an unknown value
-from x1 and r1.
+from x1 and r1. `AJoinTakesWhatTheUnwinderLeftFromTheHandler` merges, at a
+join after an ARM64 handler, the ordinary way's `mov w1,#7` with an unknown
+w1 on the handler's way, which no instruction reads afterwards.
 `MedSEHHandlerEntry.AHandlerResumingAtANopEndsTheArmThere` ends an `__except`
 arm that resumes at a `nop` without a jump, and
 `X86_64_PipelineE2E.DecompileC_MinGWStartupSEHWithX87Callee` decompiles

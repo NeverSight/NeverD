@@ -20743,7 +20743,17 @@ handler entry, and the other volatile registers what the unwinder left.
 Without that on ARM and ARM64 the CRT startup's `__except` arm passed an
 unknown value where its source passes `GetExceptionCode()` to `_exit`: the EH
 corpus's ARM64 images printed 784 placeholders and print 416, its ARM ones
-2,103 and 1,943. A termination handler's `__except`
+2,103 and 1,943. A PHI argument on a way from such a root that no definition
+reaches holds what the unwinder left as well, as the root's live-ins do,
+rather than SSA version -1, the value the function was entered with: a
+register no instruction reads before the join has no live-in at the root. On
+x64, ARM and ARM64 the volatile registers there are unknown (`UnwinderSets`);
+an x86 registration frame keeps the entry value, since its finally blocks are
+tails the function's own code also calls with an argument in a register.
+Without it MSVC ARM's `printf` after an `__except` took r1 and r2 as the
+function's own parameters on the handler's way and a stale r3 as a fourth
+argument; the ARM images print 1,532 placeholders in HighC and 5,473 in LLVM C
+instead of 1,943 and 6,188. A termination handler's `__except`
 arm thus keeps the RBP its prologue copied from RDX. HighC rebases `rdx + k`
 into the printed function's frame only in a clause body of a function without
 an SEH scope table or Itanium LSDA, where `attachCxxFuncletBodies` places catch
