@@ -45,6 +45,8 @@ request ad alto rischio.
 
 `InterpreterSpecialization.MXCSR*` verifica stati iniziali arbitrari, valori esatti in memoria, bit riservati, DAZ, alias, forme non valide, proiezione e limiti di budget. `PEFixedImageTest.RawMXCSR*` controlla byte legacy/VEX e attestazioni legate alla maschera. I test dello stato macchina e del raffinamento nativo/LLVM impediscono che capacità inutilizzate estendano le interfacce.
 
+`InterpreterSpecialization.ProducerHintProvesFiniteFrameWordAtJoin` verifica l’unione di due domini entranti e la conservazione di un puntatore del frame attraverso una scrittura provatamente disgiunta. Suggerimenti parziali, limiti insufficienti e ingressi illimitati non pubblicano un grafo parziale.
+
 ## Test di recupero delle scritture segmentate
 
 `InterpreterSpecialization.SegmentedWrite*` verifica risultati indipendenti della memoria a byte, tutte le larghezze scalari, riporto degli indirizzi, alias dello stack, origini di puntatori sovrascritte, invalidazione tra nodi e budget esatti o insufficienti. `SegmentedWritesAndReadsShareLinearMemory` copre basi uguali e diverse. `PEFixedImageTest.RawSegmented*` verifica byte nativi, rifiuto degli alias di ritorno e variazioni delle attestazioni. I valori di compatibilità esistenti restano invariati. Compilare i test di specializzazione, immagini PE fisse, stato macchina e raffinamento nativo/LLVM; i rifiuti includono capacità di scrittura inutilizzate.

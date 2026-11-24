@@ -144,6 +144,10 @@ struct Projection {
   /// register domains retain no correlations or symbolic identities. Absence
   /// denotes Top; joins union offsets and widen when the tuple cap is exceeded.
   std::map<uint64_t, std::vector<uint64_t>> FrameRegisterOffsets;
+  /// Complete values of nominated eight-byte entry-frame words. A missing
+  /// domain is Top. Each predecessor proves its own values before a join can
+  /// retain their union; no numeric entry-frame address is assumed.
+  std::map<uint64_t, std::vector<uint64_t>> FrameValueDomains;
   std::map<uint64_t, uint8_t> FrameBytes;
   std::map<uint64_t, uint8_t> AbsoluteBytes;
   /// Exact physical CALL words relative to the current RSP. These facts are
@@ -501,6 +505,29 @@ bool intersect(Projection &Into, const Projection &Incoming,
                    Found->second.end(), std::back_inserter(Joined));
     if (Joined.size() > TupleLimit) {
       It = Into.FrameRegisterOffsets.erase(It);
+      Changed = true;
+      ++Widenings;
+      continue;
+    }
+    if (Joined != It->second) {
+      It->second = std::move(Joined);
+      Changed = true;
+    }
+    ++It;
+  }
+  for (auto It = Into.FrameValueDomains.begin();
+       It != Into.FrameValueDomains.end();) {
+    const auto Found = Incoming.FrameValueDomains.find(It->first);
+    if (Found == Incoming.FrameValueDomains.end()) {
+      It = Into.FrameValueDomains.erase(It);
+      Changed = true;
+      continue;
+    }
+    std::vector<uint64_t> Joined;
+    std::set_union(It->second.begin(), It->second.end(), Found->second.begin(),
+                   Found->second.end(), std::back_inserter(Joined));
+    if (Joined.size() > TupleLimit) {
+      It = Into.FrameValueDomains.erase(It);
       Changed = true;
       ++Widenings;
       continue;
@@ -907,6 +934,7 @@ struct ControlRefinement {
   std::vector<SpecializationFrameSlot> AddressSlots;
   std::map<ProducerDemand, uint64_t> ProducerDemands;
   std::map<ProducerDemand, uint64_t> PendingProducerDemands;
+  std::map<std::pair<va_t, InstructionMode>, std::set<uint64_t>> FrameWordHints;
   std::map<ProducerDemand, DeferredProducerDemand> DeferredProducerDemands;
   std::map<ProducerDemand, DeferredProducerDemand> DeferredGuardDemands;
   uint64_t Visits = 0;
@@ -2139,6 +2167,40 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
   Reachable = !Ctx.isConstZero(Predicate);
   if (!Reachable)
     return true;
+  if (Root) {
+    const auto Hints =
+        Refinement.FrameWordHints.find({Successor.Address, Successor.Mode});
+    if (Hints != Refinement.FrameWordHints.end())
+      for (uint64_t Slot : Hints->second) {
+        if (!State.hasMaterializedRegionRange(Root, Slot, 8))
+          continue;
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "frame word projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const auto Value =
+            State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
+        const auto Domain =
+            enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
+        if (Failed)
+          return false;
+        if (Domain.Status != FiniteValueStatus::Complete ||
+            Domain.Tuples.empty())
+          continue;
+        if (Domain.Tuples.size() >
+            Options.MaxOperations - Result.EvaluatedOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "frame word projection budget exhausted");
+        Result.EvaluatedOperations += Domain.Tuples.size();
+        std::vector<uint64_t> Values;
+        Values.reserve(Domain.Tuples.size());
+        for (const auto &Tuple : Domain.Tuples)
+          Values.push_back(Tuple.front());
+        llvm::sort(Values);
+        Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
+        Out.FrameValueDomains.emplace(Slot, std::move(Values));
+      }
+  }
   // An edge guard may establish an offset that was not unique in its source
   // block. Keep the fact in this projection only: mutating State would leak
   // the guard into sibling edges evaluated from the same source state.
@@ -3198,6 +3260,22 @@ bool Specializer::evaluate(int Id) {
   SymExec Exec(Ctx, State);
   auto IncomingPredicate =
       controlPredicate(State, FrameRoot, Draft.Incoming.Controls);
+  for (const auto &[Slot, Values] : Draft.Incoming.FrameValueDomains) {
+    if (!FrameRoot || Values.empty() ||
+        Values.size() > Options.MaxOperations - Result.EvaluatedOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "frame word predicate budget exhausted");
+    Result.EvaluatedOperations += Values.size();
+    const auto Value =
+        State.load(Ctx.mkAdd(FrameRoot, Ctx.mkConst(64, Slot)), 8);
+    llvm::SmallVector<SymRef, 8> Cases;
+    for (uint64_t Item : Values)
+      Cases.push_back(Ctx.mkEq(Value, Ctx.mkConst(64, Item)));
+    IncomingPredicate = Ctx.mkAnd(IncomingPredicate, Ctx.mkOr(Cases));
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "frame word predicate symbolic-node budget exhausted");
+  }
   for (const auto &Range : Draft.Incoming.Ranges) {
     if (Result.EvaluatedOperations >= Options.MaxOperations)
       return fail(SpecializationStatus::BudgetExceeded,
@@ -6351,6 +6429,9 @@ specializeInterpreter(SpecializationProvider &Provider,
     Refinement.ProducerDemands[{Hint.Cursor.Address, Hint.Cursor.Mode,
                                 Hint.Register, Hint.Offset, Hint.Bytes}] |=
         Hint.DemandedBits;
+    if (!Hint.Register && Hint.Bytes == 8 && Hint.DemandedBits == UINT64_MAX)
+      Refinement.FrameWordHints[{Hint.Cursor.Address, Hint.Cursor.Mode}].insert(
+          Hint.Offset);
   }
   for (const auto &Hint : Options.ControlPartitionHints) {
     const auto &Range = Hint.Register;

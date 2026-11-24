@@ -431,6 +431,8 @@ Le API C v10 `neverd_devirtualize_source_v10()` e `neverd_devirtualize_machine_s
 
 Le API C v11 `neverd_devirtualize_source_v11()` e `neverd_devirtualize_machine_source_v11()` accettano i candidati di `nextControlProducerHints`; la CLI accetta opzioni ripetute `--vm-producer-hint=indirizzo:r|s:offset:byte:maschera`. Prima di riutilizzarli, associarli alla stessa immagine fisica tramite l’hash nel rapporto. I suggerimenti richiedono solo maggiore precisione, consumano il budget di scoperta e non provano valori o percorsi: ogni esecuzione dimostra nuovamente l’intero grafo raggiungibile. `controlProducerHintsTruncated` segnala un elenco troncato.
 
+Un suggerimento `s` di otto byte con maschera completa può richiedere un dominio finito per una parola del frame di ingresso nel successore indicato. Ogni arco entrante deve dimostrare separatamente tutti i valori; al punto di unione resta solo l’unione limitata. Se la prova manca, è incompleta o supera il limite, la parola resta libera. Il suggerimento non fornisce valori presunti né una nuova premessa di separazione della memoria. STORE e ritorni richiedono ancora le prove ordinarie.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## Ricostruzione dell’interprete nell’app desktop

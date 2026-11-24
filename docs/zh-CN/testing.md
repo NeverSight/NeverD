@@ -292,6 +292,8 @@ build-release/bin/NeverDLowUndefinedDigestTests
 `ControlStateRecovery.ProducerHintsRequireFreshProof` 在独立运行间导出并复用精确生产者位候选，检查循环的具体输出，并验证预算耗尽或提示格式错误时不会发布部分残余代码。候选列表本身不绑定镜像，也不证明路径。
 `SessionCAPITest.InterpreterRecoveryV11KeepsProducerHintsAsCandidates` 检查带长度的 C 接口尾部、两条源码路径、错误提示、报告以及旧版本忽略新增尾部的行为。命令行源码夹具检查可重复输入候选的选项不改变完整的普通结果。
 
+`InterpreterSpecialization.ProducerHintProvesFiniteFrameWordAtJoin` 检查两条入边取值域的并集，以及已证明不相交的写入后仍保留已保存帧指针。部分位提示、上限不足和无界输入均不得发布部分图。
+
 未解析目标的守卫测试覆盖不可达的非法阶段、入口或回边之后真实可达的未知目标、精确细化次数上限，以及相邻的成功与耗尽发现预算。拒绝时不得发布残余代码、来源记录或读取见证。完整恢复之后的可选发现开销不是必需预算的下界。
 
 按需求投影帧关系的回归覆盖自动及已有寄存器载体、高位根地址与模回绕、只约束低字节的条件、兄弟边事实冲突或缺失、相邻查询预算结果及求解器 unknown。窄位需求不能把部分指针证明冒充全宽证明；拒绝恢复时不发布残留代码或见证。

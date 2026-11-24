@@ -132,6 +132,8 @@ occorrenze native e delle patch binarie.
 
 `InterpreterSpecialization` gestisce la propagazione inversa limitata delle richieste di bit dopo un tentativo fallito. Riutilizza il valutatore scalare senza cambiare i fatti del grafo né aggiungere campi di controllo o contesti; tutto il lavoro resta soggetto ai budget e la pubblicazione richiede una nuova prova completa.
 
+Un suggerimento `s` di otto byte con maschera completa può richiedere un dominio finito per una parola del frame di ingresso nel successore indicato. Ogni arco entrante deve dimostrare separatamente tutti i valori; al punto di unione resta solo l’unione limitata. Se la prova manca, è incompleta o supera il limite, la parola resta libera. Il suggerimento non fornisce valori presunti né una nuova premessa di separazione della memoria. STORE e ritorni richiedono ancora le prove ordinarie.
+
 Il raffinamento dei contesti può proporre anche un contenitore di indirizzo di otto byte già tracciato quando una richiesta di memoria successiva ne usa soltanto una porzione. Le coordinate ristrette originali del produttore restano il riferimento; solo l’inserimento in coda forma chiavi da costanti o scostamenti del frame dimostrati.
 
 L’enumerazione finita può osservare tuple ammissibili senza cambiare la query di prova. Il rifiuto dell’osservatore restituisce un risultato incompleto senza tuple. La cache conserva solo prove matematiche del dominio; i certificati delle letture immutabili restano locali fino al completamento dell’enumerazione.

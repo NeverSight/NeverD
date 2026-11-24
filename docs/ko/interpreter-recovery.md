@@ -361,6 +361,8 @@ v10 C API `neverd_devirtualize_source_v10()`과 `neverd_devirtualize_machine_sou
 
 v11 C API `neverd_devirtualize_source_v11()`과 `neverd_devirtualize_machine_source_v11()`은 `nextControlProducerHints`의 후보를 받습니다. CLI에서는 `--vm-producer-hint=주소:r|s:오프셋:바이트:비트마스크`를 반복해서 지정할 수 있습니다. 다시 사용하기 전에 보고서의 이미지 해시로 동일한 물리 이미지에 묶으십시오. 후보는 정밀도만 요청하고 발견 예산을 사용합니다. 값이나 도달 가능한 경로를 증명하지 않으며, 매 실행에서 도달 가능한 전체 그래프를 다시 증명합니다. `controlProducerHintsTruncated`는 목록이 잘렸음을 나타냅니다.
 
+모든 비트를 지정한 8바이트 `s` 힌트는 지정한 후속 지점에서 진입 프레임 워드의 유한 값 영역을 요청할 수 있습니다. 각 진입 간선이 값을 독립적으로 완전 증명해야 하며, 합류점에서는 한도 안의 합집합만 유지합니다. 증명이 없거나 불완전하거나 한도를 넘으면 워드는 제약되지 않습니다. 힌트는 값이나 메모리 분리 전제를 추가하지 않으며 STORE와 반환에는 기존 증명이 필요합니다.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## 데스크톱에서 인터프리터 복원

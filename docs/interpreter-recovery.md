@@ -97,6 +97,15 @@ control transfers again and can still refuse. Input hints consume the ordinary
 discovery budget. A truncated output list is marked
 `controlProducerHintsTruncated` and remains safe but may omit useful hints.
 
+A full-width eight-byte `s` hint can also request a finite value domain for an
+entry-frame word at that physical successor. Each incoming edge must completely
+enumerate the word under its own guard; joins retain only the bounded union.
+Missing, incomplete or over-limit domains leave the word unconstrained. The
+hint supplies neither a value nor a memory-separation premise. For example,
+`--vm-producer-hint=0x130:s:-24:8:0xffffffffffffffff` requests the word at
+entry-RSP minus 24 before instruction `0x130`. All later STORE and return
+proofs still use the ordinary alias and control rules.
+
 Projection of ordinary automatic fields is also scoped to the destination
 node's demands. A nonconstant field enters an edge's joint finite-value
 relation only when the destination demands it. Manual fields and

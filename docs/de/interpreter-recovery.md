@@ -437,6 +437,8 @@ Die C-APIs v10 `neverd_devirtualize_source_v10()` und `neverd_devirtualize_machi
 
 Die v11-C-APIs `neverd_devirtualize_source_v11()` und `neverd_devirtualize_machine_source_v11()` akzeptieren optionale Kandidaten aus `nextControlProducerHints`; die CLI nimmt wiederholte `--vm-producer-hint=Adresse:r|s:Offset:Bytes:Bitmaske`-Angaben an. Binden Sie gespeicherte Hinweise vor der Wiederverwendung über den Bild-Hash an dasselbe physische Image. Hinweise liefern keine Werte oder erreichbaren Pfade, zählen zum Entdeckungsbudget und ersetzen keine erneute vollständige Beweisführung. `controlProducerHintsTruncated` kennzeichnet eine gekürzte Liste.
 
+Ein `s`-Hinweis für ein vollständiges Acht-Byte-Wort kann am angegebenen Nachfolger eine endliche Wertemenge für ein Wort im Eingangs-Stackframe anfordern. Jede eingehende Kante muss ihre Werte vollständig selbst beweisen; am Join bleibt nur die begrenzte Vereinigung erhalten. Fehlt ein Beweis, ist er unvollständig oder überschreitet er das Limit, bleibt das Wort unbeschränkt. Der Hinweis liefert weder einen angenommenen Wert noch eine neue Speichertrennungsannahme. STORE und Rückkehr benötigen weiterhin ihre üblichen Beweise.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## Interpreter-Rekonstruktion im Desktop

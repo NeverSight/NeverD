@@ -15765,6 +15765,12 @@ the merged bounded set on completion or refusal. A hint names a location and
 bit mask, never a value or a feasible edge. Importing a prior set charges the
 discovery budget and restarts the full graph proof; malformed ranges refuse.
 Reports label these as reusable candidates, not residual or source evidence.
+Full-width eight-byte entry-frame candidates may additionally project the
+word's complete finite value domain at the nominated successor. The edge
+solver supplies every value, joins union only proved domains within the tuple
+limit, and node reconstruction constrains a fresh word by that union. Missing
+or incomplete edge proofs widen to Top. `SymState` remains the memory owner;
+this projection neither assumes a runtime address nor authorizes a write.
 
 Context refinement may additionally nominate a tracked eight-byte address carrier when a later memory demand uses only its byte slice. The original narrow producer coordinates remain authoritative; only enqueue forms keys from proved constants or frame offsets.
 

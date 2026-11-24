@@ -45,6 +45,8 @@ risikoreichen Pull Request das breitere Aggregat aus.
 
 `InterpreterSpecialization.MXCSR*` prüft beliebige Anfangszustände, exakte Speicherwerte, reservierte Bits, DAZ, Aliase, ungültige Formen, Knotenprojektion und Budgetgrenzen. `PEFixedImageTest.RawMXCSR*` prüft Legacy/VEX-Bytes und maskengebundene Nachweise. Maschinenzustands- und native/LLVM-Verfeinerungstests verhindern, dass ungenutzte Fähigkeiten die Schnittstellen erweitern.
 
+`InterpreterSpecialization.ProducerHintProvesFiniteFrameWordAtJoin` prüft die Vereinigung zweier eingehender Wortbereiche und den Erhalt eines gesicherten Frame-Zeigers über einen bewiesen getrennten Schreibzugriff. Teilhinweise, zu kleine Limits und unbeschränkte Eingaben veröffentlichen keinen Teilgraphen.
+
 ## Tests für segmentierte Schreibzugriffe
 
 `InterpreterSpecialization.SegmentedWrite*` prüft unabhängige Byte-Speicherergebnisse, alle Skalarbreiten, Adressüberlauf, Frame-Aliase, überschriebene Zeigerherkunft, knotenübergreifende Invalidierung und genaue oder zu kleine Budgets. `SegmentedWritesAndReadsShareLinearMemory` deckt gleiche und verschiedene Basisadressen ab. `PEFixedImageTest.RawSegmented*` prüft native Bytes, die Ablehnung von Rückkehr-Aliasen und geänderte Fähigkeitsnachweise. Bestehende Kompatibilitätswerte bleiben erhalten. Die Tests für Spezialisierung, feste PE-Abbilder, Maschinenzustand und native/LLVM-Verfeinerung bauen; Ablehnungsprüfungen erfassen auch ungenutzte Schreibfähigkeiten.

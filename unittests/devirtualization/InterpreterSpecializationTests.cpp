@@ -5234,6 +5234,65 @@ TEST(InterpreterSpecialization, AtomicUpdatesPreserveFrameOnlyWithProof) {
   }
 }
 
+TEST(InterpreterSpecialization, ProducerHintProvesFiniteFrameWordAtJoin) {
+  Provider P;
+  P.add(0x100,
+        {op(NdOp::INT_SUB, reg(40), {reg(32), constant(16)}),
+         op(NdOp::INT_SUB, reg(48), {reg(32), constant(24)}),
+         op(NdOp::STORE, {}, {reg(40), reg(32)}),
+         op(NdOp::INT_AND, reg(64), {reg(8), constant(1)}),
+         op(NdOp::COND_BR, {}, {constant(0x110), reg(64)})},
+        0x120);
+  P.add(0x110, {op(NdOp::STORE, {}, {reg(48), constant(0x8080)}), jump(0x130)});
+  P.add(0x120, {op(NdOp::STORE, {}, {reg(48), constant(0x8090)}), jump(0x130)});
+  P.add(0x130, {op(NdOp::LOAD, reg(56), {reg(48)}),
+                op(NdOp::STORE, {}, {reg(56), constant(17)}), jump(0x140)});
+  P.add(0x140, {op(NdOp::LOAD, reg(32), {reg(40)}),
+                op(NdOp::COPY, reg(0), {constant(9)}), ret()});
+
+  auto O = separatedStoreOptions();
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-32, 8};
+  O.EntryFrameBounds->ExcludedAddressRanges = {{0x8080, 0x8098}};
+  O.ProveStoreFrameSeparation = true;
+  const auto Unhinted = specializeInterpreter(P, {0x100}, O);
+  EXPECT_FALSE(Unhinted.complete());
+  EXPECT_TRUE(Unhinted.Residual.Blocks.empty());
+
+  O.ControlProducerHints = {{{0x130}, false, uint64_t(-24), 8, UINT64_MAX}};
+  const auto R = specializeInterpreter(P, {0x100}, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_EQ(count(R.Residual, NdOp::STORE), 4u);
+  for (uint64_t Root : {0x1000u, 0x2000u})
+    for (uint64_t Selector : {0u, 1u, 2u, 3u}) {
+      std::map<uint64_t, uint8_t> FinalMemory;
+      EXPECT_EQ(execute(R.Residual, {{8, Selector}, {32, Root}}, {}, 0, {},
+                        std::nullopt, {}, &FinalMemory),
+                9u);
+      const uint64_t Target = Selector & 1 ? 0x8080 : 0x8090;
+      ASSERT_TRUE(FinalMemory.count(Target));
+      EXPECT_EQ(FinalMemory.at(Target), 17u);
+    }
+
+  // The hint is a location request, never an asserted value. A partial bit
+  // request or a union wider than the finite-domain cap cannot rescue it.
+  auto Partial = O;
+  Partial.ControlProducerHints.front().DemandedBits = 0xff;
+  const auto PartialResult = specializeInterpreter(P, {0x100}, Partial);
+  EXPECT_FALSE(PartialResult.complete());
+  EXPECT_TRUE(PartialResult.Residual.Blocks.empty());
+
+  auto Narrow = O;
+  Narrow.MaxControlTuples = 1;
+  const auto NarrowResult = specializeInterpreter(P, {0x100}, Narrow);
+  EXPECT_FALSE(NarrowResult.complete());
+  EXPECT_TRUE(NarrowResult.Residual.Blocks.empty());
+
+  P.Code.at(0x120).Ops[0].Inputs[1] = reg(16);
+  const auto Unbounded = specializeInterpreter(P, {0x100}, O);
+  EXPECT_FALSE(Unbounded.complete());
+  EXPECT_TRUE(Unbounded.Residual.Blocks.empty());
+}
+
 void addTimestamp(Provider &P, va_t Address) {
   Decoder D;
   ASSERT_TRUE(D.init(Arch::X64));
