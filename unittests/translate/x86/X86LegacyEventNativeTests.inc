@@ -21,18 +21,20 @@ protected:
   void compare(unsigned CPL, unsigned TargetCPL, bool Gate32, bool Code32,
                bool Stack32, bool TSS32, unsigned EventKind, unsigned Case,
                uint32_t ExtraFlags = 0, bool SameRingFaults = false,
-               std::optional<X86LegacyUD0FetchProfile> UD0Profile = {}) {
+               std::optional<X86LegacyUD0FetchProfile> UD0Profile = {},
+               unsigned UD0AddressForm = 0) {
     using namespace neverd;
     SCOPED_TRACE(testing::Message()
                  << "cpl=" << CPL << " target=" << TargetCPL << " gate32="
                  << Gate32 << " code32=" << Code32 << " stack32=" << Stack32
                  << " tss32=" << TSS32 << " event=" << EventKind
                  << " case=" << Case << " extra_flags=" << ExtraFlags
-                 << " same_ring_faults=" << SameRingFaults);
+                 << " same_ring_faults=" << SameRingFaults
+                 << " ud0_address_form=" << UD0AddressForm);
     const bool Legacy = GetParam() == 2;
     const bool UD0Boundary = EventKind == 6;
     const uint32_t InstructionPC =
-        UD0Boundary ? 0x2000 - (Code32 ? 2 : 3) : Code;
+        UD0Boundary ? 0x2000 - (Code32 ? 2 : 3) - UD0AddressForm : Code;
     const uint32_t DefaultHandler = UD0Boundary ? 0x30000 : 0x2000;
     const unsigned PTWidth = Legacy ? 4 : 8;
     const uint64_t PT = Legacy ? 0x11000 : 0x12000;
@@ -225,9 +227,15 @@ protected:
             ? (Code32 ? std::vector<uint8_t>{0x0f, 0xb9, 0x00}
                       : std::vector<uint8_t>{0x67, 0x0f, 0xb9, 0x00})
         : UD0Boundary
-            ? (Code32 ? std::vector<uint8_t>{0x0f, 0xff, 0x00}
-                      : std::vector<uint8_t>{0x67, 0x0f, 0xff, 0x00})
+            ? (UD0AddressForm == 0
+                   ? std::vector<uint8_t>{0x0f, 0xff, 0x00}
+               : UD0AddressForm == 1
+                   ? std::vector<uint8_t>{0x0f, 0xff, 0x04, 0x20}
+                   : std::vector<uint8_t>{0x0f, 0xff, 0x84, 0x20, 0, 0, 0,
+                                          0})
             : std::vector<uint8_t>{0xcd, Vector};
+    if (UD0Boundary && !Code32)
+      Instruction.insert(Instruction.begin(), 0x67);
     std::copy(Instruction.begin(), Instruction.end(), RAM + InstructionPC);
     if (EventKind == 4) {
       Instruction = {0x8e, 0xd0}; // Null MOV SS generates a real #GP(0).
@@ -464,10 +472,11 @@ TEST_P(X86LegacyEventNativeTest, OriginalUD0FetchPriorityUsesTheBoundCore) {
                            ? X86LegacyUD0FetchProfile::OpcodeOnly
                            : X86LegacyUD0FetchProfile::CompleteModRM;
   RecordProperty("core_type", CoreType);
-  for (bool Code32 : {false, true})
-    for (unsigned CPL : {0u, 3u})
-      ASSERT_NO_FATAL_FAILURE(compare(CPL, 0, true, Code32, true, true, 6, 0,
-                                      0, false, Profile));
+  for (unsigned Form : {0u, 1u, 2u})
+    for (bool Code32 : {false, true})
+      for (unsigned CPL : {0u, 3u})
+        ASSERT_NO_FATAL_FAILURE(compare(CPL, 0, true, Code32, true, true, 6,
+                                        0, 0, false, Profile, Form));
   RecordProperty("cpu_comparisons", Comparisons);
 }
 

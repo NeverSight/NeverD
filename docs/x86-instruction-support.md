@@ -88,6 +88,19 @@ specifies the unconditional exception and absence of memory effects. The
 processor-specific UD0 fetch boundary remains a separate profile; this change
 does not claim byte-identical generated UD1 machine code.
 
+UD0 now has an explicit original-byte fetch profile. On the qualified Intel
+i9-13900H, the P core fetches the encoded ModR/M address and reports a page
+fault when it crosses an absent page; the E core reports `#UD` after the opcode
+without fetching that address. The executor accepts either bound behavior,
+retains the original instruction PC and never reads the encoded data operand.
+An unbound profile or incomplete ModR/M binding for the complete-fetch profile
+fails clearly. KVM comparisons cover code16/code32, CPL0/CPL3 and legacy/PAE
+paging on each core type. The protected C dispatcher exercises both profiles
+through x64 Clang and x64 NeverC at O0/O2. The
+[Intel instruction reference](https://cdrdv2-public.intel.com/774492/325383-sdm-vol-2abcd.pdf)
+also documents that some processors decode UD0 without ModR/M; callers must
+bind the target processor rather than infer this choice from the host.
+
 | Execution domain | Verified behavior |
 | --- | --- |
 | Real, virtual-8086, protected, compatibility and 64-bit code | Control-register and far transfers, task gates and nested IRET, Intel SYSENTER and SYSEXIT, and original-IDT fault frames. An incoming task or a backing pause preserves the completed stores and the original restart point. |

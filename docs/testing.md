@@ -10320,6 +10320,14 @@ both paging profiles, including an unmapped encoded memory operand.
 `X86LegacySourceTest.OriginalUD1FaultsWithoutReadingMemory` exercises the
 compiled protected C dispatcher in code16/code32 with Clang and x64 NeverC at
 O0/O2, checking #UD, CR2 and the original fault frame.
+`X86LegacyExecutionTest.UD0FetchProfileSelectsTheOriginalFault` checks
+opcode-only versus complete-ModR/M fetch at an absent page, unbound and
+incomplete-profile refusal, and malformed byte extents. Pin
+`LegacyEvents/*OriginalUD0*` to the qualified Intel P and E cores separately:
+the P core fetches the missing ModR/M page and the E core raises #UD from the
+opcode. Each compares code16/code32 and CPL0/CPL3 under legacy and PAE paging.
+`X86LegacySourceTest.OriginalUD0UsesTheBoundFetchProfile` compiles both
+bindings through x64 Clang/NeverC at O0/O2 and checks the original #UD frame.
 
 ```sh
 cmake --build build-release --target NeverDX86EncodingAccuracyTests

@@ -269,7 +269,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     return invalid("UD0 requires a bound instruction-fetch profile");
   if (UD0 && *Options.UD0Fetch == X86LegacyUD0FetchProfile::CompleteModRM &&
       Body.size() == 2)
-    return invalid("UD0 complete-ModR/M profile requires encoded address bytes");
+    return invalid("UD0 complete ModR/M profile requires address bytes");
   if (Non64Mode) {
     using Op = detail::X86LegacyScalarOperation;
     if (State.Mpx || FastSystem || Port || String || Mpx ||
