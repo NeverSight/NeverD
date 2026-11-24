@@ -202,8 +202,10 @@ TEST(MicroMIPS64, DoublewordProductsWriteBothAccumulatorHalves) {
       EXPECT_TRUE(std::equal(Bytes.begin(), Bytes.end(), Insn.Raw->bytes));
       const auto &Detail = Insn.Raw->detail->mips;
       ASSERT_EQ(Detail.op_count, 2u);
-      EXPECT_EQ(Detail.operands[0].reg, MIPS_REG_A0);
-      EXPECT_EQ(Detail.operands[1].reg, MIPS_REG_A1);
+      ASSERT_EQ(Detail.operands[0].type, MIPS_OP_REG);
+      ASSERT_EQ(Detail.operands[1].type, MIPS_OP_REG);
+      EXPECT_EQ(Detail.operands[0].reg, MIPS_REG_A0_64);
+      EXPECT_EQ(Detail.operands[1].reg, MIPS_REG_A1_64);
 
       ASSERT_EQ(
           Micro.decodeOneForLift(Bytes.data(), Bytes.size(), Image.Entry, Insn),
