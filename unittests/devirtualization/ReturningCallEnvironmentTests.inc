@@ -247,6 +247,84 @@ TEST_F(PEFixedImageTest, ReturningCallFreshResultKeepsBothFeasibleBranches) {
   EXPECT_EQ(Branches, 1U);
 }
 
+TEST_F(PEFixedImageTest, ReturningCallResultObjectKeepsNullAndBoundedWrites) {
+  // The explicit result relation admits NULL and a 64-byte object. Only the
+  // nonnull branch writes within that object; the physical caller word must
+  // remain intact across the call and the write.
+  const std::vector<uint8_t> Code{0xba, 0x40, 0,    0,    0, // mov edx,64
+                                  0x48, 0x83, 0xec, 0x40,    // sub rsp,64
+                                  0xff, 0xd7,                // call rdi
+                                  0x48, 0x83, 0xc4, 0x40,    // add rsp,64
+                                  0x48, 0x85, 0xc0,          // test rax,rax
+                                  0x74, 0x04,                // je ret
+                                  0x48, 0x89, 0x48, 0x38,    // mov [rax+56],rcx
+                                  0xc3};                     // ret
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x1100);
+  O.X64MachineExits = {{1, Base + 0x1100, MachineExitKind::Trap}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 3;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  unsigned Branches = 0, Stores = 0, Returns = 0;
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops) {
+      Branches += Op.Opcode == NdOp::COND_BR;
+      Stores += Op.Opcode == NdOp::STORE;
+      Returns += Op.Opcode == NdOp::RETURN;
+    }
+  EXPECT_EQ(Branches, 1U);
+  EXPECT_GE(Stores, 2U); // physical CALL push and the bounded result write
+  EXPECT_GE(Returns, 1U);
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  auto WithoutObject = O;
+  WithoutObject.X64ReturningCalls.front().Version = 2;
+  WithoutObject.X64ReturningCalls.front().Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnFrameSpansV2;
+  const auto Missing =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, WithoutObject);
+  EXPECT_FALSE(Missing.complete());
+  EXPECT_TRUE(Missing.Residual.Blocks.empty());
+
+  auto ZeroSize = Code;
+  ZeroSize[1] = 0;
+  auto ZeroLoaded = load(machineExitFixture(ZeroSize));
+  ASSERT_TRUE(bool(ZeroLoaded)) << llvm::toString(ZeroLoaded.takeError());
+  const auto Zero = specializeBinaryInterpreter(*ZeroLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Zero.complete());
+  EXPECT_TRUE(Zero.Residual.Blocks.empty());
+
+  auto UnknownSize = Code;
+  std::fill_n(UnknownSize.begin(), 5, 0x90);
+  auto UnknownLoaded = load(machineExitFixture(UnknownSize));
+  ASSERT_TRUE(bool(UnknownLoaded)) << llvm::toString(UnknownLoaded.takeError());
+  const auto Unknown =
+      specializeBinaryInterpreter(*UnknownLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Unknown.complete());
+  EXPECT_TRUE(Unknown.Residual.Blocks.empty());
+
+  auto OutOfRange = Code;
+  OutOfRange[23] = 0x40;
+  auto OutOfRangeLoaded = load(machineExitFixture(OutOfRange));
+  ASSERT_TRUE(bool(OutOfRangeLoaded))
+      << llvm::toString(OutOfRangeLoaded.takeError());
+  const auto Outside =
+      specializeBinaryInterpreter(*OutOfRangeLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Outside.complete());
+  EXPECT_TRUE(Outside.Residual.Blocks.empty());
+}
+
 TEST_F(PEFixedImageTest,
        ReturningCallRepeatedNativeSiteHasFiniteStaticReceipts) {
   // The saved nonvolatile counter is two. The same opaque site executes twice;

@@ -205,6 +205,14 @@ public:
       const SpecializationReturningCall &Call) const override {
     return x64::returningCallTransition(Call.Declaration);
   }
+  std::vector<RecoveryResultObjectSite> returningCallResultObjects(
+      const SpecializationOptions &Options) const override {
+    std::vector<RecoveryResultObjectSite> Result;
+    for (const auto &Call : Options.X64ReturningCalls)
+      if (const auto Object = x64::returningCallTransition(Call).ReturnedObject)
+        Result.push_back({Call.Address, *Object});
+    return Result;
+  }
   std::string
   returningCallDigest(const SpecializationReturningCall &Call) const override {
     return x64::returningCallDigest(Call);
