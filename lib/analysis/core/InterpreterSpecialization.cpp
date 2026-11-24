@@ -4464,10 +4464,9 @@ bool Specializer::evaluate(int Id) {
                       enumerate(Ctx, Exec.pathPredicate(), {Overlap}, 1);
                   if (Failed)
                     return false;
-                  if (Domain.Status == FiniteValueStatus::Unknown)
-                    return fail(SpecializationStatus::BudgetExceeded,
-                                "materialized frame separation proof exceeded "
-                                "its budget");
+                  // This byte is only an optional preservation candidate.
+                  // An incomplete local proof leaves it to ordinary alias
+                  // invalidation; demanded return-slot checks still run below.
                   if (Domain.Status != FiniteValueStatus::Complete ||
                       Domain.Tuples != std::vector<std::vector<uint64_t>>{{0}})
                     continue;
