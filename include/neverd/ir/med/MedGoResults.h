@@ -40,6 +40,10 @@ int goResultPosition(Arch A, uint64_t RegOff);
 /// each from its first register.
 int goFloatResultPosition(Arch A, uint64_t RegOff);
 
+/// The register of Go's floating result at \p Position on \p A (X0-X14,
+/// arm64 V0-V15): goFloatResultPosition's inverse.
+uint64_t goFloatResultRegister(Arch A, int Position);
+
 /// The results a call returns: the position of the last, and for each the
 /// bytes of its register the call's readers take, at most a word.  A
 /// position no reader takes, before the last, is a whole word.
@@ -61,9 +65,17 @@ struct GoCallShape {
 /// a result's bytes as it covers.  With \p Floats, a read of a floating
 /// result register counts too (GoCallShape::LastFloat).  A call none of
 /// whose results past RAX is read is absent.
+///
+/// With \p BothBanks (and floating reads), Go's two banks of results count
+/// apart, each from its first register: a call returns RAX where RAX is its
+/// value and X0 (arm64 F0) where that is, and a read of the other bank's
+/// first register is a result too.  A call's shape then holds no integer
+/// result (Last -1) where it returns floating ones alone, and a call none of
+/// whose results past those it returns is read is absent.
 std::map<uint32_t, GoCallShape>
 goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
-                  llvm::ArrayRef<MedVar> Returned = {}, bool Floats = false);
+                  llvm::ArrayRef<MedVar> Returned = {}, bool Floats = false,
+                  bool BothBanks = false);
 
 /// What a Go function's return in \p Block hands back in the register at
 /// \p RegOff, as the return lowers a result field: the newest write of the
@@ -74,7 +86,10 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
 /// entry copy of the low byte) is a value of its own, which a later write of
 /// the whole register leaves stale.  A join without a PHI for the register
 /// brings the same value along every edge, so any edge that reaches it will do.
-/// \p ById maps the function's block ids to its blocks.
+/// \p ById maps the function's block ids to its blocks.  With \p Floating,
+/// \p RegOff is a floating result's vector register: every write of four
+/// bytes or more defines it, as a scalar's (MOVSS, MOVSD) does, but a view
+/// of the register's own value does not.
 struct GoReturnedValue {
   enum Kind : uint8_t { Unknown, Defined, Phi, Call, Entry } What = Unknown;
   const MedVar *Value = nullptr;
@@ -82,7 +97,8 @@ struct GoReturnedValue {
 };
 GoReturnedValue
 goReturnedValue(const llvm::DenseMap<int, const MedBlock *> &ById,
-                const MedBlock &Block, uint64_t RegOff, Arch A);
+                const MedBlock &Block, uint64_t RegOff, Arch A,
+                bool Floating = false);
 
 /// Make each call of \p Func that \p Shapes names return Go's integer
 /// results through its last position, each as wide as its shape says,
@@ -92,7 +108,11 @@ goReturnedValue(const llvm::DenseMap<int, const MedBlock *> &ById,
 /// values.  A width wider than its field takes the field's value in its low
 /// bytes: no reader takes more.  A call that returns some already, each a
 /// word, takes the rest.  Its floating results follow its integer ones in
-/// the record, each a float as wide as the shape says.
+/// the record, each a float as wide as the shape says.  A record of floating
+/// results alone (Last -1) holds no integer one: the RAX a call returned
+/// before is then left as a call leaves a register it returns nothing in.
+/// A call that returned X0 (arm64 F0) alone returns it as the first
+/// floating result.
 void defineGoCallResults(MedFunc &Func, Arch A,
                          const std::map<uint32_t, GoCallShape> &Shapes);
 

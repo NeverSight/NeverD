@@ -21226,6 +21226,19 @@ unknown value.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.
+`GoFloatResults` runs the pipeline, on amd64 and arm64 into HighC and LLVM C,
+over register-ABI routines that return floats, and compiles and runs each C
+with a driver. `ACallReturnsBothFloatsItsCalleeDoes`: `main.split` returns
+two loads in X0 and X1 and no integer, `main.diff` reads both below a branch,
+and both the function and the call hold `{X0, X1}`; it fails where direct
+calls return integer results alone. `ACallReturnsAnIntegerBesideAFloat`:
+`main.pair` returns `{RAX, X0}`, both read below the branch.
+`AForwardingCallReturnsWhatItsCalleeDoes`: `main.fwd` hands back what
+`main.split` returns, and its callers' read of X1 makes it a result of both.
+Their near-identical counterexample `AFloatNoReturnWritesIsNoResult` reads X1
+after `main.one`, which writes X0 alone: `main.one` returns a float and its
+call no record; it fails where the struct-return heuristic shapes Go calls
+again.
 `GoInternalABI.AFuncValueCallTakesItsArgumentsInGoRegisters` lifts `main.g`,
 built as ELF and as PE, which sets RAX to 5 and RBX to 7 and calls a func value
 through RDX after storing a local above Win64's shadow space, RDI set before a
