@@ -100,6 +100,10 @@ SymRef foldOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   if (Budget.exhausted() || Ctx.op(Root) != SymOp::Mul ||
       Ctx.numOperands(Root) < limits::kMinResidueProductFactors)
     return Root;
+  const auto Distributed =
+      foldDistributedProduct(Ctx, Root, Budget, Storage, EmittedReading);
+  if (Distributed != Root || Budget.exhausted())
+    return Distributed;
   if (Ctx.numOperands(Root) > limits::kMaxResidueProductFactors) {
     const auto Scale = Ctx.operand(Root, 0);
     if (!Ctx.isConst(Scale))

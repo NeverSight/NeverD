@@ -996,14 +996,25 @@ void evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
     Result = Arg(0).extractBits(W, static_cast<uint32_t>(N.Aux));
     return;
   case SymOp::Concat: {
-    llvm::APInt Acc(W, 0);
-    uint32_t Shift = W;
+    if (Result.getBitWidth() != W)
+      Result = llvm::APInt(W, 0);
+    unsigned End = W;
     for (size_t I = 0; I < NumArgs; ++I) {
-      const auto &A = Arg(I);
-      Shift -= A.getBitWidth();
-      Acc |= A.zext(W).shl(Shift);
+      const auto &Lane = Arg(I);
+      const unsigned Bits = Lane.getBitWidth();
+      End -= Bits;
+      if (End % 64 == 0) {
+        Result.insertBits(Lane, End);
+        continue;
+      }
+      // APInt's arbitrary-width unaligned insertion walks individual bits.
+      // Each word insertion touches at most two destination limbs.
+      const auto *Words = Lane.getRawData();
+      for (unsigned J = 0; J < Lane.getNumWords(); ++J) {
+        const unsigned Offset = J * 64;
+        Result.insertBits(Words[J], End + Offset, std::min(64u, Bits - Offset));
+      }
     }
-    Result = Acc;
     return;
   }
   case SymOp::ZExt:
@@ -1074,6 +1085,25 @@ llvm::APInt evaluateAffineFactors(llvm::ArrayRef<llvm::APInt> Values,
                                   llvm::ArrayRef<uint32_t> Sources,
                                   llvm::ArrayRef<uint64_t> Coefficients,
                                   unsigned Bits) {
+  // The low word of every Horner step is exact modulo 2^Bits.
+  if (Bits <= 64) {
+    uint64_t Product = 1;
+    for (auto I : Sources.drop_front()) {
+      const auto Repeat = Coefficients.front();
+      const size_t Header = Repeat ? 1 : 2;
+      const unsigned Degree = Repeat ? 1 : Coefficients[1];
+      const auto Row = Coefficients.slice(Header, Degree + 1);
+      const uint64_t X = Values[I].getRawData()[0];
+      uint64_t Factor = Row.back();
+      for (size_t J = Degree; J; --J)
+        Factor = Factor * X + Row[J - 1];
+      for (uint64_t K = 0, Count = Repeat ? Repeat : 1; K < Count; ++K)
+        Product *= Factor;
+      Coefficients = Coefficients.drop_front(Header + Degree + 1);
+    }
+    return multiplyShiftedPrefix(Values[Sources.front()],
+                                 llvm::APInt(Bits, Product, false, true));
+  }
   const unsigned N = llvm::APInt::getNumWords(Bits);
   llvm::SmallVector<uint64_t, 32> Storage(4 * size_t(N), 0);
   auto *Product = Storage.data(), *Next = Product + N;

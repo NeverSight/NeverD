@@ -98,7 +98,6 @@ public:
   TermBank(SymContext &Ctx, size_t BehaviourWords)
       : Ctx(Ctx), BehaviourWords(BehaviourWords) {
     Flat.swap(retainedBehaviours());
-    Flat.clear();
   }
 
   ~TermBank() {
@@ -112,18 +111,17 @@ public:
   /// Record \p Node under \p Words at \p Cost, unless something already behaves
   /// that way.  True when it was recorded.
   bool insert(SymRef Node, Behaviour Words, size_t Cost) {
-    const uint64_t Hash = hashBehaviour(Words);
-    if (contains(Hash, Words))
+    if (!remember(Words))
       return false;
-    addMaterialized(Hash, Node, Words, Cost);
+    llvm::copy(Words, nextBehaviour().begin());
+    addMaterialized(Node, Cost);
     return true;
   }
 
   /// Record the recipe for a new behaviour without interning a node.
-  void defer(uint64_t Hash, GramOp Op, llvm::ArrayRef<size_t> Operands,
-             Behaviour Words, size_t Cost) {
+  void defer(GramOp Op, llvm::ArrayRef<size_t> Operands, size_t Cost) {
     Pending.push_back({Op, Operands.front(), Operands.back()});
-    add(Hash, Words, Cost);
+    add(Cost);
   }
 
   // Only a target match needs an expression. Replay earlier representatives
@@ -142,20 +140,32 @@ public:
     return build(Op, Operands.front(), Operands.back());
   }
 
-  void addMaterialized(uint64_t Hash, SymRef Node, Behaviour Words,
-                       size_t Cost) {
+  void addMaterialized(SymRef Node, size_t Cost) {
     Nodes.push_back(Node);
-    add(Hash, Words, Cost);
+    add(Cost);
   }
 
-  bool contains(uint64_t Hash, Behaviour Words) const {
-    auto It = ByHash.find(Hash);
-    if (It == ByHash.end())
-      return false;
-    for (size_t I : It->second)
-      if (behaviour(I) == Words)
-        return true;
-    return false;
+  // Heads and links are one-based so zero terminates a collision chain.
+  // Reserve the next index only after comparing the complete signatures.
+  bool remember(Behaviour Words) {
+    auto &Head = ByHash[hashBehaviour(Words)];
+    for (size_t I = Head; I; I = Previous[I - 1])
+      if (behaviour(I - 1) == Words)
+        return false;
+    Previous.push_back(Head);
+    Head = Previous.size();
+    return true;
+  }
+
+  // An uncommitted signature is the next row in the bank. A duplicate
+  // reuses that space. Growing it before operand lookup keeps their pointers
+  // valid for the whole measurement, even across a reallocation.
+  llvm::MutableArrayRef<uint64_t> nextBehaviour() {
+    const size_t Begin = (Nodes.size() + Pending.size()) * BehaviourWords;
+    const size_t End = Begin + BehaviourWords;
+    if (End > Flat.size())
+      Flat.resize(End);
+    return llvm::MutableArrayRef(Flat).slice(Begin, BehaviourWords);
   }
 
   SymRef node(size_t I) const { return Nodes[I]; }
@@ -173,10 +183,8 @@ public:
   size_t costAt(size_t I) const { return Costs[I]; }
 
 private:
-  void add(uint64_t Hash, Behaviour Words, size_t Cost) {
+  void add(size_t Cost) {
     const size_t Index = Nodes.size() + Pending.size() - 1;
-    Flat.insert(Flat.end(), Words.begin(), Words.end());
-    ByHash[Hash].push_back(Index);
     std::vector<size_t> &Tier = ByCost[Cost];
     if (Tier.empty())
       Costs.push_back(Cost);
@@ -196,7 +204,8 @@ private:
   /// visits them the same way on every run.
   std::unordered_map<size_t, std::vector<size_t>> ByCost;
   std::vector<size_t> Costs;
-  llvm::DenseMap<uint64_t, llvm::SmallVector<size_t, 2>> ByHash;
+  llvm::DenseMap<uint64_t, size_t> ByHash;
+  std::vector<size_t> Previous;
 };
 
 } // namespace
@@ -304,17 +313,17 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     if (Ctx.isConst(Bank.node(I)))
       LiteralTerms.push_back(I);
 
-  Measured.resize(Points * ValueWords);
   llvm::SmallVector<llvm::APInt, 2> Args;
 
   // Read a candidate's behaviour off its operands'.  Nearly every search is at
   // a machine width, where a column of words needs no per-point interpretation.
-  auto measure = [&](GramOp Op, llvm::ArrayRef<size_t> Operands) {
+  auto measure = [&](GramOp Op, llvm::ArrayRef<size_t> Operands,
+                     llvm::MutableArrayRef<uint64_t> Out) {
     if (ValueWords == 1) {
       Sem.applyColumn(Op, Bank.behaviour(Operands[0]).data(),
                       Operands.size() > 1 ? Bank.behaviour(Operands[1]).data()
                                           : nullptr,
-                      Measured.data(), Points);
+                      Out.data(), Points);
       return;
     }
     Args.resize(Operands.size());
@@ -324,8 +333,7 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
             P.Width,
             Bank.behaviour(Operands[K]).slice(Pt * ValueWords, ValueWords));
       const llvm::APInt Value = Sem.apply(Op, Args);
-      std::copy_n(Value.getRawData(), ValueWords,
-                  Measured.data() + Pt * ValueWords);
+      std::copy_n(Value.getRawData(), ValueWords, Out.data() + Pt * ValueWords);
     }
   };
 
@@ -337,19 +345,19 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     if (!Effort.spend())
       return false;
 
-    measure(Op, Operands);
+    const auto Column = Bank.nextBehaviour();
+    measure(Op, Operands, Column);
 
-    const bool Matches = Behaviour(Measured) == Behaviour(Target);
-    const uint64_t Hash = hashBehaviour(Measured);
-    const bool Fresh = !Bank.contains(Hash, Measured);
+    const bool Matches = Behaviour(Column) == Behaviour(Target);
+    const bool Fresh = Bank.remember(Column);
     if (!Matches) {
       if (Fresh)
-        Bank.defer(Hash, Op, Operands, Measured, Cost);
+        Bank.defer(Op, Operands, Cost);
       return true;
     }
     const SymRef Node = Bank.materialize(Op, Operands);
     if (Fresh)
-      Bank.addMaterialized(Hash, Node, Measured, Cost);
+      Bank.addMaterialized(Node, Cost);
     return offer(Node, Cost);
   };
 
@@ -393,9 +401,8 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
                                          ? llvm::ArrayRef<size_t>(LiteralTerms)
                                          : Bank.atCost(Right);
         for (size_t A = 0; A < Lhs.size(); ++A)
-          for (size_t B = 0; B < Rhs.size(); ++B) {
-            if (Symmetric && Left == Right && Rhs[B] < Lhs[A])
-              continue;
+          for (size_t B = Symmetric && Left == Right ? A : 0; B < Rhs.size();
+               ++B) {
             size_t Operands[] = {Lhs[A], Rhs[B]};
             if (!consider(Op, Operands, Cost))
               return Result;
