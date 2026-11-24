@@ -23,13 +23,14 @@ import microsoft_flat_imports as flat
 import microsoft_ucrt_types as ucrt
 
 
+NAMED_RUNTIME = json.loads(flat.NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
 CASES = {
     # NDIS belongs to the primary kernel unit. Enumerate its original profile
     # instead of allowing an incomplete published header to choose the tests.
     "NDIS": (),
     "GDIPlus": (),
     "WebAuthenticationRuntime": (),
-    **{name: () for name in json.loads(flat.NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))["providers"]},
+    **{name: () for name in NAMED_RUNTIME["providers"]},
     **{provider: () for provider in (*flat.CURRENT, *flat.LEGACY, *flat.ordinal.profiles())},
     **{provider: () for provider in PROVIDER_PREFIXES},
     "NetworkInterfaces": ("NmrRegisterClient", "WskRegister", "WskCaptureProviderNPI"),
@@ -288,7 +289,7 @@ def check(args: argparse.Namespace) -> dict:
                             exports = {"module": inputs["module"], "names": inputs["exports"],
                                        "metadata": inputs["metadata"]}
                         else:
-                            inputs = json.loads(flat.NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
+                            inputs = NAMED_RUNTIME
                             profile = inputs["providers"][name]
                             exports = flat.named_runtime_exports(profile, profile["targets"][arch],
                                                                  inputs["win32_metadata"])
@@ -384,6 +385,8 @@ def check(args: argparse.Namespace) -> dict:
                 expected.difference_update(flat.LEGACY)
             if "ordinal_imports" not in profiles:
                 expected.difference_update(flat.ordinal.profiles())
+            if "named_runtime" not in profiles:
+                expected.difference_update(NAMED_RUNTIME["providers"])
             if "webauthn_runtime" not in profiles:
                 expected.discard("WebAuthenticationRuntime")
         expected.difference_update(name for name, profile in flat.ordinal.profiles().items()
