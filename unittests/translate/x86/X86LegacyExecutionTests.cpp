@@ -206,6 +206,33 @@ TEST_F(X86LegacyExecutionTest, RefusesUnsupportedInputWithoutGuestSideEffects) {
   EXPECT_EQ(get(0x10000), 0x11007u);
 }
 
+TEST_F(X86LegacyExecutionTest, UD1FaultsWithoutReadingItsAddress) {
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0x0f, 0xb9, 0xc0},
+                                         {0x0f, 0xb9, 0x00},
+                                         {0x67, 0x0f, 0xb9, 0x80, 0, 0}}) {
+    resetLegacyState();
+    S.Core.GPR[0] = 0x12345000; // The memory operand has no mapped page.
+    const auto Got = run(Bytes);
+    ASSERT_EQ(Got.Status, X86LegacyExecutionStatus::EventDelivered);
+    ASSERT_TRUE(Got.Exception);
+    EXPECT_EQ(Got.Exception->Vector, 6);
+    EXPECT_EQ(Got.DeliveredVector, 6);
+    EXPECT_FALSE(Got.InstructionCompleted);
+    EXPECT_EQ(S.CR2, 0x12345678u);
+    EXPECT_EQ(get(S.Core.GPR[4]), 0x1000u);
+  }
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0x0f, 0xb9},
+                                         {0x0f, 0xb9, 0x80},
+                                         {0x0f, 0xb9, 0x04},
+                                         {0x0f, 0xb9, 0xc0, 0x90}}) {
+    auto Error = validateX86LegacyInstructionEncoding(Bytes, true);
+    ASSERT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+  }
+}
+
 TEST_F(X86LegacyExecutionTest, UnboundSTINMIPolicyNeverGuessesEligibility) {
   O.NMIBlockedBySTI.reset();
   S.STIBlocked = true;

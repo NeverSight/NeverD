@@ -10307,10 +10307,19 @@ UD1 golden encodings exercise complete ModR/M, SIB and displacement extents,
 32/64-bit address modes, address overrides, every truncated prefix, and the
 15-byte limit, including REX2 map 1 encodings. Detailed, lightweight and lifting
 decode routes must agree and leave a following NOP at the correct boundary.
-Capstone owns validity and instruction extent; NeverD has no duplicate UD1
-length parser or LOCK/MOV-to-CS predicate. UD1 operands remain an
+Capstone owns validity and instruction extent in the decode and lifting routes;
+the original-byte legacy executor authenticates UD1's encoded ModR/M address
+with its shared legacy grammar. NeverD has no duplicate LOCK/MOV-to-CS
+predicate. UD1 operands remain an
 unconditional invalid-opcode intrinsic without ordinary memory or arithmetic
 operations; this suite does not select a processor's UD0 policy.
+`X86LegacyExecutionTest.UD1FaultsWithoutReadingItsAddress` checks complete
+and malformed UD1 byte extents. `LegacyEvents/*OriginalUD1*` compares the
+original instruction and the protected 16/32-bit executor at CPL0/CPL3 over
+both paging profiles, including an unmapped encoded memory operand.
+`X86LegacySourceTest.OriginalUD1FaultsWithoutReadingMemory` exercises the
+compiled protected C dispatcher in code16/code32 with Clang and x64 NeverC at
+O0/O2, checking #UD, CR2 and the original fault frame.
 
 ```sh
 cmake --build build-release --target NeverDX86EncodingAccuracyTests

@@ -55,7 +55,7 @@ struct LegacyInstruction {
   std::optional<X86MpxEncoding> Mpx;
   llvm::ArrayRef<uint8_t> Body;
   unsigned Width;
-  bool IRET, RETF, INT, UD2, HLT = false, LockedHLT = false, MSR = false;
+  bool IRET, RETF, INT, UD, HLT = false, LockedHLT = false, MSR = false;
 };
 
 llvm::Expected<LegacyInstruction>
@@ -96,8 +96,18 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32,
       (I.Body[0] == 0x90 || I.Body[0] == 0xfa || I.Body[0] == 0xfb ||
        I.Body[0] == 0xcc || I.Body[0] == 0xce || I.Body[0] == 0xf1);
   I.INT = Unlocked && I.Body.size() == 2 && I.Body[0] == 0xcd;
-  I.UD2 =
+  I.UD =
       Unlocked && I.Body.size() == 2 && I.Body[0] == 0x0f && I.Body[1] == 0x0b;
+  if (Unlocked && I.Body.size() >= 3 && I.Body[0] == 0x0f &&
+      I.Body[1] == 0xb9) {
+    // UD1 encodes a ModRM operand but does not read it. Parse its complete
+    // address grammar to authenticate the instruction extent before #UD.
+    detail::X86LegacyEncoding Undefined(Instruction, Code32);
+    Undefined.value(2);
+    detail::X86LegacyAddress Ignored;
+    Undefined.modRM(Ignored);
+    I.UD = Undefined.done();
+  }
   I.IRET = Unlocked && I.Body.size() == 1 && I.Body[0] == 0xcf;
   I.RETF = Unlocked && ((I.Body.size() == 1 && I.Body[0] == 0xcb) ||
                         (I.Body.size() == 3 && I.Body[0] == 0xca));
@@ -107,7 +117,7 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32,
     I.LockedHLT = HaltEncoding.Group1Prefix == 0xf0;
   }
   if (!I.Segment && !I.Scalar && !I.FastSystem && !I.String && !I.Port &&
-      !I.Far && !Single && !I.INT && !I.UD2 && !I.IRET && !I.RETF &&
+      !I.Far && !Single && !I.INT && !I.UD && !I.IRET && !I.RETF &&
       !I.DebugRegister && !I.ControlRegister && !I.Mpx && !I.HLT && !I.MSR)
     return invalid("unsupported or malformed legacy step instruction");
   return I;
@@ -244,7 +254,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   if (!Decoded)
     return Decoded.takeError();
   auto &[DebugRegister, ControlRegister, Segment, Scalar, FastSystem, String,
-         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD2, HLT, LockedHLT,
+         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD, HLT, LockedHLT,
          MSR] = *Decoded;
   if (Non64Mode) {
     using Op = detail::X86LegacyScalarOperation;
@@ -889,7 +899,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       }
       return Enter({NextIP, 0, 0, Vector, X86LegacyEventKind::Software, INT},
                    true);
-    } else if (UD2) {
+    } else if (UD) {
       R.Exception = X86MemoryException{6, 0, {}};
     }
   }

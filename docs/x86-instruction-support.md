@@ -75,6 +75,19 @@ the merged-source qualification.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 
+The original-byte protected and compatibility executor accepts fully encoded
+`0F B9 /r` UD1 forms without LOCK/REP prefixes, including address-size
+overrides. It authenticates the shared ModR/M, SIB and displacement grammar,
+then delivers `#UD` at the original instruction PC without reading the encoded
+memory operand. Truncated and trailing forms fail clearly. Independent Intel
+KVM comparisons cover code16/code32 and CPL0/CPL3 under both legacy and PAE
+paging. Generated protected C dispatch is exercised with x64 Clang and x64
+NeverC at O0/O2. The
+[Intel instruction reference](https://cdrdv2-public.intel.com/835757/325383-sdm-vol-2abcd.pdf)
+specifies the unconditional exception and absence of memory effects. The
+processor-specific UD0 fetch boundary remains a separate profile; this change
+does not claim byte-identical generated UD1 machine code.
+
 | Execution domain | Verified behavior |
 | --- | --- |
 | Real, virtual-8086, protected, compatibility and 64-bit code | Control-register and far transfers, task gates and nested IRET, Intel SYSENTER and SYSEXIT, and original-IDT fault frames. An incoming task or a backing pause preserves the completed stores and the original restart point. |

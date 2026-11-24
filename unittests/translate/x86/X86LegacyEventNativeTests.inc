@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Compare original INT/UD2 and injected IRQ/NMI entry with KVM snapshots.
+/// Compare original INT/UD traps and injected IRQ/NMI entry with KVM snapshots.
 //===----------------------------------------------------------------------===//
 
 class X86LegacyEventNativeTest : public X86PagingNativeTest {
@@ -59,10 +59,10 @@ protected:
     uint16_t NewSS = 80 | TargetCPL;
     uint32_t CodeAddress = GDT + 64;
     uint32_t IDTBase = IDT;
-    uint8_t Vector = EventKind == 1   ? 6
-                     : EventKind == 2 ? 2
-                     : EventKind == 4 ? 13
-                                      : 64;
+    uint8_t Vector = EventKind == 1 || EventKind == 5 ? 6
+                     : EventKind == 2                 ? 2
+                     : EventKind == 4                 ? 13
+                                                      : 64;
     if (Case == 29 && (EventKind == 0 || EventKind == 3))
       Vector = 14;
     uint32_t TargetIP = Target;
@@ -202,9 +202,12 @@ protected:
     Registers.rsp = Case == 34 ? 0xabcdd100 : Case == 36 ? 0xd103 : 0xd100;
     Registers.rax = EventKind == 4 ? 0 : 0x11223344;
     Registers.rflags = 0x2d7 | ExtraFlags;
-    std::vector<uint8_t> Instruction = EventKind == 1
-                                           ? std::vector<uint8_t>{0x0f, 0x0b}
-                                           : std::vector<uint8_t>{0xcd, Vector};
+    std::vector<uint8_t> Instruction =
+        EventKind == 1 ? std::vector<uint8_t>{0x0f, 0x0b}
+        : EventKind == 5
+            ? (Code32 ? std::vector<uint8_t>{0x0f, 0xb9, 0x00}
+                      : std::vector<uint8_t>{0x67, 0x0f, 0xb9, 0x00})
+            : std::vector<uint8_t>{0xcd, Vector};
     std::copy(Instruction.begin(), Instruction.end(), RAM + Code);
     if (EventKind == 4) {
       Instruction = {0x8e, 0xd0}; // Null MOV SS generates a real #GP(0).
@@ -255,7 +258,7 @@ protected:
         X86LegacyEventProfile::OrderedFrame,
         false};
     auto Expected =
-        EventKind <= 1 || EventKind == 4
+        EventKind <= 1 || EventKind == 4 || EventKind == 5
             ? executeX86LegacyInstruction(State, *Memory, Instruction, Options)
             : deliverX86LegacyEvent(State, *Memory,
                                     {uint32_t(Code), 0, 0, Vector,
@@ -407,6 +410,15 @@ TEST_P(X86LegacyEventNativeTest, OriginalTargetLimitFaultRetainsFrameWrites) {
       for (unsigned Case : {17u, 37u, 38u})
         ASSERT_NO_FATAL_FAILURE(
             compare(3, 0, Gate32, true, true, true, Event, Case, 0, true));
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
+TEST_P(X86LegacyEventNativeTest, OriginalUD1IgnoresItsMemoryOperand) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
+  for (bool Code32 : {false, true})
+    for (unsigned CPL : {0u, 3u})
+      ASSERT_NO_FATAL_FAILURE(compare(CPL, 0, true, Code32, true, true, 5, 0));
   RecordProperty("cpu_comparisons", Comparisons);
 }
 
