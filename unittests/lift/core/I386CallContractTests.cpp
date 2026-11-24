@@ -591,6 +591,75 @@ TEST(I386CallContract, HeaderFloatingImportsDefineTheNormalizedX87Result) {
   }
 }
 
+TEST(I386CallContract, HeaderWideIntegerKeepsItsWidthAndStackCleanup) {
+  class Header : public NullDebugContext {
+  public:
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "fixture_wide")
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.ReturnType = NdType::makeInt(4, false);
+      Function.Params = {{"first", NdType::makeInt(4, false)},
+                         {"sequence", NdType::makeInt(8, false)},
+                         {"last", NdType::makeInt(4, false)}};
+      Function.CallConv = DebugCallConv::Stdcall;
+      Function.PrototypeLibrary = "test-windows-header";
+      Function.PrototypeFromHeader = true;
+      return Function;
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Iat)
+        return std::nullopt;
+      auto Function = resolvePrototype("fixture_wide");
+      Function->Addr = Address;
+      return Function;
+    }
+  } Debug;
+  // Forward four distinct incoming stack words to three source parameters.
+  std::vector<uint8_t> Code;
+  for (unsigned I = 0; I < 4; ++I)
+    Code.insert(Code.end(), {0xff, 0x74, 0x24, 0x10}); // push [esp + 16]
+  const auto Call = callThroughSlot(Iat);
+  Code.insert(Code.end(), Call.begin(), Call.end());
+  Code.push_back(0xc3);
+  auto Image = makeImage(std::move(Code), {"fixture_wide"});
+  ASSERT_TRUE(Image.recordImportStorageSlot(Iat, "fixture_wide", 0,
+                                            ImportStorageEvidence::LoaderBind));
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries = {Text};
+    Options.LiftMode = Options.SourceProjection = LLVM;
+    const auto Result = Pipeline().run(Image, Context, Options, &Debug);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    CEmitterOptions COptions;
+    COptions.TheArch = Image.Arch;
+    COptions.Format = Image.Format;
+    COptions.Image = &Image;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (LLVM) {
+      ASSERT_TRUE(Result.LlvmModule);
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, COptions, &Debug,
+                                      &Image));
+    } else {
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
+    }
+    source_call_execution_test::checkSyntax(
+        Source + R"(
+typedef uint32_t (__attribute__((stdcall)) *Expected)(uint32_t, uint64_t,
+                                                      uint32_t);
+_Static_assert(__builtin_types_compatible_p(__typeof__(&fixture_wide),
+                                            Expected), "stack ABI");
+)",
+        {"--target=i686-pc-windows-msvc", "-ffreestanding", "-Werror"});
+  }
+}
+
 TEST(I386CallContract, HeaderQualifiersKeepTheOuterCallingConvention) {
   auto Code = callThroughSlot(Iat);
   Code[1] = 0x25; // jmp [IAT], forwarding the two incoming stack arguments.

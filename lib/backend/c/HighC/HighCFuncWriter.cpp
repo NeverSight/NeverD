@@ -15,6 +15,7 @@
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
+#include "../render/X86/I386WideStackArguments.h"
 #include "../render/X86/Win64CallStackInput.h"
 #include "../render/X86/X86NativeFeatures.h"
 #include "HighCWriter.h"
@@ -2856,11 +2857,14 @@ void HighCWriter::collectFieldLoadForward(const HighFunc &Func) {
 }
 
 void HighCWriter::noteDebugExtern(const std::string &Name,
-                                  const FunctionSym &FS) {
+                                  const FunctionSym &FS, const HighExpr &Call) {
   // A prototype in signature order would not take a call's arguments, which
   // come in the convention's order; the callee is declared without it.
-  if (!positionalDebugSignature(FS))
+  if (!positionalDebugSignature(FS, &Call)) {
+    if (i386WideStackArguments(FS, Opts.TheArch, Opts.Format))
+      ConflictingDebugExternSigs.insert(Name);
     return;
+  }
   auto [It, Added] = DebugExternSigs.emplace(Name, FS);
   if (Added)
     return;
@@ -2933,7 +2937,7 @@ TypeRef HighCWriter::enumTypeOfExpr(const HighExpr &E) const {
 TypeRef HighCWriter::enumTypeForCallArg(const HighExpr &Call, size_t Index,
                                         std::optional<uint64_t> Val) const {
   auto Consider = [&](const FunctionSym &FS) -> TypeRef {
-    const TypeRef Ty = expectedDebugCallArgType(FS, Index);
+    const TypeRef Ty = expectedDebugCallArgType(FS, Index, &Call);
     if (!Ty || Ty->Kind != NdTypeKind::Struct || !Ty->IsEnum)
       return nullptr;
     if (Dbg)
@@ -5024,7 +5028,7 @@ bool HighCWriter::debugCallReturnIsDeclared(const HighExpr &Call,
   const std::string Name = callIdentifier(Call);
   // A header can declare a record-argument ABI even when the generic scalar
   // extern path cannot. Its call adapter and result use that declaration.
-  return calledDefinition(Call) || positionalDebugSignature(Function) ||
+  return calledDefinition(Call) || positionalDebugSignature(Function, &Call) ||
          (Name == Function.Name && includesHeaderOf(Name));
 }
 
@@ -5241,7 +5245,8 @@ std::string HighCWriter::debugParamName(const HighFunc &Func,
   return ParamDebugNames[Index];
 }
 
-bool HighCWriter::positionalDebugSignature(const FunctionSym &FS) const {
+bool HighCWriter::positionalDebugSignature(const FunctionSym &FS,
+                                           const HighExpr *Call) const {
   // Windows variadic prefixes use their own ABI admission. Other platforms
   // retain the positional scalar signature below, including libSystem's
   // named pointer parameters before an Apple ARM64 stack-passed tail.
@@ -5277,7 +5282,20 @@ bool HighCWriter::positionalDebugSignature(const FunctionSym &FS) const {
          (Type->Kind == NdTypeKind::Struct && Type->IsEnum));
     Floats &= Type->Kind == NdTypeKind::Float && Type->Size <= sizeof(double);
   }
-  return Integers || Floats;
+  if (Integers || Floats)
+    return true;
+  if (const auto Wide = i386WideStackArguments(FS, Opts.TheArch, Opts.Format))
+    return !Call || matchesWholeStackArguments(
+                        *Wide, Call->Operands.size(), [&](size_t I) {
+                          const auto &Arg = Call->Operands[I];
+                          return Arg && Arg->Type &&
+                                         (Arg->Type->Kind == NdTypeKind::Int ||
+                                          Arg->Type->Kind == NdTypeKind::Ptr ||
+                                          Arg->Type->IsEnum)
+                                     ? Arg->Type->Size
+                                     : 0;
+                        });
+  return false;
 }
 
 TypeRef HighCWriter::emittedParamType(const HighFunc &Func,

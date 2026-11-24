@@ -28,6 +28,7 @@
 #include "../pass/LLVMC/LLVMCCommonBranches.h"
 #include "../pass/LLVMC/LLVMCLoopPhases.h"
 #include "../pass/LLVMC/LLVMCScalarLoopRecovery.h"
+#include "../render/X86/I386WideStackArguments.h"
 #include "../render/X86/Win64CallStackInput.h"
 #include "../render/X86/X86AmxState.h"
 #include "../render/X86/X86AtomicRmw.h"
@@ -2517,10 +2518,23 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
             (!Source->IsVariadic ||
              libc::variadicCallArguments(*Source, Opts.TheArch, Opts.Format)
                  .has_value());
+        const auto Wide =
+            i386WideStackArguments(*Source, Opts.TheArch, Opts.Format);
+        const bool Whole =
+            Wide && matchesWholeStackArguments(
+                        *Wide, Call->arg_size(), [&](size_t I) -> uint64_t {
+                          auto *Type = Call->getArgOperand(I)->getType();
+                          if (!(Type->isIntegerTy() || Type->isPointerTy()))
+                            return 0;
+                          return Mod.getDataLayout()
+                              .getTypeStoreSize(Type)
+                              .getFixedValue();
+                        });
         std::vector<TypeRef> Parameters;
         bool ScalarParameters = true;
         for (const auto &Param : Source->Params) {
-          ScalarParameters &= Scalar(Param.second);
+          ScalarParameters &=
+              Scalar(Param.second) || (Whole && hasCSpelling(Param.second));
           Parameters.push_back(Param.second);
         }
         const auto Floating = Fits ? libc::floatingCallArguments(
@@ -2559,10 +2573,10 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
         if (isUserFunctionDeclaration(*Source) && !Floating && !FixedInteger &&
             !ScalarRegisters)
           continue;
-        Fits &=
-            (Floating || (Layout && Layout->Positions == Parameters.size())) &&
-            (Source->IsVariadic ? Parameters.size() <= Call->arg_size()
-                                : Parameters.size() == Call->arg_size());
+        Fits &= (Floating || Whole ||
+                 (Layout && Layout->Positions == Parameters.size())) &&
+                (Source->IsVariadic ? Parameters.size() <= Call->arg_size()
+                                    : Parameters.size() == Call->arg_size());
         for (unsigned I = 0; Fits && I < Parameters.size(); ++I) {
           auto *Carrier = Call->getArgOperand(I)->getType();
           if (Parameters[I]->Kind == NdTypeKind::Float) {
@@ -2571,15 +2585,15 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
                         Parameters[I]->Size;
             continue;
           }
-          Fits &=
-              (Floating || (!Layout->Parameters[I].Indirect &&
-                            Layout->Parameters[I].Pieces.size() == 1 &&
-                            Layout->Parameters[I].Pieces[0].Argument == I)) &&
-              (Carrier->isIntegerTy() || Carrier->isPointerTy()) &&
-              (!Carrier->isPointerTy() ||
-               Carrier->getPointerAddressSpace() == 0) &&
-              Mod.getDataLayout().getTypeStoreSize(Carrier) >=
-                  Parameters[I]->Size;
+          Fits &= (Floating || Whole ||
+                   (!Layout->Parameters[I].Indirect &&
+                    Layout->Parameters[I].Pieces.size() == 1 &&
+                    Layout->Parameters[I].Pieces[0].Argument == I)) &&
+                  (Carrier->isIntegerTy() || Carrier->isPointerTy()) &&
+                  (!Carrier->isPointerTy() ||
+                   Carrier->getPointerAddressSpace() == 0) &&
+                  Mod.getDataLayout().getTypeStoreSize(Carrier) >=
+                      Parameters[I]->Size;
         }
         if (Fits && Source->ReturnType->Kind == NdTypeKind::Void)
           Fits = Call->getType()->isVoidTy() || !valueFeedsPrintedUse(Call);
