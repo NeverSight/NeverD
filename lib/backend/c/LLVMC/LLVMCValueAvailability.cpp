@@ -127,17 +127,17 @@ c_availability::Predicate edgePredicate(const BranchComparison &Branch,
 } // namespace
 
 c_availability::Assignment
-LLVMCWriter::deferredPhiAssignment(const llvm::PHINode &Phi,
-                                   const llvm::Value *Incoming) const {
+LLVMCWriter::deferredIncomingAssignment(const llvm::Instruction &Join,
+                                        const llvm::Value *Incoming) const {
   using namespace c_availability;
   Assignment A;
-  A.Destination = identity(&Phi);
+  A.Destination = identity(&Join);
   if (isDeferredUnknownInput(Incoming)) {
     A.Availability = FlagWrite::Unknown;
     return A;
   }
   A.Source = identity(Incoming);
-  A.CopyBits = Phi.getType()->getIntegerBitWidth();
+  A.CopyBits = Join.getType()->getIntegerBitWidth();
   A.Availability =
       DeferredUnknownFlags.count(Incoming) ? FlagWrite::Copy : FlagWrite::Known;
   return A;
@@ -151,16 +151,18 @@ LLVMCWriter::deferredInstructionAssignment(
     return std::nullopt;
   Assignment A;
   A.Destination = identity(&Inst);
-  if (isDeferredUnknownInput(&Inst)) {
+  // The printed select sets its flag from the chosen arm at runtime. A
+  // straight-line availability proof cannot assume either arm was chosen.
+  if (llvm::isa<llvm::SelectInst>(Inst) || isDeferredUnknownInput(&Inst)) {
     A.Availability = FlagWrite::Unknown;
     return A;
   }
-  const auto *Source = Inst.getOperand(0);
-  if (!DeferredUnknownFlags.count(Source))
+  const auto *Source = deferredScalarSource(Inst);
+  if (!Source || !DeferredUnknownFlags.count(Source))
     return std::nullopt;
   A.Source = identity(Source);
-  // Trunc/extend transport the availability of the payload, but are not
-  // identities of the full-width values compared along a path.
+  // Casts and a literal XOR transfer availability. Neither proves the full
+  // payload equal to its input for a later branch comparison.
   A.Availability = FlagWrite::Copy;
   return A;
 }
@@ -241,7 +243,7 @@ void LLVMCWriter::buildAvailabilityFlow(const llvm::Function &Fn) {
           continue;
         const auto *Incoming = Phi.getIncomingValueForBlock(&Block);
         if (DeferredUnknownFlags.count(&Phi))
-          E.addCopy(deferredPhiAssignment(Phi, Incoming));
+          E.addCopy(deferredIncomingAssignment(Phi, Incoming));
         else if (PredicateValues.contains(&Phi))
           E.addCopy({identity(&Phi), identity(Incoming),
                      Phi.getType()->getIntegerBitWidth(), FlagWrite::None});

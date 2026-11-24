@@ -43,6 +43,7 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
@@ -1197,6 +1198,11 @@ TEST(Win64CallContract, AMathImportNoHeaderDeclaresTakesItsFloat) {
     CallThunk.push_back(B);
   Put(G, framed({CallThunk}));
   const BinaryImage Img = makeImage(Code, {{F, "f"}, {G, "g"}}, {"log"});
+  llvm::SmallVector<llvm::StringRef, 4> TargetFlags;
+#if defined(__APPLE__) && defined(__aarch64__)
+  // The generated FP helpers read and write the x86 MXCSR register.
+  TargetFlags.append({"-arch", "x86_64"});
+#endif
   for (const bool LLVM : {false, true}) {
     SCOPED_TRACE(LLVM);
     llvm::LLVMContext Ctx;
@@ -1223,9 +1229,16 @@ TEST(Win64CallContract, AMathImportNoHeaderDeclaresTakesItsFloat) {
     // HighC's runs.
     if (LLVM) {
       EXPECT_NE(Source.find("log(fp_"), std::string::npos) << Source;
-      source_call_execution_test::checkSyntax(Source);
+      source_call_execution_test::checkSyntax(Source, TargetFlags);
       continue;
     }
+    auto LinkFlags = TargetFlags;
+#if defined(__linux__)
+    LinkFlags.push_back("-Wl,--no-as-needed");
+#endif
+#ifndef _WIN32
+    LinkFlags.push_back("-lm");
+#endif
     source_call_execution_test::compileAndRun(Source + R"C(
 #include <math.h>
 int main(void) {
@@ -1233,7 +1246,7 @@ int main(void) {
          fabs(g(1.3591409142295225) - 1.0) > 1e-12;
 }
 )C",
-                                              {"-Wl,--no-as-needed", "-lm"});
+                                              LinkFlags);
   }
 }
 

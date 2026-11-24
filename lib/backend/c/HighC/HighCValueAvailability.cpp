@@ -119,12 +119,25 @@ void compactFlow(
 
 } // namespace
 
+const HighExpr *HighCWriter::deferredScalarSource(const HighExpr &Value) const {
+  const HighExpr *E = peelIntegerViewOps(&Value);
+  // XOR with a literal is total and reversible. An unused updated payload can
+  // travel through a loop without observing the incoming register.
+  if (E && E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_XOR &&
+      E->Operands.size() == 2 && E->Operands[0] && E->Operands[1]) {
+    for (unsigned I : {0u, 1u})
+      if (E->Operands[I]->Kind == ExprKind::Const)
+        return peelIntegerViewOps(E->Operands[1 - I].get());
+  }
+  return E;
+}
+
 HighCWriter::DeferredAssignment
 HighCWriter::deferredAssignment(const HighExpr &Value) const {
   using c_availability::FlagWrite;
   if (knownVoidCall(Value) || isDeferredUnknownInput(&Value))
     return {FlagWrite::Unknown, {}};
-  const HighExpr *Source = peelIntegerViewOps(&Value);
+  const HighExpr *Source = deferredScalarSource(Value);
   if (Source &&
       (Source->Kind == ExprKind::Var || Source->Kind == ExprKind::Phi)) {
     std::string Name = copyForwardName(varName(Source->Var));
@@ -402,7 +415,7 @@ void HighCWriter::buildAvailabilityFlow(const HighFunc &Func) {
             !stmtHiddenFromC(S)) {
           const auto Transfer = deferredAssignment(*S.Val);
           A.Availability = Transfer.Availability;
-          const HighExpr *Source = peelIntegerViewOps(S.Val.get());
+          const HighExpr *Source = deferredScalarSource(*S.Val);
           if (Source &&
               (Source->Kind == ExprKind::Var ||
                Source->Kind == ExprKind::Phi) &&

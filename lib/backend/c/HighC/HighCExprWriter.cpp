@@ -4813,6 +4813,10 @@ bool HighCWriter::isUnknownCallOperand(const HighExpr *Op) const {
 bool HighCWriter::isDeferredUnknownInput(const HighExpr *Op) const {
   if (isUnknownCallOperand(Op))
     return true;
+  if (Op->Kind == ExprKind::BinOp && Op->Op == NdOp::INT_XOR)
+    if (const auto *Source = deferredScalarSource(*Op);
+        Source && Source != Op && isUnknownCallOperand(Source))
+      return true;
   if (Op->Kind != ExprKind::BinOp || Op->Op != NdOp::CONCAT ||
       Op->Operands.size() != 2 || !isUnknownCallOperand(Op->Operands[0].get()))
     return false;

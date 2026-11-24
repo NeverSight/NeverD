@@ -697,8 +697,11 @@ public:
   void collectOmittedUnknowns(llvm::Function &Fn);
   void collectDeferredUnknowns(llvm::Function &Fn);
   c_availability::Assignment
-  deferredPhiAssignment(const llvm::PHINode &Phi,
-                        const llvm::Value *Incoming) const;
+  deferredIncomingAssignment(const llvm::Instruction &Join,
+                             const llvm::Value *Incoming) const;
+  std::pair<std::string, std::string>
+  deferredIncomingText(const llvm::Instruction &Join,
+                       const llvm::Value *Incoming);
   std::optional<c_availability::Assignment>
   deferredInstructionAssignment(const llvm::Instruction &Inst) const;
   void buildAvailabilityFlow(const llvm::Function &Fn);
@@ -706,6 +709,7 @@ public:
   static std::optional<unsigned>
   deferredUnknownLowBit(const llvm::Value *Value);
   static bool isDeferredUnknownInput(const llvm::Value *Value);
+  static const llvm::Value *deferredScalarSource(const llvm::Instruction &Inst);
   bool writeDeferredUnknownCopy(llvm::Instruction &Inst, int Indent);
   void collectOmittedInlinedImmediates(llvm::Function &Fn);
 

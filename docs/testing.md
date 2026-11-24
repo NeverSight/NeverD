@@ -9308,6 +9308,17 @@ bytes and an unknown full-register input.
 a late handoff, a missing PHI edge, a store and a latch that changes the
 carrier selector. `ReturnContract.I386SharedShiftUsesOnlyTheSelectedCarrier`
 checks both stack arguments and compares the zero-, one- and two-trip results.
+`SysVCallContract.GuardedScratchArgumentInSelectedAndOmittedCallees`
+checks the RDX entry read through a tail relay and a caller that consumes its
+result. Changing one selector bit exposes the incoming register on the direct
+arm. `SysVCallContract.LatchCanExposeIncomingScratchOnAnOddTrip` exercises
+both C routes with a latch that either preserves or flips that bit.
+`SysVCallContract.UnwrittenAccumulatorTrapsOnlyWhenSelectedAfterTheLatch`
+executes a caller that observes the leaf result. Zero and two trips return
+the scratch value even when a latch updates an unavailable accumulator. One
+trip selects that accumulator and must reach the missing-state check.
+`MedLLVMEntryParameters.LiteralXorSelectPreservesItsKnownLowWord` checks
+both arms of a narrow read and the corresponding full-width observations.
 `ReturnContract.X64SharedShiftPairsTheWordAndItsZeroExtendedRegister` compares
 the low eight and nine bits after a transfer from R11D. On AArch64,
 `ReturnContract.AArch64SharedShiftTestsTheCarrierWithItsWordView` branches

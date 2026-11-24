@@ -5675,6 +5675,24 @@ continuation preserves its observations. Ordinary uses of the incoming value,
 including a store or a selector change that exposes it, prevent the replacement.
 The module return contract uses the same MedIR path evaluator to compare the
 final results.
+For an x64 leaf with a joined variable shift, the call graph follows known
+scalar branch conditions while an incoming argument register is still live.
+It drops the entry read only if every feasible read follows a full overwrite.
+Unknown conditions explore both successors, including loop backedges. A
+partial write or exhausted work allowance preserves the conservative input.
+Ordinary calls and tail calls use this same summary for omitted callees.
+The independent register-observation proof still describes the machine reads.
+When an entry accumulator is unavailable on a real arm, both C routes carry
+its availability through an integer XOR with a literal. An LLVM select that
+transports the accumulator chooses its payload and its availability together.
+A later store, condition or return that consumes the missing value retains
+its check, even when an earlier loop exit could use the initialized carrier.
+When an XOR is immediately returned, LLVMC applies its literal to the
+checked operand. A diagnostic hook that records the missing read and resumes
+therefore observes the same operation at the return.
+For a narrow read after the select, the LLVM C projection can slice the two
+arms before joining them. XOR with a literal preserves the positions of
+missing bits, so an unknown upper word still permits a defined low-word read.
 An outer choice can distinguish a third arm even when the inner arms return
 the same bits. A loop header can receive new bindings on each latch. The proof
 compares the observable outcomes after closing both sets under those

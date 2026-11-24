@@ -2799,10 +2799,12 @@ LLVMCWriter::deferredUnknownLowBit(const llvm::Value *Value) {
   while (const auto *Inst = llvm::dyn_cast<llvm::Instruction>(Value)) {
     if (isCallClobberValue(Value))
       return 0;
-    if (!llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst,
-                   llvm::FreezeInst>(Inst))
+    if (const auto *Source = deferredScalarSource(*Inst))
+      Value = Source;
+    else if (llvm::isa<llvm::FreezeInst>(Inst))
+      Value = Inst->getOperand(0);
+    else
       break;
-    Value = Inst->getOperand(0);
     ObservedBits =
         std::min(ObservedBits, Value->getType()->getIntegerBitWidth());
   }
@@ -2859,6 +2861,19 @@ bool LLVMCWriter::isDeferredUnknownInput(const llvm::Value *Value) {
   return deferredUnknownLowBit(Value).has_value();
 }
 
+const llvm::Value *
+LLVMCWriter::deferredScalarSource(const llvm::Instruction &Inst) {
+  if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(Inst))
+    return Inst.getOperand(0);
+  // XOR changes bit values while preserving exactly which bits are available.
+  if (Inst.getOpcode() == llvm::Instruction::Xor &&
+      Inst.getType()->isIntegerTy())
+    for (unsigned I : {0u, 1u})
+      if (llvm::isa<llvm::ConstantInt>(Inst.getOperand(I)))
+        return Inst.getOperand(1 - I);
+  return nullptr;
+}
+
 void LLVMCWriter::collectDeferredUnknowns(llvm::Function &Fn) {
   std::vector<CValueTransfer<const llvm::Value *>> Transfers;
   for (auto &Block : Fn)
@@ -2869,8 +2884,19 @@ void LLVMCWriter::collectDeferredUnknowns(llvm::Function &Fn) {
         for (const llvm::Value *Incoming : Phi->incoming_values())
           Transfers.push_back(
               {Phi, Incoming, isDeferredUnknownInput(Incoming)});
-      } else if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(
-                     &Inst)) {
+      } else if (const auto *Select = llvm::dyn_cast<llvm::SelectInst>(&Inst)) {
+        for (const llvm::Value *Arm :
+             {Select->getTrueValue(), Select->getFalseValue()})
+          Transfers.push_back({Select, Arm, isDeferredUnknownInput(Arm)});
+      } else if (const auto *Source = deferredScalarSource(Inst)) {
+        // An XOR returned immediately already observes its operand here. Keep
+        // the XOR around the checked operand, including its diagnostic value.
+        if (Inst.getOpcode() == llvm::Instruction::Xor && Inst.hasOneUse()) {
+          const auto *Ret =
+              llvm::dyn_cast<llvm::ReturnInst>(*Inst.user_begin());
+          if (Ret && Ret == Inst.getNextNode())
+            continue;
+        }
         // A low slice which excludes the missing suffix has no dependency
         // on the whole carrier's availability flag.
         if (llvm::isa<llvm::TruncInst>(&Inst))
@@ -2878,8 +2904,7 @@ void LLVMCWriter::collectDeferredUnknowns(llvm::Function &Fn) {
               FirstUnknown &&
               Inst.getType()->getIntegerBitWidth() <= *FirstUnknown)
             continue;
-        Transfers.push_back(
-            {&Inst, Inst.getOperand(0), isDeferredUnknownInput(&Inst)});
+        Transfers.push_back({&Inst, Source, isDeferredUnknownInput(&Inst)});
       } else if ((Inst.getOpcode() == llvm::Instruction::Or ||
                   Inst.getOpcode() == llvm::Instruction::And) &&
                  isDeferredUnknownInput(&Inst))

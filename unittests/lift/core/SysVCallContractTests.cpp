@@ -2367,6 +2367,193 @@ TEST(SysVCallContract, ADoubleAVariadicCallPassesOnIsAParameter) {
   EXPECT_NE(Body.find("jumps("), std::string::npos) << Body;
 }
 
+TEST(SysVCallContract, GuardedScratchArgumentInSelectedAndOmittedCallees) {
+  constexpr va_t Relay = Text + 0x40, Caller = Text + 0x50;
+  for (const uint8_t DirectTag : {0, 64}) {
+    SCOPED_TRACE(static_cast<unsigned>(DirectTag));
+    std::vector<uint8_t> Code(0x60, 0xCC);
+    put(Code, Text, {0x85, 0xFF,                      // test edi, edi
+                     0x74, 0x0C,                      // je direct
+                     0xBA, 129,       0,   0, 0,      // edx = 129
+                     0xB9, 65,        0,   0, 0,      // ecx = 65
+                     0xEB, 0x0A,                      // jmp pick
+                     0xB8, 2,         0,   0, 0,      // direct: eax = 2
+                     0xB9, DirectTag, 0,   0, 0,      // ecx = tag
+                     0xF7, 0xC1,      64,  0, 0, 0,   // pick: test ecx, 64
+                     0x74, 0x02,                      // je shift
+                     0x89, 0xD0,                      // mov eax, edx
+                     0xD3, 0xE0,                      // shift: shl eax, cl
+                     0x01, 0xF0,      0xC3});         // add eax, esi; ret
+    put(Code, Relay, {0xE9, 0xBB, 0xFF, 0xFF, 0xFF}); // jmp choose_inputs
+    put(Code, Caller,
+        {0x48, 0x83, 0xEC, 8,                     // sub rsp, 8
+         0xE8, 0xE7, 0xFF, 0xFF, 0xFF,            // call relay_inputs
+         0x48, 0x83, 0xC4, 8, 0xFF, 0xC0, 0xC3}); // add rsp, 8; inc eax; ret
+    const auto Image = makeImportImage(Code,
+                                       {{Text, "choose_inputs"},
+                                        {Relay, "relay_inputs"},
+                                        {Caller, "call_inputs"}},
+                                       {});
+    for (bool CallerOnly : {false, true}) {
+      SCOPED_TRACE(CallerOnly);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      if (CallerOnly)
+        Options.OnlyFunctionEntries = {Caller};
+      const auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      for (va_t Entry : {Text, Relay, Caller}) {
+        SCOPED_TRACE(Entry);
+        const auto Reads = Result.CallEntryReadGPRs.find(Entry);
+        ASSERT_NE(Reads, Result.CallEntryReadGPRs.end());
+        EXPECT_NE(Reads->second[x86reg::RDI / 8], 0);
+        EXPECT_NE(Reads->second[x86reg::RSI / 8], 0);
+        EXPECT_EQ(Reads->second[x86reg::RDX / 8], DirectTag ? 4 : 0);
+      }
+      for (const MedFunc &F : Result.MedFuncs) {
+        if (F.Entry == Text || F.Entry == Relay || F.Entry == Caller)
+          EXPECT_EQ(llvm::any_of(F.Params,
+                                 [](const MedVar &P) {
+                                   return P.RegOff == x86reg::RDX;
+                                 }),
+                    DirectTag != 0)
+              << F.Name;
+      }
+    }
+  }
+}
+
+TEST(SysVCallContract, LatchCanExposeIncomingScratchOnAnOddTrip) {
+  for (const uint8_t Toggle : {2, 66}) {
+    SCOPED_TRACE(static_cast<unsigned>(Toggle));
+    const std::vector<uint8_t> Code{
+        0xB8, 7,    0,      0,    0,                // eax = 7
+        0x85, 0xFF, 0x74,   12,                     // test edi, edi; je direct
+        0xBA, 129,  0,      0,    0,                // edx = 129
+        0xB9, 65,   0,      0,    0,    0xEB, 7,    // ecx = 65; jmp pick
+        0xB8, 2,    0,      0,    0,    0x31, 0xC9, // direct: eax = 2; ecx = 0
+        0x41, 0x89, 0xF0,                           // pick: mov r8d, esi
+        0x41, 0x83, 0xE0,   3,    0x74, 8,          // and r8d, 3; jz select
+        0x83, 0xF1, Toggle,                         // again: xor ecx, toggle
+        0x41, 0xFF, 0xC8,   0x75, 0xF8,             // dec r8d; jnz again
+        0xF7, 0xC1, 64,     0,    0,    0,          // select: test ecx, 64
+        0x74, 2,    0x89,   0xD0,                   // je shift; mov eax, edx
+        0xD3, 0xE0, 0xC3};                          // shift: shl eax, cl; ret
+    const auto Image = makeImportImage(Code, {{Text, "loop_inputs"}}, {});
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = LLVM;
+      Options.SourceProjection = LLVM;
+      const auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      const auto Reads = Result.CallEntryReadGPRs.find(Text);
+      ASSERT_NE(Reads, Result.CallEntryReadGPRs.end());
+      EXPECT_EQ(Reads->second[x86reg::RDX / 8], Toggle == 66 ? 4 : 0);
+      CEmitterOptions Emit;
+      Emit.TheArch = Image.Arch;
+      Emit.Format = Image.Format;
+      Emit.Image = &Image;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, OS, Emit,
+                                             nullptr, &Image)
+                       : HighCEmitter().emit(Result.HighFuncs, OS, Emit));
+      // On one trip, toggling bit six makes the direct arm read incoming EDX
+      // and the scratch arm use its untouched EAX. Two trips restore the tag.
+      const std::string Calls =
+          Toggle == 66
+              ? "loop_inputs(0,1,19)!=76 || loop_inputs(0,1,31)!=124 || "
+                "loop_inputs(1,1,19)!=56 || loop_inputs(0,2,31)!=2"
+              : "loop_inputs(0,1)!=8 || loop_inputs(1,1)!=1032 || "
+                "loop_inputs(0,2)!=2 || loop_inputs(1,0)!=258";
+      compileAndRun(Source + "\nint main(void) { return " + Calls + "; }\n");
+    }
+  }
+}
+
+TEST(SysVCallContract, UnwrittenAccumulatorTrapsOnlyWhenSelectedAfterTheLatch) {
+  constexpr va_t Caller = Text + 0x80;
+  std::vector<uint8_t> Code(0x92, 0xCC);
+  put(Code, Text,
+      {0x81, 0xFE, 1,    1,    0,    0,    0x74,
+       0x21,                                   // cmp esi, 257; je bare
+       0x48, 0x85, 0xFF, 0x74, 14,             // test rdi, rdi; je direct
+       0x48, 0xC7, 0xC2, 4,    0,    0,    0,  // rdx = 4
+       0xB9, 65,   2,    0,    0,    0xEB, 15, // ecx = 577; jmp head
+       0x48, 0xC7, 0xC0, 1,    0,    0,    0,  // direct: rax = 1
+       0xB9, 0,    2,    0,    0,    0xEB, 1,
+       0xC3, // ecx = 512; jmp head; bare: ret
+       0xF7, 0xC6, 1,    0,    0,    0,    0x74,
+       0x35, // head: test esi, 1; jz pick
+       0xF7, 0xC1, 0,    2,    0,    0,    0x75,
+       16, // test ecx, 512; jnz update
+       0xF7, 0xC1, 0,    1,    0,    0,    0x74,
+       0x25, // test ecx, 256; jz pick
+       0xF7, 0xC6, 2,    0,    0,    0,    0x74,
+       0x1D, // test esi, 2; jz pick
+       0xF7, 0xC1, 64,   0,    0,    0,    0x75,
+       6,                               // update: test ecx, 64; jnz scratch
+       0x48, 0x83, 0xF0, 2,    0xEB, 4, // xor rax, 2; jmp latch
+       0x48, 0x83, 0xF2, 2,             // scratch: xor rdx, 2
+       0x81, 0xE9, 0,    1,    0,    0, // latch: sub ecx, 256
+       0x83, 0xF1, 66,   0xEB, 0xC3,    // xor ecx, 66; jmp head
+       0xF7, 0xC1, 64,   0,    0,    0,    0x74,
+       5,                                    // pick: test ecx, 64; jz shift
+       0x48, 0x89, 0xD0, 0xEB, 0,            // mov rax, rdx; jmp shift
+       0x48, 0xD3, 0xE0,                     // shift: shl rax, cl
+       0x25, 0xFF, 1,    0,    0,    0xC3}); // and eax, 511; ret
+  put(Code, Caller,
+      {0x48, 0x83, 0xEC, 8, 0xE8, 0x77, 0xFF, 0xFF, 0xFF, // call choose_result
+       0x48, 0x83, 0xC4, 8, 0x48, 0x83, 0xC0, 1,
+       0xC3}); // restore rsp; ++rax; ret
+  const auto Image = makeImportImage(
+      Code, {{Text, "choose_result"}, {Caller, "observe_result"}}, {});
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = LLVM;
+    Options.SourceProjection = LLVM;
+    auto Result = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    CEmitterOptions Emit;
+    Emit.TheArch = Image.Arch;
+    Emit.Format = Image.Format;
+    Emit.Image = &Image;
+    std::string Source(
+        "#include <stdlib.h>\nstatic int expect_missing;\n"
+        "#define __builtin_trap() _Exit(expect_missing ? 0 : 3)\n");
+    llvm::raw_string_ostream OS(Source);
+    if (LLVM) {
+      ASSERT_TRUE(Result.LlvmModule);
+      const auto Optimization =
+          Pipeline::optimizeOrPromoteModule(*Result.LlvmModule);
+      ASSERT_TRUE(Optimization.Diagnostic.empty()) << Optimization.Diagnostic;
+      ASSERT_TRUE(
+          LLVMCEmitter().emit(*Result.LlvmModule, OS, Emit, nullptr, &Image));
+    } else {
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Emit));
+    }
+    // With two trips, the scratch arm updates the missing RAX and then
+    // returns RDX. With just one trip it actually returns the missing bits.
+    compileAndRun(Source + R"(
+int main(void) {
+    if (observe_result(1,0,19) != 9 || observe_result(1,3,19) != 13 ||
+        observe_result(0,1,19) != 77 || observe_result(0,1,31) != 125 ||
+        observe_result(0,3,19) != 4) return 1;
+    expect_missing = 1;
+    (void)observe_result(1,1,19);
+    return 2;
+}
+)");
+  }
+}
+
 TEST(SysVCallContract, GccSplitVaStartMarksTheFunctionVariadic) {
   // fatal(fmt, ...) as GCC builds it: va_start stores gp_offset and fp_offset
   // as two 32-bit constants where Clang stores one 64-bit word.  Either marks

@@ -1050,6 +1050,7 @@ struct BlockScalarFacts {
   std::map<size_t, unsigned> SelectedArms;
   llvm::SmallVector<size_t, 1> CpuidSubleafIgnored;
   RegisterFacts Registers;
+  std::optional<bool> BranchTaken;
 };
 
 bool isX86CpuidQuery(const LowOp &Op) {
@@ -1112,10 +1113,13 @@ blockScalarFacts(const BinaryImage &Img, const LowBlock &Block, bool KeepExit,
     std::optional<uint64_t> Result;
     if (O.MemoryOrdering == NdMemoryOrdering::None &&
         O.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-      if (O.Opcode == NdOp::SELECT && O.NumInputs == 3 && O.Output.Size &&
-          (O.Output.isReg() || O.Output.isTemp()) &&
-          O.Inputs[1].Size == O.Output.Size &&
-          O.Inputs[2].Size == O.Output.Size) {
+      if (KeepExit && O.Opcode == NdOp::COND_BR && O.NumInputs == 2) {
+        if (const auto Condition = Value(O.Inputs[1]))
+          Facts.BranchTaken = *Condition != 0;
+      } else if (O.Opcode == NdOp::SELECT && O.NumInputs == 3 &&
+                 O.Output.Size && (O.Output.isReg() || O.Output.isTemp()) &&
+                 O.Inputs[1].Size == O.Output.Size &&
+                 O.Inputs[2].Size == O.Output.Size) {
         if (auto C = Value(O.Inputs[0])) {
           Facts.SelectedArms[I] = *C ? 1 : 2;
           Result = Value(O.Inputs[Facts.SelectedArms[I]]);
@@ -1660,6 +1664,99 @@ localRegisterEffect(const BinaryImage &Img, const LowFunc &F,
 }
 
 namespace {
+/// A joined guard can select a scratch register only on the arm that wrote it.
+/// Follow the guard until each incoming register is read or fully overwritten.
+/// A known latch must select its real successor on every trip.
+GPRFamilyMask guardedLeafArgumentWrites(const BinaryImage &Img,
+                                        CallRegisterBodyView F,
+                                        const LocalRegisterEffect &Effect) {
+  if (llvm::none_of(F.Blocks,
+                    [](const LowBlock &B) { return B.Preds.size() > 1; }) ||
+      llvm::none_of(F.Blocks, [](const LowBlock &B) {
+        return llvm::any_of(B.Ops, [](const LowOp &O) {
+          return (O.Opcode == NdOp::INT_LEFT || O.Opcode == NdOp::INT_RIGHT ||
+                  O.Opcode == NdOp::INT_ASHR) &&
+                 O.NumInputs == 2 && !O.Inputs[1].isConst();
+        });
+      }))
+    return 0;
+
+  const auto Args =
+      getTargetRegInfo(Img.Arch).integerParamRegs(Img.abiFormat());
+  struct BlockDemand {
+    GPRFamilyMask Reads = 0;
+    GPRFamilyMask Writes = 0;
+  };
+  llvm::SmallVector<BlockDemand, 8> Demand;
+  GPRFamilyMask Read = 0, Written = 0;
+  for (const RegisterBlock &B : Effect.Blocks) {
+    auto &D = Demand.emplace_back();
+    for (const RegisterStep &S : B.Steps) {
+      if (!isPlainStep(S) && !S.Exits)
+        return 0;
+      for (uint64_t Reg : Args) {
+        const unsigned Family = Reg / 8;
+        const auto Bit = GPRFamilyMask{1} << Family;
+        if (S.Reads[Family] && !(D.Writes & Bit))
+          D.Reads |= Bit;
+      }
+      D.Writes |= S.Kills;
+    }
+    Read |= D.Reads;
+    Written |= D.Writes;
+  }
+  GPRFamilyMask Candidates = Read & Written;
+  if (!Candidates)
+    return 0;
+
+  using State =
+      std::tuple<size_t, GPRFamilyMask, BlockScalarFacts::RegisterFacts>;
+  std::set<State> Seen;
+  llvm::SmallVector<const State *, 8> Pending;
+  Pending.push_back(
+      &*Seen.emplace(0, Candidates, BlockScalarFacts::RegisterFacts{}).first);
+  size_t Work = limits::kMaxCallExitConstantOps;
+  while (Candidates && !Pending.empty()) {
+    const auto &[I, Incoming, Registers] = *Pending.pop_back_val();
+    const LowBlock &Block = F.Blocks[I];
+    const auto &Succs = Effect.Blocks[I].Succs;
+    const size_t Cost = 1 + Block.Ops.size() + Registers.size() + Succs.size();
+    if (Cost > Work)
+      return 0;
+    Work -= Cost;
+    Candidates &= ~(Incoming & Demand[I].Reads);
+    const auto Unwritten = Incoming & Candidates & ~Demand[I].Writes;
+    if (!Unwritten || Succs.empty())
+      continue;
+
+    const LowOp &Last = Block.Ops.back();
+    const bool Conditional = Last.Opcode == NdOp::COND_BR;
+    if (Conditional &&
+        (Succs.size() != 2 || Last.NumInputs != 2 ||
+         !Last.Inputs[0].isConst() ||
+         (F.Blocks[Succs[0]].StartAddr == Last.Inputs[0].Offset) ==
+             (F.Blocks[Succs[1]].StartAddr == Last.Inputs[0].Offset)))
+      return 0;
+    if (!Conditional &&
+        (Succs.size() != 1 ||
+         (Last.Opcode == NdOp::BRANCH &&
+          (Last.NumInputs != 1 || !Last.Inputs[0].isConst() ||
+           Last.Inputs[0].Offset != F.Blocks[Succs.front()].StartAddr))))
+      return 0;
+    const auto Facts = blockScalarFacts(Img, Block, true, Registers);
+    for (size_t Succ : Succs) {
+      if (Conditional && Facts.BranchTaken &&
+          *Facts.BranchTaken !=
+              (F.Blocks[Succ].StartAddr == Last.Inputs[0].Offset))
+        continue;
+      const auto [At, Added] = Seen.emplace(Succ, Unwritten, Facts.Registers);
+      if (Added)
+        Pending.push_back(&*At);
+    }
+  }
+  return Candidates;
+}
+
 LocalRegisterEffect
 localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
                           const libc::NoReturnTargetIndex *NoReturnTargets,
@@ -1788,7 +1885,8 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
     BlockStarts.insert(F.Blocks[I].StartAddr);
   }
   Effect.Blocks.resize(F.Blocks.size());
-  if (canSummarizeExitConstants(Img, F, IndexOfId))
+  const bool ScalarLeaf = canSummarizeExitConstants(Img, F, IndexOfId);
+  if (ScalarLeaf)
     Effect.ExitConstants = scalarExitConstants(Img, F, IndexOfId);
   Effect.RegisterLeaf = registerLeaf(Img, F, Effect.ExitConstants);
   const uint64_t FPReturn = getTargetRegInfo(Img.Arch).FPReturnReg;
@@ -2101,6 +2199,9 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
   summarizeIncomingStackReads(Img, F, IndexOfId, BlockStarts, ArgumentSources,
                               StackProbes, Effect);
   joinPlainSteps(Effect);
+  if (ScalarLeaf && !Effect.BodyUnknown && !Effect.UnknownObservers)
+    Effect.WrittenBeforeArgumentReads =
+        guardedLeafArgumentWrites(Img, F, Effect);
   return Effect;
 }
 } // namespace
@@ -2275,7 +2376,11 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
     if (Forward)
       break;
   }
-  return LiveIn.empty() ? GPRReadWidths{} : LiveIn[0];
+  if (LiveIn.empty())
+    return {};
+  if (F.WrittenBeforeArgumentReads)
+    Clear(LiveIn.front(), F.WrittenBeforeArgumentReads);
+  return LiveIn.front();
 }
 } // namespace
 

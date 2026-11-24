@@ -880,6 +880,55 @@ int main(void) {
         Source, {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
 }
 
+TEST(MedLLVMEntryParameters, LiteralXorSelectPreservesItsKnownLowWord) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("selected-words", Context);
+  Module.setDataLayout("e-p:64:64");
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  auto *Half = llvm::Type::getInt32Ty(Context);
+  auto *Bit = llvm::Type::getInt1Ty(Context);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(Word, {Half, Bit, Bit}, false),
+      llvm::GlobalValue::ExternalLinkage, "selected_bits", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", F);
+  auto *Whole = llvm::BasicBlock::Create(Context, "whole", F);
+  auto *Low = llvm::BasicBlock::Create(Context, "low", F);
+  llvm::IRBuilder<> B(Entry);
+  auto *Missing = llvm_source_unknown::create(B, Half);
+  auto *Partial = B.CreateOr(B.CreateZExt(F->getArg(0), Word),
+                             B.CreateShl(B.CreateZExt(Missing, Word), 32));
+  auto *Selected = B.CreateSelect(F->getArg(1), B.CreateXor(Partial, 3),
+                                  B.getInt64(UINT64_C(0xa5710045efde0310)));
+  B.CreateCondBr(F->getArg(2), Whole, Low);
+  B.SetInsertPoint(Whole);
+  B.CreateRet(Selected);
+  B.SetInsertPoint(Low);
+  B.CreateRet(B.CreateZExt(B.CreateTrunc(Selected, Half), Word));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source(
+      "#include <stdlib.h>\nstatic int expect_missing;\n"
+      "#define __builtin_trap() _Exit(expect_missing ? 0 : 3)\n");
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  Source += R"(
+int main(void) {
+  for (uint32_t i = 0; i < 64; ++i) {
+    uint32_t x = i * UINT32_C(0xe5710001);
+    if (selected_bits(x, 1, 0) != (x ^ 3) ||
+        selected_bits(x, 0, 0) != UINT32_C(0xefde0310) ||
+        selected_bits(x, 0, 1) != UINT64_C(0xa5710045efde0310)) return 1;
+  }
+  expect_missing = 1;
+  (void)selected_bits(19, 1, 1);
+  return 2;
+}
+)";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Source, {Level});
+}
+
 TEST(MedLLVMEntryParameters, PartialPhiLoopsKeepCopiesAndEffects) {
   for (bool Keep : {false, true}) {
     SCOPED_TRACE(Keep);

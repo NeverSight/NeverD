@@ -1732,18 +1732,53 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
     OS << SourceRecorder->end(*Event);
 }
 
+std::pair<std::string, std::string>
+LLVMCWriter::deferredIncomingText(const llvm::Instruction &Join,
+                                  const llvm::Value *Incoming) {
+  const auto A = deferredIncomingAssignment(Join, Incoming);
+  if (A.Availability == c_availability::FlagWrite::Unknown)
+    return {"0", "0"};
+  if (A.Availability == c_availability::FlagWrite::Copy) {
+    const auto &Available = DeferredUnknownFlags.at(Incoming);
+    llvm::SaveAndRestore<bool> Transport(ReadingDeferredPayload, true);
+    return {Available + " ? (" + integerPointerOperandStr(Incoming) + ") : 0",
+            Available};
+  }
+  return {integerPointerOperandStr(Incoming), "1"};
+}
+
 bool LLVMCWriter::writeDeferredUnknownCopy(llvm::Instruction &Inst,
                                            int Indent) {
   const auto Assignment = deferredInstructionAssignment(Inst);
   if (!Assignment)
     return false;
   const auto Flag = DeferredUnknownFlags.find(&Inst);
+  if (const auto *Select = llvm::dyn_cast<llvm::SelectInst>(&Inst)) {
+    // A select transports the chosen arm just like a PHI on that edge.
+    // Evaluate the condition once and carry its chosen availability forward.
+    auto WriteArm = [&](const llvm::Value *Arm) {
+      const auto [Payload, Available] = deferredIncomingText(Inst, Arm);
+      emitIndent(Indent + 1);
+      OS << getName(&Inst) << " = " << Payload << ";\n";
+      emitIndent(Indent + 1);
+      OS << Flag->second << " = " << Available << ";\n";
+    };
+    emitIndent(Indent);
+    OS << "if (" << valueStr(Select->getCondition()) << ") {\n";
+    WriteArm(Select->getTrueValue());
+    emitIndent(Indent);
+    OS << "} else {\n";
+    WriteArm(Select->getFalseValue());
+    emitIndent(Indent);
+    OS << "}\n";
+    return true;
+  }
   if (Assignment->Availability == c_availability::FlagWrite::Unknown) {
     emitIndent(Indent);
     OS << Flag->second << " = 0;\n";
     return true;
   }
-  const auto Source = DeferredUnknownFlags.find(Inst.getOperand(0));
+  const auto Source = DeferredUnknownFlags.find(deferredScalarSource(Inst));
   std::string Payload;
   {
     llvm::SaveAndRestore<bool> Transport(ReadingDeferredPayload, true);
@@ -8764,19 +8799,7 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
       const std::string Destination = getName(Phi);
       if (auto Flag = DeferredUnknownFlags.find(Phi);
           Flag != DeferredUnknownFlags.end()) {
-        std::string Available = "1";
-        std::string RHS;
-        const auto Assignment = deferredPhiAssignment(*Phi, Incoming);
-        if (Assignment.Availability == c_availability::FlagWrite::Unknown) {
-          Available = "0";
-          RHS = "0";
-        } else if (Assignment.Availability == c_availability::FlagWrite::Copy) {
-          Available = DeferredUnknownFlags.at(Incoming);
-          llvm::SaveAndRestore<bool> Transport(ReadingDeferredPayload, true);
-          RHS =
-              Available + " ? (" + integerPointerOperandStr(Incoming) + ") : 0";
-        } else
-          RHS = integerPointerOperandStr(Incoming);
+        const auto [RHS, Available] = deferredIncomingText(*Phi, Incoming);
         Copies.push_back({Phi, Incoming, Phi->getType(), RHS, Destination, {}});
         Copies.push_back({nullptr,
                           nullptr,

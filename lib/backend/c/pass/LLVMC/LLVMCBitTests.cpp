@@ -9,6 +9,7 @@
 
 #include "LLVMCBitTests.h"
 
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/Limits.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -158,10 +159,12 @@ private:
 bool simplifyIntegerSlices(llvm::Function &Function, unsigned WorkLimit) {
   using namespace llvm;
   SmallVector<TruncInst *, 32> Slices;
+  bool HasMissingState = false;
   for (auto &I : instructions(Function)) {
     if (!WorkLimit)
       return false;
     --WorkLimit;
+    HasMissingState |= llvm_source_unknown::isValue(&I);
     if (auto *Slice = dyn_cast<TruncInst>(&I);
         Slice && !Slice->hasPoisonGeneratingFlags() &&
         Slice->getType()->isIntegerTy() &&
@@ -170,7 +173,7 @@ bool simplifyIntegerSlices(llvm::Function &Function, unsigned WorkLimit) {
       Slices.push_back(Slice);
   }
   bool Changed = false;
-  DenseMap<std::pair<PHINode *, unsigned>, PHINode *> NarrowPhis;
+  DenseMap<std::pair<Value *, unsigned>, Value *> NarrowJoins;
   for (size_t Index = 0; Index < Slices.size(); ++Index) {
     auto *Slice = Slices[Index];
     Value *Root = Slice->getOperand(0);
@@ -180,7 +183,7 @@ bool simplifyIntegerSlices(llvm::Function &Function, unsigned WorkLimit) {
       // contain unavailable high bits even when every incoming low slice
       // is known. Keep the original PHI for users of that complete value.
       const auto Key = std::make_pair(Phi, Width);
-      PHINode *Narrow = NarrowPhis.lookup(Key);
+      auto *Narrow = dyn_cast_or_null<PHINode>(NarrowJoins.lookup(Key));
       if (!Narrow) {
         if (Phi->getNumIncomingValues() > WorkLimit)
           continue;
@@ -205,7 +208,7 @@ bool simplifyIntegerSlices(llvm::Function &Function, unsigned WorkLimit) {
                                  Phi->getName() + ".low", Phi->getIterator());
         Narrow->setDebugLoc(Slice->getDebugLoc());
         // Publish before visiting the new slices, including loop backedges.
-        NarrowPhis.try_emplace(Key, Narrow);
+        NarrowJoins.try_emplace(Key, Narrow);
         for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
           auto *Pred = Phi->getIncomingBlock(I);
           IRBuilder<> Builder(Pred->getTerminator());
@@ -256,8 +259,36 @@ bool simplifyIntegerSlices(llvm::Function &Function, unsigned WorkLimit) {
         Invert.setBit(Bit);
     }
     if (!Complete || (Source == Root && Offset == 0 && SourceMask.isAllOnes() &&
-                      Invert.isZero() && Ones.isZero()))
+                      Invert.isZero() && Ones.isZero())) {
+      // The two arms can supply different, fully defined low words even when
+      // a whole arm is unavailable. Project each before selecting that word.
+      auto *Select = dyn_cast<SelectInst>(Root);
+      if (!HasMissingState || !Select || Select->hasPoisonGeneratingFlags())
+        continue;
+      const auto Key = std::make_pair(Root, Width);
+      Value *Narrow = NarrowJoins.lookup(Key);
+      if (!Narrow) {
+        if (WorkLimit < 2)
+          continue;
+        WorkLimit -= 2;
+        IRBuilder<> Builder(Select);
+        auto Arm = [&](Value *V) {
+          Value *Low = Builder.CreateTrunc(V, Slice->getType());
+          if (auto *Next = dyn_cast<TruncInst>(Low))
+            Slices.push_back(Next);
+          return Low;
+        };
+        Value *True = Arm(Select->getTrueValue());
+        Value *False = Arm(Select->getFalseValue());
+        Narrow = Builder.CreateSelect(Select->getCondition(), True, False,
+                                      Select->getName() + ".low");
+        NarrowJoins.try_emplace(Key, Narrow);
+      }
+      Slice->replaceAllUsesWith(Narrow);
+      Slice->eraseFromParent();
+      Changed = true;
       continue;
+    }
     IRBuilder<> Builder(Slice);
     Builder.SetCurrentDebugLocation(Slice->getDebugLoc());
     Value *Result = ConstantInt::get(Slice->getType(), Ones);

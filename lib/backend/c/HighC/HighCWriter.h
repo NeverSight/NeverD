@@ -972,6 +972,7 @@ public:
   void collectCtorSourceNames(const HighFunc &Func);
   bool isUnknownCallOperand(const HighExpr *Op) const;
   bool isDeferredUnknownInput(const HighExpr *Op) const;
+  const HighExpr *deferredScalarSource(const HighExpr &Value) const;
   bool isCtorSourceExpr(const HighExpr *Op) const;
   /// isUnknownCallOperand, asking \p UnknownOnly whether a name is in
   /// UnknownOnlyNames: the one name its answer reads that set for.

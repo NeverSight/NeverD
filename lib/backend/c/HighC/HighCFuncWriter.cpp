@@ -684,7 +684,7 @@ void HighCWriter::collectDeferredUnknowns(const HighFunc &Func) {
     CValueTransfer<std::string> Transfer{
         Name, std::nullopt,
         knownVoidCall(*Stmt.Val) || isDeferredUnknownInput(Stmt.Val.get())};
-    const HighExpr *Value = peelIntegerViewOps(Stmt.Val.get());
+    const HighExpr *Value = deferredScalarSource(*Stmt.Val);
     if (Value && (Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi))
       Transfer.Source = copyForwardName(varName(Value->Var));
     Transfers.push_back(std::move(Transfer));

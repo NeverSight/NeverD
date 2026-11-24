@@ -166,6 +166,10 @@ struct RegisterBlock {
 /// \p F has an effect this summary cannot describe.
 struct LocalRegisterEffect {
   GPRFamilyMask Writes = 0;
+  /// Integer argument families read only after a full write on every feasible
+  /// path in a bounded scalar leaf. This refines ABI liveness, while the
+  /// original steps retain their physical register reads and writes.
+  GPRFamilyMask WrittenBeforeArgumentReads = 0;
   /// Original GPR writes before ABI/identity simplifications. Untracked
   /// families and the x64 stack pointer are always set. This separate fact
   /// supplies scalar observations without assuming an external call's ABI.
