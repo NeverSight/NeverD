@@ -2328,6 +2328,12 @@ the prefix is disabled. A separate guest run with PAuth_LR disabled must
 report the feature mismatch. Apple's native qualification is recorded by
 the hosted runner probe below.
 
+The hosted Arm model executed all 12 images from frozen r6 and all 12 from the
+LLVM source fork, with 96 EL/control combinations per toolchain. Both runs
+rejected the unsupported control.
+[Hosted model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45323031302) and
+[per-toolchain results](evidence/arm64e-return-oracles-2026-11-24.json).
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs

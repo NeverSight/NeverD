@@ -1,0 +1,121 @@
+{
+  "tested_revision": "5b0804ecc49c8b81a1c8f741b331c414b55f0946",
+  "model_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45323031302",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45319365861",
+  "model": {
+    "version": "11.32+19",
+    "package_sha256": "b6835fd07cb390c7a32f84fe1cead84bde992813b49679137b3a7a0a026e92de",
+    "exception_levels": [
+      0,
+      1
+    ],
+    "binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168"
+  },
+  "comparisons": {
+    "keys": [
+      "IA",
+      "IB"
+    ],
+    "routes": [
+      "HighC",
+      "LLVM-to-C",
+      "LLVM-to-C after O2 IR"
+    ],
+    "c_optimization": [
+      "O0",
+      "O2"
+    ],
+    "samples_per_loop": 64,
+    "enpacm_enpacm0": [
+      "00",
+      "10",
+      "01",
+      "11"
+    ]
+  },
+  "profiles": {
+    "r6": {
+      "llvm": "neverd-llvm-v23.0.0-r6",
+      "test_binary_sha256": "3a0e1ed4bfb701254bf4781862db439f2f9ed6823ffeac211cfba31cce3b09ca",
+      "manifest_sha256": "290bee44a8018cc9c8404d92697402a4f0697ece998c04c01ea02b571937bab2",
+      "positive_images": 12,
+      "program_executions": 96,
+      "unsupported_control": {
+        "records": [
+          "RETURN-MODEL feature mismatch"
+        ],
+        "exit_code": 1
+      },
+      "local_regression": {
+        "passed": 54,
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections"
+        ]
+      }
+    },
+    "source": {
+      "llvm": "3798d997b9c126f33aaba9216b6543868f5cf857",
+      "test_binary_sha256": "d4746815b6a5000b00ab5ebac201ddd28998b967b85b55e29d1966c76bfacdbb",
+      "manifest_sha256": "e2cf682aef5ea4dc735663210a4d3503b3ea330f11052e1b53942212f9de8246",
+      "positive_images": 12,
+      "program_executions": 96,
+      "unsupported_control": {
+        "records": [
+          "RETURN-MODEL feature mismatch"
+        ],
+        "exit_code": 1
+      },
+      "local_regression": {
+        "passed": 54,
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections"
+        ]
+      }
+    }
+  },
+  "native": {
+    "macos-15": {
+      "hardware": "Apple M1 (Virtual)",
+      "status": "unavailable",
+      "revision": "0b77af9937e829f515c4feecda97b08e61d3d426",
+      "unavailable": [
+        "native_pac_qualified",
+        "compiler_original_call_unwind_qualified",
+        "native_cursor_qualified",
+        "explicit_pauth_lr_qualified",
+        "pacm_pc_qualified",
+        "x1_el0_cpta_qualified",
+        "x1_el0_checked_writeback_qualified"
+      ]
+    },
+    "macos-26": {
+      "hardware": "Apple M1 (Virtual)",
+      "status": "unavailable",
+      "revision": "0b77af9937e829f515c4feecda97b08e61d3d426",
+      "unavailable": [
+        "explicit_pauth_lr_qualified",
+        "pacm_pc_qualified",
+        "x1_el0_cpta_qualified",
+        "x1_el0_checked_writeback_qualified"
+      ]
+    },
+    "xcode-27": {
+      "hardware": "Apple M1 (Virtual)",
+      "status": "unavailable",
+      "revision": "0b77af9937e829f515c4feecda97b08e61d3d426",
+      "unavailable": [
+        "explicit_pauth_lr_qualified",
+        "pacm_pc_qualified",
+        "x1_el0_cpta_qualified",
+        "x1_el0_checked_writeback_qualified"
+      ]
+    }
+  },
+  "native_apple_x1_qualified": false
+}
