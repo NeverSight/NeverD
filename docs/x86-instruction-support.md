@@ -27,6 +27,9 @@ corrects the dedicated i386 writer for base-only SIB operands. Its
 again passed 131/131 on Linux and 130/131 on each other platform, with the
 same explicit POSIX x64 hardware skip. The change is in Capstone's output
 writer; NeverD's mixed-mode execution qualification is recorded separately.
+At the integrated `074c7618f6` source, NeverD's local instruction-coverage,
+decode-detail and no-index SIB suites passed 7/7, 6/6 and 9/9 respectively
+against this pin.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 

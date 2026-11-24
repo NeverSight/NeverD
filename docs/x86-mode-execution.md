@@ -388,6 +388,11 @@ the Linux runner enumerated zero EPC sections.
 [Hosted software and hardware probes](https://github.com/gmh5225/test_mac_intel/actions/runs/44886176997) ·
 [Intel SDK simulation](https://github.com/gmh5225/test_mac_intel/actions/runs/44873573672)
 
+The [November 22 hosted repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45107252887)
+passed 27/27 software cases at `d45fe8b1fb` with the pinned portable x64
+NeverC compiler. All three designated runner images again exposed zero EPC
+sections and executed zero native enclave cases.
+
 ## Earlier qualification records
 
 The November 11 regression stream performs protected32 → compatibility32 → code64 →

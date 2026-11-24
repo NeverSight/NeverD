@@ -6,7 +6,7 @@
   "fixture_manifest_sha256": "4a8863177c8b90fd897d9cc3a21759a52b5d662d755ebcc477aabe7125609e7b",
   "compiler_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
   "neverd_fixture_export_commit": "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
-  "current_neverd_export_commit": "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
+  "current_neverd_export_commit": "074c7618f6d1da49ba043445b336bb3beefe9d3f",
   "matching_neverd_export_commits": [
     "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
     "6f81b8559bac0dd326d9426269b5b7d48c03b343",
@@ -14,7 +14,8 @@
     "7c35482dc19fe0aea7f45e3623d461af3965c299",
     "bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557",
     "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
-    "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7"
+    "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
+    "074c7618f6d1da49ba043445b336bb3beefe9d3f"
   ],
   "current_neverd_export_sha256": {
     "high": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",

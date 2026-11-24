@@ -45,7 +45,7 @@ revision produced the same machine objects and guest images as the hosted
 fixtures.
 [AMD KVM execution and byte hashes](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
 
-After integrating `dev` through `dbed3c1ba2`, a fresh r7 SDK shared library
+After integrating `dev` through `074c7618f6`, a fresh r7 SDK shared library
 exported the identical HighC and LLVM-to-C source bytes. The portable x64
 NeverC reproduced the same four IR and object hashes at O0/O2, and the r7
 backend reproduced the same four guest-image hashes. The hosted instruction
