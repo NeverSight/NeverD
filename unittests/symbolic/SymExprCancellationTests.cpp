@@ -82,6 +82,30 @@ TEST(SymExprCancellation, CoveredXorTermsCannotAddBitsToTheirCover) {
   }
 }
 
+TEST(SymExprCancellation, CoveredUnionDifferenceCannotAddBits) {
+  for (unsigned Width : {3u, 8u, 32u, 64u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    auto Base = C.mkAdd(X, C.mkConst(Width, 5));
+    auto Cover = C.mkConst(Width, 0x25);
+    auto Difference = C.mkXor(Base, C.mkOr(Base, Cover));
+    EXPECT_EQ(C.mkOr(Cover, Difference), Cover);
+    EXPECT_EQ(C.mkOr(Y, C.mkXor(Base, C.mkOr(Base, Y))), Y);
+    EXPECT_EQ(C.mkOr(Base, C.mkNot(C.mkOr(C.mkNot(Base), Y))), Base);
+    auto Uncovered = C.mkOr(Cover, C.mkXor(Base, C.mkOr(Base, Y)));
+    std::mt19937_64 Random(67);
+    for (unsigned I = 0; I != 256; ++I) {
+      std::array<llvm::APInt, 2> Values{word(Random, Width),
+                                        word(Random, Width)};
+      const auto Current = Values[0] + llvm::APInt(Width, 5);
+      const auto Mask = llvm::APInt(Width, 0x25);
+      EXPECT_EQ(C.eval(Uncovered, Values),
+                Mask | (Current ^ (Current | Values[1])));
+    }
+  }
+}
+
 TEST(SymExprCancellation, ExhaustiveNarrowMixedOperandsRemainExact) {
   SymContext C;
   auto X = C.mkVar("x", 3), Y = C.mkVar("y", 3), Z = C.mkVar("z", 3);
