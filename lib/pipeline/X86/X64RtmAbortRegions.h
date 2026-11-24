@@ -34,9 +34,14 @@ struct X64ContinuationInstructionSource;
 /// Evidence belongs to the original execution CPU. An unadvertised feature
 /// alone cannot distinguish an unsupported instruction from TSX CPUID masking.
 struct X64RtmAbortSelection {
-  enum Mode { Off, Supported, Probe, Unadvertised } Kind = Off;
+  enum Mode { Off, Supported, Probe, Unadvertised, ForcedAbort } Kind = Off;
   std::optional<uint32_t> MaxBasic;
   std::optional<uint32_t> Leaf7EBX;
+  std::optional<uint32_t> Leaf7EDX;
+  std::optional<uint64_t> ArchCapabilities;
+  std::optional<uint64_t> TsxCtrl;
+  std::optional<uint64_t> TsxForceAbort;
+  bool canDecline() const { return Kind == Probe || Kind == Unadvertised; }
   static llvm::Expected<X64RtmAbortSelection> read(const llvm::json::Value &V);
   llvm::json::Object report(llvm::json::Array Regions) const;
 };
@@ -56,7 +61,7 @@ std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,
                                                        unsigned AddressBits);
 
 /// The public instruction entry calls its original V6 guard, then executes
-/// the authenticated pair under the invocation's declared RTM support.
+/// the authenticated pair or projects a proven architectural abort.
 struct X64RtmAbortStep {
   std::string Name;
   X64RtmAbortRegion Region;
