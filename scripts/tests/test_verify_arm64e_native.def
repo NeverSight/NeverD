@@ -278,7 +278,8 @@
     "recipe_rejected": [
       0,
       0
-    ]
+    ],
+    "cfa_rejected": [64, 63]
   },
   "cursor_unavailable_code": 2,
   "cursor_started": "cursor-started",
@@ -311,7 +312,8 @@
       "recipe_rejected": [
         0,
         0
-      ]
+      ],
+      "cfa_rejected": [64, 63]
     },
     {
       "checks": true,
@@ -330,7 +332,8 @@
       "recipe_rejected": [
         0,
         0
-      ]
+      ],
+      "cfa_rejected": [64, 63]
     },
     {
       "checks": 1024,
@@ -349,7 +352,8 @@
       "recipe_rejected": [
         0,
         0
-      ]
+      ],
+      "cfa_rejected": [64, 63]
     },
     {
       "checks": 1024,
@@ -368,7 +372,8 @@
       "recipe_rejected": [
         0,
         0
-      ]
+      ],
+      "cfa_rejected": [64, 63]
     },
     {
       "checks": 1024,
@@ -387,7 +392,8 @@
       "recipe_rejected": [
         0,
         0
-      ]
+      ],
+      "cfa_rejected": [64, 63]
     },
     {
       "checks": 1024,
@@ -406,7 +412,8 @@
       "recipe_rejected": [
         0,
         0
-      ]
+      ],
+      "cfa_rejected": [64, 63]
     },
     {
       "checks": 1024,
@@ -424,7 +431,8 @@
       "recipe_rejected": [
         0,
         0
-      ]
+      ],
+      "cfa_rejected": [64, 63]
     },
     {
       "checks": 1024,
@@ -440,7 +448,8 @@
       "recipe_rejected": [
         0,
         0
-      ]
+      ],
+      "cfa_rejected": [64, 63]
     }
   ],
   "x1_components": {
@@ -454,5 +463,15 @@
     -11,
     -5,
     -4
+  ],
+  "cursor_invalid_cfa_counts": [
+    [
+      0,
+      63
+    ],
+    [
+      64,
+      0
+    ]
   ]
 }

@@ -551,12 +551,14 @@
     "samples": 64,
     "counts": [
       "signed",
+      "cfa_rejected",
       "pc_rejected",
       "key_rejected",
       "recipe_rejected"
     ],
     "required": [
       "signed",
+      "cfa_rejected",
       "key_rejected"
     ],
     "pc_controls": [

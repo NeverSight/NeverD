@@ -126,7 +126,9 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     self.assertEqual(report[policy["pacm_pc_key"]], weak is None)
 
     def test_cursor_does_not_accept_a_partial_or_unsigned_observation(self):
-        for observation in CASES["cursor_invalid_observations"]:
+        wrong_cfa = [{**CASES["cursor_observation"], "cfa_rejected": counts}
+                     for counts in CASES["cursor_invalid_cfa_counts"]]
+        for observation in [*CASES["cursor_invalid_observations"], *wrong_cfa]:
             result = subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
                                                  "\n" + json.dumps(observation) + "\n", "")
             with self.subTest(observation=observation), self.assertRaises(ValueError):

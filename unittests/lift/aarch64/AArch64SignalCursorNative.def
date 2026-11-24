@@ -48,11 +48,12 @@ int main(int Argc, char **Argv) {
     fprintf(stderr, "failed cursor check %u\n", Result.FirstFailure);
     return EXIT_FAILURE;
   }
-  printf("{\"checks\":%u,\"signed\":[%u,%u],\"pc_rejected\":[%u,%u],"
-         "\"key_rejected\":[%u,%u],\"recipe_rejected\":[%u,%u]}\n",
+  printf("{\"checks\":%u,\"signed\":[%u,%u],\"cfa_rejected\":[%u,%u],"
+         "\"pc_rejected\":[%u,%u],\"key_rejected\":[%u,%u],\"recipe_rejected\":"
+         "[%u,%u]}\n",
          Result.Checks, Result.Signed[0], Result.Signed[1],
-         Result.PCRejected[0], Result.PCRejected[1], Result.KeyRejected[0],
-         Result.KeyRejected[1], Result.RecipeRejected[0],
-         Result.RecipeRejected[1]);
+         Result.CFARejected[0], Result.CFARejected[1], Result.PCRejected[0],
+         Result.PCRejected[1], Result.KeyRejected[0], Result.KeyRejected[1],
+         Result.RecipeRejected[0], Result.RecipeRejected[1]);
   return EXIT_SUCCESS;
 }

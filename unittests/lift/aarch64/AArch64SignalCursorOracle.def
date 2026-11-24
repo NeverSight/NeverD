@@ -77,7 +77,8 @@ __asm__(".text\n"
 
 typedef struct {
   unsigned Checks, FirstFailure;
-  unsigned Signed[2], PCRejected[2], KeyRejected[2], RecipeRejected[2];
+  unsigned Signed[2], CFARejected[2], PCRejected[2], KeyRejected[2],
+      RecipeRejected[2];
 } CursorResults;
 
 static void check(CursorResults *Result, bool Condition) {
@@ -270,6 +271,13 @@ static void checkRecipes(CursorResults *Result, bool Explicit, uintptr_t Low,
       // PAC collisions are legal. Record sensitivity across independent inputs
       // instead of requiring every pair of signatures to differ.
       Cursor = Input;
+      Row.CFAOffset = -(ptrdiff_t)sizeof(Frames.Inner);
+      check(Result,
+            Value.CFA >= Low && Value.CFA - Low >= sizeof(Frames.Inner));
+      Result->CFARejected[Key] +=
+          !step(Result, &Cursor, Row, Low, High, Explicit);
+      Cursor = Input;
+      Row.CFAOffset = 0;
       Row.SigningPC = 0; // A valid modifier, never an "unknown PC" sentinel.
       Result->PCRejected[Key] +=
           !step(Result, &Cursor, Row, Low, High, Explicit);
@@ -304,7 +312,8 @@ static void checkRecipes(CursorResults *Result, bool Explicit, uintptr_t Low,
       check(Result, Cursor.PC == PC && Cursor.SP == Value.CFA && !Cursor.LR);
       checkSpilled(Result, Value, PC, Row, Low, High, Explicit, &Frames);
     }
-    check(Result, Result->Signed[Key] && Result->KeyRejected[Key]);
+    check(Result, Result->Signed[Key] && Result->CFARejected[Key] &&
+                      Result->KeyRejected[Key]);
     if (Explicit)
       check(Result, Result->PCRejected[Key] && Result->RecipeRejected[Key]);
   }
