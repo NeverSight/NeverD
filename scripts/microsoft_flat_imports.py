@@ -18,11 +18,14 @@ LEGACY_INPUTS = Path(__file__).with_name("MicrosoftLegacySDKInputs.json")
 WEBAUTHN_INPUTS = Path(__file__).with_name("MicrosoftWebAuthnInputs.json")
 NAMED_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftNamedRuntimeSDKInputs.json")
 SYSTEM_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftSystemRuntimeSDKInputs.json")
+METADATA_HEADER_INPUTS = Path(__file__).with_name("MicrosoftMetadataHeaderInputs.json")
 CPDK_INPUTS = Path(__file__).with_name("MicrosoftCPDKInputs.json")
 NAMED_RUNTIME = json.loads(NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
 SYSTEM_RUNTIME = json.loads(SYSTEM_RUNTIME_INPUTS.read_text(encoding="utf-8"))["providers"]
 CPDK = json.loads(CPDK_INPUTS.read_text(encoding="utf-8"))
-RUNTIME_PROFILES = NAMED_RUNTIME["providers"] | SYSTEM_RUNTIME | CPDK["providers"]
+METADATA_HEADERS = json.loads(METADATA_HEADER_INPUTS.read_text(encoding="utf-8"))
+RUNTIME_PROFILES = (NAMED_RUNTIME["providers"] | SYSTEM_RUNTIME | CPDK["providers"] |
+                    METADATA_HEADERS["providers"])
 
 # The 32-bit SDK has no host-compute or hypervisor-platform import library.
 WIDE_ONLY = {"HostCompute", "HostNetwork", "HypervisorPlatform", "ComputeStorage"}
@@ -101,6 +104,51 @@ def cpdk_headers(output, cache, licenses):
                 directory = licenses if name == CPDK["license"] else include
                 shutil.copyfile(extracted, directory / name)
     return [{key: record[key] for key in ("file", "url", "sha256")} for record in CPDK["packages"]]
+
+
+def metadata_headers(output, cache, licenses):
+    """Keep the additional headers and source license accompanying the pinned Win32 metadata."""
+    include = output / "win32-metadata-headers"
+    include.mkdir(exist_ok=True)
+    for record in METADATA_HEADERS["files"]:
+        original = package(cache, record)
+        if record["name"] == "LICENSE":
+            shutil.copyfile(original, licenses / "Microsoft-Win32Metadata-LICENSE.txt")
+        else:
+            shutil.copyfile(original, include / record["name"])
+    # The original cryptcat.h uses U+00A0 as whitespace between declaration
+    # tokens. Clang accepts it in the source used for ABI and layout checks.
+    # The C header reader accepts ASCII whitespace in the projected copy.
+    catalog = include / "cryptcat.h"
+    (include / "cryptcat-c.h").write_bytes(catalog.read_bytes().replace(b"\xc2\xa0", b" "))
+    return [{k: record[k] for k in ("file", "url", "sha256")} for record in METADATA_HEADERS["files"]]
+
+
+def metadata_header_source(output, name, profile):
+    include = output / "win32-metadata-headers"
+    header, = profile["headers"]
+    prefix = include_headers(["winsock2", "windows"])
+    if header in ("mscoree", "metahost"):
+        # These MIDL headers refer to two SAL annotations and an interface
+        # before defining it. Only the interface's pointer is used here.
+        prefix += ("#ifndef _Out_retval_\n#define _Out_retval_ _Out_\n#endif\n"
+                   "#ifndef _COM_Outptr_retval_\n#define _COM_Outptr_retval_ _COM_Outptr_\n#endif\n"
+                   "typedef struct IManagedObject IManagedObject;\n")
+    elif header == "calendarapis":
+        # The SDK header uses the C++ short name for its tagged enum.
+        prefix += "typedef enum CALDATETIME_DATEUNIT CALDATETIME_DATEUNIT;\n"
+    elif header == "cryptcat":
+        prefix += include_headers(["wincrypt"])
+    directory = output / "sdk-import-sources"
+    original = directory / (name + "-sdk.c")
+    original.write_text(prefix + f'#include "{(include / (header + ".h")).resolve().as_posix()}"\n',
+                        encoding="utf-8")
+    if header != "cryptcat":
+        return original, original
+    projection = directory / (name + "-c.c")
+    projection.write_text(prefix + f'#include "{(include / "cryptcat-c.h").resolve().as_posix()}"\n',
+                          encoding="utf-8")
+    return projection, original
 
 
 def work_queue_c_types(header):
@@ -211,8 +259,12 @@ def named_runtime_units(output, architecture, compiler, libraries):
             continue
         target = profile["targets"][architecture]
         headers = ["winsock2", "windows", *profile["headers"]]
-        source = directory / (name + "-sdk.c")
-        source.write_text(include_headers(headers), encoding="utf-8")
+        if name in METADATA_HEADERS["providers"]:
+            source, original = metadata_header_source(output, name, profile)
+        else:
+            source = directory / (name + "-sdk.c")
+            source.write_text(include_headers(headers), encoding="utf-8")
+            original = source
         # In C23 an SDK declaration such as EngCreateClip() has zero parameters.
         # Bind the published prototype against the original C declaration in that dialect.
         convention = target.get("default_calling_convention", "")
@@ -228,7 +280,11 @@ def named_runtime_units(output, architecture, compiler, libraries):
             options = [*options, "-UNTDDI_VERSION"]
         if name in CPDK["providers"]:
             options = [*options, "-I", str(output / "cpdk-headers")]
-        bridge = {"source": str(source), "source_sha256": wdk.digest(source),
+        if name in METADATA_HEADERS["providers"]:
+            options = [*options, "-I", str(output / "win32-metadata-headers")]
+            if name == "ConsolePrivateExports":
+                options = [*options, "-DFE_IME=1"]
+        bridge = {"source": str(original), "source_sha256": wdk.digest(original),
                   "arguments": [*options, "-std=c23"], "language": "c", "commands": [],
                   "runtime_exports": named_runtime_exports(profile, target, NAMED_RUNTIME["win32_metadata"])}
         if "import_library" in target:

@@ -407,6 +407,8 @@ def check(args: argparse.Namespace) -> dict:
                 expected.difference_update(flat.NAMED_RUNTIME["providers"])
             if "system_runtime" not in profiles:
                 expected.difference_update(flat.SYSTEM_RUNTIME)
+            if "metadata_headers" not in profiles:
+                expected.difference_update(flat.METADATA_HEADERS["providers"])
             if "cpdk_runtime" not in profiles:
                 expected.difference_update(flat.CPDK["providers"])
             if "webauthn_runtime" not in profiles:

@@ -850,6 +850,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             flat_units, archives = flat.source_units(output, cache, architecture, readobj,
                                                      arguments, legacy_profile)
             runtime_packages.extend(flat.cpdk_headers(output, cache, licenses))
+            runtime_packages.extend(flat.metadata_headers(output, cache, licenses))
             named_libraries = flat.named_runtime_libraries(output, cache, architecture, readobj)
             flat_units.extend(flat.named_runtime_units(output, architecture, arguments, named_libraries))
             webauthn, headers, notice = flat.webauthn_runtime_unit(output, cache, arguments)
@@ -892,6 +893,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                          named_runtime=wdk.digest(flat.NAMED_RUNTIME_INPUTS),
                          system_runtime=wdk.digest(flat.SYSTEM_RUNTIME_INPUTS),
                          cpdk_runtime=wdk.digest(flat.CPDK_INPUTS),
+                         metadata_headers=wdk.digest(flat.METADATA_HEADER_INPUTS),
                          webauthn_runtime=wdk.digest(flat.WEBAUTHN_INPUTS),
                          **({"legacy_sdk": wdk.digest(flat.LEGACY_INPUTS)} if legacy_sdk else {})),
         "inputs": inputs,
