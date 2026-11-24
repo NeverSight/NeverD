@@ -2365,6 +2365,20 @@ SIGKILL before the entry marker is recorded as an unavailable launch.
 Apple kernel signal delivery and exception personalities are exercised by
 the separate Darwin system tests.
 
+The hosted Arm model passed all 16 cursor combinations and all 96
+generated-return combinations from frozen r6. On macOS 26, Apple Clang C11
+and C++20 builds at O0 and O2 each passed 3,878 checks with PACM acting as
+a hint. On the macOS 26 and Xcode 27 runners, 36 of the 39 previously
+skipped regression cases passed on each. The three outstanding native
+comparisons exercise PAuth_LR, PACM with a signing PC, and 128-bit LRCPC3.
+[Arm model and Darwin cursor results](https://github.com/gmh5225/test_mac_intel/actions/runs/45328801509)
+and [hosted regression results](https://github.com/gmh5225/test_mac_intel/actions/runs/45329777060).
+
+Of 1,067 local Release cases, 1,031 passed and 36 skipped. Ten initial CTest
+timeouts passed on a lower-concurrency rerun. Both hosted Mac runners covered
+33 of the 36 local skips. The [validation record](evidence/arm64e-signal-cursor-2026-11-24.json)
+includes the rerun list, executable hashes and remaining native comparisons.
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs

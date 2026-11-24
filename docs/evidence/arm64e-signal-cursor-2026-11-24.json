@@ -1,0 +1,195 @@
+{
+  "neverd_revision": "998ff490f81b5f0e5deb313f76e91b27cc98c08c",
+  "llvm_prebuilt": "r6",
+  "local_release": {
+    "tests": 1067,
+    "passed": 1031,
+    "skipped": 36,
+    "failed": 0,
+    "native_verifier_unit_tests": 29,
+    "first_run_ctest_timeouts": [
+      "AArch64LiftedImage.ADRPreservesSourceLiteralAndFunctionAddresses",
+      "AArch64LiftedImage.EmbeddedLiteralAndJumpTablesSurviveAutomaticRelifting",
+      "AArch64LiftedImage.FragmentedIntegerAndSIMDLiteralsSurviveRelifting",
+      "AArch64LiftedImage.KeepsOldFrameSaveInsideItsForwardingEntry",
+      "AArch64LiftedImage.MaskedFragmentedRelativeTablesSurviveRelifting",
+      "AArch64LiftedImage.MaskedGappedRelativeTablesSurviveRelifting",
+      "AArch64LiftedImage.PartialSwitchRecordsPreserveUnalignedStorage",
+      "AArch64LiftedImage.PublishesLocalAndPeerReferencesToABasicBlock",
+      "AArch64LiftedImage.RelativeSwitchDispatchSurvivesAutomaticRelifting",
+      "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables"
+    ],
+    "recheck_passed": 25,
+    "recheck_revision": "004cd41e5c15ba9de7112bbf69eb4cc0394da1b5",
+    "raw_parity_input": {
+      "macho_section": "__TEXT,__text",
+      "bytes": 15452
+    }
+  },
+  "stack_slot_undefined_symbols": {
+    "before": {
+      "O0": [
+        "___memcpy_chk"
+      ],
+      "O2": []
+    },
+    "after": {
+      "O0": [],
+      "O2": []
+    }
+  },
+  "cursor_model": {
+    "action": "https://github.com/gmh5225/test_mac_intel/actions/runs/45328801509",
+    "action_revision": "3ee8299f0e92fe6af8bdb7b7c5cd16d2e4dcedf9",
+    "final_guest_sha256": {
+      "cursor-O0": "dddbf29b4b29aa4ec2cf52cf5dc5af742ce245f82edf8f5f1b3cb966d9913d35",
+      "cursor-O2": "17725ff86ea49c1c6e482e0fa042e5268242c0298e2c41bba0fcaf024f92a301"
+    },
+    "unused_translation_entries_zero_per_guest": 1531,
+    "model_version": "11.32+19",
+    "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "manifest_sha256": "0271515c12b730c4584b3c992ebc2623a693d4bbc8bdf91f65621ab1a226438b",
+    "programs": 2,
+    "exception_levels": [
+      0,
+      1
+    ],
+    "enpacm_enpacm0": [
+      "00",
+      "10",
+      "01",
+      "11"
+    ],
+    "program_level_control_combinations": 16,
+    "unsupported_control": "cursor-O0-unsupported"
+  },
+  "generated_return_model": {
+    "model_version": "11.32+19",
+    "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "manifest_sha256": "c46d6e03fb8aae25f669133f16c45a230c7b2311de08c34cb589eb0577048485",
+    "programs": 12,
+    "exception_levels": [
+      0,
+      1
+    ],
+    "enpacm_enpacm0": [
+      "00",
+      "10",
+      "01",
+      "11"
+    ],
+    "program_level_control_combinations": 96,
+    "unsupported_control": "prefix-high-O0-unsupported",
+    "final_guest_sha256": {
+      "explicit-high-O0": "409d44ee095943df86e6fad0e18e237f9eeaf39742d9d7d0c1b671816125042d",
+      "explicit-high-O2": "b18e8916b9066e062832e6bfe4e70a6f0dceaab83163cd8120df61edccca3e1d",
+      "explicit-llvm-O0": "409d44ee095943df86e6fad0e18e237f9eeaf39742d9d7d0c1b671816125042d",
+      "explicit-llvm-O2": "b18e8916b9066e062832e6bfe4e70a6f0dceaab83163cd8120df61edccca3e1d",
+      "explicit-llvm-opt-O0": "409d44ee095943df86e6fad0e18e237f9eeaf39742d9d7d0c1b671816125042d",
+      "explicit-llvm-opt-O2": "b18e8916b9066e062832e6bfe4e70a6f0dceaab83163cd8120df61edccca3e1d",
+      "prefix-high-O0": "571843ce4bcce3d6d1bec7fe0976fb314b5224538e65b73e3964790cf4582df9",
+      "prefix-high-O2": "a0eee24938eab3b4c91b256a92a9c2e493f50a11887afb1c1ac9a038b37baf37",
+      "prefix-llvm-O0": "571843ce4bcce3d6d1bec7fe0976fb314b5224538e65b73e3964790cf4582df9",
+      "prefix-llvm-O2": "a0eee24938eab3b4c91b256a92a9c2e493f50a11887afb1c1ac9a038b37baf37",
+      "prefix-llvm-opt-O0": "571843ce4bcce3d6d1bec7fe0976fb314b5224538e65b73e3964790cf4582df9",
+      "prefix-llvm-opt-O2": "a0eee24938eab3b4c91b256a92a9c2e493f50a11887afb1c1ac9a038b37baf37"
+    }
+  },
+  "macos_26_cursor_profiles": {
+    "c11-O0-pacm": {
+      "status": "passed",
+      "checks": 3878,
+      "cfa_rejected": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    "c11-O0-explicit": {
+      "status": "unavailable"
+    },
+    "c11-O2-pacm": {
+      "status": "passed",
+      "checks": 3878,
+      "cfa_rejected": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    "c11-O2-explicit": {
+      "status": "unavailable"
+    },
+    "c++20-O0-pacm": {
+      "status": "passed",
+      "checks": 3878,
+      "cfa_rejected": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    "c++20-O0-explicit": {
+      "status": "unavailable"
+    },
+    "c++20-O2-pacm": {
+      "status": "passed",
+      "checks": 3878,
+      "cfa_rejected": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    "c++20-O2-explicit": {
+      "status": "unavailable"
+    }
+  },
+  "hosted_native_regression": {
+    "action": "https://github.com/gmh5225/test_mac_intel/actions/runs/45329777060",
+    "results_per_runner": {
+      "arm64e-skips-xcode-27": {
+        "passed": 36,
+        "skipped": 3
+      },
+      "arm64e-skips-macos-26": {
+        "passed": 36,
+        "skipped": 3
+      }
+    },
+    "local_skips_passed_on_both": 33,
+    "still_requiring_native_execution": [
+      "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+      "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections"
+    ]
+  }
+}
