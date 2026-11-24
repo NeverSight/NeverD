@@ -40,6 +40,31 @@ int successfulMain(int Argc, char *Argv[]) {
 
 } // namespace
 
+#if defined(__linux__) && defined(CPU_COUNT)
+TEST(SupportThreads, AutomaticCountFollowsTheCallingThreadsAffinity) {
+  // A disposable thread inherits the test runner's own CPU set.
+  std::thread Worker([] {
+    cpu_set_t Original;
+    if (sched_getaffinity(0, sizeof(Original), &Original) != 0)
+      GTEST_SKIP() << "Cannot inspect the test thread's CPU affinity";
+    cpu_set_t Selected;
+    CPU_ZERO(&Selected);
+    for (int Cpu = 0; Cpu < CPU_SETSIZE; ++Cpu)
+      if (CPU_ISSET(Cpu, &Original)) {
+        CPU_SET(Cpu, &Selected);
+        break;
+      }
+    if (sched_setaffinity(0, sizeof(Selected), &Selected) != 0)
+      GTEST_SKIP() << "Cannot restrict the test thread's CPU affinity";
+    EXPECT_EQ(neverd::defaultWorkerThreadCount(), 1u);
+    ASSERT_EQ(sched_setaffinity(0, sizeof(Original), &Original), 0);
+    EXPECT_EQ(neverd::defaultWorkerThreadCount(),
+              static_cast<unsigned>(CPU_COUNT(&Original)));
+  });
+  Worker.join();
+}
+#endif
+
 TEST(SupportThreads, ZeroWorkersDoNotInvokeBody) {
   auto Worker = [] { FAIL() << "zero workers must not invoke the body"; };
   neverd::runWithLargeStackThreads(0, Worker);

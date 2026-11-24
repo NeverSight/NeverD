@@ -206,6 +206,17 @@ TEST(TaskScheduler, LargeCallerReusesAvailableHeadroom) {
   EXPECT_EQ(neverd::runWithLargeStack(Main, 0, nullptr), 0);
 }
 
+TEST(TaskScheduler, SerialLargeStackCallerCanDispatchAnInnerBatch) {
+  std::atomic<unsigned> Completed{0};
+  auto Outer = [&] {
+    auto Inner = [&] { ++Completed; };
+    neverd::runPipelineWorkers(3, Inner);
+  };
+  auto Run = [&] { neverd::runPipelineWorkers(1, Outer); };
+  neverd::runWithMainStack(Run);
+  EXPECT_EQ(Completed.load(), 3u);
+}
+
 TEST(TaskScheduler, ForeignSerialLimitStillCompletes) {
   oneapi::tbb::global_control Limit(
       oneapi::tbb::global_control::max_allowed_parallelism, 1);
