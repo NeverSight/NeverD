@@ -1,0 +1,1119 @@
+{
+  "llvm": {
+    "baseline": "e03b3a2cd27615bd9a8d193b37f36da80d56355b",
+    "candidate": "0f9776402d2f3aed5daf50e58cdcb820690517cc",
+    "pull_request": "https://github.com/NeverSight/llvm-project/pull/18",
+    "source_qualification": "https://github.com/gmh5225/test_mac_intel/actions/runs/45447960757",
+    "installed_packages": "https://github.com/gmh5225/test_mac_intel/actions/runs/45447960768",
+    "archive_sha256": {
+      "neverd-llvm-macos-arm64.tar.xz": "43d8707b620ad0e0b30b92ef33e6a96c11442fb9b6654c1c45ed6171ef1e4479",
+      "neverd-llvm-linux-x86_64.tar.xz": "ab109e7c7bb260bb17238bdaf5f21d365df5c70b337837a0f7ab1591bb0f5c32",
+      "neverd-llvm-windows-x64.zip": "20b41f0972f97ed6a654ef5bb14f080ec9691e2ec8921e03a03958bf5da94340"
+    }
+  },
+  "unicorn": {
+    "baseline": "9e7ca3522d54fbb365fc69d4c2dbf793fd4f063e",
+    "candidate": "5707f08444319743a30965bc3433343afff4c7eb",
+    "merged": "3e0374d3c2ec95aa0639677c8e8db7c71096d60f",
+    "pull_request": "https://github.com/NeverSight/unicorn/pull/38",
+    "native_tests": "https://github.com/gmh5225/test_mac_intel/actions/runs/45449583851"
+  },
+  "execution": {
+    "assembler_linker": "GNU binutils 2.42",
+    "simulator": "GNU GDB 17.1 MIPS sim",
+    "input": "GNU-linked n32/n64 microMIPS64 wide_add lifted by NeverD. The target adapter uses source LLVM with ELF metadata for r2, r3 and r5.",
+    "mixed": "Both function orders and all four classic/micro caller/callee pairs, a caller with unwind metadata, a leaf without unwind metadata and a separately placed function pointer.",
+    "cells": {
+      "n32-big": {
+        "input_elf_sha256": "30d972be80ea4d42ef1c092bf28f6611fa32f781ae53f0153d2f9229ddb5c81c",
+        "gnu_control_executable_sha256": "7f47b1d24a10ba1146008fa0fcb5344899de7536dea7b467b38e94953122dda3",
+        "gnu_input_checks": 6,
+        "rejected_release_selections": 4,
+        "relocatable": {
+          "outputs": 12,
+          "runtime_checks": 72
+        },
+        "fixed_address": {
+          "outputs": 6,
+          "runtime_checks": 36
+        },
+        "mixed_fixed_address": {
+          "outputs": 8,
+          "runtime_checks": 48
+        },
+        "unicorn": {
+          "sub_pair": {
+            "checks": 6,
+            "baseline_passed": 6,
+            "updated_passed": 6
+          },
+          "bswap": {
+            "checks": 6,
+            "baseline_passed": 0,
+            "updated_passed": 6
+          },
+          "ctpop": {
+            "checks": 6,
+            "baseline_passed": 0,
+            "updated_passed": 6
+          },
+          "double_to_int": {
+            "checks": 7,
+            "baseline_passed": 7,
+            "updated_passed": 7
+          },
+          "single_to_int": {
+            "checks": 7,
+            "baseline_passed": 7,
+            "updated_passed": 7
+          }
+        }
+      },
+      "n32-little": {
+        "input_elf_sha256": "4110151c80f28864d00f21eab0b630ae12de94ba3cea42f70dcd50eb600fdc30",
+        "gnu_control_executable_sha256": "5604f3bb7efe700098e4be6d3cb8356ce3d14312d9ed7d2e6e99c4c31fe80688",
+        "gnu_input_checks": 6,
+        "rejected_release_selections": 4,
+        "relocatable": {
+          "outputs": 12,
+          "runtime_checks": 72
+        },
+        "fixed_address": {
+          "outputs": 6,
+          "runtime_checks": 36
+        },
+        "mixed_fixed_address": {
+          "outputs": 8,
+          "runtime_checks": 48
+        },
+        "unicorn": {
+          "sub_pair": {
+            "checks": 6,
+            "baseline_passed": 6,
+            "updated_passed": 6
+          },
+          "bswap": {
+            "checks": 6,
+            "baseline_passed": 0,
+            "updated_passed": 6
+          },
+          "ctpop": {
+            "checks": 6,
+            "baseline_passed": 0,
+            "updated_passed": 6
+          },
+          "double_to_int": {
+            "checks": 7,
+            "baseline_passed": 7,
+            "updated_passed": 7
+          },
+          "single_to_int": {
+            "checks": 7,
+            "baseline_passed": 7,
+            "updated_passed": 7
+          }
+        }
+      },
+      "n64-big": {
+        "input_elf_sha256": "7b8fbd3d756c44d50513d1fc912e4af6c5a2ce8a8a04c943bb5779603f235672",
+        "gnu_control_executable_sha256": "089ff71644984b78243776f83ea4f7b549ac1702bc0b599ca7ed3d505a1e1f35",
+        "gnu_input_checks": 6,
+        "rejected_release_selections": 4,
+        "relocatable": {
+          "outputs": 12,
+          "runtime_checks": 72
+        },
+        "fixed_address": {
+          "outputs": 6,
+          "runtime_checks": 36
+        },
+        "mixed_fixed_address": {
+          "outputs": 8,
+          "runtime_checks": 48
+        },
+        "unicorn": {
+          "sub_pair": {
+            "checks": 6,
+            "baseline_passed": 6,
+            "updated_passed": 6
+          },
+          "bswap": {
+            "checks": 6,
+            "baseline_passed": 0,
+            "updated_passed": 6
+          },
+          "ctpop": {
+            "checks": 6,
+            "baseline_passed": 0,
+            "updated_passed": 6
+          },
+          "double_to_int": {
+            "checks": 7,
+            "baseline_passed": 7,
+            "updated_passed": 7
+          },
+          "single_to_int": {
+            "checks": 7,
+            "baseline_passed": 7,
+            "updated_passed": 7
+          }
+        }
+      },
+      "n64-little": {
+        "input_elf_sha256": "1f459541e6a6dd2d284db87235492a294528bb9da35cc1c656b63e37f12c6cfb",
+        "gnu_control_executable_sha256": "73a82a466a9006c54e5d4bd978232b1e17cab06c90fadafba4fdd31af5a9cb98",
+        "gnu_input_checks": 6,
+        "rejected_release_selections": 4,
+        "relocatable": {
+          "outputs": 12,
+          "runtime_checks": 72
+        },
+        "fixed_address": {
+          "outputs": 6,
+          "runtime_checks": 36
+        },
+        "mixed_fixed_address": {
+          "outputs": 8,
+          "runtime_checks": 48
+        },
+        "unicorn": {
+          "sub_pair": {
+            "checks": 6,
+            "baseline_passed": 6,
+            "updated_passed": 6
+          },
+          "bswap": {
+            "checks": 6,
+            "baseline_passed": 0,
+            "updated_passed": 6
+          },
+          "ctpop": {
+            "checks": 6,
+            "baseline_passed": 0,
+            "updated_passed": 6
+          },
+          "double_to_int": {
+            "checks": 7,
+            "baseline_passed": 7,
+            "updated_passed": 7
+          },
+          "single_to_int": {
+            "checks": 7,
+            "baseline_passed": 7,
+            "updated_passed": 7
+          }
+        }
+      }
+    }
+  },
+  "performance": {
+    "order": "24 paired runs per cell with alternating AB/BA order. Intervals are the 2.5th and 97.5th bootstrap percentiles of the paired median ratio.",
+    "llvm_objdump": {
+      "workload": "Each invocation disassembles sixteen copies of the same object (2,560 leaf functions). The full text must match before timing. Balanced AB/BA order within each ABI/endian.",
+      "child_cpu_unit": "milliseconds per invocation",
+      "host": "macOS-15.6.1-arm64-arm-64bit",
+      "rounds": 24,
+      "tools": {
+        "r8": "43ecf8fe40895b71ad4b92706686879ce3677079fbe21443b2fa6992fcd8c31f",
+        "candidate": "b2f27fd89792f2f690406fd5e01737836d8411be1893e2b288318da78b8e5801"
+      },
+      "cells": {
+        "classic-n64-be": {
+          "input_sha256": "fb3d2016239659bd3cc12891805e7b03735ae945fa3a5b9761af8e279a5e554e",
+          "stdout_sha256": "23fc1c2f1cdf61254081132dbcd78bc739d87fef2943918a7113d40fee470be3",
+          "r8_median": 36.319999999999574,
+          "candidate_median": 36.53050000000002,
+          "paired_median_ratio": 1.0015206850264418,
+          "candidate_faster_pairs": 12,
+          "resampled_95_percent_median_ratio": [
+            0.9820442380129705,
+            1.0237229020639584
+          ],
+          "first_sample_starts_with": "r8",
+          "paired_ms": [
+            [
+              37.642,
+              37.306
+            ],
+            [
+              35.0,
+              39.145
+            ],
+            [
+              37.224,
+              37.885
+            ],
+            [
+              36.953,
+              36.776
+            ],
+            [
+              36.69,
+              34.385
+            ],
+            [
+              35.73,
+              35.637
+            ],
+            [
+              35.35,
+              36.672
+            ],
+            [
+              34.277,
+              36.167
+            ],
+            [
+              35.309,
+              34.675
+            ],
+            [
+              38.229,
+              36.321
+            ],
+            [
+              35.622,
+              36.462
+            ],
+            [
+              36.225,
+              38.501
+            ],
+            [
+              37.712,
+              37.491
+            ],
+            [
+              33.621,
+              37.26
+            ],
+            [
+              37.029,
+              37.238
+            ],
+            [
+              37.682,
+              36.238
+            ],
+            [
+              36.415,
+              34.649
+            ],
+            [
+              34.884,
+              36.044
+            ],
+            [
+              34.961,
+              35.163
+            ],
+            [
+              39.424,
+              35.794
+            ],
+            [
+              39.242,
+              37.763
+            ],
+            [
+              33.824,
+              36.599
+            ],
+            [
+              35.281,
+              33.025
+            ],
+            [
+              36.568,
+              37.087
+            ]
+          ]
+        },
+        "classic-n64-le": {
+          "input_sha256": "3a5b3ea4ebd5e33190e2fc258bd1139edd47dc05b123be4d1bdd5154abee0f07",
+          "stdout_sha256": "284fa840bf199f5b11429ed00af8ddb7cfa185d615fdab3ed675f7d0a260e243",
+          "r8_median": 36.79350000000015,
+          "candidate_median": 36.85099999999997,
+          "paired_median_ratio": 0.9925280004306553,
+          "candidate_faster_pairs": 14,
+          "resampled_95_percent_median_ratio": [
+            0.9722669018834699,
+            1.0160932597641432
+          ],
+          "first_sample_starts_with": "candidate",
+          "paired_ms": [
+            [
+              38.878,
+              37.146
+            ],
+            [
+              39.343,
+              37.026
+            ],
+            [
+              36.527,
+              37.044
+            ],
+            [
+              35.977,
+              36.676
+            ],
+            [
+              35.301,
+              35.892
+            ],
+            [
+              34.415,
+              38.151
+            ],
+            [
+              36.972,
+              37.567
+            ],
+            [
+              36.784,
+              35.932
+            ],
+            [
+              39.717,
+              33.641
+            ],
+            [
+              36.192,
+              33.443
+            ],
+            [
+              35.989,
+              36.547
+            ],
+            [
+              37.592,
+              37.2
+            ],
+            [
+              35.607,
+              38.499
+            ],
+            [
+              34.167,
+              39.427
+            ],
+            [
+              38.546,
+              37.477
+            ],
+            [
+              39.377,
+              34.955
+            ],
+            [
+              34.584,
+              35.855
+            ],
+            [
+              36.361,
+              37.068
+            ],
+            [
+              39.148,
+              38.751
+            ],
+            [
+              37.873,
+              35.492
+            ],
+            [
+              40.603,
+              38.697
+            ],
+            [
+              36.852,
+              36.675
+            ],
+            [
+              35.671,
+              35.617
+            ],
+            [
+              36.803,
+              36.067
+            ]
+          ]
+        },
+        "micro-o32-be": {
+          "input_sha256": "8f58186ff807c8a4498d06c2e22522a29b55e575f8b055a7d8c30da6eb82d187",
+          "stdout_sha256": "be567be7e6eb45c7a91192307ccf5a4f93a04590bccef2ab33f0e23a378a9d9e",
+          "r8_median": 36.24749999999999,
+          "candidate_median": 34.69199999999984,
+          "paired_median_ratio": 0.955482033043717,
+          "candidate_faster_pairs": 16,
+          "resampled_95_percent_median_ratio": [
+            0.9334555794732657,
+            1.0156110781693006
+          ],
+          "first_sample_starts_with": "r8",
+          "paired_ms": [
+            [
+              36.995,
+              33.044
+            ],
+            [
+              36.621,
+              35.198
+            ],
+            [
+              34.909,
+              36.915
+            ],
+            [
+              34.045,
+              31.483
+            ],
+            [
+              38.832,
+              34.264
+            ],
+            [
+              36.616,
+              34.469
+            ],
+            [
+              34.987,
+              33.047
+            ],
+            [
+              37.606,
+              34.507
+            ],
+            [
+              32.778,
+              34.552
+            ],
+            [
+              33.552,
+              33.082
+            ],
+            [
+              33.553,
+              36.117
+            ],
+            [
+              34.353,
+              34.91
+            ],
+            [
+              36.262,
+              32.225
+            ],
+            [
+              38.503,
+              35.528
+            ],
+            [
+              35.729,
+              36.311
+            ],
+            [
+              36.233,
+              34.832
+            ],
+            [
+              32.832,
+              34.317
+            ],
+            [
+              33.43,
+              37.471
+            ],
+            [
+              33.534,
+              36.175
+            ],
+            [
+              38.795,
+              33.802
+            ],
+            [
+              36.755,
+              34.322
+            ],
+            [
+              37.546,
+              35.662
+            ],
+            [
+              36.569,
+              35.371
+            ],
+            [
+              37.629,
+              35.125
+            ]
+          ]
+        },
+        "micro-o32-le": {
+          "input_sha256": "451bbd9d6cdf6e2ef57f2c3cd816650ea7ec07384ed66c37c683163a91ed6fd2",
+          "stdout_sha256": "9928ba8429fe82ba9e21b1a519ed3f087781f16f9f61b68404729e599a648252",
+          "r8_median": 35.04350000000022,
+          "candidate_median": 35.174500000000336,
+          "paired_median_ratio": 1.009570130596988,
+          "candidate_faster_pairs": 11,
+          "resampled_95_percent_median_ratio": [
+            0.9775919362153618,
+            1.0314378314672967
+          ],
+          "first_sample_starts_with": "candidate",
+          "paired_ms": [
+            [
+              36.684,
+              34.553
+            ],
+            [
+              36.076,
+              34.336
+            ],
+            [
+              34.63,
+              33.892
+            ],
+            [
+              35.634,
+              34.411
+            ],
+            [
+              33.66,
+              37.18
+            ],
+            [
+              36.137,
+              34.633
+            ],
+            [
+              33.94,
+              35.007
+            ],
+            [
+              35.079,
+              34.929
+            ],
+            [
+              35.616,
+              37.342
+            ],
+            [
+              37.211,
+              34.581
+            ],
+            [
+              35.837,
+              35.447
+            ],
+            [
+              32.137,
+              36.704
+            ],
+            [
+              35.535,
+              36.321
+            ],
+            [
+              36.429,
+              33.006
+            ],
+            [
+              36.564,
+              37.088
+            ],
+            [
+              34.89,
+              39.193
+            ],
+            [
+              35.008,
+              35.251
+            ],
+            [
+              34.933,
+              36.289
+            ],
+            [
+              34.675,
+              35.098
+            ],
+            [
+              34.155,
+              36.988
+            ],
+            [
+              34.657,
+              35.448
+            ],
+            [
+              33.531,
+              37.441
+            ],
+            [
+              37.045,
+              33.415
+            ],
+            [
+              33.921,
+              33.565
+            ]
+          ]
+        }
+      },
+      "paired_ms_columns": [
+        "r8",
+        "r9"
+      ]
+    },
+    "unicorn": {
+      "rounds": 24,
+      "instructions_per_cold_instance": 8192,
+      "cpu_time": "seconds inside first translation and execution across 256 blocks of 32 physical instructions",
+      "sha256": {
+        "base": "306718f5d6b4ae06d68174c29abbbb564ec8a12915d89341b671bc073f0a59c3",
+        "candidate": "d4ba52dcc5a74a9a715b73dcad28366722009dbfe633ea1d97c766fe6fd570c2"
+      },
+      "cells": {
+        "r2-big": {
+          "base_ms": 3.2325,
+          "candidate_ms": 3.1149999999999998,
+          "paired_median_ratio": 0.9738193126065493,
+          "bootstrap_95pct": [
+            0.8926786239341371,
+            1.135850525496302
+          ],
+          "first_sample_starts_with": "candidate",
+          "paired_ms": [
+            [
+              3.479,
+              2.538
+            ],
+            [
+              3.15,
+              2.64
+            ],
+            [
+              3.4090000000000003,
+              3.159
+            ],
+            [
+              3.372,
+              2.561
+            ],
+            [
+              3.315,
+              3.1319999999999997
+            ],
+            [
+              3.634,
+              3.4650000000000003
+            ],
+            [
+              2.655,
+              3.54
+            ],
+            [
+              2.569,
+              2.918
+            ],
+            [
+              2.604,
+              3.738
+            ],
+            [
+              3.485,
+              3.503
+            ],
+            [
+              2.7929999999999997,
+              3.7030000000000003
+            ],
+            [
+              3.398,
+              2.505
+            ],
+            [
+              2.633,
+              2.61
+            ],
+            [
+              3.401,
+              3.036
+            ],
+            [
+              3.519,
+              3.4650000000000003
+            ],
+            [
+              3.427,
+              2.598
+            ],
+            [
+              2.617,
+              2.665
+            ],
+            [
+              2.643,
+              3.098
+            ],
+            [
+              2.848,
+              3.436
+            ],
+            [
+              3.124,
+              2.675
+            ],
+            [
+              2.6519999999999997,
+              3.646
+            ],
+            [
+              3.506,
+              2.698
+            ],
+            [
+              2.6719999999999997,
+              3.471
+            ],
+            [
+              3.539,
+              3.408
+            ]
+          ]
+        },
+        "r2-little": {
+          "base_ms": 3.3355000000000006,
+          "candidate_ms": 3.383,
+          "paired_median_ratio": 1.0128022113094448,
+          "bootstrap_95pct": [
+            0.9301774737134418,
+            1.0859473023839399
+          ],
+          "first_sample_starts_with": "candidate",
+          "paired_ms": [
+            [
+              3.346,
+              2.915
+            ],
+            [
+              3.0709999999999997,
+              3.444
+            ],
+            [
+              2.593,
+              3.46
+            ],
+            [
+              3.232,
+              3.284
+            ],
+            [
+              2.559,
+              3.342
+            ],
+            [
+              3.375,
+              3.357
+            ],
+            [
+              3.398,
+              3.588
+            ],
+            [
+              3.6319999999999997,
+              3.3890000000000002
+            ],
+            [
+              2.7590000000000003,
+              3.535
+            ],
+            [
+              3.453,
+              2.44
+            ],
+            [
+              3.3400000000000003,
+              2.533
+            ],
+            [
+              3.3310000000000004,
+              2.561
+            ],
+            [
+              3.1879999999999997,
+              3.4619999999999997
+            ],
+            [
+              3.351,
+              3.423
+            ],
+            [
+              2.542,
+              3.4290000000000003
+            ],
+            [
+              2.6159999999999997,
+              3.458
+            ],
+            [
+              3.4050000000000002,
+              3.0300000000000002
+            ],
+            [
+              3.363,
+              3.395
+            ],
+            [
+              2.5829999999999997,
+              2.497
+            ],
+            [
+              3.232,
+              3.379
+            ],
+            [
+              3.435,
+              2.528
+            ],
+            [
+              3.49,
+              3.387
+            ],
+            [
+              3.49,
+              2.575
+            ],
+            [
+              2.606,
+              3.4650000000000003
+            ]
+          ]
+        },
+        "r6-big": {
+          "base_ms": 8.2485,
+          "candidate_ms": 8.015999999999998,
+          "paired_median_ratio": 0.9734122590710822,
+          "bootstrap_95pct": [
+            0.9261161596207033,
+            1.002289708363461
+          ],
+          "first_sample_starts_with": "candidate",
+          "paired_ms": [
+            [
+              7.944,
+              7.757
+            ],
+            [
+              8.427,
+              7.953999999999999
+            ],
+            [
+              7.696,
+              7.777
+            ],
+            [
+              8.606000000000002,
+              8.156
+            ],
+            [
+              8.014999999999999,
+              7.183
+            ],
+            [
+              8.3,
+              8.28
+            ],
+            [
+              8.241,
+              7.2139999999999995
+            ],
+            [
+              8.325000000000001,
+              8.177
+            ],
+            [
+              8.241999999999999,
+              8.427999999999999
+            ],
+            [
+              8.298,
+              8.317
+            ],
+            [
+              8.902000000000001,
+              8.597000000000001
+            ],
+            [
+              8.809000000000001,
+              7.377
+            ],
+            [
+              7.278,
+              8.078
+            ],
+            [
+              8.219000000000001,
+              7.407
+            ],
+            [
+              8.369,
+              8.633000000000001
+            ],
+            [
+              8.281,
+              7.204000000000001
+            ],
+            [
+              7.593,
+              7.032
+            ],
+            [
+              8.255,
+              8.664
+            ],
+            [
+              7.441,
+              7.335
+            ],
+            [
+              8.536999999999999,
+              8.283999999999999
+            ],
+            [
+              7.718,
+              8.292000000000002
+            ],
+            [
+              8.186,
+              7.2620000000000005
+            ],
+            [
+              7.207,
+              8.263
+            ],
+            [
+              8.405,
+              7.386
+            ]
+          ]
+        },
+        "r6-little": {
+          "base_ms": 8.26,
+          "candidate_ms": 8.231000000000002,
+          "paired_median_ratio": 0.9998839907192576,
+          "bootstrap_95pct": [
+            0.9364238410596027,
+            1.035796347805055
+          ],
+          "first_sample_starts_with": "candidate",
+          "paired_ms": [
+            [
+              7.2700000000000005,
+              8.45
+            ],
+            [
+              8.333,
+              7.6290000000000004
+            ],
+            [
+              8.269,
+              8.269
+            ],
+            [
+              8.251,
+              6.998
+            ],
+            [
+              8.269,
+              8.565
+            ],
+            [
+              8.62,
+              8.618
+            ],
+            [
+              8.724,
+              8.301
+            ],
+            [
+              7.195,
+              8.425
+            ],
+            [
+              8.846,
+              8.193000000000001
+            ],
+            [
+              8.534999999999998,
+              7.648000000000001
+            ],
+            [
+              8.318000000000001,
+              8.587
+            ],
+            [
+              7.247,
+              8.481
+            ],
+            [
+              8.057,
+              7.112
+            ],
+            [
+              7.4079999999999995,
+              8.407
+            ],
+            [
+              8.51,
+              8.295
+            ],
+            [
+              8.209,
+              7.4110000000000005
+            ],
+            [
+              7.149,
+              7.681
+            ],
+            [
+              8.305,
+              7.777
+            ],
+            [
+              7.647,
+              8.444999999999999
+            ],
+            [
+              8.524000000000001,
+              8.147
+            ],
+            [
+              7.7219999999999995,
+              8.293999999999999
+            ],
+            [
+              7.289000000000001,
+              7.324
+            ],
+            [
+              8.335,
+              7.455
+            ],
+            [
+              7.091,
+              7.2940000000000005
+            ]
+          ]
+        }
+      },
+      "paired_ms_columns": [
+        "base",
+        "candidate"
+      ]
+    }
+  }
+}

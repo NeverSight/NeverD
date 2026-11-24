@@ -45,13 +45,14 @@ ROTR requires Release 2 or a separately identified SmartMIPS extension.
 The backend selects the historical ISA or release, floating-point ABI and
 position-independent addressing from the input. Function attributes can select
 classic, MIPS16 or microMIPS encoding. A function override that changes the
-input ISA or calling convention produces a diagnostic. MIPS16 and microMIPS o32 entry symbols
-carry their instruction mode so a native linker can construct callable
-pointers. LLVM emits microMIPS objects for o32. A microMIPS n32 or n64 input
-can use the analysis paths described below. Selecting an older SDK such as
-r7 limits native object output to classic profiles with a qualified ABI.
-MIPS III/o32, MIPS V, compressed bodies and fixed-address output are
-available in the r8 SDK.
+input ISA or calling convention produces a diagnostic. Compressed function
+symbols carry their instruction mode so a native linker can construct callable
+pointers. The r8 SDK supports MIPS III/o32, MIPS V, MIPS16 and microMIPS o32,
+and fixed-address output. The r9 SDK also emits scalar microMIPS64 bodies
+for Releases 2, 3 and 5 in both byte orders. n32 retains ELF32 pointers and n64
+retains ELF64 pointers. Release 6 microMIPS64
+native emission requires additional backend support. Selecting r7 limits
+native object output to classic profiles with a qualified ABI.
 
 The fork can compile ordinary LLVM functions for historical I–III ISAs.
 Lifting an existing I–III function also carries its incoming pipeline state.
@@ -67,6 +68,16 @@ reports jumps that require a veneer and references that require linker-owned
 GOT, GP or TLS state. Installing the resulting
 sections into an existing MIPS executable needs MIPS-specific layout,
 relocation and interworking support in the file patcher.
+
+GNU binutils linked 48 rebuilt microMIPS64 objects across Releases 2, 3 and 5,
+both byte orders, n32 and n64. GNU sim checked 288 returned values. A second
+test placed a caller, a leaf and a function pointer at fixed addresses.
+All 32 combinations of ABI, byte order, instruction modes and function order
+preserved the two function ranges and passed 192 return-value checks.
+The paired CPU measurements compare the fork's disassembly of byte-identical
+classic n64 and microMIPS o32 inputs. Each 95% interval for the r9/r8 time
+ratio included 1.
+[ELF execution and performance results](evidence/mips-llvm-r9-micromips64.json).
 
 ## Implementation boundaries
 
@@ -2255,8 +2266,12 @@ assembly. LLVMC copies floating views of integer storage as object bytes;
 ordinary C assignment would change these bit patterns numerically.
 
 The independent GNU/LLVM encoding fixtures cover both byte orders. Original
-execution covers classic MIPS32/64 and physical microMIPS32/64. I6400 supplies
-the classic 64-bit reference. The pinned Unicorn fork adds a
+execution covers classic MIPS32/64 and physical microMIPS32/64. The pinned
+generic microMIPS64r2 model executes signed and unsigned doubleword products
+and quotients through HI/LO, leading-bit counts and the DSBH/DSHD permutations.
+[Pre-R6 execution tests](https://github.com/NeverSight/unicorn/pull/38).
+
+I6400 supplies the classic 64-bit reference. The pinned Unicorn fork adds a
 [generic microMIPS64 R6 model](https://github.com/NeverSight/unicorn/pull/23)
 using its existing QEMU micro decoder; it is not a claim about I6400 hardware.
 The 112 FP forms execute their original micro bytes in both GPR widths and byte
