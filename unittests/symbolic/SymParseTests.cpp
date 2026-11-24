@@ -364,6 +364,13 @@ TEST(SymParse, RepeatedProductFieldsHonorDepthAndReportTheOriginalToken) {
   const auto F = Ctx.mkZExt(Ctx.mkExtract(Ctx.mkAdd(A, B), 2, 3), 16);
   EXPECT_EQ(Good.Root, Ctx.mkMul({A, B, Ctx.mkVar("c", 16), F, F}));
 
+  const auto LongField =
+      "zext(" + std::string(80, ' ') + "extract((a+b),2,3),16)";
+  const auto Long =
+      parseSymExpr(Ctx, "a*b*c*" + LongField + "*" + Field, 16, Options);
+  ASSERT_TRUE(Long.ok()) << Long.Error;
+  EXPECT_EQ(Long.Root, Good.Root);
+
   const auto Deep =
       parseSymExpr(Ctx, Product + "*(" + Field + ")", 16, Options);
   EXPECT_FALSE(Deep.ok());

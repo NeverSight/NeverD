@@ -13,6 +13,9 @@
 
 #include "SymParseDetail.h"
 
+#include "neverd/symbolic/Limits.h"
+
+#include <algorithm>
 #include <cctype>
 
 namespace neverd::symbolic::detail {
@@ -42,7 +45,10 @@ bool isRadixDigit(char C, unsigned Radix) {
 
 llvm::StringRef Lexer::parenthesizedSpelling(size_t Begin) const {
   size_t Open = 1;
-  for (size_t I = Pos; I < Text.size(); ++I) {
+  const size_t End =
+      Begin + std::min(Text.size() - Begin,
+                       limits::symbolic::kSymParseProductSpellingBytes);
+  for (size_t I = Pos; I < End; ++I) {
     if (Text[I] == '(')
       ++Open;
     else if (Text[I] == ')' && !--Open)
