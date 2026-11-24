@@ -45,12 +45,13 @@ revision produced the same machine objects and guest images as the hosted
 fixtures.
 [AMD KVM execution and byte hashes](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
 
-After integrating `dev` through `074c7618f6`, a fresh r7 SDK shared library
-exported the identical HighC and LLVM-to-C source bytes. The portable x64
-NeverC reproduced the same four IR and object hashes at O0/O2, and the r7
-backend reproduced the same four guest-image hashes. The hosted instruction
-and fault-site comparison therefore
-uses the exact generated code still emitted by that integration.
+After integrating `dev` through `d7c5338cf5`, a fresh r7 SDK shared library
+still exported identical HighC and LLVM-to-C source bytes. The portable x64
+NeverC and r7 backend reproduced the same four native object and guest-image
+hashes at O0/O2. The textual IR hashes changed when the local output directory
+moved; its absolute ModuleID and source filename are recorded in the IR.
+The hosted instruction and fault-site comparison therefore uses the exact
+generated machine code still emitted by that integration.
 
 A [November 22 repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45107766727)
 again passed all twelve guest images and 200 generated contexts on an AMD EPYC

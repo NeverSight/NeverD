@@ -1,6 +1,7 @@
 {
-  "date_local": "2026-11-21",
-  "generated_utc_date": "2026-11-22",
+  "date_local": "2026-11-23",
+  "finalized_local_date": "2026-11-23",
+  "generated_utc_date": "2026-11-24",
   "neverd": "6f81b8559bac0dd326d9426269b5b7d48c03b343",
   "neverd_commit": "https://github.com/NeverSight/NeverD/commit/6f81b8559bac0dd326d9426269b5b7d48c03b343",
   "scope": "Continuous Intel real, virtual-8086, protected, compatibility and long-mode transfers, KVM software SMM maps, initialized x64 software SGX threads and the bound asynchronous inputs.",
@@ -758,6 +759,18 @@
         "files_changed_in_cleanup": 166
       }
     },
+    "current_dev_target_audit": {
+      "neverc_dev": "bcfc2312c8f5554dd29e44d2c87bbef5b3c07397",
+      "portable_compiler_source": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+      "portable_compiler_ancestor_of_dev": true,
+      "target_and_intrinsic_owner_paths_changed_since_portable_compiler": [],
+      "runtime_rejections_covered": [
+        "-m32",
+        "i386",
+        "i686",
+        "x32"
+      ]
+    },
     "prior_package_cpu_check": {
       "package_version": "3389.1.4",
       "compiler_sha256": "d5c35e2066223fcd72573e44868c8b44e7e864d4df966c8c93e80e7319abbd7c",
@@ -798,8 +811,8 @@
     ],
     "portable_source_compiler": {
       "label": "current-portable",
-      "compiler_sha256": "05fe810c6e3e04be46ac1e6af3d9551be1f726441d9211fd6e841526243ffa85",
-      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /tmp/neverd-neverc-portable-20261120/build-portable/bin",
+      "compiler_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702",
+      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <qualification-cache>/neverc-portable-build/bin",
       "cases": [
         {
           "source": "x86_64",
@@ -860,7 +873,7 @@
       "compiler": {
         "host_cpu_model": "13th Gen Intel(R) Core(TM) i9-13900H",
         "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
-        "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /tmp/neverd-neverc-portable-20261120/build-portable/bin",
+        "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <prior-portable-build>/build-portable/bin",
         "binary_sha256": "05fe810c6e3e04be46ac1e6af3d9551be1f726441d9211fd6e841526243ffa85",
         "compiler_execution": "native",
         "generated_library_pointer_bytes": 8,
@@ -1065,11 +1078,17 @@
     "fixture_manifest_sha256": "4a8863177c8b90fd897d9cc3a21759a52b5d662d755ebcc477aabe7125609e7b",
     "compiler_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
     "neverd_fixture_export_commit": "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
-    "current_neverd_export_commit": "bf4da7c3f95673955e451e6cb436da736769b4a6",
+    "current_neverd_export_commit": "d7c5338cf5c65149570a113ad383e249401db5e2",
     "matching_neverd_export_commits": [
       "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
       "6f81b8559bac0dd326d9426269b5b7d48c03b343",
-      "bf4da7c3f95673955e451e6cb436da736769b4a6"
+      "bf4da7c3f95673955e451e6cb436da736769b4a6",
+      "7c35482dc19fe0aea7f45e3623d461af3965c299",
+      "bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557",
+      "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
+      "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
+      "074c7618f6d1da49ba043445b336bb3beefe9d3f",
+      "d7c5338cf5c65149570a113ad383e249401db5e2"
     ],
     "current_neverd_export_sha256": {
       "high": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
@@ -1609,7 +1628,27 @@
     "limits": [
       "The AMD processors are exposed through hosted nested KVM.",
       "The returning and faulting VMRUN streams use an imported initialized SVM VMCB and explicit guest xstate."
-    ]
+    ],
+    "repeat_run": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45107766727",
+      "hosted_commit": "866d665e64f06388b4b18bc6e57152bcd3679047",
+      "amd_cpu": "AMD EPYC 9V45 96-Core Processor",
+      "amd_report_sha256": "57e1e18603154d1e17a06d43a3babc77e816374f2fd35eb3b2ba170e4f0217e1",
+      "mapped_guest_runs_completed": 6,
+      "tagged_addr32_gp_observed": 6,
+      "generated_contexts_completed": 200,
+      "other_runner_cpu": "Intel(R) Xeon(R) 6975P-C",
+      "other_runner_status": "unavailable",
+      "other_runner_report_sha256": "c6c176716ab6ac1028232f3e06b1de10be4af9764a443423c1fc962a34f37d3b"
+    },
+    "addr32_environment_difference": {
+      "amd_apm_volume_2": "https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24593.pdf",
+      "amd_apm_volume_3": "https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24594.pdf",
+      "linux_kvm_nested_handler": "https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/svm/nested.c#L872-L903",
+      "qemu_tcg_original_tagged_rax_returned": true,
+      "hosted_nested_kvm_original_tagged_rax_gp": true,
+      "inference": "The v6.18 KVM handler reads full saved RAX as GPA without an address-size mask; this explains the hosted fault profile but the runner host-kernel revision was not captured."
+    }
   },
   "post_merge_verification": {
     "neverd": "bf4da7c3f95673955e451e6cb436da736769b4a6",
@@ -1788,5 +1827,3028 @@
         }
       }
     }
-  }
+  },
+  "final_dev_compiler": {
+    "neverd_source": "7c35482dc19fe0aea7f45e3623d461af3965c299",
+    "compiler": {
+      "host_cpu_model": "13th Gen Intel(R) Core(TM) i9-13900H",
+      "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <prior-portable-build>/build-portable/bin",
+      "binary_sha256": "05fe810c6e3e04be46ac1e6af3d9551be1f726441d9211fd6e841526243ffa85",
+      "compiler_execution": "native",
+      "generated_library_pointer_bytes": 8,
+      "bit_cast_result": -7,
+      "rejected_source_targets": [
+        {
+          "option": "-m32",
+          "diagnostic": "neverc: error: unknown argument: '-m32'"
+        },
+        {
+          "option": "--target=i386-unknown-linux-gnu",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i686-pc-windows-msvc",
+          "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i386-apple-darwin",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=x86_64-unknown-linux-gnux32",
+          "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+        }
+      ]
+    },
+    "vmrun_after_vmexit": {
+      "high": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+        "receipt_sha256": "0b12e5a661d68508563d26cc1413280715eee9e5e55949a6ffb8233fbfe6cebb"
+      },
+      "llvm": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1",
+        "receipt_sha256": "3ffdd213591668e59396c24d64e20f646e433beecc0466661b8487d62bc19318"
+      }
+    },
+    "vmrun_r7_backend": {
+      "llvm_backend": "neverd-llvm-v23.0.0-r7 static C API, machine optimization selected for each profile",
+      "cases": [
+        {
+          "route": "high",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "4395112470904588197d9cbd28c31e9169732bf373f9cd824d3786d73b0b6e39",
+          "object_sha256": "6ee4caa44a72a783f69303bab8f3055e3d3eb4279d711f42852c91838e8ddc28",
+          "kernel_sha256": "0548cc98f89984a8d61c78857d3cc8c0eff2414888480cb9ff2ea64b4fc2074d"
+        },
+        {
+          "route": "high",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "49add6a5e7d1540c18afbd51b460571a1fb735e1937c5a8ab95de004810c5156",
+          "object_sha256": "3f06fa80643e70881ea2a73d1952c0521044533ec5a8bac7f01c6b8efce6b246",
+          "kernel_sha256": "a92242a37a5a551c2f16e984b1c25bbc29569040bc3d0c6ac8a66b09bb552641"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "46d8b0de5607e52780eb9a4fa103194da8caa9c8f8c91072508094a45f167d48",
+          "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+          "kernel_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "a62b1fa114183544b389cfd1f3371b2ba6c2860745cd17bff5e2038d60ffbe93",
+          "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+          "kernel_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e"
+        }
+      ]
+    },
+    "host_cpu_profiles": [
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "Nehalem-v1",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      },
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "EPYC-v3",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      }
+    ],
+    "intrinsic_calls": [
+      "enclu.transfer.context",
+      "rsm.context",
+      "vmread",
+      "vmrun.context",
+      "vmwrite"
+    ],
+    "emitted_opcodes": [
+      "vmread",
+      "vmwrite",
+      "vmrun",
+      "enclu",
+      "xrstor64",
+      "rsm"
+    ],
+    "llvm_sdk": "neverd-llvm-v23.0.0-r7",
+    "sample_sha256": "c04ee5e029990ee3004eceee0b8726fb9fdecbf33cad5228fa2959b927d055af",
+    "obj_sha256": "04a64b93079fd4d11b91ed568f2d8d0ea9ae80f6d3738fa92044b3e7c79c096a",
+    "generated_consumers": {
+      "build-x86": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "e9e016b9659004fb07c734e9f2d3743d2e071c0b2184474b3acecf2b40f00aed"
+      },
+      "build-x86-native": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "81949b752523ac270d7f134c719b8a26a57a0cf482a40aace87306555145691b"
+      }
+    }
+  },
+  "final_dev_verification": {
+    "neverd": "7c35482dc19fe0aea7f45e3623d461af3965c299",
+    "neverd_commit": "https://github.com/NeverSight/NeverD/commit/7c35482dc19fe0aea7f45e3623d461af3965c299",
+    "llvm_gitlink": "a8386d0ad455d7353f9f42232ba01bc96361e83a",
+    "llvm_r7_ancestor": true,
+    "llvm_changes_after_r7": [
+      "llvm/lib/Object/RelocationResolver.cpp",
+      "llvm/test/DebugInfo/Mips/n32-debug-str-relocations.s"
+    ],
+    "sdks": {
+      "build-x86": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "dddd68e98817822e2f2c8c10ce62de0aeca191cd6aa8584cde25c4833445c846",
+          "NeverDX86PagingTests": "bc15879eac6c843a9f3f9c9be486f867595a9095fe897ddd98bf336212a312c5",
+          "neverd": "d0bec7470fef1677099d21c8cff6f9a21a036f1191d54b46d86b8260c5a6379e",
+          "NeverDX86LegacySourceTests": "1b6414a58023c70063d900abbc77a64f8d92017d810e340b74de7a9ff5f663b2",
+          "libneverd.so": "21754380e19785417d56cb270577637e8d17d0cecd47ad4cb95dfb5fb827e482"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu6.xml": "b069fd29c6c4c8686219564d4fc35a032f08a86344a593589cbf0d0d6cb3b370",
+          "execution-full-cpu12.xml": "00662a551bbe81b1598399be6a31fa2a6045c708316a560f6e1a4c44d955c804",
+          "execution-full-cpu16.xml": "51719d05506cb36378c292098d83fda83645201e68235f1792ead2bd2d055ef3",
+          "paging-alternate-cpu6.xml": "af289c6cff35afe0cc5e17d33dac9260810eaa8c83d95dbe1b2daaefef07a68a",
+          "paging-full-cpu12.xml": "775d2925a6c074469ae5b6f451dc248e39a1ea7dd1a765230c2dd2e28dfdaacb",
+          "paging-full-cpu16.xml": "3463d6c69d0dd425667c39476bc259678f9ac65e26f7cbe936fcaba45697aa0f",
+          "source-cpu14.xml": "58a7f1df5cd00cf1b70af9e98d4158afee08bb9c1ed7c66443f0e988e212685f",
+          "source-cpu18.xml": "91fcde153649e79069df15ba58ab3f9e1a22eecdb28daef62c4e83e454a3b77b"
+        }
+      },
+      "build-x86-native": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "e5d375c17147db8cfd0a53e0c1b2bd481cbcb998888bfb90a3f0b046b0f483e8",
+          "NeverDX86PagingTests": "e22ae8d42b106265afc4fc055b106c05da2deb12b8861e6f234245c8648a509c",
+          "neverd": "b5745e520d1c7568c022c9a0e0e2152484cc61ecaa6ea58c17cf4d11f0da8f7f",
+          "NeverDX86LegacySourceTests": "27908dd570d4b6e099f868874838684f677d93f4a07701bac7c0c800dc946ee8",
+          "libneverd.so": "51281af1bda354b3e277b4a1fb9b8e37848419356964daa4227df9546abed1a5"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu14.xml": "81588da325edcaa29cf3aa02903366ccc5d89f11f0542855c6f47ee101d1cc1d",
+          "execution-full-cpu4.xml": "784fc42ef30beb4f52812b505626ed6a6abaad2a9e5f56aae45f659e0d622b7e",
+          "execution-full-cpu8.xml": "44f22760e0f49cef47a93a3c7a458ead440fa1dc4b4eaf57b30ab7f8fa39eb7f",
+          "paging-alternate-cpu14.xml": "e106e386490dcf90962f3bc561d6320b361b07bfa85174db1ebdeb10dfa2ee4d",
+          "paging-full-cpu4.xml": "297960df337b5a85b1588e692b199587a81cf08bbb00175e362067b5fc15b69a",
+          "paging-full-cpu8.xml": "b291416ef6b0b84c9c4575e9121c216bf9a955e860580a48f868878a4a370aa7",
+          "source-cpu10.xml": "67c8f5b52a7daf12ebe19e78ba4f635e2805e31e57624fc139bbd3061639ade7",
+          "source-cpu2.xml": "27902df974d6954550f7953e58dc70468fed5db962f1efca659a8fb0b972aa3c"
+        }
+      }
+    },
+    "hosted": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44981777818",
+      "software": {
+        "source_commit": "7c35482dc19fe0aea7f45e3623d461af3965c299",
+        "neverc_version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
+        "cases": [
+          {
+            "name": "X86PagingTest.EnclavePrivatePagesEnforcePagingIdentityAndEpcmPermissions",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeExecutionTest.FarTransfersRetireTheirContinuationAfterDescriptorRepair",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.MachineCheckReportsRetainBankOwnershipAndPriority",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.MachineCheckMsrReadAndAcknowledgeUseOriginalInstructions",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CorrectedErrorsCountToCmciAndKeepMaskedArrivals",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CmciNmiAndSmiUseTheExistingEventLatches",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.SmiUsesPrivateRAMAndRsmHonorsFirmwareEdits",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.RsmRestoresNormalizedDebugStateAndRejectsInvalidControlsBeforePaeReload",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.InactiveRsmDeliversOriginalUndefinedOpcode",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.RsmDebugUsesFirmwareBeforeCommitAndRestoredTablesAfterCommit",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.StartupInputsRequireBindingAndRestartShutdown",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.StartupInitStaysLatchedInSmmUntilRsmCompletes",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.TaskGateAndNestedIretPublishBothTaskBanks",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.PartiallyLoadedIncomingTaskResumesTheOriginalTransfer",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.VM86InterruptAndReturnUseEveryFrameSelector",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CompatibilityReturnsSelectTheDestinationCodeWidth",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.EnclaveNotificationResumeAndDecrementSelectCorrectFrames",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.DebugOptInSelectsTrapAndBreakpointState",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.TransfersUseFullMsrsAndSelectDestinationWidth",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.SysenterMsrsUseProcessorAddressWidthBeforeTransfer",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.FaultsPrecedeFastTransferStateWrites",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.SingleStepUsesTheRetiredFullAddressAndStack",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.VM86EnterAndRealAddressFaultUseTheirOriginalModes",
+            "status": "passed"
+          }
+        ],
+        "passed": 27,
+        "expected": 27
+      },
+      "x64_compiler": {
+        "host_cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+        "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
+        "binary_sha256": "4531ad6d98d92b7cb11de5627b4fbc575822b704785288cee50ccb045e96e96c",
+        "compiler_execution": "native",
+        "generated_library_pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "rejected_source_targets": [
+          {
+            "option": "-m32",
+            "diagnostic": "neverc: error: unknown argument: '-m32'"
+          },
+          {
+            "option": "--target=i386-unknown-linux-gnu",
+            "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=i686-pc-windows-msvc",
+            "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=i386-apple-darwin",
+            "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=x86_64-unknown-linux-gnux32",
+            "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+          }
+        ]
+      },
+      "capability_probes": [
+        {
+          "image": "macos-15-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "runner_image": {
+            "RUNNER_OS": "macOS",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "macos15",
+            "ImageVersion": "20260824.0482.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "b8d7ad7beb76a287cde8c282eda88193e0916f11c410e9845618bf09d116892d"
+        },
+        {
+          "image": "macos-26-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "runner_image": {
+            "RUNNER_OS": "macOS",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "macos26",
+            "ImageVersion": "20260824.0517.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "676f9291321b70caa60be090f0f83963224d3ed54611f2a6582a3b2a8d9ecb6c"
+        },
+        {
+          "image": "ubuntu-24.04",
+          "cpu": "Intel(R) Xeon(R) 6975P-C",
+          "runner_image": {
+            "RUNNER_OS": "Linux",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "ubuntu24",
+            "ImageVersion": "20261116.133.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "3dc436b744555496c431798c9984b5c93bcb772f65e03d8537bf9ab4241bf59d"
+        }
+      ],
+      "linux_kselftest": {
+        "linux_source": "7d0a66e4bb9081d75c82ec4957c50034cb0ea449",
+        "source": "tools/testing/selftests/sgx",
+        "status": "unavailable",
+        "cases": {},
+        "test_sgx_sha256": "c5cd1494e9c03a3da0f790855d6ecedc6b075e86ca6552b460ca9aed5998c8d9",
+        "test_encl.elf_sha256": "292b41155cd2222fa2b2863c147a81b5f38fb1c51736cbaa9ea8e59669c857ed",
+        "reasons": [
+          "SGX1 is not exposed by CPUID",
+          "CPUID does not enumerate an EPC section",
+          "No accessible SGX enclave device",
+          "The Linux selftest needs read/write access to /dev/sgx_enclave"
+        ]
+      },
+      "enclave_cases_executed": 0
+    }
+  },
+  "integrated_head_compiler": {
+    "neverd_source": "bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557",
+    "compiler": {
+      "host_cpu_model": "13th Gen Intel(R) Core(TM) i9-13900H",
+      "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <qualification-cache>/neverc-portable-build/bin",
+      "binary_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702",
+      "compiler_execution": "native",
+      "generated_library_pointer_bytes": 8,
+      "bit_cast_result": -7,
+      "rejected_source_targets": [
+        {
+          "option": "-m32",
+          "diagnostic": "neverc: error: unknown argument: '-m32'"
+        },
+        {
+          "option": "--target=i386-unknown-linux-gnu",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i686-pc-windows-msvc",
+          "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i386-apple-darwin",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=x86_64-unknown-linux-gnux32",
+          "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+        }
+      ]
+    },
+    "vmrun_after_vmexit": {
+      "high": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+        "receipt_sha256": "ec9993a0819612bbd167b465f4627f99998717ede0ef1ac476672b75dcb559cd"
+      },
+      "llvm": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1",
+        "receipt_sha256": "d042ca356e24daf4695c3c3b0fa050d08b1a6f94520c1dbc5e3fb90badaba8c9"
+      }
+    },
+    "vmrun_r7_backend": {
+      "llvm_backend": "neverd-llvm-v23.0.0-r7 static C API, machine optimization selected for each profile",
+      "cases": [
+        {
+          "route": "high",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "4395112470904588197d9cbd28c31e9169732bf373f9cd824d3786d73b0b6e39",
+          "object_sha256": "6ee4caa44a72a783f69303bab8f3055e3d3eb4279d711f42852c91838e8ddc28",
+          "kernel_sha256": "0548cc98f89984a8d61c78857d3cc8c0eff2414888480cb9ff2ea64b4fc2074d"
+        },
+        {
+          "route": "high",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "49add6a5e7d1540c18afbd51b460571a1fb735e1937c5a8ab95de004810c5156",
+          "object_sha256": "3f06fa80643e70881ea2a73d1952c0521044533ec5a8bac7f01c6b8efce6b246",
+          "kernel_sha256": "a92242a37a5a551c2f16e984b1c25bbc29569040bc3d0c6ac8a66b09bb552641"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "46d8b0de5607e52780eb9a4fa103194da8caa9c8f8c91072508094a45f167d48",
+          "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+          "kernel_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "a62b1fa114183544b389cfd1f3371b2ba6c2860745cd17bff5e2038d60ffbe93",
+          "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+          "kernel_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e"
+        }
+      ]
+    },
+    "host_cpu_profiles": [
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "Nehalem-v1",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      },
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "EPYC-v3",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      }
+    ],
+    "intrinsic_calls": [
+      "enclu.transfer.context",
+      "rsm.context",
+      "vmread",
+      "vmrun.context",
+      "vmwrite"
+    ],
+    "emitted_opcodes": [
+      "vmread",
+      "vmwrite",
+      "vmrun",
+      "enclu",
+      "xrstor64",
+      "rsm"
+    ],
+    "llvm_sdk": "neverd-llvm-v23.0.0-r7",
+    "sample_sha256": "c04ee5e029990ee3004eceee0b8726fb9fdecbf33cad5228fa2959b927d055af",
+    "obj_sha256": "04a64b93079fd4d11b91ed568f2d8d0ea9ae80f6d3738fa92044b3e7c79c096a",
+    "generated_consumers": {
+      "build-x86": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "e131192f3290e53f3a164c5737aeeb524cc7142be5a1a9c20da48f3d5f98a759"
+      },
+      "build-x86-native": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "f22b9bc88cf466e214e50981ea75de946934b10424c984dcbe437d3d98b3adf6"
+      }
+    }
+  },
+  "integrated_head_verification": {
+    "neverd": "bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557",
+    "neverd_commit": "https://github.com/NeverSight/NeverD/commit/bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557",
+    "base_verified": "7c35482dc19fe0aea7f45e3623d461af3965c299",
+    "sdks": {
+      "build-x86": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "d5ec1e059e6b8af7ba42f9267b01fd6ffbe260769d0572c7e0389a5a0486f868",
+          "NeverDX86PagingTests": "590119ea3ff7e657765aeecec17a101c2ce30aa5a8cf74a84b733310bbf69b9f",
+          "neverd": "d0bec7470fef1677099d21c8cff6f9a21a036f1191d54b46d86b8260c5a6379e",
+          "NeverDX86LegacySourceTests": "1b6414a58023c70063d900abbc77a64f8d92017d810e340b74de7a9ff5f663b2",
+          "libneverd.so": "184e66cd03aa98b2d641b7c19f9de6d490ababef1f92e28e4e0e14c96191886a"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu6.xml": "041db5f6bf125d53021e944b01c9e2ff0b3aac18fe6fa4237548b77e66abb14d",
+          "execution-full-cpu12.xml": "7ec978ace8de123b9720e44c332d23ce93b4e6ac8489916e27b7f589ff054293",
+          "execution-full-cpu16.xml": "b74fa45d9d809f453e2b127044da357d1aaf6f43c751a2f49d15ecc82cf8f88c",
+          "paging-alternate-cpu6.xml": "50ceb0840515dc73f09b4f086179108f85677333a8344cb4b226a7e508a06a8f",
+          "paging-full-cpu12.xml": "91b838d437fc514d95e464da6c65b6ff61f55b417de120067f47ccf8d9463ccb",
+          "paging-full-cpu16.xml": "85bc13ce256997d6f8f78f0dbf6184d713d3dc30f0cb3dda8b97b20474b764f8",
+          "source-cpu14.xml": "5e1982d3010888e11a351d4d792c9b0d6d0ed24c21862a8db094365550aa657b",
+          "source-cpu18.xml": "4f68d9e70aca6f67e587367676b76a0811cfa81afbaa7e7c14d8d544e32c81ef"
+        }
+      },
+      "build-x86-native": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "d13ddc1c7466cfa08a52558fe4739b046ba6b20626057f253d577144a8645974",
+          "NeverDX86PagingTests": "c51368698e2c103029220fe73f03d22ab563945cc4052d8040bf8334a42fc977",
+          "neverd": "b5745e520d1c7568c022c9a0e0e2152484cc61ecaa6ea58c17cf4d11f0da8f7f",
+          "NeverDX86LegacySourceTests": "27908dd570d4b6e099f868874838684f677d93f4a07701bac7c0c800dc946ee8",
+          "libneverd.so": "b4d02960959d2f3f0ae084de47ac803e2c25f0cfe6b4894bc811c99863d3bb90"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu14.xml": "39d4730868320990e86a91b132271b5cc4461f0c933e9869e5406f35cc70ad32",
+          "execution-full-cpu4.xml": "bb2069709b07035b76d0ac7837c5bfe4c3d2b03b6ffea87d8a685183a309de50",
+          "execution-full-cpu8.xml": "0afcc4586651cdc0b4ca1b18599ea53002eadf8aa6a7f5eb2b6a26ec8a8ede3e",
+          "paging-alternate-cpu14.xml": "8e118547c7184e96ddf88312313cb15921e3cf0300053d5a6bca089bf695d0ac",
+          "paging-full-cpu4.xml": "8374cf9ac59355a220fca95acf30222f714aa294d22e3b19a89cdc9edddc839f",
+          "paging-full-cpu8.xml": "36f78441ff7d517d16e819d019e11c7a865fd4585a3097a6f4c582c0ead263d4",
+          "source-cpu10.xml": "8e6b2ce9ff4eb827e87760b043ddca999b80f7d123016dc048f635617d3b15d7",
+          "source-cpu2.xml": "704c55cb1b786d13aa48046ae2591b1b9d0fcb3791621087adbb013954dc8325"
+        }
+      }
+    }
+  },
+  "local_environment_recovery": {
+    "cause": "The temporary NeverC build executable was removed while its source checkout remained; initial NeverC-only C source cases failed to launch.",
+    "compiler_revision": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+    "restored_from": "https://github.com/gmh5225/test_mac_intel/actions/runs/45102559121",
+    "verified_compiler_artifact": {
+      "run": "45102559121",
+      "artifact": "neverc-portable-linux-x64",
+      "binary_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702",
+      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <qualification-cache>/hosted-neverc-45102559121\n"
+    },
+    "recovery_run_conclusion": "success",
+    "recovery_hosted_software": {
+      "source": "7c35482dc19fe0aea7f45e3623d461af3965c299",
+      "passed": 27,
+      "expected": 27
+    },
+    "initial_results": {
+      "build-x86": {
+        "passed": 127,
+        "compiler_launch_failures": 126,
+        "report_sha256": "99a1d894a1a399b718b185c7a07b255b491f0f7900957fd627f2dffb364e1565",
+        "log_sha256": {
+          "build-x86-source-cpu14.log": "a35ec7efc32339c5b6f825ed78c17fb7ff8d43bc75d5e5a3589e0190e42b3840",
+          "build-x86-source-cpu18.log": "19a772c459b787d769ec84577a97659cb395bbf8d050c7bdf6c67b1f2dd72d14"
+        }
+      },
+      "build-x86-native": {
+        "passed": 127,
+        "compiler_launch_failures": 126,
+        "report_sha256": "b025366e84a5aa19555fb30aecce389ad9c15cec7b88333704c4b74346798dfe",
+        "log_sha256": {
+          "build-x86-native-source-cpu10.log": "39c3e45e981aa2a21c700b78c2058bd96f5bfa2b3f934a8e3e3444e39523a8db",
+          "build-x86-native-source-cpu2.log": "31670ce52bdef82953bfa54923983e98d9d376f73a63f794a374b7bab776a98b"
+        }
+      }
+    },
+    "retest": "The integrated-head source regressions below use the verified portable x64 compiler artifact."
+  },
+  "current_head_verification": {
+    "neverd": "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
+    "neverd_commit": "https://github.com/NeverSight/NeverD/commit/d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
+    "base_verified": "bddd55cfa6a44aa70ecafee7fdd84b9ef8b87557",
+    "sdks": {
+      "build-x86": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "870ab71f66501a58b16614abae39068b1fd92b0299c1c6287a3efc900c3a98dc",
+          "NeverDX86PagingTests": "c166d8fab47032e59f4b19dfbde24c97c05bab7b886b04d3bed32941b94d7c89",
+          "neverd": "abe4d7d4df5e03e5d3b79f930c5d002734954f7a1262da6bbe2d98353dbe57e1",
+          "NeverDX86LegacySourceTests": "b006cb39e9f045bbb1472355313221e55c0655a1cb4e87e2679d00af26a0f012",
+          "libneverd.so": "11c69071dbd4158126a4e948ae63fdb6713bd940fe3736b75fe3dd1f849f936a"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu6.xml": "aa746abf8ccd2dc5481c2be6a55dab122af9a64bd20f865ee47c351ade561eda",
+          "execution-full-cpu12.xml": "7231977a8c694c1d2ddf3af3da72bdbcf0fc0281a84b8517df2d8ac2f53b2ff0",
+          "execution-full-cpu16.xml": "9f55dea727ed1c89c0a3f08290a5dae70989ce70471bba196d731066448049df",
+          "paging-alternate-cpu6.xml": "29696ad1a8c619b60f63c76cfc6c05fbfd19406bedd047a6ffb11d1f1b980a21",
+          "paging-full-cpu12.xml": "e3c385208f5202e65fba98534968b8e266429bc9906d9e4427a6125ab83eddb5",
+          "paging-full-cpu16.xml": "4f10ef6320f56807e4f89e9fd6c2703e31d83d4457612ca60a4720fac16e27c8",
+          "source-cpu14.xml": "db8855aa5dc5cfefa27894b4311a95ca3c188a669300310b202a5f01c18613ab",
+          "source-cpu18.xml": "31dfbd17a62e2e12506f6a6c4738be5c6ec5e409c5b3439964edd0eff3d85a6a"
+        }
+      },
+      "build-x86-native": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "3bec6c0637c3619e01d8d70436ed4ad80423e7d8a8e1f4377e874ba89ffe0e1b",
+          "NeverDX86PagingTests": "e00b040bbebb7394f650402657ae8d3005b3d984647f7e308ea5e36762e45461",
+          "neverd": "ce05b5bc40f99d2a6c2ed3565b73166c11e38135a8c3901e596774be622e676c",
+          "NeverDX86LegacySourceTests": "8b5546cb1a9b9a6a1744d1af4f16a2e66914c6397e0da988d7393745a7978a88",
+          "libneverd.so": "5a0d2c8004737ab8018d0d7fbd67627bca2147179e1677a8fe2f6aefe96cfe1f"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu14.xml": "a2497b0373176cb86b908d665d9a209d511ade003c995f214c9e1e6d298a9d4e",
+          "execution-full-cpu4.xml": "9d73d77e8195c20dad88933baef729ec3e1f63e667d001a080d1ad778687e1c2",
+          "execution-full-cpu8.xml": "17f449d43c0615a5cb148ec341fea8e3da847c5194d5af5458df0adbf5e13595",
+          "paging-alternate-cpu14.xml": "787ff376d760ee6f9c35ad997221a6f22cfb7203baa668bc1c9abb8d156d12fa",
+          "paging-full-cpu4.xml": "ca371701205b40874670acf74570ed1577a467458f2b987f4a3fa08663dd5eb0",
+          "paging-full-cpu8.xml": "fd0f5c9a1928aea1cfe3c87947d9ba4e4d6a8f8de043dbaab8ca904e035eb79a",
+          "source-cpu10.xml": "4c988706d5008a773b0ba28d84973fae45fad0bba301d5fb96e2ee71a733c182",
+          "source-cpu2.xml": "9f52bb57dc71c5b349adf60eff037dc5b4944903965ba9ba7e4b93371d19c64b"
+        }
+      }
+    },
+    "hosted": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45107252887",
+      "software": {
+        "source_commit": "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
+        "neverc_version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
+        "cases": [
+          {
+            "name": "X86PagingTest.EnclavePrivatePagesEnforcePagingIdentityAndEpcmPermissions",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeExecutionTest.FarTransfersRetireTheirContinuationAfterDescriptorRepair",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.MachineCheckReportsRetainBankOwnershipAndPriority",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.MachineCheckMsrReadAndAcknowledgeUseOriginalInstructions",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CorrectedErrorsCountToCmciAndKeepMaskedArrivals",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CmciNmiAndSmiUseTheExistingEventLatches",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.SmiUsesPrivateRAMAndRsmHonorsFirmwareEdits",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.RsmRestoresNormalizedDebugStateAndRejectsInvalidControlsBeforePaeReload",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.InactiveRsmDeliversOriginalUndefinedOpcode",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.RsmDebugUsesFirmwareBeforeCommitAndRestoredTablesAfterCommit",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.StartupInputsRequireBindingAndRestartShutdown",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.StartupInitStaysLatchedInSmmUntilRsmCompletes",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.TaskGateAndNestedIretPublishBothTaskBanks",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.PartiallyLoadedIncomingTaskResumesTheOriginalTransfer",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.VM86InterruptAndReturnUseEveryFrameSelector",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CompatibilityReturnsSelectTheDestinationCodeWidth",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.EnclaveNotificationResumeAndDecrementSelectCorrectFrames",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.DebugOptInSelectsTrapAndBreakpointState",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.TransfersUseFullMsrsAndSelectDestinationWidth",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.SysenterMsrsUseProcessorAddressWidthBeforeTransfer",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.FaultsPrecedeFastTransferStateWrites",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.SingleStepUsesTheRetiredFullAddressAndStack",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.VM86EnterAndRealAddressFaultUseTheirOriginalModes",
+            "status": "passed"
+          }
+        ],
+        "passed": 27,
+        "expected": 27
+      },
+      "x64_compiler": {
+        "host_cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+        "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+        "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
+        "binary_sha256": "afb9a9e377dd5dc8f7c8239eb0777412f4d7b9bc8a03a6e6895c0b67fe6e51fe",
+        "compiler_execution": "native",
+        "generated_library_pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "rejected_source_targets": [
+          {
+            "option": "-m32",
+            "diagnostic": "neverc: error: unknown argument: '-m32'"
+          },
+          {
+            "option": "--target=i386-unknown-linux-gnu",
+            "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=i686-pc-windows-msvc",
+            "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=i386-apple-darwin",
+            "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=x86_64-unknown-linux-gnux32",
+            "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+          }
+        ]
+      },
+      "capability_probes": [
+        {
+          "image": "macos-15-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "runner_image": {
+            "RUNNER_OS": "macOS",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "macos15",
+            "ImageVersion": "20260824.0482.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "d65cd5580ff2a565a765b310c592f5bd3bbd5e50f7db9899622231a91a7d906f"
+        },
+        {
+          "image": "macos-26-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "runner_image": {
+            "RUNNER_OS": "macOS",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "macos26",
+            "ImageVersion": "20260824.0517.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "37bb3ba7cc9371a8cf785449ec0baa13fc1d988e08366dd66e97d009e9e11f16"
+        },
+        {
+          "image": "ubuntu-24.04",
+          "cpu": "AMD EPYC 9V45 96-Core Processor",
+          "runner_image": {
+            "RUNNER_OS": "Linux",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "ubuntu24",
+            "ImageVersion": "20261116.376.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "0b9230dd70b66a711f16f75271a26da4f85c0804273c8781968930d4b60110d6"
+        }
+      ],
+      "linux_kselftest": {
+        "linux_source": "7d0a66e4bb9081d75c82ec4957c50034cb0ea449",
+        "source": "tools/testing/selftests/sgx",
+        "status": "unavailable",
+        "cases": {},
+        "test_sgx_sha256": "c5cd1494e9c03a3da0f790855d6ecedc6b075e86ca6552b460ca9aed5998c8d9",
+        "test_encl.elf_sha256": "626d434f63a68a1000cc14de0b4d0cd76dc9b65d3643f7a1ef21a5b481064a99",
+        "reasons": [
+          "SGX1 is not exposed by CPUID",
+          "CPUID does not enumerate an EPC section",
+          "No accessible SGX enclave device",
+          "The Linux selftest needs read/write access to /dev/sgx_enclave"
+        ]
+      },
+      "enclave_cases_executed": 0
+    },
+    "decoder_contract": {
+      "run": "https://github.com/NeverSight/NeverD/actions/runs/45107341681",
+      "neverd": "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
+      "capstone": "aa095ef5688bfc49b8ba0c5e5a7648faa7ed6877",
+      "jobs": {
+        "Linux x64": {
+          "passed": 131,
+          "skipped": [],
+          "source": "aa095ef5688bfc49b8ba0c5e5a7648faa7ed6877",
+          "results_sha256": "504e857372d2a16b870db3c2b2bbee9ebd2d8b8d960823689c39c5228460e167",
+          "integration_sha256": "9e9db02944ea2e69d45d5c3842ddd6ceb7aee5c9667148e1fd6ecc3fa9df7f10",
+          "arm_details_sha256": "691d2db4f6b5b88c299e8a5b0085293cfdce85a2d2aeab49911da275713ffa92",
+          "arm_details": {
+            "Valid files": 2,
+            "Invalid files": 0,
+            "Errors": 0,
+            "Total": 133,
+            "Successful": 133,
+            "Skipped": 0,
+            "Failed": 0
+          }
+        },
+        "Windows x64 MSVC": {
+          "passed": 130,
+          "skipped": [
+            "unit_x86_x87_environment_hardware"
+          ],
+          "source": "aa095ef5688bfc49b8ba0c5e5a7648faa7ed6877",
+          "results_sha256": "9c7707a1063a1960d45d8e0367b1888dc0e237fdb2f2cd726e6f03611875d8b6",
+          "integration_sha256": "f30fbb33ae2bc3d45e56f9b7194d9f409b40733463b53fea236815c3e2f5e6ff",
+          "arm_details_sha256": "38b5e75bb72bdbd6829df07e7bc31c9ceeb0c5ddde7121d09453509d3cc2a12b",
+          "arm_details": {
+            "Valid files": 2,
+            "Invalid files": 0,
+            "Errors": 0,
+            "Total": 133,
+            "Successful": 133,
+            "Skipped": 0,
+            "Failed": 0
+          }
+        },
+        "Windows x64 clang-cl": {
+          "passed": 130,
+          "skipped": [
+            "unit_x86_x87_environment_hardware"
+          ],
+          "source": "aa095ef5688bfc49b8ba0c5e5a7648faa7ed6877",
+          "results_sha256": "2f3a5530f6b61852cd3366c38b3d896c4213564bd937563214d9b0a3e23bfc07",
+          "integration_sha256": "8eaa6d36a447e1e9c4268b9ca01225829d1b613f62d764cc7a97da66ce535d05",
+          "arm_details_sha256": "38b5e75bb72bdbd6829df07e7bc31c9ceeb0c5ddde7121d09453509d3cc2a12b",
+          "arm_details": {
+            "Valid files": 2,
+            "Invalid files": 0,
+            "Errors": 0,
+            "Total": 133,
+            "Successful": 133,
+            "Skipped": 0,
+            "Failed": 0
+          }
+        },
+        "macOS arm64": {
+          "passed": 130,
+          "skipped": [
+            "unit_x86_x87_environment_hardware"
+          ],
+          "source": "aa095ef5688bfc49b8ba0c5e5a7648faa7ed6877",
+          "results_sha256": "ef097fd637df1db2139f4225787a79a7dd73f18c7fb73ce23b3611b53cc2a55c",
+          "integration_sha256": "02d850307feb63a78da01ec19d11da237b79cb4bb97ebcfd8014d30bf6e176fc",
+          "arm_details_sha256": "691d2db4f6b5b88c299e8a5b0085293cfdce85a2d2aeab49911da275713ffa92",
+          "arm_details": {
+            "Valid files": 2,
+            "Invalid files": 0,
+            "Errors": 0,
+            "Total": 133,
+            "Successful": 133,
+            "Skipped": 0,
+            "Failed": 0
+          }
+        }
+      }
+    },
+    "neverd_decoder_tests": {
+      "neverd": "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
+      "tests": {
+        "NeverDX86InstructionCoverageTests": {
+          "passed": 7,
+          "xml_sha256": "9404330676d9fda0f279e83b54499f89fae4e7ce1501afc4e5a35d9eec6f06b0"
+        },
+        "NeverDX86DecodeDetailTests": {
+          "passed": 6,
+          "xml_sha256": "4bd72f9d01b804862e62b1049320e41d0ea4dd7157eb5e0ca91e4131fd021f3b"
+        }
+      }
+    }
+  },
+  "current_head_compiler": {
+    "neverd_source": "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
+    "compiler": {
+      "host_cpu_model": "13th Gen Intel(R) Core(TM) i9-13900H",
+      "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <qualification-cache>/neverc-portable-build/bin",
+      "binary_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702",
+      "compiler_execution": "native",
+      "generated_library_pointer_bytes": 8,
+      "bit_cast_result": -7,
+      "rejected_source_targets": [
+        {
+          "option": "-m32",
+          "diagnostic": "neverc: error: unknown argument: '-m32'"
+        },
+        {
+          "option": "--target=i386-unknown-linux-gnu",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i686-pc-windows-msvc",
+          "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i386-apple-darwin",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=x86_64-unknown-linux-gnux32",
+          "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+        }
+      ]
+    },
+    "vmrun_after_vmexit": {
+      "high": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+        "receipt_sha256": "ec9993a0819612bbd167b465f4627f99998717ede0ef1ac476672b75dcb559cd"
+      },
+      "llvm": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1",
+        "receipt_sha256": "d042ca356e24daf4695c3c3b0fa050d08b1a6f94520c1dbc5e3fb90badaba8c9"
+      }
+    },
+    "vmrun_r7_backend": {
+      "llvm_backend": "neverd-llvm-v23.0.0-r7 static C API, machine optimization selected for each profile",
+      "cases": [
+        {
+          "route": "high",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "4395112470904588197d9cbd28c31e9169732bf373f9cd824d3786d73b0b6e39",
+          "object_sha256": "6ee4caa44a72a783f69303bab8f3055e3d3eb4279d711f42852c91838e8ddc28",
+          "kernel_sha256": "0548cc98f89984a8d61c78857d3cc8c0eff2414888480cb9ff2ea64b4fc2074d"
+        },
+        {
+          "route": "high",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "49add6a5e7d1540c18afbd51b460571a1fb735e1937c5a8ab95de004810c5156",
+          "object_sha256": "3f06fa80643e70881ea2a73d1952c0521044533ec5a8bac7f01c6b8efce6b246",
+          "kernel_sha256": "a92242a37a5a551c2f16e984b1c25bbc29569040bc3d0c6ac8a66b09bb552641"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "46d8b0de5607e52780eb9a4fa103194da8caa9c8f8c91072508094a45f167d48",
+          "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+          "kernel_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "a62b1fa114183544b389cfd1f3371b2ba6c2860745cd17bff5e2038d60ffbe93",
+          "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+          "kernel_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e"
+        }
+      ]
+    },
+    "host_cpu_profiles": [
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "Nehalem-v1",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      },
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "EPYC-v3",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      }
+    ],
+    "intrinsic_calls": [
+      "enclu.transfer.context",
+      "rsm.context",
+      "vmread",
+      "vmrun.context",
+      "vmwrite"
+    ],
+    "emitted_opcodes": [
+      "vmread",
+      "vmwrite",
+      "vmrun",
+      "enclu",
+      "xrstor64",
+      "rsm"
+    ],
+    "llvm_sdk": "neverd-llvm-v23.0.0-r7",
+    "sample_sha256": "c04ee5e029990ee3004eceee0b8726fb9fdecbf33cad5228fa2959b927d055af",
+    "obj_sha256": "04a64b93079fd4d11b91ed568f2d8d0ea9ae80f6d3738fa92044b3e7c79c096a",
+    "generated_consumers": {
+      "build-x86": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "f2ff24b5157c073fcb235f02739ca6d521c11b7ad96a094a8aecda321fdbd790"
+      },
+      "build-x86-native": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "70aa250b155957a827a68e06b94da83c8ee9d06a5d67521f313944844190f785"
+      }
+    }
+  },
+  "merged_dev_verification": {
+    "neverd": "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
+    "neverd_commit": "https://github.com/NeverSight/NeverD/commit/dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
+    "base_verified": "d45fe8b1fb1c56ec371d5ee2a5796c35535f0bc2",
+    "sdks": {
+      "build-x86": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "1dca25dd5cf2987f71636e5137948738b5de1ff26ffe19bea678c2707ce20baf",
+          "NeverDX86PagingTests": "c166d8fab47032e59f4b19dfbde24c97c05bab7b886b04d3bed32941b94d7c89",
+          "neverd": "cf425a56112553a76cd37f632113e1fcbb8847b2334de19c8eaba18d4a54dd71",
+          "NeverDX86LegacySourceTests": "b006cb39e9f045bbb1472355313221e55c0655a1cb4e87e2679d00af26a0f012",
+          "libneverd.so": "3b03f6e1c456263022b4a0dd7a8735b49ea50d179493e2745663681435904642"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu6.xml": "24db149073236f37e2eddf3e8a32ba6f003485180c6524f2116fe12d7c481a55",
+          "execution-full-cpu12.xml": "bbc42275d0ddaf36d6c7e6299d30fcfc5d595ada441c493af4e28fd54ac2121c",
+          "execution-full-cpu16.xml": "dd0855cdbae4b3ea35d87339ff3863591cf09b86daddcf2136d309730942ceef",
+          "paging-alternate-cpu6.xml": "0b1a13ca8a21a9032e0d20597b0b6c6c9ebe3f45b31ba1d10222c2133a5f8476",
+          "paging-full-cpu12.xml": "8fb3157472decfc3e629fa169295767a3f8c2177a41309eb873cc4a27333b406",
+          "paging-full-cpu16.xml": "1b53a500c897c9d06ff233b6d77549e31bcc5467c688467f46929b9a771a132d",
+          "source-cpu14.xml": "bb3da33499c0644113d93a0c0d9e73ffa3de044aeab044c6bca6cf2b089125f1",
+          "source-cpu18.xml": "a7a3c67279231bca68794365d7e8b729e70fc586f2eb0b57d2a7fa6cbfff9a07"
+        }
+      },
+      "build-x86-native": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "c3b6c63012e8567d56016e80bdd8254046c528f2e71e7090c06204282ff56e0a",
+          "NeverDX86PagingTests": "e00b040bbebb7394f650402657ae8d3005b3d984647f7e308ea5e36762e45461",
+          "neverd": "d9bd8e5eac39317aa76c2eb3f9008ee4bd4400e07ed7c9e147e556e62773fd90",
+          "NeverDX86LegacySourceTests": "8b5546cb1a9b9a6a1744d1af4f16a2e66914c6397e0da988d7393745a7978a88",
+          "libneverd.so": "75128ff9e908b42f6e2c0bf5f0414086fc8b140556d823bca6dec5ff7d75b443"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu14.xml": "7c91ff30cdafe0d2211893071182a8d52ebec6072b8ebc1f9a5a2a685c477ab7",
+          "execution-full-cpu4.xml": "5bf6e00eb8cc7841c672df4fd4330f710f8c7e461b2dfe3b0c606156960bb3bb",
+          "execution-full-cpu8.xml": "ec8cdc736fa35f919ae4f06180e1bc1faf856a5889eb41f70cd3026e8e1a515d",
+          "paging-alternate-cpu14.xml": "1cb2010f5dc2c061354d265c9e984881f79c8b4d71a258264c7c400f55f34773",
+          "paging-full-cpu4.xml": "cda73627f96aca1066b99c6e13af10bbcd40a88c78686710fde93b701188f1e3",
+          "paging-full-cpu8.xml": "76d3eabdb686a8776439dbf70fa39c00a0f5e0929d23aa44315124c6a0287f19",
+          "source-cpu10.xml": "76a6f99eb662583d9289ab1c2daa9b05206d114144669e57a1c496a5c309f315",
+          "source-cpu2.xml": "db71d26b059edc60fb331350aa4219663e94f2b479467f8310e1b15386f5b3ab"
+        }
+      }
+    },
+    "hosted": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45114331755",
+      "software": {
+        "source_commit": "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
+        "neverc_version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
+        "cases": [
+          {
+            "name": "X86PagingTest.EnclavePrivatePagesEnforcePagingIdentityAndEpcmPermissions",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeExecutionTest.FarTransfersRetireTheirContinuationAfterDescriptorRepair",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.MachineCheckReportsRetainBankOwnershipAndPriority",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.MachineCheckMsrReadAndAcknowledgeUseOriginalInstructions",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CorrectedErrorsCountToCmciAndKeepMaskedArrivals",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CmciNmiAndSmiUseTheExistingEventLatches",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.SmiUsesPrivateRAMAndRsmHonorsFirmwareEdits",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.RsmRestoresNormalizedDebugStateAndRejectsInvalidControlsBeforePaeReload",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.InactiveRsmDeliversOriginalUndefinedOpcode",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.RsmDebugUsesFirmwareBeforeCommitAndRestoredTablesAfterCommit",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.StartupInputsRequireBindingAndRestartShutdown",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.StartupInitStaysLatchedInSmmUntilRsmCompletes",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.TaskGateAndNestedIretPublishBothTaskBanks",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.PartiallyLoadedIncomingTaskResumesTheOriginalTransfer",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.VM86InterruptAndReturnUseEveryFrameSelector",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CompatibilityReturnsSelectTheDestinationCodeWidth",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.EnclaveNotificationResumeAndDecrementSelectCorrectFrames",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.DebugOptInSelectsTrapAndBreakpointState",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.TransfersUseFullMsrsAndSelectDestinationWidth",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.SysenterMsrsUseProcessorAddressWidthBeforeTransfer",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.FaultsPrecedeFastTransferStateWrites",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.SingleStepUsesTheRetiredFullAddressAndStack",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.VM86EnterAndRealAddressFaultUseTheirOriginalModes",
+            "status": "passed"
+          }
+        ],
+        "passed": 27,
+        "expected": 27
+      },
+      "x64_compiler": {
+        "host_cpu_model": "AMD EPYC 7763 64-Core Processor",
+        "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+        "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
+        "binary_sha256": "4d929fec3c02e8accc37f330970ee57f83d00c8a1f44c50cc6ee91cbb6824e11",
+        "compiler_execution": "native",
+        "generated_library_pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "rejected_source_targets": [
+          {
+            "option": "-m32",
+            "diagnostic": "neverc: error: unknown argument: '-m32'"
+          },
+          {
+            "option": "--target=i386-unknown-linux-gnu",
+            "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=i686-pc-windows-msvc",
+            "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=i386-apple-darwin",
+            "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=x86_64-unknown-linux-gnux32",
+            "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+          }
+        ]
+      },
+      "capability_probes": [
+        {
+          "image": "macos-15-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "runner_image": {
+            "RUNNER_OS": "macOS",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "macos15",
+            "ImageVersion": "20260824.0482.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "bd6dd4dce0130c080f0d6edb641ea9ce493fca05111133ee6e98099ab68d649d"
+        },
+        {
+          "image": "macos-26-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "runner_image": {
+            "RUNNER_OS": "macOS",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "macos26",
+            "ImageVersion": "20260824.0517.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "440b42b0a2c1998c3d4e49678f90173c4b9d49b8d6fd41ad0edf07ef7c0e92f2"
+        },
+        {
+          "image": "ubuntu-24.04",
+          "cpu": "AMD EPYC 9V74 80-Core Processor",
+          "runner_image": {
+            "RUNNER_OS": "Linux",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "ubuntu24",
+            "ImageVersion": "20261116.376.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "c9b726fddae14b769dfad3c3193d83a1230f6bf78cc040fa986b4fdb5be143fd"
+        }
+      ],
+      "linux_kselftest": {
+        "linux_source": "7d0a66e4bb9081d75c82ec4957c50034cb0ea449",
+        "source": "tools/testing/selftests/sgx",
+        "status": "unavailable",
+        "cases": {},
+        "test_sgx_sha256": "c5cd1494e9c03a3da0f790855d6ecedc6b075e86ca6552b460ca9aed5998c8d9",
+        "test_encl.elf_sha256": "729761ca9051d9ae2571d20e2efb7058745433396568114db3b5714b079ef5d0",
+        "reasons": [
+          "SGX1 is not exposed by CPUID",
+          "CPUID does not enumerate an EPC section",
+          "No accessible SGX enclave device",
+          "The Linux selftest needs read/write access to /dev/sgx_enclave"
+        ]
+      },
+      "enclave_cases_executed": 0
+    }
+  },
+  "merged_dev_compiler": {
+    "neverd_source": "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
+    "compiler": {
+      "host_cpu_model": "13th Gen Intel(R) Core(TM) i9-13900H",
+      "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <qualification-cache>/neverc-portable-build/bin",
+      "binary_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702",
+      "compiler_execution": "native",
+      "generated_library_pointer_bytes": 8,
+      "bit_cast_result": -7,
+      "rejected_source_targets": [
+        {
+          "option": "-m32",
+          "diagnostic": "neverc: error: unknown argument: '-m32'"
+        },
+        {
+          "option": "--target=i386-unknown-linux-gnu",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i686-pc-windows-msvc",
+          "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i386-apple-darwin",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=x86_64-unknown-linux-gnux32",
+          "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+        }
+      ]
+    },
+    "vmrun_after_vmexit": {
+      "high": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+        "receipt_sha256": "ec9993a0819612bbd167b465f4627f99998717ede0ef1ac476672b75dcb559cd"
+      },
+      "llvm": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1",
+        "receipt_sha256": "d042ca356e24daf4695c3c3b0fa050d08b1a6f94520c1dbc5e3fb90badaba8c9"
+      }
+    },
+    "vmrun_r7_backend": {
+      "llvm_backend": "neverd-llvm-v23.0.0-r7 static C API, machine optimization selected for each profile",
+      "cases": [
+        {
+          "route": "high",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "4395112470904588197d9cbd28c31e9169732bf373f9cd824d3786d73b0b6e39",
+          "object_sha256": "6ee4caa44a72a783f69303bab8f3055e3d3eb4279d711f42852c91838e8ddc28",
+          "kernel_sha256": "0548cc98f89984a8d61c78857d3cc8c0eff2414888480cb9ff2ea64b4fc2074d"
+        },
+        {
+          "route": "high",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "49add6a5e7d1540c18afbd51b460571a1fb735e1937c5a8ab95de004810c5156",
+          "object_sha256": "3f06fa80643e70881ea2a73d1952c0521044533ec5a8bac7f01c6b8efce6b246",
+          "kernel_sha256": "a92242a37a5a551c2f16e984b1c25bbc29569040bc3d0c6ac8a66b09bb552641"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "46d8b0de5607e52780eb9a4fa103194da8caa9c8f8c91072508094a45f167d48",
+          "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+          "kernel_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "a62b1fa114183544b389cfd1f3371b2ba6c2860745cd17bff5e2038d60ffbe93",
+          "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+          "kernel_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e"
+        }
+      ]
+    },
+    "host_cpu_profiles": [
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "Nehalem-v1",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      },
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "EPYC-v3",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      }
+    ],
+    "intrinsic_calls": [
+      "enclu.transfer.context",
+      "rsm.context",
+      "vmread",
+      "vmrun.context",
+      "vmwrite"
+    ],
+    "emitted_opcodes": [
+      "vmread",
+      "vmwrite",
+      "vmrun",
+      "enclu",
+      "xrstor64",
+      "rsm"
+    ],
+    "llvm_sdk": "neverd-llvm-v23.0.0-r7",
+    "sample_sha256": "c04ee5e029990ee3004eceee0b8726fb9fdecbf33cad5228fa2959b927d055af",
+    "obj_sha256": "04a64b93079fd4d11b91ed568f2d8d0ea9ae80f6d3738fa92044b3e7c79c096a",
+    "generated_consumers": {
+      "build-x86": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "9a03a37eeedcaede4612b701073e18ca08b0f0b87dd013f65a8bc962cebaa571"
+      },
+      "build-x86-native": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "cfe6a50d2cfb2346782938d94a03bebcb447bfb08f7384acf63eb75af315a5e3"
+      }
+    }
+  },
+  "decoder_followup": {
+    "run": "https://github.com/NeverSight/NeverD/actions/runs/45114911896",
+    "neverd": "30c94d8e3eda73dbcf459130262ba347a33712eb",
+    "capstone": "372fbd2d967c5023371a12e0e406f8be2ec84ae5",
+    "jobs": {
+      "Linux x64": {
+        "passed": 131,
+        "skipped": [],
+        "source": "372fbd2d967c5023371a12e0e406f8be2ec84ae5",
+        "results_sha256": "993539c0e3922332f559896853c2643d1e92b601c8143bf8d08e27aa29c02c22",
+        "integration_sha256": "ec173e4f4d95641cae48a8483f4841c9253c4c7a3e98c306827e5b36d710e5c8",
+        "arm_details_sha256": "691d2db4f6b5b88c299e8a5b0085293cfdce85a2d2aeab49911da275713ffa92",
+        "arm_details": {
+          "Valid files": 2,
+          "Invalid files": 0,
+          "Errors": 0,
+          "Total": 133,
+          "Successful": 133,
+          "Skipped": 0,
+          "Failed": 0
+        }
+      },
+      "Windows x64 MSVC": {
+        "passed": 130,
+        "skipped": [
+          "unit_x86_x87_environment_hardware"
+        ],
+        "source": "372fbd2d967c5023371a12e0e406f8be2ec84ae5",
+        "results_sha256": "0241dc4eb55b14181f03a096a363895ad748d769662eb46c80891191edf2f41d",
+        "integration_sha256": "0690d45087a6c232b2cd0307ca5306bd78e1a0b120f369c9c9aa884cf8887191",
+        "arm_details_sha256": "38b5e75bb72bdbd6829df07e7bc31c9ceeb0c5ddde7121d09453509d3cc2a12b",
+        "arm_details": {
+          "Valid files": 2,
+          "Invalid files": 0,
+          "Errors": 0,
+          "Total": 133,
+          "Successful": 133,
+          "Skipped": 0,
+          "Failed": 0
+        }
+      },
+      "Windows x64 clang-cl": {
+        "passed": 130,
+        "skipped": [
+          "unit_x86_x87_environment_hardware"
+        ],
+        "source": "372fbd2d967c5023371a12e0e406f8be2ec84ae5",
+        "results_sha256": "549811b8a0a6cae7714aafe2aa8ed5033fcedd5c73743dd89e257d831a5bf60f",
+        "integration_sha256": "6c1e0afd336e0b22cfcc0c0fcc21e27332dbf75aa9d24635e9465ecbdbcb5657",
+        "arm_details_sha256": "38b5e75bb72bdbd6829df07e7bc31c9ceeb0c5ddde7121d09453509d3cc2a12b",
+        "arm_details": {
+          "Valid files": 2,
+          "Invalid files": 0,
+          "Errors": 0,
+          "Total": 133,
+          "Successful": 133,
+          "Skipped": 0,
+          "Failed": 0
+        }
+      },
+      "macOS arm64": {
+        "passed": 130,
+        "skipped": [
+          "unit_x86_x87_environment_hardware"
+        ],
+        "source": "372fbd2d967c5023371a12e0e406f8be2ec84ae5",
+        "results_sha256": "d9986974448a22910c4b9e1c9fa7aaa0591258309bb8d17642e61496ee2706b6",
+        "integration_sha256": "06f5b15be78153d3305b9e19578bf6ab7ff415800d206ed71212d1bb02db5e39",
+        "arm_details_sha256": "691d2db4f6b5b88c299e8a5b0085293cfdce85a2d2aeab49911da275713ffa92",
+        "arm_details": {
+          "Valid files": 2,
+          "Invalid files": 0,
+          "Errors": 0,
+          "Total": 133,
+          "Successful": 133,
+          "Skipped": 0,
+          "Failed": 0
+        }
+      }
+    }
+  },
+  "latest_decoder_contract": {
+    "run": "https://github.com/NeverSight/NeverD/actions/runs/45324143563",
+    "neverd": "ff48fa384ba39812596fa1fbd44ec8a24bb415ff",
+    "capstone": "3a67e7f8ff2fc6265dc86c115c7989e47c8a7ee2",
+    "jobs": {
+      "Linux x64": {
+        "passed": 131,
+        "skipped": [],
+        "source": "3a67e7f8ff2fc6265dc86c115c7989e47c8a7ee2",
+        "results_sha256": "0f9bf1af1e12181b49a2777a953abe43cc2843a479723f9f82deae070d688fa0",
+        "integration_sha256": "2871d51c15dc4d20c034070e034baec94c225ecae24ce0733e98ea498f701215",
+        "arm_details_sha256": "691d2db4f6b5b88c299e8a5b0085293cfdce85a2d2aeab49911da275713ffa92",
+        "arm_details": {
+          "Valid files": 2,
+          "Invalid files": 0,
+          "Errors": 0,
+          "Total": 133,
+          "Successful": 133,
+          "Skipped": 0,
+          "Failed": 0
+        }
+      },
+      "Windows x64 MSVC": {
+        "passed": 130,
+        "skipped": [
+          "unit_x86_x87_environment_hardware"
+        ],
+        "source": "3a67e7f8ff2fc6265dc86c115c7989e47c8a7ee2",
+        "results_sha256": "08c3937130d2ec931317dc98a02cda88fb76268e20389b87cebfb397496c84f9",
+        "integration_sha256": "0c61753e5b94a05a30c125e64bd4d96617c0b752859dabcbfa242ddb11750c2e",
+        "arm_details_sha256": "38b5e75bb72bdbd6829df07e7bc31c9ceeb0c5ddde7121d09453509d3cc2a12b",
+        "arm_details": {
+          "Valid files": 2,
+          "Invalid files": 0,
+          "Errors": 0,
+          "Total": 133,
+          "Successful": 133,
+          "Skipped": 0,
+          "Failed": 0
+        }
+      },
+      "Windows x64 clang-cl": {
+        "passed": 130,
+        "skipped": [
+          "unit_x86_x87_environment_hardware"
+        ],
+        "source": "3a67e7f8ff2fc6265dc86c115c7989e47c8a7ee2",
+        "results_sha256": "7ffe2aef067aeebdc5599012ee7feca3c61adb85fb070fa2d0b7ddaa544255d7",
+        "integration_sha256": "9c3b8887c72bcda924ff5bb5971abd55971a52e97e37f9a1ba87227da1175d68",
+        "arm_details_sha256": "38b5e75bb72bdbd6829df07e7bc31c9ceeb0c5ddde7121d09453509d3cc2a12b",
+        "arm_details": {
+          "Valid files": 2,
+          "Invalid files": 0,
+          "Errors": 0,
+          "Total": 133,
+          "Successful": 133,
+          "Skipped": 0,
+          "Failed": 0
+        }
+      },
+      "macOS arm64": {
+        "passed": 130,
+        "skipped": [
+          "unit_x86_x87_environment_hardware"
+        ],
+        "source": "3a67e7f8ff2fc6265dc86c115c7989e47c8a7ee2",
+        "results_sha256": "a0224a5de486353ccb9aba881bf7e5e8d6e161e3e3970aabf103199320416bbe",
+        "integration_sha256": "107c303d54b4819fc9c251d35c73d240bb528102f14874ba8fdb295f9ed39ab5",
+        "arm_details_sha256": "691d2db4f6b5b88c299e8a5b0085293cfdce85a2d2aeab49911da275713ffa92",
+        "arm_details": {
+          "Valid files": 2,
+          "Invalid files": 0,
+          "Errors": 0,
+          "Total": 133,
+          "Successful": 133,
+          "Skipped": 0,
+          "Failed": 0
+        }
+      }
+    }
+  },
+  "final_integrated_verification": {
+    "neverd": "d7c5338cf5c65149570a113ad383e249401db5e2",
+    "neverd_commit": "https://github.com/NeverSight/NeverD/commit/d7c5338cf5c65149570a113ad383e249401db5e2",
+    "base_verified": "dbed3c1ba225fe30baa092d8ab82d72cc66fa9e7",
+    "llvm_gitlink": "3798d997b9c126f33aaba9216b6543868f5cf857",
+    "local_native_sdk_source": "e7c81b978b440561583eeb43771cb9d486e3f8ff",
+    "x86_target_or_intrinsic_files_changed_since_r7": [],
+    "sdks": {
+      "build-x86": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "fdb9f88f2f22601f9a48016e3cbb8ca27bdb5012e52714a6b95a8ee03cdf7e38",
+          "NeverDX86PagingTests": "d99da5bd55a11429fc52aa40380f06a3c1d1d70af48487f3ebc6d2d1d8749bba",
+          "neverd": "aee7344d508717efe731f5fb47c1179d2ce670624f632f9a271315b35f8819fa",
+          "NeverDX86LegacySourceTests": "4aeaddb367c4c761c12c0e218c74c7c9957f2caf66ca9949d1066e5b2c61d9cf",
+          "libneverd.so": "48925fdf962a63be8e7d34e580f43975280e2a52dfd3641175c7f5250531d222"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu6.xml": "2797eec22865a605a513ce18c79b8ec5fbb73d62aaaee30fb15582c302998afa",
+          "execution-full-cpu12.xml": "b4aa62553e4c950422e4e0dd45acdd92e7ea45789b35773c1a64cd6f80803e26",
+          "execution-full-cpu16.xml": "071d436b3f3cdef35d6e2b1a99d45c80cb0b1046d00d54785bf49c4a5997ce2f",
+          "paging-alternate-cpu6.xml": "b77edca182b1df90beb8b9f7b3d6eb9daf88479570a6b7bbacb125bba2815f13",
+          "paging-full-cpu12.xml": "5a1cdd7c78202e8b5e8e64b1570393b613d90cd78a82c48b24c3c35fa5fce8de",
+          "paging-full-cpu16.xml": "800bbc137fd04dc7061c2878ef9be897ab5033b9d8f5cbc609a54f6cc89e2c02",
+          "source-cpu14.xml": "8d63db6f683668d0f0643c8f6cba1120a0c3fd4e24951ac2471063e65fe6d27d",
+          "source-cpu18.xml": "9f9aba4cf54454ebc98cfd010a35ebcea554c76571ce2c29ea0d5584567243e8"
+        }
+      },
+      "build-x86-native": {
+        "registered": {
+          "execution": 243,
+          "paging": 855
+        },
+        "suites": {
+          "execution_alternate": {
+            "executed": 48,
+            "passed": 48,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "execution_full": {
+            "executed": 243,
+            "passed": 243,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_alternate": {
+            "executed": 4,
+            "passed": 4,
+            "missing": [],
+            "failures": [],
+            "skips": {},
+            "duplicates": [],
+            "exit_codes": []
+          },
+          "paging_full": {
+            "executed": 855,
+            "passed": 853,
+            "missing": [],
+            "failures": [],
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "unittests/translate/x86/X86PagingNativeTests.cpp:130\nBound KVM CPU has no LA57\n"
+            },
+            "duplicates": [],
+            "exit_codes": []
+          }
+        },
+        "source_regressions": {
+          "registered": 253,
+          "executed": 253,
+          "passed": 253,
+          "failed": [],
+          "skipped": [],
+          "missing": [],
+          "sdk": [
+            {
+              "suite": "test_legacy_source_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            },
+            {
+              "suite": "test_continuation_integration.py",
+              "exit": 0,
+              "tests": 2,
+              "skipped": 0
+            }
+          ]
+        },
+        "binaries": {
+          "NeverDX64PagedExecutionTests": "d08658c812bb3aab7413d1f948f4c8c6a7d3247806bc2cf0fbcb6510dae7c279",
+          "NeverDX86PagingTests": "42c30b65ca4ae8f92f44eb80c7f45825d469c5e98c20d466f3c6800fe065e905",
+          "neverd": "4603af48285767f28921ef840edb4ab096b2a4df6c743313b8c5e7de3d71ae76",
+          "NeverDX86LegacySourceTests": "fada746d3c7f8d716d6d78b4901b60a28a6ee155fb6f6d14e79514d788de5bf2",
+          "libneverd.so": "87ae8f5ce8c9f8c300a8380b461e0b094e2c76c9fa87f643a9d06006d2f137a9"
+        },
+        "xml_sha256": {
+          "execution-alternate-cpu14.xml": "1505e052685d9e6eabbd6e4f474514f9ec06e5c5f5edb77a4725a12d008b7207",
+          "execution-full-cpu4.xml": "5109a16175a3fb43a7cae9fb67bbb5d1dc70a0ef63c00006cc7e86a2a601ad7f",
+          "execution-full-cpu8.xml": "11108e525066496f10add66f2962b8118ed6780677833fd8c92e239f6eaa2898",
+          "paging-alternate-cpu14.xml": "db8e8bad95adf1434fc3cd73f4690545b37ea09659b10a755496c76a380f7468",
+          "paging-full-cpu4.xml": "42529311f699952be4705315c31102b3bc71281cf5b268c98067cfc897ab52aa",
+          "paging-full-cpu8.xml": "ae371a7654531db82bbfb47de6accd84d5b1da1408eca96cd9a4cc6f4d6685db",
+          "source-cpu10.xml": "558457d2d79cec67f7c24af07cbef5e87616fe71e326ef3c60ff082ae86cef35",
+          "source-cpu2.xml": "6532c031ab316a5df6f843c2033ae4e2f33ec8965ea384c4a31238fdeedb9aea"
+        }
+      }
+    },
+    "neverd_decoder_tests": {
+      "neverd": "d7c5338cf5c65149570a113ad383e249401db5e2",
+      "capstone": "3a67e7f8ff2fc6265dc86c115c7989e47c8a7ee2",
+      "sdk": "build-x86-native",
+      "tests": {
+        "NeverDX86InstructionCoverageTests": {
+          "passed": 7,
+          "registered": 7,
+          "binary_sha256": "36eb72fa05520f805630eccf3fea71be243fcb37a6e97c7beff9ec059c353037",
+          "xml_sha256": "27802b5d57ec112d539f782980360a1ae8e86f9b6484ff278bffc5babca3def0"
+        },
+        "NeverDX86DecodeDetailTests": {
+          "passed": 6,
+          "registered": 6,
+          "binary_sha256": "d62dde58d7be7b56008bcf59c177dee72a423f13611f1e64556a4bacdc66a366",
+          "xml_sha256": "9e03826bebef66c73069c8de8a458bb002aafce11d1a9d9246def57ac4379707"
+        },
+        "NeverDX86NoIndexAddressTests": {
+          "passed": 9,
+          "registered": 9,
+          "binary_sha256": "4f75920911af0689c99c19435b90fadd336b77788bd3f75a4b05ed9fdd13cdc8",
+          "xml_sha256": "10eeaf3549d3e6550bb328fb32922c07547261948786c0d8b54d1d968417e17a"
+        }
+      }
+    },
+    "hosted": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45325488567",
+      "software": {
+        "source_commit": "d7c5338cf5c65149570a113ad383e249401db5e2",
+        "neverc_version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
+        "cases": [
+          {
+            "name": "X86PagingTest.EnclavePrivatePagesEnforcePagingIdentityAndEpcmPermissions",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeExecutionTest.FarTransfersRetireTheirContinuationAfterDescriptorRepair",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.MachineCheckReportsRetainBankOwnershipAndPriority",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.MachineCheckMsrReadAndAcknowledgeUseOriginalInstructions",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CorrectedErrorsCountToCmciAndKeepMaskedArrivals",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CmciNmiAndSmiUseTheExistingEventLatches",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.SmiUsesPrivateRAMAndRsmHonorsFirmwareEdits",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.RsmRestoresNormalizedDebugStateAndRejectsInvalidControlsBeforePaeReload",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.InactiveRsmDeliversOriginalUndefinedOpcode",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.RsmDebugUsesFirmwareBeforeCommitAndRestoredTablesAfterCommit",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.StartupInputsRequireBindingAndRestartShutdown",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.StartupInitStaysLatchedInSmmUntilRsmCompletes",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.TaskGateAndNestedIretPublishBothTaskBanks",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.PartiallyLoadedIncomingTaskResumesTheOriginalTransfer",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.VM86InterruptAndReturnUseEveryFrameSelector",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeInterruptTest.CompatibilityReturnsSelectTheDestinationCodeWidth",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.EnclaveNotificationResumeAndDecrementSelectCorrectFrames",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.DebugOptInSelectsTrapAndBreakpointState",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.TransfersUseFullMsrsAndSelectDestinationWidth",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.SysenterMsrsUseProcessorAddressWidthBeforeTransfer",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.FaultsPrecedeFastTransferStateWrites",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.SingleStepUsesTheRetiredFullAddressAndStack",
+            "status": "passed"
+          },
+          {
+            "name": "X86ModeFastSystemTest.VM86EnterAndRealAddressFaultUseTheirOriginalModes",
+            "status": "passed"
+          }
+        ],
+        "passed": 27,
+        "expected": 27
+      },
+      "x64_compiler": {
+        "host_cpu_model": "AMD EPYC 9V45 96-Core Processor",
+        "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+        "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <toolchain-bin>",
+        "binary_sha256": "2426491ce414bf11fe6556fc787e141c95ef710dea8517a49cd0b5e580476bd7",
+        "compiler_execution": "native",
+        "generated_library_pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "rejected_source_targets": [
+          {
+            "option": "-m32",
+            "diagnostic": "neverc: error: unknown argument: '-m32'"
+          },
+          {
+            "option": "--target=i386-unknown-linux-gnu",
+            "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=i686-pc-windows-msvc",
+            "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=i386-apple-darwin",
+            "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+          },
+          {
+            "option": "--target=x86_64-unknown-linux-gnux32",
+            "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+          }
+        ]
+      },
+      "capability_probes": [
+        {
+          "image": "macos-15-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "runner_image": {
+            "RUNNER_OS": "macOS",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "macos15",
+            "ImageVersion": "20260824.0482.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "c38e1ffafa493448067b11df201b36f21e975b79a6fb76ce010226aee0b217ed"
+        },
+        {
+          "image": "macos-26-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "runner_image": {
+            "RUNNER_OS": "macOS",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "macos26",
+            "ImageVersion": "20260824.0517.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "d97e001d778d9e2cdeeb269f539587ff3281c723c0c1e66be78d63ed0f1d3601"
+        },
+        {
+          "image": "ubuntu-24.04",
+          "cpu": "AMD EPYC 7763 64-Core Processor",
+          "runner_image": {
+            "RUNNER_OS": "Linux",
+            "RUNNER_ARCH": "X64",
+            "ImageOS": "ubuntu24",
+            "ImageVersion": "20261116.376.1"
+          },
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "native_enclave_instructions": 0,
+          "capability_report_sha256": "ce14e00fe808ade9bf521b4f3b28e2deade7a3797c027c1396e9ff333d8218c8"
+        }
+      ],
+      "linux_kselftest": {
+        "linux_source": "7d0a66e4bb9081d75c82ec4957c50034cb0ea449",
+        "source": "tools/testing/selftests/sgx",
+        "status": "unavailable",
+        "cases": {},
+        "test_sgx_sha256": "c5cd1494e9c03a3da0f790855d6ecedc6b075e86ca6552b460ca9aed5998c8d9",
+        "test_encl.elf_sha256": "eaeeb8e6ec8c23cce43b2275e675ad5975180f7c4af7f2f816dcc39f75bc1e18",
+        "reasons": [
+          "SGX1 is not exposed by CPUID",
+          "CPUID does not enumerate an EPC section",
+          "No accessible SGX enclave device",
+          "The Linux selftest needs read/write access to /dev/sgx_enclave"
+        ]
+      },
+      "enclave_cases_executed": 0
+    }
+  },
+  "final_integrated_compiler": {
+    "neverd_source": "d7c5338cf5c65149570a113ad383e249401db5e2",
+    "compiler": {
+      "host_cpu_model": "13th Gen Intel(R) Core(TM) i9-13900H",
+      "source_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+      "version": "neverc version 3389.1.5\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: <qualification-cache>/neverc-portable-build/bin",
+      "binary_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702",
+      "compiler_execution": "native",
+      "generated_library_pointer_bytes": 8,
+      "bit_cast_result": -7,
+      "rejected_source_targets": [
+        {
+          "option": "-m32",
+          "diagnostic": "neverc: error: unknown argument: '-m32'"
+        },
+        {
+          "option": "--target=i386-unknown-linux-gnu",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i686-pc-windows-msvc",
+          "diagnostic": "neverc: error: unsupported target architecture 'i686' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=i386-apple-darwin",
+          "diagnostic": "neverc: error: unsupported target architecture 'i386' (only x86_64/aarch64 are supported)"
+        },
+        {
+          "option": "--target=x86_64-unknown-linux-gnux32",
+          "diagnostic": "neverc: error: unsupported target architecture 'x86_64' (only x86_64/aarch64 are supported)"
+        }
+      ]
+    },
+    "vmrun_after_vmexit": {
+      "high": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+        "receipt_sha256": "7ad543be29401e9128ca462b0c25206d18dad40c7be13d0e19152c32409085d2"
+      },
+      "llvm": {
+        "profiles": [
+          {
+            "optimization": "O0",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          },
+          {
+            "optimization": "O2",
+            "contexts": 50,
+            "original_ida_counterexample": true,
+            "original_addr32_rax": true,
+            "original_invalid_cr2": 16
+          }
+        ],
+        "scope": "QEMU TCG long-mode SVM, XCR0=7; no physical AMD qualification",
+        "source_sha256": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1",
+        "receipt_sha256": "372f69541158760b89f50cc19f7d4f4617b9759d10bb17ad2e423022a0534bd4"
+      }
+    },
+    "vmrun_r7_backend": {
+      "llvm_backend": "neverd-llvm-v23.0.0-r7 static C API, machine optimization selected for each profile",
+      "cases": [
+        {
+          "route": "high",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "7bc2322b8be6fd52e54192389f11f227c977ec78a6ae0acf58f0d1ccb3b519ba",
+          "object_sha256": "6ee4caa44a72a783f69303bab8f3055e3d3eb4279d711f42852c91838e8ddc28",
+          "kernel_sha256": "0548cc98f89984a8d61c78857d3cc8c0eff2414888480cb9ff2ea64b4fc2074d"
+        },
+        {
+          "route": "high",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "2857189a8a532f396e221651f7a81f021cea91f1f71e107f6b7f60ad1fd9caaa",
+          "object_sha256": "3f06fa80643e70881ea2a73d1952c0521044533ec5a8bac7f01c6b8efce6b246",
+          "kernel_sha256": "a92242a37a5a551c2f16e984b1c25bbc29569040bc3d0c6ac8a66b09bb552641"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O0",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "cfa6141dc1cf6d0e492740abc36b45237bd976bd7fa80be8ed6eecec12f48a98",
+          "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+          "kernel_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O2",
+          "contexts": 50,
+          "original_invalid_cr2": 16,
+          "original_addr32_rax": true,
+          "original_rcx": 22136,
+          "ir_sha256": "c34287fca04f77f89d6ce4ae0af6734fa7d6707107223a01ee5fee17e86d53a4",
+          "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+          "kernel_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e"
+        }
+      ]
+    },
+    "host_cpu_profiles": [
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "Nehalem-v1",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      },
+      {
+        "mode": "QEMU user CPU profile",
+        "cpu": "EPYC-v3",
+        "pointer_bytes": 8,
+        "bit_cast_result": -7,
+        "generated_sha256": "4de167529c04739c37d2fdf8979f9bb62ce75e14774e52a1114d354c4d7ba1a1"
+      }
+    ],
+    "intrinsic_calls": [
+      "enclu.transfer.context",
+      "rsm.context",
+      "vmread",
+      "vmrun.context",
+      "vmwrite"
+    ],
+    "emitted_opcodes": [
+      "vmread",
+      "vmwrite",
+      "vmrun",
+      "enclu",
+      "xrstor64",
+      "rsm"
+    ],
+    "llvm_sdk": "neverd-llvm-v23.0.0-r7",
+    "sample_sha256": "c04ee5e029990ee3004eceee0b8726fb9fdecbf33cad5228fa2959b927d055af",
+    "obj_sha256": "04a64b93079fd4d11b91ed568f2d8d0ea9ae80f6d3738fa92044b3e7c79c096a",
+    "generated_consumers": {
+      "build-x86": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "542a63410e148ec3ef25911376845fc081c52a40c506f6b32b574982175ca779"
+      },
+      "build-x86-native": {
+        "passed": [
+          "X86ModeExecutionTest.CompiledFastCallReturnsToTheOriginalCompatibilityStream",
+          "X86ModeInterruptTest.AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent",
+          "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+          "X86ModeSgxThreadTest.NestedHandlerRepairsDivideAtOriginalInstruction"
+        ],
+        "xml_sha256": "9154f227cbbc6e0ef8efa6fee813eabe0cacc50e5b0491ff32289dcb384fe8b3"
+      }
+    },
+    "ir_text_hash_note": {
+      "reason": "The local output directory moved from a temporary path to a persistent cache. LLVM textual IR records its absolute ModuleID and source_filename. Raw IR hashes changed; exact generated C, native objects and guest images are verified separately.",
+      "earlier": [
+        {
+          "route": "high",
+          "frontend_optimization": "O0",
+          "ir_sha256": "4395112470904588197d9cbd28c31e9169732bf373f9cd824d3786d73b0b6e39"
+        },
+        {
+          "route": "high",
+          "frontend_optimization": "O2",
+          "ir_sha256": "49add6a5e7d1540c18afbd51b460571a1fb735e1937c5a8ab95de004810c5156"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O0",
+          "ir_sha256": "46d8b0de5607e52780eb9a4fa103194da8caa9c8f8c91072508094a45f167d48"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O2",
+          "ir_sha256": "a62b1fa114183544b389cfd1f3371b2ba6c2860745cd17bff5e2038d60ffbe93"
+        }
+      ],
+      "current": [
+        {
+          "route": "high",
+          "frontend_optimization": "O0",
+          "ir_sha256": "7bc2322b8be6fd52e54192389f11f227c977ec78a6ae0acf58f0d1ccb3b519ba"
+        },
+        {
+          "route": "high",
+          "frontend_optimization": "O2",
+          "ir_sha256": "2857189a8a532f396e221651f7a81f021cea91f1f71e107f6b7f60ad1fd9caaa"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O0",
+          "ir_sha256": "cfa6141dc1cf6d0e492740abc36b45237bd976bd7fa80be8ed6eecec12f48a98"
+        },
+        {
+          "route": "llvm",
+          "frontend_optimization": "O2",
+          "ir_sha256": "c34287fca04f77f89d6ce4ae0af6734fa7d6707107223a01ee5fee17e86d53a4"
+        }
+      ]
+    }
+  },
+  "latest_verified_source": "d7c5338cf5c65149570a113ad383e249401db5e2"
 }

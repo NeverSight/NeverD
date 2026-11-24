@@ -393,6 +393,21 @@ passed 27/27 software cases at `d45fe8b1fb` with the pinned portable x64
 NeverC compiler. All three designated runner images again exposed zero EPC
 sections and executed zero native enclave cases.
 
+The [November 23 hosted run](https://github.com/gmh5225/test_mac_intel/actions/runs/45325488567)
+tested integrated NeverD `d7c5338cf5` with a freshly built x64 NeverC at
+`f3eb95aa50`. Its 27/27 selected software cases passed. The downloaded
+compiler artifact matches the CI receipt. Ubuntu 24.04 and both Intel macOS
+images again exposed zero EPC sections; no native enclave case executed.
+
+At the same `d7c5338cf5` source, both the published r7 SDK and the local LLVM
+SDK passed 243/243 full-mode execution, 853/855 paging (the same two LA57
+capability skips), 48/48 opposite-core execution, 4/4 opposite-core paging,
+253/253 generated-C source and 4/4 Python SDK checks. The portable x64
+NeverC and published r7 backend completed another 200 VMRUN contexts in QEMU
+TCG; their native object and guest-image bytes match the hosted KVM fixtures.
+The [current qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+retains source, compiler, binary, XML and runner hashes separately.
+
 ## Earlier qualification records
 
 The November 11 regression stream performs protected32 → compatibility32 → code64 →

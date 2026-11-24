@@ -135,6 +135,14 @@ SGX harness and its enclave image. With SGX1, an EPC section and access to
 All three hosted runners reported zero EPC sections and the Linux runner
 executed zero native test cases. [Run and artifact digests](evidence/x86-sgx-runner-discovery-2026-11-20.json)
 
+The [November 23 repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45325488567)
+tested NeverD `d7c5338cf5`: all 27 selected software mode/SMM/SGX/event cases
+passed. Ubuntu 24.04 and both Intel macOS images again reported zero EPC,
+zero native enclave instructions and no available native enclave selftest
+cases. The Linux job used a freshly built x64 NeverC compiler whose source
+revision and artifact hash are retained in the
+[current qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json).
+
 Architectural ownership follows Intel SDM revision 090, ENCLU/EENTER/ERESUME/
 EEXIT and enclave entry/exit chapters, available from the
 [Intel SDM index](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).

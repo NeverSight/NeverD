@@ -30,6 +30,12 @@ writer; NeverD's mixed-mode execution qualification is recorded separately.
 At the integrated `074c7618f6` source, NeverD's local instruction-coverage,
 decode-detail and no-index SIB suites passed 7/7, 6/6 and 9/9 respectively
 against this pin.
+The next `dev` pin, `3a67e7f8ff2fc6265dc86c115c7989e47c8a7ee2`, passed
+the [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45324143563):
+131/131 on Linux x64 and 130/131 on macOS arm64, Windows MSVC and Windows
+clang-cl, with the same explicit POSIX x64 x87-hardware skip. At integrated
+`d7c5338cf5`, NeverD's three local decoder suites passed 7/7, 6/6 and 9/9
+against this pin.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 
