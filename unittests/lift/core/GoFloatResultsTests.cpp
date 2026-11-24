@@ -224,6 +224,17 @@ uint64_t integerResult(Arch A) {
   return A == Arch::X64 ? x86reg::RAX : a64reg::X0;
 }
 
+/// Whether this host builds and runs the C of \p A: x86-64 C keeps the SSE
+/// state helpers its floating operations print, inline assembly only an
+/// x86-64 host assembles; arm64 C is portable.
+bool runsHere(Arch A) {
+#if defined(__x86_64__) || defined(_M_X64)
+  return true;
+#else
+  return A != Arch::X64;
+#endif
+}
+
 uint64_t floatResult(Arch A, int Position) {
   return A == Arch::X64
              ? x86reg::VectorBase + Position * x86reg::VectorRegStride
@@ -262,6 +273,8 @@ TEST(GoFloatResults, ACallReturnsBothFloatsItsCalleeDoes) {
       EXPECT_EQ(fields(*Call->RegisterReturnFields), Floats);
       EXPECT_EQ(D.body("main_diff").find("__builtin_trap"), std::string::npos)
           << D.body("main_diff");
+      if (!runsHere(A))
+        continue;
       source_call_execution_test::compileAndRun(D.Source + driver(R"C(
 int main(void) {
   static double p[2] = {7.5, 2.25};
@@ -294,6 +307,8 @@ TEST(GoFloatResults, ACallReturnsAnIntegerBesideAFloat) {
       EXPECT_EQ(D.body("main_usepair").find("__builtin_trap"),
                 std::string::npos)
           << D.body("main_usepair");
+      if (!runsHere(A))
+        continue;
       source_call_execution_test::compileAndRun(D.Source + driver(R"C(
 int main(void) {
   static struct { int64_t n; double f; } s = {3, 0.5};
@@ -323,6 +338,8 @@ TEST(GoFloatResults, AForwardingCallReturnsWhatItsCalleeDoes) {
       ASSERT_NE(Call, nullptr);
       ASSERT_TRUE(Call->RegisterReturnFields);
       EXPECT_EQ(fields(*Call->RegisterReturnFields), Floats);
+      if (!runsHere(A))
+        continue;
       source_call_execution_test::compileAndRun(D.Source + driver(R"C(
 int main(void) {
   static double p[2] = {-1.5, 0.25};
