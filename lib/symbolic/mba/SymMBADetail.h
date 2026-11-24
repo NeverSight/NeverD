@@ -650,6 +650,10 @@ unsigned slicedProductFieldWidth(const SymContext &Ctx, SymRef Perturbation);
 bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
                        unsigned Bits);
 
+/// Inspect a scaled product for projected sums of weighted fields. The caller
+/// has established a product with at least kMinResidueProductFactors operands.
+bool hasDistributedFactors(const SymContext &Ctx, SymRef Root);
+
 /// Combine the surviving fields of scaled sums without expanding their product.
 SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                               size_t &Storage, bool *EmittedReading);

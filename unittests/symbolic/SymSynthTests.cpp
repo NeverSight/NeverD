@@ -736,6 +736,31 @@ TEST(SymSynth, ReportsWhatItSpent) {
 
 } // namespace
 
+TEST(SymSynth, EqualSignatureHashSamplesKeepDistinctGridBehaviours) {
+  using namespace neverd::symbolic::synth;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", 32), Y = Ctx.mkVar("y", 32);
+  SynthProblem P;
+  P.Original = P.Body = Ctx.mkXor(X, Y);
+  P.Leaves = {X, Y};
+  P.LeafVars = {0, 1};
+  P.Width = 32;
+  for (unsigned I = 0; I < 64; ++I) {
+    const llvm::APInt A(32, I * 17 + 3), B(32, I == 15 ? 19 : I * 17 + 3);
+    P.Grid.push_back({A, B});
+    P.Target.push_back(A ^ B);
+  }
+  SynthOptions Opts;
+  Opts.MaxCost = 3;
+  Opts.UseAffineFitting = Opts.UseQuadraticFitting = false;
+  auto Check = makeChecker(Ctx, P, Opts);
+  SearchEffort Effort(4096);
+  uint64_t Queries = 0;
+  const auto Result = enumerateShortest(Ctx, P, Opts, OpSemantics(Ctx, 32),
+                                        Effort, Check, std::nullopt, Queries);
+  EXPECT_EQ(Result.Candidate, P.Body);
+}
+
 // The search measures candidates through applyColumn and builds them through
 // the nodes apply reads, so any disagreement is a wrong answer the proof must
 // catch, or a missed one nothing catches.

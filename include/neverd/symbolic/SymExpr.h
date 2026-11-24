@@ -720,13 +720,15 @@ private:
   // A native plan holds its slot values here. A wide affine product holds
   // [multiplicity, offset limbs, scale limbs] for each distinct factor;
   // zero multiplicity stores a degree followed by its coefficient limbs.
-  // Its argument slots name the bases and ScratchAP holds their values.
+  // For a repeated wide product these are sizes of binary exponent columns.
+  // Its argument slots name the factors and ScratchAP holds their values.
   llvm::SmallVector<uint64_t, limits::symbolic::kSymEvalPlanInlineSteps>
       PlanWords;
   std::vector<llvm::APInt> ScratchAP;
   uint32_t RootSlot = 0;
   bool FitsU64 = true;
   NativePreparation NativeState = NativePreparation::FirstEvaluation;
+  bool HasPowerColumns = false;
 };
 
 } // namespace neverd::symbolic
