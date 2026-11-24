@@ -54,6 +54,12 @@ def run(executable):
         binary.write_bytes(b"source cache fixture")
         client = clients.enter_context(Client(executable))
         ok(client, "open", {"path": str(binary), "analysis": False})
+        # Speculative reads can only prepare entries already in this inventory.
+        request = {"representation": "source", "limit": 1, "listed_entry_only": True}
+        missing = client.call("decompile", {**request, "address": hex(int(A, 16) + 1)})
+        assert missing["status"] == "error" and missing["error"]["code"] == "not_found", missing
+        malformed = client.call("decompile", {**request, "address": A, "listed_entry_only": "yes"})
+        assert malformed["status"] == "error" and malformed["error"]["code"] == "invalid_request", malformed
         # Fresh LLVM requests must carry their view to preparation rather
         # than forcing a full HighIR projection before reading LLVM.
         llvm_client = clients.enter_context(Client(executable))
@@ -75,7 +81,9 @@ def run(executable):
         assert graph_source["fixture_prepared_view"] == "cfg", graph_source
         assert graph_source["fixture_prepares"] == 1, graph_source
         reused(source(graph_client), graph_source)
+        listed = ok(client, "decompile", {**request, "address": A, "limit": 4})
         first = source(client)
+        reused(first, listed)
         assert first["fixture_prepares"] == 1 and first["fixture_pages"] == 1
         assert first["fixture_renders"] == 0, first
         second = source(client, B)

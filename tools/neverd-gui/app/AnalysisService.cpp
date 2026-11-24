@@ -695,20 +695,29 @@ AnalysisPool::AnalysisPool(QueryService &owner, const QString &workerPath,
   });
 }
 
-void AnalysisPool::prefetchSource(quint64 address) {
-  if (preparing_ || lanes_.front().service->queries().pendingReadCount() != 0)
-    return;
+void AnalysisPool::prefetchSource(quint64 address, bool listedOnly) {
   auto &lane = lanes_.front();
+  if (preparing_ || lane.service->queries().pendingReadCount() != 0)
+    return;
+  if (listedOnly &&
+      (!lane.service->ready() || functionLanes_.value(address, 0) != 0))
+    return;
   lane.function = address;
-  functionLanes_.insert(address, 0);
-  preparing_ = true;
+  if (!listedOnly)
+    functionLanes_.insert(address, 0);
+  // Only an initial restore should make other functions wait for this lane.
+  preparing_ = !listedOnly;
   const auto serial = ++preparationSerial_;
-  const QJsonObject payload{
+  const auto representation = CodeView::pseudocodeRepresentation();
+  QJsonObject payload{
       {"address", QStringLiteral("0x") + QString::number(address, 16)},
-      {"representation", QStringLiteral("source")},
-      {"source_options", QJsonObject{}},
+      {"representation", representation},
+      {"source_options", listedOnly ? SourceDefaults::options(representation)
+                                    : QJsonObject{}},
       {"offset", 0},
       {"limit", 1}};
+  if (listedOnly)
+    payload.insert(QStringLiteral("listed_entry_only"), true);
   lane.service->queries().subscribe({QStringLiteral("decompile"), payload},
                                     &preparationOwner_,
                                     [this, serial](const QJsonObject &) {

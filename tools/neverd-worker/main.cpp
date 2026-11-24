@@ -238,6 +238,7 @@ Json hello() {
                 "render_ahead",
                 "render_store",
                 "kept_renders",
+                "listed_source_prefetch",
                 "page_delta",
                 "prepare_function",
                 "functions",

@@ -28,6 +28,8 @@
 
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <sched.h>
 #endif
 
 namespace neverd {
@@ -47,17 +49,25 @@ template <typename Fn> void runPipelineWorkers(unsigned Count, Fn &Worker) {
 
 /// Preferred default worker-thread count for a fresh process.
 ///
-/// On a homogeneous machine this is simply the logical-core count, which lets
+/// On a homogeneous machine this is the available logical-core count, which lets
 /// the parallel IR phases scale all the way up on a many-core server (the
 /// historical hard cap of 12 left those cores idle).  On a heterogeneous Apple
 /// Silicon host the efficiency cores run the same work perhaps 2-3x slower, so
 /// on the short latency-bound phases their stragglers cost more wall time than
 /// the throughput they add; there the performance-core count
-/// (hw.perflevel0.logicalcpu) is the better default.  Intel Macs and every
-/// non-Apple platform lack that sysctl and fall through to the full core count.
+/// (hw.perflevel0.logicalcpu) is the better default. Linux workers inherit
+/// the calling thread's affinity, including cpuset and taskset restrictions.
 /// The value is only a default — NEVERD_THREADS or setWorkerThreadCount() can
 /// push it higher (e.g. to also use the efficiency cores) or lower.
 inline unsigned defaultWorkerThreadCount() {
+#if defined(__linux__) && defined(CPU_COUNT)
+  cpu_set_t Allowed;
+  if (sched_getaffinity(0, sizeof(Allowed), &Allowed) == 0) {
+    const int Count = CPU_COUNT(&Allowed);
+    if (Count > 0)
+      return static_cast<unsigned>(Count);
+  }
+#endif
   const unsigned Hw = std::max(1u, std::thread::hardware_concurrency());
 #if defined(__APPLE__)
   int32_t PerfCores = 0;
@@ -88,7 +98,7 @@ inline void setWorkerThreadCount(unsigned N) {
 /// Low->Med, Med->High).  Resolution order:
 ///   1. an explicit setWorkerThreadCount() override, else
 ///   2. the NEVERD_THREADS environment variable (parsed once), else
-///   3. std::thread::hardware_concurrency().
+///   3. the available host CPUs from defaultWorkerThreadCount().
 ///
 /// Historically this was capped at 12, which idled cores on hosts with more
 /// than twelve of them — the LLVM emission phase already spawns one thread per
