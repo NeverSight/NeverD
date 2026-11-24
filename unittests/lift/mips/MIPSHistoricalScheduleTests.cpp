@@ -1700,6 +1700,38 @@ TEST(MIPSHistoricalScheduling, ColdResetRequiresObservedUnknownRegisters) {
   }
 }
 
+// Tektronix 92DM74, figures 4-6 and 4-11, records physical bus addresses.
+// Bind the ROM to KSEG1 and the general vector to KSEG0 for this replay.
+TEST(MIPSHistoricalScheduling, R3000SyscallsEnterTheRecordedGeneralVector) {
+  constexpr uint32_t Syscall = 0x0000000c, VectorLui = 0x3c1aa000;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    for (uint32_t Physical : {0x1fc14994u, 0x1fc14998u}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(Physical);
+      auto Img = image(A, 1);
+      addCode(Img, Physical, {Syscall});
+      addCode(Img, 0x80, {VectorLui});
+
+      const uint32_t PC = 0xa0000000u | Physical;
+      const HistoricalTLB NoMappedPages{{}, 0};
+      MIPSSystemContext C;
+      C.HistoricalMMU = &NoMappedPages;
+      C.Historical = HistoricalSchedule::fromSnapshot(
+          1, {}, HistoricalCP0{HistoricalProcessor::R30xx, 0, 0, 0, {}, {}});
+      ASSERT_TRUE(C.Historical);
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      EXPECT_FALSE(execute(lift(Img, PC, {Syscall}), E, C));
+      const auto &CPU = *C.Historical->system();
+      EXPECT_EQ(CPU.EPC, PC);
+      EXPECT_EQ(CPU.Cause & 0x7c, 8u << 2);
+      ASSERT_EQ(CPU.ExceptionVector, 0x80000080u);
+      ASSERT_TRUE(execute(lift(Img, *CPU.ExceptionVector, {VectorLui}), E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::K0), 0xa0000000u);
+    }
+  }
+}
+
 // IDT AN-93, figures 1 and 2, reports bus addresses and 32-bit words.
 // Either byte serialization represents the listing. The CP0 values are
 // fixture inputs since the logic analyzer sampled the external bus.

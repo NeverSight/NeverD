@@ -1883,6 +1883,20 @@ against CPU recognition. The original reference memories are named
 [Tektronix 92DM74, figure 4-10](https://download.tek.com/manual/070809000.pdf#page=70),
 [figures 5-1 and 5-2](https://download.tek.com/manual/070809000.pdf#page=80).
 
+The same `R3000_Demo` acquisition shows two synchronous `SYSCALL` instructions
+at physical addresses `0x1fc14994` and `0x1fc14998`. The analyzer measured
+190 ns from each instruction sample to the first general-vector instruction
+at physical `0x80`. The two sample pairs are 1645–1651 and 2281–2287.
+For the first pair, the six relative timestamps are 30, 30, 30, 40, 30
+and 30 ns. At sample 1651 the probe reports `INST_RUN/EXC1W` and
+`0x3c1aa000` (`lui k0,0xa000`). The timestamps have 10 ns resolution.
+The regression replays both instruction pairs in each byte order and checks
+the exception PC, vector and resulting `k0`. The physical observations start
+at software traps. Measuring external IRQ recognition still requires the CPU
+input transition in the capture.
+[Two recorded intervals, figure 4-6](https://download.tek.com/manual/070809000.pdf#page=59),
+[individual samples, figure 4-11](https://download.tek.com/manual/070809000.pdf#page=72).
+
 The HP E2401A R3000 inverse-assembler disk contains three HP 16500 analyzer
 setups with labels for reset, interrupt and exception signals. All three
 contain channel configuration and symbols. None contains an acquisition
