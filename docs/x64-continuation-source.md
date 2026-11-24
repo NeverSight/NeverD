@@ -1277,6 +1277,41 @@ The generated step has the same code
 as the corresponding captured CPU selection and adds no runtime check.
 See the [QEMU capture procedure](qemu-save-snapshot.md#immediate-rtm-abort-at-the-saved-rip).
 
+## Observed XBEGIN invalid-opcode fault
+
+A QEMU/KVM instruction observation can resolve a single unprefixed x64
+`XBEGIN rel32` when RTM enumeration leaves its outcome open. Supply
+`qemu_xbegin_fault_v1` in a successful-RAM `kernel-events-v6` request. Both
+C routes deliver vector 6 through the live IDT, preserve RAX, save the
+original instruction PC and set RF in the stacked flags. The driver charges
+one attempted instruction and stops at handler entry. This binding applies to
+the selected site under the observed vCPU's RTM configuration, outside RTM/HLE.
+
+Capture on one stopped, diskless vCPU in 64-bit ring zero. Place hardware
+execution breakpoints at the fallthrough, the encoded abort target and the
+exception landing pads. Resume at the original instruction with IF and TF
+clear. Read the synchronized registers and the hardware stack frame at the
+first handler instruction. Single-stepping can itself abort a transaction.
+The observation requires a dedicated vector 6 interrupt gate, same-ring
+entry without IST and a quiescent guest. The producer owns the breakpoint
+setup, capture identity and the association between raw bytes and their
+guest addresses. [QEMU debugger](https://www.qemu.org/docs/master/system/gdb.html)
+
+| Capture field | Contents |
+| --- | --- |
+| `before`, `after` | Each object contains `cpu`, `rip`, `rsp`, `rax`, `eflags`, `cs`, `ss`, `cs_ar`, `cr4` and `efer`. `cs_ar` is the access-rights word (QEMU HMP segment flags shifted right by eight). |
+| `bytes` | The six instruction bytes read at the original RIP, in memory order as hex. |
+| `exception_idt` | The first 32 consecutive 16-byte gates at the guest IDTR base, as hex. Vector 6 must be the only present exception gate with the observed handler address. |
+| `frame` | The 40 bytes at the stopped RSP, as hex. The five little-endian words contain the saved RIP, CS, RFLAGS with RF, original RSP and SS. |
+| `load_base` | Optional original image base for a relocated capture. |
+
+The exporter checks these fields against one another and the selected image
+bytes. The manifest records the captured vCPU, image PC, bytes, vector and
+observed handler. Replay reads its own V6 descriptor tables and stack. The
+record fits inside the request and can be reused offline. Ordinary exports
+do not contact QEMU. A capture from a new vCPU describes that experiment.
+An older VM invocation requires its own evidence.
+
 ## Complete selected RTM attempts
 
 `native_rtm_regions: true` separately binds complete transactions, nested
