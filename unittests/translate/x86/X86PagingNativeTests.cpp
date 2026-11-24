@@ -44,8 +44,10 @@
 #include "X86KVMBacking.h"
 
 #include <cerrno>
+#include <cpuid.h>
 #include <fcntl.h>
 #include <linux/kvm.h>
+#include <sched.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>

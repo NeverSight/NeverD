@@ -98,15 +98,19 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32,
   I.INT = Unlocked && I.Body.size() == 2 && I.Body[0] == 0xcd;
   I.UD =
       Unlocked && I.Body.size() == 2 && I.Body[0] == 0x0f && I.Body[1] == 0x0b;
-  if (Unlocked && I.Body.size() >= 3 && I.Body[0] == 0x0f &&
-      I.Body[1] == 0xb9) {
-    // UD1 encodes a ModRM operand but does not read it. Parse its complete
-    // address grammar to authenticate the instruction extent before #UD.
-    detail::X86LegacyEncoding Undefined(Instruction, Code32);
-    Undefined.value(2);
-    detail::X86LegacyAddress Ignored;
-    Undefined.modRM(Ignored);
-    I.UD = Undefined.done();
+  if (Unlocked && I.Body.size() >= 2 && I.Body[0] == 0x0f &&
+      (I.Body[1] == 0xb9 || I.Body[1] == 0xff)) {
+    // UD1 always needs its encoded ModR/M bytes. UD0 may instead raise #UD
+    // after its opcode; the execution profile decides which bytes are fetched.
+    if (I.Body[1] == 0xff && I.Body.size() == 2) {
+      I.UD = true;
+    } else if (I.Body.size() >= 3) {
+      detail::X86LegacyEncoding Undefined(Instruction, Code32);
+      Undefined.value(2);
+      detail::X86LegacyAddress Ignored;
+      Undefined.modRM(Ignored);
+      I.UD = Undefined.done();
+    }
   }
   I.IRET = Unlocked && I.Body.size() == 1 && I.Body[0] == 0xcf;
   I.RETF = Unlocked && ((I.Body.size() == 1 && I.Body[0] == 0xcb) ||
@@ -256,6 +260,16 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   auto &[DebugRegister, ControlRegister, Segment, Scalar, FastSystem, String,
          Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD, HLT, LockedHLT,
          MSR] = *Decoded;
+  const bool UD0 = UD && Body.size() >= 2 && Body[0] == 0x0f &&
+                   Body[1] == 0xff;
+  if (UD0 &&
+      (!Options.UD0Fetch ||
+       (*Options.UD0Fetch != X86LegacyUD0FetchProfile::OpcodeOnly &&
+        *Options.UD0Fetch != X86LegacyUD0FetchProfile::CompleteModRM)))
+    return invalid("UD0 requires a bound instruction-fetch profile");
+  if (UD0 && *Options.UD0Fetch == X86LegacyUD0FetchProfile::CompleteModRM &&
+      Body.size() == 2)
+    return invalid("UD0 complete-ModR/M profile requires encoded address bytes");
   if (Non64Mode) {
     using Op = detail::X86LegacyScalarOperation;
     if (State.Mpx || FastSystem || Port || String || Mpx ||
@@ -593,7 +607,11 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
           false);
     }
   }
-  for (unsigned I = 0; !Resuming && !R.Exception && I != Instruction.size();
+  const unsigned FetchBytes =
+      UD0 && *Options.UD0Fetch == X86LegacyUD0FetchProfile::OpcodeOnly
+          ? Instruction.size() - Body.size() + 2
+          : Instruction.size();
+  for (unsigned I = 0; !Resuming && !R.Exception && I != FetchBytes;
        ++I) {
     uint8_t Byte = 0;
     auto Got =

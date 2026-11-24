@@ -233,6 +233,51 @@ TEST_F(X86LegacyExecutionTest, UD1FaultsWithoutReadingItsAddress) {
   }
 }
 
+TEST_F(X86LegacyExecutionTest, UD0FetchProfileSelectsTheOriginalFault) {
+  const std::vector<uint8_t> Bytes{0x0f, 0xff, 0x00};
+  for (auto Profile : {X86LegacyUD0FetchProfile::OpcodeOnly,
+                       X86LegacyUD0FetchProfile::CompleteModRM}) {
+    resetLegacyState();
+    O.UD0Fetch = Profile;
+    S.EIP = 0x1ffe;
+    S.Core.GPR[0] = 0x12345000; // The encoded data operand is unmapped.
+    put(0x11008, 0, GuestScalarWidth::I32); // The ModR/M fetch page is absent.
+    const auto Got = run(Bytes);
+    ASSERT_EQ(Got.Status, X86LegacyExecutionStatus::EventDelivered);
+    ASSERT_TRUE(Got.Exception);
+    EXPECT_EQ(Got.Exception->Vector,
+              Profile == X86LegacyUD0FetchProfile::OpcodeOnly ? 6 : 14);
+    EXPECT_EQ(Got.DeliveredVector, Got.Exception->Vector);
+    EXPECT_EQ(S.CR2, Profile == X86LegacyUD0FetchProfile::OpcodeOnly
+                         ? 0x12345678u
+                         : 0x2000u);
+    EXPECT_EQ(get(S.Core.GPR[4] +
+                  (Profile == X86LegacyUD0FetchProfile::OpcodeOnly ? 0 : 4)),
+              0x1ffeu);
+  }
+  resetLegacyState();
+  O.UD0Fetch.reset();
+  auto Unbound = executeX86LegacyInstruction(S, *M, Bytes, O);
+  EXPECT_FALSE(bool(Unbound));
+  if (!Unbound)
+    llvm::consumeError(Unbound.takeError());
+  O.UD0Fetch = X86LegacyUD0FetchProfile::CompleteModRM;
+  auto Incomplete = executeX86LegacyInstruction(S, *M, {0x0f, 0xff}, O);
+  EXPECT_FALSE(bool(Incomplete));
+  if (!Incomplete)
+    llvm::consumeError(Incomplete.takeError());
+  O.UD0Fetch = X86LegacyUD0FetchProfile::OpcodeOnly;
+  EXPECT_EQ(run({0x0f, 0xff}).DeliveredVector, 6);
+  for (const auto &Malformed :
+       std::vector<std::vector<uint8_t>>{{0x0f, 0xff, 0x80},
+                                         {0x0f, 0xff, 0x04},
+                                         {0x0f, 0xff, 0xc0, 0x90}}) {
+    auto Error = validateX86LegacyInstructionEncoding(Malformed, true);
+    ASSERT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+  }
+}
+
 TEST_F(X86LegacyExecutionTest, UnboundSTINMIPolicyNeverGuessesEligibility) {
   O.NMIBlockedBySTI.reset();
   S.STIBlocked = true;

@@ -675,6 +675,36 @@ TEST_P(X86LegacySourceTest, OriginalUD1FaultsWithoutReadingMemory) {
   }
 }
 
+TEST_P(X86LegacySourceTest, OriginalUD0UsesTheBoundFetchProfile) {
+  for (bool Code32 : {false, true})
+    for (auto Profile : {X86LegacyUD0FetchProfile::OpcodeOnly,
+                         X86LegacyUD0FetchProfile::CompleteModRM}) {
+      resetLegacyState();
+      if (!Code32)
+        S.Core.Segments[1].Attributes &= ~0x4000;
+      std::vector<uint8_t> Bytes;
+      if (!Code32)
+        Bytes.push_back(0x67);
+      Bytes.push_back(0x0f);
+      Bytes.push_back(0xff);
+      if (Profile == X86LegacyUD0FetchProfile::CompleteModRM)
+        Bytes.push_back(0x00);
+      Driver Run = nullptr;
+      ASSERT_NO_FATAL_FAILURE(
+          compile({{0x1000, Code32 ? 32u : 16u, Bytes}}, Run));
+      O.UD0Fetch = Profile;
+      S.Core.GPR[0] = 0x12345000; // No mapped encoded data operand.
+      X86LegacySourceExecution Context(S, *M, O);
+      uint64_t Budget = 1;
+      ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+      EXPECT_EQ(Budget, 0u);
+      EXPECT_EQ(Context.lastResult().DeliveredVector, 6);
+      EXPECT_FALSE(Context.lastResult().InstructionCompleted);
+      EXPECT_EQ(S.CR2, 0x12345678u);
+      EXPECT_EQ(get(S.Core.GPR[4]), 0x1000u);
+    }
+}
+
 TEST_P(X86LegacySourceTest, MachineStatusChangesReachFollowingInstructions) {
   for (bool Code32 : {false, true})
     for (bool Operand32 : {false, true}) {
