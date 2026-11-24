@@ -364,25 +364,27 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
 
     def test_cpta_distinguishes_product_overflow_from_pointer_addition(self):
         policy = native.POLICY["cpta_probe"]
-        for addition, product, disagreement, status in (
-                (True, True, False, "passed"), (True, False, False, "passed"),
-                (False, False, False, "unavailable"), (False, True, False, "failed"),
-                (True, True, True, "failed")):
+        for addition, product, writeback, disagreement, status in (
+                (True, True, True, False, "passed"), (True, False, True, False, "passed"),
+                (True, True, False, False, "unavailable"), (False, False, False, False, "unavailable"),
+                (False, True, True, False, "failed"), (True, True, True, True, "failed")):
             def scalar_probe(arch, opt, mode):
                 if mode == policy["writeback_mode"]:
-                    return 0, [policy["writeback_started"], policy["writeback_checked"]]
+                    marker = policy["writeback_checked"] if writeback else policy["writeback_unchecked"]
+                    return 0, [policy["writeback_started"], marker]
                 return 0, [mode, *(row[2 + addition] for row in policy["vectors"])]
 
             def product_probe(arch, opt, mode):
                 checked = product and not (disagreement and opt == policy["report_optimization"])
                 return 0, [mode, *(row[mode][checked] for row in policy["product_vectors"])]
 
-            with self.subTest(addition=addition, product=product, disagreement=disagreement), \
+            with self.subTest(addition=addition, product=product, writeback=writeback, disagreement=disagreement), \
                     tempfile.TemporaryDirectory() as directory:
                 report = self.mock_cpta_probe(Path(directory), scalar_probe, product_probe)
                 self.assertEqual(report["status"], native.POLICY[status])
                 self.assertEqual(report[policy["qualified_key"]], status == "passed")
-                self.assertEqual(report[policy["product_qualified_key"]], status == "passed" and product)
+                self.assertEqual(report[policy["product_qualified_key"]], status != "failed" and product)
+                self.assertEqual(report[policy["writeback_qualified_key"]], writeback)
                 profile = report["profiles"][policy["x1"]]
                 for name in policy["product_instructions"]:
                     self.assertEqual(profile[policy["product_results_key"]][name],
