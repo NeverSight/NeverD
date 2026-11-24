@@ -251,13 +251,28 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
             if (OI + 1 < Blk.Ops.size() &&
                 Blk.Ops[OI + 1].Opcode == NdOp::RETURN)
               continue;
-            // A call already remodeled (FP/wide/struct) produces a
-            // non-register output; only the default single-register CALL is a
-            // candidate.
-            if (Op.Output.Kind != MedVar::Reg)
-              continue;
+            // A non-register result already remodeled as a wide value
+            // must not be replaced. The callee can also have no default
+            // integer output; in that case require this call's own complete
+            // floating aggregate candidate, not just agreement at another site.
             auto It = MRByEntry.find(Op.Inputs[0].ConstVal);
             if (It == MRByEntry.end())
+              continue;
+            const MedStructReturnCandidate *Candidate = nullptr;
+            for (const MedStructReturnCandidate &C : MF.StructReturnCandidates)
+              if (C.CallSiteId == Op.CallSiteId) {
+                Candidate = &C;
+                break;
+              }
+            if (Op.Output.Kind != MedVar::Reg &&
+                (Op.Output.Size || !Candidate ||
+                 Candidate->HasUnobservedFields ||
+                 !It->second.front().IsFP ||
+                 !std::equal(It->second.begin(), It->second.end(),
+                             Candidate->Fields.begin(), Candidate->Fields.end(),
+                             [](const MedReturnReg &A, const MedVar &B) {
+                               return A.RegOff == B.RegOff && A.Size == B.Size;
+                             })))
               continue;
             uint32_t SiteId = Op.CallSiteId;
             va_t CallAddr = Op.Addr;
@@ -276,12 +291,6 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
             Op.RegisterReturnFields =
                 std::make_shared<const std::vector<MedReturnReg>>(Fields);
             std::vector<MedOp> Extracts;
-            const MedStructReturnCandidate *Candidate = nullptr;
-            for (const MedStructReturnCandidate &C : MF.StructReturnCandidates)
-              if (C.CallSiteId == Op.CallSiteId) {
-                Candidate = &C;
-                break;
-              }
             uint16_t Cum = 0;
             for (const auto &F : Fields) {
               MedVar Out;
