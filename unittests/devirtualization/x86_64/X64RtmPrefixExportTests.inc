@@ -186,7 +186,7 @@ TEST_F(X64ContinuationExportTest,
 int main(int argc, char **argv) {
   const int strict=argc==2,expected=strict ? atoi(argv[1]) : -1;
   unsigned a,b,c,d;
-  const int supported=__get_cpuid_count(7,0,&a,&b,&c,&d) && (b&(1U<<11));
+  const int supported=__get_cpuid_count(7,0,&a,&b,&c,&d) && ((b|d)&(1U<<11));
   if(strict)CHECK(supported==expected);
   void *code=mmap(0,4096,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
   CHECK(code!=MAP_FAILED && sizeof(original_bytes)<=4096);

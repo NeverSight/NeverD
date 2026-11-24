@@ -16,6 +16,7 @@ relevant symbols with `rg -n`, then read the surrounding section.
 | Choose tests, targets, labels, or fixtures | [Test layout](docs/testing.md#test-layout) and [incremental CTest workflow](docs/testing.md#incremental-ctest-workflow) |
 | Change C/C++ code, headers, limits, or defaults | [Code style](CONTRIBUTING.md#code-style), including header layout and policy ownership |
 | Change a hot path, container, index, parallel loop, cache or threshold; claim or review a speedup | [Performance skill](.agents/skills/neverd-performance/SKILL.md) |
+| Change integer return recovery across shared exits, register views, variable shifts or MIPS stack-saved return addresses | [Return recovery skill](.agents/skills/neverd-return-recovery/SKILL.md) |
 | Change or review Windows SEH, `_local_unwind`, Control Flow Guard, or a rewrite of a PE with exception tables | [Windows SEH skill](.agents/skills/neverd-windows-seh/SKILL.md) |
 | Change a GitHub workflow, action pin, or workflow trigger | [Workflow trust skill](.agents/skills/neverd-workflow-trust/SKILL.md) |
 | Change CLI behavior or usage | [CLI usage](README.md#cli) |

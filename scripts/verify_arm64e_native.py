@@ -9,6 +9,7 @@ from pathlib import Path
 import platform
 import plistlib
 import re
+import signal
 import struct
 import subprocess
 import tempfile
@@ -57,9 +58,13 @@ def command(products, output, label, argv, timeout, env=None):
     return result
 
 
+def killed_before_entry(result):
+    return result.returncode == -signal.SIGKILL and not result.stdout.strip()
+
+
 def capability_status(result, contract):
     started = contract["started"] in result.stdout.splitlines()
-    if result.returncode < 0 and not started:
+    if killed_before_entry(result):
         return POLICY["unavailable"]
     if not started:
         return POLICY["failed"]
@@ -92,7 +97,7 @@ def check_binary(binary):
 def cursor_observation(result, recipe):
     policy = POLICY["cursor_probe"]
     lines = result.stdout.splitlines()
-    if not lines and result.returncode < 0:
+    if killed_before_entry(result):
         return {"status": POLICY["unavailable"]}
     if (lines == [policy["started"]] and
             result.returncode == policy["unavailable_code"] and
@@ -110,7 +115,7 @@ def cursor_observation(result, recipe):
                 any(type(v) is not int or v < 0 or v > policy["samples"] for v in values)):
             raise ValueError(policy["invalid_report"])
     required = policy["required"] + (
-        policy["explicit_required"] if recipe == policy["recipe_explicit"] else [])
+        policy["pc_controls"] if recipe == policy["recipe_explicit"] else [])
     if any(not all(data[name]) for name in required):
         raise ValueError(policy["invalid_report"])
     return {"status": POLICY["passed"], **data}
@@ -149,8 +154,9 @@ def probe_signal_cursor(output):
                     optimization=optimization, recipe=recipe)] for optimization in policy["optimizations"]]
             pacm = observations(policy["recipe_pacm"])
             report[policy["baseline_key"]] = all(p["status"] == POLICY["passed"] for p in pacm)
-            report[policy["pacm_pc_key"]] = all(p["status"] == POLICY["passed"] and
-                                               all(p["pc_rejected"]) for p in pacm)
+            report[policy["pacm_pc_key"]] = all(
+                p["status"] == POLICY["passed"] and all(all(p[name]) for name in policy["pc_controls"])
+                for p in pacm)
             report[policy["explicit_key"]] = all(
                 p["status"] == POLICY["passed"] for p in observations(policy["recipe_explicit"]))
             report["status"] = POLICY["passed"] if report[policy["baseline_key"]] else POLICY["unavailable"]
@@ -232,7 +238,7 @@ def probe_cpta(output):
                     continue
                 lines = result.stdout.splitlines()
                 if not lines:
-                    if result.returncode < 0:
+                    if killed_before_entry(result):
                         profile["outcome"] = policy["loader_unavailable"]
                     continue
                 if lines[0] != policy["started"]:

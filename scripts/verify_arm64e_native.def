@@ -510,6 +510,7 @@
     "mode": "probe-cursor",
     "source": "unittests/lift/aarch64/AArch64SignalCursorNative.def",
     "source_files": [
+      "unittests/lift/aarch64/AArch64SignalCursorOracle.def",
       "include/neverd/runtime/DarwinArm64eSignalCursor.h",
       "include/neverd/runtime/DarwinArm64eSignatures.def",
       "include/neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def",
@@ -550,15 +551,17 @@
     "samples": 64,
     "counts": [
       "signed",
+      "cfa_rejected",
       "pc_rejected",
       "key_rejected",
       "recipe_rejected"
     ],
     "required": [
       "signed",
+      "cfa_rejected",
       "key_rejected"
     ],
-    "explicit_required": [
+    "pc_controls": [
       "pc_rejected",
       "recipe_rejected"
     ],

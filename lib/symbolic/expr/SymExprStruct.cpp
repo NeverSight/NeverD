@@ -609,15 +609,20 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
         (Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Add) &&
         numOperands(Packed) == 2 && op(operand(Packed, 0)) == SymOp::And &&
         op(operand(Packed, 1)) == SymOp::And;
-    if (!Shifts && !Multi && !Masked)
+    if (!Turn && !Shifts && !Multi && !Masked)
       break;
     const unsigned Have = width(Packed);
     uint64_t At = Low;
     if (Turn) {
-      const auto Count = operand(A, 1);
-      if (!isConst(Count))
+      const auto Start = node(A).Aux;
+      if (!Start || Width == Have)
         break;
-      At = (At + node(A).Aux) % Have;
+      At = (At + Start) % Have;
+      if (At + Width <= Have) {
+        A = Packed;
+        Low = At;
+        continue;
+      }
     }
     std::optional<detail::WordWindow> Selected;
     if (Shifts)
@@ -625,14 +630,21 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
     else if (Masked)
       Selected =
           projectMaskedPair(*this, Packed, At, Width, RemainingSplits, Read);
-    else {
+    else if (Multi) {
       Selected = projectShiftedPrefix(*this, Packed, At, Width);
       if (!Selected && (Op == SymOp::Or || Op == SymOp::Xor))
         Selected = projectMaskedBitwise(*this, Packed, At, Width,
                                         RemainingSplits, Read);
     }
-    if (!Selected)
+    if (!Selected) {
+      // A crossing slice starts at the same source bit even if the
+      // original rotation placed its low end in the middle of the word.
+      if (Turn && Low) {
+        A = mkRor(Packed, mkConst(Have, At));
+        Low = 0;
+      }
       break;
+    }
     A = Selected->Word;
     Low = Selected->Offset;
     if (width(A) < Have) {

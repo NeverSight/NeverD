@@ -1923,6 +1923,99 @@ TEST(SymExpr, NativeNormalizedResultsRetainWidthBoundaries) {
   }
 }
 
+TEST(SymExpr, ComposedRotationsUseEveryCountBitAndKeepDynamicCounts) {
+  for (const unsigned W : {5u, 8u, 65u, 513u}) {
+    SCOPED_TRACE(W);
+    SymContext C;
+    const auto X = C.mkVar("x", W);
+    const auto First = llvm::APInt::getOneBitSet(129, 93) + 3;
+    const auto Second = llvm::APInt(16, 2 * W + 1);
+    const unsigned A = First.urem(W), B = Second.urem(W);
+    const auto Word = llvm::APInt::getSignMask(W) | llvm::APInt(W, 11);
+    for (bool LeftFirst : {false, true})
+      for (bool LeftSecond : {false, true}) {
+        const auto Inner = LeftFirst ? C.mkRol(X, C.mkConst(First))
+                                     : C.mkRor(X, C.mkConst(First));
+        const auto Result = LeftSecond ? C.mkRol(Inner, C.mkConst(Second))
+                                       : C.mkRor(Inner, C.mkConst(Second));
+        const unsigned Start =
+            ((LeftFirst ? W - A : A) + (LeftSecond ? W - B : B)) % W;
+        if (A && B)
+          EXPECT_EQ(Result, C.mkRor(X, C.mkConst(W, Start)));
+        EXPECT_EQ(C.eval(Result, {Word}), Word.rotr(Start));
+        for (unsigned Low : {0u, 1u, W / 2})
+          for (unsigned Size : {1u, W - Low}) {
+            const auto Field = C.mkExtract(Result, Low, Size);
+            EXPECT_EQ(C.eval(Field, {Word}),
+                      Word.rotr(Start).extractBits(Size, Low));
+            const unsigned At = (Start + Low) % W;
+            if (At + Size <= W)
+              EXPECT_EQ(Field, C.mkExtract(X, At, Size));
+          }
+        EXPECT_EQ(C.mkRol(C.mkRor(X, C.mkConst(First)), C.mkConst(First)), X);
+      }
+    const auto N = C.mkVar("count", 129);
+    const auto Dynamic = C.mkRol(C.mkRor(X, N), C.mkConst(Second));
+    EXPECT_EQ(C.eval(Dynamic, {Word, First}), Word.rotr(A).rotl(B));
+    EXPECT_EQ(C.eval(Dynamic, {Word, llvm::APInt(129, 0)}), Word.rotl(B));
+  }
+}
+
+TEST(SymExpr, OnlyComplementaryLogicalShiftsRotateTheCompleteWord) {
+  SymContext C;
+  const auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  const auto Shift = C.mkConst(8, 5);
+  const auto L = C.mkShl(X, C.mkConst(8, 3)), R = C.mkLShr(X, Shift);
+  const auto Rotation = C.mkRor(X, Shift);
+  EXPECT_EQ(C.mkOr(L, R), Rotation);
+  EXPECT_EQ(C.mkXor(R, L), Rotation);
+  EXPECT_EQ(C.mkAdd(L, R), Rotation);
+  const auto Other = C.mkOr(L, C.mkLShr(Y, Shift));
+  const auto Signed = C.mkXor(L, C.mkAShr(X, Shift));
+  const auto Overlap = C.mkAdd(L, C.mkLShr(X, C.mkConst(8, 4)));
+  const auto Multiple = C.mkOr(C.mkMul(X, C.mkConst(8, 24)), R);
+  for (unsigned I = 0; I < 256; ++I) {
+    const unsigned J = I ^ 0xff;
+    const std::array<uint64_t, 2> Inputs{I, J};
+    EXPECT_EQ(C.evalU64(Other, Inputs), ((I << 3) | (J >> 5)) & 255);
+    const auto SignShift = llvm::APInt(8, I).ashr(5).getZExtValue();
+    EXPECT_EQ(C.evalU64(Signed, Inputs), ((I << 3) ^ SignShift) & 255);
+    EXPECT_EQ(C.evalU64(Overlap, Inputs), ((I << 3) + (I >> 4)) & 255);
+    EXPECT_EQ(C.evalU64(Multiple, Inputs), ((I * 24) | (I >> 5)) & 255);
+  }
+}
+
+TEST(SymExpr, WideScaledFieldsRespectEveryConsumerAndPartialProductLimb) {
+  for (const unsigned Bits : {7u, 63u, 65u, 129u, 513u}) {
+    SCOPED_TRACE(Bits);
+    SymContext C;
+    const unsigned W = 2 * Bits + 3;
+    const auto X = C.mkVar("x", Bits), Y = C.mkVar("y", Bits + 3);
+    const auto Packed = C.mkConcat(Y, X);
+    const auto Signed = C.mkSExt(X, W), Unsigned = C.mkZExt(Y, W);
+    // One consumer observes only three bits, another sees the sign and
+    // both joined lanes. A second shift straddles the product's last limb.
+    const auto Scale = llvm::APInt::getOneBitSet(W, W - 3);
+    const auto WideScale = llvm::APInt(W, 3).shl(W - Bits - 1);
+    const auto Low = C.mkMul({C.mkConst(Scale), Signed, Unsigned, Packed});
+    const auto Full = C.mkXor(Packed, C.mkAdd(Signed, Unsigned));
+    const auto Boundary = C.mkMul({C.mkConst(WideScale), Signed, Packed});
+    SymEvalPlan Narrow(C, Low);
+    SymEvalPlan Shared(C, C.mkAdd({Low, Full, Boundary}));
+    for (unsigned I : {0u, 1u, 2u, 3u, 0u, 2u}) {
+      const auto A =
+          I & 1 ? llvm::APInt::getAllOnes(Bits) : llvm::APInt(Bits, I);
+      const auto B = I & 2 ? llvm::APInt::getSignMask(Bits + 3) | 3
+                           : llvm::APInt(Bits + 3, I);
+      const std::array<llvm::APInt, 2> Values{A, B};
+      const auto P = B.concat(A), S = A.sext(W), U = B.zext(W);
+      const auto L = Scale * S * U * P;
+      EXPECT_EQ(Narrow.eval(Values), L);
+      EXPECT_EQ(Shared.eval(Values), L + (P ^ (S + U)) + WideScale * S * P);
+    }
+  }
+}
+
 TEST(SymExpr, WideConstantRotationCountsIncludeEveryActiveLimb) {
   SymContext C;
   for (unsigned W : {65u, 128u, 257u, 1024u}) {

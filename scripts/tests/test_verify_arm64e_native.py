@@ -99,8 +99,36 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
         self.assertEqual(native.cursor_observation(result(), CASES["cursor_recipes"][1])["status"],
                          native.POLICY["passed"])
 
+    def test_pacm_qualification_requires_both_pc_controls_for_each_key_and_build(self):
+        policy = native.POLICY["cursor_probe"]
+        for weak in (None, *policy["pc_controls"]):
+            for key in range(len(CASES["cursor_observation"]["signed"])):
+                with self.subTest(weak=weak, key=key), tempfile.TemporaryDirectory() as directory:
+                    def run(products, output, label, argv, timeout):
+                        if label.endswith(native.POLICY["compile_suffix"]):
+                            Path(argv[-1]).write_bytes(struct.pack(
+                                native.POLICY["header_format"], native.POLICY["macho_magic"],
+                                native.POLICY["cpu_type"], native.POLICY["cpu_subtype"]))
+                            return subprocess.CompletedProcess(argv, 0, "", "")
+                        counts = dict(CASES["cursor_observation"])
+                        for field in policy["pc_controls"]:
+                            counts[field] = list(counts["signed"])
+                        if weak and label == policy["profile_label"].format(
+                                optimization=policy["optimizations"][-1], recipe=policy["recipe_pacm"]):
+                            counts[weak][key] = 0
+                        return subprocess.CompletedProcess(
+                            argv, 0, policy["started"] + "\n" + json.dumps(counts) + "\n", "")
+                    with mock.patch.object(native.platform, "system", return_value=native.POLICY["host_os"]), \
+                            mock.patch.object(native.platform, "machine", return_value=native.POLICY["host_arches"][0]), \
+                            mock.patch.object(native, "command", side_effect=run):
+                        report = native.probe_signal_cursor(Path(directory))
+                    self.assertTrue(report[policy["baseline_key"]])
+                    self.assertEqual(report[policy["pacm_pc_key"]], weak is None)
+
     def test_cursor_does_not_accept_a_partial_or_unsigned_observation(self):
-        for observation in CASES["cursor_invalid_observations"]:
+        wrong_cfa = [{**CASES["cursor_observation"], "cfa_rejected": counts}
+                     for counts in CASES["cursor_invalid_cfa_counts"]]
+        for observation in [*CASES["cursor_invalid_observations"], *wrong_cfa]:
             result = subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
                                                  "\n" + json.dumps(observation) + "\n", "")
             with self.subTest(observation=observation), self.assertRaises(ValueError):
@@ -117,6 +145,13 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
             result.returncode = code
             with self.subTest(code=code), self.assertRaises(ValueError):
                 native.cursor_observation(result, CASES["cursor_recipes"][1])
+
+    def test_cursor_prelaunch_fault_is_a_failure(self):
+        for code in CASES["cursor_prelaunch_failures"]:
+            result = subprocess.CompletedProcess([], code, "", "")
+            for recipe in CASES["cursor_recipes"]:
+                with self.subTest(code=code, recipe=recipe), self.assertRaises(ValueError):
+                    native.cursor_observation(result, recipe)
 
     def test_cpta_requires_checked_results_from_the_actual_x1_slice(self):
         policy = native.POLICY["cpta_probe"]
@@ -186,21 +221,25 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
             if label.endswith(policy["writeback_suffix"]):
                 return subprocess.CompletedProcess(argv, 0, policy["writeback_unchecked"], "")
             if label == policy["x1"]:
+                if prelaunch_fault:
+                    return subprocess.CompletedProcess(argv, prelaunch_fault, "", "")
                 raise OSError(policy["bad_cpu_type_errno"], "")
             return subprocess.CompletedProcess(argv, policy["undefined_instruction"],
                                                policy["started"], "")
 
-        with tempfile.TemporaryDirectory() as temporary, \
-                mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
-                mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
-                mock.patch.object(native, "command", side_effect=run):
-            report = native.probe_cpta(Path(temporary))
-            self.assertEqual(report["status"], native.POLICY["unavailable"])
-            self.assertFalse(report[policy["observed_key"]])
-            self.assertFalse(report[policy["qualified_key"]])
-            for arch, profile in report["profiles"].items():
-                self.assertEqual(profile["outcome"],
-                                 policy["loader_unavailable" if arch == policy["x1"] else "isa_unavailable"])
+        for prelaunch_fault in (None, *CASES["cursor_prelaunch_failures"]):
+            with tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                    mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                    mock.patch.object(native, "command", side_effect=run):
+                report = native.probe_cpta(Path(temporary))
+                self.assertEqual(report["status"], native.POLICY["failed" if prelaunch_fault else "unavailable"])
+                self.assertFalse(report[policy["observed_key"]])
+                self.assertFalse(report[policy["qualified_key"]])
+                for arch, profile in report["profiles"].items():
+                    self.assertEqual(profile["outcome"],
+                                     policy[("unexpected" if prelaunch_fault else "loader_unavailable")
+                                        if arch == policy["x1"] else "isa_unavailable"])
 
     def test_probe_keeps_startup_and_dlopen_contracts_distinct(self):
         contract = native.fixture_contract()

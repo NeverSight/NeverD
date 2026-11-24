@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure reset-to-fetch on the two published Tektronix TLA waveforms."""
+"""Measure reset release to the first external boot-read request on two TLA waveforms."""
 
 import argparse
 import hashlib
@@ -31,7 +31,7 @@ def first_edge(pix, samples, columns, high_y, low_y, initial_high):
     raise ValueError("no transition in the acquisition window")
 
 
-def measure(path, sha256, page, columns, ns_per_pixel, reset_rows, request_rows):
+def measure(path, sha256, page, columns, ns_per_pixel, reset_rows, request_rows, request_signal):
     source = path.read_bytes()
     if hashlib.sha256(source).hexdigest() != sha256:
         raise ValueError(f"{path}: unexpected probe manual edition")
@@ -48,6 +48,10 @@ def measure(path, sha256, page, columns, ns_per_pixel, reset_rows, request_rows)
     return {
         "pdf_page": page,
         "ns_per_pixel": ns_per_pixel,
+        "start_event": {"kind": "reset_release", "signal": "ResetB", "edge": "rising"},
+        "end_event": {
+            "kind": "external_boot_read_request", "signal": request_signal, "edge": "falling",
+        },
         "reset_release_x_px": release,
         "first_valid_request_x_px": request,
         "interval_ns": sum(bounds) / 2,
@@ -67,12 +71,12 @@ def main():
         "R4300": measure(
             args.r4300_manual,
             "95c7ae1667dbd3722d0320df394293047fb3f2130ed3c47d50a7d8ce75fcfd97",
-            47, range(110, 621), 2, (376, 388), (250, 262),
+            47, range(110, 621), 2, (376, 388), (250, 262), "PValidB",
         ),
         "R4600": measure(
             args.r4xxx_manual,
             "85c1024fa15c3c4b994c4558c235303cff6df640ed1e60c8864e7004b4a234c7",
-            58, range(108, 621), 1, (328, 340), (184, 196),
+            58, range(108, 621), 1, (328, 340), (184, 196), "ValidOutB",
         ),
     }, indent=2))
 

@@ -779,9 +779,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
         if (Request->RtmSteps.Kind != X64RtmAbortSelection::Unadvertised)
           Functions.back().Name += "_guard";
         RtmSteps.push_back({Unit.Function.Name, std::move(*Pair)});
-        // A live check may return the untouched NativeInstruction boundary.
-        NativeBoundary =
-            Request->RtmSteps.Kind != X64RtmAbortSelection::Supported;
+        NativeBoundary = Request->RtmSteps.canDecline();
       }
     }
     Native += NativeBoundary;
@@ -1278,7 +1276,8 @@ typedef struct neverd_x64_event_v1 {
         {"provider", "neverd_x64_rtm_abort_environment_v6"},
         {"native_intrinsic", "llvm.x86.rtm.abort.pair"},
         {"regions", std::move(RtmAborts)},
-        {"domain", "CPUID RTM; outside RTM/HLE; no debug traps or faults; "
+        {"domain", "CPUID RTM or RTM_ALWAYS_ABORT; outside RTM/HLE; "
+                   "no debug traps or faults; "
                    "exact immutable pair; actual native abort status; one "
                    "environment invocation per pair"}};
   if (Request->NativeRtmRegions)

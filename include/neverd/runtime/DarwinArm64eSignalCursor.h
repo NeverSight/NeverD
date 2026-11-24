@@ -59,7 +59,7 @@ static inline bool ndDarwinArm64eStackSlot(uintptr_t CFA, ptrdiff_t Offset,
   if (__builtin_add_overflow(CFA, Offset, &Address) || Address < Low ||
       Address > High || sizeof(*Value) > High - Address)
     return false;
-  memcpy(Value, (const void *)Address, sizeof(*Value));
+  __builtin_memcpy_inline(Value, (const void *)Address, sizeof(*Value));
   return true;
 }
 

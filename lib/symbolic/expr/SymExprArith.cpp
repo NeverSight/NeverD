@@ -13,6 +13,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../SymFunnel.h"
 #include "SymExprCompare.h"
 #include "SymExprMask.h"
 
@@ -60,6 +61,8 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
   if (Ops.size() == 2) {
     SymRef A = Ops[0], B = Ops[1];
     assert(width(B) == W && "mkAdd operands must share a width");
+    if (const auto Rotated = detail::joinedRotation(*this, SymOp::Add, A, B))
+      return Rotated;
     if (isConst(B))
       std::swap(A, B);
     if (isConst(A)) {

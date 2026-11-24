@@ -259,7 +259,10 @@ For a single function, pass `--interaction-benchmark-function 0xADDRESS`
 with `--interaction-benchmark`. The workbench records the listing jump, then
 times the first F5 from disassembly, a second opening from disassembly, and
 an explicit F5 refresh inside the source pane. Each measurement ends when the
-complete source document at that entry paints.
+complete source document at that entry paints. Successful pseudocode samples also
+record `painted_monotonic_ns` at that point. A launcher on the same Linux host
+can subtract its pre-launch `CLOCK_MONOTONIC` timestamp to measure startup
+through the first full paint, including the listing jump.
 
 ## Against IDA
 

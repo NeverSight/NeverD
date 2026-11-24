@@ -1995,14 +1995,81 @@ def rotated_field_product(width, case, *, counted=False):
             word = f"{('zext', 'sext')[extension]}({field},{width})"
         factors.append(f"({offset}+({weight})*{word})")
     scale = ((3, 5, 7, -3)[variant] << (width - 2 * bits - 1)) % (1 << width)
+    return scaled_field_product(scale, factors, counted)
+
+
+def scaled_field_product(scale, factors, counted):
+    # The independent evaluator accepts the exact multiset without parsing
+    # a left-associated Python AST thousands of levels deep.
     if counted:
-        # Every factor has the full word width. A counted product gives the
-        # independent evaluator the exact multiset without a 7,573-deep AST.
         terms = ",".join(f"{term},{copies}" for term, copies in Counter(factors).items())
         product = f"scaled_product({scale:#x},{terms})"
     else:
         product = f"({scale:#x}*" + "*".join(factors) + ")"
     return product + "+(x^y)+2*(x&y)+(u|v)"
+
+
+def composed_rotation_product(width, case, *, counted=False):
+    """Products with differently composed rotations of eight overlapping coordinates."""
+    variant = case % 4
+    if width <= 64:
+        degree, bits = ((347, 6), (389, 8), (431, 10), (479, 12))[variant]
+    else:
+        degree = ((809, 887, 991, 1093) if width <= 513 else
+                  (7993, 8537, 9199, 10007))[variant]
+        bits = (19, 33, 53, 71)[variant]
+    axes = ("x", "(y+z)", "(u^v)", "((x&w)+z)", "((u|y)^x)", "((v-x)&w)",
+            "((x+y)^u)", "((v&z)-w)")
+    rooms = (bits, bits - 1, max(2, 3 * bits // 4), max(2, bits // 2), max(2, bits // 3),
+             max(2, bits // 4), bits - 1, max(2, bits // 2))
+    rng = random.Random(0x5BD1E + 379 * case + 41 * width)
+    pool_size = ((43, 61, 83, 103) if case < 8 else (197, 263, 347, 401))[variant]
+    pool = []
+    for j in range(pool_size):
+        k = j % len(axes)
+        room = rooms[k]
+        start = width - room if k % 2 else (11 + 7 * k + case) % (width - bits)
+        turn = (width - start - 1 if k in (1, 3) else
+                (7 + k + case) % width if k in (2, 6) else 0)
+        live = room if j < len(axes) else rng.randrange(max(1, room // 3), room + 1)
+        size = min(room, live + j % 4)
+        offset = rng.choice((-9, -5, 1, 3, 7, 11))
+        weight = rng.choice((-7, -3, 3, 5)) << (2 * bits + 1 - live)
+        pool.append((axes[k], start, turn, size, offset, weight, j % 4, 1 + 2 * j))
+
+    def rotate(word, target, key):
+        right = 0
+        for step in range(2 + key % 4):
+            left = (key >> step) & 1
+            shift = (key * 17 + step * 43 + 7) % (width - 1) + 1
+            right += -shift if left else shift
+            word = f"{('ror', 'rol')[left]}({word},{shift + width * (key % 3)})"
+        left = key % 3 == 0
+        last = ((right - target) if left else (target - right)) % width
+        return f"{('ror', 'rol')[left]}({word},{last + width * (1 + key % 3)})"
+
+    factors = []
+    for j in range(degree):
+        if j % pool_size == 0:
+            rng.shuffle(pool)
+        axis, start, turn, size, offset, weight, kind, key = pool[j % pool_size]
+        if case % 3 and j == degree // 2:
+            offset, weight, kind = 13, 12, 1
+        elif variant == 2 and j == degree // 3:
+            offset, weight, kind = 13, -20, 1
+        if variant == 3 and j == degree - 2:
+            offset = 6
+        if kind == 0:
+            word = rotate(axis, (start + turn) % width, key)
+        else:
+            field = f"extract({rotate(axis, turn, key)},{start},{size})"
+            if kind == 3:
+                word = f"concat(extract((u+{1 + key % 23}*v),{size},{width - size}),{field})"
+            else:
+                word = f"{('zext', 'sext')[kind - 1]}({field},{width})"
+        factors.append(f"({offset}+({weight})*{word})")
+    scale = ((3, 5, 7, -3)[variant] << (width - 2 * bits - 1)) % (1 << width)
+    return scaled_field_product(scale, factors, counted)
 
 
 def overlapping_field(width, case):
@@ -2347,7 +2414,7 @@ def main():
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
                  "funnel-window", "staggered-window", "signed-window", "joined-prefix", "masked-window", "blended-field", "overlapping-field", "masked-join",
                  "wrapped-masked-join", "mixed-valuation", "variable-width-product",
-                 "terminal-field-product", "rotated-field-product"),
+                 "terminal-field-product", "rotated-field-product", "composed-rotation-product"),
         default="complement",
     )
     args = parser.parse_args()
@@ -2377,6 +2444,7 @@ def main():
             "variable-width-product": (32, 64, 36865, 40961, 49153),
             "terminal-field-product": (32, 64, 513, 57345, 61441, 65536),
             "rotated-field-product": (32, 64, 513, 32769, 57345, 65536),
+            "composed-rotation-product": (32, 64, 513, 16385, 49153, 65536),
             "masked-window": (1537, 2049, 3073),
             "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
@@ -2440,16 +2508,17 @@ def main():
                 "mixed-valuation": lambda w, n: [mixed_valuation_product(w, i) for i in range(n)],
                 "variable-width-product": lambda w, n: [variable_width_product(w, i) for i in range(n)],
                 "rotated-field-product": lambda w, n: [rotated_field_product(w, i) for i in range(n)],
+                "composed-rotation-product": lambda w, n: [composed_rotation_product(w, i) for i in range(n)],
                 "terminal-field-product": lambda w, n: [terminal_field_product(w, i) for i in range(n)],
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]
             expressions = generate(width, args.count)
             path.write_text("\n".join(expressions) + "\n", encoding="utf-8")
-            semantic_inputs = (
-                [rotated_field_product(width, i, counted=True) for i in range(args.count)]
-                if args.family == "rotated-field-product" else expressions
-            )
+            counted_family = {"rotated-field-product": rotated_field_product,
+                              "composed-rotation-product": composed_rotation_product}.get(args.family)
+            semantic_inputs = ([counted_family(width, i, counted=True) for i in range(args.count)]
+                               if counted_family else expressions)
             row = {
                 "width": width,
                 "corpusSha256": digest(path),

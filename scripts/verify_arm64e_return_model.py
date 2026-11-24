@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Link the actual arm64e oracle objects on Darwin and execute them on Arm FVP."""
+"""Build arm64e return and frame-walk oracles on Darwin and execute them on Arm FVP."""
 
 import argparse
 import hashlib
@@ -61,12 +61,36 @@ def export_objects(binary, scratch, fixtures):
     return {family: exported[name] for family, name in names.items()}
 
 
+def compile_object(source, obj, flags=()):
+    subprocess.run([*CONFIG["compiler"], CONFIG["target"], CONFIG["march"], *flags,
+                    CONFIG["compile_only"], source, CONFIG["output_option"], obj], check=True)
+
+
+def link_guest(guest, entry, driver, obj):
+    subprocess.run([*CONFIG["linker"], *CONFIG["link_flags"], CONFIG["segment_address"],
+                    CONFIG["text_segment"], CONFIG["image_base"], CONFIG["output_option"], guest,
+                    entry, driver, obj], check=True)
+    check_macho(guest, CONFIG["executable_kind"])
+    # FVP loads the linked file at its physical base without a Darwin loader.
+    layout = subprocess.check_output([*CONFIG["segments"], guest], text=True)
+    segments = re.findall(CONFIG["size_pattern"], layout, re.MULTILINE)
+    base = int(CONFIG["image_base"], 0)
+    if (len(segments) != sum(line.startswith(CONFIG["segment_prefix"]) for line in layout.splitlines()) or
+            not any(s == CONFIG["text_segment"] for s, _, _ in segments) or
+            any(int(address, 0) != base + int(offset) for _, address, offset in segments)):
+        raise ValueError(CONFIG["bad_map"].format(path=guest))
+    symbols = subprocess.check_output([*CONFIG["symbols"], guest], text=True)
+    start, = (int(row.split()[0], 16) for row in symbols.splitlines()
+              if row.split()[-1] == CONFIG["reset_symbol"])
+    return {"entry": hex(start), "sha256": digest(guest),
+            "object_sha256": digest(obj)}
+
+
 def build(binary, output):
     if output.exists():
         raise FileExistsError(output)
     source = ROOT / CONFIG["guest_directory"]
     fixtures = ROOT.parent / CONFIG["fixture_directory"]
-    compiler = [*CONFIG["compiler"], CONFIG["target"], CONFIG["march"]]
     manifest = {"test_binary_sha256": digest(binary), "guests": {},
                 "sources": {CONFIG[key]: digest(source / CONFIG[key])
                             for key in ("guest_entry", "guest_driver", "guest_constants")}}
@@ -77,53 +101,69 @@ def build(binary, output):
         staged.mkdir()
         exports = export_objects(binary, scratch, fixtures)
         entry = scratch / CONFIG["entry_object"]
-        subprocess.run([*compiler, CONFIG["compile_only"], source / CONFIG["guest_entry"], CONFIG["output_option"], entry], check=True)
+        compile_object(source / CONFIG["guest_entry"], entry)
         drivers = {}
         for family in exports:
             driver = scratch / (family + CONFIG["test_object_extension"])
             flags = CONFIG["cases"][family]["defines"]
-            subprocess.run([*compiler, *CONFIG["driver_flags"], *flags, CONFIG["compile_only"],
-                            source / CONFIG["guest_driver"], CONFIG["output_option"], driver], check=True)
+            compile_object(source / CONFIG["guest_driver"], driver, [*CONFIG["driver_flags"], *flags])
             drivers[family] = driver
         for family, route, optimization in cases():
             name = "-".join((family, route, optimization))
             obj = exports[family] / route / (optimization + CONFIG["test_object_extension"])
             check_macho(obj, CONFIG["object_kind"])
             guest = staged / name
-            subprocess.run([*CONFIG["linker"], *CONFIG["link_flags"], CONFIG["segment_address"],
-                            CONFIG["text_segment"], CONFIG["image_base"], CONFIG["output_option"], guest,
-                            entry, drivers[family], obj], check=True)
-            check_macho(guest, CONFIG["executable_kind"])
-            # FVP loads the linked file at its physical base without a Darwin loader.
-            layout = subprocess.check_output([*CONFIG["segments"], guest], text=True)
-            segments = re.findall(CONFIG["size_pattern"], layout, re.MULTILINE)
-            base = int(CONFIG["image_base"], 0)
-            if (len(segments) != sum(line.startswith(CONFIG["segment_prefix"]) for line in layout.splitlines()) or
-                    not any(s == CONFIG["text_segment"] for s, _, _ in segments) or
-                    any(int(address, 0) != base + int(offset) for _, address, offset in segments)):
-                raise ValueError(CONFIG["bad_map"].format(path=guest))
-            symbols = subprocess.check_output([*CONFIG["symbols"], guest], text=True)
-            start, = (int(row.split()[0], 16) for row in symbols.splitlines()
-                      if row.split()[-1] == CONFIG["reset_symbol"])
-            manifest["guests"][name] = {"entry": hex(start), "sha256": digest(guest),
-                                       "object_sha256": digest(obj)}
+            manifest["guests"][name] = link_guest(guest, entry, drivers[family], obj)
         write_json(staged / CONFIG["manifest"], manifest)
         staged.rename(output)
 
 
-def run(model, guests, output):
+def build_cursor(output):
+    if output.exists():
+        raise FileExistsError(output)
+    cursor = CONFIG["cursor"]
+    source = ROOT / CONFIG["guest_directory"]
+    native = json.loads((ROOT / cursor["native_policy"]).read_text())["cursor_probe"]
+    fixture_dir = (ROOT.parent / native["source"]).parent
+    inputs = [source / CONFIG[key] for key in ("guest_entry", "guest_driver", "guest_constants")]
+    inputs.append(source / cursor["driver"])
+    inputs.extend(ROOT.parent / path for path in native["source_files"])
+    manifest = {"guests": {}, "sources": {str(path.relative_to(ROOT.parent)): digest(path) for path in inputs}}
+    with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+        scratch = Path(temporary)
+        staged = scratch / CONFIG["staging_directory"]
+        staged.mkdir()
+        entry = scratch / CONFIG["entry_object"]
+        compile_object(source / CONFIG["guest_entry"], entry, [cursor["define"]])
+        driver = scratch / (Path(CONFIG["guest_driver"]).stem + CONFIG["test_object_extension"])
+        compile_object(source / CONFIG["guest_driver"], driver, [*CONFIG["driver_flags"], cursor["define"]])
+        for optimization in CONFIG["optimizations"]:
+            name = cursor["name"].format(optimization=optimization)
+            obj = scratch / (name + CONFIG["test_object_extension"])
+            flags = [cursor["define"], *cursor["flags"], cursor["optimization_option"].format(optimization=optimization),
+                     cursor["include_option"], ROOT.parent / native["include"], cursor["include_option"], fixture_dir]
+            compile_object(source / cursor["driver"], obj, flags)
+            check_macho(obj, CONFIG["object_kind"])
+            manifest["guests"][name] = link_guest(staged / name, entry, driver, obj)
+        write_json(staged / CONFIG["manifest"], manifest)
+        staged.rename(output)
+
+
+def run(model, guests, output, cursor=False):
     output.mkdir()
     version = subprocess.check_output([model, *CONFIG["version_flags"]], text=True, stderr=subprocess.STDOUT)
     match = re.search(CONFIG["version_pattern"], version)
     if not match or match[1] != CONFIG["model_version"]:
         raise ValueError(CONFIG["bad_version"].format(version=version.strip()))
     manifest = json.loads((guests / CONFIG["manifest"]).read_text())
-    names = ["-".join(case) for case in cases()]
+    names = ([CONFIG["cursor"]["name"].format(optimization=opt) for opt in CONFIG["optimizations"]]
+             if cursor else ["-".join(case) for case in cases()])
     if set(manifest["guests"]) != set(names):
         raise ValueError(CONFIG["bad_inventory"])
     result = {"model_version": CONFIG["model_version"], "model_sha256": digest(model),
               "manifest_sha256": digest(guests / CONFIG["manifest"]), "observations": {}}
-    for label in [CONFIG["negative_case"] + CONFIG["negative_suffix"], *names]:
+    negative_case = names[0] if cursor else CONFIG["negative_case"]
+    for label in [negative_case + CONFIG["negative_suffix"], *names]:
         name = label.removesuffix(CONFIG["negative_suffix"])
         negative = name != label
         guest = guests / name
@@ -158,13 +198,19 @@ if __name__ == "__main__":
     options = CONFIG["commands"]
     link = commands.add_parser(options["build"])
     link.add_argument(options["tests"], type=Path, required=True)
+    cursor_link = commands.add_parser(options["build_cursor"])
     execute = commands.add_parser(options["run"])
-    execute.add_argument(options["model"], type=Path, required=True)
-    execute.add_argument(options["guests"], type=Path, required=True)
-    for command in (link, execute):
+    cursor_execute = commands.add_parser(options["run_cursor"])
+    for command in (execute, cursor_execute):
+        command.add_argument(options["model"], type=Path, required=True)
+        command.add_argument(options["guests"], type=Path, required=True)
+    for command in (link, cursor_link, execute, cursor_execute):
         command.add_argument(options["output"], type=Path, required=True)
     args = parser.parse_args()
     if args.command == options["build"]:
         build(args.tests.resolve(), args.output.resolve())
+    elif args.command == options["build_cursor"]:
+        build_cursor(args.output.resolve())
     else:
-        run(args.model.resolve(), args.guests.resolve(), args.output.resolve())
+        run(args.model.resolve(), args.guests.resolve(), args.output.resolve(),
+            cursor=args.command == options["run_cursor"])

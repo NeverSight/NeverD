@@ -17,6 +17,33 @@ using namespace neverd::symbolic;
 
 namespace {
 
+TEST(SymParseLexer, RepeatedLongCallsCheckTheFullTextAndItsNesting) {
+  const std::string Prefix = "ror(" + std::string(80, ' ');
+  const std::string A = Prefix + "rol(x,2),3)";
+  const std::string B = Prefix + "rol(y,2),4)";
+  SymParseOptions Options;
+  Options.MaxNesting = 2;
+  for (const auto &Fields : {A + "*" + B, B + "*" + A}) {
+    const auto Product = "x*y*z*" + Fields + "*" + A;
+    for (const auto &Text : {Product, Product + " * (" + A + ")",
+                             Product + "*" + Prefix + "rol(x,2),!]",
+                             Product + "*" + A.substr(0, A.size() - 1)}) {
+      SymContext Plain, Reused;
+      const auto Expected =
+          detail::Parser(Plain, Text, 16, Options, false).run();
+      const auto Actual = detail::Parser(Reused, Text, 16, Options).run();
+      EXPECT_EQ(Actual.ok(), Text == Product);
+      ASSERT_EQ(Expected.ok(), Actual.ok());
+      if (Actual.ok())
+        EXPECT_EQ(Plain.toString(Expected.Root), Reused.toString(Actual.Root));
+      else {
+        EXPECT_EQ(Expected.Error, Actual.Error);
+        EXPECT_EQ(Expected.ErrorOffset, Actual.ErrorOffset);
+      }
+    }
+  }
+}
+
 TEST(SymParseLexer, EveryPunctuationPairKeepsMaximalMunchAndOffsets) {
   const std::string Punctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~";
   const std::string_view Pairs[] = {
