@@ -228,7 +228,12 @@ protected:
     const auto Built =
         exec(NEVERD_TEST_CLANG,
              {"-std=gnu11", "-O2", "-fno-strict-aliasing", HostSource.string(),
-              ReferenceObject.string(), "-o", Program.string()});
+              ReferenceObject.string(),
+#if defined(__linux__)
+              // A target FMA may lower to a host libm call.
+              "-lm",
+#endif
+              "-o", Program.string()});
     ASSERT_EQ(Built.exitCode, 0) << Built.err << "\n" << C;
     EXPECT_EQ(exec(Program.string(), {}).exitCode, 0) << C;
   }
