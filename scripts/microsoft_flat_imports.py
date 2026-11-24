@@ -187,6 +187,20 @@ def import_identity(path, module, architecture, readobj):
             "sha256": wdk.digest(path), "command": [readobj, "--coff-imports", str(path)]}
 
 
+def include_headers(headers) -> str:
+    lines = []
+    for header in headers:
+        if header == "ntsecapi":
+            # winternl already supplied NTSTATUS, STRING and UNICODE_STRING.
+            # Use ntsecapi's own guard against its alternative LSA aliases;
+            # restore the macro before any subsequent provider is read.
+            lines += ['#pragma push_macro("_NTDEF_")', '#define _NTDEF_ 1']
+        lines.append(f"#include <{header}.h>")
+        if header == "ntsecapi":
+            lines.append('#pragma pop_macro("_NTDEF_")')
+    return "\n".join(lines) + "\n"
+
+
 def named_runtime_units(output, architecture, compiler, libraries):
     """Project documented named PE exports qualified for this target."""
     directory = output / "sdk-import-sources"
@@ -198,13 +212,16 @@ def named_runtime_units(output, architecture, compiler, libraries):
         target = profile["targets"][architecture]
         headers = ["winsock2", "windows", *profile["headers"]]
         source = directory / (name + "-sdk.c")
-        source.write_text("".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
+        source.write_text(include_headers(headers), encoding="utf-8")
         # In C23 an SDK declaration such as EngCreateClip() has zero parameters.
         # Bind the published prototype against the original C declaration in that dialect.
         convention = target.get("default_calling_convention", "")
         if convention and (architecture != "x86" or convention != "__stdcall" or name not in libraries):
             raise ValueError("unverified default calling convention for " + name)
         options = compiler + (["-Xclang", "-fdefault-calling-conv=stdcall"] if convention else [])
+        if profile.get("kit_ntddi"):
+            # SdkDdkVer.h selects the pinned kit's feature level for these declarations.
+            options = [*options, "-UNTDDI_VERSION"]
         if name in CPDK["providers"]:
             options = [*options, "-I", str(output / "cpdk-headers")]
         bridge = {"source": str(source), "source_sha256": wdk.digest(source),

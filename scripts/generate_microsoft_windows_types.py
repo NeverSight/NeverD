@@ -546,7 +546,7 @@ def merge_providers(base: str, primary: Path, output: Path,
     for name, headers, defines, prototypes in providers:
         provider_arguments = arguments + ["-D" + value for value in defines]
         source = directory / (name + ".c")
-        source.write_text(include_headers(headers), encoding="utf-8")
+        source.write_text(flat.include_headers(headers), encoding="utf-8")
         units.append(prepare_provider(name, source, provider_arguments, directory,
                                       neverd, model, headers, defines, prototypes,
                                       convention=convention, gdiplus_imports=gdiplus_imports))
@@ -652,20 +652,6 @@ def merge_providers(base: str, primary: Path, output: Path,
                 "// Source packages, commands and hashes: manifest.json."), encoding="utf-8")
         temporary.replace(primary)
     return records
-
-
-def include_headers(headers: tuple[str, ...]) -> str:
-    lines = []
-    for header in headers:
-        if header == "ntsecapi":
-            # winternl already supplied NTSTATUS, STRING and UNICODE_STRING.
-            # Use ntsecapi's own guard against its alternative LSA aliases;
-            # restore the macro before any subsequent provider is read.
-            lines += ['#pragma push_macro("_NTDEF_")', '#define _NTDEF_ 1']
-        lines.append(f"#include <{header}.h>")
-        if header == "ntsecapi":
-            lines.append('#pragma pop_macro("_NTDEF_")')
-    return "\n".join(lines) + "\n"
 
 
 def compiler_defaults(kit: Path, architecture: str, library: str) -> tuple[list[str], str]:
@@ -801,7 +787,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
     for base, (headers, directories, defines) in LIBRARIES.items():
         name = base + suffix
         source = output / (name + ".c")
-        source.write_text(include_headers(headers), encoding="utf-8")
+        source.write_text(flat.include_headers(headers), encoding="utf-8")
         defaults, convention = compiler_defaults(kit, architecture, base)
         arguments = common + defines + defaults + [item for part in directories
                                         for item in ("-I", str(include / part))]
