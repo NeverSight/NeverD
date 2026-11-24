@@ -145,6 +145,9 @@ struct Projection {
   std::map<uint64_t, std::vector<uint64_t>> FrameRegisterOffsets;
   std::map<uint64_t, uint8_t> FrameBytes;
   std::map<uint64_t, uint8_t> AbsoluteBytes;
+  /// Exact physical CALL words relative to the current RSP. These facts are
+  /// kept only while every intervening write is proved to miss their bytes.
+  std::vector<std::pair<uint64_t, va_t>> NativeCallReturnCells;
   /// Current complete pointer words at declared entry memory fields. Guest
   /// writes may erase these facts; no initial relation is recreated at joins.
   std::map<uint64_t, EntryPointer> AbsoluteAffineValues;
@@ -170,6 +173,7 @@ struct ContextKey {
   bool EntryReturnSlotIntact = false;
   std::optional<uint64_t> StackDisplacement;
   std::vector<std::pair<uint64_t, std::optional<uint64_t>>> ReturnSlots;
+  std::vector<std::pair<uint64_t, va_t>> NativeCallReturnCells;
   std::vector<std::optional<uint64_t>> ReturnedObjectSizes;
   std::vector<std::optional<bool>> ReturnedObjectNonNull;
   uint32_t FrameResidue = 0;
@@ -177,13 +181,14 @@ struct ContextKey {
   bool operator<(const ContextKey &Other) const {
     return std::tie(Cursor.Address, Cursor.Mode, Controls, FrameControls,
                     NativeStackActive, EntryReturnSlotIntact, StackDisplacement,
-                    ReturnSlots, ReturnedObjectSizes, ReturnedObjectNonNull,
-                    FrameResidue) <
+                    ReturnSlots, NativeCallReturnCells, ReturnedObjectSizes,
+                    ReturnedObjectNonNull, FrameResidue) <
            std::tie(Other.Cursor.Address, Other.Cursor.Mode, Other.Controls,
                     Other.FrameControls, Other.NativeStackActive,
                     Other.EntryReturnSlotIntact, Other.StackDisplacement,
-                    Other.ReturnSlots, Other.ReturnedObjectSizes,
-                    Other.ReturnedObjectNonNull, Other.FrameResidue);
+                    Other.ReturnSlots, Other.NativeCallReturnCells,
+                    Other.ReturnedObjectSizes, Other.ReturnedObjectNonNull,
+                    Other.FrameResidue);
   }
 };
 
@@ -208,9 +213,35 @@ struct Node {
   bool Pending = false;
 };
 
+struct LiveNativeCallReturnCell {
+  symbolic::SymRef Address;
+  va_t Target = 0;
+};
+
 std::optional<uint64_t> affineDisplacement(SymContext &Ctx, SymRef Value,
                                            SymRef Root) {
   return detail::frameRelativeOffset(Ctx, Value, Root);
+}
+
+std::optional<uint64_t> nativeStackRelativeOffset(const SymContext &Ctx,
+                                                  SymRef Value, SymRef Base) {
+  if (!Value || !Base || Ctx.width(Value) != 64 || Ctx.width(Base) != 64)
+    return std::nullopt;
+  const auto Split = [&](SymRef Address) {
+    if (Ctx.op(Address) == SymOp::Add && Ctx.numOperands(Address) == 2)
+      for (unsigned I = 0; I != 2; ++I) {
+        const auto Constant = Ctx.operand(Address, I);
+        if (Ctx.isConst(Constant))
+          return std::pair{Ctx.operand(Address, 1 - I),
+                           Ctx.constValue(Constant).getZExtValue()};
+      }
+    return std::pair{Address, uint64_t{0}};
+  };
+  const auto [ValueRoot, ValueOffset] = Split(Value);
+  const auto [BaseRoot, BaseOffset] = Split(Base);
+  return ValueRoot == BaseRoot
+             ? std::optional<uint64_t>(ValueOffset - BaseOffset)
+             : std::nullopt;
 }
 
 Projection project(SymState &State, SymRef Root,
@@ -476,6 +507,15 @@ bool intersect(Projection &Into, const Projection &Incoming,
   }
   Changed |= intersectMap(Into.FrameBytes, Incoming.FrameBytes);
   Changed |= intersectMap(Into.AbsoluteBytes, Incoming.AbsoluteBytes);
+  if (Into.NativeCallReturnCells != Incoming.NativeCallReturnCells) {
+    std::vector<std::pair<uint64_t, va_t>> Common;
+    std::set_intersection(
+        Into.NativeCallReturnCells.begin(), Into.NativeCallReturnCells.end(),
+        Incoming.NativeCallReturnCells.begin(),
+        Incoming.NativeCallReturnCells.end(), std::back_inserter(Common));
+    Changed |= Common != Into.NativeCallReturnCells;
+    Into.NativeCallReturnCells = std::move(Common);
+  }
   Changed |=
       intersectMap(Into.AbsoluteAffineValues, Incoming.AbsoluteAffineValues);
   Changed |= intersectMap(Into.Frame.AffineValues, Incoming.Frame.AffineValues);
@@ -1109,6 +1149,7 @@ private:
   // Borrowed only while emitTargets() projects this transfer's successors.
   detail::ControlDependencyCache *DependencyCache = nullptr;
   std::vector<Node> Nodes;
+  std::vector<LiveNativeCallReturnCell> LiveNativeCallReturnCells;
   std::map<ContextKey, int> Indices;
   std::map<std::pair<va_t, InstructionMode>, uint32_t> ContextCounts;
   std::deque<int> Pending;
@@ -2025,6 +2066,26 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
       !chargeCallWork(Origins.SafeRegisters.size()))
     return false;
   Out = project(State, Root, AffineCandidates, Origins, Frame);
+  if (!LiveNativeCallReturnCells.empty()) {
+    const auto &StackRegister = *Options.FrameBaseRegister;
+    const auto Stack = State.read(SymSpace::Register, StackRegister.Offset,
+                                  StackRegister.Bytes);
+    for (const auto &Cell : LiveNativeCallReturnCells) {
+      if (Result.EvaluatedOperations >= Options.MaxOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "native call-return projection budget exhausted");
+      ++Result.EvaluatedOperations;
+      if (const auto Offset =
+              nativeStackRelativeOffset(Ctx, Cell.Address, Stack))
+        Out.NativeCallReturnCells.emplace_back(*Offset, Cell.Target);
+    }
+    std::sort(Out.NativeCallReturnCells.begin(),
+              Out.NativeCallReturnCells.end());
+    Out.NativeCallReturnCells.erase(
+        std::unique(Out.NativeCallReturnCells.begin(),
+                    Out.NativeCallReturnCells.end()),
+        Out.NativeCallReturnCells.end());
+  }
   if (!projectObjects(State, ObjectRoots, Out))
     return false;
   Out.FrameResidue = FrameResidue;
@@ -2546,6 +2607,7 @@ int Specializer::enqueue(SpecializationCursor Cursor,
     SlotControl(Slot);
   Key.NativeStackActive = Incoming.Frame.NativeStackActive;
   Key.EntryReturnSlotIntact = Incoming.Frame.EntryReturnSlotIntact;
+  Key.NativeCallReturnCells = Incoming.NativeCallReturnCells;
   Key.ReturnedObjectSizes.reserve(ReturnedObjects.size());
   Key.ReturnedObjectNonNull.reserve(ReturnedObjects.size());
   for (size_t I = 0; I < ReturnedObjects.size(); ++I) {
@@ -3040,6 +3102,15 @@ bool Specializer::evaluate(int Id) {
     return false;
   seed(Ctx, State, FrameRoot, ObjectRoots, Draft.Incoming,
        Options.EntryReturnSlot);
+  LiveNativeCallReturnCells.clear();
+  if (!Draft.Incoming.NativeCallReturnCells.empty()) {
+    const auto &StackRegister = *Options.FrameBaseRegister;
+    const auto Stack = State.read(SymSpace::Register, StackRegister.Offset,
+                                  StackRegister.Bytes);
+    for (const auto &[Offset, Target] : Draft.Incoming.NativeCallReturnCells)
+      LiveNativeCallReturnCells.push_back(
+          {Ctx.mkAdd(Stack, Ctx.mkConst(64, Offset)), Target});
+  }
   if ((!ObjectRoots.empty() || Options.EntryReturnSlot) &&
       Ctx.numNodes() > Options.MaxSymbolicNodes)
     return fail(SpecializationStatus::BudgetExceeded,
@@ -3313,7 +3384,9 @@ bool Specializer::evaluate(int Id) {
     bool ExpandedReturn = false;
     bool CertifiedOuterReturn = false;
     bool ExpandedIndirectCall = false;
+    bool PendingUnrootedNativeCall = false;
     bool RetainedTerminator = false;
+    std::optional<va_t> KnownUnrootedReturnTarget;
     size_t NativeCallPrefixSize = 0;
     SymRef CallerStack;
     int64_t PreservedBegin = 0;
@@ -3470,11 +3543,28 @@ bool Specializer::evaluate(int Id) {
         if (Frame.NativeReturnSlots.size() > Options.MaxNativeReturnSlots)
           return fail(SpecializationStatus::BudgetExceeded,
                       "native return-slot context budget exhausted");
+      } else if (Instruction.NativeStackControl ==
+                     SpecializationNativeStackControl::Call &&
+                 RawRegion) {
+        PendingUnrootedNativeCall = true;
       } else if (ExpandedReturn) {
         const SymRef ReturnAddress =
             Displacement ? Ctx.mkAdd(FrameRoot, Ctx.mkConst(64, *Displacement))
                          : Exec.operandValue(Stack);
-        const SymRef ReturnValue = State.load(ReturnAddress, Stack.Size);
+        for (const auto &Cell : LiveNativeCallReturnCells)
+          if (nativeStackRelativeOffset(Ctx, Cell.Address, ReturnAddress) ==
+              0) {
+            if (KnownUnrootedReturnTarget &&
+                *KnownUnrootedReturnTarget != Cell.Target) {
+              KnownUnrootedReturnTarget.reset();
+              break;
+            }
+            KnownUnrootedReturnTarget = Cell.Target;
+          }
+        const SymRef ReturnValue =
+            KnownUnrootedReturnTarget
+                ? Ctx.mkConst(64, *KnownUnrootedReturnTarget)
+                : State.load(ReturnAddress, Stack.Size);
         auto Targets = enumerate(Ctx, Exec.pathPredicate(), {ReturnValue},
                                  Options.MaxIndirectTargets);
         if (Failed)
@@ -3494,6 +3584,11 @@ bool Specializer::evaluate(int Id) {
         }
         if (Displacement)
           Frame.NativeReturnSlots.erase(*Displacement);
+        if (KnownUnrootedReturnTarget)
+          std::erase_if(LiveNativeCallReturnCells, [&](const auto &Cell) {
+            return nativeStackRelativeOffset(Ctx, Cell.Address,
+                                             ReturnAddress) == 0;
+          });
       }
       // Reaching the untouched entry return slot is an outer exit even when
       // native code has discarded one or more intermediate frames.
@@ -3638,7 +3733,11 @@ bool Specializer::evaluate(int Id) {
         return fail(SpecializationStatus::BudgetExceeded,
                     "specialization symbolic-node budget exhausted");
       LowOp Original = Operations[I];
+      if (Original.Opcode == NdOp::INTRINSIC || Original.Opcode == NdOp::CALL ||
+          Original.Opcode == NdOp::INDIR_CALL)
+        LiveNativeCallReturnCells.clear();
       if (ReturningCall && I + 1 == Operations.size()) {
+        LiveNativeCallReturnCells.clear();
         if (!lowRawReturningCallShapeIsValid(Original))
           return fail(SpecializationStatus::InvalidInput,
                       "returning-call expansion has a malformed raw event");
@@ -3896,6 +3995,48 @@ bool Specializer::evaluate(int Id) {
       llvm::SmallVector<SymStorePreservationRegion, 4> ProvedAbsoluteRanges;
       for (unsigned J = 0; J < Original.NumInputs; ++J)
         OutputUnsafe |= unsafeOrigin(Original.Inputs[J], Origins);
+      if (!LiveNativeCallReturnCells.empty() &&
+          (Original.Opcode == NdOp::STORE || AtomicWrite)) {
+        const auto Memory = lowMemoryOperands(Original);
+        const auto Address = Exec.memoryAddressValue(Original);
+        if (RuntimeMemory || Ctx.width(Address) != 64) {
+          LiveNativeCallReturnCells.clear();
+        } else {
+          for (auto It = LiveNativeCallReturnCells.begin();
+               It != LiveNativeCallReturnCells.end();) {
+            if (Result.EvaluatedOperations >= Options.MaxOperations)
+              return fail(SpecializationStatus::BudgetExceeded,
+                          "native call-return separation budget exhausted");
+            ++Result.EvaluatedOperations;
+            if (const auto Delta =
+                    nativeStackRelativeOffset(Ctx, Address, It->Address)) {
+              // The common symbolic base cancels modulo the address width.
+              // This also covers byte ranges that straddle address zero.
+              if (*Delta >= 8 && uint64_t{0} - *Delta >= Memory.AccessSize) {
+                ++It;
+                continue;
+              }
+              It = LiveNativeCallReturnCells.erase(It);
+              continue;
+            }
+            const auto Overlap = memoryExtentsOverlap(
+                Ctx, Address, Memory.AccessSize, It->Address, 8);
+            if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+              return fail(SpecializationStatus::BudgetExceeded,
+                          "native call-return separation node budget "
+                          "exhausted");
+            const auto Domain =
+                enumerate(Ctx, Exec.pathPredicate(), {Overlap}, 1);
+            if (Failed)
+              return false;
+            if (Domain.Status == FiniteValueStatus::Complete &&
+                Domain.Tuples == std::vector<std::vector<uint64_t>>{{0}})
+              ++It;
+            else
+              It = LiveNativeCallReturnCells.erase(It);
+          }
+        }
+      }
       if (FrameRoot && (!RuntimeMemory || Original.Opcode == NdOp::STORE) &&
           (Original.Opcode == NdOp::LOAD || Original.Opcode == NdOp::STORE ||
            AtomicWrite)) {
@@ -4631,11 +4772,16 @@ bool Specializer::evaluate(int Id) {
       }
       bool FoldedImmutableRead = false;
       std::vector<LowOp> ImmutableOps;
-      SymRef FiniteReadValue;
+      SymRef FiniteReadValue =
+          KnownUnrootedReturnTarget && ExpandedReturn &&
+                  Original.Opcode == NdOp::LOAD &&
+                  Original.Output == NdVar::tmp(NativeReturnTemp, 8)
+              ? Ctx.mkConst(64, *KnownUnrootedReturnTarget)
+              : SymRef();
       // Admission above limits wide reads to the explicit nonfaulting domain.
       // Every feasible address still needs one complete, untruncated witness.
       if (Original.Opcode == NdOp::LOAD && !RuntimeMemory && !ExternalExit &&
-          !FiniteFrameReadValue && !ReturningCall) {
+          !FiniteFrameReadValue && !FiniteReadValue && !ReturningCall) {
         const auto Memory = lowMemoryOperands(Original);
         const SymRef Address = Exec.operandValue(*Memory.Address);
         // Exact root-relative translation preserves domain cardinality, even
@@ -4980,6 +5126,16 @@ bool Specializer::evaluate(int Id) {
         Draft.Block.Ops.push_back(Original);
         Finished = true;
         continue;
+      }
+      if (PendingUnrootedNativeCall) {
+        if (LiveNativeCallReturnCells.size() + Frame.NativeReturnSlots.size() >=
+            Options.MaxNativeReturnSlots)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "native call-return context budget exhausted");
+        LiveNativeCallReturnCells.push_back(
+            {State.read(SymSpace::Register, Options.FrameBaseRegister->Offset,
+                        Options.FrameBaseRegister->Bytes),
+             Instruction.Fallthrough.Address});
       }
       if (Flow != StepResult::Return) {
         if (ReplayingDemands &&
