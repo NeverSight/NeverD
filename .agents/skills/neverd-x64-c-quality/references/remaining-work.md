@@ -24,8 +24,9 @@ directly, including a bounded stack window for offline analysis. Its checked
 64-bit load consumes one observation at the actual operand. The unbound
 ordinary ABI still requires an original input when this value is observed.
 Immediate-abort V6 steps admit the native pair when RTM or RTM_ALWAYS_ABORT
-is enumerated on the original CPU. Captured RTM_DISABLE or the combination
-of RTM_ALWAYS_ABORT and RTM_FORCE_ABORT fixes RAX at zero and selects the
+is enumerated on the original CPU. Captured RTM_DISABLE, an active
+IA32_TSX_FORCE_ABORT bit 0, or the combination of the RTM_ALWAYS_ABORT and
+RTM_FORCE_ABORT CPUID bits fixes RAX at zero and selects the
 original fallback during export. With hidden RTM and insufficient evidence,
 the step retains the original native boundary.
 

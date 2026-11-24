@@ -1251,12 +1251,15 @@ entire outcome at export, including on a machine with hidden RTM.
 
 - If EDX bits 11 and 13 are both set (`"leaf7_edx":"0x2800"`), the
   processor hardwires IA32_TSX_FORCE_ABORT bit 0 to one.
+- If EDX bit 13 enumerates IA32_TSX_FORCE_ABORT, a captured
+  `"ia32_tsx_force_abort":1` also proves a zero status. The register may be
+  writable on this CPU, so its value must cover the original invocation.
 - If EDX bit 29 enumerates IA32_ARCH_CAPABILITIES and its bit 7 enumerates
   IA32_TSX_CTRL, a set RTM_DISABLE bit proves the same result. For example,
   `{"max_basic_leaf":7,"leaf7_ebx":0,"leaf7_edx":"0x20000000","ia32_arch_capabilities":"0x80","ia32_tsx_ctrl":3}`
   records a disabled transaction with hidden RTM and HLE.
 
-In either case the guarded step sets RAX to zero and jumps to the original
+With any of these proofs the guarded step sets RAX to zero and jumps to the original
 fallback. Its receipt gives the status and the evidence. This step emits no
 CPUID, MSR read or transaction. Every captured selection avoids a runtime
 feature branch. The capture must describe the original CPU for the invocation.

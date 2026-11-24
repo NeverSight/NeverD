@@ -39,6 +39,8 @@ constexpr uint32_t kArchCapabilitiesMsr = 1U << 29;
 constexpr uint64_t kTsxCtrlMsr = 1ULL << 7;
 constexpr uint64_t kRtmDisable = 1;
 constexpr uint64_t kTsxCpuidClear = 2;
+constexpr uint64_t kForceAbort = 1;
+constexpr uint64_t kSdvEnableRtm = 4;
 
 template <typename T>
 std::optional<T> cpuWord(const llvm::json::Object &Record,
@@ -55,6 +57,17 @@ std::optional<T> cpuWord(const llvm::json::Object &Record,
       !Text->getAsInteger(0, Number))
     return Number;
   return std::nullopt;
+}
+
+llvm::StringRef forcedAbortEvidence(const X64RtmAbortSelection &CPU) {
+  if (CPU.TsxCtrl.value_or(0) & kRtmDisable)
+    return "ia32_tsx_ctrl.rtm_disable";
+  if (CPU.TsxForceAbort.value_or(0) & kForceAbort)
+    return "ia32_tsx_force_abort.rtm_force_abort";
+  // With both EDX bits set IA32_TSX_FORCE_ABORT[0] is fixed at one.
+  if ((CPU.Leaf7EDX.value_or(0) & kHardwiredAbort) == kHardwiredAbort)
+    return "rtm_always_abort+rtm_force_abort";
+  return {};
 }
 } // namespace
 
@@ -80,10 +93,11 @@ X64RtmAbortSelection::read(const llvm::json::Value &V) {
   Result.ArchCapabilities =
       cpuWord<uint64_t>(*Record, "ia32_arch_capabilities");
   Result.TsxCtrl = cpuWord<uint64_t>(*Record, "ia32_tsx_ctrl");
+  Result.TsxForceAbort = cpuWord<uint64_t>(*Record, "ia32_tsx_force_abort");
   const unsigned Fields =
       Result.MaxBasic.has_value() + Result.Leaf7EBX.has_value() +
       Result.Leaf7EDX.has_value() + Result.ArchCapabilities.has_value() +
-      Result.TsxCtrl.has_value();
+      Result.TsxCtrl.has_value() + Result.TsxForceAbort.has_value();
   if (Record->size() != Fields)
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "unknown or invalid RTM CPU record field");
@@ -96,17 +110,33 @@ X64RtmAbortSelection::read(const llvm::json::Value &V) {
   const uint32_t EBX = Result.Leaf7EBX.value_or(0);
   const uint32_t EDX = Result.Leaf7EDX.value_or(0);
   const uint64_t Ctrl = Result.TsxCtrl.value_or(0);
+  const uint64_t Force = Result.TsxForceAbort.value_or(0);
   if ((Result.ArchCapabilities && !(EDX & kArchCapabilitiesMsr)) ||
-      (Result.TsxCtrl && !(Result.ArchCapabilities.value_or(0) & kTsxCtrlMsr)))
+      (Result.TsxCtrl &&
+       !(Result.ArchCapabilities.value_or(0) & kTsxCtrlMsr)) ||
+      (Result.TsxForceAbort && !(EDX & kRtmForceAbortMsr)))
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "RTM CPU record uses an unenumerated MSR");
-  if ((Ctrl & ~(kRtmDisable | kTsxCpuidClear)) ||
-      ((Ctrl & kTsxCpuidClear) && (EBX & (kRtm | kHle))))
+  if (Ctrl & ~(kRtmDisable | kTsxCpuidClear))
     return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "invalid IA32_TSX_CTRL or inconsistent "
-                                   "RTM/HLE enumeration");
-  // With both EDX bits set IA32_TSX_FORCE_ABORT[0] is fixed at one.
-  if ((Ctrl & kRtmDisable) || (EDX & kHardwiredAbort) == kHardwiredAbort)
+                                   "reserved IA32_TSX_CTRL bits");
+  if (Result.TsxForceAbort) {
+    // EDX[11] fixes FORCE_ABORT at one. SDV_ENABLE_RTM clears both.
+    // CPUID_CLEAR is implemented only in either of those two modes.
+    const bool Always = EDX & kRtm;
+    const bool Sdv = Force & kSdvEnableRtm;
+    if ((Force & ~(kForceAbort | kTsxCpuidClear | kSdvEnableRtm)) ||
+        (Always && !(Force & kForceAbort)) ||
+        (Sdv && (Always || (Force & kForceAbort))) ||
+        ((Force & kTsxCpuidClear) && !Always && !Sdv))
+      return llvm::createStringError(llvm::errc::invalid_argument,
+                                     "inconsistent IA32_TSX_FORCE_ABORT");
+  }
+  if (((Ctrl | Force) & kTsxCpuidClear) && (EBX & (kRtm | kHle)))
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "TSX_CPUID_CLEAR contradicts RTM/HLE enumeration");
+  if (!forcedAbortEvidence(Result).empty())
     Result.Kind = ForcedAbort;
   else
     Result.Kind = ((EBX | EDX) & kRtm) ? Supported : Unadvertised;
@@ -121,16 +151,14 @@ X64RtmAbortSelection::report(llvm::json::Array Regions) const {
                  "instruction fetch and no debug trap"},
       {"budget",
        "one translated step per attempted pair; zero on capability refusal"},
-      {"selection", Kind == Probe      ? "executing-cpu-cpuid"
-                    : ArchCapabilities ? "captured-cpu-state"
-                    : MaxBasic         ? "captured-cpuid"
-                                       : "declared-rtm"},
+      {"selection", Kind == Probe                       ? "executing-cpu-cpuid"
+                    : ArchCapabilities || TsxForceAbort ? "captured-cpu-state"
+                    : MaxBasic                          ? "captured-cpuid"
+                                                        : "declared-rtm"},
       {"can_decline", canDecline()}};
   if (Kind == ForcedAbort) {
     R["forced_abort_status"] = 0;
-    R["forced_abort_evidence"] = (TsxCtrl.value_or(0) & kRtmDisable)
-                                     ? "ia32_tsx_ctrl.rtm_disable"
-                                     : "rtm_always_abort+rtm_force_abort";
+    R["forced_abort_evidence"] = forcedAbortEvidence(*this);
   } else {
     R["native_intrinsic"] = "llvm.x86.rtm.abort.pair";
   }
@@ -144,6 +172,8 @@ X64RtmAbortSelection::report(llvm::json::Array Regions) const {
     R["ia32_arch_capabilities"] = "0x" + llvm::utohexstr(*ArchCapabilities);
   if (TsxCtrl)
     R["ia32_tsx_ctrl"] = "0x" + llvm::utohexstr(*TsxCtrl);
+  if (TsxForceAbort)
+    R["ia32_tsx_force_abort"] = "0x" + llvm::utohexstr(*TsxForceAbort);
   return R;
 }
 

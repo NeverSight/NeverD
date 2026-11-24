@@ -40,6 +40,7 @@ struct X64RtmAbortSelection {
   std::optional<uint32_t> Leaf7EDX;
   std::optional<uint64_t> ArchCapabilities;
   std::optional<uint64_t> TsxCtrl;
+  std::optional<uint64_t> TsxForceAbort;
   bool canDecline() const { return Kind == Probe || Kind == Unadvertised; }
   static llvm::Expected<X64RtmAbortSelection> read(const llvm::json::Value &V);
   llvm::json::Object report(llvm::json::Array Regions) const;
