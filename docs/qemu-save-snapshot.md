@@ -39,6 +39,37 @@ read-only, writes no output files and never treats RAM-block names as paths.
 Normal filesystem permissions apply. It requires only Python's standard
 library, not an installed QEMU or libvirt service.
 
+## Immediate RTM abort at the saved RIP
+
+Given the original runtime address of an XBEGIN, the offline adapter finds the
+vCPU stopped there and extracts its TSX control word. For an image relocated
+at load time, pass the independently established runtime base of that image.
+Use the resulting JSON fragment in a successful-RAM V6 continuation request.
+
+```sh
+python3 -m scripts.qemu_save_rtm paused.save --profile qemu-10.2-kvm-x64 \
+  --expect-pc 0xffff800000001000 --load-base 0xffff800000000000 > rtm.json
+jq --slurpfile rtm rtm.json '. + $rtm[0]' request.json > bound-request.json
+```
+
+The addresses are illustrative. An ambiguous RIP requires an explicit
+`--cpu` migration instance. The reader checks 64-bit code mode, CPU v12
+and the v1 `cpu/msr_tsx_ctrl` subsection's unsigned 32-bit field.
+QEMU saves that subsection when the vCPU enumerates IA32_TSX_CTRL. An
+omission produces a JSON `null`. Automatic selection reads eight RIP bytes
+per candidate from the indexed save and decodes only the matched CPU record.
+Giving `--cpu` goes directly to that record.
+It requires no guest instruction or additional RAM read.
+[QEMU x86 VMState](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/machine.c)
+
+The exporter checks the mapped RIP against a selected XBEGIN immediately
+followed by XABORT in the same immutable image. RTM_DISABLE yields the
+architectural zero status and the signed fallback at that site. A clear
+RTM_DISABLE bit or an omitted word preserves the native boundary. Apply
+the result only to the captured invocation and its control state. A caller's
+software selection flag or a save paused elsewhere cannot supply this word.
+[Intel TSX controls](https://www.intel.com/content/www/us/en/developer/articles/technical/software-security-guidance/technical-documentation/cpuid-enumeration-and-architectural-msrs.html)
+
 ## Selected device evidence
 
 [`scripts/qemu_save_devices.py`](../scripts/qemu_save_devices.py) lists the

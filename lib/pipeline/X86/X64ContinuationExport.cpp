@@ -16,6 +16,7 @@
 #include "X64FunctionCalls.h"
 #include "X64FunctionContext.h"
 #include "X64RtmAbortRegions.h"
+#include "X64RtmCapture.h"
 #include "X64RtmRegions.h"
 #include "X64SpecialRegions.h"
 #include "X64StateObjectPointers.h"
@@ -84,6 +85,7 @@ struct Request {
   bool FollowDirectJumps = false;
   bool NativeRtmAbortRegions = false;
   X64RtmAbortSelection RtmSteps;
+  std::optional<llvm::json::Object> XbeginFaultReceipt;
   bool NativeRtmRegions = false;
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
@@ -92,7 +94,7 @@ struct Request {
   std::vector<X64FunctionCallInterface> FunctionCalls;
 };
 
-llvm::Expected<Request> readRequest(llvm::StringRef Text) {
+llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
   if (Text.empty() ||
       Text.size() > limits::pipeline::kX64ContinuationRequestBytes)
     return invalid(
@@ -103,44 +105,45 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   const auto *Object = Parsed->getAsObject();
   if (!Object)
     return invalid("x64 continuation request must be an object");
-  const std::set<llvm::StringRef> Keys{"profile",
-                                       "instructions",
-                                       "entries",
-                                       "mxcsr_mask",
-                                       "paging_address_bits",
-                                       "null_segment_base_policy",
-                                       "segment_base_msr_address_bits",
-                                       "sysenter_msr_address_bits",
-                                       "uiret_restores_uif",
-                                       "native_timestamp_reads",
-                                       "native_write_prefetch",
-                                       "native_speculation_control_msrs",
-                                       "native_descriptor_queries",
-                                       "native_page_table_access",
-                                       "native_debug_register_access",
-                                       "native_page_global_access",
-                                       "native_rtm_abort_regions",
-                                       "native_rtm_abort_steps",
-                                       "native_rtm_regions",
-                                       "native_kvm_hypercalls",
-                                       "native_hle_steps",
-                                       "native_snp_instructions",
-                                       "native_sev_guest_exit",
-                                       "event_delivery",
-                                       "paged_memory",
-                                       "paged_debug",
-                                       "scheduled_events",
-                                       "notify_cr8_writes",
-                                       "native_hyperv_hypercall_entry",
-                                       "follow_internal_calls",
-                                       "function_context",
-                                       "function_calls",
-                                       "pause_call_sites",
-                                       "follow_direct_jumps",
-                                       "callee_depth",
-                                       "dispatch",
-                                       "max_instructions",
-                                       "max_operations"};
+  static const std::set<llvm::StringRef> Keys{"profile",
+                                              "instructions",
+                                              "entries",
+                                              "mxcsr_mask",
+                                              "paging_address_bits",
+                                              "null_segment_base_policy",
+                                              "segment_base_msr_address_bits",
+                                              "sysenter_msr_address_bits",
+                                              "uiret_restores_uif",
+                                              "native_timestamp_reads",
+                                              "native_write_prefetch",
+                                              "native_speculation_control_msrs",
+                                              "native_descriptor_queries",
+                                              "native_page_table_access",
+                                              "native_debug_register_access",
+                                              "native_page_global_access",
+                                              "native_rtm_abort_regions",
+                                              "native_rtm_abort_steps",
+                                              "qemu_xbegin_fault_v1",
+                                              "native_rtm_regions",
+                                              "native_kvm_hypercalls",
+                                              "native_hle_steps",
+                                              "native_snp_instructions",
+                                              "native_sev_guest_exit",
+                                              "event_delivery",
+                                              "paged_memory",
+                                              "paged_debug",
+                                              "scheduled_events",
+                                              "notify_cr8_writes",
+                                              "native_hyperv_hypercall_entry",
+                                              "follow_internal_calls",
+                                              "function_context",
+                                              "function_calls",
+                                              "pause_call_sites",
+                                              "follow_direct_jumps",
+                                              "callee_depth",
+                                              "dispatch",
+                                              "max_instructions",
+                                              "max_operations"};
   for (const auto &[Key, Value] : *Object)
     if (!Keys.count(Key))
       return invalid("unknown x64 continuation option: " +
@@ -257,7 +260,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       *Destination = *Flag;
     }
   if (const auto *V = Object->get("native_rtm_abort_steps")) {
-    auto Selection = X64RtmAbortSelection::read(*V);
+    auto Selection = X64RtmAbortSelection::read(*V, ImageBase);
     if (!Selection)
       return Selection.takeError();
     Result.RtmSteps = *Selection;
@@ -269,6 +272,20 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
     return invalid(
         "native RTM abort steps require successful-RAM kernel-events-v6 "
         "with a single RTM binding and no event scheduler");
+  if (const auto *V = Object->get("qemu_xbegin_fault_v1")) {
+    if (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
+        Options.PagedMemory || Options.ScheduledEvents ||
+        Result.NativeRtmRegions || Result.NativeRtmAbortRegions ||
+        Result.RtmSteps.Kind != X64RtmAbortSelection::Off)
+      return invalid("observed XBEGIN fault requires successful-RAM V6 with a "
+                     "single RTM binding and no event scheduler");
+    auto Capture =
+        X64RtmFaultCapture::read(*V, ImageBase, *Options.PagingAddressBits);
+    if (!Capture)
+      return Capture.takeError();
+    Options.ObservedXbeginFault = Capture->Site;
+    Result.XbeginFaultReceipt = std::move(Capture->Receipt);
+  }
   if (Result.NativeRtmAbortRegions &&
       Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6)
     return invalid("native RTM abort regions require kernel-events-v6");
@@ -678,7 +695,7 @@ void driver(llvm::raw_ostream &OS,
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug) {
-  auto Request = readRequest(RequestJSON);
+  auto Request = readRequest(RequestJSON, Image.Base);
   if (!Request)
     return Request.takeError();
   if (Image.Arch != Arch::X64)
@@ -688,10 +705,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   if (Request->Entries) {
     auto Selection = selectX64SpecialRegions(
         Image, Addresses, Request->Options, Request->CalleeDepth,
-        Request->FollowDirectJumps,
-        Request->NativeRtmAbortRegions ||
-            Request->RtmSteps.Kind != X64RtmAbortSelection::Off,
-        Request->NativeRtmRegions, Debug);
+        Request->FollowDirectJumps, Request->NativeRtmAbortRegions,
+        Request->RtmSteps, Request->NativeRtmRegions, Debug);
     if (!Selection)
       return Selection.takeError();
     Addresses = std::move(Selection->Addresses);
@@ -721,15 +736,21 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       {kX64PagedAccessAddress, PagedAccessName}};
   llvm::json::Array Manifest;
   std::vector<X64RtmAbortStep> RtmSteps;
+  std::optional<std::string> FaultStep;
   size_t Native = 0;
   uint64_t Work = Units->size();
-  const auto AddFunction =
-      [&](const LowFunc &Low,
-          const SourceFunctionTypeHint &ABI) -> llvm::Error {
+  const auto AddFunction = [&](const LowFunc &Low,
+                               const SourceFunctionTypeHint &ABI,
+                               bool ObservedFault = false) -> llvm::Error {
     for (const auto &Block : Low.Blocks) {
       if (Block.Ops.size() > Request->Options.MaxOperations - Work)
         return invalid("continuation source operation budget exhausted");
       Work += Block.Ops.size();
+    }
+    if (ObservedFault) {
+      FaultStep = renderX64RtmFaultStep(Low);
+      if (FaultStep)
+        return llvm::Error::success();
     }
     LowToMedConverter Converter;
     std::map<va_t, SourceFunctionTypeHint> Hints{{Low.Entry, ABI}};
@@ -767,13 +788,22 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     if (Unit.EntryValidation)
       if (auto Error = AddFunction(*Unit.EntryValidation, Unit.SourceABI))
         return std::move(Error);
-    if (auto Error = AddFunction(Unit.Function, Unit.SourceABI))
+    if (auto Error = AddFunction(
+            Unit.Function, Unit.SourceABI,
+            Request->Options.ObservedXbeginFault &&
+                Unit.Address == Request->Options.ObservedXbeginFault->Address))
       return std::move(Error);
     bool NativeBoundary = Unit.RequiresNativeExecution;
     if (NativeBoundary && Request->RtmSteps.Kind != X64RtmAbortSelection::Off &&
+        Request->RtmSteps.covers(Unit.Address) &&
         x86TransactionBeginEncoding(Unit.Bytes, Unit.Address, true)) {
       if (auto Pair = readX64RtmAbortRegion(
               Image, Unit.Address, *Request->Options.PagingAddressBits)) {
+        if (Request->RtmSteps.Qemu && !Request->RtmSteps.Qemu->admitsAddresses(
+                                          Unit.Bytes, Pair->Bytes.size(),
+                                          *Request->Options.PagingAddressBits))
+          return invalid(
+              "captured RTM instruction or fallback address is invalid");
         // The existing instruction function validates all V6 state before
         // returning NativeInstruction. Keep it as the guard for the bound step.
         if (Request->RtmSteps.Kind != X64RtmAbortSelection::Unadvertised)
@@ -794,6 +824,9 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
         {"name", Unit.Function.Name},
         {"arbitrary_effects", effects(Unit)}});
   }
+  if (Request->RtmSteps.Qemu && RtmSteps.empty())
+    return invalid(
+        "captured RIP does not select an immediate XBEGIN/XABORT pair");
   X64ContinuationExport Result;
   llvm::raw_string_ostream OS(Result.Source);
   const auto Version = Units->front().StateVersion;
@@ -817,7 +850,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   Options.Format = BinaryFormat::ELF;
   Options.UseUnalignedPointers = false;
   Options.PreserveLLVMFunctionTypes = Request->Options.PagedMemory;
-  if (UseLLVM) {
+  if (UseLLVM && !Functions.empty()) {
     llvm::LLVMContext Context;
     std::vector<char> Bodies(Functions.size(), 1);
     if (Request->Options.PagedMemory) {
@@ -856,7 +889,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     if (!Module || llvm::verifyModule(*Module, &llvm::errs()) ||
         !LLVMCEmitter().emit(*Module, OS, Options))
       return invalid("x64 continuation LLVM C emission failed");
-  } else {
+  } else if (!Functions.empty()) {
     std::vector<HighFunc> High(Functions.size());
     const auto Convert = [&](auto Claim, size_t Total) {
       MedToHighConverter Converter;
@@ -885,6 +918,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   // declarations need not precede byte-pointer steps; inserting their headers
   // first would freeze libc feature selection before the emitter's macros.
   auto Fields = stateDeclaration(OS, Version, Units->front().StateBytes);
+  if (FaultStep)
+    OS << *FaultStep;
   llvm::json::Array RtmStepReceipts;
   if (!RtmSteps.empty())
     RtmStepReceipts =
@@ -1268,6 +1303,8 @@ typedef struct neverd_x64_event_v1 {
                     "initial CPU/controller coherence is caller-owned; "
                     "raw steps and unscheduled drivers do not notify"}};
   }
+  if (Request->XbeginFaultReceipt)
+    Report["qemu_xbegin_fault_v1"] = std::move(*Request->XbeginFaultReceipt);
   if (Request->RtmSteps.Kind != X64RtmAbortSelection::Off)
     Report["native_rtm_abort_steps"] =
         Request->RtmSteps.report(std::move(RtmStepReceipts));

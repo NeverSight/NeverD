@@ -76,6 +76,13 @@ def _integer(value, label: str, maximum: int) -> int:
     return value
 
 
+def _expect_x86_pc(actual, cpu: int, pc: int):
+    if type(actual) is not int or not 0 <= actual <= 0xffffffffffffffff:
+        raise SnapshotError("CPU has no decoded x86 instruction pointer")
+    if actual != pc:
+        raise SnapshotError(f"CPU {cpu} PC mismatch: saved {actual:#x}, requested {pc:#x}")
+
+
 def _name(value, label: str) -> str:
     if not isinstance(value, str) or not value or "\0" in value:
         raise SnapshotError(f"invalid {label}")
@@ -474,11 +481,50 @@ class QemuSaveSnapshot:
         pc = _integer(pc, "requested PC", 0xffffffffffffffff)
         if cpu not in self.cpus:
             raise SnapshotError(f"CPU {cpu} is absent")
-        actual = self.cpus[cpu]["fields"].get("env.eip")
-        if type(actual) is not int or not 0 <= actual <= 0xffffffffffffffff:
-            raise SnapshotError("CPU has no decoded x86 instruction pointer")
-        if actual != pc:
-            raise SnapshotError(f"CPU {cpu} PC mismatch: saved {actual:#x}, requested {pc:#x}")
+        _expect_x86_pc(self.cpus[cpu]["fields"].get("env.eip"), cpu, pc)
+
+    def cpus_at_x64_rip(self, pc: int, cpu: int | None = None):
+        """Match original eight-byte RIPs without decoding other register banks."""
+        pc = _integer(pc, "requested RIP", 0xffffffffffffffff)
+        devices = self._devices.items()
+        if cpu is not None:
+            key = ("cpu", _integer(cpu, "CPU instance", 0xffffffff))
+            device = self._devices.get(key)
+            if device is None:
+                raise SnapshotError(f"CPU {cpu} is absent")
+            devices = ((key, device),)
+        for (name, instance), device in devices:
+            if name != "cpu":
+                continue
+            offset = device.offset
+            for field in device.layout.fields:
+                if field.name == "env.eip":
+                    if field != _Field("env.eip", 8, None, ("big", False), None):
+                        raise SnapshotError("expected a saved x64 uint64 RIP")
+                    self._file.seek(offset)
+                    actual = self._uint(8)
+                    if cpu is not None:
+                        _expect_x86_pc(actual, cpu, pc)
+                    if actual == pc:
+                        yield instance
+                    break
+                offset += field.size * (field.count if field.count is not None else 1)
+            else:
+                raise SnapshotError(f"CPU {instance} has no saved RIP")
+
+    def has_cpu_subsection_u32(self, cpu: int, name: str, field: str) -> bool:
+        """Check the original wire layout of a one-word v1 CPU subsection."""
+        cpu = _integer(cpu, "CPU instance", 0xffffffff)
+        section = self._devices.get(("cpu", cpu))
+        if section is None:
+            raise SnapshotError(f"CPU {cpu} is absent")
+        child = next((sub for sub in section.layout.subsections if sub.name == name), None)
+        if child is None:
+            return False
+        if (child.version != 1 or child.subsections or
+                child.fields != (_Field(field, 4, None, ("big", False), None),)):
+            raise SnapshotError(f"expected {name} v1 containing one uint32 {field}")
+        return True
 
     def read_ram(self, block: str, offset: int, size: int) -> bytes:
         """Read RAM-block offsets, not physical/virtual addresses; missing pages fail."""
