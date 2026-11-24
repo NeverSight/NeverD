@@ -50,8 +50,21 @@ symbols carry their instruction mode so a native linker can construct callable
 pointers. The r8 SDK supports MIPS III/o32, MIPS V, MIPS16 and microMIPS o32,
 and fixed-address output. The r9 SDK also emits scalar microMIPS64 bodies
 for Releases 2, 3 and 5 in both byte orders. n32 retains ELF32 pointers and n64
-retains ELF64 pointers. Release 6 microMIPS64
-native emission requires additional backend support. Selecting r7 limits
+retains ELF64 pointers. The r10 SDK adds scalar microMIPS64 Release 6
+object and fixed-address output for these ABIs and byte orders. The target
+layout records the pointer width and byte order across code and data sections.
+Release 6 calls use a tagged address when switching between classic and
+microMIPS functions. Clang preserves the mode on declarations. When a callee’s
+mode is resolved at link time, LLD supplies the mode-switching thunk. On n64
+the compiler keeps the full address of stack variables. On n32, a register call
+can hold an upper-half ELF32 function address sign-extended to 64 bits.
+NeverD matches that address and the instruction-mode tag to the callee before
+emitting the call. For 64-bit field writes, five cross-word starting positions
+have conflicting encodings in the reference manual.
+The compiler emits an equivalent sequence with unambiguous instructions.
+[Release qualification](evidence/mips-llvm-r10-micromips64r6.json).
+
+Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
 The fork can compile ordinary LLVM functions for historical I–III ISAs.

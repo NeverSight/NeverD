@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 3a3558b94c1d1c87a058e832bc187cbb1d1906e0e1b1c3b59fb1e9fd91d5ce65 -->
+<!-- i18n-source: b184498ae7532c73d73e053cee0c98a14194188b6a3109e01ade408ed3e16445 -->
 
 <div align="center">
 
@@ -63,6 +63,15 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 > 표의 모든 셀은 구현되어 있지만 통합 테스트 깊이는 서로 다릅니다. 자세한 내용은 [아키텍처 범위 표](architecture.md#support-and-test-depth)를 참고하세요. 현대 macOS는 과거 i386 실행 파일을 링크할 수 없으므로 Mach-O i386에는 `thin` 재배치 가능 객체를 사용합니다.
 
 **MIPS ELF**의 디스어셈블, 제어 흐름 복원, C 및 LLVM 출력을 지원합니다. SDK는 NeverSight LLVM의 Mips 백엔드로 지원 대상 함수를 재배치 가능한 ELF 오브젝트로 다시 컴파일하며 원래 바이트 순서와 호출 규약(o32, n32, n64)을 유지합니다. 실행 파일에 코드를 반영하려면 패치 도구에 MIPS ELF 쓰기 기능이 필요합니다. [MIPS 프로필 및 네이티브 출력(영문)](../mips.md)
+
+실험적 정수 ELF 대상은 엄격한 명령어 리프팅, 제어 흐름 그래프 복원, 구조화된 C 출력, LLVM IR 출력 및 LLVM IR에서 생성한 C 출력을 지원합니다.
+
+| 대상 | 검증된 ELF 프로필 |
+|---|---|
+| RISC-V | 리틀 엔디언 RV32I/ILP32 및 RV64I/LP64. ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. |
+| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. ELFv1 함수 디스크립터에서 코드 진입점과 TOC를 얻습니다. 검증한 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, CR0에 기록되는 결과, XER 오버플로 비트에 미치는 영향이 포함됩니다. |
+
+네이티브 코드 재작성 및 모듈 간 동적 링크는 향후 과제입니다. [RISC-V 및 PowerPC 지원 범위(영문)](../riscv-powerpc.md)
 
 legacy EVM bytecode는 native container와 독립적으로 지원합니다. Frontier부터 Fusaka까지
 assigned opcode 150개가 전용 Low/Med/High IR, verified LLVM `i256`, C23
@@ -202,7 +211,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r9
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r10
 cmake --build build
 ```
 
@@ -218,19 +227,19 @@ NeverD의 일반 push 및 pull request CI는 의도적으로 LLVM submodule을 �
 
 각 아카이브는 `~/.cache/neverd-llvm/<tag>/<arch>/` 또는 `NEVERD_LLVM_PREBUILT_CACHE_DIR` 경로에 압축을 풀기 전에 `cmake/NeverDLLVMPrebuilt.cmake`에 고정된 다이제스트로 검증됩니다. 고정 정보에 없는 태그는 게시된 `.sha256`을 사용합니다. 기본 고정 버전은 `BUILDINFO.txt`의 LLVM 서브모듈 커밋도 정확히 일치해야 합니다. 릴리스 빌드는 macOS/Linux에서 ccache, Windows clang-cl에서 sccache와 GitHub Actions 캐시를 사용합니다. 컴파일러 캐시는 재빌드만 가속하며 릴리스 자산으로 게시하지 않습니다.
 
-기본 패키지 리비전은 `neverd-llvm-v23.0.0-r9`입니다. Git 태그, 릴리스 대상, 소스 커밋, 아카이브 세 개의 다이제스트를 하나의 변경 불가 소스 리비전으로 고정합니다. 이전 기본 태그, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`를 캐시한 빌드 디렉터리는 명시적인 `NEVERD_LLVM_PREBUILT_SHA256`이 없으면 자동으로 `r9`로 이동합니다. `Prebuilt LLVM Audit`는 push, pull request 및 6시간마다 실행되고, `scripts/audit_prebuilt_llvm_release.py`가 고정 정보와 현재 GitHub 릴리스 및 각 체크섬 파일을 비교합니다.
+기본 패키지 리비전은 `neverd-llvm-v23.0.0-r10`입니다. Git 태그, 릴리스 대상, 소스 커밋, 아카이브 세 개의 다이제스트를 하나의 변경 불가 소스 리비전으로 고정합니다. 이전 기본 태그, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9`를 캐시한 빌드 디렉터리는 명시적인 `NEVERD_LLVM_PREBUILT_SHA256`이 없으면 자동으로 `r10`로 이동합니다. `Prebuilt LLVM Audit`는 push, pull request 및 6시간마다 실행되고, `scripts/audit_prebuilt_llvm_release.py`가 고정 정보와 현재 GitHub 릴리스 및 각 체크섬 파일을 비교합니다.
 
-LLVM fork가 변경되었지만 LLVM 버전이 여전히 `23.0.0`이면 다음 패키지 리비전인 `neverd-llvm-v23.0.0-r10`, 이후 `-r11`를 게시합니다. 기존 릴리스를 덮어쓰거나 LLVM 버전 `23.0.1`을 임의로 만들지 않습니다.
+LLVM fork가 변경되었지만 LLVM 버전이 여전히 `23.0.0`이면 다음 패키지 리비전인 `neverd-llvm-v23.0.0-r11`, 이후 `-r12`를 게시합니다. 기존 릴리스를 덮어쓰거나 LLVM 버전 `23.0.1`을 임의로 만들지 않습니다.
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r10 \
+  -f release_tag=neverd-llvm-v23.0.0-r11 \
   -f overwrite_existing_assets=false
 ```
 
-워크플로 성공 후 `cmake/NeverDLLVMPrebuilt.cmake`의 기본 태그, 고정 커밋, 다이제스트 세 개를 함께 갱신합니다. 각 패키지 리비전은 별도 캐시 디렉터리를 사용하며 현재 기본 리비전은 `.cache/neverd-llvm/neverd-llvm-v23.0.0-r9` 아래에 저장됩니다. 오래되거나 다시 게시된 아카이브는 압축 해제 전에 실패합니다. `overwrite_existing_assets`는 이전 릴리스 복구 전용이며 일반 리비전 게시에서는 끕니다.
+워크플로 성공 후 `cmake/NeverDLLVMPrebuilt.cmake`의 기본 태그, 고정 커밋, 다이제스트 세 개를 함께 갱신합니다. 각 패키지 리비전은 별도 캐시 디렉터리를 사용하며 현재 기본 리비전은 `.cache/neverd-llvm/neverd-llvm-v23.0.0-r10` 아래에 저장됩니다. 오래되거나 다시 게시된 아카이브는 압축 해제 전에 실패합니다. `overwrite_existing_assets`는 이전 릴리스 복구 전용이며 일반 리비전 게시에서는 끕니다.
 
 **산출물**
 

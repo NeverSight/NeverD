@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 3a3558b94c1d1c87a058e832bc187cbb1d1906e0e1b1c3b59fb1e9fd91d5ce65 -->
+<!-- i18n-source: b184498ae7532c73d73e053cee0c98a14194188b6a3109e01ade408ed3e16445 -->
 
 <div align="center">
 
@@ -63,6 +63,15 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 > 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](architecture.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
 
 **MIPS ELF** の逆アセンブル、制御フローの復元、C および LLVM 出力に対応しています。SDK は NeverSight 版 LLVM の Mips バックエンドで対応関数を再配置可能な ELF オブジェクトに再コンパイルし、元のバイト順と呼び出し規約（o32、n32、n64）を保持します。実行ファイルに書き戻すには、パッチャーに MIPS ELF の書き込み処理を追加する必要があります。[MIPS プロファイルとネイティブ出力（英語）](../mips.md)
+
+実験的な整数 ELF ターゲットでは、厳密なリフト、制御フローグラフの復元、構造化 C、LLVM IR、および LLVM IR からの C 出力に対応しています。
+
+| ターゲット | 検証済みの ELF プロファイル |
+|---|---|
+| RISC-V | リトルエンディアンの RV32I/ILP32 と RV64I/LP64。ELF の情報に従って M、A、整数 C、または個別の Zmmul、Zaamo、Zalrsc、Zca 拡張を選択します。 |
+| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。ELFv1 の関数記述子からコードのエントリと TOC を取得します。検証済みのスカラ命令には符号付き・符号なし除算と、その結果の CR0 への記録、XER のオーバーフロー状態への影響が含まれます。 |
+
+ネイティブコードの書き換えとモジュール間の動的リンクは今後の課題です。 [RISC-V と PowerPC の対応範囲（英語）](../riscv-powerpc.md)
 
 legacy EVM bytecode は native container と独立して対応します。Frontier から Fusaka
 までの 150 assigned opcode が専用 Low/Med/High IR、verified LLVM `i256`、C23
@@ -202,7 +211,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r9
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r10
 cmake --build build
 ```
 
@@ -218,19 +227,19 @@ NeverD の通常の push および pull request CI は、意図的に LLVM submo
 
 各アーカイブは `~/.cache/neverd-llvm/<tag>/<arch>/`（または `NEVERD_LLVM_PREBUILT_CACHE_DIR` の指定先）への展開前に、`cmake/NeverDLLVMPrebuilt.cmake` の固定ダイジェストで検証されます。固定値の対象外のタグでは、公開された `.sha256` を使います。既定の固定版では `BUILDINFO.txt` の LLVM サブモジュールコミットも完全一致が必要です。リリースビルドは macOS/Linux で ccache、Windows clang-cl で sccache と GitHub Actions キャッシュを使用します。コンパイラーキャッシュは再ビルドの高速化専用で、リリース成果物には含めません。
 
-既定のパッケージ改訂版は `neverd-llvm-v23.0.0-r9` です。Git タグ、リリース対象、ソースコミット、3アーカイブのダイジェストを不可変の改訂版として固定します。古い基本タグ、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7`、`neverd-llvm-v23.0.0-r8` をキャッシュしたビルドディレクトリは、明示的な `NEVERD_LLVM_PREBUILT_SHA256` がなければ自動で `r9` に移行します。`Prebuilt LLVM Audit` は push、pull request、6時間ごとに実行され、`scripts/audit_prebuilt_llvm_release.py` が固定値と GitHub の現在のリリースおよび各チェックサムファイルを照合します。
+既定のパッケージ改訂版は `neverd-llvm-v23.0.0-r10` です。Git タグ、リリース対象、ソースコミット、3アーカイブのダイジェストを不可変の改訂版として固定します。古い基本タグ、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7`、`neverd-llvm-v23.0.0-r8`、`neverd-llvm-v23.0.0-r9` をキャッシュしたビルドディレクトリは、明示的な `NEVERD_LLVM_PREBUILT_SHA256` がなければ自動で `r10` に移行します。`Prebuilt LLVM Audit` は push、pull request、6時間ごとに実行され、`scripts/audit_prebuilt_llvm_release.py` が固定値と GitHub の現在のリリースおよび各チェックサムファイルを照合します。
 
-LLVM fork が変更されても LLVM のバージョンが `23.0.0` の場合は、次のパッケージ改訂版 `neverd-llvm-v23.0.0-r10`、続いて `-r11` を公開します。既存リリースの上書きや架空の LLVM バージョン `23.0.1` は使用しません。
+LLVM fork が変更されても LLVM のバージョンが `23.0.0` の場合は、次のパッケージ改訂版 `neverd-llvm-v23.0.0-r11`、続いて `-r12` を公開します。既存リリースの上書きや架空の LLVM バージョン `23.0.1` は使用しません。
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r10 \
+  -f release_tag=neverd-llvm-v23.0.0-r11 \
   -f overwrite_existing_assets=false
 ```
 
-成功後は `cmake/NeverDLLVMPrebuilt.cmake` の既定タグ、固定コミット、3つのダイジェストを同時に更新します。パッケージの改訂版ごとに専用のキャッシュディレクトリを使い、現在の既定版は `.cache/neverd-llvm/neverd-llvm-v23.0.0-r9` 以下に保存されます。古い、または再公開されたアーカイブは展開前に拒否されます。`overwrite_existing_assets` は旧版復旧専用で、通常の改訂版公開では無効にします。
+成功後は `cmake/NeverDLLVMPrebuilt.cmake` の既定タグ、固定コミット、3つのダイジェストを同時に更新します。パッケージの改訂版ごとに専用のキャッシュディレクトリを使い、現在の既定版は `.cache/neverd-llvm/neverd-llvm-v23.0.0-r10` 以下に保存されます。古い、または再公開されたアーカイブは展開前に拒否されます。`overwrite_existing_assets` は旧版復旧専用で、通常の改訂版公開では無効にします。
 
 **成果物**
 

@@ -1,0 +1,473 @@
+{
+  "scope": "Scalar microMIPS64 Release 6 compiler and ELF output. n32 uses ELF32 and n64 uses ELF64 in both byte orders.",
+  "llvm": {
+    "source": "1c37d515ef3b12e8923390f95dc49052a966f00f",
+    "tree": "c7c139db902b2055041b2efed47cf1563afc0572",
+    "previous_release": "neverd-llvm-v23.0.0-r9",
+    "pull_request": "https://github.com/NeverSight/llvm-project/pull/19",
+    "source_ci": "https://github.com/gmh5225/test_mac_intel/actions/runs/45489861600",
+    "sdk_ci": "https://github.com/gmh5225/test_mac_intel/actions/runs/45489861419",
+    "merge": "8888aa226da17a7215bf819b550f78f10842111d",
+    "release": "https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r10",
+    "archives": {
+      "neverd-llvm-linux-x86_64.tar.xz": "c42d28773101411fe9f439e13040d6b2018a04dbb74caf36a5c8c10df70df08f",
+      "neverd-llvm-macos-arm64.tar.xz": "3a62ff7efd96b7e794f74d6ab75442e5ed824e5e74f66eda5a8c37c2d4dc7047",
+      "neverd-llvm-windows-x64.zip": "4093cae8a2e67a95f345d8d333f97cfe8720aa3271697c162499fcdb9f41ff07"
+    },
+    "native_results": {
+      "Linux": {
+        "suites": {
+          "llvm": 1647,
+          "clang": 4,
+          "target-layout": 3,
+          "mips-fixups": 2,
+          "lld": 97
+        },
+        "llvm": {
+          "Passed": 1587,
+          "Expectedly Failed": 57,
+          "Unsupported": 3
+        },
+        "artifact": "sha256:991f994072685186207eba0cb413310bbfd46ba622bdd86c296cd1c1089e1501"
+      },
+      "macOS": {
+        "suites": {
+          "llvm": 1647,
+          "clang": 4,
+          "target-layout": 3,
+          "mips-fixups": 2,
+          "lld": 97
+        },
+        "llvm": {
+          "Passed": 1587,
+          "Expectedly Failed": 57,
+          "Unsupported": 3
+        },
+        "artifact": "sha256:cef5c1392c56e698d1271e3dd4314c96d2b21231afed9b7921393e5864042f74"
+      },
+      "Windows": {
+        "suites": {
+          "llvm": 1647,
+          "clang": 4,
+          "target-layout": 3,
+          "mips-fixups": 2,
+          "lld": 97
+        },
+        "llvm": {
+          "Passed": 1587,
+          "Expectedly Failed": 57,
+          "Unsupported": 3
+        },
+        "artifact": "sha256:e11767307c6b2455a23d7461c1d5be5cedce96429960f357bfe227c31e32fe17"
+      }
+    }
+  },
+  "unicorn": {
+    "previous": "3763c9a814a5cf6691f6cb912f89598ddebe9426",
+    "source": "895c15602161c56d409880d2177b0b442967a32f",
+    "merged": "34afc42471e2aa56428ee0bc5b9687ef7729d94b",
+    "pull_request": "https://github.com/NeverSight/unicorn/pull/42",
+    "native_ci": "https://github.com/gmh5225/test_mac_intel/actions/runs/45487986093"
+  },
+  "execution": {
+    "model": "NeverSight Unicorn microMIPS64R6 generic CPU. Integer expected values were evaluated separately. All inputs are synthetic arithmetic, conversions, calls or memory accesses.",
+    "public_lift": {
+      "math": [
+        "add",
+        "unsigned high product",
+        "three bit-field extracts",
+        "three floating-point conversions",
+        "branch with memory store"
+      ],
+      "variants": "Nine functions, two ABIs, two byte orders, with and without the NeverD optimization pipeline. Checks compare the return value, return PC, stack pointer and memory. n64 uses stack and data addresses above 4 GiB.",
+      "r9_object_count": 0,
+      "earlier_r6_candidate": {
+        "source": "14470f327190d3fccc316b33407319a3242c697f",
+        "programs": 58,
+        "checks": 406
+      },
+      "replayed_lift_ir": {
+        "programs": 72,
+        "programs_correct": 72,
+        "correct_checks": 504
+      },
+      "published_sdk": {
+        "programs": 72,
+        "programs_correct": 72,
+        "correct_checks": 504
+      },
+      "inputs_sha256": [
+        "081f88f684cf9b87033cecd9fc17d05a35f2de913a26f8f051cfd73b6302fb09",
+        "0b622909abea37e990e9a762eedc1fceb958d52986a12ac76cb9dcbd15fa5143",
+        "12294e8b050da602c2ecab71a014ad72c96aad8447bceea2d832fdd77e9084f3",
+        "1b2914b17c68d8febe4de078a9b8f0e5113576d068a938c0637b5d7b0a8678fa",
+        "3a53264fd20aa8819b9cbe4df6d9b9b9f6cfc7e6479680dd53e52cb15fc5d1cf",
+        "419d3fb3f870f46b7ae304d55961cb28a0bc16c21ce4f78e8484bf3f16511466",
+        "4a0e2331f86140a431f766f1b7dc61aadad9a3951fa6661d130f69e89b858240",
+        "4b3adbe01e2ccf357f0f98fc59864abd4bf6df6165ed9ce054baa273f1c41553",
+        "51fcc0c551264d036cf0f50c2bac51341be0433c50479ad64a585e6169b363e0",
+        "52ed4563e278d0439f0ca790a3c0d9bae9f8e82604fd81a7d01c96fe72e0c705",
+        "59ba9e896ca4e76a08967ebcf3dad611a48ba7b3632c5c2e28f4c418bd4f863f",
+        "60c4802b9ae44654ab3f987dd85d03c5f2cb8703b1da6a7d8c7540c00950f5b1",
+        "62704b92255bf7e43260736463e6f73964ff3875380341a6a9fc4758ad2eab21",
+        "63ee97d886ecbc042eff5be7620b6ba9eff205a20206400cf080ac6cd32a6531",
+        "74785af5cf21b1b81f0d76ee848fc548525cfb5e689e04c803e30b74cbf1b679",
+        "7a8ebbbe4fc8ab9c0332804a727c6fe8be0160c0aaca80dceffcf1767f51bae7",
+        "8ceef4f643210eb46fb4b518183ea5d1c8184b9b87db3e8aba0a38a524e7bd50",
+        "8f176cae2e25e2cab6e9d0273b5ea2796704c25302c1ae58234f4fb3450d6d3b",
+        "91547ebb12ce68ac493e7fc034a3e8a5d2c3924df4415f35428105a351b7470b",
+        "a64f01d73d9f9401eb5ac5a817b9bdde93d44b61ad79fcb3beff5559d63283eb",
+        "a78399912fbef999633d34b438858443f3bdff3ccc1fad25e1785bedfd2611ca",
+        "ae22dd75d841fc01d8002cd9f4a6c93b5a36ddf46bd360b42cd4a9aab4ed9ecc",
+        "b751fcc621a60ee0239227a06c956883f331a91c3120ea5d7405ed2fed4c386f",
+        "bb2d0c743b634f367055b771b9a7e205d41a2f854b275809a5180ec874de9fe8",
+        "c29e68ce144bee452403feda2f5daa90db28a0724d74a7b0d1f522074e9d60d3",
+        "c5b16a7885bfb40b8c33847b3a3884a35f87681431f6a1b9768914ec1e134918",
+        "cdc89dbc57d77ba301853f13d67ccf82a87a8a05e7d92fc030924bc999fd8f2e",
+        "db7015b376680f05e8bcf06efd30b8a9fbc61dc16a1761a0c0de029b132125ef",
+        "dbc9ddaac0bf81e0af1c39164629bd8241d94be610422b3ce5a3c6ded70d7399",
+        "e0a05c19c44bddd1221226a39be6602d13ec5600dda47a479eb6b1d6ea012307",
+        "f343989a634e660b6e9e7be5ce8a87c1b29f336ef8399f1fc5588ac82469b01b",
+        "f732c5fadd92f675339e842b33216845828e5d4aaaa769c4c239afff3a1e0b6a",
+        "fb8ae889425946c2f90ee997f0e35482cb0f9df63d7d97260aa2dcd4a7c39c58",
+        "fbd15704466f8143f4e0709e21c6b811e92357264c3392437c04e3076596ab0f",
+        "fbf2343d7db54ec3d9626d4450c7720359dc67fef5ee3b854250351b9434931e",
+        "ff8295a54dd034916b46887d69ebc7d6cdb388d4038d5187ce2c0f78dc8cb0c5"
+      ]
+    },
+    "fixed_address": {
+      "paired_bytes": 72,
+      "executions": 1008,
+      "external_placements": 48,
+      "valid_external_placements": 16,
+      "successful_external_calls": 80
+    },
+    "mode_switches": {
+      "inside_module_before": {
+        "programs": 64,
+        "programs_correct": 48,
+        "correct_checks": 336
+      },
+      "inside_module": {
+        "programs": 64,
+        "programs_correct": 64,
+        "correct_checks": 448
+      },
+      "separate_units_before": {
+        "programs": 64,
+        "programs_correct": 48,
+        "correct_checks": 336
+      },
+      "separate_units": {
+        "programs": 64,
+        "programs_correct": 64,
+        "correct_checks": 448
+      },
+      "separately_compiled_c": {
+        "programs": 128,
+        "programs_correct": 128,
+        "correct_checks": 896
+      },
+      "rebased_thunk_checks": 96,
+      "n64_plt_checks": 144
+    },
+    "fields": {
+      "compiler_cases_before": {
+        "programs": 104,
+        "programs_correct": 84,
+        "correct_checks": 588
+      },
+      "compiler_cases": {
+        "programs": 104,
+        "programs_correct": 104,
+        "correct_checks": 728
+      },
+      "exhaustive_expression": "(a & ~mask) | ((b << position) & mask) for all nonempty contiguous 64-bit fields. Nine input pairs per field.",
+      "source_sha256": "c1b845a6a75d1a615a2dfda2d712b079fb32be190d2eca4413985a102c1497c8",
+      "exhaustive_results": {
+        "n32-big": {
+          "fields": 2080,
+          "passed": 18720,
+          "elf_sha256": "998c05aa687bd1345ebe2b1454e2157c6eaceb5b58bdabdd3e95b9a37a43416b"
+        },
+        "n32-little": {
+          "fields": 2080,
+          "passed": 18720,
+          "elf_sha256": "df5866e132955509a813cc9d1478bef79c7f7d5dd36d5289f25ed7006a9191b6"
+        },
+        "n64-big": {
+          "fields": 2080,
+          "passed": 18720,
+          "elf_sha256": "cc3ca900bac2c3d6a8202c983ddad730f4ec20c54879e920d852cf79a0fa54c1"
+        },
+        "n64-little": {
+          "fields": 2080,
+          "passed": 18720,
+          "elf_sha256": "2e00b5b75beaf051d26c42f5eb8377da9eb48aab94b4f42f47d4d92b362a662d"
+        }
+      },
+      "machine_code": {
+        "r2_distinct_words_assembled_per_profile": 2080,
+        "r6_distinct_words_assembled_per_profile": 1920,
+        "r6_diagnostic_words_per_profile": 160,
+        "raw_words_disassembled_per_profile": 2080,
+        "byte_orders": [
+          "little",
+          "big"
+        ],
+        "abi": [
+          "n32",
+          "n64"
+        ]
+      },
+      "instruction_execution": {
+        "r2-little": {
+          "previous": {
+            "value_passed": 6240
+          },
+          "updated": {
+            "value_passed": 6240
+          }
+        },
+        "r2-big": {
+          "previous": {
+            "value_passed": 6240
+          },
+          "updated": {
+            "value_passed": 6240
+          }
+        },
+        "r6-little": {
+          "previous": {
+            "value_failed": 5760,
+            "reserved_passed": 480
+          },
+          "updated": {
+            "value_passed": 5760,
+            "reserved_passed": 480
+          }
+        },
+        "r6-big": {
+          "previous": {
+            "value_failed": 5760,
+            "reserved_passed": 480
+          },
+          "updated": {
+            "value_passed": 5760,
+            "reserved_passed": 480
+          }
+        }
+      }
+    },
+    "public_two_functions": {
+      "cases": 32,
+      "r9": {
+        "objects": 8,
+        "checks": 112
+      },
+      "published_sdk": {
+        "objects": 32,
+        "checks": 448
+      },
+      "checks": "The public API lifts both named functions in one session. Their physical offsets, lengths and ISA tags agree with the object symbol table. Link each symbol as the entry and execute seven inputs with SP and return PC checks. n32 and n64, both byte orders, all caller/callee modes, with or without NeverD optimization.",
+      "high_half_n32": {
+        "r9": {
+          "complete": {
+            "objects": 0,
+            "checks": 0
+          },
+          "objects_containing_only_callee": 0,
+          "diagnostics": 16
+        },
+        "published_sdk": {
+          "objects": 16,
+          "checks": 224
+        },
+        "original_checks": 56,
+        "source_text": "0x91010100",
+        "rebuilt_text": "0xa1010100"
+      }
+    },
+    "recompiled_c": {
+      "projections": {
+        "highc": {
+          "programs": 36,
+          "programs_correct": 36,
+          "correct_checks": 252
+        },
+        "llvmc": {
+          "programs": 36,
+          "programs_correct": 36,
+          "correct_checks": 252
+        }
+      },
+      "mode": "The C declaration selects microMIPS. All 72 linked ELF files retain the ISA tag on the entry symbol and address.",
+      "programs": 72,
+      "programs_correct": 72,
+      "correct_checks": 504
+    }
+  },
+  "limits": {
+    "ambiguous_instruction_encodings": {
+      "crossing_dinsm_positions": [
+        2,
+        4,
+        12,
+        20,
+        28
+      ],
+      "compiler": "Lower writes at these positions with lower-word and upper-word inserts and a logical shift.",
+      "hardware": "Instruction diagrams for DSRA32 and DLSA conflict with the POOL32S table in revision 6.05. The raw R6 decoder diagnoses these words.",
+      "manual": "https://docs.alexrp.com/mips/micromips64_insns_v6_05.pdf"
+    },
+    "file_installation": "Installing generated sections in an existing MIPS ELF still requires MIPS-specific layout, relocations and interworking.",
+    "physical_timing": "Same-clock silicon captures are still needed for reset release to first internal fetch, a TLB write to the first use of its new mapping, and IRQ pin assertion to CPU recognition."
+  },
+  "performance": {
+    "baseline": "0f9776402d2f3aed5daf50e58cdcb820690517cc",
+    "candidate": "1c37d515ef3b12e8923390f95dc49052a966f00f",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45489870055",
+    "method": "24 interleaved paired rounds per input and native host. Each invocation disassembles 2,560 functions. Ratios are candidate child CPU time divided by r9; intervals are resampled 95% intervals for the paired median.",
+    "cells": {
+      "Linux": {
+        "micro-o32-be": {
+          "median": 0.9424773402195483,
+          "interval": [
+            0.9390806203452006,
+            0.9466636744841213
+          ]
+        },
+        "micro-o32-le": {
+          "median": 0.9335818144135859,
+          "interval": [
+            0.9253929444864394,
+            0.9384711450908838
+          ]
+        },
+        "r6-word-be": {
+          "median": 0.9987237524751578,
+          "interval": [
+            0.993038237783061,
+            1.0053790218666365
+          ]
+        },
+        "r6-word-le": {
+          "median": 1.011675914382959,
+          "interval": [
+            1.003876739530198,
+            1.019028803193006
+          ]
+        }
+      },
+      "macOS": {
+        "micro-o32-be": {
+          "median": 0.9645013167859992,
+          "interval": [
+            0.8315219915514257,
+            1.057206794831784
+          ]
+        },
+        "micro-o32-le": {
+          "median": 0.9505625531808655,
+          "interval": [
+            0.8504323175134909,
+            1.022116650075147
+          ]
+        },
+        "r6-word-be": {
+          "median": 1.0389480504785018,
+          "interval": [
+            0.9311879773002517,
+            1.1371799770841857
+          ]
+        },
+        "r6-word-le": {
+          "median": 1.0485286116299908,
+          "interval": [
+            0.8807840218336086,
+            1.1525414332566033
+          ]
+        }
+      },
+      "Windows": {
+        "micro-o32-be": {
+          "median": 0.9047619047619048,
+          "interval": [
+            0.9047619047619048,
+            0.9090909090909091
+          ]
+        },
+        "micro-o32-le": {
+          "median": 0.9023809523809524,
+          "interval": [
+            0.8695652173913043,
+            0.9047619047619048
+          ]
+        },
+        "r6-word-be": {
+          "median": 0.9722222222222222,
+          "interval": [
+            0.9444444444444444,
+            1.0
+          ]
+        },
+        "r6-word-le": {
+          "median": 1.0,
+          "interval": [
+            0.9473684210526315,
+            1.0
+          ]
+        }
+      }
+    }
+  },
+  "consumer_local": {
+    "mips": 1078,
+    "shared_layout": 23,
+    "shared_scalar": 39,
+    "binaries": {
+      "library_sha256": "230e2bd9601d9a6101518d815501fbac2e76092d5eebc7efe700dd5b2d07524e",
+      "cli_sha256": "cf2b9b0866cae2fdbe6b990697e96449f9e4d845771bf3e620eacd8d2e5b8ac1",
+      "clang_sha256": "fa0628cea4e84ec13650d3f4d0590a130697621d1c19a36f613b89a5ca11fc54",
+      "lld_sha256": "ba4a5b0ac0e1228afd73a6702807e4b2b5d85a48daf9cd4b9bcced2fc177bd85",
+      "previous_library_sha256": "9dc8d75747cd3de3c6962067c1422fd512fdf6fbc7baffd178ed2a91ed1b12a4"
+    },
+    "public_api_performance": {
+      "method": "Eight optimized whole-ELF public object roundtrips per leg, with two original classic functions per input. Both persistent processes warm up all four profiles before 24 interleaved pairs. Child process CPU nanoseconds exclude process startup. r9 and r10 differ in NeverD and the LLVM SDK.",
+      "profiles": {
+        "n32/big": {
+          "input_sha256": "b27f1f8c1014816ee959160b6d9cd23461a57575df079b3568833c6e2ac9190e",
+          "paired_median": 0.9936849806470947,
+          "resampled_95_percent": [
+            0.9709184363587177,
+            1.0072775388686734
+          ]
+        },
+        "n32/little": {
+          "input_sha256": "7e0e1094dfdb7de15e96a3697e29ee8c377c6a40a6ca42ac037d07ceb0bf2313",
+          "paired_median": 1.0120899818801452,
+          "resampled_95_percent": [
+            0.9633786412433996,
+            1.0559979450295403
+          ]
+        },
+        "n64/big": {
+          "input_sha256": "ad5f1ccb207218b6997732eb77d5836b71e70dff7749e9d15b0c8839dcb78b99",
+          "paired_median": 0.9728920400373136,
+          "resampled_95_percent": [
+            0.943954604975993,
+            1.0119508210815924
+          ]
+        },
+        "n64/little": {
+          "input_sha256": "a2bee0ac184b58fc6928a9add8c543e29479ef322c8760a3af22c645eb8bf2de",
+          "paired_median": 0.9951522517761913,
+          "resampled_95_percent": [
+            0.9826066094883944,
+            1.0274105697041072
+          ]
+        }
+      }
+    }
+  }
+}
