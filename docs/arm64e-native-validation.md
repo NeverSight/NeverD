@@ -2275,6 +2275,28 @@ tag were removed with verified HTTP 404 responses; the replay repository was
 restored to its baseline tree. The 42,325,529-byte local replay package was
 removed after recording its hash. The active build and prebuilt r6 are retained.
 
+### Previously skipped Release cases
+
+Of the 39 cases skipped by the expanded r6 regression at `d9b476c234a1`,
+36 passed at `7a0540326952` on both macOS 26 and Xcode 27. Each host ran
+the compiler's original call and unwind control, then passed 32 installed-image
+tests covering chained and threaded fixups, signed cleanup and default process
+startup. Both also passed the four-key comparison, two entry tests
+and the MC recipe test. The entry verifier checked 26 public entries in
+each of eight published images per host and toolchain.
+
+For the eight generated-IR cases, r6 accepted upstream Clang 22.1.8 output
+and the source-built fork accepted Apple Clang output. When Apple Clang
+requested the named Darwin stack probe, r6 diagnosed it in all eight cases.
+Both local toolchains passed the other 40 installation cases. Integrating
+dev at `8af382a995b9` reproduced the local Release results and all 12
+inputs delivered to the Arm model.
+
+Three native comparisons still require an Apple environment exposing
+explicit PAuth_LR, effective PACM or 128-bit LRCPC3. The Arm model ran
+the generated ordered-memory code at EL0 and EL1 across four CPTA settings.
+[Individual outcomes and execution records](evidence/arm64e-skipped-regression-2026-11-24.json).
+
 ### Native x1 runner qualification
 
 The PAuth_LR and PACM suites cross-compile their complete comparison programs
