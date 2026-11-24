@@ -202,18 +202,37 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
   visitRequiredPrefixes<true>(
       Ctx, Root, RootSlot, NumSlots, Steps, ArgSlots,
       [&](Step &St, unsigned Demand, unsigned Zeros, unsigned Coefficient) {
-        // If a product observes only the low lane, extension bits and the
-        // other concatenated lanes cannot reach any use of this output.
-        if (Demand <= 64 && Demand < St.Width &&
-            (St.Op == SymOp::ZExt || St.Op == SymOp::SExt ||
-             St.Op == SymOp::Concat) &&
-            Demand <= Ctx.width(Ctx.operands(St.Node).back())) {
-          St.FirstArg += St.NumArgs - 1;
-          St.NumArgs = 1;
-          St.Op = SymOp::Extract;
-          St.Aux = 0;
-          St.Width = Demand;
-          return;
+        if (Demand <= 64 && Demand < St.Width) {
+          // The low lane can come directly from a carrier, or from the
+          // unwrapped input suffix of a constant right shift or rotation.
+          unsigned Start = 0;
+          bool Extract = false;
+          switch (St.Op) {
+          case SymOp::ZExt:
+          case SymOp::SExt:
+          case SymOp::Concat:
+            if (Demand <= Ctx.width(Ctx.operands(St.Node).back())) {
+              St.FirstArg += St.NumArgs - 1;
+              Extract = true;
+            }
+            break;
+          case SymOp::LShr:
+          case SymOp::AShr:
+          case SymOp::Rol:
+          case SymOp::Ror:
+            Start = detail::sourceSuffixStart(Ctx, St.Node);
+            Extract = Start && Start <= St.Width - Demand;
+            break;
+          default:
+            break;
+          }
+          if (Extract) {
+            St.NumArgs = 1;
+            St.Op = SymOp::Extract;
+            St.Aux = Start;
+            St.Width = Demand;
+            return;
+          }
         }
         if (preservesLowBits(St.Op) && Demand <= 64)
           St.Width = Demand;

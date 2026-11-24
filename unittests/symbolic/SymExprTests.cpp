@@ -2540,6 +2540,59 @@ TEST(SymExpr, ScaledProductOverwritesItsObservedSliceBetweenEvaluations) {
   }
 }
 
+TEST(SymExpr, ScaledMotionWindowsRetainPaddingWrapsAndVariableCounts) {
+  constexpr unsigned Width = 193;
+  std::mt19937_64 Random(0x3c967a);
+  for (unsigned Bits : {7u, 63u, 64u}) {
+    for (auto Op : {SymOp::LShr, SymOp::AShr, SymOp::Rol, SymOp::Ror}) {
+      for (unsigned Slot = 0; Slot < 4; ++Slot) {
+        SymContext C;
+        const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+        // Positions on either side of the last unwrapped window expose one
+        // extra source bit or one bit of zero, sign or circular padding.
+        const unsigned Start = Width - Bits - 1 + Slot;
+        const unsigned Distance = Op == SymOp::Rol ? Width - Start : Start;
+        const auto Count =
+            Slot == 3 ? C.mkVar("count", Width) : C.mkConst(Width, Distance);
+        const auto Word = Op == SymOp::Rol    ? C.mkRol(X, Count)
+                          : Op == SymOp::Ror  ? C.mkRor(X, Count)
+                          : Op == SymOp::LShr ? C.mkLShr(X, Count)
+                                              : C.mkAShr(X, Count);
+        const auto Scale = llvm::APInt(Width, 3).shl(Width - Bits);
+        const auto Root =
+            C.mkMul({C.mkConst(Scale), C.mkXor(Word, C.mkConst(Width, 5)),
+                     C.mkOr(Y, C.mkConst(Width, 1))});
+        SymEvalPlan Partial(C, Root), Shared(C, C.mkXor(Root, Word));
+        for (unsigned Trial = 0; Trial < 32; ++Trial) {
+          std::array<llvm::APInt, 3> Values;
+          for (auto &V : Values) {
+            std::array<uint64_t, 4> Words;
+            for (auto &Raw : Words)
+              Raw = Random();
+            V = llvm::APInt(Width, Words);
+          }
+          if (Slot != 3 || Trial % 2)
+            Values[2] = (Slot == 3 && Trial % 3) ? 0 : Distance;
+          const auto &N = Values[2];
+          auto Full = Values[0];
+          if (Op == SymOp::Rol)
+            Full = Full.rotl(N.urem(Width));
+          else if (Op == SymOp::Ror)
+            Full = Full.rotr(N.urem(Width));
+          else if (Op == SymOp::LShr)
+            Full = Full.lshr(N.getLimitedValue(Width));
+          else
+            Full = Full.ashr(N.getLimitedValue(Width - 1));
+          const auto Expected = Scale * (Full ^ llvm::APInt(Width, 5)) *
+                                (Values[1] | llvm::APInt(Width, 1));
+          EXPECT_EQ(Partial.eval(Values), Expected);
+          EXPECT_EQ(Shared.eval(Values), Expected ^ Full);
+        }
+      }
+    }
+  }
+}
+
 TEST(SymExpr, WeightedSumsEvaluateTheObservedBitsOfEverySource) {
   constexpr unsigned Width = 321, Shift = 73;
   std::mt19937_64 Random(0x744aa9);

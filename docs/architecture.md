@@ -8216,7 +8216,9 @@ uses that same circular field for every offset at the coordinate. A signed
 extension or concatenation keeps its upper bits when a weight observes them.
 For a scaled product that reads only the low lane of an extension or
 concatenation, the evaluation plan can read that lane directly. A shared
-use that observes more bits keeps the wider value.
+use that observes more bits keeps the wider value. A fixed shift or rotation
+can supply a low word from its source when every observed bit precedes the
+first padding or wrapped bit.
 Repeated long factor calls share a parse result after their complete spelling
 and the applicable nesting depth have been checked.
 A scaled product can also contain several weighted fields per factor. If
