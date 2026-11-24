@@ -1838,9 +1838,12 @@ Missing/conflicting providers, unresolved or
 subtracted expressions, non-writable storage and stale placement fail before
 mutation. A source build of the fork exercises both IR and assembly producers
 through final placement in chained and threaded images. The bounded handoff
-retains nested signing constants and verifies the installed recipes. The r6
-build lacks the callback and explicitly skips that integration test; this
-handoff does not reconstruct the ABI of arbitrary lifted modules.
+retains nested signing constants and verifies the installed recipes. With r6,
+the native Mach-O object writer carries the same signing information in
+relocations. Its direct image writer exposes the authenticated specifier but
+omits the key and discriminator. NeverD rejects that output, including signing
+expressions introduced by assembly. Both toolchains exercise the native
+object installer with a local rebase and an external bind.
 
 `MachOAuthenticatedFixups` installs final-address signing recipes in linked
 arm64e chained and legacy threaded images. It reuses the strict dependency
@@ -5585,8 +5588,12 @@ common return. Each arm must supply its own input, and each block followed
 to the exit must be free of other effects. A partial register write can
 assemble a literal from bytes already defined on that arm. Across a join,
 only differences that survive the shared computation count. Replacing a
-field erases differences in that field. Adding a constant in a return delay
-slot preserves differences modulo the observed low bits. For an indirect
+field erases differences in that field. XOR with a scalar literal preserves
+differences in each observed bit. Addition and subtraction with a fixed
+operand preserve differences modulo the observed low bits. A zero extension
+contributes only the bits of its input. If a narrower view has its own PHI,
+its incoming value and the complete return register must agree on that
+predecessor before that view can prove a branch choice. For an indirect
 branch, the jump table must prove its index domain and bind the selected
 arms to that instruction. The
 comparison uses the inferred result width. If another edge needs an

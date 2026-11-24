@@ -580,12 +580,16 @@ pass all 36 native cases and both six-control prerequisites, with no failures
 or skips. The temporary delivery binds source-file, manifest, archive and
 test-binary hashes; it is recorded separately from the cold builds.
 
-A source build also exercises `MCProducerCapturesRecipesThroughFinalPlacement`
-for IR and assembly producers with chained and threaded installers, plus
-nested signing constants. This proves the bounded raw MC signing-recipe
-handoff offline. r6 lacks that callback. Neither this handoff nor canonical
-replacement IR supplies the missing ABI reconstruction for arbitrary
-`neverd.arm64e-analysis` lifted modules.
+`MCProducerCapturesRecipesThroughFinalPlacement` exercises IR and assembly
+producers with both chained and threaded installers. The native-object
+path runs with r6 and the source-built fork. It checks the installed IA
+rebase and DB bind, including their discriminator, address diversity,
+provider and signed addend. The source-built fork also supplies the signing
+recipe through its direct MC callback. On r6 the direct writer rejects
+authenticated expressions whose signing fields it cannot report.
+`ClassifiesEachAssembledSigningSpecifier` checks an ordinary pointer and
+each authenticated specifier independently. Lifted analysis modules also
+require the source ABI reconstruction described below.
 
 Run the new matrices using a source build of the corrected fork and a successful
 same-source system preflight:
@@ -941,6 +945,16 @@ classic arm64e subtype and requires system-compatible unwind information in
 the raw object. With `--publish`, NeverD checks the
 relocated object and its final installed unwind ranges. This also exercises
 the classic r6 conversion described above.
+
+On macOS with Clang, `AArch64EntryABI.PublishSignedNativeInputs` and
+`AArch64EntryABI.RejectsOccupiedNativeInputs` also run directly under CTest.
+Each builds a private arm64e dylib with the independent C++ caller and 26
+trapping entry points. The first test installs the reconstructed entries and
+checks the receipt against the output image. The second occupies the
+original TEXT tail and checks that publication fails before writing an
+output. Both work on a host that can link arm64e even when it cannot execute
+that slice. The verifier supplies explicit inputs to the same tests for
+the complete O0/O2, IA/IB and compact/DWARF matrix.
 
 Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
 same reconstructed fixed-C entry matrix. Each original dylib contains 26
@@ -2261,7 +2275,36 @@ tag were removed with verified HTTP 404 responses; the replay repository was
 restored to its baseline tree. The 42,325,529-byte local replay package was
 removed after recording its hash. The active build and prebuilt r6 are retained.
 
+### Previously skipped Release cases
+
+Of the 39 cases skipped by the expanded r6 regression at `d9b476c234a1`,
+36 passed at `7a0540326952` on both macOS 26 and Xcode 27. Each host ran
+the compiler's original call and unwind control, then passed 32 installed-image
+tests covering chained and threaded fixups, signed cleanup and default process
+startup. Both also passed the four-key comparison, two entry tests
+and the MC recipe test. The entry verifier checked 26 public entries in
+each of eight published images per host and toolchain.
+
+For the eight generated-IR cases, r6 accepted upstream Clang 22.1.8 output
+and the source-built fork accepted Apple Clang output. When Apple Clang
+requested the named Darwin stack probe, r6 diagnosed it in all eight cases.
+Both local toolchains passed the other 40 installation cases. Integrating
+dev at `8af382a995b9` reproduced the local Release results and all 12
+inputs delivered to the Arm model.
+
+Three native comparisons still require an Apple environment exposing
+explicit PAuth_LR, effective PACM or 128-bit LRCPC3. The Arm model ran
+the generated ordered-memory code at EL0 and EL1 across four CPTA settings.
+[Individual outcomes and execution records](evidence/arm64e-skipped-regression-2026-11-24.json).
+
 ### Native x1 runner qualification
+
+The PAuth_LR and PACM suites cross-compile their complete comparison programs
+with HighC, LLVM-to-C and LLVM-to-C after IR optimization. Each program builds
+at O0 and O2 using the same six IA/IB operations and independent instruction
+oracle as its native test. Native qualification additionally executes those
+programs on a process that demonstrates active keys and the required modifier
+behavior.
 
 Apple specifies M6 or later Macs and A20 Pro or later iPhones for arm64e.x1;
 the simulator cannot execute this ABI. Standard GitHub macOS ARM runners use

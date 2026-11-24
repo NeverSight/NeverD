@@ -8,6 +8,7 @@
 /// This does not execute dyld or authorize complete arm64e image rebuilding.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/codegen/MachO/MachOArm64eABI.h"
 #include "../../../lib/backend/codegen/MachO/MachODependencyState.h"
 #include "../../../lib/backend/codegen/MachO/MachOSourceDependencies.h"
 #include "gtest/gtest.h"
@@ -15,13 +16,16 @@
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/codegen/SourcePatch.h"
 #include "neverd/backend/codegen/SourcePatchDependencies.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOThreadedBind.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/Twine.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/IR/LLVMContext.h"
@@ -945,43 +949,128 @@ TEST(MachOArm64eInstallation, CompilerRetainsOrRefusesNestedSigningConstants) {
 #endif
 }
 
-TEST(MachOArm64eInstallation, MCProducerCapturesRecipesThroughFinalPlacement) {
+void setProducerAssembly(llvm::Module &Module, llvm::StringRef Body,
+                         llvm::StringRef Slots) {
+  Module.setModuleInlineAsm(
+      (llvm::Twine(kProducerFunction) + Body + kProducerData + Slots).str());
+}
+
+CompiledImage compileProducerImage(llvm::Module &Module, uint64_t Base) {
+  return compileImageForPatch(
+      Module, Arch::AArch64, BinaryFormat::MachO, Base,
+      PatchSymbolResolver([](llvm::StringRef Name,
+                             uint32_t) -> std::optional<uint64_t> {
+        return Name == kSymbol ? std::optional(kInstalledTarget) : std::nullopt;
+      }),
+      kBase, kProducerTriple, RewriteInputKind::ReplacementIR);
+}
+
+TEST(MachOArm64eInstallation, ClassifiesEachAssembledSigningSpecifier) {
+  for (llvm::StringRef Slot :
+       {kProducerPlainSlot, kProducerSignedSlot, kProducerDiverseSlot}) {
+    SCOPED_TRACE(Slot.str());
+    llvm::LLVMContext Context;
+    llvm::Module Module(kProducerModule, Context);
+    setProducerAssembly(Module, kProducerLeaf, Slot);
+    auto Image = compileProducerImage(Module, kBase);
+    const bool Signed = Slot != kProducerPlainSlot;
 #if !__has_include("llvm/MC/MCPointerAuthInfo.h")
-  GTEST_SKIP() << kMissingProducer;
-#else
-  for (bool Assembly : {false, true})
-    for (bool Threaded : {false, true}) {
-      auto Bytes =
-          largePageImage(Threaded ? threadedImage() : linkedImage(Chains[0]));
-      llvm::LLVMContext Context;
-      llvm::SMDiagnostic Diagnostic;
-      auto Module = llvm::parseAssemblyString(kProducerIR, Diagnostic, Context);
-      ASSERT_TRUE(Module);
-      if (Assembly) {
-        Module = std::make_unique<llvm::Module>(kProducerModule, Context);
-        Module->setModuleInlineAsm(kProducerAssembly);
-      }
-      const auto Base =
-          MachOPatcher().plannedExecSegmentVA(Bytes, Arch::AArch64);
-      ASSERT_NE(Base, 0u);
-      auto Image = compileImageForPatch(
-          *Module, Arch::AArch64, BinaryFormat::MachO, Base,
-          PatchSymbolResolver(
-              [](llvm::StringRef Name, uint32_t) -> std::optional<uint64_t> {
-                return Name == kSymbol ? std::optional(kInstalledTarget)
-                                       : std::nullopt;
-              }),
-          kBase, kProducerTriple, RewriteInputKind::ReplacementIR);
-      ASSERT_TRUE(Image.Success);
-      auto Recipes = collectMachOAuthenticatedFixups(Bytes, Image);
-      ASSERT_TRUE(bool(Recipes)) << llvm::toString(Recipes.takeError());
-      ASSERT_EQ(Recipes->size(), 2u);
-      auto Error = MachOPatcher().appendReplacementImage(Bytes, Image);
-      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
-      Error = verifyMachOAuthenticatedFixups(Bytes, *Recipes);
-      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    if (Signed) {
+      EXPECT_FALSE(Image.Success);
+      EXPECT_TRUE(Image.Sections.empty());
+      EXPECT_TRUE(Image.Bytes.empty());
+      continue;
     }
 #endif
+    ASSERT_TRUE(Image.Success);
+    unsigned Recipes = 0;
+    for (const auto &Section : Image.Sections)
+      for (const auto &Fixup : Section.FixupReferences)
+        if (Fixup.PointerAuth) {
+          ++Recipes;
+          EXPECT_EQ(Fixup.PointerAuth->AddressDiversity,
+                    Slot == kProducerDiverseSlot);
+        }
+    EXPECT_EQ(Recipes, unsigned(Signed));
+  }
+}
+
+void checkInstalledProducerSlots(llvm::ArrayRef<uint8_t> Original,
+                                 const CompiledImage &Image,
+                                 llvm::ArrayRef<uint8_t> Published) {
+  auto Slots = collectMachOAuthenticatedFixups(Original, Image);
+  ASSERT_TRUE(bool(Slots)) << llvm::toString(Slots.takeError());
+  ASSERT_EQ(Slots->size(), kProducerSlotCount);
+  unsigned Binds = 0;
+  for (const auto &Slot : *Slots) {
+    const auto &Recipe = Slot.Recipe;
+    EXPECT_TRUE(Slot.Authenticated);
+    EXPECT_EQ(Recipe.Diversity, kInstalledDiversity);
+    if (Recipe.LibraryOrdinal) {
+      ++Binds;
+      EXPECT_EQ(*Recipe.LibraryOrdinal, kProducerLibraryOrdinal);
+      EXPECT_EQ(Recipe.Symbol, kSymbol);
+      EXPECT_EQ(Recipe.Module, kLibrary);
+      EXPECT_EQ(Recipe.Addend, kImportAddend);
+      EXPECT_EQ(Recipe.Key, kAArch64PAuthKeyDB);
+      EXPECT_FALSE(Recipe.AddressDiversity);
+    } else {
+      EXPECT_EQ(Recipe.Target, Image.BaseVA);
+      EXPECT_EQ(Recipe.Key, kAArch64PAuthKeyIA);
+      EXPECT_TRUE(Recipe.AddressDiversity);
+    }
+  }
+  EXPECT_EQ(Binds, kProducerBindCount);
+  auto Error = verifyMachOAuthenticatedFixups(Published, *Slots);
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+}
+
+TEST(MachOArm64eInstallation, MCProducerCapturesRecipesThroughFinalPlacement) {
+  for (bool Assembly : {false, true}) {
+    SCOPED_TRACE(Assembly);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Diagnostic;
+    auto Module = llvm::parseAssemblyString(kProducerIR, Diagnostic, Context);
+    ASSERT_TRUE(Module);
+    if (Assembly) {
+      Module = std::make_unique<llvm::Module>(kProducerModule, Context);
+      setProducerAssembly(*Module, kProducerLeaf, kProducerSlots);
+    }
+    auto ObjectModule = llvm::CloneModule(*Module);
+    // The native object installer requires registered unwind coverage.
+    if (Assembly)
+      setProducerAssembly(*ObjectModule, kProducerUnwindLeaf, kProducerSlots);
+    auto Object = Codegen().compile(*ObjectModule, Arch::AArch64,
+                                    BinaryFormat::MachO, kProducerTriple);
+    ASSERT_TRUE(Object.Success);
+    for (bool Threaded : {false, true}) {
+      SCOPED_TRACE(Threaded);
+      auto Original =
+          largePageImage(Threaded ? threadedImage() : linkedImage(Chains[0]));
+      writeLE<uint32_t>(Original.data() + offsetof(mach_header_64, cpusubtype),
+                        macho_arm64e_abi::kClassicObjectSubtype);
+      auto ObjectBytes = Original;
+      auto Installed = appendMachOObjectImage(
+          ObjectBytes, llvm::toStringRef(llvm::ArrayRef(Object.ObjectData)));
+      ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+      checkInstalledProducerSlots(Original, *Installed, ObjectBytes);
+      const auto Base =
+          MachOPatcher().plannedExecSegmentVA(Original, Arch::AArch64);
+      ASSERT_NE(Base, 0u);
+      auto Image = compileProducerImage(*Module, Base);
+#if __has_include("llvm/MC/MCPointerAuthInfo.h")
+      ASSERT_TRUE(Image.Success);
+      auto Bytes = Original;
+      auto Error = MachOPatcher().appendReplacementImage(Bytes, Image);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      checkInstalledProducerSlots(Original, Image, Bytes);
+#else
+      EXPECT_FALSE(Image.Success);
+      EXPECT_TRUE(Image.Sections.empty());
+      EXPECT_TRUE(Image.Bytes.empty());
+#endif
+    }
+  }
 }
 
 TEST(MachOArm64eInstallation,
