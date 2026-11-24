@@ -5338,6 +5338,16 @@ HighCWriter::exprStrAsTypedArg(const HighExpr &E, const TypeRef &Expected,
   if (Expected && Expected->Kind == NdTypeKind::Int && !Expected->IsEnum &&
       printsAsPointer(Text))
     return "(" + Parameter() + ")(uintptr_t)" + castOperand(Text);
+  // Machine pointer types omit source qualifiers. C can add const to the
+  // immediate pointee, but cannot implicitly pass T ** as const T **.
+  // Use the selected declaration's type at this call boundary.
+  if (Spelled && Expected && Expected->Kind == NdTypeKind::Ptr &&
+      Expected->Pointee && Expected->Pointee->Kind == NdTypeKind::Ptr &&
+      Text != "0") {
+    const std::string Cast = "(" + *Spelled + ")";
+    if (!llvm::StringRef(Text).starts_with(Cast))
+      return Cast + castOperand(Text);
+  }
   // So does a function pointer of another type to a function-pointer
   // parameter: a stub's prototype spells qsort's comparator
   // `int32_t (*)(void*, void*)` where its caller's parameter keeps the

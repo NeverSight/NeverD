@@ -784,8 +784,10 @@ TEST(HighCSourceCalls, CallbackBorrowsDeclareNestedRecordTags) {
     Function.Name = "register_callback";
     Function.ReturnType = NdType::makeInt(4, false);
     // The records occur only inside the callback, not as ordinary parameters.
+    const auto TextSlot = NdType::makePtr(NdType::makePtr(NdType::makeInt(2, false)));
+    TextSlot->Size = TextSlot->Pointee->Size = Word->Size;
     Function.Params = {
-        {"Callback", Callback}, {"Input", Word}, {"Output", Word}};
+        {"Callback", Callback}, {"Input", TextSlot}, {"Output", Word}};
     Function.PrototypeFromHeader = true;
     const std::string Convention = Narrow ? "__stdcall " : "";
     const std::string CallbackType =
@@ -795,13 +797,14 @@ TEST(HighCSourceCalls, CallbackBorrowsDeclareNestedRecordTags) {
         "uint32_t register_callback(void (" + Convention +
         "*Callback)(const struct CallbackInput *, volatile union "
         "CallbackOutput *), "
-        "uintptr_t Input, uintptr_t Output)";
-    Function.PortableParameterTypes = {CallbackType, "uintptr_t", "uintptr_t"};
+        "const uint16_t **Input, uintptr_t Output)";
+    Function.PortableParameterTypes = {CallbackType, "const uint16_t **",
+                                       "uintptr_t"};
     auto Call = HighExpr::makeCall(
         "register_callback", Function.Addr,
-        {parameter(0, Word), parameter(1, Word), parameter(2, Word)});
+        {parameter(0, Word), parameter(1, TextSlot), parameter(2, Word)});
     Call->Type = Function.ReturnType;
-    auto Caller = returning("callback_entry", Call, {Word, Word, Word});
+    auto Caller = returning("callback_entry", Call, {Word, TextSlot, Word});
     CEmitterOptions Options;
     Options.TheArch = Architecture;
     Options.Format = BinaryFormat::COFF;
