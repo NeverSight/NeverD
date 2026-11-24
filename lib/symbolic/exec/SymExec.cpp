@@ -704,8 +704,13 @@ StepResult SymExec::stepMemory(const LowOp &Op,
   const auto Commit = [&](SymRef Value) {
     bool Absolute;
     if (Conditional) {
-      Absolute = State.storeConditional(Addr, Value, *Conditional);
-      if (Conditional->Status != SymConditionalStoreStatus::Applied)
+      Absolute = Preservation
+                     ? State.storeConditionalPreserving(
+                           Addr, Value, *Preservation, *Conditional)
+                     : State.storeConditional(Addr, Value, *Conditional);
+      if (Conditional->Status != SymConditionalStoreStatus::Applied ||
+          (Preservation &&
+           Preservation->Status != SymStorePreservationStatus::Applied))
         return Refuse();
     } else {
       Absolute = Preservation ? State.store(Addr, Value, *Preservation)
@@ -896,6 +901,15 @@ StepResult SymExec::stepWithConditionalStore(const LowOp &Op,
   Control.Status = SymConditionalStoreStatus::Invalid;
   Control.WorkUsed = 0;
   return stepImpl(Op, CallEffect, nullptr, &Control);
+}
+
+StepResult SymExec::stepWithConditionalStore(const LowOp &Op,
+                                             SymConditionalStore &Control,
+                                             SymStorePreservation &Preservation,
+                                             const SymCallEffect *CallEffect) {
+  Control.Status = SymConditionalStoreStatus::Invalid;
+  Control.WorkUsed = 0;
+  return stepImpl(Op, CallEffect, &Preservation, &Control);
 }
 
 StepResult SymExec::stepImpl(const LowOp &Op, const SymCallEffect *CallEffect,

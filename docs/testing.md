@@ -23233,6 +23233,8 @@ ctest --test-dir build-release -L "^(NeverDPEFixedImageTests|NeverDInterpreterSp
 
 `NeverDSymConditionalStoreTests` covers bounded byte effects across absolute and symbolic banks, both byte orders, overlap, wrapping, unknown epochs and exact budgets. Executor tests cover STORE, scalar atomic ADD/XCHG/CMPXCHG, aliased address/value/output registers, delayed Old publication, malformed shapes and refusal havoc. `SymStorePreservation` checks the same atomic write path with explicit frame preservation and exact versus one-short budgets. Ordinary execution without a descriptor retains its existing behavior; these checks do not certify access permissions or whole-program recovery.
 
+`NeverDSymConditionalStoreTests` also covers selected conditional regions beside proved preservation: partial-byte aliases, untracked unknown epochs, exact and one-short budgets, malformed regions, and atomic old-value publication or refusal.
+
 ## Runtime module resources and persistent buffers
 
 The [runtime module reference](runtime-modules.md#verification) lists the focused

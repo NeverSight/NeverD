@@ -2146,6 +2146,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NeverDSymConditionalStoreTests` は絶対・シンボリック領域の有界バイト効果、両エンディアン、重なり、折り返し、未知の世代、正確な予算を検証する。実行器の対象は STORE、スカラー原子操作 ADD/XCHG/CMPXCHG、アドレス・値・出力レジスタの重複、Old の遅延公開、不正な形式、拒否時の havoc。`SymStorePreservation` は明示的なフレーム保存契約と、必要量ちょうど及び一単位不足の予算で同じ原子書き込み経路を検証する。記述子なしの通常実行は従来どおりであり、アクセス権限やプログラム全体の復元を認証するものではない。
 
+`NeverDSymConditionalStoreTests` は、証明済みの保持と選択した条件付き領域の併用について、部分バイトの別名、未追跡領域の未知世代、必要量ちょうどと一単位不足の予算、不正な領域、アトミック旧値の公開または拒否も検証する。
+
 
 `AbsoluteMemoryFactsTests.inc` はノード間の絶対ターゲット、合流の競合、部分重複と未知の別名書き込み、両バイト順と連鎖の有無でのスタック分離を検査する。独立バイト実行器が効果を確認し、除外範囲の欠落と予算不足は拒否する。`SymStorePreservation.Absolute*` と `SymState.AbsoluteProjections*` は領域の共存、高位アドレス、純粋で有界な射影、未知世代とトランザクション的拒否を検査する。`NeverDInterpreterSpecializationTests`、`NeverDSymbolicIntegerIntrinsicTests`、`NeverDSymMemoryKnowledgeTests`、続いてネイティブ独立性とLowIR精緻化スイートを実行する。
 
