@@ -10445,14 +10445,27 @@ taskset -c "$E_CORE" /tmp/ud0-prefix-matrix 6
 taskset -c "$P_CORE" /tmp/ud0-length-probe
 taskset -c "$E_CORE" /tmp/ud0-length-probe
 ```
+The full paged test target also contains REP data-watchpoint oracles. Bind the
+recorded debug group size separately on each core; `1` is the measured P-core
+profile and `16` is the measured E-core profile. Reusing `1` on the E core
+fails the aligned forward MOVS/STOS comparisons because that processor reports
+the data breakpoint after a group of completed elements.
+
+```bash
+NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES=1 NEVERD_TEST_NEVERC="$NEVERC" \
+  taskset -c "$P_CORE" "$BUILD_DIR/bin/NeverDX64PagedExecutionTests"
+NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES=16 NEVERD_TEST_NEVERC="$NEVERC" \
+  taskset -c "$E_CORE" "$BUILD_DIR/bin/NeverDX64PagedExecutionTests"
+```
 The [address-size override qualification](evidence/x86-code64-ud0-addr32-2026-11-24.json)
 records both CPU results and the full P-core paging report.
-The [code64 UD0 qualification](evidence/x86-code64-ud0-fetch-2026-11-24.json)
+The [earlier code64 UD0 qualification](evidence/x86-code64-ud0-fetch-2026-11-24.json)
 records full and focused XML digests for LLVM r8, the native LLVM candidate,
-and the current 64-bit NeverC. The two REP watchpoint tests skipped by the
-unbound full-suite run pass separately with the recorded P/E group boundaries.
-After merging current dev, the P-core full suite passes 247/247 with its
-recorded group binding and no skips.
+and 64-bit NeverC. The two REP watchpoint tests skipped by its unbound
+full-suite run passed separately with the recorded P/E group boundaries. Its
+P-core full suite passed 247/247 on the recorded dev base. The current
+[prefix qualification](evidence/x86-code64-ud0-prefixes-2026-11-24.json)
+records 248/248 full-suite passes without skips on each P/E core.
 
 ```sh
 cmake --build build-release --target NeverDX86EncodingAccuracyTests

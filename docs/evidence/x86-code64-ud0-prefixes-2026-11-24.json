@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-24",
+  "scope": "Original-byte code64 UD0 with zero to two qualified non-LOCK prefixes, processor-bound instruction fetch and generated C",
+  "tested_neverd_base": "62a2625e54e1925318eacd492e8365ff48cee3cc",
+  "neverd_code_commit": "7c85d3a02500a93dce6343fd198048ce95c4cf1e",
+  "post_qualification_rebase": {
+    "base_commit": "9813768e70ada58586c715a219ccf9395b8e8d45",
+    "rebuilt_test_binary_sha256": "f6490aa69c6c027751b5c5e422742b7716eef2b0bfdb0c9024605bcc48914ef8",
+    "same_binary_as_full_p_e_qualification": true,
+    "scope": "The intervening dev commit changes Linux network emulation only. The x86 paging test binary is byte-identical after the rebase and rebuild."
+  },
+  "dependencies": {
+    "production_llvm": {
+      "tag": "neverd-llvm-v23.0.0-r8",
+      "commit": "e03b3a2cd27615bd9a8d193b37f36da80d56355b"
+    },
+    "capstone_commit": "fa11ca3d930b9e66a919ed4de20affdbc75bd125",
+    "neverc_binary_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702"
+  },
+  "original_instruction_probe": {
+    "host_cpu": "Intel Core i9-13900H",
+    "source_file": "scripts/isa/x86/ud0_prefix_matrix.c",
+    "source_sha256": "c93defa8d9b8274018515082d77b2cc2d13b6860eec66d9ed26c3f29663f6512",
+    "binary_sha256": "bce684425727817b13d41b4af975d0e1ce440fc14ebb188e93cfbae9cc3eb9e2",
+    "prefix_lengths": [0, 1, 2],
+    "prefix_bytes": ["26", "2e", "36", "3e", "64", "65", "66", "67", "f0", "f2", "f3", "40-4f"],
+    "cases_per_core": 757,
+    "decoded_ud0_non_lock": 703,
+    "decoder_rejected_lock": 54,
+    "compared_fields": ["signal", "trap vector", "error code", "fault RIP", "fault address"],
+    "p_core": {
+      "cpu": 4,
+      "native_matches": 757,
+      "trap": 14,
+      "page_fault_error_code": "0x14",
+      "report_file": "ud0-prefix-matrix-repro-p.log",
+      "report_sha256": "910c067560bc630a5059873c71ed6cf35bc05cbc0b71b81dc315a9a7e96542ac"
+    },
+    "e_core": {
+      "cpu": 12,
+      "native_matches": 757,
+      "trap": 6,
+      "report_file": "ud0-prefix-matrix-repro-e.log",
+      "report_sha256": "cac1b79aa079bd5a964f7ec367ec6da210c4f9e2fc76010055881160d3b1dcb7"
+    },
+    "scope_note": "User-mode original instructions establish local CPU fetch priority. KVM and generated-C state comparisons are tracked separately."
+  },
+  "prefix_length_probe": {
+    "source_file": "scripts/isa/x86/ud0_length_probe.c",
+    "source_sha256": "6c7cbd97c02ca0363a9f2bfbb76cfa552e42a1595da823e78476cd357315c076",
+    "binary_sha256": "9dba67c39431340d548fbc1de4a64de0c8816241ea2c99322ac900a375c68832",
+    "prefix_byte": "66",
+    "prefix_count_range": "0-14",
+    "p_core": {
+      "count_0_to_12": "#PF on the missing ModR/M page",
+      "count_13_to_14": "#GP before the missing ModR/M page",
+      "report_file": "ud0-length-repro-p.log",
+      "report_sha256": "09beb4c1c55ffdd6b9eb2bc78273c6c30e1594f85b77bfd50cd983fc800dff78"
+    },
+    "e_core": {
+      "count_0_to_13": "#UD at the original opcode",
+      "count_14": "#GP from the overlong prefix sequence",
+      "report_file": "ud0-length-repro-e.log",
+      "report_sha256": "52b1bb422111ba3df9c5ed10978e013ed3ce37ad5561d401a96970d055822387"
+    },
+    "scope_note": "Longer prefixes have an instruction-length-dependent exception order and are outside this two-prefix contract."
+  },
+  "generated_qualification": {
+    "status": "P/E-core full paging regressions passed",
+    "test_binary_sha256": "f6490aa69c6c027751b5c5e422742b7716eef2b0bfdb0c9024605bcc48914ef8",
+    "representative_prefixes": ["none", "66", "67", "f2", "f3", "2e", "65", "40", "4f", "66 66", "66 67", "67 66", "67 67"],
+    "address_forms": ["ModR/M", "SIB", "ModR/M plus displacement"],
+    "routes": ["HighC", "LLVM-to-C"],
+    "compilers": ["x64 Clang", "x64 NeverC"],
+    "optimization_levels": ["O0", "O2"],
+    "full_suite_repeat_debug_group_bytes": {"p_core": 1, "e_core": 16},
+    "compared_fields": ["exception vector", "error code", "CR2", "faulting RIP", "handler RIP", "GPRs", "RFLAGS", "CS", "SS", "RAM"],
+    "focused_p": {
+      "file": "ud0-prefix-postrebase-focused-p.xml",
+      "tests": 6,
+      "passed": 6,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 312,
+      "sha256": "d6feeb5dc5f5e20af813b29725691065df857863c82dd23eadccfe2b206f958c"
+    },
+    "focused_e": {
+      "file": "ud0-prefix-postrebase-focused-e16.xml",
+      "tests": 6,
+      "passed": 6,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 312,
+      "sha256": "478cf0b84367ed0d01fec8de9deb53a6d2a37102ddd739cdcf1c9a3ef3ba386d"
+    },
+    "full_p": {
+      "file": "ud0-prefix-postrebase-full-p.xml",
+      "tests": 248,
+      "passed": 248,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "55d4c6a89970cd3876d2337928eec124e8be10c0b3a8dd63790fd8e527a39b79"
+    },
+    "full_e": {
+      "file": "ud0-prefix-postrebase-full-e16.xml",
+      "tests": 248,
+      "passed": 248,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "7dd2e774a3a1ccfb78986bd753cd5d6bc51717173b6db2e3ca97700fb820c9cf"
+    }
+  },
+  "release_gate": {
+    "global_x86_complete": false,
+    "native_sgx_qualified": false,
+    "new_llvm_release_for_this_change": false,
+    "production_pin_changed_by_this_change": false
+  }
+}
