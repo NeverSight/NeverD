@@ -184,7 +184,7 @@ LinuxFiles::readProc(OpenProcFile &File, uint64_t Address, uint64_t Size,
     return Reply(uint64_t(0) - BadAddress);
   if (Size > MaxSignedIOSize - File.Offset)
     return Reply(uint64_t(0) - InvalidArgument);
-  Size = std::min(Size, MaxReadWriteSize & ~(Layout.PageSize - 1));
+  Size = std::min(Size, Layout.maxReadWriteCount());
   if (!Size)
     return Reply(0);
   if (!File.Offset) {

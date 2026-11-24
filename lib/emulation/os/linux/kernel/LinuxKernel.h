@@ -35,6 +35,14 @@ enum class ServiceKind {
 /// Address policy shared by ELF processes and Android native workloads.
 struct MemoryLayout {
   uint64_t UserLimit, PageSize;
+
+  /// Linux access_ok checks the address range independently of page mappings.
+  bool containsUserRange(uint64_t Address, uint64_t Size) const {
+    return Address <= UserLimit && Size <= UserLimit - Address;
+  }
+  uint64_t maxReadWriteCount() const {
+    return MaxReadWriteSize & ~(PageSize - 1);
+  }
 };
 /// Explicit OS-owned thread identity. The caller consumes Exit after a
 /// nonreturning SYS_exit; exit_group still terminates the whole process.

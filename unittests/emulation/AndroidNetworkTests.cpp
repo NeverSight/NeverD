@@ -435,6 +435,22 @@ TEST_P(AndroidNetwork, RefusalAndUnknownPeerStaySeparate) {
   EXPECT_NE(R.Diagnostic.find("matching offline connection"),
             std::string::npos);
 }
+TEST_P(AndroidNetwork, SocketBufferExtentPreservesBionicErrnoAndShortIO) {
+  for (unsigned Mode : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Mode);
+    auto R = run("network_buffer_extent", Mode);
+    ASSERT_NO_FATAL_FAILURE(returned(R));
+    const bool SocketCall = Mode < 2;
+    EXPECT_EQ(word(R, 0), UINT64_MAX);
+    EXPECT_EQ(word(R, 1), SocketCall ? 14u : 9u);
+    EXPECT_EQ(word(R, 2), UINT64_MAX);
+    EXPECT_EQ(word(R, 3), 14u);
+    EXPECT_EQ(word(R, 4), SocketCall ? 2u : UINT64_MAX);
+    EXPECT_EQ(word(R, 5), 14u);
+    EXPECT_EQ(word(R, 6), Mode == 1 ? 0x31u : 0u);
+    EXPECT_EQ(word(R, 7), Mode == 1 ? 0u : 0xffu);
+  }
+}
 TEST_P(AndroidNetwork, FortifiedTransfersKeepMissingStreamObservationsPending) {
   Options.Android->ObserveMemoryOnFailure = true;
   auto &Stream = Options.LinuxNetwork->Connections.front();

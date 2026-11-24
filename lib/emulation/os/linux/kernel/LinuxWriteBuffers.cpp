@@ -70,7 +70,7 @@ importWriteBuffers(ExecutionBackend &CPU, uint64_t Address, uint32_t Entries,
     Buffers.push_back({*Base, *Size});
   }
 
-  const uint64_t Maximum = MaxReadWriteSize & ~(Layout.PageSize - 1);
+  const uint64_t Maximum = Layout.maxReadWriteCount();
   uint64_t Total = 0;
   for (auto &Buffer : Buffers) {
     // Only the newer single-buffer path caps before access_ok. Older imports
@@ -89,7 +89,7 @@ importWriteBuffers(ExecutionBackend &CPU, uint64_t Address, uint32_t Entries,
 void materializeWriteBuffers(llvm::ArrayRef<llvm::StringRef> Bytes,
                              const MemoryLayout &Layout,
                              llvm::SmallVectorImpl<WriteBuffer> &Buffers) {
-  uint64_t Remaining = MaxReadWriteSize & ~(Layout.PageSize - 1);
+  uint64_t Remaining = Layout.maxReadWriteCount();
   for (auto Text : Bytes) {
     Text = Text.take_front(Remaining);
     Buffers.push_back({Text, Text.size()});

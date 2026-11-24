@@ -196,9 +196,6 @@ private:
   llvm::Expected<std::optional<uint64_t>>
   awaitDescriptors(std::unique_ptr<KernelWait> Pending, ProcessResult &Result,
                    ThreadContext *Thread);
-  /// Zero admits the extent, an errno rejects it, null preserves unsupported.
-  std::optional<uint64_t> receiveBuffer(uint64_t Address, uint64_t Size,
-                                        ProcessResult &Result) const;
   llvm::Expected<std::optional<uint64_t>>
   receiveSocket(std::shared_ptr<Descriptor> Owner, uint64_t Address,
                 uint64_t Size, ProcessResult &Result, ThreadContext *Thread,

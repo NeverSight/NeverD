@@ -101,7 +101,10 @@ llvm::Expected<std::optional<uint64_t>> LinuxFiles::writeDescriptor(
   if (auto *Socket = std::get_if<OpenSocket>(I->second.get())) {
     if (Kind != ServiceKind::Write)
       return unsupported(Result, "vectored TCP writes are unmodeled");
-    return transferSocket(*Socket, true, Address, Size, Result);
+    if (!Layout.containsUserRange(Address, Size))
+      return Reply(uint64_t(0) - BadAddress);
+    return transferSocket(*Socket, true, Address,
+                          std::min(Size, Layout.maxReadWriteCount()), Result);
   }
   auto *F = std::get_if<OpenFile>(I->second.get());
   if (!F)
@@ -146,7 +149,7 @@ LinuxFiles::writeFile(OpenFile &F, llvm::ArrayRef<WriteBuffer> Buffers,
     return Reply(uint64_t(0) - InvalidArgument);
   auto &Object = MutableFiles.at(F.Path);
   uint64_t Position = (F.Flags & OpenAppend) ? Object.Bytes.size() : F.Offset;
-  Size = std::min(Size, MaxReadWriteSize & ~(Layout.PageSize - 1));
+  Size = std::min(Size, Layout.maxReadWriteCount());
   const auto Limit = *fileWriteLimit(F.Path);
   if (Size && (Position > Limit || Size > Limit - Position))
     return unsupported(Result,

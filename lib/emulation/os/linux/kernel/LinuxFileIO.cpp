@@ -62,14 +62,15 @@ LinuxFiles::readDescriptor(uint32_t FD, uint64_t Address, uint64_t Size,
   if (I == Descriptors.end())
     return std::optional<uint64_t>(uint64_t(0) - BadDescriptor);
   if (std::holds_alternative<OpenSocket>(*I->second)) {
-    auto Admitted = receiveBuffer(Address, Size, Result);
-    if (!Admitted || *Admitted)
-      return Admitted;
+    if (!Layout.containsUserRange(Address, Size))
+      return std::optional<uint64_t>(uint64_t(0) - BadAddress);
     // Linux sock_read_iter returns before dequeuing for a zero-size read.
     // recvfrom with a zero-size buffer still consumes a UDP datagram.
     if (!Size)
       return std::optional<uint64_t>(0);
-    return receiveSocket(I->second, Address, Size, Result, Thread);
+    return receiveSocket(I->second, Address,
+                         std::min(Size, Layout.maxReadWriteCount()), Result,
+                         Thread);
   }
   if (std::holds_alternative<ProcessDescriptor>(*I->second) ||
       std::holds_alternative<std::shared_ptr<EpollState>>(*I->second))
@@ -150,7 +151,7 @@ llvm::Expected<uint64_t> LinuxFiles::read(OpenFile &File, uint64_t Address,
   const auto Bytes = fileBytes(File);
   const uint64_t Available =
       Bytes.size() - std::min<uint64_t>(File.Offset, Bytes.size());
-  Size = std::min({Size, Available, MaxReadWriteSize & ~(Layout.PageSize - 1)});
+  Size = std::min({Size, Available, Layout.maxReadWriteCount()});
   uint64_t Copied = 0;
   while (Copied < Size) {
     const uint64_t Start = Address + Copied;

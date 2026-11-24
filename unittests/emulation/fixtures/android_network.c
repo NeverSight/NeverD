@@ -317,6 +317,37 @@ u64 network_null_peer(u64 *out, u64 mode) {
   return close(fd);
 }
 
+static long socket_buffer_call(u64 mode, int fd, void *buffer, u64 count) {
+  switch (mode) {
+  case 0:
+    return sendto(fd, buffer, count, 0, 0, 0);
+  case 1:
+    return recvfrom(fd, buffer, count, 0, 0, 0);
+  case 2:
+    return write(fd, buffer, count);
+  default:
+    return read(fd, buffer, count);
+  }
+}
+
+u64 network_buffer_extent(u64 *out, u64 mode) {
+  const unsigned char peer[16] = {2, 0, 0x23, 0x29, 127, 0, 0, 1};
+  int fd = socket(2, 1, 6);
+  if (fd < 0 || connect(fd, peer, sizeof(peer)))
+    return 1;
+  unsigned char data[] = {0, 0xff};
+  *__errno() = 73;
+  out[0] = socket_buffer_call(mode, -1, (void *)-1, 0);
+  out[1] = *__errno();
+  out[2] = socket_buffer_call(mode, fd, (void *)-1, 0);
+  out[3] = *__errno();
+  out[4] = socket_buffer_call(mode, fd, data, (u64)-1);
+  out[5] = *__errno();
+  out[6] = data[0];
+  out[7] = data[1];
+  return close(fd);
+}
+
 u64 network_stream_identity(u64 *out, u64 mode) {
   unsigned char peer[16] = {2, 0, 0x23, 0x29, 127, 0, 0, 1};
   int failed = socket(2, 1, 6);

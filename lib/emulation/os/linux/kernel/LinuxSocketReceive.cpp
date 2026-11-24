@@ -10,21 +10,6 @@
 #include "LinuxTime.h"
 
 namespace neverd::emulation::linux_model {
-std::optional<uint64_t> LinuxFiles::receiveBuffer(uint64_t Address,
-                                                  uint64_t Size,
-                                                  ProcessResult &Result) const {
-  // The syscall imports its complete user extent before waiting, even at EOF
-  // or with a zero count. Page permissions are checked only during the copy.
-  // Oversized read/recv extents have different clamp/admission rules; keep
-  // those outside this bounded common contract.
-  const uint64_t MaxCount = uint64_t(INT32_MAX) & ~(Layout.PageSize - 1);
-  if (Size > MaxCount)
-    return unsupported(Result, "socket receive extent exceeds MAX_RW_COUNT");
-  if (Address > Layout.UserLimit || Size > Layout.UserLimit - Address)
-    return uint64_t(0) - BadAddress;
-  return 0;
-}
-
 class LinuxFiles::ReceiveWait final : public KernelWait {
 public:
   ReceiveWait(LinuxFiles &Files, std::shared_ptr<Descriptor> Owner,
