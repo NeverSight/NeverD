@@ -2677,6 +2677,27 @@ TEST(InterpreterSpecialization, StoreSeparationChargesProofBudgets) {
 }
 
 TEST(InterpreterSpecialization,
+     OptionalMaterializedFrameProofUnknownForgetsAliasingByte) {
+  Provider P;
+  P.add(0x100, {op(NdOp::INT_SUB, reg(48), {reg(32), constant(16)}),
+                op(NdOp::STORE, {}, {reg(48), constant(0x2a)}),
+                op(NdOp::LOAD, reg(40), {reg(48)}),
+                op(NdOp::STORE, {}, {reg(8), constant(0x5b)}),
+                op(NdOp::LOAD, reg(0), {reg(48)}),
+                op(NdOp::INT_ADD, reg(0), {reg(0), reg(40)}), ret()});
+  auto O = separatedStoreOptions();
+  O.RequireRestoredFrameAtReturn = false;
+  // The optional overlap query cannot be encoded within this gate budget.
+  O.MaxSolverGates = 1;
+  const auto R = specializeInterpreter(P, {0x100}, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_EQ(count(R.Residual, NdOp::STORE), 2u);
+  for (const uint64_t Destination : {uint64_t{0xff8}, uint64_t{0x3000}})
+    EXPECT_EQ(execute(R.Residual, {{8, Destination}, {32, 0x1008}}),
+              Destination == 0xff8 ? 0x85u : 0x54u);
+}
+
+TEST(InterpreterSpecialization,
      StoreSeparationHonorsBranchDomainAndZeroExtension) {
   for (bool HighRoot : {false, true}) {
     const uint64_t Root =
