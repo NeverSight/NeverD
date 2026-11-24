@@ -272,8 +272,17 @@ void MIPSObjectSDK::checkObjectRoundTrip(bool Micro, unsigned Revision) {
                File.Bytes.size());
   Output.close();
 
-  ASSERT_EQ(neverd_lift_to_obj(Session, Path.c_str(), 0, 1), 0)
-      << take(neverd_last_error(Session));
+  const int Status = neverd_lift_to_obj(Session, Path.c_str(), 0, 1);
+#ifndef LLVM_NEVERD_MICROMIPS32_R6_COMPACT_RETURN
+  if (Micro && Revision == 6 && !isMIPS64(Target)) {
+    EXPECT_NE(Status, 0);
+    EXPECT_NE(take(neverd_last_error(Session)).find("compact returns"),
+              std::string::npos);
+    EXPECT_EQ(neverd_roundtrip_func_count(Session), 0);
+    return;
+  }
+#endif
+  ASSERT_EQ(Status, 0) << take(neverd_last_error(Session));
   unsigned long long Length = 0;
   const auto *Obj = neverd_roundtrip_obj(Session, &Length);
   ASSERT_NE(Obj, nullptr);
