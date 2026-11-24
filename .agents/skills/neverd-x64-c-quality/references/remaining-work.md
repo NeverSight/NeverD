@@ -1846,6 +1846,12 @@ conditional memory, invocation lifetime and both C routes remain open.
   conditions group conjunctions in HighC values and branches. LLVM-to-C uses
   the same grouping when consecutive branches share a target.
 
+- HighC folds paired integer comparisons after checking the SSA values and
+  widths each test reads. A mask, reversed subtraction or narrower equality
+  keeps its own test. Signed ordering and repeated ordered reads or calls
+  survive two-arm branch rendering. Compile-time regressions cover the
+  comparison results and branch direction.
+
 - Typed scalar expressions now distinguish LLVM width from the promoted C
   type and operator precedence. Redundant unsigned casts are omitted, while
   narrow wrapping, signed interpretation and widened arithmetic/shift carriers

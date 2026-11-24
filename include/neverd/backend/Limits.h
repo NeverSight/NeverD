@@ -241,28 +241,21 @@ inline constexpr int kMedLLVMVarAccessMedLLVMEmitterGetRawSegmentOffsetBudget =
 // lib/backend/c/HighC/HighCExprBinOp.cpp
 inline constexpr int kHighCExprBinOpCountBelowDepthLimit = 8;
 inline constexpr int
-    kHighCExprBinOpHighCWriterRenderBinOpOperandsPeelZeroViewDepthLimit = 6;
-inline constexpr int
     kHighCExprBinOpHighCWriterRenderBinOpOperandsPeelViewDepthLimit = 8;
 inline constexpr int
     kHighCExprBinOpHighCWriterRenderBinOpOperandsDisplayIntDepthLimit = 6;
 
+// lib/backend/c/HighC/HighCIntegerConditions.cpp
+inline constexpr unsigned kHighCComparisonValueDepth = 6;
+
 // lib/backend/c/HighC/HighCExprWriter.cpp
-inline constexpr int
-    kHighCExprWriterHighCWriterRenderUnaryOpSameScalarPeelDepthLimit = 6;
 inline constexpr int
     kHighCExprWriterHighCWriterVaStartUnknownOperandDepthLimit = 8;
 inline constexpr int
     kHighCExprWriterHighCWriterIsCtorSourceExprRecRecDepthLimit = 8;
 inline constexpr int kHighCExprWriterHighCWriterIndirectCalleeStrDepthLimit = 2;
-inline constexpr int kHighCExprWriterHighCWriterCondStrImplScalarOfDepthLimit =
-    6;
-inline constexpr int
-    kHighCExprWriterHighCWriterPreferGreaterIfElseCondPeelPeelDepthLimit = 6;
 inline constexpr int
     kHighCExprWriterHighCWriterInvertCondStrImplLooksBoolDepthLimit = 8;
-inline constexpr int
-    kHighCExprWriterHighCWriterInvertCondStrImplPeelScalarDepthLimit = 6;
 
 // lib/backend/c/HighC/HighCFuncWriter.cpp
 inline constexpr int
