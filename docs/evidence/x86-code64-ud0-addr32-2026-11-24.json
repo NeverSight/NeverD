@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-24",
+  "scope": "Original-byte code64 UD0 with one 67 address-size override, processor-bound fetch priority and generated C execution",
+  "neverd_code_commit": "d4733203a8779d0cd0d4c671c680e44dd650c938",
+  "dependencies": {
+    "production_llvm": {
+      "tag": "neverd-llvm-v23.0.0-r8",
+      "commit": "e03b3a2cd27615bd9a8d193b37f36da80d56355b"
+    },
+    "capstone_commit": "396483e58bf0bb8f4dd6e36daff8b0458bad2315",
+    "neverc": {
+      "source_commit": "e065e748414253c7bae8b580cbde5dbd37975dfe",
+      "binary_sha256": "f7541c872306d9f0461cebc07b17aafae10e9b037c5fbb0bf181924d7fbf9a94",
+      "source_targets": [
+        "x86_64",
+        "aarch64"
+      ]
+    }
+  },
+  "qualification": {
+    "host_cpu": "Intel Core i9-13900H",
+    "p_core": "CPU 4, complete ModRM/SIB/displacement instruction fetch",
+    "e_core": "CPU 12, opcode-only instruction fetch",
+    "input_prefixes": [
+      "none",
+      "67"
+    ],
+    "encoded_address_forms": [
+      "ModRM",
+      "SIB",
+      "ModRM plus displacement"
+    ],
+    "generated_routes": [
+      "HighC",
+      "LLVM-to-C"
+    ],
+    "host_compilers": [
+      "Clang x86_64",
+      "NeverC x86_64"
+    ],
+    "optimization_levels": [
+      "O0",
+      "O2"
+    ],
+    "compared_native_fields": [
+      "exception vector",
+      "error code",
+      "CR2",
+      "faulting RIP",
+      "handler RIP",
+      "GPRs",
+      "RFLAGS",
+      "CS",
+      "SS",
+      "RAM"
+    ],
+    "live_tail": "ModRM and SIB changed after export; no relift or encoded data-operand read",
+    "unbound_profile": "refused before CPU and RAM effects",
+    "other_prefix_example": "66 UD0 remains an explicit native-execution boundary",
+    "reports": {
+      "focused_p": {
+        "file": "ud0-addr32-final-p.xml",
+        "tests": 5,
+        "passed": 5,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "c9d7f2f69ca78bf62608f8af02763a654962a10f9aa9e06cb0e4bf5a05310452",
+        "original_cpu_comparisons": 48
+      },
+      "focused_e": {
+        "file": "ud0-addr32-final-e.xml",
+        "tests": 5,
+        "passed": 5,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "cc5dc203e8d0cee218e36692a1aa0bad3cf121c7ce244ea8e5e13ec09016ddd4",
+        "original_cpu_comparisons": 48
+      },
+      "full_p": {
+        "file": "ud0-addr32-full-p.xml",
+        "tests": 247,
+        "passed": 247,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "87abd2611199721f924102dde0b7bf37bf52a077876b4cde8af4b483909289f8",
+        "original_cpu_comparisons": 48
+      },
+      "legacy_paging": {
+        "file": "ud0-addr32-final-legacy-paging.xml",
+        "tests": 1,
+        "passed": 1,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "3b1b54aa39cc8014af0fd27bb0dd685fb29ab21b88de67a9821a069f4411ae81"
+      },
+      "legacy_source": {
+        "file": "ud0-addr32-final-legacy-source.xml",
+        "tests": 8,
+        "passed": 8,
+        "skipped": 0,
+        "failures": 0,
+        "errors": 0,
+        "sha256": "5621b56fe06c0ce1b7657c1584f889a8679a31b5f0f4b355f2321038d420ca61"
+      }
+    },
+    "legacy_scope": "Protected code16/code32 guest instructions through x86_64 Clang/NeverC generated host C; NeverC does not gain a 32-bit source target.",
+    "full_p_tested_base_commit": "512869d727dbaf75844eb8c6c5898abe675f8e6d",
+    "full_p_scope_note": "The first 247-case full run used the preceding dev base; a second 247-case full run qualified the later shared C/LLVM dev merge."
+  },
+  "related_evidence": [
+    "docs/evidence/x86-code64-ud0-fetch-2026-11-24.json",
+    "docs/evidence/x86-vmrun-hosted-kvm-2026-11-21.json"
+  ],
+  "release_gate": {
+    "global_x86_complete": false,
+    "native_sgx_qualified": false,
+    "new_llvm_release_for_this_change": false,
+    "production_pin_changed_by_this_change": false,
+    "remaining": [
+      "ordinary executable UD0 still lowers to llvm.trap",
+      "other UD0 prefixes lack original-byte paged continuation",
+      "unqualified processors have no bound fetch profile",
+      "native enclave execution unavailable on designated SGX-less hosted runners",
+      "other mode, SMM, SGX and asynchronous environments remain partially qualified"
+    ]
+  },
+  "post_rebase_base_commit": "1a58e3ade9aa24d05411db1237411c21355cabc6",
+  "submission_base_commit": "362098a9de6a93cbd4b2e5beb9c68962400c54af",
+  "submission_neverc_binary_sha256": "1e15b75e0b320ce0c6bfe5c6f31e3d76169a826a08cada794c119d3c9deb55f2",
+  "submission_reports": {
+    "focused_p": {
+      "file": "ud0-addr32-submission-p.xml",
+      "tests": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "679da4d05ee935aa04ebfda799ca20b3b3ad3e12ad91d8e96d79695c47f7759e",
+      "original_cpu_comparisons": 48
+    },
+    "focused_e": {
+      "file": "ud0-addr32-submission-e.xml",
+      "tests": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "586ed456d7a6fa03405b582a800f66f0eb6e0227f75f6d9cd160d322cb5069b0",
+      "original_cpu_comparisons": 48
+    },
+    "legacy_paging": {
+      "file": "ud0-addr32-submission-legacy-paging.xml",
+      "tests": 1,
+      "passed": 1,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "db32e7cdd4b9c1cbb5d6528f00145185d909ddd59345bfcc2958d9108be413ce"
+    },
+    "legacy_source": {
+      "file": "ud0-addr32-submission-legacy-source.xml",
+      "tests": 8,
+      "passed": 8,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "f7c0d6481cf866fae9faae52e37e262ad458bf6d04f16beaa105073f65e70bd7"
+    }
+  },
+  "post_rebase_reports": {
+    "focused_p": {
+      "file": "ud0-addr32-postrebase-p.xml",
+      "tests": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "7aecb186acec9a9e65ff8755335f79cfeda76fbbafe632a146ea28d990d74334",
+      "original_cpu_comparisons": 48
+    },
+    "focused_e": {
+      "file": "ud0-addr32-postrebase-e.xml",
+      "tests": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "7a9a20e739cc4ff218a711e5e31249292379b2b9f004ce06b747089859c5a515",
+      "original_cpu_comparisons": 48
+    },
+    "full_p": {
+      "file": "ud0-addr32-postrebase-full-p.xml",
+      "tests": 247,
+      "passed": 247,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "9ddae898b3977808dd19eab6f1f1d17590f2b460b504453495499c37e7ab31ec",
+      "original_cpu_comparisons": 48
+    },
+    "legacy_paging": {
+      "file": "ud0-addr32-postrebase-legacy-paging.xml",
+      "tests": 1,
+      "passed": 1,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "22bfc8ba8d6a27645033cd73d865388a615f12722d1381cf42ade474a0811ffc"
+    },
+    "legacy_source": {
+      "file": "ud0-addr32-postrebase-legacy-source.xml",
+      "tests": 8,
+      "passed": 8,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "252e6d22e6537460b576136f9c1bd9474a9a12be3eff26a5c1c6ce16c49b3e71"
+    }
+  }
+}

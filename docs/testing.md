@@ -10407,6 +10407,8 @@ separately; compare bare and `67` UD0 through the original KVM handler,
 fault stack RIP/error code, CR2, all GPRs, flags and RAM with each generated
 lane. The model's execution binding is intentionally independent of the host
 core used to compile its C source. Missing KVM is an oracle skip, not a pass.
+The [address-size override qualification](evidence/x86-code64-ud0-addr32-2026-11-24.json)
+records both CPU results and the full P-core paging report.
 The [code64 UD0 qualification](evidence/x86-code64-ud0-fetch-2026-11-24.json)
 records full and focused XML digests for LLVM r8, the native LLVM candidate,
 and the current 64-bit NeverC. The two REP watchpoint tests skipped by the

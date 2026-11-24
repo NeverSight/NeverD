@@ -126,6 +126,9 @@ The code64 paged continuation also admits the measured `67 UD0` address-size
 form. Both hybrid CPU classes retain their existing #UD versus instruction-fetch
 #PF choice, and generated HighC/LLVM-to-C uses the original fault PC. Other
 prefixes stay at the explicit native boundary.
+The [address-size override qualification](evidence/x86-code64-ud0-addr32-2026-11-24.json)
+records the P/E original-CPU matrices, full paging run and exact dependency and
+report digests.
 
 | Execution domain | Verified behavior |
 | --- | --- |
