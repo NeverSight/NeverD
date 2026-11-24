@@ -408,6 +408,18 @@ TCG; their native object and guest-image bytes match the hosted KVM fixtures.
 The [current qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
 retains source, compiler, binary, XML and runner hashes separately.
 
+At merged source `0d5a4ee1df`, both SDKs repeated the complete matrix:
+243/243 full-mode execution, 853/855 paging with the same two LA57 hardware
+skips, 48/48 execution and 4/4 paging on the alternate core, 253/253
+generated-C source, and 4/4 Python SDK checks. Each SDK also passed 73
+return-contract, 81 pipeline-outcome and 122 x64 continuation-export tests.
+The first regular-SDK continuation run hit a temporary `libneverd.so` load
+error while an independent build relinked that file; an isolated full rerun
+passed 122/122. The portable x64 NeverC/r7 backend executed 200 more QEMU
+TCG VMRUN contexts from the byte-identical current C export. The linked
+[evidence record](evidence/x86-mode-smm-sgx-events-2026-11-21.json) records
+the full XML and binary digests as well as the initial race and rerun.
+
 ## Earlier qualification records
 
 The November 11 regression stream performs protected32 → compatibility32 → code64 →

@@ -143,6 +143,13 @@ cases. The Linux job used a freshly built x64 NeverC compiler whose source
 revision and artifact hash are retained in the
 [current qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json).
 
+The [merged-source repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45334574616)
+again found SGX1 false, zero EPC sections and zero native enclave instruction
+executions on all three designated runners. The Linux native selftest recorded
+zero available cases. These are capability results, not enclave execution
+passes; the current software-mode result is recorded separately in the linked
+qualification after its job completes.
+
 Architectural ownership follows Intel SDM revision 090, ENCLU/EENTER/ERESUME/
 EEXIT and enclave entry/exit chapters, available from the
 [Intel SDM index](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).

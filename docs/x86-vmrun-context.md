@@ -59,6 +59,17 @@ again passed all twelve guest images and 200 generated contexts on an AMD EPYC
 SVM and reported that capability as unavailable. The original two-AMD run
 remains the complete two-host comparison.
 
+The [November 23 merged-source repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45334702918)
+again passed twelve images and 200 generated contexts on an AMD EPYC 9V45.
+For RAX with a zero high half, all original and generated O0/O2 routes
+returned with RCX=0x5678 and VMCB exit 0x81. A nonzero high half raised
+vector 13, error code zero at `67 0F 01 D8` on every route; each generated
+fault PC remained inside the native intrinsic helper. The other runner again
+had no guest SVM. NeverD `0d5a4ee1df` exports byte-identical C for both
+routes, and the portable NeverC/r7 backend reproduces the tagged-input hosted
+native object and guest-image hashes. The [evidence record](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
+retains the new report and source digests.
+
 These results establish the tested nested KVM profile. The generated path
 preserves the full RAX value and emits the original address-size prefix; the
 CPU environment selects the VMCB address or raises the observed exception.

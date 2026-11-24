@@ -51,6 +51,15 @@ the x32 ABI. The three designated Actions runners reported zero EPC sections.
 Intel’s signed simulation enclave and the Linux software regressions have
 independent execution records. [Test results and hardware discovery](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
 
+After the `0d5a4ee1df` merge, each SDK again passed 243 complete mode-execution
+cases, 853 paging cases with two LA57-only skips, 48 alternate-core execution
+cases, four alternate-core paging cases, 253 generated-C source cases and four
+Python integrations. The shared return, pipeline and x64 continuation suites
+also passed 73, 81 and 122 cases per SDK after the temporary relink race was
+removed. The current HighC and LLVM-to-C VMRUN source bytes match the hosted
+KVM fixtures, and [the AMD repeat](https://github.com/gmh5225/test_mac_intel/actions/runs/45334702918)
+passed all twelve original/generated O0/O2 guest images on its SVM runner.
+
 ## Support is a pipeline property
 
 Decoder recognition, strict LowIR lifting, executable LLVM/C output and
