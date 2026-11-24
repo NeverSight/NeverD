@@ -13,6 +13,7 @@
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -3361,10 +3362,19 @@ TEST(PipelineOutcome, SourceEHRefusalsAgreeAcrossSingleAndShardedEmission) {
         llvm::consumeError(Contract.takeError());
         auto *Function = Result.LlvmModule->getFunction("source_0");
         ASSERT_NE(Function, nullptr);
+        const auto *Callee = Result.LlvmModule->getFunction("sub_9000");
+        ASSERT_NE(Callee, nullptr);
         size_t Calls = 0;
         for (const auto &Block : *Function)
           for (const auto &Instruction : Block)
-            Calls += llvm::isa<llvm::CallInst>(Instruction);
+            if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+              // An unrecovered return value has an IR provider of its own.
+              if (llvm_source_unknown::isValue(Call))
+                continue;
+              EXPECT_TRUE(llvm::isa<llvm::CallInst>(Call));
+              EXPECT_EQ(Call->getCalledFunction(), Callee);
+              ++Calls;
+            }
         EXPECT_EQ(Calls, 1u);
         EXPECT_NE(Function->getMetadata(exception_rewrite::FunctionAttachment),
                   nullptr);
