@@ -584,3 +584,22 @@ TEST(ARM32_ImportCalls, AnImportNoHeaderDeclaresTakesItsTablesTypes) {
             std::string::npos)
       << Source;
 }
+
+// An MSVC import thunk composes its slot's address, `movw r12, #lo; movt
+// r12, #hi; ldr pc, [r12]`, and its call through the loaded word named no
+// import.  Where no call of the image names the thunk either, as the
+// exception directory alone names `__C_specific_handler`'s, the thunk took
+// no argument and passed the import unknown values.  Folded to the slot,
+// its call is the import's, and it forwards the six words a caller passes.
+TEST(ARM32_ImportThunks, AThunkComposingItsSlotForwardsItsArguments) {
+  const BinaryImage Img = thumbThunkImage(std::vector<uint8_t>(0x10, 0x00),
+                                          "__stdio_common_vfprintf");
+  StdioHeader Header;
+  const std::string Source = thumbHighC(Img, Header);
+  EXPECT_NE(Source.find("__stdio_common_vfprintf(((uint64_t)((uint32_t)(arg1)) "
+                        "<< 32 | (uint64_t)((uint32_t)(arg0))), (FILE *)arg2, "
+                        "(const char *)arg3, (_locale_t)arg4, (char *)arg5)"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+}

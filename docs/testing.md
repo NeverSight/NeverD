@@ -27156,6 +27156,10 @@ the same function with no header declaring the import, as no Windows header
 library covers an ARM32 image: the C library's prototype table declares it,
 and the call passes the options as the pair. It fails where the table's
 parameter count alone matches the options to one register.
+`ARM32_ImportThunks.AThunkComposingItsSlotForwardsItsArguments` decompiles a
+Thumb PE thunk of `__stdio_common_vfprintf` that no call names: it forwards
+its six words, r0:r1 joined as the options. It fails where the thunk's call
+through the movw/movt address names no import.
 
 `SourceParameterPlacement.MIPSScalarOnlyCallsKeepCompleteSignatures` covers
 integer, pointer and void signatures without any floating parameters in all

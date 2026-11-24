@@ -5444,6 +5444,16 @@ prototype declares, as its export fixes the convention for the callers within
 the image too: the declared parameters join what its body reads in its own
 summary, so that a system call stub's callers pass the stack arguments its
 dispatcher reads, and a body that reads past them keeps those.
+A call through a register loaded from an import's slot names the import as
+the slot does (`loadedCallSlot`). The walk back from the load follows copies,
+a 32-bit literal's widening, additions, and an instruction that keeps a
+register's bits under a mask and sets the rest (`mergedRegisterBits`), as
+ARM's movt writes the high half of an address movw set. An MSVC ARM import
+thunk is `movw r12, #lo; movt r12, #hi; ldr pc, [r12]`. Without the merge its
+call named no import, and a thunk no call of the image names, as the
+exception directory alone names `__C_specific_handler`'s, took no argument
+and passed the import unknown values. A bit an instruction both keeps and
+sets makes no such merge.
 `CallPrototypeArguments` carries that declaration provenance through final
 call recovery for both selected and omitted callees. A narrower recovered
 gate body cannot truncate arguments already established by its entry summary;

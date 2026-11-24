@@ -117,6 +117,65 @@ struct LoadedCallSlotProof {
   bool AllowAlignmentChecks = false;
 };
 
+/// The register an instruction keeps the bits of under a mask, and the
+/// constant bits it sets over the rest, when Ops[\p Index] of \p Block ends
+/// it as `r = (r & mask) | bits`: ARM's movt, whose `lo = r & 0xffff` and
+/// `hi = imm16 << 16` it ORs, writes the high half of an address movw set.
+struct MergedRegisterBits {
+  NdVar Register;
+  uint64_t KeptMask = 0;
+  uint64_t Bits = 0;
+};
+
+inline std::optional<MergedRegisterBits>
+mergedRegisterBits(const LowBlock &Block, size_t Index) {
+  if (Index >= Block.Ops.size())
+    return std::nullopt;
+  const LowOp &Or = Block.Ops[Index];
+  if (Or.Opcode != NdOp::INT_OR || Or.NumInputs != 2 || !Or.Output.isReg() ||
+      !Or.Output.Size || Or.Output.Size > 8 || !Or.Inputs[0].isTemp() ||
+      !Or.Inputs[1].isTemp() || Or.Inputs[0].Offset == Or.Inputs[1].Offset)
+    return std::nullopt;
+  // The last write of each temporary before the OR, in its instruction.
+  const LowOp *Defs[2] = {nullptr, nullptr};
+  for (size_t J = Index; J-- > 0 && Block.Ops[J].Addr == Or.Addr;)
+    for (unsigned I = 0; I < 2; ++I)
+      if (!Defs[I] && Block.Ops[J].Output.isTemp() &&
+          Block.Ops[J].Output.Offset == Or.Inputs[I].Offset &&
+          Block.Ops[J].Output.Size == Or.Inputs[I].Size)
+        Defs[I] = &Block.Ops[J];
+  if (!Defs[0] || !Defs[1])
+    return std::nullopt;
+  const uint64_t Width = Or.Output.Size == 8
+                             ? ~uint64_t{0}
+                             : (uint64_t{1} << (8 * Or.Output.Size)) - 1;
+  for (unsigned I = 0; I < 2; ++I) {
+    const LowOp &And = *Defs[I];
+    const LowOp &Set = *Defs[1 - I];
+    if (And.Opcode != NdOp::INT_AND || And.NumInputs != 2 ||
+        !And.Inputs[0].isReg() || And.Inputs[0].Offset != Or.Output.Offset ||
+        And.Inputs[0].Size != Or.Output.Size || !And.Inputs[1].isConst())
+      continue;
+    std::optional<uint64_t> Bits;
+    if (Set.Opcode == NdOp::COPY && Set.NumInputs == 1 &&
+        Set.Inputs[0].isConst())
+      Bits = Set.Inputs[0].Offset;
+    else if (Set.Opcode == NdOp::INT_LEFT && Set.NumInputs == 2 &&
+             Set.Inputs[0].isConst() && Set.Inputs[1].isConst() &&
+             Set.Inputs[1].Offset < 8 * Or.Output.Size)
+      Bits = Set.Inputs[0].Offset << Set.Inputs[1].Offset;
+    if (!Bits)
+      continue;
+    const uint64_t KeptMask = And.Inputs[1].Offset & Width;
+    // A bit both kept and set ORs into the kept value: two halves do not
+    // merge so.
+    if (*Bits & Width & KeptMask)
+      continue;
+    return MergedRegisterBits{Or.Output, KeptMask, *Bits & Width};
+  }
+  return std::nullopt;
+}
+
 inline std::optional<va_t>
 loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks, const LowBlock &Block,
                size_t Index, NdVar Var,
@@ -132,12 +191,18 @@ loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks, const LowBlock &Block,
   bool Loaded = false;
   uint64_t Addend = 0;
   unsigned LiteralBits = 0;
+  // The bits an instruction set over the address the rest of the walk
+  // reaches, which it kept under the mask (mergedRegisterBits).
+  std::optional<MergedRegisterBits> Merged;
   for (int Step = 0; Step < limits::kCallTargetSlotDepth; ++Step) {
-    if (Loaded && Var.isConst())
-      return static_cast<va_t>(
-          (LiteralBits ? Var.Offset & ((UINT64_C(1) << LiteralBits) - 1)
-                       : Var.Offset) +
-          Addend);
+    if (Loaded && Var.isConst()) {
+      uint64_t Value = LiteralBits
+                           ? Var.Offset & ((UINT64_C(1) << LiteralBits) - 1)
+                           : Var.Offset;
+      if (Merged)
+        Value = (Value & Merged->KeptMask) | Merged->Bits;
+      return static_cast<va_t>(Value + Addend);
+    }
     if (!Var.isReg() && !Var.isTemp())
       return std::nullopt;
     const LowOp *Def = nullptr;
@@ -228,7 +293,7 @@ loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks, const LowBlock &Block,
     // address temporary. Trace only same-width copies back to that literal;
     // arithmetic inside the extension needs its own width-aware proof.
     // An extension of the loaded callable itself is never accepted here.
-    if (Loaded && !LiteralBits && Def->Opcode == NdOp::INT_ZEXT &&
+    if (Loaded && !LiteralBits && !Merged && Def->Opcode == NdOp::INT_ZEXT &&
         Def->NumInputs == 1 && Def->Inputs[0].Size > 0 &&
         Def->Inputs[0].Size < Def->Output.Size && Def->Output.Size <= 8) {
       LiteralBits = Def->Inputs[0].Size * 8;
@@ -236,11 +301,22 @@ loadedCallSlot(llvm::ArrayRef<LowBlock> Blocks, const LowBlock &Block,
       continue;
     }
     if (Loaded && Def->Opcode == NdOp::INT_ADD && Def->NumInputs == 2 &&
-        Def->Inputs[1].isConst() && !LiteralBits) {
+        Def->Inputs[1].isConst() && !LiteralBits && !Merged) {
       Addend += Def->Inputs[1].Offset;
       Var = Def->Inputs[0];
       continue;
     }
+    // An address whose high half ARM's movt wrote over the half movw set
+    // (`movw r12, #lo; movt r12, #hi; ldr pc, [r12]`, an MSVC import
+    // thunk): the walk follows the register the movt kept the low half of.
+    // An addition the walk meets after would act on the kept half alone.
+    if (Loaded && !LiteralBits && !Merged && Def->Output.Size == Var.Size)
+      if (const std::optional<MergedRegisterBits> Bits =
+              mergedRegisterBits(*Cur, End)) {
+        Merged = *Bits;
+        Var = Bits->Register;
+        continue;
+      }
     return std::nullopt;
   }
   return std::nullopt;
