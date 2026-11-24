@@ -1,0 +1,31 @@
+{
+  "capture_sha256": "47ad71e3110126ee829e6ac168d1bf0e277b5fc6af0c4c206c1e9ceade225eca",
+  "declared_frames": 1132234,
+  "stored_frames": 1132544,
+  "trailing_all_high_blocks": 1,
+  "examined_frames": 1131520,
+  "irq_low_samples": {
+    "/IRQ1": 0,
+    "/IRQ2": 0,
+    "/IRQ9": 0,
+    "/IRQ10": 0
+  },
+  "vblank_fall_samples": [
+    49504,
+    615612
+  ],
+  "rom_reads_after_vblank_rises": [
+    {
+      "vblank_rise_sample": 1,
+      "rom_read_sample": 19,
+      "elapsed_samples": 18,
+      "sbus_a23_a0": "0xc2035c"
+    },
+    {
+      "vblank_rise_sample": 566104,
+      "rom_read_sample": 566128,
+      "elapsed_samples": 24,
+      "sbus_a23_a0": "0xc2035c"
+    }
+  ]
+}
