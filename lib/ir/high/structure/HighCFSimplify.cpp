@@ -486,23 +486,17 @@ static bool exprEquivalent(const ExprPtr &A, const ExprPtr &B) {
   return A->structuralEq(*B);
 }
 
-static void mergeConsecutiveCondBlocks(std::vector<HighStmt> &Stmts) {
+static void mergeConsecutiveCondBlocks(std::vector<HighStmt> &Stmts,
+                                       const std::set<va_t> &Entered) {
   for (size_t I = 0; I + 1 < Stmts.size();) {
     auto &Cur = Stmts[I];
     auto &Next = Stmts[I + 1];
 
-    if (Cur.Kind == StmtKind::If && Next.Kind == StmtKind::If && Cur.Cond &&
+    // A jump can reach the second test without taking either arm of the
+    // first. Moving its edge copies to those arms would erase that entry.
+    if ((Cur.Kind == StmtKind::If || Cur.Kind == StmtKind::IfElse) &&
+        Next.Kind == Cur.Kind && !Entered.contains(Next.Addr) && Cur.Cond &&
         Next.Cond && !Cur.Cond->hasOrderedMemoryAccess() &&
-        !Next.Cond->hasOrderedMemoryAccess() &&
-        exprEquivalent(Cur.Cond, Next.Cond)) {
-      for (auto &S : Next.Body)
-        Cur.Body.push_back(std::move(S));
-      Stmts.erase(Stmts.begin() + static_cast<long>(I + 1));
-      continue;
-    }
-
-    if (Cur.Kind == StmtKind::IfElse && Next.Kind == StmtKind::IfElse &&
-        Cur.Cond && Next.Cond && !Cur.Cond->hasOrderedMemoryAccess() &&
         !Next.Cond->hasOrderedMemoryAccess() &&
         exprEquivalent(Cur.Cond, Next.Cond)) {
       for (auto &S : Next.Body)
@@ -518,9 +512,9 @@ static void mergeConsecutiveCondBlocks(std::vector<HighStmt> &Stmts) {
 
   for (auto &S : Stmts) {
     if (!S.Body.empty())
-      mergeConsecutiveCondBlocks(S.Body);
+      mergeConsecutiveCondBlocks(S.Body, Entered);
     if (!S.ElseBody.empty())
-      mergeConsecutiveCondBlocks(S.ElseBody);
+      mergeConsecutiveCondBlocks(S.ElseBody, Entered);
   }
 }
 
@@ -5659,11 +5653,11 @@ void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
   structureIfElse(Func, IfElseMaxPasses, &Med);
   auto TPost = Now();
 
-  removeTrivialGotos(Func.Body, gotoTargets(Func.Body), LabelStarts(Func.Body),
-                     /*Late=*/false);
+  const LabelStarts Starts(Func.Body);
+  removeTrivialGotos(Func.Body, Starts.entered(), Starts, /*Late=*/false);
   simplifyNestedGotos(Func.Body);
 
-  mergeConsecutiveCondBlocks(Func.Body);
+  mergeConsecutiveCondBlocks(Func.Body, Starts.entered());
   inlineGotoReturns(Func, Med);
   cleanupGuardBeforeSwitch(Func);
 

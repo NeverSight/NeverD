@@ -14,6 +14,8 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/loader/DWARF/EHFrame.h"
+#include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
 
@@ -229,6 +231,16 @@ bool readEncodedPointer(const uint8_t *Buf, size_t Size, size_t &Cursor,
       *SlotOut = static_cast<va_t>(Resolved);
     if (!Img || PtrSize == 0)
       return false;
+    if (Img->MachOSharedCache) {
+      if (auto Target =
+              macho_loader::readMetadataPointerTarget(*Img, Resolved)) {
+        Out = *Target;
+        return true;
+      }
+      // A caller that retains the slot can still identify a named binding.
+      Out = 0;
+      return SlotOut && !resolveRoutineName(*Img, 0, Resolved).empty();
+    }
     const uint8_t *Slot = Img->readVA(Resolved, PtrSize);
     if (!Slot)
       return false;

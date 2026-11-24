@@ -267,7 +267,7 @@ TEST_P(LinuxReceive, ZeroDatagramPeekAndLatePeerLengthKeepPacketOwnership) {
 TEST_P(LinuxReceive, InvalidAdmissionAndClockOverflowHaveNoEffects) {
   const auto FD = open();
   EXPECT_FALSE(call(ServiceKind::ReceiveFrom, FD, Base + 128, 1, 0x100));
-  EXPECT_FALSE(call(ServiceKind::Read, FD, Base + 128, UINT64_MAX));
+  EXPECT_EQ(call(ServiceKind::Read, FD, Base + 128, UINT64_MAX), uint64_t(-14));
   EXPECT_FALSE(
       call(ServiceKind::ReceiveFrom, FD, Base + 128, 1, 0, Base + 160));
   Options.LinuxTime->Clocks[1] = {INT64_MAX, 999999999};

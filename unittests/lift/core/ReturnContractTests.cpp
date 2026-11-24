@@ -14,6 +14,7 @@
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -21,17 +22,20 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -61,6 +65,25 @@ MedVar temporary(int Id) {
   Value.Id = Id;
   Value.SSAVer = 1;
   Value.Size = 8;
+  return Value;
+}
+
+/// \p Value at \p Size bytes.
+MedVar sized(MedVar Value, uint16_t Size) {
+  Value.Size = Size;
+  return Value;
+}
+
+/// A value of \p Size bytes in the register at \p Offset, which \p Id names
+/// apart from the other values there (a register and its narrower views).
+MedVar inRegister(uint64_t Offset, uint16_t Size, int Id, int Version) {
+  MedVar Value;
+  Value.Kind = MedVar::Reg;
+  Value.TheArch = Arch::X64;
+  Value.Id = Id;
+  Value.SSAVer = Version;
+  Value.Size = Size;
+  Value.RegOff = Offset;
   return Value;
 }
 
@@ -200,6 +223,50 @@ std::vector<bool> settle(std::vector<MedFunc> Funcs,
   for (const MedFunc &Func : Result.MedFuncs)
     NoValue.push_back(Func.ReturnsNoValue);
   return NoValue;
+}
+
+/// As settle, returning the functions too.
+PipelineResult settled(std::vector<MedFunc> Funcs,
+                       BinaryFormat Format = BinaryFormat::ELF) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = Format;
+  PipelineResult Result;
+  Result.MedFuncs = std::move(Funcs);
+  settleReturnContracts(Image, Result, nullptr);
+  return Result;
+}
+
+/// A callee one path of which hands back RAX as it entered and the other
+/// what an unknown call left: no value unless a caller reads one.
+MedFunc releasing() {
+  return branching(CalleeEntry,
+                   operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}));
+}
+
+/// A caller that calls the callee, runs \p Ops on what RAX then holds
+/// (rax(1)) and returns zero.
+MedFunc callerRunning(std::vector<MedOp> Ops) {
+  std::vector<MedOp> All = {callTo(CalleeEntry, 1)};
+  for (MedOp &Op : Ops)
+    All.push_back(std::move(Op));
+  All.push_back(returning(MedVar::makeConst(0, 8)));
+  return function(CallerEntry, {block(std::move(All))});
+}
+
+/// `setcc %al` after the call: RAX keeps the bytes the call left above the
+/// one written.  The merged register is rax(2).
+std::vector<MedOp> byteSetOverTheResult() {
+  return {operation(NdOp::INT_AND, temporary(2),
+                    {rax(1), MedVar::makeConst(~0xFFull, 8)}),
+          operation(NdOp::INT_ZEXT, temporary(3), {sized(temporary(1), 1)}),
+          operation(NdOp::INT_OR, rax(2), {temporary(2), temporary(3)})};
+}
+
+std::vector<MedOp> operator+(std::vector<MedOp> Ops, std::vector<MedOp> More) {
+  for (MedOp &Op : More)
+    Ops.push_back(std::move(Op));
+  return Ops;
 }
 
 TEST(ReturnContracts, TheRegisterAsTheFunctionEnteredItIsNoValue) {
@@ -360,14 +427,629 @@ TEST(ReturnContracts, AResultOnlyADeadMergeReadsIsNoValue) {
 }
 
 TEST(ReturnContracts, AResultAMergeHandsBackIsReadByACallerThatReturnsAValue) {
-  // The caller returns 5 on the other path, so what it hands back from the
-  // callee is a value too.
-  MedFunc Callee = branching(
-      CalleeEntry, operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}));
+  // The caller returns 5 on the other path, and no path of the callee shows
+  // it means no value (one returns what an unknown call left, the other
+  // follows a call that does not return): what the caller hands back from
+  // it is a value too.
+  MedOp Abort = callTo(0x3000, 2);
+  Abort.DoesNotReturn = true;
+  MedFunc Callee =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0}),
+                block({Abort, returning(rax(2))}, {0})});
   MedFunc Caller =
       conditionalCaller(MedVar::makeConst(5, 8), returning(rax(2)));
   EXPECT_EQ(settle({std::move(Callee), std::move(Caller)}),
             (std::vector<bool>{false, false}));
+}
+
+TEST(ReturnContracts, ACalleeAndTheCallerThatHandsItsResultBackReturnNone) {
+  // sqlite3_free and sqlite3BtreeClearCursor: the callee's result is read
+  // only if the wrapper returns a value, and the wrapper returns one only if
+  // the callee does.  Neither does.
+  const MedFunc Wrapper = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1), returning(rax(1))})});
+  EXPECT_EQ(settle({releasing(), Wrapper}), (std::vector<bool>{true, true}));
+}
+
+TEST(ReturnContracts, AReadReachesDownThroughACallerThatHandsTheResultBack) {
+  // seh_probe: main compares what a wrapper returns, and the wrapper returns
+  // what its callee does.  The callee's result is read.
+  const MedFunc Wrapper = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1), returning(rax(1))})});
+  const MedFunc Reader = function(
+      0x3000, {block({callTo(CallerEntry, 1),
+                      operation(NdOp::STORE, {}, {temporary(7), rax(1)}),
+                      returning(MedVar::makeConst(0, 8))})});
+  EXPECT_EQ(settle({releasing(), Wrapper, Reader}),
+            (std::vector<bool>{false, false, false}));
+
+  // A read of the float a function returns is no read of the integer
+  // register it hands back.
+  MedFunc Measuring = Wrapper;
+  Measuring.ReturnType = NdType::makeFloat(8);
+  EXPECT_EQ(settle({releasing(), Measuring, Reader}),
+            (std::vector<bool>{true, false, false}));
+}
+
+TEST(ReturnContracts, ACalleeNoPathShowsMeansNoValueWaitsForItsCaller) {
+  // MSVC's AArch64 cookie check returns the X0 it was given unless the
+  // cookie is wrong, when it calls a routine that does not return; every
+  // function it guards returns through it.  No path of it shows it means
+  // no value, so a caller that hands its result back may be returning what
+  // it passed: both keep their values.
+  MedOp Abort = callTo(0x3000, 2);
+  Abort.DoesNotReturn = true;
+  const MedFunc Check =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0}),
+                block({Abort, returning(rax(2))}, {0})});
+  const MedFunc Guarded = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1), returning(rax(1))})});
+  EXPECT_EQ(settle({Check, Guarded}), (std::vector<bool>{false, false}));
+
+  // Nothing hands its result back: it returns none, as before.
+  EXPECT_EQ(settle({Check}), std::vector<bool>{true});
+
+  // Nor does a caller that is itself settled to return none, whichever of
+  // the two is looked at first: one of its paths never wrote the register.
+  const MedFunc Early =
+      function(CallerEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({returning(rax(0))}, {0}),
+                block({callTo(CalleeEntry, 1), returning(rax(1))}, {0})});
+  EXPECT_EQ(settle({Check, Early}), (std::vector<bool>{true, true}));
+  EXPECT_EQ(settle({Early, Check}), (std::vector<bool>{true, true}));
+}
+
+TEST(ReturnContracts, AFunctionThatReturnsWhatItsOwnCallReturnsShowsNothing) {
+  // One path returns what an unknown call left, the other what the function
+  // itself returns: that it may return nothing is no evidence that it does.
+  const MedFunc Recursive =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0}),
+                block({callTo(CalleeEntry, 2), returning(rax(2))}, {0})});
+  EXPECT_EQ(settle({Recursive}), std::vector<bool>{false});
+}
+
+TEST(ReturnContracts, AResultOnlyUnreadViewsOfTheRegisterReadIsNotRead) {
+  // sqlite3BtreeIndexMoveto: the lift keeps the narrower views of RAX a
+  // function reads anywhere (`eax`, `al`) in step with it, so a call's
+  // result is copied into each view and merged where paths join.  Nothing
+  // reads these merges.
+  const MedVar Entered = inRegister(x86reg::RAX, 4, 1, 0),
+               Left = inRegister(x86reg::RAX, 4, 1, 1),
+               Joined = inRegister(x86reg::RAX, 4, 1, 2);
+  PhiNode Merge;
+  Merge.Output = Joined;
+  Merge.Args = {{0, Entered}, {1, Left}};
+  MedBlock Join = block({returning(MedVar::makeConst(0, 8))}, {0, 1});
+  Join.Phis.push_back(std::move(Merge));
+  const MedFunc Caller =
+      function(CallerEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({callTo(CalleeEntry, 1),
+                       operation(NdOp::SUBBYTES, Left,
+                                 {rax(1), MedVar::makeConst(0, 4)})},
+                      {0}, {2}),
+                std::move(Join)});
+  EXPECT_EQ(settle({releasing(), Caller}), (std::vector<bool>{true, false}));
+}
+
+TEST(ReturnContracts, AnUnreadViewOfTheReturnRegisterReadsNothing) {
+  // sqlite3GenerateConstraintChecks: the view of a call's result that not
+  // even a merge reads.
+  const MedFunc Caller =
+      callerRunning({operation(NdOp::SUBBYTES, inRegister(x86reg::RAX, 4, 1, 1),
+                               {rax(1), MedVar::makeConst(0, 4)})});
+  EXPECT_EQ(settle({releasing(), Caller}), (std::vector<bool>{true, false}));
+}
+
+TEST(ReturnContracts, TheBytesASetccMergesOverReadNothing) {
+  // `call release; setne %al; mov %al, (%rbx)`: the store reads the byte
+  // written, not what the call left above it.  The merge then reads zero in
+  // place of the result of a call that returns none.
+  const MedVar Low = sized(temporary(4), 1);
+  const MedFunc Caller = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{
+          operation(NdOp::SUBBYTES, Low, {rax(2), MedVar::makeConst(0, 8)}),
+          operation(NdOp::STORE, {}, {temporary(7), Low})});
+  const PipelineResult Result = settled({releasing(), Caller});
+  EXPECT_TRUE(Result.MedFuncs[0].ReturnsNoValue);
+  const MedOp &Kept = Result.MedFuncs[1].Blocks[0].Ops[1];
+  ASSERT_EQ(Kept.Opcode, NdOp::INT_AND);
+  EXPECT_TRUE(Kept.Inputs[0].isConst() && Kept.Inputs[0].ConstVal == 0);
+
+  // A store of the whole register reads what the call left.
+  const MedFunc Whole = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{operation(NdOp::STORE, {}, {temporary(7), rax(2)})});
+  const PipelineResult Read = settled({releasing(), Whole});
+  EXPECT_FALSE(Read.MedFuncs[0].ReturnsNoValue);
+  EXPECT_FALSE(Read.MedFuncs[1].Blocks[0].Ops[1].Inputs[0].isConst());
+}
+
+TEST(ReturnContracts, AnAndWithAZeroExtendedByteReadsOneByte) {
+  // sub_59DC0: `call sqlite3_free; sete %al; and %eax, %ebx` where EBX holds
+  // a zero-extended flag.  The bytes of EAX above AL, which the call left,
+  // meet zero bytes; a 32-bit store of the result reads none of them.
+  const MedVar Eax = sized(temporary(4), 4);
+  const auto Ebx = [](int Version) {
+    return inRegister(x86reg::RBX, 4, 2, Version);
+  };
+  const std::vector<MedOp> Anded = {
+      operation(NdOp::SUBBYTES, Eax, {rax(2), MedVar::makeConst(0, 8)}),
+      operation(NdOp::INT_AND, Ebx(2), {Ebx(1), Eax}),
+      operation(NdOp::STORE, {}, {temporary(7), Ebx(2)})};
+  const MedFunc Flag =
+      callerRunning(std::vector<MedOp>{operation(NdOp::INT_ZEXT, Ebx(1),
+                                                 {sized(temporary(6), 1)})} +
+                    byteSetOverTheResult() + Anded);
+  EXPECT_EQ(settle({releasing(), Flag}), (std::vector<bool>{true, false}));
+
+  // An EBX of unknown bytes shows every byte of EAX.
+  const MedFunc Unknown = callerRunning(byteSetOverTheResult() + Anded);
+  EXPECT_EQ(settle({releasing(), Unknown}), (std::vector<bool>{false, false}));
+
+  // A flag ANDed around a loop stays the byte it started as: the merge at
+  // the loop's head is zero above its low byte because every arm is.
+  PhiNode Head;
+  Head.Output = Ebx(1);
+  Head.Args = {{0, Ebx(0)}, {1, Ebx(2)}};
+  std::vector<MedOp> Body = {callTo(CalleeEntry, 1)};
+  for (MedOp &Op : byteSetOverTheResult() + Anded)
+    Body.push_back(std::move(Op));
+  Body.push_back(operation(NdOp::COND_BR, {}, {temporary(9)}));
+  MedBlock Loop = block(std::move(Body), {0, 1}, {1, 2});
+  Loop.Phis.push_back(std::move(Head));
+  const MedFunc Looping = function(
+      CallerEntry,
+      {block({operation(NdOp::INT_ZEXT, Ebx(0), {sized(temporary(6), 1)})}, {},
+             {1}),
+       std::move(Loop), block({returning(MedVar::makeConst(0, 8))}, {1})});
+  EXPECT_EQ(settle({releasing(), Looping}), (std::vector<bool>{true, false}));
+}
+
+TEST(ReturnContracts, ALeftShiftReadsNothingAboveTheBytesRead) {
+  // sqlite3_progress_handler: `setne %al; shl $6, %eax; mov %al, 0x6e(%rbx)`.
+  // A left shift moves bits up only, so the byte stored comes from AL.
+  const MedVar Eax = sized(temporary(4), 4), Shifted = sized(temporary(5), 4),
+               Low = sized(temporary(6), 1);
+  const MedFunc Caller = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{
+          operation(NdOp::SUBBYTES, Eax, {rax(2), MedVar::makeConst(0, 8)}),
+          operation(NdOp::INT_LEFT, Shifted, {Eax, MedVar::makeConst(6, 4)}),
+          operation(NdOp::SUBBYTES, Low, {Shifted, MedVar::makeConst(0, 8)}),
+          operation(NdOp::STORE, {}, {temporary(7), Low})});
+  EXPECT_EQ(settle({releasing(), Caller}), (std::vector<bool>{true, false}));
+}
+
+TEST(ReturnContracts, AnOperationPassesOnOnlyTheBytesReadOfIt) {
+  // After `setcc %al` the register holds a known byte below the seven the
+  // call left.  Each case stores some bytes of what an operation makes of
+  // it: the call's result is read exactly where the operation carries one
+  // of its bytes into what is stored.
+  const MedVar Eax = sized(temporary(4), 4), Out = temporary(5),
+               Out4 = sized(temporary(5), 4), Stored = sized(temporary(6), 1);
+  const MedOp ViewOfEax =
+      operation(NdOp::SUBBYTES, Eax, {rax(2), MedVar::makeConst(0, 8)});
+  struct Case {
+    const char *Name;
+    std::vector<MedOp> Ops;
+    /// The operation's result and the byte of it stored.
+    MedVar Made;
+    uint64_t Byte;
+    bool ReadsResult;
+  };
+  const MedVar Ones = MedVar::makeConst(~0xFFull, 8);
+  const std::vector<Case> Cases = {
+      {"copy", {operation(NdOp::COPY, Out, {rax(2)})}, Out, 0, false},
+      {"copy", {operation(NdOp::COPY, Out, {rax(2)})}, Out, 1, true},
+      {"not", {operation(NdOp::INT_NOT, Out, {rax(2)})}, Out, 0, false},
+      {"not", {operation(NdOp::INT_NOT, Out, {rax(2)})}, Out, 1, true},
+      // A zero extension adds bytes that read nothing.
+      {"zext",
+       {ViewOfEax, operation(NdOp::INT_ZEXT, Out, {Eax})},
+       Out,
+       0,
+       false},
+      {"zext",
+       {ViewOfEax, operation(NdOp::INT_ZEXT, Out, {Eax})},
+       Out,
+       1,
+       true},
+      {"zext",
+       {ViewOfEax, operation(NdOp::INT_ZEXT, Out, {Eax})},
+       Out,
+       5,
+       false},
+      // A sign extension repeats the top byte of its source above it.
+      {"sext",
+       {ViewOfEax, operation(NdOp::INT_SEXT, Out, {Eax})},
+       Out,
+       0,
+       false},
+      {"sext",
+       {ViewOfEax, operation(NdOp::INT_SEXT, Out, {Eax})},
+       Out,
+       5,
+       true},
+      // The first operand is the high part: its low byte is the known one.
+      {"concat",
+       {ViewOfEax, operation(NdOp::CONCAT, Out, {Eax, sized(temporary(8), 4)})},
+       Out,
+       4,
+       false},
+      {"concat",
+       {ViewOfEax, operation(NdOp::CONCAT, Out, {Eax, sized(temporary(8), 4)})},
+       Out,
+       5,
+       true},
+      // A carry runs upwards only.
+      {"add",
+       {ViewOfEax,
+        operation(NdOp::INT_ADD, Out4, {Eax, MedVar::makeConst(1, 4)})},
+       Out4,
+       0,
+       false},
+      {"add",
+       {ViewOfEax,
+        operation(NdOp::INT_ADD, Out4, {Eax, MedVar::makeConst(1, 4)})},
+       Out4,
+       1,
+       true},
+      {"sub",
+       {ViewOfEax,
+        operation(NdOp::INT_SUB, Out4, {Eax, MedVar::makeConst(1, 4)})},
+       Out4,
+       0,
+       false},
+      {"sub",
+       {ViewOfEax,
+        operation(NdOp::INT_SUB, Out4, {Eax, MedVar::makeConst(1, 4)})},
+       Out4,
+       1,
+       true},
+      {"mult",
+       {ViewOfEax,
+        operation(NdOp::INT_MULT, Out4, {Eax, MedVar::makeConst(3, 4)})},
+       Out4,
+       0,
+       false},
+      {"mult",
+       {ViewOfEax,
+        operation(NdOp::INT_MULT, Out4, {Eax, MedVar::makeConst(3, 4)})},
+       Out4,
+       1,
+       true},
+      {"xor",
+       {operation(NdOp::INT_XOR, Out, {rax(2), temporary(8)})},
+       Out,
+       0,
+       false},
+      {"xor",
+       {operation(NdOp::INT_XOR, Out, {rax(2), temporary(8)})},
+       Out,
+       1,
+       true},
+      // A byte ORed with ones shows nothing of the other operand.
+      {"or ones",
+       {operation(NdOp::INT_OR, Out, {rax(2), Ones})},
+       Out,
+       1,
+       false},
+      {"or zero",
+       {operation(NdOp::INT_OR, Out, {rax(2), MedVar::makeConst(0, 8)})},
+       Out,
+       1,
+       true},
+  };
+  for (const Case &Each : Cases) {
+    const MedFunc Caller = callerRunning(
+        byteSetOverTheResult() + Each.Ops +
+        std::vector<MedOp>{
+            operation(NdOp::SUBBYTES, Stored,
+                      {Each.Made, MedVar::makeConst(Each.Byte, 8)}),
+            operation(NdOp::STORE, {}, {temporary(7), Stored})});
+    EXPECT_EQ(settle({releasing(), Caller}),
+              (std::vector<bool>{!Each.ReadsResult, false}))
+        << Each.Name << " byte " << Each.Byte;
+  }
+}
+
+TEST(ReturnContracts, AWordInsertedIntoAVectorReadsNoneOfItsOtherLanes) {
+  // sqlite3ExprListDelete's caller: `call f; pinsrw $0, mem, %xmm0; ...;
+  // movd %xmm0, mem`.  The insert keeps the other lanes of what the call
+  // left in XMM0, and the store reads the inserted word's bytes alone.
+  const MedVar Xmm = inRegister(x86reg::XMM0, 16, 3, 1);
+  const MedVar Word = sized(temporary(1), 2), Rest = sized(temporary(2), 14),
+               Inserted = sized(temporary(3), 16),
+               Stored = sized(temporary(4), 2);
+  const MedFunc Caller = function(
+      CallerEntry,
+      {block({operation(
+                  NdOp::CALL, Xmm,
+                  {MedVar::makeConst(CalleeEntry, 8,
+                                     ConstantAddressProvenance::CodeAddress)}),
+              operation(NdOp::SUBBYTES, Rest, {Xmm, MedVar::makeConst(2, 8)}),
+              operation(NdOp::CONCAT, Inserted, {Rest, Word}),
+              operation(NdOp::SUBBYTES, Stored,
+                        {Inserted, MedVar::makeConst(0, 8)}),
+              operation(NdOp::STORE, {}, {temporary(7), Stored}),
+              returning(MedVar::makeConst(0, 8))})});
+  const PipelineResult Result = settled({releasing(), Caller});
+  EXPECT_TRUE(Result.MedFuncs[0].ReturnsNoValue);
+  // That the callee returns no value says nothing of what it left in XMM0:
+  // the insert still reads the register.
+  const MedOp &Kept = Result.MedFuncs[1].Blocks[0].Ops[1];
+  ASSERT_EQ(Kept.Opcode, NdOp::SUBBYTES);
+  EXPECT_FALSE(Kept.Inputs[0].isConst());
+}
+
+TEST(ReturnContracts, AFunctionThatReturnsAFloatHandsBackNoInteger) {
+  // sqlite3_column_double ends in sqlite3_mutex_leave and returns XMM0:
+  // RAX is as the call left it at its return, which reads nothing.
+  const auto Measuring = [] {
+    return function(CallerEntry,
+                    {block({callTo(CalleeEntry, 1), returning(rax(1))})});
+  };
+  MedFunc Inferred = Measuring();
+  Inferred.ReturnType = NdType::makeFloat(8);
+  EXPECT_EQ(settle({releasing(), Inferred}), (std::vector<bool>{true, false}));
+
+  // A source signature and debug information say the same of theirs.
+  MedFunc Hinted = Measuring();
+  Hinted.SourceTypeHint.emplace();
+  Hinted.SourceTypeHint->ReturnType = NdType::makeFloat(8);
+  EXPECT_EQ(settle({releasing(), Hinted}), (std::vector<bool>{true, false}));
+  DeclaringDebugContext Debug;
+  Debug.Returns[CallerEntry] = NdType::makeFloat(8);
+  EXPECT_EQ(settle({releasing(), Measuring()}, BinaryFormat::ELF, &Debug),
+            (std::vector<bool>{true, false}));
+
+  // One declared to return an integer reads what it hands back.
+  Debug.Returns[CallerEntry] = NdType::makeInt(8);
+  EXPECT_EQ(settle({releasing(), Measuring()}, BinaryFormat::ELF, &Debug),
+            (std::vector<bool>{false, false}));
+
+  // A target that may return a float in the integer register: read.
+  BinaryImage Soft;
+  Soft.Arch = Arch::ARM;
+  Soft.Format = BinaryFormat::ELF;
+  const TargetRegInfo &ARM = getTargetRegInfo(Soft.Arch);
+  const auto R0 = [&](int Version) {
+    MedVar Value = inRegister(ARM.IntReturnReg, 4, 0, Version);
+    Value.TheArch = Soft.Arch;
+    return Value;
+  };
+  MedVar Link = sized(temporary(9), 4);
+  Link.TheArch = Soft.Arch;
+  const MedOp Seed = operation(NdOp::COPY, R0(0), {R0(0)});
+  MedFunc Callee = function(
+      CalleeEntry,
+      {block({Seed, operation(NdOp::COND_BR, {}, {temporary(8)})}, {}, {1, 2}),
+       block({returning(Link)}, {0}),
+       block({operation(NdOp::INDIR_CALL, R0(1), {temporary(5)}),
+              returning(Link)},
+             {0})});
+  Callee.ReturnType = NdType::makeInt(4);
+  MedFunc Caller = function(
+      CallerEntry,
+      {block({operation(
+                  NdOp::CALL, R0(1),
+                  {MedVar::makeConst(CalleeEntry, 4,
+                                     ConstantAddressProvenance::CodeAddress)}),
+              returning(Link)})});
+  Caller.ReturnType = NdType::makeFloat(4);
+  PipelineResult Result;
+  Result.MedFuncs = {Callee, Caller};
+  settleReturnContracts(Soft, Result);
+  EXPECT_FALSE(Result.MedFuncs[0].ReturnsNoValue);
+}
+
+TEST(ReturnContracts, WhatSomethingUnseenMayReadIsRead) {
+  // Memory is read through pointers, and a load or a division runs whatever
+  // reads its result: neither lets a call's result go unread.
+  const std::vector<std::pair<const char *, MedOp>> Cases = {
+      {"a load", operation(NdOp::LOAD, temporary(2), {rax(1)})},
+      {"a division",
+       operation(NdOp::INT_DIV, temporary(2), {temporary(8), rax(1)})},
+  };
+  for (const auto &[Name, Op] : Cases)
+    EXPECT_EQ(settle({releasing(), callerRunning({Op})}),
+              (std::vector<bool>{false, false}))
+        << Name;
+
+  // A frame slot is memory: reading one byte of it by name leaves the rest
+  // to whatever reads it through a pointer.
+  MedVar Slot = temporary(3);
+  Slot.Kind = MedVar::Stack;
+  const MedVar Low = sized(temporary(4), 1);
+  const MedFunc Spilling = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{
+          operation(NdOp::COPY, Slot, {rax(2)}),
+          operation(NdOp::SUBBYTES, Low, {Slot, MedVar::makeConst(0, 8)}),
+          operation(NdOp::STORE, {}, {temporary(7), Low})});
+  EXPECT_EQ(settle({releasing(), Spilling}), (std::vector<bool>{false, false}));
+
+  // The value an exception hands a merge is one of its arguments.
+  PhiNode Handler;
+  Handler.Output = temporary(4);
+  Handler.Args = {{0, temporary(2)}};
+  Handler.ExceptionalEntry = rax(1);
+  MedBlock Handling =
+      block({operation(NdOp::STORE, {}, {temporary(7), temporary(4)}),
+             returning(MedVar::makeConst(0, 8))},
+            {0});
+  Handling.Phis.push_back(Handler);
+  const MedFunc Catching = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1)}, {}, {1}), Handling});
+  EXPECT_EQ(settle({releasing(), Catching}), (std::vector<bool>{false, false}));
+}
+
+TEST(ReturnContracts, AnotherRegisterIsReadWhereSomethingUnseenMayTakeIt) {
+  // sqlite3WindowCodeInit: `call sqlite3ExprListDelete; pinsrw $0, mem,
+  // %xmm0`.  The insert keeps the lanes the call left, and XMM0 then reaches
+  // the function's end unread.  The function returns an integer and nothing
+  // catches an exception in it, so nothing takes XMM0 from it.
+  const MedVar Rdx = inRegister(x86reg::RDX, 8, 4, 1);
+  const auto Leaving = [&] {
+    return callerRunning({operation(NdOp::COPY, Rdx, {rax(1)})});
+  };
+  EXPECT_EQ(settle({releasing(), Leaving()}), (std::vector<bool>{true, false}));
+  for (const TypeRef &Type : {NdType::makePtr(nullptr), NdType::makeVoid()}) {
+    MedFunc Typed = Leaving();
+    Typed.ReturnType = Type;
+    EXPECT_EQ(settle({releasing(), Typed}), (std::vector<bool>{true, false}));
+  }
+
+  // A merge of the register that nothing reads is no more a reader.
+  PhiNode Merge;
+  Merge.Output = inRegister(x86reg::RDX, 8, 4, 2);
+  Merge.Args = {{0, inRegister(x86reg::RDX, 8, 4, 0)}, {1, Rdx}};
+  MedBlock Join = block({returning(MedVar::makeConst(0, 8))}, {0, 1});
+  Join.Phis.push_back(Merge);
+  const auto Merging = [&] {
+    return function(
+        CallerEntry,
+        {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})}, {},
+               {1, 2}),
+         block({callTo(CalleeEntry, 1), operation(NdOp::COPY, Rdx, {rax(1)})},
+               {0}, {2}),
+         Join});
+  };
+  EXPECT_EQ(settle({releasing(), Merging()}), (std::vector<bool>{true, false}));
+
+  // A caller takes the register from a function that returns a record of
+  // registers, a floating-point or vector value, or nothing typed yet; an
+  // exception handler lifted apart reads what the function held.
+  const std::vector<std::pair<const char *, void (*)(MedFunc &)>> Unseen = {
+      {"a record of registers",
+       [](MedFunc &F) {
+         F.MultiReturn = {{x86reg::RAX, 8, false}, {x86reg::RDX, 8, false}};
+       }},
+      {"an x87 result", [](MedFunc &F) { F.FPReturnViaX87 = true; }},
+      {"an explicit x87 result",
+       [](MedFunc &F) { F.ExplicitX87ReturnValue = true; }},
+      {"a vector result", [](MedFunc &F) { F.ReturnsVectorRegister = true; }},
+      {"an untyped result", [](MedFunc &F) { F.ReturnType = nullptr; }},
+      {"a float result",
+       [](MedFunc &F) { F.ReturnType = NdType::makeFloat(8); }},
+      {"a source signature's float",
+       [](MedFunc &F) {
+         F.SourceTypeHint.emplace();
+         F.SourceTypeHint->ReturnType = NdType::makeFloat(8);
+       }},
+      {"an exceptional edge",
+       [](MedFunc &F) {
+         F.Blocks.front().ExceptionalSuccs.push_back(
+             {-1, 0x4000, ExceptionalEdgeKind::CxxCatch});
+       }},
+      {"an exceptional entry",
+       [](MedFunc &F) {
+         F.Blocks.front().ExceptionalPreds.push_back(
+             {-1, 0x4000, ExceptionalEdgeKind::CxxCatch});
+       }},
+  };
+  for (const auto &[Name, Change] : Unseen) {
+    MedFunc Changed = Leaving(), Joined = Merging();
+    Change(Changed);
+    Change(Joined);
+    EXPECT_FALSE(settle({releasing(), Changed})[0]) << Name;
+    EXPECT_FALSE(settle({releasing(), Joined})[0]) << Name << " (merge)";
+  }
+}
+
+TEST(ReturnContracts, TheUnreadResultOfARoutineDeclaredVoidReadsZero) {
+  // `call _set_app_type; setne %al; mov %al, (%rbx)`: the routine is void by
+  // its prototype, and the merge reads zero in place of what it left.
+  MedFunc Routine = function(
+      CalleeEntry,
+      {block({seed(), operation(NdOp::COPY, rax(1), {MedVar::makeConst(7, 8)}),
+              returning(rax(1))})});
+  Routine.Name = "_set_app_type";
+  const MedVar Low = sized(temporary(4), 1);
+  const MedFunc Caller = callerRunning(
+      byteSetOverTheResult() +
+      std::vector<MedOp>{
+          operation(NdOp::SUBBYTES, Low, {rax(2), MedVar::makeConst(0, 8)}),
+          operation(NdOp::STORE, {}, {temporary(7), Low})});
+  const PipelineResult Result = settled({Routine, Caller}, BinaryFormat::COFF);
+  EXPECT_TRUE(Result.MedFuncs[0].ReturnsNoValue);
+  const MedOp &Kept = Result.MedFuncs[1].Blocks[0].Ops[1];
+  ASSERT_EQ(Kept.Opcode, NdOp::INT_AND);
+  EXPECT_TRUE(Kept.Inputs[0].isConst() && Kept.Inputs[0].ConstVal == 0);
+}
+
+TEST(ReturnContracts,
+     AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt) {
+  // Go passes its first argument in RAX.  runtime.compute0 writes through
+  // its second and returns with RAX as it came: no result, unless a caller
+  // reads one, as it does of a function that returns its argument.
+  MedVar Argument = rax(0);
+  Argument.Kind = MedVar::Param;
+  MedFunc ByParameter = function(CalleeEntry, {block({returning(Argument)})});
+  ByParameter.Params.push_back(Argument);
+  MedFunc ByRegister =
+      function(CalleeEntry, {block({seed(), returning(rax(0))})});
+  ByRegister.Params.push_back(Argument);
+  const MedFunc Reader = function(
+      CallerEntry, {block({callTo(CalleeEntry, 1),
+                           operation(NdOp::STORE, {}, {temporary(7), rax(1)}),
+                           returning(MedVar::makeConst(0, 8))})});
+  for (const MedFunc &Callee : {ByParameter, ByRegister}) {
+    EXPECT_EQ(settle({Callee}), std::vector<bool>{true});
+    EXPECT_EQ(settle({Callee, Reader}), (std::vector<bool>{false, false}));
+  }
+
+  // One that also writes the register hands the argument back as a value.
+  MedFunc Writing =
+      function(CalleeEntry,
+               {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})},
+                      {}, {1, 2}),
+                block({returning(rax(0))}, {0}),
+                block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}),
+                       returning(rax(1))},
+                      {0})});
+  Writing.Params.push_back(Argument);
+  EXPECT_EQ(settle({Writing}), std::vector<bool>{false});
+}
+
+TEST(ReturnContracts, AnotherRegisterAsEnteredShowsNothing) {
+  // `mov %rbx, %rax; ret` of an RBX the function never set leaves nothing
+  // defined, but the register was written: beside a `return 1` the function
+  // keeps its value, where a return that never wrote RAX would not.
+  const MedVar Rbx = inRegister(x86reg::RBX, 8, 2, 0);
+  const auto Beside = [](MedVar Entered) {
+    return function(
+        CalleeEntry,
+        {block({seed(), operation(NdOp::COPY, Entered, {Entered}),
+                operation(NdOp::COND_BR, {}, {temporary(9)})},
+               {}, {1, 2}),
+         block({returning(Entered)}, {0}),
+         block({operation(NdOp::COPY, rax(2), {MedVar::makeConst(1, 8)}),
+                returning(rax(2))},
+               {0})});
+  };
+  EXPECT_EQ(settle({Beside(Rbx)}), std::vector<bool>{false});
+  EXPECT_EQ(settle({Beside(rax(0))}), std::vector<bool>{true});
 }
 
 TEST(ReturnContracts, AReturnOfACopiedArgumentIsAValue) {
@@ -589,12 +1271,377 @@ TEST(ReturnContracts, AnInstructionRunForItsEffectIsNoValue) {
             std::vector<bool>{true});
 }
 
+/// One path hands back what a call to the function at 0x3000 left, the
+/// other a constant.
+MedFunc constantBesideACall() {
+  return function(
+      CalleeEntry,
+      {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})}, {},
+             {1, 2}),
+       block({callTo(0x3000, 1), returning(rax(1))}, {0}),
+       block({operation(NdOp::COPY, rax(2), {MedVar::makeConst(1, 8)}),
+              returning(rax(2))},
+             {0})});
+}
+
 TEST(ReturnContracts, AConstantIsADeliberateValue) {
-  // register_tm_clones' `return 0` beside the bare path: a value.
+  // A `return 1` beside the code after a call that does not return: that
+  // path shows nothing of the function, and the constant is its value.
+  MedOp Abort = callTo(0x3000, 1);
+  Abort.DoesNotReturn = true;
+  EXPECT_EQ(
+      settle({function(
+          CalleeEntry,
+          {block({seed(), operation(NdOp::COND_BR, {}, {temporary(9)})}, {},
+                 {1, 2}),
+           block({Abort, returning(rax(1))}, {0}),
+           block({operation(NdOp::COPY, rax(2), {MedVar::makeConst(1, 8)}),
+                  returning(rax(2))},
+                 {0})})}),
+      std::vector<bool>{false});
+}
+
+TEST(ReturnContracts, AConstantBesideTheResultOfAFunctionThatReturnsNoneIsNot) {
+  // sqlite3ExprAttachSubtrees: `mov $1, %eax` to store a height on one path
+  // and `jmp sqlite3ExprDelete` on the other.  A function that means to
+  // return a value does not hand back the result of one that returns none:
+  // the constant is what the code happened to hold.
+  const MedFunc Sink = function(0x3000, {block({seed(), returning(rax(0))})});
+  EXPECT_EQ(settle({Sink, constantBesideACall()}),
+            (std::vector<bool>{true, true}));
+
+  // The result of a routine declared void shows the same.
+  MedFunc Routine = function(
+      0x3000,
+      {block({seed(), operation(NdOp::COPY, rax(1), {MedVar::makeConst(7, 8)}),
+              returning(rax(1))})});
+  Routine.Name = "_set_app_type";
+  EXPECT_EQ(settle({Routine, constantBesideACall()}, BinaryFormat::COFF),
+            (std::vector<bool>{true, true}));
+}
+
+TEST(ReturnContracts, AConstantBesideAPathThatNeverWroteTheRegisterIsNoValue) {
+  // sqlite3DeleteColumnNames: `xor %eax, %eax; mov %ax, 0x36(%r13)` on one
+  // path and an early `ret` that never wrote RAX on another.  Compiled code
+  // that means to return a value has no such path.
   EXPECT_EQ(
       settle({branching(CalleeEntry, operation(NdOp::COPY, rax(1),
                                                {MedVar::makeConst(0, 8)}))}),
-      std::vector<bool>{false});
+      std::vector<bool>{true});
+}
+
+TEST(ReturnContracts, OnlyAProvenChoiceOfReturnValuesOutweighsABareReturn) {
+  const auto C = [](uint64_t Value) { return MedVar::makeConst(Value, 8); };
+  const auto Cond = [&](va_t Target, int Predicate) {
+    return operation(NdOp::COND_BR, {}, {C(Target), temporary(Predicate)});
+  };
+  // The guard's false arm leaves RAX as it entered. The other arm chooses
+  // between two blocks whose only effect is the integer they return.
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Cond(0x1020, 9)}, {}, {1, 2}),
+       block({returning(rax(0))}, {0}), block({Cond(0x1040, 10)}, {0}, {3, 4}),
+       block({returning(C(10))}, {2}),
+       block({operation(NdOp::COPY, rax(1), {C(15)}), returning(rax(1))},
+             {2})});
+  for (auto &B : F.Blocks)
+    B.StartAddr = CalleeEntry + 0x10 * B.Id;
+  F.Blocks[2].Ops.back().Addr = 0x1024;
+  auto IsVoid = [](const MedFunc &F) { return bool(settle({F}).front()); };
+  EXPECT_FALSE(IsVoid(F));
+  std::reverse(F.Blocks[2].Succs.begin(), F.Blocks[2].Succs.end());
+  EXPECT_FALSE(IsVoid(F));
+
+  MedFunc Same = F;
+  Same.Blocks[3].Ops.back() = returning(C(15));
+  EXPECT_TRUE(IsVoid(Same));
+  MedFunc Narrow = F;
+  Narrow.ReturnType = NdType::makeInt(1);
+  Narrow.Blocks[3].Ops.back() = returning(C(0x10f));
+  EXPECT_TRUE(IsVoid(Narrow));
+  MedFunc Address = F;
+  Address.Blocks[3].Ops.back().Inputs[0].Provenance =
+      ConstantAddressProvenance::CodeAddress;
+  EXPECT_TRUE(IsVoid(Address));
+  MedFunc Store = F;
+  auto &Ops = Store.Blocks[4].Ops;
+  Ops.insert(Ops.end() - 1, operation(NdOp::STORE, {}, {temporary(7), rax(1)}));
+  EXPECT_TRUE(IsVoid(Store));
+  MedFunc Fixed = F;
+  Fixed.Blocks[2].Ops.back().Inputs[1] = C(0);
+  EXPECT_TRUE(IsVoid(Fixed));
+  Fixed.Blocks[2].Ops.back().Inputs[1] = MedVar::makeUnspecified(1, Arch::X64);
+  EXPECT_TRUE(IsVoid(Fixed));
+  MedFunc Unreachable = F;
+  Unreachable.Blocks[0].Ops.back() = operation(NdOp::BRANCH, {}, {C(0x1010)});
+  Unreachable.Blocks[0].Succs = {1};
+  Unreachable.Blocks[2].Preds.clear();
+  EXPECT_TRUE(IsVoid(Unreachable));
+
+  auto &Branch = F.Blocks[2].Ops.back();
+  Branch = operation(NdOp::INDIR_BR, {}, {temporary(8)});
+  Branch.Addr = 0x1024;
+  EXPECT_TRUE(IsVoid(F));
+  JumpTable &Table = F.JumpTables.emplace_back();
+  Table.InsnAddr = Branch.Addr;
+  Table.IndexDomainAuthenticated = true;
+  Table.Targets = {0x1030, 0x1040};
+  EXPECT_FALSE(IsVoid(F));
+  ++Table.InsnAddr;
+  EXPECT_TRUE(IsVoid(F));
+  --Table.InsnAddr;
+  Table.Targets = {0x1030, 0x1030};
+  EXPECT_TRUE(IsVoid(F));
+  Table.Targets.back() = 0x1040;
+  Table.MutatedUnsafe = true;
+  EXPECT_TRUE(IsVoid(F));
+  Table.MutatedUnsafe = false;
+  Table.AnalysisOnly = true;
+  EXPECT_TRUE(IsVoid(F));
+  Table.AnalysisOnly = false;
+  Table.IndexDomainAuthenticated = false;
+  EXPECT_TRUE(IsVoid(F));
+  Table.IndexDomainAuthenticated = true;
+  F.UnsafeIndirectBranchAddresses.insert(Branch.Addr);
+  EXPECT_TRUE(IsVoid(F));
+}
+
+TEST(ReturnContracts, ASharedReturnTakesItsLiteralFromEachBranchArm) {
+  const auto C = [](uint64_t Value) { return MedVar::makeConst(Value, 8); };
+  const auto Jump = [&](int Id) {
+    return operation(NdOp::BRANCH, {}, {C(CalleeEntry + 16 * Id)});
+  };
+  const auto Choose = [&](int Id, int Condition) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Id), temporary(Condition)});
+  };
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Choose(2, 9)}, {}, {1, 2}),
+       block({returning(rax(0))}, {0}), block({Choose(4, 10)}, {0}, {3, 4}),
+       block({operation(NdOp::COPY, rax(1), {C(10)}), Jump(5)}, {2}, {5}),
+       block({operation(NdOp::COPY, rax(2), {C(15)})}, {2}, {5}),
+       block({returning(rax(3))}, {3, 4})});
+  for (auto &B : F.Blocks)
+    B.StartAddr = CalleeEntry + 16 * B.Id;
+  F.Blocks[5].Phis.push_back({rax(3), {{3, rax(1)}, {4, rax(2)}}, {}});
+  auto IsVoid = [](const MedFunc &F) { return bool(settle({F}).front()); };
+  EXPECT_FALSE(IsVoid(F));
+  std::reverse(F.Blocks[5].Phis.front().Args.begin(),
+               F.Blocks[5].Phis.front().Args.end());
+  std::reverse(F.Blocks[2].Succs.begin(), F.Blocks[2].Succs.end());
+  EXPECT_FALSE(IsVoid(F));
+
+  MedFunc SingleExit = F;
+  SingleExit.Blocks[1].Ops = {Jump(5)};
+  SingleExit.Blocks[1].Succs = {5};
+  SingleExit.Blocks[5].Preds.push_back(1);
+  SingleExit.Blocks[5].Phis.front().Args.push_back({1, rax(0)});
+  EXPECT_FALSE(IsVoid(SingleExit));
+
+  MedFunc Folded = F;
+  Folded.Blocks[5].Phis.front().Args = {{4, C(15)}, {3, C(10)}};
+  EXPECT_FALSE(IsVoid(Folded));
+  Folded.Blocks[3].Ops.front().Inputs[0] = C(0x10f);
+  Folded.Blocks[5].Phis.front().Args.back().second = C(0x10f);
+  Folded.ReturnType = NdType::makeInt(1);
+  EXPECT_TRUE(IsVoid(Folded));
+
+  MedFunc WrongArm = F;
+  WrongArm.Blocks[5].Phis.front().Args = {{3, rax(2)}, {4, rax(1)}};
+  EXPECT_TRUE(IsVoid(WrongArm));
+  MedFunc Copies = F;
+  Copies.Blocks[3].Ops = {operation(NdOp::COPY, temporary(14), {C(10)}),
+                          operation(NdOp::COPY, rax(1), {temporary(14)}),
+                          operation(NdOp::NOP, {}, {}), Jump(5)};
+  EXPECT_FALSE(IsVoid(Copies));
+  Copies.Blocks[3].Ops[1].Inputs[0] = temporary(15);
+  EXPECT_TRUE(IsVoid(Copies));
+  Copies.Blocks[3].Ops[1].Inputs[0] = sized(temporary(14), 4);
+  EXPECT_TRUE(IsVoid(Copies));
+  MedFunc Narrow = F;
+  Narrow.Blocks[5].Phis.front().Args.back().second.Size = 4;
+  EXPECT_TRUE(IsVoid(Narrow));
+  Narrow = F;
+  Narrow.Blocks[5].Phis.front().Output.Size = 4;
+  EXPECT_TRUE(IsVoid(Narrow));
+  const MedOp Store = operation(NdOp::STORE, {}, {temporary(11), rax(1)});
+  MedFunc Effect = F;
+  Effect.Blocks[3].Ops.insert(Effect.Blocks[3].Ops.begin() + 1, Store);
+  EXPECT_TRUE(IsVoid(Effect));
+  Effect = F;
+  Effect.Blocks[5].Ops.insert(Effect.Blocks[5].Ops.begin(), Store);
+  EXPECT_TRUE(IsVoid(Effect));
+  MedFunc Exceptional = F;
+  Exceptional.Blocks[5].Phis.front().ExceptionalEntry =
+      MedVar::makeUnspecified(8, Arch::X64);
+  EXPECT_TRUE(IsVoid(Exceptional));
+
+  // The table must bind the arms that set the results at their common return.
+  F.Blocks[2].Ops.back() = operation(NdOp::INDIR_BR, {}, {temporary(9)});
+  F.Blocks[2].Ops.back().Addr = F.Blocks[2].StartAddr;
+  JumpTable &Table = F.JumpTables.emplace_back();
+  Table.InsnAddr = F.Blocks[2].StartAddr;
+  Table.IndexDomainAuthenticated = true;
+  Table.Targets = {F.Blocks[3].StartAddr, F.Blocks[4].StartAddr};
+  EXPECT_FALSE(IsVoid(F));
+  Table.Targets.back() = F.Blocks[5].StartAddr;
+  EXPECT_TRUE(IsVoid(F));
+}
+
+TEST(ReturnContracts, NestedReturnsCompareOnlyBitsThatReachTheCaller) {
+  const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
+  const auto Choose = [&](int Id) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Id), temporary(Id)});
+  };
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Choose(2)}, {}, {1, 2}), block({}, {0}, {6}),
+       block({Choose(4)}, {0}, {3, 4}),
+       block({operation(NdOp::COPY, rax(1), {C(0x10a)})}, {2}, {5}),
+       block({operation(NdOp::COPY, rax(2), {C(15)})}, {2}, {5}),
+       block({operation(NdOp::INT_AND, rax(4), {rax(3), C(~0xff00ULL)})},
+             {3, 4}, {6}),
+       block({returning(rax(5))}, {1, 5})});
+  for (auto &B : F.Blocks)
+    B.StartAddr = CalleeEntry + 16 * B.Id;
+  F.Blocks[5].Phis.push_back({rax(3), {{4, rax(2)}, {3, rax(1)}}, {}});
+  F.Blocks[6].Phis.push_back({rax(5), {{5, rax(4)}, {1, rax(0)}}, {}});
+  auto IsVoid = [&] { return bool(settle({F}).front()); };
+  EXPECT_FALSE(IsVoid());
+  F.Blocks[4].Ops.front().Inputs[0] = C(10);
+  EXPECT_TRUE(IsVoid()); // The differing byte was overwritten.
+  for (NdOp Opcode : {NdOp::INT_XOR, NdOp::INT_SUB}) {
+    F.Blocks[5].Ops.front() = operation(Opcode, rax(4), {C(7), rax(3)});
+    EXPECT_FALSE(IsVoid());
+    F.ReturnType = NdType::makeInt(1);
+    EXPECT_TRUE(IsVoid());
+    F.ReturnType = NdType::makeInt(8);
+  }
+  F.Blocks[5].Ops.front() = operation(NdOp::INT_XOR, rax(4), {rax(3), rax(3)});
+  EXPECT_TRUE(IsVoid()); // Both inputs change together and cancel.
+  F.Blocks[5].Ops.front() = operation(NdOp::INT_ADD, rax(4), {rax(3), C(7)});
+  EXPECT_FALSE(IsVoid());
+  F.ReturnType = NdType::makeInt(1);
+  EXPECT_TRUE(IsVoid()); // Addition preserves the equal low bytes.
+  F.ReturnType = NdType::makeInt(8);
+  F.Blocks[5].Phis.front().Args[0].second.Size = 1;
+  EXPECT_TRUE(IsVoid()); // One incoming byte cannot establish the register.
+
+  F.Blocks[5].Phis.front().Args[0].second = rax(2);
+  const auto Pair = sized(temporary(12), 2);
+  F.Blocks[3].Ops = {
+      operation(NdOp::CONCAT, Pair,
+                {MedVar::makeConst(0x62, 1), MedVar::makeConst(15, 1)}),
+      operation(NdOp::CONCAT, rax(1), {MedVar::makeConst(0, 6), Pair})};
+  EXPECT_FALSE(IsVoid()); // This arm supplied all bytes locally.
+  F.Blocks[3].Ops.back().Inputs[0] = sized(temporary(13), 6);
+  EXPECT_TRUE(IsVoid()); // The upper bytes have no source on this arm.
+}
+
+TEST(ReturnContracts, SharedShiftsProveOnlyObservableDifferences) {
+  const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
+  const auto Choose = [&](int Id) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Id), temporary(Id)});
+  };
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Choose(2)}, {}, {1, 2}), block({returning(rax(0))}, {0}),
+       block({Choose(4)}, {0}, {3, 4}),
+       block({operation(NdOp::COPY, rax(1), {C(0)})}, {2}, {5}),
+       block({operation(NdOp::COPY, rax(2), {C(0)})}, {2}, {5}),
+       block({}, {3, 4})});
+  F.Blocks[5].Phis.push_back({rax(3), {{4, rax(2)}, {3, rax(1)}}, {}});
+  auto Distinguishes = [&](NdOp Opcode, const MedVar &Count, uint64_t Delta,
+                           uint64_t Mask) {
+    F.Blocks[4].Ops.front().Inputs[0] = C(Delta);
+    F.Blocks[5].Ops = {operation(Opcode, rax(4), {rax(3), Count}),
+                       operation(NdOp::INT_AND, rax(5), {rax(4), C(Mask)}),
+                       returning(rax(5))};
+    return !settle({F}).front();
+  };
+  constexpr uint64_t Sign = uint64_t{1} << 63;
+  EXPECT_TRUE(Distinguishes(NdOp::INT_LEFT, C(60), 8, Sign));
+  EXPECT_FALSE(Distinguishes(NdOp::INT_LEFT, C(60), 16, UINT64_MAX));
+  EXPECT_TRUE(Distinguishes(NdOp::INT_RIGHT, C(4), 16, 1));
+  EXPECT_FALSE(Distinguishes(NdOp::INT_RIGHT, C(4), 15, UINT64_MAX));
+  EXPECT_TRUE(Distinguishes(NdOp::INT_ASHR, C(7), Sign, Sign));
+  EXPECT_FALSE(Distinguishes(NdOp::INT_ASHR, C(7), Sign >> 1, Sign));
+  for (NdOp Opcode : {NdOp::INT_LEFT, NdOp::INT_RIGHT, NdOp::INT_ASHR}) {
+    SCOPED_TRACE(static_cast<unsigned>(Opcode));
+    EXPECT_TRUE(Distinguishes(Opcode, C(0), Sign, Sign));
+    for (uint64_t Count : {uint64_t{64}, uint64_t{65}, UINT64_MAX})
+      EXPECT_EQ(Distinguishes(Opcode, C(Count), Sign, 1),
+                Opcode == NdOp::INT_ASHR);
+    EXPECT_FALSE(Distinguishes(Opcode, temporary(9), Sign, UINT64_MAX));
+    EXPECT_FALSE(Distinguishes(
+        Opcode,
+        MedVar::makeConst(1, 8, ConstantAddressProvenance::AddressFragment),
+        Sign, UINT64_MAX));
+    EXPECT_FALSE(
+        Distinguishes(Opcode, MedVar::makeConst(256, 1), Sign, UINT64_MAX));
+  }
+  const auto Byte = sized(temporary(12), 1);
+  for (NdOp Opcode : {NdOp::INT_ZEXT, NdOp::INT_SEXT}) {
+    F.Blocks[5].Ops = {operation(NdOp::SUBBYTES, Byte, {rax(3), C(1)}),
+                       operation(Opcode, rax(4), {Byte}),
+                       operation(NdOp::INT_AND, rax(5), {rax(4), C(Sign)}),
+                       returning(rax(5))};
+    F.Blocks[4].Ops.front().Inputs[0] = C(0x8000);
+    EXPECT_EQ(!settle({F}).front(), Opcode == NdOp::INT_SEXT);
+    F.Blocks[4].Ops.front().Inputs[0] = C(0x4080);
+    EXPECT_TRUE(settle({F}).front());
+  }
+}
+
+TEST(ReturnContracts, SharedRegisterViewsNeedTheirOwnCompleteIncomingValue) {
+  const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
+  const auto Byte = [](unsigned V) { return MedVar::makeConst(V, 1); };
+  const auto Choose = [&](int Id) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Id), temporary(Id)});
+  };
+  for (const unsigned Offset : {0u, 1u}) {
+    SCOPED_TRACE(Offset);
+    const auto View = [Offset](int Version) {
+      return inRegister(x86reg::RAX + Offset, 1, 11, Version);
+    };
+    const auto Left = Byte(Offset ? 0x23 : 0x1a);
+    const auto Right = Byte(Offset ? 0x34 : 0x1b);
+    auto Result = sized(temporary(12), 1);
+    MedFunc F = function(
+        CalleeEntry,
+        {block({seed(), Choose(2)}, {}, {1, 2}),
+         block({returning(rax(0))}, {0}), block({Choose(4)}, {0}, {3, 4}),
+         block({operation(NdOp::COPY, rax(1), {C(0x231a)}),
+                operation(NdOp::COPY, View(1), {Left})},
+               {2}, {5}),
+         block({operation(NdOp::COPY, rax(2), {C(0x341b)}),
+                operation(NdOp::COPY, View(2), {Right})},
+               {2}, {5}),
+         block({operation(NdOp::INT_XOR, Result, {View(3), Byte(0xa5)}),
+                operation(NdOp::INT_ZEXT, rax(4), {Result}), returning(rax(4))},
+               {3, 4})});
+    auto &Phis = F.Blocks[5].Phis;
+    Phis.push_back({rax(3), {{3, rax(1)}, {4, rax(2)}}, {}});
+    Phis.push_back({View(3), {{4, View(2)}, {3, View(1)}}, {}});
+    auto IsVoid = [&] { return bool(settle({F}).front()); };
+    EXPECT_FALSE(IsVoid());
+    std::reverse(Phis.begin(), Phis.end());
+    EXPECT_FALSE(IsVoid());
+    auto &Input = Phis.back().Args.front().second;
+    Input = sized(rax(1), 1);
+    EXPECT_TRUE(IsVoid());
+    Input = rax(1);
+    F.Blocks[3].Ops.back().Inputs[0] = Byte(0xcc);
+    EXPECT_TRUE(
+        IsVoid()); // The view and the full register disagree on this edge.
+    F.Blocks[3].Ops.back().Inputs[0] = Left;
+    std::swap(Phis.front().Args[0].second, Phis.front().Args[1].second);
+    EXPECT_TRUE(IsVoid());
+  }
 }
 
 TEST(ReturnContracts, AFunctionThatNeverReturnsReturnsNoValue) {
@@ -811,6 +1858,334 @@ TEST(ReturnContract, PropagatedParametersOwnCompleteIntegerReturnValues) {
               TRI.ReturnOperandIsValue);
     Return.Inputs[0].RegOff = TRI.IntReturnReg;
     EXPECT_FALSE(hasPropagatedIntegerReturnValue(Return, A, Value.Size));
+  }
+}
+
+TEST(ReturnContract, IncomingRegisterNeedsAnEntryPathWithNoClobber) {
+  MedFunc F = function(CalleeEntry, {block({}, {}, {1}), block({}, {0})});
+  F.Blocks[0].StartAddr = F.Entry;
+  auto Untouched = [&] {
+    return registerUntouchedFromEntry(F, F.Blocks[1], x86reg::RAX, 8,
+                                      Arch::X64);
+  };
+  EXPECT_TRUE(Untouched());
+  F.Blocks[0].Ops = {operation(NdOp::SUBBYTES, sized(rax(1), 4),
+                               {rax(0), MedVar::makeConst(0, 4)})};
+  EXPECT_TRUE(Untouched());
+  F.Blocks[0].Ops.front().Inputs[1] = temporary(11);
+  EXPECT_FALSE(Untouched());
+  F.Blocks[0].Ops = {callTo(0x3000, 1)};
+  EXPECT_FALSE(Untouched());
+  F.Blocks[0].Ops.clear();
+  F.Blocks[0].Succs.clear();
+  F.Blocks[1].Preds = F.Blocks[1].Succs = {1};
+  EXPECT_FALSE(Untouched());
+}
+
+void runIntegerReturnSources(Arch Target, std::vector<uint8_t> Bytes,
+                             const char *Oracle, const char *Preamble = "") {
+  BinaryImage Image;
+  Image.Arch = Target;
+  Image.Format = BinaryFormat::ELF;
+  Image.Bits = Bitness::Bits64;
+  Image.Base = Image.Entry = CalleeEntry;
+  Segment Code;
+  Code.VA = CalleeEntry;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Data = std::move(Bytes);
+  Code.Size = Code.FileSz = Code.Data.size();
+  auto Sym = Symbol::makeFunc(CalleeEntry, Code.Size);
+  Sym.Name = "choose_result";
+  Image.Symbols.push_back(std::move(Sym));
+  Image.Segments.push_back(std::move(Code));
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  Options.OnlyFunctionEntries = {CalleeEntry};
+  CEmitterOptions COptions;
+  COptions.TheArch = Image.Arch;
+  COptions.Format = Image.Format;
+  COptions.Image = &Image;
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    Options.LiftMode = LLVM;
+    Options.SourceProjection = LLVM;
+    llvm::LLVMContext Context;
+    auto Result = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    std::string Source(Preamble);
+    llvm::raw_string_ostream OS(Source);
+    if (LLVM) {
+      ASSERT_TRUE(Result.LlvmModule);
+      ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, OS, COptions));
+    } else {
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, COptions));
+    }
+    OS.flush();
+    source_call_execution_test::compileAndRun(Source + Oracle, {"-O2"});
+  }
+}
+
+TEST(ReturnContract, BareAArch64ReturnKeepsTheIncomingIntegerArgument) {
+  // cbnz w2,bare; cbz w1,ten; mov w0,#15; ret; ten: mov w0,#10; ret; bare: ret
+  runIntegerReturnSources(Arch::AArch64,
+                          {0xc2, 0x00, 0x00, 0x35, 0x61, 0x00, 0x00,
+                           0x34, 0xe0, 0x01, 0x80, 0x52, 0xc0, 0x03,
+                           0x5f, 0xd6, 0x40, 0x01, 0x80, 0x52, 0xc0,
+                           0x03, 0x5f, 0xd6, 0xc0, 0x03, 0x5f, 0xd6},
+                          R"(
+int main(void) {
+    uint64_t value = UINT64_C(0x1234567887654321);
+    return (uint64_t)choose_result(value, 1, 1) != value ||
+           choose_result(value, 0, 0) != 10 || choose_result(value, 1, 0) != 15;
+}
+)");
+}
+
+TEST(ReturnContract, SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge) {
+  const char *Oracle = R"(
+int main(void) {
+    if (choose_result(0, 0) != 10 || choose_result(1, 0) != 15) return 1;
+    expect_missing = 1;
+    (void)choose_result(1, 1);
+    return 2;
+}
+)";
+  const char *Preamble =
+      "#include <stdlib.h>\nstatic int expect_missing;\n"
+      "#define __builtin_trap() _Exit(expect_missing ? 0 : 3)\n";
+  // All three paths reach the final RET. Only the two MOVs define EAX.
+  runIntegerReturnSources(Arch::X64, {0x85, 0xf6, 0x75, 0x10, 0x85, 0xff, 0x74,
+                                      0x07, 0xb8, 0x0f, 0,    0,    0,    0xeb,
+                                      0x05, 0xb8, 0x0a, 0,    0,    0,    0xc3},
+                          Oracle, Preamble);
+  // On MIPS64 the DADDIU arms share a JR and its empty delay slot. The
+  // third arm executes its own JR without writing V0.
+  runIntegerReturnSources(Arch::MIPS64EL,
+                          {9,  0, 0xa0, 0x14, 0, 0, 0, 0, // bnez a1,bare; nop
+                           4,  0, 0x80, 0x10, 0, 0, 0, 0, // beqz a0,ten; nop
+                           15, 0, 2,    0x64,             // daddiu v0,zero,15
+                           6,  0, 0,    0x10, 0, 0, 0, 0, // b done; nop
+                           10, 0, 2,    0x64, // ten: daddiu v0,zero,10
+                           3,  0, 0,    0x10, 0, 0, 0, 0,  // b done; nop
+                           8,  0, 0xe0, 3,    0, 0, 0, 0,  // bare: jr ra; nop
+                           8,  0, 0xe0, 3,    0, 0, 0, 0}, // done: jr ra; nop
+                          Oracle, Preamble);
+}
+
+TEST(ReturnContract, NestedSharedReturnOverwritesOnlyAH) {
+  runIntegerReturnSources(
+      Arch::X64,
+      {0x48, 0x83, 0xfe, 2,    0x74, 0x20,       // cmp rsi,2; je bare
+       0x48, 0x83, 0xfe, 1,    0x74, 0x13,       // cmp rsi,1; je third
+       0x48, 0x85, 0xff, 0x74, 7,                // test rdi,rdi; je ten
+       0xb8, 15,   0,    0,    0,    0xeb, 0x10, // mov eax,15; jmp inner
+       0xb8, 10,   0,    0,    0,    0xeb, 9,    // ten: mov eax,10; jmp inner
+       0xb8, 31,   0,    0,    0,    0xeb, 6,    // third: mov eax,31; jmp done
+       0xeb, 4,                                  // bare: jmp done
+       0xb4, 0x62, 0xeb, 0,    0xc3}, // inner: mov ah,0x62; jmp done; ret
+      R"(
+int main(void) {
+    return choose_result(0, 0) != 0x620a || choose_result(1, 0) != 0x620f ||
+           choose_result(0, 1) != 31;
+}
+)");
+}
+
+TEST(ReturnContract, SharedX86ReturnUsesTheChangedRegisterView) {
+  // The two MOVs write the whole register. A third path returns it unwritten.
+  const std::vector<uint8_t> Arms = {
+      0x48, 0x83, 0xfe, 2, 0x74, 0x14, // cmp rsi,2; je bare
+      0x48, 0x83, 0xff, 0, 0x74, 7,    // cmp rdi,0; je left
+      0xb8, 0x15, 3,    0, 0,    0xeb, 8,   0xb8,
+      0x14, 2,    0,    0, 0xeb, 1,    0xc3}; // bare: ret
+  auto Code = Arms;
+  Code.insert(Code.end(), {0x34, 0xa5, 0xb4, 0x62, 0xc3}); // xor al; mov ah
+  runIntegerReturnSources(Arch::X64, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0x62b1 || choose_result(1, 0) != 0x62b0;
+}
+)");
+  Code = Arms;
+  Code.insert(Code.end(), {0x67, 0x8d, 0x40, 0xf9, 0xc3}); // lea eax,[eax-7]
+  runIntegerReturnSources(Arch::X64, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0x20d || choose_result(1, 0) != 0x30e;
+}
+)");
+}
+
+TEST(ReturnContract, SharedX86ReturnKeepsTheShiftedLowNibble) {
+  runIntegerReturnSources(Arch::X64,
+                          {0x48, 0x83, 0xfe, 2,
+                           0x74, 0x14, // cmp rsi,2; je bare
+                           0x48, 0x83, 0xff, 0,
+                           0x74, 7, // cmp rdi,0; je left
+                           0xb8, 0x23, 0x31, 0,
+                           0,    0xeb, 8, // mov eax,0x3123; jmp shared
+                           0xb8, 1,    0x21, 0,
+                           0,    0xeb, 1, // left: mov eax,0x2101; jmp shared
+                           0xc3, 0x48, 0xc1, 0xe0,
+                           60,   0xc3}, // bare: ret; shared: shl rax,60; ret
+                          R"(
+int main(void) {
+    return choose_result(0, 0) != UINT64_C(0x1000000000000000) ||
+           choose_result(1, 0) != UINT64_C(0x3000000000000000);
+}
+)");
+}
+
+TEST(ReturnContract, SharedMIPSSignExtensionRequiresAWordOnEachArm) {
+  std::vector<uint8_t> Code = {
+      2,    0,    12,   0x64, 9,    0,    0xac, 0x10,
+      0,    0,    0,    0,                         // mode 2 goes to bare
+      4,    0,    0x80, 0x10, 0,    0,    0,    0, // beqz a0,left; nop
+      0xf9, 3,    2,    0x64, 6,    0,    0,    0x10,
+      0,    0,    0,    0, // v0 = 0x3f9; b shared
+      1,    4,    2,    0x64, 3,    0,    0,    0x10,
+      0,    0,    0,    0,                            // left: v0 = 0x401
+      8,    0,    0xe0, 3,    0,    0,    0,    0,    // bare: jr ra; nop
+      0xfa, 0x10, 2,    0,    0x20, 0x14, 2,    0x7c, // dsrl v0,3; seb v0,v0
+      8,    0,    0xe0, 3,    0xfe, 0x17, 2,    0};   // jr ra; dsrl32 v0,31
+  runIntegerReturnSources(Arch::MIPS64EL, Code, R"(
+int main(void) {
+    return choose_result(0, 0) != 1 || choose_result(1, 0) != 0;
+}
+)");
+  // Shifting -8 by 3 or 32 still leaves a value outside SEB's word domain.
+  Code[20] = 0xf8;
+  Code[21] = 0xff;
+  auto &ShiftEncoding = Code[Code.size() - 16];
+  for (uint8_t Shift : {0xfa, 0x3e}) {
+    SCOPED_TRACE(static_cast<unsigned>(Shift));
+    ShiftEncoding = Shift;
+    runIntegerReturnSources(
+        Arch::MIPS64EL, Code, R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0, 0)), void),
+               "one valid result cannot prove a choice");
+int main(void) {
+    choose_result(0, 0);
+    expect_word_trap = 1;
+    choose_result(1, 0);
+    return 2;
+}
+)",
+        "#include <stdlib.h>\nstatic int expect_word_trap;\n"
+        "#define __builtin_trap() _Exit(expect_word_trap ? 0 : 3)\n");
+  }
+  ShiftEncoding = 0x7e; // dsrl32 v0,v0,1 leaves at most 31 bits.
+  runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0 || choose_result(1, 0) != 1;
+}
+)");
+}
+
+TEST(ReturnContract, SharedMIPSReturnAppliesTheDelaySlotXor) {
+  const std::vector<uint8_t> Arms = {
+      2,    0,    12,   0x64, 9, 0, 0xac, 0x10,
+      0,    0,    0,    0,                   // mode 2 branches to bare
+      4,    0,    0x80, 0x10, 0, 0, 0,    0, // beqz a0,left
+      0x15, 0x31, 2,    0x64, 6, 0, 0,    0x10,
+      0,    0,    0,    0, // v0 = 0x3115; b shared
+      0x14, 0x22, 2,    0x64, 3, 0, 0,    0x10,
+      0,    0,    0,    0,                    // v0 = 0x2214; b shared
+      8,    0,    0xe0, 3,    0, 0, 0,    0}; // bare: jr ra; nop
+  auto Code = Arms;
+  Code.insert(Code.end(), {8, 0, 0xe0, 3, 0xa5, 0, 0x42, 0x38}); // jr ra; xori
+  runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0x22b1 || choose_result(1, 0) != 0x31b0;
+}
+)");
+  Code = Arms;
+  Code.insert(Code.end(), {0xa5, 0, 0x42, 0x38, 8, 0, 0xe0, 3, 7, 0x7b, 2,
+                           0x7c}); // xori; jr ra; dins v0,zero,12,4
+  runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != 0x2b1 || choose_result(1, 0) != 0x1b0;
+}
+)");
+}
+
+TEST(ReturnContract, SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot) {
+  for (bool BranchOnZero : {true, false}) {
+    SCOPED_TRACE(BranchOnZero);
+    const uint32_t Words[] = {
+        0x640c0002,
+        0x10ac000f,
+        0, // mode 2 branches to the bare path
+        0x640c0001,
+        0x10ac0009,
+        0, // mode 1 branches to the third constant
+        0x10800004,
+        0, // beqz a0,ten
+        0x6402000f,
+        0x10000009,
+        0, // v0 = 15; b inner
+        0x6402000a,
+        0x10000006,
+        0, // ten: v0 = 10; b inner
+        0x6402001f,
+        0x10000007,
+        0, // v0 = 31; b done
+        0x10000005,
+        0,                                        // bare: b done
+        BranchOnZero ? 0x50800003u : 0x54800003u, // inner: beqzl/bnezl a0,done
+        0x64420007,                               // taken slot: daddiu v0,v0,7
+        0x10000001,
+        0,
+        0x03e00008,
+        0}; // b done; done: jr ra
+    std::vector<uint8_t> Code;
+    for (uint32_t Word : Words)
+      for (unsigned Shift = 0; Shift < 32; Shift += 8)
+        Code.push_back(static_cast<uint8_t>(Word >> Shift));
+    runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != (ON_ZERO ? 17 : 10) ||
+           choose_result(1, 0) != (ON_ZERO ? 15 : 22) ||
+           choose_result(0, 1) != 31;
+}
+)",
+                            BranchOnZero ? "#define ON_ZERO 1\n"
+                                         : "#define ON_ZERO 0\n");
+  }
+}
+
+TEST(ReturnContract, MissingPointerResultUsesTheSourceABIPointerWidth) {
+  for (Arch Target : {Arch::MIPS64N32EL, Arch::MIPS64EL}) {
+    const auto &TRI = getTargetRegInfo(Target);
+    MedVar Link = inRegister(TRI.LinkRegister, TRI.FullRegWidth, 31, 0);
+    Link.TheArch = Target;
+    MedFunc F = function(CalleeEntry, {block({returning(Link)})});
+    F.ReturnType = NdType::makePtr();
+    F.Blocks.front().StartAddr = F.Entry;
+    for (bool Source : {false, true}) {
+      SCOPED_TRACE(testing::Message() << unsigned(Target) << " " << Source);
+      llvm::LLVMContext Context;
+      MedLLVMEmitter Emitter;
+      Emitter.setPreserveUnknownSourceValues(Source);
+      auto Module = Emitter.emit({F}, Context, "missing_pointer", Target, {},
+                                 nullptr, BinaryFormat::ELF);
+      ASSERT_TRUE(Module);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      const auto *Function = Module->getFunction(F.Name);
+      ASSERT_TRUE(Function);
+      const auto *Ret =
+          llvm::dyn_cast<llvm::ReturnInst>(Function->back().getTerminator());
+      ASSERT_TRUE(Ret);
+      const auto *Pointer = Ret->getReturnValue();
+      ASSERT_TRUE(Pointer && Pointer->getType()->isPointerTy());
+      if (Source) {
+        const auto *Cast = llvm::dyn_cast<llvm::IntToPtrInst>(Pointer);
+        ASSERT_TRUE(Cast);
+        EXPECT_TRUE(llvm_source_unknown::isValue(Cast->getOperand(0)));
+        EXPECT_TRUE(Cast->getSrcTy()->isIntegerTy(TRI.PointerSize * 8));
+      } else {
+        EXPECT_TRUE(llvm::isa<llvm::ConstantPointerNull>(Pointer));
+      }
+    }
   }
 }
 

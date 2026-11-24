@@ -1607,6 +1607,57 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
                  FlipDifference);
       }
     }
+    // Both arms enter the latch at index 8. An untaken BNEL skips its
+    // slot and jumps over the folded arm to the zero test at index 18.
+    const auto ArmLow = Binary(0x26, 3, 12, 13);
+    const auto ArmHigh = Binary(0x26, 25, 14, 15);
+    const auto SharedLatch = [&](const char *Name, bool Proven, uint32_t Whole,
+                                 uint32_t Fold, uint32_t AtLatch,
+                                 uint32_t Branch, uint32_t Slot) {
+      CheckParts(Name, Proven,
+                 {InitialArm, Xor,        0x1220000f, 0,        0x10200009,
+                  ToggleArm,  0x10000001, Whole,      AtLatch,  Decrement,
+                  Branch,     Slot,       0x10000005, 0,        ArmLow,
+                  ArmHigh,    0x1000fff7, Fold,       ZeroDiff, 0});
+    };
+    constexpr uint32_t LikelyBack = 0x5620fff9, AlwaysSlotBack = 0x1620fff9;
+    const auto Fold = Binary(0x25, 24, 3, 25);
+    SharedLatch("both arms recompute the difference", true, Sub, Fold, 0,
+                LikelyBack, Xor);
+    SharedLatch("late arm checks only the low half", false, Sub, Move(24, 3), 0,
+                LikelyBack, Xor);
+    SharedLatch("late arm checks only the high half", false, Sub, Move(24, 25),
+                0, LikelyBack, Xor);
+    SharedLatch("early arm checks only the high half", false,
+                Binary(0x26, 24, 14, 15), Fold, 0, LikelyBack, Xor);
+    SharedLatch("changed difference reaches the untaken exit", false, Sub, Fold,
+                0x3b180001, LikelyBack, Xor);
+    SharedLatch("taken-only clobber is recomputed before exit", true, Sub, Fold,
+                0, LikelyBack, Move(24, 0));
+    SharedLatch("ordinary slot clobber reaches the exit", false, Sub, Fold, 0,
+                AlwaysSlotBack, Move(24, 0));
+    // The initial BEQ either skips to the guard or enters the BNEL's slot
+    // directly. Only the path through the branch can jump to the repair.
+    constexpr uint32_t EnterSlot = 0x12200002, SkipToGuard = 0x12200006;
+    constexpr uint32_t LikelyToRepair = 0x56200003, LikelyToSlot = 0x56200000;
+    const auto SlotPath = [&](const char *Name, bool Proven, uint32_t Entry,
+                              uint32_t Back, uint32_t Slot) {
+      CheckParts(Name, Proven,
+                 {Xor, Entry, 0, Back, Slot, 0x10000002, 0, Sub, ZeroDiff, 0});
+    };
+    SlotPath("clobber repaired before the guard", true, SkipToGuard,
+             LikelyToRepair, Move(24, 0));
+    for (uint32_t Branch : {LikelyToRepair, LikelyToSlot}) {
+      SCOPED_TRACE(Branch);
+      SlotPath("independent slot compares the entire word", true, EnterSlot,
+               Branch, Sub);
+      SlotPath("independent slot checks only low bits", false, EnterSlot,
+               Branch, Binary(0x26, 24, 12, 13));
+      SlotPath("independent slot checks only high bits", false, EnterSlot,
+               Branch, Binary(0x26, 24, 14, 15));
+      SlotPath("independent slot changes the difference", false, EnterSlot,
+               Branch, 0x3b180001);
+    }
     CheckParts("mixed zero evidence through a loop header", true,
                {RightArm, 0, 0x10000004, Sub, LowDiff, HighDiff, EitherDiff,
                 SkipLoop, 0, Decrement, Backedge, 0, ZeroDiff, 0});
@@ -2005,6 +2056,35 @@ TEST_P(MIPSControl, LikelyBranchAnnulsSlotBeforeSSA) {
       for (unsigned I = 0; I < Op.NumInputs; ++I)
         FoundSeven |= Op.Inputs[I].isConst() && Op.Inputs[I].ConstVal == 7;
   EXPECT_TRUE(FoundSeven);
+}
+
+TEST_P(MIPSControl, LikelySkipThreadsJumpsAfterItsAnnulledSlot) {
+  // beql a0,zero,0x1010; addiu v0,zero,7; b 0x1018; nop
+  // jr ra; addiu v0,v0,11; b 0x1020; nop; jr ra; addiu v0,v0,13
+  const auto Low =
+      build(image({0x50800003, 0x24020007, 0x10000003, 0, 0x03e00008,
+                   0x2442000b, 0x10000001, 0, 0x03e00008, 0x2442000d},
+                  GetParam()));
+  ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+  LowToMedConverter Converter;
+  const auto Med = Converter.convert(Low, GetParam());
+  const auto &Guard = Med.Blocks.front();
+  ASSERT_FALSE(Guard.Ops.empty());
+  ASSERT_EQ(Guard.Ops.back().Opcode, NdOp::COND_BR);
+  ASSERT_EQ(Guard.Succs.size(), 2u);
+  EXPECT_EQ(Guard.Ops.back().Inputs[0].ConstVal, 0x1020u);
+  EXPECT_NE(Guard.Succs.front(), Guard.Succs.back());
+  for (const int Id : Guard.Succs) {
+    const auto &Succ = Med.Blocks.at(Id);
+    if (Succ.Role == MedBlockRole::PredicatedEffect) {
+      ASSERT_EQ(Succ.Succs.size(), 1u);
+      EXPECT_EQ(Med.Blocks.at(Succ.Succs.front()).StartAddr, 0x1010u);
+    } else {
+      EXPECT_EQ(Succ.StartAddr, 0x1020u);
+      ASSERT_FALSE(Succ.Ops.empty());
+      EXPECT_EQ(Succ.Ops.back().Opcode, NdOp::RETURN);
+    }
+  }
 }
 
 TEST_P(MIPSControl, LikelySlotStoreIsGuardedInLowAndMedIR) {

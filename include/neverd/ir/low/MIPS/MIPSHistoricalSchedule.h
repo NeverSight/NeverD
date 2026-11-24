@@ -172,9 +172,8 @@ public:
            System->enterException(4, PC, {}, PC);
   }
   bool raiseSoftwareException(uint64_t PC, uint8_t Code) {
-    if (!Active || !Active->Word ||
-        (*Active->Word & 0xfc00003fu) != (Code == 8 ? 12u : 13u) ||
-        (Code != 8 && Code != 9))
+    if (!Code || !Active || !Active->Word ||
+        historicalSoftwareExceptionCode(*Active->Word) != Code)
       return false;
     return enterException(PC, Code);
   }

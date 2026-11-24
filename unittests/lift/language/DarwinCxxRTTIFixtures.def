@@ -1,0 +1,100 @@
+//===- DarwinCxxRTTIFixtures.def - Apple C++ type name fixtures -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef DARWIN_RTTI_VALUE
+#define DARWIN_RTTI_VALUE(Type, Name, Value)
+#endif
+#ifndef DARWIN_RTTI_TEXT
+#define DARWIN_RTTI_TEXT(Name, Value)
+#endif
+#ifndef DARWIN_RTTI_LINK_TEXT
+#define DARWIN_RTTI_LINK_TEXT(Name, Value)
+#endif
+#ifndef DARWIN_RTTI_CACHE_VALUE
+#define DARWIN_RTTI_CACHE_VALUE(Type, Name, Value)
+#endif
+
+DARWIN_RTTI_VALUE(uint64_t, kNameTag, UINT64_C(0x8000000000000000))
+DARWIN_RTTI_VALUE(uint64_t, kOtherNameBit, UINT64_C(0x4000000000000000))
+DARWIN_RTTI_VALUE(uint64_t, kDescriptorOffset, 0x180)
+DARWIN_RTTI_VALUE(uint64_t, kNameOffset, 0x220)
+DARWIN_RTTI_TEXT(kPublicTypeName, "11PublicError")
+DARWIN_RTTI_TEXT(kHiddenTypeName, "11HiddenError")
+DARWIN_RTTI_TEXT(kPrivateTypeName, "N12_GLOBAL__N_112PrivateErrorE")
+DARWIN_RTTI_TEXT(kPublicTypeInfo, "__ZTI11PublicError")
+
+DARWIN_RTTI_LINK_TEXT(kCxx, "clang++")
+DARWIN_RTTI_LINK_TEXT(kArm64Triple, "arm64-apple-macos15")
+DARWIN_RTTI_LINK_TEXT(kO0, "-O0")
+DARWIN_RTTI_LINK_TEXT(kO2, "-O2")
+DARWIN_RTTI_LINK_TEXT(kChained, "-Wl,-fixup_chains")
+DARWIN_RTTI_LINK_TEXT(kDyldInfo, "-Wl,-no_fixup_chains")
+DARWIN_RTTI_LINK_TEXT(kStripLocal, "-Wl,-x")
+DARWIN_RTTI_LINK_TEXT(kCatchSourceFile, "catch-types.cpp")
+DARWIN_RTTI_LINK_TEXT(kCatchFunction, "_catch_types")
+DARWIN_RTTI_LINK_TEXT(kCatchSource, R"cpp(
+#include <cstdio>
+#include <typeinfo>
+
+struct __attribute__((visibility("default"))) PublicError { int value; };
+struct __attribute__((visibility("hidden"))) HiddenError { int value; };
+namespace { struct PrivateError { int value; }; }
+
+template <class T> [[noreturn]] __attribute__((noinline))
+void raise_typed(int value) {
+  throw T{value};
+}
+
+extern "C" __attribute__((noinline)) int catch_types(int value) {
+  try {
+    if (value == 3)
+      raise_typed<PublicError>(value);
+    if (value == 5)
+      raise_typed<HiddenError>(value);
+    raise_typed<PrivateError>(value);
+  } catch (const PublicError &e) {
+    return 30 + e.value;
+  } catch (const HiddenError &e) {
+    return 50 + e.value;
+  } catch (const PrivateError &e) {
+    return 70 + e.value;
+  }
+}
+
+int main() {
+  const int a = catch_types(3), b = catch_types(5), c = catch_types(7);
+  std::printf("%s %s %s | %d %d %d\n", typeid(PublicError).name(),
+              typeid(HiddenError).name(), typeid(PrivateError).name(), a, b, c);
+  return a != 33 || b != 55 || c != 77;
+}
+)cpp")
+
+// Independent v3/v5 plain words carry high8 = 0x80 and link to the
+// fixture's second, authenticated slot two pointer widths later.
+DARWIN_RTTI_CACHE_VALUE(uint32_t, kCacheV3, 3)
+DARWIN_RTTI_CACHE_VALUE(uint32_t, kCacheV5, 5)
+DARWIN_RTTI_CACHE_VALUE(uint64_t, kCacheV3NameBits,
+                        (UINT64_C(2) << 51) | (UINT64_C(0x80) << 43))
+DARWIN_RTTI_CACHE_VALUE(uint64_t, kCacheV5NameBits,
+                        (UINT64_C(2) << 52) | (UINT64_C(0x80) << 34))
+DARWIN_RTTI_CACHE_VALUE(size_t, kCacheNameWordOffset, 0x1008)
+DARWIN_RTTI_CACHE_VALUE(size_t, kCacheNameStringOffset, 0x900)
+DARWIN_RTTI_CACHE_VALUE(size_t, kCacheAuthStringOffset, 0x700)
+DARWIN_RTTI_CACHE_VALUE(uint64_t, kCacheDescriptorOffset, 0x2000)
+DARWIN_RTTI_CACHE_VALUE(uint64_t, kCacheAuthSlotOffset, 0x2018)
+DARWIN_RTTI_CACHE_VALUE(size_t, kCacheIndirectWordOffset, 0x3000)
+DARWIN_RTTI_CACHE_VALUE(uint64_t, kCacheIndirectSlotOffset, 0x4000)
+DARWIN_RTTI_CACHE_VALUE(uint64_t, kCacheLSDAOffset, 0x800)
+// A ULEB call site, a single catch action and a PC-relative indirect type
+// entry. The entry at +11 refers to the slide slot at cache offset 0x4000.
+DARWIN_RTTI_CACHE_VALUE(auto, kCacheCatchLSDA,
+                        (std::to_array<uint8_t>({0xff, 0x9b, 12, 1, 4, 0, 4, 8,
+                                                 1, 1, 0, 0xf5, 0x37, 0, 0})))
+
+#undef DARWIN_RTTI_CACHE_VALUE
+#undef DARWIN_RTTI_LINK_TEXT
+#undef DARWIN_RTTI_TEXT
+#undef DARWIN_RTTI_VALUE

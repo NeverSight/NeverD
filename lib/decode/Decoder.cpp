@@ -353,10 +353,7 @@ Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
 
 LLVM_ATTRIBUTE_NOINLINE bool Decoder::decodeMIPSProfile(const uint8_t *Bytes,
                                                         size_t Len, va_t Addr) {
-  if (MIPSHistoricalISA) {
-    if (!historicalMIPSWordAvailable(Bytes, Len, TargetArch, MIPSHistoricalISA))
-      return false;
-  } else if (MIPS->hasClassicDSP64() && MIPSISARevision != 6) {
+  if (MIPS->hasClassicDSP64() && MIPSISARevision != 6) {
     // Only the admitted classic DSP64 profile reaches this branch. Its
     // legacy packed forms otherwise pay for a failed physical decode
     // before decoding their equivalent operand template.
@@ -395,13 +392,21 @@ int Decoder::decodeMIPSOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   if (Addr & MIPSInvalidAddressBits)
     return 0;
   InsnBuf->illegal = false;
+  bool Decoded = false;
   if (MIPSNeedsDecodeGuard) {
-    if (!decodeMIPSProfile(Bytes, Len, Addr))
-      return 0;
-  } else if (!Mips_disasmOne(Handle, Bytes, Len, Addr, InsnBuf) &&
-             !decodeMIPSASE(Bytes, Len, Addr)) {
-    return 0;
+    if (MIPSHistoricalISA) {
+      if (!historicalMIPSWordAvailable(Bytes, Len, TargetArch,
+                                       MIPSHistoricalISA))
+        return 0;
+    } else {
+      if (!decodeMIPSProfile(Bytes, Len, Addr))
+        return 0;
+      Decoded = true;
+    }
   }
+  if (!Decoded && !Mips_disasmOne(Handle, Bytes, Len, Addr, InsnBuf) &&
+      !decodeMIPSASE(Bytes, Len, Addr))
+    return 0;
   Out.Addr = InsnBuf->address;
   Out.Size = InsnBuf->size;
   Out.Id = InsnBuf->id;

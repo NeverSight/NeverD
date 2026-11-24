@@ -10,6 +10,7 @@ add_neverd_component_library(NeverDIRMed
   MedDispatchSlots.cpp
   MedDynamicStack.cpp
   MedPointerAccesses.cpp
+  MedReturnArguments.cpp
   X86/RegistrationFrame.cpp
   X86/RegistrationDisplayJoins.cpp
   X86/RegistrationCallback.cpp
@@ -64,6 +65,7 @@ add_neverd_component_library(NeverDIRMed
   abi/MedCallLeftovers.cpp
   abi/MedCallingConv.cpp
   abi/MedCallingConvFP.cpp
+  abi/GoStackResults.cpp
   abi/X86/MedCallingConvX86.cpp
   abi/ARM/MedSmcccConvention.cpp
   abi/MedSyscallConvention.cpp
@@ -97,6 +99,8 @@ add_neverd_component_library(NeverDIRMed
   lower/LowToMedMachineFlags.cpp
   pass/MedBoundCallStackArguments.cpp
   pass/MedCallReturnReads.cpp
+  pass/MedByteDemand.cpp
+  pass/MedStackGuard.cpp
   pass/MedCFGSimplify.cpp
   pass/MedConstantPropagation.cpp
   pass/MedGoResults.cpp

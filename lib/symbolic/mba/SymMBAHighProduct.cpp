@@ -419,6 +419,8 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   size_t Edges = 0;
   bool HasMaskedDisturbance = false;
   bool Mixed = !FullPossible;
+  bool DifferentFields = false;
+  unsigned FieldWidth = 0;
   if (FullPossible) {
     for (auto F : Factors) {
       if (!Budget.canConsume(Words + 1))
@@ -438,10 +440,17 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       if (Ctx.numOperands(D) > Storage / (4 * sizeof(SymRef)) - Edges)
         return Root;
       Edges += Ctx.numOperands(D);
+      if (Scale && !DifferentFields) {
+        if (const auto Size = slicedProductFieldWidth(Ctx, D)) {
+          DifferentFields = FieldWidth && Size != FieldWidth;
+          FieldWidth = Size;
+        }
+      }
     }
   }
   if (!Mixed && Scale && First < Observed && First >= Observed - First &&
-      hasJoinedLowField(Ctx, Disturbance(Factors.front()), Observed - First)) {
+      (DifferentFields || hasJoinedLowField(Ctx, Disturbance(Factors.front()),
+                                            Observed - First))) {
     // Collect the live field before expansion mixes sign and zero extensions
     // of the same word. The narrow reader checks every factor and coefficient.
     const auto Compact = foldTruncatedProduct(Ctx, Root, Observed, Budget,
@@ -521,6 +530,20 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     }
     if (High.size() < 2)
       return Root;
+    if (Scale && MiddleBits < Observed && High.size() > Remainder.size() &&
+        High.size() >= limits::kMinResidueProductFactors) {
+      const auto D = Disturbance(High.front());
+      if (Ctx.op(D) == SymOp::Mul && Ctx.numOperands(D) == 2 &&
+          (projectedHighField(Ctx, Ctx.operand(D, 1),
+                              Ctx.constValue(Ctx.operand(D, 0)).countr_zero(),
+                              Observed) ||
+           slicedProductFieldWidth(Ctx, D))) {
+        const auto Compact = foldTruncatedProduct(Ctx, Root, Observed, Budget,
+                                                  Storage, EmittedReading);
+        if (Compact != Root || Budget.exhausted())
+          return Compact;
+      }
+    }
     Factors = High;
   }
 

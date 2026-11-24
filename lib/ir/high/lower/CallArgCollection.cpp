@@ -30,6 +30,7 @@
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
+#include "neverd/ir/med/MedGoResults.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/FunctionNames.h"
@@ -138,6 +139,10 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
     // Nor does an indirect call take a prologue's save of a register's
     // incoming value (`push {r4, r6, r7, lr}` above the outgoing area).
     if (Scan.Indirect && isIncomingRegisterSave(TRI, Stored, Scan.Function))
+      return;
+    // Nor the results an earlier Go call left in the frame
+    // (storeGoStackCallResults): no callee says it reads their words.
+    if (Scan.Indirect && storesGoStackCallResult(Ops, static_cast<size_t>(J)))
       return;
 
     const MedVar &AddrVar = Prev.Inputs[0];

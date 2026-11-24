@@ -26,6 +26,63 @@ using namespace neverd::language_eh_test;
 #define ITANIUM_LSDA_VALUE(Name, Value) constexpr va_t Name = Value;
 #include "LanguageEHItaniumFixtures.def"
 
+#define DARWIN_RTTI_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define DARWIN_RTTI_TEXT(Name, Value)                                          \
+  [[maybe_unused]] constexpr char Name[] = Value;
+#include "DarwinCxxRTTIFixtures.def"
+
+TEST(ItaniumLSDA, OnlyDarwinArm64TypeNamesUseTheNonUniqueBit) {
+  auto Img = makeImage();
+  Img.Arch = Arch::AArch64;
+  Img.Format = BinaryFormat::MachO;
+  auto &Data = Img.Segments.back();
+  Data.FileSz = Data.Data.size();
+  const va_t Descriptor = Data.VA + kDescriptorOffset;
+  const va_t Name = Data.VA + kNameOffset;
+  const va_t Slot = Descriptor + sizeof(uint64_t);
+  const std::vector<uint8_t> Text(kPublicTypeName,
+                                  kPublicTypeName + sizeof(kPublicTypeName));
+  writeData(Img, Name, Text);
+  auto NameWord = [&](uint64_t Value) {
+    ByteBuilder Word;
+    Word.u64(Value);
+    writeData(Img, Slot, Word.data());
+  };
+  NameWord(Name);
+  EXPECT_EQ(readItaniumTypeName(Img, Descriptor), kPublicTypeName);
+  NameWord(kNameTag | Name);
+  EXPECT_EQ(readItaniumTypeName(Img, Descriptor), kPublicTypeName);
+  Img.MachOHasChainedFixups = true;
+  EXPECT_TRUE(readItaniumTypeName(Img, Descriptor).empty());
+  Img.MachOResolvedChainedPointerSlots.insert(Slot);
+  EXPECT_EQ(readItaniumTypeName(Img, Descriptor), kPublicTypeName);
+  Img.ImportPtrSlots.emplace(Slot, kPublicTypeInfo);
+  EXPECT_TRUE(readItaniumTypeName(Img, Descriptor).empty());
+  Img.ImportPtrSlots.clear();
+  NameWord(kNameTag | kOtherNameBit | Name);
+  EXPECT_TRUE(readItaniumTypeName(Img, Descriptor).empty());
+  NameWord(kNameTag | Name);
+  Img.Arch = Arch::X64;
+  EXPECT_TRUE(readItaniumTypeName(Img, Descriptor).empty());
+  Img.Arch = Arch::AArch64;
+  Img.Format = BinaryFormat::ELF;
+  EXPECT_TRUE(readItaniumTypeName(Img, Descriptor).empty());
+  Segment High;
+  High.VA = kNameTag | Name;
+  High.Data.assign(kHiddenTypeName, kHiddenTypeName + sizeof(kHiddenTypeName));
+  High.Size = High.FileSz = High.Data.size();
+  High.Flags = SegmentFlags::Readable;
+  Img.Segments.push_back(std::move(High));
+  EXPECT_EQ(readItaniumTypeName(Img, Descriptor), kHiddenTypeName);
+  Img.Format = BinaryFormat::MachO;
+  Img.Arch = Arch::X64;
+  EXPECT_EQ(readItaniumTypeName(Img, Descriptor), kHiddenTypeName);
+  Img.Arch = Arch::AArch64;
+  EXPECT_EQ(readItaniumTypeName(Img, Descriptor), kPublicTypeName);
+  NameWord(Name);
+  EXPECT_EQ(readItaniumTypeName(Img, Descriptor), kPublicTypeName);
+}
+
 TEST(ItaniumLSDA, ExplicitLPStartKeepsCallSitesFunctionRelative) {
   for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
     for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::MachO}) {
@@ -89,6 +146,112 @@ TEST(ItaniumLSDA, ExplicitLPStartCannotHideCallSiteOverflow) {
   writeData(Img, Req.LSDAVA, Table.data());
   EXPECT_EQ(parseLSDA(Img, Req, PointerBases{}).ParseStatus,
             ExceptionParseStatus::Malformed);
+}
+
+// Encode each field at its declared width, including the zero offset used by
+// a row with no landing pad. The action index is always ULEB128.
+LSDAParseResult parseLandingPad(BinaryImage &Img, uint8_t Format, va_t Base,
+                                uint64_t Offset) {
+  ByteBuilder Table, Sites;
+  Table.u8(dweh::Absptr);
+  if (Img.is32Bit())
+    Table.u32(Base);
+  else
+    Table.u64(Base);
+  Table.u8(dweh::Omit);
+  Table.u8(Format);
+  for (const uint64_t Value : {kGuardedOffset, kGuardedSize, Offset}) {
+    switch (Format) {
+    case dweh::Sleb128:
+      Sites.sleb(static_cast<int64_t>(Value));
+      break;
+    case dweh::Sdata2:
+      Sites.u16(Value);
+      break;
+    case dweh::Sdata4:
+    case dweh::Udata4:
+      Sites.u32(Value);
+      break;
+    case dweh::Sdata8:
+    case dweh::Udata8:
+      Sites.u64(Value);
+      break;
+    default:
+      ADD_FAILURE() << unsigned(Format);
+      return {};
+    }
+  }
+  Sites.uleb(0);
+  Table.uleb(Sites.size());
+  Table.data().insert(Table.data().end(), Sites.data().begin(),
+                      Sites.data().end());
+  LSDAParseRequest Req;
+  Req.LSDAVA = kDataVA + kLSDAOffset;
+  Req.FunctionStart = kTextVA + kFunctionOffset;
+  Req.FunctionEnd = Req.FunctionStart + kFunctionSize;
+  writeData(Img, Req.LSDAVA, Table.data());
+  return parseLSDA(Img, Req, {});
+}
+
+TEST(ItaniumLSDA, ResolvesSignedLandingPadsFromEitherSideOfLPStart) {
+  const va_t Function = kTextVA + kFunctionOffset;
+  const va_t Pad = Function + kLandingPadOffset;
+  for (Arch Target : {Arch::X86, Arch::AArch64}) {
+    auto Img = makeImage();
+    Img.Arch = Target;
+    Img.Bits = Target == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+    const va_t Max = Img.is32Bit() ? UINT32_MAX : UINT64_MAX;
+    for (uint8_t Encoding :
+         {dweh::Sleb128, dweh::Sdata2, dweh::Sdata4, dweh::Sdata8}) {
+      for (va_t Base : {Function, Pad, Function + kFunctionSize}) {
+        SCOPED_TRACE(static_cast<unsigned>(Target));
+        SCOPED_TRACE(unsigned(Encoding));
+        SCOPED_TRACE(Base);
+        auto Result = parseLandingPad(Img, Encoding, Base, Pad - Base);
+        ASSERT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+        ASSERT_TRUE(Result.Info);
+        ASSERT_EQ(Result.Info->CallSites.size(), 1u);
+        const auto &Site = Result.Info->CallSites.front();
+        EXPECT_EQ(Site.GuardedRange.Begin, Function + kGuardedOffset);
+        EXPECT_EQ(Site.GuardedRange.End,
+                  Function + kGuardedOffset + kGuardedSize);
+        EXPECT_EQ(Site.NativeLandingPad, (Pad - Base) & Max);
+        EXPECT_EQ(Site.LandingPadVA, Pad == Base ? 0u : Pad);
+      }
+      auto Outside = parseLandingPad(Img, Encoding, Function, uint64_t(-1));
+      ASSERT_EQ(Outside.ParseStatus, ExceptionParseStatus::Partial);
+      ASSERT_TRUE(Outside.Info && !Outside.Info->CallSites.empty());
+      EXPECT_EQ(Outside.Info->CallSites.front().LandingPadVA, Function - 1);
+    }
+  }
+}
+
+TEST(ItaniumLSDA, ChecksLandingPadArithmeticAtTheTargetWidth) {
+  for (Arch Target : {Arch::X86, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    auto Img = makeImage();
+    Img.Arch = Target;
+    Img.Bits = Target == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+    const va_t Max = Img.is32Bit() ? UINT32_MAX : UINT64_MAX;
+    const va_t HighBit = Max / 2 + 1;
+    const va_t Pad = kTextVA + kFunctionOffset + kLandingPadOffset;
+    const uint8_t Signed = Img.is32Bit() ? dweh::Sdata4 : dweh::Sdata8;
+    const uint8_t Unsigned = Img.is32Bit() ? dweh::Udata4 : dweh::Udata8;
+
+    auto Back = parseLandingPad(Img, Signed, HighBit + Pad, HighBit);
+    ASSERT_EQ(Back.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_TRUE(Back.Info && !Back.Info->CallSites.empty());
+    EXPECT_EQ(Back.Info->CallSites.front().LandingPadVA, Pad);
+    auto Forward = parseLandingPad(Img, Unsigned, 0, HighBit);
+    ASSERT_EQ(Forward.ParseStatus, ExceptionParseStatus::Partial);
+    ASSERT_TRUE(Forward.Info && !Forward.Info->CallSites.empty());
+    EXPECT_EQ(Forward.Info->CallSites.front().LandingPadVA, HighBit);
+    EXPECT_EQ(parseLandingPad(Img, Signed, HighBit - 1, HighBit).ParseStatus,
+              ExceptionParseStatus::Malformed);
+    for (uint8_t Encoding : {Signed, Unsigned})
+      EXPECT_EQ(parseLandingPad(Img, Encoding, Max, 1).ParseStatus,
+                ExceptionParseStatus::Malformed);
+  }
 }
 
 //===----------------------------------------------------------------------===//

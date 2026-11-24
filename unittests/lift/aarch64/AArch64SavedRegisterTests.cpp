@@ -24,6 +24,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
@@ -63,9 +64,9 @@ struct CompactPairCase {
 // This is a final-image format fixture, not a test of Apple's selection of
 // compact object records. Xcode 27 rewrites the nonzero-offset input record
 // into ordinary FP mode. Install the independently specified fixture word in
-// its single validated encoding slot before signing the test image.
+// the validated encoding slots before signing the test image.
 void writeCompactFixture(const std::string &Path, const BinaryImage &Image,
-                         uint32_t Encoding) {
+                         uint32_t Encoding, bool BothFunctions = false) {
   const auto *Section = Image.getSectionByName(section_names::macho::Unwind);
   const auto *Symbol = Image.findSymbol(kSumSymbol);
   ASSERT_TRUE(Section && Symbol);
@@ -74,18 +75,43 @@ void writeCompactFixture(const std::string &Path, const BinaryImage &Image,
   ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
   ASSERT_EQ(Raw->Pages.size(), 1u);
   const auto &Page = Raw->Pages.front();
-  ASSERT_EQ(Page.Kind, macho_unwind::kSecondLevelCompressed);
-  ASSERT_EQ(Page.CompressedEntries.size(), 1u);
-  const auto &Entry = Page.CompressedEntries.front();
-  ASSERT_EQ(Entry.FunctionOffset + Image.Base, Symbol->Addr);
-  const auto Index = Entry.EncodingIndex;
-  const size_t Offset =
-      Index < Raw->CommonEncodings.size()
-          ? Raw->Header.CommonEncodingsSectionOffset + Index * sizeof(uint32_t)
-          : Page.SectionOffset + Page.EncodingsPageOffset +
-                (Index - Raw->CommonEncodings.size()) * sizeof(uint32_t);
+  llvm::SmallVector<va_t, 2> Starts{Symbol->Addr};
+  if (BothFunctions) {
+    const auto *Second = Image.findSymbol(kDifferenceSymbol);
+    ASSERT_NE(Second, nullptr);
+    Starts.push_back(Second->Addr);
+  }
   auto Bytes = Image.Raw;
-  writeLE<uint32_t>(Bytes.data() + Section->FileOff + Offset, Encoding);
+  for (va_t Start : Starts) {
+    const auto Owns = [&](const auto &Entry) {
+      return Entry.FunctionOffset + Image.Base == Start;
+    };
+    size_t Offset = 0;
+    if (Page.Kind == macho_unwind::kSecondLevelRegular) {
+      const auto Entry = llvm::find_if(Page.RegularEntries, Owns);
+      ASSERT_NE(Entry, Page.RegularEntries.end());
+      Offset = Page.SectionOffset + Page.EntryPageOffset +
+               (Entry - Page.RegularEntries.begin()) *
+                   sizeof(macho_unwind::CompactUnwindRawRegularEntry) +
+               sizeof(uint32_t);
+    } else {
+      ASSERT_EQ(Page.Kind, macho_unwind::kSecondLevelCompressed);
+      const auto Entry = llvm::find_if(Page.CompressedEntries, Owns);
+      ASSERT_NE(Entry, Page.CompressedEntries.end());
+      const auto Index = Entry->EncodingIndex;
+      ASSERT_TRUE(llvm::all_of(Page.CompressedEntries, [&](const auto &E) {
+        return E.EncodingIndex != Index ||
+               llvm::is_contained(Starts, Image.Base + E.FunctionOffset);
+      }));
+      Offset =
+          Index < Raw->CommonEncodings.size()
+              ? Raw->Header.CommonEncodingsSectionOffset +
+                    Index * sizeof(uint32_t)
+              : Page.SectionOffset + Page.EncodingsPageOffset +
+                    (Index - Raw->CommonEncodings.size()) * sizeof(uint32_t);
+    }
+    writeLE<uint32_t>(Bytes.data() + Section->FileOff + Offset, Encoding);
+  }
   std::ofstream File(Path, std::ios::binary | std::ios::trunc);
   File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
   File.close();
@@ -98,12 +124,8 @@ void verifySavedRegisters(bool Quad, bool Signal,
                           bool ExtraStack = false, bool Coalesced = false,
                           bool Frameless = false,
                           std::optional<unsigned> SigningOffset = std::nullopt,
-                          bool Language = false) {
+                          bool Language = false, bool IndexedPeer = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
-#if !__has_include("llvm/BinaryFormat/AArch64CompactUnwind.def")
-  if (SigningOffset)
-    GTEST_SKIP() << kPAuthLRMCUnavailable;
-#endif
   const bool Compact = CompactPairs.has_value();
   const unsigned Functions = Compact && !Coalesced ? 1 : kFunctions;
   const char *Names[] = {kSum, kDifference};
@@ -136,7 +158,12 @@ void verifySavedRegisters(bool Quad, bool Signal,
   const auto Output = (Root / kPublished).string();
   const auto Rejected = (Root / kRejected).string();
   const auto RulesPath = (Root / kRules).string();
-  std::ofstream(Source) << (Compact ? kCompactBody : kBody);
+  {
+    std::ofstream Assembly(Source);
+    Assembly << (Compact ? kCompactBody : kBody);
+    if (IndexedPeer)
+      Assembly << kIndexedPeerBody;
+  }
   std::ofstream(Wrapper) << kObserver;
   std::ofstream(Caller) << kDriverBody;
   llvm::SmallVector<llvm::StringRef> Common{kCompiler, kTargetFlag, kTarget,
@@ -162,7 +189,7 @@ void verifySavedRegisters(bool Quad, bool Signal,
   if (Language)
     Common.push_back(kLanguageFlag);
   auto Compile = Common;
-  if (Language)
+  if (Language || IndexedPeer)
     Compile.push_back(kCXXRuntime);
   Compile.append({kDylib, kTight, Source, kOutputFlag, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
@@ -193,34 +220,39 @@ void verifySavedRegisters(bool Quad, bool Signal,
     ASSERT_TRUE(OriginalFrame && OriginalFrame->Compact);
     testing::Test::RecordProperty(kLinkerCompactWord,
                                   OriginalFrame->Compact->NativeEncoding);
-    // A classic FP recipe must not authorize copying PC-signed return words.
-    ASSERT_NO_FATAL_FAILURE(
-        writeCompactFixture(Input, *Image, kCompactFrameMode | *CompactPairs));
-    auto Contradictory = Reader->load(Input);
-    ASSERT_TRUE(bool(Contradictory))
-        << llvm::toString(Contradictory.takeError());
-    llvm::LLVMContext BadContext;
-    PipelineOptions BadOptions;
-    BadOptions.PatchMode = true;
-    BadOptions.EmitDumpOutput = false;
-    auto Bad = Pipeline().run(*Contradictory, BadContext, BadOptions);
-    if (Bad.Success) {
-      ASSERT_TRUE(Bad.LlvmModule);
-      MachOPatcher BadPatcher;
-      BadPatcher.setImageContext(&*Contradictory);
-      EXPECT_FALSE(
-          BadPatcher
-              .patch(Input, Rejected, *Bad.LlvmModule, Contradictory->Arch)
-              .Success);
-    } else {
-      EXPECT_FALSE(Bad.Error.empty());
+    const uint32_t LanguageBits =
+        OriginalFrame->Compact->NativeEncoding &
+        (macho_unwind::kPersonalityMask | macho_unwind::kHasLSDA);
+    const uint32_t Encoding =
+        kCompactPAuthLRMode | *CompactPairs | LanguageBits |
+        ((*SigningOffset / aarch64::kInsnSize) << kPAuthLRShift);
+    // Both an ordinary FP recipe and a PC field naming the next instruction
+    // disagree with the actual PACIBSPPC site.
+    for (const auto Wrong : {kCompactFrameMode | *CompactPairs | LanguageBits,
+                             Encoding + (1u << kPAuthLRShift)}) {
+      ASSERT_NO_FATAL_FAILURE(writeCompactFixture(Input, *Image, Wrong));
+      auto Contradictory = Reader->load(Input);
+      ASSERT_TRUE(bool(Contradictory))
+          << llvm::toString(Contradictory.takeError());
+      llvm::LLVMContext BadContext;
+      PipelineOptions BadOptions;
+      BadOptions.PatchMode = true;
+      BadOptions.EmitDumpOutput = false;
+      auto Bad = Pipeline().run(*Contradictory, BadContext, BadOptions);
+      if (Bad.Success) {
+        ASSERT_TRUE(Bad.LlvmModule);
+        MachOPatcher BadPatcher;
+        BadPatcher.setImageContext(&*Contradictory);
+        EXPECT_FALSE(
+            BadPatcher
+                .patch(Input, Rejected, *Bad.LlvmModule, Contradictory->Arch)
+                .Success);
+      } else {
+        EXPECT_FALSE(Bad.Error.empty());
+      }
+      EXPECT_FALSE(std::filesystem::exists(Rejected));
     }
-    EXPECT_FALSE(std::filesystem::exists(Rejected));
-    const auto Encoding = kCompactPAuthLRMode | *CompactPairs |
-                          (*SigningOffset / aarch64::kInsnSize)
-                              << kPAuthLRShift;
-    ASSERT_NO_FATAL_FAILURE(
-        writeCompactFixture(Input, *Contradictory, Encoding));
+    ASSERT_NO_FATAL_FAILURE(writeCompactFixture(Input, *Image, Encoding));
     Image = Reader->load(Input);
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
     const auto *Symbol = Image->findSymbol(kSumSymbol);
@@ -304,11 +336,15 @@ void verifySavedRegisters(bool Quad, bool Signal,
 
   auto Installed = Patcher.patch(Input, Output, Module, Image->Arch);
   ASSERT_TRUE(Installed.Success);
-  ASSERT_EQ(Installed.PatchedFunctions.size(), Functions);
+  ASSERT_EQ(Installed.PatchedFunctions.size(),
+            Functions + unsigned(IndexedPeer));
   auto Published = Reader->load(Output);
   ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
   EXPECT_TRUE(Published->isArm64e());
   EXPECT_NE(Published->Raw, Snapshot);
+  if (SigningOffset && !IndexedPeer &&
+      !Image->getSectionByName(section_names::macho::EhFrame))
+    EXPECT_FALSE(Published->getSectionByName(section_names::macho::EhFrame));
   for (const auto &Entry : Installed.PatchedFunctions) {
     EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
     const auto *Before =
@@ -316,6 +352,24 @@ void verifySavedRegisters(bool Quad, bool Signal,
     const auto *After =
         Published->ExceptionMetadata.findFunction(Entry.OwnerVA);
     ASSERT_TRUE(Before && After);
+    if (IndexedPeer && Entry.SourceFunction == kIndexedPeer) {
+      ASSERT_TRUE(Before->Dwarf && After->Dwarf && After->Compact);
+      ASSERT_TRUE(Before->Itanium && After->Itanium);
+      EXPECT_EQ(After->Compact->NativeEncoding & macho_unwind::kModeMask,
+                macho_unwind::kARM64ModeDwarf);
+      EXPECT_EQ(After->Compact->NativeEncoding &
+                    macho_unwind::kDwarfSectionOffsetMask,
+                After->Dwarf->SectionOffset);
+      EXPECT_EQ(After->Dwarf->InitialLocation, Entry.OwnerVA);
+      EXPECT_EQ(After->Personality, Before->Personality);
+      EXPECT_EQ(After->Dwarf->LSDAVA, After->Itanium->LSDAVA);
+      ASSERT_EQ(Before->Itanium->CallSites.size(), 1u);
+      ASSERT_EQ(After->Itanium->CallSites.size(), 1u);
+      EXPECT_EQ(After->Itanium->CallSites.front().LandingPadVA - Entry.OwnerVA,
+                Before->Itanium->CallSites.front().LandingPadVA -
+                    Entry.OriginalVA);
+      continue;
+    }
     if (Compact) {
       ASSERT_TRUE(Before->Compact && After->Compact);
       EXPECT_FALSE(Before->Dwarf);
@@ -691,6 +745,176 @@ TEST(AArch64CompactRegisters, PublishesPAuthLROffsetAndSparsePairs) {
   verifySavedRegisters(false, false, kCompactSparsePairs, true, false, false,
                        kPAuthLRNonzeroOffset);
 }
+TEST(AArch64CompactRegisters, PublishesPAuthLRFrameOnlyWithWidePC) {
+  verifySavedRegisters(false, false, 0, false, false, false,
+                       kPAuthLRWideOffset);
+}
+
+TEST(AArch64CompactRegisters, PublishesPAuthLRLanguageCleanup) {
+  verifySavedRegisters(false, false, kCompactSparsePairs, true, false, false,
+                       kPAuthLRNonzeroOffset, true);
+}
+
+TEST(AArch64CompactRegisters, PublishesPAuthLRBesideIndexedCleanup) {
+  verifySavedRegisters(false, false, kCompactSparsePairs, true, false, false,
+                       kPAuthLRNonzeroOffset, false, true);
+}
+
+void verifyMixedCleanupOwners(bool Shared) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Assembly = (Root / kSource).string();
+  const auto Original = (Root / kOriginal).string();
+  std::ofstream(Assembly) << kCompactBody << kIndexedPeerBody;
+  const auto Pairs =
+      std::string(kCompactFlag) + std::to_string(kCompactSparsePairs);
+  const auto Signing =
+      std::string(kPAuthLRFlag) + std::to_string(kPAuthLRNonzeroOffset);
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(
+          kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize, kDylib,
+                      kTight, Pairs, Signing, kCoalescedFlag, kLanguageFlag,
+                      Shared ? kSharedCleanupFlag : kDistinctCleanupFlag,
+                      Assembly, kCXXRuntime, kOutputFlag, Original}),
+      0);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                kFixtureCodesign,
+                {kFixtureCodesign, kFixtureRemoveSignature, Original}),
+            0);
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto Input = Reader->load(Original);
+  ASSERT_TRUE(bool(Input)) << llvm::toString(Input.takeError());
+  const auto *Sum = Input->findSymbol(kSumSymbol);
+  ASSERT_NE(Sum, nullptr);
+  const auto *Unwind = Input->ExceptionMetadata.findFunctionEntry(Sum->Addr);
+  ASSERT_TRUE(Unwind && Unwind->Compact);
+  const uint32_t Encoding =
+      kCompactPAuthLRMode | kCompactSparsePairs |
+      (kPAuthLRNonzeroOffset / aarch64::kInsnSize << kPAuthLRShift) |
+      (Unwind->Compact->NativeEncoding &
+       (macho_unwind::kPersonalityMask | macho_unwind::kHasLSDA));
+  ASSERT_NO_FATAL_FAILURE(
+      writeCompactFixture(Original, *Input, Encoding, true));
+
+  const std::array Symbols = {kSumSymbol, kDifferenceSymbol,
+                              kFirstIndexedSymbol, kSecondIndexedSymbol};
+  using Addresses = std::array<va_t, Symbols.size()>;
+  Addresses Entries{};
+  for (auto [I, Name] : llvm::enumerate(Symbols)) {
+    const auto *Sym = Input->findSymbol(Name);
+    ASSERT_NE(Sym, nullptr);
+    Entries[I] = Sym->Addr;
+  }
+  struct CleanupSite {
+    va_t Begin, End, Pad;
+    bool operator==(const CleanupSite &) const = default;
+  };
+  std::array<CleanupSite, Symbols.size()> Sites{};
+  const auto Check = [&](const BinaryImage &Image, const Addresses &Owners,
+                         bool First) {
+    std::optional<va_t> SharedCIE, FirstLSDA;
+    for (auto [I, Start] : llvm::enumerate(Owners)) {
+      SCOPED_TRACE(Symbols[I]);
+      const auto *F = Image.ExceptionMetadata.findFunctionEntry(Start);
+      ASSERT_TRUE(F && F->Compact && F->Itanium);
+      ASSERT_EQ(F->ParseStatus, ExceptionParseStatus::Complete);
+      ASSERT_EQ(F->Personality, ExceptionPersonality::GxxPersonalityV0);
+      ASSERT_EQ(F->Itanium->CallSites.size(), 1u);
+      ASSERT_TRUE(F->Itanium->isCleanupOnly());
+      const auto &Site = F->Itanium->CallSites.front();
+      const CleanupSite Relative{Site.GuardedRange.Begin - Start,
+                                 Site.GuardedRange.End - Start,
+                                 Site.LandingPadVA - Start};
+      if (First)
+        Sites[I] = Relative;
+      else
+        EXPECT_EQ(Relative, Sites[I]);
+      if (I < kFunctions) {
+        EXPECT_FALSE(F->Dwarf);
+        EXPECT_EQ(F->Compact->NativeEncoding, Encoding);
+        ASSERT_EQ(F->Compact->ReturnAddressSigningOffset,
+                  kPAuthLRNonzeroOffset);
+        const auto *Sign =
+            Image.readVA(Start + kPAuthLRNonzeroOffset, aarch64::kInsnSize);
+        ASSERT_NE(Sign, nullptr);
+        EXPECT_EQ(readLE<uint32_t>(Sign), kSigningInstruction);
+        continue;
+      }
+      ASSERT_TRUE(F->Dwarf);
+      EXPECT_EQ(F->Compact->Kind, CompactUnwindKind::DwarfFDE);
+      EXPECT_EQ(F->Compact->DwarfFDEOffset, F->Dwarf->SectionOffset);
+      EXPECT_EQ(F->Dwarf->InitialLocation, Start);
+      EXPECT_EQ(F->Dwarf->LSDAVA, F->Itanium->LSDAVA);
+      ASSERT_TRUE(Image.ExceptionMetadata.findCIE(F->Dwarf->CIESectionOffset));
+      if (SharedCIE) {
+        EXPECT_EQ(F->Dwarf->CIESectionOffset, *SharedCIE);
+        EXPECT_EQ(F->Dwarf->LSDAVA == *FirstLSDA, Shared);
+      } else {
+        SharedCIE = F->Dwarf->CIESectionOffset;
+        FirstLSDA = F->Dwarf->LSDAVA;
+      }
+    }
+  };
+
+  unsigned Publications = 0;
+  for (bool NoOpt : {true, false}) {
+    SCOPED_TRACE(NoOpt);
+    auto Source = Original;
+    auto Owners = Entries;
+    for (const char *Name : {kPublished, kRepublished}) {
+      SCOPED_TRACE(Name);
+      auto Before = Reader->load(Source);
+      ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+      if (Source == Original)
+        ASSERT_NO_FATAL_FAILURE(Check(*Before, Owners, true));
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.PatchMode = true;
+      Options.EmitDumpOutput = false;
+      Options.NoOpt = NoOpt;
+      auto Lifted = Pipeline().run(*Before, Context, Options);
+      ASSERT_TRUE(Lifted.Success && Lifted.LlvmModule) << Lifted.Error;
+      symbolizeImageAbsolutePointers(*Lifted.LlvmModule, *Before);
+      MachOPatcher Patcher;
+      Patcher.setImageContext(&*Before);
+      const auto Output = (Root / Name).string();
+      const auto Installed =
+          Patcher.patch(Source, Output, *Lifted.LlvmModule, Before->Arch);
+      ASSERT_TRUE(Installed.Success);
+      for (auto &Owner : Owners) {
+        const auto It =
+            llvm::find_if(Installed.PatchedFunctions,
+                          [&](const auto &F) { return F.OriginalVA == Owner; });
+        ASSERT_NE(It, Installed.PatchedFunctions.end());
+        ASSERT_NE(It->OwnerVA, Owner);
+        Owner = It->OwnerVA;
+      }
+      auto After = Reader->load(Output);
+      ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+      ASSERT_NO_FATAL_FAILURE(Check(*After, Owners, false));
+      ++Publications;
+      Source = Output;
+    }
+    ASSERT_TRUE(std::filesystem::remove(Root / kPublished));
+    ASSERT_TRUE(std::filesystem::remove(Root / kRepublished));
+  }
+  testing::Test::RecordProperty(kMixedPublications, Publications);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
+TEST(AArch64CompactRegisters, RepublishesPAuthLRBesideSharedCleanupTable) {
+  verifyMixedCleanupOwners(true);
+}
+
+TEST(AArch64CompactRegisters, RepublishesPAuthLRBesideDistinctCleanupTables) {
+  verifyMixedCleanupOwners(false);
+}
+
 TEST(AArch64CompactRegisters, SystemUnwindsPAuthLRAllPairs) {
   verifySavedRegisters(false, true, kCompactAllPairs, false, false, false, 0);
 }

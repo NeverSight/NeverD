@@ -415,6 +415,13 @@ struct HighStmt {
   /// try: GotoTarget is where the try falls through.
   bool LeavesTry = false;
 
+  /// An instruction executed inside another block can also be a native entry
+  /// in its own right. Only the independent occurrence may carry that label.
+  va_t NonEntryInstruction = 0;
+  va_t sourceAddress() const {
+    return NonEntryInstruction ? NonEntryInstruction : Addr;
+  }
+
   std::string str(int Indent = 0) const;
 };
 
@@ -495,16 +502,19 @@ template <typename F> void forEachRhsExpr(const HighStmt &S, F &&Fn) {
 }
 
 template <typename F> void walkStmts(std::vector<HighStmt> &Stmts, F &&Fn) {
-  for (auto &S : Stmts) {
-    Fn(S);
-    walkStmts(S.Body, Fn);
-    walkStmts(S.ElseBody, Fn);
-    for (auto &C : S.Cases)
-      walkStmts(C.Body, Fn);
-    walkStmts(S.DefaultBody, Fn);
-    for (auto &ClauseBody : S.EHClauseBodies)
-      walkStmts(ClauseBody, Fn);
-  }
+  for (auto &S : Stmts)
+    walkStmt(S, Fn);
+}
+
+template <typename F> void walkStmt(HighStmt &S, F &&Fn) {
+  Fn(S);
+  walkStmts(S.Body, Fn);
+  walkStmts(S.ElseBody, Fn);
+  for (auto &C : S.Cases)
+    walkStmts(C.Body, Fn);
+  walkStmts(S.DefaultBody, Fn);
+  for (auto &ClauseBody : S.EHClauseBodies)
+    walkStmts(ClauseBody, Fn);
 }
 
 template <typename F>

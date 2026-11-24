@@ -5,10 +5,9 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// The fields of a multi-register struct return that hold the arguments a
-/// caller passed in the same registers.  `struct dd f(double a, double b)
-/// {return (struct dd){a, b};}` compiles to a lone `ret`: no operation reads
-/// or writes xmm0 and xmm1, yet each field is the argument passed there.
+/// Identify arguments returned in their incoming registers, individually or
+/// as fields of a record. A bare return can carry a scalar argument in x0
+/// or two floating-point fields in xmm0 and xmm1.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -22,6 +21,30 @@
 #include <optional>
 
 namespace neverd {
+
+/// A copy of a register onto itself names the value that arrived in it.
+inline bool isIncomingRegisterCopy(const MedOp &Op) {
+  const MedVar &Out = Op.Output;
+  return Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+         Op.Inputs[0].Kind == Out.Kind && Op.Inputs[0].RegOff == Out.RegOff &&
+         Op.Inputs[0].Size == Out.Size && Op.Inputs[0].Id == Out.Id &&
+         Op.Inputs[0].SSAVer == Out.SSAVer;
+}
+
+/// Whether SUBBYTES reads the low bytes of its own register.
+inline bool isRegisterLowView(const MedOp &Op) {
+  return Op.Opcode == NdOp::SUBBYTES && Op.NumInputs >= 1 &&
+         Op.Inputs[0].Kind == MedVar::Reg &&
+         (Op.NumInputs == 1 || Op.Inputs[1].isConst()) &&
+         isSameRegisterLowSlice(Op.Output.RegOff, Op.Output.Size,
+                                Op.Inputs[0].RegOff, Op.Inputs[0].Size,
+                                Op.NumInputs == 1 ? 0 : Op.Inputs[1].ConstVal);
+}
+
+/// Whether all ordinary paths from entry to this return preserve the observed
+/// bytes of the incoming register.
+bool registerUntouchedFromEntry(const MedFunc &Med, const MedBlock &Block,
+                                uint64_t Reg, uint16_t Width, Arch TheArch);
 
 /// Whether an operation or phi of \p Func writes a byte of the \p Size bytes
 /// at register offset \p RegOff.  A call may: the callee leaves its own

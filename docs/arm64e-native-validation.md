@@ -580,12 +580,16 @@ pass all 36 native cases and both six-control prerequisites, with no failures
 or skips. The temporary delivery binds source-file, manifest, archive and
 test-binary hashes; it is recorded separately from the cold builds.
 
-A source build also exercises `MCProducerCapturesRecipesThroughFinalPlacement`
-for IR and assembly producers with chained and threaded installers, plus
-nested signing constants. This proves the bounded raw MC signing-recipe
-handoff offline. r6 lacks that callback. Neither this handoff nor canonical
-replacement IR supplies the missing ABI reconstruction for arbitrary
-`neverd.arm64e-analysis` lifted modules.
+`MCProducerCapturesRecipesThroughFinalPlacement` exercises IR and assembly
+producers with both chained and threaded installers. The native-object
+path runs with r6 and the source-built fork. It checks the installed IA
+rebase and DB bind, including their discriminator, address diversity,
+provider and signed addend. The source-built fork also supplies the signing
+recipe through its direct MC callback. On r6 the direct writer rejects
+authenticated expressions whose signing fields it cannot report.
+`ClassifiesEachAssembledSigningSpecifier` checks an ordinary pointer and
+each authenticated specifier independently. Lifted analysis modules also
+require the source ABI reconstruction described below.
 
 Run the new matrices using a source build of the corrected fork and a successful
 same-source system preflight:
@@ -941,6 +945,16 @@ classic arm64e subtype and requires system-compatible unwind information in
 the raw object. With `--publish`, NeverD checks the
 relocated object and its final installed unwind ranges. This also exercises
 the classic r6 conversion described above.
+
+On macOS with Clang, `AArch64EntryABI.PublishSignedNativeInputs` and
+`AArch64EntryABI.RejectsOccupiedNativeInputs` also run directly under CTest.
+Each builds a private arm64e dylib with the independent C++ caller and 26
+trapping entry points. The first test installs the reconstructed entries and
+checks the receipt against the output image. The second occupies the
+original TEXT tail and checks that publication fails before writing an
+output. Both work on a host that can link arm64e even when it cannot execute
+that slice. The verifier supplies explicit inputs to the same tests for
+the complete O0/O2, IA/IB and compact/DWARF matrix.
 
 Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
 same reconstructed fixed-C entry matrix. Each original dylib contains 26
@@ -1390,6 +1404,17 @@ An ordinary RTTI reference and an authenticated personality reference keep
 their respective pointer encodings. A writable source slot requires separate
 GOT storage for the published reference.
 
+On 64-bit Darwin Arm, the name word in a C++ `type_info` descriptor can
+carry the non-unique RTTI flag in bit 63. NeverD resolves the plain fixup
+for that word and clears the flag before reading the type name. The linked
+exception tests check public, hidden and translation-unit-local catch types
+after stripping local symbols, at both `-O0` and `-O2`. They cover chained
+fixups on arm64e and arm64 and dyld-info rebases on arm64. In a shared
+cache, the LSDA can reach a descriptor through an indirect slot outside the
+selected image. The v3 and v5 tests follow that slot and read its name from
+another mapping.
+See the [Darwin Arm type-name implementation in libc++](https://github.com/llvm/llvm-project/blob/main/libcxx/include/typeinfo).
+
 Apple Clang can leave a synchronous DWARF row in force through part of the
 prologue or epilogue. At an interrupt where its CFA cannot be proved to equal
 the incoming SP, recovery derives the CFA and integer register locations from
@@ -1757,6 +1782,17 @@ recipe with the signing-PC offset. Ordinary compact mode cannot authorize
 these PC-signed words. The final verifier checks the complete emitted recipe
 and rejects removal of the signing CFI.
 
+Frozen LLVM r6 emits an indexed DWARF fallback for the same retained bodies.
+NeverD compares the relocated B-key FDE with the source compact frame. The CFA,
+every GPR and D-register save, the PC-dependent signing row and the
+`PACIBSPPC` instruction must agree before publication uses mode 5. For a
+compact-only image this check uses private storage. Mixed
+images retain the indexed functions and relocate their CIE back-references,
+personality slots, LSDA fields and compact DWARF indexes. Each indexed FDE
+bounds its own guarded ranges and landing pads, including when multiple
+functions share a language table. The compact lookup can extend past that
+FDE to the next entry.
+
 The Xcode 27 diagnostic reproduced a transport difference: the input object
 contained `0x05002515`, but the Apple-linked image contained `0x04000515`.
 Regular LLVM object emission therefore retains DWARF for nonzero signing-PC
@@ -2005,6 +2041,17 @@ of these installed language frames. SP-based indexed frames with a saved LR
 exercise actual C++ and Objective-C cleanup delivery at a protected non-call
 instruction, at O0 and O2 and on ordinary and alternate signal stacks.
 
+Call-site tables using SLEB128, SDATA2, SDATA4 or SDATA8 can place a
+landing pad on either side of explicit LPStart. The reader resolves the
+displacement at the target pointer width. A zero field still denotes no
+handler. The guarded range stays relative to the function entry.
+`ItaniumLSDA.ResolvesSignedLandingPadsFromEitherSideOfLPStart` and
+`ItaniumLSDA.ChecksLandingPadArithmeticAtTheTargetWidth` exercise 32-bit and
+64-bit address arithmetic, including true overflow and underflow. The
+`NativeBackwardLandingPadRunsCleanups` and `LiftedBackwardLandingPadRunsCleanups`
+cases compare the original and published C++ and Objective-C cleanup paths at
+O0 and O2, on the ordinary and alternate signal stacks.
+
 The typed explicit-base fixture executes a nonmatching catch followed by cleanup;
 its additional specification-only type tests reconstruction without invoking an
 unexpected-exception path. The entry-handler case qualifies address serialization
@@ -2228,7 +2275,73 @@ tag were removed with verified HTTP 404 responses; the replay repository was
 restored to its baseline tree. The 42,325,529-byte local replay package was
 removed after recording its hash. The active build and prebuilt r6 are retained.
 
+### Previously skipped Release cases
+
+Of the 39 cases skipped by the expanded r6 regression at `d9b476c234a1`,
+36 passed at `7a0540326952` on both macOS 26 and Xcode 27. Each host ran
+the compiler's original call and unwind control, then passed 32 installed-image
+tests covering chained and threaded fixups, signed cleanup and default process
+startup. Both also passed the four-key comparison, two entry tests
+and the MC recipe test. The entry verifier checked 26 public entries in
+each of eight published images per host and toolchain.
+
+For the eight generated-IR cases, r6 accepted upstream Clang 22.1.8 output
+and the source-built fork accepted Apple Clang output. When Apple Clang
+requested the named Darwin stack probe, r6 diagnosed it in all eight cases.
+Both local toolchains passed the other 40 installation cases. Integrating
+dev at `8af382a995b9` reproduced the local Release results and all 12
+inputs delivered to the Arm model.
+
+Three native comparisons still require an Apple environment exposing
+explicit PAuth_LR, effective PACM or 128-bit LRCPC3. The Arm model ran
+the generated ordered-memory code at EL0 and EL1 across four CPTA settings.
+[Individual outcomes and execution records](evidence/arm64e-skipped-regression-2026-11-24.json).
+
+### Executing both return-signing oracles on the Arm model
+
+The Release test binary can export the exact arm64e Mach-O objects it compiled
+for HighC, LLVM-to-C and LLVM-to-C after IR optimization. Each route produces
+an O0 and an O2 object for explicit PAuth_LR and conditional PACM.
+On macOS, link those objects to the freestanding comparison driver.
+
+```sh
+python3 scripts/verify_arm64e_return_model.py build \
+  --tests build-release/bin/NeverDArm64eAnalysisTests --output return-guests
+```
+
+Copy the guest directory to the Linux machine with Arm FVP Base RevC 11.32+19.
+The second command checks the guest hashes, runs each linked Mach-O at its
+original text address and writes the per-image results to a fresh directory.
+
+```sh
+python3 scripts/verify_arm64e_return_model.py run \
+  --model /path/to/FVP_Base_RevC-2xAEMvA --guests return-guests --output return-results
+```
+
+Each guest calls the comparison program from EL1 and EL0 at all four
+`SCTLR2_EL1.EnPACM` / `EnPACM0` settings. The EL0 return verifies the
+hardware-saved exception origin and SVC address. The original signing
+instructions supply the signed value, SP and signing PC. The generated
+code must reproduce the value for IA and IB, authenticate it and recover
+the expected return target. The prefix oracle also checks active keys while
+the prefix is disabled. A separate guest run with PAuth_LR disabled must
+report the feature mismatch. Apple's native qualification is recorded by
+the hosted runner probe below.
+
+The hosted Arm model executed all 12 images from frozen r6 and all 12 from the
+LLVM source fork, with 96 EL/control combinations per toolchain. Both runs
+rejected the unsupported control.
+[Hosted model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45323031302) and
+[per-toolchain results](evidence/arm64e-return-oracles-2026-11-24.json).
+
 ### Native x1 runner qualification
+
+The PAuth_LR and PACM suites cross-compile their complete comparison programs
+with HighC, LLVM-to-C and LLVM-to-C after IR optimization. Each program builds
+at O0 and O2 using the same six IA/IB operations and independent instruction
+oracle as its native test. Native qualification additionally executes those
+programs on a process that demonstrates active keys and the required modifier
+behavior.
 
 Apple specifies M6 or later Macs and A20 Pro or later iPhones for arm64e.x1;
 the simulator cannot execute this ABI. Standard GitHub macOS ARM runners use
@@ -2273,10 +2386,10 @@ published signed images. They explicitly sign execution copies after publication
 strictly verify them and recover the execution plans again from those copies;
 the unsigned source fixture remains unchanged through publication. They separately count normal calls, caller resumptions
 and public system-unwinder steps. Six classic compact signal controls also
-exercise the saved-LR system-step path on ordinary arm64e hosts. Unsupported
-hardware still reports zero
-native PAuth_LR executions. The r6 prebuilt remains unchanged and skips these
-four cases because its MC producer lacks mode-5 support.
+exercise the saved-LR system-step path on ordinary arm64e hosts. Hosts without
+the feature report zero native PAuth_LR executions. The original r6 baseline
+skipped four cases. The same r6 prebuilt now runs their structural checks
+using its verified DWARF fallback. [PR #2506](https://github.com/NeverSight/NeverD/pull/2506)
 
 The aggregate probe qualifies only the checked environment controls. It does
 not establish complete arm64e instruction, arbitrary-image publication or

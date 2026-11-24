@@ -25,7 +25,11 @@
 #endif
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <iomanip>
+#include <iterator>
 #include <memory>
 #include <vector>
 
@@ -40,6 +44,101 @@ std::vector<uint8_t> encode(llvm::ArrayRef<uint32_t> Words, Arch Target) {
       Result.push_back(
           uint8_t(Word >> (8 * (archLittleEndian(Target) ? I : 3 - I))));
   return Result;
+}
+
+struct CapstoneReference {
+  csh Handle{};
+  cs_insn *Insn = nullptr;
+  ~CapstoneReference() {
+    if (Insn)
+      cs_free(Insn, 1);
+    if (Handle)
+      cs_close(&Handle);
+  }
+};
+
+TEST(MIPSPhysicalDecode, ClassicRecordsMatchTheIteratorAcrossISAAndByteOrder) {
+  constexpr cs_mode Modes[] = {CS_MODE_MIPS64R2, CS_MODE_MIPS1, CS_MODE_MIPS2,
+                               CS_MODE_MIPS3,    CS_MODE_MIPS4, CS_MODE_MIPS5};
+  // Interleave DSP-mapped LW/SW and ordinary unaligned transfers so reused
+  // records must expose the groups selected for each individual instruction.
+  constexpr unsigned Major[] = {4,  35, 34, 5,  43, 42, 8,  9,  10, 11, 12,
+                                13, 14, 32, 33, 36, 37, 38, 40, 41, 46};
+  constexpr unsigned Alu[] = {0x20, 0x21, 0x22, 0x23, 0x24,
+                              0x25, 0x26, 0x27, 0x2a, 0x2b};
+  for (bool Little : {false, true}) {
+    Decoder D;
+    for (unsigned Level = 0; Level < std::size(Modes); ++Level) {
+      const bool Wide = Level == 0 || Level >= 3;
+      const Arch A = Wide ? (Little ? Arch::MIPS64EL : Arch::MIPS64)
+                          : (Little ? Arch::MIPS32EL : Arch::MIPS32);
+      BinaryImage Img;
+      Img.Arch = A;
+      Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+      Img.MIPS.emplace();
+      Img.MIPS->ABI = Wide ? MIPSABI::N64 : MIPSABI::O32;
+      Img.MIPS->ISARevision = Level ? 0 : 2;
+      Img.MIPS->HistoricalISA = Level;
+      ASSERT_TRUE(D.init(Img));
+      CapstoneReference Ref;
+      const auto Mode = static_cast<cs_mode>(
+          Modes[Level] | (Little ? CS_MODE_LITTLE_ENDIAN : CS_MODE_BIG_ENDIAN));
+      ASSERT_EQ(cs_open(CS_ARCH_MIPS, Mode, &Ref.Handle), CS_ERR_OK);
+      ASSERT_EQ(cs_option(Ref.Handle, CS_OPT_DETAIL, CS_OPT_ON), CS_ERR_OK);
+      Ref.Insn = cs_malloc(Ref.Handle);
+      ASSERT_NE(Ref.Insn, nullptr);
+      std::vector<uint32_t> Words;
+      for (uint32_t Fields : {0u, 0x00a28000u, 0x03e07fffu, 0x03ffffffu}) {
+        for (unsigned Op : Major)
+          Words.push_back((Op << 26) | Fields);
+        for (unsigned Fn : Alu)
+          Words.push_back((Fields & 0x03fff800) | Fn);
+        Words.push_back(0x03e00008); // JR ra reads an operand to classify RET.
+      }
+      const auto Bytes = encode(Words, A);
+      for (bool Text : {false, true, false}) {
+        D.setText(Text);
+        ASSERT_EQ(
+            cs_option(Ref.Handle, CS_OPT_TEXT, Text ? CS_OPT_ON : CS_OPT_OFF),
+            CS_ERR_OK);
+        for (size_t I = 0; I < Words.size(); ++I) {
+          SCOPED_TRACE(::testing::Message()
+                       << Level << "/" << Little << "/" << Text << "/"
+                       << std::hex << Words[I]);
+          const uint64_t Address =
+              (Wide ? UINT64_C(0x1ffffff80) : 0x7fffff80u) + I * 4;
+          const uint8_t *Next = Bytes.data() + I * 4;
+          const uint8_t *Start = Next;
+          uint64_t PC = Address;
+          size_t Remaining = 4;
+          ASSERT_TRUE(
+              cs_disasm_iter(Ref.Handle, &Next, &Remaining, &PC, Ref.Insn));
+          for (auto Decode : {&Decoder::decodeOneForLift,
+                              &Decoder::decodeOneLight, &Decoder::decodeOne}) {
+            DecodedInsn Out;
+            ASSERT_EQ((D.*Decode)(Start, 4, Address, Out), 4);
+            ASSERT_NE(Out.Raw, nullptr);
+            EXPECT_EQ(Out.Id, Ref.Insn->id);
+            EXPECT_EQ(Out.Addr, Ref.Insn->address);
+            EXPECT_EQ(Out.Size, Ref.Insn->size);
+            EXPECT_EQ(std::memcmp(Out.Raw->bytes, Ref.Insn->bytes, 4), 0);
+            EXPECT_EQ(Out.Raw->illegal, Ref.Insn->illegal);
+            EXPECT_EQ(Out.Raw->is_alias, Ref.Insn->is_alias);
+            EXPECT_EQ(Out.Raw->alias_id, Ref.Insn->alias_id);
+            EXPECT_EQ(Out.Raw->usesAliasDetails, Ref.Insn->usesAliasDetails);
+            EXPECT_STREQ(Out.Raw->mnemonic, Ref.Insn->mnemonic);
+            EXPECT_STREQ(Out.Raw->op_str, Ref.Insn->op_str);
+            ASSERT_NE(Out.Raw->detail, nullptr);
+            // MIPS clears the common detail fields and its architecture
+            // payload.
+            EXPECT_EQ(std::memcmp(Out.Raw->detail, Ref.Insn->detail,
+                                  offsetof(cs_detail, mips) + sizeof(cs_mips)),
+                      0);
+          }
+        }
+      }
+    }
+  }
 }
 
 TEST(MIPSPhysicalDecode, SingleInstructionPathsMatchTheStreamingIterator) {
@@ -61,16 +160,7 @@ TEST(MIPSPhysicalDecode, SingleInstructionPathsMatchTheStreamingIterator) {
           (Mode == InstructionMode::MIPS16      ? CS_MODE_MIPS16
            : Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO
                                                 : 0));
-      struct Reference {
-        csh Handle{};
-        cs_insn *Insn = nullptr;
-        ~Reference() {
-          if (Insn)
-            cs_free(Insn, 1);
-          if (Handle)
-            cs_close(&Handle);
-        }
-      } Ref;
+      CapstoneReference Ref;
       ASSERT_EQ(cs_open(CS_ARCH_MIPS, CsMode, &Ref.Handle), CS_ERR_OK);
       ASSERT_EQ(cs_option(Ref.Handle, CS_OPT_DETAIL, CS_OPT_ON), CS_ERR_OK);
       Ref.Insn = cs_malloc(Ref.Handle);

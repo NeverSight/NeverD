@@ -935,9 +935,10 @@ public:
   /// or prints as a literal already.
   std::string stringArgumentNote(const HighExpr &Arg);
   void collectUnknownOnlyNames(const HighFunc &Func);
-  /// Full-width AArch64 entry GPRs whose only use is to be stored. A context
-  /// save stores the caller-saved bank this way; HighC then names those
-  /// registers instead of trapping.
+  /// Full-width entry GPRs whose only use is to be stored. A context save
+  /// stores the caller-saved bank this way; HighC then names those
+  /// registers, and the vector registers stored with them, instead of
+  /// trapping.
   void collectCapturedEntryRegisters(const HighFunc &Func);
   /// Entry Q registers printed as the value of a store. That spill stays
   /// unknown. A different use of the same register is not in this set.
@@ -1204,6 +1205,21 @@ public:
   bool isHiddenCopyForwardAssign(const HighStmt &Stmt) const;
   void hideUnusedFrameSlotWrites(const HighFunc &Func);
   void hideX86CallPushSetup(const HighFunc &Func);
+  /// What a context save of x86-64 stores of the machine: a general register
+  /// at full width, or an SSE register whole (HighC/X86/HighCContextSave.cpp).
+  enum class X64MachineRegister { None, General, Vector };
+  static X64MachineRegister x64MachineRegister(const MedVar &V);
+  /// What an x86-64 function does with the value a register that is no
+  /// parameter held at its entry: nothing, only stores of it, or a read.
+  enum class X64EntryUse { None, Stored, Read };
+  /// Whether an x86-64 function whose entry registers \p Use describes
+  /// saves a register no caller gives it a value in: the register
+  /// parameters it only stores are then part of a context too.
+  static bool
+  x64SavesUngivenRegister(llvm::function_ref<X64EntryUse(uint64_t)> Use);
+  /// The read of the x86-64 register \p V names as the machine holds it, in
+  /// either assembly dialect; empty for any other view.
+  static std::string x64MachineRegisterText(const MedVar &V);
   void hideX86SehRegistration(const HighFunc &Func);
   void hideIncrementOnlyLoads(const HighFunc &Func);
   void hideBitClearSlotCopies(const HighFunc &Func);
@@ -1748,9 +1764,14 @@ public:
   /// Destinations whose only assignments are Undef / unknown copies of those.
   /// Assigns are hidden; observable uses diagnose missing state.
   std::set<std::string> UnknownOnlyNames;
-  /// AArch64 entry-GPR offsets named as the architectural register. Empty
-  /// unless collectCapturedEntryRegisters proved a context save.
+  /// AArch64 and x86-64 entry register offsets named as the architectural
+  /// register: general registers, and the vector registers stored with
+  /// them (SSE's on x86-64, Q and D views on AArch64). Empty unless
+  /// collectCapturedEntryRegisters proved a context save.
   std::set<uint64_t> CapturedEntryRegisters;
+  /// The function only stores the frame pointer it was entered with: its
+  /// caller's frame (collectCapturedEntryRegisters), on x86-64 and AArch64.
+  bool CapturedCallerFrame = false;
   /// Peeled entry-Q nodes that are the value of a store or a store intrinsic.
   std::unordered_set<const HighExpr *> EntryVectorSpills;
   /// Availability of mixed known/unknown integer PHIs and their copies.

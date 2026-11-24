@@ -174,7 +174,7 @@ TEST_P(AndroidNetwork, TCPConnectFailuresShareRawNamedDynamicAndVariadicCalls) {
 
 TEST_P(AndroidNetwork, DatagramFallbackRetainsPacketsSourcesAndExplicitErrors) {
   Options.Android->Libraries["libc.so"] = {"recv"};
-  for (uint64_t Mode : {0, 1, 2, 3}) {
+  for (uint64_t Mode : {0, 1, 2, 3, 4, 6}) {
     const auto &Peer = Mode & 2 ? IPv6 : IPv4;
     LinuxStreamConnection Failure;
     Failure.Peer = Peer;
@@ -405,6 +405,20 @@ TEST_P(AndroidNetwork, StreamAliasesShortTransfersAndRawWrappersShareState) {
         std::equal(Guarded.begin(), Guarded.end(), Bytes.begin() + 128));
   }
 }
+TEST_P(AndroidNetwork, NullPeerIgnoresAddressLengthInNamedAndRawTransfers) {
+  for (unsigned Mode : {0u, 1u, 2u, 3u, 4u, 5u}) {
+    SCOPED_TRACE(Mode);
+    auto R = run("network_null_peer", Mode);
+    ASSERT_NO_FATAL_FAILURE(returned(R));
+    EXPECT_EQ(word(R, 0), 2u);
+    EXPECT_EQ(word(R, 1), 16u);
+    const auto &Bytes = R.MemorySnapshots.at(0).Bytes;
+    const bool Receive = Mode == 2 || Mode == 3 || Mode == 5;
+    EXPECT_EQ(Bytes[16], Receive ? 0x31 : 0xa5);
+    EXPECT_EQ(Bytes[17], Receive ? 0 : 0xa5);
+    EXPECT_EQ(Bytes[18], 0xa5);
+  }
+}
 TEST_P(AndroidNetwork, RefusalAndUnknownPeerStaySeparate) {
   auto &C = Options.LinuxNetwork->Connections.front();
   C.ConnectErrno = 111;
@@ -420,6 +434,43 @@ TEST_P(AndroidNetwork, RefusalAndUnknownPeerStaySeparate) {
   EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
   EXPECT_NE(R.Diagnostic.find("matching offline connection"),
             std::string::npos);
+}
+TEST_P(AndroidNetwork, SocketBufferExtentPreservesBionicErrnoAndShortIO) {
+  for (unsigned Mode : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Mode);
+    auto R = run("network_buffer_extent", Mode);
+    ASSERT_NO_FATAL_FAILURE(returned(R));
+    const bool SocketCall = Mode < 2;
+    EXPECT_EQ(word(R, 0), UINT64_MAX);
+    EXPECT_EQ(word(R, 1), SocketCall ? 14u : 9u);
+    EXPECT_EQ(word(R, 2), UINT64_MAX);
+    EXPECT_EQ(word(R, 3), 14u);
+    EXPECT_EQ(word(R, 4), SocketCall ? 2u : UINT64_MAX);
+    EXPECT_EQ(word(R, 5), 14u);
+    EXPECT_EQ(word(R, 6), Mode == 1 ? 0x31u : 0u);
+    EXPECT_EQ(word(R, 7), Mode == 1 ? 0u : 0xffu);
+  }
+}
+TEST_P(AndroidNetwork, FortifiedTransfersKeepMissingStreamObservationsPending) {
+  Options.Android->ObserveMemoryOnFailure = true;
+  auto &Stream = Options.LinuxNetwork->Connections.front();
+  Stream.ExpectedSend.clear();
+  Stream.Receive.clear();
+  Stream.ReceiveEOF = false;
+  for (auto [Named, Checked] : {std::pair{0u, 4u}, std::pair{2u, 5u}}) {
+    SCOPED_TRACE(Checked);
+    auto Plain = run("network_null_peer", Named);
+    auto R = run("network_null_peer", Checked);
+    ASSERT_EQ(Plain.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R.Stop, Plain.Stop);
+    EXPECT_EQ(R.Diagnostic, Plain.Diagnostic);
+    ASSERT_FALSE(R.NativeCalls.empty());
+    EXPECT_EQ(R.NativeCalls.back().Name,
+              Checked == 4 ? "__sendto_chk" : "__recvfrom_chk");
+    EXPECT_FALSE(R.NativeCalls.back().Result);
+    ASSERT_EQ(R.MemorySnapshots.size(), 1u);
+    EXPECT_EQ(R.MemorySnapshots[0].Bytes, Options.Android->Memory[0].Bytes);
+  }
 }
 TEST_P(AndroidNetwork, OutgoingMismatchReportsStreamAndBufferOffsets) {
   Options.Android->ObserveMemoryOnFailure = true;

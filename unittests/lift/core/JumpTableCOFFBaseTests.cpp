@@ -114,15 +114,23 @@ Fixture makeFixture(unsigned FillerBlocks, const std::string &Variant) {
   const va_t Branch = Entry + W.Code.size();
   W.put({0xff, 0xe1});
   std::vector<va_t> Targets;
+  std::vector<size_t> ReturnJumps;
   for (int I = 0; I < 6; ++I) {
     Targets.push_back(Entry + W.Code.size());
     W.put({0xb8}); // mov eax, independently expected case result
     W.u32(10 + I);
-    W.put({0xc3, 0xcc});
+    if (Kind == "shared-return") {
+      W.put({0xe9});
+      ReturnJumps.push_back(W.u32(0));
+    } else {
+      W.put({0xc3, 0xcc});
+    }
   }
   size_t Default = W.Code.size();
   W.put({0xc3, 0xcc, 0xcc, 0xcc});
   W.branch(DefaultBranch, Default);
+  for (size_t Jump : ReturnJumps)
+    W.branch(Jump, Default);
   const size_t FunctionEnd = W.Code.size();
   const size_t Helper = W.Code.size();
   size_t NestedCall = 0;
@@ -390,7 +398,8 @@ void writePE(const Fixture &F, const fs::path &Path) {
 class COFFTableBaseCLI : public NeverDLiftTest {};
 
 TEST_F(COFFTableBaseCLI, BothSourceRoutesUseTheSharedBaseProof) {
-  for (const std::string Variant : {"decoy", "composite"}) {
+  for (const std::string Variant :
+       {"decoy", "composite", "composite-shared-return"}) {
     SCOPED_TRACE(Variant);
     const auto F = makeFixture(160, Variant);
     const fs::path Input = tmpFile(Variant + ".exe");
@@ -414,20 +423,33 @@ TEST_F(COFFTableBaseCLI, BothSourceRoutesUseTheSharedBaseProof) {
       EXPECT_NE(Text.find("sub_140001000("), std::string::npos);
       EXPECT_NE(Text.find("return"), std::string::npos);
       if (hasCrossTargetClang()) {
-        // Zero is a valid argument for either the recovered integer or pointer
-        // spelling. It selects case zero and must return its machine value.
         const fs::path Program =
             tmpFile(Variant + (LLVM ? "-llvm.exe" : "-high.exe"));
         const fs::path Harness =
             tmpFile(Variant + (LLVM ? "-llvm-run.c" : "-high-run.c"));
         std::ofstream RunSource(Harness);
-        RunSource << Text
-                  << "\nint main(void) { return sub_140001000(0, 0) == 10 ? 0 "
-                     ": 1; }\n";
+        RunSource << Text << R"(
+int main(void) {
+    for (uintptr_t i = 0; i < 6; ++i)
+        if (sub_140001000((SELECTOR_TYPE)i, 0) != 10 + i)
+            return 1;
+    return 0;
+}
+)";
         RunSource.close();
-        const auto Built = exec(NEVERD_TEST_CLANG, {"-O0", Harness.string(),
-                                                    "-o", Program.string()});
-        ASSERT_TRUE(Built.ok()) << Built.err;
+        // Both an integer and a pointer can carry this fixture's selector.
+        // Let the C compiler check the call against the recovered prototype.
+        auto Build = [&](const char *Type) {
+          return exec(NEVERD_TEST_CLANG,
+                      {"-O0", "-Werror=int-conversion",
+                       std::string("-DSELECTOR_TYPE=") + Type, Harness.string(),
+                       "-o", Program.string()});
+        };
+        const auto Integer = Build("uintptr_t");
+        if (!Integer.ok()) {
+          const auto Pointer = Build("void *");
+          ASSERT_TRUE(Pointer.ok()) << Integer.err << Pointer.err;
+        }
         const auto Ran = exec(Program.string(), {});
         EXPECT_TRUE(Ran.ok()) << Ran.err;
       }

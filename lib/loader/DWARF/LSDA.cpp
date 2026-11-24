@@ -9,6 +9,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
 
@@ -26,19 +27,35 @@ namespace {
 
 using namespace dweh;
 
-/// Largest run starting at \p Address, capped at \p Want, that a single
-/// \ref BinaryImage::readVA can hand back.  The decoder works on a bounded
-/// local buffer instead of chasing addresses field by field, so the length must
-/// stay inside one segment: adjacent segments are contiguous in VA space but
-/// live in separate buffers, and asking for a run that crosses the boundary
-/// fails outright rather than returning the short prefix.
-size_t mappedBytesAt(const BinaryImage &Img, va_t Address, size_t Want) {
-  if (Want == 0 || !Img.readVA(Address, 1))
+/// The pointer reader returns the displacement in the target's uintptr_t.
+/// A signed displacement may refer to a landing pad before LPStart.
+std::optional<va_t> resolveLandingPad(va_t Base, va_t Offset, uint8_t Format,
+                                      unsigned PtrSize) {
+  const va_t Max = PtrSize == sizeof(uint32_t)
+                       ? std::numeric_limits<uint32_t>::max()
+                       : std::numeric_limits<va_t>::max();
+  const bool Signed = Format == Sleb128 || Format == Sdata2 ||
+                      Format == Sdata4 || Format == Sdata8;
+  if (Signed && Offset > Max / 2) {
+    const va_t Distance = Max - Offset + 1;
+    if (Distance > Base)
+      return std::nullopt;
+    return Base - Distance;
+  }
+  if (Base > Max - Offset)
+    return std::nullopt;
+  return Base + Offset;
+}
+
+/// Largest contiguous prefix, capped at \p Want, that fits in one backing
+/// buffer. Adjacent virtual segments can occupy separate buffers.
+template <typename Reader> size_t readablePrefix(Reader Read, size_t Want) {
+  if (Want == 0 || !Read(1))
     return 0;
   size_t Lo = 1, Hi = Want;
   while (Lo < Hi) {
     const size_t Mid = Lo + (Hi - Lo + 1) / 2;
-    if (Img.readVA(Address, Mid))
+    if (Read(Mid))
       Lo = Mid;
     else
       Hi = Mid - 1;
@@ -46,14 +63,21 @@ size_t mappedBytesAt(const BinaryImage &Img, va_t Address, size_t Want) {
   return Lo;
 }
 
+size_t mappedBytesAt(const BinaryImage &Img, va_t Address, size_t Want) {
+  return readablePrefix([&](size_t N) { return Img.readVA(Address, N); }, Want);
+}
+
 std::string readMappedCString(const BinaryImage &Img, va_t Address) {
   if (Address == 0)
     return {};
-  const size_t Available = mappedBytesAt(
-      Img, Address, ::neverd::limits::loader::kLSDAMaxTypeNameBytes);
+  const auto Read = [&](size_t N) {
+    return macho_loader::readMetadataBytes(Img, Address, N);
+  };
+  const size_t Available =
+      readablePrefix(Read, ::neverd::limits::loader::kLSDAMaxTypeNameBytes);
   if (Available == 0)
     return {};
-  const uint8_t *Bytes = Img.readVA(Address, Available);
+  const uint8_t *Bytes = Read(Available);
   if (!Bytes)
     return {};
   size_t Length = 0;
@@ -77,7 +101,13 @@ std::string readItaniumTypeName(const BinaryImage &Img, va_t TypeInfoVA) {
   if (TypeInfoVA > InvalidVA - PtrSize)
     return {};
 
-  const uint8_t *NameSlot = Img.readVA(TypeInfoVA + PtrSize, PtrSize);
+  const va_t SlotVA = TypeInfoVA + PtrSize;
+  if (Img.isMachO() && Img.Arch == Arch::AArch64 && Img.is64Bit()) {
+    const auto Name = macho_loader::readArm64TypeNameAddress(Img, SlotVA);
+    return Name ? readMappedCString(Img, *Name) : std::string{};
+  }
+
+  const uint8_t *NameSlot = Img.readVA(SlotVA, PtrSize);
   if (!NameSlot)
     return {};
   const va_t NameVA = PtrSize == 4 ? va_t(readTargetEndian<uint32_t>(
@@ -262,9 +292,11 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
       }
 
       if (LandingPad != 0) {
-        if (Info.LandingPadBase > InvalidVA - LandingPad)
+        auto Address = resolveLandingPad(Info.LandingPadBase, LandingPad,
+                                         CallSiteFormat, PtrSize);
+        if (!Address)
           return malformed("Itanium LSDA landing-pad address overflows");
-        Site.LandingPadVA = Info.LandingPadBase + LandingPad;
+        Site.LandingPadVA = *Address;
         if (Req.FunctionEnd != 0 && (Site.LandingPadVA < Req.FunctionStart ||
                                      Site.LandingPadVA >= Req.FunctionEnd))
           partial("Itanium LSDA landing pad leaves its function");
@@ -449,22 +481,20 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
           partial("Itanium LSDA type-table entry is not mapped");
           break;
         }
-        size_t SlotCursor = 0;
         va_t TypeInfo = 0;
         va_t IndirectSlot = 0;
+        size_t SlotCursor = 0;
         if (!readEncodedPointer(Slot, EntrySize, SlotCursor, EntryVA,
                                 SlotEncoding, Bases, PtrSize, &Img, TypeInfo,
                                 &IndirectSlot)) {
           partial("unresolved Itanium LSDA type-table entry");
           break;
         }
-        // A slot the loader binds holds no usable pointer in the file image:
-        // Mach-O chained fixups leave an encoded ordinal there and ELF leaves
-        // zero or a link-time placeholder.  Reporting that word as an address
-        // would hand a consumer a number that names nothing, so the address is
-        // dropped and the slot — which the binding does name — is what carries
-        // the identity.
-        if (TypeInfo != 0 && IndirectSlot != 0 && !Img.readVA(TypeInfo, 1))
+        // Standalone images can carry a bound ordinal or link-time placeholder.
+        // Shared-cache indirect targets have already been validated by dyld
+        // metadata.
+        if (TypeInfo && IndirectSlot && !Img.MachOSharedCache &&
+            !Img.readVA(TypeInfo, 1))
           TypeInfo = 0;
 
         ItaniumTypeEntry Entry;

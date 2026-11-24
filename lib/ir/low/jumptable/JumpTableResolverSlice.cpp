@@ -45,6 +45,7 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/DivisionByConstantInfo.h"
@@ -7263,10 +7264,13 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     // Collects the definitions of V that reach the point after Ops[From] of
     // Blk.  A block entered again adds nothing: its other entries supply the
     // value that flows around the cycle.
-    std::function<bool(int, int, const NdVar &, std::set<int> &,
+    // Membership is queried, never iterated. Keep the existing logical
+    // lookup charge and predecessor order while avoiding per-node allocation.
+    using VisitedBlocks = llvm::SmallDenseSet<int, 8>;
+    std::function<bool(int, int, const NdVar &, VisitedBlocks &,
                        std::vector<Occurrence> &)>
         reachingDefs = [&](int Blk, int From, const NdVar &V,
-                           std::set<int> &Visited,
+                           VisitedBlocks &Visited,
                            std::vector<Occurrence> &Defs) -> bool {
       const std::vector<LowOp> &Ops = Graph.Blocks[Blk].Ops;
       for (int I = std::min(From, static_cast<int>(Ops.size()) - 1); I >= 0;
@@ -7317,7 +7321,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                        unsigned Depth) -> std::optional<uint64_t> {
       if (Depth >= limits::kMaxQuasiCopyDepth || (!V.isReg() && !V.isTemp()))
         return std::nullopt;
-      std::set<int> Visited;
+      VisitedBlocks Visited;
       std::vector<Occurrence> Defs;
       if (!reachingDefs(Blk, From, V, Visited, Defs) || Defs.empty())
         return std::nullopt;
@@ -7368,7 +7372,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     // The address itself is formed by the store's own instruction.
     const std::vector<LowOp> &Ops = Graph.Blocks[Block].Ops;
     auto localDef = [&](int From, const NdVar &V) {
-      std::set<int> Visited;
+      VisitedBlocks Visited;
       std::vector<Occurrence> Defs;
       Visited.insert(Block);
       if (!reachingDefs(Block, From, V, Visited, Defs) || Defs.size() != 1 ||

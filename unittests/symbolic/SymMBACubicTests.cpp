@@ -91,6 +91,38 @@ TEST(SymMBACubic,
         }
 }
 
+TEST(SymMBACubic, DenseSupportDegreesRecoverOverlapsAndRepeatedFactors) {
+  std::mt19937_64 Random(0x4d415247);
+  for (unsigned Sample = 0; Sample != 64; ++Sample) {
+    uint64_t A = (Random() | 0x0101) & 0xffff;
+    uint64_t B = Sample % 3 == 0 ? A : (Random() | 0x0202) & 0xffff;
+    uint64_t C = Sample % 5 == 0 ? B : (Random() | 0x0404) & 0xffff;
+    // All sixteen coordinates appear, including disjoint and shared ones.
+    C |= ~(A | B) & 0xffff;
+    const auto Width = Sample % 2 ? 3u : 65u;
+    const llvm::APInt Scale =
+        Sample % 3 ? llvm::APInt(Width, 6) : llvm::APInt::getSignMask(Width);
+    llvm::SmallVector<TruthTable, 3> Factors{table(4, A), table(4, B),
+                                             table(4, C)};
+    auto H = expand(Factors, Scale);
+    detail::WorkBudget Budget(1u << 20);
+    auto R = detail::recoverProductSupport(H, 3, 4, Budget, 65536);
+    ASSERT_TRUE(R) << Sample;
+    ASSERT_EQ(R->size(), 3u) << Sample;
+    EXPECT_EQ(expand(*R, Scale), H) << Sample;
+    std::vector<uint64_t> Expected{A, B, C}, Actual;
+    for (const auto &F : *R)
+      Actual.push_back(F.packed());
+    llvm::sort(Expected);
+    llvm::sort(Actual);
+    EXPECT_EQ(Actual, Expected) << Sample;
+    detail::WorkBudget Short(16 + 4 * H.size());
+    EXPECT_FALSE(detail::recoverProductSupport(H, 3, 4, Short, 65536));
+    detail::WorkBudget LowMemory(1u << 20);
+    EXPECT_FALSE(detail::recoverProductSupport(H, 3, 4, LowMemory, 256));
+  }
+}
+
 TEST(SymMBACubic, SubsetDegreeRefusalIsDistinctFromAnImpossibleProduct) {
   auto H =
       expand({table(2, 3), table(2, 6), table(2, 12)}, llvm::APInt(257, 7));

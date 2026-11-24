@@ -594,15 +594,23 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
             continue;
           const MedOp &WideOp = MB.Ops[OI];
           if (WideOp.Opcode == NdOp::INT_ZEXT) {
-            if (WideOp.NumInputs < 1 || WideOp.Inputs[0].Kind != MedVar::Reg ||
-                WideOp.Inputs[0].Size >= NarSz)
+            if (WideOp.NumInputs < 1)
               continue;
-            int InputByteOff =
-                TRI.subRegByteOffset(WideOp.Inputs[0].RegOff,
-                                     WideOp.Inputs[0].Size, WideOff, WideSz);
-            if (InputByteOff < 0 && WideOp.Inputs[0].RegOff == WideOff)
-              InputByteOff = 0;
-            if (InputByteOff != 0)
+            // The zero-extension of a register's own low slice leaves that
+            // slice as the definition of every view no wider than it.  One of
+            // anything else, as the byte a load gave (AArch64 `ldrb w7, ...`
+            // is a temporary's), defines the whole register it writes, and
+            // its low bytes with it.
+            const MedVar &From = WideOp.Inputs[0];
+            int InputByteOff = -1;
+            if (From.Kind == MedVar::Reg) {
+              InputByteOff =
+                  TRI.subRegByteOffset(From.RegOff, From.Size, WideOff, WideSz);
+              if (InputByteOff < 0 && From.RegOff == WideOff)
+                InputByteOff = 0;
+            }
+            const bool OwnSlice = From.Kind == MedVar::Reg && InputByteOff >= 0;
+            if (OwnSlice && (From.Size >= NarSz || InputByteOff != 0))
               continue;
           }
           int ByteOff;

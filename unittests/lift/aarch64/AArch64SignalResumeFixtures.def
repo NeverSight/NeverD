@@ -366,6 +366,7 @@ ASYNC_FRAME_VALUE(unsigned, kSignalActionCount, 3)
 ASYNC_FRAME_VALUE(uint64_t, kSignalSpecType, 2)
 ASYNC_FRAME_TEXT(kSignalTypedLSDA, "-DNEVERD_TYPED_LSDA")
 ASYNC_FRAME_TEXT(kSignalExplicitLPStart, "-DNEVERD_EXPLICIT_LPSTART")
+ASYNC_FRAME_TEXT(kSignalBackwardLandingPad, "-DNEVERD_BACKWARD_LANDING_PAD")
 ASYNC_FRAME_TEXT(kSignalGeneratedLSDA, "Lneverd_lsda_${:uid}:\n.byte 255\n")
 ASYNC_FRAME_TEXT(kSignalInvalidLSDA, "Lneverd_lsda_${:uid}:\n.byte 0\n")
 ASYNC_FRAME_TEXT(kSignalNonCallExceptions, "native_noncall_language_cleanups")
@@ -626,15 +627,17 @@ Lcatch_bad:
  .p2align 2
 Lexception:
 #ifdef NEVERD_EXPLICIT_LPSTART
- // LPStart deliberately differs from the function start. Call-site ranges
- // remain function-relative; only landing-pad offsets use this base.
- .byte 27
-#ifdef NEVERD_ENTRY_LANDING_PAD
- .long Lfunc_begin-4-.
+#ifdef NEVERD_BACKWARD_LANDING_PAD
+#define LSDA_PAD_BASE Lfunction_end
+#elif defined(NEVERD_ENTRY_LANDING_PAD)
+#define LSDA_PAD_BASE (Lfunc_begin-4)
 #else
- .long Lfunc_begin+4-.
+#define LSDA_PAD_BASE (Lfunc_begin+4)
 #endif
+ .byte 27
+ .long LSDA_PAD_BASE-.
 #else
+#define LSDA_PAD_BASE Lfunc_begin
  .byte 255
 #endif
 #if defined(NEVERD_TYPED_LSDA) || defined(NEVERD_LOCAL_CATCH)
@@ -648,17 +651,21 @@ Ltypes_offset:
 #else
  .byte 255
 #endif
+#ifdef NEVERD_BACKWARD_LANDING_PAD
+ .byte 11
+#define LSDA_FIELD .long
+#else
  .byte 1
+#define LSDA_FIELD .uleb128
+#endif
  .uleb128 Ltable_end-Ltable
 Ltable:
- .uleb128 Lprotected-Lfunc_begin
- .uleb128 Lprotected_end-Lprotected
+ LSDA_FIELD Lprotected-Lfunc_begin
+ LSDA_FIELD Lprotected_end-Lprotected
 #ifdef NEVERD_ENTRY_LANDING_PAD
- .uleb128 4
-#elif defined(NEVERD_EXPLICIT_LPSTART)
- .uleb128 Lcleanup-Lfunc_begin-4
+ LSDA_FIELD Lfunc_begin-LSDA_PAD_BASE
 #else
- .uleb128 Lcleanup-Lfunc_begin
+ LSDA_FIELD Lcleanup-LSDA_PAD_BASE
 #endif
 #if defined(NEVERD_TYPED_LSDA) || defined(NEVERD_LOCAL_CATCH)
  .byte 1
@@ -667,18 +674,20 @@ Ltable:
 #endif
  // Resuming the exception has no local cleanup. Without this entry the
  // personality treats the second-phase return edge as a missing call site.
- .uleb128 Lresume-Lfunc_begin
- .uleb128 Lresume_end-Lresume
- .byte 0
+ LSDA_FIELD Lresume-Lfunc_begin
+ LSDA_FIELD Lresume_end-Lresume
+ LSDA_FIELD 0
  .byte 0
 #ifdef NEVERD_TYPED_LSDA
  // The unreachable trap checks an exception-specification-only type index.
- .uleb128 Lresume_end-Lfunc_begin
- .uleb128 Lfunction_end-Lresume_end
- .uleb128 Lcleanup-Lfunc_begin-4
+ LSDA_FIELD Lresume_end-Lfunc_begin
+ LSDA_FIELD Lfunction_end-Lresume_end
+ LSDA_FIELD Lcleanup-LSDA_PAD_BASE
  .byte 5
 #endif
 Ltable_end:
+#undef LSDA_FIELD
+#undef LSDA_PAD_BASE
 #ifdef NEVERD_LOCAL_CATCH
  // A catch-all selects this frame in phase one and returns normally after
  // checking that begin_catch exposes the original exception object.

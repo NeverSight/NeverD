@@ -167,24 +167,49 @@ BionicResult Bionic::socketTransfer(const NativeCallEvent &Call) {
                     Adapted);
 }
 
+BionicResult Bionic::checkedSocketTransfer(const NativeCallEvent &Call) {
+  const auto &A = Call.Arguments;
+  const bool Send = Call.Name == symbol::SendToChk;
+  if (A[2] > A[3])
+    return fortifyBufferFailure(Call, Send ? "sendto" : "recvfrom", A[2], A[3],
+                                Send);
+  // Bionic inserts the buffer extent between the length and the flags.
+  auto Adapted = Call;
+  std::copy_n(A.begin() + 4, 3, Adapted.Arguments.begin() + 3);
+  return kernelCall(Send ? linux_model::ServiceKind::SendTo
+                         : linux_model::ServiceKind::ReceiveFrom,
+                    Adapted);
+}
+
 BionicResult Bionic::syscall(const NativeCallEvent &Call) {
   return kernelCall(std::nullopt, Call);
 }
 
 BionicResult Bionic::pollCall(const NativeCallEvent &Call) {
   using linux_model::ServiceKind;
-  auto Adapted = Call;
   if (Call.Name == symbol::EpollPwait || Call.Name == symbol::EpollPwait64) {
+    auto Adapted = Call;
     Adapted.Arguments[5] = linux_model::SignalMaskSize;
     return kernelCall(ServiceKind::EpollPwait, Adapted);
+  }
+  const bool Milliseconds =
+      Call.Name == symbol::Poll || Call.Name == symbol::PollChk;
+  if (Call.Name == symbol::PollChk || Call.Name == symbol::PPollChk) {
+    const uint32_t Count = Call.Arguments[1];
+    const uint64_t Capacity =
+        Call.Arguments[Milliseconds ? 3 : 4] / linux_model::PollDescriptorSize;
+    if (Count > Capacity)
+      return fortifyFatal(Call, llvm::Twine(Milliseconds ? "poll" : "ppoll") +
+                                    ": " + llvm::Twine(Capacity) +
+                                    "-element pollfd array too small for " +
+                                    llvm::Twine(Count) + " fds");
   }
   ProcessServiceEvent Event{Call.PC, 0, {}, std::nullopt};
   std::copy_n(Call.Arguments.begin(), Event.Arguments.size(),
               Event.Arguments.begin());
   Event.ReturnAddress = Call.ReturnAddress;
   Event.Arguments[4] = linux_model::SignalMaskSize;
-  auto R = Kernel.poll(Call.Name == symbol::Poll ? ServiceKind::Poll
-                                                 : ServiceKind::PPoll,
+  auto R = Kernel.poll(Milliseconds ? ServiceKind::Poll : ServiceKind::PPoll,
                        Event, Threads ? Threads->kernel() : nullptr, true);
   if (!R)
     return R.takeError();

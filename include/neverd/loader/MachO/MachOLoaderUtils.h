@@ -146,6 +146,25 @@ void parseExportTrie(const uint8_t *BasePtr, size_t FileSize,
                      const DyldInfoOffsets &DyldInfo, uint64_t TextVMAddr,
                      BinaryImage &Img);
 
+/// The stubs a symbol stub section holds and the bytes of each.
+struct StubRun {
+  uint32_t Count = 0;
+  uint64_t Bytes = 0;
+};
+
+/// The stubs of \p Sections[\p Index], a symbol stub section.  Its header
+/// gives the bytes of a stub (reserved2), and the indirect symbol table
+/// holds one run of symbols per section from the section's first index
+/// (reserved1), \p IndirectSymbols in all.  Go's linker writes 6, x86-64's
+/// stub size, on arm64 too, where a stub is three instructions: by that size
+/// `__symbol_stub1` would hold twice its stubs and take the symbols of the
+/// `__got` after it, and every stub but the first named another import.
+/// Where the header's size has the section claim more symbols than its run
+/// holds, the run gives the size, if it divides the section evenly; else the
+/// header stands.
+StubRun stubRun(const std::vector<SectionInfo> &Sections, size_t Index,
+                uint32_t IndirectSymbols);
+
 /// Parse __stubs sections via the indirect symbol table and populate
 /// Img.Imports and Img.Symbols with stub-to-import mappings.
 void parseStubImports(const llvm::object::MachOObjectFile &Obj,

@@ -1,0 +1,166 @@
+{
+  "cases": {
+    "explicit": {
+      "test": "AArch64PAuthLRSemantics.BothCProjectionsCompileWithTheTwoModifierOracle",
+      "defines": []
+    },
+    "prefix": {
+      "test": "AArch64PACMSemantics.BothCProjectionsCompileWithThePrefixOracle",
+      "defines": [
+        "-DRETURN_MODEL_PREFIX"
+      ]
+    }
+  },
+  "routes": [
+    "high",
+    "llvm",
+    "llvm-opt"
+  ],
+  "optimizations": [
+    "O0",
+    "O2"
+  ],
+  "artifact_environment": "NEVERD_ARM64E_RETURN_OBJECTS",
+  "artifact_property": "arm64e_return_object_directory",
+  "guest_directory": "diagnostics",
+  "guest_entry": "Arm64eReturnModel.S",
+  "guest_driver": "Arm64eReturnModel.c",
+  "guest_constants": "Arm64eReturnModel.def",
+  "target": "arm64e-apple-macos15",
+  "march": "-march=armv8.3-a+pauth",
+  "driver_flags": [
+    "-O2",
+    "-ffreestanding",
+    "-fno-stack-protector"
+  ],
+  "link_flags": [
+    "-static",
+    "-pagezero_size",
+    "0",
+    "-arch",
+    "arm64e",
+    "-e",
+    "_start",
+    "-platform_version",
+    "macos",
+    "15.0",
+    "15.0",
+    "-no_uuid"
+  ],
+  "text_segment": "__TEXT",
+  "reset_symbol": "_start",
+  "image_base": "0x80000000",
+  "object_kind": 1,
+  "executable_kind": 2,
+  "macho_header": "<4I",
+  "macho_magic": 4277009103,
+  "arm64_cpu": 16777228,
+  "arm64e_subtype": 2,
+  "subtype_mask": 16777215,
+  "report": "report.json",
+  "manifest": "guests.json",
+  "model_version": "11.32+19",
+  "parameters": {
+    "cluster0.NUM_CORES": 1,
+    "cluster1.NUM_CORES": 0,
+    "cluster0.has_arm_v9-5": 1,
+    "cluster0.has_el2": 0,
+    "cluster0.has_el3": 0,
+    "cluster0.has_sctlr2": 1,
+    "cluster0.enhanced_pac2_level": 4,
+    "cluster0.pacm_support_level": 2,
+    "cluster0.cpu0.CONFIG64": 1,
+    "semihosting-enable": 1,
+    "bp.secure_memory": 0,
+    "bp.vis.disable_visualisation": 1,
+    "bp.terminal_0.start_telnet": 0,
+    "bp.terminal_1.start_telnet": 0,
+    "bp.terminal_2.start_telnet": 0,
+    "bp.terminal_3.start_telnet": 0
+  },
+  "reset_parameter": "cluster0.cpu0.RVBAR",
+  "negative_parameters": {
+    "cluster0.has_arm_v9-5": 0,
+    "cluster0.has_arm_v9-4": 1,
+    "cluster0.enhanced_pac2_level": 3,
+    "cluster0.pacm_support_level": 0
+  },
+  "negative_case": "prefix-high-O0",
+  "model_timeout": 30,
+  "process_timeout": 60,
+  "record_prefix": "RETURN-MODEL ",
+  "passed": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings",
+  "feature_mismatch": "RETURN-MODEL feature mismatch",
+  "control_records": [
+    "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0=00",
+    "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0=10",
+    "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0=01",
+    "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0=11"
+  ],
+  "unsupported_exit": 1,
+  "size_pattern": "^Segment (\\S+): \\d+ \\(vmaddr (0x[0-9a-fA-F]+) fileoff (\\d+)\\)$",
+  "test_filter_flag": "--gtest_filter=",
+  "test_report_flag": "--gtest_output=json:",
+  "bad_header": "Unexpected arm64e Mach-O header in {path} ({header})",
+  "test_failed": "Oracle did not complete exactly once: {name}",
+  "bad_export": "Unexpected object directory: {path}",
+  "bad_tests": "Incomplete oracle test inventory: {names}",
+  "bad_map": "Static guest has a non-flat segment map: {path}",
+  "bad_version": "Unexpected model version: {version}",
+  "bad_inventory": "Incomplete model guest inventory",
+  "bad_hash": "Guest identity changed: {name}",
+  "bad_observation": "{label} returned {status}: {records}",
+  "compiler": [
+    "xcrun",
+    "clang",
+    "-target"
+  ],
+  "linker": [
+    "xcrun",
+    "ld"
+  ],
+  "symbols": [
+    "xcrun",
+    "nm",
+    "-n"
+  ],
+  "segments": [
+    "xcrun",
+    "size",
+    "-m",
+    "-l"
+  ],
+  "version_flags": [
+    "--version"
+  ],
+  "model_data": "--data",
+  "model_timelimit": "--timelimit",
+  "model_parameter": "-C",
+  "segment_prefix": "Segment ",
+  "test_object_extension": ".o",
+  "test_object_directory": "objects",
+  "entry_object": "entry.o",
+  "negative_suffix": "-unsupported",
+  "model_log_extension": ".log",
+  "fixture_directory": "unittests/lift/fixtures/arm64e",
+  "fixture_environment": "NEVERD_ARM64E_PAUTH_FIXTURES",
+  "fixture_files": [
+    "pauth_lr_oracle.c",
+    "pauth_pc_oracle.def",
+    "string.h"
+  ],
+  "version_pattern": "Fast Models \\[([^ ]+) ",
+  "staging_directory": "guests",
+  "commands": {
+    "build": "build",
+    "run": "run",
+    "tests": "--tests",
+    "guests": "--guests",
+    "model": "--model",
+    "output": "--output"
+  },
+  "compile_only": "-c",
+  "output_option": "-o",
+  "segment_address": "-segaddr",
+  "test_completed": "COMPLETED"
+}

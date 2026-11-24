@@ -90,19 +90,29 @@ bool safeWidenedShift(const llvm::Instruction &I) {
   return Amount->getValue().ule(ResultWidth - SourceWidth);
 }
 
-// (X << K) ashr K sign-extends the low W-K bits. The left shift also
-// proves that all bits discarded by an exact right shift are zero.
-// The translator validates the left shift and its own flags independently.
-unsigned shiftedSignedWidth(const llvm::Instruction &I) {
+struct ScaledSignedField {
+  const llvm::Value *Source;
+  unsigned Bits;
+  unsigned LowZeros;
+};
+
+// (X << L) ashr R sign-extends the low W-L bits and leaves L-R
+// trailing zeros when R <= L. Each shift's flags are checked independently.
+std::optional<ScaledSignedField> scaledSignedField(const llvm::Instruction &I) {
   if (I.getOpcode() != llvm::Instruction::AShr || !I.getType()->isIntegerTy())
-    return 0;
+    return std::nullopt;
   const auto *Left = llvm::dyn_cast<llvm::BinaryOperator>(I.getOperand(0));
-  const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1));
+  const auto *RightCount = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1));
+  if (!Left || Left->getOpcode() != llvm::Instruction::Shl || !RightCount)
+    return std::nullopt;
+  const auto *LeftCount =
+      llvm::dyn_cast<llvm::ConstantInt>(Left->getOperand(1));
   const unsigned Width = I.getType()->getIntegerBitWidth();
-  if (!Left || Left->getOpcode() != llvm::Instruction::Shl || !K ||
-      Left->getOperand(1) != K || K->getValue().uge(Width))
-    return 0;
-  return Width - K->getZExtValue();
+  if (!LeftCount || LeftCount->getValue().uge(Width) ||
+      RightCount->getValue().ugt(LeftCount->getValue()))
+    return std::nullopt;
+  const unsigned L = LeftCount->getZExtValue(), R = RightCount->getZExtValue();
+  return ScaledSignedField{Left->getOperand(0), Width - L, L - R};
 }
 
 // Infer bit facts from operand values alone. The translator checks every
@@ -126,20 +136,35 @@ llvm::KnownBits maskedWordBits(const llvm::Value *V, unsigned Depth,
         return Unknown;
       }
   }
-  // A literal scale leaves its trailing bits clear for every input word.
-  // This also admits InstCombine's disjoint OR of an offset into those bits.
+  // The guaranteed trailing zeros of a product add, even when one operand
+  // is a scaled signed field or a sum of multiples rather than a literal.
   if (I->getOpcode() == llvm::Instruction::Mul) {
-    for (const llvm::Value *Operand : I->operands())
-      if (const auto *K = llvm::dyn_cast<llvm::ConstantInt>(Operand)) {
-        Unknown.Zero.setLowBits(K->getValue().countr_zero());
-        break;
-      }
+    auto TrailingZeros = [&](const llvm::Value *Operand) {
+      if (const auto *K = llvm::dyn_cast<llvm::ConstantInt>(Operand))
+        return K->getValue().countr_zero();
+      return maskedWordBits(Operand, Depth - 1, Remaining)
+          .countMinTrailingZeros();
+    };
+    const unsigned Left = TrailingZeros(I->getOperand(0));
+    const unsigned Right = TrailingZeros(I->getOperand(1));
+    Unknown.Zero.setLowBits(std::min(Width, Left + Right));
     return Unknown;
   }
-  if (I->getOpcode() == llvm::Instruction::Shl) {
+  if (I->getOpcode() == llvm::Instruction::Shl ||
+      I->getOpcode() == llvm::Instruction::LShr) {
     const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(1));
-    if (K && K->getValue().ult(Width))
-      Unknown.Zero.setLowBits(K->getZExtValue());
+    if (K && K->getValue().ult(Width)) {
+      const unsigned Amount = K->getZExtValue();
+      if (I->getOpcode() == llvm::Instruction::Shl)
+        Unknown.Zero.setLowBits(Amount);
+      else
+        Unknown.Zero.setHighBits(Amount);
+    }
+    return Unknown;
+  }
+  if (I->getOpcode() == llvm::Instruction::AShr) {
+    if (const auto Field = scaledSignedField(*I))
+      Unknown.Zero.setLowBits(Field->LowZeros);
     return Unknown;
   }
   if (I->getOpcode() != llvm::Instruction::Add &&
@@ -625,10 +650,14 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
   case OpTag::LShr:
     return Ctx.mkLShr(M(A), M(B));
   case OpTag::AShr:
-    if (const unsigned Bits = shiftedSignedWidth(I)) {
-      const auto Source = M(llvm::cast<llvm::Instruction>(A)->getOperand(0));
-      if (Source)
-        return Ctx.mkSExt(Ctx.mkExtract(Source, 0, Bits), Width);
+    if (const auto Field = scaledSignedField(I)) {
+      if (const auto Source = Memo.lookup(Field->Source)) {
+        const auto Extended =
+            Ctx.mkSExt(Ctx.mkExtract(Source, 0, Field->Bits), Width);
+        return Field->LowZeros
+                   ? Ctx.mkShl(Extended, Ctx.mkConst(Width, Field->LowZeros))
+                   : Extended;
+      }
     }
     return Ctx.mkAShr(M(A), M(B));
   case OpTag::UDiv:

@@ -2832,4 +2832,836 @@ TEST(SysVCallContract, ErrorCheckingWrapperEndsAtItsExitHelper) {
   EXPECT_EQ(Body.find("unknown value"), std::string::npos) << Body;
 }
 
+// release(p): `test rdi, rdi; je done; mov rax, [rdi]; mov qword [rdi], 0;
+// done: ret`.  As sqlite3_free does, it returns without writing RAX where
+// its argument is null.
+constexpr uint8_t ReleaseCode[] = {0x48, 0x85, 0xFF, 0x74, 0x0A, 0x48,
+                                   0x8B, 0x07, 0x48, 0xC7, 0x07, 0x00,
+                                   0x00, 0x00, 0x00, 0xC3};
+
+/// \p Code after ReleaseCode, which it calls at Text.
+std::vector<uint8_t> afterRelease(std::initializer_list<uint8_t> Code) {
+  std::vector<uint8_t> All(std::begin(ReleaseCode), std::end(ReleaseCode));
+  All.insert(All.end(), Code);
+  return All;
+}
+
+TEST(SysVCallContract, AFunctionAndTheWrapperThatHandsItsResultBackRun) {
+  // drop(o): `mov rdi, [rdi+8]; jmp release`, as sqlite3BtreeClearCursor
+  // ends in sqlite3_free.  The wrapper returns a value only if release
+  // does, and release's result is read only if the wrapper returns one:
+  // neither does, and a null argument is no trap.
+  // user(o): `call drop; call release; xor eax, eax; ret`.
+  constexpr va_t Release = Text, Drop = Text + 0x10, User = Text + 0x20;
+  const BinaryImage Img = makeImportImage(
+      afterRelease({0x48, 0x8B, 0x7F, 0x08, // drop: mov rdi, [rdi+8]
+                    0xEB, 0xEA,             // jmp release
+                    0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+                    0x53,                         // user: push rbx
+                    0x48, 0x89, 0xFB,             // mov rbx, rdi
+                    0xE8, 0xE7, 0xFF, 0xFF, 0xFF, // call drop
+                    0x48, 0x89, 0xDF,             // mov rdi, rbx
+                    0xE8, 0xCF, 0xFF, 0xFF, 0xFF, // call release
+                    0x31, 0xC0,                   // xor eax, eax
+                    0x5B,                         // pop rbx
+                    0xC3}),                       // ret
+      {{Release, "release"}, {Drop, "drop"}, {User, "user"}}, {});
+  const std::string Source = liftEntries(Img, {Release, Drop, User});
+  EXPECT_NE(Source.find("\nvoid release("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\nvoid drop("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  int64_t cell = 7;
+  struct { int64_t first; void *owned; } o = {9, 0};
+  drop(&o);
+  if (o.first != 9)
+    return 1;
+  o.owned = &cell;
+  drop(&o);
+  if (cell != 0)
+    return 2;
+  cell = 3;
+  if (user((int64_t)(intptr_t)&o) != 0 || cell != 0 || o.first != 0)
+    return 3;
+  return 0;
+}
+)");
+}
+
+TEST(SysVCallContract, TheBytesACallThatReturnsNothingLeftReachNoValue) {
+  // both(p, a, b): `xor ebx, ebx; test esi, esi; sete bl; call release;
+  // test r12d, r12d; setne al; and ebx, eax; mov eax, ebx`.  EAX above AL is
+  // what release left; EBX holds a zero-extended flag, so the AND reads AL
+  // alone.  mark(p, q, a): `call release; test r12d, r12d; setne al;
+  // shl eax, 6; mov [rbx], al; xor eax, eax`: the shift moves nothing down
+  // into AL.
+  // Neither reads a result of release, which returns none.
+  constexpr va_t Release = Text, Both = Text + 0x10, Mark = Text + 0x40;
+  const BinaryImage Img = makeImportImage(
+      afterRelease({0x53,                         // both: push rbx
+                    0x41, 0x54,                   // push r12
+                    0x48, 0x83, 0xEC, 0x08,       // sub rsp, 8
+                    0x41, 0x89, 0xD4,             // mov r12d, edx
+                    0x31, 0xDB,                   // xor ebx, ebx
+                    0x85, 0xF6,                   // test esi, esi
+                    0x0F, 0x94, 0xC3,             // sete bl
+                    0xE8, 0xDA, 0xFF, 0xFF, 0xFF, // call release
+                    0x45, 0x85, 0xE4,             // test r12d, r12d
+                    0x0F, 0x95, 0xC0,             // setne al
+                    0x21, 0xC3,                   // and ebx, eax
+                    0x89, 0xD8,                   // mov eax, ebx
+                    0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+                    0x41, 0x5C,                   // pop r12
+                    0x5B,                         // pop rbx
+                    0xC3,                         // ret
+                    0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+                    0x53,                         // mark: push rbx
+                    0x41, 0x54,                   // push r12
+                    0x48, 0x83, 0xEC, 0x08,       // sub rsp, 8
+                    0x48, 0x89, 0xF3,             // mov rbx, rsi
+                    0x41, 0x89, 0xD4,             // mov r12d, edx
+                    0xE8, 0xAE, 0xFF, 0xFF, 0xFF, // call release
+                    0x45, 0x85, 0xE4,             // test r12d, r12d
+                    0x0F, 0x95, 0xC0,             // setne al
+                    0xC1, 0xE0, 0x06,             // shl eax, 6
+                    0x88, 0x03,                   // mov [rbx], al
+                    0x31, 0xC0,                   // xor eax, eax
+                    0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+                    0x41, 0x5C,                   // pop r12
+                    0x5B,                         // pop rbx
+                    0xC3}),                       // ret
+      {{Release, "release"}, {Both, "both"}, {Mark, "mark"}}, {});
+  const std::string Source = liftEntries(Img, {Release, Both, Mark});
+  EXPECT_NE(Source.find("\nvoid release("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  int64_t cell = 5;
+  unsigned char flag = 0xFF;
+  if (both((int64_t)(intptr_t)&cell, 0, 3) != 1 || cell != 0)
+    return 1;
+  if (both(0, 0, 0) != 0 || both(0, 2, 5) != 0 || both(0, 0, 1) != 1)
+    return 2;
+  mark(0, &flag, 1);
+  if (flag != 0x40)
+    return 3;
+  mark(0, &flag, 0);
+  return flag;
+}
+)");
+}
+
+TEST(SysVCallContract, AConstantTheCodeHeldIsNoResult) {
+  // reset(p): `test rdi, rdi; je done; xor eax, eax; mov [rdi], ax;
+  // mov qword [rdi+8], 0; done: ret`, as sqlite3DeleteColumnNames: the zero
+  // in EAX is what the store needed, beside a path that never wrote RAX.
+  // finish(p, f): `test esi, esi; je tail; mov eax, 1; mov [rdi+16], eax;
+  // ret; tail: jmp release`, as sqlite3ExprAttachSubtrees: a function that
+  // meant to return the one would not hand back what release left.
+  constexpr va_t Reset = Text, Release = Text + 0x20, Finish = Text + 0x30,
+                 User = Text + 0x40;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x85, 0xFF,                               // reset: test rdi, rdi
+      0x74, 0x0D,                                     // je done
+      0x31, 0xC0,                                     // xor eax, eax
+      0x66, 0x89, 0x07,                               // mov [rdi], ax
+      0x48, 0xC7, 0x47, 0x08, 0x00, 0x00, 0x00, 0x00, // mov qword [rdi+8], 0
+      0xC3,                                           // done: ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0x48, 0x85, 0xFF, // release: test rdi, rdi
+      0x74, 0x0A,                                     // je done
+      0x48, 0x8B, 0x07,                               // mov rax, [rdi]
+      0x48, 0xC7, 0x07, 0x00, 0x00, 0x00, 0x00,       // mov qword [rdi], 0
+      0xC3,                                           // done: ret
+      0x85, 0xF6,                                     // finish: test esi, esi
+      0x74, 0x09,                                     // je tail
+      0xB8, 0x01, 0x00, 0x00, 0x00,                   // mov eax, 1
+      0x89, 0x47, 0x10,                               // mov [rdi+16], eax
+      0xC3,                                           // ret
+      0xEB, 0xE1,                                     // tail: jmp release
+      0xCC,
+      0x53,                         // user: push rbx
+      0x48, 0x89, 0xFB,             // mov rbx, rdi
+      0xE8, 0xB7, 0xFF, 0xFF, 0xFF, // call reset
+      0x48, 0x89, 0xDF,             // mov rdi, rbx
+      0xBE, 0x01, 0x00, 0x00, 0x00, // mov esi, 1
+      0xE8, 0xDA, 0xFF, 0xFF, 0xFF, // call finish
+      0x48, 0x89, 0xDF,             // mov rdi, rbx
+      0x31, 0xF6,                   // xor esi, esi
+      0xE8, 0xD0, 0xFF, 0xFF, 0xFF, // call finish
+      0x31, 0xC0,                   // xor eax, eax
+      0x5B,                         // pop rbx
+      0xC3};                        // ret
+  const BinaryImage Img = makeImportImage(Code,
+                                          {{Reset, "reset"},
+                                           {Release, "release"},
+                                           {Finish, "finish"},
+                                           {User, "user"}},
+                                          {});
+  const std::string Source = liftEntries(Img, {Reset, Release, Finish, User});
+  EXPECT_NE(Source.find("\nvoid reset("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\nvoid finish("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  struct { int64_t first; int64_t second; int32_t third; } o = {0x71111,
+                                                                0x2222, 3};
+  reset(0);
+  finish(0, 0);
+  if (user((int64_t)(intptr_t)&o) != 0)
+    return 1;
+  return o.first == 0 && o.second == 0 && o.third == 1 ? 0 : 2;
+}
+)");
+}
+
+TEST(SysVCallContract, AFloatResultReadsNoIntegerItsFunctionHandsBack) {
+  // measure(p): `movsd xmm0, [rdi+8]; ...; mov rdi, [rdi]; call release;
+  // movsd xmm0, [rsp+8]; ret`, as sqlite3_column_double ends in
+  // sqlite3_mutex_leave: it returns XMM0, and RAX is as release left it.
+  // whole(p) reads the double.  release still returns no value.
+  constexpr va_t Release = Text, Measure = Text + 0x10, Whole = Text + 0x40;
+  const BinaryImage Img = makeImportImage(
+      afterRelease(
+          {0x53,                               // measure: push rbx
+           0x48, 0x83, 0xEC, 0x10,             // sub rsp, 16
+           0xF2, 0x0F, 0x10, 0x47, 0x08,       // movsd xmm0, [rdi+8]
+           0xF2, 0x0F, 0x11, 0x44, 0x24, 0x08, // movsd [rsp+8], xmm0
+           0x48, 0x8B, 0x3F,                   // mov rdi, [rdi]
+           0xE8, 0xD8, 0xFF, 0xFF, 0xFF,       // call release
+           0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, // movsd xmm0, [rsp+8]
+           0x48, 0x83, 0xC4, 0x10,             // add rsp, 16
+           0x5B,                               // pop rbx
+           0xC3,                               // ret
+           0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+           0xCC, 0xCC, 0xCC, 0xCC, 0x48, 0x83, 0xEC, 0x08, // whole: sub rsp, 8
+           0xE8, 0xC7, 0xFF, 0xFF, 0xFF,                   // call measure
+           0xF2, 0x0F, 0x2C, 0xC0, // cvttsd2si eax, xmm0
+           0x48, 0x83, 0xC4, 0x08, // add rsp, 8
+           0xC3}),                 // ret
+      {{Release, "release"}, {Measure, "measure"}, {Whole, "whole"}}, {});
+  const std::string Source = liftEntries(Img, {Release, Measure, Whole});
+  EXPECT_NE(Source.find("\nvoid release("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\ndouble measure("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  int64_t cell = 6;
+  struct { void *owned; double value; } o = {0, 42.5};
+  if (whole((int64_t)(intptr_t)&o) != 42)
+    return 1;
+  o.owned = &cell;
+  return whole((int64_t)(intptr_t)&o) == 42 && cell == 0 ? 0 : 2;
+}
+)");
+}
+
+TEST(SysVCallContract, ACalleeThatLeavesForUnknownCodeStillReadsItsArguments) {
+  // size(db, p): `cmp rsi, [rdi+8]; jae other; mov eax, 0x80; ret; other:
+  // mov rax, [rdi+0x18]; mov rdi, rsi; jmp rax`, as sqlite3DbMallocSize
+  // reads both its arguments before it jumps to the allocator's routine.
+  // What that routine reads is unknown, so size has no summary of its entry
+  // reads; it reads RDI and RSI for certain.  note(db, p) calls it with
+  // both as they came, and drop(db, p) jumps to note the same way: each
+  // passes both on.
+  constexpr va_t Size = Text, Note = Text + 0x20, Drop = Text + 0x30;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x3B, 0x77, 0x08,       // size: cmp rsi, [rdi+8]
+      0x73, 0x06,                   // jae other
+      0xB8, 0x80, 0x00, 0x00, 0x00, // mov eax, 0x80
+      0xC3,                         // ret
+      0x48, 0x8B, 0x47, 0x18,       // other: mov rax, [rdi+0x18]
+      0x48, 0x89, 0xF7,             // mov rdi, rsi
+      0xFF, 0xE0,                   // jmp rax
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+      0x53,                         // note: push rbx
+      0x48, 0x89, 0xFB,             // mov rbx, rdi
+      0xE8, 0xD7, 0xFF, 0xFF, 0xFF, // call size
+      0x01, 0x43, 0x10,             // add [rbx+16], eax
+      0x5B,                         // pop rbx
+      0xC3,                         // ret
+      0xCC, 0xCC, 0x48, 0x85, 0xFF, // drop: test rdi, rdi
+      0x74, 0x02,                   // je done
+      0xEB, 0xE9,                   // jmp note
+      0xC3};                        // done: ret
+  const BinaryImage Img = makeImportImage(
+      Code, {{Size, "size"}, {Note, "note"}, {Drop, "drop"}}, {});
+  const std::string Source = liftEntries(Img, {Size, Note, Drop});
+  const std::string Dropping = body(Source, "drop");
+  ASSERT_FALSE(Dropping.empty()) << Source;
+  EXPECT_NE(Dropping.find("arg1"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+static uint64_t seven(void *p) { return p ? 7 : 0; }
+int main(void) {
+  struct {
+    int64_t first;
+    uint64_t limit;
+    int32_t count;
+    int32_t pad;
+    void *measure;
+  } db = {0, 100, 0, 0, (void *)seven};
+  drop(0, 0);
+  drop(&db, 5);
+  if (db.count != 0x80)
+    return 1;
+  drop(&db, 200);
+  return db.count == 0x87 ? 0 : 2;
+}
+)");
+}
+
+TEST(SysVCallContract,
+     AnIntegerItsCallersReadIsTheResultBesideAReloadedDouble) {
+  // classify(i, r) returns what is_odd(i) returned where that is not zero,
+  // and otherwise -1 or 2 by how i compares with r, which it reloads into
+  // XMM0 to convert: as sqlite3IntFloatCompare does.  At its one `ret` the
+  // integer register merges a call's result, which a branch tested, with
+  // two constants, and the vector register a double the body read: the
+  // body alone reads as returning the double.  order(i, r) tests EAX after
+  // the call and nothing reads XMM0, so the integer is the result.
+  constexpr va_t IsOdd = Text, Classify = Text + 0x10, Order = Text + 0x50;
+  const std::vector<uint8_t> Code = {
+      0x89, 0xF8,       // is_odd: mov eax, edi
+      0x83, 0xE0, 0x01, // and eax, 1
+      0xC3,             // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0x53,                               // classify: push rbx
+      0x48, 0x83, 0xEC, 0x10,             // sub rsp, 16
+      0xF2, 0x0F, 0x11, 0x44, 0x24, 0x08, // movsd [rsp+8], xmm0
+      0x48, 0x89, 0xFB,                   // mov rbx, rdi
+      0xE8, 0xDD, 0xFF, 0xFF, 0xFF,       // call is_odd
+      0x85, 0xC0,                         // test eax, eax
+      0x75, 0x1A,                         // jne done
+      0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, // movsd xmm0, [rsp+8]
+      0xF2, 0x48, 0x0F, 0x2C, 0xD0,       // cvttsd2si rdx, xmm0
+      0xB8, 0xFF, 0xFF, 0xFF, 0xFF,       // mov eax, -1
+      0x48, 0x39, 0xD3,                   // cmp rbx, rdx
+      0x7C, 0x05,                         // jl done
+      0xB8, 0x02, 0x00, 0x00, 0x00,       // mov eax, 2
+      0x48, 0x83, 0xC4, 0x10,             // done: add rsp, 16
+      0x5B,                               // pop rbx
+      0xC3,                               // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0x48, 0x83, 0xEC, 0x08,                               // order: sub rsp, 8
+      0xE8, 0xB7, 0xFF, 0xFF, 0xFF,                         // call classify
+      0x85, 0xC0,                                           // test eax, eax
+      0x0F, 0x9F, 0xC0,                                     // setg al
+      0x0F, 0xB6, 0xC0,                                     // movzx eax, al
+      0x48, 0x83, 0xC4, 0x08,                               // add rsp, 8
+      0xC3};                                                // ret
+  const BinaryImage Img = makeImportImage(
+      Code, {{IsOdd, "is_odd"}, {Classify, "classify"}, {Order, "order"}}, {});
+  const std::string Source = liftEntries(Img, {IsOdd, Classify, Order});
+  EXPECT_EQ(Source.find("\ndouble classify("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  /* odd: is_odd's 1; even below r: -1; even at or above r: 2 */
+  return order(3, 9.0) == 1 && order(4, 9.0) == 0 && order(10, 9.0) == 1 ? 0
+                                                                         : 1;
+}
+)");
+}
+
+TEST(SysVCallContract, AFloatReadThroughAWrapperKeepsItsFunctionFloat) {
+  // pair leaves n + 1 in RAX and 2x in XMM0.  count tests the integer;
+  // pass only jumps to pair, handing back what it leaves; twice reads the
+  // double after calling pass.  That read is one of pair's double, so the
+  // integer count reads does not make pair return no float.
+  constexpr va_t Pair = Text, Count = Text + 0x10, Pass = Text + 0x30,
+                 Twice = Text + 0x40;
+  const std::vector<uint8_t> Code = {
+      0x48, 0x8D, 0x47, 0x01,                   // pair: lea rax, [rdi+1]
+      0xF2, 0x0F, 0x58, 0xC0,                   // addsd xmm0, xmm0
+      0xC3,                                     // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0x48, 0x83, 0xEC, 0x08,                   // count: sub rsp, 8
+      0xE8, 0xE7, 0xFF, 0xFF, 0xFF,             // call pair
+      0x48, 0x85, 0xC0,                         // test rax, rax
+      0x0F, 0x95, 0xC0,                         // setne al
+      0x0F, 0xB6, 0xC0,                         // movzx eax, al
+      0x48, 0x83, 0xC4, 0x08,                   // add rsp, 8
+      0xC3,                                     // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0xEB, 0xCE,                                           // pass: jmp pair
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,             // padding
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,             // padding
+      0x48, 0x83, 0xEC, 0x08,                               // twice: sub rsp, 8
+      0xE8, 0xE7, 0xFF, 0xFF, 0xFF,                         // call pass
+      0xF2, 0x48, 0x0F, 0x2C, 0xC0, // cvttsd2si rax, xmm0
+      0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+      0xC3};                        // ret
+  const BinaryImage Img = makeImportImage(
+      Code,
+      {{Pair, "pair"}, {Count, "count"}, {Pass, "pass"}, {Twice, "twice"}}, {});
+  const std::string Source = liftEntries(Img, {Pair, Count, Pass, Twice});
+  EXPECT_NE(Source.find("\ndouble pair("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\ndouble pass("), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) { return twice(3, 2.75) == 5 ? 0 : 1; }
+)");
+}
+
+TEST(SysVCallContract, WhatAStackProtectorCheckLeavesIsNoResult) {
+  // half(v) and bump(p) are protected as GCC protects them: each keeps the
+  // thread's guard in its frame and, before it returns, loads that copy
+  // into RAX and subtracts the live guard, leaving for __stack_chk_fail
+  // where they differ.  The difference is no value: GCC makes it in RAX
+  // where the function returns none there.  half returns the double it
+  // left in XMM0 and bump returns nothing.
+  constexpr va_t Half = Text, Bump = Text + 0x40, Fail = Text + 0x100;
+  std::vector<uint8_t> Code(0x110, 0xCC);
+  put(Code, Half,
+      {0x55,                                                 // push rbp
+       0x48, 0x89, 0xE5,                                     // mov rbp, rsp
+       0x48, 0x83, 0xEC, 0x10,                               // sub rsp, 0x10
+       0x64, 0x48, 0x8B, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, // mov rax, fs:0x28
+       0x48, 0x89, 0x45, 0xF8,                               // mov [rbp-8], rax
+       0xF2, 0x48, 0x0F, 0x2A, 0xC7, // cvtsi2sd xmm0, rdi
+       0xF2, 0x0F, 0x11, 0x45, 0xF0, // movsd [rbp-0x10], xmm0
+       0xF2, 0x0F, 0x10, 0x45, 0xF0, // movsd xmm0, [rbp-0x10]
+       0x48, 0x8B, 0x45, 0xF8,       // mov rax, [rbp-8]
+       0x64, 0x48, 0x2B, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, // sub rax, fs:0x28
+       0x75, 0x02,                                           // jne fail
+       0xC9,                                                 // leave
+       0xC3,                                                 // ret
+       0xE8, 0xC6, 0x00, 0x00, 0x00}); // call __stack_chk_fail
+  put(Code, Bump,
+      {0x55,                                                 // push rbp
+       0x48, 0x89, 0xE5,                                     // mov rbp, rsp
+       0x48, 0x83, 0xEC, 0x10,                               // sub rsp, 0x10
+       0x64, 0x48, 0x8B, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, // mov rax, fs:0x28
+       0x48, 0x89, 0x45, 0xF8,                               // mov [rbp-8], rax
+       0x48, 0x83, 0x07, 0x01,                               // add [rdi], 1
+       0x48, 0x8B, 0x45, 0xF8,                               // mov rax, [rbp-8]
+       0x64, 0x48, 0x2B, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, // sub rax, fs:0x28
+       0x75, 0x02,                                           // jne fail
+       0xC9,                                                 // leave
+       0xC3,                                                 // ret
+       0xE8, 0x91, 0x00, 0x00, 0x00}); // call __stack_chk_fail
+  put(Code, Fail, {0xC3});             // the stub
+  const BinaryImage Img = makeImportImage(
+      Code, {{Half, "half"}, {Bump, "bump"}}, {{Fail, "__stack_chk_fail"}});
+  const std::string Source = liftEntries(Img, {Half, Bump});
+  EXPECT_NE(Source.find("\ndouble half("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\nvoid bump("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+}
+
+TEST(SysVCallContract, AJumpToAFloatFunctionAfterAFloatWriteReturnsItsResult) {
+  // value(p, fn) loads a double into XMM0, returns it where p[0] is zero,
+  // and otherwise jumps to conv, which returns a double and calls through
+  // fn, so no summary lists its arguments: as sqlite3VdbeRealValue jumps to
+  // memRealValue.  The caller's SSA holds XMM0 by then, so the jump's
+  // result takes the value it has for the register after the call, and the
+  // return must read that same value.
+  constexpr va_t Conv = Text, Value = Text + 0x10;
+  std::vector<uint8_t> Code(0x30, 0xCC);
+  put(Code, Conv,
+      {0x48, 0x83, 0xEC, 0x08, // sub rsp, 8
+       0xFF, 0xD6,             // call rsi
+       0xF2, 0x0F, 0x58, 0xC0, // addsd xmm0, xmm0
+       0x48, 0x83, 0xC4, 0x08, // add rsp, 8
+       0xC3});                 // ret
+  put(Code, Value,
+      {0x48, 0x8B, 0x07,             // mov rax, [rdi]
+       0xF2, 0x0F, 0x10, 0x47, 0x08, // movsd xmm0, [rdi+8]
+       0x48, 0x85, 0xC0,             // test rax, rax
+       0x75, 0x01,                   // jne convert
+       0xC3,                         // ret
+       0x48, 0x89, 0xC7,             // convert: mov rdi, rax
+       0xEB, 0xDD});                 // jmp conv
+  const BinaryImage Img =
+      makeImportImage(Code, {{Conv, "conv"}, {Value, "value"}}, {});
+  const std::string Source = liftEntries(Img, {Conv, Value});
+  EXPECT_NE(Source.find("\ndouble value("), std::string::npos) << Source;
+  const std::string Body = body(Source, "value");
+  ASSERT_FALSE(Body.empty()) << Source;
+  EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("return conv("), std::string::npos) << Body;
+}
+
+TEST(SysVCallContract, AReturnThatHoldsACalleesLeftoverReturnsNoFloat) {
+  // step's body ends with a double in XMM0 and is typed as returning it.
+  // either jumps to step on one path and on the other returns after
+  // calling twice, which computes through XMM0 and returns an integer: at
+  // that return XMM0 holds what twice left.  A function that returns a
+  // float holds one at every return, so either returns none, as sqlite's
+  // sumStep, which ends in kahanBabuskaNeumaierStep on one path only.
+  constexpr va_t Step = Text, Twice = Text + 0x10, Either = Text + 0x30;
+  std::vector<uint8_t> Code(0x50, 0xCC);
+  put(Code, Step,
+      {0xF2, 0x0F, 0x58, 0x07, // addsd xmm0, [rdi]
+       0xF2, 0x0F, 0x11, 0x07, // movsd [rdi], xmm0
+       0xC3});                 // ret
+  put(Code, Twice,
+      {0xF2, 0x48, 0x0F, 0x2A, 0x07,               // cvtsi2sd xmm0, [rdi]
+       0xF2, 0x0F, 0x58, 0xC0,                     // addsd xmm0, xmm0
+       0xF2, 0x48, 0x0F, 0x2C, 0xC0,               // cvttsd2si rax, xmm0
+       0x48, 0x89, 0x07,                           // mov [rdi], rax
+       0xC3});                                     // ret
+  put(Code, Either, {0x48, 0x85, 0xD2,             // test rdx, rdx
+                     0x74, 0x02,                   // je count
+                     0xEB, 0xC9,                   // jmp step
+                     0x48, 0x83, 0xEC, 0x08,       // count: sub rsp, 8
+                     0x48, 0x89, 0xF7,             // mov rdi, rsi
+                     0xE8, 0xCD, 0xFF, 0xFF, 0xFF, // call twice
+                     0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+                     0xC3});                       // ret
+  const BinaryImage Img = makeImportImage(
+      Code, {{Step, "step"}, {Twice, "twice"}, {Either, "either"}}, {});
+  const std::string Source = liftEntries(Img, {Step, Twice, Either});
+  EXPECT_EQ(Source.find("\ndouble either("), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  double sum = 1.5;
+  long n = 3;
+  either((int64_t)&sum, (int64_t)&n, 1, 2.0);
+  if (sum != 3.5 || n != 3)
+    return 1;
+  either((int64_t)&sum, (int64_t)&n, 0, 2.0);
+  return sum == 3.5 && n == 6 ? 0 : 2;
+}
+)");
+}
+
+TEST(SysVCallContract, ARegisterACalleeNeverWritesKeepsTheCallersValue) {
+  // step(sum, v) and scale(x) write XMM0 and never RAX.  A compiler that
+  // has their bodies in view keeps a value in RAX across a call to them
+  // (GCC's -fipa-ra, as sqlite's kahanBabuskaNeumaierStepInt64 does): both
+  // adds the high part of v, then the low part it left in RAX; mix adds n,
+  // which it left there, to what scale returns.  The integer after the
+  // call is the caller's, not a result, and the double scale leaves is one,
+  // also where wrap only hands it back.
+  constexpr va_t Step = Text, Both = Text + 0x10, Scale = Text + 0x40,
+                 Mix = Text + 0x50, Wrap = Text + 0x70;
+  const std::vector<uint8_t> Code = {
+      0xF2, 0x0F, 0x58, 0x07,                   // step: addsd xmm0, [rdi]
+      0xF2, 0x0F, 0x11, 0x07,                   // movsd [rdi], xmm0
+      0xC3,                                     // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // padding
+      0x48, 0x83, 0xEC, 0x08,                   // both: sub rsp, 8
+      0x48, 0x89, 0xF0,                         // mov rax, rsi
+      0x25, 0xFF, 0x3F, 0x00, 0x00,             // and eax, 0x3fff
+      0x48, 0x29, 0xC6,                         // sub rsi, rax
+      0x66, 0x0F, 0xEF, 0xC0,                   // pxor xmm0, xmm0
+      0xF2, 0x48, 0x0F, 0x2A, 0xC6,             // cvtsi2sd xmm0, rsi
+      0xE8, 0xD3, 0xFF, 0xFF, 0xFF,             // call step
+      0x66, 0x0F, 0xEF, 0xC0,                   // pxor xmm0, xmm0
+      0xF2, 0x48, 0x0F, 0x2A, 0xC0,             // cvtsi2sd xmm0, rax
+      0x48, 0x83, 0xC4, 0x08,                   // add rsp, 8
+      0xEB, 0xC4,                               // jmp step
+      0xCC, 0xCC, 0xCC, 0xCC,                   // padding
+      0xF2, 0x0F, 0x58, 0xC0,                   // scale: addsd xmm0, xmm0
+      0xC3,                                     // ret
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,       // padding
+      0xCC, 0xCC, 0xCC, 0xCC, 0xCC,             // padding
+      0x48, 0x83, 0xEC, 0x08,                   // mix: sub rsp, 8
+      0x48, 0x89, 0xF8,                         // mov rax, rdi
+      0xE8, 0xE4, 0xFF, 0xFF, 0xFF,             // call scale
+      0x66, 0x0F, 0xEF, 0xC9,                   // pxor xmm1, xmm1
+      0xF2, 0x48, 0x0F, 0x2A, 0xC8,             // cvtsi2sd xmm1, rax
+      0xF2, 0x0F, 0x58, 0xC1,                   // addsd xmm0, xmm1
+      0x48, 0x83, 0xC4, 0x08,                   // add rsp, 8
+      0xC3,                                     // ret
+      0xCC, 0xCC,                               // padding
+      0x48, 0x83, 0xEC, 0x08,                   // wrap: sub rsp, 8
+      0xE8, 0xC7, 0xFF, 0xFF, 0xFF,             // call scale
+      0x48, 0x83, 0xC4, 0x08,                   // add rsp, 8
+      0xC3};                                    // ret
+  const BinaryImage Img = makeImportImage(Code,
+                                          {{Step, "step"},
+                                           {Both, "both"},
+                                           {Scale, "scale"},
+                                           {Mix, "mix"},
+                                           {Wrap, "wrap"}},
+                                          {});
+  const std::string Source = liftEntries(Img, {Step, Both, Scale, Mix, Wrap});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\ndouble scale(double"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("\ndouble wrap(double"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  double sum = 0.5;
+  /* 0x12345 = 0x10000 + 0x2345: the high part, then the low one */
+  both((int64_t)&sum, 0x12345);
+  if (sum != 74565.5)
+    return 1;
+  if (mix(3, 1.25) != 5.5)
+    return 2;
+  return wrap(2.5) == 5.0 ? 0 : 3;
+}
+)");
+}
+
+TEST(SysVCallContract, TheVectorCountSetBeforeABranchReachesTheVariadicCall) {
+  // report(ctx, fmt, ...) is variadic as GCC builds sqlite3ErrorMsg: it
+  // tests AL, saves the eight vector registers for va_arg and calls through
+  // a pointer of ctx, so no summary says what it reads.  check clears EAX
+  // once, as the result of the path that returns and as the count of the
+  // call in the block the branch selects, the way GCC compiles
+  // sqlite3ExprCheckHeight.  tested passes the EAX a `test eax, eax; je`
+  // has just found zero.  Neither call passes a vector register, so check
+  // and tested take two integers, and run and runs, which call them, have
+  // no double to pass.
+  constexpr va_t Report = Text, Check = Text + 0xA0, Run = Text + 0xD0,
+                 Tested = Text + 0xF0, Runs = Text + 0x110;
+  std::vector<uint8_t> Code(0x130, 0xCC);
+  put(Code, Report,
+      {0x55,                                     // push rbp
+       0x48, 0x89, 0xE5,                         // mov rbp, rsp
+       0x41, 0x54,                               // push r12
+       0x49, 0x89, 0xFC,                         // mov r12, rdi
+       0x53,                                     // push rbx
+       0x48, 0x81, 0xEC, 0xE0, 0x00, 0x00, 0x00, // sub rsp, 0xe0
+       0x48, 0x89, 0x95, 0x50, 0xFF, 0xFF, 0xFF, // mov [rbp-0xb0], rdx
+       0x48, 0x89, 0x8D, 0x58, 0xFF, 0xFF, 0xFF, // mov [rbp-0xa8], rcx
+       0x4C, 0x89, 0x85, 0x60, 0xFF, 0xFF, 0xFF, // mov [rbp-0xa0], r8
+       0x4C, 0x89, 0x8D, 0x68, 0xFF, 0xFF, 0xFF, // mov [rbp-0x98], r9
+       0x84, 0xC0,                               // test al, al
+       0x74, 0x23,                               // je spilled
+       0x0F, 0x29, 0x85, 0x70, 0xFF, 0xFF, 0xFF, // movaps [rbp-0x90], xmm0
+       0x0F, 0x29, 0x4D, 0x80,                   // movaps [rbp-0x80], xmm1
+       0x0F, 0x29, 0x55, 0x90,                   // movaps [rbp-0x70], xmm2
+       0x0F, 0x29, 0x5D, 0xA0,                   // movaps [rbp-0x60], xmm3
+       0x0F, 0x29, 0x65, 0xB0,                   // movaps [rbp-0x50], xmm4
+       0x0F, 0x29, 0x6D, 0xC0,                   // movaps [rbp-0x40], xmm5
+       0x0F, 0x29, 0x75, 0xD0,                   // movaps [rbp-0x30], xmm6
+       0x0F, 0x29, 0x7D, 0xE0,                   // movaps [rbp-0x20], xmm7
+       0x48, 0x8D, 0x45, 0x10,                   // spilled: lea rax, [rbp+0x10]
+       0x48, 0x8D, 0x95, 0x20, 0xFF, 0xFF, 0xFF, // lea rdx, [rbp-0xe0]
+       0xC7, 0x85, 0x20, 0xFF, 0xFF, 0xFF, 0x10,
+       0x00, 0x00, 0x00,                         // mov dword [rbp-0xe0], 0x10
+       0x48, 0x89, 0x85, 0x28, 0xFF, 0xFF, 0xFF, // mov [rbp-0xd8], rax
+       0x48, 0x8D, 0x85, 0x40, 0xFF, 0xFF, 0xFF, // lea rax, [rbp-0xc0]
+       0xC7, 0x85, 0x24, 0xFF, 0xFF, 0xFF, 0x30,
+       0x00, 0x00, 0x00,                         // mov dword [rbp-0xdc], 0x30
+       0x48, 0x89, 0x85, 0x30, 0xFF, 0xFF, 0xFF, // mov [rbp-0xd0], rax
+       0x48, 0x89, 0xF7,                         // mov rdi, rsi
+       0x48, 0x89, 0xD6,                         // mov rsi, rdx
+       0x41, 0xFF, 0x14, 0x24,                   // call [r12]
+       0x48, 0x81, 0xC4, 0xE0, 0x00, 0x00, 0x00, // add rsp, 0xe0
+       0x5B,                                     // pop rbx
+       0x41, 0x5C,                               // pop r12
+       0x5D,                                     // pop rbp
+       0xC3});                                   // ret
+  put(Code, Check, {0x31, 0xC0,                  // xor eax, eax
+                    0x48, 0x83, 0xFE, 0x07,      // cmp rsi, 0x7
+                    0x7F, 0x01,                  // jg report_it
+                    0xC3,                        // ret
+                    0x55,                        // report_it: push rbp
+                    0x48, 0x89, 0xF2,            // mov rdx, rsi
+                    0x48, 0x8D, 0x35, 0x00, 0x10, 0x00, 0x00, // lea rsi, [fmt]
+                    0x48, 0x89, 0xE5,                         // mov rbp, rsp
+                    0xE8, 0x44, 0xFF, 0xFF, 0xFF,             // call report
+                    0xB8, 0x01, 0x00, 0x00, 0x00,             // mov eax, 0x1
+                    0x5D,                                     // pop rbp
+                    0xC3});                                   // ret
+  put(Code, Run,
+      {0x48, 0x83, 0xEC, 0x08,       // sub rsp, 0x8
+       0xE8, 0xC7, 0xFF, 0xFF, 0xFF, // call check
+       0x48, 0x83, 0xC0, 0x01,       // add rax, 0x1
+       0x48, 0x83, 0xC4, 0x08,       // add rsp, 0x8
+       0xC3});                       // ret
+  put(Code, Tested, {0x89, 0xF0,     // mov eax, esi
+                     0x85, 0xC0,     // test eax, eax
+                     0x74, 0x01,     // je report_it
+                     0xC3,           // ret
+                     0x55,           // report_it: push rbp
+                     0x48, 0x8D, 0x35, 0x00, 0x10, 0x00, 0x00, // lea rsi, [fmt]
+                     0x48, 0x89, 0xE5,                         // mov rbp, rsp
+                     0xE8, 0xF9, 0xFE, 0xFF, 0xFF,             // call report
+                     0xB8, 0x01, 0x00, 0x00, 0x00,             // mov eax, 1
+                     0x5D,                                     // pop rbp
+                     0xC3});                                   // ret
+  put(Code, Runs,
+      {0x48, 0x83, 0xEC, 0x08,       // sub rsp, 8
+       0xE8, 0xD7, 0xFF, 0xFF, 0xFF, // call tested
+       0x48, 0x83, 0xC0, 0x01,       // add rax, 1
+       0x48, 0x83, 0xC4, 0x08,       // add rsp, 8
+       0xC3});                       // ret
+  const BinaryImage Img = makeImportImage(Code,
+                                          {{Report, "report"},
+                                           {Check, "check"},
+                                           {Run, "run"},
+                                           {Tested, "tested"},
+                                           {Runs, "runs"}},
+                                          {});
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries = {Report, Check, Run, Tested, Runs};
+  const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  for (const va_t Entry : {Check, Tested}) {
+    SCOPED_TRACE(Entry);
+    const auto Func = llvm::find_if(
+        Result.MedFuncs, [&](const MedFunc &F) { return F.Entry == Entry; });
+    ASSERT_NE(Func, Result.MedFuncs.end());
+    EXPECT_FALSE(llvm::any_of(Func->Params, [](const MedVar &P) {
+      return P.RegOff >= x86reg::VectorBase;
+    }));
+  }
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Img.Arch;
+  Options.Format = Img.Format;
+  Options.Image = &Img;
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  for (const char *Name : {"check", "run", "tested", "runs"}) {
+    SCOPED_TRACE(Name);
+    const std::string Body = body(Source, Name);
+    ASSERT_FALSE(Body.empty()) << Source;
+    EXPECT_EQ(Body.find("double"), std::string::npos) << Body;
+    EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+  }
+}
+
+TEST(SysVCallContract, AFrameBeyondTheLimitIsRefused) {
+  // big reserves 32 MiB with one `sub rsp`, as Go's reflect call
+  // trampolines from runtime.call16777216 up do, and reads an argument
+  // above it.  No stage follows a frame that large: the function is
+  // refused by name, not read with a stack pointer nothing tracks.  edge,
+  // whose frame is just inside the limit, converts.
+  constexpr va_t Big = Text, Edge = Text + 0x20;
+  std::vector<uint8_t> Code(0x40, 0xCC);
+  put(Code, Big,
+      {0x55,                                     // push rbp
+       0x48, 0x89, 0xE5,                         // mov rbp, rsp
+       0x48, 0x81, 0xEC, 0x00, 0x00, 0x00, 0x02, // sub rsp, 0x2000000
+       0x48, 0x8B, 0x84, 0x24, 0x10, 0x00, 0x00,
+       0x02,                                     // mov rax, [rsp+0x2000010]
+       0x48, 0x89, 0x04, 0x24,                   // mov [rsp], rax
+       0x48, 0x81, 0xC4, 0x00, 0x00, 0x00, 0x02, // add rsp, 0x2000000
+       0x5D,                                     // pop rbp
+       0xC3});                                   // ret
+  put(Code, Edge,
+      {0x55,                                     // push rbp
+       0x48, 0x89, 0xE5,                         // mov rbp, rsp
+       0x48, 0x81, 0xEC, 0xF0, 0xFF, 0xFF, 0x00, // sub rsp, 0xfffff0
+       0x48, 0x89, 0x7C, 0x24, 0x08,             // mov [rsp+8], rdi
+       0x48, 0x8B, 0x44, 0x24, 0x08,             // mov rax, [rsp+8]
+       0x48, 0x81, 0xC4, 0xF0, 0xFF, 0xFF, 0x00, // add rsp, 0xfffff0
+       0x5D,                                     // pop rbp
+       0xC3});                                   // ret
+  const BinaryImage Img =
+      makeImportImage(Code, {{Big, "big"}, {Edge, "edge"}}, {});
+  for (const auto &[Entry, Converts] :
+       {std::pair{Big, false}, std::pair{Edge, true}}) {
+    SCOPED_TRACE(Entry);
+    llvm::LLVMContext Ctx;
+    PipelineOptions Opts;
+    Opts.EmitDumpOutput = false;
+    Opts.OnlyFunctionEntries = {Entry};
+    const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+    EXPECT_EQ(Result.Success, Converts) << Result.Error;
+    if (!Converts)
+      EXPECT_NE(Result.Error.find("Stack frame larger than"), std::string::npos)
+          << Result.Error;
+  }
+}
+
+TEST(SysVCallContract, TheFramePointerAFunctionOnlyStoresIsItsCallersFrame) {
+  // keep_frame(buf) stores the RBP and the stack pointer it was entered
+  // with, as Go's gosave, mcall and morestack keep them in the goroutine's
+  // gobuf.  RBP is no parameter, and the function reads it no other way:
+  // it is the caller's frame, which C reads with
+  // __builtin_frame_address(1).
+  const std::vector<uint8_t> Code = {0x48, 0x89, 0x2F, // mov [rdi], rbp
+                                     0x48, 0x8D, 0x44, 0x24,
+                                     0x08,                   // lea rax, [rsp+8]
+                                     0x48, 0x89, 0x47, 0x08, // mov [rdi+8], rax
+                                     0xC3};                  // ret
+  const BinaryImage Img = makeImportImage(Code, {{Text, "keep_frame"}}, {});
+  const std::string Source = liftEntries(Img, {Text});
+  EXPECT_NE(Source.find("__builtin_frame_address(1)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  SCOPED_TRACE(Source);
+  compileAndRun(Source + R"(
+int main(void) {
+  uint64_t kept[2] = {0, 0};
+  /* A real call: inlined, the function would have no caller of its own. */
+  __typeof__(keep_frame) *volatile call = keep_frame;
+  call((void *)kept);
+  return kept[0] == (uintptr_t)__builtin_frame_address(0) ? 0 : 1;
+}
+)");
+}
+
+TEST(SysVCallContract, AFunctionThatOnlyStoresItsRegistersSavesAContext) {
+  // save_all(buf) stores the registers it was entered with, as a signal
+  // trampoline or Go's asyncPreempt and panicBounds keep the register
+  // file of the code they interrupt.  No caller gives a function a value
+  // in RAX: one that only stores it, and other caller-saved registers
+  // with it, saves a context.  RCX, RDX, RSI and R8 would carry arguments
+  // and stay parameters.  The registers no parameter carries are read
+  // from the machine, RBP as the caller's frame.
+  const std::vector<uint8_t> Code = {
+      0x48, 0x89, 0x07,                   // mov [rdi], rax
+      0x48, 0x89, 0x4F, 0x08,             // mov [rdi+8], rcx
+      0x48, 0x89, 0x57, 0x10,             // mov [rdi+0x10], rdx
+      0x48, 0x89, 0x5F, 0x18,             // mov [rdi+0x18], rbx
+      0x48, 0x89, 0x6F, 0x20,             // mov [rdi+0x20], rbp
+      0x48, 0x89, 0x77, 0x28,             // mov [rdi+0x28], rsi
+      0x4C, 0x89, 0x47, 0x30,             // mov [rdi+0x30], r8
+      0x4C, 0x89, 0x57, 0x38,             // mov [rdi+0x38], r10
+      0x4C, 0x89, 0x5F, 0x40,             // mov [rdi+0x40], r11
+      0x4C, 0x89, 0x67, 0x48,             // mov [rdi+0x48], r12
+      0xF3, 0x44, 0x0F, 0x7F, 0x47, 0x50, // movdqu [rdi+0x50], xmm8
+      0xC3};                              // ret
+  const BinaryImage Img = makeImportImage(Code, {{Text, "save_all"}}, {});
+  const std::string Source = liftEntries(Img, {Text});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  for (const char *Read :
+       {"%%rax, %0", "%%r10, %0", "%%r11, %0", "%%rbx, %0", "%%r12, %0",
+        "movdqu {%%xmm8, %0", "__builtin_frame_address(1)"})
+    EXPECT_NE(Source.find(Read), std::string::npos) << Read << "\n" << Source;
+  SCOPED_TRACE(Source);
+  // What the scratch registers hold is the machine's; the parameters and
+  // the caller's frame are what the caller gave.
+  compileAndRun(Source + R"(
+int main(void) {
+  _Alignas(16) uint64_t kept[12] = {0};
+  __typeof__(save_all) *volatile call = save_all;
+  call((void *)kept, 1, 2, 3, 4);
+  return kept[1] == 3 && kept[2] == 2 && kept[5] == 1 && kept[6] == 4 &&
+                 kept[4] == (uintptr_t)__builtin_frame_address(0)
+             ? 0
+             : 1;
+}
+)");
+}
+
+TEST(SysVCallContract, FourStoredArgumentsAreNoContextSave) {
+  // set4(obj, a, b, c, d) stores its four arguments, as any constructor
+  // does, and R10, which holds nothing it was given.  Four caller-saved
+  // registers are stored, but not RAX: the function keeps no register
+  // file, and R10 stays a value nothing defines.
+  const std::vector<uint8_t> Code = {
+      0x48, 0x89, 0x37,       // mov [rdi], rsi
+      0x48, 0x89, 0x57, 0x08, // mov [rdi+8], rdx
+      0x48, 0x89, 0x4F, 0x10, // mov [rdi+0x10], rcx
+      0x4C, 0x89, 0x47, 0x18, // mov [rdi+0x18], r8
+      0x4C, 0x89, 0x57, 0x20, // mov [rdi+0x20], r10
+      0xC3};                  // ret
+  const BinaryImage Img = makeImportImage(Code, {{Text, "set4"}}, {});
+  const std::string Source = liftEntries(Img, {Text});
+  EXPECT_EQ(Source.find("%%r10"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_trap"), std::string::npos) << Source;
+}
+
 } // namespace

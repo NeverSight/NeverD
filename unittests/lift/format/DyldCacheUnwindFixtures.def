@@ -1,0 +1,44 @@
+//===- DyldCacheUnwindFixtures.def - Cached unwind provider -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+NEVERD_CACHE_UNWIND_VALUE(size_t, kHeaderOffset, 0x600)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kTextDirectoryField, 136)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kTextCountField, 144)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kTextDirectory, 0x3c0)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kTextLoadAddress, 16)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kTextSizeField, 24)
+NEVERD_CACHE_UNWIND_VALUE(uint32_t, kTextBytes, 0x400)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kCodeOffset, 0x900)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kTrieOffset, 0x3280)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kTerminalFlagsOffset, 26)
+NEVERD_CACHE_UNWIND_VALUE(uint32_t, kSplitSlideVersion, 5)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kSubcacheDirectoryField, 392)
+NEVERD_CACHE_UNWIND_VALUE(uint32_t, kSubcacheRow, 0x380)
+NEVERD_CACHE_UNWIND_VALUE(uint8_t, kSubcacheUUID, 2)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kSubcacheVMField, 0x390)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kSubcacheSuffixField, 0x398)
+NEVERD_CACHE_UNWIND_TEXT(kSubcacheExt, ".01")
+NEVERD_CACHE_UNWIND_VALUE(uint64_t, kSubcacheBias, 0x10000)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kLinkeditCommand, 0x700)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kSymbolCommand, 0x748)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kDynamicSymbolCommand, 0x760)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kDataInCodeCommand, 0x7b0)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kFunctionStartsCommand, 0x7c0)
+NEVERD_CACHE_UNWIND_VALUE(uint32_t, kOriginalLinkedit, 0x3000)
+NEVERD_CACHE_UNWIND_VALUE(uint32_t, kSplitLinkedit, 0x400)
+NEVERD_CACHE_UNWIND_VALUE(size_t, kSplitLinkeditBytes, 0xc00)
+NEVERD_CACHE_UNWIND_TEXT(kProviderName, "___gxx_personality_v0")
+// Root has one child at offset 25. Its regular export has image offset 0x300.
+NEVERD_CACHE_UNWIND_TEXT(kProviderTrie,
+                         "\0\1___gxx_personality_v0\0\x19\3\0\x80\6")
+NEVERD_CACHE_UNWIND_TEXT(kCacheEnvironment, "NEVERD_DYLD_CACHE")
+NEVERD_CACHE_UNWIND_TEXT(kRealLibCxx, "/usr/lib/libc++.1.dylib")
+NEVERD_CACHE_UNWIND_TEXT(kCacheUnavailable,
+                         "set NEVERD_DYLD_CACHE to a cache containing libc++")
+NEVERD_CACHE_UNWIND_TEXT(kProviderFramesProperty, "cached_cxx_frames")
+
+#undef NEVERD_CACHE_UNWIND_TEXT
+#undef NEVERD_CACHE_UNWIND_VALUE

@@ -129,7 +129,8 @@ TEST_P(LinuxNetwork, FailedAdmissionDoesNotConsumeConnectionOrStream) {
             "1, connection index 0)");
   EXPECT_EQ(call(ServiceKind::SendTo, FD, Base + 66, 1), 1u);
   EXPECT_FALSE(call(ServiceKind::SendTo, FD, Base + 64, 1));
-  EXPECT_EQ(call(ServiceKind::SendTo, FD, UINT64_MAX, 0), 0u);
+  EXPECT_EQ(call(ServiceKind::SendTo, FD, UINT64_MAX, 0), uint64_t(-14));
+  EXPECT_EQ(call(ServiceKind::SendTo, FD, Layout.UserLimit, 0), 0u);
   EXPECT_FALSE(call(ServiceKind::ReceiveFrom, FD, 1, 2));
   EXPECT_EQ(call(ServiceKind::Read, FD, Base + 128, 4), 2u);
   uint8_t Read[2];
@@ -137,6 +138,58 @@ TEST_P(LinuxNetwork, FailedAdmissionDoesNotConsumeConnectionOrStream) {
   EXPECT_EQ(Read[0], 7);
   EXPECT_EQ(Read[1], 8);
   EXPECT_EQ(call(ServiceKind::ReceiveFrom, FD, 1, 2), 0u);
+}
+TEST_P(LinuxNetwork, NullPeerIgnoresAddressLengthForStreamTransfers) {
+  const auto FD = open();
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
+  const uint8_t Bytes[] = {1, 2, 3};
+  llvm::cantFail(cpu().write(Base + 64, Bytes));
+  EXPECT_FALSE(call(ServiceKind::SendTo, FD, Base + 64, 3, 0, Base, 16));
+  EXPECT_FALSE(
+      call(ServiceKind::ReceiveFrom, FD, Base + 128, 2, 0, Base, Base + 160));
+
+  ASSERT_EQ(call(ServiceKind::SendTo, FD, Base + 64, 3, 0, 0, UINT32_MAX), 2u);
+  EXPECT_EQ(call(ServiceKind::Write, FD, Base + 66, 1), 1u);
+  ASSERT_EQ(call(ServiceKind::ReceiveFrom, FD, Base + 128, 2, 0, 0, UINT64_MAX),
+            2u);
+  uint8_t Read[2];
+  llvm::cantFail(cpu().read(Base + 128, Read));
+  EXPECT_EQ(Read[0], 7);
+  EXPECT_EQ(Read[1], 8);
+}
+TEST_P(LinuxNetwork, SocketTransferBufferExtentAndDescriptorErrorOrder) {
+  constexpr uint64_t MaxCount = 0x7ffff000; // MAX_RW_COUNT with 4 KiB pages.
+  for (auto Kind : {ServiceKind::SendTo, ServiceKind::ReceiveFrom}) {
+    EXPECT_EQ(call(Kind, 99, UINT64_MAX, 0), uint64_t(-14));
+    EXPECT_EQ(call(Kind, 99, Layout.UserLimit, 0), uint64_t(-9));
+    EXPECT_EQ(call(Kind, 99, Layout.UserLimit - MaxCount, UINT64_MAX),
+              uint64_t(-9));
+    EXPECT_EQ(call(Kind, 99, Layout.UserLimit - MaxCount + 1, UINT64_MAX),
+              uint64_t(-14));
+  }
+  auto &Stream = Options.LinuxNetwork->Connections.front();
+  Stream.ExpectedSend = {1, 2, 1, 2};
+  Stream.Receive = {7, 8, 9, 10};
+  const auto FD = open();
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
+  for (auto Kind : {ServiceKind::Read, ServiceKind::Write}) {
+    EXPECT_EQ(call(Kind, 99, UINT64_MAX, 0), uint64_t(-9));
+    EXPECT_EQ(call(Kind, FD, Base + 64, UINT64_MAX), uint64_t(-14));
+  }
+  // The full imported range must fit even when only two bytes can transfer.
+  for (auto Kind : {ServiceKind::SendTo, ServiceKind::ReceiveFrom,
+                    ServiceKind::Read, ServiceKind::Write})
+    EXPECT_EQ(call(Kind, FD, Layout.UserLimit - 2, 3), uint64_t(-14));
+
+  const uint8_t Bytes[] = {1, 2};
+  llvm::cantFail(cpu().write(Base + 64, Bytes));
+  EXPECT_EQ(call(ServiceKind::SendTo, FD, Base + 64, UINT64_MAX), 2u);
+  EXPECT_EQ(call(ServiceKind::Write, FD, Base + 64, MaxCount + 1), 2u);
+  EXPECT_EQ(call(ServiceKind::ReceiveFrom, FD, Base + 128, UINT64_MAX), 2u);
+  EXPECT_EQ(call(ServiceKind::Read, FD, Base + 130, MaxCount + 1), 2u);
+  std::vector<uint8_t> Received(4);
+  llvm::cantFail(cpu().read(Base + 128, Received));
+  EXPECT_EQ(Received, Stream.Receive);
 }
 TEST_P(LinuxNetwork, MismatchOffsetsUseSharedCursorWithoutConsumingPrefix) {
   for (uint64_t Prefix : {1u, 2u}) {
@@ -310,7 +363,8 @@ TEST_P(LinuxNetwork, DatagramBoundariesPeekTruncationAndAliasesAreShared) {
                           [](uint8_t V) { return V == 0xa5; }));
   EXPECT_EQ(call(ServiceKind::ReceiveFrom, Alias, Base + 128, 1), 1u);
   EXPECT_FALSE(call(ServiceKind::ReceiveFrom, Alias, Base + 128, 3));
-  EXPECT_EQ(call(ServiceKind::SendTo, Alias, UINT64_MAX, 0), 0u);
+  EXPECT_EQ(call(ServiceKind::SendTo, Alias, UINT64_MAX, 0), uint64_t(-14));
+  EXPECT_EQ(call(ServiceKind::SendTo, Alias, Layout.UserLimit, 0), 0u);
   // read(0) leaves the empty datagram queued; recv(0) consumes it.
   EXPECT_EQ(call(ServiceKind::Read, Alias, 1, 0), 0u);
   EXPECT_EQ(call(ServiceKind::ReceiveFrom, Alias, 1, 0, 2), 0u);

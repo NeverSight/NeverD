@@ -71,10 +71,11 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
 
 /// Follow an Itanium `std::type_info *` to its mangled name.
 ///
-/// The ABI fixes the layout: a vtable pointer followed by a `const char *`
-/// naming the type.  Returns an empty string when the chain could not be
-/// followed inside mapped, readable data, because a guessed name would be
-/// indistinguishable from a proven one to every consumer downstream.
+/// The descriptor holds a vtable pointer followed by the name word. Apple arm64
+/// uses the high bit of that word to mark a non-unique type name. Returns an
+/// empty string when the chain could not be followed inside mapped, readable
+/// data, because a guessed name would be indistinguishable from a proven one to
+/// every consumer downstream.
 std::string readItaniumTypeName(const BinaryImage &Img, va_t TypeInfoVA);
 
 } // namespace neverd::dwarf_eh

@@ -12,10 +12,12 @@
 
 #include "neverd/ir/low/GoCallContract.h"
 
+#include "neverd/ir/Limits.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <map>
@@ -193,9 +195,186 @@ goWriteBarrierArguments(const BinaryImage &Img, va_t Entry) {
   return Arguments;
 }
 
+bool goAssemblyCallsPlatformCode(const BinaryImage &Img, va_t Caller,
+                                 llvm::ArrayRef<LowBlock> Blocks, size_t Block,
+                                 size_t Call) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  const std::optional<uint64_t> Context = goClosureContextRegister(Img.Arch);
+  // x86-64's routines of this kind switch to the system stack before the
+  // call (`runtime.nanotime1`, `time.now`).  With the stack pointer they
+  // hold in R12 kept, the frame they return to is known again, and the
+  // source frame check refuses them for the return address the call pushed
+  // on the other stack, which it cannot place.  Until it follows a stack
+  // switch, an x86-64 call of this kind stays Go's, which keeps less.
+  if (Img.Arch != Arch::AArch64)
+    return false;
+  if (!Module || !Module->RegisterArguments || !Context ||
+      !isGoCode(Img, Caller) || !inRanges(Module->GoAssembly, Caller) ||
+      Block >= Blocks.size() || Call >= Blocks[Block].Ops.size() ||
+      Blocks[Block].Ops[Call].Opcode != NdOp::INDIR_CALL ||
+      Blocks[Block].Ops[Call].NumInputs < 1)
+    return false;
+  // The blocks behind the call, as far back as the limit, by index.
+  std::map<int, size_t> IndexOf;
+  for (size_t I = 0; I < Blocks.size(); ++I)
+    IndexOf.emplace(Blocks[I].Id, I);
+  std::map<size_t, unsigned> Depth{{Block, 0}};
+  for (std::vector<size_t> Work{Block}; !Work.empty();) {
+    const size_t At = Work.back();
+    Work.pop_back();
+    if (Depth[At] >= limits::ir::kGoIndirectCallTargetBlocks)
+      continue;
+    for (const int Pred : Blocks[At].Preds)
+      if (const auto It = IndexOf.find(Pred); It != IndexOf.end())
+        if (Depth.try_emplace(It->second, Depth[At] + 1).second)
+          Work.push_back(It->second);
+  }
+  // Each register and temporary holds a numbered value.  A copy keeps the
+  // number and any other operation gives its result its own; a load's
+  // result remembers the number of the address it read.  A register no
+  // operation has written since the last point that changed them all, the
+  // edge of these blocks, a call or a join of blocks that disagree, holds
+  // the value that point gave it.
+  using Key = std::pair<VnodeSpace, uint64_t>;
+  struct State {
+    std::map<Key, unsigned> Known;
+    unsigned Since = 0;
+    bool operator==(const State &) const = default;
+  };
+  enum : unsigned { Held, Result, Edge, AfterCall, Join, Merged };
+  std::map<std::tuple<unsigned, size_t, size_t, Key>, unsigned> Numbers;
+  const auto Number = [&](unsigned Kind, size_t A, size_t B, Key K = {}) {
+    return Numbers.try_emplace({Kind, A, B, K}, Numbers.size()).first->second;
+  };
+  const auto ValueOf = [&](const State &S, const NdVar &V) {
+    const Key K{V.Space, V.Offset};
+    if (const auto It = S.Known.find(K); It != S.Known.end())
+      return It->second;
+    return Number(Held, S.Since, 0, K);
+  };
+  const uint64_t Word = getTargetRegInfo(Img.Arch).PointerSize;
+  std::map<unsigned, unsigned> LoadedFrom;
+  const auto Run = [&](State &S, size_t At, size_t End) {
+    for (size_t I = 0; I < End; ++I) {
+      const LowOp &Op = Blocks[At].Ops[I];
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        // A call may change any register, and may return the target.
+        S.Known.clear();
+        S.Since = Number(AfterCall, At, I);
+        continue;
+      }
+      if (!Op.Output.isReg() && !Op.Output.isTemp())
+        continue;
+      const Key Out{Op.Output.Space, Op.Output.Offset};
+      const bool Whole = Op.Output.Size == Word;
+      // A copy, or the sum with zero an address without a displacement is.
+      const bool Same =
+          Whole && Op.NumInputs >= 1 && !Op.Inputs[0].isConst() &&
+          Op.Inputs[0].Size == Word &&
+          ((Op.Opcode == NdOp::COPY && Op.NumInputs == 1) ||
+           ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+            Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+            Op.Inputs[1].Offset == 0));
+      if (Same) {
+        const unsigned Value = ValueOf(S, Op.Inputs[0]);
+        S.Known[Out] = Value;
+      } else {
+        const unsigned Value = Number(Result, At, I);
+        if (Whole && Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+          LoadedFrom[Value] = ValueOf(S, Op.Inputs[0]);
+        S.Known[Out] = Value;
+      }
+    }
+  };
+  // What the registers hold where a block begins: what every block that
+  // leads to it leaves, where they agree.
+  std::map<size_t, State> Leaves;
+  const auto Enters = [&](size_t At) -> std::optional<State> {
+    const LowBlock &B = Blocks[At];
+    State Unknown;
+    Unknown.Since = Number(Edge, At, 0);
+    if (B.Preds.empty() || !B.ExceptionalPreds.empty() ||
+        Depth.at(At) >= limits::ir::kGoIndirectCallTargetBlocks)
+      return Unknown;
+    llvm::SmallVector<const State *, 4> From;
+    for (const int Pred : B.Preds) {
+      const auto Index = IndexOf.find(Pred);
+      if (Index == IndexOf.end() || !Depth.count(Index->second))
+        return Unknown;
+      if (const auto It = Leaves.find(Index->second); It != Leaves.end())
+        From.push_back(&It->second);
+    }
+    if (From.empty())
+      return std::nullopt;
+    State S = *From.front();
+    if (llvm::all_of(From, [&](const State *P) { return *P == S; }))
+      return S;
+    const bool SameSince =
+        llvm::all_of(From, [&](const State *P) { return P->Since == S.Since; });
+    std::set<Key> Keys;
+    for (const State *P : From)
+      for (const auto &Item : P->Known)
+        Keys.insert(Item.first);
+    S.Known.clear();
+    if (!SameSince)
+      S.Since = Number(Join, At, 0);
+    for (const Key &K : Keys) {
+      const NdVar V{K.first, K.second, static_cast<uint16_t>(Word)};
+      const unsigned First = ValueOf(*From.front(), V);
+      if (llvm::all_of(From,
+                       [&](const State *P) { return ValueOf(*P, V) == First; }))
+        S.Known[K] = First;
+      else if (SameSince)
+        S.Known[K] = Number(Merged, At, 0, K);
+    }
+    return S;
+  };
+  // Each pass settles at least one more block or changes nothing; a value
+  // changes at most twice, from unset to a number to the block's own.
+  bool Changed = true;
+  for (size_t Pass = 0; Changed && Pass <= 2 * Depth.size() + 1; ++Pass) {
+    Changed = false;
+    for (const auto &[At, Level] : Depth) {
+      (void)Level;
+      std::optional<State> S = Enters(At);
+      if (!S)
+        continue;
+      Run(*S, At, Blocks[At].Ops.size());
+      const auto [It, New] = Leaves.try_emplace(At, *S);
+      if (!New && It->second == *S)
+        continue;
+      It->second = std::move(*S);
+      Changed = true;
+    }
+  }
+  if (Changed)
+    return false;
+  std::optional<State> S = Enters(Block);
+  if (!S)
+    return false;
+  Run(*S, Block, Call);
+  const NdVar &Target = Blocks[Block].Ops[Call].Inputs[0];
+  if (Target.isConst())
+    return false;
+  const auto Loaded = LoadedFrom.find(ValueOf(*S, Target));
+  return Loaded != LoadedFrom.end() &&
+         Loaded->second != ValueOf(*S, NdVar::reg(*Context, Word));
+}
+
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
                                             va_t Callee) {
   if (!isGoCode(Img, Caller))
+    return CallRegisterContract::Platform;
+  // A routine the pclntab does not record is none the Go toolchain built: a
+  // libc routine reached through its stub follows the platform's convention
+  // and keeps its callee-saved registers, as Darwin's
+  // `runtime.mmap_trampoline` expects of X19, where it holds its arguments.
+  // Code with a record but no frame data, as a linker trampoline into a Go
+  // function is, stays under Go's.
+  if (const auto &Module = Img.ExceptionMetadata.GoModule;
+      Callee != InvalidVA && Module && !Module->FrameArguments.empty() &&
+      !isGoCode(Img, Callee) && !goRecordsFunction(Img, Callee))
     return CallRegisterContract::Platform;
   // Compiled code of a register-ABI image follows the internal ABI, so
   // its x86-64 calls keep X15 zero.
@@ -486,6 +665,12 @@ bool goTakesStackArguments(const BinaryImage &Img, va_t Entry) {
           (Module->RegisterArguments && inRanges(Module->GoAssembly, Entry)));
 }
 
+bool goRecordsStackArguments(const BinaryImage &Img, va_t Entry) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && Module->StackArguments && isGoCode(Img, Entry) &&
+         goFrameArgumentBytes(Img, Entry).value_or(0) != 0;
+}
+
 bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register) {
   const Arch A = TRI.TheArch;
   // The stack ABI passes floating arguments on the stack too: a vector
@@ -699,17 +884,25 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
       if (At != Phase::Spilling || !Slot || Slot->Base != StackPointer ||
           Slot->Offset < 8)
         return std::nullopt;
-      // Floating arguments (X0-X14, F0-F15) are not modelled: a path that
-      // spills one names an argument list this one would not complete.
-      if (Op.Inputs[1].isReg() &&
-          isGoGeneralRegister(Img.Arch, Op.Inputs[1].Offset)) {
+      // A floating argument is spilled as the scalar it is, the register's
+      // low four or eight bytes: `movsd [rsp+8], xmm0` stores them through
+      // a temporary, `fmovd F0, 8(RSP)` as D0.  Only the first eight
+      // floating registers are modelled, those a summary's vector rows name
+      // (kX64VectorArgumentFamilies): a path that spills a later one names
+      // an argument list no call would complete.
+      const auto Argument = [&](uint64_t Register) {
+        return isGoGeneralRegister(Img.Arch, Register) ||
+               llvm::is_contained(goFloatArgumentRegisters(Img.Arch).take_front(
+                                      kX64VectorArgumentFamilies),
+                                  Register);
+      };
+      if (Op.Inputs[1].isReg() && Argument(Op.Inputs[1].Offset)) {
         Spills.push_back(
             {Op.Inputs[1].Offset, Op.Inputs[1].Size, Slot->Offset});
       } else if (const auto Low = Op.Inputs[1].isTemp()
                                       ? Narrowed.find(Op.Inputs[1].Offset)
                                       : Narrowed.end();
-                 Low != Narrowed.end() &&
-                 isGoGeneralRegister(Img.Arch, Low->second.first)) {
+                 Low != Narrowed.end() && Argument(Low->second.first)) {
         Spills.push_back({Low->second.first, Low->second.second, Slot->Offset});
       } else {
         return std::nullopt;

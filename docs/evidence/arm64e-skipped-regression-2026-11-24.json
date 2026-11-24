@@ -1,0 +1,809 @@
+{
+  "baseline_revision": "d9b476c234a13f8f19aed85508c1d79c660fcfa8",
+  "tested_revision": "7a0540326952f3c0164fc4ed78546f2b1344e68f",
+  "originally_skipped": 39,
+  "now_passed": 36,
+  "native_unavailable": [
+    "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+    "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+    "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+  ],
+  "execution_evidence": {
+    "installer_and_entry": "https://github.com/gmh5225/test_mac_intel/actions/runs/45303500369",
+    "apple_frontend_source_backend": "https://github.com/gmh5225/test_mac_intel/actions/runs/45303805838",
+    "instruction_controls": "https://github.com/gmh5225/test_mac_intel/actions/runs/45294366893",
+    "x1_preflight": "https://github.com/gmh5225/test_mac_intel/actions/runs/45292528531",
+    "model": "https://github.com/gmh5225/test_mac_intel/actions/runs/45302564966"
+  },
+  "test_binary_sha256": {
+    "r6": "9eb6336b67b7034a03fcaab79e2fae2c1f9f54beb852a4d30c239672c311af00",
+    "source": "11c98e43fb8388e6b6890738f6e735c0922e14944ca0700fe1d27bffa5a44abb"
+  },
+  "local_regression": {
+    "r6": {
+      "tests": 104,
+      "skipped": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections"
+      ]
+    },
+    "source": {
+      "tests": 104,
+      "skipped": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections"
+      ]
+    }
+  },
+  "structural_installation": {
+    "r6": {
+      "passed": 40,
+      "ir_compiler_sha256": "3ec747aca494276d2720e742d95efc5850b8c31aa93bcd0e4d0a5bbb4bc79d0c"
+    },
+    "source": {
+      "passed": 40,
+      "ir_compiler_sha256": "3ec747aca494276d2720e742d95efc5850b8c31aa93bcd0e4d0a5bbb4bc79d0c"
+    }
+  },
+  "entry_publication": {
+    "cases_per_local_profile": 8,
+    "cases_per_hosted_profile": 8,
+    "public_entries_per_image": 26
+  },
+  "apple_ir_frozen_r6": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45302628349",
+    "revision": "7a0540326952f3c0164fc4ed78546f2b1344e68f",
+    "runners": {
+      "arm64e-skips-macos-26": {
+        "passed": 28,
+        "skipped": 3,
+        "rejected_explicit_stack_probe": [
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+        ],
+        "frontend": "Apple clang version 21.0.0 (clang-2100.1.1.101)"
+      },
+      "arm64e-skips-xcode-27": {
+        "passed": 28,
+        "skipped": 3,
+        "rejected_explicit_stack_probe": [
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+          "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+        ],
+        "frontend": "Apple clang version 21.0.0 (clang-2100.3.34.2)"
+      }
+    }
+  },
+  "cross_compiled_oracles": {
+    "AArch64PAuthLRSemantics.BothCProjectionsCompileWithTheTwoModifierOracle": {
+      "r6": "passed",
+      "source": "passed",
+      "r6/macos-26": "passed",
+      "r6/xcode-27": "passed",
+      "source/macos-26": "passed",
+      "source/xcode-27": "passed"
+    },
+    "AArch64PACMSemantics.BothCProjectionsCompileWithThePrefixOracle": {
+      "r6": "passed",
+      "source": "passed",
+      "r6/macos-26": "passed",
+      "r6/xcode-27": "passed",
+      "source/macos-26": "passed",
+      "source/xcode-27": "passed"
+    }
+  },
+  "ordered_memory_arm_model": {
+    "profiles": {
+      "el0-ordered": [
+        "high-O0",
+        "high-O2",
+        "llvm-c-O0",
+        "llvm-c-O2",
+        "llvm-object"
+      ],
+      "ordered-image-relocated": [
+        "high-O0",
+        "high-O2",
+        "llvm-c-O0",
+        "llvm-c-O2",
+        "llvm-object"
+      ],
+      "el0-ordered-image": [
+        "high-O0",
+        "high-O2",
+        "llvm-c-O0",
+        "llvm-c-O2",
+        "llvm-object"
+      ],
+      "el0-ordered-image-relocated": [
+        "high-O0",
+        "high-O2",
+        "llvm-c-O0",
+        "llvm-c-O2",
+        "llvm-object"
+      ],
+      "ordered-image": [
+        "high-O0",
+        "high-O2",
+        "llvm-c-O0",
+        "llvm-c-O2",
+        "llvm-object"
+      ],
+      "ordered": [
+        "high-O0",
+        "high-O2",
+        "llvm-c-O0",
+        "llvm-c-O2",
+        "llvm-object"
+      ]
+    },
+    "samples_per_route": 115,
+    "modes_per_sample": 4,
+    "executions": 13800
+  },
+  "cases": [
+    {
+      "test": "AArch64EntryABI.PublishSignedNativeInputs",
+      "original_requirement": "entry publication fixture",
+      "original_skip_message": "explicit native entry publication inputs are required",
+      "outcomes": {
+        "r6": "passed",
+        "source": "passed",
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      }
+    },
+    {
+      "test": "AArch64EntryABI.RejectsOccupiedNativeInputs",
+      "original_requirement": "entry publication fixture",
+      "original_skip_message": "explicit native entry publication inputs are required",
+      "outcomes": {
+        "r6": "passed",
+        "source": "passed",
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      }
+    },
+    {
+      "test": "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+      "original_requirement": "FEAT_LRCPC3",
+      "original_skip_message": "The execution host does not report the required ordered-memory feature",
+      "outcomes": {
+        "r6": "skipped",
+        "source": "skipped",
+        "r6/macos-26": "skipped",
+        "r6/xcode-27": "skipped",
+        "source/macos-26": "skipped",
+        "source/xcode-27": "skipped"
+      }
+    },
+    {
+      "test": "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+      "original_requirement": "native four-key and generic signatures",
+      "original_skip_message": "this host cannot execute arm64e with all four active pointer signing keys and generic signatures",
+      "outcomes": {
+        "r6": "skipped",
+        "source": "skipped",
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      }
+    },
+    {
+      "test": "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+      "original_requirement": "PAuth_LR with active IA and IB",
+      "original_skip_message": "this host cannot execute arm64e PAuth_LR with active keys",
+      "outcomes": {
+        "r6": "skipped",
+        "source": "skipped",
+        "r6/macos-26": "skipped",
+        "r6/xcode-27": "skipped",
+        "source/macos-26": "skipped",
+        "source/xcode-27": "skipped"
+      }
+    },
+    {
+      "test": "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "original_requirement": "PACM with an effective second modifier",
+      "original_skip_message": "this host cannot execute PACM with active IA/IB keys and a second diversifier",
+      "outcomes": {
+        "r6": "skipped",
+        "source": "skipped",
+        "r6/macos-26": "skipped",
+        "r6/xcode-27": "skipped",
+        "source/macos-26": "skipped",
+        "source/xcode-27": "skipped"
+      }
+    },
+    {
+      "test": "MachOArm64eInstallation.MCProducerCapturesRecipesThroughFinalPlacement",
+      "original_requirement": "MC signing recipe callback",
+      "original_skip_message": "configured LLVM predates authenticated MC recipe callbacks",
+      "outcomes": {
+        "r6": "passed",
+        "source": "passed",
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "threaded_input": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "threaded_input": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "threaded_input": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "threaded_input": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "threaded_input": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "threaded_input": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "threaded_input": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "threaded_input": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "threaded_input": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "threaded_input": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "threaded_input": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "threaded_input": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "executable runtime requires a qualified native verifier profile",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "executable runtime requires a qualified native verifier profile",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "executable runtime requires a qualified native verifier profile",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "executable runtime requires a qualified native verifier profile",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "arm64e execution/PAC-enforcement control unavailable: -2\nSegmentation fault: 11",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "executable runtime requires a qualified native verifier profile",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "executable runtime requires a qualified native verifier profile",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O0",
+        "dwarf_language_fixture": true
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "executable runtime requires a qualified native verifier profile",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": false
+      }
+    },
+    {
+      "test": "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3",
+      "original_requirement": "published Mach-O execution",
+      "original_skip_message": "executable runtime requires a qualified native verifier profile",
+      "outcomes": {
+        "r6/macos-26": "passed",
+        "r6/xcode-27": "passed",
+        "source/macos-26": "passed",
+        "source/xcode-27": "passed"
+      },
+      "parameters": {
+        "optimization": "O2",
+        "dwarf_language_fixture": true
+      }
+    }
+  ],
+  "integrated_release": {
+    "revision": "ce7ea4817261d3d17595007772954a3eec01db79",
+    "dev_parent": "8af382a995b9855d2c4c35e470f6bc249269e477",
+    "tree": "c161c38f61b3315ff7065261483c1a264812a803",
+    "profiles": {
+      "r6": {
+        "test_binary_sha256": "bfbdd8b0a35f27040b5d0a30aa3f2199f05473c395dcafafa0af6fd4df1d6c82",
+        "passed": 100,
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections"
+        ],
+        "structural_passed": 40,
+        "entry_images": 8
+      },
+      "source": {
+        "test_binary_sha256": "c8ef0548f184ea84c4f5af3941a6a450e98f7df4853f78d04b48d4ba2503eaea",
+        "passed": 100,
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections"
+        ],
+        "structural_passed": 40,
+        "entry_images": 8
+      }
+    },
+    "model_inputs_reproduced": 12
+  },
+  "local_apple_probe": {
+    "revision": "7a0540326952f3c0164fc4ed78546f2b1344e68f",
+    "status": "unavailable",
+    "processor": "Apple M4 Max",
+    "lrcpc3_signal": "SIGILL"
+  },
+  "hosted_x1_preflight": {
+    "macos-15": {
+      "revision": "67dc5459e38411aecbb1c10e6372cc005ffc2f96",
+      "cpu": "Apple M1 (Virtual)",
+      "qualified": false,
+      "status": "unavailable",
+      "native_pac": false,
+      "call_unwind": false,
+      "PAuth_LR": false,
+      "PACM-PC": false,
+      "CPTA-on": false,
+      "checked_writeback": false
+    },
+    "macos-26": {
+      "revision": "67dc5459e38411aecbb1c10e6372cc005ffc2f96",
+      "cpu": "Apple M1 (Virtual)",
+      "qualified": false,
+      "status": "unavailable",
+      "native_pac": true,
+      "call_unwind": true,
+      "PAuth_LR": false,
+      "PACM-PC": false,
+      "CPTA-on": false,
+      "checked_writeback": false
+    },
+    "xcode-27": {
+      "revision": "67dc5459e38411aecbb1c10e6372cc005ffc2f96",
+      "cpu": "Apple M1 (Virtual)",
+      "qualified": false,
+      "status": "unavailable",
+      "native_pac": true,
+      "call_unwind": true,
+      "PAuth_LR": false,
+      "PACM-PC": false,
+      "CPTA-on": false,
+      "checked_writeback": false
+    }
+  }
+}

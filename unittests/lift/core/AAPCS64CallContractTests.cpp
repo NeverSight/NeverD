@@ -3630,4 +3630,130 @@ int main(void) {
       }
 }
 
+TEST(AAPCS64CallContract, AFrameSizeBuiltInARegisterBeyondTheLimitIsRefused) {
+  // A frame beyond an immediate's reach is subtracted through a register,
+  // as Go's runtime.call16777216 does: mov x27, #0x10; movk x27, #0x100,
+  // lsl #16; sub x20, sp, x27; mov sp, x20.  The block's constant moves the
+  // stack pointer further than a frame may span, so the function is
+  // refused by name.
+  const BinaryImage Image =
+      makeImage({{Text,
+                  {0xD280021Bu, // mov x27, #0x10
+                   0xF2A0201Bu, // movk x27, #0x100, lsl #16
+                   0xCB3B63F4u, // sub x20, sp, x27
+                   0x9100029Fu, // mov sp, x20
+                   0xF94003E0u, // ldr x0, [sp]
+                   0x8B3B63F4u, // add x20, sp, x27
+                   0x9100029Fu, // mov sp, x20
+                   Ret}}},
+                {{Text, "big"}}, {});
+  llvm::LLVMContext Context;
+  const auto Result = run(Image, Context, {Text});
+  EXPECT_FALSE(Result.Success);
+  EXPECT_NE(Result.Error.find("Stack frame larger than"), std::string::npos)
+      << Result.Error;
+}
+
+TEST(AAPCS64CallContract, TheFramePointerAFunctionOnlyStoresIsItsCallersFrame) {
+  // keep_frame(buf) stores the x29 it was entered with, as Go's mcall and
+  // morestack keep it in the goroutine's gobuf.  The register is no
+  // parameter, and one register is no context save: it is the caller's
+  // frame, which C reads with __builtin_frame_address(1).
+  const BinaryImage Image = makeImage({{Text,
+                                        {0xF900001Du, // str x29, [x0]
+                                         Ret}}},
+                                      {{Text, "keep_frame"}}, {});
+  const std::string Source = highC(Image, {Text});
+  EXPECT_NE(Source.find("__builtin_frame_address(1)"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  source_call_execution_test::compileAndRun(Source + R"C(
+int main(void) {
+  uint64_t kept = 0;
+  /* A real call: inlined, the function would have no caller of its own. */
+  __typeof__(keep_frame) *volatile call = keep_frame;
+  call((void *)&kept);
+  return kept != (uintptr_t)__builtin_frame_address(0);
+}
+)C");
+}
+
+TEST(AAPCS64CallContract, AContextSaveReadsTheVectorRegistersItStores) {
+  // save_all(buf) stores x9 to x12, four caller-saved registers that are
+  // no parameters: a context save, as Go's asyncPreempt keeps the
+  // registers of the code it interrupts.  The vector registers stored
+  // with them are part of that context: q16 is read whole and d17 as its
+  // bits.  Alone, a stored vector register is a spill and stays unknown.
+  const BinaryImage Image = makeImage({{Text,
+                                        {0xA9002809u, // stp x9, x10, [x0]
+                                         0xA901300Bu, // stp x11, x12, [x0, #16]
+                                         0x3D800810u, // str q16, [x0, #32]
+                                         0xFD001811u, // str d17, [x0, #48]
+                                         Ret}}},
+                                      {{Text, "save_all"}}, {});
+  const std::string Source = highC(Image, {Text});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  for (const char *Read : {"mov %0, x9", "mov %0.16b, v16.16b", "d17"})
+    EXPECT_NE(Source.find(Read), std::string::npos) << Read << "\n" << Source;
+
+  const BinaryImage Spill = makeImage({{Text,
+                                        {0x3D800810u, // str q16, [x0, #32]
+                                         Ret}}},
+                                      {{Text, "spill"}}, {});
+  const std::string Alone = highC(Spill, {Text});
+  EXPECT_EQ(Alone.find("v16.16b"), std::string::npos) << Alone;
+  EXPECT_NE(Alone.find("__builtin_trap"), std::string::npos) << Alone;
+}
+
+TEST(AAPCS64CallContract, AContextSaveStoresVectorRegistersWithWriteback) {
+  // Go's arm64 asyncPreempt keeps v0 to v31 four at a time, with ST1 and a
+  // post-index: each register it writes to memory is stored, as a plain
+  // store's value is, and read from the machine.
+  //   save_all: stp x9, x10, [x0]; stp x11, x12, [x0, #16]
+  //             add x1, x0, #32
+  //             st1 {v16.16b, v17.16b, v18.16b, v19.16b}, [x1], #64; ret
+  const BinaryImage Image =
+      makeImage({{Text,
+                  {0xA9002809u, // stp x9, x10, [x0]
+                   0xA901300Bu, // stp x11, x12, [x0, #16]
+                   0x91008001u, // add x1, x0, #32
+                   0x4C9F2030u, // st1 {v16-v19}, [x1], #64
+                   Ret}}},
+                {{Text, "save_all"}}, {});
+  const std::string Source = highC(Image, {Text});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  for (const char *Read : {"v16.16b", "v17.16b", "v18.16b", "v19.16b"})
+    EXPECT_NE(Source.find(Read), std::string::npos) << Read << "\n" << Source;
+}
+
+TEST(AArch64RegisterViews, ALoadedByteReachesAReadOfTheLowByteAfterAJoin) {
+  // One path loads a byte into w7 and the other sets x7 whole; after the
+  // join the code extracts x7's low byte.  The load writes w7 as the
+  // zero-extension of a temporary.  The pass that projects a block's last
+  // wide write onto the narrower views other blocks read took every
+  // zero-extension for one of the register's own slice and skipped it, so
+  // the byte view kept the 100 an earlier `mov w7, #100` gave it: the
+  // function returned 100 for whatever byte it loaded.
+  //   pick: mov w7, #100; cbz x1, 1f; ldrb w7, [x0]; b 2f
+  //   1:    orr x7, xzr, #0x30
+  //   2:    ubfx x0, x7, #0, #8; ret
+  const BinaryImage Image = makeImage({{Text,
+                                        {0x52800C87u, // mov w7, #100
+                                         0xB4000061u, // cbz x1, 1f
+                                         0x39400007u, // ldrb w7, [x0]
+                                         0x14000002u, // b 2f
+                                         0xB27C07E7u, // orr x7, xzr, #0x30
+                                         0xD3401CE0u, // ubfx x0, x7, #0, #8
+                                         Ret}}},
+                                      {{Text, "pick"}}, {});
+  const std::string Source = highC(Image, {Text});
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  source_call_execution_test::compileAndRun(Source + R"C(
+int main(void) {
+  unsigned char byte = 0x41;
+  return pick(&byte, 1) == 0x41 && pick(&byte, 0) == 0x30 ? 0 : 1;
+}
+)C");
+}
+
 } // namespace

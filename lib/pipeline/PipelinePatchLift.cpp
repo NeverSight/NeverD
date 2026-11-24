@@ -272,6 +272,9 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   modelWideIntReturns(Img, Result, medStackProjection(Opts));
 
   materializeGoCallResults(Img, Result);
+  materializeGoStackResults(Img, Result,
+                            Opts.SourceProjection && !Opts.PatchMode,
+                            Opts.SourceProjection && !Opts.PatchMode);
   recoverStructReturnFromCallers(Img, Result);
 
   propagateStructReturnForwarderShapes(Img, Result);
@@ -284,6 +287,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   materializeKnownStructReturnCallSites(Img, Result);
 
   bindFloatCallResults(Img, Result);
+  keepCallersValueInReturnRegister(Img, Result);
 
   // LLVM-to-C uses the same declared source returns as HighC. Binary lifting
   // keeps its machine contract; a display prototype cannot authorize a

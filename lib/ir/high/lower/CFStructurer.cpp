@@ -19,6 +19,9 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/med/MedCodeIdentity.h"
+
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <functional>
@@ -135,9 +138,7 @@ void MedToHighConverter::insertPhiCopies(HighFunc &Func,
     if (Copies.empty())
       continue;
     const auto &TargetBlock = CurMed->Blocks[Successor];
-    va_t Target = TargetBlock.StartAddr;
-    if (!Target && !TargetBlock.Ops.empty())
-      Target = TargetBlock.Ops.front().Addr;
+    const va_t Target = medBlockCodeAddress(TargetBlock);
     va_t TargetEnd = TargetBlock.EndAddr;
     if (!TargetEnd)
       TargetEnd = TargetBlock.Ops.empty() ? Target + 1
@@ -147,7 +148,14 @@ void MedToHighConverter::insertPhiCopies(HighFunc &Func,
         return false;
       if (GotoTarget == Target)
         return true;
-      return Target && GotoTarget >= Target && GotoTarget < TargetEnd;
+      if (!Target || GotoTarget < Target || GotoTarget >= TargetEnd)
+        return false;
+      // Entering another successor at its exact start takes that edge's PHIs,
+      // even when its first instruction lies inside this block's extent.
+      return llvm::none_of(CurBlock.Succs, [&](int Other) {
+        return Other >= 0 && Other < static_cast<int>(CurMed->Blocks.size()) &&
+               medBlockCodeAddress(CurMed->Blocks[Other]) == GotoTarget;
+      });
     };
     if (BranchIndex < Func.Body.size()) {
       auto &Branch = Func.Body[BranchIndex];
@@ -221,9 +229,7 @@ void MedToHighConverter::lowerCompareTreeSwitch(HighFunc &Func,
     const MedBlock &Target = Med.Blocks[Edge.To];
     HighStmt Jump;
     Jump.Kind = StmtKind::Goto;
-    Jump.GotoTarget = Target.StartAddr     ? Target.StartAddr
-                      : Target.Ops.empty() ? 0
-                                           : Target.Ops.front().Addr;
+    Jump.GotoTarget = medBlockCodeAddress(Target);
     Body.push_back(std::move(Jump));
     return Body;
   };
@@ -257,9 +263,7 @@ void MedToHighConverter::pullCompareTreeCases(HighFunc &Func,
   // The block holding each address.
   std::vector<std::tuple<va_t, va_t, int>> Ranges;
   for (const MedBlock &Block : Med.Blocks) {
-    const va_t Start = Block.StartAddr     ? Block.StartAddr
-                       : Block.Ops.empty() ? 0
-                                           : Block.Ops.front().Addr;
+    const va_t Start = medBlockCodeAddress(Block);
     const va_t End = Block.EndAddr       ? Block.EndAddr
                      : Block.Ops.empty() ? Start
                                          : Block.Ops.back().Addr + 1;
@@ -424,12 +428,6 @@ void MedToHighConverter::pullCompareTreeCases(HighFunc &Func,
 // Block layout
 //===----------------------------------------------------------------------===//
 
-static va_t blockEntry(const MedBlock &Block) {
-  return Block.StartAddr     ? Block.StartAddr
-         : Block.Ops.empty() ? 0
-                             : Block.Ops.front().Addr;
-}
-
 /// The block \p Block runs into when it does not branch: -1 when it never
 /// does, nullopt when its edges do not say which successor that is.
 static std::optional<int> fallThroughOf(const MedFunc &Med,
@@ -454,7 +452,7 @@ static std::optional<int> fallThroughOf(const MedFunc &Med,
       // Both edges reach one block only when the branch targets the
       // instruction after it.
       if (Block.Succs.size() == 1)
-        return blockEntry(Med.Blocks[Block.Succs[0]]) == Taken &&
+        return medBlockCodeAddress(Med.Blocks[Block.Succs[0]]) == Taken &&
                        Block.EndAddr == Taken
                    ? std::optional<int>(Block.Succs[0])
                    : std::nullopt;
@@ -462,7 +460,7 @@ static std::optional<int> fallThroughOf(const MedFunc &Med,
         return std::nullopt;
       int Other = -1, Hits = 0;
       for (int Successor : Block.Succs) {
-        if (blockEntry(Med.Blocks[Successor]) == Taken)
+        if (medBlockCodeAddress(Med.Blocks[Successor]) == Taken)
           ++Hits;
         else
           Other = Successor;
@@ -556,14 +554,15 @@ std::vector<int> highBlockLayout(const MedFunc &Med,
         (!Dispatched.count(I) && !fallThroughOf(Med, Block)))
       return AddressOrder;
   }
-  if (blockEntry(Med.Blocks[0]) != Med.Entry)
+  if (medBlockCodeAddress(Med.Blocks[0]) != Med.Entry)
     return AddressOrder;
 
   std::vector<std::vector<int>> Successors(Count);
   for (int I = 0; I < Count; ++I) {
     Successors[I] = Med.Blocks[I].Succs;
     std::sort(Successors[I].begin(), Successors[I].end(), [&](int A, int B) {
-      const va_t X = blockEntry(Med.Blocks[A]), Y = blockEntry(Med.Blocks[B]);
+      const va_t X = medBlockCodeAddress(Med.Blocks[A]),
+                 Y = medBlockCodeAddress(Med.Blocks[B]);
       return X != Y ? X > Y : A > B;
     });
     Successors[I].erase(std::unique(Successors[I].begin(), Successors[I].end()),
@@ -602,7 +601,7 @@ std::vector<int> highBlockLayout(const MedFunc &Med,
         return AddressOrder;
       int First = Count, Last = -1, Members = 0;
       for (int I = 0; I < Count; ++I)
-        if (Scope.GuardedRange.contains(blockEntry(Med.Blocks[I]))) {
+        if (Scope.GuardedRange.contains(medBlockCodeAddress(Med.Blocks[I]))) {
           First = std::min(First, Position[I]);
           Last = std::max(Last, Position[I]);
           ++Members;
@@ -638,8 +637,14 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
   // A function too large to structure keeps its branches: a switch there
   // only trades them for as many case jumps.
   size_t OpCount = 0;
-  for (const MedBlock &Block : Med.Blocks)
+  llvm::SmallVector<va_t, 16> NativeEntries;
+  for (const MedBlock &Block : Med.Blocks) {
     OpCount += Block.Ops.size();
+    if (isMIPS(TargetArch) && (Block.Role == MedBlockRole::Machine ||
+                               Block.Role == MedBlockRole::EntryLoopHeader))
+      NativeEntries.push_back(Block.StartAddr);
+  }
+  llvm::sort(NativeEntries);
   const std::vector<CompareTreeSwitch> Trees =
       OpCount > limits::kMaxStructuredHighStmts
           ? std::vector<CompareTreeSwitch>()
@@ -647,21 +652,17 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
   std::map<int, const CompareTreeSwitch *> TreeAt;
   std::set<int> TreeInterior;
   CaseRegions.clear();
-  auto EntryOf = [](const MedBlock &Block) -> va_t {
-    return Block.StartAddr     ? Block.StartAddr
-           : Block.Ops.empty() ? 0
-                               : Block.Ops.front().Addr;
-  };
   for (const CompareTreeSwitch &Tree : Trees) {
     TreeAt.emplace(Tree.Root, &Tree);
     TreeInterior.insert(Tree.Interior.begin(), Tree.Interior.end());
     auto &Regions = CaseRegions[Med.Blocks[Tree.Root].Ops.back().Addr];
     for (const CompareTreeEdge &Edge : Tree.Cases)
       if (!Edge.Region.empty())
-        Regions.push_back({EntryOf(Med.Blocks[Edge.To]), Edge.Region});
+        Regions.push_back(
+            {medBlockCodeAddress(Med.Blocks[Edge.To]), Edge.Region});
     if (!Tree.Default.Region.empty())
-      Regions.push_back(
-          {EntryOf(Med.Blocks[Tree.Default.To]), Tree.Default.Region});
+      Regions.push_back({medBlockCodeAddress(Med.Blocks[Tree.Default.To]),
+                         Tree.Default.Region});
   }
 
   planDispatchSelectors(Med);
@@ -760,10 +761,7 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
             break;
           }
           const auto &Target = Med.Blocks[Successor];
-          const va_t Address =
-              Target.StartAddr
-                  ? Target.StartAddr
-                  : (Target.Ops.empty() ? 0 : Target.Ops.front().Addr);
+          const va_t Address = medBlockCodeAddress(Target);
           if (Address == Terminator.Inputs[0].ConstVal) {
             Complete &= Taken == -1;
             Taken = Successor;
@@ -776,10 +774,7 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
           const auto &Target = Med.Blocks[Other];
           HighStmt Transfer;
           Transfer.Kind = StmtKind::Goto;
-          Transfer.GotoTarget =
-              Target.StartAddr
-                  ? Target.StartAddr
-                  : (Target.Ops.empty() ? 0 : Target.Ops.front().Addr);
+          Transfer.GotoTarget = medBlockCodeAddress(Target);
           Func.Body.push_back(std::move(Transfer));
         }
       }
@@ -804,7 +799,7 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
           Med.Blocks[Successor].Id == Successor) {
         HighStmt Transfer;
         Transfer.Kind = StmtKind::Goto;
-        Transfer.GotoTarget = EntryOf(Med.Blocks[Successor]);
+        Transfer.GotoTarget = medBlockCodeAddress(Med.Blocks[Successor]);
         Func.Body.push_back(std::move(Transfer));
       }
     }
@@ -825,14 +820,31 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
       Left.LeftImageAt = CurBlock.EndAddr;
       Func.Body.push_back(std::move(Left));
     }
-    const va_t Entry =
-        CurBlock.StartAddr
-            ? CurBlock.StartAddr
-            : (CurBlock.Ops.empty() ? 0 : CurBlock.Ops.front().Addr);
+    const va_t Entry = medBlockCodeAddress(CurBlock);
+    // A delayed transfer and a separate CFG entry can both execute the same
+    // instruction. An external jump must bypass the transfer's private slot
+    // effects and edge PHI copies, even if they are emitted first.
+    const auto First = llvm::upper_bound(NativeEntries, CurBlock.StartAddr);
+    const bool Guarded = CurBlock.Role == MedBlockRole::PredicatedEffect;
+    if (Guarded ||
+        (First != NativeEntries.end() && *First < CurBlock.EndAddr)) {
+      const auto Last =
+          std::lower_bound(First, NativeEntries.end(), CurBlock.EndAddr);
+      for (size_t I = BlkBodyStart; I < Func.Body.size(); ++I)
+        walkStmt(Func.Body[I], [&](HighStmt &S) {
+          if ((Guarded && Entry && S.Addr == Entry) ||
+              std::binary_search(First, Last, S.Addr)) {
+            S.NonEntryInstruction = S.Addr;
+            S.Addr = 0;
+          }
+        });
+    }
     // Enter before every effect of the block. A delayed transfer can emit
     // its slot's statement first and its head-address call/branch later;
     // finding that later address does not make it a valid entry anchor.
-    if (Entry && Entry != InvalidVA &&
+    // A predicated effect shares its guard's instruction address. Only the
+    // guard can be entered there; its private edge executes by fallthrough.
+    if (!Guarded && Entry && Entry != InvalidVA &&
         (BlkBodyStart == Func.Body.size() ||
          Func.Body[BlkBodyStart].Addr != Entry))
       MissingEntries.emplace_back(BlkBodyStart, Entry);

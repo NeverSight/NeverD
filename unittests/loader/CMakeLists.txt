@@ -18,6 +18,11 @@ add_neverd_unittest(NeverDLinkerThunkTests
   LINK_COMPONENTS Loader Support
 )
 
+add_neverd_unittest(NeverDMachOStubRunTests
+  MachOStubRunTests.cpp
+  LINK_COMPONENTS Loader Support
+)
+
 add_neverd_unittest(NeverDStaticSymbolTableTests
   StaticSymbolTableTests.cpp
   LINK_COMPONENTS Loader Support

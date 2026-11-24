@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -26,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -35,7 +37,7 @@ namespace {
 
 struct Factor {
   SymRef Ref, Word, Weight, Offset;
-  unsigned Zeros, Content;
+  unsigned Zeros, Content, Copies;
   bool Complement;
 };
 
@@ -50,6 +52,21 @@ SymRef lowOperand(const SymContext &Ctx, SymRef R) {
   default:
     return {};
   }
+}
+
+struct ProductField {
+  SymRef Low;
+  unsigned Start = 0, Size = 0;
+};
+
+// An extension or concatenation preserves its low operand. A canonical
+// fixed motion preserves its source suffix up to the fill or wrap boundary.
+ProductField productField(const SymContext &Ctx, SymRef Word) {
+  if (const auto Low = lowOperand(Ctx, Word))
+    return {Low, 0, Ctx.width(Low)};
+  if (const unsigned Start = detail::sourceSuffixStart(Ctx, Word))
+    return {{}, Start, Ctx.width(Word) - Start};
+  return {};
 }
 
 // A compiler can distribute a shift into a sum of scaled words. Each
@@ -83,8 +100,7 @@ SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
         break;
       if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
         return {};
-      const unsigned Shift = Ctx.constantRotateAmount(Count, Width);
-      Offset = (Offset + (Op == SymOp::Ror ? Shift : Width - Shift)) % Width;
+      Offset = (Offset + Ctx.node(Source).Aux) % Width;
       Source = Ctx.operand(Source, 0);
       continue;
     }
@@ -751,16 +767,16 @@ struct OffsetPowers {
   llvm::SmallDenseMap<uint32_t, unsigned, 8> ByOffset;
   llvm::SmallVector<OffsetPower, 8> Groups;
 
-  bool count(SymRef Offset, size_t Limit) {
+  bool count(SymRef Offset, size_t Limit, unsigned Multiplicity) {
     auto It = ByOffset.find(Offset.index());
     if (It != ByOffset.end()) {
-      ++Groups[It->second].Count;
+      Groups[It->second].Count += Multiplicity;
       return true;
     }
     if (Groups.size() == Limit)
       return false;
     ByOffset.try_emplace(Offset.index(), Groups.size());
-    Groups.push_back({Offset, 1});
+    Groups.push_back({Offset, Multiplicity});
     return true;
   }
 
@@ -797,12 +813,16 @@ void buildOffsetPowers(const SymContext &Ctx,
 template <typename Coefficient>
 SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
                           SymRef Outer, unsigned Precision, unsigned Shift,
-                          WorkBudget &Budget, size_t &Storage) {
+                          WorkBudget &Budget, size_t &Storage,
+                          llvm::ArrayRef<unsigned> Multiplicities = {},
+                          llvm::ArrayRef<uint64_t> WeightSums = {}) {
+  assert(Multiplicities.empty() || Multiplicities.size() == Rows.size());
   const unsigned Bits = Precision - Shift;
   constexpr bool Native = std::is_same_v<Coefficient, uint64_t>;
   assert(Bits && Shift >= Bits && Native == (Bits <= 64));
   const size_t Limbs = llvm::APInt::getNumWords(Bits);
   const size_t Words = llvm::APInt::getNumWords(Precision);
+  assert(WeightSums.empty() || WeightSums.size() == Rows.size() * Words);
   const size_t PerRow = sizeof(Coefficient) +
                         4 * sizeof(std::pair<uint32_t, Coefficient>) +
                         (Native ? 0 : 5 * Limbs * sizeof(uint64_t));
@@ -816,15 +836,18 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   const size_t Work = 9 + 2 * Words + Words * Words +
                       (Native ? 0 : 3 * (Limbs * (Limbs + 1) / 2 - 1));
   const size_t LowProduct = Limbs * (Limbs + 1) / 2;
-  const size_t GroupedRowWork = 7 + Words + LowProduct;
-  const bool Long = Rows.size() > limits::kMaxResidueProductFactors;
+  const size_t GroupedRowWork =
+      7 + Words + LowProduct + (Multiplicities.empty() ? 0 : 1 + Limbs);
+  const bool Long = !Multiplicities.empty() ||
+                    Rows.size() > limits::kMaxResidueProductFactors;
   if (FixedBytes > Storage || Rows.size() > (Storage - FixedBytes) / PerRow ||
       !Budget.canConsume(FixedWork))
     return {};
   const size_t Available = Budget.available() - FixedWork;
   if (Rows.size() > Available / (Long ? GroupedRowWork : Work))
     return {};
-  const bool FlatFits = Rows.size() <= Available / Work;
+  const bool FlatFits =
+      Multiplicities.empty() && Rows.size() <= Available / Work;
   const size_t Goal = FlatFits ? Rows.size() * Work : Available;
   // Include vector and hash bucket growth as well as the two stored low
   // residues per offset. The flat method remains available if a trial fails.
@@ -840,18 +863,22 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     Powers.emplace();
   if (!FlatFits && !Powers)
     return {};
-  // Extensions and concatenations preserve this complete low field. Check
-  // it once while counting offsets that could share a cofactor.
+  // Summed rows already name their field. Ordinary rows retain the complete
+  // carrier. Count offsets only after checking the projected width.
+  auto fieldOf = [&](const Factor &F) {
+    return WeightSums.empty() ? lowOperand(Ctx, F.Word) : F.Word;
+  };
   size_t Trial = 0;
-  for (const auto &F : Rows) {
-    const auto Low = lowOperand(Ctx, F.Word);
+  for (const auto &[I, F] : llvm::enumerate(Rows)) {
+    const auto Low = fieldOf(F);
     if (!Low || Ctx.width(Low) != Bits) {
-      Budget.consume(size_t(&F - Rows.data()) + 1 + Trial);
+      Budget.consume(I + 1 + Trial);
       return {};
     }
     if (Powers) {
       ++Trial;
-      if (!Powers->count(F.Offset, MaxGroups))
+      const unsigned Count = Multiplicities.empty() ? 1 : Multiplicities[I];
+      if (!Powers->count(F.Offset, MaxGroups, Count))
         Powers.reset();
     }
   }
@@ -884,8 +911,11 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     else
       return C;
   };
-  auto LiveWeight = [&](SymRef V) -> Coefficient {
-    auto Full = Literal(V);
+  auto LiveWeight = [&](size_t I) -> Coefficient {
+    const auto Digits = WeightSums.empty()
+                            ? Ctx.constWords(Rows[I].Weight).take_front(Words)
+                            : WeightSums.slice(I * Words, Words);
+    const llvm::APInt Full(Precision, Digits);
     if constexpr (Native)
       return Full.extractBitsAsZExtValue(Bits, Shift);
     else
@@ -909,20 +939,33 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   llvm::SmallDenseMap<uint32_t, Coefficient, 8> Weights;
   Coefficient Suffix = Low(Unit.getRawData());
   Coefficient Correction = Low(llvm::APInt::getZero(Bits).getRawData());
+  bool FoldedSignBit = false;
   for (size_t I = Rows.size(); I-- != 0;) {
     const auto &F = Rows[I];
-    Coefficient C = LiveWeight(F.Weight);
+    Coefficient C = LiveWeight(I);
     if (Powers) {
       C *= Low(Powers->cofactor(F.Offset).getRawData());
+      if (WeightSums.empty() && !Multiplicities.empty() &&
+          Multiplicities[I] != 1)
+        C *= static_cast<uint64_t>(Multiplicities[I]);
     } else {
       C *= Prefix[I] * Suffix;
       Suffix *= Low(Ctx.constWords(F.Offset).data());
     }
-    auto Word = lowOperand(Ctx, F.Word);
+    auto Word = fieldOf(F);
     if (Ctx.op(Word) == SymOp::Not) {
       Word = Ctx.operand(Word, 0);
       Correction += C;
       C = -C;
+    }
+    // Flipping the highest live bit adds half the modulus. Move this
+    // constant into the offset before combining weights of the same field.
+    if (Ctx.op(Word) == SymOp::Xor && Ctx.numOperands(Word) == 2 &&
+        Ctx.isConst(Ctx.operand(Word, 0)) &&
+        Ctx.constValue(Ctx.operand(Word, 0)).isSignMask()) {
+      Word = Ctx.operand(Word, 1);
+      Correction += C << (Bits - 1);
+      FoldedSignBit = true;
     }
     auto [It, Inserted] = Weights.try_emplace(Word.index(), C);
     if (!Inserted)
@@ -943,18 +986,234 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     return {};
   Budget.consume(Edges * EdgeWork);
   Storage -= Edges * PerEdge;
-  llvm::SmallVector<SymRef, 8> Sum{
-      Ctx.mkConst(Product.extractBits(Bits, Shift))};
+  const auto Offset = Product.extractBits(Bits, Shift);
+  llvm::SmallVector<SymRef, 8> Sum{Ctx.mkConst(Offset)};
+  const bool MatchOffset = FoldedSignBit || !WeightSums.empty();
+  SymRef Matched;
+  size_t MatchIndex = 0;
   for (const auto &[Index, C] : Weights) {
     const auto K = Value(C);
-    if (!K.isZero())
+    if (!K.isZero()) {
+      if (MatchOffset && K == Offset) {
+        Matched = SymRef(Index);
+        MatchIndex = Sum.size();
+      }
       Sum.push_back(Ctx.mkMul(Ctx.mkConst(K), SymRef(Index)));
+    }
+  }
+  auto Upper = Ctx.mkAdd(Sum);
+  if (MatchOffset && Sum.size() > 1 && (Matched || Offset.isAllOnes()) &&
+      Edges <= Storage / PerEdge && Budget.canConsume(Edges * EdgeWork)) {
+    Budget.consume(Edges * EdgeWork);
+    Storage -= Edges * PerEdge;
+    // An offset that matches a weight gives k + k*x = -k*~x. With
+    // offset -1 the whole sum can be complemented.
+    if (Matched)
+      Sum[MatchIndex] = Ctx.mkMul(Ctx.mkConst(-Offset), Ctx.mkNot(Matched));
+    else {
+      Sum.resize(1);
+      for (const auto &[Index, C] : Weights)
+        if (auto K = Value(C); !K.isZero())
+          Sum.push_back(Ctx.mkMul(Ctx.mkConst(-K), SymRef(Index)));
+    }
+    auto Alternative = Ctx.mkAdd(llvm::ArrayRef(Sum).drop_front());
+    if (!Matched)
+      Alternative = Ctx.mkNot(Alternative);
+    if (readingScore(Ctx, Alternative) < readingScore(Ctx, Upper))
+      Upper = Alternative;
   }
   // The bottom Shift bits are constant. The outer scale contributes the
   // remaining low zeros of the carrier, leaving just Bits arithmetic bits.
   const auto Tail =
       Product.trunc(Shift).zext(Width - Bits).shl(Width - Precision);
-  return Ctx.mkConcat(Ctx.mkAdd(Sum), Ctx.mkConst(Tail));
+  return Ctx.mkConcat(Upper, Ctx.mkConst(Tail));
+}
+
+// The shared cofactor accounts for every occurrence, including equal factors
+// whose unobserved upper bits differ. An even offset never needs division.
+SymRef buildProjectedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
+                                   SymRef Outer, unsigned Precision,
+                                   unsigned Shift, WorkBudget &Budget,
+                                   size_t &Storage,
+                                   llvm::ArrayRef<unsigned> Counts = {},
+                                   llvm::ArrayRef<uint64_t> WeightSums = {}) {
+  auto Build = Precision - Shift <= 64 ? buildLinearProduct<uint64_t>
+                                       : buildLinearProduct<llvm::APInt>;
+  return Build(Ctx, Rows, Outer, Precision, Shift, Budget, Storage, Counts,
+               WeightSums);
+}
+
+// Isolate the high-weight subproduct. Every pair of its disturbances is zero
+// modulo 2^Precision. The remaining factors multiply the complete sum, so
+// their mixed terms and their sign or upper lanes remain observable.
+SymRef buildMixedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
+                               SymRef Outer, unsigned Precision, unsigned Bits,
+                               llvm::SmallVectorImpl<SymRef> &Parts,
+                               WorkBudget &Budget, size_t &Storage) {
+  using Key = std::tuple<uint32_t, uint32_t, uint32_t>;
+  const size_t PerRow =
+      2 * (sizeof(Factor) + sizeof(unsigned) + sizeof(SymRef)) +
+      4 * sizeof(std::pair<Key, unsigned>);
+  // Allow for the growing row arrays and hash buckets. The existing product
+  // reader has already charged for its original factors and output operands.
+  if (Rows.size() > Storage / PerRow || Rows.size() > Budget.available() / 3)
+    return {};
+  llvm::SmallDenseMap<Key, unsigned, 16> Index;
+  llvm::SmallVector<Factor, 16> High;
+  llvm::SmallVector<unsigned, 16> Counts;
+  llvm::SmallVector<SymRef, 8> Remainder;
+  const unsigned Half = Precision - Precision / 2;
+  for (const auto &[I, F] : llvm::enumerate(Rows)) {
+    if (F.Zeros < Half) {
+      Remainder.push_back(F.Ref);
+      continue;
+    }
+    const auto Field = projectedHighField(Ctx, F.Word, F.Zeros, Precision);
+    if (!Field || Ctx.width(Field) != Bits) {
+      Budget.consume(3 * (I + 1));
+      return {};
+    }
+    const Key K{F.Offset.index(), F.Weight.index(), Field.index()};
+    const auto [It, Inserted] = Index.try_emplace(K, High.size());
+    if (Inserted) {
+      High.push_back(F);
+      Counts.push_back(1);
+    } else {
+      ++Counts[It->second];
+    }
+  }
+  Budget.consume(3 * Rows.size());
+  const auto Count = Rows.size() - Remainder.size();
+  if (Count < limits::kMinResidueProductFactors || Count <= Remainder.size())
+    return {};
+  const size_t Temporary = Rows.size() * PerRow;
+  Storage -= Temporary;
+  const auto Sum = buildProjectedLinearProduct(
+      Ctx, High, Outer, Precision, Precision - Bits, Budget, Storage,
+      Count == High.size() ? llvm::ArrayRef<unsigned>{}
+                           : llvm::ArrayRef(Counts));
+  Storage += Temporary;
+  if (Sum)
+    Parts.append(Remainder.begin(), Remainder.end());
+  return Sum;
+}
+
+// A row with weight b reads only Precision - ctz(b) low bits. Extracts
+// starting at the same bit of the same source can therefore name a common
+// coordinate even when their widths or the enclosing extensions differ.
+SymRef buildSlicedLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
+                                size_t RowCount, SymRef Outer,
+                                unsigned Precision, unsigned Shift,
+                                llvm::SmallVectorImpl<SymRef> &Parts,
+                                WorkBudget &Budget, size_t &Storage) {
+  using Key = std::tuple<uint32_t, uint32_t, uint32_t>;
+  const unsigned Bits = Precision - Shift;
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  const size_t PerRow = 2 * (sizeof(Factor) + sizeof(unsigned) +
+                             sizeof(SymRef) + Words * sizeof(uint64_t)) +
+                        4 * sizeof(std::pair<Key, unsigned>);
+  const size_t RowWork = 3 + Words;
+  if (Rows.size() > Storage / PerRow ||
+      Rows.size() > Budget.available() / RowWork)
+    return {};
+  llvm::SmallDenseMap<Key, unsigned, 16> Index;
+  llvm::SmallVector<Factor, 16> Groups;
+  llvm::SmallVector<unsigned, 16> Counts;
+  llvm::SmallVector<uint64_t, 32> Weights;
+  llvm::SmallVector<const Factor *, 8> Remainder;
+  size_t Remaining = 0;
+  const size_t Temporary = Rows.size() * PerRow;
+  Storage -= Temporary;
+  const llvm::scope_exit Restore([&] { Storage += Temporary; });
+  llvm::DenseMap<uint32_t, SymRef> Widened;
+  Budget.consume(Rows.size() * RowWork);
+  for (const auto &F : Rows) {
+    if (F.Zeros < Shift) {
+      Remainder.push_back(&F);
+      Remaining += F.Copies;
+      continue;
+    }
+    const auto Field = productField(Ctx, F.Word);
+    auto Low = Field.Low;
+    unsigned Start = Field.Start;
+    auto Source = F.Word;
+    if (Field.Size < Bits && F.Zeros < Precision - Field.Size) {
+      // The complete carrier supplies any live sign or concatenated bits.
+      Low = {};
+      Start = 0;
+    } else if (!Low) {
+      if (Start)
+        Source = Ctx.operand(F.Word, 0);
+    } else if (Ctx.op(Low) == SymOp::Extract) {
+      Source = Ctx.operand(Low, 0);
+      Start = Ctx.node(Low).Aux;
+    } else if (Ctx.op(Low) == SymOp::Add || Ctx.op(Low) == SymOp::Mul ||
+               isBitwise(Ctx.op(Low))) {
+      Source =
+          widenCoordinate(Ctx, Low, Ctx.width(Outer), Widened, Budget, Storage);
+      if (!Source)
+        return {};
+    } else {
+      Source = Low;
+    }
+    const auto [It, Inserted] = Index.try_emplace(
+        Key{F.Offset.index(), Source.index(), Start}, Groups.size());
+    const size_t I = It->second;
+    if (Inserted) {
+      Groups.push_back(F);
+      Groups.back().Word = {};
+      Counts.push_back(0);
+      Weights.resize(Weights.size() + Words, 0);
+    }
+    if (Low && Ctx.width(Low) == Bits)
+      Groups[I].Word = Low;
+    Counts[I] += F.Copies;
+    // All these rows have the same offset and coordinate. Their cofactor
+    // is shared even for an even offset. Add the weights without division.
+    auto *Sum = Weights.data() + I * Words;
+    const auto *Weight = Ctx.constWords(F.Weight).data();
+    if (F.Copies == 1) {
+      llvm::APInt::tcAdd(Sum, Weight, 0, Words);
+    } else {
+      if (!Budget.consume(Words))
+        return {};
+      llvm::APInt::tcMultiplyPart(Sum, Weight, F.Copies, 0, Words, Words, true);
+    }
+  }
+  const auto Count = RowCount - Remaining;
+  if (Count < limits::kMinResidueProductFactors || Count <= Remaining)
+    return {};
+  for (const auto &[K, I] : Index) {
+    if (Groups[I].Word)
+      continue;
+    const SymRef Source(std::get<1>(K));
+    // A low extract can rebuild modular children. The printed tree count
+    // also bounds repeated edges of a variadic source.
+    const unsigned Start = std::get<2>(K);
+    const unsigned Available = std::min(Bits, Ctx.width(Source) - Start);
+    // When the observed slice reaches the top, its missing bits have zero
+    // coefficient. A zero extension gives the group a common representative.
+    const size_t Nodes = llvm::SaturatingAdd(Ctx.readabilityCost(Source),
+                                             size_t(Available < Bits));
+    const size_t Bytes = 2 * sizeof(SymNode) + 4 * sizeof(SymRef);
+    if (Nodes > Storage / Bytes || !Budget.consume(2 * Nodes + 1))
+      return {};
+    Storage -= Nodes * Bytes;
+    const auto Field = Ctx.mkExtract(Source, Start, Available);
+    Groups[I].Word = Available == Bits ? Field : Ctx.mkZExt(Field, Bits);
+  }
+  const auto Sum = buildProjectedLinearProduct(
+      Ctx, Groups, Outer, Precision, Shift, Budget, Storage,
+      Count == Groups.size() ? llvm::ArrayRef<unsigned>{}
+                             : llvm::ArrayRef(Counts),
+      Weights);
+  if (Sum) {
+    if (!Budget.consume(Remaining - Remainder.size()))
+      return {};
+    for (const auto *Row : Remainder)
+      Parts.append(Row->Copies, Row->Ref);
+  }
+  return Sum;
 }
 
 SymRef buildTruncatedGroup(SymContext &Ctx, llvm::ArrayRef<Factor> Group,
@@ -1036,6 +1295,31 @@ SymRef buildTruncatedGroup(SymContext &Ctx, llvm::ArrayRef<Factor> Group,
 
 } // namespace
 
+SymRef projectedHighField(const SymContext &Ctx, SymRef Word, unsigned Zeros,
+                          unsigned Precision) {
+  const auto Low = lowOperand(Ctx, Word);
+  if (!Low)
+    return {};
+  const unsigned Bits = Ctx.width(Low);
+  return Bits <= Precision / 2 && Zeros < Precision && Zeros >= Precision - Bits
+             ? Low
+             : SymRef{};
+}
+
+unsigned slicedProductFieldWidth(const SymContext &Ctx, SymRef Perturbation) {
+  if (!Perturbation || Ctx.op(Perturbation) != SymOp::Mul ||
+      Ctx.numOperands(Perturbation) != 2)
+    return 0;
+  const auto Field = productField(Ctx, Ctx.operand(Perturbation, 1));
+  if (!Field.Low)
+    return Field.Size;
+  const auto Op = Ctx.op(Field.Low);
+  return Op == SymOp::Extract || Op == SymOp::Add || Op == SymOp::Mul ||
+                 isBitwise(Op)
+             ? Field.Size
+             : 0;
+}
+
 bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
                        unsigned Bits) {
   if (!Perturbation || Ctx.op(Perturbation) != SymOp::Mul ||
@@ -1058,7 +1342,12 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
   const size_t FirstGenerated = Ctx.numNodes();
   llvm::SmallVector<Factor, 16> Rows;
   llvm::SmallVector<SymRef, 16> Parts;
-  unsigned TotalZeros = 0, MinimumZeros = Observed;
+  unsigned TotalZeros = 0, MinimumZeros = Observed, LowerZeros = 0;
+  const unsigned Half = Observed - Observed / 2;
+  size_t FirstHigh = N;
+  unsigned HighZeros = Observed, FirstFieldBits = 0;
+  bool NeedsSlices = false;
+  size_t HighFields = 0, RowCount = 0;
   const auto Outer =
       Ctx.isConst(Ctx.operand(Root, 0)) ? Ctx.operand(Root, 0) : SymRef{};
   for (size_t I = bool(Outer); I < N; ++I) {
@@ -1094,7 +1383,25 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
       if (Weights[J])
         break;
     }
+    // Identical factors in a canonical product are consecutive. Their word,
+    // weight and live window need decoding just once. Retain every factor for
+    // later polynomial readers. Even factors keep the zero-prefix early exit.
+    const size_t First = I;
+    if (!InitialContent)
+      while (I + 1 < N && Ctx.operand(Root, I + 1) == F)
+        ++I;
+    const size_t Count = I - First + 1;
+    if (Count > 1 && !Budget.consume(Count - 1))
+      return Root;
     MinimumZeros = std::min(MinimumZeros, Zeros);
+    if (Zeros < Half)
+      LowerZeros +=
+          std::min<uint64_t>(Observed - LowerZeros, uint64_t(Zeros) * Count);
+    else {
+      HighZeros = std::min(HighZeros, Zeros);
+      if (FirstHigh == N)
+        FirstHigh = RowCount;
+    }
     TotalZeros += std::min(Observed - TotalZeros, InitialContent);
     if (TotalZeros == Observed)
       return Ctx.mkZero(Width);
@@ -1104,7 +1411,18 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
       return Root;
     Storage -= Tail.size() * 3 * sizeof(SymRef);
     auto Word = Tail.size() == 1 ? Tail.front() : Ctx.mkMul(Tail);
-    Rows.push_back({F, Word, Weight, Offset, Zeros, InitialContent, false});
+    if (Outer && Zeros >= Half) {
+      const auto Field = productField(Ctx, Word);
+      if (Field.Size && Field.Size >= Observed - std::min(Observed, Zeros)) {
+        HighFields += Count;
+        NeedsSlices |=
+            Field.Start || (FirstFieldBits && Field.Size != FirstFieldBits);
+        FirstFieldBits = Field.Size;
+      }
+    }
+    RowCount += Count;
+    Rows.push_back({F, Word, Weight, Offset, Zeros, InitialContent,
+                    static_cast<unsigned>(Count), false});
   }
   auto Finish = [&]() {
     const auto Candidate = Ctx.mkMul(Parts);
@@ -1117,15 +1435,41 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
   };
   const bool Linear = Outer && MinimumZeros < Observed &&
                       MinimumZeros >= Observed - MinimumZeros;
-  if (Linear) {
-    auto Build = Observed - MinimumZeros <= 64
-                     ? buildLinearProduct<uint64_t>
-                     : buildLinearProduct<llvm::APInt>;
-    if (auto Sum =
-            Build(Ctx, Rows, Outer, Observed, MinimumZeros, Budget, Storage)) {
-      Parts.push_back(Sum);
-      return Finish();
+  SymRef LinearPart;
+  if (NeedsSlices && HighFields > RowCount / 2 && HighZeros < Observed &&
+      RowCount >= limits::kMinResidueProductFactors)
+    LinearPart = buildSlicedLinearProduct(Ctx, Rows, RowCount, Outer, Observed,
+                                          HighZeros, Parts, Budget, Storage);
+  if (!LinearPart && RowCount != Rows.size()) {
+    // The general polynomial readers consume individual factors in their
+    // original order. Expand only when a counted slice did not finish.
+    const size_t Unique = Rows.size();
+    if (!Budget.consume(RowCount - Unique))
+      return Root;
+    Rows.resize_for_overwrite(RowCount);
+    size_t End = RowCount;
+    for (size_t I = Unique; I-- != 0;) {
+      const auto F = Rows[I];
+      End -= F.Copies;
+      std::fill_n(Rows.begin() + End, F.Copies, F);
     }
+  }
+  if (!LinearPart && Linear) {
+    LinearPart = buildProjectedLinearProduct(Ctx, Rows, Outer, Observed,
+                                             MinimumZeros, Budget, Storage);
+  } else if (!LinearPart && Outer && LowerZeros < Observed &&
+             FirstHigh < Rows.size() &&
+             Rows.size() >= limits::kMinResidueProductFactors) {
+    // If the lower-weight disturbances can themselves vanish together, let
+    // the per-coordinate polynomial reader below reduce those groups too.
+    const auto &F = Rows[FirstHigh];
+    if (const auto Field = projectedHighField(Ctx, F.Word, F.Zeros, Observed))
+      LinearPart = buildMixedLinearProduct(
+          Ctx, Rows, Outer, Observed, Ctx.width(Field), Parts, Budget, Storage);
+  }
+  if (LinearPart) {
+    Parts.push_back(LinearPart);
+    return Finish();
   }
   // Admit the complete product's content before reading coordinates.
   // Once that prefix proves zero, none of their alternate spellings matter.

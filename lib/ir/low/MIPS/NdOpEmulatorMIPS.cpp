@@ -115,12 +115,12 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
         return false;
       }
     }
-    if (System && System->canTakeInterrupt()) {
-      Context.Historical->enterException(Op.Addr, 0);
-      return false;
-    }
-    if (System) {
-      const auto Cop = mips::HistoricalCP0::coprocessorOf(Op.Inputs[1].Offset);
+    if (!System)
+      return true;
+    const uint32_t Word = Op.Inputs[1].Offset;
+    const bool IRQ = System->canTakeInterrupt();
+    if (!IRQ || System->Processor == mips::HistoricalProcessor::R4000) {
+      const auto Cop = mips::HistoricalCP0::coprocessorOf(Word);
       if (Cop && !System->coprocessorUsable(*Cop)) {
         Context.Historical->enterException(Op.Addr, 11);
         return false;
@@ -129,8 +129,17 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
         Context.Historical->enterException(Op.Addr, 10);
         return false;
       }
+      // R4000 table 5-13: a synchronous exception on the same instruction
+      // wins. The lifted operand check runs before any register or store
+      // effect.
+      if (!IRQ || mips::historicalSoftwareExceptionCode(Word) ||
+          mips::integerMemoryAccess(Word >> 26) ||
+          mips::historicalTrappingArithmeticBytes(Word) ||
+          mips::historicalTrap(Word))
+        return true;
     }
-    return true;
+    Context.Historical->enterException(Op.Addr, 0);
+    return false;
   }
   if (Id == Intrinsic::MIPSHistoricalOverflow ||
       Id == Intrinsic::MIPSHistoricalTrap ||
@@ -143,6 +152,15 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     const auto Word = Schedule->physicalWord(Op.Addr);
     if (!Word)
       return false;
+    // Board lines and interrupt masks cannot change inside this physical
+    // instruction. A successful check leaves the pending interrupt eligible.
+    const auto ContinueAfterCheck = [&] {
+      const auto &CPU = Schedule->system();
+      if (!CPU || !CPU->canTakeInterrupt())
+        return true;
+      Schedule->enterException(Op.Addr, 0);
+      return false;
+    };
     const auto Value = readOperand(Op.Inputs[1]);
     if (Id != Intrinsic::MIPSHistoricalAddressCheck) {
       const bool Trap = Id == Intrinsic::MIPSHistoricalTrap;
@@ -150,7 +168,7 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
                              : !mips::historicalTrappingArithmeticBytes(*Word)))
         return false;
       if (!Value)
-        return true;
+        return ContinueAfterCheck();
       Schedule->enterException(Op.Addr, Trap ? 13 : 12);
     } else {
       const auto Transfer = mips::integerMemoryAccess(*Word >> 26);
@@ -171,6 +189,8 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
           return false;
         Address = *PA;
       }
+      if (!ContinueAfterCheck())
+        return false;
       if (Op.Output.Size)
         writeOutput(Op.Output, Address);
       else if (Address != Value) {

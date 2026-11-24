@@ -23,6 +23,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <optional>
+#include <utility>
 
 namespace neverd::symbolic {
 
@@ -410,7 +412,7 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
     }
   }
 
-  llvm::APInt ConstFactor(W, 1);
+  std::optional<llvm::APInt> Coefficient;
   llvm::SmallVector<SymRef, 8> Rest;
 
   llvm::SmallVector<SymRef, 8> Work(Ops.begin(), Ops.end());
@@ -423,12 +425,19 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
       continue;
     }
     if (isConst(R)) {
-      ConstFactor *= constValue(R);
+      // The first coefficient already has the product width. Multiplying it
+      // by a wide one would run a full limb multiplication for a lone scale.
+      if (Coefficient)
+        *Coefficient *= constValue(R);
+      else
+        Coefficient = constValue(R);
       continue;
     }
     Rest.push_back(R);
   }
 
+  const auto ConstFactor =
+      Coefficient ? std::move(*Coefficient) : llvm::APInt(W, 1);
   if (ConstFactor.isZero())
     return mkZero(W);
   if (Rest.empty())

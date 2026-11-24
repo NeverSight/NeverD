@@ -1658,6 +1658,12 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_decompile_precall_v6",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t", "int", "const char *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_decompile_llvm",
     "const char *",
     ["neverd_session_t", "neverd_va_t"],

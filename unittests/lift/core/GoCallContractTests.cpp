@@ -21,6 +21,7 @@
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/GoCallContract.h"
+#include "neverd/ir/low/GoInlinedRoutine.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
@@ -651,11 +652,14 @@ TEST(GoStackGrowth, AnARM64ByteSpillGoesThroughATemporary) {
   EXPECT_EQ(Growth->Spills[0].EntryOffset, 24);
 }
 
-TEST(GoStackGrowth, AFloatSpillNamesNoModelledArgumentList) {
+TEST(GoStackGrowth, AFloatSpillIsAnArgumentToo) {
   // runtime.modf: cmp rsp, [r14+0x10]; jbe grow; ret
   //   grow: movsd [rsp+8], xmm0; call morestack_noctxt
   //         movsd xmm0, [rsp+8]; jmp runtime.modf
-  // Floating arguments are not modelled, so the spills are no argument list.
+  // The path spills the scalar the argument is, through a temporary of
+  // XMM0's low eight bytes, and names the function's parameters exactly: a
+  // double in X0, though the body never reads it.  Unmodelled, the path
+  // stayed in the function as a loop round a call of morestack.
   constexpr va_t Function = kTextVA + 0x100;
   GoTestImage T;
   T.writeText(Function, {0x49, 0x3B, 0x66, 0x10, 0x76, 0x01, 0xC3, 0xF2, 0x0F,
@@ -663,6 +667,43 @@ TEST(GoStackGrowth, AFloatSpillNamesNoModelledArgumentList) {
   T.writeText(Function + 0x0D, makeCall(Function + 0x0D, Morestack));
   T.writeText(Function + 0x12,
               {0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, 0xEB, 0xE6});
+  T.writeText(Morestack, {0xC3});
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Function, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const auto Growth = goStackGrowth(T.Img, build(T.Img, Function).Blocks);
+  ASSERT_TRUE(Growth.has_value());
+  ASSERT_EQ(Growth->Spills.size(), 1u);
+  EXPECT_EQ(Growth->Spills[0].Register, x86reg::vectorReg(0));
+  EXPECT_EQ(Growth->Spills[0].Size, 8u);
+  EXPECT_EQ(Growth->Spills[0].EntryOffset, 8);
+  const MedFunc F = lift(T.Img, Function);
+  EXPECT_TRUE(F.ExactRegisterParameters);
+  ASSERT_EQ(F.Params.size(), 1u);
+  EXPECT_EQ(F.Params[0].RegOff, x86reg::vectorReg(0));
+  const auto Scalar = F.FPParamScalarBytes.find(x86reg::vectorReg(0));
+  ASSERT_NE(Scalar, F.FPParamScalarBytes.end());
+  EXPECT_EQ(Scalar->second, 8u);
+  // Its summary reads the double for its callers.
+  const LocalRegisterEffect Effect = localRegisterEffect(
+      T.Img, build(T.Img, Function), nullptr, nullptr, nullptr, nullptr);
+  ASSERT_TRUE(Effect.GoArgumentReads.has_value());
+  EXPECT_EQ((*Effect.GoArgumentReads)[kX64VectorFamilyBase], 8u);
+}
+
+TEST(GoStackGrowth, ASpillOfANinthFloatingRegisterIsNotModelled) {
+  // The same path over XMM8: `movsd [rsp+8], xmm8 ... movsd xmm8, [rsp+8]`.
+  // A summary's vector rows name the first eight floating registers, so a
+  // path that spills a later one names an argument list no call completes.
+  constexpr va_t Function = kTextVA + 0x100;
+  GoTestImage T;
+  T.writeText(Function, {0x49, 0x3B, 0x66, 0x10, 0x76, 0x01, 0xC3, 0xF2, 0x44,
+                         0x0F, 0x11, 0x44, 0x24, 0x08});
+  T.writeText(Function + 0x0E, makeCall(Function + 0x0E, Morestack));
+  T.writeText(Function + 0x13,
+              {0xF2, 0x44, 0x0F, 0x10, 0x44, 0x24, 0x08, 0xEB, 0xE4});
   T.writeText(Morestack, {0xC3});
   GoModuleInfo Module;
   Module.RegisterArguments = true;
@@ -2025,6 +2066,143 @@ TEST(GoStackABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
   ASSERT_FALSE(Text.empty());
   EXPECT_NE(Text.find("mov %0, x28"), std::string::npos) << Text;
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
+TEST(GoStackGrowth, AFunctionOfFloatsEntersItsBodyDirectly) {
+  // main.m(x float64) (float64, float64) returns (x, x) for zero, (0, x)
+  // otherwise, and for a negative x the results of m(-x) the other way
+  // round; main.user adds the two.  `runtime.modf` has the shape.
+  //   main.m: cmp rsp, [r14+0x10]; jbe grow; push rbp; mov rbp, rsp
+  //           sub rsp, 8; xorps xmm2, xmm2; ucomisd xmm2, xmm0; ja neg
+  //           ucomisd xmm0, xmm2; jne zero; jp zero
+  //           movups xmm1, xmm0; add rsp, 8; pop rbp; ret
+  //     zero: movups xmm1, xmm0; movups xmm0, xmm2; add rsp, 8; pop rbp; ret
+  //     neg:  subsd xmm2, xmm0; movups xmm0, xmm2; call main.m
+  //           movups xmm2, xmm0; movups xmm0, xmm1; movups xmm1, xmm2
+  //           add rsp, 8; pop rbp; ret
+  //     grow: movsd [rsp+8], xmm0; call morestack; movsd xmm0, [rsp+8]
+  //           jmp main.m
+  //   main.user: the same entry and growth path round
+  //           call main.m; addsd xmm0, xmm1
+  // Each takes one double and keeps no growth path.  `main.m` returns RAX
+  // beside X0 and X1 only where its own call left it: the return two paths
+  // reach with RAX as the function was entered with hands back an unknown
+  // value there, where the function was refused once its body was no loop.
+  constexpr va_t M = kTextVA + 0x100;
+  constexpr va_t User = M + 0x70;
+  constexpr va_t Grow = M + 0xA0;
+  GoTestImage T;
+  T.writeText(M,
+              {0x49, 0x3B, 0x66, 0x10, 0x76, 0x49, 0x55, 0x48, 0x89, 0xE5, 0x48,
+               0x83, 0xEC, 0x08, 0x0F, 0x57, 0xD2, 0x66, 0x0F, 0x2E, 0xD0, 0x77,
+               0x1D, 0x66, 0x0F, 0x2E, 0xC2, 0x75, 0x0B, 0x7A, 0x09, 0x0F, 0x10,
+               0xC8, 0x48, 0x83, 0xC4, 0x08, 0x5D, 0xC3, 0x0F, 0x10, 0xC8, 0x0F,
+               0x10, 0xC2, 0x48, 0x83, 0xC4, 0x08, 0x5D, 0xC3, 0xF2, 0x0F, 0x5C,
+               0xD0, 0x0F, 0x10, 0xC2, 0xE8, 0xC0, 0xFF, 0xFF, 0xFF, 0x0F, 0x10,
+               0xD0, 0x0F, 0x10, 0xC1, 0x0F, 0x10, 0xCA, 0x48, 0x83, 0xC4, 0x08,
+               0x5D, 0xC3, 0xF2, 0x0F, 0x11, 0x44, 0x24, 0x08, 0xE8, 0x46, 0x00,
+               0x00, 0x00, 0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, 0xEB, 0x9E, 0x0F,
+               0x1F, 0x00, 0x66, 0x66, 0x2E, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00,
+               0x00, 0x00, 0x49, 0x3B, 0x66, 0x10, 0x76, 0x17, 0x55, 0x48, 0x89,
+               0xE5, 0x48, 0x83, 0xEC, 0x08, 0xE8, 0x7D, 0xFF, 0xFF, 0xFF, 0xF2,
+               0x0F, 0x58, 0xC1, 0x48, 0x83, 0xC4, 0x08, 0x5D, 0xC3, 0xF2, 0x0F,
+               0x11, 0x44, 0x24, 0x08, 0xE8, 0x08, 0x00, 0x00, 0x00, 0xF2, 0x0F,
+               0x10, 0x44, 0x24, 0x08, 0xEB, 0xD0, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{M, "main.m"}, std::pair{User, "main.user"},
+        std::pair{Grow, "runtime.morestack_noctxt"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.MorestackEntries = {Grow};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  for (const va_t Entry : {M, User}) {
+    SCOPED_TRACE(Entry);
+    const auto It = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &F) { return F.Entry == Entry; });
+    ASSERT_NE(It, R.MedFuncs.end());
+    ASSERT_EQ(It->Params.size(), 1u);
+    EXPECT_EQ(It->Params[0].RegOff, x86reg::vectorReg(0));
+    const auto Scalar = It->FPParamScalarBytes.find(x86reg::vectorReg(0));
+    ASSERT_NE(Scalar, It->FPParamScalarBytes.end());
+    EXPECT_EQ(Scalar->second, 8u);
+    EXPECT_TRUE(llvm::none_of(It->Blocks, [&](const MedBlock &Block) {
+      return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+        return Op.Opcode == NdOp::CALL && Op.NumInputs &&
+               Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal == Grow;
+      });
+    }));
+  }
+  const std::string Text = highCBody(R, T.Img, "main_m");
+  ASSERT_FALSE(Text.empty()) << R.Error;
+  EXPECT_NE(Text.find("double arg0"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("morestack"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("while"), std::string::npos) << Text;
+  const std::string Caller = highCBody(R, T.Img, "main_user");
+  ASSERT_FALSE(Caller.empty()) << R.Error;
+  EXPECT_NE(Caller.find("double arg0"), std::string::npos) << Caller;
+  EXPECT_EQ(Caller.find("morestack"), std::string::npos) << Caller;
+}
+
+TEST(GoInternalABI, ACallWithAFloatPassesTheIntegersItsSummaryBound) {
+  // main.f(p, n, c, x float64) stores n, c and x through p and returns
+  // p + 24 and c + 1; main.g(x) passes it a buffer of its own, 0, 5 and x,
+  // and stores the second result through the first.
+  //   main.f: mov [rax], rbx; mov [rax+8], rcx; movsd [rax+16], xmm0
+  //           add rax, 24; lea rbx, [rcx+1]; ret
+  //   main.g: sub rsp, 0x28; lea rax, [rsp]; xor ebx, ebx; mov ecx, 5
+  //           call main.f; mov [rax], rbx; add rsp, 0x28; ret
+  // A summary that lists a floating argument was no integer summary to call
+  // recovery, which scanned for the registers' setup instead of taking the
+  // operands the summary bound.  Register DCE keeps that setup for the
+  // platform's argument registers alone, and the call's own results end
+  // what RAX and RBX held, which are none of System V's: the buffer and the
+  // 0 printed unknown, as `strconv.genericFtoa(?, ?, 24, 'g', -1, 64, x)`.
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = F + 0x20;
+  GoTestImage T =
+      goFunctions({{{F, "main.f"}, {0x48, 0x89, 0x18, 0x48, 0x89, 0x48, 0x08,
+                                    0xF2, 0x0F, 0x11, 0x40, 0x10, 0x48, 0x83,
+                                    0xC0, 0x18, 0x48, 0x8D, 0x59, 0x01, 0xC3}},
+                   {{G, "main.g"},
+                    {0x48, 0x83, 0xEC, 0x28, 0x48, 0x8D, 0x04, 0x24, 0x31, 0xDB,
+                     0xB9, 0x05, 0x00, 0x00, 0x00, 0xE8, 0xCC, 0xFF, 0xFF, 0xFF,
+                     0x48, 0x89, 0x18, 0x48, 0x83, 0xC4, 0x28, 0xC3}}});
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const auto Caller =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == G; });
+  ASSERT_NE(Caller, R.MedFuncs.end());
+  const auto Info =
+      llvm::find_if(Caller->CallInfos, [&](const MedCallInfo &Call) {
+        return Call.TargetAddr == F;
+      });
+  ASSERT_NE(Info, Caller->CallInfos.end());
+  ASSERT_GE(Info->Args.size(), 3u);
+  ASSERT_TRUE(Info->Args[1].isConst());
+  EXPECT_EQ(Info->Args[1].ConstVal, 0u);
+  ASSERT_TRUE(Info->Args[2].isConst());
+  EXPECT_EQ(Info->Args[2].ConstVal, 5u);
+  const std::string Text = highCBody(R, T.Img, "main_g");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("&stack_storage"), std::string::npos) << Text;
+  EXPECT_NE(Text.find(", 0, 5, arg0)"), std::string::npos) << Text;
 }
 
 TEST(GoInternalABI, AFuncValueCallReturnsItsFloatResults) {
@@ -4160,7 +4338,7 @@ TEST(GoStackArguments, ArgumentsAndTheirCallsAreOnTheStack) {
   // Call recovery passes the callee's arguments on the stack where its own
   // recovery found them there.
   // Its record's 24 bytes hold its result too, after the two it reads.
-  const std::set<va_t> StackCallees{Add};
+  const std::map<va_t, int> StackCallees{{Add, -1}};
   std::map<va_t, int> TotalArity{{Add, static_cast<int>(F.Params.size())}};
   MedFunc G = lift(T.Img, Caller);
   recoverCallAbi(G, T.Img.Arch, {}, &T.Img, nullptr, &TotalArity, nullptr,
@@ -4214,7 +4392,7 @@ TEST(GoStackArguments, ACalleeWithoutASizeTakesWhatItReads) {
       const MedFunc F = lift(T.Img, Add);
       EXPECT_TRUE(F.StackArgumentsOnly);
       ASSERT_EQ(F.Params.size(), 2u);
-      const std::set<va_t> StackCallees{Add};
+      const std::map<va_t, int> StackCallees{{Add, -1}};
       std::map<va_t, int> TotalArity{{Add, 2}};
       MedFunc G = lift(T.Img, Caller);
       recoverCallAbi(G, T.Img.Arch, {}, &T.Img, nullptr, &TotalArity, nullptr,
@@ -4759,6 +4937,344 @@ TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
       EXPECT_EQ(Argument.ConstVal, I);
     else
       EXPECT_EQ(Argument.RegOff, I == 1 ? x86reg::RAX : x86reg::RBX);
+  }
+}
+
+TEST(GoAssembly, AnARM64RoutineRunInPlaceTakesTheRegistersItReads) {
+  // Reflection's register transfers and Duff's device run in their caller's
+  // place.  Standing alone, each takes the registers its body reads before
+  // it writes them: on arm64 that is X20, which neither Go's internal ABI
+  // nor AAPCS64 passes an argument in, so each printed it as a register
+  // nothing defines.
+  //   runtime.spillArgs:   stp x0, x1, [x20]; str x9, [x20, #72]; ret
+  //   runtime.unspillArgs: ldp x0, x1, [x20]; ret
+  //   runtime.duffzero:    stp xzr, xzr, [x20], #16 (twice); ret
+  constexpr va_t Spill = kTextVA + 0x100;
+  constexpr va_t Unspill = kTextVA + 0x140;
+  constexpr va_t Zero = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Spill, words({0xA9000680, 0xF9002689, 0xD65F03C0}));
+  T.writeText(Unspill, words({0xA9400680, 0xD65F03C0}));
+  T.writeText(Zero, words({0xA8817E9F, 0xA8817E9F, 0xD65F03C0}));
+  for (const auto &[Entry, Name] : {std::pair{Spill, "runtime.spillArgs"},
+                                    std::pair{Unspill, "runtime.unspillArgs"},
+                                    std::pair{Zero, "runtime.duffzero"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {
+      {Spill, Spill + 0x40}, {Unspill, Unspill + 0x40}, {Zero, Zero + 0x40}};
+  Module.RegisterArgumentTransfers = {{Spill, Spill + 0x40},
+                                      {Unspill, Unspill + 0x40}};
+  Module.DuffDevices = {{Zero, Zero + 0x40}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  const auto Registers = [&](va_t Entry) {
+    std::vector<uint64_t> Found;
+    if (const auto Operands = goInlinedRoutineOperands(T.Img, Entry))
+      for (const auto &Parameter : Operands->Parameters)
+        Found.push_back(Parameter.Register);
+    return Found;
+  };
+  // The platform's registers first, then Go's, then the others'.
+  EXPECT_EQ(Registers(Spill), (std::vector<uint64_t>{a64reg::X0, a64reg::X1,
+                                                     a64reg::X9, a64reg::X20}));
+  EXPECT_EQ(Registers(Unspill), (std::vector<uint64_t>{a64reg::X20}));
+  EXPECT_EQ(Registers(Zero), (std::vector<uint64_t>{a64reg::X20}));
+  // A point inside Duff's device begins a routine of its own.
+  EXPECT_EQ(Registers(Zero + 4), (std::vector<uint64_t>{a64reg::X20}));
+  EXPECT_FALSE(goInlinedRoutineOperands(T.Img, kTextVA + 0x300).has_value());
+
+  const MedFunc Stores = lift(T.Img, Spill);
+  ASSERT_EQ(Stores.Params.size(), 4u);
+  EXPECT_EQ(Stores.Params[3].RegOff, a64reg::X20);
+  EXPECT_TRUE(Stores.ExactRegisterParameters);
+
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  for (const char *Name :
+       {"runtime_spillArgs", "runtime_unspillArgs", "runtime_duffzero"}) {
+    const std::string Text = highCBody(R, T.Img, Name);
+    ASSERT_FALSE(Text.empty()) << Name;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+  EXPECT_NE(highCBody(R, T.Img, "runtime_spillArgs").find("*(int64_t *)arg3"),
+            std::string::npos)
+      << highCBody(R, T.Img, "runtime_spillArgs");
+}
+
+TEST(GoAssembly, AnX64RoutineRunInPlaceTakesItsSummarysRegisters) {
+  // x86-64 routines take the registers their summaries read
+  // (goEntryRegisterOperands), so the body gives none.
+  //   runtime.spillArgs: mov [r12], rax; ret
+  constexpr va_t Spill = kTextVA + 0x100;
+  GoTestImage T(Arch::X64);
+  T.writeText(Spill, {0x49, 0x89, 0x04, 0x24, 0xC3});
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Spill, Spill + 0x40}};
+  Module.RegisterArgumentTransfers = {{Spill, Spill + 0x40}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_FALSE(goInlinedRoutineOperands(T.Img, Spill).has_value());
+}
+
+TEST(GoAssembly, GoCodeHasNoVariadicPrologue) {
+  // Go passes a variadic argument as a slice, so no Go function has the
+  // platform's variadic prologue.  arm64's runtime.asyncPreempt keeps X0
+  // to X7 and V0 to V7 for the code it interrupts, as an AAPCS64 variadic
+  // function fills its register save area with both argument files:
+  //   stur x30, [sp, #-0xf0]; sub sp, sp, #0xf0
+  //   stp x0, x1, [sp, #8]; stp x2, x3, [sp, #0x18]
+  //   stp x4, x5, [sp, #0x28]; stp x6, x7, [sp, #0x38]
+  //   stp q0, q1, [sp, #0x50]; stp q2, q3, [sp, #0x70]
+  //   stp q4, q5, [sp, #0x90]; stp q6, q7, [sp, #0xb0]
+  //   add sp, sp, #0xf0; ret
+  constexpr va_t Preempt = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Preempt, words({0xF81103FE, 0xD103C3FF, 0xA90087E0, 0xA9018FE2,
+                              0xA90297E4, 0xA9039FE6, 0xAD0287E0, 0xAD038FE2,
+                              0xAD0497E4, 0xAD059FE6, 0x9103C3FF, 0xD65F03C0}));
+  // Read as the platform's code, the function is variadic.
+  EXPECT_TRUE(lift(T.Img, Preempt).IsVariadic);
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Preempt, Preempt + 0x40}};
+  Module.GoAssembly = {{Preempt, Preempt + 0x40}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_FALSE(lift(T.Img, Preempt).IsVariadic);
+}
+
+TEST(GoAssembly, ACallToCodeTheGoToolchainDidNotBuildFollowsThePlatform) {
+  // A routine the pclntab does not record is none the Go toolchain built:
+  // a libc routine a Darwin trampoline reaches through its stub.  It keeps
+  // the registers the platform's convention keeps, and the trampoline
+  // holds its argument block in X19 across the call.  As a call into Go
+  // code, which keeps no register, the store through X19 was unknown.
+  //   runtime.tramp: stp x29, x30, [sp, #-16]!; mov x19, x0; ldr x0, [x19]
+  //                  bl helper; str x0, [x19, #8]
+  //                  ldp x29, x30, [sp], #16; ret
+  //   helper:        add x0, x0, #1; ret
+  constexpr va_t Tramp = kTextVA + 0x100;
+  constexpr va_t Helper = kTextVA + 0x200;
+  constexpr va_t Site = Tramp + 12;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call = 0x94000000u | (((Helper - Site) >> 2) & 0x3FFFFFFu);
+  T.writeText(Tramp, words({0xA9BF7BFD, 0xAA0003F3, 0xF9400260, Call,
+                            0xF9000660, 0xA8C17BFD, 0xD65F03C0}));
+  T.writeText(Helper, words({0x91000400, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{Tramp, "runtime.tramp"}, std::pair{Helper, "helper"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Tramp, Tramp + 0x40}};
+  Module.GoAssembly = {{Tramp, Tramp + 0x40}};
+  Module.FrameArguments = {{Tramp, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  EXPECT_EQ(callRegisterContractOf(T.Img, Tramp, Helper),
+            CallRegisterContract::Platform);
+  // A call into Go code, or one that names no target, stays Go's.
+  EXPECT_EQ(callRegisterContractOf(T.Img, Tramp, Tramp),
+            CallRegisterContract::GoCode);
+  EXPECT_EQ(callRegisterContractOf(T.Img, Tramp, InvalidVA),
+            CallRegisterContract::GoCode);
+
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "runtime_tramp");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("helper("), std::string::npos) << Text;
+
+  // Without the table of the functions the pclntab records, nothing tells
+  // code it left out from code inside a function: the call stays Go's.
+  T.Img.ExceptionMetadata.GoModule->FrameArguments.clear();
+  EXPECT_EQ(callRegisterContractOf(T.Img, Tramp, Helper),
+            CallRegisterContract::GoCode);
+}
+
+TEST(GoStackABI, ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters) {
+  // Go 1.16's syscall.libc_mmap_trampoline is `B libc_mmap(SB)`: the libc
+  // routine takes its arguments in the platform's registers, which the
+  // trampoline was entered with and hands on.  It reads none of them, so
+  // as stack-ABI code it took no register argument and passed six unknown
+  // values.
+  //   syscall.libc_add_trampoline: b helper
+  //   helper:                      add x0, x0, x1; ret
+  constexpr va_t Tramp = kTextVA + 0x100;
+  constexpr va_t Helper = kTextVA + 0x200;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Tramp,
+              words({0x14000000u | (((Helper - Tramp) >> 2) & 0x3FFFFFFu)}));
+  T.writeText(Helper, words({0x8B010000, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{Tramp, "syscall.libc_add_trampoline"},
+        std::pair{Helper, "helper"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{Tramp, Tramp + 0x10}};
+  Module.FrameArguments = {{Tramp, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const auto It = llvm::find_if(
+      R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Tramp; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_FALSE(It->StackArgumentsOnly);
+  const std::string Text = highCBody(R, T.Img, "syscall_libc_add_trampoline");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("helper(arg0, arg1)"), std::string::npos) << Text;
+}
+
+TEST(GoAssembly, ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform) {
+  // Assembly calls Go code by name or through a func value, whose code
+  // pointer is the word the closure context register points at.  A call
+  // through any other pointer it loads reaches the platform's code:
+  // runtime.nanotime1 calls the vDSO routine a variable holds, with its
+  // stack pointer in R20, which that routine keeps and Go code would not.
+  //   plat:  stp x29, x30, [sp, #-32]!; mov x20, x0; ldr x2, [x1]; blr x2
+  //          str x0, [x20]; ldp x29, x30, [sp], #32; ret
+  //   fval:  the same, with `mov x26, x1` before the load
+  //   cross: the same as plat, with `cbz x2` between the load and the call
+  //   join:  the same as plat, with `cbz x3, 1f; add x4, x4, #1; 1:` there,
+  //          so two blocks lead to the call's
+  constexpr va_t Plat = kTextVA + 0x100;
+  constexpr va_t FuncValue = kTextVA + 0x140;
+  constexpr va_t Cross = kTextVA + 0x180;
+  constexpr va_t Joined = kTextVA + 0x1C0;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Plat, words({0xA9BE7BFD, 0xAA0003F4, 0xF9400022, 0xD63F0040,
+                           0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
+  T.writeText(Joined,
+              words({0xA9BE7BFD, 0xAA0003F4, 0xF9400022, 0xB4000043, 0x91000484,
+                     0xD63F0040, 0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
+  T.writeText(FuncValue,
+              words({0xA9BE7BFD, 0xAA0003F4, 0xAA0103FA, 0xF9400022, 0xD63F0040,
+                     0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
+  T.writeText(Cross, words({0xA9BE7BFD, 0xAA0003F4, 0xF9400022, 0xB4000062,
+                            0xD63F0040, 0xF9000280, 0xA8C27BFD, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{Plat, "runtime.plat"}, std::pair{FuncValue, "runtime.fval"},
+        std::pair{Cross, "runtime.cross"}, std::pair{Joined, "runtime.join"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Plat, Plat + 0x100}};
+  Module.FrameArguments = {
+      {Plat, 0, 0}, {FuncValue, 0, 0}, {Cross, 0, 0}, {Joined, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+  // The contract of the routine's one indirect call.
+  const auto Contract = [&](va_t Entry) {
+    const MedFunc F = lift(T.Img, Entry);
+    for (const MedBlock &Block : F.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INDIR_CALL)
+          return Op.RegisterContract;
+    ADD_FAILURE() << "no indirect call";
+    return CallRegisterContract::Platform;
+  };
+  EXPECT_EQ(Contract(Plat), CallRegisterContract::Platform);
+  EXPECT_EQ(Contract(Cross), CallRegisterContract::Platform);
+  EXPECT_EQ(Contract(Joined), CallRegisterContract::Platform);
+  EXPECT_EQ(Contract(FuncValue), CallRegisterContract::GoCode);
+  // Compiled code calls through method tables and func values alike: only
+  // assembly's pointers are told apart.
+  T.Img.ExceptionMetadata.GoModule->GoAssembly.clear();
+  EXPECT_EQ(Contract(Plat), CallRegisterContract::GoInternal);
+  T.Img.ExceptionMetadata.GoModule->GoAssembly = {{Plat, Plat + 0x100}};
+
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  for (const char *Name : {"runtime_plat", "runtime_cross", "runtime_join"}) {
+    const std::string Text = highCBody(R, T.Img, Name);
+    ASSERT_FALSE(Text.empty()) << Name;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+  // After a call into Go code X20 holds nothing.
+  const std::string Go = highCBody(R, T.Img, "runtime_fval");
+  ASSERT_FALSE(Go.empty());
+  EXPECT_NE(Go.find("__builtin_trap"), std::string::npos) << Go;
+}
+
+TEST(GoAssembly, AssemblyEnteredAsAClosureReadsItsContext) {
+  // The compiler's closures for comparing values of a size they hold jump
+  // to runtime.memequal_varlen, internal-ABI assembly that reads the size
+  // through the closure context.  The context was defined for compiled
+  // code alone, so the read went through a register nothing defines.
+  //   main.eq: mov rcx, [rdx+8]; add rax, rbx; add rax, rcx; ret
+  //   (arm64)  ldr x2, [x26, #8]; add x0, x0, x1; add x0, x0, x2; ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t F = kTextVA + 0x100;
+    GoTestImage T(A);
+    if (A == Arch::X64)
+      T.writeText(F, {0x48, 0x8B, 0x4A, 0x08, 0x48, 0x01, 0xD8, 0x48, 0x01,
+                      0xC8, 0xC3});
+    else
+      T.writeText(F, words({0xF9400742, 0x8B010000, 0x8B020000, 0xD65F03C0}));
+    Symbol Function = Symbol::makeFunc(F);
+    Function.Name = "main.eq";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.GoAssembly = {{F, F + 0x20}};
+    Module.FrameArguments = {{F, 0, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_eq");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_NE(Text.find(A == Arch::X64 ? "movq %%rdx" : "mov %0, x26"),
+              std::string::npos)
+        << Text;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
   }
 }
 

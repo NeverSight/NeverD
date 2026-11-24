@@ -82,6 +82,11 @@ after linking the object with the target linker.
   backedge and a folded-XOR backedge. On each backedge, the difference after
   the jump delay slot must still prove equality of both operand halves at zero.
   Replacing the difference on a single edge can invalidate the guard.
+  When two paths share a latch, a branch-likely executes its delay slot
+  only on the taken backedge. The untaken edge carries the pre-slot counter
+  and difference to the exit test, including across a jump over the other arm.
+  A value changed only on the backedge can qualify again if every path
+  recomputes the full comparison before reaching the call.
   A single word can hold the OR of two 32-bit differences. A word
   spill of a 64-bit XOR can leave its high half unchecked.
   Full-width moves carry the established fact across basic blocks.
@@ -1556,6 +1561,11 @@ scheduling contract. Floating arithmetic additionally requires an executor
 that explicitly declares the historical ISA; the modern pre-R6 FPU does not
 claim R3000/R4000 floating-point exception, NaN or subnormal behavior.
 
+For a raw historical code span, `neverd-mips-bench` accepts `mips1`, `mips2`
+and `mips3`. Append `el` for little-endian bytes. The `capstone` and `decode`
+stages use the same configured Capstone handle. The `lift` stage includes
+the historical begin/retire operations and executed delay slots.
+
 A historical scheduling snapshot can additionally bind a processor's CP0 state.
 The R30xx and R4000 have distinct exception rules. A MIPS II CW4011 snapshot
 selects its R3000- or R4000-compatible exception mode. Historical CP0 moves use
@@ -1596,15 +1606,33 @@ hardware interrupt lines between physical instructions. A recorded issue PC can
 bind that sample to an instruction or an executed delay slot. A failed issue
 preserves the sample for retry.
 
+When an IRQ and a modeled synchronous fault belong to the same R4000
+instruction, the synchronous fault supplies the exception code and the IRQ
+remains visible in Cause.IP. This includes instruction fetch, scalar integer
+data alignment and translation, integer overflow and trap, SYSCALL/BREAK,
+unusable coprocessors and restricted doubleword operations. A successful
+operand check lets the IRQ enter before a load, store or GPR write takes
+effect. In an executed delay slot, EPC names the branch and Cause.BD is set.
+The issue sample establishes which instruction competes with the IRQ.
+Measuring the time from the CPU pin to recognition still requires a common
+hardware clock for both events. Cause.IP reflects the current line levels. A line may have fallen by the time the handler reads Cause.
+[R4000 exception priorities](https://www.eecg.utoronto.ca/~moshovos/ACA/R4000.pdf#page=153),
+[R4000 interrupt exception](https://www.eecg.utoronto.ca/~moshovos/ACA/R4000.pdf#page=173).
+
 A cold-reset snapshot for R30xx or R4000 supplies the unspecified register
 values. The first physical instruction must come from the uncached boot ROM
 at physical address `0x1fc00000`. A bound MMU snapshot checks guest
 instruction fetches against physical bytes. Aligned and byte scalar integer
 transfers translate through a complete 64-entry R3000A or 48-entry R4000
-table. R4000 compatibility translations support even and odd pages, global
-pairs and variable page sizes. On a miss to a sign-extended 32-bit address,
-the R4000 selects the refill vector from the interrupted mode's UX, SX or KX
-bit. Extended addressing adds `0x80` to the refill vector. A miss with EXL
+table. R4000 translations support even and odd pages, global pairs and
+variable page sizes. With extended addressing active, mapped addresses
+retain their region and all 40 virtual address bits during TLB lookup.
+User, supervisor and kernel access follow the R4000 segment bounds.
+For a defined `xkphys` cache attribute, the low 36 bits supply the physical
+address directly. Fetching or accessing a hole in the extended address
+space raises Address Error. The R4000 selects the refill vector from the
+interrupted mode's UX, SX or KX bit. Extended addressing adds `0x80` to
+the refill vector. A miss with EXL
 already set uses the general vector and preserves EPC. Invalid entries and
 writes to clean pages also use the general vector. The big- and little-endian
 system tests stamp the vector actually entered in the guest ROM. In QEMU
@@ -1620,8 +1648,27 @@ cache miss. Replaying that silicon erratum requires the pipeline and cache
 state. The manufacturer's report gives no write-to-first-translation interval.
 [R4000PC/SC revision errata, item 11](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=3).
 
-Extended R4000 address regions, TLB management instructions, reverse-endian
-user data, cache-isolation data accesses and CW4011 MMU behavior need
+The big- and little-endian R4000 guest ROMs map two pages with identical
+low 32 bits, fill both translations, rewrite the high tag with `TLBWI`,
+then read and execute from the replacement frame. A guest exception handler
+reads the full EPC to identify the executed virtual page. This tests access
+order. Measuring elapsed hardware cycles requires a trace that records the
+TLB write and the first use of its new physical frame on the same clock.
+[R4000 manual, segment tables 4-1 through 4-5](https://techpubs.jurassic.nl/library/manuals/2000/007-2489-001/pdf/007-2489-001.pdf#page=98).
+
+On an N64, the registered `TLB64Execute` probe maps two 16 KiB pages
+with the same low address bits. The high page returns 64 and its low alias
+would return 32. The author reports zero failures in the hardware run.
+NeverD replays the two distinct instruction words through an R4000 MMU
+snapshot in both byte orders.
+[VR4300 probe](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/tlb64/mod.rs#L630-L710),
+[registered cases](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/testlist.rs#L1128-L1129),
+[hardware run](https://github.com/thelemmy/nemu64-test/commit/c918c15794bcc80483352e50905bec43025f739c).
+
+The snapshot executor leaves non-sign-extended addresses in 32-bit mode,
+reserved `xkphys` cache attributes and extended user addresses above the
+low 2 GiB under ERL unresolved. TLB management instructions, reverse-endian
+user data, cache-isolation data accesses and CW4011 MMU behavior also need
 additional processor-specific evidence.
 
 On a 40 MHz R3000 DECstation 5000/240 running Mach 3.0, the IOASIC counter
@@ -1633,6 +1680,16 @@ write. Neither timestamps the first fetch or load that sees the new mapping.
 [Bala et al., table 1](https://www.usenix.org/conference/osdi-94/software-prefetching-and-caching-translation-lookaside-buffers),
 [CWI measurements, SGI Indy “boktor”](https://homepages.cwi.nl/~manegold/Calibrator/DB/boktor.pdf).
 
+The Monster monitor on an R2000 DECstation 3100 timed software markers at
+the entry and exit of TLB miss handlers. On the SGI POWER 4D/340, a bus
+monitor recorded cache misses on four 33 MHz R3000s with 60 ns timestamps.
+The SGI kernel emitted the TLB index, virtual and physical page numbers, and
+process ID through additional uncached reads. Neither record pairs a TLB
+array write with the first translation using that entry. A first use that
+hits in cache can be absent from the SGI bus trace.
+[Nagle et al., section 3.1](https://tnm.engin.umich.edu/wp-content/uploads/sites/353/2021/03/1992.12.SoftwareTLB_Management.pdf#page=3),
+[Torrellas et al., section 2.2](https://courses.grainger.illinois.edu/CS533/sp2025/reading_list/10a.pdf#page=2).
+
 For R4000PC/SC revisions 2.2 and 3.0, item 27 of the silicon errata puts
 `TLBWR` in a taken branch-likely delay slot, followed by `NOP` and `ERET`.
 The R4000 guest test uses that sequence in both byte orders. A probe miss
@@ -1643,6 +1700,27 @@ The native lifter test checks fetch and load against successive MMU snapshots.
 The erratum specifies instruction order and the guest runs report architectural
 results. Neither supplies the clock edge at which the physical TLB changed.
 [MIPS R4000PC/SC errata, item 27, pp. 5–6](https://repo.oss.cipunited.com/archives/docs/MIPS/R4x00/R4000_3.0_2.2_PC_SC_errata.pdf#page=6).
+
+The VR4300 cross-page probe maps adjacent 4 KiB virtual pages to physical
+frames separated by an intervening frame. The probe expects `v0 = 0x300`
+after a taken branch at offset `0xffc` executes the odd page's delay slot
+and its target.
+The native regression replays the branch in both byte orders. It checks the
+old and replacement slots against distinct physical words, then invalidates
+the odd page and checks the fault address, branch EPC and Cause.BD. The MMU
+snapshots identify which frame the slot used. The time of the TLB write on
+silicon remains open.
+[VR4300 split-page probe](https://github.com/lemmy-64/n64-systemtest/blob/196f5421173220eb2f63a7a99c64795dc0ea0698/src/tests/tlb/cross_page_exec.rs#L112-L129).
+
+The N64 test maintainer reports a full hardware run with zero failures in
+3,935 cases. That revision registers the split-page branch test. Its separate
+timing group uses CP0 Count and expects one CPU cycle for a single `TLBWI`
+or `TLBWR` in the measured code. The timing group is opt-in and the run
+summary gives no per-case samples. Neither case records when a replacement
+entry became visible alongside the first access that used it.
+[N64 hardware run](https://github.com/thelemmy/nemu64-test/commit/c918c15794bcc80483352e50905bec43025f739c),
+[registered tests](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/testlist.rs#L1106),
+[TLB timing cases](https://github.com/thelemmy/nemu64-test/blob/c918c15794bcc80483352e50905bec43025f739c/src/tests/timing/mod.rs#L517-L546).
 
 IDT's HP16500 listing for an R3051 shows three boot ROM reads. The first
 fetch at physical `0x1fc00000` supplies a jump, the read at `0x1fc00004`
@@ -1656,6 +1734,45 @@ falling SysClk edge and requests the vector word on the sixth rising edge
 after detection. The analyzer listing begins at the read.
 [IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf),
 [R3051 hardware manual, chapter 10, Reset Behavior](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/cpu/mips/r3051.pdf#page=131).
+
+On Stanford's FAST board, an oscilloscope recorded the R3000's 25 MHz
+system clock, its instruction-request output and the FPGA's instruction-ready
+signal. Three uncached bus reads are visible. The instrument captured a
+steady-state read every three clocks (120 ns). The trace omits reset release
+and the internal fetch stage, so it gives no reset-to-first-fetch interval.
+[Davis et al., figure 5](https://www.microsoft.com/en-us/research/wp-content/uploads/2005/11/DASCMP2005_FAST.pdf#page=7).
+
+Crescent Heart recorded reset release and the first boot instruction read on
+the same asynchronous logic-analyzer timebase for two MIPS III processors.
+Each interval starts at the rising edge of `ResetB` and ends when the CPU
+first presents the read on its external bus.
+
+| Processor | First request in figure 5.1 | Time from reset release | Range read from the published pixels |
+| --- | --- | ---: | ---: |
+| R4300 | `PValidB` falls on the first `ReadReq` | 200 ns | 196–204 ns |
+| R4600 | `ValidOutB` falls on the four-byte read of `0x1fc00000` | 64 ns | 62–66 ns |
+
+The R4300 capture also shows the ROM response `0x0bf00158`. Its cursors at
+238 and 598 ns identify the request and response transactions. The first
+request edge precedes the 238 ns cursor. On the R4600 the CPU holds the
+request while the board is busy. The ranges reflect the resolution of the
+published waveforms. Board wait states, pipeline fetch and instruction
+retirement are separate events. Figure 4.3 of each manual supplies the boot
+jump, delay slot and target words used by the big- and little-endian lift
+tests. The tests bind the ROM at its physical addresses and check each
+instruction through the MIPS III unmapped reset segment in both byte orders.
+The compatible R4000 reset profile supplies the test's initial CP0 state.
+[R4300 probe manual, figure 5.1](https://archive.org/download/manualzilla-id-5722005/5722005.pdf#page=47),
+[R4XXX probe manual, R4600 figure 5.1](https://web.archive.org/web/20030728054757id_/http://www.c-h-s.com/r4xxxps.pdf#page=58).
+
+To reproduce the intervals, download both linked manuals and run the
+[waveform reader](../unittests/lift/mips/historical-reset-capture.py) with
+Python and PyMuPDF. It checks each PDF's SHA-256 and reports the pixels
+bracketing both transitions and their separation in nanoseconds.
+
+```sh
+python3 unittests/lift/mips/historical-reset-capture.py r4300ps.pdf r4xxxps.pdf
+```
 
 A separate PlayStation logic-analyzer observation identifies the boot ROM
 timing change after the BIOS writes the memory controller. The fetch at
@@ -1684,6 +1801,12 @@ board delivery, exception entry, and the probe write. The experiment does
 not resolve the instruction at which the CPU recognized the input.
 [DEC PRL Research Report 19, sections 3.1–3.2, figures 6 and 9](https://ftpmirror.your.org/pub/misc/bitsavers/pdf/dec/tech_reports/PRL-RR-19.pdf#page=16).
 
+On a Tandem R4400, CITCAT used a hardware branch counter and uncached
+exception-handler stores of EPC and Cause to locate the interrupted
+instruction. The capture omitted the originating interrupt signal. Its
+instruction boundary therefore has no corresponding pin-edge timestamp.
+[Rose, section 4.3](https://charltonrose.com/citcat/msthesis/msthesis.pdf#page=31).
+
 IDT gives separate R3051/2 pipeline latencies to the general exception
 vector while the pipeline runs. A direct, externally synchronized interrupt
 takes one cycle and an internally synchronized input takes two. A stalled
@@ -1692,6 +1815,12 @@ stated conditions. A physical pin-to-recognition measurement still needs
 the CPU input transition and an identifiable recognition event on the same
 timebase. NeverD accepts the observed interrupt state at an instruction boundary.
 [IDT application note AN-131, Pipeline Latency, pp. 103–104](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/861.pdf#page=1).
+
+The VR4300 test ROM also compares back-to-back writes that assert and clear
+a software interrupt with a sequence that inserts one NOP. The latter checks
+that EPC identifies the clearing instruction. Both sequences drive Cause
+from software, so the recorded instruction boundary carries no CPU-pin time.
+[VR4300 software interrupt probes](https://github.com/thelemmy/nemu64-test/blob/9a8b9f7d94ee2f6f57d7feed70c98c22cdc30e6c/src/tests/exception_instructions/mod.rs#L641-L748).
 
 On a little-endian Sony SCPH-5501 (PRId 2, US ROM 3.0), the
 `irqsio` memory-card reports give the instruction count between enabling
@@ -1702,6 +1831,27 @@ the retirement count, exception vector and Status using representative
 instructions. The timing of the electrical IRQ pin was outside this probe.
 [Board and test description](https://psx.wiki/tests/irqsio/),
 [card-b](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt),
+[card-g](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g/irqsio/14IEX.txt),
+[card-g3](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g3/irqsio/14IEX.txt).
+
+In a separate `14IEX` trial, root counter 2 interrupts a three-word loop.
+Each of the three card reports records the same 16 EPC/BD pairs for timer
+targets 100 through 115. Five entries have BD set. At a branch and at its
+delay slot the saved EPC is word 2 relative to the mode write. Only the slot
+sets BD. The other instruction saves word 1. Both endian encodings of a
+representative loop reproduce those three exception states when the input
+is supplied at the observed instruction boundaries. The board ran
+little-endian. The reports record handler state and timer settings without
+an electrical timestamp for the CPU interrupt pin.
+[Original card report, timer loop](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt).
+
+In the two linear timer sweeps, each report lists 16 settings, 100–107
+and 150–157. Across all 48 observations the handler's timer 2 reading
+exceeds the programmed compare value by 35–46 system-clock counts, with a
+median of 40. For each column, subtract its programmed target from the
+reading to the right of `@`. The value to the left counts instructions.
+These are timer and handler measurements on the board's counter.
+[Timer sweeps on card-b](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-b/irqsio/14IEX.txt),
 [card-g](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g/irqsio/14IEX.txt),
 [card-g3](https://psx.wiki/tests/raw/20260927T0000Z-5501a-card-g3/irqsio/14IEX.txt).
 
@@ -2030,6 +2180,14 @@ Single-instruction MIPS decoding uses the static Capstone entry for classic and
 compressed profiles. The streaming iterator supplies the operand and text
 reference. Historical admission, Release 6 forbidden followers and NeverD ASE
 adapters still run at their profile boundaries.
+
+With assembly text disabled and detail enabled, classic MIPS I–V and Release
+2/5 can map common scalar encodings without building printer operands. The
+fixed-address decoder uses Capstone's regular instruction and implicit-effect
+tables. For word loads and stores the DSP predicate selects the same mapping
+as the generated decoder, including its instruction groups. Unaligned loads
+and stores use the generated decoder. The public iterator is the comparison
+for IDs, groups, register effects, physical bytes and alias state.
 
 The baseline for decoder measurements is
 bcef8d07e1, with matched Release compiler and dependency inputs except for

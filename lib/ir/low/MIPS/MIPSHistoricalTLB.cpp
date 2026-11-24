@@ -21,9 +21,7 @@ HistoricalTLB::translate(const HistoricalCP0 &CPU, uint64_t VA,
     return std::nullopt; // Isolated D-cache accesses do not address ordinary
                          // RAM.
   const uint32_t Address = static_cast<uint32_t>(VA);
-  // These profiles cover R3000A and the R4000 compatibility segments. The
-  // xuseg/xsseg/xkphys/xkseg regions have different privilege and VA rules.
-  if (R3000 ? VA != Address : VA != uint64_t(int64_t(int32_t(Address))))
+  if (R3000 && VA != Address)
     return std::nullopt;
   const bool Kernel =
       R3000 ? !(CPU.Status & 2) : (CPU.Status & 6) || !(CPU.Status & 0x18);
@@ -33,14 +31,40 @@ HistoricalTLB::translate(const HistoricalCP0 &CPU, uint64_t VA,
       (CPU.Status & (1u << 25)))
     return std::nullopt; // User-mode reverse-endian data uses different byte
                          // lanes.
-  if (Address >= 0x80000000u && !Kernel &&
-      !(Supervisor && Address >= 0xc0000000u && Address < 0xe0000000u))
-    return HistoricalTranslation{HistoricalAddressResult::AddressError};
-  if (Address >= 0x80000000u && Address < 0xc0000000u)
-    return HistoricalTranslation{HistoricalAddressResult::Mapped,
-                                 Address & 0x1fffffffu};
-  if (!R3000 && (CPU.Status & 4) && Address < 0x80000000u)
-    return HistoricalTranslation{HistoricalAddressResult::Mapped, Address};
+  if (R3000 || VA == uint64_t(int64_t(int32_t(Address)))) {
+    if (Address >= 0x80000000u && !Kernel &&
+        !(Supervisor && Address >= 0xc0000000u && Address < 0xe0000000u))
+      return HistoricalTranslation{HistoricalAddressResult::AddressError};
+    if (Address >= 0x80000000u && Address < 0xc0000000u)
+      return HistoricalTranslation{HistoricalAddressResult::Mapped,
+                                   Address & 0x1fffffffu};
+    if (!R3000 && (CPU.Status & 4) && Address < 0x80000000u)
+      return HistoricalTranslation{HistoricalAddressResult::Mapped, Address};
+  } else {
+    // R4000 manual, tables 4-1, 4-2 and 4-4. A non-sign-extended address
+    // produced in 32-bit addressing mode has no guaranteed translation.
+    if (!CPU.usesExtendedAddressing())
+      return std::nullopt;
+    const auto Region = VA >> 62;
+    const HistoricalTranslation Error{HistoricalAddressResult::AddressError};
+    if (Region == 2) { // xkphys carries CCA in [61:59] and PA in [35:0].
+      if (!Kernel || (VA & UINT64_C(0x07fffff000000000)))
+        return Error;
+      const auto CCA = (VA >> 59) & 7;
+      if (CCA < 2 || CCA == 7)
+        return std::nullopt;
+      return HistoricalTranslation{HistoricalAddressResult::Mapped,
+                                   VA & UINT64_C(0xfffffffff)};
+    }
+    // xuseg and xsseg span 1 TiB each. The upper 2 GiB of xkseg are
+    // accessible only through the sign-extended compatibility segments.
+    if ((VA & UINT64_C(0x3fffff0000000000)) ||
+        (Region == 1 && !Kernel && !Supervisor) ||
+        (Region == 3 && (!Kernel || VA > UINT64_C(0xc00000ff7fffffff))))
+      return Error;
+    if (Region == 0 && (CPU.Status & 4))
+      return std::nullopt; // Only the low 2 GiB are specified under ERL.
+  }
 
   if (Entries.size() != (R3000 ? 64u : 48u) || (R3000 && ASID >= 64))
     return std::nullopt;

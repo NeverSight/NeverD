@@ -2316,6 +2316,30 @@ AnalysisCacheWarmup prefillOmittedCallees(const BinaryImage &Img,
   return Warmup;
 }
 
+const OmittedCalleeBodies &omittedCalleeBodies(const BinaryImage &Img,
+                                               PipelineResult &Result,
+                                               bool SourceDeclarations,
+                                               bool SourceParameterReads) {
+  std::vector<va_t> Functions;
+  for (const MedFunc &F : Result.MedFuncs)
+    Functions.push_back(F.Entry);
+  if (!Result.OmittedCallees || Result.OmittedCallees->Functions != Functions ||
+      Result.OmittedCallees->IncludesSourceDeclarations != SourceDeclarations ||
+      Result.OmittedCallees->IncludesSourceParameterReads !=
+          SourceParameterReads) {
+    OmittedCalleeBodies Omitted;
+    Omitted.Functions = std::move(Functions);
+    Omitted.IncludesSourceDeclarations = SourceDeclarations;
+    Omitted.IncludesSourceParameterReads = SourceParameterReads;
+    Omitted.Bodies = omittedDirectCalleeSignatures(
+        Img, Result, SourceDeclarations, SourceParameterReads,
+        Omitted.SourceOriginalBlocks);
+    Result.OmittedCallees =
+        std::make_shared<const OmittedCalleeBodies>(std::move(Omitted));
+  }
+  return *Result.OmittedCallees;
+}
+
 void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                           const std::map<va_t, std::string> &AllFuncNames,
                           bool SourceDeclarations, bool SourceParameterReads) {
@@ -2334,31 +2358,15 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   auto &VectorArgumentCallees = Maps.VectorArguments;
   auto &CalleeConsumesVaList = Maps.ConsumesVaList;
   auto &CalleeIntRegs = Maps.IntRegs;
-  std::vector<va_t> Functions;
-  for (const MedFunc &F : Result.MedFuncs)
-    Functions.push_back(F.Entry);
   // The memo of the image's callees, where the run shares one, keeps the
   // image's function-pointer variables and the probes of its bodies.
   OmittedCalleeMemo *Memo = Result.CalleeSignatureMemo.get();
   if (Memo)
     Memo->adopt(Img, Result);
-  if (!Result.OmittedCallees || Result.OmittedCallees->Functions != Functions ||
-      Result.OmittedCallees->IncludesSourceDeclarations != SourceDeclarations ||
-      Result.OmittedCallees->IncludesSourceParameterReads !=
-          SourceParameterReads) {
-    OmittedCalleeBodies Omitted;
-    Omitted.Functions = Functions;
-    Omitted.IncludesSourceDeclarations = SourceDeclarations;
-    Omitted.IncludesSourceParameterReads = SourceParameterReads;
-    Omitted.Bodies = omittedDirectCalleeSignatures(
-        Img, Result, SourceDeclarations, SourceParameterReads,
-        Omitted.SourceOriginalBlocks);
-    Result.OmittedCallees =
-        std::make_shared<const OmittedCalleeBodies>(std::move(Omitted));
-  }
   // The passes before recovery read the kept bodies in place.
   const std::vector<std::shared_ptr<const MedFunc>> &OmittedCallees =
-      Result.OmittedCallees->Bodies;
+      omittedCalleeBodies(Img, Result, SourceDeclarations, SourceParameterReads)
+          .Bodies;
   // What a call through each function-pointer variable passes on.
   std::map<va_t, PointerVariableCallee> OwnPointerCallees;
   if (!Memo)
@@ -2373,11 +2381,18 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   for (const auto &F : OmittedCallees)
     SignatureBodies.push_back(F.get());
   // The callees whose own recovery found every argument on the stack (Go
-  // before its internal ABI): their calls pass them there.
-  std::set<va_t> StackArgumentCallees;
+  // before its internal ABI): their calls pass them there, and no word of
+  // the results of one the run leaves out
+  // (PipelineResult::GoStackArgumentWords).
+  std::map<va_t, int> StackArgumentCallees;
   for (const MedFunc *MF : SignatureBodies)
-    if (MF->StackArgumentsOnly)
-      StackArgumentCallees.insert(MF->Entry);
+    if (MF->StackArgumentsOnly) {
+      const auto Arguments = Result.GoStackArgumentWords.find(MF->Entry);
+      StackArgumentCallees.emplace(
+          MF->Entry, Arguments == Result.GoStackArgumentWords.end()
+                         ? -1
+                         : Arguments->second);
+    }
   // The memo's conversions of the omitted bodies, which keep their forwarder
   // probes.
   std::vector<OmittedCalleeMemo::Conversion *> KeptBodies(

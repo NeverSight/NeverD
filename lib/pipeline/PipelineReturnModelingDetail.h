@@ -52,6 +52,18 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
 /// call it makes returns reads those results of that call.
 void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result);
 
+/// Return, from every Go stack-ABI function, the results it stores in its
+/// caller's frame, in the result registers of Go's internal ABI
+/// (MedFunc::GoStackResults), and store them in the caller's frame again
+/// after each direct call of it: the stack ABI returns nothing in a register,
+/// and a C function writes no word of its caller's frame.  A callee the run
+/// leaves out is read for its results as the run's call recovery reads it,
+/// with the same \p SourceDeclarations and \p SourceParameterReads
+/// (recoverModuleCallAbi).
+void materializeGoStackResults(const BinaryImage &Img, PipelineResult &Result,
+                               bool SourceDeclarations,
+                               bool SourceParameterReads);
+
 /// Learn each callee's multi-register return shape from its direct callers'
 /// field-extract remodeling and re-type the callee to match.  64-bit targets.
 void recoverStructReturnFromCallers(const BinaryImage &Img,
@@ -108,6 +120,12 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
 /// Bind declared scalar floating results to their physical return register,
 /// and propagate the resulting types through forwarding calls in both routes.
 void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result);
+
+/// Give each read of RAX after a call to a callee that never writes RAX the
+/// value the caller left there (GCC's -fipa-ra keeps one across such a
+/// call), once the calls' float and record results are bound.  x86-64 only.
+void keepCallersValueInReturnRegister(const BinaryImage &Img,
+                                      PipelineResult &Result);
 
 /// Settle which functions return no value a caller could rely on
 /// (MedFunc::ReturnsNoValue), once for both C backends.

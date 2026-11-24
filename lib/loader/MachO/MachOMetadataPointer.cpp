@@ -50,7 +50,11 @@ const uint8_t *readMetadataBytes(const BinaryImage &Image, va_t Address,
 
 namespace {
 
-std::optional<va_t> readCachePointer(const BinaryImage &Image, va_t Slot) {
+#define NEVERD_DARWIN_CXX_ABI_VALUE(Name, Value) constexpr va_t Name = Value;
+#include "DarwinCxxABI.def"
+
+std::optional<va_t> readCachePointer(const BinaryImage &Image, va_t Slot,
+                                     bool PlainOnly) {
   const auto *Bytes = readMetadataBytes(Image, Slot, arm64e::kPointerBytes);
   if (!Bytes)
     return std::nullopt;
@@ -70,6 +74,8 @@ std::optional<va_t> readCachePointer(const BinaryImage &Image, va_t Slot) {
     return std::nullopt;
   const auto &Fixup = Fixups->front();
   if (Fixup.Authentication) {
+    if (PlainOnly)
+      return std::nullopt;
     if (Raw != Fixup.EncodedValue)
       return std::nullopt;
     if (Auth != Image.MachOAuthenticatedPointers.end()) {
@@ -99,17 +105,12 @@ std::optional<va_t> readCachePointer(const BinaryImage &Image, va_t Slot) {
     if (Raw != (Resolved ? Fixup.Target : Fixup.EncodedValue))
       return std::nullopt;
   }
-  if (!Fixup.Target)
-    return 0;
-  return readMetadataBytes(Image, Fixup.Target, 1)
-             ? std::optional<va_t>(Fixup.Target)
-             : std::nullopt;
+  return Fixup.Target;
 }
 
-} // namespace
-
-std::optional<va_t> readMetadataPointerTarget(const BinaryImage &Image,
-                                              va_t Slot) {
+// Preserve the high bits of a plain rebase until its ABI field is known.
+std::optional<va_t> readMetadataPointerValue(const BinaryImage &Image,
+                                             va_t Slot, bool PlainOnly) {
   const unsigned Width = Image.getPointerSize();
   if (Image.Format != BinaryFormat::MachO ||
       Image.MachOChainedFixupsAmbiguous ||
@@ -126,7 +127,7 @@ std::optional<va_t> readMetadataPointerTarget(const BinaryImage &Image,
           Image.ConflictingImportStorageSlots.count(At) ||
           (At != Slot && Image.MachOAuthenticatedPointers.count(At)))
         return std::nullopt;
-    return readCachePointer(Image, Slot);
+    return readCachePointer(Image, Slot, PlainOnly);
   }
   const auto *Owner = Image.getSegmentFor(Slot);
   if (!Owner || !Owner->isReadable() || Owner->Size > InvalidVA - Owner->VA ||
@@ -166,9 +167,9 @@ std::optional<va_t> readMetadataPointerTarget(const BinaryImage &Image,
     return Raw;
   }
   const auto &Recipe = Auth->second;
-  if (Image.Arch != Arch::AArch64 || Width != arm64e::kPointerBytes ||
-      !Recipe.EncodedValue || *Recipe.EncodedValue != Raw ||
-      !arm64e::kAuthentication.extract(Raw) ||
+  if (PlainOnly || Image.Arch != Arch::AArch64 ||
+      Width != arm64e::kPointerBytes || !Recipe.EncodedValue ||
+      *Recipe.EncodedValue != Raw || !arm64e::kAuthentication.extract(Raw) ||
       Recipe.Key != arm64e::kKey.extract(Raw) ||
       Recipe.Diversity != arm64e::kDiversity.extract(Raw) ||
       Recipe.AddressDiversity != bool(arm64e::kAddressDiversity.extract(Raw)) ||
@@ -184,6 +185,27 @@ std::optional<va_t> readMetadataPointerTarget(const BinaryImage &Image,
     if (&Other != Target && Other.contains(Recipe.Target))
       return std::nullopt;
   return Recipe.Target;
+}
+
+} // namespace
+
+std::optional<va_t> readMetadataPointerTarget(const BinaryImage &Image,
+                                              va_t Slot) {
+  auto Target = readMetadataPointerValue(Image, Slot, /*PlainOnly=*/false);
+  if (Image.MachOSharedCache && Target && *Target &&
+      !readMetadataBytes(Image, *Target, 1))
+    return std::nullopt;
+  return Target;
+}
+
+std::optional<va_t> readArm64TypeNameAddress(const BinaryImage &Image,
+                                             va_t Slot) {
+  if (Image.Arch != Arch::AArch64 || !Image.is64Bit())
+    return std::nullopt;
+  auto Word = readMetadataPointerValue(Image, Slot, /*PlainOnly=*/true);
+  if (!Word)
+    return std::nullopt;
+  return *Word & ~kNonUniqueTypeNameBit;
 }
 
 } // namespace neverd::macho_loader

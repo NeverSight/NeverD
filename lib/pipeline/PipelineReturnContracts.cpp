@@ -13,22 +13,40 @@
 /// back to the same constant as a deliberate `return 0`.
 ///
 /// A return hands back, on each path to it, one of
-///  - nothing defined: the return register as the function entered it (when
-///    no parameter arrives in it), an unspecified value, the result of a
-///    callee that itself returns no value, or of an instruction run for its
-///    effect;
+///  - nothing defined: an unspecified value, what a call that does not
+///    return or an instruction run for its effect left, or the result of a
+///    callee that itself returns no value;
+///  - nothing defined, by a path that shows the function means no value:
+///    the return register as the function entered it, when no parameter
+///    arrives in it (no instruction on the way wrote it and no call was
+///    made), or the result of a callee that returned and returns nothing, a
+///    routine declared void or a function such a path of its own shows.
+///    Compiled code that means to return a value has no such path;
 ///  - the parameter that arrived in the return register of a function that
 ///    never writes it (AArch64 x0 of a writer through its pointer argument):
 ///    a value only when a caller reads it;
 ///  - a deliberate value: a constant or a comparison, as `return 0` or a
 ///    `setcc` byte merged into the register;
 ///  - some other value.
-/// A function returns no value when every path hands back nothing defined,
-/// or when one does and none hands back a deliberate value, unless a caller
-/// reads what a call to it returns.  What a declaration says decides first:
-/// a bound source signature, debug information, or the MSVC rule that a
-/// destructor returns nothing; a routine known by name returns what its
-/// prototype declares.  Code generation keeps the register.
+/// A function returns no value when every path hands back nothing defined.
+/// A caller reading the result or a reachable branch choosing between
+/// distinct return-only constants keeps a defined result. Without either,
+/// a path that shows the function means no value outweighs incidental
+/// constants (such as `xor %eax, %eax` to store a zero). The function also
+/// returns none when a path hands back nothing defined and none a deliberate
+/// value.
+///
+/// A caller reads a result where something it does depends on a byte of it
+/// (MedByteDemand): not the views of the return register the lift keeps in
+/// step with it, nor the bytes a `setcc` merges a byte over where only that
+/// byte goes on.  A caller that only hands the result back reads it where
+/// it returns a value in the integer register itself, which is the other
+/// half of the same question (ReturnContracts::settle).
+///
+/// What a declaration says decides first: a bound source signature, debug
+/// information, or the MSVC rule that a destructor returns nothing; a
+/// routine known by name returns what its prototype declares.  Code
+/// generation keeps the register.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -48,8 +66,12 @@
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/ir/med/MedByteDemand.h"
+#include "neverd/ir/med/MedConstantPropagation.h"
+#include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
+#include "neverd/ir/med/MedStackGuard.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/ir/med/X86/X86RegistrationFrame.h"
 #include "neverd/libc/LibCNames.h"
@@ -57,8 +79,16 @@
 #include "neverd/loader/SymbolSpelling.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <map>
 #include <optional>
@@ -70,15 +100,23 @@ namespace neverd {
 
 namespace {
 
-using ValueKey = std::tuple<MedVar::VarKind, int, int>;
+using ValueKey = MedValueKey;
 
-ValueKey keyOf(const MedVar &Value) {
-  return {Value.Kind, Value.Id, Value.SSAVer};
-}
+ValueKey keyOf(const MedVar &Value) { return medValueKey(Value); }
+
+template <typename T> using ValueMap = MedValueMap<T>;
 
 enum class ReturnedValue : uint8_t {
   /// Nothing the function defines.
   Undefined,
+  /// The return register as the function entered it, where no parameter
+  /// arrives in it: no instruction on the way wrote it and no call was made.
+  /// Nothing defined, and more: compiled code that means to return a value
+  /// has no such path, so the path shows the function means none.
+  Unwritten,
+  /// What a call to a routine declared to return nothing left, handed back
+  /// after the routine returned: it shows the same.
+  Nothing,
   /// The parameter in a return register the function never writes.
   Incoming,
   /// A system call's result, which the call writes to the return register
@@ -92,34 +130,70 @@ enum class ReturnedValue : uint8_t {
   ReloadedGOTAddress,
   /// A constant or a comparison: a value the function means.
   Deliberate,
+  /// What a call to a function this pass settles returns: nothing defined
+  /// where that function returns no value, else some other value.
+  CalleeResult,
   /// Any other value.
   Other,
 };
 
-/// One function's SSA definitions and the values it reads.
+/// What one path to a return hands back.
+struct ReturnPath {
+  ReturnedValue Kind = ReturnedValue::Other;
+  /// The function whose result a CalleeResult path hands back, by its
+  /// position among the functions this pass settles.
+  unsigned Callee = ~0u;
+  ReturnPath(ReturnedValue Kind, unsigned Callee = ~0u)
+      : Kind(Kind), Callee(Callee) {}
+};
+
+/// One function's SSA definitions and what it does with its calls' results.
 struct FunctionFacts {
   const MedFunc *Func = nullptr;
-  std::map<ValueKey, const MedOp *> Defs;
+  /// The values the function's stack protector check makes.
+  MedStackGuard StackGuard;
+  ValueMap<const MedOp *> Defs;
   /// The intrinsic each bound output of a multi-output intrinsic comes from.
-  std::map<ValueKey, const MedOp *> IntrinsicOutputDefs;
-  std::map<ValueKey, const PhiNode *> Phis;
-  /// Values an operation other than a return reads, directly or through the
-  /// PHIs that merge them.
-  std::set<ValueKey> Read;
-  /// Values a return hands back, directly or through the PHIs that merge
-  /// them.
-  std::set<ValueKey> Returned;
-  /// The results of the calls to each function of this image: a direct
-  /// call's target, or the routine an import's stub or slot reaches
-  /// (ownRoutineOf).
-  std::map<va_t, std::vector<ValueKey>> CallResults;
-  /// What the return register holds at each return; none for the value it
-  /// entered the function with.
-  std::vector<std::optional<MedVar>> Returns;
+  ValueMap<const MedOp *> IntrinsicOutputDefs;
+  ValueMap<const PhiNode *> Phis;
+  /// How this function uses what its calls to one function of this image
+  /// return: a direct call's target, or the routine an import's stub or slot
+  /// reaches (ownRoutineOf).
+  struct ResultUse {
+    /// Something the function does depends on a byte of one (MedByteDemand).
+    bool Read = false;
+    /// A return hands one back: directly, through the PHIs that merge it,
+    /// or as the narrower or wider view of it a return reads.
+    bool Returned = false;
+  };
+  std::map<va_t, ResultUse> CallResults;
+  /// The block and the value found by the shared return-register lookup.
+  struct ReturnSite {
+    const MedBlock *Block;
+    std::optional<MedVar> Value;
+  };
+  std::vector<ReturnSite> Returns;
+  bool SelectsReturnValue = false;
   /// Whether any operation or PHI writes the return register.  A return
   /// whose value no backward walk finds holds the entry value only when
   /// none does; otherwise a join can hide a value written before it.
   bool WritesReturnRegister = false;
+  /// The calls whose result an operation reads though nothing depends on a
+  /// byte of it, such as the rest of a register a `setcc` wrote a byte of.
+  std::vector<const MedOp *> UnreadCalls;
+  /// Those results with what their calls hand back
+  /// (ReturnContracts::summarize).
+  std::vector<std::pair<MedVar, ReturnPath>> UnreadResults;
+  /// What each path to a return hands back (ReturnContracts::summarize).
+  std::vector<ReturnPath> Paths;
+  /// Where no path returns: whether that is proven (hasProvenNoReturnExit).
+  bool NeverReturns = false;
+  /// Some operation gives the stack pointer a value no constant away from
+  /// the one the function was entered with (goLeavesItsStack).  Assembly
+  /// that switches or realigns its stack stores a result through the
+  /// pointer it restores, at no offset from its entry that names the word
+  /// (`runtime.asmcgocall`, `runtime.callCgoMmap`).
+  bool LeavesItsStack = false;
 };
 
 /// A live-in self-copy names the value the register already holds.
@@ -186,7 +260,7 @@ struct CallAddress {
   std::optional<va_t> Target, Slot;
 };
 CallAddress callAddressOf(const MedFunc &Func, const MedOp &Call,
-                          const std::map<ValueKey, const MedOp *> &Defs) {
+                          const ValueMap<const MedOp *> &Defs) {
   CallAddress Address;
   if (Call.NumInputs < 1)
     return Address;
@@ -219,19 +293,15 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
   const Arch Target = Img.Arch;
   FunctionFacts Facts;
   Facts.Func = &Func;
+  Facts.StackGuard = MedStackGuard(Func, Target);
   std::vector<const MedOp *> Calls;
-  // Each PHI's arguments, by its output: they are read where it is.
-  std::map<ValueKey, std::vector<ValueKey>> PhiArgs;
+  MedByteDemand Demand(TRI, medLeavesOtherRegisters(Func));
   for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis) {
       Facts.WritesReturnRegister |= Phi.Output.Kind == MedVar::Reg &&
                                     Phi.Output.RegOff == TRI.IntReturnReg;
-      Facts.Phis.emplace(keyOf(Phi.Output), &Phi);
-      for (const auto &[Predecessor, Value] : Phi.Args) {
-        (void)Predecessor;
-        if (!Value.isConst())
-          PhiArgs[keyOf(Phi.Output)].push_back(keyOf(Value));
-      }
+      Facts.Phis.try_emplace(keyOf(Phi.Output), &Phi);
+      Demand.define(Phi);
     }
     for (const MedOp &Op : Block.Ops) {
       Facts.WritesReturnRegister |=
@@ -240,56 +310,543 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
             return writesReturnRegister(Op, Output, TRI);
           });
       if (Op.Output.Size && !Op.Output.isConst())
-        Facts.Defs.emplace(keyOf(Op.Output), &Op);
+        Facts.Defs.try_emplace(keyOf(Op.Output), &Op);
       for (const MedVar &Output : Op.IntrinsicOutputs)
         if (!Output.isConst())
-          Facts.IntrinsicOutputDefs.emplace(keyOf(Output), &Op);
+          Facts.IntrinsicOutputDefs.try_emplace(keyOf(Output), &Op);
       if (Op.Opcode == NdOp::RETURN) {
         if (isRegistrationDisplayRuntimeReturn(Func, Op.Addr))
           continue;
         const auto Returned = returnRegisterAt(
             Func, Block, static_cast<size_t>(&Op - Block.Ops.data()), TRI,
             Target);
-        Facts.Returns.push_back(Returned);
-        if (Returned && !Returned->isConst())
-          Facts.Returned.insert(keyOf(*Returned));
+        Facts.Returns.push_back({&Block, Returned});
+        // classify sees through the views MedByteDemand::handBack follows.
+        if (Returned)
+          Demand.handBack(*Returned);
         continue;
       }
-      for (uint8_t I = 0; I < Op.NumInputs; ++I)
-        if (!Op.Inputs[I].isConst())
-          Facts.Read.insert(keyOf(Op.Inputs[I]));
+      Demand.define(Op);
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           Op.Output.Size && !Op.Output.isConst())
         Calls.push_back(&Op);
     }
   }
-  // A merge nothing reads, such as the return register's after a call made
-  // on one path only, reads none of its arguments.
-  const auto ThroughPhis = [&](std::set<ValueKey> &Values) {
-    std::vector<ValueKey> Pending(Values.begin(), Values.end());
-    while (!Pending.empty()) {
-      const ValueKey Merged = Pending.back();
-      Pending.pop_back();
-      if (const auto Args = PhiArgs.find(Merged); Args != PhiArgs.end())
-        for (const ValueKey &Arg : Args->second)
-          if (Values.insert(Arg).second)
-            Pending.push_back(Arg);
-    }
-  };
-  ThroughPhis(Facts.Read);
-  ThroughPhis(Facts.Returned);
+  Demand.settle();
   // A call's callee is known once every definition is: an indirect call may
   // load its slot in a later block.
   for (const MedOp *Call : Calls) {
+    // Whether a function returns a value says nothing of what it leaves in
+    // another register, which a call may be given as its result.
+    if (Call->Output.Kind == MedVar::Reg &&
+        Call->Output.RegOff == TRI.IntReturnReg &&
+        !Demand.reads(Call->Output) && Demand.used(Call->Output))
+      Facts.UnreadCalls.push_back(Call);
     const CallAddress Address = callAddressOf(Func, *Call, Facts.Defs);
     std::optional<va_t> Callee = Address.Target;
     if (const std::optional<va_t> Own =
             ownRoutineOf(Img, ArgumentSources, Address))
       Callee = Own;
-    if (Callee)
-      Facts.CallResults[*Callee].push_back(keyOf(Call->Output));
+    if (!Callee)
+      continue;
+    FunctionFacts::ResultUse &Use = Facts.CallResults[*Callee];
+    Use.Read |= Demand.reads(Call->Output);
+    Use.Returned |= Demand.handsBack(Call->Output);
   }
   return Facts;
+}
+
+/// A delayed return can copy its link into a temporary before an empty slot.
+static bool isReturnControlOp(const MedOp &Op, const MedOp *Ret,
+                              const TargetRegInfo &TRI) {
+  if (Op.Opcode == NdOp::NOP)
+    return true;
+  if (!Ret || Ret->NumInputs != 1 || Op.Opcode != NdOp::COPY ||
+      Op.NumInputs != 1 || Op.Output.Kind != MedVar::Temp)
+    return false;
+  const MedVar &Target = Ret->Inputs[0];
+  return Target.Kind == MedVar::Reg && TRI.isLinkRegister(Target.RegOff) &&
+         Op.Inputs[0] == Target && Op.Inputs[0].RegOff == Target.RegOff &&
+         Op.Inputs[0].Size == Target.Size && Op.Output.Size == Target.Size;
+}
+
+static bool isScalarLiteral(const MedVar &V) {
+  return V.isConst() && (V.Provenance == ConstantAddressProvenance::Unknown ||
+                         V.Provenance == ConstantAddressProvenance::Scalar);
+}
+
+static bool writesOutsideIntegerResult(const MedOp &Op,
+                                       const TargetRegInfo &TRI) {
+  const MedVar &V = Op.Output;
+  return V.Kind == MedVar::Reg && V.RegOff != TRI.IntReturnReg &&
+         !TRI.isSubRegOf(V.RegOff, V.Size, TRI.IntReturnReg, TRI.FullRegWidth);
+}
+
+/// Resolve every returned byte to a scalar literal written on this arm. A
+/// partial write may take the other bytes from an earlier local definition.
+static std::optional<uint64_t> literalResult(llvm::ArrayRef<MedOp> Ops,
+                                             const MedVar &Value,
+                                             const TargetRegInfo &TRI,
+                                             unsigned Bytes,
+                                             const MedOp *Ret = nullptr) {
+  struct ByteSource {
+    const MedVar *Value;
+    unsigned Offset;
+  };
+  llvm::SmallVector<ByteSource, 8> Sources;
+  for (unsigned I = 0; I < Bytes; ++I)
+    Sources.push_back({&Value, I});
+  for (const MedOp &Op : llvm::reverse(Ops)) {
+    if (isReturnControlOp(Op, Ret, TRI))
+      continue;
+    if (medReadsInputsWhole(Op) || writesOutsideIntegerResult(Op, TRI))
+      return {};
+    const auto &In = Op.Inputs;
+    const bool Copy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1;
+    const bool Slice = Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+                       isScalarLiteral(In[1]) && In[0].Size >= Op.Output.Size &&
+                       In[1].ConstVal <= unsigned(In[0].Size - Op.Output.Size);
+    const bool Join = Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 &&
+                      In[0].Size && In[1].Size &&
+                      In[0].Size + In[1].Size == Op.Output.Size;
+    if (!Copy && !Slice && !Join)
+      return {};
+    for (auto &[Source, Offset] : Sources) {
+      if (!(Op.Output == *Source))
+        continue;
+      if (Op.Output.Size != Source->Size)
+        return {};
+      Source = &In[0];
+      if (Slice)
+        Offset += In[1].ConstVal;
+      else if (Join) {
+        if (Offset < In[1].Size)
+          Source = &In[1];
+        else
+          Offset -= In[1].Size;
+      }
+      if (Offset >= Source->Size)
+        return {};
+    }
+  }
+  uint64_t Literal = 0;
+  for (unsigned I = 0; I < Bytes; ++I) {
+    const auto &[Source, Offset] = Sources[I];
+    if (!isScalarLiteral(*Source) || Offset >= Source->Size || Offset >= 8)
+      return {};
+    Literal |= ((Source->ConstVal >> (8 * Offset)) & 0xff) << (8 * I);
+  }
+  return Literal;
+}
+
+/// Bits an OR cannot set from this operand. A shifted, masked replacement
+/// field leaves both the upper and lower bits of the old register visible.
+static uint64_t zeroBitsAtOr(const FunctionFacts &F, const MedVar &V) {
+  if (V.isConst())
+    return isScalarLiteral(V) ? ~V.ConstVal : 0;
+  const auto Definition = [&](const MedVar &Value) -> const MedOp * {
+    auto It = F.Defs.find(keyOf(Value));
+    if (It == F.Defs.end() || It->second->Output.Size != Value.Size)
+      return nullptr;
+    return It->second;
+  };
+  const MedOp *Op = Definition(V);
+  unsigned Shift = 0;
+  if (Op && Op->Opcode == NdOp::INT_LEFT && Op->NumInputs == 2 &&
+      Op->Inputs[0].Size == V.Size && isScalarLiteral(Op->Inputs[1]) &&
+      Op->Inputs[1].ConstVal < V.Size * 8) {
+    Shift = static_cast<unsigned>(Op->Inputs[1].ConstVal);
+    Op = Definition(Op->Inputs[0]);
+  }
+  uint64_t Field = UINT64_MAX;
+  if (Op && Op->Opcode == NdOp::COPY && Op->NumInputs == 1 &&
+      Op->Inputs[0].Size == V.Size && isScalarLiteral(Op->Inputs[0]))
+    Field = Op->Inputs[0].ConstVal;
+  else if (Op && Op->Opcode == NdOp::INT_AND && Op->NumInputs == 2)
+    for (const MedVar &In : llvm::ArrayRef(Op->Inputs).take_front(2))
+      if (In.Size == V.Size && isScalarLiteral(In))
+        Field &= In.ConstVal;
+  return ~(Field << Shift);
+}
+
+using PhiObservations =
+    llvm::SmallVector<std::pair<const PhiNode *, uint64_t>, 2>;
+
+/// Only the low input bits and, for a signed extension, the sign copied
+/// into an observed high bit can distinguish two extended results.
+static uint64_t observedExtensionBits(uint64_t Bits, unsigned InputBits,
+                                      bool Signed) {
+  const uint64_t Low = llvm::maskTrailingOnes<uint64_t>(InputBits);
+  return (Bits & Low) |
+         (Signed && (Bits & ~Low) ? uint64_t{1} << (InputBits - 1) : 0);
+}
+
+static std::optional<uint64_t> fixedShiftCount(const MedOp &Op) {
+  if (Op.NumInputs != 2)
+    return {};
+  const auto &Value = Op.Inputs[0], &Count = Op.Inputs[1];
+  if (!Count.Size || Count.Size > Value.Size || Value.Size != Op.Output.Size ||
+      Value.Size > 8 || !isScalarLiteral(Count) ||
+      !llvm::isUIntN(8 * Count.Size, Count.ConstVal))
+    return {};
+  return Count.ConstVal;
+}
+
+static llvm::ArrayRef<MedOp> beforeDirectBranch(llvm::ArrayRef<MedOp> Ops) {
+  if (!Ops.empty() && Ops.back().Opcode == NdOp::BRANCH &&
+      Ops.back().NumInputs == 1 && Ops.back().Inputs[0].isConst())
+    return Ops.drop_back();
+  return Ops;
+}
+
+/// A MIPS64 word instruction may trap on a non-word input. Its check has no
+/// effect here only if every incoming literal, after any common logical right
+/// shift, already is a sign-extended word.
+static bool provenReturnWordCheck(const FunctionFacts &F, const MedBlock &Block,
+                                  const MedOp &Op, const TargetRegInfo &TRI) {
+  if (!hasValidMedIntrinsicId(Op) ||
+      Op.Inputs[0].ConstVal != uint64_t(Intrinsic::MIPSRequireWord) ||
+      !mipsScalarMedShapeIsValid(Op, TRI.TheArch))
+    return false;
+  const MedVar *Value = &Op.Inputs[1];
+  unsigned Shift = 0;
+  if (!Value->isConst()) {
+    const MedOp *Def = F.Defs.lookup(keyOf(*Value));
+    if (Def && Def->Output.Size == Value->Size &&
+        Def->Opcode == NdOp::INT_RIGHT) {
+      const auto Count = fixedShiftCount(*Def);
+      if (!Count)
+        return false;
+      if (*Count >= 33)
+        return true; // At most 31 unsigned bits remain.
+      Shift = static_cast<unsigned>(*Count);
+      Value = &Def->Inputs[0];
+    }
+  }
+  const auto IsWord = [Shift](uint64_t V) {
+    return llvm::isInt<32>(static_cast<int64_t>(V >> Shift));
+  };
+  if (Value->isConst())
+    return isScalarLiteral(*Value) && IsWord(Value->ConstVal);
+  if (Value->Kind != MedVar::Reg || Value->RegOff != TRI.IntReturnReg)
+    return false;
+  const auto Phi = llvm::find_if(Block.Phis, [&](const PhiNode &P) {
+    return P.Output == *Value && P.Output.Size == Value->Size &&
+           P.Output.RegOff == Value->RegOff;
+  });
+  if (Phi == Block.Phis.end() ||
+      !hasCompleteOrdinaryPhiInputs(Block, *Phi,
+                                    {Block.Preds.begin(), Block.Preds.end()}))
+    return false;
+  return llvm::all_of(Phi->Args, [&](const auto &Arg) {
+    const auto &[Id, In] = Arg;
+    if (static_cast<unsigned>(Id) >= F.Func->Blocks.size())
+      return false;
+    const MedBlock &Pred = F.Func->Blocks[Id];
+    if (Pred.Succs.size() != 1 || Pred.Succs.front() != Block.Id ||
+        !Pred.ExceptionalSuccs.empty())
+      return false;
+    const auto V = literalResult(beforeDirectBranch(Pred.Ops), In, TRI, 8);
+    return V && IsWord(*V);
+  });
+}
+
+/// Trace only bits whose *difference* guarantees a different result. Demand
+/// alone is insufficient: an OR may hide a read bit, and a carry can change
+/// an observed high byte even when two inputs agree in that byte.
+static PhiObservations
+observedReturnPhis(const FunctionFacts &F, const MedBlock &Block,
+                   llvm::ArrayRef<MedOp> Ops, const MedVar &Result,
+                   uint64_t Mask, const TargetRegInfo &TRI, const MedOp *Ret) {
+  struct Observation {
+    const MedVar *Value;
+    uint64_t Bits;
+  };
+  ValueMap<Observation> Seen;
+  auto Observe = [&](const MedVar &V, uint64_t Bits) {
+    if (!Bits || V.isConst())
+      return;
+    auto [It, Inserted] = Seen.try_emplace(keyOf(V), Observation{&V, Bits});
+    if (!Inserted && It->second.Value->Size == V.Size)
+      It->second.Bits |= Bits;
+  };
+  Observe(Result, Mask);
+  for (const MedOp &Op : llvm::reverse(Ops)) {
+    if (isReturnControlOp(Op, Ret, TRI) ||
+        (Op.Opcode == NdOp::INTRINSIC &&
+         provenReturnWordCheck(F, Block, Op, TRI)))
+      continue;
+    if (medReadsInputsWhole(Op) || writesOutsideIntegerResult(Op, TRI))
+      return {};
+    const auto It = Seen.find(keyOf(Op.Output));
+    if (It == Seen.end())
+      continue;
+    const uint64_t Bits = It->second.Bits;
+    if (Op.Output.Size != It->second.Value->Size || Op.Output.Size > 8)
+      return {};
+    Seen.erase(It);
+    if (Op.Opcode == NdOp::COPY) {
+      if (Op.NumInputs == 1 && Op.Inputs[0].Size == Op.Output.Size)
+        Observe(Op.Inputs[0], Bits);
+      continue;
+    }
+    if (Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT) {
+      if (Op.NumInputs == 1 && Op.Inputs[0].Size &&
+          Op.Inputs[0].Size <= Op.Output.Size)
+        Observe(Op.Inputs[0],
+                observedExtensionBits(Bits, 8 * Op.Inputs[0].Size,
+                                      Op.Opcode == NdOp::INT_SEXT));
+      continue;
+    }
+    if (Op.NumInputs != 2)
+      continue;
+    const MedVar &A = Op.Inputs[0], &B = Op.Inputs[1];
+    switch (Op.Opcode) {
+    case NdOp::INT_LEFT:
+    case NdOp::INT_RIGHT:
+    case NdOp::INT_ASHR: {
+      const auto Count = fixedShiftCount(Op);
+      if (!Count)
+        break;
+      const unsigned Width = 8 * A.Size;
+      if (Op.Opcode == NdOp::INT_LEFT) {
+        if (*Count < Width)
+          Observe(A, Bits >> *Count);
+      } else if (*Count < Width || Op.Opcode == NdOp::INT_ASHR) {
+        // An oversized arithmetic shift copies the sign into every bit.
+        const unsigned Shift = std::min<uint64_t>(*Count, Width - 1);
+        Observe(A, observedExtensionBits(Bits, Width - Shift,
+                                         Op.Opcode == NdOp::INT_ASHR)
+                       << Shift);
+      }
+      break;
+    }
+    case NdOp::SUBBYTES:
+      if (isScalarLiteral(B) && A.Size <= 8 && A.Size >= Op.Output.Size &&
+          B.ConstVal <= static_cast<unsigned>(A.Size - Op.Output.Size))
+        Observe(A, Bits << (8 * B.ConstVal));
+      break;
+    case NdOp::CONCAT:
+      if (A.Size && B.Size && A.Size + B.Size == Op.Output.Size) {
+        Observe(A, Bits >> (8 * B.Size));
+        Observe(B, Bits & llvm::maskTrailingOnes<uint64_t>(8 * B.Size));
+      }
+      break;
+    case NdOp::INT_AND:
+    case NdOp::INT_OR:
+    case NdOp::INT_XOR:
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+      if (A.Size != Op.Output.Size || B.Size != A.Size)
+        break;
+      for (unsigned I = 0; I < 2; ++I) {
+        const MedVar &Input = Op.Inputs[I], &Other = Op.Inputs[1 - I];
+        if (Op.Opcode == NdOp::INT_OR)
+          Observe(Input, Bits & zeroBitsAtOr(F, Other));
+        else if (isScalarLiteral(Other)) {
+          // Fixed XOR preserves each differing bit. A fixed addend or
+          // subtrahend preserves differences modulo a power of two.
+          uint64_t Kept = Bits;
+          if (Op.Opcode == NdOp::INT_AND)
+            Kept &= Other.ConstVal;
+          else if (Op.Opcode != NdOp::INT_XOR)
+            Kept &= ~(Bits + 1);
+          Observe(Input, Kept);
+        }
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  PhiObservations Phis;
+  for (const PhiNode &Phi : Block.Phis) {
+    if (Phi.ExceptionalEntry || Phi.Output.Kind != MedVar::Reg)
+      continue;
+    const auto It = Seen.find(keyOf(Phi.Output));
+    if (It != Seen.end() && It->second.Value->Size == Phi.Output.Size &&
+        It->second.Value->RegOff == Phi.Output.RegOff)
+      Phis.emplace_back(&Phi, It->second.Bits);
+  }
+  return Phis;
+}
+
+/// Literals compared before a common computation must undergo that same
+/// computation. Distinct constants entering different overwrites prove nothing.
+struct ReturnLiteral {
+  std::pair<const PhiNode *, uint64_t> Observation;
+  uint64_t Bits;
+};
+
+using LiteralArms =
+    llvm::SmallDenseMap<int, llvm::SmallVector<ReturnLiteral, 1>, 4>;
+
+static LiteralArms literalReturnArms(const FunctionFacts &F,
+                                     const TargetRegInfo &TRI, unsigned Bytes) {
+  const MedFunc &Func = *F.Func;
+  LiteralArms Arms;
+  struct IncomingResult {
+    const MedBlock *Block;
+    const MedVar *Result;
+    uint64_t Mask;
+    const PhiNode *CommonComputation;
+    const MedVar *Whole = nullptr;
+    unsigned ByteOffset = 0;
+  };
+  llvm::SmallVector<IncomingResult, 8> Pending;
+  for (const auto &Site : F.Returns)
+    if (Site.Value && Site.Block->Succs.empty() &&
+        Site.Block->ExceptionalSuccs.empty() &&
+        Site.Block->Ops.back().Opcode == NdOp::RETURN)
+      Pending.push_back({Site.Block, &*Site.Value,
+                         llvm::maskTrailingOnes<uint64_t>(8 * Bytes), nullptr});
+
+  // Every predecessor followed here has one successor leading to a return.
+  // These chains can merge, but cannot cycle or lead to two different exits.
+  while (!Pending.empty()) {
+    const auto [Block, Result, Mask, Common, Whole, ByteOffset] =
+        Pending.pop_back_val();
+    const unsigned Needed =
+        Whole ? Result->Size
+              : std::max(Bytes, (unsigned(llvm::Log2_64(Mask)) / 8 + 1));
+    if (Result->Size < Needed || !Block->ExceptionalPreds.empty())
+      continue;
+    llvm::ArrayRef<MedOp> Ops(Block->Ops);
+    const MedOp *Ret = nullptr;
+    if (!Ops.empty() && Ops.back().Opcode == NdOp::RETURN) {
+      Ret = &Ops.back();
+      Ops = Ops.drop_back();
+    } else
+      Ops = beforeDirectBranch(Ops);
+    const auto Follow = [&](int Id, const MedVar &Incoming, uint64_t Bits,
+                            const PhiNode *Computation, const MedVar *Parent,
+                            unsigned Offset) {
+      if (static_cast<unsigned>(Id) >= Func.Blocks.size())
+        return;
+      const MedBlock &Pred = Func.Blocks[Id];
+      if (Pred.Succs.size() == 1 && Pred.Succs.front() == Block->Id &&
+          Pred.ExceptionalSuccs.empty())
+        Pending.push_back(
+            {&Pred, &Incoming, Bits, Computation, Parent, Offset});
+    };
+    if (Block->Phis.empty()) {
+      if (const auto V = literalResult(Ops, *Result, TRI, Needed, Ret)) {
+        if (Whole) {
+          // A narrow SSA name may have its own PHI. Its actual input and
+          // the complete carrier must describe the same bytes on this edge.
+          const auto Word =
+              literalResult(Ops, *Whole, TRI, TRI.FullRegWidth, Ret);
+          if (!Word || *V != ((*Word >> (8 * ByteOffset)) &
+                              llvm::maskTrailingOnes<uint64_t>(8 * Needed)))
+            continue;
+        }
+        Arms[Block->Id].push_back({{Common, Mask}, *V & Mask});
+      } else if (Block->Preds.size() == 1 &&
+                 llvm::all_of(Ops, [&](const MedOp &Op) {
+                   return isReturnControlOp(Op, Ret, TRI);
+                 }))
+        Follow(Block->Preds.front(), *Result, Mask, Common, Whole, ByteOffset);
+      continue;
+    }
+    if (Whole)
+      continue;
+    // Index the full carrier only when an observed subregister needs it.
+    std::optional<llvm::SmallDenseMap<int, const MedVar *, 4>> FullInputs;
+    for (const auto &[Phi, Bits] :
+         observedReturnPhis(F, *Block, Ops, *Result, Mask, TRI, Ret)) {
+      const MedVar &Out = Phi->Output;
+      if (Out.RegOff == TRI.IntReturnReg && Out.Size >= Bytes) {
+        for (const auto &[Id, In] : Phi->Args)
+          Follow(Id, In, Bits, Out == *Result ? Common : Phi, nullptr, 0);
+        continue;
+      }
+      const int Offset = TRI.subRegByteOffset(
+          Out.RegOff, Out.Size, TRI.IntReturnReg, TRI.FullRegWidth);
+      if (Offset < 0 || !Out.Size || Offset + Out.Size > TRI.FullRegWidth)
+        continue;
+      if (!FullInputs) {
+        FullInputs.emplace();
+        for (const PhiNode &Parent : Block->Phis)
+          if (!Parent.ExceptionalEntry && Parent.Output.Kind == MedVar::Reg &&
+              Parent.Output.RegOff == TRI.IntReturnReg &&
+              Parent.Output.Size == TRI.FullRegWidth)
+            for (const auto &[Id, In] : Parent.Args)
+              if (In.Size == TRI.FullRegWidth)
+                FullInputs->try_emplace(Id, &In);
+      }
+      for (const auto &[Id, In] : Phi->Args)
+        if (const MedVar *Parent = FullInputs->lookup(Id);
+            Parent && In.Size == Out.Size)
+          Follow(Id, In, Bits, Phi, Parent, Offset);
+    }
+  }
+  return Arms;
+}
+
+/// A choice between two such arms has an observable result. An indirect
+/// branch's CFG may retain labels for display or trapping, so only count
+/// successors that the published table binds to this very branch.
+static bool selectsLiteralReturns(const FunctionFacts &F,
+                                  const TargetRegInfo &TRI) {
+  const MedFunc &Func = *F.Func;
+  const unsigned Bytes =
+      Func.ReturnType ? Func.ReturnType->Size : TRI.FullRegWidth;
+  if (Func.AnalysisOnly || !Bytes || Bytes > sizeof(uint64_t))
+    return false;
+  const auto Arms = literalReturnArms(F, TRI, Bytes);
+  if (Arms.size() < 2)
+    return false;
+  llvm::DenseSet<std::pair<va_t, va_t>> TableEdges;
+  for (const JumpTable &Table : Func.JumpTables)
+    if (Table.IndexDomainAuthenticated && !Table.AnalysisOnly &&
+        !Table.MutatedUnsafe &&
+        !Func.UnsafeIndirectBranchAddresses.count(Table.InsnAddr))
+      for (va_t Target : Table.Targets)
+        TableEdges.insert({Table.InsnAddr, Target});
+  // Kept labels and exceptional continuations can be disconnected from
+  // ordinary execution. Follow the published edges from the entry.
+  llvm::SmallBitVector Visited(Func.Blocks.size());
+  llvm::SmallVector<unsigned, 16> Pending{0};
+  const auto Dynamic = [](const MedVar &V) {
+    return !V.isConst() && V.Kind != MedVar::Unspecified;
+  };
+  Visited.set(0);
+  while (!Pending.empty()) {
+    const MedBlock &Block = Func.Blocks[Pending.pop_back_val()];
+    if (Block.Succs.empty())
+      continue;
+    const MedOp *Branch = Block.Ops.empty() ? nullptr : &Block.Ops.back();
+    const bool Indirect = Branch && Branch->Opcode == NdOp::INDIR_BR;
+    const bool Choice = Branch && Branch->Opcode == NdOp::COND_BR &&
+                        Branch->NumInputs == 2 && Dynamic(Branch->Inputs[1]);
+    if (Indirect && (Branch->NumInputs != 1 || !Dynamic(Branch->Inputs[0])))
+      continue;
+    if (Block.Succs.size() > 1 && !Choice && !Indirect)
+      continue;
+    llvm::SmallDenseMap<std::pair<const PhiNode *, uint64_t>, uint64_t, 4>
+        First;
+    for (int Succ : Block.Succs) {
+      if (static_cast<unsigned>(Succ) >= Func.Blocks.size())
+        continue;
+      const MedBlock &Next = Func.Blocks[Succ];
+      if (Indirect && !TableEdges.contains({Branch->Addr, Next.StartAddr}))
+        continue;
+      if (!Visited.test(Succ)) {
+        Visited.set(Succ);
+        Pending.push_back(Succ);
+      }
+      const auto It = Arms.find(Succ);
+      if (It == Arms.end())
+        continue;
+      for (const auto &[Observation, Bits] : It->second)
+        if (const auto Prior = First.find(Observation);
+            Prior != First.end() && Prior->second != Bits)
+          return true;
+      for (const auto &[Observation, Bits] : It->second)
+        First.try_emplace(Observation, Bits);
+    }
+  }
+  return false;
 }
 
 bool isComparison(NdOp Opcode) {
@@ -320,62 +877,310 @@ public:
   ReturnContracts(const BinaryImage &Img, PipelineResult &Result,
                   const DebugContext *Dbg)
       : Img(Img), Result(Result), Dbg(Dbg), TRI(getTargetRegInfo(Img.Arch)) {
-    for (const MedFunc &Func : Result.MedFuncs) {
-      Facts.emplace(Func.Entry,
-                    collectFacts(Func, TRI, Img, Result.callArgumentSources()));
-      if (const std::optional<bool> None = declaredNoValue(Func))
-        Declared.emplace(Func.Entry, *None);
+    // One answer for each entry: the first function at it.
+    for (size_t I = 0; I < Result.MedFuncs.size(); ++I) {
+      const MedFunc &Func = Result.MedFuncs[I];
+      if (!IndexOf.try_emplace(Func.Entry, States.size()).second)
+        continue;
+      State &S = States.emplace_back();
+      S.Func = &Func;
+      S.Function = I;
+      S.Declared = declaredNoValue(Func);
+      S.Settles = !S.Declared && settles(Func);
+      S.IntegerResult = returnsInIntegerRegister(Func);
+      if (S.Declared)
+        Declared.emplace(Func.Entry, *S.Declared);
       if (!Func.Name.empty())
         Names.emplace(Func.Entry, Func.Name);
     }
-    for (const auto &[Entry, Caller] : Facts)
-      for (const auto &[Callee, Results] : Caller.CallResults)
-        CallsTo[Callee].push_back({Entry, &Caller, &Results});
+    // Each function's facts read that function alone.
+    const std::map<va_t, va_t> &ArgumentSources = Result.callArgumentSources();
+    parallelForEach(States.size(), [&](auto Claim, size_t Total) {
+      for (size_t I; (I = Claim()) < Total;)
+        States[I].Facts =
+            collectFacts(*States[I].Func, TRI, Img, ArgumentSources);
+    });
+    for (size_t I = 0; I < States.size(); ++I) {
+      summarize(States[I]);
+      for (const auto &[Callee, Use] : States[I].Facts.CallResults)
+        if (const auto Found = IndexOf.find(Callee); Found != IndexOf.end()) {
+          States[Found->second].Callers.push_back(
+              {static_cast<unsigned>(I), Use});
+          if (Use.Returned)
+            States[I].HandsBack.push_back(static_cast<unsigned>(Found->second));
+        }
+      for (const ReturnPath &Path : States[I].Facts.Paths)
+        if (Path.Kind == ReturnedValue::CalleeResult)
+          States[Path.Callee].PathCallers.push_back(static_cast<unsigned>(I));
+    }
   }
 
+  /// A function that hands a callee's result back returns a value only if
+  /// the callee does, and the callee's result is read only if that function
+  /// returns one: each answer rests on the other.  Three rules keep them
+  /// apart.
+  ///
+  /// That a path hands back nothing defined is shown from the paths up: a
+  /// callee counts as returning none only once it is settled so, so a
+  /// function that returns what its own call returns shows nothing about
+  /// itself (ground).
+  ///
+  /// That a caller reads nothing of a result it hands back is assumed only
+  /// of a function one of whose paths shows it means no value: a return
+  /// that never wrote the register, or the result of a callee that returns
+  /// nothing after returning.  Every function this pass settles starts as
+  /// one that may return none; the answers that supports are worked out,
+  /// the functions it does not support leave it, and the rounds end when
+  /// what is left is supported.  The assumption only shrinks.  Of any other
+  /// function, which may be handing back what its caller passed it, a
+  /// caller that hands the result back reads it until it is itself settled
+  /// to return none (answer).
+  ///
+  /// A read reaches down: where something reads a function's result, the
+  /// results that function hands back are read too (passReadsDown).
   void settle() {
-    for (unsigned Round = 0;
-         Round < ::neverd::limits::pipeline::kPipelineReturnContractsMaxRounds;
+    std::vector<unsigned> Candidates;
+    for (size_t I = 0; I < States.size(); ++I) {
+      State &S = States[I];
+      if (S.Declared)
+        S.NoValue = *S.Declared;
+      else if (S.Settles)
+        Candidates.push_back(static_cast<unsigned>(I));
+      S.Assumed = S.Settles || handsBackNothing(S);
+    }
+    bool Supported = false;
+    unsigned Round = 0;
+    for (; Round <
+               ::neverd::limits::pipeline::kPipelineReturnContractsMaxRounds &&
+           !Supported;
          ++Round) {
-      bool Changed = false;
-      for (const MedFunc &Func : Result.MedFuncs) {
-        const auto Declaration = Declared.find(Func.Entry);
-        const bool None = Declaration != Declared.end() ? Declaration->second
-                                                        : returnsNoValue(Func);
-        bool &Known = NoValue[Func.Entry];
-        Changed |= Known != None;
-        Known = None;
-      }
-      if (!Changed)
-        break;
+      passReadsDown();
+      ground(Candidates);
+      Supported = true;
+      for (unsigned I : Candidates)
+        if (States[I].Assumed && !States[I].NoValue) {
+          States[I].Assumed = false;
+          Supported = false;
+        }
+    }
+    // An image the bound stops gets the answers no assumption supports.
+    if (!Supported) {
+      for (unsigned I : Candidates)
+        States[I].Assumed = false;
+      passReadsDown();
+      ground(Candidates);
     }
     for (MedFunc &Func : Result.MedFuncs)
-      Func.ReturnsNoValue = NoValue[Func.Entry];
+      Func.ReturnsNoValue = States[IndexOf.find(Func.Entry)->second].NoValue;
+    zeroUnreadResults();
   }
 
 private:
+  /// A caller's use of what its calls to a function return.
+  struct Caller {
+    unsigned Index;
+    FunctionFacts::ResultUse Use;
+  };
+  /// One function, by its entry.
+  struct State {
+    const MedFunc *Func = nullptr;
+    /// Its place in the pipeline result.
+    size_t Function = 0;
+    FunctionFacts Facts;
+    /// What its declaration says: true for none.
+    std::optional<bool> Declared;
+    /// Whether this pass settles it: nothing declares it and its type is an
+    /// integer the lift inferred (settles).
+    bool Settles = false;
+    /// Whether what it returns may be what the integer return register
+    /// holds (returnsInIntegerRegister).
+    bool IntegerResult = true;
+    /// The callers of this image, in address order.
+    std::vector<Caller> Callers;
+    /// The functions a path of which hands back what this one returns.
+    std::vector<unsigned> PathCallers;
+    /// The functions whose result a return of this one hands back.
+    std::vector<unsigned> HandsBack;
+    /// The answer: it returns no value.
+    bool NoValue = false;
+    /// Whether a path of its own shows that: one that never wrote the
+    /// register, or the result of a callee a path of which shows it.
+    bool Shown = false;
+    /// Whether it is taken to read nothing of a result it hands back while
+    /// the answers are worked out: it returns no value, or returns one in
+    /// another register.
+    bool Assumed = false;
+    /// Whether something reads its result under that assumption
+    /// (passReadsDown).
+    bool ReadDown = false;
+  };
+
   const BinaryImage &Img;
   PipelineResult &Result;
   const DebugContext *Dbg;
   const TargetRegInfo &TRI;
-  std::map<va_t, FunctionFacts> Facts;
-  /// A function's calls to one callee: its entry, its facts, and the results
-  /// of those calls.
-  struct CallsByCaller {
-    va_t Entry;
-    const FunctionFacts *Facts;
-    const std::vector<ValueKey> *Results;
-  };
-  /// The calls to each function of this image, caller by caller in address
-  /// order.
-  std::map<va_t, std::vector<CallsByCaller>> CallsTo;
-  std::map<va_t, bool> NoValue;
-  /// The numbers the i386 PC-rooted proof gives each function's values
-  /// (MedToHighConverter::i386PcRootedNumbers), computed on first use.
-  mutable std::map<const MedFunc *, std::map<VarKey, uint32_t>> PcRootedNumbers;
+  std::vector<State> States;
+  std::map<va_t, size_t> IndexOf;
   /// What each declared function's declaration says: true for none.
   std::map<va_t, bool> Declared;
   std::map<va_t, std::string> Names;
+
+  /// Works out what each path to a return of \p S hands back, once: only a
+  /// callee's answer changes it afterwards (ReturnedValue::CalleeResult).
+  void summarize(State &S) {
+    FunctionFacts &F = S.Facts;
+    if (S.Settles) {
+      for (const auto &Site : F.Returns) {
+        const auto &Returned = Site.Value;
+        if (!Returned) {
+          F.Paths.push_back(!entersReturnRegister(*S.Func)
+                                ? ReturnedValue::Unwritten
+                            : F.WritesReturnRegister ? ReturnedValue::Other
+                                                     : ReturnedValue::Incoming);
+          continue;
+        }
+        std::set<ValueKey> Seen;
+        classify(F, *Returned, F.Paths, Seen, 0);
+      }
+      // A common write can hide an entire choice behind one classified path.
+      if ((F.Paths.size() >= 3 || (F.Paths.size() == 2 && !F.Phis.empty())) &&
+          llvm::any_of(F.Paths, [](const ReturnPath &P) {
+            return P.Kind == ReturnedValue::Unwritten ||
+                   P.Kind == ReturnedValue::Nothing ||
+                   P.Kind == ReturnedValue::CalleeResult;
+          }))
+        F.SelectsReturnValue = selectsLiteralReturns(F, TRI);
+      // No ordinary RETURN is not a proof of no return: an external catch
+      // funclet can resume its parent and supply a value after attachment.
+      // Use the shared proof, which includes exceptional edges and missing
+      // handlers.
+      if (F.Paths.empty())
+        F.NeverReturns =
+            S.Func->DoesNotReturn || hasProvenNoReturnExit(*S.Func, Img.Arch);
+      // Asked only where it decides an answer: of a function without
+      // stack results in an image whose compiled code follows the stack ABI.
+      if (const auto &Go = Img.ExceptionMetadata.GoModule;
+          S.Func->StackArgumentsOnly && S.Func->GoStackResults.empty() && Go &&
+          Go->StackArguments)
+        F.LeavesItsStack = goLeavesItsStack(*S.Func, Img.Arch, Img.abiFormat());
+    }
+    for (const MedOp *Call : F.UnreadCalls) {
+      const ReturnPath Path = callPath(F, *Call);
+      if (Path.Kind == ReturnedValue::Undefined ||
+          Path.Kind == ReturnedValue::Nothing ||
+          Path.Kind == ReturnedValue::CalleeResult)
+        F.UnreadResults.emplace_back(Call->Output, Path);
+    }
+    F.UnreadCalls = {};
+    F.Defs = ValueMap<const MedOp *>();
+    F.IntrinsicOutputDefs = ValueMap<const MedOp *>();
+    F.Phis = ValueMap<const PhiNode *>();
+    F.Returns = {};
+  }
+
+  /// A call that returns no value leaves no result to read, and the C shows
+  /// a read of one as unknown.  Where an operation reads such a result but
+  /// nothing depends on a byte of it (MedByteDemand), the operation reads zero
+  /// instead: the bytes it took from the result reach nothing.
+  void zeroUnreadResults() {
+    for (State &S : States) {
+      ValueMap<bool> Unread;
+      for (const auto &[Value, Path] : S.Facts.UnreadResults)
+        if (Path.Kind != ReturnedValue::CalleeResult ||
+            States[Path.Callee].NoValue)
+          Unread.try_emplace(keyOf(Value), true);
+      if (Unread.empty())
+        continue;
+      for (MedBlock &Block : Result.MedFuncs[S.Function].Blocks)
+        for (MedOp &Op : Block.Ops) {
+          if (Op.Opcode == NdOp::RETURN)
+            continue;
+          for (uint8_t I = 0; I < Op.NumInputs; ++I)
+            if (!Op.Inputs[I].isConst() && Unread.count(keyOf(Op.Inputs[I])))
+              Op.Inputs[I] = MedVar::makeConst(0, Op.Inputs[I].Size);
+        }
+    }
+  }
+
+  /// Whether \p S hands back nothing a caller could read whatever its
+  /// returns hold: it returns no value, or returns one in another register.
+  static bool handsBackNothing(const State &S) {
+    return S.NoValue || !S.IntegerResult;
+  }
+
+  /// Marks each function whose result something reads while the assumption
+  /// stands: a caller reads it, or hands it back and is taken to return a
+  /// value, or hands it back and has its own result read.
+  void passReadsDown() {
+    std::vector<unsigned> Work;
+    for (size_t I = 0; I < States.size(); ++I) {
+      State &S = States[I];
+      S.ReadDown = llvm::any_of(S.Callers, [&](const Caller &C) {
+        return C.Use.Read || (C.Use.Returned && !States[C.Index].Assumed);
+      });
+      if (S.ReadDown)
+        Work.push_back(static_cast<unsigned>(I));
+    }
+    while (!Work.empty()) {
+      const unsigned Reader = Work.back();
+      Work.pop_back();
+      // What is read of a function that returns in another register is not
+      // the integer register it hands back.
+      if (!States[Reader].IntegerResult)
+        continue;
+      for (unsigned Callee : States[Reader].HandsBack)
+        if (!States[Callee].ReadDown) {
+          States[Callee].ReadDown = true;
+          Work.push_back(Callee);
+        }
+    }
+  }
+
+  /// Settles which of \p Candidates return no value, from the paths up: a
+  /// function joins once its own paths, the callees already settled and the
+  /// callers that read it show it.  An answer changes what the callers that
+  /// hand the function's result back return and what the callees whose
+  /// result it hands back are read by.
+  void ground(const std::vector<unsigned> &Candidates) {
+    for (unsigned I : Candidates)
+      States[I].NoValue = States[I].Shown = false;
+    std::vector<unsigned> Work(Candidates.rbegin(), Candidates.rend());
+    while (!Work.empty()) {
+      State &S = States[Work.back()];
+      Work.pop_back();
+      if (!S.Settles)
+        continue;
+      const Answer Now = answer(S);
+      if (Now.NoValue == S.NoValue && Now.Shown == S.Shown)
+        continue;
+      S.NoValue = Now.NoValue;
+      S.Shown = Now.Shown;
+      for (unsigned Reader : S.PathCallers)
+        Work.push_back(Reader);
+      for (unsigned Callee : S.HandsBack)
+        Work.push_back(Callee);
+    }
+  }
+
+  /// Whether what \p Func returns may be what the integer return register
+  /// holds.  Not where its result is a floating-point or vector value on a
+  /// target that returns those in a register of their own (x86-64 XMM0,
+  /// AArch64 V0): a return of such a function hands the integer register
+  /// back as the last call left it (`sqlite3_column_double` after
+  /// `sqlite3_mutex_leave`), which reads nothing.
+  bool returnsInIntegerRegister(const MedFunc &Func) const {
+    if (Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64)
+      return true;
+    TypeRef Type = Func.ReturnType;
+    if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
+      Type = Func.SourceTypeHint->ReturnType;
+    else if (Dbg)
+      if (const auto Debug = Dbg->resolveFunction(Func.Entry);
+          Debug && Debug->ReturnType)
+        Type = Debug->ReturnType;
+    return !Type || (Type->Kind != NdTypeKind::Float &&
+                     Type->Kind != NdTypeKind::Vector);
+  }
 
   /// Whether \p Func's declaration says it returns nothing, as the C
   /// writers read it: a bound source signature, else debug information, else
@@ -444,13 +1249,21 @@ private:
     return Img.findImportStubAt(Address);
   }
 
-  /// Whether the call \p Call returns no value: it does not return, or its
-  /// callee returns none.
-  bool callReturnsNoValue(const FunctionFacts &F, const MedOp &Call) const {
+  /// What the call \p Call hands back: nothing defined where it does not
+  /// return or its callee is declared to return none, a value where the
+  /// callee is declared to return one, and the callee's own answer where
+  /// this pass settles it.
+  ReturnPath callPath(const FunctionFacts &F, const MedOp &Call) const {
+    const auto Known = [](bool NoValue) {
+      return ReturnPath(NoValue ? ReturnedValue::Nothing
+                                : ReturnedValue::Other);
+    };
+    // A call that does not return leaves nothing, and shows nothing of the
+    // function: no return follows it.
     if (Call.DoesNotReturn)
-      return true;
+      return ReturnPath(ReturnedValue::Undefined);
     if (Call.NumInputs < 1)
-      return false;
+      return Known(false);
     const CallAddress Address = callAddressOf(*F.Func, Call, F.Defs);
     std::optional<va_t> Target = Address.Target, Slot = Address.Slot;
     // A call through the stub or slot of an import the loader starts at
@@ -466,24 +1279,29 @@ private:
     // C writers read it, by the debug information or a prototype of its
     // name: the call they print returns nothing then.
     if (Target) {
+      const auto Function = IndexOf.find(*Target);
       if (const auto Declaration = Declared.find(*Target);
           Declaration != Declared.end())
-        return Declaration->second;
-      if (Dbg && !Facts.count(*Target))
+        return Known(Declaration->second);
+      if (Dbg && Function == IndexOf.end())
         if (const auto Debug = Dbg->resolveFunction(*Target);
             Debug && Debug->Addr == *Target && Debug->ReturnType)
-          return Debug->ReturnType->Kind == NdTypeKind::Void;
+          return Known(Debug->ReturnType->Kind == NdTypeKind::Void);
       if (const auto Name = Names.find(*Target);
           Name != Names.end() && !Img.functionHasBytePatch(*Target))
         if (const std::optional<bool> None =
                 namedNoValue(Name->second, /*ByProgramPrototype=*/false))
-          return *None;
-      if (const auto Known = NoValue.find(*Target); Known != NoValue.end())
-        return Known->second;
+          return Known(*None);
+      // A function whose type is not this pass's to settle returns a value.
+      if (Function != IndexOf.end())
+        return States[Function->second].Settles
+                   ? ReturnPath(ReturnedValue::CalleeResult,
+                                static_cast<unsigned>(Function->second))
+                   : Known(false);
     }
     if (const Import *Imp =
             importAt(Target ? *Target : Slot.value_or(InvalidVA)))
-      return namedNoValue(Imp->Name).value_or(false);
+      return Known(namedNoValue(Imp->Name).value_or(false));
     // A loaded GOT slot names its import through the canonical storage view
     // (`mov rax, [slot]; jmp rax`).
     if (Slot) {
@@ -492,10 +1310,15 @@ private:
       if (const auto It = Storage.Slots.find(*Slot);
           It != Storage.Slots.end() && !Storage.Conflicts.count(*Slot) &&
           It->second.Addend == 0)
-        return namedNoValue(It->second.Name).value_or(false);
+        return Known(namedNoValue(It->second.Name).value_or(false));
     }
-    return false;
+    return Known(false);
   }
+
+  /// The numbers the i386 PC-rooted proof gives the values of the function
+  /// last asked about (MedToHighConverter::i386PcRootedNumbers).
+  mutable const MedFunc *PcRootedFunc = nullptr;
+  mutable std::map<VarKey, uint32_t> PcRootedNumbers;
 
   /// How \p Value is the linked GOT's address that an authenticated i386
   /// get-PC sequence computes (`call 1f; 1: pop %eax; add $GOT-1b, %eax`),
@@ -519,19 +1342,20 @@ private:
                                                  : GOTAddressKind::None;
     // clang -O0 spills the GOT address and reloads it: the reload is the
     // address by the proof the HighIR route reads it with.
-    auto [Numbers, Computed] = PcRootedNumbers.try_emplace(F.Func);
-    if (Computed)
-      Numbers->second =
+    if (PcRootedFunc != F.Func) {
+      PcRootedFunc = F.Func;
+      PcRootedNumbers =
           MedToHighConverter::i386PcRootedNumbers(*F.Func, Img.Arch, &Img);
-    const auto Number = Numbers->second.find(varKey(Value));
-    return Number != Numbers->second.end() && Number->second == uint32_t(*GOT)
+    }
+    const auto Number = PcRootedNumbers.find(varKey(Value));
+    return Number != PcRootedNumbers.end() && Number->second == uint32_t(*GOT)
                ? GOTAddressKind::Reloaded
                : GOTAddressKind::None;
   }
 
   /// What \p Value hands back, each path a PHI joins counted on its own.
   void classify(const FunctionFacts &F, const MedVar &Value,
-                std::vector<ReturnedValue> &Paths, std::set<ValueKey> &Seen,
+                std::vector<ReturnPath> &Paths, std::set<ValueKey> &Seen,
                 unsigned Depth) const {
     if (Value.isConst()) {
       Paths.push_back(ReturnedValue::Deliberate);
@@ -539,6 +1363,13 @@ private:
     }
     if (Value.Kind == MedVar::Unspecified) {
       Paths.push_back(ReturnedValue::Undefined);
+      return;
+    }
+    // What a stack protector check leaves in the register shows the
+    // function means no value: a compiler makes the check there only where
+    // the register holds no result.
+    if (F.StackGuard.holds(Value)) {
+      Paths.push_back(ReturnedValue::Unwritten);
       return;
     }
     // The GOT address computed from the PC is nothing the function means.
@@ -551,6 +1382,14 @@ private:
       return;
     case GOTAddressKind::None:
       break;
+    }
+    // The parameter that arrived in the return register, handed back by a
+    // function that never writes the register: Go passes its first argument
+    // there, and a function with no result returns with it as it came.
+    if (Value.Kind == MedVar::Param && Value.RegOff == TRI.IntReturnReg &&
+        !F.WritesReturnRegister) {
+      Paths.push_back(ReturnedValue::Incoming);
+      return;
     }
     if (Value.Kind == MedVar::Param ||
         Depth > ::neverd::limits::pipeline::
@@ -581,15 +1420,24 @@ private:
         (Def->second->Opcode == NdOp::COPY && Def->second->NumInputs == 1 &&
          keyOf(Def->second->Inputs[0]) == keyOf(Value))) {
       // A register as the function entered it: no value, unless a
-      // parameter arrives in it.
-      const bool Parameter = Value.Kind == MedVar::Reg &&
-                             llvm::any_of(F.Func->Params, [&](const MedVar &P) {
-                               return P.RegOff == Value.RegOff;
-                             });
-      Paths.push_back(Value.Kind == MedVar::Reg && Value.SSAVer == 0 &&
-                              !Parameter
-                          ? ReturnedValue::Undefined
-                          : ReturnedValue::Other);
+      // parameter arrives in it.  Only the return register itself shows the
+      // function means none: another register's entry value was copied
+      // there, by code whose reason this pass does not know.  A parameter
+      // that arrived in the return register of a function that never writes
+      // it is a value where a caller reads it.
+      if (Value.Kind != MedVar::Reg || Value.SSAVer != 0) {
+        Paths.push_back(ReturnedValue::Other);
+        return;
+      }
+      const bool Parameter = llvm::any_of(F.Func->Params, [&](const MedVar &P) {
+        return P.RegOff == Value.RegOff;
+      });
+      const bool ReturnRegister = Value.RegOff == TRI.IntReturnReg;
+      Paths.push_back(Parameter ? ReturnRegister && !F.WritesReturnRegister
+                                      ? ReturnedValue::Incoming
+                                      : ReturnedValue::Other
+                      : ReturnRegister ? ReturnedValue::Unwritten
+                                       : ReturnedValue::Undefined);
       return;
     }
     const MedOp &Op = *Def->second;
@@ -619,11 +1467,11 @@ private:
       // of RAX) is what a narrow return reads.
       if (Op.NumInputs != 2)
         break;
-      std::vector<ReturnedValue> Low;
+      std::vector<ReturnPath> Low;
       classify(F, Op.Inputs[1], Low, Seen, Depth + 1);
       Paths.push_back(llvm::all_of(Low,
-                                   [](ReturnedValue V) {
-                                     return V == ReturnedValue::Deliberate;
+                                   [](const ReturnPath &V) {
+                                     return V.Kind == ReturnedValue::Deliberate;
                                    })
                           ? ReturnedValue::Deliberate
                           : ReturnedValue::Other);
@@ -632,12 +1480,12 @@ private:
     case NdOp::SELECT: {
       if (Op.NumInputs != 3)
         break;
-      std::vector<ReturnedValue> Arms;
+      std::vector<ReturnPath> Arms;
       classify(F, Op.Inputs[1], Arms, Seen, Depth + 1);
       classify(F, Op.Inputs[2], Arms, Seen, Depth + 1);
       Paths.push_back(llvm::all_of(Arms,
-                                   [](ReturnedValue V) {
-                                     return V == ReturnedValue::Deliberate;
+                                   [](const ReturnPath &V) {
+                                     return V.Kind == ReturnedValue::Deliberate;
                                    })
                           ? ReturnedValue::Deliberate
                           : ReturnedValue::Other);
@@ -652,8 +1500,7 @@ private:
         Paths.push_back(ReturnedValue::Incoming);
         return;
       }
-      Paths.push_back(callReturnsNoValue(F, Op) ? ReturnedValue::Undefined
-                                                : ReturnedValue::Other);
+      Paths.push_back(callPath(F, Op));
       return;
     case NdOp::INTRINSIC: {
       // An instruction run for its effect (a fence, a breakpoint) or one C
@@ -734,22 +1581,18 @@ private:
     Paths.push_back(ReturnedValue::Other);
   }
 
-  /// Whether a caller reads what a call to \p Func returns.
-  bool callerReadsResult(const MedFunc &Func) const {
-    const auto Calls = CallsTo.find(Func.Entry);
-    if (Calls == CallsTo.end())
-      return false;
-    for (const CallsByCaller &Caller : Calls->second)
-      for (const ValueKey &Result : *Caller.Results) {
-        if (Caller.Facts->Read.count(Result))
-          return true;
-        // A caller that hands it back on reads it when it returns a value.
-        if (Caller.Facts->Returned.count(Result))
-          if (const auto Known = NoValue.find(Caller.Entry);
-              Known == NoValue.end() || !Known->second)
-            return true;
-      }
-    return false;
+  /// Whether a caller reads what a call to \p S returns.  Where a path of
+  /// \p S shows it means no value (\p Shown), that is what the assumption
+  /// leaves read.  Otherwise \p S may be handing back what its caller
+  /// passed it (the register a parameter arrives in, as a routine that keeps
+  /// its registers does), so a caller that hands its result back reads it
+  /// until that caller is settled to return none.
+  bool callerReadsResult(const State &S, bool Shown) const {
+    if (S.ReadDown)
+      return true;
+    return !Shown && llvm::any_of(S.Callers, [&](const Caller &C) {
+      return C.Use.Returned && !handsBackNothing(States[C.Index]);
+    });
   }
 
   /// Whether a parameter arrives in the return register (AArch64 x0, ARM r0).
@@ -759,39 +1602,80 @@ private:
     });
   }
 
-  bool returnsNoValue(const MedFunc &Func) const {
-    if (!settles(Func))
-      return false;
-    const FunctionFacts &F = Facts.at(Func.Entry);
-    std::vector<ReturnedValue> Paths;
-    for (const std::optional<MedVar> &Returned : F.Returns) {
-      if (!Returned) {
-        Paths.push_back(!entersReturnRegister(Func) ? ReturnedValue::Undefined
-                        : F.WritesReturnRegister    ? ReturnedValue::Other
-                                                    : ReturnedValue::Incoming);
-        continue;
-      }
-      std::set<ValueKey> Seen;
-      classify(F, *Returned, Paths, Seen, 0);
+  /// Whether a function returns no value, and whether a path of its own
+  /// shows it.
+  struct Answer {
+    bool NoValue = false;
+    bool Shown = false;
+  };
+
+  Answer answer(const State &S) const {
+    // Go's stack ABI returns nothing in a register: a stack-ABI function
+    // returns the results it stores in its caller's frame
+    // (materializeGoStackResults), and no value where it stores none, in an
+    // image whose compiled code follows that ABI, and no caller reads what
+    // it leaves in the return register.  Assembly has conventions of its
+    // own that a caller does read: `return0` hands `deferproc`'s caller a
+    // zero in AX.  Under Go's internal ABI only assembly takes its
+    // arguments on the stack, and what it returns in a register may have no
+    // caller in the image to show it (x86-64's write barrier returns its
+    // buffer in R11).  And where a routine leaves its stack, the results it
+    // stores on its way back are not found.  What each of those returns is
+    // recovered as any function's is.
+    if (S.Func->StackArgumentsOnly) {
+      if (!S.Func->GoStackResults.empty())
+        return {};
+      const auto &Go = Img.ExceptionMetadata.GoModule;
+      if (Go && Go->StackArguments && !S.Facts.LeavesItsStack &&
+          !callerReadsResult(S, /*Shown=*/false))
+        return {true, true};
     }
-    // No ordinary RETURN is not a proof of no return: an external catch
-    // funclet can resume its parent and supply a value after attachment. Use
-    // the shared proof, which includes exceptional edges and missing handlers.
+    const std::vector<ReturnPath> &Paths = S.Facts.Paths;
     if (Paths.empty())
-      return Func.DoesNotReturn || hasProvenNoReturnExit(Func, Img.Arch);
-    const bool Read = callerReadsResult(Func);
-    for (ReturnedValue &Path : Paths)
-      if (Path == ReturnedValue::Incoming ||
-          Path == ReturnedValue::SystemCallResult ||
-          Path == ReturnedValue::ReloadedGOTAddress)
-        Path = Read ? ReturnedValue::Other : ReturnedValue::Undefined;
-    const auto Count = [&](ReturnedValue Kind) {
-      return llvm::count(Paths, Kind);
-    };
-    if (Count(ReturnedValue::Undefined) == static_cast<long>(Paths.size()))
-      return true;
-    return Count(ReturnedValue::Undefined) &&
-           !Count(ReturnedValue::Deliberate) && !Read;
+      return {S.Facts.NeverReturns, false};
+    size_t Undefined = 0, Deliberate = 0, UnlessRead = 0;
+    bool Shown = false;
+    for (const ReturnPath &Path : Paths)
+      switch (Path.Kind) {
+      case ReturnedValue::CalleeResult:
+        if (States[Path.Callee].NoValue) {
+          ++Undefined;
+          Shown |= States[Path.Callee].Shown;
+        }
+        break;
+      case ReturnedValue::Unwritten:
+      case ReturnedValue::Nothing:
+        Shown = true;
+        ++Undefined;
+        break;
+      case ReturnedValue::Undefined:
+        ++Undefined;
+        break;
+      case ReturnedValue::Incoming:
+      case ReturnedValue::SystemCallResult:
+      case ReturnedValue::ReloadedGOTAddress:
+        ++UnlessRead;
+        break;
+      case ReturnedValue::Deliberate:
+        ++Deliberate;
+        break;
+      case ReturnedValue::Other:
+        break;
+      }
+    const bool Read = callerReadsResult(S, Shown);
+    if (!Read)
+      Undefined += UnlessRead;
+    if (Undefined == Paths.size())
+      return {true, Shown};
+    if (Read || S.Facts.SelectsReturnValue)
+      return {};
+    // A constant left beside a path that shows the function means no value
+    // is what the code happened to hold there (`xor %eax, %eax` to store a
+    // zero).  Beside a path that only leaves nothing, such as the code after
+    // a call that does not return, it is the function's value.
+    if (Shown || (Undefined && !Deliberate))
+      return {true, Shown};
+    return {};
   }
 };
 

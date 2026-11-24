@@ -542,6 +542,11 @@ inline constexpr int
 
 // lib/ir/high/lower/MedToHigh.cpp
 inline constexpr int kMedToHighHighConversionTraceMedNameSizeLimit = 256;
+
+// lib/ir/med/pass/MedByteDemand.cpp
+// The values worked out together when asking which bytes of one are zero
+// (a flag ANDed around a loop); past it nothing is known of them.
+inline constexpr unsigned kMedByteDemandZeroByteValues = 64;
 inline constexpr int kMedToHighHighWalkWalkDepthLimit = 32;
 inline constexpr int kMedToHighConverterSourceBitSliceDepthLimit = 40;
 inline constexpr int kMedToHighConverterForceInlineExprDepthLimit = 30;
@@ -856,6 +861,12 @@ inline constexpr int kMedABIPassSupportResolveIndirectTargetAddrDepthLimit = 16;
 inline constexpr int kMedABIPassSupportPeelCopyDefIndexDepthLimit = 16;
 inline constexpr int kMedABIPassSupportResolveIndirectTargetArgIdxDepthLimit =
     16;
+/// How many blocks back from an indirect call goAssemblyCallsPlatformCode
+/// numbers values to find the load that defines the call's target.
+inline constexpr unsigned kGoIndirectCallTargetBlocks = 8;
+/// How many bytes of its caller's frame goStackFrameUse follows a Go
+/// stack-ABI function into where its record gives its arguments no size.
+inline constexpr uint32_t kGoUnrecordedFrameBytes = 0x400;
 inline constexpr int kMedABIPassSupportAuthenticatedStackOffsetDepthLimit = 128;
 inline constexpr int kMedABIPassSupportPreservesSpillAcrossCallDepthLimit = 16;
 inline constexpr int kMedABIPassSupportStackPtrDeltaAtDepthLimit = 128;

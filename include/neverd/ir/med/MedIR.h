@@ -205,6 +205,15 @@ struct MedReturnReg {
   bool IsFP = false;
 };
 
+/// A result a Go stack-ABI function leaves in its caller's frame: \ref Size
+/// bytes, \ref Offset bytes past the first word of its arguments.
+struct MedGoStackResult {
+  uint32_t Offset = 0;
+  uint16_t Size = 0;
+
+  bool operator==(const MedGoStackResult &) const = default;
+};
+
 struct MedOp {
   enum class RegistrationRootKind : uint8_t {
     None,
@@ -664,6 +673,12 @@ struct MedFunc {
   /// address, and no register carries one: Go code before Go's internal ABI
   /// (goTakesStackArguments).  integerArgumentLayoutOf gives its layout.
   bool StackArgumentsOnly = false;
+  /// The results a Go stack-ABI function stores in its caller's frame, in
+  /// the order of the result registers of Go's internal ABI, which each of
+  /// its returns hands them back in (materializeGoStackResults): the stack
+  /// ABI returns nothing in a register, so C takes them as the function's
+  /// value, or its record where there are several.
+  std::vector<MedGoStackResult> GoStackResults;
   /// The function begins with Go's stack check (goStackGrowth): it runs on a
   /// goroutine's stack, where Go code calls nothing but Go code.  Code of
   /// another language runs on the system stack, which assembly that has no
@@ -690,6 +705,16 @@ struct MedFunc {
   /// `__m128`, a NEON vector, x86-64's `{float, float}` packed in one
   /// register), typed Float(16): its bits, not a scalar float.
   bool ReturnsVectorRegister = false;
+  /// Callers of this image depend on the integer result of calls to this
+  /// function and none on what it leaves in the floating-point return
+  /// register (settleFloatReturnsByCallers): a floating value its body
+  /// holds at a return is no result.
+  bool CallersReadIntegerResult = false;
+  /// Some return of this function holds in the floating-point return
+  /// register what a callee that returns no float left there
+  /// (bindFloatCallResults): the function returns none either, whatever
+  /// another of its returns holds.
+  bool ReturnHoldsNoFloat = false;
 
   std::vector<MedTypedParam> TypedParams;
   /// The width (4 or 8 bytes) of the scalar each floating-point argument

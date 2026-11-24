@@ -31,6 +31,7 @@
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedCallTarget.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -911,6 +912,15 @@ bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OI,
   }
   const bool HasIntegerResult =
       Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == TRI.IntReturnReg;
+  // A call to a callee that never writes the integer return register has no
+  // output (LowToMed).  Where that callee writes the floating-point one, the
+  // result it is typed with is the call's only one.
+  const bool HasNoResultYet =
+      Op.Output.Kind == MedVar::Temp && Op.Output.Size == 0 &&
+      callPreservesRegisterBytes(TheArch, Op.CallPreservedGPRs,
+                                 TRI.IntReturnReg, TRI.FullRegWidth) &&
+      !callPreservesRegisterBytes(TheArch, Op.CallPreservedGPRs,
+                                  TRI.FPReturnReg, Size);
   const MedVar ExistingOutput = Op.Output;
   // The synthetic split is the call's 64-bit temp followed, at the call's
   // address, by the SUBBYTES that place its halves in the two integer return
@@ -954,7 +964,7 @@ bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OI,
       SyntheticWideHalves = 0;
   }
   const bool HasSyntheticWideResult = SyntheticWideHalves != 0;
-  if (!HasIntegerResult && !HasSyntheticWideResult)
+  if (!HasIntegerResult && !HasSyntheticWideResult && !HasNoResultYet)
     return false;
   auto ClobberIt = Func.CallClobbers.end();
   for (auto It = Func.CallClobbers.begin(); It != Func.CallClobbers.end();
@@ -1085,7 +1095,7 @@ void recoverCallAbi(
     const RelocationSymbolIndex *RelocationSymbols,
     std::vector<va_t> *SummaryKeysRead,
     const std::map<va_t, std::map<uint64_t, uint16_t>> *CalleeFPScalarBytes,
-    const std::set<va_t> *StackArgumentCallees) {
+    const std::map<va_t, int> *StackArgumentCallees) {
   Func.CallInfos.clear();
   int LastStackInputVersion = 0;
   bool BoundFPResult = false;
@@ -1875,6 +1885,13 @@ void recoverCallAbi(
           CalleeArgs =
               CalleeArgs >= 0 ? std::min(CalleeArgs, FrameWords) : FrameWords;
         }
+        // A result is no argument: a callee whose results are known takes
+        // the words before them, whatever its own recovery passes on in a
+        // jump to the routine that returns them.
+        if (const int Arguments = StackArgumentCallees->at(CI.TargetAddr);
+            Arguments >= 0)
+          CalleeArgs =
+              CalleeArgs >= 0 ? std::min(CalleeArgs, Arguments) : Arguments;
         CI.ArgumentsFromPrototype = true;
         CI.ArgumentsInCalleeRegisterOrder = true;
       }
@@ -2406,6 +2423,27 @@ void recoverCallAbi(
         FoundMask[K] = true;
       }
 
+      // A summary that lists floating arguments beside the integer ones is
+      // no claim of the whole list (IntegerSummary), yet it bound each
+      // integer operand as an input of the call, which SSA renamed to the
+      // value that reaches it (LowToMed).  Register DCE keeps the setup of
+      // the platform's argument registers alone, so a register that is none
+      // of them shows the scans above no write: Go's RAX and RBX in
+      // `lea rax, [rsp+0x38]; xor ebx, ebx; ...; call strconv.genericFtoa`,
+      // whose buffer and length printed unknown.  Such a slot carries the
+      // bound operand.
+      if (!SummarizedIntegerOperands && !HeaderVariadic && Convention &&
+          Convention->RegisterArgumentsFromCalleeSummary &&
+          Op.CalleeRegisterArgs > 0 && Op.CalleeVectorSlots == 0 &&
+          Op.CalleeVectorArgs > 0 &&
+          Op.CalleeRegisterArgs <= static_cast<int>(IntParamRegs.size()) &&
+          Op.NumInputs >= 1u + Op.CalleeRegisterArgs)
+        for (int K = 0; K < Op.CalleeRegisterArgs && K < MaxArgs; ++K)
+          if (!FoundMask[K]) {
+            Found[K] = Op.Inputs[K + 1];
+            FoundMask[K] = true;
+          }
+
       // A register argument can be materialised in a block that dominates the
       // call rather than the call's own block (e.g. a loop-invariant count set
       // before a vectorised loop whose predicated branches push the call into a
@@ -2908,6 +2946,14 @@ void recoverCallAbi(
       for (int J = static_cast<int>(OI) - 1; J >= StoreScanStart; --J) {
         auto &Prev = Blk.Ops[J];
         if (endsCallStackSetup(Prev))
+          break;
+        // The results an earlier Go call left in this frame
+        // (storeGoStackCallResults) are an argument where a callee is known
+        // to read their word: `g(f())` passes a result on in place, with no
+        // store of its own.  A call through a pointer takes what was stored
+        // for it, and no callee says it reads more.
+        if (CI.IsIndirect &&
+            storesGoStackCallResult(Blk.Ops, static_cast<size_t>(J)))
           break;
         if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
             Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)
@@ -4711,10 +4757,14 @@ void recoverCallAbi(
                                    ? TRI.FPABIRegWidth
                                    : static_cast<uint16_t>(TRI.VecRegStride))
                             : ForwarderFPRetSize;
+        // The RETURN reads what the call defines.  That is no longer the
+        // value the integer register named where the call's result was
+        // already moved to the one the caller's SSA holds for the register
+        // (promoteFloatCallResult).
         if (I + 1 < Blk.Ops.size() && Blk.Ops[I + 1].Opcode == NdOp::RETURN &&
             Blk.Ops[I + 1].NumInputs >= 1 &&
             Blk.Ops[I + 1].Inputs[0].Kind == MedVar::Reg) {
-          Blk.Ops[I + 1].Inputs[0].RegOff = TRI.FPReturnReg;
+          Blk.Ops[I + 1].Inputs[0] = O.Output;
           Blk.Ops[I + 1].Inputs[0].Size = ForwarderFPRetSize;
         }
         break;

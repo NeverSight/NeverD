@@ -329,8 +329,8 @@ bool agreeOnAssignments(const SymContext &Ctx,
     return &Assignment[Position(Id)];
   };
 
-  // Fill the existing wide buffers, keeping the original little-endian
-  // generator order even when adjacent variables have different widths.
+  // Keep the little-endian sample sequence across mixed variable widths.
+  llvm::SmallVector<uint64_t, 16> Digits;
   auto Run = [&](auto &&NextWord) {
     for (unsigned S = 0; S < Samples; ++S) {
       for (auto &V : Assignment) {
@@ -340,13 +340,13 @@ bool agreeOnAssignments(const SymContext &Ctx,
           V.setAllBits();
         else if (S == 2)
           V = 1;
+        else if (V.getBitWidth() <= 64)
+          V = NextWord();
         else {
-          for (unsigned J = 0; J < V.getNumWords(); ++J) {
-            const unsigned Offset = J * 64,
-                           Count = std::min(64u, V.getBitWidth() - Offset);
-            V.insertBits(NextWord() & (~uint64_t(0) >> (64 - Count)), Offset,
-                         Count);
-          }
+          Digits.resize_for_overwrite(V.getNumWords());
+          for (auto &Word : Digits)
+            Word = NextWord();
+          V = llvm::APInt(V.getBitWidth(), Digits);
         }
       }
       if (!CheckWide(Lookup))

@@ -35,6 +35,7 @@
 #include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
@@ -127,7 +128,8 @@ void compileArm64eC(const std::string &Source,
                     const std::function<void(llvm::StringRef)> &Inspect = {},
                     bool EmitLLVM = false, llvm::StringRef ExecuteTarget = {},
                     bool *ExecutionAvailable = nullptr,
-                    llvm::StringRef Language = "c") {
+                    llvm::StringRef Language = kOracleCLanguage,
+                    llvm::StringRef ObjectDirectory = {}) {
   const bool ExecuteNative = !ExecuteTarget.empty();
 #ifdef NEVERD_TEST_CLANG
   const std::string HostCompiler = NEVERD_TEST_CLANG;
@@ -194,6 +196,12 @@ void compileArm64eC(const std::string &Source,
     ASSERT_EQ(Status, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "")
                          << Source;
+    if (!ObjectDirectory.empty()) {
+      llvm::SmallString<128> Saved(ObjectDirectory);
+      llvm::sys::path::append(Saved, Optimization.drop_front());
+      llvm::sys::path::replace_extension(Saved, kOracleObjectExtension);
+      ASSERT_FALSE(llvm::sys::fs::copy_file(ObjectPath, Saved));
+    }
     if (Inspect)
       Inspect(ObjectPath);
     if (ExecuteNative) {
@@ -1676,37 +1684,104 @@ TEST(AArch64PAuthSemantics, ExceptionReturnsNeverLoseAuthentication) {
 }
 
 namespace {
-void executeCProjections(const std::vector<MedFunc> &Functions,
-                         llvm::StringRef Oracle,
-                         llvm::StringRef ExecuteTarget) {
+void checkCProjections(const std::vector<MedFunc> &Functions,
+                       llvm::StringRef Oracle, llvm::StringRef ExecuteTarget) {
   CEmitterOptions Options;
   Options.TheArch = Arch::AArch64;
   Options.Format = BinaryFormat::MachO;
-  for (bool LLVMRoute : {false, true})
-    for (bool Optimize : {false, true}) {
-      if (!LLVMRoute && Optimize)
-        continue;
-      SCOPED_TRACE(testing::Message() << LLVMRoute << " " << Optimize);
-      std::string Source;
-      llvm::raw_string_ostream Out(Source);
-      if (LLVMRoute) {
-        llvm::LLVMContext Context;
-        auto Module =
-            MedLLVMEmitter().emit(Functions, Context, "native", Arch::AArch64);
-        ASSERT_TRUE(Module);
-        if (Optimize)
-          optimize(*Module);
-        ASSERT_FALSE(llvm::verifyModule(*Module));
-        ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
-      } else {
-        std::vector<HighFunc> High;
-        for (const auto &F : Functions)
-          High.push_back(MedToHighConverter().convert(F, Arch::AArch64));
-        ASSERT_TRUE(HighCEmitter().emit(High, Out, Options));
-      }
-      Source.append(Oracle.data(), Oracle.size());
-      compileArm64eC(Source, {}, /*EmitLLVM=*/false, ExecuteTarget);
+  llvm::SmallString<128> Directory;
+  if (ExecuteTarget.empty()) {
+    if (const char *Root = std::getenv(kOracleArtifactEnvironment);
+        Root && *Root) {
+      const auto *Test = testing::UnitTest::GetInstance()->current_test_info();
+      llvm::SmallString<128> Prefix(Root);
+      ASSERT_FALSE(llvm::sys::fs::create_directories(Prefix));
+      llvm::sys::path::append(Prefix, Test->test_suite_name());
+      ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+      testing::Test::RecordProperty(kOracleArtifactProperty,
+                                    Directory.str().str());
     }
+  }
+  constexpr struct {
+    const char *Name;
+    bool LLVMRoute;
+    bool Optimize;
+  } Routes[] = {{kOracleHighRoute, false, false},
+                {kOracleLLVMRoute, true, false},
+                {kOracleOptimizedLLVMRoute, true, true}};
+  for (const auto &[Name, LLVMRoute, Optimize] : Routes) {
+    SCOPED_TRACE(Name);
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (LLVMRoute) {
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(Functions, Context, kOracleModule,
+                                          Arch::AArch64);
+      ASSERT_TRUE(Module);
+      if (Optimize)
+        optimize(*Module);
+      ASSERT_FALSE(llvm::verifyModule(*Module));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+    } else {
+      std::vector<HighFunc> High;
+      for (const auto &F : Functions)
+        High.push_back(MedToHighConverter().convert(F, Arch::AArch64));
+      ASSERT_TRUE(HighCEmitter().emit(High, Out, Options));
+    }
+    Source.append(Oracle.data(), Oracle.size());
+    llvm::SmallString<128> Route(Directory);
+    if (!Directory.empty()) {
+      llvm::sys::path::append(Route, Name);
+      ASSERT_FALSE(llvm::sys::fs::create_directory(Route));
+    }
+    compileArm64eC(Source, {}, /*EmitLLVM=*/false, ExecuteTarget,
+                   /*ExecutionAvailable=*/nullptr, kOracleCLanguage, Route);
+  }
+}
+
+struct OracleFunction {
+  Intrinsic Id;
+  const char *Name;
+};
+
+std::vector<MedFunc> makeOracleFunctions(llvm::ArrayRef<OracleFunction> Cases) {
+  std::vector<MedFunc> Functions;
+  for (const auto &[Id, Name] : Cases) {
+    auto F = pointerFunction(Id, Name);
+    F.Entry += Functions.size() * sizeof(uint32_t);
+    F.Blocks.front().StartAddr = F.Entry;
+    Functions.push_back(std::move(F));
+  }
+  return Functions;
+}
+
+void checkReturnOracle(llvm::StringRef ExecuteTarget = {}) {
+  constexpr OracleFunction Cases[] = {
+#define NEVERD_PAUTH_ORACLE_PAIR(LR, LRName, Prefix, PrefixName)               \
+  {Intrinsic::LR, #LRName},
+#include "AArch64PAuthNative.def"
+  };
+  const auto Oracle = readPAuthOracle(kReturnOracle);
+  ASSERT_TRUE(Oracle);
+  checkCProjections(makeOracleFunctions(Cases), (*Oracle)->getBuffer(),
+                    ExecuteTarget);
+}
+
+namespace pacm_oracle {
+#define NEVERD_PACM_NATIVE_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "AArch64PACMNative.def"
+} // namespace pacm_oracle
+
+void checkPrefixOracle(llvm::StringRef ExecuteTarget = {}) {
+  constexpr OracleFunction Cases[] = {
+#define NEVERD_PAUTH_ORACLE_PAIR(LR, LRName, Prefix, PrefixName)               \
+  {Intrinsic::Prefix, #PrefixName},
+#include "AArch64PAuthNative.def"
+  };
+  checkCProjections(makeOracleFunctions(Cases),
+                    std::string(pacm_oracle::kOracle) +
+                        pacm_oracle::kCompareMain,
+                    ExecuteTarget);
 }
 
 bool hasNativePAuth() {
@@ -1727,8 +1802,8 @@ TEST(AArch64PAuthSemantics, NativeGenericSignaturesAgreeWithBothCProjections) {
     GTEST_SKIP() << "native key comparison requires a PAuth Apple Silicon host";
   const auto Oracle = readPAuthOracle(kGenericOracle);
   ASSERT_TRUE(Oracle);
-  executeCProjections({pointerFunction(Intrinsic::A64_Pacga, "test_pacga")},
-                      (*Oracle)->getBuffer(), "arm64-apple-macos");
+  checkCProjections({pointerFunction(Intrinsic::A64_Pacga, "test_pacga")},
+                    (*Oracle)->getBuffer(), "arm64-apple-macos");
 }
 
 TEST(AArch64PAuthSemantics, NativeKeysAgreeWithBothCProjections) {
@@ -1745,68 +1820,30 @@ TEST(AArch64PAuthSemantics, NativeKeysAgreeWithBothCProjections) {
     GTEST_SKIP() << kSigningKeysUnavailable;
   const auto Oracle = readPAuthOracle(kSigningOracle);
   ASSERT_TRUE(Oracle);
-  std::vector<MedFunc> Functions;
-  const std::pair<Intrinsic, const char *> Cases[] = {
-      {Intrinsic::Pacia, "test_pacia"},    {Intrinsic::Pacib, "test_pacib"},
-      {Intrinsic::Pacda, "test_pacda"},    {Intrinsic::Pacdb, "test_pacdb"},
-      {Intrinsic::Autia, "test_autia"},    {Intrinsic::Autib, "test_autib"},
-      {Intrinsic::Autda, "test_autda"},    {Intrinsic::Autdb, "test_autdb"},
-      {Intrinsic::Xpaci, "test_xpaci"},    {Intrinsic::Xpacd, "test_xpacd"},
-      {Intrinsic::A64_Pacga, "test_pacga"}};
-  for (const auto &[Id, Name] : Cases) {
-    auto F = pointerFunction(Id, Name);
-    F.Entry += Functions.size() * 0x10;
-    F.Blocks.front().StartAddr = F.Entry;
-    Functions.push_back(std::move(F));
-  }
-  executeCProjections(Functions, (*Oracle)->getBuffer(), kSigningKeyTarget);
+  constexpr OracleFunction Cases[] = {
+#define NEVERD_PAUTH_KEY_FUNCTION(Id, Name) {Intrinsic::Id, #Name},
+#include "AArch64PAuthNative.def"
+  };
+  checkCProjections(makeOracleFunctions(Cases), (*Oracle)->getBuffer(),
+                    kSigningKeyTarget);
+}
+
+TEST(AArch64PAuthLRSemantics, BothCProjectionsCompileWithTheTwoModifierOracle) {
+  checkReturnOracle();
 }
 
 TEST(AArch64PAuthLRSemantics, NativeTwoModifierKeysAgreeWithBothCProjections) {
   if (!hasNativePAuth())
-    GTEST_SKIP() << "native pointer authentication requires Apple Silicon";
+    GTEST_SKIP() << kReturnHostUnavailable;
   bool ExecutionAvailable = false;
-  // The process must both execute PAuth_LR and have active IA/IB keys. A
-  // successful ordinary arm64 process cannot establish either condition.
-  compileArm64eC(R"(
-    #include <stdint.h>
-    int main(void) {
-      int changed_a = 0, changed_b = 0;
-      for (uint64_t i = 0; i != 64; ++i) {
-        uint64_t a, b, pointer = 0x12340 + i * 16;
-        __asm__ volatile("mov x17, %2\nmov x16, %3\nmov x15, %3\n"
-                         ".inst 0xdac18bfe\nmov %0, x17\n"
-                         "mov x17, %2\n.inst 0xdac18ffe\nmov %1, x17"
-                         : "=&r"(a), "=r"(b) : "r"(pointer), "r"(i)
-                         : "x15", "x16", "x17");
-        changed_a |= a != pointer;
-        changed_b |= b != pointer;
-      }
-      return !(changed_a && changed_b);
-    }
-  )",
-                 {}, /*EmitLLVM=*/false, "arm64e-apple-macos",
+  // The process must both execute PAuth_LR and have active IA/IB keys.
+  compileArm64eC(kReturnKeyProbe, {}, /*EmitLLVM=*/false, kSigningKeyTarget,
                  &ExecutionAvailable);
   if (HasFatalFailure())
     return;
   if (!ExecutionAvailable)
-    GTEST_SKIP() << "this host cannot execute arm64e PAuth_LR with active keys";
-  const auto Oracle = readPAuthOracle(kReturnOracle);
-  ASSERT_TRUE(Oracle);
-  std::vector<MedFunc> Functions;
-  for (const auto &[Id, Name] :
-       {std::pair{Intrinsic::A64_Pacia2, "test_pacia2"},
-        std::pair{Intrinsic::A64_Pacib2, "test_pacib2"},
-        std::pair{Intrinsic::A64_Autia2, "test_autia2"},
-        std::pair{Intrinsic::A64_Autib2, "test_autib2"},
-        std::pair{Intrinsic::A64_AuthReturnIA2, "test_returnia2"},
-        std::pair{Intrinsic::A64_AuthReturnIB2, "test_returnib2"}}) {
-    auto F = pointerFunction(Id, Name);
-    F.Entry += Functions.size() * 0x10;
-    F.Blocks.front().StartAddr = F.Entry;
-    Functions.push_back(std::move(F));
-  }
-  executeCProjections(Functions, (*Oracle)->getBuffer(), "arm64e-apple-macos");
+    GTEST_SKIP() << kReturnKeysUnavailable;
+  checkReturnOracle(kSigningKeyTarget);
 }
 
 TEST(AArch64PACMSemantics, PendingPrefixIsNeverAnOrdinaryHint) {
@@ -2653,33 +2690,22 @@ TEST(AArch64PACMSemantics, CTemporariesDoNotCaptureTheMode) {
     }
 }
 
+TEST(AArch64PACMSemantics, BothCProjectionsCompileWithThePrefixOracle) {
+  checkPrefixOracle();
+}
+
 TEST(AArch64PACMSemantics, NativePrefixModesAgreeWithBothCProjections) {
-#define NEVERD_PACM_NATIVE_TEXT(Name, Text) constexpr char Name[] = Text;
-#include "AArch64PACMNative.def"
   if (!hasNativePAuth())
-    GTEST_SKIP() << kNativeUnavailable;
+    GTEST_SKIP() << pacm_oracle::kNativeUnavailable;
   bool ExecutionAvailable = false;
-  compileArm64eC(std::string(kOracle) + kProbeMain, {}, /*EmitLLVM=*/false,
-                 kNativeTarget, &ExecutionAvailable);
+  compileArm64eC(std::string(pacm_oracle::kOracle) + pacm_oracle::kProbeMain,
+                 {}, /*EmitLLVM=*/false, pacm_oracle::kNativeTarget,
+                 &ExecutionAvailable);
   if (HasFatalFailure())
     return;
   if (!ExecutionAvailable)
-    GTEST_SKIP() << kNativeUnavailable;
-  std::vector<MedFunc> Functions;
-  for (const auto &[Id, Name] :
-       {std::pair{Intrinsic::A64_PaciaM, "test_pacia_m"},
-        std::pair{Intrinsic::A64_PacibM, "test_pacib_m"},
-        std::pair{Intrinsic::A64_AutiaM, "test_autia_m"},
-        std::pair{Intrinsic::A64_AutibM, "test_autib_m"},
-        std::pair{Intrinsic::A64_AuthReturnIAM, "test_returnia_m"},
-        std::pair{Intrinsic::A64_AuthReturnIBM, "test_returnib_m"}}) {
-    auto F = pointerFunction(Id, Name);
-    F.Entry += Functions.size() * pacm_fixture::kWordBytes;
-    F.Blocks.front().StartAddr = F.Entry;
-    Functions.push_back(std::move(F));
-  }
-  executeCProjections(Functions, std::string(kOracle) + kCompareMain,
-                      kNativeTarget);
+    GTEST_SKIP() << pacm_oracle::kNativeUnavailable;
+  checkPrefixOracle(pacm_oracle::kNativeTarget);
 }
 
 TEST(AArch64PACMSemantics, IncomingModeSurvivesSSAAndLoopBackedges) {

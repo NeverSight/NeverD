@@ -10,6 +10,7 @@
 #include "neverd/loader/DWARF/LSDA.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/DyldSharedCache.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -65,6 +66,12 @@ void attachLSDA(const BinaryImage &Img, const dwarf_eh::PointerBases &Bases,
   Req.LSDAVA = LSDAVA;
   Req.FunctionStart = F.CodeRange.Begin;
   Req.FunctionEnd = F.CodeRange.End;
+  // Compact lookup can include padding before the next entry. An indexed FDE
+  // owns its LSDA's code extent, as does a supplemental FDE supplying the
+  // only language table. A native compact recipe can own its own LSDA.
+  if (F.Dwarf && F.Compact &&
+      (F.Compact->Kind == CompactUnwindKind::DwarfFDE || !F.Compact->LSDAVA))
+    Req.FunctionEnd = F.Dwarf->InitialLocation + F.Dwarf->AddressRange;
   Req.Personality = F.Personality;
   Req.IsSJLJ = isSJLJPersonality(F.Personality);
   dwarf_eh::PointerBases LSDABases = Bases;
@@ -151,6 +158,16 @@ void parseDarwinExceptions(BinaryImage &Img) {
     auto It = NameCache.find(Key);
     if (It == NameCache.end()) {
       std::string Resolved = resolveRoutineName(Img, Routine, Slot);
+      if (Resolved.empty() && Routine && Img.MachOSharedCache) {
+        auto Export = Img.MachOSharedCache->readTextExportName(Routine);
+        if (Export) {
+          Resolved = std::move(*Export);
+        } else {
+          Out.ParseStatus = mergeExceptionParseStatus(
+              Out.ParseStatus, ExceptionParseStatus::Partial);
+          Out.Diagnostics.push_back(llvm::toString(Export.takeError()));
+        }
+      }
       It = NameCache
                .emplace(Key,
                         std::make_pair(Resolved,

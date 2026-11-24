@@ -1020,3 +1020,59 @@ find() { return 0; }
         self.assertNotIn("  push:\n", diagnostic)
         self.assertIn("scripts/diagnostics/RepFaultProbe.cpp", diagnostic)
         self.assertIn("WindowsAlignmentNative.RunsOriginalFaultAndRetryExecutable", diagnostic)
+
+    def test_third_party_actions_are_pinned_to_commit_shas(self):
+        uses = re.compile(r"^[ \t]*(?:- )?uses:\s+(\S+)")
+        mutable = []
+        paths = sorted((ROOT / ".github").rglob("*.yml"))
+        paths += sorted((ROOT / ".github").rglob("*.yaml"))
+        for path in paths:
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                match = uses.match(line.split(" #", 1)[0].rstrip())
+                if match is None:
+                    continue
+                reference = match.group(1)
+                if reference.startswith("./"):
+                    if "@" in reference:
+                        mutable.append(
+                            f"{path.relative_to(ROOT).as_posix()}:{lineno}: {reference}")
+                    continue
+                revision = reference.rsplit("@", 1)[-1] if "@" in reference else ""
+                if re.fullmatch(r"[0-9a-f]{40}", revision):
+                    continue
+                mutable.append(
+                    f"{path.relative_to(ROOT).as_posix()}:{lineno}: {reference}")
+        self.assertEqual(mutable, [])
+
+    def test_workflows_keep_fork_controlled_definitions_out(self):
+        # These events load the workflow from the pull request merge commit,
+        # which a fork controls. pull_request_target and workflow_run load the
+        # default-branch file instead, so they stay under the checks below.
+        forbidden_triggers = {"pull_request", "pull_request_review",
+                              "pull_request_review_comment"}
+        untrusted_checkout = (
+            "github.event.pull_request.head.sha",
+            "github.event.workflow_run.head_sha",
+            "github.event.workflow_run.head_repository",
+        )
+        failures = []
+        paths = sorted((ROOT / ".github").rglob("*.yml"))
+        paths += sorted((ROOT / ".github").rglob("*.yaml"))
+        for path in paths:
+            source = path.read_text(encoding="utf-8")
+            relative = path.relative_to(ROOT).as_posix()
+            if "\non:\n" not in source:
+                continue
+            block = source.split("\non:\n", 1)[1]
+            block = re.split(r"(?m)^[A-Za-z]", block, maxsplit=1)[0]
+            triggers = set(re.findall(r"(?m)^  ([a-z_]+):", block))
+            failures.extend(
+                f"{relative}: {trigger} executes a fork-controlled workflow file"
+                for trigger in sorted(triggers & forbidden_triggers))
+            if "pull_request_target" in triggers and "actions/checkout@" in source:
+                failures.append(
+                    f"{relative}: pull_request_target checks out a repository")
+            failures.extend(
+                f"{relative}: checks out {expression}"
+                for expression in untrusted_checkout if expression in source)
+        self.assertEqual(failures, [])

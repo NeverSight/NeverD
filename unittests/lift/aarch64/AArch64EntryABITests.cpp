@@ -27,6 +27,7 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/Dwarf.h"
@@ -687,6 +688,24 @@ void writeIR(const llvm::Module &Module, const std::filesystem::path &Path) {
   ASSERT_FALSE(IR.has_error());
 }
 
+void writeTrappingOriginal(llvm::Module &Module,
+                           const std::filesystem::path &Path) {
+  // A publication that leaves the original public entries in place cannot
+  // satisfy the independent caller.
+  for (auto &Function : Module) {
+    if (Function.isDeclaration() || Function.hasLocalLinkage())
+      continue;
+    Function.deleteBody();
+    auto *Block =
+        llvm::BasicBlock::Create(Module.getContext(), kBody, &Function);
+    llvm::IRBuilder<> Builder(Block);
+    auto *Type = llvm::FunctionType::get(Builder.getVoidTy(), false);
+    Builder.CreateCall(llvm::InlineAsm::get(Type, kOriginalTrap, {}, true));
+    Builder.CreateUnreachable();
+  }
+  writeIR(Module, Path);
+}
+
 TEST(AArch64EntryABI, ExportSignedNativeInputs) {
   llvm::LLVMContext Context;
   const char *Directory = std::getenv(kExportDirectory);
@@ -738,19 +757,8 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
                  Object.ObjectData.size());
     Output.close();
     ASSERT_TRUE(Output);
-    // Every public baseline entry traps. A publication that accidentally keeps
-    // the original implementation cannot satisfy the independent caller.
-    for (auto &Function : *Module) {
-      if (Function.isDeclaration() || Function.hasLocalLinkage())
-        continue;
-      Function.deleteBody();
-      auto *Block = llvm::BasicBlock::Create(Context, kBody, &Function);
-      llvm::IRBuilder<> Builder(Block);
-      auto *Type = llvm::FunctionType::get(Builder.getVoidTy(), false);
-      Builder.CreateCall(llvm::InlineAsm::get(Type, kOriginalTrap, {}, true));
-      Builder.CreateUnreachable();
-    }
-    writeIR(*Module, Root / (Dwarf ? kOriginalDwarfIR : kOriginalIR));
+    writeTrappingOriginal(*Module,
+                          Root / (Dwarf ? kOriginalDwarfIR : kOriginalIR));
     ASSERT_FALSE(HasFailure());
   }
   if (Root.empty())
@@ -761,15 +769,9 @@ TEST(AArch64EntryABI, ExportSignedNativeInputs) {
   ASSERT_TRUE(Caller);
 }
 
-void publishNativeInputs(bool ExpectLayoutRefusal) {
-  const char *Input = std::getenv(kPublicationInput);
-  if (!Input)
-    GTEST_SKIP() << kPublicationUnavailable;
-  const char *Output = std::getenv(kPublicationOutput);
-  const char *Receipt = std::getenv(kPublicationReceipt);
-  ASSERT_NE(Output, nullptr);
-  ASSERT_NE(Receipt, nullptr);
-  const bool Dwarf = std::getenv(kPublicationDwarf) != nullptr;
+void publishNativeInputs(const std::string &Input, const std::string &Output,
+                         const std::string &Receipt, bool Dwarf,
+                         bool ExpectLayoutRefusal) {
   auto Image = Loader::create(BinaryFormat::MachO)->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   if (ExpectLayoutRefusal) {
@@ -929,9 +931,58 @@ void publishNativeInputs(bool ExpectLayoutRefusal) {
   ASSERT_FALSE(Record.has_error());
 }
 
-TEST(AArch64EntryABI, PublishSignedNativeInputs) { publishNativeInputs(false); }
+void checkNativePublication(bool ExpectLayoutRefusal) {
+  const char *Input = std::getenv(kPublicationInput);
+  const char *Output = std::getenv(kPublicationOutput);
+  const char *Receipt = std::getenv(kPublicationReceipt);
+  const bool Dwarf = std::getenv(kPublicationDwarf) != nullptr;
+  if (Input || Output || Receipt || Dwarf) {
+    ASSERT_NE(Input, nullptr);
+    ASSERT_NE(Output, nullptr);
+    ASSERT_NE(Receipt, nullptr);
+    publishNativeInputs(Input, Output, Receipt, Dwarf, ExpectLayoutRefusal);
+    return;
+  }
+#if defined(__APPLE__) && defined(NEVERD_TEST_CLANG)
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const auto Cleanup = llvm::scope_exit(
+      [&] { EXPECT_FALSE(llvm::sys::fs::remove_directories(Directory)); });
+  const std::filesystem::path Root(Directory.str().str());
+  const auto IR = (Root / kOriginalIR).string();
+  const auto Caller = (Root / kCallerFile).string();
+  const auto Original = (Root / kOriginalLibrary).string();
+  llvm::LLVMContext Context;
+  auto Module = module(Context);
+  addFixtures(*Module);
+  ASSERT_FALSE(::testing::Test::HasFailure());
+  prepareNativeModule(*Module, false);
+  writeTrappingOriginal(*Module, IR);
+  ASSERT_FALSE(::testing::Test::HasFailure());
+  std::ofstream CallerSource(Caller);
+  CallerSource << kNativeCaller;
+  CallerSource.close();
+  ASSERT_TRUE(CallerSource);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                NEVERD_TEST_CLANG,
+                {NEVERD_TEST_CLANG, kTargetFlag, kArm64eTriple, kCallerStandard,
+                 kOptimize2, kFramePointerOption, kNoSiblingCalls,
+                 kPublicationKey, kDynamicLibrary, kTightHeader, Caller, IR,
+                 kCxxRuntime, kOutputFlag, Original}),
+            0);
+  publishNativeInputs(Original, (Root / kInstalledLibrary).string(),
+                      (Root / kStandaloneReceipt).string(), false,
+                      ExpectLayoutRefusal);
+#else
+  GTEST_SKIP() << kPublicationUnavailable;
+#endif
+}
+
+TEST(AArch64EntryABI, PublishSignedNativeInputs) {
+  checkNativePublication(false);
+}
 
 TEST(AArch64EntryABI, RejectsOccupiedNativeInputs) {
-  publishNativeInputs(true);
+  checkNativePublication(true);
 }
 } // namespace

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedCodeIdentity.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -114,9 +115,7 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
       // leave the pointer table targeting an address with no LLVM BlockAddress
       // owner.  Direct branches and JumpTable metadata can be rewritten below;
       // an externally stored code identity cannot, so retain its block.
-      const va_t BlockAddress = Blk.StartAddr != 0 || Blk.Ops.empty()
-                                    ? Blk.StartAddr
-                                    : Blk.Ops.front().Addr;
+      const va_t BlockAddress = medBlockCodeAddress(Blk);
       if (AddressTaken(normalizeCodeAddress(BlockAddress, TargetArch,
                                             Image ? Image->Mode
                                                   : InstructionMode::Default)))
@@ -128,6 +127,9 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
       if (Target < 0 || Target >= static_cast<int>(Func.Blocks.size()))
         continue;
 
+      // A delayed jump may emit its slot's NOP before its branch. Both
+      // ends of a threaded edge name machine block entries.
+      const va_t TargetAddress = medBlockCodeAddress(Func.Blocks[Target]);
       std::vector<int> PredsCopy = Blk.Preds;
 
       for (int PredId : PredsCopy) {
@@ -142,15 +144,9 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
 
         for (auto &Op : Pred.Ops) {
           if ((Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) &&
-              Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
-            if (!Func.Blocks[Target].Ops.empty()) {
-              va_t TrivialAddr = Blk.Ops.empty() ? 0 : Blk.Ops.front().Addr;
-              if (Op.Inputs[0].ConstVal == TrivialAddr) {
-                Op.Inputs[0] = MedVar::makeConst(
-                    Func.Blocks[Target].Ops.front().Addr, Op.Inputs[0].Size);
-              }
-            }
-          }
+              Op.NumInputs >= 1 && Op.Inputs[0].isConst() &&
+              Op.Inputs[0].ConstVal == BlockAddress)
+            Op.Inputs[0] = MedVar::makeConst(TargetAddress, Op.Inputs[0].Size);
         }
       }
 
@@ -164,15 +160,11 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
       // misses them. Redirect those targets too — otherwise the emitter cannot
       // map the removed block's address back to a switch case (it would drop
       // the whole switch).
-      if (!Blk.Ops.empty() && !Func.Blocks[Target].Ops.empty()) {
-        va_t TrivialAddr = Blk.Ops.front().Addr;
-        va_t NewAddr = Func.Blocks[Target].Ops.front().Addr;
-        if (TrivialAddr != NewAddr)
-          for (auto &JT : Func.JumpTables)
-            for (auto &Tgt : JT.Targets)
-              if (Tgt == TrivialAddr)
-                Tgt = NewAddr;
-      }
+      if (BlockAddress != TargetAddress)
+        for (auto &JT : Func.JumpTables)
+          for (auto &Tgt : JT.Targets)
+            if (Tgt == BlockAddress)
+              Tgt = TargetAddress;
 
       Blk.Ops.clear();
       Blk.Succs.clear();
@@ -225,8 +217,7 @@ void LowToMedConverter::simplifyCfg(MedFunc &Func) {
       continue;
     const auto &Target = NewBlocks[Blk.Succs.front()];
     const va_t Address = Terminator.Inputs[0].ConstVal;
-    if (Target.StartAddr != Address &&
-        (Target.Ops.empty() || Target.Ops.front().Addr != Address))
+    if (medBlockCodeAddress(Target) != Address)
       continue;
     Terminator.Opcode = NdOp::BRANCH;
     Terminator.NumInputs = 1;

@@ -15,6 +15,7 @@
 #define NEVERD_IR_LOW_GOINLINEDROUTINE_H
 
 #include "neverd/Common.h"
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/low/LowIR.h"
 
 #include <optional>
@@ -39,6 +40,22 @@ struct BinaryImage;
 /// or leaves the routine.
 std::optional<std::vector<LowOp>> goInlinedRoutineBody(const BinaryImage &Img,
                                                        va_t Entry);
+
+/// The registers the arm64 routine at \p Entry takes its operands in where
+/// it stands alone, when it is one of those routines and its body reads at
+/// its entry a general-purpose register neither Go's internal ABI nor the
+/// platform passes an argument in: `runtime.spillArgs` stores X0 to X15
+/// through the internal/abi.RegArgs X20 points at, `runtime.unspillArgs`
+/// loads them from it, and `runtime.duffzero` zeroes the words X20 points
+/// at.  Each general-purpose register the body reads before it writes it,
+/// but those Go code keeps a role for (goStackABIEntryRegister) and the
+/// platform's, in the platform's argument order, then Go's, then the others'
+/// in theirs.  Its callers run the body in their place, and one that calls
+/// it binds these, as a prototype's operands (FixedIntegerCallArguments).
+/// None for an x86-64 routine, whose summary gives the registers it reads
+/// (goEntryRegisterOperands).
+std::optional<FixedIntegerCallArguments>
+goInlinedRoutineOperands(const BinaryImage &Img, va_t Entry);
 
 } // namespace neverd
 

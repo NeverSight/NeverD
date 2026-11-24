@@ -61,7 +61,7 @@ void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat,
-    llvm::ArrayRef<uint64_t> OwnRegisters);
+    llvm::ArrayRef<uint64_t> OwnRegisters, bool Exact);
 
 // ---- MIPS fixed hard-float parameter order (MIPS/MedCallConventionMIPS.cpp)
 // ----
@@ -713,14 +713,23 @@ static bool phiHoldsUnwrittenRegister(const MedFunc &Func, uint64_t Register) {
   return false;
 }
 
-void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
-                          llvm::ArrayRef<uint64_t> ParamRegs,
-                          llvm::ArrayRef<uint64_t> IntegerRegs,
-                          std::set<uint64_t> UsedParamRegs, Arch TargetArch,
-                          const CallArgumentConvention *Convention,
-                          const GPRReadWidths *EntryReadSummary,
-                          bool GoRegisterArguments,
-                          std::optional<size_t> ProtoArgs) {
+/// Whether \p Reads lists a read of \p Register.  The table has a row for
+/// each register a summary tracks; one past them, as arm64's X24 and up,
+/// is listed by none.
+static bool summaryReads(const GPRReadWidths &Reads, uint64_t Register) {
+  const uint64_t Row = Register / 8;
+  return Row < Reads.size() && Reads[Row];
+}
+
+/// \p FixedOperands: \p IntegerRegs are the operands a contract fixes, each
+/// of which the function takes whether or not \p EntryReadSummary has a row
+/// for its register (a Go write barrier's shared body takes arm64's X25).
+void detectRegisterParams(
+    MedFunc &Func, const TargetRegInfo &TRI, llvm::ArrayRef<uint64_t> ParamRegs,
+    llvm::ArrayRef<uint64_t> IntegerRegs, std::set<uint64_t> UsedParamRegs,
+    Arch TargetArch, const CallArgumentConvention *Convention,
+    const GPRReadWidths *EntryReadSummary, bool GoRegisterArguments,
+    std::optional<size_t> ProtoArgs, bool FixedOperands = false) {
   // A routine with a platform prototype (a documented WDK routine) takes
   // exactly its declared parameters, however its body forwards registers to
   // other calls.
@@ -748,7 +757,7 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
   } else if (FromSummary) {
     UsedParamRegs.clear();
     for (size_t I = 0; I < ParamRegs.size() && I < IntegerRegs.size(); ++I)
-      if ((*EntryReadSummary)[ParamRegs[I] / 8])
+      if (FixedOperands || summaryReads(*EntryReadSummary, ParamRegs[I]))
         UsedParamRegs.insert(ParamRegs[I]);
     // A positional convention's slot may carry a floating argument in its
     // vector register instead.
@@ -1696,9 +1705,21 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
       Image && Image->ExceptionMetadata.GoModule &&
       Image->ExceptionMetadata.GoModule->RegisterArguments && Convention &&
       Convention->ArgumentsFromCallSetup;
+  // A routine that jumps to code the Go toolchain did not build hands it
+  // the registers it was entered with, where the platform passes that code
+  // its arguments: `syscall.libc_mmap_trampoline` is `B libc_mmap(SB)`.  The
+  // jump reads none of them either.
+  const bool JumpsToPlatformCode =
+      Convention && Convention->ArgumentsFromCallSetup &&
+      llvm::any_of(Func.Blocks, [](const MedBlock &Block) {
+        return llvm::any_of(Block.Ops, [](const MedOp &Op) {
+          return Op.Opcode == NdOp::CALL && Op.IsTailCall &&
+                 Op.RegisterContract == CallRegisterContract::Platform;
+        });
+      });
   if (Image && !GoRegisterArguments && !GoFixedOperands &&
       !Func.Blocks.empty() && goTakesStackArguments(*Image, Func.Entry) &&
-      (!CallsHideForwarding ||
+      (!(CallsHideForwarding || JumpsToPlatformCode) ||
        loadsIncomingStackWord(Func, TheArch, Fmt,
                               goStackArgumentLayout(TheArch).EntryStackBase))) {
     // The entry's leading self-copies name every register read before the
@@ -1709,8 +1730,17 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
     // of the bytes it keeps (`sete r9b` keeps R9's upper bytes, which Go never
     // reads).
     Func.StackArgumentsOnly = true;
+    // A function that takes its record's words on the stack takes no
+    // register beside them, whatever it reads of one as it was entered
+    // (goRecordsStackArguments): what that holds is no argument.
+    // `runtime.netpoll` calls `runtime.epollwait`, which hands the kernel
+    // R9, the sixth operand of `epoll_pwait`, as it found it; the read made
+    // R9 a parameter of `netpoll` and of every caller up to
+    // `runtime.findrunnable`.  A stub that takes registers beside such a
+    // record was told apart above (GoFixedOperands).
+    const bool RecordsStackWords = goRecordsStackArguments(*Image, Func.Entry);
     for (const MedOp &Op : Func.Blocks.front().Ops) {
-      if (Op.Opcode != NdOp::COPY)
+      if (RecordsStackWords || Op.Opcode != NdOp::COPY)
         break;
       if (Op.Output.Kind == MedVar::Reg && Op.NumInputs >= 1 &&
           Op.Inputs[0].Id == Op.Output.Id &&
@@ -1846,8 +1876,11 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
     }
     GPRReadWidths FixedReads{};
     if (GoFixedOperands) {
+      // The table has no row for a register past those a summary tracks:
+      // detectRegisterParams takes the operands from the list itself.
       for (uint64_t Register : IntegerRegs)
-        FixedReads[Register / 8] = 8;
+        if (Register / 8 < FixedReads.size())
+          FixedReads[Register / 8] = 8;
       Summary = &FixedReads;
       Func.ExactRegisterParameters = true;
     }
@@ -1896,7 +1929,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
       if (Summary) {
         BoundedReads = *Summary;
         for (size_t K = *Bound; K < IntegerRegs.size(); ++K)
-          BoundedReads[IntegerRegs[K] / 8] = 0;
+          if (IntegerRegs[K] / 8 < BoundedReads.size())
+            BoundedReads[IntegerRegs[K] / 8] = 0;
         Summary = &BoundedReads;
       }
     }
@@ -1905,13 +1939,17 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
                          GoRegisterArguments || BufferBarrier ||
                              BoundsRoutine || GrowthRoutine ||
                              Func.StackArgumentsOnly || GoFixedOperands,
-                         BoundRegisters);
+                         BoundRegisters, GoFixedOperands);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
     // specially once all call sites are known (Pipeline
     // finalizeVariadicCallees).
-    if (!BoundRegisters)
+    // Go passes a variadic argument as a slice, so no Go function has the
+    // platform's variadic prologue, though one that stores both argument
+    // register files looks like one: arm64's `runtime.asyncPreempt` keeps
+    // X0 to X7 and V0 to V7 for the code it interrupts.
+    if (!BoundRegisters && !(Image && isGoCode(*Image, Func.Entry)))
       detectVariadic(Func, TRI, TargetArch, Fmt);
 
     // Recover floating/vector parameters in their target's register bank.
@@ -1945,12 +1983,48 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
                      Op.Output.RegOff <= a64reg::X15 &&
                      Op.Output.RegOff % 8 == 0;
         }
+      // A Go function's stack-growth path names exactly the floating
+      // arguments it takes, as it names the integer ones, and the scalar
+      // each is (LowToMedConverter::GoArgumentSpillFloats).  A register the
+      // path does not spill carries no argument, whatever lanes of it a
+      // legacy SSE write keeps, and one it spills is a parameter though
+      // the body never reads it, in its place among the others.
+      const bool SpilledFloats = GoRegisterArguments && GoArgumentSpillReads;
+      llvm::SmallVector<uint64_t, 4> Spilled;
+      for (const auto &[Register, Bytes] : GoArgumentSpillFloats) {
+        (void)Bytes;
+        Spilled.push_back(Register);
+      }
       const llvm::ArrayRef<uint64_t> GoFloats =
-          GoRegisterArguments || GoFixedOperands || GoArm64
+          SpilledFloats ? llvm::ArrayRef<uint64_t>(Spilled)
+          : GoRegisterArguments || GoFixedOperands || GoArm64
               ? goFloatArgumentRegisters(TheArch)
               : llvm::ArrayRef<uint64_t>();
-      detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat,
-                     GoFloats);
+      if (!SpilledFloats || !Spilled.empty())
+        detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat,
+                       GoFloats, /*Exact=*/SpilledFloats);
+      if (SpilledFloats)
+        for (const auto &[Register, Bytes] : GoArgumentSpillFloats) {
+          if (llvm::none_of(Func.Params, [&](const MedVar &Parameter) {
+                return Parameter.RegOff == Register;
+              })) {
+            MedVar Parameter;
+            Parameter.Kind = MedVar::Param;
+            Parameter.Id = -1;
+            Parameter.Size = TRI.FPABIRegWidth;
+            Parameter.RegOff = Register;
+            Parameter.TheArch = TargetArch;
+            Func.Params.insert(llvm::find_if(Func.Params,
+                                             [&](const MedVar &Other) {
+                                               return llvm::is_contained(
+                                                          Spilled,
+                                                          Other.RegOff) &&
+                                                      Other.RegOff > Register;
+                                             }),
+                               Parameter);
+          }
+          Func.FPParamScalarBytes[Register] = Bytes;
+        }
       // Where a summary gives the floating arguments each in the next
       // vector register (System V x86-64), it lists those a variadic call
       // reads too, which no entry copy shows.

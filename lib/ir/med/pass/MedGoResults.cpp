@@ -412,6 +412,13 @@ void defineGoCallResults(MedFunc &Func, Arch A,
         Bump(Input);
     }
   }
+  // A value a call left that nothing reads any more keeps its id in the
+  // call's clobbers alone, and a view of a field defines it again below: a
+  // new value that took its id would be read as that view.
+  for (const MedCallClobber &Clobber : Func.CallClobbers) {
+    Bump(Clobber.Value);
+    Bump(Clobber.PreservedInput);
+  }
   std::map<uint32_t, std::vector<MedVar>> Left;
   for (const MedCallClobber &Clobber : Func.CallClobbers)
     if (Shapes.count(Clobber.CallSiteId) && Clobber.Value.Kind == MedVar::Reg &&

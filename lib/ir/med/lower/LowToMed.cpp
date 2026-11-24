@@ -37,6 +37,7 @@
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/GoCallContract.h"
+#include "neverd/ir/low/GoInlinedRoutine.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
@@ -747,6 +748,14 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
                     static_cast<int>(std::numeric_limits<int8_t>::max())))
               : 0;
     }
+  // A Go function that takes its record's words on the stack takes no
+  // register beside them (goRecordsStackArguments), whatever its summary
+  // reads of one.  Bound as an operand, the read made the caller's own
+  // incoming register a parameter, and a stack-ABI function of it one that
+  // takes the platform's registers.  A stub that does take registers was
+  // bound above from its own list (goRegisterStubArguments).
+  const bool GoStackCallee = Image && ConstantTarget && !GoCallee &&
+                             goRecordsStackArguments(*Image, Key);
   // An indirect-call dispatcher calls the function in its target register.
   // Its arguments are the registers this function set before the call, the
   // rule IDA uses; a register only passed through from this function's
@@ -767,7 +776,7 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
     MOp.CalleeRegisterArgs = Count;
   } else if (!MOp.IntegerCallSignature && Convention &&
              Convention->RegisterArgumentsFromCalleeSummary &&
-             CallEntryReadGPRs && MOp.NumInputs == 1)
+             CallEntryReadGPRs && MOp.NumInputs == 1 && !GoStackCallee)
     if (auto R = CallEntryReadGPRs->find(ArgumentsKey);
         R != CallEntryReadGPRs->end() &&
         !summaryListsNoParameters(*Convention, R->second, GoCallee)) {
@@ -903,6 +912,10 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
   MOp.CallPreservedGPRs = ~It->second;
   // A callee that writes neither the integer nor the floating-point return
   // register returns nothing: the register still holds the caller's value.
+  // One that writes only the floating-point register keeps its output until
+  // the recovery of float and record results has read it; an x86-64 caller's
+  // reads of RAX after such a call are settled later
+  // (keepCallersValueInReturnRegister).
   if (MOp.Output.Kind == MedVar::Reg && !(It->second & kFPReturnWriteBit))
     if (auto Family = gprFamilyOf(TargetArch, MOp.Output.RegOff);
         Family && (MOp.CallPreservedGPRs >> *Family) & 1) {
@@ -1418,6 +1431,14 @@ MedFunc LowToMedConverter::convertFunction(
     if (const GoWriteBarrier *Barrier = goWriteBarrierAt(*Image, Low.Entry))
       GoBarrierResult = goWriteBarrierResult(TheArch, Barrier->Kind);
 
+  // System V's AL at each call, across the function's blocks.
+  std::optional<LowByteConstantsAtCalls> VariadicVectorCounts;
+  if (Convention && Convention->VariadicVectorCountRegister)
+    VariadicVectorCounts.emplace(
+        Low.Blocks, *Convention->VariadicVectorCountRegister,
+        !Low.Blocks.empty() && Low.Blocks.front().StartAddr == Low.Entry &&
+            lowBlocksShowEveryEntry(CallRegisterBodyView(Low)));
+
   for (const auto &LB : Low.Blocks) {
     uint8_t DispatchDefined =
         TrackDispatchArgs ? DispatchDefinedIn[LowBlockIndex] : 0;
@@ -1616,6 +1637,18 @@ MedFunc LowToMedConverter::convertFunction(
                       LOp.Inputs[0].isConst()
                   ? LOp.Inputs[0].Offset
                   : InvalidVA);
+        // Assembly's call through a pointer that is no func value reaches the
+        // platform's code, which keeps the registers the platform's
+        // convention keeps: arm64's `runtime.nanotime1` holds its stack
+        // pointer in R20 across the vDSO routine it calls.  The summaries
+        // before this conversion still take the call for Go's, which keeps
+        // less.
+        if (Image && MOp.Opcode == NdOp::INDIR_CALL && !TailCall &&
+            MOp.RegisterContract == CallRegisterContract::GoCode &&
+            goAssemblyCallsPlatformCode(
+                *Image, Low.Entry, Low.Blocks,
+                static_cast<size_t>(&LB - Low.Blocks.data()), LowOpIndex))
+          MOp.RegisterContract = CallRegisterContract::Platform;
         if (BoundaryIndex < LB.InstructionBoundaries.size()) {
           const LowInstructionBoundary &Boundary =
               LB.InstructionBoundaries[BoundaryIndex];
@@ -1818,10 +1851,10 @@ MedFunc LowToMedConverter::convertFunction(
           CallArgumentsFrom = *Own;
       // How many vector registers the call tells a variadic callee it
       // passes, at most (System V AL).
-      if (Convention && Convention->VariadicVectorCountRegister &&
+      if (VariadicVectorCounts &&
           (LOp.Opcode == NdOp::CALL || LOp.Opcode == NdOp::INDIR_CALL))
-        if (const std::optional<uint8_t> Count = lowByteConstantAtCall(
-                LB.Ops, LowOpIndex, *Convention->VariadicVectorCountRegister);
+        if (const std::optional<uint8_t> Count =
+                VariadicVectorCounts->at(LB, LowOpIndex);
             Count && *Count <= ConventionRegs.floatingParamRegs(Fmt).size())
           MOp.VariadicVectorCount = static_cast<int8_t>(*Count);
       // Bind ordinary register arguments first. The checked stack argument
@@ -2498,10 +2531,14 @@ MedFunc LowToMedConverter::convertFunction(
     }
     GoArgumentSpillBegin.reset();
     GoArgumentSpillReads.reset();
+    GoArgumentSpillFloats.clear();
     if (GoGrowth && usesGoRegisterArguments(*Image, Low.Entry)) {
       GPRReadWidths Reads{};
+      const llvm::ArrayRef<uint64_t> Floats = goFloatArgumentRegisters(TheArch);
       for (const GoArgumentSpill &Spill : GoGrowth->Spills)
-        if (Spill.Register / 8 < kX64VectorFamilyBase)
+        if (llvm::is_contained(Floats, Spill.Register))
+          GoArgumentSpillFloats.emplace_back(Spill.Register, Spill.Size);
+        else if (Spill.Register / 8 < kX64VectorFamilyBase)
           Reads[Spill.Register / 8] = std::max<uint8_t>(
               Reads[Spill.Register / 8], static_cast<uint8_t>(Spill.Size));
       GoArgumentSpillReads = Reads;
@@ -2514,6 +2551,10 @@ MedFunc LowToMedConverter::convertFunction(
       if (!GoFixedArguments)
         GoFixedArguments =
             goRegisterStubArguments(*Image, Low.Entry, Low.Blocks);
+      // A routine that runs in its caller's place takes the registers its
+      // body reads (goInlinedRoutineOperands).
+      if (!GoFixedArguments)
+        GoFixedArguments = goInlinedRoutineOperands(*Image, Low.Entry);
       // Go assembly that takes registers of its own takes those its callers
       // bind (goEntryRegisterOperands).
       if (!GoFixedArguments && CallEntryReadGPRs && CallEntryIntegerArguments)
@@ -2581,13 +2622,30 @@ MedFunc LowToMedConverter::convertFunction(
     // register, as does Go code before its internal ABI that takes no
     // register argument (MedFunc::StackArgumentsOnly): a stub that takes some,
     // as Go 1.16's panicSliceAlen takes CX and DX, reads those instead.
-    if (Image &&
-        (Func.StackArgumentsOnly || usesGoRegisterArguments(*Image, Low.Entry)))
-      if (const std::optional<uint64_t> Context =
-              goClosureContextRegister(TheArch)) {
-        defineGoClosureContext(Func, *Context);
-        debugVerifyMedFunc(Func, "defineGoClosureContext");
-      }
+    // Assembly Go code enters by the internal ABI is a closure's body too:
+    // the compiler's closures for comparing values of a size they hold jump
+    // to `runtime.memequal_varlen`, which reads it through the context
+    // (`MOVQ 8(DX), BX`).  x86-64 assembly that takes Go's argument registers
+    // is such code (goAssemblyTakesRegisterArguments).  arm64 summaries list
+    // no entry reads, and there it is assembly that addresses memory through
+    // the register as it was entered: what the platform enters only saves
+    // X26 for its caller.
+    const std::optional<uint64_t> ClosureContext =
+        goClosureContextRegister(TheArch);
+    const bool ClosureAssembly =
+        RegisterABIGoCode && ClosureContext &&
+        !usesGoRegisterArguments(*Image, Low.Entry) &&
+        (TheArch == Arch::X64
+             ? OwnEntryReads && goAssemblyTakesRegisterArguments(
+                                    *Image, Low.Entry, *OwnEntryReads)
+             : TheArch == Arch::AArch64 &&
+                   addressesThroughEntryRegister(Func, *ClosureContext));
+    if (Image && ClosureContext &&
+        (Func.StackArgumentsOnly ||
+         usesGoRegisterArguments(*Image, Low.Entry) || ClosureAssembly)) {
+      defineGoClosureContext(Func, *ClosureContext);
+      debugVerifyMedFunc(Func, "defineGoClosureContext");
+    }
 
     // Bind public LowIR selector occurrences only after every MedIR rewrite and
     // SSA/propagation pass has finished.  A source op that disappeared, was

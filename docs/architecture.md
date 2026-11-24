@@ -1838,9 +1838,12 @@ Missing/conflicting providers, unresolved or
 subtracted expressions, non-writable storage and stale placement fail before
 mutation. A source build of the fork exercises both IR and assembly producers
 through final placement in chained and threaded images. The bounded handoff
-retains nested signing constants and verifies the installed recipes. The r6
-build lacks the callback and explicitly skips that integration test; this
-handoff does not reconstruct the ABI of arbitrary lifted modules.
+retains nested signing constants and verifies the installed recipes. With r6,
+the native Mach-O object writer carries the same signing information in
+relocations. Its direct image writer exposes the authenticated specifier but
+omits the key and discriminator. NeverD rejects that output, including signing
+expressions introduced by assembly. Both toolchains exercise the native
+object installer with a local rebase and an external bind.
 
 `MachOAuthenticatedFixups` installs final-address signing recipes in linked
 arm64e chained and legacy threaded images. It reuses the strict dependency
@@ -2785,19 +2788,35 @@ some real signed images retain original section offsets in their headers.
 `MachOLoader` selects an exact catalogue install name and reuses the ordinary
 Mach-O readers through `prepareImage`. The bounded analysis projection retains
 virtual addresses, symbol indices and alias/module names while packing only
-referenced linkedit bytes and strings. Packed linkedit has no projected VM
-ownership. Its original addresses remain readable through the cache. The
+referenced linkedit bytes and strings. The symbol tables, relocations, function
+starts and export trie use the file offsets of their image's `__LINKEDIT`.
+Text and linkedit subcaches can use identical numeric offsets. A command with
+unspecified segment ownership still requires a unique source range. Apple's
+extractor uses the linkedit segment's VM address and file offset for this
+translation. [Apple dyld cache extractor](https://github.com/apple-oss-distributions/dyld/blob/main/other-tools/dsc_extractor.cpp)
+
+Packed linkedit has no projected VM ownership. Its original addresses remain
+readable through the cache. The
 cache slide reader supplies pointer semantics before metadata and discovery;
 authenticated bytes remain encoded, and only unsigned slide slots are patched.
 Indirect-table names are separate cache symbol references, never ordinary
 import-storage proof. Optimized `__got`/`__auth_got` sections retain names only
-for nonzero surviving slots validated against slide records; coalesced holes
-are not pointers. This follows Apple's [cache binding](https://github.com/apple-oss-distributions/dyld/blob/main/cache_builder/CacheDylib.cpp)
+for nonzero surviving slots validated against slide records. A cache absolute
+bind keeps its original integer value. dyld removes its slide entry, so a
+positional symbol on that slot provides no pointer identity. This follows Apple's [cache binding](https://github.com/apple-oss-distributions/dyld/blob/main/cache_builder/CacheDylib.cpp)
 and [section adjustment](https://github.com/apple-oss-distributions/dyld/blob/main/cache_builder/NewAdjustDylibSegments.cpp). `InputFileSHA256` hashes the exact main file, while the
 image retains every input file digest and its install name. `Raw` is explicitly
 an analysis projection. Module and source-replacement guards apply even when
 a cached image's subtype is ordinary arm64. The layouts follow
 [Apple's cache definitions](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/dyld_cache_format.h).
+
+A cached compact-unwind or DWARF personality can reside in another image.
+The slide record identifies the routine address. To recover its name the
+reader consults the cache text-image directory or the image layouts in older
+caches, checks the executable
+instruction section and looks for a unique regular export at that exact
+address. This also lets an LSDA use its C++ personality to interpret typed
+catches across image boundaries.
 `BinaryImage::MachOSharedCache` retains that immutable address space for
 analysis-only metadata reads. Selected segment bytes take precedence; edits,
 overlapping ownership and stale signing recipes fail validation. Range slide
@@ -4520,6 +4539,15 @@ name (`machOCommandPlatform`, `MachOPlatform.h`, which the emulator's images
 read too), and `darwinPlatform` (`DarwinOperatingSystem.h`) tells macOS
 programs from iOS ones; a program for Mac Catalyst, tvOS or watchOS, or one
 that names no platform or several, joins no library.
+A Mach-O symbol stub names the import its indirect symbol gives it, and the
+stub section's header gives the bytes of a stub. Go's linker writes 6,
+x86-64's stub size, on arm64 too, where a stub is three instructions, so by
+its header `__symbol_stub1` holds twice its stubs and takes the symbols of
+the `__got` after it: every stub but the first named another import, and
+`runtime.mmap_trampoline` called `mach_timebase_info`. The indirect symbol
+table holds one run of symbols per section; where the header's size has the
+stub section claim more than its run, `stubRun` (`MachOLoaderUtils.h`) takes
+the stub size the run gives.
 `scripts/generate_freebsd_types.py` renders what FreeBSD's headers declare
 for a program into `FreeBSDX64.h`, `FreeBSDX86.h`, `FreeBSDARM64.h` and
 `FreeBSDARM.h`, from the /usr/include of FreeBSD 15.1-RELEASE's base.txz for
@@ -5492,10 +5520,36 @@ keeps the ordinary arguments for both C backends. Explicit call-site source
 contracts retain their authority. Prototypes without supported argument summaries
 keep the existing SDK binding.
 
+System V's AL, the count of vector registers a call passes a variadic
+callee, is read across the blocks of a function
+(`LowByteConstantsAtCalls`), by MedIR and the callee read summaries alike.
+Where the start of the call's block comes before any write of AL, the count
+is the one constant every way into that block leaves there: GCC clears EAX
+once, as the result of the path that returns and as the count of the call
+in the block a branch selects (`sqlite3ExprCheckHeight`), and passes the EAX
+a `test eax, eax; je` has just found zero. The byte is unknown at the
+function's entry, in a block no other leads to and in one an exception
+enters, and nothing is carried across blocks where a block may be entered
+some way its predecessors do not show (`lowBlocksShowEveryEntry`). Without
+the count a variadic callee reads all eight vector registers, its caller
+gains eight double parameters, and each caller of that passes eight values
+it never had.
+
+A function whose stack pointer moves further than a frame may span
+(`kMaxFrameSize`, 16 MiB) is refused by name (`analyzeStack`): by a constant
+on the stack pointer itself, or by one the block loaded into a register
+(AArch64's `mov x27, #N; sub x20, sp, x27; mov sp, x20`). Go's reflect call
+trampolines from `runtime.call16777216` to `runtime.call1073741824` reserve
+such frames. The bound also drops stale frame associations on registers
+reused for data, which keep being ignored; on the stack pointer it is the
+function's real frame, and reading on with a stack pointer nothing tracks
+printed wrong code.
+
 A RETURN hands back the parameter that arrived in the result register when
 no path from the function's entry to it writes any byte of that register,
 calls a routine, which clobbers it, or enters through an exceptional edge
-(`registerUntouchedFromEntry` in `NdOpReturnLowering.cpp`). AArch64 and ARM
+(`registerUntouchedFromEntry` in `MedReturnArguments.cpp`). HighC and LLVM
+use the same proof for an incoming integer argument at a bare return. AArch64 and ARM
 pass the first argument in the result register, so the bare `ret` beside the
 tail call of `if (b) return g(b); return a;` returns `a`. A compare that only
 reads the low half of that register (`cbnz w0` after a call, or of the
@@ -5506,6 +5560,114 @@ return is not in the compare's block. A real 32-bit write is a
 definition, and the zeros it writes are the high bits. High bits no write
 produced are not invented. Whether the function returns a value at all stays
 with the return contracts (`settleReturnContracts`).
+The return contracts settle that from each function's return paths, its
+callees and its callers together (`PipelineReturnContracts.cpp`). A path that
+never wrote the result register, where no parameter arrives in it, shows the
+function means no value, and so does a path that hands back what a callee
+left when that callee returned and returns nothing; a constant another path
+holds is then what the code happened to hold (`xor eax, eax` to store a
+zero). A function no path of which shows that, such as one that returns the
+register a parameter arrived in or ends after a call that does not return,
+keeps its value while a caller hands its result back: the caller may be
+returning what it passed. The same holds where the parameter is Go's
+first argument, which arrives in the register its first result leaves in: a
+Go function with no result returns with it as it came. A caller reads a result only where something it
+does depends on a byte of it (`MedByteDemand`): the narrower views of the
+register the lift keeps in step with it, the merges of those views, and the
+bytes a `setcc` writes one byte over read nothing unless they reach a store,
+a call, a branch or a return, and a read of a function's result reaches the
+results that function hands back. So a callee and the callers that hand its
+result back return no value together, as `sqlite3_free` and the functions
+that end in it do, and an operation that reads the result of a call that
+returns nothing, where no byte of it reaches anything, reads zero instead.
+
+A reachable branch whose arms only return distinct integer constants selects
+a result even when another path leaves the register untouched. The arms may
+return separately or pass through successive result PHIs on the way to a
+common return. Each arm must supply its own input, and each block followed
+to the exit must be free of other effects. A partial register write can
+assemble a literal from bytes already defined on that arm. Across a join,
+only differences that survive the shared computation count. Replacing a
+field erases differences in that field. XOR with a scalar literal preserves
+differences in each observed bit. Addition and subtraction with a fixed
+operand preserve differences modulo the observed low bits. A fixed shift
+maps observed result bits back to their input positions. A sign extension
+or arithmetic right shift can expose the input sign through any observed
+sign-fill bit. Zero-filled and discarded bits cannot distinguish the arms.
+A MIPS64 word check in the common computation needs a valid sign-extended
+word on every incoming arm, including after a logical right shift. If a
+narrower view has its own PHI, its incoming value and the complete return
+register must agree on that predecessor before that view can prove a branch
+choice. For an indirect
+branch, the jump table must prove its index domain and bind the selected
+arms to that instruction. The
+comparison uses the inferred result width. If another edge needs an
+unspecified register, generated C traps on that edge. LLVM source projection
+uses the same missing-value marker for a bare link-register return whose
+integer or pointer result has no reaching write or bound argument.
+For a conditional delay slot, HighIR keeps the shared guard address on the
+guard. Two consecutive equal conditions stay separate when a jump can
+enter the second test. The slot's computation and edge copies execute only
+when the original branch executes its slot.
+
+The same demand (`MedByteDemand`) settles which register holds the result of
+a function whose returns leave a floating value in the vector return
+register beside an integer in the integer one. The type pass chooses from
+the body first (`inferReturnType`); where something a direct caller does
+depends on the integer register after the call and nothing depends on the
+vector one, the integer is the result and the function is typed again
+without the float (`settleFloatReturnsByCallers`).
+`sqlite3IntFloatCompare` reloads the double it compares before it returns
+-1, 0 or 1, and its callers test EAX. A caller that hands a register back
+as the call left it shows nothing itself, and a read of what that caller
+returns counts for the function it came from, so the double a wrapper
+passes on to a reader stays a result. This is settled only on x86-64, where
+a call's register arguments are its operands by then and a result handed
+straight to the next call is a read like any other.
+What a stack protector check leaves in the return register is no result
+(`MedStackGuard`). A protected function keeps the thread's guard in its
+frame and compares the two before it returns; GCC loads the copy into RAX
+and subtracts the live guard (`sub rax, fs:0x28`), and Clang loads the guard
+there, exactly where RAX holds no result. The guard, its copies, the
+difference or exclusive OR the check makes, and a value only the check reads
+are the check's own: the type pass takes none for an integer result
+(`inferReturnType`), so a protected function that returns a double is typed
+by the double it left in XMM0, and the return contracts read such a return
+as showing the function means no value. The guard is found at `%fs:0x28` on
+x86-64 and `%gs:0x14` on i386, where the C libraries of Linux and Android
+keep it.
+A function that returns a float holds one at every return. Where some path
+to a return leaves in the vector return register what a call to a function
+of this image that returns no float left there, the function returns none
+either, whatever another of its returns holds
+(`returnHoldsACalleesLeftover`, `MedFunc::ReturnHoldsNoFloat`): sqlite's
+`sumStep` jumps to a helper whose body ends with a double in XMM0 on one
+path and returns after integer helpers on the others. Code this image does
+not hold and a callee reached through a pointer may return a float nothing
+has typed, so what such a call leaves shows nothing, and neither does the
+register as the function was entered, which may be its argument. The check
+is made again when a callee is typed later, since that turns a leftover
+into a result.
+A tail call that forwards a float is rewired to the vector register after
+its arguments are recovered. Where the call's result was already moved to
+the value the caller's SSA holds for that register after the call
+(`promoteFloatCallResult`), the return reads that same value, not the one
+the integer register named.
+A callee whose summary shows it never writes RAX returns nothing there,
+whatever it leaves in XMM0: the register still holds the caller's value,
+and a caller compiled with the callee's body in view keeps one there across
+the call, as GCC's `-fipa-ra` does in sqlite's
+`kahanBabuskaNeumaierStepInt64`. A callee that writes neither register
+gives its call no output from the start (`applyCallRegisterEffect`). One
+that writes XMM0 keeps the output while the recovery of float and record
+results reads it; once those are bound, `keepCallersValueInReturnRegister`
+gives each read of RAX after the call the value that reached the call, and
+the call no output. That value is the one definition every path brings: a
+PHI, or the same value from each predecessor; where paths bring different
+values no PHI merges, the read stays as it was. This is x86-64's: on
+AArch64 and in Go's register ABI the return register is also the first
+argument's, and a callee that never writes it hands that argument back,
+which the return contracts settle.
 An inferred integer result is as wide as the widest value some return path
 is seen to leave (`inferReturnType`). The write in the return's own block,
 the writes that reach a return without one from the blocks before it, and the
@@ -5560,6 +5722,21 @@ that width at the element's start (`tree[n].freq`); union alternatives of
 the same width leave none, and the access stays raw. A pointer names a
 member as the array it indexes only where it holds an array member's
 address (`s->heap[i]`), never the first member of the record it points to.
+
+A register's views share no variable: X7, W7 and the byte the code reads
+with `ubfx x10, x7, #0, #8` are three, and `fixupSubRegisters` keeps them in
+step before SSA. Within a block a narrow read after a wider write is an
+extraction from that write. Across blocks, a block's last wide write is
+projected onto each narrower view another block reads (Phase C), so the
+view's own chain carries the new low bytes through the PHIs. The
+zero-extension the pass inserts after a 32-bit write is no such write for a
+view its source covers: the source is that view's definition. A
+zero-extension of anything else defines the whole register, and its low
+bytes with it. AArch64's `ldrb w7, [x0]` is one, of the byte the load gave,
+and it was skipped with the others, so after a join with a path that set X7
+whole the byte view still held what an earlier write had left: Go's
+`strconv.roundShortest` compared a stale digit, and a function returned a
+constant for the byte it had just loaded.
 
 ## System boundary
 
@@ -5903,7 +6080,15 @@ is the closure context (`defineGoClosureContext`,
 clobbers the register, so no read follows one. Go code before the internal
 ABI that takes no register argument (`MedFunc::StackArgumentsOnly`) reads its
 context the same way; a stub that takes registers, as Go 1.16's
-`panicSliceAlen` takes CX and DX, reads those instead. For either register the
+`panicSliceAlen` takes CX and DX, reads those instead. Assembly Go code
+enters by the internal ABI is a closure's body too: the closures the compiler
+makes for comparing values of a size they hold jump to
+`runtime.memequal_varlen`, which reads the size through the context
+(`MOVQ 8(DX), BX`). x86-64 assembly that takes Go's argument registers is such
+code (`goAssemblyTakesRegisterArguments`); on arm64, whose summaries list no
+entry reads, it is assembly that addresses memory through R26 as it was
+entered, since what the platform enters only saves that register for its
+caller. For either register the
 incoming value is the version nothing in the function defines: where a
 function reads the register only after a call that writes it, its first SSA
 version is that call's clobber, and stays the call's. Calls from assembly, which may
@@ -6019,7 +6204,14 @@ the platform's code enters reads its arguments where the platform passes them
 (`runtime.sigtramp`): both keep the platform's positions. A routine that
 leaves only to resume saved state calls nothing either. A jump to code no
 summary describes passes the routine's argument registers on, so its entry
-reads are unknown (`LocalRegisterEffect::UnknownEntryReads`); one that
+reads are unknown (`LocalRegisterEffect::UnknownEntryReads`) and no summary
+binds its callers' operands. What it reads before control leaves is read all
+the same: a function that calls it and returns passes those registers on, so
+they are its own entry reads, which its callers bind (`CertainReads` in
+`solveCallRegisterEffects`). `sqlite3DbMallocSize` reads both its arguments
+before it jumps to the allocator's size routine; the function that adds what
+it returns to a counter only hands it both, and a tail jump to that function
+passed the second as an unknown value. An unknown jump that
 follows a load of the stack pointer from memory in its block resumes state
 saved elsewhere, on that state's stack (`RegisterStep::ResumesContext`,
 `loadsStackPointerBefore`): it reads no register as the routine was entered
@@ -6059,6 +6251,21 @@ them back, the same way (`goInlinedRoutineAt`): between the two a helper calls
 a func value, which enters Go code by the internal ABI, so its stores read
 what the call returns (`modelGoCallResults`). As calls, each of a Go image's
 27 helpers passed `spillArgs` sixteen unknown values, twelve on Windows.
+
+Standing alone, such a routine takes the registers its body reads before it
+writes them. An x86-64 routine's summary gives them
+(`goEntryRegisterOperands`). arm64 summaries publish no entry reads and
+track no register past X15, so an arm64 routine's own body gives them
+(`goInlinedRoutineOperands`): each general-purpose register it reads first,
+but those Go code keeps a role for, in the platform's argument order, then
+Go's, then the others'. The routine must read one that neither the internal
+ABI nor AAPCS64 passes an argument in: X20 holds the internal/abi.RegArgs of
+the transfers and the words `runtime.duffzero` zeroes, and X21 the
+destination of `runtime.duffcopy`. Read as AAPCS64 code, `runtime.spillArgs`
+stored thirty-two values through a register nothing defines.
+`localRegisterEffect` publishes the operands for a call that does reach the
+routine, and `LowToMedConverter` gives them to `detectCc` as the routine's
+exact parameters.
 
 Such a call takes its arguments in Go's registers too, integer and floating
 (`goIntegerArgumentRegisters`, `goFloatArgumentRegisters`), as does every
@@ -6153,7 +6360,45 @@ argument registers from the first variadic one through R9 into consecutive
 words that read no parameter: Go passes a variadic argument as a slice, and
 RAX is its first argument register. `findRegisterSaveAreaSpills` skips Go
 code, so `runtime.spillArgs`, which stores RAX and then R8 and R9 in a row,
-reads both.
+reads both. `detectCc` looks for no variadic prologue in Go code on any
+target: arm64's `runtime.asyncPreempt`, which keeps X0 to X7 and V0 to V7
+for the code it interrupts, was taken for an AAPCS64 variadic function, and
+Darwin's `runtime.adjustSignalStack` and `runtime.entersyscallblock` for
+Darwin ones. A variadic function is no context save, so the thirty-two
+vector registers `asyncPreempt` keeps printed as registers nothing defines.
+
+A call Go code makes to a routine the `pclntab` does not record follows the
+platform's convention (`callRegisterContractOf`): the Go toolchain built no
+such routine. Darwin's `runtime.mmap_trampoline` holds its argument block in
+X19 across `BL libc_mmap(SB)`, which libc keeps and Go code would not, so
+every store after the call went through a register nothing defines. Code
+with a record but no frame data, as a linker trampoline into a Go function
+is, stays under Go's, and so does every call where the table of recorded
+functions is unproven. A routine that only jumps to such code hands it the
+registers it was entered with: Go 1.16's `syscall.libc_mmap_trampoline` is
+`B libc_mmap(SB)`. Where a call takes its arguments from its caller's setup
+(arm64), nothing reads those registers, so `detectCc` takes such a routine
+for no stack-ABI one unless it loads a word of its caller's frame.
+
+Assembly reaches Go code by name or through a func value, whose code pointer
+is the word the closure context register points at when the call is made
+(`MOVD R3, R26; MOVD 0(R3), R3; BL (R3)`). A call through any other pointer
+it loads reaches the platform's code: `runtime.nanotime1`, `walltime` and
+`vgetrandom1` call the vDSO routine whose address a variable holds, with
+the goroutine's stack pointer in R20 and `m` in R21, which that routine
+keeps and Go code would not. `goAssemblyCallsPlatformCode` numbers the values
+of the blocks behind the call, a block keeping what every block that leads
+to it agrees on: where a load defines the target, it compares the address
+the load read with the context register at the call; `LowToMedConverter`
+gives such a call the platform's contract.
+A target no load in reach defines says nothing, and compiled code, which
+calls through method tables too, is not asked. On x86-64 the same routines
+switch to the system stack first: with R12 kept, the frame they return to
+is known again, and the source frame check refuses them for the return
+address the call pushed on the other stack. Until that check follows a stack
+switch, the rule is arm64's alone, and an x86-64 call of this kind stays
+Go's. The register summaries before the conversion take every such call for
+Go's, which keeps less.
 
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
@@ -6241,13 +6486,32 @@ returns a list of values, and as one `__int128` `runtime.makeAddrRange`, which
 returns its two arguments, was refused, its high word being no value the
 function computed (`returnsGoResults`).
 
+No register carries a value into Go code but its arguments. A field of a
+register record that a return leaves as the function was entered with, where
+no argument arrives, is therefore unknown, in a record with floating fields
+too (`NdOpReturnLowering`): `runtime.modf` returns X0 and X1, and RAX beside
+them only where its own call left it. Its return that two paths reach with
+RAX untouched hands back an unknown value there. Before, the lowering found
+no value and refused the function once its growth path was gone.
+
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
 function uses into the spill area above the return address, calls the runtime's
 `morestack` and reloads them (cmd/compile/internal/amd64/ssa.go, `RegArgs`).
 A byte or halfword spill may store the register's low bytes through a
-temporary (arm64 `strb w2, [sp, #24]`). Floating arguments are not modelled,
-so a path that spills a vector register names no argument list.
+temporary (arm64 `strb w2, [sp, #24]`). A floating argument is spilled as the
+scalar it is: `movsd [rsp+8], xmm0` stores XMM0's low eight bytes through a
+temporary, and arm64 stores D0. The path names those too, the first eight
+floating registers, which a summary's vector rows can name; a path that
+spills a later one names an argument list no call would complete and stays
+unmodelled. `detectCc` takes exactly the spilled floating registers as the
+function's floating parameters, each the `float` or `double` its spill wrote
+(`LowToMedConverter::GoArgumentSpillFloats`): one the body never reads is a
+parameter all the same, and a register the path does not spill carries none,
+whatever lanes of it a legacy SSE write keeps. Unmodelled, a function that
+takes a float kept its growth path as a loop round a call of `morestack`,
+and took its float as a 128-bit vector: `runtime.printfloat64(__int128)` is
+now `runtime_printfloat64(double arg0)` with a straight-line body.
 The spills become the function's entry reads in the call summaries
 (`LocalRegisterEffect::GoArgumentReads`), as a prototype fixes an import's, in
 place of what its calls appear to forward. `detectCc` takes them as its
@@ -6421,7 +6685,23 @@ whose incoming bytes only an x86-64 partial write keeps and only a return reads
 parameter first and moved every stack parameter one place, as in
 `runtime_mallocgc(?, size, typ, needzero)`. Go 1.16's register stubs
 (`panicIndex` takes AX and CX, `duffzero` DI and X0) and the trampolines the
-platform's code enters keep their registers. A call passes a callee's arguments on the stack only
+platform's code enters keep their registers.
+
+A function whose record gives it argument or result words takes them on the
+stack and no register at all, whatever its body reads of one as it was
+entered (`goRecordsStackArguments`). `bsf rdi, rsi` keeps RDI where RSI is
+zero, which Go's count of trailing zeros then replaces, and `runtime.netpoll`
+calls `runtime.epollwait`, which hands the kernel R9, the sixth operand of
+`epoll_pwait`, as it found it. Read as arguments, these made
+`(*pallocBits).find` and `netpoll` take the platform's registers, return no
+stack result, and take the register from every caller up to `findrunnable`.
+A call to such a function binds no register from the callee's summary either
+(`applyCallRegisterEffect`). The stubs are told apart first
+(`goRegisterStubArguments`); `duffzero`, the write barrier and the
+trampolines have a record of no words, or none. The value nothing set shows
+as unknown where it is read, once, in `netpoll`'s call.
+
+A call passes a callee's arguments on the stack only
 where the callee's own recovery found them there (the stack-argument callees
 PipelineCallAbi collects). It takes no more words than the callee reads,
 bounded by its record, and marks the list complete
@@ -6433,6 +6713,84 @@ Go code is read for its own recovery, where a summary would count its stack
 words after the platform's register positions (`calleesToRead`). Before,
 `runtime_futex(0, 0, 0, 0, 0, 0, addr, op, ...)` printed alone beside
 `runtime_futex(addr, op, ...)` in the image.
+
+The stack ABI returns results where it takes arguments: in the words of the
+caller's frame after them, and nothing in a register. A C function has no
+such words. Its store of a result went to a copy of its own, a dead store,
+and its caller read a word of its frame that nobody wrote: `main_deepest(x);
+return var_m10 + 2;` printed with `var_m10` uninitialised, about 600 such
+reads in one Go 1.15 image, with no placeholder to mark them. So a stack-ABI
+function returns the results it stores there as its value
+(`materializeGoStackResults`, `MedFunc::GoStackResults`), and the same code
+prints `return main_deepest(x) + 2;`. The function's own stores name its
+results (`goStackFrameUse`, `goStackResults`): a result is the bytes of one
+store within a word, the widest where stores overlap, in a word no path reads
+before writing (that word is an argument, a modified one included), which
+every return has written, directly or by handing its address on. A return the
+runtime enters, as the one a recovered panic resumes at, counts as having run
+the function. A record of no bytes bounds nothing: `runtime.cputicks` is
+declared `$0-0` and stores `ret+0(FP)` all the same.
+
+Each return hands the results back in the result registers of Go's internal
+ABI (`returnGoStackResults`), a narrower one zero extended: the value the one
+store that reaches the return stored, or the word read back where paths store
+different values, a callee may write it through its address, or a vector
+register stored it (a float's bits return as the integer the caller's frame
+holds). The function then returns its first result as its value, or all of
+them as their record (`MedFunc::MultiReturn`), as a register-ABI function
+does. Every direct call of it returns that value or record
+(`defineGoCallResults`) and stores each result in the word of the caller's
+frame the callee left it in (`storeGoStackCallResults`). The caller's reads
+find it there, and so does the next call's argument scan: `g(f())` passes
+results on in place with no store of its own. A call whose callee writes no
+register defined none, and gets a value to return its result in. A caller
+copies exactly its callee's list, whichever results it goes on to read, and a
+result nothing reads leaves no store behind.
+
+A routine that only jumps to a stack-ABI routine returns what its target
+does, in the frame the two share; one that returns results of its own and
+also jumps returns the same ones as its target, or none this way. A jump to
+anything else returns what this function's frame holds: `runtime.memequal`
+hands `memeqbody` the address of its result in AX. A result is no argument:
+parameter recovery took its word for one where the function reads the result
+back, and where a routine that jumps on passes every word of its target's
+record (`detectStackParams`), which made each caller of
+`sync/atomic.LoadInt32` pass an unknown value for the result. A function of
+the run drops such a parameter (`dropGoStackResultParameters`); a callee the
+run leaves out keeps its own, so call recovery is told where its arguments
+end (`PipelineResult::GoStackArgumentWords`, recoverCallAbi's
+`StackArgumentCallees`). A run of some functions reads the bodies of the
+callees it leaves out for their results (`omittedCalleeBodies`), as it does
+for their arguments, and prints what a run of the image prints.
+
+The return contract of such a function is stated, not inferred
+(`settleReturnContracts`): it returns its stack results, and, in an image
+whose compiled code follows the stack ABI, no value where it stores none and
+no caller reads the return register. Assembly keeps conventions a caller does
+read (`return0` hands `deferproc`'s caller a zero in AX), and under the
+internal ABI only assembly takes its arguments on the stack, whose register
+results may have no caller in the image (x86-64's write barrier returns its
+buffer in R11): what those return is recovered as any function's is. So is what a routine that leaves its stack
+returns, since the results it stores through the stack pointer it restores
+are not found (`runtime.asmcgocall`, `runtime.callCgoMmap`).
+
+These stay as they were. A call through a function value names no callee: its
+results are not returned this way, and an earlier call's results are no
+argument of it (`storesGoStackCallResult`, in call recovery's scans and
+HighIR's). A result written only through an address, with no store of the
+function's own (`runtime.strhash` hands `&ret` to `aeshashbody`; arm64's
+`memequal`), is not found, nor is an argument read only through one
+(`concatstring2`). A function with more results than Go has result registers,
+nine on x86-64 and sixteen on arm64, returns none this way. A float result
+returns as an integer of the same bits.
+
+One thing is new. A function that now returns nothing leaves an unknown value
+where the code after its call passed the return register on, and where a C
+variable merges that register with values it does hold: `runtime.systemstack`
+hands `runtime.abort`, which no decode gives a signature, what
+`badsystemstack` left in X0, and `runtime.gcDrain` guards four reads of a
+variable its last call's result shares. Both carried a value no instruction
+means before.
 Under Go's internal ABI, Go assembly keeps the stack ABI (ABI0) unless it is
 declared `<ABIInternal>`, and Go's compiler calls it so: `mov %rax,(%rsp);
 ...; call madvise`, which reads `[rsp+8..24]` (`goTakesStackArguments`, the
@@ -7033,6 +7391,19 @@ proof-gated semantic synthesis in both HighC and LLVM-to-C. HighC tries
 synthesis after exact derivation, retaining the derivation if synthesis
 cannot improve it. Width conversions also start inner numeric regions, so
 extensions do not hide narrow arithmetic or change its overflow semantics.
+For a scaled product of affine factors, the surviving bits of each weight
+determine which input slice contributes to the result. When pairwise high
+terms vanish, rows with the same offset and slice share their cofactor.
+Repeated factors share their multiplicity. A slice ending at the top of its
+source can share a shorter zero-extended coordinate when its weight discards
+the missing bits. If sign fill or a concatenated upper lane contributes, the
+complete carrier supplies those bits. Lower-weight factors remain exact
+multipliers.
+HighC can emit a non-byte-sized arithmetic field shifted above a constant
+tail in an unsigned source word. The LLVM reader carries the surviving zero
+suffix of a left shift followed by an arithmetic right shift into its
+disjoint-OR proof. Multiplication adds the guaranteed trailing zero counts
+of both operands. Each contributing instruction still has its own flag check.
 Empty block anchors left by dead-store removal retain available scalar
 definitions. A referenced jump or exception entry still clears them; child
 scopes, expressions and effects keep their existing boundaries. Serial and
@@ -7078,7 +7449,32 @@ bounded exponentiation and a prefix/suffix scan. It compares both methods
 against the remaining work and storage before constructing the result. The solver
 combines equal fields at their live width and appends the constant low bits.
 This computation retains every live coefficient bit across machine-word
-boundaries. A bitwise expression in which each abstract input occurs once
+boundaries. When only some pairs of perturbations vanish, the product reader
+can collect that subset and keep the other factors as full-width multipliers.
+Two high-weight factors can share a row when their offsets, weights and
+observable low fields agree. Toggling the highest bit of a field adds half
+its modulus. The reader moves that adjustment into the constant before
+combining weights, including when the two remaining coefficients cancel.
+The multiplicity of a shared row contributes to both the offset
+product and its cofactor. The remaining factors may still observe differences
+between sign extensions, zero extensions and concatenations of the same field.
+A prepared evaluation plan can use the trailing zeros of a concatenated
+literal tail to multiply the other factors at the demanded precision.
+Constant rotation counts use native remainder when their value fits in a
+single limb. For power-of-two carrier widths, only the low count bits are
+needed. A pair of distinct wide variables has a canonical bitwise ordering
+without constructing a word-sized neutral mask.
+For expanded products with many active minterms, the maximum degree over a
+set of coordinates counts the factors containing any of those coordinates.
+Successive restrictions recover overlapping factors and their multiplicities.
+The solver checks every recovered coefficient, including modular zeros. An
+expensive cubic search can first inspect two-coordinate slices. At a nonzero
+cube the coefficient fixes the scale, so a second coordinate that occurs in
+`n` factors must have the coefficients of `a^(3-n) * (a+b)^n` times that
+scale. An inconsistent slice leaves the original cubic available while the
+solver simplifies other terms. The same search can remove common multipliers
+from a quartic quotient when its Cartesian tables fit the available budget.
+A bitwise expression in which each abstract input occurs once
 already uses the minimum number of binary operations for that reading.
 The region solver can use it directly and still check alternative input
 relations after restoring the original expressions. A one-bit XOR over
@@ -7708,6 +8104,15 @@ remain factored beside independent scaled variables or XOR words. An AND
 addend can also stay separate when its operands and the other addends are
 absent from the product's arithmetic leaves and none of those leaves is an
 AND partition.
+The symbolic context indexes unique variable nodes by name. Parsing another
+occurrence reuses its node after checking the declaration width. Ambiguous
+widths or input origins retain their exact variable IDs.
+The LLVM translator proves a disjoint OR of shifted lanes when their guaranteed
+zero bits cover the word. An in-range logical right shift supplies high zeros.
+Its child instructions still have to satisfy their own definedness checks.
+For a fixed whole-word rotation, the symbolic builder records which source
+bit becomes bit zero. Product recovery uses the resulting suffix when the
+coefficient discards all wrapped bits.
 A product can also group different views of a word when their live low bits
 agree. An interior window starting at bit `i` has the same low bits as a
 right rotation by `i`. Constant rotations compose modulo the word width
@@ -12158,14 +12563,36 @@ When an unrelated unresolved value prevents a complete entry-demand graph,
 native helper inference may retain an independent full-word, call-preserved
 entry register used directly by an effect. LowIR must confirm the same read and
 the existing preserved-state proof still applies. A prologue spill value alone
-does not establish a source parameter. An AArch64 function that only stores
-four or more distinct caller-saved entry GPRs, and does not use those values
-as addresses or operands, is saving the architectural register context. HighC
-names each of those registers and the callee-saved entry registers stored with
-them. A later definition of the same register is a different value: HighIR
+does not establish a source parameter. An AArch64 or x86-64 function that
+only stores four or more distinct caller-saved entry GPRs, and does not use
+those values as addresses or operands, is saving the architectural register
+context. HighC names each of those registers and the callee-saved entry
+registers stored with them. The vector registers it only stores are part of
+that context: an AArch64 Q register is read whole and a D register as its
+low double, as Go's arm64 `asyncPreempt` keeps V0 to V31, where a vector
+register stored alone is a spill and stays unknown
+(`collectEntryVectorSpills`). Go 1.26's `asyncPreempt` keeps them four at a
+time with ST1 and a post-index, each stored as a plain store's value is.
+Most caller-saved registers of x86-64 carry
+arguments, and a register an argument arrives in is a parameter, not one of
+the four. Where the function only stores the RAX it was entered with, which
+no caller of a function that is not variadic gives a value, and reads
+neither R10 nor R11 (`HighC/X86/HighCContextSave.cpp`), the register
+parameters it only stores count too and stay parameters; an SSE register it
+only stores is read whole. Go's `asyncPreempt` keeps the general registers
+in its frame and XMM0 to XMM15 in the P's scratch area, and `debugCallV2`
+keeps them for the debugger; `panicBounds`, whose two parameters are bound
+at its calls, hands the six other argument registers it saved to
+`panicBounds64`. Four stored arguments without RAX are a constructor, and a
+register stored with them stays unknown. A later definition of the same register is a different value: HighIR
 renames it and clears its SSA version, and that local is not a use of the
 incoming register. A variadic save, a prologue spill, and any incoming register
-that is also used as a value stay unknown. An entry Q register that a data
+that is also used as a value stay unknown. The frame pointer alone is still
+a context's: a function that only stores the RBP or x29 it was entered with
+keeps its caller's frame, as Go's `mcall`, `gosave` and `morestack` do in
+`gobuf.bp`, and HighC reads it as `__builtin_frame_address(1)`: the value
+the compiled prologue saved, whatever the caller keeps in the register.
+An entry Q register that a data
 intrinsic or another value use reads, and an entry GPR that a
 pointer-authentication operation reads as its modifier, are that architectural
 register. A 64-bit vector half, a vector the function wrote, a register used
@@ -12830,7 +13257,12 @@ lists floating arguments, that recovery passes no integer register past those
 the summary counts, though the callee's own recovery took more as forwarded
 parameters: those positions pass zero, before the floating arguments. A call
 whose block loads AL with no constant gives no count, and nothing changes for
-it.
+it. Such a summary still bound each integer operand as an input of the call,
+and a register whose setup the recovery's scans do not find carries that
+operand. Register DCE keeps the setup of the platform's argument registers
+alone, so Go's RAX and RBX showed no write once the call's own results ended
+them: `strconv.genericFtoa(buf[:0], x, 'g', -1, 64)` printed its buffer and
+its length as unknown.
 
 An unknown call that returns passes on the argument registers its setup
 leaves alone below one it sets (`forwardedArgumentRegisters`), and the summary
@@ -17841,6 +18273,12 @@ versions that counted n-ary nodes once and omitted all all-ones literals.
 Verification samples reuse the compiled evaluator's word-sized path when both
 plans and all context variables fit in 64 bits. Corner assignments and the
 random stream stay unchanged; wider inputs retain arbitrary-width evaluation.
+Wide affine-product evaluation can share a slot between fields starting at
+the same bit of the same source. A literal weight determines the number of
+observable low bits in each field. An existing wider slot supplies those bits
+only when the interval ends before sign fill, zero fill or rotation wrap.
+A live wrapped bit keeps its complete rotated word.
+
 A wide product can combine three or more distinct affine factors that each
 occur once and read the same input slot. A shared literal scale can expose
 that common input. When each weight has at least `ceil(P/4)` low zero bits,
@@ -18027,8 +18465,11 @@ Opaque-input enumeration and sampling share one candidate checker within a
 request. It remembers counterexamples and validation-grid mismatches for
 canonical candidates, but never caches inconclusive proof results or shares
 rejections across requests.
-Repeated offers still spend search work; only actual verifier calls count as
-proof queries.
+Repeated offers still spend search work. Only actual verifier calls count as
+proof queries. Enumeration records the grammar operation and its operand
+indices for each new sampled behaviour. On a target match it builds pending
+representatives in discovery order before offering the candidate. An
+unsuccessful search can discard its recipes without interning those nodes.
 
 Before composite grammar enumeration, semantic synthesis can fit an entire
 modular affine vector from the oracle's zero and unit-vector responses. Equal

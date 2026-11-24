@@ -13,14 +13,18 @@
 #include "neverd/ir/SourceStackFrame.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
+#include <string>
 #include <tuple>
 
 namespace neverd {
@@ -140,6 +144,54 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
     return false;
   };
 
+  // A function that moves its stack pointer further than a frame may span
+  // is refused: no stage follows such a frame, and reading on with a stack
+  // pointer nothing tracks prints wrong code.
+  auto RefuseFrameBeyondLimit = [] {
+    throw LowToMedConversionError("Stack frame larger than " +
+                                  std::to_string(limits::kMaxFrameSize) +
+                                  " bytes is not supported");
+  };
+  // \p Bits as the signed value of an operand \p Bytes wide: a 32-bit
+  // `add esp, -0x80` holds 0xFFFFFF80, which moves the stack by 128 bytes.
+  auto AsWideAsItsOperand = [](uint64_t Bits, uint16_t Bytes) {
+    if (Bytes == 0 || Bytes >= sizeof(uint64_t))
+      return static_cast<int64_t>(Bits);
+    const unsigned Shift = 64 - 8 * Bytes;
+    return static_cast<int64_t>(Bits << Shift) >> Shift;
+  };
+  // The constant \p Value holds before Ops[End] of \p Blk, where the block
+  // computes one from constants alone.  AArch64 builds a frame size beyond
+  // an immediate's reach in a register: `mov x27, #0x10; movk x27, #0x100,
+  // lsl #16; sub x20, sp, x27; mov sp, x20`.  \p Budget bounds the
+  // definitions followed by the operations the block has.
+  std::function<std::optional<uint64_t>(const LowBlock &, size_t, const NdVar &,
+                                        size_t &)>
+      ConstantBefore = [&](const LowBlock &Blk, size_t End, const NdVar &Value,
+                           size_t &Budget) -> std::optional<uint64_t> {
+    if (Value.isConst())
+      return Value.Offset;
+    if (!Value.isReg() && !Value.isTemp())
+      return std::nullopt;
+    for (size_t I = End; I-- > 0;) {
+      const LowOp &Def = Blk.Ops[I];
+      if (Def.Opcode == NdOp::CALL || Def.Opcode == NdOp::INDIR_CALL)
+        return std::nullopt;
+      const NdVar &Out = Def.Output;
+      if (!Out.Size || Out.Space != Value.Space ||
+          Out.Offset >= Value.Offset + Value.Size ||
+          Value.Offset >= Out.Offset + Out.Size)
+        continue;
+      if (Out.Offset != Value.Offset || Out.Size != Value.Size || !Budget)
+        return std::nullopt;
+      --Budget;
+      return lowScalarConstantResult(Def, [&](const NdVar &Input) {
+        return ConstantBefore(Blk, I, Input, Budget);
+      });
+    }
+    return std::nullopt;
+  };
+
   for (const auto &Blk : Low.Blocks) {
     FrameDefsInBlock.clear();
     for (const auto &Op : Blk.Ops) {
@@ -213,8 +265,23 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
           // vectorized kernels stay in the KB range), so legitimate frame
           // associations are untouched (#387a residual: the COPY-only clear
           // missed non-COPY data redefinitions of a reused EA-scratch temp).
-          if (Total > limits::kMaxFrameSize || Total < -limits::kMaxFrameSize)
+          if (Total > limits::kMaxFrameSize || Total < -limits::kMaxFrameSize) {
+            // From the stack pointer itself this is no stale association:
+            // the function moves or addresses its stack further than a frame
+            // may span, as Go's reflect call trampolines do with frames of
+            // 16 MiB to 1 GiB.  No stage follows such a frame, and reading on
+            // with a stack pointer nothing tracks prints wrong code.
+            if (IsImplicitFrameBase(Op.Inputs[I])) {
+              int64_t Moved = AsWideAsItsOperand(Op.Inputs[Other].Offset,
+                                                 Op.Inputs[Other].Size);
+              if (Op.Opcode == NdOp::INT_SUB)
+                Moved = -Moved;
+              if (Base + Moved > limits::kMaxFrameSize ||
+                  Base + Moved < -limits::kMaxFrameSize)
+                RefuseFrameBeyondLimit();
+            }
             continue;
+          }
 
           // Snapshotting Base above must precede this clear: address updates
           // are commonly in-place (`sp = sp - imm`), so output and frame input
@@ -248,6 +315,19 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
             int64_t Base = 0;
             if (!FrameOffset(Op.Inputs[I], Base))
               continue;
+            // A constant the block loaded into the other register moves
+            // the stack pointer as an immediate does.
+            if (IsImplicitFrameBase(Op.Inputs[I])) {
+              size_t Budget = Blk.Ops.size();
+              if (const std::optional<uint64_t> Moved = ConstantBefore(
+                      Blk, static_cast<size_t>(&Op - Blk.Ops.data()),
+                      Op.Inputs[Other], Budget)) {
+                const int64_t By =
+                    AsWideAsItsOperand(*Moved, Op.Inputs[Other].Size);
+                if (By > limits::kMaxFrameSize || By < -limits::kMaxFrameSize)
+                  RefuseFrameBeyondLimit();
+              }
+            }
             ClearOutput(Op);
             if (IsTrackableOutput(Op)) {
               AddrMap[VnKey(Op.Output)] = Base;

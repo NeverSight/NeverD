@@ -184,11 +184,12 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
   if (!Options || !Network)
     return unsupported(Result,
                        "socket services require linux_files and linux_network");
-  if (Kind == ServiceKind::ReceiveFrom) {
-    // recvfrom imports the user extent before looking up the descriptor.
-    auto Admitted = receiveBuffer(A[1], A[2], Result);
-    if (!Admitted || *Admitted)
-      return Admitted;
+  uint64_t TransferSize = A[2];
+  if (Kind == ServiceKind::SendTo || Kind == ServiceKind::ReceiveFrom) {
+    // import_single_range bounds the iterator before sockfd_lookup.
+    TransferSize = std::min(TransferSize, Layout.maxReadWriteCount());
+    if (!Layout.containsUserRange(A[1], TransferSize))
+      return Reply(uint64_t(0) - BadAddress);
   }
   if (Kind == ServiceKind::Socket) {
     const uint32_t Family = A[0], Type = A[1], Protocol = A[2];
@@ -374,26 +375,22 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
     return Reply(0);
   }
   if (Kind == ServiceKind::ReceiveFrom)
-    return receiveSocket(I->second, A[1], A[2], Result, Thread, uint32_t(A[3]),
-                         A[4], A[5]);
-  if (Datagram) {
-    if (Kind == ServiceKind::SendTo && A[4])
-      return unsupported(
-          Result, "UDP explicit destinations require a routing contract");
-    return transferDatagram(*Socket, Kind == ServiceKind::SendTo, A[1], A[2],
-                            Result, uint32_t(A[3]), A[4], A[5]);
-  }
-  if ((Kind == ServiceKind::SendTo || Kind == ServiceKind::ReceiveFrom) &&
-      (A[4] || A[5]))
+    return receiveSocket(I->second, A[1], TransferSize, Result, Thread,
+                         uint32_t(A[3]), A[4], A[5]);
+  // Linux sendto reads addrlen only when a destination address is supplied.
+  if (A[4])
     return unsupported(
-        Result, "TCP explicit peer output or send destination is unmodeled");
+        Result,
+        Datagram ? "UDP explicit destinations require a routing contract"
+                 : "TCP explicit peer output or send destination is unmodeled");
   const uint32_t Flags = A[3];
-  // MSG_NOSIGNAL changes only an EPIPE signal; this subset never fabricates
-  // that failure. MSG_DONTWAIT cannot invent missing receive readiness.
+  if (Datagram)
+    return transferDatagram(*Socket, true, A[1], TransferSize, Result, Flags);
+  // Admitted sends use the supplied byte contract. MSG_NOSIGNAL only affects
+  // signal delivery on EPIPE.
   if (Flags & ~uint32_t(0x4000 | 0x40))
     return unsupported(Result, "unmodeled TCP transfer flags");
-  return transferSocket(*Socket, Kind == ServiceKind::SendTo, A[1], A[2],
-                        Result, Flags);
+  return transferSocket(*Socket, true, A[1], TransferSize, Result, Flags);
 }
 
 std::optional<uint64_t>
@@ -417,8 +414,6 @@ LinuxFiles::transferSocket(OpenSocket &Socket, bool Send, uint64_t Address,
   if (!Socket.Connection)
     return unsupported(Result,
                        "TCP transfer requires a completed offline connection");
-  if (Size > MaxSignedIOSize)
-    return Reply(uint64_t(0) - InvalidArgument);
   if (!Size)
     return Reply(0);
   const auto &C = *Socket.Connection;
@@ -451,8 +446,6 @@ LinuxFiles::transferSocket(OpenSocket &Socket, bool Send, uint64_t Address,
     return unsupported(Result, Reason.c_str());
   }
   const auto Transfer = std::min(Count, Remaining);
-  if (Address > Layout.UserLimit || Transfer > Layout.UserLimit - Address)
-    return Reply(uint64_t(0) - BadAddress);
   auto Accessible =
       CPU.canAccess(Address, Transfer, (Send ? Read : Write) | UserAccessible);
   if (!Accessible)

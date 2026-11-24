@@ -484,6 +484,10 @@ private:
   /// The register arguments a Go function's stack-growth path spills, as the
   /// entry reads detectCc takes for its parameters (goMorestackSpills).
   std::optional<GPRReadWidths> GoArgumentSpillReads;
+  /// The floating arguments among them: each register and the bytes of the
+  /// scalar the path spills from it, four or eight.  detectCc takes exactly
+  /// these as the function's floating parameters.
+  std::vector<std::pair<uint64_t, uint16_t>> GoArgumentSpillFloats;
   /// The complete operands of the Go routine being converted, which detectCc
   /// takes as its parameters, in their order: a storing write barrier's
   /// (goWriteBarrierArguments) or those a stub passes on as a stack-ABI

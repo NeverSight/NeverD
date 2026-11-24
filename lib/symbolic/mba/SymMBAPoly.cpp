@@ -619,6 +619,70 @@ llvm::SmallVector<MintermIndex, 8> selectedMinterms(const TruthTable &Table) {
   return Out;
 }
 
+// At a nonzero cube a^3 the scale is known and all three factors contain
+// a. Restricting another minterm b to occur in N factors gives the exact
+// coefficients of (a+b)^N * a^(3-N), including modular cancellations.
+static bool
+cubicSlicesFitProduct(llvm::ArrayRef<PolyTerm> Terms,
+                      const llvm::DenseMap<uint32_t, TruthTable> &Tables,
+                      size_t Corners, uint32_t Width, size_t Words,
+                      size_t ExpansionWork, WorkBudget &Budget) {
+  // The caller already admitted ExpansionWork. An inconclusive projection
+  // must leave that work available. Only inspect a slice cheaper than the
+  // Cartesian expansion, and charge the rows actually visited.
+  const size_t PerTerm = 10 + 9 * Words;
+  const size_t Limit =
+      std::min(ExpansionWork, Budget.available() - ExpansionWork);
+  if (Terms.size() > Limit / Corners / PerTerm)
+    return true;
+  std::optional<size_t> Anchor;
+  llvm::APInt Scale(Width, 0);
+  for (size_t I = Corners; I && !Anchor; --I) {
+    const size_t M = I - 1;
+    Budget.consume(Terms.size() * (3 + Words));
+    for (const auto &Term : Terms)
+      if (llvm::all_of(Term.Factors, [&](SymRef F) {
+            return Tables.find(F.index())->second.at(M);
+          }))
+        Scale += Term.Coeff;
+    if (!Scale.isZero())
+      Anchor = M;
+  }
+  if (!Anchor)
+    return true;
+  const auto Twice = Scale + Scale;
+  const auto Three = Twice + Scale;
+  for (size_t M = 0; M != Corners; ++M) {
+    if (M == *Anchor)
+      continue;
+    Budget.consume(Terms.size() * (7 + 8 * Words));
+    llvm::APInt AAB(Width, 0), ABB(Width, 0), BBB(Width, 0);
+    for (const auto &Term : Terms) {
+      unsigned A = 0, B = 0;
+      for (unsigned I = 0; I != 3; ++I) {
+        const auto &Table = Tables.find(Term.Factors[I].index())->second;
+        A |= unsigned(Table.at(*Anchor)) << I;
+        B |= unsigned(Table.at(M)) << I;
+      }
+      for (unsigned I = 0; I != 3; ++I) {
+        const unsigned One = 1u << I, OtherTwo = 7u ^ One;
+        if ((A & OtherTwo) == OtherTwo && (B & One))
+          AAB += Term.Coeff;
+        if ((B & OtherTwo) == OtherTwo && (A & One))
+          ABB += Term.Coeff;
+      }
+      if (B == 7)
+        BBB += Term.Coeff;
+    }
+    if (!((AAB.isZero() && ABB.isZero() && BBB.isZero()) ||
+          (AAB == Scale && ABB.isZero() && BBB.isZero()) ||
+          (AAB == Twice && ABB == Scale && BBB.isZero()) ||
+          (AAB == Three && ABB == Three && BBB == Scale)))
+      return false;
+  }
+  return true;
+}
+
 std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
                                            llvm::ArrayRef<PolyTerm> Terms,
                                            llvm::ArrayRef<uint32_t> AtomIds,
@@ -745,6 +809,15 @@ std::optional<PolyForm> expandOverMinterms(const SymContext &Ctx,
       }
       Pending += ProductSize;
     }
+    // When a scan of the expanded cubic could exceed the remaining work,
+    // consult two-coordinate slices before building the coefficient map.
+    if (SingleProduct && !CheckExtremes &&
+        Pending > Budget.available() / (4 + Words) &&
+        llvm::all_of(Terms,
+                     [](const PolyTerm &T) { return T.Factors.size() == 3; }) &&
+        !cubicSlicesFitProduct(Terms, Cache, Corners, Width, Words, Pending,
+                               Budget))
+      return std::nullopt;
   }
   // Every diagonal minterm power in a single product occurs once, so all
   // nonzero diagonal coefficients must equal its scale. Read just those

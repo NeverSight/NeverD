@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 
@@ -31,17 +32,7 @@ bool takesBitCounts(llvm::StringRef F) {
   return F == "zext" || F == "sext" || F == "trunc" || F == "extract";
 }
 
-} // namespace
-
-SymRef Parser::makeLiteral(const Token &N) {
-  if (N.Digits.empty()) {
-    fail(N.Offset, "malformed numeric literal");
-    return {};
-  }
-  uint32_t W = parseWidthSuffix(Width);
-  if (Failed)
-    return {};
-
+SymRef literalValue(SymContext &Ctx, const Token &N, uint32_t W) {
   if (N.Radix == 10) {
     // The lexer already established every digit. A group of up to 19
     // decimal digits fits a limb. Longer literals denote a residue at W,
@@ -94,6 +85,29 @@ SymRef Parser::makeLiteral(const Token &N) {
   return Ctx.mkConst(llvm::APInt(W, Words));
 }
 
+} // namespace
+
+SymRef Parser::makeLiteral(const Token &N, bool Negative) {
+  if (N.Digits.empty()) {
+    fail(N.Offset, "malformed numeric literal");
+    return {};
+  }
+  uint32_t W = parseWidthSuffix(Width);
+  if (Failed)
+    return {};
+
+  if (W == Width && W > 64) {
+    auto &[Value, Negated] = WideLiterals[{N.Digits, N.Radix}];
+    if (!Value)
+      Value = literalValue(Ctx, N, W);
+    if (Negative && !Negated)
+      Negated = Ctx.mkNeg(Value);
+    return Negative ? Negated : Value;
+  }
+  const auto Value = literalValue(Ctx, N, W);
+  return Negative ? Ctx.mkNeg(Value) : Value;
+}
+
 uint32_t Parser::parseWidthSuffix(uint32_t Default) {
   if (!isPunct("#"))
     return Default;
@@ -115,6 +129,13 @@ bool Parser::parsePlainInt(uint64_t &Out) {
     return false;
   }
   Token N = Lex.take();
+  // Up to nineteen validated decimal digits fit a 64-bit bit count.
+  if (N.Radix == 10 && N.Digits.size() <= 19) {
+    Out = 0;
+    for (char C : N.Digits)
+      Out = Out * 10 + (C - '0');
+    return true;
+  }
   if (N.Digits.getAsInteger(N.Radix, Out)) {
     fail(N.Offset, "bit count is out of range");
     return false;
@@ -126,7 +147,18 @@ SymRef Parser::parseCall(const Token &Name) {
   DepthGuard Guard(*this, Name.Offset);
   if (Failed)
     return {};
-  Lex.take(); // '('
+  if (Reuse != CallReuse::Factor || Name.Text == "concat")
+    return parseCallArguments(Name);
+  // Read the two field calls inside a concatenation independently. Each
+  // outer call and its disjoint parenthesized operands are scanned once.
+  llvm::SaveAndRestore Scope(Reuse, CallReuse::InsideCall);
+  return reuseProductTerm(Name.Offset,
+                          [&] { return parseCallArguments(Name); });
+}
+
+SymRef Parser::parseCallArguments(const Token &Name) {
+  Lex.take(); // opening parenthesis
+
   if (Name.Text == "varid") {
     const size_t IdOffset = Lex.peek().Offset;
     uint64_t Id = 0;

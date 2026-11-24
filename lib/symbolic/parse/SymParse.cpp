@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <optional>
 
@@ -133,6 +134,9 @@ SymRef Parser::parseBinary(int MinPrec) {
     if (S == "*" && Ctx.op(L) == SymOp::Mul &&
         Ctx.numOperands(L) - unsigned(Ctx.isConst(Ctx.operand(L, 0))) >= 2 &&
         isPunct("*")) {
+      llvm::SaveAndRestore Scope(Reuse, Reuse == CallReuse::OutsideProduct
+                                            ? CallReuse::Factor
+                                            : Reuse);
       llvm::SmallVector<SymRef, 16> Factors{L};
       while (consumePunct("*")) {
         R = parseBinary(P + 1);
@@ -212,6 +216,8 @@ SymRef Parser::parseUnary() {
     DepthGuard Guard(*this, Offset);
     if (Failed)
       return {};
+    if (Width > 64 && S == "-" && Lex.peek().K == Token::Number)
+      return makeLiteral(Lex.take(), /*Negative=*/true);
     SymRef A = parseUnary();
     if (Failed)
       return {};
@@ -227,6 +233,17 @@ SymRef Parser::parseUnary() {
     return W == 1 ? Ctx.mkNot(A) : Ctx.mkEq(A, Ctx.mkZero(W));
   }
   return parsePrimary();
+}
+
+SymRef Parser::parseGroup(size_t Offset) {
+  Lex.take();
+  DepthGuard Guard(*this, Offset);
+  if (Failed)
+    return {};
+  SymRef E = parseExpr();
+  if (Failed || !expectPunct(")"))
+    return {};
+  return E;
 }
 
 SymRef Parser::parsePrimary() {
@@ -251,14 +268,14 @@ SymRef Parser::parsePrimary() {
     // Width-specific and structured identities can coexist internally, but a
     // textual name with one unambiguous declaration must not silently change
     // meaning across occurrences.
-    if (std::optional<uint32_t> Existing = Ctx.findVar(Id.Text)) {
-      uint32_t Have = Ctx.varInfo(*Existing).Width;
+    if (const auto Existing = Ctx.findVarRef(Id.Text)) {
+      const uint32_t Have = Ctx.width(Existing);
       if (Have != W) {
         fail(Id.Offset, "'" + Id.Text + "' was already declared at width " +
                             llvm::Twine(Have));
         return {};
       }
-      return Ctx.varRef(*Existing);
+      return Existing;
     }
     if (Ctx.hasVarName(Id.Text)) {
       fail(Id.Offset,
@@ -271,14 +288,10 @@ SymRef Parser::parsePrimary() {
   case Token::Punct: {
     if (T.Text == "(") {
       size_t Offset = T.Offset;
-      Lex.take();
-      DepthGuard Guard(*this, Offset);
-      if (Failed)
-        return {};
-      SymRef E = parseExpr();
-      if (Failed || !expectPunct(")"))
-        return {};
-      return E;
+      if (Reuse != CallReuse::InsideCall)
+        return parseGroup(Offset);
+      llvm::SaveAndRestore Scope(Reuse, CallReuse::InsideGroup);
+      return reuseProductTerm(Offset, [&] { return parseGroup(Offset); });
     }
     fail(T.Offset, "unexpected '" + T.Text + "'");
     return {};

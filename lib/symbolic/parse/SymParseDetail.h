@@ -20,6 +20,7 @@
 #include "neverd/symbolic/SymParse.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 
@@ -27,6 +28,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace neverd::symbolic::detail {
 
@@ -76,6 +78,11 @@ class Lexer {
 public:
   explicit Lexer(llvm::StringRef T) : Text(T) { advance(); }
 
+  llvm::StringRef parenthesizedSpelling(size_t Begin) const;
+  void skipSpelling(llvm::StringRef Spelling) {
+    Pos = Spelling.end() - Text.begin();
+    advance();
+  }
   const Token &peek() const { return Cur; }
   Token take() {
     Token T = Cur;
@@ -98,8 +105,10 @@ private:
 class Parser {
 public:
   Parser(SymContext &Ctx, llvm::StringRef Text, uint32_t Width,
-         const SymParseOptions &Options)
-      : Ctx(Ctx), Lex(Text), Width(Width), Options(Options) {
+         const SymParseOptions &Options, bool ReuseProductTerms = true)
+      : Reuse(ReuseProductTerms ? CallReuse::OutsideProduct
+                                : CallReuse::Disabled),
+        Ctx(Ctx), Lex(Text), Width(Width), Options(Options) {
     validateWidth(Width, 0);
   }
 
@@ -124,10 +133,30 @@ private:
   SymRef parseBinary(int MinPrec);
   SymRef parseUnary();
   SymRef parsePrimary();
+  SymRef parseGroup(size_t Offset);
+
+  // Keys borrow the input and values belong to this parser's context. Only
+  // success at the same or a greater depth discharges the nesting policy.
+  template <typename Parse>
+  SymRef reuseProductTerm(size_t Begin, Parse ParseNormally) {
+    const auto Spelling = Lex.parenthesizedSpelling(Begin);
+    if (Spelling.empty())
+      return ParseNormally();
+    const auto It = ProductTerms.find(Spelling);
+    if (It != ProductTerms.end() && Depth <= It->second.Depth) {
+      Lex.skipSpelling(Spelling);
+      return It->second.Value;
+    }
+    const SymRef Result = ParseNormally();
+    if (Result)
+      ProductTerms[Spelling] = {Result, Depth};
+    return Result;
+  }
   SymRef parseCall(const Token &Name);
+  SymRef parseCallArguments(const Token &Name);
   SymRef parseVariadicCall(const Token &Name);
   SymRef parseWidthCall(const Token &Name);
-  SymRef makeLiteral(const Token &N);
+  SymRef makeLiteral(const Token &N, bool Negative = false);
 
   bool parsePlainInt(uint64_t &Out);
   uint32_t parseWidthSuffix(uint32_t Default);
@@ -194,6 +223,24 @@ private:
     ErrorOffset = Offset;
   }
 
+  // The spelling borrows the input for this parse. Explicitly different
+  // widths use the ordinary literal interner.
+  llvm::DenseMap<std::pair<llvm::StringRef, unsigned>,
+                 std::pair<SymRef, SymRef>>
+      WideLiterals;
+  enum class CallReuse {
+    Disabled,
+    OutsideProduct,
+    Factor,
+    InsideCall,
+    InsideGroup
+  };
+  CallReuse Reuse;
+  struct ParsedTerm {
+    SymRef Value;
+    size_t Depth;
+  };
+  llvm::DenseMap<llvm::StringRef, ParsedTerm> ProductTerms;
   SymContext &Ctx;
   Lexer Lex;
   uint32_t Width;

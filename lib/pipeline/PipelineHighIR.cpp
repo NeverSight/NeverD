@@ -23,12 +23,14 @@
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/SourceFrameBytes.h"
 #include "neverd/ir/low/SourceImageBytes.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedABIPass.h"
+#include "neverd/ir/med/MedByteDemand.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/libc/LibCNames.h"
@@ -61,22 +63,286 @@ namespace neverd {
 /// typed as returning one. Binding a call can make its caller return the
 /// result, so a caller is typed again, and each round that finds another
 /// such function binds the calls to it.
+namespace {
+/// The width of the scalar float \p MF is typed as returning in the vector
+/// return register, or 0.
+uint16_t floatReturnBytes(const MedFunc &MF) {
+  return MF.ReturnType && MF.ReturnType->Kind == NdTypeKind::Float &&
+                 MF.ReturnType->Size <= sizeof(double) &&
+                 MF.MultiReturn.empty() && !MF.FPReturnViaX87
+             ? MF.ReturnType->Size
+             : 0;
+}
+
+/// Whether \p Caller returns with the vector return register as the call at
+/// \p Index of \p Block left it: some path from the call reaches a RETURN
+/// with no write to that register and no call that may change it.
+bool handsFloatRegisterBack(const MedFunc &Caller, const MedBlock &Block,
+                            size_t Index, const TargetRegInfo &TRI,
+                            Arch Target) {
+  const auto Writes = [&](const MedVar &Value) {
+    return Value.Kind == MedVar::Reg && Value.Size &&
+           Value.RegOff == TRI.FPReturnReg;
+  };
+  std::map<int, const MedBlock *> ById;
+  std::set<int> Visited;
+  std::vector<std::pair<const MedBlock *, size_t>> Work = {{&Block, Index + 1}};
+  while (!Work.empty()) {
+    const auto [Current, Start] = Work.back();
+    Work.pop_back();
+    bool Ends = false;
+    for (size_t I = Start; I < Current->Ops.size() && !Ends; ++I) {
+      const MedOp &Op = Current->Ops[I];
+      if (Op.Opcode == NdOp::RETURN)
+        return true;
+      Ends = Writes(Op.Output) || llvm::any_of(Op.IntrinsicOutputs, Writes) ||
+             ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+              !callPreservesRegisterBytes(Target, Op.CallPreservedGPRs,
+                                          TRI.FPReturnReg, sizeof(double)));
+    }
+    if (Ends)
+      continue;
+    if (ById.empty())
+      for (const MedBlock &Each : Caller.Blocks)
+        ById.emplace(Each.Id, &Each);
+    for (const int Successor : Current->Succs)
+      if (const auto Next = ById.find(Successor);
+          Next != ById.end() && Visited.insert(Successor).second)
+        Work.push_back({Next->second, 0});
+  }
+  return false;
+}
+
+/// A body that holds a floating value in the vector return register and an
+/// integer in the integer one at its returns shows little of which is its
+/// result: the type pass chooses by what the body does with each
+/// (inferReturnType), and sqlite3IntFloatCompare, which reloads the double
+/// it compares and returns -1, 0 or 1, came out as returning the double.
+/// Its callers show more.  Where something a direct caller does depends on
+/// the integer register after the call (MedByteDemand) and nothing depends
+/// on the vector one, the integer is the result: the function is typed
+/// again without the float.  A caller that hands a register back as the
+/// call left it shows nothing itself, and a read of what that caller
+/// returns is a read of what it was handed: the float a wrapper passes on
+/// to a reader stays one.
+///
+/// This holds only where the register arguments of a call are its operands
+/// by now, as on x86-64 (LowToMed binds them from the callee read
+/// summaries): a result handed straight to the next call is then a read
+/// like any other.  Elsewhere the arguments are bound later and such a read
+/// is not to be seen yet, so nothing is settled here.
+void settleFloatReturnsByCallers(const BinaryImage &Img, PipelineResult &Result,
+                                 const TargetRegInfo &TRI) {
+  if (Img.Arch != Arch::X64)
+    return;
+  std::map<va_t, MedFunc *> Inferred;
+  for (MedFunc &MF : Result.MedFuncs)
+    if (floatReturnBytes(MF) && !MF.SourceTypeHint &&
+        !MF.SourceParametersBound && !MF.CallersReadIntegerResult &&
+        !Result.CallFloatReturns.get().count(MF.Entry))
+      Inferred.emplace(MF.Entry, &MF);
+  if (Inferred.empty())
+    return;
+  // What the callers of a function show of each register after a call.
+  struct Evidence {
+    bool Integer = false, Float = false;
+    std::set<va_t> HandedBackBy;
+  };
+  std::map<va_t, Evidence> Shown;
+  // The functions whose calls are looked at: the inferred ones, then each
+  // caller that hands the vector register back, whose own callers may read
+  // it.
+  std::set<va_t> Asked;
+  std::vector<va_t> Wanted;
+  for (const auto &[Entry, MF] : Inferred) {
+    (void)MF;
+    Asked.insert(Entry);
+    Wanted.push_back(Entry);
+  }
+  while (!Wanted.empty()) {
+    const std::set<va_t> Round(Wanted.begin(), Wanted.end());
+    Wanted.clear();
+    for (const MedFunc &Caller : Result.MedFuncs) {
+      std::optional<MedByteDemand> Demand;
+      for (const MedBlock &Block : Caller.Blocks)
+        for (size_t I = 0; I < Block.Ops.size(); ++I) {
+          const MedOp &Call = Block.Ops[I];
+          if (Call.Opcode != NdOp::CALL || !Call.NumInputs ||
+              !Call.Inputs[0].isConst() || Call.SourceCallHint ||
+              !Round.count(Call.Inputs[0].ConstVal))
+            continue;
+          if (!Demand) {
+            Demand.emplace(TRI, medLeavesOtherRegisters(Caller));
+            for (const MedBlock &Each : Caller.Blocks) {
+              for (const PhiNode &Phi : Each.Phis)
+                Demand->define(Phi);
+              // An x86 return reads what the return register holds: a value
+              // the caller computes from a result reads that result, and
+              // the result handed back as it came shows nothing.
+              for (const MedOp &Op : Each.Ops)
+                if (Op.Opcode != NdOp::RETURN)
+                  Demand->define(Op);
+                else if (Op.NumInputs >= 1)
+                  Demand->handBack(Op.Inputs[0]);
+            }
+            Demand->settle();
+          }
+          const auto Reads = [&](const MedVar &Value, uint64_t Register) {
+            return Value.Kind == MedVar::Reg && Value.RegOff == Register &&
+                   Demand->reads(Value);
+          };
+          Evidence &Of = Shown[Call.Inputs[0].ConstVal];
+          Of.Integer |= Reads(Call.Output, TRI.IntReturnReg);
+          Of.Float |= Reads(Call.Output, TRI.FPReturnReg);
+          for (const MedCallClobber &Clobber : Caller.CallClobbers)
+            Of.Float |= Clobber.CallSiteId == Call.CallSiteId &&
+                        Reads(Clobber.Value, TRI.FPReturnReg);
+          if (handsFloatRegisterBack(Caller, Block, I, TRI, Img.Arch)) {
+            Of.HandedBackBy.insert(Caller.Entry);
+            if (Asked.insert(Caller.Entry).second)
+              Wanted.push_back(Caller.Entry);
+          }
+        }
+    }
+  }
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (auto &[Entry, Of] : Shown) {
+      (void)Entry;
+      if (Of.Float)
+        continue;
+      Of.Float = llvm::any_of(Of.HandedBackBy, [&](va_t By) {
+        const auto Reader = Shown.find(By);
+        return Reader != Shown.end() && Reader->second.Float;
+      });
+      Changed |= Of.Float;
+    }
+  }
+  for (const auto &[Entry, MF] : Inferred)
+    if (const auto Of = Shown.find(Entry);
+        Of != Shown.end() && Of->second.Integer && !Of->second.Float) {
+      MF->CallersReadIntegerResult = true;
+      inferMedTypes(*MF, Img.Arch, &Result.CallFloatReturns.get());
+    }
+}
+
+/// Whether some path to a RETURN of \p Func leaves in the vector return
+/// register what a call to a function of this image that returns no float
+/// left there (\p Lifted holds the image's functions, \p FloatReturns those
+/// that return one).  A function that returns a float holds one at every
+/// return.  sqlite's sumStep jumps to a helper whose body ends with a
+/// double in XMM0 on one path and returns after integer helpers on the
+/// others: it returns none, and its other returns must not read one.  Code
+/// this image does not hold, and a callee reached through a pointer, may
+/// return a float nothing has typed, so what such a call leaves shows
+/// nothing; neither does the register as the function was entered, which
+/// may be its own argument.
+bool returnHoldsACalleesLeftover(
+    const MedFunc &Func, const TargetRegInfo &TRI, Arch Target,
+    const std::map<va_t, uint16_t> &FloatReturns,
+    const std::map<va_t, const MedFunc *> &Lifted) {
+  const auto Writes = [&](const MedVar &Value) {
+    return Value.Kind == MedVar::Reg && Value.Size &&
+           Value.RegOff == TRI.FPReturnReg;
+  };
+  const auto LeavesNoFloat = [&](const MedOp &Call) {
+    if (Call.Opcode != NdOp::CALL || !Call.NumInputs ||
+        !Call.Inputs[0].isConst() || Call.SourceCallHint)
+      return false;
+    const va_t Callee = Call.Inputs[0].ConstVal;
+    const auto Body = Lifted.find(Callee);
+    return Callee != Func.Entry && Body != Lifted.end() &&
+           !FloatReturns.count(Callee) && Body->second->MultiReturn.empty() &&
+           !Body->second->ReturnsVectorRegister &&
+           !Body->second->FPReturnViaX87 &&
+           !(Body->second->ReturnType &&
+             Body->second->ReturnType->Kind == NdTypeKind::Float);
+  };
+  const size_t Count = Func.Blocks.size();
+  std::map<int, size_t> IndexOf;
+  for (size_t I = 0; I < Count; ++I)
+    IndexOf.emplace(Func.Blocks[I].Id, I);
+  // Per block, whether some path leaves such a leftover at its end.
+  std::vector<char> AtEnd(Count, 0), Queued(Count, 1);
+  std::vector<size_t> Work;
+  for (size_t I = Count; I-- > 0;)
+    Work.push_back(I);
+  while (!Work.empty()) {
+    const size_t I = Work.back();
+    Work.pop_back();
+    Queued[I] = 0;
+    const MedBlock &Block = Func.Blocks[I];
+    bool Left = false;
+    for (const int Pred : Block.Preds)
+      if (const auto From = IndexOf.find(Pred); From != IndexOf.end())
+        Left |= AtEnd[From->second] != 0;
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::RETURN) {
+        if (Left)
+          return true;
+        continue;
+      }
+      if (Writes(Op.Output) || llvm::any_of(Op.IntrinsicOutputs, Writes)) {
+        Left = false;
+        continue;
+      }
+      if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+          !callPreservesRegisterBytes(Target, Op.CallPreservedGPRs,
+                                      TRI.FPReturnReg, sizeof(double)))
+        Left = LeavesNoFloat(Op);
+    }
+    if (!Left || AtEnd[I])
+      continue;
+    AtEnd[I] = 1;
+    for (const int Succ : Block.Succs)
+      if (const auto To = IndexOf.find(Succ);
+          To != IndexOf.end() && !Queued[To->second]) {
+        Queued[To->second] = 1;
+        Work.push_back(To->second);
+      }
+  }
+  return false;
+}
+} // namespace
+
 void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result) {
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   if (TRI.FPReturnReg == 0 || TRI.ReturnsFPInX87 ||
       !TRI.isVectorReg(TRI.fpReturnModelReg()))
     return;
-  auto FloatReturn = [](const MedFunc &MF) -> uint16_t {
-    return MF.ReturnType && MF.ReturnType->Kind == NdTypeKind::Float &&
-                   MF.ReturnType->Size <= sizeof(double) &&
-                   MF.MultiReturn.empty() && !MF.FPReturnViaX87
-               ? MF.ReturnType->Size
-               : 0;
-  };
+  settleFloatReturnsByCallers(Img, Result, TRI);
+  const auto FloatReturn = floatReturnBytes;
   std::map<va_t, uint16_t> FloatReturns = Result.CallFloatReturns;
-  for (const MedFunc &MF : Result.MedFuncs)
+  std::map<va_t, const MedFunc *> Lifted;
+  for (const MedFunc &MF : Result.MedFuncs) {
+    Lifted.emplace(MF.Entry, &MF);
     if (const uint16_t Bytes = FloatReturn(MF))
       FloatReturns.try_emplace(MF.Entry, Bytes);
+  }
+  // The float \p MF returns once a return that holds a callee's leftover
+  // has shown it returns none (returnHoldsACalleesLeftover).  That shows
+  // nothing of a function a declaration types.
+  const auto SettledFloatReturn = [&](MedFunc &MF) -> uint16_t {
+    const uint16_t Bytes = FloatReturn(MF);
+    if (!Bytes || MF.SourceTypeHint || MF.SourceParametersBound ||
+        Result.CallFloatReturns.get().count(MF.Entry) ||
+        !returnHoldsACalleesLeftover(MF, TRI, Img.Arch, FloatReturns, Lifted))
+      return Bytes;
+    MF.ReturnHoldsNoFloat = true;
+    inferMedTypes(MF, Img.Arch, &FloatReturns);
+    return FloatReturn(MF);
+  };
+  // Each function that then returns none may leave another's return with
+  // its leftover.
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (MedFunc &MF : Result.MedFuncs)
+      if (FloatReturns.count(MF.Entry) && FloatReturn(MF) &&
+          !SettledFloatReturn(MF)) {
+        FloatReturns.erase(MF.Entry);
+        Changed = true;
+      }
+  }
   for (size_t Round = 0; Round <= Result.MedFuncs.size(); ++Round) {
     bool Found = false;
     for (MedFunc &MF : Result.MedFuncs) {
@@ -94,8 +360,11 @@ void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result) {
         }
       if (!Bound || MF.SourceParametersBound)
         continue;
+      // A callee typed since may have turned what a return held from a
+      // leftover into a result.
+      MF.ReturnHoldsNoFloat = false;
       inferMedTypes(MF, Img.Arch, &FloatReturns);
-      if (const uint16_t Bytes = FloatReturn(MF))
+      if (const uint16_t Bytes = SettledFloatReturn(MF))
         Found |= FloatReturns.try_emplace(MF.Entry, Bytes).second;
     }
     if (!Found)
@@ -189,6 +458,8 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   // Calls remodeled to return a packed register pair must agree with the
   // corresponding definition on the HighIR route as well as the LLVM route.
   materializeGoCallResults(Img, Result);
+  materializeGoStackResults(Img, Result, /*SourceDeclarations=*/false,
+                            /*SourceParameterReads=*/true);
   recoverStructReturnFromCallers(Img, Result);
   propagateStructReturnForwarderShapes(Img, Result);
   recoverStructReturnFromBody(Img, Result, StructReturnEvidence::Callers);
@@ -196,6 +467,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   recoverPackedScalarReturnFromCallers(Img, Result);
   materializeKnownStructReturnCallSites(Img, Result);
   bindFloatCallResults(Img, Result);
+  keepCallersValueInReturnRegister(Img, Result);
   settleReturnContracts(Img, Result, Dbg);
 
   // Imports name every selection the same way. The cache keeps that map;
@@ -678,7 +950,7 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
           walkStmts(HF.Body, [&](const HighStmt &S) {
             if (!S.Cond)
               return;
-            auto At = Branches.find(S.Addr);
+            auto At = Branches.find(S.sourceAddress());
             if (At != Branches.end() && At->second.size() == 1)
               Observe(At->second.front(), S.Cond);
           });

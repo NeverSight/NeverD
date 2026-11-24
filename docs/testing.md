@@ -910,8 +910,10 @@ bytes, missing branch writes, disconnected cycles and exhausted work.
 `Win64CallContract.OverwrittenStackArgumentDoesNotDemandItsEntryBytes` executes
 both C routes at O0/O2, with selected and omitted callees and pipeline
 optimization on/off. Native x64 code varies the overwritten input while an
-independent seventh stack argument and pointer read remain observable. The
-omitted-callee case also checks that unprototyped wide immediates keep their
+independent seventh stack argument and pointer read remain observable.
+The full-width store consumes no incoming word. A 32-bit store reads the
+original word once at the call site and carries its upper half to the result.
+The omitted-callee case also checks that unprototyped wide immediates keep their
 full C carrier rather than relying on default int promotion.
 
 `X64ContinuationIntegerTest` in `NeverDX64ContinuationSourceTests` compares
@@ -1985,12 +1987,26 @@ metadata. Category fixtures exercise authenticated class, metaclass and method r
 reconstruction restriction. Metadata names replace synthesized function-start
 names while preserving stated, analysis and user names.
 
+The `AArch64CompactRegisters.*PAuthLR*` filter in
+`NeverDArm64eLiftedImageTests` runs the same structural checks with frozen r6
+and source-built LLVM. It publishes all-pair, sparse and frame-only recipes,
+including a signing PC at byte 256 and PC-signed C++ cleanups. Mixed-image
+cases publish two PC-signed owners beside two DWARF-indexed functions at O0
+and O2, then publish each output again. They check each signing instruction,
+FDE, CIE and landing pad with shared and distinct language tables.
+The two system-walk cases record the number of native PAuth_LR steps after a
+hardware probe. The original and published images can both pass their
+structural checks on a host reporting zero native steps.
+
 `NeverDLanguageEHTests` also covers compact PAuth_LR frame recipes with zero,
 middle and final signing-instruction offsets, register pairs, reserved bits,
-range truncation, alignment and arithmetic overflow. Shared raw/semantic page
-tests reject overflowing compressed deltas, incorrect first rows, duplicates
-and out-of-page records for signed ARM64, ordinary ARM64 and x86-64; a discarded
-middle page cannot widen a valid neighbor. `AArch64DwarfReturnAddress` uses
+range truncation, alignment and arithmetic overflow. The Darwin loader tests
+also check guarded ranges ending precisely at an indexed FDE's end and reject
+guarded ranges or landing pads extending into compact lookup padding. Shared
+raw/semantic page tests reject overflowing compressed deltas, incorrect first
+rows, duplicates and out-of-page records for signed ARM64, ordinary ARM64 and
+x86-64. A discarded middle page cannot widen a valid neighbor.
+`AArch64DwarfReturnAddress` uses
 independent CFI bytes to check absolute states, both keys, HINT/non-HINT
 recipes, legacy toggles, CIE/FDE remember/restore, unknown runtime rules,
 signed displacement overflow, strict set_loc (including base zero), reserved
@@ -4613,6 +4629,42 @@ to 65 live coefficient bits. A 103-factor x86 fixture exercises the wrapped
 byte in both source views. The expression tests change a bit on each side of
 the wrap, and the product tests compare repeated odd and even offsets with
 direct full-width multiplication.
+
+Use `--family mixed-valuation --count 4` for 20 products at 32, 64,
+24577, 28673 and 32769 bits. The 12 wide products contain 2689–3529 factors.
+One to four lower-weight factors keep mixed terms observable. The other
+factors vary their upper lanes, offsets and coefficients while sharing
+wrapped low fields. The tests compare the complete product with independent
+multiplication, including even offsets and a change to a live bit. The 73-
+and 117-factor x86 fixtures also exercise both source views through the CLI
+and the GUI worker at Clang O0 and O2.
+Using `--count 32` exercises 160 distinct inputs, including 96 products
+above both 20,481 bits and 2,593 factors.
+
+Use `--family variable-width-product --count 32` for 160 mixed products
+at 32, 64, 36,865, 40,961 and 49,153 bits. The 96 wide products have
+3,671–4,327 factors. Each weight determines how many bits survive from its
+signed, unsigned or concatenated field. The regression tests include narrower
+fields with observable upper bits, even offsets and a slice ending at the
+source boundary. Two 137-factor x86 fixtures exercise a nine-bit arithmetic
+result in both decompiler source views. The repeated-offset variant packs
+nonoverlapping literals into a scaled signed field. Byte-wide LLVM guards
+exhaust its input domain, including overlapping literals and unsafe shifts.
+
+Use `--family rotated-field-product --count 24` for 144 products spanning
+32 to 65,536 bits with up to 7,573 factors. Six source expressions feed
+overlapping fields, whole-word rotations and signed or zero-extended slices.
+The rotation counts include values larger than the word width. A 239-factor
+x86 fixture compares both source views against native-width arithmetic at
+`-O0` and `-O2`.
+
+Use `--family terminal-field-product --count 16` for 96 products spanning 32
+to 65,536 bits and up to 5,179 factors. They mix top-of-word shifts, signed
+and unsigned extensions, concatenations with live upper bits and even offsets.
+Two 173-factor x86 fixtures exercise both source views through the CLI and
+the GUI worker. They check the compiled output against independent arithmetic.
+Byte-wide LLVM tests vary both multiplier inputs and the disjoint literal,
+including an overlapping bit and a shift with an unsafe no-wrap flag.
 
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
@@ -9141,7 +9193,125 @@ kernel's headers and `WindowsKernelRoutines.inc` agree on the bytes each
 parameter of a routine both know takes, and
 `ReturnContracts.ACallToAFunctionDeclaredVoidElsewhereHandsBackNoValue` and
 `AStubOfAnImportDeclaredVoidReturnsNoValue` cover the return contracts that
-read declarations. Copied import addresses and callable values use the same
+read declarations. `ReturnContracts.ACalleeAndTheCallerThatHandsItsResultBackReturnNone`,
+`AReadReachesDownThroughACallerThatHandsTheResultBack`,
+`ACalleeNoPathShowsMeansNoValueWaitsForItsCaller` and
+`AFunctionThatReturnsWhatItsOwnCallReturnsShowsNothing` cover how a callee and
+the callers that hand its result back are settled together;
+`AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt` and
+`AnotherRegisterAsEnteredShowsNothing` what a register handed back as the
+function entered it means;
+`AConstantBesideAPathThatNeverWroteTheRegisterIsNoValue`,
+`AConstantBesideTheResultOfAFunctionThatReturnsNoneIsNot` and
+`AConstantIsADeliberateValue` what a constant beside a path that hands back
+nothing means; `AResultOnlyUnreadViewsOfTheRegisterReadIsNotRead`,
+`TheBytesASetccMergesOverReadNothing`,
+`AnAndWithAZeroExtendedByteReadsOneByte`,
+`AnOperationPassesOnOnlyTheBytesReadOfIt`,
+`AWordInsertedIntoAVectorReadsNoneOfItsOtherLanes`,
+`WhatSomethingUnseenMayReadIsRead` and
+`AnotherRegisterIsReadWhereSomethingUnseenMayTakeIt` which bytes of a call's
+result a caller reads; and
+`SysVCallContract.AFunctionAndTheWrapperThatHandsItsResultBackRun`,
+`TheBytesACallThatReturnsNothingLeftReachNoValue`,
+`AConstantTheCodeHeldIsNoResult` and
+`AFloatResultReadsNoIntegerItsFunctionHandsBack` compile and run the C of
+such functions, which a null argument must not trap.
+`ReturnContracts.OnlyAProvenChoiceOfReturnValuesOutweighsABareReturn`
+checks distinct scalar results at their inferred width, incidental stores,
+disconnected blocks and the provenance of indirect edges.
+`ReturnContracts.ASharedReturnTakesItsLiteralFromEachBranchArm` checks the
+same contract when the arms jump or fall through to a shared return. It
+covers reordered PHI inputs, values from the wrong predecessor, narrow
+inputs, stores, exceptional entry and the actual targets of an indirect
+branch. `ReturnContract.SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge`
+executes both C outputs on all three paths to a single x86-64 return and
+on MIPS64 branches that materialize the results through temporaries before
+a shared delayed return.
+`ReturnContracts.NestedReturnsCompareOnlyBitsThatReachTheCaller`
+covers a second merge, a difference erased by a mask or the return width,
+and an incomplete incoming value.
+`ReturnContract.NestedSharedReturnOverwritesOnlyAH` executes both C outputs
+on the two paths that update AH and the path that bypasses it.
+`ReturnContract.SharedX86ReturnUsesTheChangedRegisterView` covers a low-byte
+XOR followed by an AH write and a zero-extended EAX address calculation.
+`ReturnContracts.SharedShiftsProveOnlyObservableDifferences` checks retained
+and discarded bits, sign fill, zero and oversized shifts, and shift counts
+whose scalar value is unknown.
+`ReturnContract.SharedX86ReturnKeepsTheShiftedLowNibble` executes both C
+outputs after a shared shift by 60.
+`ReturnContract.SharedMIPSSignExtensionRequiresAWordOnEachArm` checks a
+signed byte followed by a delay-slot shift and the word-domain trap when
+one incoming value makes the byte instruction unpredictable.
+`ReturnContracts.SharedRegisterViewsNeedTheirOwnCompleteIncomingValue`
+checks both byte offsets, reversed PHIs, missing upper bytes, mismatched
+values and inputs from the wrong predecessor.
+`ReturnContract.SharedMIPSReturnAppliesTheDelaySlotXor` executes a common
+return with XOR in its delay slot and a second version in which a four-bit
+field write in the delay slot follows the XOR.
+`ReturnContract.SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot` runs both
+polarities of the branch after the inner merge and checks the returned value
+for the taken edge, the annulled edge and the path that bypasses the slot.
+`ReturnContract.MissingPointerResultUsesTheSourceABIPointerWidth` checks
+the four-byte n32 and eight-byte n64 source markers and native IR for
+the same bare pointer return.
+`COFFTableBaseCLI.BothSourceRoutesUseTheSharedBaseProof` executes all six
+selectors through HighC and LLVMC on three PE fixtures, including a
+two-level table whose cases and default all jump to the same return.
+`ReturnContract.BareAArch64ReturnKeepsTheIncomingIntegerArgument` runs
+both C outputs on a bare return carrying a 64-bit argument in x0 and on
+the two paths that replace it with a constant.
+`SysVCallContract.AnIntegerItsCallersReadIsTheResultBesideAReloadedDouble`
+runs a caller that tests the integer a function returns after reloading a
+double into XMM0: the function must not be typed as returning the double.
+`AFloatReadThroughAWrapperKeepsItsFunctionFloat` keeps a function's double
+where the only read of it follows a call to a wrapper that jumps to the
+function, beside another caller that tests its integer.
+`WhatAStackProtectorCheckLeavesIsNoResult` types a protected function by
+the double it returns and another as returning nothing, where each loads
+its guard copy into RAX and subtracts `%fs:0x28` before `ret`.
+`AJumpToAFloatFunctionAfterAFloatWriteReturnsItsResult` returns the result
+of a tail call to a float function whose arguments no summary lists, from a
+caller that wrote XMM0 before.
+`AReturnThatHoldsACalleesLeftoverReturnsNoFloat` runs a function that jumps
+to a float helper on one path and returns after an integer helper on the
+other: it returns no float and no path reads one.
+`ARegisterACalleeNeverWritesKeepsTheCallersValue` runs callers that keep a
+value in RAX across calls to callees that write XMM0 and never RAX, one of
+which returns a double a wrapper hands back.
+`AAPCS64CallContract.SelectedFloatingRecordsKeepEveryObservedField` covers
+the record such a callee returns in the vector registers, which the call's
+output must stay for until it is bound.
+`SysVCallContract.AFunctionThatOnlyStoresItsRegistersSavesAContext` runs
+an x86-64 function that stores ten general registers and XMM8: the
+registers no parameter carries are read from the machine, the parameters
+arrive as passed, and RBP is the caller's frame.
+`SysVCallContract.FourStoredArgumentsAreNoContextSave` stores four
+arguments and R10 without RAX: R10 stays a value nothing defines.
+`AAPCS64CallContract.AContextSaveReadsTheVectorRegistersItStores` stores
+x9 to x12 with q16 and d17: both vector registers are read from the
+machine, and a q16 stored alone stays unknown.
+`AArch64RegisterViews.ALoadedByteReachesAReadOfTheLowByteAfterAJoin` runs a
+function that loads a byte into w7 on one path, sets x7 on the other and
+extracts the low byte after the join: it must return the byte it loaded.
+`AAPCS64CallContract.AContextSaveStoresVectorRegistersWithWriteback`
+stores x9 to x12 and v16 to v19 with one post-indexed ST1: the four vector
+registers are read from the machine.
+`SysVCallContract.TheFramePointerAFunctionOnlyStoresIsItsCallersFrame`
+and its `AAPCS64CallContract` counterpart run a function that stores the
+frame pointer it was entered with and compare the stored value with the
+caller's own frame address.
+`SysVCallContract.AFrameBeyondTheLimitIsRefused` and
+`AAPCS64CallContract.AFrameSizeBuiltInARegisterBeyondTheLimitIsRefused`
+refuse a frame of 32 MiB by name, moved by an immediate or by a constant a
+register holds, and convert a frame just inside the limit.
+`TheVectorCountSetBeforeABranchReachesTheVariadicCall` passes a variadic
+callee no vector register where AL was cleared before the branch to the
+call's block, or tested zero by that branch.
+`SysVCallContract.ACalleeThatLeavesForUnknownCodeStillReadsItsArguments`
+checks that a function which only hands its arguments to a callee ending in
+a jump through a pointer still takes them, and that a tail jump to it passes
+them. Copied import addresses and callable values use the same
 bounded slot proof as call ABI recovery. The x86/x64/ARM32/ARM64 cases cover
 COFF, ELF and Mach-O, including numeric collisions, dynamic addresses, cycles,
 segment overrides and nonvoid declarations.
@@ -15414,6 +15584,10 @@ stripped Thumb library whose tail call to `puts` goes through lld's thunk: the
 thunk and the PLT entry must both stand for `puts`, and the decompiled caller
 must call `puts` with its string. `LinkerThunk.*` checks each long-branch
 form's target, state and size, and that a direct jump is never a long branch.
+`MachOStubRun.*` checks the stubs a Mach-O stub section holds: the header's
+stub size where the indirect symbol table agrees with it, and the size the
+section's own run of symbols gives where the header claims more, as Go's
+arm64 linker has it.
 
 `LLVMCValues.ImageStringsInACodeSegmentFollowTheirSection` requires a string
 in `.rodata` inside an R+X segment to print, its bytes in `.text` not to, and
@@ -18410,6 +18584,21 @@ assignments on that edge. The roundtrips check the forwarded word and the
 restored return address. Return-target tests
 replace either arm with a single-half check or flip the difference in its jump
 delay slot.
+The shared-latch variants place the folded arm before or after the latch.
+On exit from a BNEL or BEQL, the latter layout jumps over that arm to the
+final zero test. Each iteration contributes its incoming difference, counter
+and selected full-width difference to the return value, so the HighC and
+LLVMC roundtrips detect a skipped, duplicated or reordered update. Ordinary
+BNE supplies the always-executed delay-slot control. The return-target cases
+also check whether a clobber in the slot can reach the final zero test.
+The relay fixtures branch directly into a delay slot on zero trips.
+With a nonzero count, one relay jumps to the loop header and the other
+conditionally branches to its own slot. The accumulator records two updates
+when that branch is taken, one on direct entry, and zero on its untaken edge.
+One variant makes the branch and its physical slot successors of the same
+predecessor, so each edge must also initialize the correct PHI values.
+Return-target tests also let a single-half comparison or a changed difference
+reach the guard through the independent entry.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.
@@ -20863,6 +21052,15 @@ arguments at most. `GoRegisterArguments.TheSpillAreaHoldsNoStackArgument`
 spills X0 and X1 above the return address, calls, and reloads them: the
 function takes those two registers and no stack parameter, where it took
 eleven.
+`GoStackGrowth.AFloatSpillIsAnArgumentToo` reads a path that spills XMM0's
+low eight bytes: the recognizer lists the register with eight bytes, the
+function takes exactly one double though its body never reads it, and its
+summary reads the double. `ASpillOfANinthFloatingRegisterIsNotModelled` gives
+the same path XMM8, which names no argument list.
+`AFunctionOfFloatsEntersItsBodyDirectly` runs the pipeline over a function
+shaped as `runtime.modf` and its caller: each takes one double and keeps no
+call of morestack and no loop, and the function prints though one of its
+returns leaves a record's integer field as the function was entered with.
 `GoStackGrowth.AGrowthRoutineTakesNoArgument` runs arm64's
 `runtime.morestack_noctxt`, which branches to a `runtime.morestack` that reads
 X3: alone and in the pipeline, neither takes a parameter, and both are exact.
@@ -20920,6 +21118,9 @@ the goroutine at its entry and again after the call.
 `GoInternalABI.AClosureReadsTheContextItsCallerPasses` lifts a closure that adds
 two words it loads through RDX, and its arm64 twin through R26: its C reads
 the register at the entry and traps nowhere.
+`GoAssembly.AssemblyEnteredAsAClosureReadsItsContext` lifts internal-ABI
+assembly that loads a word through the context register on x86-64 and arm64:
+it reads the register the same way.
 `GoAssembly.AReflectCallHelperStoresWhatItsFuncValueReturns` lifts a helper that
 loads RAX, RBX and X0 with `runtime.unspillArgs`, calls a func value through
 RDX and stores them back with `runtime.spillArgs`: neither routine is called,
@@ -20928,6 +21129,58 @@ helper was entered with, the helper keeps its two parameters, and the C stores
 what the call returns, a double among it, trapping nowhere.
 `GoRegisterArgumentTransfers.AreFoundByName` checks that the pclntab names both
 routines' code.
+`GoAssembly.AnARM64RoutineRunInPlaceTakesTheRegistersItReads` lifts arm64
+`runtime.spillArgs`, `runtime.unspillArgs` and `runtime.duffzero` on their
+own: each takes X20 as a parameter after the argument registers it reads,
+a point inside Duff's device does too, and the C traps nowhere.
+`GoAssembly.AnX64RoutineRunInPlaceTakesItsSummarysRegisters` checks that an
+x86-64 routine gets no operands from its body.
+`GoAssembly.GoCodeHasNoVariadicPrologue` lifts arm64 code that stores X0 to
+X7 and Q0 to Q7: variadic as the platform's code, and not as Go code.
+`GoAssembly.ACallToCodeTheGoToolchainDidNotBuildFollowsThePlatform` lifts an
+arm64 trampoline that keeps its argument block in X19 across a call to code
+outside the pclntab: the call follows the platform's contract, the store
+after it traps nowhere, and a call into Go code or without the table of
+recorded functions stays Go's.
+`GoStackResults.*` (unittests/lift/core/GoStackResultsTests.cpp) compile and
+run the C of small stack-ABI routines.
+`ACallReturnsTheResultItsCalleeStores` checks, on x86-64 and arm64 and through
+both C routes, that `main.caller(x)` returns `main.add(x, 5) + 1`, where the
+caller read an unwritten word of its own frame before.
+`SeveralResultsReturnAsTheirRecord` returns an int and a one-byte bool.
+`AResultWrittenThroughItsAddressIsReturned` returns a named result a callee
+fills through its address. `AResultReadBackIsNoParameter` adds one to a result
+where it lies. `ARoutineThatJumpsOnReturnsWhatItsTargetDoes` goes through a
+wrapper that changes an argument in place and jumps, and takes two
+parameters, not its target's result word as a third.
+`AResultNoCallerReadsLeavesNoStore` prints a bare call.
+`AResultPassedOnInPlaceIsTheNextCallsArgument` runs `main.add(main.pair())`,
+which stores nothing between the two calls, and whose first callee writes no
+register. `ACallThroughAFunctionValueTakesNoEarlierResult` keeps one argument
+at an indirect call that follows a call with a result.
+`ARunOfOneRoutineReturnsWhatTheImageDoes` runs a caller alone, with its callee
+and that callee's jump target left out.
+`ARegisterACalleeKeepsIsNoArgument` runs callers of a count of trailing zeros
+(`bsf rdi, rsi; cmovz rdi, r8`), whose summary reads RDI: the one with a
+record takes its argument and returns its result, and the one whose record
+has no word takes no parameter. `ARecordOfStackWordsLeavesNoRegisterArgument`
+lifts a routine that adds R9 as it found it: it and its caller each take one
+stack parameter and return a stack result, the call passes no register, and
+the unknown value shows where it is read.
+`GoStackABI.ARoutineThatJumpsToPlatformCodeHandsOnItsRegisters` lifts a
+stack-ABI routine that is one jump to such code: it takes the two registers
+its target reads and passes them on.
+`GoAssembly.ACallThroughAPointerThatIsNoFuncValueFollowsThePlatform` lifts
+arm64 routines that hold a pointer in X20 across an indirect call: one
+whose target a plain pointer gives, in the call's block, the one before it
+or before a join, follows the platform's contract and stores through X20;
+one that calls through a func value stays Go's and traps; compiled code is
+not asked.
+`GoInternalABI.ACallWithAFloatPassesTheIntegersItsSummaryBound` runs the
+pipeline over `main.f(p, n, c, x float64)`, which returns in RAX and RBX, and
+a caller that sets RAX with `lea`, RBX with `xor` and RCX with `mov` before
+the call: the call passes the buffer, 0, 5 and the double, and its C holds no
+unknown value.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.
@@ -26717,6 +26970,8 @@ permutation, floating-point and control-transfer instructions.
 `mips32r2fp`, `mips32r2fpel`, `mips64r2fp` and `mips64r2fpel` select classic
 pre-R6 FR=1 profiles. Newly admitted instructions have no successful baseline
 lift; report their throughput separately from comparisons of unchanged work.
+Historical profiles `mips1`, `mips2`, and `mips3` select MIPS I, II,
+and III. The `el` suffix selects little-endian bytes for each.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same

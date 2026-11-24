@@ -276,9 +276,9 @@ def multiple_residual_elf(degree, neighbor=False):
     return elf(code), "x+y+z+" + str(scale) + "U*" + "*".join(factors)
 
 
-def masked_join_elf(degree, *, wrapped=False):
+def masked_join_elf(degree, *, wrapped=False, low_factors=()):
     rng = random.Random(1971 + degree)
-    scale = 1 << 18
+    scale = 1 << (16 if low_factors else 18)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
     for i in range(degree):
@@ -298,7 +298,10 @@ def masked_join_elf(degree, *, wrapped=False):
         code += bytes.fromhex("4409c1 4409c9" if axis else "4431c1 4431c9")
         code += bytes.fromhex("c1c9") + bytes([(at - 8) % 32])  # field in CH
         code += bytes.fromhex("0fbecd" if i % 3 == 0 else "0fb6cd")
-        weight, offset = (2 * i + 3) << (6 + axis), 2 * i + 1
+        shift = 6 + axis
+        if low_factors:
+            shift = 1 + i % 3 if i in low_factors else 8
+        weight, offset = (2 * i + 3) << shift, 2 * i + 1
         code += bytes.fromhex("69c9") + struct.pack("<I", weight)
         code += bytes.fromhex("81c1") + struct.pack("<I", offset) + bytes.fromhex("0fafc1")
         op = "|" if axis else "^"
@@ -309,6 +312,59 @@ def masked_join_elf(degree, *, wrapped=False):
         if i % 3 == 0:
             field = f"(({field}^128U)-128U)"
         factors.append(f"({offset}U+{weight}U*{field})")
+    code += bytes.fromhex("01f8 01f0 01d0 c3")
+    return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
+
+
+def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0,
+                       raw_rotations=False):
+    scale = 3 << 13
+    code = bytearray.fromhex("b8") + struct.pack("<I", scale)
+    weights = (1 if repeated_offsets else 3, -3, 5, 7, -5)
+    factors = []
+    for i in range(degree):
+        secondary = i % 2
+        code += bytes.fromhex("89f1 01d1" if secondary else "89f9")
+        word = "(y+z)" if secondary else "x"
+        turn = 11 if secondary else 5
+        delta = (i // 2 + secondary) % 4
+        bits = 16 if delta == 0 or i % 3 == 1 else 8
+        signed = i % 3 != 2
+        if raw_rotations and i % 4 < 2 and i not in (17, 64):
+            # The complete rotated register reaches the multiply. When the
+            # observed window crosses bit 31 its wrapped low bits stay live.
+            start = 24 if i % 3 else turn
+            left = i % 2 == 0
+            code += bytes.fromhex("c1c1" if left else "c1c9")
+            code += bytes([32 - start if left else start])
+            field = f"(({word}>>{start})|({word}<<{32-start}))"
+            signed = False
+        elif terminal_period and i % terminal_period:
+            # A logical or arithmetic shift reads the same top byte until a
+            # coefficient leaves the sign padding observable.
+            code += bytes.fromhex("c1f9" if signed else "c1e9") + bytes([24])
+            field = f"({word}>>24)"
+            bits = 8
+        else:
+            code += bytes.fromhex("c1c9") + bytes([turn])
+            code += bytes.fromhex({(16, True): "0fbfc9", (16, False): "0fb7c9",
+                                   (8, True): "0fbec9", (8, False): "0fb6c9"}[bits, signed])
+            field = f"((({word}>>{turn})|({word}<<{32-turn}))&{(1<<bits)-1}U)"
+        if signed:
+            sign = 1 << (bits - 1)
+            field = f"(({field}^{sign}U)-{sign}U)"
+        # The two low-weight factors keep sign and upper bits observable.
+        shift = {17: 2, 64: 3}.get(i, 10 + delta)
+        weight = weights[i % len(weights)] << shift
+        if repeated_offsets:
+            # A unit weight becomes a pair of shifts with different counts.
+            # LLVM can pack a small positive offset into the remaining zeros.
+            offset = 6 if i == 4 else (1, -3, 5, 9, -7)[i % 5]
+        else:
+            offset = -(2 * i + 3)
+        code += bytes.fromhex("69c9") + struct.pack("<i", weight)
+        code += bytes.fromhex("81c1") + struct.pack("<i", offset) + bytes.fromhex("0fafc1")
+        factors.append(f"({offset & 0xffffffff}U+{weight & 0xffffffff}U*{field})")
     code += bytes.fromhex("01f8 01f0 01d0 c3")
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
@@ -644,7 +700,7 @@ def source_operations(text):
 
 
 def run_fixture(worker, cli, compiler, kind, image, expected):
-    def enhanced_shape(text):
+    def enhanced_shape(text, llvm):
         code = source_operations(text)
         if kind in ("affine-residue-neighbor", "prefix-residue-neighbor"):
             assert ">>" in code, text
@@ -675,6 +731,17 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "funnel-perturbation-rotated-product-239":
+            assert code.count("*") <= (9 if llvm else 15), text
+        elif kind == "funnel-perturbation-terminal-product-173":
+            assert code.count("*") <= 12, text
+        elif kind == "funnel-perturbation-terminal-field-173":
+            assert code.count("*") <= 8, text
+        elif kind.startswith("funnel-perturbation-variable-field-"):
+            assert code.count("*") <= 12, text
+        elif kind.startswith("funnel-perturbation-mixed-valuation-"):
+            limit = 5 if kind.endswith("-73") else 9
+            assert code.count("*") <= limit + (2 if llvm else 0), text
         elif kind in ("funnel-perturbation-masked-join-89", "funnel-perturbation-masked-wrap-103"):
             assert code.count("*") <= 6, text
         elif kind.startswith(("funnel-perturbation-masked-", "funnel-perturbation-overlap-")):
@@ -744,7 +811,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 ordinary = source(client, representation, False)
                 enhanced = source(client, representation, True)
                 function_name(enhanced)
-                enhanced_shape(enhanced)
+                enhanced_shape(enhanced, representation == "llvmc")
                 if representation == "source":
                     code = source_operations(ordinary)
                     if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
@@ -785,7 +852,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                                    check=True, capture_output=True, text=True,
                                    timeout=DECOMPILE_TIMEOUT_SECONDS)
                     text = output.read_text(encoding="utf-8")
-                    enhanced_shape(text)
+                    enhanced_shape(text, llvm)
                     outputs[name] = text
 
         if compiler:
@@ -864,6 +931,20 @@ if __name__ == "__main__":
                 81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
             ("funnel-perturbation-masked-join-89", *masked_join_elf(89)),
             ("funnel-perturbation-masked-wrap-103", *masked_join_elf(103, wrapped=True)),
+            ("funnel-perturbation-rotated-product-239",
+             *variable_field_elf(239, terminal_period=3, repeated_offsets=True,
+                                 raw_rotations=True)),
+            ("funnel-perturbation-terminal-field-173",
+             *variable_field_elf(173, terminal_period=2, repeated_offsets=True)),
+            ("funnel-perturbation-terminal-product-173",
+             *variable_field_elf(173, terminal_period=7, repeated_offsets=True)),
+            ("funnel-perturbation-variable-field-137", *variable_field_elf(137)),
+            ("funnel-perturbation-variable-field-repeated-137",
+             *variable_field_elf(137, repeated_offsets=True)),
+            ("funnel-perturbation-mixed-valuation-73",
+             *masked_join_elf(73, wrapped=True, low_factors=(29,))),
+            ("funnel-perturbation-mixed-valuation-117",
+             *masked_join_elf(117, wrapped=True, low_factors=(19, 51, 93))),
             *((f"funnel-perturbation-blended-{degree}", *high_perturbation_elf(
                 degree, shift_base=6, affine_depth=1, observed=14, blended_fields=True))
               for degree in (47, 99)),

@@ -12,6 +12,7 @@
 
 #include "../X86/MedLLVMSourceSEHFilter.h"
 
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
@@ -19,6 +20,7 @@
 
 #define DEBUG_TYPE "neverd-med-llvm-return"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedReturnValue.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -586,6 +588,27 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
     }
 
+    // A bare return can hand back an argument in the integer result register.
+    // Its operand on a link-register target carries the control destination.
+    if (!RetVal && RetBlkId >= 0 && TRI.LinkRegister && !WantFloat &&
+        !CurMedFunc->FPReturnViaX87 && ParamRegoffMap.count(RetRegOff) &&
+        (RetTy->isPointerTy() || RetTy->isIntegerTy())) {
+      const unsigned Bytes = RetTy->isPointerTy()
+                                 ? TRI.PointerSize
+                                 : (RetTy->getIntegerBitWidth() + 7) / 8;
+      if (Bytes && Bytes <= TRI.FullRegWidth &&
+          registerUntouchedFromEntry(*CurMedFunc, CurMedFunc->Blocks[RetBlkId],
+                                     RetRegOff, Bytes, TargetArch)) {
+        MedVar Incoming;
+        Incoming.Kind = MedVar::Reg;
+        Incoming.RegOff = RetRegOff;
+        Incoming.Size = Bytes;
+        Incoming.SSAVer = -1;
+        Incoming.TheArch = TargetArch;
+        RetVal = getIncomingParameter(Incoming, Builder);
+      }
+    }
+
     // Still nothing: the FP result is the function's incoming FP argument,
     // returned unchanged (e.g. `double f(int n,double x){ if(n<=0) return x;
     // …}` on the `n<=0` path, where the FP return register is never written).
@@ -607,14 +630,20 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   if (!RetVal) {
     const auto &TRI = getTargetRegInfo(TargetArch);
-    // ARM/AArch64 RETURN operands are control-flow targets (LR or a pc value
-    // restored from the stack), never ABI return values.  If no write to the
-    // real return register was found above, materialize the neutral residual
-    // used by void inference instead of returning that branch target.  X86
-    // lifters put RAX/EAX in the RETURN operand, so retain their fallback.
-    if (TRI.LinkRegister != 0 || Op.NumInputs == 0)
-      RetVal = llvm::ConstantInt::get(RetTy, 0);
-    else {
+    // A link-register RETURN supplies the destination. With no reaching
+    // result or bound argument, source must observe a missing scalar on this
+    // path. Native lifting keeps its neutral residual.
+    if (TRI.LinkRegister != 0 || Op.NumInputs == 0) {
+      if (PreserveUnknownSourceValues &&
+          (RetTy->isIntegerTy() || RetTy->isPointerTy())) {
+        auto *Bits = RetTy->isPointerTy()
+                         ? Builder.getIntNTy(TRI.PointerSize * 8)
+                         : llvm::cast<llvm::IntegerType>(RetTy);
+        RetVal = llvm_source_unknown::create(Builder, Bits);
+      } else {
+        RetVal = llvm::Constant::getNullValue(RetTy);
+      }
+    } else {
       rejectEscapingAddressFragment(Op.Inputs[0], "a return value");
       RetVal = GetInput(0);
     }

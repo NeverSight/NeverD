@@ -42,6 +42,7 @@ struct MedValueReads;
 
 struct BinaryImage;
 struct AnalysisCacheWarmup;
+struct OmittedCalleeBodies;
 struct PipelineResult;
 struct CallArgumentConvention;
 struct Symbol;
@@ -462,6 +463,15 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                           const std::map<va_t, std::string> &AllFuncNames,
                           bool SourceDeclarations = false,
                           bool SourceParameterReads = false);
+
+/// The bodies of the callees a run of some functions leaves out, read for
+/// their signatures as recoverModuleCallAbi reads them
+/// (PipelineResult::OmittedCallees), which keeps them for it: a pass before
+/// recovery that needs a callee's own facts reads the same bodies.
+const OmittedCalleeBodies &omittedCalleeBodies(const BinaryImage &Img,
+                                               PipelineResult &Result,
+                                               bool SourceDeclarations,
+                                               bool SourceParameterReads);
 
 /// Confirm caller-observed return shapes in omitted local callees. Uses the
 /// signature reader's complete lifts, conversion memo and work bounds; support

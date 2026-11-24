@@ -37,6 +37,12 @@ constexpr bool historicalDoublewordGPRInstruction(uint32_t Word) {
   return Op ? FirstLevel[Major][Op] == 3 : FirstLevel[Special][Word & 63] == 3;
 }
 
+/// Cause.ExcCode for SYSCALL or BREAK, including their optional code field.
+constexpr uint8_t historicalSoftwareExceptionCode(uint32_t Word) {
+  const uint32_t Op = Word & 0xfc00003fu;
+  return Op == 12 ? 8 : Op == 13 ? 9 : 0;
+}
+
 /// Width of an integer operation that raises the synchronous Overflow
 /// exception.
 constexpr unsigned historicalTrappingArithmeticBytes(uint32_t Word) {

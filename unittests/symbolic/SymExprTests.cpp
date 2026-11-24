@@ -414,6 +414,26 @@ TEST(SymExpr, ShiftsByConstantsBecomeProductsSoSumsCanCollectThem) {
   EXPECT_EQ(Ctx.mkLShr(X, Ctx.mkConst(W32, 99)), Ctx.mkZero(W32));
 }
 
+TEST(SymExpr, WideLogicalShiftsRetainSingleAndCombinedScales) {
+  constexpr unsigned W = 4097, Shift = 4079;
+  SymContext C;
+  const auto X = C.mkVar("x", W), Amount = C.mkConst(W, Shift);
+  const auto Right = C.mkLShr(X, Amount);
+  const auto Scale = llvm::APInt::getOneBitSet(W, Shift);
+  const auto Mask = C.mkConst(~llvm::APInt::getLowBitsSet(W, Shift));
+  const auto Half = C.mkConst(Scale.lshr(1)), Two = C.mkConst(W, 2);
+  EXPECT_EQ(C.mkMul(C.mkConst(Scale), Right), C.mkAnd(X, Mask));
+  EXPECT_EQ(C.mkMul({Right, Half, Two}), C.mkAnd(X, Mask));
+  const auto K = C.mkConst(Scale + 3);
+  const auto Other = C.mkMul(K, Right);
+  EXPECT_EQ(Other, C.mkMul(Right, K));
+  EXPECT_EQ(C.op(Other), SymOp::Mul);
+  EXPECT_EQ(C.operand(Other, 0), K);
+  EXPECT_EQ(C.operand(Other, 1), Right);
+  EXPECT_EQ(C.mkMul({C.mkZero(W), Right, Two}), C.mkZero(W));
+  EXPECT_EQ(C.mkMul(C.mkConst(W, 1), Right), Right);
+}
+
 TEST(SymExpr, RightShiftDiscardsOnlyNeutralBitwiseWindows) {
   for (unsigned Width : {8U, 16U, 32U, 64U, 128U}) {
     SCOPED_TRACE(Width);
@@ -1235,6 +1255,8 @@ TEST(SymExpr, FindVarSeesDeclarationsAndNothingElse) {
   SymRef X32 = Ctx.mkVar("x", W32);
   EXPECT_TRUE(Ctx.hasVarName("x"));
   EXPECT_FALSE(Ctx.hasVarName("nope"));
+  EXPECT_EQ(Ctx.findVarRef("x"), X32);
+  EXPECT_FALSE(Ctx.findVarRef("nope"));
   ASSERT_TRUE(Ctx.findVar("x").has_value());
   EXPECT_EQ(*Ctx.findVar("x"), Ctx.varId(X32));
   EXPECT_EQ(Ctx.varInfo(*Ctx.findVar("x")).Width, W32);
@@ -1243,6 +1265,7 @@ TEST(SymExpr, FindVarSeesDeclarationsAndNothingElse) {
   Ctx.mkVar("x", 8);
   EXPECT_TRUE(Ctx.hasVarName("x"));
   EXPECT_FALSE(Ctx.findVar("x").has_value());
+  EXPECT_FALSE(Ctx.findVarRef("x"));
 }
 
 TEST(SymExpr, FreshVariablesCarryExplicitOrigin) {
@@ -1266,6 +1289,7 @@ TEST(SymExpr, StructuredInputNeverMutatesAPlainVariableIdentity) {
   EXPECT_EQ(Input, Ctx.varRef(Ctx.varId(Input)));
   EXPECT_TRUE(Ctx.hasVarName("reg$24"));
   EXPECT_FALSE(Ctx.findVar("reg$24").has_value());
+  EXPECT_FALSE(Ctx.findVarRef("reg$24"));
   EXPECT_FALSE(Ctx.varRef(Ctx.numVars()).isValid());
   EXPECT_FALSE(Ctx.mkInputVar("zero-width", 0,
                               SymInputOrigin{SymInputKind::Register, 0, 1, 0})
@@ -1899,6 +1923,26 @@ TEST(SymExpr, NativeNormalizedResultsRetainWidthBoundaries) {
   }
 }
 
+TEST(SymExpr, WideConstantRotationCountsIncludeEveryActiveLimb) {
+  SymContext C;
+  for (unsigned W : {65u, 128u, 257u, 1024u}) {
+    const auto X = C.mkVar("x", W);
+    const auto Pattern = llvm::APInt::getSignMask(W) | llvm::APInt(W, 5);
+    for (auto Count :
+         {llvm::APInt(W, 0), llvm::APInt(W, W + 1),
+          llvm::APInt(W, ~uint64_t(0)), llvm::APInt::getOneBitSet(W, 64) + W,
+          llvm::APInt::getSignMask(W) + 7}) {
+      const auto Literal = C.mkConst(Count);
+      const auto Amount = Count.urem(W);
+      EXPECT_EQ(C.constantRotateAmount(Literal, W), Amount);
+      EXPECT_EQ(C.constValue(C.mkRol(C.mkConst(Pattern), Literal)),
+                Pattern.rotl(Amount));
+      if (!Amount)
+        EXPECT_EQ(C.mkRor(X, Literal), X);
+    }
+  }
+}
+
 TEST(SymExpr, NativeRotationsAndSignExtensionMatchEveryWordWidth) {
   std::mt19937_64 Random(0xf012e);
   for (unsigned Width = 1; Width <= 64; ++Width) {
@@ -2447,7 +2491,7 @@ TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
 
 TEST(SymExpr, AffineProductPlansKeepLiveLaneBitsAndRepeatedFactors) {
   std::mt19937_64 Random(0xaff1ae);
-  for (unsigned Bits : {65u, 127u, 128u, 129u, 171u, 257u}) {
+  for (unsigned Bits : {34u, 63u, 64u, 65u, 127u, 128u, 129u, 171u, 257u}) {
     constexpr unsigned W = 513;
     const unsigned FieldWidth = Bits - 33;
     SymContext C;
@@ -2499,6 +2543,57 @@ TEST(SymExpr, AffineProductPlansKeepLiveLaneBitsAndRepeatedFactors) {
   }
 }
 
+TEST(SymExpr, RotatedProductFieldsKeepWrappedSignedAndDynamicBits) {
+  constexpr unsigned W = 513;
+  SymContext C;
+  const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+  auto Count = llvm::APInt::getOneBitSet(W, 150) + 7;
+  const unsigned Turn = Count.urem(W);
+  const auto Right = C.mkRor(X, C.mkConst(Count));
+  const auto Left = C.mkRol(X, C.mkConst(W, W - Turn));
+  const unsigned Size = 39;
+  ASSERT_LT(Turn + Size, W);
+  const auto Slice = C.mkExtract(X, Turn, Size);
+  const auto End = C.mkRor(X, C.mkConst(W, W - 5));
+  const auto Signed = C.mkAShr(X, C.mkConst(W, W - 5));
+  const auto Dynamic = C.mkRor(X, Y);
+  const auto Narrow = C.mkZExt(Slice, W);
+  const auto Sign = C.mkSExt(Slice, W);
+  const auto Scale = llvm::APInt::getOneBitSet(W, W - 77);
+  const std::array Sources{Right, Left, Narrow, Sign, End, Signed, Dynamic};
+  const std::array Shifts{40u, 43u, 41u, 38u, 70u, 71u, 20u};
+  llvm::SmallVector<SymRef> Factors{C.mkConst(Scale)};
+  for (unsigned I = 0; I < Sources.size(); ++I) {
+    const auto Weight = llvm::APInt(W, 2 * I + 1).shl(Shifts[I]);
+    Factors.push_back(C.mkAdd(C.mkConst(W, 2 * I + 3),
+                              C.mkMul(C.mkConst(Weight), Sources[I])));
+  }
+  Factors.push_back(Factors[4]);
+  const auto Product = C.mkMul(Factors);
+  SymEvalPlan Plan(C, Product);
+  std::mt19937_64 Random(0xda237);
+  for (unsigned I = 0; I < 64; ++I) {
+    std::array<uint64_t, 9> Words;
+    for (auto &Word : Words)
+      Word = Random();
+    const auto A = I == 0 ? llvm::APInt::getSignMask(W) : llvm::APInt(W, Words);
+    const auto B = llvm::APInt(W, Random());
+    const auto Field = A.extractBits(Size, Turn);
+    const std::array Values{A.rotr(Turn),     A.rotl(W - Turn), Field.zext(W),
+                            Field.sext(W),    A.rotr(W - 5),    A.ashr(W - 5),
+                            A.rotr(B.urem(W))};
+    auto Expected = Scale;
+    for (unsigned J = 0; J < Values.size(); ++J) {
+      const auto Factor =
+          (Values[J] * (2 * J + 1)).shl(Shifts[J]) + (2 * J + 3);
+      Expected *= Factor;
+      if (J == 3)
+        Expected *= Factor;
+    }
+    EXPECT_EQ(Plan.eval({A, B}), Expected);
+  }
+}
+
 TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
   constexpr unsigned W = 513;
   SymContext C;
@@ -2507,6 +2602,7 @@ TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
   // Some offsets share an even multiple of the same variable. Other rows
   // have distinct weights or retain a complete, repeated factor.
   auto Magnitude = [](unsigned I) { return 2 * (I < 8 ? I % 2 : I) + 1; };
+  auto Offset = [](unsigned I) { return I == 5 ? 6u : 2 * I + 1; };
   for (unsigned Bits : {65u, 127u, 129u, 207u, 257u}) {
     const unsigned Fourth = (Bits + 3) / 4;
     const unsigned Third = (Bits + 2) / 3;
@@ -2516,7 +2612,7 @@ TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
       llvm::SmallVector<SymRef> Factors{C.mkConst(Scale)};
       for (unsigned I = 0; I < 12; ++I) {
         const auto B = (-llvm::APInt(W, Magnitude(I))).shl(I == 8 ? 0 : Shift);
-        const auto F = C.mkAdd(C.mkConst(W, 2 * I + 1),
+        const auto F = C.mkAdd(C.mkConst(W, Offset(I)),
                                C.mkMul(C.mkConst(B), I % 2 ? X : Y));
         Factors.push_back(F);
         if (I == 5)
@@ -2535,7 +2631,7 @@ TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
         for (unsigned I = 0; I < 12; ++I) {
           auto Term =
               (Inputs[I % 2 ? 0 : 1] * Magnitude(I)).shl(I == 8 ? 0 : Shift);
-          Term = llvm::APInt(W, 2 * I + 1) - Term;
+          Term = llvm::APInt(W, Offset(I)) - Term;
           Expected *= Term;
           if (I == 5)
             Expected *= Term;
@@ -2583,6 +2679,57 @@ TEST(SymExpr, WideProductsKeepDynamicCoefficientsAndSharedFactorPrecision) {
         }
       }
     }
+}
+
+TEST(SymExpr, WideBitwiseVariablePairsShareTheVariadicIdentity) {
+  for (unsigned Width : {65u, 257u, 32769u}) {
+    SymContext C;
+    const auto Y = C.mkVar("y", Width), X = C.mkVar("x", Width);
+    const auto Zero = C.mkZero(Width), Ones = C.mkOnes(Width);
+    EXPECT_EQ(C.mkAnd(X, Y), C.mkAnd({Y, Ones, X, X}));
+    EXPECT_EQ(C.mkOr(X, Y), C.mkOr({Y, Zero, Y, X}));
+    EXPECT_EQ(C.mkXor(X, Y), C.mkXor({Y, X, X, Zero, X}));
+    EXPECT_EQ(C.mkAnd(Y, Y), Y);
+    EXPECT_EQ(C.mkOr(X, X), X);
+    EXPECT_EQ(C.mkXor(Y, Y), Zero);
+  }
+}
+
+TEST(SymExpr, ConcatenatedProductScalePreservesPartialAndSharedDemands) {
+  constexpr unsigned Width = 385, High = 7;
+  std::mt19937_64 Random(0x434f4e434154);
+  for (unsigned Bits : {8u, 63u, 64u, 65u, 97u, 129u}) {
+    SCOPED_TRACE(Bits);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    const auto Tail = llvm::APInt(Width - High, 3).shl(Width - Bits);
+    const auto Coeff = C.mkConcat(C.mkExtract(X, 9, High), C.mkConst(Tail));
+    const auto A = C.mkXor(X, Y), B = C.mkAdd(Y, Z);
+    const auto Product = C.mkMul({A, B, Z, Coeff});
+    // Truncation can require less than the full product. A second observer
+    // still reads the high bits of B from the same plan.
+    const unsigned Demand = Width - Bits / 2;
+    const auto Narrow = C.mkZExt(C.mkExtract(Product, 0, Demand), Width);
+    SymEvalPlan FullPlan(C, Product), PartialPlan(C, C.mkXor(Narrow, B));
+    const auto Binary = C.mkMul(B, Coeff);
+    SymEvalPlan BinaryPlan(C, C.mkXor(Binary, B));
+    for (unsigned I = 0; I != 32; ++I) {
+      std::array<llvm::APInt, 3> Values;
+      for (auto &V : Values) {
+        std::array<uint64_t, 7> Limbs;
+        std::generate(Limbs.begin(), Limbs.end(), [&] { return Random(); });
+        V = llvm::APInt(Width, Limbs);
+      }
+      const auto Sum = Values[1] + Values[2];
+      const auto Scale = Values[0].extractBits(High, 9).concat(Tail);
+      const auto Expected = (Values[0] ^ Values[1]) * Sum * Values[2] * Scale;
+      EXPECT_EQ(FullPlan.eval(Values), Expected);
+      EXPECT_EQ(BinaryPlan.eval(Values), (Scale * Sum) ^ Sum);
+      EXPECT_EQ(PartialPlan.eval(Values),
+                Expected.trunc(Demand).zext(Width) ^ Sum);
+    }
+  }
 }
 
 TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {

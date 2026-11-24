@@ -62,6 +62,14 @@ and `recv` lower to that same owner. Connected TCP accepts no explicit peer
 argument in send/receive. Scalar `read` and `write` share stream cursors;
 `dup`/`dup3` aliases and closing/reusing descriptor numbers retain the same
 open-description lifetime. Bionic alone converts raw negative errors to errno.
+With a null peer address, `sendto` ignores the address length and `recvfrom`
+leaves the address-length storage untouched.
+
+Bionic's `__sendto_chk` and `__recvfrom_chk` compare the requested byte count
+with the caller's buffer extent before descriptor lookup or guest memory access.
+An oversized request enters the shared FORTIFY diagnostic and abort path.
+An admitted call forwards the flags, peer address and address length to the
+ordinary Linux transfer, including its short counts and pending observations.
 
 An entry with just `peer_hex` supplies a successful TCP `connect`. A nonempty
 send or receive requires that entry's own transfer observations, even when
@@ -81,9 +89,9 @@ bound open description, so aliases retain it and a reused FD can refer to a
 different index. Declared failed connection attempts occupy indices; rejected
 peer or memory admission does not consume one.
 When a send requires more bytes than remain in the declared stream, the
-diagnostic gives the bound connection index, current stream offset, guest
-request size, size after applying `max_send`, and remaining byte count. The
-send stops before reading the guest buffer or advancing the cursor.
+diagnostic gives the bound connection index, current stream offset, size after
+the kernel's `MAX_RW_COUNT` clamp, size after applying `max_send`, and remaining
+byte count. The send stops before reading the guest buffer or advancing the cursor.
 Socket seek returns ESPIPE. `setsockopt`/`getsockopt` share SO_RCVTIMEO and
 SO_SNDTIMEO state across aliases, accepting whole seconds up to one day;
 negative seconds retain immediate-timeout state. Fractional timeouts stop
@@ -267,14 +275,16 @@ The description lifetime and timeout behavior follow
 [receive](https://man7.org/linux/man-pages/man2/recv.2.html) and
 [socket options](https://man7.org/linux/man-pages/man7/socket.7.html).
 
-The full user buffer extent is admitted before waiting, including at EOF and
-for zero-length calls. `recvfrom` checks the extent before the FD lookup; a
-descriptor `read` checks the FD first. An out-of-range extent returns EFAULT;
-page permissions remain a completion-time check. Extents above guest
-`MAX_RW_COUNT` are explicitly unsupported because read and recv import/clamp
-ordering differs. This follows the Linux 5.10
-[socket entry](https://github.com/torvalds/linux/blob/v5.10/net/socket.c) and
-[iterator import](https://github.com/torvalds/linux/blob/v5.10/lib/iov_iter.c).
+`sendto` and `recvfrom` cap the requested byte count at the guest
+`MAX_RW_COUNT` before checking the user address range and looking up the FD.
+Socket `read` and `write` look up the FD first, check the original range and
+then cap the transfer count. An out-of-range buffer returns EFAULT even at
+EOF or for a zero-length request. A zero-length buffer may start exactly at
+the user address limit. Page permissions are checked when bytes are copied,
+so the uncopied portion of a valid address range can be unmapped. See the
+Linux [socket entry](https://github.com/torvalds/linux/blob/v5.10/net/socket.c),
+[iterator import](https://github.com/torvalds/linux/blob/v5.10/lib/iov_iter.c)
+and [VFS read/write](https://github.com/torvalds/linux/blob/v5.10/fs/read_write.c).
 
 A suspended select retains its copied bitmaps and absolute deadline. Other
 threads may modify guest input memory without changing that copy; output access
@@ -294,6 +304,12 @@ The shared Linux descriptor owner implements LP64 `poll`, `ppoll`,
 AArch64 uses its native `ppoll`/`epoll_pwait` trap numbers; Android's `poll`,
 `ppoll`/`ppoll64` and epoll imports adapt to the same owner. No host socket,
 polling API or wall-clock wait supplies readiness.
+
+The Bionic `__poll_chk` and `__ppoll_chk` imports check the unsigned descriptor
+count against the number of complete eight-byte `pollfd` entries in the supplied
+object extent. An undersized array enters the shared FORTIFY diagnostic and
+abort path before Bionic reads the descriptors, timeout or signal mask. An
+admitted call uses the ordinary `poll` or `ppoll` wait and writeback semantics.
 
 Ordinary IN/OUT and RDNORM/WRNORM queries use the socket's existing offline
 arrival and expected-send state. Regular files, directories and modeled proc

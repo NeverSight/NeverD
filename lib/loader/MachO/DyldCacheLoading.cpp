@@ -58,12 +58,19 @@ llvm::Error applyCacheSlideFixups(BinaryImage &Image,
       return Fail();
     Previous = Slot;
   }
-  for (const auto &[Slot, Name] : Image.MachOSharedCacheSymbolPointers) {
+  auto &Symbols = Image.MachOSharedCacheSymbolPointers;
+  for (auto It = Symbols.begin(); It != Symbols.end();) {
     Progress.check();
+    const auto &[Slot, Name] = *It;
     const auto *Bytes = Image.readVA(Slot, arm64e::kPointerBytes);
-    if (!Bytes || Name.empty() ||
-        (!Pending.count(Slot) && readLE<uint64_t>(Bytes)))
+    if (!Bytes || Name.empty())
       return Fail();
+    // dyld writes an absolute bind's value in place and removes its slide
+    // entry. An indirect-table index alone cannot identify a sliding pointer.
+    if (!Pending.count(Slot) && readLE<uint64_t>(Bytes))
+      It = Symbols.erase(It);
+    else
+      ++It;
   }
   for (const auto &[Slot, Fixup] : Pending) {
     Progress.check();

@@ -234,6 +234,12 @@ TEST(HighIRSources, PairedStoresKeepTheirIndependentInstructionOrigins) {
   ASSERT_TRUE(Index.lookup(0x1000, Second));
   EXPECT_EQ(Index.lookup(0x1000, First)->Sequence, 3);
   EXPECT_EQ(Index.lookup(0x1000, Second)->Sequence, 4);
+  // An independently entered delay slot and the branch-owned execution of
+  // that slot have the same source address and distinct occurrences.
+  Second.NonEntryInstruction = Second.Addr;
+  Second.Addr = 0;
+  ASSERT_TRUE(Index.lookup(0x1000, Second));
+  EXPECT_EQ(Index.lookup(0x1000, Second)->Sequence, 4);
   First.StoreAddr = HighExpr::makeConst(0x3000, 8);
   EXPECT_FALSE(Index.lookup(0x1000, First));
   Second.Kind = StmtKind::Assign;

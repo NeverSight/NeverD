@@ -19,6 +19,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -29,6 +30,37 @@ namespace neverd {
 namespace macho_loader {
 
 using namespace llvm::MachO;
+
+/// Whether a section of type \p Type has a run of the indirect symbol table
+/// (<mach-o/loader.h>: reserved1 is its first index).
+static bool indexesIndirectSymbols(uint32_t Type) {
+  return Type == S_SYMBOL_STUBS || Type == S_LAZY_SYMBOL_POINTERS ||
+         Type == S_NON_LAZY_SYMBOL_POINTERS ||
+         Type == S_LAZY_DYLIB_SYMBOL_POINTERS ||
+         Type == S_THREAD_LOCAL_VARIABLE_POINTERS;
+}
+
+StubRun stubRun(const std::vector<SectionInfo> &Sections, size_t Index,
+                uint32_t IndirectSymbols) {
+  const SectionInfo &Stubs = Sections[Index];
+  if (Stubs.StubSize == 0)
+    return {};
+  StubRun Run{static_cast<uint32_t>(Stubs.Size / Stubs.StubSize),
+              Stubs.StubSize};
+  // The run ends where the next section's begins, or the table does.
+  uint32_t End = IndirectSymbols;
+  for (size_t I = 0; I < Sections.size(); ++I)
+    if (I != Index && Sections[I].Size != 0 &&
+        indexesIndirectSymbols(Sections[I].Flags) &&
+        Sections[I].Reserved1 > Stubs.Reserved1)
+      End = std::min(End, Sections[I].Reserved1);
+  if (End <= Stubs.Reserved1)
+    return Run;
+  const uint32_t Owned = End - Stubs.Reserved1;
+  if (Run.Count > Owned && Stubs.Size % Owned == 0)
+    Run = {Owned, Stubs.Size / Owned};
+  return Run;
+}
 
 void parseStubImports(const llvm::object::MachOObjectFile &Obj,
                       const std::vector<SectionInfo> &Sections,
@@ -70,11 +102,13 @@ void parseStubImports(const llvm::object::MachOObjectFile &Obj,
     return readFixedName(StrTab + NStrx, SymtabCmd.strsize - NStrx);
   };
 
-  for (const auto &Sect : Sections) {
+  for (size_t Index = 0; Index < Sections.size(); ++Index) {
+    const SectionInfo &Sect = Sections[Index];
     if (Sect.Flags != S_SYMBOL_STUBS || Sect.StubSize == 0)
       continue;
 
-    uint32_t NStubs = static_cast<uint32_t>(Sect.Size / Sect.StubSize);
+    const StubRun Run = stubRun(Sections, Index, DysymtabCmd.nindirectsyms);
+    uint32_t NStubs = Run.Count;
     uint32_t IndirectBase = Sect.Reserved1;
 
     for (uint32_t SI = 0; SI < NStubs; ++SI) {
@@ -93,7 +127,7 @@ void parseStubImports(const llvm::object::MachOObjectFile &Obj,
       if (SymName.empty())
         continue;
 
-      va_t StubAddr = Sect.Addr + static_cast<uint64_t>(SI) * Sect.StubSize;
+      va_t StubAddr = Sect.Addr + static_cast<uint64_t>(SI) * Run.Bytes;
 
       Import Imp;
       Imp.Name = SymName;

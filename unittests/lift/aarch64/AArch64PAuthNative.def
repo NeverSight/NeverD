@@ -13,6 +13,16 @@
 #endif
 
 NEVERD_PAUTH_NATIVE_TEXT(kPAuthCompiler, "clang")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleModule, "native")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleArtifactEnvironment,
+                         "NEVERD_ARM64E_RETURN_OBJECTS")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleArtifactProperty,
+                         "arm64e_return_object_directory")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleHighRoute, "high")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleLLVMRoute, "llvm")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleOptimizedLLVMRoute, "llvm-opt")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleObjectExtension, "o")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleCLanguage, "c")
 NEVERD_PAUTH_NATIVE_TEXT(
     kPAuthCompilerUnavailable,
     "clang is required for the arm64e source compilation check")
@@ -46,5 +56,56 @@ int main(void) {
   return changed != 15 || !generic;
 }
 )")
+
+NEVERD_PAUTH_NATIVE_TEXT(kReturnHostUnavailable,
+                         "native pointer authentication requires Apple Silicon")
+NEVERD_PAUTH_NATIVE_TEXT(
+    kReturnKeysUnavailable,
+    "this host cannot execute arm64e PAuth_LR with active keys")
+NEVERD_PAUTH_NATIVE_TEXT(kReturnKeyProbe, R"(
+#include <stdint.h>
+int main(void) {
+  int changed_a = 0, changed_b = 0;
+  for (uint64_t i = 0; i != 64; ++i) {
+    uint64_t a, b, pointer = 0x12340 + i * 16;
+    __asm__ volatile("mov x17, %2\nmov x16, %3\nmov x15, %3\n"
+                     ".inst 0xdac18bfe\nmov %0, x17\n"
+                     "mov x17, %2\n.inst 0xdac18ffe\nmov %1, x17"
+                     : "=&r"(a), "=r"(b) : "r"(pointer), "r"(i)
+                     : "x15", "x16", "x17");
+    changed_a |= a != pointer;
+    changed_b |= b != pointer;
+  }
+  return !(changed_a && changed_b);
+}
+)")
+
+#ifdef NEVERD_PAUTH_KEY_FUNCTION
+NEVERD_PAUTH_KEY_FUNCTION(Pacia, test_pacia)
+NEVERD_PAUTH_KEY_FUNCTION(Pacib, test_pacib)
+NEVERD_PAUTH_KEY_FUNCTION(Pacda, test_pacda)
+NEVERD_PAUTH_KEY_FUNCTION(Pacdb, test_pacdb)
+NEVERD_PAUTH_KEY_FUNCTION(Autia, test_autia)
+NEVERD_PAUTH_KEY_FUNCTION(Autib, test_autib)
+NEVERD_PAUTH_KEY_FUNCTION(Autda, test_autda)
+NEVERD_PAUTH_KEY_FUNCTION(Autdb, test_autdb)
+NEVERD_PAUTH_KEY_FUNCTION(Xpaci, test_xpaci)
+NEVERD_PAUTH_KEY_FUNCTION(Xpacd, test_xpacd)
+NEVERD_PAUTH_KEY_FUNCTION(A64_Pacga, test_pacga)
+#undef NEVERD_PAUTH_KEY_FUNCTION
+#endif
+
+#ifdef NEVERD_PAUTH_ORACLE_PAIR
+// Both native oracles compare IA and IB for signing, authentication and return.
+NEVERD_PAUTH_ORACLE_PAIR(A64_Pacia2, test_pacia2, A64_PaciaM, test_pacia_m)
+NEVERD_PAUTH_ORACLE_PAIR(A64_Pacib2, test_pacib2, A64_PacibM, test_pacib_m)
+NEVERD_PAUTH_ORACLE_PAIR(A64_Autia2, test_autia2, A64_AutiaM, test_autia_m)
+NEVERD_PAUTH_ORACLE_PAIR(A64_Autib2, test_autib2, A64_AutibM, test_autib_m)
+NEVERD_PAUTH_ORACLE_PAIR(A64_AuthReturnIA2, test_returnia2, A64_AuthReturnIAM,
+                         test_returnia_m)
+NEVERD_PAUTH_ORACLE_PAIR(A64_AuthReturnIB2, test_returnib2, A64_AuthReturnIBM,
+                         test_returnib_m)
+#undef NEVERD_PAUTH_ORACLE_PAIR
+#endif
 
 #undef NEVERD_PAUTH_NATIVE_TEXT

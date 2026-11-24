@@ -1329,6 +1329,10 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
                  Ctx.width(Item.Ref) % 8 == 0) {
         PackedHigh = Ctx.mkZExt(High, Ctx.width(Item.Ref));
         LowLiteral = Low;
+      } else if (Ctx.isConst(Low) && Ctx.width(Item.Ref) <= 64 &&
+                 Ctx.width(Item.Ref) % 8 == 0 && Ctx.width(High) % 8 != 0) {
+        PackedHigh = High;
+        LowLiteral = Low;
       }
     }
     if (!Item.ChildrenReady)
@@ -1749,7 +1753,20 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
     case sym::SymOp::Concat: {
       if (PackedHigh) {
-        const auto Source = get(PackedHigh);
+        auto Source = get(PackedHigh);
+        if (!Source && NodeWidth <= 64) {
+          // Only the low bits of this field survive the shift into the
+          // enclosing unsigned word. Arithmetic may use a wider carrier.
+          const auto Word =
+              packedExtractWord(Ctx, Ctx.operand(Item.Ref, 0), Built,
+                                PackedWords, ScalarLiterals);
+          if (Word) {
+            Source = std::make_shared<HighExpr>();
+            Source->Kind = ExprKind::Cast;
+            Source->Type = Source->CastTo = NdType::makeInt(ByteSize, false);
+            Source->Operands = {Word};
+          }
+        }
         const auto Literal =
             literalExpr(Ctx.constValue(LowLiteral).zext(NodeWidth), ByteSize,
                         ScalarLiterals);

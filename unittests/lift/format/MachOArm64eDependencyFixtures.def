@@ -144,23 +144,33 @@ ARM64E_DEPENDENCY_TEXT(kThreadedCopyDiagnostic,
 
 ARM64E_DEPENDENCY_TEXT(kProducerTriple, "arm64e-apple-macosx14.0.0")
 ARM64E_DEPENDENCY_TEXT(kProducerModule, "arm64e-producer")
-ARM64E_DEPENDENCY_TEXT(
-    kMissingProducer,
-    "configured LLVM predates authenticated MC recipe callbacks")
-ARM64E_DEPENDENCY_TEXT(kProducerAssembly, R"asm(
+ARM64E_DEPENDENCY_VALUE(unsigned, kProducerSlotCount, 2)
+ARM64E_DEPENDENCY_VALUE(unsigned, kProducerBindCount, 1)
+ARM64E_DEPENDENCY_VALUE(int64_t, kProducerLibraryOrdinal, 1)
+ARM64E_DEPENDENCY_TEXT(kProducerFunction, R"asm(
 .text
 .p2align 2
 .globl _installed
 _installed:
-ret
+)asm")
+ARM64E_DEPENDENCY_TEXT(kProducerLeaf, "ret\n")
+ARM64E_DEPENDENCY_TEXT(kProducerUnwindLeaf,
+                       ".cfi_startproc\nret\n.cfi_endproc\n")
+ARM64E_DEPENDENCY_TEXT(kProducerData, R"asm(
 .data
 .p2align 3
 .globl _slots
 _slots:
+)asm")
+ARM64E_DEPENDENCY_TEXT(kProducerSlots, R"asm(
 .quad _installed@AUTH(ia,4660,addr)
 .quad (_target-4)@AUTH(db,4660)
 .subsections_via_symbols
 )asm")
+ARM64E_DEPENDENCY_TEXT(kProducerPlainSlot, ".quad _target\n")
+ARM64E_DEPENDENCY_TEXT(kProducerSignedSlot, ".quad _target@AUTH(db,4660)\n")
+ARM64E_DEPENDENCY_TEXT(kProducerDiverseSlot,
+                       ".quad _target@AUTH(ia,4660,addr)\n")
 
 ARM64E_DEPENDENCY_TEXT(kProducerIR, R"ir(
 @target = external global i8

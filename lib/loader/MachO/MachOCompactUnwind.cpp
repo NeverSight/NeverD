@@ -7,6 +7,7 @@
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
+#include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -662,7 +663,10 @@ ParseResult parseCompactUnwind(const BinaryImage &Img,
     // personality is loaded from, not the routine address itself.
     const va_t SlotVA = ImageBase + SlotRVA;
     va_t Routine = 0;
-    if (const uint8_t *Slot = Img.readVA(SlotVA, PtrSize))
+    if (Img.MachOSharedCache)
+      Routine =
+          macho_loader::readMetadataPointerTarget(Img, SlotVA).value_or(0);
+    else if (const uint8_t *Slot = Img.readVA(SlotVA, PtrSize))
       Routine = PtrSize == 4 ? va_t(readLE<uint32_t>(Slot))
                              : va_t(readLE<uint64_t>(Slot));
     Result.Personalities.push_back(Routine);
