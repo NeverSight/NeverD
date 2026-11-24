@@ -159,7 +159,7 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
         // a user declaration's records merely because its name matches.
         const bool StandaloneRecord =
             NeedsDeclaration &&
-            c_library::standaloneRegisterRecord(*Callee, Opts);
+            c_library::standaloneIntegerRecord(*Callee, Opts);
         if (StandaloneRecord) {
           for (const auto &[Name, Type] : Callee->Params)
             if (Type->Kind == NdTypeKind::Struct && !Type->IsEnum)

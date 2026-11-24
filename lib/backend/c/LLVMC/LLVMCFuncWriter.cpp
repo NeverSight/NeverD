@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CDeferredValue.h"
+#include "../HeaderPrototype.h"
 #include "../MIPS/CRecordEntry.h"
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
@@ -3866,6 +3867,10 @@ unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
         Library && Library.Name == FS->Name)
       if (const auto Layout = recordCallArguments(Call, *FS))
         return Clamp(Layout->Positions);
+    // If the record declaration could not be projected, the fallback still
+    // passes the recovered machine operands. Its source arity may be smaller.
+    if (c_library::standaloneIntegerRecord(*FS, Opts))
+      return Have;
     // A pointer-encoded class return may be a real RAX pointer rather than
     // an indirect result. With no debug parameters, live integer machine
     // arguments do not establish a hidden result address.

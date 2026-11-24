@@ -245,6 +245,7 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
         SourceCallHint != Other.SourceCallHint ||
         ((SourceCalleeType || Other.SourceCalleeType) &&
          !equalSourceTypes(SourceCalleeType, Other.SourceCalleeType)) ||
+        DenseIntegerStackArguments != Other.DenseIntegerStackArguments ||
         ((FloatingCallSignature || Other.FloatingCallSignature) &&
          (!FloatingCallSignature || !Other.FloatingCallSignature ||
           *FloatingCallSignature != *Other.FloatingCallSignature)) ||

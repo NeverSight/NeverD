@@ -546,6 +546,8 @@ private:
   int forwardedParameterCount(size_t CallIdx, const std::vector<MedOp> &Ops,
                               llvm::ArrayRef<uint64_t> ParamRegs) const;
 
+  bool hasDenseIntegerCallStack(const MedCallInfo &Info, size_t Operands) const;
+
   /// \p ResolvedSlot is the import slot an indirect call was resolved to
   /// through the register it calls, else 0.
   std::vector<ExprPtr> collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,

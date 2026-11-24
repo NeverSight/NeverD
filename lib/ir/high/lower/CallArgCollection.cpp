@@ -476,6 +476,27 @@ MedToHighConverter::sourceRecordFromWords(const SourceParameterTypeHint &P,
   return HighExpr::makeRecord(P.Type, std::move(Fields));
 }
 
+bool MedToHighConverter::hasDenseIntegerCallStack(const MedCallInfo &Info,
+                                                  size_t Operands) const {
+  if (!Info.ArgumentsFromPrototype || Info.StackArgumentOffsets.empty() ||
+      !Image || Info.Args.size() != Operands ||
+      Info.FloatingRegisterArgCount != 0)
+    return false;
+  const auto Physical =
+      getTargetRegInfo(TargetArch).integerArgumentLayout(Image->abiFormat());
+  if (!Physical.SlotBytes ||
+      Physical.SlotBytes != Info.StackArgumentSlotBytes ||
+      Info.IntegerRegisterArgCount !=
+          static_cast<int>(Physical.Registers.size()) ||
+      Operands != Physical.Registers.size() + Info.StackArgumentOffsets.size())
+    return false;
+  for (size_t I = 0; I < Info.StackArgumentOffsets.size(); ++I)
+    if (Info.StackArgumentOffsets[I] !=
+        static_cast<int64_t>(I * Physical.SlotBytes))
+      return false;
+  return true;
+}
+
 std::vector<ExprPtr>
 MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                     va_t ResolvedSlot) {
