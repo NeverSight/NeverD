@@ -19,12 +19,12 @@
 // Use one Darwin process per instruction. The data symbol at its instruction
 // address stays unsigned when the function pointer uses the arm64e ABI.
 #define SCALAR_FORMS(X)                                                        \
-  X(ADDPT, 0x9a012000, false)                                                  \
-  X(SUBPT, 0xda012000, true)                                                   \
-  X(MADDPT, 0x9b620020, false)                                                 \
-  X(MSUBPT, 0x9b628020, true)
+  X(ADDPT, 0x9a012000, false, false)                                           \
+  X(SUBPT, 0xda012000, true, false)                                            \
+  X(MADDPT, 0x9b620020, false, true)                                           \
+  X(MSUBPT, 0x9b628020, true, true)
 
-#define DEFINE_SCALAR(Name, Word, Subtract)                                    \
+#define DEFINE_SCALAR(Name, Word, Subtract, Multiply)                          \
   extern uint64_t run##Name(uint64_t, uint64_t, uint64_t);                     \
   extern const uint32_t site##Name;                                            \
   __asm__(".text\n.p2align 2\n.globl _run" #Name "\n_run" #Name ":\n"          \
@@ -37,11 +37,12 @@ typedef struct {
   uint64_t (*Run)(uint64_t, uint64_t, uint64_t);
   const uint32_t *Site;
   bool Subtract;
+  bool Multiply;
 } ScalarForm;
 
 static const ScalarForm Forms[] = {
-#define SCALAR_ROW(Name, Word, Subtract)                                       \
-  {#Name, run##Name, &site##Name, Subtract},
+#define SCALAR_ROW(Name, Word, Subtract, Multiply)                             \
+  {#Name, run##Name, &site##Name, Subtract, Multiply},
     SCALAR_FORMS(SCALAR_ROW)
 #undef SCALAR_ROW
 };
@@ -106,7 +107,7 @@ int main(int Argc, char **Argv) {
     fflush(stdout);
     return checkWriteback();
   }
-  if (Argc < 4 || Argc % 2)
+  if (Argc < 4)
     return EXIT_FAILURE;
   const ScalarForm *Form = NULL;
   for (size_t I = 0; I != sizeof(Forms) / sizeof(Forms[0]); ++I) {
@@ -115,7 +116,11 @@ int main(int Argc, char **Argv) {
       break;
     }
   }
-  if (!Form)
+  const bool Product = !strcmp(Argv[2], "product");
+  const int First = Product ? 3 : 2;
+  const int Stride = Product ? 3 : 2;
+  if (!Form || (Product && !Form->Multiply) || Argc - First < Stride ||
+      (Argc - First) % Stride)
     return EXIT_FAILURE;
   atomic_store_explicit(&ExpectedPC, (uintptr_t)Form->Site,
                         memory_order_relaxed);
@@ -127,13 +132,15 @@ int main(int Argc, char **Argv) {
     return EXIT_FAILURE;
   puts(Form->Name);
   fflush(stdout);
-  for (int I = 2; I < Argc; I += 2) {
+  for (int I = First; I < Argc; I += Stride) {
     const uint64_t Base = strtoull(Argv[I], NULL, 16);
-    const uint64_t Offset = strtoull(Argv[I + 1], NULL, 16);
-    // All four forms compute Base + Offset. For the multiply forms, x0
-    // is the accumulator, x1 the signed offset and x2 the factor one.
-    printf("%016" PRIx64 "\n",
-           Form->Run(Base, Form->Subtract ? 0 - Offset : Offset, 1));
+    uint64_t Left = strtoull(Argv[I + 1], NULL, 16);
+    const uint64_t Right = Product ? strtoull(Argv[I + 2], NULL, 16) : 1;
+    // The addition vectors describe Base + Offset for every opcode. Product
+    // vectors supply both signed operands directly to the original opcode.
+    if (!Product && Form->Subtract)
+      Left = 0 - Left;
+    printf("%016" PRIx64 "\n", Form->Run(Base, Left, Right));
     fflush(stdout);
   }
   return EXIT_SUCCESS;

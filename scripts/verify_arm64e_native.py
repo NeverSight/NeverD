@@ -200,7 +200,7 @@ def sign_cpta_slice(products, output, binary, policy):
     return None
 
 
-def cpta_observation(products, output, label, argv, mode, policy):
+def cpta_observation(products, output, label, argv, mode, policy, *, product=False):
     try:
         result = command(products, output, label, argv, POLICY["tool_timeout"])
     except OSError as error:
@@ -221,10 +221,28 @@ def cpta_observation(products, output, label, argv, mode, policy):
         if result.returncode == policy["undefined_instruction"] and not values:
             return policy["isa_unavailable"], []
         if result.returncode == 0:
-            for column, outcome in ((3, policy["checked"]), (2, policy["unchecked"])):
-                if values == [vector[column] for vector in policy["vectors"]]:
+            expected = ([row[mode] for row in policy["product_vectors"]] if product
+                        else [row[2:] for row in policy["vectors"]])
+            for column, outcome in enumerate((policy["unchecked"], policy["checked"])):
+                if values == [vector[column] for vector in expected]:
                     return outcome, values
     return policy["unexpected"], lines
+
+
+def measure_cpta_instructions(products, output, binary, arch, policy, *, product=False):
+    if product:
+        args = [policy["product_mode"], *(v for row in policy["product_vectors"] for v in row["operands"])]
+        instructions, label_format = policy["product_instructions"], policy["product_label"]
+    else:
+        args = [v for row in policy["vectors"] for v in row[:2]]
+        instructions, label_format = policy["instructions"], policy["instruction_label"]
+    states, results = {}, {}
+    for instruction in instructions:
+        label = label_format.format(arch=arch, instruction=instruction)
+        states[instruction], results[instruction] = cpta_observation(
+            products, output, label, [binary, instruction, *args], instruction, policy, product=product)
+    outcome = next(iter(states.values())) if len(set(states.values())) == 1 else policy["unexpected"]
+    return outcome, states, results
 
 
 def measure_cpta_slice(products, output, arch, subtype, optimization, policy):
@@ -245,19 +263,15 @@ def measure_cpta_slice(products, output, arch, subtype, optimization, policy):
             return profile
         profile[policy["entitlements_key"]] = signed
     profile.update(check_binary(binary, subtype))
-    operands = [v for row in policy["vectors"] for v in row[:2]]
-    states, results = {}, {}
-    for instruction in policy["instructions"]:
-        label = policy["instruction_label"].format(arch=arch, instruction=instruction)
-        states[instruction], results[instruction] = cpta_observation(
-            products, output, label, [binary, instruction, *operands], instruction, policy)
-    profile[policy["scalar_outcomes_key"]] = states
-    profile[policy["scalar_results_key"]] = results
-    if len(set(states.values())) == 1:
-        profile["outcome"] = next(iter(states.values()))
-    if profile["outcome"] in (policy["checked"], policy["unchecked"]):
+    outcome, states, results = measure_cpta_instructions(products, output, binary, arch, policy)
+    profile["outcome"] = outcome
+    profile[policy["scalar_outcomes_key"]], profile[policy["scalar_results_key"]] = states, results
+    if outcome in (policy["checked"], policy["unchecked"]):
         # Preserve the original vector-major result order for report consumers.
         profile["results"] = [value for vector in zip(*results.values()) for value in vector]
+    outcome, states, results = measure_cpta_instructions(products, output, binary, arch, policy, product=True)
+    profile[policy["product_key"]] = outcome
+    profile[policy["product_outcomes_key"]], profile[policy["product_results_key"]] = states, results
     mode = policy["writeback_mode"]
     profile[policy["writeback_key"]], _ = cpta_observation(
         products, output, arch + policy["writeback_suffix"], [binary, mode], mode, policy)
@@ -269,7 +283,7 @@ def probe_cpta(output):
     scalar, writeback = policy["scalar_qualified_key"], policy["writeback_qualified_key"]
     report = {**provenance(), "platform": platform.platform(), "profiles": {}, "optimization_reports": {},
               "status": POLICY["failed"], policy["observed_key"]: False, scalar: False,
-              policy["qualified_key"]: False, writeback: False}
+              policy["qualified_key"]: False, writeback: False, policy["product_qualified_key"]: False}
     report["source_sha256"][policy["source"]] = digest(ROOT / policy["source"])
     try:
         if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
@@ -290,24 +304,33 @@ def probe_cpta(output):
                 report["optimization_reports"][optimization] = {
                     "report": path.relative_to(output).as_posix(), "sha256": digest(path)}
                 for arch, profile in profiles.items():
-                    observations[arch].append((profile["outcome"], profile.get(policy["writeback_key"])))
+                    observations[arch].append((profile["outcome"], profile.get(policy["writeback_key"]),
+                                               profile.get(policy["product_key"])))
                 # The original public per-slice profiles are the O2 observations.
                 if optimization == policy["report_optimization"]:
                     report["profiles"] = profiles
             checked = policy["checked"]
             x1 = observations[policy["x1"]]
-            report[policy["observed_key"]] = any(all(s == checked for s, _ in rows)
-                                                  for rows in observations.values())
-            report[scalar] = all(s == checked for s, _ in x1)
-            report[writeback] = all(w == checked for _, w in x1)
-            report[policy["qualified_key"]] = report[scalar] and report[writeback]
+            report[policy["observed_key"]] = any(all(s == checked for s, _, _ in rows)
+                                                 for rows in observations.values())
+            report[scalar] = all(s == checked for s, _, _ in x1)
+            report[writeback] = all(w == checked for _, w, _ in x1)
             for rows in observations.values():
                 if len(set(rows)) != 1:
                     return report
-                state, wb = rows[0]
-                if (policy["unexpected"] in (state, wb) or
+                state, wb, product = rows[0]
+                if (policy["unexpected"] in (state, wb, product) or
                         (state == policy["loader_unavailable"]) != (wb == policy["loader_unavailable"])):
                     return report
+                # Both vector sets execute the same multiply instructions.
+                # Effective CPTM can only be observed with effective CPTA.
+                if state in (checked, policy["unchecked"]):
+                    if product not in (checked, policy["unchecked"]) or (product == checked and state != checked):
+                        return report
+                elif product is not None and product != state:
+                    return report
+            report[policy["product_qualified_key"]] = all(p == checked for _, _, p in x1)
+            report[policy["qualified_key"]] = report[scalar] and report[writeback]
             report["status"] = POLICY["passed"] if report[policy["qualified_key"]] else POLICY["unavailable"]
         return report
     finally:

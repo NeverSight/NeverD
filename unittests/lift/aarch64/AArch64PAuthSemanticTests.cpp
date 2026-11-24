@@ -26,6 +26,7 @@
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
@@ -57,6 +58,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -460,6 +462,120 @@ TEST(AArch64CPASemantics, ScalarOperandsRetainChecksThroughBothDecoders) {
     for (unsigned I = 1; I < 4; ++I) {
       EXPECT_TRUE(Zero[0].Inputs[I].isConst());
       EXPECT_EQ(Zero[0].Inputs[I].Offset, 0);
+    }
+  }
+}
+
+struct ScalarCPATraceCase {
+  uint32_t Word;
+  uint64_t X1, X2, X3;
+  uint64_t Unchecked, Addition, AdditionAndProduct;
+};
+
+constexpr ScalarCPATraceCase ScalarCPATraceCases[] = {
+#define NEVERD_A64_CPA_TRACE(...) {__VA_ARGS__},
+#include "AArch64ScalarCPATraceFixtures.def"
+};
+
+TEST(AArch64CPASemantics, TracesEffectiveAdditionAndProductChecks) {
+  using Control = AArch64ScalarCPAControl;
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  for (bool Fast : {false, true}) {
+    for (const auto &Case : ScalarCPATraceCases) {
+      SCOPED_TRACE(Case.Word);
+      SCOPED_TRACE(Fast);
+      const auto Ops = lift(Case.Word, Fast);
+      ASSERT_FALSE(Ops.empty());
+      NdOpEmulator E(Image);
+      E.setRegister(a64reg::X1, Case.X1);
+      E.setRegister(a64reg::X2, Case.X2);
+      E.setRegister(a64reg::X3, Case.X3);
+      E.setStrictMode(true);
+      for (auto [Mode, Expected] :
+           {std::pair{Control::Unchecked, Case.Unchecked},
+            std::pair{Control::Addition, Case.Addition},
+            std::pair{Control::AdditionAndProduct, Case.AdditionAndProduct}}) {
+        for (const LowOp &Op : Ops)
+          ASSERT_TRUE(E.stepWithAArch64ScalarCPA(Op, Mode));
+        EXPECT_EQ(E.getRegister(a64reg::X0), Expected);
+        EXPECT_FALSE(E.skips().any());
+      }
+      // The preceding explicit observation must not supply controls to run().
+      const bool Independent = Case.Unchecked == Case.AdditionAndProduct;
+      EXPECT_EQ(E.run(Ops), Independent ? Ops.size() : Ops.size() - 1);
+      EXPECT_FALSE(E.skips().any());
+      E.setStrictMode(false);
+      EXPECT_EQ(E.run(Ops), Ops.size());
+      EXPECT_EQ(E.getRegister(a64reg::X0),
+                Independent ? std::optional(Case.Unchecked) : std::nullopt);
+      EXPECT_EQ(E.skips().ApproximatedOps, Independent ? 0u : 1u);
+    }
+  }
+}
+
+TEST(AArch64CPASemantics, TracesStackBaseAliasedOperandAndDiscardedResult) {
+  using Control = AArch64ScalarCPAControl;
+  constexpr struct {
+    uint32_t Word;
+    uint64_t Register, Initial, X2, Unchecked, Checked;
+  } Cases[] = {
+#define NEVERD_A64_CPA_REGISTER(Word, Reg, ...)                                \
+  {Word, a64reg::Reg, __VA_ARGS__},
+#include "AArch64ScalarCPATraceFixtures.def"
+  };
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  for (bool Fast : {false, true}) {
+    for (const auto &Case : Cases) {
+      const auto Ops = lift(Case.Word, Fast);
+      ASSERT_FALSE(Ops.empty());
+      for (auto Mode : {Control::Unchecked, Control::AdditionAndProduct}) {
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegister(Case.Register, Case.Initial);
+        if (Case.Register == a64reg::SP) {
+          EXPECT_EQ(E.run(Ops), 0u);
+          EXPECT_EQ(E.getRegister(Case.Register), Case.Initial);
+        }
+        E.setRegister(a64reg::X2, Case.X2);
+        for (const auto &Op : Ops)
+          ASSERT_TRUE(E.stepWithAArch64ScalarCPA(Op, Mode));
+        EXPECT_EQ(E.getRegister(Case.Register),
+                  Mode == Control::Unchecked ? Case.Unchecked : Case.Checked);
+        EXPECT_FALSE(E.skips().any());
+      }
+    }
+  }
+}
+
+TEST(AArch64CPASemantics, RejectsUnprovenOperandsAndMalformedTraceInputs) {
+  using Control = AArch64ScalarCPAControl;
+  for (const auto &Case : ScalarCPATraceCases) {
+    const auto Ops = lift(Case.Word, false);
+    if (Ops.size() != 1)
+      continue; // Shifted forms have a temporary input.
+    SCOPED_TRACE(Case.Word);
+    for (auto TheArch : {Arch::AArch64, Arch::X64}) {
+      BinaryImage Image;
+      Image.Arch = TheArch;
+      NdOpEmulator E(Image);
+      E.setRegister(a64reg::X0, Case.X1);
+      E.setRegister(a64reg::X1, Case.X1);
+      EXPECT_FALSE(E.stepWithAArch64ScalarCPA(Ops.front(), Control::Unchecked));
+      E.setRegister(a64reg::X2, Case.X2);
+      if (Ops.front().NumInputs == 4)
+        EXPECT_FALSE(
+            E.stepWithAArch64ScalarCPA(Ops.front(), Control::Unchecked));
+      E.setRegister(a64reg::X3, Case.X3);
+      auto Bad = Ops.front();
+      Bad.Inputs[1].Size /= 2;
+      EXPECT_FALSE(E.stepWithAArch64ScalarCPA(Bad, Control::Unchecked));
+      EXPECT_FALSE(E.step(Bad));
+      if (TheArch != Arch::AArch64)
+        EXPECT_FALSE(E.step(Ops.front()));
+      EXPECT_EQ(E.getRegister(a64reg::X0), Case.X1);
+      EXPECT_FALSE(E.skips().any());
     }
   }
 }

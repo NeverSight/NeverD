@@ -273,7 +273,7 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 with self.subTest(code=code, recipe=recipe), self.assertRaises(ValueError):
                     native.cursor_observation(result, recipe)
 
-    def mock_cpta_probe(self, output, observation):
+    def mock_cpta_probe(self, output, observation, observe_product=None):
         policy = native.POLICY["cpta_probe"]
 
         def invoke(products, directory, label, argv, timeout):
@@ -287,7 +287,14 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, plistlib.dumps(policy["entitlements"]).decode(), "")
             elif len(argv) > 1 and argv[1] in (*policy["instructions"], policy["writeback_mode"]):
                 arch = Path(argv[0]).name.removesuffix(native.POLICY["binary_suffix"])
-                code, lines = observation(arch, "-" + directory.name, argv[1])
+                opt, mode = "-" + directory.name, argv[1]
+                product = argv[2:3] == [policy["product_mode"]]
+                if product and observe_product is not None:
+                    code, lines = observe_product(arch, opt, mode)
+                else:
+                    code, lines = observation(arch, opt, mode)
+                    if product and code == 0:
+                        lines = [mode, *(row[mode][0] for row in policy["product_vectors"])]
                 return subprocess.CompletedProcess(argv, code, "\n".join(lines), "")
             return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -354,6 +361,56 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     self.assertEqual(report[policy["qualified_key"]], selected is None)
                     self.assertEqual(report[policy["writeback_qualified_key"]],
                                      change != policy["writeback_mode"] or selected is None)
+
+    def test_cpta_distinguishes_product_overflow_from_pointer_addition(self):
+        policy = native.POLICY["cpta_probe"]
+        for addition, product, disagreement, status in (
+                (True, True, False, "passed"), (True, False, False, "passed"),
+                (False, False, False, "unavailable"), (False, True, False, "failed"),
+                (True, True, True, "failed")):
+            def scalar_probe(arch, opt, mode):
+                if mode == policy["writeback_mode"]:
+                    return 0, [policy["writeback_started"], policy["writeback_checked"]]
+                return 0, [mode, *(row[2 + addition] for row in policy["vectors"])]
+
+            def product_probe(arch, opt, mode):
+                checked = product and not (disagreement and opt == policy["report_optimization"])
+                return 0, [mode, *(row[mode][checked] for row in policy["product_vectors"])]
+
+            with self.subTest(addition=addition, product=product, disagreement=disagreement), \
+                    tempfile.TemporaryDirectory() as directory:
+                report = self.mock_cpta_probe(Path(directory), scalar_probe, product_probe)
+                self.assertEqual(report["status"], native.POLICY[status])
+                self.assertEqual(report[policy["qualified_key"]], status == "passed")
+                self.assertEqual(report[policy["product_qualified_key"]], status == "passed" and product)
+                profile = report["profiles"][policy["x1"]]
+                for name in policy["product_instructions"]:
+                    self.assertEqual(profile[policy["product_results_key"]][name],
+                                     product_probe(policy["x1"], policy["report_optimization"], name)[1][1:])
+
+    def test_cpta_rejects_incomplete_or_inconsistent_product_observations(self):
+        policy = native.POLICY["cpta_probe"]
+        def scalar_probe(arch, opt, mode):
+            if mode == policy["writeback_mode"]:
+                return 0, [policy["writeback_started"], policy["writeback_checked"]]
+            return 0, [mode, *(v[3] for v in policy["vectors"])]
+
+        for selected in policy["product_instructions"]:
+            checked = [v[selected][1] for v in policy["product_vectors"]]
+            for code, values in ((policy["undefined_instruction"], []), (0, checked[:-1]),
+                                 (0, [policy["product_vectors"][0][selected][0], *checked[1:]])):
+                def product_probe(arch, opt, mode):
+                    if mode == selected:
+                        return code, [mode, *values]
+                    return 0, [mode, *(v[mode][1] for v in policy["product_vectors"])]
+
+                with self.subTest(instruction=selected, code=code, values=values), \
+                        tempfile.TemporaryDirectory() as directory:
+                    report = self.mock_cpta_probe(Path(directory), scalar_probe, product_probe)
+                    self.assertEqual(report["status"], native.POLICY["failed"])
+                    self.assertTrue(report[policy["scalar_qualified_key"]])
+                    self.assertFalse(report[policy["product_qualified_key"]])
+                    self.assertFalse(report[policy["qualified_key"]])
 
     def test_cpta_requires_the_signed_entitlements_to_round_trip(self):
         policy = native.POLICY["cpta_probe"]
@@ -422,6 +479,14 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                             with self.subTest(variant=variant, optimization=opt, instruction=name):
                                 state, _ = native.cpta_observation(products, root, name, [binary, name, *args],
                                                                    name, policy)
+                                self.assertEqual(state, policy[expected])
+                        for name in policy["product_instructions"]:
+                            operands = [v for row in policy["product_vectors"] for v in row["operands"]]
+                            with self.subTest(variant=variant, optimization=opt, product=name):
+                                state, _ = native.cpta_observation(
+                                    products, root, policy["product_label"].format(arch=control["native_arch"],
+                                                                                  instruction=name),
+                                    [binary, name, policy["product_mode"], *operands], name, policy, product=True)
                                 self.assertEqual(state, policy[expected])
 
     def test_probe_keeps_startup_and_dlopen_contracts_distinct(self):

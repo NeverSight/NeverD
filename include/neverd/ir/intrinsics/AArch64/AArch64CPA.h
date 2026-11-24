@@ -23,6 +23,20 @@ namespace neverd {
 #define NEVERD_A64_CPA_TEXT(Name, Text) inline constexpr char Name[] = Text;
 #include "neverd/ir/intrinsics/AArch64/AArch64CPA.def"
 
+/// Result of PointerCheckAtEL with effective CPTA enabled. ProductOverflow
+/// contributes only when the caller has also enabled the multiply check.
+inline uint64_t aarch64CheckedPointerResult(uint64_t Base, uint64_t Result,
+                                            bool ProductOverflow = false) {
+  const bool PreviouslyDetected = bool(Base & kAddressMemorySignBit) !=
+                                  bool(Base & kAddressMemoryPoisonBit);
+  if (!ProductOverflow && !PreviouslyDetected &&
+      !((Result ^ Base) & kAddressMemoryTagMask))
+    return Result;
+  return (Result & ~(kAddressMemoryPreservedMask | kAddressMemoryPoisonBit)) |
+         (Base & kAddressMemoryPreservedMask) |
+         (Base & kAddressMemorySignBit ? 0 : kAddressMemoryPoisonBit);
+}
+
 struct AArch64CPAOperation {
   Intrinsic Id;
   unsigned Sources;

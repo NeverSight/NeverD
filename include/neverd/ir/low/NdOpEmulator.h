@@ -43,6 +43,10 @@ namespace ppc {
 struct Division;
 }
 
+/// Effective scalar CPA checks at the instruction's exception level. Arm
+/// makes the multiply check ineffective whenever the addition check is off.
+enum class AArch64ScalarCPAControl { Unchecked, Addition, AdditionAndProduct };
+
 /// Record of a memory LOAD performed during emulation.
 struct LoadRecord {
   uint64_t Addr = 0;
@@ -172,6 +176,11 @@ public:
   /// Multi-result operations require run() and their adjacent result bindings.
   /// Without those bindings step() refuses before any effect.
   bool step(const LowOp &Op);
+
+  /// Supply effective CPTA/CPTM for this scalar CPA instruction only.
+  /// Ordinary step/run can recover a value when all control settings agree.
+  bool stepWithAArch64ScalarCPA(const LowOp &Op,
+                                AArch64ScalarCPAControl Checks);
 
   /// Step with the effective SCTLR of this LRCPC3 Normal-memory Q access.
   /// Other operations retain their usual step semantics. The observation
@@ -374,8 +383,10 @@ private:
     WithinGranule,
     Any
   };
-  bool stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
-                OrderedAlignment Alignment = OrderedAlignment::Natural);
+  bool
+  stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
+           OrderedAlignment Alignment = OrderedAlignment::Natural,
+           std::optional<AArch64ScalarCPAControl> CPAChecks = std::nullopt);
   bool executeArith(const LowOp &Op);
   bool executeFloatArith(const LowOp &Op);
   bool executeFloatConvert(const LowOp &Op);

@@ -1,0 +1,83 @@
+{
+  "scope": "Scalar ADDPT, SUBPT, MADDPT and MSUBPT numerical tracing for already decoded AArch64 instructions.",
+  "llvm_package": "neverd-llvm-v23.0.0-r6",
+  "base_revision": "d71179c2d7a60f9f4afcd8cc515e354507fd8647",
+  "source_sha256": {
+    "unittests/lift/aarch64/AArch64ScalarCPATraceFixtures.def": "cb314d3c41eeb57e1ccd5baa25da15f78107a002bb42a9c2013f1297a56339e1",
+    "scripts/arm64e_native_cpta.def": "cdf3984043d36c06e6df942efc9064dc5dc925d8f372062f3b929ffafb60c017",
+    "scripts/verify_arm64e_native.def": "2ef1468e176cc918b61352b071785eda061c7181deeb0f989a4584c3b72ce10b"
+  },
+  "corpus": {
+    "sha256": "a3d686a65cb31c8e8af35544653c8b25e1fab286af33d9a5997371995bfec68a",
+    "cases": 1062,
+    "inputs": "12 trace fixtures, 16 addition probe rows, 10 independent product probe rows and 1024 deterministic signed arithmetic cases.",
+    "operand_stream": "Hex word, X0, X1, X2, X3, unchecked result, addition-checked result, addition-and-product-checked result."
+  },
+  "model": {
+    "name": "Arm FVP_Base_RevC-2xAEMvA",
+    "version": "11.32+19",
+    "sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "checked_pointer_arithmetic_support_level": 2,
+    "exception_levels": [
+      "EL1",
+      "EL0"
+    ],
+    "controls": "All 16 raw CPTA, CPTA0, CPTM and CPTM0 bit combinations with SCTLR2_EL1 readback.",
+    "observations": {
+      "O2-CPA1": {
+        "returncode": 1,
+        "completed_raw_control_pairs": 0,
+        "original_instruction_comparisons": 0,
+        "guest_sha256": "e9bb86c42b86c6ad8835597162eb9c5cafe8a616672eeab3a7a087eecf1326e5"
+      },
+      "O0-CPA2": {
+        "returncode": 0,
+        "completed_raw_control_pairs": 16,
+        "original_instruction_comparisons": 33984,
+        "guest_sha256": "4c0f3d86656aef7fcbad41e620c7ddcbdb7caf1f40642ec169b64bd92fe28696"
+      },
+      "O2-CPA2": {
+        "returncode": 0,
+        "completed_raw_control_pairs": 16,
+        "original_instruction_comparisons": 33984,
+        "guest_sha256": "e9bb86c42b86c6ad8835597162eb9c5cafe8a616672eeab3a7a087eecf1326e5"
+      }
+    },
+    "instruction_only": {
+      "architecture_profile": "Armv9.4-A",
+      "checked_pointer_arithmetic_support_level": 1,
+      "controls": "Each EL1 and EL0 CPTA/CPTM bit read back zero after all 16 attempted settings. All original instructions produced the unchecked result.",
+      "observations": {
+        "O2-instruction-only-CPA0": {
+          "returncode": 1,
+          "completed_raw_control_pairs": 0,
+          "original_instruction_comparisons": 0,
+          "guest_sha256": "226a0546b165c60515cd3c5c54f9814cfa41910b5333b57e8ec4dbcc65491bc1"
+        },
+        "O0-instruction-only-CPA1": {
+          "returncode": 0,
+          "completed_raw_control_pairs": 16,
+          "original_instruction_comparisons": 33984,
+          "guest_sha256": "a721cd729ca350870277db40316ba3ea62bf6e7e4b227890dd2edad43ba13df0"
+        },
+        "O2-instruction-only-CPA1": {
+          "returncode": 0,
+          "completed_raw_control_pairs": 16,
+          "original_instruction_comparisons": 33984,
+          "guest_sha256": "226a0546b165c60515cd3c5c54f9814cfa41910b5333b57e8ec4dbcc65491bc1"
+        }
+      }
+    }
+  },
+  "neverd": {
+    "decoders": [
+      "decodeOne",
+      "decodeOneForLift"
+    ],
+    "corpus": 1062,
+    "explicit_results": 6372,
+    "independent_results": 570,
+    "ambiguous_controls": 1554
+  },
+  "native_apple_arm64e_x1_qualified_by_model": false
+}
