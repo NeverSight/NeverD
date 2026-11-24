@@ -2531,10 +2531,14 @@ MedFunc LowToMedConverter::convertFunction(
     }
     GoArgumentSpillBegin.reset();
     GoArgumentSpillReads.reset();
+    GoArgumentSpillFloats.clear();
     if (GoGrowth && usesGoRegisterArguments(*Image, Low.Entry)) {
       GPRReadWidths Reads{};
+      const llvm::ArrayRef<uint64_t> Floats = goFloatArgumentRegisters(TheArch);
       for (const GoArgumentSpill &Spill : GoGrowth->Spills)
-        if (Spill.Register / 8 < kX64VectorFamilyBase)
+        if (llvm::is_contained(Floats, Spill.Register))
+          GoArgumentSpillFloats.emplace_back(Spill.Register, Spill.Size);
+        else if (Spill.Register / 8 < kX64VectorFamilyBase)
           Reads[Spill.Register / 8] = std::max<uint8_t>(
               Reads[Spill.Register / 8], static_cast<uint8_t>(Spill.Size));
       GoArgumentSpillReads = Reads;

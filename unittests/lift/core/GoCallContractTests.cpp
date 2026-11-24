@@ -652,11 +652,14 @@ TEST(GoStackGrowth, AnARM64ByteSpillGoesThroughATemporary) {
   EXPECT_EQ(Growth->Spills[0].EntryOffset, 24);
 }
 
-TEST(GoStackGrowth, AFloatSpillNamesNoModelledArgumentList) {
+TEST(GoStackGrowth, AFloatSpillIsAnArgumentToo) {
   // runtime.modf: cmp rsp, [r14+0x10]; jbe grow; ret
   //   grow: movsd [rsp+8], xmm0; call morestack_noctxt
   //         movsd xmm0, [rsp+8]; jmp runtime.modf
-  // Floating arguments are not modelled, so the spills are no argument list.
+  // The path spills the scalar the argument is, through a temporary of
+  // XMM0's low eight bytes, and names the function's parameters exactly: a
+  // double in X0, though the body never reads it.  Unmodelled, the path
+  // stayed in the function as a loop round a call of morestack.
   constexpr va_t Function = kTextVA + 0x100;
   GoTestImage T;
   T.writeText(Function, {0x49, 0x3B, 0x66, 0x10, 0x76, 0x01, 0xC3, 0xF2, 0x0F,
@@ -664,6 +667,43 @@ TEST(GoStackGrowth, AFloatSpillNamesNoModelledArgumentList) {
   T.writeText(Function + 0x0D, makeCall(Function + 0x0D, Morestack));
   T.writeText(Function + 0x12,
               {0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, 0xEB, 0xE6});
+  T.writeText(Morestack, {0xC3});
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Function, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const auto Growth = goStackGrowth(T.Img, build(T.Img, Function).Blocks);
+  ASSERT_TRUE(Growth.has_value());
+  ASSERT_EQ(Growth->Spills.size(), 1u);
+  EXPECT_EQ(Growth->Spills[0].Register, x86reg::vectorReg(0));
+  EXPECT_EQ(Growth->Spills[0].Size, 8u);
+  EXPECT_EQ(Growth->Spills[0].EntryOffset, 8);
+  const MedFunc F = lift(T.Img, Function);
+  EXPECT_TRUE(F.ExactRegisterParameters);
+  ASSERT_EQ(F.Params.size(), 1u);
+  EXPECT_EQ(F.Params[0].RegOff, x86reg::vectorReg(0));
+  const auto Scalar = F.FPParamScalarBytes.find(x86reg::vectorReg(0));
+  ASSERT_NE(Scalar, F.FPParamScalarBytes.end());
+  EXPECT_EQ(Scalar->second, 8u);
+  // Its summary reads the double for its callers.
+  const LocalRegisterEffect Effect = localRegisterEffect(
+      T.Img, build(T.Img, Function), nullptr, nullptr, nullptr, nullptr);
+  ASSERT_TRUE(Effect.GoArgumentReads.has_value());
+  EXPECT_EQ((*Effect.GoArgumentReads)[kX64VectorFamilyBase], 8u);
+}
+
+TEST(GoStackGrowth, ASpillOfANinthFloatingRegisterIsNotModelled) {
+  // The same path over XMM8: `movsd [rsp+8], xmm8 ... movsd xmm8, [rsp+8]`.
+  // A summary's vector rows name the first eight floating registers, so a
+  // path that spills a later one names an argument list no call completes.
+  constexpr va_t Function = kTextVA + 0x100;
+  GoTestImage T;
+  T.writeText(Function, {0x49, 0x3B, 0x66, 0x10, 0x76, 0x01, 0xC3, 0xF2, 0x44,
+                         0x0F, 0x11, 0x44, 0x24, 0x08});
+  T.writeText(Function + 0x0E, makeCall(Function + 0x0E, Morestack));
+  T.writeText(Function + 0x13,
+              {0xF2, 0x44, 0x0F, 0x10, 0x44, 0x24, 0x08, 0xEB, 0xE4});
   T.writeText(Morestack, {0xC3});
   GoModuleInfo Module;
   Module.RegisterArguments = true;
@@ -2026,6 +2066,93 @@ TEST(GoStackABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
   ASSERT_FALSE(Text.empty());
   EXPECT_NE(Text.find("mov %0, x28"), std::string::npos) << Text;
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
+TEST(GoStackGrowth, AFunctionOfFloatsEntersItsBodyDirectly) {
+  // main.m(x float64) (float64, float64) returns (x, x) for zero, (0, x)
+  // otherwise, and for a negative x the results of m(-x) the other way
+  // round; main.user adds the two.  `runtime.modf` has the shape.
+  //   main.m: cmp rsp, [r14+0x10]; jbe grow; push rbp; mov rbp, rsp
+  //           sub rsp, 8; xorps xmm2, xmm2; ucomisd xmm2, xmm0; ja neg
+  //           ucomisd xmm0, xmm2; jne zero; jp zero
+  //           movups xmm1, xmm0; add rsp, 8; pop rbp; ret
+  //     zero: movups xmm1, xmm0; movups xmm0, xmm2; add rsp, 8; pop rbp; ret
+  //     neg:  subsd xmm2, xmm0; movups xmm0, xmm2; call main.m
+  //           movups xmm2, xmm0; movups xmm0, xmm1; movups xmm1, xmm2
+  //           add rsp, 8; pop rbp; ret
+  //     grow: movsd [rsp+8], xmm0; call morestack; movsd xmm0, [rsp+8]
+  //           jmp main.m
+  //   main.user: the same entry and growth path round
+  //           call main.m; addsd xmm0, xmm1
+  // Each takes one double and keeps no growth path.  `main.m` returns RAX
+  // beside X0 and X1 only where its own call left it: the return two paths
+  // reach with RAX as the function was entered with hands back an unknown
+  // value there, where the function was refused once its body was no loop.
+  constexpr va_t M = kTextVA + 0x100;
+  constexpr va_t User = M + 0x70;
+  constexpr va_t Grow = M + 0xA0;
+  GoTestImage T;
+  T.writeText(M,
+              {0x49, 0x3B, 0x66, 0x10, 0x76, 0x49, 0x55, 0x48, 0x89, 0xE5, 0x48,
+               0x83, 0xEC, 0x08, 0x0F, 0x57, 0xD2, 0x66, 0x0F, 0x2E, 0xD0, 0x77,
+               0x1D, 0x66, 0x0F, 0x2E, 0xC2, 0x75, 0x0B, 0x7A, 0x09, 0x0F, 0x10,
+               0xC8, 0x48, 0x83, 0xC4, 0x08, 0x5D, 0xC3, 0x0F, 0x10, 0xC8, 0x0F,
+               0x10, 0xC2, 0x48, 0x83, 0xC4, 0x08, 0x5D, 0xC3, 0xF2, 0x0F, 0x5C,
+               0xD0, 0x0F, 0x10, 0xC2, 0xE8, 0xC0, 0xFF, 0xFF, 0xFF, 0x0F, 0x10,
+               0xD0, 0x0F, 0x10, 0xC1, 0x0F, 0x10, 0xCA, 0x48, 0x83, 0xC4, 0x08,
+               0x5D, 0xC3, 0xF2, 0x0F, 0x11, 0x44, 0x24, 0x08, 0xE8, 0x46, 0x00,
+               0x00, 0x00, 0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, 0xEB, 0x9E, 0x0F,
+               0x1F, 0x00, 0x66, 0x66, 0x2E, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00,
+               0x00, 0x00, 0x49, 0x3B, 0x66, 0x10, 0x76, 0x17, 0x55, 0x48, 0x89,
+               0xE5, 0x48, 0x83, 0xEC, 0x08, 0xE8, 0x7D, 0xFF, 0xFF, 0xFF, 0xF2,
+               0x0F, 0x58, 0xC1, 0x48, 0x83, 0xC4, 0x08, 0x5D, 0xC3, 0xF2, 0x0F,
+               0x11, 0x44, 0x24, 0x08, 0xE8, 0x08, 0x00, 0x00, 0x00, 0xF2, 0x0F,
+               0x10, 0x44, 0x24, 0x08, 0xEB, 0xD0, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{M, "main.m"}, std::pair{User, "main.user"},
+        std::pair{Grow, "runtime.morestack_noctxt"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.MorestackEntries = {Grow};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  for (const va_t Entry : {M, User}) {
+    SCOPED_TRACE(Entry);
+    const auto It = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &F) { return F.Entry == Entry; });
+    ASSERT_NE(It, R.MedFuncs.end());
+    ASSERT_EQ(It->Params.size(), 1u);
+    EXPECT_EQ(It->Params[0].RegOff, x86reg::vectorReg(0));
+    const auto Scalar = It->FPParamScalarBytes.find(x86reg::vectorReg(0));
+    ASSERT_NE(Scalar, It->FPParamScalarBytes.end());
+    EXPECT_EQ(Scalar->second, 8u);
+    EXPECT_TRUE(llvm::none_of(It->Blocks, [&](const MedBlock &Block) {
+      return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+        return Op.Opcode == NdOp::CALL && Op.NumInputs &&
+               Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal == Grow;
+      });
+    }));
+  }
+  const std::string Text = highCBody(R, T.Img, "main_m");
+  ASSERT_FALSE(Text.empty()) << R.Error;
+  EXPECT_NE(Text.find("double arg0"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("morestack"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("while"), std::string::npos) << Text;
+  const std::string Caller = highCBody(R, T.Img, "main_user");
+  ASSERT_FALSE(Caller.empty()) << R.Error;
+  EXPECT_NE(Caller.find("double arg0"), std::string::npos) << Caller;
+  EXPECT_EQ(Caller.find("morestack"), std::string::npos) << Caller;
 }
 
 TEST(GoInternalABI, AFuncValueCallReturnsItsFloatResults) {

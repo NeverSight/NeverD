@@ -21044,6 +21044,15 @@ arguments at most. `GoRegisterArguments.TheSpillAreaHoldsNoStackArgument`
 spills X0 and X1 above the return address, calls, and reloads them: the
 function takes those two registers and no stack parameter, where it took
 eleven.
+`GoStackGrowth.AFloatSpillIsAnArgumentToo` reads a path that spills XMM0's
+low eight bytes: the recognizer lists the register with eight bytes, the
+function takes exactly one double though its body never reads it, and its
+summary reads the double. `ASpillOfANinthFloatingRegisterIsNotModelled` gives
+the same path XMM8, which names no argument list.
+`AFunctionOfFloatsEntersItsBodyDirectly` runs the pipeline over a function
+shaped as `runtime.modf` and its caller: each takes one double and keeps no
+call of morestack and no loop, and the function prints though one of its
+returns leaves a record's integer field as the function was entered with.
 `GoStackGrowth.AGrowthRoutineTakesNoArgument` runs arm64's
 `runtime.morestack_noctxt`, which branches to a `runtime.morestack` that reads
 X3: alone and in the pipeline, neither takes a parameter, and both are exact.

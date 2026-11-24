@@ -61,7 +61,7 @@ void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat,
-    llvm::ArrayRef<uint64_t> OwnRegisters);
+    llvm::ArrayRef<uint64_t> OwnRegisters, bool Exact);
 
 // ---- MIPS fixed hard-float parameter order (MIPS/MedCallConventionMIPS.cpp)
 // ----
@@ -1983,12 +1983,48 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
                      Op.Output.RegOff <= a64reg::X15 &&
                      Op.Output.RegOff % 8 == 0;
         }
+      // A Go function's stack-growth path names exactly the floating
+      // arguments it takes, as it names the integer ones, and the scalar
+      // each is (LowToMedConverter::GoArgumentSpillFloats).  A register the
+      // path does not spill carries no argument, whatever lanes of it a
+      // legacy SSE write keeps, and one it spills is a parameter though
+      // the body never reads it, in its place among the others.
+      const bool SpilledFloats = GoRegisterArguments && GoArgumentSpillReads;
+      llvm::SmallVector<uint64_t, 4> Spilled;
+      for (const auto &[Register, Bytes] : GoArgumentSpillFloats) {
+        (void)Bytes;
+        Spilled.push_back(Register);
+      }
       const llvm::ArrayRef<uint64_t> GoFloats =
-          GoRegisterArguments || GoFixedOperands || GoArm64
+          SpilledFloats ? llvm::ArrayRef<uint64_t>(Spilled)
+          : GoRegisterArguments || GoFixedOperands || GoArm64
               ? goFloatArgumentRegisters(TheArch)
               : llvm::ArrayRef<uint64_t>();
-      detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat,
-                     GoFloats);
+      if (!SpilledFloats || !Spilled.empty())
+        detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat,
+                       GoFloats, /*Exact=*/SpilledFloats);
+      if (SpilledFloats)
+        for (const auto &[Register, Bytes] : GoArgumentSpillFloats) {
+          if (llvm::none_of(Func.Params, [&](const MedVar &Parameter) {
+                return Parameter.RegOff == Register;
+              })) {
+            MedVar Parameter;
+            Parameter.Kind = MedVar::Param;
+            Parameter.Id = -1;
+            Parameter.Size = TRI.FPABIRegWidth;
+            Parameter.RegOff = Register;
+            Parameter.TheArch = TargetArch;
+            Func.Params.insert(llvm::find_if(Func.Params,
+                                             [&](const MedVar &Other) {
+                                               return llvm::is_contained(
+                                                          Spilled,
+                                                          Other.RegOff) &&
+                                                      Other.RegOff > Register;
+                                             }),
+                               Parameter);
+          }
+          Func.FPParamScalarBytes[Register] = Bytes;
+        }
       // Where a summary gives the floating arguments each in the next
       // vector register (System V x86-64), it lists those a variadic call
       // reads too, which no entry copy shows.

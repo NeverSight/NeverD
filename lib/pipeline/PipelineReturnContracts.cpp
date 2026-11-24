@@ -955,7 +955,11 @@ private:
       if (F.Paths.empty())
         F.NeverReturns =
             S.Func->DoesNotReturn || hasProvenNoReturnExit(*S.Func, Img.Arch);
-      if (S.Func->StackArgumentsOnly)
+      // Asked only where it decides an answer: of a function without
+      // stack results in an image whose compiled code follows the stack ABI.
+      if (const auto &Go = Img.ExceptionMetadata.GoModule;
+          S.Func->StackArgumentsOnly && S.Func->GoStackResults.empty() && Go &&
+          Go->StackArguments)
         F.LeavesItsStack = goLeavesItsStack(*S.Func, Img.Arch, Img.abiFormat());
     }
     for (const MedOp *Call : F.UnreadCalls) {

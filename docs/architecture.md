@@ -6481,13 +6481,32 @@ returns a list of values, and as one `__int128` `runtime.makeAddrRange`, which
 returns its two arguments, was refused, its high word being no value the
 function computed (`returnsGoResults`).
 
+No register carries a value into Go code but its arguments. A field of a
+register record that a return leaves as the function was entered with, where
+no argument arrives, is therefore unknown, in a record with floating fields
+too (`NdOpReturnLowering`): `runtime.modf` returns X0 and X1, and RAX beside
+them only where its own call left it. Its return that two paths reach with
+RAX untouched hands back an unknown value there. Before, the lowering found
+no value and refused the function once its growth path was gone.
+
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
 function uses into the spill area above the return address, calls the runtime's
 `morestack` and reloads them (cmd/compile/internal/amd64/ssa.go, `RegArgs`).
 A byte or halfword spill may store the register's low bytes through a
-temporary (arm64 `strb w2, [sp, #24]`). Floating arguments are not modelled,
-so a path that spills a vector register names no argument list.
+temporary (arm64 `strb w2, [sp, #24]`). A floating argument is spilled as the
+scalar it is: `movsd [rsp+8], xmm0` stores XMM0's low eight bytes through a
+temporary, and arm64 stores D0. The path names those too, the first eight
+floating registers, which a summary's vector rows can name; a path that
+spills a later one names an argument list no call would complete and stays
+unmodelled. `detectCc` takes exactly the spilled floating registers as the
+function's floating parameters, each the `float` or `double` its spill wrote
+(`LowToMedConverter::GoArgumentSpillFloats`): one the body never reads is a
+parameter all the same, and a register the path does not spill carries none,
+whatever lanes of it a legacy SSE write keeps. Unmodelled, a function that
+takes a float kept its growth path as a loop round a call of `morestack`,
+and took its float as a 128-bit vector: `runtime.printfloat64(__int128)` is
+now `runtime_printfloat64(double arg0)` with a straight-line body.
 The spills become the function's entry reads in the call summaries
 (`LocalRegisterEffect::GoArgumentReads`), as a prototype fixes an import's, in
 place of what its calls appear to forward. `detectCc` takes them as its

@@ -252,10 +252,11 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     // (materializeGoCallResults): a field the walks below still miss is a
     // value this function returns, printed as unknown, not a sign the record
     // is wrong.
+    const bool GoCode = Image && Image->ExceptionMetadata.GoModule &&
+                        Image->ExceptionMetadata.GoModule->RegisterArguments &&
+                        isGoCode(*Image, Med.Entry);
     const bool GoResults =
-        Image && Image->ExceptionMetadata.GoModule &&
-        Image->ExceptionMetadata.GoModule->RegisterArguments &&
-        isGoCode(*Image, Med.Entry) &&
+        GoCode &&
         llvm::all_of(llvm::enumerate(Med.MultiReturn), [&](const auto &E) {
           return !E.value().IsFP &&
                  goResultPosition(TargetArch, E.value().RegOff) ==
@@ -406,7 +407,12 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
                  Returned.Value)
           Value = HighExpr::makeVar(*Returned.Value);
       }
-      if (!Value && GoResults)
+      // No register carries a value into Go code but its arguments: a field
+      // this return leaves as the function was entered with, where none
+      // arrives, is unknown, in a record with floating fields too
+      // (`runtime.modf` returns X0 and X1, and RAX beside them only where
+      // its own call left it).
+      if (!Value && GoCode)
         Value = HighExpr::makeUndef(Field.Size);
       if (!Value)
         throw std::runtime_error(

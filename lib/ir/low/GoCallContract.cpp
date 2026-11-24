@@ -884,17 +884,25 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
       if (At != Phase::Spilling || !Slot || Slot->Base != StackPointer ||
           Slot->Offset < 8)
         return std::nullopt;
-      // Floating arguments (X0-X14, F0-F15) are not modelled: a path that
-      // spills one names an argument list this one would not complete.
-      if (Op.Inputs[1].isReg() &&
-          isGoGeneralRegister(Img.Arch, Op.Inputs[1].Offset)) {
+      // A floating argument is spilled as the scalar it is, the register's
+      // low four or eight bytes: `movsd [rsp+8], xmm0` stores them through
+      // a temporary, `fmovd F0, 8(RSP)` as D0.  Only the first eight
+      // floating registers are modelled, those a summary's vector rows name
+      // (kX64VectorArgumentFamilies): a path that spills a later one names
+      // an argument list no call would complete.
+      const auto Argument = [&](uint64_t Register) {
+        return isGoGeneralRegister(Img.Arch, Register) ||
+               llvm::is_contained(goFloatArgumentRegisters(Img.Arch).take_front(
+                                      kX64VectorArgumentFamilies),
+                                  Register);
+      };
+      if (Op.Inputs[1].isReg() && Argument(Op.Inputs[1].Offset)) {
         Spills.push_back(
             {Op.Inputs[1].Offset, Op.Inputs[1].Size, Slot->Offset});
       } else if (const auto Low = Op.Inputs[1].isTemp()
                                       ? Narrowed.find(Op.Inputs[1].Offset)
                                       : Narrowed.end();
-                 Low != Narrowed.end() &&
-                 isGoGeneralRegister(Img.Arch, Low->second.first)) {
+                 Low != Narrowed.end() && Argument(Low->second.first)) {
         Spills.push_back({Low->second.first, Low->second.second, Slot->Offset});
       } else {
         return std::nullopt;

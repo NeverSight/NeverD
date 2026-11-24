@@ -29,20 +29,21 @@ void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat,
-    llvm::ArrayRef<uint64_t> OwnRegisters);
+    llvm::ArrayRef<uint64_t> OwnRegisters, bool Exact);
 
 void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat) {
-  detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat, {});
+  detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat, {},
+                 /*Exact=*/false);
 }
 
 void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat,
-    llvm::ArrayRef<uint64_t> OwnRegisters) {
+    llvm::ArrayRef<uint64_t> OwnRegisters, bool Exact) {
   // FP/vector arguments arrive in a dedicated vector register class under
   // clang's -O2 conventions: x86-64 XMM0-7, AArch64 V0-7, ARM VFP D0-7 — all
   // observed as live-in self-copies.  A function that takes its arguments in
@@ -696,25 +697,9 @@ void detectFPParams(
     AlreadyParam.insert(P.RegOff);
 
   std::vector<MedVar> FPParams;
-  for (const auto &Op : Entry.Ops) {
-    if (Op.Opcode != NdOp::COPY)
-      break;
-    if (!isFPArgSelfCopy(Op))
-      continue;
-
-    uint64_t ROff = Op.Output.RegOff;
-    // A positional convention (Win64) finds its floating arguments among
-    // the argument slots; each still carries a scalar or a vector.
-    if (AlreadyParam.count(ROff)) {
-      if (!Func.FPParamScalarBytes.count(ROff))
-        if (const uint16_t Scalar = scalarLaneBytes(Op.Output))
-          Func.FPParamScalarBytes[ROff] = Scalar;
-      continue;
-    }
-    // Skip a scratch vector register whose incoming value is never read.
-    if (!liveInValueUsed(Op.Output))
-      continue;
-
+  // The parameter \p Op's register carries, as the variable its copy reads.
+  auto Add = [&](const MedOp &Op) {
+    const uint64_t ROff = Op.Output.RegOff;
     // Prefer the var recorded at the self-copy's own width: an ARM `float` arg
     // in s0 and a `double` arg in d0 share register offset 0x100, so the access
     // width (4 vs 8) selects the right one.
@@ -746,7 +731,37 @@ void detectFPParams(
       if (const uint16_t Scalar = scalarLaneBytes(Op.Output))
         Func.FPParamScalarBytes[ROff] = Scalar;
     }
+  };
+  // Where each of \p OwnRegisters is known to carry an argument (Exact), one
+  // whose incoming value no view shows used is a parameter all the same: the
+  // first copy of it stands for it, once the views that are used had theirs.
+  std::vector<const MedOp *> Unused;
+  for (const auto &Op : Entry.Ops) {
+    if (Op.Opcode != NdOp::COPY)
+      break;
+    if (!isFPArgSelfCopy(Op))
+      continue;
+
+    uint64_t ROff = Op.Output.RegOff;
+    // A positional convention (Win64) finds its floating arguments among
+    // the argument slots; each still carries a scalar or a vector.
+    if (AlreadyParam.count(ROff)) {
+      if (!Func.FPParamScalarBytes.count(ROff))
+        if (const uint16_t Scalar = scalarLaneBytes(Op.Output))
+          Func.FPParamScalarBytes[ROff] = Scalar;
+      continue;
+    }
+    // Skip a scratch vector register whose incoming value is never read.
+    if (!liveInValueUsed(Op.Output)) {
+      if (Exact)
+        Unused.push_back(&Op);
+      continue;
+    }
+    Add(Op);
   }
+  for (const MedOp *Op : Unused)
+    if (!AlreadyParam.count(Op->Output.RegOff))
+      Add(*Op);
 
   // FP arguments occupy the vector/FP registers in increasing register order
   // (XMM0,XMM1,.. / D0,D1,.. / S0,S1,..), so order the recovered FP parameters
