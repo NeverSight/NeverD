@@ -1918,11 +1918,12 @@ record with the interrupt edge and CPU recognition on a common clock.
 IDT gives separate R3051/2 pipeline latencies to the general exception
 vector while the pipeline runs. A direct, externally synchronized interrupt
 takes one cycle and an internally synchronized input takes two. A stalled
-pipeline defers recognition. The application note gives these values under
-stated conditions. A physical pin-to-recognition measurement still needs
+pipeline defers recognition. Table 1 gives 4–25 cycles from assertion to
+service entry for the example priority handler with code and stack in cache.
+A physical pin-to-recognition measurement still needs
 the CPU input transition and an identifiable recognition event on the same
 timebase. NeverD accepts the observed interrupt state at an instruction boundary.
-[IDT application note AN-131, Pipeline Latency, pp. 103–104](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/861.pdf#page=1).
+[IDT application note AN-131, table 1 and Pipeline Latency, pp. 103–104](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/861.pdf#page=1).
 
 The VR4300 test ROM also compares back-to-back writes that assert and clear
 a software interrupt with a sequence that inserts one NOP. The latter checks
