@@ -1680,6 +1680,16 @@ write. Neither timestamps the first fetch or load that sees the new mapping.
 [Bala et al., table 1](https://www.usenix.org/conference/osdi-94/software-prefetching-and-caching-translation-lookaside-buffers),
 [CWI measurements, SGI Indy “boktor”](https://homepages.cwi.nl/~manegold/Calibrator/DB/boktor.pdf).
 
+The Monster monitor on an R2000 DECstation 3100 timed software markers at
+the entry and exit of TLB miss handlers. On the SGI POWER 4D/340, a bus
+monitor recorded cache misses on four 33 MHz R3000s with 60 ns timestamps.
+The SGI kernel emitted the TLB index, virtual and physical page numbers, and
+process ID through additional uncached reads. Neither record pairs a TLB
+array write with the first translation using that entry. A first use that
+hits in cache can be absent from the SGI bus trace.
+[Nagle et al., section 3.1](https://tnm.engin.umich.edu/wp-content/uploads/sites/353/2021/03/1992.12.SoftwareTLB_Management.pdf#page=3),
+[Torrellas et al., section 2.2](https://courses.grainger.illinois.edu/CS533/sp2025/reading_list/10a.pdf#page=2).
+
 For R4000PC/SC revisions 2.2 and 3.0, item 27 of the silicon errata puts
 `TLBWR` in a taken branch-likely delay slot, followed by `NOP` and `ERET`.
 The R4000 guest test uses that sequence in both byte orders. A probe miss
@@ -2174,8 +2184,9 @@ adapters still run at their profile boundaries.
 With assembly text disabled and detail enabled, classic MIPS I–V and Release
 2/5 can map common scalar encodings without building printer operands. The
 fixed-address decoder uses Capstone's regular instruction and implicit-effect
-tables. Encodings with feature-dependent aliases, including word loads and
-stores, go through the generated decoder. The public iterator is the comparison
+tables. For word loads and stores the DSP predicate selects the same mapping
+as the generated decoder, including its instruction groups. Unaligned loads
+and stores use the generated decoder. The public iterator is the comparison
 for IDs, groups, register effects, physical bytes and alias state.
 
 The baseline for decoder measurements is
