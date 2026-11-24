@@ -94,6 +94,18 @@ inline symbolic::SymRef nullableObjectFramePredicate(
   return Ctx.mkOr(Ctx.mkEq(ObjectRoot, Ctx.mkConst(64, 0)), Nonzero);
 }
 
+/// A caller-declared nonnull result object misses this absolute range.
+/// The null outcome remains possible and gains no object extent.
+inline symbolic::SymRef nullableObjectExclusionPredicate(
+    symbolic::SymContext &Ctx, symbolic::SymRef ObjectRoot, int64_t ObjectBytes,
+    uint64_t ExcludedBegin, uint64_t ExcludedEnd) {
+  assert(ObjectRoot && Ctx.width(ObjectRoot) == 64 && ObjectBytes > 0 &&
+         ExcludedBegin < ExcludedEnd);
+  return Ctx.mkOr(Ctx.mkEq(ObjectRoot, Ctx.mkConst(64, 0)),
+                  excludedFrameRangePredicate(Ctx, ObjectRoot, 0, ObjectBytes,
+                                              ExcludedBegin, ExcludedEnd));
+}
+
 } // namespace neverd::analysis::detail
 
 #endif

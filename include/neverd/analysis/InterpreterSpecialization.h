@@ -95,6 +95,10 @@ enum class SpecializationX64CallProfile : uint8_t {
   /// invocation. This is a caller-owned callee contract, not a fact inferred
   /// from an import name or a concrete run.
   ConditionalNormalReturnResultObjectV3,
+  /// V3 plus caller-declared absolute ranges missed by every nonnull result
+  /// object. This is an explicit callee-effect premise, not inferred from an
+  /// allocator name, image layout, or observed address.
+  ConditionalNormalReturnResultObjectExcludedV4,
 };
 
 struct SpecializationCallPreservedFrameRange {
@@ -102,6 +106,13 @@ struct SpecializationCallPreservedFrameRange {
   int64_t End = 0;
   bool
   operator==(const SpecializationCallPreservedFrameRange &) const = default;
+};
+
+struct SpecializationCallObjectExclusion {
+  /// Absolute, nonempty, nonwrapping half-open range [Begin, End).
+  uint64_t Begin = 0;
+  uint64_t End = 0;
+  bool operator==(const SpecializationCallObjectExclusion &) const = default;
 };
 
 /// Opt-in relation at an exact native CALL. Every dynamic invocation has fresh
@@ -113,9 +124,14 @@ struct SpecializationX64ReturningCall {
   va_t Address = InvalidVA;
   SpecializationX64CallProfile Profile = SpecializationX64CallProfile::None;
   uint64_t OutgoingBytes = 0;
-  /// Versions 2 and 3. Sorted, disjoint, nonempty entry-frame-relative spans.
+  /// Versions 2 through 4. Sorted, disjoint, nonempty entry-frame-relative
+  /// spans.
   /// Only bytes materialized immediately before the call are retained.
   std::vector<SpecializationCallPreservedFrameRange> PreservedFrameRanges;
+  /// Version 4 only. Sorted, disjoint absolute ranges missed by the complete
+  /// nonnull result object at every dynamic invocation. No result address or
+  /// memory contents are inferred. Empty for earlier versions.
+  std::vector<SpecializationCallObjectExclusion> ResultObjectExclusions;
   bool operator==(const SpecializationX64ReturningCall &) const = default;
 };
 

@@ -68,6 +68,7 @@ inline constexpr int
 
 // lib/analysis/arch/x86_64/X64CallContinuation.cpp
 inline constexpr size_t kX64ReturningCallPreservedFrameRangesLimit = 64;
+inline constexpr size_t kX64ReturningCallObjectExclusionsLimit = 64;
 
 // lib/analysis/bytecode/BytecodeDecoder.cpp
 inline constexpr int kMaxBytecodeLookupValues = 65536;

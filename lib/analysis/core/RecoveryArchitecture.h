@@ -154,6 +154,7 @@ struct RecoveryCallTransition {
   struct ResultObject {
     NdVar Result;
     NdVar Size;
+    std::vector<SpecializationCallObjectExclusion> Exclusions;
   };
   std::optional<ResultObject> ReturnedObject;
 };

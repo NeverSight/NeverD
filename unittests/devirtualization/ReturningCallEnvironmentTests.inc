@@ -432,6 +432,114 @@ TEST_F(PEFixedImageTest, ReturningCallResultPointerSurvivesWritableGlobal) {
   EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
 }
 
+TEST_F(PEFixedImageTest,
+       ReturningCallObjectExclusionSavesCurrentGlobalProofQueries) {
+  // The caller first replaces an image word with the returned pointer, then
+  // clears the object's first word before reloading that image word. The
+  // exclusion avoids repeated per-cell alias queries for the current word.
+  std::vector<uint8_t> Code{
+      0x48, 0x89, 0x64, 0x24, 0x90,       // mov [rsp-112],rsp
+      0xba, 0x40, 0,    0,    0,          // mov edx,64
+      0x48, 0x83, 0xec, 0x40,             // sub rsp,64
+      0xff, 0xd7,                         // call rdi
+      0x48, 0x83, 0xc4, 0x40,             // add rsp,64
+      0x48, 0x85, 0xc0,                   // test rax,rax
+      0x74, 0x1f,                         // je restore
+      0x48, 0x89, 0x05, 0,    0,    0, 0, // mov [global],rax
+      0x48, 0xc7, 0x00, 0,    0,    0, 0, // mov qword [rax],0
+      0x31, 0xc0,                         // xor eax,eax
+      0xeb, 0x00,                         // jmp reload
+      0x48, 0x8b, 0x1d, 0,    0,    0, 0, // mov rbx,[global]
+      0x48, 0x89, 0x4b, 0x38,             // mov [rbx+56],rcx
+      0xeb, 0x00,                         // jmp restore
+      0x48, 0x8b, 0x5c, 0x24, 0x90,       // mov rbx,[rsp-112]
+      0x48, 0x39, 0xe3,                   // cmp rbx,rsp
+      0x75, 0x01,                         // jne trap
+      0xc3,                               // ret
+      0xcc};                              // trap
+  constexpr va_t Global = Base + 0x30a0;
+  put32(Code, 28, Global - (Base + 0x1000 + 32));
+  put32(Code, 46, Global - (Base + 0x1000 + 50));
+  auto Image = machineExitFixture(Code);
+  put64(Image, IData + 0xa0, 0x800000);
+  auto Loaded = load(Image);
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x100e, Base + 0x1042);
+  O.X64MachineExits = {{1, Base + 0x1042, MachineExitKind::Return},
+                       {1, Base + 0x1043, MachineExitKind::Trap}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryFrameBounds->ExcludedAddressRanges.push_back({Global, Global + 8});
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  O.MaxChainedTransfers = 0;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 4;
+  Call.Profile = SpecializationX64CallProfile::
+      ConditionalNormalReturnResultObjectExcludedV4;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  Call.ResultObjectExclusions = {{Global, Global + 8}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  unsigned Stores = 0;
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops)
+      Stores += Op.Opcode == NdOp::STORE;
+  EXPECT_GE(Stores, 4U);
+  auto WithoutExclusion = O;
+  auto &V3 = WithoutExclusion.X64ReturningCalls.front();
+  V3.Version = 3;
+  V3.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  V3.ResultObjectExclusions.clear();
+  const auto Unproved =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, WithoutExclusion);
+  ASSERT_TRUE(Unproved.complete()) << Unproved.Diagnostic;
+  EXPECT_LT(R.SolverQueries, Unproved.SolverQueries);
+  auto Tight = O;
+  Tight.MaxSolverQueries = R.SolverQueries;
+  const auto TightResult =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, Tight);
+  ASSERT_TRUE(TightResult.complete()) << TightResult.Diagnostic;
+  auto TightV3 = WithoutExclusion;
+  TightV3.MaxSolverQueries = R.SolverQueries;
+  const auto Exhausted =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, TightV3);
+  EXPECT_FALSE(Exhausted.complete());
+  EXPECT_TRUE(Exhausted.Residual.Blocks.empty());
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  auto Changed = O;
+  Changed.X64ReturningCalls.front().ResultObjectExclusions.front().End += 8;
+  auto Mismatch = validateSpecializationRawEnvironment(R, Changed);
+  EXPECT_TRUE(bool(Mismatch));
+  llvm::consumeError(std::move(Mismatch));
+
+  auto Legacy = O;
+  Legacy.X64ReturningCalls.front().Version = 3;
+  Legacy.X64ReturningCalls.front().Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  const auto LegacyRefused =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, Legacy);
+  EXPECT_FALSE(LegacyRefused.complete());
+  EXPECT_TRUE(LegacyRefused.Residual.Blocks.empty());
+
+  for (const std::vector<SpecializationCallObjectExclusion> &Ranges :
+       std::vector<std::vector<SpecializationCallObjectExclusion>>{
+           {},
+           {{Global + 8, Global}},
+           {{Global, Global + 8}, {Global + 4, Global + 16}}}) {
+    auto Invalid = O;
+    Invalid.X64ReturningCalls.front().ResultObjectExclusions = Ranges;
+    const auto Refused =
+        specializeBinaryInterpreter(*Loaded, Base + 0x1000, Invalid);
+    EXPECT_FALSE(Refused.complete());
+    EXPECT_TRUE(Refused.Residual.Blocks.empty());
+  }
+}
+
 TEST_F(PEFixedImageTest, ReturningCallResultObjectBoundsSymbolicOffset) {
   // The index is symbolic but masked into the declared 64-byte extent. A null
   // result writes in the low address range; an explicit frame exclusion is
