@@ -784,10 +784,8 @@ TEST(HighCSourceCalls, CallbackBorrowsDeclareNestedRecordTags) {
     Function.Name = "register_callback";
     Function.ReturnType = NdType::makeInt(4, false);
     // The records occur only inside the callback, not as ordinary parameters.
-    const auto TextSlot = NdType::makePtr(NdType::makePtr(NdType::makeInt(2, false)));
-    TextSlot->Size = TextSlot->Pointee->Size = Word->Size;
     Function.Params = {
-        {"Callback", Callback}, {"Input", TextSlot}, {"Output", Word}};
+        {"Callback", Callback}, {"Input", Word}, {"Output", Word}};
     Function.PrototypeFromHeader = true;
     const std::string Convention = Narrow ? "__stdcall " : "";
     const std::string CallbackType =
@@ -797,14 +795,13 @@ TEST(HighCSourceCalls, CallbackBorrowsDeclareNestedRecordTags) {
         "uint32_t register_callback(void (" + Convention +
         "*Callback)(const struct CallbackInput *, volatile union "
         "CallbackOutput *), "
-        "const uint16_t **Input, uintptr_t Output)";
-    Function.PortableParameterTypes = {CallbackType, "const uint16_t **",
-                                       "uintptr_t"};
+        "uintptr_t Input, uintptr_t Output)";
+    Function.PortableParameterTypes = {CallbackType, "uintptr_t", "uintptr_t"};
     auto Call = HighExpr::makeCall(
         "register_callback", Function.Addr,
-        {parameter(0, Word), parameter(1, TextSlot), parameter(2, Word)});
+        {parameter(0, Word), parameter(1, Word), parameter(2, Word)});
     Call->Type = Function.ReturnType;
-    auto Caller = returning("callback_entry", Call, {Word, TextSlot, Word});
+    auto Caller = returning("callback_entry", Call, {Word, Word, Word});
     CEmitterOptions Options;
     Options.TheArch = Architecture;
     Options.Format = BinaryFormat::COFF;
@@ -867,6 +864,43 @@ int main(void) {
                              "-Werror=incompatible-function-pointer-types",
                              "-fsanitize=undefined", "-fsanitize-trap=all"});
   }
+}
+
+TEST(HighCSourceCalls, HeaderOutputSlotUsesItsNestedPointeeQualifiers) {
+  class CalleeDebug final : public NullDebugContext {
+  public:
+    FunctionSym Function;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      return Address == Function.Addr ? std::optional(Function) : std::nullopt;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  const auto Slot = NdType::makePtr(NdType::makePtr(NdType::makeInt(2, false)));
+  auto &Function = Debug.Function;
+  Function.Addr = 0x2000;
+  Function.Name = "read_slot";
+  Function.ReturnType = NdType::makeInt(4, false);
+  Function.Params = {{"slot", Slot}};
+  Function.PrototypeFromHeader = true;
+  Function.PortablePrototypeDeclaration =
+      "uint32_t read_slot(const uint16_t **slot)";
+  Function.PortableParameterTypes = {"const uint16_t **"};
+  auto Call =
+      HighExpr::makeCall(Function.Name, Function.Addr, {parameter(0, Slot)});
+  Call->Type = Function.ReturnType;
+  const auto Caller = returning("forward_slot", Call, {Slot});
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Caller}, OS, Options, &Debug));
+  EXPECT_NE(Source.find("read_slot((const uint16_t **)arg0)"),
+            std::string::npos)
+      << Source;
+  source_call_execution_test::checkSyntax(
+      Source, {"--target=x86_64-w64-windows-gnu",
+               "-Werror=incompatible-pointer-types"});
 }
 
 TEST(HighCSourceCalls, PortableDeclarationsOwnObjectPointerConversions) {
