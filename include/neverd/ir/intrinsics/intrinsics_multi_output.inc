@@ -7,6 +7,10 @@
 // The counts are aligned in a column, which clang-format would undo.
 // clang-format off
 
+// PowerPC record forms produce a quotient and the same instruction's CR0.
+#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, ...) MULTI_OUT(Intrinsic::RecordId, 1);
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
+
 // x86/x64
 MULTI_OUT(Intrinsic::Cpuid,   4);  // eax, ebx, ecx, edx
 MULTI_OUT(Intrinsic::Rdtsc,   2);  // eax(lo), edx(hi)

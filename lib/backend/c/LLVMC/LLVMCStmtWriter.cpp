@@ -56,6 +56,7 @@
 #include "neverd/backend/MIPS/MIPSMSASource.h"
 #include "neverd/backend/MIPS/MIPSScalarFPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
+#include "neverd/backend/PowerPC/PowerPCDivisionSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/NativeVectorCall.h"
@@ -5025,6 +5026,39 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   if (!IA)
     return false;
+  if (auto *MD = Call.getMetadata(ppc::DivisionMarker)) {
+    const auto *Id =
+        MD->getNumOperands() == 1
+            ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(0))
+            : nullptr;
+    const auto D =
+        Id && Id->getBitWidth() == 16
+            ? ppc::division(static_cast<Intrinsic>(Id->getZExtValue()))
+            : std::nullopt;
+    const unsigned Bits = getTargetRegInfo(Opts.TheArch).PointerSize * 8;
+    if (!D || !D->admits(Opts.TheArch) || Call.arg_size() != 2 ||
+        !Call.getArgOperand(0)->getType()->isIntegerTy(Bits) ||
+        Call.getArgOperand(1)->getType() != Call.getArgOperand(0)->getType() ||
+        IA->hasSideEffects() ||
+        IA->getAsmString() != ppc::divisionAssembly(*D, '$') ||
+        IA->getConstraintString() != ppc::divisionConstraints(*D))
+      throw std::invalid_argument("invalid PowerPC divide assembly");
+    const auto *Pair = llvm::dyn_cast<llvm::StructType>(Call.getType());
+    if (D->Record ? !Pair || Pair->getNumElements() != 2 ||
+                        !Pair->getElementType(0)->isIntegerTy(Bits) ||
+                        !Pair->getElementType(1)->isIntegerTy(Bits)
+                  : !Call.getType()->isIntegerTy(Bits))
+      throw std::invalid_argument("invalid PowerPC divide result");
+    if (!Call.use_empty()) {
+      emitIndent(Indent);
+      OS << Name << (D->Record ? ".field_0 = " : " = ")
+         << ppc::divisionSource(*D, valueStr(Call.getArgOperand(0)),
+                                valueStr(Call.getArgOperand(1)),
+                                D->Record ? Name + ".field_1" : "")
+         << ";\n";
+    }
+    return true;
+  }
   if (auto *MD = Call.getMetadata(integer_memory::SourceMarker)) {
     auto *Id =
         MD->getNumOperands() == 2

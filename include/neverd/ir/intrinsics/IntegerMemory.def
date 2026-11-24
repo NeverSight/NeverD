@@ -1,0 +1,57 @@
+//===- IntegerMemory.def - Scalar atomic and barrier encodings ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// RISC-V rows map funct5 to an operation and mnemonic stem. PowerPC rows
+/// bind an instruction word or XO field to its stable LowIR selector.
+/// Intrinsic rows bind the side-effecting operation to its serialized ID.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_INTEGER_MEMORY_INTRINSIC
+#define NEVERD_INTEGER_MEMORY_INTRINSIC(Id, Value, Name)
+#endif
+#ifndef NEVERD_RISCV_ATOMIC
+#define NEVERD_RISCV_ATOMIC(Funct5, Operation, Mnemonic)
+#endif
+#ifndef NEVERD_PPC_BARRIER
+#define NEVERD_PPC_BARRIER(Word, Key, Mnemonic)
+#endif
+#ifndef NEVERD_PPC_RESERVATION
+#define NEVERD_PPC_RESERVATION(XO, Key, Operation, Bytes, Mnemonic)
+#endif
+
+NEVERD_INTEGER_MEMORY_INTRINSIC(RISCVAtomic, 18000, "neverd_riscv_atomic")
+NEVERD_INTEGER_MEMORY_INTRINSIC(RISCVFence, 18001, "neverd_riscv_fence")
+NEVERD_INTEGER_MEMORY_INTRINSIC(PPCReservation, 18002, "neverd_ppc_reservation")
+NEVERD_INTEGER_MEMORY_INTRINSIC(PPCBarrier, 18003, "neverd_ppc_barrier")
+
+NEVERD_RISCV_ATOMIC(0, Add, "amoadd")
+NEVERD_RISCV_ATOMIC(1, Swap, "amoswap")
+NEVERD_RISCV_ATOMIC(2, Reserve, "lr")
+NEVERD_RISCV_ATOMIC(3, Conditional, "sc")
+NEVERD_RISCV_ATOMIC(4, Xor, "amoxor")
+NEVERD_RISCV_ATOMIC(8, Or, "amoor")
+NEVERD_RISCV_ATOMIC(12, And, "amoand")
+NEVERD_RISCV_ATOMIC(16, SMin, "amomin")
+NEVERD_RISCV_ATOMIC(20, SMax, "amomax")
+NEVERD_RISCV_ATOMIC(24, UMin, "amominu")
+NEVERD_RISCV_ATOMIC(28, UMax, "amomaxu")
+
+NEVERD_PPC_BARRIER(0x7c0004ac, 0, "sync")
+NEVERD_PPC_BARRIER(0x7c2004ac, 1, "lwsync")
+NEVERD_PPC_BARRIER(0x4c00012c, 2, "isync")
+NEVERD_PPC_BARRIER(0x7c0006ac, 3, "eieio")
+
+NEVERD_PPC_RESERVATION(20, 0, Reserve, 4, "lwarx")
+NEVERD_PPC_RESERVATION(84, 1, Reserve, 8, "ldarx")
+NEVERD_PPC_RESERVATION(150, 2, Conditional, 4, "stwcx.")
+NEVERD_PPC_RESERVATION(214, 3, Conditional, 8, "stdcx.")
+
+#undef NEVERD_INTEGER_MEMORY_INTRINSIC
+#undef NEVERD_RISCV_ATOMIC
+#undef NEVERD_PPC_BARRIER
+#undef NEVERD_PPC_RESERVATION

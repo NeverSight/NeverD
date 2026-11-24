@@ -379,9 +379,9 @@ LLVM_ATTRIBUTE_NOINLINE bool historicalMIPSWordAvailable(const uint8_t *Bytes,
 LLVM_ATTRIBUTE_ALWAYS_INLINE bool
 Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   if (isRISCV(TargetArch)) {
-    const unsigned Alignment = RISCV.Compressed ? 2 : 4;
+    const unsigned Alignment = RISCV.hasCompressed() ? 2 : 4;
     if ((Addr & (Alignment - 1)) || Len < 2 ||
-        (!RISCV.Compressed && (Bytes[0] & 3) != 3) ||
+        (!RISCV.hasCompressed() && (Bytes[0] & 3) != 3) ||
         (TargetArch == Arch::RISCV32 && Addr > UINT32_MAX))
       return false;
   } else if (isPowerPC(TargetArch) &&

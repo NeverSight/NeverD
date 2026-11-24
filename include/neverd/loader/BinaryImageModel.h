@@ -2077,7 +2077,7 @@ struct BinaryImage {
              Normalized % (isMIPSCompressedMode(*LocalMode) ? 2 : 4) == 0;
     }
     if (isRISCV(Arch))
-      return Normalized % (RISCV.Compressed ? 2 : 4) == 0;
+      return Normalized % (RISCV.hasCompressed() ? 2 : 4) == 0;
     if (Arch == neverd::Arch::AArch64 || isPowerPC(Arch))
       return Normalized % 4 == 0;
     if (Arch == neverd::Arch::ARM) {

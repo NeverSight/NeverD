@@ -20,17 +20,22 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/lift/IntegerRegisters.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
+#include <tuple>
 #include <vector>
 
 using namespace neverd;
@@ -128,6 +133,14 @@ struct LinkedImage {
     return {llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
                             Bytes.size()),
             "integer-add.elf"};
+  }
+  void setWords(llvm::ArrayRef<uint32_t> Words) {
+    const unsigned Header = Wide ? 64 : 52, Pointer = Wide ? 8 : 4;
+    Bytes.resize(0x100 + Words.size() * 4);
+    put(Header + (Wide ? 32 : 16), Words.size() * 4, Pointer);
+    put(Header + (Wide ? 40 : 20), Words.size() * 4, Pointer);
+    for (size_t I = 0; I != Words.size(); ++I)
+      put(0x100 + I * 4, Words[I], 4);
   }
 };
 
@@ -515,6 +528,142 @@ TEST(RISCVProfile, ReusedDecoderTracksExtensionEvidenceAndHalfwordBoundaries) {
       EXPECT_NO_THROW(D.liftToLow(I, Ops));
     else
       EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+  }
+}
+
+TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
+  struct AttributeCase {
+    const char *Attribute;
+    const char *Features;
+    bool Multiply;
+    bool Divide;
+    bool Amo;
+    bool Reservation;
+    bool Compressed;
+  };
+  const AttributeCase Cases[] = {
+      {"_zmmul1p0", "+i,+zmmul", true, false, false, false, false},
+      {"_zaamo1p0", "+i,+zaamo", false, false, true, false, false},
+      {"_zalrsc1p0", "+i,+zalrsc", false, false, false, true, false},
+      {"_zca1p0", "+i,+zca", false, false, false, false, true},
+      {"_m2p0_a2p1_c2p0_zaamo1p0_zalrsc1p0_zca1p0_zmmul1p0", "+i,+m,+a,+c",
+       true, true, true, true, true}};
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    const std::string Base = A == Arch::RISCV64 ? "rv64i2p1" : "rv32i2p1";
+    Decoder D;
+    for (const auto &C : Cases) {
+      SCOPED_TRACE(Base + C.Attribute);
+      LinkedImage File(A);
+      if (C.Compressed)
+        File.put(File.Wide ? 48 : 36, llvm::ELF::EF_RISCV_RVC, 4);
+      File.riscvAttributes(Base + C.Attribute);
+      auto Img = ELFLoader().loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+      ASSERT_TRUE(D.init(*Img));
+      const auto Check = [&](uint32_t Word, bool Expected) {
+        uint8_t Code[4];
+        llvm::support::endian::write32le(Code, Word);
+        DecodedInsn I;
+        ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), File.Entry, I), 4);
+        std::vector<LowOp> Ops;
+        if (Expected)
+          EXPECT_NO_THROW(D.liftToLow(I, Ops));
+        else
+          EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+      };
+      Check(0x02b50533, C.Multiply);    // mul a0,a0,a1
+      Check(0x02b54533, C.Divide);      // div a0,a0,a1
+      Check(0x00b5252f, C.Amo);         // amoadd.w a0,a1,(a0)
+      Check(0x1005252f, C.Reservation); // lr.w a0,(a0)
+      Check(0x18b5252f, C.Reservation); // sc.w a0,a1,(a0)
+      EXPECT_EQ(Img->isFunctionEntryCandidateAt(File.Entry + 2), C.Compressed);
+
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {File.Entry};
+      Options.LiftMode = true;
+      Options.EmitDumpOutput = false;
+      llvm::LLVMContext Ctx;
+      auto R = Pipeline().run(*Img, Ctx, Options);
+      ASSERT_TRUE(R.Success) << R.Error;
+      ASSERT_TRUE(R.LlvmModule);
+      ASSERT_EQ(R.MedFuncs.size(), 1u);
+      auto *Body = R.LlvmModule->getFunction(R.MedFuncs[0].Name);
+      ASSERT_TRUE(Body);
+      EXPECT_EQ(Body->getFnAttribute("target-features").getValueAsString(),
+                C.Features);
+    }
+    LinkedImage Unsupported(A);
+    Unsupported.riscvAttributes(Base + "_zmmul1p1");
+    auto Bad = ELFLoader().loadBuffer(Unsupported.buffer());
+    ASSERT_FALSE(bool(Bad));
+    llvm::consumeError(Bad.takeError());
+  }
+}
+
+TEST(RISCVControl, ZeroBaseJalrHasAnAbsoluteAlignedTarget) {
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = A == Arch::RISCV32 ? Bitness::Bits32 : Bitness::Bits64;
+    for (bool Compressed : {false, true}) {
+      Img.RISCV.Compressed = Compressed;
+      Decoder D;
+      ASSERT_TRUE(D.init(Img));
+      for (int Disp : {1, 3, 0x7fd, -3}) {
+        for (unsigned Rd : {0u, 1u, 7u}) {
+          uint8_t Code[4];
+          llvm::support::endian::write32le(Code, (uint32_t(Disp) << 20) |
+                                                     Rd << 7 | 0x67);
+          DecodedInsn I;
+          ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, I), 4);
+          va_t Target = va_t(Disp) & ~va_t(1);
+          if (A == Arch::RISCV32)
+            Target = uint32_t(Target);
+          const bool Aligned = Compressed || !(Target & 3);
+          EXPECT_EQ(D.directCallTarget(I),
+                    Rd == 1 && Aligned ? Target : InvalidVA);
+          std::vector<LowOp> Ops;
+          if (!Aligned) {
+            EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+            continue;
+          }
+          ASSERT_NO_THROW(D.liftToLow(I, Ops));
+          ASSERT_FALSE(Ops.empty());
+          EXPECT_EQ(Ops.back().Opcode, Rd == 1 ? NdOp::CALL : NdOp::BRANCH);
+          EXPECT_EQ(Ops.back().Inputs[0].Provenance,
+                    ConstantAddressProvenance::CodeAddress);
+          EXPECT_EQ(Ops.back().Inputs[0].Offset, Target);
+        }
+      }
+    }
+  }
+}
+
+TEST(RISCVControl, UnrelaxedCalleeRequiresAReachableAuipcDefinition) {
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    // An entry jump can bypass AUIPC and enter JALR with a caller-supplied
+    // base. Likewise, a different base register does not name this callee.
+    for (const auto &[First, Call, Expected] :
+         {std::tuple{0x00000013u, 0x00c280e7u, true},     // nop; jalr ra,12(t0)
+          std::tuple{0x0080006fu, 0x00c280e7u, false},    // j +8
+          std::tuple{0x00000013u, 0x00c300e7u, false},    // jalr ra,12(t1)
+          std::tuple{0x00050463u, 0x00c280e7u, false}}) { // beqz a0,+8
+      SCOPED_TRACE(::testing::Message() << std::hex << First << " " << Call);
+      LinkedImage File(A);
+      File.setWords({First, 0x00000297, Call,
+                     0x00008067,               // auipc t0,0; ...; ret
+                     0x00b50533, 0x00008067}); // add a0,a0,a1; ret
+      auto Img = ELFLoader().loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+      Decoder D;
+      ASSERT_TRUE(D.init(*Img));
+      auto Entries = FuncDetector().detect(*Img, D);
+      EXPECT_EQ(llvm::any_of(Entries,
+                             [&](const auto &Entry) {
+                               return Entry.first == File.Entry + 16;
+                             }),
+                Expected);
+    }
   }
 }
 INSTANTIATE_TEST_SUITE_P(Profiles, ELFIntegerTarget,

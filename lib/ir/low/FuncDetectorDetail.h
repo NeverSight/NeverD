@@ -17,6 +17,8 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <array>
 #include <atomic>
 #include <functional>
@@ -158,7 +160,14 @@ bool aarch64MarkedEntryAfterFunctionEnd(const BinaryImage &Img, va_t Addr);
 
 void scanELFIntegerCalls(const BinaryImage &Img, Decoder &Dec,
                          const Segment *Seg, va_t Start, va_t End,
-                         std::set<va_t> &Out, const Cancellation *Control);
+                         std::set<va_t> &Out,
+                         std::vector<std::pair<va_t, va_t>> &CodeAddresses,
+                         const Cancellation *Control);
+
+void recoverRISCVCallEntries(const BinaryImage &Img, Decoder &Dec,
+                             llvm::ArrayRef<std::pair<va_t, va_t>> Pairs,
+                             std::set<va_t> &Entries, std::set<va_t> &Calls,
+                             const Cancellation *Control);
 
 inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
                              const Segment *Seg, va_t Start, va_t End,
@@ -175,7 +184,7 @@ inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
     return;
 #define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling) case Arch::Name:
 #include "neverd/ELFIntegerTargets.def"
-    scanELFIntegerCalls(Img, Dec, Seg, Start, End, Out, Control);
+    scanELFIntegerCalls(Img, Dec, Seg, Start, End, Out, CodeAddresses, Control);
     return;
   case Arch::MIPS32:
   case Arch::MIPS32EL:

@@ -1,0 +1,21 @@
+//===- PowerPCDivision.def - PowerPC scalar divide instructions -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// NEVERD_PPC_DIVIDE(Id, Value, RecordId, RecordValue, XO, Bytes, Signed,
+/// Mnemonic) describes the nine-bit XO field independently of the
+/// overflow-enable and record bits.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_PPC_DIVIDE(PPCDivw, 18004, PPCDivwRecord, 18008, 491, 4, true, "divw")
+NEVERD_PPC_DIVIDE(PPCDivwu, 18005, PPCDivwuRecord, 18009, 459, 4, false,
+                  "divwu")
+NEVERD_PPC_DIVIDE(PPCDivd, 18006, PPCDivdRecord, 18010, 489, 8, true, "divd")
+NEVERD_PPC_DIVIDE(PPCDivdu, 18007, PPCDivduRecord, 18011, 457, 8, false,
+                  "divdu")
+
+#undef NEVERD_PPC_DIVIDE

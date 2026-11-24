@@ -22,8 +22,13 @@ namespace ppc {
 constexpr uint64_t LR = PC + 8;
 constexpr uint64_t CTR = LR + 8;
 constexpr uint64_t XER = CTR + 8;
+#define NEVERD_PPC_XER_BIT(Name, Shift) constexpr unsigned XER##Name = Shift;
+#define NEVERD_PPC_CR_BIT(Name, BI) constexpr unsigned CR##Name = BI;
+#include "neverd/lift/PowerPC/PowerPCRegisterFields.def"
 // Architectural CR bit zero is the most significant bit of CR0.
 constexpr uint64_t crBit(unsigned BI) { return XER + 8 + BI; }
+constexpr unsigned crShift(unsigned BI) { return 31 - BI; }
+constexpr uint32_t CR0ComparisonMask = UINT32_C(7) << crShift(CREQ);
 } // namespace ppc
 } // namespace neverd::integerreg
 #endif // NEVERD_LIFT_INTEGERREGISTERS_H

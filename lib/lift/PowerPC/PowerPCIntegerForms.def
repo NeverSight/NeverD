@@ -1,0 +1,90 @@
+//===- PowerPCIntegerForms.def - Classic integer instruction forms -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// D and indexed transfers share a width, direction and extension rule.
+/// Their update variants set bit 0 of the primary opcode or bit 5 of XO.
+/// DS variants encode the addressing form in the low two instruction bits.
+/// Each logical operation has a GPR opcode and a condition-register opcode.
+/// Carry forms specify the two inputs to the addition of XER.CA. SPR rows
+/// map the encoded selector to the architectural storage used by MFSPR/MTSPR.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_PPC_DX_TRANSFER
+#define NEVERD_PPC_DX_TRANSFER(Name, D, X, Bytes, Store, Signed)
+#endif
+#ifndef NEVERD_PPC_X64_TRANSFER
+#define NEVERD_PPC_X64_TRANSFER(Name, X, Bytes, Store, Signed)
+#endif
+#ifndef NEVERD_PPC_DS_TRANSFER
+#define NEVERD_PPC_DS_TRANSFER(Name, Op, Variant, Bytes, Store, Signed, Update)
+#endif
+#ifndef NEVERD_PPC_LOGICAL
+#define NEVERD_PPC_LOGICAL(Name, GPR, CR, Kind, InvertRight, InvertResult)
+#endif
+#ifndef NEVERD_PPC_LOGICAL_IMM
+#define NEVERD_PPC_LOGICAL_IMM(Name, Op, Kind, Shift, Record)
+#endif
+#ifndef NEVERD_PPC_CARRY_FORM
+#define NEVERD_PPC_CARRY_FORM(Name, XO, ComplementLeft, Addend)
+#endif
+#ifndef NEVERD_PPC_SPR
+#define NEVERD_PPC_SPR(Name, Selector)
+#endif
+
+NEVERD_PPC_DX_TRANSFER(LWZ, 32, 23, 4, false, false)
+NEVERD_PPC_DX_TRANSFER(LBZ, 34, 87, 1, false, false)
+NEVERD_PPC_DX_TRANSFER(STW, 36, 151, 4, true, false)
+NEVERD_PPC_DX_TRANSFER(STB, 38, 215, 1, true, false)
+NEVERD_PPC_DX_TRANSFER(LHZ, 40, 279, 2, false, false)
+NEVERD_PPC_DX_TRANSFER(LHA, 42, 343, 2, false, true)
+NEVERD_PPC_DX_TRANSFER(STH, 44, 407, 2, true, false)
+
+NEVERD_PPC_X64_TRANSFER(LDX, 21, 8, false, false)
+NEVERD_PPC_X64_TRANSFER(STDX, 149, 8, true, false)
+NEVERD_PPC_X64_TRANSFER(LWAX, 341, 4, false, true)
+
+NEVERD_PPC_DS_TRANSFER(LD, LoadDS, 0, 8, false, false, false)
+NEVERD_PPC_DS_TRANSFER(LDU, LoadDS, 1, 8, false, false, true)
+NEVERD_PPC_DS_TRANSFER(LWA, LoadDS, 2, 4, false, true, false)
+NEVERD_PPC_DS_TRANSFER(STD, StoreDS, 0, 8, true, false, false)
+NEVERD_PPC_DS_TRANSFER(STDU, StoreDS, 1, 8, true, false, true)
+
+NEVERD_PPC_LOGICAL(AND, 28, 257, AND, false, false)
+NEVERD_PPC_LOGICAL(ANDC, 60, 129, AND, true, false)
+NEVERD_PPC_LOGICAL(NAND, 476, 225, AND, false, true)
+NEVERD_PPC_LOGICAL(OR, 444, 449, OR, false, false)
+NEVERD_PPC_LOGICAL(ORC, 412, 417, OR, true, false)
+NEVERD_PPC_LOGICAL(NOR, 124, 33, OR, false, true)
+NEVERD_PPC_LOGICAL(XOR, 316, 193, XOR, false, false)
+NEVERD_PPC_LOGICAL(EQV, 284, 289, XOR, false, true)
+
+NEVERD_PPC_LOGICAL_IMM(ORI, 24, OR, 0, false)
+NEVERD_PPC_LOGICAL_IMM(ORIS, 25, OR, 16, false)
+NEVERD_PPC_LOGICAL_IMM(XORI, 26, XOR, 0, false)
+NEVERD_PPC_LOGICAL_IMM(XORIS, 27, XOR, 16, false)
+NEVERD_PPC_LOGICAL_IMM(ANDIRecord, 28, AND, 0, true)
+NEVERD_PPC_LOGICAL_IMM(ANDISRecord, 29, AND, 16, true)
+
+NEVERD_PPC_CARRY_FORM(SUBFE, 136, true, Register)
+NEVERD_PPC_CARRY_FORM(ADDE, 138, false, Register)
+NEVERD_PPC_CARRY_FORM(SUBFZE, 200, true, Zero)
+NEVERD_PPC_CARRY_FORM(ADDZE, 202, false, Zero)
+NEVERD_PPC_CARRY_FORM(SUBFME, 232, true, MinusOne)
+NEVERD_PPC_CARRY_FORM(ADDME, 234, false, MinusOne)
+
+NEVERD_PPC_SPR(XER, 1)
+NEVERD_PPC_SPR(LR, 8)
+NEVERD_PPC_SPR(CTR, 9)
+
+#undef NEVERD_PPC_DX_TRANSFER
+#undef NEVERD_PPC_X64_TRANSFER
+#undef NEVERD_PPC_DS_TRANSFER
+#undef NEVERD_PPC_LOGICAL
+#undef NEVERD_PPC_LOGICAL_IMM
+#undef NEVERD_PPC_CARRY_FORM
+#undef NEVERD_PPC_SPR

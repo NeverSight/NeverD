@@ -29,9 +29,10 @@ def compiler_flags(profile):
             "-fno-asynchronous-unwind-tables"]
 
 
-def compile_elf(args, work, profile, source, output, entry, optimization="-O2", callees=()):
+def compile_elf(args, work, profile, source, output, entry, optimization="-O2", callees=(),
+                extra_flags=()):
     dialect = ["-std=gnu17", "-I", work] if source.suffix == ".c" else []
-    subprocess.run([args.clang, *compiler_flags(profile), optimization, *dialect, "-nostdlib",
+    subprocess.run([args.clang, *compiler_flags(profile), *extra_flags, optimization, *dialect, "-nostdlib",
                     "-static", f"-fuse-ld={args.ld}", f"-Wl,-e,{entry}",
                     source, *callees, "-o", output], check=True)
 
@@ -65,7 +66,7 @@ def machine(path, profile):
     return cpu, symbols
 
 
-def execute(path, profile, function, cases):
+def execute(path, profile, function, cases, symbol=None):
     cpu, symbols = machine(path, profile)
     rv = profile.startswith("riscv")
     size = 8 if "64" in profile else 4
@@ -79,9 +80,10 @@ def execute(path, profile, function, cases):
     saved = {register: 0x12340000 + register for register in gprs}
     if not rv:
         saved.update({ppc_const.UC_PPC_REG_CR0 + n: n + 8 for n in (2, 3, 4)})
-    if function not in symbols:
-        raise RuntimeError(f"{profile}: {path.name} has no definition of {function}")
-    start = symbols[function]
+    symbol = symbol or function
+    if symbol not in symbols:
+        raise RuntimeError(f"{profile}: {path.name} has no definition of {symbol}")
+    start = symbols[symbol]
     results = []
     for a, b in cases:
         cpu.mem_write(DATA + size, a.to_bytes(size, order))
@@ -119,11 +121,13 @@ def main():
                                        "void *memset(void *, int, size_t);\n")
         for profile in args.profile or PROFILES:
             original = work / f"{profile}.elf"
-            compile_elf(args, work, profile, fixture, original, "mix")
+            # Exercise the linked AUIPC/JALR call pair with its original displacement.
+            original_flags = ["-mno-relax", "-Wl,--no-relax"] if profile.startswith("riscv") else []
+            compile_elf(args, work, profile, fixture, original, "mix", extra_flags=original_flags)
             bits = 64 if "64" in profile else 32
             mask = (1 << bits) - 1
             values = [0, 1, 1 << (bits - 1), mask, 0x87654321]
-            cases = list(itertools.product(values, repeat=2))
+            all_cases = list(itertools.product(values, repeat=2))
             module = work / f"{profile}.ll"
             subprocess.run([args.neverd, "lift", "-o", module, original], check=True)
             module_binaries = {}
@@ -131,23 +135,53 @@ def main():
                 binary = work / f"{profile}-llvm{optimization}.elf"
                 compile_elf(args, work, profile, module, binary, "mix", optimization)
                 module_binaries[optimization] = binary
-            for function in ("mix", "product", "branch", "access_word", "atomic_word", "call_mix"):
+            functions = ["mix", "product", "unsigned_quotient", "signed_quotient",
+                         "branch", "access_word", "atomic_word", "call_mix"]
+            if profile.startswith("powerpc"):
+                functions.extend(("recorded_divide", "divide_flags"))
+            for function in functions:
+                cases = all_cases
+                if function in ("unsigned_quotient", "signed_quotient"):
+                    cases = [(a, b) for a, b in cases if b and
+                             (function != "signed_quotient" or (a, b) != (1 << (bits - 1), mask))]
+                if function == "divide_flags" and bits == 64:
+                    cases = [*cases, (1 << 31, mask)]
                 expected = []
                 for a, b in cases:
                     if function == "mix":
                         expected.append((((a + b) ^ (b << 3)) & mask, a))
                     elif function == "product":
                         expected.append(((a * b) & mask, a))
+                    elif function == "unsigned_quotient":
+                        expected.append((a // b, a))
+                    elif function == "signed_quotient":
+                        left = a - (1 << bits) if a >> (bits - 1) else a
+                        right = b - (1 << bits) if b >> (bits - 1) else b
+                        value = abs(left) // abs(right)
+                        expected.append(((-value if (left < 0) != (right < 0) else value) & mask, a))
                     elif function == "call_mix":
                         left, right = b + 1, a ^ 7
                         expected.append(((((left + right) ^ (right << 3)) + b) & mask, a))
                     elif function == "branch":
                         expected.append(((a + b if a < b else a - b) & mask, a))
+                    elif function in ("recorded_divide", "divide_flags"):
+                        # The original target supplies the undefined word-division
+                        # bits and the CR0 recorded by this processor model.
+                        continue
                     elif function == "access_word":
                         expected.append(((a + b) & mask, b))
                     else:
                         expected.append((a, (a + b) & mask))
-                if execute(original, profile, function, cases) != expected:
+                observed = execute(original, profile, function, cases)
+                if function in ("recorded_divide", "divide_flags"):
+                    expected = observed
+                    if function == "divide_flags":
+                        for (a, b), (flags, memory) in zip(cases, observed):
+                            divisor = b & 0xffffffff
+                            overflow = divisor == 0 or (a & 0xffffffff, divisor) == (0x80000000, 0xffffffff)
+                            if (flags & 1) != bool((a & 1) or overflow) or memory != a:
+                                raise RuntimeError(f"{profile} divwo.: incorrect SO or memory")
+                elif observed != expected:
                     raise RuntimeError(f"{profile} {function}: original disagrees with input C")
                 for projection in ("highc", "llvmc", "llvm"):
                     stem = work / f"{profile}-{function}-{projection}"
@@ -174,6 +208,27 @@ def main():
                             raise RuntimeError(f"{stem.name} {optimization} {cases[index]}: "
                                                f"{actual[index]} != {expected[index]}")
                         print(f"{stem.name} {optimization}: {len(cases)} register/memory comparisons", flush=True)
+
+            if profile.startswith("riscv"):
+                with original.open("rb") as file:
+                    symtab = ELFFile(file).get_section_by_name(".symtab")
+                    caller = symtab.get_symbol_by_name("call_mix")[0]["st_value"]
+                    callee = symtab.get_symbol_by_name("mix")[0]["st_value"]
+                stripped = work / f"{profile}-stripped.elf"
+                compile_elf(args, work, profile, fixture, stripped, "call_mix",
+                            extra_flags=[*original_flags, "-Wl,--strip-all"])
+                stripped_ir = stripped.with_suffix(".ll")
+                subprocess.run([args.neverd, "lift", "-o", stripped_ir, stripped], check=True)
+                entry = f"sub_{caller:x}"
+                for optimization in ("-O0", "-O2"):
+                    rebuilt = work / f"{profile}-stripped{optimization}.elf"
+                    compile_elf(args, work, profile, stripped_ir, rebuilt, entry, optimization)
+                    for name, address in (("call_mix", caller), ("mix", callee)):
+                        expected = execute(original, profile, name, all_cases)
+                        actual = execute(rebuilt, profile, name, all_cases, f"sub_{address:x}")
+                        if actual != expected:
+                            raise RuntimeError(f"{profile} stripped {name} {optimization}: incorrect result")
+                        print(f"{profile}-stripped-{name} {optimization}: {len(all_cases)} comparisons", flush=True)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@
 
 #include "../IntegerLiftState.h"
 #include "RISCVCompressed.h"
+#include "RISCVOpcode.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
@@ -26,10 +27,22 @@ namespace {
 using llvm::SignExtend32;
 using llvm::SignExtend64;
 
+va_t atXLen(Arch A, va_t Value) {
+  return A == Arch::RISCV32 ? uint32_t(Value) : Value;
+}
+
+va_t auipcAddress(Arch A, uint32_t Word, va_t PC) {
+  return atXLen(A, PC + SignExtend64<32>(Word & 0xfffff000));
+}
+
+va_t jalrAddress(Arch A, va_t Base, uint32_t Word) {
+  return atXLen(A, Base + SignExtend64<12>(Word >> 20)) & ~va_t(1);
+}
+
 std::optional<uint32_t> word(Arch A, RISCVProfile P, const cs_insn &I) {
   if (I.size == 4)
     return llvm::support::endian::read32le(I.bytes);
-  if (I.size == 2 && P.Compressed)
+  if (I.size == 2 && P.hasCompressed())
     return expandCompressed(llvm::support::endian::read16le(I.bytes),
                             A == Arch::RISCV64);
   return std::nullopt;
@@ -38,26 +51,30 @@ std::optional<uint32_t> word(Arch A, RISCVProfile P, const cs_insn &I) {
 IntegerControl branch(Arch A, uint32_t W, va_t PC) {
   const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7,
                  Rs = W >> 15 & 31;
-  if (Op == 0x67 && !F) {
+  if (Op == opcode::Jalr && !F) {
+    if (!Rs) {
+      // JALR through x0 has an absolute signed 12-bit destination.
+      return {Rd == 1 ? NdOp::CALL : NdOp::BRANCH, jalrAddress(A, 0, W)};
+    }
     if (!Rd && Rs == 1 && !(W >> 20))
       return {NdOp::RETURN};
     return {Rd == 1 ? NdOp::INDIR_CALL : NdOp::INDIR_BR};
   }
   va_t Target;
   NdOp Kind;
-  if (Op == 0x6f) {
+  if (Op == opcode::Jal) {
     const unsigned J = (W >> 31) << 20 | (W & 0xff000) | (W >> 20 & 1) << 11 |
                        (W >> 21 & 0x3ff) << 1;
     Target = PC + SignExtend32<21>(J);
     Kind = Rd == 1 ? NdOp::CALL : NdOp::BRANCH;
-  } else if (Op == 0x63 && (F < 2 || F >= 4)) {
+  } else if (Op == opcode::Branch && (F < 2 || F >= 4)) {
     const unsigned B = (W >> 31) << 12 | (W >> 7 & 1) << 11 |
                        (W >> 25 & 63) << 5 | (W >> 8 & 15) << 1;
     Target = PC + SignExtend32<13>(B);
     Kind = NdOp::COND_BR;
   } else
     return {};
-  return {Kind, A == Arch::RISCV32 ? uint32_t(Target) : Target};
+  return {Kind, atXLen(A, Target)};
 }
 
 struct State : IntegerLiftState {
@@ -100,18 +117,18 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   NdVar Y = S.read(R2);
   if (IntegerControl Flow = branch(A, W, S.Addr); Flow.Opcode != NdOp::NOP) {
     NdVar Dest;
-    if (Op == 0x67) {
+    if (Flow.Target == InvalidVA) {
       Dest = S.op(NdOp::INT_AND, S.op(NdOp::INT_ADD, X, S.imm(Immediate)),
                   S.imm(~uint64_t(1)));
-      if (!P.Compressed)
+      if (!P.hasCompressed())
         S.emitIntrinsic(Intrinsic::RequireAligned, {},
                         {S.resize(Dest, 8), NdVar::scalar(4, 8)});
     } else {
-      if (!P.Compressed && (Flow.Target & 3))
+      if (!P.hasCompressed() && (Flow.Target & 3))
         return false;
       Dest = NdVar::codeAddress(Flow.Target, S.Width);
     }
-    if (Op == 0x63) {
+    if (Op == opcode::Branch) {
       NdOp Cmp = F == 0   ? NdOp::INT_EQUAL
                  : F == 1 ? NdOp::INT_NOTEQUAL
                  : F == 4 ? NdOp::INT_SLESS
@@ -131,19 +148,15 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
     S.emit(Flow.Opcode, Call ? S.reg(10) : NdVar{}, {Dest});
     return true;
   }
-  if (Op == 0x37 || Op == 0x17) {
-    const uint64_t Upper = SignExtend64<32>(W & 0xfffff000);
-    if (Op == 0x37)
-      S.write(Rd, S.imm(Upper));
-    else {
-      const va_t Addr = S.Addr + Upper;
-      S.write(Rd, NdVar::addressFragment(S.Width == 4 ? uint32_t(Addr) : Addr,
-                                         S.Width));
-    }
+  if (Op == opcode::Lui || Op == opcode::Auipc) {
+    if (Op == opcode::Lui)
+      S.write(Rd, S.imm(SignExtend64<32>(W & 0xfffff000)));
+    else
+      S.write(Rd, NdVar::addressFragment(auipcAddress(A, W, S.Addr), S.Width));
     return true;
   }
-  if (Op == 0x03 || Op == 0x23) {
-    const bool Store = Op == 0x23;
+  if (Op == opcode::Load || Op == opcode::Store) {
+    const bool Store = Op == opcode::Store;
     unsigned Bytes = 1u << (F & 3);
     if ((Store && F >= 4) || F == 7 || Bytes > S.Width ||
         (F == 6 && S.Width == 4))
@@ -156,12 +169,16 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
       S.write(Rd, S.load(EA, Bytes), F < 4);
     return true;
   }
-  if (Op == 0x2f) {
-    if (!P.Atomic || (F != 2 && F != 3))
+  if (Op == opcode::Atomic) {
+    if (F != 2 && F != 3)
       return false;
     const unsigned Key = (W >> 25) << 1 | (F - 2);
     auto M = integer_memory::form(A, Intrinsic::RISCVAtomic, Key);
     if (!M || (M->Op == integer_memory::Operation::Reserve && R2))
+      return false;
+    const bool Reservation = M->Op == integer_memory::Operation::Reserve ||
+                             M->Op == integer_memory::Operation::Conditional;
+    if (!P.Atomic && !(Reservation ? P.Zalrsc : P.Zaamo))
       return false;
     NdVar Out = Rd ? S.reg(Rd) : S.makeTemp(S.Width);
     NdVar Selector = NdVar::scalar(Key, 1);
@@ -171,21 +188,22 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
       S.emitIntrinsic(Intrinsic::RISCVAtomic, Out, {Selector, X, Y});
     return true;
   }
-  if (Op == 0x0f && !F && !Rd && !R1 && !(W >> 28)) {
+  if (Op == opcode::MiscMem && !F && !Rd && !R1 && !(W >> 28)) {
     S.emitVoidIntrinsic(Intrinsic::RISCVFence,
                         {NdVar::scalar((W >> 20) & 255, 1)});
     return true;
   }
 
-  const bool Imm = Op == 0x13 || Op == 0x1b;
-  const bool Word = Op == 0x1b || Op == 0x3b;
-  if ((!Imm && Op != 0x33 && Op != 0x3b) || (Word && S.Width != 8))
+  const bool Imm = Op == opcode::OpImm || Op == opcode::OpImm32;
+  const bool Word = Op == opcode::OpImm32 || Op == opcode::Op32;
+  if ((!Imm && Op != opcode::Op && Op != opcode::Op32) ||
+      (Word && S.Width != 8))
     return false;
   const unsigned Bytes = Word ? 4 : S.Width;
   X = S.resize(X, Bytes);
   Y = Imm ? S.resize(S.imm(Immediate), Bytes) : S.resize(Y, Bytes);
   if (!Imm && F7 == 1) {
-    if (!P.Multiply || (Word && F > 0 && F < 4))
+    if (!(P.Multiply || (P.Zmmul && F < 4)) || (Word && F > 0 && F < 4))
       return false;
     S.write(Rd, mulDiv(S, F, X, Y), Word);
     return true;
@@ -217,10 +235,22 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
 }
 } // namespace
 
+std::optional<va_t> pcRelativeCall(Arch A, RISCVProfile P, uint32_t Upper,
+                                   const cs_insn &I) {
+  if ((Upper & 127) != opcode::Auipc)
+    return std::nullopt;
+  const unsigned Base = Upper >> 7 & 31;
+  const auto W = word(A, P, I);
+  if (!Base || !W || branch(A, *W, I.address).Opcode != NdOp::INDIR_CALL ||
+      ((*W >> 15) & 31) != Base)
+    return std::nullopt;
+  return jalrAddress(A, auipcAddress(A, Upper, I.address - 4), *W);
+}
+
 IntegerControl control(Arch A, RISCVProfile P, const cs_insn &I) {
   if (auto W = word(A, P, I)) {
     auto Flow = branch(A, *W, I.address);
-    if (Flow.Target == InvalidVA || P.Compressed || !(Flow.Target & 3))
+    if (Flow.Target == InvalidVA || P.hasCompressed() || !(Flow.Target & 3))
       return Flow;
   }
   return {};

@@ -60,10 +60,13 @@ struct CNameTable {
     C(Intrinsic::X86SEHRegisterRead, "__neverd_seh_register_read");
     C(Intrinsic::X86SEHRegisterWrite, "__neverd_seh_register_write");
     C(Intrinsic::GoCurrentGoroutine, "__neverd_go_getg");
-    C(Intrinsic::RISCVAtomic, "neverd_riscv_atomic");
-    C(Intrinsic::RISCVFence, "neverd_riscv_fence");
-    C(Intrinsic::PPCReservation, "neverd_ppc_reservation");
-    C(Intrinsic::PPCBarrier, "neverd_ppc_barrier");
+#define NEVERD_INTEGER_MEMORY_INTRINSIC(Id, Value, Name) C(Intrinsic::Id, Name);
+#include "neverd/ir/intrinsics/IntegerMemory.def"
+#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, RecordValue, XO, Bytes, Signed, \
+                          Mnemonic)                                            \
+  C(Intrinsic::Id, "neverd_ppc_" Mnemonic);                                    \
+  C(Intrinsic::RecordId, "neverd_ppc_" Mnemonic "_record");
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
     C(Intrinsic::GoClosureContext, "__neverd_go_closure_context");
 
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_cnames.inc"
@@ -163,10 +166,9 @@ struct SideEffectTable {
   SIDEEFFECT(Intrinsic::PortableX87##Role);
 #include "neverd/ir/X86/X87PortableABI.def"
 #undef NEVERD_X87_PORTABLE_HELPER
-    SIDEEFFECT(Intrinsic::RISCVAtomic);
-    SIDEEFFECT(Intrinsic::RISCVFence);
-    SIDEEFFECT(Intrinsic::PPCReservation);
-    SIDEEFFECT(Intrinsic::PPCBarrier);
+#define NEVERD_INTEGER_MEMORY_INTRINSIC(Id, Value, Name)                       \
+  SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/IntegerMemory.def"
     SIDEEFFECT(Intrinsic::Syscall);
     SIDEEFFECT(Intrinsic::RawEnvironmentRequirementV1);
     SIDEEFFECT(Intrinsic::ArchitecturalValueV1);

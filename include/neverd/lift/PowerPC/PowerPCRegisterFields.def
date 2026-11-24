@@ -1,0 +1,22 @@
+//===- PowerPCRegisterFields.def - Integer status register fields ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// XER rows give numeric shifts. CR rows give the architectural bit number
+/// within a four-bit field, ordered from most to least significant.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_PPC_XER_BIT(SO, 31)
+NEVERD_PPC_XER_BIT(OV, 30)
+NEVERD_PPC_XER_BIT(CA, 29)
+NEVERD_PPC_CR_BIT(LT, 0)
+NEVERD_PPC_CR_BIT(GT, 1)
+NEVERD_PPC_CR_BIT(EQ, 2)
+NEVERD_PPC_CR_BIT(SO, 3)
+
+#undef NEVERD_PPC_XER_BIT
+#undef NEVERD_PPC_CR_BIT

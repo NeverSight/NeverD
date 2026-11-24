@@ -1,0 +1,27 @@
+//===- RISCVIntegerOpcodes.def - RISC-V base integer opcodes --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// NEVERD_RISCV_OPCODE(Name, Opcode) names a seven-bit major opcode shared
+/// by compressed expansion, control-flow classification and scalar lifting.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_RISCV_OPCODE(Load, 0x03)
+NEVERD_RISCV_OPCODE(MiscMem, 0x0f)
+NEVERD_RISCV_OPCODE(OpImm, 0x13)
+NEVERD_RISCV_OPCODE(Auipc, 0x17)
+NEVERD_RISCV_OPCODE(OpImm32, 0x1b)
+NEVERD_RISCV_OPCODE(Store, 0x23)
+NEVERD_RISCV_OPCODE(Atomic, 0x2f)
+NEVERD_RISCV_OPCODE(Op, 0x33)
+NEVERD_RISCV_OPCODE(Lui, 0x37)
+NEVERD_RISCV_OPCODE(Op32, 0x3b)
+NEVERD_RISCV_OPCODE(Branch, 0x63)
+NEVERD_RISCV_OPCODE(Jalr, 0x67)
+NEVERD_RISCV_OPCODE(Jal, 0x6f)
+
+#undef NEVERD_RISCV_OPCODE

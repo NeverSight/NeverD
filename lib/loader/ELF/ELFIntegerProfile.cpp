@@ -45,7 +45,6 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
     if (Header.e_flags & ~uint32_t(EF_RISCV_RVC))
       return llvm::createStringError(
           "elf: RISC-V requires the integer ILP32 or LP64 ABI");
-    RV.Compressed = Header.e_flags & EF_RISCV_RVC;
   } else {
     // ELFv1 points function symbols at descriptors. An unspecified ABI
     // cannot establish that a symbol is an ELFv2 code entry.
@@ -90,23 +89,38 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
         if (!Parsed)
           return Parsed.takeError();
         const auto &ISA = **Parsed;
-        if (ISA.getXLen() != Obj.getBytesInAddress() * 8 ||
-            !ISA.hasExtension("i"))
+        if (ISA.getXLen() != Obj.getBytesInAddress() * 8)
           return llvm::createStringError("elf: RISC-V architecture attribute "
                                          "conflicts with integer ELF class");
-        for (const auto &[Name, V] : ISA.getExtensions()) {
-          if (Name == "zca" && (V.Major != 1 || V.Minor != 0))
-            return llvm::createStringError(
-                "elf: unsupported RISC-V Zca version");
-          if ((Name == "i" || Name == "a" || Name == "c" || Name == "m") &&
-              (V.Major != 2 ||
-               V.Minor > (Name == "i" || Name == "a" ? 1u : 0u)))
-            return llvm::createStringError(
-                "elf: unsupported RISC-V integer extension version");
+        const auto &Extensions = ISA.getExtensions();
+        struct Extension {
+          const char *Name;
+          unsigned Major;
+          unsigned MaxMinor;
+          bool RISCVProfile::*Member;
+        };
+        static constexpr Extension Supported[] = {
+#define NEVERD_RISCV_BASE(Name, Major, MaxMinor)                               \
+  {Name, Major, MaxMinor, nullptr},
+#define NEVERD_RISCV_EXTENSION(Member, Name, Major, MaxMinor, ...)             \
+  {Name, Major, MaxMinor, &RISCVProfile::Member},
+#include "neverd/lift/RISCV/RISCVExtensions.def"
+        };
+        for (const auto &Spec : Supported) {
+          const auto It = Extensions.find(Spec.Name);
+          if (It == Extensions.end()) {
+            if (!Spec.Member)
+              return llvm::createStringError(
+                  "elf: missing RISC-V integer base");
+            continue;
+          }
+          if (It->second.Major != Spec.Major ||
+              It->second.Minor > Spec.MaxMinor)
+            return llvm::createStringError("elf: unsupported RISC-V %s version",
+                                           Spec.Name);
+          if (Spec.Member)
+            RV.*Spec.Member = true;
         }
-        RV.Multiply = ISA.hasExtension("m");
-        RV.Atomic = ISA.hasExtension("a");
-        RV.Compressed |= ISA.hasExtension("c") || ISA.hasExtension("zca");
       }
     }
     if (isPowerPC(A) && (S.sh_flags & SHF_EXECINSTR) && (S.sh_flags & VLE))
@@ -122,6 +136,8 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch A,
                                        "relocations before native analysis");
     }
   }
+  if (isRISCV(A) && (Header.e_flags & EF_RISCV_RVC) && !RV.Zca)
+    RV.Compressed = true;
   return llvm::Error::success();
 }
 

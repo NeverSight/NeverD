@@ -15,9 +15,12 @@
 namespace neverd {
 
 struct RISCVProfile {
-  bool Multiply = false;
-  bool Atomic = false;
-  bool Compressed = false;
+#define NEVERD_RISCV_BASE(Name, Major, MaxMinor)                               \
+  static constexpr char BaseFeature[] = "+" Name;
+#define NEVERD_RISCV_EXTENSION(Member, ...) bool Member = false;
+#include "neverd/lift/RISCV/RISCVExtensions.def"
+
+  bool hasCompressed() const { return Compressed || Zca; }
 };
 
 } // namespace neverd

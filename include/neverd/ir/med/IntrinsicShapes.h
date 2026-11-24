@@ -28,6 +28,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
 #include "neverd/ir/intrinsics/X86/X64CallRCX.h"
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
 #include "neverd/ir/intrinsics/X86/X86AtomicMemory.h"
@@ -49,6 +50,17 @@ namespace neverd {
 inline bool hasValidMedIntrinsicId(const MedOp &Op) {
   return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
          Op.NumInputs <= Op.Inputs.size() && Op.Inputs.front().isConst();
+}
+
+inline bool powerPCDivisionMedShapeIsValid(const MedOp &Op, Arch A,
+                                           const ppc::Division &D) {
+  return hasValidMedIntrinsicId(Op) && Op.NumInputs == 3 &&
+         Op.Inputs[0].ConstVal == static_cast<uint64_t>(D.Id) &&
+         Op.IntrinsicOutputs.size() == unsigned(D.Record) &&
+         (!D.Record || Op.IntrinsicOutputs.front().Size == Op.Output.Size) &&
+         Op.MemoryOrdering == NdMemoryOrdering::None &&
+         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+         D.matches(A, Op.Output.Size, Op.Inputs[1].Size, Op.Inputs[2].Size);
 }
 
 inline bool aarch64VectorMedShapeIsValid(const MedOp &Op) {

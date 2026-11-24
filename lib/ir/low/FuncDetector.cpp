@@ -594,6 +594,9 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
     });
     MarkedEntries = MarkedAArch64Entries;
     Entries.insert(DirectCallTargets.begin(), DirectCallTargets.end());
+    if (isRISCV(Img.Arch) && !CodeNamedByCode.empty())
+      func_detect_detail::recoverRISCVCallEntries(
+          Img, Dec, CodeNamedByCode, Entries, DirectCallTargets, Cancellation);
     // A binary file has no symbols, unwind tables or relocations to name
     // the functions its code only takes the address of.  A target starts
     // with a prologue, so its decode below need only not fail: a function
