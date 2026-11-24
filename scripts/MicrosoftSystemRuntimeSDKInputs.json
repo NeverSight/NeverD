@@ -594,6 +594,48 @@
         }
       }
     },
+    "DbgHelpLegacy": {
+      "module": "dbghelp.dll",
+      "headers": [
+        "dbghelp"
+      ],
+      "exports": {
+        "EnumerateLoadedModules": 3,
+        "StackWalk": 9,
+        "SymEnumerateModules": 3,
+        "SymEnumerateSymbols": 4,
+        "SymEnumerateSymbolsW": 4,
+        "SymFunctionTableAccess": 2,
+        "SymGetLineFromAddr": 4,
+        "SymGetLineFromName": 6,
+        "SymGetLineNext": 2,
+        "SymGetLinePrev": 2,
+        "SymGetModuleBase": 2,
+        "SymGetModuleInfo": 3,
+        "SymGetModuleInfoW": 3,
+        "SymGetSymFromAddr": 4,
+        "SymGetSymFromName": 3,
+        "SymGetSymNext": 2,
+        "SymGetSymPrev": 2,
+        "SymLoadModule": 6,
+        "SymRegisterCallback": 3,
+        "SymRegisterFunctionEntryCallback": 3,
+        "SymUnDName": 3,
+        "SymUnloadModule": 2
+      },
+      "targets": {
+        "x64": {
+          "image_sha256": "6357f697069e90b475f78520f235aae782da79d32a0e70c733168082cb933c25",
+          "additional_exports": {},
+          "import_library": "DbgHelp.Lib"
+        },
+        "arm64": {
+          "image_sha256": "37590f714cfaa5efc829e4bb0c347418f85190d92d27522ce31e3bba8658323b",
+          "additional_exports": {},
+          "import_library": "DbgHelp.Lib"
+        }
+      }
+    },
     "DbgengRuntime": {
       "module": "dbgeng.dll",
       "headers": [

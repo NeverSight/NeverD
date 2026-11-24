@@ -129,6 +129,15 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                     cloud = next(u for u in units if u["name"] == "CloudAuthentication")
                     self.assertEqual(cloud["compiler"][-1], "-UNTDDI_VERSION")
                     self.assertEqual(cloud["bridge"]["arguments"], [*cloud["compiler"], "-std=c23"])
+                legacy = [u for u in units if u["name"] == "DbgHelpLegacy"]
+                self.assertEqual(len(legacy), int(arch != "x86"))
+                if legacy:
+                    unit, = legacy
+                    self.assertIn("-D_IMAGEHLP_SOURCE_", unit["compiler"])
+                    self.assertEqual(unit["bridge"]["arguments"], [*unit["compiler"], "-std=c23"])
+                    self.assertIn("runtime_import_library", unit["bridge"])
+                    self.assertEqual(unit["bridge"]["runtime_exports"]["parameter_counts"]["StackWalk"], 9)
+                self.assertNotIn("-D_IMAGEHLP_SOURCE_", security["compiler"])
                 ssl = next(u for u in units if u["name"] == "SslProvider")
                 self.assertIn(str(Path(tmp) / arch / "cpdk-headers"), ssl["compiler"])
                 self.assertEqual(ssl["bridge"]["runtime_exports"]["parameter_counts"]["SslEnumCipherSuites"], 5)
