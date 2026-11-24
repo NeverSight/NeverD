@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../SymFunnel.h"
+
 #include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
 
@@ -241,10 +243,12 @@ size_t groupAffineFactors(llvm::MutableArrayRef<uint32_t> Slots,
 
   struct Polynomial {
     uint32_t Slot;
-    std::array<llvm::APInt, 4> Coefficients;
+    unsigned MinZeros;
   };
   llvm::DenseMap<uint32_t, unsigned> Index;
   llvm::SmallVector<Polynomial, 4> Groups;
+  llvm::SmallVector<uint64_t, 32> Coefficients;
+  llvm::SmallVector<uint64_t, 8> Scratch(2 * size_t(N));
   size_t Kept = 0;
   for (auto [I, Slot] : llvm::enumerate(Slots.drop_front())) {
     const auto Row = llvm::ArrayRef(Words).slice(I * Stride, Stride);
@@ -256,32 +260,54 @@ size_t groupAffineFactors(llvm::MutableArrayRef<uint32_t> Slots,
       ++Kept;
       continue;
     }
-    llvm::APInt A(Bits, Row.slice(1, N)), B(Bits, Row.take_back(N));
+    const auto *A = Row.data() + 1;
+    const auto *B = A + N;
+    const unsigned Zeros = std::min(Bits, llvm::APInt::tcLSB(B, N));
     const auto [It, New] = Index.try_emplace(Slot, Groups.size());
     if (New) {
-      Groups.push_back({Slot,
-                        {std::move(A), std::move(B), llvm::APInt(Bits, 0),
-                         llvm::APInt(Bits, 0)}});
+      Groups.push_back({Slot, Zeros});
+      Coefficients.append(A, B + N);
+      Coefficients.append(2 * size_t(N), 0);
+      continue;
+    }
+    auto &G = Groups[It->second];
+    G.MinZeros = std::min(G.MinZeros, Zeros);
+    auto *C = Coefficients.data() + It->second * 4 * size_t(N);
+    // Every coefficient of degree d carries at least d * MinZeros zero
+    // bits. Accumulate descending degrees so the previous row stays live.
+    const unsigned Degree = (Bits - 1) / G.MinZeros;
+    if (N == 1) {
+      for (unsigned K = Degree; K; --K)
+        C[K] = C[K] * *A + C[K - 1] * *B;
+      C[0] *= *A;
     } else {
-      auto &C = Groups[It->second].Coefficients;
-      for (unsigned K = C.size() - 1; K > 0; --K)
-        C[K] = C[K] * A + C[K - 1] * B;
-      C[0] *= A;
+      auto *First = Scratch.data(), *Second = First + N;
+      for (unsigned K = Degree; K; --K) {
+        auto *Current = C + K * N;
+        llvm::APInt::tcMultiply(First, Current, A, N);
+        llvm::APInt::tcMultiply(Second, Current - N, B, N);
+        llvm::APInt::tcAdd(First, Second, 0, N);
+        std::copy_n(First, N, Current);
+      }
+      llvm::APInt::tcMultiply(First, C, A, N);
+      std::copy_n(First, N, C);
     }
   }
   Words.resize(Kept * Stride);
-  for (const auto &G : Groups) {
+  const uint64_t LastMask = ~uint64_t(0) >> ((-Bits) % 64);
+  for (const auto &[I, G] : llvm::enumerate(Groups)) {
     Slots[++Kept] = G.Slot;
-    auto Coefficients = llvm::ArrayRef(G.Coefficients);
-    while (Coefficients.size() > 2 && Coefficients.back().isZero())
-      Coefficients = Coefficients.drop_back();
-    // Positive counts retain their original multiplicity. A zero count
-    // introduces one polynomial row with an explicit degree.
-    Words.push_back(Coefficients.size() == 2);
-    if (Coefficients.size() > 2)
-      Words.push_back(Coefficients.size() - 1);
-    for (const auto &C : Coefficients)
-      Words.append(C.getRawData(), C.getRawData() + N);
+    auto *C = Coefficients.data() + 4 * I * N;
+    unsigned Degree = std::max(1u, (Bits - 1) / G.MinZeros);
+    for (unsigned K = 0; K <= Degree; ++K)
+      C[(K + 1) * N - 1] &= LastMask;
+    while (Degree > 1 && llvm::all_of(llvm::ArrayRef(C + Degree * N, N),
+                                      [](uint64_t Word) { return !Word; }))
+      --Degree;
+    Words.push_back(Degree == 1);
+    if (Degree > 1)
+      Words.push_back(Degree);
+    Words.append(C, C + (Degree + 1) * N);
   }
   return Kept + 1;
 }
@@ -326,22 +352,82 @@ size_t prepareAffineFactors(
   auto Slots = Args.slice(Steps.back().FirstArg, Unique + 1);
   Slots.front() = Slot.find(Factors.front().index())->second - 1;
   Words.reserve((1 + 2 * size_t(N)) * Unique);
+  struct Slice {
+    unsigned Bits;
+    uint32_t Slot;
+  };
+  llvm::DenseMap<std::pair<uint32_t, unsigned>, unsigned> SliceIndex;
+  llvm::SmallVector<Slice, 8> Slices;
+  llvm::SmallVector<std::pair<size_t, unsigned>, 16> SliceRows;
   size_t Out = 1;
+  auto AppendSource = [&](SymRef F, unsigned Live) {
+    const auto SourceSlot = Slot.find(F.index())->second - 1;
+    // Only these low source bits survive multiplication. An existing wider
+    // slice at the same position can supply them for every assignment.
+    const bool Extract = Ctx.op(F) == SymOp::Extract;
+    const unsigned Start =
+        Extract ? Ctx.node(F).Aux : detail::sourceSuffixStart(Ctx, F);
+    if (Extract || Start) {
+      const auto Source = Ctx.operand(F, 0);
+      const unsigned Available =
+          Extract ? Ctx.width(F) : Ctx.width(Source) - Start;
+      if (Live <= Available) {
+        const auto [It, New] =
+            SliceIndex.try_emplace({Source.index(), Start}, Slices.size());
+        const auto Index = It->second;
+        if (New)
+          Slices.push_back({Available, SourceSlot});
+        else if (Available > Slices[Index].Bits)
+          Slices[Index] = {Available, SourceSlot};
+        SliceRows.emplace_back(Out, Index);
+      }
+    }
+    Slots[Out++] = SourceSlot;
+  };
   for (size_t I = 1; I < Factors.size();) {
     auto F = Factors[I];
     const auto First = I++;
     while (I < Factors.size() && Factors[I] == F)
       ++I;
     size_t Copies = I - First;
-    llvm::APInt A(Bits, 0), B(Bits, 1);
-    do {
+    const auto Scaled = Ctx.operand(F, 1);
+    if (Copies == 1 && Ctx.op(Scaled) == SymOp::Mul &&
+        Ctx.numOperands(Scaled) == 2 && Ctx.isConst(Ctx.operand(Scaled, 0))) {
+      const auto Weight = Ctx.constWords(Ctx.operand(Scaled, 0)).take_front(N);
+      const unsigned Live =
+          Bits - std::min(Bits, llvm::APInt::tcLSB(Weight.data(), N));
+      auto Source = Ctx.operand(Scaled, 1);
+      const auto Op = Ctx.op(Source);
+      if (Op == SymOp::Concat || Op == SymOp::SExt || Op == SymOp::ZExt) {
+        const auto Low = Ctx.operands(Source).back();
+        if (Ctx.width(Low) >= Live)
+          Source = Low;
+      }
+      // The remaining source is a real slice, shift or input. Its original
+      // slot supplies every bit retained by the literal weight.
+      const auto SourceOp = Ctx.op(Source);
+      if (SourceOp == SymOp::Extract || SourceOp == SymOp::LShr ||
+          SourceOp == SymOp::AShr || SourceOp == SymOp::Rol ||
+          SourceOp == SymOp::Ror || SourceOp == SymOp::Var) {
+        const auto Offset = Ctx.constWords(Ctx.operand(F, 0)).take_front(N);
+        Words.push_back(1);
+        Words.append(Offset.begin(), Offset.end());
+        Words.append(Weight.begin(), Weight.end());
+        AppendSource(Source, Live);
+        continue;
+      }
+    }
+    llvm::APInt A(Bits, Ctx.constWords(Ctx.operand(F, 0)).take_front(N));
+    F = Ctx.operand(F, 1);
+    llvm::APInt B(Bits, 1);
+    while (Uses[Slot.find(F.index())->second - 1] == 1) {
       const auto Op = Ctx.op(F);
       const auto Children = Ctx.operands(F);
       if ((Op == SymOp::Add || Op == SymOp::Mul) && Children.size() == 2 &&
           Ctx.isConst(Children.front())) {
         llvm::APInt K(Bits, Ctx.constWords(Children.front()).take_front(N));
         if (Op == SymOp::Mul)
-          B *= K;
+          B = B.isOne() ? std::move(K) : B * K;
         else
           A += B * K;
         F = Children.back();
@@ -358,7 +444,7 @@ size_t prepareAffineFactors(
         continue;
       }
       break;
-    } while (Uses[Slot.find(F.index())->second - 1] == 1);
+    }
     // Shared scalar multiples can hide the power of two that makes the
     // weights nilpotent. Peel a single shared scale to expose that source;
     // shared affine chains otherwise keep their ordinary evaluation slots.
@@ -366,7 +452,8 @@ size_t prepareAffineFactors(
         Ctx.isConst(Ctx.operand(F, 0))) {
       const auto Digits = Ctx.constWords(Ctx.operand(F, 0)).take_front(N);
       if (!(Digits.front() & 1)) {
-        B *= llvm::APInt(Bits, Digits);
+        llvm::APInt Scale(Bits, Digits);
+        B = B.isOne() ? std::move(Scale) : B * Scale;
         F = Ctx.operand(F, 1);
       }
     }
@@ -388,10 +475,12 @@ size_t prepareAffineFactors(
       Copies = 1;
     }
     Words.push_back(Copies);
-    Slots[Out++] = Slot.find(F.index())->second - 1;
+    AppendSource(F, Bits - B.countr_zero());
     Words.append(A.getRawData(), A.getRawData() + N);
     Words.append(B.getRawData(), B.getRawData() + N);
   }
+  for (const auto &[Row, Index] : SliceRows)
+    Slots[Row] = Slices[Index].Slot;
   Slots = Slots.take_front(groupAffineFactors(Slots, Words, Uses, Bits));
   Steps.back().NumArgs = Slots.size();
   Steps.back().Aux = Bits;

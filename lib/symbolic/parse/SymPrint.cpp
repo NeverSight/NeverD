@@ -110,6 +110,8 @@ private:
   const std::string &arg(SymRef R) const { return frag(R).Text; }
   std::string sub(SymRef R, int Need) const { return wrap(frag(R), Need); }
 
+  void appendJoined(std::string &Text, llvm::ArrayRef<SymRef> Ops,
+                    std::string_view Sep, int Need) const;
   std::string join(llvm::ArrayRef<SymRef> Ops, std::string_view Sep,
                    int Need) const;
   std::string call(const char *Name, llvm::ArrayRef<SymRef> Ops) const;
@@ -128,18 +130,8 @@ private:
     return leaf(std::move(T), W);
   }
 
-  /// The unsigned magnitude of a term that is worth writing behind a minus
-  /// sign, and whether that sign can ride on a leading literal coefficient
-  /// instead of governing the whole term.
-  struct Magnitude {
-    Fragment Frag;
-    bool CoeffLed = false;
-  };
-
   std::optional<Fragment> negatedLiteral(const llvm::APInt &V) const;
-  std::optional<Magnitude> negatedProduct(SymRef R) const;
-  std::optional<Magnitude> negatedTerm(SymRef R) const;
-  std::string negate(const Magnitude &M) const;
+  std::string_view subtractedText(SymRef R) const;
 
   Fragment render(SymRef R) const;
 
@@ -159,16 +151,37 @@ private:
 std::string Printer::join(llvm::ArrayRef<SymRef> Ops, std::string_view Sep,
                           int Need) const {
   std::string T;
-  for (unsigned I = 0, E = Ops.size(); I < E; ++I) {
-    if (I)
-      T += Sep;
-    appendWrapped(T, frag(Ops[I]), Need);
-  }
+  appendJoined(T, Ops, Sep, Need);
   return T;
 }
 
+void Printer::appendJoined(std::string &Text, llvm::ArrayRef<SymRef> Ops,
+                           std::string_view Sep, int Need) const {
+  // Long joins benefit from reserving once. Ordinary binary fragments
+  // often fit in the inline string and only need one operand traversal.
+  if (Ops.size() > 2) {
+    size_t Length = Text.size() + (Ops.size() - 1) * Sep.size();
+    for (auto Operand : Ops) {
+      const auto &Child = frag(Operand);
+      Length += Child.Text.size() + 2 * (Child.Prec < Need);
+    }
+    Text.reserve(Length);
+  }
+  for (size_t I = 0; I < Ops.size(); ++I) {
+    if (I)
+      Text += Sep;
+    appendWrapped(Text, frag(Ops[I]), Need);
+  }
+}
+
 std::string Printer::call(const char *Name, llvm::ArrayRef<SymRef> Ops) const {
-  std::string T = Name;
+  const std::string_view Function = Name;
+  size_t Size = Function.size() + 2 * Ops.size();
+  for (auto Operand : Ops)
+    Size += arg(Operand).size();
+  std::string T;
+  T.reserve(Size);
+  T += Function;
   T += '(';
   for (unsigned I = 0, E = Ops.size(); I < E; ++I) {
     if (I)
@@ -188,64 +201,21 @@ std::optional<Fragment> Printer::negatedLiteral(const llvm::APInt &V) const {
   return literal(Mag, V.getBitWidth());
 }
 
-/// The magnitude of a product with a negative leading coefficient, so a sum
-/// prints `x - 2*y` rather than `x + 0xfffffffe*y`.  The caller writes the
-/// sign.  `mkNeg` is multiplication by all-ones and `mkMul` folds the constant
-/// factor back in, so both spellings intern to the same node.
-std::optional<Printer::Magnitude> Printer::negatedProduct(SymRef R) const {
-  llvm::ArrayRef<SymRef> Ops = Ctx.operands(R);
-  if (Ops.size() < 2 || !Ctx.isConst(Ops[0]))
-    return std::nullopt;
-  const Fragment &Coefficient = frag(Ops[0]);
-  if (Coefficient.Prec != PrecUnary)
-    return std::nullopt;
-
-  Magnitude M;
-  M.CoeffLed = !Ctx.isConstOnes(Ops[0]);
-  llvm::ArrayRef<SymRef> Factors = Ops.drop_front();
-  std::string T;
-  if (M.CoeffLed) {
-    T.assign(Coefficient.Text, 1, std::string::npos);
-    T += " * ";
-  }
-  // Division sits at the same strength as multiplication but does not
-  // associate with it, so a quotient among the factors has to be bracketed or
-  // the chain regroups: `d * (b / c)` must not flatten to `d * b / c`.
-  T += join(Factors, " * ", PrecMultiplicative + 1);
-
-  // A unit coefficient over a single factor contributes no operator of its
-  // own, so the magnitude is that factor's text and keeps its strength — or is
-  // primary, if the join had to bracket it.
-  int P = PrecMultiplicative;
-  if (!M.CoeffLed && Factors.size() == 1) {
-    int FactorPrec = frag(Factors[0]).Prec;
-    P = FactorPrec > PrecMultiplicative ? FactorPrec : PrecPrimary;
-  }
-  M.Frag = {std::move(T), P};
-  return M;
-}
-
-/// Split a term of a sum, or a product standing on its own, into a sign and a
-/// magnitude.  Nothing is returned when the term reads better as written.
-std::optional<Printer::Magnitude> Printer::negatedTerm(SymRef R) const {
-  if (Ctx.isConst(R)) {
-    const Fragment &Value = frag(R);
-    if (Value.Prec == PrecUnary)
-      return Magnitude{{Value.Text.substr(1), PrecPrimary}, /*CoeffLed=*/true};
-  } else if (Ctx.op(R) == SymOp::Mul) {
-    return negatedProduct(R);
-  }
-  return std::nullopt;
-}
-
-/// Write \p M with its sign, in a position where the minus is unary.
-///
-/// A leading literal coefficient absorbs the sign — `-2 * x` is `(-2) * x`,
-/// and multiplication is flattened, so that is the same node.  Without one the
-/// minus governs the whole term and has to bind at least as tightly as it
-/// does, or `-(e / a)` would come back as `(-e) / a`.
-std::string Printer::negate(const Magnitude &M) const {
-  return "-" + (M.CoeffLed ? M.Frag.Text : wrap(M.Frag, PrecUnary));
+/// The already rendered magnitude when a sum can spell this child as a
+/// subtraction. Only negation of a whole product adds an outer pair of
+/// parentheses that is unnecessary after the binary minus.
+std::string_view Printer::subtractedText(SymRef R) const {
+  const std::string_view Text = arg(R);
+  if (Ctx.isConst(R))
+    return frag(R).Prec == PrecUnary ? Text.substr(1) : std::string_view{};
+  if (Ctx.op(R) != SymOp::Mul)
+    return {};
+  const auto Coeff = Ctx.operand(R, 0);
+  if (!Ctx.isConst(Coeff) || frag(Coeff).Prec != PrecUnary)
+    return {};
+  if (Ctx.numOperands(R) > 2 && Ctx.isConstOnes(Coeff))
+    return Text.substr(2, Text.size() - 3);
+  return Text.substr(1);
 }
 
 Fragment Printer::render(SymRef R) const {
@@ -262,29 +232,44 @@ Fragment Printer::render(SymRef R) const {
   case SymOp::Var: {
     const uint32_t Id = Ctx.varId(R);
     const SymVarInfo &Info = Ctx.varInfo(Id);
-    const std::optional<uint32_t> Unique = Ctx.findVar(Info.Name);
-    if (Unique && *Unique == Id && isTextIdentifier(Info.Name))
+    if (Ctx.findVarRef(Info.Name) == R && isTextIdentifier(Info.Name))
       return leaf(Info.Name, N.Width);
     return {"varid(" + std::to_string(Id) + ")", PrecPrimary};
   }
 
   case SymOp::Add: {
     unsigned Lead = print_detail::leadingAddOperand(Ctx, Ops);
-    std::optional<Magnitude> First = negatedTerm(Ops[Lead]);
-    std::string T =
-        First ? negate(*First) : wrap(frag(Ops[Lead]), PrecAdditive);
+    std::string T;
+    if (Ops.size() > 2) {
+      size_t Size = 3 * (Ops.size() - 1);
+      for (auto Operand : Ops)
+        Size += arg(Operand).size();
+      T.reserve(Size);
+    }
+    appendWrapped(T, frag(Ops[Lead]), PrecAdditive);
     for (unsigned I = 0, E = Ops.size(); I < E; ++I) {
       if (I == Lead)
         continue;
-      std::optional<Magnitude> Neg = negatedTerm(Ops[I]);
-      T += Neg ? " - " : " + ";
-      appendWrapped(T, Neg ? Neg->Frag : frag(Ops[I]), PrecAdditive + 1);
+      if (const auto Magnitude = subtractedText(Ops[I]); !Magnitude.empty()) {
+        T += " - ";
+        T += Magnitude;
+      } else {
+        T += " + ";
+        appendWrapped(T, frag(Ops[I]), PrecAdditive + 1);
+      }
     }
     return {std::move(T), PrecAdditive};
   }
   case SymOp::Mul:
-    if (std::optional<Magnitude> Neg = negatedProduct(R))
-      return {negate(*Neg), Neg->CoeffLed ? PrecMultiplicative : PrecUnary};
+    if (print_detail::hasUnaryMinus(Ctx, R)) {
+      // A unit negative coefficient negates the whole remaining product.
+      // A single quotient or sum already gets brackets from the join.
+      std::string Text = Ops.size() == 2 ? "-" : "-(";
+      appendJoined(Text, Ops.drop_front(), " * ", PrecMultiplicative + 1);
+      if (Ops.size() > 2)
+        Text += ')';
+      return {std::move(Text), PrecUnary};
+    }
     return {join(Ops, " * ", PrecMultiplicative + 1), PrecMultiplicative};
 
   case SymOp::And:

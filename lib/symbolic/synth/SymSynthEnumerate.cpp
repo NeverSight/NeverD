@@ -95,7 +95,8 @@ void appendSignature(const Signature &Sig, std::vector<uint64_t> &Words) {
 /// measuring a candidate reads its operands' at every point.
 class TermBank {
 public:
-  explicit TermBank(size_t BehaviourWords) : BehaviourWords(BehaviourWords) {
+  TermBank(SymContext &Ctx, size_t BehaviourWords)
+      : Ctx(Ctx), BehaviourWords(BehaviourWords) {
     Flat.swap(retainedBehaviours());
     Flat.clear();
   }
@@ -114,21 +115,37 @@ public:
     const uint64_t Hash = hashBehaviour(Words);
     if (contains(Hash, Words))
       return false;
-    add(Hash, Node, Words, Cost);
+    addMaterialized(Hash, Node, Words, Cost);
     return true;
   }
 
-  /// Record \p Node under a behaviour \c contains did not find for this \p
-  /// Hash.
-  void add(uint64_t Hash, SymRef Node, Behaviour Words, size_t Cost) {
-    const size_t Index = Nodes.size();
+  /// Record the recipe for a new behaviour without interning a node.
+  void defer(uint64_t Hash, GramOp Op, llvm::ArrayRef<size_t> Operands,
+             Behaviour Words, size_t Cost) {
+    Pending.push_back({Op, Operands.front(), Operands.back()});
+    add(Hash, Words, Cost);
+  }
+
+  // Only a target match needs an expression. Replay earlier representatives
+  // in insertion order so canonical builders and proof callbacks see the
+  // same nodes they would have seen during eager enumeration.
+  SymRef materialize(GramOp Op, llvm::ArrayRef<size_t> Operands) {
+    auto build = [&](GramOp Kind, size_t Left, size_t Right) {
+      const SymRef Args[] = {Nodes[Left], Nodes[Right]};
+      return buildGramOp(
+          Ctx, Kind,
+          llvm::ArrayRef(Args).take_front(isUnaryGramOp(Kind) ? 1 : 2));
+    };
+    for (const auto &R : Pending)
+      Nodes.push_back(build(R.Op, R.Left, R.Right));
+    Pending.clear();
+    return build(Op, Operands.front(), Operands.back());
+  }
+
+  void addMaterialized(uint64_t Hash, SymRef Node, Behaviour Words,
+                       size_t Cost) {
     Nodes.push_back(Node);
-    Flat.insert(Flat.end(), Words.begin(), Words.end());
-    ByHash[Hash].push_back(Index);
-    std::vector<size_t> &Tier = ByCost[Cost];
-    if (Tier.empty())
-      Costs.push_back(Cost);
-    Tier.push_back(Index);
+    add(Hash, Words, Cost);
   }
 
   bool contains(uint64_t Hash, Behaviour Words) const {
@@ -156,6 +173,22 @@ public:
   size_t costAt(size_t I) const { return Costs[I]; }
 
 private:
+  void add(uint64_t Hash, Behaviour Words, size_t Cost) {
+    const size_t Index = Nodes.size() + Pending.size() - 1;
+    Flat.insert(Flat.end(), Words.begin(), Words.end());
+    ByHash[Hash].push_back(Index);
+    std::vector<size_t> &Tier = ByCost[Cost];
+    if (Tier.empty())
+      Costs.push_back(Cost);
+    Tier.push_back(Index);
+  }
+
+  struct Recipe {
+    GramOp Op;
+    size_t Left, Right;
+  };
+  SymContext &Ctx;
+  std::vector<Recipe> Pending;
   size_t BehaviourWords;
   std::vector<SymRef> Nodes;
   std::vector<uint64_t> Flat;
@@ -181,7 +214,7 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
 
   const size_t Points = P.Grid.size();
   const size_t ValueWords = llvm::APInt::getNumWords(P.Width);
-  TermBank Bank(Points * ValueWords);
+  TermBank Bank(Ctx, Points * ValueWords);
 
   // Charge a grid's worth of work per offer, including candidates whose
   // refutation is cached.  This preserves the work limit and search order
@@ -273,7 +306,6 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
 
   Measured.resize(Points * ValueWords);
   llvm::SmallVector<llvm::APInt, 2> Args;
-  llvm::SmallVector<SymRef, 2> ArgNodes;
 
   // Read a candidate's behaviour off its operands'.  Nearly every search is at
   // a machine width, where a column of words needs no per-point interpretation.
@@ -310,17 +342,15 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     const bool Matches = Behaviour(Measured) == Behaviour(Target);
     const uint64_t Hash = hashBehaviour(Measured);
     const bool Fresh = !Bank.contains(Hash, Measured);
-    if (!Matches && !Fresh)
+    if (!Matches) {
+      if (Fresh)
+        Bank.defer(Hash, Op, Operands, Measured, Cost);
       return true;
-
-    ArgNodes.clear();
-    for (size_t I : Operands)
-      ArgNodes.push_back(Bank.node(I));
-    SymRef Node = buildGramOp(Ctx, Op, ArgNodes);
-
+    }
+    const SymRef Node = Bank.materialize(Op, Operands);
     if (Fresh)
-      Bank.add(Hash, Node, Measured, Cost);
-    return !Matches || offer(Node, Cost);
+      Bank.addMaterialized(Hash, Node, Measured, Cost);
+    return offer(Node, Cost);
   };
 
   for (size_t Cost = 2;; ++Cost) {
