@@ -9,6 +9,7 @@ is descriptive rather than a machine-dependent pass/fail threshold.
 
 import argparse
 import ast
+from collections import Counter
 import hashlib
 import itertools
 import json
@@ -1943,7 +1944,7 @@ def terminal_field_product(width, case):
     return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
 
 
-def rotated_field_product(width, case):
+def rotated_field_product(width, case, *, counted=False):
     """Products of recurring field expressions with both rotation directions."""
     variant = case % 4
     if width <= 64:
@@ -1994,7 +1995,14 @@ def rotated_field_product(width, case):
             word = f"{('zext', 'sext')[extension]}({field},{width})"
         factors.append(f"({offset}+({weight})*{word})")
     scale = ((3, 5, 7, -3)[variant] << (width - 2 * bits - 1)) % (1 << width)
-    return f"({scale:#x}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)"
+    if counted:
+        # Every factor has the full word width. A counted product gives the
+        # independent evaluator the exact multiset without a 7,573-deep AST.
+        terms = ",".join(f"{term},{copies}" for term, copies in Counter(factors).items())
+        product = f"scaled_product({scale:#x},{terms})"
+    else:
+        product = f"({scale:#x}*" + "*".join(factors) + ")"
+    return product + "+(x^y)+2*(x&y)+(u|v)"
 
 
 def overlapping_field(width, case):
@@ -2178,6 +2186,18 @@ def check_semantics(expressions, results, width):
                         return value.value & ((1 << bits.value) - 1), bits.value
                     if isinstance(value, ast.Name) and value.id in values:
                         return values[value.id] & ((1 << bits.value) - 1), bits.value
+            if name == "scaled_product":
+                scale, bits = evaluated[node.args[0]]
+                # After multiplying by scale, only this residue of the
+                # unscaled product can affect the full-width answer.
+                modulus = (1 << bits) // (scale & -scale)
+                product = 1
+                for term, copies in zip(node.args[1::2], node.args[2::2]):
+                    value, factor_bits = evaluated[term]
+                    if factor_bits != bits or not isinstance(copies, ast.Constant):
+                        raise ValueError("Expected a repeated full-width factor")
+                    product = product * pow(value % modulus, copies.value, modulus) % modulus
+                return (scale * product) & ((1 << bits) - 1), bits
             if name in ("ashr", "lshr") and len(node.args) == 2:
                 value, bits = evaluated[node.args[0]]
                 count = evaluated[node.args[1]][0]
@@ -2229,6 +2249,10 @@ def check_semantics(expressions, results, width):
             elif isinstance(current, ast.UnaryOp):
                 pending.append((current.operand, False))
             elif (isinstance(current, ast.Call) and isinstance(current.func, ast.Name)
+                  and current.func.id == "scaled_product"):
+                pending.extend((arg, False) for arg in reversed(current.args[1::2]))
+                pending.append((current.args[0], False))
+            elif (isinstance(current, ast.Call) and isinstance(current.func, ast.Name)
                   and current.func.id in ("concat", "rol", "ror", "ashr", "lshr")):
                 pending.extend((arg, False) for arg in reversed(current.args))
             elif (isinstance(current, ast.Call)
@@ -2249,7 +2273,7 @@ def check_semantics(expressions, results, width):
     names = sorted({
         node.id for expression in [*expressions, *(r["output"] for r in results)]
         for node in ast.walk(parse(expression))
-        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror", "ashr", "lshr")
+        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror", "ashr", "lshr", "scaled_product")
     })
     assignments = [
         {name: (x if index % 2 == 0 else y)
@@ -2422,6 +2446,10 @@ def main():
             }[args.family]
             expressions = generate(width, args.count)
             path.write_text("\n".join(expressions) + "\n", encoding="utf-8")
+            semantic_inputs = (
+                [rotated_field_product(width, i, counted=True) for i in range(args.count)]
+                if args.family == "rotated-field-product" else expressions
+            )
             row = {
                 "width": width,
                 "corpusSha256": digest(path),
@@ -2431,7 +2459,7 @@ def main():
             # Warm both processes, then alternate order to reduce thermal/load bias.
             for info in engines.values():
                 warm = run(info, path, width)
-                check_semantics(expressions, warm["results"], width)
+                check_semantics(semantic_inputs, warm["results"], width)
             for iteration in range(args.rounds):
                 for name in (
                     list(engines) if iteration % 2 == 0 else list(reversed(engines))
