@@ -255,6 +255,89 @@ static long long td(long long x, int b) {
                             "retll", {"retll", "td"}, {0, 1, -1, 0x4567, 77});
 }
 
+// A join is not an unknown input merely because its first real RDX write has
+// SSA version zero. The indirect target reads the third integer argument.
+TEST_F(X86_64_CallAbi, AnIndirectCallTakesItsBranchSeededThirdArgument) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Assembly = tmpFile("joined-argument.S");
+  const auto Object = tmpFile("joined-argument.o");
+  const auto Source = tmpFile("joined-argument.c");
+  const auto Program = tmpFile("joined-argument.exe");
+  for (bool FirstWriteInEntry : {false, true}) {
+    SCOPED_TRACE(FirstWriteInEntry);
+    {
+      std::ofstream Out(Assembly);
+      Out << R"S(
+.text
+.globl joined_argument
+.type joined_argument,@function
+joined_argument:
+  push %rbp
+  mov %rsp,%rbp
+  lea numeric_sink(%rip),%rax
+)S";
+      if (FirstWriteInEntry)
+        Out << R"S(
+  lea -13(%rdi),%edx
+  test %edi,%edi
+  jle .Ljoined
+  lea 7(%rdi),%edx
+)S";
+      else
+        Out << R"S(
+  test %edi,%edi
+  jle .Llow
+  lea 7(%rdi),%edx
+  jmp .Ljoined
+.Llow:
+  lea -13(%rdi),%edx
+)S";
+      Out << R"S(
+.Ljoined:
+  mov %edi,%esi
+  add $1,%edi
+  call *%rax
+  pop %rbp
+  ret
+.size joined_argument,.-joined_argument
+.type numeric_sink,@function
+numeric_sink:
+  imul $11,%edi,%eax
+  imul $7,%esi,%esi
+  add %esi,%eax
+  add %edx,%eax
+  ret
+.size numeric_sink,.-numeric_sink
+)S";
+    }
+    const auto Compiled =
+        exec(NEVERD_TEST_CLANG, {"-target", "x86_64-linux-gnu", "-c",
+                               Assembly.string(), "-o", Object.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    const auto Decompiled = decompileToHighC(Object);
+    ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+    std::ifstream Input(tmpFile("decompiled_high.c"));
+    ASSERT_TRUE(Input.good());
+    const std::string C((std::istreambuf_iterator<char>(Input)),
+                        std::istreambuf_iterator<char>());
+    std::ofstream(Source) << C << R"C(
+int main(void) {
+    for (int i = -512; i < 512; ++i)
+        if ((int)joined_argument(i) != 11 * (i + 1) + 7 * i + i
+                                        + (i > 0 ? 7 : -13))
+            return 1;
+    return 0;
+}
+)C";
+    const auto Built =
+        exec(NEVERD_TEST_CLANG, {"-std=gnu11", "-O2", "-fno-strict-aliasing",
+                               Source.string(), "-o", Program.string()});
+    ASSERT_EQ(Built.exitCode, 0) << Built.err << C;
+    EXPECT_EQ(exec(Program.string(), {}).exitCode, 0) << C;
+  }
+}
+
 // `long f(long a) { return (signed char)a; }` sign-extends the low byte of
 // whatever register its caller passes.  Built apart from its callers, its C
 // must do the same: a `signed char` parameter would let Clang take the
