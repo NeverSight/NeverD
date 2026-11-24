@@ -325,6 +325,41 @@ TEST_F(PEFixedImageTest, ReturningCallResultObjectKeepsNullAndBoundedWrites) {
   EXPECT_TRUE(Outside.Residual.Blocks.empty());
 }
 
+TEST_F(PEFixedImageTest,
+       ReturningCallRepeatedContainedWritesReuseNonnullProof) {
+  std::vector<uint8_t> Code{0xba, 0x40, 0,    0,    0, // mov edx,64
+                            0x48, 0x83, 0xec, 0x40,    // sub rsp,64
+                            0xff, 0xd7,                // call rdi
+                            0x48, 0x83, 0xc4, 0x40,    // add rsp,64
+                            0x48, 0x85, 0xc0,          // test rax,rax
+                            0x74, 0};                  // je ret
+  for (unsigned I = 0; I < 8; ++I)
+    Code.insert(Code.end(), {0x48, 0x89, 0x48, static_cast<uint8_t>(8 * I)});
+  Code[19] = static_cast<uint8_t>(Code.size() - 20);
+  Code.push_back(0xc3);
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x1100);
+  O.X64MachineExits = {{1, Base + 0x1100, MachineExitKind::Trap}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  O.MaxSolverQueries = 13;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 3;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  unsigned Stores = 0;
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops)
+      Stores += Op.Opcode == NdOp::STORE;
+  EXPECT_GE(Stores, 9U);
+}
+
 TEST_F(PEFixedImageTest, ReturningCallResultPointerSurvivesWritableGlobal) {
   // The old image word could name the entry frame. The program replaces it
   // with the returned object pointer before a later node reloads and writes.

@@ -3161,6 +3161,9 @@ bool Specializer::evaluate(int Id) {
       Options.X64CR8State ? Ctx.mkZExt(Ctx.mkFreshVar(4, "cr8"), 64) : SymRef();
   FrameOrigins Origins = Draft.Incoming.Origins;
   FrameFacts Frame = Draft.Incoming.Frame;
+  // Assumptions only accumulate within this node. A proved nonnull object
+  // remains nonnull for later stores until a call creates a different root.
+  std::set<uint32_t> ProvedNonnullObjectRoots;
   SymExec Exec(Ctx, State);
   auto IncomingPredicate =
       controlPredicate(State, FrameRoot, Draft.Incoming.Controls);
@@ -4223,19 +4226,30 @@ bool Specializer::evaluate(int Id) {
                     // declared extent misses the disjoint entry frame.
                     if (!chargeObjectWork(1))
                       return false;
-                    const auto IsNull = Ctx.mkEq(ObjectRoots[Object->Root - 1],
-                                                 Ctx.mkConst(64, 0));
-                    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
-                      return fail(SpecializationStatus::BudgetExceeded,
-                                  "returned object separation node budget "
-                                  "exhausted");
-                    const auto Nonnull =
-                        enumerate(Ctx, Exec.pathPredicate(), {IsNull}, 1);
-                    if (Failed)
-                      return false;
-                    if (Nonnull.Status == FiniteValueStatus::Complete &&
-                        Nonnull.Tuples ==
-                            std::vector<std::vector<uint64_t>>{{0}}) {
+                    const size_t Index = Object->Root - ReturnBegin - 1;
+                    const SymRef Root = ObjectRoots[Object->Root - 1];
+                    const auto Known = Frame.ReturnedObjectNonNull.find(Index);
+                    bool Nonnull = Known != Frame.ReturnedObjectNonNull.end() &&
+                                   Known->second;
+                    if (!Nonnull && Ctx.isVar(Root))
+                      Nonnull = ProvedNonnullObjectRoots.count(Ctx.varId(Root));
+                    if (!Nonnull) {
+                      const auto IsNull = Ctx.mkEq(Root, Ctx.mkConst(64, 0));
+                      if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+                        return fail(SpecializationStatus::BudgetExceeded,
+                                    "returned object separation node budget "
+                                    "exhausted");
+                      const auto Proof =
+                          enumerate(Ctx, Exec.pathPredicate(), {IsNull}, 1);
+                      if (Failed)
+                        return false;
+                      Nonnull = Proof.Status == FiniteValueStatus::Complete &&
+                                Proof.Tuples ==
+                                    std::vector<std::vector<uint64_t>>{{0}};
+                      if (Nonnull && Ctx.isVar(Root))
+                        ProvedNonnullObjectRoots.insert(Ctx.varId(Root));
+                    }
+                    if (Nonnull) {
                       StorePreservation = SymStorePreservation{
                           FrameRoot, Bounds.Begin, Bounds.End};
                       ProvedFrameSeparation = true;
