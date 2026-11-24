@@ -825,12 +825,15 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
     // instruction. An external jump must bypass the transfer's private slot
     // effects and edge PHI copies, even if they are emitted first.
     const auto First = llvm::upper_bound(NativeEntries, CurBlock.StartAddr);
-    if (First != NativeEntries.end() && *First < CurBlock.EndAddr) {
+    const bool Guarded = CurBlock.Role == MedBlockRole::PredicatedEffect;
+    if (Guarded ||
+        (First != NativeEntries.end() && *First < CurBlock.EndAddr)) {
       const auto Last =
           std::lower_bound(First, NativeEntries.end(), CurBlock.EndAddr);
       for (size_t I = BlkBodyStart; I < Func.Body.size(); ++I)
         walkStmt(Func.Body[I], [&](HighStmt &S) {
-          if (std::binary_search(First, Last, S.Addr)) {
+          if ((Guarded && Entry && S.Addr == Entry) ||
+              std::binary_search(First, Last, S.Addr)) {
             S.NonEntryInstruction = S.Addr;
             S.Addr = 0;
           }
@@ -839,7 +842,9 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
     // Enter before every effect of the block. A delayed transfer can emit
     // its slot's statement first and its head-address call/branch later;
     // finding that later address does not make it a valid entry anchor.
-    if (Entry && Entry != InvalidVA &&
+    // A predicated effect shares its guard's instruction address. Only the
+    // guard can be entered there; its private edge executes by fallthrough.
+    if (!Guarded && Entry && Entry != InvalidVA &&
         (BlkBodyStart == Func.Body.size() ||
          Func.Body[BlkBodyStart].Addr != Entry))
       MissingEntries.emplace_back(BlkBodyStart, Entry);

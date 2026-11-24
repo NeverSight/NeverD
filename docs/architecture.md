@@ -5593,6 +5593,10 @@ comparison uses the inferred result width. If another edge needs an
 unspecified register, generated C traps on that edge. LLVM source projection
 uses the same missing-value marker for a bare link-register return whose
 integer or pointer result has no reaching write or bound argument.
+For a conditional delay slot, HighIR keeps the shared guard address on the
+guard. Two consecutive equal conditions stay separate when a jump can
+enter the second test. The slot's computation and edge copies execute only
+when the original branch executes its slot.
 
 The same demand (`MedByteDemand`) settles which register holds the result of
 a function whose returns leave a floating value in the vector return

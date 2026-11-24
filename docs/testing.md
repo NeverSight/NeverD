@@ -9226,6 +9226,9 @@ covers a second merge, a difference erased by a mask or the return width,
 and an incomplete incoming value.
 `ReturnContract.NestedSharedReturnOverwritesOnlyAH` executes both C outputs
 on the two paths that update AH and the path that bypasses it.
+`ReturnContract.SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot` runs both
+polarities of the branch after the inner merge and checks the returned value
+for the taken edge, the annulled edge and the path that bypasses the slot.
 `ReturnContract.MissingPointerResultUsesTheSourceABIPointerWidth` checks
 the four-byte n32 and eight-byte n64 source markers and native IR for
 the same bare pointer return.

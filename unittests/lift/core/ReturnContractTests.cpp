@@ -1879,6 +1879,51 @@ int main(void) {
 )");
 }
 
+TEST(ReturnContract, SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot) {
+  for (bool BranchOnZero : {true, false}) {
+    SCOPED_TRACE(BranchOnZero);
+    const uint32_t Words[] = {
+        0x640c0002,
+        0x10ac000f,
+        0, // mode 2 branches to the bare path
+        0x640c0001,
+        0x10ac0009,
+        0, // mode 1 branches to the third constant
+        0x10800004,
+        0, // beqz a0,ten
+        0x6402000f,
+        0x10000009,
+        0, // v0 = 15; b inner
+        0x6402000a,
+        0x10000006,
+        0, // ten: v0 = 10; b inner
+        0x6402001f,
+        0x10000007,
+        0, // v0 = 31; b done
+        0x10000005,
+        0,                                        // bare: b done
+        BranchOnZero ? 0x50800003u : 0x54800003u, // inner: beqzl/bnezl a0,done
+        0x64420007,                               // taken slot: daddiu v0,v0,7
+        0x10000001,
+        0,
+        0x03e00008,
+        0}; // b done; done: jr ra
+    std::vector<uint8_t> Code;
+    for (uint32_t Word : Words)
+      for (unsigned Shift = 0; Shift < 32; Shift += 8)
+        Code.push_back(static_cast<uint8_t>(Word >> Shift));
+    runIntegerReturnSources(Arch::MIPS64EL, std::move(Code), R"(
+int main(void) {
+    return choose_result(0, 0) != (ON_ZERO ? 17 : 10) ||
+           choose_result(1, 0) != (ON_ZERO ? 15 : 22) ||
+           choose_result(0, 1) != 31;
+}
+)",
+                            BranchOnZero ? "#define ON_ZERO 1\n"
+                                         : "#define ON_ZERO 0\n");
+  }
+}
+
 TEST(ReturnContract, MissingPointerResultUsesTheSourceABIPointerWidth) {
   for (Arch Target : {Arch::MIPS64N32EL, Arch::MIPS64EL}) {
     const auto &TRI = getTargetRegInfo(Target);
