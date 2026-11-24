@@ -2068,6 +2068,57 @@ TEST(GoStackABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
 }
 
+TEST(GoInternalABI, ABranchDecidesTheSelectionBelowIt) {
+  // main.f(p, n uintptr) uintptr counts n's trailing zeros where n is not
+  // zero and p is 1, as `runtime.(*pageCache).alloc` does: `bsf` keeps RCX
+  // where RBX is zero, which the test two blocks above has ruled out.
+  //   main.f: cmp rsp, [r14+0x10]; jbe grow; test rbx, rbx; je zero
+  //           cmp rax, 1; jne other; bsf rcx, rbx; mov rax, rcx; ret
+  //   other:  lea rax, [rax+rbx]; ret
+  //   zero:   xor eax, eax; ret
+  //   grow:   spill RAX and RBX; call morestack; reload them; jmp main.f
+  // The selection of RCX's old value printed as an unknown value.
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t Grow = F + 0x40;
+  GoTestImage T;
+  T.writeText(F,
+              {0x49, 0x3B, 0x66, 0x10, 0x76, 0x1B, 0x48, 0x85, 0xDB, 0x74, 0x13,
+               0x48, 0x83, 0xF8, 0x01, 0x75, 0x08, 0x48, 0x0F, 0xBC, 0xCB, 0x48,
+               0x89, 0xC8, 0xC3, 0x48, 0x8D, 0x04, 0x18, 0xC3, 0x31, 0xC0, 0xC3,
+               0x48, 0x89, 0x44, 0x24, 0x08, 0x48, 0x89, 0x5C, 0x24, 0x10, 0xE8,
+               0x10, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x8B,
+               0x5C, 0x24, 0x10, 0xEB, 0xC4, 0x0F, 0x1F, 0x40, 0x00, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{Grow, "runtime.morestack_noctxt"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.MorestackEntries = {Grow};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const auto Function =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(Function, R.MedFuncs.end());
+  EXPECT_EQ(Function->Params.size(), 2u);
+  EXPECT_TRUE(llvm::none_of(Function->Blocks, [](const MedBlock &Block) {
+    return llvm::any_of(
+        Block.Ops, [](const MedOp &Op) { return Op.Opcode == NdOp::SELECT; });
+  }));
+  const std::string Text = highCBody(R, T.Img, "main_f");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
 TEST(GoStackGrowth, AFunctionOfFloatsEntersItsBodyDirectly) {
   // main.m(x float64) (float64, float64) returns (x, x) for zero, (0, x)
   // otherwise, and for a negative x the results of m(-x) the other way

@@ -283,6 +283,7 @@ add_neverd_unittest(NeverDMedDceTests
 add_neverd_unittest(NeverDMedPhiRecompositionTests
   core/MedPhiRecompositionTests.cpp
   core/MedConstantPropagationTests.cpp
+  core/MedDominatedSelectsTests.cpp
   LINK_COMPONENTS IRMed)
 
 add_neverd_unittest(NeverDFPParameterMaskTests

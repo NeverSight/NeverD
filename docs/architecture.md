@@ -4063,6 +4063,20 @@ temporary reaches only that arm of selections on the condition, through
 integer operations that cannot fault. A join, store, call, branch or division
 keeps the selection, so a value read on every path stays what it was.
 
+A selection a dominating conditional branch decides takes its arm right
+after SSA, before ABI discovery (`foldDominatedSelects`). A branch decides its
+condition in a successor that only its edge enters, exceptional edges
+included: true where it jumps, false where it falls through, and so in every
+block that successor dominates. The selection's condition must be the
+branch's value, or the same comparison of the same SSA values (equality
+either way round, through copies and `x & x`), or the negation of either.
+`bsf` keeps its destination where its source is zero, which Go's compiler
+emits only where a test has ruled that out: `test rdx, rdx; je; cmp rbx, 1;
+jne; bsf rcx, rdx` in `runtime.(*pageCache).alloc` selected RCX's old value,
+which no argument set, and printed it as unknown two blocks below the test.
+The C routes' own if/else simplification caught only a selection directly
+under its test.
+
 ## Manual PDB presentation boundary
 
 `lib/debug/PDBIdentity.h` owns RSDS build identity for full loading, symbol-store

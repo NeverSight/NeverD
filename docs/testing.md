@@ -15809,7 +15809,12 @@ alongside the existing constant-propagation cases. Reordered edges,
 loop carries, complete complementary slices, retained partial reads,
 exceptional/incomplete inputs, fresh IDs including intrinsic outputs and
 the converter's later allocations, and unchanged call/memory effects have
-independent controls. The default
+independent controls. `MedDominatedSelects.*` in the same target fold a
+selection two blocks below the test that decides it, take the other arm for
+the negated comparison, and keep it where the other edge joins in or the
+comparison is another. `GoInternalABI.ABranchDecidesTheSelectionBelowIt`
+runs the pipeline over a Go function shaped as `(*pageCache).alloc`: no
+selection is left, and its C traps nowhere. The default
 LowIR conversion case verifies pipeline integration. Run this target,
 the shared ABI suite and HighIR/control-flow regressions after changing
 the recomposition owner.

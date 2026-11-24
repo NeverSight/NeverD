@@ -60,6 +60,7 @@
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
+#include "neverd/ir/med/MedDominatedSelects.h"
 #include "neverd/ir/med/MedSyscallConvention.h"
 #include "neverd/ir/med/X86/X86RegistrationCall.h"
 #include "neverd/ir/med/X86/X86RegistrationEntry.h"
@@ -2490,6 +2491,13 @@ MedFunc LowToMedConverter::convertFunction(
     // half phis.
     mergeLoopCarriedVectorReads(Func);
     debugVerifyMedFunc(Func, "mergeLoopCarriedVectorReads");
+
+    // A selection a dominating branch decides takes its arm before ABI
+    // discovery, so the arm it never takes reads no register: `bsf` keeps
+    // its destination where its source is zero, which a test before it
+    // has ruled out.
+    if (foldDominatedSelects(Func))
+      debugVerifyMedFunc(Func, "foldDominatedSelects");
 
     // SGX's implicit register dependencies are conditional on EAX. Resolve
     // constant leaf selectors before ABI discovery, so an unused hardware
