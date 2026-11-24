@@ -26,8 +26,8 @@ i386WideStackArguments(const FunctionSym &Function, Arch A, BinaryFormat F) {
   const auto Word = getTargetRegInfo(A).PointerSize;
   if (!Function.ReturnType || Function.ReturnType->Size > Word ||
       !llvm::any_of(Function.Params, [Word](const auto &Param) {
-        return Param.second && Param.second->Kind == NdTypeKind::Int &&
-               Param.second->Size > Word;
+        return Param.second && Param.second->Size > Word &&
+               (Param.second->Kind == NdTypeKind::Int || Param.second->IsEnum);
       }))
     return std::nullopt;
   return libc::fixedIntegerCallArguments(Function, A, F);

@@ -2526,9 +2526,10 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
                           auto *Type = Call->getArgOperand(I)->getType();
                           if (!(Type->isIntegerTy() || Type->isPointerTy()))
                             return 0;
-                          return Mod.getDataLayout()
-                              .getTypeStoreSize(Type)
-                              .getFixedValue();
+                          const auto Bits = Mod.getDataLayout()
+                                                .getTypeSizeInBits(Type)
+                                                .getFixedValue();
+                          return Bits % 8 == 0 ? Bits / 8 : 0;
                         });
         std::vector<TypeRef> Parameters;
         bool ScalarParameters = true;

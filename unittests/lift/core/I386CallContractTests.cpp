@@ -657,6 +657,16 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(&fixture_wide),
                                             Expected), "stack ABI");
 )",
         {"--target=i686-pc-windows-msvc", "-ffreestanding", "-Werror"});
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+    source_call_execution_test::compileAndRun(Source + R"(
+uint32_t __attribute__((stdcall)) fixture_wide(uint32_t first, uint64_t seq,
+                                               uint32_t last) {
+    return first == 11 && seq == UINT64_C(0xfedcba9876543210) && last == 29;
+}
+int main(void) { return wrap(11, 0x76543210, 0xfedcba98, 29) != 1; }
+)",
+                                              {"-m32"});
+#endif
   }
 }
 
