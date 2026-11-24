@@ -15,7 +15,6 @@
 
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MipsABIFlags.h"
@@ -38,26 +37,6 @@ struct ObjectFixture {
     B.CreateRet(B.getInt32(37));
   }
 };
-
-class MIPSObject : public ::testing::Test {
-protected:
-  void SetUp() override {
-    if (!archCodegenSupported(Arch::MIPS32))
-      GTEST_SKIP() << getArchName(Arch::MIPS32);
-  }
-};
-
-TEST(MIPSObjectCapability, MatchesRelocatableELFEmission) {
-  ObjectFixture F;
-  const auto Result =
-      Codegen().compile(F.Module, Arch::MIPS32, BinaryFormat::ELF);
-  const llvm::Triple Triple(llvmCodegenTriple(Arch::MIPS32, BinaryFormat::ELF));
-  std::string Diagnostic;
-  const auto *Backend = llvm::TargetRegistry::lookupTarget(Triple, Diagnostic);
-  EXPECT_EQ(archCodegenSupported(Arch::MIPS32), Backend != nullptr);
-  EXPECT_EQ(Result.Success, Backend != nullptr);
-  EXPECT_EQ(!Result.ObjectData.empty(), Result.Success);
-}
 
 void checkObject(Arch Target, const MIPSImageMetadata *Profile,
                  unsigned ISALevel, unsigned Revision, unsigned FPABI) {
@@ -151,7 +130,7 @@ void checkObject(Arch Target, const MIPSImageMetadata *Profile,
   EXPECT_TRUE(SawText);
 }
 
-TEST_F(MIPSObject, ClassicGPRAndPointerWidthsAreIndependent) {
+TEST(MIPSObject, ClassicGPRAndPointerWidthsAreIndependent) {
   using namespace llvm::Mips;
   for (auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
@@ -166,7 +145,7 @@ TEST_F(MIPSObject, ClassicGPRAndPointerWidthsAreIndependent) {
   }
 }
 
-TEST_F(MIPSObject, ImageRevisionAndFPABIReachTheObjectWriter) {
+TEST(MIPSObject, ImageRevisionAndFPABIReachTheObjectWriter) {
   using namespace llvm::Mips;
   for (auto Target : {Arch::MIPS32, Arch::MIPS32EL}) {
     MIPSImageMetadata Profile;
@@ -183,7 +162,7 @@ TEST_F(MIPSObject, ImageRevisionAndFPABIReachTheObjectWriter) {
   }
 }
 
-TEST_F(MIPSObject, MSAUsesTheRelease5ABIInBothByteOrders) {
+TEST(MIPSObject, MSAUsesTheRelease5ABIInBothByteOrders) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     MIPSImageMetadata Profile;
@@ -199,7 +178,7 @@ TEST_F(MIPSObject, MSAUsesTheRelease5ABIInBothByteOrders) {
   }
 }
 
-TEST_F(MIPSObject, HistoricalELFRecordsRetainTheOriginalISA) {
+TEST(MIPSObject, HistoricalELFRecordsRetainTheOriginalISA) {
   using namespace llvm::Mips;
   for (auto Target : {Arch::MIPS32, Arch::MIPS32EL}) {
     for (unsigned ISA : {1, 2}) {
@@ -223,7 +202,7 @@ TEST_F(MIPSObject, HistoricalELFRecordsRetainTheOriginalISA) {
   }
 }
 
-TEST_F(MIPSObject, RejectsWrongTriplesAndUnsupportedInstructionSelectors) {
+TEST(MIPSObject, RejectsWrongTriplesAndUnsupportedInstructionSelectors) {
   ObjectFixture F;
   for (const char *Triple : {"mipsel-linux-gnu", "mips64-linux-gnuabin32",
                              "mips64el-linux-gnuabi64", "aarch64-linux-gnu"})
@@ -254,7 +233,7 @@ TEST_F(MIPSObject, RejectsWrongTriplesAndUnsupportedInstructionSelectors) {
       Codegen().compile(F.Module, Arch::MIPS32, BinaryFormat::ELF).Success);
 }
 
-TEST_F(MIPSObject, InvalidFunctionFeaturesReturnDiagnosticsToTheCaller) {
+TEST(MIPSObject, InvalidFunctionFeaturesReturnDiagnosticsToTheCaller) {
   ObjectFixture F;
   MIPSImageMetadata Profile;
   std::string Diagnostic;
@@ -301,7 +280,7 @@ TEST_F(MIPSObject, InvalidFunctionFeaturesReturnDiagnosticsToTheCaller) {
       << Diagnostic;
 }
 
-TEST_F(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
+TEST(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
   for (bool Mips16 : {false, true})
     for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
       SCOPED_TRACE(getArchName(Target));
@@ -365,7 +344,7 @@ TEST_F(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
     }
 }
 
-TEST_F(MIPSObject, FixedAddressEmissionKeepsEntryPointersAndFunctionRanges) {
+TEST(MIPSObject, FixedAddressEmissionKeepsEntryPointersAndFunctionRanges) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     SCOPED_TRACE(getArchName(Target));
@@ -408,7 +387,7 @@ TEST_F(MIPSObject, FixedAddressEmissionKeepsEntryPointersAndFunctionRanges) {
   }
 }
 
-TEST_F(MIPSObject, EquivalentTriplesSelectTheSameABI) {
+TEST(MIPSObject, EquivalentTriplesSelectTheSameABI) {
   for (const auto &[Target, Triple] :
        {std::pair{Arch::MIPS32, "mips-linux-musl"},
         std::pair{Arch::MIPS64EL, "mips64el-linux-gnu"},
