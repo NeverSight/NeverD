@@ -8322,7 +8322,13 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         ::neverd::limits::worker::kEngineExecuteImplDecompileLimitSizeFieldMax);
     if (!limit)
       throw Error("invalid_request", "limit must be at least 1");
-    const auto entry = functionEntry(address);
+    if (p.contains("listed_entry_only") &&
+        !p.at("listed_entry_only").is_boolean())
+      throw Error("invalid_request", "listed_entry_only must be true or false");
+    const bool listedOnly = p.value("listed_entry_only", false);
+    if (listedOnly && neverd_func_find_by_addr(session_, address) < 0)
+      throw Error("not_found", "No listed function starts at this address");
+    const auto entry = listedOnly ? address : functionEntry(address);
     if (p.contains("refresh") && !p.at("refresh").is_boolean())
       throw Error("invalid_request", "refresh must be true or false");
     if (p.value("refresh", false)) {

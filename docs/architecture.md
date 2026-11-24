@@ -6930,6 +6930,10 @@ they stay in the inputs. Types new to the library that nothing names leave every
 render as it was, and a file beside the folders (`.same`) says the folder holds for
 the inputs after them too. A session whose job starts over after it began no longer
 reads as a new session does, and stops reading and adding to the store.
+When the user jumps to a new executable listing page with idle analysis enabled,
+an idle, loaded replica may prepare source for the target while the owner reads
+the listing. The worker checks its function index before analyzing an entry.
+The foreground view reuses the resulting document under the same source options.
 With a store that reaches every function, the owner answers those views itself
 (`kept_only`), and a replica starts only for what the store does not answer. A page
 the owner gave stays the owner's to answer for while it keeps it, even once a replica

@@ -107,6 +107,11 @@ public:
   void prepareFunctionRead(quint64 address, const QString &declaration = {}) {
     analysis_.prepareRead(address, declaration);
   }
+  void prefetchListedSource(quint64 address) {
+    if (loaded_ && idleAnalysis() &&
+        capabilities_.contains(QStringLiteral("listed_source_prefetch")))
+      analysis_.prefetchSource(address, /*listedOnly=*/true);
+  }
   QueryService &analysisQueries(const QJsonObject &payload, QObject *owner) {
     return analysis_.queries(payload, owner);
   }
