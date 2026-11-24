@@ -48,6 +48,16 @@ NEVERD_PAUTH_NATIVE_TEXT(kOracleArtifactProperty,
 NEVERD_PAUTH_NATIVE_TEXT(kOracleHighRoute, "high")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleLLVMRoute, "llvm")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleOptimizedLLVMRoute, "llvm-opt")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleBackendTarget, "arm64e-apple-macos15")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleBackendObject, "backend.o")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleOptimizedBackendObject, "backend-opt.o")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleCallerDirectory, "caller")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleStdint, "#include <stdint.h>\n")
+NEVERD_PAUTH_NATIVE_TEXT(kReturnOraclePrototype,
+                         "extern uint64_t {0}(uint64_t, uint64_t, uint64_t);\n")
+NEVERD_PAUTH_NATIVE_TEXT(kPrefixOraclePrototype,
+                         "extern uint64_t {0}(uint64_t, uint64_t, uint64_t, "
+                         "uint64_t);\n")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleObjectExtension, "o")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleCLanguage, "c")
 NEVERD_PAUTH_NATIVE_TEXT(

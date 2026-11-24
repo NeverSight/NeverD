@@ -151,7 +151,8 @@ void compileArm64eC(const std::string &Source,
                     bool EmitLLVM = false, llvm::StringRef ExecuteTarget = {},
                     NativeCapability *Capability = nullptr,
                     llvm::StringRef Language = kOracleCLanguage,
-                    llvm::StringRef ObjectDirectory = {}) {
+                    llvm::StringRef ObjectDirectory = {},
+                    llvm::StringRef LinkObject = {}) {
   const bool ExecuteNative = !ExecuteTarget.empty();
 #ifdef NEVERD_TEST_CLANG
   const std::string HostCompiler = NEVERD_TEST_CLANG;
@@ -207,6 +208,8 @@ void compileArm64eC(const std::string &Source,
         SourcePath,
         "-o",
         ObjectPath};
+    if (!LinkObject.empty())
+      Args.insert(Args.begin() + 1, LinkObject); // Before -x selects C.
     if (EmitLLVM)
       Args.append({"-S", "-emit-llvm"});
     else if (ExecuteNative)
@@ -1730,8 +1733,37 @@ TEST(AArch64PAuthSemantics, ExceptionReturnsNeverLoseAuthentication) {
 }
 
 namespace {
+void checkOracleBackend(llvm::Module &Module, const std::string &Caller,
+                        llvm::StringRef ExecuteTarget,
+                        llvm::StringRef Directory, llvm::StringRef Filename) {
+  const auto Object = Codegen().compile(
+      Module, Arch::AArch64, BinaryFormat::MachO, kOracleBackendTarget);
+  ASSERT_TRUE(Object.Success);
+  if (Directory.empty() && ExecuteTarget.empty())
+    return;
+  llvm::SmallString<128> Path(Directory);
+  if (Directory.empty()) {
+    ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+        kOracleModule, kOracleObjectExtension, Path));
+  } else {
+    llvm::sys::path::append(Path, Filename);
+  }
+  llvm::FileRemover Remove(Path, Directory.empty());
+  std::error_code Error;
+  llvm::raw_fd_ostream Out(Path, Error);
+  ASSERT_FALSE(Error) << Error.message();
+  Out.write(reinterpret_cast<const char *>(Object.ObjectData.data()),
+            Object.ObjectData.size());
+  Out.close();
+  ASSERT_FALSE(Out.has_error());
+  if (!ExecuteTarget.empty())
+    compileArm64eC(Caller, {}, /*EmitLLVM=*/false, ExecuteTarget, nullptr,
+                   kOracleCLanguage, {}, Path);
+}
+
 void checkCProjections(const std::vector<MedFunc> &Functions,
-                       llvm::StringRef Oracle, llvm::StringRef ExecuteTarget) {
+                       llvm::StringRef Oracle, llvm::StringRef ExecuteTarget,
+                       const char *CallerPrototype = nullptr) {
   CEmitterOptions Options;
   Options.TheArch = Arch::AArch64;
   Options.Format = BinaryFormat::MachO;
@@ -1746,6 +1778,21 @@ void checkCProjections(const std::vector<MedFunc> &Functions,
       ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
       testing::Test::RecordProperty(kOracleArtifactProperty,
                                     Directory.str().str());
+    }
+  }
+  std::string Caller;
+  if (CallerPrototype) {
+    llvm::raw_string_ostream Out(Caller);
+    Out << kOracleStdint;
+    for (const auto &F : Functions)
+      Out << llvm::formatv(CallerPrototype, F.Name);
+    Out << Oracle;
+    if (!Directory.empty()) {
+      llvm::SmallString<128> Path(Directory);
+      llvm::sys::path::append(Path, kOracleCallerDirectory);
+      ASSERT_FALSE(llvm::sys::fs::create_directory(Path));
+      ASSERT_NO_FATAL_FAILURE(compileArm64eC(Caller, {}, /*EmitLLVM=*/false, {},
+                                             nullptr, kOracleCLanguage, Path));
     }
   }
   constexpr struct {
@@ -1768,6 +1815,10 @@ void checkCProjections(const std::vector<MedFunc> &Functions,
         optimize(*Module);
       ASSERT_FALSE(llvm::verifyModule(*Module));
       ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+      if (CallerPrototype)
+        ASSERT_NO_FATAL_FAILURE(checkOracleBackend(
+            *Module, Caller, ExecuteTarget, Directory,
+            Optimize ? kOracleOptimizedBackendObject : kOracleBackendObject));
     } else {
       std::vector<HighFunc> High;
       for (const auto &F : Functions)
@@ -1810,7 +1861,7 @@ void checkReturnOracle(llvm::StringRef ExecuteTarget = {}) {
   const auto Oracle = readPAuthOracle(kReturnOracle);
   ASSERT_TRUE(Oracle);
   checkCProjections(makeOracleFunctions(Cases), (*Oracle)->getBuffer(),
-                    ExecuteTarget);
+                    ExecuteTarget, kReturnOraclePrototype);
 }
 
 namespace pacm_oracle {
@@ -1818,16 +1869,17 @@ namespace pacm_oracle {
 #include "AArch64PACMNative.def"
 } // namespace pacm_oracle
 
-void checkPrefixOracle(llvm::StringRef ExecuteTarget = {}) {
+void checkPrefixOracle(llvm::StringRef ExecuteTarget = {},
+                       llvm::StringRef Mode = {}) {
   constexpr OracleFunction Cases[] = {
 #define NEVERD_PAUTH_ORACLE_PAIR(LR, LRName, Prefix, PrefixName)               \
   {Intrinsic::Prefix, #PrefixName},
 #include "AArch64PAuthNative.def"
   };
-  checkCProjections(makeOracleFunctions(Cases),
-                    std::string(pacm_oracle::kOracle) +
-                        pacm_oracle::kCompareMain,
-                    ExecuteTarget);
+  checkCProjections(
+      makeOracleFunctions(Cases),
+      (Mode + pacm_oracle::kOracle + pacm_oracle::kCompareMain).str(),
+      ExecuteTarget, kPrefixOraclePrototype);
 }
 
 bool hasNativePAuth() {
@@ -1840,6 +1892,21 @@ bool hasNativePAuth() {
 #else
   return false;
 #endif
+}
+
+void checkNativePrefixOracle(llvm::StringRef Mode,
+                             llvm::StringRef Unavailable) {
+  if (!hasNativePAuth())
+    GTEST_SKIP() << Unavailable.str();
+  NativeCapability Capability;
+  compileArm64eC((Mode + pacm_oracle::kOracle + pacm_oracle::kProbeMain).str(),
+                 {}, /*EmitLLVM=*/false, pacm_oracle::kNativeTarget,
+                 &Capability);
+  if (testing::Test::HasFatalFailure())
+    return;
+  if (!Capability.Available.value_or(false))
+    GTEST_SKIP() << Unavailable.str();
+  checkPrefixOracle(pacm_oracle::kNativeTarget, Mode);
 }
 } // namespace
 
@@ -2762,17 +2829,12 @@ TEST(AArch64PACMSemantics, BothCProjectionsCompileWithThePrefixOracle) {
 }
 
 TEST(AArch64PACMSemantics, NativePrefixModesAgreeWithBothCProjections) {
-  if (!hasNativePAuth())
-    GTEST_SKIP() << pacm_oracle::kNativeUnavailable;
-  NativeCapability Capability;
-  compileArm64eC(std::string(pacm_oracle::kOracle) + pacm_oracle::kProbeMain,
-                 {}, /*EmitLLVM=*/false, pacm_oracle::kNativeTarget,
-                 &Capability);
-  if (HasFatalFailure())
-    return;
-  if (!Capability.Available.value_or(false))
-    GTEST_SKIP() << pacm_oracle::kNativeUnavailable;
-  checkPrefixOracle(pacm_oracle::kNativeTarget);
+  checkNativePrefixOracle({}, pacm_oracle::kNativeUnavailable);
+}
+
+TEST(AArch64PACMSemantics, NativeHintModeAgreesWithCAndDirectObjects) {
+  checkNativePrefixOracle(pacm_oracle::kHintMode,
+                          pacm_oracle::kHintUnavailable);
 }
 
 TEST(AArch64PACMSemantics, IncomingModeSurvivesSSAAndLoopBackedges) {

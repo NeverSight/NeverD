@@ -83,12 +83,12 @@ def provenance():
                               for name in POLICY["source_files"]}}
 
 
-def check_binary(binary):
+def check_binary(binary, subtype=POLICY["cpu_subtype"]):
     raw = binary.read_bytes()
     fields = struct.unpack_from(POLICY["header_format"], raw)
     if (fields[0] != POLICY["macho_magic"] or
             fields[1] != POLICY["cpu_type"] or
-            fields[2] & POLICY["subtype_mask"] != POLICY["cpu_subtype"]):
+            fields[2] & POLICY["subtype_mask"] != subtype):
         raise ValueError(POLICY["errors"]["binary"])
     return {"sha256": digest(binary), "bytes": len(raw),
             "cpu_subtype": fields[2]}
@@ -280,15 +280,53 @@ def probe_cpta(output):
         save(output / POLICY["report_name"], report)
 
 
+def probe_ordered_q(output):
+    policy = POLICY["ordered_probe"]
+    key = policy["qualified_key"]
+    report = {**provenance(), "status": POLICY["failed"], key: False, "profiles": {}}
+    source = ROOT / policy["source"]
+    report["source_sha256"].update({name: digest(ROOT / name) for name in (policy["source"], *policy["headers"])})
+    try:
+        if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
+            report["status"] = POLICY["unavailable"]
+            return report
+        with OwnedProducts(output, False) as products:
+            for opt in POLICY["optimizations"]:
+                label = policy["binary_label"].format(optimization=opt)
+                binary = output / label
+                products.append(binary)
+                built = command(products, output, label + POLICY["compile_suffix"],
+                                [*policy["compile"], opt, source, policy["output_flag"], binary], POLICY["tool_timeout"])
+                if built.returncode:
+                    return report
+                identity = check_binary(binary, policy["subtype"])
+                result = command(products, output, label, [binary], POLICY["tool_timeout"])
+                observed = POLICY["failed"]
+                if result.returncode == 0 and result.stdout.splitlines() == [policy["passed_record"]]:
+                    observed = POLICY["passed"]
+                elif result.returncode == policy["skip_exit"] and result.stdout.splitlines() == [policy["unavailable_record"]]:
+                    observed = POLICY["unavailable"]
+                report["profiles"][opt] = {**identity, "status": observed}
+            statuses = {row["status"] for row in report["profiles"].values()}
+            if len(statuses) == 1:
+                report["status"], = statuses
+                report[key] = report["status"] == POLICY["passed"]
+        return report
+    finally:
+        save(output / POLICY["report_name"], report)
+
+
 def qualify_x1(output):
     policy = POLICY["x1_qualification"]
+    ordered = POLICY["ordered_probe"]
     report = {**provenance(), "status": POLICY["failed"],
-              policy["qualified_key"]: False, "probes": {}, "missing": []}
+              policy["qualified_key"]: False, ordered["qualified_key"]: False, "probes": {}, "missing": []}
     try:
         statuses = set()
         for mode, run in ((POLICY["probe_mode"], probe),
                           (POLICY["cursor_probe"]["mode"], probe_signal_cursor),
-                          (POLICY["cpta_probe"]["mode"], probe_cpta)):
+                          (POLICY["cpta_probe"]["mode"], probe_cpta),
+                          (ordered["mode"], probe_ordered_q)):
             directory = output / mode
             directory.mkdir()
             result = run(directory)
@@ -296,6 +334,13 @@ def qualify_x1(output):
             report["probes"][mode] = {"status": result["status"],
                                       "report": path.relative_to(output).as_posix(),
                                       "sha256": digest(path)}
+            if mode == ordered["mode"]:
+                # Q instructions have their own architectural feature and can
+                # qualify on a host without the arm64e.x1 execution environment.
+                report[ordered["qualified_key"]] = result[ordered["qualified_key"]]
+                if result["status"] == POLICY["failed"]:
+                    return report
+                continue
             statuses.add(result["status"])
             report["missing"].extend(
                 {"probe": mode, "feature": feature}
@@ -653,6 +698,8 @@ def main():
             report = probe_cpta(output)
         elif args.mode == POLICY["cursor_probe"]["mode"]:
             report = probe_signal_cursor(output)
+        elif args.mode == POLICY["ordered_probe"]["mode"]:
+            report = probe_ordered_q(output)
         elif args.mode == POLICY["x1_qualification"]["mode"]:
             report = qualify_x1(output)
         elif args.mode == POLICY["startup_mode"]:

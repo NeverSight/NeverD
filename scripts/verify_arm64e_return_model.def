@@ -16,6 +16,14 @@
     "llvm",
     "llvm-opt"
   ],
+  "return_profile": "c-and-direct-backend",
+  "previous_return_profile": "c-projections",
+  "backend_objects": {
+    "backend": "backend.o",
+    "backend-opt": "backend-opt.o"
+  },
+  "caller_directory": "caller",
+  "caller_hash_field": "caller_sha256",
   "optimizations": [
     "O0",
     "O2"
@@ -197,12 +205,16 @@
     },
     "object_route": "llvm-object",
     "object_file": "llvm-arm64e.o",
+    "raw_object_route": "llvm-object-raw",
+    "raw_object_file": "llvm-arm64e-raw.o",
     "dispatch": "ordered-dispatch.c",
     "interface": "Arm64eOrderedAccess.h",
     "fixture_directory": "unittests/lift/aarch64",
     "fixture": "AArch64OrderedMemoryFixtures.def",
     "include_option": "-I",
-    "profile": "signed-offset-gpr-simd",
+    "profile": "signed-offset-gpr-simd-raw-and-optimized",
+    "previous_profile": "signed-offset-gpr-simd",
+    "quadword_profile": "quadword",
     "legacy_passed": "ORDERED-MODEL passed quadword comparisons",
     "march": "-march=armv8.3-a+rcpc3",
     "parameters": {
@@ -225,8 +237,11 @@
       "target": "arm64-apple-macos15",
       "subtype": 0,
       "driver": "Arm64eOrderedNative.c",
+      "probe": "Arm64eOrderedQ.c",
       "object_file": "llvm-macho.o",
-      "profile": "darwin-signed-offset-gpr-simd",
+      "raw_object_file": "llvm-macho-raw.o",
+      "profile": "darwin-signed-offset-gpr-simd-raw-and-optimized",
+      "previous_profile": "darwin-signed-offset-gpr-simd",
       "skip_exit": 77,
       "unavailable": "ORDERED-NATIVE LSE2 or LRCPC2 unavailable",
       "gpr": "ORDERED-NATIVE GPR, aligned Q instructions unavailable",

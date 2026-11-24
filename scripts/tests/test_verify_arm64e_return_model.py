@@ -26,7 +26,7 @@ class NativeOrderedReportTests(unittest.TestCase):
         header = struct.pack(config["macho_header"], config["macho_magic"], config["arm64_cpu"],
                              self.policy["subtype"], config["executable_kind"])
         images = {}
-        for name, _, _ in model.ordered_routes(self.policy["object_file"]):
+        for name, _, _ in model.ordered_routes(self.policy, self.policy["profile"]):
             image = self.guests / name
             image.write_bytes(header)
             images[name] = {"sha256": model.digest(image)}
@@ -66,3 +66,36 @@ class NativeOrderedReportTests(unittest.TestCase):
     def test_skip_text_cannot_accompany_success(self):
         with self.assertRaises(RuntimeError):
             self.run_routes([self.outcome("unavailable")])
+
+    def test_current_profile_requires_the_raw_backend(self):
+        path = self.guests / model.CONFIG["manifest"]
+        manifest = json.loads(path.read_text())
+        del manifest["guests"][model.CONFIG["ordered"]["raw_object_route"]]
+        model.write_json(path, manifest)
+        with self.assertRaisesRegex(ValueError, model.CONFIG["bad_inventory"]):
+            self.run_routes([])
+        manifest["ordered_profile"] = self.policy["previous_profile"]
+        model.write_json(path, manifest)
+        self.assertEqual(self.run_routes([self.outcome("simd")] * len(manifest["guests"])), 0)
+
+
+class ModelProfileTests(unittest.TestCase):
+    def test_two_direct_backends_share_both_caller_optimizations(self):
+        config = model.CONFIG
+        previous = set(model.cases(config["previous_return_profile"]))
+        current = set(model.cases(config["return_profile"]))
+        additions = {(family, backend, opt) for family in config["cases"]
+                     for backend in config["backend_objects"] for opt in config["optimizations"]}
+        self.assertTrue(previous.isdisjoint(additions))
+        self.assertEqual(current, previous | additions)
+        with self.assertRaises(ValueError):
+            list(model.cases(None))
+
+    def test_only_model_guests_accept_the_quadword_profile(self):
+        policy = model.CONFIG["ordered"]
+        previous = list(model.ordered_routes(policy, policy["previous_profile"]))
+        self.assertEqual(list(model.ordered_routes(policy, policy["quadword_profile"])), previous)
+        self.assertEqual(list(model.ordered_routes(policy, policy["profile"])),
+                         [*previous, (policy["raw_object_route"], policy["raw_object_file"], None)])
+        with self.assertRaises(ValueError):
+            list(model.ordered_routes(policy["native"], policy["quadword_profile"]))

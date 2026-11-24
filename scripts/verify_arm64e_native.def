@@ -324,6 +324,7 @@
     "run-generated",
     "run-generated-executable",
     "probe-cursor",
+    "probe-lrcpc3",
     "qualify-x1"
   ],
   "cpta_probe": {
@@ -571,6 +572,25 @@
     "binary_label": "cursor-{optimization}",
     "invalid_report": "native cursor did not produce a complete, successful observation",
     "include": "include"
+  },
+  "ordered_probe": {
+    "mode": "probe-lrcpc3",
+    "qualified_key": "native_lrcpc3_128_qualified",
+    "subtype": 0,
+    "source": "scripts/diagnostics/Arm64eOrderedQ.c",
+    "headers": [
+      "scripts/diagnostics/Arm64eOrderedModel.def",
+      "scripts/diagnostics/Arm64eOrderedAccess.h"
+    ],
+    "compile": [
+      "/usr/bin/clang", "-target", "arm64-apple-macos15", "-std=gnu11",
+      "-Wall", "-Wextra", "-Werror", "-DORDERED_NATIVE_Q_PROBE"
+    ],
+    "output_flag": "-o",
+    "binary_label": "ordered{optimization}",
+    "passed_record": "ORDERED-NATIVE aligned Q store and both load lanes passed",
+    "unavailable_record": "ORDERED-NATIVE aligned Q store and load raised SIGILL",
+    "skip_exit": 77
   },
   "x1_qualification": {
     "mode": "qualify-x1",

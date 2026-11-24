@@ -62,6 +62,8 @@
 #define ORDERED_NATIVE_X_LOAD 0xd9400020U
 #define ORDERED_NATIVE_Q_STORE 0x1d800820U
 #define ORDERED_NATIVE_Q_LOAD 0x1dc00820U
+#define ORDERED_NATIVE_Q_PASSED "ORDERED-NATIVE aligned Q store and both load lanes passed"
+#define ORDERED_NATIVE_Q_UNAVAILABLE "ORDERED-NATIVE aligned Q store and load raised SIGILL"
 #define ORDERED_NATIVE_SKIP 77
 #define ORDERED_NATIVE_ATOMIC_ERROR "Darwin signal observations must be lock-free"
 #define ORDERED_NATIVE_UNAVAILABLE "ORDERED-NATIVE LSE2 or LRCPC2 unavailable"

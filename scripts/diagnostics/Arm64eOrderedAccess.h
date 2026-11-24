@@ -18,10 +18,25 @@ typedef struct {
   uint64_t ESR, FAR, Word;
 } OrderedAbort;
 
+typedef enum {
+  OrderedQFailed,
+  OrderedQUnavailable,
+  OrderedQPassed
+} OrderedQStatus;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+OrderedQStatus probeDarwinOrderedQ(void);
 uint64_t accessOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
                        bool Original);
 bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane, bool Original,
                     bool MayFault, uint64_t *Result, OrderedAbort *Abort);
 int compareOrdered(unsigned Mode, unsigned EL, bool WithSIMD);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // NEVERD_DIAGNOSTICS_ARM64E_ORDERED_ACCESS_H

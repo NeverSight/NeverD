@@ -455,9 +455,32 @@
   "x1_components": {
     "probe": "probe",
     "probe-cursor": "probe_signal_cursor",
-    "probe-cpta": "probe_cpta"
+    "probe-cpta": "probe_cpta",
+    "probe-lrcpc3": "probe_ordered_q"
   },
   "x1_failed_tool": "controlled x1 compiler failure",
+  "ordered_q_controls": {
+    "platform_required": "requires Apple Silicon",
+    "header": "Arm64eOrderedModel.def",
+    "store_macro": "ORDERED_NATIVE_Q_STORE",
+    "load_macro": "ORDERED_NATIVE_Q_LOAD",
+    "words": {
+      "str_q": "0x3d800020U",
+      "ldr_q": "0x3dc00020U",
+      "ld1r_2d": "0x4d40cc20U",
+      "nop": "0xd503201fU",
+      "udf": "0x00000000U"
+    },
+    "cases": [
+      ["str_q", "ldr_q", "passed"],
+      ["str_q", "nop", "failed"],
+      ["str_q", "ld1r_2d", "failed"],
+      ["nop", "ldr_q", "failed"],
+      ["udf", "ldr_q", "failed"],
+      ["str_q", "udf", "failed"],
+      ["udf", "udf", "unavailable"]
+    ]
+  },
   "x1_claim": "native_arm64e_x1_environment_qualified",
   "cursor_prelaunch_failures": [
     -11,

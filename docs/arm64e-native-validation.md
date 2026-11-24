@@ -2299,10 +2299,15 @@ the generated ordered-memory code at EL0 and EL1 across four CPTA settings.
 
 ### Executing both return-signing oracles on the Arm model
 
-The Release test binary can export the exact arm64e Mach-O objects it compiled
-for HighC, LLVM-to-C and LLVM-to-C after IR optimization. Each route produces
-an O0 and an O2 object for explicit PAuth_LR and conditional PACM.
-On macOS, link those objects to the freestanding comparison driver.
+The verifier links the Release test binary's exported objects into 20 arm64e
+Mach-O programs for explicit PAuth_LR and conditional PACM. For each family,
+Clang compiles HighC,
+LLVM-to-C and LLVM-to-C after IR optimization at O0 and O2. NeverD also
+emits two backend objects directly, one before IR optimization and one after
+the O2 IR pipeline. Each links against an independent C caller compiled at
+O0 and O2. The manifest records separate hashes for the caller and backend
+object. Both backend routes use NeverD's normal code-generation settings.
+On macOS, build the programs with the freestanding comparison driver.
 
 ```sh
 python3 scripts/verify_arm64e_return_model.py build \
@@ -2392,8 +2397,9 @@ python3 scripts/verify_arm64e_return_model.py run-ordered \
   --model /path/to/FVP_Base_RevC-2xAEMvA --guests ordered-guests --output ordered-results
 ```
 
-The five images contain HighC and LLVM-to-C at O0/O2 and the NeverD backend's
-arm64e Mach-O object. An independently assembled reference uses the same five
+The six images contain HighC and LLVM-to-C at O0/O2 and direct NeverD
+arm64e Mach-O objects from before and after the O2 IR pipeline.
+An independently assembled reference uses the same five
 signed displacements and all sixteen address alignments. The guest reads back
 the LRCPC feature level and the effective SCTLR settings. At EL0 and EL1 it
 compares both loaded lanes, stored bytes and the surrounding memory. For a
@@ -2482,16 +2488,24 @@ and [qualification record](evidence/arm64e-ordered-granules-2026-11-24.json).
 
 ### Native x1 runner qualification
 
-The PAuth_LR and PACM suites cross-compile their complete comparison programs
-with HighC, LLVM-to-C and LLVM-to-C after IR optimization. Each program builds
-at O0 and O2 using the same six IA/IB operations and independent instruction
-oracle as its native test. Native qualification additionally executes those
-programs on a process that demonstrates active keys and the required modifier
-behavior. At O0 and O2 the capability probe records entry before executing
+The PAuth_LR and PACM suites compare the same six IA/IB operations in the C
+projections and the direct backend objects. A native process must demonstrate
+active keys and the modifier behavior under test. The PACM HINT comparison
+requires both keys to be active while the second modifier has no observable
+effect. The PC-sensitive comparison requires that effect for both keys.
+At O0 and O2 the capability probe records entry before executing
 the instructions. Both builds must agree. A launch killed before entry,
 inactive keys, or an illegal instruction in an explicit optional-instruction
 probe can skip the native comparison. An unexpected signal after entry fails
 the test.
+
+`qualify-x1` also reports `native_lrcpc3_128_qualified` independently.
+The SIMD GTest, Darwin memory comparison and standalone `probe-lrcpc3`
+share the aligned Q store and load probe. Each instruction executes in its
+own child. A store must replace both memory lanes. A load must replace both
+register lanes with distinct values and preserve memory. Both children must
+identify the original faulting instruction on SIGILL to report the feature
+unavailable. Mixed results fail the probe.
 
 Apple specifies M6 or later Macs and A20 Pro or later iPhones for arm64e.x1;
 the simulator cannot execute this ABI. Standard GitHub macOS ARM runners use
@@ -2511,11 +2525,11 @@ The probe compiles fresh O0/O2 signing/cursor controls, checks actual signatures
 and PC sensitivity, signs an arm64e.x1 slice with the required Enhanced Security
 entitlements, and measures checked scalar arithmetic and ordinary writeback.
 It also requires the original authenticated call and language-unwind controls.
-The top report binds all three component reports by SHA-256 and qualifies the
-environment only when every required native claim is true. Exit 2 records an
-unavailable environment; exit 1 records failure. CPU names, successful assembly,
-PACM hint execution and a green negative-control workflow do not qualify x1.
-Temporary executables and entitlements are removed; reports remain available.
+The top report records the SHA-256 of each of the four component reports.
+The x1 result requires the call, unwind, cursor and checked-pointer controls.
+The Q result records 128-bit LRCPC3 separately. Exit 2 records an unavailable
+environment and exit 1 records failure. The verifier retains the reports and
+removes the temporary executables and entitlements.
 
 A registered GitHub Actions runner with labels `self-hosted`, `macOS`, `ARM64`
 and `neverd-arm64e-x1` can run the manual **Arm64e x1 native qualification**

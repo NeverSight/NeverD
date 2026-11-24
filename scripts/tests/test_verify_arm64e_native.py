@@ -4,6 +4,10 @@ from contextlib import ExitStack
 import json
 import plistlib
 from pathlib import Path
+import platform
+import re
+import shutil
+import signal
 import subprocess
 import struct
 import sys
@@ -30,6 +34,7 @@ def runtime_xml(executable=False, generated=False):
 class Arm64eNativeQualificationTests(unittest.TestCase):
     def test_x1_requires_every_feature_from_successful_native_probes(self):
         requirements = native.POLICY["x1_qualification"]["requirements"]
+        q_key = native.POLICY["ordered_probe"]["qualified_key"]
         failures = [(mode, feature) for mode, features in requirements.items()
                     for feature in features]
         for missing in (None, *failures):
@@ -40,11 +45,12 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     def run(directory, mode=mode):
                         report = {"status": native.POLICY["passed"],
                                   **{feature: (mode, feature) != missing
-                                     for feature in requirements[mode]}}
+                                     for feature in requirements.get(mode, [q_key])}}
                         native.save(directory / native.POLICY["report_name"], report)
                         return report
                     patches.enter_context(mock.patch.object(native, function, side_effect=run))
                 report = native.qualify_x1(output)
+                self.assertTrue(report[q_key])
                 self.assertEqual(report[CASES["x1_claim"]], missing is None)
                 self.assertEqual(report["status"], native.POLICY[
                     "passed" if missing is None else "unavailable"])
@@ -57,21 +63,79 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
 
     def test_x1_does_not_hide_a_failed_or_unavailable_probe(self):
         requirements = native.POLICY["x1_qualification"]["requirements"]
+        ordered = native.POLICY["ordered_probe"]
         for status in (native.POLICY["failed"], native.POLICY["unavailable"]):
-            for changed in requirements:
+            for changed in CASES["x1_components"]:
                 with self.subTest(status=status, probe=changed), \
                         tempfile.TemporaryDirectory() as temporary, ExitStack() as patches:
                     for mode, function in CASES["x1_components"].items():
                         def run(directory, mode=mode):
-                            report = {"status": status if mode == changed else native.POLICY["passed"],
-                                      **dict.fromkeys(requirements[mode], True)}
+                            observed = status if mode == changed else native.POLICY["passed"]
+                            report = {"status": observed, **dict.fromkeys(requirements.get(mode, []), True)}
+                            if mode == ordered["mode"]:
+                                report[ordered["qualified_key"]] = observed == native.POLICY["passed"]
                             native.save(directory / native.POLICY["report_name"], report)
                             return report
                         patches.enter_context(mock.patch.object(native, function, side_effect=run))
                     report = native.qualify_x1(Path(temporary))
-                    self.assertFalse(report[CASES["x1_claim"]])
-                    self.assertEqual(report["status"], status)
+                    independent_skip = changed == ordered["mode"] and status == native.POLICY["unavailable"]
+                    self.assertEqual(report[CASES["x1_claim"]], independent_skip)
+                    self.assertEqual(report["status"], native.POLICY["passed"] if independent_skip else status)
                     self.assertEqual(report["probes"][changed]["status"], status)
+
+    def test_ordered_q_requires_both_compilations_and_matching_instruction_results(self):
+        q = native.POLICY["ordered_probe"]
+        passed = (0, q["passed_record"])
+        skipped = (q["skip_exit"], q["unavailable_record"])
+        for outcomes, expected in (((passed, passed), "passed"), ((skipped, skipped), "unavailable"),
+                                   ((passed, skipped), "failed"), (((0, skipped[1]),) * 2, "failed"),
+                                   (((-signal.SIGILL, ""),) * 2, "failed")):
+            with self.subTest(outcomes=outcomes), tempfile.TemporaryDirectory() as temporary:
+                observations = iter(outcomes)
+                def invoke(products, output, label, argv, timeout):
+                    if label.endswith(native.POLICY["compile_suffix"]):
+                        Path(argv[-1]).write_bytes(struct.pack(native.POLICY["header_format"],
+                            native.POLICY["macho_magic"], native.POLICY["cpu_type"], q["subtype"]))
+                        return subprocess.CompletedProcess(argv, 0, "", "")
+                    status, record = next(observations)
+                    return subprocess.CompletedProcess(argv, status, record, "")
+                with mock.patch.object(native, "command", side_effect=invoke), \
+                        mock.patch.object(native.platform, "system", return_value=native.POLICY["host_os"]), \
+                        mock.patch.object(native.platform, "machine", return_value=native.POLICY["host_arches"][0]):
+                    report = native.probe_ordered_q(Path(temporary))
+                self.assertEqual(report["status"], native.POLICY[expected])
+                self.assertEqual(report[q["qualified_key"]], expected == "passed")
+
+    @unittest.skipUnless(platform.system() == native.POLICY["host_os"] and
+                         platform.machine() in native.POLICY["host_arches"],
+                         CASES["ordered_q_controls"]["platform_required"])
+    def test_ordered_q_lane_and_signal_controls_with_baseline_instructions(self):
+        q = native.POLICY["ordered_probe"]
+        controls = CASES["ordered_q_controls"]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = Path(shutil.copy(native.ROOT / q["source"], directory))
+            for name in q["headers"]:
+                shutil.copy(native.ROOT / name, directory)
+            header = directory / controls["header"]
+            original = header.read_text()
+            for store, load, expected in controls["cases"]:
+                text = original
+                for macro, word in ((controls["store_macro"], store), (controls["load_macro"], load)):
+                    text, count = re.subn(rf"(?m)^(#define {macro} )\S+$",
+                                          lambda m: m[1] + controls["words"][word], text)
+                    self.assertEqual(count, 1)
+                header.write_text(text)
+                for opt in native.POLICY["optimizations"]:
+                    with self.subTest(store=store, load=load, optimization=opt):
+                        binary = directory / q["binary_label"].format(optimization=opt)
+                        subprocess.run([*q["compile"], opt, source, q["output_flag"], binary], check=True)
+                        result = subprocess.run([binary], capture_output=True, text=True,
+                                                timeout=native.POLICY["tool_timeout"])
+                        status = q["skip_exit"] if expected == "unavailable" else native.POLICY["exit_codes"][expected]
+                        self.assertEqual(result.returncode, status)
+                        self.assertEqual(result.stdout.splitlines(), [] if expected == "failed" else
+                                         [q[expected + "_record"]])
 
     def test_x1_records_failure_when_a_probe_tool_raises(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(

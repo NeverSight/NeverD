@@ -8,6 +8,7 @@
 /// opcodes and native outcomes independently check checked-address ownership.
 //===----------------------------------------------------------------------===//
 
+#include "Arm64eOrderedAccess.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -60,6 +61,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <array>
@@ -3324,8 +3326,24 @@ void executeImmediateMemoryFamilies(llvm::ArrayRef<ImmediateMemoryCase> Cases,
   ASSERT_TRUE(Module);
   if (Image)
     EXPECT_EQ(Module->global_empty(), !Relocate);
+  auto ExportMachO = [&](llvm::StringRef Name, llvm::StringRef Triple) {
+    auto Copy = llvm::CloneModule(*Module);
+    const auto Object =
+        Codegen().compile(*Copy, Arch::AArch64, BinaryFormat::MachO, Triple);
+    ASSERT_TRUE(Object.Success);
+    SaveArtifact(Name, llvm::toStringRef(Object.ObjectData));
+  };
+  if (Execution.ExportArm64eObject) {
+    ASSERT_NO_FATAL_FAILURE(
+        ExportMachO(kImmediateRawArm64eArtifact, kImmediateArm64eTriple));
+    if (!ArtifactDirectory.empty())
+      ASSERT_NO_FATAL_FAILURE(ExportMachO(kImmediateRawMachOArtifact, {}));
+  }
   optimizeMemory(*Module);
   ASSERT_FALSE(llvm::verifyModule(*Module));
+  if (Execution.ExportArm64eObject)
+    ASSERT_NO_FATAL_FAILURE(
+        ExportMachO(kImmediateArm64eArtifact, kImmediateArm64eTriple));
   const auto Harness =
       (Relocate ? std::string(kImmediateImageBaseDeclaration) : std::string{}) +
       llvm::formatv(kImmediateNativeHarness, Wrappers, Entries,
@@ -3364,14 +3382,9 @@ void executeImmediateMemoryFamilies(llvm::ArrayRef<ImmediateMemoryCase> Cases,
   const auto Object =
       Codegen().compile(*Module, Arch::AArch64, BinaryFormat::MachO);
   ASSERT_TRUE(Object.Success);
-  const llvm::MemoryBufferRef Buffer(
-      llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
-                      Object.ObjectData.size()),
-      kObject);
-  SaveArtifact(
-      kImmediateMachOArtifact,
-      llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
-                      Object.ObjectData.size()));
+  const llvm::MemoryBufferRef Buffer(llvm::toStringRef(Object.ObjectData),
+                                     kObject);
+  SaveArtifact(kImmediateMachOArtifact, Buffer.getBuffer());
   for (const auto &Case : Cases)
     inspectMemoryObject(Buffer, Case.Scratch);
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -3393,13 +3406,6 @@ void executeImmediateMemoryFamilies(llvm::ArrayRef<ImmediateMemoryCase> Cases,
       SaveArtifact(kImmediateOrderedDispatchArtifact,
                    Declarations + kImmediateOrderedDispatchBegin +
                        OrderedDispatch + kImmediateOrderedDispatchEnd);
-      const auto Darwin = Codegen().compile(
-          *Module, Arch::AArch64, BinaryFormat::MachO, kImmediateArm64eTriple);
-      ASSERT_TRUE(Darwin.Success);
-      SaveArtifact(kImmediateArm64eArtifact,
-                   llvm::StringRef(
-                       reinterpret_cast<const char *>(Darwin.ObjectData.data()),
-                       Darwin.ObjectData.size()));
     }
     const auto ELF =
         Codegen().compile(*Module, Arch::AArch64, BinaryFormat::ELF);
@@ -6915,12 +6921,12 @@ std::vector<ImmediateMemoryCase> orderedRegisterCases(bool Vector) {
   return Result;
 }
 
-bool nativeOrderedMemorySupported(bool Vector) {
+bool nativeOrderedGPRSupported() {
 #if defined(__APPLE__) && defined(__aarch64__)
   int Supported = 0;
   size_t Size = sizeof(Supported);
-  return sysctlbyname(Vector ? kOrderedRCPC3Feature : kOrderedRCPC2Feature,
-                      &Supported, &Size, nullptr, 0) == 0 &&
+  return sysctlbyname(kOrderedRCPC2Feature, &Supported, &Size, nullptr, 0) ==
+             0 &&
          Size == sizeof(Supported) && Supported;
 #else
   return false;
@@ -6994,15 +7000,17 @@ TEST(AArch64OrderedMemory, BothCProjectionsAndLLVMRetainOrderedInstructions) {
 }
 
 TEST(AArch64OrderedMemoryNative, GPRFamiliesExecuteBothSourcesAndLLVM) {
-  if (!nativeOrderedMemorySupported(false))
+  if (!nativeOrderedGPRSupported())
     GTEST_SKIP() << kOrderedUnsupported;
   executeImmediateMemoryFamilies(orderedRegisterCases(false), false, true,
                                  nullptr, false, {.AlignAccesses = true});
 }
 
 TEST(AArch64OrderedMemoryNative, SIMDFamiliesExecuteBothSourcesAndLLVM) {
-  if (!nativeOrderedMemorySupported(true))
-    GTEST_SKIP() << kOrderedUnsupported;
+  const auto Status = probeDarwinOrderedQ();
+  if (Status == OrderedQUnavailable)
+    GTEST_SKIP() << kOrderedSIMDUnavailable;
+  ASSERT_EQ(Status, OrderedQPassed);
   executeImmediateMemoryFamilies(orderedRegisterCases(true), false, true,
                                  nullptr, false, {.AlignAccesses = true});
 }

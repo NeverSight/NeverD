@@ -16,8 +16,15 @@ NEVERD_PACM_NATIVE_TEXT(kNativeTarget, "arm64e-apple-macos")
 NEVERD_PACM_NATIVE_TEXT(kNativeUnavailable,
                         "this host cannot execute PACM with active IA/IB keys "
                         "and a second diversifier")
+NEVERD_PACM_NATIVE_TEXT(kHintUnavailable,
+                        "this host cannot execute arm64e with active IA/IB "
+                        "keys and PACM hint behavior")
+NEVERD_PACM_NATIVE_TEXT(kHintMode, "#define RETURN_ORACLE_EXPECTED_MODE 0\n")
 NEVERD_PACM_NATIVE_TEXT(kOracle, R"(
 #include <stdint.h>
+#ifndef RETURN_ORACLE_EXPECTED_MODE
+#define RETURN_ORACLE_EXPECTED_MODE 1
+#endif
 static uint64_t sign_a(uint64_t pointer, uint64_t first, uint64_t second,
                        uint64_t mode) {
   uint64_t result;
@@ -65,7 +72,7 @@ static int qualifies(int enabled) {
 }
 )")
 NEVERD_PACM_NATIVE_TEXT(kProbeMain, R"(
-int main(void) { return !qualifies(1); }
+int main(void) { return !qualifies(RETURN_ORACLE_EXPECTED_MODE); }
 )")
 NEVERD_PACM_NATIVE_TEXT(kCompareMain, R"(
 #define RETURN_ORACLE_PREFIX
@@ -93,7 +100,7 @@ int comparePrefixModes(int enabled) {
     }
   return pc_a_changes == enabled && pc_b_changes == enabled ? 0 : OraclePCMismatch;
 }
-int main(void) { return comparePrefixModes(1); }
+int main(void) { return comparePrefixModes(RETURN_ORACLE_EXPECTED_MODE); }
 )")
 
 #undef NEVERD_PACM_NATIVE_TEXT

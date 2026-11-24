@@ -629,6 +629,8 @@ IMMEDIATE_MEMORY_TEXT(kImmediateOrderedDispatchEnd, "}\n__builtin_trap();\n}\n")
 IMMEDIATE_MEMORY_TEXT(kImmediateArm64eTriple, "arm64e-apple-macos15")
 IMMEDIATE_MEMORY_TEXT(kImmediateArm64eArtifact, "llvm-arm64e.o")
 IMMEDIATE_MEMORY_TEXT(kImmediateMachOArtifact, "llvm-macho.o")
+IMMEDIATE_MEMORY_TEXT(kImmediateRawArm64eArtifact, "llvm-arm64e-raw.o")
+IMMEDIATE_MEMORY_TEXT(kImmediateRawMachOArtifact, "llvm-macho-raw.o")
 IMMEDIATE_MEMORY_TEXT(kImmediateHarnessArtifact, "harness.c")
 
 #undef IMMEDIATE_MEMORY_CASE
