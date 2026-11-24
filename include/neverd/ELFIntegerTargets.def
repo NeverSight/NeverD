@@ -1,0 +1,18 @@
+//===- ELFIntegerTargets.def - RISC-V and PowerPC ELF targets ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Native target identities, LLVM triple architectures and ELF spellings.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_ELF_INTEGER_TARGET(RISCV32, riscv32, "riscv32")
+NEVERD_ELF_INTEGER_TARGET(RISCV64, riscv64, "riscv64")
+NEVERD_ELF_INTEGER_TARGET(PPC32, ppc, "powerpc")
+NEVERD_ELF_INTEGER_TARGET(PPC32LE, ppcle, "powerpcle")
+NEVERD_ELF_INTEGER_TARGET(PPC64, ppc64, "powerpc64")
+NEVERD_ELF_INTEGER_TARGET(PPC64LE, ppc64le, "powerpc64le")
+#undef NEVERD_ELF_INTEGER_TARGET

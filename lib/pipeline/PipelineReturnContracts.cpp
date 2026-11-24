@@ -62,6 +62,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64CPA.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/GoCallContract.h"
@@ -1800,6 +1801,21 @@ private:
                                : Intrinsic::None;
       if (intrinsicReturnsSystemCallResult(Id)) {
         Paths.push_back(ReturnedValue::SystemCallResult);
+        return;
+      }
+      // An atomic read or conditional store can return its old value or
+      // status through the integer result register. A fence has no result.
+      if (integer_memory::owns(Id)) {
+        const auto Form =
+            Op.NumInputs >= 2 && Op.Inputs[1].isConst()
+                ? integer_memory::form(Img.Arch, Id, Op.Inputs[1].ConstVal)
+                : std::nullopt;
+        Paths.push_back(Form && Op.Output.Size &&
+                                Form->matchesSignature(Op.NumInputs,
+                                                       Op.Output.Size,
+                                                       TRI.FullRegWidth)
+                            ? ReturnedValue::Other
+                            : ReturnedValue::Undefined);
         return;
       }
       // A merge read both observes memory and defines a scalar result. An

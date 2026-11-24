@@ -26,7 +26,7 @@ NEVERD_LOAD_ROW(DyldCache, "dyld-cache", "Apple arm64e dyld shared cache")
 // NEVERD_LOAD_REASON(Id, Text): why a row cannot be loaded.
 #ifdef NEVERD_LOAD_REASON
 NEVERD_LOAD_REASON(Processor, "NeverD has no {0} processor")
-NEVERD_LOAD_REASON(BigEndian, "Big-endian ELF files are not supported")
+NEVERD_LOAD_REASON(BigEndian, "Unsupported big-endian ELF architecture")
 NEVERD_LOAD_REASON(Class, "This ELF class is not supported")
 NEVERD_LOAD_REASON(Malformed, "The header cannot be read: {0}")
 NEVERD_LOAD_REASON(SBFVersion, "Unsupported SBF version in the ELF flags")

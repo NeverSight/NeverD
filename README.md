@@ -67,6 +67,17 @@ n64 calling convention. The file patcher still needs a MIPS ELF installer.
 See [MIPS profiles and native output](docs/mips.md) for ISA, compressed code
 and floating-point coverage.
 
+Experimental integer ELF targets also support strict lifting, CFG recovery,
+structured C, LLVM IR and LLVM-derived C for these profiles.
+
+| Target | Qualified ELF profiles |
+|---|---|
+| RISC-V | Little-endian RV32I/ILP32 and RV64I/LP64, with M, A and integer C instructions when indicated by the binary |
+| PowerPC | Big- and little-endian PPC32 System V and PPC64 ELFv2, for the tested scalar instructions and integer calling conventions |
+
+Native rewriting, PPC64 ELFv1 function descriptors and cross-module TOC
+recovery remain open. See [RISC-V and PowerPC coverage](docs/riscv-powerpc.md).
+
 Legacy EVM bytecode is supported independently of native containers: all 150 assigned opcodes through Fusaka feed dedicated Low/Med/High IR, verified LLVM `i256`, C23 `_BitInt(256)`, and Solidity output. See [EVM decompilation](docs/evm.md).
 
 Solana SBF v0-v4 ELF programs use a dedicated strict loader, complete

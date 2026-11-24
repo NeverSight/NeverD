@@ -560,6 +560,11 @@ enum class Intrinsic : uint16_t {
 #define NEVERD_MIPS_SCALAR_INTRINSIC(Id, Value, ...) Id = Value,
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
 
+  RISCVAtomic = 18000,
+  RISCVFence,
+  PPCReservation,
+  PPCBarrier,
+
   _Count = 21000
 };
 

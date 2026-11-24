@@ -21,6 +21,8 @@
 #include "neverd/lift/AArch64/AArch64Lifter.h"
 #include "neverd/lift/ARM/ARMLifter.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
+#include "neverd/lift/PowerPC/PowerPCLifter.h"
+#include "neverd/lift/RISCV/RISCVLifter.h"
 #include "neverd/lift/X86/X86Lifter.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
@@ -41,6 +43,14 @@ va_t mipsInvalidAddressBits(Arch Target, InstructionMode Mode) {
     return 0;
   const va_t AlignmentBits = isMIPSCompressedMode(Mode) ? 1 : 3;
   return AlignmentBits | (isMIPS64(Target) ? 0 : ~va_t(UINT32_MAX));
+}
+
+IntegerControl integerControl(Arch A, RISCVProfile RV, const cs_insn &I) {
+  if (isRISCV(A))
+    return riscv::control(A, RV, I);
+  if (isPowerPC(A))
+    return ppc::control(A, I);
+  return {};
 }
 
 /// Release a decoder handle using the active architecture's ownership rules.
@@ -138,6 +148,26 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     NewARM = std::make_unique<ARMLifter>(TheArch, Mode);
     NewARM->setStrict(Strict);
     break;
+  case Arch::RISCV32:
+  case Arch::RISCV64:
+    if (Mode != InstructionMode::Default)
+      return false;
+    CsArch = CS_ARCH_RISCV;
+    CsMode =
+        cs_mode((TheArch == Arch::RISCV64 ? CS_MODE_RISCV64 : CS_MODE_RISCV32) |
+                CS_MODE_RISCV_C | CS_MODE_RISCV_A);
+    break;
+  case Arch::PPC32:
+  case Arch::PPC32LE:
+  case Arch::PPC64:
+  case Arch::PPC64LE:
+    if (Mode != InstructionMode::Default)
+      return false;
+    CsArch = CS_ARCH_PPC;
+    CsMode = cs_mode((isPowerPC64(TheArch) ? CS_MODE_64 : CS_MODE_32) |
+                     (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN
+                                                : CS_MODE_BIG_ENDIAN));
+    break;
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64O32:
@@ -231,10 +261,12 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   ARM = std::move(NewARM);
   AArch64 = std::move(NewAArch64);
   MIPS = std::move(NewMIPS);
+  RISCV = {};
   return true;
 }
 
 void Decoder::configureFor(const BinaryImage &Img) {
+  RISCV = Img.RISCV;
   configureX86For(Img);
   if (MIPS) {
     MIPS->setMIPS16Enabled(Img.MIPS && Img.MIPS->HasMIPS16);
@@ -296,7 +328,7 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
   if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode &&
       (!MIPS ||
        (MIPSISARevision == Revision && MIPSHistoricalISA == Historical))) {
-    if (AArch64 || MIPS)
+    if (AArch64 || MIPS || isRISCV(Img.Arch))
       configureFor(Img);
     return true;
   }
@@ -306,7 +338,7 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
     return false;
   setDetail(WasDetail);
   setText(WasText);
-  if (AArch64 || MIPS)
+  if (AArch64 || MIPS || isRISCV(Img.Arch))
     configureFor(Img);
   return true;
 }
@@ -346,6 +378,16 @@ LLVM_ATTRIBUTE_NOINLINE bool historicalMIPSWordAvailable(const uint8_t *Bytes,
 
 LLVM_ATTRIBUTE_ALWAYS_INLINE bool
 Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
+  if (isRISCV(TargetArch)) {
+    const unsigned Alignment = RISCV.Compressed ? 2 : 4;
+    if ((Addr & (Alignment - 1)) || Len < 2 ||
+        (!RISCV.Compressed && (Bytes[0] & 3) != 3) ||
+        (TargetArch == Arch::RISCV32 && Addr > UINT32_MAX))
+      return false;
+  } else if (isPowerPC(TargetArch) &&
+             ((Addr & 3) || (!isPowerPC64(TargetArch) && Addr > UINT32_MAX))) {
+    return false;
+  }
   InsnBuf->illegal = false;
   const uint8_t *Code = Bytes;
   size_t Remaining = Len;
@@ -530,12 +572,12 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
     liftARMToLow(Insn, Ops, ScalarRelocs);
   } else if (MIPS) {
     MIPS->lift(*Insn.Raw, Ops, Insn.MIPSForbiddenFollower);
+  } else if (isRISCV(TargetArch) && Insn.Raw) {
+    riscv::lift(TargetArch, RISCV, *Insn.Raw, Ops);
+  } else if (isPowerPC(TargetArch) && Insn.Raw) {
+    ppc::lift(TargetArch, *Insn.Raw, Ops);
   } else {
-    LowOp Nop;
-    Nop.Opcode = NdOp::NOP;
-    Nop.Addr = Insn.Addr;
-    Nop.Seq = 0;
-    Ops.push_back(Nop);
+    throw UnliftedInstruction(Insn.Addr, "no active native lifter", nullptr);
   }
   if (UndefinedEffects && !X86)
     UndefinedEffects->OpCount = Ops.size() - OpsStart;
@@ -563,7 +605,8 @@ bool Decoder::isFunctionTerminator(const DecodedInsn &Insn) const {
     return AArch64Lifter::isFunctionTerminator(Insn.Raw);
   if (ARM)
     return ARMLifter::isFunctionTerminator(Insn.Raw);
-  return MIPS && MIPS->isFunctionTerminator(*Insn.Raw);
+  return MIPS ? MIPS->isFunctionTerminator(*Insn.Raw)
+              : integerControl(TargetArch, RISCV, *Insn.Raw).terminates();
 }
 
 bool Decoder::isAlignmentNop(const DecodedInsn &Insn) const {
@@ -591,6 +634,8 @@ std::optional<bool> Decoder::returnsToCaller(const DecodedInsn &Insn) const {
     return ARMLifter::isReturn(Insn.Raw);
   if (MIPS)
     return MIPS->isReturn(*Insn.Raw);
+  if (isRISCV(TargetArch) || isPowerPC(TargetArch))
+    return integerControl(TargetArch, RISCV, *Insn.Raw).Opcode == NdOp::RETURN;
   return std::nullopt;
 }
 
@@ -615,7 +660,10 @@ va_t Decoder::directCallTarget(const DecodedInsn &Insn) const {
     return AArch64Lifter::directCallTarget(Insn.Raw);
   if (ARM)
     return ARMLifter::directCallTarget(Insn.Raw);
-  return MIPS ? MIPS->directCallTarget(*Insn.Raw) : InvalidVA;
+  if (MIPS)
+    return MIPS->directCallTarget(*Insn.Raw);
+  const auto Flow = integerControl(TargetArch, RISCV, *Insn.Raw);
+  return Flow.Opcode == NdOp::CALL ? Flow.Target : InvalidVA;
 }
 
 } // namespace neverd

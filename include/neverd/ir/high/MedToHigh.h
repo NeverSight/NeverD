@@ -47,6 +47,7 @@ class HighSemanticSimplifier;
 Intrinsic intrinsicId(const MedOp &Op);
 std::string intrinsicName(const MedOp &Op);
 TypeRef inferReturnType(const MedFunc &Med);
+TypeRef inferReturnType(const MedFunc &Med, uint64_t ReturnRegister);
 std::set<uint64_t> detectPtrParamRegs(const MedFunc &Med);
 /// Stack-passed parameter ids (`MedVar::Param`) used as memory addresses.
 std::set<int> detectPtrParamIds(const MedFunc &Med);

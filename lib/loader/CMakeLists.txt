@@ -100,6 +100,7 @@ add_neverd_component_library(NeverDLoader
   ELF/ARMEHABIUnwind.cpp
   ELF/ELFDynamicSections.cpp
   ELF/ELFLoader.cpp
+  ELF/ELFIntegerProfile.cpp
   ELF/ELFMIPSProfile.cpp
   ELF/ELFMIPSInstructionRelocations.cpp
   ELF/ELFMIPSDynamic.cpp

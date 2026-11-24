@@ -19,7 +19,7 @@ namespace neverd {
 
 inline bool archLiftSupported(Arch A) {
   return A == Arch::X64 || A == Arch::AArch64 || A == Arch::X86 ||
-         A == Arch::ARM || isMIPS(A);
+         A == Arch::ARM || isMIPS(A) || isRISCV(A) || isPowerPC(A);
 }
 
 /// Installing code in an existing image needs its fixups and layout writer.
@@ -43,7 +43,8 @@ constexpr bool archLittleEndian(Arch A) {
   return A == Arch::X64 || A == Arch::AArch64 || A == Arch::X86 ||
          A == Arch::ARM || A == Arch::SBF || A == Arch::MIPS32EL ||
          A == Arch::MIPS64EL || A == Arch::MIPS64N32EL ||
-         A == Arch::MIPS64O32EL;
+         A == Arch::MIPS64O32EL || isRISCV(A) || A == Arch::PPC32LE ||
+         A == Arch::PPC64LE;
 }
 
 inline bool archMachOPatchSupported(Arch A) {
@@ -94,7 +95,7 @@ guaranteedEntryStackAlignment(Arch A, BinaryFormat Fmt,
                               StackEntryKind Kind = StackEntryKind::Call) {
   if (A == Arch::ARM || isMIPSO32(A))
     return 8;
-  if (isMIPS64(A))
+  if (isMIPS64(A) || isRISCV(A) || isPowerPC(A))
     return 16;
   if (A == Arch::AArch64 || A == Arch::X64)
     return 16;
@@ -163,6 +164,10 @@ inline const char *getTriple(Arch A, BinaryFormat Fmt) {
   case Arch::Name:                                                             \
     return Triple;
 #include "neverd/MIPSTargets.def"
+#define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling)                    \
+  case Arch::Name:                                                             \
+    return Spelling "-unknown-linux-gnu";
+#include "neverd/ELFIntegerTargets.def"
   default:
     return nullptr;
   }

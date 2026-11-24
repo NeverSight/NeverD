@@ -180,14 +180,16 @@ void MedToHighConverter::inferTypes(HighFunc &Func) {
 // inferReturnType — deduce the return value's type from RETURN predecessors
 //===----------------------------------------------------------------------===//
 
-TypeRef inferReturnType(const MedFunc &Med) {
+TypeRef inferReturnType(const MedFunc &Med) { return inferReturnType(Med, 0); }
+
+TypeRef inferReturnType(const MedFunc &Med, uint64_t ReturnRegister) {
   for (auto &Blk : Med.Blocks) {
     for (auto RIt = Blk.Ops.rbegin(); RIt != Blk.Ops.rend(); ++RIt) {
       if (RIt->Opcode != NdOp::RETURN)
         continue;
       for (auto RIt2 = RIt + 1; RIt2 != Blk.Ops.rend(); ++RIt2) {
-        if (RIt2->Output.Kind != MedVar::Reg || RIt2->Output.RegOff != 0 ||
-            RIt2->Output.Size == 0)
+        if (RIt2->Output.Kind != MedVar::Reg ||
+            RIt2->Output.RegOff != ReturnRegister || RIt2->Output.Size == 0)
           continue;
         if (RIt2->Opcode == NdOp::INT_ZEXT && RIt2->NumInputs >= 1) {
           // A byte or halfword zero-extended into the register is unsigned:

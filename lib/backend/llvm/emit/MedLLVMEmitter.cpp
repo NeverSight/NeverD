@@ -878,6 +878,16 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   // would read unmapped memory.  Mirrors the dso_local data globals.  External
   // call targets keep default visibility (declared elsewhere, may be imports).
   LLVMFunc->setDSOLocal(true);
+  if (!PortableBody && isRISCV(TargetArch)) {
+    std::string Features = "+i";
+    if (Img && Img->RISCV.Multiply)
+      Features += ",+m";
+    if (Img && Img->RISCV.Atomic)
+      Features += ",+a";
+    if (Img && Img->RISCV.Compressed)
+      Features += ",+c";
+    LLVMFunc->addFnAttr("target-features", Features);
+  }
   LLVMFunc->addFnAttr(llvm::Attribute::NullPointerIsValid);
   if (Func.DoesNotReturn)
     LLVMFunc->addFnAttr(llvm::Attribute::NoReturn);
@@ -1116,6 +1126,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
     // not LLVM's generic default until a TargetMachine happens to be created.
     Mod_->setDataLayout(Mod_->getTargetTriple().computeDataLayout());
   }
+  if (!PortableBody && isRISCV(TheArch))
+    Mod_->addModuleFlag(
+        llvm::Module::Error, "target-abi",
+        llvm::MDString::get(LCtx, TheArch == Arch::RISCV32 ? "ilp32" : "lp64"));
   Img = Img_;
   RelocatedEntryProofs.reset();
   ImportStorageSnapshotImage = nullptr;

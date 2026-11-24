@@ -11,6 +11,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/ARM/ARMRegs.h"
+#include "neverd/lift/IntegerRegisters.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -21,6 +22,10 @@
 #include <vector>
 
 namespace neverd {
+namespace {
+constexpr uint64_t PreservedCRBegin = integerreg::ppc::crBit(8); // CR2.LT
+constexpr uint64_t PreservedCREnd = integerreg::ppc::crBit(20);  // CR5.LT
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // CondCode helpers
@@ -284,6 +289,9 @@ const TargetRegInfo &getTargetRegInfo(Arch TheArch) {
     return A64RegInfo;
   case Arch::ARM:
     return ARMRegInfo;
+#define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling) case Arch::Name:
+#include "neverd/ELFIntegerTargets.def"
+    return getELFIntegerRegInfo(TheArch);
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64O32:
@@ -310,6 +318,9 @@ bool TargetRegInfo::isX87StackReg(uint64_t RegOff) const {
 }
 
 bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
+  if (isPowerPC(TheArch) && RegOff >= PreservedCRBegin &&
+      RegOff < PreservedCREnd)
+    return Size <= PreservedCREnd - RegOff;
   if (isCalleeSaveReg(RegOff))
     return !isMIPS64O32(TheArch) || Size <= 4;
 
@@ -340,6 +351,9 @@ bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
 
 uint16_t TargetRegInfo::callPreservedPrefixSize(uint64_t RegOff,
                                                 uint16_t Size) const {
+  if (isPowerPC(TheArch) && RegOff >= PreservedCRBegin &&
+      RegOff < PreservedCREnd)
+    return std::min<uint64_t>(Size, PreservedCREnd - RegOff);
   if (isCallPreserved(RegOff, Size))
     return Size;
   if (isMIPS64O32(TheArch) && Size > 4 && isCalleeSaveReg(RegOff))
@@ -404,6 +418,9 @@ TargetRegInfo::callPreservedRanges(BinaryFormat Format) const {
     Add(PlatformRegister, FullRegWidth);
   for (uint64_t Reg : CalleeSaveRegs)
     Add(Reg, FullRegWidth);
+  if (isPowerPC(TheArch))
+    for (uint64_t Bit = PreservedCRBegin; Bit != PreservedCREnd; ++Bit)
+      Add(Bit, 1);
 
   if (VecRegStride <= std::numeric_limits<uint16_t>::max()) {
     const auto VecBytes = static_cast<uint16_t>(VecRegStride);

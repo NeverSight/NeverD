@@ -94,7 +94,17 @@ void CFGBuilder::splitBlocks() {
       if (Insns.count(Addr + Rec.Size))
         BlockStarts.insert(Addr + Rec.Size);
     }
-    if (Rec.IsBranch && Rec.IsCond)
+    // A link-producing transfer can publish the next instruction as a code
+    // pointer. Like a conditional fallthrough, it needs a block identity.
+    if ((Rec.IsBranch && Rec.IsCond) ||
+        ((Rec.IsCall || Rec.IsBranch) &&
+         std::any_of(Rec.Ops.begin(), Rec.Ops.end(),
+                     [NextVA = Addr + Rec.Size](const LowOp &Op) {
+                       return Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                              Op.Inputs[0].Provenance ==
+                                  ConstantAddressProvenance::CodeAddress &&
+                              Op.Inputs[0].Offset == NextVA;
+                     })))
       BlockStarts.insert(Addr + Rec.Size);
     if (Registration &&
         std::any_of(Rec.Ops.begin(), Rec.Ops.end(), [](const LowOp &Op) {

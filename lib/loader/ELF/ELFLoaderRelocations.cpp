@@ -266,6 +266,13 @@ void applyDynamicRelativeRelocations(
   using Elf_Shdr = typename ELFT::Shdr;
 
   auto IsRelative = [&](uint32_t Type) {
+    if (isRISCV(Img.Arch))
+      return Type == R_RISCV_RELATIVE;
+    if (isPowerPC(Img.Arch)) {
+      if constexpr (ELFT::Is64Bits)
+        return Type == R_PPC64_RELATIVE;
+      return Type == R_PPC_RELATIVE;
+    }
     if constexpr (ELFT::Is64Bits) {
       return (Img.Arch == Arch::X64 && Type == R_X86_64_RELATIVE) ||
              (Img.Arch == Arch::AArch64 && Type == R_AARCH64_RELATIVE);

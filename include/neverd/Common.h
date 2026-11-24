@@ -336,7 +336,21 @@ enum class Arch : uint8_t {
   Unknown,
 #define NEVERD_MIPS_TARGET(Name, Spelling, Triple) Name,
 #include "neverd/MIPSTargets.def"
+#define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling) Name,
+#include "neverd/ELFIntegerTargets.def"
 };
+
+constexpr bool isRISCV(Arch A) {
+  return A == Arch::RISCV32 || A == Arch::RISCV64;
+}
+
+constexpr bool isPowerPC64(Arch A) {
+  return A == Arch::PPC64 || A == Arch::PPC64LE;
+}
+
+constexpr bool isPowerPC(Arch A) {
+  return A == Arch::PPC32 || A == Arch::PPC32LE || isPowerPC64(A);
+}
 
 constexpr bool isMIPSN32(Arch A) {
   return A == Arch::MIPS64N32 || A == Arch::MIPS64N32EL;
@@ -424,6 +438,10 @@ inline const char *getArchName(Arch A) {
   case Arch::Name:                                                             \
     return Spelling;
 #include "neverd/MIPSTargets.def"
+#define NEVERD_ELF_INTEGER_TARGET(Name, LLVMArch, Spelling)                    \
+  case Arch::Name:                                                             \
+    return Spelling;
+#include "neverd/ELFIntegerTargets.def"
   case Arch::EVM:
     return kEVMArchName.data();
   case Arch::SBF:

@@ -6,16 +6,49 @@
 
 #include "SourceParameterPlacementDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 
 #include <algorithm>
+#include <bit>
 #include <functional>
 
 using namespace neverd;
 using namespace neverd::source_placement;
 
-namespace {} // namespace
+namespace {
+std::optional<SourceParameterPlacement>
+placeELFIntegers(const TargetRegInfo &TRI, const TypeRef &ReturnType,
+                 llvm::ArrayRef<TypeRef> Types) {
+  const unsigned Word = TRI.PointerSize;
+  auto Fits = [Word](const TypeRef &T) {
+    return isIntegerScalar(T) && T->Size <= Word &&
+           std::has_single_bit(unsigned(T->Size));
+  };
+  if (!ReturnType ||
+      (ReturnType->Kind != NdTypeKind::Void && !Fits(ReturnType)))
+    return std::nullopt;
+  SourceParameterPlacement Result;
+  int64_t Stack = TRI.CallStackArgumentBase;
+  for (const auto &Type : Types) {
+    if (!Fits(Type))
+      break;
+    const size_t Index = Result.Parameters.size();
+    if (Index < TRI.IntParamRegs.size()) {
+      Result.Parameters.push_back(
+          {registerPiece(SourceABICarrierKind::IntegerRegister,
+                         TRI.IntParamRegs[Index], 0, Type->Size)});
+    } else {
+      const int64_t Offset =
+          Stack + (archLittleEndian(TRI.TheArch) ? 0 : Word - Type->Size);
+      Result.Parameters.push_back({stackPiece(Offset, 0, Type->Size)});
+      Stack += Word;
+    }
+  }
+  return Result;
+}
+} // namespace
 
 bool source_placement::isIntegerScalar(const TypeRef &Type) {
   if (!Type || !Type->Size)
@@ -128,6 +161,8 @@ neverd::placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   if (Variadic && !isMIPS(A) && (A != Arch::AArch64 || F != BinaryFormat::COFF))
     return std::nullopt;
   const TargetRegInfo &TRI = getTargetRegInfo(A);
+  if (F == BinaryFormat::ELF && (isRISCV(A) || isPowerPC(A)))
+    return placeELFIntegers(TRI, ReturnType, ParamTypes);
   switch (A) {
   case Arch::X64:
     return F == BinaryFormat::COFF ? placeWin64(TRI, ReturnType, ParamTypes)

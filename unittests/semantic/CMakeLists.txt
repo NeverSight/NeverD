@@ -9,6 +9,11 @@ if(WIN32)
   add_compile_definitions(NOMINMAX)
 endif()
 
+add_neverd_unittest(NeverDELFIntegerSemanticTests
+  ELFIntegerSemanticTests.cpp
+  LINK_COMPONENTS IRLow Lift Decode
+  LINK_LIBS unicorn)
+
 # This binary's large inventory can take several minutes to enumerate on
 # hosted Windows runners, so widen its still-finite PRE_TEST discovery bound.
 add_neverd_unittest(NeverDSemanticTests

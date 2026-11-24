@@ -25,7 +25,11 @@ function(neverd_require_unicorn)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
   set(UNICORN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(UNICORN_INSTALL OFF CACHE BOOL "" FORCE)
-  set(UNICORN_ARCH "x86;arm;aarch64;mips" CACHE STRING "" FORCE)
+  set(_neverd_unicorn_arches x86 arm aarch64 mips)
+  if(NEVERD_ENABLE_SEMANTIC_TESTS)
+    list(APPEND _neverd_unicorn_arches riscv ppc)
+  endif()
+  set(UNICORN_ARCH "${_neverd_unicorn_arches}" CACHE STRING "" FORCE)
   # QEMU's C helpers require wrapping signed arithmetic. The pinned Unicorn
   # build supplies -fwrapv on its Unix path, but clang-cl takes its MSVC path.
   if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND

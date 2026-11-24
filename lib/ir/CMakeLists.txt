@@ -25,6 +25,7 @@ add_neverd_component_library(NeverDIR
   low/SourceImageBytes.cpp
   low/ImportCallee.cpp
   TargetRegInfo.cpp
+  TargetRegInfoELFInteger.cpp
   AArch64/TargetRegInfoAArch64.cpp
   ARM/TargetRegInfoARM.cpp
   MIPS/TargetRegInfoMIPS.cpp

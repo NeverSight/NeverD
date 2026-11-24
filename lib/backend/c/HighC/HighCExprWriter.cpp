@@ -39,6 +39,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/DataAccessWidths.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/IntegerMemorySource.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
@@ -2330,6 +2331,18 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
+    if (integer_memory::owns(E.IntrinsicId)) {
+      if (E.Operands.empty() || E.Operands.front()->Kind != ExprKind::Const)
+        throw std::runtime_error("missing native integer memory selector");
+      const uint64_t Key = E.Operands.front()->ConstVal;
+      auto F = integer_memory::form(Opts.TheArch, E.IntrinsicId, Key);
+      if (!F || E.Operands.size() != 1 + F->inputs())
+        throw std::runtime_error("invalid native integer memory instruction");
+      llvm::SmallVector<std::string, 2> Args;
+      for (size_t I = 1; I < E.Operands.size(); ++I)
+        Args.push_back(exprStr(*E.Operands[I]));
+      return integer_memory::source(Opts.TheArch, *F, Key, Args);
+    }
     if (mips::isScalarIntrinsic(E.IntrinsicId))
       return renderMIPSScalar(
           E, Opts.TheArch, MIPSScalarHelpers.at(mipsScalarHelperKey(E)),
