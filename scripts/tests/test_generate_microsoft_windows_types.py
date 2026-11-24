@@ -87,6 +87,33 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                 for name in names})
             self.assertEqual(packaged, manifest)
 
+    def test_named_runtime_profiles_preserve_target_exports_and_parameter_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def exports(arch):
+                return {u["name"]: u["bridge"]["runtime_exports"] for u in
+                        windows.flat.named_runtime_units(Path(tmp) / arch, arch, ["clang"])}
+            x64, arm64 = exports("x64"), exports("arm64")
+            self.assertEqual(x64["DisplayControl"]["parameter_counts"]["DCIOpenProvider"], 0)
+            self.assertEqual(arm64["DisplayDriverFunctions"]["parameter_counts"]["EngCreateClip"], 0)
+            reset = "WldpResetProductionConfiguration"
+            self.assertNotIn(reset, x64["LockdownPolicy"]["names"])
+            self.assertEqual(arm64["LockdownPolicy"]["parameter_counts"][reset], 0)
+            self.assertNotEqual(x64["DisplayControl"]["image_sha256"],
+                                arm64["DisplayControl"]["image_sha256"])
+
+    def test_runtime_abi_rejects_truncating_an_unspecified_parameter_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original, published = root / "original.h", root / "published.h"
+            original.write_text("int ReadEntry();\n", encoding="utf-8")
+            published.write_text("int ReadEntry(void);\n", encoding="utf-8")
+            flags = ["clang", "--target=aarch64-pc-windows-msvc"]
+            proof = {"source": str(original), "projected_functions": ["ReadEntry"], "commands": [],
+                     "arguments": [*flags, "-std=c23"], "language": "c",
+                     "runtime_exports": {"module": "example.dll", "parameter_counts": {"ReadEntry": 2}}}
+            with self.assertRaisesRegex(ValueError, "parameter list disagrees"):
+                windows.flat.verify_abis(proof, published, flags, root, {"ReadEntry"}, windows.run)
+
     def test_c_import_profile_preserves_mixed_and_cpp_only_archive_evidence(self):
         symbols = {"OnlyCpp": {"?OnlyCpp@@YAHXZ", "__imp_?OnlyCpp@@YAHXZ"},
                    "Both": {"?Both@@YAHXZ", "_Both@0"}, "Plain": {"_Plain@4"},

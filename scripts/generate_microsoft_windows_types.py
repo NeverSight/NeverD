@@ -863,6 +863,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                 target_packages.append(gdiplus_imports["package"])
             flat_units, archives = flat.source_units(output, cache, architecture, readobj,
                                                      arguments, legacy_profile)
+            flat_units.extend(flat.named_runtime_units(output, architecture, arguments))
             webauthn, headers, notice = flat.webauthn_runtime_unit(output, cache, arguments)
             flat_units.append(webauthn)
             runtime_packages.extend(headers)
@@ -900,6 +901,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                          gdiplus=wdk.digest(Path(gdiplus.__file__)),
                          flat_imports=wdk.digest(Path(flat.__file__)),
                          ordinal_imports=wdk.digest(flat.ordinal.INPUTS),
+                         named_runtime=wdk.digest(flat.NAMED_RUNTIME_INPUTS),
                          webauthn_runtime=wdk.digest(flat.WEBAUTHN_INPUTS),
                          **({"legacy_sdk": wdk.digest(flat.LEGACY_INPUTS)} if legacy_sdk else {})),
         "inputs": inputs,

@@ -1,0 +1,195 @@
+{
+  "win32_metadata": {
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.win32metadata/71.0.45-preview/microsoft.windows.sdk.win32metadata.71.0.45-preview.nupkg",
+    "version": "71.0.45-preview",
+    "metadata_sha256": "b9e476a81e14060040804e4cf09b2973fc53a174befc7b3b670d4db72eef55af"
+  },
+  "providers": {
+    "DisplayControl": {
+      "module": "dciman32.dll",
+      "headers": [
+        "dciman"
+      ],
+      "exports": {
+        "DCIBeginAccess": 5,
+        "DCICloseProvider": 1,
+        "DCICreateOffscreen": 10,
+        "DCICreateOverlay": 3,
+        "DCICreatePrimary": 2,
+        "DCIDestroy": 1,
+        "DCIDraw": 1,
+        "DCIEndAccess": 1,
+        "DCIEnum": 5,
+        "DCIOpenProvider": 0,
+        "DCISetClipList": 2,
+        "DCISetDestination": 3,
+        "DCISetSrcDestClip": 4,
+        "GetDCRegionData": 3,
+        "GetWindowRegionData": 3,
+        "WinWatchClose": 1,
+        "WinWatchDidStatusChange": 1,
+        "WinWatchGetClipList": 4,
+        "WinWatchNotify": 3,
+        "WinWatchOpen": 1
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "068c9407f03e23b1e3ac9448139bb292651edc8411a751c6c2a8a9829385a4f0",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "0589a9d1c0770e201b409f8a53512f1a8615ac06ecdefff38c1ef198a0ad2c38",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "0122f6a18d0c3d21407f23feb85bc821fc059077f4165e3c3b270c7c82bf9001",
+          "additional_exports": {}
+        }
+      }
+    },
+    "DisplayDriverFunctions": {
+      "module": "gdi32.dll",
+      "headers": [
+        "winddi"
+      ],
+      "exports": {
+        "BRUSHOBJ_hGetColorTransform": 1,
+        "BRUSHOBJ_pvAllocRbrush": 2,
+        "BRUSHOBJ_pvGetRbrush": 1,
+        "BRUSHOBJ_ulGetBrushColor": 1,
+        "CLIPOBJ_bEnum": 3,
+        "CLIPOBJ_cEnumStart": 5,
+        "CLIPOBJ_ppoGetPath": 1,
+        "EngAcquireSemaphore": 1,
+        "EngAlphaBlend": 7,
+        "EngAssociateSurface": 3,
+        "EngBitBlt": 11,
+        "EngCheckAbort": 1,
+        "EngComputeGlyphSet": 3,
+        "EngCopyBits": 6,
+        "EngCreateBitmap": 5,
+        "EngCreateClip": 0,
+        "EngCreateDeviceBitmap": 3,
+        "EngCreateDeviceSurface": 3,
+        "EngCreatePalette": 6,
+        "EngCreateSemaphore": 0,
+        "EngDeleteClip": 1,
+        "EngDeletePalette": 1,
+        "EngDeletePath": 1,
+        "EngDeleteSemaphore": 1,
+        "EngDeleteSurface": 1,
+        "EngEraseSurface": 3,
+        "EngFillPath": 7,
+        "EngFindResource": 4,
+        "EngFreeModule": 1,
+        "EngGetCurrentCodePage": 2,
+        "EngGetDriverName": 1,
+        "EngGetPrinterDataFileName": 1,
+        "EngGradientFill": 10,
+        "EngLineTo": 9,
+        "EngLoadModule": 1,
+        "EngLockSurface": 1,
+        "EngMarkBandingSurface": 1,
+        "EngMultiByteToUnicodeN": 5,
+        "EngMultiByteToWideChar": 5,
+        "EngPaint": 5,
+        "EngPlgBlt": 11,
+        "EngQueryEMFInfo": 2,
+        "EngQueryLocalTime": 1,
+        "EngReleaseSemaphore": 1,
+        "EngStretchBlt": 11,
+        "EngStretchBltROP": 13,
+        "EngStrokeAndFillPath": 10,
+        "EngStrokePath": 8,
+        "EngTextOut": 10,
+        "EngTransparentBlt": 8,
+        "EngUnicodeToMultiByteN": 5,
+        "EngUnlockSurface": 1,
+        "EngWideCharToMultiByte": 5,
+        "FONTOBJ_cGetAllGlyphHandles": 2,
+        "FONTOBJ_cGetGlyphs": 5,
+        "FONTOBJ_pQueryGlyphAttrs": 2,
+        "FONTOBJ_pfdg": 1,
+        "FONTOBJ_pifi": 1,
+        "FONTOBJ_pvTrueTypeFontFile": 2,
+        "FONTOBJ_pxoGetXform": 1,
+        "FONTOBJ_vGetInfo": 3,
+        "HT_Get8BPPFormatPalette": 4,
+        "HT_Get8BPPMaskPalette": 6,
+        "PATHOBJ_bEnum": 2,
+        "PATHOBJ_bEnumClipLines": 3,
+        "PATHOBJ_vEnumStart": 1,
+        "PATHOBJ_vEnumStartClipLines": 4,
+        "PATHOBJ_vGetBounds": 2,
+        "STROBJ_bEnum": 3,
+        "STROBJ_bEnumPositionsOnly": 3,
+        "STROBJ_bGetAdvanceWidths": 4,
+        "STROBJ_dwGetCodePage": 1,
+        "STROBJ_vEnumStart": 1,
+        "XFORMOBJ_bApplyXform": 5,
+        "XFORMOBJ_iGetXform": 2,
+        "XLATEOBJ_cGetPalette": 4,
+        "XLATEOBJ_hGetColorTransform": 1,
+        "XLATEOBJ_iXlate": 2,
+        "XLATEOBJ_piVector": 1
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "f0c42611c13c3995fede747e932fcbe8db5dfb8efb8baddadbe62ec90af450cd",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "b5f5a3f16d03366cdb02020fc4dadceb0892e243f8aa94d205e124045da9457f",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "6620d2d18021c2a58248631faf413b7ca9fe106ddd86daf4624eddbffc26f95d",
+          "additional_exports": {}
+        }
+      }
+    },
+    "LockdownPolicy": {
+      "module": "wldp.dll",
+      "headers": [
+        "wldp"
+      ],
+      "exports": {
+        "WldpGetLockdownPolicy": 3,
+        "WldpIsAppApprovedByPolicy": 2,
+        "WldpIsClassInApprovedList": 4,
+        "WldpIsDynamicCodePolicyEnabled": 1,
+        "WldpQueryDynamicCodeTrust": 3,
+        "WldpQuerySecurityPolicy": 6,
+        "WldpQueryWindowsLockdownMode": 1,
+        "WldpQueryWindowsLockdownRestriction": 1,
+        "WldpSetDynamicCodeTrust": 1,
+        "WldpSetWindowsLockdownRestriction": 1
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "b45df6644d2dbe6997afd57517a30783c902eb0b0875d6b07204f927580c96ca",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "c2a7ed84bdd3cf931fdcc5782cea58c376b1a2841fcc6f954e65812deff50389",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "218b33e84dfb38ccb3fc98a83b8c0e0b5e07a734e4ec36e2d2d52754da6933f6",
+          "additional_exports": {
+            "WldpCanExecuteBuffer": 6,
+            "WldpCanExecuteFile": 5,
+            "WldpCanExecuteStream": 5,
+            "WldpIsProductionConfiguration": 1,
+            "WldpIsWcosProductionConfiguration": 1,
+            "WldpQueryDeviceSecurityInformation": 3,
+            "WldpQueryPolicySettingEnabled": 2,
+            "WldpQueryPolicySettingEnabled2": 2,
+            "WldpResetProductionConfiguration": 0,
+            "WldpResetWcosProductionConfiguration": 0
+          }
+        }
+      }
+    }
+  }
+}

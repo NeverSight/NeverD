@@ -318,6 +318,15 @@ target or module/ordinal pair displays its numeric name. Run
 and package cache to recompile the Cabinet, PrintTicket, XInput and MAPI callers
 and compare the ordinal imports of the original and regenerated DLLs.
 
+The named runtime profiles in `scripts/MicrosoftNamedRuntimeSDKInputs.json`
+cover display DDI exports in GDI32, display control in DCIMAN32 and Windows
+lockdown policy in WLDP. Each profile records the original system DLL hash
+for each architecture and the parameter counts from the pinned Microsoft
+Win32 metadata. The generator compares the original SDK and published C
+declarations with Clang. It checks empty C parameter lists against the metadata.
+These profiles apply to published export names. Import-by-ordinal resolution
+uses the separately witnessed mappings above.
+
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with
 `UNICODE`, including in declarations with an explicit `_W` name. An exact
 selection imports the reviewed Unicode entry points first; the ANSI profile

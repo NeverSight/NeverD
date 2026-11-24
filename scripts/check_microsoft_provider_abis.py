@@ -29,6 +29,7 @@ CASES = {
     "NDIS": (),
     "GDIPlus": (),
     "WebAuthenticationRuntime": (),
+    **{name: () for name in json.loads(flat.NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))["providers"]},
     **{provider: () for provider in (*flat.CURRENT, *flat.LEGACY, *flat.ordinal.profiles())},
     **{provider: () for provider in PROVIDER_PREFIXES},
     "NetworkInterfaces": ("NmrRegisterClient", "WskRegister", "WskCaptureProviderNPI"),
@@ -282,11 +283,21 @@ def check(args: argparse.Namespace) -> dict:
                                    imports_without_declaration=inventory["imports_without_declaration"])
                     elif "sdk_runtime_bridge" in metadata:
                         declared = official_names(args, compiler, original, directory, row, arch, name, ("",))
-                        inputs = json.loads(flat.WEBAUTHN_INPUTS.read_text(encoding="utf-8"))
-                        inventory = {"runtime_exports": {"names": inputs["exports"]}}
+                        if name == "WebAuthenticationRuntime":
+                            inputs = json.loads(flat.WEBAUTHN_INPUTS.read_text(encoding="utf-8"))
+                            exports = {"module": inputs["module"], "names": inputs["exports"],
+                                       "metadata": inputs["metadata"]}
+                        else:
+                            inputs = json.loads(flat.NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
+                            profile = inputs["providers"][name]
+                            exports = flat.named_runtime_exports(profile, profile["targets"][arch],
+                                                                 inputs["win32_metadata"])
+                        if exports != bridge["runtime_exports"]:
+                            raise ValueError("published named export inventory differs from its qualified input")
+                        inventory = {"runtime_exports": exports}
                         names = tuple(flat.select(inventory, declared, directory, windows.run))
                         row.update(functions=names, inventory="Microsoft Win32 metadata and public headers",
-                                   module=inputs["module"])
+                                   module=exports["module"])
                     elif name == "NDIS" or name in PROVIDER_PREFIXES:
                         prefixes = ("Ndis",) if name == "NDIS" else PROVIDER_PREFIXES[name]
                         names = official_names(args, compiler, original, directory,
