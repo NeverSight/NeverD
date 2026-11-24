@@ -230,7 +230,16 @@ TEST(GoEHCorpus, RecoversDeferPanicAndRecoverSites) {
     for (const ExceptionFunction &Function : Info.Functions) {
       if (!Function.Go)
         continue;
-      EXPECT_EQ(Function.Encoding, ExceptionEncoding::GoFuncTable);
+      // A primary PE unwind record keeps its native encoding when the Go
+      // table describes the same function. Other frames come from pclntab.
+      if (Image->Format == BinaryFormat::COFF &&
+          Function.model() == ExceptionModel::WindowsTable) {
+        EXPECT_EQ(Function.Kind, RuntimeFunctionKind::Primary);
+        EXPECT_NE(Function.RuntimeFunctionRVA, 0u);
+      } else {
+        EXPECT_EQ(Function.Encoding, ExceptionEncoding::GoFuncTable);
+      }
+      EXPECT_EQ(Function.Go->EntryVA, Function.CodeRange.Begin);
       // The runtime resumes a panicking frame by jumping to this offset from
       // the function's entry, so an offset past the end of the body is a
       // misread record rather than an unusual function.
