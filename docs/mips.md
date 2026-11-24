@@ -18,9 +18,8 @@ order in both MIPS byte orders, including fields that span bytes.
 Legacy packed bit-fields may cross that unit. For example, a
 12-bit field following 27 bits starts at bit 27 in both byte orders, even when
 the little-endian debug entry encodes a high-bit offset of −7.
-For unlinked n32 ELF objects, the LLVM source build reads debug string offsets
-from explicit relocation addends. The r7 prebuilt package can read these types
-after linking the object with the target linker.
+For unlinked n32 ELF objects, the LLVM source build and the r8 SDK read debug
+string offsets from explicit relocation addends. With r7, link the object first.
 
 ## Native LLVM output
 
@@ -43,8 +42,8 @@ carry their instruction mode so a native linker can construct callable
 pointers. LLVM emits microMIPS objects for o32. A microMIPS n32 or n64 input
 can use the analysis paths described below. Selecting an older SDK such as
 r7 limits native object output to classic profiles with a qualified ABI.
-MIPS III/o32, MIPS V, compressed bodies and fixed-address output require the
-updated fork.
+MIPS III/o32, MIPS V, compressed bodies and fixed-address output are
+available in the r8 SDK.
 
 The fork can compile ordinary LLVM functions for historical I–III ISAs.
 Lifting an existing I–III function also carries its incoming pipeline state.
@@ -751,7 +750,7 @@ explicit ELF mode evidence in o32, n32 and n64. MIPS16 numerical identities
 remain limited to r2/o32. Both source backends share this boundary; unknown-mode
 imports, including whole or partial GOT reads, remain refused. Direct control
 identities, serialized callables and code-byte/data addresses retain distinct
-roles. The LLVM r7 SDK uses the fork's `Fi8` data layout, so stronger function
+roles. The NeverSight LLVM SDK uses the fork's `Fi8` data layout, so stronger function
 code alignment cannot clear the callable ISA tag during LLVM optimization.
 Recompiling numeric observations requires NeverSight Clang with the qualified
 [MIPS function-pointer layout fix](https://github.com/NeverSight/llvm-project/commit/df115daf54a117501223f3a6a88bfcd9bf4fa5a8):
