@@ -109,6 +109,9 @@ struct FrameFacts {
   /// Exact size of each currently live nullable call-result object. A later
   /// invocation at the same site replaces its identity and size.
   std::map<size_t, uint64_t> ReturnedObjectSizes;
+  /// A branch may prove whether the current result is nonnull. Missing means
+  /// both outcomes remain possible; joins retain only identical facts.
+  std::map<size_t, bool> ReturnedObjectNonNull;
 };
 
 struct ControlMarginal {
@@ -168,17 +171,19 @@ struct ContextKey {
   std::optional<uint64_t> StackDisplacement;
   std::vector<std::pair<uint64_t, std::optional<uint64_t>>> ReturnSlots;
   std::vector<std::optional<uint64_t>> ReturnedObjectSizes;
+  std::vector<std::optional<bool>> ReturnedObjectNonNull;
   uint32_t FrameResidue = 0;
 
   bool operator<(const ContextKey &Other) const {
     return std::tie(Cursor.Address, Cursor.Mode, Controls, FrameControls,
                     NativeStackActive, EntryReturnSlotIntact, StackDisplacement,
-                    ReturnSlots, ReturnedObjectSizes, FrameResidue) <
+                    ReturnSlots, ReturnedObjectSizes, ReturnedObjectNonNull,
+                    FrameResidue) <
            std::tie(Other.Cursor.Address, Other.Cursor.Mode, Other.Controls,
                     Other.FrameControls, Other.NativeStackActive,
                     Other.EntryReturnSlotIntact, Other.StackDisplacement,
                     Other.ReturnSlots, Other.ReturnedObjectSizes,
-                    Other.FrameResidue);
+                    Other.ReturnedObjectNonNull, Other.FrameResidue);
   }
 };
 
@@ -476,6 +481,8 @@ bool intersect(Projection &Into, const Projection &Incoming,
   Changed |= intersectMap(Into.Frame.AffineValues, Incoming.Frame.AffineValues);
   Changed |= intersectMap(Into.Frame.ReturnedObjectSizes,
                           Incoming.Frame.ReturnedObjectSizes);
+  Changed |= intersectMap(Into.Frame.ReturnedObjectNonNull,
+                          Incoming.Frame.ReturnedObjectNonNull);
   if (Into.Frame.EntryReturnSlotIntact &&
       !Incoming.Frame.EntryReturnSlotIntact) {
     Into.Frame.EntryReturnSlotIntact = false;
@@ -1222,12 +1229,14 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
        {Origins.UnsafeScalars.size(), Origins.SafeRegisters.size(),
         Origins.ExternalTemporaries.size(), Origins.ExternalFrameBytes.size(),
         Origins.UndefinedFlags.size(), Frame.AffineValues.size(),
-        Frame.NativeReturnSlots.size(), Frame.ReturnedObjectSizes.size()})
+        Frame.NativeReturnSlots.size(), Frame.ReturnedObjectSizes.size(),
+        Frame.ReturnedObjectNonNull.size()})
     if (!chargeCallWork(Count) || !chargeCallWork(Count))
       return false;
   FrameFacts NextFrame;
   NextFrame.NativeStackActive = Frame.NativeStackActive;
   NextFrame.ReturnedObjectSizes = Frame.ReturnedObjectSizes;
+  NextFrame.ReturnedObjectNonNull = Frame.ReturnedObjectNonNull;
   if (Frame.EntryReturnSlotIntact) {
     const auto &Slot = *Options.EntryReturnSlot;
     NextFrame.EntryReturnSlotIntact =
@@ -1334,6 +1343,7 @@ bool Specializer::applyReturningResultObject(
   ObjectRoots[RootIndex] = Root;
   State.write(SymSpace::Register, Object.Result.Offset, Root);
   Frame.ReturnedObjectSizes[Index] = Size;
+  Frame.ReturnedObjectNonNull.erase(Index);
   const auto &Bounds = *Options.EntryFrameBounds;
   Exec.assume(detail::nullableObjectFramePredicate(Ctx, FrameRoot, Bounds.Begin,
                                                    Bounds.End, Root,
@@ -2537,12 +2547,18 @@ int Specializer::enqueue(SpecializationCursor Cursor,
   Key.NativeStackActive = Incoming.Frame.NativeStackActive;
   Key.EntryReturnSlotIntact = Incoming.Frame.EntryReturnSlotIntact;
   Key.ReturnedObjectSizes.reserve(ReturnedObjects.size());
+  Key.ReturnedObjectNonNull.reserve(ReturnedObjects.size());
   for (size_t I = 0; I < ReturnedObjects.size(); ++I) {
     const auto At = Incoming.Frame.ReturnedObjectSizes.find(I);
     Key.ReturnedObjectSizes.push_back(
         At == Incoming.Frame.ReturnedObjectSizes.end()
             ? std::nullopt
             : std::optional<uint64_t>(At->second));
+    const auto Nullness = Incoming.Frame.ReturnedObjectNonNull.find(I);
+    Key.ReturnedObjectNonNull.push_back(
+        Nullness == Incoming.Frame.ReturnedObjectNonNull.end()
+            ? std::nullopt
+            : std::optional<bool>(Nullness->second));
   }
   if (Key.NativeStackActive) {
     const auto At =
@@ -2739,6 +2755,34 @@ bool Specializer::emitTargets(
       return -1;
     if (!Reachable)
       return -2;
+    if (Flow == StepResult::CondBranch) {
+      // The successor receives a fresh symbolic object root. Retain only a
+      // nullness outcome proved for this exact edge; the nullable declaration
+      // alone cannot establish which branch was taken.
+      const size_t ReturnBegin = Options.EntryFrameExcludedObjects.size() +
+                                 Options.EntryFrameLoadedObjects.size();
+      for (const auto &ObjectSize : Frame.ReturnedObjectSizes) {
+        const size_t Index = ObjectSize.first;
+        if (Frame.ReturnedObjectNonNull.count(Index))
+          continue;
+        if (!chargeObjectWork(1))
+          return -1;
+        const auto IsNull =
+            Ctx.mkEq(ObjectRoots[ReturnBegin + Index], Ctx.mkConst(64, 0));
+        if (Ctx.numNodes() > Options.MaxSymbolicNodes) {
+          fail(SpecializationStatus::BudgetExceeded,
+               "returned object branch node budget exhausted");
+          return -1;
+        }
+        const auto Nullness = enumerate(Ctx, Predicate, {IsNull}, 1);
+        if (Failed)
+          return -1;
+        if (Nullness.Status == FiniteValueStatus::Complete &&
+            Nullness.Tuples.size() == 1 && Nullness.Tuples.front().size() == 1)
+          EdgeState.Frame.ReturnedObjectNonNull[Index] =
+              Nullness.Tuples.front().front() == 0;
+      }
+    }
     if (KnownTarget && Flow == StepResult::IndirectBranch &&
         scalarLocation(Original.Inputs[0])) {
       // The retained live operand is exactly what residual dispatch tests.
@@ -3092,6 +3136,13 @@ bool Specializer::evaluate(int Id) {
                     detail::nullableObjectFramePredicate(
                         Ctx, FrameRoot, Bounds.Begin, Bounds.End,
                         ObjectRoots[I], static_cast<int64_t>(At->second)));
+      const auto Nullness = Draft.Incoming.Frame.ReturnedObjectNonNull.find(
+          I - DirectCount - LoadedCount);
+      if (Nullness != Draft.Incoming.Frame.ReturnedObjectNonNull.end()) {
+        const auto IsNull = Ctx.mkEq(ObjectRoots[I], Ctx.mkConst(64, 0));
+        IncomingPredicate = Ctx.mkAnd(
+            IncomingPredicate, Nullness->second ? Ctx.mkNot(IsNull) : IsNull);
+      }
       if (Ctx.numNodes() > Options.MaxSymbolicNodes)
         return fail(SpecializationStatus::BudgetExceeded,
                     "returned object predicate symbolic-node budget "
@@ -3981,28 +4032,64 @@ bool Specializer::evaluate(int Id) {
               const auto Object = objectPointer(Ctx, Address, ObjectRoots);
               if (Failed)
                 return false;
-              if (Object)
-                Distance = Ctx.mkAdd(
-                    Ctx.mkSub(ObjectRoots[Object->Root - 1], FrameRoot),
-                    Ctx.mkConst(64, Object->Offset -
-                                        static_cast<uint64_t>(Bounds.Begin)));
-              const auto Overlap = memoryExtentsOverlap(
-                  Ctx, Address, Memory.AccessSize, First, Bytes, Distance);
-              if (Ctx.numNodes() > Options.MaxSymbolicNodes)
-                return fail(SpecializationStatus::BudgetExceeded,
-                            "frame separation node budget exhausted");
-              const auto Domain =
-                  enumerate(Ctx, Exec.pathPredicate(), {Overlap}, 1);
-              if (Failed)
-                return false;
-              if (Domain.Status == FiniteValueStatus::Unknown)
-                return fail(SpecializationStatus::BudgetExceeded,
-                            "frame separation proof exceeded its budget");
-              if (Domain.Status == FiniteValueStatus::Complete &&
-                  Domain.Tuples == std::vector<std::vector<uint64_t>>{{0}}) {
-                StorePreservation =
-                    SymStorePreservation{FrameRoot, Bounds.Begin, Bounds.End};
-                ProvedFrameSeparation = true;
+              if (Object) {
+                const size_t ReturnBegin =
+                    Options.EntryFrameExcludedObjects.size() +
+                    Options.EntryFrameLoadedObjects.size();
+                if (Object->Root > ReturnBegin) {
+                  const auto At = Frame.ReturnedObjectSizes.find(
+                      Object->Root - ReturnBegin - 1);
+                  if (At != Frame.ReturnedObjectSizes.end() &&
+                      Object->Offset < At->second &&
+                      Memory.AccessSize <= At->second - Object->Offset) {
+                    // A complete write inside a proved nonnull object's
+                    // declared extent misses the disjoint entry frame.
+                    if (!chargeObjectWork(1))
+                      return false;
+                    const auto IsNull = Ctx.mkEq(ObjectRoots[Object->Root - 1],
+                                                 Ctx.mkConst(64, 0));
+                    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+                      return fail(SpecializationStatus::BudgetExceeded,
+                                  "returned object separation node budget "
+                                  "exhausted");
+                    const auto Nonnull =
+                        enumerate(Ctx, Exec.pathPredicate(), {IsNull}, 1);
+                    if (Failed)
+                      return false;
+                    if (Nonnull.Status == FiniteValueStatus::Complete &&
+                        Nonnull.Tuples ==
+                            std::vector<std::vector<uint64_t>>{{0}}) {
+                      StorePreservation = SymStorePreservation{
+                          FrameRoot, Bounds.Begin, Bounds.End};
+                      ProvedFrameSeparation = true;
+                    }
+                  }
+                }
+              }
+              if (!StorePreservation) {
+                if (Object)
+                  Distance = Ctx.mkAdd(
+                      Ctx.mkSub(ObjectRoots[Object->Root - 1], FrameRoot),
+                      Ctx.mkConst(64, Object->Offset -
+                                          static_cast<uint64_t>(Bounds.Begin)));
+                const auto Overlap = memoryExtentsOverlap(
+                    Ctx, Address, Memory.AccessSize, First, Bytes, Distance);
+                if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+                  return fail(SpecializationStatus::BudgetExceeded,
+                              "frame separation node budget exhausted");
+                const auto Domain =
+                    enumerate(Ctx, Exec.pathPredicate(), {Overlap}, 1);
+                if (Failed)
+                  return false;
+                if (Domain.Status == FiniteValueStatus::Unknown)
+                  return fail(SpecializationStatus::BudgetExceeded,
+                              "frame separation proof exceeded its budget");
+                if (Domain.Status == FiniteValueStatus::Complete &&
+                    Domain.Tuples == std::vector<std::vector<uint64_t>>{{0}}) {
+                  StorePreservation =
+                      SymStorePreservation{FrameRoot, Bounds.Begin, Bounds.End};
+                  ProvedFrameSeparation = true;
+                }
               }
             }
           }
