@@ -620,6 +620,13 @@ TEST(ARM32_ImportCalls, AFloatingImportTakesAndReturnsItsDoubleInD0) {
   NullDebugContext NoHeaders;
   const std::string Source = thumbHighC(Img, NoHeaders);
   EXPECT_EQ(Source.find("__builtin_bit_cast"), std::string::npos) << Source;
+  llvm::SmallVector<llvm::StringRef, 2> LinkFlags;
+#if defined(__linux__)
+  LinkFlags.push_back("-Wl,--no-as-needed");
+#endif
+#ifndef _WIN32
+  LinkFlags.push_back("-lm");
+#endif
   source_call_execution_test::compileAndRun(Source + R"C(
 #include <math.h>
 int main(void) {
@@ -627,5 +634,5 @@ int main(void) {
          fabs(f(0.5) - 2.718281828459045) > 1e-12;
 }
 )C",
-                                            {"-Wl,--no-as-needed", "-lm"});
+                                            LinkFlags);
 }
