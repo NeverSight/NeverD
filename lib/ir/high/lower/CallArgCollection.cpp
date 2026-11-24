@@ -482,8 +482,8 @@ bool MedToHighConverter::hasDenseIntegerCallStack(const MedCallInfo &Info,
       !Image || Info.Args.size() != Operands ||
       Info.FloatingRegisterArgCount != 0)
     return false;
-  const auto Physical =
-      getTargetRegInfo(TargetArch).integerArgumentLayout(Image->abiFormat());
+  const auto Physical = getTargetRegInfo(TargetArch)
+                            .sourceIntegerArgumentLayout(Image->abiFormat());
   if (!Physical.SlotBytes ||
       Physical.SlotBytes != Info.StackArgumentSlotBytes ||
       Info.IntegerRegisterArgCount !=

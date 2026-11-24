@@ -149,10 +149,10 @@ bindLLVMIntegerCallArguments(const llvm::CallBase &Call,
                                                : std::nullopt;
   }
   const auto Banks = getLLVMArgumentBanks(Call);
-  const auto Physical = getTargetRegInfo(A).integerArgumentLayout(F);
+  const auto Physical = getTargetRegInfo(A).sourceIntegerArgumentLayout(F);
   if (!Banks || Banks->second || !Physical.SlotBytes)
     return std::nullopt;
-  const unsigned Registers = A == Arch::X86 ? 0 : Physical.Registers.size();
+  const unsigned Registers = Physical.Registers.size();
   const auto Stack = getLLVMArgumentStackLayout(Call);
   const bool Located = Metadata->getNumOperands() > 2;
   if (Located && (Stack.SlotBytes != Physical.SlotBytes ||

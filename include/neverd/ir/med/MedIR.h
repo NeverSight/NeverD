@@ -534,8 +534,8 @@ struct MedCallInfo {
   /// (MedFunc::FPParamScalarBytes); 0, or no entry, for a whole argument.
   std::vector<uint16_t> ArgReadBytes;
   /// Counts of the independent integer and floating register runs in Args;
-  /// remaining arguments are stack-passed. -1 means no bank proof (explicit
-  /// source ABI or a convention with positional argument slots).
+  /// remaining arguments are stack-passed. -1 means no bank proof, including
+  /// positional calls whose register bank varies between arguments.
   int IntegerRegisterArgCount = -1;
   int FloatingRegisterArgCount = -1;
   /// Where each stack-passed value after those register runs was stored: its

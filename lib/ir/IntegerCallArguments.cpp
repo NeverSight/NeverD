@@ -101,9 +101,8 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     Placement = placeSourceParameters(A, F, ReturnType, Parameters);
   if (!Placement || Placement->Parameters.size() != Parameters.size())
     return std::nullopt;
-  const auto Layout = getTargetRegInfo(A).integerArgumentLayout(F);
-  const llvm::ArrayRef<uint64_t> IntegerRegisters =
-      A == Arch::X86 ? llvm::ArrayRef<uint64_t>() : Layout.Registers;
+  const auto Layout = getTargetRegInfo(A).sourceIntegerArgumentLayout(F);
+  const auto IntegerRegisters = Layout.Registers;
   if (!Layout.SlotBytes)
     return std::nullopt;
   std::set<unsigned> Registers;
