@@ -11,7 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "gtest/gtest.h"
-#include "unicorn/unicorn.h"
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
@@ -23,6 +22,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <unicorn/unicorn.h>
 #include <vector>
 
 using namespace neverd;
