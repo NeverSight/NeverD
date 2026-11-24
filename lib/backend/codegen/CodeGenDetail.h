@@ -25,6 +25,9 @@
 namespace llvm {
 class Triple;
 class Module;
+namespace mc_rewrite {
+struct RewriteOptions;
+} // namespace mc_rewrite
 } // namespace llvm
 
 namespace neverd {
@@ -32,6 +35,15 @@ namespace neverd {
 /// Prepare authenticated globals and calls for the configured target backend.
 bool preparePointerAuthentication(llvm::Module &M, const llvm::Triple &Triple,
                                   bool RequireRecipes = false);
+
+#if !__has_include("llvm/MC/MCPointerAuthInfo.h")
+/// r6 exposes the authenticated fixup kind but cannot supply its signing key
+/// or discriminator. Preserve ordinary transforms and report any missing
+/// recipe.
+llvm::mc_rewrite::RewriteOptions
+guardMachOAuthenticatedFixups(const llvm::mc_rewrite::RewriteOptions &Options,
+                              bool &MissingRecipe);
+#endif
 
 /// Synthetic marker inserted into the scanned-name set when the module uses
 /// native half-precision (`half`) arithmetic (emitted as ops, not intrinsics),
