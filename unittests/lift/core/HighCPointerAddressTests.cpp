@@ -47087,9 +47087,11 @@ TEST(HighCPointerAddresses, RepeatedCpuidAndRdtscDoNotRedeclareLocals) {
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
   EXPECT_EQ(HighC.find("{{"), std::string::npos) << HighC;
-  // Preserve both the incoming ECX and the explicitly zeroed subleaf.
-  EXPECT_NE(HighC.find("__cpuidex(cpuInfo, 1, arg0)"), std::string::npos)
-      << HighC;
+  // Leaf 1 takes no sub-leaf (x86CpuidLeafIgnoresSubleaf), so the ECX the
+  // code leaves alone is neither one nor an argument; leaf 7 keeps the
+  // sub-leaf it zeroes.
+  EXPECT_NE(HighC.find("__cpuid(cpuInfo, 1)"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("arg0"), std::string::npos) << HighC;
   EXPECT_NE(HighC.find("__cpuidex(cpuInfo, 7, 0)"), std::string::npos) << HighC;
   EXPECT_NE(HighC.find("__int2c()"), std::string::npos) << HighC;
   // Every scratch declaration opens a block of its own.

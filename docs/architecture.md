@@ -14344,6 +14344,15 @@ around the query. Microsoft's
 [intrinsic documentation](https://learn.microsoft.com/en-us/cpp/intrinsics/cpuid-cpuidex)
 distinguishes this from `__cpuid`, which clears ECX.
 
+A leaf that ignores ECX takes no sub-leaf (`x86CpuidLeafIgnoresSubleaf`):
+0, 1, 2, 3, 5 and 6, and 80000000H to 80000008H, which neither manual gives
+one; every other leaf keeps its ECX. Where such a leaf reaches CPUID as a
+constant, the entry-read summary reads no ECX for it, MedIR passes it zero,
+which the processor answers the same way (`dropIgnoredCpuidSubleaves`), and
+C names no sub-leaf (`__cpuid(1, ...)`). Go's `rt0_go` runs `mov eax, 0;
+cpuid` and `mov eax, 1; cpuid` with ECX as the kernel left it: each read ECX
+as an unknown value and failed there.
+
 `X86SystemState.def` and `X86SystemState.h` own the bounded system-instruction
 inventory, scalar operand widths, memory roles and completion shapes. LowIR,
 Low-to-Med conversion, Med verification and emitters use this same authority.

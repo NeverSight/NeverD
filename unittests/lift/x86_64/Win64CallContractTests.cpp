@@ -7488,6 +7488,12 @@ BinaryImage registerQueryImage(unsigned Mutation = 0) {
     Leaf.insert(Leaf.begin(), Mutation == 14 ? 0xFD : 0xFC); // std / cld
   else if (Mutation == 16)
     Leaf.insert(Leaf.begin() + 7, {0x44, 0x89, 0xD1}); // mov ecx,r10d
+  // The sub-leaf these two take from an incoming register is one leaf 7
+  // reads; leaf 0 ignores it (x86CpuidLeafIgnoresSubleaf).
+  if (Mutation == 2 || Mutation == 16) {
+    Leaf.erase(Leaf.begin(), Leaf.begin() + 2);    // xor eax,eax
+    Leaf.insert(Leaf.begin(), {0xB8, 7, 0, 0, 0}); // mov eax,7
+  }
   put(Code, Producer, Leaf);
   auto Image = makeImage(
       Code, {{Text, "observe_cpu_words"}, {Producer, "cpu_words"}}, {});

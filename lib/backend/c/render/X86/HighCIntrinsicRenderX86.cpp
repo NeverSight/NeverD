@@ -27,6 +27,7 @@
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/LLVMX86X87StateAsm.h"
 #include "neverd/ir/FloatConversion.h"
+#include "neverd/ir/X86/X86CpuidLeaves.h"
 #include "neverd/ir/X86/X87Stack.h"
 #include "neverd/ir/high/X86/X86FPStateShape.h"
 #include "neverd/ir/intrinsics/X86/X86Interrupts.h"
@@ -1306,10 +1307,14 @@ std::string renderCpuid(const std::vector<MedVar> &Outs,
                         std::function<std::string(const MedVar &)> VarFn,
                         const IsAliveFn &IsAlive, bool GnuToolchain) {
   std::string Leaf = Ops.empty() ? "0" : ExprFn(*Ops[0]);
-  const std::string Subleaf =
-      Ops.size() > 1 && Ops[1] && Ops[1]->Kind != ExprKind::Undef
-          ? ExprFn(*Ops[1])
-          : std::string();
+  // A leaf that ignores ECX takes no sub-leaf (x86CpuidLeafIgnoresSubleaf).
+  const bool IgnoresSubleaf =
+      !Ops.empty() && Ops[0] && Ops[0]->Kind == ExprKind::Const &&
+      x86CpuidLeafIgnoresSubleaf(Ops[0]->ConstVal & 0xffffffffu);
+  const std::string Subleaf = !IgnoresSubleaf && Ops.size() > 1 && Ops[1] &&
+                                      Ops[1]->Kind != ExprKind::Undef
+                                  ? ExprFn(*Ops[1])
+                                  : std::string();
   // A block scope, so a second CPUID in the function does not redeclare
   // cpuInfo.
   std::string Result;

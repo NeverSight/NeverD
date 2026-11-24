@@ -61,9 +61,9 @@ void expectIntrinsicStyle(const std::string &Source, bool LLVMPath = false) {
     Search += std::strlen("__asm__ volatile");
     ++AsmCount;
   }
-  // The fixture has two CPUID occurrences, one XGETBV, one SYSCALL and one
-  // WRMSR fallback.
-  EXPECT_EQ(AsmCount, LLVMPath ? 5u : 2u) << Source;
+  // The fixture has four CPUID occurrences, one XGETBV, one SYSCALL and
+  // one WRMSR fallback.
+  EXPECT_EQ(AsmCount, LLVMPath ? 7u : 2u) << Source;
   for (const char *Name :
        {"test_rdtsc_intrinsic", "test_pause_intrinsic", "test_mfence_intrinsic",
         "test_lfence_intrinsic", "test_sfence_intrinsic",
@@ -106,6 +106,29 @@ static void stub_cpuid(unsigned leaf, unsigned *a, unsigned *b, unsigned *c,
 #define __cpuid(leaf, a, b, c, d) stub_cpuid((leaf), &(a), &(b), &(c), &(d))
 #define __cpuid_count(leaf, subleaf, a, b, c, d) \
     ((void)(subleaf), stub_cpuid((leaf), &(a), &(b), &(c), &(d)))
+)C";
+
+// The same spellings, recording the sub-leaf each query passes: -1 for
+// none.
+constexpr const char *CpuidSubleafStub = R"C(
+static unsigned stub_calls;
+static int stub_leaf;
+static long long stub_subleaf;
+static uint32_t stub_words[4];
+static void stub_cpuid(unsigned leaf, long long subleaf, unsigned *a,
+                       unsigned *b, unsigned *c, unsigned *d) {
+    _Static_assert(sizeof(unsigned) == sizeof(uint32_t), "CPUID word width");
+    ++stub_calls;
+    stub_leaf = (int)leaf;
+    stub_subleaf = subleaf;
+    *a = stub_words[0];
+    *b = stub_words[1];
+    *c = stub_words[2];
+    *d = stub_words[3];
+}
+#define __cpuid(leaf, a, b, c, d) stub_cpuid((leaf), -1, &(a), &(b), &(c), &(d))
+#define __cpuid_count(leaf, subleaf, a, b, c, d) \
+    stub_cpuid((leaf), (long long)(uint32_t)(subleaf), &(a), &(b), &(c), &(d))
 )C";
 
 constexpr const char *ClflushStub = R"C(
@@ -624,6 +647,86 @@ int main(void) {
     return 0;
 }
 )C");
+}
+
+TEST_F(X86_64_Intrinsics, Decompile_CpuidLeafWithoutSubleafReadsNoEcx) {
+  // CPUID leaf 1 ignores ECX, which the code leaves as its caller left it:
+  // C takes no sub-leaf and reads no register for one, where it read ECX
+  // as an unknown value and failed there.
+  auto r = decompileToHighC(obj("test_intrinsics_system.o"));
+  ASSERT_EQ(r.exitCode, 0) << "Decompile failed: " << r.err;
+  const auto content = readDecompiledFile("decompiled_high.c");
+  const auto Body = generatedFunction(content, "test_cpuid_leaf1");
+  ASSERT_FALSE(Body.empty()) << content;
+  EXPECT_NE(Body.find("__cpuid(1,"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("__cpuid_count"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+  expectGeneratedIntrinsicRuns(content, "test_cpuid_leaf1", CpuidStub, R"C(
+int main(void) {
+    stub_calls = 0;
+    stub_leaf = -1;
+    stub_words[0] = 1;
+    stub_words[1] = UINT32_C(0x89abcdef);
+    stub_words[2] = 3;
+    stub_words[3] = 4;
+    uint32_t result = (uint32_t)test_cpuid_leaf1();
+    if (stub_calls != 1 || stub_leaf != 1 ||
+        result != UINT32_C(0x89abcdef)) {
+        fprintf(stderr, "CPUID leaf 1 result=%08x calls=%u leaf=%d\n", result,
+                stub_calls, stub_leaf);
+        return 1;
+    }
+    return 0;
+}
+)C");
+}
+
+TEST_F(X86_64_Intrinsics, Decompile_CpuidLeafWithSubleafKeepsEcx) {
+  // Leaf 7 takes a sub-leaf, here in ECX as the caller's fourth argument
+  // left it: C passes that argument on (`__cpuid_count(7, ...)`), where a
+  // leaf that ignored ECX would drop it.
+  auto r = decompileToHighC(obj("test_intrinsics_system.o"));
+  ASSERT_EQ(r.exitCode, 0) << "Decompile failed: " << r.err;
+  const auto content = readDecompiledFile("decompiled_high.c");
+  const auto Body = generatedFunction(content, "test_cpuid_leaf7");
+  ASSERT_FALSE(Body.empty()) << content;
+  EXPECT_NE(Body.find("__cpuid_count(7,"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+  expectGeneratedIntrinsicRuns(content, "test_cpuid_leaf7", CpuidSubleafStub,
+                               R"C(
+int main(void) {
+    const uint32_t subleaves[] = {0, 1, 2, UINT32_C(0x5a)};
+    for (unsigned i = 0; i < sizeof(subleaves)/sizeof(subleaves[0]); ++i) {
+        stub_calls = 0;
+        stub_leaf = -1;
+        stub_subleaf = -2;
+        stub_words[0] = 1;
+        stub_words[1] = UINT32_C(0x89abcdef) ^ subleaves[i];
+        stub_words[2] = 3;
+        stub_words[3] = 4;
+        uint32_t result = (uint32_t)test_cpuid_leaf7(0, 0, 0, subleaves[i]);
+        if (stub_calls != 1 || stub_leaf != 7 ||
+            stub_subleaf != (long long)subleaves[i] ||
+            result != (UINT32_C(0x89abcdef) ^ subleaves[i])) {
+            fprintf(stderr, "CPUID leaf 7 subleaf=%lld want=%u result=%08x\n",
+                    stub_subleaf, subleaves[i], result);
+            return 1;
+        }
+    }
+    return 0;
+}
+)C");
+}
+
+TEST_F(X86_64_Intrinsics, LlvmC_CpuidLeafWithoutSubleafReadsNoEcx) {
+  // The same leaf through LLVM: CPUID's ECX operand is zero, which the
+  // processor answers the same way, where it was the unknown ECX.
+  auto r = decompileToC(obj("test_intrinsics_system.o"));
+  ASSERT_EQ(r.exitCode, 0) << "LLVM C decompile failed: " << r.err;
+  const auto content = readDecompiledFile("decompiled.c");
+  const auto Body = generatedFunction(content, "test_cpuid_leaf1");
+  ASSERT_FALSE(Body.empty()) << content;
+  EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
 }
 
 TEST_F(X86_64_Intrinsics, Decompile_CpuidReturnAllVarsDeclared) {
