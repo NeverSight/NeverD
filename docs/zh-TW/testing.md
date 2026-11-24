@@ -2092,6 +2092,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NeverDSymConditionalStoreTests` 涵蓋絕對與符號儲存區的有界位元組效果、雙端序、重疊、環繞、未知時期和精確預算。執行器測試包含 STORE、純量原子 ADD/XCHG/CMPXCHG、位址/值/輸出暫存器重疊、Old 延後發布、非法形狀及拒絕時 havoc。`SymStorePreservation` 以明確堆疊框架保留契約檢查同一原子寫入路徑，以及精確和少一單位預算。無描述元的一般執行行為不變；這些檢查不認證存取權限或完整程式恢復。
 
+`NeverDSymConditionalStoreTests` 也涵蓋已證明保留與指定條件區域並存時的部分位元組別名、未追蹤區域的未知世代、精確與少一單位預算、無效區域，以及原子舊值的發布或拒絕。
+
 
 `AbsoluteMemoryFactsTests.inc` 涵蓋絕對位址目標跨節點傳遞、衝突匯合、部分重疊及未知別名寫入，以及兩種位元組序和啟用/停用串接時的堆疊分離證明。獨立位元組執行器檢查副作用；缺少排除範圍或預算不足時必須拒絕。`SymStorePreservation.Absolute*` 與 `SymState.AbsoluteProjections*` 檢查區域共存、高位址、唯讀有界投影、寫入後的未知值世代和交易式拒絕。執行 `NeverDInterpreterSpecializationTests`、`NeverDSymbolicIntegerIntrinsicTests`、`NeverDSymMemoryKnowledgeTests`，再執行原生獨立性及 LowIR 精化測試。
 

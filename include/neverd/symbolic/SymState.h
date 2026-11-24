@@ -141,6 +141,11 @@ struct SymConditionalStore {
   uint64_t MaxWork = 0;
   uint64_t WorkUsed = 0;
   SymConditionalStoreStatus Status = SymConditionalStoreStatus::Invalid;
+  /// Borrowed for storeConditionalPreserving(). Only current bytes in these
+  /// exact regions receive conditional effects; other unprotected banks use
+  /// ordinary unknown epochs. Empty is invalid for the combined operation
+  /// and retains the existing all-bank behavior of storeConditional().
+  llvm::ArrayRef<SymStorePreservationRegion> TrackedRegions;
 };
 
 enum class SymMemoryPreservationStatus : uint8_t {
@@ -304,6 +309,20 @@ public:
   /// Symbolic offsets wrap modulo 2^64; absolute writes must not overflow.
   bool storeConditional(SymRef Addr, SymRef Value,
                         SymConditionalStore &Control);
+
+  /// Apply one store with both a caller-proved separation contract and exact
+  /// conditional effects for current bytes in Control.TrackedRegions. Every
+  /// tracked byte is updated according to whether the actual write aliases
+  /// it; no separation is inferred for those regions. Missing bytes remain
+  /// unknown. The preservation descriptor and conditional plan are validated
+  /// and budgeted before the store, so refusal leaves this state unchanged.
+  /// Inspect both statuses; a false return can still be a successful symbolic
+  /// write. Tracked regions may include the store's own base, whose ordinary
+  /// byte-overlap semantics take precedence. A tracked byte also named by a
+  /// preserved range receives its conditional update after restoration.
+  bool storeConditionalPreserving(SymRef Addr, SymRef Value,
+                                  SymStorePreservation &Preservation,
+                                  SymConditionalStore &Control);
 
   /// What a load that could not be resolved was reading.
   struct LoadOrigin {

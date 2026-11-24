@@ -156,6 +156,15 @@ public:
   stepWithConditionalStore(const LowOp &Op, SymConditionalStore &Control,
                            const SymCallEffect *CallEffect = nullptr);
 
+  /// Execute one STORE or supported atomic write using both the caller's
+  /// proved preservation contract and Control.TrackedRegions. Other opcodes
+  /// leave both statuses Invalid. Refusal retains ordinary memory havoc, and
+  /// an atomic write publishes its old value only after both effects apply.
+  StepResult
+  stepWithConditionalStore(const LowOp &Op, SymConditionalStore &Control,
+                           SymStorePreservation &Preservation,
+                           const SymCallEffect *CallEffect = nullptr);
+
   /// Read one operand through the same width, space, and memory semantics used
   /// by \c step.  This may materialise an untouched symbolic input in \c State.
   /// Concrete shadow execution uses it instead of duplicating NdVar semantics.
