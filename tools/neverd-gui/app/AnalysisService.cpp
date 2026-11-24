@@ -80,6 +80,7 @@ void AnalysisService::stopWorker() {
   wire_.clear();
   abandoned_.clear();
   restore_.clear();
+  warmTypeLibraries_ = false;
   ready_ = false;
   startingReplica_ = false;
   refreshingNames_ = false;
@@ -527,6 +528,11 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
             .toArray()
             .contains(QStringLiteral("prepare_analysis_views")))
       restore["prepare_views"] = true;
+    warmTypeLibraries_ = !prepareViews_ &&
+                         restore.value("render_ahead").toBool() &&
+                         message.value("capabilities")
+                             .toArray()
+                             .contains(QStringLiteral("type_libraries"));
     restore_ = client_.request(QStringLiteral("analysis_restore"), restore);
     return;
   }
@@ -559,6 +565,11 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
       client_.stop();
       return;
     }
+    // Once the image and its overrides are restored, an idle source replica
+    // can load the same type libraries its first decompilation will use.
+    if (std::exchange(warmTypeLibraries_, false) && !refreshingNames_ &&
+        active_.isEmpty() && !preparedRead_ && abandoned_.isEmpty())
+      abandoned_ = client_.request(QStringLiteral("type_libraries"), {});
     snapshot_ = {};
     if (!refreshingNames_ && restoring_.isValid())
       restoreMilliseconds_ = restoring_.elapsed();
