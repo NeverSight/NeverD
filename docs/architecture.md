@@ -5635,10 +5635,12 @@ Across successive joins, the return-contract pass follows the value and count
 on the same predecessor. Every PHI reads the state before entry to its block.
 An outer choice can distinguish a third arm even when the inner arms return
 the same bits. A loop header can receive new bindings on each latch. The proof
-compares the observable outcomes of the two arms only after closing both sets under those
-transitions, including the exit before the first iteration. If an operand is
-unknown at the return or the search exhausts its work allowance, this branch
-supplies no evidence of a result.
+compares the observable outcomes after closing both sets under those
+transitions, including the exit before the first iteration. A shift in a
+predecessor can feed the return through a final PHI or register view. The
+comparison uses the bits still visible after the exit's mask or byte
+extraction. If an operand is unknown at the return or the search exhausts
+its work allowance, this branch supplies no evidence of a result.
 A MIPS64 word check in the common computation needs a valid sign-extended
 word on every incoming arm, including after a logical right shift. If a
 narrower view has its own PHI, its incoming value and the complete return

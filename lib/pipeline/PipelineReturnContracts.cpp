@@ -182,6 +182,7 @@ struct FunctionFacts {
   };
   std::vector<ReturnSite> Returns;
   bool SelectsReturnValue = false;
+  bool HasVariableShift = false;
   /// Whether any operation or PHI writes the return register.  A return
   /// whose value no backward walk finds holds the entry value only when
   /// none does; otherwise a join can hide a value written before it.
@@ -314,6 +315,7 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
       Demand.define(Phi);
     }
     for (const MedOp &Op : Block.Ops) {
+      Facts.HasVariableShift |= return_contract::isVariableShift(Op);
       Facts.WritesReturnRegister |=
           writesReturnRegister(Op, Op.Output, TRI) ||
           llvm::any_of(Op.IntrinsicOutputs, [&](const MedVar &Output) {
@@ -1056,13 +1058,8 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
   if (Func.AnalysisOnly || !Bytes || Bytes > sizeof(uint64_t))
     return false;
   const auto Arms = literalReturnArms(F, TRI, Bytes);
-  llvm::SmallVector<const FunctionFacts::ReturnSite *, 2> ShiftExits;
-  for (const auto &Site : F.Returns)
-    if (Site.Value && Site.Value->Size >= Bytes && Site.Block->Succs.empty() &&
-        Site.Block->ExceptionalSuccs.empty() &&
-        llvm::any_of(Site.Block->Ops, return_contract::isVariableShift))
-      ShiftExits.push_back(&Site);
-  if (Arms.Literals.size() < 2 && Arms.Shifts.size() < 2 && ShiftExits.empty())
+  const bool HasShiftAndJoin = F.HasVariableShift && !F.Phis.empty();
+  if (Arms.Literals.size() < 2 && Arms.Shifts.size() < 2 && !HasShiftAndJoin)
     return false;
   llvm::DenseSet<std::pair<va_t, va_t>> TableEdges;
   for (const JumpTable &Table : Func.JumpTables)
@@ -1117,11 +1114,14 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
         First.try_emplace(Observation, Bits);
     }
   }
+  if (!HasShiftAndJoin)
+    return false;
   unsigned Work = limits::pipeline::kPipelineReturnShiftPathWork;
-  for (const auto *Site : ShiftExits)
-    if (Visited.test(Site->Block->Id) &&
+  for (const auto &Site : F.Returns)
+    if (Site.Value && Site.Value->Size >= Bytes && Site.Block->Succs.empty() &&
+        Site.Block->ExceptionalSuccs.empty() && Visited.test(Site.Block->Id) &&
         return_contract::selectsShiftedReturnAcrossJoins(
-            Func, *Site->Block, *Site->Value, TRI, F.Format, Bytes, F.Defs,
+            Func, *Site.Block, *Site.Value, TRI, F.Format, Bytes, F.Defs,
             F.Phis, Visited, Work))
       return true;
   return false;

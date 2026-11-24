@@ -1738,6 +1738,22 @@ TEST(ReturnContracts, PairedShiftPathsCloseEveryBackedgeBeforeSelectingAValue) {
     Narrow.ReturnType = NdType::makeInt(1);
     EXPECT_FALSE(settle({Narrow}).front());
   }
+  {
+    MedFunc Masked = F;
+    Masked.Blocks[7].Ops.pop_back();
+    Masked.Blocks[7].Succs = {8};
+    auto &Exit = Masked.Blocks.emplace_back(block(
+        {operation(NdOp::INT_AND, rax(6), {rax(5), C(7)}), returning(rax(6))},
+        {7}));
+    Exit.Id = 8;
+    Exit.StartAddr = CalleeEntry + 16 * Exit.Id;
+    EXPECT_FALSE(settle({Masked}).front()); // {1,4} and {0} at the return.
+    Exit.Ops.front().Inputs[1] = C(3);
+    EXPECT_TRUE(settle({Masked}).front()); // Both can return zero.
+    Masked.Blocks[7].Ops.back().Output = temporary(20);
+    Exit.Ops.front().Inputs = {rax(3), C(7)};
+    EXPECT_TRUE(settle({Masked}).front()); // The shift no longer feeds it.
+  }
   // One latch changes only the value and the other only the count. Both
   // must run before the changed count can make the two arms return six.
   {
@@ -2334,6 +2350,41 @@ int main(void) {
   runIntegerReturnSources(Arch::X64, WithCounts(0, 1, 2), R"(
 _Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
                "the inner and outer paths all produce two");
+int main(void) { choose_result(1,0); choose_result(0,257); return 0; }
+)");
+}
+
+TEST(ReturnContract, SharedX86ReturnObservesBothShiftDirectionsAfterTheJoin) {
+  const auto WithMask = [](uint8_t HighByte) {
+    return std::vector<uint8_t>{
+        // cmp rsi,257; je bare; test esi,8; jnz third
+        0x48, 0x81, 0xfe, 1, 1, 0, 0, 0x74, 42, 0xf7, 0xc6, 8, 0, 0, 0, 0x75,
+        35,
+        // cmp rdi,0; je left
+        0x48, 0x83, 0xff, 0, 0x74, 14,
+        // (rax,ecx) = (129,1); jump to the direction test
+        0x48, 0xc7, 0xc0, 129, 0, 0, 0, 0xb9, 1, 0, 0, 0, 0xeb, 24,
+        // left: (rax,ecx) = (2,0); jump to the direction test
+        0x48, 0xc7, 0xc0, 2, 0, 0, 0, 0xb9, 0, 0, 0, 0, 0xeb, 10,
+        // bare: ret; third: mov rax,2; jmp observe
+        0xc3, 0x48, 0xc7, 0xc0, 2, 0, 0, 0, 0xeb, 18,
+        // test esi,1; jnz right; shl rax,cl; jmp observe
+        0xf7, 0xc6, 1, 0, 0, 0, 0x75, 5, 0x48, 0xd3, 0xe0, 0xeb, 5,
+        // right: shr rax,cl; jmp observe
+        0x48, 0xd3, 0xe8, 0xeb, 0,
+        // observe: and eax,mask; ret
+        0x25, 0xff, HighByte, 0, 0, 0xc3};
+  };
+  runIntegerReturnSources(Arch::X64, WithMask(1), R"(
+int main(void) {
+    return choose_result(0,0)!=2 || choose_result(0,1)!=2 ||
+           choose_result(1,0)!=258 || choose_result(1,1)!=64 ||
+           choose_result(1,8)!=2;
+}
+)");
+  runIntegerReturnSources(Arch::X64, WithMask(0), R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "the left shift can also return two after the byte mask");
 int main(void) { choose_result(1,0); choose_result(0,257); return 0; }
 )");
 }
