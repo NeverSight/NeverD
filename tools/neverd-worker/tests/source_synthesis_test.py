@@ -377,6 +377,32 @@ def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0,
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
 
+def distributed_field_elf(degree):
+    # Each factor reads independently signed bytes of x and y+z. The low
+    # weight in one row preserves cross terms with the rest of the product.
+    scale = 3 << 16
+    code = bytearray.fromhex("b8") + struct.pack("<I", scale)
+    factors = []
+    for i in range(degree):
+        left_weight = (3, 5, -7, 9)[i % 4] << (2 if i == 29 else 8)
+        right_weight = (-3, 7, 5, -9, 11)[i % 5] << 8
+        offset = 6 if i == 17 else (-9, 3, 5, 7, -3)[i % 5]
+        left = 8 * (i % 4)
+        right = 8 * ((i // 3) % 4)
+        code += bytes.fromhex("89f9 c1c9") + bytes([left])
+        code += bytes.fromhex("0fbec9 69c9") + struct.pack("<i", left_weight)
+        code += bytes.fromhex("448d0416 41c1c8") + bytes([right])
+        code += bytes.fromhex("450fbec0 4569c0") + struct.pack("<i", right_weight)
+        code += bytes.fromhex("4401c1 81c1") + struct.pack("<i", offset)
+        code += bytes.fromhex("0fafc1")
+        x_field = f"((((x>>{left})&255U)^128U)-128U)"
+        y_field = f"(((((y+z)>>{right})&255U)^128U)-128U)"
+        factors.append(f"({offset & 0xffffffff}U+{left_weight & 0xffffffff}U*{x_field}"
+                       f"+{right_weight & 0xffffffff}U*{y_field})")
+    code += bytes.fromhex("01f8 01f0 01d0 c3")
+    return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
+
+
 def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=False,
                       *, interleaved=False, complemented=False, neighbor=False,
                       factor_mask=None, factor_order=None):
@@ -739,6 +765,8 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "distributed-field-product-73":
+            assert code.count("*") <= (13 if llvm else 11), text
         elif kind == "funnel-perturbation-composed-product-283":
             assert code.count("*") <= (19 if llvm else 21), text
         elif kind == "funnel-perturbation-rotated-product-239":
@@ -941,6 +969,7 @@ if __name__ == "__main__":
                 81, shift_base=6, affine_depth=1, observed=14, overlapping_fields=True)),
             ("funnel-perturbation-masked-join-89", *masked_join_elf(89)),
             ("funnel-perturbation-masked-wrap-103", *masked_join_elf(103, wrapped=True)),
+            ("distributed-field-product-73", *distributed_field_elf(73)),
             ("funnel-perturbation-composed-product-283",
              *variable_field_elf(283, terminal_period=3, repeated_offsets=True,
                                  raw_rotations=True, composed_rotations=True)),

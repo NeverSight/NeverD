@@ -4651,6 +4651,17 @@ result in both decompiler source views. The repeated-offset variant packs
 nonoverlapping literals into a scaled signed field. Byte-wide LLVM guards
 exhaust its input domain, including overlapping literals and unsafe shifts.
 
+`tools/neverd-bench/generate_distributed_product.py --width 131071 --case 3`
+emits an 18,013-factor product over twelve overlapping fields. Pass
+`--reference` to generate its expected form by modular multiplication of
+successive coefficient vectors. Cases 0 through 3 cover mixed signs, even
+offsets and a factor with a surviving cross term. Use `neverd simplify -f`
+with the same width. Inputs above the default parser limit of 65,536 bits
+require `--exhaustive`, which also selects the exhaustive work policy.
+The 32- through 65,536-bit controls run with `--max-work=65536`. A
+73-factor machine-code fixture checks both decompilers against the original
+signed-byte products and a low-weight residual at Clang O0 and O2.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may

@@ -8191,6 +8191,15 @@ concatenation, the evaluation plan can read that lane directly. A shared
 use that observes more bits keeps the wider value.
 Repeated long factor calls share a parse result after their complete spelling
 and the applicable nesting depth have been checked.
+A scaled product can also contain several weighted fields per factor. If
+the outer scale leaves `p` bits and every weight is divisible by
+`2^ceil(p/2)`, products of two perturbations vanish. Recovery groups the
+surviving weights by field and scalar offset, counts each accepted factor's
+offset once, and retains any factor containing an observable cross term.
+The cofactor calculation supports even offsets without modular division.
+When translating flagged LLVM arithmetic, the source width of a sign or zero
+extension bounds its result. Those bounds can justify a surrounding no-wrap
+sum or product while keeping every operand's definedness checks.
 A sum, OR or XOR can also supply a field from one right shift when every
 other term is zero below the end of that field. For OR and XOR, a mask
 only needs to be zero inside the field. A sum can carry from lower bits.

@@ -267,6 +267,23 @@ MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
     Result.UnsignedMax = Result.SignedMin = Result.SignedMax = C->getValue();
     return Result;
   }
+  // Extending an integer bounds the result even if every input bit is
+  // unknown. The translator independently checks the source and cast flags.
+  if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(V)) {
+    const auto Op = Cast->getOpcode();
+    if (Op == llvm::Instruction::SExt || Op == llvm::Instruction::ZExt) {
+      const unsigned Bits = Cast->getSrcTy()->getIntegerBitWidth();
+      if (Op == llvm::Instruction::SExt) {
+        Result.SignedMin = llvm::APInt::getSignedMinValue(Bits).sext(Width);
+        Result.SignedMax = llvm::APInt::getSignedMaxValue(Bits).sext(Width);
+      } else {
+        Result.UnsignedMax = llvm::APInt::getLowBitsSet(Width, Bits);
+        Result.SignedMin.clearAllBits();
+        Result.SignedMax = Result.UnsignedMax;
+      }
+    }
+    return Result;
+  }
   const auto *I = llvm::dyn_cast<llvm::BinaryOperator>(V);
   if (!I)
     return Result;
