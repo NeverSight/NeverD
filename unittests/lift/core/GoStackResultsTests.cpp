@@ -23,6 +23,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstring>
 #include <set>
 #include <string>
@@ -193,11 +194,15 @@ struct Decompiled {
 
   Decompiled(Arch A, const std::vector<uint8_t> &Code,
              llvm::ArrayRef<Routine> Routines, bool LLVM = false,
-             std::set<va_t> Only = {})
+             std::set<va_t> Only = {},
+             const std::set<std::string> &Assembly = {})
       : Image(A) {
     Image.writeText(kCode, Code);
     GoModuleInfo Module;
-    Module.StackArguments = true;
+    // With \p Assembly, an image of the internal ABI where those routines
+    // alone are assembly, which takes the stack ABI still.
+    Module.StackArguments = Assembly.empty();
+    Module.RegisterArguments = !Assembly.empty();
     Module.GoCode = {{kTextVA, kTextVA + kTextSize}};
     for (const Routine &R : Routines) {
       Symbol Function = Symbol::makeFunc(kCode + R.Offset);
@@ -205,6 +210,13 @@ struct Decompiled {
       Image.Img.Symbols.push_back(std::move(Function));
       Module.FrameArguments.push_back(
           {kCode + R.Offset, R.FrameBytes, std::nullopt});
+      if (Assembly.count(R.Name)) {
+        uint32_t End = static_cast<uint32_t>(Code.size());
+        for (const Routine &Other : Routines)
+          if (Other.Offset > R.Offset)
+            End = std::min(End, Other.Offset);
+        Module.GoAssembly.push_back({kCode + R.Offset, kCode + End});
+      }
     }
     Image.Img.ExceptionMetadata.GoModule = std::move(Module);
     PipelineOptions Options;
@@ -383,7 +395,7 @@ TEST(GoStackResults, AResultPassedOnInPlaceIsTheNextCallsArgument) {
   // `main.add(main.pair())`: the two results lie where `main.add` takes its
   // arguments, so the compiler stores nothing between the calls.  `main.pair`
   // writes no register, so its call defined none either.
-  // Two words of results are one record on x86-64 and arm64's register pair.
+  // Two words of results are one record, on arm64 as on x86-64.
   for (const Arch A : {Arch::X64, Arch::AArch64})
     for (const bool LLVM : {false, true}) {
       SCOPED_TRACE(static_cast<unsigned>(A) * 2 + LLVM);
@@ -397,6 +409,57 @@ TEST(GoStackResults, AResultPassedOnInPlaceIsTheNextCallsArgument) {
 int main(void) { return main_sum() != 7; }
 )C");
     }
+}
+
+/// arm64, an image of the internal ABI whose assembly takes the stack ABI:
+///   main.swap2(a, b) (int, int):   ldr x0, [sp, #8]; ldr x1, [sp, #16]
+///                                  str x1, [sp, #24]; str x0, [sp, #32]; ret
+///   main.useswap() int (compiled): str x30, [sp, #-0x30]!; mov x0, #7
+///                                  str x0, [sp, #8]; mov x0, #9
+///                                  str x0, [sp, #16]; bl main.swap2
+///                                  ldr x0, [sp, #24]; ldr x1, [sp, #32]
+///                                  sub x0, x0, x1; ldr x30, [sp], #0x30; ret
+const std::vector<uint8_t> &arm64SwapCode() {
+  static const std::vector<uint8_t> Code = [] {
+    const uint32_t Words[] = {
+        0xF94007E0, 0xF9400BE1, 0xF9000FE1, 0xF90013E0, 0xD65F03C0,
+        0xD503201F, 0xD503201F, 0xD503201F, 0xF81D0FFE, 0xD28000E0,
+        0xF90007E0, 0xD2800120, 0xF9000BE0, 0x97FFFFF3, 0xF9400FE0,
+        0xF94013E1, 0xCB010000, 0xF84307FE, 0xD65F03C0,
+    };
+    std::vector<uint8_t> Bytes(sizeof(Words));
+    std::memcpy(Bytes.data(), Words, sizeof(Words));
+    return Bytes;
+  }();
+  return Code;
+}
+
+const Routine ARM64SwapRoutines[] = {
+    {"main.swap2", 0x00, 32},
+    {"main.useswap", 0x20, 0},
+};
+
+TEST(GoStackResults, AnAssemblyRoutineReturnsTheRecordItsCallsRead) {
+  // Compiled main.useswap calls main.swap2, assembly that still takes the
+  // stack ABI, whose two results become a record.  On arm64 they are X0 and
+  // X1, AAPCS64's integer pair, so main.swap2 returned an `__int128` to a
+  // call that read its record, which C rejects: `runtime.sysMmap`,
+  // `syscall.rawVforkSyscall`.
+  for (const bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    const Decompiled D(Arch::AArch64, arm64SwapCode(), ARM64SwapRoutines, LLVM,
+                       {}, {"main.swap2"});
+    ASSERT_TRUE(D.Result.Success) << D.Result.Error;
+    const MedFunc *Swap = D.function("main.swap2");
+    ASSERT_NE(Swap, nullptr);
+    ASSERT_EQ(Swap->GoStackResults.size(), 2u);
+    EXPECT_EQ(Swap->MultiReturn.size(), 2u);
+    EXPECT_EQ(D.Source.find("__int128 main_swap2("), std::string::npos)
+        << D.Source;
+    source_call_execution_test::compileAndRun(D.Source + R"C(
+int main(void) { return main_useswap() != 2; }
+)C");
+  }
 }
 
 TEST(GoStackResults, ACallThroughAFunctionValueTakesNoEarlierResult) {

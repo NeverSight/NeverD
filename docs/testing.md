@@ -21141,6 +21141,11 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`GoStackResults.AnAssemblyRoutineReturnsTheRecordItsCallsRead` decompiles an
+arm64 image of the internal ABI whose assembly routine still returns two
+stack words to compiled code, on both routes: the routine returns the record
+its call reads, and the C runs; it fails where the routine returns
+`__int128` (X0 and X1 as AAPCS64's pair).
 `GoInternalABI.ASetupWriteALaterOneReplacesReadsNoResult` runs a Go caller
 that computes `bsr rsi, rax; mov r8, -1; cmove rsi, r8` from a call's result
 before another call: the first call returns one result and the caller

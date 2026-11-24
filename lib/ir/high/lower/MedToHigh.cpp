@@ -97,11 +97,15 @@ TypeRef multiRegisterReturnType(const std::vector<MedReturnReg> &Fields) {
   return registerReturnType(std::move(Members));
 }
 
-/// Whether \p Med returns Go's results, which C carries as a record however
-/// many words they take: Go's register ABI returns a list of values, so the
-/// two in X0 and X1 are no double-word integer, as AAPCS64's pair is.
-bool returnsGoResults(const BinaryImage *Img, const MedFunc &Med) {
-  return Img && usesGoRegisterArguments(*Img, Med.Entry);
+/// Whether the code at \p Entry returns Go's results, which C carries as a
+/// record however many words they take: Go's ABIs return a list of values,
+/// so the two in X0 and X1 are no double-word integer, as AAPCS64's pair is.
+/// Compiled code returns them in registers, and so does a routine of the
+/// stack ABI once its stores are its results (materializeGoStackResults):
+/// `runtime.sysMmap` returned `__int128` to calls that read its record.  A
+/// direct call takes its callee's record as the callee's definition does.
+bool returnsGoResults(const BinaryImage *Img, va_t Entry) {
+  return Img && isGoCode(*Img, Entry);
 }
 
 // Temporary, opt-in observation of the actual source-recovery conversion.
@@ -396,9 +400,12 @@ TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
                    [](const auto &Field) { return Field.IsFP; }))
     return multiRegisterReturnType(*Op.RegisterReturnFields);
   // A call under Go's internal ABI returns its callee's results, a record as
-  // the callee returns them (returnsGoResults).
+  // the callee returns them (returnsGoResults), and so does a direct call of
+  // any code that returns them.
   if (Op.RegisterReturnFields &&
       (Op.RegisterContract == CallRegisterContract::GoInternal ||
+       (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+        returnsGoResults(Image, Op.Inputs[0].ConstVal)) ||
        !isWholeIntegerReturnPair(*Op.RegisterReturnFields,
                                  getTargetRegInfo(TargetArch))))
     if (TypeRef Record = multiRegisterReturnType(*Op.RegisterReturnFields))
@@ -2061,7 +2068,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     Func.ReturnType = NdType::makeInt(Func.ReturnType->Size, false);
   if (!Med.SourceParametersBound && !Med.ExplicitMIPSRecordResult &&
       isWholeIntegerReturnPair(Med.MultiReturn, ReturnTRI) &&
-      !returnsGoResults(Image, Med))
+      !returnsGoResults(Image, Med.Entry))
     Func.ReturnType = NdType::makeInt(2 * ReturnTRI.PointerSize);
   else if (!Med.SourceParametersBound &&
            (Med.ExplicitMIPSRecordResult || Med.MultiReturn.size() >= 2) &&

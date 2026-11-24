@@ -6578,7 +6578,11 @@ and an indirect call's results stay words. Two results are a record too where
 they take X0 and X1, which AAPCS64 also returns a double-word integer in: Go
 returns a list of values, and as one `__int128` `runtime.makeAddrRange`, which
 returns its two arguments, was refused, its high word being no value the
-function computed (`returnsGoResults`).
+function computed (`returnsGoResults`). Any code in Go's text returns such a
+record, and a direct call takes its callee's: assembly that still takes the
+stack ABI returns its stored results as a record too (`runtime.sysMmap`,
+`syscall.rawVforkSyscall`), which returned an `__int128` to calls that read
+its record, an assignment C rejects.
 
 No register carries a value into Go code but its arguments. A field of a
 register record that a return leaves as the function was entered with, where
