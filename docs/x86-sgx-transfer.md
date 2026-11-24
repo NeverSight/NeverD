@@ -152,6 +152,9 @@ audit and all 27 selected software mode/SMM/SGX/event cases at NeverD
 `a02363b36b` source passed the same 27 software cases on both local SDKs.
 The later `1bfbe32497` shared-analysis merge repeated those 27 cases on both
 SDKs together with the complete 243-case mode execution owner.
+At integrated `9a1252f88b`, both SDKs again passed the same 27 software
+cases and 243 complete mode-execution cases. The designated runners still
+provide no EPC for native enclave execution.
 These are software and capability results, not native enclave execution passes.
 The [qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json) retains
 the runner, compiler and test-report digests separately.

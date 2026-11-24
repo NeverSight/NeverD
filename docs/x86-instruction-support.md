@@ -57,6 +57,18 @@ changes only Capstone's MIPS scanning and printing. The
 again passed 132/132 on Linux and 131/132 on the other platforms with their
 single POSIX-x64 x87 skip. At `1bfbe32497`, both local SDKs repeated the
 22 x86 decoder checks and exported the same two VMRUN C sources.
+The next pin, `8347e89a4e9a9e1618009fb8a496e335e857d00f`, corrects
+mask-register memory-store access metadata. At integrated `9a1252f88b`,
+both SDKs passed 25/25 local x86 decoder checks, including the three APX
+KMOV cases, and retained the hosted VMRUN source hashes. The
+[merged-source qualification](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+also records 243 complete mode-execution and 27 selected SMM/SGX/event
+software passes per SDK. NeverC continues to accept only x64 source targets.
+The [four-platform contract](https://github.com/NeverSight/NeverD/actions/runs/45348733110)
+passed 132/132 on Linux and 131/132 on macOS arm64 and both Windows
+compilers. Each non-Linux job skipped only the declared POSIX-x64 x87
+hardware case; the decoder and ARM-detail artifacts retain their hashes in
+the merged-source qualification.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 
@@ -102,6 +114,11 @@ and 122/122 x64 continuation cases per SDK. Its new returning-call and
 interpreter specialization checks passed 13/13 and 669/669 per SDK. The
 [qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
 keeps this focused merge result separate from the earlier full paging matrix.
+The subsequent `9a1252f88b` merge repeated those same 243 mode, 253
+generated-C, four Python SDK, 27 software, 73 return, 81 pipeline and
+122 continuation checks on both SDKs. Its new Capstone pin also passed
+25 x86 decoder checks per SDK. Native SGX still has zero EPC on the designated
+runners; final LLVM release and production pin remain gated.
 
 ## Support is a pipeline property
 

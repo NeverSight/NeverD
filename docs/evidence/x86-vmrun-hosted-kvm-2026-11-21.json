@@ -6,7 +6,7 @@
   "fixture_manifest_sha256": "4a8863177c8b90fd897d9cc3a21759a52b5d662d755ebcc477aabe7125609e7b",
   "compiler_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
   "neverd_fixture_export_commit": "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
-  "current_neverd_export_commit": "1bfbe324973924e2bc32af3d44c975028909e345",
+  "current_neverd_export_commit": "9a1252f88bf46bff8b640d0f72a66a330ce917f5",
   "matching_neverd_export_commits": [
     "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
     "6f81b8559bac0dd326d9426269b5b7d48c03b343",
@@ -19,7 +19,8 @@
     "d7c5338cf5c65149570a113ad383e249401db5e2",
     "0d5a4ee1df986128fce8ee42a98d27cc4f280f47",
     "a02363b36b289a54c2b3546649ab93ca593a80df",
-    "1bfbe324973924e2bc32af3d44c975028909e345"
+    "1bfbe324973924e2bc32af3d44c975028909e345",
+    "9a1252f88bf46bff8b640d0f72a66a330ce917f5"
   ],
   "current_neverd_export_sha256": {
     "high": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
@@ -599,6 +600,15 @@
       "llvm": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1"
     },
     "qualified_full_matrix_source": "a02363b36b289a54c2b3546649ab93ca593a80df",
+    "focused_report": "docs/evidence/x86-mode-smm-sgx-events-2026-11-21.json"
+  },
+  "latest_dev_integration": {
+    "neverd": "9a1252f88bf46bff8b640d0f72a66a330ce917f5",
+    "source_sha256": {
+      "high": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+      "llvm": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1"
+    },
+    "qualified_full_paging_source": "a02363b36b289a54c2b3546649ab93ca593a80df",
     "focused_report": "docs/evidence/x86-mode-smm-sgx-events-2026-11-21.json"
   }
 }

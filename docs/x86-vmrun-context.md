@@ -80,6 +80,12 @@ The following `1bfbe32497` shared-analysis merge also retained both source
 hashes, after full mode execution and x64 continuation suites passed on both
 SDKs. The [VMRUN evidence](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
 records that later export identity separately from the hosted guest run.
+The `9a1252f88b` integration, including the newer Capstone mask-register pin
+and shared Go/ABI changes, again exported the same HighC and LLVM-to-C bytes.
+Both SDKs passed the complete 243-case mode owner and 122-case x64
+continuation suite. This preserves the exact generated source used by the
+hosted zero-high and nonzero-high RAX comparisons; the AMD run itself remains
+the separately recorded hardware observation.
 
 These results establish the tested nested KVM profile. The generated path
 preserves the full RAX value and emits the original address-size prefix; the

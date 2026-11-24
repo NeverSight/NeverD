@@ -456,6 +456,21 @@ single declared x87 hardware skip per platform. The preceding `a02363b36b`
 source retains the complete 853/855 paging qualification; this later merge
 replayed the execution and shared consumers.
 
+At `9a1252f88b`, the next `dev` integration adopts Capstone
+`8347e89a4e` for mask-register memory-store access metadata and includes
+shared Go/ABI changes. Both SDKs rebuilt and passed 243/243 complete mode
+execution, 253/253 generated-C source, 4/4 Python SDK, 27/27 selected
+mode/SMM/SGX/event software, 25/25 x86 decoder, 73/73 return-contract,
+81/81 pipeline-outcome and 122/122 x64 continuation-export cases. The HighC
+and LLVM-to-C VMRUN exports still have the hosted AMD source hashes. The
+[qualification record](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+keeps the earlier full paging matrix and this merged-source replay distinct.
+Native SGX execution remains unavailable on the designated runners, so this
+integration does not authorize a final LLVM release or production pin update.
+The [Capstone four-platform run](https://github.com/NeverSight/NeverD/actions/runs/45348733110)
+passed 132/132 checks on Linux and 131/132 on macOS arm64 and each Windows
+compiler, with one declared POSIX-x64 x87 hardware skip per non-Linux job.
+
 ## Earlier qualification records
 
 The November 11 regression stream performs protected32 → compatibility32 → code64 →
