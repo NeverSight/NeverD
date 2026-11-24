@@ -1882,6 +1882,120 @@ _Static_assert(MASKED_XOR(0x80, 0x20) == 0, "both masks");
       {"-Werror=parentheses"});
 }
 
+TEST(HighCIntegerWidths, CompoundComparisonsPreserveTheTestedValues) {
+  const auto Word = NdType::makeInt(4, false);
+  const auto X = parameter(0, Word), Y = parameter(1, Word);
+  const auto Zero = HighExpr::makeConst(0, Word->Size);
+  auto LowByte = [&](ExprPtr Value) {
+    auto Low = HighExpr::makeBinop(NdOp::SUBBYTES, Value, Zero);
+    Low->Type = NdType::makeInt(1, false);
+    return Low;
+  };
+  auto Not = [](ExprPtr Value) {
+    return HighExpr::makeUnary(NdOp::BOOL_NOT, Value);
+  };
+  auto NotLessAndDifferent = [&](ExprPtr Left, ExprPtr Right) {
+    return Not(HighExpr::makeBinop(
+        NdOp::BOOL_AND, HighExpr::makeBinop(NdOp::INT_LESSEQUAL, X, Y),
+        HighExpr::makeBinop(NdOp::INT_NOTEQUAL, Left, Right)));
+  };
+  auto Check = [&](const char *Name, ExprPtr Value, const char *Assertions) {
+    SCOPED_TRACE(Name);
+    HighFunc Func;
+    Func.Name = Name;
+    Func.Params = {{"arg0", Word}, {"arg1", Word}};
+    Func.ReturnType = Word;
+    returnValue(Func, Value);
+    const std::string Source = emitFunctions({Func});
+    const auto Expr =
+        llvm::StringRef(Source).rsplit("return ").second.split(';').first;
+    ASSERT_FALSE(Expr.empty()) << Source;
+    source_call_execution_test::checkSyntax(Source +
+                                            "\n#define RESULT(arg0, arg1) (" +
+                                            Expr.str() + ")\n" + Assertions);
+  };
+
+  const auto Masked = HighExpr::makeBinop(NdOp::INT_AND, X, Zero);
+  Check("masked_pair", NotLessAndDifferent(Masked, Y),
+        "_Static_assert(!RESULT(1u, 1u), \"masked equality\");");
+  Check("subtracted_pair",
+        NotLessAndDifferent(HighExpr::makeBinop(NdOp::INT_SUB, Zero, X), Y),
+        "_Static_assert(!RESULT(1u, 1u), \"subtraction order\");");
+  Check("low_byte_pair", NotLessAndDifferent(LowByte(X), LowByte(Y)),
+        "_Static_assert(RESULT(1u, 257u), \"narrow equality\");");
+  Check("matching_pair", NotLessAndDifferent(Y, X),
+        "_Static_assert(RESULT(1u, 1u) && !RESULT(1u, 2u) && RESULT(2u, 1u),"
+        " \"same values in reversed order\");");
+
+  const auto SignedTest = HighExpr::makeBinop(
+      NdOp::BOOL_OR, HighExpr::makeBinop(NdOp::INT_EQUAL, Masked, Zero),
+      HighExpr::makeBinop(NdOp::INT_SLESS, X, Zero));
+  Check("masked_zero_or_sign", SignedTest,
+        "_Static_assert(RESULT(1u, 0u), \"zero test\");");
+  Check("negated_zero_or_sign", Not(SignedTest),
+        "_Static_assert(!RESULT(1u, 0u), \"inverted zero test\");");
+  Check("masked_positive",
+        Not(HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, Masked, Zero)),
+        "_Static_assert(!RESULT(1u, 0u), \"sign of masked value\");");
+}
+
+TEST(HighCIntegerWidths, TwoArmComparisonsKeepSignedOrderAndRepeatReads) {
+  const auto Word = NdType::makeInt(4, false);
+  const auto X = parameter(0, Word), Y = parameter(1, Word);
+  auto BranchSource = [&](const ExprPtr &Left, const ExprPtr &OtherLeft) {
+    HighFunc Func;
+    Func.Name = "compare_arms";
+    Func.Params = {{"arg0", Word}, {"arg1", Word}};
+    Func.ReturnType = Word;
+    HighStmt Branch;
+    Branch.Kind = StmtKind::IfElse;
+    Branch.Cond = HighExpr::makeUnary(
+        NdOp::BOOL_NOT,
+        HighExpr::makeBinop(
+            NdOp::BOOL_AND, HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, Left, Y),
+            HighExpr::makeBinop(NdOp::INT_NOTEQUAL, Y, OtherLeft)));
+    HighStmt One, Zero;
+    One.Kind = Zero.Kind = StmtKind::Return;
+    One.RetVal = HighExpr::makeConst(1, Word->Size);
+    Zero.RetVal = HighExpr::makeConst(0, Word->Size);
+    Branch.Body = {One};
+    Branch.ElseBody = {Zero};
+    Func.Body = {Branch};
+    return emitFunctions({Func});
+  };
+  const std::string Source = BranchSource(X, X);
+  const auto [Condition, Arms] =
+      llvm::StringRef(Source).rsplit("if (").second.split(") {");
+  ASSERT_FALSE(Arms.empty()) << Source;
+  const auto Returns = Arms.split("return ").second.split(';');
+  const auto OtherReturn =
+      Returns.second.split("return ").second.split(';').first;
+  ASSERT_FALSE(OtherReturn.empty()) << Source;
+  source_call_execution_test::checkSyntax(
+      Source + "\n#define RESULT(arg0, arg1) ((" + Condition.str() + ") ? " +
+      Returns.first.str() + " : " + OtherReturn.str() + ")\n" +
+      "_Static_assert(!RESULT(0x80000000u, 1u) && RESULT(1u, 0x80000000u) &&"
+      " RESULT(1u, 1u), \"signed order and arm selection\");");
+
+  auto Call = HighExpr::makeCall("sample", 0x1000, {});
+  Call->Type = Word;
+  const std::string Calls = BranchSource(Call, Call);
+  EXPECT_EQ(
+      llvm::StringRef(Calls).rsplit("if (").second.split(") {").first.count(
+          "sample("),
+      2u)
+      << Calls;
+  source_call_execution_test::checkSyntax(Calls);
+  auto Read = HighExpr::makeLoad(X, Word, NdMemoryOrdering::Acquire);
+  const std::string Loads = BranchSource(Read, Read);
+  EXPECT_EQ(
+      llvm::StringRef(Loads).rsplit("if (").second.split(") {").first.count(
+          "neverd_mem_load_acquire_u32("),
+      2u)
+      << Loads;
+  source_call_execution_test::checkSyntax(Loads);
+}
+
 TEST(HighCIntegerWidths, BooleanXorAndWideInplaceMasksKeepExactBits) {
   const auto Word = NdType::makeInt(8, false);
   const auto Wide = NdType::makeInt(16, false);

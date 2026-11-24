@@ -1441,95 +1441,10 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
       const HighExpr *Cur = unwrapIntegerView(Op.get());
       return Cur && Cur->Kind == ExprKind::Const && Cur->ConstVal == 0;
     };
-    auto SameScalar = [&](const HighExpr *A, const HighExpr *B) {
-      auto Peel = [&](const HighExpr *E) {
-        unsigned Depth = 0;
-        while (
-            E &&
-            Depth++ <
-                ::neverd::limits::backend::
-                    kHighCExprWriterHighCWriterRenderUnaryOpSameScalarPeelDepthLimit) {
-          const HighExpr *Fwd = forwardedExpr(E);
-          if (Fwd && (Fwd->Kind == ExprKind::Var || Fwd->Kind == ExprKind::Phi))
-            E = Fwd;
-          E = unwrapIntegerView(E);
-          if (!E || E->Kind != ExprKind::BinOp || E->Operands.size() != 2)
-            return E;
-          if (E->Op == NdOp::INT_EQUAL || E->Op == NdOp::INT_NOTEQUAL ||
-              E->Op == NdOp::INT_LESS || E->Op == NdOp::INT_LESSEQUAL ||
-              E->Op == NdOp::INT_SLESS || E->Op == NdOp::INT_SLESSEQUAL)
-            return E;
-          if (IsZero(E->Operands[1]) && E->Operands[0]) {
-            E = E->Operands[0].get();
-            continue;
-          }
-          if (IsZero(E->Operands[0]) && E->Operands[1]) {
-            E = E->Operands[1].get();
-            continue;
-          }
-          return E;
-        }
-        return E;
-      };
-      A = Peel(A);
-      B = Peel(B);
-      return A && B && (A->Kind == ExprKind::Var || A->Kind == ExprKind::Phi) &&
-             A->Kind == B->Kind && A->Var.Kind == B->Var.Kind &&
-             A->Var.Id == B->Var.Id;
-    };
-    auto AsEqZero = [&](const HighExpr *Op, ExprPtr &X) {
-      Op = forwardedExpr(Op);
-      Op = unwrapIntegerView(Op);
-      if (!Op || Op->Kind != ExprKind::BinOp || Op->Op != NdOp::INT_EQUAL ||
-          Op->Operands.size() != 2)
-        return false;
-      if (IsZero(Op->Operands[1]) && Op->Operands[0]) {
-        X = Op->Operands[0];
-        return true;
-      }
-      if (IsZero(Op->Operands[0]) && Op->Operands[1]) {
-        X = Op->Operands[1];
-        return true;
-      }
-      return false;
-    };
-    auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X, uint16_t &Bytes) {
-      Op = forwardedExpr(Op);
-      Op = unwrapIntegerView(Op);
-      if (Op && Op->Kind == ExprKind::BinOp && Op->Op == NdOp::INT_NOTEQUAL &&
-          Op->Operands.size() == 2) {
-        const HighExpr *A = unwrapIntegerView(Op->Operands[0].get());
-        const HighExpr *B = unwrapIntegerView(Op->Operands[1].get());
-        if (A && A->Kind == ExprKind::BinOp && A->Op == NdOp::INT_SLESS &&
-            IsZero(Op->Operands[1]))
-          Op = A;
-        else if (B && B->Kind == ExprKind::BinOp && B->Op == NdOp::INT_SLESS &&
-                 IsZero(Op->Operands[0]))
-          Op = B;
-      }
-      if (!Op || Op->Kind != ExprKind::BinOp || Op->Op != NdOp::INT_SLESS ||
-          Op->Operands.size() != 2 || !IsZero(Op->Operands[1]) ||
-          !Op->Operands[0])
-        return false;
-      X = Op->Operands[0];
-      Bytes = zeroTestBytes(*Op->Operands[0], *Op->Operands[1]);
-      return Bytes != 0;
-    };
     // `Sz` is the width the test reads, whatever the variable it views: a
     // 64-bit `test rax, rax` is not `(int32_t)rax > 0`.
     auto PrintGtZero = [&](const ExprPtr &X, uint16_t Sz) {
-      const HighExpr *V = forwardedExpr(X.get());
-      V = unwrapIntegerView(V);
-      if (V && V->Kind == ExprKind::BinOp && V->Operands.size() == 2 &&
-          V->Op != NdOp::INT_EQUAL && V->Op != NdOp::INT_NOTEQUAL &&
-          V->Op != NdOp::INT_SLESS && V->Op != NdOp::INT_SLESSEQUAL &&
-          IsZero(V->Operands[1]) && V->Operands[0])
-        V = unwrapIntegerView(V->Operands[0].get());
-      // A value narrower than the test keeps the extension X reads it through.
-      const HighExpr *Print =
-          V && (!V->Type || V->Type->Size >= Sz) && lowBytesRead(X.get()) >= Sz
-              ? V
-              : X.get();
+      const HighExpr *Print = comparisonOperand(*X);
       // What the text certainly prints as decides over the IR's type: a call
       // has its declared type, not the carrier's, and a declared local can read
       // in the other signedness.
@@ -1559,20 +1474,6 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
         Result = "(" + Result + ")";
       return Result;
     };
-    if (Inner && Inner->Kind == ExprKind::BinOp &&
-        (Inner->Op == NdOp::BOOL_OR || Inner->Op == NdOp::INT_OR) &&
-        Inner->Operands.size() == 2) {
-      ExprPtr XEq;
-      ExprPtr XLt;
-      uint16_t Bytes = 0;
-      const bool LeftEq = AsEqZero(Inner->Operands[0].get(), XEq) &&
-                          AsSignedLtZero(Inner->Operands[1].get(), XLt, Bytes);
-      const bool RightEq = AsEqZero(Inner->Operands[1].get(), XEq) &&
-                           AsSignedLtZero(Inner->Operands[0].get(), XLt, Bytes);
-      if ((LeftEq || RightEq) && SameScalar(XEq.get(), XLt.get()) &&
-          readsSameBytes(Inner->Operands[0].get(), Inner->Operands[1].get()))
-        return PrintGtZero(XLt, Bytes);
-    }
     if (Inner && Inner->Kind == ExprKind::BinOp &&
         Inner->Op == NdOp::INT_SLESSEQUAL && Inner->Operands.size() == 2 &&
         IsZero(Inner->Operands[1]) && Inner->Operands[0])
@@ -7617,14 +7518,6 @@ unsigned HighCWriter::lowBytesRead(const HighExpr *E) const {
   return 0;
 }
 
-bool HighCWriter::isNotBelowZeroOf(llvm::StringRef Not,
-                                   llvm::StringRef Value) const {
-  std::string NotStorage, ValueStorage;
-  llvm::StringRef Plain = plainText(Not, NotStorage);
-  return Plain.consume_front("!(") && Plain.consume_back(" < 0)") &&
-         Plain == plainText(Value, ValueStorage);
-}
-
 bool HighCWriter::printsWiderThanItsValue(const HighExpr &E) const {
   if (E.Kind != ExprKind::Var && E.Kind != ExprKind::Phi)
     return false;
@@ -10259,33 +10152,16 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
       (Cur->Op == NdOp::BOOL_AND || Cur->Op == NdOp::BOOL_OR)) {
     if (Cur->Op == NdOp::BOOL_AND) {
       // `x && !(x < 0)` is the signed `test; jle` split. Print `x > 0`.
-      auto ScalarOf = [&](const HighExpr *E) -> const HighExpr * {
-        unsigned Depth = 0;
-        while (
-            E &&
-            Depth++ <
-                ::neverd::limits::backend::
-                    kHighCExprWriterHighCWriterCondStrImplScalarOfDepthLimit) {
-          E = forwardedExpr(E);
-          E = unwrapIntegerView(E);
-          if (!E)
-            return nullptr;
-          if (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi)
-            return E;
-          if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_NOTEQUAL &&
-              E->Operands.size() == 2) {
-            if (IsZeroLike(E->Operands[1]) && E->Operands[0]) {
-              E = E->Operands[0].get();
-              continue;
-            }
-            if (IsZeroLike(E->Operands[0]) && E->Operands[1]) {
-              E = E->Operands[1].get();
-              continue;
-            }
-          }
-          return nullptr;
+      auto NonzeroOperand = [&](const HighExpr *Test) -> const HighExpr * {
+        Test = truthTestedValue(Test);
+        if (Test && Test->Kind == ExprKind::BinOp &&
+            Test->Op == NdOp::INT_NOTEQUAL && Test->Operands.size() == 2) {
+          if (IsZeroLike(Test->Operands[1]))
+            return Test->Operands[0].get();
+          if (IsZeroLike(Test->Operands[0]))
+            return Test->Operands[1].get();
         }
-        return nullptr;
+        return Test;
       };
       // The value tested by `!(x < 0)`, `(x < 0) == 0`, or the normalized
       // `0 <= x`, and the width of that test.
@@ -10318,23 +10194,14 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
         Bytes = zeroTestBytes(*Cmp->Operands[0], *Cmp->Operands[1]);
         return Cmp->Operands[0];
       };
-      auto SameScalar = [&](const HighExpr *A, const HighExpr *B) {
-        if (!A || !B ||
-            (A->Kind != ExprKind::Var && A->Kind != ExprKind::Phi) ||
-            A->Kind != B->Kind)
-          return false;
-        if (A->Var.Kind == B->Var.Kind && A->Var.Id == B->Var.Id)
-          return true;
-        return copyForwardName(varName(A->Var)) ==
-               copyForwardName(varName(B->Var));
-      };
       for (unsigned Truth = 0; Truth != 2; ++Truth) {
         uint16_t Bytes = 0;
         const ExprPtr Value =
             NonNegativeValue(Cur->Operands[1 - Truth].get(), Bytes);
         if (!Value || !Bytes ||
-            !SameScalar(ScalarOf(Cur->Operands[Truth].get()),
-                        ScalarOf(Value.get())) ||
+            !sameComparisonValue(
+                truthTestedValue(NonzeroOperand(Cur->Operands[Truth].get())),
+                truthTestedValue(Value.get())) ||
             !readsSameBytes(Cur->Operands[0].get(), Cur->Operands[1].get()))
           continue;
         // Printed as the negated comparison, which spells the view it reads.
@@ -10346,12 +10213,6 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
     }
     std::string L = condStr(*Cur->Operands[0]);
     std::string R = condStr(*Cur->Operands[1]);
-    if (Cur->Op == NdOp::BOOL_AND) {
-      if (isNotBelowZeroOf(R, L))
-        return L + " > 0";
-      if (isNotBelowZeroOf(L, R))
-        return R + " > 0";
-    }
     return joinLogicalConditions(std::move(L), std::move(R),
                                  Cur->Op == NdOp::BOOL_AND);
   }
@@ -10416,102 +10277,15 @@ std::string HighCWriter::invertedTruthValue(const HighExpr &Test,
 
 std::optional<std::string>
 HighCWriter::preferGreaterIfElseCond(const HighExpr &E) {
-  const HighExpr *Cur = forwardedExpr(&E);
-  Cur = unwrapIntegerView(Cur);
+  const HighExpr *Cur = truthTestedValue(&E);
   if (!Cur || Cur->Kind != ExprKind::UnaryOp || Cur->Op != NdOp::BOOL_NOT ||
-      Cur->Operands.empty() || !Cur->Operands[0])
+      Cur->Operands.size() != 1)
     return std::nullopt;
-  Cur = forwardedExpr(Cur->Operands[0].get());
-  Cur = unwrapIntegerView(Cur);
-  if (!Cur || Cur->Kind != ExprKind::BinOp || Cur->Operands.size() != 2 ||
-      !Cur->Operands[0] || !Cur->Operands[1] ||
-      (Cur->Op != NdOp::BOOL_AND && Cur->Op != NdOp::INT_AND))
+  const HighExpr *And = truthTestedValue(Cur->Operands[0].get());
+  const HighExpr *Le = And ? strictLessComparison(*And) : nullptr;
+  if (!Le)
     return std::nullopt;
-  auto AsLe = [&](const HighExpr *Op) -> const HighExpr * {
-    Op = forwardedExpr(Op);
-    Op = unwrapIntegerView(Op);
-    if (Op && Op->Kind == ExprKind::BinOp && Op->Operands.size() == 2 &&
-        (Op->Op == NdOp::INT_LESSEQUAL || Op->Op == NdOp::INT_SLESSEQUAL))
-      return Op;
-    return nullptr;
-  };
-  auto AsNe = [&](const HighExpr *Op) -> const HighExpr * {
-    Op = forwardedExpr(Op);
-    Op = unwrapIntegerView(Op);
-    if (Op && Op->Kind == ExprKind::BinOp && Op->Op == NdOp::INT_NOTEQUAL &&
-        Op->Operands.size() == 2)
-      return Op;
-    return nullptr;
-  };
-  const HighExpr *Le = AsLe(Cur->Operands[0].get());
-  const HighExpr *Ne = AsNe(Cur->Operands[1].get());
-  if (!Le || !Ne) {
-    Le = AsLe(Cur->Operands[1].get());
-    Ne = AsNe(Cur->Operands[0].get());
-  }
-  if (!Le || !Ne || Le->Operands.size() != 2 || !Le->Operands[0] ||
-      !Le->Operands[1])
-    return std::nullopt;
-  auto Peel = [&](const HighExpr *S) -> const HighExpr * {
-    unsigned Depth = 0;
-    while (
-        S &&
-        Depth++ <
-            ::neverd::limits::backend::
-                kHighCExprWriterHighCWriterPreferGreaterIfElseCondPeelPeelDepthLimit) {
-      S = forwardedExpr(S);
-      S = unwrapIntegerView(S);
-      if (!S || S->Kind != ExprKind::BinOp || S->Operands.size() != 2)
-        return S;
-      if (S->Op == NdOp::INT_EQUAL || S->Op == NdOp::INT_NOTEQUAL ||
-          S->Op == NdOp::INT_LESS || S->Op == NdOp::INT_LESSEQUAL ||
-          S->Op == NdOp::INT_SLESS || S->Op == NdOp::INT_SLESSEQUAL)
-        return S;
-      break;
-    }
-    return S;
-  };
-  auto SameScalar = [&](const HighExpr *A, const HighExpr *B) {
-    A = Peel(A);
-    B = Peel(B);
-    if (!A || !B)
-      return false;
-    if (A == B)
-      return true;
-    if ((A->Kind == ExprKind::Var || A->Kind == ExprKind::Phi) &&
-        A->Kind == B->Kind)
-      return A->Var.Kind == B->Var.Kind && A->Var.Id == B->Var.Id;
-    return exprStr(*A, 99) == exprStr(*B, 99);
-  };
-  auto SamePair = [&](const HighExpr *A0, const HighExpr *A1,
-                      const HighExpr *B0, const HighExpr *B1) {
-    return (SameScalar(A0, B0) && SameScalar(A1, B1)) ||
-           (SameScalar(A0, B1) && SameScalar(A1, B0));
-  };
-  if (!SamePair(Le->Operands[0].get(), Le->Operands[1].get(),
-                Ne->Operands[0].get(), Ne->Operands[1].get()))
-    return std::nullopt;
-  auto MemberOrExpr = [&](const HighExpr &Op) {
-    const HighExpr *Inner = peelIntegerViewOps(&Op);
-    if (!Inner)
-      Inner = &Op;
-    if (Inner->Kind == ExprKind::Load && !Inner->Operands.empty() &&
-        Inner->Operands[0]) {
-      if (auto Member = loadedMemberAccess(*Inner))
-        return *Member;
-    }
-    if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
-      const std::string Raw = varName(Inner->Var);
-      if (auto It = FieldForward.find(Raw); It != FieldForward.end())
-        return It->second;
-      const std::string Name = copyForwardName(Raw);
-      if (auto It = FieldForward.find(Name); It != FieldForward.end())
-        return It->second;
-    }
-    return exprStr(*Inner, 7);
-  };
-  return MemberOrExpr(*Le->Operands[1]) + " > " +
-         MemberOrExpr(*Le->Operands[0]);
+  return renderBinOpOperands(*Le, 0, FoldedRelation::SwappedGreater);
 }
 
 std::string HighCWriter::invertCondStr(const HighExpr &E) {
@@ -10581,80 +10355,12 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
 
   if (Cur->Kind == ExprKind::BinOp && Cur->Operands.size() == 2 &&
       Cur->Operands[0] && Cur->Operands[1]) {
-    auto PeelScalar = [&](const HighExpr *S) -> const HighExpr * {
-      unsigned Depth = 0;
-      while (
-          S &&
-          Depth++ <
-              ::neverd::limits::backend::
-                  kHighCExprWriterHighCWriterInvertCondStrImplPeelScalarDepthLimit) {
-        S = forwardedExpr(S);
-        S = unwrapIntegerView(S);
-        if (!S || S->Kind != ExprKind::BinOp || S->Operands.size() != 2)
-          return S;
-        if (S->Op == NdOp::INT_EQUAL || S->Op == NdOp::INT_NOTEQUAL ||
-            S->Op == NdOp::INT_LESS || S->Op == NdOp::INT_LESSEQUAL ||
-            S->Op == NdOp::INT_SLESS || S->Op == NdOp::INT_SLESSEQUAL)
-          return S;
-        if (IsZeroLike(S->Operands[1]) && S->Operands[0]) {
-          S = S->Operands[0].get();
-          continue;
-        }
-        if (IsZeroLike(S->Operands[0]) && S->Operands[1]) {
-          S = S->Operands[1].get();
-          continue;
-        }
-        return S;
-      }
-      return S;
-    };
-    auto SameScalar = [&](const HighExpr *A, const HighExpr *B) {
-      A = PeelScalar(A);
-      B = PeelScalar(B);
-      if (!A || !B || A->Kind != B->Kind)
-        return false;
-      if (A->Kind == ExprKind::Var || A->Kind == ExprKind::Phi)
-        return A->Var.Kind == B->Var.Kind && A->Var.Id == B->Var.Id;
-      return false;
-    };
-    auto SamePair = [&](const HighExpr *A0, const HighExpr *A1,
-                        const HighExpr *B0, const HighExpr *B1) {
-      return (SameScalar(A0, B0) && SameScalar(A1, B1)) ||
-             (SameScalar(A0, B1) && SameScalar(A1, B0));
-    };
-    auto PrintGe = [&](const HighExpr &Le) {
-      std::string S = exprStr(Le);
-      const auto Pos = S.find(" <= ");
-      if (Pos != std::string::npos)
-        S.replace(Pos, 4, " >= ");
-      return S;
-    };
-    auto AsLe = [&](const HighExpr *Op) -> const HighExpr * {
-      Op = forwardedExpr(Op);
-      Op = unwrapIntegerView(Op);
-      if (Op && Op->Kind == ExprKind::BinOp && Op->Operands.size() == 2 &&
-          (Op->Op == NdOp::INT_LESSEQUAL || Op->Op == NdOp::INT_SLESSEQUAL))
-        return Op;
-      return nullptr;
-    };
-    auto AsNe = [&](const HighExpr *Op) -> const HighExpr * {
-      Op = forwardedExpr(Op);
-      Op = unwrapIntegerView(Op);
-      if (Op && Op->Kind == ExprKind::BinOp && Op->Op == NdOp::INT_NOTEQUAL &&
-          Op->Operands.size() == 2)
-        return Op;
-      return nullptr;
-    };
-    const HighExpr *Le = AsLe(Cur->Operands[0].get());
-    const HighExpr *Ne = AsNe(Cur->Operands[1].get());
-    if (!Le || !Ne) {
-      Le = AsLe(Cur->Operands[1].get());
-      Ne = AsNe(Cur->Operands[0].get());
-    }
-    if ((Cur->Op == NdOp::BOOL_AND || Cur->Op == NdOp::INT_AND) && Le && Ne &&
-        SamePair(Le->Operands[0].get(), Le->Operands[1].get(),
-                 Ne->Operands[0].get(), Ne->Operands[1].get()))
-      return PrintGe(*Le);
+    if (Cur->Op == NdOp::BOOL_AND || Cur->Op == NdOp::INT_AND)
+      if (const HighExpr *Le = strictLessComparison(*Cur))
+        return renderBinOpOperands(*Le, 0, FoldedRelation::GreaterEqual);
+    if (Cur->Op == NdOp::BOOL_OR || Cur->Op == NdOp::INT_OR)
+      if (auto NonPositive = nonPositiveComparison(*Cur))
+        return exprStr(*HighExpr::makeUnary(NdOp::BOOL_NOT, NonPositive));
 
     const bool BoolOr = Cur->Op == NdOp::BOOL_OR ||
                         (Cur->Op == NdOp::INT_OR &&
@@ -10667,13 +10373,6 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
     if (BoolOr || BoolAnd) {
       std::string L = invertCondStr(*Cur->Operands[0]);
       std::string R = invertCondStr(*Cur->Operands[1]);
-      if (BoolOr) {
-        // `x == 0 || x < 0` inverts to `x > 0`.
-        if (isNotBelowZeroOf(R, L))
-          return L + " > 0";
-        if (isNotBelowZeroOf(L, R))
-          return R + " > 0";
-      }
       return joinLogicalConditions(std::move(L), std::move(R), BoolOr);
     }
     if (Cur->Op == NdOp::INT_EQUAL) {

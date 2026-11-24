@@ -212,8 +212,8 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
   return Rendered;
 }
 
-std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
-                                             int ParentPrec) {
+std::string HighCWriter::renderBinOpOperands(const HighExpr &E, int ParentPrec,
+                                             FoldedRelation Fold) {
   if (E.Op == NdOp::BOOL_XOR) {
     constexpr int TruthPrec = getOpPrecedence(NdOp::INT_NOTEQUAL);
     return typedText(E,
@@ -304,84 +304,6 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
       return false;
     }
   };
-  auto PeelCmpNeZero = [&](const HighExpr *Op) -> const HighExpr * {
-    Op = forwardedExpr(Op);
-    if (!Op || Op->Kind != ExprKind::BinOp || Op->Operands.size() != 2)
-      return Op;
-    if (Op->Op != NdOp::INT_NOTEQUAL)
-      return Op;
-    const HighExpr *A = unwrapIntegerView(Op->Operands[0].get());
-    const HighExpr *B = unwrapIntegerView(Op->Operands[1].get());
-    if (A && A->Kind == ExprKind::BinOp && IsCompareOp(A->Op) &&
-        IsZeroLike(Op->Operands[1]))
-      return A;
-    if (B && B->Kind == ExprKind::BinOp && IsCompareOp(B->Op) &&
-        IsZeroLike(Op->Operands[0]))
-      return B;
-    return Op;
-  };
-  auto PeelZeroView = [&](const HighExpr *E) -> const HighExpr * {
-    unsigned Depth = 0;
-    while (
-        E &&
-        Depth++ <
-            ::neverd::limits::backend::
-                kHighCExprBinOpHighCWriterRenderBinOpOperandsPeelZeroViewDepthLimit) {
-      E = forwardedExpr(E);
-      E = unwrapIntegerView(E);
-      if (!E || E->Kind != ExprKind::BinOp || IsCompareOp(E->Op) ||
-          E->Operands.size() != 2)
-        return E;
-      if (IsZeroLike(E->Operands[1]) && E->Operands[0]) {
-        E = E->Operands[0].get();
-        continue;
-      }
-      if (IsZeroLike(E->Operands[0]) && E->Operands[1]) {
-        E = E->Operands[1].get();
-        continue;
-      }
-      return E;
-    }
-    return E;
-  };
-  auto SameScalar = [&](const HighExpr *A, const HighExpr *B) {
-    A = PeelZeroView(A);
-    B = PeelZeroView(B);
-    if (!A || !B || A->Kind != B->Kind)
-      return false;
-    if (A->Kind == ExprKind::Var || A->Kind == ExprKind::Phi)
-      return A->Var.Kind == B->Var.Kind && A->Var.Id == B->Var.Id;
-    return false;
-  };
-  auto AsEqZero = [&](const HighExpr *Op, ExprPtr &X) -> bool {
-    Op = forwardedExpr(Op);
-    Op = unwrapIntegerView(Op);
-    if (!Op || Op->Kind != ExprKind::BinOp || Op->Op != NdOp::INT_EQUAL ||
-        Op->Operands.size() != 2)
-      return false;
-    if (IsZeroLike(Op->Operands[1]) && Op->Operands[0]) {
-      X = Op->Operands[0];
-      return true;
-    }
-    if (IsZeroLike(Op->Operands[0]) && Op->Operands[1]) {
-      X = Op->Operands[1];
-      return true;
-    }
-    return false;
-  };
-  auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X,
-                            uint16_t &Bytes) -> bool {
-    const HighExpr *Cmp = PeelCmpNeZero(Op);
-    if (!Cmp || Cmp->Kind != ExprKind::BinOp || Cmp->Op != NdOp::INT_SLESS ||
-        Cmp->Operands.size() != 2)
-      return false;
-    if (IsZeroLike(Cmp->Operands[1]) && Cmp->Operands[0]) {
-      X = Cmp->Operands[0];
-      Bytes = zeroTestBytes(*Cmp->Operands[0], *Cmp->Operands[1]);
-      return Bytes != 0;
-    }
-    return false;
-  };
   if (E.Operands.size() == 2 && E.Operands[0] && E.Operands[1] &&
       (E.Op == NdOp::INT_NOTEQUAL || E.Op == NdOp::INT_EQUAL)) {
     const HighExpr *A = unwrapIntegerView(E.Operands[0].get());
@@ -399,24 +321,9 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
       return invertedTruthValue(*Cmp, E, ParentPrec);
     }
   }
-  if (E.Operands.size() == 2 && E.Operands[0] && E.Operands[1] &&
-      (E.Op == NdOp::BOOL_OR || E.Op == NdOp::INT_OR)) {
-    ExprPtr XEq;
-    ExprPtr XLt;
-    uint16_t Bytes = 0;
-    const bool LeftEq = AsEqZero(E.Operands[0].get(), XEq) &&
-                        AsSignedLtZero(E.Operands[1].get(), XLt, Bytes);
-    const bool RightEq = AsEqZero(E.Operands[1].get(), XEq) &&
-                         AsSignedLtZero(E.Operands[0].get(), XLt, Bytes);
-    if ((LeftEq || RightEq) && SameScalar(XEq.get(), XLt.get()) &&
-        readsSameBytes(E.Operands[0].get(), E.Operands[1].get())) {
-      // The zero takes x's width: a wider one would compare x extended,
-      // and a 16-bit x zero-extended is never below zero.
-      auto Sle = HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, XLt,
-                                     HighExpr::makeConst(0, Bytes));
-      return renderBinOp(*Sle, ParentPrec);
-    }
-  }
+  if (E.Op == NdOp::BOOL_OR || E.Op == NdOp::INT_OR)
+    if (auto NonPositive = nonPositiveComparison(E))
+      return renderBinOp(*NonPositive, ParentPrec);
 
   // `(x << n) | (x >> (width-n))` is a rotate.  Print a rotate builtin
   // instead of the nested unsigned-shift casts Hex-Rays beats with `__ROL8__`.
@@ -1353,17 +1260,29 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
     RHS = CastOp(R);
   }
 
-  // A constant compares from the right, as a reader expects: `x >= 0` for
-  // `0 <= x`.  Both operands are evaluated either way.
-  const llvm::StringRef Sym(OpSym);
-  const bool Ordering =
-      Sym == " < " || Sym == " <= " || Sym == " == " || Sym == " != ";
-  const HighExpr *LeftValue = unwrapIntegerView(E.Operands[0].get());
-  const HighExpr *RightValue = unwrapIntegerView(E.Operands[1].get());
-  if (Ordering && LeftValue && LeftValue->Kind == ExprKind::Const &&
-      RightValue && RightValue->Kind != ExprKind::Const) {
+  // Keep the signedness, width and source markers produced by CastOp when a
+  // pair of comparisons becomes one. A two-arm guard uses its opposite arm.
+  if (Fold == FoldedRelation::GreaterEqual)
+    OpSym = " >= ";
+  else if (Fold == FoldedRelation::SwappedGreater) {
     std::swap(LHS, RHS);
-    OpSym = Sym == " < " ? " > " : Sym == " <= " ? " >= " : OpSym;
+    OpSym = " > ";
+  } else {
+    // A constant compares from the right, as a reader expects: `x >= 0` for
+    // `0 <= x`.  Both operands are evaluated either way.
+    const llvm::StringRef Sym(OpSym);
+    const bool Ordering =
+        Sym == " < " || Sym == " <= " || Sym == " == " || Sym == " != ";
+    if (Ordering) {
+      const HighExpr *Left = unwrapIntegerView(E.Operands[0].get());
+      if (Left && Left->Kind == ExprKind::Const) {
+        const HighExpr *Right = unwrapIntegerView(E.Operands[1].get());
+        if (Right && Right->Kind != ExprKind::Const) {
+          std::swap(LHS, RHS);
+          OpSym = Sym == " < " ? " > " : Sym == " <= " ? " >= " : OpSym;
+        }
+      }
+    }
   }
   std::string Result = LHS + OpSym + RHS;
   if (MyPrec > 0 && MyPrec <= ParentPrec)

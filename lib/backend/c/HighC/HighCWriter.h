@@ -798,11 +798,15 @@ public:
   /// (`(int32_t)(int8_t)v` is not `v`).
   const HighExpr *sameWidthVariable(const HighExpr &E) const;
   const HighExpr *forwardedExpr(const HighExpr *E) const;
-  /// The text \p Not is `!(x < 0)` of the text \p Value, which is then `x > 0`
-  /// with it: without a cast, `x` is signed at its own width. Both are read
-  /// without source markers, so a marked render spells what the ordinary one
-  /// does.
-  bool isNotBelowZeroOf(llvm::StringRef Not, llvm::StringRef Value) const;
+  /// A width-preserving view or arithmetic identity can name the original
+  /// comparison operand. All other operations retain their result.
+  const HighExpr *comparisonOperand(const HighExpr &E) const;
+  bool sameComparisonValue(const HighExpr *A, const HighExpr *B,
+                           unsigned Depth = 0) const;
+  /// The inclusive comparison in a strict less-than expressed as LE and NE.
+  const HighExpr *strictLessComparison(const HighExpr &E) const;
+  /// The signed nonpositive comparison expressed as equality or sign.
+  ExprPtr nonPositiveComparison(const HighExpr &E) const;
   /// exprStr last printed the variable \p E as a name declared wider than its
   /// value, so that reading only the value takes a cast.
   bool printsWiderThanItsValue(const HighExpr &E) const;
@@ -1291,7 +1295,9 @@ public:
 
   //--- Binary expression rendering (HighCExprBinOp.cpp) ---
   std::string renderBinOp(const HighExpr &E, int ParentPrec);
-  std::string renderBinOpOperands(const HighExpr &E, int ParentPrec);
+  enum class FoldedRelation { None, GreaterEqual, SwappedGreater };
+  std::string renderBinOpOperands(const HighExpr &E, int ParentPrec,
+                                  FoldedRelation Fold = FoldedRelation::None);
 
   //--- State ---
   /// Every member is a value or a pointer into what the writer only reads:
