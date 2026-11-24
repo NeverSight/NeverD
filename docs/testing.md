@@ -1331,6 +1331,16 @@ return, a vector register, an intrinsic, other memory or a va_list pointer
 other than the one va_start stores there, a load's frame address has no fixed
 offset or an edge is exceptional, and where Apple's arm64 recognizer, which
 reads no save area, applies.
+`MedVariadic.WindowsARM64VaListPointsAtTheFirstUnnamedRegister` takes a
+Windows ARM64 save area of one, two or three named registers whose first
+unnamed slot's address is kept in a local (`/O0`), formed in an argument
+register past a second `sub sp` (MSVC `/O2`) or passed to a call, with the
+overflow at the entry stack pointer.
+`WindowsARM64NamedHomeContinuingTheRunStaysNamed` keeps x0 named where its
+home continues the run, and `WindowsARM64SpillsWithNoVaListAreNoSaveArea`
+takes no save area from homes read back, a run a doubleword short of the
+entry stack pointer, an address below the run or inside a slot, x7 no longer
+holding its entry value, an ELF image or an address only a load uses.
 
 `AArch64_VariadicSaveArea` compiles AAPCS64 variadic routines. One whose
 va_arg reads ints only leaves its vector half unread: MedIR keeps no q0-q7
@@ -21761,6 +21771,12 @@ prints each filter callback as its `__except` expression: the Counter read
 through the homed argument, `GetExceptionCode() == 0xC0000005`, a constant as
 `EXCEPTION_EXECUTE_HANDLER`, MSVC /O0's temporaries in the parent's frame gone
 when nothing else touches them, and the writes to a slot the parent reads kept.
+`AWriteKeepsItsCallAndTheReadReadsTheSlot` calls the function once where the
+callback keeps a call's value in such a slot and returns it,
+`ATemporaryNothingElseTouchesCarriesTheCallOnce` carries it through a
+temporary to its one read, and `ACallBetweenATemporaryAndItsReadRunsInOrder`
+keeps the callback's call where another call runs between the write and the
+read.
 `ARM64SEHLocalUnwindTests.cpp` builds MSVC ARM64 /O0 parents that reach the
 import through a veneer: `ARM64SEHLocalUnwind.*` certifies the exit through
 an unrecorded veneer from the saved entry stack pointer, with the handler

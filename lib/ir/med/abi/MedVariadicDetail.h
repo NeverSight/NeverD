@@ -8,8 +8,10 @@
 /// Internal declarations shared by detectVariadic (MedVariadic.cpp) and the
 /// per-convention variadic prologue recognizers: MedVariadicX86.cpp (x86-64
 /// va_start word, i386 stack va_list), MedVariadicAArch64.cpp (AAPCS64 save
-/// area), MedVariadicDarwin.cpp (Apple arm64 stack va_list) and
-/// MedVariadicARM.cpp (AAPCS save area abutting the entry SP).  Not public.
+/// area), MedVariadicDarwin.cpp (Apple arm64 stack va_list),
+/// MedVariadicWindowsAArch64.cpp (Windows ARM64 save area ending at the entry
+/// SP) and MedVariadicARM.cpp (AAPCS save area abutting the entry SP).  Not
+/// public.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -193,6 +195,14 @@ std::vector<std::pair<size_t, size_t>>
 unreadAAPCS64VectorSpills(VariadicScan &S, int FirstVariadicRegister);
 
 std::optional<int> aapcs32FirstVariadicRegister(VariadicScan &S);
+
+/// The first variadic integer argument register of a Windows ARM64
+/// va_start (MedVariadicWindowsAArch64.cpp): x(first) through x7 spilled with
+/// their entry values to consecutive doublewords ending at the entry stack
+/// pointer, x(first) the lowest of them whose slot's address the function
+/// passes on as its va_list.  Nothing where no such address is passed on.
+std::optional<int> windowsAArch64FirstVariadicRegister(VariadicScan &S);
+
 bool hasI386VariadicPrologue(VariadicScan &S);
 bool hasAAPCS64VariadicPrologue(VariadicScan &S);
 bool hasDarwinVariadicPrologue(VariadicScan &S);

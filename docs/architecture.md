@@ -13406,9 +13406,25 @@ those slots shows they are no arguments (an -O0 spill near the call), so they
 end with it.
 That count is the named parameters of a variadic callee and zero for a callee
 nothing describes. Below it the callee reads the register, and the unknown
-value stays. The named count of an AAPCS64 or AAPCS32 variadic routine comes
-from its register save area, which spills the argument registers from the
-first unnamed one to the last (`MedFunc::VariadicFirstRegister`). Recovery
+value stays. The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
+routine comes from its register save area, which spills the argument registers
+from the first unnamed one to the last (`MedFunc::VariadicFirstRegister`).
+Windows ARM64 has no va_list record: va_start spills x(first) through x7 to
+consecutive doublewords ending at the entry stack pointer, and the va_list is
+the address of the first, from which va_arg walks on into the caller's stack
+arguments. `windowsAArch64FirstVariadicRegister`
+(`MedVariadicWindowsAArch64.cpp`) takes that run, x7 just below the entry
+stack pointer, as a save area only where the function passes on the address
+of a slot in it: stored as a value, an operand of a call or a return, or
+formed in an argument register for a call, as MSVC's `/O2` passes it to
+`_vfprintf_l` (`add x3, sp, #off`). Code that homes named parameters in that
+layout passes none of their addresses on, and the lowest slot whose address
+goes on starts the variadic registers, so a named parameter homed where it
+continues the run stays named. A COFF function without that shape still gets
+the AAPCS64 recognizers. Before the rule a Windows ARM64 printf wrapper took
+all eight registers as parameters, and a call whose format reads none of them
+passed seven unknown values: the Windows EH corpus's 96 ARM64 images printed
+29,710 placeholders, 784 with it. Recovery
 applies the rule to `MedCallInfo::Args`, and HighIR's hole filling and
 positional fill use the same predicate, since x86-64 HighC builds its call
 arguments with its own scan. Because a variadic routine of the image keeps its
@@ -20784,7 +20800,15 @@ of the callback with one of its two arguments. A write it makes to the
 parent's frame stays in the expression unless nothing else can read those
 bytes: no statement of the parent, no other filter and no handler still out of
 line touches them, and no address of the frame goes anywhere else, as with the
-temporaries MSVC's `/Od` keeps for a filter in its parent's frame. The
+temporaries MSVC's `/Od` keeps for a filter in its parent's frame. A call in
+the callback runs once, where the callback ran it: a word the expression
+leaves out carries a call's value only to the one read of it, with nothing
+that can be seen to run between the write and that read, and a write that
+stays keeps its call, after which the word reads as itself. `/Od` keeps a
+filter's result in such a word and returns it; the folder put a call's value
+both into the write that stays and into the read, calling the function twice
+(52 filters of the x64 and ARM32 EH corpus images), and ran a call between a left-out write and
+its read before the call whose value the write held. The
 expression must also print as C that evaluates as the callback did, or the
 callback keeps its call: an integer, reading no value of a function whose
 result the writer leaves out (`analyzeVoidReturn`), and reaching the frame only
