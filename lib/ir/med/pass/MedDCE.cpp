@@ -271,11 +271,17 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   };
   // A walk ends where call setup does, or at an op that an earlier walk
   // keeping at least its registers passed: that walk went on to the same end.
-  // A walk for a direct call keeps more registers than the others.
+  // A walk for a direct call keeps more registers than the others.  A write
+  // a later one in the walk covers is none the call reads: Go's `bsr rsi,
+  // rax; mov r8, -1; cmove rsi, r8` before a call left the first selection,
+  // which reads what an earlier call left in RSI, and that read became a
+  // fifth result of the earlier call.
+  llvm::SmallDenseMap<uint64_t, uint16_t, 8> Covered;
   auto seedParamWrites = [&](const MedBlock &Block, int Before,
                              bool DirectCall) {
     const uint8_t Walked =
         DirectCall ? DirectParamWritesWalked : ParamWritesWalked;
+    Covered.clear();
     for (int J = Before; J >= 0; --J) {
       uint8_t &Facts = OpFacts[opIndex(Block, J)];
       if ((Facts & Walked) || endsSetup(Block, J))
@@ -288,8 +294,12 @@ void LowToMedConverter::runDce(MedFunc &Func) {
            (DirectCall && (llvm::is_contained(AlternateArgumentRegisters,
                                               Prev.Output.RegOff) ||
                            llvm::is_contained(NonstandardArgumentRegisters,
-                                              Prev.Output.RegOff)))))
-        MarkLive(Prev.Output);
+                                              Prev.Output.RegOff))))) {
+        uint16_t &Later = Covered[Prev.Output.RegOff];
+        if (Later < Prev.Output.Size)
+          MarkLive(Prev.Output);
+        Later = std::max(Later, Prev.Output.Size);
+      }
     }
   };
   // Widen block IDs so every int value stays distinct from the hash sentinels.

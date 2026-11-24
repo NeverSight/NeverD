@@ -21137,6 +21137,11 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`GoInternalABI.ASetupWriteALaterOneReplacesReadsNoResult` runs a Go caller
+that computes `bsr rsi, rax; mov r8, -1; cmove rsi, r8` from a call's result
+before another call: the first call returns one result and the caller
+computes the highest bit; it fails where dead-code elimination keeps the
+covered selection, which reads the callee's RSI as a fifth result.
 `GoInternalABI.AnIndirectCallReturnsEveryResultItsCallerReads` lifts a Go
 1.18 function that calls through a function value and stores RBX: the call
 returns RAX and RBX packed, every later read of RBX is its second field, and

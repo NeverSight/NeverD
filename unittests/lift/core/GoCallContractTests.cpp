@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../language/GoRuntimeEHTestsDetail.h"
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
@@ -1326,6 +1327,88 @@ TEST(GoInternalABI, AByteWriteKeepsNoResultOfTheCall) {
   const MedOp *Call = onlyCall(F);
   ASSERT_NE(Call, nullptr);
   EXPECT_FALSE(Call->RegisterReturnFields);
+}
+
+TEST(GoInternalABI, ASetupWriteALaterOneReplacesReadsNoResult) {
+  // `bsr` keeps its destination where its source is zero, so its lift
+  // selects the register's old value there, and Go's compiler replaces
+  // that at once: `bsr rsi, rax; mov r8, -1; cmove rsi, r8`.  Before a
+  // call, dead-code elimination kept every write of an argument register
+  // the setup passes, so the first selection stayed and its read of what
+  // the earlier call left in RSI made a fifth result of that call:
+  // runtime.extractHeapBitsSmall, which returns one word, returned five,
+  // and its callers read a record that its declaration does not return.
+  //   main.bits: mov rsi, [rax+8]; mov rdi, rsi; mov rcx, rsi
+  //              mov rbx, rsi; mov rax, [rax]; ret
+  //   main.top:  push rbp; mov rbp, rsp; call main.bits
+  //              bsr rsi, rax; mov r8, -1; cmove rsi, r8; mov rax, rsi
+  //              call main.use; pop rbp; ret
+  //   main.use:  add rax, 1; ret
+  constexpr va_t Bits = kTextVA + 0x100;
+  constexpr va_t Top = kTextVA + 0x120;
+  constexpr va_t Use = kTextVA + 0x180;
+  GoTestImage T;
+  T.writeText(Bits, {0x48, 0x8B, 0x70, 0x08, 0x48, 0x89, 0xF7, 0x48, 0x89, 0xF1,
+                     0x48, 0x89, 0xF3, 0x48, 0x8B, 0x00, 0xC3});
+  T.writeText(Top, {0x55, 0x48, 0x89, 0xE5, 0xE8, 0xD7, 0xFF, 0xFF, 0xFF,
+                    0x48, 0x0F, 0xBD, 0xF0, 0x49, 0xC7, 0xC0, 0xFF, 0xFF,
+                    0xFF, 0xFF, 0x49, 0x0F, 0x44, 0xF0, 0x48, 0x89, 0xF0,
+                    0xE8, 0x40, 0x00, 0x00, 0x00, 0x5D, 0xC3});
+  T.writeText(Use, {0x48, 0x83, 0xC0, 0x01, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{Bits, "main.bits"}, std::pair{Top, "main.top"},
+        std::pair{Use, "main.use"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Bits, kTextVA + 0x200}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  unsigned Calls = 0;
+  for (const MedFunc &M : R.MedFuncs) {
+    if (M.Entry == Bits)
+      EXPECT_TRUE(M.MultiReturn.empty()) << M.MultiReturn.size();
+    if (M.Entry == Top)
+      for (const MedBlock &Block : M.Blocks)
+        for (const MedOp &Op : Block.Ops)
+          if (Op.Opcode == NdOp::CALL) {
+            ++Calls;
+            EXPECT_FALSE(Op.RegisterReturnFields)
+                << Op.RegisterReturnFields->size();
+          }
+  }
+  EXPECT_EQ(Calls, 2u);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions C;
+  C.TheArch = T.Img.Arch;
+  C.Format = T.Img.Format;
+  C.Image = &T.Img;
+  ASSERT_TRUE(HighCEmitter().emit(R.HighFuncs, OS, C));
+  OS.flush();
+  EXPECT_EQ(Source.find("field_"), std::string::npos) << Source;
+#if defined(__x86_64__) || defined(_M_X64)
+  source_call_execution_test::compileAndRun(Source + R"C(
+int main(void) {
+  static uint64_t words[][2] = {
+      {0, 7}, {1, 7}, {0x10, 7}, {UINT64_C(0x8000000000000001), 7}};
+  static const int64_t want[] = {0, 1, 5, 64};
+  for (int i = 0; i < 4; ++i)
+    if ((int64_t)main_top(words[i]) != want[i])
+      return 1 + i;
+  return 0;
+}
+)C",
+                                            {"-Wno-int-conversion"});
+#endif
 }
 
 TEST(GoInternalABI, EveryDirectCallOfAFunctionReturnsTheSameResults) {

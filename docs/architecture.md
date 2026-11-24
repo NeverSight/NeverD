@@ -13264,6 +13264,15 @@ that passes a two-load target's object finds none in a register that holds the
 target. HighIR's stack scan takes no prologue save for an indirect call either
 (`isIncomingRegisterSave`, shared with recovery).
 
+Before ABI recovery binds a call's register arguments, MedIR dead-code
+elimination keeps the writes of argument registers that the call's setup
+makes, but only the newest of each register: a write that a later one covers
+before the call is no argument. Go's `bsr rsi, rax; mov r8, -1;
+cmove rsi, r8` ahead of a call left the first selection, whose read of what
+an earlier call left in RSI made a fifth result of that call:
+`runtime.extractHeapBitsSmall`, which returns one word, returned five, and its
+callers read a record that its declaration does not return.
+
 Dedicated indirect-result registers are separate from ordinary parameter
 registers. MedIR dead-code elimination keeps their reaching definitions at
 calls and tails until ABI recovery binds the hidden result argument. This
