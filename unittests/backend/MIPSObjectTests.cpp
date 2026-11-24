@@ -46,6 +46,15 @@ void checkObject(Arch Target, const MIPSImageMetadata *Profile,
   const auto Emitted =
       Codegen().compile(F.Module, Target, BinaryFormat::ELF, {},
                         ObjectConsumer::PlatformLinker, Profile, Diagnostic);
+#ifndef LLVM_NEVERD_MIPS_ELF_REWRITE
+  if (isMIPS64O32(Target) || ISALevel == 5) {
+    EXPECT_FALSE(Emitted.Success);
+    EXPECT_TRUE(Emitted.ObjectData.empty());
+    EXPECT_NE(Diagnostic.find("requires the updated NeverSight LLVM"),
+              std::string::npos);
+    return;
+  }
+#endif
   ASSERT_TRUE(Emitted.Success) << Diagnostic;
   ASSERT_FALSE(Emitted.ObjectData.empty());
   const llvm::StringRef Bytes(
@@ -249,6 +258,26 @@ TEST(MIPSObject, InvalidFunctionFeaturesReturnDiagnosticsToTheCaller) {
   Check(Arch::MIPS64N32EL, "+fpxx", "require o32");
   Check(Arch::MIPS64N32EL, "+nooddspreg", "require o32");
   Check(Arch::MIPS64N32EL, "+unknown-isa", "unknown target feature");
+  Profile.HasMSA = false;
+  Profile.ABI = MIPSABI::O32;
+  Profile.ISARevision = 2;
+  Check(Arch::MIPS32EL, "+soft-float", "change the input ELF ISA or ABI");
+  Check(Arch::MIPS32, "+mips32r6", "change the input ELF ISA or ABI");
+  F.Leaf->removeFnAttr("target-features");
+  F.Leaf->addFnAttr("use-soft-float", "true");
+  auto HardFloat =
+      Codegen().compile(F.Module, Arch::MIPS32, BinaryFormat::ELF, {},
+                        ObjectConsumer::PlatformLinker, &Profile, Diagnostic);
+  EXPECT_FALSE(HardFloat.Success);
+  EXPECT_TRUE(HardFloat.ObjectData.empty());
+  EXPECT_NE(Diagnostic.find("soft-float calling convention"), std::string::npos)
+      << Diagnostic;
+  Profile.FPABI = llvm::Mips::Val_GNU_MIPS_ABI_FP_SOFT;
+  EXPECT_TRUE(Codegen()
+                  .compile(F.Module, Arch::MIPS32, BinaryFormat::ELF, {},
+                           ObjectConsumer::PlatformLinker, &Profile, Diagnostic)
+                  .Success)
+      << Diagnostic;
 }
 
 TEST(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
@@ -267,6 +296,13 @@ TEST(MIPSObject, CompressedFunctionRetainsSymbolModeAndImageFPABI) {
       auto Result = Codegen().compile(F.Module, Target, BinaryFormat::ELF, {},
                                       ObjectConsumer::PlatformLinker, &Profile,
                                       Diagnostic);
+#ifndef LLVM_NEVERD_MIPS_ELF_REWRITE
+      EXPECT_FALSE(Result.Success);
+      EXPECT_TRUE(Result.ObjectData.empty());
+      EXPECT_NE(Diagnostic.find("compressed function entry modes"),
+                std::string::npos);
+      continue;
+#endif
       ASSERT_TRUE(Result.Success) << Diagnostic;
       ASSERT_EQ(Result.Functions.size(), 1u);
       const llvm::StringRef Bytes(
@@ -325,6 +361,10 @@ TEST(MIPSObject, FixedAddressEmissionKeepsEntryPointersAndFunctionRanges) {
     };
     auto Result =
         Codegen().compileForRewrite(F.Module, Target, Opt, BinaryFormat::ELF);
+#ifndef LLVM_NEVERD_MIPS_ELF_REWRITE
+    EXPECT_FALSE(Result.ImageValid);
+    continue;
+#endif
     ASSERT_TRUE(Result.ImageValid);
     ASSERT_TRUE(Result.FunctionRangesValid);
     EXPECT_TRUE(Result.Unresolved.empty());

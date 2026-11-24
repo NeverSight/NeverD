@@ -36,11 +36,15 @@ sizes. Use the target linker to place the sections and resolve relocations.
 | n64 | 64-bit GPRs and pointers | ELF64, both byte orders |
 
 The backend selects the historical ISA or release, floating-point ABI and
-position-independent addressing from the input. Function attributes select
-classic, MIPS16 or microMIPS encoding. MIPS16 and microMIPS o32 entry symbols
+position-independent addressing from the input. Function attributes can select
+classic, MIPS16 or microMIPS encoding. A function override that changes the
+input ISA or calling convention produces a diagnostic. MIPS16 and microMIPS o32 entry symbols
 carry their instruction mode so a native linker can construct callable
 pointers. LLVM emits microMIPS objects for o32. A microMIPS n32 or n64 input
-can use the analysis paths described below.
+can use the analysis paths described below. Selecting an older SDK such as
+r7 limits native object output to classic profiles with a qualified ABI.
+MIPS III/o32, MIPS V, compressed bodies and fixed-address output require the
+updated fork.
 
 The fork also emits fixed-address code and data through
 `addPassesToEmitBinaryRewrite`. It reports function ranges at their physical

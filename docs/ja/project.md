@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 26bbbe32fa118fe31d79cefefa50beec2c54d4f406c2aa1c363edee7565ff5b6 -->
+<!-- i18n-source: 6874690d10b49481e10ba6b924afc59f37b5bff48c1b1093277ab7aef7e45725 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 
 > 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](architecture.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
 
-**MIPS ELF 解析は実験的な対応です。** MIPS32r2/o32 と MIPS64r2/n64 の両エンディアンで、厳密に限定した整数命令の逆アセンブル、CFG 復元、C および LLVM 出力に対応します。ネイティブコードの書き換えには対応していません。[MIPS の対応範囲とファームウェアの例（英語）](../mips.md)で、個別に検証された microMIPS32、MIPS16e/e2、DSP、MIPS32r5 MSA の各サブセットとソース出力の制約を確認してください。
+**MIPS ELF** の逆アセンブル、制御フローの復元、C および LLVM 出力に対応しています。SDK は NeverSight 版 LLVM の Mips バックエンドで対応関数を再配置可能な ELF オブジェクトに再コンパイルし、元のバイト順と呼び出し規約（o32、n32、n64）を保持します。実行ファイルに書き戻すには、パッチャーに MIPS ELF の書き込み処理を追加する必要があります。[MIPS プロファイルとネイティブ出力（英語）](../mips.md)
 
 legacy EVM bytecode は native container と独立して対応します。Frontier から Fusaka
 までの 150 assigned opcode が専用 Low/Med/High IR、verified LLVM `i256`、C23

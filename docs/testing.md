@@ -26154,6 +26154,18 @@ python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTe
 ctest --test-dir build-mips --build-config Release -L '^NeverDMIPS.*Tests$' --output-on-failure --parallel 4
 ```
 
+The native object roundtrip runs a GNU-assembled function and the object from
+`neverd_lift_to_obj` with the same caller under QEMU. Its 14 profiles cover
+classic o32/n32/n64, MIPS16 and microMIPS o32, and historical MIPS V n32/n64,
+each in both byte orders. On Linux it uses `qemu-user` and GNU binutils for
+`mips-linux-gnu`, `mipsel-linux-gnu`, `mips64-linux-gnuabi64` and
+`mips64el-linux-gnuabi64`. Each case removes its temporary ELF files after
+execution.
+
+```sh
+python3 unittests/lift/mips/native-object-roundtrip.py --sdk build-mips/bin/libneverd.so --output build-mips/mips-native-execution.json
+```
+
 `unittests/lift/mips/roundtrip.py` is an additional standalone differential
 runner. It needs clang and lld with MIPS targets, pyelftools, and the repository's
 pinned Unicorn native library/Python bindings. Pass the built CLI, compiler,

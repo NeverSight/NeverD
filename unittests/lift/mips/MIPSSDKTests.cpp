@@ -184,6 +184,31 @@ TEST_P(MIPSSDK, StartupMainArgumentCanBePreparedInTheCallSlot) {
   EXPECT_EQ(sdk::SessionTestAccess::programMain(Image), 0x1010u);
 }
 
+TEST_P(MIPSSDK, FileInstallationRequiresAnArchitectureSpecificWriter) {
+  mips_test::ELFBytes File(GetParam());
+  const std::filesystem::path Root(Directory.str().str());
+  const std::string Input = (Root / "input.elf").string();
+  const std::string Output = (Root / "installed.elf").string();
+  std::error_code Error;
+  llvm::raw_fd_ostream Stream(Input, Error);
+  ASSERT_FALSE(Error);
+  Stream.write(reinterpret_cast<const char *>(File.Bytes.data()),
+               File.Bytes.size());
+  Stream.close();
+  ASSERT_TRUE(neverd_session_load(Session, Input.c_str()));
+  for (int Strategy : {0, 1}) {
+    SCOPED_TRACE(Strategy);
+    testing::internal::CaptureStderr();
+    int Installed =
+        neverd_patch_from_ir(Session, "define i32 @func_10100() { ret i32 37 }",
+                             Strategy, Output.c_str());
+    auto Detail = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Installed, 0);
+    EXPECT_NE(Detail.find("unsupported arch"), std::string::npos) << Detail;
+    EXPECT_FALSE(std::filesystem::exists(Output));
+  }
+}
+
 class MicroMIPSSDK : public MIPSSDK {};
 
 class MIPSObjectSDK : public MIPSSDK {};

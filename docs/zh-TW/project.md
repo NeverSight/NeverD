@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 26bbbe32fa118fe31d79cefefa50beec2c54d4f406c2aa1c363edee7565ff5b6 -->
+<!-- i18n-source: 6874690d10b49481e10ba6b924afc59f37b5bff48c1b1093277ab7aef7e45725 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI、整合方與 AI 智慧體透過 **純 C API** 使用同一個引擎 **`lib
 
 > 矩陣中的每個單元格都已實作，但整合測試深度不同。詳見[架構覆蓋矩陣](architecture.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位物件，因為現代 macOS 無法連結歷史 i386 可執行檔。
 
-**MIPS ELF 分析為實驗性支援：** MIPS32r2/o32 與 MIPS64r2/n64 均支援大小端，可對嚴格限定的整數指令子集進行反組譯、CFG 還原以及 C 和 LLVM 輸出。不支援原生程式碼重寫。詳見 [MIPS 涵蓋範圍與韌體範例（英文）](../mips.md)，其中說明了個別驗證的 microMIPS32、MIPS16e/e2、DSP 和 MIPS32r5 MSA 子集及其原始碼輸出限制。
+**MIPS ELF** 支援反組譯、控制流程還原，以及 C 和 LLVM 輸出。SDK 可透過 NeverSight LLVM fork 的 Mips 後端，將支援的函式重新編譯為可重定位的 ELF 目的檔，保留原有位元組順序與 o32、n32 或 n64 呼叫慣例。將程式碼寫回執行檔仍需要 MIPS ELF 寫入支援。[MIPS 設定與原生程式碼輸出（英文）](../mips.md)
 
 傳統 EVM 位元組碼獨立於原生 container：從 Frontier 到 Fusaka 的 150 個已分配
 opcode 全部進入專用 Low/Med/High IR、已驗證 LLVM `i256`、C23 `_BitInt(256)`

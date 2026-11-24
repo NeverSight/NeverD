@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 26bbbe32fa118fe31d79cefefa50beec2c54d4f406c2aa1c363edee7565ff5b6 -->
+<!-- i18n-source: 6874690d10b49481e10ba6b924afc59f37b5bff48c1b1093277ab7aef7e45725 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Consulta las guías de [EVM](evm.md), [Solana SBF](sbf.md), [recuperación de c�
 
 > Todas las celdas de la matriz están implementadas, pero la profundidad de las pruebas de integración varía. Consulte la [matriz de cobertura de arquitectura](architecture.md#support-and-test-depth). Mach-O i386 usa objetos reubicables `thin` porque macOS moderno no puede enlazar ejecutables i386 históricos.
 
-**El análisis ELF de MIPS es experimental:** MIPS32r2/o32 y MIPS64r2/n64, en ambos órdenes de bytes, admiten un subconjunto estricto de instrucciones enteras para desensamblado, recuperación del CFG y salida en C y LLVM. No se admite la reescritura de código nativo. Consulta [la cobertura de MIPS y el ejemplo de firmware (inglés)](../mips.md) para conocer los subconjuntos microMIPS32, MIPS16e/e2, DSP y MIPS32r5 MSA validados por separado y sus restricciones de salida de código fuente.
+**MIPS ELF** admite desensamblado, recuperación del flujo de control y salida en C y LLVM. El SDK recompila las funciones compatibles en objetos ELF reubicables con el backend Mips de LLVM de NeverSight. Conserva el orden de bytes y la convención de llamada o32, n32 o n64. Para insertar el código en un ejecutable, el parcheador aún necesita un escritor de ELF para MIPS. [Perfiles MIPS y salida nativa (inglés)](../mips.md)
 
 El bytecode EVM legacy se soporta sin contenedor nativo: los 150 opcodes asignados
 de Frontier a Fusaka pasan por Low/Med/High IR, LLVM `i256` verificado, C23

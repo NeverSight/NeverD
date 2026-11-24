@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 26bbbe32fa118fe31d79cefefa50beec2c54d4f406c2aa1c363edee7565ff5b6 -->
+<!-- i18n-source: 6874690d10b49481e10ba6b924afc59f37b5bff48c1b1093277ab7aef7e45725 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Verwendung, unterstützte Verträge und Grenzen stehen in den Leitfäden zu [EVM
 
 > Jede Zelle der Matrix ist implementiert, die Tiefe der Integrationstests variiert jedoch. Siehe die [Architektur-Abdeckungsmatrix](architecture.md#support-and-test-depth). Mach-O i386 verwendet relocatable `thin`-Objekte, weil modernes macOS historische i386-Executables nicht linken kann.
 
-**Die MIPS-ELF-Analyse ist experimentell:** MIPS32r2/o32 und MIPS64r2/n64 unterstützen in beiden Byte-Reihenfolgen eine strikt begrenzte Teilmenge von Ganzzahlbefehlen für Disassemblierung, CFG-Rekonstruktion sowie C- und LLVM-Ausgabe. Das Umschreiben nativen Codes wird nicht unterstützt. Siehe [MIPS-Abdeckung und Firmware-Beispiel (Englisch)](../mips.md) für die separat geprüften Teilmengen microMIPS32, MIPS16e/e2, DSP und MIPS32r5 MSA sowie deren Einschränkungen bei der Quellcodeausgabe.
+**MIPS-ELF-Dateien** lassen sich disassemblieren und als C oder LLVM-IR ausgeben. NeverD rekonstruiert dabei den Kontrollfluss. Das SDK übersetzt unterstützte Funktionen mit dem Mips-Backend des NeverSight-LLVM-Forks in verschiebbare ELF-Objektdateien und erhält Byte-Reihenfolge sowie Aufrufkonvention (o32, n32 oder n64). Zum Einfügen in eine ausführbare Datei benötigt der Patcher noch einen MIPS-ELF-Writer. [MIPS-Profile und native Ausgabe (Englisch)](../mips.md)
 
 Legacy-EVM-Bytecode wird unabhängig von nativen Containern unterstützt: Alle
 150 Opcodes von Frontier bis Fusaka führen durch Low/Med/High IR, verifiziertes

@@ -13,6 +13,7 @@
 #include "neverd/loader/ELF/MIPSImageMetadata.h"
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/BinaryRewrite.h"
@@ -37,15 +38,10 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
   const unsigned HistoricalISA =
       Profile ? Profile->HistoricalISA : (isMIPS64O32(Target) ? 3 : 0);
 #ifndef LLVM_NEVERD_MIPS_ELF_REWRITE
-  // Older NeverSight packages abort on MIPS V and downgrade MIPS III to II
-  // when selecting paired FPRs.
-  if (HistoricalISA == 5)
-    return Unsupported("MIPS V needs a newer NeverSight LLVM MIPS backend");
-  if (isMIPS64O32(Target) && Profile &&
-      (Profile->FPABI == llvm::Mips::Val_GNU_MIPS_ABI_FP_DOUBLE ||
-       Profile->FPABI == llvm::Mips::Val_GNU_MIPS_ABI_FP_XX))
+  // The old package uses n64 argument slots for GP64/o32 and rejects MIPS V.
+  if (HistoricalISA == 5 || isMIPS64O32(Target))
     return Unsupported(
-        "MIPS III/o32 paired FPRs need a newer NeverSight LLVM MIPS backend");
+        "this ISA/ABI requires the updated NeverSight LLVM MIPS backend");
 #endif
   const unsigned Revision = Profile ? Profile->ISARevision : 2;
   std::string CPU = HistoricalISA      ? "mips" + std::to_string(HistoricalISA)
@@ -138,6 +134,23 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
   };
   if (auto Error = Validate())
     return Error;
+  // LLVM selects the calling convention per function. Its ELF streamer can
+  // therefore describe a soft-float object even when the input passes doubles
+  // in $f12/$f14. Preserve the resolved ABI and ISA across local overrides.
+  llvm::FeatureBitset ProfileFeatures;
+  if (Profile) {
+    for (const auto &Feature : Subtarget->getAllProcessorFeatures()) {
+      if (Subtarget->isCPUStringValid(Feature.Key) ||
+          llvm::StringSwitch<bool>(Feature.Key)
+              .Cases({"fp64", "fpxx", "single-float", "soft-float",
+                      "nooddspreg", "nan2008", "noabicalls", "ptr64"},
+                     true)
+              .Default(false))
+        ProfileFeatures.set(Feature.Value);
+    }
+  }
+  const auto InputFeatures = Subtarget->getFeatureBits() & ProfileFeatures;
+  const bool InputSoftFloat = Subtarget->checkFeatures("+soft-float");
   llvm::SmallVector<std::pair<llvm::Function *, std::string>> Updates;
   for (auto &Function : Module) {
     if (Function.isDeclaration())
@@ -176,7 +189,14 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
       Subtarget->setDefaultFeatures(CPU, CPU, Effective);
       if (auto Error = Validate())
         return Error;
+      if ((Subtarget->getFeatureBits() & ProfileFeatures) != InputFeatures)
+        return Unsupported("function features change the input ELF ISA or ABI");
     }
+    if (Profile && !InputSoftFloat &&
+        Function.getFnAttribute("use-soft-float").getValueAsBool())
+      return Unsupported(
+          "function soft-float calling convention conflicts with "
+          "the input ELF ABI");
     bool Micro = Function.hasFnAttribute("micromips") ||
                  (!Function.hasFnAttribute("nomicromips") &&
                   Subtarget->checkFeatures("+micromips"));
@@ -184,9 +204,9 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
                   (!Function.hasFnAttribute("nomips16") &&
                    Subtarget->checkFeatures("+mips16"));
 #ifndef LLVM_NEVERD_MIPS_ELF_REWRITE
-    if (Mips16)
-      return Unsupported("MIPS16 entry symbols and encoded halfwords need a "
-                         "newer NeverSight LLVM MIPS backend");
+    if (Mips16 || Micro)
+      return Unsupported("compressed function entry modes require the updated "
+                         "NeverSight LLVM MIPS backend");
 #endif
     if (Micro && !isMIPSO32(Target))
       return Unsupported("the LLVM backend cannot generate microMIPS64 bodies");
