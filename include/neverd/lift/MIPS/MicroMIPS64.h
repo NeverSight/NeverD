@@ -67,11 +67,13 @@ inline std::optional<uint32_t> micro64Word(uint32_t Word,
     break;
   }
   switch (Word & 0xffff) {
-  case 0xab3c:
-  case 0xbb3c: // DDIV / DDIVU into HI/LO
+  case 0x8b3c: // DMULT
+  case 0x9b3c: // DMULTU
+  case 0xab3c: // DDIV
+  case 0xbb3c: // DDIVU
     if (Release6)
       return std::nullopt;
-    return Bases | (Word & 0x1000 ? 31u : 30u);
+    return Bases | (28u + ((Word >> 12) & 3));
   case 0x4b3c:
   case 0x5b3c: // DCLO / DCLZ (the classic format repeats rd in rt).
     return (28u << 26) | Bases | (RT << 11) | (Word & 0x1000 ? 36u : 37u);
