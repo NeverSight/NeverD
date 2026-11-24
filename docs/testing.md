@@ -9294,6 +9294,16 @@ Removing bit eight from the final mask makes the left-shift path overlap.
 `ReturnContracts.LateReturnCopyChecksTheScratchRegisterOnItsOwnEdge` checks
 the high byte of RDX as data and as a count, reordered PHIs, conflicting
 bytes and an unknown full-register input.
+`ReturnContracts.TheGuardMustExcludeAnUnwrittenCarrierOnItsOwnEdge` checks
+a late handoff, a missing PHI edge, a store and a latch that changes the
+carrier selector. `ReturnContract.I386SharedShiftUsesOnlyTheSelectedCarrier`
+checks both stack arguments and compares the zero-, one- and two-trip results.
+`ReturnContract.X64SharedShiftPairsTheWordAndItsZeroExtendedRegister` compares
+the low eight and nine bits after a transfer from R11D. On AArch64,
+`ReturnContract.AArch64SharedShiftTestsTheCarrierWithItsWordView` branches
+on W3, shifts by X3 and checks the incoming X0 on the bare path.
+`ReturnContract.MIPSDelaySlotForwardsTheOtherArmsShiftOperand` places the
+handoff in a branch delay slot and varies the final mask by one bit.
 `ReturnContract.I386LoopReusesTheCounterRegisterForTheFinalResult` executes
 zero through three trips with EAX as the counter. At the exit it compares
 the masked result copied from EDX, including a one-trip collision.

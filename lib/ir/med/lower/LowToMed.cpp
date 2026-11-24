@@ -61,6 +61,7 @@
 #include "neverd/ir/med/MedCallTarget.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
 #include "neverd/ir/med/MedDominatedSelects.h"
+#include "neverd/ir/med/MedShiftedReturnPaths.h"
 #include "neverd/ir/med/MedSyscallConvention.h"
 #include "neverd/ir/med/X86/X86CpuidSubleaf.h"
 #include "neverd/ir/med/X86/X86RegistrationCall.h"
@@ -2577,6 +2578,12 @@ MedFunc LowToMedConverter::convertFunction(
           if (const auto Bound = CallEntryIntegerArguments->find(Low.Entry);
               Bound != CallEntryIntegerArguments->end())
             GoFixedArguments = Bound->second;
+    }
+    if (SourceReturnProjectionEnabled &&
+        return_contract::foldUnusedShiftCarriers(
+            Func, getTargetRegInfo(TheArch), Fmt)) {
+      runDce(Func);
+      debugVerifyMedFunc(Func, "foldUnusedShiftCarriers");
     }
     detectCc(Func, TheArch, Fmt, BoundEntry);
     completeX86RegistrationEntryParameters(Func);

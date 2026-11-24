@@ -51,11 +51,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "PipelineReturnModelingDetail.h"
-#include "PipelineShiftedReturnPaths.h"
 
 #include "neverd/Common.h"
 #include "neverd/backend/c/MsvcCallee.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X86FPState.h"
 #include "neverd/ir/X86/X87Context.h"
@@ -74,6 +74,7 @@
 #include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
+#include "neverd/ir/med/MedShiftedReturnPaths.h"
 #include "neverd/ir/med/MedStackGuard.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/ir/med/X86/X86RegistrationFrame.h"
@@ -183,7 +184,7 @@ struct FunctionFacts {
   };
   std::vector<ReturnSite> Returns;
   bool SelectsReturnValue = false;
-  bool HasVariableShift = false;
+  bool HasScalarShift = false;
   /// Whether any operation or PHI writes the return register.  A return
   /// whose value no backward walk finds holds the entry value only when
   /// none does; otherwise a join can hide a value written before it.
@@ -316,7 +317,7 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
       Demand.define(Phi);
     }
     for (const MedOp &Op : Block.Ops) {
-      Facts.HasVariableShift |= return_contract::isVariableShift(Op);
+      Facts.HasScalarShift |= return_contract::isScalarShift(Op);
       Facts.WritesReturnRegister |=
           writesReturnRegister(Op, Op.Output, TRI) ||
           llvm::any_of(Op.IntrinsicOutputs, [&](const MedVar &Output) {
@@ -1059,7 +1060,7 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
   if (Func.AnalysisOnly || !Bytes || Bytes > sizeof(uint64_t))
     return false;
   const auto Arms = literalReturnArms(F, TRI, Bytes);
-  const bool HasShiftAndJoin = F.HasVariableShift && !F.Phis.empty();
+  const bool HasShiftAndJoin = F.HasScalarShift && !F.Phis.empty();
   if (Arms.Literals.size() < 2 && Arms.Shifts.size() < 2 && !HasShiftAndJoin)
     return false;
   llvm::DenseSet<std::pair<va_t, va_t>> TableEdges;
@@ -1117,7 +1118,7 @@ static bool selectsLiteralReturns(const FunctionFacts &F,
   }
   if (!HasShiftAndJoin)
     return false;
-  unsigned Work = limits::pipeline::kPipelineReturnShiftPathWork;
+  unsigned Work = limits::ir::kMedShiftedReturnPathWork;
   for (const auto &Site : F.Returns)
     if (Site.Value && Site.Value->Size >= Bytes && Site.Block->Succs.empty() &&
         Site.Block->ExceptionalSuccs.empty() && Visited.test(Site.Block->Id) &&
