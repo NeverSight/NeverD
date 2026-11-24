@@ -942,6 +942,16 @@ the raw object. With `--publish`, NeverD checks the
 relocated object and its final installed unwind ranges. This also exercises
 the classic r6 conversion described above.
 
+On macOS with Clang, `AArch64EntryABI.PublishSignedNativeInputs` and
+`AArch64EntryABI.RejectsOccupiedNativeInputs` also run directly under CTest.
+Each builds a private arm64e dylib with the independent C++ caller and 26
+trapping entry points. The first test installs the reconstructed entries and
+checks the receipt against the output image. The second occupies the
+original TEXT tail and checks that publication fails before writing an
+output. Both work on a host that can link arm64e even when it cannot execute
+that slice. The verifier supplies explicit inputs to the same tests for
+the complete O0/O2, IA/IB and compact/DWARF matrix.
+
 Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
 same reconstructed fixed-C entry matrix. Each original dylib contains 26
 public trapping entries and the independently compiled native caller/thrower.
