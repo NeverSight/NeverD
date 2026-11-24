@@ -26242,12 +26242,29 @@ The experimental [MIPS analysis](mips.md) path has focused targets
 `NeverDMIPSTests` (ELF admission, endian data, GOT/PLT and unwind records),
 `NeverDMIPSIntegerTests` (integer semantics and pinned Unicorn),
 `NeverDMIPSFlowTests` (delay-slot ownership, capture and annulment),
-`NeverDMIPSSDKTests` (physical disassembly rows and flow) and
-`NeverDMIPSPipelineTests` (ABI recovery and both source paths).
+`NeverDMIPSSDKTests` (physical disassembly rows, flow and the public ELF
+object roundtrip), `NeverDMIPSPipelineTests` (ABI recovery and both source
+paths), and `NeverDMIPSObjectTests` (native ELF flags, ABI records,
+instruction modes, fixed-address output and code generation diagnostics).
 
 ```sh
-python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests neverd --parallel 4
+python3 scripts/build.py build-mips --target NeverDMIPSTests NeverDMIPSIntegerTests NeverDMIPSFlowTests NeverDMIPSSDKTests NeverDMIPSPipelineTests NeverDMIPSObjectTests neverd --parallel 4
 ctest --test-dir build-mips --build-config Release -L '^NeverDMIPS.*Tests$' --output-on-failure --parallel 4
+```
+
+The native object roundtrip runs a GNU-assembled function and the object from
+`neverd_lift_to_obj` with the same caller under QEMU. Its 32 profiles cover
+classic Release 2 and Release 6 o32/n32/n64, MIPS16 and microMIPS o32,
+historical MIPS I/II o32, and historical MIPS III/IV/V n32/n64, each in both
+byte orders. All 32 GNU originals run on compatible QEMU CPUs. The SDK objects
+run for 24 profiles. The other eight verify the missing historical execution
+context diagnostic and an empty object for I–III inputs. On Linux it uses `qemu-user` and GNU binutils for
+`mips-linux-gnu`, `mipsel-linux-gnu`, `mips64-linux-gnuabi64` and
+`mips64el-linux-gnuabi64`. Each case removes its temporary ELF files after
+execution.
+
+```sh
+python3 unittests/lift/mips/native-object-roundtrip.py --sdk build-mips/bin/libneverd.so --output build-mips/mips-native-execution.json
 ```
 
 `unittests/lift/mips/roundtrip.py` is an additional standalone differential

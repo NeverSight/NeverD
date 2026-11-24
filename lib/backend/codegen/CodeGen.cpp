@@ -39,6 +39,7 @@
 #include "llvm/MC/BinaryRewrite.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Debug.h"
@@ -112,6 +113,19 @@ static bool tripleMatchesTarget(const llvm::Triple &TT, Arch TargetArch,
       (ObjectFormat == BinaryFormat::COFF && TT.isOSBinFormatCOFF());
   if (!MatchesFormat)
     return false;
+
+  if (isMIPS(TargetArch)) {
+    if (ObjectFormat != BinaryFormat::ELF)
+      return false;
+    const llvm::Triple Expected(llvmCodegenTriple(TargetArch, ObjectFormat));
+    if (TT.getArch() != Expected.getArch() ||
+        TT.isABIN32() != isMIPSN32(TargetArch))
+      return false;
+    // LLVM selects n64 for a 64-bit MIPS triple without an n32 environment.
+    const auto Env = TT.getEnvironment();
+    return isMIPSN64(TargetArch) ||
+           (Env != llvm::Triple::GNUABI64 && Env != llvm::Triple::MuslABI64);
+  }
 
   switch (TargetArch) {
   case Arch::X64:
@@ -407,6 +421,18 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                BinaryFormat ObjectFormat,
                                llvm::StringRef TargetTriple,
                                ObjectConsumer Consumer) {
+  std::string Diagnostic;
+  return compile(Mod, TargetArch, ObjectFormat, TargetTriple, Consumer, nullptr,
+                 Diagnostic);
+}
+
+CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
+                               BinaryFormat ObjectFormat,
+                               llvm::StringRef TargetTriple,
+                               ObjectConsumer Consumer,
+                               const MIPSImageMetadata *MIPSProfile,
+                               std::string &Diagnostic) {
+  Diagnostic.clear();
   CodegenResult Result;
   initializeLLVMCodegenTargets();
   if (!supportsX86NativeExtensions(Mod))
@@ -433,10 +459,16 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
     return Result;
   }
 
-  llvm::Triple TT(TargetTriple.empty() ? llvm::StringRef(TripleStr)
-                                       : TargetTriple);
-  if (!tripleMatchesTarget(TT, TargetArch, ObjectFormat))
+  const llvm::StringRef TripleName =
+      TargetTriple.empty() ? llvm::StringRef(TripleStr) : TargetTriple;
+  llvm::Triple TT(isMIPS(TargetArch) ? llvm::Triple::normalize(TripleName)
+                                     : TripleName.str());
+  if (!tripleMatchesTarget(TT, TargetArch, ObjectFormat)) {
+    llvm::WithColor::error()
+        << "codegen: target triple '" << TT.str() << "' does not match "
+        << getArchName(TargetArch) << " and the requested object format\n";
     return Result;
+  }
   if (!supportsAArch64ReturnUnwind(Mod, TT))
     return Result;
   Mod.setTargetTriple(TT);
@@ -461,7 +493,21 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
   (void)Consumer;
 #endif
   auto RM = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
-  auto [CPU, Features] = detectTargetFeatures(Mod, TargetArch);
+  std::string CPU, Features;
+  if (isMIPS(TargetArch)) {
+    auto Target =
+        configureMIPSELFCodegen(Mod, TargetArch, *TheTarget, MIPSProfile, *RM);
+    if (!Target) {
+      Diagnostic = llvm::toString(Target.takeError());
+      llvm::WithColor::error() << Diagnostic << '\n';
+      return Result;
+    }
+    CPU = std::move(Target->CPU);
+    Features = std::move(Target->Features);
+    RM = Target->Relocation;
+  } else {
+    std::tie(CPU, Features) = detectTargetFeatures(Mod, TargetArch);
+  }
   if (!Features.empty())
     LLVM_DEBUG(llvm::dbgs() << "codegen: " << getArchName(TargetArch)
                             << " features: " << Features << "\n");
@@ -539,6 +585,12 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
       continue;
 
     CodegenResult::FuncEntry FE;
+    if (isMIPS(TargetArch)) {
+      const llvm::object::ELFSymbolRef ELFSym(Sym);
+      if (ELFSym.getELFType() != llvm::ELF::STT_FUNC)
+        continue;
+      FE.Size = ELFSym.getSize();
+    }
     FE.Name = NameOrErr->str();
     FE.Offset = *AddrOrErr;
     llvm::StringRef FENameRef(FE.Name);
@@ -552,10 +604,8 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
     if (SecOrErr && *SecOrErr != Obj.section_end()) {
       auto Sec = **SecOrErr;
       auto SecNameStr = Sec.getName();
-      if (SecNameStr && section_names::isTextSectionName(*SecNameStr)) {
-        FE.Size = 0;
+      if (SecNameStr && section_names::isTextSectionName(*SecNameStr))
         Result.Functions.push_back(FE);
-      }
     }
   }
 
@@ -618,6 +668,15 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::Module &Mod, Arch TargetArch,
     const llvm::mc_rewrite::RewriteOptions &Opts, BinaryFormat ObjectFormat,
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
+  return compileForRewrite(Mod, TargetArch, Opts, ObjectFormat, TargetTriple,
+                           InputKind, nullptr);
+}
+
+llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
+    llvm::Module &Mod, Arch TargetArch,
+    const llvm::mc_rewrite::RewriteOptions &Opts, BinaryFormat ObjectFormat,
+    llvm::StringRef TargetTriple, RewriteInputKind InputKind,
+    const MIPSImageMetadata *MIPSProfile) {
   llvm::mc_rewrite::RewriteResult Result;
   initializeLLVMCodegenTargets();
   if (!supportsX86NativeExtensions(Mod)) {
@@ -635,9 +694,14 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     return Result;
   }
 
-  if (!archCodegenSupported(TargetArch)) {
+  bool Supported = archFileRewriteSupported(TargetArch);
+#ifdef LLVM_NEVERD_MIPS_ELF_REWRITE
+  Supported |= isMIPS(TargetArch) && ObjectFormat == BinaryFormat::ELF;
+#endif
+  if (!Supported) {
     llvm::WithColor::error()
-        << "codegen: unsupported arch " << getArchName(TargetArch) << "\n";
+        << "codegen: fixed-address rewriting is unsupported for "
+        << getArchName(TargetArch) << "\n";
     Result.ImageValid = false;
     return Result;
   }
@@ -652,7 +716,8 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
 
   const llvm::StringRef TripleName =
       TargetTriple.empty() ? llvm::StringRef(DefaultTriple) : TargetTriple;
-  llvm::Triple TT(TripleName);
+  llvm::Triple TT(isMIPS(TargetArch) ? llvm::Triple::normalize(TripleName)
+                                     : TripleName.str());
   if (!tripleMatchesTarget(TT, TargetArch, ObjectFormat)) {
     llvm::WithColor::error()
         << "codegen: target triple '" << TripleName
@@ -713,7 +778,18 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
           : llvm::Reloc::PIC_);
   std::string CPU;
   std::string Features;
-  if (TargetArch == Arch::ARM && isARMv7KTriple(TT)) {
+  if (isMIPS(TargetArch)) {
+    auto Target = configureMIPSELFCodegen(Mod, TargetArch, *TheTarget,
+                                          MIPSProfile, llvm::Reloc::Static);
+    if (!Target) {
+      llvm::WithColor::error() << llvm::toString(Target.takeError()) << '\n';
+      Result.ImageValid = false;
+      return Result;
+    }
+    CPU = std::move(Target->CPU);
+    Features = std::move(Target->Features);
+    RM = Target->Relocation;
+  } else if (TargetArch == Arch::ARM && isARMv7KTriple(TT)) {
     const std::set<std::string> Requirements = scanIntrinsicPatterns(Mod);
     if (auto Unsupported = findUnsupportedARMv7KRequirement(Requirements)) {
       llvm::WithColor::error()

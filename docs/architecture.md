@@ -19205,10 +19205,13 @@ does not admit unproved stack restores across calls. Ordinary RAM source
 equivalence assumes valid, accessible, aligned original accesses. LowIR fault
 order is tested independently; ordinary MedIR/C dead-load elimination still
 prevents a general source memory-fault equivalence claim.
-The official Archer C7 V5 example qualifies selected static function views,
-not an entire firmware image. This is an analysis-only addition to the matrix
-above: no MIPS rewrite or guest-process execution backend is claimed. See
-[MIPS support](mips.md) for rejected profiles, ABI limits and reproduction.
+The official Archer C7 V5 example qualifies selected static function views.
+For native ELF output, `configureMIPSELFCodegen` carries the loaded ISA, ABI
+and relocation model into the registered LLVM Mips target. The SDK exposes
+relocatable objects. The fork's final-address writer resolves representable
+jumps and preserves compressed entry pointers. Installation in a linked MIPS
+file and guest-process execution remain separate capabilities.
+[MIPS profiles and native output](mips.md#native-llvm-output).
 
 ## Where to edit
 

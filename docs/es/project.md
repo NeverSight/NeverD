@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 26bbbe32fa118fe31d79cefefa50beec2c54d4f406c2aa1c363edee7565ff5b6 -->
+<!-- i18n-source: 3d16cd0744810e185f3095c75abab93e54271d90e83f7f2335755c2c18b48c42 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Consulta las guías de [EVM](evm.md), [Solana SBF](sbf.md), [recuperación de c�
 
 > Todas las celdas de la matriz están implementadas, pero la profundidad de las pruebas de integración varía. Consulte la [matriz de cobertura de arquitectura](architecture.md#support-and-test-depth). Mach-O i386 usa objetos reubicables `thin` porque macOS moderno no puede enlazar ejecutables i386 históricos.
 
-**El análisis ELF de MIPS es experimental:** MIPS32r2/o32 y MIPS64r2/n64, en ambos órdenes de bytes, admiten un subconjunto estricto de instrucciones enteras para desensamblado, recuperación del CFG y salida en C y LLVM. No se admite la reescritura de código nativo. Consulta [la cobertura de MIPS y el ejemplo de firmware (inglés)](../mips.md) para conocer los subconjuntos microMIPS32, MIPS16e/e2, DSP y MIPS32r5 MSA validados por separado y sus restricciones de salida de código fuente.
+**MIPS ELF** admite desensamblado, recuperación del flujo de control y salida en C y LLVM. El SDK recompila las funciones compatibles en objetos ELF reubicables con el backend Mips de LLVM de NeverSight. Conserva el orden de bytes y la convención de llamada o32, n32 o n64. Para insertar el código en un ejecutable, el parcheador aún necesita un escritor de ELF para MIPS. [Perfiles MIPS y salida nativa (inglés)](../mips.md)
 
 El bytecode EVM legacy se soporta sin contenedor nativo: los 150 opcodes asignados
 de Frontier a Fusaka pasan por Low/Med/High IR, LLVM `i256` verificado, C23
@@ -202,7 +202,7 @@ La primera configuración compila el fork LLVM localmente (a menudo 30–60 min)
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r7
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r8
 cmake --build build
 ```
 
@@ -218,19 +218,19 @@ El paquete publicado se elige según el host que ejecuta CMake:
 
 Cada archivo se verifica con el resumen fijado en `cmake/NeverDLLVMPrebuilt.cmake`, o con su `.sha256` publicado para etiquetas no descritas allí, antes de extraerlo en `~/.cache/neverd-llvm/<tag>/<arch>/` o `NEVERD_LLVM_PREBUILT_CACHE_DIR`. Para la versión predeterminada, `BUILDINFO.txt` también debe identificar el commit exacto del submódulo LLVM. La publicación usa ccache en macOS/Linux y sccache con la caché de GitHub Actions para clang-cl en Windows. Las cachés solo aceleran recompilaciones y nunca se publican como artefactos.
 
-La revisión predeterminada es `neverd-llvm-v23.0.0-r7`. La etiqueta Git, el destino de publicación, el commit de origen y los tres resúmenes de archivo forman una referencia de origen versionada e inmutable. Los directorios que conservan la etiqueta base antigua, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5` o `neverd-llvm-v23.0.0-r6` migran automáticamente a `r7`, salvo que se configure `NEVERD_LLVM_PREBUILT_SHA256`. `Prebuilt LLVM Audit` se ejecuta en pushes, pull requests y cada seis horas; llama a `scripts/audit_prebuilt_llvm_release.py` para comparar la referencia con la publicación actual de GitHub y cada archivo de suma de comprobación.
+La revisión predeterminada es `neverd-llvm-v23.0.0-r8`. La etiqueta Git, el destino de publicación, el commit de origen y los tres resúmenes de archivo forman una referencia de origen versionada e inmutable. Los directorios que conservan la etiqueta base antigua, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6` o `neverd-llvm-v23.0.0-r7` migran automáticamente a `r8`, salvo que se configure `NEVERD_LLVM_PREBUILT_SHA256`. `Prebuilt LLVM Audit` se ejecuta en pushes, pull requests y cada seis horas; llama a `scripts/audit_prebuilt_llvm_release.py` para comparar la referencia con la publicación actual de GitHub y cada archivo de suma de comprobación.
 
-Si cambia el fork de LLVM pero LLVM sigue indicando `23.0.0`, publique la siguiente revisión de paquete, `neverd-llvm-v23.0.0-r8` y luego `-r9`, sin sobrescribir publicaciones ni inventar la versión LLVM `23.0.1`:
+Si cambia el fork de LLVM pero LLVM sigue indicando `23.0.0`, publique la siguiente revisión de paquete, `neverd-llvm-v23.0.0-r9` y luego `-r10`, sin sobrescribir publicaciones ni inventar la versión LLVM `23.0.1`:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r8 \
+  -f release_tag=neverd-llvm-v23.0.0-r9 \
   -f overwrite_existing_assets=false
 ```
 
-Tras completarse el flujo, actualice juntos la etiqueta predeterminada, el commit fijado y los tres resúmenes en `cmake/NeverDLLVMPrebuilt.cmake`. Cada revisión del paquete usa su propio directorio de caché; la revisión predeterminada actual se guarda en `.cache/neverd-llvm/neverd-llvm-v23.0.0-r7`. Un archivo obsoleto o republicado falla antes de extraerse. `overwrite_existing_assets` solo sirve para recuperación histórica y permanece desactivado en el flujo normal.
+Tras completarse el flujo, actualice juntos la etiqueta predeterminada, el commit fijado y los tres resúmenes en `cmake/NeverDLLVMPrebuilt.cmake`. Cada revisión del paquete usa su propio directorio de caché; la revisión predeterminada actual se guarda en `.cache/neverd-llvm/neverd-llvm-v23.0.0-r8`. Un archivo obsoleto o republicado falla antes de extraerse. `overwrite_existing_assets` solo sirve para recuperación histórica y permanece desactivado en el flujo normal.
 
 **Artefactos**
 

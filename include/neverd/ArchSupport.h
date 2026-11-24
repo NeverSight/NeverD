@@ -22,10 +22,15 @@ inline bool archLiftSupported(Arch A) {
          A == Arch::ARM || isMIPS(A);
 }
 
-/// Native rewriting requires a target backend as well as analysis semantics.
-inline bool archCodegenSupported(Arch A) {
+/// Installing code in an existing image needs its fixups and layout writer.
+inline bool archFileRewriteSupported(Arch A) {
   return A == Arch::X64 || A == Arch::AArch64 || A == Arch::X86 ||
          A == Arch::ARM;
+}
+
+/// MIPS has a relocatable ELF writer in the linked LLVM backend.
+inline bool archCodegenSupported(Arch A) {
+  return archFileRewriteSupported(A) || isMIPS(A);
 }
 
 /// Whether every instruction of an \p A image decodes in the one mode the
@@ -43,11 +48,17 @@ constexpr bool archLittleEndian(Arch A) {
          A == Arch::MIPS64O32EL;
 }
 
-inline bool archMachOPatchSupported(Arch A) { return archCodegenSupported(A); }
+inline bool archMachOPatchSupported(Arch A) {
+  return archFileRewriteSupported(A);
+}
 
-inline bool archCOFFPatchSupported(Arch A) { return archCodegenSupported(A); }
+inline bool archCOFFPatchSupported(Arch A) {
+  return archFileRewriteSupported(A);
+}
 
-inline bool archELFPatchSupported(Arch A) { return archCodegenSupported(A); }
+inline bool archELFPatchSupported(Arch A) {
+  return archFileRewriteSupported(A);
+}
 
 constexpr uint64_t kPageSize4K = 0x1000;
 constexpr uint64_t kPageSize16K = 0x4000;

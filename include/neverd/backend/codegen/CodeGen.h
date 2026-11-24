@@ -27,6 +27,7 @@
 namespace neverd {
 
 struct BinaryImage;
+struct MIPSImageMetadata;
 
 /// An installed entry and the compiler-owned function it actually targets.
 struct PatchedFunctionEntry {
@@ -116,7 +117,7 @@ enum class ObjectConsumer { PlatformLinker, FinalImageInstaller };
 /// code generation. This never removes a runtime or protection requirement.
 llvm::Error validateReplacementIR(const llvm::Module &Module, Arch TargetArch);
 
-/// LLVM IR -> relocatable object for all four ISAs (see ArchSupport.h).
+/// LLVM IR -> relocatable object for a supported ISA and object format.
 class Codegen {
 public:
   CodegenResult
@@ -124,6 +125,13 @@ public:
           BinaryFormat ObjectFormat = BinaryFormat::MachO,
           llvm::StringRef TargetTriple = {},
           ObjectConsumer Consumer = ObjectConsumer::PlatformLinker);
+
+  /// Retain the source ELF's MIPS ISA and ABI during object emission.
+  CodegenResult compile(llvm::Module &Mod, Arch TargetArch,
+                        BinaryFormat ObjectFormat, llvm::StringRef TargetTriple,
+                        ObjectConsumer Consumer,
+                        const MIPSImageMetadata *MIPSProfile,
+                        std::string &Diagnostic);
 
   /// Compile directly to fixed-up image bytes using the caller's address
   /// model, bypassing the relocatable object intermediate format.
@@ -142,6 +150,14 @@ public:
                     const llvm::mc_rewrite::RewriteOptions &Opts,
                     BinaryFormat ObjectFormat, llvm::StringRef TargetTriple,
                     RewriteInputKind InputKind = RewriteInputKind::LiftedIR);
+
+  /// Use the source MIPS ELF's ABI, instruction profile and relocation model.
+  llvm::mc_rewrite::RewriteResult
+  compileForRewrite(llvm::Module &Mod, Arch TargetArch,
+                    const llvm::mc_rewrite::RewriteOptions &Opts,
+                    BinaryFormat ObjectFormat, llvm::StringRef TargetTriple,
+                    RewriteInputKind InputKind,
+                    const MIPSImageMetadata *MIPSProfile);
 };
 
 /// Patch pre-pass (PIE/ASLR safety). Rewrites absolute pointer constants

@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 26bbbe32fa118fe31d79cefefa50beec2c54d4f406c2aa1c363edee7565ff5b6 -->
+<!-- i18n-source: 3d16cd0744810e185f3095c75abab93e54271d90e83f7f2335755c2c18b48c42 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 
 > 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](architecture.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
 
-**MIPS ELF 解析は実験的な対応です。** MIPS32r2/o32 と MIPS64r2/n64 の両エンディアンで、厳密に限定した整数命令の逆アセンブル、CFG 復元、C および LLVM 出力に対応します。ネイティブコードの書き換えには対応していません。[MIPS の対応範囲とファームウェアの例（英語）](../mips.md)で、個別に検証された microMIPS32、MIPS16e/e2、DSP、MIPS32r5 MSA の各サブセットとソース出力の制約を確認してください。
+**MIPS ELF** の逆アセンブル、制御フローの復元、C および LLVM 出力に対応しています。SDK は NeverSight 版 LLVM の Mips バックエンドで対応関数を再配置可能な ELF オブジェクトに再コンパイルし、元のバイト順と呼び出し規約（o32、n32、n64）を保持します。実行ファイルに書き戻すには、パッチャーに MIPS ELF の書き込み処理を追加する必要があります。[MIPS プロファイルとネイティブ出力（英語）](../mips.md)
 
 legacy EVM bytecode は native container と独立して対応します。Frontier から Fusaka
 までの 150 assigned opcode が専用 Low/Med/High IR、verified LLVM `i256`、C23
@@ -202,7 +202,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r7
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r8
 cmake --build build
 ```
 
@@ -218,19 +218,19 @@ NeverD の通常の push および pull request CI は、意図的に LLVM submo
 
 各アーカイブは `~/.cache/neverd-llvm/<tag>/<arch>/`（または `NEVERD_LLVM_PREBUILT_CACHE_DIR` の指定先）への展開前に、`cmake/NeverDLLVMPrebuilt.cmake` の固定ダイジェストで検証されます。固定値の対象外のタグでは、公開された `.sha256` を使います。既定の固定版では `BUILDINFO.txt` の LLVM サブモジュールコミットも完全一致が必要です。リリースビルドは macOS/Linux で ccache、Windows clang-cl で sccache と GitHub Actions キャッシュを使用します。コンパイラーキャッシュは再ビルドの高速化専用で、リリース成果物には含めません。
 
-既定のパッケージ改訂版は `neverd-llvm-v23.0.0-r7` です。Git タグ、リリース対象、ソースコミット、3アーカイブのダイジェストを不可変の改訂版として固定します。古い基本タグ、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6` をキャッシュしたビルドディレクトリは、明示的な `NEVERD_LLVM_PREBUILT_SHA256` がなければ自動で `r7` に移行します。`Prebuilt LLVM Audit` は push、pull request、6時間ごとに実行され、`scripts/audit_prebuilt_llvm_release.py` が固定値と GitHub の現在のリリースおよび各チェックサムファイルを照合します。
+既定のパッケージ改訂版は `neverd-llvm-v23.0.0-r8` です。Git タグ、リリース対象、ソースコミット、3アーカイブのダイジェストを不可変の改訂版として固定します。古い基本タグ、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7` をキャッシュしたビルドディレクトリは、明示的な `NEVERD_LLVM_PREBUILT_SHA256` がなければ自動で `r8` に移行します。`Prebuilt LLVM Audit` は push、pull request、6時間ごとに実行され、`scripts/audit_prebuilt_llvm_release.py` が固定値と GitHub の現在のリリースおよび各チェックサムファイルを照合します。
 
-LLVM fork が変更されても LLVM のバージョンが `23.0.0` の場合は、次のパッケージ改訂版 `neverd-llvm-v23.0.0-r8`、続いて `-r9` を公開します。既存リリースの上書きや架空の LLVM バージョン `23.0.1` は使用しません。
+LLVM fork が変更されても LLVM のバージョンが `23.0.0` の場合は、次のパッケージ改訂版 `neverd-llvm-v23.0.0-r9`、続いて `-r10` を公開します。既存リリースの上書きや架空の LLVM バージョン `23.0.1` は使用しません。
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r8 \
+  -f release_tag=neverd-llvm-v23.0.0-r9 \
   -f overwrite_existing_assets=false
 ```
 
-成功後は `cmake/NeverDLLVMPrebuilt.cmake` の既定タグ、固定コミット、3つのダイジェストを同時に更新します。パッケージの改訂版ごとに専用のキャッシュディレクトリを使い、現在の既定版は `.cache/neverd-llvm/neverd-llvm-v23.0.0-r7` 以下に保存されます。古い、または再公開されたアーカイブは展開前に拒否されます。`overwrite_existing_assets` は旧版復旧専用で、通常の改訂版公開では無効にします。
+成功後は `cmake/NeverDLLVMPrebuilt.cmake` の既定タグ、固定コミット、3つのダイジェストを同時に更新します。パッケージの改訂版ごとに専用のキャッシュディレクトリを使い、現在の既定版は `.cache/neverd-llvm/neverd-llvm-v23.0.0-r8` 以下に保存されます。古い、または再公開されたアーカイブは展開前に拒否されます。`overwrite_existing_assets` は旧版復旧専用で、通常の改訂版公開では無効にします。
 
 **成果物**
 

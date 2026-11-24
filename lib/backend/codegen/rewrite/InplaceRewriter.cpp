@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ArchSupport.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
@@ -117,6 +118,11 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
                                      llvm::Module &Mod,
                                      const BinaryImage &Image,
                                      Arch TargetArch) {
+  if (!archFileRewriteSupported(TargetArch)) {
+    llvm::WithColor::error()
+        << "inplace: unsupported arch " << getArchName(TargetArch) << "\n";
+    return {};
+  }
   if (!isSingleInstructionMode(Image.Mode) &&
       !(Image.Mode == InstructionMode::MixedARMThumb &&
         TargetArch == Arch::ARM && Image.Format == BinaryFormat::ELF)) {

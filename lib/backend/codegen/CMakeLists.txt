@@ -56,6 +56,7 @@ add_neverd_component_library(NeverDCodeGen
   CodeGenPointerAuth.cpp
   AArch64/CodeGenAArch64.cpp
   ARM/CodeGenARM.cpp
+  MIPS/CodeGenMIPS.cpp
   CodeGenSymbolize.cpp
   X86/CodeGenX86.cpp
   CompiledImage.cpp
