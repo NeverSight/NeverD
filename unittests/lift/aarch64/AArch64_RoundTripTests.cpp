@@ -140,9 +140,17 @@ TEST_F(AArch64_RoundTrip, LiveInIdentityAndCallClobbersStayExact) {
   llvm::StringRef Header(PostCall.data(), Open);
   EXPECT_TRUE(Header.contains("(void)")) << Header.str();
   EXPECT_FALSE(Header.contains("arg1")) << Header.str();
-  EXPECT_EQ(PostCall.find("caller-saved register clobbered by call: unknown"),
+  EXPECT_NE(PostCall.find("test_unproved_call_leaf("), std::string::npos)
+      << PostCall;
+  EXPECT_NE(PostCall.find("(__builtin_trap(), 0 /* no recovered semantics"),
             std::string::npos)
       << PostCall;
+
+  const auto LocalCall = functionText(C, "test_post_local_call_x1");
+  ASSERT_FALSE(LocalCall.empty()) << C;
+  EXPECT_NE(LocalCall.find("test_call_leaf("), std::string::npos) << LocalCall;
+  EXPECT_NE(LocalCall.find("arg1"), std::string::npos) << LocalCall;
+  EXPECT_EQ(LocalCall.find("__builtin_trap"), std::string::npos) << LocalCall;
 
   std::string NarrowReturn = functionText(C, "test_post_call_w0");
   ASSERT_FALSE(NarrowReturn.empty()) << C;
@@ -160,6 +168,12 @@ TEST_F(AArch64_RoundTrip, LiveInIdentityAndCallClobbersStayExact) {
       countOccurrences(LLVM.out, "%X1_call_clobber_unknown = freeze i64 undef"),
       1u)
       << LLVM.out;
+  const auto LocalLLVM = functionText(LLVM.out, "@test_post_local_call_x1");
+  ASSERT_FALSE(LocalLLVM.empty()) << LLVM.out;
+  EXPECT_NE(LocalLLVM.find("icmp eq i64 %arg1, 0"), std::string::npos)
+      << LocalLLVM;
+  EXPECT_EQ(LocalLLVM.find("X1_call_clobber_unknown"), std::string::npos)
+      << LocalLLVM;
   std::string NarrowLLVM = functionText(LLVM.out, "@test_post_call_w0");
   ASSERT_FALSE(NarrowLLVM.empty()) << LLVM.out;
   EXPECT_NE(NarrowLLVM.find("call i64 @test_call_leaf(i64 41)"),
@@ -191,7 +205,9 @@ TEST_F(AArch64_RoundTrip, LiveInIdentityAndCallClobbersStayExact) {
 
   std::string FMinNum = functionText(C, "test_fminnm_f64");
   ASSERT_FALSE(FMinNum.empty()) << C;
-  EXPECT_NE(FMinNum.find("__builtin_fmin("), std::string::npos) << FMinNum;
+  EXPECT_NE(FMinNum.find("__builtin_elementwise_min(arg0, arg1)"),
+            std::string::npos)
+      << FMinNum;
   EXPECT_EQ(FMinNum.find("unknown"), std::string::npos) << FMinNum;
 
   std::string Q9LLVM = functionText(LLVM.out, "@test_post_call_q9_upper");
