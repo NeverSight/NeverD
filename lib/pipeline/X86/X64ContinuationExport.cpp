@@ -273,12 +273,15 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
         "native RTM abort steps require successful-RAM kernel-events-v6 "
         "with a single RTM binding and no event scheduler");
   if (const auto *V = Object->get("qemu_xbegin_fault_v1")) {
+    // Automatic admission makes no CPU assertion. Only remaining native
+    // pairs can reach it after the observed instruction is lowered.
     if (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
         Options.PagedMemory || Options.ScheduledEvents ||
         Result.NativeRtmRegions || Result.NativeRtmAbortRegions ||
-        Result.RtmSteps.Kind != X64RtmAbortSelection::Off)
+        (Result.RtmSteps.Kind != X64RtmAbortSelection::Off &&
+         Result.RtmSteps.Kind != X64RtmAbortSelection::Probe))
       return invalid("observed XBEGIN fault requires successful-RAM V6 with a "
-                     "single RTM binding and no event scheduler");
+                     "single CPU binding and no event scheduler");
     auto Capture =
         X64RtmFaultCapture::read(*V, ImageBase, *Options.PagingAddressBits);
     if (!Capture)
@@ -788,10 +791,9 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     if (Unit.EntryValidation)
       if (auto Error = AddFunction(*Unit.EntryValidation, Unit.SourceABI))
         return std::move(Error);
-    if (auto Error = AddFunction(
-            Unit.Function, Unit.SourceABI,
-            Request->Options.ObservedXbeginFault &&
-                Unit.Address == Request->Options.ObservedXbeginFault->Address))
+    if (auto Error =
+            AddFunction(Unit.Function, Unit.SourceABI,
+                        Request->Options.observedXbeginFaultAt(Unit.Address)))
       return std::move(Error);
     bool NativeBoundary = Unit.RequiresNativeExecution;
     if (NativeBoundary && Request->RtmSteps.Kind != X64RtmAbortSelection::Off &&

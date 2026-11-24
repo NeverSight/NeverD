@@ -5338,6 +5338,16 @@ HighCWriter::exprStrAsTypedArg(const HighExpr &E, const TypeRef &Expected,
   if (Expected && Expected->Kind == NdTypeKind::Int && !Expected->IsEnum &&
       printsAsPointer(Text))
     return "(" + Parameter() + ")(uintptr_t)" + castOperand(Text);
+  // Machine pointer types omit source qualifiers. C can add const to the
+  // immediate pointee, but cannot implicitly pass T ** as const T **.
+  // Use the selected declaration's type at this call boundary.
+  if (Spelled && Expected && Expected->Kind == NdTypeKind::Ptr &&
+      Expected->Pointee && Expected->Pointee->Kind == NdTypeKind::Ptr &&
+      Text != "0") {
+    const std::string Cast = "(" + *Spelled + ")";
+    if (!llvm::StringRef(Text).starts_with(Cast))
+      return Cast + castOperand(Text);
+  }
   // So does a function pointer of another type to a function-pointer
   // parameter: a stub's prototype spells qsort's comparator
   // `int32_t (*)(void*, void*)` where its caller's parameter keeps the
@@ -9191,8 +9201,11 @@ std::string HighCWriter::formatReturnExpr(const HighExpr &Expr) {
         !Raw->Operands.empty() && Raw->Operands[0] && Raw->Operands[0]->Type &&
         Raw->Operands[0]->Type->Size == FuncReturnType->Size)
       Raw = Raw->Operands[0].get();
+    // Integer bits are the float's: those of a vector register, wider than
+    // the float, hold it in their low bytes.  C converts an integer it
+    // returns as a float numerically, so they are reinterpreted.
     if (Raw->Type && Raw->Type->Kind == NdTypeKind::Int &&
-        Raw->Type->Size == FuncReturnType->Size) {
+        Raw->Type->Size >= FuncReturnType->Size) {
       auto RawType = NdType::makeInt(FuncReturnType->Size, false);
       return "__builtin_bit_cast(" + typeToC(FuncReturnType) + ", (" +
              typeToC(RawType) + ")(" + exprStr(*Raw) + "))";

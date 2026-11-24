@@ -1689,6 +1689,135 @@ TEST(ReturnContracts, VariableShiftsNeedDisjointObservedResults) {
   EXPECT_FALSE(Kept());
 }
 
+TEST(ReturnContracts, PairedShiftPathsCloseEveryBackedgeBeforeSelectingAValue) {
+  const auto C = [](uint64_t N) { return MedVar::makeConst(N, 8); };
+  const auto RCX = [](int V) { return inRegister(x86reg::RCX, 8, 20, V); };
+  const auto Choose = [&](int Target, int Cond) {
+    return operation(NdOp::COND_BR, {},
+                     {C(CalleeEntry + 16 * Target), temporary(Cond)});
+  };
+  MedFunc F = function(
+      CalleeEntry,
+      {block({seed(), Choose(4, 11)}, {}, {1, 4}),
+       block({Choose(3, 12)}, {0}, {2, 3}),
+       block({operation(NdOp::COPY, rax(1), {C(1)}),
+              operation(NdOp::COPY, RCX(1), {C(0)})},
+             {1}, {5}),
+       block({operation(NdOp::COPY, rax(2), {C(4)}),
+              operation(NdOp::COPY, RCX(2), {C(1)})},
+             {1}, {5}),
+       block({returning(rax(0))}, {0}),
+       block({Choose(7, 13)}, {2, 3, 6}, {6, 7}),
+       block({operation(NdOp::INT_XOR, rax(4), {rax(3), C(2)}),
+              operation(NdOp::INT_XOR, RCX(4), {RCX(3), C(2)})},
+             {5}, {5}),
+       block({operation(NdOp::INT_AND, temporary(14), {RCX(3), C(63)}),
+              operation(NdOp::INT_LEFT, rax(5), {rax(3), temporary(14)}),
+              returning(rax(5))},
+             {5})});
+  for (auto &B : F.Blocks)
+    B.StartAddr = CalleeEntry + 16 * B.Id;
+  auto ZeroFlag = inRegister(x86reg::ZF, 1, 21, 1);
+  ZeroFlag.Kind = MedVar::Flag;
+  F.Blocks[5].Ops.insert(
+      F.Blocks[5].Ops.begin(),
+      operation(NdOp::INT_EQUAL, ZeroFlag, {temporary(13), C(0)}));
+  auto &Phis = F.Blocks[5].Phis;
+  Phis.push_back({rax(3), {{3, rax(2)}, {6, rax(4)}, {2, rax(1)}}, {}});
+  Phis.push_back({RCX(3), {{2, RCX(1)}, {3, RCX(2)}, {6, RCX(4)}}, {}});
+  const auto IsVoid = [&] { return bool(settle({F}).front()); };
+  EXPECT_FALSE(IsVoid()); // {1,12} and {8,48}, including zero iterations.
+  {
+    MedFunc Narrow = F;
+    auto Low = temporary(19);
+    Low.Size = 1;
+    auto &Ops = Narrow.Blocks.back().Ops;
+    Ops.back() = operation(NdOp::SUBBYTES, Low, {rax(5), C(0)});
+    Ops.push_back(returning(Low));
+    EXPECT_TRUE(settle({Narrow}).front());
+    Narrow.ReturnType = NdType::makeInt(1);
+    EXPECT_FALSE(settle({Narrow}).front());
+  }
+  {
+    MedFunc Masked = F;
+    Masked.Blocks[7].Ops.pop_back();
+    Masked.Blocks[7].Succs = {8};
+    auto &Exit = Masked.Blocks.emplace_back(block(
+        {operation(NdOp::INT_AND, rax(6), {rax(5), C(7)}), returning(rax(6))},
+        {7}));
+    Exit.Id = 8;
+    Exit.StartAddr = CalleeEntry + 16 * Exit.Id;
+    EXPECT_FALSE(settle({Masked}).front()); // {1,4} and {0} at the return.
+    Exit.Ops.front().Inputs[1] = C(3);
+    EXPECT_TRUE(settle({Masked}).front()); // Both can return zero.
+    Masked.Blocks[7].Ops.back().Output = temporary(20);
+    Exit.Ops.front().Inputs = {rax(3), C(7)};
+    EXPECT_TRUE(settle({Masked}).front()); // The shift no longer feeds it.
+  }
+  // One latch changes only the value and the other only the count. Both
+  // must run before the changed count can make the two arms return six.
+  {
+    MedFunc TwoLatches = F;
+    MedBlock First = F.Blocks[6], Second = First;
+    First.Id = 8;
+    Second.Id = 9;
+    First.StartAddr = CalleeEntry + 16 * First.Id;
+    Second.StartAddr = CalleeEntry + 16 * Second.Id;
+    First.Preds = Second.Preds = {6};
+    First.Ops[1] = operation(NdOp::COPY, RCX(4), {RCX(3)});
+    Second.Ops[0] = operation(NdOp::COPY, rax(6), {rax(3)});
+    Second.Ops[1].Output = RCX(6);
+    Second.Ops[1].Inputs[1] = C(64);
+    auto &Split = TwoLatches.Blocks[6];
+    Split.Ops = {Choose(9, 16)};
+    Split.Succs = {8, 9};
+    auto &Head = TwoLatches.Blocks[5];
+    Head.Preds = {2, 3, 8, 9};
+    for (auto &P : Head.Phis) {
+      for (auto &Arg : P.Args)
+        if (Arg.first == 6)
+          Arg.first = 8;
+      P.Args.emplace_back(9, P.Output.RegOff == x86reg::RCX ? RCX(6) : rax(6));
+    }
+    TwoLatches.Blocks.push_back(std::move(First));
+    TwoLatches.Blocks.push_back(std::move(Second));
+    EXPECT_FALSE(settle({TwoLatches}).front());
+    TwoLatches.Blocks.back().Ops[1].Inputs[1] = C(1);
+    EXPECT_TRUE(settle({TwoLatches}).front());
+  }
+  F.Blocks[6].Ops.back().Inputs[1] = C(1);
+  EXPECT_TRUE(IsVoid()); // Both arms can return six after one lap.
+  F.Blocks[6].Ops.back().Inputs[1] = C(2);
+  std::reverse(Phis.begin(), Phis.end());
+  EXPECT_FALSE(IsVoid());
+  auto Original = Phis.front().Args;
+  Phis.front().Args.pop_back();
+  EXPECT_TRUE(IsVoid());
+  Phis.front().Args = Original;
+  F.Blocks[6].Ops.push_back(
+      operation(NdOp::STORE, {}, {temporary(15), rax(4)}));
+  EXPECT_TRUE(IsVoid());
+  F.Blocks[6].Ops.pop_back();
+  F.Blocks[6].Ops.back().Opcode = NdOp::INT_ADD;
+  EXPECT_TRUE(
+      IsVoid()); // An unfinished sequence of distinct states is no proof.
+
+  // Both PHIs read the previous header on a backedge that swaps the values.
+  // (0,2) becomes (2,0) and collides with (1,1). Sequential assignments
+  // could instead make (2,2) and miss the collision.
+  F.Blocks[2].Ops[0].Inputs[0] = C(0);
+  F.Blocks[2].Ops[1].Inputs[0] = C(2);
+  F.Blocks[3].Ops[0].Inputs[0] = C(1);
+  F.Blocks[6].Ops.clear();
+  for (auto &P : Phis)
+    for (auto &[From, Value] : P.Args)
+      if (From == 6)
+        Value = P.Output.RegOff == x86reg::RCX ? rax(3) : RCX(3);
+  EXPECT_TRUE(IsVoid());
+  std::reverse(Phis.begin(), Phis.end());
+  EXPECT_TRUE(IsVoid());
+}
+
 TEST(ReturnContracts, SharedRegisterViewsNeedTheirOwnCompleteIncomingValue) {
   const auto C = [](uint64_t V) { return MedVar::makeConst(V, 8); };
   const auto Byte = [](unsigned V) { return MedVar::makeConst(V, 1); };
@@ -2185,6 +2314,155 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0, 0)), voi
                "every earlier count must preserve an observable difference");
 int main(void) { choose_result(1, 1); choose_result(0, 257); return 0; }
 )");
+}
+
+TEST(ReturnContract, SharedX86VariableShiftCrossesTwoJoins) {
+  const auto WithCounts = [](uint8_t Right, uint8_t Left, uint8_t Third) {
+    return std::vector<uint8_t>{
+        // cmp rsi,257; je bare; test esi,1; jnz third
+        0x48, 0x81, 0xfe, 1, 1, 0, 0, 0x74, 42, 0xf7, 0xc6, 1, 0, 0, 0, 0x75,
+        40,
+        // cmp rdi,0; je left
+        0x48, 0x83, 0xff, 0, 0x74, 14,
+        // mov rax,2; mov ecx,Right; jmp inner
+        0x48, 0xc7, 0xc0, 2, 0, 0, 0, 0xb9, Right, 0, 0, 0, 0xeb, 15,
+        // left: mov rax,1; mov ecx,Left; jmp inner
+        0x48, 0xc7, 0xc0, 1, 0, 0, 0, 0xb9, Left, 0, 0, 0, 0xeb, 1,
+        // bare: ret; inner: and ecx,63; jmp done
+        0xc3, 0x83, 0xe1, 63, 0xeb, 14,
+        // third: mov rax,Third; mov ecx,0; jmp done
+        0x48, 0xc7, 0xc0, Third, 0, 0, 0, 0xb9, 0, 0, 0, 0, 0xeb, 0,
+        // done: shl rax,cl; ret
+        0x48, 0xd3, 0xe0, 0xc3};
+  };
+  runIntegerReturnSources(Arch::X64, WithCounts(1, 0, 2), R"(
+int main(void) {
+    return choose_result(0,0)!=1 || choose_result(1,0)!=4 ||
+           choose_result(0,1)!=2 || choose_result(1,1)!=2;
+}
+)");
+  runIntegerReturnSources(Arch::X64, WithCounts(0, 1, 4), R"(
+int main(void) {
+    return choose_result(0,0)!=2 || choose_result(1,0)!=2 ||
+           choose_result(0,1)!=4 || choose_result(1,1)!=4;
+}
+)");
+  runIntegerReturnSources(Arch::X64, WithCounts(0, 1, 2), R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "the inner and outer paths all produce two");
+int main(void) { choose_result(1,0); choose_result(0,257); return 0; }
+)");
+}
+
+TEST(ReturnContract, SharedX86ReturnObservesBothShiftDirectionsAfterTheJoin) {
+  const auto WithMask = [](uint8_t HighByte) {
+    return std::vector<uint8_t>{
+        // cmp rsi,257; je bare; test esi,8; jnz third
+        0x48, 0x81, 0xfe, 1, 1, 0, 0, 0x74, 42, 0xf7, 0xc6, 8, 0, 0, 0, 0x75,
+        35,
+        // cmp rdi,0; je left
+        0x48, 0x83, 0xff, 0, 0x74, 14,
+        // (rax,ecx) = (129,1); jump to the direction test
+        0x48, 0xc7, 0xc0, 129, 0, 0, 0, 0xb9, 1, 0, 0, 0, 0xeb, 24,
+        // left: (rax,ecx) = (2,0); jump to the direction test
+        0x48, 0xc7, 0xc0, 2, 0, 0, 0, 0xb9, 0, 0, 0, 0, 0xeb, 10,
+        // bare: ret; third: mov rax,2; jmp observe
+        0xc3, 0x48, 0xc7, 0xc0, 2, 0, 0, 0, 0xeb, 18,
+        // test esi,1; jnz right; shl rax,cl; jmp observe
+        0xf7, 0xc6, 1, 0, 0, 0, 0x75, 5, 0x48, 0xd3, 0xe0, 0xeb, 5,
+        // right: shr rax,cl; jmp observe
+        0x48, 0xd3, 0xe8, 0xeb, 0,
+        // observe: and eax,mask; ret
+        0x25, 0xff, HighByte, 0, 0, 0xc3};
+  };
+  runIntegerReturnSources(Arch::X64, WithMask(1), R"(
+int main(void) {
+    return choose_result(0,0)!=2 || choose_result(0,1)!=2 ||
+           choose_result(1,0)!=258 || choose_result(1,1)!=64 ||
+           choose_result(1,8)!=2;
+}
+)");
+  runIntegerReturnSources(Arch::X64, WithMask(0), R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "the left shift can also return two after the byte mask");
+int main(void) { choose_result(1,0); choose_result(0,257); return 0; }
+)");
+}
+
+TEST(ReturnContract, SharedAArch64WordShiftKeepsEachLatchAndTheIncomingX0) {
+  for (const bool Collision : {false, true}) {
+    SCOPED_TRACE(Collision);
+    const uint32_t Words[] = {
+        // cmp x1,257; b.eq bare; and x4,x1,3; cbz x0,left
+        0xf104043f, 0x54000120, 0x92400424, 0xb4000080,
+        // (w0,w3) = (4,1) or (1,0); branch to head; bare: ret
+        0x52800080, 0x52800023, 0x14000005, 0x52800020, 0x52800003, 0x14000002,
+        0xd65f03c0,
+        // head: cbz x4,done; tbnz x1,2,other; eor w0,w0,2; eor w3,w3,mask
+        0xb4000124, 0x371000a1, 0x521f0000,
+        Collision ? 0x52000063u : 0x521f0063u,
+        // sub x4,x4,1; b head; other: eor w3,w3,32; sub x4,x4,1; b head
+        0xd1000484, 0x17fffffb, 0x521b0063, 0xd1000484, 0x17fffff8,
+        // done: lslv w0,w0,w3; ret
+        0x1ac32000, 0xd65f03c0};
+    std::vector<uint8_t> Code;
+    for (uint32_t Word : Words)
+      for (unsigned Shift = 0; Shift < 32; Shift += 8)
+        Code.push_back(static_cast<uint8_t>(Word >> Shift));
+    runIntegerReturnSources(Arch::AArch64, std::move(Code), R"(
+int main(void) {
+    for (unsigned n=0;n!=8;++n) {
+        int changed = !(n & 4) && (n & 1);
+        if (choose_result(0,n)!=(changed ? (COLLISION ? 6 : 12) : 1) ||
+            choose_result(1,n)!=(changed ? (COLLISION ? 6 : 48) : 8)) return 1;
+    }
+    uint64_t incoming = UINT64_C(0x1234567887654321);
+    return (uint64_t)choose_result(incoming,257)!=incoming;
+}
+)",
+                            Collision ? "#define COLLISION 1\n"
+                                      : "#define COLLISION 0\n");
+  }
+}
+
+TEST(ReturnContract, SharedMIPSShiftCountChangesInTheBackedgeSlot) {
+  for (const bool Little : {false, true}) {
+    SCOPED_TRACE(Little);
+    const auto WithCountUpdate = [&](uint16_t Mask) {
+      const uint32_t Words[] = {
+          // daddiu t0,zero,257; beq a1,t0,bare; nop; andi t2,a1,3
+          0x640c0101, 0x10ac000c, 0, 0x30ae0003,
+          // beqz a0,left; nop; v0=4; t1=1; b head; nop
+          0x10800005, 0, 0x64020004, 0x640d0001, 0x10000007, 0,
+          // left: v0=1; t1=0; b head; nop; bare: jr ra; nop
+          0x64020001, 0x640d0000, 0x10000003, 0, 0x03e00008, 0,
+          // head: beqz t2,done; nop; xori v0,v0,2; daddiu t2,t2,-1
+          0x11c00005, 0, 0x38420002, 0x65ceffff,
+          // b head; xori t1,t1,Mask; done: jr ra; dsllv v0,v0,t1
+          0x1000fffb, 0x39ad0000u | Mask, 0x03e00008, 0x01a21014};
+      std::vector<uint8_t> Code;
+      for (uint32_t Word : Words)
+        for (unsigned I = 0; I < 4; ++I)
+          Code.push_back(
+              static_cast<uint8_t>(Word >> (8 * (Little ? I : 3 - I))));
+      return Code;
+    };
+    const Arch Target = Little ? Arch::MIPS64EL : Arch::MIPS64;
+    runIntegerReturnSources(Target, WithCountUpdate(2), R"(
+int main(void) {
+    for (unsigned n=0;n!=4;++n) {
+        if (choose_result(0,n)!=(n%2?12:1) ||
+            choose_result(1,n)!=(n%2?48:8)) return 1;
+    }
+    return 0;
+}
+)");
+    runIntegerReturnSources(Target, WithCountUpdate(1), R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "both entry paths can return six after one trip");
+int main(void) { choose_result(0,1); choose_result(1,3); return 0; }
+)");
+  }
 }
 
 TEST(ReturnContract, SharedMIPSRegisterShiftObservesTheDelaySlotMask) {

@@ -670,6 +670,7 @@ add_neverd_unittest(NeverDLiftTests
   core/MedCallLeftoversTests.cpp
   core/GoCallContractTests.cpp
   core/GoStackResultsTests.cpp
+  core/GoFloatResultsTests.cpp
   core/MedPositionalCallArgumentsTests.cpp
   core/MedCallResultControlTests.cpp
   core/MedStackDeltaTests.cpp

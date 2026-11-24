@@ -12,6 +12,33 @@
 #define NEVERD_PAUTH_NATIVE_TEXT(Name, Value)
 #endif
 
+// A supervising shell returns the child's Darwin wait status without folding
+// distinct signals into LLVM ExecuteAndWait's common crash result.
+#define NEVERD_PROBE_MARKER "NEVERD native probe entered"
+NEVERD_PAUTH_NATIVE_TEXT(kProbeEntryMarker, NEVERD_PROBE_MARKER "\n")
+NEVERD_PAUTH_NATIVE_TEXT(
+    kProbeEntrySource,
+    "extern long write(int, const void *, __SIZE_TYPE__);\n"
+    "__attribute__((constructor)) static void probeEntered(void) {\n"
+    "  static const char mark[] = \"" NEVERD_PROBE_MARKER "\\n\";\n"
+    "  (void)write(1, mark, sizeof(mark) - 1);\n}\n")
+#undef NEVERD_PROBE_MARKER
+NEVERD_PAUTH_NATIVE_TEXT(kProbeShell, "/bin/sh")
+NEVERD_PAUTH_NATIVE_TEXT(kProbeResultMessage, " probe exit ")
+NEVERD_PAUTH_NATIVE_TEXT(kProbeCommandOption, "-c")
+NEVERD_PAUTH_NATIVE_TEXT(kProbeCommand, "\"$1\"; exit $?")
+NEVERD_PAUTH_NATIVE_TEXT(kProbeProgramName, "neverd-native-probe")
+NEVERD_PAUTH_NATIVE_TEXT(kProbeOutputExtension, "out")
+#ifdef NEVERD_PAUTH_NATIVE_NUMBER
+NEVERD_PAUTH_NATIVE_NUMBER(kProbeSignalBase, 128)
+NEVERD_PAUTH_NATIVE_NUMBER(kProbeKilledSignal, 9)
+NEVERD_PAUTH_NATIVE_NUMBER(kProbeIllegalSignal, 4)
+NEVERD_PAUTH_NATIVE_NUMBER(kProbeSegmentationSignal, 11)
+NEVERD_PAUTH_NATIVE_NUMBER(kProbeAbsent, 1)
+NEVERD_PAUTH_NATIVE_NUMBER(kProbeTimeoutSeconds, 30)
+#undef NEVERD_PAUTH_NATIVE_NUMBER
+#endif
+
 NEVERD_PAUTH_NATIVE_TEXT(kPAuthCompiler, "clang")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleModule, "native")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleArtifactEnvironment,

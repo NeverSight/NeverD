@@ -4651,6 +4651,17 @@ result in both decompiler source views. The repeated-offset variant packs
 nonoverlapping literals into a scaled signed field. Byte-wide LLVM guards
 exhaust its input domain, including overlapping literals and unsafe shifts.
 
+`tools/neverd-bench/generate_distributed_product.py --width 131071 --case 3`
+emits an 18,013-factor product over twelve overlapping fields. Pass
+`--reference` to generate its expected form by modular multiplication of
+successive coefficient vectors. Cases 0 through 3 cover mixed signs, even
+offsets and a factor with a surviving cross term. Use `neverd simplify -f`
+with the same width. Inputs above the default parser limit of 65,536 bits
+require `--exhaustive`, which also selects the exhaustive work policy.
+The 32- through 65,536-bit controls run with `--max-work=65536`. A
+73-factor machine-code fixture checks both decompilers against the original
+signed-byte products and a low-weight residual at Clang O0 and O2.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may
@@ -9254,6 +9265,20 @@ and `SharedMIPSRegisterShiftObservesTheDelaySlotMask` run both C outputs.
 Each pairs a proven result with a case where legal counts erase the observed
 difference. `SharedMIPSWordShiftChecksTheOperandOnEachArm` pairs a word
 right shift with a separate count write and checks both orders of the counts.
+`ReturnContracts.PairedShiftPathsCloseEveryBackedgeBeforeSelectingAValue`
+checks a count changed on a backedge, simultaneous PHI reads, an unfinished
+loop proof, a mask in a later return block and a discarded shift.
+`ReturnContract.SharedX86VariableShiftCrossesTwoJoins`
+checks edge pairing through successive joins in machine code.
+`ReturnContract.SharedX86ReturnObservesBothShiftDirectionsAfterTheJoin`
+runs both C outputs with left and right shifts on separate predecessors.
+Removing bit eight from the final mask makes the left-shift path overlap.
+`ReturnContract.SharedAArch64WordShiftKeepsEachLatchAndTheIncomingX0`
+checks a word shift after either latch and a bare path returning the full X0.
+`ReturnContract.SharedMIPSShiftCountChangesInTheBackedgeSlot` runs both C
+routes with the count update in the backedge delay slot and the shift in the
+return delay slot. Changing one count makes the two arms return the same
+value after an odd number of iterations.
 The [return recovery skill](../.agents/skills/neverd-return-recovery/SKILL.md)
 describes the corresponding original-machine checks.
 `ReturnContract.SharedX86ReturnKeepsTheShiftedLowNibble` executes both C
@@ -10307,10 +10332,32 @@ UD1 golden encodings exercise complete ModR/M, SIB and displacement extents,
 32/64-bit address modes, address overrides, every truncated prefix, and the
 15-byte limit, including REX2 map 1 encodings. Detailed, lightweight and lifting
 decode routes must agree and leave a following NOP at the correct boundary.
-Capstone owns validity and instruction extent; NeverD has no duplicate UD1
-length parser or LOCK/MOV-to-CS predicate. UD1 operands remain an
+Capstone owns validity and instruction extent in the decode and lifting routes;
+the original-byte legacy executor authenticates UD1's encoded ModR/M address
+with its shared legacy grammar. NeverD has no duplicate LOCK/MOV-to-CS
+predicate. UD1 operands remain an
 unconditional invalid-opcode intrinsic without ordinary memory or arithmetic
 operations; this suite does not select a processor's UD0 policy.
+`X86LegacyExecutionTest.UD1FaultsWithoutReadingItsAddress` checks complete
+and malformed UD1 byte extents. `LegacyEvents/*OriginalUD1*` compares the
+original instruction and the protected 16/32-bit executor at CPL0/CPL3 over
+both paging profiles, including an unmapped encoded memory operand.
+`X86LegacySourceTest.OriginalUD1FaultsWithoutReadingMemory` exercises the
+compiled protected C dispatcher in code16/code32 with Clang and x64 NeverC at
+O0/O2, checking #UD, CR2 and the original fault frame.
+`X86LegacyExecutionTest.UD0FetchProfileSelectsTheOriginalFault` checks
+opcode-only versus complete-ModR/M fetch at an absent page, unbound and
+incomplete-profile refusal, and malformed byte extents. Pin
+`LegacyEvents/*OriginalUD0*` to the qualified Intel P and E cores separately:
+the P core fetches the missing ModR/M page and the E core raises #UD from the
+opcode. Each compares code16/code32 and CPL0/CPL3 under legacy and PAE paging.
+`X86LegacySourceTest.OriginalUD0UsesTheBoundFetchProfile` compiles both
+bindings through x64 Clang/NeverC at O0/O2 and checks the original #UD frame.
+`X86LegacySourceTest.OriginalUD0CrossPageFetchUsesTheBoundProfile` places the
+ModR/M byte across an absent page after the opcode. Its three address forms
+cover simple ModR/M, SIB and disp32; code16/code32 and both bound processor
+profiles check #UD versus #PF, CR2 and the original return PC through the same
+four compiler lanes.
 
 ```sh
 cmake --build build-release --target NeverDX86EncodingAccuracyTests
@@ -12278,6 +12325,15 @@ changing integer uses or the selected branch.
 `SharedFloatingComputationSurvivesRegisterViews` starts from MedIR, keeps one
 shared FMA through widened/sliced register views and executes its generated C.
 These checks run at O0/O2 with undefined-behavior traps.
+`HighCPointerAddresses.AVectorRegisterParameterIsAFloat` decompiles a double
+function that flips its XMM0 parameter's sign with `xorpd` and checks the
+parameter is a `double` (it fails where a vector register's scalar parameter
+is an integer), then runs it; `MergedXmm0ResultIsTheDoubleReturnValue` reads
+that parameter's bits through `__builtin_bit_cast`.
+`AFloatReturnTakesTheLowBytesOfWiderBits` returns a double from a 16-byte
+register value with its sign flipped, as `runtime.floor` does, and from bits
+as wide as the double: both return the reinterpreted low eight bytes, where C
+converted the wider integer numerically.
 
 `AArch64_FP.AngleReductionKeepsFloatingViewsAndRounding` assembles an independent
 FMUL/FCSEL/FCVTZS/SCVTF/FMADD kernel and executes both C routes at O0/O2 for 1,039
@@ -13821,7 +13877,7 @@ binary completion while retaining native-proof and both source-layout refusals.
 
 `InterpreterSpecialization.WideIntegerConcat*` checks both byte orders, high/low words, constant inputs, overlapping output, high-word control, malformed shapes, exact/short budgets and retained unknown-memory provenance. Strictly decoded `PSHUFD` covers all 256 selectors with aliased and distinct destinations against independent dword indexing. `BinaryLowIRRefinement.WideIntegerConcatCompletesOnlyRawRecovery` retains native-proof and both source-layout refusals.
 
-`InterpreterSpecialization.Timestamp*` checks complete samples, zero upper halves, independent and repeated reads, preserved registers/flags/memory/segment bases, exact and insufficient budgets, malformed bundles and unknown address origins with independent value/state oracles. `BinaryLowIRRefinement.TimestampCompletesOnlyRawRecovery` checks raw completion and continued native-proof/source-layout refusals. Existing `X86_64_Intrinsics` timestamp cases check source emission and single-read full-bit results; `DriverTimestamp` separately checks the shared Unicorn/KVM/WHP clock policy, state preservation, budgets and overflow. Platform skips do not establish backend execution.
+`InterpreterSpecialization.Timestamp*` checks complete samples, zero upper halves, independent and repeated reads, preserved registers/flags/memory/segment bases, exact and insufficient budgets, malformed bundles and unknown address origins with independent value/state oracles. `BinaryLowIRRefinement.TimestampCompletesOnlyRawRecovery` checks raw completion and continued native-proof/source-layout refusals. Existing `X86_64_Intrinsics` timestamp cases check source emission and single-read full-bit results; `X86_64_Intrinsics.Decompile_CpuidLeafWithoutSubleafReadsNoEcx` decompiles a CPUID leaf 1 that leaves ECX alone to `__cpuid(1, ...)` with no trap and runs it against a stub, and `LlvmC_CpuidLeafWithoutSubleafReadsNoEcx` checks that the LLVM route passes no unknown ECX; its counterexample `Decompile_CpuidLeafWithSubleafKeepsEcx` keeps leaf 7's sub-leaf, the caller's fourth argument in ECX, as `__cpuid_count(7, ...)` and runs it against a stub that records each sub-leaf; `DriverTimestamp` separately checks the shared Unicorn/KVM/WHP clock policy, state preservation, budgets and overflow. Platform skips do not establish backend execution.
 
 `InterpreterSpecialization.CPUQuery*` checks original selectors, all four
 outputs and upper-half clearing, independent repeated queries, exact/short
@@ -21217,6 +21273,19 @@ unknown value.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.
+`GoFloatResults` runs the pipeline, on amd64 and arm64 into HighC and LLVM C,
+over register-ABI routines that return floats, and compiles and runs each C
+with a driver. `ACallReturnsBothFloatsItsCalleeDoes`: `main.split` returns
+two loads in X0 and X1 and no integer, `main.diff` reads both below a branch,
+and both the function and the call hold `{X0, X1}`; it fails where direct
+calls return integer results alone. `ACallReturnsAnIntegerBesideAFloat`:
+`main.pair` returns `{RAX, X0}`, both read below the branch.
+`AForwardingCallReturnsWhatItsCalleeDoes`: `main.fwd` hands back what
+`main.split` returns, and its callers' read of X1 makes it a result of both.
+Their near-identical counterexample `AFloatNoReturnWritesIsNoResult` reads X1
+after `main.one`, which writes X0 alone: `main.one` returns a float and its
+call no record; it fails where the struct-return heuristic shapes Go calls
+again.
 `GoInternalABI.AFuncValueCallTakesItsArgumentsInGoRegisters` lifts `main.g`,
 built as ELF and as PE, which sets RAX to 5 and RBX to 7 and calls a func value
 through RDX after storing a local above Win64's shadow space, RDI set before a
@@ -21349,6 +21418,12 @@ caller alone. Both publish (AX, CX) for the stub, and the caller's call binds
 lists a Go 1.18 function that grows its stack as never returning, as
 `runtime.throw` is: a run of its caller alone summarizes it as the whole run
 does, reading RAX and RBX.
+`GoPanicBounds.AWholeRunReadsABoundsCheckAsARunOfOneDoes` runs the pipeline
+over `main.f`, whose failed bounds check calls a `runtime.panicBounds` that
+saves every register while its `PCDATA_PanicBounds` entry names RBX and a
+constant, and `main.g`, which calls `main.f`: in a whole run and in a run of
+`main.g` alone the call passes exactly RAX and RBX and `main.f` takes two
+parameters; it fails where a run's own functions read the routine's summary.
 `GoWriteBarriers.AStoringBarrierTakesItsAddressAndPointer` runs the pipeline
 over a call to `runtime.gcWriteBarrierCX`, alone and in the whole image, as
 System V and Win64 x86-64 with Go's register ABI, as System V with the stack

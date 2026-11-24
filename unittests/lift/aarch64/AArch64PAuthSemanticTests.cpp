@@ -55,6 +55,7 @@
 #include <climits>
 #include <cstdlib>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,7 @@ using namespace neverd;
 
 namespace {
 #define NEVERD_PAUTH_NATIVE_TEXT(Name, Value) constexpr char Name[] = Value;
+#define NEVERD_PAUTH_NATIVE_NUMBER(Name, Value) constexpr int Name = Value;
 #include "AArch64PAuthNative.def"
 
 const char *pAuthFixtureDirectory() {
@@ -124,10 +126,30 @@ void expectIntrinsic(const LowOp &Op, Intrinsic Id, unsigned Inputs) {
   EXPECT_EQ(Op.Inputs[0].Offset, static_cast<uint64_t>(Id));
 }
 
+struct NativeCapability {
+  bool MayTrapOnInstruction = false;
+  std::optional<bool> Available;
+};
+
+std::optional<bool> nativeProbeStatus(int Result, llvm::StringRef Output,
+                                      bool MayTrapOnInstruction) {
+  if (Output.empty() && Result == kProbeSignalBase + kProbeKilledSignal)
+    return false;
+  if (Output != kProbeEntryMarker)
+    return std::nullopt;
+  if (Result == 0)
+    return true;
+  if (Result == kProbeAbsent ||
+      (MayTrapOnInstruction &&
+       Result == kProbeSignalBase + kProbeIllegalSignal))
+    return false;
+  return std::nullopt;
+}
+
 void compileArm64eC(const std::string &Source,
                     const std::function<void(llvm::StringRef)> &Inspect = {},
                     bool EmitLLVM = false, llvm::StringRef ExecuteTarget = {},
-                    bool *ExecutionAvailable = nullptr,
+                    NativeCapability *Capability = nullptr,
                     llvm::StringRef Language = kOracleCLanguage,
                     llvm::StringRef ObjectDirectory = {}) {
   const bool ExecuteNative = !ExecuteTarget.empty();
@@ -160,6 +182,8 @@ void compileArm64eC(const std::string &Source,
   {
     llvm::raw_fd_ostream Out(SourcePath, FileError);
     ASSERT_FALSE(FileError);
+    if (Capability)
+      Out << kProbeEntrySource;
     Out << Source;
   }
   const std::optional<llvm::StringRef> Redirects[] = {
@@ -205,13 +229,35 @@ void compileArm64eC(const std::string &Source,
     if (Inspect)
       Inspect(ObjectPath);
     if (ExecuteNative) {
-      const llvm::StringRef RunArgs[] = {ObjectPath};
-      const int Result = llvm::sys::ExecuteAndWait(
-          ObjectPath, RunArgs, std::nullopt, Redirects, 30, 0, &Error);
-      if (ExecutionAvailable) {
-        *ExecutionAvailable = Result == 0;
-        return;
+      if (Capability) {
+        llvm::SmallString<128> ProbeOutput;
+        ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+            kProbeProgramName, kProbeOutputExtension, ProbeOutput));
+        llvm::FileRemover RemoveOutput(ProbeOutput);
+        const std::optional<llvm::StringRef> ProbeRedirects[] = {
+            std::nullopt, ProbeOutput.str(), ErrorPath.str()};
+        const llvm::StringRef ProbeArgs[] = {kProbeShell, kProbeCommandOption,
+                                             kProbeCommand, kProbeProgramName,
+                                             ObjectPath};
+        const int Result = llvm::sys::ExecuteAndWait(
+            kProbeShell, ProbeArgs, std::nullopt, ProbeRedirects,
+            kProbeTimeoutSeconds, 0, &Error);
+        const auto Output = llvm::MemoryBuffer::getFile(ProbeOutput);
+        ASSERT_TRUE(Output) << Output.getError().message();
+        const auto Observed = nativeProbeStatus(
+            Result, (*Output)->getBuffer(), Capability->MayTrapOnInstruction);
+        ASSERT_TRUE(Observed.has_value())
+            << Optimization.str() << kProbeResultMessage << Result << Error;
+        if (Capability->Available) {
+          ASSERT_EQ(*Capability->Available, *Observed) << Optimization.str();
+        }
+        Capability->Available = Observed;
+        continue;
       }
+      const llvm::StringRef RunArgs[] = {ObjectPath};
+      const int Result =
+          llvm::sys::ExecuteAndWait(ObjectPath, RunArgs, std::nullopt,
+                                    Redirects, kProbeTimeoutSeconds, 0, &Error);
       EXPECT_EQ(Result, 0) << Error << Source;
     }
   }
@@ -1735,7 +1781,7 @@ void checkCProjections(const std::vector<MedFunc> &Functions,
       ASSERT_FALSE(llvm::sys::fs::create_directory(Route));
     }
     compileArm64eC(Source, {}, /*EmitLLVM=*/false, ExecuteTarget,
-                   /*ExecutionAvailable=*/nullptr, kOracleCLanguage, Route);
+                   /*Capability=*/nullptr, kOracleCLanguage, Route);
   }
 }
 
@@ -1797,6 +1843,27 @@ bool hasNativePAuth() {
 }
 } // namespace
 
+TEST(AArch64PAuthSemantics, ProbeRequiresEntryAndDistinguishesFaults) {
+  const int Killed = kProbeSignalBase + kProbeKilledSignal;
+  const int Illegal = kProbeSignalBase + kProbeIllegalSignal;
+  for (bool MayTrap : {false, true}) {
+    EXPECT_EQ(nativeProbeStatus(0, kProbeEntryMarker, MayTrap), true);
+    EXPECT_EQ(nativeProbeStatus(kProbeAbsent, kProbeEntryMarker, MayTrap),
+              false);
+    EXPECT_EQ(nativeProbeStatus(Killed, {}, MayTrap), false);
+    EXPECT_FALSE(nativeProbeStatus(0, {}, MayTrap).has_value());
+    EXPECT_FALSE(nativeProbeStatus(Illegal, {}, MayTrap).has_value());
+    EXPECT_FALSE(
+        nativeProbeStatus(Killed, kProbeEntryMarker, MayTrap).has_value());
+    EXPECT_FALSE(nativeProbeStatus(kProbeSignalBase + kProbeSegmentationSignal,
+                                   kProbeEntryMarker, MayTrap)
+                     .has_value());
+  }
+  EXPECT_EQ(nativeProbeStatus(Illegal, kProbeEntryMarker, true), false);
+  EXPECT_FALSE(
+      nativeProbeStatus(Illegal, kProbeEntryMarker, false).has_value());
+}
+
 TEST(AArch64PAuthSemantics, NativeGenericSignaturesAgreeWithBothCProjections) {
   if (!hasNativePAuth())
     GTEST_SKIP() << "native key comparison requires a PAuth Apple Silicon host";
@@ -1811,12 +1878,12 @@ TEST(AArch64PAuthSemantics, NativeKeysAgreeWithBothCProjections) {
     GTEST_SKIP() << "native key comparison requires a PAuth Apple Silicon host";
   // A requested target alone is not evidence: a linker may emit ordinary
   // arm64. Require each signing key to change a pointer in the actual process.
-  bool ExecutionAvailable = false;
+  NativeCapability Capability{.MayTrapOnInstruction = true};
   compileArm64eC(kSigningKeyProbe, {}, /*EmitLLVM=*/false, kSigningKeyTarget,
-                 &ExecutionAvailable);
+                 &Capability);
   if (HasFatalFailure())
     return;
-  if (!ExecutionAvailable)
+  if (!Capability.Available.value_or(false))
     GTEST_SKIP() << kSigningKeysUnavailable;
   const auto Oracle = readPAuthOracle(kSigningOracle);
   ASSERT_TRUE(Oracle);
@@ -1835,13 +1902,13 @@ TEST(AArch64PAuthLRSemantics, BothCProjectionsCompileWithTheTwoModifierOracle) {
 TEST(AArch64PAuthLRSemantics, NativeTwoModifierKeysAgreeWithBothCProjections) {
   if (!hasNativePAuth())
     GTEST_SKIP() << kReturnHostUnavailable;
-  bool ExecutionAvailable = false;
+  NativeCapability Capability{.MayTrapOnInstruction = true};
   // The process must both execute PAuth_LR and have active IA/IB keys.
   compileArm64eC(kReturnKeyProbe, {}, /*EmitLLVM=*/false, kSigningKeyTarget,
-                 &ExecutionAvailable);
+                 &Capability);
   if (HasFatalFailure())
     return;
-  if (!ExecutionAvailable)
+  if (!Capability.Available.value_or(false))
     GTEST_SKIP() << kReturnKeysUnavailable;
   checkReturnOracle(kSigningKeyTarget);
 }
@@ -2697,13 +2764,13 @@ TEST(AArch64PACMSemantics, BothCProjectionsCompileWithThePrefixOracle) {
 TEST(AArch64PACMSemantics, NativePrefixModesAgreeWithBothCProjections) {
   if (!hasNativePAuth())
     GTEST_SKIP() << pacm_oracle::kNativeUnavailable;
-  bool ExecutionAvailable = false;
+  NativeCapability Capability;
   compileArm64eC(std::string(pacm_oracle::kOracle) + pacm_oracle::kProbeMain,
                  {}, /*EmitLLVM=*/false, pacm_oracle::kNativeTarget,
-                 &ExecutionAvailable);
+                 &Capability);
   if (HasFatalFailure())
     return;
-  if (!ExecutionAvailable)
+  if (!Capability.Available.value_or(false))
     GTEST_SKIP() << pacm_oracle::kNativeUnavailable;
   checkPrefixOracle(pacm_oracle::kNativeTarget);
 }

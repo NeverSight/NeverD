@@ -134,9 +134,16 @@ SymRef Parser::parseBinary(int MinPrec) {
     if (S == "*" && Ctx.op(L) == SymOp::Mul &&
         Ctx.numOperands(L) - unsigned(Ctx.isConst(Ctx.operand(L, 0))) >= 2 &&
         isPunct("*")) {
-      llvm::SaveAndRestore Scope(Reuse, Reuse == CallReuse::OutsideProduct
-                                            ? CallReuse::Factor
-                                            : Reuse);
+      auto Mode = Reuse;
+      if (Mode == CallReuse::OutsideProduct) {
+        // The initial product already exposes the shape of its first two
+        // factors. Reuse complete multi-term sums with independent field calls.
+        const auto First = Ctx.operands(L).back();
+        Mode = Ctx.op(First) == SymOp::Add && Ctx.numOperands(First) > 2
+                   ? CallReuse::SumFactor
+                   : CallReuse::Factor;
+      }
+      llvm::SaveAndRestore Scope(Reuse, Mode);
       llvm::SmallVector<SymRef, 16> Factors{L};
       while (consumePunct("*")) {
         R = parseBinary(P + 1);
@@ -288,6 +295,10 @@ SymRef Parser::parsePrimary() {
   case Token::Punct: {
     if (T.Text == "(") {
       size_t Offset = T.Offset;
+      if (Reuse == CallReuse::SumFactor) {
+        llvm::SaveAndRestore Scope(Reuse, CallReuse::Factor);
+        return reuseProductTerm(Offset, [&] { return parseGroup(Offset); });
+      }
       if (Reuse != CallReuse::InsideCall)
         return parseGroup(Offset);
       llvm::SaveAndRestore Scope(Reuse, CallReuse::InsideGroup);

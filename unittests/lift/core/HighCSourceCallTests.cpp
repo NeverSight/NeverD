@@ -866,6 +866,43 @@ int main(void) {
   }
 }
 
+TEST(HighCSourceCalls, HeaderOutputSlotUsesItsNestedPointeeQualifiers) {
+  class CalleeDebug final : public NullDebugContext {
+  public:
+    FunctionSym Function;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      return Address == Function.Addr ? std::optional(Function) : std::nullopt;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  const auto Slot = NdType::makePtr(NdType::makePtr(NdType::makeInt(2, false)));
+  auto &Function = Debug.Function;
+  Function.Addr = 0x2000;
+  Function.Name = "read_slot";
+  Function.ReturnType = NdType::makeInt(4, false);
+  Function.Params = {{"slot", Slot}};
+  Function.PrototypeFromHeader = true;
+  Function.PortablePrototypeDeclaration =
+      "uint32_t read_slot(const uint16_t **slot)";
+  Function.PortableParameterTypes = {"const uint16_t **"};
+  auto Call =
+      HighExpr::makeCall(Function.Name, Function.Addr, {parameter(0, Slot)});
+  Call->Type = Function.ReturnType;
+  const auto Caller = returning("forward_slot", Call, {Slot});
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Caller}, OS, Options, &Debug));
+  EXPECT_NE(Source.find("read_slot((const uint16_t **)arg0)"),
+            std::string::npos)
+      << Source;
+  source_call_execution_test::checkSyntax(
+      Source, {"--target=x86_64-w64-windows-gnu",
+               "-Werror=incompatible-pointer-types"});
+}
+
 TEST(HighCSourceCalls, PortableDeclarationsOwnObjectPointerConversions) {
   class CalleeDebug final : public NullDebugContext {
   public:

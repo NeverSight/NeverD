@@ -197,6 +197,14 @@ enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 /// PVI, independently of IOPL. These CPU choices need explicit target binding.
 enum class X86LegacyVM86Profile : uint8_t { IntelVME };
 
+/// UD0 can fault after its opcode or after the encoded ModR/M address bytes.
+/// Bind the target CPU's instruction-fetch behavior explicitly. Both forms
+/// raise #UD without reading the encoded data operand once fetch succeeds.
+enum class X86LegacyUD0FetchProfile : uint8_t {
+  OpcodeOnly,
+  CompleteModRM,
+};
+
 /// Confined ordinary RAM. POP memory uses incremented ESP, with SS.B-sized
 /// stack advancement preserving high ESP on a word wrap. PUSHA/ENTER stores
 /// and POPA register loads publish in order; ESP and ENTER's EBP commit only
@@ -415,6 +423,7 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyControlRegisterBinding> ControlRegisters;
   std::optional<X86LegacyMpxProfile> MpxMemory;
   std::optional<X86LegacyVM86Profile> Virtual8086;
+  std::optional<X86LegacyUD0FetchProfile> UD0Fetch;
   /// Only executeX86Non64Instruction accepts this binding. That boundary
   /// returns events to the full-width owner before any IDT access.
   std::optional<X86Non64ModeBinding> Non64Mode;

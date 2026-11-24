@@ -545,6 +545,10 @@ struct X64ContinuationSourceOptions {
   /// Replay this site under the same RTM configuration, outside a transaction.
   /// Its fault enters the live V6 IDT with the original PC and RF set on stack.
   std::optional<X64XbeginFaultSite> ObservedXbeginFault;
+
+  bool observedXbeginFaultAt(va_t Address) const {
+    return ObservedXbeginFault && ObservedXbeginFault->Address == Address;
+  }
 };
 
 /// A profile-owned choice of a legacy GPR's upper 32 bits on a successful

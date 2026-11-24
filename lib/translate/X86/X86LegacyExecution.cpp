@@ -55,7 +55,7 @@ struct LegacyInstruction {
   std::optional<X86MpxEncoding> Mpx;
   llvm::ArrayRef<uint8_t> Body;
   unsigned Width;
-  bool IRET, RETF, INT, UD2, HLT = false, LockedHLT = false, MSR = false;
+  bool IRET, RETF, INT, UD, HLT = false, LockedHLT = false, MSR = false;
 };
 
 llvm::Expected<LegacyInstruction>
@@ -96,8 +96,22 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32,
       (I.Body[0] == 0x90 || I.Body[0] == 0xfa || I.Body[0] == 0xfb ||
        I.Body[0] == 0xcc || I.Body[0] == 0xce || I.Body[0] == 0xf1);
   I.INT = Unlocked && I.Body.size() == 2 && I.Body[0] == 0xcd;
-  I.UD2 =
+  I.UD =
       Unlocked && I.Body.size() == 2 && I.Body[0] == 0x0f && I.Body[1] == 0x0b;
+  if (Unlocked && I.Body.size() >= 2 && I.Body[0] == 0x0f &&
+      (I.Body[1] == 0xb9 || I.Body[1] == 0xff)) {
+    // UD1 always needs its encoded ModR/M bytes. UD0 may instead raise #UD
+    // after its opcode; the execution profile decides which bytes are fetched.
+    if (I.Body[1] == 0xff && I.Body.size() == 2) {
+      I.UD = true;
+    } else if (I.Body.size() >= 3) {
+      detail::X86LegacyEncoding Undefined(Instruction, Code32);
+      Undefined.value(2);
+      detail::X86LegacyAddress Ignored;
+      Undefined.modRM(Ignored);
+      I.UD = Undefined.done();
+    }
+  }
   I.IRET = Unlocked && I.Body.size() == 1 && I.Body[0] == 0xcf;
   I.RETF = Unlocked && ((I.Body.size() == 1 && I.Body[0] == 0xcb) ||
                         (I.Body.size() == 3 && I.Body[0] == 0xca));
@@ -107,7 +121,7 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32,
     I.LockedHLT = HaltEncoding.Group1Prefix == 0xf0;
   }
   if (!I.Segment && !I.Scalar && !I.FastSystem && !I.String && !I.Port &&
-      !I.Far && !Single && !I.INT && !I.UD2 && !I.IRET && !I.RETF &&
+      !I.Far && !Single && !I.INT && !I.UD && !I.IRET && !I.RETF &&
       !I.DebugRegister && !I.ControlRegister && !I.Mpx && !I.HLT && !I.MSR)
     return invalid("unsupported or malformed legacy step instruction");
   return I;
@@ -244,8 +258,18 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   if (!Decoded)
     return Decoded.takeError();
   auto &[DebugRegister, ControlRegister, Segment, Scalar, FastSystem, String,
-         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD2, HLT, LockedHLT,
+         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD, HLT, LockedHLT,
          MSR] = *Decoded;
+  const bool UD0 = UD && Body.size() >= 2 && Body[0] == 0x0f &&
+                   Body[1] == 0xff;
+  if (UD0 &&
+      (!Options.UD0Fetch ||
+       (*Options.UD0Fetch != X86LegacyUD0FetchProfile::OpcodeOnly &&
+        *Options.UD0Fetch != X86LegacyUD0FetchProfile::CompleteModRM)))
+    return invalid("UD0 requires a bound instruction-fetch profile");
+  if (UD0 && *Options.UD0Fetch == X86LegacyUD0FetchProfile::CompleteModRM &&
+      Body.size() == 2)
+    return invalid("UD0 complete ModR/M profile requires address bytes");
   if (Non64Mode) {
     using Op = detail::X86LegacyScalarOperation;
     if (State.Mpx || FastSystem || Port || String || Mpx ||
@@ -583,7 +607,11 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
           false);
     }
   }
-  for (unsigned I = 0; !Resuming && !R.Exception && I != Instruction.size();
+  const unsigned FetchBytes =
+      UD0 && *Options.UD0Fetch == X86LegacyUD0FetchProfile::OpcodeOnly
+          ? Instruction.size() - Body.size() + 2
+          : Instruction.size();
+  for (unsigned I = 0; !Resuming && !R.Exception && I != FetchBytes;
        ++I) {
     uint8_t Byte = 0;
     auto Got =
@@ -889,7 +917,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       }
       return Enter({NextIP, 0, 0, Vector, X86LegacyEventKind::Software, INT},
                    true);
-    } else if (UD2) {
+    } else if (UD) {
       R.Exception = X86MemoryException{6, 0, {}};
     }
   }

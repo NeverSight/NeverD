@@ -11,6 +11,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/X86/X86CpuidLeaves.h"
 #include "neverd/ir/X86/X86FPState.h"
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
@@ -1047,7 +1048,7 @@ struct BlockScalarFacts {
   using Fact = std::pair<uint16_t, uint64_t>;
   using RegisterFacts = std::map<uint64_t, Fact>;
   std::map<size_t, unsigned> SelectedArms;
-  llvm::SmallVector<size_t, 1> CpuidLeafZero;
+  llvm::SmallVector<size_t, 1> CpuidSubleafIgnored;
   RegisterFacts Registers;
 };
 
@@ -1120,10 +1121,12 @@ blockScalarFacts(const BinaryImage &Img, const LowBlock &Block, bool KeepExit,
           Result = Value(O.Inputs[Facts.SelectedArms[I]]);
         }
       } else if (!KeepExit && X86 && isX86CpuidQuery(O)) {
-        // Intel SDM, CPUID leaf 0 returns the maximum basic leaf and vendor ID.
-        // The block-local proof cannot cross a call or an unknown EAX write.
-        if (Value(O.Inputs[1]) == uint64_t{0})
-          Facts.CpuidLeafZero.push_back(I);
+        // A leaf that ignores ECX (x86CpuidLeafIgnoresSubleaf), as leaf 0's
+        // maximum basic leaf and vendor ID does.  The block-local proof
+        // cannot cross a call or an unknown EAX write.
+        if (const auto Leaf = Value(O.Inputs[1]);
+            Leaf && x86CpuidLeafIgnoresSubleaf(*Leaf))
+          Facts.CpuidSubleafIgnored.push_back(I);
       } else
         Result = lowScalarConstantResult(O, Value);
     }
@@ -1837,7 +1840,7 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
         unreadSyscallArguments(Img, Block);
     const auto ScalarFacts = blockScalarFacts(Img, Block, false);
     const auto &SelectedArms = ScalarFacts.SelectedArms;
-    auto CpuidLeafZero = ScalarFacts.CpuidLeafZero.begin();
+    auto CpuidSubleafIgnored = ScalarFacts.CpuidSubleafIgnored.begin();
     auto ControlOf = [&](size_t OpIndex) {
       for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
         if (OpIndex >= Boundary.FirstOp &&
@@ -1866,10 +1869,10 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
       // Home-spill refinement below addresses steps by their LowIR index.
       // Keep an empty step for ignored operations until joinPlainSteps.
       RegisterStep &Step = Out.Steps.emplace_back();
-      if (CpuidLeafZero != ScalarFacts.CpuidLeafZero.end() &&
-          *CpuidLeafZero == I) {
+      if (CpuidSubleafIgnored != ScalarFacts.CpuidSubleafIgnored.end() &&
+          *CpuidSubleafIgnored == I) {
         Step.CpuidIgnoresSubleaf = true;
-        ++CpuidLeafZero;
+        ++CpuidSubleafIgnored;
       }
       if (const auto Arm = SelectedArms.find(I);
           Arm != SelectedArms.end() && Op.Output.isReg() &&

@@ -62,6 +62,7 @@
 #include "neverd/ir/med/MedConstantPropagation.h"
 #include "neverd/ir/med/MedDominatedSelects.h"
 #include "neverd/ir/med/MedSyscallConvention.h"
+#include "neverd/ir/med/X86/X86CpuidSubleaf.h"
 #include "neverd/ir/med/X86/X86RegistrationCall.h"
 #include "neverd/ir/med/X86/X86RegistrationEntry.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
@@ -2498,6 +2499,10 @@ MedFunc LowToMedConverter::convertFunction(
     // has ruled out.
     if (foldDominatedSelects(Func))
       debugVerifyMedFunc(Func, "foldDominatedSelects");
+    // A CPUID whose constant leaf ignores ECX reads no sub-leaf.
+    if (TheArch == Arch::X64 || TheArch == Arch::X86)
+      if (dropIgnoredCpuidSubleaves(Func))
+        debugVerifyMedFunc(Func, "dropIgnoredCpuidSubleaves");
 
     // SGX's implicit register dependencies are conditional on EAX. Resolve
     // constant leaf selectors before ABI discovery, so an unused hardware

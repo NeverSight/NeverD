@@ -1374,6 +1374,134 @@ bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
          (Ctx.op(Field) == SymOp::Xor || Ctx.op(Field) == SymOp::Or);
 }
 
+// In the observed ring, perturbations divisible by 2^ceil(Precision/2)
+// annihilate one another. A factor can contribute several field coefficients
+// but its scalar offset contributes to the product exactly once.
+SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                              size_t &Storage, bool *EmittedReading) {
+  const auto Scale = Ctx.operand(Root, 0);
+  if (!Ctx.isConst(Scale))
+    return Root;
+  const auto Factors = Ctx.operands(Root).drop_front();
+  const auto Digits = Ctx.constWords(Scale);
+  if (Digits.front() & 1)
+    return Root;
+  auto Scaled = [&](SymRef Term) {
+    return Ctx.op(Term) == SymOp::Mul && Ctx.numOperands(Term) == 2 &&
+           Ctx.isConst(Ctx.operand(Term, 0));
+  };
+  auto HasSum = [&](SymRef F) {
+    if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) < 3 ||
+        !Ctx.isConst(Ctx.operand(F, 0)))
+      return false;
+    const auto A = Ctx.operand(F, 1), B = Ctx.operand(F, 2);
+    if (!Scaled(A) || !Scaled(B))
+      return false;
+    // A projected coordinate distinguishes this case from ordinary products
+    // of scalar affine forms, which already have a less expensive reader.
+    return lowOperand(Ctx, Ctx.operand(A, 1)) ||
+           lowOperand(Ctx, Ctx.operand(B, 1));
+  };
+  if (!HasSum(Factors.front()) && !HasSum(Factors.back()) &&
+      !HasSum(Factors[Factors.size() / 2]))
+    return Root;
+  if (!Budget.consume(Digits.size()))
+    return Root;
+  const unsigned Width = Ctx.width(Scale);
+  const unsigned Precision =
+      Width - llvm::APInt::tcLSB(Digits.data(), Digits.size());
+  const unsigned Bits = Precision / 2, Shift = Precision - Bits;
+  if (!Bits || Factors.size() > Storage / (2 * sizeof(SymRef)) ||
+      !Budget.consume(Factors.size()))
+    return Root;
+
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  using Key = std::pair<uint32_t, uint32_t>;
+  const size_t Bytes =
+      2 * (sizeof(Factor) + sizeof(unsigned) + Words * sizeof(uint64_t)) +
+      4 * sizeof(std::pair<Key, unsigned>);
+  llvm::SmallDenseMap<Key, unsigned, 16> Index;
+  llvm::SmallVector<Factor, 16> Rows;
+  llvm::SmallVector<unsigned, 16> Counts;
+  llvm::SmallVector<uint64_t, 32> Weights;
+  llvm::SmallVector<SymRef, 16> Parts;
+  Storage -= 2 * Factors.size() * sizeof(SymRef);
+  for (size_t I = 0; I != Factors.size();) {
+    const auto F = Factors[I++];
+    const size_t First = I - 1;
+    while (I != Factors.size() && Factors[I] == F)
+      ++I;
+    const auto Copies = static_cast<unsigned>(I - First);
+    auto Terms = Ctx.operands(F);
+    if (Ctx.op(F) != SymOp::Add || !Ctx.isConst(Terms.front())) {
+      Parts.append(Copies, F);
+      continue;
+    }
+    const auto Offset = Terms.front();
+    Terms = Terms.drop_front();
+    if (Terms.size() > Budget.available() / (4 + 2 * Words))
+      return Root;
+    Budget.consume(Terms.size() * (4 + 2 * Words));
+    // Validate every term before publishing a contribution from this factor.
+    if (!llvm::all_of(Terms, [&](SymRef D) {
+          return Scaled(D) &&
+                 llvm::APInt::tcLSB(Ctx.constWords(Ctx.operand(D, 0)).data(),
+                                    Words) >= Shift;
+        })) {
+      Parts.append(Copies, F);
+      continue;
+    }
+    unsigned Multiplicity = Copies;
+    for (const auto D : Terms) {
+      const auto K = Ctx.operand(D, 0), Word = Ctx.operand(D, 1);
+      const auto Low = lowOperand(Ctx, Word);
+      const auto Field = Low && Ctx.width(Low) == Bits ? Low : Word;
+      const Key Position{Offset.index(), Field.index()};
+      auto It = Index.find(Position);
+      if (It == Index.end()) {
+        if (Storage < Bytes)
+          return Root;
+        Storage -= Bytes;
+        It = Index.try_emplace(Position, Rows.size()).first;
+        Rows.push_back({F, Field, K, Offset, Shift, 0, 0, false});
+        Counts.push_back(0);
+        Weights.resize(Weights.size() + Words, 0);
+      }
+      const unsigned Row = It->second;
+      Counts[Row] += Multiplicity;
+      Multiplicity = 0;
+      llvm::APInt::tcMultiplyPart(Weights.data() + Row * Words,
+                                  Ctx.constWords(K).data(), Copies, 0, Words,
+                                  Words, true);
+    }
+  }
+  if (Factors.size() - Parts.size() < limits::kMinResidueProductFactors)
+    return Root;
+  const size_t FirstGenerated = Ctx.numNodes();
+  // Project general carriers after the operand walk: interning an extract
+  // can relocate the original operand pool. Narrow fields already name
+  // their exact value, including fields shared by different extensions.
+  for (auto &Row : Rows) {
+    if (Ctx.width(Row.Word) != Bits) {
+      if (!Budget.consume(Words + 1))
+        return Root;
+      Row.Word = Ctx.mkExtract(Row.Word, 0, Bits);
+    }
+  }
+  const auto Sum = buildProjectedLinearProduct(
+      Ctx, Rows, Scale, Precision, Shift, Budget, Storage, Counts, Weights);
+  if (!Sum)
+    return Root;
+  Parts.push_back(Sum);
+  const auto Candidate = Ctx.mkMul(Parts);
+  if (!(readingScore(Ctx, Candidate) < readingScore(Ctx, Root)))
+    return Root;
+  recordResidueReading(Ctx, FirstGenerated, Budget, Storage);
+  if (EmittedReading)
+    *EmittedReading = true;
+  return Candidate;
+}
+
 SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
                             WorkBudget &Budget, size_t &Storage,
                             bool *EmittedReading) {

@@ -334,6 +334,13 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
           goCallEntersInternalABI(
               *Image, Func.Entry,
               ConstantCallee ? Op.Inputs[0].ConstVal : InvalidVA, CalleeReads);
+      // Go's internal ABI decides what a call into Go code returns, and
+      // materializeGoCallResults gives every call of a callee the same
+      // record from all of its callers' reads.  A record this block's
+      // reads alone suggest would disagree with that one: the return's
+      // default RAX would make one of floats alone hold RAX too.
+      if (GoCall)
+        continue;
       std::vector<FieldRead> Fields;
       std::set<uint64_t> Redefined;
       for (size_t J = OI + 1; J < Blk.Ops.size(); ++J) {
@@ -369,11 +376,6 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
               continue;
             int CI = candIdx(In.RegOff);
             if (CI >= 1000 || Redefined.count(In.RegOff) || PreservedByCall(In))
-              continue;
-            // A call Go code makes returns nothing in a register Go's
-            // internal ABI returns no result in, as RDX, its closure
-            // context (goResultRegister).
-            if (GoCall && !goResultRegister(TargetArch, In.RegOff))
               continue;
             // The field holds every byte the caller reads from it: `mov ecx,
             // eax` followed by `shr rax, 32` needs all of RAX.

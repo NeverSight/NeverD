@@ -617,6 +617,8 @@ IMMEDIATE_MEMORY_TEXT(kImmediateImageArtifactProperty,
 IMMEDIATE_MEMORY_TEXT(kImmediateHighCArtifact, "high.c")
 IMMEDIATE_MEMORY_TEXT(kImmediateLLVMCArtifact, "llvm.c")
 IMMEDIATE_MEMORY_TEXT(kImmediateELFArtifact, "llvm.o")
+IMMEDIATE_MEMORY_TEXT(kImmediateArm64eTriple, "arm64e-apple-macos15")
+IMMEDIATE_MEMORY_TEXT(kImmediateArm64eArtifact, "llvm-arm64e.o")
 IMMEDIATE_MEMORY_TEXT(kImmediateMachOArtifact, "llvm-macho.o")
 IMMEDIATE_MEMORY_TEXT(kImmediateHarnessArtifact, "harness.c")
 

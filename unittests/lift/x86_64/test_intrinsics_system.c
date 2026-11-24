@@ -55,6 +55,27 @@ int test_cpuid_return_eax(void) {
     return (int)a;
 }
 
+/* Leaf 1 takes no sub-leaf: the code leaves ECX as its caller left it. */
+int test_cpuid_leaf1(void) {
+    unsigned int a, b, c, d;
+    __asm__ volatile ("cpuid"
+        : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+        : "a"(1));
+    return (int)b;
+}
+
+/* Leaf 7 takes a sub-leaf: ECX holds the caller's fourth argument. */
+int test_cpuid_leaf7(int a, int b, int c, unsigned int subleaf) {
+    unsigned int eax, ebx, ecx, edx;
+    (void)a;
+    (void)b;
+    (void)c;
+    __asm__ volatile ("cpuid"
+        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+        : "a"(7), "c"(subleaf));
+    return (int)ebx;
+}
+
 unsigned long long test_rdtsc_return(void) {
     unsigned int lo, hi;
     __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));

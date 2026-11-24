@@ -1112,6 +1112,43 @@ TEST(SymSimplifyGuard, SignedFieldScaleOnlyFreesTheInsertedLowBits) {
   }
 }
 
+TEST(SymSimplifyGuard, ExtendedIntegerBoundsPreserveEveryNoWrapCondition) {
+  llvm::LLVMContext C;
+  llvm::Module M("extended_range", C);
+  const auto Byte = llvm::Type::getInt8Ty(C);
+  auto *Type =
+      llvm::FunctionType::get(Byte, {llvm::Type::getIntNTy(C, 4)}, false);
+  for (const bool SignedField : {false, true})
+    for (const bool SignedFlag : {false, true})
+      for (const unsigned Offset : {1u, 112u, 120u, 127u, 128u, 241u, 255u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << SignedField << '/' << SignedFlag << '/' << Offset);
+        auto *F = llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                                         "extended_add", &M);
+        llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+        auto *Field = SignedField ? B.CreateSExt(F->getArg(0), Byte)
+                                  : B.CreateZExt(F->getArg(0), Byte);
+        auto *Bias = B.getInt8(Offset);
+        auto *Sum = B.CreateAdd(Field, Bias, "", !SignedFlag, SignedFlag);
+        auto *Root = B.CreateSub(Sum, B.CreateAdd(Field, Bias));
+        B.CreateRet(Root);
+        bool Defined = true;
+        for (unsigned I = 0; I < 16; ++I) {
+          const llvm::APInt Narrow(4, I);
+          const auto Value = SignedField ? Narrow.sext(8) : Narrow.zext(8);
+          bool Overflow;
+          (void)(SignedFlag ? Value.sadd_ov(Bias->getValue(), Overflow)
+                            : Value.uadd_ov(Bias->getValue(), Overflow));
+          Defined &= !Overflow;
+        }
+        const auto Value = SymSimplifyPass::constantValueOf(Root);
+        ASSERT_EQ(Value.has_value(), Defined);
+        if (Value)
+          EXPECT_TRUE(Value->isZero());
+        EXPECT_FALSE(llvm::verifyFunction(*F, &llvm::errs()));
+      }
+}
+
 TEST(SymSimplifyGuard, ProductOffsetsRequireTheCombinedZeroSuffix) {
   llvm::LLVMContext C;
   llvm::Module M("product_low_bits", C);

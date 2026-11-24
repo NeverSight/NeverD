@@ -4,24 +4,38 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Compare original INT/UD2 and injected IRQ/NMI entry with KVM snapshots.
+/// Compare original INT/UD traps and injected IRQ/NMI entry with KVM snapshots.
 //===----------------------------------------------------------------------===//
 
 class X86LegacyEventNativeTest : public X86PagingNativeTest {
 protected:
   unsigned Comparisons = 0;
+  std::optional<cpu_set_t> OriginalAffinity;
+
+  void TearDown() override {
+    X86PagingNativeTest::TearDown();
+    if (OriginalAffinity)
+      EXPECT_EQ(sched_setaffinity(0, sizeof(cpu_set_t), &*OriginalAffinity), 0);
+  }
 
   void compare(unsigned CPL, unsigned TargetCPL, bool Gate32, bool Code32,
                bool Stack32, bool TSS32, unsigned EventKind, unsigned Case,
-               uint32_t ExtraFlags = 0, bool SameRingFaults = false) {
+               uint32_t ExtraFlags = 0, bool SameRingFaults = false,
+               std::optional<X86LegacyUD0FetchProfile> UD0Profile = {},
+               unsigned UD0AddressForm = 0) {
     using namespace neverd;
     SCOPED_TRACE(testing::Message()
                  << "cpl=" << CPL << " target=" << TargetCPL << " gate32="
                  << Gate32 << " code32=" << Code32 << " stack32=" << Stack32
                  << " tss32=" << TSS32 << " event=" << EventKind
                  << " case=" << Case << " extra_flags=" << ExtraFlags
-                 << " same_ring_faults=" << SameRingFaults);
+                 << " same_ring_faults=" << SameRingFaults
+                 << " ud0_address_form=" << UD0AddressForm);
     const bool Legacy = GetParam() == 2;
+    const bool UD0Boundary = EventKind == 6;
+    const uint32_t InstructionPC =
+        UD0Boundary ? 0x2000 - (Code32 ? 2 : 3) - UD0AddressForm : Code;
+    const uint32_t DefaultHandler = UD0Boundary ? 0x30000 : 0x2000;
     const unsigned PTWidth = Legacy ? 4 : 8;
     const uint64_t PT = Legacy ? 0x11000 : 0x12000;
     constexpr uint32_t GDT = 0x7000, IDT = 0x6000;
@@ -59,10 +73,10 @@ protected:
     uint16_t NewSS = 80 | TargetCPL;
     uint32_t CodeAddress = GDT + 64;
     uint32_t IDTBase = IDT;
-    uint8_t Vector = EventKind == 1   ? 6
-                     : EventKind == 2 ? 2
-                     : EventKind == 4 ? 13
-                                      : 64;
+    uint8_t Vector = EventKind == 1 || EventKind == 5 || UD0Boundary ? 6
+                     : EventKind == 2                 ? 2
+                     : EventKind == 4                 ? 13
+                                                      : 64;
     if (Case == 29 && (EventKind == 0 || EventKind == 3))
       Vector = 14;
     uint32_t TargetIP = Target;
@@ -133,9 +147,12 @@ protected:
       put(Cursor, Stop - (Cursor + 4), 4);
     };
     for (unsigned V = 0; V != 256; ++V) {
-      const uint32_t Entry = 0x2000 + V * 16;
-      put(IDT + V * 8, Entry | (uint64_t(SameRingFaults ? 24 | CPL : 8) << 16) |
-                           (uint64_t{0xee} << 40));
+      const uint32_t Entry = DefaultHandler + V * 16;
+      put(IDT + V * 8,
+          (Entry & 0xffff) |
+              (uint64_t(SameRingFaults ? 24 | CPL : 8) << 16) |
+              (uint64_t{0xee} << 40) |
+              (uint64_t(Entry & 0xffff0000) << 32));
       Handler(Entry, V, true);
     }
     Handler(Target, Vector, Code32);
@@ -162,6 +179,8 @@ protected:
       Clear(0xb000, 1);
     if (Case == 32 || Case == 33)
       Clear(0xa000, 1);
+    if (UD0Boundary)
+      Clear(0x2000, 1);
     std::fill(RAM + 0xd000, RAM + 0xd100, 0xa5);
     std::fill(RAM + 0xdf00, RAM + 0xe000, 0xa5);
     std::fill(RAM + 0xef00, RAM + 0xf100, 0xa5);
@@ -198,17 +217,29 @@ protected:
     Special.tr.type = TSS32 ? 11 : 3;
     Special.tr.present = 1;
     kvm_regs Registers{};
-    Registers.rip = Code;
+    Registers.rip = InstructionPC;
     Registers.rsp = Case == 34 ? 0xabcdd100 : Case == 36 ? 0xd103 : 0xd100;
     Registers.rax = EventKind == 4 ? 0 : 0x11223344;
     Registers.rflags = 0x2d7 | ExtraFlags;
-    std::vector<uint8_t> Instruction = EventKind == 1
-                                           ? std::vector<uint8_t>{0x0f, 0x0b}
-                                           : std::vector<uint8_t>{0xcd, Vector};
-    std::copy(Instruction.begin(), Instruction.end(), RAM + Code);
+    std::vector<uint8_t> Instruction =
+        EventKind == 1 ? std::vector<uint8_t>{0x0f, 0x0b}
+        : EventKind == 5
+            ? (Code32 ? std::vector<uint8_t>{0x0f, 0xb9, 0x00}
+                      : std::vector<uint8_t>{0x67, 0x0f, 0xb9, 0x00})
+        : UD0Boundary
+            ? (UD0AddressForm == 0
+                   ? std::vector<uint8_t>{0x0f, 0xff, 0x00}
+               : UD0AddressForm == 1
+                   ? std::vector<uint8_t>{0x0f, 0xff, 0x04, 0x20}
+                   : std::vector<uint8_t>{0x0f, 0xff, 0x84, 0x20, 0, 0, 0,
+                                          0})
+            : std::vector<uint8_t>{0xcd, Vector};
+    if (UD0Boundary && !Code32)
+      Instruction.insert(Instruction.begin(), 0x67);
+    std::copy(Instruction.begin(), Instruction.end(), RAM + InstructionPC);
     if (EventKind == 4) {
       Instruction = {0x8e, 0xd0}; // Null MOV SS generates a real #GP(0).
-      std::copy(Instruction.begin(), Instruction.end(), RAM + Code);
+      std::copy(Instruction.begin(), Instruction.end(), RAM + InstructionPC);
     }
     RAM[Stop] = 0xf4;
     X86LegacyExecutionState State;
@@ -254,11 +285,12 @@ protected:
          X86AlignmentPriority::BeforePaging, X86FullSegmentLimitChoice::Fault},
         X86LegacyEventProfile::OrderedFrame,
         false};
+    Options.UD0Fetch = UD0Profile;
     auto Expected =
-        EventKind <= 1 || EventKind == 4
+        EventKind <= 1 || EventKind == 4 || EventKind == 5 || UD0Boundary
             ? executeX86LegacyInstruction(State, *Memory, Instruction, Options)
             : deliverX86LegacyEvent(State, *Memory,
-                                    {uint32_t(Code), 0, 0, Vector,
+                                    {InstructionPC, 0, 0, Vector,
                                      EventKind == 2
                                          ? X86LegacyEventKind::NMI
                                          : X86LegacyEventKind::Interrupt},
@@ -300,7 +332,7 @@ protected:
       EXPECT_EQ(Delivered, Expected->DeliveredVector);
       const uint32_t Entry = Delivered == Vector
                                  ? (Gate32 ? TargetIP : uint16_t(TargetIP))
-                                 : 0x2000 + Delivered * 16;
+                                 : DefaultHandler + Delivered * 16;
       EXPECT_EQ(Entry, State.EIP);
       const std::array<uint32_t, 8> GPR{
           uint32_t(Registers.rax), uint32_t(Registers.rcx),
@@ -407,6 +439,44 @@ TEST_P(X86LegacyEventNativeTest, OriginalTargetLimitFaultRetainsFrameWrites) {
       for (unsigned Case : {17u, 37u, 38u})
         ASSERT_NO_FATAL_FAILURE(
             compare(3, 0, Gate32, true, true, true, Event, Case, 0, true));
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
+TEST_P(X86LegacyEventNativeTest, OriginalUD1IgnoresItsMemoryOperand) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
+  for (bool Code32 : {false, true})
+    for (unsigned CPL : {0u, 3u})
+      ASSERT_NO_FATAL_FAILURE(compare(CPL, 0, true, Code32, true, true, 5, 0));
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
+TEST_P(X86LegacyEventNativeTest, OriginalUD0FetchPriorityUsesTheBoundCore) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
+  OriginalAffinity.emplace();
+  ASSERT_EQ(sched_getaffinity(0, sizeof(cpu_set_t), &*OriginalAffinity), 0);
+  const int Processor = sched_getcpu();
+  ASSERT_GE(Processor, 0);
+  cpu_set_t Selected;
+  CPU_ZERO(&Selected);
+  CPU_SET(Processor, &Selected);
+  ASSERT_EQ(sched_setaffinity(0, sizeof(Selected), &Selected), 0);
+  unsigned A, B, C, D;
+  if (!__get_cpuid_count(0x1a, 0, &A, &B, &C, &D))
+    GTEST_SKIP() << "UD0 fetch profile requires a selected hybrid core";
+  const unsigned CoreType = A >> 24;
+  if (CoreType != 0x20 && CoreType != 0x40)
+    GTEST_SKIP() << "UD0 fetch profile is unqualified for this core type";
+  const auto Profile = CoreType == 0x20
+                           ? X86LegacyUD0FetchProfile::OpcodeOnly
+                           : X86LegacyUD0FetchProfile::CompleteModRM;
+  RecordProperty("core_type", CoreType);
+  for (unsigned Form : {0u, 1u, 2u})
+    for (bool Code32 : {false, true})
+      for (unsigned CPL : {0u, 3u})
+        ASSERT_NO_FATAL_FAILURE(compare(CPL, 0, true, Code32, true, true, 6,
+                                        0, 0, false, Profile, Form));
   RecordProperty("cpu_comparisons", Comparisons);
 }
 

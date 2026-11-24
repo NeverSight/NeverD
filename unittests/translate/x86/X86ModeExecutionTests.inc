@@ -775,7 +775,7 @@ TEST_F(X86ModeExecutionTest, LongBodiesOwnShadowsAndIgnoreLegacyCodeBounds) {
 #if defined(__linux__) && defined(__x86_64__)
 TEST_F(X86ModeExecutionTest, OriginalModeWritesChooseTheNativeEventFrame) {
   unsigned Compared = 0;
-  for (unsigned Case = 0; Case != 4; ++Case) {
+  for (unsigned Case = 0; Case != 5; ++Case) {
     SCOPED_TRACE(Case);
     X64PagedNativeCPU Native;
     ASSERT_NO_FATAL_FAILURE(Native.initialize());
@@ -788,10 +788,10 @@ TEST_F(X86ModeExecutionTest, OriginalModeWritesChooseTheNativeEventFrame) {
     auto &R = V.Core.Core.Core.Core;
     uint64_t PC = Program[9].Address;
     Program.resize(9);
-    const uint8_t Vector = Case == 0   ? 0x40
-                           : Case == 1 ? 6
-                           : Case == 2 ? 13
-                                       : 1;
+    const uint8_t Vector = Case == 0                ? 0x40
+                           : Case == 1 || Case == 4 ? 6
+                           : Case == 2              ? 13
+                                                    : 1;
     if (Case == 2) {
       Program[4].Bytes[1] = 0; // Original MOV EAX,0 disables PAE before PG.
       std::copy(Program[4].Bytes.begin(), Program[4].Bytes.end(),
@@ -807,10 +807,11 @@ TEST_F(X86ModeExecutionTest, OriginalModeWritesChooseTheNativeEventFrame) {
       PC = add(PC, X86ExecutionMode::Protected32, {0x9d});
     }
     PC = add(PC, X86ExecutionMode::Protected32, {0x0f, 0x22, 0xc0});
-    if (Case < 2)
+    if (Case < 2 || Case == 4)
       add(PC, X86ExecutionMode::Compatibility32,
-          Case == 0 ? std::vector<uint8_t>{0xcd, Vector}
-                    : std::vector<uint8_t>{0x0f, 0x0b});
+          Case == 0   ? std::vector<uint8_t>{0xcd, Vector}
+          : Case == 4 ? std::vector<uint8_t>{0x0f, 0xb9, 0x00}
+                      : std::vector<uint8_t>{0x0f, 0x0b});
     std::copy(RAM.Memory.front().Bytes.begin(), RAM.Memory.front().Bytes.end(),
               Native.RAM);
     auto S = Native.Initial;
@@ -850,7 +851,8 @@ TEST_F(X86ModeExecutionTest, OriginalModeWritesChooseTheNativeEventFrame) {
     ASSERT_EQ(Got->Status, X86LegacyExecutionStatus::EventDelivered);
     EXPECT_EQ(Got->DeliveredVector, Vector);
     EXPECT_EQ(Got->Attempts, Program.size());
-    EXPECT_EQ(Got->Completions, Program.size() - (Case == 1 || Case == 2));
+    EXPECT_EQ(Got->Completions,
+              Program.size() - (Case == 1 || Case == 2 || Case == 4));
     EXPECT_EQ(Budget, 0u);
     // The native terminal HLT advances PC by one; it changes neither the
     // installed frame nor the registers/flags compared here.

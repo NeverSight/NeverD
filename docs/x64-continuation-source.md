@@ -1297,6 +1297,73 @@ entry without IST and a quiescent guest. The producer owns the breakpoint
 setup, capture identity and the association between raw bytes and their
 guest addresses. [QEMU debugger](https://www.qemu.org/docs/master/system/gdb.html)
 
+### Probe an unresolved site from a continuation report
+
+On a Linux host with KVM access, Python-enabled GDB and `qemu-system-x86_64`,
+run the manifest probe from the repository root. Its input is the JSON file
+written by `--continuation-report`. Its output is a complete request for
+`--x64-continuation`.
+
+```sh
+python3 -m scripts.qemu_xbegin_probe unbound-report.json bound-request.json
+neverd decompile image.exe --x64-continuation=bound-request.json --continuation-report=bound-report.json -o bound.c
+```
+
+The probe finds the unresolved unprefixed `XBEGIN rel32` in the report's
+instruction units. Supply `--pc 0x...` if multiple sites match. It places
+only the six selected image bytes at their original address in a fresh
+one-vCPU, diskless QEMU/KVM guest. The debugger sets up long mode while the
+vCPU is stopped and permits one resume. The original image stays on the host.
+The fixture maps cross-page instructions and their successors. Its five-level
+paging mode requires LA57 on the realized vCPU.
+[Probe implementation](../scripts/qemu_xbegin_probe.py) ·
+[QEMU raw loader](https://www.qemu.org/docs/master/system/generic-loader.html)
+
+At a dedicated vector 6 landing the probe adds the observed evidence to the
+embedded request and publishes the new file. It preserves the requested
+entries, dispatch and `"native_rtm_abort_steps": "auto"`. The observed PC
+delivers the fault directly. Other immediate-abort pairs keep their automatic
+admission and fallback edges. Explicit CPU and region bindings still require
+their original configuration.
+A distinct abort target reports EAX for the instrumented attempt. A debug
+breakpoint inside a transaction can itself cause an abort. An ambiguous stop
+produces no binding. The result describes the fresh vCPU. Ordinary exports
+load the request offline.
+[Intel system programming guide](https://cdrdv2-public.intel.com/843857/253669-sdm-vol-3b-dec-24.pdf)
+
+### Capture from an already prepared fixture
+
+The GDB command reads both stops and writes the request fragment. Start with
+the isolated vCPU stopped at the original XBEGIN. Give vector 6 its own landing
+pad and direct the other present exception gates to a shared pad. The two
+successors and the landing pads must fit the four x86 hardware breakpoint
+slots. Disable any breakpoint at the starting RIP so GDB can resume directly.
+[Sourcing a Python command in GDB](https://sourceware.org/gdb/current/onlinedocs/gdb.html/CLI-Commands-In-Python.html)
+
+```text
+(gdb) source scripts/gdb_xbegin_capture.py
+(gdb) neverd-xbegin-capture /tmp/xbegin.json
+(gdb) continue
+```
+
+The command reads QEMU's synchronized registers and original virtual memory
+and arms hardware breakpoints on that inferior. It matches the synchronized
+RIP to the breakpoint GDB reports. The operator issues the single resume.
+The first stop removes the capture breakpoints. A stop at the dedicated vector
+6 entry records the original bytes, IDT and frame. At the distinct abort
+target GDB prints that attempt's EAX. Coincident successors remain
+undetermined. Only a vector 6 observation produces a JSON fragment.
+The exporter verifies it against the image and the V6 request.
+
+Pass the observed load base as a second argument when the image was relocated.
+Use `neverd-xbegin-capture cancel` to disarm before resuming. The destination
+file must be new. The resulting fragment can be reused in an existing request
+without a debugger connection.
+
+```sh
+jq --slurpfile capture /tmp/xbegin.json '. + $capture[0]' request.json > bound-request.json
+```
+
 | Capture field | Contents |
 | --- | --- |
 | `before`, `after` | Each object contains `cpu`, `rip`, `rsp`, `rax`, `eflags`, `cs`, `ss`, `cs_ar`, `cr4` and `efer`. `cs_ar` is the access-rights word (QEMU HMP segment flags shifted right by eight). |

@@ -5,7 +5,8 @@
 //===----------------------------------------------------------------------===//
 
 // The FVP starts at EL1 with EL2 and EL3 absent.
-#ifdef RETURN_MODEL_CURSOR
+#if defined(RETURN_MODEL_CURSOR) || defined(RETURN_MODEL_ORDERED)
+#define RETURN_MODEL_NORMAL_MEMORY
 // Each 2 MiB block holds either shared read-only code or one writable stack.
 #define RETURN_MODEL_TEXT_BASE 0x80000000
 #define RETURN_MODEL_EL0_DATA 0x80200000
@@ -81,10 +82,16 @@
 #define RETURN_MODEL_STATUS "oracle status="
 #define RETURN_MODEL_TCR " TCR_EL1="
 #define RETURN_MODEL_SCTLR " SCTLR_EL1="
+#ifdef RETURN_MODEL_ORDERED
+#define RETURN_MODEL_MODE " alignment control index="
+#define RETURN_MODEL_EL1_ERROR "ORDERED-MODEL EL1 comparison failed\n"
+#define RETURN_MODEL_EL0_ERROR "ORDERED-MODEL EL0 comparison failed\n"
+#else
 #define RETURN_MODEL_MODE " EnPACM bits="
-#define RETURN_MODEL_NEWLINE "\n"
 #define RETURN_MODEL_EL1_ERROR "RETURN-MODEL EL1 comparison failed\n"
 #define RETURN_MODEL_EL0_ERROR "RETURN-MODEL EL0 comparison failed\n"
+#endif
+#define RETURN_MODEL_NEWLINE "\n"
 #define RETURN_MODEL_EXCEPTION "RETURN-MODEL unexpected exception\n"
 #define RETURN_MODEL_OBSERVATION "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0="
 #define RETURN_MODEL_ZERO '0'

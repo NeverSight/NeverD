@@ -450,6 +450,43 @@ int main(void) {
   }
 }
 
+TEST(HighCIntegerConversion, AFloatReturnTakesTheLowBytesOfWiderBits) {
+  // A function returning a double hands back a vector register's 16 bytes,
+  // its sign flipped (`xorpd xmm0, mask`): the double is their low eight.
+  // C converted the 16-byte integer numerically, `return v1 ^ 0x80...;`,
+  // as runtime.floor printed; the bits are reinterpreted.  Its near twin
+  // returns bits as wide as the double, which were reinterpreted already.
+  const TypeRef Wide = integer(16, false), Word = integer(8, false);
+  const TypeRef Double = NdType::makeFloat(8);
+  auto Flip =
+      function("flip", Double,
+               {assign(local(1, Wide), extend(NdOp::INT_ZEXT, input(), Wide)),
+                result(op(NdOp::INT_XOR, local(1, Wide),
+                          constant(UINT64_C(0x8000000000000000), 16), Wide))});
+  auto Same =
+      function("same", Double,
+               {result(op(NdOp::INT_XOR, input(),
+                          constant(UINT64_C(0x8000000000000000)), Word))});
+  Same.Entry += 0x100;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({Flip, Same}, Out, Options));
+  compileAndRun(Source + R"(
+int main(void) {
+  const double inputs[] = {2.5, -1.25, 1e300, -0.0};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    const uint64_t bits = __builtin_bit_cast(uint64_t, inputs[i]);
+    const uint64_t want = bits ^ UINT64_C(0x8000000000000000);
+    if (__builtin_bit_cast(uint64_t, flip(bits)) != want) return 1;
+    if (__builtin_bit_cast(uint64_t, same(bits)) != want) return 2;
+  }
+  return 0;
+}
+)");
+}
+
 TEST(HighCIntegerConversion, FloatingConstantSelectionKeepsItsCondition) {
   auto Select = std::make_shared<HighExpr>();
   Select->Kind = ExprKind::BinOp;

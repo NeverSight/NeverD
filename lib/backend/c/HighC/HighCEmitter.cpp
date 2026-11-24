@@ -547,13 +547,13 @@ void HighCWriter::prepareFunctionIdentifiers(
     const std::string Symbol =
         cNameOfSymbol(SourceName, Opts.Format, Opts.TheArch).str();
     std::string Stem = canonicalizeCProjectionIdentifier(Symbol, "nd_function");
-    // A callee omitted from this projection is still the image's own copy.
-    // Give its recovered declaration the same namespace protection as a
-    // definition, retaining the original symbol as its assembler link name.
+    // A single-entry load can omit the callee's symbol. A direct target in
+    // image code still owns its recovered signature and assembler link name.
     if (Expr->CallAddr && copiesHeaderRoutine(Stem, Opts.Format) &&
-        isOwnFunctionName(SourceName, Funcs) && Opts.Image &&
-        !Opts.Image->findImportAt(Expr->CallAddr) &&
-        !Opts.Image->findImportStubAt(Expr->CallAddr)) {
+        Opts.Image && !Opts.Image->findImportAt(Expr->CallAddr) &&
+        !Opts.Image->findImportStubAt(Expr->CallAddr) &&
+        (Opts.Image->isCodeAddress(Expr->CallAddr) ||
+         isOwnFunctionName(SourceName, Funcs))) {
       Stem += "_" + llvm::utohexstr(Expr->CallAddr);
       ImageHeaderSymbols.insert(Symbol);
     }

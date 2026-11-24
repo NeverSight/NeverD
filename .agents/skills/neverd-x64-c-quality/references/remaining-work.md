@@ -29,6 +29,16 @@ IA32_TSX_FORCE_ABORT bit 0, or the combination of the RTM_ALWAYS_ABORT and
 RTM_FORCE_ABORT CPUID bits fixes RAX at zero and selects the
 original fallback during export. With hidden RTM and insufficient evidence,
 the step retains the original native boundary.
+An isolated QEMU/KVM vector 6 stop at the selected XBEGIN can supply the
+missing evidence. The [GDB capture command](../../../../scripts/gdb_xbegin_capture.py)
+collects the two register banks, original bytes, exception gates and hardware
+frame for the existing V6 export validator. An observed fallback EAX belongs
+to that attempt. Ordinary exports perform no debugger queries.
+The [manifest probe](../../../../scripts/qemu_xbegin_probe.py) stages the
+unresolved instruction in a fresh diskless KVM guest and produces the complete
+request from its first stop. It uses the same debugger capture and V6 validator.
+An entry selection can keep automatic RTM checks at other sites. The observed
+site contributes the vector 6 step and has no RTM abort successor of its own.
 
 The ordinary HighC and LLVMC interfaces now expose an unresolved fixed
 Win64 outgoing word at its authenticated direct CALL. Bind
@@ -37,6 +47,8 @@ Win64 outgoing word at its authenticated direct CALL. Bind
 retains its recovered value. The default source imports the original word
 and preserves the registry call through optimization. The physical word
 can differ across invocations with identical ordinary entry parameters.
+Single-entry HighC exports also keep mapped direct callees distinct from
+MinGW header declarations when only the PDB names the omitted routine.
 The V6 `native_rtm_abort_steps` binding handles an authenticated immediate
 abort pair under declared RTM support as one translated step. It preserves
 early-abort EAX and the original fallback. The earlier environment-budget

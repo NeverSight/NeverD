@@ -149,6 +149,7 @@ private:
   bool updatesNames_ = false, refreshingNames_ = false;
   bool solvesSummaries_ = false, summariesReady_ = false;
   bool rendersAhead_ = false;
+  bool warmTypeLibraries_ = false;
   QString renderAheadState_;
   /// The project whose replica last exited abnormally, whose replicas render
   /// nothing ahead from then on.

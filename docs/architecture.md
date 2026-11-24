@@ -5631,6 +5631,16 @@ instruction's count mask. An oversized MedIR shift yields zero or sign fill.
 Compare the sets of observable results after the shift. Disjoint sets prove
 a choice. An overlap leaves that choice unproven. A word shift on a wide
 register uses the width of the shift operand.
+Across successive joins, the return-contract pass follows the value and count
+on the same predecessor. Every PHI reads the state before entry to its block.
+An outer choice can distinguish a third arm even when the inner arms return
+the same bits. A loop header can receive new bindings on each latch. The proof
+compares the observable outcomes after closing both sets under those
+transitions, including the exit before the first iteration. A shift in a
+predecessor can feed the return through a final PHI or register view. The
+comparison uses the bits still visible after the exit's mask or byte
+extraction. If an operand is unknown at the return or the search exhausts
+its work allowance, this branch supplies no evidence of a result.
 A MIPS64 word check in the common computation needs a valid sign-extended
 word on every incoming arm, including after a logical right shift. If a
 narrower view has its own PHI, its incoming value and the complete return
@@ -5745,6 +5755,10 @@ debug signature is not positional and therefore cannot declare that flat call.
 Scalar temporaries used through a same-width floating view may be declared as
 float or double; integer uses still reinterpret their bits. Conflicting widths,
 address-taken storage and explicit type edits keep their existing declarations.
+A function returning a float returns the bits it holds reinterpreted,
+those of a vector register wider than the float from their low bytes:
+`runtime.floor` returned `v1 ^ 0x8000000000000000`, its 16-byte value with
+the sign flipped, as C's numeric conversion of that integer.
 Readonly floating constants and constant conditional-move arms print as
 floating values while retaining the original condition. Shared floating
 computations remain materialized through register-width views, preserving FMA
@@ -6462,8 +6476,25 @@ float32 or a float64 as its widest read takes (`GoCallShape::LastFloat`): a
 func value returning a float64 left X0 to a read of what the call clobbered.
 A record holds as many as Go returns: up to nine integer and fifteen floating
 results on amd64, sixteen of each on arm64 (`kSourceMaxRegisterReturnMembers`).
-Direct calls, whose callee returns their record, still return integer results
-alone. RDX, the closure context, is no result of such a call; read as System
+Direct calls return floating results too, the two banks counted apart, each
+from its first register (`goCallResultsRead` with `BothBanks`): a call the
+type pass gave a floating value returns X0 (arm64 F0), and a read of RAX
+beside it is a result as well, while the RAX conversion gives every call is
+one only where something reads it, a return's default operand aside. A
+record of floats alone holds no integer field: `runtime.modf` returns `{X0,
+X1}`, and `runtime.(*scavengerState).run`, typed `double`, returns `{RAX,
+X0}`, whose RAX `bgscavenge` read as what the call clobbered. Each floating
+result must be supplied by every return as an integer one is
+(`goReturnedValue` with `Floating`): the vector register's newest write of
+four bytes or more, as MOVSD's, its PHI, a call that returns it, or an
+argument the path leaves unchanged; a function returns no float a return
+leaves undefined, though a caller reads the register, and a single result is
+no record. The struct-return heuristic leaves calls into Go code to this
+authority (`modelCallStructReturn`): from one block's reads and the return's
+default RAX it gave `modf`'s recursive call `{RAX, X0, X1}`, which
+`recoverStructReturnFromCallers` then gave `modf`, while `runtime.floor`, which
+reads X1 after the call and X0 only below a branch, kept a call of RAX and
+printed `return runtime_modf(arg0);` from a `double` function. RDX, the closure context, is no result of such a call; read as System
 V's second result, it gave one a field. A shape other than the
 platform's integer pair is a record at a call as in the function it calls
 (`integerReturnPair`): arm64 printed `__int128` at each call of a function
@@ -6526,10 +6557,9 @@ function computed (`returnsGoResults`).
 No register carries a value into Go code but its arguments. A field of a
 register record that a return leaves as the function was entered with, where
 no argument arrives, is therefore unknown, in a record with floating fields
-too (`NdOpReturnLowering`): `runtime.modf` returns X0 and X1, and RAX beside
-them only where its own call left it. Its return that two paths reach with
-RAX untouched hands back an unknown value there. Before, the lowering found
-no value and refused the function once its growth path was gone.
+too (`NdOpReturnLowering`). Before, the lowering found no value and refused
+such a function once its growth path was gone: `runtime.modf`, while its
+record still held a RAX that two of its returns leave untouched.
 
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
@@ -6674,6 +6704,12 @@ loader reads every function's table (`GoModuleInfo::PanicBounds`), and
 passes exactly that index and bound, the call summaries take them as the call's
 fixed reads, and the routine's own two parameters stand for them, so a call
 prints `runtime_panicBounds(i, n)` rather than the registers the routine saves.
+The fixed reads hold for the run's own functions as for the callees it takes
+in (`appendGoBoundsCallReads`). A whole image is all its own functions, and
+there each bounds check read every register the routine saves: a function
+read RBX, RCX, RDI, RSI and R8-R11 at its entry, its callers passed them, and
+those reads made an earlier call's records grow, `runtime.showfuncinfo`
+returning `{RAX, RBX}` where its declaration returns a `bool`.
 An arm64 call takes the registers set before it, so LowToMed copies the index
 and the bound into X0 and X1 before the call, through temporaries that keep a
 swapped pair apart. The call never returns, so nothing after it reads them.
@@ -8171,6 +8207,15 @@ concatenation, the evaluation plan can read that lane directly. A shared
 use that observes more bits keeps the wider value.
 Repeated long factor calls share a parse result after their complete spelling
 and the applicable nesting depth have been checked.
+A scaled product can also contain several weighted fields per factor. If
+the outer scale leaves `p` bits and every weight is divisible by
+`2^ceil(p/2)`, products of two perturbations vanish. Recovery groups the
+surviving weights by field and scalar offset, counts each accepted factor's
+offset once, and retains any factor containing an observable cross term.
+The cofactor calculation supports even offsets without modular division.
+When translating flagged LLVM arithmetic, the source width of a sign or zero
+extension bounds its result. Those bounds can justify a surrounding no-wrap
+sum or product while keeping every operand's definedness checks.
 A sum, OR or XOR can also supply a field from one right shift when every
 other term is zero below the end of that field. For OR and XOR, a mask
 only needs to be zero inside the field. A sum can carry from lower bits.
@@ -13092,6 +13137,12 @@ source policy independently of analyst call-signature overrides. It supplies
 no dynamic callee result, native reconstruction contract or partially preserved
 vector-suffix proof. Ordinary LLVM undef/poison/freeze keep their own semantics.
 
+A scalar parameter a vector register carries is a float of its width in both
+routes (`inferParamTypes`), as the LLVM route's declaration already was: a
+`double` the code also uses as bits (`xorpd xmm0, mask` to flip its sign)
+was declared `int64_t` in HighC, which C passes in an integer register,
+where its integer uses now reinterpret its bits.
+
 A floating argument's vector register is wider than the scalar most callees
 read in it. Parameter detection records the width of the scalar a vector
 argument register carries in its low lane where the function reads no other
@@ -14343,6 +14394,15 @@ known, zero-extends signed intrinsic output cells, and retains compiler ordering
 around the query. Microsoft's
 [intrinsic documentation](https://learn.microsoft.com/en-us/cpp/intrinsics/cpuid-cpuidex)
 distinguishes this from `__cpuid`, which clears ECX.
+
+A leaf that ignores ECX takes no sub-leaf (`x86CpuidLeafIgnoresSubleaf`):
+0, 1, 2, 3, 5 and 6, and 80000000H to 80000008H, which neither manual gives
+one; every other leaf keeps its ECX. Where such a leaf reaches CPUID as a
+constant, the entry-read summary reads no ECX for it, MedIR passes it zero,
+which the processor answers the same way (`dropIgnoredCpuidSubleaves`), and
+C names no sub-leaf (`__cpuid(1, ...)`). Go's `rt0_go` runs `mov eax, 0;
+cpuid` and `mov eax, 1; cpuid` with ECX as the kernel left it: each read ECX
+as an unknown value and failed there.
 
 `X86SystemState.def` and `X86SystemState.h` own the bounded system-instruction
 inventory, scalar operand widths, memory roles and completion shapes. LowIR,

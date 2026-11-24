@@ -652,6 +652,97 @@ TEST_P(X86LegacySourceTest, IntegerFeatureBindingsSelectAliasesOrGuestUD) {
   EXPECT_EQ(get(S.Core.GPR[4]), 0x1004u);
 }
 
+TEST_P(X86LegacySourceTest, OriginalUD1FaultsWithoutReadingMemory) {
+  for (bool Code32 : {false, true}) {
+    resetLegacyState();
+    if (!Code32)
+      S.Core.Segments[1].Attributes &= ~0x4000;
+    const std::vector<uint8_t> Bytes =
+        Code32 ? std::vector<uint8_t>{0x0f, 0xb9, 0x00}
+               : std::vector<uint8_t>{0x67, 0x0f, 0xb9, 0x00};
+    Driver Run = nullptr;
+    ASSERT_NO_FATAL_FAILURE(
+        compile({{0x1000, Code32 ? 32u : 16u, Bytes}}, Run));
+    S.Core.GPR[0] = 0x12345000; // The encoded memory operand is unmapped.
+    X86LegacySourceExecution Context(S, *M, O);
+    uint64_t Budget = 1;
+    ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+    EXPECT_EQ(Budget, 0u);
+    EXPECT_EQ(Context.lastResult().DeliveredVector, 6);
+    EXPECT_FALSE(Context.lastResult().InstructionCompleted);
+    EXPECT_EQ(S.CR2, 0x12345678u);
+    EXPECT_EQ(get(S.Core.GPR[4]), 0x1000u);
+  }
+}
+
+TEST_P(X86LegacySourceTest, OriginalUD0UsesTheBoundFetchProfile) {
+  for (bool Code32 : {false, true})
+    for (auto Profile : {X86LegacyUD0FetchProfile::OpcodeOnly,
+                         X86LegacyUD0FetchProfile::CompleteModRM}) {
+      resetLegacyState();
+      if (!Code32)
+        S.Core.Segments[1].Attributes &= ~0x4000;
+      std::vector<uint8_t> Bytes;
+      if (!Code32)
+        Bytes.push_back(0x67);
+      Bytes.push_back(0x0f);
+      Bytes.push_back(0xff);
+      if (Profile == X86LegacyUD0FetchProfile::CompleteModRM)
+        Bytes.push_back(0x00);
+      Driver Run = nullptr;
+      ASSERT_NO_FATAL_FAILURE(
+          compile({{0x1000, Code32 ? 32u : 16u, Bytes}}, Run));
+      O.UD0Fetch = Profile;
+      S.Core.GPR[0] = 0x12345000; // No mapped encoded data operand.
+      X86LegacySourceExecution Context(S, *M, O);
+      uint64_t Budget = 1;
+      ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+      EXPECT_EQ(Budget, 0u);
+      EXPECT_EQ(Context.lastResult().DeliveredVector, 6);
+      EXPECT_FALSE(Context.lastResult().InstructionCompleted);
+      EXPECT_EQ(S.CR2, 0x12345678u);
+      EXPECT_EQ(get(S.Core.GPR[4]), 0x1000u);
+    }
+}
+
+TEST_P(X86LegacySourceTest, OriginalUD0CrossPageFetchUsesTheBoundProfile) {
+  const std::vector<std::vector<uint8_t>> EncodedAddresses{
+      {0x00},
+      {0x04, 0x25, 0x00, 0x50, 0x34, 0x12},
+      {0x80, 0x00, 0x50, 0x34, 0x12}};
+  for (bool Code32 : {false, true})
+    for (auto Profile : {X86LegacyUD0FetchProfile::OpcodeOnly,
+                         X86LegacyUD0FetchProfile::CompleteModRM})
+      for (const auto &Address : EncodedAddresses) {
+        resetLegacyState();
+        if (!Code32)
+          S.Core.Segments[1].Attributes &= ~0x4000;
+        const uint32_t PC = Code32 ? 0x1ffe : 0x1ffd;
+        S.EIP = PC;
+        std::vector<uint8_t> Bytes;
+        if (!Code32)
+          Bytes.push_back(0x67);
+        Bytes.insert(Bytes.end(), {0x0f, 0xff});
+        Bytes.insert(Bytes.end(), Address.begin(), Address.end());
+        Driver Run = nullptr;
+        ASSERT_NO_FATAL_FAILURE(
+            compile({{PC, Code32 ? 32u : 16u, Bytes}}, Run));
+        put(0x11008, 0, GuestScalarWidth::I32); // Encoded address page absent.
+        S.Core.GPR[0] = 0x12345000; // Data operand is also unmapped.
+        O.UD0Fetch = Profile;
+        X86LegacySourceExecution Context(S, *M, O);
+        uint64_t Budget = 1;
+        ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+        EXPECT_EQ(Budget, 0u);
+        const bool Complete =
+            Profile == X86LegacyUD0FetchProfile::CompleteModRM;
+        EXPECT_EQ(Context.lastResult().DeliveredVector, Complete ? 14 : 6);
+        EXPECT_FALSE(Context.lastResult().InstructionCompleted);
+        EXPECT_EQ(S.CR2, Complete ? 0x2000u : 0x12345678u);
+        EXPECT_EQ(get(S.Core.GPR[4] + (Complete ? 4 : 0)), PC);
+      }
+}
+
 TEST_P(X86LegacySourceTest, MachineStatusChangesReachFollowingInstructions) {
   for (bool Code32 : {false, true})
     for (bool Operand32 : {false, true}) {

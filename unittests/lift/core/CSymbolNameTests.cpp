@@ -29,7 +29,9 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <initializer_list>
 #include <tuple>
+#include <utility>
 
 #ifndef NEVERD_RUNTIME_FIXTURE_COMPILER
 #define NEVERD_RUNTIME_FIXTURE_COMPILER ""
@@ -1488,13 +1490,22 @@ TEST(CSymbolNames, OmittedImageHeaderRoutinesKeepTheirRecoveredDeclarations) {
     }
     bool hasInfo() const override { return true; }
   } Debug;
-  for (const char *Name :
-       {"strlen", "qsort", "wcschr", "_strupr", "wcscpy_s"}) {
+  for (const auto &[Name, Listed] :
+       std::initializer_list<std::pair<const char *, bool>>{
+           {"strlen", true},
+           {"qsort", true},
+           {"wcschr", true},
+           {"_strupr", true},
+           {"wcscpy_s", true},
+           {"_wcsicmp", false}}) {
     SCOPED_TRACE(Name);
     Debug.Name = Name;
     BinaryImage Image = startupImage();
     Image.Format = BinaryFormat::COFF;
-    Image.Symbols.back().Name = Name;
+    if (Listed)
+      Image.Symbols.back().Name = Name;
+    else
+      Image.Symbols.pop_back(); // Only debug info names the omitted target.
     CEmitterOptions Options;
     Options.TheArch = Arch::X64;
     Options.Format = BinaryFormat::COFF;

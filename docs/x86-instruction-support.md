@@ -75,6 +75,47 @@ the merged-source qualification.
 
 ## Mixed-mode execution, SMM, SGX and asynchronous events
 
+The original-byte protected and compatibility executor accepts fully encoded
+`0F B9 /r` UD1 forms without LOCK/REP prefixes, including address-size
+overrides. It authenticates the shared ModR/M, SIB and displacement grammar,
+then delivers `#UD` at the original instruction PC without reading the encoded
+memory operand. Truncated and trailing forms fail clearly. Independent Intel
+KVM comparisons cover code16/code32 and CPL0/CPL3 under both legacy and PAE
+paging. Generated protected C dispatch is exercised with x64 Clang and x64
+NeverC at O0/O2. The
+[Intel instruction reference](https://cdrdv2-public.intel.com/835757/325383-sdm-vol-2abcd.pdf)
+specifies the unconditional exception and absence of memory effects. The
+processor-specific UD0 fetch boundary remains a separate profile; this change
+does not claim byte-identical generated UD1 machine code.
+
+UD0 now has an explicit original-byte fetch profile. On the qualified Intel
+i9-13900H, the P core fetches the encoded ModR/M address and reports a page
+fault when it crosses an absent page; the E core reports `#UD` after the opcode
+without fetching that address. The executor accepts either bound behavior,
+retains the original instruction PC and never reads the encoded data operand.
+An unbound profile or incomplete ModR/M binding for the complete-fetch profile
+fails clearly. KVM comparisons cover code16/code32, CPL0/CPL3 and legacy/PAE
+paging on each core type. The protected C dispatcher exercises both profiles
+through x64 Clang and x64 NeverC at O0/O2. The
+[Intel instruction reference](https://cdrdv2-public.intel.com/774492/325383-sdm-vol-2abcd.pdf)
+also documents that some processors decode UD0 without ModR/M; callers must
+bind the target processor rather than infer this choice from the host.
+
+The [UD0 and integration qualification](evidence/x86-ud0-fetch-and-integration-2026-11-24.json)
+binds the P/E-core KVM comparisons, both SDKs' full paging and mode suites,
+and the latest `e6e6ac13df` generated-C and selected software regressions to
+their exact source commits and report hashes. The hosted
+[`test_mac_intel` run](https://github.com/gmh5225/test_mac_intel/actions/runs/45371725990)
+passed 37 of 38 selected cases at `eff781e8b3`; the remaining original-mode
+KVM case skipped because that runner could not open `/dev/kvm`. All three
+hosted SGX probes found zero EPC sections, so native enclave execution and
+the final LLVM release remain unqualified.
+At `c3663bdafa`, both SDKs' complete generated-C suites pass 265/265 after
+adding a cross-page UD0 source case. Each Clang/NeverC O0/O2 lane checks twelve
+code16/code32, profile and address-form combinations, including SIB and disp32,
+for the original fault PC, vector and CR2. The report digests are in the
+same qualification record.
+
 | Execution domain | Verified behavior |
 | --- | --- |
 | Real, virtual-8086, protected, compatibility and 64-bit code | Control-register and far transfers, task gates and nested IRET, Intel SYSENTER and SYSEXIT, and original-IDT fault frames. An incoming task or a backing pause preserves the completed stores and the original restart point. |
@@ -507,6 +548,7 @@ families remain separate work.
 
 | Instructions or family | Missing contract |
 | --- | --- |
+| UD0 in ordinary x64 executable output | The ordinary lifter records a terminal UD0 intrinsic, but its LLVM emitter currently lowers that intrinsic to `llvm.trap`. The resulting machine instruction does not retain the original UD0 bytes or processor-specific ModR/M fetch priority. The explicit protected source executor above is qualified only with a bound fetch profile. Exact x64 executable replay needs an original-byte fault continuation and a bound processor policy; a plain trap is not that contract. |
 | REP beyond the explicit paged memory-string binding | Long-mode MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS own element progress, page/alignment faults, handler repair/IRET/retry and producer-selected IRQ/NMI boundaries through both C routes. The local processor profile binds addr32 entry normalization and destination-first CMPS reads. The [protected legacy memory-string executor](x86-legacy-segments.md#protected-memory-strings) adds segmented 16/32-bit progress, exact operand faults, original handler repair and IRQ/NMI restart through the internal C++ state interface. Long-mode INS/OUTS use the explicit paged device binding. The [protected legacy port binding](x86-legacy-segments.md#protected-port-devices) adds IN/OUT/INS/OUTS with segmented progress, TSS permission checks and retained input effects across fault delivery. The explicit protected source dispatcher now retains these pauses. Ordinary function projection, physical device read-ahead, fast-string event timing and other processor profiles remain separate. Native LLVM/NeverC completion interfaces continue to own all seven families in their executing environment. |
 | SNP/RMP and VMGEXIT outside explicit native bindings | Nine appended decoder IDs and native LLVM/NeverC APIs now retain exact register/flag completion and memory effects. The [explicit SNP/SEV-ES source bindings](x86-snp-state.md) connect canonical x64 bytes to both C routes, including PVALIDATE address32 and both VMGEXIT prefixes. Unbound ordinary ABI lifting, other source prefixes/modes, faults/restart and physical RMP/SEV-ES service execution remain unqualified. The [dated census](evidence/x86-snp-census-2026-10-31.json) records the earlier missing implementation. |
 | LDS, LES, LSS, LFS, LGS | LLVM provides thirteen native interfaces; NeverC provides the nine long-mode forms. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. The [protected legacy transition](x86-legacy-segments.md#explicit-selector-instructions) now owns all five i386 LxS forms with staged cache/GPR publication over paged RAM. The [protected legacy executor](x86-legacy-segments.md#protected-instruction-and-event-execution) now connects these instructions to original-byte fetch, IDT fault delivery and IRET/RETF. The explicit protected source dispatcher connects this owner; ordinary legacy function projection, compatibility source dispatch and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
