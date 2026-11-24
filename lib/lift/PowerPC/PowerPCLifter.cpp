@@ -513,12 +513,16 @@ bool integer(State &S, Arch A, uint32_t W) {
     S.result(T, Sum, Rc);
     return true;
   }
-  if (XO == opcode::MFCR && !Rc && !(W & 0x001ff800)) { // MFCR
+  if (XO == opcode::MFCR && !Rc && !(W & 0x001ff800)) {
     NdVar Value = S.imm(0);
-    for (unsigned B = 0; B < 32; ++B)
-      Value = S.op(
-          NdOp::INT_OR, Value,
-          S.op(NdOp::INT_LEFT, S.resize(S.cr(B), S.Width), S.imm(crShift(B))));
+    for (unsigned B = 0; B < 32; ++B) {
+      // An incoming CR bit occupies a byte of LowIR storage. Only bit zero
+      // can contribute, even when the other seven storage bits are unknown.
+      NdVar Bit = S.op(NdOp::INT_AND, S.cr(B), NdVar::scalar(1, 1));
+      Value =
+          S.op(NdOp::INT_OR, Value,
+               S.op(NdOp::INT_LEFT, S.resize(Bit, S.Width), S.imm(crShift(B))));
+    }
     S.result(T, Value, false);
     return true;
   }

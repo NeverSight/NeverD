@@ -54,6 +54,7 @@ belong to one reachable basic block and use the same base register.
 PowerPC division preserves the quotient, the recorded CR0 comparison and the
 OE update to XER. Recompiled C and LLVM use native division for the target's
 choice of undefined bits, including division by zero and signed overflow.
+Each divide executes separately even when the operands match.
 The LowIR emulator tracks those bits as unknown. On PPC64, a successful word
 division exposes its defined low word even when the full register and CR0
 comparison depend on the processor.
@@ -94,7 +95,8 @@ The cross-compiler fixture builds freestanding integer arithmetic, division,
 branches, memory accesses, atomic fetch-add and a non-leaf call with reordered
 arguments. A stripped RISC-V fixture disables linker relaxation and rebuilds
 both the caller and its unsymbolized callee. PowerPC fixtures also consume
-the quotient and CR0 bits from a recorded word divide.
+the quotient and CR0 bits from a recorded word divide, check sticky overflow
+and count the two independent divides in the rebuilt machine code.
 It recompiles HighC, LLVM-derived C and the complete LLVM module at `-O0`
 and `-O2` for the same target. The GNU C17 rebuild checks the declared return
 width. Single-function HighC can use an unprototyped external declaration.

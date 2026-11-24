@@ -137,7 +137,7 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
                              : Word;
     auto *Ty = llvm::FunctionType::get(Result, {Word, Word}, false);
     auto *Asm = llvm::InlineAsm::get(Ty, ppc::divisionAssembly(*D, '$'),
-                                     ppc::divisionConstraints(*D), false);
+                                     ppc::divisionConstraints(*D), true);
     auto Operand = [&](unsigned I) -> llvm::Value * {
       auto *V = getVar(Op.Inputs[I], Builder);
       return V->getType()->isPointerTy() ? Builder.CreatePtrToInt(V, Word)

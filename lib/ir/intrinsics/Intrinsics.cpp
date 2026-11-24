@@ -176,6 +176,11 @@ struct SideEffectTable {
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_sideeffect.inc"
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm_sideeffect.inc"
 #include "neverd/ir/intrinsics/X86/intrinsics_x86_sideeffect.inc"
+// Each native divide supplies its own architecturally unspecified result bits.
+#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, ...)                            \
+  SIDEEFFECT(Intrinsic::Id);                                                   \
+  SIDEEFFECT(Intrinsic::RecordId);
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
 // Fresh unpredictable definitions must not be merged with one another.
 // Their dead outputs are removed by the validated MedIR DCE rule.
 #define NEVERD_MIPS_MERGE_LOAD(Id, ...) SIDEEFFECT(Intrinsic::Id);

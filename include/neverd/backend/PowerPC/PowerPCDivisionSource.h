@@ -39,8 +39,8 @@ inline std::string divisionSource(Division D, const std::string &Left,
   std::string Text = "(__extension__ ({ __UINTPTR_TYPE__ __nd_quotient";
   if (D.Record)
     Text += ", __nd_condition";
-  Text +=
-      "; __asm__(\"" + divisionAssembly(D, '%') + "\" : \"=r\" (__nd_quotient)";
+  Text += "; __asm__ volatile (\"" + divisionAssembly(D, '%') +
+          "\" : \"=r\" (__nd_quotient)";
   if (D.Record)
     Text += ", \"=r\" (__nd_condition)";
   Text += " : \"r\" ((__UINTPTR_TYPE__)(" + Left +

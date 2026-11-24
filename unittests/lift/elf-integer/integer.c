@@ -12,6 +12,13 @@ word unsigned_quotient(word a, word b) { return a / b; }
 long signed_quotient(long a, long b) { return a / b; }
 
 #if defined(__powerpc__)
+word independent_divides(word a, word b) {
+  word first, second;
+  __asm__ volatile("divw %0, %1, %2" : "=r"(first) : "r"(a), "r"(b));
+  __asm__ volatile("divw %0, %1, %2" : "=r"(second) : "r"(a), "r"(b));
+  return first ^ second;
+}
+
 word recorded_divide(word a, word b) {
   word quotient, cr;
   __asm__("divw. %0, %2, %3; mfcr %1"

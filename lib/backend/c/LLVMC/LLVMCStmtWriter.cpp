@@ -5039,7 +5039,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     if (!D || !D->admits(Opts.TheArch) || Call.arg_size() != 2 ||
         !Call.getArgOperand(0)->getType()->isIntegerTy(Bits) ||
         Call.getArgOperand(1)->getType() != Call.getArgOperand(0)->getType() ||
-        IA->hasSideEffects() ||
+        !IA->hasSideEffects() ||
         IA->getAsmString() != ppc::divisionAssembly(*D, '$') ||
         IA->getConstraintString() != ppc::divisionConstraints(*D))
       throw std::invalid_argument("invalid PowerPC divide assembly");
@@ -5049,14 +5049,14 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
                         !Pair->getElementType(1)->isIntegerTy(Bits)
                   : !Call.getType()->isIntegerTy(Bits))
       throw std::invalid_argument("invalid PowerPC divide result");
-    if (!Call.use_empty()) {
-      emitIndent(Indent);
-      OS << Name << (D->Record ? ".field_0 = " : " = ")
-         << ppc::divisionSource(*D, valueStr(Call.getArgOperand(0)),
-                                valueStr(Call.getArgOperand(1)),
-                                D->Record ? Name + ".field_1" : "")
-         << ";\n";
-    }
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << Name << (D->Record ? ".field_0 = " : " = ");
+    OS << ppc::divisionSource(*D, valueStr(Call.getArgOperand(0)),
+                              valueStr(Call.getArgOperand(1)),
+                              D->Record && !Call.use_empty() ? Name + ".field_1"
+                                                             : "")
+       << ";\n";
     return true;
   }
   if (auto *MD = Call.getMetadata(integer_memory::SourceMarker)) {

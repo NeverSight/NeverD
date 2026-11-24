@@ -108,6 +108,19 @@ def execute(path, profile, function, cases, symbol=None):
     return results
 
 
+def count_word_divides(path, function):
+    with path.open("rb") as file:
+        elf = ELFFile(file)
+        symbol = elf.get_section_by_name(".symtab").get_symbol_by_name(function)[0]
+        section = elf.get_section(symbol["st_shndx"])
+        start = symbol["st_value"] - section["sh_addr"]
+        code = section.data()[start:start + symbol["st_size"]]
+        order = "little" if elf.little_endian else "big"
+        # divw without OE or Rc. Ignore only the three register selectors.
+        return sum((int.from_bytes(code[i:i + 4], order) & 0xfc0007ff) == 0x7c0003d6
+                   for i in range(0, len(code), 4))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for program in ("neverd", "clang", "ld"):
@@ -138,7 +151,7 @@ def main():
             functions = ["mix", "product", "unsigned_quotient", "signed_quotient",
                          "branch", "access_word", "atomic_word", "call_mix"]
             if profile.startswith("powerpc"):
-                functions.extend(("recorded_divide", "divide_flags"))
+                functions.extend(("independent_divides", "recorded_divide", "divide_flags"))
             for function in functions:
                 cases = all_cases
                 if function in ("unsigned_quotient", "signed_quotient"):
@@ -164,7 +177,7 @@ def main():
                         expected.append(((((left + right) ^ (right << 3)) + b) & mask, a))
                     elif function == "branch":
                         expected.append(((a + b if a < b else a - b) & mask, a))
-                    elif function in ("recorded_divide", "divide_flags"):
+                    elif function in ("independent_divides", "recorded_divide", "divide_flags"):
                         # The original target supplies the undefined word-division
                         # bits and the CR0 recorded by this processor model.
                         continue
@@ -173,8 +186,10 @@ def main():
                     else:
                         expected.append((a, (a + b) & mask))
                 observed = execute(original, profile, function, cases)
-                if function in ("recorded_divide", "divide_flags"):
+                if function in ("independent_divides", "recorded_divide", "divide_flags"):
                     expected = observed
+                    if function == "independent_divides" and count_word_divides(original, function) != 2:
+                        raise RuntimeError(f"{profile}: original must execute both word divides")
                     if function == "divide_flags":
                         for (a, b), (flags, memory) in zip(cases, observed):
                             divisor = b & 0xffffffff
@@ -203,6 +218,8 @@ def main():
                             callees = [work / f"{profile}-mix-{projection}.c"] if function == "call_mix" else []
                             compile_elf(args, work, profile, checked, rebuilt, function, optimization, callees)
                         actual = execute(rebuilt, profile, function, cases)
+                        if function == "independent_divides" and count_word_divides(rebuilt, function) != 2:
+                            raise RuntimeError(f"{stem.name} {optimization}: lost an independent word divide")
                         if actual != expected:
                             index = next(i for i, pair in enumerate(zip(actual, expected)) if pair[0] != pair[1])
                             raise RuntimeError(f"{stem.name} {optimization} {cases[index]}: "
@@ -219,13 +236,13 @@ def main():
                             extra_flags=[*original_flags, "-Wl,--strip-all"])
                 stripped_ir = stripped.with_suffix(".ll")
                 subprocess.run([args.neverd, "lift", "-o", stripped_ir, stripped], check=True)
-                entry = f"sub_{caller:x}"
+                entry = f"sub_{caller:X}"
                 for optimization in ("-O0", "-O2"):
                     rebuilt = work / f"{profile}-stripped{optimization}.elf"
                     compile_elf(args, work, profile, stripped_ir, rebuilt, entry, optimization)
                     for name, address in (("call_mix", caller), ("mix", callee)):
                         expected = execute(original, profile, name, all_cases)
-                        actual = execute(rebuilt, profile, name, all_cases, f"sub_{address:x}")
+                        actual = execute(rebuilt, profile, name, all_cases, f"sub_{address:X}")
                         if actual != expected:
                             raise RuntimeError(f"{profile} stripped {name} {optimization}: incorrect result")
                         print(f"{profile}-stripped-{name} {optimization}: {len(all_cases)} comparisons", flush=True)
