@@ -9967,6 +9967,12 @@ undefined entry arms. Run the ABI suite alongside the x64 boolean-after-float
 call and AArch64 strtof/strtod execution tests when changing this admission.
 `FloatCallsDefineOnlyTheirDeclaredScalarWidth` checks mixed float/double
 carriers in both input orders, using both call-site and callee-summary types.
+`BytesJoinedBitwiseAreOneByteWhereEitherIs` returns `sete al; setnp cl; and
+eax, ecx` over entry registers no argument set: the result is one byte.
+`BytesJoinedBitwiseOverArgumentsKeepTheirWidth` makes RAX and RCX arguments:
+the result keeps its four bytes.
+`AnIntrinsicsOtherOutputsAreDefined` returns a byte written over the 32-bit
+OR of the EBX and ECX a CPUID defines: the result keeps its four bytes.
 The shared HighC host fixture reports native `-m32` execution unavailable on
 macOS, where a 64-bit build would truncate the kernels' addresses, and on any
 other non-Linux host whose test Clang builds no runnable `-m32` program: the
@@ -15803,7 +15809,12 @@ alongside the existing constant-propagation cases. Reordered edges,
 loop carries, complete complementary slices, retained partial reads,
 exceptional/incomplete inputs, fresh IDs including intrinsic outputs and
 the converter's later allocations, and unchanged call/memory effects have
-independent controls. The default
+independent controls. `MedDominatedSelects.*` in the same target fold a
+selection two blocks below the test that decides it, take the other arm for
+the negated comparison, and keep it where the other edge joins in or the
+comparison is another. `GoInternalABI.ABranchDecidesTheSelectionBelowIt`
+runs the pipeline over a Go function shaped as `(*pageCache).alloc`: no
+selection is left, and its C traps nowhere. The default
 LowIR conversion case verifies pipeline integration. Run this target,
 the shared ABI suite and HighIR/control-flow regressions after changing
 the recomposition owner.
@@ -23124,6 +23135,7 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 ```
 
 `PEFixedImageTest.ReturningCall*` in `NeverDPEFixedImageTests` checks exact physical call expansion, fresh results, repeated sites, receipt integrity, current frame-byte preservation, joins and short budgets. `NeverDInterpreterSpecializationTests` checks the direct returning-call state effect. `NeverDSymMemoryKnowledgeTests` checks transactional bounded memory forgetting; `NeverDRawEnvironmentRequirementTests` checks that raw call markers are refused by ordinary execution and source consumers. Run these focused targets after changing the conditional raw-call relation. A passing raw result is not an ordinary C or native equivalence certificate.
+`ReturningCallResultObjectKeepsNullAndBoundedWrites` additionally checks solver-proved null and nonnull branch projection, contained writes against the complete frame, an uncontracted result, zero or unknown size, and an out-of-object write. The source wrapper continues to reject the retained conditional call marker.
 
 `PEFixedImageTest.ReturningCallCanRetainDeclaredEarlierFrameBytes` in `NeverDPEFixedImageTests` distinguishes the version 2 frame-span relation from version 1 and rejects overlap with the call stack area. `RetainsDisjointCurrentFrameSpans` in `NeverDSymMemoryKnowledgeTests` checks that only current bytes in the declared intervals survive, with bounded atomic failure. Run these focused targets for changes to this relation; neither test authenticates an external callee's actual writes.
 

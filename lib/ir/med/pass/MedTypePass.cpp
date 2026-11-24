@@ -813,6 +813,10 @@ class DefinedLowBytes {
   const std::map<Key, const PhiNode *> &Phis;
   /// Each value's last clobber, which evaluate reads.
   std::map<Key, const MedCallClobber *> Clobbers;
+  /// The values an operation defines beside its output (MedOp::
+  /// IntrinsicOutputs), each whole: the pointers a `rep movsq` leaves in RSI
+  /// and RDI are as defined as any result.
+  std::set<Key> SecondaryOutputs;
   /// The values earlier queries solved.
   mutable std::map<Key, uint16_t> Bytes;
   /// The values being solved, and those a step of that solve read that it
@@ -868,6 +872,8 @@ class DefinedLowBytes {
       break;
     case NdOp::CONCAT:
     case NdOp::SELECT:
+    case NdOp::INT_AND:
+    case NdOp::INT_XOR:
       for (uint8_t I = 0; I != Op.NumInputs; ++I)
         Input(Op.Inputs[I]);
       break;
@@ -991,6 +997,37 @@ class DefinedLowBytes {
     if (const auto Merged = definedMergedLowBytes(
             Defs, Op, Value.Size, [&](const MedVar &V) { return (*this)(V); }))
       return *Merged;
+    // A bitwise operation computes each byte from the same byte of its
+    // operands: its low bytes are defined as far as both of theirs are.
+    // `sete al; setnp cl; and eax, ecx` joins two bytes written over what
+    // the registers held, and defines one byte, not four.  A mask that
+    // clears every byte above an operand's defined ones defines those too.
+    if ((Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR ||
+         Op.Opcode == NdOp::INT_XOR) &&
+        Op.NumInputs == 2 && Op.Inputs[0].Size == Value.Size &&
+        Op.Inputs[1].Size == Value.Size && Value.Size <= 8) {
+      const MedVar &A = Op.Inputs[0], &B = Op.Inputs[1];
+      // A value XORed with itself is zero, whatever it held.
+      if (Op.Opcode == NdOp::INT_XOR && !A.isConst() && A == B)
+        return Value.Size;
+      if (!A.isConst() && !B.isConst())
+        return std::min((*this)(A), (*this)(B));
+      if (A.isConst() != B.isConst()) {
+        const MedVar &Read = A.isConst() ? B : A;
+        const uint64_t Mask = (A.isConst() ? A : B).ConstVal;
+        const uint16_t Low = (*this)(Read);
+        if (Low >= Value.Size)
+          return Value.Size;
+        const uint64_t Above =
+            Low >= 8
+                ? 0
+                : (~uint64_t{0} << (Low * 8)) &
+                      (Value.Size == 8 ? ~uint64_t{0}
+                                       : (uint64_t{1} << (Value.Size * 8)) - 1);
+        return Op.Opcode == NdOp::INT_AND && (Mask & Above) == 0 ? Value.Size
+                                                                 : Low;
+      }
+    }
     return Value.Size;
   }
 
@@ -1003,6 +1040,11 @@ public:
         FloatReturns(FloatReturns) {
     for (const MedCallClobber &Clobber : Func.CallClobbers)
       Clobbers[{Clobber.Value.Id, Clobber.Value.SSAVer}] = &Clobber;
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        for (const MedVar &Output : Op.IntrinsicOutputs)
+          if (Output.Size)
+            SecondaryOutputs.insert({Output.Id, Output.SSAVer});
   }
 
   uint16_t operator()(const MedVar &V) const {
@@ -1021,6 +1063,8 @@ public:
       if (Op == Defs.end() || EntryCopy)
         return parameterRegisterPrefix(Func, V);
     }
+    if (!valueOf(K) && SecondaryOutputs.count(K))
+      return V.Size;
     if (const auto It = Bytes.find(K); It != Bytes.end())
       return std::min(V.Size, It->second);
     if (Solving) {

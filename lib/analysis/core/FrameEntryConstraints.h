@@ -79,6 +79,21 @@ inline symbolic::SymRef disjointFrameRangesPredicate(symbolic::SymContext &Ctx,
   return Ctx.mkOr(Ctx.mkUlt(Last, OtherFirst), Ctx.mkUlt(OtherLast, First));
 }
 
+/// A nullable result may be zero. Every nonzero result names a complete,
+/// nonwrapping object disjoint from the entry frame. The caller still owns the
+/// relation between a callee's result and this object; no identity follows
+/// from the root's symbolic name alone.
+inline symbolic::SymRef nullableObjectFramePredicate(
+    symbolic::SymContext &Ctx, symbolic::SymRef FrameRoot, int64_t FrameBegin,
+    int64_t FrameEnd, symbolic::SymRef ObjectRoot, int64_t ObjectBytes) {
+  assert(ObjectBytes > 0);
+  const auto Nonzero = Ctx.mkAnd(
+      nonwrappingFramePredicate(Ctx, ObjectRoot, 0, ObjectBytes),
+      disjointFrameRangesPredicate(Ctx, FrameRoot, FrameBegin, FrameEnd,
+                                   ObjectRoot, 0, ObjectBytes));
+  return Ctx.mkOr(Ctx.mkEq(ObjectRoot, Ctx.mkConst(64, 0)), Nonzero);
+}
+
 } // namespace neverd::analysis::detail
 
 #endif

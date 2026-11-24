@@ -88,6 +88,13 @@ enum class SpecializationX64CallProfile : uint8_t {
   /// bytes survive each call. The extra preservation is an explicit callee
   /// effect precondition, never inferred from an observed address or ABI.
   ConditionalNormalReturnFrameSpansV2,
+  /// V2 plus an explicit nullable result-object relation. Each successful
+  /// call returns in RAX a nonwrapping object of the exact pre-call RDX size,
+  /// disjoint from the declared entry frame. RAX zero remains a possible
+  /// outcome. The size must be proved an exact positive finite value at each
+  /// invocation. This is a caller-owned callee contract, not a fact inferred
+  /// from an import name or a concrete run.
+  ConditionalNormalReturnResultObjectV3,
 };
 
 struct SpecializationCallPreservedFrameRange {
@@ -106,7 +113,7 @@ struct SpecializationX64ReturningCall {
   va_t Address = InvalidVA;
   SpecializationX64CallProfile Profile = SpecializationX64CallProfile::None;
   uint64_t OutgoingBytes = 0;
-  /// Version 2 only. Sorted, disjoint, nonempty entry-frame-relative spans.
+  /// Versions 2 and 3. Sorted, disjoint, nonempty entry-frame-relative spans.
   /// Only bytes materialized immediately before the call are retained.
   std::vector<SpecializationCallPreservedFrameRange> PreservedFrameRanges;
   bool operator==(const SpecializationX64ReturningCall &) const = default;

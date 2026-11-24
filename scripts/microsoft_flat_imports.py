@@ -13,6 +13,7 @@ import microsoft_ucrt_types as ucrt
 
 LEGACY_INPUTS = Path(__file__).with_name("MicrosoftLegacySDKInputs.json")
 WEBAUTHN_INPUTS = Path(__file__).with_name("MicrosoftWebAuthnInputs.json")
+NAMED_RUNTIME_INPUTS = Path(__file__).with_name("MicrosoftNamedRuntimeSDKInputs.json")
 # The 32-bit SDK has no host-compute or hypervisor-platform import library.
 WIDE_ONLY = {"HostCompute", "HostNetwork", "HypervisorPlatform", "ComputeStorage"}
 CURRENT = {
@@ -127,6 +128,36 @@ def cpp_import_names(name, proof, directory, commands, run):
         if node["kind"] == "FunctionDecl" and node["name"].startswith(prefix):
             names.add(node["name"])
     return names
+
+
+def named_runtime_exports(profile, target, metadata):
+    common, extra = profile["exports"], target["additional_exports"]
+    if common.keys() & extra.keys():
+        raise ValueError("duplicate named SDK runtime export for target")
+    counts = {**common, **extra}
+    return {"module": profile["module"], "names": sorted(counts), "parameter_counts": counts,
+            "image_sha256": target["image_sha256"], "metadata": metadata}
+
+
+def named_runtime_units(output, architecture, compiler):
+    """Project documented named PE exports whose SDK import libraries can omit them."""
+    inputs = json.loads(NAMED_RUNTIME_INPUTS.read_text(encoding="utf-8"))
+    directory = output / "sdk-import-sources"
+    directory.mkdir(parents=True, exist_ok=True)
+    units = []
+    for name, profile in inputs["providers"].items():
+        target = profile["targets"][architecture]
+        headers = ["winsock2", "windows", *profile["headers"]]
+        source = directory / (name + "-sdk.c")
+        source.write_text("".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
+        # In C23 an SDK declaration such as EngCreateClip() has zero parameters.
+        # Bind the published prototype against the original C declaration in that dialect.
+        bridge = {"source": str(source), "source_sha256": wdk.digest(source),
+                  "arguments": [*compiler, "-std=c23"], "language": "c", "commands": [],
+                  "runtime_exports": named_runtime_exports(profile, target, inputs["win32_metadata"])}
+        units.append({"name": name, "source": source, "compiler": compiler, "headers": headers,
+                      "default_calling_convention": "", "bridge": bridge})
+    return units
 
 
 def webauthn_runtime_unit(output, cache, compiler):
@@ -335,9 +366,12 @@ def verify_abis(proof, header, compiler, directory, prototypes, run):
         ir = run(command, source.with_suffix(".log"), source.with_suffix(".ll"))
         proof["commands"].append(command)
         contracts.append(ucrt.normalized_bridge_abis(ir, names))
+    counts = proof.get("runtime_exports", {}).get("parameter_counts")
     for name in names:
         if contracts[0][name] != contracts[1][name]:
             raise ValueError("published compiler ABI differs from Microsoft SDK: " + name)
+        if counts is not None and counts[name] and not contracts[0][name][2].strip():
+            raise ValueError("empty SDK parameter list disagrees with Win32 metadata: " + name)
         if imports is None:
             continue
         symbol = contracts[0][name][0]

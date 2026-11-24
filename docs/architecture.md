@@ -4063,6 +4063,20 @@ temporary reaches only that arm of selections on the condition, through
 integer operations that cannot fault. A join, store, call, branch or division
 keeps the selection, so a value read on every path stays what it was.
 
+A selection a dominating conditional branch decides takes its arm right
+after SSA, before ABI discovery (`foldDominatedSelects`). A branch decides its
+condition in a successor that only its edge enters, exceptional edges
+included: true where it jumps, false where it falls through, and so in every
+block that successor dominates. The selection's condition must be the
+branch's value, or the same comparison of the same SSA values (equality
+either way round, through copies and `x & x`), or the negation of either.
+`bsf` keeps its destination where its source is zero, which Go's compiler
+emits only where a test has ruled that out: `test rdx, rdx; je; cmp rbx, 1;
+jne; bsf rcx, rdx` in `runtime.(*pageCache).alloc` selected RCX's old value,
+which no argument set, and printed it as unknown two blocks below the test.
+The C routes' own if/else simplification caught only a selection directly
+under its test.
+
 ## Manual PDB presentation boundary
 
 `lib/debug/PDBIdentity.h` owns RSDS build identity for full loading, symbol-store
@@ -5580,6 +5594,21 @@ results that function hands back. So a callee and the callers that hand its
 result back return no value together, as `sqlite3_free` and the functions
 that end in it do, and an operation that reads the result of a call that
 returns nothing, where no byte of it reaches anything, reads zero instead.
+
+A result is no wider than the bytes every return defines (`MedTypePass`'s
+`DefinedLowBytes`): `mov al, 1; ret` over a RAX no argument set returns one
+byte, as a compiler returning `bool` guarantees no more. A byte or word write
+defines what it writes and keeps what the register held above it; a view, a
+zero extension, a selection and a join pass on what their inputs define; and a
+bitwise operation defines each byte as far as both of its operands do, all of
+them where a mask clears the bytes above an operand's defined ones, and all
+where it XORs a value with itself. So `sete al; setnp cl; and eax, ecx`, how
+Go's `f64equal` returns its bool, defines one byte, and the function returns
+`int8_t` without the entry RAX's and RCX's upper bytes, which printed as
+unknown. The values an operation defines beside its output
+(`MedOp::IntrinsicOutputs`) are defined whole: taken for values nothing
+defines, the pointers a `rep movsq` leaves made a later byte write the whole
+of Go's `memmove` result.
 
 A reachable branch whose arms only return distinct integer constants selects
 a result even when another path leaves the register untouched. The arms may
@@ -21321,6 +21350,8 @@ Interpreter specialization retains full-width guest addresses. At publication, i
 `X64MachineExits` declares exact CALL, unconditional JMP, canonical near RET and resumable INT3/INT1 trap boundaries (including the two-byte INT 3 encoding) for a raw machine region. `NativeStackControl` strictly relifts the original bytes and retains the complete transfer: CALL captures its target before pushing the original fallthrough address; RET loads the actual stack word before advancing RSP by eight plus any unsigned cleanup. The final target remains a value, including for direct transfers. A trap instead retains its authenticated final intrinsic and ends the region without a next-PC or exception-continuation contract. Its exact architecture-owned undefined-output audit is retained: canonical INT3/INT 3 has Complete coverage and INT1 remains Missing. Neither supplies exception delivery or a continuation; invented undefined effects, changed audit grades and preservation claims are rejected. The architecture owner grants this terminal behavior, and ordinary trap intrinsics remain unsupported by the generic executor. This domain requires explicit nonfaulting CET-disabled x64 state and excludes the ordinary restored-return-slot and terminal-import contracts. Unknown stores retain their alias effects; every unlisted transfer still needs exhaustive internal analysis. The existing bounded raw requirement and receipt bind the declarations, graph and physical exit spans. Complete describes the declared region only. Callee effects, reentry, continuation composition, whole-function recovery and source/native certificates remain separate obligations; ordinary consumers reject this domain even when its declarations are unused.
 
 `X64ReturningCalls` opts an exact authenticated physical CALL into a conditional normal-return relation inside a declared raw machine region. The x64 owner validates the original target capture, push and fallthrough, and binds a unique residual call span to the complete native bytes and receipt. The common evaluator then forgets volatile registers and memory under the caller-declared relation, retaining only the architecture-owned preserved register ranges and current materialized entry-frame bytes above the outgoing call area. Arithmetic flags receive fresh defined values; the guest stack and PC return to the original fallthrough. Work and node budgets cover this transition. This relation assumes normal return without fault, unwind, reentry or callback and is not a learned import model. Unlisted calls still end only at declared machine exits or refuse. A completed raw region with such a call does not establish an ordinary source ABI, callee implementation or C/LLVM certificate; those consumers reject the retained marker.
+
+The version-3 conditional result-object profile adds a nullable RAX result whose nonzero value owns a nonwrapping object of the exact pre-call RDX size, disjoint from the declared entry frame. The size must be proved positive and unique at each occurrence; otherwise the transition refuses. Every invocation receives a fresh object identity, including repeated visits to one static site. Projection retains the exact size with that identity, separates contexts with different sizes, and discards stale pointer facts when the site is called again. A conditional edge may also retain nullness only after exhaustive proof, then binds it again at the successor. A structurally contained write to a proved nonnull result object uses that declared disjoint extent to preserve the frame; every other write keeps the ordinary alias proof. The declaration supplies no unchecked per-store exemption, initialized bytes, allocator identity or source/native certificate. This is an explicit conditional callee effect, not a conclusion from a concrete address or an import name.
 
 `EntryReturnSlot` is an explicit raw-domain caller-word premise. The x64 owner admits only a complete eight-byte word at entry RSP within declared frame bounds, and binds it to the architecture-owned domain digest. Core carries only a must-preserved opaque memory fact across projections, context keys, joins, proved disjoint stores and conditional returning-call effects. Any possible overlap retires the fact. A certified physical RET at the restored entry stack can then be an outer RETURN; the same native byte in another stack or memory context remains an internal transfer with its usual exhaustive target proof. The raw receipt still describes a conditional machine region. Source and native proof consumers reject this premise until they have an independent contract for it.
 

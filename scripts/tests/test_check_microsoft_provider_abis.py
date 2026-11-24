@@ -40,6 +40,25 @@ class MicrosoftProviderABIs(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "callback ABI or record layout"):
                     check(broken)
 
+    def test_archived_catalog_only_requires_named_runtime_providers_when_requested(self):
+        names = {"DisplayControl": ()}
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(provider.CASES, names, clear=True):
+            root = Path(temporary)
+            (root / "x64").mkdir()
+            manifest = root / "x64/manifest.json"
+            (root / "manifest.json").write_text("{}", encoding="utf-8")
+            for label, profiles, selected in (("archived", {}, None), ("requested", {}, ["DisplayControl"]),
+                                              ("current", {"named_runtime": "present"}, None)):
+                with self.subTest(label=label):
+                    manifest.write_text(json.dumps({"libraries": [], "profiles": profiles}), encoding="utf-8")
+                    args = argparse.Namespace(generated=root, output=root / label, architecture=["x64"],
+                                              provider=selected)
+                    if label == "archived":
+                        self.assertFalse(provider.check(args)["passed"])
+                    else:
+                        with self.assertRaisesRegex(ValueError, "matrix is incomplete"):
+                            provider.check(args)
+
     def test_generated_declarations_do_not_inherit_the_wdk_default_calling_convention(self):
         compiler = ['clang', '--target=i686-pc-windows-msvc', '-I', 'wdk',
                     '-ivfsoverlay', 'headers.json', '-Xclang', '-fdefault-calling-conv=stdcall',

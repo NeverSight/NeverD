@@ -106,6 +106,7 @@ add_neverd_component_library(NeverDIRMed
   pass/MedGoResults.cpp
   pass/MedImmutableTableScans.cpp
   pass/MedDCE.cpp
+  pass/MedDominatedSelects.cpp
   pass/MIPS/MedMIPSMergeValues.cpp
   pass/MIPS/MedMIPSGuardedCalls.cpp
   pass/MIPS/MedMIPSRecordFrame.cpp
