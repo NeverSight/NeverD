@@ -7544,6 +7544,10 @@ checks exact masked status bits, signed extensions, shared expressions and
 effect preservation without the symbolic bridge. An 8,192-level worker-thread
 regression checks iterative operand traversal for both pure rewrites and
 ordered-memory ancestors that must remain intact.
+`HighControlFlowSemantics.MergedTestsKeepTheFirstTestsLabel` jumps from a
+nested `if` to the first of two tests that late jump reduction merges, then
+runs the result for 32 inputs with exact jump targets: each returns what the
+program computes; it fails where the merged test drops the first test's label.
 `HighControlFlowSemantics.AJumpToWhatFollowsItsTryTakesNoCopy` ends an
 `__except` handler, and an `if` arm, with a jump to the statement after them:
 tail copying copies nothing there and the arm still computes the same; it

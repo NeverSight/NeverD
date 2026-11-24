@@ -4663,6 +4663,12 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
             HighExpr::makeBinop(NdOp::BOOL_OR, L[I].Cond, L[I + 1].Cond);
         Merged->Type = NdType::makeInt(1, false);
         L[I + 1].Cond = Merged;
+        // A jump to the first test enters the merged one, which evaluates
+        // that test first, so the merged test takes its label.  Erased with
+        // the first test, the label left runtime.(*unwinder).resolveInternal
+        // jumping to no statement.
+        if (labelStart(L, I))
+          L[I + 1].Addr = L[I].Addr;
         L.erase(L.begin() + I);
         Changed = true;
         if (I > 0)

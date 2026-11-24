@@ -10526,6 +10526,50 @@ TEST(HighControlFlowSemantics, ExceptHandlerJumpToAReturnTailBecomesItsCopy) {
   EXPECT_EQ(countKind(F, StmtKind::Goto), 0u);
 }
 
+TEST(HighControlFlowSemantics, MergedTestsKeepTheFirstTestsLabel) {
+  // v = 7; if (c & 8) { if (c & 16) { v = 5; goto X; } v = 6; }
+  // X: if (c & 2) goto L; if (c & 4) { L: v = v + 100; } return v;
+  // Merging the two tests into `if (c & 2 || c & 4)` erased the first one,
+  // which the inner jump enters: X labelled no statement, as in
+  // runtime.(*unwinder).resolveInternal, whose C would not compile.  The
+  // merged test evaluates the first one first and takes its label.
+  const auto Bit = [](uint64_t Mask) {
+    return HighExpr::makeBinop(NdOp::INT_AND, local(0),
+                               HighExpr::makeConst(Mask, 8));
+  };
+  HighStmt Inner;
+  Inner.Kind = StmtKind::If;
+  Inner.Addr = 0x1006;
+  Inner.Cond = Bit(16);
+  Inner.Body = {assign(0x1007, 1, 5), jump(0x1008, 0x1010)};
+  HighStmt Outer;
+  Outer.Kind = StmtKind::If;
+  Outer.Addr = 0x1004;
+  Outer.Cond = Bit(8);
+  Outer.Body = {Inner, assign(0x100A, 1, 6)};
+  HighStmt First = conditional(0x1010, 0x1030);
+  First.Cond = Bit(2);
+  auto Add = assign(0x1030, 1, 0);
+  Add.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(100, 8));
+  HighStmt Second;
+  Second.Kind = StmtKind::If;
+  Second.Addr = 0x1020;
+  Second.Cond = Bit(4);
+  Second.Body = {Add};
+  HighFunc F;
+  F.Body = {assign(0x1000, 1, 7), Outer, First, Second,
+            result(0x1040, local(1))};
+  reduceSingleUseGotos(F.Body, /*SpliceRegions=*/false);
+  for (uint64_t C = 0; C < 32; ++C) {
+    const uint64_t Start = !(C & 8) ? 7 : (C & 16) ? 5 : 6;
+    const uint64_t Expected = Start + ((C & 6) ? 100 : 0);
+    EXPECT_EQ(execute(F, C, /*RequireExactTargets=*/true),
+              std::optional<uint64_t>(Expected))
+        << C;
+  }
+}
+
 TEST(HighControlFlowSemantics, AJumpToWhatFollowsItsTryTakesNoCopy) {
   // __try { v = 1; } __except (...) { v = 2; goto T; } T: v = v + 3;
   // return v; -- falling off the handler reaches T too, so the jump is the

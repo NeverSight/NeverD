@@ -19961,6 +19961,12 @@ try with only `__except` clauses, and lands where falling off it goes, is
 that fall-through: tail copying (`duplicateSmallReturnTails`) leaves it to
 the later jump removal and copies no tail there: a copy only repeated the
 tail that follows, and the code after an `__except` handler printed twice.
+Late jump reduction merges `if (a) goto L; if (b) { L: S }` into
+`if (a || b) { S }` (`reduceSingleUseGotos`). The merged test evaluates `a`
+first, so a jump that entered the first test enters it, and it takes the first
+test's label. Erased with the first test, the label left arm64's
+`runtime.(*unwinder).resolveInternal` jumping to no statement, which C
+rejects.
 
 The shared `SourceABI` owner distinguishes a logical by-value record from its physical address carrier. Darwin ARM64 C declarations for six or sixteen doubles keep the complete record type and use an eight-byte integer-register or naturally aligned stack carrier, independently of floating argument registers and the x8 result pointer. ABI equality and projection batching retain this distinction, calling convention and parameter roles. Partial, overlapping, incompatible or stale carriers are rejected. This declaration alone does not bind LowIR calls, project entries, emit HighC calls or authorize frame borrows: those require a separate copy-storage proof. Compiler and native ABI tests cover register exhaustion, stack packing, arbitrary floating bits, copy mutation isolation and independent indirect results; they are not a complete `setTransform:` recovery test.
 
