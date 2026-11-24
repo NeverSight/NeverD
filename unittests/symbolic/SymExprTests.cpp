@@ -2896,6 +2896,30 @@ TEST(SymExpr, RotatedProductFieldsKeepWrappedSignedAndDynamicBits) {
   }
 }
 
+TEST(SymExpr, SharedFactorWindowsSelectTheLargestObservedPrefix) {
+  constexpr unsigned Width = 257, Start = 19, Residue = 131;
+  const auto Scale = llvm::APInt::getOneBitSet(Width, Width - Residue);
+  const auto ShortWeight = llvm::APInt::getOneBitSet(Width, Residue - 23);
+  for (unsigned Bits : {39u, 64u, 65u, 97u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", Width);
+    const auto Motion = C.mkRor(X, C.mkConst(Width, Start));
+    const auto Field = C.mkZExt(C.mkExtract(X, Start, Bits), Width);
+    const auto LongWeight = llvm::APInt::getOneBitSet(Width, Residue - Bits);
+    const auto Short =
+        C.mkAdd(C.mkConst(Width, 3), C.mkMul(C.mkConst(ShortWeight), Motion));
+    const auto Long =
+        C.mkAdd(C.mkConst(Width, 5), C.mkMul(C.mkConst(LongWeight), Field));
+    SymEvalPlan Plan(C, C.mkMul({C.mkConst(Scale), Short, Long}));
+    for (unsigned Bit : {0u, 22u, 23u, Bits - 1}) {
+      const auto Input = llvm::APInt::getOneBitSet(Width, Start + Bit);
+      const auto Source = Input.rotr(Start);
+      EXPECT_EQ(Plan.eval({Input}),
+                Scale * (ShortWeight * Source + 3) * (LongWeight * Source + 5));
+    }
+  }
+}
+
 TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
   constexpr unsigned W = 513;
   SymContext C;

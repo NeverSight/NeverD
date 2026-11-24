@@ -429,8 +429,8 @@ size_t prepareAffineFactors(
   size_t Out = 1;
   auto AppendSource = [&](SymRef F, unsigned Live) {
     const auto SourceSlot = Slot.find(F.index())->second - 1;
-    // Only these low source bits survive multiplication. An existing wider
-    // slice at the same position can supply them for every assignment.
+    // A row guarantees its requested bits, even when the evaluation plan
+    // already narrowed the motion. Keep the largest such request at a start.
     const bool Extract = Ctx.op(F) == SymOp::Extract;
     const unsigned Start =
         Extract ? Ctx.node(F).Aux : detail::sourceSuffixStart(Ctx, F);
@@ -443,9 +443,9 @@ size_t prepareAffineFactors(
             SliceIndex.try_emplace({Source.index(), Start}, Slices.size());
         const auto Index = It->second;
         if (New)
-          Slices.push_back({Available, SourceSlot});
-        else if (Available > Slices[Index].Bits)
-          Slices[Index] = {Available, SourceSlot};
+          Slices.push_back({Live, SourceSlot});
+        else if (Live > Slices[Index].Bits)
+          Slices[Index] = {Live, SourceSlot};
         SliceRows.emplace_back(Out, Index);
       }
     }
