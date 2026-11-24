@@ -325,6 +325,64 @@ TEST_F(PEFixedImageTest, ReturningCallResultObjectKeepsNullAndBoundedWrites) {
   EXPECT_TRUE(Outside.Residual.Blocks.empty());
 }
 
+TEST_F(PEFixedImageTest, ReturningCallResultObjectBoundsSymbolicOffset) {
+  // The index is symbolic but masked into the declared 64-byte extent. A null
+  // result writes in the low address range; an explicit frame exclusion is
+  // needed to preserve the entry frame on that branch.
+  const std::vector<uint8_t> Code{0xba, 0x40, 0,    0,    0, // mov edx,64
+                                  0x48, 0x83, 0xec, 0x40,    // sub rsp,64
+                                  0xff, 0xd7,                // call rdi
+                                  0x48, 0x83, 0xc4, 0x40,    // add rsp,64
+                                  0x83, 0xe1, 0x1f,          // and ecx,31
+                                  0x48, 0x89, 0x14, 0x08, // mov [rax+rcx],rdx
+                                  0xc3};                  // ret
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x1100);
+  O.X64MachineExits = {{1, Base + 0x1100, MachineExitKind::Trap}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 3;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  O.EntryFrameBounds->ExcludedAddressRanges.push_back({0, 64});
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  unsigned Stores = 0;
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops)
+      Stores += Op.Opcode == NdOp::STORE;
+  EXPECT_GE(Stores, 2U);
+
+  auto WithoutLowExclusion = O;
+  WithoutLowExclusion.EntryFrameBounds->ExcludedAddressRanges.clear();
+  const auto Unproved =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, WithoutLowExclusion);
+  EXPECT_FALSE(Unproved.complete());
+  EXPECT_TRUE(Unproved.Residual.Blocks.empty());
+
+  auto Unbounded = Code;
+  Unbounded[17] = 0x3f; // index may cross the 64-byte object boundary
+  auto WideLoaded = load(machineExitFixture(Unbounded));
+  ASSERT_TRUE(bool(WideLoaded)) << llvm::toString(WideLoaded.takeError());
+  const auto Wide = specializeBinaryInterpreter(*WideLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Wide.complete());
+  EXPECT_TRUE(Wide.Residual.Blocks.empty());
+
+  auto Checked = Code;
+  Checked.insert(Checked.begin() + 15,
+                 {0x48, 0x85, 0xc0, 0x74, 0x07}); // test rax,rax; je ret
+  auto CheckedLoaded = load(machineExitFixture(Checked));
+  ASSERT_TRUE(bool(CheckedLoaded)) << llvm::toString(CheckedLoaded.takeError());
+  const auto Guarded = specializeBinaryInterpreter(
+      *CheckedLoaded, Base + 0x1000, WithoutLowExclusion);
+  EXPECT_TRUE(Guarded.complete()) << Guarded.Diagnostic;
+}
+
 TEST_F(PEFixedImageTest,
        ReturningCallRepeatedNativeSiteHasFiniteStaticReceipts) {
   // The saved nonvolatile counter is two. The same opaque site executes twice;
