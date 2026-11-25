@@ -262,6 +262,34 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                     self.assertIn("#include <audiostatemonitorapi.h>", original)
         self.assertNotIn("x86", windows.flat.RUNTIME_PROFILES["WindowControl"]["targets"])
 
+    def test_system_cpp_exports_use_the_original_headers_on_each_installed_target(self):
+        names = ("DebugDataModelManager", "DirectCompositionClock", "DirectCompositionControls",
+                 "MachineLearningOperatorRegistry", "VolumeShadowCopyRuntime")
+        profiles = {name: windows.flat.RUNTIME_PROFILES[name] for name in names}
+        standard_headers = ["-I", "pinned-msvc-stl"]
+        with tempfile.TemporaryDirectory() as directory:
+            for arch in ("x86", "x64", "arm64"):
+                units = windows.flat.named_runtime_units(Path(directory) / arch, arch, ["clang"],
+                                                         dict.fromkeys(names, {}), profiles=profiles,
+                                                         cpp_headers=standard_headers)
+                by_name = {u["name"]: u for u in units}
+                self.assertEqual("DirectCompositionClock" in by_name, arch == "arm64")
+                self.assertEqual("MachineLearningOperatorRegistry" in by_name, arch != "arm64")
+                for name, unit in by_name.items():
+                    bridge = unit["bridge"]
+                    self.assertEqual(bridge["language"], "c++")
+                    original = Path(bridge["source"]).read_text()
+                    published = unit["source"].read_text()
+                    for header in profiles[name]["headers"]:
+                        self.assertIn(f"#include <{header}.h>", original)
+                    for export in bridge["runtime_exports"]["names"]:
+                        self.assertNotIn(export + "(", original)
+                        self.assertIn(export + "(", published)
+                    self.assertNotIn("pinned-msvc-stl", unit["compiler"])
+                    self.assertEqual("pinned-msvc-stl" in bridge["arguments"],
+                                     name == "MachineLearningOperatorRegistry")
+                self.assertIn("_Bool *pbBlock", by_name["VolumeShadowCopyRuntime"]["source"].read_text())
+
     def test_named_runtime_archive_coexists_with_other_sdk_imports(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
