@@ -759,6 +759,22 @@ TEST(SymSynth, EqualSignatureHashSamplesKeepDistinctGridBehaviours) {
   const auto Result = enumerateShortest(Ctx, P, Opts, OpSemantics(Ctx, 32),
                                         Effort, Check, std::nullopt, Queries);
   EXPECT_EQ(Result.Candidate, P.Body);
+
+  // Many operations agree at the last grid point. With a larger cost bound,
+  // the work limit alone ends the tier. The full grid still determines the
+  // match, and the independent check still costs its last unit of work.
+  const size_t Needed = Effort.used();
+  ASSERT_GT(Needed, 1u);
+  Opts.MaxCost = 32;
+  for (const size_t Limit : {Needed - 1, Needed}) {
+    auto FreshCheck = makeChecker(Ctx, P, Opts);
+    SearchEffort Bounded(Limit);
+    const auto R =
+        enumerateShortest(Ctx, P, Opts, OpSemantics(Ctx, 32), Bounded,
+                          FreshCheck, std::nullopt, Queries);
+    EXPECT_EQ(R.Candidate, Limit == Needed ? P.Body : SymRef{});
+    EXPECT_EQ(Bounded.used(), Limit);
+  }
 }
 
 // The search measures candidates through applyColumn and builds them through

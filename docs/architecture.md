@@ -18801,6 +18801,12 @@ proof queries. Enumeration records the grammar operation and its operand
 indices for each new sampled behaviour. On a target match it builds pending
 representatives in discovery order before offering the candidate. An
 unsuccessful search can discard its recipes without interning those nodes.
+For machine words, the cost bound or the remaining work can make the current
+tier the last one reachable. The search screens those candidates at one grid
+point and checks survivors against the full grid. If any survivor matches, it
+replays the tier in discovery order for the independent checker and verifier.
+An unsuccessful final tier charges every visited candidate without storing
+signatures that no later tier can read.
 
 Before composite grammar enumeration, semantic synthesis can fit an entire
 modular affine vector from the oracle's zero and unit-vector responses. Equal
