@@ -462,10 +462,11 @@ struct ShiftPaths {
   }
 
   bool outcomes(int Seed, Outcomes &Values, bool &CrossedResultJoin,
-                const CarrierUses *Uses = nullptr) {
+                const CarrierUses *Uses = nullptr, Frame InitialState = {}) {
     using Point = std::pair<int, Frame>;
     llvm::SmallVector<Point, 8> Pending;
-    Pending.emplace_back(Seed, Frame(Registers.size() + CarriedTemps.size()));
+    InitialState.resize(Registers.size() + CarriedTemps.size());
+    Pending.emplace_back(Seed, std::move(InitialState));
     std::set<Point> Seen;
     while (!Pending.empty()) {
       auto [Id, State] = Pending.pop_back_val();
@@ -545,6 +546,35 @@ struct ShiftPaths {
     }
     llvm::sort(Values);
     return !Values.empty();
+  }
+
+  bool distinguishes(const MedBlock &Choice) {
+    // A value initialized before the split reaches both arms, even if each
+    // arm only writes the count. Start with unknown incoming bindings.
+    Frame Common(Registers.size() + CarriedTemps.size());
+    Locals Local;
+    if (!spend(Choice.Ops.size()))
+      return false;
+    for (const MedOp &Op : llvm::drop_end(Choice.Ops))
+      if (!apply(Op, Common, Local, false, false))
+        return false;
+    if (read(Choice.Ops.back().Inputs[1], Common, Local))
+      return false;
+    // An outer choice can have just one arm passing through the value join.
+    bool Crossed = false;
+    const auto Follow = [&](int Id, Outcomes &Values) {
+      Frame Incoming = Common;
+      const auto &Next = Func.Blocks[Id];
+      if (!Next.Phis.empty() &&
+          !enter(Next, Choice.Id, Common, Local, Incoming, Crossed))
+        return false;
+      return outcomes(Id, Values, Crossed, nullptr, std::move(Incoming));
+    };
+    Outcomes Left, Right;
+    return Follow(Choice.Succs[0], Left) && Follow(Choice.Succs[1], Right) &&
+           Crossed && llvm::none_of(Left, [&](uint64_t V) {
+             return llvm::binary_search(Right, V);
+           });
   }
 };
 // SSA uses -1 for an absent definition and zero for the first binding.
@@ -778,13 +808,7 @@ bool selectsShiftedReturnAcrossJoins(
     if (L.Preds.size() != 1 || R.Preds.size() != 1 || L.Preds.front() != Id ||
         R.Preds.front() != Id || L.Succs.empty() || R.Succs.empty())
       continue;
-    // An outer choice can have just one arm passing through the value join.
-    bool CrossedResultJoin = false;
-    Outcomes Left, Right;
-    if (Paths.outcomes(A, Left, CrossedResultJoin) &&
-        Paths.outcomes(B, Right, CrossedResultJoin) && CrossedResultJoin &&
-        llvm::none_of(
-            Left, [&](uint64_t V) { return llvm::binary_search(Right, V); }))
+    if (Paths.distinguishes(Choice))
       return true;
   }
   return false;

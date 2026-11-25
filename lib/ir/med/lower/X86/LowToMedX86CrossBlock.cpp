@@ -69,12 +69,8 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
           Reads.push_back({Inp.RegOff, Inp.Size, BI});
       }
 
-  // Blocks that lie on a cycle.  A partial write inside a loop must NOT get an
-  // eager wide-parent definition: that would make the parent loop-carried and
-  // hijack a legitimate accumulator phi (clang writes a real sub-register each
-  // iteration).  Such in-loop partial values are already handled by Phase B2 /
-  // mergeLoopCarriedPartialReads; only forward "seed" writes (a one-time set
-  // before the loop whose parent is read inside it) need this propagation.
+  // A loop-local read can use the narrow loop PHI. A read after the loop
+  // may see the parent from any latch, including one that wrote only a byte.
   size_t N = Func.Blocks.size();
   std::map<int, size_t> IdToIdx;
   for (size_t I = 0; I < N; ++I)
@@ -167,14 +163,89 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
     return (Found.First && *Found.First != Block) || Found.Second;
   };
 
+  // A narrow PHI in a loop header only repairs local reads. If another
+  // block observes the register after leaving the loop, carry the updated
+  // parent on the writing edge. This also keeps a separately joined byte
+  // consistent with its initialized parent when the exit reads only the byte.
+  using Region = std::pair<uint64_t, uint16_t>;
+  std::map<Region, std::vector<bool>> ReachesExitRead;
+  auto readAfterLoop = [&](uint64_t Off, uint16_t Size, uint64_t Parent,
+                           uint16_t Width, size_t Writer) {
+    auto [It, Added] = ReachesExitRead.try_emplace({Off, Size});
+    auto &LiveOut = It->second;
+    if (Added) {
+      LiveOut.resize(N);
+      std::vector<bool> Kills(N), ReadsNarrow(N), ReadsWider(N);
+      std::vector<size_t> Pending;
+      for (size_t I = 0; I < N; ++I) {
+        for (const MedOp &Op : Func.Blocks[I].Ops) {
+          if (!InLoop[I])
+            for (unsigned J = 0; J < Op.NumInputs; ++J) {
+              const auto &Read = Op.Inputs[J];
+              if (Read.Kind == MedVar::Reg && Read.Size >= Size &&
+                  Read.Size <= Width && Read.RegOff <= Off &&
+                  Off + Size <= Read.RegOff + Read.Size)
+                (Read.Size == Size ? ReadsNarrow : ReadsWider)[I] = true;
+            }
+          const auto &Write = Op.Output;
+          if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+              Op.Inputs[0].Kind == MedVar::Reg &&
+              Op.Inputs[0].RegOff == Parent && Op.Inputs[0].Size == Write.Size)
+            continue;
+          if (Write.Kind == MedVar::Reg && Write.RegOff == Parent &&
+              (Write.Size == Width ||
+               TRI.writeZeroExtends(Parent, Write.Size))) {
+            Kills[I] = true;
+            break;
+          }
+        }
+      }
+      // A byte-only seed and use need no incoming upper bytes. Only keep
+      // a separately initialized parent for a narrow observation when each
+      // path to that observation has defined it.
+      std::vector<bool> NeedsEntryParent(N);
+      for (size_t I = 0; I < N; ++I)
+        if (I == 0 || Func.Blocks[I].Preds.empty() ||
+            !Func.Blocks[I].ExceptionalPreds.empty()) {
+          NeedsEntryParent[I] = true;
+          Pending.push_back(I);
+        }
+      while (!Pending.empty()) {
+        size_t I = Pending.back();
+        Pending.pop_back();
+        if (!Kills[I])
+          for (size_t Succ : SuccIdx[I])
+            if (!NeedsEntryParent[Succ]) {
+              NeedsEntryParent[Succ] = true;
+              Pending.push_back(Succ);
+            }
+      }
+      for (size_t I = 0; I < N; ++I)
+        if (ReadsWider[I] || (ReadsNarrow[I] && !NeedsEntryParent[I]))
+          Pending.push_back(I);
+      while (!Pending.empty()) {
+        auto I = Pending.back();
+        Pending.pop_back();
+        for (int Pred : Func.Blocks[I].Preds) {
+          auto Pos = IdToIdx.find(Pred);
+          if (Pos != IdToIdx.end() && !LiveOut[Pos->second]) {
+            LiveOut[Pos->second] = true;
+            if (!Kills[Pos->second])
+              Pending.push_back(Pos->second);
+          }
+        }
+      }
+    }
+    return bool(LiveOut[Writer]);
+  };
+
   // True when the wide parent is (re)defined at full width earlier in the same
   // block (a SUBBYTES self-slice is a read-view, not a real definition).  Such
   // a parent holds a fresh in-iteration value at the partial write — clang uses
   // it as scratch (compute the new byte in a temp register, then transfer it
   // via a full-width `mov`) — so merging is safe even inside a loop.  A parent
-  // NOT redefined in the block is loop-carried; its narrow writes belong to an
-  // accumulator phi reconstructed by mergeLoopCarriedPartialReads, and an eager
-  // wide definition here would hijack it.
+  // carried across iterations otherwise needs either a wide observation or
+  // a loop-carried narrow PHI.
   auto parentFreshInBlock = [&](const MedBlock &MB, size_t OI, uint64_t WOff,
                                 uint16_t WSz) -> bool {
     for (size_t J = 0; J < OI; ++J) {
@@ -194,17 +265,15 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
     return false;
   };
 
+  struct MergeInsert {
+    size_t Block, AfterOp;
+    std::vector<MedOp> Seq;
+  };
+  std::vector<MergeInsert> Pending;
   for (size_t BI = 0; BI < Func.Blocks.size(); ++BI) {
-    auto &MB = Func.Blocks[BI];
-
-    struct MergeInsert {
-      size_t AfterOp;
-      std::vector<MedOp> Seq;
-    };
-    std::vector<MergeInsert> Pending;
-
+    const auto &MB = Func.Blocks[BI];
     for (size_t OI = 0; OI < MB.Ops.size(); ++OI) {
-      MedOp &MOp = MB.Ops[OI];
+      const MedOp &MOp = MB.Ops[OI];
       // Use the target's alias table rather than a size test: a 32-bit GPR
       // write zero-extends its parent, while a 16-byte legacy XMM write still
       // preserves the high half of the 32-byte YMM slot.
@@ -229,23 +298,16 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
       int ByteOff = TRI.subRegByteOffset(POff, PSz, WOff, WSz);
       if (ByteOff < 0)
         continue;
-      if (!wideParentReadElsewhere(POff, PSz, WOff, WSz, BI))
-        continue;
-      // When the wide parent also takes a full-width write somewhere in a loop
-      // it forms its own wide phi; then every low-byte update must merge back
-      // so that phi stays consistent across all arms.  Such a parent is NOT
-      // left to the narrow-phi machinery — merge unconditionally.
-      bool WidePhiForming = WideFullWrittenInLoop.count(WOff);
-      // A loop block's partial write only merges when its wide parent is fresh
-      // scratch this iteration (full-width redefined in-block before the
-      // write); a purely narrow loop-carried parent is left to the narrow-phi
-      // machinery.
-      bool FreshParent = parentFreshInBlock(MB, OI, WOff, WSz);
-      if (InLoop[BI] && !FreshParent && !WidePhiForming)
-        continue;
-      // Cede a parent known to be narrow-carried in some loop unless it was
-      // just proven to be a fresh in-block value here or it forms a wide phi.
-      if (!FreshParent && !WidePhiForming && LoopNarrowCarried.count(WOff))
+      // A wider cross-block read already uses the parent for a forward seed,
+      // a whole-register loop PHI or a fresh in-block definition. Otherwise
+      // check whether a previously narrow loop value escapes to a later read.
+      const bool HasWideUse =
+          wideParentReadElsewhere(POff, PSz, WOff, WSz, BI) &&
+          ((!InLoop[BI] && !LoopNarrowCarried.contains(WOff)) ||
+           WideFullWrittenInLoop.contains(WOff) ||
+           parentFreshInBlock(MB, OI, WOff, WSz));
+      if (!HasWideUse && !(InLoop[BI] && TRI.isGeneralReg(WOff) &&
+                           readAfterLoop(POff, PSz, WOff, WSz, BI)))
         continue;
 
       // The reconstructed wide parent must carry the canonical SSA id of its
@@ -288,14 +350,15 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
       Copy.addInput(Combined);
       Ops.push_back(std::move(Copy));
 
-      Pending.push_back({OI, std::move(Ops)});
+      Pending.push_back({BI, OI, std::move(Ops)});
     }
-
-    // Insert each merge right after its partial write; reverse order keeps the
-    // remaining insertion indices valid.
-    for (auto It = Pending.rbegin(); It != Pending.rend(); ++It)
-      MB.Ops.insert(MB.Ops.begin() + static_cast<long>(It->AfterOp + 1),
-                    It->Seq.begin(), It->Seq.end());
+  }
+  // Query the original reads and definitions in every block before inserting
+  // synthetic parent writes. Reverse order keeps the recorded indices valid.
+  for (auto It = Pending.rbegin(); It != Pending.rend(); ++It) {
+    auto &Ops = Func.Blocks[It->Block].Ops;
+    Ops.insert(Ops.begin() + static_cast<long>(It->AfterOp + 1),
+               It->Seq.begin(), It->Seq.end());
   }
 }
 
