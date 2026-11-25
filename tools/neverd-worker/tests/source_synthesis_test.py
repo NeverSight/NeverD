@@ -378,8 +378,9 @@ def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0,
 
 
 def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False, field_masks=False,
-                          scaled_fields=False, result_masks=False):
-    scaled = scaled_fields or result_masks
+                          scaled_fields=False, result_masks=False, carry_masks=False):
+    output_mask = result_masks or carry_masks
+    scaled = scaled_fields or output_mask
     # Each factor reads independently signed bytes of x and y+z. The low
     # weight in one row preserves cross terms with the rest of the product.
     scale = 3 << 16
@@ -420,15 +421,32 @@ def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False,
         else:
             operator, opcode = "+", "81c1"
         code += bytes.fromhex("4401c1")
+        if carry_masks:
+            trailing = 1 + i % 3
+            inputs = 0xff ^ (1 << (8 - trailing + (i // 3) % trailing))
+            if i % 7 == 0:
+                inputs &= 0xff ^ ((1 << (8 - trailing)) - 1)
+            if i == degree // 3:
+                inputs ^= 1 << (7 - trailing)
+            delta_mask = (inputs << 8) | 0x400005
         if delta_mask is not None:
             code += bytes.fromhex("81e1") + struct.pack("<I", delta_mask)
         if scaled:
             field_scale = (3, -5, 6, 17, -31)[(i // 3) % 5]
+            if carry_masks:
+                field_scale = (field_scale | 1) << trailing
             code += bytes.fromhex("69c9") + struct.pack("<i", field_scale)
-        if result_masks:
+        if output_mask:
             result_mask = (0 if i % 7 == 0 else 0xff00) | 0x800003
             if i == degree // 3:
                 result_mask ^= 0x3900
+            if carry_masks:
+                outputs = 0xff ^ (1 << ((i // 5) % trailing))
+                if i % 11 == 0:
+                    outputs &= (1 << trailing) - 1
+                if i == degree // 3:
+                    outputs ^= 1 << trailing
+                result_mask = (outputs << 8) | 0x800003
             code += bytes.fromhex("81e1") + struct.pack("<I", result_mask)
         code += bytes.fromhex(opcode) + struct.pack("<i", offset)
         code += bytes.fromhex("0fafc1")
@@ -439,7 +457,7 @@ def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False,
             fields = f"({delta_mask}U&{fields})"
         if scaled:
             fields = f"({field_scale & 0xffffffff}U*{fields})"
-        if result_masks:
+        if output_mask:
             fields = f"({result_mask}U&{fields})"
         if invert:
             fields = "~" + fields
@@ -810,10 +828,12 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "carry-mask-product-313":
+            assert code.count("*") <= (48 if llvm else 16), text
         elif kind == "result-mask-product-257":
-            assert code.count("*") <= (38 if llvm else 11), text
+            assert code.count("*") <= (10 if llvm else 11), text
         elif kind == "scaled-field-product-223":
-            assert code.count("*") <= (22 if llvm else 15), text
+            assert code.count("*") <= (15 if llvm else 15), text
         elif kind == "gated-field-product-197":
             assert code.count("*") <= (13 if llvm else 14), text
         elif kind == "masked-field-product-113":
@@ -907,7 +927,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 enhanced_shape(enhanced, representation == "llvmc")
                 if representation == "source":
                     code = source_operations(ordinary)
-                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
+                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor", "carry-mask-product-313"):
                         assert "*" in code, ordinary
                     elif kind == "masked":
                         assert code.count("^") >= 3, ordinary
@@ -1030,6 +1050,7 @@ if __name__ == "__main__":
             ("gated-field-product-197", *distributed_field_elf(197, field_masks=True)),
             ("scaled-field-product-223", *distributed_field_elf(223, scaled_fields=True)),
             ("result-mask-product-257", *distributed_field_elf(257, result_masks=True)),
+            ("carry-mask-product-313", *distributed_field_elf(313, carry_masks=True)),
             ("funnel-perturbation-composed-product-283",
              *variable_field_elf(283, terminal_period=3, repeated_offsets=True,
                                  raw_rotations=True, composed_rotations=True)),
