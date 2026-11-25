@@ -42,6 +42,8 @@ bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
   Abort->Word = Mailbox->Abort.Word;
   return true;
 }
+#elif defined(RETURN_MODEL_WRITEBACK)
+extern int compareStructureWriteback(int Enabled);
 #else
 extern int compareCursorModes(int Enabled, uintptr_t StackTop);
 #endif
@@ -135,6 +137,9 @@ int runReturnOracle(int Enabled, uintptr_t StackTop) {
   return compareOrdered(Enabled, ORDERED_EL0, true);
 #elif defined(RETURN_MODEL_CURSOR)
   return compareCursorModes(Enabled, StackTop);
+#elif defined(RETURN_MODEL_WRITEBACK)
+  (void)StackTop;
+  return compareStructureWriteback(Enabled);
 #elif defined(RETURN_MODEL_PREFIX)
   (void)StackTop;
   return comparePrefixModes(Enabled);
@@ -178,6 +183,30 @@ void runReturnModel(void) {
       writeText((Mode & ORDERED_MODE_NAA) ? ORDERED_01_PASS : ORDERED_00_PASS);
   }
   finish(ORDERED_PASS, 0);
+#elif defined(RETURN_MODEL_WRITEBACK)
+  uint64_t Features, Control;
+  __asm__ volatile(RETURN_MODEL_READ(RETURN_MODEL_ISAR3) : "=r"(Features));
+  if ((Features & RETURN_MODEL_NIBBLE_MASK) != WRITEBACK_CPA2)
+    finish(WRITEBACK_FEATURE_ERROR, 1);
+  const uint64_t Mask = RETURN_MODEL_NIBBLE_MASK << WRITEBACK_CPTA_SHIFT;
+  for (unsigned Mode = 0; Mode <= RETURN_MODEL_NIBBLE_MASK; ++Mode) {
+    const uint64_t Bits = Mode << WRITEBACK_CPTA_SHIFT;
+    __asm__ volatile(RETURN_MODEL_READ(RETURN_MODEL_SCTLR2) : "=r"(Control));
+    Control = (Control & ~Mask) | Bits;
+    __asm__ volatile(RETURN_MODEL_WRITE(RETURN_MODEL_SCTLR2)::"r"(Control)
+                     : "memory");
+    __asm__ volatile(RETURN_MODEL_READ(RETURN_MODEL_SCTLR2) : "=r"(Control));
+    if ((Control & Mask) != Bits)
+      finish(WRITEBACK_CONTROL_ERROR, 1);
+    checkOracle(compareStructureWriteback((Mode & WRITEBACK_CPTA) != 0), Mode,
+                RETURN_MODEL_EL1_ERROR);
+    checkOracle(runAtEL0((Mode & WRITEBACK_CPTA0) != 0, RETURN_MODEL_STACK_EL0),
+                Mode, RETURN_MODEL_EL0_ERROR);
+    const char Setting[] = {RETURN_MODEL_HEX[Mode], '\n', 0};
+    writeText(WRITEBACK_OBSERVATION);
+    writeText(Setting);
+  }
+  finish(WRITEBACK_PASS, 0);
 #else
   uint64_t ISAR1, ISAR2, ISAR3, Control;
   __asm__ volatile(RETURN_MODEL_READ(ID_AA64ISAR1_EL1) : "=r"(ISAR1));

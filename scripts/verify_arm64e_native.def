@@ -324,10 +324,12 @@
     "run-generated",
     "run-generated-executable",
     "probe-cursor",
+    "probe-x1-cursor",
     "probe-lrcpc3",
     "qualify-x1"
   ],
   "cpta_probe": {
+    "source_files": ["scripts/diagnostics/Arm64eCheckedWriteback.def"],
     "source": "scripts/arm64e_native_cpta.def",
     "report_optimization": "-O2",
     "mode": "probe-cpta",
@@ -536,6 +538,7 @@
   "cpta_qualification_key": "native_apple_cpta_qualified",
   "cursor_probe": {
     "mode": "probe-cursor",
+    "target": ["-target", "arm64e-apple-macosx15.0"],
     "source": "unittests/lift/aarch64/AArch64SignalCursorNative.def",
     "source_files": [
       "unittests/lift/aarch64/AArch64SignalCursorOracle.def",
@@ -548,8 +551,8 @@
     ],
     "compile": [
       "/usr/bin/clang",
-      "-target",
-      "arm64e-apple-macosx15.0",
+      "{target_flag}",
+      "{triple}",
       "-std=c11",
       "-Wall",
       "-Wextra",
@@ -602,6 +605,12 @@
     "invalid_report": "native cursor did not produce a complete, successful observation",
     "include": "include"
   },
+  "x1_cursor_probe": {
+    "mode": "probe-x1-cursor",
+    "target": ["-arch", "arm64e.x1"],
+    "explicit_key": "explicit_pauth_lr_qualified",
+    "pacm_pc_key": "pacm_pc_qualified"
+  },
   "ordered_probe": {
     "mode": "probe-lrcpc3",
     "qualified_key": "native_lrcpc3_128_qualified",
@@ -624,12 +633,16 @@
   "x1_qualification": {
     "mode": "qualify-x1",
     "qualified_key": "native_arm64e_x1_environment_qualified",
+    "complete_key": "native_arm64e_x1_and_lrcpc3_qualified",
     "requirements": {
       "probe": [
         "native_pac_qualified",
         "compiler_original_call_unwind_qualified"
       ],
       "probe-cursor": [
+        "native_cursor_qualified"
+      ],
+      "probe-x1-cursor": [
         "native_cursor_qualified",
         "explicit_pauth_lr_qualified",
         "pacm_pc_qualified"

@@ -465,6 +465,7 @@
   "x1_components": {
     "probe": "probe",
     "probe-cursor": "probe_signal_cursor",
+    "probe-x1-cursor": "probe_x1_signal_cursor",
     "probe-cpta": "probe_cpta",
     "probe-lrcpc3": "probe_ordered_q"
   },
@@ -552,6 +553,10 @@
     "cannot_launch": "host rejected the arm64e control before entry"
   },
   "cpta_controls": {
+    "writeback_changes": [
+      ["ld1 {v0.b}[0], [%[base]], %[offset]", "add %[base], %[base], %[offset]\\nmovi v0.8b, #0xa7"],
+      ["dup v0.8b, %w[source]", "movi v0.8b, #0x5a"]
+    ],
     "native_arch": "arm64",
     "plain_words": {
       "0x9a012000": "0x8b010000",

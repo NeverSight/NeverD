@@ -5,7 +5,8 @@
 //===----------------------------------------------------------------------===//
 
 // The FVP starts at EL1 with EL2 and EL3 absent.
-#if defined(RETURN_MODEL_CURSOR) || defined(RETURN_MODEL_ORDERED)
+#if defined(RETURN_MODEL_CURSOR) || defined(RETURN_MODEL_ORDERED) ||            \
+    defined(RETURN_MODEL_WRITEBACK)
 #define RETURN_MODEL_NORMAL_MEMORY
 // Each 2 MiB block holds either shared read-only code or one writable stack.
 #define RETURN_MODEL_TEXT_BASE 0x80000000
@@ -86,6 +87,18 @@
 #define RETURN_MODEL_MODE " alignment control index="
 #define RETURN_MODEL_EL1_ERROR "ORDERED-MODEL EL1 comparison failed\n"
 #define RETURN_MODEL_EL0_ERROR "ORDERED-MODEL EL0 comparison failed\n"
+#elif defined(RETURN_MODEL_WRITEBACK)
+#define RETURN_MODEL_MODE " CPTA/CPTA0/CPTM/CPTM0 bits="
+#define RETURN_MODEL_EL1_ERROR "WRITEBACK-MODEL EL1 comparison failed\n"
+#define RETURN_MODEL_EL0_ERROR "WRITEBACK-MODEL EL0 comparison failed\n"
+#define WRITEBACK_CPA2 2
+#define WRITEBACK_CPTA_SHIFT 9
+#define WRITEBACK_CPTA 1
+#define WRITEBACK_CPTA0 2
+#define WRITEBACK_FEATURE_ERROR "WRITEBACK-MODEL CPA2 unavailable\n"
+#define WRITEBACK_CONTROL_ERROR "WRITEBACK-MODEL controls did not read back\n"
+#define WRITEBACK_OBSERVATION "WRITEBACK-MODEL controls="
+#define WRITEBACK_PASS "WRITEBACK-MODEL passed EL1 and EL0 writeback\n"
 #else
 #define RETURN_MODEL_MODE " EnPACM bits="
 #define RETURN_MODEL_EL1_ERROR "RETURN-MODEL EL1 comparison failed\n"

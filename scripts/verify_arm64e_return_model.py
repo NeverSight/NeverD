@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and execute Darwin arm64e return, frame-walk and ordered-memory oracles on Arm FVP."""
+"""Build and execute Darwin arm64e return, frame-walk and memory oracles on Arm FVP."""
 
 import argparse
 import hashlib
@@ -135,15 +135,14 @@ def build(binary, output):
         staged.rename(output)
 
 
-def build_cursor(output):
+def build_control_guests(output, family):
     if output.exists():
         raise FileExistsError(output)
-    cursor = CONFIG["cursor"]
+    profile = CONFIG[family]
     source = ROOT / CONFIG["guest_directory"]
-    native = json.loads((ROOT / cursor["native_policy"]).read_text())["cursor_probe"]
-    fixture_dir = (ROOT.parent / native["source"]).parent
+    native = json.loads((ROOT / CONFIG["native_policy"]).read_text())[profile["native_probe"]]
     inputs = [source / CONFIG[key] for key in ("guest_entry", "guest_driver", "guest_constants")]
-    inputs.append(source / cursor["driver"])
+    inputs.append(source / profile["driver"])
     inputs.extend(ROOT.parent / path for path in native["source_files"])
     manifest = {"guests": {}, "sources": {str(path.relative_to(ROOT.parent)): digest(path) for path in inputs}}
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
@@ -151,15 +150,18 @@ def build_cursor(output):
         staged = scratch / CONFIG["staging_directory"]
         staged.mkdir()
         entry = scratch / CONFIG["entry_object"]
-        compile_object(source / CONFIG["guest_entry"], entry, [cursor["define"]])
+        compile_object(source / CONFIG["guest_entry"], entry, [profile["define"]])
         driver = scratch / (Path(CONFIG["guest_driver"]).stem + CONFIG["test_object_extension"])
-        compile_object(source / CONFIG["guest_driver"], driver, [*CONFIG["driver_flags"], cursor["define"]])
+        compile_object(source / CONFIG["guest_driver"], driver, [*CONFIG["driver_flags"], profile["define"]])
+        flags = list(profile.get("flags", CONFIG["driver_flags"]))
+        if "include_option" in profile:
+            flags.extend([profile["include_option"], ROOT.parent / native["include"],
+                          profile["include_option"], (ROOT.parent / native["source"]).parent])
         for optimization in CONFIG["optimizations"]:
-            name = cursor["name"].format(optimization=optimization)
+            name = profile["name"].format(optimization=optimization)
             obj = scratch / (name + CONFIG["test_object_extension"])
-            flags = [cursor["define"], *cursor["flags"], cursor["optimization_option"].format(optimization=optimization),
-                     cursor["include_option"], ROOT.parent / native["include"], cursor["include_option"], fixture_dir]
-            compile_object(source / cursor["driver"], obj, flags)
+            compile_object(source / profile["driver"], obj,
+                           [profile["define"], *flags, CONFIG["optimization_option"].format(optimization=optimization)])
             check_macho(obj, CONFIG["object_kind"])
             manifest["guests"][name] = link_guest(staged / name, entry, driver, obj)
         write_json(staged / CONFIG["manifest"], manifest)
@@ -277,15 +279,21 @@ def run_native_ordered(guests, output):
     return first["exit_code"]
 
 
-def run(model, guests, output, cursor=False, ordered=False):
+def run(model, guests, output, cursor=False, ordered=False, *, writeback=False):
     output.mkdir()
     version = subprocess.check_output([model, *CONFIG["version_flags"]], text=True, stderr=subprocess.STDOUT)
     match = re.search(CONFIG["version_pattern"], version)
     if not match or match[1] != CONFIG["model_version"]:
         raise ValueError(CONFIG["bad_version"].format(version=version.strip()))
     manifest = json.loads((guests / CONFIG["manifest"]).read_text())
-    policy = CONFIG["ordered"] if ordered else CONFIG
+    policy = CONFIG
+    if ordered:
+        policy = CONFIG["ordered"]
+    elif writeback:
+        policy = CONFIG["writeback"]
     passed = policy["passed"]
+    records_required = ([policy["control_record"].format(mode) for mode in range(policy["control_count"])]
+                        if writeback else policy["control_records"])
     if ordered:
         profile = manifest.get("ordered_profile", policy["quadword_profile"])
         names = [label for label, _, _ in ordered_routes(policy, profile)]
@@ -293,8 +301,9 @@ def run(model, guests, output, cursor=False, ordered=False):
             passed = policy["legacy_passed"]
         elif profile != policy["profile"]:
             passed = policy["fixed_input_passed"]
-    elif cursor:
-        names = [CONFIG["cursor"]["name"].format(optimization=opt) for opt in CONFIG["optimizations"]]
+    elif cursor or writeback:
+        profile = policy if writeback else CONFIG["cursor"]
+        names = [profile["name"].format(optimization=opt) for opt in CONFIG["optimizations"]]
     else:
         profile = manifest.get("return_profile", CONFIG["previous_return_profile"])
         names = ["-".join(case) for case in cases(profile)]
@@ -302,7 +311,7 @@ def run(model, guests, output, cursor=False, ordered=False):
         raise ValueError(CONFIG["bad_inventory"])
     result = {"model_version": CONFIG["model_version"], "model_sha256": digest(model),
               "manifest_sha256": digest(guests / CONFIG["manifest"]), "observations": {}}
-    negative_case = names[0] if cursor or ordered else CONFIG["negative_case"]
+    negative_case = names[0] if cursor or ordered or writeback else CONFIG["negative_case"]
     for label in [negative_case + CONFIG["negative_suffix"], *names]:
         name = label.removesuffix(CONFIG["negative_suffix"])
         negative = name != label
@@ -311,7 +320,7 @@ def run(model, guests, output, cursor=False, ordered=False):
         if digest(guest) != item["sha256"]:
             raise ValueError(CONFIG["bad_hash"].format(name=name))
         params = {**CONFIG["parameters"], CONFIG["reset_parameter"]: item["entry"]}
-        if ordered:
+        if ordered or writeback:
             params.update(policy["parameters"])
         if negative:
             params.update(policy["negative_parameters"])
@@ -326,7 +335,7 @@ def run(model, guests, output, cursor=False, ordered=False):
         records = [line for line in log.read_text().splitlines()
                    if line.startswith(policy["record_prefix"])]
         expected = ([policy["feature_mismatch"]] if negative
-                    else [*policy["control_records"], passed])
+                    else [*records_required, passed])
         if records != expected or observed.returncode != (CONFIG["unsupported_exit"] if negative else 0):
             raise RuntimeError(CONFIG["bad_observation"].format(
                 label=label, status=observed.returncode, records=records))
@@ -345,14 +354,17 @@ if __name__ == "__main__":
     for command in (link, ordered_link, native_link):
         command.add_argument(options["tests"], type=Path, required=True)
     cursor_link = commands.add_parser(options["build_cursor"])
+    writeback_link = commands.add_parser(options["build_writeback"])
     execute = commands.add_parser(options["run"])
     cursor_execute = commands.add_parser(options["run_cursor"])
     ordered_execute = commands.add_parser(options["run_ordered"])
-    for command in (execute, cursor_execute, ordered_execute):
+    writeback_execute = commands.add_parser(options["run_writeback"])
+    executions = (execute, cursor_execute, ordered_execute, writeback_execute)
+    for command in executions:
         command.add_argument(options["model"], type=Path, required=True)
-    for command in (execute, cursor_execute, ordered_execute, native_execute):
+    for command in (*executions, native_execute):
         command.add_argument(options["guests"], type=Path, required=True)
-    for command in (link, cursor_link, ordered_link, native_link, execute, cursor_execute, ordered_execute, native_execute):
+    for command in (link, cursor_link, writeback_link, ordered_link, native_link, *executions, native_execute):
         command.add_argument(options["output"], type=Path, required=True)
     args = parser.parse_args()
     if args.command == options["build"]:
@@ -361,8 +373,10 @@ if __name__ == "__main__":
         build_ordered(args.tests.resolve(), args.output.resolve(), native=args.command == options["build_native_ordered"])
     elif args.command == options["run_native_ordered"]:
         raise SystemExit(run_native_ordered(args.guests.resolve(), args.output.resolve()))
-    elif args.command == options["build_cursor"]:
-        build_cursor(args.output.resolve())
+    elif args.command in (options["build_cursor"], options["build_writeback"]):
+        family = "writeback" if args.command == options["build_writeback"] else "cursor"
+        build_control_guests(args.output.resolve(), family)
     else:
         run(args.model.resolve(), args.guests.resolve(), args.output.resolve(),
-            cursor=args.command == options["run_cursor"], ordered=args.command == options["run_ordered"])
+            cursor=args.command == options["run_cursor"], ordered=args.command == options["run_ordered"],
+            writeback=args.command == options["run_writeback"])
