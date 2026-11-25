@@ -68,6 +68,10 @@ the proposed rewrite only unifies file layout and its measured benefit falls
 within run-to-run variation. Test the existing decoder contract with real
 instruction bytes. [AArch64 access-width example](references/methodology.md#refactoring-a-lifter-hot-path)
 
+When a code-generation change moves work across a branch, compare the work
+executed on each path before updating assembly expectations.
+[MIPS16 multiply example](references/methodology.md#moving-work-across-a-branch)
+
 ## Rules for new code
 
 1. **Complexity before constants.** Do not scan all functions, blocks, calls or

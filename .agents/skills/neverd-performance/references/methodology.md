@@ -202,6 +202,17 @@ compute-bound change, so the suffix check stayed. Revisit the choice if a
 supported input produces incorrect IR or a new comparison shows a repeatable
 gain. [Release comparison](https://github.com/NeverSight/NeverD/pull/2603)
 
+### Moving work across a branch
+
+A MIPS16 fix initially exposed the multiply's LO register during instruction
+selection. The existing `cttz_i64` test caught both halves being calculated
+before the branch. All six inputs still returned the right value. On QEMU's
+74Kf model the two paths had grown from 27 and 28 instructions to 43 and 44.
+Expanding the low product after register allocation restored the original
+assembly and path counts while emitting valid object bytes. Use dynamic
+instruction counts to identify extra work and target timing for a latency
+claim. [LLVM change and measurements](https://github.com/NeverSight/llvm-project/pull/21)
+
 ## 6. Prove the fast path exact
 
 - **Bound a non-monotone solve by the step that breaks it.** The module
