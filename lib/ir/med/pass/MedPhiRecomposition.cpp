@@ -145,56 +145,19 @@ struct PhiLocation {
   MedBlock *Block;
   size_t Index;
 };
-} // namespace
 
-bool recomposeSplitPhis(MedFunc &Func, int *NextVarId) {
-  if (Func.SkippedSSA)
-    return false;
+bool recomposeJoins(MedFunc &Func, uint64_t &NextId) {
   Definitions Defs;
   llvm::DenseMap<Key, PhiLocation> Phis;
   std::map<int, std::set<int>> Incoming;
-  // The converter keeps allocating after this pass. Its counter also covers
-  // ids no longer used in the function, which a register view can return to.
-  uint64_t NextId = NextVarId ? uint64_t(std::max(*NextVarId, 0)) : 0;
-  auto ObserveId = [&](const MedVar &V) {
-    if (!V.isConst() && V.Id >= 0)
-      NextId = std::max(NextId, uint64_t(V.Id) + 1);
-  };
-  for (const auto &V : Func.Params)
-    ObserveId(V);
-  for (const auto &V : Func.Locals)
-    ObserveId(V);
-  for (const auto &C : Func.CallClobbers) {
-    ObserveId(C.Value);
-    ObserveId(C.PreservedInput);
-  }
-  for (const auto &Info : Func.CallInfos)
-    for (const auto &V : Info.Args)
-      ObserveId(V);
-  for (const auto &C : Func.StructReturnCandidates)
-    for (const auto &V : C.Fields)
-      ObserveId(V);
   for (auto &Block : Func.Blocks) {
     for (int Successor : Block.Succs)
       Incoming[Successor].insert(Block.Id);
-    for (size_t I = 0; I < Block.Phis.size(); ++I) {
-      const auto &Phi = Block.Phis[I];
-      Phis[key(Phi.Output)] = {&Block, I};
-      ObserveId(Phi.Output);
-      for (const auto &[Pred, Value] : Phi.Args)
-        ObserveId(Value);
-      if (Phi.ExceptionalEntry)
-        ObserveId(*Phi.ExceptionalEntry);
-    }
-    for (const auto &Op : Block.Ops) {
+    for (size_t I = 0; I < Block.Phis.size(); ++I)
+      Phis[key(Block.Phis[I].Output)] = {&Block, I};
+    for (const auto &Op : Block.Ops)
       if (!Op.Dead && Op.Output.Size && !Op.Output.isConst())
         Defs.Ops[key(Op.Output)] = &Op;
-      ObserveId(Op.Output);
-      for (const MedVar &Output : Op.IntrinsicOutputs)
-        ObserveId(Output);
-      for (unsigned I = 0; I < Op.NumInputs; ++I)
-        ObserveId(Op.Inputs[I]);
-    }
   }
 
   llvm::DenseMap<std::pair<Key, Key>, MedVar> Recovered;
@@ -278,10 +241,61 @@ bool recomposeSplitPhis(MedFunc &Func, int *NextVarId) {
       Changed = true;
     }
   }
+  return Changed;
+}
+} // namespace
+
+bool recomposeSplitPhis(MedFunc &Func, int *NextVarId) {
+  if (Func.SkippedSSA)
+    return false;
+  // The converter keeps allocating after this pass. Its counter also covers
+  // ids no longer used in the function, which a register view can return to.
+  uint64_t NextId = NextVarId ? uint64_t(std::max(*NextVarId, 0)) : 0;
+  auto ObserveId = [&](const MedVar &V) {
+    if (!V.isConst() && V.Id >= 0)
+      NextId = std::max(NextId, uint64_t(V.Id) + 1);
+  };
+  for (const auto &V : Func.Params)
+    ObserveId(V);
+  for (const auto &V : Func.Locals)
+    ObserveId(V);
+  for (const auto &C : Func.CallClobbers) {
+    ObserveId(C.Value);
+    ObserveId(C.PreservedInput);
+  }
+  for (const auto &Info : Func.CallInfos)
+    for (const auto &V : Info.Args)
+      ObserveId(V);
+  for (const auto &C : Func.StructReturnCandidates)
+    for (const auto &V : C.Fields)
+      ObserveId(V);
+  bool HasSlices = false;
+  bool HasPhis = false;
+  for (const auto &Block : Func.Blocks) {
+    HasPhis |= !Block.Phis.empty();
+    for (const auto &Phi : Block.Phis) {
+      ObserveId(Phi.Output);
+      for (const auto &[Pred, Value] : Phi.Args)
+        ObserveId(Value);
+      if (Phi.ExceptionalEntry)
+        ObserveId(*Phi.ExceptionalEntry);
+    }
+    for (const auto &Op : Block.Ops) {
+      HasSlices |= !Op.Dead && Op.Opcode == NdOp::SUBBYTES;
+      ObserveId(Op.Output);
+      for (const MedVar &Output : Op.IntrinsicOutputs)
+        ObserveId(Output);
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        ObserveId(Op.Inputs[I]);
+    }
+  }
+
+  // Each incoming edge needs slices of the same whole. The allocator must
+  // still cover every original id when there is no join to reconstruct.
+  const bool Changed = HasPhis && HasSlices && recomposeJoins(Func, NextId);
   if (NextVarId)
-    *NextVarId = static_cast<int>(std::max<uint64_t>(
-        uint64_t(std::max(*NextVarId, 0)),
-        std::min<uint64_t>(NextId, std::numeric_limits<int>::max())));
+    *NextVarId = static_cast<int>(
+        std::min<uint64_t>(NextId, std::numeric_limits<int>::max()));
   return Changed;
 }
 } // namespace neverd
