@@ -128,22 +128,14 @@ void expectIntrinsic(const LowOp &Op, Intrinsic Id, unsigned Inputs) {
   EXPECT_EQ(Op.Inputs[0].Offset, static_cast<uint64_t>(Id));
 }
 
-struct NativeCapability {
-  bool MayTrapOnInstruction = false;
-  std::optional<bool> Available;
-};
-
-std::optional<bool> nativeProbeStatus(int Result, llvm::StringRef Output,
-                                      bool MayTrapOnInstruction) {
+std::optional<bool> nativeProbeStatus(int Result, llvm::StringRef Output) {
   if (Output.empty() && Result == kProbeSignalBase + kProbeKilledSignal)
     return false;
   if (Output != kProbeEntryMarker)
     return std::nullopt;
   if (Result == 0)
     return true;
-  if (Result == kProbeAbsent ||
-      (MayTrapOnInstruction &&
-       Result == kProbeSignalBase + kProbeIllegalSignal))
+  if (Result == kProbeAbsent)
     return false;
   return std::nullopt;
 }
@@ -151,7 +143,7 @@ std::optional<bool> nativeProbeStatus(int Result, llvm::StringRef Output,
 void compileArm64eC(const std::string &Source,
                     const std::function<void(llvm::StringRef)> &Inspect = {},
                     bool EmitLLVM = false, llvm::StringRef ExecuteTarget = {},
-                    NativeCapability *Capability = nullptr,
+                    std::optional<bool> *Capability = nullptr,
                     llvm::StringRef Language = kOracleCLanguage,
                     llvm::StringRef ObjectDirectory = {},
                     llvm::StringRef LinkObject = {}) {
@@ -191,15 +183,14 @@ void compileArm64eC(const std::string &Source,
   }
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
-  // Exclude host libc headers explicitly. Only Clang's resource headers and
-  // the fixture's C declarations are needed, including on Linux and Windows.
+  // Cross-compiled projections use Clang's resource headers and the fixture
+  // declarations. Only the native capability probes need Darwin SDK headers.
   for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
     llvm::SmallVector<llvm::StringRef> Args = {
         Compiler,
         "-target",
         ExecuteNative ? ExecuteTarget : "arm64e-apple-macos",
         "-ffreestanding",
-        "-nostdlibinc",
         "-I",
         pAuthFixtureDirectory(),
         "-std=gnu11",
@@ -210,6 +201,8 @@ void compileArm64eC(const std::string &Source,
         SourcePath,
         "-o",
         ObjectPath};
+    if (!Capability)
+      Args.push_back("-nostdlibinc");
     if (!LinkObject.empty())
       Args.insert(Args.begin() + 1, LinkObject); // Before -x selects C.
     if (EmitLLVM)
@@ -249,14 +242,13 @@ void compileArm64eC(const std::string &Source,
             kProbeTimeoutSeconds, 0, &Error);
         const auto Output = llvm::MemoryBuffer::getFile(ProbeOutput);
         ASSERT_TRUE(Output) << Output.getError().message();
-        const auto Observed = nativeProbeStatus(
-            Result, (*Output)->getBuffer(), Capability->MayTrapOnInstruction);
+        const auto Observed = nativeProbeStatus(Result, (*Output)->getBuffer());
         ASSERT_TRUE(Observed.has_value())
             << Optimization.str() << kProbeResultMessage << Result << Error;
-        if (Capability->Available) {
-          ASSERT_EQ(*Capability->Available, *Observed) << Optimization.str();
+        if (Capability->has_value()) {
+          ASSERT_EQ(**Capability, *Observed) << Optimization.str();
         }
-        Capability->Available = Observed;
+        *Capability = Observed;
         continue;
       }
       const llvm::StringRef RunArgs[] = {ObjectPath};
@@ -1992,9 +1984,11 @@ void checkPrefixOracle(llvm::StringRef ExecuteTarget = {},
   {Intrinsic::Prefix, #PrefixName},
 #include "AArch64PAuthNative.def"
   };
+  const auto Oracle = readPAuthOracle(pacm_oracle::kOracle);
+  ASSERT_TRUE(Oracle);
   checkCProjections(
       makeOracleFunctions(Cases),
-      (Mode + pacm_oracle::kOracle + pacm_oracle::kCompareMain).str(),
+      (Mode + (*Oracle)->getBuffer() + pacm_oracle::kCompareMain).str(),
       ExecuteTarget, kPrefixOraclePrototype);
 }
 
@@ -2014,13 +2008,15 @@ void checkNativePrefixOracle(llvm::StringRef Mode,
                              llvm::StringRef Unavailable) {
   if (!hasNativePAuth())
     GTEST_SKIP() << Unavailable.str();
-  NativeCapability Capability;
-  compileArm64eC((Mode + pacm_oracle::kOracle + pacm_oracle::kProbeMain).str(),
-                 {}, /*EmitLLVM=*/false, pacm_oracle::kNativeTarget,
-                 &Capability);
+  std::optional<bool> Capability;
+  const auto Oracle = readPAuthOracle(pacm_oracle::kOracle);
+  ASSERT_TRUE(Oracle);
+  compileArm64eC(
+      (Mode + (*Oracle)->getBuffer() + pacm_oracle::kProbeMain).str(), {},
+      /*EmitLLVM=*/false, pacm_oracle::kNativeTarget, &Capability);
   if (testing::Test::HasFatalFailure())
     return;
-  if (!Capability.Available.value_or(false))
+  if (!Capability.value_or(false))
     GTEST_SKIP() << Unavailable.str();
   checkPrefixOracle(pacm_oracle::kNativeTarget, Mode);
 }
@@ -2029,22 +2025,17 @@ void checkNativePrefixOracle(llvm::StringRef Mode,
 TEST(AArch64PAuthSemantics, ProbeRequiresEntryAndDistinguishesFaults) {
   const int Killed = kProbeSignalBase + kProbeKilledSignal;
   const int Illegal = kProbeSignalBase + kProbeIllegalSignal;
-  for (bool MayTrap : {false, true}) {
-    EXPECT_EQ(nativeProbeStatus(0, kProbeEntryMarker, MayTrap), true);
-    EXPECT_EQ(nativeProbeStatus(kProbeAbsent, kProbeEntryMarker, MayTrap),
-              false);
-    EXPECT_EQ(nativeProbeStatus(Killed, {}, MayTrap), false);
-    EXPECT_FALSE(nativeProbeStatus(0, {}, MayTrap).has_value());
-    EXPECT_FALSE(nativeProbeStatus(Illegal, {}, MayTrap).has_value());
-    EXPECT_FALSE(
-        nativeProbeStatus(Killed, kProbeEntryMarker, MayTrap).has_value());
-    EXPECT_FALSE(nativeProbeStatus(kProbeSignalBase + kProbeSegmentationSignal,
-                                   kProbeEntryMarker, MayTrap)
-                     .has_value());
-  }
-  EXPECT_EQ(nativeProbeStatus(Illegal, kProbeEntryMarker, true), false);
-  EXPECT_FALSE(
-      nativeProbeStatus(Illegal, kProbeEntryMarker, false).has_value());
+  EXPECT_EQ(nativeProbeStatus(0, kProbeEntryMarker), true);
+  EXPECT_EQ(nativeProbeStatus(kProbeAbsent, kProbeEntryMarker), false);
+  EXPECT_EQ(nativeProbeStatus(Killed, {}), false);
+  EXPECT_FALSE(nativeProbeStatus(0, {}).has_value());
+  EXPECT_FALSE(nativeProbeStatus(Illegal, {}).has_value());
+  EXPECT_FALSE(nativeProbeStatus(Killed, kProbeEntryMarker).has_value());
+  EXPECT_FALSE(nativeProbeStatus(Illegal, kProbeEntryMarker).has_value());
+  EXPECT_FALSE(nativeProbeStatus(kProbeFailed, kProbeEntryMarker).has_value());
+  EXPECT_FALSE(nativeProbeStatus(kProbeSignalBase + kProbeSegmentationSignal,
+                                 kProbeEntryMarker)
+                   .has_value());
 }
 
 TEST(AArch64PAuthSemantics, NativeGenericSignaturesAgreeWithBothCProjections) {
@@ -2061,12 +2052,14 @@ TEST(AArch64PAuthSemantics, NativeKeysAgreeWithBothCProjections) {
     GTEST_SKIP() << "native key comparison requires a PAuth Apple Silicon host";
   // A requested target alone is not evidence: a linker may emit ordinary
   // arm64. Require each signing key to change a pointer in the actual process.
-  NativeCapability Capability{.MayTrapOnInstruction = true};
-  compileArm64eC(kSigningKeyProbe, {}, /*EmitLLVM=*/false, kSigningKeyTarget,
-                 &Capability);
+  const auto Probe = readPAuthOracle(kSigningKeyProbe);
+  ASSERT_TRUE(Probe);
+  std::optional<bool> Capability;
+  compileArm64eC((*Probe)->getBuffer().str(), {}, /*EmitLLVM=*/false,
+                 kSigningKeyTarget, &Capability);
   if (HasFatalFailure())
     return;
-  if (!Capability.Available.value_or(false))
+  if (!Capability.value_or(false))
     GTEST_SKIP() << kSigningKeysUnavailable;
   const auto Oracle = readPAuthOracle(kSigningOracle);
   ASSERT_TRUE(Oracle);
@@ -2085,13 +2078,15 @@ TEST(AArch64PAuthLRSemantics, BothCProjectionsCompileWithTheTwoModifierOracle) {
 TEST(AArch64PAuthLRSemantics, NativeTwoModifierKeysAgreeWithBothCProjections) {
   if (!hasNativePAuth())
     GTEST_SKIP() << kReturnHostUnavailable;
-  NativeCapability Capability{.MayTrapOnInstruction = true};
+  const auto Probe = readPAuthOracle(kSigningKeyProbe);
+  ASSERT_TRUE(Probe);
+  std::optional<bool> Capability;
   // The process must both execute PAuth_LR and have active IA/IB keys.
-  compileArm64eC(kReturnKeyProbe, {}, /*EmitLLVM=*/false, kSigningKeyTarget,
-                 &Capability);
+  compileArm64eC((kReturnProbeMode + (*Probe)->getBuffer()).str(), {},
+                 /*EmitLLVM=*/false, kSigningKeyTarget, &Capability);
   if (HasFatalFailure())
     return;
-  if (!Capability.Available.value_or(false))
+  if (!Capability.value_or(false))
     GTEST_SKIP() << kReturnKeysUnavailable;
   checkReturnOracle(kSigningKeyTarget);
 }

@@ -20,6 +20,16 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+typedef uint64_t Quadword __attribute__((vector_size(ORDERED_QUAD_BYTES)));
+
+// The fixture encodings use X1 for the base and V0 for the transferred lanes.
+// A data symbol keeps the instruction address unsigned on the arm64e ABI.
+extern Quadword storeOrderedQ(uintptr_t, uint64_t *, Quadword);
+extern Quadword loadOrderedQ(uintptr_t, uint64_t *, Quadword);
+extern const uint32_t storeOrderedQSite, loadOrderedQSite;
+__asm__(ORDERED_NATIVE_Q_ROUTINE(storeOrderedQ, ORDERED_NATIVE_Q_STORE));
+__asm__(ORDERED_NATIVE_Q_ROUTINE(loadOrderedQ, ORDERED_NATIVE_Q_LOAD));
+
 static volatile sig_atomic_t ProbingStore;
 
 static void illegalInstruction(int Number, siginfo_t *Info, void *Context) {
@@ -28,7 +38,8 @@ static void illegalInstruction(int Number, siginfo_t *Info, void *Context) {
   const uintptr_t PC = arm_thread_state64_get_pc(MC->__ss);
   const uint32_t Expected =
       ProbingStore ? ORDERED_NATIVE_Q_STORE : ORDERED_NATIVE_Q_LOAD;
-  _exit(Number == SIGILL && *(const uint32_t *)PC == Expected
+  const uint32_t *Site = ProbingStore ? &storeOrderedQSite : &loadOrderedQSite;
+  _exit(Number == SIGILL && PC == (uintptr_t)Site && *Site == Expected
             ? ORDERED_NATIVE_SKIP
             : EXIT_FAILURE);
 }
@@ -42,25 +53,16 @@ static int executeQ(bool Store) {
     return EXIT_FAILURE;
   ProbingStore = Store;
   // Complementing the input to V0 makes an unchanged or repeated lane fail.
-  typedef uint64_t Quadword __attribute__((vector_size(ORDERED_QUAD_BYTES)));
   _Alignas(ORDERED_QUAD_BYTES)
       uint64_t Data[] = {~ORDERED_STORE_LOW, ~ORDERED_STORE_HIGH};
-  register uintptr_t X1 __asm__(ORDERED_BASE_REGISTER) = (uintptr_t)Data;
-  register Quadword V0 __asm__(ORDERED_VECTOR_REGISTER) = {ORDERED_STORE_LOW,
-                                                           ORDERED_STORE_HIGH};
+  Quadword V0 = {ORDERED_STORE_LOW, ORDERED_STORE_HIGH};
   if (Store) {
-    __asm__ volatile(ORDERED_INSTRUCTION
-                     : "+w"(V0)
-                     : "r"(X1), [encoding] "i"(ORDERED_NATIVE_Q_STORE)
-                     : "memory");
+    storeOrderedQ(0, Data, V0);
     return Data[0] == ORDERED_STORE_LOW && Data[1] == ORDERED_STORE_HIGH
                ? EXIT_SUCCESS
                : EXIT_FAILURE;
   }
-  __asm__ volatile(ORDERED_INSTRUCTION
-                   : "+w"(V0)
-                   : "r"(X1), [encoding] "i"(ORDERED_NATIVE_Q_LOAD)
-                   : "memory");
+  V0 = loadOrderedQ(0, Data, V0);
   return V0[0] == ~ORDERED_STORE_LOW && V0[1] == ~ORDERED_STORE_HIGH &&
                  Data[0] == V0[0] && Data[1] == V0[1]
              ? EXIT_SUCCESS

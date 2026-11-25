@@ -2532,6 +2532,22 @@ register lanes with distinct values and preserve memory. Both children must
 identify the original faulting instruction on SIGILL to report the feature
 unavailable. Mixed results fail the probe.
 
+The GoogleTest preflights for the C and direct-object projections also check
+the saved instruction address before reporting an unavailable signing
+instruction. The two explicit register forms are tried independently.
+A single undefined form, a fault beyond its label, or conflicting PACM modes
+for two active keys fails the comparison.
+
+The signing oracles vary each bit of both 64-bit modifiers independently with
+the pointer held fixed. For IA and IB they compare generated signatures with
+the original instructions, then check authentication and authenticated return
+with the same inputs. Equal signatures on individual bit flips are valid when
+the reference produces them. PACM exercises both prefix states. The second
+modifier must preserve signatures in HINT mode and change at least one signature per
+key when enabled. The 128-bit ordered probe checks the labelled load or store
+address and its word. Its baseline control includes
+a second copy of the same undefined word at an unrelated address.
+
 The native cursor probes the IA and IB explicit instructions separately before
 walking frames. An unsupported result requires a synchronous fault at each
 signer's instruction address. Mixed availability or disagreement between O0

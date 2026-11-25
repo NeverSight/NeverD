@@ -1,0 +1,106 @@
+//===- pauth_key_probe.def - Darwin signing instruction probes ---*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Execute each signing instruction at a known address before comparing native
+/// projections. The shell can report an unhandled signal from any instruction.
+//===----------------------------------------------------------------------===//
+
+#include <mach/arm/thread_status.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <sys/ucontext.h>
+#include <unistd.h>
+
+enum { ProbeAbsent = 1, ProbeFailed = 2, Samples = 64 };
+
+#ifdef PROBE_RETURN_KEYS
+#define KEY_FORMS(F)                                                           \
+  F(signIA, "mov x17,x0\nmov x16,x1\nmov x15,x1\n", ".inst 0xdac18bfe",        \
+    "mov x0,x17\n", 0)                                                         \
+  F(signIB, "mov x17,x0\nmov x16,x1\nmov x15,x1\n", ".inst 0xdac18ffe",        \
+    "mov x0,x17\n", 0)
+#else
+#define KEY_FORMS(F)                                                           \
+  F(signIA, "", "pacia x0,x1", "", 0)                                          \
+  F(signIB, "", "pacib x0,x1", "", 0)                                          \
+  F(signDA, "", "pacda x0,x1", "", 0)                                          \
+  F(signDB, "", "pacdb x0,x1", "", 0)                                          \
+  F(signGeneric, "", "pacga x0,x0,x1", "", 1)
+#endif
+
+#define DEFINE_KEY(Name, Setup, Instruction, Finish, Generic)                  \
+  extern uint64_t Name(uint64_t, uint64_t);                                    \
+  extern const uint32_t Name##Site;                                            \
+  __asm__(".text\n.p2align 2\n.globl _" #Name "\n_" #Name ":\n" Setup          \
+          ".globl _" #Name "Site\n_" #Name "Site:\n" Instruction "\n" Finish   \
+          "ret\n");
+KEY_FORMS(DEFINE_KEY)
+#undef DEFINE_KEY
+
+typedef struct {
+  uint64_t (*Run)(uint64_t, uint64_t);
+  const uint32_t *Site;
+  int Generic;
+} Key;
+
+static const Key Keys[] = {
+#define KEY_ROW(Name, Setup, Instruction, Finish, Generic)                     \
+  {Name, &Name##Site, Generic},
+    KEY_FORMS(KEY_ROW)
+#undef KEY_ROW
+};
+#undef KEY_FORMS
+
+static sigjmp_buf Recovery;
+static _Atomic(uintptr_t) ExpectedPC;
+
+static void illegalInstruction(int Number, siginfo_t *Info, void *Context) {
+  (void)Info;
+  const mcontext_t MC = ((ucontext_t *)Context)->uc_mcontext;
+  if (Number != SIGILL ||
+      arm_thread_state64_get_pc(MC->__ss) !=
+          atomic_load_explicit(&ExpectedPC, memory_order_relaxed))
+    _exit(ProbeFailed);
+  siglongjmp(Recovery, 1);
+}
+
+typedef enum { Inactive, Active, Undefined } Observation;
+
+static Observation observe(const Key *Form) {
+  if (sigsetjmp(Recovery, 1))
+    return Undefined;
+  atomic_store_explicit(&ExpectedPC, (uintptr_t)Form->Site,
+                        memory_order_relaxed);
+  int Changed = 0;
+  for (uint64_t I = 0; I != Samples; ++I) {
+    const uint64_t Pointer = 0x12340 + I * 16;
+    const uint64_t Value = Form->Run(Pointer, I);
+    Changed |= Value != (Form->Generic ? 0 : Pointer);
+  }
+  return Changed ? Active : Inactive;
+}
+
+int main(void) {
+  struct sigaction Action = {0};
+  Action.sa_sigaction = illegalInstruction;
+  Action.sa_flags = SA_SIGINFO;
+  sigemptyset(&Action.sa_mask);
+  if (sigaction(SIGILL, &Action, 0))
+    return ProbeFailed;
+#ifdef PROBE_RETURN_KEYS
+  const Observation IA = observe(&Keys[0]), IB = observe(&Keys[1]);
+  if ((IA == Undefined) != (IB == Undefined))
+    return ProbeFailed;
+  return IA == Active && IB == Active ? 0 : ProbeAbsent;
+#else
+  for (unsigned I = 0; I != sizeof(Keys) / sizeof(*Keys); ++I)
+    if (observe(&Keys[I]) != Active)
+      return ProbeAbsent;
+  return 0;
+#endif
+}
