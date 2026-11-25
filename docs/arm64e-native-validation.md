@@ -2602,6 +2602,15 @@ individual loads and stores. A CPA-only guest must report CPA2 unavailable.
 Darwin regression controls also replace the load or store with a fixed value
 and require both optimizations to reject each substitution.
 
+The integrated Xcode 27 job built and signed both x1 cursor executables.
+Darwin returned `EBADARCH` before entry for both recipes at O0 and O2 on its
+virtual M1. The macOS 15 and macOS 26 compilers rejected the x1 architecture.
+Ordinary arm64e completed 64 PACM HINT walks per key and optimization on
+macOS 26 and Xcode 27. On the Arm model, forcing unchecked writeback failed
+at EL1, and selecting the EL1 control for EL0 failed at EL0.
+[Hosted run](https://github.com/gmh5225/test_mac_intel/actions/runs/45585703758)
+and [model and per-slice results](evidence/arm64e-x1-cursor-writeback-2026-11-25.json).
+
 The CPTA probe builds arm64, arm64e and arm64e.x1 at O0 and O2. Each scalar
 instruction runs in its own process with four input vectors. A SIGILL counts
 as unavailable only at that instruction's address before the first result.
