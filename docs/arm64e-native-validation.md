@@ -2518,35 +2518,38 @@ projections and the direct backend objects. A native process must demonstrate
 active keys and the modifier behavior under test. The PACM HINT comparison
 requires both keys to be active while the second modifier has no observable
 effect. The PC-sensitive comparison requires that effect for both keys.
-At O0 and O2 the capability probe records entry before executing
-the instructions. Both builds must agree. A launch killed before entry,
-inactive keys, or an illegal instruction in an explicit optional-instruction
-probe can skip the native comparison. An unexpected signal after entry fails
-the test.
+At O0 and O2 the capability probe records entry before executing the
+instructions. Both builds must agree. A launch killed before entry or an
+inactive required key can skip the comparison. The explicit IA and IB register
+forms execute separately. Both must fault at their labelled instructions to
+report them as unavailable. A single undefined form, a fault elsewhere, or
+opposing PACM modes for two active keys fails the comparison.
 
-`qualify-x1` also reports `native_lrcpc3_128_qualified` independently.
-The SIMD GTest, Darwin memory comparison and standalone `probe-lrcpc3`
-share the aligned Q store and load probe. Each instruction executes in its
-own child. A store must replace both memory lanes. A load must replace both
-register lanes with distinct values and preserve memory. Both children must
-identify the original faulting instruction on SIGILL to report the feature
-unavailable. Mixed results fail the probe.
-
-The GoogleTest preflights for the C and direct-object projections also check
-the saved instruction address before reporting an unavailable signing
-instruction. The two explicit register forms are tried independently.
-A single undefined form, a fault beyond its label, or conflicting PACM modes
-for two active keys fails the comparison.
+`qualify-x1` reports `native_lrcpc3_128_qualified` independently. The SIMD
+GoogleTest, Darwin memory comparison and standalone `probe-lrcpc3` share the
+aligned Q probe. The store and load run in separate children. The store must
+replace both memory lanes. The load must replace both register lanes with
+distinct values and preserve memory. Both saved PCs and instruction words
+must match to report SIGILL as unavailable. The baseline control also executes
+an identical undefined word at an unrelated address.
 
 The signing oracles vary each bit of both 64-bit modifiers independently with
 the pointer held fixed. For IA and IB they compare generated signatures with
 the original instructions, then check authentication and authenticated return
-with the same inputs. Equal signatures on individual bit flips are valid when
+on the same inputs. Equal signatures on individual bit flips are valid when
 the reference produces them. PACM exercises both prefix states. The second
-modifier must preserve signatures in HINT mode and change at least one signature per
-key when enabled. The 128-bit ordered probe checks the labelled load or store
-address and its word. Its baseline control includes
-a second copy of the same undefined word at an unrelated address.
+modifier preserves signatures in HINT mode and changes at least one signature
+per key when enabled.
+
+On the r6 build, 20 signing programs completed all four control settings at
+EL0 and EL1. Clearing bit 35 of one modifier produced the expected mismatch in
+HighC and the optimized direct backend. For the same guest configurations,
+clearing bit 63 preserved the observed signatures. The CPA2 model also ran the
+native structure load/store writeback probes at both exception levels and both
+optimizations. The hosted tests record each runner's CPU, tested revision and
+per-feature native verdict. [Model and native results](evidence/arm64e-probe-sites-2026-11-25.json).
+[Hosted r6 projections](https://github.com/gmh5225/test_mac_intel/actions/runs/45550753976) and
+[hardware probes](https://github.com/gmh5225/test_mac_intel/actions/runs/45550938279).
 
 The native cursor probes the IA and IB explicit instructions separately before
 walking frames. An unsupported result requires a synchronous fault at each
