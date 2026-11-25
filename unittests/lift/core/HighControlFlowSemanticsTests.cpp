@@ -9510,6 +9510,35 @@ TEST(HighControlFlowSemantics, PhiCopiesOfOneRegisterShareItsName) {
   }
 }
 
+TEST(HighControlFlowSemantics, ASharedPredicateKeepsAnUnrelatedCall) {
+  // The same input at both operands gives this small DAG billions of paths.
+  // No node in the predicate calls observe, so the actual call must stay.
+  ExprPtr Shared = local(0);
+  for (int I = 0; I != 34; ++I)
+    Shared = HighExpr::makeBinop(NdOp::INT_ADD, Shared, Shared);
+  HighStmt Call;
+  Call.Kind = StmtKind::Call;
+  Call.CallExpr = HighExpr::makeCall("observe", 0x2000, {});
+  Call.CallExpr->CallSiteAddr = 0x1004;
+  HighStmt Inner;
+  Inner.Kind = StmtKind::If;
+  Inner.Cond = local(1);
+  Inner.Body = {result(0x1010, local(0))};
+  HighStmt Outer;
+  Outer.Kind = StmtKind::If;
+  Outer.Cond = Shared;
+  Outer.Body = {Call, Inner};
+  HighFunc F;
+  F.Body = {Outer, result(0x1030, local(1))};
+  structureIfElse(F, 0);
+  size_t Calls = 0;
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    if (S.CallExpr && S.CallExpr->CallTarget == "observe")
+      ++Calls;
+  });
+  EXPECT_EQ(Calls, 1u);
+}
+
 TEST(HighControlFlowSemantics, JumpToANoReturnCallBecomesItsCopy) {
   // if (c) goto fail; v = 5; return v; fail: abort(); -- the failing path
   // ends in the call, as a return tail ends in its return.
