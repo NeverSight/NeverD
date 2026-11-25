@@ -5141,6 +5141,39 @@ bool Specializer::evaluate(int Id) {
           OutputUnsafe = true;
         }
       } else {
+        if (StorePreservation && FrameRoot && Original.Opcode == NdOp::STORE) {
+          const auto ContainsSlot = [](int64_t Begin, int64_t End,
+                                       uint64_t Slot) {
+            const uint64_t Size =
+                static_cast<uint64_t>(End) - static_cast<uint64_t>(Begin);
+            return Size >= 8 && Slot - static_cast<uint64_t>(Begin) <= Size - 8;
+          };
+          for (uint64_t Slot : Frame.NativeReturnSlots) {
+            if (Result.EvaluatedOperations >= Options.MaxOperations)
+              return fail(SpecializationStatus::BudgetExceeded,
+                          "conditional native return-cell budget exhausted");
+            ++Result.EvaluatedOperations;
+            const int64_t Begin = static_cast<int64_t>(Slot);
+            if (Begin > std::numeric_limits<int64_t>::max() - 8 ||
+                !State.hasMaterializedRegionRange(FrameRoot, Slot, 8))
+              continue;
+            if (StorePreservation->Base == FrameRoot &&
+                (ContainsSlot(StorePreservation->Begin, StorePreservation->End,
+                              Slot) ||
+                 llvm::any_of(ProvedStoreRanges, [&](const auto &Range) {
+                   return ContainsSlot(Range.Begin, Range.End, Slot);
+                 })))
+              continue;
+            if (llvm::any_of(ConditionalFrameStores, [&](const auto &Region) {
+                  return Region.Base == FrameRoot && Region.Begin == Begin &&
+                         Region.End == Begin + 8;
+                }))
+              continue;
+            // The physical return word is a current scalar cell. Retain both
+            // alias outcomes without treating its address as disjoint.
+            ConditionalFrameStores.push_back({FrameRoot, Begin, Begin + 8});
+          }
+        }
         if (StorePreservation)
           StorePreservation->MaxWork =
               Options.MaxOperations - Result.EvaluatedOperations;
