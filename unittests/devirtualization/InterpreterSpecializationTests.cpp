@@ -5325,7 +5325,9 @@ TEST(InterpreterSpecialization, ProducerHintProvesFiniteFrameWordAtJoin) {
         0x120);
   P.add(0x110, {op(NdOp::STORE, {}, {reg(48), constant(0x8080)}), jump(0x130)});
   P.add(0x120, {op(NdOp::STORE, {}, {reg(48), constant(0x8090)}), jump(0x130)});
-  P.add(0x130, {op(NdOp::LOAD, reg(56), {reg(48)}),
+  P.add(0x130, {jump(0x138)});
+  P.add(0x138, {jump(0x13c)});
+  P.add(0x13c, {op(NdOp::LOAD, reg(56), {reg(48)}),
                 op(NdOp::STORE, {}, {reg(56), constant(17)}), jump(0x140)});
   P.add(0x140, {op(NdOp::LOAD, reg(32), {reg(40)}),
                 op(NdOp::COPY, reg(0), {constant(9)}), ret()});
@@ -5366,6 +5368,13 @@ TEST(InterpreterSpecialization, ProducerHintProvesFiniteFrameWordAtJoin) {
   const auto NarrowResult = specializeInterpreter(P, {0x100}, Narrow);
   EXPECT_FALSE(NarrowResult.complete());
   EXPECT_TRUE(NarrowResult.Residual.Blocks.empty());
+
+  auto &Middle = P.Code.at(0x138).Ops;
+  Middle.insert(Middle.begin(), op(NdOp::STORE, {}, {reg(48), reg(16)}));
+  const auto Clobbered = specializeInterpreter(P, {0x100}, O);
+  EXPECT_FALSE(Clobbered.complete());
+  EXPECT_TRUE(Clobbered.Residual.Blocks.empty());
+  Middle.erase(Middle.begin());
 
   P.Code.at(0x120).Ops[0].Inputs[1] = reg(16);
   const auto Unbounded = specializeInterpreter(P, {0x100}, O);
