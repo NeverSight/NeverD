@@ -657,6 +657,12 @@ struct BinaryImage {
   /// discovery runs through a const pipeline view and patch-time source
   /// authentication consumes the published result later in the same run.
   mutable std::set<uint64_t> VerifiedFunctionEntries;
+  /// Function starts only a prologue after padding suggested
+  /// (Symbol::IsBoundaryGuess) that FuncDetector found code to name, a direct
+  /// call its scan decoded or a relocated code address, and whose bounded
+  /// decode holds: they are no guesses (boundaryGuessFunctionStarts).
+  /// Mutable as VerifiedFunctionEntries is.
+  mutable std::set<uint64_t> CodeNamedFunctionStarts;
   /// Maps the virtual address of a non-lazy/lazy pointer slot (Mach-O __got /
   /// __la_symbol_ptr, the indirect-symbol-table backed import pointer tables)
   /// to the imported symbol it binds to.  Most external calls go through a
@@ -936,8 +942,9 @@ struct BinaryImage {
   }
 
   /// Function starts supported only by a prologue heuristic: no other symbol
-  /// names the address and no primary unwind record begins there. Padding or
-  /// an unrelocated data word alone cannot confirm it. See IsBoundaryGuess.
+  /// names the address, no primary unwind record begins there, and no code
+  /// names it (CodeNamedFunctionStarts). Padding or an unrelocated data word
+  /// alone cannot confirm it. See IsBoundaryGuess.
   std::set<va_t> boundaryGuessFunctionStarts() const {
     // Debug info renames a guessed symbol in place; a real name confirms it.
     const auto Guessed = [](const Symbol &Sym) {
@@ -957,6 +964,12 @@ struct BinaryImage {
     for (const auto &[Start, End] : KnownCodeRanges)
       if (Guesses.count(Start) && !isFunctionContinuationAt(Start))
         Guesses.erase(Start);
+    if (!CodeNamedFunctionStarts.empty())
+      for (auto It = Guesses.begin(); It != Guesses.end();)
+        It =
+            CodeNamedFunctionStarts.count(normalizeCodeAddress(*It, Arch, Mode))
+                ? Guesses.erase(It)
+                : std::next(It);
     return Guesses;
   }
 

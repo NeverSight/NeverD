@@ -5676,7 +5676,8 @@ PipelineAnalysisCache::SymbolInventory::SymbolInventory(const BinaryImage &Img)
       ExportData(Img.Exports.data()), ExportCount(Img.Exports.size()),
       RangeData(Img.KnownCodeRanges.data()),
       RangeCount(Img.KnownCodeRanges.size()),
-      ContinuationCount(Img.ContinuationCodeStarts.size()) {}
+      ContinuationCount(Img.ContinuationCodeStarts.size()),
+      CodeNamedCount(Img.CodeNamedFunctionStarts.size()) {}
 
 bool PipelineAnalysisCache::SymbolInventory::readFrom(
     const BinaryImage &Img) const {
@@ -5686,7 +5687,8 @@ bool PipelineAnalysisCache::SymbolInventory::readFrom(
          ExportCount == Img.Exports.size() &&
          RangeData == Img.KnownCodeRanges.data() &&
          RangeCount == Img.KnownCodeRanges.size() &&
-         ContinuationCount == Img.ContinuationCodeStarts.size();
+         ContinuationCount == Img.ContinuationCodeStarts.size() &&
+         CodeNamedCount == Img.CodeNamedFunctionStarts.size();
 }
 
 const std::map<va_t, std::string> &

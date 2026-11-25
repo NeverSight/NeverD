@@ -1294,6 +1294,7 @@ takeDiscoveryJob(Session &S, bool Wait,
     return DiscoveryJobState::Cancelled;
   S.Img.VerifiedFunctionEntries.merge(Result.VerifiedEntries);
   S.Img.CodeRefTargets.merge(Result.CodeReferences);
+  S.Img.CodeNamedFunctionStarts.merge(Result.CodeNamedStarts);
   publishDiscovery(S, std::move(Result.Functions));
   return DiscoveryJobState::Complete;
 }
@@ -1387,6 +1388,8 @@ int neverd_session_discover_functions_step(neverd_session_t Sess) {
                                std::move(Image.VerifiedFunctionEntries);
                            Result.CodeReferences =
                                std::move(Image.CodeRefTargets);
+                           Result.CodeNamedStarts =
+                               std::move(Image.CodeNamedFunctionStarts);
                          }
                          // An async callable can outlive its invocation until
                          // get(). Do not retain the image while the owner

@@ -444,7 +444,7 @@ struct Session {
   std::optional<std::vector<std::pair<va_t, std::string>>> DiscoveredFunctions;
   struct FunctionDiscoveryResult {
     std::vector<std::pair<va_t, std::string>> Functions;
-    std::set<va_t> VerifiedEntries, CodeReferences;
+    std::set<va_t> VerifiedEntries, CodeReferences, CodeNamedStarts;
     bool Cancelled = false;
   };
   struct FunctionDiscoveryJob {

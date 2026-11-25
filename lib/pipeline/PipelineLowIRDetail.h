@@ -83,6 +83,8 @@ private:
   const std::pair<va_t, va_t> *RangeData;
   size_t RangeCount;
   size_t ContinuationCount;
+  /// BoundaryGuesses leave out the starts code names, which detection adds.
+  size_t CodeNamedCount;
   mutable std::optional<std::map<va_t, std::string>> FunctionNames;
   mutable std::optional<std::map<va_t, Intrinsic>> RuntimeRoutineCalls;
   mutable std::optional<ItaniumVTableIndex> VirtualTables;

@@ -16,6 +16,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/loader/BinaryImage.h"
@@ -168,6 +169,43 @@ TEST(ResumableTrapBoundary, InteriorDebugBreakRetainsItsContinuation) {
       EXPECT_EQ(Function.Blocks.front().InstructionBoundaries.back().Control,
                 LowInstructionControl::Return);
     }
+}
+
+TEST(ResumableTrapBoundary, ACalledGuessAfterTheTrapIsNoContinuation) {
+  // `mov eax, 7; int3`, as `call __scrt_fastfail; int3` ends a function,
+  // then a start only a prologue guess names, which code further on calls.
+  // The call makes the guess a function (FuncDetector), so resuming there is
+  // not the trap owner's code; without it the guess stays the owner's.
+  for (const bool Called : {false, true}) {
+    SCOPED_TRACE(Called);
+    auto Image = image(Arch::X86);
+    auto &Data = Image.Segments.front().Data;
+    if (Called) {
+      // call Next; ret
+      const va_t Caller = Next + 6;
+      const uint32_t Displacement = static_cast<uint32_t>(Next - (Caller + 5));
+      Data.push_back(0xe8);
+      for (unsigned Byte = 0; Byte < 4; ++Byte)
+        Data.push_back(static_cast<uint8_t>(Displacement >> (8 * Byte)));
+      Data.push_back(0xc3);
+    }
+    Image.Segments.front().Size = Data.size();
+    auto Guess = Symbol::makeFunc(Next);
+    Guess.IsBoundaryGuess = true;
+    Image.Symbols.push_back(std::move(Guess));
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Image));
+    (void)FuncDetector().detect(Image, Dec);
+    EXPECT_EQ(Image.boundaryGuessFunctionStarts().count(Next),
+              Called ? 0u : 1u);
+    const auto Function = build(Image);
+    if (Called) {
+      expectStoppedAtTrap(Function, Arch::X86);
+      continue;
+    }
+    ASSERT_EQ(Function.Blocks.size(), 1u);
+    EXPECT_EQ(Function.Blocks.front().EndAddr, Next + 6);
+  }
 }
 
 TEST(ResumableTrapBoundary, ATrapEndingABranchLeavesTheFunction) {

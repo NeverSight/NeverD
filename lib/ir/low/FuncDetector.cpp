@@ -1101,6 +1101,33 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   std::sort(Results.begin(), Results.end());
   func_detect_detail::checkCancellation(Cancellation);
 
+  // A start only a prologue after padding suggested is a function once code
+  // names it, a direct call the scan decoded or a relocated code address,
+  // and its bounded decode holds. Later readers of the image's guesses then
+  // keep it, so a function whose trap the CFG walk resumes past
+  // (`call __scrt_fastfail; int3`) does not take it in.
+  std::vector<va_t> CodeNamed;
+  if (!RelocationsOnly && hasEntryPoint(Img)) {
+    const std::set<va_t> Guesses = Img.boundaryGuessFunctionStarts();
+    const bool PreviousDetail = Dec.detailEnabled();
+    Dec.setDetail(Img.Arch == Arch::ARM);
+    for (const auto &[Addr, Name] : Results) {
+      (void)Name;
+      func_detect_detail::checkCancellation(Cancellation);
+      if (!Guesses.count(Addr) || (!DirectCallTargets.count(Addr) &&
+                                   !RelocationCodeTargets.count(Addr)))
+        continue;
+      const va_t Normalized = normalizeCodeAddress(Addr, Img.Arch, Img.Mode);
+      Dec.resetX86FpuState();
+      if (VerifiedCandidates.count(Normalized) ||
+          verifyFunctionDecode(Img, Dec, Addr))
+        CodeNamed.push_back(Normalized);
+    }
+    Dec.resetX86FpuState();
+    Dec.setDetail(PreviousDetail);
+    func_detect_detail::checkCancellation(Cancellation);
+  }
+
   // Publish only verified candidates that survived every candidate and
   // overlap filter. A transient decoder hit must never become patch-time
   // function identity after this routine has rejected it.
@@ -1112,6 +1139,7 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
     else if (VerifiedCandidates.count(Normalized))
       Img.VerifiedFunctionEntries.insert(Normalized);
   }
+  Img.CodeNamedFunctionStarts.insert(CodeNamed.begin(), CodeNamed.end());
 
   return Results;
 }

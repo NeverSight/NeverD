@@ -13032,11 +13032,19 @@ The shared symbol inventory distinguishes confirmed
 entries from padding guesses in both live and indexed queries. A guess alone
 does not stop resumable fallthrough; explicit transfers still retain potential
 callee boundaries. A decoded continuation absorbs a guessed function at its
-instruction boundary, even inside a basic block. A path a trap ends at another
-function's entry or the function's end stops at a trap after it in both C
-routes, HighC's naming the address it would resume at: C had run on into
-whatever followed the branch, or returned a value another path computed
-(HighC's trailing return) or 0 (the LLVM route).
+instruction boundary, even inside a basic block. A guess that code names, a
+direct call the detector's scan decoded or a relocated code address, and whose
+bounded decode holds, is no guess (`BinaryImage::CodeNamedFunctionStarts`), so
+it stops a trap's continuation as any entry does: MSVC's
+`__scrt_initialize_onexit_tables` ends in `call __scrt_fastfail; int3`, and
+the x86 images had taken the next function into it, leaving that function's
+callers calling one the unit never defined. A run that detects functions, and
+a session after its discovery, know these starts; a `--func` run without
+discovery keeps the guess. A path a trap ends at another function's entry or
+the function's end stops at a trap after it in both C routes, HighC's naming
+the address it would resume at: C had run on into whatever followed the
+branch, or returned a value another path computed (HighC's trailing return) or
+0 (the LLVM route).
 Debugger breaks define no return register: long x86 `int 3` has the short
 encoding's void, zero-argument intrinsic contract, and ARM `bkpt` and AArch64
 `brk` leave R0/X0 intact. Service interrupts keep their own result contracts.
