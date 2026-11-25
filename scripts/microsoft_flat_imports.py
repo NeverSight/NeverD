@@ -264,7 +264,7 @@ def include_headers(headers) -> str:
 # consumed by the type reader and compare both emitted ABIs.
 CPP_ONLY_RUNTIME_DECLARATIONS = {
     "DirectCompositionControls": (
-        "struct IDCompositionVisual;\n"
+        "struct IDCompositionVisual { const struct IDCompositionVisualVtbl *lpVtbl; };\n"
         "HRESULT WINAPI DCompositionAttachMouseDragToHwnd(struct IDCompositionVisual *visual, HWND hwnd, BOOL enable);\n"
         "HRESULT WINAPI DCompositionAttachMouseWheelToHwnd(struct IDCompositionVisual *visual, HWND hwnd, BOOL enable);\n"
         "HRESULT WINAPI DCompositionCreateSurfaceHandle(DWORD desiredAccess, SECURITY_ATTRIBUTES *securityAttributes, HANDLE *surfaceHandle);\n"
@@ -277,12 +277,12 @@ CPP_ONLY_RUNTIME_DECLARATIONS = {
         "DWORD WINAPI DCompositionWaitForCompositorClock(UINT count, const HANDLE *handles, DWORD timeoutInMs);\n"
     ),
     "DebugDataModelManager": (
-        "struct IDebugHost;\n"
-        "struct IDataModelManager;\n"
+        "struct IDebugHost { const struct IDebugHostVtbl *lpVtbl; };\n"
+        "struct IDataModelManager { const struct IDataModelManagerVtbl *lpVtbl; };\n"
         "HRESULT WINAPI CreateDataModelManager(struct IDebugHost *debugHost, struct IDataModelManager **manager);\n"
     ),
     "MachineLearningOperatorRegistry": (
-        "struct IMLOperatorRegistry;\n"
+        "struct IMLOperatorRegistry { const struct IMLOperatorRegistryVtbl *lpVtbl; };\n"
         "HRESULT WINAPI MLCreateOperatorRegistry(struct IMLOperatorRegistry **registry);\n"
     ),
     "VolumeShadowCopyRuntime": (

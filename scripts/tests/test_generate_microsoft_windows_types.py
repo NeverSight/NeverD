@@ -282,6 +282,11 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                     published = unit["source"].read_text()
                     for header in profiles[name]["headers"]:
                         self.assertIn(f"#include <{header}.h>", original)
+                    interfaces = {"DirectCompositionControls": ("IDCompositionVisual",),
+                                  "DebugDataModelManager": ("IDebugHost", "IDataModelManager"),
+                                  "MachineLearningOperatorRegistry": ("IMLOperatorRegistry",)}
+                    for tag in interfaces.get(name, ()):
+                        self.assertIn(f"struct {tag} {{ const struct {tag}Vtbl *lpVtbl;", published)
                     for export in bridge["runtime_exports"]["names"]:
                         self.assertNotIn(export + "(", original)
                         self.assertIn(export + "(", published)
