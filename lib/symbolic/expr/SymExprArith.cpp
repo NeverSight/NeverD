@@ -164,16 +164,20 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
   auto OrderedTerms = Terms.takeVector();
   llvm::sort(OrderedTerms, llvm::less_first());
   for (const auto &[BaseIdx, Entry] : OrderedTerms) {
+    // A unique canonical addend already contains its nonzero coefficient.
+    // Only merging like bases can cancel it or expose a different operation.
+    if (Entry.Original) {
+      Final.push_back(Entry.Original);
+      continue;
+    }
     const auto &Coeff = Entry.Coefficient;
     if (Coeff.isZero())
       continue;
-    SymRef Base(BaseIdx);
-    // A unique addend already has exactly the collected coefficient. Reuse
-    // it instead of rebuilding its unchanged, potentially very long product.
-    SymRef Term = Entry.Original.isValid() ? Entry.Original
-                  : Coeff.isOne()          ? Base
-                                           : mkMul(mkConst(Coeff), Base);
-    Recollect |= !Coeff.isOne() && op(Term) != SymOp::Mul;
+    SymRef Term(BaseIdx);
+    if (!Coeff.isOne()) {
+      Term = mkMul(mkConst(Coeff), Term);
+      Recollect |= op(Term) != SymOp::Mul;
+    }
     Final.push_back(Term);
   }
 
@@ -209,12 +213,14 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
     OrderedTerms = Terms.takeVector();
     llvm::sort(OrderedTerms, llvm::less_first());
     for (const auto &[BaseIdx, Entry] : OrderedTerms) {
+      if (Entry.Original) {
+        Final.push_back(Entry.Original);
+        continue;
+      }
       const auto &Coeff = Entry.Coefficient;
       if (!Coeff.isZero()) {
         SymRef Base(BaseIdx);
-        Final.push_back(Entry.Original.isValid() ? Entry.Original
-                        : Coeff.isOne()          ? Base
-                                                 : mkMul(mkConst(Coeff), Base));
+        Final.push_back(Coeff.isOne() ? Base : mkMul(mkConst(Coeff), Base));
       }
     }
   }
@@ -310,6 +316,51 @@ SymRef SymContext::mkSub(SymRef A, SymRef B) {
 
 SymRef SymContext::mkNeg(SymRef A) { return mkMul(mkOnes(width(A)), A); }
 
+// A literal with complete low zero limbs bounds the precision required from
+// every other factor. Use the largest such shift before multiplying the
+// coefficients, independent of their original order in the product.
+static llvm::APInt productCoefficient(const SymContext &Ctx, unsigned Width,
+                                      llvm::ArrayRef<SymRef> Constants) {
+  if (Constants.empty())
+    return llvm::APInt(Width, 1);
+  if (Constants.size() == 1)
+    return Ctx.constValue(Constants.front());
+  if (Width <= 64) {
+    uint64_t Product = 1;
+    for (auto R : Constants)
+      Product *= Ctx.constWords(R).front();
+    return llvm::APInt(Width, Product, /*isSigned=*/false,
+                       /*implicitTrunc=*/true);
+  }
+
+  size_t ScaleIndex = 0;
+  unsigned Shift = 0;
+  for (const auto &[I, R] : llvm::enumerate(Constants)) {
+    const auto Words = Ctx.constWords(R);
+    if (Words.front())
+      continue;
+    const unsigned Zeros = llvm::APInt::tcLSB(Words.data(), Words.size());
+    if (Zeros >= Width)
+      return llvm::APInt(Width, 0);
+    if (Zeros > Shift) {
+      ScaleIndex = I;
+      Shift = Zeros;
+    }
+  }
+  const unsigned Bits = Width - Shift;
+  const unsigned Words = llvm::APInt::getNumWords(Bits);
+  auto Product = Ctx.constValue(Constants[ScaleIndex]);
+  if (Shift)
+    Product = Product.extractBits(Bits, Shift);
+  for (const auto &[I, R] : llvm::enumerate(Constants)) {
+    if (I != ScaleIndex)
+      Product *= llvm::APInt(Bits, Ctx.constWords(R).take_front(Words));
+  }
+  if (Shift)
+    return Product.zext(Width).shl(Shift);
+  return Product;
+}
+
 SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
   assert(!Ops.empty() && "mkMul needs at least one operand");
   uint32_t W = width(Ops[0]);
@@ -337,12 +388,9 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
         return intern(SymOp::Mul, W, Factors, 0);
       }
       if (ProductConstant && AtomConstant) {
-        auto Value = constValue(Product);
         if (isConstOnes(Atom))
-          Value.negate();
-        else
-          Value *= constValue(Atom);
-        return mkConst(Value);
+          return mkConst(-constValue(Product));
+        return mkConst(productCoefficient(*this, W, {Product, Atom}));
       }
       if (ProductConstant != AtomConstant) {
         if (AtomConstant)
@@ -387,9 +435,9 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
       if (Tail.size() >= 2) {
         assert(width(Atom) == W && width(Product) == W &&
                "mkMul operands must share a width");
-        llvm::APInt Coefficient = constValue(Atom);
-        if (Scaled)
-          Coefficient *= constValue(Existing.front());
+        llvm::APInt Coefficient =
+            Scaled ? productCoefficient(*this, W, {Atom, Existing.front()})
+                   : constValue(Atom);
         if (Coefficient.isZero())
           return mkZero(W);
         llvm::SmallVector<SymRef, 16> Factors;
@@ -424,7 +472,7 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
     }
   }
 
-  std::optional<llvm::APInt> Coefficient;
+  llvm::SmallVector<SymRef, 4> Constants;
   llvm::SmallVector<SymRef, 8> Rest;
 
   llvm::SmallVector<SymRef, 8> Work(Ops.begin(), Ops.end());
@@ -436,20 +484,13 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
       Work.append(Sub.begin(), Sub.end());
       continue;
     }
-    if (isConst(R)) {
-      // The first coefficient already has the product width. Multiplying it
-      // by a wide one would run a full limb multiplication for a lone scale.
-      if (Coefficient)
-        *Coefficient *= constValue(R);
-      else
-        Coefficient = constValue(R);
-      continue;
-    }
-    Rest.push_back(R);
+    if (isConst(R))
+      Constants.push_back(R);
+    else
+      Rest.push_back(R);
   }
 
-  const auto ConstFactor =
-      Coefficient ? std::move(*Coefficient) : llvm::APInt(W, 1);
+  const auto ConstFactor = productCoefficient(*this, W, Constants);
   if (ConstFactor.isZero())
     return mkZero(W);
   if (Rest.empty())

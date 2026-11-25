@@ -394,6 +394,18 @@ bool expandsAffine(const SymContext &Ctx, SymRef R) {
   return Ctx.op(R) == SymOp::Mul && Ops.size() == 2 && Ctx.isConst(Ops[0]);
 }
 
+// Pending coefficients commonly remain one or fit a native limb. Use that
+// limb directly when scaling a wide affine term or its constant offset.
+llvm::APInt multiplyAffine(const llvm::APInt &A, const llvm::APInt &B) {
+  if (!A.isSingleWord()) {
+    if (const auto Scale = A.tryZExtValue())
+      return *Scale == 1 ? B : B * *Scale;
+    if (const auto Scale = B.tryZExtValue())
+      return *Scale == 1 ? A : A * *Scale;
+  }
+  return A * B;
+}
+
 std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
                                        const NodeSet &ForcedAtoms,
                                        const NodeMap<Role> &Roles,
@@ -451,7 +463,7 @@ std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
     if (Ctx.isConst(R)) {
       if (!Resources.product(Coefficient))
         return std::nullopt;
-      Out.Offset += Coefficient * Ctx.constValue(R);
+      Out.Offset += multiplyAffine(Coefficient, Ctx.constValue(R));
       continue;
     }
     if (R != Root && (ForcedAtoms.contains(R.index()) ||
@@ -464,10 +476,10 @@ std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
     if (Cached != Cache.end()) {
       if (!Resources.product(Coefficient))
         return std::nullopt;
-      Out.Offset += Coefficient * Cached->second.Offset;
+      Out.Offset += multiplyAffine(Coefficient, Cached->second.Offset);
       for (const auto &[Base, Scale] : Cached->second.Terms) {
         if (!Resources.product(Coefficient) ||
-            !Resources.add(Out.Terms, Base, Coefficient * Scale))
+            !Resources.add(Out.Terms, Base, multiplyAffine(Coefficient, Scale)))
           return std::nullopt;
       }
       continue;
@@ -482,7 +494,7 @@ std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,
                Ctx.isConst(Ops[0])) {
       if (!Resources.product(Coefficient) ||
           !Resources.add(Pending, Ops[1].index(),
-                         Coefficient * Ctx.constValue(Ops[0])))
+                         multiplyAffine(Coefficient, Ctx.constValue(Ops[0]))))
         return std::nullopt;
     } else if (Ctx.op(R) == SymOp::Not) {
       Out.Offset -= Coefficient;

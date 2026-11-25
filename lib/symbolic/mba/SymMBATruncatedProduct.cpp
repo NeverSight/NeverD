@@ -908,7 +908,7 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   };
   auto Value = [&](const Coefficient &C) -> llvm::APInt {
     if constexpr (Native)
-      return llvm::APInt(Bits, C);
+      return llvm::APInt(Bits, C, /*isSigned=*/false, /*implicitTrunc=*/true);
     else
       return C;
   };
@@ -992,9 +992,11 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   const bool MatchOffset = FoldedSignBit || !WeightSums.empty();
   SymRef Matched;
   size_t MatchIndex = 0;
+  bool OnlySignBit = Bits > 1;
   for (const auto &[Index, C] : Weights) {
     const auto K = Value(C);
     if (!K.isZero()) {
+      OnlySignBit = OnlySignBit && K.isSignMask();
       if (MatchOffset && K == Offset) {
         Matched = SymRef(Index);
         MatchIndex = Sum.size();
@@ -1003,6 +1005,29 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
     }
   }
   auto Upper = Ctx.mkAdd(Sum);
+  if (OnlySignBit && Sum.size() > 2 && Edges <= Storage / PerEdge &&
+      Budget.canConsume(Edges * EdgeWork)) {
+    // Multiplication by the highest bit observes only parity. Combine the
+    // input bits before the multiply, including a top bit from the offset.
+    Budget.consume(Edges * EdgeWork);
+    Storage -= Edges * PerEdge;
+    llvm::SmallVector<SymRef, 8> Fields;
+    for (const auto &[Index, C] : Weights)
+      if (!Value(C).isZero())
+        Fields.emplace_back(Index);
+    auto Parity = Ctx.mkXor(Fields);
+    const auto Top = Ctx.mkConst(llvm::APInt::getSignMask(Bits));
+    auto Bias = Offset;
+    if (Bias.isNegative() && !Bias.isAllOnes()) {
+      Bias.clearSignBit();
+      Parity = Ctx.mkNot(Parity);
+    }
+    auto Alternative = Ctx.mkMul(Top, Parity);
+    Alternative = Bias.isAllOnes() ? Ctx.mkNot(Alternative)
+                                   : Ctx.mkAdd(Ctx.mkConst(Bias), Alternative);
+    if (readingScore(Ctx, Alternative) < readingScore(Ctx, Upper))
+      Upper = Alternative;
+  }
   if (MatchOffset && Sum.size() > 1 && (Matched || Offset.isAllOnes()) &&
       Edges <= Storage / PerEdge && Budget.canConsume(Edges * EdgeWork)) {
     Budget.consume(Edges * EdgeWork);
@@ -1362,30 +1387,52 @@ size_t equalFactorRun(llvm::ArrayRef<SymRef> Remaining, WorkBudget &Budget) {
 // ring. A mixed field keeps the original bit operation on the live bits.
 std::optional<int> uniformJoinSlope(const SymContext &Ctx, SymOp Op,
                                     const llvm::APInt &Literal, unsigned Zeros,
-                                    SymRef OuterMask, SymRef InnerMask) {
-  const unsigned Live = Literal.getBitWidth() - Zeros;
+                                    WeightedFieldStage Outer,
+                                    WeightedFieldStage Inner) {
+  const unsigned Precision = Literal.getBitWidth();
+  auto scaleZeros = [&](SymRef Scale, unsigned Available) {
+    if (!Scale || !Available)
+      return 0u;
+    const auto Digits = Ctx.constWords(Scale);
+    return std::min(
+        Available,
+        llvm::APInt::tcLSB(Digits.data(), llvm::APInt::getNumWords(Available)));
+  };
+  const unsigned InnerShift = scaleZeros(Inner.Scale, Precision - Zeros);
+  const unsigned OuterShift =
+      scaleZeros(Outer.Scale, Precision - Zeros - InnerShift);
+  const unsigned Live = Precision - Zeros - InnerShift - OuterShift;
   if (!Live)
     return 0;
+
+  // Only these high bits of the final perturbation can reach the join.
+  // A join that discards them is constant even if an earlier mask is mixed.
+  std::optional<int> Direction;
+  if (Op == SymOp::Add)
+    Direction = 1;
+  else if (Literal.getActiveBits() <= Precision - Live)
+    Direction = Op == SymOp::And ? 0 : 1;
+  else if (Literal.countl_one() >= Live)
+    Direction = Op == SymOp::Or ? 0 : -1;
+  if (Direction == 0)
+    return 0;
+
+  // Trace the observable interval back through each even multiplier. Its
+  // trailing zeros lift the bottom edge and discard the same number of top
+  // bits. A hole outside this interval cannot affect the result or its carries.
   bool Partial = false;
-  for (const auto Ref : {OuterMask, InnerMask}) {
+  for (const auto [Ref, High] :
+       {std::pair{Outer.Mask, Precision - OuterShift},
+        std::pair{Inner.Mask, Precision - OuterShift - InnerShift}}) {
     if (!Ref)
       continue;
     const llvm::APInt Mask(
-        Literal.getBitWidth(),
-        Ctx.constWords(Ref).take_front(Literal.getNumWords()));
-    if (Mask.getActiveBits() <= Zeros)
+        High, Ctx.constWords(Ref).take_front(llvm::APInt::getNumWords(High)));
+    if (Mask.getActiveBits() <= High - Live)
       return 0;
     Partial |= Mask.countl_one() < Live;
   }
-  if (Partial)
-    return std::nullopt;
-  if (Op == SymOp::Add)
-    return 1;
-  if (Literal.getActiveBits() <= Zeros)
-    return Op == SymOp::And ? 0 : 1;
-  if (Literal.countl_one() >= Live)
-    return Op == SymOp::Or ? 0 : -1;
-  return std::nullopt;
+  return Partial ? std::nullopt : Direction;
 }
 
 // The factor is c OP (2^Shift * h). Its low Shift bits are the
@@ -1524,6 +1571,12 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     return Root;
 
   const size_t Words = llvm::APInt::getNumWords(Precision);
+  // All accepted weights are multiples of 2^Shift. Their complete zero limbs
+  // stay zero under addition, subtraction and multiplication by either scale.
+  const size_t Skip = Shift / llvm::APInt::APINT_BITS_PER_WORD;
+  const size_t LiveWords = Words - Skip;
+  const unsigned LiveWidth =
+      Precision - Skip * llvm::APInt::APINT_BITS_PER_WORD;
   using Key = std::pair<uint32_t, uint32_t>;
   const size_t Bytes =
       2 * (sizeof(Factor) + sizeof(unsigned) + Words * sizeof(uint64_t)) +
@@ -1577,12 +1630,18 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     int Direction = 1;
     const auto Op = Ctx.op(F);
     if (Op != SymOp::Add || Outer.Mask) {
-      if (!Budget.consume((1 + bool(Outer.Mask) + bool(Inner.Mask)) * Words))
+      size_t ProbeWords = (1 + bool(Outer.Mask) + bool(Inner.Mask)) * Words;
+      // A zero low limb can require more than one word to locate the shift.
+      if (Words > 1)
+        for (const auto Scale : {Outer.Scale, Inner.Scale})
+          if (Scale && !Ctx.constWords(Scale).front())
+            ProbeWords += Words - 1;
+      if (!Budget.consume(ProbeWords))
         return Root;
       const llvm::APInt Literal(Precision,
                                 Ctx.constWords(Offset).take_front(Words));
-      if (const auto Slope = uniformJoinSlope(Ctx, Op, Literal, Zeros,
-                                              Outer.Mask, Inner.Mask)) {
+      if (const auto Slope =
+              uniformJoinSlope(Ctx, Op, Literal, Zeros, Outer, Inner)) {
         Direction = *Slope;
       } else {
         const size_t Nodes = Terms.size() + 2 + (Op == SymOp::And) +
@@ -1612,18 +1671,19 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
           return Root;
         WordCopies *= Ctx.constWords(Scale).front();
       } else {
-        const size_t ProductWork = llvm::SaturatingMultiply(Words, Words);
+        const size_t ProductWork =
+            llvm::SaturatingMultiply(LiveWords, LiveWords);
         if (WideCopies) {
           if (!Budget.consume(ProductWork))
             return Root;
-          *WideCopies *=
-              llvm::APInt(Precision, Ctx.constWords(Scale).take_front(Words));
+          *WideCopies *= llvm::APInt(
+              LiveWidth, Ctx.constWords(Scale).take_front(LiveWords));
         } else {
-          if (!Budget.consume(llvm::SaturatingMultiplyAdd(Terms.size(),
-                                                          ProductWork, Words)))
+          if (!Budget.consume(llvm::SaturatingMultiplyAdd(
+                  Terms.size(), ProductWork, LiveWords)))
             return Root;
-          WideCopies.emplace(Precision,
-                             Ctx.constWords(Scale).take_front(Words));
+          WideCopies.emplace(LiveWidth,
+                             Ctx.constWords(Scale).take_front(LiveWords));
           *WideCopies *= Copies;
         }
       }
@@ -1649,24 +1709,25 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       Multiplicity = 0;
       if (!Direction)
         break; // This row retains the scalar offset and its multiplicity.
-      auto *Sum = Weights.data() + Row * Words;
+      auto *Sum = Weights.data() + Row * Words + Skip;
+      const auto WeightWords = Ctx.constWords(K).slice(Skip, LiveWords);
       // Negating the accumulator on both sides subtracts the whole
       // multi-limb weight without truncating a negative multiplier to 64 bits.
       if (Direction < 0) {
-        if (!Budget.consume(2 * Words))
+        if (!Budget.consume(2 * LiveWords))
           return Root;
-        llvm::APInt::tcNegate(Sum, Words);
+        llvm::APInt::tcNegate(Sum, LiveWords);
       }
       if (WideCopies) {
-        llvm::APInt Weight(Precision, Ctx.constWords(K).take_front(Words));
+        llvm::APInt Weight(LiveWidth, WeightWords);
         Weight *= *WideCopies;
-        llvm::APInt::tcAdd(Sum, Weight.getRawData(), 0, Words);
+        llvm::APInt::tcAdd(Sum, Weight.getRawData(), 0, LiveWords);
       } else {
-        llvm::APInt::tcMultiplyPart(Sum, Ctx.constWords(K).data(), WordCopies,
-                                    0, Words, Words, true);
+        llvm::APInt::tcMultiplyPart(Sum, WeightWords.data(), WordCopies, 0,
+                                    LiveWords, LiveWords, true);
       }
       if (Direction < 0)
-        llvm::APInt::tcNegate(Sum, Words);
+        llvm::APInt::tcNegate(Sum, LiveWords);
     }
   }
   if (Factors.size() - Parts.size() < limits::kMinResidueProductFactors)
@@ -1690,7 +1751,9 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     const auto Suffix = Ctx.mkConst(Literal.trunc(Shift).zext(Precision));
     Rows.push_back({F, Field, {}, Suffix, Shift, 0, 0, false});
     Counts.push_back(Copies);
-    const auto Weight = llvm::APInt(Precision, Copies).shl(Shift);
+    const auto Weight = llvm::APInt(Precision, Copies, /*isSigned=*/false,
+                                    /*implicitTrunc=*/true)
+                            .shl(Shift);
     Weights.append(Weight.getRawData(), Weight.getRawData() + Words);
   }
   const auto Sum = buildProjectedLinearProduct(

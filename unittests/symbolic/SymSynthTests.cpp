@@ -843,6 +843,14 @@ TEST(SymSynth, ColumnSemanticsAgreeWithNodes) {
     for (const GramOp Op : Ops) {
       SCOPED_TRACE(unsigned(Op));
       Sem.applyColumn(Op, A.data(), B.data(), Out.data(), A.size());
+      if (Width <= 32) {
+        const std::vector<uint32_t> Left(A.begin(), A.end()),
+            Right(B.begin(), B.end());
+        std::vector<uint32_t> Narrow(A.size());
+        Sem.applyColumn(Op, Left.data(), Right.data(), Narrow.data(),
+                        Narrow.size());
+        ASSERT_TRUE(llvm::equal(Narrow, Out));
+      }
       for (size_t I = 0; I != A.size(); ++I) {
         const llvm::APInt Args[] = {llvm::APInt(Width, A[I]),
                                     llvm::APInt(Width, B[I])};

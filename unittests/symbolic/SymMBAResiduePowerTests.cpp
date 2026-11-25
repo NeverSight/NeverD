@@ -1053,13 +1053,28 @@ TEST(SymMBAResiduePowers, BitwiseOffsetsPreserveLiveOverlapAndLowerCarries) {
   }
 }
 
-void checkMaskedWeightedDeltas(bool Scaled, bool MaskResult = false) {
+enum class FieldMasks { Input, ScaledInput, ScaledResult, CarryWindow };
+
+void checkMaskedWeightedDeltas(FieldMasks Mode) {
+  const bool Scaled = Mode != FieldMasks::Input;
+  const bool MaskResult =
+      Mode == FieldMasks::ScaledResult || Mode == FieldMasks::CarryWindow;
+  const bool CarryWindow = Mode == FieldMasks::CarryWindow;
+  auto trailing = [](unsigned I) { return 1 + I % 3; };
   for (unsigned Bits : {4u, 65u}) {
     const unsigned Shift = Bits + 1, Width = 3 * Bits + 7;
     const auto Full = llvm::APInt::getLowBitsSet(Width, Bits).shl(Shift);
     const auto Outside = llvm::APInt::getOneBitSet(Width, Width - 2);
     const auto Scale = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
     auto mask = [&](unsigned I) {
+      if (CarryWindow) {
+        const auto Top =
+            llvm::APInt::getOneBitSet(Width, Shift + Bits - trailing(I));
+        auto Selected = I % 7 ? Full ^ Top : Top;
+        if (I == 15)
+          Selected ^= llvm::APInt::getOneBitSet(Width, Shift);
+        return Selected | Outside | 3;
+      }
       if (MaskResult && I % 8 == 2)
         return llvm::APInt::getAllOnes(Width);
       if (I >= 10 && I < 15)
@@ -1067,16 +1082,28 @@ void checkMaskedWeightedDeltas(bool Scaled, bool MaskResult = false) {
       return (I % 5 ? Full | Outside : Outside) | 3;
     };
     auto resultMask = [&](unsigned I) {
+      if (CarryWindow) {
+        const auto Low =
+            llvm::APInt::getOneBitSet(Width, Shift + trailing(I) - 1);
+        auto Selected = I % 11 ? Full ^ Low : Low;
+        if (I == 15)
+          Selected ^= llvm::APInt::getOneBitSet(Width, Shift + trailing(I));
+        return Selected | Outside | 5;
+      }
       if (I >= 9 && I <= 16)
         return (Full ^ llvm::APInt::getOneBitSet(Width, Shift + Bits / 2)) |
                Outside;
       return (I % 7 ? Full | Outside : Outside) | 5;
     };
     auto resultScale = [&](unsigned I) {
+      if (CarryWindow && I % 13 == 0)
+        return llvm::APInt::getOneBitSet(Width, Bits);
       return I % 6 == 0 ? llvm::APInt::getOneBitSet(Width, Bits - 1) + 5
                         : llvm::APInt(Width, I % 9 == 0 ? -3 : 1, true);
     };
     auto fieldScale = [&](unsigned I) {
+      if (CarryWindow)
+        return llvm::APInt(Width, I % 2 ? -5 : 3, true).shl(trailing(I));
       if (!Scaled)
         return llvm::APInt(Width, I == 38 ? 3 : 1);
       if (I % 4 == 0)
@@ -1175,15 +1202,63 @@ void checkMaskedWeightedDeltas(bool Scaled, bool MaskResult = false) {
 }
 
 TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
-  checkMaskedWeightedDeltas(false);
+  checkMaskedWeightedDeltas(FieldMasks::Input);
 }
 
 TEST(SymMBAResiduePowers, ScaledMaskedDeltasKeepCarriesAndVariableMultipliers) {
-  checkMaskedWeightedDeltas(true);
+  checkMaskedWeightedDeltas(FieldMasks::ScaledInput);
 }
 
 TEST(SymMBAResiduePowers, MasksBeforeAndAfterScalingKeepTheirCarryOrder) {
-  checkMaskedWeightedDeltas(true, true);
+  checkMaskedWeightedDeltas(FieldMasks::ScaledResult);
+}
+
+TEST(SymMBAResiduePowers, EvenScalesLimitWhichMaskHolesCanAffectCarries) {
+  checkMaskedWeightedDeltas(FieldMasks::CarryWindow);
+}
+
+TEST(SymMBAResiduePowers, HighestBitWeightsShareOneParityProduct) {
+  constexpr unsigned Width = 32, Bits = 5, Shift = 5;
+  const auto HighWeight = llvm::APInt(Width, 1u << (Bits + Shift - 1));
+  const auto Outer = llvm::APInt(Width, 1u << (Width - Bits - Shift));
+  for (unsigned Bias : {0u, 7u, 16u, 31u}) {
+    SymContext C;
+    llvm::SmallVector<SymRef, 4> Fields, Carriers;
+    for (auto Name : {"a", "b", "c", "d"}) {
+      auto Field = C.mkExtract(C.mkVar(Name, Width), 0, Bits);
+      Fields.push_back(Field);
+      Carriers.push_back(
+          C.mkMul(C.mkConst(HighWeight), C.mkZExt(Field, Width)));
+    }
+    llvm::SmallVector<SymRef, 64> Factors{C.mkConst(Outer)};
+    for (unsigned I = 0; I < 34; ++I) {
+      const unsigned A = I < 32 ? I % 4 : 2 * (I - 32);
+      const auto Offset = C.mkConst(Width, 1u + (I == 0 ? Bias << Shift : 0u));
+      Factors.push_back(C.mkAdd({Offset, Carriers[A], Carriers[(A + 1) % 4]}));
+    }
+    const auto Root = C.mkMul(Factors);
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1u << 20;
+    const auto Reduced = detail::foldProductResidues(C, Root, Budget, Storage);
+    const auto Parity = C.mkXor(Fields);
+    const auto K = C.mkConst(Bits, 1u << (Bits - 1));
+    const auto Upper = C.mkAdd(C.mkConst(Bits, Bias), C.mkMul(K, Parity));
+    const auto Reference =
+        C.mkConcat(Upper, C.mkConst(Width - Bits, Outer.getZExtValue()));
+    EXPECT_LE(C.readabilityCost(Reduced), C.readabilityCost(Reference));
+    SymEvalPlan Plan(C, Reduced);
+    for (unsigned Mask = 0; Mask < 16; ++Mask) {
+      std::array<llvm::APInt, 4> Values;
+      unsigned Odd = 0;
+      for (unsigned I = 0; I < Values.size(); ++I) {
+        Values[I] = llvm::APInt(Width, 0x7ffffff0u + ((Mask >> I) & 1));
+        Odd ^= (Mask >> I) & 1;
+      }
+      const auto Want =
+          Outer * (1u + (Bias << Shift) + Odd * HighWeight.getZExtValue());
+      EXPECT_EQ(Plan.eval(Values), Want);
+    }
+  }
 }
 
 } // namespace

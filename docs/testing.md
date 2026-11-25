@@ -4728,6 +4728,11 @@ on both sides of a scalar multiplication. The compact reference preserves
 partially selected fields and a low-weight factor. The 257-factor x86 fixture
 checks both source views against the original arithmetic at Clang O0 and O2.
 
+Use `--carry-masks` to place holes above and below the bits an even multiplier
+can carry into the result. Width 2,359,301 and case 3 generate 163,838 factors.
+The 313-factor native fixture exercises both source views against the original
+arithmetic, including a factor whose low weight retains mixed products.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may

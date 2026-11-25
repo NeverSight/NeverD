@@ -8,11 +8,12 @@ from collections import Counter
 
 def distributed_product(width, case, *, reference=False, counted=False,
                         joined_offsets=False, masked_offsets=False, field_masks=False,
-                        scaled_fields=False, result_masks=False):
+                        scaled_fields=False, result_masks=False, carry_masks=False):
     """Return one input, its affine reference, or its counted evaluation form."""
-    if sum((joined_offsets, masked_offsets, field_masks, scaled_fields, result_masks)) > 1:
+    if sum((joined_offsets, masked_offsets, field_masks, scaled_fields, result_masks, carry_masks)) > 1:
         raise ValueError("choose one bitwise offset family")
-    scaled = scaled_fields or result_masks
+    output_mask = result_masks or carry_masks
+    scaled = scaled_fields or output_mask
     gated = field_masks or scaled
     variant = case % 4
     bits = ((5, 7, 9, 11) if width <= 32 else (17, 37, 65, 97))[variant]
@@ -37,10 +38,12 @@ def distributed_product(width, case, *, reference=False, counted=False,
         degree = ((179, 239, 313, 431) if width <= 32 else
                   (421, 557, 683, 809) if width <= 513 else
                   (79013, 85021, 91009, 100003))[variant]
-    if result_masks:
+    if output_mask:
         degree = ((197, 263, 353, 463) if width <= 32 else
                   (487, 601, 743, 911) if width <= 513 else
                   (105019, 111029, 121021, 131071))[variant]
+    if carry_masks:
+        degree += degree // 4
     shift = bits + case % 2
     precision = shift + bits
     mask = (1 << precision) - 1
@@ -115,6 +118,14 @@ def distributed_product(width, case, *, reference=False, counted=False,
             if variant >= 2 and j == degree // 4:
                 gate = field_mask // 3
                 op = arithmetic
+            if carry_masks:
+                trailing = 1 + row[0][0] % min(bits - 1, 4)
+                # These holes leave the observed word when the inner scale shifts.
+                gate = field_mask ^ (1 << (bits - trailing + row[1][0] % trailing))
+                if row[-1][0] % 7 == 0:
+                    gate &= field_mask ^ ((1 << (bits - trailing)) - 1)
+                if variant >= 2 and j == degree // 4:
+                    gate ^= 1 << (bits - trailing - 1)
             if op == arithmetic:
                 sign = -1 if op == "-" else 1
             elif high == field_mask:
@@ -128,17 +139,30 @@ def distributed_product(width, case, *, reference=False, counted=False,
             if scaled:
                 multipliers = (3, -5, 6, (1 << (bits - 1)) + 5, -(1 << bits) + 9)
                 multiplier = multipliers[(row[0][0] + row[1][0]) % len(multipliers)]
+                if carry_masks:
+                    multiplier = (multiplier | 1) << trailing
                 sign *= multiplier
-            if result_masks:
+            if output_mask:
                 # The second gate selects bits after multiplication. Carries can
                 # enter a hole in the input mask or leave an output-selected bit.
                 result_gate = 0 if row[1][0] % 5 == 0 else field_mask
                 if variant >= 2 and j == degree // 4:
                     result_gate = (field_mask // 3) ^ (field_mask // 7)
-                if not gate or not result_gate:
+                visible = field_mask
+                input_bits = gate
+                if carry_masks:
+                    visible >>= trailing
+                    input_bits &= visible
+                    result_gate = field_mask ^ (1 << (row[-1][0] % trailing))
+                    if row[1][0] % 7 == 0:
+                        result_gate &= (1 << trailing) - 1
+                    if variant >= 2 and j == degree // 4:
+                        result_gate ^= 1 << trailing
+                output_bits = result_gate >> trailing if carry_masks else result_gate
+                if not input_bits or not output_bits:
                     sign, live_overlap = 0, False
-                elif result_gate != field_mask:
-                    live_overlap = True
+                else:
+                    live_overlap = input_bits != visible or output_bits != visible
                 result_mask = (1 << (precision + 2 + row[1][0])) | (result_gate << shift) | 3
 
         if variant and j == degree // 2:
@@ -163,7 +187,7 @@ def distributed_product(width, case, *, reference=False, counted=False,
                     delta = f"{lane_mask}&({delta})"
                     if scaled:
                         delta = f"({multiplier})*({delta})"
-                    if result_masks:
+                    if output_mask:
                         delta = f"{result_mask}&({delta})"
                 factor = f"({offset}{op}({delta}))"
                 if live_overlap:
@@ -205,6 +229,8 @@ if __name__ == "__main__":
                         help="multiply masked weighted sums before combining them with an offset")
     offsets.add_argument("--result-masks", action="store_true",
                         help="mask weighted sums both before and after multiplication")
+    offsets.add_argument("--carry-masks", action="store_true",
+                         help="mix observable mask holes with bits lost to even multipliers")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--reference", action="store_true",
                         help="emit the independently calculated reference expression")
@@ -215,6 +241,7 @@ if __name__ == "__main__":
         print(distributed_product(args.width, args.case, reference=args.reference, counted=args.counted,
                                   joined_offsets=args.joined_offsets, masked_offsets=args.masked_offsets,
                                   field_masks=args.field_masks, scaled_fields=args.scaled_fields,
-                                  result_masks=args.result_masks))
+                                  result_masks=args.result_masks,
+                                  carry_masks=args.carry_masks))
     except ValueError as error:
         parser.error(str(error))

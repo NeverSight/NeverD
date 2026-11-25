@@ -8432,6 +8432,13 @@ and the three bitwise joins. A literal scale on a masked sum is projected after
 the mask. A second mask can select the scaled result before it joins the
 offset. When a mask selects only part of the live field, reconstruction keeps
 its position relative to multiplication so that carries reach the correct bits.
+When canonicalizing constant factors, a scale with full zero low limbs bounds
+the width of the other factors. The product restores the discarded zero suffix
+once after multiplying their live bits.
+An even scalar shifts the live interval of each mask. Bits discarded above
+the observed width and holes below the shifted field cannot change a carry.
+When every live coefficient is the top bit, only the parity of the input
+fields contributes to the result.
 Equal projected fields accumulate their signed coefficients modulo
 the observed precision, including multiplicity. A mixed inner mask keeps its holes, and addition
 or subtraction takes place at the surviving field width so carries and borrows
@@ -8447,6 +8454,8 @@ evaluator rewrites just that bit slice of its scratch result on each assignment.
 The synthesis oracle binds each variable to a grid column once. A native-word
 evaluation plan reads those columns directly. A plan with wider intermediates
 reads the arbitrary-width values from the same grid.
+Enumeration stores one 32-bit sample per point for widths through 32.
+Wider words retain all required limbs.
 For enumerated candidates, a bounded hash spans the measurement grid. A
 matching hash still requires equality of the complete measurement vectors
 before a candidate reaches independent validation.

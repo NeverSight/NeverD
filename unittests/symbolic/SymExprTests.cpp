@@ -3143,6 +3143,29 @@ TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {
     }
 }
 
+TEST(SymExpr, WideLiteralProductsKeepTheLiveBitsInEveryFactorOrder) {
+  for (unsigned W : {5u, 32u, 65u, 129u, 257u, 513u}) {
+    SCOPED_TRACE(W);
+    SymContext C;
+    const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+    const auto XY = C.mkMul(X, Y);
+    const auto Mask = llvm::APInt::getSignMask(W);
+    const auto Extra = Mask | 19;
+    const auto B = C.mkConst(Extra);
+    for (const auto &Scale : {Mask, (Mask | 3).shl(W / 2), Mask | 1}) {
+      const auto A = C.mkConst(Scale);
+      const auto Expected = C.mkConst(Scale * Extra);
+      EXPECT_EQ(C.mkMul(A, B), Expected);
+      EXPECT_EQ(C.mkMul(B, A), Expected);
+      EXPECT_EQ(C.mkMul(C.mkMul(XY, B), A), C.mkMul(Expected, XY));
+      const auto Folded = C.mkConst(Scale * Extra * Scale);
+      EXPECT_EQ(C.mkMul({B, A, X, A, Y}), C.mkMul(Folded, XY));
+      EXPECT_EQ(C.mkMul({Y, A, X, B, A}), C.mkMul(Folded, XY));
+      EXPECT_EQ(C.mkMul({A, X, B, C.mkZero(W), Y}), C.mkZero(W));
+    }
+  }
+}
+
 TEST(SymExpr, BinaryProductsPreserveOpaqueOperandsAndModularOverflow) {
   std::mt19937_64 Random(0x61746f6d70616972ULL);
   for (unsigned Width : {1u, 3u, 8u, 64u, 65u, 128u, 257u}) {
