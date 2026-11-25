@@ -169,6 +169,13 @@ aggregate calls require separate ABI coverage. Link objects with relocations
 against allocated sections before analysis. Raw firmware mapping and native
 guest execution have separate entry points and coverage.
 
+A linked RISC-V function can still address a read-only lookup table by its
+original virtual address in HighC, LLVM-derived C and module IR. For example,
+Clang 23.1.6 at `-O2` compiles compiler-rt's `__ffssi2` for RV32IMAC and
+RV64IMAC with a 32-byte table in `.rodata`. A standalone rebuild of this
+function needs those bytes at the original address. Moving the table can
+produce an incorrect bit position.
+
 ## Verification
 
 The CTest suites exercise stripped, linked ELF, instruction widths, ABI
