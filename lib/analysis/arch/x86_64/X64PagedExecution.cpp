@@ -43,7 +43,7 @@ struct X64PagedInstructionContinuation {
   analysis::X64PagedReturnContinuation Return;
   analysis::X64PagedSegmentContinuation Segment;
   std::optional<X64NullSegmentBasePolicy> NullBasePolicy;
-  llvm::SmallVector<uint8_t, 15> Bytes;
+  llvm::SmallVector<uint8_t, x86::kMaxInstructionLen> Bytes;
   X64PagedBody Body = nullptr, Validate = nullptr;
   uint64_t Address = 0;
   uint32_t MXCSRMask = 0;
@@ -509,7 +509,7 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
                         DebugSSBlocked.has_value(), BranchDebug);
   if (!Valid)
     return Valid.takeError();
-  if (!Body || Bytes.empty() || Bytes.size() > 15)
+  if (!Body || Bytes.empty() || Bytes.size() > x86::kMaxInstructionLen)
     return invalid("invalid paged instruction binding");
   if (!*Valid)
     return Last;
@@ -530,7 +530,8 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
               (*Options.UD0Fetch != X86UD0FetchProfile::OpcodeOnly &&
                *Options.UD0Fetch != X86UD0FetchProfile::CompleteModRM)))
     return invalid("paged UD0 requires a bound instruction-fetch profile");
-  const unsigned FetchBytes = UD0 ? *UD0Offset + 2 : Bytes.size();
+  const unsigned FetchBytes =
+      UD0 ? *UD0Offset + X86PagedCode64UD0OpcodeBytes : Bytes.size();
   auto Controls = Memory.controls();
   const auto &Original = State.Core.Core.Core.Core;
   const bool SingleStep = Original.RFlags & 0x100;
@@ -595,6 +596,14 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     // remaining extent from live instruction bytes, even when the image ends
     // after the opcode or later bytes have changed. No data read is implied.
     const auto Fetch = [&](unsigned Offset, uint8_t &Byte) {
+      // A complete-fetch processor checks the architectural 15-byte ceiling
+      // before fetching the next encoded address byte. This can beat a #PF on
+      // the next page, while opcode-only processors already raised #UD.
+      if (x86UD0FetchExceedsInstructionLength(Offset)) {
+        T.Access.Status = X86PageWalkStatus::Exception;
+        T.Access.Exception = X86MemoryException{13, 0, std::nullopt};
+        return false;
+      }
       return T.accept(
           Memory.load({Address + Offset, MemoryAccessKind::Execute, T.CPL},
                       llvm::MutableArrayRef(&Byte, 1)));

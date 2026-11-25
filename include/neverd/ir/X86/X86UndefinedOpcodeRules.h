@@ -10,6 +10,8 @@
 #ifndef NEVERD_IR_X86_X86UNDEFINEDOPCODERULES_H
 #define NEVERD_IR_X86_X86UNDEFINEDOPCODERULES_H
 
+#include "neverd/support/ISAEncoding.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -24,10 +26,18 @@ enum class X86UD0FetchProfile : uint8_t {
   CompleteModRM,
 };
 
-/// Qualified code64 UD0 prefixes exclude LOCK. The original P/E-core oracle
-/// covers zero, one or two such prefixes; Capstone reports the opcode without
-/// the ModR/M address tail for every admitted combination.
-inline constexpr unsigned X86PagedCode64UD0QualifiedPrefixLimit = 2;
+/// Qualified code64 UD0 prefixes exclude LOCK. Capstone reports the opcode
+/// without the ModR/M address tail. The opcode must fit within the x86
+/// instruction limit; the processor-bound fetch profile decides whether the
+/// address tail matters and whether a later byte would exceed that limit.
+inline constexpr unsigned X86PagedCode64UD0OpcodeBytes = 2;
+inline constexpr unsigned X86PagedCode64UD0QualifiedPrefixLimit =
+    static_cast<unsigned>(x86::kMaxInstructionLen) -
+    X86PagedCode64UD0OpcodeBytes;
+
+constexpr bool x86UD0FetchExceedsInstructionLength(unsigned Offset) {
+  return Offset >= x86::kMaxInstructionLen;
+}
 
 constexpr bool x86PagedCode64UD0Prefix(uint8_t Byte) {
   if (Byte >= 0x40 && Byte <= 0x4f)
@@ -55,7 +65,8 @@ x86PagedCode64UD0OpcodeOffset(const uint8_t *Bytes, size_t Size) {
   while (Offset < X86PagedCode64UD0QualifiedPrefixLimit && Offset < Size &&
          x86PagedCode64UD0Prefix(Bytes[Offset]))
     ++Offset;
-  if (Size < Offset + 2 || Bytes[Offset] != 0x0f || Bytes[Offset + 1] != 0xff)
+  if (Size < Offset + X86PagedCode64UD0OpcodeBytes || Bytes[Offset] != 0x0f ||
+      Bytes[Offset + 1] != 0xff)
     return std::nullopt;
   return Offset;
 }
