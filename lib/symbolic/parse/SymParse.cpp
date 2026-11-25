@@ -142,7 +142,7 @@ SymRef Parser::parseBinary(int MinPrec) {
         const auto First = Ctx.operands(L).back();
         const auto Factor = readWeightedFactor(Ctx, First);
         const bool Sum = Ctx.op(First) == SymOp::Add
-                             ? Ctx.numOperands(First) > 2 || Factor.FieldMask
+                             ? Ctx.numOperands(First) > 2 || Factor.Outer.Mask
                              : bool(Factor.Offset);
         Mode = Sum ? CallReuse::SumFactor : CallReuse::Factor;
       }
