@@ -1489,6 +1489,10 @@ TEST(ControlStateRecovery, ProducerHintsRequireFreshProof) {
 
 TEST(ControlStateRecovery, RegisterPartitionHintsProveEveryIncomingCase) {
   auto Provider = makeBankProgram(false, SelectorInput::MaskedScalar, 8);
+  // Keep the partitioned register live across both physical transfers.
+  // The frame-reload variant needs its own frame-slot projection.
+  Provider.Code.erase(Reload);
+  Provider.add(Reload, {jump(Dispatch)});
   auto Options = bankOptions(false, false);
   Options.ControlPartitionHints = {{{Route}, {SelectorRegister, 1}}};
   const auto Result = specializeInterpreter(Provider, {Entry}, Options);

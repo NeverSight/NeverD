@@ -167,6 +167,10 @@ struct Projection {
 struct ContextKey {
   SpecializationCursor Cursor;
   std::vector<std::optional<uint64_t>> Controls;
+  // Only the physical successor with a proved register partition uses this
+  // value. Keep distinct cases separate while their guards remain in the
+  // residual graph.
+  std::optional<uint64_t> RegisterPartition;
   // A complete entry-relative pointer is a structural fact, not a numeric
   // constant. Keep its displacement separately so a selected virtual stack
   // cursor can distinguish contexts without fixing the invocation's address.
@@ -181,16 +185,16 @@ struct ContextKey {
   uint32_t FrameResidue = 0;
 
   bool operator<(const ContextKey &Other) const {
-    return std::tie(Cursor.Address, Cursor.Mode, Controls, FrameControls,
-                    NativeStackActive, EntryReturnSlotIntact, StackDisplacement,
-                    ReturnSlots, NativeCallReturnCells, ReturnedObjectSizes,
-                    ReturnedObjectNonNull, FrameResidue) <
+    return std::tie(Cursor.Address, Cursor.Mode, Controls, RegisterPartition,
+                    FrameControls, NativeStackActive, EntryReturnSlotIntact,
+                    StackDisplacement, ReturnSlots, NativeCallReturnCells,
+                    ReturnedObjectSizes, ReturnedObjectNonNull, FrameResidue) <
            std::tie(Other.Cursor.Address, Other.Cursor.Mode, Other.Controls,
-                    Other.FrameControls, Other.NativeStackActive,
-                    Other.EntryReturnSlotIntact, Other.StackDisplacement,
-                    Other.ReturnSlots, Other.NativeCallReturnCells,
-                    Other.ReturnedObjectSizes, Other.ReturnedObjectNonNull,
-                    Other.FrameResidue);
+                    Other.RegisterPartition, Other.FrameControls,
+                    Other.NativeStackActive, Other.EntryReturnSlotIntact,
+                    Other.StackDisplacement, Other.ReturnSlots,
+                    Other.NativeCallReturnCells, Other.ReturnedObjectSizes,
+                    Other.ReturnedObjectNonNull, Other.FrameResidue);
   }
 };
 
@@ -2648,6 +2652,11 @@ int Specializer::enqueue(SpecializationCursor Cursor,
     RegisterControl(Range);
   for (const auto &Slot : Refinement.ContextSlots)
     SlotControl(Slot);
+  if (const auto Partition =
+          Refinement.RegisterPartitions.find({Cursor.Address, Cursor.Mode});
+      Partition != Refinement.RegisterPartitions.end())
+    Key.RegisterPartition =
+        constantWord(Incoming.Scalars, Partition->second, Options.ByteOrder);
   Key.NativeStackActive = Incoming.Frame.NativeStackActive;
   Key.EntryReturnSlotIntact = Incoming.Frame.EntryReturnSlotIntact;
   Key.NativeCallReturnCells = Incoming.NativeCallReturnCells;
@@ -2851,8 +2860,11 @@ bool Specializer::emitTargets(
   }
 
   const SymRef Path = Exec.pathPredicate();
-  const auto projectCase = [&](SpecializationCursor Cursor, SymRef Predicate,
-                               std::optional<uint64_t> KnownTarget) -> int {
+  const auto projectCase =
+      [&](SpecializationCursor Cursor, SymRef Predicate,
+          std::optional<uint64_t> KnownTarget,
+          std::optional<std::pair<SymRegisterRange, uint64_t>> RegisterCase)
+      -> int {
     Projection EdgeState;
     bool Reachable = true;
     if (!projectEdge(State, FrameRoot, ObjectRoots, Origins, Frame, Predicate,
@@ -2860,6 +2872,17 @@ bool Specializer::emitTargets(
       return -1;
     if (!Reachable)
       return -2;
+    if (RegisterCase) {
+      const auto &[Range, Value] = *RegisterCase;
+      for (uint16_t I = 0; I < Range.Bytes; ++I) {
+        const unsigned Shift =
+            8 * (Options.ByteOrder == llvm::endianness::little
+                     ? I
+                     : Range.Bytes - I - 1);
+        EdgeState.Scalars[{SymSpace::Register, Range.Offset + I}] =
+            static_cast<uint8_t>(Value >> Shift);
+      }
+    }
     if (Flow == StepResult::CondBranch) {
       // The successor receives a fresh symbolic object root. Retain only a
       // nullness outcome proved for this exact edge; the nullable declaration
@@ -2939,7 +2962,8 @@ bool Specializer::emitTargets(
           const SymRef Case = Ctx.mkAnd(
               Predicate,
               Ctx.mkEq(Value, Ctx.mkConst(Ctx.width(Value), Tuple[0])));
-          const int Id = projectCase(Cursor, Case, KnownTarget);
+          const int Id = projectCase(Cursor, Case, KnownTarget,
+                                     std::make_pair(Range, Tuple[0]));
           if (Id == -1)
             return -1;
           if (Id >= 0)
@@ -2959,10 +2983,10 @@ bool Specializer::emitTargets(
       } else {
         // Incomplete domains do not authorize a partial dispatch. Keep the
         // ordinary conservative edge; its successor still has to finish.
-        Next = projectCase(Cursor, Predicate, KnownTarget);
+        Next = projectCase(Cursor, Predicate, KnownTarget, std::nullopt);
       }
     } else {
-      Next = projectCase(Cursor, Predicate, KnownTarget);
+      Next = projectCase(Cursor, Predicate, KnownTarget, std::nullopt);
     }
     if (Next >= 0)
       Draft.Transfers.push_back(Cursor);
