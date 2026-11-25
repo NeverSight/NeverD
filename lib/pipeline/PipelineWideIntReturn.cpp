@@ -429,16 +429,18 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
     // so a cycle of unproved forwarders cannot justify itself.
     {
       std::map<va_t, const MedFunc *> ByEntry;
+      std::set<va_t> Proven;
       for (const auto &MF : Result.MedFuncs) {
         ByEntry[MF.Entry] = &MF;
         if (libc::returnsDoubleWord(
-                cNameOfSymbol(MF.Name, Img.Format, Img.Arch),
-                TRI.PointerSize) ||
-            ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
-             !WideRetCallees.count(MF.Entry) && returnsDoubleWordSum(MF, TRI)))
+                cNameOfSymbol(MF.Name, Img.Format, Img.Arch), TRI.PointerSize))
           WideRetCallees.insert(MF.Entry);
+        else if ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
+                 !WideRetCallees.count(MF.Entry) &&
+                 returnsDoubleWordSum(MF, TRI))
+          // The sum proof already checked both final register definitions.
+          Proven.insert(MF.Entry);
       }
-      std::set<va_t> Proven;
       for (va_t Entry : WideRetCallees)
         if (!ByEntry.count(Entry))
           Proven.insert(Entry);
