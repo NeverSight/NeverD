@@ -106,6 +106,12 @@ public:
   MedByteDemand(const TargetRegInfo &TRI, bool OtherRegistersRead)
       : TRI(TRI), OtherRegistersRead(OtherRegistersRead) {}
 
+  /// Reserve space for the definitions counted while selecting the function.
+  void reserve(size_t Definitions) {
+    Index.reserve(Definitions);
+    Nodes.reserve(Definitions);
+  }
+
   /// Notes the value \p Phi defines and those it merges.
   void define(const PhiNode &Phi);
   /// Notes the value \p Op defines and those it reads; an operation run for
@@ -146,6 +152,10 @@ private:
     const MedOp *Op = nullptr;
     const PhiNode *Phi = nullptr;
     MedByteMask Bytes = 0;
+    MedByteMask Zero = 0;
+    // A zero-byte query initializes its whole dependency slice before solving
+    // it. A node outside that slice is either unvisited or already settled.
+    bool ZeroVisited = false;
     /// An operation, a PHI or a return reads it.
     bool Used = false;
     /// A return hands it back as it came.
@@ -159,13 +169,11 @@ private:
   /// Whether something no operation shows may read a register other than
   /// the integer return register (medLeavesOtherRegisters).
   bool OtherRegistersRead;
-  MedValueMap<unsigned> Index;
+  llvm::DenseMap<MedValueKey, unsigned> Index;
   std::vector<Node> Nodes;
   std::vector<unsigned> Pending;
   /// The values returns hand back, until settle follows them.
   std::vector<MedVar> Returns;
-  /// The zero bytes of the values asked about, by node (zeroBytes).
-  llvm::DenseMap<unsigned, MedByteMask> Zero;
 };
 
 } // namespace neverd
