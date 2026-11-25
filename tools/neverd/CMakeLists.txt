@@ -71,6 +71,7 @@ add_neverd_tool(neverd
   cmd/NeverDCmdDiff.cpp
   cmd/NeverDCmdLineage.cpp
   cmd/NeverDCmdPipeline.cpp
+  cmd/NeverDCmdRelink.cpp
   cmd/NeverDCmdContinuation.cpp
   cmd/NeverDCmdSimplify.cpp
   cmd/NeverDCmdProject.cpp

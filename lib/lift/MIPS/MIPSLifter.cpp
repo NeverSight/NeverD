@@ -12,6 +12,8 @@
 
 #include "neverd/lift/MIPS/MIPSLifter.h"
 
+#include "MIPSIntegerOpcodes.h"
+
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSDSP.h"
@@ -49,17 +51,19 @@ uint32_t MIPSLifter::word(const cs_insn &Instruction) const {
 
 bool MIPSLifter::hasDelaySlot(uint32_t Word) {
   const unsigned Opcode = Word >> 26;
-  if (Opcode == 0)
-    return (Word & 63) == 8 || (Word & 63) == 9;
-  if (Opcode == 1) {
+  if (Opcode == mips::major::SPECIAL)
+    return (Word & 63) == mips::special::JR ||
+           (Word & 63) == mips::special::JALR;
+  if (Opcode == mips::major::REGIMM) {
     const unsigned RT = (Word >> 16) & 31;
     return RT <= 3 || (RT >= 16 && RT <= 19) || (Word >> 16) == 0x041c;
   }
-  if (Opcode == 17) {
+  if (Opcode == mips::major::COP1) {
     const unsigned RS = (Word >> 21) & 31;
     return RS == 8 || RS == 11 || RS == 15 || RS >= 24;
   }
-  return (Opcode >= 2 && Opcode <= 7) || (Opcode >= 20 && Opcode <= 23);
+  return (Opcode >= mips::major::J && Opcode <= mips::major::BGTZ) ||
+         (Opcode >= mips::major::BEQL && Opcode <= mips::major::BGTZL);
 }
 
 namespace {
@@ -93,9 +97,10 @@ MIPSLifter::classicReleaseOneEncoding(uint32_t Word) const {
     return 0; // PAUSE executes as a NOP on a core without the instruction.
   if (!Wide && mips::historicalDoublewordGPRInstruction(Word))
     return std::nullopt;
-  if (!Op && (Fn == 8 || Fn == 9) && (Word & 0x7c0))
+  if (Op == mips::major::SPECIAL &&
+      (Fn == mips::special::JR || Fn == mips::special::JALR) && (Word & 0x7c0))
     return std::nullopt; // Release 1 defines only the zero JR/JALR hint.
-  if (Op == 16) {
+  if (Op == mips::major::COP0) {
     // Base CP0 moves and privileged CO operations. Shadow GPR and interrupt
     // enable/disable transfers have different selectors, introduced in R2.
     if (RS == 0 || RS == 4 || (Wide && (RS == 1 || RS == 5)))
@@ -106,21 +111,27 @@ MIPSLifter::classicReleaseOneEncoding(uint32_t Word) const {
       return Word; // TLBR/WI/WR/P, ERET, DERET, WAIT.
     return std::nullopt;
   }
-  if (Op == 28) { // SPECIAL2 adds multiply/accumulate and count leading bits.
-    if (Fn == 0 || Fn == 1 || Fn == 2 || Fn == 4 || Fn == 5 || Fn == 32 ||
-        Fn == 33 || (Wide && (Fn == 36 || Fn == 37)) || Fn == 63)
+  // SPECIAL2 adds multiply/accumulate and count leading bits.
+  if (Op == mips::major::SPECIAL2) {
+    if (Fn == mips::special2::MADD || Fn == mips::special2::MADDU ||
+        Fn == mips::special2::MUL || Fn == mips::special2::MSUB ||
+        Fn == mips::special2::MSUBU || Fn == mips::special2::CLZ ||
+        Fn == mips::special2::CLO ||
+        (Wide && (Fn == mips::special2::DCLZ || Fn == mips::special2::DCLO)) ||
+        Fn == mips::special2::SDBBP)
       return Word;
     return std::nullopt;
   }
-  if (Op == 47) // CACHE
+  if (Op == mips::major::CACHE)
     return Word;
   if (!Wide) {
     // COP1X, long conversions, paired-single and reciprocal operations
     // require MIPS64 on Release 1. MIPS32 has a 32-bit FPR file.
-    if (Op == 19 ||
-        (Op == 17 && (RS == 21 || RS == 22 ||
-                      (RS >= 16 && ((Fn >= 8 && Fn <= 11) || Fn == 21 ||
-                                    Fn == 22 || Fn == 37 || Fn == 38)))))
+    if (Op == mips::major::COP1X ||
+        (Op == mips::major::COP1 &&
+         (RS == 21 || RS == 22 ||
+          (RS >= 16 && ((Fn >= 8 && Fn <= 11) || Fn == 21 || Fn == 22 ||
+                        Fn == 37 || Fn == 38)))))
       return std::nullopt;
   }
   if (mips::historicalInstructionAvailable(Word, 5))
@@ -156,10 +167,10 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
     return Encoding{(Word & ~63u) | 8u, 4};
 
   if (((Word >> 16) == 0x041c && !HasDSP) ||
-      (Word >> 26 == 17 && hasDelaySlot(Word) &&
+      (Word >> 26 == mips::major::COP1 && hasDelaySlot(Word) &&
        (((Word >> 21) & 31) == 8 ? !HasScalarFP : !HasMSA)))
     return std::nullopt;
-  if (Word >> 26 == 29) {
+  if (Word >> 26 == mips::major::JALX) {
     if (Mode != InstructionMode::MIPSClassic)
       return std::nullopt;
     return Encoding{Word, 4}; // JALX requires admitted alternate ISA.
@@ -185,12 +196,13 @@ MIPSLifter::controlTargetMode(const cs_insn &Instruction) const {
   if (!Code || Code->R6 || Code->hasSequence() ||
       Mode == InstructionMode::Default)
     return LowInstructionTargetMode::Preserve;
-  if (Code->Word >> 26 == 29)
+  if (Code->Word >> 26 == mips::major::JALX)
     return isMIPSCompressedMode(Mode) ? LowInstructionTargetMode::MIPSClassic
            : HasMIPS16                ? LowInstructionTargetMode::MIPS16
                                       : LowInstructionTargetMode::MicroMIPS;
-  if (Code->Word >> 26 == 0 &&
-      ((Code->Word & 63) == 8 || (Code->Word & 63) == 9))
+  if (Code->Word >> 26 == mips::major::SPECIAL &&
+      ((Code->Word & 63) == mips::special::JR ||
+       (Code->Word & 63) == mips::special::JALR))
     return HasMIPS16 || Mode == InstructionMode::MIPS16
                ? LowInstructionTargetMode::FromMIPS16TargetBit0
                : LowInstructionTargetMode::FromTargetBit0;
@@ -219,7 +231,7 @@ bool MIPSLifter::isFunctionTerminator(const cs_insn &Instruction) const {
   const uint32_t Word = Code->Word;
   if (Code->R6)
     return Word >> 26 == 50 || (Word >> 21) == (54u << 5);
-  return isZeroEqualityBranch(Word) || Word >> 26 == 2 ||
+  return isZeroEqualityBranch(Word) || Word >> 26 == mips::major::J ||
          (Word & 0xfc1fffff) == 8; // B / J / JR
 }
 
@@ -234,10 +246,11 @@ va_t MIPSLifter::directCallTarget(const cs_insn &Instruction) const {
                : InvalidVA;
   // Conditional link branches require their predicate when establishing a
   // no-return call. They remain discoverable from lifted control flow.
-  if (Word >> 26 != 3 && Word >> 26 != 29)
+  if (Word >> 26 != mips::major::JAL && Word >> 26 != mips::major::JALX)
     return InvalidVA;
   const unsigned Shift =
-      Mode == InstructionMode::MicroMIPS && Word >> 26 != 29 ? 1 : 2;
+      Mode == InstructionMode::MicroMIPS && Word >> 26 != mips::major::JALX ? 1
+                                                                            : 2;
   const uint64_t TargetAddress = ((Instruction.address + Instruction.size) &
                                   ~((uint64_t{1} << (26 + Shift)) - 1)) |
                                  (uint64_t(Word & 0x03ffffff) << Shift);
@@ -326,29 +339,31 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     S.emit(NdOp::NOP, {}, {});
     return true;
   }
-  if (Opcode == 0) {
+  if (Opcode == mips::major::SPECIAL) {
     switch (Function) {
-    case 0:    // SLL
-    case 2:    // SRL / ROTR
-    case 3:    // SRA
-    case 4:    // SLLV
-    case 6:    // SRLV / ROTRV
-    case 7:    // SRAV
-    case 20:   // DSLLV
-    case 22:   // DSRLV / DROTRV
-    case 23:   // DSRAV
-    case 56:   // DSLL
-    case 58:   // DSRL / DROTR
-    case 59:   // DSRA
-    case 60:   // DSLL32
-    case 62:   // DSRL32 / DROTR32
-    case 63: { // DSRA32
-      const bool Double = Function >= 20;
+    case mips::special::SLL:
+    case mips::special::SRL: // SRL / ROTR
+    case mips::special::SRA:
+    case mips::special::SLLV:
+    case mips::special::SRLV: // SRLV / ROTRV
+    case mips::special::SRAV:
+    case mips::special::DSLLV:
+    case mips::special::DSRLV: // DSRLV / DROTRV
+    case mips::special::DSRAV:
+    case mips::special::DSLL:
+    case mips::special::DSRL: // DSRL / DROTR
+    case mips::special::DSRA:
+    case mips::special::DSLL32:
+    case mips::special::DSRL32: // DSRL32 / DROTR32
+    case mips::special::DSRA32: {
+      const bool Double = Function >= mips::special::DSLLV;
       if (Double && !Wide)
         return false;
       const uint16_t Bytes = Double ? 8 : 4;
-      const bool Variable = Function == 4 || Function == 6 || Function == 7 ||
-                            Function == 20 || Function == 22 || Function == 23;
+      const bool Variable =
+          Function == mips::special::SLLV || Function == mips::special::SRLV ||
+          Function == mips::special::SRAV || Function == mips::special::DSLLV ||
+          Function == mips::special::DSRLV || Function == mips::special::DSRAV;
       const bool Rotate = (Function & 3) == 2 && (Variable ? SA == 1 : RS == 1);
       if ((Variable && SA != unsigned(Rotate)) ||
           (!Variable && RS != unsigned(Rotate)))
@@ -357,10 +372,12 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       // Only the shifted value is constrained, never the variable count.
       if (!Double && (Function & 3) != 0)
         S.requireWord(RT);
-      NdVar Shift = Variable
-                        ? S.binary(NdOp::INT_AND, S.read(RS, Bytes),
-                                   NdVar::cst(Bytes * 8 - 1, Bytes))
-                        : NdVar::cst(SA + (Function >= 60 ? 32 : 0), Bytes);
+      NdVar Shift =
+          Variable
+              ? S.binary(NdOp::INT_AND, S.read(RS, Bytes),
+                         NdVar::cst(Bytes * 8 - 1, Bytes))
+              : NdVar::cst(SA + (Function >= mips::special::DSLL32 ? 32 : 0),
+                           Bytes);
       NdVar Value = S.read(RT, Bytes);
       NdOp Op = (Function & 3) == 0   ? NdOp::INT_LEFT
                 : (Function & 3) == 2 ? NdOp::INT_RIGHT
@@ -376,11 +393,11 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       S.write(RD, Result);
       return true;
     }
-    case 5:    // LSA
-    case 21: { // DLSA
-      if (!HasMSA || SA >= 4 || (Function == 21 && !Wide))
+    case mips::special::LSA:
+    case mips::special::DLSA: {
+      if (!HasMSA || SA >= 4 || (Function == mips::special::DLSA && !Wide))
         return false;
-      const uint16_t Bytes = Function == 21 ? 8 : 4;
+      const uint16_t Bytes = Function == mips::special::DLSA ? 8 : 4;
       if (Bytes == 4)
         S.requireWord(RT); // RS is truncated before the shift.
       S.write(RD, S.binary(NdOp::INT_ADD,
@@ -389,26 +406,28 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
                            S.read(RT, Bytes)));
       return true;
     }
-    case 10:   // MOVZ
-    case 11: { // MOVN
+    case mips::special::MOVZ:
+    case mips::special::MOVN: {
       if (SA)
         return false;
       NdVar Condition =
-          S.binary(Function == 10 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL,
+          S.binary(Function == mips::special::MOVZ ? NdOp::INT_EQUAL
+                                                   : NdOp::INT_NOTEQUAL,
                    S.read(RT), NdVar::cst(0, S.Width), 1);
       NdVar Result = S.makeTemp(S.Width);
       S.emit(NdOp::SELECT, Result, {Condition, S.read(RS), S.read(RD)});
       S.write(RD, Result);
       return true;
     }
-    case 16:   // MFHI
-    case 18: { // MFLO
+    case mips::special::MFHI:
+    case mips::special::MFLO: {
       const unsigned Bank = RS & 3;
       if ((RS & ~3u) || RT || SA ||
           (Bank && (!HasDSP || Mode == InstructionMode::MIPS16)))
         return false;
-      S.write(RD, NdVar::reg(Function == 16 ? mipsreg::accumulatorHI(Bank)
-                                            : mipsreg::accumulatorLO(Bank),
+      S.write(RD, NdVar::reg(Function == mips::special::MFHI
+                                 ? mipsreg::accumulatorHI(Bank)
+                                 : mipsreg::accumulatorLO(Bank),
                              S.Width));
       // Reading to $zero still consumes the pending arithmetic result.
       if (!Bank)
@@ -416,44 +435,46 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
                {NdVar::cst(0, 1)});
       return true;
     }
-    case 17:   // MTHI
-    case 19: { // MTLO
+    case mips::special::MTHI:
+    case mips::special::MTLO: {
       const unsigned Bank = RD & 3;
       if (RT || (RD & ~3u) || SA ||
           (Bank && (!HasDSP || Mode == InstructionMode::MIPS16)))
         return false;
       if (!Bank) {
-        const auto Other =
-            NdVar::reg(Function == 17 ? mipsreg::LO : mipsreg::HI, S.Width);
+        const auto Other = NdVar::reg(
+            Function == mips::special::MTHI ? mipsreg::LO : mipsreg::HI,
+            S.Width);
         S.emitIntrinsic(Intrinsic::MIPSAccumulatorAfterWrite, Other,
                         {NdVar::reg(mipsreg::AC0Pending, 1), Other});
         S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
                {NdVar::cst(0, 1)});
       }
       S.emit(NdOp::COPY,
-             NdVar::reg(Function == 17 ? mipsreg::accumulatorHI(Bank)
-                                       : mipsreg::accumulatorLO(Bank),
+             NdVar::reg(Function == mips::special::MTHI
+                            ? mipsreg::accumulatorHI(Bank)
+                            : mipsreg::accumulatorLO(Bank),
                         S.Width),
              {S.read(RS)});
       return true;
     }
-    case 24:   // MULT
-    case 25:   // MULTU
-    case 28:   // DMULT
-    case 29: { // DMULTU
+    case mips::special::MULT:
+    case mips::special::MULTU:
+    case mips::special::DMULT:
+    case mips::special::DMULTU: {
       if (RD && HasDSP && Mode != InstructionMode::MIPS16 && RD <= 3 && !SA &&
-          Function <= 25) {
+          Function <= mips::special::MULTU) {
         S.requireWord(RS);
         S.requireWord(RT);
-        const bool Signed = Function == 24;
+        const bool Signed = Function == mips::special::MULT;
         S.writeAccumulator(RD, S.binary(NdOp::INT_MULT,
                                         S.resize(S.read(RS, 4), 8, Signed),
                                         S.resize(S.read(RT, 4), 8, Signed)));
         return true;
       }
-      if (RD || SA || (Function >= 28 && !Wide))
+      if (RD || SA || (Function >= mips::special::DMULT && !Wide))
         return false;
-      const uint16_t Bytes = Function >= 28 ? 8 : 4;
+      const uint16_t Bytes = Function >= mips::special::DMULT ? 8 : 4;
       const bool Signed = (Function & 1) == 0;
       if (Bytes == 4) {
         S.requireWord(RS);
@@ -473,15 +494,16 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
              {NdVar::cst(1, 1)});
       return true;
     }
-    case 26:   // DIV
-    case 27: { // DIVU
+    case mips::special::DIV:
+    case mips::special::DIVU: {
       if (RD || SA)
         return false;
       S.requireWord(RS);
       S.requireWord(RT);
       const auto Result = S.makeTemp(8);
-      S.emitIntrinsic(Function == 26 ? Intrinsic::MIPSDivWord
-                                     : Intrinsic::MIPSDivUnsignedWord,
+      S.emitIntrinsic(Function == mips::special::DIV
+                          ? Intrinsic::MIPSDivWord
+                          : Intrinsic::MIPSDivUnsignedWord,
                       Result, {S.read(RS, 4), S.read(RT, 4)});
       const auto Low = S.resize(Result, 4);
       const auto High = S.makeTemp(4);
@@ -494,55 +516,63 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
              {NdVar::cst(1, 1)});
       return true;
     }
-    case 30:   // DDIV
-    case 31: { // DDIVU
+    case mips::special::DDIV:
+    case mips::special::DDIVU: {
       if (!Wide || RD || SA)
         return false;
-      S.divide(S.read(RS), S.read(RT), Function == 30,
+      S.divide(S.read(RS), S.read(RT), Function == mips::special::DDIV,
                NdVar::reg(mipsreg::LO, 8), NdVar::reg(mipsreg::HI, 8));
       S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
              {NdVar::cst(1, 1)});
       return true;
     }
-    case 33:   // ADDU
-    case 35:   // SUBU
-    case 36:   // AND
-    case 37:   // OR
-    case 38:   // XOR
-    case 39:   // NOR
-    case 42:   // SLT
-    case 43:   // SLTU
-    case 45:   // DADDU
-    case 47: { // DSUBU
-      if (SA || (Function >= 45 && !Wide))
+    case mips::special::ADDU:
+    case mips::special::SUBU:
+    case mips::special::AND:
+    case mips::special::OR:
+    case mips::special::XOR:
+    case mips::special::NOR:
+    case mips::special::SLT:
+    case mips::special::SLTU:
+    case mips::special::DADDU:
+    case mips::special::DSUBU: {
+      if (SA || (Function >= mips::special::DADDU && !Wide))
         return false;
       // OR/XOR with architectural zero is a full-width move, including on
       // MIPS64. Retain that identity before source frame and return proofs;
       // ADDU's word truncation/sign extension is a different operation.
-      if (RD && (Function == 37 || Function == 38) && (!RS || !RT)) {
+      if (RD &&
+          (Function == mips::special::OR || Function == mips::special::XOR) &&
+          (!RS || !RT)) {
         S.write(RD, S.read(RS ? RS : RT));
         return true;
       }
-      const bool WordOperation = Function == 33 || Function == 35;
+      const bool WordOperation =
+          Function == mips::special::ADDU || Function == mips::special::SUBU;
       const uint16_t Bytes = WordOperation ? 4 : S.Width;
       if (WordOperation) {
         S.requireWord(RS);
         S.requireWord(RT);
       }
-      const NdOp Op = Function == 33 || Function == 45   ? NdOp::INT_ADD
-                      : Function == 35 || Function == 47 ? NdOp::INT_SUB
-                      : Function == 36                   ? NdOp::INT_AND
-                      : Function == 37 || Function == 39 ? NdOp::INT_OR
-                      : Function == 38                   ? NdOp::INT_XOR
-                      : Function == 42                   ? NdOp::INT_SLESS
-                                                         : NdOp::INT_LESS;
-      const bool Compare = Function == 42 || Function == 43;
+      const NdOp Op =
+          Function == mips::special::ADDU || Function == mips::special::DADDU
+              ? NdOp::INT_ADD
+          : Function == mips::special::SUBU || Function == mips::special::DSUBU
+              ? NdOp::INT_SUB
+          : Function == mips::special::AND ? NdOp::INT_AND
+          : Function == mips::special::OR || Function == mips::special::NOR
+              ? NdOp::INT_OR
+          : Function == mips::special::XOR ? NdOp::INT_XOR
+          : Function == mips::special::SLT ? NdOp::INT_SLESS
+                                           : NdOp::INT_LESS;
+      const bool Compare =
+          Function == mips::special::SLT || Function == mips::special::SLTU;
       // On MIPS64 a word read emits a truncation. Keep those operations in
       // source operand order on hosts with different argument evaluation order.
       const NdVar Left = S.read(RS, Bytes);
       const NdVar Right = S.read(RT, Bytes);
       NdVar Result = S.binary(Op, Left, Right, Compare ? 1 : Bytes);
-      if (Function == 39) {
+      if (Function == mips::special::NOR) {
         NdVar Inverted = S.makeTemp(Bytes);
         S.emit(NdOp::INT_NOT, Inverted, {Result});
         Result = Inverted;
@@ -555,38 +585,43 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     }
   }
   switch (Opcode) {
-  case 9: // ADDIU (32-bit operation even on MIPS64)
+  case mips::major::ADDIU: // ADDIU (32-bit operation even on MIPS64)
     S.requireWord(RS);
     S.write(RT,
             S.binary(NdOp::INT_ADD, S.read(RS, 4), NdVar::cst(Immediate, 4)));
     return true;
-  case 10: // SLTI
-  case 11: // SLTIU also sign-extends its immediate before unsigned comparison
-    S.write(RT,
-            S.binary(Opcode == 10 ? NdOp::INT_SLESS : NdOp::INT_LESS,
-                     S.read(RS), NdVar::cst(Immediate, S.Width), 1),
-            false);
+  case mips::major::SLTI:
+  case mips::major::SLTIU: // SLTIU also sign-extends its immediate before
+                           // unsigned comparison
+    S.write(
+        RT,
+        S.binary(Opcode == mips::major::SLTI ? NdOp::INT_SLESS : NdOp::INT_LESS,
+                 S.read(RS), NdVar::cst(Immediate, S.Width), 1),
+        false);
     return true;
-  case 12: // ANDI
-  case 13: // ORI
-  case 14: // XORI
-    S.write(RT, S.binary(Opcode == 12   ? NdOp::INT_AND
-                         : Opcode == 13 ? NdOp::INT_OR
-                                        : NdOp::INT_XOR,
+  case mips::major::ANDI:
+  case mips::major::ORI:
+  case mips::major::XORI:
+    S.write(RT, S.binary(Opcode == mips::major::ANDI  ? NdOp::INT_AND
+                         : Opcode == mips::major::ORI ? NdOp::INT_OR
+                                                      : NdOp::INT_XOR,
                          S.read(RS), NdVar::cst(Word & 0xffff, S.Width)));
     return true;
-  case 15: // LUI sign-extends its 32-bit result on MIPS64
+  case mips::major::LUI: // LUI sign-extends its 32-bit result on MIPS64
     if (RS)
       return false;
     S.write(RT, NdVar::cst(uint32_t(Word << 16), 4));
     return true;
-  case 25: // DADDIU
+  case mips::major::DADDIU:
     if (!Wide)
       return false;
     S.write(RT, S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 8)));
     return true;
-  case 28: { // SPECIAL2: MUL, CLZ/CLO, DCLZ/DCLO
-    if ((Function == 0 || Function == 1 || Function == 4 || Function == 5) &&
+  case mips::major::SPECIAL2: { // SPECIAL2: MUL, CLZ/CLO, DCLZ/DCLO
+    if ((Function == mips::special2::MADD ||
+         Function == mips::special2::MADDU ||
+         Function == mips::special2::MSUB ||
+         Function == mips::special2::MSUBU) &&
         !SA && RD <= 3 && (!Wide || HasDSP) &&
         Mode != InstructionMode::MIPS16 && (!RD || HasDSP)) {
       S.requireWord(RS);
@@ -600,7 +635,7 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
                                   S.accumulator(RD), Product));
       return true;
     }
-    if (Function == 2 && !SA) {
+    if (Function == mips::special2::MUL && !SA) {
       S.requireWord(RS);
       S.requireWord(RT);
       S.write(RD, S.binary(NdOp::INT_MULT, S.read(RS, 4), S.read(RT, 4)));
@@ -615,11 +650,12 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       return true;
     }
     if (SA || RT != RD ||
-        (Function != 32 && Function != 33 && Function != 36 &&
-         Function != 37) ||
-        (Function >= 36 && !Wide))
+        (Function != mips::special2::CLZ && Function != mips::special2::CLO &&
+         Function != mips::special2::DCLZ &&
+         Function != mips::special2::DCLO) ||
+        (Function >= mips::special2::DCLZ && !Wide))
       return false;
-    const uint16_t Bytes = Function >= 36 ? 8 : 4;
+    const uint16_t Bytes = Function >= mips::special2::DCLZ ? 8 : 4;
     if (Bytes == 4)
       S.requireWord(RS);
     NdVar Input = S.read(RS, Bytes);
@@ -633,9 +669,9 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     S.write(RD, Result, false);
     return true;
   }
-  case 30: // MSA
+  case mips::major::MSA:
     return liftMSA(S, Word);
-  case 31: // SPECIAL3 integer bitfields and lane permutations
+  case mips::major::SPECIAL3: // integer bitfields and lane permutations
     return liftBitfield(S, Word) || liftDSP(S, Word);
   default:
     return false;
@@ -698,7 +734,7 @@ bool MIPSLifter::liftHistoricalSystem(State &S, uint32_t Word) const {
     S.emitIntrinsic(Intrinsic::MIPSHistoricalRFE, {});
     return true;
   }
-  if (Word >> 26 == 16)
+  if (Word >> 26 == mips::major::COP0)
     return liftSystem(S, Word);
   const auto Code = mips::historicalSoftwareExceptionCode(Word);
   if (!Code)
@@ -819,7 +855,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
                      : !SlotCode->hasSequence() &&
                            (hasDelaySlot(SlotCode->Word) ||
                             (!HistoricalISA && SlotCode->Word == 0x00000140) ||
-                            SlotCode->Word >> 26 == 29))))
+                            SlotCode->Word >> 26 == mips::major::JALX))))
     throw UnliftedInstruction(
         Slot->address, Slot->mnemonic,
         "unsupported instruction or transfer in MIPS delay slot");
@@ -846,15 +882,15 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   bool Return = false;
   NdVar Condition;
   NdVar Destination;
-  if (Opcode == 0) {
-    if (RT || SA || (Function == 8 && RD) ||
-        (Function == 9 && RD != 0 && RD == RS &&
+  if (Opcode == mips::major::SPECIAL) {
+    if (RT || SA || (Function == mips::special::JR && RD) ||
+        (Function == mips::special::JALR && RD != 0 && RD == RS &&
          !(Mode == InstructionMode::MicroMIPS &&
            (Head.size == 2 || ISARevision == 6))))
       throw UnliftedInstruction(Head.address, Head.mnemonic,
                                 "unsupported MIPS register-transfer encoding");
-    Link = Function == 9 ? RD : 0;
-    Return = Function == 8 && RS == 31;
+    Link = Function == mips::special::JALR ? RD : 0;
+    Return = Function == mips::special::JR && RS == 31;
     // Snapshot before the slot and before writing a link register.
     Destination = S.makeTemp(S.Width);
     S.emit(NdOp::COPY, Destination, {S.read(RS)});
@@ -866,10 +902,12 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     }
   } else if (ReadPC) {
     Link = 31;
-  } else if (Opcode == 2 || Opcode == 3 || Opcode == 29) {
-    Link = Opcode != 2 ? 31 : 0;
+  } else if (Opcode == mips::major::J || Opcode == mips::major::JAL ||
+             Opcode == mips::major::JALX) {
+    Link = Opcode != mips::major::J ? 31 : 0;
     const unsigned Shift =
-        Mode == InstructionMode::MicroMIPS && Opcode != 29 ? 1 : 2;
+        Mode == InstructionMode::MicroMIPS && Opcode != mips::major::JALX ? 1
+                                                                          : 2;
     Destination =
         NdVar::cst(Address((Next & ~((uint64_t{1} << (26 + Shift)) - 1)) |
                            (uint64_t(Word & 0x03ffffff) << Shift)),
@@ -891,19 +929,20 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
           S.binary(NdOp::INT_NOTEQUAL,
                    S.binary(NdOp::INT_AND, Control, NdVar::cst(BranchBits, 4)),
                    NdVar::cst(0, 4), 1);
-    } else if (Opcode == 17 && ISARevision == 6) {
+    } else if (Opcode == mips::major::COP1 && ISARevision == 6) {
       const auto Bit = S.binary(NdOp::INT_AND, NdVar::reg(mipsreg::w(RT), 4),
                                 NdVar::cst(1, 4));
       Condition = S.binary(RS == 9 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL, Bit,
                            NdVar::cst(0, 4), 1);
-    } else if (Opcode == 17 && RS == 8) { // BC1F/T and likely variants
+    } else if (Opcode == mips::major::COP1 &&
+               RS == 8) { // BC1F/T and likely variants
       const auto Control = S.floatConditions(HistoricalISA != 0);
       const auto Bit =
           S.binary(NdOp::INT_AND, Control, NdVar::cst(1u << (RT >> 2), 4));
       Condition = S.binary(RT & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL, Bit,
                            NdVar::cst(0, 4), 1);
       Likely = RT & 2;
-    } else if (Opcode == 17) {
+    } else if (Opcode == mips::major::COP1) {
       const bool Whole = RS == 11 || RS == 15;
       const bool Nonzero = (RS & 4) != 0;
       const uint16_t Bytes = Whole ? 8 : 1u << (RS & 3);
@@ -916,7 +955,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
                                  Condition, Test, 1)
                       : Test;
       }
-    } else if (Opcode == 1) {
+    } else if (Opcode == mips::major::REGIMM) {
       Link = RT >= 16 ? 31 : 0;
       if (Link && RS == 31)
         throw UnliftedInstruction(Head.address, Head.mnemonic,
@@ -930,7 +969,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
         Condition = Inverted;
       }
     } else {
-      Likely = Opcode >= 20;
+      Likely = Opcode >= mips::major::BEQL;
       const unsigned Kind = Opcode & 3;
       if (Kind >= 2 && RT)
         throw UnliftedInstruction(Head.address, Head.mnemonic,

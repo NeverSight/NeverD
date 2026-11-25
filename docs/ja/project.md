@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 17e7164f84189f8887ffa9d68d24b1c62b915f59c23b7084e29b8771c19d4649 -->
+<!-- i18n-source: 53f1a000027451971c7ecbb53458cf55fca7b02e4df6dd9daae836c681650299 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 
 > 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](architecture.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
 
-**MIPS ELF** の逆アセンブル、制御フローの復元、C および LLVM 出力に対応しています。SDK は NeverSight 版 LLVM の Mips バックエンドで対応関数を再配置可能な ELF オブジェクトに再コンパイルし、元のバイト順と呼び出し規約（o32、n32、n64）を保持します。実行ファイルに書き戻すには、パッチャーに MIPS ELF の書き込み処理を追加する必要があります。[MIPS プロファイルとネイティブ出力（英語）](../mips.md)
+**MIPS ELF** の逆アセンブル、制御フローの復元、C および LLVM 出力に対応しています。SDK は NeverSight 版 LLVM の Mips バックエンドで対応関数を再配置可能な ELF オブジェクトに再コンパイルし、元のバイト順と呼び出し規約（o32、n32、n64）を保持します。静的実行ファイルの元のオブジェクトとリンカースクリプトがあれば、`neverd patch --relink` で更新した関数を別のセクションに配置するか、元のサイズを上限として同じアドレスに配置できます。 [MIPS プロファイルとネイティブ出力（英語）](../mips.md)
 
 実験的な整数 ELF ターゲットでは、厳密なリフト、制御フローグラフの復元、構造化 C、LLVM IR、および LLVM IR からの C 出力に対応しています。
 

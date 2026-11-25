@@ -63,9 +63,10 @@ See the guides for [EVM](docs/evm.md), [Solana SBF](docs/sbf.md), [mobile source
 **MIPS ELF** supports disassembly, control-flow recovery, C and LLVM output.
 The public SDK can also recompile admitted functions to relocatable ELF using
 the NeverSight LLVM Mips backend. It preserves byte order and the o32, n32 or
-n64 calling convention. The file patcher still needs a MIPS ELF installer.
-See [MIPS profiles and native output](docs/mips.md) for ISA, compressed code
-and floating-point coverage.
+n64 calling convention. For static executables with their original objects
+and linker layout, `neverd patch --relink` can place an updated function in
+a separate section or retain its original address and size limit. See the
+[MIPS profiles, native output and relink manifest](docs/mips.md).
 
 Experimental integer ELF targets also support strict lifting, CFG recovery,
 structured C, LLVM IR and LLVM-derived C for these profiles.

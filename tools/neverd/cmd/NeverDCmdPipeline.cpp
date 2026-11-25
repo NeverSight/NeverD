@@ -1463,6 +1463,16 @@ int runDecompile(neverd_session_t Sess) {
 int runPatch(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
 
+  const std::string OutPath = OutputFile.empty()
+                                  ? InputFile.getValue() + ".patched"
+                                  : OutputFile.getValue();
+  if (PatchRelink.getNumOccurrences())
+    return runRelinkPatch(OutPath);
+  if (PatchLinkerPath.getNumOccurrences()) {
+    WithColor::error() << "--linker-path requires --relink\n";
+    return 1;
+  }
+
   if (std::optional<std::string> Error = validateSanitizeArguments()) {
     WithColor::error() << *Error << "\n";
     return 1;
@@ -1472,10 +1482,6 @@ int runPatch(neverd_session_t Sess) {
     return 1;
   }
   const bool StrictSanitize = PatchSanitize.getNumOccurrences() != 0;
-
-  std::string OutPath = OutputFile.getValue();
-  if (OutPath.empty())
-    OutPath = InputFile.getValue() + ".patched";
 
   int Strategy = PatchStrat == InplaceMode ? 1 : 0;
   neverd_set_inst_substitution(Sess, InstSubst ? 1 : 0, InstSubstRounds);

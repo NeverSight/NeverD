@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 17e7164f84189f8887ffa9d68d24b1c62b915f59c23b7084e29b8771c19d4649 -->
+<!-- i18n-source: 53f1a000027451971c7ecbb53458cf55fca7b02e4df6dd9daae836c681650299 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 
 > 표의 모든 셀은 구현되어 있지만 통합 테스트 깊이는 서로 다릅니다. 자세한 내용은 [아키텍처 범위 표](architecture.md#support-and-test-depth)를 참고하세요. 현대 macOS는 과거 i386 실행 파일을 링크할 수 없으므로 Mach-O i386에는 `thin` 재배치 가능 객체를 사용합니다.
 
-**MIPS ELF**의 디스어셈블, 제어 흐름 복원, C 및 LLVM 출력을 지원합니다. SDK는 NeverSight LLVM의 Mips 백엔드로 지원 대상 함수를 재배치 가능한 ELF 오브젝트로 다시 컴파일하며 원래 바이트 순서와 호출 규약(o32, n32, n64)을 유지합니다. 실행 파일에 코드를 반영하려면 패치 도구에 MIPS ELF 쓰기 기능이 필요합니다. [MIPS 프로필 및 네이티브 출력(영문)](../mips.md)
+**MIPS ELF**의 디스어셈블, 제어 흐름 복원, C 및 LLVM 출력을 지원합니다. SDK는 NeverSight LLVM의 Mips 백엔드로 지원 대상 함수를 재배치 가능한 ELF 오브젝트로 다시 컴파일하며 원래 바이트 순서와 호출 규약(o32, n32, n64)을 유지합니다. 정적 실행 파일의 원래 오브젝트와 링커 스크립트가 있으면 `neverd patch --relink`로 수정한 함수를 별도 섹션에 배치하거나 원래 크기 한도 안에서 같은 주소에 유지할 수 있습니다. [MIPS 프로필 및 네이티브 출력(영문)](../mips.md)
 
 실험적 정수 ELF 대상은 엄격한 명령어 리프팅, 제어 흐름 그래프 복원, 구조화된 C 출력, LLVM IR 출력 및 LLVM IR에서 생성한 C 출력을 지원합니다.
 

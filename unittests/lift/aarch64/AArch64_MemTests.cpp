@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/loader/BinaryImageModel.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
@@ -270,6 +271,62 @@ TEST_F(AArch64_Mem, PostIndexLdrKeepsBothAggregateReturnRegisters) {
   EXPECT_NE(F.find("add i64"), std::string::npos) << F;
   EXPECT_NE(F.find(", 8"), std::string::npos) << F;
   EXPECT_NE(F.find("ret { i64, i64 }"), std::string::npos) << F;
+}
+
+TEST_F(AArch64_Mem, UnprivilegedTransfersUseTheirEncodedWidths) {
+  const struct {
+    std::array<uint8_t, 4> Bytes;
+    unsigned Id;
+    NdOp Access;
+    uint16_t Width;
+    NdOp Conversion;
+  } Cases[] = {
+      {{0x20, 0x08, 0x40, 0x38},
+       AARCH64_INS_LDTRB,
+       NdOp::LOAD,
+       1,
+       NdOp::INT_ZEXT},
+      {{0x62, 0x08, 0x80, 0x78},
+       AARCH64_INS_LDTRSH,
+       NdOp::LOAD,
+       2,
+       NdOp::INT_SEXT},
+      {{0xa4, 0x08, 0x00, 0x78},
+       AARCH64_INS_STTRH,
+       NdOp::STORE,
+       2,
+       NdOp::SUBBYTES},
+  };
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Id);
+    DecodedInsn Insn{};
+    ASSERT_EQ(Dec.decodeOneForLift(Case.Bytes.data(), Case.Bytes.size(), 0x1000,
+                                   Insn),
+              4);
+    ASSERT_EQ(Insn.Id, Case.Id);
+    ASSERT_TRUE(Dec.hasAArch64OperandDetail(Insn));
+    std::vector<LowOp> Ops;
+    Dec.liftToLow(Insn, Ops);
+    const auto Access =
+        std::find_if(Ops.begin(), Ops.end(),
+                     [&](const LowOp &Op) { return Op.Opcode == Case.Access; });
+    ASSERT_NE(Access, Ops.end());
+    EXPECT_EQ(Access->MemoryOrdering, NdMemoryOrdering::None);
+    const bool IsLoad = Case.Access == NdOp::LOAD;
+    ASSERT_EQ(Access->NumInputs, IsLoad ? 1u : 2u);
+    const NdVar Value = IsLoad ? Access->Output : Access->Inputs[1];
+    EXPECT_EQ(Value.Size, Case.Width);
+    EXPECT_TRUE(std::any_of(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+      return Op.Opcode == Case.Conversion &&
+             (IsLoad ? Op.Inputs[0] == Value : Op.Output == Value);
+    }));
+  }
 }
 
 TEST_F(AArch64_Mem, LdrLiteralKeepsTheFullVirtualAddress) {

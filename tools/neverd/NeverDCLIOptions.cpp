@@ -2182,6 +2182,13 @@ cl::opt<std::string> CgSvg("svg", cl::desc("Output call graph as SVG file"),
 //===----------------------------------------------------------------------===//
 
 cl::opt<std::string>
+    PatchRelink("relink", cl::desc("Rebuild a MIPS ELF from a link manifest"),
+                cl::value_desc("manifest.json"), cl::sub(PatchCmd));
+cl::opt<std::string> PatchLinkerPath("linker-path",
+                                     cl::desc("ELF LLD driver for --relink"),
+                                     cl::init("ld.lld"), cl::sub(PatchCmd));
+
+cl::opt<std::string>
     PatchFromIR("from-ir", cl::desc("Patch from external LLVM IR file (.ll)"),
                 cl::init(""), cl::sub(PatchCmd));
 
@@ -2255,7 +2262,7 @@ OptionalStringList PatchSanitize(
 cl::opt<PatchStrategy> PatchStrat(
     "mode", cl::desc("Patch mode"), cl::init(SectionMode),
     cl::values(clEnumValN(SectionMode, "section",
-                          "Add new section with trampolines"),
+                          "Place replacement code in a separate section"),
                clEnumValN(InplaceMode, "inplace", "In-place binary rewriting")),
     cl::sub(PatchCmd));
 
