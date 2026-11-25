@@ -182,10 +182,14 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
           if (!InLoop[I])
             for (unsigned J = 0; J < Op.NumInputs; ++J) {
               const auto &Read = Op.Inputs[J];
-              if (Read.Kind == MedVar::Reg && Read.Size >= Size &&
-                  Read.Size <= Width && Read.RegOff <= Off &&
-                  Off + Size <= Read.RegOff + Read.Size)
-                (Read.Size == Size ? ReadsNarrow : ReadsWider)[I] = true;
+              if (Read.Kind != MedVar::Reg || !Read.Size || Read.Size > Width)
+                continue;
+              // Either byte of DX can have its own exit PHI after a DX write.
+              if (Off <= Read.RegOff && Read.RegOff + Read.Size <= Off + Size)
+                ReadsNarrow[I] = true;
+              else if (Read.RegOff <= Off &&
+                       Off + Size <= Read.RegOff + Read.Size)
+                ReadsWider[I] = true;
             }
           const auto &Write = Op.Output;
           if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&

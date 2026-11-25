@@ -2751,6 +2751,52 @@ int main(void) {
   runIntegerReturnSources(Arch::X86, Bytes, Expected);
 }
 
+TEST(ReturnContract, X86WordLatchFeedsTheSelectedExitByte) {
+  for (Arch Target : {Arch::X86, Arch::X64}) {
+    SCOPED_TRACE(static_cast<int>(Target));
+    const auto Code = [&](uint8_t Low, uint8_t High, uint8_t ByteOperand) {
+      // Return bare for mode 257. Otherwise EAX holds the schedule and the
+      // first argument selects the initial EDX and shift count.
+      std::vector<uint8_t> Bytes;
+      if (Target == Arch::X86)
+        Bytes = {0x81, 0x7c, 0x24, 8,    1, 1,    0,    0,    0x75, 1,
+                 0xc3, 0x8b, 0x44, 0x24, 8, 0x83, 0x7c, 0x24, 4,    0};
+      else
+        Bytes = {0x81, 0xfe, 1, 1, 0, 0, 0x75, 1, 0xc3, 0x89, 0xf0, 0x85, 0xff};
+      Bytes.insert(
+          Bytes.end(),
+          {// Right starts at (0x404,1). Left uses the two seed bytes and count
+           // zero.
+           0x74, 12, 0xba, 4, 4, 0, 0, 0xb9, 1, 0, 0, 0, 0xeb, 10, 0xba, Low,
+           High, 0, 0, 0xb9, 0, 0, 0, 0,
+           // On odd trips XOR DX with 0x202, on even trips XOR ECX with one.
+           0x85, 0xc0, 0x74, 28, 0x83, 0xf8, 1, 0x74, 23, 0xa9, 1, 0, 0, 0,
+           0x74, 9, 0x66, 0x81, 0xf2, 2, 2, 0xd1, 0xe8, 0xeb, 0xe7, 0x83, 0xf1,
+           1, 0xd1, 0xe8, 0xeb, 0xe0,
+           // MOVZX from DL or DH, then SHL EAX,CL and RET.
+           0x0f, 0xb6, ByteOperand, 0xd3, 0xe0, 0xc3});
+      return Bytes;
+    };
+    const char *Distinct = R"(
+int main(void) {
+    return choose_result(0,0)!=130 || choose_result(1,0)!=8 ||
+           choose_result(0,3)!=128 || choose_result(1,3)!=12 ||
+           choose_result(0,5)!=256 || choose_result(1,6)!=6;
+}
+)";
+    const char *Overlap = R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "both entry arms can shift the selected byte to six");
+int main(void) { choose_result(0,5); choose_result(1,6); return 0; }
+)";
+    constexpr uint8_t DL = 0xc2, DH = 0xc6;
+    runIntegerReturnSources(Target, Code(0x82, 1, DL), Distinct);
+    runIntegerReturnSources(Target, Code(0x82, 1, DH), Overlap);
+    runIntegerReturnSources(Target, Code(1, 0x82, DL), Overlap);
+    runIntegerReturnSources(Target, Code(1, 0x82, DH), Distinct);
+  }
+}
+
 TEST(ReturnContract, I386SharedShiftUsesOnlyTheSelectedCarrier) {
   const auto WithUpdate = [](uint8_t Update) {
     return std::vector<uint8_t>{
