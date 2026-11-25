@@ -64,6 +64,12 @@ skips the copy. After import a non-socket returns ENOTSOCK, and an Internet
 socket requires at least the two-byte address family. AF_UNSPEC disconnects
 remain an explicit unsupported operation.
 
+For a nonzero address family on a fresh IPv4 TCP or UDP socket, a length
+below 16 bytes returns EINVAL. With at least 16 bytes, a family other than
+AF_INET returns EAFNOSUPPORT. IPv4 compares the port and address to the supplied peer. It
+ignores the eight `sin_zero` padding bytes and any trailing bytes after the
+full guest range has been read. The guest buffer retains its original contents.
+
 `socket`, `connect`, `sendto` and `recvfrom` share one implementation across raw
 x64/AArch64 Linux syscalls, Android named wrappers and `syscall`. Bionic `send`
 and `recv` lower to that same owner. Connected TCP accepts no explicit peer
@@ -382,8 +388,8 @@ the diagnostic identifies the one-based attempt and the zero-based index in
 failure advances the attempt number. Only exact results advance the index.
 When counted failures end the sequence, the diagnostic gives the number of
 failures consumed and the pending attempt number. Both diagnostics include
-`peer_hex` with the complete IPv4 or IPv6 sockaddr requested by the guest,
-in the same byte order as a `connections` entry. A pending `connect` retains
+`peer_hex` in the canonical form used by a `connections` entry. For IPv4 this
+is the 16-byte sockaddr with zeroed padding. A pending `connect` retains
 no result until a matching outcome is supplied in the input.
 Execution instruction, event and time budgets still bound each
 run. JSON and typed input use the shared validator; decimal strings follow the

@@ -437,7 +437,8 @@ TEST_P(AndroidNetwork, RefusalAndUnknownPeerStaySeparate) {
             std::string::npos);
 }
 TEST_P(AndroidNetwork, ConnectAddressErrorsReachNamedAndRawBionicCallers) {
-  const uint64_t Expected[] = {9, 22, 14, 88, 88, 14, 22, 14, 22, 106};
+  const uint64_t Expected[] = {22, 97, 0,  9,  22, 14, 88,
+                               88, 14, 22, 14, 22, 106};
   for (uint64_t Raw : {0u, 1u}) {
     SCOPED_TRACE(Raw);
     auto R = run("network_connect_address_errors", Raw);
