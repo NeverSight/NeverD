@@ -1,11 +1,25 @@
 {
   "manifest": "projections.json",
   "export": "export",
+  "build": "build-r6",
   "check": "check",
   "tests": "--tests",
   "inputs": "--inputs",
   "output": "--output",
   "require_execution": "--require-execution",
+  "require_native": "--require-native",
+  "qualified_key": "native_generated_arm64e_x1_qualified",
+  "control_receipt": "native_controls",
+  "digest_pattern": "[0-9a-f]{64}",
+  "r6": {
+    "tag": "neverd-llvm-v23.0.0-r6",
+    "sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+    "target": "NeverDArm64eAnalysisTests",
+    "bin_dir": "bin",
+    "dependencies": ["git", "submodule", "update", "--init", "--depth", "1", "--", "third_party/capstone", "third_party/unicorn", "signatures"],
+    "configure": ["cmake", "-S", ".", "-B", "{build}", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=ON", "-DNEVERD_BUILD_GUI=OFF", "-DNEVERD_BUILD_AGENT=OFF", "-DNEVERD_BUILD_WORKER=OFF", "-DNEVERD_ENABLE_WEB_ANALYSIS=OFF", "-DNEVERD_LLVM_PREBUILT=ON", "-DNEVERD_LLVM_PREBUILT_TAG={tag}", "-DNEVERD_LLVM_PREBUILT_SHA256={sha256}"],
+    "compile": ["scripts/build.py", "{build}", "--target", "{target}", "--parallel", "3"]
+  },
   "source_name": "projection.c",
   "driver": "diagnostics/Arm64eProjectionEntry.def",
   "compiler": "/usr/bin/clang",
@@ -39,6 +53,7 @@
     "stage": "{label} failed for {directory}",
     "symbols": "the Apple link map does not attribute every IA/IB projection symbol to {owner}",
     "execution": "unexpected projection process status or entry/comparison records in {directory}",
+    "control_identity": "native control revision or x1 cursor digest differs from its recorded identity",
     "capability": "the arm64e.x1 cursor controls failed before projection measurement"
   }
 }

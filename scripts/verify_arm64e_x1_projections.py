@@ -2,10 +2,13 @@
 """Export NeverD signing projections and qualify their signed arm64e.x1 images."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 
 import verify_arm64e_native as native
@@ -58,10 +61,26 @@ def export(tests, output):
 
 def checked_inputs(directory):
     manifest = json.loads((directory / CONFIG["manifest"]).read_text())
-    if (any(manifest.get(k) != v for k, v in input_identity().items()) or
+    if (not isinstance(manifest, dict) or not isinstance(manifest.get("exporter_sha256"), str) or
+            not re.fullmatch(CONFIG["digest_pattern"], manifest["exporter_sha256"]) or
+            any(manifest.get(k) != v for k, v in input_identity().items()) or
             manifest.get("files") != {p.as_posix(): model.digest(directory / p) for p in inventory()}):
         raise ValueError(CONFIG["errors"]["inputs"])
     return manifest
+
+
+def build_r6(output):
+    if output.exists():
+        raise FileExistsError(output)
+    recipe = CONFIG["r6"]
+    with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+        build = Path(temporary)
+        configure = [arg.format(build=build, **recipe) for arg in recipe["configure"]]
+        compile_args = [arg.format(build=build, **recipe) for arg in recipe["compile"]]
+        subprocess.run(recipe["dependencies"], cwd=native.ROOT, check=True)
+        subprocess.run(configure, cwd=native.ROOT, check=True)
+        subprocess.run([sys.executable, *compile_args], cwd=native.ROOT, check=True)
+        export(build / recipe["bin_dir"] / recipe["target"], output)
 
 
 def checked_command(products, directory, label, args):
@@ -133,17 +152,54 @@ def measure_image(family, route, opt, inputs, directory, capable, launchable):
         return receipt
 
 
-def check(inputs, output, require_execution=False):
-    manifest = checked_inputs(inputs)
-    output.mkdir()
-    report = {"source_revision": manifest["source_revision"], "exporter_sha256": manifest["exporter_sha256"],
-              "input_manifest_sha256": model.digest(inputs / CONFIG["manifest"]),
-              "status": native.POLICY["failed"], "all_linked": False, "all_executed": False, "images": {}}
-    try:
+def projection_cursor(output, report, require_native):
+    filename = native.POLICY["report_name"]
+    if not require_native:
         directory = output / X1["mode"]
         directory.mkdir()
         cursor = native.probe_x1_signal_cursor(directory)
-        report["cursor_sha256"] = model.digest(directory / native.POLICY["report_name"])
+        report["cursor_sha256"] = model.digest(directory / filename)
+        return cursor
+
+    gate = native.POLICY["x1_qualification"]
+    directory = output / gate["complete_mode"]
+    directory.mkdir()
+    path = directory / filename
+    try:
+        controls = native.qualify_x1(directory, require_complete=True)
+    finally:
+        if path.is_file():
+            report[CONFIG["control_receipt"]] = {"report": path.relative_to(output).as_posix(),
+                                                "sha256": model.digest(path)}
+    if controls["source_revision"] != report["source_revision"]:
+        raise ValueError(CONFIG["errors"]["control_identity"])
+    report[gate["complete_key"]] = controls[gate["complete_key"]]
+    if controls["status"] == native.POLICY["failed"]:
+        return None
+    receipt = controls["probes"][X1["mode"]]
+    raw = (directory / receipt["report"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != receipt["sha256"]:
+        raise ValueError(CONFIG["errors"]["control_identity"])
+    cursor = json.loads(raw)
+    if cursor["source_revision"] != report["source_revision"]:
+        raise ValueError(CONFIG["errors"]["control_identity"])
+    report["cursor_sha256"] = receipt["sha256"]
+    return cursor
+
+
+def check(inputs, output, require_execution=False, *, require_native=False):
+    manifest = checked_inputs(inputs)
+    output.mkdir()
+    gate = native.POLICY["x1_qualification"]
+    report = {"source_revision": manifest["source_revision"], "exporter_sha256": manifest["exporter_sha256"],
+              "input_manifest_sha256": model.digest(inputs / CONFIG["manifest"]),
+              "status": native.POLICY["failed"], "all_linked": False, "all_executed": False, "images": {}}
+    if require_native:
+        report[CONFIG["qualified_key"]] = False
+    try:
+        cursor = projection_cursor(output, report, require_native)
+        if cursor is None:
+            return native.POLICY["exit_codes"][report["status"]]
         if cursor["status"] == native.POLICY["failed"]:
             raise RuntimeError(CONFIG["errors"]["capability"])
         rows = cursor["profiles"].values()
@@ -157,7 +213,12 @@ def check(inputs, output, require_execution=False):
             report["images"][label] = measure_image(family, route, opt, inputs, output / label, capable, launchable)
         report["all_linked"] = True
         report["all_executed"] = all(row["execution"] == CONFIG["executed"] for row in report["images"].values())
-        report["status"] = native.POLICY["unavailable" if require_execution and not report["all_executed"] else "passed"]
+        if require_native:
+            passed = report[gate["complete_key"]] and report["all_executed"]
+            report[CONFIG["qualified_key"]] = passed
+        else:
+            passed = not require_execution or report["all_executed"]
+        report["status"] = native.POLICY["passed" if passed else "unavailable"]
         return native.POLICY["exit_codes"][report["status"]]
     finally:
         model.write_json(output / MODEL["report"], report)
@@ -166,18 +227,23 @@ def check(inputs, output, require_execution=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
+    builder = modes.add_parser(CONFIG["build"])
     producer = modes.add_parser(CONFIG["export"])
     consumer = modes.add_parser(CONFIG["check"])
     producer.add_argument(CONFIG["tests"], type=Path, required=True)
     consumer.add_argument(CONFIG["inputs"], type=Path, required=True)
     consumer.add_argument(CONFIG["require_execution"], action="store_true")
-    for mode in (producer, consumer):
+    consumer.add_argument(CONFIG["require_native"], action="store_true")
+    for mode in (builder, producer, consumer):
         mode.add_argument(CONFIG["output"], type=Path, required=True)
     args = parser.parse_args()
+    if args.mode == CONFIG["build"]:
+        build_r6(args.output.resolve())
+        return 0
     if args.mode == CONFIG["export"]:
         export(args.tests.resolve(), args.output.resolve())
         return 0
-    return check(args.inputs.resolve(), args.output.resolve(), args.require_execution)
+    return check(args.inputs.resolve(), args.output.resolve(), args.require_execution, require_native=args.require_native)
 
 
 if __name__ == "__main__":
