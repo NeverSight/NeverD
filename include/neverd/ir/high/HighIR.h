@@ -386,6 +386,11 @@ struct HighStmt {
   /// image for, where no code is mapped (MedFunc::TruncatedPathAddresses).
   /// InvalidVA for an indirect branch that proved no target.
   va_t LeftImageAt = InvalidVA;
+  /// For a Goto without a target: where a debugger trap that ends its path
+  /// goes on if a debugger resumes it, in code that is not the function's
+  /// (CFGBuilder found another function's entry or the function's end
+  /// there).  InvalidVA otherwise.
+  va_t ResumesOutsideAt = InvalidVA;
 
   /// For While: original back-edge target address.
   va_t LoopHeaderAddr = 0;

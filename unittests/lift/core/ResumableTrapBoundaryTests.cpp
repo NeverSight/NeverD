@@ -170,6 +170,88 @@ TEST(ResumableTrapBoundary, InteriorDebugBreakRetainsItsContinuation) {
     }
 }
 
+TEST(ResumableTrapBoundary, ATrapEndingABranchLeavesTheFunction) {
+  // `if (x) { fail(5); int3 }` with another function after the int3, as
+  // `__scrt_initialize_onexit_tables` ends: the branch's trap ends the
+  // function, so once a debugger resumes it C must not run what follows the
+  // branch or return another path's value.
+  BinaryImage Image = image(Arch::X86);
+  auto &Data = Image.Segments.front().Data;
+  Data = {
+      0x8b, 0x44, 0x24, 0x04,       // 0x1000: mov eax, [esp+4]
+      0x85, 0xc0,                   // test eax, eax
+      0x75, 0x03,                   // jne 0x100b
+      0xb0, 0x01,                   // mov al, 1
+      0xc3,                         // ret
+      0x6a, 0x05,                   // 0x100b: push 5
+      0xe8, 0x16, 0,    0,    0,    // call 0x1028
+      0xcc,                         // int3
+      0x55,                         // 0x1013: push ebp
+      0x8b, 0xec,                   // mov ebp, esp
+      0x8b, 0x45, 0x08,             // mov eax, [ebp+8]
+      0x5d,                         // pop ebp
+      0xc3,                         // ret
+      0x6a, 0x00,                   // 0x101b: push 0
+      0xe8, 0xf1, 0xff, 0xff, 0xff, // call 0x1013
+      0x83, 0xc4, 0x04,             // add esp, 4
+      0xc3,                         // ret
+      0xcc, 0xcc,                   // 0x1026
+      0xc3,                         // 0x1028: ret
+  };
+  Image.Segments.front().Size = Data.size();
+  Image.Symbols.push_back(Symbol::makeFunc(Entry + 0x13));
+  Image.Symbols.push_back(Symbol::makeFunc(Entry + 0x1b));
+  Image.Symbols.push_back(Symbol::makeFunc(Entry + 0x28));
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  auto Result = Pipeline().run(Image, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions COptions;
+  COptions.TheArch = Image.Arch;
+  COptions.Format = Image.Format;
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, COptions));
+  OS.flush();
+  const size_t Owner = Source.find("/* neverd.entry: 0x1000 */");
+  ASSERT_NE(Owner, std::string::npos) << Source;
+  const std::string Body =
+      Source.substr(Owner, Source.find("\n}\n", Owner) - Owner);
+  const size_t Break = Body.find("__debugbreak();");
+  ASSERT_NE(Break, std::string::npos) << Source;
+  // The statement after the breakpoint stops the path; nothing of the other
+  // branch, such as its return, runs there.
+  const std::string Expected =
+      "__builtin_trap(); /* 0x1012 resumes at 0x1013, outside this function";
+  const size_t Stop = Body.find_first_not_of(" \n", Break + 15);
+  EXPECT_EQ(Body.compare(Stop, Expected.size(), Expected), 0) << Source;
+  // The called start is its own function, which the caller calls.
+  EXPECT_NE(Source.find("/* neverd.entry: 0x1013 */"), std::string::npos)
+      << Source;
+
+  // The LLVM route's path traps there too instead of returning a value.
+  llvm::LLVMContext LLVMContext;
+  Options.LiftMode = true;
+  Options.SourceProjection = true;
+  auto Lifted = Pipeline().run(Image, LLVMContext, Options);
+  ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+  ASSERT_TRUE(Lifted.LlvmModule);
+  EXPECT_FALSE(llvm::verifyModule(*Lifted.LlvmModule, &llvm::errs()));
+  std::string LLVMSource;
+  llvm::raw_string_ostream LLVMOS(LLVMSource);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Lifted.LlvmModule, LLVMOS, COptions, nullptr,
+                                  &Image));
+  LLVMOS.flush();
+  const size_t Definition = LLVMSource.find("sub_1000(uint32_t arg0) {");
+  ASSERT_NE(Definition, std::string::npos) << LLVMSource;
+  const size_t LLVMBreak = LLVMSource.find("__debugbreak();", Definition);
+  ASSERT_NE(LLVMBreak, std::string::npos) << LLVMSource;
+  const size_t LLVMStop = LLVMSource.find_first_not_of(" \n", LLVMBreak + 15);
+  EXPECT_EQ(LLVMSource.compare(LLVMStop, 17, "__builtin_trap();"), 0)
+      << LLVMSource;
+}
+
 TEST(ResumableTrapBoundary, AdjacentOwnedFragmentRetainsItsContinuation) {
   auto Image = image();
   Image.KnownCodeRanges = {{Entry, Next}, {Next, Next + 6}};

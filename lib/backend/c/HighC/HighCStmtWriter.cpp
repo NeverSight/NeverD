@@ -1746,6 +1746,10 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
         OS << "__builtin_trap(); /* 0x" << llvm::utohexstr(Stmt.sourceAddress())
            << " goes on at 0x" << llvm::utohexstr(Stmt.LeftImageAt)
            << ", where the image maps no code */\n";
+      else if (Stmt.ResumesOutsideAt != InvalidVA)
+        OS << "__builtin_trap(); /* 0x" << llvm::utohexstr(Stmt.sourceAddress())
+           << " resumes at 0x" << llvm::utohexstr(Stmt.ResumesOutsideAt)
+           << ", outside this function */\n";
       else
         OS << "__builtin_trap(); "
            << failClosedComment("indirect targets not proved",

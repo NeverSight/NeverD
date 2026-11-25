@@ -820,6 +820,30 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
       Left.LeftImageAt = CurBlock.EndAddr;
       Func.Body.push_back(std::move(Left));
     }
+    // A debugger trap the CFG ends a path with goes on, if a debugger resumes
+    // it, where CFGBuilder found another function's entry or the function's
+    // end: no code of this function runs there, so the path stops at a trap,
+    // not at whatever C prints next or returns.
+    if (!Tree && CurBlock.Succs.empty() && !CurBlock.Ops.empty() &&
+        CurBlock.Ops.back().Opcode == NdOp::INTRINSIC &&
+        Func.Body.size() > BlkBodyStart) {
+      const HighStmt &Last = Func.Body.back();
+      const ExprPtr &Call =
+          Last.Kind == StmtKind::Call ? Last.CallExpr
+          : Last.Kind == StmtKind::ExprStmt || Last.Kind == StmtKind::Assign
+              ? Last.Val
+              : nullptr;
+      if (Call && Call->Kind == ExprKind::Call &&
+          Call->IntrinsicId != Intrinsic::None &&
+          !isTerminatingHighCall(Call)) {
+        HighStmt Stop;
+        Stop.Kind = StmtKind::Goto;
+        Stop.Addr = CurBlock.Ops.back().Addr;
+        Stop.GotoTarget = InvalidVA;
+        Stop.ResumesOutsideAt = CurBlock.EndAddr;
+        Func.Body.push_back(std::move(Stop));
+      }
+    }
     const va_t Entry = medBlockCodeAddress(CurBlock);
     // A delayed transfer and a separate CFG entry can both execute the same
     // instruction. An external jump must bypass the transfer's private slot

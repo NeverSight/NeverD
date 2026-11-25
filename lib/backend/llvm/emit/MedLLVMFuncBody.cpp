@@ -1086,9 +1086,13 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         else
           EmitDefaultRet();
       } else if (Blk.Succs.empty()) {
+        // A debugger trap CFGBuilder ends a path with goes on, if a debugger
+        // resumes it, in code that is not the function's: the path traps
+        // there, as one that leaves the image does, rather than return.
         if (Func.DoesNotReturn)
           Builder.CreateUnreachable();
-        else if (RunsOff)
+        else if (RunsOff ||
+                 (!Blk.Ops.empty() && Blk.Ops.back().Opcode == NdOp::INTRINSIC))
           EmitLeftImage(Builder);
         else
           EmitDefaultRet();

@@ -10357,8 +10357,11 @@ host with OS-enabled FMA3. FMA4, EVEX/SAE and unavailable features are excluded.
 `NeverDResumableTrapBoundaryTests` checks that an x86/x64 debugger trap at a
 known function end or before another function's entry does not acquire a
 synthetic tail call. Sized symbols, code ranges and unwind records supply
-independent boundary evidence. Interior debug breaks, adjacent owned fragments,
-ordinary fallthrough and explicit tail jumps remain controls. The PE source cases
+independent boundary evidence;
+`ATrapEndingABranchLeavesTheFunction` stops such a trap's branch at a trap in
+both C routes instead of returning the other branch's value. Interior debug
+breaks, adjacent owned fragments, ordinary fallthrough and explicit tail jumps
+remain controls. The PE source cases
 check HighC and LLVM-to-C with and without optimization, preserving the preceding
 returning call and the breakpoint.
 Sibling fixtures exercise short, long and prefixed x86 breakpoints, `int1`,
