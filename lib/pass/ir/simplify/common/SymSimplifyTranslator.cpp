@@ -863,6 +863,14 @@ sym::SymRef Translator::in(llvm::Value *Root) {
   return Memo.lookup(Root);
 }
 
+bool Translator::foldedToOperand(const llvm::Instruction &Root,
+                                 sym::SymRef Value, size_t MinNodes) const {
+  return Memo.size() >= MinNodes &&
+         llvm::any_of(Root.operands(), [&](const llvm::Use &Op) {
+           return Memo.lookup(Op.get()) == Value;
+         });
+}
+
 bool Translator::retainsOpaqueInstructionLeaves(sym::SymRef R) const {
   if (!R.isValid())
     return false;

@@ -152,6 +152,8 @@ struct SymSimplifyOptions {
   /// The count is of the shared graph, so a subterm an obfuscator repeated is
   /// one node however many times it appears.  Four is the first size that can
   /// improve: `~x + 1` is four nodes and is `-x`.
+  /// When translation already returns an operand, the original region's
+  /// distinct LLVM values determine whether that fold meets the threshold.
   size_t MinMeasuredNodes = 4;
 
   /// How many instructions a rewrite has to remove before it is made.

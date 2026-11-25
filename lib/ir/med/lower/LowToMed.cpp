@@ -22,7 +22,7 @@
 #include "GoCurrentGoroutine.h"
 #include "GoStackGrowth.h"
 #include "MIPS/PICGlobalPointer.h"
-#include "PowerPC/ELFv1Calls.h"
+#include "PowerPC/ELFCalls.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -2230,6 +2230,11 @@ MedFunc LowToMedConverter::convertFunction(
     if (isPowerPC64ELFv1(TheArch))
       throw LowToMedConversionError(
           "PPC64 ELFv1 descriptor and TOC recovery requires SSA");
+    if (Image && isPowerPC64ELFv2(TheArch) &&
+        (Image->PPC64EntryContexts.contains(Low.Entry) ||
+         !Image->PPC64LinkageStubs.empty()))
+      throw LowToMedConversionError(
+          "PPC64 ELFv2 entry and TOC recovery requires SSA");
     Func.SkippedSSA = true;
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
@@ -2364,16 +2369,20 @@ MedFunc LowToMedConverter::convertFunction(
     splitEntryLoopHeader(Func);
     debugVerifyMedFunc(Func, "splitEntryLoopHeader");
     PPC64LinkageCalls PPC64Calls;
-    if (Image && isPowerPC64ELFv1(TheArch)) {
+    if (Image && isPowerPC64(TheArch) && Fmt == BinaryFormat::ELF) {
       auto TOC = ndVarToMedVar(
           NdVar::reg(integerreg::gpr(ppc_elf::TOCRegister), ppc_elf::WordSize));
       auto SP = ndVarToMedVar(NdVar::reg(getTargetRegInfo(TheArch).StackPointer,
                                          ppc_elf::WordSize));
-      PPC64Calls = preparePPC64LinkageCalls(Func, *Image, TOC, SP, NextVarId);
+      auto R12 = ndVarToMedVar(NdVar::reg(
+          integerreg::gpr(ppc_elf::GlobalEntryRegister), ppc_elf::WordSize));
+      PPC64Calls =
+          preparePPC64LinkageCalls(Func, *Image, TOC, SP, R12, NextVarId);
     }
     buildSsa(Func, Low);
-    if (isPowerPC64ELFv1(TheArch))
-      recoverPPC64ELFv1(Func, Image, PPC64Calls);
+    if (isPowerPC64ELFv1(TheArch) ||
+        (Image && isPowerPC64ELFv2(TheArch) && Fmt == BinaryFormat::ELF))
+      recoverPPC64ELFCalls(Func, Image, PPC64Calls, isPowerPC64ELFv1(TheArch));
     debugVerifyMedFunc(Func, "buildSsa");
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);

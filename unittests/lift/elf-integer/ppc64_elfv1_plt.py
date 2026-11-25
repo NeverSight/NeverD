@@ -139,8 +139,8 @@ def tocsave_object(cc, source, output):
 
 
 def qualify(args, work, target):
-    fixture = Path(__file__).with_name("ppc64-elfv1-plt.c")
-    multi = fixture.with_name("ppc64-elfv1-multitoc.S")
+    fixture = Path(__file__).with_name("ppc64-plt.c")
+    multi = fixture.with_name("ppc64-multitoc.S")
     cc = [args.clang, f"--target={target}-linux-gnu", "-mabi=elfv1", "-mcpu=power8",
           "-ffreestanding", "-fno-stack-protector", "-fPIC", "-nostdlib"]
     link = [f"-fuse-ld={args.ld}"]
@@ -157,7 +157,7 @@ def qualify(args, work, target):
         subprocess.run([*cc, *flags, "-c", multi, "-o", obj], check=True)
         inputs.append(obj)
     saved = work / "tocsave.o"
-    tocsave_object(cc, fixture.with_name("ppc64-elfv1-tocsave.S"), saved)
+    tocsave_object(cc, fixture.with_name("ppc64-tocsave.S"), saved)
     count = 0
     cases = (("plt", ["-no-pie"], ("cross", "twice")),
              ("chain", ["-shared", "-Wl,-Bsymbolic,--plt-static-chain,--plt-thread-safe"],

@@ -5737,6 +5737,10 @@ on the same predecessor. Every PHI reads the state before entry to its block.
 The selected data may occupy a scratch register until the epilogue writes the
 ABI result. A separately merged byte must agree with its represented parent
 on the incoming edge, including when that byte supplies the shift count.
+When separate latches update the scratch byte and the shift count, the
+unchanged operand comes from that same latch. A value initialized before
+the count choice reaches both successors. Compare results at the width
+that the exit actually reads, including any mask or shift after the join.
 An unrelated loop counter may remain unknown while the proof checks both
 continuations and the value after the final write.
 One arm may write the ABI result directly while another supplies a scratch
@@ -8378,9 +8382,12 @@ A factor can also set, flip or clear weighted bits with a constant offset
 as `C | D`, `C ^ D` or `C & ~D`. Where the weighted sum `D` can affect
 the product, a uniform mask yields exactly `C`, `C + D` or `C - D` in
 the observed precision. A mixed mask retains its original operation on
-the overlapping field. In the equivalent spelling `C ^ (M & D)`, the
-toggle mask `M` is projected independently of `C`. A weight below the required shift keeps the entire
-factor, including its cross terms.
+the overlapping field. A mask on the weighted sum itself is projected
+independently of the offset. This covers `C + (M & D)`, `C - (M & D)`
+and the three bitwise joins. A mixed inner mask keeps its holes, and addition
+or subtraction takes place at the surviving field width so carries and borrows
+remain observable. A weight below the required shift keeps the entire factor,
+including its cross terms.
 Independent evaluation of a wide scaled product can combine repeated
 factors by binary exponentiation. When a sum of weighted words has a common
 power of two and its observed coefficients fit a signed 32-bit word, the
@@ -15680,6 +15687,12 @@ demands after a failed attempt. It reuses the scalar evaluator without changing
 graph facts or allocating control fields or contexts; all work remains
 budgeted and publication requires a fresh complete proof.
 
+The same owner accepts optional physical-point producer-bit hints and returns
+the merged bounded set on completion or refusal. A hint names a location and
+bit mask, never a value or a feasible edge. Importing a prior set charges the
+discovery budget and restarts the full graph proof; malformed ranges refuse.
+Reports label these as reusable candidates, not residual or source evidence.
+
 Context refinement may additionally nominate a tracked eight-byte address carrier when a later memory demand uses only its byte slice. The original narrow producer coordinates remain authoritative; only enqueue forms keys from proved constants or frame offsets.
 
 `ControlDependencyCache` reuses completed dependency walks only among sibling
@@ -18452,6 +18465,9 @@ assumptions remain separate. Expression synthesis selects its proof backend
 through the existing verifier boundary; inconclusive results never authorize a
 rewrite. Repeated product factors share squared powers in the solver encoding;
 the existing scaled-product quotient restores the complete output word.
+When both sides of a word comparison have the same odd constant on every
+addend, the Z3 encoding compares the unscaled sums. The scalar is invertible
+at the original width, so the same inputs satisfy both comparisons.
 See [bitvector proof backends](solver.md) for build and validation.
 
 Shared symbolic expression builders recover comparisons from bounded
@@ -18792,6 +18808,12 @@ proof queries. Enumeration records the grammar operation and its operand
 indices for each new sampled behaviour. On a target match it builds pending
 representatives in discovery order before offering the candidate. An
 unsuccessful search can discard its recipes without interning those nodes.
+For machine words, the cost bound or the remaining work can make the current
+tier the last one reachable. The search screens those candidates at one grid
+point and checks survivors against the full grid. If any survivor matches, it
+replays the tier in discovery order for the independent checker and verifier.
+An unsuccessful final tier charges every visited candidate without storing
+signatures that no later tier can read.
 
 Before composite grammar enumeration, semantic synthesis can fit an entire
 modular affine vector from the oracle's zero and unit-vector responses. Equal
@@ -19174,7 +19196,11 @@ TOC and static chain for incoming registers, and binds a descriptor call from
 its reaching loads. For PPC64 ELFv1 inter-module calls, the loader pairs a
 PLT stub with the runtime jump-slot relocation. For a local TOC switch it
 checks the branch destination's descriptor. MedIR validates the caller's
-reaching r2 and carries its saved value through the return edge.
+reaching r2 and carries its saved value through the return edge. For ELFv2,
+`st_other` identifies the global and local entries of one function. The loader
+reads the global prologue for its TOC and associates linkage stubs with
+eight-byte jump slots. MedIR checks the register required at the selected
+entry and tracks the native save and reload at 24(r1).
 RISC-V extension evidence belongs to the image. Decode,
 lift and function discovery share the physical instruction size and
 control-transfer semantics.

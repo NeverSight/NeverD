@@ -293,7 +293,18 @@ class ABIInventoryTests(unittest.TestCase):
         self.assertEqual(abi.NeverDDevirtualizeOptionsV10().machine_source_abi, 0)
         self.assertEqual(int(abi.DevirtualizeMachineSourceABI.QUERIES_V1), 1)
         self.assertEqual(int(abi.DevirtualizeMachineSourceABI.QUERIES_XMM_V2), 2)
-        for version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+        self.assertEqual(abi.NeverDDevirtualizeProducerHintV1.address.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizeProducerHintV1.offset.offset, 8)
+        self.assertEqual(abi.NeverDDevirtualizeProducerHintV1.demanded_bits.offset, 16)
+        self.assertEqual(abi.NeverDDevirtualizeProducerHintV1.bytes.offset, 24)
+        self.assertEqual(abi.NeverDDevirtualizeProducerHintV1.is_register.offset, 26)
+        self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeProducerHintV1), 32)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV11.base.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV11.producer_hints.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV10))
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV11), 208)
+        for version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
             for prefix in ("source", "machine_source"):
                 spec = abi.FUNCTION_SPECS[f"neverd_devirtualize_{prefix}_v{version}"]
                 self.assertEqual(

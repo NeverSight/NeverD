@@ -780,6 +780,35 @@ class NeverDDevirtualizeOptionsV10(ctypes.Structure):
     ]
 
 
+class NeverDDevirtualizeProducerHintV1(ctypes.Structure):
+    """Candidate physical-point bit demand; no value or path is assumed."""
+
+    _fields_ = [
+        ("address", ctypes.c_uint64),
+        ("offset", ctypes.c_uint64),
+        ("demanded_bits", ctypes.c_uint64),
+        ("bytes", ctypes.c_uint16),
+        ("is_register", ctypes.c_uint8),
+        ("reserved", ctypes.c_uint8 * 5),
+    ]
+
+
+class NeverDDevirtualizeOptionsV11(ctypes.Structure):
+    """v10 prefix plus bounded candidate producer bit demands.
+
+    Set the v1 prefix's struct_size to the full size. Keep the hint array alive
+    through the call. The caller binds a saved set to the same physical image;
+    the engine still re-proves every reachable edge. Reserved must be zero.
+    """
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV10),
+        ("producer_hints", ctypes.POINTER(NeverDDevirtualizeProducerHintV1)),
+        ("producer_hint_count", ctypes.c_size_t),
+        ("reserved", ctypes.c_uint64),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -1048,6 +1077,9 @@ _C_TYPES: dict[str, object] = {
     ),
     "const neverd_devirtualize_options_v10 *": ctypes.POINTER(
         NeverDDevirtualizeOptionsV10
+    ),
+    "const neverd_devirtualize_options_v11 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV11
     ),
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -2701,6 +2733,20 @@ _declare(
      "const neverd_devirtualize_options_v10 *", "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_devirtualize_source_v11",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v11 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v11",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v11 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_comparison_create", "neverd_comparison_t", [])
 _declare("neverd_comparison_destroy", "void", ["neverd_comparison_t"])
 _declare("neverd_comparison_cancel", "void", ["neverd_comparison_t"])
@@ -2793,6 +2839,8 @@ __all__ = [
     "NeverDDevirtualizeOptionsV9",
     "DevirtualizeFlagsV9",
     "NeverDDevirtualizeOptionsV10",
+    "NeverDDevirtualizeProducerHintV1",
+    "NeverDDevirtualizeOptionsV11",
     "DevirtualizeMachineSourceABI",
     "DevirtualizeFlagsV6",
     "DevirtualizeFlagsV7",

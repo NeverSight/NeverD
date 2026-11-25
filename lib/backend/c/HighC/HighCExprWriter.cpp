@@ -454,6 +454,8 @@ llvm::StringRef HighCWriter::plainText(llvm::StringRef Text,
 }
 
 std::string HighCWriter::castOperandText(std::string Text) const {
+  if (!SourceRecorder)
+    return c_memory::castOperand(Text);
   std::string Storage;
   const llvm::StringRef Plain = plainText(Text, Storage);
   // Parentheses the ordinary text needs enclose its delimiters too.
@@ -1340,6 +1342,12 @@ HighCWriter::implicitIntegerConversion(const HighExpr &E, const TypeRef &To) {
   std::string Text = exprStr(Source);
   if (!integerText(Source, Text))
     return std::nullopt;
+  // A conditional move can select a full register before a byte store.
+  // Express the destination conversion on the selected value.
+  if (Source.Kind == ExprKind::BinOp && Source.Op == NdOp::SELECT &&
+      isPlainInteger(Source.Type) && Width <= Source.Type->Size &&
+      (Width < Source.Type->Size || To->IsSigned != Source.Type->IsSigned))
+    return "(" + typeToC(To) + ")" + castOperandText(std::move(Text));
   // C's conversion reads the carrier under a signed result just the same,
   // unless it widens.
   if (Source.Type && Width <= Source.Type->Size)
@@ -5188,7 +5196,7 @@ std::optional<std::string> HighCWriter::floatSourceText(const HighExpr &Bits,
     const auto True = floatConstantBitsText(*Source->Operands[1], Float);
     const auto False = floatConstantBitsText(*Source->Operands[2], Float);
     if (True && False)
-      return "(" + exprStr(*Source->Operands[0]) + " ? " + *True + " : " +
+      return "(" + condStr(*Source->Operands[0]) + " ? " + *True + " : " +
              *False + ")";
   }
   if (Source->Kind != ExprKind::Call)
@@ -8203,7 +8211,7 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec,
     return SourceRecorder && CurrentFunc
                ? SourceRecorder->expression(CurrentFunc->Entry, E,
                                             std::move(Text))
-               : Text;
+               : std::move(Text);
   }
   // A local's name has its declared type.
   std::string Storage;
@@ -8224,7 +8232,7 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec,
           return SourceRecorder && CurrentFunc
                      ? SourceRecorder->expression(CurrentFunc->Entry, E,
                                                   std::move(Text))
-                     : Text;
+                     : std::move(Text);
         }
       if (isPlainInteger(Declared->second))
         PrintedIntegerTypes[&E] = {Declared->second->Size,
@@ -8242,7 +8250,7 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec,
   return SourceRecorder && CurrentFunc
              ? SourceRecorder->expression(CurrentFunc->Entry, E,
                                           std::move(Text))
-             : Text;
+             : std::move(Text);
 }
 
 std::optional<std::string>
@@ -10142,10 +10150,13 @@ std::string HighCWriter::condStr(const HighExpr &E) {
   return SourceRecorder && CurrentFunc
              ? SourceRecorder->expression(CurrentFunc->Entry, E,
                                           std::move(Text))
-             : Text;
+             : std::move(Text);
 }
 
 std::string HighCWriter::condStrImpl(const HighExpr &E) {
+  if ((E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
+      ValueForward.empty())
+    return truthOperandStr(E);
   const HighExpr *Cur = truthTestedValue(&E);
   auto IsZeroLike = [this](const ExprPtr &Op) {
     if (!Op)
@@ -10266,9 +10277,14 @@ std::string HighCWriter::truthOperandStr(const HighExpr &E) {
   std::string Text = exprStr(E);
   TruthTested = Enclosing;
   // A name declared wider than its value has bytes the test does not read.
-  if (printsWiderThanItsValue(E))
-    return "(" + typeToC(NdType::makeInt(E.Type->Size, false)) + ")" +
-           castOperandText(std::move(Text));
+  if (printsWiderThanItsValue(E)) {
+    const auto &View = E.Type;
+    const std::string Unsigned =
+        !View->IsSigned && View->SourceName.empty()
+            ? typeToC(View)
+            : typeToC(NdType::makeInt(View->Size, false));
+    return "(" + Unsigned + ")" + castOperandText(std::move(Text));
+  }
   return Text;
 }
 
@@ -10320,7 +10336,7 @@ std::string HighCWriter::invertCondStr(const HighExpr &E) {
   return SourceRecorder && CurrentFunc
              ? SourceRecorder->expression(CurrentFunc->Entry, E,
                                           std::move(Text))
-             : Text;
+             : std::move(Text);
 }
 
 std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {

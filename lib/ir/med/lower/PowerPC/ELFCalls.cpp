@@ -1,16 +1,16 @@
-//===- ELFv1Calls.cpp - PPC64 descriptor and TOC lowering ----------------===//
+//===- ELFCalls.cpp - PPC64 descriptor and TOC lowering ----------------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Recover native PPC64 ELFv1 function pointers and TOC-relative operands
+/// Recover native PPC64 ELF calls and TOC-relative operands
 /// from their reaching machine definitions.
 ///
 //===----------------------------------------------------------------------===//
 
-#include "ELFv1Calls.h"
+#include "ELFCalls.h"
 
 #include "../../../../safety/StackSlotFlow.h"
 #include "../../pass/MedEntryStackOffsets.h"
@@ -24,6 +24,7 @@
 #include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -41,7 +42,7 @@ MedVar stripCopies(MedVar V, MedDefinitionIndex &Defs) {
   for (int I = 0; I < limits::kCallTargetSlotDepth && !V.isConst(); ++I) {
     const auto *D = Defs.find(V);
     if (!D || D->Opcode != NdOp::COPY || D->NumInputs != 1 ||
-        D->Inputs[0].Size != WordSize)
+        D->Inputs[0].Size != WordSize || D->Inputs[0] == V)
       break;
     V = D->Inputs[0];
   }
@@ -50,14 +51,18 @@ MedVar stripCopies(MedVar V, MedDefinitionIndex &Defs) {
 
 // A high-adjusted TOC displacement can first produce an address outside any
 // section. Bind the completed load/store address only after the low half.
-std::optional<va_t> tocAddress(MedVar V, MedDefinitionIndex &Defs, va_t TOC) {
+std::optional<va_t> tocAddress(MedVar V, MedDefinitionIndex &Defs,
+                               std::optional<va_t> TOC,
+                               std::optional<va_t> Global = std::nullopt) {
   uint64_t Displacement = 0;
   for (int I = 0; I < limits::kCallTargetSlotDepth && V.Size == WordSize; ++I) {
     if (V.isConst()) {
-      if ((V.Provenance == ConstantAddressProvenance::AddressFragment ||
-           V.Provenance == ConstantAddressProvenance::DataAddress) &&
-          V.ConstVal == TOC)
-        return TOC + Displacement;
+      if (((V.Provenance == ConstantAddressProvenance::AddressFragment ||
+            V.Provenance == ConstantAddressProvenance::DataAddress) &&
+           (TOC == V.ConstVal || Global == V.ConstVal)) ||
+          (V.Provenance == ConstantAddressProvenance::CodeAddress &&
+           Global == V.ConstVal))
+        return V.ConstVal + Displacement;
       break;
     }
     const auto *D = Defs.find(V);
@@ -192,7 +197,7 @@ void recoverCallerTOCRestores(MedFunc &Function, const BinaryImage &Image,
       auto At = Offset(Op.Inputs[0]);
       if (!At)
         throw LowToMedConversionError(
-            "PPC64 ELFv1 TOC restore has no proven stack slot");
+            "PPC64 TOC restore has no proven stack slot");
       CallSlots.try_emplace(Call->second, *At);
       Reloads.push_back({&Block, I, *At});
     }
@@ -200,15 +205,23 @@ void recoverCallerTOCRestores(MedFunc &Function, const BinaryImage &Image,
     auto It = CallSlots.find(Op.CallSiteId);
     return It != CallSlots.end() && It->second == Slot && Bytes == WordSize;
   };
+  MedDefinitionIndex Defs(Function);
+  auto MayBeFrame = [&](MedVar V) {
+    V = stripCopies(V, Defs);
+    // The prologue can save LR after r2. Its incoming return address points
+    // to the caller's code and cannot expose the linkage area to the callee.
+    return !V.isConst() &&
+           !(V.Kind == MedVar::Reg && V.RegOff == integerreg::ppc::LR &&
+             safety::detail::isAuthenticatedEntryRegisterLiveIn(Function, V));
+  };
   llvm::SmallVector<std::pair<MedOp *, MedVar>> Copies;
   for (const auto &[Block, I, Slot] : Reloads) {
     const auto Reaching = safety::detail::reachingStackValues(
-        Function, Block->Id, I, Slot, WordSize, Offset,
-        [](const MedVar &V) { return !V.isConst(); },
+        Function, Block->Id, I, Slot, WordSize, Offset, MayBeFrame,
         [](const MedVar &) { return false; }, true, true, Preserves);
     if (!Reaching.Complete || Reaching.Values.size() != 1)
       throw LowToMedConversionError(
-          "PPC64 ELFv1 TOC restore has no unique reaching save");
+          "PPC64 TOC restore has no unique reaching save");
     Copies.emplace_back(&Block->Ops[I], Reaching.Values.front());
   }
   for (auto &[Op, V] : Copies) {
@@ -220,9 +233,12 @@ void recoverCallerTOCRestores(MedFunc &Function, const BinaryImage &Image,
 
 PPC64LinkageCalls preparePPC64LinkageCalls(MedFunc &Function,
                                            const BinaryImage &Image, MedVar TOC,
-                                           MedVar SP, int &NextVarId) {
+                                           MedVar SP, MedVar R12,
+                                           int &NextVarId) {
   using namespace ppc_elf;
   PPC64LinkageCalls Calls;
+  const bool V2 = isPowerPC64ELFv2(Image.Arch);
+  const auto Entry = Image.PPC64EntryContexts.find(Function.Entry);
   std::map<va_t, std::pair<int, MedVar>> Restores;
   auto Fresh = [&]() {
     MedVar V;
@@ -232,15 +248,42 @@ PPC64LinkageCalls preparePPC64LinkageCalls(MedFunc &Function,
     return V;
   };
   for (auto &Block : Function.Blocks) {
+    // A block that executes the entire checked global prologue establishes
+    // its TOC. A branch into the middle keeps the original arithmetic.
+    if (V2 && Entry != Image.PPC64EntryContexts.end() && Entry->second.TOC &&
+        Block.StartAddr == Function.Entry && Block.Preds.empty() &&
+        Block.ExceptionalPreds.empty()) {
+      const auto Local = Function.Entry + Entry->second.LocalEntryOffset;
+      if (Block.EndAddr >= Local) {
+        MedOp *Last = nullptr;
+        for (auto &Op : Block.Ops) {
+          if (Op.Addr >= Local)
+            break;
+          if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == TOC.RegOff &&
+              Op.Output.Size == WordSize)
+            Last = &Op;
+        }
+        if (Last) {
+          Last->Opcode = NdOp::COPY;
+          Last->NumInputs = 1;
+          Last->Inputs[0] =
+              MedVar::makeConst(*Entry->second.TOC, WordSize,
+                                ConstantAddressProvenance::AddressFragment);
+        }
+      }
+    }
     std::vector<MedOp> Ops;
     size_t First = 0;
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       auto &Op = Block.Ops[I];
-      if (Op.Opcode != NdOp::CALL || !Op.NumInputs || !Op.Inputs[0].isConst())
+      const bool Indirect = V2 && Op.Opcode == NdOp::INDIR_CALL;
+      if (!Op.NumInputs ||
+          (!Indirect && (Op.Opcode != NdOp::CALL || !Op.Inputs[0].isConst())))
         continue;
-      va_t Target = Op.Inputs[0].ConstVal;
+      va_t Target = Indirect ? InvalidVA : Op.Inputs[0].ConstVal;
       const auto Stub = Image.PPC64LinkageStubs.find(Target);
-      auto Callee = Image.PPC64EntryContexts.find(Target);
+      const va_t Global = Image.ppc64GlobalEntry(Target);
+      auto Callee = Image.PPC64EntryContexts.find(Global);
       const bool Saves =
           Stub != Image.PPC64LinkageStubs.end() && Stub->second.SavesTOC;
       const va_t Resume = Op.Addr + InstructionAlignment;
@@ -248,23 +291,44 @@ PPC64LinkageCalls preparePPC64LinkageCalls(MedFunc &Function,
       const bool RestoresTOC =
           !Op.IsTailCall && Next &&
           readTargetEndian<uint32_t>(Next, archLittleEndian(Image.Arch)) ==
-              RestoreTOC;
-      va_t Expected;
-      if (Stub != Image.PPC64LinkageStubs.end()) {
+              (V2 ? ELFv2RestoreTOC : RestoreTOC);
+      va_t Expected = InvalidVA;
+      bool NeedsR12 = Indirect;
+      if (!Indirect && Stub != Image.PPC64LinkageStubs.end()) {
         if (Stub->second.Target == InvalidVA)
           throw LowToMedConversionError(
-              "PPC64 ELFv1 linkage has no unique descriptor or TOC");
+              "PPC64 linkage has no unique call target or TOC");
         Expected = Stub->second.IncomingTOC;
-        Op.Inputs[0] =
-            MedVar::makeConst(Stub->second.Target, WordSize,
-                              ConstantAddressProvenance::CodeAddress);
+        if (V2)
+          Calls.CallTargets.try_emplace(Op.CallSiteId, Stub->second.Target);
+        else
+          Op.Inputs[0] =
+              MedVar::makeConst(Stub->second.Target, WordSize,
+                                ConstantAddressProvenance::CodeAddress);
+      } else if (V2 && Callee != Image.PPC64EntryContexts.end()) {
+        if (Global != Target) {
+          if (!Callee->second.TOC)
+            throw LowToMedConversionError(
+                "PPC64 ELFv2 local entry has no proven TOC");
+          Expected = *Callee->second.TOC;
+          Calls.CallTargets.try_emplace(Op.CallSiteId, Global);
+        } else if (Callee->second.LocalEntryOffset) {
+          NeedsR12 = true;
+          Expected = Global;
+        }
       } else if (Callee != Image.PPC64EntryContexts.end() &&
                  Callee->second.TOC) {
         Expected = *Callee->second.TOC;
-      } else {
+      } else if (!Indirect) {
         if (RestoresTOC)
           throw LowToMedConversionError(
-              "PPC64 ELFv1 TOC restore has no proven linkage call");
+              "PPC64 TOC restore has no proven linkage call");
+        continue;
+      }
+
+      if (!Indirect && !Saves && Expected == InvalidVA) {
+        if (RestoresTOC)
+          Calls.CallerRestores.try_emplace(Resume, Op.CallSiteId);
         continue;
       }
 
@@ -279,9 +343,13 @@ PPC64LinkageCalls preparePPC64LinkageCalls(MedFunc &Function,
       Snapshot.Opcode = NdOp::COPY;
       Snapshot.Addr = Op.Addr;
       Snapshot.Output = Fresh();
-      Snapshot.addInput(TOC);
+      Snapshot.addInput(NeedsR12 ? R12 : TOC);
       const MedVar Saved = Snapshot.Output;
-      Calls.RequiredTOCs.try_emplace(Saved.Id, Expected);
+      if (Indirect)
+        Calls.IndirectEntrySnapshots.insert(Saved.Id);
+      if (Expected != InvalidVA)
+        (NeedsR12 ? Calls.RequiredGlobalEntries : Calls.RequiredTOCs)
+            .try_emplace(Saved.Id, Expected);
       Ops.push_back(std::move(Snapshot));
       if (Saves) {
         MedOp Address;
@@ -289,8 +357,9 @@ PPC64LinkageCalls preparePPC64LinkageCalls(MedFunc &Function,
         Address.Addr = Op.Addr;
         Address.Output = Fresh();
         Address.addInput(SP);
-        Address.addInput(MedVar::makeConst(TOCSaveOffset, WordSize,
-                                           ConstantAddressProvenance::Scalar));
+        Address.addInput(
+            MedVar::makeConst(V2 ? ELFv2TOCSaveOffset : TOCSaveOffset, WordSize,
+                              ConstantAddressProvenance::Scalar));
         MedOp Store;
         Store.Opcode = NdOp::STORE;
         Store.Addr = Op.Addr;
@@ -331,36 +400,85 @@ PPC64LinkageCalls preparePPC64LinkageCalls(MedFunc &Function,
   return Calls;
 }
 
-void recoverPPC64ELFv1(MedFunc &Function, const BinaryImage *Image,
-                       const PPC64LinkageCalls &Calls) {
+void recoverPPC64ELFCalls(MedFunc &Function, const BinaryImage *Image,
+                          const PPC64LinkageCalls &Calls, bool Descriptors) {
   using namespace ppc_elf;
   if (Image)
     recoverCallerTOCRestores(Function, *Image, Calls);
   MedDefinitionIndex Defs(Function);
   const auto TOCReg = integerreg::gpr(TOCRegister);
   const auto EnvReg = integerreg::gpr(EnvironmentRegister);
+  llvm::DenseSet<std::pair<int, int>> ClobberedTOCs;
+  if (!Descriptors)
+    for (const auto &C : Function.CallClobbers)
+      if (C.Value.Kind == MedVar::Reg && C.Value.RegOff == TOCReg)
+        ClobberedTOCs.insert({C.Value.Id, C.Value.SSAVer});
+  auto CheckTOC = [&](const MedVar &V) {
+    if (V.Kind == MedVar::Reg && V.RegOff == TOCReg &&
+        ClobberedTOCs.contains({V.Id, V.SSAVer}))
+      throw LowToMedConversionError(
+          "PPC64 ELFv2 call leaves the TOC undefined at its use");
+  };
   std::optional<va_t> EntryTOC;
   if (Image) {
-    const auto It = Image->PPC64EntryContexts.find(Function.Entry);
+    const auto It =
+        Image->PPC64EntryContexts.find(Image->ppc64GlobalEntry(Function.Entry));
     if (It != Image->PPC64EntryContexts.end())
       EntryTOC = It->second.TOC;
   }
   for (auto &Block : Function.Blocks) {
+    if (!ClobberedTOCs.empty()) {
+      for (const auto &Phi : Block.Phis)
+        for (const auto &Arg : Phi.Args)
+          CheckTOC(Arg.second);
+      for (const auto &Op : Block.Ops)
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          CheckTOC(Op.Inputs[I]);
+    }
     if (llvm::none_of(Block.Ops, [](const MedOp &Op) {
           return Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
         }))
       continue;
     llvm::SmallPtrSet<const MedOp *, 8> Loads;
     std::optional<MedVar> TOC, Env;
+    std::optional<MedVar> IndirectEntry;
     for (auto &Op : Block.Ops) {
       if (Op.Opcode == NdOp::COPY && Op.Output.Kind == MedVar::Temp) {
+        if (Calls.IndirectEntrySnapshots.contains(Op.Output.Id))
+          IndirectEntry = stripCopies(Op.Inputs[0], Defs);
         auto Need = Calls.RequiredTOCs.find(Op.Output.Id);
         if (Need != Calls.RequiredTOCs.end() &&
-            (!EntryTOC ||
-             tocAddress(Op.Inputs[0], Defs, *EntryTOC) != Need->second))
+            tocAddress(Op.Inputs[0], Defs, EntryTOC,
+                       Descriptors
+                           ? std::nullopt
+                           : std::optional(Function.Entry)) != Need->second)
           throw LowToMedConversionError(
-              "PPC64 ELFv1 direct call crosses unproven TOC contexts");
+              "PPC64 direct call crosses unproven TOC contexts");
+        auto Global = Calls.RequiredGlobalEntries.find(Op.Output.Id);
+        if (Global != Calls.RequiredGlobalEntries.end() &&
+            tocAddress(Op.Inputs[0], Defs, EntryTOC, Global->second) !=
+                Global->second)
+          throw LowToMedConversionError(
+              "PPC64 ELFv2 global call requires r12 to name its entry");
       }
+      if (Op.Opcode == NdOp::CALL)
+        if (auto It = Calls.CallTargets.find(Op.CallSiteId);
+            It != Calls.CallTargets.end())
+          Op.Inputs[0] = MedVar::makeConst(
+              It->second, WordSize, ConstantAddressProvenance::CodeAddress);
+      if (!Descriptors && Op.Opcode == NdOp::INDIR_CALL) {
+        const auto *Mask = Defs.find(stripCopies(Op.Inputs[0], Defs));
+        if (!IndirectEntry || !Mask || Mask->Opcode != NdOp::INT_AND ||
+            Mask->NumInputs != 2 || !Mask->Inputs[1].isConst() ||
+            Mask->Inputs[1].ConstVal != ~(uint64_t(InstructionAlignment) - 1) ||
+            stripCopies(Mask->Inputs[0], Defs) != *IndirectEntry)
+          throw LowToMedConversionError("PPC64 ELFv2 indirect call requires "
+                                        "the same global entry in CTR and r12");
+        Op.Inputs[0] = *IndirectEntry;
+        IndirectEntry.reset();
+      }
+      if (!Descriptors)
+        continue;
       if (Op.Opcode == NdOp::INDIR_CALL) {
         const auto *Mask = Defs.find(stripCopies(Op.Inputs[0], Defs));
         std::optional<MedVar> Base;

@@ -340,14 +340,32 @@ struct BinaryImage {
     std::optional<va_t> Environment;
     /// A native function pointer can reproduce one descriptor identity.
     va_t Descriptor = InvalidVA;
+    /// ELFv2 st_other distinguishes two entries of one function, and the
+    /// single-entry functions that promise to return with r2 unchanged.
+    unsigned LocalEntryOffset = 0;
+    bool PreservesTOC = false;
   };
   std::map<va_t, PPC64EntryContext> PPC64EntryContexts;
-  /// A direct branch into ELFv1 linkage code uses the caller's r2. Only
+  /// The local entry is callable with an established TOC. Calls through a
+  /// native function pointer and the source-level body use the global entry.
+  va_t ppc64GlobalEntry(va_t Address) const {
+    if (isPowerPC64ELFv2(Arch) && !PPC64EntryContexts.empty()) {
+      auto End = PPC64EntryContexts.upper_bound(Address);
+      if (End != PPC64EntryContexts.begin()) {
+        auto It = std::prev(End);
+        if (Address - It->first == It->second.LocalEntryOffset)
+          return It->first;
+      }
+    }
+    return Address;
+  }
+  /// A direct branch into PPC64 linkage code uses the caller's r2. Only
   /// publish a destination for the TOC the stub was resolved against.
   struct PPC64LinkageStub {
     va_t IncomingTOC = InvalidVA;
     va_t Target = InvalidVA; // Code entry, or the registered import veneer.
     bool SavesTOC = false;
+    bool PreservesTOC = false;
   };
   std::map<va_t, PPC64LinkageStub> PPC64LinkageStubs;
   bool IsRelocatable = false;
@@ -2092,7 +2110,8 @@ struct BinaryImage {
   /// function identity, ABI or instruction semantics by itself.
   bool isFunctionEntryCandidateAt(va_t Addr) const {
     const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
-    if (DataInCode.count(Normalized) || isFunctionContinuationAt(Addr) ||
+    if (ppc64GlobalEntry(Normalized) != Normalized ||
+        DataInCode.count(Normalized) || isFunctionContinuationAt(Addr) ||
         !hasExecutableCodeOwnerAt(Normalized))
       return false;
     if (isMIPS(Arch)) {

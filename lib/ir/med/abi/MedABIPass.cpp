@@ -46,6 +46,7 @@
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/ProloguePatterns.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -1080,6 +1081,20 @@ boundedLibcArgumentCount(const BinaryImage *Image, llvm::StringRef Name,
   return Forward->FixedCount + Forward->Count;
 }
 
+/// The tail transfer leaves the incoming stack untouched at entry or after
+/// the single x86 CET marker that designates an indirect branch target.
+static bool beginsWithTailTransfer(const BinaryImage *Img, va_t Entry,
+                                   va_t Transfer) {
+  if (Transfer == Entry)
+    return true;
+  if (!Img || (Img->Arch != Arch::X86 && Img->Arch != Arch::X64) ||
+      Transfer < Entry || Transfer - Entry != x86::kEndbrLen)
+    return false;
+  const uint8_t *Prefix = Img->readVA(Entry, x86::kEndbrLen);
+  return Prefix &&
+         x86BranchTargetMarkerLength(Prefix, x86::kEndbrLen) == x86::kEndbrLen;
+}
+
 void recoverCallAbi(
     MedFunc &Func, Arch TheArch, const std::map<va_t, std::string> &FuncNames,
     const BinaryImage *Img, std::map<va_t, int> *CalleeRegArity,
@@ -1422,17 +1437,19 @@ void recoverCallAbi(
           FnIt != FuncNames.end()
               ? FnIt->second
               : (kAutoFuncPrefix + llvm::utohexstr(CI.TargetAddr)).str();
-      // A single-function projection omits the callee body. Its descriptor
-      // still identifies the named routine at this code entry.
+      // A single-function projection omits the callee body. The PPC64 ELF
+      // entry still identifies the named routine.
       if (FnIt == FuncNames.end() && Img && !CI.IsIndirect &&
-          isPowerPC64ELFv1(TheArch) &&
+          isPowerPC64(TheArch) &&
           Img->PPC64EntryContexts.contains(CI.TargetAddr))
         if (const auto Name = Img->statedFunctionNameAt(CI.TargetAddr);
             !Name.empty())
           CI.TargetName = Name.str();
-      // A stub the names leave unnamed still reaches its import, whose name
-      // its prototype and va_list contract go by.
-      if (Img && !CI.IsIndirect && CI.TargetName.starts_with(kAutoFuncPrefix))
+      // The import owns the prototype and va_list contract. LLD can also
+      // publish an ELFv2 function symbol for the PLT stub itself.
+      if (Img && !CI.IsIndirect &&
+          (CI.TargetName.starts_with(kAutoFuncPrefix) ||
+           (isPowerPC64ELFv2(TheArch) && Img->findImportStubAt(CI.TargetAddr))))
         if (std::string Import = importCalleeName(*Img, CI.TargetAddr);
             !Import.empty())
           CI.TargetName = std::move(Import);
@@ -3452,6 +3469,13 @@ void recoverCallAbi(
       // parameters; elsewhere both start at the fixed register count.
       const int CalleeStackBase =
           StackAfterUsedRegisters ? FirstStackSlot : NumIntParamRegs;
+      // A fixed prototype can exhaust its register arguments before the stack
+      // begins (e.g. a SysV MEMORY-class record after two pointers).
+      const bool PrototypeRegisterPadding =
+          PrototypeArguments && !HeaderVariadic && !OpenVariadicArity &&
+          !StackAfterUsedRegisters && Op.CalleeRegisterArgs >= 0 &&
+          Op.CalleeRegisterArgs < NumIntParamRegs &&
+          Op.CalleeStackArgs > NumIntParamRegs;
       int CallerStackBase = NumIntParamRegs;
       if (StackAfterUsedRegisters) {
         CallerStackBase = 0;
@@ -3484,8 +3508,13 @@ void recoverCallAbi(
         for (int K = CalleeStackBase; K < CalleeArgs && K < MaxArgs; ++K) {
           if (FoundMask[K])
             continue;
-          if (K > 0 && !FoundMask[K - 1])
-            break; // keep arguments consecutive from arg0
+          // A jump through an import slot at entry forwards the incoming
+          // stack unchanged, even when the last register position is padding.
+          const bool AcrossRegisterPadding =
+              K == CalleeStackBase && PrototypeRegisterPadding &&
+              IsIndirectImport && beginsWithTailTransfer(Img, Func.Entry, Op.Addr);
+          if (K > 0 && !FoundMask[K - 1] && !AcrossRegisterPadding)
+            break;
           const int Incoming = CallerStackBase + (K - CalleeStackBase);
           MedVar P;
           P.Kind = MedVar::Param;
@@ -3926,9 +3955,10 @@ void recoverCallAbi(
       // slots between that prefix and the stack. Keep those slots as padding;
       // setup scans cannot turn their scratch registers into arguments.
       const bool SummarizedRegisterPadding =
-          PositionalSlots && NoVectorArguments && !CalleeHasFP &&
-          !CI.IsIndirect && !CI.ArgumentsInCalleeRegisterOrder &&
-          !HeaderVariadic && !OpenVariadicArity && CalleeArgs > NumIntRegArgs;
+          PrototypeRegisterPadding ||
+          (PositionalSlots && NoVectorArguments && !CalleeHasFP &&
+           !CI.IsIndirect && !CI.ArgumentsInCalleeRegisterOrder &&
+           !HeaderVariadic && !OpenVariadicArity && CalleeArgs > NumIntRegArgs);
       // A variadic callee that takes its vector argument registers (System
       // V) takes every integer one before them, past its named ones too.
       const bool EveryIntegerPosition =

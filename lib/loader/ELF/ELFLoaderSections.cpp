@@ -11,6 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "ELFIntegerProfile.h"
 #include "ELFLoaderDetail.h"
 #include "ELFSymbolCollector.h"
 
@@ -286,6 +287,11 @@ llvm::Error collectSymbols(const llvm::object::ELFFile<ELFT> &ELF,
           isMappingSymbolName(*NameOr))
         continue;
 
+      if (isPowerPC64ELFv2(Img.Arch) && !IsRelocatable && Type == STT_FUNC &&
+          Sym.st_shndx < SHN_LORESERVE && Img.hasExecutableCodeOwnerAt(Value))
+        if (auto E =
+                recordPPC64ELFv2Entry(Img, Value, Sym.st_size, Sym.st_other))
+          return E;
       Symbols.add(*NameOr, Value, Sym.st_size, Type, IsFunction);
 
       // st_size is an object boundary only for a defined STT_OBJECT whose

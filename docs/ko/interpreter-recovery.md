@@ -357,6 +357,8 @@ v9 API `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9`�
 
 v10 C API `neverd_devirtualize_source_v10()`과 `neverd_devirtualize_machine_source_v10()`은 `neverd_devirtualize_options_v10`을 받습니다. 0으로 초기화하고 v1 접두부의 `struct_size`를 전체 크기로 설정합니다. `machine_source_abi`는 `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2`로 선택합니다. 알 수 없는 값, 0이 아닌 예약 필드 및 일반 소스의 확장 배치는 거부합니다. 이전 API는 새 꼬리를, v10은 미래 꼬리를 무시합니다. 널 옵션은 스칼라 기본값을 유지합니다. Python은 `NeverDDevirtualizeOptionsV10`과 `DevirtualizeMachineSourceABI`를 제공합니다. 네이티브 인증은 변경되지 않습니다.
 
+v11 C API `neverd_devirtualize_source_v11()`과 `neverd_devirtualize_machine_source_v11()`은 `nextControlProducerHints`의 후보를 받습니다. CLI에서는 `--vm-producer-hint=주소:r|s:오프셋:바이트:비트마스크`를 반복해서 지정할 수 있습니다. 다시 사용하기 전에 보고서의 이미지 해시로 동일한 물리 이미지에 묶으십시오. 후보는 정밀도만 요청하고 발견 예산을 사용합니다. 값이나 도달 가능한 경로를 증명하지 않으며, 매 실행에서 도달 가능한 전체 그래프를 다시 증명합니다. `controlProducerHintsTruncated`는 목록이 잘렸음을 나타냅니다.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## 데스크톱에서 인터프리터 복원

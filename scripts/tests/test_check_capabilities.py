@@ -3381,6 +3381,8 @@ class RepositoryCapabilityTests(unittest.TestCase):
                       "neverd_devirtualize_machine_source_v9",
                       "neverd_devirtualize_source_v10",
                       "neverd_devirtualize_machine_source_v10",
+                      "neverd_devirtualize_source_v11",
+                      "neverd_devirtualize_machine_source_v11",
                       "neverd_x64_continuation_source_v1"],
                 "python": [],
                 "cli": [
@@ -3388,6 +3390,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd decompile --recovery-report",
                     "neverd decompile --vm-control",
                     "neverd decompile --vm-control-stack",
+                    "neverd decompile --vm-producer-hint",
                     "neverd decompile --vm-machine-state",
                     "neverd decompile --vm-max-contexts",
                     "neverd decompile --vm-max-nodes",

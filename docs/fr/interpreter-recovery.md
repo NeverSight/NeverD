@@ -431,6 +431,8 @@ Utilisez `--vm-source-abi=scalar|queries|xmm` avec `--devirtualize --vm-machine-
 
 Les API C v10 `neverd_devirtualize_source_v10()` et `neverd_devirtualize_machine_source_v10()` acceptent `neverd_devirtualize_options_v10`. Initialisez la structure à zéro, fixez `struct_size` du préfixe v1 à la taille complète et choisissez `machine_source_abi` avec `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` ou `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2`. Les valeurs inconnues, champs réservés non nuls et dispositions étendues en source ordinaire sont refusés. Les anciennes API ignorent cette extension ; v10 ignore les extensions futures. Des options nulles gardent les valeurs scalaires par défaut. Python expose `NeverDDevirtualizeOptionsV10` et `DevirtualizeMachineSourceABI`. La certification native reste inchangée.
 
+Les API C v11 `neverd_devirtualize_source_v11()` et `neverd_devirtualize_machine_source_v11()` acceptent les candidats de `nextControlProducerHints` ; la CLI accepte plusieurs options `--vm-producer-hint=adresse:r|s:décalage:octets:masque`. Avant réutilisation, rattachez-les à la même image physique au moyen du hachage du rapport. Ces indices demandent seulement plus de précision, consomment le budget de découverte et ne prouvent ni valeur ni chemin ; chaque exécution reprend la preuve complète du graphe accessible. `controlProducerHintsTruncated` signale une liste tronquée.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## Reconstitution de l’interpréteur dans l’application

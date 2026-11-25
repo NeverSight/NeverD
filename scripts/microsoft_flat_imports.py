@@ -259,6 +259,19 @@ def include_headers(headers) -> str:
     return "\n".join(lines) + "\n"
 
 
+# These flat functions have C linkage but appear only in C++ views of the
+# SDK headers. Compile those originals separately from the C declarations
+# consumed by the type reader and compare both emitted ABIs.
+CPP_ONLY_RUNTIME_DECLARATIONS = {
+    "MediaFoundationCollection": "HRESULT __stdcall MFCreateCollection(IMFCollection **ppIMFCollection);\n",
+    "OlePropertyConversion": (
+        "struct PMemoryAllocator;\n"
+        "BOOLEAN __stdcall StgConvertPropertyToVariant(const SERIALIZEDPROPERTYVALUE *pprop, "
+        "USHORT CodePage, PROPVARIANT *pvar, struct PMemoryAllocator *pma);\n"
+    ),
+}
+
+
 def named_runtime_units(output, architecture, compiler, libraries, *, profiles=None):
     """Project documented named PE exports qualified for this target."""
     directory = output / "sdk-import-sources"
@@ -298,18 +311,13 @@ def named_runtime_units(output, architecture, compiler, libraries, *, profiles=N
                 options = [*options, "-DFE_IME=1"]
         language = "c"
         arguments = [*options, "-std=c23"]
-        if name in ("AudioStateMonitors", "MediaFoundationCollection"):
-            # These headers expose the flat functions to C++ callers. The C
-            # reader handles the audio COM declaration. MF declares its
-            # collection factory only inside the C++ section of mfapi.h.
+        c_declaration = CPP_ONLY_RUNTIME_DECLARATIONS.get(name)
+        if name == "AudioStateMonitors" or c_declaration:
             language = "c++"
             arguments = [*options, "-x", "c++", "-std=c++17"]
-            if name == "MediaFoundationCollection":
-                original = source
+            if c_declaration:
                 source = directory / (name + "-c.c")
-                source.write_text(include_headers(headers) +
-                                  "HRESULT __stdcall MFCreateCollection(IMFCollection **ppIMFCollection);\n",
-                                  encoding="utf-8")
+                source.write_text(include_headers(headers) + c_declaration, encoding="utf-8")
         bridge = {"source": str(original), "source_sha256": wdk.digest(original),
                   "arguments": arguments, "language": language, "commands": [],
                   "runtime_exports": named_runtime_exports(profile, target, NAMED_RUNTIME["win32_metadata"])}

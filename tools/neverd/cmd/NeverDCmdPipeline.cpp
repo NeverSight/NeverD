@@ -19,6 +19,7 @@
 #include "neverd/sdk/Limits.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
@@ -722,7 +723,8 @@ int auditEveryLoadedFunction(neverd_session_t Sess) {
       StackFrameFile.getNumOccurrences() ||
       OriginalCallState.getNumOccurrences() || StackFrameInfo ||
       VMMachineState || VMMachineSourceABI.getNumOccurrences() ||
-      !VMControlRegisters.empty() || !VMControlFrameSlots.empty()) {
+      !VMControlRegisters.empty() || !VMControlFrameSlots.empty() ||
+      !VMProducerHints.empty()) {
     WithColor::error()
         << "--check-all decompiles every loaded function on the default C "
            "route; omit other decompile options\n";
@@ -1002,8 +1004,8 @@ int runDecompile(neverd_session_t Sess) {
   if (!Devirtualize &&
       (VMMachineState || VMMachineSourceABI.getNumOccurrences() ||
        !VMControlRegisters.empty() || !VMControlFrameSlots.empty() ||
-       !VMRecoveryReport.empty() || VMMaxNodes.getNumOccurrences() ||
-       VMMaxContexts.getNumOccurrences() ||
+       !VMProducerHints.empty() || !VMRecoveryReport.empty() ||
+       VMMaxNodes.getNumOccurrences() || VMMaxContexts.getNumOccurrences() ||
        VMMaxOperations.getNumOccurrences() ||
        VMMaxRefinements.getNumOccurrences() ||
        VMMaxFields.getNumOccurrences() || VMMaxQueries.getNumOccurrences() ||
@@ -1326,9 +1328,40 @@ int runDecompile(neverd_session_t Sess) {
         }
         FrameSlots.push_back({Offset, static_cast<uint16_t>(Bytes), 0});
       }
-      neverd_devirtualize_options_v10 SourceRecovery{};
-      SourceRecovery.machine_source_abi = MachineSourceABI;
-      auto &ProofRecovery = SourceRecovery.base;
+      std::vector<neverd_devirtualize_producer_hint_v1> ProducerHints;
+      for (const auto &Text : VMProducerHints) {
+        SmallVector<StringRef, 5> Parts;
+        StringRef(Text).split(Parts, ':');
+        uint64_t Address = 0;
+        uint64_t Offset = 0;
+        uint64_t Bits = 0;
+        unsigned Bytes = 0;
+        int64_t SignedOffset = 0;
+        if (Parts.size() != 5 || Parts[0].getAsInteger(0, Address) ||
+            (Parts[1] != "r" && Parts[1] != "s") ||
+            (Parts[2].starts_with('-') ? Parts[2].getAsInteger(0, SignedOffset)
+                                       : Parts[2].getAsInteger(0, Offset)) ||
+            Parts[3].getAsInteger(0, Bytes) || !Bytes || Bytes > 8 ||
+            Parts[4].getAsInteger(0, Bits)) {
+          WithColor::error()
+              << "--vm-producer-hint expects "
+                 "address:r|s:offset:bytes:bit-mask (bytes 1..8)\n";
+          return 1;
+        }
+        if (Parts[2].starts_with('-'))
+          Offset = static_cast<uint64_t>(SignedOffset);
+        ProducerHints.push_back({Address,
+                                 Offset,
+                                 Bits,
+                                 static_cast<uint16_t>(Bytes),
+                                 static_cast<uint8_t>(Parts[1] == "r"),
+                                 {}});
+      }
+      neverd_devirtualize_options_v11 SourceRecovery{};
+      SourceRecovery.producer_hints = ProducerHints.data();
+      SourceRecovery.producer_hint_count = ProducerHints.size();
+      SourceRecovery.base.machine_source_abi = MachineSourceABI;
+      auto &ProofRecovery = SourceRecovery.base.base;
       if (VMProveStoreReturnSeparation)
         ProofRecovery.flags |=
             NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION;
@@ -1372,9 +1405,9 @@ int runDecompile(neverd_session_t Sess) {
       Base.use_llvm = LlvmRoute;
       Base.no_opt = NoOpt;
       const char *Report = nullptr;
-      Source = VMMachineState ? neverd_devirtualize_machine_source_v10(
+      Source = VMMachineState ? neverd_devirtualize_machine_source_v11(
                                     Sess, Entry, &SourceRecovery, &Report)
-                              : neverd_devirtualize_source_v10(
+                              : neverd_devirtualize_source_v11(
                                     Sess, Entry, &SourceRecovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;

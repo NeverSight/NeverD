@@ -25,7 +25,7 @@ class ObjectFile;
 namespace neverd {
 struct BinaryImage;
 namespace elf_loader {
-struct PPC64DescriptorTable {
+struct PPC64LinkageTables {
   va_t Address = 0;
   uint64_t Size = 0;
   unsigned EntrySize = 0;
@@ -33,14 +33,16 @@ struct PPC64DescriptorTable {
   va_t JumpRelocations = 0;
   uint64_t JumpRelocationSize = 0;
   std::optional<va_t> Glink = std::nullopt;
+  bool PLTLocalEntry = false;
 };
 llvm::Error readIntegerProfile(const llvm::object::ObjectFile &Object, Arch &A,
                                RISCVProfile &Profile,
-                               PPC64DescriptorTable *Descriptors = nullptr);
-llvm::Error readPPC64Descriptors(BinaryImage &Image,
-                                 PPC64DescriptorTable Table);
+                               PPC64LinkageTables *Linkage = nullptr);
+llvm::Error readPPC64Descriptors(BinaryImage &Image, PPC64LinkageTables Table);
+llvm::Error recordPPC64ELFv2Entry(BinaryImage &Image, va_t Entry, uint64_t Size,
+                                  uint8_t Other);
 llvm::Error readPPC64Linkage(BinaryImage &Image,
-                             const PPC64DescriptorTable &Table);
+                             const PPC64LinkageTables &Table);
 } // namespace elf_loader
 } // namespace neverd
 #endif // NEVERD_LIB_LOADER_ELF_ELFINTEGERPROFILE_H

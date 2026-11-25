@@ -24,8 +24,7 @@
 
 namespace neverd::elf_loader {
 
-llvm::Error readPPC64Descriptors(BinaryImage &Image,
-                                 PPC64DescriptorTable Table) {
+llvm::Error readPPC64Descriptors(BinaryImage &Image, PPC64LinkageTables Table) {
   using namespace ppc_elf;
   const va_t Start = Table.Address, End = Start + Table.Size;
   const auto Contains = [&](va_t VA) { return VA >= Start && VA < End; };

@@ -348,8 +348,12 @@ constexpr bool isPowerPC64ELFv1(Arch A) {
   return A == Arch::PPC64ELFv1 || A == Arch::PPC64LEELFv1;
 }
 
+constexpr bool isPowerPC64ELFv2(Arch A) {
+  return A == Arch::PPC64 || A == Arch::PPC64LE;
+}
+
 constexpr bool isPowerPC64(Arch A) {
-  return A == Arch::PPC64 || A == Arch::PPC64LE || isPowerPC64ELFv1(A);
+  return isPowerPC64ELFv2(A) || isPowerPC64ELFv1(A);
 }
 
 constexpr bool isPowerPC(Arch A) {

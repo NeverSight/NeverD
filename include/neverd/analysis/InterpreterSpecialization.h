@@ -31,6 +31,19 @@ struct SpecializationCursor {
   bool operator==(const SpecializationCursor &) const = default;
 };
 
+/// Candidate bit demand at one physical program point. This requests
+/// projection precision only: it carries no value, feasible path, memory fact
+/// or transfer certificate. The final graph still proves every reachable edge.
+struct SpecializationControlProducerHint {
+  SpecializationCursor Cursor;
+  bool Register = false;
+  uint64_t Offset = 0;
+  uint16_t Bytes = 0;
+  uint64_t DemandedBits = 0;
+
+  bool operator==(const SpecializationControlProducerHint &) const = default;
+};
+
 /// Provider certificate for the omitted physical effects of a native near
 /// CALL/RETURN. The instruction uses the configured eight-byte frame register
 /// as its stack pointer. CALL pushes its exact fallthrough address. Internal
@@ -424,6 +437,10 @@ struct SpecializationOptions {
   /// Other constant bytes join by intersection, so changing business values
   /// do not unroll a loop forever.
   std::vector<symbolic::SymRegisterRange> ControlRegisters;
+  /// Optional candidates from an earlier attempt at the same physical code.
+  /// They affect only dependency projection and are never an environment
+  /// premise. A fresh run must still prove every edge and final fixed point.
+  std::vector<SpecializationControlProducerHint> ControlProducerHints;
   /// Optional entry-relative frame identity. This enables affine pointers,
   /// complete affine pointer spills, and constant frame-byte propagation.
   /// Bounded alignment refinements cover every entry-root residue; they do
@@ -691,6 +708,10 @@ struct SpecializationResult {
   std::vector<SpecializationReturningCall> ReturningCalls;
   std::optional<SpecializationRawEnvironmentReceipt> RawEnvironment;
   std::string Diagnostic;
+  /// Reusable precision candidates, including those nominated on a failed
+  /// attempt. These are not a partial residual or a proof certificate.
+  std::vector<SpecializationControlProducerHint> ControlProducerHints;
+  bool ControlProducerHintsTruncated = false;
   /// Includes the additional pure operations generated for certified reads
   /// and finite dispatch, plus optional frame-normalization strategy units;
   /// fixed-point reevaluations and normalization retries are charged again.

@@ -119,7 +119,13 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 shutil.copy(native.ROOT / name, directory)
             header = directory / controls["header"]
             original = header.read_text()
-            for store, load, expected in controls["cases"]:
+            original_source = source.read_text()
+            for store, load, expected, *source_changes in controls["cases"]:
+                body = original_source
+                for before, after in source_changes:
+                    self.assertEqual(body.count(before), 1)
+                    body = body.replace(before, after)
+                source.write_text(body)
                 text = original
                 for macro, word in ((controls["store_macro"], store), (controls["load_macro"], load)):
                     text, count = re.subn(rf"(?m)^(#define {macro} )\S+$",
@@ -136,6 +142,55 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                         self.assertEqual(result.returncode, status)
                         self.assertEqual(result.stdout.splitlines(), [] if expected == "failed" else
                                          [q[expected + "_record"]])
+
+    @unittest.skipUnless(platform.system() == native.POLICY["host_os"] and
+                         platform.machine() in native.POLICY["host_arches"],
+                         CASES["ordered_q_controls"]["platform_required"])
+    def test_native_projection_probe_instruction_sites_and_key_modes(self):
+        controls = CASES["projection_probe_controls"]
+        key_probe = (native.ROOT / controls["key_probe"]).read_text()
+        prefix_probe = (native.ROOT / controls["prefix_probe"]).read_text()
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / controls["source"]
+            binary = Path(temporary) / controls["binary"]
+
+            def check(body, options, runs):
+                source.write_text(body)
+                for opt in native.POLICY["optimizations"]:
+                    subprocess.run([*controls["compiler"], *options, opt, source,
+                                    native.POLICY["output_flag"], binary], check=True)
+                    for arguments, expected in runs:
+                        with self.subTest(optimization=opt, arguments=arguments):
+                            result = subprocess.run([binary, *arguments], capture_output=True,
+                                                    timeout=native.POLICY["tool_timeout"])
+                            self.assertEqual(result.returncode, expected, result.stderr)
+
+            for a, b, expected in controls["explicit_cases"]:
+                with self.subTest(explicit=(a, b)):
+                    body = key_probe
+                    for word, form in zip(controls["explicit_instructions"], (a, b)):
+                        self.assertEqual(body.count(word), 1)
+                        body = body.replace(word, controls["key_words"][form])
+                    check(body, [controls["explicit_define"]], [([], expected)])
+
+            ordinary = key_probe
+            for word in controls["ordinary_instructions"]:
+                self.assertEqual(ordinary.count(word), 1)
+                ordinary = ordinary.replace(word, controls["ordinary_active"])
+            generic = controls["generic_instruction"]
+            self.assertEqual(ordinary.count(generic), 1)
+            for word, expected in controls["generic_cases"]:
+                with self.subTest(generic=word):
+                    check(ordinary.replace(generic, word), [], [([], expected)])
+
+            for a, b, expected in controls["prefix_cases"]:
+                with self.subTest(prefix=(a, b)):
+                    body = prefix_probe.replace(controls["prefix_instruction"], controls["prefix_nop"])
+                    for word, form in zip(controls["prefix_signers"], (a, b)):
+                        self.assertIn(word, body)
+                        body = body.replace(word, controls["prefix_words"][form])
+                    check(body + controls["prefix_main"], [],
+                          [([], expected[0]), ([controls["prefix_argument"]], expected[1])])
 
     def test_x1_records_failure_when_a_probe_tool_raises(self):
         with tempfile.TemporaryDirectory() as temporary, ExitStack() as patches:

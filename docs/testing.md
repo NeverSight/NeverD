@@ -4697,6 +4697,12 @@ exercise uniform masks, partial overlap, an even offset and a factor with
 a lower-weight field. The 113-factor x86 fixture applies the same operations
 to signed bytes. The worker and CLI run both source views and compile the
 results at Clang O0 and O2 for comparison with the original product.
+With `--field-masks --width 786433 --case 3`, the generator emits 70,001
+factors whose weighted sums pass through a second mask. Cases 0–3 add or
+join the masked field to each offset. Cases 4–7 include subtraction and
+borrows. The independent reference retains the mixed mask and the low-weight
+factor. The 197-factor x86 fixture exercises masked signed-byte sums through
+both source views and checks the emitted C against the original product.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
@@ -9325,6 +9331,16 @@ bytes and an unknown full-register input.
 a late handoff, a missing PHI edge, a store and a latch that changes the
 carrier selector. `ReturnContract.I386SharedShiftUsesOnlyTheSelectedCarrier`
 checks both stack arguments and compares the zero-, one- and two-trip results.
+`ReturnContract.TwoLatchesKeepTheWrittenByteInTheShiftedRegister` checks
+both latch orders, a full-register collision and a collision visible only
+when the exit reads the low byte. An XOR with the current shift count makes
+reversing the latches observable. On i386,
+`ReturnContract.I386TwoLatchesCanProveTheShiftOfJustDL` checks the
+disjoint byte results after zero, one and two trips with full-register seeds
+and with only DL initialized.
+`ReturnContract.MIPSTwoLatchesCarryTheValueSetBeforeTheCountChoice` sets the
+scratch register before either count arm. It executes DINS or the count update
+in a branch delay slot and the variable shift in the return delay slot.
 `SysVCallContract.GuardedScratchArgumentInSelectedAndOmittedCallees`
 checks the RDX entry read through a tail relay and a caller that consumes its
 result. Changing one selector bit exposes the incoming register on the direct
@@ -14137,6 +14153,15 @@ Entry-alignment regressions cover finer partitions, every allowed residue, diffe
 `StringTransfer.*` and repeated-copy regressions check overlap, zero count, scratch isolation, capacity/budget limits and pointer invalidation. `MachineStringSourceTests.cpp` compares native execution and both C routes at O0/O2 against independent full-register, flags and stack observations for all four widths and both directions.
 
 `ControlDiscovery.*` and `NativeStackSpecialization.*` cover low-bit root guards, high-bit and whole-root dependencies, incomplete walks, exact and short traversal budgets, and preserved finite immutable-address witnesses.
+
+`ControlStateRecovery.ProducerHintsRequireFreshProof` exports and reuses exact
+producer-bit candidates across independent runs, checks concrete loop outputs,
+and requires budget and malformed-hint refusal without a partial residual.
+The candidate list does not bind a code image or certify a path by itself.
+`SessionCAPITest.InterpreterRecoveryV11KeepsProducerHintsAsCandidates` checks
+the size-delimited C tail, both source routes, malformed hints, reports and
+older-version tail isolation. The CLI source fixture checks the repeatable
+candidate option without changing a complete ordinary result.
 
 `ControlDiscoveryCache.*` checks completed-walk reuse, exact and short work
 budgets, changed or missing input births, later load history, context and byte

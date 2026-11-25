@@ -95,6 +95,9 @@ public:
   /// an opaque input.
   sym::SymRef in(llvm::Value *Root);
 
+  bool foldedToOperand(const llvm::Instruction &Root, sym::SymRef Value,
+                       size_t MinNodes) const;
+
   /// Whether \p R still references every instruction that became an opaque
   /// input on the way in.  A candidate may simplify around such a boundary,
   /// but it may not use an identity to erase one.

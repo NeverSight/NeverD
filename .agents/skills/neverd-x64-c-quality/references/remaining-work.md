@@ -1857,6 +1857,12 @@ conditional memory, invocation lifetime and both C routes remain open.
   negation yields 0 or 1 in value expressions. Compile-time regressions
   include narrowing a 128-bit input to 64 bits and testing a bitwise flag mask.
 
+- Conditional expressions and logical values test the recovered operand width,
+  including floating constant choices and SEH filter actions. HighC tracks the
+  promoted C type of narrow integer choices so signed overflow builtins consume
+  the original byte or halfword. A register choice stored to a narrower integer
+  makes the destination conversion explicit.
+
 - Typed scalar expressions now distinguish LLVM width from the promoted C
   type and operator precedence. Redundant unsigned casts are omitted, while
   narrow wrapping, signed interpretation and widened arithmetic/shift carriers

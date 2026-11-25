@@ -1,0 +1,254 @@
+{
+  "date": "2026-11-25",
+  "implementation": "https://github.com/NeverSight/NeverD/pull/2605",
+  "implementation_head": "00576a2ea6b036b12a37c994cc189817274f9874",
+  "dev_merge": "34c3f2da6efa3531ad825e8a3dd361b1a3c8c93e",
+  "toolchain": "neverd-llvm-v23.0.0-r6",
+  "analysis_test_sha256": "92af450e3ade4106345ebc196adf922d672591c3ac199375efc27cef571076c6",
+  "baseline": {
+    "hosted_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45536344308",
+    "compilers": [
+      "O0",
+      "O2"
+    ],
+    "wrong_site_repeated_undefined_word": "unavailable at the same opcode on a different PC",
+    "explicit_signing_probe": "unrelated post-entry SIGILL accepted as unavailable",
+    "prefix_probe": "opposing second-modifier behavior for active IA and IB was unavailable in both modes"
+  },
+  "native_probe_regressions": {
+    "ordered_runs": 16,
+    "projection_runs": 52,
+    "python": {
+      "tests": 67,
+      "passed": 66,
+      "skipped": 1,
+      "local_skip": "signed arm64e cursor process rejected before main"
+    },
+    "ctest": {
+      "tests": 59,
+      "passed": 54,
+      "skipped": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativeHintModeAgreesWithCAndDirectObjects"
+      ],
+      "failed": [],
+      "exit_code": 0
+    },
+    "darwin_sdk_entry_marker": {
+      "ordinary arm64-apple-macos15 -O0": {
+        "status": 1,
+        "entry": true,
+        "source_sha256": "b07a400be3c47706c2299c5adba0fdf6cd004cb07253f04693726e80d6df93f3"
+      },
+      "ordinary arm64-apple-macos15 -O2": {
+        "status": 1,
+        "entry": true,
+        "source_sha256": "b07a400be3c47706c2299c5adba0fdf6cd004cb07253f04693726e80d6df93f3"
+      },
+      "ordinary arm64e-apple-macos15 -O0": {
+        "status": -9,
+        "entry": false,
+        "source_sha256": "b07a400be3c47706c2299c5adba0fdf6cd004cb07253f04693726e80d6df93f3"
+      },
+      "ordinary arm64e-apple-macos15 -O2": {
+        "status": -9,
+        "entry": false,
+        "source_sha256": "b07a400be3c47706c2299c5adba0fdf6cd004cb07253f04693726e80d6df93f3"
+      },
+      "explicit arm64-apple-macos15 -O0": {
+        "status": 1,
+        "entry": true,
+        "source_sha256": "45f643b6377e41e2d5bcb772c6d105d53f127b129926d33341e0e74c0c1e3c60"
+      },
+      "explicit arm64-apple-macos15 -O2": {
+        "status": 1,
+        "entry": true,
+        "source_sha256": "45f643b6377e41e2d5bcb772c6d105d53f127b129926d33341e0e74c0c1e3c60"
+      },
+      "explicit arm64e-apple-macos15 -O0": {
+        "status": -9,
+        "entry": false,
+        "source_sha256": "45f643b6377e41e2d5bcb772c6d105d53f127b129926d33341e0e74c0c1e3c60"
+      },
+      "explicit arm64e-apple-macos15 -O2": {
+        "status": -9,
+        "entry": false,
+        "source_sha256": "45f643b6377e41e2d5bcb772c6d105d53f127b129926d33341e0e74c0c1e3c60"
+      }
+    }
+  },
+  "arm_model": {
+    "version": "11.32+19",
+    "sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "comparison": "IA and IB signing, authentication and authenticated returns, changing one bit at a time in each modifier, plus SP and signing PC controls.",
+    "signing": {
+      "images": 20,
+      "el_and_control_combinations": 160,
+      "guest_manifest_sha256": "d4d9686c491de9283ee79bf085ee2cf9c08123b30642ba498799e505191bb3f4",
+      "qualification_report_sha256": "def86cf2efe45d8437f6cd041c2739e34530687b8b4d147c280f63c7d86b2865"
+    },
+    "cursor": {
+      "images": 2,
+      "el_and_control_combinations": 16
+    },
+    "ordered_memory": {
+      "routes": 6,
+      "comparisons": 88320,
+      "quadword_comparisons": 7680,
+      "qualification_report_sha256": "c3c9e3837b220636213a482178fcb35d4967a7bf65ed00168304358fd008b58b"
+    },
+    "scalar_cpa2": {
+      "O2-CPA1": {
+        "returncode": 1,
+        "completed_raw_control_pairs": 0,
+        "original_instruction_comparisons": 0,
+        "guest_sha256": "e9bb86c42b86c6ad8835597162eb9c5cafe8a616672eeab3a7a087eecf1326e5"
+      },
+      "O0-CPA2": {
+        "returncode": 0,
+        "completed_raw_control_pairs": 16,
+        "original_instruction_comparisons": 33984,
+        "guest_sha256": "4c0f3d86656aef7fcbad41e620c7ddcbdb7caf1f40642ec169b64bd92fe28696"
+      },
+      "O2-CPA2": {
+        "returncode": 0,
+        "completed_raw_control_pairs": 16,
+        "original_instruction_comparisons": 33984,
+        "guest_sha256": "e9bb86c42b86c6ad8835597162eb9c5cafe8a616672eeab3a7a087eecf1326e5"
+      }
+    },
+    "structure_writeback": {
+      "native_probe_sha256": "cdf3984043d36c06e6df942efc9064dc5dc925d8f372062f3b929ffafb60c017",
+      "observations": {
+        "O2-CPA1": {
+          "returncode": 1,
+          "completed_raw_control_pairs": 0,
+          "structure_accesses": 0
+        },
+        "O0-CPA2": {
+          "returncode": 0,
+          "completed_raw_control_pairs": 16,
+          "structure_accesses": 128
+        },
+        "O2-CPA2": {
+          "returncode": 0,
+          "completed_raw_control_pairs": 16,
+          "structure_accesses": 128
+        }
+      }
+    },
+    "bit_controls": {
+      "clear_bit_35": {
+        "explicit-high-O2": "RETURN-MODEL EL1 comparison failed",
+        "explicit-backend-opt-O2": "RETURN-MODEL EL1 comparison failed",
+        "prefix-high-O2": "RETURN-MODEL EL1 comparison failed",
+        "prefix-backend-opt-O2": "RETURN-MODEL EL1 comparison failed"
+      },
+      "clear_bit_63": {
+        "explicit-high-O2": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings",
+        "explicit-backend-opt-O2": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings",
+        "prefix-high-O2": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings",
+        "prefix-backend-opt-O2": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings"
+      },
+      "first_modifier_key": "IA explicit",
+      "second_modifier_key": "IB prefixed"
+    }
+  },
+  "hosted_native": {
+    "maintained_workflow": "https://github.com/gmh5225/test_mac_intel/pull/13",
+    "capability_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45550938279",
+    "r6_test_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45550753976",
+    "hosts": {
+      "macos-15": {
+        "cpu": "Apple M1 (Virtual)",
+        "os_version": "15.8.2",
+        "source_revision": "34c3f2da6efa3531ad825e8a3dd361b1a3c8c93e",
+        "r6_test_source": "00576a2ea6b036b12a37c994cc189817274f9874",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": false,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "r6_passed": [
+          "AArch64PAuthSemantics.ProbeRequiresEntryAndDistinguishesFaults",
+          "AArch64PAuthSemantics.NativeGenericSignaturesAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.BothCProjectionsCompileWithTheTwoModifierOracle",
+          "AArch64PACMSemantics.BothCProjectionsCompileWithThePrefixOracle"
+        ],
+        "r6_skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativeHintModeAgreesWithCAndDirectObjects"
+        ]
+      },
+      "macos-26": {
+        "cpu": "Apple M1 (Virtual)",
+        "os_version": "26.7.2",
+        "source_revision": "34c3f2da6efa3531ad825e8a3dd361b1a3c8c93e",
+        "r6_test_source": "00576a2ea6b036b12a37c994cc189817274f9874",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": true,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "r6_passed": [
+          "AArch64PAuthSemantics.ProbeRequiresEntryAndDistinguishesFaults",
+          "AArch64PAuthSemantics.NativeGenericSignaturesAgreeWithBothCProjections",
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.BothCProjectionsCompileWithTheTwoModifierOracle",
+          "AArch64PACMSemantics.BothCProjectionsCompileWithThePrefixOracle",
+          "AArch64PACMSemantics.NativeHintModeAgreesWithCAndDirectObjects"
+        ],
+        "r6_skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ]
+      },
+      "xcode-27": {
+        "cpu": "Apple M1 (Virtual)",
+        "os_version": "27.0.1",
+        "source_revision": "34c3f2da6efa3531ad825e8a3dd361b1a3c8c93e",
+        "r6_test_source": "00576a2ea6b036b12a37c994cc189817274f9874",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": true,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "r6_passed": [
+          "AArch64PAuthSemantics.ProbeRequiresEntryAndDistinguishesFaults",
+          "AArch64PAuthSemantics.NativeGenericSignaturesAgreeWithBothCProjections",
+          "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+          "AArch64PAuthLRSemantics.BothCProjectionsCompileWithTheTwoModifierOracle",
+          "AArch64PACMSemantics.BothCProjectionsCompileWithThePrefixOracle",
+          "AArch64PACMSemantics.NativeHintModeAgreesWithCAndDirectObjects"
+        ],
+        "r6_skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ]
+      }
+    }
+  }
+}

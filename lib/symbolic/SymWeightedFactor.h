@@ -14,7 +14,8 @@ namespace neverd::symbolic::detail {
 struct WeightedFactor {
   SymRef Offset;
   llvm::ArrayRef<SymRef> Terms;
-  SymRef ToggleMask{};
+  SymRef FieldMask{};
+  bool SubtractField = false;
 };
 
 inline WeightedFactor readWeightedFactor(const SymContext &Ctx, SymRef F) {
@@ -25,23 +26,29 @@ inline WeightedFactor readWeightedFactor(const SymContext &Ctx, SymRef F) {
   const auto Args = Ctx.operands(F);
   if (!Ctx.isConst(Args.front()))
     return {};
-  if (Op == SymOp::Add)
-    return {Args.front(), Args.drop_front()};
   if (Args.size() != 2)
-    return {};
+    return Op == SymOp::Add ? WeightedFactor{Args.front(), Args.drop_front()}
+                            : WeightedFactor{};
   auto Sum = Args.back();
   if (Op == SymOp::And) {
     if (Ctx.op(Sum) != SymOp::Not)
       return {};
     Sum = Ctx.operand(Sum, 0);
   }
-  // An explicit toggle mask also occurs when the compiler spells C & ~D
-  // as C ^ (M & D) and clears bits of M already known zero in D.
-  if (Op == SymOp::Xor && Ctx.op(Sum) == SymOp::And &&
-      Ctx.numOperands(Sum) == 2 && Ctx.isConst(Ctx.operand(Sum, 0)) &&
-      Ctx.op(Ctx.operand(Sum, 1)) == SymOp::Add)
-    return {Args.front(), Ctx.operands(Ctx.operand(Sum, 1)),
-            Ctx.operand(Sum, 0)};
+  // A mask on the weighted delta precedes its addition or bitwise join
+  // with the scalar offset. Keep the mask until its live bits are known.
+  // Subtraction is represented as addition of a product by all ones.
+  const bool Scaled = Op == SymOp::Add && Ctx.op(Sum) == SymOp::Mul &&
+                      Ctx.numOperands(Sum) == 2;
+  const SymRef Delta = Scaled ? Ctx.operand(Sum, 1) : Sum;
+  if (Ctx.op(Delta) == SymOp::And && Ctx.numOperands(Delta) == 2 &&
+      Ctx.isConst(Ctx.operand(Delta, 0)) &&
+      Ctx.op(Ctx.operand(Delta, 1)) == SymOp::Add &&
+      (!Scaled || Ctx.isConstOnes(Ctx.operand(Sum, 0))))
+    return {Args.front(), Ctx.operands(Ctx.operand(Delta, 1)),
+            Ctx.operand(Delta, 0), Scaled};
+  if (Op == SymOp::Add)
+    return {Args.front(), Args.drop_front()};
   if (Ctx.op(Sum) == SymOp::Add)
     return {Args.front(), Ctx.operands(Sum)};
   return {};

@@ -29,7 +29,7 @@ namespace {
 template <typename ELFT>
 llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
                              llvm::ArrayRef<typename ELFT::Shdr> Sections,
-                             Arch &A, PPC64DescriptorTable *Descriptors) {
+                             Arch &A, PPC64LinkageTables *Linkage) {
   using namespace llvm::ELF;
   const auto &Header = File.getHeader();
   llvm::StringRef SectionNames;
@@ -39,7 +39,7 @@ llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
       return Names.takeError();
     SectionNames = *Names;
   }
-  PPC64DescriptorTable OPD;
+  PPC64LinkageTables Tables;
   for (const auto &S : Sections) {
     if (SectionNames.empty() || !S.sh_name)
       continue;
@@ -48,16 +48,16 @@ llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
       return Name.takeError();
     if (*Name != ppc_elf::DescriptorSection)
       continue;
-    if (OPD.Size || S.sh_type != SHT_PROGBITS ||
+    if (Tables.Size || S.sh_type != SHT_PROGBITS ||
         (S.sh_flags & (SHF_ALLOC | SHF_EXECINSTR)) != SHF_ALLOC || !S.sh_size ||
         (S.sh_entsize && ((S.sh_entsize != ppc_elf::EnvironmentOffset &&
                            S.sh_entsize != ppc_elf::DescriptorSize) ||
                           S.sh_size % S.sh_entsize)))
       return llvm::createStringError("elf: invalid PPC64 .opd section");
-    OPD = {S.sh_addr, S.sh_size, static_cast<unsigned>(S.sh_entsize)};
+    Tables = {S.sh_addr, S.sh_size, static_cast<unsigned>(S.sh_entsize)};
   }
   std::optional<va_t> Address, Size;
-  std::optional<va_t> JumpRel, JumpSize, JumpType, Glink;
+  std::optional<va_t> JumpRel, JumpSize, JumpType, Glink, Options;
   auto Segments = File.program_headers();
   if (!Segments)
     return Segments.takeError();
@@ -78,9 +78,6 @@ llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
         Terminated = true;
         break;
       }
-      if (Header.e_flags == ppc_elf::ELFv2 && D.d_tag != ppc_elf::DynamicOPD &&
-          D.d_tag != ppc_elf::DynamicOPDSize)
-        continue;
       std::optional<va_t> *Field = nullptr;
       switch (D.d_tag) {
       case ppc_elf::DynamicOPD:
@@ -101,6 +98,9 @@ llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
       case ppc_elf::DynamicGlink:
         Field = &Glink;
         break;
+      case ppc_elf::DynamicOptions:
+        Field = &Options;
+        break;
       default:
         continue;
       }
@@ -113,42 +113,42 @@ llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
   }
   if (Address || Size) {
     if (!Address || !Size || !*Size ||
-        (OPD.Size && (OPD.Address != *Address || OPD.Size != *Size)))
+        (Tables.Size && (Tables.Address != *Address || Tables.Size != *Size)))
       return llvm::createStringError(
           "elf: conflicting PPC64 descriptor tables");
-    OPD = {*Address, *Size, OPD.EntrySize, true};
+    Tables = {*Address, *Size, Tables.EntrySize, true};
   }
-  if (OPD.Size && Header.e_flags == ppc_elf::ELFv2)
+  if (Tables.Size && Header.e_flags == ppc_elf::ELFv2)
     return llvm::createStringError("elf: PPC64 ELFv2 conflicts with .opd");
-  if (OPD.Size) {
-    if (OPD.Address % ppc_elf::WordSize || OPD.Size % ppc_elf::WordSize ||
-        OPD.Size < ppc_elf::EnvironmentOffset ||
-        OPD.Size > InvalidVA - OPD.Address)
+  if (Tables.Size) {
+    if (Tables.Address % ppc_elf::WordSize || Tables.Size % ppc_elf::WordSize ||
+        Tables.Size < ppc_elf::EnvironmentOffset ||
+        Tables.Size > InvalidVA - Tables.Address)
       return llvm::createStringError(
           "elf: invalid PPC64 descriptor table bounds");
     A = ELFT::Endianness == llvm::endianness::little ? Arch::PPC64LEELFv1
                                                      : Arch::PPC64ELFv1;
-    if (JumpRel || JumpSize || JumpType) {
-      if (!JumpRel || !JumpSize || JumpType != DT_RELA ||
-          *JumpSize % sizeof(typename ELFT::Rela) ||
-          *JumpSize > InvalidVA - *JumpRel)
-        return llvm::createStringError(
-            "elf: invalid PPC64 PLT relocation table");
-      OPD.JumpRelocations = *JumpRel;
-      OPD.JumpRelocationSize = *JumpSize;
-    }
-    OPD.Glink = Glink;
-    if (Descriptors)
-      *Descriptors = OPD;
   } else if (Header.e_flags != ppc_elf::ELFv2)
     return llvm::createStringError("elf: missing PPC64 ABI or .opd evidence");
+  if (JumpRel || JumpSize || JumpType) {
+    if (!JumpRel || !JumpSize || JumpType != DT_RELA ||
+        *JumpSize % sizeof(typename ELFT::Rela) ||
+        *JumpSize > InvalidVA - *JumpRel)
+      return llvm::createStringError("elf: invalid PPC64 PLT relocation table");
+    Tables.JumpRelocations = *JumpRel;
+    Tables.JumpRelocationSize = *JumpSize;
+  }
+  Tables.Glink = Glink;
+  Tables.PLTLocalEntry = Options.value_or(0) & ppc_elf::LocalEntryOption;
+  if (Linkage)
+    *Linkage = Tables;
   return llvm::Error::success();
 }
 
 // Identify and load must agree even when ELF machine, class and flags conflict.
 template <typename ELFT>
 llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
-                        RISCVProfile &RV, PPC64DescriptorTable *Descriptors) {
+                        RISCVProfile &RV, PPC64LinkageTables *Linkage) {
   using namespace llvm::ELF;
   const auto &File = Obj.getELFFile();
   const auto &Header = File.getHeader();
@@ -258,7 +258,7 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
     }
   }
   if (isPowerPC64(A))
-    return readPPC64Profile(File, *Sections, A, Descriptors);
+    return readPPC64Profile(File, *Sections, A, Linkage);
   if (isRISCV(A) && (Header.e_flags & EF_RISCV_RVC) && !RV.Zca)
     RV.Compressed = true;
   return llvm::Error::success();
@@ -268,12 +268,12 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
 
 llvm::Error readIntegerProfile(const llvm::object::ObjectFile &Object, Arch &A,
                                RISCVProfile &Profile,
-                               PPC64DescriptorTable *Descriptors) {
+                               PPC64LinkageTables *Linkage) {
   using namespace llvm::object;
   return llvm::TypeSwitch<const ObjectFile *, llvm::Error>(&Object)
       .Case<ELF32LEObjectFile, ELF32BEObjectFile, ELF64LEObjectFile,
             ELF64BEObjectFile>([&](const auto *ELF) {
-        return readProfile(*ELF, A, Profile, Descriptors);
+        return readProfile(*ELF, A, Profile, Linkage);
       })
       .Default([](const ObjectFile *) {
         return llvm::createStringError("elf: unsupported class");

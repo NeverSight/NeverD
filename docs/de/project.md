@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9d385e278cada6c6a2fa4564b4ec44fbfc6e00b1c7dfc19b34f5d1ce1105f7ce -->
+<!-- i18n-source: 53f1a000027451971c7ecbb53458cf55fca7b02e4df6dd9daae836c681650299 -->
 
 <div align="center">
 
@@ -69,7 +69,7 @@ Die experimentellen Integer-ELF-Ziele unterstützen striktes Lifting, die Rekons
 | Ziel | Geprüfte ELF-Profile |
 |---|---|
 | RISC-V | RV32I/ILP32 und RV64I/LP64 in Little Endian. Die ELF-Angaben bestimmen die Erweiterungen M, A und Integer-C oder die einzelnen Erweiterungen Zmmul, Zaamo, Zalrsc und Zca. |
-| PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. ELFv1 unterstützt Funktionsdeskriptoren, modulübergreifende PLT-Aufrufe und den Wechsel der TOC innerhalb eines Moduls. Die geprüften Skalaroperationen umfassen vorzeichenbehaftete und vorzeichenlose Division, das in CR0 festgehaltene Ergebnis und die Auswirkungen auf die Überlaufbits in XER. |
+| PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. Beide PPC64-ABIs unterstützen modulübergreifende PLT-Aufrufe und TOC-Wechsel. ELFv1 verwendet Funktionsdeskriptoren, ELFv2 unterstützt globale und lokale Einsprungpunkte. Die geprüften Skalaroperationen umfassen vorzeichenbehaftete und vorzeichenlose Division, das in CR0 festgehaltene Ergebnis und die Auswirkungen auf die Überlaufbits in XER. |
 
 Das Umschreiben von nativem Code steht für diese Profile noch aus. [Unterstützung für RISC-V und PowerPC (Englisch)](../riscv-powerpc.md)
 

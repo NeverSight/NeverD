@@ -408,6 +408,8 @@ neverd decompile program --func entry --devirtualize --vm-machine-state \
 
 تقبل واجهتا C v10، وهما `neverd_devirtualize_source_v10()` و`neverd_devirtualize_machine_source_v10()`، البنية `neverd_devirtualize_options_v10`. صفّر البنية واضبط `struct_size` في بادئة v1 على الحجم الكامل، وحدد `machine_source_abi` باستخدام `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1` أو `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` أو `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2`. تُرفض القيم المجهولة والحقول المحجوزة غير الصفرية والتخطيطات الموسعة مع المصدر العادي. تتجاهل الواجهات السابقة الذيل الجديد، وتتجاهل v10 الذيول المستقبلية. تحتفظ الخيارات الفارغة بالإعدادات القياسية الافتراضية. توفر Python كلاً من `NeverDDevirtualizeOptionsV10` و`DevirtualizeMachineSourceABI`. لا تتغير شهادة التنفيذ الأصلي.
 
+تقبل واجهتا C بالإصدار v11، `neverd_devirtualize_source_v11()` و`neverd_devirtualize_machine_source_v11()`، المرشحات الواردة في `nextControlProducerHints`؛ ويمكن تكرار الخيار `--vm-producer-hint=address:r|s:offset:bytes:mask` في سطر الأوامر. اربط المرشحات بالصورة الثنائية المادية نفسها باستخدام تجزئة الصورة في التقرير قبل إعادة استخدامها. لا تمنح هذه التلميحات قيمة أو مسارًا مثبتًا؛ فهي تطلب دقة إضافية فقط، وتستهلك ميزانية الاكتشاف، ويُعاد إثبات الرسم القابل للوصول كاملًا في كل تشغيل. يشير `controlProducerHintsTruncated` إلى اقتطاع القائمة.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## استعادة المفسّر في تطبيق سطح المكتب

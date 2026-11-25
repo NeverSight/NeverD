@@ -287,7 +287,7 @@ MedLLVMEmitter::materializeImageFunctionDeclaration(va_t Entry,
   // A relocated ELFv1 pointer can take an omitted routine's address before
   // its direct call is emitted. Preserve the integer call operands already
   // recovered for that entry when declaring the initializer's target.
-  if (Img && isPowerPC64ELFv1(Img->Arch) &&
+  if (Img && isPowerPC64(Img->Arch) &&
       Img->PPC64EntryContexts.contains(Entry)) {
     if (auto It = DirectCallArgumentCounts.find(Entry);
         It != DirectCallArgumentCounts.end()) {
