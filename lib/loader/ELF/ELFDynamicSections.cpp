@@ -190,8 +190,8 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
       uint64_t Last = 0;
       for (uint64_t I = 0; I < Buckets; ++I)
         Last = std::max<uint64_t>(Last, Word(*Table + BucketsAt + I * 4));
-      if (!Last && isPowerPC(Img.Arch) && Tag(DT_JMPREL) &&
-          Tag(DT_PLTREL) == uint64_t(DT_RELA)) {
+      if (!Last && (isPowerPC(Img.Arch) || isRISCV(Img.Arch)) &&
+          Tag(DT_JMPREL) && Tag(DT_PLTREL) == uint64_t(DT_RELA)) {
         // An executable with only undefined imports has empty GNU hash
         // buckets. GNU ld can still place those imports after symoffset.
         // A SysV count covers those too. Otherwise the runtime RELA

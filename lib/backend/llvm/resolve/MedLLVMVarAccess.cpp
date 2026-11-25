@@ -1213,17 +1213,6 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
           return Builder.CreatePtrToInt(Code, sizeToType(V.Size),
                                         "codeptr.prov");
         }
-        // An exact import veneer stands for its import, as in the pointer
-        // mirror: a destructor `push offset` names one for an iterator.
-        if (const Import *Imported =
-                Img ? Img->findImportStubAt(V.ConstVal) : nullptr;
-            Imported && !Imported->Name.empty()) {
-          if (llvm::GlobalValue *Symbol =
-                  importedSymbolIdentity(Imported->Name))
-            return Builder.CreatePtrToInt(Symbol, sizeToType(V.Size),
-                                          "import.prov");
-          return llvm::UndefValue::get(sizeToType(V.Size));
-        }
         // A string literal among the code is data a symbol names.
         if (llvm::Constant *Literal = resolveSymbolStringLiteral(V.ConstVal))
           return Builder.CreatePtrToInt(Literal, sizeToType(V.Size), "literal");

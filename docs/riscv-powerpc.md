@@ -23,6 +23,14 @@ uses the physical instruction length for the link address.
 [Unprivileged ISA, 20260120](https://docs.riscv.org/reference/isa/v20260120/unpriv/unpriv-index.html).
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/).
 
+Linked RV32 and RV64 executables and shared libraries support the default
+psABI PLT. The loader reads `R_RISCV_JUMP_SLOT` from the program's dynamic
+table. To name an external call, it checks that the PLT entry loads that
+slot and that PLT0 computes the same relocation index for lazy binding.
+This works with section headers removed and with linker relaxation enabled
+or disabled. Variant calling conventions and landing-pad PLTs have separate
+instruction and ABI requirements and are outside this profile.
+
 | PowerPC ABI | Admission and linkage |
 | --- | --- |
 | PPC32 System V | ELF32 and zero processor flags. The ninth integer argument begins eight bytes above the caller's stack pointer on entry. Cross-module calls use a secure PLT or a classic BSS-PLT. |
@@ -195,6 +203,17 @@ rebuilding target-dependent source. For big-endian PowerPC64, pass
 
 ```sh
 python3 unittests/lift/elf-integer/roundtrip.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
+```
+
+The RISC-V PLT fixture builds two independent providers and checks ordinary
+calls and tail calls. It runs both the original and the rebuilt caller at
+different module bases, with eager and lazy binding. The lazy resolver checks
+the relocation index and link map before rebinding the slot. Run it with ELF
+LLD or GNU ld with the `elf32lriscv` and `elf64lriscv` emulations.
+
+```sh
+python3 unittests/lift/elf-integer/riscv_plt.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
 ```
 

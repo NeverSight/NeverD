@@ -13,7 +13,7 @@ from elftools.elf.enums import ENUM_RELOC_TYPE_PPC as PPC
 import unicorn
 from unicorn import ppc_const as reg
 
-from roundtrip import DATA, RETURN, STACK, machine, map_image
+from roundtrip import DATA, RETURN, STACK, machine, map_image, without_sections
 
 
 VALUES = (0, 1, 17, 0x80000001, 0xffffffff)
@@ -155,19 +155,6 @@ def image_storage(source, reference):
     storage = source.with_suffix(".S")
     storage.write_text("\n".join(lines) + "\n")
     return [storage]
-
-
-def without_sections(app):
-    with app.open("rb") as stream:
-        elf = ELFFile(stream)
-        for field in ("e_shoff", "e_shnum", "e_shstrndx"):
-            elf.header[field] = 0
-        header = elf.structs.Elf_Ehdr.build(elf.header)
-    raw = bytearray(app.read_bytes())
-    raw[:len(header)] = header
-    result = app.with_name(app.stem + "-no-section-headers.so")
-    result.write_bytes(raw)
-    return result
 
 
 def check_rejected(neverd, image, diagnostic):

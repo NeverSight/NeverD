@@ -101,6 +101,7 @@ add_neverd_component_library(NeverDLoader
   ELF/ELFDynamicSections.cpp
   ELF/ELFLoader.cpp
   ELF/ELFIntegerProfile.cpp
+  ELF/ELFRISCVLinkage.cpp
   ELF/ELFPPC64Descriptors.cpp
   ELF/ELFPPC32Linkage.cpp
   ELF/ELFPPC64Entries.cpp
