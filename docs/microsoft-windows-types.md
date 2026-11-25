@@ -154,6 +154,12 @@ exports of `mcd.sys`. It retains the variadic debug routine and the
 byte-sized direction argument to `ChangerClassSendSrbSynchronous`. Select
 `--provider MediaChanger` in the provider ABI check to compare all five.
 
+`--provider AcpiOpRegion` checks the registration and deregistration exports of
+`acpi.sys` from `oprghdlr.h`. The WDK declares the operation handler and its
+completion callback with `__cdecl` on x86. `--provider KernelStreamingCOM`
+checks the four `Ko` exports of `ks.sys` from `kcom.h`, using the kernel
+`IUnknown` declaration from `unknown.h`.
+
 RDBSS is an independent kernel unit using the official mini-redirector
 profile. The pinned `rxcontx.h` gives two different anonymous enums the same
 `RX_CONTEXT_CREATE_FLAGS` typedef only in C. The generator compares both

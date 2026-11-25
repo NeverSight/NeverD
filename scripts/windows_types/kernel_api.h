@@ -25,13 +25,17 @@ NDIS_STATUS NTAPI NdisOpenConfigurationEx(
 PVOID NTAPI MmMapIoSpaceEx(PHYSICAL_ADDRESS PhysicalAddress,
                            SIZE_T NumberOfBytes, ULONG Protect);
 
-// Native API declarations: phnt ntrtl.h and the kernel's exported PEB query.
-// The PEB and transaction remain opaque unless another header defines them.
+// The ReactOS process manager documents the exported PEB query.
+// Other headers may complete the PEB and transaction types.
 struct _PEB *NTAPI PsGetProcessPeb(PEPROCESS Process);
+// The Microsoft driver documentation supplies this declaration outside wdm.h.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlansistringtounicodestring
 WCHAR NTAPI RtlAnsiCharToUnicodeChar(PUCHAR *SourceCharacter);
 typedef struct _KTRANSACTION *PKTRANSACTION;
 
-// The information-class enum is supplied from phnt by the generator.
+// The kernel declaration and information classes come from phnt. The callable
+// signature also matches the documented ntdll entry.
+// https://learn.microsoft.com/windows/win32/sysinfo/zwquerysysteminformation
 NTSTATUS NTAPI ZwQuerySystemInformation(
     SYSTEM_INFORMATION_CLASS SystemInformationClass, PVOID SystemInformation,
     ULONG SystemInformationLength, PULONG ReturnLength);
