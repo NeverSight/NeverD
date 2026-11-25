@@ -18,4 +18,9 @@ SDK_SIGNING_TEXT(kForceSign, "--force")
 SDK_SIGNING_TEXT(kSign, "--sign")
 SDK_SIGNING_TEXT(kAdHocIdentity, "-")
 
+SDK_SIGNING_TEXT(kRemoveSignature, "--remove-signature")
+SDK_SIGNING_TEXT(kPageSizeOption, "--pagesize")
+SDK_SIGNING_TEXT(kFourKiBPage, "4096")
+SDK_SIGNING_TEXT(kSixteenKiBPage, "16384")
+
 #undef SDK_SIGNING_TEXT

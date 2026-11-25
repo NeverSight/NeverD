@@ -1175,9 +1175,8 @@ int publishGuarded(Session *S, const std::filesystem::path &SourcePath,
   const bool SignedMachO = Security.MachO && !isUnsignedMachO(*Security.MachO);
   if (SignedMachO) {
 #ifdef __APPLE__
-    const std::string &Identifier = Security.MachO->Slices.front().Identifier;
     if (llvm::Error Signing = macho_signing::adHocResign(
-            BackendTemporary.path().string(), Identifier))
+            BackendTemporary.path().string(), Security.MachO->Slices.front()))
       return fail(S, Result, NEVERD_SANITIZE_STATUS_SIGNING_FAILED,
                   llvm::toString(std::move(Signing)));
 #else

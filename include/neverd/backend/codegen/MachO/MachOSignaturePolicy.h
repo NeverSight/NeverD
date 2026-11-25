@@ -19,6 +19,7 @@
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,9 @@ struct Profile {
 
   bool operator==(const Profile &) const = default;
 };
+
+/// Decode the page-size exponent accepted for a paged CodeDirectory.
+std::optional<uint64_t> codeDirectoryPageBytes(uint8_t Exponent);
 
 /// Parse and classify every thin or universal Mach-O slice.
 ///

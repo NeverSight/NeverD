@@ -30,6 +30,12 @@
 
 namespace neverd::macho_signature {
 
+std::optional<uint64_t> codeDirectoryPageBytes(uint8_t Exponent) {
+  if (!Exponent || Exponent >= std::numeric_limits<int64_t>::digits)
+    return std::nullopt;
+  return uint64_t{1} << Exponent;
+}
+
 namespace {
 
 using llvm::MachO::CS_BlobIndex;
@@ -251,12 +257,12 @@ parseCodeDirectory(llvm::ArrayRef<uint8_t> Blob, uint64_t ExpectedCodeLimit) {
   if (EffectiveCodeLimit != ExpectedCodeLimit)
     return malformed("CodeDirectory codeLimit does not end at the signature");
 
-  if (PageSize == 0 || PageSize >= 63)
+  const auto PageBytes = codeDirectoryPageBytes(PageSize);
+  if (!PageBytes)
     return malformed("CodeDirectory page size is unsupported");
-  const uint64_t PageBytes = uint64_t{1} << PageSize;
   const uint64_t ExpectedCodeSlots =
-      EffectiveCodeLimit / PageBytes +
-      (EffectiveCodeLimit % PageBytes != 0 ? 1 : 0);
+      EffectiveCodeLimit / *PageBytes +
+      (EffectiveCodeLimit % *PageBytes != 0 ? 1 : 0);
   if (ExpectedCodeSlots != *CodeSlots)
     return malformed("CodeDirectory page coverage is incomplete");
 

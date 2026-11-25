@@ -394,16 +394,20 @@ private:
   bool Active = false;
 };
 
-void expectExactGuardPublish(uint32_t Strategy, bool CodesignInput = false) {
+void expectExactGuardPublish(uint32_t Strategy,
+                             const char *PageBytes = nullptr) {
   REQUIRE_RUNTIME_FIXTURE_COMPILER();
   TemporaryFixture Fixture;
   ASSERT_TRUE(Fixture.valid()) << Fixture.Error;
   ASSERT_TRUE(Fixture.compileRuntimeFixture()) << Fixture.Error;
 
 #ifdef __APPLE__
-  if (CodesignInput) {
+  if (PageBytes) {
     const std::string Path = Fixture.Input.string();
-    ASSERT_EQ(runProgram({kCodesign, kForceSign, kSign, kAdHocIdentity, Path},
+    ASSERT_EQ(runProgram({kCodesign, kRemoveSignature, Path}, Fixture.Error), 0)
+        << Fixture.Error;
+    ASSERT_EQ(runProgram({kCodesign, kForceSign, kSign, kAdHocIdentity,
+                          kPageSizeOption, PageBytes, Path},
                          Fixture.Error),
               0)
         << Fixture.Error;
@@ -1197,8 +1201,11 @@ TEST(NeverDSafetyPatchCAPI, InplacePublishesOneExactCountedWriteGuard) {
 
 #ifdef __APPLE__
 TEST(NeverDSafetyPatchCAPI, CodesignAdHocInputPublishesExactGuards) {
-  expectExactGuardPublish(NEVERD_SANITIZE_STRATEGY_SECTION, true);
-  expectExactGuardPublish(NEVERD_SANITIZE_STRATEGY_INPLACE, true);
+  for (const char *PageBytes : {kFourKiBPage, kSixteenKiBPage}) {
+    SCOPED_TRACE(PageBytes);
+    expectExactGuardPublish(NEVERD_SANITIZE_STRATEGY_SECTION, PageBytes);
+    expectExactGuardPublish(NEVERD_SANITIZE_STRATEGY_INPLACE, PageBytes);
+  }
 }
 #endif
 

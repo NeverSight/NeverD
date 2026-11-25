@@ -498,8 +498,7 @@ TEST_P(MachOArm64eNativeInstallation,
                    : installMachOAuthenticatedFixups(Bytes, Fixups);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   ASSERT_FALSE(Write(InstalledPath, llvm::toStringRef(llvm::ArrayRef(Bytes))));
-  Error = macho_signing::adHocResign(InstalledPath,
-                                     Signature->Slices.front().Identifier);
+  Error = macho_signing::adHocResign(InstalledPath, Signature->Slices.front());
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   Error = macho_signing::verifyStrict(InstalledPath);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
@@ -1412,8 +1411,8 @@ void checkNativeObjectInstallation(
   } else {
     ASSERT_FALSE(
         Write(InstalledPath, llvm::toStringRef(llvm::ArrayRef(Bytes))));
-    auto Error = macho_signing::adHocResign(
-        InstalledPath, Signature->Slices.front().Identifier);
+    auto Error =
+        macho_signing::adHocResign(InstalledPath, Signature->Slices.front());
     ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   }
   auto Error = macho_signing::verifyStrict(InstalledPath);
@@ -1867,8 +1866,7 @@ TEST(MachONativeRelro, DyldProtectsConstantsAndKeepsMutablePagesWritable) {
   auto Error = Patcher.appendReplacementImage(Bytes, Image);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   ASSERT_FALSE(Write(Installed, llvm::toStringRef(llvm::ArrayRef(Bytes))));
-  Error = macho_signing::adHocResign(Installed,
-                                     Signature->Slices.front().Identifier);
+  Error = macho_signing::adHocResign(Installed, Signature->Slices.front());
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   Error = macho_signing::verifyStrict(Installed);
   ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
