@@ -48,7 +48,10 @@ retains its recovered value. The default source imports the original word
 and preserves the registry call through optimization. The physical word
 can differ across invocations with identical ordinary entry parameters.
 Single-entry HighC exports also keep mapped direct callees distinct from
-MinGW header declarations when only the PDB names the omitted routine.
+MinGW header declarations when only the PDB names the omitted routine. In
+original-state exports the Win64 integer calls whose parameter types are
+unknown use open declarations. Calls retain their default argument promotions
+and original linker symbols in both GNU C11 and C23.
 The V6 `native_rtm_abort_steps` binding handles an authenticated immediate
 abort pair under declared RTM support as one translated step. It preserves
 early-abort EAX and the original fallback. The earlier environment-budget
