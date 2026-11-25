@@ -995,6 +995,8 @@ MedFunc LowToMedConverter::convertFunction(
       Fmt == BinaryFormat::ELF)
     Physical = projectMIPSPICGlobalPointer(SourceLow, *Image);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
+  if (isPowerPC(TheArch))
+    requirePPCConditionalReturnLinks(Low);
   const bool MIPS16Literals =
       SourceCallRuntimeHintsEnabled && Image && isMIPSO32(TheArch) &&
       Image->MIPS && Image->MIPS->HasMIPS16 &&

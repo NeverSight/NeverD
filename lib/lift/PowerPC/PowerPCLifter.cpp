@@ -34,6 +34,10 @@ enum : unsigned {
 };
 } // namespace opcode
 
+namespace branch_option {
+#include "PowerPCBranchOptions.inc"
+} // namespace branch_option
+
 struct State : IntegerLiftState {
   using IntegerLiftState::IntegerLiftState;
   NdVar special(uint64_t Offset) { return NdVar::reg(Offset, Width); }
@@ -75,26 +79,44 @@ struct State : IntegerLiftState {
 IntegerControl branch(Arch A, uint32_t W, va_t PC) {
   unsigned Op = W >> 26;
   bool Link = W & 1;
+  using namespace branch_option;
+  const unsigned BO = W >> 21 & 31;
+  const bool Conditional =
+      (BO & (IgnoreCR | IgnoreCTR)) != (IgnoreCR | IgnoreCTR);
   if (Op == opcode::B || Op == opcode::BC) {
-    bool Conditional = Op == opcode::BC && ((W >> 21 & 20) != 20);
+    const bool TestsCondition = Op == opcode::BC && Conditional;
     // A conditional call needs a predicated link/call edge.
-    if (Conditional && Link)
+    if (TestsCondition && Link)
       return {};
     int64_t Disp = Op == opcode::B ? llvm::SignExtend64<26>(W & 0x3fffffc)
                                    : llvm::SignExtend64<16>(W & 0xfffc);
     va_t Dest = ((W & 2) ? 0 : PC) + Disp;
     // A link to the following instruction materializes the PC in LR. There
     // is no callee, register clobber or independent function at that address.
-    if (Link && !Conditional && Dest == PC + ppc_elf::InstructionAlignment)
+    if (Link && !TestsCondition && Dest == PC + ppc_elf::InstructionAlignment)
       return {NdOp::COPY, isPowerPC64(A) ? Dest : uint32_t(Dest)};
-    return {Link          ? NdOp::CALL
-            : Conditional ? NdOp::COND_BR
-                          : NdOp::BRANCH,
+    return {Link             ? NdOp::CALL
+            : TestsCondition ? NdOp::COND_BR
+                             : NdOp::BRANCH,
             isPowerPC64(A) ? Dest : uint32_t(Dest)};
   }
-  if (Op != opcode::XL || (W >> 21 & 20) != 20 || (W & 0xe000))
+  if (Op != opcode::XL || (W & ReservedXLBits))
     return {};
   unsigned XO = W >> 1 & 1023;
+  if (Conditional) {
+    // The two prediction bits are adjacent for CR-only tests and split for
+    // CTR-only tests. The encoding 01 is reserved in either form.
+    const bool ReservedPrediction =
+        (BO & IgnoreCTR)
+            ? (BO & (BranchIfCTRZero | PredictionTaken)) == PredictionTaken
+            : (BO & IgnoreCR) &&
+                  (BO & (BranchIfCRSet | PredictionTaken)) == PredictionTaken;
+    if (XO != opcode::BCLR || Link || (W & HintMask) == ReservedHint ||
+        ReservedPrediction)
+      return {};
+    const va_t Next = PC + ppc_elf::InstructionAlignment;
+    return {NdOp::RETURN, isPowerPC64(A) ? Next : uint32_t(Next)};
+  }
   if (XO == opcode::BCLR)
     return {Link ? NdOp::INDIR_CALL : NdOp::RETURN};
   if (XO == opcode::BCCTR)
@@ -103,18 +125,19 @@ IntegerControl branch(Arch A, uint32_t W, va_t PC) {
 }
 
 NdVar condition(State &S, unsigned BO, unsigned BI) {
+  using namespace branch_option;
   NdVar Cond = NdVar::scalar(1, 1);
-  if (!(BO & 4)) {
+  if (!(BO & IgnoreCTR)) {
     NdVar Counter = S.special(CTR);
     S.emit(NdOp::INT_SUB, Counter, {Counter, S.imm(1)});
-    Cond = S.op((BO & 2) ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL, Counter,
-                S.imm(0), 1);
+    Cond = S.op((BO & BranchIfCTRZero) ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL,
+                Counter, S.imm(0), 1);
   }
-  if (!(BO & 16)) {
+  if (!(BO & IgnoreCR)) {
     NdVar Flag = S.cr(BI);
-    if (!(BO & 8))
+    if (!(BO & BranchIfCRSet))
       Flag = S.op(NdOp::BOOL_XOR, Flag, NdVar::scalar(1, 1), 1);
-    Cond = (BO & 4) ? Flag : S.op(NdOp::BOOL_AND, Cond, Flag, 1);
+    Cond = (BO & IgnoreCTR) ? Flag : S.op(NdOp::BOOL_AND, Cond, Flag, 1);
   }
   return Cond;
 }
@@ -248,6 +271,22 @@ NdVar rotate(State &S, NdVar V, NdVar Shift) {
               S.op(NdOp::INT_RIGHT, V, Complement));
 }
 
+// Count bits independently in each byte, word or doubleword of the GPR.
+// CONCAT takes its high half first in either instruction byte order.
+NdVar populationCount(State &S, NdVar V, unsigned LaneBytes) {
+  if (V.Size == LaneBytes) {
+    NdVar Count = S.makeTemp(V.Size);
+    S.emit(NdOp::POPCOUNT, Count, {V});
+    return Count;
+  }
+  const unsigned Half = V.Size / 2;
+  NdVar Upper = S.makeTemp(Half);
+  S.emit(NdOp::SUBBYTES, Upper, {V, NdVar::scalar(Half, 4)});
+  const NdVar High = populationCount(S, Upper, LaneBytes);
+  const NdVar Low = populationCount(S, S.resize(V, Half), LaneBytes);
+  return S.op(NdOp::CONCAT, High, Low, V.Size);
+}
+
 bool integer(State &S, Arch A, uint32_t W) {
   const unsigned Op = W >> 26, T = W >> 21 & 31, RA = W >> 16 & 31,
                  RB = W >> 11 & 31;
@@ -263,6 +302,14 @@ bool integer(State &S, Arch A, uint32_t W) {
       S.emit(NdOp::COPY, S.special(LR),
              {NdVar::addressFragment(Flow.Target, S.Width)});
       return true;
+    }
+    if (Flow.hasReturnFallthrough()) {
+      // CTR decrements even on the not-taken edge. Guard only the transfer.
+      NdVar Taken = condition(S, T, RA);
+      NdVar Skip = S.makeTemp(1);
+      S.emit(NdOp::BOOL_NOT, Skip, {Taken});
+      S.emit(NdOp::COND_BR, {},
+             {NdVar::codeAddress(Flow.Target, S.Width), Skip});
     }
     NdVar Dest;
     if (Op == opcode::XL)
@@ -563,6 +610,13 @@ bool integer(State &S, Arch A, uint32_t W) {
                                                      : 4),
                  S.Width, true);
     break;
+#define NEVERD_PPC_POPULATION(Name, Encoding, LaneBytes)                       \
+  case Encoding:                                                               \
+    if (RB || Rc || LaneBytes > S.Width)                                       \
+      return false;                                                            \
+    V = populationCount(S, Src, LaneBytes);                                    \
+    break;
+#include "PowerPCIntegerForms.def"
   case opcode::CNTLZW:
   case opcode::CNTLZD: {
     if (RB || (XO == opcode::CNTLZD && !Wide))

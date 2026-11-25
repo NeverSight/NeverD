@@ -12,6 +12,30 @@ word unsigned_quotient(word a, word b) { return a / b; }
 long signed_quotient(long a, long b) { return a / b; }
 
 #if defined(__powerpc__)
+// A counted conditional return tests both CR0.EQ and the decremented CTR.
+__asm__(".text\n"
+        ".globl conditional_return\n"
+        ".type conditional_return,@function\n"
+        "conditional_return:\n"
+        "mtctr 4\n"
+        "cmpwi 3,0\n"
+        "bclr 8,2\n"
+        "mfctr 4\n"
+        "add 3,3,4\n"
+        "blr\n"
+        ".size conditional_return,.-conditional_return\n");
+word population_counts(word a, word b) {
+  word by_word, by_byte, total;
+  __asm__("popcntw %0,%1" : "=r"(by_word) : "r"(a));
+  __asm__("popcntb %0,%1" : "=r"(by_byte) : "r"(b));
+#if defined(__powerpc64__)
+  __asm__("popcntd %0,%1" : "=r"(total) : "r"(a ^ b));
+#else
+  __asm__("popcntw %0,%1" : "=r"(total) : "r"(a ^ b));
+#endif
+  return by_word + by_byte + total;
+}
+
 word independent_divides(word a, word b) {
   word first, second;
   __asm__ volatile("divw %0, %1, %2" : "=r"(first) : "r"(a), "r"(b));

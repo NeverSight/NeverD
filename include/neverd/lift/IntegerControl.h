@@ -18,11 +18,16 @@
 namespace neverd {
 struct IntegerControl {
   NdOp Opcode = NdOp::NOP;
+  // A conditional return has one static successor, its not-taken edge.
   va_t Target = InvalidVA;
 
+  bool hasReturnFallthrough() const {
+    return Opcode == NdOp::RETURN && Target != InvalidVA;
+  }
+
   bool terminates() const {
-    return Opcode == NdOp::RETURN || Opcode == NdOp::BRANCH ||
-           Opcode == NdOp::INDIR_BR;
+    return (Opcode == NdOp::RETURN && Target == InvalidVA) ||
+           Opcode == NdOp::BRANCH || Opcode == NdOp::INDIR_BR;
   }
 };
 } // namespace neverd
