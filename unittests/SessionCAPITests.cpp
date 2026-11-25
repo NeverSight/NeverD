@@ -13021,6 +13021,40 @@ TEST_F(SessionCAPITest, PrepareFunctionAcceptsAnEntryAtAddressZero) {
   EXPECT_TRUE(State.FunctionSources.empty());
 }
 
+TEST_F(SessionCAPITest, SymbolicSourceKeepsTheLocalVariadicImportContract) {
+  const auto Fixture = std::filesystem::path(__FILE__).parent_path() / "types" /
+                       "fixtures" / "local_variadic_import.exe";
+  std::ifstream Input(Fixture, std::ios::binary);
+  ASSERT_TRUE(Input.good());
+  const auto Path =
+      write("local-variadic.exe",
+            std::string(std::istreambuf_iterator<char>(Input), {}));
+  for (const bool EnhancedFirst : {false, true}) {
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    const auto Entry = neverd_session_entry_addr(Session);
+    ASSERT_FALSE(
+        takeString(neverd_local_types_declare(
+                       Session,
+                       "unsigned long long KeGetCurrentThread(unsigned long "
+                       "long x, ...);",
+                       nullptr))
+            .empty());
+    for (const bool Symbolic : {EnhancedFirst, !EnhancedFirst}) {
+      SCOPED_TRACE(Symbolic);
+      const auto Text = takeString(
+          neverd_ir_view_ex_json(Session, Entry, "c", 0, 256,
+                                 Symbolic ? R"({"symbolic":true})" : "{}"));
+      auto Page = llvm::json::parse(Text);
+      ASSERT_TRUE(bool(Page)) << Text;
+      const auto Body = Page->getAsObject()->getString("text");
+      ASSERT_TRUE(Body);
+      EXPECT_TRUE(Body->contains(
+          "KeGetCurrentThread(arg0, (uint64_t)0xB, (uint64_t)0xD)"))
+          << Body->str();
+    }
+  }
+}
+
 TEST_F(SessionCAPITest, SourceOptionsKeepOrdinaryAndEnhancedPagesIndependent) {
   // (x ^ y) + 2 * (x & y), followed by a separately named constant function.
   std::string Body("\x89\xf8\x31\xf0\x21\xf7\x01\xff\x01\xf8\xc3", 11);

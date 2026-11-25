@@ -7314,12 +7314,13 @@ TEST(Win64CallContract, HeaderOnlyFloatingImportRetainsItsTypedABI) {
 
 class FixedStackHeader : public NullDebugContext {
 public:
+  std::string Callee = "fixture_stack";
   uint16_t ReturnBytes = 8;
   unsigned Registers = 4;
   bool Local = false;
   std::optional<FunctionSym>
   resolvePrototype(llvm::StringRef Name) const override {
-    if (Name != "fixture_stack")
+    if (Name != Callee)
       return std::nullopt;
     FunctionSym Function;
     Function.Name = Name.str();
@@ -7342,18 +7343,111 @@ public:
         std::string(ReturnBytes == 0   ? "void"
                     : ReturnBytes == 4 ? "int32_t"
                                        : "int64_t") +
-        " fixture_stack(uint8_t a, uint16_t b, uint32_t c, uint64_t d, " +
+        " " + Callee + "(uint8_t a, uint16_t b, uint32_t c, uint64_t d, " +
         (Registers == 6 ? "uint64_t e, uint64_t f, " : "") + "int64_t *value)";
     return Function;
   }
   std::optional<FunctionSym> resolveFunction(va_t Address) const override {
-    auto Function =
-        Address == Iat ? resolvePrototype("fixture_stack") : std::nullopt;
+    auto Function = Address == Iat ? resolvePrototype(Callee) : std::nullopt;
     if (Function)
       Function->Addr = Address;
     return Function;
   }
 };
+
+TEST(Win64CallContract, DeclaredImportWithWDKNameKeepsItsStackOperand) {
+  FixedStackHeader Debug;
+  Debug.Callee = "RtlInitUnicodeString";
+  Debug.Local = true;
+  // R8, R9 and the fifth argument are live only for the private import.
+  const std::vector<uint8_t> Setup = {
+      0xB9, 11,   0,    0,    0,       // mov ecx,11
+      0xBA, 22,   0,    0,    0,       // mov edx,22
+      0x41, 0xB8, 33,   0,    0,    0, // mov r8d,33
+      0x41, 0xB9, 44,   0,    0,    0, // mov r9d,44
+      0x48, 0xC7, 0x44, 0x24, 0x20, 55, 0, 0, 0};
+  const auto Code = framed({Setup, throughSlot(Text + 4 + Setup.size(), Iat)});
+  for (bool Local : {false, true}) {
+    SCOPED_TRACE(Local);
+    auto Image = makeImage(Code, {{Text, "probe"}}, {Debug.Callee.c_str()});
+    Image.Imports.front().Module = Local ? "fixture.dll" : "ntoskrnl.exe";
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries = {Text};
+    const auto Result =
+        Pipeline().run(Image, Context, Options, Local ? &Debug : nullptr);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    EXPECT_EQ(Result.CallUserPrototypes.count(Iat), Local ? 1u : 0u);
+    const size_t Count = Local ? 5 : 2;
+    ASSERT_EQ(Result.MedFuncs.size(), 1u);
+    ASSERT_EQ(Result.MedFuncs.front().CallInfos.size(), 1u);
+    const auto &Args = Result.MedFuncs.front().CallInfos.front().Args;
+    ASSERT_EQ(Args.size(), Count);
+    for (size_t I = 0; I < Args.size(); ++I) {
+      ASSERT_TRUE(Args[I].isConst()) << I;
+      EXPECT_EQ(Args[I].ConstVal, 11 * (I + 1));
+    }
+  }
+}
+
+TEST(Win64CallContract,
+     LocalFloatingAndVariadicImportsReplaceWDKIntegerLayout) {
+  class Declarations final : public NullDebugContext {
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.PrototypeLibrary = UserPrototypeLibrary.str();
+      Function.ReturnType = NdType::makeInt(8);
+      Function.CallConv = DebugCallConv::Cdecl;
+      if (Name == "KeClearEvent") {
+        Function.Params = {{"a", NdType::makeFloat(8)},
+                           {"b", NdType::makeInt(4)},
+                           {"c", NdType::makeFloat(8)}};
+      } else if (Name == "KeGetCurrentThread") {
+        Function.Params = {{"first", NdType::makeInt(4)}};
+        Function.IsVariadic = true;
+      } else {
+        return std::nullopt;
+      }
+      return Function;
+    }
+  } Debug;
+  const std::vector<uint8_t> Setup = {0x66, 0x0f, 0x57, 0xc0, // xorpd xmm0,xmm0
+                                      0x66, 0x0f, 0x57, 0xd2, // xorpd xmm2,xmm2
+                                      0xb9, 11,   0,    0,    0, // mov ecx,11
+                                      0xba, 22,   0,    0,    0, // mov edx,22
+                                      0x41, 0xb8, 33,   0,    0,
+                                      0}; // mov r8d,33
+  const auto Code = framed({Setup, throughSlot(Text + 4 + Setup.size(), Iat)});
+  for (const bool Variadic : {false, true}) {
+    auto Image = makeImage(Code, {{Text, "probe"}},
+                           {Variadic ? "KeGetCurrentThread" : "KeClearEvent"});
+    Image.Imports.front().Module = "fixture.dll";
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.OnlyFunctionEntries = {Text};
+    Options.EmitDumpOutput = false;
+    const auto Result = Pipeline().run(Image, Context, Options, &Debug);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    EXPECT_TRUE(Result.CallUserPrototypes.count(Iat));
+    EXPECT_FALSE(Result.CallEntryIntegerArguments.count(Iat));
+    if (Variadic) {
+      ASSERT_TRUE(Result.CallEntryVariadicArguments.count(Iat));
+      EXPECT_EQ(Result.CallEntryVariadicArguments.at(Iat),
+                std::vector<uint16_t>({4}));
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      ASSERT_EQ(Result.MedFuncs.front().CallInfos.size(), 1u);
+      const auto &Args = Result.MedFuncs.front().CallInfos.front().Args;
+      ASSERT_EQ(Args.size(), 3u);
+      ASSERT_TRUE(Args.back().isConst());
+      EXPECT_EQ(Args.back().ConstVal, 33u);
+    } else {
+      EXPECT_TRUE(Result.CallEntryFloatingArguments.count(Iat));
+    }
+  }
+}
 
 TEST(Win64CallContract, HeaderStackOperandSurvivesRecoveredBlockBoundaries) {
   FixedStackHeader Debug;

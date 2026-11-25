@@ -2193,6 +2193,10 @@ struct ScopedSourceView {
   bool Swapped = false;
   bool CallsSwapped = false;
   std::vector<SourceCallEditResult> PreviousCallResults;
+  void swapHighIR(Session::HighIRVariant &Variant) noexcept {
+    S.PipeResult.HighFuncs.swap(Variant.HighFuncs);
+    S.PipeResult.HighSources.swap(Variant.HighSources);
+  }
   ScopedSourceView(Session &S, va_t Entry, const SourceViewOptions &Options,
                    bool High)
       : S(S), Previous(S.SourceOptions) {
@@ -2220,29 +2224,30 @@ struct ScopedSourceView {
     }
     if (!CallsSwapped && High && Options.Symbolic) {
       if (!S.EnhancedHighIR) {
-        auto Variant = std::make_unique<PipelineResult>();
-        Variant->LowFuncs = S.PipeResult.LowFuncs;
-        Variant->MedFuncs = S.PipeResult.MedFuncs;
-        Variant->LibraryRecognitions = S.PipeResult.LibraryRecognitions;
+        auto Variant = std::make_unique<Session::HighIRVariant>();
         PipelineOptions Policy;
+        S.applyAnalysisOptions(Policy);
+        Policy.AnalysisCache = &S.AnalysisCache;
         Policy.SymbolicHighC = true;
-        Pipeline().rebuildHighIR(S.Img, Policy, *Variant, S.decompileDebug());
-        S.EnhancedHighIR = std::make_unique<Session::HighIRVariant>(
-            Session::HighIRVariant{std::move(Variant->HighFuncs),
-                                   std::move(Variant->HighSources)});
+        // Project the same machine IR and call contracts as the ordinary
+        // view. Retain its complete output even if the new projection fails.
+        {
+          swapHighIR(*Variant);
+          llvm::scope_exit Restore([&] { swapHighIR(*Variant); });
+          Pipeline().rebuildHighIR(S.Img, Policy, S.PipeResult,
+                                   S.decompileDebug());
+        }
+        S.EnhancedHighIR = std::move(Variant);
       }
-      S.PipeResult.HighFuncs.swap(S.EnhancedHighIR->HighFuncs);
-      S.PipeResult.HighSources.swap(S.EnhancedHighIR->HighSources);
+      swapHighIR(*S.EnhancedHighIR);
       Swapped = true;
     }
     S.SourceOptions = Options;
   }
   ~ScopedSourceView() {
     S.SourceOptions = Previous;
-    if (Swapped) {
-      S.PipeResult.HighFuncs.swap(S.EnhancedHighIR->HighFuncs);
-      S.PipeResult.HighSources.swap(S.EnhancedHighIR->HighSources);
-    }
+    if (Swapped)
+      swapHighIR(*S.EnhancedHighIR);
     if (CallsSwapped) {
       std::swap(S.PipeResult, *S.CallVariant->Result);
       std::swap(S.NativeMedFuncs, S.CallVariant->Native);

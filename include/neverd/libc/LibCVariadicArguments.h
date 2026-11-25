@@ -15,6 +15,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
@@ -78,7 +79,8 @@ runtimeVariadicPrototype(std::string_view Name, Arch A, BinaryFormat F) {
 inline std::optional<std::vector<uint16_t>>
 variadicCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F) {
   if (!Function.IsVariadic ||
-      (!Function.PrototypeFromHeader && !Function.PrototypeFromCLibrary) ||
+      (!Function.PrototypeFromHeader && !Function.PrototypeFromCLibrary &&
+       !isUserFunctionDeclaration(Function)) ||
       !Function.PlatformConvention || !Function.ParamEntryLocations.empty() ||
       (Function.CallConv != DebugCallConv::Unknown &&
        Function.CallConv != DebugCallConv::Cdecl) ||
