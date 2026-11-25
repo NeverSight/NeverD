@@ -377,6 +377,49 @@ int main(void) {
 )");
 }
 
+TEST(HighValueForward, ConditionalUseStillReadsTheCapturedMemberOnBothPaths) {
+  const auto Word = NdType::makeInt(8, false);
+  const auto Record = NdType::makeNamedRecord("Observed", 16);
+  Record->FieldDisplayNames = {"pad", "observed"};
+  Record->FieldDisplayOffsets = {0, 8};
+  Record->FieldDisplayTypes = {Word, Word};
+  const auto Pointer = NdType::makePtr(Record);
+  const auto Address =
+      op(NdOp::INT_ADD, typedParameter(0, Pointer), constant(8));
+  Address->Type = NdType::makePtr(Word);
+  auto Select = op(NdOp::SELECT, typedParameter(1, Word), local(17, Word));
+  Select->Operands.push_back(constant(42));
+  Select->Type = Word;
+  auto F = function("read_before_choice",
+                    {assign(local(17, Word), HighExpr::makeLoad(Address, Word)),
+                     result(Select)});
+  F.Params = {{"arg0", Pointer}, {"arg1", Word}};
+  auto Branch = F;
+  Branch.Name = "read_before_branch";
+  Branch.Body = {F.Body.front(),
+                 when(typedParameter(1, Word), {result(local(17, Word))}),
+                 result(constant(42))};
+  const auto C = emit({F, Branch});
+  ASSERT_NE(C.find("->observed"), std::string::npos) << C;
+  // Instrument the field read in the emitted C. The test can observe its
+  // evaluation without depending on platform-specific memory faults.
+  compileAndRun(std::string(R"(
+#include <stdint.h>
+typedef struct Observed { uint64_t pad, cells[1]; } Observed;
+static unsigned reads;
+static unsigned count_read(void) { ++reads; return 0; }
+#define observed cells[count_read()]
+)") + C + R"(
+int main(void) {
+  Observed data = {0, {99}};
+  if (read_before_choice(&data, 0) != 42 || reads != 1) return 1;
+  if (read_before_choice(&data, 1) != 99 || reads != 2) return 2;
+  if (read_before_branch(&data, 0) != 42 || reads != 3) return 3;
+  return read_before_branch(&data, 1) != 99 || reads != 4;
+}
+)");
+}
+
 TEST(HighValueForward, TypedIndexedLoadEvaluatesCallAddressOnce) {
   const auto Word = NdType::makeInt(8, false);
   auto Index = HighExpr::makeCall("next_index", 0x2100, {});
