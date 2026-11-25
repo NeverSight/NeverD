@@ -8,6 +8,7 @@ on:
       - '.github/workflows/mips-elf-relink.yml'
       - 'scripts/check_mips_elf_relink.py'
       - 'tools/neverd/CMakeLists.txt'
+      - 'tools/neverd/NeverDCLI.h'
       - 'tools/neverd/NeverDCLIOptions.cpp'
       - 'tools/neverd/cmd/NeverDCmdPipeline.cpp'
       - 'tools/neverd/cmd/NeverDCmdRelink.cpp'

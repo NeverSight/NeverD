@@ -231,10 +231,12 @@ TEST_F(AArch64_Mem, StlurHighCRetainsReleaseWordsAndCompiles) {
     const char *Name;
     uint32_t Word;
     const char *Helper;
-  } Cases[] = {
-      {"test_stlur_a64", 0xd9000211U, "neverd_aarch64_store_u64_D9000211"},
-      {"test_stlurb_a64", 0x19000211U, "neverd_aarch64_store_u8_19000211"},
-      {"test_stlurh_a64", 0x59000211U, "neverd_aarch64_store_u16_59000211"}};
+  } Cases[] = {{"test_stlur_a64", 0xd9000211U,
+                "neverd_aarch64_store_u64_D9000211"},
+               {"test_stlurb_a64", 0x19000211U,
+                "neverd_aarch64_store_u8_19000211"},
+               {"test_stlurh_a64", 0x59000211U,
+                "neverd_aarch64_store_u16_59000211"}};
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Name);
     auto F = functionC(source, Case.Name);
@@ -247,7 +249,8 @@ TEST_F(AArch64_Mem, StlurHighCRetainsReleaseWordsAndCompiles) {
     }
     EXPECT_NE(Instruction.find("__asm__ volatile(\".inst"), std::string::npos)
         << Instruction;
-    EXPECT_NE(Instruction.find("\"memory\""), std::string::npos) << Instruction;
+    EXPECT_NE(Instruction.find("\"memory\""), std::string::npos)
+        << Instruction;
     EXPECT_NE(Instruction.find("\"i\"(" + std::to_string(Case.Word) + ")"),
               std::string::npos)
         << Instruction;
@@ -270,7 +273,7 @@ TEST_F(AArch64_Mem, PostIndexLdrKeepsBothAggregateReturnRegisters) {
   EXPECT_NE(F.find("ret { i64, i64 }"), std::string::npos) << F;
 }
 
-TEST_F(AArch64_Mem, UnprivilegedAccessWidthSurvivesMissingMnemonic) {
+TEST_F(AArch64_Mem, UnprivilegedTransfersUseTheirEncodedWidths) {
   const struct {
     std::array<uint8_t, 4> Bytes;
     unsigned Id;
@@ -303,10 +306,11 @@ TEST_F(AArch64_Mem, UnprivilegedAccessWidthSurvivesMissingMnemonic) {
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Id);
     DecodedInsn Insn{};
-    ASSERT_EQ(Dec.decodeOne(Case.Bytes.data(), Case.Bytes.size(), 0x1000, Insn),
+    ASSERT_EQ(Dec.decodeOneForLift(Case.Bytes.data(), Case.Bytes.size(), 0x1000,
+                                   Insn),
               4);
     ASSERT_EQ(Insn.Id, Case.Id);
-    Insn.Raw->mnemonic[0] = '\0';
+    ASSERT_TRUE(Dec.hasAArch64OperandDetail(Insn));
     std::vector<LowOp> Ops;
     Dec.liftToLow(Insn, Ops);
     const auto Access =
