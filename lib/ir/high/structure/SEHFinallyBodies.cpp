@@ -2145,15 +2145,37 @@ bool hoistTryOverLoop(HighStmt &S, const ExceptionFunction &EH,
 /// address goes anywhere a load or a store does not take it straight to, such
 /// as a variable, a call or memory, where any of it may be read or written.
 struct FrameTouches {
+  /// A frame address a store keeps in a word of the frame, which leaves for
+  /// anywhere else only where something reads that word (foldFilterLists).
+  struct Kept {
+    int64_t Address;
+    int64_t Word;
+    uint64_t Size;
+  };
   std::vector<std::pair<int64_t, uint64_t>> Bytes;
   /// Those of \ref Bytes that are read.
   std::vector<std::pair<int64_t, uint64_t>> Reads;
   /// The displacements of the frame addresses that go anywhere else.
   std::vector<int64_t> Addresses;
+  std::vector<Kept> KeptAddresses;
   /// The frame is reached where this cannot follow.
   bool Lost = false;
 
   bool escapes() const { return Lost || !Addresses.empty(); }
+
+  bool reads(int64_t At, uint64_t Size) const {
+    return llvm::any_of(Reads, [&](const auto &Read) {
+      return Read.first < At + static_cast<int64_t>(Size) &&
+             At < Read.first + static_cast<int64_t>(Read.second);
+    });
+  }
+
+  /// Whether this takes the frame address at \p At, kept in a word or not.
+  bool takes(int64_t At) const {
+    return llvm::is_contained(Addresses, At) ||
+           llvm::any_of(KeptAddresses,
+                        [&](const Kept &K) { return K.Address == At; });
+  }
 
   bool overlaps(int64_t At, uint64_t Size) const {
     return escapes() || llvm::any_of(Bytes, [&](const auto &Touched) {
@@ -2292,7 +2314,10 @@ FrameTouches frameTouches(const std::vector<HighStmt> &Stmts, Arch TargetArch,
       // A filter value's write (seh_filter::foldFilterBody).
       if (const auto At = Offset(E->Operands[0])) {
         Touches.Bytes.emplace_back(*At, Width(E->Type));
-        Visit(E->Operands[1]);
+        if (const auto Kept = Offset(E->Operands[1]))
+          Touches.KeptAddresses.push_back({*Kept, *At, Width(E->Type)});
+        else
+          Visit(E->Operands[1]);
         return;
       }
     } else if (const auto At = Offset(E)) {
@@ -2304,15 +2329,21 @@ FrameTouches frameTouches(const std::vector<HighStmt> &Stmts, Arch TargetArch,
   walkStmts(Stmts, [&](const HighStmt &S) {
     if (Definitions.count(&S))
       return;
+    bool KeptValue = false;
     if (S.Kind == StmtKind::Store && S.StoreAddr) {
-      if (const auto At = Offset(S.StoreAddr))
-        Touches.Bytes.emplace_back(
-            *At, Width(S.StoreVal ? S.StoreVal->Type : S.StoreAddr->Type));
-      else
+      if (const auto At = Offset(S.StoreAddr)) {
+        const uint64_t Size =
+            Width(S.StoreVal ? S.StoreVal->Type : S.StoreAddr->Type);
+        Touches.Bytes.emplace_back(*At, Size);
+        if (const auto Kept = Offset(S.StoreVal)) {
+          Touches.KeptAddresses.push_back({*Kept, *At, Size});
+          KeptValue = true;
+        }
+      } else
         Visit(S.StoreAddr);
     }
     forEachExpr(S, [&](const ExprPtr &E) {
-      if (&E != &S.StoreAddr)
+      if (&E != &S.StoreAddr && !(KeptValue && &E == &S.StoreVal))
         Visit(E);
     });
     for (const HighEHClause &Clause : S.EHClauses)
@@ -2468,7 +2499,9 @@ private:
   /// where nothing else can read it: no statement of the parent, no other
   /// filter, and no handler that still runs out of line touches those bytes,
   /// and no address of the frame leaves for anywhere else, as with the
-  /// temporaries a compiler keeps for a filter in its parent's frame.  A
+  /// temporaries a compiler keeps for a filter in its parent's frame.  An
+  /// address kept in a word nothing reads goes nowhere: MSVC saves its frame
+  /// for `_local_unwind`, whose call a `__finally`'s jump out replaced.  A
   /// callback keeps its call when one expression cannot say what it does, or
   /// its expression would read what C cannot give it (spelledInParent).
   void foldFilterLists(std::vector<HighStmt> &Body) {
@@ -2491,11 +2524,20 @@ private:
         Touches[I] =
             frameTouches(Pending[I].Body, TargetArch, Aliases, {}, Budget);
     }
+    const auto KeptLeaves = [&](const FrameTouches &Keeper) {
+      return llvm::any_of(Keeper.KeptAddresses, [&](const auto &K) {
+        return Own.reads(K.Word, K.Size) ||
+               llvm::any_of(Touches, [&](const FrameTouches &T) {
+                 return T.reads(K.Word, K.Size);
+               });
+      });
+    };
+    const bool Leaves = KeptLeaves(Own) || llvm::any_of(Touches, KeptLeaves);
     for (size_t I = 0; I < Pending.size(); ++I) {
       seh_filter::FilterFrame Frame;
       Frame.TargetArch = TargetArch;
       Frame.IsPrivate = [&](int64_t Word, const HighExpr &Written) {
-        if (!Knowable || Own.escapes() || Touches[I].escapes())
+        if (!Knowable || Leaves || Own.escapes() || Touches[I].escapes())
           return false;
         const uint64_t Size = Written.Type && Written.Type->Size
                                   ? Written.Type->Size
@@ -2547,7 +2589,10 @@ private:
       if (!llvm::is_contained(Own.Reads, Read))
         return false;
     for (const int64_t At : Used.Addresses)
-      if (!llvm::is_contained(Own.Addresses, At))
+      if (!Own.takes(At))
+        return false;
+    for (const auto &Kept : Used.KeptAddresses)
+      if (!Own.takes(Kept.Address))
         return false;
     return true;
   }

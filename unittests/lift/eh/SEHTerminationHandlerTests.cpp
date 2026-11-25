@@ -1246,14 +1246,23 @@ enum class FilterShape {
   ACallsValueInATemporary,
   /// The same with another call between the temporary's write and its read.
   ACallBetweenATemporaryAndItsRead,
+  /// A call's value in a temporary, beside the frame the parent keeps in a
+  /// word nothing reads, as MSVC does for `_local_unwind`.
+  ACallsValueBesideAKeptFrame,
+  /// The same, with the parent passing the kept frame on through memory.
+  ACallsValueBesideAFrameThatLeaves,
 };
 
 BinaryImage makeFilterImage(FilterShape Kind) {
   const bool ParentReads =
       Kind == FilterShape::ParentReadsATemporary ||
       Kind == FilterShape::ACallsValueInATemporaryTheParentReads;
+  const bool KeepsItsFrame =
+      Kind == FilterShape::ACallsValueBesideAKeptFrame ||
+      Kind == FilterShape::ACallsValueBesideAFrameThatLeaves;
   const bool Temporaries =
-      ParentReads || Kind == FilterShape::TemporariesInTheParentsFrame ||
+      ParentReads || KeepsItsFrame ||
+      Kind == FilterShape::TemporariesInTheParentsFrame ||
       Kind == FilterShape::ACallsValueInATemporary ||
       Kind == FilterShape::ACallBetweenATemporaryAndItsRead;
   BinaryImage Img;
@@ -1280,6 +1289,16 @@ BinaryImage makeFilterImage(FilterShape Kind) {
     // mov eax,[rsp+0x2c]; mov [rbx],eax: the decision's slot.
     place(D, Done, {0x8b, 0x44, 0x24, 0x2c, 0x89, 0x03});
     Done += 6;
+  }
+  if (KeepsItsFrame) {
+    // mov [rsp+0x20],rsp: the frame the parent keeps.
+    place(D, Done, {0x48, 0x89, 0x64, 0x24, 0x20});
+    Done += 5;
+  }
+  if (Kind == FilterShape::ACallsValueBesideAFrameThatLeaves) {
+    // mov rax,[rsp+0x20]; mov [rbx],rax
+    place(D, Done, {0x48, 0x8b, 0x44, 0x24, 0x20, 0x48, 0x89, 0x03});
+    Done += 8;
   }
   // add rsp,N; pop rbx; ret
   place(D, Done, {0x48, 0x83, 0xc4, Allocation, 0x5b, 0xc3});
@@ -1330,6 +1349,8 @@ BinaryImage makeFilterImage(FilterShape Kind) {
     break;
   case FilterShape::ACallsValueInATemporaryTheParentReads:
   case FilterShape::ACallsValueInATemporary:
+  case FilterShape::ACallsValueBesideAKeptFrame:
+  case FilterShape::ACallsValueBesideAFrameThatLeaves:
     // push rbp; sub rsp,0x20; mov rbp,rdx; call decide; mov [rbp+0x2c],eax;
     // mov eax,[rbp+0x2c]; add rsp,0x20; pop rbp; ret
     place(D, 0x80, {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea,
@@ -1509,6 +1530,31 @@ TEST(SEHFilterValue, ACallBetweenATemporaryAndItsReadRunsInOrder) {
     ASSERT_NE(Decide, std::string::npos) << P;
     EXPECT_LT(Decide, Effect) << P;
   }
+  EXPECT_NE(E.find("sub_140001080("), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, AFrameKeptInAWordNothingReadsLetsTheTemporaryGo) {
+  // The address the parent keeps goes nowhere, so the callback's temporary
+  // is its own and carries the call once.
+  const std::string P = parentText(decompileHighC(
+      makeFilterImage(FilterShape::ACallsValueBesideAKeptFrame)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  const size_t Call = E.find("sub_140001048()");
+  ASSERT_NE(Call, std::string::npos) << P;
+  EXPECT_EQ(E.find("sub_140001048()", Call + 1), std::string::npos) << P;
+  EXPECT_EQ(E.find(" = "), std::string::npos) << P;
+  EXPECT_EQ(E.find("sub_140001080"), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, AKeptFrameThatLeavesKeepsTheTemporary) {
+  // The parent reads the kept frame back and stores it where anything may
+  // reach the temporary through it: the write stays, and C cannot read the
+  // temporary back, so the callback keeps its call.
+  const std::string P = parentText(decompileHighC(
+      makeFilterImage(FilterShape::ACallsValueBesideAFrameThatLeaves)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
   EXPECT_NE(E.find("sub_140001080("), std::string::npos) << P;
 }
 

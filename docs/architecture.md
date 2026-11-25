@@ -20896,7 +20896,12 @@ of the callback with one of its two arguments. A write it makes to the
 parent's frame stays in the expression unless nothing else can read those
 bytes: no statement of the parent, no other filter and no handler still out of
 line touches them, and no address of the frame goes anywhere else, as with the
-temporaries MSVC's `/Od` keeps for a filter in its parent's frame. A call in
+temporaries MSVC's `/Od` keeps for a filter in its parent's frame. An address
+a store keeps in a frame word goes nowhere while nothing reads that word: MSVC
+keeps its frame there for `_local_unwind`, which a `__finally`'s jump out calls
+and C writes as a `goto`, and xcpt4's x64 /O0 filters beside such a jump kept
+temporaries C cannot read back and printed as calls of their callbacks, 72 of
+the EH corpus's filters in all. A call in
 the callback runs once, where the callback ran it: a word the expression
 leaves out carries a call's value only to the one read of it, with nothing
 that can be seen to run between the write and that read, and a write that

@@ -21818,7 +21818,10 @@ callback keeps a call's value in such a slot and returns it,
 `ATemporaryNothingElseTouchesCarriesTheCallOnce` carries it through a
 temporary to its one read, and `ACallBetweenATemporaryAndItsReadRunsInOrder`
 keeps the callback's call where another call runs between the write and the
-read.
+read. `AFrameKeptInAWordNothingReadsLetsTheTemporaryGo` carries it the same
+way beside the frame address the parent keeps in a word nothing reads, and
+`AKeptFrameThatLeavesKeepsTheTemporary` keeps the callback where the parent
+reads that word back and stores it elsewhere.
 `ARM64SEHLocalUnwindTests.cpp` builds MSVC ARM64 /O0 parents that reach the
 import through a veneer: `ARM64SEHLocalUnwind.*` certifies the exit through
 an unrecorded veneer from the saved entry stack pointer, with the handler
