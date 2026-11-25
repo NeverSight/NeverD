@@ -182,7 +182,8 @@ USER_UNIT = (["#include <winsock2.h>", "#include <ws2tcpip.h>",
               "#undef UNICODE", "#undef INITGUID", "#undef COBJMACROS",
               "#include <phnt_sdk_types.h>", "#include <phnt.h>"] +
              [f"#include <{name}.h>" for name in PHNT_HEADERS] +
-             [f"#include <{name}.h>" for name in USER_HEADERS])
+             [f"#include <{name}.h>" for name in USER_HEADERS] +
+             ["#include <user_api.h>"])
 
 
 def kernel(triple, model, arch, output):
@@ -556,6 +557,7 @@ def generate(arguments, name, target, version):
             "edit; generate it again.")
         header = "".join(f"// {line}\n" for line in textwrap.wrap(
             text, 77, break_long_words=False, break_on_hyphens=False))
+        header += "// Documented Windows exports are declared in scripts/windows_types/user_api.h.\n"
     else:
         commit = run(["git", "-C", str(arguments.phnt), "rev-parse",
                       "HEAD"]).strip()
