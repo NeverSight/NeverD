@@ -1487,6 +1487,78 @@ TEST(ControlStateRecovery, ProducerHintsRequireFreshProof) {
   EXPECT_TRUE(Invalid.ControlProducerHints.empty());
 }
 
+TEST(ControlStateRecovery, RegisterPartitionHintsProveEveryIncomingCase) {
+  auto Provider = makeBankProgram(false, SelectorInput::MaskedScalar, 8);
+  // Keep the partitioned register live across both physical transfers.
+  // The frame-reload variant needs its own frame-slot projection.
+  Provider.Code.erase(Reload);
+  Provider.add(Reload, {jump(Dispatch)});
+  auto Options = bankOptions(false, false);
+  Options.ControlPartitionHints = {{{Route}, {SelectorRegister, 1}}};
+  const auto Result = specializeInterpreter(Provider, {Entry}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  ASSERT_EQ(Result.ControlPartitionHints.size(), 1u);
+  EXPECT_EQ(Result.ControlPartitionHints.front(),
+            Options.ControlPartitionHints.front());
+  EXPECT_FALSE(Result.ControlPartitionHintsTruncated);
+  EXPECT_GE(Result.DiscoveryVisits, 1u);
+  unsigned LiveCaseGuards = 0;
+  for (const auto &Block : Result.Residual.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::INT_EQUAL && Op.NumInputs == 2 &&
+          Op.Inputs[0].isReg() && Op.Inputs[0].Offset == SelectorRegister &&
+          Op.Inputs[0].Size == 1)
+        ++LiveCaseGuards;
+  EXPECT_GE(LiveCaseGuards, 7u);
+  for (uint64_t Input : {0ULL, 1ULL, 2ULL, 3ULL, 4ULL, 5ULL, 6ULL, 7ULL,
+                         0x123456789abcdef0ULL, ~0ULL}) {
+    const uint64_t Lane = Input & 7;
+    EXPECT_EQ(run(Result.Residual, Input, 0), ((Input ^ 45) + 3 + 11 * Lane));
+  }
+}
+
+TEST(ControlStateRecovery, RegisterPartitionHintsCannotSupplyMissingCases) {
+  auto Provider = makeBankProgram(false, SelectorInput::MaskedScalar, 8);
+  constexpr va_t UnboundedPredecessor = 0x4c0;
+  auto EntryOps = Provider.Code.at(Entry).Ops;
+  EntryOps.pop_back();
+  EntryOps.push_back(operation(NdOp::INT_EQUAL, r(ConditionRegister, 1),
+                               {r(LimitRegister), c(0)}));
+  EntryOps.push_back(operation(
+      NdOp::COND_BR, {}, {c(UnboundedPredecessor), r(ConditionRegister, 1)}));
+  Provider.Code.erase(Entry);
+  Provider.add(Entry, EntryOps, Route);
+  Provider.add(UnboundedPredecessor,
+               {operation(NdOp::COPY, r(SelectorRegister), {r(InputRegister)}),
+                operation(NdOp::STORE, {},
+                          {r(SelectorAddressRegister), r(SelectorRegister)}),
+                jump(Route)});
+  auto Options = bankOptions(false, false);
+  Options.ControlPartitionHints = {{{Route}, {SelectorRegister, 1}}};
+  const auto Result = specializeInterpreter(Provider, {Entry}, Options);
+  EXPECT_FALSE(Result.complete());
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+  ASSERT_EQ(Result.ControlPartitionHints.size(), 1u);
+
+  Options.MaxDiscoveryVisits = 0;
+  const auto Limited = specializeInterpreter(Provider, {Entry}, Options);
+  EXPECT_EQ(Limited.Status, SpecializationStatus::BudgetExceeded);
+  EXPECT_TRUE(Limited.Residual.Blocks.empty());
+
+  Options.MaxDiscoveryVisits = 1;
+  Options.ControlPartitionHints = {{{Route}, {SelectorRegister, 0}}};
+  const auto Invalid = specializeInterpreter(Provider, {Entry}, Options);
+  EXPECT_EQ(Invalid.Status, SpecializationStatus::InvalidInput);
+  EXPECT_TRUE(Invalid.Residual.Blocks.empty());
+
+  Options.ControlPartitionHints = {{{Route}, {SelectorRegister, 1}},
+                                   {{Route}, {SelectorRegister + 1, 1}}};
+  Options.MaxDiscoveryVisits = 2;
+  const auto Conflict = specializeInterpreter(Provider, {Entry}, Options);
+  EXPECT_EQ(Conflict.Status, SpecializationStatus::InvalidInput);
+  EXPECT_TRUE(Conflict.Residual.Blocks.empty());
+}
+
 TEST(ControlStateRecovery, DiscoveryIgnoresUnrelatedControlRegisterReuse) {
   auto Provider = makeBankProgram(false);
   constexpr va_t BranchEntry = 0x400;

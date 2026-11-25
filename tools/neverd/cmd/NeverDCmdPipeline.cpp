@@ -724,7 +724,7 @@ int auditEveryLoadedFunction(neverd_session_t Sess) {
       OriginalCallState.getNumOccurrences() || StackFrameInfo ||
       VMMachineState || VMMachineSourceABI.getNumOccurrences() ||
       !VMControlRegisters.empty() || !VMControlFrameSlots.empty() ||
-      !VMProducerHints.empty()) {
+      !VMProducerHints.empty() || !VMPartitionHints.empty()) {
     WithColor::error()
         << "--check-all decompiles every loaded function on the default C "
            "route; omit other decompile options\n";
@@ -1004,8 +1004,9 @@ int runDecompile(neverd_session_t Sess) {
   if (!Devirtualize &&
       (VMMachineState || VMMachineSourceABI.getNumOccurrences() ||
        !VMControlRegisters.empty() || !VMControlFrameSlots.empty() ||
-       !VMProducerHints.empty() || !VMRecoveryReport.empty() ||
-       VMMaxNodes.getNumOccurrences() || VMMaxContexts.getNumOccurrences() ||
+       !VMProducerHints.empty() || !VMPartitionHints.empty() ||
+       !VMRecoveryReport.empty() || VMMaxNodes.getNumOccurrences() ||
+       VMMaxContexts.getNumOccurrences() ||
        VMMaxOperations.getNumOccurrences() ||
        VMMaxRefinements.getNumOccurrences() ||
        VMMaxFields.getNumOccurrences() || VMMaxQueries.getNumOccurrences() ||
@@ -1357,11 +1358,31 @@ int runDecompile(neverd_session_t Sess) {
                                  static_cast<uint8_t>(Parts[1] == "r"),
                                  {}});
       }
-      neverd_devirtualize_options_v11 SourceRecovery{};
-      SourceRecovery.producer_hints = ProducerHints.data();
-      SourceRecovery.producer_hint_count = ProducerHints.size();
-      SourceRecovery.base.machine_source_abi = MachineSourceABI;
-      auto &ProofRecovery = SourceRecovery.base.base;
+      std::vector<neverd_devirtualize_partition_hint_v1> PartitionHints;
+      for (const auto &Text : VMPartitionHints) {
+        SmallVector<StringRef, 3> Parts;
+        StringRef(Text).split(Parts, ':');
+        uint64_t Address = 0;
+        uint64_t Offset = 0;
+        unsigned Bytes = 0;
+        if (Parts.size() != 3 || Parts[0].getAsInteger(0, Address) ||
+            Parts[1].getAsInteger(0, Offset) ||
+            Parts[2].getAsInteger(0, Bytes) || !Bytes || Bytes > 8) {
+          WithColor::error()
+              << "--vm-partition-hint expects "
+                 "address:register-bank-offset:bytes (bytes 1..8)\n";
+          return 1;
+        }
+        PartitionHints.push_back(
+            {Address, Offset, static_cast<uint16_t>(Bytes), {}});
+      }
+      neverd_devirtualize_options_v12 SourceRecovery{};
+      SourceRecovery.partition_hints = PartitionHints.data();
+      SourceRecovery.partition_hint_count = PartitionHints.size();
+      SourceRecovery.base.producer_hints = ProducerHints.data();
+      SourceRecovery.base.producer_hint_count = ProducerHints.size();
+      SourceRecovery.base.base.machine_source_abi = MachineSourceABI;
+      auto &ProofRecovery = SourceRecovery.base.base.base;
       if (VMProveStoreReturnSeparation)
         ProofRecovery.flags |=
             NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION;
@@ -1405,9 +1426,9 @@ int runDecompile(neverd_session_t Sess) {
       Base.use_llvm = LlvmRoute;
       Base.no_opt = NoOpt;
       const char *Report = nullptr;
-      Source = VMMachineState ? neverd_devirtualize_machine_source_v11(
+      Source = VMMachineState ? neverd_devirtualize_machine_source_v12(
                                     Sess, Entry, &SourceRecovery, &Report)
-                              : neverd_devirtualize_source_v11(
+                              : neverd_devirtualize_source_v12(
                                     Sess, Entry, &SourceRecovery, &Report);
       if (!VMRecoveryReport.empty() && Report) {
         std::error_code EC;

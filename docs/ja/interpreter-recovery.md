@@ -139,6 +139,8 @@ JSON レポートには `discoverControlState`、`maxControlRefinements`、`maxD
 
 `EntryFrameBounds::ExcludedAddressRanges` は、入口フレーム全体が重ならない絶対アドレス区間を追加で宣言できます。各区間は非空で回り込みません。これは呼び出し側の明示的な前提であり、観測したアドレスやポインターの由来から推測しません。`ProveStoreFrameSeparation` は書き込み範囲全体との分離を証明した場合だけ、現在のフレームのバイトと保存されたアフィンポインターを保持します。未証明の書き込みは通常どおりエイリアス情報を無効化し、不明な証明や予算不足は拒否します。CMPXCHG の書き込み段階全体も対象です。ネイティブ証明のフレーム契約には同じ除外リストが必要です。生の証拠はリストと証明方式を結び付け、残余コードの利用者は入力前提を維持する必要があります。
 
+`SpecializationOptions::ControlPartitionHints` と v12 ソース API は、物理的な後続アドレスとレジスタのバイト範囲を候補として受け取ります。CLI では `--vm-partition-hint=address:register-bank-offset:bytes` を繰り返し指定できます。レポートの `controlPartitionHints` と `nextControlPartitionHints` は候補を示し、上限に達すると `controlPartitionHintsTruncated` が立ちます。再利用前に同じ物理イメージであることを確認してください。各入力辺は完全な有限値域を改めて証明し、全ケースの実行時比較を生成します。不完全なら保守的な辺を維持します。候補は値、到達可能経路、メモリ事実、環境前提を与えず、探索と制御フィールドの予算を消費します。完全な結果には到達可能グラフ全体の証明が必要です。
+
 <!-- i18n-section: execution-contract -->
 
 ## 実行契約

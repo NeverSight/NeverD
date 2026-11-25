@@ -304,7 +304,16 @@ class ABIInventoryTests(unittest.TestCase):
                          ctypes.sizeof(abi.NeverDDevirtualizeOptionsV10))
         if ctypes.sizeof(ctypes.c_void_p) == 8:
             self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV11), 208)
-        for version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
+        self.assertEqual(abi.NeverDDevirtualizePartitionHintV1.address.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizePartitionHintV1.register_offset.offset, 8)
+        self.assertEqual(abi.NeverDDevirtualizePartitionHintV1.bytes.offset, 16)
+        self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizePartitionHintV1), 24)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV12.base.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV12.partition_hints.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV11))
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV12), 232)
+        for version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
             for prefix in ("source", "machine_source"):
                 spec = abi.FUNCTION_SPECS[f"neverd_devirtualize_{prefix}_v{version}"]
                 self.assertEqual(

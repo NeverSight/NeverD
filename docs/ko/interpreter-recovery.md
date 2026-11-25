@@ -139,6 +139,8 @@ JSON 보고서에는 `discoverControlState`, `maxControlRefinements`, `maxDiscov
 
 `EntryFrameBounds::ExcludedAddressRanges`는 전체 진입 프레임과 겹치지 않는 절대 주소 구간을 추가로 선언할 수 있습니다. 각 구간은 비어 있지 않고 순환하지 않습니다. 이는 명시적인 호출자 전제 조건이며 관측 주소나 포인터 출처에서 추론하지 않습니다. `ProveStoreFrameSeparation`는 전체 쓰기 범위가 프레임과 분리됨을 증명한 뒤에만 현재 프레임 바이트와 저장된 아핀 포인터를 보존합니다. 증명되지 않은 쓰기는 일반 별칭 무효화를 유지하며 증명 결과가 불명확하거나 예산이 소진되면 거부합니다. CMPXCHG의 전체 쓰기 단계도 포함합니다. 네이티브 증명은 프레임 계약에 동일한 제외 목록을 요구합니다. 원시 증거는 목록과 증명 전략을 결합하며 잔여 코드 사용자는 입력 전제를 유지해야 합니다.
 
+`SpecializationOptions::ControlPartitionHints`와 v12 소스 API는 물리적 후속 주소와 레지스터 바이트 범위 후보를 받습니다. CLI에서는 `--vm-partition-hint=address:register-bank-offset:bytes`를 반복 지정할 수 있습니다. 보고서의 `controlPartitionHints`, `nextControlPartitionHints`에는 후보가 기록되며 목록이 제한되면 `controlPartitionHintsTruncated`가 표시됩니다. 재사용 전에 동일한 물리 이미지인지 확인하십시오. 각 입력 간선은 완전한 유한 값 영역을 다시 증명하고 모든 경우에 대한 런타임 비교를 생성해야 합니다. 완전한 열거에 실패하면 보수적인 간선을 유지합니다. 후보는 값, 도달 가능한 경로, 메모리 사실 또는 환경 전제를 제공하지 않으며 탐색 및 제어 필드 예산을 사용합니다. 완전한 결과에는 도달 가능한 그래프 전체의 증명이 필요합니다.
+
 <!-- i18n-section: execution-contract -->
 
 ## 실행 계약

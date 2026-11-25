@@ -274,6 +274,18 @@ If a target remains unresolved after producer, guard, register and frame refinem
 
 `EntryFrameBounds::ExcludedAddressRanges` can additionally declare absolute, nonwrapping intervals that the whole entry frame must miss. These are explicit caller preconditions, never inferred from an observed address or pointer provenance. `ProveStoreFrameSeparation` preserves current frame bytes and affine pointer spills only after proving that a complete write misses the declared frame; unproved writes retain ordinary alias invalidation, and unknown proofs or exhausted budgets refuse. This includes the complete CMPXCHG write phase. Native proof requires the identical exclusion list in its frame contract. Raw receipts bind both the exclusions and the proof strategy; residual consumers must retain the declared input domain.
 
+`SpecializationOptions::ControlPartitionHints` and the v12 source APIs accept
+bounded physical successor and register-byte-range candidates. The CLI option
+`--vm-partition-hint=address:register-bank-offset:bytes` requests the same
+precision; reports return `controlPartitionHints` and
+`nextControlPartitionHints`, with `controlPartitionHintsTruncated` when the
+candidate list is capped. Bind saved hints to the same image before replay.
+Each incoming edge must independently prove a complete finite register domain
+and emit live comparisons for every case. Incomplete domains keep the ordinary
+conservative edge; no runtime value, reachable path, memory fact or environment
+precondition comes from a hint. Hints consume discovery visits and control
+fields, and a complete result still requires the full reachable graph proof.
+
 <!-- i18n-section: execution-contract -->
 
 ## Default execution contract

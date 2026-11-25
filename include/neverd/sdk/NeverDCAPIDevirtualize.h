@@ -242,6 +242,27 @@ typedef struct neverd_devirtualize_options_v11 {
   uint64_t reserved;
 } neverd_devirtualize_options_v11;
 
+/// Candidate split at a physical successor. The offset names a register-bank
+/// byte range, not a value. Every incoming edge must prove the complete finite
+/// domain and retain live runtime guards; otherwise recovery stays
+/// conservative. All reserved bytes must be zero.
+typedef struct neverd_devirtualize_partition_hint_v1 {
+  neverd_va_t address;
+  uint64_t register_offset;
+  uint16_t bytes;
+  uint8_t reserved[6];
+} neverd_devirtualize_partition_hint_v1;
+
+/// Version 12 accepts bounded register split candidates. They also request
+/// bounded context precision, consume discovery work, and remain subject to
+/// the full graph proof. v1-v11 ignore this tail.
+typedef struct neverd_devirtualize_options_v12 {
+  neverd_devirtualize_options_v11 base;
+  const neverd_devirtualize_partition_hint_v1 *partition_hints;
+  size_t partition_hint_count;
+  uint64_t reserved;
+} neverd_devirtualize_options_v12;
+
 /// Return recovered C only when all reachable control targets are resolved.
 /// The contract fixes mapped image bytes and permissions, excludes concurrent
 /// mutation and calls, and does not certify binary patching or unwind behavior.
@@ -393,6 +414,16 @@ neverd_devirtualize_source_v11(neverd_session_t Session, neverd_va_t Entry,
 NEVERD_API const char *neverd_devirtualize_machine_source_v11(
     neverd_session_t Session, neverd_va_t Entry,
     const neverd_devirtualize_options_v11 *Options, const char **Report);
+
+/// Source contracts and ownership match v11. Candidate partition hints never
+/// supply values or feasible paths; failure publishes no source.
+NEVERD_API const char *
+neverd_devirtualize_source_v12(neverd_session_t Session, neverd_va_t Entry,
+                               const neverd_devirtualize_options_v12 *Options,
+                               const char **Report);
+NEVERD_API const char *neverd_devirtualize_machine_source_v12(
+    neverd_session_t Session, neverd_va_t Entry,
+    const neverd_devirtualize_options_v12 *Options, const char **Report);
 
 #ifdef __cplusplus
 }

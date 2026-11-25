@@ -883,6 +883,11 @@ cl::list<std::string> VMProducerHints(
     cl::desc("Candidate address:r|s:offset:bytes:bit-mask (repeatable; "
              "does not assume a value or path)"),
     cl::ZeroOrMore, cl::sub(DecompileCmd));
+cl::list<std::string> VMPartitionHints(
+    "vm-partition-hint",
+    cl::desc("Candidate address:register-bank-offset:bytes (repeatable; "
+             "each incoming edge proves every case)"),
+    cl::ZeroOrMore, cl::sub(DecompileCmd));
 cl::opt<unsigned>
     VMMaxNodes("vm-max-nodes", cl::desc("Recovery node budget"),
                cl::init(::neverd::limits::cli::kDefaultVMMaxNodes),
