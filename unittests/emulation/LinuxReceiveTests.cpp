@@ -147,7 +147,17 @@ TEST_P(LinuxReceive, QuietContractMustCoverTheTimeoutInclusive) {
   EXPECT_FALSE(call(ServiceKind::Read, FD, Base + 128, 1));
   EXPECT_EQ(Kernel->clock().elapsed(), 2 * Second + 1);
   EXPECT_EQ(word(Base + 128), 0u);
-  EXPECT_NE(Report.Diagnostic.find("readiness"), std::string::npos);
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, read readiness), "
+                               "receive quiet through 2000000000 ns elapsed");
+
+  auto &Datagram = Options.LinuxNetwork->DatagramConnections.front();
+  Datagram.ReceiveEvents.clear();
+  Datagram.ReceiveQuietUntilNS = 0;
+  const auto UDP = open(2);
+  EXPECT_FALSE(call(ServiceKind::ReceiveFrom, UDP, Base + 128, 1, 0x40));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation, "
+                               "receive quiet through 0 ns elapsed");
 }
 
 TEST_P(LinuxReceive, NonblockingAndImmediateTimeoutNeverAdvanceOrConsume) {

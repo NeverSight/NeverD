@@ -186,7 +186,8 @@ TEST_P(LinuxPoll, QuietDurationStartsAtConnectAndIsSharedByAliases) {
   EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 1));
   EXPECT_EQ(Kernel->clock().elapsed(), 2000072u);
   EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
-                               "(TCP connection index 0, read readiness)");
+                               "(TCP connection index 0, read readiness), "
+                               "receive quiet through 2000071 ns elapsed");
   EXPECT_EQ(events(0), 0xa5a5u);
   EXPECT_FALSE(call(ServiceKind::ReceiveFrom, 4, Base + 128, 1, 0x40));
   ASSERT_EQ(call(ServiceKind::Close, 4), 0u);
@@ -196,7 +197,8 @@ TEST_P(LinuxPoll, QuietDurationStartsAtConnectAndIsSharedByAliases) {
   EXPECT_EQ(Kernel->clock().elapsed(), 4000072u);
   EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 1));
   EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
-                               "(TCP connection index 1, read readiness)");
+                               "(TCP connection index 1, read readiness), "
+                               "receive quiet through 4000072 ns elapsed");
 }
 TEST_P(LinuxPoll, StreamIOKeepsTheConnectRelativeQuietEnd) {
   auto &C = Options.LinuxNetwork->Connections.front();
@@ -221,8 +223,14 @@ TEST_P(LinuxPoll, StreamIOKeepsTheConnectRelativeQuietEnd) {
   EXPECT_EQ(Kernel->clock().elapsed(), 2000001u);
   EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
                                "(TCP connection index 0, read readiness), "
-                               "sent bytes 3, receive events consumed 1/1");
+                               "sent bytes 3, receive events consumed 1/1, "
+                               "receive quiet through 2000000 ns elapsed");
   EXPECT_EQ(events(0), 0xa5a5u);
+
+  entry(0, 3, 4);
+  EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 0));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, write readiness)");
 }
 
 TEST_P(LinuxPoll, UnrepresentableQuietEndDoesNotConsumeTheConnection) {

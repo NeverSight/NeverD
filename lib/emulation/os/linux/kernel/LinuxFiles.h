@@ -159,6 +159,7 @@ private:
     // Each wait consumes its observation before any guest execution resumes.
     const OpenSocket *TCPSocket = nullptr;
     const char *TCPInterest = nullptr;
+    std::optional<uint64_t> ExpiredQuietEndNS = std::nullopt;
     explicit operator bool() const { return Reason != nullptr; }
     std::optional<uint64_t> stop(ProcessResult &Result) const;
   };

@@ -211,6 +211,8 @@ Quiet intervals cannot coexist with EOF. End times must follow supplied event
 times. All times fit signed 64-bit nanoseconds; a quiet interval must have a
 representable first unknown nanosecond. Failed connects cannot carry schedules.
 Every timed input requires `linux_time.advance_on_idle: true`.
+When a TCP or UDP read waits beyond the declared quiet interval, the readiness
+diagnostic reports the last covered nanosecond on the elapsed virtual clock.
 
 For a TCP connection established during execution, `receive_quiet_after_connect_ns`
 sets the same inclusive quiet end relative to the successful `connect`. Choose

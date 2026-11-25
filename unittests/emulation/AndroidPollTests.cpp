@@ -189,7 +189,8 @@ TEST_P(AndroidPoll, ConnectRelativeSilenceExpiresAtTheGuestDeadline) {
     auto Short = run(Route, 0);
     ASSERT_EQ(Short.Stop, ProcessStopReason::UnsupportedService);
     EXPECT_EQ(Short.Diagnostic, "socket readiness has no offline observation "
-                                "(TCP connection index 0, read readiness)");
+                                "(TCP connection index 0, read readiness), "
+                                "receive quiet through 999999 ns elapsed");
     ASSERT_EQ(Short.MemorySnapshots.size(), 1u);
     EXPECT_EQ(word(Short, 4), 0xa5u);
   }

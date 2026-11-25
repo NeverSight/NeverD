@@ -17,23 +17,28 @@
 namespace neverd::emulation::linux_model {
 std::optional<uint64_t>
 LinuxFiles::ReadinessFailure::stop(ProcessResult &Result) const {
-  if (!TCPSocket)
+  if (!TCPSocket && !ExpiredQuietEndNS)
     return unsupported(Result, Reason);
   std::string Message;
   llvm::raw_string_ostream OS(Message);
-  OS << Reason << " (TCP connection index " << TCPSocket->ConnectionIndex
-     << ", " << TCPInterest << " readiness)";
-  const auto &Events = TCPSocket->Connection->ReceiveEvents;
-  const bool Read = llvm::StringRef(TCPInterest) == "read";
-  if (Read && (TCPSocket->Sent || !Events.empty()))
-    OS << ", sent bytes " << TCPSocket->Sent;
-  if (Read && !Events.empty()) {
-    const auto Next = TCPSocket->ReceiveEvent;
-    OS << ", receive events consumed " << Next << '/' << Events.size();
-    if (Next < Events.size())
-      OS << ", receive_events[" << Next
-         << "].after_send=" << Events[Next].AfterSend;
+  OS << Reason;
+  if (TCPSocket) {
+    OS << " (TCP connection index " << TCPSocket->ConnectionIndex << ", "
+       << TCPInterest << " readiness)";
+    const auto &Events = TCPSocket->Connection->ReceiveEvents;
+    const bool Read = llvm::StringRef(TCPInterest) == "read";
+    if (Read && (TCPSocket->Sent || !Events.empty()))
+      OS << ", sent bytes " << TCPSocket->Sent;
+    if (Read && !Events.empty()) {
+      const auto Next = TCPSocket->ReceiveEvent;
+      OS << ", receive events consumed " << Next << '/' << Events.size();
+      if (Next < Events.size())
+        OS << ", receive_events[" << Next
+           << "].after_send=" << Events[Next].AfterSend;
+    }
   }
+  if (ExpiredQuietEndNS)
+    OS << ", receive quiet through " << *ExpiredQuietEndNS << " ns elapsed";
   return unsupported(Result, Message.c_str());
 }
 
@@ -120,7 +125,9 @@ LinuxFiles::Readiness LinuxFiles::socketReadiness(const OpenSocket &Socket,
       R.Unknown = {"timed network input requires virtual idle time"};
       return R;
     }
-    if (Clock->elapsed() <= *Quiet && *Quiet < uint64_t(INT64_MAX)) {
+    if (Clock->elapsed() > *Quiet) {
+      R.Unknown.ExpiredQuietEndNS = Quiet;
+    } else if (*Quiet < uint64_t(INT64_MAX)) {
       R.Wake = *Quiet + 1; // First unknown nanosecond, not invented data.
       return R;
     }
