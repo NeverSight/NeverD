@@ -2614,6 +2614,46 @@ TEST(InterpreterSpecialization, StoreSeparationKeepsOrdinaryAliasHavoc) {
   EXPECT_TRUE(Refused.Residual.Blocks.empty());
 }
 
+TEST(InterpreterSpecialization,
+     ConditionalFrameStoreRetainsPossibleAliasForLaterStackRestore) {
+  Provider P;
+  P.add(0x100, {op(NdOp::INT_SUB, reg(40), {reg(32), constant(32)}),
+                op(NdOp::INT_SUB, reg(48), {reg(32), constant(16)}),
+                op(NdOp::COPY, reg(64), {reg(32)}),
+                op(NdOp::STORE, {}, {reg(40), reg(32)}),
+                op(NdOp::STORE, {}, {reg(48), reg(32)}),
+                op(NdOp::INT_ADD, reg(80), {reg(32), constant(64)}),
+                op(NdOp::SELECT, reg(56), {reg(8, 1), reg(48), reg(80)}),
+                op(NdOp::STORE, {}, {reg(56), constant(0x5b, 1)}),
+                op(NdOp::LOAD, reg(72), {reg(48)}),
+                op(NdOp::SELECT, reg(32), {reg(8, 1), reg(64), reg(72)}),
+                op(NdOp::COPY, reg(0), {reg(72)}), ret()});
+  auto O = separatedStoreOptions();
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-40, 8};
+  // Both SELECT arms miss the entry return slot for every frame root.
+  O.ExternalStoresPreserveEntryReturnSlot = true;
+  const auto R = specializeInterpreter(P, {0x100}, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_EQ(count(R.Residual, NdOp::STORE), 3u);
+  for (uint64_t Root : {0x1008u, 0x2008u})
+    for (uint64_t Alias : {0u, 1u}) {
+      std::map<uint64_t, uint8_t> FinalMemory;
+      EXPECT_EQ(execute(R.Residual, {{8, Alias}, {32, Root}}, {}, 0, {},
+                        std::nullopt, {}, &FinalMemory),
+                Alias ? ((Root & ~uint64_t{0xff}) | 0x5bu) : Root);
+      ASSERT_TRUE(FinalMemory.count(Root - 16));
+      EXPECT_EQ(FinalMemory.at(Root - 16),
+                Alias ? 0x5bu : static_cast<uint8_t>(Root));
+      if (!Alias) {
+        ASSERT_TRUE(FinalMemory.count(Root + 64));
+        EXPECT_EQ(FinalMemory.at(Root + 64), 0x5bu);
+      }
+    }
+  O.ByteOrder = llvm::endianness::big;
+  const auto BigEndian = specializeInterpreter(P, {0x100}, O);
+  EXPECT_TRUE(BigEndian.complete()) << BigEndian.Diagnostic;
+}
+
 TEST(InterpreterSpecialization, StoreSeparationUsesCurrentSymbolicRelation) {
   Provider P;
   P.add(0x100, {op(NdOp::INT_AND, reg(40), {reg(8), constant(7)}),

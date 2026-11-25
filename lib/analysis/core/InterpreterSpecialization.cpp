@@ -4049,6 +4049,7 @@ bool Specializer::evaluate(int Id) {
       std::optional<SymStorePreservation> StorePreservation;
       llvm::SmallVector<SymStorePreservationRange, 4> ProvedStoreRanges;
       llvm::SmallVector<SymStorePreservationRegion, 4> ProvedAbsoluteRanges;
+      llvm::SmallVector<SymStorePreservationRegion, 4> ConditionalFrameStores;
       for (unsigned J = 0; J < Original.NumInputs; ++J)
         OutputUnsafe |= unsafeOrigin(Original.Inputs[J], Origins);
       if (!LiveNativeCallReturnCells.empty() &&
@@ -4481,8 +4482,17 @@ bool Specializer::evaluate(int Id) {
                               "saved frame-address separation proof exceeded "
                               "its budget");
                 if (Domain.Status != FiniteValueStatus::Complete ||
-                    Domain.Tuples != std::vector<std::vector<uint64_t>>{{0}})
+                    Domain.Tuples != std::vector<std::vector<uint64_t>>{{0}}) {
+                  // A possible alias cannot preserve the pointer relation.
+                  // Its current bytes can still carry the exact conditional
+                  // write effect when another region has a proved
+                  // preservation contract for this same STORE.
+                  if (Original.Opcode == NdOp::STORE &&
+                      State.hasMaterializedRegionRange(FrameRoot, Slot, 8))
+                    ConditionalFrameStores.push_back(
+                        {FrameRoot, Begin, Begin + 8});
                   continue;
+                }
                 if (!StorePreservation)
                   StorePreservation =
                       SymStorePreservation{FrameRoot, Begin, Begin + 8};
@@ -5110,9 +5120,32 @@ bool Specializer::evaluate(int Id) {
         if (StorePreservation)
           StorePreservation->MaxWork =
               Options.MaxOperations - Result.EvaluatedOperations;
-        Flow = Exec.step(FoldedImmutableRead ? Residual : Evaluated, nullptr,
-                         StorePreservation ? &*StorePreservation : nullptr);
+        std::optional<SymConditionalStore> Conditional;
+        if (StorePreservation && !ConditionalFrameStores.empty()) {
+          Conditional.emplace();
+          Conditional->MaxWork =
+              Options.MaxOperations - Result.EvaluatedOperations;
+          Conditional->TrackedRegions = ConditionalFrameStores;
+          Flow = Exec.stepWithConditionalStore(
+              FoldedImmutableRead ? Residual : Evaluated, *Conditional,
+              *StorePreservation);
+          if (Conditional->Status == SymConditionalStoreStatus::BudgetExceeded)
+            return fail(SpecializationStatus::BudgetExceeded,
+                        "conditional frame store budget exhausted");
+          if (Conditional->WorkUsed >
+              Options.MaxOperations - Result.EvaluatedOperations)
+            return fail(SpecializationStatus::BudgetExceeded,
+                        "conditional frame store budget exhausted");
+          Result.EvaluatedOperations += Conditional->WorkUsed;
+        } else {
+          Flow = Exec.step(FoldedImmutableRead ? Residual : Evaluated, nullptr,
+                           StorePreservation ? &*StorePreservation : nullptr);
+        }
         if (StorePreservation) {
+          if (StorePreservation->WorkUsed >
+              Options.MaxOperations - Result.EvaluatedOperations)
+            return fail(SpecializationStatus::BudgetExceeded,
+                        "frame preservation byte budget exhausted");
           Result.EvaluatedOperations += StorePreservation->WorkUsed;
           if (StorePreservation->Status ==
               SymStorePreservationStatus::BudgetExceeded)
