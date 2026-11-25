@@ -8378,9 +8378,12 @@ A factor can also set, flip or clear weighted bits with a constant offset
 as `C | D`, `C ^ D` or `C & ~D`. Where the weighted sum `D` can affect
 the product, a uniform mask yields exactly `C`, `C + D` or `C - D` in
 the observed precision. A mixed mask retains its original operation on
-the overlapping field. In the equivalent spelling `C ^ (M & D)`, the
-toggle mask `M` is projected independently of `C`. A weight below the required shift keeps the entire
-factor, including its cross terms.
+the overlapping field. A mask on the weighted sum itself is projected
+independently of the offset. This covers `C + (M & D)`, `C - (M & D)`
+and the three bitwise joins. A mixed inner mask keeps its holes, and addition
+or subtraction takes place at the surviving field width so carries and borrows
+remain observable. A weight below the required shift keeps the entire factor,
+including its cross terms.
 Independent evaluation of a wide scaled product can combine repeated
 factors by binary exponentiation. When a sum of weighted words has a common
 power of two and its observed coefficients fit a signed 32-bit word, the

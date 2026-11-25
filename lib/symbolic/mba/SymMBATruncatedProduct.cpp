@@ -1362,17 +1362,19 @@ size_t equalFactorRun(llvm::ArrayRef<SymRef> Remaining, WorkBudget &Budget) {
 // ring. A mixed field keeps the original bit operation on the live bits.
 std::optional<int> uniformJoinSlope(SymOp Op, const llvm::APInt &Literal,
                                     unsigned Zeros,
-                                    llvm::ArrayRef<uint64_t> Toggle) {
+                                    llvm::ArrayRef<uint64_t> FieldMask) {
   const unsigned Live = Literal.getBitWidth() - Zeros;
   if (!Live)
     return 0;
-  if (!Toggle.empty()) {
-    const llvm::APInt Mask(Literal.getBitWidth(), Toggle);
+  if (!FieldMask.empty()) {
+    const llvm::APInt Mask(Literal.getBitWidth(), FieldMask);
     if (Mask.getActiveBits() <= Zeros)
       return 0;
     if (Mask.countl_one() < Live)
       return std::nullopt;
   }
+  if (Op == SymOp::Add)
+    return 1;
   if (Literal.getActiveBits() <= Zeros)
     return Op == SymOp::And ? 0 : 1;
   if (Literal.countl_one() >= Live)
@@ -1398,14 +1400,15 @@ SymRef joinedHighField(SymContext &Ctx, SymRef F, const llvm::APInt &Literal,
     Term = Ctx.mkMul(Ctx.mkConst(Coefficient.extractBits(Bits, Shift)), Field);
   }
   const auto High = Ctx.mkConst(Literal.extractBits(Bits, Shift));
-  const auto Sum = Ctx.mkAdd(Weighted);
-  if (Factor.ToggleMask) {
+  auto Sum = Ctx.mkAdd(Weighted);
+  if (Factor.FieldMask) {
     const llvm::APInt Mask(
         Literal.getBitWidth(),
-        Ctx.constWords(Factor.ToggleMask).take_front(Literal.getNumWords()));
-    return Ctx.mkXor(
-        High, Ctx.mkAnd(Ctx.mkConst(Mask.extractBits(Bits, Shift)), Sum));
+        Ctx.constWords(Factor.FieldMask).take_front(Literal.getNumWords()));
+    Sum = Ctx.mkAnd(Ctx.mkConst(Mask.extractBits(Bits, Shift)), Sum);
   }
+  if (Ctx.op(F) == SymOp::Add)
+    return Factor.SubtractField ? Ctx.mkSub(High, Sum) : Ctx.mkAdd(High, Sum);
   if (Ctx.op(F) == SymOp::And)
     return Ctx.mkAnd(High, Ctx.mkNot(Sum));
   return Ctx.op(F) == SymOp::Or ? Ctx.mkOr(High, Sum) : Ctx.mkXor(High, Sum);
@@ -1527,7 +1530,8 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     if (!Copies)
       return Root;
     I += Copies;
-    const auto [Offset, Terms, ToggleMask] = readWeightedFactor(Ctx, F);
+    const auto [Offset, Terms, FieldMask, SubtractField] =
+        readWeightedFactor(Ctx, F);
     if (!Offset) {
       if (LongRuns && !Budget.consume(Copies))
         return Root;
@@ -1557,19 +1561,18 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     }
     int Direction = 1;
     const auto Op = Ctx.op(F);
-    if (Op != SymOp::Add) {
-      if (!Budget.consume(ToggleMask ? 2 * Words : Words))
+    if (Op != SymOp::Add || FieldMask) {
+      if (!Budget.consume(FieldMask ? 2 * Words : Words))
         return Root;
       const llvm::APInt Literal(Precision,
                                 Ctx.constWords(Offset).take_front(Words));
-      const auto Toggle = ToggleMask
-                              ? Ctx.constWords(ToggleMask).take_front(Words)
-                              : llvm::ArrayRef<uint64_t>{};
-      if (const auto Slope = uniformJoinSlope(Op, Literal, Zeros, Toggle)) {
-        Direction = *Slope;
+      const auto Mask = FieldMask ? Ctx.constWords(FieldMask).take_front(Words)
+                                  : llvm::ArrayRef<uint64_t>{};
+      if (const auto Slope = uniformJoinSlope(Op, Literal, Zeros, Mask)) {
+        Direction = SubtractField ? -*Slope : *Slope;
       } else {
-        const size_t Nodes =
-            Terms.size() + 2 + (ToggleMask || Op == SymOp::And);
+        const size_t Nodes = Terms.size() + 2 + bool(FieldMask) +
+                             (Op == SymOp::And || SubtractField);
         const size_t NodeBytes = 4 * (sizeof(SymNode) + 4 * sizeof(SymRef) +
                                       Words * sizeof(uint64_t));
         if (Bytes > Storage || Nodes > (Storage - Bytes) / NodeBytes ||
