@@ -52,6 +52,15 @@ most time. Each step is an instruction, its reason and the case it comes from.
   showed 0.1% where the 3,000-view sample showed 10% of the median band
   (`85e71477f4`). Choose the sample before looking at the candidate, and keep
   the inputs where the candidate loses.
+- **Isolate source layout from dispatch cost.** To evaluate a `.def` or
+  `.inc`, build the same Release translation units with the declarations or
+  cases expanded at their use sites. Keep row order, compiler flags and
+  dependencies fixed. Compare object bytes, or compare executable sections,
+  constants and relocations if build metadata differs. Identical code and data
+  give the same runtime mechanism. If instruction selection changes as well,
+  run a second comparison that isolates the new algorithm. Keep the build
+  manifests, object digests, input hashes and paired timings together so
+  another developer can reproduce the comparison.
 - **Without `perf`,** sample with `tools/neverd-bench/sigprof`. For one thread
   of a GUI process, read `CLOCK_THREAD_CPUTIME_ID` around the call in a
   throwaway test slot.
