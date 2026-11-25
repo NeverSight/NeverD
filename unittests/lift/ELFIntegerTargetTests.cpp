@@ -146,6 +146,53 @@ struct LinkedImage {
 
 class ELFIntegerTarget : public ::testing::TestWithParam<Arch> {};
 
+#include "DoubleWordSumFixture.inc"
+
+TEST(ELF32DoubleWordSum, RecoversBothWordsOnlyForTheABISum) {
+  using namespace doubleword;
+  struct Case {
+    Arch A;
+    llvm::ArrayRef<uint32_t> Words;
+    unsigned ResultBytes;
+  };
+  const Case Cases[] = {
+      {Arch::RISCV32, RVSum, 8},           {Arch::RISCV32, RVWrongCarry, 4},
+      {Arch::RISCV32, RVSpilled, 8},       {Arch::RISCV32, RVPartialSpill, 4},
+      {Arch::RISCV32, RVStored, 4},        {Arch::PPC32, BESum, 8},
+      {Arch::PPC32, BEIncomingCarry, 4},   {Arch::PPC32, LESum, 4},
+      {Arch::PPC32, BEStored, 4},          {Arch::PPC32LE, LESum, 8},
+      {Arch::PPC32LE, LEIncomingCarry, 4}, {Arch::PPC32LE, BESum, 4},
+      {Arch::PPC32LE, LEStored, 4}};
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(::testing::Message() << getArchName(C.A) << " " << C.Words[0]
+                                      << " " << C.Words.size());
+    LinkedImage File(C.A);
+    File.setWords(C.Words);
+    auto Img = ELFLoader().loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+    for (bool LLVM : {false, true}) {
+      PipelineOptions Options;
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      llvm::LLVMContext Ctx;
+      auto R = Pipeline().run(*Img, Ctx, Options);
+      ASSERT_TRUE(R.Success) << R.Error;
+      ASSERT_EQ(R.MedFuncs.size(), 1u);
+      if (LLVM) {
+        ASSERT_TRUE(R.LlvmModule);
+        auto *F = R.LlvmModule->getFunction(R.MedFuncs.front().Name);
+        ASSERT_TRUE(F);
+        EXPECT_TRUE(F->getReturnType()->isIntegerTy(C.ResultBytes * 8));
+        EXPECT_FALSE(llvm::verifyModule(*R.LlvmModule, &llvm::errs()));
+      } else {
+        ASSERT_EQ(R.HighFuncs.size(), 1u);
+        ASSERT_TRUE(R.HighFuncs.front().ReturnType);
+        EXPECT_EQ(R.HighFuncs.front().ReturnType->Size, C.ResultBytes);
+      }
+    }
+  }
+}
+
 TEST_P(ELFIntegerTarget, StrippedELFToCAndVerifiedLLVM) {
   const Arch A = GetParam();
   LinkedImage File(A);

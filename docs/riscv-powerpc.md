@@ -4,9 +4,9 @@
 
 | ELF machine | Class and byte order | ABI used for integer arguments and returns | Encoding |
 | --- | --- | --- | --- |
-| RISC-V | ELF32, little-endian | ILP32, a0–a7, result in a0 | RV32I, M, A, integer C |
+| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C |
 | RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C |
-| PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, result in r3 | Fixed-width scalar subset |
+| PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset |
 | PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Fixed-width scalar subset |
 
 For RISC-V, the ELF class selects XLEN. The loader accepts the integer ABI and
@@ -113,6 +113,13 @@ The scalar encodings and flag definitions follow Books I and II of versions
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
 | Native rewrite | Unsupported | Unsupported |
 
+When selected on its own, a straight-line RV32 or PPC32 leaf can establish a
+64-bit sum from the first two argument pairs. Both result registers must hold
+the corresponding sums and the low addition's carry must reach the high
+addition. Word spills and reloads can carry the inputs through the leaf's
+own frame. PPC32 places the high word in r3 on big endian and r4 on little
+endian. The source projections can retain four word-sized parameters.
+
 JALR through x0 has a signed absolute target. In a stripped linked ELF,
 function discovery also follows an AUIPC/JALR call when both instructions
 belong to one reachable basic block and use the same base register.
@@ -161,7 +168,10 @@ ctest --test-dir build-release --build-config Release \
 
 The cross-compiler fixture builds freestanding integer arithmetic, division,
 branches, memory accesses, atomic fetch-add and a non-leaf call with reordered
-arguments. A stripped RISC-V fixture disables linker relaxation and rebuilds
+arguments. A separately compiled caller checks both halves of a 64-bit sum
+across carry and wraparound, varying the original and rebuild optimization
+levels independently.
+A stripped RISC-V fixture disables linker relaxation and rebuilds
 both the caller and its unsymbolized callee. PowerPC fixtures also consume
 the quotient and CR0 bits from a recorded word divide, check sticky overflow
 and count the two independent divides in the rebuilt machine code.

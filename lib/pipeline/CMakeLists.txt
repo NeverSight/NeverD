@@ -55,6 +55,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineStructReturn.cpp
   PipelineStructReturnCallSites.cpp
   PipelineReturnContracts.cpp
+  PipelineDoubleWordSum.cpp
   PipelineWideIntReturn.cpp
   PipelineWideIntReturnEvidence.cpp
   X86/X64FunctionCallSchedule.cpp
