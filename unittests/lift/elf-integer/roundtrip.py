@@ -126,6 +126,51 @@ def count_word_divides(path, function):
                    for i in range(0, len(code), 4))
 
 
+def check_double_word_sum(args, work, profile):
+    # Keep the caller's native ABI in a separate object across all rebuilds.
+    # The two source routes select just the leaf. The LLVM module has no caller.
+    leaf = work / "sum_words.c"
+    leaf.write_text("unsigned long long sum_words(unsigned long long a, "
+                    "unsigned long long b) { return a + b; }\n")
+    inputs = [(0, 0), (0xffffffff, 1), (0x0123456789abcdef, 0x76543210fedcba98),
+              (0xffffffffffffffff, 2), (0x100000002, 0x300000004)]
+    rows = ",\n".join(f"  {{ {a:#x}ULL, {b:#x}ULL, {(a + b) % (1 << 64):#x}ULL }}"
+                      for a, b in inputs)
+    caller = work / "check_sum.c"
+    caller.write_text("typedef unsigned long long U64;\nextern U64 sum_words(U64, U64);\n"
+                      f"static const U64 cases[][3] = {{\n{rows}\n}};\n"
+                      "unsigned check_sum(unsigned n) { const U64 *p = cases[n];\n"
+                      "  return sum_words(p[0], p[1]) == p[2]; }\n")
+    obj = work / "check_sum.o"
+    subprocess.run([args.clang, *compiler_flags(profile), "-O2", "-c", caller, "-o", obj],
+                   check=True)
+    cases = [(i, 0) for i in range(len(inputs))]
+
+    def verify(binary):
+        if any(value != 1 for value, _ in execute(binary, profile, "check_sum", cases)):
+            raise RuntimeError(f"{profile} {binary.name}: incorrect 64-bit sum at caller")
+
+    original = work / f"{profile}-sum.elf"
+    linked = work / f"{profile}-check.elf"
+    for original_opt in ("-O0", "-O2"):
+        compile_elf(args, work, profile, leaf, original, "sum_words", original_opt)
+        compile_elf(args, work, profile, leaf, linked, "check_sum", original_opt, [obj])
+        verify(linked)
+        for route in ("highc", "llvmc", "llvm"):
+            source = work / ("sum.ll" if route == "llvm" else "sum.c")
+            if route == "llvm":
+                command = ["lift", "-o", source, original]
+            else:
+                flags = ["--llvm"] if route == "llvmc" else []
+                command = ["decompile", "--func", "sum_words", *flags, "-o", source, linked]
+            subprocess.run([args.neverd, *command], check=True)
+            for opt in ("-O0", "-O2"):
+                binary = work / f"{profile}-sum{original_opt}-{route}{opt}.elf"
+                compile_elf(args, work, profile, source, binary, "check_sum", opt, [obj])
+                verify(binary)
+                print(f"{binary.name}: {len(cases)} 64-bit sums", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for program in ("neverd", "clang", "ld"):
@@ -138,6 +183,7 @@ def main():
         (work / "string.h").write_text("#include <stddef.h>\nvoid *memcpy(void *, const void *, size_t);\n"
                                        "void *memset(void *, int, size_t);\n")
         for profile in args.profile or PROFILES:
+            check_double_word_sum(args, work, profile)
             original = work / f"{profile}.elf"
             # Exercise the linked AUIPC/JALR call pair with its original displacement.
             original_flags = ["-mno-relax", "-Wl,--no-relax"] if profile.startswith("riscv") else []

@@ -414,7 +414,11 @@ bool integer(State &S, Arch A, uint32_t W) {
       return CR ? S.op(NdOp::BOOL_XOR, V, NdVar::scalar(1, 1)) : S.inverse(V);
     };
     NdVar Left = CR ? S.cr(RA) : Src, Right = CR ? S.cr(RB) : Y;
-    NdVar V = S.op(L->Kind, Left, L->InvertRight ? Invert(Right) : Right);
+    // mr rA,rS is or rA,rS,rS. Keep the register copy visible when it
+    // establishes the frame pointer; result() still models the record bit.
+    NdVar V = L->Kind == NdOp::INT_OR && !L->InvertRight && Left == Right
+                  ? Left
+                  : S.op(L->Kind, Left, L->InvertRight ? Invert(Right) : Right);
     if (L->InvertResult)
       V = Invert(V);
     if (CR)

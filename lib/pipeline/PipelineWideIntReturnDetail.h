@@ -28,6 +28,10 @@ bool returnsRegisterPairI64(
 
 bool returnsRegisterPairI64(const MedFunc &Func, const TargetRegInfo &TRI);
 
+/// A leaf adds two pairs of incoming integer argument words and delivers the
+/// complete sum, including the carry from its low word, in the ABI result pair.
+bool returnsDoubleWordSum(const MedFunc &Func, const TargetRegInfo &TRI);
+
 } // namespace neverd
 
 #endif
