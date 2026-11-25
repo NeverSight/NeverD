@@ -85,6 +85,18 @@ global role to a reused physical register. Dependency discovery is bounded and
 incomplete; recovery without manual hints is not guaranteed for every
 interpreter.
 
+The recovery report includes `nextControlProducerHints`, a bounded list of
+candidate address, register/frame kind, offset, width and bit mask tuples.
+`neverd_devirtualize_source_v11()` and its machine-state counterpart accept the
+same tuples. The CLI accepts repeated
+`--vm-producer-hint=address:r|s:offset:bytes:bit-mask` entries (`r` selects a
+register-bank offset; `s` selects an entry-frame offset). Bind a saved list to
+the same physical image using the report's image hash before reusing it.
+These entries request precision only; every new run proves all reachable
+control transfers again and can still refuse. Input hints consume the ordinary
+discovery budget. A truncated output list is marked
+`controlProducerHintsTruncated` and remains safe but may omit useful hints.
+
 Projection of ordinary automatic fields is also scoped to the destination
 node's demands. A nonconstant field enters an edge's joint finite-value
 relation only when the destination demands it. Manual fields and

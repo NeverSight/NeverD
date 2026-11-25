@@ -14138,6 +14138,15 @@ Entry-alignment regressions cover finer partitions, every allowed residue, diffe
 
 `ControlDiscovery.*` and `NativeStackSpecialization.*` cover low-bit root guards, high-bit and whole-root dependencies, incomplete walks, exact and short traversal budgets, and preserved finite immutable-address witnesses.
 
+`ControlStateRecovery.ProducerHintsRequireFreshProof` exports and reuses exact
+producer-bit candidates across independent runs, checks concrete loop outputs,
+and requires budget and malformed-hint refusal without a partial residual.
+The candidate list does not bind a code image or certify a path by itself.
+`SessionCAPITest.InterpreterRecoveryV11KeepsProducerHintsAsCandidates` checks
+the size-delimited C tail, both source routes, malformed hints, reports and
+older-version tail isolation. The CLI source fixture checks the repeatable
+candidate option without changing a complete ordinary result.
+
 `ControlDiscoveryCache.*` checks completed-walk reuse, exact and short work
 budgets, changed or missing input births, later load history, context and byte
 order isolation, incomplete retries and storage saturation. The sibling

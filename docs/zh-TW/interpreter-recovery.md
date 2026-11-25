@@ -357,6 +357,8 @@ v9 介面 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v
 
 v10 C API `neverd_devirtualize_source_v10()` 與 `neverd_devirtualize_machine_source_v10()` 接受 `neverd_devirtualize_options_v10`。將其清零，把 v1 前綴的 `struct_size` 設為完整大小，並以 `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`、`NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` 或 `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2` 設定 `machine_source_abi`。未知選值、非零保留欄位及一般原始碼搭配擴充配置皆會被拒絕。舊 API 忽略新尾部，v10 忽略未來尾部；空選項保留純量預設值。Python 提供 `NeverDDevirtualizeOptionsV10` 與 `DevirtualizeMachineSourceABI`。原生認證能力不變。
 
+v11 C API `neverd_devirtualize_source_v11()` 與 `neverd_devirtualize_machine_source_v11()` 可接收 `nextControlProducerHints` 中的候選；命令列可重複指定 `--vm-producer-hint=位址:r|s:位移:位元組數:位元遮罩`。重用前，應以報告中的映像雜湊確認相同的實體映像。候選只要求投影精度並計入探索預算，不提供數值或可達路徑的證明；每次執行仍重新證明完整可達圖。`controlProducerHintsTruncated` 表示清單已截斷。
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## 桌面中的直譯器還原

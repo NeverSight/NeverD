@@ -433,6 +433,8 @@ Verwenden Sie `--vm-source-abi=scalar|queries|xmm` mit `--devirtualize --vm-mach
 
 Die C-APIs v10 `neverd_devirtualize_source_v10()` und `neverd_devirtualize_machine_source_v10()` akzeptieren `neverd_devirtualize_options_v10`. Initialisieren Sie die Struktur mit Nullen, setzen Sie `struct_size` im v1-Präfix auf die Gesamtgröße und wählen Sie `machine_source_abi` mit `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` oder `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2`. Unbekannte Werte, nichtleere reservierte Felder und erweiterte Layouts für gewöhnlichen Quellcode werden abgelehnt. Ältere APIs ignorieren den neuen Anhang, v10 künftige Anhänge. Nulloptionen behalten skalare Standardwerte. Python stellt `NeverDDevirtualizeOptionsV10` und `DevirtualizeMachineSourceABI` bereit. Native Zertifizierung bleibt unverändert.
 
+Die v11-C-APIs `neverd_devirtualize_source_v11()` und `neverd_devirtualize_machine_source_v11()` akzeptieren optionale Kandidaten aus `nextControlProducerHints`; die CLI nimmt wiederholte `--vm-producer-hint=Adresse:r|s:Offset:Bytes:Bitmaske`-Angaben an. Binden Sie gespeicherte Hinweise vor der Wiederverwendung über den Bild-Hash an dasselbe physische Image. Hinweise liefern keine Werte oder erreichbaren Pfade, zählen zum Entdeckungsbudget und ersetzen keine erneute vollständige Beweisführung. `controlProducerHintsTruncated` kennzeichnet eine gekürzte Liste.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## Interpreter-Rekonstruktion im Desktop
