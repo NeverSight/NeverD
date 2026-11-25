@@ -69,6 +69,7 @@ ISOLATED_PROVIDERS = {
         Provider("NetworkInterfaces", ("ntddk", "netioddk", "wsk")),
         Provider("KernelStreaming", ("ntddk", "minwindef", "ks", "swenum", "ksi")),
         Provider("StorageClass", ("ntddk", "scsi", "classpnp")),
+        Provider("MediaChanger", ("ntddk", "mcd")),
         Provider("TDI", ("ntddk", "tdikrnl")),
         Provider("VideoPort", ("miniport", "ntddvdeo", "video")),
         Provider("ATA", ("ntddk", "ata", "irb")),
@@ -296,6 +297,7 @@ def verify_layouts(original: str, generated: str,
 # Each isolated unit also includes the compiler or SDK prerequisites. Only
 # these API families belong to the provider that brought that unit in.
 WDK_EXPORT_PREFIXES = {
+    "MediaChanger": ("ChangerClass",),
     "StoragePortAccess": ("StorPortReadPort", "StorPortReadRegister",
                           "StorPortWritePort", "StorPortWriteRegister"),
     "TapeClass": ("TapeClass", "TapeDebugPrint"),

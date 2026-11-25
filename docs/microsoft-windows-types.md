@@ -149,6 +149,11 @@ Network DMA units cover older driver imports. The Network DMA header
 requires `ENABLE_LEGACY_NETDMA`. The provider ABI checker compiles each
 selected prototype against the original headers and the published catalog.
 
+The media changer unit reads `mcd.h` and selects the five `ChangerClass`
+exports of `mcd.sys`. It retains the variadic debug routine and the
+byte-sized direction argument to `ChangerClassSendSrbSynchronous`. Select
+`--provider MediaChanger` in the provider ABI check to compare all five.
+
 RDBSS is an independent kernel unit using the official mini-redirector
 profile. The pinned `rxcontx.h` gives two different anonymous enums the same
 `RX_CONTEXT_CREATE_FLAGS` typedef only in C. The generator compares both
