@@ -264,7 +264,7 @@ class MicrosoftWindowsTypes(unittest.TestCase):
 
     def test_system_cpp_exports_use_the_original_headers_on_each_installed_target(self):
         names = ("DebugDataModelManager", "DirectCompositionClock", "DirectCompositionControls",
-                 "MachineLearningOperatorRegistry", "VolumeShadowCopyRuntime")
+                 "DispatcherQueueRuntime", "MachineLearningOperatorRegistry", "VolumeShadowCopyRuntime")
         profiles = {name: windows.flat.RUNTIME_PROFILES[name] for name in names}
         standard_headers = ["-I", "pinned-msvc-stl"]
         with tempfile.TemporaryDirectory() as directory:
@@ -293,6 +293,9 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                     self.assertNotIn("pinned-msvc-stl", unit["compiler"])
                     self.assertEqual("pinned-msvc-stl" in bridge["arguments"],
                                      name == "MachineLearningOperatorRegistry")
+                dispatcher = by_name["DispatcherQueueRuntime"]["source"].read_text()
+                self.assertIn("#include <windows.system.h>", dispatcher)
+                self.assertIn("struct DispatcherQueueOptions options", dispatcher)
                 self.assertIn("_Bool *pbBlock", by_name["VolumeShadowCopyRuntime"]["source"].read_text())
 
     def test_named_runtime_archive_coexists_with_other_sdk_imports(self):
