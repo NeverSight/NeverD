@@ -36,6 +36,7 @@
 #include "neverd/loader/Rust/RustEH.h"
 #include "neverd/support/FilePath.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
@@ -228,8 +229,12 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
       return Table.takeError();
     PPC32PLT = *Table;
   }
-  const bool RuntimeTables =
-      isMIPS(Img.Arch) || PPC32PLT.Count || Linkage.JumpRelocationSize;
+  const bool RISCVRuntime =
+      isRISCV(Img.Arch) &&
+      llvm::any_of(Img.ELFMetadata->ProgramHeaders,
+                   [](const auto &P) { return P.Type == PT_DYNAMIC; });
+  const bool RuntimeTables = RISCVRuntime || isMIPS(Img.Arch) ||
+                             PPC32PLT.Count || Linkage.JumpRelocationSize;
   if (!IsRelocatable && (SectionsOr->empty() || RuntimeTables)) {
     const size_t DiagnosticsBefore = Img.LoadDiagnostics.size();
     Reconstructed =
@@ -240,9 +245,10 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
           return llvm::createStringError(
               llvm::inconvertibleErrorCode(),
               "elf: invalid %s runtime table: %s",
-              isMIPS(Img.Arch) ? "MIPS"
-              : PPC32          ? "PPC32"
-                               : "PPC64",
+              RISCVRuntime       ? "RISC-V"
+              : isMIPS(Img.Arch) ? "MIPS"
+              : PPC32            ? "PPC32"
+                                 : "PPC64",
               Img.LoadDiagnostics[I].Message.c_str());
       if (!SectionsOr->empty()) {
         // PT_DYNAMIC is authoritative even when the file retains an
@@ -281,13 +287,14 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   // --- Apply relocations for relocatable objects (.o files) ---
   // PC-relative references in .text to .rodata need fixup so the lifter
   // sees correct displacements for constant pool loads.
+  llvm::SmallVector<va_t> RelrSlots;
   if (IsRelocatable) {
     if (llvm::Error E = elf_loader::detail::applyRelocations<ELFT>(
             ELF, *SectionsOr, Data, Size, SecBase, IsRelocatable, Externs, Img))
       return E;
   } else
-    elf_loader::detail::applyDynamicRelativeRelocations<ELFT>(ELF, Tables, Data,
-                                                              Size, Img);
+    elf_loader::detail::applyDynamicRelativeRelocations<ELFT>(
+        ELF, Tables, Data, Size, Img, RISCVRuntime ? &RelrSlots : nullptr);
 
   Progress.check();
   if (llvm::Error E = elf_loader::detail::collectSymbols<ELFT>(
@@ -311,7 +318,13 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
 
   Progress.check();
   // --- .rela.plt / .rel.plt imports ---
-  elf_loader::parsePLTImports(ELF, Tables, TableNames, Data, Size, Img);
+  if (!IsRelocatable && isRISCV(Img.Arch)) {
+    if (RISCVRuntime)
+      if (auto E = elf_loader::readRISCVLinkage(Img, RelrSlots))
+        return E;
+  } else {
+    elf_loader::parsePLTImports(ELF, Tables, TableNames, Data, Size, Img);
+  }
   if (PPC32PLT.Count)
     if (auto E = elf_loader::readPPC32Linkage(Img, PPC32PLT))
       return E;

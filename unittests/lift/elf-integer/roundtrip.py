@@ -37,6 +37,19 @@ def compile_elf(args, work, profile, source, output, entry, optimization="-O2", 
                     source, *callees, "-o", output], check=True)
 
 
+def without_sections(app):
+    with app.open("rb") as stream:
+        elf = ELFFile(stream)
+        for field in ("e_shoff", "e_shnum", "e_shstrndx"):
+            elf.header[field] = 0
+        header = elf.structs.Elf_Ehdr.build(elf.header)
+    raw = bytearray(app.read_bytes())
+    raw[:len(header)] = header
+    result = app.with_name(app.stem + "-no-section-headers.so")
+    result.write_bytes(raw)
+    return result
+
+
 def map_image(cpu, elf, bias=0):
     segments = [s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD" and s["p_memsz"]]
     # LOAD segments may share an aligned page.

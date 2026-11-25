@@ -430,6 +430,11 @@ llvm::Constant *MedLLVMEmitter::resolveImageFunctionAddress(va_t Address) {
     return Lifted;
   if (!Img || !Mod || !Ctx)
     return nullptr;
+  // An exact import veneer can supply a numeric code address before the
+  // module sees the call that declares its external function type.
+  if (const Import *Imported = Img->findImportStubAt(Address);
+      Imported && !Imported->Name.empty())
+    return importedSymbolIdentity(Imported->Name);
   const auto [Exact, Ending] = imageFunctionSymbolsAt(Address);
   // Adjacent functions share an address with the previous function's end.
   // Independent entry evidence owns that address before the end fallback.

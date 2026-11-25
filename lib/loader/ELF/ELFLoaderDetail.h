@@ -21,6 +21,7 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"
@@ -171,12 +172,13 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
 /// Apply full-width dynamic-loader-relative relocations in a linked ELF image
 /// at its link-time virtual addresses, and normalize their pointer provenance
 /// into the same slot/target sets used by relocatable objects and other
-/// container formats.
+/// container formats. When requested, keep the destinations of packed RELR
+/// writes, which have no individual REL or RELA record.
 template <typename ELFT>
 void applyDynamicRelativeRelocations(
     const llvm::object::ELFFile<ELFT> &ELF,
     llvm::ArrayRef<typename ELFT::Shdr> Sections, const uint8_t *Data,
-    size_t Size, BinaryImage &Img);
+    size_t Size, BinaryImage &Img, llvm::SmallVectorImpl<va_t> *RelrSlots);
 
 /// MIPS global GOT entries are bound by dynamic symbol order, without one
 /// relocation per cell. Retain those import identities and validate the table.
