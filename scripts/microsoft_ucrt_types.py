@@ -374,10 +374,11 @@ def prepare(output: Path, cache: Path, sdk: Path, sdk_include: Path,
         "version": 0, "case-sensitive": False,
         "roots": [wdk.overlay_directory(kit, True)],
     }, indent=2) + "\n", encoding="utf-8")
-    arguments = common + ["-nostdinc", "-ivfsoverlay", str(overlay), "-D_CRT_RAND_S=1"]
+    header_arguments = ["-nostdinc", "-ivfsoverlay", str(overlay), "-D_CRT_RAND_S=1"]
     for include in [kit / inventory["vc_include"], kit / f"c/Include/{version}/ucrt",
                     sdk_include / "shared", sdk_include / "um"]:
-        arguments += ["-I", str(include)]
+        header_arguments += ["-I", str(include)]
+    arguments = common + header_arguments
     cpp = directory / "UCRT.cpp"
     cpp.write_text("#include <corecrt_terminate.h>\n#include <vcruntime_typeinfo.h>\n"
                    "#include <eh.h>\n"
@@ -446,6 +447,7 @@ def prepare(output: Path, cache: Path, sdk: Path, sdk_include: Path,
         for alias, original in aliases.items():
             stream.write(f"__typeof__({original}) {alias};\n")
     return {"source": source, "arguments": arguments, "prototypes": selected,
+            "header_arguments": header_arguments,
             "packages": [packages[0]],
             "target_packages": [dict(packages[1], architecture=architecture)],
             "metadata": {"inputs_definition_sha256": wdk.digest(INPUTS),

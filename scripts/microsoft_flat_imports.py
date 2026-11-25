@@ -263,6 +263,40 @@ def include_headers(headers) -> str:
 # SDK headers. Compile those originals separately from the C declarations
 # consumed by the type reader and compare both emitted ABIs.
 CPP_ONLY_RUNTIME_DECLARATIONS = {
+    "DirectCompositionControls": (
+        "struct IDCompositionVisual { const struct IDCompositionVisualVtbl *lpVtbl; };\n"
+        "HRESULT WINAPI DCompositionAttachMouseDragToHwnd(struct IDCompositionVisual *visual, HWND hwnd, BOOL enable);\n"
+        "HRESULT WINAPI DCompositionAttachMouseWheelToHwnd(struct IDCompositionVisual *visual, HWND hwnd, BOOL enable);\n"
+        "HRESULT WINAPI DCompositionCreateSurfaceHandle(DWORD desiredAccess, SECURITY_ATTRIBUTES *securityAttributes, HANDLE *surfaceHandle);\n"
+    ),
+    "DirectCompositionClock": (
+        "HRESULT WINAPI DCompositionBoostCompositorClock(BOOL enable);\n"
+        "HRESULT WINAPI DCompositionGetFrameId(COMPOSITION_FRAME_ID_TYPE frameIdType, COMPOSITION_FRAME_ID *frameId);\n"
+        "HRESULT WINAPI DCompositionGetStatistics(COMPOSITION_FRAME_ID frameId, COMPOSITION_FRAME_STATS *frameStats, UINT targetIdCount, COMPOSITION_TARGET_ID *targetIds, UINT *actualTargetIdCount);\n"
+        "HRESULT WINAPI DCompositionGetTargetStatistics(COMPOSITION_FRAME_ID frameId, const COMPOSITION_TARGET_ID *targetId, COMPOSITION_TARGET_STATS *targetStats);\n"
+        "DWORD WINAPI DCompositionWaitForCompositorClock(UINT count, const HANDLE *handles, DWORD timeoutInMs);\n"
+    ),
+    "DebugDataModelManager": (
+        "struct IDebugHost { const struct IDebugHostVtbl *lpVtbl; };\n"
+        "struct IDataModelManager { const struct IDataModelManagerVtbl *lpVtbl; };\n"
+        "HRESULT WINAPI CreateDataModelManager(struct IDebugHost *debugHost, struct IDataModelManager **manager);\n"
+    ),
+    "MachineLearningOperatorRegistry": (
+        "struct IMLOperatorRegistry { const struct IMLOperatorRegistryVtbl *lpVtbl; };\n"
+        "HRESULT WINAPI MLCreateOperatorRegistry(struct IMLOperatorRegistry **registry);\n"
+    ),
+    "VolumeShadowCopyRuntime": (
+        "struct IVssBackupComponents;\n"
+        "struct IVssExamineWriterMetadata;\n"
+        "struct IVssExpressWriter;\n"
+        "HRESULT WINAPI CreateVssBackupComponentsInternal(struct IVssBackupComponents **ppBackup);\n"
+        "HRESULT WINAPI CreateVssExamineWriterMetadataInternal(BSTR bstrXML, struct IVssExamineWriterMetadata **ppMetadata);\n"
+        "HRESULT WINAPI CreateVssExpressWriterInternal(struct IVssExpressWriter **ppWriter);\n"
+        "HRESULT WINAPI GetProviderMgmtInterfaceInternal(VSS_ID ProviderId, IID InterfaceId, IUnknown **ppItf);\n"
+        "HRESULT WINAPI IsVolumeSnapshottedInternal(VSS_PWSZ pwszVolumeName, BOOL *pbSnapshotsPresent, LONG *plSnapshotCapability);\n"
+        "HRESULT WINAPI ShouldBlockRevertInternal(LPCWSTR wszVolumeName, _Bool *pbBlock);\n"
+        "void WINAPI VssFreeSnapshotPropertiesInternal(VSS_SNAPSHOT_PROP *pProp);\n"
+    ),
     "MediaFoundationCollection": "HRESULT __stdcall MFCreateCollection(IMFCollection **ppIMFCollection);\n",
     "OlePropertyConversion": (
         "struct PMemoryAllocator;\n"
@@ -272,7 +306,22 @@ CPP_ONLY_RUNTIME_DECLARATIONS = {
 }
 
 
-def named_runtime_units(output, architecture, compiler, libraries, *, profiles=None):
+def runtime_cpp_headers(output, cache, sdk, version, licenses):
+    """Provide the original MLOperatorAuthor.h with the pinned C++ standard library."""
+    inputs = json.loads(ucrt.INPUTS.read_text(encoding="utf-8"))
+    vc, notice = inputs["vc_headers"], inputs["vc_license"]
+    kit = output / "sdk-cpp-headers"
+    crt = f"c/Include/{version}/ucrt"
+    wdk.extract([sdk, package(cache, vc)], kit, [crt + "/", inputs["vc_include"] + "/"])
+    shutil.copy2(package(cache, notice), licenses / notice["file"])
+    overlay = output / "sdk-cpp-vfs.json"
+    overlay.write_text(json.dumps({"version": 0, "case-sensitive": False,
+                                   "roots": [wdk.overlay_directory(kit, True)]}), encoding="utf-8")
+    return ["-ivfsoverlay", str(overlay), "-I", str(kit / inputs["vc_include"]),
+            "-I", str(kit / crt)], vc
+
+
+def named_runtime_units(output, architecture, compiler, libraries, *, profiles=None, cpp_headers=()):
     """Project documented named PE exports qualified for this target."""
     directory = output / "sdk-import-sources"
     directory.mkdir(parents=True, exist_ok=True)
@@ -312,12 +361,17 @@ def named_runtime_units(output, architecture, compiler, libraries, *, profiles=N
         language = "c"
         arguments = [*options, "-std=c23"]
         c_declaration = CPP_ONLY_RUNTIME_DECLARATIONS.get(name)
+        if name == "MachineLearningOperatorRegistry":
+            options_cpp = [*options, *cpp_headers, "-fms-compatibility-version=19.44"]
+        else:
+            options_cpp = options
         if name == "AudioStateMonitors" or c_declaration:
             language = "c++"
-            arguments = [*options, "-x", "c++", "-std=c++17"]
+            arguments = [*options_cpp, "-x", "c++", "-std=c++17"]
             if c_declaration:
                 source = directory / (name + "-c.c")
-                source.write_text(include_headers(headers) + c_declaration, encoding="utf-8")
+                c_headers = ["winsock2", "windows", *profile.get("c_headers", profile["headers"])]
+                source.write_text(include_headers(c_headers) + c_declaration, encoding="utf-8")
         bridge = {"source": str(original), "source_sha256": wdk.digest(original),
                   "arguments": arguments, "language": language, "commands": [],
                   "runtime_exports": named_runtime_exports(profile, target, NAMED_RUNTIME["win32_metadata"])}
