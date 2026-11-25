@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -120,6 +121,7 @@ class PriorPassTests(unittest.TestCase):
         self.assertFalse(audit_results(selected, combined[:-1], "windows-focused", 0)["ok"])
         self.assertFalse(audit_results(selected, combined, "windows-focused", 8)["ok"])
 
+    @unittest.skipUnless(shutil.which("ctest"), "CTest is unavailable")
     def test_real_ctest_reuses_a_pass_and_a_skip_and_reruns_only_the_failure(self):
         with tempfile.TemporaryDirectory(prefix="neverd-ci-reuse-") as directory:
             root = Path(directory)
