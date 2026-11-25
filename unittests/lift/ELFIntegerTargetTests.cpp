@@ -22,6 +22,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/IntegerRegisters.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
@@ -644,6 +645,57 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
     auto Bad = ELFLoader().loadBuffer(Unsupported.buffer());
     ASSERT_FALSE(bool(Bad));
     llvm::consumeError(Bad.takeError());
+  }
+}
+
+namespace conditional_return_fixture {
+#include "PowerPCConditionalReturnFixture.inc"
+} // namespace conditional_return_fixture
+
+TEST(PowerPCControl, ConditionalReturnRequiresTheCallersLinkOnEveryPath) {
+  using namespace conditional_return_fixture;
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    for (bool Clobber : {false, true}) {
+      LinkedImage File(A);
+      // The second path either preserves LR or replaces it with r4.
+      File.setWords({Compare, Skip, Clobber ? SetLR : Compare, BeqLR, Ret});
+      auto Img = ELFLoader().loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+      Decoder D;
+      ASSERT_TRUE(D.init(*Img));
+      DecodedInsn Insn;
+      ASSERT_EQ(D.decodeOneForLift(File.Bytes.data() + 0x10c, 4,
+                                   Img->Entry + 12, Insn),
+                4);
+      EXPECT_EQ(D.returnsToCaller(Insn), true);
+      EXPECT_FALSE(D.isFunctionTerminator(Insn));
+      auto Low = CFGBuilder().build(*Img, D, Img->Entry, "guarded");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      const auto *Block = Low.blockFor(Img->Entry + 12);
+      ASSERT_TRUE(Block && !Block->InstructionBoundaries.empty());
+      EXPECT_EQ(Block->InstructionBoundaries.back().Control,
+                LowInstructionControl::ConditionalReturn);
+      ASSERT_EQ(Block->Succs.size(), 1u);
+      EXPECT_EQ(Low.Blocks[Block->Succs.front()].StartAddr, Img->Entry + 16);
+      LowToMedConverter Converter;
+      Converter.setBinaryImage(&*Img);
+      if (Clobber)
+        EXPECT_THROW(Converter.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+      else
+        EXPECT_NO_THROW(Converter.convert(Low, A, BinaryFormat::ELF));
+    }
+    for (uint32_t Word :
+         {BeqLR | 1, BeqLR | 0x1000, BeqLR | 0x200000, BeqLR | 0x400}) {
+      LinkedImage File(A);
+      File.setWords({Word, Ret});
+      auto Img = ELFLoader().loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+      Decoder D;
+      ASSERT_TRUE(D.init(*Img));
+      auto Low = CFGBuilder().build(*Img, D, Img->Entry, "unmodeled");
+      EXPECT_FALSE(Low.hasCompleteLiftCoverage());
+    }
   }
 }
 

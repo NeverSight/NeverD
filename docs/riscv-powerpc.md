@@ -96,6 +96,13 @@ restore on return. Unresolved descriptor targets, ambiguous TOCs and
 unrecognized save/restore sequences require additional evidence.
 [GNU ld PowerPC64 options](https://sourceware.org/binutils/docs/ld/PowerPC64-ELF64.html).
 
+PPC scalar population counts preserve each byte or word lane independently.
+PPC64 also admits the doubleword count. A conditional branch through LR can
+test CR, decrement CTR, or do both. The not-taken path retains the updated
+CTR. Source recovery requires the incoming return address to reach the branch
+on every path. A reaching call or explicit LR write, including an unproven
+save/restore, leaves that source return unresolved.
+
 PPC64 arithmetic models the common CA, OV and SO bits. A full XER read
 requires processor evidence for the ISA 3.0 CA32 and OV32 fields and is
 currently rejected. [OpenPOWER ELFv2 ABI](https://openpower.foundation/specifications/64bitelfabi/).

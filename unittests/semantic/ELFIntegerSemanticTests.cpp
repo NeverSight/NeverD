@@ -20,6 +20,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <array>
+#include <bit>
 #include <memory>
 #include <optional>
 #include <unicorn/unicorn.h>
@@ -27,6 +28,8 @@
 
 using namespace neverd;
 namespace {
+#include "PowerPCPopulationFixture.inc"
+
 class ELFIntegerSemantic : public ::testing::TestWithParam<Arch> {};
 
 TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
@@ -102,6 +105,9 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
                                0x7cc538f9, 0x4d8a8842,   // nor. / crnor
                                0x7cc53a79, 0x4d8a8982,   // xor. / crxor
                                0x7cc53a39, 0x4d8a8a42}); // eqv. / creqv
+    if (Wide)
+      for (auto Form : PopulationForms)
+        Words.push_back(Form.Word);
     // Read back stores through different addressing forms and widths.
     Words.insert(Words.end(), {0x3ba02080,   // li r29,0x2080
                                0x3bc00008,   // li r30,8
@@ -307,6 +313,53 @@ TEST_P(ELFIntegerSemantic, IndirectCallUsesOldLinkAndPhysicalReturnAddress) {
   EXPECT_EQ(Emu.getRegister(Link), 0x1000u + Bytes);
   EXPECT_EQ(Emu.getRegister(Ops.back().Inputs[0].Offset),
             RV ? 0x2002u : 0x2000u);
+}
+
+TEST(PowerPCInteger, PopulationCountsKeepEachLaneAndRejectReservedFields) {
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    BinaryImage Image;
+    Image.Arch = A;
+    const unsigned Bytes = isPowerPC64(A) ? 8 : 4;
+    Image.Bits = Bytes == 8 ? Bitness::Bits64 : Bitness::Bits32;
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    for (auto [Word, Lane] : PopulationForms)
+      for (unsigned Reserved : {0U, 1U, 1U << 11}) {
+        uint8_t Code[4];
+        llvm::support::endian::write32(Code, Word | Reserved,
+                                       archLittleEndian(A)
+                                           ? llvm::endianness::little
+                                           : llvm::endianness::big);
+        DecodedInsn I;
+        const bool Admitted = !Reserved && Lane <= Bytes;
+        if (!D.decodeOneForLift(Code, sizeof(Code), 0x1000, I)) {
+          EXPECT_FALSE(Admitted);
+          continue;
+        }
+        std::vector<LowOp> Ops;
+        if (!Admitted) {
+          EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+          continue;
+        }
+        ASSERT_NO_THROW(D.liftToLow(I, Ops));
+        for (uint64_t Input :
+             {UINT64_C(0), UINT64_MAX, UINT64_C(0xff00aa12cccc777f)}) {
+          NdOpEmulator Emu(Image);
+          Emu.setStrictMode(true);
+          Emu.setRegister(integerreg::gpr(6),
+                          Bytes == 8 ? Input : uint32_t(Input));
+          for (const LowOp &Op : Ops)
+            ASSERT_TRUE(Emu.step(Op)) << ndOpName(Op.Opcode);
+          const uint64_t Mask = UINT64_MAX >> (64 - 8 * Lane);
+          uint64_t Expected = 0;
+          for (unsigned Off = 0; Off < Bytes; Off += Lane)
+            Expected |= uint64_t(std::popcount((Input >> (8 * Off)) & Mask))
+                        << (8 * Off);
+          EXPECT_EQ(Emu.getRegister(integerreg::gpr(5)), Expected);
+        }
+      }
+  }
 }
 
 TEST(PowerPCDivision, QuotientDefinedBitsAndStickyOverflow) {

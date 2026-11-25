@@ -16,6 +16,7 @@
 #include "../../pass/MedEntryStackOffsets.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/IntegerRegisters.h"
@@ -230,6 +231,40 @@ void recoverCallerTOCRestores(MedFunc &Function, const BinaryImage &Image,
   }
 }
 } // namespace
+
+void requirePPCConditionalReturnLinks(const LowFunc &Function) {
+  // Only predecessors of a guarded LR transfer matter. An LR write on the
+  // other side of an early return does not change the link at that return.
+  llvm::SmallVector<int> Work;
+  llvm::SmallDenseSet<int> Visited;
+  auto Check = [&](const LowBlock &Block, llvm::ArrayRef<LowOp> Before) {
+    if (!Block.ExceptionalPreds.empty() ||
+        (Block.StartAddr != Function.Entry &&
+         (Block.Preds.empty() ||
+          Function.ModuleAnalysisRoots.count(Block.StartAddr))))
+      throw LowToMedConversionError(
+          "PPC conditional return has an unknown incoming link");
+    for (const auto &Op : Before)
+      if ((Op.Output.isReg() && Op.Output.Offset == integerreg::ppc::LR) ||
+          Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        throw LowToMedConversionError(
+            "PPC conditional return does not have a proven incoming LR");
+    for (int Pred : Block.Preds)
+      if (Visited.insert(Pred).second)
+        Work.push_back(Pred);
+  };
+  for (const auto &Block : Function.Blocks) {
+    if (Block.InstructionBoundaries.empty())
+      continue;
+    const auto &Last = Block.InstructionBoundaries.back();
+    if (Last.Control == LowInstructionControl::ConditionalReturn)
+      Check(Block, llvm::ArrayRef(Block.Ops).take_front(Last.FirstOp));
+  }
+  while (!Work.empty()) {
+    const auto &Block = Function.Blocks[Work.pop_back_val()];
+    Check(Block, Block.Ops);
+  }
+}
 
 PPC64LinkageCalls preparePPC64LinkageCalls(MedFunc &Function,
                                            const BinaryImage &Image, MedVar TOC,
