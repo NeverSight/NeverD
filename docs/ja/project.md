@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: beb10f652d7204b5d011356eb712245a5bfbdde867c57c1a7d8b734069d50f68 -->
 
 <div align="center">
 
@@ -69,9 +69,9 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 | ターゲット | 検証済みの ELF プロファイル |
 |---|---|
 | RISC-V | リトルエンディアンの RV32I/ILP32 と RV64I/LP64。ELF の情報に従って M、A、整数 C、または個別の Zmmul、Zaamo、Zalrsc、Zca 拡張を選択します。 |
-| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。ELFv1 の関数記述子からコードのエントリと TOC を取得します。検証済みのスカラ命令には符号付き・符号なし除算と、その結果の CR0 への記録、XER のオーバーフロー状態への影響が含まれます。 |
+| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。ELFv1 は関数記述子、PLT を介したモジュール間呼び出し、モジュール内の TOC 切り替えに対応しています。検証済みのスカラ命令には符号付き・符号なし除算と、その結果の CR0 への記録、XER のオーバーフロー状態への影響が含まれます。 |
 
-ネイティブコードの書き換えとモジュール間の動的リンクは今後の課題です。 [RISC-V と PowerPC の対応範囲（英語）](../riscv-powerpc.md)
+これらのプロファイルのネイティブコード書き換えは今後の課題です。 [RISC-V と PowerPC の対応範囲（英語）](../riscv-powerpc.md)
 
 legacy EVM bytecode は native container と独立して対応します。Frontier から Fusaka
 までの 150 assigned opcode が専用 Low/Med/High IR、verified LLVM `i256`、C23

@@ -111,12 +111,14 @@ llvm::Error buildSections(llvm::ArrayRef<typename ELFT::Shdr> Sections,
                           bool IsRelocatable, BinaryImage &Img);
 
 /// Record every SHT_REL / SHT_RELA entry in `Img.Relocations`, resolving each
-/// one's symbol name where the referenced symbol table supplies it.
+/// one's symbol name where the referenced symbol table supplies it. Tables
+/// reconstructed from PT_DYNAMIC follow the FileSectionCount input headers.
 template <typename ELFT>
 void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
                         llvm::ArrayRef<typename ELFT::Shdr> Sections,
                         llvm::StringRef ShStrTab, const uint8_t *Data,
-                        size_t Size, bool IsRelocatable, BinaryImage &Img);
+                        size_t Size, bool IsRelocatable,
+                        size_t FileSectionCount, BinaryImage &Img);
 
 /// The addresses a relocatable object's relocations resolve against that no
 /// section of the object holds (ELFLoaderExterns.cpp): its externs, laid out

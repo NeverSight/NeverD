@@ -29,6 +29,7 @@
 #include <cstring>
 #include <map>
 #include <optional>
+#include <utility>
 
 namespace neverd {
 namespace elf_loader {
@@ -43,6 +44,8 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
   using Elf_Shdr = typename ELFT::Shdr;
   using Elf_Phdr = typename ELFT::Phdr;
   using Elf_Dyn = typename ELFT::Dyn;
+  using Elf_Sym = typename ELFT::Sym;
+  using Elf_Rela = typename ELFT::Rela;
 
   DynamicSections<ELFT> Out;
   Out.Names.push_back('\0');
@@ -158,13 +161,18 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
     return llvm::support::endian::read32<ELFT::Endianness>(ELF.base() + Offset);
   };
 
-  // How many dynamic symbols there are.  Only a hash table says, for the
-  // dynamic linker as for us: SysV's chain has one entry per symbol, and the
-  // GNU table's last chain ends at the last symbol.
+  // SysV counts every dynamic symbol. A nonempty GNU hash chain ends at
+  // the last symbol. Some linkers leave undefined imports unhashed.
   auto SymbolCount = [&]() -> std::optional<uint64_t> {
     if (isMIPS(Img.Arch))
       if (const auto Count = Tag(DT_MIPS_SYMTABNO))
         return Count;
+    auto SysVCount = [&](uint64_t VA) -> std::optional<uint64_t> {
+      const auto Header = FileOffset(names::Hash, VA, 8);
+      if (!Header)
+        return std::nullopt;
+      return Word(*Header + 4);
+    };
     constexpr uint64_t HeaderWords = 4;
     if (std::optional<uint64_t> Address = Tag(DT_GNU_HASH)) {
       const std::optional<uint64_t> Header =
@@ -182,6 +190,40 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
       uint64_t Last = 0;
       for (uint64_t I = 0; I < Buckets; ++I)
         Last = std::max<uint64_t>(Last, Word(*Table + BucketsAt + I * 4));
+      if (!Last && isPowerPC64ELFv1(Img.Arch) && Tag(DT_JMPREL) &&
+          Tag(DT_PLTREL) == uint64_t(DT_RELA)) {
+        // An executable with only undefined imports has empty GNU hash
+        // buckets. GNU ld can still place those imports after symoffset.
+        // A SysV count covers those too. Otherwise the runtime RELA
+        // indices prove the prefix used by both PLT and data relocations.
+        if (auto VA = Tag(DT_HASH))
+          return SysVCount(*VA);
+        uint64_t Count = First;
+        for (auto [AddrTag, SizeTag] : {std::pair{DT_RELA, DT_RELASZ},
+                                        std::pair{DT_JMPREL, DT_PLTRELSZ}}) {
+          auto VA = Tag(AddrTag);
+          const uint64_t Size = Tag(SizeTag).value_or(0);
+          if (!VA || !Size)
+            continue;
+          auto Name = AddrTag == DT_RELA ? names::RelaDyn : names::RelaPlt;
+          auto Records = FileOffset(Name, *VA, Size);
+          if (!Records || Size % sizeof(Elf_Rela))
+            return std::nullopt;
+          for (uint64_t I = 0; I < Size; I += sizeof(Elf_Rela)) {
+            Elf_Rela R;
+            std::memcpy(&R, ELF.base() + *Records + I, sizeof(R));
+            Count = std::max<uint64_t>(Count, uint64_t(R.getSymbol(false)) + 1);
+          }
+        }
+        auto Sym = Tag(DT_SYMTAB), Str = Tag(DT_STRTAB);
+        if (Sym && Str && *Str > *Sym &&
+            Count > (*Str - *Sym) / sizeof(Elf_Sym)) {
+          Skip(names::Dynsym,
+               "its referenced symbols overlap the string table");
+          return std::nullopt;
+        }
+        return Count;
+      }
       if (Last == 0)
         return First;
       if (Last < First) {
@@ -199,13 +241,8 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
           return Index + 1;
       }
     }
-    if (std::optional<uint64_t> Address = Tag(DT_HASH)) {
-      const std::optional<uint64_t> Header =
-          FileOffset(names::Hash, *Address, 8);
-      if (!Header)
-        return std::nullopt;
-      return Word(*Header + 4);
-    }
+    if (auto Address = Tag(DT_HASH))
+      return SysVCount(*Address);
     Skip(names::Dynsym, "no hash table bounds it");
     return std::nullopt;
   };
@@ -219,7 +256,6 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
 
   uint32_t DynSym = 0;
   if (std::optional<uint64_t> Address = Tag(DT_SYMTAB)) {
-    using Elf_Sym = typename ELFT::Sym;
     if (Tag(DT_SYMENT).value_or(sizeof(Elf_Sym)) != sizeof(Elf_Sym))
       Skip(names::Dynsym, "DT_SYMENT is not the size of a symbol");
     else if (std::optional<uint64_t> Count = SymbolCount();
@@ -263,7 +299,6 @@ reconstructDynamicSections(const llvm::object::ELFFile<ELFT> &ELF,
     AddTable(Name, Type, *Address, Size, EntrySize, DynSym);
   };
   using Elf_Rel = typename ELFT::Rel;
-  using Elf_Rela = typename ELFT::Rela;
   using Elf_Relr = typename ELFT::Relr;
   // Android's packed tables are byte streams.
   constexpr uint64_t PackedEntrySize = 1;

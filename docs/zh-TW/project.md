@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: beb10f652d7204b5d011356eb712245a5bfbdde867c57c1a7d8b734069d50f68 -->
 
 <div align="center">
 
@@ -69,9 +69,9 @@ CLI、整合方與 AI 智慧體透過 **純 C API** 使用同一個引擎 **`lib
 | 目標 | 已驗證的 ELF 組態 |
 |---|---|
 | RISC-V | 小端序 RV32I/ILP32 和 RV64I/LP64。依 ELF 標記選用 M、A、整數 C，或個別的 Zmmul、Zaamo、Zalrsc 和 Zca 擴充。 |
-| PowerPC | 大端序及小端序的 PPC32 System V 和 PPC64 ELFv1/ELFv2。ELFv1 函式描述元提供程式碼進入點與 TOC。已驗證的純量子集涵蓋帶號及無號除法、寫入 CR0 的結果，以及對 XER 溢位旗標的影響。 |
+| PowerPC | 大端序及小端序的 PPC32 System V 和 PPC64 ELFv1/ELFv2。ELFv1 支援函式描述元、跨模組 PLT 呼叫及本地 TOC 切換。已驗證的純量子集涵蓋帶號及無號除法、寫入 CR0 的結果，以及對 XER 溢位旗標的影響。 |
 
-原生程式碼重寫與跨模組動態連結仍待實作。 [RISC-V 與 PowerPC 支援範圍（英文）](../riscv-powerpc.md)
+這些架構設定的原生程式碼重寫仍待實作。 [RISC-V 與 PowerPC 支援範圍（英文）](../riscv-powerpc.md)
 
 傳統 EVM 位元組碼獨立於原生 container：從 Frontier 到 Fusaka 的 150 個已分配
 opcode 全部進入專用 Low/Med/High IR、已驗證 LLVM `i256`、C23 `_BitInt(256)`
