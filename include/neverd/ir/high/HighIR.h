@@ -743,7 +743,7 @@ struct HighFunc {
   /// MedFunc::SEHTerminationFrameBytes.
   std::map<va_t, uint64_t> SEHTerminationFrameBytes;
   /// MedFunc::SEHHomedArguments.
-  std::map<int64_t, unsigned> SEHHomedArguments;
+  std::map<int64_t, SEHHomedArgument> SEHHomedArguments;
   /// MedFunc::SEHFuncletRegisters.
   std::map<va_t, std::map<uint64_t, SEHFuncletRegisterValue>>
       SEHFuncletRegisters;

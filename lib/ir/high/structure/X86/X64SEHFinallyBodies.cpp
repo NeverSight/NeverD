@@ -24,13 +24,19 @@ namespace neverd {
 namespace seh_finally {
 namespace {
 
+/// A parameter a function homes, and how many of its low bytes the slot holds.
+struct HomedParameter {
+  MedVar Var;
+  uint16_t Bytes = 0;
+};
+
 /// The incoming parameter a function homes at entry-SP displacement \p Offset,
 /// as a Win64 prologue spills `[rsp + k] = arg`.  Only the statements before
 /// the first structured region are consulted, and a displacement written more
 /// than once, or by a non-parameter, yields nothing there.
-std::map<int64_t, MedVar> homedParameters(const HighFunc &Func,
-                                          Arch TargetArch) {
-  std::map<int64_t, MedVar> Homed;
+std::map<int64_t, HomedParameter> homedParameters(const HighFunc &Func,
+                                                  Arch TargetArch) {
+  std::map<int64_t, HomedParameter> Homed;
   std::set<int64_t> Ambiguous;
   size_t Budget = limits::kMaxCxxObjectAddressWork;
   for (const HighStmt &S : Func.Body) {
@@ -47,17 +53,21 @@ std::map<int64_t, MedVar> homedParameters(const HighFunc &Func,
       Homed.erase(*Offset);
       continue;
     }
+    // The store's value says how many of the parameter's bytes the slot
+    // holds: an `int` homes four.
     const ExprPtr &V = S.StoreVal;
+    const uint16_t Width = getTargetRegInfo(TargetArch).PointerSize;
     if (V->Kind == ExprKind::Var && V->Var.Kind == MedVar::Param &&
-        S.StoreAddr->Type &&
-        S.StoreAddr->Type->Size == getTargetRegInfo(TargetArch).PointerSize)
-      Homed.emplace(*Offset, V->Var);
+        S.StoreAddr->Type && S.StoreAddr->Type->Size == Width && V->Type &&
+        V->Type->Size && V->Type->Size <= Width)
+      Homed.emplace(*Offset, HomedParameter{V->Var, V->Type->Size});
   }
   // A home nothing in the function reads leaves no store behind in HighIR; the
   // prologue's own says what it holds.
-  for (const auto &[Offset, Position] : Func.SEHHomedArguments) {
+  for (const auto &[Offset, Home] : Func.SEHHomedArguments) {
+    const unsigned Position = Home.Position;
     if (Homed.count(Offset) || Ambiguous.count(Offset) ||
-        Position >= Func.Params.size())
+        Position >= Func.Params.size() || !Home.Bytes)
       continue;
     MedVar Param;
     Param.Kind = MedVar::Param;
@@ -67,7 +77,7 @@ std::map<int64_t, MedVar> homedParameters(const HighFunc &Func,
     Param.RenameTag = -1;
     Param.RegOff = Func.Params[Position].RegOff;
     Param.Size = getTargetRegInfo(TargetArch).PointerSize;
-    Homed.emplace(Offset, Param);
+    Homed.emplace(Offset, HomedParameter{Param, Home.Bytes});
   }
   // The home keeps the incoming value; a parameter the function assigns or
   // merges under another name no longer spells it.
@@ -92,7 +102,7 @@ std::map<int64_t, MedVar> homedParameters(const HighFunc &Func,
     forEachExpr(S, Visit);
   });
   for (auto It = Homed.begin(); It != Homed.end();)
-    if (Moved.count(It->second.Id))
+    if (Moved.count(It->second.Var.Id))
       It = Homed.erase(It);
     else
       ++It;
@@ -109,7 +119,8 @@ std::map<int64_t, MedVar> homedParameters(const HighFunc &Func,
 std::optional<std::vector<HighStmt>>
 projectFuncletBody(const std::vector<HighStmt> &FuncletBody,
                    const HighFunc &Parent, Arch TargetArch, uint64_t FrameBytes,
-                   const ExprPtr &First, const std::map<int64_t, MedVar> &Homed,
+                   const ExprPtr &First,
+                   const std::map<int64_t, HomedParameter> &Homed,
                    const MedVar &EntrySP, FuncletNames &Names) {
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   std::vector<HighStmt> Body = cloneStmts(FuncletBody);
@@ -139,12 +150,13 @@ projectFuncletBody(const std::vector<HighStmt> &FuncletBody,
     return E;
   });
 
-  // A pointer-width load of a homed slot is the homed parameter.
+  // A load of a homed slot no wider than what the parent saved there is the
+  // homed parameter, or its low bytes.
   if (!Homed.empty()) {
     size_t Budget = limits::kMaxCxxObjectAddressWork;
     mapExprs(Body, [&](ExprPtr E) -> ExprPtr {
       if (!E || E->Kind != ExprKind::Load || E->Operands.size() != 1 ||
-          !E->Type || E->Type->Size != TRI.PointerSize ||
+          !E->Type || !E->Type->Size || E->Type->Size > TRI.PointerSize ||
           E->MemoryOrdering != NdMemoryOrdering::None ||
           E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return E;
@@ -153,9 +165,19 @@ projectFuncletBody(const std::vector<HighStmt> &FuncletBody,
       if (!Offset)
         return E;
       auto It = Homed.find(*Offset);
-      if (It == Homed.end())
+      if (It == Homed.end() || E->Type->Size > It->second.Bytes)
         return E;
-      return HighExpr::makeVar(It->second, E->Type);
+      const MedVar &Param = It->second.Var;
+      if (E->Type->Size == Param.Size)
+        return HighExpr::makeVar(Param, E->Type);
+      if (E->Type->Size > Param.Size)
+        return E;
+      ExprPtr Low = HighExpr::makeBinop(
+          NdOp::SUBBYTES,
+          HighExpr::makeVar(Param, NdType::makeInt(Param.Size, false)),
+          HighExpr::makeConst(0, 4));
+      Low->Type = E->Type;
+      return Low;
     });
   }
 
@@ -225,7 +247,7 @@ public:
 
 private:
   HighFunc &Parent;
-  std::map<int64_t, MedVar> Homed;
+  std::map<int64_t, HomedParameter> Homed;
   MedVar EntrySP;
 
   /// The callback's body spelled in the parent, its first argument replaced by

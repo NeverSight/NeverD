@@ -13314,7 +13314,13 @@ read: the home slots lie at fixed offsets from that frame, and an MSVC filter
 reads there a parameter that its parent only spills. `pass_through_2_dll` of
 the `xframe_eh_dll` builds takes its `Disposition` again, and in the xcpt4
 builds a call passes the counter that its callee's filter increments through
-the callee's first argument, where it passed zero.
+the callee's first argument, where it passed zero. The x64 projection that
+folds such a filter into its `__except` reads a home as the parameter it holds,
+including the four bytes an `int` homes (`mov [rsp+0x10],edx`): a load no
+wider than what the home holds is the parameter or its low bytes. In each x64
+copy of the EH corpus 20 more filters fold, `pass_through_2_dll`'s into
+`sub_180001040(arg1)`, where their calls had passed an unknown establisher
+frame.
 FS/GS and ordered stores keep their register observations. Returning an
 incoming-area address also retains its possible readers; it cannot establish
 a variadic forwarding contract. The variadic save-area rule still requires

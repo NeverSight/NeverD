@@ -1197,13 +1197,20 @@ public:
   void setRegister(uint64_t Reg, HomedWord Word) { Registers[Reg] = Word; }
 
   HomedWord read(const NdVar &V) const {
-    if (V.Size != TRI.PointerSize)
-      return {};
     const auto &Words = V.isTemp() ? Temps : Registers;
     if (!V.isTemp() && !V.isReg())
       return {};
     const auto It = Words.find(V.Offset);
-    return It == Words.end() ? HomedWord{} : It->second;
+    if (It == Words.end())
+      return {};
+    if (V.Size == TRI.PointerSize)
+      return It->second;
+    // The low bytes of an argument register are its argument's (`mov
+    // [rsp+0x10],edx` homes an `int`).
+    return !V.isTemp() && V.Size && V.Size < TRI.PointerSize &&
+                   It->second.K == HomedWord::Argument
+               ? It->second
+               : HomedWord{};
   }
 
   /// Run a value operation; a store is the caller's to read before this.
@@ -1246,9 +1253,9 @@ private:
 
 } // namespace
 
-std::map<int64_t, unsigned> collectLowSEHHomedArguments(const LowFunc &Low,
-                                                        Arch TargetArch) {
-  std::map<int64_t, unsigned> Homed;
+std::map<int64_t, SEHHomedArgument>
+collectLowSEHHomedArguments(const LowFunc &Low, Arch TargetArch) {
+  std::map<int64_t, SEHHomedArgument> Homed;
   if (TargetArch != Arch::X64 || !Low.ExceptionMetadata ||
       !Low.ExceptionMetadata->SEH || Low.Blocks.empty())
     return Homed;
@@ -1293,7 +1300,8 @@ std::map<int64_t, unsigned> collectLowSEHHomedArguments(const LowFunc &Low,
       const HomedWord Value = Entry.read(Op.Inputs[1]);
       if (Address.K == HomedWord::StackAddress &&
           Value.K == HomedWord::Argument)
-        Homed.emplace(Address.Displacement, Value.Position);
+        Homed.emplace(Address.Displacement,
+                      SEHHomedArgument{Value.Position, Op.Inputs[1].Size});
       continue;
     }
     Entry.step(Op);
@@ -1336,12 +1344,13 @@ std::map<int64_t, unsigned> collectLowSEHHomedArguments(const LowFunc &Low,
       const int64_t Size = Op.Inputs[1].Size;
       for (auto It = Homed.begin(); It != Homed.end();) {
         const bool Touches =
-            Address.Displacement < It->first + TRI.PointerSize &&
+            Address.Displacement < It->first + It->second.Bytes &&
             It->first < Address.Displacement + Size;
         const HomedWord Value = Walk.read(Op.Inputs[1]);
         const bool Same = Address.Displacement == It->first &&
                           Value.K == HomedWord::Argument &&
-                          Value.Position == It->second && !B;
+                          Value.Position == It->second.Position &&
+                          Size == It->second.Bytes && !B;
         if (Touches && !Same)
           It = Homed.erase(It);
         else

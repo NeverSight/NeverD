@@ -1231,6 +1231,9 @@ enum class FilterShape {
   /// `/O2`: reads the Counter whose pointer the parent homed, through its
   /// EstablisherFrame: `__except (*Counter)`.
   ReadsTheHomedArgument,
+  /// `/O0` with an `int` argument the parent homes four bytes of, which the
+  /// callback reads through its EstablisherFrame: `__except (q)`.
+  ReadsTheHomedInt,
   /// Tests the exception code alone.
   TestsTheCode,
   /// Decides one constant.
@@ -1284,6 +1287,9 @@ BinaryImage makeFilterImage(FilterShape Kind) {
   place(D, 0x00, {0x48,       0x89, 0x54, 0x24, 0x10, 0x53, 0x48, 0x83, 0xec,
                   Allocation, 0x48, 0x8b, 0xda, 0xe8, 0x2e, 0,    0,    0,
                   0x90,       0xeb, 0x06, 0xc7, 0x03, 0x63, 0,    0,    0});
+  // An `int` homes edx alone: the same store with REX.W clear.
+  if (Kind == FilterShape::ReadsTheHomedInt)
+    D[0] = 0x40;
   size_t Done = 0x1b;
   if (ParentReads) {
     // mov eax,[rsp+0x2c]; mov [rbx],eax: the decision's slot.
@@ -1316,6 +1322,14 @@ BinaryImage makeFilterImage(FilterShape Kind) {
     place(D, 0x80,
           {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea, 0x48, 0x8b,
            0x45, 0x38, 0x8b, 0x00, 0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
+    Length = 0x15;
+    break;
+  case FilterShape::ReadsTheHomedInt:
+    // push rbp; sub rsp,0x20; mov rbp,rdx; mov eax,[rbp+0x38]; nop x3;
+    // add rsp,0x20; pop rbp; ret
+    place(D, 0x80,
+          {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea, 0x8b, 0x45,
+           0x38, 0x90, 0x90, 0x90, 0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
     Length = 0x15;
     break;
   case FilterShape::TestsTheCode:
@@ -1435,7 +1449,15 @@ TEST(SEHTerminationFrame, AFilterCallbackTakesTheSameEstablisher) {
   EXPECT_EQ(collectLowSEHTerminationFrames(Low, Arch::X64),
             (std::map<va_t, uint64_t>{{FilterCallback, 0x28}}));
   EXPECT_EQ(collectLowSEHHomedArguments(Low, Arch::X64),
-            (std::map<int64_t, unsigned>{{0x10, 1}}));
+            (std::map<int64_t, SEHHomedArgument>{{0x10, {1, 8}}}));
+}
+
+TEST(SEHTerminationFrame, AnIntHomesFourBytesOfItsRegister) {
+  // `mov dword [rsp+0x10],edx` homes the low four bytes of the argument.
+  const LowFunc Low =
+      decodeParent(makeFilterImage(FilterShape::ReadsTheHomedInt));
+  EXPECT_EQ(collectLowSEHHomedArguments(Low, Arch::X64),
+            (std::map<int64_t, SEHHomedArgument>{{0x10, {1, 4}}}));
 }
 
 TEST(SEHFilterValue, AFilterReadingTheHomedArgumentIsItsExpression) {
@@ -1443,6 +1465,19 @@ TEST(SEHFilterValue, AFilterReadingTheHomedArgumentIsItsExpression) {
   // EstablisherFrame: the expression reads the parent's argument.
   const std::string P = parentText(
       decompileHighC(makeFilterImage(FilterShape::ReadsTheHomedArgument)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  EXPECT_EQ(E.find("sub_"), std::string::npos) << P;
+  EXPECT_EQ(E.find("GetExceptionInformation"), std::string::npos) << P;
+  EXPECT_NE(E.find("arg1"), std::string::npos) << P;
+  EXPECT_EQ(E.find("var_"), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, AFilterReadingAHomedIntIsItsExpression) {
+  // The four bytes the parent homed are its argument's low bytes, which the
+  // expression reads where the callback read the slot.
+  const std::string P = parentText(
+      decompileHighC(makeFilterImage(FilterShape::ReadsTheHomedInt)));
   const std::string E = exceptExpression(P);
   ASSERT_FALSE(E.empty()) << P;
   EXPECT_EQ(E.find("sub_"), std::string::npos) << P;

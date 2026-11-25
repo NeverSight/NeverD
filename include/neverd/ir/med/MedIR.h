@@ -24,6 +24,7 @@
 #include "neverd/ir/SourceImageBytes.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/low/SourceClassGetterCall.h"
 #include "neverd/ir/low/SourceRegisterCopy.h"
 
@@ -887,9 +888,9 @@ struct MedFunc {
   /// Windows x64: where this function's prologue saves its argument registers
   /// for its termination handlers and filter callbacks, which read them back
   /// through their EstablisherFrame though nothing in the function does:
-  /// entry-SP displacement to argument position.  The function writes no other
-  /// value there (collectLowSEHHomedArguments).
-  std::map<int64_t, unsigned> SEHHomedArguments;
+  /// entry-SP displacement to the argument and how much of it the slot holds.
+  /// The function writes no other value there (collectLowSEHHomedArguments).
+  std::map<int64_t, SEHHomedArgument> SEHHomedArguments;
   /// ARM and AArch64 termination handlers and filter callbacks read the
   /// parent's callee-saved registers, which the unwinder, or for a filter the
   /// C-specific handler, restores to their values where the exception struck.

@@ -100,14 +100,23 @@ llvm::Expected<uint64_t> proveLowSEHFixedFrame(const LowFunc &Function,
                                                const TargetRegInfo &TRI,
                                                size_t &WorkRemaining);
 
+/// An incoming integer argument a function saves in its own frame: its
+/// position, and how many of its low bytes the slot holds (an `int` homes
+/// four of a register's eight).
+struct SEHHomedArgument {
+  unsigned Position = 0;
+  uint16_t Bytes = 0;
+  bool operator==(const SEHHomedArgument &) const = default;
+};
+
 /// Where a Windows x64 function with termination handlers or filter callbacks
 /// saves its incoming argument registers in its own entry block, before any of
-/// its protected ranges: entry-SP displacement to argument position.  MSVC
-/// homes them there for the callbacks, which read them back through their
-/// EstablisherFrame.  Only a slot the function writes with nothing else at any
-/// address it computes from its stack pointer counts.
-std::map<int64_t, unsigned> collectLowSEHHomedArguments(const LowFunc &Parent,
-                                                        Arch TargetArch);
+/// its protected ranges, by entry-SP displacement.  MSVC homes them there for
+/// the callbacks, which read them back through their EstablisherFrame.  Only a
+/// slot the function writes with nothing else at any address it computes from
+/// its stack pointer counts.
+std::map<int64_t, SEHHomedArgument>
+collectLowSEHHomedArguments(const LowFunc &Parent, Arch TargetArch);
 
 /// The certified frame bytes of every termination handler and filter callback
 /// of \p Parent, by callback entry. A callback whose frame is not proved is
