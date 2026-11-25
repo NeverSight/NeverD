@@ -415,6 +415,25 @@ TEST(SEHFinallyBody, GuardsTheAbnormalWorkAndKeepsTheNormalCopy) {
   EXPECT_EQ(P.find("rdx"), std::string::npos) << P;
 }
 
+TEST(SEHFinallyBody, TheHandlerReturnsNothing) {
+  // The runtime calls a termination handler as a PTERMINATION_HANDLER,
+  // which returns nothing, whatever it leaves in RAX: bar1's leaves the
+  // Counter pointer there.
+  const std::string Source = decompileHighC(makeTerminationImage(Shape::Plain));
+  std::string Definition;
+  for (size_t At = Source.find("sub_140001080("); At != std::string::npos;
+       At = Source.find("sub_140001080(", At + 1)) {
+    const size_t Begin = Source.rfind('\n', At) + 1;
+    const size_t End = Source.find('\n', At);
+    const std::string Line = Source.substr(Begin, End - Begin);
+    if (Line.size() > 2 && Line.compare(Line.size() - 2, 2, " {") == 0 &&
+        Begin < At)
+      Definition = Line;
+  }
+  ASSERT_FALSE(Definition.empty()) << Source;
+  EXPECT_EQ(Definition.rfind("void sub_140001080(", 0), 0u) << Definition;
+}
+
 TEST(SEHFinallyBody, FlagIndependentHandlerFillsTheClauseAndDropsTheCopy) {
   // A handler that does not read the abnormal flag runs the same on both
   // exits, so the clause holds the body itself and the inline copy is removed.

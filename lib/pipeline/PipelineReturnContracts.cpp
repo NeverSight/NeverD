@@ -44,8 +44,9 @@
 /// half of the same question (ReturnContracts::settle).
 ///
 /// What a declaration says decides first: a bound source signature, debug
-/// information, or the MSVC rule that a destructor returns nothing; a
-/// routine known by name returns what its prototype declares.  Code
+/// information, the MSVC rule that a destructor returns nothing, or a
+/// termination handler the exception directory names; a routine known by
+/// name returns what its prototype declares.  Code
 /// generation keeps the register.
 ///
 //===----------------------------------------------------------------------===//
@@ -1158,6 +1159,14 @@ public:
   ReturnContracts(const BinaryImage &Img, PipelineResult &Result,
                   const DebugContext *Dbg)
       : Img(Img), Result(Result), Dbg(Dbg), TRI(getTargetRegInfo(Img.Arch)) {
+    // The runtime calls each termination handler the exception directory
+    // names as a PTERMINATION_HANDLER, which returns nothing, and so does
+    // the code that calls it on leaving its range.
+    for (const ExceptionFunction &EH : Img.ExceptionMetadata.Functions)
+      if (EH.SEH)
+        for (const SEHScopeRecord &Scope : EH.SEH->Scopes)
+          if (Scope.Kind == SEHScopeKind::Finally && Scope.FilterOrFinallyVA)
+            TerminationHandlers.insert(Scope.FilterOrFinallyVA);
     // One answer for each entry: the first function at it.
     for (size_t I = 0; I < Result.MedFuncs.size(); ++I) {
       const MedFunc &Func = Result.MedFuncs[I];
@@ -1305,6 +1314,8 @@ private:
   /// What each declared function's declaration says: true for none.
   std::map<va_t, bool> Declared;
   std::map<va_t, std::string> Names;
+  /// The functions the exception directory names as termination handlers.
+  std::set<va_t> TerminationHandlers;
 
   /// Works out what each path to a return of \p S hands back, once: only a
   /// callee's answer changes it afterwards (ReturnedValue::CalleeResult).
@@ -1474,7 +1485,8 @@ private:
       if (const auto Debug = Dbg->resolveFunction(Func.Entry);
           Debug && Debug->ReturnType)
         return Debug->ReturnType->Kind == NdTypeKind::Void;
-    if (isMsvcDestructorName(Func.Name))
+    if (isMsvcDestructorName(Func.Name) ||
+        TerminationHandlers.contains(Func.Entry))
       return true;
     // The program's prototype of a definition is resolveFunction's, which
     // refuses one an alias the linker folded with it contradicts (KeClearEvent

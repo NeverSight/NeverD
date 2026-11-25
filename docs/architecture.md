@@ -5660,6 +5660,15 @@ results that function hands back. So a callee and the callers that hand its
 result back return no value together, as `sqlite3_free` and the functions
 that end in it do, and an operation that reads the result of a call that
 returns nothing, where no byte of it reaches anything, reads zero instead.
+A declaration decides first: a bound source signature, debug information, a
+routine's prototype, the MSVC rule that a destructor returns nothing, and the
+exception directory's word that a function is a termination handler, which
+the runtime calls as a `PTERMINATION_HANDLER` and the parent calls on leaving
+its range, neither reading a result (`declaredNoValue`). A `__finally`
+funclet left whatever its last statement put in the result register: x64 and
+ARM ones printed it as a result, and ARM64 ones, where a path leaves it
+unknown, as a placeholder (the EH corpus's ARM64 images printed 408 and
+print 60).
 
 A result is no wider than the bytes every return defines (`MedTypePass`'s
 `DefinedLowBytes`): `mov al, 1; ret` over a RAX no argument set returns one

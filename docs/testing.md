@@ -21775,6 +21775,8 @@ prints each filter callback as its `__except` expression: the Counter read
 through the homed argument, `GetExceptionCode() == 0xC0000005`, a constant as
 `EXCEPTION_EXECUTE_HANDLER`, MSVC /O0's temporaries in the parent's frame gone
 when nothing else touches them, and the writes to a slot the parent reads kept.
+`SEHFinallyBody.TheHandlerReturnsNothing` declares bar1's termination handler
+`void` although it leaves the Counter pointer in RAX.
 `AWriteKeepsItsCallAndTheReadReadsTheSlot` calls the function once where the
 callback keeps a call's value in such a slot and returns it,
 `ATemporaryNothingElseTouchesCarriesTheCallOnce` carries it through a
