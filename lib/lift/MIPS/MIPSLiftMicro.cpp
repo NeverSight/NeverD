@@ -9,6 +9,8 @@
 /// original occurrence. Unlisted encodings never acquire classic semantics.
 //===----------------------------------------------------------------------===//
 
+#include "MIPSIntegerOpcodes.h"
+
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
@@ -49,7 +51,8 @@ MIPSLifter::microLegacyJump(uint16_t First, uint16_t Second) const {
     if (Minor < 12 || Minor > 15)
       return std::nullopt;
     const bool Link = Minor >= 14;
-    return Encoding{registerForm(Link ? 9 : 8, Link ? 31 : 0, First & 31),
+    return Encoding{registerForm(Link ? mips::special::JALR : mips::special::JR,
+                                 Link ? 31 : 0, First & 31),
                     Minor == 13   ? 0u
                     : Minor == 14 ? 4u
                     : Minor == 15 ? 2u
@@ -57,23 +60,27 @@ MIPSLifter::microLegacyJump(uint16_t First, uint16_t Second) const {
   }
   case 0x23: // BEQZ16
   case 0x2b: // BNEZ16
-    return Encoding{immediateForm(Major == 0x23 ? 4 : 5, 0,
-                                  compactRegister((First >> 7) & 7),
-                                  ((First & 127) ^ 64) - 64),
-                    1};
+    return Encoding{
+        immediateForm(Major == 0x23 ? mips::major::BEQ : mips::major::BNE, 0,
+                      compactRegister((First >> 7) & 7),
+                      ((First & 127) ^ 64) - 64),
+        1};
   case 0x33: // B16
-    return Encoding{immediateForm(4, 0, 0, ((First & 1023) ^ 512) - 512), 1};
+    return Encoding{
+        immediateForm(mips::major::BEQ, 0, 0, ((First & 1023) ^ 512) - 512), 1};
   case 0x25: // BEQ32
   case 0x2d: // BNE32
     return Encoding{
-        immediateForm(Major == 0x25 ? 4 : 5, RT, RS, uint16_t(Word)), 1};
+        immediateForm(Major == 0x25 ? mips::major::BEQ : mips::major::BNE, RT,
+                      RS, uint16_t(Word)),
+        1};
   case 0x35: // J
   case 0x3d: // JAL
   case 0x1d: // JALS
   case 0x3c: // JALX
-    return Encoding{((Major == 0x35   ? 2u
-                      : Major == 0x3c ? 29u
-                                      : 3u)
+    return Encoding{((Major == 0x35   ? mips::major::J
+                      : Major == 0x3c ? mips::major::JALX
+                                      : mips::major::JAL)
                      << 26) |
                         (Word & 0x03ffffff),
                     Major == 0x1d   ? 2u
@@ -81,8 +88,9 @@ MIPSLifter::microLegacyJump(uint16_t First, uint16_t Second) const {
                                     : 4u};
   case 0:
     if (Second == 0x0f3c || Second == 0x4f3c)
-      return Encoding{registerForm(RT ? 9 : 8, RT, RS),
-                      Second == 0x4f3c ? 2u : 4u};
+      return Encoding{
+          registerForm(RT ? mips::special::JALR : mips::special::JR, RT, RS),
+          Second == 0x4f3c ? 2u : 4u};
     return std::nullopt;
   case 0x10: // DSP BPOSGE32
     if (const auto Branch = mips::microLegacyFloatBranch(Word))
@@ -143,35 +151,43 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
       }
       if ((R6 && (First & 31) == 0x13) || (!R6 && ((First >> 5) & 31) == 24)) {
         const unsigned Words = R6 ? (First >> 5) & 31 : First & 31;
-        return Encoding{.Word = registerForm(8, 0, 31),
+        return Encoding{.Word = registerForm(mips::special::JR, 0, 31),
                         .StackIncrement = static_cast<uint8_t>(Words * 4)};
       }
       if (!R6 && ((First >> 5) & 31) == 16)
-        return Encoding{registerForm(16, First & 31, 0)}; // MFHI16
+        return Encoding{
+            registerForm(mips::special::MFHI, First & 31, 0)}; // MFHI16
       if (!R6 && ((First >> 5) & 31) == 18)
-        return Encoding{registerForm(18, First & 31, 0)}; // MFLO16
+        return Encoding{
+            registerForm(mips::special::MFLO, First & 31, 0)}; // MFLO16
       if (!Minor)
-        return Encoding{registerForm(39, Dest, Source)}; // NOT16
+        return Encoding{
+            registerForm(mips::special::NOR, Dest, Source)}; // NOT16
       if (Minor == (R6 ? 1u : 2u))
-        return Encoding{registerForm(36, Dest, Dest, Source)}; // AND16
+        return Encoding{
+            registerForm(mips::special::AND, Dest, Dest, Source)}; // AND16
       if (Minor == (R6 ? 8u : 1u))
-        return Encoding{registerForm(38, Dest, Dest, Source)}; // XOR16
+        return Encoding{
+            registerForm(mips::special::XOR, Dest, Dest, Source)}; // XOR16
       if (Minor == (R6 ? 9u : 3u))
-        return Encoding{registerForm(37, Dest, Dest, Source)}; // OR16
+        return Encoding{
+            registerForm(mips::special::OR, Dest, Dest, Source)}; // OR16
     }
     if (R6) {
       if (auto Branch = mips::microR6Compact(First, 2))
         return Encoding{.Word = *Branch, .R6 = true};
       if (Major == 1) // Release 6 interchanges the three compact fields.
-        return Encoding{registerForm((First & 1) ? 35 : 33,
+        return Encoding{registerForm((First & 1) ? mips::special::SUBU
+                                                 : mips::special::ADDU,
                                      compactRegister((First >> 1) & 7),
                                      compactRegister((First >> 7) & 7),
                                      compactRegister((First >> 4) & 7))};
       if (Major == 0x11) {
         const unsigned Fn = First & 31;
         if (Fn == 3 || Fn == 11)
-          return Encoding{registerForm(Fn == 11 ? 9 : 8, Fn == 11 ? 31 : 0,
-                                       (First >> 5) & 31)};
+          return Encoding{
+              registerForm(Fn == 11 ? mips::special::JALR : mips::special::JR,
+                           Fn == 11 ? 31 : 0, (First >> 5) & 31)};
         return std::nullopt;
       }
     }
@@ -180,38 +196,43 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
                  // 5-2.
       static constexpr uint16_t Masks[] = {
           128, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 63, 64, 255, 32768, 65535};
-      return Encoding{immediateForm(12, RT, RS, Masks[First & 15])};
+      return Encoding{
+          immediateForm(mips::major::ANDI, RT, RS, Masks[First & 15])};
     }
     case 0x13: { // ADDIUS5 / ADDIUSP
       if (!(First & 1)) {
         const unsigned Reg = (First >> 5) & 31;
-        return Encoding{
-            immediateForm(9, Reg, Reg, llvm::SignExtend64<4>(First >> 1))};
+        return Encoding{immediateForm(mips::major::ADDIU, Reg, Reg,
+                                      llvm::SignExtend64<4>(First >> 1))};
       }
       int Imm = llvm::SignExtend64<9>(First >> 1);
       if (Imm >= -2 && Imm <= 1)
         Imm += Imm < 0 ? -256 : 256;
-      return Encoding{immediateForm(9, 29, 29, Imm * 4)};
+      return Encoding{immediateForm(mips::major::ADDIU, 29, 29, Imm * 4)};
     }
     case 0x1b: { // ADDIUR2 / ADDIUR1SP
       if (First & 1)
-        return Encoding{immediateForm(9, RT, 29, ((First >> 1) & 63) * 4)};
+        return Encoding{
+            immediateForm(mips::major::ADDIU, RT, 29, ((First >> 1) & 63) * 4)};
       const unsigned Imm = (First >> 1) & 7;
-      return Encoding{immediateForm(9, RT, RS,
+      return Encoding{immediateForm(mips::major::ADDIU, RT, RS,
                                     Imm == 7 ? -1
                                     : Imm    ? 4 * Imm
                                              : 1)};
     }
     case 0x01: // ADDU16 / SUBU16
-      return Encoding{registerForm((First & 1) ? 35 : 33, RT,
-                                   compactRegister((First >> 1) & 7), RS)};
+      return Encoding{
+          registerForm((First & 1) ? mips::special::SUBU : mips::special::ADDU,
+                       RT, compactRegister((First >> 1) & 7), RS)};
     case 0x03: // MOVE16
-      return Encoding{registerForm(isMIPS64(Target) ? 37 : 33,
+      return Encoding{registerForm(isMIPS64(Target) ? mips::special::OR
+                                                    : mips::special::ADDU,
                                    (First >> 5) & 31, First & 31)};
     case 0x09: { // SLL16 / SRL16: encoded zero means eight.
       const unsigned Shift = (First >> 1) & 7;
       return Encoding{
-          registerForm((First & 1) ? 2 : 0, RT, 0, RS, Shift ? Shift : 8)};
+          registerForm((First & 1) ? mips::special::SRL : mips::special::SLL,
+                       RT, 0, RS, Shift ? Shift : 8)};
     }
     case 0x11:
       return microLegacyJump(First, 0);
@@ -221,36 +242,40 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
       return Encoding{.Word = unsigned((First & 0x3f0) | ((First >> 1) & 7)),
                       .Sequence = SequenceKind::MovePair};
     case 0x02: // LBU16: encoded 15 means -1.
-      return Encoding{immediateForm(
-          36, RT, RS, (First & 15) == 15 ? uint16_t(-1) : First & 15)};
+      return Encoding{
+          immediateForm(mips::major::LBU, RT, RS,
+                        (First & 15) == 15 ? uint16_t(-1) : First & 15)};
     case 0x0a: // LHU16
-      return Encoding{immediateForm(37, RT, RS, (First & 15) * 2)};
+      return Encoding{
+          immediateForm(mips::major::LHU, RT, RS, (First & 15) * 2)};
     case 0x1a: // LW16
-      return Encoding{immediateForm(35, RT, RS, (First & 15) * 4)};
+      return Encoding{immediateForm(mips::major::LW, RT, RS, (First & 15) * 4)};
     case 0x22:   // SB16
     case 0x2a:   // SH16
     case 0x3a: { // SW16: the first compact source is zero, not s0.
       const unsigned Scale = Major == 0x22 ? 1 : Major == 0x2a ? 2 : 4;
-      return Encoding{immediateForm(Major == 0x22   ? 40
-                                    : Major == 0x2a ? 41
-                                                    : 43,
+      return Encoding{immediateForm(Major == 0x22   ? mips::major::SB
+                                    : Major == 0x2a ? mips::major::SH
+                                                    : mips::major::SW,
                                     RT == 16 ? 0 : RT, RS,
                                     (First & 15) * Scale)};
     }
     case 0x12: // LWSP16
     case 0x32: // SWSP16
-      return Encoding{immediateForm(Major == 0x12 ? 35 : 43, (First >> 5) & 31,
-                                    29, (First & 31) * 4)};
-    case 0x19: // LWGP16
       return Encoding{
-          immediateForm(35, RT, 28, ((First & 127) ^ 64) * 4 - 256)};
+          immediateForm(Major == 0x12 ? mips::major::LW : mips::major::SW,
+                        (First >> 5) & 31, 29, (First & 31) * 4)};
+    case 0x19: // LWGP16
+      return Encoding{immediateForm(mips::major::LW, RT, 28,
+                                    ((First & 127) ^ 64) * 4 - 256)};
     case 0x23:
     case 0x2b:
     case 0x33:
       return microLegacyJump(First, 0);
     case 0x3b: // LI16: encoded 127 means -1; 64..126 are positive.
-      return Encoding{immediateForm(
-          9, RT, 0, (First & 127) == 127 ? uint16_t(-1) : First & 127)};
+      return Encoding{
+          immediateForm(mips::major::ADDIU, RT, 0,
+                        (First & 127) == 127 ? uint16_t(-1) : First & 127)};
     default:
       return std::nullopt;
     }
@@ -282,7 +307,8 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
     if (const auto Cache = mips::microR6Cache(Word))
       return Native(*Cache);
     if (Major == 4) // AUI
-      return release6Encoding(immediateForm(15, RT, RS, uint16_t(Word)));
+      return release6Encoding(
+          immediateForm(mips::major::LUI, RT, RS, uint16_t(Word)));
     if (Major == 0x1e) // PCREL
       return Native((59u << 26) | (Word & 0x03ffffff));
     if (Major == 0) {
@@ -319,11 +345,14 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
       if (Minor == 0x140 || Minor == 0x180)
         return Native(registerForm(Minor == 0x140 ? 53 : 55, RD, RS, RT));
       if ((Word & 0xffff) == 0x4b3c || (Word & 0xffff) == 0x5b3c)
-        return Native(registerForm(Word & 0x1000 ? 16 : 17, RT, RS, 0, 1));
+        return Native(registerForm(Word & 0x1000 ? mips::special::MFHI
+                                                 : mips::special::MTHI,
+                                   RT, RS, 0, 1));
       if ((Word & 0xffff) == 0x0b3c) // BITSWAP
         return Native((31u << 26) | (RT << 16) | (RS << 11) | 32);
       if ((Word & 0xffff) == 0x0f3c) // JALRC / JRC, no slot
-        return Encoding{registerForm(RT ? 9 : 8, RT, RS)};
+        return Encoding{
+            registerForm(RT ? mips::special::JALR : mips::special::JR, RT, RS)};
       if (Word == 0x2800)
         return Encoding{0x140}; // PAUSE
       if (Word == 0x1800)
@@ -360,7 +389,7 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
     return std::nullopt;
   case 0x10:
     if (RT == 13) // Pre-R6 LUI: the destination occupies the rs field.
-      return Encoding{immediateForm(15, RS, 0, uint16_t(Word))};
+      return Encoding{immediateForm(mips::major::LUI, RS, 0, uint16_t(Word))};
     return microLegacyJump(First, uint16_t(Word));
   case 0x18: { // Pre-R6 POOL32C, signed twelve-bit displacement.
     const unsigned Sub = (Word >> 12) & 15;
@@ -400,12 +429,15 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
 #include "neverd/lift/MIPS/MicroMIPSInteger.def"
       case 0xab3c:
       case 0xbb3c: // DIV / DIVU
-        return Encoding{registerForm(Word & 0x1000 ? 27 : 26, 0, RS, RT)};
+        return Encoding{registerForm(Word & 0x1000 ? mips::special::DIVU
+                                                   : mips::special::DIV,
+                                     0, RS, RT)};
       case 0x0d7c:
       case 0x1d7c: // MFHI / MFLO
         if (RT)
           return std::nullopt;
-        return Encoding{registerForm(Word & 0x1000 ? 18 : 16, RS, 0)};
+        return Encoding{registerForm(
+            Word & 0x1000 ? mips::special::MFLO : mips::special::MFHI, RS, 0)};
       default:
         break;
       }
@@ -457,8 +489,8 @@ void MIPSLifter::liftMicroSequence(State &S, Encoding Code) const {
                     {S.resize(SP, 8), NdVar::scalar(4, 8)});
   for (unsigned I = 0; I <= Count; ++I)
     liftMemory(S,
-               immediateForm(Store ? 43 : 35, I == Count ? 31 : 16 + I, 29,
-                             Offset + 4 * I),
+               immediateForm(Store ? mips::major::SW : mips::major::LW,
+                             I == Count ? 31 : 16 + I, 29, Offset + 4 * I),
                SP);
 }
 

@@ -325,32 +325,39 @@ decodeApxConditionalEncoding(const cs_insn *Insn, const cs_x86 &X86,
                                 Width, Immediate, RMFirst};
 }
 
-NdVar emitCMovCondition(X86Lifter::LiftState &S, unsigned ConditionCode) {
+namespace cc {
+enum : unsigned {
+#define NEVERD_X86_CONDITION(Suffix, Code) Suffix = Code,
+#include "X86ConditionCodes.def"
+};
+} // namespace cc
+
+NdVar emitFlagCondition(X86Lifter::LiftState &S, unsigned ConditionCode) {
   NdVar Condition = S.makeTemp(1);
   switch (ConditionCode) {
-  case 0:
+  case cc::O:
     S.emit(NdOp::COPY, Condition, {NdVar::reg(x86reg::OF, 1)});
     break;
-  case 1:
+  case cc::NO:
     S.emit(NdOp::BOOL_NOT, Condition, {NdVar::reg(x86reg::OF, 1)});
     break;
-  case 2:
+  case cc::B:
     S.emit(NdOp::COPY, Condition, {NdVar::reg(x86reg::CF, 1)});
     break;
-  case 3:
+  case cc::AE:
     S.emit(NdOp::BOOL_NOT, Condition, {NdVar::reg(x86reg::CF, 1)});
     break;
-  case 4:
+  case cc::E:
     S.emit(NdOp::COPY, Condition, {NdVar::reg(x86reg::ZF, 1)});
     break;
-  case 5:
+  case cc::NE:
     S.emit(NdOp::BOOL_NOT, Condition, {NdVar::reg(x86reg::ZF, 1)});
     break;
-  case 6:
+  case cc::BE:
     S.emit(NdOp::BOOL_OR, Condition,
            {NdVar::reg(x86reg::CF, 1), NdVar::reg(x86reg::ZF, 1)});
     break;
-  case 7: {
+  case cc::A: {
     NdVar NotCarry = S.makeTemp(1);
     NdVar NotZero = S.makeTemp(1);
     S.emit(NdOp::BOOL_NOT, NotCarry, {NdVar::reg(x86reg::CF, 1)});
@@ -358,27 +365,27 @@ NdVar emitCMovCondition(X86Lifter::LiftState &S, unsigned ConditionCode) {
     S.emit(NdOp::BOOL_AND, Condition, {NotCarry, NotZero});
     break;
   }
-  case 8:
+  case cc::S:
     S.emit(NdOp::COPY, Condition, {NdVar::reg(x86reg::SF, 1)});
     break;
-  case 9:
+  case cc::NS:
     S.emit(NdOp::BOOL_NOT, Condition, {NdVar::reg(x86reg::SF, 1)});
     break;
-  case 10:
+  case cc::P:
     S.emit(NdOp::COPY, Condition, {NdVar::reg(x86reg::PF, 1)});
     break;
-  case 11:
+  case cc::NP:
     S.emit(NdOp::BOOL_NOT, Condition, {NdVar::reg(x86reg::PF, 1)});
     break;
-  case 12:
+  case cc::L:
     S.emit(NdOp::INT_NOTEQUAL, Condition,
            {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
     break;
-  case 13:
+  case cc::GE:
     S.emit(NdOp::INT_EQUAL, Condition,
            {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
     break;
-  case 14: {
+  case cc::LE: {
     NdVar SignNotOverflow = S.makeTemp(1);
     S.emit(NdOp::INT_NOTEQUAL, SignNotOverflow,
            {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
@@ -386,7 +393,7 @@ NdVar emitCMovCondition(X86Lifter::LiftState &S, unsigned ConditionCode) {
            {NdVar::reg(x86reg::ZF, 1), SignNotOverflow});
     break;
   }
-  case 15: {
+  case cc::G: {
     NdVar NotZero = S.makeTemp(1);
     NdVar SignEqualsOverflow = S.makeTemp(1);
     S.emit(NdOp::BOOL_NOT, NotZero, {NdVar::reg(x86reg::ZF, 1)});
@@ -412,7 +419,7 @@ NdVar emitApxSourceCondition(X86Lifter::LiftState &S, unsigned SCC) {
     S.emit(NdOp::COPY, Condition, {NdVar::scalar(0, 1)});
     return Condition;
   }
-  return emitCMovCondition(S, SCC);
+  return emitFlagCondition(S, SCC);
 }
 
 void emitApxConditionalFlags(X86Lifter::LiftState &S, NdVar Condition,
@@ -442,43 +449,207 @@ void emitApxConditionalFlags(X86Lifter::LiftState &S, NdVar Condition,
   }
 }
 
-std::optional<unsigned> ordinaryCMovConditionCode(unsigned InsnId) {
-  switch (InsnId) {
-  case X86_INS_CMOVO:
-    return 0;
-  case X86_INS_CMOVNO:
-    return 1;
-  case X86_INS_CMOVB:
-    return 2;
-  case X86_INS_CMOVAE:
-    return 3;
-  case X86_INS_CMOVE:
-    return 4;
-  case X86_INS_CMOVNE:
-    return 5;
-  case X86_INS_CMOVBE:
-    return 6;
-  case X86_INS_CMOVA:
-    return 7;
-  case X86_INS_CMOVS:
-    return 8;
-  case X86_INS_CMOVNS:
-    return 9;
-  case X86_INS_CMOVP:
-    return 10;
-  case X86_INS_CMOVNP:
-    return 11;
-  case X86_INS_CMOVL:
-    return 12;
-  case X86_INS_CMOVGE:
-    return 13;
-  case X86_INS_CMOVLE:
-    return 14;
-  case X86_INS_CMOVG:
-    return 15;
-  default:
-    return std::nullopt;
+bool liftFlagJump(X86Lifter::LiftState &S, const cs_x86 &X86,
+                  unsigned ConditionCode) {
+  if (X86.op_count) {
+    const auto Target = static_cast<uint64_t>(X86.operands[0].imm);
+    const NdVar Condition = emitFlagCondition(S, ConditionCode);
+    S.emit(NdOp::COND_BR, {}, {NdVar::cst(Target, 8), Condition});
   }
+  return true;
+}
+
+bool liftSetCondition(X86Lifter &L, X86Lifter::LiftState &S, const cs_x86 &X86,
+                      unsigned ConditionCode, bool ZeroUpper) {
+  if (X86.op_count != 1 || X86.operands[0].size != 1 ||
+      (X86.operands[0].type != X86_OP_REG &&
+       X86.operands[0].type != X86_OP_MEM) ||
+      (ZeroUpper && L.targetArch() != Arch::X64))
+    return false;
+  NdVar DstW = L.operandWrite(X86.operands[0]);
+  const NdVar Cond = emitFlagCondition(S, ConditionCode);
+  if (X86.operands[0].type == X86_OP_MEM) {
+    S.storeToMem(X86.operands[0], Cond);
+  } else if (ZeroUpper) {
+    // APX SETZUcc names the byte register in the encoding, but ND=1 makes
+    // the architectural destination the complete 64-bit GPR.  APX only
+    // exposes low-byte registers here, so a non-container offset is a
+    // malformed shape and must fail before emitting a partial write.
+    if (DstW.Size != 1 || DstW.Offset % 8 != 0)
+      return false;
+    NdVar WideCondition = S.makeTemp(8);
+    S.emit(NdOp::INT_ZEXT, WideCondition, {Cond});
+    S.emit(NdOp::COPY, NdVar::reg(DstW.Offset, 8), {WideCondition});
+  } else {
+    // SETcc writes exactly ONE byte to the destination register's low byte
+    // (AL/BL/.../R15B) or high byte (AH/BH/CH/DH); the enclosing 32/64-bit
+    // register's OTHER bytes are PRESERVED.  Writing the byte through a
+    // 32-bit INT_ZEXT (the old approach) zeroes bits 63:8 of the 64-bit
+    // register (a 32-bit write zero-extends) — wrong for any caller that
+    // keeps live data in the upper bytes.  A bare 1-byte register write is
+    // correct on paper but lands the flag-derived value in a byte
+    // sub-register that the downstream sub-register reconstruction mishandles
+    // when it trails a wider write (`xor eax,eax; setcc al` — the compiler's
+    // standard idiom — would drop the byte).  Instead read-modify-write the
+    // FULL register: zero- extend the condition to register width (Pass 2
+    // still recovers the comparison feeding this INT_ZEXT, as for the old
+    // wide-ZEXT form), mask the target byte out of the old value, OR the
+    // condition in, and store the whole register back.  Wide read + wide
+    // write only — no trailing partial write — so upper bytes are preserved
+    // without tripping the reconstruction.
+    uint16_t WideSz = (L.targetArch() == Arch::X64) ? 8 : 4;
+    uint64_t ByteOff = DstW.Offset % 8; // 0 for *L / 1 for AH/BH/CH/DH
+    uint64_t EnclOff = DstW.Offset - ByteOff;
+    NdVar Wide = NdVar::reg(EnclOff, WideSz);
+
+    NdVar CondW = S.makeTemp(WideSz);
+    S.emit(NdOp::INT_ZEXT, CondW, {Cond});
+    if (ByteOff > 0) {
+      NdVar Shifted = S.makeTemp(WideSz);
+      S.emit(NdOp::INT_LEFT, Shifted,
+             {CondW, NdVar::scalar(ByteOff * 8, WideSz)});
+      CondW = Shifted;
+    }
+    uint64_t WideMask = (WideSz >= 8) ? ~0ULL : ((1ULL << (WideSz * 8)) - 1);
+    uint64_t ClearMask = (~(0xFFULL << (ByteOff * 8))) & WideMask;
+    NdVar Cleared = S.makeTemp(WideSz);
+    S.emit(NdOp::INT_AND, Cleared, {Wide, NdVar::scalar(ClearMask, WideSz)});
+    NdVar Result = S.makeTemp(WideSz);
+    S.emit(NdOp::INT_OR, Result, {Cleared, CondW});
+    S.emit(NdOp::COPY, Wide, {Result});
+  }
+  return true;
+}
+
+bool liftFaultSuppressingCMov(X86Lifter &L, X86Lifter::LiftState &S,
+                              const cs_x86 &X86, unsigned ConditionCode) {
+  if (L.targetArch() != Arch::X64 || (X86.op_count != 2 && X86.op_count != 3))
+    return false;
+
+  if (X86.operands[0].type == X86_OP_MEM) {
+    if (X86.op_count != 2 || X86.operands[1].type != X86_OP_REG)
+      return false;
+    const RegInfo Source =
+        mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].reg));
+    const uint16_t Size = Source.Size;
+    if ((Size != 2 && Size != 4 && Size != 8) || X86.operands[0].size != Size)
+      return false;
+
+    NdVar Condition = emitFlagCondition(S, ConditionCode);
+    if (Condition.Size != 1)
+      return false;
+    const uint64_t SignBit = UINT64_C(1) << (Size * 8 - 1);
+    NdVar Mask = S.makeTemp(16);
+    S.emit(NdOp::SELECT, Mask,
+           {Condition, NdVar::scalar(SignBit, 16), NdVar::scalar(0, 16)});
+    NdVar StoreData = S.makeTemp(16);
+    S.emit(NdOp::INT_ZEXT, StoreData, {L.operandRead(S, X86.operands[1])});
+    const Intrinsic StoreId = Size == 2   ? Intrinsic::MaskedStoreW
+                              : Size == 4 ? Intrinsic::MaskedStoreD
+                                          : Intrinsic::MaskedStoreQ;
+    S.emitIntrinsic(StoreId, {},
+                    {S.computeEA(X86.operands[0]), Mask, StoreData},
+                    NdMemoryOrdering::None,
+                    X86Lifter::LiftState::memoryAddressSpace(X86.operands[0]));
+    return true;
+  }
+
+  if (X86.operands[0].type != X86_OP_REG ||
+      (X86.op_count == 3 && X86.operands[1].type != X86_OP_REG))
+    return false;
+
+  const RegInfo Destination =
+      mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
+  const uint16_t Size = Destination.Size;
+  const cs_x86_op &ConditionalSource = X86.operands[X86.op_count - 1];
+  if ((Size != 2 && Size != 4 && Size != 8) ||
+      (ConditionalSource.type != X86_OP_REG &&
+       ConditionalSource.type != X86_OP_MEM) ||
+      ConditionalSource.size != Size ||
+      (X86.op_count == 3 && X86.operands[1].size != Size))
+    return false;
+
+  NdVar Condition = emitFlagCondition(S, ConditionCode);
+  if (Condition.Size != 1)
+    return false;
+
+  NdVar ConditionalValue;
+  if (ConditionalSource.type == X86_OP_MEM) {
+    const uint64_t SignBit = UINT64_C(1) << (Size * 8 - 1);
+    NdVar Mask = S.makeTemp(16);
+    S.emit(NdOp::SELECT, Mask,
+           {Condition, NdVar::scalar(SignBit, 16), NdVar::scalar(0, 16)});
+
+    Intrinsic LoadId = Size == 2   ? Intrinsic::MaskedLoadW
+                       : Size == 4 ? Intrinsic::MaskedLoadD
+                                   : Intrinsic::MaskedLoadQ;
+    NdVar LoadedVector = S.makeTemp(16);
+    S.emitIntrinsic(
+        LoadId, LoadedVector, {S.computeEA(ConditionalSource), Mask},
+        NdMemoryOrdering::None,
+        X86Lifter::LiftState::memoryAddressSpace(ConditionalSource));
+    ConditionalValue = S.makeTemp(Size);
+    S.emit(NdOp::SUBBYTES, ConditionalValue,
+           {LoadedVector, NdVar::scalar(0, 4)});
+  } else {
+    ConditionalValue = L.operandRead(S, ConditionalSource);
+  }
+
+  const NdVar FalseValue = X86.op_count == 3 ? L.operandRead(S, X86.operands[1])
+                                             : NdVar::scalar(0, Size);
+  NdVar Selected = S.makeTemp(Size);
+  S.emit(NdOp::SELECT, Selected, {Condition, ConditionalValue, FalseValue});
+
+  const NdVar FullDestination = NdVar::reg(Destination.Offset, 8);
+  if (Size == 8)
+    S.emit(NdOp::COPY, FullDestination, {Selected});
+  else
+    S.emit(NdOp::INT_ZEXT, FullDestination, {Selected});
+  return true;
+}
+
+bool liftCMov(X86Lifter &L, X86Lifter::LiftState &S, const cs_x86 &X86,
+              unsigned ConditionCode) {
+  if (X86.op_count == 3) {
+    if (L.targetArch() != Arch::X64 || X86.operands[0].type != X86_OP_REG ||
+        X86.operands[1].type != X86_OP_REG ||
+        (X86.operands[2].type != X86_OP_REG &&
+         X86.operands[2].type != X86_OP_MEM))
+      return false;
+    const RegInfo Destination =
+        mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
+    const uint16_t Size = Destination.Size;
+    if ((Size != 2 && Size != 4 && Size != 8) || X86.operands[1].size != Size ||
+        X86.operands[2].size != Size)
+      return false;
+    // Unlike CFCMOV, ordinary CMOV reads r/m before testing the condition.
+    // operandRead deliberately emits an unconditional LOAD for a memory
+    // source so the false path retains the instruction's fault behavior.
+    const NdVar ConditionalSource = L.operandRead(S, X86.operands[2]);
+    const NdVar Fallback = L.operandRead(S, X86.operands[1]);
+    const NdVar Condition = emitFlagCondition(S, ConditionCode);
+    NdVar Selected = S.makeTemp(Size);
+    S.emit(NdOp::SELECT, Selected, {Condition, ConditionalSource, Fallback});
+
+    const NdVar FullDestination = NdVar::reg(Destination.Offset, 8);
+    if (Size == 8)
+      S.emit(NdOp::COPY, FullDestination, {Selected});
+    else
+      S.emit(NdOp::INT_ZEXT, FullDestination, {Selected});
+    return true;
+  }
+  if (X86.op_count < 2)
+    return true;
+  NdVar Src = L.operandRead(S, X86.operands[1]);
+  NdVar DstR = L.operandRead(S, X86.operands[0]);
+  NdVar Dst = L.operandWrite(X86.operands[0]);
+  const NdVar Cond = emitFlagCondition(S, ConditionCode);
+  // Preserve the value-selection boundary, as with APX CMOV. Expanding it
+  // into integer masks makes pointer/flag provenance depend on the selector
+  // and gives every consumer an artificial Boolean/arithmetic expression.
+  // operandRead above deliberately retains an unconditional memory read.
+  S.emit(NdOp::SELECT, Dst, {Cond, Src, DstR});
+  return true;
 }
 
 } // namespace
@@ -771,112 +942,31 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // --- Jcc (conditional jumps) ---
-  case X86_INS_JE:
-  case X86_INS_JNE:
-  case X86_INS_JA:
-  case X86_INS_JAE:
-  case X86_INS_JB:
-  case X86_INS_JBE:
-  case X86_INS_JG:
-  case X86_INS_JGE:
-  case X86_INS_JL:
-  case X86_INS_JLE:
-  case X86_INS_JS:
-  case X86_INS_JNS:
-  case X86_INS_JO:
-  case X86_INS_JNO:
-  case X86_INS_JP:
-  case X86_INS_JNP:
+#define NEVERD_X86_CONDITION(Suffix, Code)                                     \
+  case X86_INS_J##Suffix:                                                      \
+    return liftFlagJump(S, X86, Code);                                         \
+  case X86_INS_SET##Suffix:                                                    \
+    return liftSetCondition(*this, S, X86, Code, false);                       \
+  case X86_INS_SETZU##Suffix:                                                  \
+    return liftSetCondition(*this, S, X86, Code, true);                        \
+  case X86_INS_CMOV##Suffix:                                                   \
+    return liftCMov(*this, S, X86, Code);                                      \
+  case X86_INS_CFCMOV##Suffix:                                                 \
+    return liftFaultSuppressingCMov(*this, S, X86, Code);
+#include "X86ConditionCodes.def"
+
   case X86_INS_JCXZ:
   case X86_INS_JECXZ:
   case X86_INS_JRCXZ: {
     if (X86.op_count < 1)
       break;
-    va_t Target = static_cast<uint64_t>(X86.operands[0].imm);
+    const auto Target = static_cast<uint64_t>(X86.operands[0].imm);
+    const uint16_t CxSize = InsnId == X86_INS_JCXZ    ? 2
+                            : InsnId == X86_INS_JECXZ ? 4
+                                                      : 8;
     NdVar Cond = S.makeTemp(1);
-
-    switch (InsnId) {
-    case X86_INS_JE:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::ZF, 1)});
-      break;
-    case X86_INS_JNE:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::ZF, 1)});
-      break;
-    case X86_INS_JB:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::CF, 1)});
-      break;
-    case X86_INS_JAE:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::CF, 1)});
-      break;
-    case X86_INS_JA: {
-      NdVar NC = S.makeTemp(1);
-      NdVar NZ = S.makeTemp(1);
-      S.emit(NdOp::BOOL_NOT, NC, {NdVar::reg(x86reg::CF, 1)});
-      S.emit(NdOp::BOOL_NOT, NZ, {NdVar::reg(x86reg::ZF, 1)});
-      S.emit(NdOp::BOOL_AND, Cond, {NC, NZ});
-      break;
-    }
-    case X86_INS_JBE: {
-      S.emit(NdOp::BOOL_OR, Cond,
-             {NdVar::reg(x86reg::CF, 1), NdVar::reg(x86reg::ZF, 1)});
-      break;
-    }
-    case X86_INS_JG: {
-      NdVar NZ = S.makeTemp(1);
-      NdVar SfEqOf = S.makeTemp(1);
-      S.emit(NdOp::BOOL_NOT, NZ, {NdVar::reg(x86reg::ZF, 1)});
-      S.emit(NdOp::INT_EQUAL, SfEqOf,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      S.emit(NdOp::BOOL_AND, Cond, {NZ, SfEqOf});
-      break;
-    }
-    case X86_INS_JGE:
-      S.emit(NdOp::INT_EQUAL, Cond,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_JL:
-      S.emit(NdOp::INT_NOTEQUAL, Cond,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_JLE: {
-      NdVar SfNeOf = S.makeTemp(1);
-      S.emit(NdOp::INT_NOTEQUAL, SfNeOf,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      S.emit(NdOp::BOOL_OR, Cond, {NdVar::reg(x86reg::ZF, 1), SfNeOf});
-      break;
-    }
-    case X86_INS_JS:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::SF, 1)});
-      break;
-    case X86_INS_JNS:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::SF, 1)});
-      break;
-    case X86_INS_JO:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_JNO:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_JP:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::PF, 1)});
-      break;
-    case X86_INS_JNP:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::PF, 1)});
-      break;
-    case X86_INS_JCXZ:
-    case X86_INS_JECXZ:
-    case X86_INS_JRCXZ: {
-      uint16_t CxSize = (InsnId == X86_INS_JCXZ)    ? 2
-                        : (InsnId == X86_INS_JECXZ) ? 4
-                                                    : 8;
-      S.emit(NdOp::INT_EQUAL, Cond,
-             {NdVar::reg(x86reg::RCX, CxSize), NdVar::scalar(0, CxSize)});
-      break;
-    }
-    default:
-      break;
-    }
+    S.emit(NdOp::INT_EQUAL, Cond,
+           {NdVar::reg(x86reg::RCX, CxSize), NdVar::scalar(0, CxSize)});
     S.emit(NdOp::COND_BR, {}, {NdVar::cst(Target, 8), Cond});
     break;
   }
@@ -912,227 +1002,6 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // --- SETCC ---
-  case X86_INS_SETE:
-  case X86_INS_SETNE:
-  case X86_INS_SETA:
-  case X86_INS_SETAE:
-  case X86_INS_SETB:
-  case X86_INS_SETBE:
-  case X86_INS_SETG:
-  case X86_INS_SETGE:
-  case X86_INS_SETL:
-  case X86_INS_SETLE:
-  case X86_INS_SETS:
-  case X86_INS_SETNS:
-  case X86_INS_SETO:
-  case X86_INS_SETNO:
-  case X86_INS_SETP:
-  case X86_INS_SETNP:
-  case X86_INS_SETZUO:
-  case X86_INS_SETZUNO:
-  case X86_INS_SETZUB:
-  case X86_INS_SETZUAE:
-  case X86_INS_SETZUE:
-  case X86_INS_SETZUNE:
-  case X86_INS_SETZUBE:
-  case X86_INS_SETZUA:
-  case X86_INS_SETZUS:
-  case X86_INS_SETZUNS:
-  case X86_INS_SETZUP:
-  case X86_INS_SETZUNP:
-  case X86_INS_SETZUL:
-  case X86_INS_SETZUGE:
-  case X86_INS_SETZULE:
-  case X86_INS_SETZUG: {
-    const bool ZeroUpper = InsnId >= X86_INS_SETZUO && InsnId <= X86_INS_SETZUG;
-    unsigned ConditionInsnId = InsnId;
-    switch (InsnId) {
-    case X86_INS_SETZUO:
-      ConditionInsnId = X86_INS_SETO;
-      break;
-    case X86_INS_SETZUNO:
-      ConditionInsnId = X86_INS_SETNO;
-      break;
-    case X86_INS_SETZUB:
-      ConditionInsnId = X86_INS_SETB;
-      break;
-    case X86_INS_SETZUAE:
-      ConditionInsnId = X86_INS_SETAE;
-      break;
-    case X86_INS_SETZUE:
-      ConditionInsnId = X86_INS_SETE;
-      break;
-    case X86_INS_SETZUNE:
-      ConditionInsnId = X86_INS_SETNE;
-      break;
-    case X86_INS_SETZUBE:
-      ConditionInsnId = X86_INS_SETBE;
-      break;
-    case X86_INS_SETZUA:
-      ConditionInsnId = X86_INS_SETA;
-      break;
-    case X86_INS_SETZUS:
-      ConditionInsnId = X86_INS_SETS;
-      break;
-    case X86_INS_SETZUNS:
-      ConditionInsnId = X86_INS_SETNS;
-      break;
-    case X86_INS_SETZUP:
-      ConditionInsnId = X86_INS_SETP;
-      break;
-    case X86_INS_SETZUNP:
-      ConditionInsnId = X86_INS_SETNP;
-      break;
-    case X86_INS_SETZUL:
-      ConditionInsnId = X86_INS_SETL;
-      break;
-    case X86_INS_SETZUGE:
-      ConditionInsnId = X86_INS_SETGE;
-      break;
-    case X86_INS_SETZULE:
-      ConditionInsnId = X86_INS_SETLE;
-      break;
-    case X86_INS_SETZUG:
-      ConditionInsnId = X86_INS_SETG;
-      break;
-    default:
-      break;
-    }
-
-    if (X86.op_count != 1 || X86.operands[0].size != 1 ||
-        (X86.operands[0].type != X86_OP_REG &&
-         X86.operands[0].type != X86_OP_MEM) ||
-        (ZeroUpper && TargetArch != Arch::X64))
-      return false;
-    NdVar DstW = operandWrite(X86.operands[0]);
-    NdVar Cond = S.makeTemp(1);
-
-    switch (ConditionInsnId) {
-    case X86_INS_SETE:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::ZF, 1)});
-      break;
-    case X86_INS_SETNE:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::ZF, 1)});
-      break;
-    case X86_INS_SETB:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::CF, 1)});
-      break;
-    case X86_INS_SETAE:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::CF, 1)});
-      break;
-    case X86_INS_SETS:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::SF, 1)});
-      break;
-    case X86_INS_SETNS:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::SF, 1)});
-      break;
-    case X86_INS_SETO:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_SETNO:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_SETP:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::PF, 1)});
-      break;
-    case X86_INS_SETNP:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::PF, 1)});
-      break;
-    case X86_INS_SETA: {
-      NdVar NC = S.makeTemp(1);
-      NdVar NZ = S.makeTemp(1);
-      S.emit(NdOp::BOOL_NOT, NC, {NdVar::reg(x86reg::CF, 1)});
-      S.emit(NdOp::BOOL_NOT, NZ, {NdVar::reg(x86reg::ZF, 1)});
-      S.emit(NdOp::BOOL_AND, Cond, {NC, NZ});
-      break;
-    }
-    case X86_INS_SETBE:
-      S.emit(NdOp::BOOL_OR, Cond,
-             {NdVar::reg(x86reg::CF, 1), NdVar::reg(x86reg::ZF, 1)});
-      break;
-    case X86_INS_SETG: {
-      NdVar NZ = S.makeTemp(1);
-      NdVar SfEqOf = S.makeTemp(1);
-      S.emit(NdOp::BOOL_NOT, NZ, {NdVar::reg(x86reg::ZF, 1)});
-      S.emit(NdOp::INT_EQUAL, SfEqOf,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      S.emit(NdOp::BOOL_AND, Cond, {NZ, SfEqOf});
-      break;
-    }
-    case X86_INS_SETGE:
-      S.emit(NdOp::INT_EQUAL, Cond,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_SETL:
-      S.emit(NdOp::INT_NOTEQUAL, Cond,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_SETLE: {
-      NdVar SfNeOf = S.makeTemp(1);
-      S.emit(NdOp::INT_NOTEQUAL, SfNeOf,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      S.emit(NdOp::BOOL_OR, Cond, {NdVar::reg(x86reg::ZF, 1), SfNeOf});
-      break;
-    }
-    default:
-      S.emit(NdOp::COPY, Cond, {NdVar::scalar(0, 1)});
-      break;
-    }
-
-    if (X86.operands[0].type == X86_OP_MEM) {
-      S.storeToMem(X86.operands[0], Cond);
-    } else if (ZeroUpper) {
-      // APX SETZUcc names the byte register in the encoding, but ND=1 makes
-      // the architectural destination the complete 64-bit GPR.  APX only
-      // exposes low-byte registers here, so a non-container offset is a
-      // malformed shape and must fail before emitting a partial write.
-      if (DstW.Size != 1 || DstW.Offset % 8 != 0)
-        return false;
-      NdVar WideCondition = S.makeTemp(8);
-      S.emit(NdOp::INT_ZEXT, WideCondition, {Cond});
-      S.emit(NdOp::COPY, NdVar::reg(DstW.Offset, 8), {WideCondition});
-    } else {
-      // SETcc writes exactly ONE byte to the destination register's low byte
-      // (AL/BL/.../R15B) or high byte (AH/BH/CH/DH); the enclosing 32/64-bit
-      // register's OTHER bytes are PRESERVED.  Writing the byte through a
-      // 32-bit INT_ZEXT (the old approach) zeroes bits 63:8 of the 64-bit
-      // register (a 32-bit write zero-extends) — wrong for any caller that
-      // keeps live data in the upper bytes.  A bare 1-byte register write is
-      // correct on paper but lands the flag-derived value in a byte
-      // sub-register that the downstream sub-register reconstruction mishandles
-      // when it trails a wider write (`xor eax,eax; setcc al` — the compiler's
-      // standard idiom — would drop the byte).  Instead read-modify-write the
-      // FULL register: zero- extend the condition to register width (Pass 2
-      // still recovers the comparison feeding this INT_ZEXT, as for the old
-      // wide-ZEXT form), mask the target byte out of the old value, OR the
-      // condition in, and store the whole register back.  Wide read + wide
-      // write only — no trailing partial write — so upper bytes are preserved
-      // without tripping the reconstruction.
-      uint16_t WideSz = (TargetArch == Arch::X64) ? 8 : 4;
-      uint64_t ByteOff = DstW.Offset % 8; // 0 for *L / 1 for AH/BH/CH/DH
-      uint64_t EnclOff = DstW.Offset - ByteOff;
-      NdVar Wide = NdVar::reg(EnclOff, WideSz);
-
-      NdVar CondW = S.makeTemp(WideSz);
-      S.emit(NdOp::INT_ZEXT, CondW, {Cond});
-      if (ByteOff > 0) {
-        NdVar Shifted = S.makeTemp(WideSz);
-        S.emit(NdOp::INT_LEFT, Shifted,
-               {CondW, NdVar::scalar(ByteOff * 8, WideSz)});
-        CondW = Shifted;
-      }
-      uint64_t WideMask = (WideSz >= 8) ? ~0ULL : ((1ULL << (WideSz * 8)) - 1);
-      uint64_t ClearMask = (~(0xFFULL << (ByteOff * 8))) & WideMask;
-      NdVar Cleared = S.makeTemp(WideSz);
-      S.emit(NdOp::INT_AND, Cleared, {Wide, NdVar::scalar(ClearMask, WideSz)});
-      NdVar Result = S.makeTemp(WideSz);
-      S.emit(NdOp::INT_OR, Result, {Cleared, CondW});
-      S.emit(NdOp::COPY, Wide, {Result});
-    }
-    break;
-  }
-
   // --- LEAVE ---
   // StackAddressSize copies the full RBP into RSP; OperandSize then pops BP.
   // LEAVEW is therefore `mov rsp, rbp; pop bp`, not a 16-bit SP:=BP merge.
@@ -1147,244 +1016,6 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     S.emit(NdOp::LOAD, Val, {Rsp});
     S.emit(NdOp::COPY, RbpData, {Val});
     S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(DataSize, PtrSize)});
-    break;
-  }
-
-  // --- CMOV ---
-  case X86_INS_CFCMOVO:
-  case X86_INS_CFCMOVNO:
-  case X86_INS_CFCMOVB:
-  case X86_INS_CFCMOVAE:
-  case X86_INS_CFCMOVE:
-  case X86_INS_CFCMOVNE:
-  case X86_INS_CFCMOVBE:
-  case X86_INS_CFCMOVA:
-  case X86_INS_CFCMOVS:
-  case X86_INS_CFCMOVNS:
-  case X86_INS_CFCMOVP:
-  case X86_INS_CFCMOVNP:
-  case X86_INS_CFCMOVL:
-  case X86_INS_CFCMOVGE:
-  case X86_INS_CFCMOVLE:
-  case X86_INS_CFCMOVG: {
-    if (TargetArch != Arch::X64 || (X86.op_count != 2 && X86.op_count != 3))
-      return false;
-
-    const unsigned ConditionCode = InsnId - X86_INS_CFCMOVO;
-    if (X86.operands[0].type == X86_OP_MEM) {
-      if (X86.op_count != 2 || X86.operands[1].type != X86_OP_REG)
-        return false;
-      const RegInfo Source =
-          mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].reg));
-      const uint16_t Size = Source.Size;
-      if ((Size != 2 && Size != 4 && Size != 8) || X86.operands[0].size != Size)
-        return false;
-
-      NdVar Condition = emitCMovCondition(S, ConditionCode);
-      if (Condition.Size != 1)
-        return false;
-      const uint64_t SignBit = UINT64_C(1) << (Size * 8 - 1);
-      NdVar Mask = S.makeTemp(16);
-      S.emit(NdOp::SELECT, Mask,
-             {Condition, NdVar::scalar(SignBit, 16), NdVar::scalar(0, 16)});
-      NdVar StoreData = S.makeTemp(16);
-      S.emit(NdOp::INT_ZEXT, StoreData, {operandRead(S, X86.operands[1])});
-      const Intrinsic StoreId = Size == 2   ? Intrinsic::MaskedStoreW
-                                : Size == 4 ? Intrinsic::MaskedStoreD
-                                            : Intrinsic::MaskedStoreQ;
-      S.emitIntrinsic(StoreId, {},
-                      {S.computeEA(X86.operands[0]), Mask, StoreData},
-                      NdMemoryOrdering::None,
-                      LiftState::memoryAddressSpace(X86.operands[0]));
-      break;
-    }
-
-    if (X86.operands[0].type != X86_OP_REG ||
-        (X86.op_count == 3 && X86.operands[1].type != X86_OP_REG))
-      return false;
-
-    const RegInfo Destination =
-        mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
-    const uint16_t Size = Destination.Size;
-    const cs_x86_op &ConditionalSource = X86.operands[X86.op_count - 1];
-    if ((Size != 2 && Size != 4 && Size != 8) ||
-        (ConditionalSource.type != X86_OP_REG &&
-         ConditionalSource.type != X86_OP_MEM) ||
-        ConditionalSource.size != Size ||
-        (X86.op_count == 3 && X86.operands[1].size != Size))
-      return false;
-
-    NdVar Condition = emitCMovCondition(S, ConditionCode);
-    if (Condition.Size != 1)
-      return false;
-
-    NdVar ConditionalValue;
-    if (ConditionalSource.type == X86_OP_MEM) {
-      const uint64_t SignBit = UINT64_C(1) << (Size * 8 - 1);
-      NdVar Mask = S.makeTemp(16);
-      S.emit(NdOp::SELECT, Mask,
-             {Condition, NdVar::scalar(SignBit, 16), NdVar::scalar(0, 16)});
-
-      Intrinsic LoadId = Size == 2   ? Intrinsic::MaskedLoadW
-                         : Size == 4 ? Intrinsic::MaskedLoadD
-                                     : Intrinsic::MaskedLoadQ;
-      NdVar LoadedVector = S.makeTemp(16);
-      S.emitIntrinsic(LoadId, LoadedVector,
-                      {S.computeEA(ConditionalSource), Mask},
-                      NdMemoryOrdering::None,
-                      LiftState::memoryAddressSpace(ConditionalSource));
-      ConditionalValue = S.makeTemp(Size);
-      S.emit(NdOp::SUBBYTES, ConditionalValue,
-             {LoadedVector, NdVar::scalar(0, 4)});
-    } else {
-      ConditionalValue = operandRead(S, ConditionalSource);
-    }
-
-    const NdVar FalseValue = X86.op_count == 3 ? operandRead(S, X86.operands[1])
-                                               : NdVar::scalar(0, Size);
-    NdVar Selected = S.makeTemp(Size);
-    S.emit(NdOp::SELECT, Selected, {Condition, ConditionalValue, FalseValue});
-
-    const NdVar FullDestination = NdVar::reg(Destination.Offset, 8);
-    if (Size == 8)
-      S.emit(NdOp::COPY, FullDestination, {Selected});
-    else
-      S.emit(NdOp::INT_ZEXT, FullDestination, {Selected});
-    break;
-  }
-
-  case X86_INS_CMOVE:
-  case X86_INS_CMOVNE:
-  case X86_INS_CMOVA:
-  case X86_INS_CMOVAE:
-  case X86_INS_CMOVB:
-  case X86_INS_CMOVBE:
-  case X86_INS_CMOVG:
-  case X86_INS_CMOVGE:
-  case X86_INS_CMOVL:
-  case X86_INS_CMOVLE:
-  case X86_INS_CMOVS:
-  case X86_INS_CMOVNS:
-  case X86_INS_CMOVO:
-  case X86_INS_CMOVNO:
-  case X86_INS_CMOVP:
-  case X86_INS_CMOVNP: {
-    if (X86.op_count == 3) {
-      if (TargetArch != Arch::X64 || X86.operands[0].type != X86_OP_REG ||
-          X86.operands[1].type != X86_OP_REG ||
-          (X86.operands[2].type != X86_OP_REG &&
-           X86.operands[2].type != X86_OP_MEM))
-        return false;
-      const RegInfo Destination =
-          mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
-      const uint16_t Size = Destination.Size;
-      if ((Size != 2 && Size != 4 && Size != 8) ||
-          X86.operands[1].size != Size || X86.operands[2].size != Size)
-        return false;
-      const std::optional<unsigned> ConditionCode =
-          ordinaryCMovConditionCode(InsnId);
-      if (!ConditionCode)
-        return false;
-
-      // Unlike CFCMOV, ordinary CMOV reads r/m before testing the condition.
-      // operandRead deliberately emits an unconditional LOAD for a memory
-      // source so the false path retains the instruction's fault behavior.
-      const NdVar ConditionalSource = operandRead(S, X86.operands[2]);
-      const NdVar Fallback = operandRead(S, X86.operands[1]);
-      const NdVar Condition = emitCMovCondition(S, *ConditionCode);
-      NdVar Selected = S.makeTemp(Size);
-      S.emit(NdOp::SELECT, Selected, {Condition, ConditionalSource, Fallback});
-
-      const NdVar FullDestination = NdVar::reg(Destination.Offset, 8);
-      if (Size == 8)
-        S.emit(NdOp::COPY, FullDestination, {Selected});
-      else
-        S.emit(NdOp::INT_ZEXT, FullDestination, {Selected});
-      break;
-    }
-    if (X86.op_count < 2)
-      break;
-    NdVar Src = operandRead(S, X86.operands[1]);
-    NdVar DstR = operandRead(S, X86.operands[0]);
-    NdVar Dst = operandWrite(X86.operands[0]);
-
-    NdVar Cond = S.makeTemp(1);
-    switch (InsnId) {
-    case X86_INS_CMOVE:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::ZF, 1)});
-      break;
-    case X86_INS_CMOVNE:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::ZF, 1)});
-      break;
-    case X86_INS_CMOVB:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::CF, 1)});
-      break;
-    case X86_INS_CMOVAE:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::CF, 1)});
-      break;
-    case X86_INS_CMOVS:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::SF, 1)});
-      break;
-    case X86_INS_CMOVNS:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::SF, 1)});
-      break;
-    case X86_INS_CMOVO:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_CMOVNO:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_CMOVP:
-      S.emit(NdOp::COPY, Cond, {NdVar::reg(x86reg::PF, 1)});
-      break;
-    case X86_INS_CMOVNP:
-      S.emit(NdOp::BOOL_NOT, Cond, {NdVar::reg(x86reg::PF, 1)});
-      break;
-    case X86_INS_CMOVA: {
-      NdVar NC = S.makeTemp(1);
-      NdVar NZ = S.makeTemp(1);
-      S.emit(NdOp::BOOL_NOT, NC, {NdVar::reg(x86reg::CF, 1)});
-      S.emit(NdOp::BOOL_NOT, NZ, {NdVar::reg(x86reg::ZF, 1)});
-      S.emit(NdOp::BOOL_AND, Cond, {NC, NZ});
-      break;
-    }
-    case X86_INS_CMOVBE:
-      S.emit(NdOp::BOOL_OR, Cond,
-             {NdVar::reg(x86reg::CF, 1), NdVar::reg(x86reg::ZF, 1)});
-      break;
-    case X86_INS_CMOVG: {
-      NdVar NZ = S.makeTemp(1);
-      NdVar SfEqOf = S.makeTemp(1);
-      S.emit(NdOp::BOOL_NOT, NZ, {NdVar::reg(x86reg::ZF, 1)});
-      S.emit(NdOp::INT_EQUAL, SfEqOf,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      S.emit(NdOp::BOOL_AND, Cond, {NZ, SfEqOf});
-      break;
-    }
-    case X86_INS_CMOVGE:
-      S.emit(NdOp::INT_EQUAL, Cond,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_CMOVL:
-      S.emit(NdOp::INT_NOTEQUAL, Cond,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      break;
-    case X86_INS_CMOVLE: {
-      NdVar SfNeOf = S.makeTemp(1);
-      S.emit(NdOp::INT_NOTEQUAL, SfNeOf,
-             {NdVar::reg(x86reg::SF, 1), NdVar::reg(x86reg::OF, 1)});
-      S.emit(NdOp::BOOL_OR, Cond, {NdVar::reg(x86reg::ZF, 1), SfNeOf});
-      break;
-    }
-    default:
-      S.emit(NdOp::COPY, Cond, {NdVar::scalar(1, 1)});
-      break;
-    }
-    // Preserve the value-selection boundary, as with APX CMOV. Expanding it
-    // into integer masks makes pointer/flag provenance depend on the selector
-    // and gives every consumer an artificial Boolean/arithmetic expression.
-    // operandRead above deliberately retains an unconditional memory read.
-    S.emit(NdOp::SELECT, Dst, {Cond, Src, DstR});
     break;
   }
 

@@ -25,13 +25,7 @@ namespace neverd {
 
 bool liftMemSingle(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
                    const cs_arm &ARM) {
-  switch (Insn->id) {
-  // --- LDR / LDRB / LDRH / LDRSB / LDRSH ---
-  case ARM_INS_LDR:
-  case ARM_INS_LDRB:
-  case ARM_INS_LDRH:
-  case ARM_INS_LDRSB:
-  case ARM_INS_LDRSH: {
+  auto Load = [&](uint16_t LoadSz, bool SignExt) {
     // capstone aliases a single-register `pop {Rt}` (= `ldr Rt, [sp], #4`) to
     // ARM_INS_LDR with mnemonic "pop" and ONLY the Rt operand (the [sp] base is
     // implicit, mirroring the multi-register `pop` -> LDM alias).  Without this
@@ -42,25 +36,11 @@ bool liftMemSingle(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar Sp = NdVar::reg(armreg::SP, 4);
       S.emit(NdOp::LOAD, Dst, {Sp});
       S.emit(NdOp::INT_ADD, Sp, {Sp, NdVar::cst(4, 4)});
-      break;
+      return;
     }
     if (ARM.op_count < 2)
-      break;
+      return;
     NdVar Dst = L.operandWrite(ARM.operands[0]);
-
-    uint16_t LoadSz = 4;
-    switch (Insn->id) {
-    case ARM_INS_LDRB:
-    case ARM_INS_LDRSB:
-      LoadSz = 1;
-      break;
-    case ARM_INS_LDRH:
-    case ARM_INS_LDRSH:
-      LoadSz = 2;
-      break;
-    default:
-      break;
-    }
 
     if (ARM.operands[1].type == ARM_OP_MEM) {
       auto &MemOp = ARM.operands[1];
@@ -69,7 +49,6 @@ bool liftMemSingle(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar Val = S.makeTemp(LoadSz);
       S.emit(NdOp::LOAD, Val, {EA});
 
-      bool SignExt = (Insn->id == ARM_INS_LDRSB || Insn->id == ARM_INS_LDRSH);
       if (SignExt && LoadSz < 4)
         S.emit(NdOp::INT_SEXT, Dst, {Val});
       else if (LoadSz < 4)
@@ -80,13 +59,8 @@ bool liftMemSingle(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar Val = L.operandRead(S, ARM.operands[1]);
       S.emit(NdOp::COPY, Dst, {Val});
     }
-    break;
-  }
-
-  // --- STR / STRB / STRH ---
-  case ARM_INS_STR:
-  case ARM_INS_STRB:
-  case ARM_INS_STRH: {
+  };
+  auto Store = [&](uint16_t StoreSz) {
     // capstone aliases a single-register `push {Rt}` (= `str Rt, [sp, #-4]!`)
     // to ARM_INS_STR with mnemonic "push" and ONLY the Rt operand (the [sp]
     // base is implicit, mirroring the multi-register `push` -> STM alias).
@@ -95,17 +69,11 @@ bool liftMemSingle(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar Sp = NdVar::reg(armreg::SP, 4);
       S.emit(NdOp::INT_SUB, Sp, {Sp, NdVar::cst(4, 4)});
       S.emit(NdOp::STORE, {}, {Sp, Src});
-      break;
+      return;
     }
     if (ARM.op_count < 2)
-      break;
+      return;
     NdVar Src = L.operandRead(S, ARM.operands[0]);
-
-    uint16_t StoreSz = 4;
-    if (Insn->id == ARM_INS_STRB)
-      StoreSz = 1;
-    else if (Insn->id == ARM_INS_STRH)
-      StoreSz = 2;
 
     if (StoreSz < 4) {
       NdVar Trunc = S.makeTemp(StoreSz);
@@ -118,10 +86,19 @@ bool liftMemSingle(ARMLifter &L, ARMLifter::LiftState &S, const cs_insn *Insn,
       NdVar EA = L.emitSingleMemAddr(S, Insn, ARM, MemOp);
       S.emit(NdOp::STORE, {}, {EA, Src});
     }
-    break;
-  }
+  };
 
-  // --- LDRD / STRD ---
+  switch (Insn->id) {
+#define NEVERD_ARM_LOAD(Name, Bytes, Signed)                                   \
+  case ARM_INS_##Name:                                                         \
+    Load(Bytes, Signed);                                                       \
+    break;
+#define NEVERD_ARM_STORE(Name, Bytes)                                          \
+  case ARM_INS_##Name:                                                         \
+    Store(Bytes);                                                              \
+    break;
+#include "ARMIntegerForms.def"
+
   case ARM_INS_LDRD: {
     if (ARM.op_count < 3)
       break;
