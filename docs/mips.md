@@ -35,9 +35,11 @@ sizes. Use the target linker to place the sections and resolve relocations.
 | n64 | 64-bit GPRs and pointers | ELF64, both byte orders |
 
 For scalar classic MIPS32 and MIPS64, the ELF header identifies Release 1.
-Releases 3 and 5 share the Release 2 header flags. Their ISA revision comes
-from `.MIPS.abiflags`. Without this record the loader admits the Release 2
-subset. Release 1 uses its own instruction encodings in disassembly and lift.
+For both classic and microMIPS, Releases 3 and 5 share the Release 2 header
+flags. Their ISA revision comes from `.MIPS.abiflags`. A scalar microMIPS
+record carries the microMIPS ASE bit. Without this record the loader admits
+the Release 2 subset. Release 1 uses its own instruction encodings in
+disassembly and lift.
 For example, the encoding later assigned to EHB acts as SSNOP on Release 1.
 ROTR requires Release 2 or a separately identified SmartMIPS extension.
 [MIPS32 instruction set, EHB and ROTR](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00086-2B-MIPS32BIS-AFP-05.04.pdf).
@@ -779,11 +781,10 @@ Each covers 16 profiles, 128 builds and 4,096 executions with the same byte
 orders, FR modes, compilers and observations. The unit and isolated-function
 receipts identify their different tested commits explicitly.
 
-Numeric microMIPS code identities are admitted for defined Release 2 and
-Release 6 targets with explicit ELF mode evidence in o32, n32 and n64.
-MIPS16 numerical identities remain limited to r2/o32. Both source backends
-share this boundary; unknown-mode
-imports, including whole or partial GOT reads, remain refused. Direct control
+Numeric microMIPS code identities are admitted for defined targets in Releases
+2, 3, 5 and 6 with explicit ELF mode evidence in o32, n32 and n64. MIPS16
+numerical identities remain limited to r2/o32. Both source backends reject
+unknown-mode imports, including whole or partial GOT reads. Direct control
 identities, serialized callables and code-byte/data addresses retain distinct
 roles. The NeverSight LLVM SDK uses the fork's `Fi8` data layout, so stronger function
 code alignment cannot clear the callable ISA tag during LLVM optimization.
@@ -814,7 +815,8 @@ registers. Shared source projection applies each field's carry, shift and
 truncation to the rebuilt symbol address while keeping physical LowIR unchanged.
 Address arithmetic and bit projection retain that symbol's identity.
 This currently covers classic LUI, ADDIU, DADDIU and ORI fields naming defined
-function symbols. It does not cover compressed instruction relocation encodings
+function symbols. Release 6 uses the same LUI operation for AUI with a zero
+base register. It does not cover compressed instruction relocation encodings
 or infer an address from an equal numeric literal. Without relocation or other
 authenticated use evidence, the original integer bits remain scalar. Conflicting,
 mismatched or unpaired claimed fields refuse source reconstruction.

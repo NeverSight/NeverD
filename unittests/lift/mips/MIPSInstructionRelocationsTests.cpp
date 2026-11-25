@@ -277,6 +277,18 @@ TEST(MIPSSplitAddressFields, High64FieldsUseIndependentCarries) {
   }
 }
 
+TEST_P(MIPSInstructionRelocations, Release6ZeroBaseAUIRetainsUpperSymbol) {
+  const Arch A = GetParam();
+  SplitAddressELF File(A, true, 0, true);
+  const uint32_t Flags = isMIPSN32(A) ? 0xa2000020u
+                         : File.Is64  ? 0xa2000000u
+                                      : 0x92001000u;
+  File.put(File.Is64 ? 48 : 36, Flags, 4);
+  File.put(0x10c, 0x03e00009, 4); // R6 jalr $zero,$ra
+  File.put(0x8100, 0x47e3, 2);    // microMIPS R6 jrc16 $ra
+  checkSource(File, true);
+}
+
 TEST(MIPSSplitAddressFields, CompressedO32CallableKeepsTagInBothSources) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
     SCOPED_TRACE(static_cast<unsigned>(A));

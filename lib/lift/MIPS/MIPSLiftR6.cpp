@@ -52,6 +52,9 @@ MIPSLifter::Encoding MIPSLifter::release6Encoding(uint32_t Word) const {
   if (Op == 0 && (Fn <= 4 || Fn == 6 || Fn == 7 || Fn == 15 || Fn == 20 ||
                   Fn == 22 || Fn == 23 || (Fn >= 32 && Fn <= 47) || Fn >= 56))
     return Encoding{Word};
+  // AUI with $zero as its base is LUI and has the same word result.
+  if (Op == 15 && !(Word & 0x03e00000))
+    return Encoding{Word};
   if ((Op >= 9 && Op <= 14) || Op == 25 || Op == 32 || Op == 33 || Op == 35 ||
       Op == 36 || Op == 37 || Op == 39 || Op == 40 || Op == 41 || Op == 43 ||
       Op == 55 || Op == 63)

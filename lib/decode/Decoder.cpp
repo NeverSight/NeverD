@@ -188,7 +188,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
                        isMIPSCompressedMode(Mode))
                     : (Revision != 1 && Revision != 2 && Revision != 3 &&
                        Revision != 5 && Revision != 6)) ||
-        ((Revision == 1 || Revision == 3) && isMIPSCompressedMode(Mode)) ||
+        (Revision == 1 && isMIPSCompressedMode(Mode)) ||
         (Revision != 2 && Mode == InstructionMode::MIPS16)) {
       syncError() << "unsupported MIPS instruction mode\n";
       return false;

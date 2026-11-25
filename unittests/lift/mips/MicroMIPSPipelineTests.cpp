@@ -634,9 +634,11 @@ TEST(MicroMIPSPipelineSource, NumericModeBoundaryAdmitsQualifiedWideProfiles) {
     EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
                  std::invalid_argument);
     Image.MIPS->ABI = N32 ? MIPSABI::N32 : MIPSABI::N64;
-    Image.MIPS->ISARevision = 6;
-    EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100));
-    for (unsigned Revision : {1u, 3u}) {
+    for (unsigned Revision : {3u, 5u, 6u}) {
+      Image.MIPS->ISARevision = Revision;
+      EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100));
+    }
+    for (unsigned Revision : {1u, 4u}) {
       Image.MIPS->ISARevision = Revision;
       EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
                    std::invalid_argument);

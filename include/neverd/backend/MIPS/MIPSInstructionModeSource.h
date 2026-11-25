@@ -65,7 +65,8 @@ inline void requireNumericCodePointerSource(const BinaryImage *Image,
       if ((Mode == InstructionMode::MIPS16 && Image->MIPS->HasMIPS16 && O32 &&
            Revision == 2) ||
           (Mode == InstructionMode::MicroMIPS && Image->MIPS->HasMicroMIPS &&
-           (Revision == 2 || Revision == 6) && (O32 || N32 || N64)))
+           (Revision == 2 || Revision == 3 || Revision == 5 || Revision == 6) &&
+           (O32 || N32 || N64)))
         return;
     }
   }

@@ -282,7 +282,7 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
     if (const auto Cache = mips::microR6Cache(Word))
       return Native(*Cache);
     if (Major == 4) // AUI
-      return Native(immediateForm(15, RT, RS, uint16_t(Word)));
+      return release6Encoding(immediateForm(15, RT, RS, uint16_t(Word)));
     if (Major == 0x1e) // PCREL
       return Native((59u << 26) | (Word & 0x03ffffff));
     if (Major == 0) {

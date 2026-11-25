@@ -21,7 +21,9 @@
 #include "neverd/loader/ELF/ELFProgramMetadata.h"
 #include "neverd/loader/FunctionDiscovery.h"
 
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/MipsABIFlags.h"
 
 #include <algorithm>
 #include <array>
@@ -458,6 +460,46 @@ TEST_P(MIPSLoader, ClassicReleaseIsEstablishedByHeaderAndABIRecord) {
         } else {
           llvm::consumeError(Image.takeError());
         }
+      }
+    }
+  }
+}
+
+TEST_P(MIPSLoader, ScalarMicroReleaseUsesTheABIRecord) {
+  using namespace llvm::ELF;
+  ELFLoader Loader;
+  for (bool N32 : {false, true}) {
+    ELFBytes File(GetParam());
+    if (N32 && File.Is64)
+      continue;
+    const bool Wide = File.Is64 || N32;
+    const uint32_t ABI = N32 ? EF_MIPS_ABI2 : File.Is64 ? 0 : EF_MIPS_ABI_O32;
+    File.put(File.Is64 ? 48 : 36,
+             (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2) |
+                 EF_MIPS_MICROMIPS | ABI,
+             4);
+    File.put(24, 0x10101, File.Is64 ? 8 : 4);
+    File.abiFlags();
+    File.put(0xec, llvm::Mips::AFL_ASE_MICROMIPS, 4);
+    File.Bytes[0xe2] = Wide ? 64 : 32;
+    File.Bytes[0xe4] = Wide ? 2 : 1;
+    for (unsigned Revision : {1u, 2u, 3u, 4u, 5u, 6u}) {
+      SCOPED_TRACE(Revision);
+      File.Bytes[0xe3] = Revision;
+      const bool Match = Revision == 2 || Revision == 3 || Revision == 5;
+      auto Image = Loader.loadBuffer(File.buffer());
+      std::vector<LoadCandidate> Candidates;
+      ELFLoader::identify(File.buffer(), Candidates);
+      ASSERT_EQ(Candidates.size(), 1u);
+      EXPECT_EQ(Candidates.front().Loadable, Match);
+      ASSERT_EQ(bool(Image), Match) << llvm::toString(Image.takeError());
+      if (Image) {
+        EXPECT_EQ(Image->MIPS->ISARevision, Revision);
+        EXPECT_EQ(isMIPS64(Image->Arch), Wide);
+        EXPECT_EQ(Image->instructionModeAt(Image->Entry),
+                  InstructionMode::MicroMIPS);
+      } else {
+        llvm::consumeError(Image.takeError());
       }
     }
   }
