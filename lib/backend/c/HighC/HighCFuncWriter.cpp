@@ -5461,6 +5461,18 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
   if (auto It = EmittedParamIndices.find(Key);
       It != EmittedParamIndices.end() && It->second.size() <= N)
     return It->second;
+  // The flat definition takes a record in the positions its source ABI
+  // assigns. Compacting unused registers can move its stack pieces into
+  // registers when another object calls this entry.
+  if (DebugFn && libc::hasRecordCallParameters(*DebugFn, Opts.libcVariant()))
+    if (const auto Layout = libc::recordCallArguments(
+            *DebugFn, Opts.TheArch, Opts.Format, Opts.libcVariant());
+        Layout && Layout->Positions == N) {
+      for (size_t I = 0; I < N; ++I)
+        All.push_back(I);
+      EmittedParamIndices[Key] = All;
+      return All;
+    }
   ParamIndicesInProgress.insert(&Func);
   const auto Done =
       llvm::make_scope_exit([&] { ParamIndicesInProgress.erase(&Func); });

@@ -3452,6 +3452,13 @@ void recoverCallAbi(
       // parameters; elsewhere both start at the fixed register count.
       const int CalleeStackBase =
           StackAfterUsedRegisters ? FirstStackSlot : NumIntParamRegs;
+      // A fixed prototype can exhaust its register arguments before the stack
+      // begins (e.g. a SysV MEMORY-class record after two pointers).
+      const bool PrototypeRegisterPadding =
+          PrototypeArguments && !HeaderVariadic && !OpenVariadicArity &&
+          !StackAfterUsedRegisters && Op.CalleeRegisterArgs >= 0 &&
+          Op.CalleeRegisterArgs < NumIntParamRegs &&
+          Op.CalleeStackArgs > NumIntParamRegs;
       int CallerStackBase = NumIntParamRegs;
       if (StackAfterUsedRegisters) {
         CallerStackBase = 0;
@@ -3484,8 +3491,13 @@ void recoverCallAbi(
         for (int K = CalleeStackBase; K < CalleeArgs && K < MaxArgs; ++K) {
           if (FoundMask[K])
             continue;
-          if (K > 0 && !FoundMask[K - 1])
-            break; // keep arguments consecutive from arg0
+          // A jump through an import slot at entry forwards the incoming
+          // stack unchanged, even when the last register position is padding.
+          const bool AcrossRegisterPadding =
+              K == CalleeStackBase && PrototypeRegisterPadding &&
+              IsIndirectImport && Op.Addr == Func.Entry;
+          if (K > 0 && !FoundMask[K - 1] && !AcrossRegisterPadding)
+            break;
           const int Incoming = CallerStackBase + (K - CalleeStackBase);
           MedVar P;
           P.Kind = MedVar::Param;
@@ -3926,9 +3938,10 @@ void recoverCallAbi(
       // slots between that prefix and the stack. Keep those slots as padding;
       // setup scans cannot turn their scratch registers into arguments.
       const bool SummarizedRegisterPadding =
-          PositionalSlots && NoVectorArguments && !CalleeHasFP &&
-          !CI.IsIndirect && !CI.ArgumentsInCalleeRegisterOrder &&
-          !HeaderVariadic && !OpenVariadicArity && CalleeArgs > NumIntRegArgs;
+          PrototypeRegisterPadding ||
+          (PositionalSlots && NoVectorArguments && !CalleeHasFP &&
+           !CI.IsIndirect && !CI.ArgumentsInCalleeRegisterOrder &&
+           !HeaderVariadic && !OpenVariadicArity && CalleeArgs > NumIntRegArgs);
       // A variadic callee that takes its vector argument registers (System
       // V) takes every integer one before them, past its named ones too.
       const bool EveryIntegerPosition =

@@ -33,6 +33,7 @@
 #include "neverd/types/TypeParse.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -494,30 +495,47 @@ TEST(RecordCallContract, LinkedLibCRecordsExecuteThroughBothCEmitters) {
           ASSERT_TRUE(
               HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
         }
-        write(Generated, Source + Provider);
+        // Exercise the HighC PLT entry with the original record ABI. Bind its
+        // flat slot alias to the independently compiled provider and route
+        // calls to the library name through the emitted entry. A compacted
+        // register hole or an unspecified stack word now fails at runtime.
+        std::string EntryBinding;
+        std::string ProviderFile = Oracle;
+        if (!Restricted && !LLVM) {
+          for (const auto &F : Result.HighFuncs) {
+            const auto *Import = Image.findImportStubAt(F.Entry);
+            if (!Import || Import->Name != "fopencookie")
+              continue;
+            const std::string Entry =
+                Import->Name + "_" + llvm::utohexstr(F.Entry);
+            const std::string Slot =
+                Entry + "_" + llvm::utohexstr(Import->IATAddr);
+            ProviderFile = Root + "/slot-provider.c";
+            write(ProviderFile,
+                  "#define fopencookie " + Slot + "\n#include \"oracle.c\"\n");
+            EntryBinding = "-Wl,--defsym=fopencookie=" + Entry;
+            break;
+          }
+          ASSERT_FALSE(EntryBinding.empty());
+        }
+        write(Generated, Source);
         for (const char *COptimization : {"-O0", "-O2"}) {
           SCOPED_TRACE(COptimization);
-          // Whole modules retain separately named import-slot aliases for
-          // the SDK's image linker. Verify their complete declarations and
-          // calls; native provider linkage below exercises the selected
-          // functions, which call the actual header-declared routine names.
-          if (!Restricted) {
-            ASSERT_TRUE(
-                execute(Compiler,
-                        {Compiler, "-std=gnu11", COptimization, "-fsyntax-only",
-                         "-Werror=int-conversion",
-                         "-Werror=incompatible-pointer-types", Generated},
-                        Errors))
-                << Source;
-            continue;
-          }
-          ASSERT_TRUE(execute(
+          // Other uncalled import slots belong to the image linker.
+          std::vector<llvm::StringRef> Args = {
               Compiler,
-              {Compiler, "-std=gnu11", COptimization,
-               "-fsanitize=address,undefined", "-Werror=int-conversion",
-               "-Werror=incompatible-pointer-types", Generated, "-o", Product},
-              Errors))
-              << Source;
+              "-std=gnu11",
+              COptimization,
+              "-fsanitize=address,undefined",
+              "-Werror=int-conversion",
+              "-Werror=incompatible-pointer-types",
+              "-ffunction-sections",
+              "-fuse-ld=lld",
+              "-Wl,--gc-sections"};
+          if (!EntryBinding.empty())
+            Args.push_back(EntryBinding);
+          Args.insert(Args.end(), {Generated, ProviderFile, "-o", Product});
+          ASSERT_TRUE(execute(Compiler, Args, Errors)) << Source;
           ASSERT_TRUE(execute(Product, {Product}, Errors)) << Source;
         }
       }
