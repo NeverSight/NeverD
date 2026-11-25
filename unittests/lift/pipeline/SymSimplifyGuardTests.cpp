@@ -3818,6 +3818,9 @@ TEST(SymSimplifyGuard, MeasuresSharedArithmeticInsideOneClosedRegion) {
       llvm::Value *Y = F->getArg(1);
       llvm::Value *Union = B.CreateOr(X, Y);
       B.CreateRet(B.CreateOr(B.CreateSub(Union, Swap ? Y : X), Union));
+      SymSimplifyOptions LargeRegions;
+      LargeRegions.MinMeasuredNodes = 6;
+      EXPECT_EQ(SymSimplifyPass::simplify(*F, LargeRegions), 0u);
       ASSERT_GT(SymSimplifyPass::simplify(*F), 0u) << printFunction(*F);
       EXPECT_EQ(instructionCount(*F), 2u) << printFunction(*F);
       const auto *Ret = llvm::cast<llvm::ReturnInst>(BB->getTerminator());
