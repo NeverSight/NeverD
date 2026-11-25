@@ -2461,6 +2461,32 @@
         }
       }
     },
+    "OlePropertyConversion": {
+      "module": "ole32.dll",
+      "headers": [
+        "PropIdl"
+      ],
+      "exports": {
+        "StgConvertPropertyToVariant": 4
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "60bc39af69692154c27788a7facd84648febb4151966751d06c95b46c09b7b2e",
+          "additional_exports": {},
+          "import_library": "Ole32.Lib"
+        },
+        "x64": {
+          "image_sha256": "4a7b8ed9f2aeca875f948d9a1bce8b8d177744475f253704362792d7182d55f2",
+          "additional_exports": {},
+          "import_library": "Ole32.Lib"
+        },
+        "arm64": {
+          "image_sha256": "74835dd48045673e5e5846aa851547014fbbb6206dd5b205294e7b16df0f6b75",
+          "additional_exports": {},
+          "import_library": "Ole32.Lib"
+        }
+      }
+    },
     "OndemandconnroutehelperRuntime": {
       "module": "ondemandconnroutehelper.dll",
       "headers": [
