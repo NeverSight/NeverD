@@ -754,6 +754,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
     manifest.unlink(missing_ok=True)
     inventory = wdk.declarations()
     packages = [wdk.download(cache, *record) for record in inventory["DOWNLOAD"]]
+    sdk = next(path for path in packages if path.name.startswith("microsoft.windows.sdk.cpp."))
     kit = output / "microsoft-kit"
     selected = [f"c/Include/{VERSION}/{part}/"
                 for part in ("km", "shared", "um", "winrt")]
@@ -834,7 +835,6 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             temporary.replace(generated)
         runtime, compatibility = None, None
         if include_ucrt and base == "WindowsUser":
-            sdk = next(path for path in packages if path.name.startswith("microsoft.windows.sdk.cpp."))
             runtime = ucrt.prepare(output, cache, sdk, include, common, architecture,
                                    VERSION, readobj, neverd, model, run, checked_types,
                                    verify_layouts)
@@ -852,7 +852,17 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             runtime_packages.extend(flat.cpdk_headers(output, cache, licenses))
             runtime_packages.extend(flat.metadata_headers(output, cache, licenses))
             named_libraries = flat.named_runtime_libraries(output, cache, architecture, readobj)
-            flat_units.extend(flat.named_runtime_units(output, architecture, arguments, named_libraries))
+            cpp_headers = []
+            if architecture in flat.RUNTIME_PROFILES["MachineLearningOperatorRegistry"]["targets"]:
+                if runtime:
+                    # UCRT preparation already acquired these exact SDK/STL headers.
+                    cpp_headers = runtime["header_arguments"]
+                else:
+                    cpp_headers, package = flat.runtime_cpp_headers(output, cache, sdk, VERSION, licenses)
+                    if package not in runtime_packages:
+                        runtime_packages.append(package)
+            flat_units.extend(flat.named_runtime_units(output, architecture, arguments, named_libraries,
+                                                      cpp_headers=cpp_headers))
             recent, recent_imports = flat.recent_runtime_units(output, cache, architecture, readobj,
                                                                common, include)
             flat_units.extend(recent)

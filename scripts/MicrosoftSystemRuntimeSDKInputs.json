@@ -728,6 +728,33 @@
         }
       }
     },
+    "DebugDataModelManager": {
+      "module": "dbgmodel.dll",
+      "headers": [
+        "DbgModel"
+      ],
+      "c_headers": [],
+      "exports": {
+        "CreateDataModelManager": 2
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "45206db2b70513724861bd6548dcde2c5258032a99a47ee5d2620a837db5fadc",
+          "additional_exports": {},
+          "import_library": "DbgModel.Lib"
+        },
+        "x64": {
+          "image_sha256": "7f24170db50a849426ba2aa9c802b41a15c8d464c8d6a71c7c2897a6ec272e26",
+          "additional_exports": {},
+          "import_library": "DbgModel.Lib"
+        },
+        "arm64": {
+          "image_sha256": "22a5422be57237522250c225785a4e80fafb99e79aeb1393a34c55f0b7727d55",
+          "additional_exports": {},
+          "import_library": "DbgModel.Lib"
+        }
+      }
+    },
     "DesktopWindowActions": {
       "module": "user32.dll",
       "headers": [
@@ -851,6 +878,57 @@
         "arm64": {
           "image_sha256": "1ccce54424c83ab6fa201e8fee2d65a222813d45b14b99d525c64cf86644405e",
           "additional_exports": {}
+        }
+      }
+    },
+    "DirectCompositionClock": {
+      "module": "dcomp.dll",
+      "headers": [
+        "dcomp"
+      ],
+      "c_headers": [
+        "dcomptypes"
+      ],
+      "exports": {
+        "DCompositionBoostCompositorClock": 1,
+        "DCompositionGetFrameId": 2,
+        "DCompositionGetStatistics": 5,
+        "DCompositionGetTargetStatistics": 3,
+        "DCompositionWaitForCompositorClock": 3
+      },
+      "targets": {
+        "arm64": {
+          "image_sha256": "a9230e8de67934393aa3ecaaa73a7b8b34b91497707b0790ac16fc1576cbf67b",
+          "additional_exports": {}
+        }
+      }
+    },
+    "DirectCompositionControls": {
+      "module": "dcomp.dll",
+      "headers": [
+        "dcomp"
+      ],
+      "c_headers": [],
+      "exports": {
+        "DCompositionAttachMouseDragToHwnd": 3,
+        "DCompositionAttachMouseWheelToHwnd": 3,
+        "DCompositionCreateSurfaceHandle": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "66a6c1b089f3c23951d7afd990fd39296834f13c025cc04ab6141b1c71980eb7",
+          "additional_exports": {},
+          "import_library": "dcomp.lib"
+        },
+        "x64": {
+          "image_sha256": "e14616683da13a69e578a3cd8214137f311c700a30c1695ce8a89b38f064e636",
+          "additional_exports": {},
+          "import_library": "dcomp.lib"
+        },
+        "arm64": {
+          "image_sha256": "a9230e8de67934393aa3ecaaa73a7b8b34b91497707b0790ac16fc1576cbf67b",
+          "additional_exports": {},
+          "import_library": "dcomp.lib"
         }
       }
     },
@@ -1687,6 +1765,28 @@
         "arm64": {
           "image_sha256": "bbb0dee29907fe44a83e3ad1ed9ea17792c5734a57e505469da26cf873ac509d",
           "additional_exports": {}
+        }
+      }
+    },
+    "MachineLearningOperatorRegistry": {
+      "module": "windows.ai.machinelearning.dll",
+      "headers": [
+        "MLOperatorAuthor"
+      ],
+      "c_headers": [],
+      "exports": {
+        "MLCreateOperatorRegistry": 1
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "b9a8b9197fe908429e1f06f4fae65a1e2f9d11811e710fc18d99cbd200bd429a",
+          "additional_exports": {},
+          "import_library": "windows.ai.machinelearning.lib"
+        },
+        "x64": {
+          "image_sha256": "8b003352d78268a56773b5ae0ec487501fbfcb4f6bfd241c63ed7cb1c670a739",
+          "additional_exports": {},
+          "import_library": "windows.ai.machinelearning.lib"
         }
       }
     },
@@ -3122,6 +3222,43 @@
           "additional_exports": {
             "HdvInitializeDeviceHostEx": 3
           }
+        }
+      }
+    },
+    "VolumeShadowCopyRuntime": {
+      "module": "vssapi.dll",
+      "headers": [
+        "vss",
+        "vswriter",
+        "vsbackup"
+      ],
+      "c_headers": [
+        "vss"
+      ],
+      "exports": {
+        "CreateVssBackupComponentsInternal": 1,
+        "CreateVssExamineWriterMetadataInternal": 2,
+        "CreateVssExpressWriterInternal": 1,
+        "GetProviderMgmtInterfaceInternal": 3,
+        "IsVolumeSnapshottedInternal": 3,
+        "ShouldBlockRevertInternal": 2,
+        "VssFreeSnapshotPropertiesInternal": 1
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "5f76cf53d899ece65916ef6a24bef6b0eaabf442ddfff3ffa42168b177fea7a7",
+          "additional_exports": {},
+          "import_library": "vssapi.lib"
+        },
+        "x64": {
+          "image_sha256": "8ef41d7a63c3e835d3c987368b1b8594284698b5b3e1db374ee0d828897c384f",
+          "additional_exports": {},
+          "import_library": "vssapi.lib"
+        },
+        "arm64": {
+          "image_sha256": "1f0d1da7f7004717716944119c22eb44dda17933d140192d1a0cd528bcf946a9",
+          "additional_exports": {},
+          "import_library": "vssapi.lib"
         }
       }
     },
