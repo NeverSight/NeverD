@@ -9349,6 +9349,9 @@ reversing the latches observable. On i386,
 `ReturnContract.I386TwoLatchesCanProveTheShiftOfJustDL` checks the
 disjoint byte results after zero, one and two trips with full-register seeds
 and with only DL initialized.
+`ReturnContract.X86WordLatchFeedsTheSelectedExitByte` writes DX on i386 and
+x86-64, then reads either DL or DH. Swapping the two seed bytes exchanges
+which exit can distinguish the two entry arms.
 `ReturnContract.MIPSTwoLatchesCarryTheValueSetBeforeTheCountChoice` sets the
 scratch register before either count arm. It executes DINS or the count update
 in a branch delay slot and the variable shift in the return delay slot.
