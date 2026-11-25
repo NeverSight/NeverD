@@ -1544,7 +1544,7 @@ static void collectFieldLoadDefs(const std::vector<HighStmt> &Body,
   for (const HighStmt &S : Body) {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
         (S.Dst->Kind == ExprKind::Var || S.Dst->Kind == ExprKind::Phi) &&
-        S.Val->Kind == ExprKind::Load)
+        S.Val->Kind == ExprKind::Load && !exprHasObservableEffect(S.Val.get()))
       Defs[varKey(S.Dst->Var)] = S.Val.get();
     collectFieldLoadDefs(S.Body, Defs);
     collectFieldLoadDefs(S.ElseBody, Defs);
@@ -2104,7 +2104,10 @@ static void collectOrDisjuncts(const HighExpr *E,
 
 static bool impliedCondMatch(const HighExpr *Conjunct, const HighExpr *Outer,
                              bool SameTempId, const FieldLoadDefs *FieldLoads) {
-  if (!Conjunct || !Outer)
+  // Equal expression nodes may be evaluated twice. Only a captured value
+  // can supply the same observation to both tests without replaying effects.
+  if (!Conjunct || !Outer || exprHasObservableEffect(Conjunct) ||
+      exprHasObservableEffect(Outer))
     return false;
   if (condStructEq(Conjunct, Outer, SameTempId))
     return true;
@@ -2253,7 +2256,7 @@ static ExprPtr composeWorkAssigns(const std::vector<HighStmt> &Body,
     const HighStmt &S = Body[N - 1];
     MedVar Dest;
     ExprPtr Val;
-    if (isValueAssign(S, Dest, Val) && !exprHasCall(Val.get())) {
+    if (isValueAssign(S, Dest, Val) && !exprHasObservableEffect(Val.get())) {
       if (exprUsesVar(Cond.get(), Dest))
         Cond = replaceVarInExpr(Cond, Dest, Val);
     } else if (S.Kind != StmtKind::Nop &&
