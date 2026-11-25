@@ -4723,6 +4723,10 @@ order of subtraction and bitwise joins. The compact reference keeps any
 observable overlap and live cross term. The 223-factor x86 fixture checks
 the CLI and worker output for both source views against its original product
 at Clang O0 and O2.
+With `--result-masks --width 1835009 --case 3`, 131,071 factors include masks
+on both sides of a scalar multiplication. The compact reference preserves
+partially selected fields and a low-weight factor. The 257-factor x86 fixture
+checks both source views against the original arithmetic at Clang O0 and O2.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping

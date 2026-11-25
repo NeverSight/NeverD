@@ -8,11 +8,12 @@ from collections import Counter
 
 def distributed_product(width, case, *, reference=False, counted=False,
                         joined_offsets=False, masked_offsets=False, field_masks=False,
-                        scaled_fields=False):
+                        scaled_fields=False, result_masks=False):
     """Return one input, its affine reference, or its counted evaluation form."""
-    if sum((joined_offsets, masked_offsets, field_masks, scaled_fields)) > 1:
+    if sum((joined_offsets, masked_offsets, field_masks, scaled_fields, result_masks)) > 1:
         raise ValueError("choose one bitwise offset family")
-    gated = field_masks or scaled_fields
+    scaled = scaled_fields or result_masks
+    gated = field_masks or scaled
     variant = case % 4
     bits = ((5, 7, 9, 11) if width <= 32 else (17, 37, 65, 97))[variant]
     if width < 2 * bits + 2:
@@ -36,6 +37,10 @@ def distributed_product(width, case, *, reference=False, counted=False,
         degree = ((179, 239, 313, 431) if width <= 32 else
                   (421, 557, 683, 809) if width <= 513 else
                   (79013, 85021, 91009, 100003))[variant]
+    if result_masks:
+        degree = ((197, 263, 353, 463) if width <= 32 else
+                  (487, 601, 743, 911) if width <= 513 else
+                  (105019, 111029, 121021, 131071))[variant]
     shift = bits + case % 2
     precision = shift + bits
     mask = (1 << precision) - 1
@@ -120,10 +125,21 @@ def distributed_product(width, case, *, reference=False, counted=False,
                 sign = 0
             live_overlap = gate not in (0, field_mask)
             lane_mask = (1 << (precision + 3 + row[0][0])) | (gate << shift) | 5
-            if scaled_fields:
+            if scaled:
                 multipliers = (3, -5, 6, (1 << (bits - 1)) + 5, -(1 << bits) + 9)
                 multiplier = multipliers[(row[0][0] + row[1][0]) % len(multipliers)]
                 sign *= multiplier
+            if result_masks:
+                # The second gate selects bits after multiplication. Carries can
+                # enter a hole in the input mask or leave an output-selected bit.
+                result_gate = 0 if row[1][0] % 5 == 0 else field_mask
+                if variant >= 2 and j == degree // 4:
+                    result_gate = (field_mask // 3) ^ (field_mask // 7)
+                if not gate or not result_gate:
+                    sign, live_overlap = 0, False
+                elif result_gate != field_mask:
+                    live_overlap = True
+                result_mask = (1 << (precision + 2 + row[1][0])) | (result_gate << shift) | 3
 
         if variant and j == degree // 2:
             field = fields[(j + case) % len(fields)]
@@ -145,8 +161,10 @@ def distributed_product(width, case, *, reference=False, counted=False,
                 delta = "+".join(terms)
                 if gated:
                     delta = f"{lane_mask}&({delta})"
-                    if scaled_fields:
+                    if scaled:
                         delta = f"({multiplier})*({delta})"
+                    if result_masks:
+                        delta = f"{result_mask}&({delta})"
                 factor = f"({offset}{op}({delta}))"
                 if live_overlap:
                     residuals.append(factor)
@@ -185,6 +203,8 @@ if __name__ == "__main__":
                         help="mask weighted sums before combining them with an offset")
     offsets.add_argument("--scaled-fields", action="store_true",
                         help="multiply masked weighted sums before combining them with an offset")
+    offsets.add_argument("--result-masks", action="store_true",
+                        help="mask weighted sums both before and after multiplication")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--reference", action="store_true",
                         help="emit the independently calculated reference expression")
@@ -194,6 +214,7 @@ if __name__ == "__main__":
     try:
         print(distributed_product(args.width, args.case, reference=args.reference, counted=args.counted,
                                   joined_offsets=args.joined_offsets, masked_offsets=args.masked_offsets,
-                                  field_masks=args.field_masks, scaled_fields=args.scaled_fields))
+                                  field_masks=args.field_masks, scaled_fields=args.scaled_fields,
+                                  result_masks=args.result_masks))
     except ValueError as error:
         parser.error(str(error))

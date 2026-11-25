@@ -11,11 +11,17 @@
 
 namespace neverd::symbolic::detail {
 
+// A stage selects bits with a literal mask, then multiplies by a literal.
+struct WeightedFieldStage {
+  SymRef Mask{};
+  SymRef Scale{};
+};
+
 struct WeightedFactor {
   SymRef Offset;
   llvm::ArrayRef<SymRef> Terms;
-  SymRef FieldMask{};
-  SymRef FieldScale{};
+  WeightedFieldStage Outer{};
+  WeightedFieldStage Inner{};
 };
 
 inline WeightedFactor readWeightedFactor(const SymContext &Ctx, SymRef F) {
@@ -35,19 +41,27 @@ inline WeightedFactor readWeightedFactor(const SymContext &Ctx, SymRef F) {
       return {};
     Sum = Ctx.operand(Sum, 0);
   }
-  // A mask on the weighted delta precedes its addition or bitwise join
-  // with the scalar offset. A scalar outside the mask multiplies the
-  // selected bits, including any carries through holes in the mask.
-  const auto Scale = Ctx.op(Sum) == SymOp::Mul && Ctx.numOperands(Sum) == 2 &&
-                             Ctx.isConst(Ctx.operand(Sum, 0))
-                         ? Ctx.operand(Sum, 0)
-                         : SymRef{};
-  const SymRef Delta = Scale ? Ctx.operand(Sum, 1) : Sum;
-  if (Ctx.op(Delta) == SymOp::And && Ctx.numOperands(Delta) == 2 &&
-      Ctx.isConst(Ctx.operand(Delta, 0)) &&
-      Ctx.op(Ctx.operand(Delta, 1)) == SymOp::Add)
-    return {Args.front(), Ctx.operands(Ctx.operand(Delta, 1)),
-            Ctx.operand(Delta, 0), Scale};
+  auto Delta = Sum;
+  const auto takeLiteral = [&](SymOp Wanted) -> SymRef {
+    if (Ctx.op(Delta) != Wanted || Ctx.numOperands(Delta) != 2 ||
+        !Ctx.isConst(Ctx.operand(Delta, 0)))
+      return {};
+    const auto Literal = Ctx.operand(Delta, 0);
+    Delta = Ctx.operand(Delta, 1);
+    return Literal;
+  };
+  const auto readStage = [&] {
+    const auto Scale = takeLiteral(SymOp::Mul);
+    return WeightedFieldStage{takeLiteral(SymOp::And), Scale};
+  };
+  const auto Outer = readStage();
+  if (Outer.Mask) {
+    // A multiplier inside the result mask can itself consume a masked sum.
+    const auto Inner =
+        Ctx.op(Delta) == SymOp::Mul ? readStage() : WeightedFieldStage{};
+    if (Ctx.op(Delta) == SymOp::Add)
+      return {Args.front(), Ctx.operands(Delta), Outer, Inner};
+  }
   if (Op == SymOp::Add)
     return {Args.front(), Args.drop_front()};
   if (Ctx.op(Sum) == SymOp::Add)

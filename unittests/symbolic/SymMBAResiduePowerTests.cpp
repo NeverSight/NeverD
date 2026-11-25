@@ -1053,16 +1053,28 @@ TEST(SymMBAResiduePowers, BitwiseOffsetsPreserveLiveOverlapAndLowerCarries) {
   }
 }
 
-void checkMaskedWeightedDeltas(bool Scaled) {
+void checkMaskedWeightedDeltas(bool Scaled, bool MaskResult = false) {
   for (unsigned Bits : {4u, 65u}) {
     const unsigned Shift = Bits + 1, Width = 3 * Bits + 7;
     const auto Full = llvm::APInt::getLowBitsSet(Width, Bits).shl(Shift);
     const auto Outside = llvm::APInt::getOneBitSet(Width, Width - 2);
     const auto Scale = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
     auto mask = [&](unsigned I) {
+      if (MaskResult && I % 8 == 2)
+        return llvm::APInt::getAllOnes(Width);
       if (I >= 10 && I < 15)
         return Outside | llvm::APInt::getOneBitSet(Width, Shift + Bits / 2);
       return (I % 5 ? Full | Outside : Outside) | 3;
+    };
+    auto resultMask = [&](unsigned I) {
+      if (I >= 9 && I <= 16)
+        return (Full ^ llvm::APInt::getOneBitSet(Width, Shift + Bits / 2)) |
+               Outside;
+      return (I % 7 ? Full | Outside : Outside) | 5;
+    };
+    auto resultScale = [&](unsigned I) {
+      return I % 6 == 0 ? llvm::APInt::getOneBitSet(Width, Bits - 1) + 5
+                        : llvm::APInt(Width, I % 9 == 0 ? -3 : 1, true);
     };
     auto fieldScale = [&](unsigned I) {
       if (!Scaled)
@@ -1087,6 +1099,9 @@ void checkMaskedWeightedDeltas(bool Scaled) {
           C.mkAdd(C.mkMul(C.mkConst(A), SX), C.mkMul(C.mkConst(B), ZY));
       auto D = C.mkAnd(C.mkConst(mask(I)), Sum);
       D = C.mkMul(Scaled && I == 43 ? X : C.mkConst(fieldScale(I)), D);
+      if (MaskResult)
+        D = C.mkMul(C.mkConst(resultScale(I)),
+                    C.mkAnd(C.mkConst(resultMask(I)), D));
       const auto K = C.mkConst(offset(I));
       switch (I % 5) {
       case 0:
@@ -1133,6 +1148,8 @@ void checkMaskedWeightedDeltas(bool Scaled) {
         auto D = mask(J) & ((L * (1 + 2 * (J % 4))).shl(J == 29 ? 1 : Shift) -
                             (R * (3 + 2 * (J % 3))).shl(Shift));
         D *= Scaled && J == 43 ? Values[0] : fieldScale(J);
+        if (MaskResult)
+          D = resultScale(J) * (D & resultMask(J));
         const auto K = offset(J);
         switch (J % 5) {
         case 0:
@@ -1163,6 +1180,10 @@ TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
 
 TEST(SymMBAResiduePowers, ScaledMaskedDeltasKeepCarriesAndVariableMultipliers) {
   checkMaskedWeightedDeltas(true);
+}
+
+TEST(SymMBAResiduePowers, MasksBeforeAndAfterScalingKeepTheirCarryOrder) {
+  checkMaskedWeightedDeltas(true, true);
 }
 
 } // namespace

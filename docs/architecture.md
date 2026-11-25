@@ -8428,7 +8428,10 @@ the observed precision. A mixed mask retains its original operation on
 the overlapping field. A mask on the weighted sum itself is projected
 independently of the offset. This covers `C + (M & D)`, `C - (M & D)`
 and the three bitwise joins. A literal scale on a masked sum is projected after
-the mask. Equal projected fields accumulate their signed coefficients modulo
+the mask. A second mask can select the scaled result before it joins the
+offset. When a mask selects only part of the live field, reconstruction keeps
+its position relative to multiplication so that carries reach the correct bits.
+Equal projected fields accumulate their signed coefficients modulo
 the observed precision, including multiplicity. A mixed inner mask keeps its holes, and addition
 or subtraction takes place at the surviving field width so carries and borrows
 remain observable. A weight below the required shift keeps the entire factor,
@@ -8440,6 +8443,9 @@ evaluator accumulates that sum at the required precision using the original
 input slots. A shared use that observes more bits increases this precision.
 For a product whose coefficient leaves at most one live machine word, the
 evaluator rewrites just that bit slice of its scratch result on each assignment.
+The synthesis oracle binds each variable to a grid column once. A native-word
+evaluation plan reads those columns directly. A plan with wider intermediates
+reads the arbitrary-width values from the same grid.
 For enumerated candidates, a bounded hash spans the measurement grid. A
 matching hash still requires equality of the complete measurement vectors
 before a candidate reaches independent validation.

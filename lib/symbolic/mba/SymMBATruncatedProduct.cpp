@@ -1360,19 +1360,25 @@ size_t equalFactorRun(llvm::ArrayRef<SymRef> Remaining, WorkBudget &Budget) {
 
 // A uniform field changes a factor by exactly 0, D or -D in the observed
 // ring. A mixed field keeps the original bit operation on the live bits.
-std::optional<int> uniformJoinSlope(SymOp Op, const llvm::APInt &Literal,
-                                    unsigned Zeros,
-                                    llvm::ArrayRef<uint64_t> FieldMask) {
+std::optional<int> uniformJoinSlope(const SymContext &Ctx, SymOp Op,
+                                    const llvm::APInt &Literal, unsigned Zeros,
+                                    SymRef OuterMask, SymRef InnerMask) {
   const unsigned Live = Literal.getBitWidth() - Zeros;
   if (!Live)
     return 0;
-  if (!FieldMask.empty()) {
-    const llvm::APInt Mask(Literal.getBitWidth(), FieldMask);
+  bool Partial = false;
+  for (const auto Ref : {OuterMask, InnerMask}) {
+    if (!Ref)
+      continue;
+    const llvm::APInt Mask(
+        Literal.getBitWidth(),
+        Ctx.constWords(Ref).take_front(Literal.getNumWords()));
     if (Mask.getActiveBits() <= Zeros)
       return 0;
-    if (Mask.countl_one() < Live)
-      return std::nullopt;
+    Partial |= Mask.countl_one() < Live;
   }
+  if (Partial)
+    return std::nullopt;
   if (Op == SymOp::Add)
     return 1;
   if (Literal.getActiveBits() <= Zeros)
@@ -1401,17 +1407,21 @@ SymRef joinedHighField(SymContext &Ctx, SymRef F, const llvm::APInt &Literal,
   }
   const auto High = Ctx.mkConst(Literal.extractBits(Bits, Shift));
   auto Sum = Ctx.mkAdd(Weighted);
-  if (Factor.FieldMask) {
-    const llvm::APInt Mask(
-        Literal.getBitWidth(),
-        Ctx.constWords(Factor.FieldMask).take_front(Literal.getNumWords()));
-    Sum = Ctx.mkAnd(Ctx.mkConst(Mask.extractBits(Bits, Shift)), Sum);
-  }
-  if (Factor.FieldScale) {
-    const auto K =
-        llvm::APInt(Bits, Ctx.constWords(Factor.FieldScale)
+  // A multiply can carry through a hole. Replay both masks in their original
+  // order at the projected width whenever either live mask is nonuniform.
+  for (const auto Stage : {Factor.Inner, Factor.Outer}) {
+    if (Stage.Mask) {
+      const llvm::APInt Mask(
+          Literal.getBitWidth(),
+          Ctx.constWords(Stage.Mask).take_front(Literal.getNumWords()));
+      Sum = Ctx.mkAnd(Ctx.mkConst(Mask.extractBits(Bits, Shift)), Sum);
+    }
+    if (Stage.Scale) {
+      const llvm::APInt K(Bits,
+                          Ctx.constWords(Stage.Scale)
                               .take_front(llvm::APInt::getNumWords(Bits)));
-    Sum = Ctx.mkMul(Ctx.mkConst(K), Sum);
+      Sum = Ctx.mkMul(Ctx.mkConst(K), Sum);
+    }
   }
   if (Ctx.op(F) == SymOp::Add)
     return Ctx.mkAdd(High, Sum);
@@ -1536,8 +1546,7 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     if (!Copies)
       return Root;
     I += Copies;
-    const auto [Offset, Terms, FieldMask, FieldScale] =
-        readWeightedFactor(Ctx, F);
+    const auto [Offset, Terms, Outer, Inner] = readWeightedFactor(Ctx, F);
     if (!Offset) {
       if (LongRuns && !Budget.consume(Copies))
         return Root;
@@ -1567,18 +1576,18 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     }
     int Direction = 1;
     const auto Op = Ctx.op(F);
-    if (Op != SymOp::Add || FieldMask) {
-      if (!Budget.consume(FieldMask ? 2 * Words : Words))
+    if (Op != SymOp::Add || Outer.Mask) {
+      if (!Budget.consume((1 + bool(Outer.Mask) + bool(Inner.Mask)) * Words))
         return Root;
       const llvm::APInt Literal(Precision,
                                 Ctx.constWords(Offset).take_front(Words));
-      const auto Mask = FieldMask ? Ctx.constWords(FieldMask).take_front(Words)
-                                  : llvm::ArrayRef<uint64_t>{};
-      if (const auto Slope = uniformJoinSlope(Op, Literal, Zeros, Mask)) {
+      if (const auto Slope = uniformJoinSlope(Ctx, Op, Literal, Zeros,
+                                              Outer.Mask, Inner.Mask)) {
         Direction = *Slope;
       } else {
-        const size_t Nodes = Terms.size() + 2 + bool(FieldMask) +
-                             (Op == SymOp::And) + bool(FieldScale);
+        const size_t Nodes = Terms.size() + 2 + (Op == SymOp::And) +
+                             bool(Outer.Mask) + bool(Outer.Scale) +
+                             bool(Inner.Mask) + bool(Inner.Scale);
         const size_t NodeBytes = 4 * (sizeof(SymNode) + 4 * sizeof(SymRef) +
                                       Words * sizeof(uint64_t));
         if (Bytes > Storage || Nodes > (Storage - Bytes) / NodeBytes ||
@@ -1589,24 +1598,34 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
         continue;
       }
     }
-    // Each weight already contains 2^Shift. Only the low Bits of the
-    // outside multiplier times the copy count can affect its contribution.
+    // When each live mask passes the field, both literal multipliers can
+    // join the copy count. Each weight already contains 2^Shift.
     uint64_t WordCopies = Copies;
     std::optional<llvm::APInt> WideCopies;
-    if (FieldScale && Direction) {
-      if (Ctx.isConstOnes(FieldScale)) {
+    for (const auto Scale : {Outer.Scale, Inner.Scale}) {
+      if (!Scale || !Direction)
+        continue;
+      if (Ctx.isConstOnes(Scale)) {
         Direction = -Direction;
       } else if (Bits <= 64) {
         if (!Budget.consume(1))
           return Root;
-        WordCopies *= Ctx.constWords(FieldScale).front();
+        WordCopies *= Ctx.constWords(Scale).front();
       } else {
-        if (!Budget.consume(llvm::SaturatingMultiplyAdd(
-                Terms.size(), llvm::SaturatingMultiply(Words, Words), Words)))
-          return Root;
-        WideCopies.emplace(Precision,
-                           Ctx.constWords(FieldScale).take_front(Words));
-        *WideCopies *= Copies;
+        const size_t ProductWork = llvm::SaturatingMultiply(Words, Words);
+        if (WideCopies) {
+          if (!Budget.consume(ProductWork))
+            return Root;
+          *WideCopies *=
+              llvm::APInt(Precision, Ctx.constWords(Scale).take_front(Words));
+        } else {
+          if (!Budget.consume(llvm::SaturatingMultiplyAdd(Terms.size(),
+                                                          ProductWork, Words)))
+            return Root;
+          WideCopies.emplace(Precision,
+                             Ctx.constWords(Scale).take_front(Words));
+          *WideCopies *= Copies;
+        }
       }
     }
     unsigned Multiplicity = Copies;
