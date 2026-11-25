@@ -159,8 +159,10 @@ VSX, prefixed instructions in ordinary function bodies, conditional calls,
 conditional jumps through CTR and system instructions have no qualified
 semantic path. The ELFv2 loader recognizes a PC-relative prefixed load or
 address calculation in a linker stub when its final CTR transfer and
-destination match. Word multiplies with an undefined high half on PPC64
-also fail strict lifting.
+destination match. On PPC64, `mullw` and `mullw.` write the full signed 64-bit product of the
+two low 32-bit operands. The record form compares that full result for CR0.
+The overflow-enabled forms and the word high-product instructions
+(`mulhw` and `mulhwu`) remain outside the PPC64 profile.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
 ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a

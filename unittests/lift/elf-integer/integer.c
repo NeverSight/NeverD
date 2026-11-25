@@ -36,6 +36,15 @@ word population_counts(word a, word b) {
   return by_word + by_byte + total;
 }
 
+word recorded_word_product(word a, word b) {
+  word product, cr;
+  __asm__("mullw. %0, %2, %3; mfcr %1"
+          : "=r"(product), "=r"(cr)
+          : "r"(a), "r"(b)
+          : "cr0");
+  return product ^ ((unsigned)cr >> 29);
+}
+
 word independent_divides(word a, word b) {
   word first, second;
   __asm__ volatile("divw %0, %1, %2" : "=r"(first) : "r"(a), "r"(b));

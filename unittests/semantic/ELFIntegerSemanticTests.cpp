@@ -28,7 +28,7 @@
 
 using namespace neverd;
 namespace {
-#include "PowerPCPopulationFixture.inc"
+#include "PowerPCArithmeticFixture.inc"
 
 class ELFIntegerSemantic : public ::testing::TestWithParam<Arch> {};
 
@@ -105,6 +105,7 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
                                0x7cc538f9, 0x4d8a8842,   // nor. / crnor
                                0x7cc53a79, 0x4d8a8982,   // xor. / crxor
                                0x7cc53a39, 0x4d8a8a42}); // eqv. / creqv
+    Words.insert(Words.end(), {MultiplyWord, MultiplyWordRecord});
     if (Wide)
       for (auto Form : PopulationForms)
         Words.push_back(Form.Word);
