@@ -614,6 +614,43 @@ TEST(ARMSEHFinallyRegisters, AThumbLeafHandlerIsAFunctionAndReadsTheFrame) {
   EXPECT_EQ(R4->second.Offset, -0xc);
 }
 
+/// The same parent with its scope an `__except` whose filter, a frameless
+/// Thumb leaf no unwind record covers either, decides to handle everything:
+/// `movs r0,#1; bx lr`.  Its arm is the code after the protected range.
+BinaryImage makeThumbFilterImage() {
+  BinaryImage Img = makeThumbImage();
+  const uint16_t FilterCode[] = {0x2001, 0x4770};
+  std::memcpy(Img.Segments.front().Data.data() + (ThumbFunclet - ThumbEntry),
+              FilterCode, sizeof(FilterCode));
+  SEHScopeRecord &Scope =
+      Img.ExceptionMetadata.Functions.front().SEH->Scopes.front();
+  Scope.Kind = SEHScopeKind::Filter;
+  Scope.HandlerVA = ThumbEntry + 0x0c;
+  Scope.ContinuationVA = ThumbEntry + 0x0c;
+  Img.ExceptionMetadata.rebuildIndex();
+  return Img;
+}
+
+TEST(ARMSEHFilterValue, AThumbLeafFilterIsAFunctionAndFolds) {
+  const BinaryImage Img = makeThumbFilterImage();
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::ARM, InstructionMode::Thumb));
+  // Only the scope table names the filter, and the unit holds it, so its
+  // value is the `__except` expression rather than a call of a function the
+  // unit never defines.
+  const auto Functions = FuncDetector().detect(Img, Dec);
+  EXPECT_TRUE(llvm::any_of(
+      Functions, [](const auto &F) { return F.first == ThumbFunclet; }));
+  const std::string Source = decompileHighC(Img);
+  const std::string P = parentText(Source, "sub_401000(");
+  EXPECT_NE(P.find("} __except (EXCEPTION_EXECUTE_HANDLER) {"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(P.find("sub_401040("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("int32_t sub_401040(void) {"), std::string::npos)
+      << Source;
+}
+
 /// bar1 at /O0 with its scope an `__except` whose filter callback reads the
 /// Counter the parent homed, through the frame in x1:
 /// `ldr x8,[x1,#0x18]; ldr w0,[x8]; ret`.  Its arm is the code after the call.

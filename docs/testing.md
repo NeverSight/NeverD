@@ -22017,8 +22017,13 @@ codes give, prints a frame the parent cannot name that a handler forwards to a
 call as an unknown argument, keeps the comment for the unpublished registers, and
 `ARangeRunningPastTheEpilogueStillStructures` structures a `__try` whose range
 runs past the epilogue a branch around it skips to. `ARMSEHFilterValue.*`
-publishes the frame pointer for a filter callback and prints the callback that
-reads the homed Counter through x1 as its `__except` expression.
+publishes the frame pointer for a filter callback, prints the callback that
+reads the homed Counter through x1 as its `__except` expression, and takes a
+frameless Thumb filter only the scope table names as a function whose value
+becomes the `__except` expression.
+`COFFExceptionIR.HighCSEHFilterCallTakesWhatItsDefinitionTakes` calls a filter
+that does not fold with no argument when its definition takes none, and with
+the exception pointers converted to the word its definition reads.
 `WindowsEHModesCorpus.LocalUnwindReturnRunsTheFinallyOnceInTheClause` checks
 xcpt4's `eret` the same way on the original x64 FH4 binary: one increment in
 the `__except` arm, one in the filled clause and one in the normal-path copy,

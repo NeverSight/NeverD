@@ -21276,12 +21276,19 @@ another `__try` is filled in place. A local-unwind exit that leaves such a
 `__try` runs the handler as its clause, as on x64: where the clause can run it
 for every such exit, the exits' explicit calls of it go and their jumps stay
 jumps. A handler that reads a register without a published value keeps its
-address comment. MSVC ARM leaf handlers
-have no unwind record of their own, so `FuncDetector` also takes each scope's
-out-of-line termination handler as a function entry unless it lies inside
-another record's range. Filters stay as they were: the `__except` expression
-calls one with the exception pointers, which a definition that never reads
-them would not take.
+address comment. MSVC ARM and AArch64 leaf
+callbacks have no unwind record of their own, so `FuncDetector` also takes each
+scope's out-of-line termination handler or filter as a function entry unless
+it lies inside another record's range. The unit then holds the filter, so its
+body can fold into its `__except` expression; one that does not fold is called
+with the arguments its definition takes, as the LLVM C writer calls it: none,
+or the exception pointers converted to its parameter. The C keeps no frame
+where the machine's establisher frame points, so a filter that also reads the
+frame is passed the unknown value the writer gives a missing argument; before,
+such a call passed too few arguments. In each MSVC ARM copy of the EH corpus
+238 more of its 500 filters fold, and the 296 calls of a filter the unit never
+defined now call one it does; x64 and AArch64 had 346 calls of a filter that
+reads the frame with one argument.
 
 Ordinary internal returns preserve both the callee PC and the parent entry PC. The same reaching-write proof checks both coordinates; writes into known allocated parent storage remain allowed.
 

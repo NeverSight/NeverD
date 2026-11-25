@@ -723,6 +723,67 @@ TEST(COFFExceptionIR, HighCSEHFilterRendersNamedFilterCall) {
   EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
 }
 
+TEST(COFFExceptionIR, HighCSEHFilterCallTakesWhatItsDefinitionTakes) {
+  // A filter the unit defines is called with what its definition takes, as
+  // the dispatcher passes more than a filter reads: one that reads nothing
+  // with no argument, one that reads the exception pointers as a word with
+  // them converted to it.
+  for (const bool TakesPointers : {false, true}) {
+    SCOPED_TRACE(TakesPointers);
+    HighFunc Parent;
+    Parent.Name = "seh_filter_fn";
+    Parent.Entry = 0x140001000;
+    Parent.ReturnType = NdType::makeVoid();
+    HighStmt Try;
+    Try.Kind = StmtKind::SEHTry;
+    Try.EHIsReducible = true;
+    Try.EHRange = {0x140001000, 0x140001020};
+    HighStmt BodyRet;
+    BodyRet.Kind = StmtKind::Return;
+    Try.Body.push_back(BodyRet);
+    HighEHClause Except;
+    Except.Kind = HighEHClauseKind::SEHExcept;
+    Except.FilterOrActionVA = 0x140001100;
+    Except.HandlerVA = 0x140001200;
+    Try.EHClauses.push_back(Except);
+    Try.EHClauseBodies.emplace_back();
+    Parent.Body.push_back(std::move(Try));
+
+    HighFunc Filter;
+    Filter.Name = "sub_140001100";
+    Filter.Entry = 0x140001100;
+    Filter.ReturnType = NdType::makeInt(4, true);
+    HighStmt Decide;
+    Decide.Kind = StmtKind::Return;
+    Decide.RetVal = HighExpr::makeConst(1, 4);
+    if (TakesPointers) {
+      HighParam Pointers;
+      Pointers.Name = "arg0";
+      Pointers.Type = NdType::makeInt(8, true);
+      Filter.Params.push_back(std::move(Pointers));
+      MedVar Read;
+      Read.Kind = MedVar::Param;
+      Read.Id = 0;
+      Read.Size = 8;
+      Read.TheArch = Arch::X64;
+      Decide.RetVal = HighExpr::makeVar(Read, NdType::makeInt(8, true));
+    }
+    Filter.Body.push_back(std::move(Decide));
+
+    const std::string Source = emitHighC({Parent, Filter});
+    const size_t At = Source.find("} __except (sub_140001100(");
+    ASSERT_NE(At, std::string::npos) << Source;
+    const std::string Call = Source.substr(At, Source.find(") {", At) - At);
+    if (TakesPointers) {
+      EXPECT_NE(Call.find("GetExceptionInformation()"), std::string::npos)
+          << Source;
+      EXPECT_NE(Call.find("(int64_t)"), std::string::npos) << Source;
+    } else {
+      EXPECT_EQ(Call, "} __except (sub_140001100()") << Source;
+    }
+  }
+}
+
 TEST(COFFExceptionIR, HighCStandaloneSEHIncludesItsPlatformDeclarations) {
   REQUIRE_HOST_FIXTURE_COMPILER();
   for (bool NamedFilter : {false, true}) {

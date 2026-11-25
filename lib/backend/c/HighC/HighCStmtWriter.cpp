@@ -1873,7 +1873,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       } else if (Clause.FilterValue) {
         OS << sehFilterValueText(*Clause.FilterValue);
       } else {
-        OS << sehFilterName(Clause) << "(GetExceptionInformation())";
+        OS << sehFilterCallText(Clause);
       }
       OS << ") {\n";
       // GetExceptionCode() is only valid in the __except arm; the handler

@@ -61,6 +61,30 @@ std::string HighCWriter::sehFilterName(const HighEHClause &Clause) {
       (kAutoFuncPrefix + llvm::utohexstr(Clause.FilterOrActionVA)).str());
 }
 
+std::string HighCWriter::sehFilterCallText(const HighEHClause &Clause) {
+  const std::string Name = sehFilterName(Clause);
+  const auto Found = DefinedFunctionsByAddress.find(Clause.FilterOrActionVA);
+  if (Found == DefinedFunctionsByAddress.end() || !Found->second)
+    return Name + "(GetExceptionInformation())";
+  // The dispatcher passes a filter the exception pointers and the
+  // establisher frame. A filter of the unit takes what it reads of them, and
+  // its call passes what its definition takes, as the LLVM C writer's does:
+  // none, or the pointers, converted as any argument of that parameter is.
+  // The C keeps no frame where the machine's establisher frame points, so a
+  // filter that also reads the frame gets the unknown value the writer gives
+  // an argument a call does not pass.
+  std::vector<ExprPtr> Arguments;
+  if (emittedParamCount(*Found->second) != 0) {
+    ExprPtr Pointers = HighExpr::makeCall("GetExceptionInformation", 0, {});
+    Pointers->Type = NdType::makePtr();
+    Arguments.push_back(std::move(Pointers));
+  }
+  ExprPtr Call =
+      HighExpr::makeCall(Name, Clause.FilterOrActionVA, std::move(Arguments));
+  Call->Type = Found->second->ReturnType;
+  return exprStr(*Call);
+}
+
 void HighCWriter::writeSEHScopeAnnotation(const HighFunc &Func, int Indent) {
   if (!Func.ExceptionMetadata || !Func.ExceptionMetadata->SEH)
     return;
