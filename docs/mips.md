@@ -187,8 +187,9 @@ paths, then `python3 scripts/check_mips_elf_relink.py execute --root products`
 on Linux with QEMU user-mode and pyelftools. The n32 and n64 microMIPS
 cases use the pinned NeverSight Unicorn fork. Set `LIBUNICORN_PATH` to its
 MIPS-enabled shared-library build and `PYTHONPATH` to
-`third_party/unicorn/bindings/python`. Execution starts at the ELF entry and
-checks the ABI exit syscall and its result. The manual **MIPS ELF relink**
+`third_party/unicorn/bindings/python`. The runner applies the ELF load
+segments' memory permissions, starts at the entry point, and checks the ABI
+exit syscall and its result. The manual **MIPS ELF relink**
 workflow builds the programs on Linux, macOS and Windows and runs all three
 sets on Linux.
 

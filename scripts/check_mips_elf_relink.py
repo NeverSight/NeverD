@@ -333,6 +333,10 @@ def execute(args):
                 or (profile.shrinking and not (section["size"] < old["size"] and inplace["size"] < old["size"]))):
             raise ValueError(f"{profile.name}: incorrect function placement {ranges}")
         results[profile.name], placements[profile.name] = row, ranges
+        if profile.name == "micromips-r2-n64-be":
+            from mips_elf_runtime import check_non_executable_entry
+            check_non_executable_entry(root / profile.name / "section.elf",
+                                       profile.release, profile.exit_nr, updated)
     encode(root / "execution.json", results)
     encode(root / "placements.json", placements)
     print(f"Executed {3 * len(results)} complete ELF files across {len(results)} profiles")
