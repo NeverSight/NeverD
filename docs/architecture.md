@@ -8404,7 +8404,9 @@ uses that same circular field for every offset at the coordinate. A signed
 extension or concatenation keeps its upper bits when a weight observes them.
 For a scaled product that reads only the low lane of an extension or
 concatenation, the evaluation plan can read that lane directly. A shared
-use that observes more bits keeps the wider value. A fixed shift or rotation
+use that observes more bits keeps the wider value. A binary product whose observed prefix costs fewer limb
+operations can multiply at that precision. The evaluator takes the widest
+demand across all uses before shortening either operand. A fixed shift or rotation
 can supply a low word from its source when every observed bit precedes the
 first padding or wrapped bit.
 Repeated long factor calls share a parse result after their complete spelling
@@ -8421,7 +8423,9 @@ the product, a uniform mask yields exactly `C`, `C + D` or `C - D` in
 the observed precision. A mixed mask retains its original operation on
 the overlapping field. A mask on the weighted sum itself is projected
 independently of the offset. This covers `C + (M & D)`, `C - (M & D)`
-and the three bitwise joins. A mixed inner mask keeps its holes, and addition
+and the three bitwise joins. A literal scale on a masked sum is projected after
+the mask. Equal projected fields accumulate their signed coefficients modulo
+the observed precision, including multiplicity. A mixed inner mask keeps its holes, and addition
 or subtraction takes place at the surviving field width so carries and borrows
 remain observable. A weight below the required shift keeps the entire factor,
 including its cross terms.

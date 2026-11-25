@@ -1407,8 +1407,14 @@ SymRef joinedHighField(SymContext &Ctx, SymRef F, const llvm::APInt &Literal,
         Ctx.constWords(Factor.FieldMask).take_front(Literal.getNumWords()));
     Sum = Ctx.mkAnd(Ctx.mkConst(Mask.extractBits(Bits, Shift)), Sum);
   }
+  if (Factor.FieldScale) {
+    const auto K =
+        llvm::APInt(Bits, Ctx.constWords(Factor.FieldScale)
+                              .take_front(llvm::APInt::getNumWords(Bits)));
+    Sum = Ctx.mkMul(Ctx.mkConst(K), Sum);
+  }
   if (Ctx.op(F) == SymOp::Add)
-    return Factor.SubtractField ? Ctx.mkSub(High, Sum) : Ctx.mkAdd(High, Sum);
+    return Ctx.mkAdd(High, Sum);
   if (Ctx.op(F) == SymOp::And)
     return Ctx.mkAnd(High, Ctx.mkNot(Sum));
   return Ctx.op(F) == SymOp::Or ? Ctx.mkOr(High, Sum) : Ctx.mkXor(High, Sum);
@@ -1530,7 +1536,7 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     if (!Copies)
       return Root;
     I += Copies;
-    const auto [Offset, Terms, FieldMask, SubtractField] =
+    const auto [Offset, Terms, FieldMask, FieldScale] =
         readWeightedFactor(Ctx, F);
     if (!Offset) {
       if (LongRuns && !Budget.consume(Copies))
@@ -1569,10 +1575,10 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       const auto Mask = FieldMask ? Ctx.constWords(FieldMask).take_front(Words)
                                   : llvm::ArrayRef<uint64_t>{};
       if (const auto Slope = uniformJoinSlope(Op, Literal, Zeros, Mask)) {
-        Direction = SubtractField ? -*Slope : *Slope;
+        Direction = *Slope;
       } else {
         const size_t Nodes = Terms.size() + 2 + bool(FieldMask) +
-                             (Op == SymOp::And || SubtractField);
+                             (Op == SymOp::And) + bool(FieldScale);
         const size_t NodeBytes = 4 * (sizeof(SymNode) + 4 * sizeof(SymRef) +
                                       Words * sizeof(uint64_t));
         if (Bytes > Storage || Nodes > (Storage - Bytes) / NodeBytes ||
@@ -1581,6 +1587,26 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
         Storage -= Bytes + Nodes * NodeBytes;
         Overlaps.emplace_back(F, Copies);
         continue;
+      }
+    }
+    // Each weight already contains 2^Shift. Only the low Bits of the
+    // outside multiplier times the copy count can affect its contribution.
+    uint64_t WordCopies = Copies;
+    std::optional<llvm::APInt> WideCopies;
+    if (FieldScale && Direction) {
+      if (Ctx.isConstOnes(FieldScale)) {
+        Direction = -Direction;
+      } else if (Bits <= 64) {
+        if (!Budget.consume(1))
+          return Root;
+        WordCopies *= Ctx.constWords(FieldScale).front();
+      } else {
+        if (!Budget.consume(llvm::SaturatingMultiplyAdd(
+                Terms.size(), llvm::SaturatingMultiply(Words, Words), Words)))
+          return Root;
+        WideCopies.emplace(Precision,
+                           Ctx.constWords(FieldScale).take_front(Words));
+        *WideCopies *= Copies;
       }
     }
     unsigned Multiplicity = Copies;
@@ -1612,8 +1638,14 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
           return Root;
         llvm::APInt::tcNegate(Sum, Words);
       }
-      llvm::APInt::tcMultiplyPart(Sum, Ctx.constWords(K).data(), Copies, 0,
-                                  Words, Words, true);
+      if (WideCopies) {
+        llvm::APInt Weight(Precision, Ctx.constWords(K).take_front(Words));
+        Weight *= *WideCopies;
+        llvm::APInt::tcAdd(Sum, Weight.getRawData(), 0, Words);
+      } else {
+        llvm::APInt::tcMultiplyPart(Sum, Ctx.constWords(K).data(), WordCopies,
+                                    0, Words, Words, true);
+      }
       if (Direction < 0)
         llvm::APInt::tcNegate(Sum, Words);
     }

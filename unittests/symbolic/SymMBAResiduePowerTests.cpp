@@ -1053,7 +1053,7 @@ TEST(SymMBAResiduePowers, BitwiseOffsetsPreserveLiveOverlapAndLowerCarries) {
   }
 }
 
-TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
+void checkMaskedWeightedDeltas(bool Scaled) {
   for (unsigned Bits : {4u, 65u}) {
     const unsigned Shift = Bits + 1, Width = 3 * Bits + 7;
     const auto Full = llvm::APInt::getLowBitsSet(Width, Bits).shl(Shift);
@@ -1063,6 +1063,13 @@ TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
       if (I >= 10 && I < 15)
         return Outside | llvm::APInt::getOneBitSet(Width, Shift + Bits / 2);
       return (I % 5 ? Full | Outside : Outside) | 3;
+    };
+    auto fieldScale = [&](unsigned I) {
+      if (!Scaled)
+        return llvm::APInt(Width, I == 38 ? 3 : 1);
+      if (I % 4 == 0)
+        return llvm::APInt::getOneBitSet(Width, Bits - 1) + 3;
+      return llvm::APInt(Width, I % 4 == 1 ? -5 : I % 4 == 2 ? 6 : 9, true);
     };
     auto offset = [&](unsigned I) {
       return (I % 3 ? Full : Outside) + (I == 23 ? 6 : 1 + 2 * (I % 7));
@@ -1079,8 +1086,7 @@ TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
       const auto Sum =
           C.mkAdd(C.mkMul(C.mkConst(A), SX), C.mkMul(C.mkConst(B), ZY));
       auto D = C.mkAnd(C.mkConst(mask(I)), Sum);
-      if (I == 38)
-        D = C.mkMul(C.mkConst(Width, 3), D);
+      D = C.mkMul(Scaled && I == 43 ? X : C.mkConst(fieldScale(I)), D);
       const auto K = C.mkConst(offset(I));
       switch (I % 5) {
       case 0:
@@ -1126,8 +1132,7 @@ TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
       for (unsigned J = 0; J < 97; ++J) {
         auto D = mask(J) & ((L * (1 + 2 * (J % 4))).shl(J == 29 ? 1 : Shift) -
                             (R * (3 + 2 * (J % 3))).shl(Shift));
-        if (J == 38)
-          D *= 3;
+        D *= Scaled && J == 43 ? Values[0] : fieldScale(J);
         const auto K = offset(J);
         switch (J % 5) {
         case 0:
@@ -1150,6 +1155,14 @@ TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
       EXPECT_EQ(Plan.eval(Values), Want) << Bits << " bits, trial " << I;
     }
   }
+}
+
+TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
+  checkMaskedWeightedDeltas(false);
+}
+
+TEST(SymMBAResiduePowers, ScaledMaskedDeltasKeepCarriesAndVariableMultipliers) {
+  checkMaskedWeightedDeltas(true);
 }
 
 } // namespace

@@ -7,10 +7,12 @@ from collections import Counter
 
 
 def distributed_product(width, case, *, reference=False, counted=False,
-                        joined_offsets=False, masked_offsets=False, field_masks=False):
+                        joined_offsets=False, masked_offsets=False, field_masks=False,
+                        scaled_fields=False):
     """Return one input, its affine reference, or its counted evaluation form."""
-    if sum((joined_offsets, masked_offsets, field_masks)) > 1:
+    if sum((joined_offsets, masked_offsets, field_masks, scaled_fields)) > 1:
         raise ValueError("choose one bitwise offset family")
+    gated = field_masks or scaled_fields
     variant = case % 4
     bits = ((5, 7, 9, 11) if width <= 32 else (17, 37, 65, 97))[variant]
     if width < 2 * bits + 2:
@@ -30,6 +32,10 @@ def distributed_product(width, case, *, reference=False, counted=False,
         degree = ((163, 211, 283, 373) if width <= 32 else
                   (379, 503, 613, 733) if width <= 513 else
                   (49157, 53003, 61001, 70001))[variant]
+    if scaled_fields:
+        degree = ((179, 239, 313, 431) if width <= 32 else
+                  (421, 557, 683, 809) if width <= 513 else
+                  (79013, 85021, 91009, 100003))[variant]
     shift = bits + case % 2
     precision = shift + bits
     mask = (1 << precision) - 1
@@ -51,7 +57,7 @@ def distributed_product(width, case, *, reference=False, counted=False,
     pool = []
     for j in range((31, 47, 67, 89)[variant]):
         offset = rng.choice((-9, -5, -1, 1, 3, 7, 11))
-        if joined_offsets or masked_offsets or field_masks:
+        if joined_offsets or masked_offsets or gated:
             offset = abs(offset)
             if j % 3 == 0:
                 offset |= 1 << (precision + 1 + j % 5)
@@ -95,7 +101,7 @@ def distributed_product(width, case, *, reference=False, counted=False,
             elif op == "&~":
                 sign = 0
 
-        if field_masks:
+        if gated:
             arithmetic = "-" if case % 8 >= 4 else "+"
             op = (arithmetic, "|", "&~", "^")[(row[0][0] + row[-1][0]) % 4]
             high = field_mask if row[1][0] % 3 == 0 else 0
@@ -114,6 +120,10 @@ def distributed_product(width, case, *, reference=False, counted=False,
                 sign = 0
             live_overlap = gate not in (0, field_mask)
             lane_mask = (1 << (precision + 3 + row[0][0])) | (gate << shift) | 5
+            if scaled_fields:
+                multipliers = (3, -5, 6, (1 << (bits - 1)) + 5, -(1 << bits) + 9)
+                multiplier = multipliers[(row[0][0] + row[1][0]) % len(multipliers)]
+                sign *= multiplier
 
         if variant and j == degree // 2:
             field = fields[(j + case) % len(fields)]
@@ -129,12 +139,14 @@ def distributed_product(width, case, *, reference=False, counted=False,
             continue
         else:
             terms = [f"({weight << shift})*{word}" for _, weight, word in row]
-            if joined_offsets or masked_offsets or field_masks:
+            if joined_offsets or masked_offsets or gated:
                 if joined_offsets:
                     op = ("|", "^")[(row[0][0] + offset) % 2]
                 delta = "+".join(terms)
-                if field_masks:
+                if gated:
                     delta = f"{lane_mask}&({delta})"
+                    if scaled_fields:
+                        delta = f"({multiplier})*({delta})"
                 factor = f"({offset}{op}({delta}))"
                 if live_overlap:
                     residuals.append(factor)
@@ -171,6 +183,8 @@ if __name__ == "__main__":
                         help="join constants to weighted fields with OR and XOR")
     offsets.add_argument("--field-masks", action="store_true",
                         help="mask weighted sums before combining them with an offset")
+    offsets.add_argument("--scaled-fields", action="store_true",
+                        help="multiply masked weighted sums before combining them with an offset")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--reference", action="store_true",
                         help="emit the independently calculated reference expression")
@@ -180,6 +194,6 @@ if __name__ == "__main__":
     try:
         print(distributed_product(args.width, args.case, reference=args.reference, counted=args.counted,
                                   joined_offsets=args.joined_offsets, masked_offsets=args.masked_offsets,
-                                  field_masks=args.field_masks))
+                                  field_masks=args.field_masks, scaled_fields=args.scaled_fields))
     except ValueError as error:
         parser.error(str(error))

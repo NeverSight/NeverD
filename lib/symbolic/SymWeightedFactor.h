@@ -15,7 +15,7 @@ struct WeightedFactor {
   SymRef Offset;
   llvm::ArrayRef<SymRef> Terms;
   SymRef FieldMask{};
-  bool SubtractField = false;
+  SymRef FieldScale{};
 };
 
 inline WeightedFactor readWeightedFactor(const SymContext &Ctx, SymRef F) {
@@ -36,17 +36,18 @@ inline WeightedFactor readWeightedFactor(const SymContext &Ctx, SymRef F) {
     Sum = Ctx.operand(Sum, 0);
   }
   // A mask on the weighted delta precedes its addition or bitwise join
-  // with the scalar offset. Keep the mask until its live bits are known.
-  // Subtraction is represented as addition of a product by all ones.
-  const bool Scaled = Op == SymOp::Add && Ctx.op(Sum) == SymOp::Mul &&
-                      Ctx.numOperands(Sum) == 2;
-  const SymRef Delta = Scaled ? Ctx.operand(Sum, 1) : Sum;
+  // with the scalar offset. A scalar outside the mask multiplies the
+  // selected bits, including any carries through holes in the mask.
+  const auto Scale = Ctx.op(Sum) == SymOp::Mul && Ctx.numOperands(Sum) == 2 &&
+                             Ctx.isConst(Ctx.operand(Sum, 0))
+                         ? Ctx.operand(Sum, 0)
+                         : SymRef{};
+  const SymRef Delta = Scale ? Ctx.operand(Sum, 1) : Sum;
   if (Ctx.op(Delta) == SymOp::And && Ctx.numOperands(Delta) == 2 &&
       Ctx.isConst(Ctx.operand(Delta, 0)) &&
-      Ctx.op(Ctx.operand(Delta, 1)) == SymOp::Add &&
-      (!Scaled || Ctx.isConstOnes(Ctx.operand(Sum, 0))))
+      Ctx.op(Ctx.operand(Delta, 1)) == SymOp::Add)
     return {Args.front(), Ctx.operands(Ctx.operand(Delta, 1)),
-            Ctx.operand(Delta, 0), Scaled};
+            Ctx.operand(Delta, 0), Scale};
   if (Op == SymOp::Add)
     return {Args.front(), Args.drop_front()};
   if (Ctx.op(Sum) == SymOp::Add)

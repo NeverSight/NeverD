@@ -4713,6 +4713,12 @@ join the masked field to each offset. Cases 4–7 include subtraction and
 borrows. The independent reference retains the mixed mask and the low-weight
 factor. The 197-factor x86 fixture exercises masked signed-byte sums through
 both source views and checks the emitted C against the original product.
+With `--scaled-fields --width 1310721 --case 3`, 100,003 factors multiply
+masked sums by signed, even and multi-limb coefficients. Cases 4–7 vary the
+order of subtraction and bitwise joins. The compact reference keeps any
+observable overlap and live cross term. The 223-factor x86 fixture checks
+the CLI and worker output for both source views against its original product
+at Clang O0 and O2.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping

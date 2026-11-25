@@ -374,6 +374,15 @@ SymRef SymContext::mkMul(llvm::ArrayRef<SymRef> Ops) {
       auto Existing = operands(Product);
       const bool Scaled = isConst(Existing.front());
       auto Tail = Existing.drop_front(unsigned(Scaled));
+      // Negating a scaled product changes only its leading coefficient.
+      // A full-width multiply by an all-ones limb array is quadratic.
+      if (W > 64 && Scaled && isConstOnes(Atom)) {
+        auto Coefficient = -constValue(Existing.front());
+        llvm::SmallVector<SymRef, 8> Factors(Tail);
+        if (!Coefficient.isOne())
+          Factors.insert(Factors.begin(), mkConst(Coefficient));
+        return Factors.size() == 1 ? Factors.front() : mkMul(Factors);
+      }
       // A single logical shift still needs the matching-power fold below.
       if (Tail.size() >= 2) {
         assert(width(Atom) == W && width(Product) == W &&

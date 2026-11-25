@@ -377,7 +377,8 @@ def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0,
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
 
-def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False, field_masks=False):
+def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False, field_masks=False,
+                          scaled_fields=False):
     # Each factor reads independently signed bytes of x and y+z. The low
     # weight in one row preserves cross terms with the rest of the product.
     scale = 3 << 16
@@ -395,7 +396,7 @@ def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False,
         code += bytes.fromhex("450fbec0 4569c0") + struct.pack("<i", right_weight)
         invert = False
         delta_mask = None
-        if field_masks:
+        if field_masks or scaled_fields:
             delta_mask = (0xff00 if i % 5 else 0) | ((1 << 24) if i % 2 else 0x400005)
             if i == degree // 3:
                 delta_mask ^= 0x5a00
@@ -420,6 +421,9 @@ def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False,
         code += bytes.fromhex("4401c1")
         if delta_mask is not None:
             code += bytes.fromhex("81e1") + struct.pack("<I", delta_mask)
+        if scaled_fields:
+            field_scale = (3, -5, 6, 17, -31)[(i // 3) % 5]
+            code += bytes.fromhex("69c9") + struct.pack("<i", field_scale)
         code += bytes.fromhex(opcode) + struct.pack("<i", offset)
         code += bytes.fromhex("0fafc1")
         x_field = f"((((x>>{left})&255U)^128U)-128U)"
@@ -427,6 +431,8 @@ def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False,
         fields = f"({left_weight & 0xffffffff}U*{x_field}+{right_weight & 0xffffffff}U*{y_field})"
         if delta_mask is not None:
             fields = f"({delta_mask}U&{fields})"
+        if scaled_fields:
+            fields = f"({field_scale & 0xffffffff}U*{fields})"
         if invert:
             fields = "~" + fields
         factors.append(f"({offset & 0xffffffff}U{operator}{fields})")
@@ -796,6 +802,8 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "scaled-field-product-223":
+            assert code.count("*") <= (53 if llvm else 15), text
         elif kind == "gated-field-product-197":
             assert code.count("*") <= (13 if llvm else 14), text
         elif kind == "masked-field-product-113":
@@ -1010,6 +1018,7 @@ if __name__ == "__main__":
             ("joined-field-product-97", *distributed_field_elf(97, joined_offsets=True)),
             ("masked-field-product-113", *distributed_field_elf(113, masked_offsets=True)),
             ("gated-field-product-197", *distributed_field_elf(197, field_masks=True)),
+            ("scaled-field-product-223", *distributed_field_elf(223, scaled_fields=True)),
             ("funnel-perturbation-composed-product-283",
              *variable_field_elf(283, terminal_period=3, repeated_offsets=True,
                                  raw_rotations=True, composed_rotations=True)),

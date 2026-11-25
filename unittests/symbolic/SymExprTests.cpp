@@ -2724,6 +2724,56 @@ TEST(SymExpr, WideSignedCoefficientsKeepTheirSignAcrossWordBoundaries) {
   }
 }
 
+TEST(SymExpr, ProductsKeepAllBitsDemandedAcrossUsers) {
+  std::mt19937_64 Random(0xa3f72);
+  for (unsigned Bits : {65u, 129u}) {
+    const unsigned Width = 16 * Bits + 5;
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto K = -(llvm::APInt::getOneBitSet(Width, Bits - 1) + 7);
+    const auto Scale = llvm::APInt::getOneBitSet(Width, Width - Bits);
+    for (bool Literal : {false, true}) {
+      const auto Term = C.mkMul(Literal ? C.mkConst(K) : Y, X);
+      const auto Offset = C.mkAdd(Term, C.mkConst(Width, 5));
+      const auto Product = C.mkMul({C.mkConst(Scale), Offset, Y});
+      SymEvalPlan Partial(C, Product), Shared(C, C.mkXor(Product, Term));
+      for (unsigned Trial = 0; Trial < 40; ++Trial) {
+        std::array<llvm::APInt, 2> Input;
+        for (auto &V : Input) {
+          llvm::SmallVector<uint64_t, 32> Words(
+              llvm::APInt::getNumWords(Width));
+          for (auto &Word : Words)
+            Word = Random();
+          V = llvm::APInt(Width, Words);
+        }
+        if (Trial % 5 == 0)
+          Input[0] = llvm::APInt::getOneBitSet(Width, Bits);
+        const auto T = (Literal ? K : Input[1]) * Input[0];
+        const auto Want = Scale * (T + 5) * Input[1];
+        EXPECT_EQ(Partial.eval(Input), Want);
+        EXPECT_EQ(Shared.eval(Input), Want ^ T);
+      }
+    }
+  }
+}
+
+TEST(SymExpr, NegatingAWideProductPreservesCanonicalFactors) {
+  SymContext C;
+  constexpr unsigned W = 513;
+  const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+  const auto K = llvm::APInt::getOneBitSet(W, 129) + 3;
+  const auto Positive = C.mkConst(K), Negative = C.mkConst(-K);
+  EXPECT_EQ(C.mkNeg(C.mkMul(Positive, X)), C.mkMul(Negative, X));
+  EXPECT_EQ(C.mkMul(C.mkMul({Negative, X, Y}), C.mkOnes(W)),
+            C.mkMul({Positive, X, Y}));
+  EXPECT_EQ(C.mkNeg(C.mkMul(C.mkOnes(W), X)), X);
+  EXPECT_EQ(C.mkNeg(C.mkMul({C.mkOnes(W), X, Y})), C.mkMul(X, Y));
+  const auto Shift = C.mkLShr(X, C.mkConst(llvm::APInt(W, 7)));
+  const auto Scale = llvm::APInt(W, 128);
+  EXPECT_EQ(C.mkNeg(C.mkMul(C.mkConst(-Scale), Shift)),
+            C.mkAnd(X, C.mkConst(~llvm::APInt::getLowBitsSet(W, 7))));
+}
+
 TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
   std::mt19937_64 Random(0x7072656669786573);
   for (unsigned Width : {65u, 128u, 257u, 513u})
