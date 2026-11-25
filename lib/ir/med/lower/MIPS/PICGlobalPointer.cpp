@@ -10,6 +10,7 @@
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/MIPSGPAnchor.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -109,7 +110,7 @@ public:
   void nextInstruction() { Temps.clear(); }
 
   bool resumeCall(Arch Target, va_t Resume) {
-    const auto Link = read(NdVar::reg(mipsreg::RA, 8));
+    const auto Link = read(NdVar::reg(mipsreg::RA, isMIPS64(Target) ? 8 : 4));
     if (!Link || Link->Base != Origin::Scalar || Link->Bits != Resume)
       return false;
     const auto &TRI = getTargetRegInfo(Target);
@@ -163,7 +164,8 @@ struct SkippedSlot {
 bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
                 EntryValues &Values, BlockProof &Proof,
                 std::optional<SkippedSlot> &Skipped) {
-  const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Target);
+  const uint16_t GPRBytes = isMIPS64(Target) ? 8 : 4;
+  const bool SignedWordPointers = hasMIPS32BitAddressIn64BitGPR(Target);
   size_t End = 0;
   for (const auto &Insn : Block.InstructionBoundaries) {
     const bool Direct =
@@ -172,10 +174,9 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
                                       LowInstructionControlFlag::Indirect);
     const bool Call =
         Insn.Control == LowInstructionControl::Call &&
-        (isMIPSN32(Target) || isMIPSN64(Target)) &&
         !hasLowInstructionControlFlag(Insn.ControlFlags,
                                       LowInstructionControlFlag::NoReturn);
-    if (isMIPSCompressedMode(Insn.Mode) ||
+    if (Insn.Mode == InstructionMode::MIPS16 ||
         (Insn.Control != LowInstructionControl::None && !Direct && !Call) ||
         Insn.FirstOp != End || Insn.OpCount > Block.Ops.size() - End)
       return false;
@@ -190,8 +191,10 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
       const LowOp &Op = Block.Ops[I];
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         // The link write and the executed delay slot precede the transfer.
+        const va_t Resume =
+            serializeCodePointer(Insn.Address + Insn.Size, Target, Insn.Mode);
         if (!Call || !WritesLink || I + 1 != End ||
-            !Values.resumeCall(Target, Insn.Address + Insn.Size))
+            !Values.resumeCall(Target, Resume))
           return false;
         continue;
       }
@@ -223,12 +226,12 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
         continue;
       auto V = Values.write(Op);
       if (Call && Op.Output.isReg() && Op.Output.Offset == mipsreg::RA &&
-          Op.Output.Size == 8 &&
+          Op.Output.Size == GPRBytes &&
           (!Insn.DelaySlot || I < Insn.FirstOp + Insn.DelaySlot->FirstOp))
         WritesLink = true;
       if (!V || V->Base != Origin::AdjustedEntry || V->Bits != GP ||
-          (WordPointers && !V->SignedWord) || !Op.Output.isReg() ||
-          Op.Output.Size != 8 || Op.Opcode != NdOp::COPY)
+          (SignedWordPointers && !V->SignedWord) || !Op.Output.isReg() ||
+          Op.Output.Size != GPRBytes || Op.Opcode != NdOp::COPY)
         continue;
 
       Proof.Writes.push_back(I);
@@ -244,11 +247,13 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
 
 std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
                                                    const BinaryImage &Image) {
-  if (!Image.MIPS || !Image.MIPS->PICGP || !isMIPS64(Image.Arch) ||
-      Function.Blocks.empty())
+  if (!Image.MIPS || !Image.MIPS->PICGP || Function.Blocks.empty())
     return std::nullopt;
   const LowBlock &Entry = Function.Blocks.front();
   if (Entry.StartAddr != Function.Entry || !Entry.ExceptionalPreds.empty())
+    return std::nullopt;
+  const auto Mode = Image.instructionModeAt(Function.Entry);
+  if (!Mode || *Mode == InstructionMode::MIPS16)
     return std::nullopt;
 
   struct Input {
@@ -258,11 +263,16 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
     BlockProof Proof;
   };
   llvm::SmallDenseMap<int, Input, 2> Inputs;
-  const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Image.Arch);
+  const uint16_t GPRBytes = isMIPS64(Image.Arch) ? 8 : 4;
+  const bool SignedWordPointers = hasMIPS32BitAddressIn64BitGPR(Image.Arch);
+  const bool WordPointers = Image.getPointerSize() == 4;
+  // The linker displacement includes the ISA bit of the callable entry in $t9.
+  const uint64_t EntryPointer =
+      serializeCodePointer(Function.Entry, Image.Arch, *Mode);
   Inputs[0].GPRs[mipsreg::T9] = {
-      WordPointers ? uint64_t(llvm::SignExtend64<32>(Function.Entry))
-                   : Function.Entry,
-      Origin::Entry, WordPointers, 8};
+      SignedWordPointers ? uint64_t(llvm::SignExtend64<32>(EntryPointer))
+                         : EntryPointer,
+      Origin::Entry, SignedWordPointers, GPRBytes};
   const uint64_t GP = *Image.MIPS->PICGP;
   const bool Complete = Function.hasCompleteLiftCoverage() &&
                         Function.UnsafeIndirectBranchAddresses.empty();
@@ -353,8 +363,8 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
 
   LowFunc Projected = Function;
   const auto Anchor = mipsPICGPAnchor(Image, GP);
-  const NdVar LinkedGP =
-      Anchor ? NdVar::dataAddress(GP, 8, *Anchor) : NdVar::address(GP, 8);
+  const NdVar LinkedGP = Anchor ? NdVar::dataAddress(GP, GPRBytes, *Anchor)
+                                : NdVar::address(GP, GPRBytes);
   for (int Id : Needed) {
     const auto &Proof = Inputs.find(Id)->second.Proof;
     auto &Ops = Projected.Blocks[Id].Ops;

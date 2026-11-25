@@ -146,7 +146,7 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
   auto Dynamic = readELFProgramDynamicTable(Img);
   if (!Dynamic)
     return Dynamic.takeError();
-  if (Dynamic->empty() && Img.MIPS && Img.MIPS->PICGP && isMIPS64(Img.Arch))
+  if (Dynamic->empty() && Img.MIPS && Img.MIPS->PICGP)
     collectStaticGOTPointers<ELFT>(Img, LinkedPointers);
   recordAbsolutePointerRelocations(Img, LinkedPointers);
   std::map<int64_t, uint64_t> Tags;

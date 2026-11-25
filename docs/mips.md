@@ -113,14 +113,16 @@ ratio included 1.
   upper half of the n32 address space retain their ELF32 storage identity
   when generated code is relinked. Each later register write takes effect
   normally.
-- In linked classic n32/n64 PIC and CPIC code, the ordinary entry can
-  establish GP from its incoming `$t9` and a linker displacement. Source
+- In linked MIPS o32, n32 and n64 PIC and CPIC code, the ordinary entry can
+  establish GP from its incoming `$t9` and a linker displacement. A
+  microMIPS function receives its tagged entry address in `$t9`. The
+  linker includes that low bit when computing the displacement. Source
   conversion follows saved copies of `$t9` across direct branches and loops.
   A branch-likely passes the pre-slot value on its skipped edge and the
   updated value on its taken edge. The classic `b` alias and
   `beql $zero,$zero` always execute their slot and have one successor.
   Every incoming path, including loop backedges, must establish the same
-  value. After an ordinary n32/n64 call, a saved entry value survives in a
+  value. After an ordinary call, a saved entry value survives in a
   register the ABI preserves. The call's executed delay slot participates in
   that proof. An independent entry ends it. The completed write must match
   the image-wide register-info GP. This covers assembler `.cpsetup` and
@@ -777,9 +779,10 @@ Each covers 16 profiles, 128 builds and 4,096 executions with the same byte
 orders, FR modes, compilers and observations. The unit and isolated-function
 receipts identify their different tested commits explicitly.
 
-Numeric microMIPS code identities are admitted for defined r2 targets with
-explicit ELF mode evidence in o32, n32 and n64. MIPS16 numerical identities
-remain limited to r2/o32. Both source backends share this boundary; unknown-mode
+Numeric microMIPS code identities are admitted for defined Release 2 and
+Release 6 targets with explicit ELF mode evidence in o32, n32 and n64.
+MIPS16 numerical identities remain limited to r2/o32. Both source backends
+share this boundary; unknown-mode
 imports, including whole or partial GOT reads, remain refused. Direct control
 identities, serialized callables and code-byte/data addresses retain distinct
 roles. The NeverSight LLVM SDK uses the fork's `Fi8` data layout, so stronger function

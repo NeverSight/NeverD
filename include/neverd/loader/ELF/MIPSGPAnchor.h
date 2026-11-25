@@ -18,8 +18,7 @@ namespace neverd {
 /// still address the same table after the linked image moves.
 inline std::optional<va_t> mipsPICGPAnchor(const BinaryImage &Image,
                                            uint64_t Value) {
-  if (!Image.MIPS || Image.MIPS->PICGP != Value ||
-      (!isMIPSN32(Image.Arch) && !isMIPSN64(Image.Arch)))
+  if (!Image.MIPS || Image.MIPS->PICGP != Value)
     return std::nullopt;
   if (Image.DynInfo.PltGotAddr)
     return Image.DynInfo.PltGotAddr;

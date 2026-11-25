@@ -190,6 +190,18 @@ TEST(MIPSEntryGP, N32HighDataAddressesKeepTheirELF32IdentityInAWideGPR) {
   }
 }
 
+bool hasExactAddress(const MedFunc &Function, va_t Address) {
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I) {
+        const auto &V = Op.Inputs[I];
+        if (V.isConst() && V.ConstVal == Address &&
+            isExactAddressProvenance(V.Provenance))
+          return true;
+      }
+  return false;
+}
+
 TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
   for (bool N32 : {false, true})
     for (bool Little : {false, true})
@@ -222,16 +234,50 @@ TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
           LowToMedConverter Convert;
           Convert.setBinaryImage(&*Image);
           const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
-          bool Bound = false;
-          for (const auto &Block : Med.Blocks)
-            for (const auto &Op : Block.Ops)
-              for (unsigned I = 0; I < Op.NumInputs; ++I) {
-                const auto &V = Op.Inputs[I];
-                Bound |= V.isConst() && V.ConstVal == 0x1011c &&
-                         isExactAddressProvenance(V.Provenance);
-              }
-          EXPECT_EQ(Bound, Case == 0);
+          EXPECT_EQ(hasExactAddress(Med, 0x1011c), Case == 0);
         }
+}
+
+TEST(MIPSEntryGP, MicroR6UsesTheTaggedEntryAtRegisterWidth) {
+  using namespace llvm::ELF;
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                      Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    const bool N32 = isMIPSN32(Target);
+    mips_test::ELFBytes File(
+        N32 ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
+            : Target);
+    const uint32_t Flags =
+        (isMIPS64(Target) ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6) |
+        (N32                 ? EF_MIPS_ABI2
+         : isMIPSO32(Target) ? EF_MIPS_ABI_O32
+                             : 0) |
+        EF_MIPS_MICROMIPS | EF_MIPS_NAN2008 | EF_MIPS_PIC;
+    File.put(File.Is64 ? 48 : 36, Flags, 4);
+    File.put(24, 0x10101, File.Is64 ? 8 : 4);
+    File.put(0x100, isMIPSN64(Target) ? 0x5c59 : 0x3059, 2);
+    File.put(0x102, 31, 2); // [d]addiu v0,t9,31
+    File.put(0x104, isMIPS64(Target) ? 0x5c42 : 0x3042, 2);
+    File.put(0x106, 0xfff8, 2); // [d]addiu v0,v0,-8
+    File.put(0x108, 0x47e3, 2); // jrc16 ra
+
+    for (uint64_t GP : {0x10120u, 0x1011fu}) {
+      SCOPED_TRACE(GP);
+      File.globalPointer(GP);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      const auto Low =
+          CFGBuilder().build(*Image, Decode, Image->Entry, "pic_address");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*Image);
+      const auto Med = Convert.convert(Low, Target, BinaryFormat::ELF);
+      EXPECT_EQ(hasExactAddress(Med, 0x10118), GP == 0x10120);
+    }
+  }
 }
 
 void expectPICAddress(bool N32, bool Little, llvm::ArrayRef<uint32_t> Words,
@@ -263,15 +309,7 @@ void expectPICAddress(bool N32, bool Little, llvm::ArrayRef<uint32_t> Words,
   LowToMedConverter Convert;
   Convert.setBinaryImage(&*Image);
   const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
-  bool Bound = false;
-  for (const auto &Block : Med.Blocks)
-    for (const auto &Op : Block.Ops)
-      for (unsigned I = 0; I < Op.NumInputs; ++I) {
-        const auto &V = Op.Inputs[I];
-        Bound |= V.isConst() && V.ConstVal == 0x10170 &&
-                 isExactAddressProvenance(V.Provenance);
-      }
-  EXPECT_EQ(Bound, Expected);
+  EXPECT_EQ(hasExactAddress(Med, 0x10170), Expected);
 }
 
 TEST(MIPSEntryGP, PICJoinsRequireTheSameEntryValueOnEveryIncomingPath) {
