@@ -326,7 +326,8 @@
     "probe-cursor",
     "probe-x1-cursor",
     "probe-lrcpc3",
-    "qualify-x1"
+    "qualify-x1",
+    "qualify-x1-full"
   ],
   "cpta_probe": {
     "source_files": ["scripts/diagnostics/Arm64eCheckedWriteback.def"],
@@ -632,6 +633,7 @@
   },
   "x1_qualification": {
     "mode": "qualify-x1",
+    "complete_mode": "qualify-x1-full",
     "qualified_key": "native_arm64e_x1_environment_qualified",
     "complete_key": "native_arm64e_x1_and_lrcpc3_qualified",
     "requirements": {

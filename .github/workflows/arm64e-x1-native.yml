@@ -22,10 +22,10 @@ jobs:
             unittests/lift/format
             include/neverd/runtime
             include/neverd/ir/intrinsics/AArch64
-      - name: Require native PAuth_LR, PACM PC dependence and CPTA-on
+      - name: Require native x1 signing, checked arithmetic, writeback and 128-bit LRCPC3
         run: |
           ulimit -c 0
-          python3 scripts/verify_arm64e_native.py qualify-x1 --output "$RUNNER_TEMP/$EVIDENCE"
+          python3 scripts/verify_arm64e_native.py qualify-x1-full --output "$RUNNER_TEMP/$EVIDENCE"
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

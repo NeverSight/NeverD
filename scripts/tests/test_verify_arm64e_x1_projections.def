@@ -1,0 +1,10 @@
+{
+  "explicit": "explicit",
+  "object": "/objects/generated backend.o",
+  "foreign": "/objects/caller.o",
+  "inputs": "[ 1] {foreign}\n[ 2] {owner}\n# Symbols:\n",
+  "symbol": "0x100000100 0x00000004 [ {index}] {symbol}\n",
+  "live": 2,
+  "wrong": 1,
+  "dead": "# Dead Stripped Symbols:\n"
+}

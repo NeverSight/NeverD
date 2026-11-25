@@ -99,6 +99,31 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     self.assertEqual(report["status"], native.POLICY["passed"] if independent_skip else status)
                     self.assertEqual(report["probes"][changed]["status"], status)
 
+    def test_full_x1_cli_requires_the_independent_lrcpc3_result(self):
+        policy = native.POLICY["x1_qualification"]
+        ordered = native.POLICY["ordered_probe"]
+        for state in (native.POLICY["passed"], native.POLICY["unavailable"], native.POLICY["failed"]):
+            with self.subTest(ordered=state), tempfile.TemporaryDirectory() as tmp, ExitStack() as patches:
+                output = Path(tmp) / policy["complete_mode"]
+                for mode, function in CASES["x1_components"].items():
+                    def run(directory, mode=mode):
+                        report = {"status": native.POLICY["passed"],
+                                  **dict.fromkeys(policy["requirements"].get(mode, ()), True)}
+                        if mode == ordered["mode"]:
+                            report.update(status=state)
+                            report[ordered["qualified_key"]] = state == native.POLICY["passed"]
+                        native.save(directory / native.POLICY["report_name"], report)
+                        return report
+                    patches.enter_context(mock.patch.object(native, function, side_effect=run))
+                patches.enter_context(mock.patch.object(sys, "argv", [
+                    __file__, policy["complete_mode"], native.POLICY["output_argument"], str(output)]))
+                self.assertEqual(native.main(), native.POLICY["exit_codes"][state])
+                result = json.loads((output / native.POLICY["report_name"]).read_text())
+                self.assertEqual(result[policy["complete_key"]], state == native.POLICY["passed"])
+                if state == native.POLICY["unavailable"]:
+                    self.assertTrue(result[policy["qualified_key"]])
+                    self.assertIn({"probe": ordered["mode"], "feature": ordered["qualified_key"]}, result["missing"])
+
     def test_ordered_q_requires_both_compilations_and_matching_instruction_results(self):
         q = native.POLICY["ordered_probe"]
         passed = (0, q["passed_record"])

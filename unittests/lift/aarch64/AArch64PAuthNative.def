@@ -60,6 +60,7 @@ NEVERD_PAUTH_NATIVE_TEXT(kPrefixOraclePrototype,
                          "extern uint64_t {0}(uint64_t, uint64_t, uint64_t, "
                          "uint64_t);\n")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleObjectExtension, "o")
+NEVERD_PAUTH_NATIVE_TEXT(kOracleSourceFile, "projection.c")
 NEVERD_PAUTH_NATIVE_TEXT(kOracleCLanguage, "c")
 NEVERD_PAUTH_NATIVE_TEXT(
     kPAuthCompilerUnavailable,
