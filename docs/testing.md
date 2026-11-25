@@ -4697,6 +4697,12 @@ exercise uniform masks, partial overlap, an even offset and a factor with
 a lower-weight field. The 113-factor x86 fixture applies the same operations
 to signed bytes. The worker and CLI run both source views and compile the
 results at Clang O0 and O2 for comparison with the original product.
+With `--field-masks --width 786433 --case 3`, the generator emits 70,001
+factors whose weighted sums pass through a second mask. Cases 0–3 add or
+join the masked field to each offset. Cases 4–7 include subtraction and
+borrows. The independent reference retains the mixed mask and the low-weight
+factor. The 197-factor x86 fixture exercises masked signed-byte sums through
+both source views and checks the emitted C against the original product.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping

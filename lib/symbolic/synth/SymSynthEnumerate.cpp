@@ -374,54 +374,109 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     return offer(Node, Cost);
   };
 
-  for (size_t Cost = 2;; ++Cost) {
-    const size_t WorkBeforeTier = Effort.used();
-    for (unsigned OpIndex = 0; OpIndex < kNumGramOps; ++OpIndex) {
-      const GramOp Op = GramOp(OpIndex);
-      if (!isUnaryGramOp(Op))
-        continue;
-      for (size_t I : Bank.atCost(Cost - 1)) {
-        size_t Operands[] = {I};
-        if (!consider(Op, Operands, Cost))
-          return Result;
-      }
+  // Operands come only from cheaper tiers. Counting these same groups lets
+  // the last observable tier skip building signatures no later term can use.
+  auto visitGroups = [&](size_t Cost, auto &&Visit) {
+    for (unsigned I = 0; I < kNumGramOps; ++I) {
+      const GramOp Op = GramOp(I);
+      if (isUnaryGramOp(Op) &&
+          !Visit(Op, Bank.atCost(Cost - 1), llvm::ArrayRef<size_t>{}, false))
+        return false;
     }
-
-    for (unsigned OpIndex = 0; OpIndex < kNumGramOps; ++OpIndex) {
-      const GramOp Op = GramOp(OpIndex);
+    for (unsigned I = 0; I < kNumGramOps; ++I) {
+      const GramOp Op = GramOp(I);
       if (isUnaryGramOp(Op))
         continue;
       const bool FixedAmount = isShiftGramOp(Op) && !Opts.AllowVariableShifts;
       const bool Symmetric = isCommutativeGramOp(Op);
-
-      // A binary node costs one plus its operands, so every split of the
-      // remaining cost between them is one way to reach this size.
-      const size_t NumOperandCosts = Bank.numCosts();
-      for (size_t CostIndex = 0; CostIndex < NumOperandCosts; ++CostIndex) {
-        const size_t Left = Bank.costAt(CostIndex);
+      const size_t NumCosts = Bank.numCosts();
+      for (size_t J = 0; J < NumCosts; ++J) {
+        const size_t Left = Bank.costAt(J);
         if (Left >= Cost - 1)
           break;
         const size_t Right = Cost - 1 - Left;
-        if (FixedAmount && Right != 1)
+        if ((FixedAmount && Right != 1) || (Symmetric && Left > Right))
           continue;
-        // Swapping the operands of a commutative operator interns the same
-        // node, so only one order of each pair is built.
-        if (Symmetric && Left > Right)
-          continue;
-
-        llvm::ArrayRef<size_t> Lhs = Bank.atCost(Left);
-        llvm::ArrayRef<size_t> Rhs = FixedAmount
-                                         ? llvm::ArrayRef<size_t>(LiteralTerms)
-                                         : Bank.atCost(Right);
-        for (size_t A = 0; A < Lhs.size(); ++A)
-          for (size_t B = Symmetric && Left == Right ? A : 0; B < Rhs.size();
-               ++B) {
-            size_t Operands[] = {Lhs[A], Rhs[B]};
-            if (!consider(Op, Operands, Cost))
-              return Result;
-          }
+        const auto Rhs = FixedAmount ? llvm::ArrayRef<size_t>(LiteralTerms)
+                                     : Bank.atCost(Right);
+        if (!Visit(Op, Bank.atCost(Left), Rhs, Symmetric && Left == Right))
+          return false;
       }
     }
+    return true;
+  };
+
+  auto visitTier = [&](size_t Cost, auto &&Visit) {
+    return visitGroups(Cost, [&](GramOp Op, llvm::ArrayRef<size_t> Lhs,
+                                 llvm::ArrayRef<size_t> Rhs, bool Triangular) {
+      if (isUnaryGramOp(Op)) {
+        for (size_t A : Lhs)
+          if (!Visit(Op, llvm::ArrayRef(A), Cost))
+            return false;
+      } else {
+        for (size_t I = 0; I < Lhs.size(); ++I)
+          for (size_t B : Rhs.drop_front(Triangular ? I : 0)) {
+            const size_t Args[] = {Lhs[I], B};
+            if (!Visit(Op, Args, Cost))
+              return false;
+          }
+      }
+      return true;
+    });
+  };
+
+  auto isLastTier = [&](size_t Cost, size_t Left) {
+    if (Cost == Opts.MaxCost)
+      return true;
+    return !visitGroups(Cost, [&](GramOp Op, llvm::ArrayRef<size_t> Lhs,
+                                  llvm::ArrayRef<size_t> Rhs, bool Triangular) {
+      size_t Rows = Lhs.size(), Cols = isUnaryGramOp(Op) ? 1 : Rhs.size();
+      if (Triangular) {
+        // N * (N+1) / 2 pairs, halving the even factor first.
+        Cols = (Rows + 1) / (Rows % 2 ? 2 : 1);
+        if (Rows % 2 == 0)
+          Rows /= 2;
+      }
+      if (Rows && Cols > (Left - 1) / Rows)
+        return false;
+      Left -= Rows * Cols;
+      return true;
+    });
+  };
+
+  for (size_t Cost = 2;; ++Cost) {
+    const size_t WorkBeforeTier = Effort.used();
+    const size_t Left = Effort.remaining();
+    if (!Left)
+      return Result;
+    if (ValueWords == 1 && isLastTier(Cost, Left)) {
+      // A mismatch at one measured point rules out a match of the complete
+      // grid. A surviving match replays this tier in the ordinary order,
+      // preserving even the recipes and proof callbacks before that match.
+      size_t Visited = 0;
+      bool Match = false;
+      visitTier(Cost, [&](GramOp Op, llvm::ArrayRef<size_t> Operands, size_t) {
+        ++Visited;
+        const size_t Pt = Points - 1;
+        const auto *A = Bank.behaviour(Operands.front()).data() + Pt;
+        const auto *B = Operands.size() == 1
+                            ? nullptr
+                            : Bank.behaviour(Operands.back()).data() + Pt;
+        uint64_t Value;
+        Sem.applyColumn(Op, A, B, &Value, 1);
+        if (Value == Target[Pt]) {
+          measure(Op, Operands, Measured);
+          Match = Behaviour(Measured) == Behaviour(Target);
+        }
+        return !Match && Visited < Left;
+      });
+      if (!Match) {
+        Effort.spend(std::max<size_t>(Visited, 1));
+        return Result;
+      }
+    }
+    if (!visitTier(Cost, consider))
+      return Result;
 
     // A tier with no candidates must still be bounded by the caller's work
     // budget.  Otherwise a very large MaxCost can spend unbounded time walking

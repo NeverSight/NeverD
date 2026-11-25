@@ -140,9 +140,10 @@ SymRef Parser::parseBinary(int MinPrec) {
         // The initial product already exposes the shape of its first two
         // factors. Reuse complete multi-term sums with independent field calls.
         const auto First = Ctx.operands(L).back();
+        const auto Factor = readWeightedFactor(Ctx, First);
         const bool Sum = Ctx.op(First) == SymOp::Add
-                             ? Ctx.numOperands(First) > 2
-                             : bool(readWeightedFactor(Ctx, First).Offset);
+                             ? Ctx.numOperands(First) > 2 || Factor.FieldMask
+                             : bool(Factor.Offset);
         Mode = Sum ? CallReuse::SumFactor : CallReuse::Factor;
       }
       llvm::SaveAndRestore Scope(Reuse, Mode);

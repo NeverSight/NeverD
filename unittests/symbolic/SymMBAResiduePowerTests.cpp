@@ -1053,4 +1053,103 @@ TEST(SymMBAResiduePowers, BitwiseOffsetsPreserveLiveOverlapAndLowerCarries) {
   }
 }
 
+TEST(SymMBAResiduePowers, MasksOnWeightedDeltasPreserveCarriesAndHoles) {
+  for (unsigned Bits : {4u, 65u}) {
+    const unsigned Shift = Bits + 1, Width = 3 * Bits + 7;
+    const auto Full = llvm::APInt::getLowBitsSet(Width, Bits).shl(Shift);
+    const auto Outside = llvm::APInt::getOneBitSet(Width, Width - 2);
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Shift - Bits);
+    auto mask = [&](unsigned I) {
+      if (I >= 10 && I < 15)
+        return Outside | llvm::APInt::getOneBitSet(Width, Shift + Bits / 2);
+      return (I % 5 ? Full | Outside : Outside) | 3;
+    };
+    auto offset = [&](unsigned I) {
+      return (I % 3 ? Full : Outside) + (I == 23 ? 6 : 1 + 2 * (I % 7));
+    };
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto SX = C.mkSExt(C.mkExtract(X, 0, Bits), Width);
+    const auto ZY = C.mkZExt(C.mkExtract(Y, 0, Bits), Width);
+    llvm::SmallVector<SymRef, 128> Factors{C.mkConst(Scale)};
+    for (unsigned I = 0; I < 97; ++I) {
+      const auto A =
+          llvm::APInt(Width, 1 + 2 * (I % 4)).shl(I == 29 ? 1 : Shift);
+      const auto B = -llvm::APInt(Width, 3 + 2 * (I % 3)).shl(Shift);
+      const auto Sum =
+          C.mkAdd(C.mkMul(C.mkConst(A), SX), C.mkMul(C.mkConst(B), ZY));
+      auto D = C.mkAnd(C.mkConst(mask(I)), Sum);
+      if (I == 38)
+        D = C.mkMul(C.mkConst(Width, 3), D);
+      const auto K = C.mkConst(offset(I));
+      switch (I % 5) {
+      case 0:
+        Factors.push_back(C.mkOr(K, D));
+        break;
+      case 1:
+        Factors.push_back(C.mkXor(K, D));
+        break;
+      case 2:
+        Factors.push_back(C.mkAnd(K, C.mkNot(D)));
+        break;
+      case 3:
+        Factors.push_back(C.mkAdd(K, D));
+        break;
+      default:
+        Factors.push_back(C.mkSub(K, D));
+        break;
+      }
+    }
+    const auto Product = C.mkMul(Factors);
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1u << 20;
+    const auto Reduced =
+        detail::foldProductResidues(C, Product, Budget, Storage);
+    ASSERT_LT(C.readabilityCost(Reduced), C.readabilityCost(Product) / 4);
+    SymEvalPlan Plan(C, Reduced);
+    std::mt19937_64 Random(0xfc3029);
+    for (unsigned I = 0; I < 256; ++I) {
+      std::array<llvm::APInt, 2> Values;
+      for (auto &V : Values) {
+        llvm::SmallVector<uint64_t, 4> Data(llvm::APInt::getNumWords(Width));
+        for (auto &Word : Data)
+          Word = Random();
+        V = llvm::APInt(Width, Data);
+      }
+      if (Bits == 4) {
+        Values[0] = I / 16;
+        Values[1] = I % 16;
+      }
+      const auto L = Values[0].trunc(Bits).sext(Width);
+      const auto R = Values[1].trunc(Bits).zext(Width);
+      auto Want = Scale;
+      for (unsigned J = 0; J < 97; ++J) {
+        auto D = mask(J) & ((L * (1 + 2 * (J % 4))).shl(J == 29 ? 1 : Shift) -
+                            (R * (3 + 2 * (J % 3))).shl(Shift));
+        if (J == 38)
+          D *= 3;
+        const auto K = offset(J);
+        switch (J % 5) {
+        case 0:
+          Want *= K | D;
+          break;
+        case 1:
+          Want *= K ^ D;
+          break;
+        case 2:
+          Want *= K & ~D;
+          break;
+        case 3:
+          Want *= K + D;
+          break;
+        default:
+          Want *= K - D;
+          break;
+        }
+      }
+      EXPECT_EQ(Plan.eval(Values), Want) << Bits << " bits, trial " << I;
+    }
+  }
+}
+
 } // namespace

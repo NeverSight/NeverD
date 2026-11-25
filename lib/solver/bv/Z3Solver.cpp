@@ -6,6 +6,7 @@
 
 #include "neverd/solver/Z3Solver.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 
 #include <optional>
@@ -178,6 +179,40 @@ public:
                    Amount.extract(Width - 1, 0));
   }
 
+  z3::expr wordComparison(SymRef A, SymRef B, bool Distinct = false) {
+    auto compare = [&](const z3::expr &L, const z3::expr &R) {
+      return Distinct ? L != R : L == R;
+    };
+    auto addends = [&](const SymRef &R) {
+      return Ctx.op(R) == SymOp::Add ? Ctx.operands(R) : llvm::ArrayRef(R);
+    };
+    auto coefficient = [&](SymRef Term) {
+      return Ctx.op(Term) == SymOp::Mul && Ctx.numOperands(Term) == 2
+                 ? Ctx.operand(Term, 0)
+                 : SymRef{};
+    };
+    const auto Left = addends(A), Right = addends(B);
+    const auto Scale = coefficient(Left.front());
+    auto sameScale = [&](SymRef Term) { return coefficient(Term) == Scale; };
+    if (Scale && Ctx.isConst(Scale) && (Ctx.constWords(Scale).front() & 1) &&
+        llvm::all_of(Left.drop_front(), sameScale) &&
+        llvm::all_of(Right, sameScale)) {
+      // An odd scalar is invertible modulo 2^width. Removing it from
+      // every addend on both sides preserves equality for each assignment.
+      auto unscaledSum = [&](llvm::ArrayRef<SymRef> Terms) {
+        auto value = [&](SymRef Term) -> const z3::expr & {
+          return *Nodes[Ctx.operand(Term, 1).index()];
+        };
+        z3::expr Sum = value(Terms.front());
+        for (auto Term : Terms.drop_front())
+          Sum = Sum + value(Term);
+        return Sum;
+      };
+      return compare(unscaledSum(Left), unscaledSum(Right));
+    }
+    return compare(*Nodes[A.index()], *Nodes[B.index()]);
+  }
+
   z3::expr translateNode(SymRef R) {
     const auto &N = Ctx.node(R);
     auto arg = [&](unsigned I) -> const z3::expr & {
@@ -290,7 +325,7 @@ public:
     case SymOp::Ite:
       return z3::ite(predicate(arg(0)), arg(1), arg(2));
     case SymOp::Eq:
-      return bit(arg(0) == arg(1));
+      return bit(wordComparison(Ctx.operand(R, 0), Ctx.operand(R, 1)));
     case SymOp::Ult:
       return bit(z3::ult(arg(0), arg(1)));
     case SymOp::Ule:
@@ -342,7 +377,7 @@ public:
           return false;
         if (Ctx.width(A) != Ctx.width(*B))
           return fail(SatResult::Invalid);
-        Pred = *Nodes[A.index()] == *Nodes[B->index()];
+        Pred = wordComparison(A, *B);
       }
       Solver.add(Positive ? Pred : !Pred);
       return true;
@@ -371,7 +406,7 @@ public:
           fail(SatResult::Invalid);
           return SatResult::Invalid;
         }
-        LastAssumptions.push_back(*Nodes[A.index()] != *Nodes[B.index()]);
+        LastAssumptions.push_back(wordComparison(A, B, true));
       }
       const z3::check_result Result = Solver.check(LastAssumptions);
       if (Result == z3::unknown) {

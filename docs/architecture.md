@@ -8382,9 +8382,12 @@ A factor can also set, flip or clear weighted bits with a constant offset
 as `C | D`, `C ^ D` or `C & ~D`. Where the weighted sum `D` can affect
 the product, a uniform mask yields exactly `C`, `C + D` or `C - D` in
 the observed precision. A mixed mask retains its original operation on
-the overlapping field. In the equivalent spelling `C ^ (M & D)`, the
-toggle mask `M` is projected independently of `C`. A weight below the required shift keeps the entire
-factor, including its cross terms.
+the overlapping field. A mask on the weighted sum itself is projected
+independently of the offset. This covers `C + (M & D)`, `C - (M & D)`
+and the three bitwise joins. A mixed inner mask keeps its holes, and addition
+or subtraction takes place at the surviving field width so carries and borrows
+remain observable. A weight below the required shift keeps the entire factor,
+including its cross terms.
 Independent evaluation of a wide scaled product can combine repeated
 factors by binary exponentiation. When a sum of weighted words has a common
 power of two and its observed coefficients fit a signed 32-bit word, the
@@ -18462,6 +18465,9 @@ assumptions remain separate. Expression synthesis selects its proof backend
 through the existing verifier boundary; inconclusive results never authorize a
 rewrite. Repeated product factors share squared powers in the solver encoding;
 the existing scaled-product quotient restores the complete output word.
+When both sides of a word comparison have the same odd constant on every
+addend, the Z3 encoding compares the unscaled sums. The scalar is invertible
+at the original width, so the same inputs satisfy both comparisons.
 See [bitvector proof backends](solver.md) for build and validation.
 
 Shared symbolic expression builders recover comparisons from bounded
@@ -18802,6 +18808,12 @@ proof queries. Enumeration records the grammar operation and its operand
 indices for each new sampled behaviour. On a target match it builds pending
 representatives in discovery order before offering the candidate. An
 unsuccessful search can discard its recipes without interning those nodes.
+For machine words, the cost bound or the remaining work can make the current
+tier the last one reachable. The search screens those candidates at one grid
+point and checks survivors against the full grid. If any survivor matches, it
+replays the tier in discovery order for the independent checker and verifier.
+An unsuccessful final tier charges every visited candidate without storing
+signatures that no later tier can read.
 
 Before composite grammar enumeration, semantic synthesis can fit an entire
 modular affine vector from the oracle's zero and unit-vector responses. Equal

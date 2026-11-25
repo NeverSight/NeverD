@@ -335,7 +335,17 @@ SymSimplifyResult rewriteRoot(llvm::Instruction *Root,
   const sym::SymRef Before = Xlat.in(Root);
   if (HadSharedBoundary)
     *HadSharedBoundary = Xlat.hasSharedBoundary();
-  if (!Before.isValid() || Ctx.dagSize(Before) < Opts.MinMeasuredNodes)
+  if (!Before.isValid())
+    return Result;
+  // Construction can already fold the root to one of its operands. The
+  // original region qualified for measurement even if that operand is small.
+  if (Xlat.foldedToOperand(*Root, Before, Opts.MinMeasuredNodes) &&
+      materializeCandidate(Root, Xlat, Before, Opts, Dead)) {
+    Result.Rewrites = 1;
+    Result.Outcome = SymSimplifyOutcome::Rewritten;
+    return Result;
+  }
+  if (Ctx.dagSize(Before) < Opts.MinMeasuredNodes)
     return Result;
 
   Result.Outcome = SymSimplifyOutcome::AlreadyShortest;
