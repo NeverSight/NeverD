@@ -5737,6 +5737,10 @@ on the same predecessor. Every PHI reads the state before entry to its block.
 The selected data may occupy a scratch register until the epilogue writes the
 ABI result. A separately merged byte must agree with its represented parent
 on the incoming edge, including when that byte supplies the shift count.
+When separate latches update the scratch byte and the shift count, the
+unchanged operand comes from that same latch. A value initialized before
+the count choice reaches both successors. Compare results at the width
+that the exit actually reads, including any mask or shift after the join.
 An unrelated loop counter may remain unknown while the proof checks both
 continuations and the value after the final write.
 One arm may write the ABI result directly while another supplies a scratch

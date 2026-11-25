@@ -9325,6 +9325,16 @@ bytes and an unknown full-register input.
 a late handoff, a missing PHI edge, a store and a latch that changes the
 carrier selector. `ReturnContract.I386SharedShiftUsesOnlyTheSelectedCarrier`
 checks both stack arguments and compares the zero-, one- and two-trip results.
+`ReturnContract.TwoLatchesKeepTheWrittenByteInTheShiftedRegister` checks
+both latch orders, a full-register collision and a collision visible only
+when the exit reads the low byte. An XOR with the current shift count makes
+reversing the latches observable. On i386,
+`ReturnContract.I386TwoLatchesCanProveTheShiftOfJustDL` checks the
+disjoint byte results after zero, one and two trips with full-register seeds
+and with only DL initialized.
+`ReturnContract.MIPSTwoLatchesCarryTheValueSetBeforeTheCountChoice` sets the
+scratch register before either count arm. It executes DINS or the count update
+in a branch delay slot and the variable shift in the return delay slot.
 `SysVCallContract.GuardedScratchArgumentInSelectedAndOmittedCallees`
 checks the RDX entry read through a tail relay and a caller that consumes its
 result. Changing one selector bit exposes the incoming register on the direct

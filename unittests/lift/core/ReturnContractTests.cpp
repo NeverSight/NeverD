@@ -1785,6 +1785,27 @@ TEST(ReturnContracts, PairedShiftPathsCloseEveryBackedgeBeforeSelectingAValue) {
     EXPECT_FALSE(settle({TwoLatches}).front());
     TwoLatches.Blocks.back().Ops[1].Inputs[1] = C(1);
     EXPECT_TRUE(settle({TwoLatches}).front());
+
+    // The data can be initialized once before the split that sets the count.
+    // Both latches still carry it. Toggling count bit zero allows a collision.
+    auto &Choice = TwoLatches.Blocks[1];
+    Choice.Ops.insert(Choice.Ops.begin(),
+                      operation(NdOp::COPY, rax(9), {C(1)}));
+    for (int Arm : {2, 3})
+      TwoLatches.Blocks[Arm].Ops.erase(TwoLatches.Blocks[Arm].Ops.begin());
+    for (auto &[Pred, In] : TwoLatches.Blocks[5].Phis.front().Args)
+      if (Pred == 2 || Pred == 3)
+        In = rax(9);
+    EXPECT_TRUE(settle({TwoLatches}).front());
+    TwoLatches.Blocks.back().Ops[1].Inputs[1] = C(4);
+    EXPECT_FALSE(settle({TwoLatches}).front());
+    const auto Always = sized(temporary(31), 1);
+    Choice.Ops.insert(Choice.Ops.end() - 1,
+                      operation(NdOp::INT_EQUAL, Always, {C(1), C(1)}));
+    Choice.Ops.back().Inputs[1] = Always;
+    EXPECT_TRUE(settle({TwoLatches}).front());
+    Choice.Ops[Choice.Ops.size() - 2].Opcode = NdOp::INT_NOTEQUAL;
+    EXPECT_TRUE(settle({TwoLatches}).front());
   }
   F.Blocks[6].Ops.back().Inputs[1] = C(1);
   EXPECT_TRUE(IsVoid()); // Both arms can return six after one lap.
@@ -2596,6 +2617,86 @@ int main(void) { choose_result(0,0); choose_result(1,0); return 0; }
 )");
 }
 
+TEST(ReturnContract, TwoLatchesKeepTheWrittenByteInTheShiftedRegister) {
+  const auto Code = [](uint8_t Upper, bool ReadByte, bool UseCount = false) {
+    std::vector<uint8_t> Bytes = {
+        // Mode 257 takes a bare return. The two entries set R11 and select
+        // a shift count of zero or one.
+        0x81, 0xfe, 1, 1, 0, 0, 0x74, 0x22, 0x41, 0x89, 0xf0, 0x48, 0x85, 0xff,
+        0x74, 0x0d, 0x41, 0xbb, static_cast<uint8_t>(UseCount ? 2 : 4), Upper,
+        0, 0, 0xb9, 1, 0, 0, 0, 0xeb, 0x0e, 0x41, 0xbb, 1, 1, 0, 0, 0xb9, 0, 0,
+        0, 0, 0xeb, 1, 0xc3,
+        // Stop at zero or one. An odd trip updates R11B. An even
+        // trip XORs ECX with one. Each latch shifts the schedule right.
+        0x45, 0x85, 0xc0, 0x74, 0x20, 0x41, 0x83, 0xf8, 1, 0x74, 0x1a, 0x41,
+        0xf7, 0xc0, 1, 0, 0, 0, 0x74, 9};
+    if (UseCount)
+      Bytes.insert(Bytes.end(), {0x41, 0x30, 0xcb, 0x90}); // xor r11b,cl; nop
+    else
+      Bytes.insert(Bytes.end(), {0x41, 0x80, 0xf3, 2}); // xor r11b,2
+    Bytes.insert(Bytes.end(), {0x41, 0xd1, 0xe8, 0xeb, 0xe3, 0x83, 0xf1, 1,
+                               0x41, 0xd1, 0xe8, 0xeb, 0xdb});
+    if (ReadByte)
+      Bytes.insert(Bytes.end(), {0x41, 0x0f, 0xb6, 0xc3}); // movzx eax,r11b
+    else
+      Bytes.insert(Bytes.end(), {0x4c, 0x89, 0xd8});     // mov rax,r11
+    Bytes.insert(Bytes.end(), {0x48, 0xd3, 0xe0, 0xc3}); // shl rax,cl; ret
+    return Bytes;
+  };
+  runIntegerReturnSources(Arch::X64, Code(3, false), R"(
+int main(void) {
+    return choose_result(0,1)!=0x101 || choose_result(1,1)!=0x608 ||
+           choose_result(0,3)!=0x103 || choose_result(1,3)!=0x60c ||
+           choose_result(0,5)!=0x206 || choose_result(1,5)!=0x306 ||
+           choose_result(0,6)!=0x206 || choose_result(1,6)!=0x306;
+}
+)");
+  const char *Collision = R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "both entry arms can produce the same shifted value");
+int main(void) { choose_result(0,5); choose_result(1,6); return 0; }
+)";
+  runIntegerReturnSources(Arch::X64, Code(2, false), Collision);
+  runIntegerReturnSources(Arch::X64, Code(3, true), Collision);
+  // Reading CL on the byte-writing latch makes the two orders distinguishable.
+  runIntegerReturnSources(Arch::X64, Code(3, false, true), R"(
+int main(void) {
+    return choose_result(0,5)!=0x202 || choose_result(0,6)!=0x200 ||
+           choose_result(1,5)!=0x303 || choose_result(1,6)!=0x302;
+}
+)");
+  runIntegerReturnSources(Arch::X64, Code(3, true, true), Collision);
+}
+
+TEST(ReturnContract, I386TwoLatchesCanProveTheShiftOfJustDL) {
+  // EAX holds the schedule until the exit. An odd bit updates DL, an even
+  // bit updates ECX, and MOVZX observes only DL before the variable shift.
+  std::vector<uint8_t> Bytes = {
+      0x81, 0x7c, 0x24, 8,    1,    1,    0,    0,    0x74, 0x23, 0x8b, 0x44,
+      0x24, 8,    0x83, 0x7c, 0x24, 4,    0,    0x74, 0x0c, 0xba, 4,    2,
+      0,    0,    0xb9, 1,    0,    0,    0,    0xeb, 0x0d, 0xba, 1,    1,
+      0,    0,    0xb9, 0,    0,    0,    0,    0xeb, 1,    0xc3, 0x85, 0xc0,
+      0x74, 0x1a, 0x83, 0xf8, 1,    0x74, 0x15, 0xa9, 1,    0,    0,    0,
+      0x74, 7,    0x80, 0xf2, 2,    0xd1, 0xe8, 0xeb, 0xe9, 0x83, 0xf1, 4,
+      0xd1, 0xe8, 0xeb, 0xe2, 0x0f, 0xb6, 0xc2, 0xd3, 0xe0, 0xc3};
+  const char *Expected = R"(
+int main(void) {
+    return choose_result(0,1)!=1 || choose_result(1,1)!=8 ||
+           choose_result(0,3)!=3 || choose_result(1,3)!=12 ||
+           choose_result(0,5)!=48 || choose_result(1,5)!=192 ||
+           choose_result(0,6)!=48 || choose_result(1,6)!=192;
+}
+)";
+  runIntegerReturnSources(Arch::X86, Bytes, Expected);
+  // Write just DL on both entries. The upper bits of EDX are unavailable.
+  for (auto I : {21u, 33u}) {
+    ASSERT_EQ(Bytes[I], 0xba); // mov edx,imm32
+    Bytes[I] = 0xb2;           // mov dl,imm8
+    std::fill_n(Bytes.begin() + I + 2, 3, 0x90);
+  }
+  runIntegerReturnSources(Arch::X86, Bytes, Expected);
+}
+
 TEST(ReturnContract, I386SharedShiftUsesOnlyTheSelectedCarrier) {
   const auto WithUpdate = [](uint8_t Update) {
     return std::vector<uint8_t>{
@@ -2729,6 +2830,49 @@ int main(void) {
   }
 }
 
+static std::vector<uint8_t> mipsInstructionBytes(llvm::ArrayRef<uint32_t> Words,
+                                                 bool Little) {
+  std::vector<uint8_t> Code;
+  for (uint32_t Word : Words)
+    for (unsigned I = 0; I < 4; ++I)
+      Code.push_back(static_cast<uint8_t>(Word >> (8 * (Little ? I : 3 - I))));
+  return Code;
+}
+
+TEST(ReturnContract, MIPSTwoLatchesCarryTheValueSetBeforeTheCountChoice) {
+  for (Arch Target :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    const auto Code = [&](uint32_t CountMask) {
+      const uint32_t Words[] = {
+          // The bare path returns with V0 untouched. Otherwise set A6 to
+          // 0x101 before choosing an initial count of zero or one in T1.
+          0x640c0101, 0x10ac0008, 0, 0x640a0101, 0x10800003, 0x00a07025,
+          0x10000005, 0x640d0001, 0x10000003, 0x640d0000, 0x03e00008, 0,
+          // Stop at schedule zero or one. An odd trip replaces the low byte
+          // of A6 with DINS in the branch slot. An even trip changes T1 there.
+          0x11c0000c, 0x640c0001, 0x11cc000a, 0x31cc0001, 0x11800005, 0,
+          0x394c0002, 0x000e707a, 0x1000fff7, 0x7d8a3807, 0x000e707a,
+          0x1000fff4, 0x39ad0000u | CountMask,
+          // Move A6 to V0 and shift by T1 in the return delay slot.
+          0x01401025, 0x03e00008, 0x01a21014};
+      return mipsInstructionBytes(Words, archLittleEndian(Target));
+    };
+    runIntegerReturnSources(Target, Code(4), R"(
+int main(void) {
+    return choose_result(0,1)!=257 || choose_result(1,1)!=514 ||
+           choose_result(0,3)!=259 || choose_result(1,3)!=518 ||
+           choose_result(0,5)!=(259u<<4) || choose_result(1,6)!=(259u<<5);
+}
+)");
+    runIntegerReturnSources(Target, Code(1), R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "both entries can reach the same count with the same value");
+int main(void) { choose_result(0,5); choose_result(1,6); return 0; }
+)");
+  }
+}
+
 TEST(ReturnContract, SharedMIPSShiftCountChangesInTheBackedgeSlot) {
   for (const bool Little : {false, true}) {
     SCOPED_TRACE(Little);
@@ -2744,12 +2888,7 @@ TEST(ReturnContract, SharedMIPSShiftCountChangesInTheBackedgeSlot) {
           0x11c00005, 0, 0x38420002, 0x65ceffff,
           // b head; xori t1,t1,Mask; done: jr ra; dsllv v0,v0,t1
           0x1000fffb, 0x39ad0000u | Mask, 0x03e00008, 0x01a21014};
-      std::vector<uint8_t> Code;
-      for (uint32_t Word : Words)
-        for (unsigned I = 0; I < 4; ++I)
-          Code.push_back(
-              static_cast<uint8_t>(Word >> (8 * (Little ? I : 3 - I))));
-      return Code;
+      return mipsInstructionBytes(Words, Little);
     };
     const Arch Target = Little ? Arch::MIPS64EL : Arch::MIPS64;
     runIntegerReturnSources(Target, WithCountUpdate(2), R"(
