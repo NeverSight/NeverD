@@ -238,10 +238,10 @@ class MicrosoftWindowsTypes(unittest.TestCase):
             self.assertEqual(Path(unwind["runtime_import_library"]["file"]).read_bytes(), b"kernel32.Lib")
             self.assertFalse(set(windows.flat.primary_runtime_profiles()).intersection(recent["providers"]))
 
-    def test_cpp_media_headers_verify_the_published_c_prototypes(self):
+    def test_cpp_headers_verify_the_published_c_prototypes(self):
         with tempfile.TemporaryDirectory() as tmp:
             groups = {name: windows.flat.RUNTIME_PROFILES[name]
-                      for name in ("AudioStateMonitors", "MediaFoundationCollection")}
+                      for name in ("AudioStateMonitors", "MediaFoundationCollection", "OlePropertyConversion")}
             units = windows.flat.named_runtime_units(Path(tmp), "arm64", ["clang"],
                                                      dict.fromkeys(groups, {}), profiles=groups)
             for unit in units:
@@ -253,6 +253,10 @@ class MicrosoftWindowsTypes(unittest.TestCase):
                     self.assertIn("#include <mfapi.h>", original)
                     self.assertNotIn("MFCreateCollection(", original)
                     self.assertIn("MFCreateCollection(IMFCollection **", unit["source"].read_text())
+                elif unit["name"] == "OlePropertyConversion":
+                    self.assertIn("#include <PropIdl.h>", original)
+                    self.assertNotIn("StgConvertPropertyToVariant(", original)
+                    self.assertIn("BOOLEAN __stdcall StgConvertPropertyToVariant(", unit["source"].read_text())
                 else:
                     self.assertIn("#include <mmdeviceapi.h>", original)
                     self.assertIn("#include <audiostatemonitorapi.h>", original)

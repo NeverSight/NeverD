@@ -40,6 +40,37 @@ class MicrosoftProviderABIs(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "callback ABI or record layout"):
                     check(broken)
 
+    @unittest.skipUnless(shutil.which("clang") and shutil.which("neverd"),
+                         "requires Clang and the NeverD CLI")
+    def test_cpp_only_runtime_export_is_compared_with_original_declaration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "arm64").mkdir()
+            original, projection = root / "original.h", root / "projection.c"
+            original.write_text('#ifdef __cplusplus\nextern "C" unsigned char Read(void *);\n#endif\n')
+            projection.write_text("unsigned char Read(void *);\n")
+            header = root / "WindowsUserARM64.h"
+            flags = ["clang", "--target=aarch64-pc-windows-msvc", "-ffreestanding", "-I", str(root)]
+            target = {"image_sha256": "1" * 64, "additional_exports": {}}
+            profile = {"module": "example.dll", "exports": {"Read": 1}, "targets": {"arm64": target}}
+            bridge = {"source": str(original), "source_sha256": provider.digest(original),
+                      "language": "c++", "arguments": [*flags, "-x", "c++", "-std=c++17"],
+                      "runtime_exports": provider.flat.named_runtime_exports(
+                          profile, target, provider.flat.NAMED_RUNTIME["win32_metadata"])}
+            unit = {"name": "Example", "commands": [[*flags, "-E", str(projection)]],
+                    "metadata": {"sdk_runtime_bridge": bridge}}
+            (root / "manifest.json").write_text("{}")
+            with mock.patch.dict(provider.flat.RUNTIME_PROFILES, {"Example": profile}), \
+                 mock.patch.dict(provider.CASES, {"Example": ()}):
+                for result_type, expected in (("unsigned char", True), ("int", False)):
+                    header.write_text(result_type + " Read(void *);\n")
+                    library = {"name": "WindowsUserARM64", "sha256": provider.digest(header),
+                               "providers": [unit]}
+                    (root / "arm64/manifest.json").write_text(json.dumps({"libraries": [library]}))
+                    args = argparse.Namespace(generated=root, output=root / result_type, neverd="neverd",
+                                              architecture=["arm64"], provider=["Example"], timeout=15)
+                    self.assertEqual(provider.check(args)["passed"], expected)
+
     def test_archived_catalog_only_requires_named_runtime_providers_when_requested(self):
         names = {"DisplayControl": ()}
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(provider.CASES, names, clear=True):

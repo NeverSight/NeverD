@@ -283,7 +283,14 @@ def check(args: argparse.Namespace) -> dict:
                         row.update(functions=names, inventory="original SDK headers and target import library",
                                    imports_without_declaration=inventory["imports_without_declaration"])
                     elif "sdk_runtime_bridge" in metadata:
-                        declared = official_names(args, compiler, original, directory, row, arch, name, ("",))
+                        # The type reader inventories C declarations. Some SDK functions
+                        # appear only in the C++ view. Select their names from the C
+                        # input, then check arity and linkage against the original C++
+                        # header and the emitted catalog independently below.
+                        inventory_source = (Path(command[-1]) if bridge.get("language") == "c++"
+                                            else original)
+                        declared = official_names(args, compiler, inventory_source, directory,
+                                                  row, arch, name, ("",))
                         if name == "WebAuthenticationRuntime":
                             inputs = json.loads(flat.WEBAUTHN_INPUTS.read_text(encoding="utf-8"))
                             exports = {"module": inputs["module"], "names": inputs["exports"],
