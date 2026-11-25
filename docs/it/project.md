@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 53f1a000027451971c7ecbb53458cf55fca7b02e4df6dd9daae836c681650299 -->
+<!-- i18n-source: cc524e2ef5f646079f8605cb37ff35db8589f473f5a0400471da98f1926a4c2b -->
 
 <div align="center">
 
@@ -69,7 +69,7 @@ I target ELF sperimentali per le istruzioni intere supportano il lifting rigoros
 | Target | Profili ELF verificati |
 |---|---|
 | RISC-V | RV32I/ILP32 e RV64I/LP64 little-endian. Le informazioni ELF determinano le estensioni M, A e C per gli interi oppure le singole estensioni Zmmul, Zaamo, Zalrsc e Zca. |
-| PowerPC | PPC32 System V e PPC64 ELFv1/ELFv2 in entrambi gli ordini dei byte. Entrambe le ABI PPC64 supportano chiamate tra moduli tramite la PLT e cambi di TOC. ELFv1 usa descrittori di funzione ed ELFv2 supporta punti di ingresso globali e locali. Le operazioni scalari verificate comprendono la divisione con e senza segno, il risultato registrato in CR0 e gli effetti sull’overflow in XER. |
+| PowerPC | PPC32 System V e PPC64 ELFv1/ELFv2 in entrambi gli ordini dei byte. PPC32 supporta chiamate tra moduli tramite la PLT sicura e la BSS-PLT classica. Entrambe le ABI PPC64 supportano chiamate tra moduli tramite la PLT e cambi di TOC. ELFv1 usa descrittori di funzione ed ELFv2 supporta punti di ingresso globali e locali. Le operazioni scalari verificate comprendono la divisione con e senza segno, il risultato registrato in CR0 e gli effetti sull’overflow in XER. |
 
 La riscrittura del codice nativo resta da implementare per questi profili. [Copertura di RISC-V e PowerPC (in inglese)](../riscv-powerpc.md)
 

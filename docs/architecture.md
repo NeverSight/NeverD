@@ -19221,7 +19221,10 @@ for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 ### Experimental RISC-V and PowerPC ELF analysis
 
 The ELF loader admits little-endian RV32I/ILP32 and RV64I/LP64, classic PPC32
-System V, and PPC64 ELFv1 and ELFv2 in either byte order. The ELFv1 loader
+System V, and PPC64 ELFv1 and ELFv2 in either byte order. On PPC32 the runtime
+jump table identifies the secure PLT's pointer slots or the classic BSS-PLT's
+executable entries. For a secure PIC stub, MedIR binds the call to a slot
+using the reaching r30. The ELFv1 loader
 keeps descriptor addresses and code entries distinct. MedIR uses the entry's
 TOC and static chain for incoming registers, and binds a descriptor call from
 its reaching loads. For PPC64 ELFv1 inter-module calls, the loader pairs a

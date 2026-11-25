@@ -43,6 +43,14 @@ llvm::Error recordPPC64ELFv2Entry(BinaryImage &Image, va_t Entry, uint64_t Size,
                                   uint8_t Other);
 llvm::Error readPPC64Linkage(BinaryImage &Image,
                              const PPC64LinkageTables &Table);
+struct PPC32PLTTable {
+  va_t Address = 0;
+  va_t Relocations = 0;
+  uint64_t Count = 0;
+  bool Secure = false;
+};
+llvm::Expected<PPC32PLTTable> readPPC32PLTTable(const BinaryImage &Image);
+llvm::Error readPPC32Linkage(BinaryImage &Image, const PPC32PLTTable &Table);
 } // namespace elf_loader
 } // namespace neverd
 #endif // NEVERD_LIB_LOADER_ELF_ELFINTEGERPROFILE_H

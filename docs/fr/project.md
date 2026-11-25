@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 53f1a000027451971c7ecbb53458cf55fca7b02e4df6dd9daae836c681650299 -->
+<!-- i18n-source: cc524e2ef5f646079f8605cb37ff35db8589f473f5a0400471da98f1926a4c2b -->
 
 <div align="center">
 
@@ -69,7 +69,7 @@ Les cibles ELF entières expérimentales prennent en charge la traduction strict
 | Cible | Profils ELF vérifiés |
 |---|---|
 | RISC-V | RV32I/ILP32 et RV64I/LP64 petit-boutistes. Les informations ELF déterminent les extensions M, A et C entière ou les extensions individuelles Zmmul, Zaamo, Zalrsc et Zca. |
-| PowerPC | PPC32 System V et PPC64 ELFv1/ELFv2 dans les deux ordres d’octets. Les deux ABI PPC64 prennent en charge les appels entre modules via la PLT et les changements de TOC. ELFv1 utilise des descripteurs de fonction et ELFv2 prend en charge les points d’entrée globaux et locaux. Le sous-ensemble scalaire vérifié couvre la division signée et non signée, le résultat enregistré dans CR0 et les effets sur le débordement dans XER. |
+| PowerPC | PPC32 System V et PPC64 ELFv1/ELFv2 dans les deux ordres d’octets. PPC32 prend en charge les appels entre modules via la PLT sécurisée et la BSS-PLT classique. Les deux ABI PPC64 prennent en charge les appels entre modules via la PLT et les changements de TOC. ELFv1 utilise des descripteurs de fonction et ELFv2 prend en charge les points d’entrée globaux et locaux. Le sous-ensemble scalaire vérifié couvre la division signée et non signée, le résultat enregistré dans CR0 et les effets sur le débordement dans XER. |
 
 La réécriture du code natif reste à implémenter pour ces profils. [Couverture de RISC-V et PowerPC (en anglais)](../riscv-powerpc.md)
 

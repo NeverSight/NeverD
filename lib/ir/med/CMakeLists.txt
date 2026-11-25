@@ -83,6 +83,7 @@ add_neverd_component_library(NeverDIRMed
   flags/X86/MedFlagsX86.cpp
   lower/LowToMed.cpp
   lower/PowerPC/ELFCalls.cpp
+  lower/PowerPC/ELF32Calls.cpp
   lower/MIPS/LowToMedMIPSRelocations.cpp
   lower/LowToMedScalarSelectors.cpp
   lower/LowToMedSourceCalls.cpp

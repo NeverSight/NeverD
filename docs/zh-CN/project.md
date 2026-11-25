@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 53f1a000027451971c7ecbb53458cf55fca7b02e4df6dd9daae836c681650299 -->
+<!-- i18n-source: cc524e2ef5f646079f8605cb37ff35db8589f473f5a0400471da98f1926a4c2b -->
 
 <div align="center">
 
@@ -69,7 +69,7 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 | 目标 | 已验证的 ELF 配置 |
 |---|---|
 | RISC-V | 小端 RV32I/ILP32 和 RV64I/LP64。根据 ELF 中的标记选择 M、A、整数 C，或单独的 Zmmul、Zaamo、Zalrsc 和 Zca 扩展。 |
-| PowerPC | 大端和小端 PPC32 System V 及 PPC64 ELFv1/ELFv2。两种 PPC64 ABI 均支持跨模块 PLT 调用和 TOC 切换。ELFv1 使用函数描述符，ELFv2 支持全局入口和本地入口。已验证的标量子集包括有符号和无符号除法、写入 CR0 的结果以及对 XER 溢出位的影响。 |
+| PowerPC | 大端和小端 PPC32 System V 及 PPC64 ELFv1/ELFv2。PPC32 支持通过 secure PLT 和传统 BSS-PLT 进行跨模块调用。两种 PPC64 ABI 均支持跨模块 PLT 调用和 TOC 切换。ELFv1 使用函数描述符，ELFv2 支持全局入口和本地入口。已验证的标量子集包括有符号和无符号除法、写入 CR0 的结果以及对 XER 溢出位的影响。 |
 
 这些架构配置的原生代码重写仍待实现。 [RISC-V 和 PowerPC 支持范围（英文）](../riscv-powerpc.md)
 

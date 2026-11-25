@@ -220,7 +220,16 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   elf_loader::detail::DynamicSections<ELFT> Reconstructed;
   llvm::ArrayRef<Elf_Shdr> Tables = *SectionsOr;
   llvm::StringRef TableNames = ShStrTab;
-  const bool RuntimeTables = isMIPS(Img.Arch) || Linkage.JumpRelocationSize;
+  const bool PPC32 = Img.Arch == Arch::PPC32 || Img.Arch == Arch::PPC32LE;
+  elf_loader::PPC32PLTTable PPC32PLT;
+  if (PPC32 && !IsRelocatable) {
+    auto Table = elf_loader::readPPC32PLTTable(Img);
+    if (!Table)
+      return Table.takeError();
+    PPC32PLT = *Table;
+  }
+  const bool RuntimeTables =
+      isMIPS(Img.Arch) || PPC32PLT.Count || Linkage.JumpRelocationSize;
   if (!IsRelocatable && (SectionsOr->empty() || RuntimeTables)) {
     const size_t DiagnosticsBefore = Img.LoadDiagnostics.size();
     Reconstructed =
@@ -231,7 +240,9 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
           return llvm::createStringError(
               llvm::inconvertibleErrorCode(),
               "elf: invalid %s runtime table: %s",
-              isMIPS(Img.Arch) ? "MIPS" : "PPC64",
+              isMIPS(Img.Arch) ? "MIPS"
+              : PPC32          ? "PPC32"
+                               : "PPC64",
               Img.LoadDiagnostics[I].Message.c_str());
       if (!SectionsOr->empty()) {
         // PT_DYNAMIC is authoritative even when the file retains an
@@ -301,6 +312,9 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   Progress.check();
   // --- .rela.plt / .rel.plt imports ---
   elf_loader::parsePLTImports(ELF, Tables, TableNames, Data, Size, Img);
+  if (PPC32PLT.Count)
+    if (auto E = elf_loader::readPPC32Linkage(Img, PPC32PLT))
+      return E;
   if (isPowerPC64(Img.Arch))
     if (auto E = elf_loader::readPPC64Linkage(Img, Linkage))
       return E;

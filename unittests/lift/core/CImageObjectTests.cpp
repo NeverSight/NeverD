@@ -252,6 +252,33 @@ TEST(CImageObjects, RelocatedSlotNamesATargetCDoesNotDeclare) {
       << Source;
 }
 
+TEST(CImageObjects, DereferencingARelocatedCellSizesItsUnnamedInitialTarget) {
+  BinaryImage Img = objectImage();
+  std::erase_if(Img.Symbols,
+                [](const Symbol &Sym) { return Sym.Addr == Counter; });
+  putPointer(Img.Segments.back().Data, Utf8Slot - DataVA, Counter);
+  const auto Word = NdType::makeInt(4, false);
+  HighFunc Read = function("read_slot", Word, TextVA);
+  Read.Body = {returnStatement(
+      HighExpr::makeLoad(load(Utf8Slot, NdType::makeInt(8, false)), Word))};
+  CEmitterOptions Options;
+  Options.TheArch = Img.Arch;
+  Options.Format = Img.Format;
+  Options.Image = &Img;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Read}, OS, Options));
+  OS.flush();
+  source_call_execution_test::compileAndRun(Source + R"(
+int main(void) {
+    uint32_t replacement = 17;
+    if (read_slot() != 5) return 1;
+    u8s = (uintptr_t)&replacement;
+    return read_slot() != replacement;
+}
+)");
+}
+
 TEST(CImageObjects, DeclaredObjectsHoldTheImageBytes) {
   const BinaryImage Img = objectImage();
   const std::string Source = emitObjects(Img, nullptr);
@@ -329,7 +356,8 @@ int main(void) {
 }
 )";
     source_call_execution_test::compileAndRun(
-        Check, {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+        Check,
+        {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
   }
 }
 
