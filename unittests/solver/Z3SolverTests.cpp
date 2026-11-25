@@ -183,6 +183,41 @@ TEST(Z3Solver, ScaledProductsKeepFullWordsAndIndependentInputModels) {
       }
 }
 
+TEST(Z3Solver, OddScalesPreserveEqualityAndFullWordCounterexamples) {
+  if (!Z3Solver::available())
+    GTEST_SKIP() << "Z3 backend disabled";
+  for (unsigned Width : {4u, 65u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Three = Ctx.mkConst(Width, 3);
+    const auto Left = Ctx.mkAdd(Ctx.mkMul(Three, X), Ctx.mkMul(Three, Y));
+    const auto Right = Ctx.mkMul(Three, Ctx.mkAdd(X, Y));
+    Z3Solver Solver(Ctx);
+    EXPECT_EQ(Solver.checkDistinct(Left, Right), SatResult::Unsat);
+
+    // Different upper coefficient bits matter even when the low word matches.
+    const auto Top = llvm::APInt::getOneBitSet(Width, Width - 1);
+    const auto Other = Ctx.mkConst(Top | 3);
+    const auto Mixed = Ctx.mkAdd(Ctx.mkMul(Other, X), Ctx.mkMul(Three, Y));
+    ASSERT_TRUE(Solver.assertEqual(X, Ctx.mkConst(Width, 1)));
+    ASSERT_TRUE(Solver.assertEqual(Y, Ctx.mkConst(Top + 1)));
+    ASSERT_EQ(Solver.checkDistinct(Left, Mixed), SatResult::Sat);
+    ASSERT_TRUE(Solver.model().value(Ctx, Y));
+    EXPECT_EQ(*Solver.model().value(Ctx, Y), Top + 1);
+    EXPECT_EQ(Solver.checkDistinct(Left, Ctx.mkAdd(Ctx.mkMul(Three, X), Y)),
+              SatResult::Sat);
+
+    // X and Y differ only at the top bit. An even scale erases it.
+    const auto Two = Ctx.mkConst(Width, 2);
+    const auto TwiceX = Ctx.mkMul(Two, X), TwiceY = Ctx.mkMul(Two, Y);
+    EXPECT_EQ(Solver.checkDistinct(TwiceX, TwiceY), SatResult::Unsat);
+    ASSERT_TRUE(Solver.assertTrue(Ctx.mkEq(Left, Right)));
+    ASSERT_TRUE(Solver.assertDistinct(Left, Mixed));
+    EXPECT_EQ(Solver.check(), SatResult::Sat);
+  }
+}
+
 TEST(Z3Solver, RepeatedProductsKeepAllFactorsAndCompleteInputModels) {
   if (!Z3Solver::available())
     GTEST_SKIP() << "Z3 backend disabled";

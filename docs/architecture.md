@@ -18461,6 +18461,9 @@ assumptions remain separate. Expression synthesis selects its proof backend
 through the existing verifier boundary; inconclusive results never authorize a
 rewrite. Repeated product factors share squared powers in the solver encoding;
 the existing scaled-product quotient restores the complete output word.
+When both sides of a word comparison have the same odd constant on every
+addend, the Z3 encoding compares the unscaled sums. The scalar is invertible
+at the original width, so the same inputs satisfy both comparisons.
 See [bitvector proof backends](solver.md) for build and validation.
 
 Shared symbolic expression builders recover comparisons from bounded

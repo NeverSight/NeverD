@@ -123,6 +123,10 @@ still test the unavailable-backend contract. Scaled-product tests compare the
 built-in circuit with independent long multiplication and integer arithmetic
 through 257 bits. Z3 tests prove agreement with a separate full-width encoding
 and retain high input bits and deliberately wrong high output bits.
+For word equality and inequality, Z3 can compare unscaled sums when every
+addend on both sides has the same odd multiplier. Multiplying by an odd word
+is a bijection at that width. A satisfying assignment therefore remains a
+counterexample on the original words, including bits above bit 63.
 Repeated factors use shared squared powers in the Z3 encoding instead of a
 linear multiplication chain. Complete-word integer oracles cover factor counts
 around powers of two through 129 repetitions, widths 1–257, scaled products and
