@@ -1052,16 +1052,27 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   }
 
   // Step 3: Collect all variable definitions per block
-  std::map<int, std::set<int>> VarDefs;
+  struct Definitions {
+    llvm::SmallVector<int, 2> Blocks;
+    const MedVar *FirstOutput = nullptr;
+  };
+  std::map<int, Definitions> VarDefs;
+  auto recordDef = [&](int B, int Id, const MedVar *Output = nullptr) {
+    auto &Defs = VarDefs[Id];
+    if (Output && !Defs.FirstOutput)
+      Defs.FirstOutput = Output;
+    if (Defs.Blocks.empty() || Defs.Blocks.back() != B)
+      Defs.Blocks.push_back(B);
+  };
   for (int B = 0; B < N; ++B) {
-    for (auto &Op : Func.Blocks[B].Ops) {
+    for (const auto &Op : Func.Blocks[B].Ops) {
       if (Op.Output.Id >= 0 && Op.Output.Size > 0)
-        VarDefs[Op.Output.Id].insert(B);
+        recordDef(B, Op.Output.Id, &Op.Output);
       for (const MedVar &Aux : Op.IntrinsicOutputs)
         if (Aux.Id >= 0 && Aux.Size > 0)
-          VarDefs[Aux.Id].insert(B);
+          recordDef(B, Aux.Id, &Aux);
       for (int Id : CallClobberedIds(Op))
-        VarDefs[Id].insert(B);
+        recordDef(B, Id);
     }
   }
 
@@ -1084,7 +1095,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
             Phi.Args.push_back({P, View});
         Phi.ExceptionalEntry = Code;
         Func.Blocks[B].Phis.push_back(std::move(Phi));
-        VarDefs[Id].insert(B);
+        recordDef(B, Id);
       }
 
   // The runtime SP of a shared source handler is a separate incoming value.
@@ -1095,59 +1106,57 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       for (int Id : It->second) {
         x86_seh::mergeSourceHandlerStack(Func.Blocks[B], RegVarOfId.at(Id),
                                          FlowPreds[B], VirtualRoot, TargetArch);
-        VarDefs[Id].insert(B);
+        recordDef(B, Id);
       }
 
   // Step 4: Insert phi nodes
-  std::map<int, MedVar> VarIdToVar = RegVarOfId;
-  for (auto &Blk : Func.Blocks)
-    for (auto &Op : Blk.Ops) {
-      if (Op.Output.Id >= 0 && Op.Output.Size > 0)
-        VarIdToVar.emplace(Op.Output.Id, Op.Output);
-      for (const MedVar &Aux : Op.IntrinsicOutputs)
-        if (Aux.Id >= 0 && Aux.Size > 0)
-          VarIdToVar.emplace(Aux.Id, Aux);
-    }
-
-  // Membership does not determine the ordered PHI output vectors.
-  std::vector<llvm::DenseSet<int>> PhiVariables(N);
+  std::vector<llvm::DenseSet<int>> PreplacedPhis(N);
   for (int B = 0; B < N; ++B)
     for (const auto &Phi : Func.Blocks[B].Phis)
-      PhiVariables[B].insert(Phi.Output.Id);
-  for (auto &[VarId, DefBlocks] : VarDefs) {
-    const auto Var = VarIdToVar.find(VarId);
+      PreplacedPhis[B].insert(Phi.Output.Id);
+  // Each variable walks its iterated frontier once, including handler PHIs
+  // already present above. Keep the original FIFO order of definition blocks.
+  std::vector<int> LastVisitedVariable(N, -1);
+  llvm::SmallVector<int, 16> Worklist;
+  const bool HasHandlerDefs =
+      !SharedHandlerCodes.empty() || !SharedSourceSPRoots.empty();
+  for (const auto &[VarId, Defs] : VarDefs) {
+    const auto Reg = RegVarOfId.find(VarId);
+    const MedVar *Var =
+        Reg == RegVarOfId.end() ? Defs.FirstOutput : &Reg->second;
     // Only temporaries have complete explicit uses here. ABI recovery may
     // still discover implicit uses of machine registers and stack carriers.
-    const bool Temporary =
-        Var != VarIdToVar.end() && Var->second.Kind == MedVar::Temp;
+    const bool Temporary = Var && Var->Kind == MedVar::Temp;
 
-    std::set<int> PhiBlocks;
-    std::queue<int> Worklist;
-    for (int B : DefBlocks)
-      Worklist.push(B);
-
-    while (!Worklist.empty()) {
-      int B = Worklist.front();
-      Worklist.pop();
+    Worklist.assign(Defs.Blocks.begin(), Defs.Blocks.end());
+    // Ordinary definitions arrived in block order. A handler can add an
+    // earlier block, including one already recorded for this variable.
+    if (HasHandlerDefs && !llvm::is_sorted(Worklist)) {
+      llvm::sort(Worklist);
+      Worklist.erase(std::unique(Worklist.begin(), Worklist.end()),
+                     Worklist.end());
+    }
+    for (size_t I = 0; I < Worklist.size(); ++I) {
+      int B = Worklist[I];
       for (int D : DF[B]) {
         if (D < 0 || D >= N)
           continue;
         if (Temporary && !PhiLiveIn[D].contains(VarId))
           continue;
-        if (PhiBlocks.insert(D).second) {
-          Worklist.push(D);
+        if (LastVisitedVariable[D] != VarId) {
+          LastVisitedVariable[D] = VarId;
+          Worklist.push_back(D);
           // Step 3b already placed this variable's PHI at a shared handler.
-          if (!PhiVariables[D].insert(VarId).second)
+          if (PreplacedPhis[D].contains(VarId))
             continue;
-          auto VIt = VarIdToVar.find(VarId);
-          MedVar PhiVar = (VIt != VarIdToVar.end()) ? VIt->second : MedVar{};
+          const MedVar PhiVar = Var ? *Var : MedVar{};
 
           PhiNode Phi;
           Phi.Output = PhiVar;
           for (int P : FlowPreds[D])
             if (P != VirtualRoot)
               Phi.Args.push_back({P, PhiVar});
-          Func.Blocks[D].Phis.push_back(Phi);
+          Func.Blocks[D].Phis.push_back(std::move(Phi));
         }
       }
     }
