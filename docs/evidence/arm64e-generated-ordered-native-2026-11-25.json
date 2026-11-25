@@ -1,0 +1,873 @@
+{
+  "scope": "Same-host native signing and ordered-memory verification, Mach-O re-signing regressions and architecture-model execution.",
+  "measurement_date_utc": "2026-11-25",
+  "source_revision": "b0c33a7d888a4b8fd3522a8706d50811cce152e4",
+  "pull_requests": {
+    "NeverSight/NeverD": "https://github.com/NeverSight/NeverD/pull/2643",
+    "gmh5225/test_mac_intel": "https://github.com/gmh5225/test_mac_intel/pull/19"
+  },
+  "exported_inputs": {
+    "files": {
+      "explicit/high/projection.c": "f312ffb1f0ad45c55ef54f0b9b3df55ce529b8700f408db7ed61911632d530a8",
+      "explicit/llvm/projection.c": "ac4a961712327c0506a62f2536173c4c6ae644e7729cb68d601d21ce632ad723",
+      "explicit/llvm-opt/projection.c": "ac4a961712327c0506a62f2536173c4c6ae644e7729cb68d601d21ce632ad723",
+      "explicit/caller/projection.c": "b87ef6f524a401b75f8eb756ed0b5faed6cfca3fb42bd21bfc936492b4d00f98",
+      "explicit/backend.o": "f281f20d9abd71e56e09b1cde6203370789c4152b1984b6cb642062b8c151997",
+      "explicit/backend-opt.o": "b474948ab36ca15f67daaa01fb9a6ab9b151b66febf9a760360343e78b8c0aad",
+      "prefix/high/projection.c": "067fe04d63ce0abc4a7f8012321bbcb69bcb56002cf0feb36d9ce6ca577c0273",
+      "prefix/llvm/projection.c": "66f0a86cf86974eb29220ac842756b6cf763a74c1c97dd5ded29bd2bdd1b127e",
+      "prefix/llvm-opt/projection.c": "66f0a86cf86974eb29220ac842756b6cf763a74c1c97dd5ded29bd2bdd1b127e",
+      "prefix/caller/projection.c": "bf657a5ec89ec8e312351e4801e844c6f64554a18e50129e71e8db17bcdc8706",
+      "prefix/backend.o": "342d98bb0ca3787d188816d8176d1c16c090425917bde62f45b3c69c9af075db",
+      "prefix/backend-opt.o": "ed0d529cd2c094fc0b0281c1ed9b728f2c85025a52633223ba871516fd5fdcdd"
+    },
+    "ordered_inputs": {
+      "fixtures": {
+        "AArch64OrderedMemoryFixtures.def": "4fbd8b1a09e40aa88e316dd74813fe8c512393f293b1e679e5910fa92ba0040e"
+      },
+      "files": {
+        "high.c": "b63dd116dafde768528d0691fa83b0601b88cb9091d489c6826008188fa8ec4b",
+        "llvm-macho-raw.o": "b145e87e48c595072754e4d9e5c86cd1c58912df1b2e643a5bf05117137d21b0",
+        "llvm-macho.o": "757f2ebb9d66f9df3bbbd32aff17186685f7b425eec3ba4c5d297a273a05b28d",
+        "llvm.c": "f3628429ec6edcd91846f08454a8821ecce494ed8b873738566db727bd6b75a9",
+        "ordered-dispatch.c": "f6c96a66578451e76bfe16be41b9bc43c3298d5751c58d87c8d3e8d8e0908799"
+      }
+    }
+  },
+  "llvm_release": {
+    "tag": "neverd-llvm-v23.0.0-r6",
+    "archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad"
+  },
+  "inputs": {
+    "signing_files": 12,
+    "ordered_files": 5,
+    "ordered_files_matching_previous_darwin_export": 5
+  },
+  "builds": {
+    "candidate": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45656796151",
+      "workflow_revision": "569f420c089038b22a8822325f79d8e686709643",
+      "artifact_sha256": {
+        "signed-x1-projection-results-1": "79d8e6a4f23d456deda5df816b6188e006daecf94d19f618eb2e2bd7cabf9786",
+        "r6-projection-inputs-1": "8afc357da570ae892698c18c02a688b48abe2c8d80fac9cef5319458bec1ff02"
+      },
+      "exporter_sha256": "e374887970d7e8a5af6dc2c744fc0f52f09342726bf158d96b813b472eb4e95e",
+      "input_manifest_sha256": "3a6336430036013a044206cdb0b632fdeea3cebedc0a676131f4355fbc3ddfd1"
+    },
+    "matrix": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45657884991",
+      "workflow_revision": "ba15acd6852211b908ec515104507009babc7fc9",
+      "artifact_sha256": {
+        "ordered-x1-projection-results-macos-15-1": "b7638cf6b2f4b460b2d1d5a1d130ed227bace85310da68a1ac3607706b52f33e",
+        "ordered-x1-projection-results-macos-26-1": "33bd69d5c20c0ce72c0b35165acd435528ee83fb6a294d745f9d2968e024edae",
+        "r6-projection-inputs-1": "3ffd8ddc65737c2674e411bd8f0f713e6f1bc391ebdac1672ebb8423d7157e02",
+        "signed-x1-projection-results-1": "b27416c9691b9094557826dcbd57cbba492b8cc85daa9fb770b22833e57710bc"
+      },
+      "exporter_sha256": "288e2f9ef8955dee34a7dee9677504c4d3b6e80cb7e519b9c43e65bc848026df",
+      "input_manifest_sha256": "e013b0111fb7d035e3c462c1cd362618b79dacf39e14a496526567089440ded6"
+    }
+  },
+  "hosts": {
+    "local_m4_max": {
+      "cpu": "Apple M4 Max",
+      "strict_exit": 2,
+      "qualifies": false,
+      "native_controls": {
+        "native_pac_qualified": false,
+        "compiler_original_call_unwind_qualified": false,
+        "native_cursor_qualified": false,
+        "explicit_pauth_lr_qualified": false,
+        "pacm_pc_qualified": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false,
+        "native_lrcpc3_128_qualified": false
+      },
+      "signing_linked": 0,
+      "signing_executed": 0,
+      "live_signing_function_owners": 0,
+      "ordered_routes": 6,
+      "ordered_gpr_routes": 6,
+      "ordered_128bit_routes": 0,
+      "ordered_process_records": {
+        "records": [
+          "ORDERED-NATIVE GPR, aligned Q instructions unavailable",
+          "ORDERED-NATIVE within one granule"
+        ],
+        "exit_code": 0
+      },
+      "control_report_sha256": "2c9f1a196c490ddf017d6ba762286e52c1edb029decdd1148ff3c115e86aed37",
+      "guest_manifest_sha256": "45e77c1e2ef275378cfda06f1a3a6980b6001946394146ecb0aa2c4eb320e713",
+      "ordered_report_sha256": "9bcc5c302d8d6092c062c6ff1989bd6a4111c543bb00649d1a4101c458afec97"
+    },
+    "first_xcode_27": {
+      "cpu": "Apple M1 (Virtual)",
+      "strict_exit": 2,
+      "qualifies": false,
+      "native_controls": {
+        "native_pac_qualified": true,
+        "compiler_original_call_unwind_qualified": true,
+        "native_cursor_qualified": false,
+        "explicit_pauth_lr_qualified": false,
+        "pacm_pc_qualified": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false,
+        "native_lrcpc3_128_qualified": false
+      },
+      "signing_linked": 20,
+      "signing_executed": 0,
+      "live_signing_function_owners": 120,
+      "ordered_routes": 6,
+      "ordered_gpr_routes": 6,
+      "ordered_128bit_routes": 0,
+      "ordered_process_records": {
+        "records": [
+          "ORDERED-NATIVE GPR, aligned Q instructions unavailable",
+          "ORDERED-NATIVE within one granule"
+        ],
+        "exit_code": 0
+      },
+      "control_report_sha256": "0a4448c212c5809595ccd1394865ceace4f7607a23da2f9560a7c0b161878d8c",
+      "guest_manifest_sha256": "a6ba172c555be37d4cc5fd6bc6e2b6b7e751e5b53e29e9f0b15d4711161549b3",
+      "ordered_report_sha256": "3ebca06625c31dce57d13a867084d3249f76a594df8646665f662c0658a78aac"
+    },
+    "matrix_macos_15": {
+      "cpu": "Apple M1 (Virtual)",
+      "strict_exit": 2,
+      "qualifies": false,
+      "native_controls": {
+        "native_pac_qualified": false,
+        "compiler_original_call_unwind_qualified": false,
+        "native_cursor_qualified": false,
+        "explicit_pauth_lr_qualified": false,
+        "pacm_pc_qualified": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false,
+        "native_lrcpc3_128_qualified": false
+      },
+      "signing_linked": 0,
+      "signing_executed": 0,
+      "live_signing_function_owners": 0,
+      "ordered_routes": 6,
+      "ordered_gpr_routes": 6,
+      "ordered_128bit_routes": 0,
+      "ordered_process_records": {
+        "records": [
+          "ORDERED-NATIVE GPR, aligned Q instructions unavailable",
+          "ORDERED-NATIVE within one granule"
+        ],
+        "exit_code": 0
+      },
+      "control_report_sha256": "a46520c0e1fc7fa299428a8223da2bebad71c584b592095a10288db834e37fe9",
+      "guest_manifest_sha256": "30ab04a14299d4ff03257a034e36cf0be82700148932698468e421a7507c1721",
+      "ordered_report_sha256": "cd61b366170edda8c4e297c17c801fbff824a92924f08f10b7882e34bae694d0"
+    },
+    "matrix_macos_26": {
+      "cpu": "Apple M1 (Virtual)",
+      "strict_exit": 2,
+      "qualifies": false,
+      "native_controls": {
+        "native_pac_qualified": true,
+        "compiler_original_call_unwind_qualified": true,
+        "native_cursor_qualified": false,
+        "explicit_pauth_lr_qualified": false,
+        "pacm_pc_qualified": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false,
+        "native_lrcpc3_128_qualified": false
+      },
+      "signing_linked": 0,
+      "signing_executed": 0,
+      "live_signing_function_owners": 0,
+      "ordered_routes": 6,
+      "ordered_gpr_routes": 6,
+      "ordered_128bit_routes": 0,
+      "ordered_process_records": {
+        "records": [
+          "ORDERED-NATIVE GPR, aligned Q instructions unavailable",
+          "ORDERED-NATIVE within one granule"
+        ],
+        "exit_code": 0
+      },
+      "control_report_sha256": "e58d3d06c698043a8db92963e3518581106d770a49e84480f1e1084d1f9bfa0f",
+      "guest_manifest_sha256": "ca922058de7d1a8ac2753cb8499932cd96fa330df1542f5ce1310e84e276c502",
+      "ordered_report_sha256": "091f1e958b91d92707f8d383128ef2f0a1270984667d7d606cf2546b4c27423d"
+    },
+    "matrix_xcode_27": {
+      "cpu": "Apple M1 (Virtual)",
+      "strict_exit": 2,
+      "qualifies": false,
+      "native_controls": {
+        "native_pac_qualified": true,
+        "compiler_original_call_unwind_qualified": true,
+        "native_cursor_qualified": false,
+        "explicit_pauth_lr_qualified": false,
+        "pacm_pc_qualified": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false,
+        "native_lrcpc3_128_qualified": false
+      },
+      "signing_linked": 20,
+      "signing_executed": 0,
+      "live_signing_function_owners": 120,
+      "ordered_routes": 6,
+      "ordered_gpr_routes": 6,
+      "ordered_128bit_routes": 0,
+      "ordered_process_records": {
+        "records": [
+          "ORDERED-NATIVE GPR, aligned Q instructions unavailable",
+          "ORDERED-NATIVE within one granule"
+        ],
+        "exit_code": 0
+      },
+      "control_report_sha256": "918377b992023434396881933db82b0a8cac388f765048ae9308304ce4117464",
+      "guest_manifest_sha256": "593d2606d72018c2574d2005703af36229b1f0462afb7fa3b1525042ce7fedd0",
+      "ordered_report_sha256": "7a721ebecaa1818f8fac3819a5919516bd21c2dc5b92db79d15f02955a383ae4"
+    }
+  },
+  "independent_encoding_checks": {
+    "fixture_sha256": "4fbd8b1a09e40aa88e316dd74813fe8c512393f293b1e679e5910fa92ba0040e",
+    "families": [
+      "ldapurb W",
+      "ldapurh W",
+      "ldapur W",
+      "ldapur X",
+      "ldapursb W",
+      "ldapursb X",
+      "ldapursh W",
+      "ldapursh X",
+      "ldapursw X",
+      "stlurb W",
+      "stlurh W",
+      "stlur W",
+      "stlur X",
+      "ldapur B",
+      "stlur B",
+      "ldapur H",
+      "stlur H",
+      "ldapur S",
+      "stlur S",
+      "ldapur D",
+      "stlur D",
+      "ldapur Q",
+      "stlur Q"
+    ],
+    "signed_imm9_values_per_family": 512,
+    "register_placements_per_word": 2,
+    "distinct_words": 23552,
+    "assembly_sha256": "89edbee29f312358c835fc8897e65965d3c4e85264629d5bfd723b92757e5ae8",
+    "text_sha256": "dc09676ed775f3c443a6a2b7b4418c59d29d3debc5e5a354c4f3b14fcb780c47",
+    "assemblers": [
+      {
+        "version": "Homebrew LLVM version 18.1.8",
+        "assembled_words": 23552,
+        "decoded_words": 23552,
+        "unallocated_rejections": 9
+      },
+      {
+        "version": "Homebrew LLVM version 20.1.8",
+        "assembled_words": 23552,
+        "decoded_words": 23552,
+        "unallocated_rejections": 9
+      },
+      {
+        "version": "Homebrew LLVM version 22.1.6",
+        "assembled_words": 23552,
+        "decoded_words": 23552,
+        "unallocated_rejections": 9
+      }
+    ],
+    "apple_integrated_assembler": {
+      "version": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+      "assembled_words": 23552
+    }
+  },
+  "negative_control": {
+    "mutated_load": "0x19500020",
+    "rejected_transfer": true,
+    "rejected_execution": true,
+    "observation": "high-O0 returned 1: ['ORDERED-NATIVE GPR, aligned Q instructions unavailable']",
+    "process_log": "ORDERED-NATIVE GPR, aligned Q instructions unavailable\nORDERED-NATIVE within one granule differs at comparison 1\n"
+  },
+  "arm_fvp_controls": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45669536908",
+    "workflow_revision": "0915d8efac75c5150556b1facd4e9854d0b7c03c",
+    "revision": "20ae0677461c4f16b11c0ba25c3170987b74a4d2",
+    "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "artifact_sha256": {
+      "fvp-control-guests": "sha256:564535c2721d1a8ebca3636363ea3064e2085af1f4110062fe2769c223c0ef70",
+      "fvp-control-results": "sha256:e44b55b7ab3e5e2228d287ef3a63f428d7d3795109fbd5878124b86b3dc130e3"
+    },
+    "suites": {
+      "cursor": {
+        "checks": {
+          "cursor-O0-unsupported": {
+            "exit": 1,
+            "records": 1,
+            "first": "RETURN-MODEL feature mismatch",
+            "last": "RETURN-MODEL feature mismatch"
+          },
+          "cursor-O0": {
+            "exit": 0,
+            "records": 5,
+            "first": "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0=00",
+            "last": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings"
+          },
+          "cursor-O2": {
+            "exit": 0,
+            "records": 5,
+            "first": "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0=00",
+            "last": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings"
+          }
+        },
+        "model_version": "11.32+19",
+        "report_sha256": "e3dbe0a5dff20e7903f5d5988bfbeb6311937f9e97c8927c16e33aaa38b49bb2",
+        "manifest_sha256": "6550b73679b4141ace1e2e6f3cade5527b3f4148cd03461f25754f9639186b87",
+        "historical_byte_and_entry_matches": 0
+      },
+      "writeback": {
+        "checks": {
+          "writeback-O0-unsupported": {
+            "exit": 1,
+            "records": 1,
+            "first": "WRITEBACK-MODEL CPA2 unavailable",
+            "last": "WRITEBACK-MODEL CPA2 unavailable"
+          },
+          "writeback-O0": {
+            "exit": 0,
+            "records": 17,
+            "first": "WRITEBACK-MODEL controls=0",
+            "last": "WRITEBACK-MODEL passed EL1 and EL0 writeback"
+          },
+          "writeback-O2": {
+            "exit": 0,
+            "records": 17,
+            "first": "WRITEBACK-MODEL controls=0",
+            "last": "WRITEBACK-MODEL passed EL1 and EL0 writeback"
+          }
+        },
+        "model_version": "11.32+19",
+        "report_sha256": "889d72806486cec7e961ecaa87a93721fbfa87e72bccddffb594370086b469f0",
+        "manifest_sha256": "21121b7593080a3b91183f4fdf37f4eacdc0953ab70427743aae30e5e37937dd",
+        "historical_byte_and_entry_matches": 0
+      }
+    }
+  },
+  "pre_fix_model_execution": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45670146574",
+    "source_revision": "20ae0677461c4f16b11c0ba25c3170987b74a4d2",
+    "suites": {
+      "signing": {
+        "images_executed": 20,
+        "execution_report_sha256": "2e65b33265d886445271e3a1aa92ab260f5b6fbeb46f5ed4e973b0984a70affd"
+      },
+      "ordered": {
+        "images_executed": 6,
+        "execution_report_sha256": "9e9de703849de6a1261cab09839b5f83ff18cd63df2e54f69a4dbe9348eb4633"
+      },
+      "cursor": {
+        "images_executed": 2,
+        "execution_report_sha256": "e3dbe0a5dff20e7903f5d5988bfbeb6311937f9e97c8927c16e33aaa38b49bb2"
+      },
+      "writeback": {
+        "images_executed": 2,
+        "execution_report_sha256": "889d72806486cec7e961ecaa87a93721fbfa87e72bccddffb594370086b469f0"
+      }
+    },
+    "model_job": "https://github.com/gmh5225/test_mac_intel/actions/runs/45670146574/job/139435610529"
+  },
+  "control_image_codegen": {
+    "cursor-O0": {
+      "local_text": {
+        "address": "0x80000800",
+        "bytes": 15688,
+        "sha256": "ef03ede41f2c9713e1623b95a884fc695950d95d289200d6b8affefbe47ed131"
+      },
+      "hosted_text": {
+        "address": "0x80000800",
+        "bytes": 15728,
+        "sha256": "0d3020ba0de70c1f0fba47416ed57d88cb9ac1136688dd017aaf2614a9872c37"
+      },
+      "entry_equal": true,
+      "equal_section_payloads": [
+        "__TEXT,__cstring"
+      ],
+      "different_section_payloads": [
+        "__TEXT,__const",
+        "__TEXT,__text"
+      ],
+      "local_only_sections": [],
+      "hosted_only_sections": []
+    },
+    "cursor-O2": {
+      "local_text": {
+        "address": "0x80000800",
+        "bytes": 14944,
+        "sha256": "7b73a4159a402e5486185b880bca7df283e5f219c468fdadf9bd1a33a83269bb"
+      },
+      "hosted_text": {
+        "address": "0x80000800",
+        "bytes": 14984,
+        "sha256": "29999bd780f2b066502dc43e85098d17a678873303d5a74c752c9a2cd0da0ba1"
+      },
+      "entry_equal": true,
+      "equal_section_payloads": [
+        "__TEXT,__cstring"
+      ],
+      "different_section_payloads": [
+        "__TEXT,__const",
+        "__TEXT,__text"
+      ],
+      "local_only_sections": [],
+      "hosted_only_sections": []
+    },
+    "writeback-O0": {
+      "local_text": {
+        "address": "0x80000800",
+        "bytes": 6456,
+        "sha256": "26e19fb0c68daaa81c3a76c876a1a0dfc0db4a1c2d3b49db35287cbc68d61b0e"
+      },
+      "hosted_text": {
+        "address": "0x80000800",
+        "bytes": 6540,
+        "sha256": "8629a04dc0b1e1b01f3abf43e73c7bf236317b975c5f3a0d6bcce853f9b8dee5"
+      },
+      "entry_equal": true,
+      "equal_section_payloads": [
+        "__TEXT,__cstring"
+      ],
+      "different_section_payloads": [
+        "__TEXT,__const",
+        "__TEXT,__text"
+      ],
+      "local_only_sections": [],
+      "hosted_only_sections": []
+    },
+    "writeback-O2": {
+      "local_text": {
+        "address": "0x80000800",
+        "bytes": 6048,
+        "sha256": "9a4b98e982aa4d19b0b2054a743efb6e9554fa16978a9073774069d42f08ceae"
+      },
+      "hosted_text": {
+        "address": "0x80000800",
+        "bytes": 6136,
+        "sha256": "7d84b6e0d036d28e08edc756fc84f49b1dab28f088984f7dd285e0dfe2375f1c"
+      },
+      "entry_equal": true,
+      "equal_section_payloads": [
+        "__TEXT,__cstring"
+      ],
+      "different_section_payloads": [
+        "__TEXT,__const",
+        "__TEXT,__text"
+      ],
+      "local_only_sections": [],
+      "hosted_only_sections": []
+    }
+  },
+  "merged_dev_original_controls": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45666849259",
+    "workflow_revision": "0815d309940b4ea76b4da8279597fa401b845f52",
+    "hosts": {
+      "native-x1-macos-15": {
+        "cpu": "Apple M1 (Virtual)",
+        "revision": "20ae0677461c4f16b11c0ba25c3170987b74a4d2",
+        "status": "unavailable",
+        "strict_native": false,
+        "checks": [
+          "Ran 7 tests in 5.525s",
+          "OK (skipped=2)"
+        ],
+        "sha256": "68733d5545b907a4926e68b1acee22dac90234304a9437feab468906dbe4a31c",
+        "features": {
+          "native_pac_qualified": false,
+          "compiler_original_call_unwind_qualified": false,
+          "native_cursor_qualified": false,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false,
+          "x1_el0_cpta_qualified": false,
+          "x1_el0_checked_writeback_qualified": false
+        }
+      },
+      "native-x1-macos-26": {
+        "cpu": "Apple M1 (Virtual)",
+        "revision": "20ae0677461c4f16b11c0ba25c3170987b74a4d2",
+        "status": "unavailable",
+        "strict_native": false,
+        "checks": [
+          "Ran 7 tests in 16.730s",
+          "OK"
+        ],
+        "sha256": "6499be16db37f0b65561bc717b1721358d01afa7c03fb997bbe2d22dbd5c85e5",
+        "features": {
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "native_cursor_qualified": false,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false,
+          "x1_el0_cpta_qualified": false,
+          "x1_el0_checked_writeback_qualified": false
+        }
+      },
+      "native-x1-xcode-27": {
+        "cpu": "Apple M1 (Virtual)",
+        "revision": "20ae0677461c4f16b11c0ba25c3170987b74a4d2",
+        "status": "unavailable",
+        "strict_native": false,
+        "checks": [
+          "Ran 7 tests in 10.843s",
+          "OK"
+        ],
+        "sha256": "030f9014b8175a2a7c74f3a744ad34eb2d58a26d9a422e0ff5a97c10425f1fa1",
+        "features": {
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "native_cursor_qualified": false,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false,
+          "x1_el0_cpta_qualified": false,
+          "x1_el0_checked_writeback_qualified": false
+        }
+      }
+    }
+  },
+  "current_dev_native_qualification": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45671591272",
+    "source_revision": "963db8c6b5b74c876535ce335cd82fff394a66da",
+    "workflow_revision": "0815d309940b4ea76b4da8279597fa401b845f52",
+    "exporter_sha256": "744ca9878c0e915f1b4686d63a545cebfb3e9e7cde98eda4318e18128cec832c",
+    "input_manifest_sha256": "81ff67464eb2852921c7b902fa851f2317ce68d1c0ffeba0881088039deb1020",
+    "compared_with": "b0c33a7d888a4b8fd3522a8706d50811cce152e4",
+    "input_count": 17,
+    "changed_input_files": [],
+    "hosts": {
+      "xcode-27": {
+        "cpu": "Apple M1 (Virtual)",
+        "strict_exit": 2,
+        "full_native_qualification": false,
+        "ordered_programs": 6,
+        "gpr_executed": true,
+        "simd_executed": false,
+        "signing_linked": 20,
+        "signing_executed": 0,
+        "report_sha256": "033c0ec6d35a0ec7034a9be61db874f0f2d49b5a4993f3809388c49450215127"
+      },
+      "macos-15": {
+        "cpu": "Apple M1 (Virtual)",
+        "strict_exit": 2,
+        "full_native_qualification": false,
+        "ordered_programs": 6,
+        "gpr_executed": true,
+        "simd_executed": false,
+        "signing_linked": 0,
+        "signing_executed": 0,
+        "report_sha256": "a063a28ee326f0ae7ce1b8d3680c9d5053cb5f957202ba6bc46873dac32a75ce"
+      },
+      "macos-26": {
+        "cpu": "Apple M1 (Virtual)",
+        "strict_exit": 2,
+        "full_native_qualification": false,
+        "ordered_programs": 6,
+        "gpr_executed": true,
+        "simd_executed": false,
+        "signing_linked": 0,
+        "signing_executed": 0,
+        "report_sha256": "45382b56fc59ea57f87dd351b742a5dc92f659a865fa3f2a4de0e7dfa7336009"
+      }
+    },
+    "artifact_sha256": {
+      "r6-projection-inputs-1": "sha256:39937e18ca7bc91172768fba23f96f2f1fcb9ce57dc1aff00cb1fe10fa641e95",
+      "ordered-x1-projection-results-macos-26-1": "sha256:d7934e3f9df91e737751ffaad1a08eb6990e6a4a537f5dcad439d99f72b4240f",
+      "signed-x1-projection-results-1": "sha256:61a944506fcc02f3917ef6932c81e474870f39256236e452508e3499335267cd",
+      "ordered-x1-projection-results-macos-15-1": "sha256:04b7af4b604b4b56825ed7e0c3700f7a66dcc81ff7bcc1bf14d77dfb81da46b4"
+    }
+  },
+  "pre_fix_regression": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45666798301",
+    "workflow_revision": "d57026b2d0c92613b8c8cba064aee3990c3fb232",
+    "conclusion": "failure",
+    "artifact_sha256": "sha256:41f1a6f957a3ae0c956981dcaed685718c5f76ec66b6c75782463eb7d5a6c5f1",
+    "ctest": {
+      "total": 789,
+      "passed": 770,
+      "skipped": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+      ],
+      "failed": [
+        "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/0",
+        "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/1",
+        "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/2",
+        "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/3",
+        "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/4",
+        "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/5",
+        "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/6",
+        "AppleClang/MachOArm64eNativeInstallation.AppleImageKeepsSignedFramesAndDyldRecipes/7"
+      ],
+      "exit": 8
+    },
+    "source_revision": "20ae0677461c4f16b11c0ba25c3170987b74a4d2",
+    "failing_postcondition": "re-signed output page size changed"
+  },
+  "signing_fix": {
+    "pull_request": "https://github.com/NeverSight/NeverD/pull/2651",
+    "local": {
+      "test_program_sha256": "85325ea3ef331cbccde8a46d23c6b78509ec85b734205d658937a983282eaeb8",
+      "tested": 37,
+      "passed": 37,
+      "input_page_experiment": {
+        "4096": {
+          "host_default": 4096,
+          "explicit": 4096
+        },
+        "16384": {
+          "host_default": 4096,
+          "explicit": 16384
+        }
+      }
+    },
+    "remote_signer_and_sanitizer": {
+      "total": 38,
+      "exit": 0,
+      "failure": [],
+      "skipped": [],
+      "error": []
+    },
+    "previously_failed_installation_cases_passing": 8,
+    "previously_skipped_publication_cases_executed": 8,
+    "merge_commit": "62469fcb7b2f3bbe152f9a5c4c499d8dd986d34b"
+  },
+  "merged_dev_regression": {
+    "source_revision": "ee8a42cb6ccf61cd22ad735d534b6dbb61bfb58f",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45676620999",
+    "workflow_revision": "57c1d24c2e824de5953f0e36b4541d4213d7ef93",
+    "artifact_sha256": {
+      "fvp-control-results": "sha256:884551fd957b9179a02b557bf24e46a6fad6e8ba494fdc6195dc60d2a8a7da3c",
+      "model-build-results": "sha256:5fb280bf57bf347fc6540b837911a8b0fbe91d4afe7f4b76df7d529d8ded150d",
+      "fvp-control-guests": "sha256:f237c45078350687fdca4b91dc4b7cc3a6d5148aca78b9b1b2146458ebae1204"
+    },
+    "cpu": "Apple M1 (Virtual)",
+    "exporter_sha256": "7ab2b6be0f679cefabb26eb6288761e6db9cef8bdc57413ce9e1392e1badd2f3",
+    "apple_clang": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "sdk": "26.5",
+    "ir_compiler": "Homebrew clang version 22.1.8",
+    "sample_arch": "arm64e",
+    "parity_text_sha256": "0f5f5629e91901b9b415617f36aaa1d5e234729e364af92ec96c2aa51fcdd1a2",
+    "model_version": "11.32+19",
+    "model_binary_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "model_execution": {
+      "signing": {
+        "images_executed": 20,
+        "unsupported_profile": {
+          "prefix-high-O0-unsupported": "RETURN-MODEL feature mismatch"
+        },
+        "matching_macos26_pre_fix_bytes_and_entries": 20,
+        "positive_last_records": [
+          "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings"
+        ],
+        "manifest_sha256": "a03010a57fbf31b3ff483a15f6be3f28fed6f922388b45010fcbb501aee5c51e",
+        "execution_report_sha256": "5125cc1c1b52ec9983e887a222d04ca939b843b97b9d5bc7aa05def88f79ffbd",
+        "reference_executed_manifest_sha256": "d4d9686c491de9283ee79bf085ee2cf9c08123b30642ba498799e505191bb3f4",
+        "matching_historical_image_hashes": 0,
+        "historical_entry_addresses_reproduced": 20,
+        "images": {
+          "explicit-high-O0": {
+            "sha256": "8c1f8ac51e9d14ea7f21bca4785510996cae0eb4920160ee57e7d75f77834c4a",
+            "entry": "0x80000800"
+          },
+          "explicit-high-O2": {
+            "sha256": "12371d0d70e28ed0df351b6b33a55955a1e17c85ac47527036f72513a93cb30b",
+            "entry": "0x80000800"
+          },
+          "explicit-llvm-O0": {
+            "sha256": "8c1f8ac51e9d14ea7f21bca4785510996cae0eb4920160ee57e7d75f77834c4a",
+            "entry": "0x80000800"
+          },
+          "explicit-llvm-O2": {
+            "sha256": "12371d0d70e28ed0df351b6b33a55955a1e17c85ac47527036f72513a93cb30b",
+            "entry": "0x80000800"
+          },
+          "explicit-llvm-opt-O0": {
+            "sha256": "8c1f8ac51e9d14ea7f21bca4785510996cae0eb4920160ee57e7d75f77834c4a",
+            "entry": "0x80000800"
+          },
+          "explicit-llvm-opt-O2": {
+            "sha256": "12371d0d70e28ed0df351b6b33a55955a1e17c85ac47527036f72513a93cb30b",
+            "entry": "0x80000800"
+          },
+          "explicit-backend-O0": {
+            "sha256": "058497db3c87191494d5f0fe4a037cedaf9e94c84782b3deccf09c8314cc550c",
+            "entry": "0x80000800"
+          },
+          "explicit-backend-O2": {
+            "sha256": "c724e6bc0d420010d4a533fe038ddfe00d5cb5a356d5887b6c32fde3f388fe90",
+            "entry": "0x80000800"
+          },
+          "explicit-backend-opt-O0": {
+            "sha256": "5292e3d8c7c51debd608d30d52f425c53043aff56851519ad4410b60379c4979",
+            "entry": "0x80000800"
+          },
+          "explicit-backend-opt-O2": {
+            "sha256": "c2f540feba8072a4ec1a1c75158816bef5675b1060b308b1d02373f0f50bf3cf",
+            "entry": "0x80000800"
+          },
+          "prefix-high-O0": {
+            "sha256": "a68eee2d5882bb48dada6c93cb9bc31e83f3b435b8b3a92e6cf6678eff168102",
+            "entry": "0x80000800"
+          },
+          "prefix-high-O2": {
+            "sha256": "b338d6adeecf782a63cea7994cb268d41b70915f4f933823431bae4ede843d7c",
+            "entry": "0x80000800"
+          },
+          "prefix-llvm-O0": {
+            "sha256": "a68eee2d5882bb48dada6c93cb9bc31e83f3b435b8b3a92e6cf6678eff168102",
+            "entry": "0x80000800"
+          },
+          "prefix-llvm-O2": {
+            "sha256": "b338d6adeecf782a63cea7994cb268d41b70915f4f933823431bae4ede843d7c",
+            "entry": "0x80000800"
+          },
+          "prefix-llvm-opt-O0": {
+            "sha256": "a68eee2d5882bb48dada6c93cb9bc31e83f3b435b8b3a92e6cf6678eff168102",
+            "entry": "0x80000800"
+          },
+          "prefix-llvm-opt-O2": {
+            "sha256": "b338d6adeecf782a63cea7994cb268d41b70915f4f933823431bae4ede843d7c",
+            "entry": "0x80000800"
+          },
+          "prefix-backend-O0": {
+            "sha256": "dbb968dfaa1191dd2fbe6e140df8bd2b464a1db570217ad0637a7866d7dc9d70",
+            "entry": "0x80000800"
+          },
+          "prefix-backend-O2": {
+            "sha256": "4a3b0decc85a709b35e295e655396a0bfe2a66e2f26fea0dd527496ca05d4c64",
+            "entry": "0x80000800"
+          },
+          "prefix-backend-opt-O0": {
+            "sha256": "0cabece25ca2e8497c06753b9240b94c13b6ce41f90b6cee79a22d825dbb20f4",
+            "entry": "0x80000800"
+          },
+          "prefix-backend-opt-O2": {
+            "sha256": "5394f2f53f0dc116bbaea49c91c3a8c20fd28c5fe578d7e9ce92b6fbde9713dc",
+            "entry": "0x80000800"
+          }
+        }
+      },
+      "ordered": {
+        "images_executed": 6,
+        "unsupported_profile": {
+          "high-O0-unsupported": "ORDERED-MODEL LRCPC3 unavailable"
+        },
+        "matching_macos26_pre_fix_bytes_and_entries": 6,
+        "positive_last_records": [
+          "ORDERED-MODEL passed independent register and memory inputs"
+        ],
+        "manifest_sha256": "14c9ba5734440fe51b21fcf0d40a4605f3d7ffc6bc0eb28ec064c681cc9f0a8b",
+        "execution_report_sha256": "585e47c5398c22e66a53b1fcba8761e5b38f328c0f7ed3a89cf6e9f6a8c5ecdc",
+        "reference_executed_manifest_sha256": "d95f7027300533db4db40fa8960f60a94dfe5105718395092900c693c46f6ad4",
+        "matching_historical_image_hashes": 0,
+        "historical_entry_addresses_reproduced": 6,
+        "images": {
+          "high-O0": {
+            "sha256": "cb3d0ca8da2f69789fa51e01e0ba249191fe39bdf36bd682f33923b1abf4e71f",
+            "entry": "0x80000800"
+          },
+          "high-O2": {
+            "sha256": "185559fa6ece3c3c54af84e0101ee2567b2afaa91f43d24273713e3a70b3dff5",
+            "entry": "0x80000800"
+          },
+          "llvm-c-O0": {
+            "sha256": "6421cc30d26f435a6e897806d5d5047915b6d5a2e016d5a179c781797a3c2463",
+            "entry": "0x80000800"
+          },
+          "llvm-c-O2": {
+            "sha256": "b79637e3b4217eeb2d36885a382af2d54ab26767a582d511148bb742a49f439c",
+            "entry": "0x80000800"
+          },
+          "llvm-object": {
+            "sha256": "acd92b8d211b4e6ca39c2caaf1d40b5466244339f0ae000f731e13d77f7326fd",
+            "entry": "0x80000800"
+          },
+          "llvm-object-raw": {
+            "sha256": "ca29dc15037332034a447a8bc01f4e395ba11f28ff8a93988518e98861d9a75f",
+            "entry": "0x80000800"
+          }
+        }
+      },
+      "cursor": {
+        "images_executed": 2,
+        "unsupported_profile": {
+          "cursor-O0-unsupported": "RETURN-MODEL feature mismatch"
+        },
+        "matching_macos26_pre_fix_bytes_and_entries": 2,
+        "positive_last_records": [
+          "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings"
+        ],
+        "manifest_sha256": "6550b73679b4141ace1e2e6f3cade5527b3f4148cd03461f25754f9639186b87",
+        "execution_report_sha256": "e3dbe0a5dff20e7903f5d5988bfbeb6311937f9e97c8927c16e33aaa38b49bb2",
+        "reference_executed_manifest_sha256": "024e8161e93f3fa014c7a874e95fc2ca9adbf48263fc29d3b791e80e6705e7bc",
+        "matching_historical_image_hashes": 0,
+        "historical_entry_addresses_reproduced": 2,
+        "images": {
+          "cursor-O0": {
+            "sha256": "02bfac54c9faf7372bcb7dc8b1726ded3c56a4b941f016fe714f08126d4b06b1",
+            "entry": "0x80000800"
+          },
+          "cursor-O2": {
+            "sha256": "7d49ee07f788354fa1b061611ffdb31e5e7006ce6df6abe567cb0677e5bbeba2",
+            "entry": "0x80000800"
+          }
+        }
+      },
+      "writeback": {
+        "images_executed": 2,
+        "unsupported_profile": {
+          "writeback-O0-unsupported": "WRITEBACK-MODEL CPA2 unavailable"
+        },
+        "matching_macos26_pre_fix_bytes_and_entries": 2,
+        "positive_last_records": [
+          "WRITEBACK-MODEL passed EL1 and EL0 writeback"
+        ],
+        "manifest_sha256": "21121b7593080a3b91183f4fdf37f4eacdc0953ab70427743aae30e5e37937dd",
+        "execution_report_sha256": "889d72806486cec7e961ecaa87a93721fbfa87e72bccddffb594370086b469f0",
+        "reference_executed_manifest_sha256": "9d56f715c9262d5570bcc130dc8c33a02705e772b7a4352c32d3d28983f6adf7",
+        "matching_historical_image_hashes": 0,
+        "historical_entry_addresses_reproduced": 2,
+        "images": {
+          "writeback-O0": {
+            "sha256": "386dcc62bc8c46e652ed1d4439ad4df6c9b88293fc103140d696cd3841502a6a",
+            "entry": "0x80000800"
+          },
+          "writeback-O2": {
+            "sha256": "945d15345592e7ac5ec995b40e2a3809a8c52572a323720a6ca667ef3ffcb7ce",
+            "entry": "0x80000800"
+          }
+        }
+      }
+    },
+    "cpp_regression": {
+      "total": 789,
+      "passed": 786,
+      "skipped": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+      ],
+      "failed": [],
+      "remaining_optional_instruction_tests": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+      ]
+    }
+  }
+}

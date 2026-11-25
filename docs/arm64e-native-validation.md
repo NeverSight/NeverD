@@ -2717,7 +2717,44 @@ Exit 0 qualifies the run. Exit 2 records a measured
 capability or loader limit, and exit 1 records a failed control or comparison.
 A machine with partial instruction support can still report the comparisons it ran.
 
-Three same-host runs linked and signature-checked all 20 images and verified
+Two independent r6 builds produced the same 17 inputs. A later build at
+`963db8c6b5b7` reproduced all 17 after changes to the shared Med IR passes. On a physical M4 Max and all three hosted M1
+configurations, the six generated programs passed their GPR comparisons.
+Their aligned `LDAPUR Q` and `STLUR Q` controls reported unavailable.
+Xcode 27 linked and signed all 20 x1 signing programs and verified all 120
+function owners. Darwin rejected the x1 slice before entry. Each strict
+verification exited 2. A changed generated load was rejected at transfer.
+After updating its test digest, the first HighC comparison detected the wrong
+result. [Implementation](https://github.com/NeverSight/NeverD/pull/2643),
+[hosted matrix](https://github.com/gmh5225/test_mac_intel/actions/runs/45657884991),
+[merged-dev original controls](https://github.com/gmh5225/test_mac_intel/actions/runs/45666849259)
+and [dev projection replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45671591272).
+
+Apple Clang 21 and SDK 26.5 preserved all 30 historical FVP entry addresses
+and produced different guest bytes in every case. The pinned Arm FVP 11.32+19
+executed all 20 signing images, six ordered-memory images, two cursor images
+and two checked-writeback images. The four reduced-feature controls each
+returned the expected diagnostic. The O0 and O2 cursor programs exercised
+four PACM settings at EL0 and EL1. The two writeback programs exercised all
+16 raw control settings at both levels.
+[Model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45670146574/job/139435610529)
+and [independent cursor and writeback run](https://github.com/gmh5225/test_mac_intel/actions/runs/45669536908).
+
+On macOS 26, eight r6 installation tests caught a change in the
+CodeDirectory page size after re-signing. A local 16 KiB arm64e signature
+became 4 KiB with the host default, and Apple accepted both signatures in
+strict verification. Preserving the input page size fixed all eight cases.
+The compiler-original control also qualified the system loader so the eight
+previously skipped executable-publication tests could run. The repaired
+build passed 786 of 789 arm64e tests. The remaining three require native
+128-bit LRCPC3, explicit two-modifier PAuth_LR or PC-dependent PACM.
+All 38 additional signer, policy and C API checks passed. The repaired build
+reproduced and executed all 30 programs from the macOS 26 FVP run.
+[Signing fix](https://github.com/NeverSight/NeverD/pull/2651),
+[full regression and FVP results](https://github.com/gmh5225/test_mac_intel/actions/runs/45676620999)
+and [measured revisions and digests](evidence/arm64e-generated-ordered-native-2026-11-25.json).
+
+Three earlier same-host runs linked and signature-checked all 20 images and verified
 120 function owners per run. Each Xcode runner reported Apple M1 (Virtual).
 Darwin returned `EBADARCH` before entry for every image, so the combined
 verifiers exited 2 with zero native signing comparisons. The compiler-original
