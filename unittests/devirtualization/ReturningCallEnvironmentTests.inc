@@ -325,6 +325,64 @@ TEST_F(PEFixedImageTest, ReturningCallResultObjectKeepsNullAndBoundedWrites) {
   EXPECT_TRUE(Outside.Residual.Blocks.empty());
 }
 
+TEST_F(PEFixedImageTest, ReturningCallObjectPointerRangeSurvivesJoin) {
+  // Two feasible paths carry different offsets from the same returned root.
+  // The joined write fits the declared object for either path, including its
+  // full eight-byte extent. The null arm never reaches the write.
+  std::vector<uint8_t> Code{0xba, 0x40, 0,    0,    0, // mov edx,64
+                            0x48, 0x83, 0xec, 0x40,    // sub rsp,64
+                            0xff, 0xd7,                // call rdi
+                            0x48, 0x83, 0xc4, 0x40,    // add rsp,64
+                            0x48, 0x85, 0xc0,          // test rax,rax
+                            0x74, 0x16,                // je ret
+                            0x48, 0x89, 0xc3,          // mov rbx,rax
+                            0x48, 0x85, 0xf6,          // test rsi,rsi
+                            0x74, 0x06,                // je second offset
+                            0x48, 0x83, 0xc3, 0x08,    // add rbx,8
+                            0xeb, 0x04,                // jmp join
+                            0x48, 0x83, 0xc3, 0x28,    // add rbx,40
+                            0x48, 0x89, 0x4b, 0x08,    // mov [rbx+8],rcx
+                            0xc3};                     // ret
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x102a);
+  O.X64MachineExits = {{1, Base + 0x102a, MachineExitKind::Return}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  O.MaxChainedTransfers = 0;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 3;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_EQ(R.ReturningCalls.size(), 1U);
+  unsigned Stores = 0, Returns = 0;
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops) {
+      Stores += Op.Opcode == NdOp::STORE;
+      Returns += Op.Opcode == NdOp::RETURN;
+    }
+  EXPECT_GE(Stores, 2U);
+  EXPECT_GE(Returns, 1U);
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  // The second offset now makes the eight-byte write exceed the 64-byte
+  // object. No result or raw environment may be published.
+  Code[37] = 0x40;
+  auto OutsideLoaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(OutsideLoaded)) << llvm::toString(OutsideLoaded.takeError());
+  const auto Outside =
+      specializeBinaryInterpreter(*OutsideLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Outside.complete());
+  EXPECT_TRUE(Outside.Residual.Blocks.empty());
+  EXPECT_FALSE(Outside.RawEnvironment);
+}
+
 TEST_F(PEFixedImageTest,
        ReturningCallRepeatedContainedWritesReuseNonnullProof) {
   std::vector<uint8_t> Code{0xba, 0x40, 0,    0,    0, // mov edx,64
