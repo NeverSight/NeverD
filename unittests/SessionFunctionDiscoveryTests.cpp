@@ -391,6 +391,41 @@ TEST_F(SessionFunctionDiscovery, AddressedAssemblyKeepsOneCompleteNativeBody) {
     EXPECT_EQ(Match.getAsObject()->getBoolean("analysis_complete"), true);
 }
 
+TEST_F(SessionFunctionDiscovery, DiscoveryTellsTheImageACalledGuessIsNone) {
+  using namespace neverd;
+  // `mov eax,7; int3`, then a start only a prologue guess names, which a
+  // call further on reaches.  Discovery, in steps or at once, tells the
+  // session's image that code names it, so it is no guess there.
+  constexpr char Body[] = "\xb8\x07\x00\x00\x00\xcc"  // mov eax,7; int3
+                          "\xb8\x2a\x00\x00\x00\xc3"  // mov eax,42; ret
+                          "\xe8\xf5\xff\xff\xff\xc3"; // call +6; ret
+  for (bool Async : {false, true}) {
+    SCOPED_TRACE(Async);
+    const auto Path =
+        write("called-guess.elf",
+              makeNativeELF(false, 0x400000, {},
+                            std::string_view(Body, sizeof(Body) - 1)));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    auto &State = *static_cast<sdk::Session *>(Session);
+    const va_t Guessed = neverd_session_entry_addr(Session) + 6;
+    auto Guess = Symbol::makeFunc(Guessed);
+    Guess.IsBoundaryGuess = true;
+    State.Img.Symbols.push_back(Guess);
+    sdk::SessionTestAccess::resetFunctions(State);
+    ASSERT_EQ(State.Img.boundaryGuessFunctionStarts().count(Guessed), 1u);
+    if (Async) {
+      ASSERT_EQ(neverd_session_discover_functions_step(Session), 0);
+      ASSERT_TRUE(State.FunctionDiscovery);
+      State.FunctionDiscovery->Result.wait();
+      ASSERT_EQ(neverd_session_discover_functions_step(Session), 1);
+    } else {
+      ASSERT_GE(neverd_session_discover_functions(Session), 0);
+    }
+    EXPECT_EQ(State.Img.boundaryGuessFunctionStarts().count(Guessed), 0u);
+    EXPECT_GE(neverd_func_find_by_addr(Session, Guessed), 0);
+  }
+}
+
 TEST_F(SessionFunctionDiscovery,
        CompletedDiscoveryRefutesOnlyUnconfirmedLoaderGuesses) {
   using namespace neverd;

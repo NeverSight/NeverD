@@ -931,7 +931,8 @@ The source projection regressions include
 groups), `NeverDExecutableCodeOwnerTests` (COFF content flags independently of
 page permissions), `NeverDMedPrologueSavesTests` (observed versus dead restore
 joins), and `NeverDSessionFunctionDiscoveryTests` (completed discovery,
-refuted guesses and explicit user identities). Replaced-PC and recursive
+refuted guesses and explicit user identities, and a guess code calls that
+either discovery tells the session's image is none). Replaced-PC and recursive
 fixtures execute both C routes at O0/O2 with independent callbacks or return
 values; malformed return-slot and arbitrary-write controls remain refused.
 Discarded internal calls must retain the parent's exact stack and physical
