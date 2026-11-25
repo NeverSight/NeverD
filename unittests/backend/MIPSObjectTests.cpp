@@ -530,9 +530,14 @@ TEST(MIPSObject, FixedAddressMicroMIPS32R6LeafEndsWithCompactReturn) {
     MIPSImageMetadata Profile;
     Profile.ABI = MIPSABI::O32;
     Profile.ISARevision = 6;
+    Profile.HasMicroMIPS = true;
     Profile.ELFFlags = llvm::ELF::EF_MIPS_NAN2008;
     llvm::mc_rewrite::RewriteOptions Opt;
-    Opt.Model.TextVA = 0x10000;
+    constexpr uint64_t Base = 0x10000;
+    Opt.Model.TextVA = Base;
+    Opt.Model.getSectionVA = [](llvm::StringRef Name) {
+      return Name == ".text" ? Base : Base + 0x10000;
+    };
     const auto Result = Codegen().compileForRewrite(
         F.Module, Target, Opt, BinaryFormat::ELF, {},
         RewriteInputKind::LiftedIR, &Profile);
@@ -541,6 +546,7 @@ TEST(MIPSObject, FixedAddressMicroMIPS32R6LeafEndsWithCompactReturn) {
     ASSERT_TRUE(Result.FunctionRangesValid);
     ASSERT_EQ(Result.FunctionRanges.size(), 1u);
     const auto &Range = Result.FunctionRanges.front();
+    EXPECT_EQ(Range.OwnerSymbol, "leaf");
     ASSERT_EQ(Range.BeginVA, Opt.Model.TextVA);
     const auto Text = llvm::find_if(Result.Sections, [](const auto &Section) {
       return Section.Name == ".text";

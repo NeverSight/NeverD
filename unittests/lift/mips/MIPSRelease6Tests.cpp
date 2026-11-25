@@ -508,6 +508,28 @@ TEST_P(MIPSRelease6,
   EXPECT_EQ(Ops.back().Inputs[0].Offset, PC + 12);
 }
 
+TEST_P(MIPSRelease6, CompactRegisterCallsSampleTheCallableBeforeLink) {
+  for (unsigned Reg : {25u, 31u}) {
+    for (int Offset : {0, -4, 4}) {
+      SCOPED_TRACE(testing::Message() << Reg << '/' << Offset);
+      ASSERT_EQ(decode(0xf8000000u | (Reg << 16) | uint16_t(Offset)), 4);
+      Ops.clear();
+      Decode.liftUnitToLow(Unit, Ops);
+      ASSERT_EQ(Ops.size(), 3u);
+      EXPECT_EQ(Ops[0].Opcode, Offset ? NdOp::INT_ADD : NdOp::COPY);
+      EXPECT_TRUE(Ops[0].Inputs[0].isReg());
+      EXPECT_EQ(Ops[0].Inputs[0].Offset, Reg == 31 ? mipsreg::RA : mipsreg::T9);
+      if (Offset)
+        EXPECT_EQ(int16_t(Ops[0].Inputs[1].Offset), Offset);
+      EXPECT_TRUE(Ops[0].Output.isTemp());
+      EXPECT_EQ(Ops[1].Output.Offset, mipsreg::RA);
+      EXPECT_EQ(Ops[1].Inputs[0].Offset, 0x10004u);
+      EXPECT_EQ(Ops[2].Opcode, NdOp::INDIR_CALL);
+      EXPECT_EQ(Ops[2].Inputs[0], Ops[0].Output);
+    }
+  }
+}
+
 TEST_P(MIPSRelease6, FollowerEvidenceBelongsToOnePhysicalDecode) {
   uint8_t Code[8]{};
   const auto Order = archLittleEndian(GetParam()) ? llvm::endianness::little

@@ -105,10 +105,18 @@ bool MIPSLifter::liftR6Compact(State &S, uint32_t Word,
                  RT = (Word >> 16) & 31;
   const bool Indirect = (Op == 54 || Op == 62) && !RS;
   const auto Zero = NdVar::cst(0, S.Width);
-  NdVar TargetValue =
-      Indirect ? S.binary(NdOp::INT_ADD, S.read(RT),
-                          NdVar::cst(int64_t(int16_t(Word)), S.Width))
-               : NdVar::cst(r6BranchTarget(Word, S.Addr, S.InsnSize), S.Width);
+  NdVar TargetValue;
+  if (Indirect) {
+    // JRC and JALRC sample the callable register before a possible link write.
+    TargetValue = S.makeTemp(S.Width);
+    const int16_t Offset = int16_t(Word);
+    if (Offset)
+      S.emit(NdOp::INT_ADD, TargetValue,
+             {S.read(RT), NdVar::cst(int64_t(Offset), S.Width)});
+    else
+      S.emit(NdOp::COPY, TargetValue, {S.read(RT)});
+  } else
+    TargetValue = NdVar::cst(r6BranchTarget(Word, S.Addr, S.InsnSize), S.Width);
   const auto Next = NdVar::cst(S.Width == 4 ? uint32_t(S.Addr + S.InsnSize)
                                             : S.Addr + S.InsnSize,
                                S.Width);
