@@ -2696,7 +2696,9 @@ and link maps and removes the generated objects and executables.
 
 `--require-native` runs the five original control probes on the measuring
 Mac and uses that invocation's x1 cursor to decide which generated comparisons
-can run. The report sets `native_generated_arm64e_x1_qualified` only when the
+can run. Before measuring an image, it checks both control revisions against the
+export manifest and verifies the digest of the cursor bytes it reads.
+The report sets `native_generated_arm64e_x1_qualified` only when the
 full native control report qualifies and all 20 signing comparisons complete.
 It records the path and SHA-256 of the original control report alongside the
 individual image results. Exit 0 qualifies the run. Exit 2 records a measured

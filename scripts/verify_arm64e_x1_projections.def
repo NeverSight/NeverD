@@ -53,6 +53,7 @@
     "stage": "{label} failed for {directory}",
     "symbols": "the Apple link map does not attribute every IA/IB projection symbol to {owner}",
     "execution": "unexpected projection process status or entry/comparison records in {directory}",
+    "control_identity": "native control revision or x1 cursor digest differs from its recorded identity",
     "capability": "the arm64e.x1 cursor controls failed before projection measurement"
   }
 }

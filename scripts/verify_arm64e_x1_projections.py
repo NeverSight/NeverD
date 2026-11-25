@@ -2,6 +2,7 @@
 """Export NeverD signing projections and qualify their signed arm64e.x1 images."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -170,12 +171,20 @@ def projection_cursor(output, report, require_native):
         if path.is_file():
             report[CONFIG["control_receipt"]] = {"report": path.relative_to(output).as_posix(),
                                                 "sha256": model.digest(path)}
+    if controls["source_revision"] != report["source_revision"]:
+        raise ValueError(CONFIG["errors"]["control_identity"])
     report[gate["complete_key"]] = controls[gate["complete_key"]]
     if controls["status"] == native.POLICY["failed"]:
         return None
     receipt = controls["probes"][X1["mode"]]
+    raw = (directory / receipt["report"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != receipt["sha256"]:
+        raise ValueError(CONFIG["errors"]["control_identity"])
+    cursor = json.loads(raw)
+    if cursor["source_revision"] != report["source_revision"]:
+        raise ValueError(CONFIG["errors"]["control_identity"])
     report["cursor_sha256"] = receipt["sha256"]
-    return json.loads((directory / receipt["report"]).read_text())
+    return cursor
 
 
 def check(inputs, output, require_execution=False, *, require_native=False):

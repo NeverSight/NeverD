@@ -170,6 +170,7 @@ class X1ProjectionTests(unittest.TestCase):
 
     def test_native_acceptance_joins_five_controls_and_all_generated_processes(self):
         native, config = projection.native, projection.CONFIG
+        revision = native.provenance()["source_revision"]
         gate = native.POLICY["x1_qualification"]
         modes = native.POLICY["cursor_probe"]
         cases = list(projection.model.cases(projection.MODEL["return_profile"]))
@@ -206,6 +207,7 @@ class X1ProjectionTests(unittest.TestCase):
                         failed = broken_control and mode == native.POLICY["probe_mode"]
                         result = {**dict.fromkeys(gate["requirements"][mode], True),
                                   "status": native.POLICY["failed" if failed else "passed"]}
+                    result["source_revision"] = revision
                     native.save(directory / native.POLICY["report_name"], result)
                     return result
 
@@ -217,7 +219,7 @@ class X1ProjectionTests(unittest.TestCase):
                     return {"execution": config["executed" if capable else "entry_only" if launch else "not_started"]}
 
                 m.enter_context(mock.patch.object(projection, "checked_inputs", return_value={
-                    "source_revision": sha, "exporter_sha256": sha}))
+                    "source_revision": revision, "exporter_sha256": sha}))
                 aggregate = m.enter_context(mock.patch.object(native, "qualify_x1", wraps=native.qualify_x1))
                 probes = [m.enter_context(mock.patch.object(native, fn.__name__, side_effect=probe))
                           for fn in (native.probe, native.probe_signal_cursor, native.probe_x1_signal_cursor,
@@ -261,3 +263,42 @@ class X1ProjectionTests(unittest.TestCase):
                 else:
                     self.assertFalse(report["all_linked"])
                     self.assertEqual(measured.call_count, int(broken_image))
+
+    def test_stale_controls_or_a_changed_cursor_cannot_authorize_a_generated_process(self):
+        native, config = projection.native, projection.CONFIG
+        gate = native.POLICY["x1_qualification"]
+        for stale_control, stale_cursor, corrupt in ((True, False, False), (False, True, False), (False, False, True)):
+            with self.subTest(stale_control=stale_control, stale_cursor=stale_cursor, corrupt=corrupt), \
+                    tempfile.TemporaryDirectory() as tmp, ExitStack() as m:
+                inputs = Path(tmp)
+                manifest = inputs / config["manifest"]
+                manifest.write_text(json.dumps({}))
+                revision = native.provenance()["source_revision"]
+                different = revision[::-1]
+                output = inputs / config["check"]
+
+                def qualify(directory, *, require_complete):
+                    filename = native.POLICY["report_name"]
+                    path = directory / projection.X1["mode"] / filename
+                    path.parent.mkdir()
+                    cursor = {"source_revision": different if stale_cursor else revision}
+                    native.save(path, cursor)
+                    receipt = {"report": path.relative_to(directory).as_posix(), "sha256": projection.model.digest(path)}
+                    if corrupt:
+                        path.write_bytes(path.read_bytes() + b"\n")
+                    report = {"source_revision": different if stale_control else revision,
+                              "status": native.POLICY["passed"], gate["complete_key"]: True,
+                              "probes": {projection.X1["mode"]: receipt}}
+                    native.save(directory / filename, report)
+                    return report
+
+                m.enter_context(mock.patch.object(projection, "checked_inputs", return_value={
+                    "source_revision": revision, "exporter_sha256": projection.model.digest(manifest)}))
+                m.enter_context(mock.patch.object(native, "qualify_x1", side_effect=qualify))
+                measure = m.enter_context(mock.patch.object(projection, "measure_image"))
+                with self.assertRaisesRegex(ValueError, config["errors"]["control_identity"]):
+                    projection.check(inputs, output, require_native=True)
+                report = json.loads((output / projection.MODEL["report"]).read_text())
+                self.assertFalse(report[config["qualified_key"]])
+                self.assertEqual(report["status"], native.POLICY["failed"])
+                measure.assert_not_called()
