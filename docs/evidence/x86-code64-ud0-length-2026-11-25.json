@@ -106,6 +106,56 @@
     }
   },
   "resource_recovery": "Earlier full runs hit temporary-output space errors and left truncated generated C under /tmp. The final P/E reruns used TMPDIR=/dev/shm/neverd-ud0-tests, passed all 249 tests each and are the only full reports counted above.",
+  "post_qualification_rebase": {
+    "code_commit": "f431f0aed322d0d3cd2e94ed4c47788620888a10",
+    "base_commit": "e7275d9627",
+    "scope": "The intervening dev commits changed shared HighC and Windows ABI code. The test binary changed, so focused and full P/E runs were repeated on the rebuilt target.",
+    "rebuilt_test_binary_sha256": "c8be385d1dae87ddee0df61fed3b6a928dd6a101f723a1656a3b8373bec4dede",
+    "focused_p": {
+      "file": "ud0-long-r12-postrebase-focused-p.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "4258c512c24b92dd1820847aaa155240f23264e929c9d57c168ea588c87e7f2f"
+    },
+    "focused_e": {
+      "file": "ud0-long-r12-postrebase-focused-e.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "db795fc66a5076539ffd28ad235c80431ad460e4870a260ca7e5b8a588c33f9b"
+    },
+    "full_p": {
+      "file": "ud0-long-r12-postrebase-full-p.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "58827d0c30a6dc97c04466662663bb6cf4450618063c59a840e78253bf58dfc8"
+    },
+    "full_e": {
+      "file": "ud0-long-r12-postrebase-full-e.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "e4eef92fa2750a8b390df749a531dff8216b10386f2bc5548e6bf974f309dfd8"
+    }
+  },
   "release_gate": {
     "global_x86_complete": false,
     "native_sgx_qualified": false,
