@@ -202,6 +202,22 @@ compute-bound change, so the suffix check stayed. Revisit the choice if a
 supported input produces incorrect IR or a new comparison shows a repeatable
 gain. [Release comparison](https://github.com/NeverSight/NeverD/pull/2603)
 
+### Comparing definition-file layouts
+
+Compile the same translation unit twice at the same path with its Release
+flags. In the second build, expand the selected `.def` or `.inc` contents at
+each include site. Trace both variants with Clang's `-E -H` and check which
+files the preprocessor actually opened. For example, the RISC-V lifter and
+compressed decoder both reach `RISCVIntegerOpcodes.def` through
+`RISCVOpcode.h`. Editing only the two `.cpp` files leaves that table included
+in both builds. [RISC-V opcode header](../../../../lib/lift/RISCV/RISCVOpcode.h)
+
+Once the traces confirm the substitution, compare each pair of full object
+files with `cmp`. On arm64 macOS the two RISC-V translation units, the
+PowerPC lifter and the RISC-V PLT reader each produced byte-identical Release
+objects. Changing the lookup algorithm is a separate experiment. Time that
+change on identical outputs and report the cost of any newly handled inputs.
+
 ### Moving work across a branch
 
 A MIPS16 fix initially exposed the multiply's LO register during instruction
