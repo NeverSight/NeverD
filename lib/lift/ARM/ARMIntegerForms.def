@@ -1,0 +1,36 @@
+//===- ARMIntegerForms.def - ARM and Thumb integer instruction forms ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Register logic selects the LowIR operation and optional RHS inversion.
+/// Single-register memory forms select access width and load extension.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_ARM_LOGIC
+NEVERD_ARM_LOGIC(AND, INT_AND, false)
+NEVERD_ARM_LOGIC(ORR, INT_OR, false)
+NEVERD_ARM_LOGIC(ORN, INT_OR, true)
+NEVERD_ARM_LOGIC(EOR, INT_XOR, false)
+NEVERD_ARM_LOGIC(BIC, INT_AND, true)
+#undef NEVERD_ARM_LOGIC
+#endif
+
+#ifdef NEVERD_ARM_LOAD
+NEVERD_ARM_LOAD(LDR, 4, false)
+NEVERD_ARM_LOAD(LDRB, 1, false)
+NEVERD_ARM_LOAD(LDRH, 2, false)
+NEVERD_ARM_LOAD(LDRSB, 1, true)
+NEVERD_ARM_LOAD(LDRSH, 2, true)
+#undef NEVERD_ARM_LOAD
+#endif
+
+#ifdef NEVERD_ARM_STORE
+NEVERD_ARM_STORE(STR, 4)
+NEVERD_ARM_STORE(STRB, 1)
+NEVERD_ARM_STORE(STRH, 2)
+#undef NEVERD_ARM_STORE
+#endif

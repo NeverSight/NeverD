@@ -608,22 +608,8 @@ bool hasAuditedLegacyIntegerForm(const cs_insn *Insn, Arch TargetArch) {
     case X86_INS_CALL:
     case X86_INS_RET:
     case X86_INS_JMP:
-    case X86_INS_JE:
-    case X86_INS_JNE:
-    case X86_INS_JA:
-    case X86_INS_JAE:
-    case X86_INS_JB:
-    case X86_INS_JBE:
-    case X86_INS_JG:
-    case X86_INS_JGE:
-    case X86_INS_JL:
-    case X86_INS_JLE:
-    case X86_INS_JS:
-    case X86_INS_JNS:
-    case X86_INS_JO:
-    case X86_INS_JNO:
-    case X86_INS_JP:
-    case X86_INS_JNP:
+#define NEVERD_X86_CONDITION(Suffix, Code) case X86_INS_J##Suffix:
+#include "X86ConditionCodes.def"
       break;
     default:
       return false;
@@ -762,22 +748,8 @@ bool hasAuditedLegacyIntegerForm(const cs_insn *Insn, Arch TargetArch) {
     return X86.op_count == 1 && (X86.operands[0].type == X86_OP_IMM ||
                                  X86.operands[0].size == (Is64Bit ? 8 : 4) ||
                                  (!Is64Bit && X86.operands[0].size == 2));
-  case X86_INS_JE:
-  case X86_INS_JNE:
-  case X86_INS_JA:
-  case X86_INS_JAE:
-  case X86_INS_JB:
-  case X86_INS_JBE:
-  case X86_INS_JG:
-  case X86_INS_JGE:
-  case X86_INS_JL:
-  case X86_INS_JLE:
-  case X86_INS_JS:
-  case X86_INS_JNS:
-  case X86_INS_JO:
-  case X86_INS_JNO:
-  case X86_INS_JP:
-  case X86_INS_JNP:
+#define NEVERD_X86_CONDITION(Suffix, Code) case X86_INS_J##Suffix:
+#include "X86ConditionCodes.def"
   case X86_INS_JCXZ:
   case X86_INS_JECXZ:
   case X86_INS_JRCXZ:
@@ -793,40 +765,12 @@ bool hasAuditedLegacyIntegerForm(const cs_insn *Insn, Arch TargetArch) {
            Insn->bytes[OpcodeOffset] == (Insn->id == X86_INS_LOOP    ? 0xe2
                                          : Insn->id == X86_INS_LOOPE ? 0xe1
                                                                      : 0xe0);
-  case X86_INS_SETE:
-  case X86_INS_SETNE:
-  case X86_INS_SETA:
-  case X86_INS_SETAE:
-  case X86_INS_SETB:
-  case X86_INS_SETBE:
-  case X86_INS_SETG:
-  case X86_INS_SETGE:
-  case X86_INS_SETL:
-  case X86_INS_SETLE:
-  case X86_INS_SETS:
-  case X86_INS_SETNS:
-  case X86_INS_SETO:
-  case X86_INS_SETNO:
-  case X86_INS_SETP:
-  case X86_INS_SETNP:
+#define NEVERD_X86_CONDITION(Suffix, Code) case X86_INS_SET##Suffix:
+#include "X86ConditionCodes.def"
     return X86.op_count == 1 && Writable(X86.operands[0]) &&
            X86.operands[0].size == 1;
-  case X86_INS_CMOVE:
-  case X86_INS_CMOVNE:
-  case X86_INS_CMOVA:
-  case X86_INS_CMOVAE:
-  case X86_INS_CMOVB:
-  case X86_INS_CMOVBE:
-  case X86_INS_CMOVG:
-  case X86_INS_CMOVGE:
-  case X86_INS_CMOVL:
-  case X86_INS_CMOVLE:
-  case X86_INS_CMOVS:
-  case X86_INS_CMOVNS:
-  case X86_INS_CMOVO:
-  case X86_INS_CMOVNO:
-  case X86_INS_CMOVP:
-  case X86_INS_CMOVNP:
+#define NEVERD_X86_CONDITION(Suffix, Code) case X86_INS_CMOV##Suffix:
+#include "X86ConditionCodes.def"
     return Binary() && X86.operands[0].type == X86_OP_REG &&
            Writable(X86.operands[1]) && X86.operands[0].size >= 2;
   case X86_INS_RET:

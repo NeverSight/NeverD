@@ -22,19 +22,6 @@
 
 namespace neverd {
 
-// Memory access width for byte/halfword ordered/unscaled/unprivileged
-// load/store variants (mnemonic suffix 'b'/'h'); the register operand is always
-// W/X but the access (and zero/truncate width) is 1/2 bytes.
-static uint16_t orderedAccessWidth(const cs_insn *Insn, uint16_t RegSz) {
-  const char *Mn = Insn->mnemonic;
-  size_t L = Mn ? std::strlen(Mn) : 0;
-  if (L && Mn[L - 1] == 'b')
-    return 1;
-  if (L && Mn[L - 1] == 'h')
-    return 2;
-  return RegSz;
-}
-
 // Capstone 6 STLURWi/STLURXi forms tag operands as CS_OP_REG|CS_OP_MEM and may
 // surface only one AARCH64_OP_MEM operand with a bogus base/index (e.g. stlurb
 // w0,[x1] -> base=x0,index=x1).  Recover Rt/Rn/imm9 from the LD/ST unscaled
@@ -88,98 +75,50 @@ static NdVar storeEffAddrFromEncoding(AArch64Lifter::LiftState &S,
 
 bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
                      const cs_insn *Insn, const cs_aarch64 &ARM64) {
+  auto Load = [&](uint16_t Bytes, bool Signed, NdMemoryOrdering Order) {
+    if (ARM64.op_count < 2)
+      return;
+    NdVar Dst = L.operandWrite(ARM64.operands[0]);
+    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
+    if (Signed || (Bytes && Bytes < Dst.Size)) {
+      NdVar Value = S.makeTemp(Bytes);
+      S.emit(NdOp::LOAD, Value, {EA}, Order);
+      S.emit(Signed ? NdOp::INT_SEXT : NdOp::INT_ZEXT, Dst, {Value});
+    } else {
+      S.emit(NdOp::LOAD, Dst, {EA}, Order);
+    }
+  };
+  auto Store = [&](uint16_t Bytes, NdMemoryOrdering Order,
+                   bool UnscaledEncoding) {
+    NdVar Src;
+    NdVar EA;
+    if (UnscaledEncoding && Insn->size == 4) {
+      Src = storeSourceFromEncoding(Insn);
+      EA = storeEffAddrFromEncoding(S, Insn);
+    } else if (ARM64.op_count >= 2) {
+      Src = L.operandRead(S, ARM64.operands[0]);
+      EA = L.operandEffAddr(S, ARM64.operands[1]);
+    } else {
+      return;
+    }
+    if (Bytes && Bytes < Src.Size) {
+      NdVar Truncated = S.makeTemp(Bytes);
+      S.emit(NdOp::SUBBYTES, Truncated, {Src, NdVar::cst(0, 4)});
+      Src = Truncated;
+    }
+    S.emit(NdOp::STORE, {}, {EA, Src}, Order);
+  };
   switch (Insn->id) {
-  // ========================================================================
-  // Load variants (LDAPR, LDTR, LDLAR, LDPSW, LDRAA, LDRAB, etc.)
-  // ========================================================================
-  case AARCH64_INS_LDAPR:
-  case AARCH64_INS_LDAPRB:
-  case AARCH64_INS_LDAPRH:
-  case AARCH64_INS_LDLAR:
-  case AARCH64_INS_LDLARB:
-  case AARCH64_INS_LDLARH: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(ARM64.operands[0]);
-    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    uint16_t Asz = orderedAccessWidth(Insn, Dst.Size);
-    if (Asz < Dst.Size) {
-      NdVar V = S.makeTemp(Asz);
-      S.emit(NdOp::LOAD, V, {EA}, NdMemoryOrdering::Acquire);
-      S.emit(NdOp::INT_ZEXT, Dst, {V});
-    } else {
-      S.emit(NdOp::LOAD, Dst, {EA}, NdMemoryOrdering::Acquire);
-    }
+#define NEVERD_A64_LOAD(Name, Bytes, Signed, Order)                            \
+  case AARCH64_INS_##Name:                                                     \
+    Load(Bytes, Signed, NdMemoryOrdering::Order);                              \
     break;
-  }
-  case AARCH64_INS_LDAPUR:
-  case AARCH64_INS_LDAPURB:
-  case AARCH64_INS_LDAPURH: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(ARM64.operands[0]);
-    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    uint16_t Asz = orderedAccessWidth(Insn, Dst.Size);
-    if (Asz < Dst.Size) {
-      NdVar V = S.makeTemp(Asz);
-      S.emit(NdOp::LOAD, V, {EA}, NdMemoryOrdering::Acquire);
-      S.emit(NdOp::INT_ZEXT, Dst, {V});
-    } else {
-      S.emit(NdOp::LOAD, Dst, {EA}, NdMemoryOrdering::Acquire);
-    }
+#define NEVERD_A64_STORE(Name, Bytes, Order, Encoded)                          \
+  case AARCH64_INS_##Name:                                                     \
+    Store(Bytes, NdMemoryOrdering::Order, Encoded);                            \
     break;
-  }
-  case AARCH64_INS_LDAPURSB:
-  case AARCH64_INS_LDAPURSH:
-  case AARCH64_INS_LDAPURSW: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(ARM64.operands[0]);
-    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    uint16_t LoadSz = 1;
-    if (Insn->id == AARCH64_INS_LDAPURSH)
-      LoadSz = 2;
-    else if (Insn->id == AARCH64_INS_LDAPURSW)
-      LoadSz = 4;
-    NdVar Val = S.makeTemp(LoadSz);
-    S.emit(NdOp::LOAD, Val, {EA}, NdMemoryOrdering::Acquire);
-    S.emit(NdOp::INT_SEXT, Dst, {Val});
-    break;
-  }
-  case AARCH64_INS_LDTR:
-  case AARCH64_INS_LDTRB:
-  case AARCH64_INS_LDTRH: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(ARM64.operands[0]);
-    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    uint16_t Asz = orderedAccessWidth(Insn, Dst.Size);
-    if (Asz < Dst.Size) {
-      NdVar V = S.makeTemp(Asz);
-      S.emit(NdOp::LOAD, V, {EA});
-      S.emit(NdOp::INT_ZEXT, Dst, {V});
-    } else {
-      S.emit(NdOp::LOAD, Dst, {EA});
-    }
-    break;
-  }
-  case AARCH64_INS_LDTRSB:
-  case AARCH64_INS_LDTRSH:
-  case AARCH64_INS_LDTRSW: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Dst = L.operandWrite(ARM64.operands[0]);
-    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    uint16_t LoadSz = 1;
-    if (Insn->id == AARCH64_INS_LDTRSH)
-      LoadSz = 2;
-    else if (Insn->id == AARCH64_INS_LDTRSW)
-      LoadSz = 4;
-    NdVar Val = S.makeTemp(LoadSz);
-    S.emit(NdOp::LOAD, Val, {EA});
-    S.emit(NdOp::INT_SEXT, Dst, {Val});
-    break;
-  }
+#include "AArch64IntegerTransfers.def"
+
   case AARCH64_INS_LDPSW: {
     if (ARM64.op_count < 3)
       break;
@@ -306,63 +245,8 @@ bool liftLdStVariant(AArch64Lifter &L, AArch64Lifter::LiftState &S,
   }
 
   // ========================================================================
-  // Store variants (STLLR, STLUR, STTR, ST64B, STILP, STL1, etc.)
+  // Block, pair and structure stores
   // ========================================================================
-  case AARCH64_INS_STLLR:
-  case AARCH64_INS_STLLRB:
-  case AARCH64_INS_STLLRH: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Src = L.operandRead(S, ARM64.operands[0]);
-    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    uint16_t Asz = orderedAccessWidth(Insn, Src.Size);
-    if (Asz < Src.Size) {
-      NdVar T = S.makeTemp(Asz);
-      S.emit(NdOp::SUBBYTES, T, {Src, NdVar::cst(0, 4)});
-      Src = T;
-    }
-    S.emit(NdOp::STORE, {}, {EA, Src}, NdMemoryOrdering::Release);
-    break;
-  }
-  case AARCH64_INS_STLUR:
-  case AARCH64_INS_STLURB:
-  case AARCH64_INS_STLURH: {
-    NdVar Src;
-    NdVar EA;
-    if (Insn->size == 4) {
-      Src = storeSourceFromEncoding(Insn);
-      EA = storeEffAddrFromEncoding(S, Insn);
-    } else if (ARM64.op_count >= 2) {
-      Src = L.operandRead(S, ARM64.operands[0]);
-      EA = L.operandEffAddr(S, ARM64.operands[1]);
-    } else {
-      break;
-    }
-    uint16_t Asz = orderedAccessWidth(Insn, Src.Size);
-    if (Asz < Src.Size) {
-      NdVar T = S.makeTemp(Asz);
-      S.emit(NdOp::SUBBYTES, T, {Src, NdVar::cst(0, 4)});
-      Src = T;
-    }
-    S.emit(NdOp::STORE, {}, {EA, Src}, NdMemoryOrdering::Release);
-    break;
-  }
-  case AARCH64_INS_STTR:
-  case AARCH64_INS_STTRB:
-  case AARCH64_INS_STTRH: {
-    if (ARM64.op_count < 2)
-      break;
-    NdVar Src = L.operandRead(S, ARM64.operands[0]);
-    NdVar EA = L.operandEffAddr(S, ARM64.operands[1]);
-    uint16_t Asz = orderedAccessWidth(Insn, Src.Size);
-    if (Asz < Src.Size) {
-      NdVar T = S.makeTemp(Asz);
-      S.emit(NdOp::SUBBYTES, T, {Src, NdVar::cst(0, 4)});
-      Src = T;
-    }
-    S.emit(NdOp::STORE, {}, {EA, Src});
-    break;
-  }
   case AARCH64_INS_ST64B:
   case AARCH64_INS_ST64BV:
   case AARCH64_INS_ST64BV0: {

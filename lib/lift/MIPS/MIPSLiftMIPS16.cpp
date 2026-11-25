@@ -8,6 +8,8 @@
 /// is one physical instruction; compact branches never acquire a delay slot.
 //===----------------------------------------------------------------------===//
 
+#include "MIPSIntegerOpcodes.h"
+
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
@@ -45,18 +47,23 @@ MIPSLifter::mips16JumpEncoding(const cs_insn &Instruction) const {
         readTargetEndian<uint16_t>(Instruction.bytes + 2, Little);
     const uint32_t Index =
         ((First & 31) << 21) | (((First >> 5) & 31) << 16) | Second;
-    return Encoding{(uint32_t(First & 0x400 ? 29 : 3) << 26) | Index, 2};
+    return Encoding{
+        (uint32_t(First & 0x400 ? mips::major::JALX : mips::major::JAL) << 26) |
+            Index,
+        2};
   }
   if (First >> 11 != 0x1d || Instruction.size != 2)
     return std::nullopt;
   if (First == 0xe820 || First == 0xe8a0)
-    return Encoding{registerForm(8, 0, 31), First == 0xe820 ? 2u : 0u};
+    return Encoding{registerForm(mips::special::JR, 0, 31),
+                    First == 0xe820 ? 2u : 0u};
   if (First & 0x3f)
     return std::nullopt;
   const unsigned Kind = (First >> 6) & 3;
-  return Encoding{registerForm(Kind & 1 ? 9 : 8, Kind & 1 ? 31 : 0,
-                               compactRegister((First >> 8) & 7)),
-                  Kind < 2 ? 2u : 0u};
+  return Encoding{
+      registerForm(Kind & 1 ? mips::special::JALR : mips::special::JR,
+                   Kind & 1 ? 31 : 0, compactRegister((First >> 8) & 7)),
+      Kind < 2 ? 2u : 0u};
 }
 
 std::optional<MIPSLifter::Encoding>
@@ -110,16 +117,17 @@ MIPSLifter::mips16E2Encoding(uint16_t First, uint16_t Half) const {
       return std::nullopt;
     const int Offset = int(((First & 0x1e0) | (Half & 31)) ^ 0x100) - 0x100;
     return Encoding{
-        immediateForm(Half & 32 ? 47 : 51, First & 31, RX, uint16_t(Offset))};
+        immediateForm(Half & 32 ? mips::major::CACHE : mips::major::PREF,
+                      First & 31, RX, uint16_t(Offset))};
   }
   case (0x12 << 3) | 6:
   case (0x1a << 3) | 6: {
     if (First & 0x618)
       return std::nullopt;
     const int Offset = int(((First & 0x1e0) | (Half & 31)) ^ 0x100) - 0x100;
-    return Encoding{immediateForm(Major == 0x12 ? 48 : 56, RX,
-                                  compactRegister(First & 7),
-                                  uint16_t(Offset))};
+    return Encoding{
+        immediateForm(Major == 0x12 ? mips::major::LL : mips::major::SC, RX,
+                      compactRegister(First & 7), uint16_t(Offset))};
   }
   case (0x12 << 3) | 7:
   case (0x1a << 3) | 7: {
@@ -150,9 +158,10 @@ MIPSLifter::mips16E2Encoding(uint16_t First, uint16_t Half) const {
       if ((First & 0x7d8) || (!(First & 32) && (First & 7)) ||
           (Selector >= 5 && (Half & 0xe0)))
         return std::nullopt;
-      return Encoding{registerForm(Selector & 1 ? 10 : 11, RX,
-                                   First & 32 ? compactRegister(First & 7) : 0,
-                                   Selector >= 5 ? 24 : RY)};
+      return Encoding{
+          registerForm(Selector & 1 ? mips::special::MOVZ : mips::special::MOVN,
+                       RX, First & 32 ? compactRegister(First & 7) : 0,
+                       Selector >= 5 ? 24 : RY)};
     }
     return std::nullopt;
   }
@@ -231,7 +240,7 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
       return std::nullopt;
     const uint16_t Displacement =
         Extended ? Immediate : uint16_t(((Half & 0x7ff) ^ 0x400) - 0x400);
-    return Encoding{immediateForm(4, 0, 0, Displacement)};
+    return Encoding{immediateForm(mips::major::BEQ, 0, 0, Displacement)};
   }
   case 0x04: // BEQZ
   case 0x05: // BNEZ
@@ -249,27 +258,31 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
     if (Extended && (Half & 0xe0))
       return std::nullopt;
     if (Minor <= 1) // BTEQZ / BTNEZ use GPR24 as T.
-      return Encoding{immediateForm(Minor ? 5 : 4, 0, 24, SignedImmediate)};
+      return Encoding{immediateForm(Minor ? mips::major::BNE : mips::major::BEQ,
+                                    0, 24, SignedImmediate)};
     if (Minor == 2) // SW ra,offset(sp)
-      return Encoding{
-          immediateForm(43, 31, 29, Extended ? Immediate : (Half & 255) << 2)};
+      return Encoding{immediateForm(mips::major::SW, 31, 29,
+                                    Extended ? Immediate : (Half & 255) << 2)};
     if (Minor == 3) // ADJSP
       return Encoding{immediateForm(
-          9, 29, 29, Extended ? Immediate : uint16_t(int8_t(Immediate) * 8))};
+          mips::major::ADDIU, 29, 29,
+          Extended ? Immediate : uint16_t(int8_t(Immediate) * 8))};
     if (!Extended && Minor == 5) { // MOVE full GPR, compact GPR
       const unsigned Destination = ((Half >> 3) & 3) * 8 + ((Half >> 5) & 7);
-      return Encoding{
-          Destination ? registerForm(33, Destination, compactRegister(Half & 7))
-                      : 0};
+      return Encoding{Destination
+                          ? registerForm(mips::special::ADDU, Destination,
+                                         compactRegister(Half & 7))
+                          : 0};
     }
     if (!Extended && Minor == 7) // MOVE compact GPR, full GPR
-      return Encoding{registerForm(33, RY, Half & 31)};
+      return Encoding{registerForm(mips::special::ADDU, RY, Half & 31)};
     return std::nullopt;
   }
   case 0x1c: // ADDU / SUBU
     if (Extended || ((Half & 3) != 1 && (Half & 3) != 3))
       return std::nullopt;
-    return Encoding{registerForm((Half & 3) == 1 ? 33 : 35,
+    return Encoding{registerForm((Half & 3) == 1 ? mips::special::ADDU
+                                                 : mips::special::SUBU,
                                  compactRegister((Half >> 2) & 7), RX, RY)};
   case 0x1d:
     if (Extended)
@@ -287,7 +300,7 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
         return std::nullopt;
       return Encoding{registerForm(Half & 31, RX, 0)};
     case 0x0f: // NOT
-      return Encoding{registerForm(39, RX, RY)};
+      return Encoding{registerForm(mips::special::NOR, RX, RY)};
     default:
       return std::nullopt;
     }
@@ -311,7 +324,9 @@ void MIPSLifter::liftMIPS16Frame(State &S, uint32_t Word) const {
       Save ? OldSP : S.binary(NdOp::INT_ADD, OldSP, NdVar::cst(Bytes, 4));
   const auto Access = [&](unsigned Register, int Offset) {
     // Reuse ordinary word memory semantics, including alignment and faults.
-    liftMemory(S, immediateForm(Save ? 43 : 35, Register, 29, uint16_t(Offset)),
+    liftMemory(S,
+               immediateForm(Save ? mips::major::SW : mips::major::LW, Register,
+                             29, uint16_t(Offset)),
                Top);
   };
   if (Save)

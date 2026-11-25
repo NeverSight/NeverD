@@ -19409,6 +19409,14 @@ file and guest-process execution remain separate capabilities.
 
 ## Where to edit
 
+The tables in `lib/lift/<architecture>/` name the instruction forms used by
+each lifter. PowerPC and RISC-V use integer opcode tables. MIPS uses
+`MIPSIntegerOpcodes.def` for classic fields shared with microMIPS and MIPS16
+expansion. x86 uses `X86ConditionCodes.def` for the 16 condition codes across
+jumps, sets and conditional moves. ARM32 groups logical operations and scalar
+transfers in `ARMIntegerForms.def`. AArch64 uses `AArch64IntegerTransfers.def`
+for ordered and unprivileged scalar access widths, extension and ordering.
+
 Native reference pages share one immutable `ReferenceImageIndex` per SDK
 session: no-return target classification, relocated code roots and exception
 entry facts. Function entries have their own revisioned, shared sorted vector;

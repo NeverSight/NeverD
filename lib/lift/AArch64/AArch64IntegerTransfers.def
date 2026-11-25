@@ -1,0 +1,47 @@
+//===- AArch64IntegerTransfers.def - Scalar load/store variants -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Load rows give the access width, signed extension and memory ordering.
+/// Store rows also identify STLUR forms whose operands come from the encoding.
+/// A width of zero uses the register operand's width.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_A64_LOAD
+NEVERD_A64_LOAD(LDAPR, 0, false, Acquire)
+NEVERD_A64_LOAD(LDAPRB, 1, false, Acquire)
+NEVERD_A64_LOAD(LDAPRH, 2, false, Acquire)
+NEVERD_A64_LOAD(LDLAR, 0, false, Acquire)
+NEVERD_A64_LOAD(LDLARB, 1, false, Acquire)
+NEVERD_A64_LOAD(LDLARH, 2, false, Acquire)
+NEVERD_A64_LOAD(LDAPUR, 0, false, Acquire)
+NEVERD_A64_LOAD(LDAPURB, 1, false, Acquire)
+NEVERD_A64_LOAD(LDAPURH, 2, false, Acquire)
+NEVERD_A64_LOAD(LDAPURSB, 1, true, Acquire)
+NEVERD_A64_LOAD(LDAPURSH, 2, true, Acquire)
+NEVERD_A64_LOAD(LDAPURSW, 4, true, Acquire)
+NEVERD_A64_LOAD(LDTR, 0, false, None)
+NEVERD_A64_LOAD(LDTRB, 1, false, None)
+NEVERD_A64_LOAD(LDTRH, 2, false, None)
+NEVERD_A64_LOAD(LDTRSB, 1, true, None)
+NEVERD_A64_LOAD(LDTRSH, 2, true, None)
+NEVERD_A64_LOAD(LDTRSW, 4, true, None)
+#undef NEVERD_A64_LOAD
+#endif
+
+#ifdef NEVERD_A64_STORE
+NEVERD_A64_STORE(STLLR, 0, Release, false)
+NEVERD_A64_STORE(STLLRB, 1, Release, false)
+NEVERD_A64_STORE(STLLRH, 2, Release, false)
+NEVERD_A64_STORE(STLUR, 0, Release, true)
+NEVERD_A64_STORE(STLURB, 1, Release, true)
+NEVERD_A64_STORE(STLURH, 2, Release, true)
+NEVERD_A64_STORE(STTR, 0, None, false)
+NEVERD_A64_STORE(STTRB, 1, None, false)
+NEVERD_A64_STORE(STTRH, 2, None, false)
+#undef NEVERD_A64_STORE
+#endif
