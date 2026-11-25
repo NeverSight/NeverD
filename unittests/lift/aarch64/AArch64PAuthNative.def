@@ -18,10 +18,10 @@
 NEVERD_PAUTH_NATIVE_TEXT(kProbeEntryMarker, NEVERD_PROBE_MARKER "\n")
 NEVERD_PAUTH_NATIVE_TEXT(
     kProbeEntrySource,
-    "extern long write(int, const void *, __SIZE_TYPE__);\n"
+    "#include <unistd.h>\n"
     "__attribute__((constructor)) static void probeEntered(void) {\n"
     "  static const char mark[] = \"" NEVERD_PROBE_MARKER "\\n\";\n"
-    "  (void)write(1, mark, sizeof(mark) - 1);\n}\n")
+    "  (void)write(STDOUT_FILENO, mark, sizeof(mark) - 1);\n}\n")
 #undef NEVERD_PROBE_MARKER
 NEVERD_PAUTH_NATIVE_TEXT(kProbeShell, "/bin/sh")
 NEVERD_PAUTH_NATIVE_TEXT(kProbeResultMessage, " probe exit ")
