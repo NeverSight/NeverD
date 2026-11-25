@@ -1437,17 +1437,19 @@ void recoverCallAbi(
           FnIt != FuncNames.end()
               ? FnIt->second
               : (kAutoFuncPrefix + llvm::utohexstr(CI.TargetAddr)).str();
-      // A single-function projection omits the callee body. Its descriptor
-      // still identifies the named routine at this code entry.
+      // A single-function projection omits the callee body. The PPC64 ELF
+      // entry still identifies the named routine.
       if (FnIt == FuncNames.end() && Img && !CI.IsIndirect &&
-          isPowerPC64ELFv1(TheArch) &&
+          isPowerPC64(TheArch) &&
           Img->PPC64EntryContexts.contains(CI.TargetAddr))
         if (const auto Name = Img->statedFunctionNameAt(CI.TargetAddr);
             !Name.empty())
           CI.TargetName = Name.str();
-      // A stub the names leave unnamed still reaches its import, whose name
-      // its prototype and va_list contract go by.
-      if (Img && !CI.IsIndirect && CI.TargetName.starts_with(kAutoFuncPrefix))
+      // The import owns the prototype and va_list contract. LLD can also
+      // publish an ELFv2 function symbol for the PLT stub itself.
+      if (Img && !CI.IsIndirect &&
+          (CI.TargetName.starts_with(kAutoFuncPrefix) ||
+           (isPowerPC64ELFv2(TheArch) && Img->findImportStubAt(CI.TargetAddr))))
         if (std::string Import = importCalleeName(*Img, CI.TargetAddr);
             !Import.empty())
           CI.TargetName = std::move(Import);

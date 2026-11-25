@@ -18,6 +18,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
+#include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/Support/MathExtras.h"
@@ -82,6 +83,10 @@ IntegerControl branch(Arch A, uint32_t W, va_t PC) {
     int64_t Disp = Op == opcode::B ? llvm::SignExtend64<26>(W & 0x3fffffc)
                                    : llvm::SignExtend64<16>(W & 0xfffc);
     va_t Dest = ((W & 2) ? 0 : PC) + Disp;
+    // A link to the following instruction materializes the PC in LR. There
+    // is no callee, register clobber or independent function at that address.
+    if (Link && !Conditional && Dest == PC + ppc_elf::InstructionAlignment)
+      return {NdOp::COPY, isPowerPC64(A) ? Dest : uint32_t(Dest)};
     return {Link          ? NdOp::CALL
             : Conditional ? NdOp::COND_BR
                           : NdOp::BRANCH,
@@ -254,6 +259,11 @@ bool integer(State &S, Arch A, uint32_t W) {
   NdVar X = S.reg(RA), Y = S.reg(RB), Src = S.reg(T);
   NdVar Base = RA ? X : S.imm(0);
   if (auto Flow = branch(A, W, S.Addr); Flow.Opcode != NdOp::NOP) {
+    if (Flow.Opcode == NdOp::COPY) {
+      S.emit(NdOp::COPY, S.special(LR),
+             {NdVar::addressFragment(Flow.Target, S.Width)});
+      return true;
+    }
     NdVar Dest;
     if (Op == opcode::XL)
       Dest = S.op(NdOp::INT_AND, S.special(XO == opcode::BCLR ? LR : CTR),

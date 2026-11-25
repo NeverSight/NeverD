@@ -448,7 +448,7 @@ static std::string emissionFailure(const std::exception &Error) {
   return std::string("C emission failed: ") + Error.what();
 }
 
-static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
+static int prepareFunction(neverd_session_t Sess, neverd_va_t &FuncEntry,
                            Session::PipelineDepth Depth) {
   auto *S = toSession(Sess);
   if (!S)
@@ -459,6 +459,7 @@ static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
       S->setError("no binary loaded");
       return 0;
     }
+    FuncEntry = S->Img.ppc64GlobalEntry(FuncEntry);
     // Bytecode views own a whole program, not a native function selection.
     if (S->Img.Arch == Arch::EVM || S->Img.Arch == Arch::SBF)
       return S->ensurePipeline(Depth) ? 1 : 0;
@@ -504,7 +505,7 @@ static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
   return 0;
 }
 
-static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
+static int prepareFunction(neverd_session_t Sess, neverd_va_t &FuncEntry,
                            bool NeedHighIR) {
   return prepareFunction(Sess, FuncEntry,
                          NeedHighIR ? Session::PipelineDepth::HighIR
@@ -856,8 +857,9 @@ int neverd_prepare_function(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
 // A client can inspect the ordinary C view before supplying a missing call
 // contract. If that run refused MedIR, request just the original LowIR again.
-static bool prepareOriginalCalls(neverd_session_t Sess, va_t Entry) {
+static bool prepareOriginalCalls(neverd_session_t Sess, va_t &Entry) {
   auto &S = *toSession(Sess);
+  Entry = S.Img.ppc64GlobalEntry(Entry);
   if (S.PipeRan && !S.PipeResult.Success && S.findLowFunc(Entry))
     S.selectFunction(Entry);
   return prepareFunction(Sess, Entry, Session::PipelineDepth::LowIR);
@@ -917,7 +919,7 @@ int neverd_prepare_function_view(neverd_session_t Sess, neverd_va_t FuncEntry,
 
 static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
                                   CSourceMap *SourceMap, bool PlainC = false) {
-  if (!neverd_prepare_function(Sess, FuncEntry))
+  if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/true))
     return dupStr(std::string());
   auto *S = toSession(Sess);
 

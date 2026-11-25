@@ -449,16 +449,21 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   // move operations and SSA renames their values, but neither changes a
   // call's preservation contract or the register views collected above.
   // Reuse its complete clobber set across liveness, PHI placement and rename.
+  const bool PPC64 =
+      Image && Image->Arch == TargetArch && isPowerPC64(TargetArch);
+  const bool ELFv2 = PPC64 && isPowerPC64ELFv2(TargetArch);
   const auto PPCContextAt =
       [&](va_t Entry) -> const BinaryImage::PPC64EntryContext * {
-    if (Image && Image->Arch == TargetArch && isPowerPC64ELFv1(TargetArch)) {
+    if (PPC64) {
       const auto It = Image->PPC64EntryContexts.find(Entry);
       if (It != Image->PPC64EntryContexts.end())
         return &It->second;
     }
     return nullptr;
   };
-  const auto *EntryContext = PPCContextAt(Func.Entry);
+  const va_t Global = ELFv2 ? Image->ppc64GlobalEntry(Func.Entry) : Func.Entry;
+  const bool LocalEntry = Global != Func.Entry;
+  const auto *EntryContext = PPCContextAt(Global);
   constexpr auto TOCRegister = integerreg::gpr(ppc_elf::TOCRegister);
   llvm::DenseMap<uint32_t, llvm::SmallVector<int, 8>> CallClobbers;
   auto CallClobberedIds = [&](const MedOp &Op) -> llvm::ArrayRef<int> {
@@ -469,12 +474,22 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     if (!Inserted)
       return Cached->second;
     auto &Result = Cached->second;
-    const auto *CalleeContext = EntryContext && Op.Opcode == NdOp::CALL &&
-                                        Op.NumInputs && Op.Inputs[0].isConst()
-                                    ? PPCContextAt(Op.Inputs[0].ConstVal)
-                                    : nullptr;
-    const bool SharesTOC = CalleeContext && EntryContext->TOC &&
-                           EntryContext->TOC == CalleeContext->TOC;
+    bool SharesTOC = false;
+    if (PPC64 && Op.Opcode == NdOp::CALL && Op.NumInputs &&
+        Op.Inputs[0].isConst()) {
+      const va_t Target = Op.Inputs[0].ConstVal;
+      const va_t CalleeEntry = Image->ppc64GlobalEntry(Target);
+      auto Stub = Image->PPC64LinkageStubs.find(Target);
+      if (ELFv2 && Stub != Image->PPC64LinkageStubs.end())
+        SharesTOC = Stub->second.PreservesTOC;
+      else if (const auto *Callee = PPCContextAt(CalleeEntry)) {
+        if (ELFv2)
+          SharesTOC = Callee->PreservesTOC || CalleeEntry != Target;
+        else
+          SharesTOC = EntryContext && EntryContext->TOC &&
+                      EntryContext->TOC == Callee->TOC;
+      }
+    }
     for (const auto &[RegOff, Ids] : RegOffToIds)
       for (int Id : Ids)
         if (const auto It = RegVarOfId.find(Id);
@@ -916,11 +931,17 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
             Input.Size == TRI.FullRegWidth)
           Input = MedVar::makeConst(*EntryGP, Input.Size,
                                     ConstantAddressProvenance::Address);
-        if (isPowerPC64ELFv1(TargetArch) && Input.Kind == MedVar::Reg &&
-            Input.RegOff == TOCRegister && Input.Size == ppc_elf::WordSize) {
+        if (ELFv2 && Root == 0 && EntryContext &&
+            EntryContext->LocalEntryOffset && !LocalEntry &&
+            Input.Kind == MedVar::Reg && Input.Size == ppc_elf::WordSize &&
+            Input.RegOff == integerreg::gpr(ppc_elf::GlobalEntryRegister))
+          Input = MedVar::makeConst(Func.Entry, Input.Size,
+                                    ConstantAddressProvenance::AddressFragment);
+        if ((isPowerPC64ELFv1(TargetArch) || LocalEntry) &&
+            Input.Kind == MedVar::Reg && Input.RegOff == TOCRegister &&
+            Input.Size == ppc_elf::WordSize) {
           if (Root != 0 || !EntryContext || !EntryContext->TOC)
-            throw LowToMedConversionError(
-                "PPC64 ELFv1 entry TOC is unresolved");
+            throw LowToMedConversionError("PPC64 entry TOC is unresolved");
           // TOCs commonly sit 32 KiB beyond the GOT, outside any mapped byte.
           // The signed displacement in the code identifies the final object.
           const va_t TOC = *EntryContext->TOC;

@@ -30,6 +30,7 @@
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/emit/SBFLLVMEmitter.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Debug.h"
@@ -190,6 +191,15 @@ public:
 
 PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                              const PipelineOptions &Opts, DebugContext *Dbg) {
+  if (!Opts.PatchMode && isPowerPC64ELFv2(Img.Arch) &&
+      llvm::any_of(Opts.OnlyFunctionEntries,
+                   [&](va_t A) { return Img.ppc64GlobalEntry(A) != A; })) {
+    PipelineOptions Canonical = Opts;
+    Canonical.OnlyFunctionEntries.clear();
+    for (va_t A : Opts.OnlyFunctionEntries)
+      Canonical.OnlyFunctionEntries.insert(Img.ppc64GlobalEntry(A));
+    return run(Img, Ctx, Canonical, Dbg);
+  }
   PipelineResult Result;
   Result.SourceImage = &Img;
   Result.KnownFunctionEntries = Opts.KnownFunctionEntries;

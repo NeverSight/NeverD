@@ -477,7 +477,10 @@ void parsePLTImports(const llvm::object::ELFFile<ELFT> &ELF,
     // A PLT relocation section can also contain TLS descriptors and IFUNC
     // resolvers. Their symbol is not the callable value the loader installs.
     // Share the exact symbol-address role used by ordinary slot bindings.
-    if (!isELFSlotBinding(Img.Arch, Type))
+    // PPC64 pairs JMP_SLOT with the verified runtime pointer or descriptor
+    // and the linker sequence that transfers control through it.
+    if ((isPowerPC64(Img.Arch) && Type == R_PPC64_JMP_SLOT) ||
+        !isELFSlotBinding(Img.Arch, Type))
       continue;
     if (SymIdx >= SymsOr->size())
       continue;
