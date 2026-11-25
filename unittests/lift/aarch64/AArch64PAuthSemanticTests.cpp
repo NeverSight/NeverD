@@ -181,6 +181,11 @@ void compileArm64eC(const std::string &Source,
       Out << kProbeEntrySource;
     Out << Source;
   }
+  if (!ObjectDirectory.empty()) {
+    llvm::SmallString<128> Saved(ObjectDirectory);
+    llvm::sys::path::append(Saved, kOracleSourceFile);
+    ASSERT_FALSE(llvm::sys::fs::copy_file(SourcePath, Saved));
+  }
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
   // Cross-compiled projections use Clang's resource headers and the fixture

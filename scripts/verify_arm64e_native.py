@@ -421,7 +421,7 @@ def probe_ordered_q(output):
         save(output / POLICY["report_name"], report)
 
 
-def qualify_x1(output):
+def qualify_x1(output, *, require_complete=False):
     policy = POLICY["x1_qualification"]
     ordered = POLICY["ordered_probe"]
     report = {**provenance(), "status": POLICY["failed"],
@@ -467,12 +467,13 @@ def qualify_x1(output):
             raise first_error
         if POLICY["failed"] in statuses:
             return report
-        if statuses == {POLICY["passed"]} and not report["missing"]:
-            report[policy["qualified_key"]] = True
-            report[policy["complete_key"]] = report[ordered["qualified_key"]]
-            report["status"] = POLICY["passed"]
-        else:
-            report["status"] = POLICY["unavailable"]
+        environment = statuses == {POLICY["passed"]} and not report["missing"]
+        report[policy["qualified_key"]] = environment
+        report[policy["complete_key"]] = environment and report[ordered["qualified_key"]]
+        if require_complete and not report[ordered["qualified_key"]]:
+            report["missing"].append({"probe": ordered["mode"], "feature": ordered["qualified_key"]})
+        required = policy["complete_key" if require_complete else "qualified_key"]
+        report["status"] = POLICY["passed"] if report[required] else POLICY["unavailable"]
         return report
     finally:
         save(output / POLICY["report_name"], report)
@@ -825,6 +826,8 @@ def main():
             report = probe_ordered_q(output)
         elif args.mode == POLICY["x1_qualification"]["mode"]:
             report = qualify_x1(output)
+        elif args.mode == POLICY["x1_qualification"]["complete_mode"]:
+            report = qualify_x1(output, require_complete=True)
         elif args.mode == POLICY["startup_mode"]:
             report = probe(output, startup=True, userspace_fixups=userspace)
         elif args.mode == POLICY["legacy_mode"]:

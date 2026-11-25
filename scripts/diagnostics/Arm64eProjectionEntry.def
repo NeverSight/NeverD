@@ -1,0 +1,24 @@
+//===- Arm64eProjectionEntry.def - Observe a generated Darwin process -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+extern int arm64eProjectionMain(void);
+
+int main(int Argc, char **Argv) {
+  puts("projection-entered");
+  fflush(stdout);
+  if (Argc == 2 && strcmp(Argv[1], "entry-only") == 0)
+    return EXIT_SUCCESS;
+  if (Argc != 1)
+    return EXIT_FAILURE;
+  const int Result = arm64eProjectionMain();
+  if (Result == 0)
+    puts("projection-compared");
+  return Result;
+}

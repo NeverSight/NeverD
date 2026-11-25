@@ -2660,9 +2660,35 @@ The top report records the SHA-256 of all five component reports.
 The x1 result requires the call, unwind, cursor and checked-pointer controls.
 The Q result records 128-bit LRCPC3 separately.
 `native_arm64e_x1_and_lrcpc3_qualified` requires both results from the same run.
+Use `qualify-x1-full` for full native acceptance. If only Q is unavailable,
+the environment flag stays true, the Q feature appears in `missing`, and this
+command exits 2. The dedicated self-hosted workflow uses this command.
 Exit 2 records an unavailable
 environment and exit 1 records failure. The verifier retains the reports and
 removes the temporary executables and entitlements.
+
+The signing projection exporter uses the two compiler comparison tests in
+`NeverDArm64eAnalysisTests`. It exports the HighC, LLVM C and optimized LLVM C
+sources, both direct backend objects and their independent C callers. Build
+the target with the documented r6 package and run
+
+```bash
+python3 scripts/verify_arm64e_x1_projections.py export \
+  --tests build-release/bin/NeverDArm64eAnalysisTests --output projection-inputs
+python3 scripts/verify_arm64e_x1_projections.py check \
+  --inputs projection-inputs --output x1-projection-results
+```
+
+Both machines use the same NeverD revision. Xcode 27 compiles the C sources
+and callers for x1, and Apple's linker takes the original r6 arm64e objects
+as direct inputs. At O0 and O2 the report checks the final x1 executable,
+its signature and embedded entitlements, and the linker map's input owner
+for all six signing, authentication and return functions. Each image has a
+separate execution result. The independent x1 cursor enables comparisons
+only for recipes with native support. A loader rejection or an entry-only run
+leaves `all_executed` false. Pass `--require-execution` to require all 20
+comparisons to run as well as link. The consumer keeps the command receipts
+and link maps and removes the generated objects and executables.
 
 A registered GitHub Actions runner with labels `self-hosted`, `macOS`, `ARM64`
 and `neverd-arm64e-x1` can run the manual **Arm64e x1 native qualification**
