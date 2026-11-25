@@ -12,6 +12,8 @@
 #ifndef NEVERD_LOADER_ELF_POWERPCABI_H
 #define NEVERD_LOADER_ELF_POWERPCABI_H
 
+#include <cstdint>
+
 namespace neverd::ppc_elf {
 #include "neverd/loader/ELF/PowerPCABI.inc"
 } // namespace neverd::ppc_elf

@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: beb10f652d7204b5d011356eb712245a5bfbdde867c57c1a7d8b734069d50f68 -->
 
 <div align="center">
 
@@ -69,9 +69,9 @@ Die experimentellen Integer-ELF-Ziele unterstützen striktes Lifting, die Rekons
 | Ziel | Geprüfte ELF-Profile |
 |---|---|
 | RISC-V | RV32I/ILP32 und RV64I/LP64 in Little Endian. Die ELF-Angaben bestimmen die Erweiterungen M, A und Integer-C oder die einzelnen Erweiterungen Zmmul, Zaamo, Zalrsc und Zca. |
-| PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. ELFv1-Funktionsdeskriptoren liefern den Code-Einstieg und die TOC. Die geprüften Skalaroperationen umfassen vorzeichenbehaftete und vorzeichenlose Division, das in CR0 festgehaltene Ergebnis und die Auswirkungen auf die Überlaufbits in XER. |
+| PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. ELFv1 unterstützt Funktionsdeskriptoren, modulübergreifende PLT-Aufrufe und den Wechsel der TOC innerhalb eines Moduls. Die geprüften Skalaroperationen umfassen vorzeichenbehaftete und vorzeichenlose Division, das in CR0 festgehaltene Ergebnis und die Auswirkungen auf die Überlaufbits in XER. |
 
-Das Umschreiben von nativem Code und die dynamische Bindung über Modulgrenzen hinweg stehen noch aus. [Unterstützung für RISC-V und PowerPC (Englisch)](../riscv-powerpc.md)
+Das Umschreiben von nativem Code steht für diese Profile noch aus. [Unterstützung für RISC-V und PowerPC (Englisch)](../riscv-powerpc.md)
 
 Legacy-EVM-Bytecode wird unabhängig von nativen Containern unterstützt: Alle
 150 Opcodes von Frontier bis Fusaka führen durch Low/Med/High IR, verifiziertes

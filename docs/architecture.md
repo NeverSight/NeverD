@@ -19171,7 +19171,11 @@ The ELF loader admits little-endian RV32I/ILP32 and RV64I/LP64, classic PPC32
 System V, and PPC64 ELFv1 and ELFv2 in either byte order. The ELFv1 loader
 keeps descriptor addresses and code entries distinct. MedIR uses the entry's
 TOC and static chain for incoming registers, and binds a descriptor call from
-its reaching loads. RISC-V extension evidence belongs to the image. Decode,
+its reaching loads. For PPC64 ELFv1 inter-module calls, the loader pairs a
+PLT stub with the runtime jump-slot relocation. For a local TOC switch it
+checks the branch destination's descriptor. MedIR validates the caller's
+reaching r2 and carries its saved value through the return edge.
+RISC-V extension evidence belongs to the image. Decode,
 lift and function discovery share the physical instruction size and
 control-transfer semantics.
 Both families feed the existing LowIR, ABI recovery, HighC and LLVM backends.

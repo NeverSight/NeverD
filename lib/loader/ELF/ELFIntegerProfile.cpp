@@ -57,6 +57,7 @@ llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
     OPD = {S.sh_addr, S.sh_size, static_cast<unsigned>(S.sh_entsize)};
   }
   std::optional<va_t> Address, Size;
+  std::optional<va_t> JumpRel, JumpSize, JumpType, Glink;
   auto Segments = File.program_headers();
   if (!Segments)
     return Segments.takeError();
@@ -77,12 +78,35 @@ llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
         Terminated = true;
         break;
       }
-      if (D.d_tag != ppc_elf::DynamicOPD && D.d_tag != ppc_elf::DynamicOPDSize)
+      if (Header.e_flags == ppc_elf::ELFv2 && D.d_tag != ppc_elf::DynamicOPD &&
+          D.d_tag != ppc_elf::DynamicOPDSize)
         continue;
-      auto &Field = D.d_tag == ppc_elf::DynamicOPD ? Address : Size;
-      if (Field)
-        return llvm::createStringError("elf: duplicate PPC64 descriptor tag");
-      Field = D.d_un.d_val;
+      std::optional<va_t> *Field = nullptr;
+      switch (D.d_tag) {
+      case ppc_elf::DynamicOPD:
+        Field = &Address;
+        break;
+      case ppc_elf::DynamicOPDSize:
+        Field = &Size;
+        break;
+      case DT_JMPREL:
+        Field = &JumpRel;
+        break;
+      case DT_PLTRELSZ:
+        Field = &JumpSize;
+        break;
+      case DT_PLTREL:
+        Field = &JumpType;
+        break;
+      case ppc_elf::DynamicGlink:
+        Field = &Glink;
+        break;
+      default:
+        continue;
+      }
+      if (*Field)
+        return llvm::createStringError("elf: duplicate PPC64 dynamic tag");
+      *Field = D.d_un.d_val;
     }
     if (!Terminated)
       return llvm::createStringError("elf: unterminated PPC64 dynamic table");
@@ -104,6 +128,16 @@ llvm::Error readPPC64Profile(const llvm::object::ELFFile<ELFT> &File,
           "elf: invalid PPC64 descriptor table bounds");
     A = ELFT::Endianness == llvm::endianness::little ? Arch::PPC64LEELFv1
                                                      : Arch::PPC64ELFv1;
+    if (JumpRel || JumpSize || JumpType) {
+      if (!JumpRel || !JumpSize || JumpType != DT_RELA ||
+          *JumpSize % sizeof(typename ELFT::Rela) ||
+          *JumpSize > InvalidVA - *JumpRel)
+        return llvm::createStringError(
+            "elf: invalid PPC64 PLT relocation table");
+      OPD.JumpRelocations = *JumpRel;
+      OPD.JumpRelocationSize = *JumpSize;
+    }
+    OPD.Glink = Glink;
     if (Descriptors)
       *Descriptors = OPD;
   } else if (Header.e_flags != ppc_elf::ELFv2)

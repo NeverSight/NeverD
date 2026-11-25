@@ -72,10 +72,12 @@
 #include "neverd/libc/LibCVariant.h"
 #include "neverd/libc/StackProbeIndex.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/IntegerRegisters.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ELF/ELFOperatingSystem.h"
+#include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -2361,9 +2363,17 @@ MedFunc LowToMedConverter::convertFunction(
 
     splitEntryLoopHeader(Func);
     debugVerifyMedFunc(Func, "splitEntryLoopHeader");
+    PPC64LinkageCalls PPC64Calls;
+    if (Image && isPowerPC64ELFv1(TheArch)) {
+      auto TOC = ndVarToMedVar(
+          NdVar::reg(integerreg::gpr(ppc_elf::TOCRegister), ppc_elf::WordSize));
+      auto SP = ndVarToMedVar(NdVar::reg(getTargetRegInfo(TheArch).StackPointer,
+                                         ppc_elf::WordSize));
+      PPC64Calls = preparePPC64LinkageCalls(Func, *Image, TOC, SP, NextVarId);
+    }
     buildSsa(Func, Low);
     if (isPowerPC64ELFv1(TheArch))
-      recoverPPC64ELFv1(Func, Image);
+      recoverPPC64ELFv1(Func, Image, PPC64Calls);
     debugVerifyMedFunc(Func, "buildSsa");
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);

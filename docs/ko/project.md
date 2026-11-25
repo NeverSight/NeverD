@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: beb10f652d7204b5d011356eb712245a5bfbdde867c57c1a7d8b734069d50f68 -->
 
 <div align="center">
 
@@ -69,9 +69,9 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 | 대상 | 검증된 ELF 프로필 |
 |---|---|
 | RISC-V | 리틀 엔디언 RV32I/ILP32 및 RV64I/LP64. ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. |
-| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. ELFv1 함수 디스크립터에서 코드 진입점과 TOC를 얻습니다. 검증한 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, CR0에 기록되는 결과, XER 오버플로 비트에 미치는 영향이 포함됩니다. |
+| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. ELFv1은 함수 디스크립터, PLT를 통한 모듈 간 호출, 모듈 내 TOC 전환을 지원합니다. 검증한 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, CR0에 기록되는 결과, XER 오버플로 비트에 미치는 영향이 포함됩니다. |
 
-네이티브 코드 재작성 및 모듈 간 동적 링크는 향후 과제입니다. [RISC-V 및 PowerPC 지원 범위(영문)](../riscv-powerpc.md)
+이 프로필의 네이티브 코드 재작성은 향후 과제입니다. [RISC-V 및 PowerPC 지원 범위(영문)](../riscv-powerpc.md)
 
 legacy EVM bytecode는 native container와 독립적으로 지원합니다. Frontier부터 Fusaka까지
 assigned opcode 150개가 전용 Low/Med/High IR, verified LLVM `i256`, C23

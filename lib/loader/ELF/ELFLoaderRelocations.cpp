@@ -22,6 +22,7 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/BranchEncoding.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
@@ -110,14 +111,15 @@ template <typename ELFT>
 void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
                         llvm::ArrayRef<typename ELFT::Shdr> Sections,
                         llvm::StringRef ShStrTab, const uint8_t *Data,
-                        size_t Size, bool IsRelocatable, BinaryImage &Img) {
+                        size_t Size, bool IsRelocatable,
+                        size_t FileSectionCount, BinaryImage &Img) {
   using namespace llvm::ELF;
   using Elf_Shdr = typename ELFT::Shdr;
   using Elf_Rel = typename ELFT::Rel;
   using Elf_Rela = typename ELFT::Rela;
 
   // --- Relocations ---
-  for (const Elf_Shdr &SH : Sections) {
+  for (auto [Index, SH] : llvm::enumerate(Sections)) {
     const bool IsRela = SH.sh_type == SHT_RELA;
     const bool IsRel = SH.sh_type == SHT_REL;
     const bool IsAndroidRela = SH.sh_type == SHT_ANDROID_RELA;
@@ -143,18 +145,18 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
       StrTab = getLinkedStringTable<ELFT>(ELF, Sections, *SymSH);
 
     llvm::StringRef SecName = getSectionName<ELFT>(ShStrTab, SH);
+    const bool FromProgram = Index >= FileSectionCount;
     uint64_t Ordinal = 0;
     auto Record = [&](RelocationEntry RE, uint32_t SymIdx, uint64_t RawInfo) {
-      RE.ELF =
-          ELFRelocationProvenance{!IsRelocatable && Img.Sections.empty()
-                                      ? ELFRelocationSource::ProgramDynamicTable
-                                      : ELFRelocationSource::SectionTable,
-                                  SH.sh_addr,
-                                  SH.sh_offset,
-                                  Ordinal++,
-                                  RE.Address,
-                                  RawInfo,
-                                  std::nullopt};
+      RE.ELF = ELFRelocationProvenance{
+          FromProgram ? ELFRelocationSource::ProgramDynamicTable
+                      : ELFRelocationSource::SectionTable,
+          SH.sh_addr,
+          SH.sh_offset,
+          Ordinal++,
+          RE.Address,
+          RawInfo,
+          std::nullopt};
       RE.SymbolIndex = SymIdx;
       if (!SecName.empty())
         RE.SectionName = SecName.str();
@@ -166,18 +168,17 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           llvm::consumeError(SymsOr.takeError());
         } else if (SymIdx < SymsOr->size()) {
           const auto &Sym = (*SymsOr)[SymIdx];
-          RE.ELF->Symbol = ELFRelocationSymbol{
-              !IsRelocatable && Img.Sections.empty() ? 0u
-                                                     : uint32_t(SH.sh_link),
-              Sym.st_name,
-              Sym.st_shndx,
-              Sym.st_info,
-              Sym.getBinding(),
-              Sym.getType(),
-              Sym.st_other,
-              Sym.st_value,
-              Sym.st_size,
-              std::nullopt};
+          RE.ELF->Symbol =
+              ELFRelocationSymbol{FromProgram ? 0u : uint32_t(SH.sh_link),
+                                  Sym.st_name,
+                                  Sym.st_shndx,
+                                  Sym.st_info,
+                                  Sym.getBinding(),
+                                  Sym.getType(),
+                                  Sym.st_other,
+                                  Sym.st_value,
+                                  Sym.st_size,
+                                  std::nullopt};
           if (!StrTab.empty()) {
             auto SymNameOr = Sym.getName(StrTab);
             if (SymNameOr) {
@@ -1516,21 +1517,21 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
 template void collectRelocations<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, llvm::StringRef,
-    const uint8_t *, size_t, bool, BinaryImage &);
+    const uint8_t *, size_t, bool, size_t, BinaryImage &);
 
 template void collectRelocations<llvm::object::ELF32BE>(
     const llvm::object::ELFFile<llvm::object::ELF32BE> &,
     llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, llvm::StringRef,
-    const uint8_t *, size_t, bool, BinaryImage &);
+    const uint8_t *, size_t, bool, size_t, BinaryImage &);
 template void collectRelocations<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, llvm::StringRef,
-    const uint8_t *, size_t, bool, BinaryImage &);
+    const uint8_t *, size_t, bool, size_t, BinaryImage &);
 
 template void collectRelocations<llvm::object::ELF64BE>(
     const llvm::object::ELFFile<llvm::object::ELF64BE> &,
     llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, llvm::StringRef,
-    const uint8_t *, size_t, bool, BinaryImage &);
+    const uint8_t *, size_t, bool, size_t, BinaryImage &);
 
 template llvm::Error applyRelocations<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,

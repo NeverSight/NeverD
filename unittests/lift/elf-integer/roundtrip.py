@@ -37,7 +37,19 @@ def compile_elf(args, work, profile, source, output, entry, optimization="-O2", 
                     source, *callees, "-o", output], check=True)
 
 
-def machine(path, profile):
+def map_image(cpu, elf, bias=0):
+    segments = [s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD" and s["p_memsz"]]
+    # LOAD segments may share an aligned page.
+    pages = {p for s in segments for p in range(s["p_vaddr"] & ~4095,
+             s["p_vaddr"] + s["p_memsz"], 4096)}
+    for page in sorted(pages):
+        cpu.mem_map(bias + page, 4096)
+    for s in segments:
+        if s["p_filesz"]:
+            cpu.mem_write(bias + s["p_vaddr"], s.data())
+
+
+def machine(path, profile, bias=0):
     wide = "64" in profile
     rv = profile.startswith("riscv")
     if rv:
@@ -50,16 +62,9 @@ def machine(path, profile):
         cpu.reg_write(ppc_const.UC_PPC_REG_MSR, (int(wide) << 63) | int(profile.endswith("le")))
     with path.open("rb") as file:
         elf = ELFFile(file)
-        sections = [s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD" and s["p_memsz"]]
-        # LOAD segments may share an aligned page.
-        pages = {p for s in sections for p in range(s["p_vaddr"] & ~4095,
-                 s["p_vaddr"] + s["p_memsz"], 4096)}
-        for page in sorted(pages):
-            cpu.mem_map(page, 4096)
-        for s in sections:
-            if s["p_filesz"]:
-                cpu.mem_write(s["p_vaddr"], s.data())
-        symbols = {s.name: s["st_value"] for s in elf.get_section_by_name(".symtab").iter_symbols()
+        map_image(cpu, elf, bias)
+        symtab = elf.get_section_by_name(".symtab") or elf.get_section_by_name(".dynsym")
+        symbols = {s.name: bias + s["st_value"] for s in symtab.iter_symbols()
                    if s["st_info"]["type"] == "STT_FUNC"}
     for page in (DATA, STACK, RETURN):
         cpu.mem_map(page, 4096)
