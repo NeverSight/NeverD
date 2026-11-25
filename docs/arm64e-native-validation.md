@@ -2690,6 +2690,23 @@ leaves `all_executed` false. Pass `--require-execution` to require all 20
 comparisons to run as well as link. The consumer keeps the command receipts
 and link maps and removes the generated objects and executables.
 
+Two clean r6 builds reproduced all 12 projected source files and backend objects.
+Xcode 27.1 linked and signed 20 arm64e.x1 images at O0 and O2. The linker
+maps attribute all six IA/IB functions in each image to the expected input.
+The runner rejected all 20 launches before entry with Darwin `EBADARCH`.
+The full hardware scan reported a virtual Apple M1 on macOS 15, macOS 26 and
+Xcode 27. All five native feature results were unavailable on each runner.
+[Projection results](https://github.com/gmh5225/test_mac_intel/actions/runs/45592997940),
+[full hardware scan](https://github.com/gmh5225/test_mac_intel/actions/runs/45599778303) and
+[image hashes and per-host results](evidence/arm64e-generated-x1-projections-2026-11-25.json).
+
+The r6 analysis target registered 789 cases. With a canonical Clang frontend
+and the arm64e text section of `/bin/ls`, 752 passed locally. The hosted replay
+used the same test executable for the other 37 cases. Across the local and
+hosted runs, 786 distinct cases passed. The remaining three exercise native
+128-bit ordered SIMD memory, explicit two-modifier signing and PC-sensitive
+PACM. [Native regression replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45606805741).
+
 A registered GitHub Actions runner with labels `self-hosted`, `macOS`, `ARM64`
 and `neverd-arm64e-x1` can run the manual **Arm64e x1 native qualification**
 workflow. It has read-only repository permissions, requires the same strict
