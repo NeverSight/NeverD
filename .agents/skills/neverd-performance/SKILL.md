@@ -67,6 +67,7 @@ share a semantic decision. Keep a working architecture-specific shortcut when
 the proposed rewrite only unifies file layout and its measured benefit falls
 within run-to-run variation. Test the existing decoder contract with real
 instruction bytes. [AArch64 access-width example](references/methodology.md#refactoring-a-lifter-hot-path)
+[RISC-V and PowerPC definition-file comparison](references/methodology.md#comparing-definition-file-layouts)
 
 When a code-generation change moves work across a branch, compare the work
 executed on each path before updating assembly expectations.
