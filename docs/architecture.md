@@ -5333,7 +5333,7 @@ d0: a Windows on ARM thunk of `exp` returned the double's bits from r0, no read
 of d0 after its jump showing the result. Records are not placed.
 
 An ARM function's register parameters are the argument registers it reads at
-entry, and a save alone reads none (`onlySavedArgumentRegisters`,
+entry, and a save alone reads none (`dropOnlySavedArgumentRegisters`,
 `MedSavedArgumentRegisters.cpp`): MSVC ARM pushes r3 beside the registers it
 saves to keep the stack 8-byte aligned and pops it back unread (`push {r3, r4,
 r11, lr}` ... `pop {r3, r4, r11, pc}`), and its /Od code homes r0 and r1 where
@@ -5344,11 +5344,19 @@ back, with no call after it in a block that returns, reads nothing. r0 stays
 where a return may hand it back as it came, on a way that writes it nowhere
 and calls nothing, and every register stays while a frame address does
 anything but address the function's own loads and stores, as a va_list's does.
-Call recovery still adds a register a callee reads as a forwarded argument.
-The save of r3 gave four parameters to every function that pushes an even
-count that way: in the EH corpus's ARM images 890 functions declared
-parameters their code never reads and 458 do, and their calls printed 1,516
-placeholders and print 948.
+MSVC also reserves words for its locals with `push {r2, r3, ...}`: a register
+the entry block saves once is no parameter either where every byte a load
+takes another store overwrote on every way to it, a handler the unwinder
+enters knowing what each block it guards had written when it began. A join
+nothing reads takes a frame address nowhere, as the frame pointer's at an
+epilogue that pops the register. The stores that save such a register go, and
+its incoming value with them once nothing reads it, so neither C route writes
+an unknown value into the slot. Call recovery still adds a register a callee
+reads as a forwarded argument. The save of r3 gave four parameters to every
+function that pushes an even count that way: in the EH corpus's ARM images
+890 functions declared parameters their code never reads and 298 do, and
+their calls printed 1,516 placeholders in HighC and print 528, 5,465 in LLVM C
+and 4,533.
 
 Selected platform headers have their own prototype provenance, separate from
 the host C-library inclusion policy. Windows SDK records therefore use the

@@ -578,6 +578,9 @@ thumbImage(std::vector<uint8_t> Code,
 //   g2: push {r0, r1}; push.w {r11, lr}; ldr r11, [sp], #4;
 //       ldr pc, [sp], #12
 //   g3: the same with movs r0, #0 after the second push
+//   h:  push {r2, r3, r4, lr}; mov r4, sp; movs r2, #1; strb r2, [r4];
+//       ldrb r0, [r4]; pop {r2, r3, r4, pc}
+//   h2: the same reading the word: ldr r0, [r4]
 TEST(ARM32_SavedRegisters, AnAlignmentPushOfR3TakesNoArgument) {
   const BinaryImage Img = thumbImage(
       {0x08, 0xB5, 0x00, 0xF0, 0x0A, 0xF8, 0x00, 0x20, 0x08, 0xBD, // f
@@ -587,13 +590,19 @@ TEST(ARM32_SavedRegisters, AnAlignmentPushOfR3TakesNoArgument) {
        0x03, 0xB4, 0x2D, 0xE9, 0x00, 0x48, 0x5D, 0xF8, 0x04, 0xBB, // g2
        0x5D, 0xF8, 0x0C, 0xFB,                                     //
        0x03, 0xB4, 0x2D, 0xE9, 0x00, 0x48, 0x00, 0x20, 0x5D, 0xF8, // g3
-       0x04, 0xBB, 0x5D, 0xF8, 0x0C, 0xFB},
+       0x04, 0xBB, 0x5D, 0xF8, 0x0C, 0xFB,                         //
+       0x1C, 0xB5, 0x6C, 0x46, 0x01, 0x22, 0x22, 0x70, 0x20, 0x78, // h
+       0x1C, 0xBD,                                                 //
+       0x1C, 0xB5, 0x6C, 0x46, 0x01, 0x22, 0x22, 0x70, 0x20, 0x68, // h2
+       0x1C, 0xBD},
       {{0x401000, "f"},
        {0x40100A, "f2"},
        {0x401010, "f3"},
        {0x40101A, "g"},
        {0x40101C, "g2"},
-       {0x40102A, "g3"}});
+       {0x40102A, "g3"},
+       {0x40103A, "h"},
+       {0x401046, "h2"}});
   NullDebugContext Debug;
   const std::string C = thumbHighC(Img, Debug);
   const auto Signature = [&](const std::string &Name) {
@@ -606,6 +615,10 @@ TEST(ARM32_SavedRegisters, AnAlignmentPushOfR3TakesNoArgument) {
   EXPECT_NE(Signature("g2").find("arg0"), std::string::npos) << C;
   EXPECT_EQ(Signature("g2").find("arg1"), std::string::npos) << C;
   EXPECT_NE(Signature("g3").find("g3(void)"), std::string::npos) << C;
+  // A reserved word written before it is read takes nothing; a read of
+  // bytes no store overwrote takes them.
+  EXPECT_NE(Signature("h").find("h(void)"), std::string::npos) << C;
+  EXPECT_NE(Signature("h2").find("arg2"), std::string::npos) << C;
 }
 
 // AAPCS passes a 64-bit integer in an even-odd register pair, its low word

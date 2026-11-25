@@ -1817,7 +1817,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
     // A register an ARM function only saves takes no argument.
     if (TargetArch == Arch::ARM)
       for (const uint64_t Register :
-           med_calling_conv_detail::onlySavedArgumentRegisters(
+           med_calling_conv_detail::dropOnlySavedArgumentRegisters(
                Func, TargetArch, Fmt, IntegerRegs))
         UsedRegs.erase(Register);
     if (TargetArch == Arch::AArch64)

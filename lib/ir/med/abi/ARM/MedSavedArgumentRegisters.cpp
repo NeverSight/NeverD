@@ -8,10 +8,12 @@
 /// The AAPCS argument registers a function only saves.  A save alone supplies
 /// no evidence of an argument: MSVC ARM pushes r3 beside its callee-saved
 /// registers to keep the stack 8-byte aligned and pops it back unread
-/// (`push {r3, r4, r11, lr}` ... `pop {r3, r4, r11, pc}`), and /Od code homes
-/// argument registers it never reads back.  Such a register's incoming value
-/// reaches nothing the function does.  A register a call reads is a
-/// forwarded argument, which call recovery adds where the callee takes it.
+/// (`push {r3, r4, r11, lr}` ... `pop {r3, r4, r11, pc}`), reserves words for
+/// its locals with `push {r2, r3, ...}` and writes them before it reads them,
+/// and its /Od code homes argument registers it never reads back.  Such a
+/// register's incoming value reaches nothing the function does, nor do the
+/// stores that save it, which go.  A register a call reads is a forwarded
+/// argument, which call recovery adds where the callee takes it.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -26,7 +28,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
@@ -53,10 +57,12 @@ bool isCall(const MedOp &Op) {
 }
 } // namespace
 
-std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
-                                              Arch TargetArch,
-                                              BinaryFormat Format,
-                                              llvm::ArrayRef<uint64_t> Regs) {
+namespace {
+/// The argument registers \p Func only saves, with the stores that save
+/// them in \p Saves.
+std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
+                             BinaryFormat Format, llvm::ArrayRef<uint64_t> Regs,
+                             std::vector<const MedOp *> &SavesOut) {
   std::set<uint64_t> Result;
   if (Func.Blocks.empty() || Regs.empty())
     return Result;
@@ -90,9 +96,13 @@ std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
   }
 
   // Each register whose incoming value every read moves on or stores in
-  // the frame, with the slots it goes to.
-  std::vector<std::pair<uint64_t, std::vector<std::pair<int64_t, int64_t>>>>
-      Stored;
+  // the frame, with the slots it goes to and the stores that save it.
+  struct Saved {
+    uint64_t Register = 0;
+    std::vector<std::pair<int64_t, int64_t>> Slots;
+    std::vector<const MedOp *> Saves;
+  };
+  std::vector<Saved> Stored;
   for (const uint64_t Register : Regs) {
     llvm::SmallVector<MedVar, 4> Work;
     for (const MedOp &Op : Func.Blocks.front().Ops) {
@@ -105,6 +115,7 @@ std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
         Work.push_back(Op.Inputs[0]);
     }
     std::vector<std::pair<int64_t, int64_t>> Slots;
+    std::vector<const MedOp *> Saves;
     llvm::DenseSet<ValueKey> Seen;
     bool OnlyStored = !Work.empty();
     while (OnlyStored && !Work.empty()) {
@@ -127,6 +138,7 @@ std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
         if (Op.Opcode == NdOp::STORE && R.Input == 1)
           if (const auto Offset = FrameOffset(Op.Inputs[0])) {
             Slots.emplace_back(*Offset, *Offset + Op.Inputs[1].Size);
+            Saves.push_back(&Op);
             continue;
           }
         OnlyStored = false;
@@ -134,7 +146,7 @@ std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
       }
     }
     if (OnlyStored && !Slots.empty())
-      Stored.emplace_back(Register, std::move(Slots));
+      Stored.push_back({Register, std::move(Slots), std::move(Saves)});
   }
   if (Stored.empty())
     return Result;
@@ -142,12 +154,14 @@ std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
   // A frame address may address the function's own loads and stores and
   // make other frame addresses, and nothing else: one stored, passed in an
   // argument register or turned into anything else lets other code read the
-  // frame, as a va_list does.
+  // frame, as a va_list does.  A join nothing reads takes it nowhere, as the
+  // frame pointer's at an epilogue that pops the register.
   for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis)
       for (const auto &[Pred, Arg] : Phi.Args)
         if (FrameOffset(Arg) &&
-            (!FrameOffset(Phi.Output) || InArgumentRegister(Phi.Output)))
+            (!FrameOffset(Phi.Output) || InArgumentRegister(Phi.Output)) &&
+            Reads.count(valueKey(Phi.Output)))
           return Result;
     for (const MedOp &Op : Block.Ops)
       for (unsigned I = 0; I < Op.NumInputs; ++I) {
@@ -199,6 +213,7 @@ std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
     int64_t End = 0;
     bool Unread = false;
   };
+  llvm::DenseMap<const MedOp *, size_t> LoadIndex;
   std::vector<FrameLoad> Loads;
   for (const MedBlock &Block : Func.Blocks)
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
@@ -212,6 +227,7 @@ std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
           !Taken(Op.Output) && Block.Ops.back().Opcode == NdOp::RETURN &&
           std::none_of(Block.Ops.begin() + static_cast<std::ptrdiff_t>(I) + 1,
                        Block.Ops.end(), isCall);
+      LoadIndex[&Op] = Loads.size();
       Loads.push_back({*Offset, *Offset + Op.Output.Size, Unread});
     }
 
@@ -254,19 +270,156 @@ std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
     return false;
   };
 
+  // Whether every load that takes a byte of [Begin, End) reads bytes other
+  // stores overwrote on every way to it from \p Save in the entry block, as
+  // a slot MSVC reserves with `push {r2, r3, ...}` is a local the function
+  // writes before it reads.  A handler the unwinder enters knows what each
+  // block it guards had written when it began, as the exception may strike
+  // before any of its stores; a block no edge reaches knows of no write.
+  const auto OverwrittenBeforeRead = [&](const MedOp *Save, int64_t Begin,
+                                         int64_t End) {
+    const int64_t Width = End - Begin;
+    if (Width <= 0 || Width > 32)
+      return false;
+    const uint32_t All =
+        Width == 32 ? ~uint32_t{0} : (uint32_t{1} << Width) - 1;
+    const auto Bytes = [&](int64_t Lo, int64_t Hi) -> uint32_t {
+      Lo = std::max(Lo, Begin);
+      Hi = std::min(Hi, End);
+      if (Lo >= Hi)
+        return 0;
+      const int64_t N = Hi - Lo;
+      return (N == 32 ? ~uint32_t{0} : (uint32_t{1} << N) - 1) << (Lo - Begin);
+    };
+    const MedBlock &Entry = Func.Blocks.front();
+    const auto SaveAt =
+        std::find_if(Entry.Ops.begin(), Entry.Ops.end(),
+                     [&](const MedOp &Op) { return &Op == Save; });
+    if (SaveAt == Entry.Ops.end())
+      return false;
+    const size_t First = static_cast<size_t>(SaveAt - Entry.Ops.begin()) + 1;
+    // What each block's ops write of the bytes, and whether a taken load
+    // reads one before it is written, from what the block enters with.
+    const auto Walk = [&](size_t B, uint32_t Mask,
+                          bool Check) -> std::optional<uint32_t> {
+      const MedBlock &Block = Func.Blocks[B];
+      for (size_t I = B == 0 ? First : 0; I < Block.Ops.size(); ++I) {
+        const MedOp &Op = Block.Ops[I];
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
+          if (const auto Offset = FrameOffset(Op.Inputs[0]))
+            Mask |= Bytes(*Offset, *Offset + Op.Inputs[1].Size);
+        if (Check && Op.Opcode == NdOp::LOAD)
+          if (const auto Found = LoadIndex.find(&Op);
+              Found != LoadIndex.end()) {
+            const FrameLoad &Load = Loads[Found->second];
+            const uint32_t Read = Bytes(Load.Begin, Load.End);
+            if (!Load.Unread && (Mask & Read) != Read)
+              return std::nullopt;
+          }
+      }
+      return Mask;
+    };
+    std::vector<uint32_t> In(Func.Blocks.size(), All);
+    std::vector<char> Reached(Func.Blocks.size(), 0);
+    llvm::SmallVector<size_t, 8> Work;
+    Reached[0] = 1;
+    In[0] = 0;
+    Work.push_back(0);
+    for (size_t B = 1; B < Func.Blocks.size(); ++B)
+      if (Func.Blocks[B].Preds.empty() &&
+          Func.Blocks[B].ExceptionalPreds.empty()) {
+        Reached[B] = 1;
+        In[B] = 0;
+        Work.push_back(B);
+      }
+    const auto Meet = [&](int Id, uint32_t Mask) {
+      const auto Found = IndexOf.find(Id);
+      if (Found == IndexOf.end())
+        return;
+      const size_t S = Found->second;
+      const uint32_t Next = Reached[S] ? (In[S] & Mask) : Mask;
+      if (Reached[S] && Next == In[S])
+        return;
+      Reached[S] = 1;
+      In[S] = Next;
+      Work.push_back(S);
+    };
+    while (!Work.empty()) {
+      const size_t B = Work.pop_back_val();
+      const uint32_t Out = *Walk(B, In[B], /*Check=*/false);
+      for (const int Succ : Func.Blocks[B].Succs)
+        Meet(Succ, Out);
+      for (const ExceptionalEdge &Edge : Func.Blocks[B].ExceptionalSuccs)
+        Meet(Edge.BlockId, In[B]);
+    }
+    for (size_t B = 0; B < Func.Blocks.size(); ++B)
+      if (Reached[B] && !Walk(B, In[B], /*Check=*/true))
+        return false;
+    return true;
+  };
+
   // A register is only saved where no load that reads anything takes a byte
-  // of its slots.
-  for (const auto &[Register, Slots] : Stored)
-    if ((Register != TRI.IntReturnReg || !MayReturnIncoming(Register)) &&
-        llvm::all_of(Loads, [&](const FrameLoad &Load) {
-          return Load.Unread ||
-                 llvm::none_of(
-                     Slots, [&](const std::pair<int64_t, int64_t> &S) {
-                       return Load.Begin < S.second && S.first < Load.End;
-                     });
-        }))
-      Result.insert(Register);
+  // of its slots, or, saved once in the entry block, none takes a byte it
+  // has not seen overwritten.
+  for (const Saved &S : Stored) {
+    if (S.Register == TRI.IntReturnReg && MayReturnIncoming(S.Register))
+      continue;
+    const bool Unread = llvm::all_of(Loads, [&](const FrameLoad &Load) {
+      return Load.Unread ||
+             llvm::none_of(
+                 S.Slots, [&](const std::pair<int64_t, int64_t> &Slot) {
+                   return Load.Begin < Slot.second && Slot.first < Load.End;
+                 });
+    });
+    if (Unread || (S.Saves.size() == 1 &&
+                   OverwrittenBeforeRead(S.Saves.front(), S.Slots.front().first,
+                                         S.Slots.front().second))) {
+      Result.insert(S.Register);
+      SavesOut.insert(SavesOut.end(), S.Saves.begin(), S.Saves.end());
+    }
+  }
   return Result;
+}
+} // namespace
+
+std::set<uint64_t>
+dropOnlySavedArgumentRegisters(MedFunc &Func, Arch TargetArch,
+                               BinaryFormat Format,
+                               llvm::ArrayRef<uint64_t> Regs) {
+  std::vector<const MedOp *> Saves;
+  std::set<uint64_t> Registers =
+      onlySaved(Func, TargetArch, Format, Regs, Saves);
+  if (Saves.empty())
+    return Registers;
+  // What the saves store is no value the function or anything after it
+  // sees: neither C route writes it.
+  const llvm::DenseSet<const MedOp *> Dropped(Saves.begin(), Saves.end());
+  for (MedBlock &Block : Func.Blocks)
+    llvm::erase_if(Block.Ops,
+                   [&](const MedOp &Op) { return Dropped.contains(&Op); });
+  // Nor is the value the register came in with, once nothing reads it.
+  llvm::DenseSet<ValueKey> Read;
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      for (const auto &[Pred, Arg] : Phi.Args)
+        if (!Arg.isConst())
+          Read.insert(valueKey(Arg));
+    for (const MedOp &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        if (!Op.Inputs[I].isConst() &&
+            !(Op.Opcode == NdOp::COPY && Op.Inputs[I].Kind == Op.Output.Kind &&
+              Op.Inputs[I].Id == Op.Output.Id))
+          Read.insert(valueKey(Op.Inputs[I]));
+  }
+  auto &Entry = Func.Blocks.front().Ops;
+  llvm::erase_if(Entry, [&](const MedOp &Op) {
+    return Op.Opcode == NdOp::COPY &&
+           llvm::any_of(Registers,
+                        [&](uint64_t R) { return isEntryLiveInCopy(Op, R); }) &&
+           !Read.contains(valueKey(Op.Output)) &&
+           !Read.contains(valueKey(Op.Inputs[0]));
+  });
+  return Registers;
 }
 
 } // namespace neverd::med_calling_conv_detail

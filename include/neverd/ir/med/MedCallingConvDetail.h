@@ -122,14 +122,17 @@ bool liveInReachesLiveUse(const MedFunc &Func, uint64_t RegOff);
 
 /// The argument registers among \p Regs whose incoming value \p Func only
 /// stores in its own frame, where no load that reads anything takes a byte
-/// of it (MedSavedArgumentRegisters.cpp): MSVC ARM's alignment `push {r3,
-/// ...}`, popped back unread, and /Od homes no code reads back.  None while
-/// a frame address does anything but address the function's own loads and
-/// stores.  ARM only.
-std::set<uint64_t> onlySavedArgumentRegisters(const MedFunc &Func,
-                                              Arch TargetArch,
-                                              BinaryFormat Format,
-                                              llvm::ArrayRef<uint64_t> Regs);
+/// of it, or, saved once in the entry block, none takes a byte no other
+/// store overwrote on every way to it (MedSavedArgumentRegisters.cpp):
+/// MSVC ARM's alignment `push {r3, ...}`, popped back unread, the words its
+/// `push {r2, r3, ...}` reserves for locals, and /Od homes no code reads
+/// back.  Removes the stores that save them, whose bytes nothing sees.
+/// None while a frame address does anything but address the function's own
+/// loads and stores.  ARM only.
+std::set<uint64_t>
+dropOnlySavedArgumentRegisters(MedFunc &Func, Arch TargetArch,
+                               BinaryFormat Format,
+                               llvm::ArrayRef<uint64_t> Regs);
 
 /// Remove the store of a prologue's `push ecx` that only makes room for a local
 /// the function writes before it reads, and the register's live-in if nothing
