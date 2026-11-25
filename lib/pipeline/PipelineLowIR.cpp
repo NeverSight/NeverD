@@ -4299,12 +4299,6 @@ ImportPrototypeArguments importPrototypeArguments(
             if (isUserFunctionDeclaration(*Function))
               Result.UserDeclared.insert(Addr);
           }
-      // So are those a platform registry authenticates, each with its width
-      // (the convention's PrototypeIntegerArguments).
-      if (Convention && Convention->PrototypeIntegerArguments &&
-          !Result.IntegerArguments.count(Addr))
-        if (auto Integer = Convention->PrototypeIntegerArguments(Name))
-          Result.IntegerArguments.emplace(Addr, std::move(*Integer));
       Routine = UserArguments(Function);
       UserDeclared = Routine.has_value();
       PrototypeOwnsArguments = Routine.has_value();
@@ -4322,6 +4316,10 @@ ImportPrototypeArguments importPrototypeArguments(
             if (StackArguments && Prefix->size() > Registers.size())
               Result.StackArgs.emplace(Addr, Prefix->size());
             Result.VariadicArguments.emplace(Addr, std::move(*Prefix));
+            if (isUserFunctionDeclaration(*Function)) {
+              Result.PrototypeDeclared.insert(Addr);
+              Result.UserDeclared.insert(Addr);
+            }
             return;
           }
       // A complete fixed FP header signature gives the SSA call its physical
@@ -4361,6 +4359,12 @@ ImportPrototypeArguments importPrototypeArguments(
             Routine = std::move(Record);
             PrototypeOwnsArguments = true;
           }
+      // A platform integer default must not compete with a typed floating
+      // layout or turn an explicitly declared variadic prefix into a ceiling.
+      if (Convention && Convention->PrototypeIntegerArguments &&
+          !Result.PrototypeDeclared.count(Addr) && !PrototypeOwnsArguments)
+        if (auto Integer = Convention->PrototypeIntegerArguments(Name))
+          Result.IntegerArguments.emplace(Addr, std::move(*Integer));
       if (!Routine)
         Routine = RoutineArguments(Name, Function);
       if (!Routine)
@@ -5282,8 +5286,15 @@ bool computeCallRegisterEffects(
     for (va_t Addr : Prototyped.PrototypeDeclared)
       if (!DispatchThunks.count(Addr))
         Result.CallPrototypeArguments.insert(Addr);
-    // The user's declaration of an import decides where no documented
-    // contract does.
+    // A local import can share a WDK name. An explicit declaration with a
+    // recovered register/stack layout replaces all parts of the name default.
+    for (va_t Addr : Prototyped.UserDeclared) {
+      if (!DispatchThunks.count(Addr) && Prototyped.Reads.count(Addr) &&
+          FixedEntryReads.erase(Addr)) {
+        FixedEntryStackArgs.erase(Addr);
+        FixedEntryIntegerArguments.erase(Addr);
+      }
+    }
     for (auto &[Addr, Widths] : Prototyped.Reads)
       if (!DispatchThunks.count(Addr) &&
           FixedEntryReads.try_emplace(Addr, Widths).second &&
