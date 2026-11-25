@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: 858575d88fc82ac88906ac57405c675f64bfa0c0982aefe0a2fe59a3b34c7108 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 
 > 矩阵中的每个单元格都已实现，但集成测试深度不同。详见[架构覆盖矩阵](architecture.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位对象，因为现代 macOS 无法链接历史 i386 可执行文件。
 
-**MIPS ELF** 支持反汇编、控制流恢复以及 C 和 LLVM 输出。SDK 可调用 NeverSight LLVM fork 的 Mips 后端，将支持的函数重新编译为可重定位 ELF 目标文件，保留原有字节序和 o32、n32 或 n64 调用约定。把代码写回可执行文件还需要 MIPS ELF 写入支持。[MIPS 配置和原生输出（英文）](../mips.md)
+**MIPS ELF** 支持反汇编、控制流恢复以及 C 和 LLVM 输出。SDK 可调用 NeverSight LLVM fork 的 Mips 后端，将支持的函数重新编译为可重定位 ELF 目标文件，保留原有字节序和 o32、n32 或 n64 调用约定。对于具有原始目标文件和链接脚本的静态可执行文件，`neverd patch --relink` 可将更新后的函数放入独立节，也可保留原地址并检查函数大小是否超出原范围。 [MIPS 配置和原生输出（英文）](../mips.md)
 
 实验性的整数 ELF 目标支持严格指令提升、控制流图恢复，并可输出结构化 C、LLVM IR 和由 LLVM IR 生成的 C。
 

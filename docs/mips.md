@@ -93,9 +93,12 @@ byte addresses and tags pointers to compressed functions. The native checks
 cover n64 addresses above 4 GiB. Direct calls check alignment and the jump
 region selected by PC+4, including mode exchanges. Fixed-address emission
 reports jumps that require a veneer and references that require linker-owned
-GOT, GP or TLS state. Installing the resulting
-sections into an existing MIPS executable needs MIPS-specific layout,
-relocation and interworking support in the file patcher.
+GOT, GP or TLS state. For a static executable built from available
+relocatable objects, `neverd patch --relink` uses LLD to resolve the program
+again. The `section` mode moves the selected function to a named output
+section. The `inplace` mode checks its address, file offset, size and the
+surrounding loaded bytes. Both modes first reproduce the entire input ELF
+from its original link inputs. See the [manifest and CLI examples](#relinking-a-static-mips-elf).
 
 GNU binutils linked 48 rebuilt microMIPS64 objects across Releases 2, 3 and 5,
 both byte orders, n32 and n64. GNU sim checked 288 returned values. A second
@@ -106,6 +109,52 @@ The paired CPU measurements compare the fork's disassembly of byte-identical
 classic n64 and microMIPS o32 inputs. Each 95% interval for the r9/r8 time
 ratio included 1.
 [ELF execution and performance results](evidence/mips-llvm-r9-micromips64.json).
+
+### Relinking a static MIPS ELF
+
+`neverd patch --relink` takes a linked executable, the original MIPS
+relocatable objects in link order, a rebuilt object and the original LLD
+script. It first reproduces the input ELF byte for byte. It then substitutes
+the rebuilt object at the same position and links the complete program. The
+original and rebuilt objects must each define the named global function with
+a nonzero ELF symbol size. Keep the symbol table in the executable.
+
+```json
+{
+  "objects": ["start.o", "calc.o"],
+  "original": "calc.o",
+  "replacement": "updated.o",
+  "function": "calc",
+  "layout": "base.ld",
+  "sectionLayout": "section.ld",
+  "section": ".calc.update"
+}
+```
+
+Paths are relative to the manifest. Supply self-contained linker scripts and
+static ELF objects. The linker receives the objects under their original
+basenames. Use input section selectors such as `*(.text.calc)`. Link the
+original with the same LLD driver, object order and layout, for example
+`ld.lld -static -T base.ld -o app start.o calc.o`.
+
+```sh
+neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=section -o app.section
+neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=inplace -o app.inplace
+```
+
+In `section` mode, `sectionLayout` must place the function in the named
+executable output section at a range disjoint from its original range. LLD
+resolves the callers. In `inplace` mode, the original layout is reused and
+the last two manifest fields are optional. The function must fit its original
+range at the same virtual address and file offset. The program entry, load
+segments and all loaded bytes outside that range must match the original.
+Both modes check the target ABI before publishing the executable atomically.
+
+The runtime qualification uses the NeverSight LLVM fork's code generator,
+assembler and ELF linker for classic Release 2 o32, n32 and n64, in both byte
+orders. Run `scripts/check_mips_elf_relink.py qualify --help` for the tool
+paths, then `python3 scripts/check_mips_elf_relink.py execute --root products`
+on Linux with QEMU user-mode emulators for all six profiles.
 
 ## Implementation boundaries
 

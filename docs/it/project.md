@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: 858575d88fc82ac88906ac57405c675f64bfa0c0982aefe0a2fe59a3b34c7108 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Le guide [EVM](evm.md), [Solana SBF](sbf.md), [recupero di sorgenti mobili](mobi
 
 > Ogni cella della matrice è implementata, ma la profondità dei test d’integrazione varia. Consulta la [matrice di copertura dell’architettura](architecture.md#support-and-test-depth). Mach-O i386 usa oggetti `thin` rilocabili perché macOS moderno non può collegare gli eseguibili i386 storici.
 
-**MIPS ELF** supporta il disassemblaggio, la ricostruzione del flusso di controllo e l’output C e LLVM. L’SDK ricompila le funzioni supportate in oggetti ELF rilocabili con il backend Mips del fork LLVM di NeverSight, mantenendo l’ordine dei byte e la convenzione di chiamata o32, n32 o n64. Per inserire il codice in un eseguibile, il patcher richiede ancora il supporto alla scrittura di ELF MIPS. [Profili MIPS e output nativo (in inglese)](../mips.md)
+**MIPS ELF** supporta il disassemblaggio, la ricostruzione del flusso di controllo e l’output C e LLVM. L’SDK ricompila le funzioni supportate in oggetti ELF rilocabili con il backend Mips del fork LLVM di NeverSight, mantenendo l’ordine dei byte e la convenzione di chiamata o32, n32 o n64. Con i file oggetto originali e lo script di collegamento di un eseguibile statico, `neverd patch --relink` può collocare la funzione aggiornata in una sezione separata oppure mantenerla al suo indirizzo entro la dimensione originale. [Profili MIPS e output nativo (in inglese)](../mips.md)
 
 I target ELF sperimentali per le istruzioni intere supportano il lifting rigoroso, la ricostruzione del grafo di controllo e la generazione di C strutturato, IR LLVM e C derivato da tale IR.
 

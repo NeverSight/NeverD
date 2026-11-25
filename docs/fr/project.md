@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: 858575d88fc82ac88906ac57405c675f64bfa0c0982aefe0a2fe59a3b34c7108 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Consultez les guides [EVM](evm.md), [Solana SBF](sbf.md), [récupération de sou
 
 > Chaque cellule de la matrice est implémentée, mais la profondeur des tests d’intégration varie. Consultez la [matrice de couverture de l’architecture](architecture.md#support-and-test-depth). Mach-O i386 utilise des objets relogeables `thin`, car macOS moderne ne peut pas lier les anciens exécutables i386.
 
-**MIPS ELF** prend en charge le désassemblage, la reconstruction du flot de contrôle et les sorties C et LLVM. Le SDK recompile les fonctions prises en charge en objets ELF relogeables avec le backend Mips de la version de LLVM de NeverSight. Il conserve l’ordre des octets et la convention d’appel o32, n32 ou n64. L’insertion du code dans un exécutable nécessite encore la prise en charge de l’écriture des fichiers ELF MIPS. [Profils MIPS et sortie native (en anglais)](../mips.md)
+**MIPS ELF** prend en charge le désassemblage, la reconstruction du flot de contrôle et les sorties C et LLVM. Le SDK recompile les fonctions prises en charge en objets ELF relogeables avec le backend Mips de la version de LLVM de NeverSight. Il conserve l’ordre des octets et la convention d’appel o32, n32 ou n64. Avec les objets d’origine et le script de liaison d’un exécutable statique, `neverd patch --relink` place la fonction modifiée dans une section distincte ou conserve son adresse dans la limite de sa taille initiale. [Profils MIPS et sortie native (en anglais)](../mips.md)
 
 Les cibles ELF entières expérimentales prennent en charge la traduction stricte des instructions, la reconstruction du graphe de contrôle, le C structuré, l’IR LLVM et le C issu de cet IR.
 

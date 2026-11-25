@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: 858575d88fc82ac88906ac57405c675f64bfa0c0982aefe0a2fe59a3b34c7108 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI、整合方與 AI 智慧體透過 **純 C API** 使用同一個引擎 **`lib
 
 > 矩陣中的每個單元格都已實作，但整合測試深度不同。詳見[架構覆蓋矩陣](architecture.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位物件，因為現代 macOS 無法連結歷史 i386 可執行檔。
 
-**MIPS ELF** 支援反組譯、控制流程還原，以及 C 和 LLVM 輸出。SDK 可透過 NeverSight LLVM fork 的 Mips 後端，將支援的函式重新編譯為可重定位的 ELF 目的檔，保留原有位元組順序與 o32、n32 或 n64 呼叫慣例。將程式碼寫回執行檔仍需要 MIPS ELF 寫入支援。[MIPS 設定與原生程式碼輸出（英文）](../mips.md)
+**MIPS ELF** 支援反組譯、控制流程還原，以及 C 和 LLVM 輸出。SDK 可透過 NeverSight LLVM fork 的 Mips 後端，將支援的函式重新編譯為可重定位的 ELF 目的檔，保留原有位元組順序與 o32、n32 或 n64 呼叫慣例。若保有靜態執行檔的原始目的檔與連結指令稿，`neverd patch --relink` 可將更新後的函式放入獨立區段，也可保留原位址並檢查函式大小是否超出原範圍。 [MIPS 設定與原生程式碼輸出（英文）](../mips.md)
 
 實驗性的整數 ELF 目標支援嚴格的指令提升、控制流程圖重建，並可輸出結構化 C、LLVM IR 與由 LLVM IR 產生的 C。
 

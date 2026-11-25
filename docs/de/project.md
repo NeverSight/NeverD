@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
+<!-- i18n-source: 858575d88fc82ac88906ac57405c675f64bfa0c0982aefe0a2fe59a3b34c7108 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Verwendung, unterstützte Verträge und Grenzen stehen in den Leitfäden zu [EVM
 
 > Jede Zelle der Matrix ist implementiert, die Tiefe der Integrationstests variiert jedoch. Siehe die [Architektur-Abdeckungsmatrix](architecture.md#support-and-test-depth). Mach-O i386 verwendet relocatable `thin`-Objekte, weil modernes macOS historische i386-Executables nicht linken kann.
 
-**MIPS-ELF-Dateien** lassen sich disassemblieren und als C oder LLVM-IR ausgeben. NeverD rekonstruiert dabei den Kontrollfluss. Das SDK übersetzt unterstützte Funktionen mit dem Mips-Backend des NeverSight-LLVM-Forks in verschiebbare ELF-Objektdateien und erhält Byte-Reihenfolge sowie Aufrufkonvention (o32, n32 oder n64). Zum Einfügen in eine ausführbare Datei benötigt der Patcher noch einen MIPS-ELF-Writer. [MIPS-Profile und native Ausgabe (Englisch)](../mips.md)
+**MIPS-ELF-Dateien** lassen sich disassemblieren und als C oder LLVM-IR ausgeben. NeverD rekonstruiert dabei den Kontrollfluss. Das SDK übersetzt unterstützte Funktionen mit dem Mips-Backend des NeverSight-LLVM-Forks in verschiebbare ELF-Objektdateien und erhält Byte-Reihenfolge sowie Aufrufkonvention (o32, n32 oder n64). Liegen die ursprünglichen Objektdateien und das Linkerskript eines statischen Programms vor, kann `neverd patch --relink` die aktualisierte Funktion in eine eigene Sektion legen oder sie innerhalb ihres bisherigen Größenlimits an derselben Adresse belassen. [MIPS-Profile und native Ausgabe (Englisch)](../mips.md)
 
 Die experimentellen Integer-ELF-Ziele unterstützen striktes Lifting, die Rekonstruktion des Kontrollflussgraphen sowie die Ausgabe von strukturiertem C, LLVM-IR und aus LLVM-IR erzeugtem C.
 
