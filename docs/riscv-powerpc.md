@@ -123,8 +123,8 @@ The scalar encodings and flag definitions follow Books I and II of versions
 | Stage | RISC-V | PowerPC |
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
-| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary and update-form loads/stores, reservations and barriers |
-| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, unconditional indirect calls/jumps, return through LR, integer register arguments |
+| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary and update-form loads/stores, reservations and barriers |
+| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, unconditional indirect calls/jumps, guarded and unconditional LR returns, integer register arguments |
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
 | Native rewrite | Unsupported | Unsupported |
 
@@ -155,11 +155,12 @@ device memory and guest exception delivery are outside that model.
 
 The strict lifters report unsupported instructions at their original VA.
 RISC-V system/CSR, FP, V and vendor extensions, and PowerPC VLE, SPE, VMX,
-VSX, prefixed instructions in ordinary function bodies, conditional indirect
-transfers and system instructions have no qualified semantic path. The ELFv2
-loader recognizes the PC-relative prefixed load or address calculation in a
-linker stub when its final CTR transfer and destination match. Word multiplies with an
-undefined high half on PPC64 also fail strict lifting.
+VSX, prefixed instructions in ordinary function bodies, conditional calls,
+conditional jumps through CTR and system instructions have no qualified
+semantic path. The ELFv2 loader recognizes a PC-relative prefixed load or
+address calculation in a linker stub when its final CTR transfer and
+destination match. Word multiplies with an undefined high half on PPC64
+also fail strict lifting.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
 ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a
