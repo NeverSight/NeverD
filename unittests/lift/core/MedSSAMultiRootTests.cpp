@@ -38,6 +38,11 @@
 #include <regex>
 #include <set>
 
+#ifdef RegisterClass
+// winuser.h aliases this name to a window registration API.
+#undef RegisterClass
+#endif
+
 namespace {
 
 using namespace neverd;
