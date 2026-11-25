@@ -1,5 +1,5 @@
 name: Native scalar instruction table qualification
-run-name: Scalar instruction tables at deb8e70d903b78932d7872729e1511685585b9be
+run-name: Scalar instruction tables at ffb3178d6787ab6168db2e2aecc7b7236e91e02d
 on:
   workflow_dispatch:
 permissions:
@@ -22,14 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: deb8e70d903b78932d7872729e1511685585b9be
+          ref: ffb3178d6787ab6168db2e2aecc7b7236e91e02d
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
       - name: Check the source revision and initialize test dependencies
         run: |
-          test "$(git rev-parse HEAD)" = "deb8e70d903b78932d7872729e1511685585b9be"
+          test "$(git rev-parse HEAD)" = "ffb3178d6787ab6168db2e2aecc7b7236e91e02d"
           git submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
       - name: Install Linux fixture compilers
         if: runner.os == 'Linux'
