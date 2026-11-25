@@ -54,12 +54,18 @@ std::map<int64_t, HomedParameter> homedParameters(const HighFunc &Func,
       continue;
     }
     // The store's value says how many of the parameter's bytes the slot
-    // holds: an `int` homes four.
+    // holds: an `int` homes four.  Only the prologue's proof
+    // (collectLowSEHHomedArguments) says that nothing else, in the protected
+    // ranges or after them, writes the slot.
     const ExprPtr &V = S.StoreVal;
     const uint16_t Width = getTargetRegInfo(TargetArch).PointerSize;
+    const auto Proven = Func.SEHHomedArguments.find(*Offset);
     if (V->Kind == ExprKind::Var && V->Var.Kind == MedVar::Param &&
         S.StoreAddr->Type && S.StoreAddr->Type->Size == Width && V->Type &&
-        V->Type->Size && V->Type->Size <= Width)
+        V->Type->Size && V->Type->Size <= Width &&
+        Proven != Func.SEHHomedArguments.end() &&
+        Proven->second.Position == static_cast<unsigned>(V->Var.Id) &&
+        Proven->second.Bytes == V->Type->Size)
       Homed.emplace(*Offset, HomedParameter{V->Var, V->Type->Size});
   }
   // A home nothing in the function reads leaves no store behind in HighIR; the

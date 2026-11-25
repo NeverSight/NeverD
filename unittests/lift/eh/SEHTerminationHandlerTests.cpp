@@ -1234,6 +1234,9 @@ enum class FilterShape {
   /// `/O0` with an `int` argument the parent homes four bytes of, which the
   /// callback reads through its EstablisherFrame: `__except (q)`.
   ReadsTheHomedInt,
+  /// The same with the protected range writing a byte of the home, so the
+  /// callback no longer reads the argument there.
+  RewritesTheHomedInt,
   /// Tests the exception code alone.
   TestsTheCode,
   /// Decides one constant.
@@ -1288,8 +1291,12 @@ BinaryImage makeFilterImage(FilterShape Kind) {
                   Allocation, 0x48, 0x8b, 0xda, 0xe8, 0x2e, 0,    0,    0,
                   0x90,       0xeb, 0x06, 0xc7, 0x03, 0x63, 0,    0,    0});
   // An `int` homes edx alone: the same store with REX.W clear.
-  if (Kind == FilterShape::ReadsTheHomedInt)
+  if (Kind == FilterShape::ReadsTheHomedInt ||
+      Kind == FilterShape::RewritesTheHomedInt)
     D[0] = 0x40;
+  // mov byte [rsp+0x38],2 in place of the protected call.
+  if (Kind == FilterShape::RewritesTheHomedInt)
+    place(D, 0x0d, {0xc6, 0x44, 0x24, 0x38, 0x02});
   size_t Done = 0x1b;
   if (ParentReads) {
     // mov eax,[rsp+0x2c]; mov [rbx],eax: the decision's slot.
@@ -1325,6 +1332,7 @@ BinaryImage makeFilterImage(FilterShape Kind) {
     Length = 0x15;
     break;
   case FilterShape::ReadsTheHomedInt:
+  case FilterShape::RewritesTheHomedInt:
     // push rbp; sub rsp,0x20; mov rbp,rdx; mov eax,[rbp+0x38]; nop x3;
     // add rsp,0x20; pop rbp; ret
     place(D, 0x80,
@@ -1484,6 +1492,19 @@ TEST(SEHFilterValue, AFilterReadingAHomedIntIsItsExpression) {
   EXPECT_EQ(E.find("GetExceptionInformation"), std::string::npos) << P;
   EXPECT_NE(E.find("arg1"), std::string::npos) << P;
   EXPECT_EQ(E.find("var_"), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, AHomeTheTryRewritesIsNotTheArgument) {
+  // The protected range writes a byte of the home, so what the callback
+  // reads there is no longer the argument the prologue saved.
+  const LowFunc Low =
+      decodeParent(makeFilterImage(FilterShape::RewritesTheHomedInt));
+  EXPECT_TRUE(collectLowSEHHomedArguments(Low, Arch::X64).empty());
+  const std::string P = parentText(
+      decompileHighC(makeFilterImage(FilterShape::RewritesTheHomedInt)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  EXPECT_EQ(E.find("arg1"), std::string::npos) << P;
 }
 
 TEST(SEHFilterValue, AFilterTestingTheCodeSaysGetExceptionCode) {

@@ -21849,7 +21849,8 @@ callback's frame and the homes its parent saves for it, and
 `AnIntHomesFourBytesOfItsRegister` the four bytes an `int` homes;
 `SEHFilterValue.*` prints each filter callback as its `__except` expression:
 the Counter read through the homed argument, the `int` read from its four-byte
-home (`AFilterReadingAHomedIntIsItsExpression`),
+home (`AFilterReadingAHomedIntIsItsExpression`) but not from one the protected
+range rewrites (`AHomeTheTryRewritesIsNotTheArgument`),
 `GetExceptionCode() == 0xC0000005`, a constant as
 `EXCEPTION_EXECUTE_HANDLER`, MSVC /O0's temporaries in the parent's frame gone
 when nothing else touches them, and the writes to a slot the parent reads kept.
