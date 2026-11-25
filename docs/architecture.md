@@ -1338,6 +1338,11 @@ table follows the range markers rather than the invokes' unwind edges, so the
 gate also walks the parent's normal edges from its entry and requires the
 markers to leave open at the call exactly the rows that hold the row it ends;
 a block two paths enter with different rows open has no answer and refuses.
+A region dispatch's anchor belongs to the pad right before it and the
+`catchret` right after it; the exception code a pad hands a handler that reads
+it, its `llvm.eh.exceptioncode` of that pad, the casts of it and its stores to
+stack slots, sits between the pad and the anchor as the dispatch's own, and
+anything else there detaches the anchor.
 Rewritten MSVC x64 builds (`/O1` and `/O2`, with and without `/GS`) of a
 `goto` that leaves one or two `__finally` scopes inside a `__try`/`__except`,
 whose termination handlers may raise, print the original's transcript under

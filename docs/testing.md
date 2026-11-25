@@ -1484,6 +1484,8 @@ leaves a parent whose callback reads the parent's x19 without pads, and
 that view only, and `SourceViewKeepsAFilterThatReturnsNoValue` keeps a filter
 whose lifted body returns no value out. `COFFExceptionIR.LLVMCAnalysisOnlySEHInventsNoCatchAll` checks
 that SEH no form lowers prints no `__try` and no catch-all.
+`COFFExceptionIR.NativeSEHHandlerReadsTheCatchPadExceptionCode` plans the
+patch of a pad that stores its exception code before its dispatch anchor.
 `COFFExceptionIR.NativeSEHRangeMarkersFollowTheBlockLayout` (in
 `NeverDLiftTests`) frees blocks in a shuffled order before it lowers a guarded
 range with four returns, so the block pointers stop following the layout; the

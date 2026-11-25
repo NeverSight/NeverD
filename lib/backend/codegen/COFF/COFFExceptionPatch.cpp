@@ -580,6 +580,51 @@ previousSemanticInstruction(const llvm::Instruction &Instruction) {
   return Previous;
 }
 
+/// The instruction before a region dispatch's anchor, past what the pad hands
+/// its handler: the exception code it reads (`llvm.eh.exceptioncode` of that
+/// pad), the casts of that code and its stores to stack slots, which the
+/// handler's register receives at the dispatch.  Anything else between, or a
+/// code another pad gave, leaves the anchor's own previous instruction.
+const llvm::Instruction *
+beforeExceptionCodeTransport(const llvm::Instruction &Anchor) {
+  const llvm::Instruction *Previous = previousSemanticInstruction(Anchor);
+  llvm::SmallVector<const llvm::Instruction *, 4> Transport;
+  const auto IsCode = [](const llvm::Instruction *I) {
+    const auto *Call = llvm::dyn_cast<llvm::CallInst>(I);
+    return Call && Call->getIntrinsicID() == llvm::Intrinsic::eh_exceptioncode;
+  };
+  const llvm::Instruction *Before = Previous;
+  while (Before && (IsCode(Before) || llvm::isa<llvm::CastInst>(Before) ||
+                    llvm::isa<llvm::StoreInst>(Before))) {
+    Transport.push_back(Before);
+    Before = previousSemanticInstruction(*Before);
+  }
+  if (Transport.empty() || !Before)
+    return Previous;
+  const llvm::SmallPtrSet<const llvm::Value *, 4> Values(Transport.begin(),
+                                                         Transport.end());
+  const auto Carried = [&](const llvm::Value *V) {
+    const auto *I = llvm::dyn_cast<llvm::Instruction>(V);
+    return I && Values.contains(I) && !llvm::isa<llvm::StoreInst>(I);
+  };
+  for (const llvm::Instruction *I : Transport) {
+    if (IsCode(I)) {
+      if (llvm::cast<llvm::CallInst>(I)->getArgOperand(0) != Before)
+        return Previous;
+    } else if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(I)) {
+      if (!Carried(Cast->getOperand(0)))
+        return Previous;
+    } else {
+      const auto *Store = llvm::cast<llvm::StoreInst>(I);
+      if (!Carried(Store->getValueOperand()) || Store->isVolatile() ||
+          !llvm::isa<llvm::AllocaInst>(
+              Store->getPointerOperand()->stripPointerCasts()))
+        return Previous;
+    }
+  }
+  return Before;
+}
+
 using coff_native_eh::NativeEHProvenance;
 using coff_native_eh::parseNativeEHProvenance;
 using coff_native_eh::provenanceUInt;
@@ -1289,7 +1334,7 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
         return patchError("malformed region-dispatch provenance in function " +
                           F.getName());
 
-      const llvm::Instruction *Previous = previousSemanticInstruction(*Anchor);
+      const llvm::Instruction *Previous = beforeExceptionCodeTransport(*Anchor);
       const llvm::BasicBlock *Destination = nullptr;
       bool IsCleanup = false;
       const llvm::Value *ExpectedToken = nullptr;

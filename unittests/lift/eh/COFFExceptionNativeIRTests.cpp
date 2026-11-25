@@ -2015,6 +2015,19 @@ TEST(COFFExceptionIR, NativeSEHHandlerReadsTheCatchPadExceptionCode) {
       HandlerLoadsSlot |= Load->getPointerOperand() == Slot;
   EXPECT_TRUE(HandlerLoadsSlot) << printModuleIR(*Mod);
 
+  // The code the pad stores before its dispatch anchor is the dispatch's own:
+  // the patch plan takes the anchor as the pad's.
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x140000000;
+  ASSERT_TRUE(Func.ExceptionMetadata.has_value());
+  Image.ExceptionMetadata.Functions.push_back(*Func.ExceptionMetadata);
+  Image.ExceptionMetadata.rebuildIndex();
+  auto Plan = planCOFFExceptionPatch(*Mod, Image, Arch::X64);
+  ASSERT_TRUE(static_cast<bool>(Plan)) << llvm::toString(Plan.takeError());
+
   initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Mod, Arch::X64, BinaryFormat::COFF, 0x140004000,
