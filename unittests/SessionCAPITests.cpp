@@ -13022,22 +13022,16 @@ TEST_F(SessionCAPITest, PrepareFunctionAcceptsAnEntryAtAddressZero) {
 }
 
 TEST_F(SessionCAPITest, SymbolicSourceKeepsTheLocalVariadicImportContract) {
-  // The caller forwards RCX, sets RDX and R8, then calls the slot at +0x40.
-  std::string Code =
-      llvm::fromHex("4883EC28BA0B00000041B80D000000FF152B0000004883C428C3");
-  constexpr size_t SlotOffset = 0x40;
-  Code.resize(SlotOffset, '\xCC');
-  Code.resize(SlotOffset + 8, '\0');
-  const auto Path = write("local-variadic.exe", makePE64(Code));
+  const auto Fixture = std::filesystem::path(__FILE__).parent_path() / "types" /
+                       "fixtures" / "local_variadic_import.exe";
+  std::ifstream Input(Fixture, std::ios::binary);
+  ASSERT_TRUE(Input.good());
+  const auto Path =
+      write("local-variadic.exe",
+            std::string(std::istreambuf_iterator<char>(Input), {}));
   for (const bool EnhancedFirst : {false, true}) {
     ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
     const auto Entry = neverd_session_entry_addr(Session);
-    auto &Image = neverd::sdk::toSession(Session)->Img;
-    const auto Slot = Entry + SlotOffset;
-    Image.Imports.push_back({"fixture.dll", "KeGetCurrentThread", 0, Slot});
-    ASSERT_TRUE(Image.recordImportStorageSlot(
-        Slot, "KeGetCurrentThread", 0,
-        neverd::ImportStorageEvidence::LoaderBind));
     ASSERT_FALSE(
         takeString(neverd_local_types_declare(
                        Session,
