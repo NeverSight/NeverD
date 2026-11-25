@@ -87,6 +87,42 @@ TEST(RISCVPLT, BothEntryPathsReachTheRuntimeSlot) {
     }
 }
 
+TEST(RISCVPLT, SectionlessScanRespectsAlignmentAndTheLastFileByte) {
+  for (bool Wide : {false, true})
+    for (bool Compressed : {false, true})
+      for (bool Truncate : {false, true}) {
+        auto I = image(Wide, false);
+        I.RISCV.Compressed = Compressed;
+        // Move PLT0 down half a word, keeping the GOT and both slots fixed.
+        I.Entry -= 2;
+        auto &Code = I.Segments.front();
+        for (unsigned N : {2u, 4u, 9u, 13u}) {
+          auto *Insn = Code.Data.data() + N * sizeof(uint32_t);
+          llvm::support::endian::write32le(
+              Insn, llvm::support::endian::read32le(Insn) + (2u << 20));
+        }
+        constexpr size_t HeaderBytes = 8 * sizeof(uint32_t);
+        std::vector<uint8_t> Entries(Code.Data.begin() + HeaderBytes,
+                                     Code.Data.end());
+        Code.Data.resize(HeaderBytes);
+        // An earlier exact SUB belongs to unrelated instructions. The
+        // actual resolver starts at the last possible position in this map.
+        constexpr size_t Prefix = 17;
+        Code.Data.insert(Code.Data.begin(), Prefix, 0);
+        llvm::support::endian::write32le(Code.Data.data() + 4, Words32[1]);
+        Code.VA = I.Entry - Prefix;
+        Code.Size = Code.Data.size();
+        Code.FileSz = Code.Size - Truncate;
+        auto &Stubs = I.addSegment("stubs", I.Entry + HeaderBytes,
+                                   Entries.size(), Code.Flags);
+        Stubs.FileSz = Stubs.Size;
+        Stubs.Data = std::move(Entries);
+        ASSERT_EQ(llvm::toString(elf_loader::readRISCVLinkage(I)), "");
+        EXPECT_EQ(I.ImportStubIndices.size(),
+                  Compressed && !Truncate ? 2u : 0u);
+      }
+}
+
 TEST(RISCVPLT, UnrelaxedTailCallRetainsTheCallerAndTheImportedFunction) {
   for (bool Wide : {false, true}) {
     auto I = image(Wide, true);

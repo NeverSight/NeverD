@@ -20,6 +20,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -66,13 +67,20 @@ std::optional<va_t> findHeader(const BinaryImage &Image, va_t FirstSlot) {
   }
   // Eager binding does not require the file to initialize the jump slots.
   // A sectionless file can still identify its resolver by its instructions.
-  const unsigned Align = Image.RISCV.hasCompressed() ? Word / 2 : Word;
   for (const auto &Seg : Image.Segments) {
     if (!Seg.isExecutable())
       continue;
     const size_t Size = std::min<uint64_t>(Seg.FileSz, Seg.Data.size());
-    for (size_t Off = -Seg.VA % Align; Off + HeaderSize <= Size; Off += Align)
-      if ((readLE<uint32_t>(Seg.Data.data() + Off) & UFormMask) == AuipcT2 &&
+    if (Size < HeaderSize)
+      continue;
+    // Search for the high byte of the resolver's fixed SUB. A match can
+    // start only where a complete header still fits in the file mapping.
+    const llvm::StringRef Starts(
+        reinterpret_cast<const char *>(Seg.Data.data() + SubHighByteOffset),
+        Size - HeaderSize + 1);
+    for (size_t Off = Starts.find(SubHighByte); Off != llvm::StringRef::npos;
+         Off = Starts.find(SubHighByte, Off + 1))
+      if (readLE<uint32_t>(Seg.Data.data() + Off + Word) == SubT1T1T3 &&
           isHeader(Image, Seg.VA + Off))
         return Seg.VA + Off;
   }
