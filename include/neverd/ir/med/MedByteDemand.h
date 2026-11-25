@@ -124,6 +124,8 @@ public:
   /// Reads whole each value nothing reads that something unseen may, then
   /// carries every need back to the values it rests on.
   void settle();
+  /// The bytes of \p Value that reach an observation (after settle).
+  MedByteMask bytesRead(const MedVar &Value) const;
   /// Whether something depends on a byte of \p Value (after settle).
   bool reads(const MedVar &Value) const;
   /// Whether an operation, a PHI or a return reads \p Value.

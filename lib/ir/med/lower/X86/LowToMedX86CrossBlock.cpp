@@ -204,28 +204,24 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
           }
         }
       }
-      // A byte-only seed and use need no incoming upper bytes. Only keep
-      // a separately initialized parent for a narrow observation when each
-      // path to that observation has defined it.
-      std::vector<bool> NeedsEntryParent(N);
+      // A whole-register definition on even one incoming edge gives the
+      // joined parent a live range. Splice the narrow writes on the other
+      // edges into it before building SSA, including a partial loop seed.
+      std::vector<bool> HasParent(N);
       for (size_t I = 0; I < N; ++I)
-        if (I == 0 || Func.Blocks[I].Preds.empty() ||
-            !Func.Blocks[I].ExceptionalPreds.empty()) {
-          NeedsEntryParent[I] = true;
+        if (Kills[I])
           Pending.push_back(I);
-        }
       while (!Pending.empty()) {
         size_t I = Pending.back();
         Pending.pop_back();
-        if (!Kills[I])
-          for (size_t Succ : SuccIdx[I])
-            if (!NeedsEntryParent[Succ]) {
-              NeedsEntryParent[Succ] = true;
-              Pending.push_back(Succ);
-            }
+        for (size_t Succ : SuccIdx[I])
+          if (!HasParent[Succ]) {
+            HasParent[Succ] = true;
+            Pending.push_back(Succ);
+          }
       }
       for (size_t I = 0; I < N; ++I)
-        if (ReadsWider[I] || (ReadsNarrow[I] && !NeedsEntryParent[I]))
+        if (ReadsWider[I] || (ReadsNarrow[I] && HasParent[I]))
           Pending.push_back(I);
       while (!Pending.empty()) {
         auto I = Pending.back();
@@ -310,8 +306,9 @@ void LowToMedConverter::mergePartialWritesCrossBlockX86(MedFunc &Func) {
           ((!InLoop[BI] && !LoopNarrowCarried.contains(WOff)) ||
            WideFullWrittenInLoop.contains(WOff) ||
            parentFreshInBlock(MB, OI, WOff, WSz));
-      if (!HasWideUse && !(InLoop[BI] && TRI.isGeneralReg(WOff) &&
-                           readAfterLoop(POff, PSz, WOff, WSz, BI)))
+      if (!HasWideUse &&
+          !(LoopNarrowCarried.contains(WOff) && TRI.isGeneralReg(WOff) &&
+            readAfterLoop(POff, PSz, WOff, WSz, BI)))
         continue;
 
       // The reconstructed wide parent must carry the canonical SSA id of its

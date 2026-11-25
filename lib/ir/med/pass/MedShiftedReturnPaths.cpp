@@ -24,6 +24,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <compare>
 #include <optional>
 #include <set>
 
@@ -40,7 +41,20 @@ uint64_t shiftedBits(NdOp Opcode, unsigned Width, uint64_t V, uint64_t Count) {
 namespace {
 
 using Number = std::optional<uint64_t>;
-using Binding = std::pair<const MedVar *, Number>;
+// A word write can define the low bytes of a register on an edge whose
+// preserved upper bytes have no source value.
+struct KnownLowBytes {
+  uint64_t Value = 0;
+  unsigned Bytes = 0;
+
+  Number slice(unsigned Offset, unsigned Size) const {
+    if (!Size || Offset >= Bytes || Size > Bytes - Offset)
+      return {};
+    return (Value >> (8 * Offset)) & llvm::maskTrailingOnes<uint64_t>(8 * Size);
+  }
+  auto operator<=>(const KnownLowBytes &) const = default;
+};
+using Binding = std::pair<const MedVar *, KnownLowBytes>;
 using Frame = llvm::SmallVector<Binding, 6>;
 using Locals = MedValueMap<Binding>;
 using Views = llvm::SmallDenseMap<std::pair<uint64_t, unsigned>, unsigned, 8>;
@@ -267,20 +281,56 @@ struct ShiftPaths {
     return {};
   }
 
-  Number read(const MedVar &V, const Frame &State, const Locals &Local) const {
+  KnownLowBytes lowBytes(const MedVar &V, const Frame &State,
+                         const Locals &Local) const {
     if (!V.Size || V.Size > 8)
       return {};
     if (V.isConst())
       return isScalarLiteral(V) && llvm::isUIntN(V.Size * 8, V.ConstVal)
-                 ? Number(V.ConstVal)
-                 : Number();
+                 ? KnownLowBytes{V.ConstVal, V.Size}
+                 : KnownLowBytes{};
     const Binding *Found = nullptr;
     if (const auto At = Local.find(medValueKey(V)); At != Local.end())
       Found = &At->second;
     else if (const auto At = slot(V))
       Found = &State[*At];
-    return Found && Found->first && sameView(*Found->first, V) ? Found->second
-                                                               : Number();
+    return Found && Found->first && sameView(*Found->first, V)
+               ? Found->second
+               : KnownLowBytes{};
+  }
+
+  Number read(const MedVar &V, const Frame &State, const Locals &Local) const {
+    return lowBytes(V, State, Local).slice(0, V.Size);
+  }
+
+  KnownLowBytes partialResult(const MedOp &Op, const Frame &State,
+                              const Locals &Local) const {
+    if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+        Op.Inputs[0].Size == Op.Output.Size)
+      return lowBytes(Op.Inputs[0], State, Local);
+    if (Op.NumInputs != 2 || !Op.Output.Size || Op.Output.Size > 8)
+      return {};
+    const auto &A = Op.Inputs[0], &B = Op.Inputs[1];
+    if (Op.Opcode == NdOp::CONCAT && A.Size && B.Size &&
+        A.Size + B.Size == Op.Output.Size) {
+      const auto Low = lowBytes(B, State, Local);
+      if (Low.Bytes != B.Size)
+        return Low;
+      const auto High = lowBytes(A, State, Local);
+      return {Low.Value | (High.Value << (8 * B.Size)), Low.Bytes + High.Bytes};
+    }
+    if (Op.Opcode == NdOp::SUBBYTES && isScalarLiteral(B) &&
+        A.Size >= Op.Output.Size &&
+        B.ConstVal <= unsigned(A.Size - Op.Output.Size)) {
+      const auto Low = lowBytes(A, State, Local);
+      if (B.ConstVal < Low.Bytes) {
+        const unsigned Offset = static_cast<unsigned>(B.ConstVal);
+        const unsigned Size =
+            std::min<unsigned>(Low.Bytes - Offset, Op.Output.Size);
+        return {*Low.slice(Offset, Size), Size};
+      }
+    }
+    return {};
   }
 
   Number evaluate(const MedOp &Op, const Frame &State,
@@ -388,10 +438,12 @@ struct ShiftPaths {
           return false;
       }
     }
-    Number N = evaluate(Op, State, Local);
-    if (N)
-      *N &= llvm::maskTrailingOnes<uint64_t>(8 * V.Size);
-    const Binding Written{&V, N};
+    const Number N = evaluate(Op, State, Local);
+    const KnownLowBytes Low =
+        N ? KnownLowBytes{*N & llvm::maskTrailingOnes<uint64_t>(8 * V.Size),
+                          V.Size}
+          : partialResult(Op, State, Local);
+    const Binding Written{&V, Low};
     Local[medValueKey(V)] = Written;
     if (const auto At = slot(V))
       State[*At] = Written;
@@ -428,22 +480,25 @@ struct ShiftPaths {
         return false;
       const auto Arg = llvm::find_if(
           Phi.Args, [&](const auto &A) { return A.first == Pred; });
-      const auto N = read(Arg->second, Before, Local);
+      const auto Low = lowBytes(Arg->second, Before, Local);
+      const auto N = Low.slice(0, Phi.Output.Size);
       const auto &[Previous, Written] = Before[*At];
       // The same SSA definition agrees even when it holds an unknown loop
       // counter. A folded or renamed input still needs a concrete match.
       if (Phi.Output.Kind == MedVar::Reg && Previous &&
           !sameView(*Previous, Arg->second) &&
-          Local.count(medValueKey(*Previous)) && (!N || Written != N))
+          Local.count(medValueKey(*Previous)) &&
+          (!N || Written.slice(0, Phi.Output.Size) != N))
         return false;
-      After[*At] = {&Phi.Output, N};
+      After[*At] = {&Phi.Output, Low};
     }
     for (const PhiNode &Phi : Next.Phis) {
       const auto It = JoinedViews.find(&Phi);
       if (It == JoinedViews.end())
         continue;
       const auto &[WholeIndex, Offset, CarriesValue] = It->second;
-      const auto &N = After[view(Phi.Output)->second].second;
+      const auto N =
+          After[view(Phi.Output)->second].second.slice(0, Phi.Output.Size);
       if (!N)
         continue;
       const auto &Whole = After[WholeIndex];
@@ -452,9 +507,7 @@ struct ShiftPaths {
       if (Phi.Output.Size < TRI.FullRegWidth &&
           (Whole.first || TRI.isSubRegOf(Phi.Output.RegOff, Phi.Output.Size,
                                          TRI.IntReturnReg, TRI.FullRegWidth)) &&
-          (!Whole.second ||
-           *N != ((*Whole.second >> (8 * Offset)) &
-                  llvm::maskTrailingOnes<uint64_t>(8 * Phi.Output.Size))))
+          Whole.second.slice(Offset, Phi.Output.Size) != N)
         return false;
       CrossedResultJoin |= CarriesValue && Next.Preds.size() > 1;
     }
@@ -695,6 +748,80 @@ bool collectCarrierEdges(const MedFunc &Func, MedBlock &Join,
       Edges.push_back(std::move(E));
   return true;
 }
+
+// MOVK and DINS preserve part of the incoming register through a mask. Keep
+// the incoming value if any observation of the leaf needs the preserved bits.
+bool discardUnobservedEntryBytes(MedFunc &Func, const TargetRegInfo &TRI,
+                                 BinaryFormat Format) {
+  llvm::SmallVector<MedOp *, 4> Masks;
+  for (MedBlock &B : Func.Blocks) {
+    if (!B.ExceptionalPreds.empty() || !B.ExceptionalSuccs.empty() ||
+        (B.Succs.empty() &&
+         (B.Ops.empty() || B.Ops.back().Opcode != NdOp::RETURN)))
+      return false;
+    for (MedOp &Op : B.Ops) {
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+          Op.Opcode == NdOp::INDIR_BR)
+        return false; // ABI discovery has not yet bound implicit operands.
+      if (Op.Opcode != NdOp::INT_AND || Op.NumInputs != 2 || !Op.Output.Size ||
+          Op.Output.Size > 8 || medReadsInputsWhole(Op))
+        continue;
+      const auto &Input = Op.Inputs[0], &Mask = Op.Inputs[1];
+      if (Input.Kind == MedVar::Reg && Input.Size == Op.Output.Size &&
+          Mask.Size == Input.Size && isScalarLiteral(Mask) && Mask.ConstVal &&
+          !(Mask.ConstVal & 0xff))
+        Masks.push_back(&Op);
+    }
+  }
+  if (Masks.empty())
+    return false;
+
+  med_calling_conv_detail::ValueSet Incoming;
+  for (const MedOp &Op : Func.Blocks.front().Ops)
+    if (Op.Output.Kind == MedVar::Reg &&
+        med_calling_conv_detail::isEntryLiveInCopy(Op, Op.Output.RegOff)) {
+      Incoming.insert(medValueKey(Op.Output));
+      Incoming.insert(medValueKey(Op.Inputs[0]));
+    }
+  llvm::erase_if(Masks, [&](const MedOp *Op) {
+    return !Incoming.count(medValueKey(Op->Inputs[0]));
+  });
+  if (Masks.empty())
+    return false;
+
+  MedByteDemand Demand(TRI, false);
+  const auto ObserveRegister = [&](const MedVar &V) {
+    if (V.Kind != MedVar::Reg || !V.Size)
+      return;
+    const auto [Reg, Width] = TRI.findWideReg(V.RegOff, V.Size);
+    if (!integerCarrier(TRI, Reg) || TRI.isReturnReg(Reg) ||
+        llvm::is_contained(TRI.IntReturnRegs, Reg) ||
+        preserved(TRI, Format, Reg, Width))
+      Demand.need(V, medBytesOf(V));
+  };
+  for (const MedBlock &B : Func.Blocks) {
+    for (const PhiNode &P : B.Phis) {
+      Demand.define(P);
+      ObserveRegister(P.Output);
+    }
+    for (const MedOp &Op : B.Ops) {
+      Demand.define(Op);
+      ObserveRegister(Op.Output);
+    }
+  }
+  Demand.settle();
+  bool Changed = false;
+  for (MedOp *Op : Masks) {
+    if (Demand.bytesRead(Op->Output) & ~Demand.zeroBytes(Op->Inputs[1]))
+      continue;
+    Op->Opcode = NdOp::COPY;
+    Op->Inputs[0] = MedVar::makeConst(0, Op->Output.Size,
+                                      ConstantAddressProvenance::Scalar);
+    Op->NumInputs = 1;
+    Changed = true;
+  }
+  return Changed;
+}
 } // namespace
 
 bool foldUnusedShiftCarriers(MedFunc &Func, const TargetRegInfo &TRI,
@@ -722,12 +849,13 @@ bool foldUnusedShiftCarriers(MedFunc &Func, const TargetRegInfo &TRI,
   }
   if (!HasShift)
     return false;
+  const bool Trimmed = discardUnobservedEntryBytes(Func, TRI, Format);
   llvm::SmallVector<CarrierEdge, 4> Edges;
   for (MedBlock &B : Func.Blocks)
     if (!collectCarrierEdges(Func, B, TRI, Format, Work, Edges))
-      return false;
+      return Trimmed;
   if (Edges.empty())
-    return false;
+    return Trimmed;
 
   MedValueMap<const MedOp *> Defs;
   MedValueMap<PhiSite> Phis;
@@ -774,7 +902,7 @@ bool foldUnusedShiftCarriers(MedFunc &Func, const TargetRegInfo &TRI,
   }
   for (const auto &C : Changes)
     *C.Incoming = C.Active;
-  return !Changes.empty();
+  return Trimmed || !Changes.empty();
 }
 
 bool selectsShiftedReturnAcrossJoins(

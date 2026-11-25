@@ -67,6 +67,10 @@ bool medLeavesOtherRegisters(const MedFunc &Func) {
 
 namespace {
 
+bool scalarLiteral(const MedVar &V) {
+  return V.isConst() && !isAddressProvenance(V.Provenance);
+}
+
 /// \p Bytes and every byte below its highest: what a carry chain reads.
 MedByteMask throughHighest(MedByteMask Bytes) {
   return Bytes ? llvm::maskTrailingOnes<MedByteMask>(llvm::Log2_64(Bytes) + 1)
@@ -75,8 +79,8 @@ MedByteMask throughHighest(MedByteMask Bytes) {
 
 /// The bytes of each input of \p Op that \p Bytes of its output depend on.
 /// A copy, a view, a byte merge, a bitwise operation, a carry chain and a
-/// left shift pass bytes on in place or upwards; any other operation reads
-/// its inputs whole.
+/// shift pass on the bytes that can reach the observation. Other operations
+/// read their inputs whole.
 template <typename NeedFn, typename ZeroFn>
 void inputDemand(const MedOp &Op, MedByteMask Bytes, NeedFn &&Need,
                  ZeroFn &&ZeroBytes) {
@@ -114,7 +118,7 @@ void inputDemand(const MedOp &Op, MedByteMask Bytes, NeedFn &&Need,
       }
       break;
     case NdOp::SUBBYTES:
-      if (Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+      if (Op.NumInputs == 2 && scalarLiteral(Op.Inputs[1]) &&
           Covered(Op.Inputs[0]) && Op.Inputs[1].ConstVal < kMedByteMaskBytes) {
         Need(Op.Inputs[0], Bytes << Op.Inputs[1].ConstVal);
         return;
@@ -139,7 +143,7 @@ void inputDemand(const MedOp &Op, MedByteMask Bytes, NeedFn &&Need,
           // A byte ANDed with zero or ORed with ones shows nothing of the
           // other operand: `and %eax, %ebx` reads only the low byte of an
           // EAX a `setcc` wrote where EBX holds a zero-extended byte.
-          if (Other.isConst() && Op.Opcode == NdOp::INT_OR) {
+          if (Op.Opcode == NdOp::INT_OR && scalarLiteral(Other)) {
             for (unsigned Byte = 0; Byte < 8; ++Byte)
               if (((Other.ConstVal >> (8 * Byte)) & 0xFF) == 0xFFu)
                 Kept &= ~(MedByteMask(1) << Byte);
@@ -168,6 +172,18 @@ void inputDemand(const MedOp &Op, MedByteMask Bytes, NeedFn &&Need,
         return;
       }
       break;
+    case NdOp::INT_RIGHT:
+      if (Op.NumInputs == 2 && Word(Op.Output) &&
+          Op.Inputs[0].Size == Op.Output.Size && scalarLiteral(Op.Inputs[1]) &&
+          Op.Inputs[1].ConstVal < 8u * Op.Output.Size) {
+        const unsigned Bits = static_cast<unsigned>(Op.Inputs[1].ConstVal);
+        MedByteMask Read = Bytes << (Bits / 8);
+        if (Bits % 8)
+          Read |= Read << 1;
+        Need(Op.Inputs[0], Read);
+        return;
+      }
+      break;
     default:
       break;
     }
@@ -176,6 +192,8 @@ void inputDemand(const MedOp &Op, MedByteMask Bytes, NeedFn &&Need,
 }
 /// The zero bytes of the constant \p Value, among the bytes it has.
 MedByteMask zeroBytesOf(const MedVar &Value) {
+  if (isAddressProvenance(Value.Provenance))
+    return 0;
   MedByteMask Zero = 0;
   for (unsigned Byte = 0; Byte < 8 && (!Value.Size || Byte < Value.Size);
        ++Byte)
@@ -202,7 +220,7 @@ bool passesZeroBytes(const MedOp &Op) {
   case NdOp::INT_XOR:
     return Op.NumInputs == 2;
   case NdOp::SUBBYTES:
-    return Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+    return Op.NumInputs == 2 && scalarLiteral(Op.Inputs[1]) &&
            Narrow(Op.Inputs[0]) && Op.Inputs[1].ConstVal < 8;
   case NdOp::CONCAT:
     return Op.NumInputs == 2 && Narrow(Op.Inputs[0]) && Narrow(Op.Inputs[1]) &&
@@ -371,9 +389,13 @@ void MedByteDemand::settle() {
   }
 }
 
-bool MedByteDemand::reads(const MedVar &Value) const {
+MedByteMask MedByteDemand::bytesRead(const MedVar &Value) const {
   const auto Found = Index.find(medValueKey(Value));
-  return Found != Index.end() && Nodes[Found->second].Bytes;
+  return Found == Index.end() ? 0 : Nodes[Found->second].Bytes;
+}
+
+bool MedByteDemand::reads(const MedVar &Value) const {
+  return bytesRead(Value) != 0;
 }
 
 bool MedByteDemand::used(const MedVar &Value) const {

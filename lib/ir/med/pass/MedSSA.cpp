@@ -1365,8 +1365,19 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       for (uint8_t I = 0; I < Op.NumInputs; ++I) {
         // A runtime coordinate defines a new frame value independently of an
         // incoming machine register, including at a resumed parent block.
-        if (Op.Inputs[I].Id >= 0 && !RuntimeCoordinate)
-          Op.Inputs[I].SSAVer = GetVersion(Op.Inputs[I].Id);
+        auto &In = Op.Inputs[I];
+        if (In.Id < 0 || RuntimeCoordinate)
+          continue;
+        // A preserving i386 write reads its old upper bytes without declaring
+        // a register argument. A first full write on a sibling path can
+        // already own version zero.
+        if (TargetArch == Arch::X86 && I == 0 && Op.Opcode == NdOp::SUBBYTES &&
+            Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+            Op.Inputs[1].ConstVal && In.Kind == MedVar::Reg &&
+            TRI.isGeneralReg(In.RegOff) && VarStack[In.Id].empty())
+          In = MedVar::makeUnspecified(In.Size, TargetArch);
+        else
+          In.SSAVer = GetVersion(In.Id);
       }
       if (Op.Output.Id >= 0 && Op.Output.Size > 0) {
         Op.Output.SSAVer = NewVersion(Op.Output.Id);

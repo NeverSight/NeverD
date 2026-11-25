@@ -21,6 +21,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MedByteDemand.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedReturnValue.h"
@@ -2330,7 +2331,8 @@ TEST(ReturnContract, IncomingRegisterNeedsAnEntryPathWithNoClobber) {
 }
 
 void runIntegerReturnSources(Arch Target, std::vector<uint8_t> Bytes,
-                             const char *Oracle, const char *Preamble = "") {
+                             const char *Oracle, const char *Preamble = "",
+                             bool NoOpt = false) {
   BinaryImage Image;
   Image.Arch = Target;
   Image.Format = BinaryFormat::ELF;
@@ -2347,6 +2349,7 @@ void runIntegerReturnSources(Arch Target, std::vector<uint8_t> Bytes,
   Image.Symbols.push_back(std::move(Sym));
   Image.Segments.push_back(std::move(Code));
   PipelineOptions Options;
+  Options.NoOpt = NoOpt;
   Options.EmitDumpOutput = false;
   Options.OnlyFunctionEntries = {CalleeEntry};
   CEmitterOptions COptions;
@@ -2751,50 +2754,90 @@ int main(void) {
   runIntegerReturnSources(Arch::X86, Bytes, Expected);
 }
 
-TEST(ReturnContract, X86WordLatchFeedsTheSelectedExitByte) {
-  for (Arch Target : {Arch::X86, Arch::X64}) {
-    SCOPED_TRACE(static_cast<int>(Target));
-    const auto Code = [&](uint8_t Low, uint8_t High, uint8_t ByteOperand) {
-      // Return bare for mode 257. Otherwise EAX holds the schedule and the
-      // first argument selects the initial EDX and shift count.
-      std::vector<uint8_t> Bytes;
-      if (Target == Arch::X86)
-        Bytes = {0x81, 0x7c, 0x24, 8,    1, 1,    0,    0,    0x75, 1,
-                 0xc3, 0x8b, 0x44, 0x24, 8, 0x83, 0x7c, 0x24, 4,    0};
+static void checkX86WordLatch(Arch Target, bool MixedSeeds) {
+  SCOPED_TRACE(static_cast<int>(Target));
+  const auto Code = [&](uint8_t Low, uint8_t High, uint8_t ByteOperand,
+                        bool LeftWord = false, bool RightWord = false) {
+    // Return bare for mode 257. Otherwise EAX holds the schedule and the
+    // first argument selects the initial EDX and shift count.
+    std::vector<uint8_t> Bytes;
+    if (Target == Arch::X86)
+      Bytes = {0x81, 0x7c, 0x24, 8,    1, 1,    0,    0,    0x75, 1,
+               0xc3, 0x8b, 0x44, 0x24, 8, 0x83, 0x7c, 0x24, 4,    0};
+    else
+      Bytes = {0x81, 0xfe, 1, 1, 0, 0, 0x75, 1, 0xc3, 0x89, 0xf0, 0x85, 0xff};
+    const auto Seed = [&](bool Word, uint8_t Lo, uint8_t Hi) {
+      if (Word) // Pad MOV DX,imm16 with a NOP to preserve branch distances.
+        Bytes.insert(Bytes.end(), {0x66, 0xba, Lo, Hi, 0x90});
       else
-        Bytes = {0x81, 0xfe, 1, 1, 0, 0, 0x75, 1, 0xc3, 0x89, 0xf0, 0x85, 0xff};
-      Bytes.insert(
-          Bytes.end(),
-          {// Right starts at (0x404,1). Left uses the two seed bytes and count
-           // zero.
-           0x74, 12, 0xba, 4, 4, 0, 0, 0xb9, 1, 0, 0, 0, 0xeb, 10, 0xba, Low,
-           High, 0, 0, 0xb9, 0, 0, 0, 0,
-           // On odd trips XOR DX with 0x202, on even trips XOR ECX with one.
-           0x85, 0xc0, 0x74, 28, 0x83, 0xf8, 1, 0x74, 23, 0xa9, 1, 0, 0, 0,
-           0x74, 9, 0x66, 0x81, 0xf2, 2, 2, 0xd1, 0xe8, 0xeb, 0xe7, 0x83, 0xf1,
-           1, 0xd1, 0xe8, 0xeb, 0xe0,
-           // MOVZX from DL or DH, then SHL EAX,CL and RET.
-           0x0f, 0xb6, ByteOperand, 0xd3, 0xe0, 0xc3});
-      return Bytes;
+        Bytes.insert(Bytes.end(), {0xba, Lo, Hi, 0, 0});
     };
-    const char *Distinct = R"(
+    Bytes.insert(Bytes.end(), {0x74, 12});
+    Seed(RightWord, 4, 4);
+    Bytes.insert(Bytes.end(), {0xb9, 1, 0, 0, 0, 0xeb, 10});
+    Seed(LeftWord, Low, High);
+    Bytes.insert(
+        Bytes.end(),
+        {0xb9, 0, 0, 0, 0,
+         // On odd trips XOR DX with 0x202, on even trips XOR ECX with one.
+         0x85, 0xc0, 0x74, 28, 0x83, 0xf8, 1, 0x74, 23, 0xa9, 1, 0, 0, 0, 0x74,
+         9, 0x66, 0x81, 0xf2, 2, 2, 0xd1, 0xe8, 0xeb, 0xe7, 0x83, 0xf1, 1, 0xd1,
+         0xe8, 0xeb, 0xe0,
+         // MOVZX from DL or DH, then SHL EAX,CL and RET.
+         0x0f, 0xb6, ByteOperand, 0xd3, 0xe0, 0xc3});
+    return Bytes;
+  };
+  const char *Distinct = R"(
 int main(void) {
     return choose_result(0,0)!=130 || choose_result(1,0)!=8 ||
            choose_result(0,3)!=128 || choose_result(1,3)!=12 ||
            choose_result(0,5)!=256 || choose_result(1,6)!=6;
 }
 )";
-    const char *Overlap = R"(
+  const char *Overlap = R"(
 _Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
                "both entry arms can shift the selected byte to six");
 int main(void) { choose_result(0,5); choose_result(1,6); return 0; }
 )";
-    constexpr uint8_t DL = 0xc2, DH = 0xc6;
+  constexpr uint8_t DL = 0xc2, DH = 0xc6;
+  if (!MixedSeeds) {
     runIntegerReturnSources(Target, Code(0x82, 1, DL), Distinct);
     runIntegerReturnSources(Target, Code(0x82, 1, DH), Overlap);
     runIntegerReturnSources(Target, Code(1, 0x82, DL), Overlap);
     runIntegerReturnSources(Target, Code(1, 0x82, DH), Distinct);
+    return;
   }
+  for (bool LeftWord : {false, true}) {
+    runIntegerReturnSources(Target, Code(0x82, 1, DL, LeftWord, !LeftWord),
+                            Distinct);
+    runIntegerReturnSources(Target, Code(0x82, 1, DH, LeftWord, !LeftWord),
+                            Overlap);
+  }
+  if (Target == Arch::X86) {
+    // MOV EAX,EDX takes the unknown upper bytes on the left. The whole
+    // EDX definition on the right cannot supply those bytes.
+    auto Whole = Code(0x82, 1, DL, true, false);
+    Whole.resize(Whole.size() - 6);
+    Whole.insert(Whole.end(), {0x89, 0xd0, 0xd3, 0xe0, 0xc3});
+    runIntegerReturnSources(Target, std::move(Whole), R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "the partial seed leaves the upper word unavailable");
+int main(void) { choose_result(1,3); choose_result(0,257); return 0; }
+)");
+  }
+}
+
+TEST(ReturnContract, X86WordLatchFeedsTheSelectedExitByte) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    checkX86WordLatch(Target, false);
+}
+
+TEST(ReturnContract, I386MixedWordSeedsKeepTheObservedBytes) {
+  checkX86WordLatch(Arch::X86, true);
+}
+
+TEST(ReturnContract, X64MixedWordSeedsKeepTheObservedBytes) {
+  checkX86WordLatch(Arch::X64, true);
 }
 
 TEST(ReturnContract, I386SharedShiftUsesOnlyTheSelectedCarrier) {
@@ -2930,13 +2973,97 @@ int main(void) {
   }
 }
 
-static std::vector<uint8_t> mipsInstructionBytes(llvm::ArrayRef<uint32_t> Words,
-                                                 bool Little) {
+static std::vector<uint8_t> instructionBytes(llvm::ArrayRef<uint32_t> Words,
+                                             bool Little) {
   std::vector<uint8_t> Code;
   for (uint32_t Word : Words)
     for (unsigned I = 0; I < 4; ++I)
       Code.push_back(static_cast<uint8_t>(Word >> (8 * (Little ? I : 3 - I))));
   return Code;
+}
+
+TEST(ReturnContract, UnalignedByteExtractionReadsBothSourceBytes) {
+  const auto Input = rax(1), Output = temporary(8);
+  const auto Read = [&](MedVar Count) {
+    MedByteDemand Demand(getTargetRegInfo(Arch::X64), false);
+    auto Shift = operation(NdOp::INT_RIGHT, Output, {Input, Count});
+    Demand.define(Shift);
+    Demand.need(Output, 1);
+    Demand.settle();
+    return Demand.bytesRead(Input);
+  };
+  EXPECT_EQ(Read(MedVar::makeConst(8, 8)), 0b10u);
+  EXPECT_EQ(Read(MedVar::makeConst(12, 8)), 0b110u);
+  EXPECT_EQ(Read(MedVar::makeConst(63, 8)), 0b10000000u);
+  EXPECT_EQ(
+      Read(MedVar::makeConst(8, 8, ConstantAddressProvenance::AddressFragment)),
+      0xffu);
+  EXPECT_EQ(Read(temporary(9)), 0xffu);
+}
+
+TEST(ReturnContract, AArch64PartialSeedNeedsOnlyTheObservedBytes) {
+  const uint32_t Words[] = {
+      // MOVZ X9 on the right, MOVK X9 on the left. Schedule 257 returns X0.
+      0xf104043f, 0x54000120, 0xaa0103e4, 0xb4000080, 0xd2808089, 0xd2800023,
+      0x14000005, 0xf2803049, 0xd2800003, 0x14000002, 0xd65f03c0,
+      // Odd trips toggle bits 1 and 9 through BFI, even trips toggle X3.
+      0xb4000184, 0xf100049f, 0x54000140, 0x360000c4, 0x5217012c, 0x521f018c,
+      0xb3403d89, 0xd341fc84, 0x17fffff8, 0xd2400063, 0xd341fc84, 0x17fffff5,
+      // UXTB W0,W9; LSLV X0,X0,X3; RET.
+      0x53001d20, 0x9ac32000, 0xd65f03c0};
+  for (bool NoOpt : {false, true})
+    runIntegerReturnSources(Arch::AArch64, instructionBytes(Words, true), R"(
+int main(void) {
+    return choose_result(0,0)!=130 || choose_result(1,0)!=8 ||
+           choose_result(0,3)!=128 || choose_result(1,3)!=12 ||
+           choose_result(0,5)!=256 || choose_result(1,6)!=6 ||
+           choose_result(53,257)!=53;
+}
+)",
+                            "", NoOpt);
+  // Supply the preserved bytes from X2, then observe the entire X9.
+  std::vector<uint32_t> Whole(std::begin(Words), std::end(Words));
+  Whole[Whole.size() - 3] = 0xaa0903e0;    // MOV X0,X9
+  Whole.insert(Whole.begin(), 0xaa0203e9); // MOV X9,X2
+  runIntegerReturnSources(Arch::AArch64, instructionBytes(Whole, true), R"(
+int main(void) {
+    uint64_t upper = UINT64_C(0x123456789abc0000);
+    return (uint64_t)choose_result(0,0,upper)!=(upper|386) ||
+           (uint64_t)choose_result(0,3,upper)!=(upper|896) ||
+           choose_result(1,0,upper)!=2056;
+}
+)");
+}
+
+TEST(ReturnContract, MIPSPartialSeedReadsOnlyTheSelectedByteOfA6) {
+  for (Arch Target :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    uint32_t Words[] = {
+        // The left seed preserves A6 above bit 15. The right writes it whole.
+        0x640c0101, 0x10ac000a, 0, 0x10800004, 0x00a07025, 0x640a0404,
+        0x10000007, 0x640d0001, 0x340c0182, 0x7d8a7807, 0x10000003, 0x640d0000,
+        0x03e00008, 0, 0x11c0000c, 0x640c0001, 0x11cc000a, 0x31cc0001,
+        0x11800005, 0, 0x394c0202, 0x000e707a, 0x1000fff7, 0x7d8a7807,
+        0x000e707a, 0x1000fff4, 0x39ad0001,
+        // ANDI V0,A6,255; JR RA; DSLLV V0,V0,T1.
+        0x314200ff, 0x03e00008, 0x01a21014};
+    runIntegerReturnSources(
+        Target, instructionBytes(Words, archLittleEndian(Target)), R"(
+int main(void) {
+    return choose_result(0,0)!=130 || choose_result(1,0)!=8 ||
+           choose_result(0,3)!=128 || choose_result(1,3)!=12 ||
+           choose_result(0,5)!=256 || choose_result(1,6)!=6;
+}
+)");
+    Words[std::size(Words) - 3] = 0x7d423a03; // DEXT V0,A6,8,8
+    runIntegerReturnSources(
+        Target, instructionBytes(Words, archLittleEndian(Target)), R"(
+_Static_assert(__builtin_types_compatible_p(__typeof__(choose_result(0,0)),void),
+               "both entries can shift the high byte to six");
+int main(void) { choose_result(0,5); choose_result(1,6); return 0; }
+)");
+  }
 }
 
 TEST(ReturnContract, MIPSTwoLatchesCarryTheValueSetBeforeTheCountChoice) {
@@ -2956,7 +3083,7 @@ TEST(ReturnContract, MIPSTwoLatchesCarryTheValueSetBeforeTheCountChoice) {
           0x1000fff4, 0x39ad0000u | CountMask,
           // Move A6 to V0 and shift by T1 in the return delay slot.
           0x01401025, 0x03e00008, 0x01a21014};
-      return mipsInstructionBytes(Words, archLittleEndian(Target));
+      return instructionBytes(Words, archLittleEndian(Target));
     };
     runIntegerReturnSources(Target, Code(4), R"(
 int main(void) {
@@ -2988,7 +3115,7 @@ TEST(ReturnContract, SharedMIPSShiftCountChangesInTheBackedgeSlot) {
           0x11c00005, 0, 0x38420002, 0x65ceffff,
           // b head; xori t1,t1,Mask; done: jr ra; dsllv v0,v0,t1
           0x1000fffb, 0x39ad0000u | Mask, 0x03e00008, 0x01a21014};
-      return mipsInstructionBytes(Words, Little);
+      return instructionBytes(Words, Little);
     };
     const Arch Target = Little ? Arch::MIPS64EL : Arch::MIPS64;
     runIntegerReturnSources(Target, WithCountUpdate(2), R"(

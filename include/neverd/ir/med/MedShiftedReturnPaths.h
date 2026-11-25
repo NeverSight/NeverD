@@ -44,8 +44,8 @@ inline bool isVariableShift(const MedOp &Op) {
   return isScalarShift(Op) && !Op.Inputs[1].isConst();
 }
 
-/// Coalesce an unused incoming carrier with the active one on that edge
-/// when all observations through the shared return have been checked.
+/// Discard unobserved preserved bytes and coalesce an unused incoming carrier
+/// with the active one on its edge before source argument recovery.
 bool foldUnusedShiftCarriers(MedFunc &Func, const TargetRegInfo &TRI,
                              BinaryFormat Format);
 

@@ -9358,6 +9358,14 @@ and with only DL initialized.
 `ReturnContract.X86WordLatchFeedsTheSelectedExitByte` writes DX on i386 and
 x86-64, then reads either DL or DH. Swapping the two seed bytes exchanges
 which exit can distinguish the two entry arms.
+`I386MixedWordSeedsKeepTheObservedBytes` and
+`X64MixedWordSeedsKeepTheObservedBytes` swap a whole-register seed with a
+preserving word write. `AArch64PartialSeedNeedsOnlyTheObservedBytes`
+executes the low-byte return after MOVK with and without optimization, then
+supplies the preserved bits through X2 and reads the full result.
+`MIPSPartialSeedReadsOnlyTheSelectedByteOfA6` calls both generated sources
+with two arguments across n32 and n64. The selected exit byte determines
+whether the two return sets overlap.
 `ReturnContract.MIPSTwoLatchesCarryTheValueSetBeforeTheCountChoice` sets the
 scratch register before either count arm. It executes DINS or the count update
 in a branch delay slot and the variable shift in the return delay slot.

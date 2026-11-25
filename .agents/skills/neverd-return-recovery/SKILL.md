@@ -51,6 +51,15 @@ The GP recovery lives in [PICGlobalPointer.cpp](../../../lib/ir/med/lower/MIPS/P
 
 ## Verify a change
 
+For mixed-width seeds, swap which predecessor writes the whole scratch
+register and which writes its low word. Check the low and high exit bytes
+separately, including zero trips. Track which bytes each predecessor defines
+through the loop. On a whole-register read, vary the upper bytes through a
+real ABI argument. On a narrow read, vary the incoming scratch contents and
+check both source signatures and the unoptimized LLVM C path for an extra
+argument or a trap. An unseeded register's first SSA write on another
+predecessor cannot supply its incoming upper bytes.
+
 Pair each positive with a near-identical counterexample. Useful pairs change a
 single count or mask bit, swap the count definitions across two edges, clobber
 one stack byte or move an update into an annulled delay slot.
