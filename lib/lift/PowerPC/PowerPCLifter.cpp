@@ -692,9 +692,11 @@ bool integer(State &S, Arch A, uint32_t W) {
   case opcode::MULLD: {
     if (XO == opcode::MULLD && !Wide)
       return false;
-    // MULLW on PPC64 leaves the high word undefined.
-    if (XO == opcode::MULLW && Wide)
-      return false;
+    // MULLW writes the full signed product of the two low words on PPC64.
+    if (XO == opcode::MULLW && Wide) {
+      X = S.resize(S.resize(X, sizeof(int32_t)), S.Width, /*Signed=*/true);
+      Y = S.resize(S.resize(Y, sizeof(int32_t)), S.Width, /*Signed=*/true);
+    }
     S.result(T, S.op(NdOp::INT_MULT, X, Y), Rc);
     return true;
   }

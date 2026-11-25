@@ -2,6 +2,7 @@
 """Compile and execute the C and LLVM projections of linked integer ELF functions."""
 
 import argparse
+from ctypes import c_int32
 import itertools
 from pathlib import Path
 import subprocess
@@ -221,7 +222,7 @@ def main():
                          "branch", "access_word", "atomic_word", "call_mix"]
             if profile.startswith("powerpc"):
                 functions.extend(("independent_divides", "recorded_divide", "divide_flags",
-                                  "conditional_return", "population_counts"))
+                                  "conditional_return", "population_counts", "recorded_word_product"))
             for function in functions:
                 cases = all_cases
                 if function in ("unsigned_quotient", "signed_quotient"):
@@ -229,6 +230,9 @@ def main():
                              (function != "signed_quotient" or (a, b) != (1 << (bits - 1), mask))]
                 if function == "divide_flags" and bits == 64:
                     cases = [*cases, (1 << 31, mask)]
+                if function == "recorded_word_product":
+                    cases = [*cases, (0x10000, 0x10000), (0x80000000, 0xffffffff),
+                             (0x12345678ffffffff & mask, 0xfedcba9800000002 & mask)]
                 expected = []
                 for a, b in cases:
                     if function == "mix":
@@ -249,6 +253,10 @@ def main():
                         count = (b - 1) & mask
                         taken = (a & 0xffffffff) == 0 and count != 0
                         expected.append((a if taken else (a + count) & mask, a))
+                    elif function == "recorded_word_product":
+                        product = (c_int32(a).value * c_int32(b).value) & mask
+                        flags = 4 if product >> (bits - 1) else 2 if product else 1
+                        expected.append((product ^ flags, a))
                     elif function == "population_counts":
                         words = sum(((a >> n) & 0xffffffff).bit_count() << n
                                     for n in range(0, bits, 32))
