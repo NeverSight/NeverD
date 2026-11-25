@@ -261,6 +261,13 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
                       ArgSlots[St.FirstArg + Coefficient]);
           }
         }
+        if (St.Op == SymOp::Mul && St.NumArgs == 2 && !St.Aux && Demand > 64) {
+          // Even a one-limb scale visits the full result once. A product of
+          // two observed prefixes takes at most N*N limb products.
+          const size_t N = llvm::APInt::getNumWords(Demand);
+          if (N <= llvm::APInt::getNumWords(St.Width) / N)
+            St.Width = Demand;
+        }
       });
   return Weighted;
 }
@@ -1459,6 +1466,15 @@ llvm::APInt SymEvalPlan::evalWith(
           ScratchAP[I] *= Prefix.zext(St.Width);
         }
       }
+      continue;
+    }
+
+    if (St.Op == SymOp::Mul && St.Width < Ctx.width(St.Node)) {
+      // Demand is the maximum across all consumers. The rest of the slot
+      // keeps its declared width for ordinary bitwise and arithmetic users.
+      auto Product = ScratchAP[A[0]].zextOrTrunc(St.Width);
+      Product *= ScratchAP[A[1]].zextOrTrunc(St.Width);
+      ScratchAP[I] = Product.zext(Ctx.width(St.Node));
       continue;
     }
 

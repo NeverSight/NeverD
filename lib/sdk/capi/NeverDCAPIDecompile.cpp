@@ -1533,8 +1533,8 @@ const Session::FunctionSource &dialectSource(neverd_session_t Sess, va_t Entry,
 }
 
 static void writeCallSites(llvm::json::OStream &J, const LowFunc *Low,
-                           bool Slim = false) {
-  J.attribute("call_snapshot", Low ? sourceCallSnapshot(*Low) : std::string());
+                           llvm::StringRef Snapshot, bool Slim = false) {
+  J.attribute("call_snapshot", Snapshot);
   J.attributeArray("source_calls", [&] {
     if (Slim || !Low)
       return;
@@ -1676,7 +1676,8 @@ sourceFunctionView(Session &S, va_t Entry,
           llvm::json::Object{{"identifier", Name.Identifier},
                              {"symbol", jsonSafeText(Name.Symbol)},
                              {"address", vaHex(*Name.Address)}});
-  const LowFunc *Calls = S.findLowFunc(Entry);
+  // Both page sizes identify edits against the same original LowIR.
+  const auto CallSnapshot = Low ? sourceCallSnapshot(*Low) : std::string();
   const auto Metadata = [&](bool Slim) {
     std::string Text;
     llvm::raw_string_ostream Out(Text);
@@ -1685,7 +1686,7 @@ sourceFunctionView(Session &S, va_t Entry,
       J.attribute("function_identity",
                   llvm::json::Value(llvm::json::Object(Identity)));
       J.attribute("variable_snapshot", Map.VariableSnapshot);
-      writeCallSites(J, Calls, Slim);
+      writeCallSites(J, Low, CallSnapshot, Slim);
       J.attributeArray("virtual_calls", [&] {
         for (const auto &Call : Map.VirtualCalls)
           if (Call.Function == Entry)
@@ -2423,7 +2424,7 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       std::string Text;
       llvm::raw_string_ostream Stream(Text);
       llvm::json::OStream JSON(Stream);
-      JSON.object([&] { writeCallSites(JSON, Low); });
+      JSON.object([&] { writeCallSites(JSON, Low, sourceCallSnapshot(*Low)); });
       return dupStr(Stream.str());
     }
     if (Stage == "c" || Stage == "llvmc" || Stage == "source" ||
