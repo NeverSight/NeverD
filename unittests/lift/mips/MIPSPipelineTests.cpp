@@ -164,13 +164,15 @@ TEST(MIPSEntryGP, N32HighDataAddressesKeepTheirELF32IdentityInAWideGPR) {
     File.put(52 + 12, Base, 4);
     File.globalPointer(Base + 0x8000);
     File.put(84 + 8, Base + 0xb8, 4);
-    File.put(0x100, 0x67828110, 4); // daddiu v0,gp,-0x7ef0
-    File.put(0x104, 0x03e00008, 4); // jr ra
-    File.put(0x108, 0, 4);
+    File.put(0x100, 0x8f888114, 4); // lw t0,-0x7eec(gp)
+    File.put(0x104, 0xaf888118, 4); // sw t0,-0x7ee8(gp)
+    File.put(0x108, 0x6782811c, 4); // daddiu v0,gp,-0x7ee4
+    File.put(0x10c, 0x03e00008, 4); // jr ra
+    File.put(0x110, 0, 4);
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-    Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, 12));
+    Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, 20));
     Decoder Decode;
     ASSERT_TRUE(Decode.init(*Image));
     auto Low = CFGBuilder().build(*Image, Decode, Image->Entry, "gp_address");
@@ -178,15 +180,31 @@ TEST(MIPSEntryGP, N32HighDataAddressesKeepTheirELF32IdentityInAWideGPR) {
     LowToMedConverter Convert;
     Convert.setBinaryImage(&*Image);
     const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
-    bool Found = false;
+    bool FoundLoad = false, FoundStore = false, FoundWideValue = false;
     for (const auto &Block : Med.Blocks)
-      for (const auto &Op : Block.Ops)
+      for (const auto &Op : Block.Ops) {
+        if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) {
+          const auto &Address = Op.Inputs[0];
+          ASSERT_TRUE(Address.isConst()) << getArchName(Image->Arch);
+          EXPECT_EQ(Address.Size, 4);
+          EXPECT_EQ(Address.Provenance, ConstantAddressProvenance::Address);
+          if (Op.Opcode == NdOp::LOAD) {
+            EXPECT_EQ(Address.ConstVal, Base + 0x114);
+            FoundLoad = true;
+          } else {
+            EXPECT_EQ(Address.ConstVal, Base + 0x118);
+            EXPECT_FALSE(Op.Inputs[1].isConst());
+            FoundStore = true;
+          }
+        }
         if (Op.Opcode == NdOp::INT_SEXT && Op.Output.Size == 8 &&
             Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
-            Op.Inputs[0].ConstVal == Base + 0x110 &&
+            Op.Inputs[0].ConstVal == Base + 0x11c &&
             Op.Inputs[0].Provenance == ConstantAddressProvenance::Address)
-          Found = true;
-    EXPECT_TRUE(Found) << getArchName(Image->Arch);
+          FoundWideValue = true;
+      }
+    EXPECT_TRUE(FoundLoad && FoundStore && FoundWideValue)
+        << getArchName(Image->Arch);
   }
 }
 
