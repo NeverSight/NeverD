@@ -4,6 +4,7 @@ from contextlib import ExitStack
 import json
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -78,6 +79,25 @@ class X1ProjectionTests(unittest.TestCase):
                     else:
                         self.assertEqual(projection.compare_process([], directory, directory, capable, launchable),
                                          expected)
+
+    def test_signal_after_entry_and_nonzero_oracle_results_are_failures(self):
+        config = projection.CONFIG
+        entered = config["entered"]
+        compared = "\n".join((entered, config["compared"]))
+        for launchable, code, records, expected in (
+                (False, -signal.SIGKILL, "", config["not_started"]),
+                (True, -signal.SIGKILL, "", None),
+                (False, -signal.SIGKILL, entered, None),
+                (True, -signal.SIGILL, entered, None),
+                (True, 1, compared, None)):
+            with self.subTest(launchable=launchable, code=code, records=records):
+                process = subprocess.CompletedProcess([], code, records, "")
+                with mock.patch.object(projection.native, "execute_apple_slice", return_value=process):
+                    if expected is None:
+                        with self.assertRaises(ValueError):
+                            projection.compare_process([], Path(), Path(), launchable, launchable)
+                    else:
+                        self.assertEqual(projection.compare_process([], Path(), Path(), False, launchable), expected)
 
     def test_all_twenty_images_are_required_for_link_and_execution_claims(self):
         native, config = projection.native, projection.CONFIG
@@ -158,31 +178,35 @@ class X1ProjectionTests(unittest.TestCase):
                 (True, True, True, True, False, False),
                 (False, True, True, True, False, False),
                 (False, True, True, False, False, False),
+                (False, True, False, True, False, False),
                 (False, False, False, False, False, False),
                 (False, False, False, False, True, False),
                 (True, True, True, True, False, True)):
             with self.subTest(controls=controls, explicit=explicit, prefix=prefix, broken_control=broken_control,
                               broken_image=broken_image), tempfile.TemporaryDirectory() as tmp, ExitStack() as m:
-                inputs = Path(tmp)
+                inputs = Path(tmp).resolve()
                 output = inputs / config["check"]
                 manifest = inputs / config["manifest"]
                 manifest.write_text(json.dumps({}))
                 sha = projection.model.digest(manifest)
                 cursor = {modes["baseline_key"]: launch, modes["explicit_key"]: explicit, modes["pacm_pc_key"]: prefix,
-                          "status": native.POLICY["passed" if prefix else "unavailable"],
+                          "status": native.POLICY["passed" if launch else "unavailable"],
                           "profiles": {native.POLICY["optimizations"][0]: {"sha256": sha}}}
 
-                def qualify(directory, *, require_complete):
-                    self.assertTrue(require_complete)
-                    filename = native.POLICY["report_name"]
-                    path = directory / projection.X1["mode"] / filename
-                    path.parent.mkdir()
-                    native.save(path, cursor)
-                    status = "failed" if broken_control else "passed" if controls else "unavailable"
-                    result = {"status": native.POLICY[status], gate["complete_key"]: controls,
-                              "probes": {projection.X1["mode"]: {"report": path.relative_to(directory).as_posix(),
-                                                                 "sha256": projection.model.digest(path)}}}
-                    native.save(directory / filename, result)
+                ordered = native.POLICY["ordered_probe"]
+
+                def probe(directory):
+                    mode = directory.name
+                    if mode == projection.X1["mode"]:
+                        result = cursor
+                    elif mode == ordered["mode"]:
+                        result = {ordered["qualified_key"]: controls,
+                                  "status": native.POLICY["passed" if controls else "unavailable"]}
+                    else:
+                        failed = broken_control and mode == native.POLICY["probe_mode"]
+                        result = {**dict.fromkeys(gate["requirements"][mode], True),
+                                  "status": native.POLICY["failed" if failed else "passed"]}
+                    native.save(directory / native.POLICY["report_name"], result)
                     return result
 
                 def image(family, route, opt, source, dest, capable, launchable):
@@ -194,8 +218,10 @@ class X1ProjectionTests(unittest.TestCase):
 
                 m.enter_context(mock.patch.object(projection, "checked_inputs", return_value={
                     "source_revision": sha, "exporter_sha256": sha}))
-                aggregate = m.enter_context(mock.patch.object(native, "qualify_x1", side_effect=qualify))
-                second_cursor = m.enter_context(mock.patch.object(native, "probe_x1_signal_cursor"))
+                aggregate = m.enter_context(mock.patch.object(native, "qualify_x1", wraps=native.qualify_x1))
+                probes = [m.enter_context(mock.patch.object(native, fn.__name__, side_effect=probe))
+                          for fn in (native.probe, native.probe_signal_cursor, native.probe_x1_signal_cursor,
+                                     native.probe_cpta, native.probe_ordered_q)]
                 measured = m.enter_context(mock.patch.object(projection, "measure_image", side_effect=image))
                 m.enter_context(mock.patch.object(sys, "argv", [__file__, config["check"], config["require_native"],
                                                                config["inputs"], str(inputs), config["output"], str(output)]))
@@ -212,10 +238,17 @@ class X1ProjectionTests(unittest.TestCase):
                     self.assertEqual(code, native.POLICY["exit_codes"][report["status"]])
                 self.assertEqual(report[config["qualified_key"]], passed)
                 self.assertEqual(report[gate["complete_key"]], controls)
-                aggregate.assert_called_once()
-                second_cursor.assert_not_called()
+                directory = output / gate["complete_mode"]
+                aggregate.assert_called_once_with(directory, require_complete=True)
+                for observed in probes:
+                    observed.assert_called_once()
                 receipt = report[config["control_receipt"]]
-                self.assertEqual(projection.model.digest(output / receipt["report"]), receipt["sha256"])
+                control_report = output / receipt["report"]
+                self.assertEqual(projection.model.digest(control_report), receipt["sha256"])
+                children = json.loads(control_report.read_text())["probes"]
+                self.assertEqual(set(children), {*gate["requirements"], ordered["mode"]})
+                for child in children.values():
+                    self.assertEqual(projection.model.digest(directory / child["report"]), child["sha256"])
                 if not broken_control:
                     child = output / gate["complete_mode"] / projection.X1["mode"] / native.POLICY["report_name"]
                     self.assertEqual(report["cursor_sha256"], projection.model.digest(child))
