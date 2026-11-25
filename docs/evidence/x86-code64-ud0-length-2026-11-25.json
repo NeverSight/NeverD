@@ -206,6 +206,35 @@
       "sha256": "4df31003888555d4a4bc3730462487fd4eb808f18dd000d347354064669ebc2c"
     }
   },
+  "final_dev_rebase_qualification": {
+    "rebased_code_commit": "94ef4980fe",
+    "base_commit": "2f4b768a70df464d2f98064829e9fbb27af92b58",
+    "scope": "The intervening dev changes are limited to ARM64e and RISC-V code and documentation. The rebuilt test binary has the same SHA-256 as the preceding full P/E qualification. The original-CPU generated-C comparisons were repeated on both core types.",
+    "rebuilt_test_binary_sha256": "29d35e209cd45a545b76d48f450361edeb8c7601e717c86a048dc5faab6403a8",
+    "identical_to_latest_full_suite_binary": true,
+    "focused_p": {
+      "file": "ud0-long-r12-dev-final-focused-p.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "dc13b5952c824958ab443dc1c121b015e496ca1c453b73881df26a25e954bc2a"
+    },
+    "focused_e": {
+      "file": "ud0-long-r12-dev-final-focused-e.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "1e006d4207f5df6da43e0c2f9a988c48e588b547cbaa62cceb04aba86691c109"
+    }
+  },
   "release_gate": {
     "global_x86_complete": false,
     "native_sgx_qualified": false,
