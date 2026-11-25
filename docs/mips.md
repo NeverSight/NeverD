@@ -66,6 +66,19 @@ have conflicting encodings in the reference manual.
 The compiler emits an equivalent sequence with unambiguous instructions.
 [Release qualification](evidence/mips-llvm-r10-micromips64r6.json).
 
+The r11 SDK encodes both source registers of microMIPS R6 `ALIGN` in
+architectural order. On microMIPS32 R6 it emits `jrc16 $ra` as the
+halfword `0x47e3`. The pre-R6 return encoding `0x45bf` decodes as
+`movep` on R6. Both 32-bit and 64-bit microMIPS R6 use `bc` for a
+local unconditional branch, including a jump to a shared return path.
+The lifter keeps a zero-offset `jrc` or `jalrc` target as a copy of the
+incoming register before writing the link. This preserves the callable
+value through n32's sign-extended GOT loads.
+Selecting an older SDK yields a diagnostic for microMIPS R6 code
+generation. The Unicorn fork also rejects the seven
+reserved field values of the word operations `LSA` and `ALIGN`.
+[Encoding and execution results](evidence/mips-llvm-r11-micromipsr6.json).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
@@ -138,6 +151,10 @@ ratio included 1.
   GOT import load retains its symbol through n32's sign extension. A static
   GNU GOT with a single GP and no TLS can supply the initial address of a
   writable callback object. The call reads the object's current pointer.
+  In n32 HighC, an indirect call through a mutable pointer can lose a
+  forwarded incoming integer argument when its prototype is unknown.
+  Retaining the DWARF caller and function-pointer types preserves that
+  argument in the tested Release 2, 3, 5 and 6 programs.
   A local GOT cell can also contain a rounded 64 KiB page address outside
   the mapped image. Source conversion reports a proved load of such a cell
   when the page and its displacement lack relocatable storage identity.
@@ -1825,6 +1842,24 @@ falling SysClk edge and requests the vector word on the sixth rising edge
 after detection. The analyzer listing begins at the read.
 [IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf),
 [R3051 hardware manual, chapter 10, Reset Behavior](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/cpu/mips/r3051.pdf#page=131).
+
+Tektronix's TMS 420 example labels bus sample 0 as reset initiation.
+The first external ROM read at `0x1fc00000` carries a 480 ns timestamp.
+The jump, NOP delay slot and target load set `v0` to `0x20100000` in
+a software replay of the three displayed words in either byte order.
+The probe latches groups at different times and stores one state per bus
+cycle. HP's R3900 note illustrates separate bus and program-counter
+captures and gives calculated cross-trigger delays for a 75 MHz clock.
+The two examples leave the physical reset-release-to-fetch,
+TLB-write-to-first-use and IRQ-pin-to-acceptance intervals open.
+[Tektronix TMS 420, figure 2-1 and table 2-4](https://download.tek.com/manual/070982600.pdf#page=31)
+and [HP 5965-1529E, pp. 2–3](https://hpwiki.mcguirescientificservices.com/_media/application_notes%3A5965-1529e.pdf#page=2).
+
+The ACIS Mongoose, an R3000 implementation, has a separate microboot
+configuration read at virtual address `0xbffffffc` before it sets the PC
+to the reset vector `0xbfc00000`. Its memory map omits a TLB. The design
+documents this ordering without a sampled interval.
+[MIT ACIS boot hardware, section 5.2.3](https://acisweb.mit.edu/acis/sprelim/hardware.html).
 
 On Stanford's FAST board, an oscilloscope recorded the R3000's 25 MHz
 system clock, its instruction-request output and the FPGA's instruction-ready

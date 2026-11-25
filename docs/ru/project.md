@@ -1,6 +1,6 @@
 **Языки**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: b184498ae7532c73d73e053cee0c98a14194188b6a3109e01ade408ed3e16445 -->
+<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
 
 <div align="center">
 
@@ -212,7 +212,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r10
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r11
 cmake --build build
 ```
 
@@ -228,19 +228,19 @@ cmake --build build
 
 Каждый архив перед распаковкой в `~/.cache/neverd-llvm/<tag>/<arch>/` или `NEVERD_LLVM_PREBUILT_CACHE_DIR` проверяется по дайджесту из `cmake/NeverDLLVMPrebuilt.cmake`. Для тегов вне зафиксированных значений используется опубликованный `.sha256`. Для версии по умолчанию `BUILDINFO.txt` должен также указывать точный коммит подмодуля LLVM. Релизные сборки используют ccache в macOS/Linux и sccache с кешем GitHub Actions для Windows clang-cl. Кеши лишь ускоряют повторные сборки и не публикуются как артефакты релиза.
 
-По умолчанию используется ревизия пакета `neverd-llvm-v23.0.0-r10`. Git-тег, цель релиза, коммит исходников и дайджесты трёх архивов образуют неизменяемую версионную привязку. Каталоги сборки со старым базовым тегом, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8` или `neverd-llvm-v23.0.0-r9` автоматически переходят на `r10`, если явно не задан `NEVERD_LLVM_PREBUILT_SHA256`. `Prebuilt LLVM Audit` запускается при push, pull request и каждые шесть часов. Он вызывает `scripts/audit_prebuilt_llvm_release.py`, сопоставляя привязку с текущим релизом GitHub и каждым опубликованным файлом контрольной суммы.
+По умолчанию используется ревизия пакета `neverd-llvm-v23.0.0-r11`. Git-тег, цель релиза, коммит исходников и дайджесты трёх архивов образуют неизменяемую версионную привязку. Каталоги сборки со старым базовым тегом, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9` или `neverd-llvm-v23.0.0-r10` автоматически переходят на `r11`, если явно не задан `NEVERD_LLVM_PREBUILT_SHA256`. `Prebuilt LLVM Audit` запускается при push, pull request и каждые шесть часов. Он вызывает `scripts/audit_prebuilt_llvm_release.py`, сопоставляя привязку с текущим релизом GitHub и каждым опубликованным файлом контрольной суммы.
 
-Если fork LLVM изменился, но LLVM по-прежнему сообщает `23.0.0`, выпускайте следующую ревизию пакета — `neverd-llvm-v23.0.0-r11`, затем `-r12`. Не перезаписывайте существующий релиз и не придумывайте версию LLVM `23.0.1`:
+Если fork LLVM изменился, но LLVM по-прежнему сообщает `23.0.0`, выпускайте следующую ревизию пакета — `neverd-llvm-v23.0.0-r12`, затем `-r13`. Не перезаписывайте существующий релиз и не придумывайте версию LLVM `23.0.1`:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r11 \
+  -f release_tag=neverd-llvm-v23.0.0-r12 \
   -f overwrite_existing_assets=false
 ```
 
-После успешного workflow одновременно обновите тег по умолчанию, коммит и три дайджеста в `cmake/NeverDLLVMPrebuilt.cmake`. Каждая ревизия пакета использует собственный каталог кеша; текущая ревизия по умолчанию находится в `.cache/neverd-llvm/neverd-llvm-v23.0.0-r10`. Устаревший или повторно опубликованный архив отклоняется до распаковки. `overwrite_existing_assets` предназначен только для исторического восстановления и в обычном процессе выключен.
+После успешного workflow одновременно обновите тег по умолчанию, коммит и три дайджеста в `cmake/NeverDLLVMPrebuilt.cmake`. Каждая ревизия пакета использует собственный каталог кеша; текущая ревизия по умолчанию находится в `.cache/neverd-llvm/neverd-llvm-v23.0.0-r11`. Устаревший или повторно опубликованный архив отклоняется до распаковки. `overwrite_existing_assets` предназначен только для исторического восстановления и в обычном процессе выключен.
 
 **Артефакты**
 

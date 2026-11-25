@@ -1,0 +1,692 @@
+{
+  "scope": "microMIPS R6 ALIGN, compact register returns, local branches and reserved word LSA/ALIGN fields",
+  "llvm": {
+    "source": "2bc46a924391617452eeed3a6846621147eaf889",
+    "tree": "f0f0edd01bf6f45501b0f1313d4d6af70a1158ca",
+    "merged": "57a3be56ef561d8f2f4aad46b269ec2f374c7973",
+    "tag": "neverd-llvm-v23.0.0-r11",
+    "release": "https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r11",
+    "pull_request": "https://github.com/NeverSight/llvm-project/pull/20",
+    "source_tests": "https://github.com/gmh5225/test_mac_intel/actions/runs/45512826890",
+    "packages": "https://github.com/gmh5225/test_mac_intel/actions/runs/45512826922",
+    "targets": "X86;ARM;AArch64;Mips"
+  },
+  "unicorn": {
+    "source": "e28f3a39ebb6e31ad96ad51d2d105f5899d33b4d",
+    "merged": "456fbb3b4f4b1c08ac95a562b736cd289c286ff4",
+    "pull_request": "https://github.com/NeverSight/unicorn/pull/43",
+    "tests": "https://github.com/gmh5225/test_mac_intel/actions/runs/45507416633",
+    "combinations_per_host": 128,
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "profiles": [
+      "microMIPS32 R6",
+      "microMIPS64 R6",
+      "M14Kc pre-R6",
+      "microMIPS64 R2"
+    ]
+  },
+  "assets": {
+    "neverd-llvm-linux-x86_64.tar.xz": "856e4f367a549467760ba94c448834d4bc95f2cba9669c3b3932ce3f8c6ca315",
+    "neverd-llvm-macos-arm64.tar.xz": "f285f0750d52c5f64b0fc018532c53411dd55e38a929ef7d4eabdaefac533350",
+    "neverd-llvm-windows-x64.zip": "81ec672ac513855cad875bc825566889025af8f8821928666d9e5ab4c1e3e968"
+  },
+  "reference": {
+    "document": "MIPS microMIPS64 Instruction Set, revision 6.05, pp. 87, 134, 300",
+    "url": "https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00594-2B-microMIPS64-AFP-6.05.pdf",
+    "align_be": "00 a4 16 1f",
+    "align_le": "a4 00 1f 16",
+    "assembly": "align $2, $4, $5, 3",
+    "compact_return_be": "47 e3",
+    "compact_return_le": "e3 47",
+    "old_o32_halfword": "0x45bf"
+  },
+  "raw_object_execution": {
+    "checks_per_isa_per_tool": 120,
+    "positions": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "abis": [
+      "o32",
+      "n32",
+      "n64"
+    ],
+    "inputs": [
+      [
+        "0x1234567",
+        "0x89abcdef"
+      ],
+      [
+        "0xa5c3f09d",
+        "0x63fe2984"
+      ],
+      [
+        "0x74732618",
+        "0xd2a98753"
+      ],
+      [
+        "0xfedcba9876543210",
+        "0x12345689fedcba"
+      ],
+      [
+        "0x8ebdf053",
+        "0xfe160d24"
+      ]
+    ],
+    "passed": {
+      "r10-micro": 0,
+      "r10-classic": 120,
+      "r11-micro": 120,
+      "r11-classic": 120
+    }
+  },
+  "public_object_roundtrip": {
+    "r10": {
+      "library_sha256": "230e2bd9601d9a6101518d815501fbac2e76092d5eebc7efe700dd5b2d07524e",
+      "input_functions": 24,
+      "objects": 48,
+      "original_executions": 120,
+      "rebuilt_executions": 240,
+      "register_correct": 240,
+      "register_stack_return_correct": 160,
+      "by_abi": {
+        "o32": 0,
+        "n32": 80,
+        "n64": 80
+      },
+      "listing_canonical": 24,
+      "listing_reserved_rejected": 168
+    },
+    "r11": {
+      "library_sha256": "ca0602aa14e7424eacf7961ed96567dd5d04d9c755ed7882dd5acfd5725dd578",
+      "input_functions": 24,
+      "objects": 48,
+      "original_executions": 120,
+      "rebuilt_executions": 240,
+      "register_correct": 240,
+      "register_stack_return_correct": 240,
+      "by_abi": {
+        "o32": 80,
+        "n32": 80,
+        "n64": 80
+      },
+      "listing_canonical": 24,
+      "listing_reserved_rejected": 168,
+      "recompiled_c": {
+        "highc": {
+          "micro_functions": 24,
+          "checks": 120,
+          "correct": 120
+        },
+        "llvmc": {
+          "micro_functions": 24,
+          "checks": 120,
+          "correct": 120
+        }
+      }
+    }
+  },
+  "mixed_c_calls": {
+    "r10": {
+      "clang_sha256": "fa0628cea4e84ec13650d3f4d0590a130697621d1c19a36f613b89a5ca11fc54",
+      "programs": 48,
+      "executions": 336,
+      "correct_register_stack_and_return": 212,
+      "correct_by_abi": {
+        "o32": 28,
+        "n32": 92,
+        "n64": 92
+      },
+      "linkage": [
+        "static",
+        "PIC"
+      ],
+      "modes": [
+        "classic to classic",
+        "classic to micro",
+        "micro to classic",
+        "micro to micro"
+      ]
+    },
+    "r11": {
+      "clang_sha256": "622a1ae597dc20619a15d38c0b688bedd2131a771b6fb8c689dee565aeaa4f18",
+      "programs": 48,
+      "executions": 336,
+      "correct_register_stack_and_return": 336,
+      "correct_by_abi": {
+        "o32": 112,
+        "n32": 112,
+        "n64": 112
+      },
+      "linkage": [
+        "static",
+        "PIC"
+      ],
+      "modes": [
+        "classic to classic",
+        "classic to micro",
+        "micro to classic",
+        "micro to micro"
+      ]
+    }
+  },
+  "fixed_address_calls": {
+    "r10": {
+      "llvm": "1c37d515ef3b12e8923390f95dc49052a966f00f",
+      "functions": 12,
+      "executions": 42,
+      "correct": 28,
+      "caller_addresses": {
+        "o32": "0x210100",
+        "n32": "0x71010100",
+        "n64": "0x100210100"
+      },
+      "callee_offset": 8192,
+      "checks": [
+        "return value",
+        "caller PC",
+        "stack pointer",
+        "callee-saved s0"
+      ]
+    },
+    "r11": {
+      "llvm": "2bc46a924391617452eeed3a6846621147eaf889",
+      "functions": 12,
+      "executions": 42,
+      "correct": 42,
+      "caller_addresses": {
+        "o32": "0x210100",
+        "n32": "0x71010100",
+        "n64": "0x100210100"
+      },
+      "callee_offset": 8192,
+      "checks": [
+        "return value",
+        "caller PC",
+        "stack pointer",
+        "callee-saved s0"
+      ]
+    }
+  },
+  "public_mixed_calls": {
+    "r10": {
+      "library_sha256": "230e2bd9601d9a6101518d815501fbac2e76092d5eebc7efe700dd5b2d07524e",
+      "programs": 48,
+      "rebuilt": 40,
+      "planned": 336,
+      "passed": 182,
+      "by_abi": {
+        "o32": 42,
+        "n32": 70,
+        "n64": 70
+      }
+    },
+    "exported-ir": {
+      "library_sha256": "230e2bd9601d9a6101518d815501fbac2e76092d5eebc7efe700dd5b2d07524e",
+      "programs": 48,
+      "rebuilt": 40,
+      "planned": 336,
+      "passed": 210,
+      "by_abi": {
+        "o32": 70,
+        "n32": 70,
+        "n64": 70
+      }
+    },
+    "r11": {
+      "library_sha256": "ca0602aa14e7424eacf7961ed96567dd5d04d9c755ed7882dd5acfd5725dd578",
+      "programs": 48,
+      "rebuilt": 48,
+      "planned": 336,
+      "passed": 336,
+      "by_abi": {
+        "o32": 112,
+        "n32": 112,
+        "n64": 112
+      }
+    },
+    "r11-highc": {
+      "library_sha256": "ca0602aa14e7424eacf7961ed96567dd5d04d9c755ed7882dd5acfd5725dd578",
+      "programs": 48,
+      "rebuilt": 48,
+      "planned": 336,
+      "passed": 336,
+      "by_abi": {
+        "o32": 112,
+        "n32": 112,
+        "n64": 112
+      }
+    },
+    "r11-llvmc": {
+      "library_sha256": "ca0602aa14e7424eacf7961ed96567dd5d04d9c755ed7882dd5acfd5725dd578",
+      "programs": 48,
+      "rebuilt": 48,
+      "planned": 336,
+      "passed": 336,
+      "by_abi": {
+        "o32": 112,
+        "n32": 112,
+        "n64": 112
+      }
+    }
+  },
+  "native_suites": {
+    "Linux": {
+      "results": {
+        "Passed": 1587,
+        "Expectedly Failed": 57,
+        "Unsupported": 3
+      },
+      "files": {
+        "llvm": 1647,
+        "clang": 4,
+        "target-layout": 3,
+        "mips-fixups": 2,
+        "lld": 97
+      }
+    },
+    "macOS": {
+      "results": {
+        "Passed": 1587,
+        "Expectedly Failed": 57,
+        "Unsupported": 3
+      },
+      "files": {
+        "llvm": 1647,
+        "clang": 4,
+        "target-layout": 3,
+        "mips-fixups": 2,
+        "lld": 97
+      }
+    },
+    "Windows": {
+      "results": {
+        "Passed": 1587,
+        "Expectedly Failed": 57,
+        "Unsupported": 3
+      },
+      "files": {
+        "llvm": 1647,
+        "clang": 4,
+        "target-layout": 3,
+        "mips-fixups": 2,
+        "lld": 97
+      }
+    }
+  },
+  "same_host_disassembly": {
+    "baseline": "1c37d515ef3b12e8923390f95dc49052a966f00f",
+    "candidate": "2bc46a924391617452eeed3a6846621147eaf889",
+    "rounds": 24,
+    "metric": "candidate/r10 child CPU time, paired median and resampled 95% interval",
+    "functions_per_process": 2560,
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45512832953",
+    "platforms": {
+      "Linux": {
+        "micro-o32-be": {
+          "median": 1.002287819126453,
+          "interval": [
+            1.000357973853013,
+            1.0057579847548506
+          ]
+        },
+        "micro-o32-le": {
+          "median": 1.0049256875565518,
+          "interval": [
+            1.0020451715861178,
+            1.0065207681733628
+          ]
+        },
+        "r6-word-be": {
+          "median": 1.003233748177055,
+          "interval": [
+            1.001662115692338,
+            1.0051509343374236
+          ]
+        },
+        "r6-word-le": {
+          "median": 1.0048283130041942,
+          "interval": [
+            1.0030785958230088,
+            1.0070598886434892
+          ]
+        }
+      },
+      "macOS": {
+        "micro-o32-be": {
+          "median": 1.0923252603812754,
+          "interval": [
+            0.9985937549718924,
+            1.2097137142493164
+          ]
+        },
+        "micro-o32-le": {
+          "median": 0.9587276176024422,
+          "interval": [
+            0.8867756579694742,
+            1.0312337793915118
+          ]
+        },
+        "r6-word-be": {
+          "median": 1.099514918103258,
+          "interval": [
+            0.9048556638829904,
+            1.2243798659616179
+          ]
+        },
+        "r6-word-le": {
+          "median": 1.107168591475931,
+          "interval": [
+            0.9149384036879132,
+            1.2874994686875696
+          ]
+        }
+      },
+      "Windows": {
+        "micro-o32-be": {
+          "median": 1.0,
+          "interval": [
+            0.9583333333333334,
+            1.0
+          ]
+        },
+        "micro-o32-le": {
+          "median": 1.0,
+          "interval": [
+            0.9583333333333334,
+            1.0434782608695652
+          ]
+        },
+        "r6-word-be": {
+          "median": 1.0,
+          "interval": [
+            1.0,
+            1.0
+          ]
+        },
+        "r6-word-le": {
+          "median": 1.0,
+          "interval": [
+            1.0,
+            1.0
+          ]
+        }
+      }
+    }
+  },
+  "local_consumer": {
+    "mips": 1194,
+    "layout": 23,
+    "scalar": 39
+  },
+  "same_host_public_pic": {
+    "host": "macOS arm64",
+    "metric": "candidate/r10 process CPU time",
+    "method": "Eight optimized whole-ELF public object roundtrips per leg, with two original classic functions per input. Both persistent processes warm up all three PIC profiles before 24 interleaved pairs. Child process CPU nanoseconds exclude process startup. The complete NeverD and LLVM builds are identified by their library digests.",
+    "profiles": {
+      "o32/big": {
+        "input_sha256": "6dcbbe4d26d5e2fd5324295da8037ef9efc3100f7753cbea2d577d9bdbdbbc78",
+        "paired_median": 1.0183594717711932,
+        "resampled_95_percent": [
+          0.9981113059106288,
+          1.0374774589843714
+        ]
+      },
+      "n32/big": {
+        "input_sha256": "979d78a64d6df6a5339f5ca95fb4f5cf6adff5abd95fb4954a36b49d6d134f8b",
+        "paired_median": 0.9995405808092299,
+        "resampled_95_percent": [
+          0.9843115934994078,
+          1.041460985537369
+        ]
+      },
+      "n64/big": {
+        "input_sha256": "d15c17dd65bfb01babbbc79ea892ef221e81f110658f6bfd1639f738ee7616ee",
+        "paired_median": 1.0120765576211634,
+        "resampled_95_percent": [
+          0.9738479901104053,
+          1.027708923512748
+        ]
+      }
+    }
+  },
+  "relocated_numeric_callables": {
+    "2": {
+      "abis": [
+        "o32",
+        "n32",
+        "n64"
+      ],
+      "orders": [
+        "big",
+        "little"
+      ],
+      "inputs": 6,
+      "checks": {
+        "original": 48,
+        "object": 48,
+        "highc": 48,
+        "llvmc": 48
+      },
+      "observations": [
+        "full address",
+        "low four bits",
+        "three equality comparisons",
+        "two calls",
+        "separate tagged callee"
+      ]
+    },
+    "3": {
+      "abis": [
+        "o32",
+        "n32",
+        "n64"
+      ],
+      "orders": [
+        "big",
+        "little"
+      ],
+      "inputs": 6,
+      "checks": {
+        "original": 48,
+        "object": 48,
+        "highc": 48,
+        "llvmc": 48
+      },
+      "observations": [
+        "full address",
+        "low four bits",
+        "three equality comparisons",
+        "two calls",
+        "separate tagged callee"
+      ]
+    },
+    "5": {
+      "abis": [
+        "o32",
+        "n32",
+        "n64"
+      ],
+      "orders": [
+        "big",
+        "little"
+      ],
+      "inputs": 6,
+      "checks": {
+        "original": 48,
+        "object": 48,
+        "highc": 48,
+        "llvmc": 48
+      },
+      "observations": [
+        "full address",
+        "low four bits",
+        "three equality comparisons",
+        "two calls",
+        "separate tagged callee"
+      ]
+    },
+    "6": {
+      "abis": [
+        "o32",
+        "n32",
+        "n64"
+      ],
+      "orders": [
+        "big",
+        "little"
+      ],
+      "inputs": 6,
+      "checks": {
+        "original": 48,
+        "object": 48,
+        "highc": 48,
+        "llvmc": 48
+      },
+      "observations": [
+        "full address",
+        "low four bits",
+        "three equality comparisons",
+        "two calls",
+        "separate tagged callee"
+      ]
+    }
+  },
+  "pic_calls_via_linker_named_target": {
+    "images": 24,
+    "isa_releases": [
+      2,
+      3,
+      5,
+      6
+    ],
+    "checks_per_form": {
+      "original": 192,
+      "object": 192,
+      "highc": 192,
+      "llvmc": 192
+    },
+    "n32_r6_source": "JALRC samples the original callable word in a register before writing the link"
+  },
+  "static_writable_pointer": {
+    "checks": [
+      "callable address",
+      "four low bits",
+      "pointer equality",
+      "tagged callee result",
+      "exchange to another live entry, read, restore and reread"
+    ],
+    "word_abis": [
+      "o32",
+      "n32",
+      "n64"
+    ],
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "isa_releases": [
+      2,
+      3,
+      5,
+      6
+    ],
+    "placements_separated_by": 1048576,
+    "profiles": {
+      "global": {
+        "retained_relocations": true,
+        "images": 24,
+        "checks": {
+          "original": 288,
+          "object": 288,
+          "highc": 288,
+          "llvmc": 288
+        }
+      },
+      "page": {
+        "retained_relocations": true,
+        "images": 24,
+        "checks": {
+          "original": 288,
+          "object": {
+            "images_omitting_the_four_affected_functions": 24,
+            "unaffected_callee_present": true
+          },
+          "highc": {
+            "images_omitting_the_four_affected_functions": 24,
+            "unaffected_callee_present": true
+          },
+          "llvmc": {
+            "images_omitting_the_four_affected_functions": 24,
+            "unaffected_callee_present": true
+          }
+        }
+      },
+      "page-no-relocs": {
+        "retained_relocations": false,
+        "images": 24,
+        "checks": {
+          "original": 288,
+          "object": {
+            "images_omitting_the_four_affected_functions": 24,
+            "unaffected_callee_present": true
+          },
+          "highc": {
+            "images_omitting_the_four_affected_functions": 24,
+            "unaffected_callee_present": true
+          },
+          "llvmc": {
+            "images_omitting_the_four_affected_functions": 24,
+            "unaffected_callee_present": true
+          }
+        }
+      }
+    }
+  },
+  "indirect_call_through_writable_object": {
+    "forms": {
+      "DWARF": {
+        "original": {
+          "passes": 192,
+          "checks": 192
+        },
+        "object": {
+          "passes": 192,
+          "checks": 192
+        },
+        "highc": {
+          "passes": 192,
+          "checks": 192
+        },
+        "llvmc": {
+          "passes": 192,
+          "checks": 192
+        }
+      },
+      "no_debug": {
+        "original": {
+          "passes": 192,
+          "checks": 192
+        },
+        "object": {
+          "passes": 192,
+          "checks": 192
+        },
+        "highc": {
+          "passes": 176,
+          "checks": 192
+        },
+        "llvmc": {
+          "passes": 192,
+          "checks": 192
+        }
+      }
+    },
+    "known_limit": "n32 HighC loses the incoming scalar argument of this untyped indirect call without DWARF."
+  }
+}
