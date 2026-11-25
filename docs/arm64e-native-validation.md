@@ -2570,6 +2570,13 @@ per recipe at each optimization, including the zero signing-PC cases. Counts
 of observed signature differences can be lower because PAC collisions are
 valid.
 
+On integrated dev, the macOS 26 and Xcode 27 runners completed 64 walks for
+each key at O0 and O2 in PACM HINT mode. Both rejected shortening either
+key's sweep to 63. The macOS 15 runner skipped the two cursor controls before
+process entry. All three reported a virtual M1. The five native x1 feature
+checks remain open on these runners. [Hosted run](https://github.com/gmh5225/test_mac_intel/actions/runs/45579398292)
+and [per-feature results](evidence/arm64e-qualification-inputs-2026-11-25.json).
+
 The CPTA probe builds arm64, arm64e and arm64e.x1 at O0 and O2. Each scalar
 instruction runs in its own process with four input vectors. A SIGILL counts
 as unavailable only at that instruction's address before the first result.

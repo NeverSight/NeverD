@@ -96,5 +96,180 @@
       "execution_report_sha256": "8dda50190beafdaedb0a93eadaf883d7c5328b504af5a729d845513ef0c12cf1"
     }
   },
-  "native_x1_qualified": false
+  "native_x1_qualified": false,
+  "hosted_after_merge": {
+    "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/45579398292",
+    "neverd_pull": "https://github.com/NeverSight/NeverD/pull/2616",
+    "controller_pull": "https://github.com/gmh5225/test_mac_intel/pull/14",
+    "controller_revision": "9991c542cf8643687d1f46395b3742bf386617ec",
+    "runners": {
+      "macos-15": {
+        "cpu": "Apple M1 (Virtual)",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": false,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "report_sha256": "4970f0de08634ed397c19b7b528b3d5b3eadd5f900e8d7a062da8cdc8785eb39",
+        "controls_passed": 3,
+        "controls_skipped": 2,
+        "cursor_profiles": {
+          "O0-pacm": {
+            "outcome": "unavailable",
+            "returncode": -9
+          },
+          "O0-explicit": {
+            "outcome": "unavailable",
+            "returncode": -9
+          },
+          "O2-pacm": {
+            "outcome": "unavailable",
+            "returncode": -9
+          },
+          "O2-explicit": {
+            "outcome": "unavailable",
+            "returncode": -9
+          }
+        }
+      },
+      "macos-26": {
+        "cpu": "Apple M1 (Virtual)",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": true,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "report_sha256": "c339240d62d06111809f914a62fa5181270ca15e93a697cb032f520ee4729170",
+        "controls_passed": 5,
+        "controls_skipped": 0,
+        "cursor_profiles": {
+          "O0-pacm": {
+            "outcome": "passed",
+            "completed": [
+              64,
+              64
+            ],
+            "checks": 3880,
+            "signed": [
+              64,
+              64
+            ],
+            "pc_rejected": [
+              0,
+              0
+            ],
+            "recipe_rejected": [
+              0,
+              0
+            ]
+          },
+          "O0-explicit": {
+            "outcome": "unavailable",
+            "returncode": 2
+          },
+          "O2-pacm": {
+            "outcome": "passed",
+            "completed": [
+              64,
+              64
+            ],
+            "checks": 3880,
+            "signed": [
+              64,
+              64
+            ],
+            "pc_rejected": [
+              0,
+              0
+            ],
+            "recipe_rejected": [
+              0,
+              0
+            ]
+          },
+          "O2-explicit": {
+            "outcome": "unavailable",
+            "returncode": 2
+          }
+        }
+      },
+      "xcode-27": {
+        "cpu": "Apple M1 (Virtual)",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": true,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "report_sha256": "9c1cccbf5cb1d786759a52c51695fb4687b2b20c266523056fd7d5d91d0d8558",
+        "controls_passed": 5,
+        "controls_skipped": 0,
+        "cursor_profiles": {
+          "O0-pacm": {
+            "outcome": "passed",
+            "completed": [
+              64,
+              64
+            ],
+            "checks": 3880,
+            "signed": [
+              64,
+              64
+            ],
+            "pc_rejected": [
+              0,
+              0
+            ],
+            "recipe_rejected": [
+              0,
+              0
+            ]
+          },
+          "O0-explicit": {
+            "outcome": "unavailable",
+            "returncode": 2
+          },
+          "O2-pacm": {
+            "outcome": "passed",
+            "completed": [
+              64,
+              64
+            ],
+            "checks": 3880,
+            "signed": [
+              64,
+              64
+            ],
+            "pc_rejected": [
+              0,
+              0
+            ],
+            "recipe_rejected": [
+              0,
+              0
+            ]
+          },
+          "O2-explicit": {
+            "outcome": "unavailable",
+            "returncode": 2
+          }
+        }
+      }
+    },
+    "neverd_revision": "a13ccf8da8ce6f8e28181cd391c52933c4e2df8c"
+  }
 }
