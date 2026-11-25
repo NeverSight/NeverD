@@ -2428,31 +2428,73 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
     if (Hints != Refinement.FrameWordHints.end())
       Slots.insert(Hints->second.begin(), Hints->second.end());
     for (uint64_t Slot : Slots) {
-      if (!State.hasMaterializedRegionRange(Root, Slot, 8))
+      bool CompleteWord = false;
+      if (State.hasMaterializedRegionRange(Root, Slot, 8)) {
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "frame word projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const auto Value =
+            State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
+        const auto Domain =
+            enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
+        if (Failed)
+          return false;
+        CompleteWord = Domain.Status == FiniteValueStatus::Complete &&
+                       !Domain.Tuples.empty();
+        if (CompleteWord) {
+          if (Domain.Tuples.size() >
+              Options.MaxOperations - Result.EvaluatedOperations)
+            return fail(SpecializationStatus::BudgetExceeded,
+                        "frame word projection budget exhausted");
+          Result.EvaluatedOperations += Domain.Tuples.size();
+          std::vector<uint64_t> Values;
+          Values.reserve(Domain.Tuples.size());
+          for (const auto &Tuple : Domain.Tuples)
+            Values.push_back(Tuple.front());
+          llvm::sort(Values);
+          Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
+          for (uint64_t I = 0; I < 8; ++I) {
+            const unsigned Shift =
+                8 * (Options.ByteOrder == llvm::endianness::little ? I : 7 - I);
+            const uint8_t Byte = Values.front() >> Shift;
+            if (std::all_of(
+                    Values.begin(), Values.end(), [&](uint64_t Candidate) {
+                      return static_cast<uint8_t>(Candidate >> Shift) == Byte;
+                    }))
+              Out.FrameBytes[Slot + I] = Byte;
+          }
+          Out.FrameValueDomains.emplace(Slot, std::move(Values));
+        }
+      }
+      if (CompleteWord)
         continue;
-      if (Result.EvaluatedOperations >= Options.MaxOperations)
-        return fail(SpecializationStatus::BudgetExceeded,
-                    "frame word projection budget exhausted");
-      ++Result.EvaluatedOperations;
-      const auto Value = State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
-      const auto Domain =
-          enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
-      if (Failed)
-        return false;
-      if (Domain.Status != FiniteValueStatus::Complete || Domain.Tuples.empty())
-        continue;
-      if (Domain.Tuples.size() >
-          Options.MaxOperations - Result.EvaluatedOperations)
-        return fail(SpecializationStatus::BudgetExceeded,
-                    "frame word projection budget exhausted");
-      Result.EvaluatedOperations += Domain.Tuples.size();
-      std::vector<uint64_t> Values;
-      Values.reserve(Domain.Tuples.size());
-      for (const auto &Tuple : Domain.Tuples)
-        Values.push_back(Tuple.front());
-      llvm::sort(Values);
-      Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
-      Out.FrameValueDomains.emplace(Slot, std::move(Values));
+      // A variable byte can make the complete word exceed the tuple limit.
+      // Keep only byte values independently proved on this physical edge.
+      for (uint64_t I = 0; I < 8; ++I) {
+        const uint64_t Offset = Slot + I;
+        if (Out.FrameBytes.count(Offset) ||
+            !State.hasMaterializedRegionRange(Root, Offset, 1))
+          continue;
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "frame byte projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const auto Byte =
+            State.loadMaterialized(Ctx.mkAdd(Root, Ctx.mkConst(64, Offset)), 1);
+        if (!Byte)
+          continue;
+        if (const auto Constant = Ctx.asConst(Byte)) {
+          Out.FrameBytes[Offset] = Constant->getZExtValue();
+          continue;
+        }
+        const auto Domain = enumerate(Ctx, Predicate, {Byte}, 1);
+        if (Failed)
+          return false;
+        if (Domain.Status == FiniteValueStatus::Complete &&
+            Domain.Tuples.size() == 1 && Domain.Tuples.front().size() == 1)
+          Out.FrameBytes[Offset] = Domain.Tuples.front().front();
+      }
     }
   }
   // An edge guard may establish an offset that was not unique in its source
