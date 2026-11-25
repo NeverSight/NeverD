@@ -25,6 +25,7 @@
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
@@ -346,29 +347,36 @@ static bool rewriteGuardedCallThis(std::vector<HighStmt> &Body);
 static void hoistIdenticalIfElseSuffixesNested(std::vector<HighStmt> &Body,
                                                const std::set<va_t> &Targets);
 
-static bool exprHasCall(const HighExpr *E) {
-  if (!E)
-    return false;
-  if (E->Kind == ExprKind::Call)
-    return true;
-  for (const auto &Op : E->Operands)
-    if (exprHasCall(Op.get()))
+template <typename Predicate>
+static bool anyExprNode(const HighExpr *Root, Predicate Matches) {
+  llvm::SmallVector<const HighExpr *, 16> Work{Root};
+  llvm::SmallPtrSet<const HighExpr *, 16> Seen;
+  while (!Work.empty()) {
+    const HighExpr *E = Work.pop_back_val();
+    if (!E || !Seen.insert(E).second)
+      continue;
+    if (Matches(*E))
       return true;
+    // Keep the original traversal order, including indirect call targets.
+    const size_t Start = Work.size();
+    E->forEachChildExpr(
+        [&](const ExprPtr &Child) { Work.push_back(Child.get()); });
+    std::reverse(Work.begin() + Start, Work.end());
+  }
   return false;
 }
 
+static bool exprHasCall(const HighExpr *E) {
+  return anyExprNode(
+      E, [](const HighExpr &Node) { return Node.Kind == ExprKind::Call; });
+}
+
 static bool exprHasObservableEffect(const HighExpr *E) {
-  if (!E)
-    return false;
-  if (E->Kind == ExprKind::Call || E->Kind == ExprKind::Store ||
-      E->MemoryOrdering != NdMemoryOrdering::None ||
-      E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
-    return true;
-  bool Effect = false;
-  E->forEachChildExpr([&](const ExprPtr &Child) {
-    Effect |= exprHasObservableEffect(Child.get());
+  return anyExprNode(E, [](const HighExpr &Node) {
+    return Node.Kind == ExprKind::Call || Node.Kind == ExprKind::Store ||
+           Node.MemoryOrdering != NdMemoryOrdering::None ||
+           Node.MemoryAddressSpace != NdMemoryAddressSpace::Default;
   });
-  return Effect;
 }
 
 /// Whether running \p S only when a later test holds would be observable.
@@ -2729,21 +2737,13 @@ static bool stmtTreeUsesVar(const HighStmt &S, const MedVar &V) {
 }
 
 static bool exprHasCallOccurrence(const HighExpr *E, const HighExpr &Call) {
-  if (!E)
-    return false;
-  // A callee name or address identifies an implementation, not an execution.
-  // Only a copy of this exact instruction can replace the saved call effect.
   // Merged/synthetic calls without a site retain their independent effects.
-  if (E->Kind == ExprKind::Call && Call.CallSiteAddr &&
-      Call.CallSiteAddr != InvalidVA && E->CallSiteAddr == Call.CallSiteAddr &&
-      E->structuralEq(Call))
-    return true;
-  bool Found = false;
-  E->forEachChildExpr([&](const ExprPtr &Child) {
-    if (!Found)
-      Found = exprHasCallOccurrence(Child.get(), Call);
+  if (!Call.CallSiteAddr || Call.CallSiteAddr == InvalidVA)
+    return false;
+  return anyExprNode(E, [&](const HighExpr &Node) {
+    return Node.Kind == ExprKind::Call &&
+           Node.CallSiteAddr == Call.CallSiteAddr && Node.structuralEq(Call);
   });
-  return Found;
 }
 
 /// Whether the call of Body[End] occurs in \p Pred as a predicate composed

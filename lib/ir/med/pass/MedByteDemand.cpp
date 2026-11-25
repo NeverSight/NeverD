@@ -10,6 +10,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace neverd {
@@ -83,7 +84,7 @@ MedByteMask throughHighest(MedByteMask Bytes) {
 /// read their inputs whole.
 template <typename NeedFn, typename ZeroFn>
 void inputDemand(const MedOp &Op, MedByteMask Bytes, NeedFn &&Need,
-                 ZeroFn &&ZeroBytes) {
+                 ZeroFn &&ZeroBytes, bool AllZeroFactsFit) {
   // A value the mask covers, and one a machine word holds.
   const auto Covered = [](const MedVar &Value) {
     return Value.Size && Value.Size <= kMedByteMaskBytes;
@@ -138,6 +139,10 @@ void inputDemand(const MedOp &Op, MedByteMask Bytes, NeedFn &&Need,
     case NdOp::INT_XOR:
       if (Op.NumInputs == 2 && Word(Op.Output)) {
         for (unsigned I = 0; I < 2; ++I) {
+          // A literal has no SSA demand. Above the slice bound the order of
+          // zero-byte queries can affect which earlier facts are available.
+          if (AllZeroFactsFit && Op.Inputs[I].isConst())
+            continue;
           const MedVar &Other = Op.Inputs[1 - I];
           MedByteMask Kept = Bytes;
           // A byte ANDed with zero or ORed with ones shows nothing of the
@@ -366,6 +371,8 @@ void MedByteDemand::settle() {
         need(Phi->Output, medBytesOf(Phi->Output));
     }
   }
+  const bool AllZeroFactsFit =
+      Nodes.size() <= limits::ir::kMedByteDemandZeroByteValues;
   while (!Pending.empty()) {
     const unsigned Index = Pending.back();
     Pending.pop_back();
@@ -385,7 +392,8 @@ void MedByteDemand::settle() {
       inputDemand(
           *Op, Bytes,
           [&](const MedVar &Input, MedByteMask Needed) { need(Input, Needed); },
-          [&](const MedVar &Input) { return zeroBytes(Input); });
+          [&](const MedVar &Input) { return zeroBytes(Input); },
+          AllZeroFactsFit);
   }
 }
 
@@ -409,29 +417,25 @@ MedByteMask MedByteDemand::zeroBytes(const MedVar &Value) {
   const auto Root = Index.find(medValueKey(Value));
   if (Root == Index.end())
     return 0;
-  if (const auto Known = Zero.find(Root->second); Known != Zero.end())
-    return Known->second;
-  std::vector<unsigned> Slice, Work{Root->second};
-  llvm::DenseMap<unsigned, MedByteMask> Answer;
+  if (Nodes[Root->second].ZeroVisited)
+    return Nodes[Root->second].Zero;
+  llvm::SmallVector<unsigned, 16> Slice, Work{Root->second};
   while (!Work.empty()) {
-    const unsigned Each = Work.back();
-    Work.pop_back();
-    if (Answer.count(Each) || Zero.count(Each))
+    const unsigned Each = Work.pop_back_val();
+    Node &N = Nodes[Each];
+    if (N.ZeroVisited)
       continue;
-    const Node &N = Nodes[Each];
-    if (!N.Phi && !(N.Op && passesZeroBytes(*N.Op))) {
-      Zero[Each] = 0;
+    N.ZeroVisited = true;
+    if (!N.Phi && !(N.Op && passesZeroBytes(*N.Op)))
       continue;
-    }
     if (Slice.size() >= ::neverd::limits::ir::kMedByteDemandZeroByteValues) {
       // Past the bound nothing in the slice is known.
       for (unsigned Seen : Slice)
-        Zero[Seen] = 0;
-      Zero[Each] = 0;
-      return Zero[Root->second] = 0;
+        Nodes[Seen].Zero = 0;
+      return 0;
     }
     Slice.push_back(Each);
-    Answer[Each] = N.Phi ? medBytesOf(N.Phi->Output) : medBytesOf(N.Op->Output);
+    N.Zero = medBytesOf(N.Phi ? N.Phi->Output : N.Op->Output);
     const auto Push = [&](const MedVar &Input) {
       if (Input.isConst())
         return;
@@ -455,17 +459,12 @@ MedByteMask MedByteDemand::zeroBytes(const MedVar &Value) {
     if (Input.isConst())
       return zeroBytesOf(Input);
     const auto Found = Index.find(medValueKey(Input));
-    if (Found == Index.end())
-      return 0;
-    if (const auto Now = Answer.find(Found->second); Now != Answer.end())
-      return Now->second;
-    const auto Known = Zero.find(Found->second);
-    return Known == Zero.end() ? MedByteMask(0) : Known->second;
+    return Found == Index.end() ? 0 : Nodes[Found->second].Zero;
   };
   for (bool Changed = true; Changed;) {
     Changed = false;
     for (unsigned Each : Slice) {
-      const Node &N = Nodes[Each];
+      Node &N = Nodes[Each];
       MedByteMask Now;
       if (N.Phi) {
         Now = medBytesOf(N.Phi->Output);
@@ -478,14 +477,12 @@ MedByteMask MedByteDemand::zeroBytes(const MedVar &Value) {
       } else {
         Now = zeroBytesThrough(*N.Op, Of);
       }
-      Now &= Answer[Each];
-      Changed |= Now != Answer[Each];
-      Answer[Each] = Now;
+      Now &= N.Zero;
+      Changed |= Now != N.Zero;
+      N.Zero = Now;
     }
   }
-  for (unsigned Each : Slice)
-    Zero[Each] = Answer[Each];
-  return Zero[Root->second];
+  return Nodes[Root->second].Zero;
 }
 
 unsigned MedByteDemand::nodeOf(const MedVar &Value) {

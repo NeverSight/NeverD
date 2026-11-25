@@ -19,6 +19,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedByteDemand.h"
@@ -2999,6 +3000,37 @@ TEST(ReturnContract, UnalignedByteExtractionReadsBothSourceBytes) {
       Read(MedVar::makeConst(8, 8, ConstantAddressProvenance::AddressFragment)),
       0xffu);
   EXPECT_EQ(Read(temporary(9)), 0xffu);
+}
+
+TEST(ReturnContract, ZeroByteSliceRetainsItsBoundAcrossSharedMasks) {
+  constexpr int Limit = limits::ir::kMedByteDemandZeroByteValues;
+  std::vector<MedOp> Copies;
+  for (int I = 0; I <= Limit; ++I)
+    Copies.push_back(
+        operation(NdOp::COPY, temporary(I),
+                  {I ? temporary(I - 1) : MedVar::makeConst(255, 8)}));
+  const auto Input = rax(1);
+  const auto Masked = operation(NdOp::INT_AND, temporary(Limit + 1),
+                                {Input, Copies.back().Output});
+  const auto PrefixMask =
+      operation(NdOp::INT_AND, temporary(Limit + 2),
+                {Copies.front().Output, MedVar::makeConst(255, 8)});
+  const auto Read = [&](bool UsePrefix) {
+    MedByteDemand Demand(getTargetRegInfo(Arch::X64), false);
+    for (const MedOp &Op : Copies)
+      Demand.define(Op);
+    Demand.define(Masked);
+    Demand.define(PrefixMask);
+    Demand.need(Masked.Output, 0xff);
+    if (UsePrefix)
+      Demand.need(PrefixMask.Output, 0xff);
+    Demand.settle();
+    return Demand.bytesRead(Input);
+  };
+  // The full chain is one value past the bound. With its first value already
+  // proved zero in the upper bytes, the rest fits in one query.
+  EXPECT_EQ(Read(false), 0xffu);
+  EXPECT_EQ(Read(true), 1u);
 }
 
 TEST(ReturnContract, AArch64PartialSeedNeedsOnlyTheObservedBytes) {

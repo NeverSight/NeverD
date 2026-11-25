@@ -754,7 +754,9 @@ bool collectCarrierEdges(const MedFunc &Func, MedBlock &Join,
 bool discardUnobservedEntryBytes(MedFunc &Func, const TargetRegInfo &TRI,
                                  BinaryFormat Format) {
   llvm::SmallVector<MedOp *, 4> Masks;
+  size_t Definitions = 0;
   for (MedBlock &B : Func.Blocks) {
+    Definitions += B.Ops.size() + B.Phis.size();
     if (!B.ExceptionalPreds.empty() || !B.ExceptionalSuccs.empty() ||
         (B.Succs.empty() &&
          (B.Ops.empty() || B.Ops.back().Opcode != NdOp::RETURN)))
@@ -790,6 +792,7 @@ bool discardUnobservedEntryBytes(MedFunc &Func, const TargetRegInfo &TRI,
     return false;
 
   MedByteDemand Demand(TRI, false);
+  Demand.reserve(Definitions);
   const auto ObserveRegister = [&](const MedVar &V) {
     if (V.Kind != MedVar::Reg || !V.Size)
       return;

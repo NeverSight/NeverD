@@ -206,6 +206,9 @@ std::pair<uint64_t, uint16_t> TargetRegInfo::findWideReg(uint64_t RegOff,
   uint64_t BestOff = RegOff;
   uint16_t BestSz = Size;
   const uint16_t MaxWidth = maxRegisterWidth(RegOff);
+  // Neither a subregister entry nor the general-register fallback can widen it.
+  if (Size >= MaxWidth && Size >= FullRegWidth)
+    return {RegOff, Size};
   // The first of the widest containers wins.
   visitNarrowView(*this, RegOff, Size, [&](const SubRegEntry &E) {
     if (E.WideSize <= MaxWidth && E.WideSize > BestSz) {

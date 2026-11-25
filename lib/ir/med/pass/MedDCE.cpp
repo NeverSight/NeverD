@@ -53,10 +53,21 @@ struct DCEValueKeyInfo : llvm::DenseMapInfo<std::pair<int, int>> {
 void LowToMedConverter::runDce(MedFunc &Func) {
   llvm::DenseSet<std::pair<int, int>, DCEValueKeyInfo> LiveDefs;
 
+  const auto &TRI = getTargetRegInfo(TargetArch);
+  const auto DefinesSP = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.Size && TRI.isStackPointer(V.RegOff);
+  };
+  bool HasStackPointerPhi = false;
+  llvm::SmallVector<const MedOp *, 4> StackWrites;
+
   // Distinct variable ids that name each register offset (its aliases).
   std::map<uint64_t, std::set<int>> RegOffVars;
   for (auto &Blk : Func.Blocks) {
+    HasStackPointerPhi |= llvm::any_of(
+        Blk.Phis, [&](const PhiNode &Phi) { return DefinesSP(Phi.Output); });
     for (auto &Op : Blk.Ops) {
+      if (DefinesSP(Op.Output))
+        StackWrites.push_back(&Op);
       if (Op.Output.Kind == MedVar::Reg && Op.Output.Id >= 0)
         RegOffVars[Op.Output.RegOff].insert(Op.Output.Id);
       for (uint8_t I = 0; I < Op.NumInputs; ++I) {
@@ -86,8 +97,6 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       }
     }
   };
-
-  const auto &TRI = getTargetRegInfo(TargetArch);
 
   // A nonlocal finally exit consumes the restored parent SP through the
   // runtime, even when no ordinary SSA use survives. Keep the exact source
@@ -397,7 +406,8 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   // incoming path, including a final POP or an adjustment in a predecessor
   // block; otherwise the call frame can shift after DCE.  Returns read it too.
   auto seedReachingStackPointer = [&](const MedBlock &Start, int Before) {
-    seedReachingDef(Start, Before, TRI.StackPointer);
+    if (HasStackPointerPhi || !StackWrites.empty())
+      seedReachingDef(Start, Before, TRI.StackPointer);
   };
   // Go's internal ABI returns integer results in RAX, RBX, RCX, RDI, RSI and
   // R8-R11 (goIntegerArgumentRegisters).  Which of them a function returns,
@@ -591,18 +601,20 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   llvm::DenseMap<std::pair<int, int>, const MedOp *, DCEValueKeyInfo> ValueDefs;
   llvm::DenseMap<std::pair<int, int>, const PhiNode *, DCEValueKeyInfo>
       ValuePhis;
-  for (const MedBlock &Blk : Func.Blocks) {
-    for (const PhiNode &Phi : Blk.Phis)
-      if (Phi.Output.Id >= 0)
-        ValuePhis.try_emplace(std::make_pair(Phi.Output.Id, Phi.Output.SSAVer),
-                              &Phi);
-    for (const MedOp &Op : Blk.Ops)
-      if (Op.Output.Id >= 0 && !(Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-                                 Op.Inputs[0].Id == Op.Output.Id &&
-                                 Op.Inputs[0].SSAVer == Op.Output.SSAVer))
-        ValueDefs.try_emplace(std::make_pair(Op.Output.Id, Op.Output.SSAVer),
-                              &Op);
-  }
+  if (!StackWrites.empty())
+    for (const MedBlock &Blk : Func.Blocks) {
+      for (const PhiNode &Phi : Blk.Phis)
+        if (Phi.Output.Id >= 0)
+          ValuePhis.try_emplace(
+              std::make_pair(Phi.Output.Id, Phi.Output.SSAVer), &Phi);
+      for (const MedOp &Op : Blk.Ops)
+        if (Op.Output.Id >= 0 &&
+            !(Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+              Op.Inputs[0].Id == Op.Output.Id &&
+              Op.Inputs[0].SSAVer == Op.Output.SSAVer))
+          ValueDefs.try_emplace(std::make_pair(Op.Output.Id, Op.Output.SSAVer),
+                                &Op);
+    }
   auto defOf = [&](const MedVar &V) -> const MedOp * {
     if (V.Id < 0)
       return nullptr;
@@ -665,11 +677,9 @@ void LowToMedConverter::runDce(MedFunc &Func) {
     }
     return false;
   };
-  for (const MedBlock &Blk : Func.Blocks)
-    for (const MedOp &Op : Blk.Ops)
-      if (Op.Output.Kind == MedVar::Reg && Op.Output.Size > 0 &&
-          TRI.isStackPointer(Op.Output.RegOff) && commitsRuntimeAllocation(Op))
-        MarkLive(Op.Output);
+  for (const MedOp *Write : StackWrites)
+    if (commitsRuntimeAllocation(*Write))
+      MarkLive(Write->Output);
 
   auto isFlagVar = [&](const MedVar &V) {
     if (V.Kind == MedVar::Flag)
