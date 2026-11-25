@@ -13021,6 +13021,46 @@ TEST_F(SessionCAPITest, PrepareFunctionAcceptsAnEntryAtAddressZero) {
   EXPECT_TRUE(State.FunctionSources.empty());
 }
 
+TEST_F(SessionCAPITest, SymbolicSourceKeepsTheLocalVariadicImportContract) {
+  // The caller forwards RCX, sets RDX and R8, then calls the slot at +0x40.
+  std::string Code =
+      llvm::fromHex("4883EC28BA0B00000041B80D000000FF152B0000004883C428C3");
+  constexpr size_t SlotOffset = 0x40;
+  Code.resize(SlotOffset, '\xCC');
+  Code.resize(SlotOffset + 8, '\0');
+  const auto Path = write("local-variadic.exe", makePE64(Code));
+  for (const bool EnhancedFirst : {false, true}) {
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    const auto Entry = neverd_session_entry_addr(Session);
+    auto &Image = neverd::sdk::toSession(Session)->Img;
+    const auto Slot = Entry + SlotOffset;
+    Image.Imports.push_back({"fixture.dll", "KeGetCurrentThread", 0, Slot});
+    ASSERT_TRUE(Image.recordImportStorageSlot(
+        Slot, "KeGetCurrentThread", 0,
+        neverd::ImportStorageEvidence::LoaderBind));
+    ASSERT_FALSE(
+        takeString(neverd_local_types_declare(
+                       Session,
+                       "unsigned long long KeGetCurrentThread(unsigned long "
+                       "long x, ...);",
+                       nullptr))
+            .empty());
+    for (const bool Symbolic : {EnhancedFirst, !EnhancedFirst}) {
+      SCOPED_TRACE(Symbolic);
+      const auto Text = takeString(
+          neverd_ir_view_ex_json(Session, Entry, "c", 0, 256,
+                                 Symbolic ? R"({"symbolic":true})" : "{}"));
+      auto Page = llvm::json::parse(Text);
+      ASSERT_TRUE(bool(Page)) << Text;
+      const auto Body = Page->getAsObject()->getString("text");
+      ASSERT_TRUE(Body);
+      EXPECT_TRUE(Body->contains(
+          "KeGetCurrentThread(arg0, (uint64_t)0xB, (uint64_t)0xD)"))
+          << Body->str();
+    }
+  }
+}
+
 TEST_F(SessionCAPITest, SourceOptionsKeepOrdinaryAndEnhancedPagesIndependent) {
   // (x ^ y) + 2 * (x & y), followed by a separately named constant function.
   std::string Body("\x89\xf8\x31\xf0\x21\xf7\x01\xff\x01\xf8\xc3", 11);
