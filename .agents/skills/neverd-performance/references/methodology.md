@@ -170,6 +170,29 @@ most time. Each step is an instruction, its reason and the case it comes from.
   on the worker thread were each measured and left out; `remaining-work.md`
   § Rejected lists them. A lever nobody wrote down is tried again.
 
+### Refactoring a lifter hot path
+
+Check what the decoder already supplies and which modes reach the lifter.
+AArch64's `orderedAccessWidth` reads the final `b` or `h` of an existing
+mnemonic to distinguish one- and two-byte memory accesses through W/X
+registers. The original comment records the width rule. It gives no timing
+rationale. [Original implementation](https://github.com/NeverSight/NeverD/blob/bf2153969712f30f65145f49859a4aeb73ee9845/lib/lift/AArch64/AArch64LiftSIMD.cpp#L25-L36)
+
+Run real encodings through the normal decoder and the fast decode path used
+for lifting. Both handled all 38 access forms in this comparison. With text
+disabled, these inputs supplied classification only. Manually clearing the
+mnemonic after a detailed decode created a state those routes never produced.
+Keep a regression test for the observable memory width on real bytes.
+
+Isolate the proposed lookup change in the same Release build, verify identical
+LowIR, and report the spread of paired timings. Across 12 alternating pairs
+on an M4 Max, the instruction-ID version used 1.0% more CPU at the median.
+The middle half ranged from 1.1% less to 2.7% more. Elapsed time on the
+shared host fell 6.1% at the median. CPU time was the metric for this
+compute-bound change, so the suffix check stayed. Revisit the choice if a
+supported input produces incorrect IR or a new comparison shows a repeatable
+gain. [Release comparison](https://github.com/NeverSight/NeverD/pull/2603)
+
 ## 6. Prove the fast path exact
 
 - **Bound a non-monotone solve by the step that breaks it.** The module
