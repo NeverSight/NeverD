@@ -62,6 +62,12 @@ a request. It gives the case behind each line.
     `tools/neverd-bench/decoder-comparison`; the method's section 10 quotes
     what the user asked on 2026-11-12 and to whom.
 
+When refactoring a lifter hot path, use a `.def` where instruction families
+share a semantic decision. Keep a working architecture-specific shortcut when
+the proposed rewrite only unifies file layout and its measured benefit falls
+within run-to-run variation. Test the existing decoder contract with real
+instruction bytes. [AArch64 access-width example](references/methodology.md#refactoring-a-lifter-hot-path)
+
 ## Rules for new code
 
 1. **Complexity before constants.** Do not scan all functions, blocks, calls or
