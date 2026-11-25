@@ -10,6 +10,11 @@
   "require_native": "--require-native",
   "qualified_key": "native_generated_arm64e_x1_qualified",
   "control_receipt": "native_controls",
+  "ordered": {
+    "directory": "ordered-memory",
+    "inputs": "ordered_inputs",
+    "receipt": "generated_ordered_memory"
+  },
   "digest_pattern": "[0-9a-f]{64}",
   "r6": {
     "tag": "neverd-llvm-v23.0.0-r6",
@@ -53,7 +58,9 @@
     "stage": "{label} failed for {directory}",
     "symbols": "the Apple link map does not attribute every IA/IB projection symbol to {owner}",
     "execution": "unexpected projection process status or entry/comparison records in {directory}",
-    "control_identity": "native control revision or x1 cursor digest differs from its recorded identity",
+    "control_identity": "native control revision or probe digest differs from its recorded identity",
+    "ordered_inputs": "ordered-memory export differs from its fixture or generated files",
+    "ordered_control": "generated ordered-memory execution disagrees with the original 128-bit LRCPC3 probe",
     "capability": "the arm64e.x1 cursor controls failed before projection measurement"
   }
 }

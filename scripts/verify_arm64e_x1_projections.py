@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export NeverD signing projections and qualify their signed arm64e.x1 images."""
+"""Qualify generated signing and ordered-memory code against same-host Darwin controls."""
 
 import argparse
 import hashlib
@@ -20,6 +20,8 @@ FIXTURES = native.ROOT / MODEL["fixture_directory"]
 X1 = native.POLICY["x1_cursor_probe"]
 SIGN = native.POLICY["cpta_probe"]
 SUBTYPE = SIGN["profiles"][SIGN["x1"]]
+ORDERED = CONFIG["ordered"]
+DARWIN_ORDERED = MODEL["ordered"]["native"]
 
 
 def inventory():
@@ -32,6 +34,13 @@ def input_identity():
     return {"source_revision": native.provenance()["source_revision"],
             "oracle_pairs_sha256": model.digest(native.ROOT / CONFIG["pairs"]),
             "fixtures": {name: model.digest(FIXTURES / name) for name in MODEL["fixture_files"]}}
+
+
+def ordered_identity(directory):
+    policy = MODEL["ordered"]
+    fixture = native.ROOT / policy["fixture_directory"] / policy["fixture"]
+    return {"fixtures": {fixture.name: model.digest(fixture)},
+            "files": {name: model.digest(directory / name) for name in model.ordered_input_names(DARWIN_ORDERED)}}
 
 
 def export(tests, output):
@@ -54,18 +63,32 @@ def export(tests, output):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(origin, dest)
             files[path.as_posix()] = model.digest(dest)
+        ordered_dir = staged / ORDERED["directory"]
+        ordered_dir.mkdir()
+        ordered_scratch = scratch / ORDERED["directory"]
+        ordered_scratch.mkdir()
+        ordered_exports = model.export_ordered_cases(tests, ordered_scratch)
+        for name in model.ordered_input_names(DARWIN_ORDERED):
+            original = ordered_exports / name
+            if name in (DARWIN_ORDERED["object_file"], DARWIN_ORDERED["raw_object_file"]):
+                model.check_macho(original, MODEL["object_kind"], DARWIN_ORDERED["subtype"])
+            shutil.copyfile(original, ordered_dir / name)
         model.write_json(staged / CONFIG["manifest"], {**input_identity(), "exporter_sha256": model.digest(tests),
-                                                       "files": files})
+                                                       "files": files, ORDERED["inputs"]: ordered_identity(ordered_dir)})
         staged.rename(output)
 
 
-def checked_inputs(directory):
+def checked_inputs(directory, *, require_ordered=False):
     manifest = json.loads((directory / CONFIG["manifest"]).read_text())
     if (not isinstance(manifest, dict) or not isinstance(manifest.get("exporter_sha256"), str) or
             not re.fullmatch(CONFIG["digest_pattern"], manifest["exporter_sha256"]) or
             any(manifest.get(k) != v for k, v in input_identity().items()) or
             manifest.get("files") != {p.as_posix(): model.digest(directory / p) for p in inventory()}):
         raise ValueError(CONFIG["errors"]["inputs"])
+    if require_ordered or ORDERED["inputs"] in manifest:
+        if (ORDERED["inputs"] not in manifest or
+                manifest[ORDERED["inputs"]] != ordered_identity(directory / ORDERED["directory"])):
+            raise ValueError(CONFIG["errors"]["ordered_inputs"])
     return manifest
 
 
@@ -152,14 +175,25 @@ def measure_image(family, route, opt, inputs, directory, capable, launchable):
         return receipt
 
 
-def projection_cursor(output, report, require_native):
+def checked_probe(directory, controls, mode):
+    receipt = controls["probes"][mode]
+    raw = (directory / receipt["report"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != receipt["sha256"]:
+        raise ValueError(CONFIG["errors"]["control_identity"])
+    probe = json.loads(raw)
+    if probe["source_revision"] != controls["source_revision"]:
+        raise ValueError(CONFIG["errors"]["control_identity"])
+    return probe
+
+
+def projection_controls(output, report, require_native):
     filename = native.POLICY["report_name"]
     if not require_native:
         directory = output / X1["mode"]
         directory.mkdir()
         cursor = native.probe_x1_signal_cursor(directory)
         report["cursor_sha256"] = model.digest(directory / filename)
-        return cursor
+        return cursor, None
 
     gate = native.POLICY["x1_qualification"]
     directory = output / gate["complete_mode"]
@@ -175,20 +209,38 @@ def projection_cursor(output, report, require_native):
         raise ValueError(CONFIG["errors"]["control_identity"])
     report[gate["complete_key"]] = controls[gate["complete_key"]]
     if controls["status"] == native.POLICY["failed"]:
-        return None
-    receipt = controls["probes"][X1["mode"]]
-    raw = (directory / receipt["report"]).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != receipt["sha256"]:
+        return None, None
+    cursor = checked_probe(directory, controls, X1["mode"])
+    report["cursor_sha256"] = controls["probes"][X1["mode"]]["sha256"]
+    policy = native.POLICY["ordered_probe"]
+    ordered = checked_probe(directory, controls, policy["mode"])
+    if ordered[policy["qualified_key"]] != controls[policy["qualified_key"]]:
         raise ValueError(CONFIG["errors"]["control_identity"])
-    cursor = json.loads(raw)
-    if cursor["source_revision"] != report["source_revision"]:
-        raise ValueError(CONFIG["errors"]["control_identity"])
-    report["cursor_sha256"] = receipt["sha256"]
-    return cursor
+    return cursor, ordered
+
+
+def measure_ordered(inputs, output, manifest):
+    directory = output / ORDERED["directory"]
+    with tempfile.TemporaryDirectory(dir=output) as temporary:
+        guests = Path(temporary) / MODEL["staging_directory"]
+        model.link_ordered(inputs / ORDERED["directory"], manifest["exporter_sha256"], guests, native=True)
+        identity = guests / MODEL["manifest"]
+        if json.loads(identity.read_bytes())["exports"] != manifest[ORDERED["inputs"]]["files"]:
+            raise ValueError(CONFIG["errors"]["ordered_inputs"])
+        try:
+            model.run_native_ordered(guests, directory)
+        finally:
+            if directory.is_dir():
+                shutil.copyfile(identity, directory / MODEL["manifest"])
+    path = directory / MODEL["report"]
+    raw = path.read_bytes()
+    result = json.loads(raw)
+    return {"report": path.relative_to(output).as_posix(), "sha256": hashlib.sha256(raw).hexdigest(),
+            **{key: result[key] for key in (DARWIN_ORDERED["gpr_key"], DARWIN_ORDERED["simd_key"])}}
 
 
 def check(inputs, output, require_execution=False, *, require_native=False):
-    manifest = checked_inputs(inputs)
+    manifest = checked_inputs(inputs, require_ordered=require_native)
     output.mkdir()
     gate = native.POLICY["x1_qualification"]
     report = {"source_revision": manifest["source_revision"], "exporter_sha256": manifest["exporter_sha256"],
@@ -197,11 +249,19 @@ def check(inputs, output, require_execution=False, *, require_native=False):
     if require_native:
         report[CONFIG["qualified_key"]] = False
     try:
-        cursor = projection_cursor(output, report, require_native)
+        cursor, ordered = projection_controls(output, report, require_native)
         if cursor is None:
             return native.POLICY["exit_codes"][report["status"]]
         if cursor["status"] == native.POLICY["failed"]:
             raise RuntimeError(CONFIG["errors"]["capability"])
+        ordered_executed = False
+        if ordered is not None and ordered["profiles"]:
+            measured = measure_ordered(inputs, output, manifest)
+            report[ORDERED["receipt"]] = measured
+            ordered_executed = measured[DARWIN_ORDERED["simd_key"]]
+            original_q = ordered[native.POLICY["ordered_probe"]["qualified_key"]]
+            if measured[DARWIN_ORDERED["gpr_key"]] and ordered_executed != original_q:
+                raise ValueError(CONFIG["errors"]["ordered_control"])
         rows = cursor["profiles"].values()
         if not cursor["profiles"] or any("sha256" not in row for row in rows):
             report["status"] = native.POLICY["unavailable"]
@@ -214,7 +274,7 @@ def check(inputs, output, require_execution=False, *, require_native=False):
         report["all_linked"] = True
         report["all_executed"] = all(row["execution"] == CONFIG["executed"] for row in report["images"].values())
         if require_native:
-            passed = report[gate["complete_key"]] and report["all_executed"]
+            passed = report[gate["complete_key"]] and report["all_executed"] and ordered_executed
             report[CONFIG["qualified_key"]] = passed
         else:
             passed = not require_execution or report["all_executed"]

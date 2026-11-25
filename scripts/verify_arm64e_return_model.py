@@ -183,9 +183,26 @@ def ordered_routes(target, profile):
         yield policy["raw_object_route"], target["raw_object_file"], None
 
 
+def ordered_input_names(target):
+    names = {filename for _, filename, _ in ordered_routes(target, target["profile"])}
+    return sorted(names | {CONFIG["ordered"]["dispatch"]})
+
+
+def export_ordered_cases(binary, scratch):
+    policy = CONFIG["ordered"]
+    return export_cases(binary, scratch, [policy["test"]],
+                        policy["artifact_environment"], policy["artifact_property"])[policy["test"]]
+
+
 def build_ordered(binary, output, native=False):
     if output.exists():
         raise FileExistsError(output)
+    with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+        exports = export_ordered_cases(binary, Path(temporary).resolve())
+        link_ordered(exports, digest(binary), output, native=native)
+
+
+def link_ordered(exports, exporter_sha256, output, *, native):
     policy = CONFIG["ordered"]
     target = policy["native"] if native else policy
     triple = target["target"] if native else CONFIG["target"]
@@ -195,19 +212,15 @@ def build_ordered(binary, output, native=False):
     inputs = [policy["driver"], policy["constants"], policy["interface"]]
     inputs.extend([target["driver"], target["probe"]] if native else
                   [CONFIG[key] for key in ("guest_entry", "guest_driver", "guest_constants")])
-    manifest = {"test_binary_sha256": digest(binary), "guests": {},
+    manifest = {"test_binary_sha256": exporter_sha256, "guests": {},
                 "ordered_profile": target["profile"],
                 "fixtures": {policy["fixture"]: digest(fixtures / policy["fixture"])},
-                "sources": {name: digest(source / name) for name in inputs}}
+                "sources": {name: digest(source / name) for name in inputs},
+                "exports": {name: digest(exports / name) for name in ordered_input_names(target)}}
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         scratch = Path(temporary).resolve()
         staged = scratch / CONFIG["staging_directory"]
         staged.mkdir()
-        exports = export_cases(binary, scratch, [policy["test"]],
-                               policy["artifact_environment"], policy["artifact_property"])[policy["test"]]
-        routes = list(ordered_routes(target, manifest["ordered_profile"]))
-        filenames = {filename for _, filename, _ in routes}
-        manifest["exports"] = {name: digest(exports / name) for name in sorted(filenames | {policy["dispatch"]})}
         flags = [*CONFIG["driver_flags"], policy["alignment_flag"]]
         if not native:
             flags.append(policy["define"])
@@ -224,7 +237,7 @@ def build_ordered(binary, output, native=False):
         if native:
             probe = scratch / (Path(target["probe"]).stem + CONFIG["test_object_extension"])
             compile_object(source / target["probe"], probe, flags, triple)
-        for label, filename, optimization in routes:
+        for label, filename, optimization in ordered_routes(target, manifest["ordered_profile"]):
             obj = exports / filename
             if optimization:
                 obj = scratch / (label + CONFIG["test_object_extension"])
@@ -273,8 +286,8 @@ def run_native_ordered(guests, output):
             raise ValueError(target["inconsistent"])
         result["observations"][name] = item
     first = result["observations"][names[0]]
-    result["gpr_executed"] = first["exit_code"] == 0
-    result["simd_executed"] = first["records"][0] == target["simd"]
+    result[target["gpr_key"]] = first["exit_code"] == 0
+    result[target["simd_key"]] = first["records"][0] == target["simd"]
     write_json(output / CONFIG["report"], result)
     return first["exit_code"]
 

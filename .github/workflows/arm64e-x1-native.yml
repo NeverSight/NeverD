@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build and export the r6 signing projections
+      - name: Export the r6 signing and ordered-memory inputs
         run: python3 scripts/verify_arm64e_x1_projections.py build-r6 --output "$RUNNER_TEMP/inputs"
       - id: inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -48,7 +48,7 @@ jobs:
           artifact-ids: ${{ needs.export.outputs.artifact }}
           merge-multiple: true
           path: ${{ runner.temp }}/${{ env.EVIDENCE }}-inputs
-      - name: Require native controls and generated x1 comparisons on this Mac
+      - name: Require the native controls and generated signing and memory comparisons
         run: |
           ulimit -c 0
           python3 scripts/verify_arm64e_x1_projections.py check --require-native \
