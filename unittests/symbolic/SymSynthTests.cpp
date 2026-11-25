@@ -121,6 +121,29 @@ SynthOptions quick() {
 // What the measurement cannot reach
 //===----------------------------------------------------------------------===//
 
+TEST(SymSynth, GridColumnsRespectVariableWidthsAndMissingInputs) {
+  for (unsigned Width : {8u, 17u, 32u, 64u, 65u, 129u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    const auto Root = C.mkAdd(C.mkXor(X, C.mkRol(Y, C.mkConst(Width, 1))), Z);
+    const auto Slice = C.mkExtract(Root, Width - 7, 7);
+    const uint32_t Columns[] = {C.varId(Y), C.varId(X)};
+    const llvm::APInt Wide = llvm::APInt::getOneBitSet(143, 128) +
+                             llvm::APInt::getOneBitSet(143, Width - 1) + 37;
+    const synth::SamplePoint Grid[] = {{Wide, llvm::APInt(7, 93)},
+                                       {-Wide, llvm::APInt(7, 11)}};
+    const auto Values = synth::evaluateOnGrid(C, Root, Columns, Grid);
+    const auto Slices = synth::evaluateOnGrid(C, Slice, Columns, Grid);
+    for (auto [I, Point] : llvm::enumerate(Grid)) {
+      const auto Expected =
+          Point[1].zext(Width) ^ Point[0].trunc(Width).rotl(1);
+      EXPECT_EQ(Values[I], Expected);
+      EXPECT_EQ(Slices[I], Expected.extractBits(7, Width - 7));
+    }
+  }
+}
+
 TEST(SymSynth, RecoversAFormBehindTwoSpellingsOfOneShift) {
   // `(x >> 2) >> 2` and `x >> 4` are the same value written two ways.  The MBA
   // measurement sees two unrelated opaque inputs and reports their sum, which

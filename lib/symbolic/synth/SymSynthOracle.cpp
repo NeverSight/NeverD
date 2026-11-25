@@ -393,18 +393,28 @@ Signature evaluateOnGrid(const SymContext &Ctx, SymRef R,
                          llvm::ArrayRef<SamplePoint> Grid) {
   SymEvalPlan Plan(Ctx, R);
 
-  std::vector<llvm::APInt> Assignment;
-  Assignment.reserve(Ctx.numVars());
-  for (size_t I = 0; I < Ctx.numVars(); ++I)
-    Assignment.emplace_back(Ctx.varInfo(uint32_t(I)).Width, 0);
-
+  // Bind each variable to its grid column once. The plan masks native inputs
+  // to their declared width; a wider grid value contributes its low word.
+  llvm::SmallVector<size_t, 16> Columns(Ctx.numVars(), LeafVars.size());
+  for (size_t I = 0; I < LeafVars.size(); ++I)
+    Columns[LeafVars[I]] = I;
+  const unsigned Width = Ctx.width(R);
   Signature Out;
   Out.reserve(Grid.size());
   for (const SamplePoint &Point : Grid) {
-    for (size_t L = 0; L < LeafVars.size(); ++L)
-      Assignment[LeafVars[L]] =
-          Point[L].zextOrTrunc(Ctx.varInfo(LeafVars[L]).Width);
-    Out.push_back(Plan.eval(Assignment));
+    auto lookup = [&](uint32_t Id) -> const llvm::APInt * {
+      const auto Column = Columns[Id];
+      return Column == LeafVars.size() ? nullptr : &Point[Column];
+    };
+    if (Plan.fitsU64()) {
+      const auto Word = Plan.evalU64With([&](uint32_t Id) -> uint64_t {
+        const auto *Value = lookup(Id);
+        return Value ? Value->getRawData()[0] : 0;
+      });
+      Out.emplace_back(Width, Word);
+    } else {
+      Out.push_back(Plan.evalWith(lookup));
+    }
   }
   return Out;
 }
