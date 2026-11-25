@@ -105,7 +105,7 @@
       "sha256": "65c90b770689103d77f63d9f6555f0f57b37cd6ba5181d26cbd98ba34cf31baf"
     }
   },
-  "resource_recovery": "Earlier full runs hit temporary-output space errors and left truncated generated C under /tmp. The final P/E reruns used TMPDIR=/dev/shm/neverd-ud0-tests, passed all 249 tests each and are the only full reports counted above.",
+  "resource_recovery": "Earlier full runs hit temporary-output space errors and left truncated generated C under /tmp. The successful P/E reports listed here used TMPDIR=/dev/shm/neverd-ud0-tests; failed attempts are excluded.",
   "post_qualification_rebase": {
     "code_commit": "f431f0aed322d0d3cd2e94ed4c47788620888a10",
     "base_commit": "e7275d9627",
@@ -154,6 +154,56 @@
       "core_type": "0x20",
       "original_cpu_comparisons": 504,
       "sha256": "e4eef92fa2750a8b390df749a531dff8216b10386f2bc5548e6bf974f309dfd8"
+    }
+  },
+  "latest_integrated_qualification": {
+    "code_commit": "02ef5510b9",
+    "base_commit": "2bda8431f5",
+    "scope": "Subsequent dev commits changed PowerPC, MIPS and RISC-V paths without changing the x86 source or LLVM/Capstone pins. The target binary was rebuilt, and focused and full P/E suites were repeated.",
+    "rebuilt_test_binary_sha256": "29d35e209cd45a545b76d48f450361edeb8c7601e717c86a048dc5faab6403a8",
+    "focused_p": {
+      "file": "ud0-long-r12-final-focused-p.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "fe097849e96c34dd833d4cd0febf0ced9374d6eef809defb18825a528e50c774"
+    },
+    "focused_e": {
+      "file": "ud0-long-r12-final-focused-e.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "4d9c10bd4d03948bcb5725cbc9572ebbd91f4c44595525d0b47b67d6cb3b1694"
+    },
+    "full_p": {
+      "file": "ud0-long-r12-final-full-p.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "d7354d4b87c06993c459e3502d6dc69a4779d9868b54ba0e4c08b20786618f16"
+    },
+    "full_e": {
+      "file": "ud0-long-r12-final-full-e.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "4df31003888555d4a4bc3730462487fd4eb808f18dd000d347354064669ebc2c"
     }
   },
   "release_gate": {
