@@ -14,6 +14,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <map>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -21,7 +22,8 @@
 
 namespace neverd {
 struct BinaryImage;
-}
+struct LowFunc;
+} // namespace neverd
 
 namespace neverd::med_calling_conv_detail {
 
@@ -128,11 +130,16 @@ bool liveInReachesLiveUse(const MedFunc &Func, uint64_t RegOff);
 /// `push {r2, r3, ...}` reserves for locals, and /Od homes no code reads
 /// back.  Removes the stores that save them, whose bytes nothing sees.
 /// None while a frame address does anything but address the function's own
-/// loads and stores.  ARM only.
-std::set<uint64_t>
-dropOnlySavedArgumentRegisters(MedFunc &Func, Arch TargetArch,
-                               BinaryFormat Format,
-                               llvm::ArrayRef<uint64_t> Regs);
+/// loads and stores.  A slot a filter or termination handler of \p Image,
+/// among the lifted \p Bodies or else decoded, reads through the frame
+/// registers the unwinder restores, where it may still hold the register,
+/// is read; where such a handler may reach the frame some other way, or
+/// \p Image is null, or the function runs C++'s catch and unwind funclets,
+/// none is only saved.  ARM only.
+std::set<uint64_t> dropOnlySavedArgumentRegisters(
+    MedFunc &Func, Arch TargetArch, BinaryFormat Format,
+    llvm::ArrayRef<uint64_t> Regs, const BinaryImage *Image,
+    const std::map<va_t, const LowFunc *> *Bodies);
 
 /// Remove the store of a prologue's `push ecx` that only makes room for a local
 /// the function writes before it reads, and the register's live-in if nothing

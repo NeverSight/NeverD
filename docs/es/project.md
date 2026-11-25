@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4c0ed7ca84efc8f7f3ee5cd801e2499490dac190c2b43ef483af276e90381b75 -->
+<!-- i18n-source: cc524e2ef5f646079f8605cb37ff35db8589f473f5a0400471da98f1926a4c2b -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Consulta las guías de [EVM](evm.md), [Solana SBF](sbf.md), [recuperación de c�
 
 > Todas las celdas de la matriz están implementadas, pero la profundidad de las pruebas de integración varía. Consulte la [matriz de cobertura de arquitectura](architecture.md#support-and-test-depth). Mach-O i386 usa objetos reubicables `thin` porque macOS moderno no puede enlazar ejecutables i386 históricos.
 
-**MIPS ELF** admite desensamblado, recuperación del flujo de control y salida en C y LLVM. El SDK recompila las funciones compatibles en objetos ELF reubicables con el backend Mips de LLVM de NeverSight. Conserva el orden de bytes y la convención de llamada o32, n32 o n64. Para insertar el código en un ejecutable, el parcheador aún necesita un escritor de ELF para MIPS. [Perfiles MIPS y salida nativa (inglés)](../mips.md)
+**MIPS ELF** admite desensamblado, recuperación del flujo de control y salida en C y LLVM. El SDK recompila las funciones compatibles en objetos ELF reubicables con el backend Mips de LLVM de NeverSight. Conserva el orden de bytes y la convención de llamada o32, n32 o n64. Con los objetos originales y el guion de enlace de un ejecutable estático, `neverd patch --relink` permite colocar la función actualizada en una sección independiente o conservar su dirección sin exceder su tamaño original. [Perfiles MIPS y salida nativa (inglés)](../mips.md)
 
 Los destinos ELF de enteros experimentales admiten la traducción estricta de instrucciones, la recuperación del grafo de control y la generación de C estructurado, IR de LLVM y C derivado de ese IR.
 

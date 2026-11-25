@@ -960,6 +960,35 @@
         }
       }
     },
+    "DispatcherQueueRuntime": {
+      "module": "coremessaging.dll",
+      "headers": [
+        "DispatcherQueue"
+      ],
+      "c_headers": [
+        "windows.system"
+      ],
+      "exports": {
+        "CreateDispatcherQueueController": 2
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "873ac56faedf6e1523fcc2b6a6af4416eaf560357967acb86615cb12c2e27af3",
+          "additional_exports": {},
+          "import_library": "CoreMessaging.lib"
+        },
+        "x64": {
+          "image_sha256": "d71234fc4cb49dbb755c902815646067d750edb4054e463cb51cdac43ffdf687",
+          "additional_exports": {},
+          "import_library": "CoreMessaging.lib"
+        },
+        "arm64": {
+          "image_sha256": "dc0a9cc428bcb6b20d10231b56af7c4d566bf9c3c8035e5c8640c8f47f4b711f",
+          "additional_exports": {},
+          "import_library": "CoreMessaging.lib"
+        }
+      }
+    },
     "DmprocessxmlfilteredRuntime": {
       "module": "dmprocessxmlfiltered.dll",
       "headers": [
@@ -2611,6 +2640,29 @@
         },
         "arm64": {
           "image_sha256": "ad57f7437839c0a01ea8cc0966e45f3adc2f757ba6f921749f66c4dd41e2d797",
+          "additional_exports": {}
+        }
+      }
+    },
+    "PresentationFactoryRuntime": {
+      "module": "dcomp.dll",
+      "headers": [
+        "presentation"
+      ],
+      "exports": {
+        "CreatePresentationFactory": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "637b3f3e3b428b4bdcbf852c31d5ebe7189e4b5075f9be7aaf9cc3056561fdb8",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "77d500b017a41b32d527e72074fe65246e036155449e881fc03504b8af0f1b73",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "a9230e8de67934393aa3ecaaa73a7b8b34b91497707b0790ac16fc1576cbf67b",
           "additional_exports": {}
         }
       }

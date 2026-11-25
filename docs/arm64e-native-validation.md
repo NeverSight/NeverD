@@ -2438,8 +2438,13 @@ backend function for the same word. The guest checks each byte residue, both
 SIMD lanes, signed and unsigned results, guard bytes and precise alignment
 aborts at EL0 and EL1. It reads back both FEAT_LSE2 and the alignment controls.
 The preceding `build-ordered` and `run-ordered` commands build and run this
-matrix. The verifier also replays the earlier five-image GPR/SIMD and Q-only
-manifests using the inventory and completion record for each generation.
+matrix. Each register input is paired with each initial memory pattern. The
+six routes compare 353,280 original and generated pairs across both exception
+levels and four alignment settings. The 128-bit load and store account for
+30,720 of those pairs. Fixing either 64-bit store operand at its first value
+fails on all six routes. Earlier manifests replay with their original
+inventory and completion record.
+[Frozen r6 comparisons and per-key cursor controls](evidence/arm64e-qualification-inputs-2026-11-25.json).
 
 For a supported ordered unscaled access to Normal memory on a PE with
 FEAT_LSE2, pass the effective SCTLR to
@@ -2527,9 +2532,11 @@ opposing PACM modes for two active keys fails the comparison.
 
 `qualify-x1` reports `native_lrcpc3_128_qualified` independently. The SIMD
 GoogleTest, Darwin memory comparison and standalone `probe-lrcpc3` share the
-aligned Q probe. The store and load run in separate children. The store must
-replace both memory lanes. The load must replace both register lanes with
-distinct values and preserve memory. Both saved PCs and instruction words
+aligned Q probe. The store and load run in separate children. Each runs four
+combinations of memory and register contents. The store must replace both
+memory lanes and preserve its source register. The load must return both
+memory lanes and preserve memory. Both operations check the two neighboring
+quadwords. Both saved PCs and instruction words
 must match to report SIGILL as unavailable. The baseline control also executes
 an identical undefined word at an unrelated address.
 
@@ -2557,7 +2564,52 @@ signer's instruction address. Mixed availability or disagreement between O0
 and O2 fails the probe. The public cursor reports `pacm_hint_qualified` when
 both signing keys are active and neither PC control distinguishes any of the
 samples at either optimization. PC-sensitive PACM requires both controls to
-distinguish samples for both keys at both optimizations.
+distinguish samples for both keys at both optimizations. The `completed` pair
+counts full frame walks under IA and IB. Each key must complete 64 samples
+per recipe at each optimization, including the zero signing-PC cases. Counts
+of observed signature differences can be lower because PAC collisions are
+valid.
+
+On integrated dev, the macOS 26 and Xcode 27 runners completed 64 walks for
+each key at O0 and O2 in PACM HINT mode. Both rejected shortening either
+key's sweep to 63. The macOS 15 runner skipped the two cursor controls before
+process entry. All three reported a virtual M1. The five native x1 feature
+checks remain open on these runners. [Hosted run](https://github.com/gmh5225/test_mac_intel/actions/runs/45579398292)
+and [per-feature results](evidence/arm64e-qualification-inputs-2026-11-25.json).
+
+Use `probe-x1-cursor` to run the same IA and IB frame walks in a signed
+`arm64e.x1` process. The verifier records the Mach-O subtype, signed image
+hash and verified entitlements for each recipe at O0 and O2. The reports
+distinguish a compiler that cannot build the slice, a loader that rejects it
+before entry, and an explicit signer that faults at the measured instruction.
+`probe-cursor` continues to measure the ordinary `arm64e` process.
+
+The Darwin writeback probe and the Arm model share the same `LD1` and `ST1`
+fixture. It crosses 12 register offsets with two initial memory bytes and two
+store values. Each pair checks the loaded byte, stored byte, neighboring bytes
+and both updated bases. Only the original in-bounds address is dereferenced.
+To reproduce the architecture check with the pinned Arm FVP, run
+
+```bash
+python3 scripts/verify_arm64e_return_model.py build-writeback --output writeback-guests
+python3 scripts/verify_arm64e_return_model.py run-writeback \
+  --model /path/to/FVP_Base_RevC-2xAEMvA --guests writeback-guests --output writeback-results
+```
+
+The runner reads back every combination of CPTA, CPTA0, CPTM and CPTM0 and
+requires matching EL1 and EL0 results at O0 and O2. This exercises 6,144
+individual loads and stores. A CPA-only guest must report CPA2 unavailable.
+Darwin regression controls also replace the load or store with a fixed value
+and require both optimizations to reject each substitution.
+
+The integrated Xcode 27 job built and signed both x1 cursor executables.
+Darwin returned `EBADARCH` before entry for both recipes at O0 and O2 on its
+virtual M1. The macOS 15 and macOS 26 compilers rejected the x1 architecture.
+Ordinary arm64e completed 64 PACM HINT walks per key and optimization on
+macOS 26 and Xcode 27. On the Arm model, forcing unchecked writeback failed
+at EL1, and selecting the EL1 control for EL0 failed at EL0.
+[Hosted run](https://github.com/gmh5225/test_mac_intel/actions/runs/45585703758)
+and [model and per-slice results](evidence/arm64e-x1-cursor-writeback-2026-11-25.json).
 
 The CPTA probe builds arm64, arm64e and arm64e.x1 at O0 and O2. Each scalar
 instruction runs in its own process with four input vectors. A SIGILL counts
@@ -2599,13 +2651,16 @@ On an M6 Mac with an arm64e.x1-capable Apple SDK and operating system, run:
 python3 scripts/verify_arm64e_native.py qualify-x1 --output native-x1
 ```
 
-The probe compiles fresh O0/O2 signing/cursor controls, checks actual signatures
-and PC sensitivity, signs an arm64e.x1 slice with the required Enhanced Security
-entitlements, and measures checked scalar arithmetic and ordinary writeback.
+The probe compiles O0/O2 cursor controls for ordinary arm64e and arm64e.x1,
+checks signatures and PC sensitivity, and measures checked scalar arithmetic
+and ordinary writeback. Both x1 probes sign their slices with the required
+Enhanced Security entitlements.
 It also requires the original authenticated call and language-unwind controls.
-The top report records the SHA-256 of each of the four component reports.
+The top report records the SHA-256 of all five component reports.
 The x1 result requires the call, unwind, cursor and checked-pointer controls.
-The Q result records 128-bit LRCPC3 separately. Exit 2 records an unavailable
+The Q result records 128-bit LRCPC3 separately.
+`native_arm64e_x1_and_lrcpc3_qualified` requires both results from the same run.
+Exit 2 records an unavailable
 environment and exit 1 records failure. The verifier retains the reports and
 removes the temporary executables and entitlements.
 

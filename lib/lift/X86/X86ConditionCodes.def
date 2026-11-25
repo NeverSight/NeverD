@@ -1,0 +1,30 @@
+//===- X86ConditionCodes.def - x86 conditional instruction forms ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Condition suffix and four-bit encoding shared by Jcc, SETcc and CMOVcc
+/// and the APX SETZUcc and CFCMOVcc forms.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_X86_CONDITION(O, 0x0)
+NEVERD_X86_CONDITION(NO, 0x1)
+NEVERD_X86_CONDITION(B, 0x2)
+NEVERD_X86_CONDITION(AE, 0x3)
+NEVERD_X86_CONDITION(E, 0x4)
+NEVERD_X86_CONDITION(NE, 0x5)
+NEVERD_X86_CONDITION(BE, 0x6)
+NEVERD_X86_CONDITION(A, 0x7)
+NEVERD_X86_CONDITION(S, 0x8)
+NEVERD_X86_CONDITION(NS, 0x9)
+NEVERD_X86_CONDITION(P, 0xa)
+NEVERD_X86_CONDITION(NP, 0xb)
+NEVERD_X86_CONDITION(L, 0xc)
+NEVERD_X86_CONDITION(GE, 0xd)
+NEVERD_X86_CONDITION(LE, 0xe)
+NEVERD_X86_CONDITION(G, 0xf)
+
+#undef NEVERD_X86_CONDITION

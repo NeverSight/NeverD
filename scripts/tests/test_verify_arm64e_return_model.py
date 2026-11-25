@@ -97,5 +97,8 @@ class ModelProfileTests(unittest.TestCase):
         self.assertEqual(list(model.ordered_routes(policy, policy["quadword_profile"])), previous)
         self.assertEqual(list(model.ordered_routes(policy, policy["profile"])),
                          [*previous, (policy["raw_object_route"], policy["raw_object_file"], None)])
+        for target in (policy, policy["native"]):
+            self.assertEqual(list(model.ordered_routes(target, target["profile"])),
+                             list(model.ordered_routes(target, target["fixed_input_profile"])))
         with self.assertRaises(ValueError):
             list(model.ordered_routes(policy["native"], policy["quadword_profile"]))

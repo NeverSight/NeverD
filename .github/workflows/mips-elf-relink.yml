@@ -1,0 +1,151 @@
+name: MIPS ELF relink
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/mips-elf-relink-patch', dev]
+    paths:
+      - '.github/workflows/mips-elf-relink.yml'
+      - 'scripts/check_mips_elf_relink.py'
+      - 'tools/neverd/CMakeLists.txt'
+      - 'tools/neverd/NeverDCLI.h'
+      - 'tools/neverd/NeverDCLIOptions.cpp'
+      - 'tools/neverd/cmd/NeverDCmdPipeline.cpp'
+      - 'tools/neverd/cmd/NeverDCmdRelink.cpp'
+      - 'third_party/llvm-project'
+
+permissions:
+  contents: read
+
+jobs:
+  relink:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, cc: clang-18, cxx: clang++-18}
+          - {os: macos-15, cc: clang, cxx: clang++}
+          - {os: windows-latest, cc: clang-cl, cxx: clang-cl}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 220
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: source
+        name: Identify the NeverSight LLVM fork revision
+        run: echo "llvm=$(git rev-parse HEAD:third_party/llvm-project)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NeverSight/llvm-project
+          ref: ${{ steps.source.outputs.llvm }}
+          path: toolchain-src
+          sparse-checkout: |
+            cmake
+            llvm
+            lld
+            libunwind/include
+            third-party
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes ninja-build clang-18 lld-18 g++-14
+      - if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: brew install ninja
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/Install-WindowsFixtureClang.ps1 -AddToPath
+      - name: Build the fork's MIPS code generator, assembler and linker
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          test "$(git -C toolchain-src rev-parse HEAD)" = "$(git rev-parse HEAD:third_party/llvm-project)"
+          args=()
+          if [[ "$RUNNER_OS" == Linux ]]; then args+=(-DLLVM_USE_LINKER=lld); fi
+          cmake -S toolchain-src/llvm -B build-tools -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS=lld -DLLVM_TARGETS_TO_BUILD=Mips \
+            -DLLVM_ENABLE_RTTI=ON -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_PARALLEL_LINK_JOBS=1 "${args[@]}"
+          cmake --build build-tools --parallel 4 --target llc llvm-mc lld
+      - name: Build the native CLI with the published fork SDK
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          git submodule update --init --depth 1 third_party/capstone signatures third_party/unicorn
+          args=()
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            args+=('-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14')
+          fi
+          cmake -S . -B build-check -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_ENABLE_CPU_EMULATION=OFF \
+            -DNEVERD_ENABLE_WEB_ANALYSIS=OFF "${args[@]}"
+          python scripts/build.py build-check --config Release --parallel 4 --target neverd
+      - name: Relink and verify each ABI in both byte orders
+        run: |
+          suffix=
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          mkdir -p products
+          git rev-parse HEAD > products/neverd.txt
+          git rev-parse HEAD:third_party/llvm-project > products/llvm.txt
+          build-tools/bin/ld.lld$suffix --version | tee products/linker.txt
+          python - <<'PY'
+          from pathlib import Path
+          revision = Path("products/llvm.txt").read_text().strip()
+          assert revision in Path("products/linker.txt").read_text()
+          cache = Path("build-check/CMakeCache.txt").read_text()
+          llvm_dir = next(row.split("=", 1)[1] for row in cache.splitlines() if row.startswith("LLVM_DIR:PATH="))
+          info = (Path(llvm_dir).parents[2] / "BUILDINFO.txt").read_text()
+          assert f"llvm_commit: {revision}" in info, info
+          Path("products/BUILDINFO.txt").write_text(info)
+          PY
+          python scripts/check_mips_elf_relink.py qualify --root products \
+            --neverd build-check/bin/neverd$suffix --mc build-tools/bin/llvm-mc$suffix \
+            --llc build-tools/bin/llc$suffix --lld build-tools/bin/ld.lld$suffix
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: relink-${{ runner.os }}
+          path: products
+          if-no-files-found: error
+
+  execute:
+    needs: relink
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: relink-*
+          path: products
+      - name: Execute the ELF files produced on all three native hosts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes qemu-user
+          for host in Linux macOS Windows; do
+            dir="products/relink-$host"
+            test "$(cat "$dir/neverd.txt")" = "$(git rev-parse HEAD)"
+            python3 scripts/check_mips_elf_relink.py execute --root "$dir"
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: relink-execution
+          path: products/*/execution.json
+          if-no-files-found: error

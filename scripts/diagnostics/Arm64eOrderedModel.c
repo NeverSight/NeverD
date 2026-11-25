@@ -40,7 +40,8 @@ extern uint64_t generatedOrdered(uint32_t Word, uintptr_t Base, uint64_t Lane,
 // Execute the independently assembled fixture word as supplied. Explicit
 // register operands match the encoded Rn and Rt and inform the host compiler
 // about both the inputs and the effects of the original instruction.
-static uint64_t originalOrdered(uint32_t Word, uintptr_t Base, unsigned Lane) {
+static uint64_t originalOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
+                                OrderedValue Input) {
   register uintptr_t X1 __asm__(ORDERED_BASE_REGISTER) = Base;
   switch (Word) {
 #define ORDERED_MEMORY_CASE(Bits, Scratch, Vector, Access, Result, Signed,     \
@@ -51,14 +52,14 @@ static uint64_t originalOrdered(uint32_t Word, uintptr_t Base, unsigned Lane) {
                    ORDERED_REGISTER_ERROR);                                    \
     if (Vector) {                                                              \
       register Quadword V0 __asm__(ORDERED_VECTOR_REGISTER) =                  \
-          (Quadword){ORDERED_STORE_LOW, ORDERED_STORE_HIGH};                   \
+          (Quadword){Input.Low, Input.High};                                   \
       __asm__ volatile(ORDERED_INSTRUCTION                                     \
                        : "+w"(V0)                                              \
                        : "r"(X1), [encoding] "i"(Bits)                         \
                        : "memory");                                            \
       return V0[Lane];                                                         \
     }                                                                          \
-    register uint64_t X0 __asm__(ORDERED_DATA_REGISTER) = ORDERED_STORE_LOW;   \
+    register uint64_t X0 __asm__(ORDERED_DATA_REGISTER) = Input.Low;           \
     __asm__ volatile(ORDERED_INSTRUCTION                                       \
                      : "+r"(X0)                                                \
                      : "r"(X1), [encoding] "i"(Bits)                           \
@@ -71,11 +72,10 @@ static uint64_t originalOrdered(uint32_t Word, uintptr_t Base, unsigned Lane) {
 }
 
 uint64_t accessOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
-                       bool Original) {
+                       OrderedValue Input, bool Original) {
   if (Original)
-    return originalOrdered(Word, Base, Lane);
-  return generatedOrdered(Word, Base, Lane, ORDERED_STORE_LOW,
-                          ORDERED_STORE_HIGH);
+    return originalOrdered(Word, Base, Lane, Input);
+  return generatedOrdered(Word, Base, Lane, Input.Low, Input.High);
 }
 
 static uint64_t expectedLane(const OrderedCase *Case, const uint8_t *Address,
@@ -92,11 +92,12 @@ static uint64_t expectedLane(const OrderedCase *Case, const uint8_t *Address,
 }
 
 static bool checkAccess(const OrderedCase *Case, unsigned Residue,
-                        bool Original, unsigned Mode, unsigned EL) {
+                        OrderedValue Input, unsigned Seed, bool Original,
+                        unsigned Mode, unsigned EL) {
   _Alignas(ORDERED_QUAD_BYTES)
       uint8_t Bytes[ORDERED_QUAD_BYTES * ORDERED_GUARD_QUADS];
   for (unsigned I = 0; I != sizeof(Bytes); ++I)
-    Bytes[I] = (uint8_t)(I * ORDERED_DATA_STEP + ORDERED_DATA_SEED);
+    Bytes[I] = (uint8_t)(I * ORDERED_DATA_STEP + Seed);
   uint8_t *Address = Bytes + ORDERED_QUAD_BYTES + Residue;
   const uintptr_t Base = (uintptr_t)Address - Case->Offset;
   const bool Load = Case->ResultBytes != 0;
@@ -108,8 +109,8 @@ static bool checkAccess(const OrderedCase *Case, unsigned Residue,
   for (unsigned Lane = 0; Lane != Lanes; ++Lane) {
     OrderedAbort Abort;
     uint64_t Result;
-    if (observeOrdered(Case->Word, Base, Lane, Original, ExpectFault, &Result,
-                       &Abort) != ExpectFault)
+    if (observeOrdered(Case->Word, Base, Lane, Input, Original, ExpectFault,
+                       &Result, &Abort) != ExpectFault)
       return false;
     if (ExpectFault) {
       const uint64_t ESR = Abort.ESR;
@@ -126,12 +127,11 @@ static bool checkAccess(const OrderedCase *Case, unsigned Residue,
     }
   }
   for (unsigned I = 0; I != sizeof(Bytes); ++I) {
-    uint8_t Expected = (uint8_t)(I * ORDERED_DATA_STEP + ORDERED_DATA_SEED);
+    uint8_t Expected = (uint8_t)(I * ORDERED_DATA_STEP + Seed);
     const ptrdiff_t Pos = Bytes + I - Address;
     if (!Load && !ExpectFault && Pos >= 0 && (size_t)Pos < Case->Width) {
-      const uint64_t Half = Pos < (ptrdiff_t)sizeof(uint64_t)
-                                ? ORDERED_STORE_LOW
-                                : ORDERED_STORE_HIGH;
+      const uint64_t Half =
+          Pos < (ptrdiff_t)sizeof(uint64_t) ? Input.Low : Input.High;
       Expected = (uint8_t)(Half >> ((Pos % sizeof(Half)) * __CHAR_BIT__));
     }
     if (Bytes[I] != Expected)
@@ -141,17 +141,22 @@ static bool checkAccess(const OrderedCase *Case, unsigned Residue,
 }
 
 int compareOrdered(unsigned Mode, unsigned EL, bool WithSIMD) {
+  static const OrderedValue Inputs[] = ORDERED_REGISTER_INPUTS;
+  static const uint8_t Seeds[] = ORDERED_DATA_SEEDS;
   int Check = 0;
   for (unsigned I = 0; I != ORDERED_CASE_COUNT; ++I) {
     if (Cases[I].Vector && !WithSIMD)
       continue;
     for (unsigned Residue = 0; Residue != ORDERED_QUAD_BYTES; ++Residue)
-      for (unsigned Original = 0; Original != ORDERED_SOURCE_COUNT;
-           ++Original) {
-        ++Check;
-        if (!checkAccess(&Cases[I], Residue, Original, Mode, EL))
-          return Check;
-      }
+      for (size_t R = 0; R != sizeof(Inputs) / sizeof(*Inputs); ++R)
+        for (size_t M = 0; M != sizeof(Seeds) / sizeof(*Seeds); ++M)
+          for (unsigned Original = 0; Original != ORDERED_SOURCE_COUNT;
+               ++Original) {
+            ++Check;
+            if (!checkAccess(&Cases[I], Residue, Inputs[R], Seeds[M], Original,
+                             Mode, EL))
+              return Check;
+          }
   }
   return 0;
 }

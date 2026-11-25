@@ -1338,6 +1338,11 @@ reserves where a byte store writes what a byte load reads, keeps r0 where a
 return hands it back as it came, and keeps r3 where the saved word is read
 back into r0 or the frame's address goes to a call, and r2 where a word load
 reads bytes no store overwrote.
+`ARM32_SavedRegisters.AHomeAHandlerRunOutOfLineReadsKeepsItsArgument` keeps
+r1's /Od home where a filter or a termination handler reads it through r7,
+or where a filter reads the establisher frame, and lets it go where a filter
+reads another word or none, where the parent overwrites the home before the
+protected range, or where a catch-all scope runs no handler.
 `MedVariadic.WindowsARM64VaListPointsAtTheFirstUnnamedRegister` takes a
 Windows ARM64 save area of one, two or three named registers whose first
 unnamed slot's address is kept in a local (`/O0`), formed in an argument
@@ -1479,6 +1484,8 @@ leaves a parent whose callback reads the parent's x19 without pads, and
 that view only, and `SourceViewKeepsAFilterThatReturnsNoValue` keeps a filter
 whose lifted body returns no value out. `COFFExceptionIR.LLVMCAnalysisOnlySEHInventsNoCatchAll` checks
 that SEH no form lowers prints no `__try` and no catch-all.
+`COFFExceptionIR.NativeSEHHandlerReadsTheCatchPadExceptionCode` plans the
+patch of a pad that stores its exception code before its dispatch anchor.
 `COFFExceptionIR.NativeSEHRangeMarkersFollowTheBlockLayout` (in
 `NeverDLiftTests`) frees blocks in a shuffled order before it lowers a guarded
 range with four returns, so the block pointers stop following the layout; the
@@ -9267,9 +9274,10 @@ read declarations. `ReturnContracts.ACalleeAndTheCallerThatHandsItsResultBackRet
 `ACalleeNoPathShowsMeansNoValueWaitsForItsCaller` and
 `AFunctionThatReturnsWhatItsOwnCallReturnsShowsNothing` cover how a callee and
 the callers that hand its result back are settled together;
-`AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt` and
-`AnotherRegisterAsEnteredShowsNothing` what a register handed back as the
-function entered it means;
+`AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt`,
+`AnotherRegisterAsEnteredShowsNothing` and
+`AJoinArmNoWriteReachesIsTheRegisterAsItEntered` what a register handed back
+as the function entered it means, on a join's arm too;
 `AConstantBesideAPathThatNeverWroteTheRegisterIsNoValue`,
 `AConstantBesideTheResultOfAFunctionThatReturnsNoneIsNot` and
 `AConstantIsADeliberateValue` what a constant beside a path that hands back
@@ -9293,7 +9301,10 @@ disconnected blocks and the provenance of indirect edges.
 same contract when the arms jump or fall through to a shared return. It
 covers reordered PHI inputs, values from the wrong predecessor, narrow
 inputs, stores, exceptional entry and the actual targets of an indirect
-branch. `ReturnContract.SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge`
+branch. `ReturnContracts.AChoiceBeforeAConditionalAdjustmentSelectsAValue`
+follows the arms into a join through the block that begins it and has
+another way out, which `ReturnContract.SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot`
+also needs once its bare path shows the register as it entered. `ReturnContract.SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge`
 executes both C outputs on all three paths to a single x86-64 return and
 on MIPS64 branches that materialize the results through temporaries before
 a shared delayed return.
@@ -21814,7 +21825,10 @@ callback keeps a call's value in such a slot and returns it,
 `ATemporaryNothingElseTouchesCarriesTheCallOnce` carries it through a
 temporary to its one read, and `ACallBetweenATemporaryAndItsReadRunsInOrder`
 keeps the callback's call where another call runs between the write and the
-read.
+read. `AFrameKeptInAWordNothingReadsLetsTheTemporaryGo` carries it the same
+way beside the frame address the parent keeps in a word nothing reads, and
+`AKeptFrameThatLeavesKeepsTheTemporary` keeps the callback where the parent
+reads that word back and stores it elsewhere.
 `ARM64SEHLocalUnwindTests.cpp` builds MSVC ARM64 /O0 parents that reach the
 import through a veneer: `ARM64SEHLocalUnwind.*` certifies the exit through
 an unrecorded veneer from the saved entry stack pointer, with the handler

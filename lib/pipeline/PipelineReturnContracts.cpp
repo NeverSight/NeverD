@@ -944,6 +944,8 @@ static LiteralArms literalReturnArms(const FunctionFacts &F,
     const PhiNode *CommonComputation;
     const MedVar *Whole = nullptr;
     unsigned ByteOffset = 0;
+    /// The join that begins Block, followed for its arms alone.
+    const PhiNode *Join = nullptr;
   };
   llvm::SmallVector<IncomingResult, 8> Pending;
   for (const auto &Site : F.Returns)
@@ -953,10 +955,14 @@ static LiteralArms literalReturnArms(const FunctionFacts &F,
       Pending.push_back({Site.Block, &*Site.Value,
                          llvm::maskTrailingOnes<uint64_t>(8 * Bytes), nullptr});
 
-  // Every predecessor followed here has one successor leading to a return.
-  // These chains can merge, but cannot cycle or lead to two different exits.
+  // Every predecessor followed here has one successor leading to a return,
+  // or begins the join whose value it hands on: a block with another way out
+  // holds that value on this one too, so the choice the join makes is
+  // observable where this way returns it (`if (c) v += 7;` before a shared
+  // return).  Chains through such joins can cycle, so each is followed once.
+  llvm::SmallPtrSet<const PhiNode *, 4> Joins;
   while (!Pending.empty()) {
-    const auto [Block, Result, Mask, Common, Whole, ByteOffset] =
+    const auto [Block, Result, Mask, Common, Whole, ByteOffset, Join] =
         Pending.pop_back_val();
     const unsigned Needed =
         Whole ? Result->Size
@@ -976,11 +982,27 @@ static LiteralArms literalReturnArms(const FunctionFacts &F,
       if (static_cast<unsigned>(Id) >= Func.Blocks.size())
         return;
       const MedBlock &Pred = Func.Blocks[Id];
-      if (Pred.Succs.size() == 1 && Pred.Succs.front() == Block->Id &&
-          Pred.ExceptionalSuccs.empty())
+      if (!Pred.ExceptionalSuccs.empty())
+        return;
+      if (Pred.Succs.size() == 1 && Pred.Succs.front() == Block->Id) {
         Pending.push_back(
             {&Pred, &Incoming, Bits, Computation, Parent, Offset});
+        return;
+      }
+      if (Parent || !llvm::is_contained(Pred.Succs, Block->Id))
+        return;
+      for (const PhiNode &Phi : Pred.Phis)
+        if (!Phi.ExceptionalEntry && Phi.Output == Incoming &&
+            Phi.Output.Size == Incoming.Size &&
+            Phi.Output.RegOff == Incoming.RegOff && Joins.insert(&Phi).second)
+          Pending.push_back(
+              {&Pred, &Incoming, Bits, Computation, nullptr, 0, &Phi});
     };
+    if (Join) {
+      for (const auto &[Id, In] : Join->Args)
+        Follow(Id, In, Mask, Common, nullptr, 0);
+      continue;
+    }
     if (Block->Phis.empty()) {
       if (const auto V = literalResult(Ops, *Result, TRI, Needed, Ret)) {
         if (Whole) {
@@ -1717,8 +1739,11 @@ private:
       // function means none: another register's entry value was copied
       // there, by code whose reason this pass does not know.  A parameter
       // that arrived in the return register of a function that never writes
-      // it is a value where a caller reads it.
-      if (Value.Kind != MedVar::Reg || Value.SSAVer != 0) {
+      // it is a value where a caller reads it.  A join's arm no write
+      // reaches names that value at version -1 where no entry seed defines
+      // version 0, as in a function that takes no parameter there.
+      if (Value.Kind != MedVar::Reg ||
+          (Value.SSAVer != 0 && Value.SSAVer != -1)) {
         Paths.push_back(ReturnedValue::Other);
         return;
       }

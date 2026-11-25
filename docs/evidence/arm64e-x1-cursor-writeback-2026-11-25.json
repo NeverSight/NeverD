@@ -1,0 +1,259 @@
+{
+  "tested_neverd_dev": "9f5becb03464adf13eec763ac1423c29a9092d71",
+  "neverd_pr": "https://github.com/NeverSight/NeverD/pull/2619",
+  "hosted_workflow": "https://github.com/gmh5225/test_mac_intel/actions/runs/45585703758",
+  "llvm_prebuilt_baseline": "neverd-llvm-v23.0.0-r6",
+  "model_writeback": {
+    "version": "11.32+19",
+    "executable_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "guest_manifest_sha256": "9d56f715c9262d5570bcc130dc8c33a02705e772b7a4352c32d3d28983f6adf7",
+    "result_sha256": "a381cdf07e4ba550e0944410fed4bf66e4884476194ee91eb577f7636a3508ab",
+    "guests": {
+      "writeback-O0": "f0d6fc5fe8664f2621446923638430a64bfb0b5254a961931a6dcbb14e9e814d",
+      "writeback-O2": "e517b023e53a26b66b0429d5d7a75a304aa64d7178baed2f3c3af6cc08f06cf2"
+    },
+    "runs": {
+      "writeback-O0-unsupported": {
+        "exit": 1,
+        "records": 1,
+        "last": "WRITEBACK-MODEL CPA2 unavailable"
+      },
+      "writeback-O0": {
+        "exit": 0,
+        "records": 17,
+        "last": "WRITEBACK-MODEL passed EL1 and EL0 writeback"
+      },
+      "writeback-O2": {
+        "exit": 0,
+        "records": 17,
+        "last": "WRITEBACK-MODEL passed EL1 and EL0 writeback"
+      }
+    }
+  },
+  "model_cursor": {
+    "version": "11.32+19",
+    "executable_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "guest_manifest_sha256": "024e8161e93f3fa014c7a874e95fc2ca9adbf48263fc29d3b791e80e6705e7bc",
+    "result_sha256": "fb353cd1ef0d8623c2fedf67f3efef02b6370cd5b4d37d71a5375de279d770a3",
+    "guests": {
+      "cursor-O0": "b2212144891c66fadca0d7d81a92d5ddc7a74c21e6e39059f896684ae836f124",
+      "cursor-O2": "ab9ac735761faac300b8eae1bb68a633150f73d562c6f6ab684116ade6dbba45"
+    },
+    "runs": {
+      "cursor-O0-unsupported": {
+        "exit": 1,
+        "records": 1,
+        "last": "RETURN-MODEL feature mismatch"
+      },
+      "cursor-O0": {
+        "exit": 0,
+        "records": 5,
+        "last": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings"
+      },
+      "cursor-O2": {
+        "exit": 0,
+        "records": 5,
+        "last": "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings"
+      }
+    }
+  },
+  "writeback_matrix": {
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "exception_levels": [
+      0,
+      1
+    ],
+    "control_settings": 16,
+    "register_offsets": 12,
+    "load_initial_values": 2,
+    "store_source_values": 2,
+    "instructions": [
+      "LD1",
+      "ST1"
+    ],
+    "instruction_executions": 6144
+  },
+  "negative_controls": {
+    "frozen": [
+      "WRITEBACK-MODEL controls=0",
+      "WRITEBACK-MODEL EL1 comparison failed"
+    ],
+    "el0": [
+      "WRITEBACK-MODEL controls=0",
+      "WRITEBACK-MODEL EL0 comparison failed"
+    ]
+  },
+  "hosted": {
+    "macos-15": {
+      "hardware": "Apple M1 (Virtual)",
+      "source_revision": "9f5becb03464adf13eec763ac1423c29a9092d71",
+      "report_sha256": "c5d5178128e47803500524ccf616b283572588c0a617c6e1d5665026b1ca66a3",
+      "combined_native_qualified": false,
+      "features": {
+        "128-bit LRCPC3": false,
+        "Two-modifier PAuth_LR on arm64e": false,
+        "PC-sensitive PACM on arm64e": false,
+        "Two-modifier PAuth_LR on arm64e.x1": false,
+        "PC-sensitive PACM on arm64e.x1": false,
+        "PACM HINT with active IA and IB": false,
+        "EL0 checked scalar arithmetic on arm64e.x1": false,
+        "EL0 checked signed-product overflow on arm64e.x1": false,
+        "EL0 checked writeback on arm64e.x1": false
+      },
+      "ordinary_cursor_completed": {},
+      "x1_cursor": {
+        "O0": {
+          "compiler_exit": 1,
+          "recipes": {
+            "pacm": "slice-unavailable",
+            "explicit": "slice-unavailable"
+          }
+        },
+        "O2": {
+          "compiler_exit": 1,
+          "recipes": {
+            "pacm": "slice-unavailable",
+            "explicit": "slice-unavailable"
+          }
+        }
+      },
+      "regressions": {
+        "run": 7,
+        "skipped": 2
+      }
+    },
+    "macos-26": {
+      "hardware": "Apple M1 (Virtual)",
+      "source_revision": "9f5becb03464adf13eec763ac1423c29a9092d71",
+      "report_sha256": "957ec90927740618cb92704634c96d8f8056d90d27bdff7c1f5f071b57ae3aaa",
+      "combined_native_qualified": false,
+      "features": {
+        "128-bit LRCPC3": false,
+        "Two-modifier PAuth_LR on arm64e": false,
+        "PC-sensitive PACM on arm64e": false,
+        "Two-modifier PAuth_LR on arm64e.x1": false,
+        "PC-sensitive PACM on arm64e.x1": false,
+        "PACM HINT with active IA and IB": true,
+        "EL0 checked scalar arithmetic on arm64e.x1": false,
+        "EL0 checked signed-product overflow on arm64e.x1": false,
+        "EL0 checked writeback on arm64e.x1": false
+      },
+      "ordinary_cursor_completed": {
+        "O0-pacm": [
+          64,
+          64
+        ],
+        "O2-pacm": [
+          64,
+          64
+        ]
+      },
+      "x1_cursor": {
+        "O0": {
+          "compiler_exit": -11,
+          "recipes": {
+            "pacm": "slice-unavailable",
+            "explicit": "slice-unavailable"
+          }
+        },
+        "O2": {
+          "compiler_exit": -11,
+          "recipes": {
+            "pacm": "slice-unavailable",
+            "explicit": "slice-unavailable"
+          }
+        }
+      },
+      "regressions": {
+        "run": 7,
+        "skipped": 0
+      }
+    },
+    "xcode-27": {
+      "hardware": "Apple M1 (Virtual)",
+      "source_revision": "9f5becb03464adf13eec763ac1423c29a9092d71",
+      "report_sha256": "6c26a2e8ec3e0c2710001fb91cbf4ba63b697d2b18cf332023d388a4d7e5ff33",
+      "combined_native_qualified": false,
+      "features": {
+        "128-bit LRCPC3": false,
+        "Two-modifier PAuth_LR on arm64e": false,
+        "PC-sensitive PACM on arm64e": false,
+        "Two-modifier PAuth_LR on arm64e.x1": false,
+        "PC-sensitive PACM on arm64e.x1": false,
+        "PACM HINT with active IA and IB": true,
+        "EL0 checked scalar arithmetic on arm64e.x1": false,
+        "EL0 checked signed-product overflow on arm64e.x1": false,
+        "EL0 checked writeback on arm64e.x1": false
+      },
+      "ordinary_cursor_completed": {
+        "O0-pacm": [
+          64,
+          64
+        ],
+        "O2-pacm": [
+          64,
+          64
+        ]
+      },
+      "x1_cursor": {
+        "O0": {
+          "compiler_exit": 0,
+          "recipes": {
+            "pacm": {
+              "outcome": "did-not-start",
+              "errno": 86
+            },
+            "explicit": {
+              "outcome": "did-not-start",
+              "errno": 86
+            }
+          },
+          "cpu_subtype": 2147483660,
+          "image_sha256": "31be21e7953adff034675f919b0f0334e1c30b0ee0bf9277750a2b9db82da1af",
+          "signed_entitlements_verified": true
+        },
+        "O2": {
+          "compiler_exit": 0,
+          "recipes": {
+            "pacm": {
+              "outcome": "did-not-start",
+              "errno": 86
+            },
+            "explicit": {
+              "outcome": "did-not-start",
+              "errno": 86
+            }
+          },
+          "cpu_subtype": 2147483660,
+          "image_sha256": "451438d6db0860a784840673c85686723002b2bd5345a38cc7708d1bf7ded423",
+          "signed_entitlements_verified": true
+        }
+      },
+      "regressions": {
+        "run": 7,
+        "skipped": 0
+      }
+    }
+  },
+  "local_tests": {
+    "arm64e": {
+      "run": 70,
+      "passed": 68,
+      "skipped_before_entry": 2
+    },
+    "companion_passed": 14
+  },
+  "independent_runs": [
+    {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45585263066",
+      "tested_neverd_dev": "468e94af72076aecf0d30b956608b1b30d5f45f9"
+    },
+    {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45585699633",
+      "tested_neverd_dev": "9f5becb03464adf13eec763ac1423c29a9092d71"
+    }
+  ]
+}

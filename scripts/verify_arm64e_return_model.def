@@ -34,6 +34,8 @@
   "guest_entry": "Arm64eReturnModel.S",
   "guest_driver": "Arm64eReturnModel.c",
   "guest_constants": "Arm64eReturnModel.def",
+  "native_policy": "verify_arm64e_native.def",
+  "optimization_option": "-{optimization}",
   "target": "arm64e-apple-macos15",
   "march": "-march=armv8.3-a+pauth",
   "driver_flags": [
@@ -170,6 +172,8 @@
     "output": "--output",
     "build_cursor": "build-cursor",
     "run_cursor": "run-cursor",
+    "build_writeback": "build-writeback",
+    "run_writeback": "run-writeback",
     "build_ordered": "build-ordered",
     "run_ordered": "run-ordered",
     "build_native_ordered": "build-native-ordered",
@@ -181,7 +185,7 @@
   "test_completed": "COMPLETED",
   "cursor": {
     "driver": "Arm64eCursorModel.c",
-    "native_policy": "verify_arm64e_native.def",
+    "native_probe": "cursor_probe",
     "flags": [
       "-std=c11",
       "-Wall",
@@ -191,8 +195,20 @@
     ],
     "define": "-DRETURN_MODEL_CURSOR",
     "name": "cursor-{optimization}",
-    "include_option": "-I",
-    "optimization_option": "-{optimization}"
+    "include_option": "-I"
+  },
+  "writeback": {
+    "driver": "Arm64eWritebackModel.c",
+    "native_probe": "cpta_probe",
+    "define": "-DRETURN_MODEL_WRITEBACK",
+    "name": "writeback-{optimization}",
+    "parameters": {"cluster0.checked_pointer_arithmetic_support_level": 2},
+    "negative_parameters": {"cluster0.checked_pointer_arithmetic_support_level": 1},
+    "record_prefix": "WRITEBACK-MODEL ",
+    "feature_mismatch": "WRITEBACK-MODEL CPA2 unavailable",
+    "control_count": 16,
+    "control_record": "WRITEBACK-MODEL controls={:x}",
+    "passed": "WRITEBACK-MODEL passed EL1 and EL0 writeback"
   },
   "ordered": {
     "define": "-DRETURN_MODEL_ORDERED",
@@ -214,7 +230,8 @@
     "fixture_directory": "unittests/lift/aarch64",
     "fixture": "AArch64OrderedMemoryFixtures.def",
     "include_option": "-I",
-    "profile": "signed-offset-gpr-simd-raw-and-optimized",
+    "profile": "independent-inputs-gpr-simd",
+    "fixed_input_profile": "signed-offset-gpr-simd-raw-and-optimized",
     "previous_profile": "signed-offset-gpr-simd",
     "quadword_profile": "quadword",
     "legacy_passed": "ORDERED-MODEL passed quadword comparisons",
@@ -233,7 +250,8 @@
       "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=0",
       "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=1"
     ],
-    "passed": "ORDERED-MODEL passed GPR and SIMD comparisons",
+    "passed": "ORDERED-MODEL passed independent register and memory inputs",
+    "fixed_input_passed": "ORDERED-MODEL passed GPR and SIMD comparisons",
     "alignment_flag": "-mstrict-align",
     "native": {
       "target": "arm64-apple-macos15",
@@ -242,7 +260,8 @@
       "probe": "Arm64eOrderedQ.c",
       "object_file": "llvm-macho.o",
       "raw_object_file": "llvm-macho-raw.o",
-      "profile": "darwin-signed-offset-gpr-simd-raw-and-optimized",
+      "profile": "darwin-independent-inputs-gpr-simd",
+      "fixed_input_profile": "darwin-signed-offset-gpr-simd-raw-and-optimized",
       "previous_profile": "darwin-signed-offset-gpr-simd",
       "skip_exit": 77,
       "unavailable": "ORDERED-NATIVE LSE2 or LRCPC2 unavailable",

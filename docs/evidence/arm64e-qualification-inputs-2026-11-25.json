@@ -1,0 +1,275 @@
+{
+  "llvm_package": "neverd-llvm-v23.0.0-r6",
+  "ordered_exporter_sha256": "92af450e3ade4106345ebc196adf922d672591c3ac199375efc27cef571076c6",
+  "model": {
+    "version": "11.32+19",
+    "sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168"
+  },
+  "ordered": {
+    "encodings": 115,
+    "q_encodings": 10,
+    "gpr_encodings": 65,
+    "model_pairs": 353280,
+    "q_model_pairs": 30720,
+    "darwin_gpr_pairs": 24960,
+    "model_routes": [
+      "high-O0",
+      "high-O2",
+      "llvm-c-O0",
+      "llvm-c-O2",
+      "llvm-object",
+      "llvm-object-raw"
+    ],
+    "model_profile": "independent-inputs-gpr-simd",
+    "darwin_profile": "darwin-independent-inputs-gpr-simd",
+    "darwin_cpu": "Apple M4 Max",
+    "darwin_native_q": false,
+    "exports": {
+      "high.c": "6b6a9d6cef69715514a301a3e818b3a6aaea787596ab4f69f4876fc2214df7a0",
+      "llvm-arm64e-raw.o": "3f580af884e76812ac0b5c45951d7f8253c0bec97e1238611f65cb256bcbb605",
+      "llvm-arm64e.o": "6cbe69ea6231aa409d2eade4fbc9aacdc22fc54178b429df3f396207c9fce339",
+      "llvm.c": "f3628429ec6edcd91846f08454a8821ecce494ed8b873738566db727bd6b75a9",
+      "ordered-dispatch.c": "f6c96a66578451e76bfe16be41b9bc43c3298d5751c58d87c8d3e8d8e0908799"
+    },
+    "frozen_store_first_mismatch": {
+      "low": {
+        "high-O0": 5765,
+        "high-O2": 5765,
+        "llvm-c-O0": 5765,
+        "llvm-c-O2": 5765,
+        "llvm-object": 5765,
+        "llvm-object-raw": 5765
+      },
+      "high": {
+        "high-O0": 14085,
+        "high-O2": 14085,
+        "llvm-c-O0": 14085,
+        "llvm-c-O2": 14085,
+        "llvm-object": 14085,
+        "llvm-object-raw": 14085
+      }
+    }
+  },
+  "cursor": {
+    "samples_per_key": 64,
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "exception_levels": [
+      "EL0",
+      "EL1"
+    ],
+    "enpacm_settings": 4,
+    "incomplete_sweep_first_mismatch": {
+      "one_sample_both_keys": {
+        "cursor-O0": 68,
+        "cursor-O2": 68
+      },
+      "63_ia_64_ib": {
+        "cursor-O0": 3848,
+        "cursor-O2": 3848
+      },
+      "64_ia_63_ib": {
+        "cursor-O0": 3850,
+        "cursor-O2": 3850
+      }
+    }
+  },
+  "local_python": {
+    "total": 68,
+    "passed": 66,
+    "skipped_before_arm64e_entry": 2,
+    "failed": 0
+  },
+  "receipts": {
+    "ordered_model": {
+      "guest_manifest_sha256": "d95f7027300533db4db40fa8960f60a94dfe5105718395092900c693c46f6ad4",
+      "execution_report_sha256": "126652a3504855c85ef96d9afcf09524502c0a6f610187dfea3f2c5eabf5e0f8"
+    },
+    "ordered_darwin": {
+      "guest_manifest_sha256": "b5adce2c838f8e23c1dc544abc50b52a34e9ec651dbf2d8f774c9a911d312d69",
+      "execution_report_sha256": "7440c7a789db0fbc29d580332b60ab64094e7a2ac795a213580ef9ec1cfd441e"
+    },
+    "cursor_model": {
+      "guest_manifest_sha256": "10b89d22bf288450cbeb35318bc6accdb44b98115b59b6aa2398c6bcc0d5f136",
+      "execution_report_sha256": "8dda50190beafdaedb0a93eadaf883d7c5328b504af5a729d845513ef0c12cf1"
+    }
+  },
+  "native_x1_qualified": false,
+  "hosted_after_merge": {
+    "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/45579398292",
+    "neverd_pull": "https://github.com/NeverSight/NeverD/pull/2616",
+    "controller_pull": "https://github.com/gmh5225/test_mac_intel/pull/14",
+    "controller_revision": "9991c542cf8643687d1f46395b3742bf386617ec",
+    "runners": {
+      "macos-15": {
+        "cpu": "Apple M1 (Virtual)",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": false,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "report_sha256": "4970f0de08634ed397c19b7b528b3d5b3eadd5f900e8d7a062da8cdc8785eb39",
+        "controls_passed": 3,
+        "controls_skipped": 2,
+        "cursor_profiles": {
+          "O0-pacm": {
+            "outcome": "unavailable",
+            "returncode": -9
+          },
+          "O0-explicit": {
+            "outcome": "unavailable",
+            "returncode": -9
+          },
+          "O2-pacm": {
+            "outcome": "unavailable",
+            "returncode": -9
+          },
+          "O2-explicit": {
+            "outcome": "unavailable",
+            "returncode": -9
+          }
+        }
+      },
+      "macos-26": {
+        "cpu": "Apple M1 (Virtual)",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": true,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "report_sha256": "c339240d62d06111809f914a62fa5181270ca15e93a697cb032f520ee4729170",
+        "controls_passed": 5,
+        "controls_skipped": 0,
+        "cursor_profiles": {
+          "O0-pacm": {
+            "outcome": "passed",
+            "completed": [
+              64,
+              64
+            ],
+            "checks": 3880,
+            "signed": [
+              64,
+              64
+            ],
+            "pc_rejected": [
+              0,
+              0
+            ],
+            "recipe_rejected": [
+              0,
+              0
+            ]
+          },
+          "O0-explicit": {
+            "outcome": "unavailable",
+            "returncode": 2
+          },
+          "O2-pacm": {
+            "outcome": "passed",
+            "completed": [
+              64,
+              64
+            ],
+            "checks": 3880,
+            "signed": [
+              64,
+              64
+            ],
+            "pc_rejected": [
+              0,
+              0
+            ],
+            "recipe_rejected": [
+              0,
+              0
+            ]
+          },
+          "O2-explicit": {
+            "outcome": "unavailable",
+            "returncode": 2
+          }
+        }
+      },
+      "xcode-27": {
+        "cpu": "Apple M1 (Virtual)",
+        "qualification": "unavailable",
+        "features": {
+          "128-bit LRCPC3": false,
+          "Two-modifier PAuth_LR": false,
+          "PC-sensitive PACM": false,
+          "PACM HINT with active IA and IB": true,
+          "EL0 checked scalar arithmetic on arm64e.x1": false,
+          "EL0 checked signed-product overflow on arm64e.x1": false,
+          "EL0 checked writeback on arm64e.x1": false
+        },
+        "report_sha256": "9c1cccbf5cb1d786759a52c51695fb4687b2b20c266523056fd7d5d91d0d8558",
+        "controls_passed": 5,
+        "controls_skipped": 0,
+        "cursor_profiles": {
+          "O0-pacm": {
+            "outcome": "passed",
+            "completed": [
+              64,
+              64
+            ],
+            "checks": 3880,
+            "signed": [
+              64,
+              64
+            ],
+            "pc_rejected": [
+              0,
+              0
+            ],
+            "recipe_rejected": [
+              0,
+              0
+            ]
+          },
+          "O0-explicit": {
+            "outcome": "unavailable",
+            "returncode": 2
+          },
+          "O2-pacm": {
+            "outcome": "passed",
+            "completed": [
+              64,
+              64
+            ],
+            "checks": 3880,
+            "signed": [
+              64,
+              64
+            ],
+            "pc_rejected": [
+              0,
+              0
+            ],
+            "recipe_rejected": [
+              0,
+              0
+            ]
+          },
+          "O2-explicit": {
+            "outcome": "unavailable",
+            "returncode": 2
+          }
+        }
+      }
+    },
+    "neverd_revision": "a13ccf8da8ce6f8e28181cd391c52933c4e2df8c"
+  }
+}

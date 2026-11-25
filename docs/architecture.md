@@ -1338,6 +1338,11 @@ table follows the range markers rather than the invokes' unwind edges, so the
 gate also walks the parent's normal edges from its entry and requires the
 markers to leave open at the call exactly the rows that hold the row it ends;
 a block two paths enter with different rows open has no answer and refuses.
+A region dispatch's anchor belongs to the pad right before it and the
+`catchret` right after it; the exception code a pad hands a handler that reads
+it, its `llvm.eh.exceptioncode` of that pad, the casts of it and its stores to
+stack slots, sits between the pad and the anchor as the dispatch's own, and
+anything else there detaches the anchor.
 Rewritten MSVC x64 builds (`/O1` and `/O2`, with and without `/GS`) of a
 `goto` that leaves one or two `__finally` scopes inside a `__try`/`__except`,
 whose termination handlers may raise, print the original's transcript under
@@ -5351,8 +5356,21 @@ enters knowing what each block it guards had written when it began. A join
 nothing reads takes a frame address nowhere, as the frame pointer's at an
 epilogue that pops the register. The stores that save such a register go, and
 its incoming value with them once nothing reads it, so neither C route writes
-an unknown value into the slot. Call recovery still adds a register a callee
-reads as a forwarded argument. The save of r3 gave four parameters to every
+an unknown value into the slot. A filter or a termination handler the runtime
+runs out of line reads the frame too, through the frame registers the unwinder
+restores (`SEHFuncletRegisters`), at those registers plus constants, over the
+body the pipeline lifted, whose switch tables it resolved, or else decoded: a
+byte one reads is read anywhere in its protected range where no store has
+overwritten it, as a load there would. A register restored to what the
+function was entered with addresses its caller's memory, and a frame address
+may go in an argument register to a local unwind, which runs the parent's own
+handlers. Where a handler may reach the frame some other way, moving a frame
+address anywhere else or using the establisher frame or another register it
+was entered with for anything but a save on its own stack, or the function
+runs C++'s catch and unwind funclets or an unknown routine's, no register is
+only saved. MSVC ARM /Od homes a parameter only its filter reads, as
+xframe_eh_dll's `filter(q)` does, and the function took no parameter for it.
+Call recovery still adds a register a callee reads as a forwarded argument. The save of r3 gave four parameters to every
 function that pushes an even count that way: in the EH corpus's ARM images
 890 functions declared parameters their code never reads and 298 do, and
 their calls printed 1,516 placeholders in HighC and print 528, 5,465 in LLVM C
@@ -5672,7 +5690,16 @@ never wrote the result register, where no parameter arrives in it, shows the
 function means no value, and so does a path that hands back what a callee
 left when that callee returned and returns nothing; a constant another path
 holds is then what the code happened to hold (`xor eax, eax` to store a
-zero). A function no path of which shows that, such as one that returns the
+zero). Such a path may end at a join a written path also reaches, where SSA
+names the register's entry value at version -1, a function that takes no
+parameter in the register having no entry seed to define version 0. MSVC
+ARM's `__security_init_cookie` hands back what `QueryPerformanceCounter` left
+only where it seeds the cookie, and `_initterm` what its last initializer
+left only past a nonempty table: 300 functions that return none returned a
+value that way, 168 in the EH corpus's ARM images, 16 in its ARM ELF ones,
+`__do_global_dtors_aux` among them, and 116 Go arm64 runtime routines, and
+the EH corpus printed 1,585 HighC placeholders and prints 1,417, and 7,187
+LLVM C ones and 7,115. A function no path of which shows that, such as one that returns the
 register a parameter arrived in or ends after a call that does not return,
 keeps its value while a caller hands its result back: the caller may be
 returning what it passed. The same holds where the parameter is Go's
@@ -5715,7 +5742,11 @@ A reachable branch whose arms only return distinct integer constants selects
 a result even when another path leaves the register untouched. The arms may
 return separately or pass through successive result PHIs on the way to a
 common return. Each arm must supply its own input, and each block followed
-to the exit must be free of other effects. A partial register write can
+to the exit must be free of other effects. A block that begins a join and
+has another way out hands the join's value on unchanged to each, so the arms
+entering the join are followed through it, each such join once since chains
+through them can cycle: `v = c ? 15 : 10; if (d) v += 7; return v;` selects
+a result, which the way around the adjustment returns as chosen. A partial register write can
 assemble a literal from bytes already defined on that arm. Across a join,
 only differences that survive the shared computation count. Replacing a
 field erases differences in that field. XOR with a scalar literal preserves
@@ -19442,6 +19473,13 @@ file and guest-process execution remain separate capabilities.
 
 ## Where to edit
 
+Some lifters share instruction forms through local tables. PowerPC and
+RISC-V use integer opcode tables. MIPS uses
+`MIPSIntegerOpcodes.def` for classic fields shared with microMIPS and MIPS16
+expansion. x86 uses `X86ConditionCodes.def` for the 16 condition codes across
+jumps, sets and conditional moves. ARM32 groups logical operations and scalar
+transfers in `ARMIntegerForms.def`.
+
 Native reference pages share one immutable `ReferenceImageIndex` per SDK
 session: no-return target classification, relocated code roots and exception
 entry facts. Function entries have their own revisioned, shared sorted vector;
@@ -20886,7 +20924,12 @@ of the callback with one of its two arguments. A write it makes to the
 parent's frame stays in the expression unless nothing else can read those
 bytes: no statement of the parent, no other filter and no handler still out of
 line touches them, and no address of the frame goes anywhere else, as with the
-temporaries MSVC's `/Od` keeps for a filter in its parent's frame. A call in
+temporaries MSVC's `/Od` keeps for a filter in its parent's frame. An address
+a store keeps in a frame word goes nowhere while nothing reads that word: MSVC
+keeps its frame there for `_local_unwind`, which a `__finally`'s jump out calls
+and C writes as a `goto`, and xcpt4's x64 /O0 filters beside such a jump kept
+temporaries C cannot read back and printed as calls of their callbacks, 72 of
+the EH corpus's filters in all. A call in
 the callback runs once, where the callback ran it: a word the expression
 leaves out carries a call's value only to the one read of it, with nothing
 that can be seen to run between the write and that read, and a write that

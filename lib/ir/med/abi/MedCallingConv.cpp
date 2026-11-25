@@ -1818,7 +1818,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
     if (TargetArch == Arch::ARM)
       for (const uint64_t Register :
            med_calling_conv_detail::dropOnlySavedArgumentRegisters(
-               Func, TargetArch, Fmt, IntegerRegs))
+               Func, TargetArch, Fmt, IntegerRegs, Image, SEHFrameCallees))
         UsedRegs.erase(Register);
     if (TargetArch == Arch::AArch64)
       for (const uint64_t Register : capturedContextRegisters(Func))

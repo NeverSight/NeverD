@@ -22,6 +22,20 @@ import verify_arm64e_native as native
 CASES = json.loads(Path(__file__).with_suffix(".def").read_text())
 
 
+def build_cursor_control(source, binary, optimization):
+    policy = native.POLICY["cursor_probe"]
+    subprocess.run(native.cursor_compile_command(source, binary, optimization, policy["target"]), check=True)
+
+
+def stage_cpta_headers(root):
+    policy = native.POLICY["cpta_probe"]
+    for name in policy["source_files"]:
+        relative = Path(name).relative_to(Path(policy["source"]).parent)
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(native.ROOT / name, target)
+
+
 def runtime_xml(executable=False, generated=False):
     key = "expected_" + ("generated_" if generated else "") + ("executable_" if executable else "") + "tests"
     root = ET.Element(CASES["suite_tag"])
@@ -52,6 +66,7 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 report = native.qualify_x1(output)
                 self.assertTrue(report[q_key])
                 self.assertEqual(report[CASES["x1_claim"]], missing is None)
+                self.assertEqual(report[native.POLICY["x1_qualification"]["complete_key"]], missing is None)
                 self.assertEqual(report["status"], native.POLICY[
                     "passed" if missing is None else "unavailable"])
                 self.assertEqual(report["missing"], [] if missing is None else [
@@ -80,6 +95,7 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     report = native.qualify_x1(Path(temporary))
                     independent_skip = changed == ordered["mode"] and status == native.POLICY["unavailable"]
                     self.assertEqual(report[CASES["x1_claim"]], independent_skip)
+                    self.assertFalse(report[native.POLICY["x1_qualification"]["complete_key"]])
                     self.assertEqual(report["status"], native.POLICY["passed"] if independent_skip else status)
                     self.assertEqual(report["probes"][changed]["status"], status)
 
@@ -228,6 +244,68 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
         self.assertEqual(native.cursor_observation(result(), CASES["cursor_recipes"][1])["status"],
                          native.POLICY["passed"])
 
+    def test_x1_cursor_requires_signed_subtype_and_consistent_execution(self):
+        policy = native.POLICY["cursor_probe"]
+        x1 = native.POLICY["x1_cursor_probe"]
+        cpta = native.POLICY["cpta_probe"]
+        subtype = cpta["profiles"][cpta["x1"]]
+        for variant in ("pc", "hint", "no_explicit", "old_compiler", "compile_failure", "old_subtype", "bad_signature",
+                        "no_launch", "partial_recipe", "partial_build"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temp:
+                def invoke(products, directory, label, argv, timeout):
+                    code, out, err = 0, "", ""
+                    if label.endswith(native.POLICY["compile_suffix"]):
+                        target = argv.index(x1["target"][0])
+                        self.assertEqual(argv[target:target + len(x1["target"])], x1["target"])
+                        if variant in ("old_compiler", "compile_failure"):
+                            code = 1
+                            if variant == "old_compiler":
+                                err = cpta["unsupported_compiler"][0] + " " + cpta["x1"]
+                        else:
+                            header = native.POLICY["cpu_subtype"] if variant == "old_subtype" else subtype
+                            Path(argv[-1]).write_bytes(struct.pack(native.POLICY["header_format"],
+                                native.POLICY["macho_magic"], native.POLICY["cpu_type"], header))
+                    elif label == cpta["read_label"]:
+                        out = plistlib.dumps({} if variant == "bad_signature" else cpta["entitlements"]).decode()
+                    elif argv[1] in policy["recipes"]:
+                        if (variant == "no_launch" or
+                                (variant == "partial_recipe" and argv[1] == policy["recipe_explicit"]) or
+                                (variant == "partial_build" and directory.name == policy["optimizations"][-1])):
+                            raise OSError(cpta["bad_cpu_type_errno"], "")
+                        if variant == "no_explicit" and argv[1] == policy["recipe_explicit"]:
+                            return subprocess.CompletedProcess(argv, policy["unavailable_code"], policy["started"], "")
+                        counts = dict(CASES["cursor_observation"])
+                        if variant not in ("hint", "no_explicit") or argv[1] == policy["recipe_explicit"]:
+                            counts.update(dict.fromkeys(policy["pc_controls"], counts["signed"]))
+                        out = policy["started"] + "\n" + json.dumps(counts)
+                    return subprocess.CompletedProcess(argv, code, out, err)
+
+                with mock.patch.object(native.platform, "system", return_value=native.POLICY["host_os"]), \
+                        mock.patch.object(native.platform, "machine", return_value=native.POLICY["host_arches"][0]), \
+                        mock.patch.object(native, "command", side_effect=invoke):
+                    if variant == "old_subtype":
+                        with self.assertRaises(ValueError):
+                            native.probe_x1_signal_cursor(Path(temp))
+                        continue
+                    report = native.probe_x1_signal_cursor(Path(temp))
+                if variant in ("pc", "hint", "no_explicit"):
+                    self.assertEqual(report["status"], native.POLICY["passed"])
+                    self.assertEqual(report[x1["pacm_pc_key"]], variant == "pc")
+                    self.assertEqual(report[x1["explicit_key"]], variant != "no_explicit")
+                    if variant == "no_explicit":
+                        outcomes = [row.get("outcome") for row in report["profiles"].values()]
+                        self.assertEqual(outcomes.count(cpta["isa_unavailable"]), len(policy["optimizations"]))
+                    self.assertEqual(len(report["profiles"]), len(policy["recipes"]) * len(policy["optimizations"]))
+                    for row in report["profiles"].values():
+                        self.assertEqual(row["cpu_subtype"], subtype)
+                        self.assertEqual(row[cpta["entitlements_key"]], cpta["entitlements"])
+                elif variant in ("old_compiler", "no_launch"):
+                    expected = cpta["slice_unavailable" if variant == "old_compiler" else "loader_unavailable"]
+                    self.assertEqual(report["status"], native.POLICY["unavailable"])
+                    self.assertEqual({r["outcome"] for r in report["profiles"].values()}, {expected})
+                else:
+                    self.assertEqual(report["status"], native.POLICY["failed"])
+
     def test_pacm_qualification_requires_both_pc_controls_for_each_key_and_build(self):
         policy = native.POLICY["cursor_probe"]
         for weak in (None, policy["pacm_hint_key"], *policy["pc_controls"]):
@@ -287,9 +365,7 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 (root / control["oracle"]).write_text(text)
                 for opt in policy["optimizations"]:
                     binary = root / policy["binary_label"].format(optimization=opt)
-                    argv = [v.format(optimization=opt, include=native.ROOT / policy["include"],
-                                     source=source, binary=binary) for v in policy["compile"]]
-                    subprocess.run(argv, check=True)
+                    build_cursor_control(source, binary, opt)
                     result = subprocess.run([binary], capture_output=True, text=True,
                                             timeout=native.POLICY["tool_timeout"])
                     if native.killed_before_entry(result) and (ia, ib, late_fault) == variants[0] and \
@@ -300,10 +376,48 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                         expected = native.POLICY["exit_codes"]["failed" if late_fault or ia != ib else "passed"]
                         self.assertEqual(result.returncode, expected if ia or ib else policy["unavailable_code"])
 
+    @unittest.skipUnless(platform.system() == native.POLICY["host_os"] and
+                         platform.machine() in native.POLICY["host_arches"],
+                         CASES["ordered_q_controls"]["platform_required"])
+    def test_native_cursor_requires_all_samples_for_each_key(self):
+        policy = native.POLICY["cursor_probe"]
+        control = CASES["cursor_native_controls"]
+        fixture = native.ROOT / policy["source"]
+        oracle = (fixture.parent / control["oracle"]).read_text()
+        loop = control["sample_loop"]
+        self.assertEqual(oracle.count(loop), 1)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = Path(shutil.copy(fixture, root))
+            for limit in (loop, *control["truncated_loops"]):
+                (root / control["oracle"]).write_text(oracle.replace(loop, limit))
+                for opt in policy["optimizations"]:
+                    binary = root / policy["binary_label"].format(optimization=opt)
+                    build_cursor_control(source, binary, opt)
+                    result = subprocess.run([binary, policy["recipe_pacm"]], capture_output=True,
+                                            text=True, timeout=native.POLICY["tool_timeout"])
+                    if limit == loop and opt == policy["optimizations"][0] and native.killed_before_entry(result):
+                        self.skipTest(control["cannot_launch"])
+                    with self.subTest(limit=limit, optimization=opt):
+                        if limit == loop:
+                            observation = native.cursor_observation(result, policy["recipe_pacm"])
+                            self.assertEqual(observation["status"], native.POLICY["passed"])
+                        else:
+                            self.assertEqual(result.returncode, native.POLICY["exit_codes"]["failed"])
+                            self.assertEqual(result.stdout.splitlines(), [policy["started"]])
+                            self.assertRegex(result.stderr, control["failed_check"])
+
     def test_cursor_does_not_accept_a_partial_or_unsigned_observation(self):
-        wrong_cfa = [{**CASES["cursor_observation"], "cfa_rejected": counts}
+        policy = native.POLICY["cursor_probe"]
+        complete = CASES["cursor_observation"]
+        missing = dict(complete)
+        del missing[policy["completed_key"]]
+        partial = [{**complete, policy["completed_key"]: counts}
+                   for counts in CASES["cursor_incomplete_counts"]]
+        short = {**complete, "checks": sum(complete[policy["completed_key"]]) - 1}
+        wrong_cfa = [{**complete, "cfa_rejected": counts}
                      for counts in CASES["cursor_invalid_cfa_counts"]]
-        for observation in [*CASES["cursor_invalid_observations"], *wrong_cfa]:
+        for observation in [*CASES["cursor_invalid_observations"], *wrong_cfa, *partial, missing, short]:
             result = subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
                                                  "\n" + json.dumps(observation) + "\n", "")
             with self.subTest(observation=observation), self.assertRaises(ValueError):
@@ -478,7 +592,7 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 with native.OwnedProducts(root, False) as products, mock.patch.object(
                     native, "command", return_value=subprocess.CompletedProcess([], 0, contents, "")
                 ):
-                    self.assertIsNone(native.sign_cpta_slice(products, root, root / policy["x1"], policy))
+                    self.assertIsNone(native.sign_x1_slice(products, root, root / policy["x1"], policy))
                 self.assertFalse((root / policy["entitlements_file"]).exists())
 
     def test_cpta_records_unsupported_isa_and_loader_without_qualification(self):
@@ -513,6 +627,7 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
         original = (native.ROOT / policy["source"]).read_text()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            stage_cpta_headers(root)
             source = root / control["source_name"]
             binary = root / source.stem
             args = [v for row in policy["vectors"] for v in row[:2]]
@@ -545,6 +660,38 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                                                                                   instruction=name),
                                     [binary, name, policy["product_mode"], *operands], name, policy, product=True)
                                 self.assertEqual(state, policy[expected])
+
+    @unittest.skipUnless(platform.system() == native.POLICY["host_os"] and
+                         platform.machine() in native.POLICY["host_arches"],
+                         CASES["ordered_q_controls"]["platform_required"])
+    def test_native_writeback_rejects_constant_load_and_store(self):
+        policy = native.POLICY["cpta_probe"]
+        controls = CASES["cpta_controls"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage_cpta_headers(root)
+            source = root / controls["source_name"]
+            shutil.copyfile(native.ROOT / policy["source"], source)
+            header = root / Path(policy["source_files"][0]).relative_to(Path(policy["source"]).parent)
+            original = header.read_text()
+            binary = root / source.stem
+            for mutation in (None, *controls["writeback_changes"]):
+                if mutation:
+                    self.assertEqual(original.count(mutation[0]), 1)
+                    header.write_text(original.replace(*mutation))
+                for opt in native.POLICY["optimizations"]:
+                    with self.subTest(mutation=mutation, optimization=opt):
+                        argv = [v.format(arch=controls["native_arch"], optimization=opt,
+                                         source=source, binary=binary) for v in policy["compile"]]
+                        subprocess.run(argv, check=True)
+                        result = subprocess.run([binary, policy["writeback_mode"]], capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 1 if mutation else 0)
+                        lines = result.stdout.splitlines()
+                        if mutation:
+                            self.assertEqual(lines, [policy["writeback_started"]])
+                        else:
+                            self.assertIn(lines, ([policy["writeback_started"], policy[marker]]
+                                                  for marker in ("writeback_checked", "writeback_unchecked")))
 
     def test_probe_keeps_startup_and_dlopen_contracts_distinct(self):
         contract = native.fixture_contract()
