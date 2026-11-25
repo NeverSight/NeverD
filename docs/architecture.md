@@ -5332,6 +5332,24 @@ since a back-filled float has no position in the bank, and the result in s0 or
 d0: a Windows on ARM thunk of `exp` returned the double's bits from r0, no read
 of d0 after its jump showing the result. Records are not placed.
 
+An ARM function's register parameters are the argument registers it reads at
+entry, and a save alone reads none (`onlySavedArgumentRegisters`,
+`MedSavedArgumentRegisters.cpp`): MSVC ARM pushes r3 beside the registers it
+saves to keep the stack 8-byte aligned and pops it back unread (`push {r3, r4,
+r11, lr}` ... `pop {r3, r4, r11, pc}`), and its /Od code homes r0 and r1 where
+nothing reads them back. A register whose incoming value the function only
+stores in its own frame, where no load that reads anything takes a byte of it,
+is no parameter. A load read only by moves into a register no return hands
+back, with no call after it in a block that returns, reads nothing. r0 stays
+where a return may hand it back as it came, on a way that writes it nowhere
+and calls nothing, and every register stays while a frame address does
+anything but address the function's own loads and stores, as a va_list's does.
+Call recovery still adds a register a callee reads as a forwarded argument.
+The save of r3 gave four parameters to every function that pushes an even
+count that way: in the EH corpus's ARM images 890 functions declared
+parameters their code never reads and 458 do, and their calls printed 1,516
+placeholders and print 948.
+
 Selected platform headers have their own prototype provenance, separate from
 the host C-library inclusion policy. Windows SDK records therefore use the
 same placement adapter even when their definitions are embedded locally.

@@ -1814,6 +1814,12 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
   if (!Func.Blocks.empty()) {
     const auto &Entry = Func.Blocks[0];
     auto UsedRegs = findLiveInParamRegs(Entry, ParamRegs);
+    // A register an ARM function only saves takes no argument.
+    if (TargetArch == Arch::ARM)
+      for (const uint64_t Register :
+           med_calling_conv_detail::onlySavedArgumentRegisters(
+               Func, TargetArch, Fmt, IntegerRegs))
+        UsedRegs.erase(Register);
     if (TargetArch == Arch::AArch64)
       for (const uint64_t Register : capturedContextRegisters(Func))
         UsedRegs.erase(Register);

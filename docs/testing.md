@@ -1331,6 +1331,11 @@ return, a vector register, an intrinsic, other memory or a va_list pointer
 other than the one va_start stores there, a load's frame address has no fixed
 offset or an edge is exceptional, and where Apple's arm64 recognizer, which
 reads no save area, applies.
+`ARM32_SavedRegisters.AnAlignmentPushOfR3TakesNoArgument` takes no parameter
+for `push {r3, lr}` ... `pop {r3, pc}` around a call or for /Od homes of r0
+and r1 a function writes r0 after, keeps r0 where a return hands it back as
+it came, and keeps r3 where the saved word is read back into r0 or the frame's
+address goes to a call.
 `MedVariadic.WindowsARM64VaListPointsAtTheFirstUnnamedRegister` takes a
 Windows ARM64 save area of one, two or three named registers whose first
 unnamed slot's address is kept in a local (`/O0`), formed in an argument

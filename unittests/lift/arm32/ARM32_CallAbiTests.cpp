@@ -539,6 +539,75 @@ std::string thumbHighC(const BinaryImage &Img, DebugContext &Debug) {
 }
 } // namespace
 
+namespace {
+/// A Thumb PE image of \p Code at 0x401000 with the named functions.
+BinaryImage
+thumbImage(std::vector<uint8_t> Code,
+           std::initializer_list<std::pair<va_t, const char *>> Functions) {
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Mode = InstructionMode::Thumb;
+  Img.Bits = Bitness::Bits32;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x400000;
+  Img.Entry = 0x401000;
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = 0x401000;
+  Seg.Size = Seg.FileSz = Code.size();
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data = std::move(Code);
+  Img.Segments.push_back(std::move(Seg));
+  for (const auto &[Entry, Name] : Functions) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    Img.Symbols.push_back(std::move(Function));
+  }
+  return Img;
+}
+} // namespace
+
+// MSVC ARM pushes r3 beside the registers it saves to keep the stack 8-byte
+// aligned and pops it back unread, and its /Od code homes r0 and r1 unread:
+// those take no argument.  A function that reads a slot back, lets the
+// frame's address out or may return r0 as it came keeps the register.
+//   f:  push {r3, lr}; bl g; movs r0, #0; pop {r3, pc}
+//   f2: push {r3, lr}; ldr r0, [sp]; pop {r3, pc}
+//   f3: push {r3, lr}; mov r0, sp; bl g; pop {r3, pc}
+//   g:  bx lr
+//   g2: push {r0, r1}; push.w {r11, lr}; ldr r11, [sp], #4;
+//       ldr pc, [sp], #12
+//   g3: the same with movs r0, #0 after the second push
+TEST(ARM32_SavedRegisters, AnAlignmentPushOfR3TakesNoArgument) {
+  const BinaryImage Img = thumbImage(
+      {0x08, 0xB5, 0x00, 0xF0, 0x0A, 0xF8, 0x00, 0x20, 0x08, 0xBD, // f
+       0x08, 0xB5, 0x00, 0x98, 0x08, 0xBD,                         // f2
+       0x08, 0xB5, 0x68, 0x46, 0x00, 0xF0, 0x01, 0xF8, 0x08, 0xBD, // f3
+       0x70, 0x47,                                                 // g
+       0x03, 0xB4, 0x2D, 0xE9, 0x00, 0x48, 0x5D, 0xF8, 0x04, 0xBB, // g2
+       0x5D, 0xF8, 0x0C, 0xFB,                                     //
+       0x03, 0xB4, 0x2D, 0xE9, 0x00, 0x48, 0x00, 0x20, 0x5D, 0xF8, // g3
+       0x04, 0xBB, 0x5D, 0xF8, 0x0C, 0xFB},
+      {{0x401000, "f"},
+       {0x40100A, "f2"},
+       {0x401010, "f3"},
+       {0x40101A, "g"},
+       {0x40101C, "g2"},
+       {0x40102A, "g3"}});
+  NullDebugContext Debug;
+  const std::string C = thumbHighC(Img, Debug);
+  const auto Signature = [&](const std::string &Name) {
+    const std::string Definition = definitionOf(C, Name);
+    return Definition.substr(0, Definition.find('{'));
+  };
+  EXPECT_NE(Signature("f").find("f(void)"), std::string::npos) << C;
+  EXPECT_NE(Signature("f2").find("arg3"), std::string::npos) << C;
+  EXPECT_NE(Signature("f3").find("arg3"), std::string::npos) << C;
+  EXPECT_NE(Signature("g2").find("arg0"), std::string::npos) << C;
+  EXPECT_EQ(Signature("g2").find("arg1"), std::string::npos) << C;
+  EXPECT_NE(Signature("g3").find("g3(void)"), std::string::npos) << C;
+}
+
 // AAPCS passes a 64-bit integer in an even-odd register pair, its low word
 // first.  `__stdio_common_vfprintf(unsigned __int64 options, FILE *stream,
 // ...)` takes the options in r0:r1 and the stream in r2: matched to its
