@@ -342,6 +342,15 @@ CompiledImage compileImageForPatchWithFixedSectionVAs(
     uint64_t ImageBaseVA, llvm::StringRef TargetTriple,
     RewriteInputKind InputKind = RewriteInputKind::LiftedIR);
 
+/// Propagate the source MIPS ELF profile through sizing and final placement.
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    ContextualPatchSymbolResolver ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple,
+    RewriteInputKind InputKind, const MIPSImageMetadata *MIPSProfile);
+
 // ===--------------------------------------------------------------------===//
 // BinaryPatcher — base class for new-section patching
 // ===--------------------------------------------------------------------===//

@@ -10,6 +10,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/loader/ELF/MIPSImageMetadata.h"
 
@@ -18,6 +19,8 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MipsABIFlags.h"
+
+#include <array>
 
 using namespace neverd;
 
@@ -250,11 +253,14 @@ TEST(MIPSObject, RejectsWrongTriplesAndUnsupportedInstructionSelectors) {
   Profile.ABI = MIPSABI::N32;
   Profile.ISARevision = 6;
   Profile.ELFFlags = llvm::ELF::EF_MIPS_NAN2008;
-  EXPECT_FALSE(Codegen()
-                   .compile(F.Module, Arch::MIPS64N32, BinaryFormat::ELF, {},
-                            ObjectConsumer::PlatformLinker, &Profile,
-                            Diagnostic)
-                   .Success);
+  auto MicroR6 =
+      Codegen().compile(F.Module, Arch::MIPS64N32, BinaryFormat::ELF, {},
+                        ObjectConsumer::PlatformLinker, &Profile, Diagnostic);
+#ifdef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
+  EXPECT_TRUE(MicroR6.Success) << Diagnostic;
+#else
+  EXPECT_FALSE(MicroR6.Success);
+#endif
   F.Leaf->addFnAttr("target-features", "+noabicalls");
   EXPECT_FALSE(
       Codegen().compile(F.Module, Arch::MIPS32, BinaryFormat::ELF).Success);
@@ -438,21 +444,26 @@ TEST(MIPSObject, FixedAddressEmissionKeepsEntryPointersAndFunctionRanges) {
   }
 }
 
-TEST(MIPSObject, FixedAddressMicroMIPS64LeafWithoutUnwindHasAnExactRange) {
+llvm::Function *addMicroWideSum(llvm::Module &M) {
+  llvm::IRBuilder<> B(M.getContext());
+  auto *I64 = B.getInt64Ty();
+  auto *F =
+      llvm::Function::Create(llvm::FunctionType::get(I64, {I64, I64}, false),
+                             llvm::GlobalValue::ExternalLinkage, "wide_add", M);
+  F->addFnAttr("micromips");
+  F->setDoesNotThrow();
+  B.SetInsertPoint(llvm::BasicBlock::Create(M.getContext(), "entry", F));
+  B.CreateRet(B.CreateAdd(F->getArg(0), F->getArg(1)));
+  return F;
+}
+
+void checkFixedMicroMIPS64Leaf(unsigned Revision) {
   for (Arch Target :
        {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     SCOPED_TRACE(getArchName(Target));
     llvm::LLVMContext Context;
     llvm::Module M("wide", Context);
-    llvm::IRBuilder<> B(Context);
-    auto *I64 = B.getInt64Ty();
-    auto *F = llvm::Function::Create(
-        llvm::FunctionType::get(I64, {I64, I64}, false),
-        llvm::GlobalValue::ExternalLinkage, "wide_add", M);
-    F->addFnAttr("micromips");
-    F->setDoesNotThrow();
-    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
-    B.CreateRet(B.CreateAdd(F->getArg(0), F->getArg(1)));
+    addMicroWideSum(M);
 
     const uint64_t Base = isMIPSN64(Target) ? 0x1200010000ULL : 0x10000;
     llvm::mc_rewrite::RewriteOptions Opt;
@@ -460,11 +471,22 @@ TEST(MIPSObject, FixedAddressMicroMIPS64LeafWithoutUnwindHasAnExactRange) {
     Opt.Model.getSectionVA = [Base](llvm::StringRef Section) {
       return Section == ".text" ? Base : Base + 0x10000;
     };
-    auto Result =
-        Codegen().compileForRewrite(M, Target, Opt, BinaryFormat::ELF);
+    MIPSImageMetadata Profile;
+    Profile.ABI = isMIPSN32(Target) ? MIPSABI::N32 : MIPSABI::N64;
+    Profile.ISARevision = Revision;
+    Profile.HasMicroMIPS = true;
+    Profile.ELFFlags = llvm::ELF::EF_MIPS_NAN2008;
+    auto Result = Codegen().compileForRewrite(
+        M, Target, Opt, BinaryFormat::ELF, {}, RewriteInputKind::LiftedIR,
+        Revision == 6 ? &Profile : nullptr);
 #ifndef LLVM_NEVERD_MICROMIPS64_PRE_R6
     EXPECT_FALSE(Result.ImageValid);
     continue;
+#elif !defined(LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES)
+    if (Revision == 6) {
+      EXPECT_FALSE(Result.ImageValid);
+      continue;
+    }
 #endif
     ASSERT_TRUE(Result.ImageValid);
     EXPECT_TRUE(Result.Unresolved.empty());
@@ -481,15 +503,131 @@ TEST(MIPSObject, FixedAddressMicroMIPS64LeafWithoutUnwindHasAnExactRange) {
     ASSERT_GE(Text->Bytes.size(), 8u);
     const auto Endian = archLittleEndian(Target) ? llvm::endianness::little
                                                  : llvm::endianness::big;
-    // GNU as encodes JR $ra with a full-width DADDU in its delay slot.
-    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data(), Endian),
-              0x001f);
-    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data() + 2, Endian),
-              0x0f3c);
-    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data() + 4, Endian),
-              0x58a4);
-    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data() + 6, Endian),
-              0x1150);
+    // Release 2 adds in the delay slot of JR. Release 6 adds before JRC.
+    const std::array<uint16_t, 4> R2{0x001f, 0x0f3c, 0x58a4, 0x1150};
+    const std::array<uint16_t, 4> R6{0x58a4, 0x1150, 0x801f, 0x0000};
+    const auto &Expected = Revision == 6 ? R6 : R2;
+    for (size_t I = 0; I < Expected.size(); ++I)
+      EXPECT_EQ(
+          llvm::support::endian::read16(Text->Bytes.data() + 2 * I, Endian),
+          Expected[I]);
+  }
+}
+
+TEST(MIPSObject, FixedAddressMicroMIPS64LeafWithoutUnwindHasAnExactRange) {
+  checkFixedMicroMIPS64Leaf(2);
+}
+
+TEST(MIPSObject, FixedAddressMicroMIPS64R6LeafReturnsWithoutADelaySlot) {
+  checkFixedMicroMIPS64Leaf(6);
+}
+
+TEST(MIPSObject, FixedAddressMicroMIPS32R6LeafEndsWithCompactReturn) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    ObjectFixture F;
+    F.Leaf->addFnAttr("micromips");
+    MIPSImageMetadata Profile;
+    Profile.ABI = MIPSABI::O32;
+    Profile.ISARevision = 6;
+    Profile.HasMicroMIPS = true;
+    Profile.ELFFlags = llvm::ELF::EF_MIPS_NAN2008;
+    llvm::mc_rewrite::RewriteOptions Opt;
+    constexpr uint64_t Base = 0x10000;
+    Opt.Model.TextVA = Base;
+    Opt.Model.getSectionVA = [](llvm::StringRef Name) {
+      return Name == ".text" ? Base : Base + 0x10000;
+    };
+    const auto Result = Codegen().compileForRewrite(
+        F.Module, Target, Opt, BinaryFormat::ELF, {},
+        RewriteInputKind::LiftedIR, &Profile);
+#ifdef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
+    ASSERT_TRUE(Result.ImageValid);
+    ASSERT_TRUE(Result.FunctionRangesValid);
+    ASSERT_EQ(Result.FunctionRanges.size(), 1u);
+    const auto &Range = Result.FunctionRanges.front();
+    EXPECT_EQ(Range.OwnerSymbol, "leaf");
+    ASSERT_EQ(Range.BeginVA, Opt.Model.TextVA);
+    const auto Text = llvm::find_if(Result.Sections, [](const auto &Section) {
+      return Section.Name == ".text";
+    });
+    ASSERT_NE(Text, Result.Sections.end());
+    const uint64_t Size = Range.EndVA - Range.BeginVA;
+    ASSERT_GE(Size, 2u);
+    ASSERT_LE(Size, Text->Bytes.size());
+    const auto Endian = archLittleEndian(Target) ? llvm::endianness::little
+                                                 : llvm::endianness::big;
+    EXPECT_EQ(llvm::support::endian::read16(Text->Bytes.data() + Size - 2,
+                                            Endian),
+              0x47e3u); // microMIPS R6 JRC16 $ra.
+#else
+    EXPECT_FALSE(Result.ImageValid);
+#endif
+  }
+}
+
+TEST(MIPSObject, PlacedR6ImageUsesELFProfileForCodeAndFunctionPointers) {
+  for (Arch Target :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    const uint64_t Base = isMIPSN64(Target) ? 0x1200010000ULL : 0x10000;
+    const unsigned Width = isMIPSN64(Target) ? 8u : 4u;
+    const auto Endian = archLittleEndian(Target) ? llvm::endianness::little
+                                                 : llvm::endianness::big;
+    MIPSImageMetadata Profile;
+    Profile.ABI = isMIPSN32(Target) ? MIPSABI::N32 : MIPSABI::N64;
+    Profile.ISARevision = 6;
+    Profile.HasMicroMIPS = true;
+    Profile.ELFFlags = llvm::ELF::EF_MIPS_NAN2008;
+    for (bool WithData : {false, true}) {
+      SCOPED_TRACE(WithData);
+      llvm::LLVMContext Context;
+      llvm::Module M("layout", Context);
+      auto *F = addMicroWideSum(M);
+      if (WithData)
+        new llvm::GlobalVariable(M, F->getType(), false,
+                                 llvm::GlobalValue::ExternalLinkage, F,
+                                 "entry_ptr");
+      auto Result = compileImageForPatchWithFixedSectionVAs(
+          M, Target, BinaryFormat::ELF, Base,
+          [](const llvm::mc_rewrite::RewriteSymbolResolveRequest &)
+              -> std::optional<uint64_t> { return std::nullopt; },
+          [Base](llvm::StringRef Name) -> std::optional<uint64_t> {
+            return Name == ".data" ? std::optional<uint64_t>(Base + 0x2000)
+                                   : std::nullopt;
+          },
+          0, {}, RewriteInputKind::LiftedIR, &Profile);
+#ifndef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
+      EXPECT_FALSE(Result.Success);
+      continue;
+#endif
+      ASSERT_TRUE(Result.Success);
+      EXPECT_EQ(Result.PointerWidth, Width);
+      EXPECT_EQ(Result.ByteOrder, Endian);
+      EXPECT_TRUE(Result.Unresolved.empty());
+      ASSERT_EQ(Result.FunctionRanges.size(), 1u);
+      EXPECT_EQ(Result.FunctionRanges[0].BeginVA, Base);
+      EXPECT_EQ(Result.FunctionRanges[0].EndVA, Base + 8);
+      ASSERT_GE(Result.Bytes.size(), 8u);
+      EXPECT_EQ(llvm::support::endian::read16(Result.Bytes.data(), Endian),
+                0x58a4);
+      EXPECT_EQ(llvm::support::endian::read16(Result.Bytes.data() + 4, Endian),
+                0x801f);
+      if (WithData) {
+        const auto It = llvm::find_if(Result.Sections, [](const auto &Sec) {
+          return Sec.Name == ".data";
+        });
+        ASSERT_NE(It, Result.Sections.end());
+        EXPECT_FALSE(It->IsInImage);
+        EXPECT_EQ(It->VA, Base + 0x2000);
+        ASSERT_GE(It->ExternalBytes.size(), Width);
+        EXPECT_EQ(Width == 4 ? llvm::support::endian::read32(
+                                   It->ExternalBytes.data(), Endian)
+                             : llvm::support::endian::read64(
+                                   It->ExternalBytes.data(), Endian),
+                  Base + 1);
+      }
+    }
   }
 }
 

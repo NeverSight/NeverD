@@ -164,13 +164,15 @@ TEST(MIPSEntryGP, N32HighDataAddressesKeepTheirELF32IdentityInAWideGPR) {
     File.put(52 + 12, Base, 4);
     File.globalPointer(Base + 0x8000);
     File.put(84 + 8, Base + 0xb8, 4);
-    File.put(0x100, 0x67828110, 4); // daddiu v0,gp,-0x7ef0
-    File.put(0x104, 0x03e00008, 4); // jr ra
-    File.put(0x108, 0, 4);
+    File.put(0x100, 0x8f888114, 4); // lw t0,-0x7eec(gp)
+    File.put(0x104, 0xaf888118, 4); // sw t0,-0x7ee8(gp)
+    File.put(0x108, 0x6782811c, 4); // daddiu v0,gp,-0x7ee4
+    File.put(0x10c, 0x03e00008, 4); // jr ra
+    File.put(0x110, 0, 4);
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-    Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, 12));
+    Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, 20));
     Decoder Decode;
     ASSERT_TRUE(Decode.init(*Image));
     auto Low = CFGBuilder().build(*Image, Decode, Image->Entry, "gp_address");
@@ -178,16 +180,44 @@ TEST(MIPSEntryGP, N32HighDataAddressesKeepTheirELF32IdentityInAWideGPR) {
     LowToMedConverter Convert;
     Convert.setBinaryImage(&*Image);
     const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
-    bool Found = false;
+    bool FoundLoad = false, FoundStore = false, FoundWideValue = false;
     for (const auto &Block : Med.Blocks)
-      for (const auto &Op : Block.Ops)
+      for (const auto &Op : Block.Ops) {
+        if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) {
+          const auto &Address = Op.Inputs[0];
+          ASSERT_TRUE(Address.isConst()) << getArchName(Image->Arch);
+          EXPECT_EQ(Address.Size, 4);
+          EXPECT_EQ(Address.Provenance, ConstantAddressProvenance::Address);
+          if (Op.Opcode == NdOp::LOAD) {
+            EXPECT_EQ(Address.ConstVal, Base + 0x114);
+            FoundLoad = true;
+          } else {
+            EXPECT_EQ(Address.ConstVal, Base + 0x118);
+            EXPECT_FALSE(Op.Inputs[1].isConst());
+            FoundStore = true;
+          }
+        }
         if (Op.Opcode == NdOp::INT_SEXT && Op.Output.Size == 8 &&
             Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
-            Op.Inputs[0].ConstVal == Base + 0x110 &&
+            Op.Inputs[0].ConstVal == Base + 0x11c &&
             Op.Inputs[0].Provenance == ConstantAddressProvenance::Address)
-          Found = true;
-    EXPECT_TRUE(Found) << getArchName(Image->Arch);
+          FoundWideValue = true;
+      }
+    EXPECT_TRUE(FoundLoad && FoundStore && FoundWideValue)
+        << getArchName(Image->Arch);
   }
+}
+
+bool hasExactAddress(const MedFunc &Function, va_t Address) {
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I) {
+        const auto &V = Op.Inputs[I];
+        if (V.isConst() && V.ConstVal == Address &&
+            isExactAddressProvenance(V.Provenance))
+          return true;
+      }
+  return false;
 }
 
 TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
@@ -222,16 +252,130 @@ TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
           LowToMedConverter Convert;
           Convert.setBinaryImage(&*Image);
           const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
-          bool Bound = false;
-          for (const auto &Block : Med.Blocks)
-            for (const auto &Op : Block.Ops)
-              for (unsigned I = 0; I < Op.NumInputs; ++I) {
-                const auto &V = Op.Inputs[I];
-                Bound |= V.isConst() && V.ConstVal == 0x1011c &&
-                         isExactAddressProvenance(V.Provenance);
-              }
-          EXPECT_EQ(Bound, Case == 0);
+          EXPECT_EQ(hasExactAddress(Med, 0x1011c), Case == 0);
         }
+}
+
+TEST(MIPSEntryGP, MicroR6UsesTheTaggedEntryAtRegisterWidth) {
+  using namespace llvm::ELF;
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                      Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    const bool N32 = isMIPSN32(Target);
+    mips_test::ELFBytes File(
+        N32 ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
+            : Target);
+    const uint32_t Flags =
+        (isMIPS64(Target) ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6) |
+        (N32                 ? EF_MIPS_ABI2
+         : isMIPSO32(Target) ? EF_MIPS_ABI_O32
+                             : 0) |
+        EF_MIPS_MICROMIPS | EF_MIPS_NAN2008 | EF_MIPS_PIC;
+    File.put(File.Is64 ? 48 : 36, Flags, 4);
+    File.put(24, 0x10101, File.Is64 ? 8 : 4);
+    File.put(0x100, isMIPSN64(Target) ? 0x5c59 : 0x3059, 2);
+    File.put(0x102, 31, 2); // [d]addiu v0,t9,31
+    File.put(0x104, isMIPS64(Target) ? 0x5c42 : 0x3042, 2);
+    File.put(0x106, 0xfff8, 2); // [d]addiu v0,v0,-8
+    File.put(0x108, 0x47e3, 2); // jrc16 ra
+
+    for (uint64_t GP : {0x10120u, 0x1011fu}) {
+      SCOPED_TRACE(GP);
+      File.globalPointer(GP);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      const auto Low =
+          CFGBuilder().build(*Image, Decode, Image->Entry, "pic_address");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*Image);
+      const auto Med = Convert.convert(Low, Target, BinaryFormat::ELF);
+      EXPECT_EQ(hasExactAddress(Med, 0x10118), GP == 0x10120);
+    }
+  }
+}
+
+TEST(MIPSEntryGP, StaticGOTPageMustBeRebasedWhenItsCellIsRead) {
+  using namespace llvm::ELF;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(A));
+    const bool N32 = isMIPSN32(A);
+    mips_test::ELFBytes File(
+        N32 ? (archLittleEndian(A) ? Arch::MIPS32EL : Arch::MIPS32) : A);
+    const unsigned W = File.Is64 ? 8 : 4;
+    const uint32_t ABI = N32 ? EF_MIPS_ABI2 : File.Is64 ? 0 : EF_MIPS_ABI_O32;
+    File.put(File.Is64 ? 48 : 36,
+             (isMIPS64(A) ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2) | ABI |
+                 EF_MIPS_CPIC,
+             4);
+    File.globalPointer(0x18130);
+    File.Bytes.resize(0x400);
+    const unsigned P = File.Is64 ? 64 : 52;
+    File.put(P + (File.Is64 ? 32 : 16), 0x180, W);
+    File.put(P + (File.Is64 ? 40 : 20), 0x180, W);
+    File.put(File.Is64 ? 40 : 32, 0x200, W);
+    File.put(File.Is64 ? 60 : 48, 4, 2);
+    File.put(File.Is64 ? 62 : 50, 2, 2);
+    const char Names[] = "\0.got\0.shstrtab\0.text";
+    std::copy(std::begin(Names), std::end(Names), File.Bytes.begin() + 0x1a0);
+    const unsigned SH = File.Is64 ? 64 : 40, Got = 0x200 + SH, Str = Got + SH;
+    File.put(Got, 1, 4);
+    File.put(Got + 4, SHT_PROGBITS, 4);
+    File.put(Got + 8, SHF_ALLOC | SHF_WRITE, W);
+    File.put(Got + 8 + W, 0x10140, W);
+    File.put(Got + 8 + 2 * W, 0x140, W);
+    File.put(Got + 8 + 3 * W, 4 * W, W);
+    File.put(Str, 6, 4);
+    File.put(Str + 4, SHT_STRTAB, 4);
+    File.put(Str + 8 + 2 * W, 0x1a0, W);
+    File.put(Str + 8 + 3 * W, sizeof(Names), W);
+    const unsigned Text = Str + SH;
+    File.put(Text, 16, 4);
+    File.put(Text + 4, SHT_PROGBITS, 4);
+    File.put(Text + 8, SHF_ALLOC | SHF_EXECINSTR, W);
+    File.put(Text + 8 + W, 0x10100, W);
+    File.put(Text + 8 + 2 * W, 0x100, W);
+    File.put(Text + 8 + 3 * W, 0x18, W);
+    File.put(0x140 + W, uint64_t{1} << (8 * W - 1), W);
+    File.put(0x140 + 2 * W, 0x200000, W); // unmapped page base
+    File.put(0x140 + 3 * W, 0x10100, W);  // ordinary mapped pointer
+
+    File.put(0x100, 0x3c080001, 4); // lui t0,1
+    File.put(0x104, (File.Is64 ? 0x65088030 : 0x25088030), 4);
+    File.put(0x108, (File.Is64 ? 0x0119402d : 0x01194021), 4);
+    for (bool Page : {false, true})
+      for (unsigned Form : {0u, 1u, 2u}) {
+        const bool InSlot = Form == 1, Byte = Form == 2;
+        SCOPED_TRACE(testing::Message() << Page << '/' << Form);
+        const unsigned Offset = 0x8010 + (Page ? 2 : 3) * W;
+        const uint32_t Load =
+            Byte ? (0x91020000 | (Offset + 1))
+                 : ((File.Is64 ? 0xdd020000 : 0x8d020000) | Offset);
+        File.put(0x10c, InSlot ? 0x03e00008 : Load, 4);
+        File.put(0x110, InSlot ? Load : 0x03e00008, 4);
+        File.put(0x114, 0, 4);
+        auto Image = ELFLoader().loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        ASSERT_EQ(Image->MIPS->UnmappedGOTPageSlots,
+                  std::vector<va_t>{0x10140 + 2 * W});
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(*Image));
+        const auto Low =
+            CFGBuilder().build(*Image, Decode, Image->Entry, "static_got_page");
+        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+        LowToMedConverter Convert;
+        Convert.setBinaryImage(&*Image);
+        if (Page)
+          EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                       LowToMedConversionError);
+        else
+          EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+      }
+  }
 }
 
 void expectPICAddress(bool N32, bool Little, llvm::ArrayRef<uint32_t> Words,
@@ -263,15 +407,7 @@ void expectPICAddress(bool N32, bool Little, llvm::ArrayRef<uint32_t> Words,
   LowToMedConverter Convert;
   Convert.setBinaryImage(&*Image);
   const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
-  bool Bound = false;
-  for (const auto &Block : Med.Blocks)
-    for (const auto &Op : Block.Ops)
-      for (unsigned I = 0; I < Op.NumInputs; ++I) {
-        const auto &V = Op.Inputs[I];
-        Bound |= V.isConst() && V.ConstVal == 0x10170 &&
-                 isExactAddressProvenance(V.Provenance);
-      }
-  EXPECT_EQ(Bound, Expected);
+  EXPECT_EQ(hasExactAddress(Med, 0x10170), Expected);
 }
 
 TEST(MIPSEntryGP, PICJoinsRequireTheSameEntryValueOnEveryIncomingPath) {

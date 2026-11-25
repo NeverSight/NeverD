@@ -213,7 +213,7 @@ The first configure builds the LLVM fork locally (often 30–60 minutes). Later 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r9
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r11
 cmake --build build
 ```
 
@@ -241,33 +241,33 @@ build uses ccache on macOS and Linux. Windows clang-cl builds use sccache with
 the GitHub Actions cache backend; compiler caches only accelerate rebuilds and
 are never published as release assets.
 
-The default uses the package revision `neverd-llvm-v23.0.0-r9`; unlike the
+The default uses the package revision `neverd-llvm-v23.0.0-r11`; unlike the
 legacy mutable base tag, its Git tag, release target, source commit, and three
 archive digests form one revisioned source pin that NeverD treats as
 immutable. Existing build directories still caching the legacy base tag,
 `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`,
-`neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, or `neverd-llvm-v23.0.0-r8` move to `r9`
+`neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9`, or `neverd-llvm-v23.0.0-r10` move to `r11`
 automatically unless they also provide an explicit `NEVERD_LLVM_PREBUILT_SHA256` override. The `Prebuilt LLVM Audit` workflow runs
 on pushes, pull requests, and every six hours. It invokes
 `scripts/audit_prebuilt_llvm_release.py` to compare that source pin with the
 live GitHub release and each published checksum sidecar.
 
 If the LLVM fork changes while LLVM still reports `23.0.0`, publish the next
-package revision—`neverd-llvm-v23.0.0-r10`, then `-r11`—rather than overwriting
+package revision—`neverd-llvm-v23.0.0-r12`, then `-r13`—rather than overwriting
 an existing release or inventing LLVM version `23.0.1`:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r10 \
+  -f release_tag=neverd-llvm-v23.0.0-r12 \
   -f overwrite_existing_assets=false
 ```
 
 After the workflow succeeds, update the default tag, pinned commit, and all
 three digests in `cmake/NeverDLLVMPrebuilt.cmake` together. Each package revision
 uses its own cache directory; the current default lives below
-`.cache/neverd-llvm/neverd-llvm-v23.0.0-r9`. A stale or republished archive fails
+`.cache/neverd-llvm/neverd-llvm-v23.0.0-r11`. A stale or republished archive fails
 before extraction. `overwrite_existing_assets`
 exists only for legacy recovery; the normal revision workflow leaves it off.
 

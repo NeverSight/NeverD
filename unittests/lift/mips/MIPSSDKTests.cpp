@@ -215,10 +215,10 @@ class MicroMIPSSDK : public MIPSSDK {};
 
 class MIPSObjectSDK : public MIPSSDK {
 protected:
-  void checkObjectRoundTrip(bool Micro);
+  void checkObjectRoundTrip(bool Micro, unsigned Revision = 2);
 };
 
-void MIPSObjectSDK::checkObjectRoundTrip(bool Micro) {
+void MIPSObjectSDK::checkObjectRoundTrip(bool Micro, unsigned Revision) {
   auto Target = GetParam();
   // n32 uses the ELF32 header but has the same 64-bit GPR file as n64.
   mips_test::ELFBytes File(
@@ -229,6 +229,13 @@ void MIPSObjectSDK::checkObjectRoundTrip(bool Micro) {
   uint32_t InputFlags = isMIPS64(Target) ? llvm::ELF::EF_MIPS_ARCH_64R2
                                          : llvm::ELF::EF_MIPS_ARCH_32R2 |
                                                llvm::ELF::EF_MIPS_ABI_O32;
+  if (Revision == 6) {
+    File.Bytes[0xe3] = Revision;
+    InputFlags = (InputFlags & ~llvm::ELF::EF_MIPS_ARCH) |
+                 (isMIPS64(Target) ? llvm::ELF::EF_MIPS_ARCH_64R6
+                                   : llvm::ELF::EF_MIPS_ARCH_32R6) |
+                 llvm::ELF::EF_MIPS_NAN2008;
+  }
   if (isMIPSN32(Target)) {
     InputFlags |= llvm::ELF::EF_MIPS_ABI2;
     File.Bytes[0xe2] = 64;
@@ -238,11 +245,18 @@ void MIPSObjectSDK::checkObjectRoundTrip(bool Micro) {
     InputFlags |= llvm::ELF::EF_MIPS_MICROMIPS;
     File.put(24, 0x10101, File.Is64 ? 8 : 4);
     File.put(0xec, llvm::Mips::AFL_ASE_MICROMIPS, 4);
-    File.put(0x100, 0x459f, 2); // jr16 ra
-    if (isMIPS64(Target)) {
+    if (Revision == 6) {
+      // SLL by zero sign-extends the low word in a 64-bit GPR.
+      File.put(0x100, 0x0044, 2);
+      File.put(0x102, 0, 2); // sll v0,a0,0
+      File.put(0x104, 0x801f, 2);
+      File.put(0x106, 0, 2); // jrc ra
+    } else if (isMIPS64(Target)) {
+      File.put(0x100, 0x459f, 2); // jr16 ra
       File.put(0x102, 0x58a4, 2); // daddu v0,a0,a1 (GNU as 2.42)
       File.put(0x104, 0x1150, 2);
     } else {
+      File.put(0x100, 0x459f, 2);
       File.put(0x102, 0x0558, 2); // addu16 v0,a0,a1
     }
   } else {
@@ -258,8 +272,17 @@ void MIPSObjectSDK::checkObjectRoundTrip(bool Micro) {
                File.Bytes.size());
   Output.close();
 
-  ASSERT_EQ(neverd_lift_to_obj(Session, Path.c_str(), 0, 1), 0)
-      << take(neverd_last_error(Session));
+  const int Status = neverd_lift_to_obj(Session, Path.c_str(), 0, 1);
+#ifndef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
+  if (Micro && Revision == 6) {
+    EXPECT_NE(Status, 0);
+    EXPECT_NE(take(neverd_last_error(Session)).find("compact branches"),
+              std::string::npos);
+    EXPECT_EQ(neverd_roundtrip_func_count(Session), 0);
+    return;
+  }
+#endif
+  ASSERT_EQ(Status, 0) << take(neverd_last_error(Session));
   unsigned long long Length = 0;
   const auto *Obj = neverd_roundtrip_obj(Session, &Length);
   ASSERT_NE(Obj, nullptr);
@@ -275,6 +298,8 @@ void MIPSObjectSDK::checkObjectRoundTrip(bool Micro) {
             llvm::ELF::EM_MIPS);
   const auto Flags =
       llvm::support::endian::read32(Obj + (File.Is64 ? 48 : 36), Endian);
+  EXPECT_EQ(Flags & llvm::ELF::EF_MIPS_ARCH,
+            InputFlags & llvm::ELF::EF_MIPS_ARCH);
   EXPECT_EQ(bool(Flags & llvm::ELF::EF_MIPS_ABI2), isMIPSN32(Target));
   EXPECT_EQ(bool(Flags & llvm::ELF::EF_MIPS_MICROMIPS), Micro);
   ASSERT_EQ(neverd_roundtrip_func_count(Session), 1);
@@ -288,6 +313,12 @@ TEST_P(MIPSObjectSDK, LiftToObjectRetainsABIAndReportsTheEntryBody) {
 #ifdef LLVM_NEVERD_MICROMIPS64_PRE_R6
 TEST_P(MIPSObjectSDK, LiftToObjectPreservesMicroEntryAndDelaySlot) {
   checkObjectRoundTrip(true);
+}
+#endif
+
+#ifdef LLVM_NEVERD_MICROMIPS64_R6
+TEST_P(MIPSObjectSDK, LiftToObjectRetainsMicroR6ISAAndCompactReturn) {
+  checkObjectRoundTrip(true, 6);
 }
 #endif
 

@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: 3a3558b94c1d1c87a058e832bc187cbb1d1906e0e1b1c3b59fb1e9fd91d5ce65 -->
+<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
 
 <div align="center" dir="rtl">
 
@@ -63,6 +63,15 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 > نُفّذت كل خلية في المصفوفة، لكن عمق اختبارات التكامل يختلف. راجع [مصفوفة تغطية المعمارية](architecture.md#support-and-test-depth). يستخدم Mach-O i386 كائنات `thin` قابلة لإعادة التموضع لأن macOS الحديث لا يستطيع ربط ملفات i386 التنفيذية التاريخية.
 
 **ملفات MIPS ELF** تدعم فك التجميع واستعادة تدفق التحكم وإخراج C وLLVM. تستطيع حزمة SDK إعادة ترجمة الدوال المدعومة إلى ملفات ELF قابلة لإعادة التموضع باستخدام واجهة Mips الخلفية في LLVM من NeverSight، مع الحفاظ على ترتيب البايتات واتفاقية الاستدعاء o32 أو n32 أو n64. يحتاج تثبيت الشيفرة في ملف تنفيذي إلى دعم MIPS في أداة الترقيع. [ملفات MIPS المدعومة ومخرجات الشيفرة الأصلية (بالإنجليزية)](../mips.md)
+
+تدعم أهداف ELF التجريبية الخاصة بتعليمات الأعداد الصحيحة التحويل الصارم إلى التمثيل الوسيط، واستعادة مخطط تدفق التحكم، وإخراج C مهيكل وLLVM IR وشيفرة C مشتقة منه.
+
+| الهدف | ملفات ELF التي جرى التحقق منها |
+|---|---|
+| RISC-V | يدعم RV32I/ILP32 وRV64I/LP64 بترتيب البايتات من الأقل أهمية إلى الأعلى. تحدد معلومات ELF امتدادات M وA والجزء الصحيح من C أو الامتدادات المنفردة Zmmul وZaamo وZalrsc وZca. |
+| PowerPC | يدعم PPC32 System V وPPC64 ELFv1/ELFv2 بكلا ترتيبي البايتات. توفر واصفات الدوال في ELFv1 عنوان دخول الشيفرة وجدول المحتويات TOC. تشمل العمليات العددية المفردة المتحقق منها القسمة بإشارة وبدون إشارة، والنتيجة المسجلة في CR0، وأثر تجاوز السعة في XER. |
+
+ما زال تنفيذ إعادة كتابة الشيفرة الأصلية والربط الديناميكي بين الوحدات قيد العمل. [نطاق دعم RISC-V وPowerPC (بالإنجليزية)](../riscv-powerpc.md)
 
 يدعم بايت كود EVM التقليدي مستقلًا عن الحاويات الأصلية: تمر كل opcodes المخصصة
 وعددها 150 من Frontier إلى Fusaka عبر Low/Med/High IR وLLVM `i256` متحقق وC23
@@ -202,7 +211,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r9
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r11
 cmake --build build
 ```
 
@@ -218,19 +227,19 @@ cmake --build build
 
 يُفحَص كل أرشيف مقابل البصمة المثبتة في `cmake/NeverDLLVMPrebuilt.cmake`، أو ملف `.sha256` المنشور للوسوم التي لا تصفها القيم المثبتة، قبل استخراجه تحت `~/.cache/neverd-llvm/<tag>/<arch>/` أو المسار المحدد بواسطة `NEVERD_LLVM_PREBUILT_CACHE_DIR`. ويجب أن يذكر `BUILDINFO.txt` في الحزمة الافتراضية التزام الوحدة الفرعية LLVM نفسه تمامًا. تستخدم إصدارات macOS/Linux أداة ccache، وتستخدم إصدارات Windows clang-cl أداة sccache مع مخبأ GitHub Actions. تسرّع هذه المخابئ إعادة البناء فقط ولا تُنشر كملفات إصدار.
 
-مراجعة الحزمة الافتراضية هي `neverd-llvm-v23.0.0-r9`. يشكّل وسم Git وهدف الإصدار والتزام المصدر وبصمات الأرشيفات الثلاثة مرجع مصدر ذا إصدار غير قابل للتغيير. تنتقل أدلة البناء التي تحتفظ بالوسم الأساسي القديم أو `neverd-llvm-v23.0.0-r1` أو `neverd-llvm-v23.0.0-r2` أو `neverd-llvm-v23.0.0-r3` أو `neverd-llvm-v23.0.0-r4` أو `neverd-llvm-v23.0.0-r5` أو `neverd-llvm-v23.0.0-r6` أو `neverd-llvm-v23.0.0-r7` أو `neverd-llvm-v23.0.0-r8` تلقائيًا إلى `r9` ما لم تُحدّد قيمة `NEVERD_LLVM_PREBUILT_SHA256` صراحة. يعمل `Prebuilt LLVM Audit` عند push وpull request وكل ست ساعات، ويستدعي `scripts/audit_prebuilt_llvm_release.py` لمقارنة المرجع بإصدار GitHub الحالي وكل ملف تحقق منشور.
+مراجعة الحزمة الافتراضية هي `neverd-llvm-v23.0.0-r11`. يشكّل وسم Git وهدف الإصدار والتزام المصدر وبصمات الأرشيفات الثلاثة مرجع مصدر ذا إصدار غير قابل للتغيير. تنتقل أدلة البناء التي تحتفظ بالوسم الأساسي القديم أو `neverd-llvm-v23.0.0-r1` أو `neverd-llvm-v23.0.0-r2` أو `neverd-llvm-v23.0.0-r3` أو `neverd-llvm-v23.0.0-r4` أو `neverd-llvm-v23.0.0-r5` أو `neverd-llvm-v23.0.0-r6` أو `neverd-llvm-v23.0.0-r7` أو `neverd-llvm-v23.0.0-r8` أو `neverd-llvm-v23.0.0-r9` أو `neverd-llvm-v23.0.0-r10` تلقائيًا إلى `r11` ما لم تُحدّد قيمة `NEVERD_LLVM_PREBUILT_SHA256` صراحة. يعمل `Prebuilt LLVM Audit` عند push وpull request وكل ست ساعات، ويستدعي `scripts/audit_prebuilt_llvm_release.py` لمقارنة المرجع بإصدار GitHub الحالي وكل ملف تحقق منشور.
 
-إذا تغيّر تفرع LLVM بينما لا يزال LLVM يعلن `23.0.0`، فانشر مراجعة الحزمة التالية `neverd-llvm-v23.0.0-r10` ثم `-r11`، بدل الكتابة فوق إصدار موجود أو اختراع إصدار LLVM باسم `23.0.1`:
+إذا تغيّر تفرع LLVM بينما لا يزال LLVM يعلن `23.0.0`، فانشر مراجعة الحزمة التالية `neverd-llvm-v23.0.0-r12` ثم `-r13`، بدل الكتابة فوق إصدار موجود أو اختراع إصدار LLVM باسم `23.0.1`:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r10 \
+  -f release_tag=neverd-llvm-v23.0.0-r12 \
   -f overwrite_existing_assets=false
 ```
 
-بعد نجاح سير العمل، حدّث الوسم الافتراضي والالتزام المثبت والبصمات الثلاثة معًا في `cmake/NeverDLLVMPrebuilt.cmake`. تستخدم كل مراجعة للحزمة دليل تخزين مؤقت خاصًا بها؛ توجد المراجعة الافتراضية الحالية تحت `.cache/neverd-llvm/neverd-llvm-v23.0.0-r9`. ويفشل الأرشيف القديم أو المعاد نشره قبل الاستخراج. يقتصر `overwrite_existing_assets` على الاستعادة التاريخية ويبقى معطّلًا في سير المراجعات المعتاد.
+بعد نجاح سير العمل، حدّث الوسم الافتراضي والالتزام المثبت والبصمات الثلاثة معًا في `cmake/NeverDLLVMPrebuilt.cmake`. تستخدم كل مراجعة للحزمة دليل تخزين مؤقت خاصًا بها؛ توجد المراجعة الافتراضية الحالية تحت `.cache/neverd-llvm/neverd-llvm-v23.0.0-r11`. ويفشل الأرشيف القديم أو المعاد نشره قبل الاستخراج. يقتصر `overwrite_existing_assets` على الاستعادة التاريخية ويبقى معطّلًا في سير المراجعات المعتاد.
 
 **المخرجات**
 

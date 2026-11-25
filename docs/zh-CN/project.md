@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 3a3558b94c1d1c87a058e832bc187cbb1d1906e0e1b1c3b59fb1e9fd91d5ce65 -->
+<!-- i18n-source: 4784fdcf9d8b66d36ca18e9f13c9a7b4f92bcdffa5c809e31adfc235b0ed7e17 -->
 
 <div align="center">
 
@@ -63,6 +63,15 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 > 矩阵中的每个单元格都已实现，但集成测试深度不同。详见[架构覆盖矩阵](architecture.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位对象，因为现代 macOS 无法链接历史 i386 可执行文件。
 
 **MIPS ELF** 支持反汇编、控制流恢复以及 C 和 LLVM 输出。SDK 可调用 NeverSight LLVM fork 的 Mips 后端，将支持的函数重新编译为可重定位 ELF 目标文件，保留原有字节序和 o32、n32 或 n64 调用约定。把代码写回可执行文件还需要 MIPS ELF 写入支持。[MIPS 配置和原生输出（英文）](../mips.md)
+
+实验性的整数 ELF 目标支持严格指令提升、控制流图恢复，并可输出结构化 C、LLVM IR 和由 LLVM IR 生成的 C。
+
+| 目标 | 已验证的 ELF 配置 |
+|---|---|
+| RISC-V | 小端 RV32I/ILP32 和 RV64I/LP64。根据 ELF 中的标记选择 M、A、整数 C，或单独的 Zmmul、Zaamo、Zalrsc 和 Zca 扩展。 |
+| PowerPC | 大端和小端 PPC32 System V 及 PPC64 ELFv1/ELFv2。ELFv1 函数描述符提供代码入口和 TOC。已验证的标量子集包括有符号和无符号除法、写入 CR0 的结果以及对 XER 溢出位的影响。 |
+
+原生代码重写和跨模块动态链接仍待实现。 [RISC-V 和 PowerPC 支持范围（英文）](../riscv-powerpc.md)
 
 传统 EVM 字节码独立于原生 container：从 Frontier 到 Fusaka 的 150 个已分配
 opcode 全部进入专用 Low/Med/High IR、已验证 LLVM `i256`、C23 `_BitInt(256)`
@@ -202,7 +211,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r9
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r11
 cmake --build build
 ```
 
@@ -218,19 +227,19 @@ NeverD 常规的 push 与 pull request CI 刻意从源码编译 LLVM submodule�
 
 每个归档在解压到 `~/.cache/neverd-llvm/<tag>/<arch>/`（或 `NEVERD_LLVM_PREBUILT_CACHE_DIR` 指定的目录）前，都会核对 `cmake/NeverDLLVMPrebuilt.cmake` 中固定的摘要；未被这些固定值描述的 tag 则核对随包发布的 `.sha256`。默认固定版本的 `BUILDINFO.txt` 还必须记录完全一致的 LLVM 子模块提交。发布构建在 macOS 和 Linux 上使用 ccache，Windows clang-cl 使用 sccache 和 GitHub Actions 缓存后端；编译器缓存只加速重建，不作为发布产物上传。
 
-默认包修订版为 `neverd-llvm-v23.0.0-r9`。其 Git tag、发布目标、源码提交及三个归档摘要共同构成不可变的版本化源码固定值。已有构建目录若缓存旧基础 tag、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7` 或 `neverd-llvm-v23.0.0-r8`，会自动迁移到 `r9`，除非显式设置 `NEVERD_LLVM_PREBUILT_SHA256`。`Prebuilt LLVM Audit` 工作流在 push、pull request 及每六小时运行，调用 `scripts/audit_prebuilt_llvm_release.py`，对照 GitHub 当前发布和每个校验和附属文件核查源码固定值。
+默认包修订版为 `neverd-llvm-v23.0.0-r11`。其 Git tag、发布目标、源码提交及三个归档摘要共同构成不可变的版本化源码固定值。已有构建目录若缓存旧基础 tag、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7`、`neverd-llvm-v23.0.0-r8`、`neverd-llvm-v23.0.0-r9` 或 `neverd-llvm-v23.0.0-r10`，会自动迁移到 `r11`，除非显式设置 `NEVERD_LLVM_PREBUILT_SHA256`。`Prebuilt LLVM Audit` 工作流在 push、pull request 及每六小时运行，调用 `scripts/audit_prebuilt_llvm_release.py`，对照 GitHub 当前发布和每个校验和附属文件核查源码固定值。
 
-如果 LLVM fork 源码发生变化而 LLVM 仍报告 `23.0.0`，应发布下一个包修订版——`neverd-llvm-v23.0.0-r10`，之后是 `-r11`——不要覆盖已有发布，也不要虚构 LLVM 版本 `23.0.1`：
+如果 LLVM fork 源码发生变化而 LLVM 仍报告 `23.0.0`，应发布下一个包修订版——`neverd-llvm-v23.0.0-r12`，之后是 `-r13`——不要覆盖已有发布，也不要虚构 LLVM 版本 `23.0.1`：
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r10 \
+  -f release_tag=neverd-llvm-v23.0.0-r12 \
   -f overwrite_existing_assets=false
 ```
 
-工作流成功后，同时更新 `cmake/NeverDLLVMPrebuilt.cmake` 中的默认 tag、固定提交和三个摘要。每个包修订版使用独立的缓存目录；当前默认版本位于 `.cache/neverd-llvm/neverd-llvm-v23.0.0-r9` 下。过期或被重新发布的归档会在解压前失败。`overwrite_existing_assets` 仅用于旧版恢复，正常的修订版发布保持关闭。
+工作流成功后，同时更新 `cmake/NeverDLLVMPrebuilt.cmake` 中的默认 tag、固定提交和三个摘要。每个包修订版使用独立的缓存目录；当前默认版本位于 `.cache/neverd-llvm/neverd-llvm-v23.0.0-r11` 下。过期或被重新发布的归档会在解压前失败。`overwrite_existing_assets` 仅用于旧版恢复，正常的修订版发布保持关闭。
 
 **产物**
 

@@ -318,6 +318,44 @@ TEST(LowScalarConstant, InvalidUnaryOperationsNeverCreateFacts) {
     EXPECT_FALSE(lowScalarConstantResult(unary(Opcode, 4, 1, 8), constant));
 }
 
+TEST(LowScalarConstant, SubbytesKeepsExactlyTheRequestedRegisterBytes) {
+  constexpr uint64_t Value = UINT64_C(0xfedcba9876543210);
+  for (uint16_t Width = 1; Width <= 8; ++Width)
+    for (uint16_t ResultWidth = 1; ResultWidth <= Width; ++ResultWidth)
+      for (uint16_t Byte = 0; Byte <= Width - ResultWidth; ++Byte) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ':' << ResultWidth << ':' << Byte);
+        auto Op = binary(NdOp::SUBBYTES, Width, Value, Byte);
+        Op.Inputs[1].Size = 4;
+        Op.Output.Size = ResultWidth;
+        NdOpEmulator Emulator(BinaryImage{});
+        ASSERT_TRUE(Emulator.step(Op));
+        const auto Expected = Emulator.getRegister(0);
+        ASSERT_TRUE(Expected);
+        const uint64_t Mask = UINT64_MAX >> ((8 - ResultWidth) * 8);
+        EXPECT_EQ(lowScalarConstantResult(Op, constant), *Expected & Mask);
+      }
+}
+
+TEST(LowScalarConstant, SubbytesNeedsAKnownInBoundsSlice) {
+  auto Op = binary(NdOp::SUBBYTES, 8, UINT64_MAX, 5);
+  Op.Output.Size = 4;
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  Op.Inputs[1] = NdVar::cst(UINT64_MAX, 8);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  Op.Inputs[1] = NdVar::reg(16, 4);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  const auto Zero = [](const NdVar &) { return std::optional<uint64_t>{0}; };
+  EXPECT_FALSE(lowScalarConstantResult(Op, Zero));
+  Op.Inputs[1] = NdVar::addressFragment(1, 4);
+  EXPECT_FALSE(lowScalarConstantResult(Op, Zero));
+  Op.Inputs[1] = NdVar::cst(0, 4);
+  Op.Inputs[0] = NdVar::reg(8, 8);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  Op.Inputs[0] = NdVar::cst(0, 2);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+}
+
 TEST(LowScalarConstant, SelfDifferenceDoesNotNeedAnIncomingConstant) {
   for (uint16_t Width = 1; Width <= sizeof(uint64_t); ++Width)
     for (bool Temporary : {false, true}) {

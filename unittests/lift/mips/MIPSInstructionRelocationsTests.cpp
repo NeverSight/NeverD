@@ -195,7 +195,7 @@ void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true,
           for (unsigned I = 0; I < Op.NumInputs; ++I)
             EXPECT_NE(Op.Inputs[I].Provenance,
                       ConstantAddressProvenance::CodeAddress);
-    bool SawAddress = false;
+    bool SawAddress = false, SawGP = false;
     for (const auto &Function : Result.MedFuncs)
       for (const auto &Block : Function.Blocks)
         for (const auto &Op : Block.Ops)
@@ -208,8 +208,17 @@ void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true,
               // neither may become a new unrelated interior code identity.
               EXPECT_EQ(Op.Inputs[I].ConstVal,
                         File.Target | uint64_t(File.Compressed));
+            } else if (Op.Inputs[I].isConst() && Image->MIPS->PICGP &&
+                       Op.Inputs[I].Provenance ==
+                           ConstantAddressProvenance::DataAddress &&
+                       Op.Inputs[I].ConstVal == *Image->MIPS->PICGP) {
+              const auto *GOT = Image->getSectionByName(".got");
+              ASSERT_TRUE(GOT);
+              EXPECT_EQ(Op.Inputs[I].AddressOwnerVA, GOT->VA);
+              SawGP = true;
             }
     EXPECT_EQ(SawAddress, Symbolic);
+    EXPECT_EQ(SawGP, Symbolic && Image->MIPS->PICGP.has_value());
     CEmitterOptions Emit;
     Emit.TheArch = Image->Arch;
     Emit.Format = BinaryFormat::ELF;
@@ -235,7 +244,7 @@ void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true,
     } else
       ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit));
     EXPECT_EQ(Text.find("target") != std::string::npos, Symbolic) << Text;
-    if (Symbolic)
+    if (Symbolic && !SawGP)
       EXPECT_EQ(Text.find("neverd.image:"), std::string::npos) << Text;
   }
 }
@@ -275,6 +284,67 @@ TEST(MIPSSplitAddressFields, High64FieldsUseIndependentCarries) {
     SplitAddressELF File(A, true, 0, false, true);
     checkSource(File, true);
   }
+}
+
+TEST(MIPSSplitAddressFields, RetainedN64GPDisplacementUsesBothSymbols) {
+  using namespace llvm::ELF;
+  for (Arch A : {Arch::MIPS64, Arch::MIPS64EL})
+    for (int64_t Addend : {-8, 0, 24}) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << Addend);
+      SplitAddressELF File(A, true, Addend, true);
+      File.put(48, EF_MIPS_ARCH_64R2 | EF_MIPS_CPIC | EF_MIPS_MICROMIPS, 4);
+      const va_t GOT = File.Base + 0x8300, GP = GOT + 0x7ff0;
+      File.globalPointer(GP);
+      const size_t SH = File.SectionHeaders + 6 * 64;
+      File.put(60, 7, 2);
+      const char Name[] = ".got";
+      std::copy(std::begin(Name), std::end(Name),
+                File.Bytes.begin() + 0x8a00 + 43);
+      File.put(SH - 64 + 32, 43 + sizeof(Name), 8);
+      File.put(SH, 43, 4);
+      File.put(SH + 4, SHT_PROGBITS, 4);
+      File.put(SH + 8, SHF_ALLOC | SHF_WRITE, 8);
+      File.put(SH + 16, GOT, 8);
+      File.put(SH + 24, 0x8300, 8);
+      File.put(SH + 32, 16, 8);
+      const uint64_t Disp = GP - (File.Target + 1 + uint64_t(Addend));
+      File.put(0x100, 0x24020000u | uint16_t(Disp), 4);
+      File.put(0x104, 0x3c010000u | uint16_t((Disp + 0x8000) >> 16), 4);
+      for (unsigned I : {0u, 1u}) {
+        const auto R = File.Relocations + I * File.RelocationSize;
+        File.Bytes[R + 13] = I ? R_MIPS_HI16 : R_MIPS_LO16;
+        File.Bytes[R + 14] = R_MIPS_SUB;
+        File.Bytes[R + 15] = R_MIPS_GPREL16;
+      }
+      auto Image = ELFLoader().loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      ASSERT_EQ(Image->MIPS->InstructionRelocations.size(), 2u);
+      for (const auto &Field : Image->MIPS->InstructionRelocations) {
+        ASSERT_TRUE(Field.Value);
+        EXPECT_TRUE(Field.Value->GPDisplacement);
+        EXPECT_EQ(Field.Value->Addend, Addend);
+      }
+      checkSource(File, true);
+      File.put(0x104, 0x3c010003u, 4);
+      checkSource(File, false, false);
+      File.Bytes[File.Relocations + 12] = 1; // RSS_GP changes the subtraction.
+      auto Unknown = ELFLoader().loadBuffer(File.buffer());
+      ASSERT_FALSE(bool(Unknown));
+      EXPECT_NE(llvm::toString(Unknown.takeError()).find("packed MIPS64"),
+                std::string::npos);
+    }
+}
+
+TEST_P(MIPSInstructionRelocations, Release6ZeroBaseAUIRetainsUpperSymbol) {
+  const Arch A = GetParam();
+  SplitAddressELF File(A, true, 0, true);
+  const uint32_t Flags = isMIPSN32(A) ? 0xa2000020u
+                         : File.Is64  ? 0xa2000000u
+                                      : 0x92001000u;
+  File.put(File.Is64 ? 48 : 36, Flags, 4);
+  File.put(0x10c, 0x03e00009, 4); // R6 jalr $zero,$ra
+  File.put(0x8100, 0x47e3, 2);    // microMIPS R6 jrc16 $ra
+  checkSource(File, true);
 }
 
 TEST(MIPSSplitAddressFields, CompressedO32CallableKeepsTagInBothSources) {

@@ -48,6 +48,8 @@ void LowToMedConverter::propagate(MedFunc &Func) {
   llvm::DenseMap<DefKey, const MedOp *> Defs;
 
   const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
+  const bool MIPSWordAddresses =
+      Image && Image->isELF() && hasMIPS32BitAddressIn64BitGPR(TargetArch);
   auto HasExactLoaderProvenance = [&](uint64_t Value) {
     // Value-global inventories cannot distinguish an unrelated numeric/null
     // zero from a different relocation occurrence that legitimately targets
@@ -293,6 +295,26 @@ void LowToMedConverter::propagate(MedFunc &Func) {
     Changed = false;
     for (auto &Blk : Func.Blocks) {
       for (auto &Op : Blk.Ops) {
+        // n32 and wide o32 carry ELF32 addresses sign-extended in GPRs.
+        // Memory uses the relocated word. Integer users still observe all
+        // eight register bytes, and a loaded pointer still reads its cell.
+        if (MIPSWordAddresses &&
+            ((Op.Opcode == NdOp::LOAD && Op.NumInputs == 1) ||
+             (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)) &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.Inputs[0].Size == 8 && !Op.Inputs[0].isConst()) {
+          auto It = Defs.find(keyOf(Op.Inputs[0]));
+          if (It != Defs.end()) {
+            const MedOp &Def = *It->second;
+            if (Def.Opcode == NdOp::INT_SEXT && Def.NumInputs == 1 &&
+                Def.Output.Size == 8 && Def.Inputs[0].Size == PointerSize &&
+                Def.Inputs[0].isConst() &&
+                isExactAddressProvenance(Def.Inputs[0].Provenance)) {
+              Op.Inputs[0] = Def.Inputs[0];
+              Changed = true;
+            }
+          }
+        }
         if (Op.NumInputs < 2)
           continue;
         // Some lifters emit the boolean flag directly, without passing

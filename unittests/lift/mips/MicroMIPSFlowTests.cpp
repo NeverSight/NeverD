@@ -12,6 +12,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
@@ -541,6 +542,62 @@ TEST_P(MicroMIPSFlow, NativeDirectCallMustMatchItsDestinationMode) {
                                        0x1010),
             0x1010u);
   EXPECT_TRUE(buildMicro(Image).DecodeFailureAddresses.empty());
+}
+
+TEST(MicroMIPS64, N32RegisterCallUsesTheELFAddressAndCalleeMode) {
+  for (Arch Target : {Arch::MIPS64N32, Arch::MIPS64N32EL})
+    for (va_t Base : {0x71010100u, 0x91010100u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Target) << ':' << Base);
+      // Save ra, load the classic callee into t9 with LUI/ADDIU, JALR t9,
+      // add seven to v0, restore ra and return.
+      auto Image =
+          microImage(Target, {0x33bd, 0xfff0, 0xdbfd, 8, 0x1020,
+                              uint16_t(Base >> 16), 0x3321, 0x0140, 0x472b,
+                              0x5c42, 7, 0xdffd, 8, 0x33bd, 0x10, 0x801f, 0});
+      Image.Entry = Base;
+      Image.MIPS->ABI = MIPSABI::N32;
+      Image.MIPS->ISARevision = 6;
+      const va_t Callee = Base + 0x40;
+      Image.MIPS->CodeModeEntries = {{Base, InstructionMode::MicroMIPS},
+                                     {Callee, InstructionMode::MIPSClassic}};
+      auto &Text = Image.Segments.front();
+      Text.VA = Base;
+      Image.Symbols = {Symbol::makeFunc(Base, Text.Size),
+                       Symbol::makeFunc(Callee, 8)};
+      Text.Size = Text.FileSz = 0x48;
+      Text.Data.resize(Text.Size);
+      const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                  : llvm::endianness::big;
+      llvm::support::endian::write32(Text.Data.data() + 0x40, 0x03e00009,
+                                     Order);
+      llvm::support::endian::write32(Text.Data.data() + 0x44, 0x64820005,
+                                     Order);
+      const auto Low = buildMicro(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      const auto Targets = constantRegisterCallTargets(Low);
+      ASSERT_EQ(Targets.size(), 1u);
+      EXPECT_EQ(Targets.begin()->first.Instruction, Base + 0x10);
+      const va_t Raw = Targets.begin()->second;
+      EXPECT_EQ(Raw, static_cast<va_t>(llvm::SignExtend64<32>(Callee)));
+      const auto Resolve = [&](va_t Address) {
+        return qualifiedMIPSControlTarget(
+            Image, InstructionMode::MicroMIPS,
+            LowInstructionTargetMode::FromTargetBit0, Address);
+      };
+      EXPECT_EQ(Resolve(Raw), Callee);
+      EXPECT_FALSE(Resolve(Raw | 1));
+      EXPECT_FALSE(Resolve(Callee | (uint64_t{1} << 32)));
+      EXPECT_FALSE(Resolve(InvalidVA));
+      // A classic-only ELF uses the same GPR representation. Its direct
+      // operands already name ELF addresses.
+      BinaryImage Classic;
+      Classic.Arch = Target;
+      LowBlock Site;
+      Site.Ops.emplace_back().Opcode = NdOp::INDIR_CALL;
+      EXPECT_EQ(qualifiedMIPSCallTarget(Classic, Site, 0, Raw), Callee);
+      Site.Ops.front().Opcode = NdOp::CALL;
+      EXPECT_EQ(qualifiedMIPSCallTarget(Classic, Site, 0, Raw), Raw);
+    }
 }
 
 TEST_P(MicroMIPSFlow, CallableTagsAndCanonicalDirectDestinationsStayDistinct) {

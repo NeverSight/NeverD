@@ -51,8 +51,8 @@ inline void requireNumericCodePointerSource(const BinaryImage *Image,
       !Image->isImportStubAt(CanonicalAddress)) {
     if (Mode == InstructionMode::MIPSClassic)
       return;
-    if (Image->MIPS && Image->MIPS->ISARevision == 2 &&
-        !Image->MIPS->HistoricalISA) {
+    if (Image->MIPS && !Image->MIPS->HistoricalISA) {
+      const auto Revision = Image->MIPS->ISARevision;
       const bool O32 =
           (Image->Arch == Arch::MIPS32 || Image->Arch == Arch::MIPS32EL) &&
           Image->MIPS->ABI == MIPSABI::O32;
@@ -62,8 +62,10 @@ inline void requireNumericCodePointerSource(const BinaryImage *Image,
       const bool N64 =
           (Image->Arch == Arch::MIPS64 || Image->Arch == Arch::MIPS64EL) &&
           Image->MIPS->ABI == MIPSABI::N64;
-      if ((Mode == InstructionMode::MIPS16 && Image->MIPS->HasMIPS16 && O32) ||
+      if ((Mode == InstructionMode::MIPS16 && Image->MIPS->HasMIPS16 && O32 &&
+           Revision == 2) ||
           (Mode == InstructionMode::MicroMIPS && Image->MIPS->HasMicroMIPS &&
+           (Revision == 2 || Revision == 3 || Revision == 5 || Revision == 6) &&
            (O32 || N32 || N64)))
         return;
     }

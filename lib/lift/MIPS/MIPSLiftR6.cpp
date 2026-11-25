@@ -52,6 +52,9 @@ MIPSLifter::Encoding MIPSLifter::release6Encoding(uint32_t Word) const {
   if (Op == 0 && (Fn <= 4 || Fn == 6 || Fn == 7 || Fn == 15 || Fn == 20 ||
                   Fn == 22 || Fn == 23 || (Fn >= 32 && Fn <= 47) || Fn >= 56))
     return Encoding{Word};
+  // AUI with $zero as its base is LUI and has the same word result.
+  if (Op == 15 && !(Word & 0x03e00000))
+    return Encoding{Word};
   if ((Op >= 9 && Op <= 14) || Op == 25 || Op == 32 || Op == 33 || Op == 35 ||
       Op == 36 || Op == 37 || Op == 39 || Op == 40 || Op == 41 || Op == 43 ||
       Op == 55 || Op == 63)
@@ -102,10 +105,18 @@ bool MIPSLifter::liftR6Compact(State &S, uint32_t Word,
                  RT = (Word >> 16) & 31;
   const bool Indirect = (Op == 54 || Op == 62) && !RS;
   const auto Zero = NdVar::cst(0, S.Width);
-  NdVar TargetValue =
-      Indirect ? S.binary(NdOp::INT_ADD, S.read(RT),
-                          NdVar::cst(int64_t(int16_t(Word)), S.Width))
-               : NdVar::cst(r6BranchTarget(Word, S.Addr, S.InsnSize), S.Width);
+  NdVar TargetValue;
+  if (Indirect) {
+    // JRC and JALRC sample the callable register before a possible link write.
+    TargetValue = S.makeTemp(S.Width);
+    const int16_t Offset = int16_t(Word);
+    if (Offset)
+      S.emit(NdOp::INT_ADD, TargetValue,
+             {S.read(RT), NdVar::cst(int64_t(Offset), S.Width)});
+    else
+      S.emit(NdOp::COPY, TargetValue, {S.read(RT)});
+  } else
+    TargetValue = NdVar::cst(r6BranchTarget(Word, S.Addr, S.InsnSize), S.Width);
   const auto Next = NdVar::cst(S.Width == 4 ? uint32_t(S.Addr + S.InsnSize)
                                             : S.Addr + S.InsnSize,
                                S.Width);

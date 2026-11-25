@@ -66,6 +66,10 @@ struct MIPSImageMetadata {
   /// Linked GP used to authenticate a function-local PIC address calculation.
   /// This value does not describe the caller's incoming GP.
   std::optional<uint64_t> PICGP;
+  /// Static GNU GOT cells holding an unmapped, 64-KiB-aligned page base.
+  /// A following signed displacement can still address an allocated object.
+  /// Cells are recorded in table order.
+  std::vector<va_t> UnmappedGOTPageSlots;
 
   /// Retained linked instruction relocations, sorted by instruction VA. They
   /// authenticate individual fields, never unrelated equal-valued literals.

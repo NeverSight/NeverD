@@ -539,7 +539,8 @@ static CompiledImage compileImageForPatchImpl(
     llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
         FixedSectionVAFn,
     uint64_t ImageBaseVA, llvm::StringRef TargetTriple,
-    RewriteInputKind InputKind) {
+    RewriteInputKind InputKind,
+    const MIPSImageMetadata *MIPSProfile = nullptr) {
   SourceDisplacements PLT;
   PLT.IsMachO = Fmt == BinaryFormat::MachO;
   PLT.IsI386ELF = TargetArch == Arch::X86 && Fmt == BinaryFormat::ELF;
@@ -565,21 +566,6 @@ static CompiledImage compileImageForPatchImpl(
     Out.TargetMode = Triple.getArch() == llvm::Triple::thumb
                          ? InstructionMode::Thumb
                          : InstructionMode::ARM;
-  switch (TargetArch) {
-  case Arch::X64:
-  case Arch::AArch64:
-    Out.PointerWidth = 8;
-    break;
-  case Arch::X86:
-  case Arch::ARM:
-    Out.PointerWidth = 4;
-    break;
-  default:
-    Out.PointerWidth = 0;
-    break;
-  }
-  Out.ByteOrder = llvm::endianness::little;
-
   auto OriginalVAs = collectSourceFunctionOriginalVAs(Mod);
   if (!OriginalVAs) {
     llvm::WithColor::error()
@@ -641,12 +627,16 @@ static CompiledImage compileImageForPatchImpl(
   Codegen CG1;
   auto Pass1Mod = llvm::CloneModule(Mod);
   auto Res1 = CG1.compileForRewrite(*Pass1Mod, TargetArch, Pass1, Fmt,
-                                    TargetTriple, InputKind);
+                                    TargetTriple, InputKind, MIPSProfile);
   if (!Res1.ImageValid) {
     llvm::WithColor::error()
         << "compileImageForPatch: sizing compile produced an invalid image\n";
     return Out;
   }
+  const auto &Layout = Pass1Mod->getDataLayout();
+  Out.PointerWidth = Layout.getPointerSize();
+  Out.ByteOrder = Layout.isLittleEndian() ? llvm::endianness::little
+                                          : llvm::endianness::big;
   if (InputKind == RewriteInputKind::ReplacementIR &&
       !Res1.Unresolved.empty()) {
     llvm::WithColor::error()
@@ -933,7 +923,7 @@ static CompiledImage compileImageForPatchImpl(
     Codegen CGn;
     auto IterMod = llvm::CloneModule(Mod);
     auto ResN = CGn.compileForRewrite(*IterMod, TargetArch, PassN, Fmt,
-                                      TargetTriple, InputKind);
+                                      TargetTriple, InputKind, MIPSProfile);
     NameSpecifiers(IterationFixups);
     if (!ResN.ImageValid) {
       llvm::WithColor::error()
@@ -1183,9 +1173,21 @@ CompiledImage compileImageForPatchWithFixedSectionVAs(
         FixedSectionVAFn,
     uint64_t ImageBaseVA, llvm::StringRef TargetTriple,
     RewriteInputKind InputKind) {
+  return compileImageForPatchWithFixedSectionVAs(
+      Mod, TargetArch, Fmt, BaseVA, ResolveFn, FixedSectionVAFn, ImageBaseVA,
+      TargetTriple, InputKind, nullptr);
+}
+
+CompiledImage compileImageForPatchWithFixedSectionVAs(
+    llvm::Module &Mod, Arch TargetArch, BinaryFormat Fmt, uint64_t BaseVA,
+    ContextualPatchSymbolResolver ResolveFn,
+    llvm::function_ref<std::optional<uint64_t>(llvm::StringRef)>
+        FixedSectionVAFn,
+    uint64_t ImageBaseVA, llvm::StringRef TargetTriple,
+    RewriteInputKind InputKind, const MIPSImageMetadata *MIPSProfile) {
   return compileImageForPatchImpl(
       Mod, TargetArch, Fmt, BaseVA, PatchSymbolResolvers{nullptr, ResolveFn},
-      FixedSectionVAFn, ImageBaseVA, TargetTriple, InputKind);
+      FixedSectionVAFn, ImageBaseVA, TargetTriple, InputKind, MIPSProfile);
 }
 
 } // namespace neverd

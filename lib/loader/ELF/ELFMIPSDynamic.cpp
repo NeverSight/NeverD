@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ELFLoaderDetail.h"
+#include "ELFMIPSInstructionRelocations.h"
 
 #include "neverd/loader/ELF/ELFProgramMetadata.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
@@ -24,7 +25,7 @@ namespace neverd::elf_loader::detail {
 // two reserved cells. A table with TLS can also contain integer offsets.
 template <typename ELFT>
 static void
-collectStaticGOTPointers(const BinaryImage &Img,
+collectStaticGOTPointers(BinaryImage &Img,
                          std::vector<AbsolutePointerRelocation> &Pointers) {
   using namespace llvm::ELF;
   if (!Img.ELFMetadata || Img.ELFMetadata->Type != ET_EXEC ||
@@ -46,8 +47,11 @@ collectStaticGOTPointers(const BinaryImage &Img,
     return;
   for (size_t Offset = 2 * Width; Offset < Got->Size; Offset += Width) {
     const uint64_t Target = readPtr(Bytes + Offset, ELFT::Is64Bits, Little);
-    if (Target)
+    if (Target) {
       Pointers.push_back({Got->VA + Offset, Target});
+      if (!(Target & 0xffff) && !Img.getSegmentFor(Target))
+        Img.MIPS->UnmappedGOTPageSlots.push_back(Got->VA + Offset);
+    }
   }
 }
 
@@ -82,7 +86,11 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
       for (const auto &Entry : *Entries) {
         const auto Type = Entry.getType(ELF.isMips64EL());
         if constexpr (ELFT::Is64Bits)
-          if (Type & 0xffffff00u)
+          if ((Type & 0xffffff00u) &&
+              (Runtime || Section.sh_type != SHT_RELA ||
+               Section.sh_info >= Sections.size() ||
+               !(Sections[Section.sh_info].sh_flags & SHF_EXECINSTR) ||
+               !mipsPackedGPDisplacement(Type)))
             return llvm::createStringError(
                 llvm::inconvertibleErrorCode(),
                 "elf: packed MIPS64 relocations are not supported");
@@ -146,7 +154,7 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
   auto Dynamic = readELFProgramDynamicTable(Img);
   if (!Dynamic)
     return Dynamic.takeError();
-  if (Dynamic->empty() && Img.MIPS && Img.MIPS->PICGP && isMIPS64(Img.Arch))
+  if (Dynamic->empty() && Img.MIPS && Img.MIPS->PICGP)
     collectStaticGOTPointers<ELFT>(Img, LinkedPointers);
   recordAbsolutePointerRelocations(Img, LinkedPointers);
   std::map<int64_t, uint64_t> Tags;

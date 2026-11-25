@@ -35,9 +35,11 @@ sizes. Use the target linker to place the sections and resolve relocations.
 | n64 | 64-bit GPRs and pointers | ELF64, both byte orders |
 
 For scalar classic MIPS32 and MIPS64, the ELF header identifies Release 1.
-Releases 3 and 5 share the Release 2 header flags. Their ISA revision comes
-from `.MIPS.abiflags`. Without this record the loader admits the Release 2
-subset. Release 1 uses its own instruction encodings in disassembly and lift.
+For both classic and microMIPS, Releases 3 and 5 share the Release 2 header
+flags. Their ISA revision comes from `.MIPS.abiflags`. A scalar microMIPS
+record carries the microMIPS ASE bit. Without this record the loader admits
+the Release 2 subset. Release 1 uses its own instruction encodings in
+disassembly and lift.
 For example, the encoding later assigned to EHB acts as SSNOP on Release 1.
 ROTR requires Release 2 or a separately identified SmartMIPS extension.
 [MIPS32 instruction set, EHB and ROTR](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00086-2B-MIPS32BIS-AFP-05.04.pdf).
@@ -50,8 +52,34 @@ symbols carry their instruction mode so a native linker can construct callable
 pointers. The r8 SDK supports MIPS III/o32, MIPS V, MIPS16 and microMIPS o32,
 and fixed-address output. The r9 SDK also emits scalar microMIPS64 bodies
 for Releases 2, 3 and 5 in both byte orders. n32 retains ELF32 pointers and n64
-retains ELF64 pointers. Release 6 microMIPS64
-native emission requires additional backend support. Selecting r7 limits
+retains ELF64 pointers. The r10 SDK adds scalar microMIPS64 Release 6
+object and fixed-address output for these ABIs and byte orders. The target
+layout records the pointer width and byte order across code and data sections.
+Release 6 calls use a tagged address when switching between classic and
+microMIPS functions. Clang preserves the mode on declarations. When a callee’s
+mode is resolved at link time, LLD supplies the mode-switching thunk. On n64
+the compiler keeps the full address of stack variables. On n32, a register call
+can hold an upper-half ELF32 function address sign-extended to 64 bits.
+NeverD matches that address and the instruction-mode tag to the callee before
+emitting the call. For 64-bit field writes, five cross-word starting positions
+have conflicting encodings in the reference manual.
+The compiler emits an equivalent sequence with unambiguous instructions.
+[Release qualification](evidence/mips-llvm-r10-micromips64r6.json).
+
+The r11 SDK encodes both source registers of microMIPS R6 `ALIGN` in
+architectural order. On microMIPS32 R6 it emits `jrc16 $ra` as the
+halfword `0x47e3`. The pre-R6 return encoding `0x45bf` decodes as
+`movep` on R6. Both 32-bit and 64-bit microMIPS R6 use `bc` for a
+local unconditional branch, including a jump to a shared return path.
+The lifter keeps a zero-offset `jrc` or `jalrc` target as a copy of the
+incoming register before writing the link. This preserves the callable
+value through n32's sign-extended GOT loads.
+Selecting an older SDK yields a diagnostic for microMIPS R6 code
+generation. The Unicorn fork also rejects the seven
+reserved field values of the word operations `LSA` and `ALIGN`.
+[Encoding and execution results](evidence/mips-llvm-r11-micromipsr6.json).
+
+Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
 The fork can compile ordinary LLVM functions for historical I–III ISAs.
@@ -84,8 +112,12 @@ ratio included 1.
 - ELF identification and loading share class, ISA, ABI and encoding checks.
   Sectionless dynamic tables, MIPS global GOT suffixes and standard PLT veneers
   retain symbol identities. Data pointers and DWARF frame records use target
-  byte order. A packed MIPS64 relocation is refused until all of its component
-  operations are implemented. Runtime relocation tables are read from
+  byte order. In linked n64 code, retained RELA records can combine
+  `R_MIPS_GPREL16`, `R_MIPS_SUB` and `R_MIPS_HI16` or `R_MIPS_LO16`.
+  Each instruction field must match the linked GP minus the callable symbol
+  and its addend. Source conversion preserves both the GOT and function
+  identities. Other packed operations and packed runtime relocations are
+  refused. Runtime relocation tables are read from
   `PT_DYNAMIC`, including when a section table is present. Unimplemented
   relocations (including REL32/32/64 runtime fixups) and imported data/TLS GOT
   bindings fail explicitly. Admitted scalar COPY objects remain external
@@ -100,14 +132,16 @@ ratio included 1.
   upper half of the n32 address space retain their ELF32 storage identity
   when generated code is relinked. Each later register write takes effect
   normally.
-- In linked classic n32/n64 PIC and CPIC code, the ordinary entry can
-  establish GP from its incoming `$t9` and a linker displacement. Source
+- In linked MIPS o32, n32 and n64 PIC and CPIC code, the ordinary entry can
+  establish GP from its incoming `$t9` and a linker displacement. A
+  microMIPS function receives its tagged entry address in `$t9`. The
+  linker includes that low bit when computing the displacement. Source
   conversion follows saved copies of `$t9` across direct branches and loops.
   A branch-likely passes the pre-slot value on its skipped edge and the
   updated value on its taken edge. The classic `b` alias and
   `beql $zero,$zero` always execute their slot and have one successor.
   Every incoming path, including loop backedges, must establish the same
-  value. After an ordinary n32/n64 call, a saved entry value survives in a
+  value. After an ordinary call, a saved entry value survives in a
   register the ABI preserves. The call's executed delay slot participates in
   that proof. An independent entry ends it. The completed write must match
   the image-wide register-info GP. This covers assembler `.cpsetup` and
@@ -117,7 +151,21 @@ ratio included 1.
   GOT import load retains its symbol through n32's sign extension. A static
   GNU GOT with a single GP and no TLS can supply the initial address of a
   writable callback object. The call reads the object's current pointer.
+  In n32 HighC, an indirect call through a mutable pointer can lose a
+  forwarded incoming integer argument when its prototype is unknown.
+  Retaining the DWARF caller and function-pointer types preserves that
+  argument in the tested Release 2, 3, 5 and 6 programs.
+  A local GOT cell can also contain a rounded 64 KiB page address outside
+  the mapped image. Source conversion reports a proved load of such a cell
+  when the page and its displacement lack relocatable storage identity.
   Scoped GP records cannot supply the image-wide GP proof.
+- On n32, a load or store through a sign-extended ELF32 symbol uses that
+  symbol's 32-bit address when the program is relinked. Other uses of the
+  register retain all 64 bits. Tests move a PIC executable between the
+  lower and upper halves of the address space, switch a writable callback
+  from microMIPS to classic code, call it, and restore the original target.
+  They cover both byte orders and Releases 2, 3, 5 and 6 with DWARF types.
+  [Input hashes and execution results](evidence/mips-n32-high-got.json).
 - When the incoming return address is saved only on the stack, its slot must
   stay private across calls. An untyped result passed to another opaque call
   can carry a frame address. Replacing that argument before the call, including
@@ -764,10 +812,10 @@ Each covers 16 profiles, 128 builds and 4,096 executions with the same byte
 orders, FR modes, compilers and observations. The unit and isolated-function
 receipts identify their different tested commits explicitly.
 
-Numeric microMIPS code identities are admitted for defined r2 targets with
-explicit ELF mode evidence in o32, n32 and n64. MIPS16 numerical identities
-remain limited to r2/o32. Both source backends share this boundary; unknown-mode
-imports, including whole or partial GOT reads, remain refused. Direct control
+Numeric microMIPS code identities are admitted for defined targets in Releases
+2, 3, 5 and 6 with explicit ELF mode evidence in o32, n32 and n64. MIPS16
+numerical identities remain limited to r2/o32. Both source backends reject
+unknown-mode imports, including whole or partial GOT reads. Direct control
 identities, serialized callables and code-byte/data addresses retain distinct
 roles. The NeverSight LLVM SDK uses the fork's `Fi8` data layout, so stronger function
 code alignment cannot clear the callable ISA tag during LLVM optimization.
@@ -798,7 +846,8 @@ registers. Shared source projection applies each field's carry, shift and
 truncation to the rebuilt symbol address while keeping physical LowIR unchanged.
 Address arithmetic and bit projection retain that symbol's identity.
 This currently covers classic LUI, ADDIU, DADDIU and ORI fields naming defined
-function symbols. It does not cover compressed instruction relocation encodings
+function symbols. Release 6 uses the same LUI operation for AUI with a zero
+base register. It does not cover compressed instruction relocation encodings
 or infer an address from an equal numeric literal. Without relocation or other
 authenticated use evidence, the original integer bits remain scalar. Conflicting,
 mismatched or unpaired claimed fields refuse source reconstruction.
@@ -1801,6 +1850,24 @@ after detection. The analyzer listing begins at the read.
 [IDT application note AN-93, figures 1 and 2](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/849.pdf),
 [R3051 hardware manual, chapter 10, Reset Behavior](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/ic/cpu/mips/r3051.pdf#page=131).
 
+Tektronix's TMS 420 example labels bus sample 0 as reset initiation.
+The first external ROM read at `0x1fc00000` carries a 480 ns timestamp.
+The jump, NOP delay slot and target load set `v0` to `0x20100000` in
+a software replay of the three displayed words in either byte order.
+The probe latches groups at different times and stores one state per bus
+cycle. HP's R3900 note illustrates separate bus and program-counter
+captures and gives calculated cross-trigger delays for a 75 MHz clock.
+The two examples leave the physical reset-release-to-fetch,
+TLB-write-to-first-use and IRQ-pin-to-acceptance intervals open.
+[Tektronix TMS 420, figure 2-1 and table 2-4](https://download.tek.com/manual/070982600.pdf#page=31)
+and [HP 5965-1529E, pp. 2–3](https://hpwiki.mcguirescientificservices.com/_media/application_notes%3A5965-1529e.pdf#page=2).
+
+The ACIS Mongoose, an R3000 implementation, has a separate microboot
+configuration read at virtual address `0xbffffffc` before it sets the PC
+to the reset vector `0xbfc00000`. Its memory map omits a TLB. The design
+documents this ordering without a sampled interval.
+[MIT ACIS boot hardware, section 5.2.3](https://acisweb.mit.edu/acis/sprelim/hardware.html).
+
 On Stanford's FAST board, an oscilloscope recorded the R3000's 25 MHz
 system clock, its instruction-request output and the FPGA's instruction-ready
 signal. Three uncached bus reads are visible. The instrument captured a
@@ -1890,7 +1957,9 @@ separate timing acquisition, the six-bit input group stays at `0x37` throughout
 samples 137–159 in figure 5-1. Figure 5-2 displays the exception signal and
 a 530 ns trigger-to-cursor interval. Neither figure locates an input edge
 against CPU recognition. The original reference memories are named
-`R3000_Demo` and `R3K_Timg_96`.
+`R3000_Demo` and `R3K_Timg_96`. The 92DM74 application disk also uses
+`R3K_Timg_96` for a module setup and a display format. The reference-memory
+file holds the channel samples.
 [Tektronix 92DM74, figure 4-10](https://download.tek.com/manual/070809000.pdf#page=70),
 [figures 5-1 and 5-2](https://download.tek.com/manual/070809000.pdf#page=80).
 
@@ -1918,11 +1987,12 @@ record with the interrupt edge and CPU recognition on a common clock.
 IDT gives separate R3051/2 pipeline latencies to the general exception
 vector while the pipeline runs. A direct, externally synchronized interrupt
 takes one cycle and an internally synchronized input takes two. A stalled
-pipeline defers recognition. The application note gives these values under
-stated conditions. A physical pin-to-recognition measurement still needs
+pipeline defers recognition. Table 1 gives 4–25 cycles from assertion to
+service entry for the example priority handler with code and stack in cache.
+A physical pin-to-recognition measurement still needs
 the CPU input transition and an identifiable recognition event on the same
 timebase. NeverD accepts the observed interrupt state at an instruction boundary.
-[IDT application note AN-131, Pipeline Latency, pp. 103–104](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/861.pdf#page=1).
+[IDT application note AN-131, table 1 and Pipeline Latency, pp. 103–104](https://ftp.zx.net.nz/pub/micro/wumips/79R3041/71256SA/861.pdf#page=1).
 
 The VR4300 test ROM also compares back-to-back writes that assert and clear
 a software interrupt with a sequence that inserts one NOP. The latter checks

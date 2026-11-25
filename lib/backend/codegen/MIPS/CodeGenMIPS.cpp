@@ -216,7 +216,10 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
                          "NeverSight LLVM MIPS backend");
 #endif
     if (Micro && !isMIPSO32(Target)) {
-#ifdef LLVM_NEVERD_MICROMIPS64_PRE_R6
+#if defined(LLVM_NEVERD_MICROMIPS64_R6)
+      if (!Subtarget->checkFeatures("+mips64r2"))
+        return Unsupported("microMIPS64 requires MIPS64 Release 2 or later");
+#elif defined(LLVM_NEVERD_MICROMIPS64_PRE_R6)
       if (!Subtarget->checkFeatures("+mips64r2,-mips64r6"))
         return Unsupported("microMIPS64 requires MIPS64 Release 2, 3 or 5");
 #else
@@ -224,6 +227,11 @@ llvm::Expected<MIPSELFCodegenTarget> configureMIPSELFCodegen(
           "microMIPS64 bodies require the updated NeverSight LLVM backend");
 #endif
     }
+#ifndef LLVM_NEVERD_MICROMIPS_R6_COMPACT_BRANCHES
+    if (Micro && Subtarget->checkFeatures("+mips32r6"))
+      return Unsupported("microMIPS Release 6 compact branches and returns "
+                         "require NeverSight LLVM SDK r11 or later");
+#endif
     if (Mips16 && (!isMIPSO32(Target) || Revision == 6 || Micro))
       return Unsupported("MIPS16 requires pre-R6 o32 without microMIPS");
   }

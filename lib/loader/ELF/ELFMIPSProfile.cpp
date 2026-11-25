@@ -345,12 +345,15 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
           "FP32 hard-float ABI requires pre-R6 and 32-bit CPR1");
     // GNU e_flags use the R2 encoding for R2, R3 and R5. Only the ABI
     // record distinguishes a later ISA, including on a scalar-only CPU.
-    const bool LaterClassic = Profile.ISARevision == 2 && !Compressed && !ASE &&
-                              (Bytes[3] == 3 || Bytes[3] == 5);
+    const bool LaterScalar =
+        Profile.ISARevision == 2 && !Profile.HasMIPS16 &&
+        ASE == (Profile.HasMicroMIPS ? uint32_t(llvm::Mips::AFL_ASE_MICROMIPS)
+                                     : 0u) &&
+        (Bytes[3] == 3 || Bytes[3] == 5);
     if (Bytes[2] != (Historical ? Historical
                      : Wide     ? 64
                                 : 32) ||
-        (!LaterClassic &&
+        (!LaterScalar &&
          Bytes[3] != (Profile.HasMSA ? 5 : Profile.ISARevision)) ||
         (Bytes[4] != (Wide ? 2 : 1) && !(HistoricalO32 && Bytes[4] == 2)))
       return profileError("ABI flags conflict with the admitted GPR profile");

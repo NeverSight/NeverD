@@ -989,7 +989,7 @@ MedFunc LowToMedConverter::convertFunction(
           : std::nullopt;
   if (SEHPhysical)
     Physical = std::move(SEHPhysical->Function);
-  if (Image && isMIPS64(TheArch) && Image->Arch == TheArch &&
+  if (Image && isMIPS(TheArch) && Image->Arch == TheArch &&
       Fmt == BinaryFormat::ELF)
     Physical = projectMIPSPICGlobalPointer(SourceLow, *Image);
   const LowFunc &Low = Physical ? *Physical : SourceLow;

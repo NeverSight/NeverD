@@ -33,20 +33,28 @@ void collectMIPSInstructionRelocations(BinaryImage &Image) {
   using SymbolKey = std::tuple<uint64_t, uint32_t, uint32_t>;
   std::map<SymbolKey, std::vector<va_t>> PendingHigh;
   for (const auto &R : Image.Relocations) {
-    std::optional<MIPSImmediatePart> Part;
-    switch (R.Type) {
+    const auto GPPart = mipsPackedGPDisplacement(R.Type);
+    std::optional<MIPSImmediatePart> Part = GPPart;
+    if (!GPPart) {
+      switch (R.Type) {
 #define NEVERD_MIPS_IMMEDIATE_RELOCATION(Name, Type, Shift, Carry)             \
   case Type:                                                                   \
     Part = MIPSImmediatePart::Name;                                            \
     break;
 #include "neverd/loader/ELF/MIPSImmediateRelocations.def"
-    default:
-      continue;
+      default:
+        continue;
+      }
     }
-    if (!R.ELF || !R.ELF->Symbol || !R.ELF->Symbol->isFunction())
+    const bool FunctionSymbol =
+        R.ELF && R.ELF->Symbol && R.ELF->Symbol->isFunction();
+    if (!GPPart && !FunctionSymbol)
       continue;
     auto &Field = Fields[R.Address];
     Field.Address = R.Address;
+    if (!FunctionSymbol ||
+        (GPPart && (!Image.MIPS->PICGP || !R.HasExplicitAddend)))
+      continue;
     const auto &Symbol = *R.ELF->Symbol;
     const auto *Bytes = Image.readVA(R.Address, 4);
     if (Claims[R.Address] != 1 || !Symbol.isDefined() || !Bytes ||
@@ -73,10 +81,13 @@ void collectMIPSInstructionRelocations(BinaryImage &Image) {
         !mips::codeModeRangeMatches(Image, Entry, 1, Mode))
       continue;
     const va_t Value = serializeCodePointer(Entry, Image.Arch, Mode);
-    auto Candidate = MIPSSymbolImmediate{Value, R.Addend, Word, *Part};
+    auto Candidate =
+        MIPSSymbolImmediate{Value, R.Addend, Word, *Part, GPPart.has_value()};
     if (R.HasExplicitAddend) {
-      if (extractionOf(*Part).apply(Value + uint64_t(R.Addend)) ==
-          uint16_t(Word))
+      const uint64_t Absolute = Value + uint64_t(R.Addend);
+      const uint64_t Expression =
+          GPPart ? *Image.MIPS->PICGP - Absolute : Absolute;
+      if (extractionOf(*Part).apply(Expression) == uint16_t(Word))
         Field.Value = Candidate;
       continue;
     }

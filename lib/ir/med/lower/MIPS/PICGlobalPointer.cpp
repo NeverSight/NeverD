@@ -8,8 +8,10 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/MIPSGPAnchor.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -109,7 +111,7 @@ public:
   void nextInstruction() { Temps.clear(); }
 
   bool resumeCall(Arch Target, va_t Resume) {
-    const auto Link = read(NdVar::reg(mipsreg::RA, 8));
+    const auto Link = read(NdVar::reg(mipsreg::RA, isMIPS64(Target) ? 8 : 4));
     if (!Link || Link->Base != Origin::Scalar || Link->Bits != Resume)
       return false;
     const auto &TRI = getTargetRegInfo(Target);
@@ -142,12 +144,24 @@ public:
       return A->Bits;
     return std::nullopt;
   }
+
+  bool readsGOTPage(const NdVar &Address, unsigned Bytes,
+                    llvm::ArrayRef<va_t> Slots) const {
+    const auto V = read(Address);
+    if (!V || V->Base != Origin::AdjustedEntry)
+      return false;
+    const va_t Start = WordPointers ? uint32_t(V->Bits) : V->Bits;
+    const auto Next = std::lower_bound(Slots.begin(), Slots.end(), Start);
+    return (Next != Slots.end() && *Next - Start < Bytes) ||
+           (Next != Slots.begin() && Start - Next[-1] < (WordPointers ? 4 : 8));
+  }
 };
 
 struct BlockProof {
   llvm::SmallVector<std::pair<size_t, uint64_t>, 4> Words;
   llvm::SmallVector<size_t, 1> Writes;
   size_t RequiredWords = 0;
+  bool ReadsUnmappedGOTPage = false;
   // Each edge records how many checks can execute before taking it.
   llvm::SmallVector<std::pair<int, size_t>, 2> Edges;
 };
@@ -161,9 +175,10 @@ struct SkippedSlot {
 /// The final register state follows the executed slot. A guarded unit also
 /// publishes the state just before its slot for the annulled edge.
 bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
-                EntryValues &Values, BlockProof &Proof,
-                std::optional<SkippedSlot> &Skipped) {
-  const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Target);
+                llvm::ArrayRef<va_t> UnmappedGOTPageSlots, EntryValues &Values,
+                BlockProof &Proof, std::optional<SkippedSlot> &Skipped) {
+  const uint16_t GPRBytes = isMIPS64(Target) ? 8 : 4;
+  const bool SignedWordPointers = hasMIPS32BitAddressIn64BitGPR(Target);
   size_t End = 0;
   for (const auto &Insn : Block.InstructionBoundaries) {
     const bool Direct =
@@ -172,11 +187,12 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
                                       LowInstructionControlFlag::Indirect);
     const bool Call =
         Insn.Control == LowInstructionControl::Call &&
-        (isMIPSN32(Target) || isMIPSN64(Target)) &&
         !hasLowInstructionControlFlag(Insn.ControlFlags,
                                       LowInstructionControlFlag::NoReturn);
-    if (isMIPSCompressedMode(Insn.Mode) ||
-        (Insn.Control != LowInstructionControl::None && !Direct && !Call) ||
+    const bool Return = Insn.Control == LowInstructionControl::Return;
+    if (Insn.Mode == InstructionMode::MIPS16 ||
+        (Insn.Control != LowInstructionControl::None && !Direct && !Call &&
+         !Return) ||
         Insn.FirstOp != End || Insn.OpCount > Block.Ops.size() - End)
       return false;
     End += Insn.OpCount;
@@ -188,10 +204,14 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
     bool WritesLink = false;
     for (size_t I = Insn.FirstOp; I < End; ++I) {
       const LowOp &Op = Block.Ops[I];
+      if (Op.Opcode == NdOp::RETURN)
+        return false;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         // The link write and the executed delay slot precede the transfer.
+        const va_t Resume =
+            serializeCodePointer(Insn.Address + Insn.Size, Target, Insn.Mode);
         if (!Call || !WritesLink || I + 1 != End ||
-            !Values.resumeCall(Target, Insn.Address + Insn.Size))
+            !Values.resumeCall(Target, Resume))
           return false;
         continue;
       }
@@ -221,14 +241,18 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
       }
       if (!Op.Output.isReg() && !Op.Output.isTemp())
         continue;
+      if (Op.Opcode == NdOp::LOAD && !UnmappedGOTPageSlots.empty() &&
+          Values.readsGOTPage(Op.Inputs[0], Op.Output.Size,
+                              UnmappedGOTPageSlots))
+        Proof.ReadsUnmappedGOTPage = true;
       auto V = Values.write(Op);
       if (Call && Op.Output.isReg() && Op.Output.Offset == mipsreg::RA &&
-          Op.Output.Size == 8 &&
+          Op.Output.Size == GPRBytes &&
           (!Insn.DelaySlot || I < Insn.FirstOp + Insn.DelaySlot->FirstOp))
         WritesLink = true;
       if (!V || V->Base != Origin::AdjustedEntry || V->Bits != GP ||
-          (WordPointers && !V->SignedWord) || !Op.Output.isReg() ||
-          Op.Output.Size != 8 || Op.Opcode != NdOp::COPY)
+          (SignedWordPointers && !V->SignedWord) || !Op.Output.isReg() ||
+          Op.Output.Size != GPRBytes || Op.Opcode != NdOp::COPY)
         continue;
 
       Proof.Writes.push_back(I);
@@ -244,11 +268,13 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
 
 std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
                                                    const BinaryImage &Image) {
-  if (!Image.MIPS || !Image.MIPS->PICGP || !isMIPS64(Image.Arch) ||
-      Function.Blocks.empty())
+  if (!Image.MIPS || !Image.MIPS->PICGP || Function.Blocks.empty())
     return std::nullopt;
   const LowBlock &Entry = Function.Blocks.front();
   if (Entry.StartAddr != Function.Entry || !Entry.ExceptionalPreds.empty())
+    return std::nullopt;
+  const auto Mode = Image.instructionModeAt(Function.Entry);
+  if (!Mode || *Mode == InstructionMode::MIPS16)
     return std::nullopt;
 
   struct Input {
@@ -258,11 +284,16 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
     BlockProof Proof;
   };
   llvm::SmallDenseMap<int, Input, 2> Inputs;
-  const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Image.Arch);
+  const uint16_t GPRBytes = isMIPS64(Image.Arch) ? 8 : 4;
+  const bool SignedWordPointers = hasMIPS32BitAddressIn64BitGPR(Image.Arch);
+  const bool WordPointers = Image.getPointerSize() == 4;
+  // The linker displacement includes the ISA bit of the callable entry in $t9.
+  const uint64_t EntryPointer =
+      serializeCodePointer(Function.Entry, Image.Arch, *Mode);
   Inputs[0].GPRs[mipsreg::T9] = {
-      WordPointers ? uint64_t(llvm::SignExtend64<32>(Function.Entry))
-                   : Function.Entry,
-      Origin::Entry, WordPointers, 8};
+      SignedWordPointers ? uint64_t(llvm::SignExtend64<32>(EntryPointer))
+                         : EntryPointer,
+      Origin::Entry, SignedWordPointers, GPRBytes};
   const uint64_t GP = *Image.MIPS->PICGP;
   const bool Complete = Function.hasCompleteLiftCoverage() &&
                         Function.UnsafeIndirectBranchAddresses.empty();
@@ -280,7 +311,9 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
     const LowBlock &Block = Function.Blocks[Id];
     BlockProof Proof;
     std::optional<SkippedSlot> Skipped;
-    const bool Full = scanPrefix(Block, Image.Arch, GP, Values, Proof, Skipped);
+    const bool Full =
+        scanPrefix(Block, Image.Arch, GP, Image.MIPS->UnmappedGOTPageSlots,
+                   Values, Proof, Skipped);
     if (Complete && (Full || Skipped)) {
       for (int Succ : Block.Succs) {
         const auto &Next = Function.Blocks[Succ];
@@ -331,9 +364,13 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
     Inputs.erase(At);
   }
 
-  for (const auto &[Id, State] : Inputs)
+  for (const auto &[Id, State] : Inputs) {
+    if (State.Proof.ReadsUnmappedGOTPage)
+      throw LowToMedConversionError(
+          "MIPS static GOT page load requires a relocatable page and offset");
     if (!State.Proof.Writes.empty())
       Ready.insert(Id);
+  }
   if (Ready.empty())
     return std::nullopt;
   // Only discharge n32 word checks preceding a proved GP write. On a
@@ -353,8 +390,8 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
 
   LowFunc Projected = Function;
   const auto Anchor = mipsPICGPAnchor(Image, GP);
-  const NdVar LinkedGP =
-      Anchor ? NdVar::dataAddress(GP, 8, *Anchor) : NdVar::address(GP, 8);
+  const NdVar LinkedGP = Anchor ? NdVar::dataAddress(GP, GPRBytes, *Anchor)
+                                : NdVar::address(GP, GPRBytes);
   for (int Id : Needed) {
     const auto &Proof = Inputs.find(Id)->second.Proof;
     auto &Ops = Projected.Blocks[Id].Ops;

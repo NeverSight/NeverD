@@ -15,6 +15,10 @@
 namespace neverd {
 struct BinaryImage;
 struct MedFunc;
+struct MedOp;
+
+/// Numeric selector arithmetic must be defined for every input value.
+bool hasTotalBranchScalarShape(const MedOp &Operation);
 
 /// A physical-target selector compares original machine address bits. Its
 /// closed arithmetic producers cannot use relocated function/block identities.
