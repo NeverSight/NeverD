@@ -81,6 +81,12 @@ CASES = {
 }
 
 
+WDK_CALLBACK_TYPES = {
+    "AcpiOpRegion": ("PACPI_OP_REGION_HANDLER", "PACPI_OP_REGION_CALLBACK"),
+    "KernelStreamingCOM": ("KoCreateObjectHandler",),
+}
+
+
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -226,6 +232,7 @@ def check(args: argparse.Namespace) -> dict:
               "generated_manifest_sha256": digest(args.generated / "manifest.json"),
               "cases": rows}
     system_runtime_digest = digest(flat.SYSTEM_RUNTIME_INPUTS)
+    wdk_profile_digest = digest(Path(windows.__file__))
     for arch in args.architecture or ("x86", "x64", "arm64"):
         target = args.generated / arch
         manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
@@ -353,11 +360,24 @@ def check(args: argparse.Namespace) -> dict:
                         references = "".join(
                             f"__typeof__(&{symbol}) neverd_ucrt_abi_{index} = &{symbol};\n"
                             for index, symbol in enumerate(names))
+                    callbacks = WDK_CALLBACK_TYPES.get(name, ())
+                    callback_aliases = tuple(f"neverd_wdk_callback_{i}" for i in range(len(callbacks)))
+                    contract_names = (*names, *callbacks)
+                    bindings = (*bindings, *callback_aliases)
+                    if callbacks:
+                        row["callback_types"] = callbacks
+                        renamed = {r["original"]: r["name"] for r in provider["import"]["renamed"]}
                     contracts = []
                     for view, include in (("original", original), ("generated", selected)):
                         source = directory / (view + ".c")
                         cpp = view == "original" and bridge is not None and bridge.get("language", "c++") == "c++"
-                        body = 'extern "C" {\n' + references + '}\n' if cpp else references
+                        body = references
+                        for i, (callback, alias) in enumerate(zip(callbacks, callback_aliases), len(names)):
+                            typedef = renamed.get(callback, callback) if view == "generated" else callback
+                            body += (f"extern __typeof__(*({typedef})0) {alias};\n"
+                                     f"__typeof__(&{alias}) neverd_ucrt_abi_{i} = &{alias};\n")
+                        if cpp:
+                            body = 'extern "C" {\n' + body + '}\n'
                         source.write_text('#include "' + include.as_posix() + '"\n' + body,
                                           encoding="utf-8")
                         if view == "generated":
@@ -378,7 +398,7 @@ def check(args: argparse.Namespace) -> dict:
                         (directory / (view + ".ll")).write_text(result.stdout, encoding="utf-8")
                         compared = compiler_contracts(result.stdout, bindings)
                         contracts.append({symbol: compared[alias]
-                                          for symbol, alias in zip(names, bindings)})
+                                          for symbol, alias in zip(contract_names, bindings)})
                     if bridge and "runtime_import_library" in bridge:
                         witness = bridge["runtime_import_library"]
                         profile = flat.RUNTIME_PROFILES[name]
@@ -399,11 +419,15 @@ def check(args: argparse.Namespace) -> dict:
                 print(f"{arch} {name}: {'passed' if row['passed'] else 'FAILED'}", flush=True)
         expected = set(args.provider or CASES)
         profiles = manifest.get("profiles", {})
+        checked = {row["provider"] for row in rows if row["architecture"] == arch}
         if args.provider is None:
             if "com_registration" not in profiles:
                 expected.discard("COMRegistration")
             if "wdk_exports" not in profiles:
                 expected.difference_update(windows.WDK_EXPORT_PREFIXES)
+            elif profiles["wdk_exports"] != wdk_profile_digest:
+                # Earlier WDK profiles predate the operation-region and kernel COM units.
+                expected.difference_update(WDK_CALLBACK_TYPES.keys() - checked)
             if "flat_imports" not in profiles:
                 expected.difference_update(flat.CURRENT.keys() - PROVIDER_PREFIXES.keys())
             if "legacy_sdk" not in profiles:
@@ -428,7 +452,7 @@ def check(args: argparse.Namespace) -> dict:
                                    if arch not in profile["targets"])
         if arch == "x86":
             expected.difference_update(flat.WIDE_ONLY)
-        if {row["provider"] for row in rows if row["architecture"] == arch} != expected:
+        if checked != expected:
             raise ValueError(f"provider ABI matrix is incomplete for {arch}")
     report["passed"] = bool(rows) and all(row["passed"] for row in rows)
     (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

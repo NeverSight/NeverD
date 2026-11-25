@@ -15,6 +15,36 @@ import check_microsoft_provider_abis as provider
 
 
 class MicrosoftProviderABIs(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("clang") and shutil.which("neverd"),
+                         "requires Clang and the NeverD CLI")
+    def test_acpi_nested_completion_convention_is_checked_on_x86(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "x86").mkdir()
+            (root / "manifest.json").write_text("{}")
+            original = root / "original.h"
+            original.write_text(
+                "typedef void (__cdecl *PACPI_OP_REGION_CALLBACK)(void *);\n"
+                "typedef long (__cdecl *PACPI_OP_REGION_HANDLER)(PACPI_OP_REGION_CALLBACK);\n"
+                "long __stdcall RegisterOpRegionHandler(PACPI_OP_REGION_HANDLER);\n")
+            flags = ["clang", "--target=i686-pc-windows-msvc", "-ffreestanding",
+                     "-Xclang", "-fdefault-calling-conv=stdcall", "-E", str(original)]
+            header = root / "WindowsKernelX86.h"
+            unit = {"name": "AcpiOpRegion", "commands": [flags], "import": {"renamed": []}}
+            for cc in ("__cdecl", "__stdcall"):
+                with self.subTest(completion=cc):
+                    header.write_text(original.read_text().replace("__cdecl", cc, 1))
+                    library = {"name": header.stem, "sha256": provider.digest(header),
+                               "providers": [unit], "commands": [flags]}
+                    (root / "x86/manifest.json").write_text(json.dumps({"libraries": [library]}))
+                    args = argparse.Namespace(generated=root, output=root / cc, neverd="neverd",
+                                              architecture=["x86"], provider=["AcpiOpRegion"], timeout=15)
+                    row, = provider.check(args)["cases"]
+                    declared, generated = row["contracts"]
+                    self.assertEqual(declared["RegisterOpRegionHandler"], generated["RegisterOpRegionHandler"])
+                    self.assertEqual(declared["PACPI_OP_REGION_HANDLER"], generated["PACPI_OP_REGION_HANDLER"])
+                    self.assertEqual(row["passed"], cc == "__cdecl")
+
     @unittest.skipUnless(shutil.which("clang"), "requires the Clang frontend")
     def test_original_callback_and_anonymous_record_contract_survive_publication(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -70,6 +100,26 @@ class MicrosoftProviderABIs(unittest.TestCase):
                     args = argparse.Namespace(generated=root, output=root / result_type, neverd="neverd",
                                               architecture=["arm64"], provider=["Example"], timeout=15)
                     self.assertEqual(provider.check(args)["passed"], expected)
+
+    def test_earlier_wdk_profile_can_omit_new_callback_units(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.dict(provider.CASES, {"AcpiOpRegion": ()}, clear=True):
+            root = Path(temporary)
+            (root / "manifest.json").write_text("{}")
+            (root / "x86").mkdir()
+            manifest = root / "x86/manifest.json"
+            args = argparse.Namespace(generated=root, output=root / "old", neverd="neverd",
+                                      architecture=["x86"], provider=None, timeout=15)
+            manifest.write_text(json.dumps({"libraries": [], "profiles": {"wdk_exports": "archived"}}))
+            self.assertEqual(provider.check(args)["cases"], [])
+            args.output, args.provider = root / "explicit", ["AcpiOpRegion"]
+            with self.assertRaisesRegex(ValueError, "matrix is incomplete"):
+                provider.check(args)
+            args.output, args.provider = root / "current", None
+            manifest.write_text(json.dumps({"libraries": [], "profiles": {
+                "wdk_exports": provider.digest(Path(provider.windows.__file__))}}))
+            with self.assertRaisesRegex(ValueError, "matrix is incomplete"):
+                provider.check(args)
 
     def test_archived_catalog_only_requires_named_runtime_providers_when_requested(self):
         names = {"DisplayControl": ()}
