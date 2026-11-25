@@ -8,6 +8,11 @@
 #include "neverd/types/TypeParse.h"
 
 #include "llvm/ADT/StringExtras.h"
+
+#include <charconv>
+#include <iterator>
+#include <limits>
+
 using namespace neverd;
 using namespace neverd::sdk;
 
@@ -44,8 +49,17 @@ std::string neverd::sdk::sourceCallSnapshot(const LowFunc &Function) {
   OS << "call-site-v1:" << Function.Entry << ':' << Function.OriginalSize;
   size_t Work = 0;
   auto Variable = [&](const NdVar &V) {
-    OS << ':' << unsigned(V.Space) << ':' << V.Offset << ':' << V.Size << ':'
-       << unsigned(V.Provenance) << ':' << V.AddressOwnerVA;
+    const uint64_t Fields[] = {unsigned(V.Space), V.Offset, V.Size,
+                               unsigned(V.Provenance), V.AddressOwnerVA};
+    // Each field needs one separator and at most digits10 + 1 digits.
+    char Bytes[std::size(Fields) *
+               (std::numeric_limits<uint64_t>::digits10 + 2)];
+    char *End = Bytes;
+    for (uint64_t Field : Fields) {
+      *End++ = ':';
+      End = std::to_chars(End, std::end(Bytes), Field).ptr;
+    }
+    OS.write(Bytes, End - Bytes);
   };
   for (const auto &Block : Function.Blocks) {
     OS << "B" << Block.Id << ':' << Block.StartAddr << ':' << Block.EndAddr;
