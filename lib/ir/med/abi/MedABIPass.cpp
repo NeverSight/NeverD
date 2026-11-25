@@ -46,6 +46,7 @@
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCFormattedCalls.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/ProloguePatterns.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -1078,6 +1079,20 @@ boundedLibcArgumentCount(const BinaryImage *Image, llvm::StringRef Name,
     if (auto Count = linuxSyscallArgumentCount(Image->Arch, *FirstArgument))
       return Forward->FixedCount + *Count;
   return Forward->FixedCount + Forward->Count;
+}
+
+/// The tail transfer leaves the incoming stack untouched at entry or after
+/// the single x86 CET marker that designates an indirect branch target.
+static bool beginsWithTailTransfer(const BinaryImage *Img, va_t Entry,
+                                   va_t Transfer) {
+  if (Transfer == Entry)
+    return true;
+  if (!Img || (Img->Arch != Arch::X86 && Img->Arch != Arch::X64) ||
+      Transfer < Entry || Transfer - Entry != x86::kEndbrLen)
+    return false;
+  const uint8_t *Prefix = Img->readVA(Entry, x86::kEndbrLen);
+  return Prefix &&
+         x86BranchTargetMarkerLength(Prefix, x86::kEndbrLen) == x86::kEndbrLen;
 }
 
 void recoverCallAbi(
@@ -3495,7 +3510,7 @@ void recoverCallAbi(
           // stack unchanged, even when the last register position is padding.
           const bool AcrossRegisterPadding =
               K == CalleeStackBase && PrototypeRegisterPadding &&
-              IsIndirectImport && Op.Addr == Func.Entry;
+              IsIndirectImport && beginsWithTailTransfer(Img, Func.Entry, Op.Addr);
           if (K > 0 && !FoundMask[K - 1] && !AcrossRegisterPadding)
             break;
           const int Incoming = CallerStackBase + (K - CalleeStackBase);

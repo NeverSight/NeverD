@@ -446,11 +446,16 @@ TEST(RecordCallContract, LinkedLibCRecordsExecuteThroughBothCEmitters) {
         {Compiler, "-std=gnu11", Optimization, Input, Oracle, "-o", Product},
         Errors));
     ASSERT_TRUE(execute(Product, {Product}, Errors));
-    ASSERT_TRUE(
-        execute(Compiler,
-                {Compiler, "-std=gnu11", Optimization, "-fPIC", "-shared",
-                 "-nostdlib", "-fuse-ld=lld", Input, "-o", LibraryPath},
-                Errors));
+    std::vector<llvm::StringRef> Link = {Compiler, "-std=gnu11", Optimization,
+                                         "-fPIC", "-shared", "-nostdlib",
+                                         "-fuse-ld=lld"};
+    // Real PLT entries may start with a CET landing pad before the slot jump.
+    if (llvm::StringRef(Optimization) == "-O2") {
+      Link.push_back("-fcf-protection=branch");
+      Link.push_back("-Wl,-z,force-ibt");
+    }
+    Link.insert(Link.end(), {Input, "-o", LibraryPath});
+    ASSERT_TRUE(execute(Compiler, Link, Errors));
     auto Reader = Loader::create(LibraryPath);
     ASSERT_TRUE(bool(Reader));
     auto Loaded = Reader->load(LibraryPath);
