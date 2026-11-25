@@ -12,6 +12,7 @@ from elftools.elf.elffile import ELFFile
 import unicorn as uc
 from unicorn import ppc_const, riscv_const
 
+from image_storage import llvmc_image_storage
 
 PROFILES = ("riscv32", "riscv64", "powerpc", "powerpcle", "powerpc64", "powerpc64le")
 DATA = 0x30000000
@@ -190,6 +191,46 @@ def check_double_word_sum(args, work, profile):
                 print(f"{binary.name}: {len(cases)} 64-bit sums", flush=True)
 
 
+def check_riscv_indexed_read(args, work, profile):
+    fixture = Path(__file__).with_name("riscv-indexed-read.S")
+    original = work / f"{profile}-table.elf"
+    name = "indexed_read"
+    compile_elf(args, work, profile, fixture, original, name)
+    with original.open("rb") as stream:
+        elf = ELFFile(stream)
+        entry = elf["e_entry"]
+        table = elf.get_section_by_name(".rodata")["sh_addr"]
+    cases = [(i, 0) for i in range(64)]
+    # The load follows the relocated table. The XOR of the very same
+    # machine address as an integer still observes its original bits.
+    expected = [((32 - (i & 31)) ^ (table + (i & 31)), i) for i, _ in cases]
+    if execute(original, profile, name, cases) != expected:
+        raise RuntimeError(f"{profile}: incorrect original indexed read")
+    for image, symbol in ((original, name), (without_sections(original), f"sub_{entry:X}")):
+        for route in ("highc", "llvmc", "llvm"):
+            source = work / ("table.ll" if route == "llvm" else "table.c")
+            if route == "llvm":
+                command = ["lift"]
+            else:
+                command = ["decompile", "--func", hex(entry)]
+                if route == "llvmc":
+                    command.append("--llvm")
+            subprocess.run([args.neverd, *command, image, "-o", source], check=True)
+            storage = llvmc_image_storage(source, original, ".rodata") if route == "llvmc" else []
+            for opt, base in (("-O0", "0x210000"), ("-O2", "0x610000")):
+                binary = work / "moved-table.elf"
+                compile_elf(args, work, profile, source, binary, symbol, opt, storage,
+                            [f"-Wl,--image-base={base}", "-fno-strict-aliasing"])
+                with binary.open("rb") as stream:
+                    if any(s["p_type"] == "PT_LOAD" and
+                           s["p_vaddr"] <= table < s["p_vaddr"] + s["p_memsz"]
+                           for s in ELFFile(stream).iter_segments()):
+                        raise RuntimeError(f"{profile}: old table address is still mapped")
+                if execute(binary, profile, name, cases, symbol) != expected:
+                    raise RuntimeError(f"{profile} {image.name} {route} {opt}: incorrect relocated read")
+                print(f"{image.name} {route} {opt}: {len(cases)} relocated reads", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for program in ("neverd", "clang", "ld"):
@@ -203,6 +244,8 @@ def main():
                                        "void *memset(void *, int, size_t);\n")
         for profile in args.profile or PROFILES:
             check_double_word_sum(args, work, profile)
+            if profile.startswith("riscv"):
+                check_riscv_indexed_read(args, work, profile)
             original = work / f"{profile}.elf"
             # Exercise the linked AUIPC/JALR call pair with its original displacement.
             original_flags = ["-mno-relax", "-Wl,--no-relax"] if profile.startswith("riscv") else []

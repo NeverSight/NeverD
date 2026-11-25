@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../lower/RISCV/IndexedLoads.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -613,6 +615,11 @@ void LowToMedConverter::propagate(MedFunc &Func) {
       }
     }
   }
+
+  if (isRISCV(TargetArch) && Image && Image->isELF() && !Image->IsRelocatable)
+    riscv::recoverIndexedLoads(
+        Func, *Image, SharedELFIndexedData, NextVarId,
+        [&](const MedVar &V) { return Defs.lookup(keyOf(V)); });
 }
 
 } // namespace neverd

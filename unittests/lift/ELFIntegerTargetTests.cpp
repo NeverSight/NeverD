@@ -738,6 +738,59 @@ TEST(RISCVControl, ZeroBaseJalrHasAnAbsoluteAlignedTarget) {
   }
 }
 
+#include "RISCVIndexedLoadFixture.inc"
+
+TEST(RISCVIndexedLoad, OnlyTheBoundedReadObservesTheRebasedAddress) {
+  using namespace indexed_load;
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64})
+    for (bool Sections : {false, true})
+      for (const auto &[Index, Add, Load, Writable, Rebase] :
+           {std::tuple{Mask31, BaseFirst, LoadByte, false, true},
+            std::tuple{A == Arch::RISCV32 ? Shift : ShiftWord, BaseLast,
+                       LoadByte, false, true},
+            std::tuple{Mask63, BaseLast, LoadByte, false, false},
+            std::tuple{Mask31, BaseFirst, LoadHalfword, false, false},
+            std::tuple{SignedShift, BaseFirst, LoadByte, false, false},
+            std::tuple{Argument, BaseLast, LoadByte, false, false},
+            std::tuple{Mask31, BaseLast, LoadByte, true, false}}) {
+        SCOPED_TRACE(::testing::Message()
+                     << getArchName(A) << " " << Sections << " " << std::hex
+                     << Index << " " << Load << " " << Writable);
+        auto File = file(A, Index, Add, Load, Sections, Writable);
+        auto Image = ELFLoader().loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries = {Image->Entry};
+        Options.EmitDumpOutput = false;
+        llvm::LLVMContext Context;
+        auto R = Pipeline().run(*Image, Context, Options);
+        ASSERT_TRUE(R.Success) << R.Error;
+        ASSERT_EQ(R.MedFuncs.size(), 1u);
+        ASSERT_EQ(R.MedIRVerifierFailures, 0u);
+        const auto &Ops = R.MedFuncs.front().Blocks.front().Ops;
+        const auto Read = llvm::find_if(
+            Ops, [](const MedOp &Op) { return Op.Opcode == NdOp::LOAD; });
+        const auto Xor = llvm::find_if(
+            Ops, [](const MedOp &Op) { return Op.Opcode == NdOp::INT_XOR; });
+        ASSERT_NE(Read, Ops.end());
+        ASSERT_NE(Xor, Ops.end());
+        const auto Sum = llvm::find_if(Ops, [&](const MedOp &Op) {
+          return Op.Opcode == NdOp::INT_ADD && Op.Output == Read->Inputs[0];
+        });
+        ASSERT_NE(Sum, Ops.end());
+        const bool Owned = llvm::any_of(Sum->Inputs, [](const MedVar &V) {
+          return V.isConst() && V.ConstVal == TableVA &&
+                 V.Provenance == ConstantAddressProvenance::DataAddress &&
+                 V.AddressOwnerVA == TableVA;
+        });
+        EXPECT_EQ(Owned, Rebase);
+        // The XOR observes the same sum as an integer, even where the read
+        // independently establishes which mapped bytes it addresses.
+        if (Rebase)
+          EXPECT_NE(Xor->Inputs[1], Read->Inputs[0]);
+      }
+}
+
 TEST(RISCVControl, UnrelaxedCalleeRequiresAReachableAuipcDefinition) {
   for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
     // An entry jump can bypass AUIPC and enter JALR with a caller-supplied

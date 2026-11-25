@@ -11,7 +11,7 @@ from elftools.elf.enums import ENUM_RELOC_TYPE_PPC64
 import unicorn
 from unicorn import ppc_const as reg
 
-from ppc64_elfv1 import llvmc_image_storage
+from image_storage import llvmc_image_storage
 from roundtrip import DATA, RETURN, STACK, machine, map_image
 
 

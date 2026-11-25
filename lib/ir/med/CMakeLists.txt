@@ -84,6 +84,7 @@ add_neverd_component_library(NeverDIRMed
   lower/LowToMed.cpp
   lower/PowerPC/ELFCalls.cpp
   lower/PowerPC/ELF32Calls.cpp
+  lower/RISCV/IndexedLoads.cpp
   lower/MIPS/LowToMedMIPSRelocations.cpp
   lower/LowToMedScalarSelectors.cpp
   lower/LowToMedSourceCalls.cpp
