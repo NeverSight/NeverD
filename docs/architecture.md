@@ -5370,6 +5370,12 @@ was entered with for anything but a save on its own stack, or the function
 runs C++'s catch and unwind funclets or an unknown routine's, no register is
 only saved. MSVC ARM /Od homes a parameter only its filter reads, as
 xframe_eh_dll's `filter(q)` does, and the function took no parameter for it.
+A frame address that only a call of one of the function's own handlers takes,
+or of the runtime's local unwind, which runs them, goes nowhere else: a
+`goto` out of a `__finally` hands them the frame, and before the pipeline
+writes it as a jump, so does the call that runs each. 36 functions of the EH
+corpus's ARM images with such a jump declared the words they push as
+parameters, and their calls printed 56 placeholders more in each C route.
 Call recovery still adds a register a callee reads as a forwarded argument. The save of r3 gave four parameters to every
 function that pushes an even count that way: in the EH corpus's ARM images
 890 functions declared parameters their code never reads and 298 do, and

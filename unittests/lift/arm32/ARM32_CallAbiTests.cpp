@@ -688,6 +688,51 @@ TEST(ARM32_SavedRegisters, AHomeAHandlerRunOutOfLineReadsKeepsItsArgument) {
   }
 }
 
+// A `goto` out of a `__finally` hands the frame to `__jump_unwind`, which
+// runs the function's own termination handlers: that frame address goes
+// nowhere else, and r1's /Od home, which neither the function nor its
+// handler reads, takes no argument.  A frame address passed to another
+// call keeps it.
+//   thunk:   movw ip, #0x2000; movt ip, #0x40; ldr.w pc, [ip]
+//   k:       push {r0, r1}; push {r7, lr}; mov r7, sp; movs r3, #1;
+//            str r3, [r0]; add.w r0, r7, #16; movs r1, #0; bl thunk |
+//            ldr r7, [sp], #4; ldr pc, [sp], #12
+//   handler: bx lr
+TEST(ARM32_SavedRegisters, AFrameAJumpOutOfAFinallyUnwindsWithTakesNoArgument) {
+  for (const char *Callee : {"__jump_unwind", "frame_reader"}) {
+    SCOPED_TRACE(Callee);
+    std::vector<uint8_t> Code(0x10, 0x00);
+    const std::vector<uint8_t> K = {
+        0x03, 0xB4, 0x80, 0xB5, 0x6F, 0x46, 0x01, 0x23, 0x03, 0x60,
+        0x07, 0xF1, 0x10, 0x00, 0x00, 0x21, 0xFF, 0xF7, 0xEE, 0xFF,
+        0x5D, 0xF8, 0x04, 0x7B, 0x5D, 0xF8, 0x0C, 0xFB, 0x70, 0x47};
+    Code.insert(Code.end(), K.begin(), K.end());
+    BinaryImage Img = thumbThunkImage(std::move(Code), Callee, 0x401010, "k");
+    Img.Imports.front().Module = "vcruntime140.dll";
+    ExceptionFunction EH;
+    EH.CodeRange = {0x401010, 0x40102C};
+    EH.Encoding = ExceptionEncoding::ARM32Unpacked;
+    EH.Personality = ExceptionPersonality::CSpecificHandler;
+    EH.SEH.emplace();
+    SEHScopeRecord Scope;
+    Scope.GuardedRange = {0x401016, 0x40101A};
+    Scope.Kind = SEHScopeKind::Finally;
+    Scope.FilterOrFinallyVA = 0x40102C;
+    Scope.HandlerVA = 0x40102C;
+    EH.SEH->Scopes.push_back(Scope);
+    Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+    Img.ExceptionMetadata.rebuildIndex();
+    NullDebugContext Debug;
+    const std::string C = thumbHighC(Img, Debug);
+    const std::string Definition = definitionOf(C, "k");
+    const std::string Signature = Definition.substr(0, Definition.find('{'));
+    EXPECT_NE(Signature.find("arg0"), std::string::npos) << C;
+    EXPECT_EQ(Signature.find("arg1") != std::string::npos,
+              std::string(Callee) != "__jump_unwind")
+        << C;
+  }
+}
+
 // AAPCS passes a 64-bit integer in an even-odd register pair, its low word
 // first.  `__stdio_common_vfprintf(unsigned __int64 options, FILE *stream,
 // ...)` takes the options in r0:r1 and the stream in r2: matched to its

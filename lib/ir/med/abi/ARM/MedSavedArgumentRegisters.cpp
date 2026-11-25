@@ -81,16 +81,18 @@ struct HandlerRead {
   int64_t End = 0;
 };
 
-/// Whether \p Op calls a runtime local unwind routine through its import,
-/// which takes the frame to run the parent's own termination handlers.
-bool callsLocalUnwind(const BinaryImage &Img, const LowOp &Op) {
-  if (Op.Opcode != NdOp::CALL || !Op.NumInputs || !Op.Inputs[0].isConst())
-    return false;
-  const Import *Imported =
-      Img.findImportStubAt(static_cast<va_t>(Op.Inputs[0].Offset));
+/// Whether \p Target is a runtime local unwind routine's import, which
+/// takes the frame to run the function's own termination handlers.
+bool isLocalUnwind(const BinaryImage &Img, va_t Target) {
+  const Import *Imported = Img.findImportStubAt(Target);
   return Imported &&
          coff_loader::isX86ContinuationRuntimeProvider(Imported->Module) &&
          isLowSEHLocalUnwindRoutine(stripLeadingUnderscores(Imported->Name));
+}
+
+bool callsLocalUnwind(const BinaryImage &Img, const LowOp &Op) {
+  return Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+         isLocalUnwind(Img, static_cast<va_t>(Op.Inputs[0].Offset));
 }
 
 /// What the handler the runtime runs out of line at \p Entry, in the
@@ -478,6 +480,8 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
     return Result;
   // What the handlers the runtime runs out of line read of the frame.
   std::vector<HandlerRead> HandlerReads;
+  // Those handlers, whose reads those are.
+  std::set<va_t> OwnHandlers;
   if (const auto &EH = Func.ExceptionMetadata) {
     switch (EH->Personality) {
     case ExceptionPersonality::Unknown:
@@ -493,11 +497,13 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
       return Result;
     if (EH->SEH)
       for (const SEHScopeRecord &Scope : EH->SEH->Scopes)
-        if (Scope.Kind != SEHScopeKind::CatchAll &&
-            (!Image ||
-             !handlerFrameReads(Func, *Image, Bodies, Scope.FilterOrFinallyVA,
-                                Scope.GuardedRange, HandlerReads)))
-          return Result;
+        if (Scope.Kind != SEHScopeKind::CatchAll) {
+          if (!Image ||
+              !handlerFrameReads(Func, *Image, Bodies, Scope.FilterOrFinallyVA,
+                                 Scope.GuardedRange, HandlerReads))
+            return Result;
+          OwnHandlers.insert(Scope.FilterOrFinallyVA);
+        }
   }
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   MedEntryStackOffsets Offsets(Func, TargetArch, Format);
@@ -588,7 +594,34 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
   // make other frame addresses, and nothing else: one stored, passed in an
   // argument register or turned into anything else lets other code read the
   // frame, as a va_list does.  A join nothing reads takes it nowhere, as the
-  // frame pointer's at an epilogue that pops the register.
+  // frame pointer's at an epilogue that pops the register, and neither does
+  // an argument register only a call of one of the function's own handlers
+  // takes, whose reads are HandlerReads, or of the runtime's local unwind,
+  // which runs them: a `goto` out of a `__finally` hands them the frame.
+  const auto RunsOwnHandler = [&](const MedOp &Op) {
+    if (Op.Opcode != NdOp::CALL || !Op.NumInputs || !Op.Inputs[0].isConst())
+      return false;
+    const va_t Target = static_cast<va_t>(Op.Inputs[0].ConstVal);
+    return OwnHandlers.count(Target) ||
+           (Image && isLocalUnwind(*Image, Target));
+  };
+  const auto ToALocalUnwind = [&](const MedBlock &Block, size_t At) {
+    const MedOp &Def = Block.Ops[At];
+    if (const auto Found = Reads.find(valueKey(Def.Output));
+        Found != Reads.end())
+      for (const Read &R : Found->second)
+        if (R.Phi || R.Input == 0 || !RunsOwnHandler(*R.Op))
+          return false;
+    for (size_t J = At + 1; J < Block.Ops.size(); ++J) {
+      const MedOp &Op = Block.Ops[J];
+      if (isCall(Op))
+        return RunsOwnHandler(Op);
+      if (Op.Output.Kind == MedVar::Reg &&
+          Op.Output.RegOff == Def.Output.RegOff)
+        return true;
+    }
+    return false;
+  };
   for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis)
       for (const auto &[Pred, Arg] : Phi.Args)
@@ -596,7 +629,8 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
             (!FrameOffset(Phi.Output) || InArgumentRegister(Phi.Output)) &&
             Reads.count(valueKey(Phi.Output)))
           return Result;
-    for (const MedOp &Op : Block.Ops)
+    for (size_t K = 0; K < Block.Ops.size(); ++K) {
+      const MedOp &Op = Block.Ops[K];
       for (unsigned I = 0; I < Op.NumInputs; ++I) {
         if (!FrameOffset(Op.Inputs[I]))
           continue;
@@ -604,10 +638,12 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
           continue;
         if ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ADD ||
              Op.Opcode == NdOp::INT_SUB) &&
-            FrameOffset(Op.Output) && !InArgumentRegister(Op.Output))
+            FrameOffset(Op.Output) &&
+            (!InArgumentRegister(Op.Output) || ToALocalUnwind(Block, K)))
           continue;
         return Result;
       }
+    }
   }
 
   // Whether something takes a byte of \p Value other than the moves that
