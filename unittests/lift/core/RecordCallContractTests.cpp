@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/backend/c/CRecordCall.h"
+#include "../../../lib/backend/c/HeaderPrototype.h"
 #include "../../HostCompiler.h"
 #include "LocalTypesDebugContext.h"
 #include "SourceCallExecution.h"
@@ -557,7 +558,7 @@ class DeclaredHeaderDebug final : public NullDebugContext {
   const sdk::LocalTypesDebugContext &Inner;
   static std::optional<FunctionSym> asHeader(std::optional<FunctionSym> F) {
     if (F && (F->Name == "cpow" || F->Name == "fixture_hfa" ||
-              F->Name == "fixture_pair")) {
+              F->Name == "fixture_pair" || F->Name == "fixture_bool_out")) {
       F->PrototypeFromHeader = true;
       F->PrototypeLibrary = "test-windows-header";
     }
@@ -575,6 +576,77 @@ public:
     return asHeader(Inner.resolvePrototype(Name));
   }
 };
+
+TEST(RecordCallContract, Win64HeaderValueRecordsUseOneCopyPointerEach) {
+  const auto Record = NdType::makeNamedRecord("Packet", 16);
+  Record->Passing = NdRecordPassing::ByValue;
+  FunctionSym Function;
+  Function.Name = "consume";
+  Function.PrototypeFromHeader = true;
+  Function.ReturnType = NdType::makeInt(4);
+  Function.Params = {{"first", Record}, {"second", Record}};
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.RecordDefinitions = [](const auto &) { return CRecordDefinitions{}; };
+  const auto Layout = c_library::standaloneIntegerRecord(Function, Options);
+  ASSERT_TRUE(Layout);
+  ASSERT_EQ(Layout->Parameters.size(), 2u);
+  for (unsigned I = 0; I < Layout->Parameters.size(); ++I) {
+    const auto &P = Layout->Parameters[I];
+    EXPECT_TRUE(P.Indirect);
+    ASSERT_EQ(P.Pieces.size(), 1u);
+    EXPECT_EQ(P.Pieces.front().Argument, I);
+    EXPECT_EQ(P.Pieces.front().Bytes, 8u);
+  }
+  for (auto Passing : {NdRecordPassing::Unknown, NdRecordPassing::ByReference,
+                       NdRecordPassing::Microsoft}) {
+    Record->Passing = Passing;
+    EXPECT_FALSE(c_library::standaloneIntegerRecord(Function, Options));
+  }
+}
+
+TEST(RecordCallContract, I386HighCImportsDeclareBooleanOutputPointers) {
+  const std::string Header =
+      "int __stdcall fixture_bool_out(unsigned short *key, _Bool *value);";
+  auto Types = std::make_shared<types::TypeLibrary>(types::DataModel::ILP32);
+  Types->setRecordABI(types::RecordABI::Microsoft);
+  ASSERT_TRUE(types::parseCTypes(Header, *Types).ok());
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits32;
+  Import Imported;
+  Imported.Name = "fixture_bool_out";
+  Imported.Module = "fixture.dll";
+  Imported.IATAddr = 0x2000;
+  Image.Imports.push_back(Imported);
+  EmptyDebug Empty;
+  sdk::LocalTypesDebugContext Local(Empty, Types, {}, &Image);
+  DeclaredHeaderDebug Debug(Local);
+  HighFunc Probe;
+  Probe.Name = "probe";
+  Probe.Entry = 0x1000;
+  Probe.ReturnType = NdType::makeInt(4);
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeCall(
+      Imported.Name, Imported.IATAddr,
+      {HighExpr::makeConst(0x100, 4), HighExpr::makeConst(0x200, 4)});
+  Return.RetVal->Type = Probe.ReturnType;
+  Probe.Body.push_back(Return);
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  Options.Image = &Image;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Probe}, Out, Options, &Debug));
+  Out.flush();
+  source_call_execution_test::checkSyntax(
+      Source + "\n" + Header,
+      {"--target=i686-pc-windows-msvc", "-ffreestanding", "-std=gnu11"});
+}
 
 TEST(RecordCallContract, LocalFloatingDeclarationsRequireCompletePlatformABI) {
   FunctionSym Function;

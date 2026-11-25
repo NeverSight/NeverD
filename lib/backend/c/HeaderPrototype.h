@@ -33,8 +33,8 @@ inline llvm::StringRef headerConvention(const FunctionSym &Function, Arch A) {
              : "";
 }
 
-/// Named value records may span consecutive integer argument positions.
-/// Keep the physical layout so both emitters validate every source byte.
+/// A named value record occupies consecutive integer positions or a single
+/// pointer to its caller-provided copy. Both emitters use this target layout.
 inline std::optional<libc::RecordCallArguments>
 standaloneIntegerRecord(const FunctionSym &Function,
                         const CEmitterOptions &Options) {
@@ -62,7 +62,15 @@ standaloneIntegerRecord(const FunctionSym &Function,
         Type->SourceName.empty())
       return std::nullopt;
     const auto &P = Layout->Parameters[I];
-    if (P.Indirect || P.Pieces.empty())
+    if (P.Pieces.empty())
+      return std::nullopt;
+    // Microsoft x64 passes a non-register-sized C record by pointing to a
+    // copy. The carrier covers the pointer, while the declaration owns the
+    // size of the object read through it. C++ copy semantics need more proof.
+    if (P.Indirect &&
+        (Options.TheArch != Arch::X64 ||
+         !libc::isRecordCallParameter(Function, I, Options.libcVariant()) ||
+         Type->Passing != NdRecordPassing::ByValue || P.Pieces.size() != 1))
       return std::nullopt;
     unsigned Offset = 0;
     for (const auto &Piece : P.Pieces) {
@@ -72,7 +80,9 @@ standaloneIntegerRecord(const FunctionSym &Function,
       Offset += Piece.Bytes;
       ++Position;
     }
-    if (Offset != Type->Size)
+    const unsigned ExpectedBytes =
+        P.Indirect ? getTargetRegInfo(Options.TheArch).PointerSize : Type->Size;
+    if (Offset != ExpectedBytes)
       return std::nullopt;
   }
   return Position == Layout->Positions ? Layout : std::nullopt;

@@ -1904,6 +1904,13 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     if (!Opts.Image || Function.SourceTypeHint ||
         !x64DispatchFrame(*Opts.Image, Function.Entry))
       collectCallTargets(Function.Body, CallTargets);
+  // External declarations can retain a source type that the lowered call
+  // expresses only as a machine word, including a pointer to C bool.
+  for (const auto &[Name, Signature] : DebugExternSigs) {
+    CheckType(Signature.ReturnType);
+    for (const auto &Parameter : Signature.Params)
+      CheckType(Parameter.second);
+  }
   // Every spelling of a 16-byte integer, in types and in the intrinsics'
   // casts alike, takes the C23 type a 32-bit target has.
   auto WriteInt128Spelling = [&] {
