@@ -820,6 +820,65 @@ int main(void) {
 )");
 }
 
+TEST(HighValueForward, CallCaptureRetainsTheAssignmentConversion) {
+  constexpr va_t Callee = 0x2600;
+  class CallDebug : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Callee)
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = "return_word";
+      Function.ReturnType = NdType::makeInt(8, true);
+      Function.Params = {{"value", NdType::makeInt(8, false)}};
+      return Function;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  auto Probe = [&] {
+    auto E = HighExpr::makeCall("return_word", Callee, {input()});
+    E->Type = NdType::makeInt(8, true);
+    return E;
+  };
+  auto Capture = [&](const char *Name, TypeRef Type, bool Signed) {
+    auto Local = local(19, Type);
+    Local->Var.Size = Type->Size;
+    ExprPtr Condition = Signed ? op(NdOp::INT_SLESS, Local,
+                                    HighExpr::makeConst(0, Type->Size), true)
+                               : Local;
+    return function(Name, {assign(Local, Probe()),
+                           when(Condition, {result(constant(3))}),
+                           result(constant(4))});
+  };
+  const auto Byte = Capture("captured_byte", NdType::makeInt(1, false), false);
+  const auto Word = Capture("captured_word", NdType::makeInt(4, true), true);
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({Byte, Word}, Out, Options, &Debug));
+  EXPECT_TRUE(declarationOf(Source, "t19").empty()) << Source;
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t return_word(uint64_t value) {
+  ++calls;
+  return (int64_t)value;
+}
+int main(void) {
+  const uint64_t inputs[] = {0, 1, 0x100, 0x1ff, 0x7fffffff, 0x80000000,
+                             UINT64_C(0x100000000), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    const uint64_t x = inputs[i];
+    calls = 0;
+    if (captured_byte(x) != ((uint8_t)x ? 3u : 4u) || calls != 1) return 1;
+    if (captured_word(x) != (((x >> 31) & 1) ? 3u : 4u) || calls != 2) return 2;
+  }
+  return 0;
+}
+)");
+}
+
 TEST(HighValueForward, AnExtendedLowByteKeepsItsConversion) {
   // t1 = (int64_t)(int8_t)x is read once: the use reads the sign-extended
   // low byte, not x, which the views around it merely surround.

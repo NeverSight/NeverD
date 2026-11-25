@@ -1249,6 +1249,21 @@ const HighExpr &HighCWriter::lowBytesSource(const HighExpr &E,
   return *Cur;
 }
 
+ExprPtr HighCWriter::integerCallCapture(const ExprPtr &Value,
+                                        const TypeRef &To) const {
+  if (!isPlainInteger(To) || !isPlainInteger(Value->Type) ||
+      (To->Size == Value->Type->Size && To->IsSigned == Value->Type->IsSigned))
+    return {};
+  const HighExpr *Call = peelIntegerViewOps(Value.get());
+  if (Call->Kind != ExprKind::Call)
+    return {};
+  auto Cast = std::make_shared<HighExpr>();
+  Cast->Kind = ExprKind::Cast;
+  Cast->Type = Cast->CastTo = To;
+  Cast->Operands.push_back(Value);
+  return Cast;
+}
+
 bool HighCWriter::integerText(const HighExpr &E, llvm::StringRef Text) const {
   if (printedIntegerType(E))
     return true;

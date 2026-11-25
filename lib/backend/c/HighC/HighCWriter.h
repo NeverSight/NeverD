@@ -992,6 +992,7 @@ public:
   bool knownVoidCall(const HighExpr &E) const;
   const HighExpr *typedCallResult(const HighExpr *E) const;
   const HighExpr *peelIntegerViewOps(const HighExpr *E) const;
+  ExprPtr integerCallCapture(const ExprPtr &Value, const TypeRef &To) const;
   /// Peel zext/trunc around a named scalar or field load for x86 intrinsic
   /// snippets. Keep wraps on add/sub/mul.
   std::string intrinsicOperandStr(const HighExpr &E);
@@ -1286,7 +1287,8 @@ public:
   bool isCxxCatchObjectName(llvm::StringRef Name) const;
   std::optional<std::string> cxxCatchPointerName(const HighExpr &E) const;
   std::optional<std::string> cxxCatchFieldAccess(const HighExpr &Addr) const;
-  void collectValueForward(const HighFunc &Func);
+  void collectValueForward(const HighFunc &Func,
+                           std::vector<ExprPtr> &CaptureConversions);
   /// MSVC ctor returns `this`. Print the call as a statement and reuse
   /// the this operand at later uses instead of a leftover dest temp.
   void aliasCtorReturnThis(const HighFunc &Func);
