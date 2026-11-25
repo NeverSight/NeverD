@@ -2644,6 +2644,29 @@
         }
       }
     },
+    "PresentationFactoryRuntime": {
+      "module": "dcomp.dll",
+      "headers": [
+        "presentation"
+      ],
+      "exports": {
+        "CreatePresentationFactory": 3
+      },
+      "targets": {
+        "x86": {
+          "image_sha256": "637b3f3e3b428b4bdcbf852c31d5ebe7189e4b5075f9be7aaf9cc3056561fdb8",
+          "additional_exports": {}
+        },
+        "x64": {
+          "image_sha256": "77d500b017a41b32d527e72074fe65246e036155449e881fc03504b8af0f1b73",
+          "additional_exports": {}
+        },
+        "arm64": {
+          "image_sha256": "a9230e8de67934393aa3ecaaa73a7b8b34b91497707b0790ac16fc1576cbf67b",
+          "additional_exports": {}
+        }
+      }
+    },
     "PrintRouterNotifications": {
       "module": "spoolss.dll",
       "headers": [
