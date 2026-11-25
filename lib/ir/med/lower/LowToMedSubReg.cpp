@@ -73,8 +73,33 @@ static void forEachWiderWriteAt(const WriteMap &Writes, uint64_t Off,
     Visit(It->first, It->second);
 }
 
+// A leaf operating exclusively on whole registers has no narrower writer
+// or reader to connect. Calls can also require an implicit preserved prefix.
+static bool isWholeRegisterLeaf(const MedFunc &Func, const TargetRegInfo &TRI) {
+  auto isWhole = [&](const MedVar &V) {
+    return V.Kind != MedVar::Reg || (V.Size == TRI.FullRegWidth &&
+                                     TRI.maxRegisterWidth(V.RegOff) <= V.Size);
+  };
+  for (const auto &Block : Func.Blocks) {
+    if (!Block.Phis.empty())
+      return false;
+    for (const auto &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+          !isWhole(Op.Output))
+        return false;
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        if (!isWhole(Op.Inputs[I]))
+          return false;
+    }
+  }
+  return true;
+}
+
 void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
   const auto &TRI = getTargetRegInfo(TargetArch);
+
+  if (isWholeRegisterLeaf(Func, TRI))
+    return;
 
   // Phase A: Implicit zero-extension insertion.
   // On x86-64 and AArch64, writing a 32-bit register implicitly zero-extends
