@@ -338,6 +338,33 @@ TEST(HeaderLibrary, OptionalUCRTStreamsKeepTheirOwnOpaqueRecord) {
   }
 }
 
+TEST(HeaderLibrary, ProcessPrngAcceptsAByteBufferAndPointerSizedCount) {
+  for (auto Id : {HeaderLibrary::WindowsUserX86, HeaderLibrary::WindowsUserX64,
+                  HeaderLibrary::WindowsUserARM64}) {
+    SCOPED_TRACE(headerLibraryName(Id).str());
+    const auto *User = headerLibrary(Id);
+    ASSERT_NE(User, nullptr);
+    const auto *Function = User->findPrototype("ProcessPrng");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_EQ(Function->Params.size(), 2u);
+    EXPECT_FALSE(Function->Variadic);
+    EXPECT_EQ(User->sizeOf(*Function->Return), 4u);
+    const bool X86 = Id == HeaderLibrary::WindowsUserX86;
+    const unsigned PointerBytes = X86 ? 4u : 8u;
+    const auto &Buffer = *Function->Params[0].Type;
+    const auto *Alias = User->resolve(Buffer.Name);
+    ASSERT_NE(Alias, nullptr);
+    ASSERT_NE(Alias->Target, nullptr);
+    ASSERT_EQ(Alias->Target->Kind, TypeExprKind::Pointer);
+    ASSERT_NE(Alias->Target->Element, nullptr);
+    EXPECT_EQ(User->sizeOf(*Alias->Target->Element), 1u);
+    EXPECT_EQ(User->sizeOf(Buffer), PointerBytes);
+    EXPECT_EQ(User->sizeOf(*Function->Params[1].Type), PointerBytes);
+    if (X86)
+      EXPECT_EQ(Function->Convention, CallingConvention::Stdcall);
+  }
+}
+
 TEST(HeaderLibrary, EveryLibraryReadsLaidOutForItsDataModel) {
   // A pointer, and a SIZE_T, take what each data model gives them: a 32-bit
   // library's handles and records are a 32-bit program's.
