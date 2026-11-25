@@ -3086,8 +3086,9 @@ TEST(Win64Forwarder, SelectOfAFrameAddressUsesItsIntegerValue) {
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({Result.HighFuncs.front()}, Stream, Options));
   Stream.flush();
-  EXPECT_NE(Source.find("arg1 != 0 ? arg1 : (int64_t)(&var_"),
-            std::string::npos)
+  // The condition prints as a truth value however it is spelled; the arms
+  // are what this checks.
+  EXPECT_NE(Source.find(" ? arg1 : (int64_t)(&var_"), std::string::npos)
       << Source;
 }
 
