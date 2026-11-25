@@ -578,6 +578,7 @@
     "pacm_pc_key": "pacm_pc_qualified",
     "pacm_hint_key": "pacm_hint_qualified",
     "samples": 64,
+    "completed_key": "completed",
     "counts": [
       "signed",
       "cfa_rejected",

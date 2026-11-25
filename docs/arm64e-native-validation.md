@@ -2438,8 +2438,13 @@ backend function for the same word. The guest checks each byte residue, both
 SIMD lanes, signed and unsigned results, guard bytes and precise alignment
 aborts at EL0 and EL1. It reads back both FEAT_LSE2 and the alignment controls.
 The preceding `build-ordered` and `run-ordered` commands build and run this
-matrix. The verifier also replays the earlier five-image GPR/SIMD and Q-only
-manifests using the inventory and completion record for each generation.
+matrix. Each register input is paired with each initial memory pattern. The
+six routes compare 353,280 original and generated pairs across both exception
+levels and four alignment settings. The 128-bit load and store account for
+30,720 of those pairs. Fixing either 64-bit store operand at its first value
+fails on all six routes. Earlier manifests replay with their original
+inventory and completion record.
+[Frozen r6 comparisons and per-key cursor controls](evidence/arm64e-qualification-inputs-2026-11-25.json).
 
 For a supported ordered unscaled access to Normal memory on a PE with
 FEAT_LSE2, pass the effective SCTLR to
@@ -2527,9 +2532,11 @@ opposing PACM modes for two active keys fails the comparison.
 
 `qualify-x1` reports `native_lrcpc3_128_qualified` independently. The SIMD
 GoogleTest, Darwin memory comparison and standalone `probe-lrcpc3` share the
-aligned Q probe. The store and load run in separate children. The store must
-replace both memory lanes. The load must replace both register lanes with
-distinct values and preserve memory. Both saved PCs and instruction words
+aligned Q probe. The store and load run in separate children. Each runs four
+combinations of memory and register contents. The store must replace both
+memory lanes and preserve its source register. The load must return both
+memory lanes and preserve memory. Both operations check the two neighboring
+quadwords. Both saved PCs and instruction words
 must match to report SIGILL as unavailable. The baseline control also executes
 an identical undefined word at an unrelated address.
 
@@ -2557,7 +2564,11 @@ signer's instruction address. Mixed availability or disagreement between O0
 and O2 fails the probe. The public cursor reports `pacm_hint_qualified` when
 both signing keys are active and neither PC control distinguishes any of the
 samples at either optimization. PC-sensitive PACM requires both controls to
-distinguish samples for both keys at both optimizations.
+distinguish samples for both keys at both optimizations. The `completed` pair
+counts full frame walks under IA and IB. Each key must complete 64 samples
+per recipe at each optimization, including the zero signing-PC cases. Counts
+of observed signature differences can be lower because PAC collisions are
+valid.
 
 The CPTA probe builds arm64, arm64e and arm64e.x1 at O0 and O2. Each scalar
 instruction runs in its own process with four input vectors. A SIGILL counts

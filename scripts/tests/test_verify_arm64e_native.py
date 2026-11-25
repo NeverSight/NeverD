@@ -22,6 +22,13 @@ import verify_arm64e_native as native
 CASES = json.loads(Path(__file__).with_suffix(".def").read_text())
 
 
+def build_cursor_control(source, binary, optimization):
+    policy = native.POLICY["cursor_probe"]
+    argv = [v.format(optimization=optimization, include=native.ROOT / policy["include"],
+                     source=source, binary=binary) for v in policy["compile"]]
+    subprocess.run(argv, check=True)
+
+
 def runtime_xml(executable=False, generated=False):
     key = "expected_" + ("generated_" if generated else "") + ("executable_" if executable else "") + "tests"
     root = ET.Element(CASES["suite_tag"])
@@ -287,9 +294,7 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 (root / control["oracle"]).write_text(text)
                 for opt in policy["optimizations"]:
                     binary = root / policy["binary_label"].format(optimization=opt)
-                    argv = [v.format(optimization=opt, include=native.ROOT / policy["include"],
-                                     source=source, binary=binary) for v in policy["compile"]]
-                    subprocess.run(argv, check=True)
+                    build_cursor_control(source, binary, opt)
                     result = subprocess.run([binary], capture_output=True, text=True,
                                             timeout=native.POLICY["tool_timeout"])
                     if native.killed_before_entry(result) and (ia, ib, late_fault) == variants[0] and \
@@ -300,10 +305,48 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                         expected = native.POLICY["exit_codes"]["failed" if late_fault or ia != ib else "passed"]
                         self.assertEqual(result.returncode, expected if ia or ib else policy["unavailable_code"])
 
+    @unittest.skipUnless(platform.system() == native.POLICY["host_os"] and
+                         platform.machine() in native.POLICY["host_arches"],
+                         CASES["ordered_q_controls"]["platform_required"])
+    def test_native_cursor_requires_all_samples_for_each_key(self):
+        policy = native.POLICY["cursor_probe"]
+        control = CASES["cursor_native_controls"]
+        fixture = native.ROOT / policy["source"]
+        oracle = (fixture.parent / control["oracle"]).read_text()
+        loop = control["sample_loop"]
+        self.assertEqual(oracle.count(loop), 1)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = Path(shutil.copy(fixture, root))
+            for limit in (loop, *control["truncated_loops"]):
+                (root / control["oracle"]).write_text(oracle.replace(loop, limit))
+                for opt in policy["optimizations"]:
+                    binary = root / policy["binary_label"].format(optimization=opt)
+                    build_cursor_control(source, binary, opt)
+                    result = subprocess.run([binary, policy["recipe_pacm"]], capture_output=True,
+                                            text=True, timeout=native.POLICY["tool_timeout"])
+                    if limit == loop and opt == policy["optimizations"][0] and native.killed_before_entry(result):
+                        self.skipTest(control["cannot_launch"])
+                    with self.subTest(limit=limit, optimization=opt):
+                        if limit == loop:
+                            observation = native.cursor_observation(result, policy["recipe_pacm"])
+                            self.assertEqual(observation["status"], native.POLICY["passed"])
+                        else:
+                            self.assertEqual(result.returncode, native.POLICY["exit_codes"]["failed"])
+                            self.assertEqual(result.stdout.splitlines(), [policy["started"]])
+                            self.assertRegex(result.stderr, control["failed_check"])
+
     def test_cursor_does_not_accept_a_partial_or_unsigned_observation(self):
-        wrong_cfa = [{**CASES["cursor_observation"], "cfa_rejected": counts}
+        policy = native.POLICY["cursor_probe"]
+        complete = CASES["cursor_observation"]
+        missing = dict(complete)
+        del missing[policy["completed_key"]]
+        partial = [{**complete, policy["completed_key"]: counts}
+                   for counts in CASES["cursor_incomplete_counts"]]
+        short = {**complete, "checks": sum(complete[policy["completed_key"]]) - 1}
+        wrong_cfa = [{**complete, "cfa_rejected": counts}
                      for counts in CASES["cursor_invalid_cfa_counts"]]
-        for observation in [*CASES["cursor_invalid_observations"], *wrong_cfa]:
+        for observation in [*CASES["cursor_invalid_observations"], *wrong_cfa, *partial, missing, short]:
             result = subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
                                                  "\n" + json.dumps(observation) + "\n", "")
             with self.subTest(observation=observation), self.assertRaises(ValueError):

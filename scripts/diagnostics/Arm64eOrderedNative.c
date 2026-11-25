@@ -38,12 +38,13 @@ static void catchAccess(int Number, siginfo_t *Info, void *Context) {
   siglongjmp(Recovery, 1);
 }
 
-bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane, bool Original,
-                    bool MayFault, uint64_t *Result, OrderedAbort *Abort) {
+bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
+                    OrderedValue Input, bool Original, bool MayFault,
+                    uint64_t *Result, OrderedAbort *Abort) {
   (void)MayFault;
   if (!sigsetjmp(Recovery, 1)) {
     Active = 1;
-    *Result = accessOrdered(Word, Base, Lane, Original);
+    *Result = accessOrdered(Word, Base, Lane, Input, Original);
     Active = 0;
     return false;
   }
@@ -87,8 +88,9 @@ int main(void) {
     const uintptr_t Address = (uintptr_t)(Bytes + Residues[I]);
     uint64_t Value;
     OrderedAbort Abort;
-    Faults[I] = observeOrdered(ORDERED_NATIVE_X_LOAD, Address, 0, true, true,
-                               &Value, &Abort);
+    Faults[I] =
+        observeOrdered(ORDERED_NATIVE_X_LOAD, Address, 0, (OrderedValue){0, 0},
+                       true, true, &Value, &Abort);
     if (Faults[I] &&
         (Abort.FAR != Address || Abort.Word != ORDERED_NATIVE_X_LOAD ||
          (Abort.ESR & ORDERED_DFSC_MASK) != ORDERED_ALIGNMENT_FAULT))

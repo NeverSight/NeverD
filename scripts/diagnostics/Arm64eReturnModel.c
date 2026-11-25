@@ -28,12 +28,13 @@ _Static_assert(offsetof(OrderedMailbox, Armed) == ORDERED_ARMED_SLOT &&
                    offsetof(OrderedMailbox, Abort.Word) == ORDERED_WORD_SLOT,
                ORDERED_LAYOUT_ERROR);
 
-bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane, bool Original,
-                    bool MayFault, uint64_t *Result, OrderedAbort *Abort) {
+bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
+                    OrderedValue Input, bool Original, bool MayFault,
+                    uint64_t *Result, OrderedAbort *Abort) {
   volatile OrderedMailbox *Mailbox =
       (volatile OrderedMailbox *)RETURN_MODEL_EL0_DATA;
   Mailbox->Armed = MayFault;
-  *Result = accessOrdered(Word, Base, Lane, Original);
+  *Result = accessOrdered(Word, Base, Lane, Input, Original);
   if (!MayFault || Mailbox->Armed)
     return false;
   Abort->ESR = Mailbox->Abort.ESR;

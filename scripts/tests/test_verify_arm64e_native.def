@@ -263,6 +263,7 @@
   "ir_compiler_version": "test canonical IR frontend",
   "cursor_observation": {
     "checks": 1024,
+    "completed": [64, 64],
     "signed": [
       64,
       64
@@ -281,6 +282,7 @@
     ],
     "cfa_rejected": [64, 63]
   },
+  "cursor_incomplete_counts": [[1, 1], [63, 64], [64, 63], [65, 64], [true, 64], [64.0, 64]],
   "cursor_unavailable_code": 2,
   "cursor_started": "cursor-started",
   "cursor_recipes": [
@@ -297,6 +299,7 @@
     {},
     {
       "checks": 0,
+      "completed": [64, 64],
       "signed": [
         64,
         64
@@ -317,6 +320,7 @@
     },
     {
       "checks": true,
+      "completed": [64, 64],
       "signed": [
         64,
         64
@@ -337,6 +341,7 @@
     },
     {
       "checks": 1024,
+      "completed": [64, 64],
       "signed": [
         0,
         0
@@ -357,6 +362,7 @@
     },
     {
       "checks": 1024,
+      "completed": [64, 64],
       "signed": [
         64,
         64
@@ -377,6 +383,7 @@
     },
     {
       "checks": 1024,
+      "completed": [64, 64],
       "signed": [
         64,
         64
@@ -397,6 +404,7 @@
     },
     {
       "checks": 1024,
+      "completed": [64, 64],
       "signed": [
         64,
         64
@@ -417,6 +425,7 @@
     },
     {
       "checks": 1024,
+      "completed": [64, 64],
       "signed": [
         64,
         64
@@ -436,6 +445,7 @@
     },
     {
       "checks": 1024,
+      "completed": [64, 64],
       "signed": [
         64,
         64
@@ -466,13 +476,21 @@
     "load_macro": "ORDERED_NATIVE_Q_LOAD",
     "words": {
       "str_q": "0x3d800020U",
+      "stp_q_after": "0xad000020U",
+      "stp_q_before": "0xad3f8020U",
       "ldr_q": "0x3dc00020U",
+      "mvn_v0": "0x6e205800U",
       "ld1r_2d": "0x4d40cc20U",
       "nop": "0xd503201fU",
       "udf": "0x00000000U"
     },
     "cases": [
       ["str_q", "ldr_q", "passed"],
+      ["str_q", "ldr_q", "failed", ["storeOrderedQ(0, &Data.Value, Register)", "storeOrderedQ(0, &Data.Value, Inputs[0])"]],
+      ["str_q", "ldr_q", "failed", ["storeOrderedQ(0, &Data.Value, Register)", "~storeOrderedQ(0, &Data.Value, Register)"]],
+      ["stp_q_after", "ldr_q", "failed"],
+      ["stp_q_before", "ldr_q", "failed"],
+      ["str_q", "mvn_v0", "failed"],
       ["str_q", "nop", "failed"],
       ["str_q", "ld1r_2d", "failed"],
       ["nop", "ldr_q", "failed"],
@@ -514,6 +532,9 @@
   },
   "cursor_native_controls": {
     "driver_name": "cursor-control.c",
+    "sample_loop": "I != Samples;",
+    "truncated_loops": ["I != Samples - (Key == 0);", "I != Samples - (Key == 1);"],
+    "failed_check": "^failed cursor check [1-9][0-9]*\n$",
     "native": "AArch64SignalCursorNative.def",
     "oracle": "AArch64SignalCursorOracle.def",
     "driver": "#define main cursorMain\n#include \"AArch64SignalCursorNative.def\"\n#undef main\nint main(void) { puts(\"cursor-started\"); fflush(stdout); return probeExplicit(); }\n",

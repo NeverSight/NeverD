@@ -108,14 +108,18 @@ def cursor_observation(result, recipe):
     if result.returncode or len(lines) != 2 or lines[0] != policy["started"]:
         raise ValueError(policy["invalid_report"])
     data = json.loads(lines[1])
-    if (not isinstance(data, dict) or set(data) != {"checks", *policy["counts"]} or
+    counts = [policy["completed_key"], *policy["counts"]]
+    if (not isinstance(data, dict) or set(data) != {"checks", *counts} or
             type(data["checks"]) is not int or data["checks"] <= 0):
         raise ValueError(policy["invalid_report"])
-    for name in policy["counts"]:
+    for name in counts:
         values = data[name]
         if (not isinstance(values, list) or len(values) != 2 or
                 any(type(v) is not int or v < 0 or v > policy["samples"] for v in values)):
             raise ValueError(policy["invalid_report"])
+    completed = data[policy["completed_key"]]
+    if any(n != policy["samples"] for n in completed) or data["checks"] < sum(completed):
+        raise ValueError(policy["invalid_report"])
     required = policy["required"] + (
         policy["pc_controls"] if recipe == policy["recipe_explicit"] else [])
     if any(not all(data[name]) for name in required):

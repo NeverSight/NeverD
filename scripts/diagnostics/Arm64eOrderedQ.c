@@ -24,8 +24,8 @@ typedef uint64_t Quadword __attribute__((vector_size(ORDERED_QUAD_BYTES)));
 
 // The fixture encodings use X1 for the base and V0 for the transferred lanes.
 // A data symbol keeps the instruction address unsigned on the arm64e ABI.
-extern Quadword storeOrderedQ(uintptr_t, uint64_t *, Quadword);
-extern Quadword loadOrderedQ(uintptr_t, uint64_t *, Quadword);
+extern Quadword storeOrderedQ(uintptr_t, Quadword *, Quadword);
+extern Quadword loadOrderedQ(uintptr_t, Quadword *, Quadword);
 extern const uint32_t storeOrderedQSite, loadOrderedQSite;
 __asm__(ORDERED_NATIVE_Q_ROUTINE(storeOrderedQ, ORDERED_NATIVE_Q_STORE));
 __asm__(ORDERED_NATIVE_Q_ROUTINE(loadOrderedQ, ORDERED_NATIVE_Q_LOAD));
@@ -44,6 +44,10 @@ static void illegalInstruction(int Number, siginfo_t *Info, void *Context) {
             : EXIT_FAILURE);
 }
 
+static bool sameQ(Quadword A, Quadword B) {
+  return A[0] == B[0] && A[1] == B[1];
+}
+
 static int executeQ(bool Store) {
   struct sigaction Action = {0};
   Action.sa_sigaction = illegalInstruction;
@@ -52,21 +56,26 @@ static int executeQ(bool Store) {
   if (sigaction(SIGILL, &Action, NULL))
     return EXIT_FAILURE;
   ProbingStore = Store;
-  // Complementing the input to V0 makes an unchanged or repeated lane fail.
-  _Alignas(ORDERED_QUAD_BYTES)
-      uint64_t Data[] = {~ORDERED_STORE_LOW, ~ORDERED_STORE_HIGH};
-  Quadword V0 = {ORDERED_STORE_LOW, ORDERED_STORE_HIGH};
-  if (Store) {
-    storeOrderedQ(0, Data, V0);
-    return Data[0] == ORDERED_STORE_LOW && Data[1] == ORDERED_STORE_HIGH
-               ? EXIT_SUCCESS
-               : EXIT_FAILURE;
+  // Hold either source fixed while varying the other. A register-only
+  // operation cannot stand in for a load, or a fixed value for a store.
+  static const Quadword Inputs[] = ORDERED_REGISTER_INPUTS;
+  for (size_t M = 0; M != sizeof(Inputs) / sizeof(*Inputs); ++M) {
+    const Quadword Memory = ~Inputs[M];
+    for (size_t R = 0; R != sizeof(Inputs) / sizeof(*Inputs); ++R) {
+      const Quadword Register = Inputs[R];
+      const Quadword Guard = ~Register;
+      struct {
+        Quadword Before, Value, After;
+      } Data = {Guard, Memory, Guard};
+      const Quadword Result = Store ? storeOrderedQ(0, &Data.Value, Register)
+                                    : loadOrderedQ(0, &Data.Value, Register);
+      const Quadword Expected = Store ? Register : Memory;
+      if (!sameQ(Result, Expected) || !sameQ(Data.Value, Expected) ||
+          !sameQ(Data.Before, Guard) || !sameQ(Data.After, Guard))
+        return EXIT_FAILURE;
+    }
   }
-  V0 = loadOrderedQ(0, Data, V0);
-  return V0[0] == ~ORDERED_STORE_LOW && V0[1] == ~ORDERED_STORE_HIGH &&
-                 Data[0] == V0[0] && Data[1] == V0[1]
-             ? EXIT_SUCCESS
-             : EXIT_FAILURE;
+  return EXIT_SUCCESS;
 }
 
 static int runQ(bool Store) {

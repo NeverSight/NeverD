@@ -18,6 +18,10 @@ typedef struct {
   uint64_t ESR, FAR, Word;
 } OrderedAbort;
 
+typedef struct {
+  uint64_t Low, High;
+} OrderedValue;
+
 typedef enum {
   OrderedQFailed,
   OrderedQUnavailable,
@@ -30,9 +34,10 @@ extern "C" {
 
 OrderedQStatus probeDarwinOrderedQ(void);
 uint64_t accessOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
-                       bool Original);
-bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane, bool Original,
-                    bool MayFault, uint64_t *Result, OrderedAbort *Abort);
+                       OrderedValue Input, bool Original);
+bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
+                    OrderedValue Input, bool Original, bool MayFault,
+                    uint64_t *Result, OrderedAbort *Abort);
 int compareOrdered(unsigned Mode, unsigned EL, bool WithSIMD);
 
 #ifdef __cplusplus
