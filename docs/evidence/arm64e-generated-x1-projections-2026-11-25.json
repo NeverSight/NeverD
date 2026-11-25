@@ -1,0 +1,277 @@
+{
+  "scope": "Linking, signing and attempted execution of the generated signing projections, and full native feature qualification.",
+  "source_revision": "6c0bd6a6c88672f2849ff1ae486a4a24f735523d",
+  "implementation_merge": "6a4d7e0e56aa3c79a1df87c2b5fb6f984928da4f",
+  "llvm": {
+    "release": "neverd-llvm-v23.0.0-r6",
+    "archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad"
+  },
+  "generated_projections": {
+    "hosted_workflow": "https://github.com/gmh5225/test_mac_intel/actions/runs/45592997940",
+    "workflow_revision": "5a7198c110e73885f9acc6ce4371c482fc95e172",
+    "pilot_workflow": "https://github.com/gmh5225/test_mac_intel/actions/runs/45592898074",
+    "toolchain": "Xcode_27.1.app",
+    "families": [
+      "explicit PAuth_LR",
+      "PC-sensitive PACM"
+    ],
+    "routes": [
+      "HighC",
+      "LLVM C",
+      "optimized LLVM C",
+      "direct backend object",
+      "optimized direct backend object"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "inputs_sha256": "16fa5729c9adef9e12df3bcabb4e4ca8b507a6439a79ce3b32edce91792102ad",
+    "exporter_sha256": "448dfbc7c3daa1002efe2e67b8073ef501a71d8016153cf0dc8a19efb09267ee",
+    "input_files_reproduced_across_builds": 12,
+    "backend_objects_sha256": {
+      "explicit/backend.o": "f281f20d9abd71e56e09b1cde6203370789c4152b1984b6cb642062b8c151997",
+      "explicit/backend-opt.o": "b474948ab36ca15f67daaa01fb9a6ab9b151b66febf9a760360343e78b8c0aad",
+      "prefix/backend.o": "342d98bb0ca3787d188816d8176d1c16c090425917bde62f45b3c69c9af075db",
+      "prefix/backend-opt.o": "ed0d529cd2c094fc0b0281c1ed9b728f2c85025a52633223ba871516fd5fdcdd"
+    },
+    "output_macho_subtype": 12,
+    "signed_entitlements": {
+      "com.apple.security.hardened-process": true,
+      "com.apple.security.hardened-process.checked-allocations": true,
+      "com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow": true,
+      "com.apple.security.hardened-process.enhanced-security-version-string": "*"
+    },
+    "linked_images": 20,
+    "verified_signatures": 20,
+    "live_function_ownership_checks": 120,
+    "native_comparisons": 0,
+    "launch_outcomes": {
+      "did-not-start": 20
+    },
+    "launch_errno": {
+      "86": 20
+    },
+    "report_sha256": "62d8d4294207e79ee6cc4adb246a754469097fa270673647200707463443a114",
+    "capability_report_sha256": "32673354be3c185a334185246b3316ac9283878f422b41efc558b6594d9d17d5",
+    "artifact_archives_sha256": {
+      "r6-projection-inputs": "02b85e92b2a1a98beb8563cf7bf2bbdfa2494288136fde18fe60378de1a919f1",
+      "signed-x1-projection-results": "3b1e94a47674c7691d4f5766de714a3f3acc49efdb1a851a8522f4750cb6d29c"
+    },
+    "signed_images_sha256": {
+      "explicit-backend-O0": "a5fdb415009ee2b47d4fa7a40bebd2f3842465e52d9b1dc7bab9211080c6f463",
+      "explicit-backend-O2": "00fc89f19d3f575a4c66c9d320c46186c99c5dbbacd189c0d04ac36c21da2121",
+      "explicit-backend-opt-O0": "758d06712defb3959c4ed8345b119dcedeafcad10cbf14413e0567fba41b35bf",
+      "explicit-backend-opt-O2": "eccb5eeb19f5bef32f1ffafec724353a8ac9960228d3f0ad559fadfcbca6fff4",
+      "explicit-high-O0": "f5c0e523df3a6c01b3501145315d59e941e006635bdc7bf173537d9aceaa2b6b",
+      "explicit-high-O2": "27a00c19f52a004ddd9adb5ff407608225359fa3f19d01ee480ec99816d119a3",
+      "explicit-llvm-O0": "a5d1fc5cffa50346687208e07b9dc074f0747d04f43e58876e394d9ec6378392",
+      "explicit-llvm-O2": "27a00c19f52a004ddd9adb5ff407608225359fa3f19d01ee480ec99816d119a3",
+      "explicit-llvm-opt-O0": "c650ba6a2151d1bc4919366102d7a9c488974d3b1fa3241a6b708069d4d91b2f",
+      "explicit-llvm-opt-O2": "27a00c19f52a004ddd9adb5ff407608225359fa3f19d01ee480ec99816d119a3",
+      "prefix-backend-O0": "eab99b98ea6e9207c79980da4ef898da6d852aad9ad5bd9d746b00393397fdc8",
+      "prefix-backend-O2": "92c8167eb000a1c9646714f9e6ccd868eca726db0cf26e3e75b2bea8013a9c56",
+      "prefix-backend-opt-O0": "e94ce61b64f3d335e2c605cf0289eac1ad9c70ad5d6f145dfab181ef7218c9f5",
+      "prefix-backend-opt-O2": "64b7423dbd65c6cee4209041773cedfb51caca33c3bbcd5970804d6fda2b6271",
+      "prefix-high-O0": "0b3f6462601ab560bb7a05aa54e0a8e03eca51385c58cb5d3da3c31600ff3698",
+      "prefix-high-O2": "d1e65c65345edb3229a486b7e81f6ddcdd5a8cc8f40b277e2499dec2a5c6fa29",
+      "prefix-llvm-O0": "5e9456c0f3626e824a34ced581f42684c8da4324680698193a2a2d1091f647e0",
+      "prefix-llvm-O2": "d1e65c65345edb3229a486b7e81f6ddcdd5a8cc8f40b277e2499dec2a5c6fa29",
+      "prefix-llvm-opt-O0": "731d7c386f752aa4e4d96422fb6b73c37280445cede49f2e905bc90aba45cf30",
+      "prefix-llvm-opt-O2": "d1e65c65345edb3229a486b7e81f6ddcdd5a8cc8f40b277e2499dec2a5c6fa29"
+    }
+  },
+  "full_native_qualification": {
+    "hosted_workflow": "https://github.com/gmh5225/test_mac_intel/actions/runs/45599778303",
+    "workflow_revision": "89b11db34a2ef1a9766081dd2ae6b247a1724111",
+    "hosts": {
+      "macos-15": {
+        "hardware": "Apple M1 (Virtual)",
+        "source_revision": "6a4d7e0e56aa3c79a1df87c2b5fb6f984928da4f",
+        "mode": "qualify-x1-full",
+        "report_sha256": "9284021141adc0534b567a83ea028c4dfe068149ab95517e34862726674877bb",
+        "status": "unavailable",
+        "environment": false,
+        "complete": false,
+        "features": {
+          "lrcpc3_128": false,
+          "dual_modifier_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "checked_scalar": false,
+          "checked_writeback": false
+        },
+        "control_tests": 7,
+        "control_skips": 2
+      },
+      "macos-26": {
+        "hardware": "Apple M1 (Virtual)",
+        "source_revision": "6a4d7e0e56aa3c79a1df87c2b5fb6f984928da4f",
+        "mode": "qualify-x1-full",
+        "report_sha256": "415185c8bfbba52b27578bf30b0914d63e5c71bbcb6feb8178ce1206cb030515",
+        "status": "unavailable",
+        "environment": false,
+        "complete": false,
+        "features": {
+          "lrcpc3_128": false,
+          "dual_modifier_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "checked_scalar": false,
+          "checked_writeback": false
+        },
+        "control_tests": 7,
+        "control_skips": 0
+      },
+      "xcode-27": {
+        "hardware": "Apple M1 (Virtual)",
+        "source_revision": "6a4d7e0e56aa3c79a1df87c2b5fb6f984928da4f",
+        "mode": "qualify-x1-full",
+        "report_sha256": "9a7b043301b6421b741dacef13e20d823ff05440eb60e2348de090161e2606dc",
+        "status": "unavailable",
+        "environment": false,
+        "complete": false,
+        "features": {
+          "lrcpc3_128": false,
+          "dual_modifier_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "checked_scalar": false,
+          "checked_writeback": false
+        },
+        "control_tests": 7,
+        "control_skips": 0
+      }
+    }
+  },
+  "replayed_analysis_tests": {
+    "local_inputs": {
+      "frontend": "Homebrew clang version 22.1.6",
+      "frontend_sha256": "3ec747aca494276d2720e742d95efc5850b8c31aa93bcd0e4d0a5bbb4bc79d0c",
+      "text_source": "/bin/ls",
+      "architecture": "arm64e",
+      "section": "__TEXT,__text",
+      "text_sha256": "fd1c30018daf9de2629deff5b8b5a1da75f9cf9865792e45f57ccb5a5c88a1b6",
+      "words": 3813,
+      "selected": 46
+    },
+    "new_local_passes": [
+      "A64FastClassifyParity.OptionalRealBinaryWalk",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/3",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/0",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/1",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/2",
+      "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/3"
+    ],
+    "local_passes_after_replay": 752,
+    "hosted_workflow": "https://github.com/gmh5225/test_mac_intel/actions/runs/45606805741",
+    "test_binary_sha256": "6809402bb8c9edcc7fc46f3763672dc479ebcf48787c0a95791b0b8632b4ec3e",
+    "selected_on_each_runner": 37,
+    "runners": {
+      "macos-15": {
+        "original_pac_call_and_unwind": "unavailable",
+        "passed": 0,
+        "skipped": 37,
+        "gtest_sha256": "2fd6fc16a63df14884eb331d0641e42a605b3ae2e87e3a9e9dda7f72e9730873",
+        "preflight_sha256": "bb043c10c7bde1b5126bfc5198a45fa4863b7b561492d9f2ec5050945505d507"
+      },
+      "macos-26": {
+        "original_pac_call_and_unwind": "passed",
+        "passed": 34,
+        "skipped": 3,
+        "gtest_sha256": "cf567db79900c03957ef46aa04e9ed410087ad53751c27d16ecf5174102a8df2",
+        "preflight_sha256": "eb24d30af1c34984aeee1f96394d55b8eab8e646a25dfb59472a05b0c65a5a3a"
+      },
+      "xcode-27": {
+        "original_pac_call_and_unwind": "passed",
+        "passed": 34,
+        "skipped": 3,
+        "gtest_sha256": "c003fc2c4fb73a0345cada5de81e390f01764c208dd89f35a294a8e296a14444",
+        "preflight_sha256": "9d7d1ad6adc5d211387e367f0de2573f09dfdf71679f7dba94f6229e586b4b25"
+      }
+    },
+    "distinct_passes_across_all_hosts": 786,
+    "remaining_skipped": [
+      "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+      "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections"
+    ]
+  },
+  "local_regressions": {
+    "focused_ctest": {
+      "selected": 59,
+      "passed": 54,
+      "skipped": [
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativeHintModeAgreesWithCAndDirectObjects"
+      ]
+    },
+    "full_ctest_target": {
+      "label": "NeverDArm64eAnalysisTests",
+      "selected": 789,
+      "passed": 743,
+      "failed": [],
+      "skipped": {
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM": "Native 128-bit ordered loads and stores are unavailable on this host",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections": "this host cannot execute arm64e with all four active pointer signing keys and generic signatures",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections": "this host cannot execute arm64e PAuth_LR with active keys",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections": "this host cannot execute PACM with active IA/IB keys and a second diversifier",
+        "AArch64PACMSemantics.NativeHintModeAgreesWithCAndDirectObjects": "this host cannot execute arm64e with active IA/IB keys and PACM hint behavior",
+        "A64FastClassifyParity.OptionalRealBinaryWalk": "set NEVERD_PARITY_BIN to a raw arm64 code file to enable",
+        "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3": "arm64e execution/PAC-enforcement control unavailable: -2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0": "executable runtime requires a qualified native verifier profile",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1": "executable runtime requires a qualified native verifier profile",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2": "executable runtime requires a qualified native verifier profile",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3": "executable runtime requires a qualified native verifier profile",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/0": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/1": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/2": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/3": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/0": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/1": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/2": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/3": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2": "requires an explicit canonical LLVM IR frontend",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3": "requires an explicit canonical LLVM IR frontend"
+      }
+    },
+    "arm64e_python": {
+      "selected": 75,
+      "passed": 73,
+      "skipped": 2
+    },
+    "hosted_controller": {
+      "selected": 18,
+      "passed": 18,
+      "skipped": 0
+    }
+  }
+}
