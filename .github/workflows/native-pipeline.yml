@@ -1,5 +1,5 @@
 name: Native scalar instruction table qualification
-run-name: Scalar instruction tables at 89929b8b2b84718a77faf733a1d915a2c35e7b21
+run-name: Scalar instruction tables at d9d3e7100800dfc8f476f36742d8779e9fc6086f
 on:
   workflow_dispatch:
 permissions:
@@ -22,14 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 89929b8b2b84718a77faf733a1d915a2c35e7b21
+          ref: d9d3e7100800dfc8f476f36742d8779e9fc6086f
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
       - name: Check the source revision and initialize test dependencies
         run: |
-          test "$(git rev-parse HEAD)" = "89929b8b2b84718a77faf733a1d915a2c35e7b21"
+          test "$(git rev-parse HEAD)" = "d9d3e7100800dfc8f476f36742d8779e9fc6086f"
           git submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
       - name: Install Linux fixture compilers
         if: runner.os == 'Linux'
@@ -95,7 +95,7 @@ jobs:
           for owner, pattern, minimum in jobs:
               result = run(Path("build-forms/bin",owner+exe),Path("evidence",owner+".xml"),pattern,minimum,1800)
               if owner == "NeverDLiftTests":
-                  assert "AArch64_Mem.UnprivilegedAccessWidthSurvivesMissingMnemonic" in result["outcome"]["tests"]
+                  assert "AArch64_Mem.UnprivilegedTransfersUseTheirEncodedWidths" in result["outcome"]["tests"]
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: '${{ !cancelled() }}'
