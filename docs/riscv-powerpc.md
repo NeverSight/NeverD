@@ -171,12 +171,21 @@ aggregate calls require separate ABI coverage. Link objects with relocations
 against allocated sections before analysis. Raw firmware mapping and native
 guest execution have separate entry points and coverage.
 
-A linked RISC-V function can still address a read-only lookup table by its
-original virtual address in HighC, LLVM-derived C and module IR. For example,
-Clang 23.1.6 at `-O2` compiles compiler-rt's `__ffssi2` for RV32IMAC and
-RV64IMAC with a 32-byte table in `.rodata`. A standalone rebuild of this
-function needs those bytes at the original address. Moving the table can
-produce an incorrect bit position.
+A linked RV32 or RV64 function can construct an integer constant and a table
+address with the same `lui` and `addi` sequence. At an indexed load, MedIR can
+recover the table when the entire range of possible reads fits file-backed,
+read-only storage and stays within known data object boundaries. Other integer
+uses of the same sum retain its original bits. An unbounded index, a read
+across adjacent objects, or a writable mapping still needs other address
+evidence. Without section headers, the load needs a readable, non-executable
+segment and must stay clear of the ELF and program headers.
+
+For example, compiler-rt's `__ffssi2` compiled by Clang 23.1.6 at `-O2`
+uses an unsigned five-bit index into a 32-byte table on RV32IMAC and RV64IMAC.
+HighC and the full LLVM module carry the table into the rebuilt image.
+Single-function LLVM-derived C declares the original image storage as an
+external array. Its caller can link the table bytes at the corresponding
+offset in that array at a new address.
 
 ## Verification
 
@@ -196,6 +205,9 @@ branches, memory accesses, atomic fetch-add and a non-leaf call with reordered
 arguments. A separately compiled caller checks both halves of a 64-bit sum
 across carry and wraparound, varying the original and rebuild optimization
 levels independently.
+A RISC-V assembly fixture uses the same sum as a load address and an integer
+operand. It checks every table index after moving the image with and without
+section headers, at both rebuild optimization levels.
 A stripped RISC-V fixture disables linker relaxation and rebuilds
 both the caller and its unsymbolized callee. PowerPC fixtures also consume
 the quotient and CR0 bits from a recorded word divide, check sticky overflow

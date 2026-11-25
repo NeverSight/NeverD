@@ -13,10 +13,12 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/ELFIndexedData.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/object/ELFLayout.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Endian.h"
@@ -379,7 +381,64 @@ bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
       },
       ExceptionAddressRange{Address, Address + Extent});
 }
+
+std::optional<va_t> linkedELFReadOnlyDataOwner(const BinaryImage &Image,
+                                               va_t Address, uint64_t Size) {
+  if (!Image.isELF() || Image.IsRelocatable || !Size)
+    return std::nullopt;
+  if (!Image.Sections.empty()) {
+    if (mappedBytes(Image, Address, Size, true))
+      return Image.getSectionFor(Address)->VA;
+    return std::nullopt;
+  }
+
+  // With no sections, the load segment owns its file bytes beyond the ELF
+  // and program headers. Neither header can be part of the indexed data.
+  const Segment *S = Image.getSegmentFor(Address);
+  if (!S || !Image.ELFMetadata || !S->isReadable() || S->isExecutable() ||
+      !Image.readOnlyAfterRelocations(Address, Size) ||
+      !rangeInBounds(Address - S->VA, Size, S->FileSz) ||
+      !rangeInBounds(Address - S->VA, Size, S->Data.size()))
+    return std::nullopt;
+  const auto &ELF = *Image.ELFMetadata;
+  const uint64_t FileOffset = S->FileOff + (Address - S->VA);
+  if (FileOffset < ELF.HeaderSize ||
+      overlaps(FileOffset, Size, ELF.ProgramHeaderFileOffset,
+               uint64_t(ELF.ProgramHeaderEntrySize) *
+                   ELF.ProgramHeaders.size()))
+    return std::nullopt;
+  for (const Segment &Other : Image.Segments)
+    if (&Other != S && overlaps(Address, Size, Other.VA, Other.Size))
+      return std::nullopt;
+  return S->VA;
+}
 } // namespace
+
+std::optional<va_t> ELFIndexedData::readOnlyOwner(va_t Address,
+                                                  uint64_t Size) const {
+  const auto Owner = linkedELFReadOnlyDataOwner(Image, Address, Size);
+  if (!Owner)
+    return std::nullopt;
+  // Adjacent symbols in one .rodata section can become independent C
+  // objects. Strip leaves the physical mapping as the remaining evidence.
+  std::call_once(Init, [&] {
+    auto Record = [&](va_t Base, uint64_t Bytes) {
+      Boundaries.push_back(Base);
+      if (Bytes && Bytes <= InvalidVA - Base)
+        Boundaries.push_back(Base + Bytes);
+    };
+    for (const Symbol &Sym : Image.Symbols)
+      if (!Sym.IsFunc)
+        Record(Sym.Addr, Sym.Size);
+    for (const ExactDataObjectExtent &Object : Image.ExactDataObjects)
+      Record(Object.Base, Object.Size);
+    llvm::sort(Boundaries);
+  });
+  const auto Next = llvm::upper_bound(Boundaries, Address);
+  if (Next != Boundaries.end() && *Next - Address < Size)
+    return std::nullopt;
+  return Owner;
+}
 
 bool supportsImmutableImageReads(const BinaryImage &Image) {
   if (Image.IsRelocatable || (Image.Format != BinaryFormat::COFF &&

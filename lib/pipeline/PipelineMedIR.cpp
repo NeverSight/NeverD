@@ -41,6 +41,7 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/ELFIndexedData.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Diagnostic.h"
 #include "neverd/support/Parallel.h"
@@ -1268,8 +1269,9 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     OwnRuntimeRoutines = runtimeRoutineCallsOf(Img, Img.Arch);
   }
 
+  ELFIndexedData IndexedData(Img);
   auto Configure = [&](LowToMedConverter &Local) {
-    Local.setBinaryImage(&Img);
+    Local.setBinaryImage(&Img, &IndexedData);
     Local.setRuntimeRoutineCalls(RuntimeRoutines);
     Local.setSourceCallHintsEnabled(Opts.usesSourceDeclarations());
     Local.setSourceCallRuntimeHintsEnabled(!Opts.usesMachineMedIR());

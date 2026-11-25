@@ -37,6 +37,7 @@ namespace libc {
 class StackProbeIndex;
 } // namespace libc
 class LowSEHRuntimeMemory;
+class ELFIndexedData;
 
 struct BinaryImage;
 
@@ -54,13 +55,15 @@ public:
   /// freezing arithmetic between addresses that will be rebuilt as distinct
   /// symbols. Optional for standalone IR clients; null preserves the generic
   /// image-independent folding policy.
-  void setBinaryImage(const BinaryImage *I) {
+  void setBinaryImage(const BinaryImage *I,
+                      const ELFIndexedData *IndexedData = nullptr) {
     // What the converter read from another image does not describe this one.
     if (I != Image) {
       RuntimeRoutineCalls.reset();
       CodePointerTargets.reset();
     }
     Image = I;
+    SharedELFIndexedData = IndexedData;
   }
 
   /// Register DCE with an explicit architecture. Used by tests that build
@@ -501,6 +504,7 @@ private:
   std::optional<FixedIntegerCallArguments> GoFixedArguments;
 
   const BinaryImage *Image = nullptr;
+  const ELFIndexedData *SharedELFIndexedData = nullptr;
   bool SourceCallHintsEnabled = false;
   bool SourceCallRuntimeHintsEnabled = true;
   const std::map<SourceCallOccurrenceKey, SourceCallTypeHint>

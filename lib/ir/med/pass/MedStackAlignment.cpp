@@ -13,6 +13,7 @@
 
 #include "../../../safety/StackSlotFlow.h"
 #include "MedEntryStackOffsets.h"
+#include "MedScalarBounds.h"
 #include "MedScalarSelectRange.h"
 #include "MedStackRecurrence.h"
 
@@ -797,6 +798,8 @@ private:
         // LLVM's range operation models oversized shifts as poison, while
         // machine-value proofs cannot derive a bound from that assumption.
         return Right.getUnsignedMax().ult(Bits) ? Left.shl(Right) : Full;
+      case NdOp::INT_RIGHT:
+        return Right.getUnsignedMax().ult(Bits) ? Left.lshr(Right) : Full;
       default:
         break;
       }
@@ -1316,6 +1319,24 @@ private:
 };
 
 } // namespace
+
+std::vector<std::optional<uint64_t>>
+unsignedScalarUpperBounds(const MedFunc &Func, const BinaryImage &Image,
+                          llvm::ArrayRef<MedVar> Values) {
+  StackOffsetProof Proof(Func, Image.Arch, Image.abiFormat(),
+                         StackEntryKind::Call, false, {}, false, {}, nullptr,
+                         &Image);
+  std::vector<std::optional<uint64_t>> Bounds;
+  Bounds.reserve(Values.size());
+  for (const MedVar &Value : Values) {
+    const auto Range = Proof.scalar(Value);
+    Bounds.push_back(
+        Range.isFullSet() || Range.isEmptySet()
+            ? std::nullopt
+            : std::optional(Range.getUnsignedMax().getZExtValue()));
+  }
+  return Bounds;
+}
 
 struct MedEntryStackOffsets::Impl {
   StackOffsetProof Proof;

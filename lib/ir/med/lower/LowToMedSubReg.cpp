@@ -9,6 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "InsertPending.h"
+
 #include "neverd/ir/SubRegViews.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
@@ -38,29 +40,6 @@ static bool isSelfLowSliceSubbytes(const MedOp &MOp) {
                                 MOp.NumInputs < 2 || !MOp.Inputs[1].isConst()
                                     ? 0
                                     : MOp.Inputs[1].ConstVal);
-}
-
-// Puts each pending op before the op of \p Ops at its index, in one pass:
-// what inserting them one at a time from the last gives.  \p Pending is in
-// index order, with no index past Ops.size(); ops pending at one index keep
-// their order.
-template <typename PendingOp>
-static void insertPending(std::vector<MedOp> &Ops,
-                          std::vector<PendingOp> &Pending,
-                          size_t PendingOp::*Index) {
-  if (Pending.empty())
-    return;
-  std::vector<MedOp> Merged;
-  Merged.reserve(Ops.size() + Pending.size());
-  size_t Next = 0;
-  for (size_t I = 0; I < Ops.size(); ++I) {
-    for (; Next < Pending.size() && Pending[Next].*Index == I; ++Next)
-      Merged.push_back(std::move(Pending[Next].Op));
-    Merged.push_back(std::move(Ops[I]));
-  }
-  for (; Next < Pending.size(); ++Next)
-    Merged.push_back(std::move(Pending[Next].Op));
-  Ops = std::move(Merged);
 }
 
 // Calls \p Visit on each write of \p Writes, keyed by (offset, size), to a

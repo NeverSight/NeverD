@@ -11,6 +11,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/ELFIndexedData.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -50,6 +51,43 @@ BinaryImage codeImage() {
   Image.Sections.push_back(std::move(Section));
   Image.BaseRelocations.push_back({OperandVA, 3});
   return Image;
+}
+
+TEST(ELFIndexedData, ReadExtentRespectsSymbolsAndSectionlessFileLayout) {
+  auto Image = codeImage();
+  Image.Format = BinaryFormat::ELF;
+  Image.Arch = Arch::RISCV32;
+  Image.Segments.front().Flags = Image.Sections.front().Flags =
+      SegmentFlags::Readable;
+  Image.ELFMetadata.emplace();
+  auto &ELF = *Image.ELFMetadata;
+  ELF.HeaderSize = 16;
+  ELF.ProgramHeaderFileOffset = 40;
+  ELF.ProgramHeaderEntrySize = 16;
+  ELF.ProgramHeaders.emplace_back();
+  Image.addSymbol("first", TextVA + 64, 16);
+  Image.addSymbol("second", TextVA + 80);
+  Image.ExactDataObjects.push_back({TextVA + 88, 4});
+  for (bool Sections : {true, false}) {
+    SCOPED_TRACE(Sections);
+    if (!Sections)
+      Image.Sections.clear();
+    ELFIndexedData Data(Image);
+    EXPECT_EQ(Data.readOnlyOwner(TextVA + 64, 16), TextVA);
+    EXPECT_FALSE(Data.readOnlyOwner(TextVA + 64, 17));
+    EXPECT_FALSE(Data.readOnlyOwner(TextVA + 84, 8));
+    EXPECT_EQ(Data.readOnlyOwner(TextVA + 88, 4), TextVA);
+    EXPECT_FALSE(Data.readOnlyOwner(TextVA + 90, 4));
+  }
+  EXPECT_FALSE(ELFIndexedData(Image).readOnlyOwner(TextVA + 8, 2));
+  EXPECT_FALSE(ELFIndexedData(Image).readOnlyOwner(TextVA + 32, 28));
+  EXPECT_EQ(ELFIndexedData(Image).readOnlyOwner(TextVA + 56, 8), TextVA);
+  Image.Segments.front().FileSz = 96;
+  EXPECT_FALSE(ELFIndexedData(Image).readOnlyOwner(TextVA + 93, 4));
+  auto Other = Image.Segments.front();
+  Other.VA = TextVA + 60;
+  Image.Segments.push_back(std::move(Other));
+  EXPECT_FALSE(ELFIndexedData(Image).readOnlyOwner(TextVA + 56, 8));
 }
 
 TEST(ImmutableImageScalar, ELFRelroRangeKeepsScalarsButNotRelocatedPointers) {
