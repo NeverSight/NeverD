@@ -13038,10 +13038,11 @@ The shared symbol inventory distinguishes confirmed
 entries from padding guesses in both live and indexed queries. A guess alone
 does not stop resumable fallthrough; explicit transfers still retain potential
 callee boundaries. A decoded continuation absorbs a guessed function at its
-instruction boundary, even inside a basic block. A guess that code names, a
-direct call the detector's scan decoded or a relocated code address, and whose
-bounded decode holds, is no guess (`BinaryImage::CodeNamedFunctionStarts`), so
-it stops a trap's continuation as any entry does: MSVC's
+instruction boundary, even inside a basic block. A guess a direct call the
+detector's scan decoded names, and whose bounded decode holds, is no guess
+(`BinaryImage::CodeNamedFunctionStarts`), so it stops a trap's continuation as
+any entry does (a relocated code address can be a jump table's case label,
+which stays the code of the function that decodes it): MSVC's
 `__scrt_initialize_onexit_tables` ends in `call __scrt_fastfail; int3`, and
 the x86 images had taken the next function into it, leaving that function's
 callers calling one the unit never defined. A run that detects functions, and

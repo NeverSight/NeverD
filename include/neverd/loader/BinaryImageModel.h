@@ -658,9 +658,9 @@ struct BinaryImage {
   /// authentication consumes the published result later in the same run.
   mutable std::set<uint64_t> VerifiedFunctionEntries;
   /// Function starts only a prologue after padding suggested
-  /// (Symbol::IsBoundaryGuess) that FuncDetector found code to name, a direct
-  /// call its scan decoded or a relocated code address, and whose bounded
-  /// decode holds: they are no guesses (boundaryGuessFunctionStarts).
+  /// (Symbol::IsBoundaryGuess) that a direct call FuncDetector's scan decoded
+  /// names, and whose bounded decode holds: they are no guesses
+  /// (boundaryGuessFunctionStarts).
   /// Mutable as VerifiedFunctionEntries is.
   mutable std::set<uint64_t> CodeNamedFunctionStarts;
   /// Maps the virtual address of a non-lazy/lazy pointer slot (Mach-O __got /
@@ -942,9 +942,9 @@ struct BinaryImage {
   }
 
   /// Function starts supported only by a prologue heuristic: no other symbol
-  /// names the address, no primary unwind record begins there, and no code
-  /// names it (CodeNamedFunctionStarts). Padding or an unrelocated data word
-  /// alone cannot confirm it. See IsBoundaryGuess.
+  /// names the address, no primary unwind record begins there, and no direct
+  /// call names it (CodeNamedFunctionStarts). Padding or an unrelocated data
+  /// word alone cannot confirm it. See IsBoundaryGuess.
   std::set<va_t> boundaryGuessFunctionStarts() const {
     // Debug info renames a guessed symbol in place; a real name confirms it.
     const auto Guessed = [](const Symbol &Sym) {
