@@ -857,7 +857,7 @@ int neverd_prepare_function(neverd_session_t Sess, neverd_va_t FuncEntry) {
 
 // A client can inspect the ordinary C view before supplying a missing call
 // contract. If that run refused MedIR, request just the original LowIR again.
-static bool prepareOriginalCalls(neverd_session_t Sess, va_t &Entry) {
+static bool prepareOriginalCalls(neverd_session_t Sess, neverd_va_t &Entry) {
   auto &S = *toSession(Sess);
   Entry = S.Img.ppc64GlobalEntry(Entry);
   if (S.PipeRan && !S.PipeResult.Success && S.findLowFunc(Entry))
@@ -1782,9 +1782,9 @@ sourceFunctionView(Session &S, va_t Entry,
 
 /// Writes a bounded page from the kept source's physical row index. Function
 /// metadata and span validation have the same lifetime as the emitted text.
-void writeSourcePage(llvm::raw_ostream &OS, neverd_session_t Sess, va_t Entry,
-                     llvm::StringRef Stage, size_t Offset, size_t Limit,
-                     std::optional<SourceDialect> Dialect) {
+void writeSourcePage(llvm::raw_ostream &OS, neverd_session_t Sess,
+                     neverd_va_t Entry, llvm::StringRef Stage, size_t Offset,
+                     size_t Limit, std::optional<SourceDialect> Dialect) {
   auto &S = *toSession(Sess);
   assert((Stage == "llvmc" || Dialect) && "an unoffered view reached a page");
   if (!prepareFunction(Sess, Entry, /*NeedHighIR=*/Stage != "llvmc"))
