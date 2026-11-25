@@ -152,24 +152,34 @@ neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=inplac
 ```
 
 In `section` mode, `sectionLayout` must place the function in the named
-executable output section at a range disjoint from its original range. LLD
-resolves the callers. The layout can move the named program entry along with
-the other sections. In `inplace` mode, the original layout is reused and
+executable output section at a range disjoint from its original range. The
+function can grow, and LLD resolves the callers. The layout can move the
+named program entry along with the other sections while preserving its ISA
+mode. In `inplace` mode, the original layout is reused and
 the last two manifest fields are optional. The function must fit its original
 range at the same virtual address and file offset. The program entry, load
 segments and all loaded bytes outside that range must match the original.
 Both modes check the target ABI before publishing the executable atomically.
+The entry address in each ELF must point to file-backed bytes in a
+`PT_LOAD` segment with `PF_X`. Bit zero selects the entry ISA mode.
+A read-only startup segment without execute permission or a `NOLOAD`
+startup section fails this check even when the rebuilt function is executable.
 
 The runtime qualification uses the NeverSight LLVM fork's code generator,
 assembler and ELF linker. It builds classic MIPS and microMIPS for Release 2
 and Release 6 on o32, n32 and n64 in both byte orders, plus MIPS16 Release 2
 on o32 in both orders. Each program calls the rebuilt function three times.
-On MIPS16, a classic entry calls a compressed function which calls the
-rebuilt MIPS16 function through an O32 `R_MIPS16_26` relocation.
+The matrix includes classic and tagged compressed entry points. The
+MIPS16 programs call the rebuilt function through an O32 `R_MIPS16_26`
+relocation. The compressed-entry variant also calls the classic startup
+routine from MIPS16 code.
 The six original classic cases return 25 before relinking and 37 afterward.
-The 26 shrinking-function cases return 81 and 29. They check the smaller
+The 40 shrinking-function cases return 81 and 29. They check the smaller
 symbol size, file offset, placement and ISA marker. The shrinking n64 images
-place executable code above 4 GiB.
+place executable code above 4 GiB. All 46 profiles also link a larger
+function in `section` mode. Its three calls return 61, 56 and 44, giving
+exit status 161. The same object must fail in `inplace` mode and preserve
+the previous output.
 
 To build the tools from NeverD's pinned fork checkout, run
 

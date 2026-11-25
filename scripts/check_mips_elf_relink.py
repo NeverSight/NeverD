@@ -43,6 +43,26 @@ define i32 @calc(i32 %x) section ".text.calc" {
 }
 @neighbor = constant i32 12345
 """
+GROWING_CALC = """
+source_filename = "calc.c"
+define i32 @calc(i32 %x) nounwind section ".text.calc" {
+  %a = xor i32 %x, 42
+  %b = shl i32 %a, 2
+  %c = add i32 %b, %x
+  %d = lshr i32 %c, 3
+  %e = xor i32 %c, %d
+  %result = and i32 %e, 63
+  ret i32 %result
+}
+@neighbor = constant i32 12345
+"""
+MIPS16_ENTRY = """
+declare void @run_calls() noreturn
+define void @_start() noreturn nounwind section ".text.start" align 4 {
+  notail call void @run_calls()
+  unreachable
+}
+"""
 MIPS16_CALLER = """
 declare i32 @calc(i32)
 define i32 @invoke(i32 %x) nounwind section ".text.start" align 4 {
@@ -52,12 +72,13 @@ define i32 @invoke(i32 %x) nounwind section ".text.start" align 4 {
 """
 LAYOUT = """
 ENTRY(_start)
+PROGRAM_HEADERS
 SECTIONS {
   . = BASE_ADDRESS;
-  .text : { *(.text.start) OLD_CALC *(.text) RESERVE } FILL
+  .text : { *(.text.start) OLD_CALC *(.text) RESERVE } ENTRY_SEGMENT FILL
   NEW_CALC
   . = ALIGN(0x10000);
-  .MIPS.abiflags : { *(.MIPS.abiflags) }
+  .MIPS.abiflags : { *(.MIPS.abiflags) } DATA_SEGMENT
   .MIPS.options : { *(.MIPS.options) }
   .reginfo : { *(.reginfo) }
   .rodata : { *(.rodata*) }
@@ -76,11 +97,13 @@ class Profile:
     isa: str = "classic"
     release: int = 2
     shrinking: bool = False
+    compressed_entry: bool = False
 
     @property
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
-        return f"{self.isa}-r{self.release}-{suffix}" if self.shrinking else suffix
+        name = f"{self.isa}-r{self.release}-{suffix}" if self.shrinking else suffix
+        return name + "-compressed-entry" if self.compressed_entry else name
 
     @property
     def triple(self):
@@ -102,9 +125,14 @@ def profiles():
             yield Profile(abi, little)
             for isa in ("classic", "micromips"):
                 for release in (2, 6):
-                    yield Profile(abi, little, isa, release, shrinking=True)
+                    profile = Profile(abi, little, isa, release, shrinking=True)
+                    yield profile
+                    if isa == "micromips":
+                        yield replace(profile, compressed_entry=True)
             if abi == "o32":
-                yield Profile(abi, little, "mips16", shrinking=True)
+                profile = Profile(abi, little, "mips16", shrinking=True)
+                yield profile
+                yield replace(profile, compressed_entry=True)
 
 
 def startup(profile):
@@ -117,6 +145,13 @@ def startup(profile):
     # Cover the scratch registers used by the larger body in both versions.
     save = "move $1, $2\n    move $16, $1" if profile.shrinking else "move $16, $2"
     add = "addu $3, $16, $2\n    move $16, $3" if profile.shrinking else "addu $16, $16, $2"
+    if profile.compressed_entry:
+        if profile.isa == "mips16":
+            source = source.replace("_start", "run_calls")
+        else:
+            source = ".set micromips\n" + source
+            save = "addu $1, $2, $zero\n    addu $16, $1, $zero"
+            add = "addu $3, $16, $2\n    addu $16, $3, $zero"
     return (source.replace("SAVE_FIRST", save).replace("SUM_FIRST_TWO", add)
             .replace("SET_NOAT", ".set noat" if profile.shrinking else "")
             .replace("EXIT_NR", str(profile.exit_nr)))
@@ -132,13 +167,19 @@ def calculator(profile, updated):
     return ir.replace("shl i32 %x, 1", "mul i32 %x, 9").replace("ADJUST", "3")
 
 
-def layout(profile, section):
+def layout(profile, section, *, split_entry=False):
     base = 0x120000000 if profile.shrinking and profile.abi == "n64" else 0x400000
+    headers = "PHDRS { startup PT_LOAD FLAGS(5); code PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }"
+    calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
+            ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
     return (LAYOUT.replace("BASE_ADDRESS", hex(base + (0x100000 if section else 0)))
+            .replace("PROGRAM_HEADERS", headers if split_entry else "")
+            .replace("ENTRY_SEGMENT", ":startup" if split_entry else "")
+            .replace("DATA_SEGMENT", ":data" if split_entry else "")
             .replace("RESERVE", ". = ADDR(.text) + 0x100;" if profile.shrinking else "")
             .replace("FILL", "=0" if profile.shrinking else "")
             .replace("OLD_CALC", "" if section else "*(.text.calc)")
-            .replace("NEW_CALC", ".calc.update ALIGN(0x1000) : { *(.text.calc) }" if section else ""))
+            .replace("NEW_CALC", calc if section else ""))
 
 
 def write(path, body):
@@ -186,6 +227,7 @@ def qualify(args):
 
             compile_object("calc.o", calculator(profile, False))
             compile_object("updated.o", calculator(profile, True))
+            compile_object("grown.o", GROWING_CALC)
             write(build / "base.ld", layout(profile, False))
             section_layout = layout(profile, True)
             write(build / "section.ld", section_layout)
@@ -194,6 +236,9 @@ def qualify(args):
             if profile.isa == "mips16":
                 compile_object("invoke.o", MIPS16_CALLER)
                 objects.append("invoke.o")
+                if profile.compressed_entry:
+                    compile_object("entry.o", MIPS16_ENTRY)
+                    objects.append("entry.o")
             objects.append("calc.o")
             original = out / "original.elf"
             run([args.lld, "-static", "-T", build / "base.ld", "-o", original,
@@ -203,29 +248,54 @@ def qualify(args):
                             section=".calc.update", sectionLayout="section.ld")
             manifest_path = build / "manifest.json"
             encode(manifest_path, manifest)
-            command = [args.neverd, "patch", original, f"--relink={manifest_path}",
-                       f"--linker-path={args.lld}"]
-            for mode in MODES:
-                run([*command, f"--mode={mode}", "-o", out / f"{mode}.elf"])
-            results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
-            if profile.shrinking:
-                continue
+            options = [f"--relink={manifest_path}", f"--linker-path={args.lld}"]
 
-            # Exercise atomic replacement of the input pathname as well.
-            same = build / "same.elf"
-            shutil.copyfile(original, same)
-            run([*command[:2], same, *command[3:], "--mode=inplace", "-o", same])
-            if digest(same) != digest(out / "inplace.elf"):
-                raise RuntimeError(f"{name}: inconsistent same-path result")
+            def patch(mode, output, *, input_elf=original, error=None):
+                run([args.neverd, "patch", input_elf, *options, f"--mode={mode}", "-o", output],
+                    error=error)
+
+            for mode in MODES:
+                patch(mode, out / f"{mode}.elf")
+            split = layout(profile, True, split_entry=True)
+            write(build / "grown.ld", split)
+            encode(manifest_path, {**manifest, "replacement": "grown.o", "sectionLayout": "grown.ld"})
+            patch("section", out / "section-grown.elf")
+            results[name] = {case: digest(out / f"{case}.elf")
+                             for case in ("original", *MODES, "section-grown")}
 
             sentinel = build / "prior output"
             sentinel.write_bytes(b"existing product\n")
 
-            def reject(mode, diagnostic, **changes):
+            def reject(mode, diagnostic, *, input_elf=original, **changes):
                 encode(manifest_path, {**manifest, **changes})
-                run([*command, f"--mode={mode}", "-o", sentinel], error=diagnostic)
+                patch(mode, sentinel, input_elf=input_elf, error=diagnostic)
                 if sentinel.read_bytes() != b"existing product\n":
                     raise RuntimeError(f"{name}: failed link published an output")
+
+            reject("inplace", "does not fit", replacement="grown.o")
+            entry_error = "program entry is outside file-backed executable load segments"
+            write(build / "readonly-entry.ld",
+                  split.replace("startup PT_LOAD FLAGS(5)", "startup PT_LOAD FLAGS(4)"))
+            write(build / "noload-entry.ld", split.replace(".text :", ".text (NOLOAD) :"))
+            for script in ("readonly-entry.ld", "noload-entry.ld"):
+                reject("section", entry_error, sectionLayout=script)
+            if profile.shrinking:
+                continue
+
+            # Check an unusable input as well as the candidate section layout.
+            bad_input = build / "readonly-entry.elf"
+            run([args.lld, "-static", "-T", build / "readonly-entry.ld", "-o", bad_input,
+                 *(build / obj for obj in objects)])
+            for mode in MODES:
+                reject(mode, entry_error, input_elf=bad_input, layout="readonly-entry.ld")
+
+            # Exercise atomic replacement of the input pathname as well.
+            encode(manifest_path, manifest)
+            same = build / "same.elf"
+            shutil.copyfile(original, same)
+            patch("inplace", same, input_elf=same)
+            if digest(same) != digest(out / "inplace.elf"):
+                raise RuntimeError(f"{name}: inconsistent same-path result")
 
             reject("section", "do not reproduce", objects=["start.o", "updated.o"],
                    original="updated.o")
@@ -240,14 +310,10 @@ def qualify(args):
             reject("section", "ELF linker exited", replacement="wrong-endian.o")
             compile_object("adjacent.o", CALC.replace("ADJUST", "7").replace("12345", "9"))
             reject("inplace", "other loaded bytes", replacement="adjacent.o")
-            large = CALC.replace("%twice = shl i32 %x, 1",
-                                 "%a = mul i32 %x, 314159\n  %twice = xor i32 %a, 271828")
-            compile_object("large.o", large.replace("ADJUST", "7"))
-            reject("inplace", "does not fit", replacement="large.o")
             encode(manifest_path, manifest)
-            run([*command, "--from-object=updated.o", "-o", sentinel],
+            run([args.neverd, "patch", original, *options, "--from-object=updated.o", "-o", sentinel],
                 error="cannot be combined")
-    encode(root / "products.json", {"version": 2, "profiles": results})
+    encode(root / "products.json", {"version": 3, "profiles": results})
     print(f"Relinked {len(results)} profiles in both modes")
 
 
@@ -263,6 +329,8 @@ def inspect_elf(image, profile):
             or bool(flags & 0x20) != (abi == "n32")
             or flags & 0xf000 != (0x1000 if abi == "o32" else 0)):
         raise ValueError(f"{profile.name}: unexpected ELF header or ABI flags {flags:#x}")
+    if bool(image["e_entry"] & 1) != profile.compressed_entry:
+        raise ValueError(f"{profile.name}: incorrect program entry ISA at {image['e_entry']:#x}")
 
     symtab = image.get_section_by_name(".symtab")
     (index, symbol), = ((i, s) for i, s in enumerate(symtab.iter_symbols()) if s.name == "calc")
@@ -304,20 +372,31 @@ def execute(args):
     manifest = json.loads((root / "products.json").read_text())
     cases = list(profiles())
     if "version" in manifest:
-        if manifest["version"] != 2:
+        version = manifest["version"]
+        if version not in (2, 3):
             raise ValueError("Unknown MIPS relink products version")
+        if version == 2:
+            cases = [p for p in cases if not p.compressed_entry]
         hashes = manifest["profiles"]
     else:
         # Archived original-format manifests contain the six classic R2 cases.
+        version = 1
         cases = [p for p in cases if not p.shrinking]
         hashes = manifest
     if set(hashes) != {p.name for p in cases}:
         raise ValueError("MIPS relink products do not match the expected profile set")
+    section_cases = ("section", "section-grown") if version == 3 else ("section",)
     results, placements = {}, {}
     for profile in cases:
         row, ranges = {}, {}
         original, updated = (81, 29) if profile.shrinking else (25, 37)
-        for case, expected in (("original", original), ("section", updated), ("inplace", updated)):
+        expected_results = {"original": original, "section": updated, "inplace": updated}
+        if version == 3:
+            # The larger body returns 61, 56 and 44 for the three startup calls.
+            expected_results["section-grown"] = 161
+        if hashes[profile.name].keys() != expected_results.keys():
+            raise ValueError(f"{profile.name}: unexpected set of relink products")
+        for case, expected in expected_results.items():
             path = root / profile.name / f"{case}.elf"
             if digest(path) != hashes[profile.name][case]:
                 raise ValueError(f"{path}: SHA-256 mismatch")
@@ -326,12 +405,20 @@ def execute(args):
                 ranges[case] = inspect_elf(image, profile)
                 execute_image(path, image, profile, expected)
             row[case] = expected
-        old, section, inplace = (ranges[case] for case in ("original", *MODES))
+        old, inplace = ranges["original"], ranges["inplace"]
+        sizes = ranges["section"]["size"], inplace["size"]
+        sizes_match = (max(sizes) < old["size"] if profile.shrinking
+                       else sizes == (old["size"], old["size"]))
         if (inplace["va"] != old["va"] or inplace["offset"] != old["offset"]
-                or section["section"] != ".calc.update"
-                or not (section["va"] >= old["va"] + old["size"] or old["va"] >= section["va"] + section["size"])
-                or (profile.shrinking and not (section["size"] < old["size"] and inplace["size"] < old["size"]))):
+                or not sizes_match):
             raise ValueError(f"{profile.name}: incorrect function placement {ranges}")
+        for case in section_cases:
+            section = ranges[case]
+            if (section["section"] != ".calc.update"
+                    or not (section["va"] >= old["va"] + old["size"]
+                            or old["va"] >= section["va"] + section["size"])
+                    or (case == "section-grown" and section["size"] <= old["size"])):
+                raise ValueError(f"{profile.name}: incorrect {case} placement {section} for {old}")
         results[profile.name], placements[profile.name] = row, ranges
         if profile.name == "micromips-r2-n64-be":
             from mips_elf_runtime import check_non_executable_entry
@@ -339,7 +426,7 @@ def execute(args):
                                        profile.release, profile.exit_nr, updated)
     encode(root / "execution.json", results)
     encode(root / "placements.json", placements)
-    print(f"Executed {3 * len(results)} complete ELF files across {len(results)} profiles")
+    print(f"Executed {sum(map(len, results.values()))} complete ELF files across {len(results)} profiles")
 
 
 if __name__ == "__main__":
