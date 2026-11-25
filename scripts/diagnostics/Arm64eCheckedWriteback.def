@@ -1,0 +1,90 @@
+//===- Arm64eCheckedWriteback.def - Observe CPA2 writeback -------*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Shared by the Darwin process and the freestanding EL0/EL1 model. Only the
+/// original byte address is dereferenced. The updated bases are integers.
+//===----------------------------------------------------------------------===//
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef enum {
+  WritebackInvalid,
+  WritebackUnchecked,
+  WritebackChecked
+} WritebackStatus;
+
+static WritebackStatus observeStructureWriteback(void) {
+  const uint64_t TagUnit = UINT64_C(1) << 56;
+  const uint64_t Sign = UINT64_C(1) << 55;
+  const uint64_t Poison = UINT64_C(1) << 54;
+  // For tag-changing offsets, LowDelta is the independent displacement that
+  // survives the check. The stack byte is in the lower address range.
+  const struct {
+    uint64_t Offset;
+    int LowDelta;
+    bool ChangesTag;
+  } Cases[] = {{0, 0, false},
+               {1, 0, false},
+               {UINT64_MAX, 0, false},
+               {Poison, 0, false},
+               {Sign, 0, false},
+               {TagUnit, 0, true},
+               {0 - TagUnit, 0, true},
+               {TagUnit + 17, 17, true},
+               {0 - TagUnit - 19, -19, true},
+               {TagUnit + Sign + 7, 7, true},
+               {0 - TagUnit + 13, 13, true},
+               {0 - TagUnit - Sign - 3, -3, true}};
+  static const uint8_t Values[] = {0xa7, 0x36};
+  const size_t CaseCount = sizeof(Cases) / sizeof(*Cases);
+  const size_t ValueCount = sizeof(Values) / sizeof(*Values);
+  bool PlainMatches = true, CheckedMatches = true;
+  size_t Completed = 0;
+  for (size_t I = 0; I != CaseCount; ++I) {
+    for (size_t M = 0; M != ValueCount; ++M) {
+      for (size_t R = 0; R != ValueCount; ++R) {
+        const unsigned Source = (uint8_t)~Values[R];
+        struct {
+          uint8_t Before, Byte, After;
+        } Data = {0xb9, Values[M], 0x64};
+        const uint64_t Base = (uintptr_t)&Data.Byte;
+        uint64_t Load = Base, Store = Base;
+        unsigned Element;
+        __asm__ volatile("movi v0.8b, #0\n"
+                         "ld1 {v0.b}[0], [%[base]], %[offset]\n"
+                         "umov %w[element], v0.b[0]"
+                         : [base] "+&r"(Load), [element] "=r"(Element)
+                         : [offset] "r"(Cases[I].Offset)
+                         : "v0", "memory");
+        if (Element != Values[M] || Data.Byte != Values[M] ||
+            Data.Before != 0xb9 || Data.After != 0x64)
+          return WritebackInvalid;
+        __asm__ volatile("dup v0.8b, %w[source]\n"
+                         "st1 {v0.b}[0], [%[base]], %[offset]"
+                         : [base] "+&r"(Store)
+                         : [source] "r"(Source), [offset] "r"(Cases[I].Offset)
+                         : "v0", "memory");
+        if (Data.Byte != Source || Data.Before != 0xb9 || Data.After != 0x64 ||
+            Load != Store)
+          return WritebackInvalid;
+        const uint64_t Plain = Base + Cases[I].Offset;
+        const uint64_t Low = Base + (uint64_t)Cases[I].LowDelta;
+        const uint64_t Checked =
+            Cases[I].ChangesTag ? (Low & ~Poison) | (Base & Sign ? 0 : Poison)
+                                : Plain;
+        PlainMatches &= Load == Plain;
+        CheckedMatches &= Load == Checked;
+        ++Completed;
+      }
+    }
+  }
+  if (Completed != CaseCount * ValueCount * ValueCount ||
+      CheckedMatches == PlainMatches)
+    return WritebackInvalid;
+  return CheckedMatches ? WritebackChecked : WritebackUnchecked;
+}

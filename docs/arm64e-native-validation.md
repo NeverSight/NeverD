@@ -2577,6 +2577,31 @@ process entry. All three reported a virtual M1. The five native x1 feature
 checks remain open on these runners. [Hosted run](https://github.com/gmh5225/test_mac_intel/actions/runs/45579398292)
 and [per-feature results](evidence/arm64e-qualification-inputs-2026-11-25.json).
 
+Use `probe-x1-cursor` to run the same IA and IB frame walks in a signed
+`arm64e.x1` process. The verifier records the Mach-O subtype, signed image
+hash and verified entitlements for each recipe at O0 and O2. The reports
+distinguish a compiler that cannot build the slice, a loader that rejects it
+before entry, and an explicit signer that faults at the measured instruction.
+`probe-cursor` continues to measure the ordinary `arm64e` process.
+
+The Darwin writeback probe and the Arm model share the same `LD1` and `ST1`
+fixture. It crosses 12 register offsets with two initial memory bytes and two
+store values. Each pair checks the loaded byte, stored byte, neighboring bytes
+and both updated bases. Only the original in-bounds address is dereferenced.
+To reproduce the architecture check with the pinned Arm FVP, run
+
+```bash
+python3 scripts/verify_arm64e_return_model.py build-writeback --output writeback-guests
+python3 scripts/verify_arm64e_return_model.py run-writeback \
+  --model /path/to/FVP_Base_RevC-2xAEMvA --guests writeback-guests --output writeback-results
+```
+
+The runner reads back every combination of CPTA, CPTA0, CPTM and CPTM0 and
+requires matching EL1 and EL0 results at O0 and O2. This exercises 6,144
+individual loads and stores. A CPA-only guest must report CPA2 unavailable.
+Darwin regression controls also replace the load or store with a fixed value
+and require both optimizations to reject each substitution.
+
 The CPTA probe builds arm64, arm64e and arm64e.x1 at O0 and O2. Each scalar
 instruction runs in its own process with four input vectors. A SIGILL counts
 as unavailable only at that instruction's address before the first result.
@@ -2617,13 +2642,16 @@ On an M6 Mac with an arm64e.x1-capable Apple SDK and operating system, run:
 python3 scripts/verify_arm64e_native.py qualify-x1 --output native-x1
 ```
 
-The probe compiles fresh O0/O2 signing/cursor controls, checks actual signatures
-and PC sensitivity, signs an arm64e.x1 slice with the required Enhanced Security
-entitlements, and measures checked scalar arithmetic and ordinary writeback.
+The probe compiles O0/O2 cursor controls for ordinary arm64e and arm64e.x1,
+checks signatures and PC sensitivity, and measures checked scalar arithmetic
+and ordinary writeback. Both x1 probes sign their slices with the required
+Enhanced Security entitlements.
 It also requires the original authenticated call and language-unwind controls.
-The top report records the SHA-256 of each of the four component reports.
+The top report records the SHA-256 of all five component reports.
 The x1 result requires the call, unwind, cursor and checked-pointer controls.
-The Q result records 128-bit LRCPC3 separately. Exit 2 records an unavailable
+The Q result records 128-bit LRCPC3 separately.
+`native_arm64e_x1_and_lrcpc3_qualified` requires both results from the same run.
+Exit 2 records an unavailable
 environment and exit 1 records failure. The verifier retains the reports and
 removes the temporary executables and entitlements.
 

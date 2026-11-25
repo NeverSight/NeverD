@@ -127,8 +127,33 @@ def cursor_observation(result, recipe):
     return {"status": POLICY["passed"], **data}
 
 
-def probe_signal_cursor(output):
+def cursor_compile_command(source, binary, optimization, target):
     policy = POLICY["cursor_probe"]
+    return [arg.format(target_flag=target[0], triple=target[1], optimization=optimization,
+                       include=ROOT / policy["include"], source=source, binary=binary)
+            for arg in policy["compile"]]
+
+
+def unsupported_x1_compiler(result, policy):
+    return (policy["x1"] in result.stderr and
+            any(message in result.stderr.lower() for message in policy["unsupported_compiler"]))
+
+
+def execute_apple_slice(products, output, label, argv):
+    try:
+        return command(products, output, label, argv, POLICY["tool_timeout"])
+    except OSError as error:
+        if error.errno != POLICY["cpta_probe"]["bad_cpu_type_errno"]:
+            raise
+        save(output / (label + POLICY["command_suffix"]), {"argv": list(map(str, argv)), "errno": error.errno})
+        return None
+
+
+def probe_signal_cursor(output, *, x1=False):
+    policy = POLICY["cursor_probe"]
+    cpta = POLICY["cpta_probe"]
+    target = (POLICY["x1_cursor_probe"] if x1 else policy)["target"]
+    subtype = cpta["profiles"][cpta["x1"]] if x1 else POLICY["cpu_subtype"]
     source = ROOT / policy["source"]
     report = {**provenance(), "platform": platform.platform(), "profiles": {},
               "status": POLICY["failed"], policy["baseline_key"]: False,
@@ -141,20 +166,38 @@ def probe_signal_cursor(output):
             return report
         with OwnedProducts(output, False) as products:
             for optimization in policy["optimizations"]:
+                directory = output / optimization if x1 else output
+                if x1:
+                    directory.mkdir()
                 label = policy["binary_label"].format(optimization=optimization)
-                binary = output / label
+                binary = directory / label
                 products.append(binary)
-                argv = [arg.format(optimization=optimization, include=ROOT / policy["include"],
-                                   source=source, binary=binary) for arg in policy["compile"]]
-                built = command(products, output, label + POLICY["compile_suffix"],
+                argv = cursor_compile_command(source, binary, optimization, target)
+                built = command(products, directory, label + POLICY["compile_suffix"],
                                 argv, POLICY["tool_timeout"])
-                if built.returncode:
+                if built.returncode and not (x1 and unsupported_x1_compiler(built, cpta)):
                     return report
-                identity = check_binary(binary)
+                identity = {}
+                if not built.returncode:
+                    if x1:
+                        signed = sign_x1_slice(products, directory, binary, cpta)
+                        if signed is None:
+                            return report
+                        identity[cpta["entitlements_key"]] = signed
+                    identity.update(check_binary(binary, subtype))
                 for recipe in policy["recipes"]:
                     label = policy["profile_label"].format(optimization=optimization, recipe=recipe)
-                    result = command(products, output, label, [binary, recipe], POLICY["tool_timeout"])
-                    report["profiles"][label] = {**identity, **cursor_observation(result, recipe)}
+                    if built.returncode:
+                        row = {"status": POLICY["unavailable"], "outcome": cpta["slice_unavailable"]}
+                    else:
+                        result = execute_apple_slice(products, directory, label, [binary, recipe])
+                        if result is None or killed_before_entry(result):
+                            row = {"status": POLICY["unavailable"], "outcome": cpta["loader_unavailable"]}
+                        else:
+                            row = cursor_observation(result, recipe)
+                            if x1 and row["status"] == POLICY["unavailable"]:
+                                row["outcome"] = cpta["isa_unavailable"]
+                    report["profiles"][label] = {**identity, **row}
             def observations(recipe):
                 return [report["profiles"][policy["profile_label"].format(
                     optimization=optimization, recipe=recipe)] for optimization in policy["optimizations"]]
@@ -167,7 +210,10 @@ def probe_signal_cursor(output):
                 not any(p[name]) for p in pacm for name in policy["pc_controls"])
             explicit = observations(policy["recipe_explicit"])
             report[policy["explicit_key"]] = all(p["status"] == POLICY["passed"] for p in explicit)
-            if (len({p["status"] for p in pacm}) != 1 or len({p["status"] for p in explicit}) != 1 or
+            prelaunch = (cpta["slice_unavailable"], cpta["loader_unavailable"])
+            if (any(len({(p["status"], p.get("outcome")) for p in rows}) != 1 for rows in (pacm, explicit)) or
+                    any((p.get("outcome") in prelaunch) != (e.get("outcome") in prelaunch)
+                        for p, e in zip(pacm, explicit)) or
                     (report[policy["baseline_key"]] and
                      not (report[policy["pacm_pc_key"]] or report[policy["pacm_hint_key"]]))):
                 return report
@@ -177,7 +223,11 @@ def probe_signal_cursor(output):
         save(output / POLICY["report_name"], report)
 
 
-def sign_cpta_slice(products, output, binary, policy):
+def probe_x1_signal_cursor(output):
+    return probe_signal_cursor(output, x1=True)
+
+
+def sign_x1_slice(products, output, binary, policy):
     entitlements = output / policy["entitlements_file"]
     products.append(entitlements)
     entitlements.write_bytes(plistlib.dumps(policy["entitlements"]))
@@ -205,14 +255,8 @@ def sign_cpta_slice(products, output, binary, policy):
 
 
 def cpta_observation(products, output, label, argv, mode, policy, *, product=False):
-    try:
-        result = command(products, output, label, argv, POLICY["tool_timeout"])
-    except OSError as error:
-        if error.errno != policy["bad_cpu_type_errno"]:
-            raise
-        save(output / (label + POLICY["command_suffix"]), {"argv": list(map(str, argv)), "errno": error.errno})
-        return policy["loader_unavailable"], []
-    if killed_before_entry(result):
+    result = execute_apple_slice(products, output, label, argv)
+    if result is None or killed_before_entry(result):
         return policy["loader_unavailable"], []
     lines = result.stdout.splitlines()
     if mode == policy["writeback_mode"]:
@@ -257,12 +301,11 @@ def measure_cpta_slice(products, output, arch, subtype, optimization, policy):
     built = command(products, output, arch + POLICY["compile_suffix"], argv, POLICY["tool_timeout"])
     profile = {"outcome": policy["unexpected"]}
     if built.returncode:
-        if (arch == policy["x1"] and arch in built.stderr and
-                any(t in built.stderr.lower() for t in policy["unsupported_compiler"])):
+        if arch == policy["x1"] and unsupported_x1_compiler(built, policy):
             profile["outcome"] = policy["slice_unavailable"]
         return profile
     if arch == policy["x1"]:
-        signed = sign_cpta_slice(products, output, binary, policy)
+        signed = sign_x1_slice(products, output, binary, policy)
         if signed is None:
             return profile
         profile[policy["entitlements_key"]] = signed
@@ -288,7 +331,8 @@ def probe_cpta(output):
     report = {**provenance(), "platform": platform.platform(), "profiles": {}, "optimization_reports": {},
               "status": POLICY["failed"], policy["observed_key"]: False, scalar: False,
               policy["qualified_key"]: False, writeback: False, policy["product_qualified_key"]: False}
-    report["source_sha256"][policy["source"]] = digest(ROOT / policy["source"])
+    report["source_sha256"].update(
+        {name: digest(ROOT / name) for name in (policy["source"], *policy["source_files"])})
     try:
         if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
             report["status"] = POLICY["unavailable"]
@@ -381,12 +425,14 @@ def qualify_x1(output):
     policy = POLICY["x1_qualification"]
     ordered = POLICY["ordered_probe"]
     report = {**provenance(), "status": POLICY["failed"],
-              policy["qualified_key"]: False, ordered["qualified_key"]: False, "probes": {}, "missing": []}
+              policy["qualified_key"]: False, policy["complete_key"]: False,
+              ordered["qualified_key"]: False, "probes": {}, "missing": []}
     try:
         statuses = set()
         first_error = None
         for mode, run in ((POLICY["probe_mode"], probe),
                           (POLICY["cursor_probe"]["mode"], probe_signal_cursor),
+                          (POLICY["x1_cursor_probe"]["mode"], probe_x1_signal_cursor),
                           (POLICY["cpta_probe"]["mode"], probe_cpta),
                           (ordered["mode"], probe_ordered_q)):
             directory = output / mode
@@ -423,6 +469,7 @@ def qualify_x1(output):
             return report
         if statuses == {POLICY["passed"]} and not report["missing"]:
             report[policy["qualified_key"]] = True
+            report[policy["complete_key"]] = report[ordered["qualified_key"]]
             report["status"] = POLICY["passed"]
         else:
             report["status"] = POLICY["unavailable"]
@@ -772,6 +819,8 @@ def main():
             report = probe_cpta(output)
         elif args.mode == POLICY["cursor_probe"]["mode"]:
             report = probe_signal_cursor(output)
+        elif args.mode == POLICY["x1_cursor_probe"]["mode"]:
+            report = probe_x1_signal_cursor(output)
         elif args.mode == POLICY["ordered_probe"]["mode"]:
             report = probe_ordered_q(output)
         elif args.mode == POLICY["x1_qualification"]["mode"]:
