@@ -144,7 +144,8 @@ neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=inplac
 
 In `section` mode, `sectionLayout` must place the function in the named
 executable output section at a range disjoint from its original range. LLD
-resolves the callers. In `inplace` mode, the original layout is reused and
+resolves the callers. The layout can move the named program entry along with
+the other sections. In `inplace` mode, the original layout is reused and
 the last two manifest fields are optional. The function must fit its original
 range at the same virtual address and file offset. The program entry, load
 segments and all loaded bytes outside that range must match the original.
@@ -152,7 +153,18 @@ Both modes check the target ABI before publishing the executable atomically.
 
 The runtime qualification uses the NeverSight LLVM fork's code generator,
 assembler and ELF linker for classic Release 2 o32, n32 and n64, in both byte
-orders. Run `scripts/check_mips_elf_relink.py qualify --help` for the tool
+orders. To build the tools from NeverD's pinned fork checkout, run
+
+```sh
+git submodule update --init third_party/llvm-project
+cmake -S third_party/llvm-project/llvm -B build-mips-tools -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=lld \
+  -DLLVM_TARGETS_TO_BUILD=Mips -DLLVM_ENABLE_RTTI=ON
+cmake --build build-mips-tools --target llc llvm-mc lld
+```
+
+Use `build-mips-tools/bin/ld.lld` as the linker. Run
+`python3 scripts/check_mips_elf_relink.py qualify --help` for the tool
 paths, then `python3 scripts/check_mips_elf_relink.py execute --root products`
 on Linux with QEMU user-mode emulators for all six profiles.
 

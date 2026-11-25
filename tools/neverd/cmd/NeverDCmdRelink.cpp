@@ -180,6 +180,7 @@ struct LinkedImage {
   std::vector<LoadSegment> Loads;
   std::optional<StringRef> ABIFlags;
   uint64_t Entry;
+  SmallVector<StringRef> EntrySymbols;
   uint32_t Flags;
   unsigned AddressBytes, OSABI, ABIVersion;
   bool LittleEndian;
@@ -215,10 +216,34 @@ Expected<LinkedImage> inspect(MemoryBufferRef Buffer, StringRef Function) {
   auto Entry = O.getStartAddress();
   if (!Entry)
     return Entry.takeError();
+  SmallVector<StringRef> EntrySymbols;
+  for (const ELFSymbolRef &Sym : O.symbols()) {
+    if (Sym.getBinding() != ELF::STB_GLOBAL ||
+        (Sym.getELFType() != ELF::STT_FUNC &&
+         Sym.getELFType() != ELF::STT_NOTYPE))
+      continue;
+    auto Address = Sym.getAddress();
+    if (!Address)
+      return Address.takeError();
+    if (*Address != *Entry && *Address != (*Entry & ~uint64_t{1}))
+      continue;
+    auto Sec = Sym.getSection();
+    if (!Sec)
+      return Sec.takeError();
+    if (*Sec == O.section_end() ||
+        !(ELFSectionRef(**Sec).getFlags() & ELF::SHF_EXECINSTR))
+      continue;
+    auto Name = Sym.getName();
+    if (!Name)
+      return Name.takeError();
+    if (!Name->empty())
+      EntrySymbols.push_back(*Name);
+  }
   return LinkedImage{std::move(*F),
                      std::move(*Loads),
                      ABIFlags,
                      *Entry,
+                     std::move(EntrySymbols),
                      O.getPlatformFlags(),
                      O.getBytesInAddress(),
                      O.getEIdentOSABI(),
@@ -238,11 +263,15 @@ Error verifyProduct(const LinkedImage &Old, const LinkedImage &New,
   const auto &A = Old.Function;
   const auto &B = New.Function;
   if (!Inplace) {
-    // A layout may move the entry function itself. Preserve its mode tag.
-    const uint64_t ExpectedEntry = (Old.Entry & ~uint64_t{1}) == A.Address
-                                       ? B.Address | (Old.Entry & 1)
-                                       : Old.Entry;
-    if (New.Entry != ExpectedEntry)
+    // LLD may move startup code too. Match a named entry by symbol and ISA
+    // mode. An anonymous entry can only be verified at its original address.
+    const bool SameEntry =
+        Old.EntrySymbols.empty()
+            ? Old.Entry == New.Entry
+            : llvm::any_of(Old.EntrySymbols, [&](StringRef Name) {
+                return llvm::is_contained(New.EntrySymbols, Name);
+              });
+    if (!SameEntry || ((Old.Entry ^ New.Entry) & 1))
       return createStringError("section relink changed the program entry");
     const bool Overlap = A.Address <= B.Address
                              ? B.Address - A.Address < A.Size

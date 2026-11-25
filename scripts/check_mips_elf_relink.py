@@ -85,7 +85,7 @@ def digest(path):
 
 
 def run(args, *, error=None, expected=0, source=None):
-    result = subprocess.run(args, input=source, text=True, capture_output=True)
+    result = subprocess.run(args, input=source, text=True, capture_output=True, timeout=60)
     if error is None:
         passed = result.returncode == expected
     else:
@@ -117,8 +117,11 @@ def qualify(args):
             compile_calc("updated.o", CALC.replace("ADJUST", "7"))
             write(build / "base.ld", LAYOUT.replace("OLD_CALC", "*(.text.calc)")
                   .replace("NEW_CALC", ""))
-            write(build / "section.ld", LAYOUT.replace("OLD_CALC", "").replace(
-                "NEW_CALC", ".calc.update ALIGN(0x1000) : { *(.text.calc) }"))
+            section_layout = (LAYOUT.replace("0x400000", "0x500000")
+                              .replace("OLD_CALC", "")
+                              .replace("NEW_CALC", ".calc.update ALIGN(0x1000) : { *(.text.calc) }"))
+            write(build / "section.ld", section_layout)
+            write(build / "wrong-entry.ld", section_layout.replace("ENTRY(_start)", "ENTRY(calc)"))
             original = out / "original.elf"
             run([args.lld, "-static", "-T", build / "base.ld", "-o", original,
                  build / "start.o", build / "calc.o"])
@@ -152,6 +155,7 @@ def qualify(args):
             reject("section", "missing defined global function", function="absent")
             reject("section", "separate section", sectionLayout="base.ld")
             reject("section", "separate section", section=".wrong")
+            reject("section", "changed the program entry", sectionLayout="wrong-entry.ld")
             reject("inplace", "missing defined global function", replacement="start.o")
             reject("inplace", "exactly one entry", original="absent.o")
             opposite = next(t for n, t, a, *_ in profiles() if a == abi and n != name)
