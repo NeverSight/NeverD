@@ -45,6 +45,7 @@
 #include <algorithm>
 #include <cassert>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace neverd::symbolic::synth {
@@ -196,10 +197,11 @@ llvm::APInt OpSemantics::apply(GramOp Op,
   }
 }
 
-void OpSemantics::applyColumn(GramOp Op, const uint64_t *A, const uint64_t *B,
-                              uint64_t *Out, size_t Count) const {
-  const uint64_t Width = Ones.getBitWidth();
-  const uint64_t Mask = Ones.getZExtValue();
+template <typename Word>
+void OpSemantics::applyColumn(GramOp Op, const Word *A, const Word *B,
+                              Word *Out, size_t Count) const {
+  const unsigned Width = Ones.getBitWidth();
+  const Word Mask = static_cast<Word>(Ones.getZExtValue());
   const auto Each = [&](auto Value) {
     for (size_t I = 0; I != Count; ++I)
       Out[I] = Value(I);
@@ -219,18 +221,20 @@ void OpSemantics::applyColumn(GramOp Op, const uint64_t *A, const uint64_t *B,
     return Each([=](size_t I) { return A[I] ^ B[I]; });
   case GramOp::Shl:
     return Each([=](size_t I) {
-      return B[I] >= Width ? uint64_t(0) : (A[I] << B[I]) & Mask;
+      return B[I] >= Width ? Word(0) : (A[I] << B[I]) & Mask;
     });
   case GramOp::LShr:
     return Each(
-        [=](size_t I) { return B[I] >= Width ? uint64_t(0) : A[I] >> B[I]; });
+        [=](size_t I) { return B[I] >= Width ? Word(0) : A[I] >> B[I]; });
   case GramOp::AShr:
     return Each([=](size_t I) {
       // The value's sign fills the word, so shifting past its width leaves that
       // sign, and the amount only needs to stay a defined shift.
-      const unsigned Spare = 64 - unsigned(Width);
-      const int64_t Signed = int64_t(A[I] << Spare) >> Spare;
-      return uint64_t(Signed >> std::min<uint64_t>(B[I], 63)) & Mask;
+      constexpr unsigned WordBits = sizeof(Word) * 8;
+      const unsigned Spare = WordBits - Width;
+      const auto Signed =
+          static_cast<std::make_signed_t<Word>>(A[I] << Spare) >> Spare;
+      return Word(Signed >> std::min<Word>(B[I], WordBits - 1)) & Mask;
     });
   case GramOp::Not:
     return Each([=](size_t I) { return ~A[I] & Mask; });
@@ -239,6 +243,13 @@ void OpSemantics::applyColumn(GramOp Op, const uint64_t *A, const uint64_t *B,
   }
   llvm_unreachable("unhandled grammar operator");
 }
+
+template void OpSemantics::applyColumn(GramOp, const uint32_t *,
+                                       const uint32_t *, uint32_t *,
+                                       size_t) const;
+template void OpSemantics::applyColumn(GramOp, const uint64_t *,
+                                       const uint64_t *, uint64_t *,
+                                       size_t) const;
 
 //===----------------------------------------------------------------------===//
 // Behaviours
