@@ -2434,14 +2434,12 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
         return fail(SpecializationStatus::BudgetExceeded,
                     "frame word projection budget exhausted");
       ++Result.EvaluatedOperations;
-      const auto Value =
-          State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
+      const auto Value = State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
       const auto Domain =
           enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
       if (Failed)
         return false;
-      if (Domain.Status != FiniteValueStatus::Complete ||
-          Domain.Tuples.empty())
+      if (Domain.Status != FiniteValueStatus::Complete || Domain.Tuples.empty())
         continue;
       if (Domain.Tuples.size() >
           Options.MaxOperations - Result.EvaluatedOperations)
