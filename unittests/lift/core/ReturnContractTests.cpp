@@ -389,6 +389,60 @@ TEST(ReturnContracts, AnUndefinedPathWithoutADeliberateValueIsNoValue) {
             std::vector<bool>{true});
 }
 
+TEST(ReturnContracts, AJoinArmNoWriteReachesIsTheRegisterAsItEntered) {
+  // __security_init_cookie on MSVC ARM: one way returns what
+  // QueryPerformanceCounter left, the other never writes the register.  A
+  // function that takes no parameter there has no entry seed of it, so SSA
+  // names the entry value at the join's arm version -1.
+  PhiNode Merge;
+  Merge.Output = rax(2);
+  Merge.Args = {{0, rax(-1)}, {1, rax(1)}};
+  MedBlock Join = block({returning(rax(2))}, {0, 1});
+  Join.Phis.push_back(std::move(Merge));
+  EXPECT_EQ(
+      settle({function(
+          CalleeEntry,
+          {block({operation(NdOp::COND_BR, {}, {temporary(9)})}, {}, {1, 2}),
+           block({operation(NdOp::INDIR_CALL, rax(1), {temporary(5)})}, {0},
+                 {2}),
+           std::move(Join)})}),
+      std::vector<bool>{true});
+}
+
+TEST(ReturnContracts, AChoiceBeforeAConditionalAdjustmentSelectsAValue) {
+  // `v = c ? 15 : 10; if (d) v += 7; return v;` beside a path that leaves
+  // RAX as it entered: the block that begins the join has another way out,
+  // and the choice still decides what the way past the adjustment returns.
+  const auto Branch = [](int Condition) {
+    return operation(NdOp::COND_BR, {},
+                     {MedVar::makeConst(0, 8), temporary(Condition)});
+  };
+  const auto Set = [](const MedVar &Register, uint64_t Value) {
+    return operation(NdOp::COPY, Register, {MedVar::makeConst(Value, 8)});
+  };
+  PhiNode Chosen;
+  Chosen.Output = rax(3);
+  Chosen.Args = {{2, rax(1)}, {3, rax(2)}};
+  MedBlock Adjusting = block({Branch(10)}, {2, 3}, {5, 6});
+  Adjusting.Phis.push_back(std::move(Chosen));
+  PhiNode Returned;
+  Returned.Output = rax(5);
+  Returned.Args = {{4, rax(3)}, {5, rax(4)}};
+  MedBlock Shared = block({returning(rax(5))}, {4, 5});
+  Shared.Phis.push_back(std::move(Returned));
+  EXPECT_EQ(
+      settle({function(
+          CalleeEntry,
+          {block({seed(), Branch(8)}, {}, {1, 7}),
+           block({Branch(9)}, {0}, {2, 3}), block({Set(rax(1), 15)}, {1}, {4}),
+           block({Set(rax(2), 10)}, {1}, {4}), std::move(Adjusting),
+           block({operation(NdOp::INT_ADD, rax(4),
+                            {rax(3), MedVar::makeConst(7, 8)})},
+                 {4}, {6}),
+           std::move(Shared), block({returning(rax(0))}, {0})})}),
+      std::vector<bool>{false});
+}
+
 TEST(ReturnContracts, ACallerThatReadsTheResultKeepsAValue) {
   MedFunc Callee = branching(
       CalleeEntry, operation(NdOp::INDIR_CALL, rax(1), {temporary(5)}));

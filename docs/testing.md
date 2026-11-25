@@ -9267,9 +9267,10 @@ read declarations. `ReturnContracts.ACalleeAndTheCallerThatHandsItsResultBackRet
 `ACalleeNoPathShowsMeansNoValueWaitsForItsCaller` and
 `AFunctionThatReturnsWhatItsOwnCallReturnsShowsNothing` cover how a callee and
 the callers that hand its result back are settled together;
-`AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt` and
-`AnotherRegisterAsEnteredShowsNothing` what a register handed back as the
-function entered it means;
+`AParameterInTheReturnRegisterIsAValueForACallerThatReadsIt`,
+`AnotherRegisterAsEnteredShowsNothing` and
+`AJoinArmNoWriteReachesIsTheRegisterAsItEntered` what a register handed back
+as the function entered it means, on a join's arm too;
 `AConstantBesideAPathThatNeverWroteTheRegisterIsNoValue`,
 `AConstantBesideTheResultOfAFunctionThatReturnsNoneIsNot` and
 `AConstantIsADeliberateValue` what a constant beside a path that hands back
@@ -9293,7 +9294,10 @@ disconnected blocks and the provenance of indirect edges.
 same contract when the arms jump or fall through to a shared return. It
 covers reordered PHI inputs, values from the wrong predecessor, narrow
 inputs, stores, exceptional entry and the actual targets of an indirect
-branch. `ReturnContract.SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge`
+branch. `ReturnContracts.AChoiceBeforeAConditionalAdjustmentSelectsAValue`
+follows the arms into a join through the block that begins it and has
+another way out, which `ReturnContract.SharedMIPSBranchLikelyExecutesOnlyTheTakenSlot`
+also needs once its bare path shows the register as it entered. `ReturnContract.SharedIntegerReturnTrapsOnlyOnTheUnwrittenEdge`
 executes both C outputs on all three paths to a single x86-64 return and
 on MIPS64 branches that materialize the results through temporaries before
 a shared delayed return.

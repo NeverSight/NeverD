@@ -5672,7 +5672,16 @@ never wrote the result register, where no parameter arrives in it, shows the
 function means no value, and so does a path that hands back what a callee
 left when that callee returned and returns nothing; a constant another path
 holds is then what the code happened to hold (`xor eax, eax` to store a
-zero). A function no path of which shows that, such as one that returns the
+zero). Such a path may end at a join a written path also reaches, where SSA
+names the register's entry value at version -1, a function that takes no
+parameter in the register having no entry seed to define version 0. MSVC
+ARM's `__security_init_cookie` hands back what `QueryPerformanceCounter` left
+only where it seeds the cookie, and `_initterm` what its last initializer
+left only past a nonempty table: 300 functions that return none returned a
+value that way, 168 in the EH corpus's ARM images, 16 in its ARM ELF ones,
+`__do_global_dtors_aux` among them, and 116 Go arm64 runtime routines, and
+the EH corpus printed 1,585 HighC placeholders and prints 1,417, and 7,187
+LLVM C ones and 7,115. A function no path of which shows that, such as one that returns the
 register a parameter arrived in or ends after a call that does not return,
 keeps its value while a caller hands its result back: the caller may be
 returning what it passed. The same holds where the parameter is Go's
@@ -5715,7 +5724,11 @@ A reachable branch whose arms only return distinct integer constants selects
 a result even when another path leaves the register untouched. The arms may
 return separately or pass through successive result PHIs on the way to a
 common return. Each arm must supply its own input, and each block followed
-to the exit must be free of other effects. A partial register write can
+to the exit must be free of other effects. A block that begins a join and
+has another way out hands the join's value on unchanged to each, so the arms
+entering the join are followed through it, each such join once since chains
+through them can cycle: `v = c ? 15 : 10; if (d) v += 7; return v;` selects
+a result, which the way around the adjustment returns as chosen. A partial register write can
 assemble a literal from bytes already defined on that arm. Across a join,
 only differences that survive the shared computation count. Replacing a
 field erases differences in that field. XOR with a scalar literal preserves
