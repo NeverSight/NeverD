@@ -478,7 +478,38 @@
       ["nop", "ldr_q", "failed"],
       ["udf", "ldr_q", "failed"],
       ["str_q", "udf", "failed"],
-      ["udf", "udf", "unavailable"]
+      ["udf", "udf", "unavailable"],
+      ["udf", "udf", "failed", ["ProbingStore = Store;", "ProbingStore = Store; __asm__ volatile(\".inst 0\");"]]
+    ]
+  },
+  "projection_probe_controls": {
+    "compiler": ["/usr/bin/clang", "-target", "arm64-apple-macos15", "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-x", "c"],
+    "binary": "projection-probe",
+    "source": "projection-probe.c",
+    "key_probe": "unittests/lift/fixtures/arm64e/pauth_key_probe.def",
+    "explicit_define": "-DPROBE_RETURN_KEYS",
+    "explicit_instructions": [".inst 0xdac18bfe", ".inst 0xdac18ffe"],
+    "key_words": {"active": "eor x17,x17,x16", "inactive": "nop", "undefined": ".inst 0", "later_fault": "nop\\n.inst 0"},
+    "explicit_cases": [
+      ["active", "active", 0], ["active", "inactive", 1], ["inactive", "active", 1],
+      ["undefined", "undefined", 1], ["undefined", "active", 2], ["active", "undefined", 2],
+      ["undefined", "inactive", 2], ["inactive", "undefined", 2],
+      ["later_fault", "undefined", 2], ["undefined", "later_fault", 2]
+    ],
+    "ordinary_instructions": ["pacia x0,x1", "pacib x0,x1", "pacda x0,x1", "pacdb x0,x1"],
+    "ordinary_active": "eor x0,x0,x1",
+    "generic_instruction": "pacga x0,x0,x1",
+    "generic_cases": [["mov x0,x1", 0], ["mov x0,xzr", 1], [".inst 0", 1], ["nop\\n.inst 0", 2]],
+    "prefix_probe": "unittests/lift/fixtures/arm64e/pauth_prefix_probe.def",
+    "prefix_main": "\nint main(int argc, char **argv) { (void)argv; return prefixProbeStatus(argc - 1); }\n",
+    "prefix_argument": "enabled",
+    "prefix_instruction": ".inst 0xd50324ff",
+    "prefix_nop": "nop",
+    "prefix_signers": [".inst 0xd503211f", ".inst 0xd503215f"],
+    "prefix_words": {"pc": "eor x17,x17,x15", "hint": "mvn x17,x17", "inactive": "nop"},
+    "prefix_cases": [
+      ["pc", "pc", [1, 0]], ["hint", "hint", [0, 1]], ["pc", "hint", [2, 2]],
+      ["hint", "pc", [2, 2]], ["inactive", "pc", [1, 1]], ["pc", "inactive", [1, 1]]
     ]
   },
   "cursor_native_controls": {

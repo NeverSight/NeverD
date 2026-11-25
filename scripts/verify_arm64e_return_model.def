@@ -155,6 +155,8 @@
   "fixture_files": [
     "pauth_lr_oracle.c",
     "pauth_pc_oracle.def",
+    "pauth_prefix_probe.def",
+    "pauth_register_oracle.def",
     "string.h"
   ],
   "version_pattern": "Fast Models \\[([^ ]+) ",

@@ -35,6 +35,7 @@ NEVERD_PAUTH_NATIVE_NUMBER(kProbeKilledSignal, 9)
 NEVERD_PAUTH_NATIVE_NUMBER(kProbeIllegalSignal, 4)
 NEVERD_PAUTH_NATIVE_NUMBER(kProbeSegmentationSignal, 11)
 NEVERD_PAUTH_NATIVE_NUMBER(kProbeAbsent, 1)
+NEVERD_PAUTH_NATIVE_NUMBER(kProbeFailed, 2)
 NEVERD_PAUTH_NATIVE_NUMBER(kProbeTimeoutSeconds, 30)
 #undef NEVERD_PAUTH_NATIVE_NUMBER
 #endif
@@ -72,51 +73,13 @@ NEVERD_PAUTH_NATIVE_TEXT(kSigningKeyTarget, "arm64e-apple-macos")
 NEVERD_PAUTH_NATIVE_TEXT(kSigningKeysUnavailable,
                          "this host cannot execute arm64e with all four active "
                          "pointer signing keys and generic signatures")
-NEVERD_PAUTH_NATIVE_TEXT(kSigningKeyProbe, R"(
-#include <stdint.h>
-int main(void) {
-  unsigned changed = 0;
-  int generic = 0;
-  for (uint64_t i = 0; i != 64; ++i) {
-    uint64_t pointer = 0x12340 + i * 16;
-    uint64_t a = pointer, b = pointer, c = pointer, d = pointer, signature;
-    __asm__ volatile("pacia %0, %1" : "+r"(a) : "r"(i));
-    __asm__ volatile("pacib %0, %1" : "+r"(b) : "r"(i));
-    __asm__ volatile("pacda %0, %1" : "+r"(c) : "r"(i));
-    __asm__ volatile("pacdb %0, %1" : "+r"(d) : "r"(i));
-    __asm__ volatile("pacga %0, %1, %2"
-                     : "=r"(signature) : "r"(pointer), "r"(i));
-    changed |= (a != pointer) | ((b != pointer) << 1) |
-               ((c != pointer) << 2) | ((d != pointer) << 3);
-    generic |= signature != 0;
-  }
-  return changed != 15 || !generic;
-}
-)")
-
+NEVERD_PAUTH_NATIVE_TEXT(kSigningKeyProbe, "pauth_key_probe.def")
+NEVERD_PAUTH_NATIVE_TEXT(kReturnProbeMode, "#define PROBE_RETURN_KEYS 1\n")
 NEVERD_PAUTH_NATIVE_TEXT(kReturnHostUnavailable,
                          "native pointer authentication requires Apple Silicon")
 NEVERD_PAUTH_NATIVE_TEXT(
     kReturnKeysUnavailable,
     "this host cannot execute arm64e PAuth_LR with active keys")
-NEVERD_PAUTH_NATIVE_TEXT(kReturnKeyProbe, R"(
-#include <stdint.h>
-int main(void) {
-  int changed_a = 0, changed_b = 0;
-  for (uint64_t i = 0; i != 64; ++i) {
-    uint64_t a, b, pointer = 0x12340 + i * 16;
-    __asm__ volatile("mov x17, %2\nmov x16, %3\nmov x15, %3\n"
-                     ".inst 0xdac18bfe\nmov %0, x17\n"
-                     "mov x17, %2\n.inst 0xdac18ffe\nmov %1, x17"
-                     : "=&r"(a), "=r"(b) : "r"(pointer), "r"(i)
-                     : "x15", "x16", "x17");
-    changed_a |= a != pointer;
-    changed_b |= b != pointer;
-  }
-  return !(changed_a && changed_b);
-}
-)")
-
 #ifdef NEVERD_PAUTH_KEY_FUNCTION
 NEVERD_PAUTH_KEY_FUNCTION(Pacia, test_pacia)
 NEVERD_PAUTH_KEY_FUNCTION(Pacib, test_pacib)

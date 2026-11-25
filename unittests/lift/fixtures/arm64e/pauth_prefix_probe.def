@@ -1,0 +1,66 @@
+//===- pauth_prefix_probe.def - Native PACM mode observation ----*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Compare both active signing keys across independent second modifiers.
+//===----------------------------------------------------------------------===//
+
+#include <stdint.h>
+#ifndef RETURN_ORACLE_EXPECTED_MODE
+#define RETURN_ORACLE_EXPECTED_MODE 1
+#endif
+static uint64_t signPrefixIA(uint64_t Pointer, uint64_t First, uint64_t Second,
+                             uint64_t Mode) {
+  uint64_t Result;
+  if (Mode) {
+    __asm__ volatile("mov x17, %1\nmov x16, %2\nmov x15, %3\n"
+                     ".inst 0xd50324ff\n.inst 0xd503211f\nmov %0, x17"
+                     : "=r"(Result)
+                     : "r"(Pointer), "r"(First), "r"(Second)
+                     : "x15", "x16", "x17");
+  } else {
+    __asm__ volatile("mov x17, %1\nmov x16, %2\n"
+                     ".inst 0xd503211f\nmov %0, x17"
+                     : "=r"(Result)
+                     : "r"(Pointer), "r"(First)
+                     : "x16", "x17");
+  }
+  return Result;
+}
+static uint64_t signPrefixIB(uint64_t Pointer, uint64_t First, uint64_t Second,
+                             uint64_t Mode) {
+  uint64_t Result;
+  if (Mode) {
+    __asm__ volatile("mov x17, %1\nmov x16, %2\nmov x15, %3\n"
+                     ".inst 0xd50324ff\n.inst 0xd503215f\nmov %0, x17"
+                     : "=r"(Result)
+                     : "r"(Pointer), "r"(First), "r"(Second)
+                     : "x15", "x16", "x17");
+  } else {
+    __asm__ volatile("mov x17, %1\nmov x16, %2\n"
+                     ".inst 0xd503215f\nmov %0, x17"
+                     : "=r"(Result)
+                     : "r"(Pointer), "r"(First)
+                     : "x16", "x17");
+  }
+  return Result;
+}
+static int prefixProbeStatus(int Enabled) {
+  int ActiveA = 0, ActiveB = 0, DiversifiesA = 0, DiversifiesB = 0;
+  for (uint64_t I = 0; I != 64; ++I) {
+    uint64_t Pointer = 0x12340 + I * 16, First = I * 0x12345678;
+    uint64_t A = signPrefixIA(Pointer, First, I, 1);
+    uint64_t B = signPrefixIB(Pointer, First, I, 1);
+    ActiveA |= A != Pointer;
+    ActiveB |= B != Pointer;
+    DiversifiesA |= A != signPrefixIA(Pointer, First, I + 4, 1);
+    DiversifiesB |= B != signPrefixIB(Pointer, First, I + 4, 1);
+  }
+  if (!ActiveA || !ActiveB)
+    return 1;
+  if (DiversifiesA != DiversifiesB)
+    return 2;
+  return DiversifiesA != Enabled;
+}

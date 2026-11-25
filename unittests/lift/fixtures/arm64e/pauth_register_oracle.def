@@ -1,0 +1,83 @@
+//===- pauth_register_oracle.def - Two-modifier comparisons -----*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Compare each lifted operation with signatures from the original
+/// instructions.
+//===----------------------------------------------------------------------===//
+
+#ifdef RETURN_ORACLE_PREFIX
+#define ORACLE_SIGN_A(P, F, S, M) signPrefixIA(P, F, S, M)
+#define ORACLE_SIGN_B(P, F, S, M) signPrefixIB(P, F, S, M)
+#define ORACLE_PROJECT(Op, P, F, S, M) test_##Op##_m(P, F, S, M)
+#else
+#define ORACLE_SIGN_A(P, F, S, M) oracle_sign_a(P, F, S)
+#define ORACLE_SIGN_B(P, F, S, M) oracle_sign_b(P, F, S)
+#define ORACLE_PROJECT(Op, P, F, S, M) test_##Op##2(P, F, S)
+#endif
+#include "pauth_pc_oracle.def"
+
+enum { OracleSignMismatch = 1, OracleAuthMismatch, OracleReturnMismatch };
+
+static int compareRegisterAndPC(int Mode, int SecondEffective) {
+  int FirstA = 0, FirstB = 0, SecondA = 0, SecondB = 0, ActiveA = 0,
+      ActiveB = 0;
+  int PCA = 0, PCB = 0;
+  for (unsigned I = 0; I != 64; ++I) {
+    const uint64_t Pointer = 0x12340 + I * 16;
+    const uint64_t First = I * UINT64_C(0x12345678);
+    const uint64_t Second = I * UINT64_C(0x98765432);
+    const uint64_t Bit = UINT64_C(1) << I;
+    enum { Original, FlipFirst, FlipSecond, NumCases };
+    uint64_t BaseA = 0, BaseB = 0;
+    for (unsigned J = 0; J != NumCases; ++J) {
+      const uint64_t F = J == FlipFirst ? First ^ Bit : First;
+      const uint64_t S = J == FlipSecond ? Second ^ Bit : Second;
+      const uint64_t A = ORACLE_SIGN_A(Pointer, F, S, Mode);
+      const uint64_t B = ORACLE_SIGN_B(Pointer, F, S, Mode);
+      if (Mode && !SecondEffective &&
+          (A != ORACLE_SIGN_A(Pointer, F, S, 0) ||
+           B != ORACLE_SIGN_B(Pointer, F, S, 0)))
+        return OracleSignMismatch;
+      if (ORACLE_PROJECT(pacia, Pointer, F, S, Mode) != A ||
+          ORACLE_PROJECT(pacib, Pointer, F, S, Mode) != B)
+        return OracleSignMismatch;
+      if (ORACLE_PROJECT(autia, A, F, S, Mode) != Pointer ||
+          ORACLE_PROJECT(autib, B, F, S, Mode) != Pointer)
+        return OracleAuthMismatch;
+      if (ORACLE_PROJECT(returnia, A, F, S, Mode) != Pointer ||
+          ORACLE_PROJECT(returnib, B, F, S, Mode) != Pointer)
+        return OracleReturnMismatch;
+      switch (J) {
+      case Original:
+        BaseA = A;
+        BaseB = B;
+        ActiveA |= A != Pointer;
+        ActiveB |= B != Pointer;
+        break;
+      case FlipFirst:
+        FirstA |= A != BaseA;
+        FirstB |= B != BaseB;
+        break;
+      case FlipSecond:
+        SecondA |= A != BaseA;
+        SecondB |= B != BaseB;
+        break;
+      }
+    }
+    if (Mode && check_pc(Pointer, I, &PCA, &PCB))
+      return OraclePCMismatch;
+  }
+  if (!ActiveA || !ActiveB || !FirstA || !FirstB ||
+      SecondA != SecondEffective || SecondB != SecondEffective)
+    return OracleInactive;
+  if (Mode && (PCA != SecondEffective || PCB != SecondEffective))
+    return SecondEffective ? OraclePCInsensitive : OraclePCMismatch;
+  return 0;
+}
+
+#undef ORACLE_PROJECT
+#undef ORACLE_SIGN_A
+#undef ORACLE_SIGN_B
