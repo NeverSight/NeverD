@@ -292,6 +292,19 @@ TEST(MedPhiRecomposition, FreshIdsStayAboveTheCallersAllocator) {
   }
 }
 
+TEST(MedPhiRecomposition, MissingSlicesStillAdvanceTheAllocator) {
+  auto F = diamond(4, 4, false, true);
+  for (auto &Block : F.Blocks)
+    for (auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::SUBBYTES)
+        Op = operation(NdOp::COPY, Op.Output,
+                       {MedVar::makeConst(0, Op.Output.Size)});
+  F.Locals.push_back(value(20000, 8));
+  int Next = 1;
+  EXPECT_FALSE(recomposeSplitPhis(F, &Next));
+  EXPECT_EQ(Next, 20001);
+}
+
 TEST(MedPhiRecomposition, LoopCarriedSlicesKeepCarriesAndWholeValueIdentity) {
   auto F = diamond(4, 4, true, true);
   auto &Entry = F.Blocks[0];

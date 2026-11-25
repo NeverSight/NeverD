@@ -37,6 +37,19 @@ def compile_elf(args, work, profile, source, output, entry, optimization="-O2", 
                     source, *callees, "-o", output], check=True)
 
 
+def without_sections(app):
+    with app.open("rb") as stream:
+        elf = ELFFile(stream)
+        for field in ("e_shoff", "e_shnum", "e_shstrndx"):
+            elf.header[field] = 0
+        header = elf.structs.Elf_Ehdr.build(elf.header)
+    raw = bytearray(app.read_bytes())
+    raw[:len(header)] = header
+    result = app.with_name(app.stem + "-no-section-headers.so")
+    result.write_bytes(raw)
+    return result
+
+
 def map_image(cpu, elf, bias=0):
     segments = [s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD" and s["p_memsz"]]
     # LOAD segments may share an aligned page.
@@ -49,17 +62,21 @@ def map_image(cpu, elf, bias=0):
             cpu.mem_write(bias + s["p_vaddr"], s.data())
 
 
-def machine(path, profile, bias=0):
+def machine(path, profile, bias=0, power8=False):
     wide = "64" in profile
     rv = profile.startswith("riscv")
     if rv:
         cpu = uc.Uc(uc.UC_ARCH_RISCV, uc.UC_MODE_RISCV64 if wide else uc.UC_MODE_RISCV32)
     else:
-        mode = uc.UC_MODE_PPC64 if wide else uc.UC_MODE_PPC32
+        # The POWER8 model also runs 32-bit user code with MSR.SF clear.
+        mode = uc.UC_MODE_PPC64 if wide or power8 else uc.UC_MODE_PPC32
         cpu = uc.Uc(uc.UC_ARCH_PPC, uc.UC_MODE_BIG_ENDIAN | mode)
-        if wide:
+        if wide or power8:
             cpu.ctl_set_tlb_mode(uc.UC_TLB_VIRTUAL)
-        cpu.reg_write(ppc_const.UC_PPC_REG_MSR, (int(wide) << 63) | int(profile.endswith("le")))
+        # POWER8 can use FP, VMX and VSX to optimize a recompiled scalar C expression.
+        facilities = (1 << 13) | (1 << 25) | (1 << 23) if wide else 0
+        cpu.reg_write(ppc_const.UC_PPC_REG_MSR,
+                      (int(wide) << 63) | facilities | int(profile.endswith("le")))
     with path.open("rb") as file:
         elf = ELFFile(file)
         map_image(cpu, elf, bias)
@@ -72,7 +89,7 @@ def machine(path, profile, bias=0):
 
 
 def execute(path, profile, function, cases, symbol=None):
-    cpu, symbols = machine(path, profile)
+    cpu, symbols = machine(path, profile, power8=function == "population_counts")
     rv = profile.startswith("riscv")
     size = 8 if "64" in profile else 4
     order = "little" if rv or profile.endswith("le") else "big"
@@ -109,7 +126,8 @@ def execute(path, profile, function, cases, symbol=None):
             raise RuntimeError(f"{profile} {function}: stack pointer changed")
         if function == "call_mix" and any(cpu.reg_read(r) != v for r, v in saved.items()):
             raise RuntimeError(f"{profile} {function}: callee-saved register changed")
-        results.append((cpu.reg_read(first), int.from_bytes(cpu.mem_read(DATA + size, size), order)))
+        result = cpu.reg_read(first) & ((1 << (size * 8)) - 1)
+        results.append((result, int.from_bytes(cpu.mem_read(DATA + size, size), order)))
     return results
 
 
@@ -202,7 +220,8 @@ def main():
             functions = ["mix", "product", "unsigned_quotient", "signed_quotient",
                          "branch", "access_word", "atomic_word", "call_mix"]
             if profile.startswith("powerpc"):
-                functions.extend(("independent_divides", "recorded_divide", "divide_flags"))
+                functions.extend(("independent_divides", "recorded_divide", "divide_flags",
+                                  "conditional_return", "population_counts"))
             for function in functions:
                 cases = all_cases
                 if function in ("unsigned_quotient", "signed_quotient"):
@@ -226,6 +245,16 @@ def main():
                     elif function == "call_mix":
                         left, right = b + 1, a ^ 7
                         expected.append(((((left + right) ^ (right << 3)) + b) & mask, a))
+                    elif function == "conditional_return":
+                        count = (b - 1) & mask
+                        taken = (a & 0xffffffff) == 0 and count != 0
+                        expected.append((a if taken else (a + count) & mask, a))
+                    elif function == "population_counts":
+                        words = sum(((a >> n) & 0xffffffff).bit_count() << n
+                                    for n in range(0, bits, 32))
+                        octets = sum(((b >> n) & 0xff).bit_count() << n
+                                     for n in range(0, bits, 8))
+                        expected.append(((words + octets + (a ^ b).bit_count()) & mask, a))
                     elif function == "branch":
                         expected.append(((a + b if a < b else a - b) & mask, a))
                     elif function in ("independent_divides", "recorded_divide", "divide_flags"):

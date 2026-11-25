@@ -264,6 +264,8 @@
       "fixed_input_profile": "darwin-signed-offset-gpr-simd-raw-and-optimized",
       "previous_profile": "darwin-signed-offset-gpr-simd",
       "skip_exit": 77,
+      "gpr_key": "gpr_executed",
+      "simd_key": "simd_executed",
       "unavailable": "ORDERED-NATIVE LSE2 or LRCPC2 unavailable",
       "gpr": "ORDERED-NATIVE GPR, aligned Q instructions unavailable",
       "simd": "ORDERED-NATIVE GPR and SIMD",

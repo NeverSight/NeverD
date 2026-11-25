@@ -21,6 +21,9 @@
 
 namespace neverd::emulation::linux_model {
 namespace {
+constexpr unsigned SockaddrInSize = 16;
+constexpr unsigned SinZeroOffset = 8;
+
 bool connectError(uint32_t Error) {
   return Error == 0 || Error == 4 || Error == 111 || Error == 110 ||
          Error == 101 || Error == 113 || Error == 13;
@@ -82,8 +85,9 @@ uint16_t networkAddressFamily(llvm::ArrayRef<uint8_t> Address) {
   if (Address.size() < 2)
     return 0;
   const auto Family = llvm::support::endian::read16le(Address.data());
-  if (Family == 2 && Address.size() == 16 &&
-      llvm::all_of(Address.drop_front(8), [](uint8_t V) { return V == 0; }))
+  if (Family == 2 && Address.size() == SockaddrInSize &&
+      llvm::all_of(Address.drop_front(SinZeroOffset),
+                   [](uint8_t V) { return V == 0; }))
     return Family;
   if (Family == 10 && Address.size() == 28)
     return Family;
@@ -324,7 +328,8 @@ LinuxFiles::connectSocket(OpenSocket *Socket, uint64_t Address, uint32_t Size,
     return Reply(uint64_t(0) - NotSocket);
   if (Size < sizeof(uint16_t))
     return Reply(uint64_t(0) - InvalidArgument);
-  if (llvm::support::endian::read16le(Peer.data()) == 0)
+  const auto Family = llvm::support::endian::read16le(Peer.data());
+  if (Family == 0)
     return unsupported(Result, "AF_UNSPEC socket disconnect is unmodeled");
   const bool Datagram = (Socket->Flags & 0xf) == 2;
   if (Socket->Datagram)
@@ -333,10 +338,21 @@ LinuxFiles::connectSocket(OpenSocket *Socket, uint64_t Address, uint32_t Size,
     return Reply(uint64_t(0) - 106); // EISCONN
   if (Socket->Failed)
     return unsupported(Result, "a failed socket must be closed before reuse");
+  const bool IPv4 = Socket->Family == 2;
+  if (IPv4) {
+    if (Size < SockaddrInSize)
+      return Reply(uint64_t(0) - InvalidArgument);
+    if (Family != Socket->Family)
+      return Reply(uint64_t(0) - 97); // EAFNOSUPPORT
+    // IPv4 connect uses only the family, port and address after import.
+    // Match the local copy against the canonical peer in the offline input.
+    Peer = Peer.take_front(SockaddrInSize);
+    std::fill(Peer.begin() + SinZeroOffset, Peer.end(), 0);
+  }
   if (!Datagram && (Socket->Flags & OpenNonBlock))
     return unsupported(Result,
                        "asynchronous TCP connection completion is unmodeled");
-  if (networkAddressFamily(Peer) != Socket->Family)
+  if (!IPv4 && networkAddressFamily(Peer) != Socket->Family)
     return unsupported(Result, "peer requires a canonical matching sockaddr");
   if (Datagram) {
     if (NextDatagramConnection == Network.DatagramConnections.size() ||

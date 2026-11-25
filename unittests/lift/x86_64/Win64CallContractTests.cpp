@@ -2758,6 +2758,7 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
                     std::string::npos,
                 !Stored);
       EXPECT_NE(Source.find("take_stack("), std::string::npos);
+      EXPECT_FALSE(llvm::StringRef(Source).contains("__NEVERD_WIN64_OPEN"));
       for (const auto Memory :
            {Win64PrecallMemory::FlatV6, Win64PrecallMemory::WindowV6}) {
         COptions.PrecallMemory = Memory;
@@ -2784,6 +2785,11 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
           EXPECT_TRUE(llvm::StringRef(Bound).contains("stack_companion("));
           EXPECT_FALSE(llvm::StringRef(Bound).contains(
               "stack_companion_from_precall_v6("));
+          if (!Stored && Memory == Win64PrecallMemory::FlatV6)
+            for (llvm::StringRef Dialect : {"-std=gnu11", "-std=gnu2x"})
+              source_call_execution_test::checkSyntax(
+                  Bound, {"--target=x86_64-w64-windows-gnu", "-ffreestanding",
+                          "-Werror=deprecated-non-prototype", Dialect});
         }
         EXPECT_EQ(
             llvm::StringRef(Bound).contains("pass_stack_from_precall_v6("),
@@ -2794,6 +2800,9 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
             "__neverd_read_precall_word(&__neverd_precall, 0x" +
             llvm::utohexstr(Site) + "ULL, 32U";
         EXPECT_EQ(llvm::StringRef(Bound).contains(Read), !Stored);
+        EXPECT_EQ(llvm::StringRef(Bound).contains(
+                      ", take_stack) __asm__(\"take_stack\")"),
+                  !LLVM && !Stored);
         EXPECT_EQ(llvm::StringRef(Bound).contains(
                       "const uint64_t link_base = 0x" +
                       llvm::utohexstr(Image.Base) + "ULL;"),
@@ -2808,6 +2817,72 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
       }
     }
   }
+}
+
+TEST(Win64CallContract, PrecallOpenDeclarationsRequireIntegerUsesAtEveryCall) {
+  constexpr va_t Words = Text + 5, Mixed = Text + 6, Typed = Text + 7;
+  auto Image = makeImage({0xe8, 0, 0, 0, 0, 0xc3, 0xc3, 0xc3},
+                         {{Text, "caller"},
+                          {Words, "open_words"},
+                          {Mixed, "mixed_slots"},
+                          {Typed, "typed_word"}},
+                         {});
+  class Symbols : public NullDebugContext {
+  public:
+    bool hasInfo() const override { return true; }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Words && Address != Typed)
+        return std::nullopt;
+      FunctionSym Sym;
+      Sym.Addr = Address;
+      Sym.Name = Address == Words ? "open_words" : "typed_word";
+      if (Address == Typed) {
+        Sym.ReturnType = NdType::makeInt(4, false);
+        Sym.Params.emplace_back("value", NdType::makeInt(4, false));
+      }
+      return Sym;
+    }
+  } Debug;
+  int LastVersion = 0;
+  auto Slot = HighExpr::makeUndef(8);
+  Slot->Var = MedVar::makeUnspecified(8, Arch::X64);
+  Win64CallStackInput::bind(Slot->Var, &Image, Text, Words, 32, LastVersion);
+  ASSERT_TRUE(Win64CallStackInput::from(Slot->Var));
+
+  HighFunc Caller;
+  Caller.Entry = Text;
+  Caller.Name = "caller";
+  Caller.ReturnType = NdType::makeVoid();
+  auto AddCall = [&](const char *Name, va_t Address,
+                     std::vector<ExprPtr> Args) {
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr = HighExpr::makeCall(Name, Address, std::move(Args));
+    Caller.Body.push_back(std::move(Call));
+  };
+  const auto Word = HighExpr::makeConst(1, 4);
+  AddCall("open_words", Words, {Word, Word, Word, Word, Slot});
+  AddCall("open_words", Words, {Word});
+  AddCall("mixed_slots", Mixed, {Word});
+  AddCall("mixed_slots", Mixed,
+          {HighExpr::makeBitCast(Word, NdType::makeFloat(4))});
+  AddCall("typed_word", Typed, {Word});
+
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  Options.Image = &Image;
+  Options.PrecallEntry = Text;
+  Options.PrecallMemory = Win64PrecallMemory::FlatV6;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Caller}, OS, Options, &Debug));
+  const llvm::StringRef C(Source);
+  EXPECT_TRUE(C.contains("__NEVERD_WIN64_OPEN(uint64_t, open_words)"));
+  EXPECT_TRUE(C.contains("open_words(1)"));
+  EXPECT_FALSE(C.contains(", mixed_slots)"));
+  EXPECT_FALSE(C.contains(", typed_word)"));
+  EXPECT_TRUE(C.contains("typed_word(uint32_t value)"));
 }
 
 TEST(Win64CallContract, MissingInteriorStackSlotCannotDiscardLaterArguments) {

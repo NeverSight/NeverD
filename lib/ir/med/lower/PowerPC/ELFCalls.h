@@ -19,6 +19,9 @@
 
 namespace neverd {
 struct BinaryImage;
+struct LowFunc;
+/// A guarded branch through LR can return when the incoming link reaches it.
+void requirePPCConditionalReturnLinks(const LowFunc &Function);
 /// Make the real r30 input of each PIC veneer visible to SSA. The call
 /// occurrence retains its slot displacement separately from its arguments.
 llvm::DenseMap<uint32_t, uint32_t>

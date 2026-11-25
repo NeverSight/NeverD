@@ -7,7 +7,8 @@
 // NeverD reads and renders their declarations again.  The headers' notices are
 // in LICENSES/mingw-w64-headers.txt and LICENSES/phnt.txt.  Do not edit;
 // generate it again.
-// 23970 types, 11150 prototypes, rendered by NeverD.
+// Documented Windows exports are declared in scripts/windows_types/user_api.h.
+// 23970 types, 11151 prototypes, rendered by NeverD.
 #pragma once
 
 #include <stdbool.h>
@@ -141877,6 +141878,7 @@ WINBOOL Process32NextW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe);
 DWORD ProcessGroupPolicyCompleted(REFGPEXTENSIONID extensionId, ASYNCCOMPLETIONHANDLE pAsyncHandle, DWORD dwStatus);
 DWORD ProcessGroupPolicyCompletedEx(REFGPEXTENSIONID extensionId, ASYNCCOMPLETIONHANDLE pAsyncHandle, DWORD dwStatus, HRESULT RsopStatus);
 WINBOOL ProcessIdToSessionId(DWORD dwProcessId, DWORD *pSessionId);
+BOOL ProcessPrng(PBYTE pbData, SIZE_T cbData);
 ULONG ProcessTrace(PTRACEHANDLE HandleArray, ULONG HandleCount, LPFILETIME StartTime, LPFILETIME EndTime);
 HRESULT ProgIDFromCLSID(const IID *const clsid, LPOLESTR *lplpszProgID);
 HRESULT PropStgNameToFmtId(const LPOLESTR oszName, FMTID *pfmtid);

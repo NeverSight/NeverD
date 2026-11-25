@@ -433,28 +433,31 @@ u64 network_pton(u64 *out, u64 family) {
 }
 
 u64 network_connect_address_errors(u64 *out, u64 raw) {
-  const unsigned char peer[16] = {2, 0, 0x23, 0x29, 127, 0, 0, 1};
+  const unsigned char peer[24] = {2, 0, 0x23, 0x29, 127,
+                                  0, 0, 1,    0xa5, [23] = 0x5a};
+  const unsigned char other_family[16] = {10};
   const void *unmapped = (const void *)1;
   int fd = socket(2, 1, 6);
-  if (fd < 0 || connect(fd, peer, sizeof(peer)))
+  if (fd < 0)
     return 1;
   const struct {
     int fd;
     const void *address;
     u32 size;
   } calls[] = {
-      {-1, unmapped, 129}, {1, unmapped, 129}, {1, unmapped, 16},
-      {1, unmapped, 0},    {1, peer, 16},      {fd, unmapped, 16},
-      {fd, unmapped, 0},   {fd, unmapped, 1},  {fd, peer, 1},
+      {fd, other_family, 15}, {fd, other_family, 16}, {fd, peer, sizeof(peer)},
+      {-1, unmapped, 129},    {1, unmapped, 129},     {1, unmapped, 16},
+      {1, unmapped, 0},       {1, peer, 16},          {fd, unmapped, 16},
+      {fd, unmapped, 0},      {fd, unmapped, 1},      {fd, peer, 1},
       {fd, peer, 16},
   };
   for (unsigned i = 0; i < sizeof(calls) / sizeof(calls[0]); ++i) {
     long result =
         raw ? syscall(203, calls[i].fd, calls[i].address, calls[i].size)
             : connect(calls[i].fd, calls[i].address, calls[i].size);
-    if (result != -1)
+    if (result != 0 && result != -1)
       return 2;
-    out[i] = *__errno();
+    out[i] = result == 0 ? 0 : *__errno();
   }
   const unsigned char bytes[] = {0, 0xff};
   if (send(fd, bytes, sizeof(bytes), 0) != sizeof(bytes))

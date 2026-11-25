@@ -33,6 +33,7 @@
 #include "../render/X86/X86SystemRegister.h"
 #include "../render/X86/X86SystemState.h"
 #include "../render/X86/X86Virtualization.h"
+#include "COFF/HighCWin64OpenCall.h"
 #include "HighCWriter.h"
 
 #include "neverd/backend/Limits.h"
@@ -2180,7 +2181,15 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   // statement assigns, its destination's; a call inside an expression, its
   // own type's, or all of it.  A function whose address the code only takes
   // reads none.
-  std::map<std::string, uint16_t> ResultBytes;
+  struct CallUse {
+    uint16_t ResultBytes = 0;
+    bool IntegerCallsOnly = true;
+  };
+  std::map<std::string, CallUse> CallUses;
+  const bool Precall = Opts.PrecallMemory != Win64PrecallMemory::None &&
+                       Opts.TheArch == Arch::X64 &&
+                       Opts.Format == BinaryFormat::COFF;
+  c_detail::Win64OpenCallDeclarations OpenCalls;
   std::map<std::string, TypeRef> SourceCalleeTypes;
   std::map<std::string, TypeRef> FloatingResults;
   std::map<std::string, TypeRef> RegisterRecordResults;
@@ -2201,39 +2210,42 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         NeedsExceptionReturn |=
             E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::Eret;
         if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None) {
+          const std::string Name = callIdentifier(E);
           if (E.SourceCalleeType) {
-            const auto [It, New] = SourceCalleeTypes.emplace(
-                callIdentifier(E), E.SourceCalleeType);
+            const auto [It, New] =
+                SourceCalleeTypes.emplace(Name, E.SourceCalleeType);
             if (!New && !equalSourceTypes(It->second, E.SourceCalleeType))
               throw std::runtime_error(
                   "HighC external calls disagree on scalar projection: " +
-                  callIdentifier(E));
+                  Name);
           }
           if (HasMIPSCallModes && !E.IsIndirectCall && E.CallAddr)
             if (const auto Mode = Opts.Image->instructionModeAt(E.CallAddr)) {
-              const auto [It, Inserted] =
-                  MIPSCallModes.emplace(callIdentifier(E), *Mode);
+              const auto [It, Inserted] = MIPSCallModes.emplace(Name, *Mode);
               if (!Inserted && It->second != *Mode)
                 throw std::invalid_argument(
                     "HighC callees disagree on MIPS instruction mode");
             }
-          uint16_t &Bytes = ResultBytes[callIdentifier(E)];
+          CallUse &Use = CallUses[Name];
+          if (Precall && Use.IntegerCallsOnly)
+            Use.IntegerCallsOnly = c_detail::isWin64IntegerCall(E);
+          uint16_t &Bytes = Use.ResultBytes;
           // An indirect call declares no function: the record it returns is
           // its own, as Go's interface and closure calls each return theirs.
           if (E.Type && E.Type->RegisterReturnRecord && !E.IsIndirectCall) {
             const auto [It, Inserted] =
-                RegisterRecordResults.emplace(callIdentifier(E), E.Type);
+                RegisterRecordResults.emplace(Name, E.Type);
             if (!Inserted && typeToC(It->second) != typeToC(E.Type))
               throw std::runtime_error(
                   "HighC external calls disagree on register return fields");
             if (E.FloatingCallSignature &&
                 E.FloatingCallSignature->ReturnElements) {
               const auto [Signature, New] = RegisterRecordSignatures.emplace(
-                  callIdentifier(E), *E.FloatingCallSignature);
+                  Name, *E.FloatingCallSignature);
               if (!New && Signature->second != *E.FloatingCallSignature)
                 throw std::runtime_error(
                     "HighC external calls disagree on floating record ABI: " +
-                    callIdentifier(E));
+                    Name);
             }
           }
           // A recovered register-pair result is wider than one machine word.
@@ -2241,14 +2253,12 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
           // extends a scalar result and cannot establish a second register.
           if (E.Type && E.Type->Kind == NdTypeKind::Int &&
               E.Type->Size == 2 * RegisterBytes)
-            PairIntegerResults.insert(callIdentifier(E));
+            PairIntegerResults.insert(Name);
           if (E.Type && E.Type->Kind == NdTypeKind::Float) {
-            auto [It, Inserted] =
-                FloatingResults.emplace(callIdentifier(E), E.Type);
+            auto [It, Inserted] = FloatingResults.emplace(Name, E.Type);
             if (!Inserted && It->second->Size != E.Type->Size)
               throw std::runtime_error(
                   "HighC external calls disagree on floating return width");
-            const std::string Name = callIdentifier(E);
             std::vector<uint16_t> Parameters;
             for (const auto &Argument : E.Operands)
               if (Argument && Argument->Type &&
@@ -2268,7 +2278,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                 ConflictingFloatingParameters.insert(Name);
             }
           } else
-            ConflictingFloatingParameters.insert(callIdentifier(E));
+            ConflictingFloatingParameters.insert(Name);
           if (&E != Top)
             Bytes = std::max<uint16_t>(Bytes,
                                        E.Type ? E.Type->Size : RegisterBytes);
@@ -2752,6 +2762,15 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       // declaration needs nothing else: a re-spelling from its types would
       // lose `const`, and conflict with the header a unit includes too.
       const FunctionSym &Library = DebugExternSigs[Name];
+      if (Precall && !ImportSlot && c_detail::hasOnlyWin64SymbolName(Library) &&
+          !msvcCallee(Identifier, Opts.Format)) {
+        const auto Use = CallUses.find(Name);
+        if (Use != CallUses.end() && Use->second.IntegerCallsOnly) {
+          OpenCalls.write(OS, "uint64_t", Identifier, LinkLabel, NoReturn,
+                          LinkComment);
+          continue;
+        }
+      }
       if (Opts.EmitIncludes && Library.PrototypeFromCLibrary &&
           Identifier == Name && Declared == Identifier && LinkLabel.empty() &&
           c_library::selfContainedDeclaration(Library.PrototypeDeclaration,
@@ -2802,9 +2821,9 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         // A callee nothing declares returns its register whole.  An int
         // holds the result while the code reads at most an int of it; a
         // 64-bit pointer read through one would lose its upper half.
-        const auto Read = ResultBytes.find(Name);
-        const bool WholeRegister =
-            Read != ResultBytes.end() && Read->second > sizeof(int32_t);
+        const auto Read = CallUses.find(Name);
+        const bool WholeRegister = Read != CallUses.end() &&
+                                   Read->second.ResultBytes > sizeof(int32_t);
         const auto Floating = FloatingResults.find(Name);
         const auto Record = RegisterRecordResults.find(Name);
         // A compiler runtime routine that returns a double word returns it
@@ -2827,6 +2846,14 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         // from the output leaves them to it, where its parameters fill the
         // slots its decoration spells.
         const auto Known = knownArity(Symbol, Name);
+        if (Precall && !ImportSlot && !Known && Read != CallUses.end() &&
+            Read->second.IntegerCallsOnly && !DoubleWord &&
+            Floating == FloatingResults.end() &&
+            Record == RegisterRecordResults.end()) {
+          OpenCalls.write(OS, Return, Identifier, LinkLabel, NoReturn,
+                          LinkComment);
+          continue;
+        }
         const std::optional<unsigned> Pops = stdcallPops(Symbol, Name);
         const bool Stdcall = Known && Known->FpArgs == 0 &&
                              Known->IntArgs >= 0 && Pops &&
@@ -2881,6 +2908,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     }
   }
 
+  OpenCalls.finish(OS);
   if (!ExternFuncs.empty())
     OS << "\n";
 

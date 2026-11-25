@@ -23,6 +23,14 @@ uses the physical instruction length for the link address.
 [Unprivileged ISA, 20260120](https://docs.riscv.org/reference/isa/v20260120/unpriv/unpriv-index.html).
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/).
 
+Linked RV32 and RV64 executables and shared libraries support the default
+psABI PLT. The loader reads `R_RISCV_JUMP_SLOT` from the program's dynamic
+table. To name an external call, it checks that the PLT entry loads that
+slot and that PLT0 computes the same relocation index for lazy binding.
+This works with section headers removed and with linker relaxation enabled
+or disabled. Variant calling conventions and landing-pad PLTs have separate
+instruction and ABI requirements and are outside this profile.
+
 | PowerPC ABI | Admission and linkage |
 | --- | --- |
 | PPC32 System V | ELF32 and zero processor flags. The ninth integer argument begins eight bytes above the caller's stack pointer on entry. Cross-module calls use a secure PLT or a classic BSS-PLT. |
@@ -96,6 +104,13 @@ restore on return. Unresolved descriptor targets, ambiguous TOCs and
 unrecognized save/restore sequences require additional evidence.
 [GNU ld PowerPC64 options](https://sourceware.org/binutils/docs/ld/PowerPC64-ELF64.html).
 
+PPC scalar population counts preserve each byte or word lane independently.
+PPC64 also admits the doubleword count. A conditional branch through LR can
+test CR, decrement CTR, or do both. The not-taken path retains the updated
+CTR. Source recovery requires the incoming return address to reach the branch
+on every path. A reaching call or explicit LR write, including an unproven
+save/restore, leaves that source return unresolved.
+
 PPC64 arithmetic models the common CA, OV and SO bits. A full XER read
 requires processor evidence for the ISA 3.0 CA32 and OV32 fields and is
 currently rejected. [OpenPOWER ELFv2 ABI](https://openpower.foundation/specifications/64bitelfabi/).
@@ -108,8 +123,8 @@ The scalar encodings and flag definitions follow Books I and II of versions
 | Stage | RISC-V | PowerPC |
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
-| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary and update-form loads/stores, reservations and barriers |
-| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, unconditional indirect calls/jumps, return through LR, integer register arguments |
+| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary and update-form loads/stores, reservations and barriers |
+| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, unconditional indirect calls/jumps, guarded and unconditional LR returns, integer register arguments |
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
 | Native rewrite | Unsupported | Unsupported |
 
@@ -140,11 +155,12 @@ device memory and guest exception delivery are outside that model.
 
 The strict lifters report unsupported instructions at their original VA.
 RISC-V system/CSR, FP, V and vendor extensions, and PowerPC VLE, SPE, VMX,
-VSX, prefixed instructions in ordinary function bodies, conditional indirect
-transfers and system instructions have no qualified semantic path. The ELFv2
-loader recognizes the PC-relative prefixed load or address calculation in a
-linker stub when its final CTR transfer and destination match. Word multiplies with an
-undefined high half on PPC64 also fail strict lifting.
+VSX, prefixed instructions in ordinary function bodies, conditional calls,
+conditional jumps through CTR and system instructions have no qualified
+semantic path. The ELFv2 loader recognizes a PC-relative prefixed load or
+address calculation in a linker stub when its final CTR transfer and
+destination match. Word multiplies with an undefined high half on PPC64
+also fail strict lifting.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
 ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a
@@ -152,6 +168,13 @@ proven r30-relative jump slot. FP arguments, variadic and
 aggregate calls require separate ABI coverage. Link objects with relocations
 against allocated sections before analysis. Raw firmware mapping and native
 guest execution have separate entry points and coverage.
+
+A linked RISC-V function can still address a read-only lookup table by its
+original virtual address in HighC, LLVM-derived C and module IR. For example,
+Clang 23.1.6 at `-O2` compiles compiler-rt's `__ffssi2` for RV32IMAC and
+RV64IMAC with a 32-byte table in `.rodata`. A standalone rebuild of this
+function needs those bytes at the original address. Moving the table can
+produce an incorrect bit position.
 
 ## Verification
 
@@ -188,6 +211,17 @@ rebuilding target-dependent source. For big-endian PowerPC64, pass
 
 ```sh
 python3 unittests/lift/elf-integer/roundtrip.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
+```
+
+The RISC-V PLT fixture builds two independent providers and checks ordinary
+calls and tail calls. It runs both the original and the rebuilt caller at
+different module bases, with eager and lazy binding. The lazy resolver checks
+the relocation index and link map before rebinding the slot. Run it with ELF
+LLD or GNU ld with the `elf32lriscv` and `elf64lriscv` emulations.
+
+```sh
+python3 unittests/lift/elf-integer/riscv_plt.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
 ```
 

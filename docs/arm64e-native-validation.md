@@ -2667,11 +2667,13 @@ Exit 2 records an unavailable
 environment and exit 1 records failure. The verifier retains the reports and
 removes the temporary executables and entitlements.
 
-The signing projection exporter uses the two compiler comparison tests in
-`NeverDArm64eAnalysisTests`. It exports the HighC, LLVM C and optimized LLVM C
-sources, both direct backend objects and their independent C callers. Build
-the tests and export on a macOS builder, then transfer the inputs to the Mac
-that will run the qualification. Both output directories must be new.
+The r6 exporter runs three comparison tests in `NeverDArm64eAnalysisTests`.
+The two signing tests export HighC, LLVM C and optimized LLVM C sources,
+both direct backend objects and their independent C callers. The ordered-memory
+test adds five Darwin inputs covering HighC, LLVM C, a dispatch table and the raw and
+optimized backend objects. The input manifest records the exporter, source
+revision, fixtures and file digests. Transfer that directory from the macOS
+builder to the measuring Mac. Both output directories must be new.
 
 ```bash
 python3 scripts/verify_arm64e_x1_projections.py build-r6 --output projection-inputs
@@ -2695,32 +2697,68 @@ comparisons to run as well as link. The consumer keeps the command receipts
 and link maps and removes the generated objects and executables.
 
 `--require-native` runs the five original control probes on the measuring
-Mac and uses that invocation's x1 cursor to decide which generated comparisons
-can run. Before measuring an image, it checks both control revisions against the
-export manifest and verifies the digest of the cursor bytes it reads.
-The report sets `native_generated_arm64e_x1_qualified` only when the
-full native control report qualifies and all 20 signing comparisons complete.
-It records the path and SHA-256 of the original control report alongside the
-individual image results. Exit 0 qualifies the run. Exit 2 records a measured
+Mac and uses that invocation's x1 cursor to decide which signing comparisons
+can run. It checks the revision and digest of both the cursor and the original
+128-bit LRCPC3 probe. On Darwin arm64 it also links and launches six ordinary
+arm64 programs from the transferred inputs. These cover HighC and LLVM C at
+O0/O2 and both direct backend objects. They run even when the compiler cannot produce an x1
+slice. The harness records GPR and 128-bit execution separately and requires
+the six routes to agree. Each route compares register and memory results,
+including guard bytes and alignment faults, against the original instructions.
+
+`native_generated_arm64e_x1_qualified` requires the full control result,
+all 20 signing comparisons and all six generated 128-bit comparisons on the
+same Mac. On hosts that run the GPR comparisons, the generated Q result must
+agree with the independent Q probe. The report links the control and ordered
+reports by SHA-256. The ordered report identifies the six linked programs
+through `guests.json` and retains their process logs after executable cleanup.
+Exit 0 qualifies the run. Exit 2 records a measured
 capability or loader limit, and exit 1 records a failed control or comparison.
 A machine with partial instruction support can still report the comparisons it ran.
 
-Two clean r6 builds reproduced all 12 projected source files and backend objects.
-Xcode 27.1 linked and signed 20 arm64e.x1 images at O0 and O2. The linker
-maps attribute all six IA/IB functions in each image to the expected input.
-The runner rejected all 20 launches before entry with Darwin `EBADARCH`.
-The full hardware scan reported a virtual Apple M1 on macOS 15, macOS 26 and
-Xcode 27. All five native feature results were unavailable on each runner.
-[Projection results](https://github.com/gmh5225/test_mac_intel/actions/runs/45592997940),
-[full hardware scan](https://github.com/gmh5225/test_mac_intel/actions/runs/45599778303) and
-[image hashes and per-host results](evidence/arm64e-generated-x1-projections-2026-11-25.json).
+Three same-host runs linked and signature-checked all 20 images and verified
+120 function owners per run. Each Xcode runner reported Apple M1 (Virtual).
+Darwin returned `EBADARCH` before entry for every image, so the combined
+verifiers exited 2 with zero native signing comparisons. The compiler-original
+ordinary arm64e authenticated call and language unwind passed. The local and
+hosted r6 exporters produced 12 byte-identical inputs from the same revision.
+The clean r6 build on merged dev reproduced all 12 inputs from the tested PR.
+A separate four-pass Xcode replay reproduced every Mach-O section in all 20
+images. Repeated O0 links differed only in the Mach-O UUID and code signature.
+The O2 files matched byte for byte. Fixing the input object timestamps produced
+the same pattern. [Repeated links and section comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/45636350484).
+The integrated jobs on macOS 15, macOS 26 and Xcode 27 each reported that
+128-bit LRCPC3, two-modifier PAuth_LR, PC-sensitive PACM, checked scalar
+arithmetic and checked writeback were unavailable.
+[First combined run](https://github.com/gmh5225/test_mac_intel/actions/runs/45619216505),
+[updated dev base](https://github.com/gmh5225/test_mac_intel/actions/runs/45626141332),
+[merged dev](https://github.com/gmh5225/test_mac_intel/actions/runs/45645541906),
+[integrated native controls](https://github.com/gmh5225/test_mac_intel/actions/runs/45645557026) and
+[revisions, image digests and host results](evidence/arm64e-x1-same-host-2026-11-25.json).
 
-The r6 analysis target registered 789 cases. With a canonical Clang frontend
-and the arm64e text section of `/bin/ls`, 752 passed locally. The hosted replay
-used the same test executable for the other 37 cases. Across the local and
-hosted runs, 786 distinct cases passed. The remaining three exercise native
-128-bit ordered SIMD memory, explicit two-modifier signing and PC-sensitive
-PACM. [Native regression replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45606805741).
+The r6 test executable for PR head `63b58de9dc2b`
+passed 752 of 789 arm64e analysis tests
+locally with the canonical Clang frontend and the arm64e text section of
+`/bin/ls`. Three hosted runners replayed the same executable and passed
+34 additional cases, for 786
+distinct passes. The remaining three require native 128-bit LRCPC3 SIMD
+memory, explicit two-modifier PAuth_LR and PC-sensitive PACM.
+[Runtime replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45642700413).
+
+The r6 exporter also reproduced 30 complete executables and their entry
+addresses from the pinned Arm model runs. These comprised 20 signing images,
+six ordered-memory images, two cursor images and two checked-writeback images.
+The ordered-memory inputs match the profile that executed 30,720 comparisons
+between original and generated 128-bit accesses.
+[Signing measurements](evidence/arm64e-probe-sites-2026-11-25.json),
+[ordered-memory measurements](evidence/arm64e-qualification-inputs-2026-11-25.json)
+and [cursor and writeback measurements](evidence/arm64e-x1-cursor-writeback-2026-11-25.json).
+
+Earlier measurements and revisions are recorded in the
+[projection results](https://github.com/gmh5225/test_mac_intel/actions/runs/45592997940),
+[hardware scan](https://github.com/gmh5225/test_mac_intel/actions/runs/45599778303),
+[image digests](evidence/arm64e-generated-x1-projections-2026-11-25.json) and
+[previous runtime replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45606805741).
 
 A registered GitHub Actions runner with labels `self-hosted`, `macOS`, `ARM64`
 and `neverd-arm64e-x1` can run the manual **Arm64e x1 native qualification**

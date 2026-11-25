@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -772,31 +773,35 @@ void readSelectedArms(MedFunc &Func) {
 void LowToMedConverter::eliminateFlags(MedFunc &Func) {
   const auto &TRI = getTargetRegInfo(TargetArch);
 
-  // Map every value version to the set of basic blocks that read it.  ARM
-  // predication keeps CPU flags live across the branch that separates a `cmp`
-  // from the predicated instruction it guards, so a flag must not be killed
-  // locally while a successor block still consumes it.  Computed once up front
-  // (conservative: never removes a use, so it can only keep extra defs alive).
-  UseBlockMap UseBlocks;
-  // A single block has no cross-block readers, even with a self-loop.
-  // markFlagChainDead still checks its remaining operation uses.
-  if (Func.Blocks.size() > 1) {
-    for (int B = 0; B < static_cast<int>(Func.Blocks.size()); ++B) {
-      for (auto &Op : Func.Blocks[B].Ops)
-        for (uint8_t K = 0; K < Op.NumInputs; ++K)
-          UseBlocks[Op.Inputs[K].display()].insert(B);
-      // A PHI reads each argument on its predecessor edge. Record the owning
-      // successor as a distinct use block so simplifying a predecessor branch
-      // cannot delete the flag definition before that edge copy consumes it.
-      for (const auto &Phi : Func.Blocks[B].Phis)
-        for (const auto &Argument : Phi.Args)
-          UseBlocks[Argument.second.display()].insert(B);
+  // Snapshot the original readers before the first rewrite. A successor's
+  // operation or PHI can still need a flag folded in its predecessor.
+  std::optional<UseBlockMap> UseBlocks;
+  auto originalUses = [&]() -> const UseBlockMap & {
+    if (UseBlocks)
+      return *UseBlocks;
+    auto &Uses = UseBlocks.emplace();
+    if (Func.Blocks.size() > 1) {
+      for (int B = 0; B < static_cast<int>(Func.Blocks.size()); ++B) {
+        for (const auto &Op : Func.Blocks[B].Ops)
+          for (unsigned I = 0; I < Op.NumInputs; ++I)
+            Uses[Op.Inputs[I].display()].insert(B);
+        // A PHI consumes its argument on the edge into the owning block.
+        for (const auto &Phi : Func.Blocks[B].Phis)
+          for (const auto &Argument : Phi.Args)
+            Uses[Argument.second.display()].insert(B);
+      }
     }
-  }
+    return Uses;
+  };
 
   for (int BlkIdx = 0; BlkIdx < static_cast<int>(Func.Blocks.size());
        ++BlkIdx) {
     auto &Blk = Func.Blocks[BlkIdx];
+    // All three folds need a local flag definition for their comparison.
+    if (std::none_of(Blk.Ops.begin(), Blk.Ops.end(), [](const MedOp &Op) {
+          return Op.Output.Kind == MedVar::Flag;
+        }))
+      continue;
     // --- Pass 1: COND_BR condition simplification ---
     int CbranchIdx = -1;
     for (int I = static_cast<int>(Blk.Ops.size()) - 1; I >= 0; --I) {
@@ -864,7 +869,7 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
 
         auto CmpOp = buildCmpOp(CC, Cmp.A, Cmp.B, CondVar, Op.Addr);
         markFlagChainDead(Blk.Ops, static_cast<int>(I) - 1, CondVar, BlkIdx,
-                          UseBlocks);
+                          originalUses());
 
         Blk.Ops.insert(Blk.Ops.begin() + static_cast<long>(I), CmpOp);
         Blk.Ops[I + 1].Inputs[1] = CmpOp.Output;
@@ -942,7 +947,7 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
         // output, replacing the INT_ZEXT entirely.
         auto CmpOp = buildCmpOp(CC, LocalCmp.A, LocalCmp.B, Op.Output, Op.Addr);
         markFlagChainDead(Blk.Ops, static_cast<int>(I) - 1, SrcVar, BlkIdx,
-                          UseBlocks);
+                          originalUses());
         Op.Dead = true;
         Blk.Ops.insert(Blk.Ops.begin() + static_cast<long>(I) + 1, CmpOp);
         ++I;
@@ -958,7 +963,7 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
         MedVar BoolOut = SrcVar; // size-1 boolean (the INT_ZEXT input)
         auto CmpOp = buildCmpOp(CC, LocalCmp.A, LocalCmp.B, BoolOut, Op.Addr);
         markFlagChainDead(Blk.Ops, static_cast<int>(I) - 1, BoolOut, BlkIdx,
-                          UseBlocks);
+                          originalUses());
         Blk.Ops.insert(Blk.Ops.begin() + static_cast<long>(I), CmpOp);
         ++I; // points at the (kept) INT_ZEXT; loop's ++I skips past it
       }
@@ -1080,7 +1085,7 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
 
       auto CmpOp = buildCmpOp(CC, CmpA, CmpB, CondVar, Op.Addr);
       markFlagChainDead(Blk.Ops, static_cast<int>(I) - 1, CondVar, BlkIdx,
-                        UseBlocks);
+                        originalUses());
 
       if (CondVar.Kind == MedVar::Flag)
         ResolvedFlags[CondVar.display()] = CmpOp.Output;
@@ -1092,12 +1097,10 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
       if (SelOp.Inputs[0].Kind == MedVar::Flag)
         SelOp.Inputs[0] = CmpOp.Output;
     }
-
-    // Remove dead ops
-    Blk.Ops.erase(std::remove_if(Blk.Ops.begin(), Blk.Ops.end(),
-                                 [](const MedOp &Op) { return Op.Dead; }),
-                  Blk.Ops.end());
   }
+  // Earlier blocks must still expose their original reads to the first fold.
+  for (auto &Blk : Func.Blocks)
+    std::erase_if(Blk.Ops, [](const MedOp &Op) { return Op.Dead; });
   readSelectedArms(Func);
 }
 

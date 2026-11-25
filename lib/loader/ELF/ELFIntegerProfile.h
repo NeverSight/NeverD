@@ -15,6 +15,7 @@
 #include "neverd/Common.h"
 #include "neverd/lift/RISCV/RISCVProfile.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
 #include <optional>
@@ -38,6 +39,8 @@ struct PPC64LinkageTables {
 llvm::Error readIntegerProfile(const llvm::object::ObjectFile &Object, Arch &A,
                                RISCVProfile &Profile,
                                PPC64LinkageTables *Linkage = nullptr);
+llvm::Error readRISCVLinkage(BinaryImage &Image,
+                             llvm::ArrayRef<va_t> RelrSlots = {});
 llvm::Error readPPC64Descriptors(BinaryImage &Image, PPC64LinkageTables Table);
 llvm::Error recordPPC64ELFv2Entry(BinaryImage &Image, va_t Entry, uint64_t Size,
                                   uint8_t Other);

@@ -588,13 +588,21 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
            {0xf0, 0x48, 0x01,
             0x07},             // Native LOCK is not a host-pointer operation.
            {0x0f, 0x20, 0xd8}, // Native CR3 needs its architectural transition.
-           {0x66, 0x67, 0x66, 0x0f, 0xff,
-            0x00}, // Longer UD0 prefix sequences remain unqualified.
            {0xfb},
            {0x66, 0xfb}}) {
     auto Units = buildX64ContinuationSource(image(Code), {0x1000}, O);
     ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
     EXPECT_TRUE(Units->front().RequiresNativeExecution);
+  }
+  std::vector<uint8_t> Overlong(X86PagedCode64UD0QualifiedPrefixLimit + 1,
+                                0x66);
+  Overlong.insert(Overlong.end(), {0x0f, 0xff});
+  auto Unsupported = buildX64ContinuationSource(image(Overlong), {0x1000}, O);
+  if (Unsupported) {
+    ASSERT_FALSE(Unsupported->empty());
+    EXPECT_TRUE(Unsupported->front().RequiresNativeExecution);
+  } else {
+    llvm::consumeError(Unsupported.takeError());
   }
   auto Repeated =
       buildX64ContinuationSource(image({0xf3, 0x67, 0x48, 0xa5}), {0x1000}, O);
@@ -620,8 +628,7 @@ TEST(X64PagedUD0PrefixTest, QualifiedPrefixesMatchTheDecoder) {
       0xf3, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
       0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f};
   unsigned Checked = 0;
-  for (unsigned PrefixCount = 0;
-       PrefixCount <= X86PagedCode64UD0QualifiedPrefixLimit; ++PrefixCount) {
+  for (unsigned PrefixCount = 0; PrefixCount <= 2; ++PrefixCount) {
     const unsigned FirstCount = PrefixCount ? Prefixes.size() : 1;
     const unsigned SecondCount = PrefixCount == 2 ? Prefixes.size() : 1;
     for (unsigned First = 0; First != FirstCount; ++First)
@@ -645,7 +652,7 @@ TEST(X64PagedUD0PrefixTest, QualifiedPrefixesMatchTheDecoder) {
         DecodedInsn Instruction;
         ASSERT_EQ(Decode.decodeOneForLift(Code.data(), Code.size(), 0x1000,
                                           Instruction),
-                  PrefixCount + 2);
+                  PrefixCount + X86PagedCode64UD0OpcodeBytes);
         EXPECT_EQ(Instruction.Id, X86_INS_UD0);
         ++Checked;
       }
@@ -656,6 +663,67 @@ TEST(X64PagedUD0PrefixTest, QualifiedPrefixesMatchTheDecoder) {
     EXPECT_FALSE(x86PagedCode64UD0OpcodeOffset(Code.data(), Code.size()));
 }
 
+TEST(X64PagedUD0PrefixTest, ExtendedPrefixesAndLengthBoundaryMatchTheDecoder) {
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Arch::X64));
+  constexpr std::array<uint8_t, 26> RepeatedPrefixes{
+      0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65, 0x66, 0x67, 0xf2,
+      0xf3, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+      0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f};
+  constexpr std::array<
+      std::array<uint8_t, X86PagedCode64UD0QualifiedPrefixLimit>, 5>
+      Patterns{{
+          {{0x66, 0x67, 0x66, 0x67, 0x66, 0x67, 0x66, 0x67, 0x66, 0x67, 0x66,
+            0x67, 0x66}},
+          {{0x66, 0x67, 0xf2, 0x64, 0x4f, 0x2e, 0xf3, 0x40, 0x65, 0x3e, 0x48,
+            0x36, 0x26}},
+          {{0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a,
+            0x4b, 0x4c}},
+          {{0xf2, 0xf3, 0xf2, 0xf3, 0xf2, 0xf3, 0xf2, 0xf3, 0xf2, 0xf3, 0xf2,
+            0xf3, 0xf2}},
+          {{0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65, 0x26, 0x2e, 0x36, 0x3e, 0x64,
+            0x65, 0x26}},
+      }};
+  EXPECT_EQ(X86PagedCode64UD0QualifiedPrefixLimit, 13u);
+  unsigned Checked = 0;
+  const auto Check = [&](const std::vector<uint8_t> &Prefix) {
+    std::vector<uint8_t> Code = Prefix;
+    Code.insert(Code.end(), {0x0f, 0xff, 0xc0});
+    SCOPED_TRACE(testing::Message() << "count=" << Prefix.size()
+                                    << " first=" << unsigned(Prefix.front()));
+    const auto Offset = x86PagedCode64UD0OpcodeOffset(Code.data(), Code.size());
+    ASSERT_TRUE(Offset);
+    EXPECT_EQ(*Offset, Prefix.size());
+    DecodedInsn Instruction;
+    ASSERT_EQ(
+        Decode.decodeOneForLift(Code.data(), Code.size(), 0x1000, Instruction),
+        Prefix.size() + X86PagedCode64UD0OpcodeBytes);
+    EXPECT_EQ(Instruction.Id, X86_INS_UD0);
+    ++Checked;
+  };
+  for (uint8_t Byte : RepeatedPrefixes)
+    for (unsigned PrefixCount = 3;
+         PrefixCount <= X86PagedCode64UD0QualifiedPrefixLimit; ++PrefixCount)
+      Check(std::vector<uint8_t>(PrefixCount, Byte));
+  for (const auto &Pattern : Patterns)
+    for (unsigned PrefixCount = 3;
+         PrefixCount <= X86PagedCode64UD0QualifiedPrefixLimit; ++PrefixCount)
+      Check(
+          std::vector<uint8_t>(Pattern.begin(), Pattern.begin() + PrefixCount));
+  EXPECT_EQ(Checked, (RepeatedPrefixes.size() + Patterns.size()) *
+                         (X86PagedCode64UD0QualifiedPrefixLimit - 2));
+  std::vector<uint8_t> Overlong(X86PagedCode64UD0QualifiedPrefixLimit + 1,
+                                0x66);
+  Overlong.insert(Overlong.end(), {0x0f, 0xff});
+  EXPECT_FALSE(x86PagedCode64UD0OpcodeOffset(Overlong.data(), Overlong.size()));
+  for (unsigned LockPosition : {0u, 6u, 12u}) {
+    std::vector<uint8_t> Locked(X86PagedCode64UD0QualifiedPrefixLimit, 0x66);
+    Locked[LockPosition] = 0xf0;
+    Locked.insert(Locked.end(), {0x0f, 0xff});
+    EXPECT_FALSE(x86PagedCode64UD0OpcodeOffset(Locked.data(), Locked.size()));
+  }
+}
+
 TEST_F(X64PagedExecutionTest, UD0CrossPageFetchUsesTheBoundProcessor) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
@@ -664,53 +732,62 @@ TEST_F(X64PagedExecutionTest, UD0CrossPageFetchUsesTheBoundProcessor) {
     Compilers.push_back(NeverC);
   const std::vector<std::vector<uint8_t>> EncodedAddresses{
       {0x00}, {0x04, 0x20}, {0x84, 0x20, 0x00, 0x50, 0x34, 0x12}};
-  for (unsigned Form = 0; Form != EncodedAddresses.size(); ++Form) {
-    const uint64_t PC = 0x1ffe - Form;
-    const auto &Address = EncodedAddresses[Form];
-    const size_t Offset = PC - 0x1000;
-    std::vector<uint8_t> Code(Offset + 2 + Address.size(), 0x90);
-    Code[Offset] = 0x0f;
-    Code[Offset + 1] = 0xff;
-    std::copy(Address.begin(), Address.end(), Code.begin() + Offset + 2);
-    for (const auto &Compiler : Compilers)
-      for (bool LLVM : {false, true})
-        for (const std::string Optimization : {"-O0", "-O2"}) {
-          Run Driver = nullptr;
-          ASSERT_NO_FATAL_FAILURE(
-              compile(Code, LLVM, Optimization, Driver, {PC}, Compiler));
-          for (auto Profile : {X86UD0FetchProfile::OpcodeOnly,
-                               X86UD0FetchProfile::CompleteModRM}) {
-            SCOPED_TRACE(testing::Message()
-                         << Compiler << ' ' << LLVM << ' ' << Optimization
-                         << " address_form=" << Form
-                         << " profile=" << unsigned(Profile));
-            reset(Code);
-            State.Core.Core.Core.Core.PC = PC;
-            put(0x13010, 0); // ModR/M page is absent.
-            Memory =
-                llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
-            X64PagedExecutionOptions Options;
-            Options.UD0Fetch = Profile;
-            X64PagedExecution Context(*Memory, Options);
-            uint64_t Budget = 1;
-            const auto Exit =
-                Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
-            ASSERT_TRUE(Context.lastError().empty()) << Context.lastError();
-            EXPECT_EQ(Exit, 7u);
-            EXPECT_EQ(Budget, 0u);
-            const bool Complete = Profile == X86UD0FetchProfile::CompleteModRM;
-            ASSERT_TRUE(Context.lastResult().Exception);
-            EXPECT_EQ(Context.lastResult().Exception->Vector,
-                      Complete ? 14 : 6);
-            EXPECT_EQ(Context.lastResult().Exception->ErrorCode,
-                      Complete ? 0x10u : 0u);
-            EXPECT_FALSE(Context.lastResult().InstructionCompleted);
-            EXPECT_EQ(State.Core.Core.CR2, Complete ? 0x2000u : 0u);
-            EXPECT_EQ(State.Core.Core.Core.Core.PC,
-                      0x4000u + (Complete ? 14u : 6u) * 16u);
+  for (unsigned PrefixCount : {0u, 11u, 12u, 13u})
+    for (unsigned Form = 0; Form != EncodedAddresses.size(); ++Form) {
+      const uint64_t PC = 0x1ffe - Form - PrefixCount;
+      const auto &Address = EncodedAddresses[Form];
+      const size_t Offset = PC - 0x1000;
+      std::vector<uint8_t> Code(
+          Offset + PrefixCount + X86PagedCode64UD0OpcodeBytes + Address.size(),
+          0x90);
+      std::fill_n(Code.begin() + Offset, PrefixCount, 0x66);
+      Code[Offset + PrefixCount] = 0x0f;
+      Code[Offset + PrefixCount + 1] = 0xff;
+      std::copy(Address.begin(), Address.end(),
+                Code.begin() + Offset + PrefixCount +
+                    X86PagedCode64UD0OpcodeBytes);
+      for (const auto &Compiler : Compilers)
+        for (bool LLVM : {false, true})
+          for (const std::string Optimization : {"-O0", "-O2"}) {
+            Run Driver = nullptr;
+            ASSERT_NO_FATAL_FAILURE(
+                compile(Code, LLVM, Optimization, Driver, {PC}, Compiler));
+            for (auto Profile : {X86UD0FetchProfile::OpcodeOnly,
+                                 X86UD0FetchProfile::CompleteModRM}) {
+              SCOPED_TRACE(testing::Message()
+                           << Compiler << ' ' << LLVM << ' ' << Optimization
+                           << " address_form=" << Form << " prefixes="
+                           << PrefixCount << " profile=" << unsigned(Profile));
+              reset(Code);
+              State.Core.Core.Core.Core.PC = PC;
+              put(0x13010, 0); // ModR/M page is absent.
+              Memory = llvm::cantFail(
+                  X86PagedMemory::create(RAM, Features, Controls));
+              X64PagedExecutionOptions Options;
+              Options.UD0Fetch = Profile;
+              X64PagedExecution Context(*Memory, Options);
+              uint64_t Budget = 1;
+              const auto Exit = Driver(
+                  &State, reinterpret_cast<uint8_t *>(&Context), &Budget);
+              ASSERT_TRUE(Context.lastError().empty()) << Context.lastError();
+              EXPECT_EQ(Exit, 7u);
+              EXPECT_EQ(Budget, 0u);
+              const unsigned Vector =
+                  Profile == X86UD0FetchProfile::OpcodeOnly ? 6
+                  : x86UD0FetchExceedsInstructionLength(
+                        PrefixCount + X86PagedCode64UD0OpcodeBytes + Form)
+                      ? 13
+                      : 14;
+              ASSERT_TRUE(Context.lastResult().Exception);
+              EXPECT_EQ(Context.lastResult().Exception->Vector, Vector);
+              EXPECT_EQ(Context.lastResult().Exception->ErrorCode,
+                        Vector == 14 ? 0x10u : 0u);
+              EXPECT_FALSE(Context.lastResult().InstructionCompleted);
+              EXPECT_EQ(State.Core.Core.CR2, Vector == 14 ? 0x2000u : 0u);
+              EXPECT_EQ(State.Core.Core.Core.Core.PC, 0x4000u + Vector * 16u);
+            }
           }
-        }
-  }
+    }
 }
 
 TEST_F(X64PagedExecutionTest, UD0AddressExtentUsesLiveBytesAfterTheOpcode) {
@@ -768,11 +845,13 @@ TEST_F(X64PagedExecutionTest, UD0AddressExtentUsesLiveBytesAfterTheOpcode) {
 TEST_F(X64PagedExecutionTest, UD0RefusesMissingOrInvalidFetchProfile) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
+  std::vector<uint8_t> Long(X86PagedCode64UD0QualifiedPrefixLimit, 0x66);
+  Long.insert(Long.end(), {0x0f, 0xff, 0xc0});
   for (const auto &Code :
        {std::vector<uint8_t>{0x0f, 0xff, 0xc0},
         std::vector<uint8_t>{0x67, 0x0f, 0xff, 0xc0},
         std::vector<uint8_t>{0x66, 0x0f, 0xff, 0xc0},
-        std::vector<uint8_t>{0x66, 0x67, 0x0f, 0xff, 0xc0}}) {
+        std::vector<uint8_t>{0x66, 0x67, 0x0f, 0xff, 0xc0}, Long}) {
     for (bool LLVM : {false, true}) {
       Run Driver = nullptr;
       ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
@@ -863,23 +942,34 @@ TEST_F(X64PagedExecutionTest, UD0FetchPriorityMatchesOriginalHybridCPU) {
   const auto Profile = CPU.ReturnCoreType == 0x20
                            ? X86UD0FetchProfile::OpcodeOnly
                            : X86UD0FetchProfile::CompleteModRM;
-  const unsigned Vector = Profile == X86UD0FetchProfile::OpcodeOnly ? 6 : 14;
   RecordProperty("core_type", CPU.ReturnCoreType);
   const std::vector<std::vector<uint8_t>> EncodedAddresses{
       {0x00}, {0x04, 0x20}, {0x84, 0x20, 0x00, 0x50, 0x34, 0x12}};
   std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
   if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
     Compilers.push_back(NeverC);
+  std::vector<std::vector<uint8_t>> Prefixes{
+      {},           {0x66},       {0x67},      {0xf2}, {0xf3},
+      {0x2e},       {0x65},       {0x40},      {0x4f}, {0x66, 0x66},
+      {0x66, 0x67}, {0x67, 0x66}, {0x67, 0x67}};
+  for (unsigned Count : {3u, 11u, 12u, 13u})
+    Prefixes.emplace_back(Count, 0x66);
+  Prefixes.push_back({0x66, 0x67, 0xf2, 0x64, 0x4f, 0x2e, 0xf3});
+  Prefixes.push_back(
+      {0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49});
+  Prefixes.push_back({0x66, 0x67, 0xf2, 0x64, 0x4f, 0x2e, 0xf3, 0x40, 0x65,
+                      0x3e, 0x48, 0x36, 0x26});
+  Prefixes.push_back({0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+                      0x49, 0x4a, 0x4b, 0x4c});
   unsigned Comparisons = 0;
-  for (const auto &Prefix :
-       {std::vector<uint8_t>{}, std::vector<uint8_t>{0x66},
-        std::vector<uint8_t>{0x67}, std::vector<uint8_t>{0xf2},
-        std::vector<uint8_t>{0xf3}, std::vector<uint8_t>{0x2e},
-        std::vector<uint8_t>{0x65}, std::vector<uint8_t>{0x40},
-        std::vector<uint8_t>{0x4f}, std::vector<uint8_t>{0x66, 0x66},
-        std::vector<uint8_t>{0x66, 0x67}, std::vector<uint8_t>{0x67, 0x66},
-        std::vector<uint8_t>{0x67, 0x67}}) {
+  for (const auto &Prefix : Prefixes) {
     for (unsigned Form = 0; Form != EncodedAddresses.size(); ++Form) {
+      const unsigned MissingByte =
+          Prefix.size() + X86PagedCode64UD0OpcodeBytes + Form;
+      const unsigned Vector = Profile == X86UD0FetchProfile::OpcodeOnly ? 6
+                              : x86UD0FetchExceedsInstructionLength(MissingByte)
+                                  ? 13
+                                  : 14;
       const uint64_t PC = 0x1ffe - Form - Prefix.size();
       const auto &Address = EncodedAddresses[Form];
       const size_t Offset = PC - 0x1000;
@@ -903,16 +993,17 @@ TEST_F(X64PagedExecutionTest, UD0FetchPriorityMatchesOriginalHybridCPU) {
       EXPECT_EQ(Native.Core.Core.Core.Core.PC, 0x4000u + Vector * 16u);
       EXPECT_EQ(Native.Core.Core.CR2, Vector == 14 ? 0x2000u : 0u);
       const uint64_t NativeSP = Native.Core.Core.Core.Core.GPR[4];
-      ASSERT_LE(NativeSP + (Vector == 14 ? 16u : 8u),
+      const bool HasErrorCode = Vector != 6;
+      ASSERT_LE(NativeSP + (HasErrorCode ? 16u : 8u),
                 uint64_t(X64PagedNativeCPU::Size));
       const auto FrameWord = [&](unsigned Offset) {
         uint64_t Value;
         std::memcpy(&Value, CPU.RAM + NativeSP + Offset, sizeof(Value));
         return Value;
       };
-      EXPECT_EQ(FrameWord(Vector == 14 ? 8 : 0), PC);
-      if (Vector == 14)
-        EXPECT_EQ(FrameWord(0), 0x10u); // Non-present instruction fetch.
+      EXPECT_EQ(FrameWord(HasErrorCode ? 8 : 0), PC);
+      if (HasErrorCode)
+        EXPECT_EQ(FrameWord(0), Vector == 14 ? 0x10u : 0u);
       for (const auto &Compiler : Compilers)
         for (bool LLVM : {false, true})
           for (const std::string Optimization : {"-O0", "-O2"}) {

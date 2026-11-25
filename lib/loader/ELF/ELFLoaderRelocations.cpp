@@ -260,7 +260,7 @@ template <typename ELFT>
 void applyDynamicRelativeRelocations(
     const llvm::object::ELFFile<ELFT> &ELF,
     llvm::ArrayRef<typename ELFT::Shdr> Sections, const uint8_t *Data,
-    size_t Size, BinaryImage &Img) {
+    size_t Size, BinaryImage &Img, llvm::SmallVectorImpl<va_t> *RelrSlots) {
   using namespace llvm::ELF;
   using Elf_Rel = typename ELFT::Rel;
   using Elf_Rela = typename ELFT::Rela;
@@ -360,6 +360,14 @@ void applyDynamicRelativeRelocations(
       const size_t Count = static_cast<size_t>(SH.sh_size / SH.sh_entsize);
       va_t Cursor = 0;
       bool HaveCursor = false;
+      auto ApplyRelr = [&](va_t Slot) {
+        if (RelrSlots)
+          RelrSlots->push_back(Slot);
+        if (const uint8_t *P = Img.readVA(Slot, PtrSize))
+          ApplyPointerSlot(
+              Slot, readPtr(P, ELFT::Is64Bits,
+                            ELFT::Endianness == llvm::endianness::little));
+      };
       constexpr unsigned BitmapBits = PtrSize * 8 - 1;
       constexpr uint64_t BitmapSpan = uint64_t(BitmapBits) * PtrSize;
       for (size_t I = 0; I < Count; ++I) {
@@ -371,10 +379,7 @@ void applyDynamicRelativeRelocations(
             readPtr(Data + static_cast<size_t>(EntryOff), ELFT::Is64Bits,
                     ELFT::Endianness == llvm::endianness::little);
         if ((Entry & 1) == 0) {
-          if (const uint8_t *P = Img.readVA(Entry, PtrSize))
-            ApplyPointerSlot(
-                Entry, readPtr(P, ELFT::Is64Bits,
-                               ELFT::Endianness == llvm::endianness::little));
+          ApplyRelr(Entry);
           HaveCursor = Entry <= InvalidVA - PtrSize;
           if (HaveCursor)
             Cursor = Entry + PtrSize;
@@ -391,10 +396,7 @@ void applyDynamicRelativeRelocations(
           if (Cursor > InvalidVA - Delta)
             break;
           const va_t SlotVA = Cursor + Delta;
-          if (const uint8_t *P = Img.readVA(SlotVA, PtrSize))
-            ApplyPointerSlot(
-                SlotVA, readPtr(P, ELFT::Is64Bits,
-                                ELFT::Endianness == llvm::endianness::little));
+          ApplyRelr(SlotVA);
         }
         HaveCursor = Cursor <= InvalidVA - BitmapSpan;
         if (HaveCursor)
@@ -1555,21 +1557,21 @@ template llvm::Error applyRelocations<llvm::object::ELF64BE>(
 template void applyDynamicRelativeRelocations<llvm::object::ELF32LE>(
     const llvm::object::ELFFile<llvm::object::ELF32LE> &,
     llvm::ArrayRef<llvm::object::ELF32LE::Shdr>, const uint8_t *, size_t,
-    BinaryImage &);
+    BinaryImage &, llvm::SmallVectorImpl<va_t> *);
 
 template void applyDynamicRelativeRelocations<llvm::object::ELF32BE>(
     const llvm::object::ELFFile<llvm::object::ELF32BE> &,
     llvm::ArrayRef<llvm::object::ELF32BE::Shdr>, const uint8_t *, size_t,
-    BinaryImage &);
+    BinaryImage &, llvm::SmallVectorImpl<va_t> *);
 template void applyDynamicRelativeRelocations<llvm::object::ELF64LE>(
     const llvm::object::ELFFile<llvm::object::ELF64LE> &,
     llvm::ArrayRef<llvm::object::ELF64LE::Shdr>, const uint8_t *, size_t,
-    BinaryImage &);
+    BinaryImage &, llvm::SmallVectorImpl<va_t> *);
 
 template void applyDynamicRelativeRelocations<llvm::object::ELF64BE>(
     const llvm::object::ELFFile<llvm::object::ELF64BE> &,
     llvm::ArrayRef<llvm::object::ELF64BE::Shdr>, const uint8_t *, size_t,
-    BinaryImage &);
+    BinaryImage &, llvm::SmallVectorImpl<va_t> *);
 
 } // namespace detail
 

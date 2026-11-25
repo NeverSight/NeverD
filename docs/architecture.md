@@ -327,14 +327,15 @@ CR2 publication and shutdown. `X64PagedExecution` binds generated scalar steps
 to that memory, authenticates instruction fetches, stages restart state and
 commits prepared stores. `ir/X86/X86UndefinedOpcodeRules` owns the explicit
 processor choice for UD0 fetch priority. The paged code64 continuation admits
-original UD0 with zero, one or two qualified non-LOCK legacy/REX prefixes and
-the audited terminal intrinsic; longer sequences remain explicit native
-boundaries.
+original UD0 with up to thirteen qualified non-LOCK legacy/REX prefixes and
+the audited terminal intrinsic; an opcode beyond the fifteen-byte instruction
+limit remains an explicit native or invalid-decode boundary.
 `X64PagedExecution` requires the target CPU's choice before fetch, then
 authenticates the prefix and opcode bytes and, for the complete-fetch choice, reads
 the remaining ModR/M, SIB and displacement bytes from live executable RAM.
-No data operand is read, and the existing fault owner delivers #UD or a
-preceding instruction-fetch fault. The legacy protected executor uses the
+It raises #GP before a fetch that would require the sixteenth instruction byte.
+No data operand is read, and the existing fault owner delivers #UD, #GP or a
+preceding instruction-fetch #PF. The legacy protected executor uses the
 same profile type for its segmented original-byte fetch.
 
 Faultable IRET and RETF reuse the same continuation

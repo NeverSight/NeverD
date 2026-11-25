@@ -142,6 +142,11 @@ Expected<FunctionRange> findFunction(const ELFObjectFileBase &Obj,
 struct LoadSegment {
   uint64_t Offset, Address, Physical, FileSize, MemorySize, Alignment, Flags;
   bool operator==(const LoadSegment &) const = default;
+
+  bool containsExecutableBytes(uint64_t VA, uint64_t Size) const {
+    return (Flags & ELF::PF_X) && VA >= Address &&
+           rangeInBounds(VA - Address, Size, FileSize);
+  }
 };
 
 template <typename ELFT>
@@ -198,10 +203,8 @@ Expected<LinkedImage> inspect(MemoryBufferRef Buffer, StringRef Function) {
   if (!Loads)
     return Loads.takeError();
   if (llvm::none_of(*Loads, [&](const LoadSegment &Seg) {
-        return (Seg.Flags & ELF::PF_X) && F->Address >= Seg.Address &&
-               F->Offset >= Seg.Offset &&
-               F->Address - Seg.Address == F->Offset - Seg.Offset &&
-               rangeInBounds(F->Offset - Seg.Offset, F->Size, Seg.FileSize);
+        return Seg.containsExecutableBytes(F->Address, F->Size) &&
+               F->Address - Seg.Address + Seg.Offset == F->Offset;
       }))
     return createStringError("function is outside executable load segments");
   std::optional<StringRef> ABIFlags;
@@ -216,6 +219,13 @@ Expected<LinkedImage> inspect(MemoryBufferRef Buffer, StringRef Function) {
   auto Entry = O.getStartAddress();
   if (!Entry)
     return Entry.takeError();
+  // Bit zero selects the MIPS instruction mode and is not part of the VA.
+  const uint64_t EntryAddress = *Entry & ~uint64_t{1};
+  if (llvm::none_of(*Loads, [&](const LoadSegment &Seg) {
+        return Seg.containsExecutableBytes(EntryAddress, 1);
+      }))
+    return createStringError(
+        "program entry is outside file-backed executable load segments");
   SmallVector<StringRef> EntrySymbols;
   for (const ELFSymbolRef &Sym : O.symbols()) {
     if (Sym.getBinding() != ELF::STB_GLOBAL ||
@@ -225,7 +235,7 @@ Expected<LinkedImage> inspect(MemoryBufferRef Buffer, StringRef Function) {
     auto Address = Sym.getAddress();
     if (!Address)
       return Address.takeError();
-    if (*Address != *Entry && *Address != (*Entry & ~uint64_t{1}))
+    if (*Address != *Entry && *Address != EntryAddress)
       continue;
     auto Sec = Sym.getSection();
     if (!Sec)

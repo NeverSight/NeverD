@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-25",
+  "scope": "Original-byte code64 UD0 with up to 13 qualified non-LOCK prefixes, processor-bound instruction-length faults and generated C",
+  "tested_neverd_base": "b2bd96f85c2af066d091d5b5042f1ca031daa265",
+  "dependencies": {
+    "production_llvm": {
+      "tag": "neverd-llvm-v23.0.0-r12",
+      "commit": "6947b7db63e913244e0aa6de087d1ad2e791e86f"
+    },
+    "capstone_commit": "acb6a6298e4642828981a72acc6022ee36fcd0be",
+    "neverc_binary_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702"
+  },
+  "original_instruction_probe": {
+    "host_cpu": "Intel Core i9-13900H",
+    "source_file": "scripts/isa/x86/ud0_long_prefix_matrix.c",
+    "source_sha256": "b663d9a5e2b3718470a9796dc66de77a919dd9cdce2591d350aff522d310dc0b",
+    "binary_sha256": "5dc08d8b002281973c4ae73234567328186a0fbc59435ca306126576fb9c0fee",
+    "prefix_patterns": "26 qualified bytes repeated at lengths 0-13, plus five mixed sequences at lengths 0-13",
+    "address_forms": ["ModR/M", "ModR/M and SIB", "ModR/M, SIB and disp32"],
+    "cases_per_core": 5208,
+    "compared_fields": ["signal", "trap vector", "error code", "fault RIP", "page-fault address"],
+    "p_core": {
+      "cpu": 4,
+      "profile": "complete ModR/M fetch",
+      "matches": 5208,
+      "page_faults": 3131,
+      "general_protection_faults": 1054,
+      "undefined_opcode_faults": 1023,
+      "report_file": "ud0-long-r12-native-p.log",
+      "report_sha256": "e0866c2b79801e98a64aa877abe5da4c0a2132a0f8e058e47d9dd71b2cfac658"
+    },
+    "e_core": {
+      "cpu": 12,
+      "profile": "opcode-only fetch",
+      "matches": 5208,
+      "page_faults": 0,
+      "general_protection_faults": 0,
+      "undefined_opcode_faults": 5208,
+      "report_file": "ud0-long-r12-native-e.log",
+      "report_sha256": "f3284dd847dbdf66536718975005187c34f723f442d7779dde94ed60ed4e4bf1"
+    }
+  },
+  "generated_qualification": {
+    "status": "P/E-core focused and full paging regressions passed",
+    "test_binary_sha256": "435beb20a92c5cd348fe923332f7c2046c5afdfb565930519c4c4afd88d03d65",
+    "temporary_directory": "/dev/shm/neverd-ud0-tests",
+    "full_suite_repeat_debug_group_bytes": {"p_core": 1, "e_core": 16},
+    "qualified_prefixes": "0-13, excluding LOCK; opcode must fit in 15 bytes",
+    "routes": ["HighC", "LLVM-to-C"],
+    "compilers": ["x64 Clang", "x64 NeverC"],
+    "optimization_levels": ["O0", "O2"],
+    "compared_fields": ["exception vector", "error code", "CR2", "faulting RIP", "handler RIP", "GPRs", "RFLAGS", "CS", "SS", "RAM"],
+    "decoder_and_boundary": {
+      "file": "ud0-long-r12-decoder.xml",
+      "tests": 3,
+      "passed": 3,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "sha256": "85fcb90209f26f4d10bfd36d4ba89f4cd65008ad849f468d66da6057a6e549ca"
+    },
+    "focused_p": {
+      "file": "ud0-long-r12-focused-p.xml",
+      "tests": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "fb8b4d7a165d65100039e51a26abd5fc88bf28a9bdce6e45afadb1ce556b8104"
+    },
+    "focused_e": {
+      "file": "ud0-long-r12-focused-e.xml",
+      "tests": 5,
+      "passed": 5,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "fa99fcc2a509cfc1572c9f28e2cb774cf950df31eff66dcc89eebd6553b862ff"
+    },
+    "full_p": {
+      "file": "ud0-long-r12-full-p-shm.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "e2adc5c6baca9226f64be9f4115f13030ab6c258f78b178efd09ca4d62793983"
+    },
+    "full_e": {
+      "file": "ud0-long-r12-full-e-shm.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "65c90b770689103d77f63d9f6555f0f57b37cd6ba5181d26cbd98ba34cf31baf"
+    }
+  },
+  "resource_recovery": "Earlier full runs hit temporary-output space errors and left truncated generated C under /tmp. The successful P/E reports listed here used TMPDIR=/dev/shm/neverd-ud0-tests; failed attempts are excluded.",
+  "post_qualification_rebase": {
+    "code_commit": "f431f0aed322d0d3cd2e94ed4c47788620888a10",
+    "base_commit": "e7275d9627",
+    "scope": "The intervening dev commits changed shared HighC and Windows ABI code. The test binary changed, so focused and full P/E runs were repeated on the rebuilt target.",
+    "rebuilt_test_binary_sha256": "c8be385d1dae87ddee0df61fed3b6a928dd6a101f723a1656a3b8373bec4dede",
+    "focused_p": {
+      "file": "ud0-long-r12-postrebase-focused-p.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "4258c512c24b92dd1820847aaa155240f23264e929c9d57c168ea588c87e7f2f"
+    },
+    "focused_e": {
+      "file": "ud0-long-r12-postrebase-focused-e.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "db795fc66a5076539ffd28ad235c80431ad460e4870a260ca7e5b8a588c33f9b"
+    },
+    "full_p": {
+      "file": "ud0-long-r12-postrebase-full-p.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "58827d0c30a6dc97c04466662663bb6cf4450618063c59a840e78253bf58dfc8"
+    },
+    "full_e": {
+      "file": "ud0-long-r12-postrebase-full-e.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "e4eef92fa2750a8b390df749a531dff8216b10386f2bc5548e6bf974f309dfd8"
+    }
+  },
+  "latest_integrated_qualification": {
+    "code_commit": "02ef5510b9",
+    "base_commit": "2bda8431f5",
+    "scope": "Subsequent dev commits changed PowerPC, MIPS and RISC-V paths without changing the x86 source or LLVM/Capstone pins. The target binary was rebuilt, and focused and full P/E suites were repeated.",
+    "rebuilt_test_binary_sha256": "29d35e209cd45a545b76d48f450361edeb8c7601e717c86a048dc5faab6403a8",
+    "focused_p": {
+      "file": "ud0-long-r12-final-focused-p.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "fe097849e96c34dd833d4cd0febf0ced9374d6eef809defb18825a528e50c774"
+    },
+    "focused_e": {
+      "file": "ud0-long-r12-final-focused-e.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "4d9c10bd4d03948bcb5725cbc9572ebbd91f4c44595525d0b47b67d6cb3b1694"
+    },
+    "full_p": {
+      "file": "ud0-long-r12-final-full-p.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "d7354d4b87c06993c459e3502d6dc69a4779d9868b54ba0e4c08b20786618f16"
+    },
+    "full_e": {
+      "file": "ud0-long-r12-final-full-e.xml",
+      "tests": 249,
+      "passed": 249,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "4df31003888555d4a4bc3730462487fd4eb808f18dd000d347354064669ebc2c"
+    }
+  },
+  "final_dev_rebase_qualification": {
+    "rebased_code_commit": "94ef4980fe",
+    "base_commit": "2f4b768a70df464d2f98064829e9fbb27af92b58",
+    "scope": "The intervening dev changes are limited to ARM64e and RISC-V code and documentation. The rebuilt test binary has the same SHA-256 as the preceding full P/E qualification. The original-CPU generated-C comparisons were repeated on both core types.",
+    "rebuilt_test_binary_sha256": "29d35e209cd45a545b76d48f450361edeb8c7601e717c86a048dc5faab6403a8",
+    "identical_to_latest_full_suite_binary": true,
+    "focused_p": {
+      "file": "ud0-long-r12-dev-final-focused-p.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x40",
+      "original_cpu_comparisons": 504,
+      "sha256": "dc13b5952c824958ab443dc1c121b015e496ca1c453b73881df26a25e954bc2a"
+    },
+    "focused_e": {
+      "file": "ud0-long-r12-dev-final-focused-e.xml",
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "core_type": "0x20",
+      "original_cpu_comparisons": 504,
+      "sha256": "1e006d4207f5df6da43e0c2f9a988c48e588b547cbaa62cceb04aba86691c109"
+    }
+  },
+  "release_gate": {
+    "global_x86_complete": false,
+    "native_sgx_qualified": false,
+    "new_llvm_release_for_this_change": false,
+    "production_pin_changed_by_this_change": false
+  }
+}

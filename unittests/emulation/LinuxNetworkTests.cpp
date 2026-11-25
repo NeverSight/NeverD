@@ -15,6 +15,8 @@
 
 #include "llvm/Support/Endian.h"
 
+#include <algorithm>
+
 namespace neverd::emulation {
 namespace {
 using linux_model::ServiceKind;
@@ -160,6 +162,38 @@ TEST_P(LinuxNetwork, ConnectImportsAddressBeforeFileTypeAndSocketState) {
   EXPECT_EQ(Report.Diagnostic, "AF_UNSPEC socket disconnect is unmodeled");
   EXPECT_EQ(call(ServiceKind::Read, FD, Base + 128, 2), 2u);
   EXPECT_EQ(call(ServiceKind::Connect, open(), Base, 16), 0u);
+}
+TEST_P(LinuxNetwork, IPv4ConnectImportsTheWholeAddressAndMatchesTheEndpoint) {
+  auto Peer = Options.LinuxNetwork->Connections.front().Peer;
+  LinuxDatagramConnection Route;
+  Route.Peer = Peer;
+  Route.ConnectErrno = 101;
+  Options.LinuxNetwork->DatagramConnections = {Route};
+  const auto TCP = open();
+  const auto UDP = call(ServiceKind::Socket, 2, 2, 17).value();
+  Peer.resize(128, 0x5a);
+  std::fill(Peer.begin() + 8, Peer.begin() + 16, 0xa5);
+  llvm::cantFail(
+      cpu().write(Base + 8192 - 16, llvm::ArrayRef(Peer).take_front(16)));
+  for (auto FD : {TCP, UDP})
+    EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 8192 - 16, 17),
+              uint64_t(-14));
+
+  ++Peer[7];
+  llvm::cantFail(cpu().write(Base, Peer));
+  EXPECT_FALSE(call(ServiceKind::Connect, TCP, Base, Peer.size()));
+  EXPECT_EQ(Report.Diagnostic,
+            "TCP peer has no matching offline connection attempt (attempt 1, "
+            "connection index 0 has a different peer), "
+            "peer_hex=020023297f0000020000000000000000");
+  EXPECT_FALSE(call(ServiceKind::Connect, UDP, Base, Peer.size()));
+  --Peer[7];
+  llvm::cantFail(cpu().write(Base, Peer));
+  EXPECT_EQ(call(ServiceKind::Connect, TCP, Base, Peer.size()), 0u);
+  EXPECT_EQ(call(ServiceKind::Connect, UDP, Base, 16), uint64_t(-101));
+  std::vector<uint8_t> After(Peer.size());
+  llvm::cantFail(cpu().read(Base, After));
+  EXPECT_EQ(After, Peer);
 }
 TEST_P(LinuxNetwork, NullPeerIgnoresAddressLengthForStreamTransfers) {
   const auto FD = open();
@@ -497,10 +531,13 @@ TEST_P(LinuxNetwork, TCPConnectFailuresPreserveAdmissionAndBoundedOwnership) {
   EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 8191, 16), uint64_t(-14));
   Other[0] = 10;
   llvm::cantFail(cpu().write(Base + 32, Other));
-  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base + 32, 16));
+  EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 32, 15), uint64_t(-22));
+  EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 32, 16), uint64_t(-97));
+  auto Nonblocking = call(ServiceKind::Socket, 2, 1 | 0x800, 0).value();
+  EXPECT_EQ(call(ServiceKind::Connect, Nonblocking, Base + 32, 16),
+            uint64_t(-97));
   Other[0] = 2;
   llvm::cantFail(cpu().write(Base + 32, Other));
-  auto Nonblocking = call(ServiceKind::Socket, 2, 1 | 0x800, 0).value();
   EXPECT_EQ(call(ServiceKind::Connect, Nonblocking, 1, 16), uint64_t(-14));
   EXPECT_FALSE(call(ServiceKind::Connect, Nonblocking, Base, 16));
   EXPECT_EQ(call(ServiceKind::Close, Nonblocking), 0u);
@@ -739,6 +776,12 @@ TEST(LinuxNetworkJSON, StrictWireAndSemanticAdmission) {
       R"({"linux_network":{"connections":[{"peer_hex":"020023297f0000010000000000000000","max_send":0}]}})",
       false);
   Check(R"({"linux_network":{"connections":[{"peer_hex":"0z"}]}})", false);
+  Check(
+      R"({"linux_network":{"connections":[{"peer_hex":"020023297f000001a500000000000000"}]}})",
+      false);
+  Check(
+      R"({"linux_network":{"datagram_connections":[{"peer_hex":"020023297f000001000000000000000000"}]}})",
+      false);
   const std::string Peer = "\"peer_hex\":\"020023297f0000010000000000000000\"";
   auto Event = [&](llvm::StringRef Fields, bool Datagram, bool Valid) {
     Check("{\"linux_network\":{\"" +
