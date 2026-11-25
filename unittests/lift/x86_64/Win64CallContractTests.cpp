@@ -2785,6 +2785,11 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
           EXPECT_TRUE(llvm::StringRef(Bound).contains("stack_companion("));
           EXPECT_FALSE(llvm::StringRef(Bound).contains(
               "stack_companion_from_precall_v6("));
+          if (!Stored && Memory == Win64PrecallMemory::FlatV6)
+            for (llvm::StringRef Dialect : {"-std=gnu11", "-std=gnu2x"})
+              source_call_execution_test::checkSyntax(
+                  Bound, {"--target=x86_64-w64-windows-gnu", "-ffreestanding",
+                          "-Werror=deprecated-non-prototype", Dialect});
         }
         EXPECT_EQ(
             llvm::StringRef(Bound).contains("pass_stack_from_precall_v6("),
