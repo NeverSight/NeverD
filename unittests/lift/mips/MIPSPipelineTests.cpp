@@ -280,6 +280,86 @@ TEST(MIPSEntryGP, MicroR6UsesTheTaggedEntryAtRegisterWidth) {
   }
 }
 
+TEST(MIPSEntryGP, StaticGOTPageMustBeRebasedWhenItsCellIsRead) {
+  using namespace llvm::ELF;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(A));
+    const bool N32 = isMIPSN32(A);
+    mips_test::ELFBytes File(
+        N32 ? (archLittleEndian(A) ? Arch::MIPS32EL : Arch::MIPS32) : A);
+    const unsigned W = File.Is64 ? 8 : 4;
+    const uint32_t ABI = N32 ? EF_MIPS_ABI2 : File.Is64 ? 0 : EF_MIPS_ABI_O32;
+    File.put(File.Is64 ? 48 : 36,
+             (isMIPS64(A) ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2) | ABI |
+                 EF_MIPS_CPIC,
+             4);
+    File.globalPointer(0x18130);
+    File.Bytes.resize(0x400);
+    const unsigned P = File.Is64 ? 64 : 52;
+    File.put(P + (File.Is64 ? 32 : 16), 0x180, W);
+    File.put(P + (File.Is64 ? 40 : 20), 0x180, W);
+    File.put(File.Is64 ? 40 : 32, 0x200, W);
+    File.put(File.Is64 ? 60 : 48, 4, 2);
+    File.put(File.Is64 ? 62 : 50, 2, 2);
+    const char Names[] = "\0.got\0.shstrtab\0.text";
+    std::copy(std::begin(Names), std::end(Names), File.Bytes.begin() + 0x1a0);
+    const unsigned SH = File.Is64 ? 64 : 40, Got = 0x200 + SH, Str = Got + SH;
+    File.put(Got, 1, 4);
+    File.put(Got + 4, SHT_PROGBITS, 4);
+    File.put(Got + 8, SHF_ALLOC | SHF_WRITE, W);
+    File.put(Got + 8 + W, 0x10140, W);
+    File.put(Got + 8 + 2 * W, 0x140, W);
+    File.put(Got + 8 + 3 * W, 4 * W, W);
+    File.put(Str, 6, 4);
+    File.put(Str + 4, SHT_STRTAB, 4);
+    File.put(Str + 8 + 2 * W, 0x1a0, W);
+    File.put(Str + 8 + 3 * W, sizeof(Names), W);
+    const unsigned Text = Str + SH;
+    File.put(Text, 16, 4);
+    File.put(Text + 4, SHT_PROGBITS, 4);
+    File.put(Text + 8, SHF_ALLOC | SHF_EXECINSTR, W);
+    File.put(Text + 8 + W, 0x10100, W);
+    File.put(Text + 8 + 2 * W, 0x100, W);
+    File.put(Text + 8 + 3 * W, 0x18, W);
+    File.put(0x140 + W, uint64_t{1} << (8 * W - 1), W);
+    File.put(0x140 + 2 * W, 0x200000, W); // unmapped page base
+    File.put(0x140 + 3 * W, 0x10100, W);  // ordinary mapped pointer
+
+    File.put(0x100, 0x3c080001, 4); // lui t0,1
+    File.put(0x104, (File.Is64 ? 0x65088030 : 0x25088030), 4);
+    File.put(0x108, (File.Is64 ? 0x0119402d : 0x01194021), 4);
+    for (bool Page : {false, true})
+      for (unsigned Form : {0u, 1u, 2u}) {
+        const bool InSlot = Form == 1, Byte = Form == 2;
+        SCOPED_TRACE(testing::Message() << Page << '/' << Form);
+        const unsigned Offset = 0x8010 + (Page ? 2 : 3) * W;
+        const uint32_t Load =
+            Byte ? (0x91020000 | (Offset + 1))
+                 : ((File.Is64 ? 0xdd020000 : 0x8d020000) | Offset);
+        File.put(0x10c, InSlot ? 0x03e00008 : Load, 4);
+        File.put(0x110, InSlot ? Load : 0x03e00008, 4);
+        File.put(0x114, 0, 4);
+        auto Image = ELFLoader().loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        ASSERT_EQ(Image->MIPS->UnmappedGOTPageSlots,
+                  std::vector<va_t>{0x10140 + 2 * W});
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(*Image));
+        const auto Low =
+            CFGBuilder().build(*Image, Decode, Image->Entry, "static_got_page");
+        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+        LowToMedConverter Convert;
+        Convert.setBinaryImage(&*Image);
+        if (Page)
+          EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                       LowToMedConversionError);
+        else
+          EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+      }
+  }
+}
+
 void expectPICAddress(bool N32, bool Little, llvm::ArrayRef<uint32_t> Words,
                       bool Expected, unsigned MinBlocks = 2,
                       std::optional<unsigned> Independent = {}) {

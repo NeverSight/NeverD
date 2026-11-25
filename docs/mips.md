@@ -99,8 +99,12 @@ ratio included 1.
 - ELF identification and loading share class, ISA, ABI and encoding checks.
   Sectionless dynamic tables, MIPS global GOT suffixes and standard PLT veneers
   retain symbol identities. Data pointers and DWARF frame records use target
-  byte order. A packed MIPS64 relocation is refused until all of its component
-  operations are implemented. Runtime relocation tables are read from
+  byte order. In linked n64 code, retained RELA records can combine
+  `R_MIPS_GPREL16`, `R_MIPS_SUB` and `R_MIPS_HI16` or `R_MIPS_LO16`.
+  Each instruction field must match the linked GP minus the callable symbol
+  and its addend. Source conversion preserves both the GOT and function
+  identities. Other packed operations and packed runtime relocations are
+  refused. Runtime relocation tables are read from
   `PT_DYNAMIC`, including when a section table is present. Unimplemented
   relocations (including REL32/32/64 runtime fixups) and imported data/TLS GOT
   bindings fail explicitly. Admitted scalar COPY objects remain external
@@ -134,6 +138,9 @@ ratio included 1.
   GOT import load retains its symbol through n32's sign extension. A static
   GNU GOT with a single GP and no TLS can supply the initial address of a
   writable callback object. The call reads the object's current pointer.
+  A local GOT cell can also contain a rounded 64 KiB page address outside
+  the mapped image. Source conversion reports a proved load of such a cell
+  when the page and its displacement lack relocatable storage identity.
   Scoped GP records cannot supply the image-wide GP proof.
 - When the incoming return address is saved only on the stack, its slot must
   stay private across calls. An untyped result passed to another opaque call

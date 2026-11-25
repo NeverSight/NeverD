@@ -47,6 +47,7 @@ struct MIPSSymbolImmediate {
   int64_t Addend = 0;
   uint32_t Instruction = 0;
   MIPSImmediatePart Part = MIPSImmediatePart::Lo16;
+  bool GPDisplacement = false;
 };
 
 struct MIPSInstructionRelocation {

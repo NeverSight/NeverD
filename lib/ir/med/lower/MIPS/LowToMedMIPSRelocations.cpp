@@ -11,6 +11,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/MIPSGPAnchor.h"
 
 #include <algorithm>
 #include <initializer_list>
@@ -120,7 +121,19 @@ void LowToMedConverter::projectMIPSRelocatedImmediates(MedFunc &Func) {
       // Keep the symbol occurrence whole; the arithmetic below observes the
       // rebuilt callable bits. Each field has its own ABI carry and truncation,
       // so split registers and a LO instruction scheduled before HI work too.
-      const uint64_t Bias = uint64_t(Field.Addend) + Extraction.Carry;
+      uint64_t Addend = uint64_t(Field.Addend);
+      if (Field.GPDisplacement) {
+        const auto GP = *Image->MIPS->PICGP;
+        const auto Anchor = mipsPICGPAnchor(*Image, GP);
+        if (!Anchor)
+          throw LowToMedConversionError(
+              "MIPS symbolic GP displacement has no GOT storage anchor");
+        auto LinkedGP = MedVar::makeConst(
+            GP, PointerBytes, ConstantAddressProvenance::DataAddress, *Anchor);
+        Value = Emit(NdOp::INT_SUB, PointerBytes, {LinkedGP, Value});
+        Addend = uint64_t{0} - Addend;
+      }
+      const uint64_t Bias = Addend + Extraction.Carry;
       if (Bias)
         Value = Emit(NdOp::INT_ADD, PointerBytes,
                      {Value, Scalar(Bias, PointerBytes)});
