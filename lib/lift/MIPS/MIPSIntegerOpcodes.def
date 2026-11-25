@@ -1,4 +1,5 @@
-//===- MIPSIntegerOpcodes.def - Classic MIPS opcode fields -----------------===//
+//===- MIPSIntegerOpcodes.def - Classic MIPS opcode fields
+//-----------------===//
 //
 // NeverD Decompiler
 //
