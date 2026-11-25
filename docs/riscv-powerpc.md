@@ -27,8 +27,26 @@ uses the physical instruction length for the link address.
 | --- | --- |
 | PPC32 System V | ELF32 and zero processor flags. The ninth integer argument begins eight bytes above the caller's stack pointer on entry. |
 | PPC32 EABI | Unsupported. Embedded flags and VLE executable regions fail admission. |
-| PPC64 ELFv2 | Requires ABI flag 2 in either byte order. The ninth integer argument begins at offset 96. The execution fixtures enter through the global entry with its address in r12 and require no incoming TOC. Cross-module TOC recovery, global/local entry equivalence and PLT calls remain unqualified. |
+| PPC64 ELFv2 | Requires ABI flag 2 in either byte order. The ninth integer argument begins at offset 96. Function symbols specify the local entry and r2 preservation. A global call to a function with two entries supplies its address in r12. A local call supplies the callee’s TOC in r2. |
 | PPC64 ELFv1 | A linked image identifies its descriptor table with an allocated `.opd` section or the paired `DT_PPC64_OPD` and `DT_PPC64_OPDSZ` tags. Flags 0 and 1 admit that layout in either byte order. The ninth integer argument begins at offset 112. |
+
+An ELFv2 function pointer names the global entry. The loader reads the local
+entry offset from `st_other` and follows the global prologue to determine the
+TOC for that function. Discovery gives both entries one function identity.
+MedIR checks the incoming r2 at local calls and r12 at calls to a distinct
+global entry. For a single-entry symbol, encodings 0 and 1 distinguish a
+function that preserves r2 from one that can change it.
+
+An ELFv2 PLT slot holds an eight-byte function pointer. The loader matches
+the stub's load into r12 and transfer through CTR to its runtime
+`R_PPC64_JMP_SLOT`. MedIR models the r2 save at 24(r1) and its reaching
+reload after the call. This also handles a GNU linker stub that adjusts r2
+before branching to a local entry in a different TOC group. Both source
+backends emit the callee's name, allowing the native linker to select the
+entry and establish the provider's TOC in the rebuilt binary. For an optimized
+GNU PLT call without an r2 save, the dynamic local-entry flag and the
+imported global function symbol must both establish r2 preservation.
+[OpenPOWER ELFv2 ABI](https://openpowerfoundation.org/specifications/64bitelfabi/).
 
 An ELFv1 function pointer is the address of a descriptor. The loader retains
 that address and reads the descriptor's code address, TOC and optional static
@@ -102,8 +120,10 @@ device memory and guest exception delivery are outside that model.
 
 The strict lifters report unsupported instructions at their original VA.
 RISC-V system/CSR, FP, V and vendor extensions, and PowerPC VLE, SPE, VMX,
-VSX, prefixed instructions, conditional indirect transfers and system
-instructions have no qualified semantic path. Word multiplies with an
+VSX, prefixed instructions in ordinary function bodies, conditional indirect
+transfers and system instructions have no qualified semantic path. The ELFv2
+loader recognizes the PC-relative prefixed load or address calculation in a
+linker stub when its final CTR transfer and destination match. Word multiplies with an
 undefined high half on PPC64 also fail strict lifting.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
@@ -172,4 +192,21 @@ python3 unittests/lift/elf-integer/ppc64_elfv1.py \
 python3 unittests/lift/elf-integer/ppc64_elfv1_plt.py \
   --neverd build-release/bin/neverd --clang /path/to/clang \
   --ld /path/to/powerpc64-linux-gnu-ld
+```
+
+The ELFv2 fixture accepts either ELF LLD or a GNU PowerPC64 linker with
+both endiannesses. It enters functions at each advertised entry, changes
+the load address of the stripped shared-library caller, repeats the analysis
+with its section headers removed, and executes the PLT
+against an independently loaded provider. It checks the first lazy binding,
+subsequent calls and eager binding. Moving a runtime relocation away from
+the slot its stub loads must produce a diagnostic. GNU ld also produces
+fixtures with multiple TOCs and with a TOC save in the caller’s prologue. The POWER10 PC-relative PLT case recompiles the linked stub’s caller
+and executes the rebuilt calls. Unicorn executes the original POWER8 sequence.
+Run the command once with each linker to cover both stub families.
+
+```sh
+python3 unittests/lift/elf-integer/ppc64_elfv2.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang \
+  --ld /path/to/ld.lld
 ```

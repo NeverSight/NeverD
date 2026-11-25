@@ -35,9 +35,11 @@ void scanELFIntegerCalls(const BinaryImage &Img, Decoder &Dec,
     if (Size <= 0)
       break;
     va_t Target = Dec.directCallTarget(Insn);
-    if (Target != InvalidVA && Img.hasExecutableCodeOwnerRange(At, Size) &&
-        Img.isFunctionEntryCandidateAt(Target))
-      Out.insert(Target);
+    if (Target != InvalidVA && Img.hasExecutableCodeOwnerRange(At, Size)) {
+      Target = Img.ppc64GlobalEntry(Target);
+      if (Img.isFunctionEntryCandidateAt(Target))
+        Out.insert(Target);
+    }
     if (isRISCV(Img.Arch)) {
       if (PreviousWord) {
         const auto Callee = riscv::pcRelativeCall(Img.Arch, Img.RISCV,

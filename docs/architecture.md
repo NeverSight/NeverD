@@ -19180,7 +19180,11 @@ TOC and static chain for incoming registers, and binds a descriptor call from
 its reaching loads. For PPC64 ELFv1 inter-module calls, the loader pairs a
 PLT stub with the runtime jump-slot relocation. For a local TOC switch it
 checks the branch destination's descriptor. MedIR validates the caller's
-reaching r2 and carries its saved value through the return edge.
+reaching r2 and carries its saved value through the return edge. For ELFv2,
+`st_other` identifies the global and local entries of one function. The loader
+reads the global prologue for its TOC and associates linkage stubs with
+eight-byte jump slots. MedIR checks the register required at the selected
+entry and tracks the native save and reload at 24(r1).
 RISC-V extension evidence belongs to the image. Decode,
 lift and function discovery share the physical instruction size and
 control-transfer semantics.

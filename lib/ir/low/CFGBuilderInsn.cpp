@@ -131,7 +131,9 @@ void CFGBuilder::classifyInsn(InsnRecord &Rec) {
     case NdOp::CALL:
       Rec.IsCall = true;
       if (Op.NumInputs >= 1 && Op.Inputs[0].isConst()) {
-        CallTargets.insert(Op.Inputs[0].Offset);
+        CallTargets.insert(
+            CurrentImg ? CurrentImg->ppc64GlobalEntry(Op.Inputs[0].Offset)
+                       : Op.Inputs[0].Offset);
         CallImmediate = Op.Inputs[0].Offset;
       }
       break;
@@ -303,6 +305,9 @@ bool CFGBuilder::isTailCallTarget(va_t Target,
                                   bool IncludeBoundaryGuesses) const {
   if (Target == InvalidVA || Target == CurrentFuncEntry)
     return false;
+  if (CurrentImg)
+    if (va_t Global = CurrentImg->ppc64GlobalEntry(Target); Global != Target)
+      return Global != CurrentFuncEntry;
   // ObjectExterns owns undefined callable identities separately from executable
   // veneers and IAT storage. A relocated direct branch to one is an external
   // tail call even though no instruction bytes are allocated for that callee.
@@ -513,7 +518,7 @@ void CFGBuilder::rewriteAsTailCall(InsnRecord &Rec) {
   // Synthetic fallthrough stubs have no decoded immediate to preserve.
   Rec.Immediate = Target;
   Rec.BranchTarget = InvalidVA;
-  CallTargets.insert(Target);
+  CallTargets.insert(CurrentImg->ppc64GlobalEntry(Target));
 }
 
 void CFGBuilder::rewriteGoInlinedRoutineCall(const BinaryImage &Img,

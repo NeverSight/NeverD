@@ -107,7 +107,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     return llvm::make_error<llvm::StringError>("elf: unsupported architecture",
                                                llvm::inconvertibleErrorCode());
 
-  elf_loader::PPC64DescriptorTable Descriptors;
+  elf_loader::PPC64LinkageTables Linkage;
   if (isMIPS(Img.Arch)) {
     auto Profile = elf_loader::readMIPSProfile(Obj);
     if (!Profile)
@@ -118,8 +118,8 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     if (Profile->HasMicroMIPS || Profile->HasMIPS16)
       Img.Mode = InstructionMode::MixedMIPS;
   } else if (isRISCV(Img.Arch) || isPowerPC(Img.Arch)) {
-    if (auto E = elf_loader::readIntegerProfile(Obj, Img.Arch, Img.RISCV,
-                                                &Descriptors))
+    if (auto E =
+            elf_loader::readIntegerProfile(Obj, Img.Arch, Img.RISCV, &Linkage))
       return E;
   } else if constexpr (ELFT::Endianness == llvm::endianness::big) {
     return llvm::make_error<llvm::StringError>(
@@ -220,7 +220,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   elf_loader::detail::DynamicSections<ELFT> Reconstructed;
   llvm::ArrayRef<Elf_Shdr> Tables = *SectionsOr;
   llvm::StringRef TableNames = ShStrTab;
-  const bool RuntimeTables = isMIPS(Img.Arch) || Descriptors.JumpRelocationSize;
+  const bool RuntimeTables = isMIPS(Img.Arch) || Linkage.JumpRelocationSize;
   if (!IsRelocatable && (SectionsOr->empty() || RuntimeTables)) {
     const size_t DiagnosticsBefore = Img.LoadDiagnostics.size();
     Reconstructed =
@@ -286,7 +286,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
 
   Progress.check();
   if (isPowerPC64ELFv1(Img.Arch))
-    if (auto E = elf_loader::readPPC64Descriptors(Img, Descriptors))
+    if (auto E = elf_loader::readPPC64Descriptors(Img, Linkage))
       return E;
 
   // --- .dynamic ---
@@ -301,8 +301,8 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   Progress.check();
   // --- .rela.plt / .rel.plt imports ---
   elf_loader::parsePLTImports(ELF, Tables, TableNames, Data, Size, Img);
-  if (isPowerPC64ELFv1(Img.Arch))
-    if (auto E = elf_loader::readPPC64Linkage(Img, Descriptors))
+  if (isPowerPC64(Img.Arch))
+    if (auto E = elf_loader::readPPC64Linkage(Img, Linkage))
       return E;
   if (isMIPS(Img.Arch))
     if (auto Error =

@@ -2,18 +2,32 @@
 #ifndef TOCSAVE_RELOC
 #define TOCSAVE_RELOC R_PPC64_TOCSAVE
 #endif
+#ifdef ELF_V2
+.abiversion 2
+#else
 .abiversion 1
+#endif
 
 .macro begin_function name
+#ifdef ELF_V2
+.text
+#else
 .section ".opd","aw",@progbits
+#endif
 .p2align 3
 .globl \name
 .type \name,@function
 \name:
+#ifdef ELF_V2
+  addis 2,12,.TOC.-\name@ha
+  addi 2,2,.TOC.-\name@l
+  .localentry \name,.-\name
+#else
   .quad .Lentry_\name, .TOC.@tocbase, 0
 .text
 .p2align 2
 .Lentry_\name:
+#endif
   mflr 0
   stdu 1, -112(1)
   std 0, 128(1)
