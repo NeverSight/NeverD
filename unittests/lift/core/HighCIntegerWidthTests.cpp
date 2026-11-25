@@ -41,6 +41,15 @@ ExprPtr parameter(unsigned Id, TypeRef Type) {
   return HighExpr::makeVar(Var, Type);
 }
 
+ExprPtr selectValue(ExprPtr Condition, ExprPtr Taken, ExprPtr Other,
+                    TypeRef Type) {
+  auto E =
+      HighExpr::makeBinop(NdOp::SELECT, std::move(Condition), std::move(Taken));
+  E->Operands.push_back(std::move(Other));
+  E->Type = std::move(Type);
+  return E;
+}
+
 void returnValue(HighFunc &Func, ExprPtr Value) {
   HighStmt Return;
   Return.Kind = StmtKind::Return;
@@ -1880,6 +1889,120 @@ _Static_assert(MASKED_XOR(0, 0x20) == 1, "right mask");
 _Static_assert(MASKED_XOR(0x80, 0x20) == 0, "both masks");
 )",
       {"-Werror=parentheses"});
+}
+
+TEST(HighCIntegerWidths, SelectReadsTheConditionWidthAndConvertsTheResult) {
+  const auto Byte = NdType::makeInt(1, false), I8 = NdType::makeInt(1, true);
+  const auto Word = NdType::makeInt(4, false), I32 = NdType::makeInt(4, true);
+  const auto Float = NdType::makeFloat(4);
+  const auto Low = parameter(0, Byte);
+  auto Constant = [&](uint32_t Bits) {
+    return HighExpr::makeConst(Bits, Word->Size,
+                               ConstantAddressProvenance::Scalar);
+  };
+  auto Check = [&](const char *Name, ExprPtr Value, TypeRef Return,
+                   const char *Assertion) {
+    SCOPED_TRACE(Name);
+    HighFunc Func;
+    Func.Name = Name;
+    Func.Params = {{"arg0", Word}, {"arg1", Word}};
+    Func.ReturnType = Return;
+    returnValue(Func, std::move(Value));
+    const std::string Source = emitFunctions({Func});
+    const auto Expr =
+        llvm::StringRef(Source).rsplit("return ").second.split(';').first;
+    ASSERT_FALSE(Expr.empty()) << Source;
+    source_call_execution_test::checkSyntax(
+        Source + "\n#define RESULT(arg0, arg1) ((" + typeToC(Return) + ")(" +
+            Expr.str() + "))\n_Static_assert(" + Assertion + ", \"" + Name +
+            "\");\n",
+        {"-Werror=constant-conversion", "-Werror=parentheses"});
+  };
+  auto Choice = [&](ExprPtr Condition) {
+    return selectValue(std::move(Condition), Constant(11), Constant(22), Word);
+  };
+  Check("integer_choice", Choice(Low), Word,
+        "RESULT(256u, 0) == 22 && RESULT(257u, 0) == 11");
+  Check("halfword_choice", Choice(parameter(0, NdType::makeInt(2, false))),
+        Word, "RESULT(0x10000u, 0) == 22 && RESULT(256u, 0) == 11");
+  Check("full_width_choice", Choice(parameter(0, Word)), Word,
+        "RESULT(256u, 0) == 11 && RESULT(0u, 0) == 22");
+  const auto One = Constant(0x3f800000), Two = Constant(0x40000000);
+  const char *FloatChoices =
+      "RESULT(256u, 0) == 2.0f && RESULT(257u, 0) == 1.0f";
+  Check("float_choice",
+        selectValue(Low, HighExpr::makeBitCast(One, Float),
+                    HighExpr::makeBitCast(Two, Float), Float),
+        Float, FloatChoices);
+  Check("float_bits_choice",
+        HighExpr::makeBitCast(selectValue(Low, One, Two, Word), Float), Float,
+        FloatChoices);
+  auto Logic = [&](NdOp Op) {
+    return HighExpr::makeBinop(Op, Low, parameter(1, Byte));
+  };
+  Check("xor_choice", Choice(Logic(NdOp::BOOL_XOR)), Word,
+        "RESULT(256u, 1u) == 11 && RESULT(1u, 257u) == 22");
+  Check("byte_conjunction", Logic(NdOp::BOOL_AND), Word,
+        "RESULT(256u, 1u) == 0 && RESULT(257u, 2u) == 1");
+  Check("byte_disjunction", Logic(NdOp::BOOL_OR), Word,
+        "RESULT(256u, 256u) == 0 && RESULT(0u, 257u) == 1");
+  Check("selected_signed_byte",
+        selectValue(parameter(0, Word), Constant(0xff), parameter(1, I32), I32),
+        I8, "RESULT(1u, 0) == -1 && RESULT(0u, 0x180u) == -128");
+}
+
+TEST(HighCIntegerWidths, NarrowSelectKeepsTheOperandSizeOfOverflowBuiltins) {
+  const auto Word = NdType::makeInt(4, false);
+  for (unsigned Width : {1u, 2u}) {
+    const auto Type = NdType::makeInt(Width, false);
+    const auto One = HighExpr::makeConst(1, Width);
+    auto Choice =
+        selectValue(parameter(0, Word), parameter(1, Type), One, Type);
+    HighFunc Func;
+    Func.Name = Width == 1 ? "selected_byte_overflow" : "selected_word_borrow";
+    Func.Params = {{"arg0", Word}, {"arg1", Type}};
+    Func.ReturnType = Word;
+    returnValue(
+        Func, HighExpr::makeBinop(Width == 1 ? NdOp::INT_SOVF : NdOp::INT_SBOR,
+                                  Choice, One));
+    source_call_execution_test::checkSyntax(emitFunctions({Func}));
+  }
+}
+
+TEST(HighCIntegerWidths, SEHFilterSelectReadsOnlyItsConditionByte) {
+  const auto Word = NdType::makeInt(4, false);
+  HighFunc Func;
+  Func.Name = "byte_filter";
+  Func.Entry = 0x1000;
+  Func.Params = {{"arg0", Word}};
+  Func.ReturnType = Word;
+  HighStmt Try, Return;
+  Try.Kind = StmtKind::SEHTry;
+  Try.EHIsReducible = true;
+  Try.EHRange = {Func.Entry, Func.Entry + 0x10};
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeConst(0, Word->Size);
+  Try.Body.push_back(Return);
+  HighEHClause Clause;
+  Clause.Kind = HighEHClauseKind::SEHExcept;
+  Clause.FilterOrActionVA = 0x2000;
+  Clause.HandlerVA = Func.Entry + 0x10;
+  Clause.FilterValue = selectValue(parameter(0, NdType::makeInt(1, false)),
+                                   HighExpr::makeConst(1, Word->Size),
+                                   HighExpr::makeConst(0, Word->Size), Word);
+  Try.EHClauses.push_back(Clause);
+  Try.EHClauseBodies.push_back({Return});
+  Func.Body.push_back(std::move(Try));
+  const std::string Source = emitFunctions({Func});
+  const auto Filter =
+      llvm::StringRef(Source).rsplit("__except (").second.split(") {").first;
+  ASSERT_FALSE(Filter.empty()) << Source;
+  source_call_execution_test::checkSyntax(
+      "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+      "#define EXCEPTION_CONTINUE_SEARCH 0\n#define FILTER(arg0) (" +
+      Filter.str() +
+      ")\n_Static_assert(FILTER(256u) == 0 && FILTER(257u) == 1, \"filter "
+      "byte\");\n");
 }
 
 TEST(HighCIntegerWidths, TruthTestsPreserveTheOperandAndNormalizeValues) {

@@ -215,10 +215,9 @@ std::string HighCWriter::renderBinOp(const HighExpr &E, int ParentPrec) {
 std::string HighCWriter::renderBinOpOperands(const HighExpr &E, int ParentPrec,
                                              FoldedRelation Fold) {
   if (E.Op == NdOp::BOOL_XOR) {
-    constexpr int TruthPrec = getOpPrecedence(NdOp::INT_NOTEQUAL);
     return typedText(E,
-                     "((" + exprStr(*E.Operands[0], TruthPrec) + " != 0) != (" +
-                         exprStr(*E.Operands[1], TruthPrec) + " != 0))",
+                     "(!!(" + condStr(*E.Operands[0]) + ") != !!(" +
+                         condStr(*E.Operands[1]) + "))",
                      sizeof(int32_t), true);
   }
   if ((E.Op == NdOp::INT_AND || E.Op == NdOp::INT_OR) && E.Type &&
@@ -319,6 +318,14 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E, int ParentPrec,
   if (E.Op == NdOp::BOOL_OR || E.Op == NdOp::INT_OR)
     if (auto NonPositive = nonPositiveComparison(E))
       return renderBinOp(*NonPositive, ParentPrec);
+  if ((E.Op == NdOp::BOOL_AND || E.Op == NdOp::BOOL_OR) &&
+      E.Operands.size() == 2 && E.Operands[0] && E.Operands[1]) {
+    // These operators produce 0 or 1 in both a branch and a value.
+    std::string Result = condStrImpl(E);
+    if (getOpPrecedence(E.Op) <= ParentPrec)
+      Result = "(" + Result + ")";
+    return typedText(E, std::move(Result), sizeof(int32_t), true);
+  }
 
   // `(x << n) | (x >> (width-n))` is a rotate.  Print a rotate builtin
   // instead of the nested unsigned-shift casts Hex-Rays beats with `__ROL8__`.
@@ -388,18 +395,23 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E, int ParentPrec,
     return Result + ")";
   }
   if (E.Op == NdOp::SELECT && E.Operands.size() == 3) {
+    const std::string Condition = condStr(*E.Operands[0]);
     // C converts both arms to the type their printed types share, which an
     // unsigned local would make unsigned under a signed select: each integer
     // arm takes the select's own type.
     if (E.Type && E.Type->Kind == NdTypeKind::Int && !E.Type->IsEnum &&
-        E.Operands[1] && E.Operands[2])
+        E.Operands[1] && E.Operands[2]) {
+      // Even two byte or halfword arms produce an int in C.
+      const std::pair ArmType{E.Type->Size, E.Type->IsSigned};
+      const auto [Bytes, Signed] = commonArithmeticType(ArmType, ArmType);
       return typedText(E,
-                       "(" + exprStr(*E.Operands[0]) + " ? " +
+                       "(" + Condition + " ? " +
                            integerView(*E.Operands[1], E.Type, 3) + " : " +
                            integerView(*E.Operands[2], E.Type, 3) + ")",
-                       E.Type->Size, E.Type->IsSigned);
-    return "(" + exprStr(*E.Operands[0]) + " ? " + exprStr(*E.Operands[1]) +
-           " : " + exprStr(*E.Operands[2]) + ")";
+                       Bytes, Signed);
+    }
+    return "(" + Condition + " ? " + exprStr(*E.Operands[1]) + " : " +
+           exprStr(*E.Operands[2]) + ")";
   }
   auto atomicMemberAddr = [&]() -> std::string {
     if (E.SourceReturnSlotOffset) {
@@ -978,12 +990,6 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E, int ParentPrec,
   case NdOp::INT_SLESSEQUAL:
     NeedsSignedCast = true;
     OpSym = " <= ";
-    break;
-  case NdOp::BOOL_AND:
-    OpSym = " && ";
-    break;
-  case NdOp::BOOL_OR:
-    OpSym = " || ";
     break;
   case NdOp::FLOAT_ADD:
     OpSym = " + ";
