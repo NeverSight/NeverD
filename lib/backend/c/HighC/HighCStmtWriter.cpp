@@ -374,7 +374,7 @@ std::string HighCWriter::sehFilterValueText(const HighExpr &Value) {
            sehFilterValueText(*Value.Operands[1]);
   if (Value.Kind == ExprKind::BinOp && Value.Op == NdOp::SELECT &&
       Value.Operands.size() == 3 && Value.Operands[1] && Value.Operands[2])
-    return "(" + exprStr(*Value.Operands[0]) + ") ? (" +
+    return "(" + condStr(*Value.Operands[0]) + ") ? (" +
            sehFilterValueText(*Value.Operands[1]) + ") : (" +
            sehFilterValueText(*Value.Operands[2]) + ")";
   const HighExpr *Inner = unwrapIntegerView(&Value);

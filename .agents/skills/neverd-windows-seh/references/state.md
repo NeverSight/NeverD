@@ -37,6 +37,10 @@ Update this file when an item closes or a new gap is proven.
 | `ab7b687fa2` | Default LLVM C passes the emulated frame too; a Win64 home spill counts as an argument read where an SEH callback gets the frame (`sehCallbacksReceiveFrame`); filter adapters no longer turn off interprocedural passes (`registerOptNoneInterproceduralGuard`) |
 | `9165082406` | Default LLVM C makes protected accesses volatile where a callback reads the frame, as native IR does |
 
+An inline filter that selects between exception actions tests the recovered
+condition width. `SEHFilterSelectReadsOnlyItsConditionByte` checks a low-byte
+predicate on a wider argument at compile time.
+
 ## Open
 
 - `e3743938d5` admits no corpus function yet. Per function with the final
