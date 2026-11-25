@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+namespace neverd::macho_signature {
+struct SliceProfile;
+} // namespace neverd::macho_signature
+
 namespace neverd::macho_signing {
 
 struct ProcessRequest {
@@ -40,6 +44,11 @@ llvm::Error verifyStrict(llvm::StringRef Path,
 /// PageSize is in bytes; omission retains codesign's host default.
 llvm::Error adHocResign(llvm::StringRef Path, llvm::StringRef Identifier,
                         std::optional<uint64_t> PageSize = std::nullopt,
+                        const Operations &Ops = productionOperations());
+
+/// Preserve an inspected input slice's identifier and CodeDirectory page size.
+llvm::Error adHocResign(llvm::StringRef Path,
+                        const macho_signature::SliceProfile &Input,
                         const Operations &Ops = productionOperations());
 
 } // namespace neverd::macho_signing

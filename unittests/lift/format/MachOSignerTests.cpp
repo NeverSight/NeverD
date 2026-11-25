@@ -16,6 +16,7 @@
 #include "llvm/Support/Program.h"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -163,6 +164,14 @@ TEST(MachOSigner, InvalidPageGranularityNeverLaunchesCodesign) {
     EXPECT_NE(llvm::toString(std::move(Error)).find(kInvalidPage),
               std::string::npos);
   }
+  neverd::macho_signature::SliceProfile Input;
+  Input.Identifier = kIdentifier;
+  for (auto Exponent : {uint8_t{}, std::numeric_limits<uint8_t>::max()}) {
+    Input.CodeDirectoryPageSize = Exponent;
+    auto Error = adHocResign(kCandidate, Input, Ops);
+    ASSERT_TRUE(bool(Error));
+    llvm::consumeError(std::move(Error));
+  }
   EXPECT_EQ(Calls, 0u);
 }
 
@@ -203,6 +212,21 @@ TEST(MachOSigner, NativeCodesignRetainsExplicitPageGranularity) {
     EXPECT_EQ(Profile->Slices.front().CodeDirectoryPageSize, Page.Exponent);
     EXPECT_TRUE(
         neverd::macho_signature::isCanonicalCodesignAdHocOutput(*Profile));
+
+    File->reset();
+    Error = adHocResign(Candidate, Profile->Slices.front());
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    Error = verifyStrict(Candidate);
+    ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    File = llvm::MemoryBuffer::getFile(Candidate);
+    ASSERT_TRUE(bool(File));
+    auto Resigned = neverd::macho_signature::inspect(llvm::ArrayRef<uint8_t>(
+        reinterpret_cast<const uint8_t *>((*File)->getBufferStart()),
+        (*File)->getBufferSize()));
+    ASSERT_TRUE(bool(Resigned)) << llvm::toString(Resigned.takeError());
+    Error = neverd::macho_signature::validateTransactionallyAdHocResigned(
+        *Profile, *Resigned);
+    EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
   }
 #endif
 }

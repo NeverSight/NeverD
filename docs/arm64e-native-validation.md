@@ -85,9 +85,10 @@ authenticated call/catch/cleanup functions through the original addresses.
 `native_object_publication_qualified` names this additional native object
 contract. The matrix now requires twenty cases with no failures or skips.
 
-Publication passes the admitted input CodeDirectory page size explicitly to
-`codesign`. Host signing defaults can differ from the compiler linker's defaults;
-the transaction keeps its exact page-size postcondition. The signer regression
+Native object installation, whole-image publication and C API sanitization
+pass the inspected input slice's identifier and CodeDirectory page size to
+`codesign`. This preserves the page hashes' granularity when Apple's linker
+and signer choose different defaults. The signer regression
 uses real `codesign` to check both 4 KiB and 16 KiB signatures without executing
 the fixture.
 

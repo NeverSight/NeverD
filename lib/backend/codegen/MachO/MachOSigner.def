@@ -15,4 +15,7 @@ MACHO_SIGNER_TEXT(kPageSizeOption, "--pagesize")
 MACHO_SIGNER_TEXT(kInvalidPageSize,
                   "codesign page size must be zero or a power of two")
 
+MACHO_SIGNER_TEXT(kInvalidInputPageSize,
+                  "input CodeDirectory has an unsupported page-size exponent")
+
 #undef MACHO_SIGNER_TEXT

@@ -3,6 +3,7 @@
 #include "neverd/backend/codegen/MachO/MachOSigner.h"
 
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/codegen/MachO/MachOSignaturePolicy.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
@@ -154,6 +155,16 @@ llvm::Error adHocResign(llvm::StringRef Path, llvm::StringRef Identifier,
   }
   Arguments.push_back(Path.str());
   return execute("signing", std::move(Arguments), Ops);
+}
+
+llvm::Error adHocResign(llvm::StringRef Path,
+                        const macho_signature::SliceProfile &Input,
+                        const Operations &Ops) {
+  const auto PageBytes =
+      macho_signature::codeDirectoryPageBytes(Input.CodeDirectoryPageSize);
+  if (!PageBytes)
+    return signerError(kInvalidInputPageSize);
+  return adHocResign(Path, Input.Identifier, PageBytes, Ops);
 }
 
 } // namespace neverd::macho_signing
