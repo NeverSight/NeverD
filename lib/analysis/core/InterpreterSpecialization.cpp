@@ -158,6 +158,9 @@ struct Projection {
   /// Complete register equalities proved on each predecessor. A new node
   /// uses them to relate independently seeded object-relative offsets.
   std::set<std::pair<uint64_t, uint64_t>> ObjectRegisterEqualities;
+  /// Complete additive-inverse register pairs proved on every predecessor.
+  /// These preserve a negated frame pointer across independently seeded nodes.
+  std::set<std::pair<uint64_t, uint64_t>> InverseRegisterPairs;
   /// Complete values of nominated eight-byte entry-frame words. A missing
   /// domain is Top. Each predecessor proves its own values before a join can
   /// retain their union; no numeric entry-frame address is assumed.
@@ -559,6 +562,15 @@ bool intersect(Projection &Into, const Projection &Incoming,
        It != Into.ObjectRegisterEqualities.end();) {
     if (!Incoming.ObjectRegisterEqualities.count(*It)) {
       It = Into.ObjectRegisterEqualities.erase(It);
+      Changed = true;
+    } else {
+      ++It;
+    }
+  }
+  for (auto It = Into.InverseRegisterPairs.begin();
+       It != Into.InverseRegisterPairs.end();) {
+    if (!Incoming.InverseRegisterPairs.count(*It)) {
+      It = Into.InverseRegisterPairs.erase(It);
       Changed = true;
     } else {
       ++It;
@@ -2346,6 +2358,62 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
                                    Incoming, Out))
     return false;
   if (Root) {
+    // Discover exact inverse expressions without querying every register
+    // pair. On later edges, only previously retained pairs need a solver
+    // proof; an incomplete proof discards the relation.
+    if (!Out.AffineRegisters.empty()) {
+      std::map<SymRef, std::vector<uint64_t>> RegistersByValue;
+      for (uint64_t Register : AffineCandidates) {
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "inverse register projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const SymRef Value = State.read(SymSpace::Register, Register, 8);
+        if (!Ctx.isConst(Value))
+          RegistersByValue[Value].push_back(Register);
+      }
+      for (const auto &[Register, Pointer] : Out.AffineRegisters) {
+        if (!Pointer.isFrame())
+          continue;
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "inverse register projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const SymRef Value = State.read(SymSpace::Register, Register, 8);
+        const auto Other = RegistersByValue.find(Ctx.mkNeg(Value));
+        if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "inverse register projection node budget exhausted");
+        if (Other == RegistersByValue.end())
+          continue;
+        for (uint64_t Right : Other->second)
+          if (Register != Right)
+            Out.InverseRegisterPairs.insert(std::minmax(Register, Right));
+      }
+    }
+    for (const auto &[Left, Right] : Incoming.InverseRegisterPairs) {
+      if (Out.InverseRegisterPairs.count({Left, Right}))
+        continue;
+      if (Result.EvaluatedOperations >= Options.MaxOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "inverse register proof budget exhausted");
+      ++Result.EvaluatedOperations;
+      const auto Relation =
+          Ctx.mkEq(Ctx.mkAdd(State.read(SymSpace::Register, Left, 8),
+                             State.read(SymSpace::Register, Right, 8)),
+                   Ctx.mkConst(64, 0));
+      if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "inverse register proof node budget exhausted");
+      const auto Proof = enumerate(Ctx, Predicate, {Relation}, 1);
+      if (Failed)
+        return false;
+      if (Proof.Status == FiniteValueStatus::Complete &&
+          Proof.Tuples == std::vector<std::vector<uint64_t>>{{1}})
+        Out.InverseRegisterPairs.insert({Left, Right});
+    }
+  }
+  if (Root) {
     const auto Hints =
         Refinement.FrameWordHints.find({Successor.Address, Successor.Mode});
     if (Hints != Refinement.FrameWordHints.end())
@@ -3523,6 +3591,20 @@ bool Specializer::evaluate(int Id) {
     if (Ctx.numNodes() > Options.MaxSymbolicNodes)
       return fail(SpecializationStatus::BudgetExceeded,
                   "object register equality predicate node budget exhausted");
+  }
+  for (const auto &[Left, Right] : Draft.Incoming.InverseRegisterPairs) {
+    if (Result.EvaluatedOperations >= Options.MaxOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "inverse register predicate budget exhausted");
+    ++Result.EvaluatedOperations;
+    IncomingPredicate =
+        Ctx.mkAnd(IncomingPredicate,
+                  Ctx.mkEq(Ctx.mkAdd(State.read(SymSpace::Register, Left, 8),
+                                     State.read(SymSpace::Register, Right, 8)),
+                           Ctx.mkConst(64, 0)));
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "inverse register predicate node budget exhausted");
   }
   if (Options.EntryFrameBounds) {
     const auto &Bounds = *Options.EntryFrameBounds;

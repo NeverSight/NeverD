@@ -483,6 +483,46 @@ TEST(InterpreterSpecialization, BusinessLoopConvergesByWeakeningConstants) {
     EXPECT_EQ(execute(Result.Residual, {{8, Limit}}), Limit);
 }
 
+TEST(InterpreterSpecialization, NegatedFrameRegisterSurvivesJoin) {
+  for (bool BreakRelation : {false, true}) {
+    Provider P;
+    P.add(0x100,
+          {op(NdOp::INT_SUB, reg(48), {reg(32), constant(64)}),
+           op(NdOp::INT_SUB, reg(8), {constant(0), reg(48)}),
+           op(NdOp::COPY, reg(0), {reg(48)}),
+           op(NdOp::COND_BR, {}, {constant(0x110), reg(24, 1)})},
+          0x120);
+    P.add(0x110,
+          {op(NdOp::INT_ADD, reg(0), {reg(0), constant(8)}), jump(0x130)});
+    std::vector<LowOp> Other{op(NdOp::INT_ADD, reg(0), {reg(0), constant(16)})};
+    if (BreakRelation)
+      Other.push_back(op(NdOp::INT_ADD, reg(8), {reg(8), constant(40)}));
+    Other.push_back(jump(0x130));
+    P.add(0x120, std::move(Other));
+    P.add(0x130,
+          {op(NdOp::INT_ADD, reg(56), {reg(0), reg(8)}),
+           op(NdOp::INT_LESS, reg(64, 1), {reg(56), constant(32)}),
+           op(NdOp::COND_BR, {}, {constant(0x140), reg(64, 1)})},
+          0x150);
+    P.add(0x140, {op(NdOp::COPY, reg(0), {reg(56)}), ret()});
+    if (BreakRelation)
+      P.add(0x150, {op(NdOp::COPY, reg(0), {constant(99)}), ret()});
+
+    SpecializationOptions Options;
+    Options.FrameBaseRegister = SymRegisterRange{32, 8};
+    Options.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+    Options.ProveStoreFrameSeparation = true;
+    Options.MaxChainedTransfers = 0;
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    for (uint64_t Stack : {0x1000u, 0x2000u}) {
+      EXPECT_EQ(execute(Result.Residual, {{24, 1}, {32, Stack}}), 8u);
+      EXPECT_EQ(execute(Result.Residual, {{24, 0}, {32, Stack}}),
+                BreakRelation ? 99u : 16u);
+    }
+  }
+}
+
 TEST(InterpreterSpecialization, JoinsDoNotLeakFirstPredecessorConstant) {
   Provider P;
   P.add(0x100, {op(NdOp::COND_BR, {}, {constant(0x110), reg(8, 1)})}, 0x120);
