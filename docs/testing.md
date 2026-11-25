@@ -1338,6 +1338,11 @@ reserves where a byte store writes what a byte load reads, keeps r0 where a
 return hands it back as it came, and keeps r3 where the saved word is read
 back into r0 or the frame's address goes to a call, and r2 where a word load
 reads bytes no store overwrote.
+`ARM32_SavedRegisters.AHomeAHandlerRunOutOfLineReadsKeepsItsArgument` keeps
+r1's /Od home where a filter or a termination handler reads it through r7,
+or where a filter reads the establisher frame, and lets it go where a filter
+reads another word or none, where the parent overwrites the home before the
+protected range, or where a catch-all scope runs no handler.
 `MedVariadic.WindowsARM64VaListPointsAtTheFirstUnnamedRegister` takes a
 Windows ARM64 save area of one, two or three named registers whose first
 unnamed slot's address is kept in a local (`/O0`), formed in an argument

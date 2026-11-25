@@ -5351,8 +5351,21 @@ enters knowing what each block it guards had written when it began. A join
 nothing reads takes a frame address nowhere, as the frame pointer's at an
 epilogue that pops the register. The stores that save such a register go, and
 its incoming value with them once nothing reads it, so neither C route writes
-an unknown value into the slot. Call recovery still adds a register a callee
-reads as a forwarded argument. The save of r3 gave four parameters to every
+an unknown value into the slot. A filter or a termination handler the runtime
+runs out of line reads the frame too, through the frame registers the unwinder
+restores (`SEHFuncletRegisters`), at those registers plus constants, over the
+body the pipeline lifted, whose switch tables it resolved, or else decoded: a
+byte one reads is read anywhere in its protected range where no store has
+overwritten it, as a load there would. A register restored to what the
+function was entered with addresses its caller's memory, and a frame address
+may go in an argument register to a local unwind, which runs the parent's own
+handlers. Where a handler may reach the frame some other way, moving a frame
+address anywhere else or using the establisher frame or another register it
+was entered with for anything but a save on its own stack, or the function
+runs C++'s catch and unwind funclets or an unknown routine's, no register is
+only saved. MSVC ARM /Od homes a parameter only its filter reads, as
+xframe_eh_dll's `filter(q)` does, and the function took no parameter for it.
+Call recovery still adds a register a callee reads as a forwarded argument. The save of r3 gave four parameters to every
 function that pushes an even count that way: in the EH corpus's ARM images
 890 functions declared parameters their code never reads and 298 do, and
 their calls printed 1,516 placeholders in HighC and print 528, 5,465 in LLVM C

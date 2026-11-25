@@ -13,15 +13,30 @@
 /// and its /Od code homes argument registers it never reads back.  Such a
 /// register's incoming value reaches nothing the function does, nor do the
 /// stores that save it, which go.  A register a call reads is a forwarded
-/// argument, which call recovery adds where the callee takes it.
+/// argument, which call recovery adds where the callee takes it.  A filter
+/// or a termination handler the runtime runs out of line reads its parent's
+/// frame too, through the frame registers the unwinder restores, anywhere in
+/// its protected range: a byte one reads that no store has overwritten there
+/// is read.  Where one may reach the frame some other way, or the function
+/// has C++'s catch and unwind funclets or an unknown routine's, no register
+/// is only saved.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "../../pass/MedEntryStackOffsets.h"
 
+#include "neverd/Common.h"
+#include "neverd/Limits.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/SEHLocalUnwindProtocol.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/lift/ARM/ARMRegs.h"
+#include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
+#include "neverd/loader/ExceptionWindowsEH.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -30,6 +45,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <set>
 #include <utility>
@@ -55,6 +71,398 @@ bool carries(const MedOp &Op) {
 bool isCall(const MedOp &Op) {
   return Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
 }
+
+/// What a handler the runtime runs out of line reads of its parent's frame:
+/// the bytes, by entry-SP displacement, and the protected range in which it
+/// may run.
+struct HandlerRead {
+  ExceptionAddressRange Range;
+  int64_t Begin = 0;
+  int64_t End = 0;
+};
+
+/// Whether \p Op calls a runtime local unwind routine through its import,
+/// which takes the frame to run the parent's own termination handlers.
+bool callsLocalUnwind(const BinaryImage &Img, const LowOp &Op) {
+  if (Op.Opcode != NdOp::CALL || !Op.NumInputs || !Op.Inputs[0].isConst())
+    return false;
+  const Import *Imported =
+      Img.findImportStubAt(static_cast<va_t>(Op.Inputs[0].Offset));
+  return Imported &&
+         coff_loader::isX86ContinuationRuntimeProvider(Imported->Module) &&
+         isLowSEHLocalUnwindRoutine(stripLeadingUnderscores(Imported->Name));
+}
+
+/// What the handler the runtime runs out of line at \p Entry, in the
+/// protected range \p Range, reads of the frame of \p Parent, appended to
+/// \p Reads.  It reaches that frame through the callee-saved registers the
+/// unwinder restores to frame addresses (MedFunc::SEHFuncletRegisters), by
+/// loads and stores at those registers plus constants, which nothing writes;
+/// a register the unwinder restores to what the function was entered with
+/// addresses its caller's memory at nonnegative distances, and one restored
+/// to a constant any memory but the frame.  False where the handler may
+/// reach the frame some other way: a frame address going anywhere but such
+/// a load's or store's address or, in an argument register, to a local
+/// unwind, which runs the parent's own termination handlers; or a value the
+/// runtime or the parent left in a register (the establisher frame, another
+/// argument register, a callee-saved register restored to no known value)
+/// used for anything but a save on the handler's own stack, read back from
+/// there as the same.  A call takes only the arguments the handler places,
+/// which no source can make the establisher frame.
+bool handlerFrameReads(const MedFunc &Parent, const BinaryImage &Img,
+                       const std::map<va_t, const LowFunc *> *Bodies,
+                       va_t Entry, const ExceptionAddressRange &Range,
+                       std::vector<HandlerRead> &Reads) {
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  const uint64_t Word = TRI.PointerSize;
+  const auto Base = [&](uint64_t Offset) { return Offset - Offset % Word; };
+  const uint64_t SP = Base(TRI.StackPointer);
+  // The callee-saved registers the unwinder restores: to a frame address,
+  // or to a value addressing what the frame is not.
+  enum class Addresses : uint8_t { Caller, Anything };
+  std::map<uint64_t, int64_t> Frame;
+  std::map<uint64_t, Addresses> Elsewhere;
+  if (const auto Found = Parent.SEHFuncletRegisters.find(Entry);
+      Found != Parent.SEHFuncletRegisters.end())
+    for (const auto &[Register, Value] : Found->second)
+      switch (Value.ValueKind) {
+      case SEHFuncletRegisterValue::Kind::EntryStackOffset:
+        Frame.emplace(Base(Register), Value.Offset);
+        break;
+      case SEHFuncletRegisterValue::Kind::EntryRegister:
+      case SEHFuncletRegisterValue::Kind::EntryArgument:
+        Elsewhere.emplace(Base(Register), Addresses::Caller);
+        break;
+      case SEHFuncletRegisterValue::Kind::Constant:
+        Elsewhere.emplace(Base(Register), Addresses::Anything);
+        break;
+      }
+  // What the handler is entered with beside the exception pointers or the
+  // abnormal flag in the first argument register: the other argument
+  // registers, the scratch register, and the callee-saved registers no
+  // frame address is known for.
+  std::set<uint64_t> Left;
+  const llvm::ArrayRef<uint64_t> Arguments =
+      TRI.integerParamRegs(BinaryFormat::COFF);
+  for (size_t I = 1; I < Arguments.size(); ++I)
+    Left.insert(Base(Arguments[I]));
+  Left.insert(Base(armreg::R12));
+  for (uint64_t Register = armreg::R4; Register <= armreg::R11;
+       Register += Word)
+    if (!Frame.count(Base(Register)) && TRI.isCalleeSaveReg(Register))
+      Left.insert(Base(Register));
+
+  // The handler's code, and where each part goes: the blocks of the body
+  // the pipeline lifted, whose tables it resolved, or else its instructions,
+  // each decoded once.
+  struct Unit {
+    std::vector<LowOp> Ops;
+    std::vector<va_t> Succs;
+  };
+  std::map<va_t, Unit> Units;
+  std::vector<va_t> Work;
+  const LowFunc *Body = nullptr;
+  if (Bodies)
+    if (const auto Found = Bodies->find(Entry); Found != Bodies->end())
+      Body = Found->second;
+  if (Body && !Body->Blocks.empty() &&
+      Body->Blocks.front().StartAddr == Entry) {
+    const auto StartOf = [&](int Id) -> std::optional<va_t> {
+      if (Id < 0 || static_cast<size_t>(Id) >= Body->Blocks.size())
+        return std::nullopt;
+      return Body->Blocks[Id].StartAddr;
+    };
+    for (const LowBlock &Block : Body->Blocks) {
+      Unit U;
+      U.Ops = Block.Ops;
+      for (const LowOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INDIR_BR &&
+            llvm::none_of(Body->JumpTables, [&](const JumpTable &Table) {
+              return Table.InsnAddr == Op.Addr && !Table.AnalysisOnly;
+            }))
+          return false;
+      for (const int Succ : Block.Succs) {
+        const auto Start = StartOf(Succ);
+        if (!Start)
+          return false;
+        U.Succs.push_back(*Start);
+      }
+      for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs) {
+        const auto Start = StartOf(Edge.BlockId);
+        if (!Start)
+          return false;
+        U.Succs.push_back(*Start);
+      }
+      Units.emplace(Block.StartAddr, std::move(U));
+    }
+  } else {
+    Decoder Dec;
+    if (!Dec.init(Img))
+      return false;
+    Work.push_back(Entry);
+    size_t Budget = limits::kMaxSEHEstablisherFrameWork;
+    while (!Work.empty()) {
+      const va_t At = Work.back();
+      Work.pop_back();
+      if (Units.count(At))
+        continue;
+      if (!Budget--)
+        return false;
+      const Segment *Seg = Img.getSegmentFor(At);
+      if (!Seg || At - Seg->VA >= Seg->Data.size() || !Dec.selectMode(Img, At))
+        return false;
+      const size_t Offset = static_cast<size_t>(At - Seg->VA);
+      DecodedExecutionUnit Decoded;
+      const int Size = Dec.decodeUnitForLift(
+          Seg->Data.data() + Offset, Seg->Data.size() - Offset, At, Decoded);
+      if (Size <= 0 || Decoded.HasDelaySlot)
+        return false;
+      Unit U;
+      try {
+        Dec.liftUnitToLow(Decoded, U.Ops);
+      } catch (const UnliftedInstruction &) {
+        return false;
+      }
+      bool FallsThrough = true;
+      for (const LowOp &Op : U.Ops) {
+        if (Op.Opcode == NdOp::RETURN) {
+          FallsThrough = false;
+        } else if (Op.Opcode == NdOp::INDIR_BR) {
+          return false;
+        } else if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
+          if (!Op.NumInputs || !Op.Inputs[0].isConst())
+            return false;
+          U.Succs.push_back(Op.Inputs[0].Offset);
+          if (Op.Opcode == NdOp::BRANCH)
+            FallsThrough = false;
+        }
+      }
+      if (FallsThrough)
+        U.Succs.push_back(At + static_cast<va_t>(Size));
+      for (const va_t Succ : U.Succs)
+        Work.push_back(Succ);
+      Units.emplace(At, std::move(U));
+    }
+  }
+  if (!Units.count(Entry))
+    return false;
+
+  // On some way to each instruction: what may hold a value the handler was
+  // entered with, in a register or a word of its own stack, and which
+  // register may hold a frame address; on every way, which restored register
+  // still holds what it was restored to; and where the handler's own stack
+  // pointer stands.
+  struct State {
+    int64_t Stack = 0;
+    std::set<uint64_t> Registers;
+    std::set<int64_t> Slots;
+    std::set<uint64_t> FrameHeld;
+    std::set<uint64_t> Restored;
+  };
+  std::set<uint64_t> Restored;
+  for (const auto &[Register, Kind] : Elsewhere)
+    Restored.insert(Register);
+  std::map<va_t, State> In;
+  In.emplace(Entry, State{0, Left, {}, {}, Restored});
+  Work.assign(1, Entry);
+  while (!Work.empty()) {
+    const va_t At = Work.back();
+    Work.pop_back();
+    State S = In.at(At);
+    // Within the unit: temporaries holding a frame address, an address on
+    // the handler's own stack, or one a restored register makes elsewhere,
+    // with how far it is from that register.
+    std::map<uint64_t, int64_t> FrameTemps, StackTemps;
+    std::map<uint64_t, std::pair<Addresses, int64_t>> ElsewhereTemps;
+    const auto FrameAt = [&](const NdVar &V) -> std::optional<int64_t> {
+      if (V.isTemp()) {
+        const auto Found = FrameTemps.find(V.Offset);
+        return Found == FrameTemps.end() ? std::nullopt
+                                         : std::optional(Found->second);
+      }
+      if (V.isReg() && V.Size == Word)
+        if (const auto Found = Frame.find(Base(V.Offset)); Found != Frame.end())
+          return Found->second;
+      return std::nullopt;
+    };
+    const auto StackAt = [&](const NdVar &V) -> std::optional<int64_t> {
+      if (V.isTemp()) {
+        const auto Found = StackTemps.find(V.Offset);
+        return Found == StackTemps.end() ? std::nullopt
+                                         : std::optional(Found->second);
+      }
+      if (V.isReg() && Base(V.Offset) == SP)
+        return S.Stack;
+      return std::nullopt;
+    };
+    const auto ElsewhereAt =
+        [&](const NdVar &V) -> std::optional<std::pair<Addresses, int64_t>> {
+      if (V.isTemp()) {
+        const auto Found = ElsewhereTemps.find(V.Offset);
+        return Found == ElsewhereTemps.end() ? std::nullopt
+                                             : std::optional(Found->second);
+      }
+      if (V.isReg() && V.Size == Word && S.Restored.count(Base(V.Offset)))
+        if (const auto Found = Elsewhere.find(Base(V.Offset));
+            Found != Elsewhere.end())
+          return std::pair(Found->second, int64_t{0});
+      return std::nullopt;
+    };
+    const auto Step = [](const LowOp &Op) -> std::optional<int64_t> {
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
+        return 0;
+      if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+          Op.NumInputs == 2 && Op.Inputs[1].isConst())
+        return (Op.Opcode == NdOp::INT_ADD ? 1 : -1) *
+               static_cast<int64_t>(Op.Inputs[1].Offset);
+      return std::nullopt;
+    };
+    for (const LowOp &Op : Units.at(At).Ops) {
+      const bool Memory = Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE;
+      std::optional<int64_t> Slot;
+      if (Memory && Op.NumInputs >= 1)
+        Slot = StackAt(Op.Inputs[0]);
+      const std::optional<int64_t> By = Step(Op);
+      bool LeftValue = false;
+      bool HoldsFrame = false;
+      // What the op's temporary output holds, from its inputs.
+      std::optional<int64_t> NewFrame, NewStack;
+      std::optional<std::pair<Addresses, int64_t>> NewElsewhere;
+      for (unsigned I = 0; I < Op.NumInputs; ++I) {
+        const NdVar &Input = Op.Inputs[I];
+        if (Input.isConst())
+          continue;
+        if (const auto Frame = FrameAt(Input)) {
+          if (Memory && I == 0) {
+            if (Op.Opcode == NdOp::LOAD)
+              Reads.push_back({Range, *Frame, *Frame + Op.Output.Size});
+            continue;
+          }
+          if (By && I == 0) {
+            if (Op.Output.isTemp())
+              NewFrame = *Frame + *By;
+            else if (Op.Output.isReg())
+              HoldsFrame = true;
+            else
+              return false;
+            continue;
+          }
+          return false;
+        }
+        if (const auto Other = ElsewhereAt(Input)) {
+          const bool Reach = Other->first == Addresses::Anything;
+          if (Memory && I == 0 && (Reach || Other->second >= 0))
+            continue;
+          if (By && I == 0 && Op.Output.isTemp()) {
+            NewElsewhere = std::pair(Other->first, Other->second + *By);
+            continue;
+          }
+        }
+        if (Input.isReg() && S.FrameHeld.count(Base(Input.Offset)))
+          return false;
+        // A value the handler was entered with goes only to its own stack.
+        if (Input.isReg() && S.Registers.count(Base(Input.Offset))) {
+          if (Op.Opcode == NdOp::STORE && I == 1 && Slot) {
+            LeftValue = true;
+            continue;
+          }
+          return false;
+        }
+      }
+      // What the op makes of the stack pointer.
+      if (Op.Output.isTemp() && By && Op.NumInputs >= 1)
+        if (const auto Stack = StackAt(Op.Inputs[0]))
+          NewStack = *Stack + *By;
+      if (Op.Output.isTemp()) {
+        const uint64_t Out = Op.Output.Offset;
+        FrameTemps.erase(Out);
+        StackTemps.erase(Out);
+        ElsewhereTemps.erase(Out);
+        if (NewFrame)
+          FrameTemps[Out] = *NewFrame;
+        if (NewStack)
+          StackTemps[Out] = *NewStack;
+        if (NewElsewhere)
+          ElsewhereTemps[Out] = *NewElsewhere;
+      }
+      if (Op.Opcode == NdOp::STORE && Slot) {
+        for (int64_t Byte = *Slot; Byte < *Slot + Op.Inputs[1].Size; ++Byte)
+          if (LeftValue)
+            S.Slots.insert(Byte);
+          else
+            S.Slots.erase(Byte);
+      }
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        // A frame address goes in an argument register only to a local
+        // unwind.
+        if (llvm::any_of(
+                Arguments,
+                [&](uint64_t R) { return S.FrameHeld.count(Base(R)) != 0; }) &&
+            !callsLocalUnwind(Img, Op))
+          return false;
+        for (const uint64_t Argument : Arguments) {
+          S.Registers.erase(Base(Argument));
+          S.FrameHeld.erase(Base(Argument));
+        }
+        S.Registers.erase(Base(armreg::R12));
+        S.FrameHeld.erase(Base(armreg::R12));
+      }
+      if (Op.Opcode == NdOp::RETURN &&
+          llvm::any_of(S.FrameHeld,
+                       [&](uint64_t R) { return TRI.isCalleeSaveReg(R); }))
+        return false;
+      if (Op.Output.isReg()) {
+        const uint64_t Out = Base(Op.Output.Offset);
+        if (Frame.count(Out))
+          return false;
+        S.Restored.erase(Out);
+        if (Out == SP) {
+          const auto Stack =
+              Op.NumInputs ? StackAt(Op.Inputs[0]) : std::optional<int64_t>();
+          if (!Stack || !By)
+            return false;
+          S.Stack = *Stack + *By;
+        } else {
+          // A load of a word the handler saved there is that value again.
+          bool Reloaded = false;
+          if (Op.Opcode == NdOp::LOAD && Slot)
+            for (int64_t Byte = *Slot; Byte < *Slot + Op.Output.Size; ++Byte)
+              Reloaded |= S.Slots.count(Byte) != 0;
+          if (Reloaded)
+            S.Registers.insert(Out);
+          else
+            S.Registers.erase(Out);
+          if (HoldsFrame)
+            S.FrameHeld.insert(Out);
+          else
+            S.FrameHeld.erase(Out);
+        }
+      }
+    }
+    for (const va_t Succ : Units.at(At).Succs) {
+      const auto [It, Inserted] = In.try_emplace(Succ, S);
+      if (Inserted) {
+        Work.push_back(Succ);
+        continue;
+      }
+      State &Next = It->second;
+      if (Next.Stack != S.Stack)
+        return false;
+      const size_t Before = Next.Registers.size() + Next.Slots.size() +
+                            Next.FrameHeld.size() + Next.Restored.size();
+      Next.Registers.insert(S.Registers.begin(), S.Registers.end());
+      Next.Slots.insert(S.Slots.begin(), S.Slots.end());
+      Next.FrameHeld.insert(S.FrameHeld.begin(), S.FrameHeld.end());
+      for (auto R = Next.Restored.begin(); R != Next.Restored.end();)
+        R = S.Restored.count(*R) ? std::next(R) : Next.Restored.erase(R);
+      if (Next.Registers.size() + Next.Slots.size() + Next.FrameHeld.size() +
+              Next.Restored.size() !=
+          Before)
+        Work.push_back(Succ);
+    }
+  }
+  return true;
+}
 } // namespace
 
 namespace {
@@ -62,10 +470,35 @@ namespace {
 /// them in \p Saves.
 std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
                              BinaryFormat Format, llvm::ArrayRef<uint64_t> Regs,
+                             const BinaryImage *Image,
+                             const std::map<va_t, const LowFunc *> *Bodies,
                              std::vector<const MedOp *> &SavesOut) {
   std::set<uint64_t> Result;
   if (Func.Blocks.empty() || Regs.empty())
     return Result;
+  // What the handlers the runtime runs out of line read of the frame.
+  std::vector<HandlerRead> HandlerReads;
+  if (const auto &EH = Func.ExceptionMetadata) {
+    switch (EH->Personality) {
+    case ExceptionPersonality::Unknown:
+    case ExceptionPersonality::CxxFrameHandler3:
+    case ExceptionPersonality::CxxFrameHandler4:
+    case ExceptionPersonality::GSHandlerCheckEH:
+    case ExceptionPersonality::GSHandlerCheckEH4:
+      return Result;
+    default:
+      break;
+    }
+    if (EH->Cxx)
+      return Result;
+    if (EH->SEH)
+      for (const SEHScopeRecord &Scope : EH->SEH->Scopes)
+        if (Scope.Kind != SEHScopeKind::CatchAll &&
+            (!Image ||
+             !handlerFrameReads(Func, *Image, Bodies, Scope.FilterOrFinallyVA,
+                                Scope.GuardedRange, HandlerReads)))
+          return Result;
+  }
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   MedEntryStackOffsets Offsets(Func, TargetArch, Format);
   const auto FrameOffset = [&](const MedVar &V) -> std::optional<int64_t> {
@@ -283,7 +716,7 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
       return false;
     const uint32_t All =
         Width == 32 ? ~uint32_t{0} : (uint32_t{1} << Width) - 1;
-    const auto Bytes = [&](int64_t Lo, int64_t Hi) -> uint32_t {
+    const auto BytesOf = [&](int64_t Lo, int64_t Hi) -> uint32_t {
       Lo = std::max(Lo, Begin);
       Hi = std::min(Hi, End);
       if (Lo >= Hi)
@@ -299,20 +732,27 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
       return false;
     const size_t First = static_cast<size_t>(SaveAt - Entry.Ops.begin()) + 1;
     // What each block's ops write of the bytes, and whether a taken load
-    // reads one before it is written, from what the block enters with.
+    // reads one before it is written, from what the block enters with, or a
+    // handler run out of line may read one where an op of its range runs.
     const auto Walk = [&](size_t B, uint32_t Mask,
                           bool Check) -> std::optional<uint32_t> {
       const MedBlock &Block = Func.Blocks[B];
       for (size_t I = B == 0 ? First : 0; I < Block.Ops.size(); ++I) {
         const MedOp &Op = Block.Ops[I];
+        if (Check)
+          for (const HandlerRead &Read : HandlerReads) {
+            const uint32_t Bytes = BytesOf(Read.Begin, Read.End);
+            if ((Mask & Bytes) != Bytes && Read.Range.contains(Op.Addr))
+              return std::nullopt;
+          }
         if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2)
           if (const auto Offset = FrameOffset(Op.Inputs[0]))
-            Mask |= Bytes(*Offset, *Offset + Op.Inputs[1].Size);
+            Mask |= BytesOf(*Offset, *Offset + Op.Inputs[1].Size);
         if (Check && Op.Opcode == NdOp::LOAD)
           if (const auto Found = LoadIndex.find(&Op);
               Found != LoadIndex.end()) {
             const FrameLoad &Load = Loads[Found->second];
-            const uint32_t Read = Bytes(Load.Begin, Load.End);
+            const uint32_t Read = BytesOf(Load.Begin, Load.End);
             if (!Load.Unread && (Mask & Read) != Read)
               return std::nullopt;
           }
@@ -364,6 +804,13 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
   for (const Saved &S : Stored) {
     if (S.Register == TRI.IntReturnReg && MayReturnIncoming(S.Register))
       continue;
+    // A handler run out of line reads a slot of its own.
+    const bool HandlerReadsIt =
+        llvm::any_of(S.Slots, [&](const std::pair<int64_t, int64_t> &Slot) {
+          return llvm::any_of(HandlerReads, [&](const HandlerRead &Read) {
+            return Read.Begin < Slot.second && Slot.first < Read.End;
+          });
+        });
     const bool Unread = llvm::all_of(Loads, [&](const FrameLoad &Load) {
       return Load.Unread ||
              llvm::none_of(
@@ -371,9 +818,10 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
                    return Load.Begin < Slot.second && Slot.first < Load.End;
                  });
     });
-    if (Unread || (S.Saves.size() == 1 &&
-                   OverwrittenBeforeRead(S.Saves.front(), S.Slots.front().first,
-                                         S.Slots.front().second))) {
+    if ((Unread && !HandlerReadsIt) ||
+        (S.Saves.size() == 1 &&
+         OverwrittenBeforeRead(S.Saves.front(), S.Slots.front().first,
+                               S.Slots.front().second))) {
       Result.insert(S.Register);
       SavesOut.insert(SavesOut.end(), S.Saves.begin(), S.Saves.end());
     }
@@ -382,13 +830,13 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
 }
 } // namespace
 
-std::set<uint64_t>
-dropOnlySavedArgumentRegisters(MedFunc &Func, Arch TargetArch,
-                               BinaryFormat Format,
-                               llvm::ArrayRef<uint64_t> Regs) {
+std::set<uint64_t> dropOnlySavedArgumentRegisters(
+    MedFunc &Func, Arch TargetArch, BinaryFormat Format,
+    llvm::ArrayRef<uint64_t> Regs, const BinaryImage *Image,
+    const std::map<va_t, const LowFunc *> *Bodies) {
   std::vector<const MedOp *> Saves;
   std::set<uint64_t> Registers =
-      onlySaved(Func, TargetArch, Format, Regs, Saves);
+      onlySaved(Func, TargetArch, Format, Regs, Image, Bodies, Saves);
   if (Saves.empty())
     return Registers;
   // What the saves store is no value the function or anything after it

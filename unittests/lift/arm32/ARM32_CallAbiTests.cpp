@@ -621,6 +621,73 @@ TEST(ARM32_SavedRegisters, AnAlignmentPushOfR3TakesNoArgument) {
   EXPECT_NE(Signature("h2").find("arg2"), std::string::npos) << C;
 }
 
+// A filter or a termination handler the runtime runs out of line reads its
+// parent's frame through the frame register the unwinder restores: a home
+// one reads keeps its argument, `__except (q == 3)` reading the q /Od homed,
+// and one that may reach the frame another way, through the establisher
+// frame, keeps every saved register.  A filter that reads neither, or reads
+// another word of the frame, or a home the parent overwrites before the
+// protected range, or a catch-all scope, which runs no handler, lets the
+// home go.
+//   k:       push {r0, r1}; push {r7, lr}; mov r7, sp;
+//            [movs r3, #5; str r3, [r7, #12]]; movs r3, #1; str r3, [r0];
+//            nop | ldr r7, [sp], #4; ldr pc, [sp], #12
+//   handler: ldr r0, [r7, #12] (the home of r1), ldr r0, [r1],
+//            movs r0, #1 or ldr r0, [r7]; bx lr
+TEST(ARM32_SavedRegisters, AHomeAHandlerRunOutOfLineReadsKeepsItsArgument) {
+  struct Case {
+    SEHScopeKind Kind;
+    std::vector<uint8_t> Handler;
+    bool Overwritten;
+    bool Kept;
+  };
+  const Case Cases[] = {
+      {SEHScopeKind::Filter, {0xF8, 0x68}, false, true},
+      {SEHScopeKind::Finally, {0xF8, 0x68}, false, true},
+      {SEHScopeKind::Filter, {0x08, 0x68}, false, true},
+      {SEHScopeKind::Filter, {0x01, 0x20}, false, false},
+      {SEHScopeKind::Filter, {0x38, 0x68}, false, false},
+      {SEHScopeKind::Filter, {0xF8, 0x68}, true, false},
+      {SEHScopeKind::CatchAll, {0xF8, 0x68}, false, false},
+  };
+  for (const Case &Each : Cases) {
+    SCOPED_TRACE(testing::Message()
+                 << static_cast<int>(Each.Kind) << " " << int(Each.Handler[0])
+                 << " " << Each.Overwritten);
+    std::vector<uint8_t> Code = {0x03, 0xB4, 0x80, 0xB5, 0x6F, 0x46};
+    if (Each.Overwritten)
+      Code.insert(Code.end(), {0x05, 0x23, 0xFB, 0x60});
+    const va_t Guarded = 0x401000 + Code.size();
+    Code.insert(Code.end(), {0x01, 0x23, 0x03, 0x60, 0x00, 0xBF});
+    const va_t Continuation = 0x401000 + Code.size();
+    Code.insert(Code.end(), {0x5D, 0xF8, 0x04, 0x7B, 0x5D, 0xF8, 0x0C, 0xFB});
+    const va_t Handler = 0x401000 + Code.size();
+    Code.insert(Code.end(), Each.Handler.begin(), Each.Handler.end());
+    Code.insert(Code.end(), {0x70, 0x47});
+    BinaryImage Img = thumbImage(std::move(Code), {{0x401000, "k"}});
+    ExceptionFunction EH;
+    EH.CodeRange = {0x401000, Handler};
+    EH.Encoding = ExceptionEncoding::ARM32Unpacked;
+    EH.Personality = ExceptionPersonality::CSpecificHandler;
+    EH.SEH.emplace();
+    SEHScopeRecord Scope;
+    Scope.GuardedRange = {Guarded, Continuation};
+    Scope.Kind = Each.Kind;
+    Scope.FilterOrFinallyVA = Each.Kind == SEHScopeKind::CatchAll ? 0 : Handler;
+    Scope.HandlerVA =
+        Each.Kind == SEHScopeKind::Finally ? Handler : Continuation;
+    EH.SEH->Scopes.push_back(Scope);
+    Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+    Img.ExceptionMetadata.rebuildIndex();
+    NullDebugContext Debug;
+    const std::string C = thumbHighC(Img, Debug);
+    const std::string Definition = definitionOf(C, "k");
+    const std::string Signature = Definition.substr(0, Definition.find('{'));
+    EXPECT_NE(Signature.find("arg0"), std::string::npos) << C;
+    EXPECT_EQ(Signature.find("arg1") != std::string::npos, Each.Kept) << C;
+  }
+}
+
 // AAPCS passes a 64-bit integer in an even-odd register pair, its low word
 // first.  `__stdio_common_vfprintf(unsigned __int64 options, FILE *stream,
 // ...)` takes the options in r0:r1 and the stream in r2: matched to its
