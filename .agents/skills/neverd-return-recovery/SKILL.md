@@ -51,6 +51,14 @@ The GP recovery lives in [PICGlobalPointer.cpp](../../../lib/ir/med/lower/MIPS/P
 
 ## Verify a change
 
+When timing source return recovery, enable
+`setSourceReturnProjectionEnabled(true)` and time `LowToMedConverter::convert`
+on the same decoded function. Settle the return contract outside that interval
+and compare the result type and argument count on both C routes. Time byte
+demand and the dead-code pass it triggers separately from register repair,
+SSA construction and flag folding. An older timing with a different signature
+measures a different result.
+
 For mixed-width seeds, swap which predecessor writes the whole scratch
 register and which writes its low word. Check the low and high exit bytes
 separately, including zero trips. Track which bytes each predecessor defines
