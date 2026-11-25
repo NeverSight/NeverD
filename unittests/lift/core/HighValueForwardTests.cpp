@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -954,6 +955,66 @@ int main(void) {
     if (tested(x) != (x < 10 ? 1 : 2) || calls != 1) return 1;
     if (tested_against_local(x) != 1 || calls != 2) return 2;
   }
+  return 0;
+}
+)");
+}
+
+TEST(HighValueForward, LargeFunctionsFoldLocalUsesAndKeepLoopSnapshots) {
+  auto Probe = [] {
+    auto Call = HighExpr::makeCall("large_probe", 0x2000, {input()});
+    Call->Type = NdType::makeInt(8, true);
+    return Call;
+  };
+  auto Negative = [](int Id) {
+    return op(NdOp::INT_SLESS, local(Id), constant(0), true);
+  };
+  HighStmt Break;
+  Break.Kind = StmtKind::Break;
+  HighFunc F =
+      function("large_test", {assign(local(1), Probe()),
+                              when(Negative(1), {result(constant(0))}),
+                              assign(local(2), Probe()),
+                              loop(Negative(2), {Break}), result(local(2))});
+  F.Body.insert(F.Body.begin(), limits::kMaxValueForwardSites, HighStmt{});
+  const std::string Source = emit({F});
+  EXPECT_NE(Source.find("if (large_probe(arg0) < 0)"), std::string::npos);
+  EXPECT_NE(Source.find("t2 = large_probe(arg0);"), std::string::npos);
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t large_probe(uint64_t x) { ++calls; return (int64_t)x - 2; }
+int main(void) {
+  for (uint64_t x = 0; x < 6; ++x) {
+    calls = 0;
+    if (large_test(x) != (x < 2 ? 0 : x - 2)) return 1;
+    if (calls != (x < 2 ? 1u : 2u)) return 2;
+  }
+  return 0;
+}
+)");
+}
+
+TEST(HighValueForward, LargeFunctionKeepsACaptureBeforeABackwardTarget) {
+  auto Probe = HighExpr::makeCall("label_probe", 0x2400, {input()});
+  Probe->Type = NdType::makeInt(8, true);
+  auto Test = when(op(NdOp::INT_SLESS, local(9), constant(0), true),
+                   {result(constant(13))});
+  Test.Addr = 0x1020;
+  HighStmt Back;
+  Back.Kind = StmtKind::Goto;
+  Back.GotoTarget = Test.Addr;
+  auto Again = when(input(), {assign(input(), constant(0)), Back});
+  HighFunc F = function("large_backedge", {assign(local(9), Probe), Test, Again,
+                                           result(input())});
+  F.Body.insert(F.Body.begin(), limits::kMaxValueForwardSites, HighStmt{});
+  const std::string Source = emit({F});
+  EXPECT_NE(Source.find("t9 = label_probe(arg0);"), std::string::npos);
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t label_probe(uint64_t x) { ++calls; return (int64_t)x; }
+int main(void) {
+  if (large_backedge(1) != 0 || calls != 1) return 1;
+  if (large_backedge(UINT64_MAX) != 13 || calls != 2) return 2;
   return 0;
 }
 )");
