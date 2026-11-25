@@ -46,8 +46,24 @@ loaded from the same descriptor. A relocated function-pointer variable keeps
 its writable storage and starts at the rebuilt function's native descriptor.
 A linked executable can retain this evidence with `--emit-relocs`. A call
 through an unrelocated descriptor-valued initializer reports the missing
-relocation. ELFv1 PLT jump slots, direct calls across different TOCs and
-ambiguous entry contexts require additional binding evidence.
+relocation.
+
+For an ELFv1 call through the PLT, the loader pairs the executable stub with
+the inline descriptor named by a runtime `R_PPC64_JMP_SLOT` relocation. The
+stub's entry, TOC and optional static-chain loads must refer to the same slot.
+For the GNU thread-safe form, the fallback branch must reach that slot's
+`.glink` entry. HighC and LLVM emit a call to the imported function, so the
+rebuilt program uses its native linker's binding and TOC switch.
+GNU ld can also move the r2 save into the caller's prologue with
+`R_PPC64_TOCSAVE`. Recovery follows the saved stack word to the reload and
+requires a unique reaching value across the returning paths.
+
+A GNU multi-TOC stub can save the caller's r2, adjust it and branch directly
+to a local function with a different TOC. MedIR checks the reaching r2 against
+the callee's descriptor and models the ABI save at 40(r1) and immediate
+restore on return. Unresolved descriptor targets, ambiguous TOCs and
+unrecognized save/restore sequences require additional evidence.
+[GNU ld PowerPC64 options](https://sourceware.org/binutils/docs/ld/PowerPC64-ELF64.html).
 
 PPC64 arithmetic models the common CA, OV and SO bits. A full XER read
 requires processor evidence for the ISA 3.0 CA32 and OV32 fields and is
@@ -142,8 +158,18 @@ fixtures check mutable TOC data, taking a function's
 address, calling and replacing a stored pointer, the ninth integer argument
 and a callback with its own TOC and static chain.
 
+The PLT fixture links a separate provider at another base, exercises eager
+and lazy binding, and verifies the caller's r2 and its data after return.
+It includes a stripped shared-library caller relocated at run time, a
+provider that reads its static chain, a caller with a prologue TOC save,
+and two local functions in different TOC groups. Both
+fixtures execute the original and the rebuilt HighC, LLVM C and LLVM IR.
+
 ```sh
 python3 unittests/lift/elf-integer/ppc64_elfv1.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang \
+  --ld /path/to/powerpc64-linux-gnu-ld
+python3 unittests/lift/elf-integer/ppc64_elfv1_plt.py \
   --neverd build-release/bin/neverd --clang /path/to/clang \
   --ld /path/to/powerpc64-linux-gnu-ld
 ```

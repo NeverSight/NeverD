@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 858575d88fc82ac88906ac57405c675f64bfa0c0982aefe0a2fe59a3b34c7108 -->
+<!-- i18n-source: 9d385e278cada6c6a2fa4564b4ec44fbfc6e00b1c7dfc19b34f5d1ce1105f7ce -->
 
 <div align="center">
 
@@ -69,9 +69,9 @@ Los destinos ELF de enteros experimentales admiten la traducción estricta de in
 | Destino | Perfiles ELF verificados |
 |---|---|
 | RISC-V | RV32I/ILP32 y RV64I/LP64 en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. |
-| PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. Los descriptores de función ELFv1 proporcionan la dirección de entrada y la TOC. Las operaciones escalares verificadas incluyen la división con y sin signo, el resultado registrado en CR0 y los efectos sobre el desbordamiento en XER. |
+| PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. ELFv1 admite descriptores de función, llamadas entre módulos a través de la PLT y cambios de TOC dentro de un módulo. Las operaciones escalares verificadas incluyen la división con y sin signo, el resultado registrado en CR0 y los efectos sobre el desbordamiento en XER. |
 
-La reescritura de código nativo y el enlace dinámico entre módulos siguen pendientes. [Cobertura de RISC-V y PowerPC (en inglés)](../riscv-powerpc.md)
+La reescritura de código nativo sigue pendiente para estos perfiles. [Cobertura de RISC-V y PowerPC (en inglés)](../riscv-powerpc.md)
 
 El bytecode EVM legacy se soporta sin contenedor nativo: los 150 opcodes asignados
 de Frontier a Fusaka pasan por Low/Med/High IR, LLVM `i256` verificado, C23

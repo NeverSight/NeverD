@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 858575d88fc82ac88906ac57405c675f64bfa0c0982aefe0a2fe59a3b34c7108 -->
+<!-- i18n-source: 9d385e278cada6c6a2fa4564b4ec44fbfc6e00b1c7dfc19b34f5d1ce1105f7ce -->
 
 <div align="center">
 
@@ -69,9 +69,9 @@ Les cibles ELF entières expérimentales prennent en charge la traduction strict
 | Cible | Profils ELF vérifiés |
 |---|---|
 | RISC-V | RV32I/ILP32 et RV64I/LP64 petit-boutistes. Les informations ELF déterminent les extensions M, A et C entière ou les extensions individuelles Zmmul, Zaamo, Zalrsc et Zca. |
-| PowerPC | PPC32 System V et PPC64 ELFv1/ELFv2 dans les deux ordres d’octets. Les descripteurs de fonction ELFv1 fournissent le point d’entrée du code et la TOC. Le sous-ensemble scalaire vérifié couvre la division signée et non signée, le résultat enregistré dans CR0 et les effets sur le débordement dans XER. |
+| PowerPC | PPC32 System V et PPC64 ELFv1/ELFv2 dans les deux ordres d’octets. ELFv1 prend en charge les descripteurs de fonction, les appels entre modules via la PLT et les changements de TOC au sein d’un module. Le sous-ensemble scalaire vérifié couvre la division signée et non signée, le résultat enregistré dans CR0 et les effets sur le débordement dans XER. |
 
-La réécriture du code natif et la liaison dynamique entre modules restent à implémenter. [Couverture de RISC-V et PowerPC (en anglais)](../riscv-powerpc.md)
+La réécriture du code natif reste à implémenter pour ces profils. [Couverture de RISC-V et PowerPC (en anglais)](../riscv-powerpc.md)
 
 Le bytecode EVM legacy est pris en charge indépendamment des conteneurs natifs :
 les 150 opcodes attribués de Frontier à Fusaka alimentent Low/Med/High IR,

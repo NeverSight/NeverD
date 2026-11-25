@@ -220,16 +220,18 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   elf_loader::detail::DynamicSections<ELFT> Reconstructed;
   llvm::ArrayRef<Elf_Shdr> Tables = *SectionsOr;
   llvm::StringRef TableNames = ShStrTab;
-  if (!IsRelocatable && (SectionsOr->empty() || isMIPS(Img.Arch))) {
+  const bool RuntimeTables = isMIPS(Img.Arch) || Descriptors.JumpRelocationSize;
+  if (!IsRelocatable && (SectionsOr->empty() || RuntimeTables)) {
     const size_t DiagnosticsBefore = Img.LoadDiagnostics.size();
     Reconstructed =
         elf_loader::detail::reconstructDynamicSections<ELFT>(ELF, Img);
-    if (isMIPS(Img.Arch)) {
+    if (RuntimeTables) {
       for (size_t I = DiagnosticsBefore; I < Img.LoadDiagnostics.size(); ++I)
         if (Img.LoadDiagnostics[I].Code == "elf.dynamic_table_invalid")
           return llvm::createStringError(
               llvm::inconvertibleErrorCode(),
-              "elf: invalid MIPS runtime table: %s",
+              "elf: invalid %s runtime table: %s",
+              isMIPS(Img.Arch) ? "MIPS" : "PPC64",
               Img.LoadDiagnostics[I].Message.c_str());
       if (!SectionsOr->empty()) {
         // PT_DYNAMIC is authoritative even when the file retains an
@@ -261,7 +263,8 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
 
   Progress.check();
   elf_loader::detail::collectRelocations<ELFT>(ELF, Tables, TableNames, Data,
-                                               Size, IsRelocatable, Img);
+                                               Size, IsRelocatable,
+                                               SectionsOr->size(), Img);
 
   Progress.check();
   // --- Apply relocations for relocatable objects (.o files) ---
@@ -298,6 +301,9 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
   Progress.check();
   // --- .rela.plt / .rel.plt imports ---
   elf_loader::parsePLTImports(ELF, Tables, TableNames, Data, Size, Img);
+  if (isPowerPC64ELFv1(Img.Arch))
+    if (auto E = elf_loader::readPPC64Linkage(Img, Descriptors))
+      return E;
   if (isMIPS(Img.Arch))
     if (auto Error =
             elf_loader::detail::collectMIPSDynamicGOT(ELF, Tables, Img))

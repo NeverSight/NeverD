@@ -342,6 +342,14 @@ struct BinaryImage {
     va_t Descriptor = InvalidVA;
   };
   std::map<va_t, PPC64EntryContext> PPC64EntryContexts;
+  /// A direct branch into ELFv1 linkage code uses the caller's r2. Only
+  /// publish a destination for the TOC the stub was resolved against.
+  struct PPC64LinkageStub {
+    va_t IncomingTOC = InvalidVA;
+    va_t Target = InvalidVA; // Code entry, or the registered import veneer.
+    bool SavesTOC = false;
+  };
+  std::map<va_t, PPC64LinkageStub> PPC64LinkageStubs;
   bool IsRelocatable = false;
   /// The image runs at its link-time addresses: no loader rebases it, so an
   /// absolute address its code or data holds stays valid without a

@@ -394,6 +394,220 @@ TEST(PPC64ELFv1, IndirectCallRequiresMatchingEntryTOCAndEnvironment) {
   }
 }
 
+// One undefined dynamic function, with the empty GNU hash buckets GNU ld
+// emits for this case. Only PT_DYNAMIC locates these runtime tables.
+Fixture pltFixture(bool Little) {
+  using namespace llvm::ELF;
+  Fixture F{Little};
+  F.SecondSymbol.reset();
+  F.Table = {Text, FirstTOC, 0};
+  F.DataWords = {37, 0, 0, 0};
+  // The caller restores r2 before reading its own global. The linkage
+  // stub starts at Text+64 and reads the inline descriptor at Data+8.
+  F.Code = {0x7c0802a6, 0xf821ff91, 0xf8010080, 0x38630003,
+            0x48000031, 0xe8410028, 0xe8828000, 0x7c632214,
+            0x38210070, 0xe8010010, 0x7c0803a6, 0x4e800020};
+  F.Code.resize(16);
+  F.Code.insert(F.Code.end(),
+                {0xf8410028, 0xe9828008, 0x7d8903a6, 0xe8428010, 0x4e800420});
+  constexpr va_t Tags = 0x60000, Sym = 0x100, Str = 0x140, Rel = 0x180,
+                 Hash = 0x1c0;
+  F.Dynamic = {
+      DT_STRTAB,   Tags + Str, DT_STRSZ,    8,           DT_SYMTAB, Tags + Sym,
+      DT_SYMENT,   24,         DT_GNU_HASH, Tags + Hash, DT_JMPREL, Tags + Rel,
+      DT_PLTRELSZ, 24,         DT_PLTREL,   DT_RELA,     DT_NULL,   0};
+  F.Dynamic.resize((Hash + 32) / 8);
+  const auto ReadWord = [&](const void *P) -> uint64_t {
+    return Little ? llvm::support::endian::read64le(P)
+                  : llvm::support::endian::read64be(P);
+  };
+  F.Dynamic[Str / 8] = ReadWord("\0remote\0");
+  F.Dynamic[(Sym + 24) / 8] = Little ? 0x1200000001ULL : 0x112000000ULL;
+  F.Dynamic[Rel / 8] = Data + 8;
+  F.Dynamic[Rel / 8 + 1] = (uint64_t(1) << 32) | R_PPC64_JMP_SLOT;
+  F.Dynamic[Hash / 8] = (uint64_t(1) << 32) | 1;
+  F.Dynamic[Hash / 8 + 1] = Little ? 1 : uint64_t(1) << 32;
+  return F;
+}
+
+TEST(PPC64ELFv1, PLTCallRequiresTheRuntimeDescriptorAndItsReachingTOC) {
+  for (bool Little : {false, true}) {
+    for (unsigned Variant = 0; Variant < 5; ++Variant) {
+      Fixture F = pltFixture(Little);
+      if (Variant == 1)
+        F.Code[3] = 0x38420008; // Change the actual r2 before the call.
+      if (Variant == 2)
+        F.Code[19] = 0xe8428018; // Load the environment as the TOC.
+      if (Variant == 3)
+        F.Dynamic[0x180 / 8 + 1] =
+            (uint64_t(1) << 32) | llvm::ELF::R_PPC64_GLOB_DAT;
+      if (Variant == 4)
+        F.Dynamic[0x180 / 8] += 1;
+      auto I = F.load();
+      if (Variant == 4) {
+        ASSERT_FALSE(bool(I));
+        EXPECT_TRUE(llvm::StringRef(llvm::toString(I.takeError()))
+                        .contains("PLT descriptor extent"));
+        continue;
+      }
+      ASSERT_TRUE(bool(I)) << llvm::toString(I.takeError());
+      const auto *Import = I->findImportStubAt(Text + 64);
+      if (Variant <= 1) {
+        ASSERT_NE(Import, nullptr);
+        EXPECT_EQ(Import->Name, "remote");
+        ASSERT_EQ(I->Relocations.size(), 1u);
+        ASSERT_TRUE(I->Relocations.front().ELF);
+        EXPECT_EQ(I->Relocations.front().ELF->Source,
+                  ELFRelocationSource::ProgramDynamicTable);
+        EXPECT_EQ(I->findImportAt(Data + 8), nullptr);
+        EXPECT_FALSE(
+            I->collectImportStorageSlot(Data + 8).Slots.count(Data + 8));
+      } else
+        EXPECT_EQ(Import, nullptr);
+      Decoder D;
+      ASSERT_TRUE(D.init(*I));
+      auto L = CFGBuilder().build(*I, D, Text, "caller");
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*I);
+      if (Variant) {
+        EXPECT_THROW(Convert.convert(L, I->Arch, BinaryFormat::ELF),
+                     LowToMedConversionError);
+        continue;
+      }
+      auto Med = Convert.convert(L, I->Arch, BinaryFormat::ELF);
+      bool CallsImport = false, ReadsCallerData = false;
+      for (const auto &B : Med.Blocks)
+        for (const auto &Op : B.Ops)
+          if (Op.NumInputs && Op.Inputs[0].isConst()) {
+            CallsImport |=
+                Op.Opcode == NdOp::CALL && Op.Inputs[0].ConstVal == Text + 64;
+            ReadsCallerData |=
+                Op.Opcode == NdOp::LOAD && Op.Inputs[0].ConstVal == Data;
+          }
+      EXPECT_TRUE(CallsImport);
+      EXPECT_TRUE(ReadsCallerData);
+    }
+  }
+}
+
+TEST(PPC64ELFv1, PLTChecksFarDescriptorFieldsAndLazyRelocationOrdinal) {
+  for (bool Little : {false, true}) {
+    for (bool Correct : {true, false}) {
+      Fixture Far = pltFixture(Little);
+      // The descriptor crosses a signed low-half boundary. GNU ld adjusts
+      // the base before loading its TOC and static chain.
+      Far.Table[1] = Data + 8 - 0x17ff8;
+      Far.Code.resize(16);
+      Far.Code.insert(Far.Code.end(),
+                      {0xf8410028, 0x3d620001, 0xe98b7ff8, 0x396b7ff8,
+                       0x7d8903a6, 0x7d826278, 0x7d6b1214, 0xe84b0008,
+                       Correct ? 0xe96b0010U : 0xe96b0018U, 0x4e800420});
+      auto I = Far.load();
+      ASSERT_TRUE(bool(I)) << llvm::toString(I.takeError());
+      EXPECT_EQ(I->findImportStubAt(Text + 64) != nullptr, Correct);
+
+      Fixture Lazy = pltFixture(Little);
+      Lazy.Code.resize(20);
+      Lazy.Code.insert(Lazy.Code.end(),
+                       {0x28220000, 0x4ce20420, 0x48000008, 0, 0x38000000});
+      // Ordinal zero starts 32 bytes after DT_PPC64_GLINK.
+      Lazy.Dynamic[16] = 0x70000000;
+      Lazy.Dynamic[17] = Text + (Correct ? 64 : 72);
+      auto L = Lazy.load();
+      ASSERT_TRUE(bool(L)) << llvm::toString(L.takeError());
+      EXPECT_EQ(L->findImportStubAt(Text + 64) != nullptr, Correct);
+    }
+  }
+}
+
+TEST(PPC64ELFv1, CallerSavedTOCRequiresAReachingFrameWord) {
+  for (bool Little : {false, true})
+    for (unsigned Variant = 0; Variant != 3; ++Variant) {
+      Fixture F = pltFixture(Little);
+      F.Code[4] = 0x48000035; // Enter after the stub's save.
+      F.Code[3] = Variant == 0 ? 0xf8410028 : 0x60000000;
+      if (Variant == 2) {
+        F.Code[2] = 0xf8410028; // Save the full word, then overwrite part.
+        F.Code[3] = 0x9061002c;
+      }
+      auto Image = F.load();
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      ASSERT_NE(Image->findImportStubAt(Text + 68), nullptr);
+      Decoder D;
+      ASSERT_TRUE(D.init(*Image));
+      auto Low = CFGBuilder().build(*Image, D, Text, "caller");
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*Image);
+      if (Variant) {
+        EXPECT_THROW(Convert.convert(Low, Image->Arch, BinaryFormat::ELF),
+                     LowToMedConversionError);
+        continue;
+      }
+      auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
+      bool ReadsCallerData = false;
+      for (const auto &B : Med.Blocks)
+        for (const auto &Op : B.Ops)
+          ReadsCallerData |= Op.Opcode == NdOp::LOAD &&
+                             Op.Inputs[0].isConst() &&
+                             Op.Inputs[0].ConstVal == Data;
+      EXPECT_TRUE(ReadsCallerData);
+    }
+}
+
+TEST(PPC64ELFv1, SectionlessPLTRequiresDisjointRuntimeDescriptors) {
+  for (bool Little : {false, true}) {
+    Fixture F = pltFixture(Little);
+    F.Sectionless = true;
+    F.Dynamic[16] = ppc_elf::DynamicOPD;
+    F.Dynamic[17] = OPD;
+    F.Dynamic[18] = ppc_elf::DynamicOPDSize;
+    F.Dynamic[19] = 24;
+    auto Image = F.load();
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    const auto *Import = Image->findImportStubAt(Text + 64);
+    ASSERT_NE(Import, nullptr);
+    EXPECT_EQ(Import->Name, "remote");
+
+    F.DataWords.resize(8);
+    F.Dynamic[13] = 48; // Two records in DT_JMPREL.
+    F.Dynamic[0x198 / 8] = Data + 16;
+    for (auto Type :
+         {llvm::ELF::R_PPC64_JMP_SLOT, llvm::ELF::R_PPC64_GLOB_DAT}) {
+      F.Dynamic[0x198 / 8 + 1] = (uint64_t(1) << 32) | Type;
+      auto Invalid = F.load();
+      ASSERT_FALSE(bool(Invalid));
+      EXPECT_TRUE(llvm::StringRef(llvm::toString(Invalid.takeError()))
+                      .contains("PPC64 PLT descriptor"));
+    }
+  }
+}
+
+TEST(PPC64ELFv1, DirectCallUsesTheTOCEstablishedAtTheBranch) {
+  for (bool Little : {false, true}) {
+    Fixture F{Little};
+    F.Code = {0x7c0802a6, 0xf821ff91, 0xf8010080, 0xf8410028, 0x38420008,
+              0x4800001d, 0xe8410028, 0x38210070, 0xe8010010, 0x7c0803a6,
+              0x4e800020, 0,          0xe8628000, 0x4e800020};
+    F.Table = {Text, FirstTOC, 0, Text + 48, SecondTOC, 0};
+    for (bool Correct : {true, false}) {
+      if (!Correct)
+        F.Code[4] = 0x38420004;
+      auto I = F.load();
+      ASSERT_TRUE(bool(I)) << llvm::toString(I.takeError());
+      Decoder D;
+      ASSERT_TRUE(D.init(*I));
+      auto L = CFGBuilder().build(*I, D, Text, "caller");
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*I);
+      if (Correct)
+        EXPECT_NO_THROW(Convert.convert(L, I->Arch, BinaryFormat::ELF));
+      else
+        EXPECT_THROW(Convert.convert(L, I->Arch, BinaryFormat::ELF),
+                     LowToMedConversionError);
+    }
+  }
+}
+
 TEST(PPC64ELFv1, RejectsMalformedAndConflictingDescriptorEvidence) {
   for (bool Little : {false, true}) {
     Fixture F{Little};

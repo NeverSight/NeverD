@@ -12,6 +12,9 @@
 
 #include "ELFv1Calls.h"
 
+#include "../../../../safety/StackSlotFlow.h"
+#include "../../pass/MedEntryStackOffsets.h"
+
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/LowToMedError.h"
@@ -21,8 +24,14 @@
 #include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+
+#include <iterator>
+#include <map>
+#include <utility>
+#include <vector>
 
 namespace neverd {
 namespace {
@@ -157,10 +166,176 @@ void bindTOCAddresses(MedFunc &Function, MedDefinitionIndex &Defs,
     Op->Inputs[0] = Pointer;
   }
 }
+// R_PPC64_TOCSAVE lets the linker put the save in the caller's prologue.
+// Match its actual reaching stack word, including across repeated calls that
+// use the same linkage area. Other calls and aliasing stores kill the proof.
+void recoverCallerTOCRestores(MedFunc &Function, const BinaryImage &Image,
+                              const PPC64LinkageCalls &Calls) {
+  if (Calls.CallerRestores.empty())
+    return;
+  MedEntryStackOffsets Offsets(Function, Image.Arch, BinaryFormat::ELF);
+  auto Offset = [&](const MedVar &V) { return Offsets.query(V); };
+  llvm::DenseMap<uint32_t, int64_t> CallSlots;
+  struct Reload {
+    MedBlock *Block;
+    size_t Index;
+    int64_t Slot;
+  };
+  llvm::SmallVector<Reload> Reloads;
+  for (auto &Block : Function.Blocks)
+    for (auto [I, Op] : llvm::enumerate(Block.Ops)) {
+      if (Op.Opcode != NdOp::LOAD || Op.Output.Size != WordSize)
+        continue;
+      auto Call = Calls.CallerRestores.find(Op.Addr);
+      if (Call == Calls.CallerRestores.end())
+        continue;
+      auto At = Offset(Op.Inputs[0]);
+      if (!At)
+        throw LowToMedConversionError(
+            "PPC64 ELFv1 TOC restore has no proven stack slot");
+      CallSlots.try_emplace(Call->second, *At);
+      Reloads.push_back({&Block, I, *At});
+    }
+  auto Preserves = [&](const MedOp &Op, int64_t Slot, uint16_t Bytes) {
+    auto It = CallSlots.find(Op.CallSiteId);
+    return It != CallSlots.end() && It->second == Slot && Bytes == WordSize;
+  };
+  llvm::SmallVector<std::pair<MedOp *, MedVar>> Copies;
+  for (const auto &[Block, I, Slot] : Reloads) {
+    const auto Reaching = safety::detail::reachingStackValues(
+        Function, Block->Id, I, Slot, WordSize, Offset,
+        [](const MedVar &V) { return !V.isConst(); },
+        [](const MedVar &) { return false; }, true, true, Preserves);
+    if (!Reaching.Complete || Reaching.Values.size() != 1)
+      throw LowToMedConversionError(
+          "PPC64 ELFv1 TOC restore has no unique reaching save");
+    Copies.emplace_back(&Block->Ops[I], Reaching.Values.front());
+  }
+  for (auto &[Op, V] : Copies) {
+    Op->Opcode = NdOp::COPY;
+    Op->Inputs[0] = V;
+  }
+}
 } // namespace
 
-void recoverPPC64ELFv1(MedFunc &Function, const BinaryImage *Image) {
+PPC64LinkageCalls preparePPC64LinkageCalls(MedFunc &Function,
+                                           const BinaryImage &Image, MedVar TOC,
+                                           MedVar SP, int &NextVarId) {
   using namespace ppc_elf;
+  PPC64LinkageCalls Calls;
+  std::map<va_t, std::pair<int, MedVar>> Restores;
+  auto Fresh = [&]() {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = NextVarId++;
+    V.Size = WordSize;
+    return V;
+  };
+  for (auto &Block : Function.Blocks) {
+    std::vector<MedOp> Ops;
+    size_t First = 0;
+    for (size_t I = 0; I < Block.Ops.size(); ++I) {
+      auto &Op = Block.Ops[I];
+      if (Op.Opcode != NdOp::CALL || !Op.NumInputs || !Op.Inputs[0].isConst())
+        continue;
+      va_t Target = Op.Inputs[0].ConstVal;
+      const auto Stub = Image.PPC64LinkageStubs.find(Target);
+      auto Callee = Image.PPC64EntryContexts.find(Target);
+      const bool Saves =
+          Stub != Image.PPC64LinkageStubs.end() && Stub->second.SavesTOC;
+      const va_t Resume = Op.Addr + InstructionAlignment;
+      const auto *Next = Image.readVA(Resume, InstructionAlignment);
+      const bool RestoresTOC =
+          !Op.IsTailCall && Next &&
+          readTargetEndian<uint32_t>(Next, archLittleEndian(Image.Arch)) ==
+              RestoreTOC;
+      va_t Expected;
+      if (Stub != Image.PPC64LinkageStubs.end()) {
+        if (Stub->second.Target == InvalidVA)
+          throw LowToMedConversionError(
+              "PPC64 ELFv1 linkage has no unique descriptor or TOC");
+        Expected = Stub->second.IncomingTOC;
+        Op.Inputs[0] =
+            MedVar::makeConst(Stub->second.Target, WordSize,
+                              ConstantAddressProvenance::CodeAddress);
+      } else if (Callee != Image.PPC64EntryContexts.end() &&
+                 Callee->second.TOC) {
+        Expected = *Callee->second.TOC;
+      } else {
+        if (RestoresTOC)
+          throw LowToMedConversionError(
+              "PPC64 ELFv1 TOC restore has no proven linkage call");
+        continue;
+      }
+
+      // Move each original operation once while retaining the call's
+      // occurrence and all of its ABI operands.
+      if (Ops.empty())
+        Ops.reserve(Block.Ops.size());
+      Ops.insert(Ops.end(), std::make_move_iterator(Block.Ops.begin() + First),
+                 std::make_move_iterator(Block.Ops.begin() + I));
+      First = I;
+      MedOp Snapshot;
+      Snapshot.Opcode = NdOp::COPY;
+      Snapshot.Addr = Op.Addr;
+      Snapshot.Output = Fresh();
+      Snapshot.addInput(TOC);
+      const MedVar Saved = Snapshot.Output;
+      Calls.RequiredTOCs.try_emplace(Saved.Id, Expected);
+      Ops.push_back(std::move(Snapshot));
+      if (Saves) {
+        MedOp Address;
+        Address.Opcode = NdOp::INT_ADD;
+        Address.Addr = Op.Addr;
+        Address.Output = Fresh();
+        Address.addInput(SP);
+        Address.addInput(MedVar::makeConst(TOCSaveOffset, WordSize,
+                                           ConstantAddressProvenance::Scalar));
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.Addr = Op.Addr;
+        Store.addInput(Address.Output);
+        Store.addInput(Saved);
+        Ops.push_back(std::move(Address));
+        Ops.push_back(std::move(Store));
+        if (RestoresTOC)
+          Restores.emplace(Resume, std::pair(Block.Id, Saved));
+      } else if (RestoresTOC)
+        Calls.CallerRestores.try_emplace(Resume, Op.CallSiteId);
+    }
+    if (!Ops.empty()) {
+      Ops.insert(Ops.end(), std::make_move_iterator(Block.Ops.begin() + First),
+                 std::make_move_iterator(Block.Ops.end()));
+      Block.Ops = std::move(Ops);
+    }
+  }
+  // A canonical immediate reload on the call's sole returning edge reads
+  // the value the stub just saved. Preserve the physical store for code that
+  // also observes the linkage area, and leave alternate-entry loads intact.
+  if (!Restores.empty())
+    for (auto &Block : Function.Blocks)
+      for (auto &Op : Block.Ops) {
+        if (Op.Opcode != NdOp::LOAD || Op.Output.Size != WordSize)
+          continue;
+        auto It = Restores.find(Op.Addr);
+        if (It == Restores.end())
+          continue;
+        auto &[Caller, Saved] = It->second;
+        if (Block.Id != Caller &&
+            (Block.StartAddr != Op.Addr || Block.Preds.size() != 1 ||
+             Block.Preds.front() != Caller || !Block.ExceptionalPreds.empty()))
+          continue;
+        Op.Opcode = NdOp::COPY;
+        Op.Inputs[0] = Saved;
+      }
+  return Calls;
+}
+
+void recoverPPC64ELFv1(MedFunc &Function, const BinaryImage *Image,
+                       const PPC64LinkageCalls &Calls) {
+  using namespace ppc_elf;
+  if (Image)
+    recoverCallerTOCRestores(Function, *Image, Calls);
   MedDefinitionIndex Defs(Function);
   const auto TOCReg = integerreg::gpr(TOCRegister);
   const auto EnvReg = integerreg::gpr(EnvironmentRegister);
@@ -178,13 +353,11 @@ void recoverPPC64ELFv1(MedFunc &Function, const BinaryImage *Image) {
     llvm::SmallPtrSet<const MedOp *, 8> Loads;
     std::optional<MedVar> TOC, Env;
     for (auto &Op : Block.Ops) {
-      // A direct branch does not read a descriptor. A linker thunk that
-      // switches TOCs must be recovered before these two entries can share a
-      // source-level call.
-      if (EntryTOC && Op.Opcode == NdOp::CALL && Op.Inputs[0].isConst()) {
-        auto Callee = Image->PPC64EntryContexts.find(Op.Inputs[0].ConstVal);
-        if (Callee != Image->PPC64EntryContexts.end() && Callee->second.TOC &&
-            Callee->second.TOC != EntryTOC)
+      if (Op.Opcode == NdOp::COPY && Op.Output.Kind == MedVar::Temp) {
+        auto Need = Calls.RequiredTOCs.find(Op.Output.Id);
+        if (Need != Calls.RequiredTOCs.end() &&
+            (!EntryTOC ||
+             tocAddress(Op.Inputs[0], Defs, *EntryTOC) != Need->second))
           throw LowToMedConversionError(
               "PPC64 ELFv1 direct call crosses unproven TOC contexts");
       }

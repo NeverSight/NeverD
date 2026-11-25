@@ -17,6 +17,8 @@
 
 #include "llvm/Support/Error.h"
 
+#include <optional>
+
 namespace llvm::object {
 class ObjectFile;
 }
@@ -28,12 +30,17 @@ struct PPC64DescriptorTable {
   uint64_t Size = 0;
   unsigned EntrySize = 0;
   bool HasDynamicBounds = false;
+  va_t JumpRelocations = 0;
+  uint64_t JumpRelocationSize = 0;
+  std::optional<va_t> Glink = std::nullopt;
 };
 llvm::Error readIntegerProfile(const llvm::object::ObjectFile &Object, Arch &A,
                                RISCVProfile &Profile,
                                PPC64DescriptorTable *Descriptors = nullptr);
 llvm::Error readPPC64Descriptors(BinaryImage &Image,
                                  PPC64DescriptorTable Table);
+llvm::Error readPPC64Linkage(BinaryImage &Image,
+                             const PPC64DescriptorTable &Table);
 } // namespace elf_loader
 } // namespace neverd
 #endif // NEVERD_LIB_LOADER_ELF_ELFINTEGERPROFILE_H
