@@ -155,6 +155,9 @@ struct Projection {
   /// this proved inclusive range. Missing means unconstrained. This relation
   /// survives joins that discard differing exact pointer displacements.
   std::map<uint64_t, ObjectRegisterRange> ObjectRegisterRanges;
+  /// Complete register equalities proved on each predecessor. A new node
+  /// uses them to relate independently seeded object-relative offsets.
+  std::set<std::pair<uint64_t, uint64_t>> ObjectRegisterEqualities;
   /// Complete values of nominated eight-byte entry-frame words. A missing
   /// domain is Top. Each predecessor proves its own values before a join can
   /// retain their union; no numeric entry-frame address is assumed.
@@ -551,6 +554,15 @@ bool intersect(Projection &Into, const Projection &Incoming,
       Changed = true;
     }
     ++It;
+  }
+  for (auto It = Into.ObjectRegisterEqualities.begin();
+       It != Into.ObjectRegisterEqualities.end();) {
+    if (!Incoming.ObjectRegisterEqualities.count(*It)) {
+      It = Into.ObjectRegisterEqualities.erase(It);
+      Changed = true;
+    } else {
+      ++It;
+    }
   }
   for (auto It = Into.FrameValueDomains.begin();
        It != Into.FrameValueDomains.end();) {
@@ -1163,7 +1175,8 @@ private:
                    llvm::ArrayRef<SymRef> ObjectRoots,
                    const FrameOrigins &Origins, const FrameFacts &Frame,
                    SymRef Predicate, SpecializationCursor Successor,
-                   Projection &Out, bool &Reachable);
+                   const Projection &Incoming, Projection &Out,
+                   bool &Reachable);
   bool projectRange(SymContext &Ctx, SymRef Predicate, SymRef Value,
                     SymRef Root, uint32_t Field, uint64_t Mask, Projection &Out,
                     bool &Reachable);
@@ -1208,7 +1221,7 @@ private:
   bool projectObjectRegisterRanges(SymState &State,
                                    llvm::ArrayRef<SymRef> Roots,
                                    const FrameFacts &Frame, SymRef Predicate,
-                                   Projection &Out);
+                                   const Projection &Incoming, Projection &Out);
 
   SpecializationProvider &Provider;
   SpecializationCursor Entry;
@@ -1587,11 +1600,9 @@ bool Specializer::projectObjects(SymState &State, llvm::ArrayRef<SymRef> Roots,
   return true;
 }
 
-bool Specializer::projectObjectRegisterRanges(SymState &State,
-                                              llvm::ArrayRef<SymRef> Roots,
-                                              const FrameFacts &Frame,
-                                              SymRef Predicate,
-                                              Projection &Out) {
+bool Specializer::projectObjectRegisterRanges(
+    SymState &State, llvm::ArrayRef<SymRef> Roots, const FrameFacts &Frame,
+    SymRef Predicate, const Projection &Incoming, Projection &Out) {
   if (Frame.ReturnedObjectSizes.empty() ||
       (!Options.ProveStoreFrameSeparation &&
        !Options.ProveStoreReturnSlotSeparation))
@@ -1680,6 +1691,32 @@ bool Specializer::projectObjectRegisterRanges(SymState &State,
       break;
     }
   }
+  for (auto Left = Out.ObjectRegisterRanges.begin();
+       Left != Out.ObjectRegisterRanges.end(); ++Left)
+    for (auto Right = std::next(Left); Right != Out.ObjectRegisterRanges.end();
+         ++Right) {
+      if (Left->second.RootIndex != Right->second.RootIndex)
+        continue;
+      if (!chargeObjectWork(1))
+        return false;
+      const auto LeftValue = State.read(SymSpace::Register, Left->first, 8);
+      const auto RightValue = State.read(SymSpace::Register, Right->first, 8);
+      const auto Pair = std::pair{Left->first, Right->first};
+      bool Equal = LeftValue == RightValue;
+      if (!Equal)
+        if (const auto Offset = affineDisplacement(Ctx, LeftValue, RightValue))
+          Equal = *Offset == 0;
+      if (!Equal && Incoming.ObjectRegisterEqualities.count(Pair)) {
+        const auto Proof =
+            enumerate(Ctx, Predicate, {Ctx.mkEq(LeftValue, RightValue)}, 1);
+        if (Failed)
+          return false;
+        Equal = Proof.Status == FiniteValueStatus::Complete &&
+                Proof.Tuples == std::vector<std::vector<uint64_t>>{{1}};
+      }
+      if (Equal)
+        Out.ObjectRegisterEqualities.insert(Pair);
+    }
   return true;
 }
 
@@ -2251,7 +2288,8 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
                               llvm::ArrayRef<SymRef> ObjectRoots,
                               const FrameOrigins &Origins,
                               const FrameFacts &Frame, SymRef Predicate,
-                              SpecializationCursor Successor, Projection &Out,
+                              SpecializationCursor Successor,
+                              const Projection &Incoming, Projection &Out,
                               bool &Reachable) {
   SymContext &Ctx = State.context();
   if (ReplayingDemands) {
@@ -2304,7 +2342,8 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
   Reachable = !Ctx.isConstZero(Predicate);
   if (!Reachable)
     return true;
-  if (!projectObjectRegisterRanges(State, ObjectRoots, Frame, Predicate, Out))
+  if (!projectObjectRegisterRanges(State, ObjectRoots, Frame, Predicate,
+                                   Incoming, Out))
     return false;
   if (Root) {
     const auto Hints =
@@ -3029,7 +3068,8 @@ bool Specializer::emitTargets(
       Projection Unused;
       bool Reachable = true;
       if (!projectEdge(State, FrameRoot, ObjectRoots, Origins, Frame,
-                       Exec.pathPredicate(), Transfer, Unused, Reachable))
+                       Exec.pathPredicate(), Transfer, Draft.Incoming, Unused,
+                       Reachable))
         return false;
     }
     return true;
@@ -3069,7 +3109,7 @@ bool Specializer::emitTargets(
     Projection EdgeState;
     bool Reachable = true;
     if (!projectEdge(State, FrameRoot, ObjectRoots, Origins, Frame, Predicate,
-                     Cursor, EdgeState, Reachable))
+                     Cursor, Draft.Incoming, EdgeState, Reachable))
       return -1;
     if (!Reachable)
       return -2;
@@ -3473,6 +3513,16 @@ bool Specializer::evaluate(int Id) {
     if (Ctx.numNodes() > Options.MaxSymbolicNodes)
       return fail(SpecializationStatus::BudgetExceeded,
                   "object pointer range predicate node budget exhausted");
+  }
+  for (const auto &[Left, Right] : Draft.Incoming.ObjectRegisterEqualities) {
+    if (!chargeObjectWork(1))
+      return false;
+    IncomingPredicate = Ctx.mkAnd(
+        IncomingPredicate, Ctx.mkEq(State.read(SymSpace::Register, Left, 8),
+                                    State.read(SymSpace::Register, Right, 8)));
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "object register equality predicate node budget exhausted");
   }
   if (Options.EntryFrameBounds) {
     const auto &Bounds = *Options.EntryFrameBounds;

@@ -405,6 +405,64 @@ TEST_F(PEFixedImageTest, ReturningCallObjectPointerRangeSurvivesJoin) {
   }
 }
 
+TEST_F(PEFixedImageTest, ReturningCallEqualObjectOffsetsPreserveAlignment) {
+  // The joined destination has a bounded but unknown object offset. Copying
+  // it to a second register preserves equality across a physical transfer;
+  // the alignment prefix must then be derived from that same destination.
+  std::vector<uint8_t> Code{0xba, 0x80, 0,    0,    0, // mov edx,128
+                            0x48, 0x83, 0xec, 0x40,    // sub rsp,64
+                            0xff, 0xd7,                // call rdi
+                            0x48, 0x83, 0xc4, 0x40,    // add rsp,64
+                            0x48, 0x85, 0xc0,          // test rax,rax
+                            0x74, 0x26,                // je ret
+                            0x48, 0x89, 0xc3,          // mov rbx,rax
+                            0x48, 0x85, 0xf6,          // test rsi,rsi
+                            0x74, 0x06,                // je second offset
+                            0x48, 0x83, 0xc3, 0x08,    // add rbx,8
+                            0xeb, 0x04,                // jmp join
+                            0x48, 0x83, 0xc3, 0x28,    // add rbx,40
+                            0x48, 0x89, 0xd9,          // mov rcx,rbx
+                            0x49, 0x89, 0xcb,          // mov r11,rcx
+                            0xeb, 0x00,                // jmp alignment
+                            0xf7, 0xd9,                // neg ecx
+                            0x83, 0xe1, 0x0f,          // and ecx,15
+                            0x49, 0x03, 0xcb,          // add rcx,r11
+                            0x66, 0x0f, 0x7f, 0x01,    // movdqa [rcx],xmm0
+                            0xc3};                     // ret
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x103a);
+  O.X64MachineExits = {{1, Base + 0x103a, MachineExitKind::Return}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  O.MaxChainedTransfers = 0;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 3;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_EQ(R.ReturningCalls.size(), 1U);
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  // A same-width copy from the original result instead of the selected
+  // destination breaks the equality. The vector store has no proved
+  // alignment and must publish no partial result.
+  Code[43] = 0xc3; // mov r11,rax
+  auto DifferentLoaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(DifferentLoaded))
+      << llvm::toString(DifferentLoaded.takeError());
+  const auto Different =
+      specializeBinaryInterpreter(*DifferentLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Different.complete());
+  EXPECT_TRUE(Different.Residual.Blocks.empty());
+  EXPECT_FALSE(Different.RawEnvironment);
+}
+
 TEST_F(PEFixedImageTest,
        ReturningCallRepeatedContainedWritesReuseNonnullProof) {
   std::vector<uint8_t> Code{0xba, 0x40, 0,    0,    0, // mov edx,64
