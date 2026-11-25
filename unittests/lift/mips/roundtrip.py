@@ -26,6 +26,7 @@ from unicorn import (Uc, UcError, UC_ARCH_MIPS, UC_ERR_READ_UNMAPPED, UC_ERR_EXC
 from unicorn import mips_const as mips
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+from mips_elf_runtime import map_image
 from mips_validation_artifacts import MIPSValidationArtifacts
 
 
@@ -125,18 +126,6 @@ def run_command(artifacts, args, log):
         process.wait(timeout=60)
     if process.returncode:
         raise RuntimeError(f"{args[0]} exited {process.returncode}: {log.read_text()[-8192:]}")
-
-
-def map_image(uc, image, pages, bias=0):
-    for segment in image.iter_segments():
-        if segment["p_type"] != "PT_LOAD":
-            continue
-        begin, size = bias + segment["p_vaddr"], segment["p_memsz"]
-        for page in range(begin & ~4095, (begin + size + 4095) & ~4095, 4096):
-            if page not in pages:
-                uc.mem_map(page, 4096)
-                pages.add(page)
-        uc.mem_write(begin, segment.data())
 
 
 def emulator(path, bits, little, function, original=None, cpu_model=None, *, load_bias=0):
