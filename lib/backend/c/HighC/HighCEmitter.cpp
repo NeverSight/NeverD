@@ -2984,7 +2984,9 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       return Load->Addr;
     return std::nullopt;
   };
-  for (const HighFunc &Func : Funcs)
+  auto ReadImageLoads = [&](const HighFunc &Func) {
+    // SSA variable identities are local to the function being emitted.
+    ImageLoadVars.clear();
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val)
         return;
@@ -2993,6 +2995,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       if (auto Load = imageLoad(*S.Val))
         ImageLoadVars[varKey(S.Dst->Var)] = *Load;
     });
+  };
   // Symbols size the objects; the largest one at an address is the object.
   ReadsSharedDataObjects = SharedDataObjects != nullptr;
   if (!ReadsSharedDataObjects)
@@ -3838,15 +3841,36 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   std::set<const ExprPtr *> AccessOperands;
   std::vector<const HighExpr *> ImageConstants;
   std::set<const HighExpr *> SeenImageConstants;
-  auto NoteAccessAddress = [&](const ExprPtr &Address) {
+  auto NoteAccessAddress = [&](const ExprPtr &Address,
+                               const TypeRef &Access = nullptr,
+                               bool Written = false) {
     AccessOperands.insert(&Address);
     // An access the image's headers hold prints through `__ImageBase`, and
     // one in another module's storage through its symbol's declaration.
-    if (Address)
-      if (const auto VA = constAddress(*Address)) {
-        noteImageBaseAddress(*VA);
-        noteObjectExternAddress(*VA);
-      }
+    if (!Address)
+      return;
+    if (const auto VA = constAddress(*Address)) {
+      noteImageBaseAddress(*VA);
+      noteObjectExternAddress(*VA);
+      return;
+    }
+    // A stripped image can lack a symbol for the initial pointee. A
+    // dereference gives its access width. Retain the load of the pointer
+    // cell so subsequent stores to that cell still affect the program.
+    if (!Access || !Access->Size || Opts.Image->DataPtrRelocSlots.empty())
+      return;
+    const auto Slot = imageLoad(*Address);
+    const unsigned Bytes = Opts.Image->getPointerSize();
+    if (!Slot || Slot->Bytes != Bytes ||
+        !Opts.Image->DataPtrRelocSlots.count(Slot->Addr) ||
+        DataSymbolBindings->count(Slot->Addr))
+      return;
+    if (const uint8_t *P = Opts.Image->readVA(Slot->Addr, Bytes)) {
+      const va_t Target =
+          readPtr(P, Bytes == 8, archLittleEndian(Opts.TheArch));
+      if (Opts.Image->readVA(Target, Access->Size) && !sizedObjectAt(Target))
+        noteImageObject(Target, Access, Written, true);
+    }
   };
   // An atomic access needs its address as aligned in C as in the image.
   auto NoteAtomic = [&](const HighExpr &Address, const TypeRef &Access) {
@@ -4002,7 +4026,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     if (E.Kind == ExprKind::Load &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
         !E.Operands.empty() && E.Operands[0]) {
-      NoteAccessAddress(E.Operands[0]);
+      NoteAccessAddress(E.Operands[0], E.Type);
       if (auto VA = constAddress(*E.Operands[0])) {
         const uint16_t Size = E.Type ? E.Type->Size : 0;
         if (!foldReadonlyScalar(*VA, Size))
@@ -4027,10 +4051,10 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     if (E.Kind == ExprKind::Store &&
         E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
         E.Operands.size() >= 2 && E.Operands[0]) {
-      NoteAccessAddress(E.Operands[0]);
+      const auto Access = E.Operands[1] ? E.Operands[1]->Type : nullptr;
+      NoteAccessAddress(E.Operands[0], Access, true);
       if (auto VA = constAddress(*E.Operands[0]))
-        noteImageObject(*VA, E.Operands[1] ? E.Operands[1]->Type : nullptr,
-                        true, true);
+        noteImageObject(*VA, Access, true, true);
       if (E.MemoryOrdering != NdMemoryOrdering::None)
         NoteAtomic(*E.Operands[0],
                    E.Operands[1] ? E.Operands[1]->Type : nullptr);
@@ -4165,6 +4189,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
                                  ? DeclaredReturn->Kind == NdTypeKind::Void
                                  : analyzeVoidReturn(Func);
     Reading = &Func;
+    ReadImageLoads(Func);
     for (const auto &[Address, Written] : CursorStorage[I])
       if (isImageDataAddress(Address))
         if (const auto Object = indexedObjectAt(Address)) {
@@ -4185,10 +4210,10 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       if (S.Kind == StmtKind::Store &&
           S.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           S.StoreAddr) {
-        NoteAccessAddress(S.StoreAddr);
+        const auto Access = S.StoreVal ? S.StoreVal->Type : nullptr;
+        NoteAccessAddress(S.StoreAddr, Access, true);
         if (auto VA = constAddress(*S.StoreAddr))
-          noteImageObject(*VA, S.StoreVal ? S.StoreVal->Type : nullptr, true,
-                          true);
+          noteImageObject(*VA, Access, true, true);
         if (S.MemoryOrdering != NdMemoryOrdering::None)
           NoteAtomic(*S.StoreAddr, S.StoreVal ? S.StoreVal->Type : nullptr);
         // A table written at a variable offset is the whole table too.

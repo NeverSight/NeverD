@@ -2235,6 +2235,13 @@ MedFunc LowToMedConverter::convertFunction(
          !Image->PPC64LinkageStubs.empty()))
       throw LowToMedConversionError(
           "PPC64 ELFv2 entry and TOC recovery requires SSA");
+    if (Image && !Image->PPC32PLTGOTDisplacements.empty())
+      for (const auto &Block : Func.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs &&
+              Op.Inputs[0].isConst() &&
+              Image->PPC32PLTGOTDisplacements.contains(Op.Inputs[0].ConstVal))
+            throw LowToMedConversionError("PPC32 PIC PLT call requires SSA");
     Func.SkippedSSA = true;
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
@@ -2368,6 +2375,16 @@ MedFunc LowToMedConverter::convertFunction(
 
     splitEntryLoopHeader(Func);
     debugVerifyMedFunc(Func, "splitEntryLoopHeader");
+    const bool PPC32PIC =
+        Image && (TheArch == Arch::PPC32 || TheArch == Arch::PPC32LE) &&
+        (!Image->PPC32PLTGOTDisplacements.empty() ||
+         !Image->PPC32PICLiterals.empty());
+    llvm::DenseMap<uint32_t, uint32_t> PPC32Calls;
+    if (PPC32PIC && !Image->PPC32PLTGOTDisplacements.empty())
+      PPC32Calls = preparePPC32PLTCalls(
+          Func, *Image,
+          ndVarToMedVar(NdVar::reg(integerreg::gpr(ppc_elf::PPC32GOTRegister),
+                                   ppc_elf::PPC32WordSize)));
     PPC64LinkageCalls PPC64Calls;
     if (Image && isPowerPC64(TheArch) && Fmt == BinaryFormat::ELF) {
       auto TOC = ndVarToMedVar(
@@ -2380,6 +2397,8 @@ MedFunc LowToMedConverter::convertFunction(
           preparePPC64LinkageCalls(Func, *Image, TOC, SP, R12, NextVarId);
     }
     buildSsa(Func, Low);
+    if (PPC32PIC)
+      recoverPPC32PICAddresses(Func, *Image, PPC32Calls);
     if (isPowerPC64ELFv1(TheArch) ||
         (Image && isPowerPC64ELFv2(TheArch) && Fmt == BinaryFormat::ELF))
       recoverPPC64ELFCalls(Func, Image, PPC64Calls, isPowerPC64ELFv1(TheArch));

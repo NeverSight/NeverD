@@ -368,6 +368,12 @@ struct BinaryImage {
     bool PreservesTOC = false;
   };
   std::map<va_t, PPC64LinkageStub> PPC64LinkageStubs;
+  /// PPC32 secure PLT pointer slots, indexed by the runtime relocation. A
+  /// PIC veneer can reach different slots with different incoming r30 values.
+  std::map<va_t, size_t> PPC32PLTSlots;
+  std::map<va_t, uint32_t> PPC32PLTGOTDisplacements;
+  /// Immutable PC-relative displacement words loaded beside a get-PC sequence.
+  std::map<va_t, uint32_t> PPC32PICLiterals;
   bool IsRelocatable = false;
   /// The image runs at its link-time addresses: no loader rebases it, so an
   /// absolute address its code or data holds stays valid without a
@@ -2069,6 +2075,8 @@ struct BinaryImage {
   bool isImportStubAt(va_t Addr) const {
     auto Exact = ImportStubIndices.find(Addr);
     if (Exact != ImportStubIndices.end() && Exact->second < Imports.size())
+      return true;
+    if (PPC32PLTGOTDisplacements.contains(Addr))
       return true;
     for (const auto &[Start, End] : ImportStubRanges)
       if (Addr >= Start && Addr < End)

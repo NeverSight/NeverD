@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 17e7164f84189f8887ffa9d68d24b1c62b915f59c23b7084e29b8771c19d4649 -->
+<!-- i18n-source: 4c0ed7ca84efc8f7f3ee5cd801e2499490dac190c2b43ef483af276e90381b75 -->
 
 <div align="center">
 
@@ -69,7 +69,7 @@ CLI、整合方與 AI 智慧體透過 **純 C API** 使用同一個引擎 **`lib
 | 目標 | 已驗證的 ELF 組態 |
 |---|---|
 | RISC-V | 小端序 RV32I/ILP32 和 RV64I/LP64。依 ELF 標記選用 M、A、整數 C，或個別的 Zmmul、Zaamo、Zalrsc 和 Zca 擴充。 |
-| PowerPC | 大端序及小端序的 PPC32 System V 和 PPC64 ELFv1/ELFv2。兩種 PPC64 ABI 均支援跨模組 PLT 呼叫及 TOC 切換。ELFv1 使用函式描述元，ELFv2 支援全域進入點與本地進入點。已驗證的純量子集涵蓋帶號及無號除法、寫入 CR0 的結果，以及對 XER 溢位旗標的影響。 |
+| PowerPC | 大端序及小端序的 PPC32 System V 和 PPC64 ELFv1/ELFv2。PPC32 支援透過 secure PLT 和傳統 BSS-PLT 進行跨模組呼叫。兩種 PPC64 ABI 均支援跨模組 PLT 呼叫及 TOC 切換。ELFv1 使用函式描述元，ELFv2 支援全域進入點與本地進入點。已驗證的純量子集涵蓋帶號及無號除法、寫入 CR0 的結果，以及對 XER 溢位旗標的影響。 |
 
 這些架構設定的原生程式碼重寫仍待實作。 [RISC-V 與 PowerPC 支援範圍（英文）](../riscv-powerpc.md)
 

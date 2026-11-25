@@ -170,7 +170,7 @@ def qualify(args, work, target):
     cc = [args.clang, f"--target={target}-linux-gnu", "-mcpu=power8", "-mabi=elfv2",
           "-ffreestanding", "-fno-stack-protector", "-fPIC", "-nostdlib"]
     link = [f"-fuse-ld={args.ld}"]
-    source = fixtures / "ppc64-plt.c"
+    source = fixtures / "powerpc-plt.c"
     provider = work / "provider.so"
     subprocess.run([*cc, *link, "-shared", "-O2", "-DPROVIDER", "-DTEST_ELFV2_LOCALENTRY", source,
                     "-Wl,-soname,provider.so", "-o", provider], check=True)

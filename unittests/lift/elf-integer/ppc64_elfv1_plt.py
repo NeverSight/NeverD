@@ -139,7 +139,7 @@ def tocsave_object(cc, source, output):
 
 
 def qualify(args, work, target):
-    fixture = Path(__file__).with_name("ppc64-plt.c")
+    fixture = Path(__file__).with_name("powerpc-plt.c")
     multi = fixture.with_name("ppc64-multitoc.S")
     cc = [args.clang, f"--target={target}-linux-gnu", "-mabi=elfv1", "-mcpu=power8",
           "-ffreestanding", "-fno-stack-protector", "-fPIC", "-nostdlib"]

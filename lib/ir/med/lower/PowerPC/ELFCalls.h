@@ -1,12 +1,11 @@
-//===- ELFCalls.h - PPC64 descriptor and TOC lowering --------*- C++ -*-===//
+//===- ELFCalls.h - PowerPC ELF call recovery        --------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Recover source-level operands for the PPC64 ELF entry and linkage
-/// conventions.
+/// Recover source-level operands for PowerPC ELF entry and linkage conventions.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -20,6 +19,12 @@
 
 namespace neverd {
 struct BinaryImage;
+/// Make the real r30 input of each PIC veneer visible to SSA. The call
+/// occurrence retains its slot displacement separately from its arguments.
+llvm::DenseMap<uint32_t, uint32_t>
+preparePPC32PLTCalls(MedFunc &Function, const BinaryImage &Image, MedVar GOT);
+void recoverPPC32PICAddresses(MedFunc &Function, const BinaryImage &Image,
+                              const llvm::DenseMap<uint32_t, uint32_t> &Calls);
 struct PPC64LinkageCalls {
   llvm::DenseMap<int, va_t> RequiredTOCs;
   llvm::DenseMap<int, va_t> RequiredGlobalEntries;

@@ -1445,11 +1445,11 @@ void recoverCallAbi(
         if (const auto Name = Img->statedFunctionNameAt(CI.TargetAddr);
             !Name.empty())
           CI.TargetName = Name.str();
-      // The import owns the prototype and va_list contract. LLD can also
-      // publish an ELFv2 function symbol for the PLT stub itself.
+      // The import owns the prototype and va_list contract. The PowerPC
+      // linkers can also publish a function symbol for the PLT stub itself.
       if (Img && !CI.IsIndirect &&
           (CI.TargetName.starts_with(kAutoFuncPrefix) ||
-           (isPowerPC64ELFv2(TheArch) && Img->findImportStubAt(CI.TargetAddr))))
+           (isPowerPC(TheArch) && Img->findImportStubAt(CI.TargetAddr))))
         if (std::string Import = importCalleeName(*Img, CI.TargetAddr);
             !Import.empty())
           CI.TargetName = std::move(Import);
@@ -3512,7 +3512,8 @@ void recoverCallAbi(
           // stack unchanged, even when the last register position is padding.
           const bool AcrossRegisterPadding =
               K == CalleeStackBase && PrototypeRegisterPadding &&
-              IsIndirectImport && beginsWithTailTransfer(Img, Func.Entry, Op.Addr);
+              IsIndirectImport &&
+              beginsWithTailTransfer(Img, Func.Entry, Op.Addr);
           if (K > 0 && !FoundMask[K - 1] && !AcrossRegisterPadding)
             break;
           const int Incoming = CallerStackBase + (K - CalleeStackBase);

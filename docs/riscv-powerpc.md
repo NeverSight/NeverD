@@ -25,10 +25,23 @@ uses the physical instruction length for the link address.
 
 | PowerPC ABI | Admission and linkage |
 | --- | --- |
-| PPC32 System V | ELF32 and zero processor flags. The ninth integer argument begins eight bytes above the caller's stack pointer on entry. |
+| PPC32 System V | ELF32 and zero processor flags. The ninth integer argument begins eight bytes above the caller's stack pointer on entry. Cross-module calls use a secure PLT or a classic BSS-PLT. |
 | PPC32 EABI | Unsupported. Embedded flags and VLE executable regions fail admission. |
 | PPC64 ELFv2 | Requires ABI flag 2 in either byte order. The ninth integer argument begins at offset 96. Function symbols specify the local entry and r2 preservation. A global call to a function with two entries supplies its address in r12. A local call supplies the callee’s TOC in r2. |
 | PPC64 ELFv1 | A linked image identifies its descriptor table with an allocated `.opd` section or the paired `DT_PPC64_OPD` and `DT_PPC64_OPDSZ` tags. Flags 0 and 1 admit that layout in either byte order. The ninth integer argument begins at offset 112. |
+
+For PPC32, the loader reads `R_PPC_JMP_SLOT` from the runtime relocation table.
+With `DT_PPC_GOT`, a secure PLT slot holds a four-byte function pointer.
+The loader matches the stub's load into r11 and final transfer through CTR.
+For a PIC stub, MedIR uses the r30 value reaching each call to identify the
+slot. In the classic BSS-PLT, the runtime linker writes instructions into
+the entry. Its relocation ordinal determines the entry's address and size.
+Both layouts recover imports from a linked image with its section headers
+removed. GNU ld can place private data and BSS-PLT code in the same writable,
+executable mapping. A PIC data access into that mapping needs section bounds
+to distinguish the original data from code. Separate data and linkage
+mappings retain that distinction after stripping.
+[GNU ld PowerPC ELF32 options](https://sourceware.org/binutils/docs/ld/PowerPC-ELF32.html).
 
 An ELFv2 function pointer names the global entry. The loader reads the local
 entry offset from `st_other` and follows the global prologue to determine the
@@ -127,8 +140,8 @@ linker stub when its final CTR transfer and destination match. Word multiplies w
 undefined high half on PPC64 also fail strict lifting.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
-ELFv2 jump slots retain their import binding. PPC32 jump slots can contain
-instructions and need a separate PLT proof. FP arguments, variadic and
+ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a
+proven r30-relative jump slot. FP arguments, variadic and
 aggregate calls require separate ABI coverage. Link objects with relocations
 against allocated sections before analysis. Raw firmware mapping and native
 guest execution have separate entry points and coverage.
@@ -192,6 +205,22 @@ python3 unittests/lift/elf-integer/ppc64_elfv1.py \
 python3 unittests/lift/elf-integer/ppc64_elfv1_plt.py \
   --neverd build-release/bin/neverd --clang /path/to/clang \
   --ld /path/to/powerpc64-linux-gnu-ld
+```
+
+The PPC32 fixture executes callers and a separate provider in both byte orders.
+It checks arguments, results, the caller's r30 and stack pointer after return,
+and repeats each call after rebuilding HighC, LLVM C and LLVM IR at two
+optimization levels. Run it with ELF LLD and with a GNU linker that supports
+both byte orders. Both produce secure PLTs with eager and lazy binding. GNU ld
+also produces the classic BSS-PLT, tested with loader-installed branches.
+For shared libraries, module IR can retain an indirect call through a writable
+import slot. The fixture verifies its native function-pointer relocation and
+executes it with the separately loaded provider.
+
+```sh
+python3 unittests/lift/elf-integer/ppc32_plt.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang \
+  --ld /path/to/powerpc-linux-gnu-ld
 ```
 
 The ELFv2 fixture accepts either ELF LLD or a GNU PowerPC64 linker with

@@ -337,7 +337,8 @@ bool CFGBuilder::isTailCallTarget(va_t Target,
   // ABI.  BinaryImage resolves both the format-native IAT address and exact
   // executable stubs, so this also covers COFF thunks whose IATAddr stays a
   // data slot.
-  if (CurrentImg && CurrentImg->findImportAt(Target))
+  if (CurrentImg && (CurrentImg->PPC32PLTGOTDisplacements.contains(Target) ||
+                     CurrentImg->findImportAt(Target)))
     return true;
   return false;
 }

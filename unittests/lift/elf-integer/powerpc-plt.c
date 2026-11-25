@@ -1,4 +1,4 @@
-// A PowerPC64 caller and its separately linked provider, each with its own TOC.
+// A PowerPC caller and its separately linked provider, each with private data.
 typedef unsigned long word;
 
 #ifdef PROVIDER
