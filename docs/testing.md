@@ -1345,7 +1345,10 @@ reads another word or none, where the parent overwrites the home before the
 protected range, or where a catch-all scope runs no handler.
 `ARM32_SavedRegisters.AFrameAJumpOutOfAFinallyUnwindsWithTakesNoArgument`
 lets r1's home go where the frame goes only to `__jump_unwind`, and keeps it
-where the frame goes to another call.
+where the frame goes to another call, and
+`FramePointerJoinsOnlyEachOtherReadLeaveAHomeUnread` lets it go beside
+frame-pointer joins only another join reads, and keeps it where a load goes
+through the last.
 `MedVariadic.WindowsARM64VaListPointsAtTheFirstUnnamedRegister` takes a
 Windows ARM64 save area of one, two or three named registers whose first
 unnamed slot's address is kept in a local (`/O0`), formed in an argument

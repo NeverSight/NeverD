@@ -5354,7 +5354,11 @@ the entry block saves once is no parameter either where every byte a load
 takes another store overwrote on every way to it, a handler the unwinder
 enters knowing what each block it guards had written when it began. A join
 nothing reads takes a frame address nowhere, as the frame pointer's at an
-epilogue that pops the register. The stores that save such a register go, and
+epilogue that pops the register, and neither do joins of a callee-saved
+register only other joins read, as the frame pointer the unwinder restores
+at a handler meets the prologue's: 20 functions of the EH corpus's ARM images
+kept the words they push as parameters for those, and their calls printed 16
+placeholders more in each C route. The stores that save such a register go, and
 its incoming value with them once nothing reads it, so neither C route writes
 an unknown value into the slot. A filter or a termination handler the runtime
 runs out of line reads the frame too, through the frame registers the unwinder

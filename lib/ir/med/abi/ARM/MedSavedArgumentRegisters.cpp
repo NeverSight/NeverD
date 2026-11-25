@@ -622,12 +622,34 @@ std::set<uint64_t> onlySaved(const MedFunc &Func, Arch TargetArch,
     }
     return false;
   };
+  // Whether an op takes \p Value, past the joins it goes through: a frame
+  // pointer the unwinder restores at a handler joins the one the prologue
+  // set, and those joins may only meet each other.  An argument register's
+  // join a call may take without a read anyone lists.
+  const auto OpReads = [&](const MedVar &Value) {
+    if (InArgumentRegister(Value))
+      return Reads.count(valueKey(Value)) != 0;
+    llvm::SmallVector<MedVar, 4> Work{Value};
+    llvm::DenseSet<ValueKey> Seen;
+    while (!Work.empty()) {
+      const MedVar V = Work.pop_back_val();
+      if (!Seen.insert(valueKey(V)).second)
+        continue;
+      if (const auto Found = Reads.find(valueKey(V)); Found != Reads.end())
+        for (const Read &R : Found->second) {
+          if (!R.Phi)
+            return true;
+          Work.push_back(R.Phi->Output);
+        }
+    }
+    return false;
+  };
   for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis)
       for (const auto &[Pred, Arg] : Phi.Args)
         if (FrameOffset(Arg) &&
             (!FrameOffset(Phi.Output) || InArgumentRegister(Phi.Output)) &&
-            Reads.count(valueKey(Phi.Output)))
+            OpReads(Phi.Output))
           return Result;
     for (size_t K = 0; K < Block.Ops.size(); ++K) {
       const MedOp &Op = Block.Ops[K];

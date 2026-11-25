@@ -4,6 +4,10 @@
 
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/ir/med/MedIR.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -730,6 +734,90 @@ TEST(ARM32_SavedRegisters, AFrameAJumpOutOfAFinallyUnwindsWithTakesNoArgument) {
     EXPECT_EQ(Signature.find("arg1") != std::string::npos,
               std::string(Callee) != "__jump_unwind")
         << C;
+  }
+}
+
+// The frame pointer the unwinder restores at a handler meets the one the
+// prologue set at a join, and that join meets the restored one again: no
+// join is a frame address the analysis knows, but where no op takes one the
+// address goes nowhere, and r1's home, which nothing loads, takes no
+// argument.  A load through the last join takes the frame somewhere.
+TEST(ARM32_SavedRegisters, FramePointerJoinsOnlyEachOtherReadLeaveAHomeUnread) {
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::ARM);
+  const auto Reg = [](int Id, int Version, uint64_t Offset) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.Id = Id;
+    V.SSAVer = Version;
+    V.Size = 4;
+    V.RegOff = Offset;
+    V.TheArch = Arch::ARM;
+    return V;
+  };
+  const auto Temp = [](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = 4;
+    V.TheArch = Arch::ARM;
+    return V;
+  };
+  const auto Op = [](NdOp Opcode, MedVar Output, std::vector<MedVar> Inputs) {
+    MedOp O;
+    O.Opcode = Opcode;
+    O.Output = Output;
+    for (const MedVar &Input : Inputs)
+      O.addInput(Input);
+    return O;
+  };
+  const auto Const = [](uint64_t Value) { return MedVar::makeConst(Value, 4); };
+  for (bool Read : {false, true}) {
+    SCOPED_TRACE(Read);
+    const MedVar SP = Reg(13, 0, TRI.StackPointer);
+    const MedVar R1 = Reg(1, 0, armreg::R1);
+    const MedVar Prologue = Reg(11, 1, armreg::R11);
+    const MedVar Restored = Reg(11, 2, armreg::R11);
+    const MedVar First = Reg(11, 3, armreg::R11);
+    const MedVar Second = Reg(11, 4, armreg::R11);
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Blocks.resize(4);
+    for (int I = 0; I < 4; ++I) {
+      F.Blocks[I].Id = I;
+      F.Blocks[I].StartAddr = F.Entry + 0x10 * I;
+    }
+    // push {r1}; r11 = the entry stack pointer less 4; branch.
+    F.Blocks[0].Ops = {Op(NdOp::COPY, SP, {SP}),
+                       Op(NdOp::COPY, R1, {R1}),
+                       Op(NdOp::INT_SUB, Temp(1), {SP, Const(4)}),
+                       Op(NdOp::STORE, {}, {Temp(1), R1}),
+                       Op(NdOp::INT_SUB, Prologue, {SP, Const(4)}),
+                       Op(NdOp::COND_BR, {}, {Const(0x1020), Temp(2)})};
+    F.Blocks[0].Succs = {1, 2};
+    // The register as the unwinder restored it, then a branch.
+    F.Blocks[1].Ops = {Op(NdOp::LOAD, Restored, {Const(0x5000)}),
+                       Op(NdOp::COND_BR, {}, {Const(0x1030), Temp(3)})};
+    F.Blocks[1].Preds = {0};
+    F.Blocks[1].Succs = {2, 3};
+    PhiNode Join;
+    Join.Output = First;
+    Join.Args = {{0, Prologue}, {1, Restored}};
+    F.Blocks[2].Phis = {Join};
+    F.Blocks[2].Preds = {0, 1};
+    F.Blocks[2].Succs = {3};
+    PhiNode Meet;
+    Meet.Output = Second;
+    Meet.Args = {{2, First}, {1, Restored}};
+    F.Blocks[3].Phis = {Meet};
+    F.Blocks[3].Preds = {2, 1};
+    if (Read)
+      F.Blocks[3].Ops.push_back(Op(NdOp::LOAD, Temp(4), {Second}));
+    F.Blocks[3].Ops.push_back(Op(NdOp::RETURN, {}, {}));
+    const std::set<uint64_t> Dropped =
+        med_calling_conv_detail::dropOnlySavedArgumentRegisters(
+            F, Arch::ARM, BinaryFormat::COFF,
+            TRI.integerParamRegs(BinaryFormat::COFF), nullptr, nullptr);
+    EXPECT_EQ(Dropped.count(armreg::R1) != 0, !Read);
   }
 }
 
