@@ -2667,11 +2667,13 @@ Exit 2 records an unavailable
 environment and exit 1 records failure. The verifier retains the reports and
 removes the temporary executables and entitlements.
 
-The signing projection exporter uses the two compiler comparison tests in
-`NeverDArm64eAnalysisTests`. It exports the HighC, LLVM C and optimized LLVM C
-sources, both direct backend objects and their independent C callers. Build
-the tests and export on a macOS builder, then transfer the inputs to the Mac
-that will run the qualification. Both output directories must be new.
+The r6 exporter runs three comparison tests in `NeverDArm64eAnalysisTests`.
+The two signing tests export HighC, LLVM C and optimized LLVM C sources,
+both direct backend objects and their independent C callers. The ordered-memory
+test adds five Darwin inputs covering HighC, LLVM C, a dispatch table and the raw and
+optimized backend objects. The input manifest records the exporter, source
+revision, fixtures and file digests. Transfer that directory from the macOS
+builder to the measuring Mac. Both output directories must be new.
 
 ```bash
 python3 scripts/verify_arm64e_x1_projections.py build-r6 --output projection-inputs
@@ -2695,13 +2697,22 @@ comparisons to run as well as link. The consumer keeps the command receipts
 and link maps and removes the generated objects and executables.
 
 `--require-native` runs the five original control probes on the measuring
-Mac and uses that invocation's x1 cursor to decide which generated comparisons
-can run. Before measuring an image, it checks both control revisions against the
-export manifest and verifies the digest of the cursor bytes it reads.
-The report sets `native_generated_arm64e_x1_qualified` only when the
-full native control report qualifies and all 20 signing comparisons complete.
-It records the path and SHA-256 of the original control report alongside the
-individual image results. Exit 0 qualifies the run. Exit 2 records a measured
+Mac and uses that invocation's x1 cursor to decide which signing comparisons
+can run. It checks the revision and digest of both the cursor and the original
+128-bit LRCPC3 probe. On Darwin arm64 it also links and launches six ordinary
+arm64 programs from the transferred inputs. These cover HighC and LLVM C at
+O0/O2 and both direct backend objects. They run even when the compiler cannot produce an x1
+slice. The harness records GPR and 128-bit execution separately and requires
+the six routes to agree. Each route compares register and memory results,
+including guard bytes and alignment faults, against the original instructions.
+
+`native_generated_arm64e_x1_qualified` requires the full control result,
+all 20 signing comparisons and all six generated 128-bit comparisons on the
+same Mac. On hosts that run the GPR comparisons, the generated Q result must
+agree with the independent Q probe. The report links the control and ordered
+reports by SHA-256. The ordered report identifies the six linked programs
+through `guests.json` and retains their process logs after executable cleanup.
+Exit 0 qualifies the run. Exit 2 records a measured
 capability or loader limit, and exit 1 records a failed control or comparison.
 A machine with partial instruction support can still report the comparisons it ran.
 

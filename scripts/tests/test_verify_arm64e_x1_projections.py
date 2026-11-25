@@ -46,6 +46,26 @@ class X1ProjectionTests(unittest.TestCase):
             path = root / projection.CONFIG["manifest"]
             projection.model.write_json(path, manifest)
             self.assertEqual(projection.checked_inputs(root), manifest)
+            with self.assertRaisesRegex(ValueError, projection.CONFIG["errors"]["ordered_inputs"]):
+                projection.checked_inputs(root, require_ordered=True)
+            ordered_dir = root / projection.ORDERED["directory"]
+            ordered_dir.mkdir()
+            for name in projection.model.ordered_input_names(projection.DARWIN_ORDERED):
+                (ordered_dir / name).write_text(name)
+            identity = projection.ordered_identity(ordered_dir)
+            ordered_key = projection.ORDERED["inputs"]
+            complete = {**manifest, ordered_key: identity}
+            projection.model.write_json(path, complete)
+            self.assertEqual(projection.checked_inputs(root, require_ordered=True), complete)
+            for key in identity:
+                with self.subTest(missing_ordered=key), self.assertRaisesRegex(
+                        ValueError, projection.CONFIG["errors"]["ordered_inputs"]):
+                    projection.model.write_json(path, {**complete, ordered_key: {**identity, key: {}}})
+                    projection.checked_inputs(root, require_ordered=True)
+            projection.model.write_json(path, complete)
+            (ordered_dir / projection.DARWIN_ORDERED["raw_object_file"]).write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, projection.CONFIG["errors"]["ordered_inputs"]):
+                projection.checked_inputs(root)
             for key in ("fixtures", "files", "source_revision", "exporter_sha256"):
                 with self.subTest(missing=key):
                     projection.model.write_json(path, {k: v for k, v in manifest.items() if k != key})
@@ -201,7 +221,7 @@ class X1ProjectionTests(unittest.TestCase):
                     if mode == projection.X1["mode"]:
                         result = cursor
                     elif mode == ordered["mode"]:
-                        result = {ordered["qualified_key"]: controls,
+                        result = {ordered["qualified_key"]: controls, "profiles": dict.fromkeys(native.POLICY["optimizations"]),
                                   "status": native.POLICY["passed" if controls else "unavailable"]}
                     else:
                         failed = broken_control and mode == native.POLICY["probe_mode"]
@@ -225,6 +245,8 @@ class X1ProjectionTests(unittest.TestCase):
                           for fn in (native.probe, native.probe_signal_cursor, native.probe_x1_signal_cursor,
                                      native.probe_cpta, native.probe_ordered_q)]
                 measured = m.enter_context(mock.patch.object(projection, "measure_image", side_effect=image))
+                memory = m.enter_context(mock.patch.object(projection, "measure_ordered", return_value={
+                    projection.DARWIN_ORDERED["gpr_key"]: True, projection.DARWIN_ORDERED["simd_key"]: controls}))
                 m.enter_context(mock.patch.object(sys, "argv", [__file__, config["check"], config["require_native"],
                                                                config["inputs"], str(inputs), config["output"], str(output)]))
                 if broken_image:
@@ -240,6 +262,8 @@ class X1ProjectionTests(unittest.TestCase):
                     self.assertEqual(code, native.POLICY["exit_codes"][report["status"]])
                 self.assertEqual(report[config["qualified_key"]], passed)
                 self.assertEqual(report[gate["complete_key"]], controls)
+                self.assertEqual(memory.call_count, int(not broken_control))
+                self.assertEqual(report.get(projection.ORDERED["receipt"]), None if broken_control else memory.return_value)
                 directory = output / gate["complete_mode"]
                 aggregate.assert_called_once_with(directory, require_complete=True)
                 for observed in probes:
@@ -264,11 +288,58 @@ class X1ProjectionTests(unittest.TestCase):
                     self.assertFalse(report["all_linked"])
                     self.assertEqual(measured.call_count, int(broken_image))
 
-    def test_stale_controls_or_a_changed_cursor_cannot_authorize_a_generated_process(self):
+    def test_generated_q_controls_qualification_independently_of_x1_image_entry(self):
         native, config = projection.native, projection.CONFIG
         gate = native.POLICY["x1_qualification"]
-        for stale_control, stale_cursor, corrupt in ((True, False, False), (False, True, False), (False, False, True)):
-            with self.subTest(stale_control=stale_control, stale_cursor=stale_cursor, corrupt=corrupt), \
+        original_q = native.POLICY["ordered_probe"]["qualified_key"]
+        gpr_key, simd_key = (projection.DARWIN_ORDERED[key] for key in ("gpr_key", "simd_key"))
+        for has_slice, original, gpr, simd in ((False, False, True, False), (False, True, True, True),
+                                               (True, True, False, False), (True, False, True, True),
+                                               (True, True, True, False)):
+            with self.subTest(slice=has_slice, original=original, gpr=gpr, simd=simd), \
+                    tempfile.TemporaryDirectory() as tmp, ExitStack() as m:
+                inputs = Path(tmp)
+                (inputs / config["manifest"]).write_text(json.dumps({}))
+                output = inputs / config["check"]
+                digest = projection.model.digest(inputs / config["manifest"])
+                profile = native.POLICY["optimizations"][0]
+                cursor = {"status": native.POLICY["passed"], "profiles": {profile: {"sha256": digest} if has_slice else {}},
+                          **dict.fromkeys((projection.X1[key] for key in ("explicit_key", "pacm_pc_key")), True),
+                          native.POLICY["cursor_probe"]["baseline_key"]: True}
+
+                def controls(_, report, require_native):
+                    self.assertTrue(require_native)
+                    report[gate["complete_key"]] = original
+                    return cursor, {"profiles": {profile: {}}, original_q: original}
+
+                m.enter_context(mock.patch.object(projection, "checked_inputs", return_value={
+                    "source_revision": native.provenance()["source_revision"], "exporter_sha256": digest}))
+                m.enter_context(mock.patch.object(projection, "projection_controls", side_effect=controls))
+                receipt = {gpr_key: gpr, simd_key: simd}
+                memory = m.enter_context(mock.patch.object(projection, "measure_ordered", return_value=receipt))
+                images = m.enter_context(mock.patch.object(projection, "measure_image", return_value={"execution": config["executed"]}))
+                inconsistent = gpr and simd != original
+                if inconsistent:
+                    with self.assertRaisesRegex(ValueError, config["errors"]["ordered_control"]):
+                        projection.check(inputs, output, require_native=True)
+                else:
+                    self.assertEqual(projection.check(inputs, output, require_native=True),
+                                     native.POLICY["exit_codes"][native.POLICY["unavailable"]])
+                report = json.loads((output / projection.MODEL["report"]).read_text())
+                self.assertEqual(report["status"], native.POLICY["failed" if inconsistent else "unavailable"])
+                self.assertFalse(report[config["qualified_key"]])
+                self.assertEqual(report[projection.ORDERED["receipt"]], receipt)
+                self.assertEqual(images.called, has_slice and not inconsistent)
+                memory.assert_called_once()
+
+    def test_stale_controls_or_a_changed_probe_cannot_authorize_a_generated_process(self):
+        native, config = projection.native, projection.CONFIG
+        gate = native.POLICY["x1_qualification"]
+        ordered = native.POLICY["ordered_probe"]
+        modes = (projection.X1["mode"], ordered["mode"])
+        cases = [(gate["complete_mode"], False), *((mode, corrupt) for mode in modes for corrupt in (False, True))]
+        for damaged, corrupt in cases:
+            with self.subTest(damaged=damaged, corrupt=corrupt), \
                     tempfile.TemporaryDirectory() as tmp, ExitStack() as m:
                 inputs = Path(tmp)
                 manifest = inputs / config["manifest"]
@@ -279,16 +350,18 @@ class X1ProjectionTests(unittest.TestCase):
 
                 def qualify(directory, *, require_complete):
                     filename = native.POLICY["report_name"]
-                    path = directory / projection.X1["mode"] / filename
-                    path.parent.mkdir()
-                    cursor = {"source_revision": different if stale_cursor else revision}
-                    native.save(path, cursor)
-                    receipt = {"report": path.relative_to(directory).as_posix(), "sha256": projection.model.digest(path)}
-                    if corrupt:
-                        path.write_bytes(path.read_bytes() + b"\n")
-                    report = {"source_revision": different if stale_control else revision,
-                              "status": native.POLICY["passed"], gate["complete_key"]: True,
-                              "probes": {projection.X1["mode"]: receipt}}
+                    probes = {}
+                    for mode in modes:
+                        path = directory / mode / filename
+                        path.parent.mkdir()
+                        native.save(path, {"source_revision": different if mode == damaged and not corrupt else revision,
+                                           ordered["qualified_key"]: True})
+                        probes[mode] = {"report": path.relative_to(directory).as_posix(), "sha256": projection.model.digest(path)}
+                        if mode == damaged and corrupt:
+                            path.write_bytes(path.read_bytes() + b"\n")
+                    report = {"source_revision": different if damaged == gate["complete_mode"] else revision,
+                              "status": native.POLICY["passed"], gate["complete_key"]: True, ordered["qualified_key"]: True,
+                              "probes": probes}
                     native.save(directory / filename, report)
                     return report
 
