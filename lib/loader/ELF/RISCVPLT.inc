@@ -17,8 +17,10 @@ constexpr uint32_t UFormMask = 0x00000fff;
 constexpr uint32_t IFormMask = 0x000fffff;
 constexpr uint32_t AuipcT2 = 0x397;
 constexpr uint32_t SubT1T1T3 = 0x41c30333;
-constexpr unsigned SubHighByteOffset = 2 * Word - 1;
-constexpr char SubHighByte = static_cast<char>(SubT1T1T3 >> 24);
+// The resolver begins with AUIPC t2 (variable displacement) and SUB t1,t1,t3.
+constexpr uint64_t HeaderPrefixMask = (uint64_t(UINT32_MAX) << 32) | UFormMask;
+constexpr uint64_t HeaderPrefix = (uint64_t(SubT1T1T3) << 32) | AuipcT2;
+constexpr unsigned ScanStarts = 8;
 constexpr uint32_t LwT3T2 = 0x3ae03;
 constexpr uint32_t LdT3T2 = 0x3be03;
 constexpr uint32_t AdjustT1 = 0xfd430313; // addi t1,t1,-(HeaderSize + 12)

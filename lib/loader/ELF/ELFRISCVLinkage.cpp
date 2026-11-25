@@ -20,7 +20,6 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -73,15 +72,30 @@ std::optional<va_t> findHeader(const BinaryImage &Image, va_t FirstSlot) {
     const size_t Size = std::min<uint64_t>(Seg.FileSz, Seg.Data.size());
     if (Size < HeaderSize)
       continue;
-    // Search for the high byte of the resolver's fixed SUB. A match can
-    // start only where a complete header still fits in the file mapping.
-    const llvm::StringRef Starts(
-        reinterpret_cast<const char *>(Seg.Data.data() + SubHighByteOffset),
-        Size - HeaderSize + 1);
-    for (size_t Off = Starts.find(SubHighByte); Off != llvm::StringRef::npos;
-         Off = Starts.find(SubHighByte, Off + 1))
-      if (readLE<uint32_t>(Seg.Data.data() + Off + Word) == SubT1T1T3 &&
-          isHeader(Image, Seg.VA + Off))
+    const unsigned Align = Image.RISCV.hasCompressed() ? Word / 2 : Word;
+    // Compare a batch of fixed AUIPC/SUB prefixes before checking any GOT
+    // address. Repeated bytes in compressed instructions are common.
+    auto Matches = [&](size_t Pos) {
+      return (readLE<uint64_t>(Seg.Data.data() + Pos) & HeaderPrefixMask) ==
+             HeaderPrefix;
+    };
+    const size_t Last = Size - HeaderSize;
+    size_t Off = -Seg.VA % Align;
+    for (; Off <= Last && Last - Off >= (ScanStarts - 1) * Align;
+         Off += ScanStarts * Align) {
+      bool Found = false;
+      for (unsigned I = 0; I < ScanStarts; ++I)
+        Found |= Matches(Off + I * Align);
+      if (!Found)
+        continue;
+      for (unsigned I = 0; I < ScanStarts; ++I) {
+        const size_t Pos = Off + I * Align;
+        if (Matches(Pos) && isHeader(Image, Seg.VA + Pos))
+          return Seg.VA + Pos;
+      }
+    }
+    for (; Off <= Last; Off += Align)
+      if (Matches(Off) && isHeader(Image, Seg.VA + Off))
         return Seg.VA + Off;
   }
   return std::nullopt;

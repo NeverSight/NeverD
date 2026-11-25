@@ -11,6 +11,7 @@
 
 constexpr va_t PLT0 = 0x21100;
 constexpr va_t GOT = 0x1ff70;
+constexpr uint8_t RepeatedCompressedByte = 0x41; // 0x4141: c.li sp,16.
 
 constexpr uint32_t Words32[] = {
     0xfffff397, 0x41c30333, 0xe703ae03, 0xfd430313, 0xe7038293, 0x00235313,

@@ -105,11 +105,12 @@ TEST(RISCVPLT, SectionlessScanRespectsAlignmentAndTheLastFileByte) {
         std::vector<uint8_t> Entries(Code.Data.begin() + HeaderBytes,
                                      Code.Data.end());
         Code.Data.resize(HeaderBytes);
-        // An earlier exact SUB belongs to unrelated instructions. The
+        // An earlier AUIPC/SUB pair belongs to unrelated code. The
         // actual resolver starts at the last possible position in this map.
         constexpr size_t Prefix = 17;
         Code.Data.insert(Code.Data.begin(), Prefix, 0);
-        llvm::support::endian::write32le(Code.Data.data() + 4, Words32[1]);
+        llvm::support::endian::write32le(Code.Data.data() + 1, Words32[0]);
+        llvm::support::endian::write32le(Code.Data.data() + 5, Words32[1]);
         Code.VA = I.Entry - Prefix;
         Code.Size = Code.Data.size();
         Code.FileSz = Code.Size - Truncate;
@@ -121,6 +122,21 @@ TEST(RISCVPLT, SectionlessScanRespectsAlignmentAndTheLastFileByte) {
         EXPECT_EQ(I.ImportStubIndices.size(),
                   Compressed && !Truncate ? 2u : 0u);
       }
+}
+
+TEST(RISCVPLT, SectionlessScanFindsAlignedPrefixesAcrossBatches) {
+  for (bool Compressed : {false, true})
+    for (unsigned N = 0; N <= 8; ++N) {
+      auto I = image(true, false);
+      I.RISCV.Compressed = Compressed;
+      auto &Code = I.Segments.front();
+      const size_t Prefix = 1 + N * (Compressed ? 2 : 4);
+      Code.Data.insert(Code.Data.begin(), Prefix, RepeatedCompressedByte);
+      Code.VA -= Prefix;
+      Code.FileSz = Code.Size = Code.Data.size();
+      ASSERT_EQ(llvm::toString(elf_loader::readRISCVLinkage(I)), "");
+      EXPECT_EQ(I.ImportStubIndices.size(), 2u);
+    }
 }
 
 TEST(RISCVPLT, UnrelaxedTailCallRetainsTheCallerAndTheImportedFunction) {
