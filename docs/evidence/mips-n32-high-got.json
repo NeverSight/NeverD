@@ -1,0 +1,109 @@
+{
+  "implementation": "3437b329dfb2f14b4691b372eab27d0b7fdafa29",
+  "baseline_source": "f182b9ab565e13915793f4e846046c9ff52590b8",
+  "llvm_sdk": "neverd-llvm-v23.0.0-r11",
+  "libraries_sha256": {
+    "baseline": "ca0602aa14e7424eacf7961ed96567dd5d04d9c755ed7882dd5acfd5725dd578",
+    "fixed": "0f6dd672fa57a562cf20d68e7f63cd306a7385cfd519689d3599040a4269d7a6"
+  },
+  "method": "Compile the same small static PIC n32 ELF with DWARF 4 in both byte orders for Releases 2, 3, 5 and 6. Compare identical original ELF bytes across builds. Link each regenerated object independently. Observe return PC, stack, s0, pointer bits, identity and actual calls before changing the global callback from microMIPS to a classic function and after restoring it.",
+  "source": "typedef __UINTPTR_TYPE__ word;\ntypedef unsigned (*callable)(unsigned);\n__attribute__((micromips,noinline,aligned(16))) unsigned target(unsigned x) { return x + 7; }\n__attribute__((visibility(\"default\"))) callable volatile slot = target;\nword bits(void) { return (word)slot; }\nword tag(void) { return (word)slot & 15; }\nunsigned equal_bits(word p) { return p == (word)slot; }\nunsigned invoke(unsigned x) { return slot(x); }\n\n__attribute__((nomicromips,noinline,aligned(16))) unsigned alternate(unsigned x) { return x + 19; }\nword replace_callback(callable next) { callable previous = slot; slot = next; return (word)previous; }\n",
+  "placements": {
+    "high-low": {
+      "baseline": {
+        "original": 96,
+        "object": 0,
+        "highc": 0,
+        "llvmc": 0
+      },
+      "input_text": "0x81010100",
+      "output_text": "0x310100",
+      "fixed": {
+        "original": 96,
+        "object": 96,
+        "highc": 96,
+        "llvmc": 96
+      },
+      "original_elf_sha256": {
+        "2-be": "7b11160c51359064a668cbac05b7a3dc44f153bdfc326779dcfc13087f576a63",
+        "2-le": "f88a2bcee6c986c74aa1020b336f3b492627684fe9d60583e9c4b181d4a31f39",
+        "3-be": "276f18c850b469f60956f12f3f9f7d2d5694746772954c0cd747a8b8e82eeffd",
+        "3-le": "6fd07c26ba2dfd216ea26db5d8367160412dd108ee649adcc836e3a4ad2a6f28",
+        "5-be": "748b5c5b1a95573e6100617146c53636667ab3c95c0e3f5c3d6bb1b48147d64d",
+        "5-le": "9eef9291c796de631d1fa67c9aee4409646c6e7637482521a7d158505df72ea2",
+        "6-be": "192c7204b1ee06397432313c0361fda1cd4e403c1c22f58e39d93772422965c5",
+        "6-le": "0f64b93f91e557ad6d9bb10b1d0bb6ca4b5d392925b3ca9761b751028c408f86"
+      }
+    },
+    "high-high": {
+      "baseline": {
+        "original": 96,
+        "object": 0,
+        "highc": 0,
+        "llvmc": 0
+      },
+      "input_text": "0x81010100",
+      "output_text": "0x81110100",
+      "fixed": {
+        "original": 96,
+        "object": 96,
+        "highc": 96,
+        "llvmc": 96
+      },
+      "original_elf_sha256": {
+        "2-be": "7b11160c51359064a668cbac05b7a3dc44f153bdfc326779dcfc13087f576a63",
+        "2-le": "f88a2bcee6c986c74aa1020b336f3b492627684fe9d60583e9c4b181d4a31f39",
+        "3-be": "276f18c850b469f60956f12f3f9f7d2d5694746772954c0cd747a8b8e82eeffd",
+        "3-le": "6fd07c26ba2dfd216ea26db5d8367160412dd108ee649adcc836e3a4ad2a6f28",
+        "5-be": "748b5c5b1a95573e6100617146c53636667ab3c95c0e3f5c3d6bb1b48147d64d",
+        "5-le": "9eef9291c796de631d1fa67c9aee4409646c6e7637482521a7d158505df72ea2",
+        "6-be": "192c7204b1ee06397432313c0361fda1cd4e403c1c22f58e39d93772422965c5",
+        "6-le": "0f64b93f91e557ad6d9bb10b1d0bb6ca4b5d392925b3ca9761b751028c408f86"
+      }
+    },
+    "low-high": {
+      "baseline": {
+        "original": 96,
+        "object": 96,
+        "highc": 96,
+        "llvmc": 96
+      },
+      "input_text": "0x210100",
+      "output_text": "0x81110100",
+      "fixed": {
+        "original": 96,
+        "object": 96,
+        "highc": 96,
+        "llvmc": 96
+      },
+      "original_elf_sha256": {
+        "2-be": "1b633ab3c4d5c3bbdd2818867390da8dcb8d6f4483a072c1c79da2f4a8c40654",
+        "2-le": "0b6d9e7a92fe15068612eb76c7f202f5a4be464524a93baeec868cbca0cbfa68",
+        "3-be": "b736429db062a535792ed4c33b910e4bfd1de674abfda82ae925f4e511cd5e35",
+        "3-le": "d9be9bd1e5db2d38bb1a98c645830261f19979ac6de6f86f87b09aabfc4e2175",
+        "5-be": "9a631591b675d64957f059ec5604c451b816a67e7a288188d46d60d7d66f6e01",
+        "5-le": "bc0bf9ca7d7273e083d021491ab05b3a86742998113853b71c40721dbd48af67",
+        "6-be": "1aea75b998bee28ba1466634b075f96f63947eb132ad5f8e2e5ba43e3c4fdf75",
+        "6-le": "0ea6b65e54d1621e44b41042a36cb480730eb81c8b1c1b061478f5fd25e13181"
+      }
+    }
+  },
+  "local_ctest": {
+    "mips": 1194,
+    "layout": 23,
+    "scalar": 39,
+    "med": 37
+  },
+  "models": {
+    "mips64r6": "UC_CPU_MIPS64_MICROMIPS64R6_GENERIC",
+    "pre_r6_scalar": "UC_CPU_MIPS64_MICROMIPS64R2_GENERIC",
+    "unicorn": "456fbb3b4f4b1c08ac95a562b736cd289c286ff4"
+  },
+  "qualification": "Software execution of self-authored ELF files. The pre-R6 inputs use the common scalar operations supported by the R2 model.",
+  "compile": "Clang -mcpu=mips64r{2,3,5,6} -mabi=n32 -fPIC -fvisibility=hidden -ffreestanding -O2 -gdwarf-4, in both byte orders. Link with ld.lld --emit-relocs and the text addresses recorded below.",
+  "baseline_failures": {
+    "object": "The emitter refused an ambiguous pointer-table address.",
+    "highc": "The recompiled source read the original GOT address after relinking and encountered an unmapped read.",
+    "llvmc": "The source writer reported the ambiguous pointer-table address and omitted the affected functions."
+  }
+}

@@ -159,6 +159,13 @@ ratio included 1.
   the mapped image. Source conversion reports a proved load of such a cell
   when the page and its displacement lack relocatable storage identity.
   Scoped GP records cannot supply the image-wide GP proof.
+- On n32, a load or store through a sign-extended ELF32 symbol uses that
+  symbol's 32-bit address when the program is relinked. Other uses of the
+  register retain all 64 bits. Tests move a PIC executable between the
+  lower and upper halves of the address space, switch a writable callback
+  from microMIPS to classic code, call it, and restore the original target.
+  They cover both byte orders and Releases 2, 3, 5 and 6 with DWARF types.
+  [Input hashes and execution results](evidence/mips-n32-high-got.json).
 - When the incoming return address is saved only on the stack, its slot must
   stay private across calls. An untyped result passed to another opaque call
   can carry a frame address. Replacing that argument before the call, including
