@@ -276,6 +276,14 @@ CPP_ONLY_RUNTIME_DECLARATIONS = {
         "HRESULT WINAPI DCompositionGetTargetStatistics(COMPOSITION_FRAME_ID frameId, const COMPOSITION_TARGET_ID *targetId, COMPOSITION_TARGET_STATS *targetStats);\n"
         "DWORD WINAPI DCompositionWaitForCompositorClock(UINT count, const HANDLE *handles, DWORD timeoutInMs);\n"
     ),
+    "DispatcherQueueRuntime": (
+        "enum DISPATCHERQUEUE_THREAD_APARTMENTTYPE { DQTAT_COM_NONE = 0, DQTAT_COM_ASTA = 1, DQTAT_COM_STA = 2 };\n"
+        "enum DISPATCHERQUEUE_THREAD_TYPE { DQTYPE_THREAD_DEDICATED = 1, DQTYPE_THREAD_CURRENT = 2 };\n"
+        "struct DispatcherQueueOptions { DWORD dwSize; enum DISPATCHERQUEUE_THREAD_TYPE threadType; "
+        "enum DISPATCHERQUEUE_THREAD_APARTMENTTYPE apartmentType; };\n"
+        "HRESULT WINAPI CreateDispatcherQueueController(struct DispatcherQueueOptions options, "
+        "__x_ABI_CWindows_CSystem_CIDispatcherQueueController **dispatcherQueueController);\n"
+    ),
     "DebugDataModelManager": (
         "struct IDebugHost { const struct IDebugHostVtbl *lpVtbl; };\n"
         "struct IDataModelManager { const struct IDataModelManagerVtbl *lpVtbl; };\n"
@@ -637,6 +645,17 @@ def verify_abis(proof, header, compiler, directory, prototypes, run):
     stem = library["module"] if "import_library" in proof else header.stem + "-runtime"
     bindings = "".join(f"__typeof__(&{name}) neverd_ucrt_abi_{i} = &{name};\n"
                        for i, name in enumerate(names))
+    if "CreateDispatcherQueueController" in names:
+        # The three members have the same width. A type-level LLVM call
+        # comparison alone would also accept a swapped enum or field.
+        bindings += """_Static_assert(sizeof(struct DispatcherQueueOptions) == 12);
+_Static_assert(__alignof__(struct DispatcherQueueOptions) == 4);
+_Static_assert(__builtin_offsetof(struct DispatcherQueueOptions, dwSize) == 0);
+_Static_assert(__builtin_offsetof(struct DispatcherQueueOptions, threadType) == 4);
+_Static_assert(__builtin_offsetof(struct DispatcherQueueOptions, apartmentType) == 8);
+_Static_assert(DQTYPE_THREAD_DEDICATED == 1 && DQTYPE_THREAD_CURRENT == 2);
+_Static_assert(DQTAT_COM_NONE == 0 && DQTAT_COM_ASTA == 1 && DQTAT_COM_STA == 2);
+"""
     contracts = []
     counts = proof.get("runtime_exports", {}).get("parameter_counts")
     for tag, include, options in (("original", proof["source"], proof["arguments"]),
