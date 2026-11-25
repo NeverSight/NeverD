@@ -2660,9 +2660,9 @@ The top report records the SHA-256 of all five component reports.
 The x1 result requires the call, unwind, cursor and checked-pointer controls.
 The Q result records 128-bit LRCPC3 separately.
 `native_arm64e_x1_and_lrcpc3_qualified` requires both results from the same run.
-Use `qualify-x1-full` for full native acceptance. If only Q is unavailable,
+Use `qualify-x1-full` to qualify the original native controls. If only Q is unavailable,
 the environment flag stays true, the Q feature appears in `missing`, and this
-command exits 2. The dedicated self-hosted workflow uses this command.
+command exits 2.
 Exit 2 records an unavailable
 environment and exit 1 records failure. The verifier retains the reports and
 removes the temporary executables and entitlements.
@@ -2670,14 +2670,18 @@ removes the temporary executables and entitlements.
 The signing projection exporter uses the two compiler comparison tests in
 `NeverDArm64eAnalysisTests`. It exports the HighC, LLVM C and optimized LLVM C
 sources, both direct backend objects and their independent C callers. Build
-the target with the documented r6 package and run
+the tests and export on a macOS builder, then transfer the inputs to the Mac
+that will run the qualification. Both output directories must be new.
 
 ```bash
-python3 scripts/verify_arm64e_x1_projections.py export \
-  --tests build-release/bin/NeverDArm64eAnalysisTests --output projection-inputs
-python3 scripts/verify_arm64e_x1_projections.py check \
+python3 scripts/verify_arm64e_x1_projections.py build-r6 --output projection-inputs
+python3 scripts/verify_arm64e_x1_projections.py check --require-native \
   --inputs projection-inputs --output x1-projection-results
 ```
+
+An existing r6 build can also supply the exporter through
+`export --tests build-release/bin/NeverDArm64eAnalysisTests --output projection-inputs`.
+The manifest binds the exporter, fixtures and individual inputs to the checkout.
 
 Both machines use the same NeverD revision. Xcode 27 compiles the C sources
 and callers for x1, and Apple's linker takes the original r6 arm64e objects
@@ -2689,6 +2693,15 @@ only for recipes with native support. A loader rejection or an entry-only run
 leaves `all_executed` false. Pass `--require-execution` to require all 20
 comparisons to run as well as link. The consumer keeps the command receipts
 and link maps and removes the generated objects and executables.
+
+`--require-native` runs the five original control probes on the measuring
+Mac and uses that invocation's x1 cursor to decide which generated comparisons
+can run. The report sets `native_generated_arm64e_x1_qualified` only when the
+full native control report qualifies and all 20 signing comparisons complete.
+It records the path and SHA-256 of the original control report alongside the
+individual image results. Exit 0 qualifies the run. Exit 2 records a measured
+capability or loader limit, and exit 1 records a failed control or comparison.
+A machine with partial instruction support can still report the comparisons it ran.
 
 Two clean r6 builds reproduced all 12 projected source files and backend objects.
 Xcode 27.1 linked and signed 20 arm64e.x1 images at O0 and O2. The linker
@@ -2709,8 +2722,10 @@ PACM. [Native regression replay](https://github.com/gmh5225/test_mac_intel/actio
 
 A registered GitHub Actions runner with labels `self-hosted`, `macOS`, `ARM64`
 and `neverd-arm64e-x1` can run the manual **Arm64e x1 native qualification**
-workflow. It has read-only repository permissions, requires the same strict
-probe to return success and uploads the component diagnostics on failure too.
+workflow. A hosted macOS producer exports the r6 inputs. The self-hosted job
+downloads that run's artifact by ID and requires the combined verifier to exit
+0. The workflow has read-only repository permissions and uploads the original
+controls and generated image diagnostics on failure too.
 It is not dispatched until a suitable runner is available. With no device
 available, `gmh5225/test_mac_intel` uses its hosted runners to exercise the
 same gate as a negative control and continue publication regression tests.

@@ -7,7 +7,27 @@ permissions:
   contents: read
 
 jobs:
+  export:
+    runs-on: macos-26
+    timeout-minutes: 210
+    outputs:
+      artifact: ${{ steps.inputs.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and export the r6 signing projections
+        run: python3 scripts/verify_arm64e_x1_projections.py build-r6 --output "$RUNNER_TEMP/inputs"
+      - id: inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r6-projection-inputs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/inputs
+          if-no-files-found: error
+          retention-days: 1
+
   qualify:
+    needs: export
     runs-on: [self-hosted, macOS, ARM64, neverd-arm64e-x1]
     timeout-minutes: 20
     env:
@@ -19,17 +39,33 @@ jobs:
           sparse-checkout: |
             scripts
             unittests/lift/aarch64
+            unittests/lift/fixtures/arm64e
             unittests/lift/format
             include/neverd/runtime
             include/neverd/ir/intrinsics/AArch64
-      - name: Require native x1 signing, checked arithmetic, writeback and 128-bit LRCPC3
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.export.outputs.artifact }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/${{ env.EVIDENCE }}-inputs
+      - name: Require native controls and generated x1 comparisons on this Mac
         run: |
           ulimit -c 0
-          python3 scripts/verify_arm64e_native.py qualify-x1-full --output "$RUNNER_TEMP/$EVIDENCE"
+          python3 scripts/verify_arm64e_x1_projections.py check --require-native \
+            --inputs "$RUNNER_TEMP/$EVIDENCE-inputs" --output "$RUNNER_TEMP/$EVIDENCE"
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: receipts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: arm64e-x1-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/${{ env.EVIDENCE }}
           if-no-files-found: error
           retention-days: 7
+      - if: always()
+        env:
+          UPLOAD_OUTCOME: ${{ steps.receipts.outcome }}
+        run: |
+          rm -rf -- "$RUNNER_TEMP/$EVIDENCE-inputs"
+          if [ "$UPLOAD_OUTCOME" = success ]; then
+            rm -rf -- "$RUNNER_TEMP/$EVIDENCE"
+          fi
