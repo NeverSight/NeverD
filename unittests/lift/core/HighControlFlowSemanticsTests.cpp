@@ -9351,6 +9351,49 @@ TEST(HighControlFlowSemantics, AFunctionReturningNoValueFoldsNoReturnedCall) {
   EXPECT_EQ(Body.find("return 5"), std::string::npos) << Source;
 }
 
+TEST(HighControlFlowSemantics, PhiCoalescingKeepsDistinctIncomingValues) {
+  auto Reg = [](int Tag) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.Size = 8;
+    V.RegOff = 0x10;
+    V.RenameTag = Tag;
+    V.TheArch = Arch::X64;
+    return HighExpr::makeVar(V, NdType::makeInt(8));
+  };
+  auto Assign = [](va_t Addr, ExprPtr Dst, ExprPtr Val, bool Phi = false) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Addr;
+    S.Dst = std::move(Dst);
+    S.Val = std::move(Val);
+    S.IsPhiCopy = Phi;
+    return S;
+  };
+  for (bool ThroughCopy : {false, true}) {
+    SCOPED_TRACE(ThroughCopy);
+    auto A = Reg(1);
+    auto B = Reg(2);
+    MedVar P;
+    P.Kind = MedVar::Param;
+    P.Size = 8;
+    auto Input = HighExpr::makeVar(P, NdType::makeInt(8));
+    HighStmt If;
+    If.Kind = StmtKind::If;
+    If.Addr = 0x1000;
+    If.Cond = Input;
+    If.Body = {result(0x1004, HighExpr::makeBinop(NdOp::INT_ADD, A, B))};
+    HighFunc F;
+    F.Body = {If, Assign(0x1008, Reg(1), Input)};
+    if (ThroughCopy)
+      F.Body.push_back(Assign(0x100c, Reg(3), Reg(1), true));
+    F.Body.push_back(Assign(0x1010, Reg(2), Reg(ThroughCopy ? 3 : 1), true));
+    F.Body.push_back(result(0x1014, Reg(2)));
+    coalesceHighPhiCopies(F);
+    EXPECT_NE(highSourceLocalIdentity(A->Var), highSourceLocalIdentity(B->Var));
+  }
+}
+
 TEST(HighControlFlowSemantics, PhiCopiesOfOneRegisterShareItsName) {
   // v1 = x; v2 = v1; L: v3 = v2 + 1; v2 = v3; if (v3 < x + 5) goto L;
   // return v3;  -- the PHI copies of one register never overlap the values
