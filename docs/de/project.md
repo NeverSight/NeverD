@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: cc524e2ef5f646079f8605cb37ff35db8589f473f5a0400471da98f1926a4c2b -->
+<!-- i18n-source: b9cda6cb01918cadfe48b4bc6544a4dc7baeb2e8ecd51cece677de52b5708065 -->
 
 <div align="center">
 
@@ -213,11 +213,11 @@ Erste Konfiguration baut den LLVM-Fork lokal (oft 30–60 Minuten). Spätere Bui
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r11
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r12
 cmake --build build
 ```
 
-Die reguläre Push- und Pull-Request-CI von NeverD baut das LLVM-Submodul bewusst aus den Quellen. Beim manuellen Start des `CI`-Workflows validiert `use_prebuilt_llvm` die veröffentlichten Pakete; nur ein manuell gewähltes `true` aktiviert vorgefertigtes LLVM. Bleibt es ungesetzt, gilt derselbe Quellbau-Pfad wie in der automatischen CI.
+Der manuell gestartete Workflow `CI` baut das LLVM-Submodul standardmäßig aus den Quellen. Setzen Sie `use_prebuilt_llvm` auf `true`, um die veröffentlichten Pakete zu prüfen.
 
 Welches Paket verwendet wird, ergibt sich aus dem Host, auf dem CMake läuft:
 
@@ -229,19 +229,19 @@ Welches Paket verwendet wird, ergibt sich aus dem Host, auf dem CMake läuft:
 
 Jedes Archiv wird vor dem Entpacken nach `~/.cache/neverd-llvm/<tag>/<arch>/` oder `NEVERD_LLVM_PREBUILT_CACHE_DIR` gegen den in `cmake/NeverDLLVMPrebuilt.cmake` fixierten Digest geprüft. Für dort nicht beschriebene Tags gilt die veröffentlichte `.sha256`-Datei. Beim fixierten Standard muss `BUILDINFO.txt` außerdem den exakten LLVM-Submodul-Commit nennen. Release-Builds verwenden ccache unter macOS/Linux sowie sccache mit dem GitHub-Actions-Cache für Windows clang-cl. Compiler-Caches beschleunigen nur Neubuilds und werden nie als Release-Artefakte veröffentlicht.
 
-Standard ist die Paketrevision `neverd-llvm-v23.0.0-r11`. Git-Tag, Release-Ziel, Quell-Commit und die drei Archiv-Digests bilden eine unveränderliche versionierte Quellreferenz. Build-Verzeichnisse mit altem Basistag, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9` oder `neverd-llvm-v23.0.0-r10` wechseln automatisch zu `r11`, außer bei explizitem `NEVERD_LLVM_PREBUILT_SHA256`. `Prebuilt LLVM Audit` läuft bei Pushes, Pull Requests und alle sechs Stunden. `scripts/audit_prebuilt_llvm_release.py` vergleicht die Quellreferenz mit dem aktuellen GitHub-Release und allen veröffentlichten Prüfsummendateien.
+Standard ist die Paketrevision `neverd-llvm-v23.0.0-r12`. Git-Tag, Release-Ziel, Quell-Commit und die drei Archiv-Digests bilden eine unveränderliche versionierte Quellreferenz. Build-Verzeichnisse mit altem Basistag, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9`, `neverd-llvm-v23.0.0-r10` oder `neverd-llvm-v23.0.0-r11` wechseln automatisch zu `r12`, außer bei explizitem `NEVERD_LLVM_PREBUILT_SHA256`. `Prebuilt LLVM Audit` wird manuell gestartet. `scripts/audit_prebuilt_llvm_release.py` vergleicht die Quellreferenz mit dem aktuellen GitHub-Release und allen veröffentlichten Prüfsummendateien.
 
-Ändert sich der LLVM-Fork, während LLVM weiter `23.0.0` meldet, veröffentlichen Sie die nächste Paketrevision `neverd-llvm-v23.0.0-r12`, danach `-r13`. Überschreiben Sie weder bestehende Releases noch erfinden Sie die LLVM-Version `23.0.1`:
+Ändert sich der LLVM-Fork, während LLVM weiter `23.0.0` meldet, veröffentlichen Sie die nächste Paketrevision `neverd-llvm-v23.0.0-r13`, danach `-r14`. Überschreiben Sie weder bestehende Releases noch erfinden Sie die LLVM-Version `23.0.1`:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r12 \
+  -f release_tag=neverd-llvm-v23.0.0-r13 \
   -f overwrite_existing_assets=false
 ```
 
-Aktualisieren Sie nach Erfolg Standardtag, fixierten Commit und alle drei Digests in `cmake/NeverDLLVMPrebuilt.cmake` gemeinsam. Jede Paketrevision verwendet ein eigenes Cache-Verzeichnis; der aktuelle Standard liegt unter `.cache/neverd-llvm/neverd-llvm-v23.0.0-r11`. Veraltete oder neu veröffentlichte Archive scheitern vor dem Entpacken. `overwrite_existing_assets` dient nur der historischen Wiederherstellung und bleibt im normalen Revisionsablauf aus.
+Aktualisieren Sie nach Erfolg Standardtag, fixierten Commit und alle drei Digests in `cmake/NeverDLLVMPrebuilt.cmake` gemeinsam. Jede Paketrevision verwendet ein eigenes Cache-Verzeichnis; der aktuelle Standard liegt unter `.cache/neverd-llvm/neverd-llvm-v23.0.0-r12`. Veraltete oder neu veröffentlichte Archive scheitern vor dem Entpacken. `overwrite_existing_assets` dient nur der historischen Wiederherstellung und bleibt im normalen Revisionsablauf aus.
 
 **Artefakte**
 

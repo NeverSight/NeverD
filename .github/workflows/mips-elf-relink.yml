@@ -127,14 +127,22 @@ jobs:
       - name: Execute the ELF files produced on all three native hosts
         run: |
           sudo apt-get update -qq
-          sudo apt-get install --yes qemu-user
+          sudo apt-get install --yes qemu-user python3-pyelftools ninja-build pkg-config
+          git submodule update --init --depth 1 third_party/unicorn
+          cmake -S third_party/unicorn -B build-mips-runtime -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DUNICORN_ARCH=mips -DBUILD_SHARED_LIBS=ON -DUNICORN_BUILD_TESTS=OFF
+          cmake --build build-mips-runtime --parallel 4 --target unicorn
+          export LIBUNICORN_PATH="$PWD/build-mips-runtime"
+          export PYTHONPATH="$PWD/third_party/unicorn/bindings/python"
           for host in Linux macOS Windows; do
             dir="products/relink-$host"
             test "$(cat "$dir/neverd.txt")" = "$(git rev-parse HEAD)"
-            python3 scripts/check_mips_elf_relink.py execute --root "$dir"
+            /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: relink-execution
-          path: products/*/execution.json
+          path: |
+            products/*/execution.json
+            products/*/placements.json
           if-no-files-found: error

@@ -79,6 +79,15 @@ generation. The Unicorn fork also rejects the seven
 reserved field values of the word operations `LSA` and `ALIGN`.
 [Encoding and execution results](evidence/mips-llvm-r11-micromipsr6.json).
 
+The r12 fork links direct calls between classic MIPS and MIPS16 and between
+two MIPS16 functions. It preserves the ISA tag on function pointers and emits
+the full source register number in MIPS16 moves to compact registers. It
+expands a low product into `mult` and `mflo` after register allocation, so a
+conditional calculation can stay in the block that uses its result. On pre-R6
+microMIPS64, the compiler fills a register return's delay slot with a full-width
+instruction when available. Otherwise it can emit a compact return.
+[LLVM and LLD changes](https://github.com/NeverSight/llvm-project/pull/21).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
@@ -152,8 +161,17 @@ segments and all loaded bytes outside that range must match the original.
 Both modes check the target ABI before publishing the executable atomically.
 
 The runtime qualification uses the NeverSight LLVM fork's code generator,
-assembler and ELF linker for classic Release 2 o32, n32 and n64, in both byte
-orders. To build the tools from NeverD's pinned fork checkout, run
+assembler and ELF linker. It builds classic MIPS and microMIPS for Release 2
+and Release 6 on o32, n32 and n64 in both byte orders, plus MIPS16 Release 2
+on o32 in both orders. Each program calls the rebuilt function three times.
+On MIPS16, a classic entry calls a compressed function which calls the
+rebuilt MIPS16 function through an O32 `R_MIPS16_26` relocation.
+The six original classic cases return 25 before relinking and 37 afterward.
+The 26 shrinking-function cases return 81 and 29. They check the smaller
+symbol size, file offset, placement and ISA marker. The shrinking n64 images
+place executable code above 4 GiB.
+
+To build the tools from NeverD's pinned fork checkout, run
 
 ```sh
 git submodule update --init third_party/llvm-project
@@ -166,7 +184,14 @@ cmake --build build-mips-tools --target llc llvm-mc lld
 Use `build-mips-tools/bin/ld.lld` as the linker. Run
 `python3 scripts/check_mips_elf_relink.py qualify --help` for the tool
 paths, then `python3 scripts/check_mips_elf_relink.py execute --root products`
-on Linux with QEMU user-mode emulators for all six profiles.
+on Linux with QEMU user-mode and pyelftools. The n32 and n64 microMIPS
+cases use the pinned NeverSight Unicorn fork. Set `LIBUNICORN_PATH` to its
+MIPS-enabled shared-library build and `PYTHONPATH` to
+`third_party/unicorn/bindings/python`. The runner applies the ELF load
+segments' memory permissions, starts at the entry point, and checks the ABI
+exit syscall and its result. The manual **MIPS ELF relink**
+workflow builds the programs on Linux, macOS and Windows and runs all three
+sets on Linux.
 
 ## Implementation boundaries
 
