@@ -80,9 +80,9 @@ __asm__(".text\n"
 
 typedef struct {
   unsigned Checks, FirstFailure;
-  unsigned Signed[CursorKeyCount], CFARejected[CursorKeyCount],
-      PCRejected[CursorKeyCount], KeyRejected[CursorKeyCount],
-      RecipeRejected[CursorKeyCount];
+  unsigned Completed[CursorKeyCount], Signed[CursorKeyCount],
+      CFARejected[CursorKeyCount], PCRejected[CursorKeyCount],
+      KeyRejected[CursorKeyCount], RecipeRejected[CursorKeyCount];
 } CursorResults;
 
 static void check(CursorResults *Result, bool Condition) {
@@ -315,7 +315,11 @@ static void checkRecipes(CursorResults *Result, bool Explicit, uintptr_t Low,
       check(Result, step(Result, &Cursor, Row, Low, High, Explicit));
       check(Result, Cursor.PC == PC && Cursor.SP == Value.CFA && !Cursor.LR);
       checkSpilled(Result, Value, PC, Row, Low, High, Explicit, &Frames);
+      ++Result->Completed[Key];
     }
+  }
+  for (unsigned Key = 0; Key != CursorKeyCount; ++Key) {
+    check(Result, Result->Completed[Key] == Samples);
     check(Result, Result->Signed[Key] && Result->CFARejected[Key] &&
                       Result->KeyRejected[Key]);
     if (Explicit)

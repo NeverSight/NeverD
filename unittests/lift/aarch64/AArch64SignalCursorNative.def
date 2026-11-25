@@ -48,9 +48,8 @@ static bool canSign(void (*Sign)(uintptr_t, Signature *),
 }
 
 static int probeExplicit(void) {
-  struct sigaction Action = {0}, Previous;
+  struct sigaction Action = {.sa_flags = SA_SIGINFO}, Previous;
   Action.sa_sigaction = illegalInstruction;
-  Action.sa_flags = SA_SIGINFO;
   sigemptyset(&Action.sa_mask);
   if (sigaction(SIGILL, &Action, &Previous))
     return EXIT_FAILURE;
@@ -81,12 +80,14 @@ int main(int Argc, char **Argv) {
     fprintf(stderr, "failed cursor check %u\n", Result.FirstFailure);
     return EXIT_FAILURE;
   }
-  printf("{\"checks\":%u,\"signed\":[%u,%u],\"cfa_rejected\":[%u,%u],"
+  printf("{\"checks\":%u,\"completed\":[%u,%u],\"signed\":[%u,%u],"
+         "\"cfa_rejected\":[%u,%u],"
          "\"pc_rejected\":[%u,%u],\"key_rejected\":[%u,%u],\"recipe_rejected\":"
          "[%u,%u]}\n",
-         Result.Checks, Result.Signed[0], Result.Signed[1],
-         Result.CFARejected[0], Result.CFARejected[1], Result.PCRejected[0],
-         Result.PCRejected[1], Result.KeyRejected[0], Result.KeyRejected[1],
-         Result.RecipeRejected[0], Result.RecipeRejected[1]);
+         Result.Checks, Result.Completed[0], Result.Completed[1],
+         Result.Signed[0], Result.Signed[1], Result.CFARejected[0],
+         Result.CFARejected[1], Result.PCRejected[0], Result.PCRejected[1],
+         Result.KeyRejected[0], Result.KeyRejected[1], Result.RecipeRejected[0],
+         Result.RecipeRejected[1]);
   return EXIT_SUCCESS;
 }

@@ -169,14 +169,15 @@ def build_cursor(output):
 def ordered_routes(target, profile):
     policy = CONFIG["ordered"]
     # The first model guests (Q forms only) predate named profiles.
-    if profile not in (target["previous_profile"], target["profile"]) and not (
+    direct_backends = (target["fixed_input_profile"], target["profile"])
+    if profile not in (*direct_backends, target["previous_profile"]) and not (
             "quadword_profile" in target and profile == target["quadword_profile"]):
         raise ValueError(CONFIG["bad_inventory"])
     for route, source in policy["sources"].items():
         for optimization in CONFIG["optimizations"]:
             yield route + "-" + optimization, source, "-" + optimization
     yield policy["object_route"], target["object_file"], None
-    if profile == target["profile"]:
+    if profile in direct_backends:
         yield policy["raw_object_route"], target["raw_object_file"], None
 
 
@@ -290,6 +291,8 @@ def run(model, guests, output, cursor=False, ordered=False):
         names = [label for label, _, _ in ordered_routes(policy, profile)]
         if profile == policy["quadword_profile"]:
             passed = policy["legacy_passed"]
+        elif profile != policy["profile"]:
+            passed = policy["fixed_input_passed"]
     elif cursor:
         names = [CONFIG["cursor"]["name"].format(optimization=opt) for opt in CONFIG["optimizations"]]
     else:

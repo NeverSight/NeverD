@@ -23,10 +23,11 @@
 #define ORDERED_SOURCE_COUNT 2
 #define ORDERED_LAYOUT_ERROR "ordered abort record layout"
 #define ORDERED_CASE_ERROR "ordered model inventory"
-#define ORDERED_STORE_LOW 0xfedcba987654b381ULL
-#define ORDERED_STORE_HIGH 0x91a2b3c4d5e6f708ULL
+#define ORDERED_REGISTER_INPUTS                                                \
+  {{0xfedcba987654b381ULL, 0x91a2b3c4d5e6f708ULL},                            \
+   {0x21340576c9b8ed3eULL, 0x7041320374251647ULL}}
 #define ORDERED_DATA_STEP 13
-#define ORDERED_DATA_SEED 129
+#define ORDERED_DATA_SEEDS {129, 2}
 
 // Synchronous Data Abort from lower EL or the same EL, alignment fault.
 #define ORDERED_EC_SHIFT 26
@@ -55,7 +56,7 @@
 #define ORDERED_01_PASS "ORDERED-MODEL compared EL1 and EL0 A=0 nAA=1\n"
 #define ORDERED_10_PASS "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=0\n"
 #define ORDERED_11_PASS "ORDERED-MODEL compared EL1 and EL0 A=1 nAA=1\n"
-#define ORDERED_PASS "ORDERED-MODEL passed GPR and SIMD comparisons\n"
+#define ORDERED_PASS "ORDERED-MODEL passed independent register and memory inputs\n"
 
 #define ORDERED_NATIVE_LSE2 "hw.optional.arm.FEAT_LSE2"
 #define ORDERED_NATIVE_LRCPC2 "hw.optional.arm.FEAT_LRCPC2"
