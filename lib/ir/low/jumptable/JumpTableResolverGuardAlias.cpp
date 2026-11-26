@@ -1968,12 +1968,18 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   // budget.
   if (!AliasQueries.empty()) {
     bool AliasProofComplete = false;
+    // The batch runs on a share of the candidate account and is charged what
+    // it spent: an unfinished batch only abandons its alternatives.
+    size_t AliasQueryBudget = *CandidateEvidenceBudget /
+                              limits::kJumpTableGuardAliasQueryAccountDivisor;
+    const size_t AliasQueryAllowance = AliasQueryBudget;
     const std::vector<bool> AliasResults = tableValuesMatchAtUses(
         AliasQueries, &AliasProofComplete, nullptr, InvalidVA, nullptr,
-        CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
+        &AliasQueryBudget, /*LocalMatchEvidenceLimit=*/0,
         /*CandidateBranchesSharingTargets=*/nullptr,
         /*QueryUnsignedFeasibleMasks=*/nullptr, GuardValueDepth,
         CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
+    *CandidateEvidenceBudget -= AliasQueryAllowance - AliasQueryBudget;
     if (!AliasProofComplete || AliasResults.size() != AliasQueries.size())
       goto alias_done;
     for (const PredicatedIndexAlias &Candidate : AliasCandidates) {

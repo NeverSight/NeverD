@@ -1605,6 +1605,10 @@ field into RCX through `movl`'s implicit zero-extend and scales RCX in the
 table load: the dispatch reads its four slots although one case scales a value
 at the end of a chain no value query finishes, while writing CL between the
 reload and the table load leaves the dispatch unresolved.
+`JTE_X86_64.AliasQueriesSpendOnlyTheirShareOfTheCandidateAccount` builds a
+64-case byte-code walk whose `cmova` selects propose about 10 Mi of alias
+queries with a 14 Mi candidate account: the guard still bounds the dispatch
+to its 64 slots.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

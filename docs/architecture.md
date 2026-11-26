@@ -11645,6 +11645,12 @@ such an occurrence asks every same-scale operation of the function whether
 it carries the index, and one query of that batch that cannot finish fails
 the role. liblzma's decoder lost its table that way once the table's targets
 brought a deep scaled value into the function.
+A guard proof's predicated-alias queries, which only add index alternatives
+for a select whose predicate the guard repeats, run on a share of the
+remaining candidate account (`kJumpTableGuardAliasQueryAccountDivisor`) and
+are charged what they spent. An unfinished batch abandons those alternatives
+and leaves the guard proof the rest; charged in full, pcre2's alias batches
+spent the account the guard itself needed.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
