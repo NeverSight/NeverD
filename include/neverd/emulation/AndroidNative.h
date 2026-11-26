@@ -57,6 +57,9 @@ struct NativeRegisterMemoryRead {
   uint32_t Register = 0;
   int64_t Offset = 0;
   uint64_t Size = 0;
+  /// Restrict an instruction observation to this configured guest PC.
+  /// Terminal reads require this field to be absent.
+  std::optional<uint64_t> PC = std::nullopt;
 };
 
 struct AndroidAuxiliaryValue {

@@ -148,8 +148,8 @@ The object requires 1–64 unique, four-byte-aligned `pcs` and a positive `limit
 Each retained record contains `pc`, `thread_id`, the admitted instruction count
 before that point, `registers` in x0–x30 order, `sp`, `nzcv`, and the requested
 memory bytes. These are scalar observations, not complete CPU/OS checkpoints.
-Addresses and register bits use hexadecimal strings in reports. The same
-memory ranges are copied at every point. `require_mapped_at_entry: false`
+Addresses and register bits use hexadecimal strings in reports. Fixed
+`read_memory` ranges are copied at every point. `require_mapped_at_entry: false`
 allows a range created during execution; it must be readable at every captured
 point. An unreadable range fails before executing that watched instruction.
 
@@ -165,8 +165,17 @@ and report the resolved address. They share the same reservation and truncation
 rules. They do not decode strings, dereference further pointers or supply JNI
 objects. `require_mapped_at_entry` applies only to fixed reads.
 
+A register read can select one of the configured `pcs` with an optional `pc`.
+For example, `{"register":"x0","size":8,"pc":"0x40001004"}` copies eight
+bytes only at that instruction. An omitted `pc` selects every watched
+instruction. Each record contains the matching reads in their declared order
+after the fixed reads. Terminal `android.read_register_memory` accepts only
+unqualified reads.
+
 The complete retained capacity shares `output_limit` with ordinary snapshots,
-thread records and PC tracing. `execution_observations_truncated` becomes true
+thread records and PC tracing. The reservation uses the largest complete
+record at any one configured PC multiplied by `limit`.
+`execution_observations_truncated` becomes true
 only when another point matches after the retained limit; execution continues
 with observation disabled. Unreached addresses produce no records. Observations
 consume no guest instruction or service event and preserve cooperative quantum

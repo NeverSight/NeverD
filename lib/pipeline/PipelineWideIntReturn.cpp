@@ -27,6 +27,7 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 
 #include <algorithm>
 #include <cstring>
@@ -39,6 +40,14 @@
 namespace neverd {
 
 namespace {
+
+bool isDoubleWordShift(llvm::StringRef Name) {
+  return llvm::StringSwitch<bool>(Name)
+#define NEVERD_DOUBLE_WORD_RESULT(Name, WordBytes)
+#define NEVERD_DOUBLE_WORD_SHIFT(Name, WordBytes) .Case(Name, true)
+#include "neverd/libc/CompilerRuntimeDoubleWord.def"
+      .Default(false);
+}
 
 // Resolve a call-target operand to its absolute VA, folding the COPY / INT_ADD
 // / INT_SUB / literal-pool LOAD chain the emitter resolves — so an ARM32
@@ -430,14 +439,18 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
     {
       std::map<va_t, const MedFunc *> ByEntry;
       std::set<va_t> Proven;
+      std::set<va_t> Shifts;
       for (const auto &MF : Result.MedFuncs) {
         ByEntry[MF.Entry] = &MF;
-        if (libc::returnsDoubleWord(
-                cNameOfSymbol(MF.Name, Img.Format, Img.Arch), TRI.PointerSize))
+        const auto Name = cNameOfSymbol(MF.Name, Img.Format, Img.Arch);
+        if (libc::returnsDoubleWord(Name, TRI.PointerSize)) {
           WideRetCallees.insert(MF.Entry);
-        else if ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
-                 !WideRetCallees.count(MF.Entry) &&
-                 returnsDoubleWordSum(MF, TRI))
+          if ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
+              isDoubleWordShift(Name))
+            Shifts.insert(MF.Entry);
+        } else if ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
+                   !WideRetCallees.count(MF.Entry) &&
+                   returnsDoubleWordSum(MF, TRI))
           // The sum proof already checked both final register definitions.
           Proven.insert(MF.Entry);
       }
@@ -465,7 +478,8 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
                        cNameOfSymbol(Import->Name, Img.Format, Img.Arch),
                        TRI.PointerSize);
           };
-          if (!returnsRegisterPairI64(Callee, TRI, TailReturnsPair))
+          if (!returnsRegisterPairI64(Callee, TRI, TailReturnsPair,
+                                      Shifts.count(Entry)))
             continue;
           Proven.insert(Entry);
           Changed = true;

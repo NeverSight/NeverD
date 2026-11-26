@@ -63,7 +63,18 @@ python3 tools/neverd-bench/sigprof/ab.py --runs 7 \
 and wall time with the per-pair range. Every run's output hash must agree;
 otherwise the timing comparison is meaningless.
 
-The comparison exits nonzero and suppresses timing ratios if any command fails,
+For a short command, use `--show-pairs` to retain each A and B observation
+in milliseconds and its execution order. The signed B−A summary takes the
+median of differences within pairs. A positive wall delta means B took longer.
+For a suspected submillisecond regression, repeat the same experiment with two
+copies of one binary and library. When both versions share a launcher, keep
+its path fixed and verify which SDK the loader selected for each side. If
+identical SDK copies in different directories give a persistent offset, repeat
+with both SDKs loaded from the same pathname. For warm-file-cache measurements,
+prime each copy first. On macOS the loaded image UUID identifies the version.
+Measure process start to exit separately from time inside the decompile command.
+
+The comparison exits nonzero and suppresses paired results if any command fails,
 any output is missing, or any full SHA-256 differs (including between repeated
 runs of the same side). A positive `--runs` count is required. CPU ratios are
 unavailable when a baseline CPU measurement is zero. Output identity is a

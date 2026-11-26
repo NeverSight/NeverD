@@ -334,7 +334,7 @@ memoryReads(const llvm::json::Value &Value) {
   return Reads;
 }
 llvm::Expected<std::vector<NativeRegisterMemoryRead>>
-registerMemoryReads(const llvm::json::Value &Value) {
+registerMemoryReads(const llvm::json::Value &Value, bool AtInstruction) {
   const auto *Array = Value.getAsArray();
   if (!Array)
     return invalid(field::ReadRegisterMemory);
@@ -383,6 +383,11 @@ registerMemoryReads(const llvm::json::Value &Value) {
         if (!Size)
           return Size.takeError();
         Read.Size = *Size;
+      } else if (Name == field::PC && AtInstruction) {
+        auto PC = number(V, Name);
+        if (!PC)
+          return PC.takeError();
+        Read.PC = *PC;
       } else
         return invalid(Name);
     }
@@ -419,7 +424,7 @@ observationOptions(const llvm::json::Value &Value) {
         return Reads.takeError();
       Out.ReadMemory = std::move(*Reads);
     } else if (Name == field::ReadRegisterMemory) {
-      auto Reads = registerMemoryReads(V);
+      auto Reads = registerMemoryReads(V, /*AtInstruction=*/true);
       if (!Reads)
         return Reads.takeError();
       Out.ReadRegisterMemory = std::move(*Reads);
@@ -1109,7 +1114,7 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
         return Reads.takeError();
       Out.ReadMemory = std::move(*Reads);
     } else if (Name == field::ReadRegisterMemory) {
-      auto Reads = registerMemoryReads(V);
+      auto Reads = registerMemoryReads(V, /*AtInstruction=*/false);
       if (!Reads)
         return Reads.takeError();
       Out.ReadRegisterMemory = std::move(*Reads);

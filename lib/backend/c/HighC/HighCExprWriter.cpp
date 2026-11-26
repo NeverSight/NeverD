@@ -42,7 +42,7 @@
 #include "neverd/backend/IntegerMemorySource.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
-#include "neverd/backend/PowerPC/PowerPCDivisionSource.h"
+#include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
@@ -2340,18 +2340,18 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
-    if (const auto D = ppc::division(E.IntrinsicId)) {
+    if (const auto D = ppc::fixedPoint(E.IntrinsicId)) {
       if (!D->admits(Opts.TheArch) || E.Operands.size() != 2 ||
           E.IntrinsicOutputs.size() != unsigned(D->Record))
-        throw std::runtime_error("invalid PowerPC divide");
+        throw std::runtime_error("invalid PowerPC fixed-point operation");
       std::string Condition;
       if (D->Record) {
         Condition = varName(E.IntrinsicOutputs.front());
         if (Analysis.DeadVars.count(Condition))
           Condition.clear();
       }
-      return ppc::divisionSource(*D, exprStr(*E.Operands[0]),
-                                 exprStr(*E.Operands[1]), Condition);
+      return ppc::fixedPointSource(*D, exprStr(*E.Operands[0]),
+                                   exprStr(*E.Operands[1]), Condition);
     }
     if (integer_memory::owns(E.IntrinsicId)) {
       if (E.Operands.empty() || E.Operands.front()->Kind != ExprKind::Const)

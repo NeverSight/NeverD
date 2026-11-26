@@ -187,7 +187,8 @@ TEST_P(AndroidSnapshots, TerminalRegisterReadsShareTheFinalOutputBudget) {
   auto Exact = llvm::cantFail(run());
   ASSERT_EQ(Exact.MemorySnapshots.size(), 2u);
   EXPECT_EQ(Exact.MemorySnapshots.back().Bytes.size(), 16u);
-  for (const auto &Read : {NativeRegisterMemoryRead{32, 0, 16}, {0, 0, 0}}) {
+  for (const auto &Read :
+       {NativeRegisterMemoryRead{32, 0, 16}, {0, 0, 0}, {0, 0, 16, 0}}) {
     A.ReadRegisterMemory = {Read};
     auto Invalid = run();
     ASSERT_FALSE(bool(Invalid));
