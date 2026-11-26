@@ -20,6 +20,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <bit>
 #include <cstdint>
 #include <iomanip>
 #include <vector>
@@ -188,6 +189,27 @@ TEST(RISCVBitManipulation, ReservedRV32EncodingsDoNotAcquireRV64Semantics) {
   }
 }
 
+void expectRISCVResult(const BinaryImage &Img, Decoder &D, uint32_t Word,
+                       uint64_t X, uint64_t Y, uint64_t Expected,
+                       unsigned Result = 10) {
+  const uint64_t Mask = Img.Arch == Arch::RISCV64 ? UINT64_MAX : UINT32_MAX;
+  SCOPED_TRACE(::testing::Message()
+               << std::hex << Word << " " << X << " " << Y);
+  uint8_t Code[4];
+  llvm::support::endian::write32le(Code, Word);
+  DecodedInsn I;
+  ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, I), 4);
+  std::vector<LowOp> Ops;
+  ASSERT_NO_THROW(D.liftToLow(I, Ops));
+  NdOpEmulator Emu(Img);
+  Emu.setStrictMode(true);
+  Emu.setRegister(integerreg::gpr(10), X & Mask);
+  Emu.setRegister(integerreg::gpr(11), Y & Mask);
+  for (const auto &Op : Ops)
+    ASSERT_TRUE(Emu.step(Op));
+  EXPECT_EQ(Emu.getRegister(integerreg::gpr(Result)), Expected & Mask);
+}
+
 TEST(RISCVBitManipulation, WordInputsAndBitIndicesUseTheirArchitecturalWidths) {
   using namespace rv_fixture;
   for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
@@ -208,21 +230,7 @@ TEST(RISCVBitManipulation, WordInputsAndBitIndicesUseTheirArchitecturalWidths) {
         // a0 is both rs1 and rd, a1 supplies rs2. Immediate forms use the
         // largest index and register forms also receive out-of-range values.
         auto Check = [&](uint32_t Word, uint64_t Expected) {
-          SCOPED_TRACE(::testing::Message()
-                       << std::hex << Word << " " << X << " " << Y);
-          uint8_t Code[4];
-          llvm::support::endian::write32le(Code, Word);
-          DecodedInsn I;
-          ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, I), 4);
-          std::vector<LowOp> Ops;
-          ASSERT_NO_THROW(D.liftToLow(I, Ops));
-          NdOpEmulator Emu(Img);
-          Emu.setStrictMode(true);
-          Emu.setRegister(integerreg::gpr(10), X & Mask);
-          Emu.setRegister(integerreg::gpr(11), Y & Mask);
-          for (const auto &Op : Ops)
-            ASSERT_TRUE(Emu.step(Op));
-          EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), Expected & Mask);
+          expectRISCVResult(Img, D, Word, X, Y, Expected);
         };
         Check(SH1ADD, 2 * X + Y);
         Check(SH2ADD, 4 * X + Y);
@@ -247,6 +255,215 @@ TEST(RISCVBitManipulation, WordInputsAndBitIndicesUseTheirArchitecturalWidths) {
         Check(BEXTI | Shift << 20, bool(X & High));
         Check(BINVI | Shift << 20, X ^ High);
         Check(BSETI | Shift << 20, X | High);
+      }
+  }
+}
+TEST(RISCVBasicBitManipulation, CountsLanesAliasesAndWordRotates) {
+  using namespace rv_fixture;
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    const bool Wide = A == Arch::RISCV64;
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+    Img.RISCV.Zbb = true;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    for (uint64_t Input :
+         {UINT64_C(0), UINT64_MAX, UINT64_C(0x010080ff807f0001),
+          UINT64_C(0x8100000080000000), UINT64_C(0x8000000000000000)}) {
+      const uint64_t X = Wide ? Input : uint32_t(Input);
+      uint64_t Bytes = 0;
+      for (unsigned I = 0; I < 64; I += 8)
+        if ((X >> I) & UINT8_MAX)
+          Bytes |= uint64_t(UINT8_MAX) << I;
+      const unsigned Bits = Wide ? 64 : 32;
+      uint64_t Reverse = 0;
+      for (unsigned I = 0; I < Bits; I += 8)
+        Reverse = (Reverse << 8) | ((X >> I) & UINT8_MAX);
+      expectRISCVResult(Img, D, Wide ? Rev8_64 : Rev8_32, X, 0, Reverse);
+      expectRISCVResult(Img, D, Wide ? ZextH64 : ZextH32, X, 0, uint16_t(X));
+      expectRISCVResult(Img, D, SextH, X, 0, llvm::SignExtend64<16>(X));
+      expectRISCVResult(Img, D, SextB, X, 0, llvm::SignExtend64<8>(X));
+      expectRISCVResult(Img, D, Clz, X, 0,
+                        Wide ? std::countl_zero(X)
+                             : std::countl_zero(uint32_t(X)));
+      expectRISCVResult(Img, D, Cpop, X, 0, std::popcount(X));
+      expectRISCVResult(Img, D, Wide ? Rori63 : Rori31, X, 0,
+                        Wide ? std::rotl(X, 1) : std::rotl(uint32_t(X), 1));
+      for (uint64_t Y : {UINT64_C(0), X, UINT64_C(1) << (Bits - 1)}) {
+        const bool SignedLess =
+            llvm::SignExtend64(X, Bits) < llvm::SignExtend64(Y, Bits);
+        expectRISCVResult(Img, D, AndN, X, Y, X & ~Y);
+        expectRISCVResult(Img, D, OrN, X, Y, X | ~Y);
+        expectRISCVResult(Img, D, Xnor, X, Y, ~(X ^ Y));
+        expectRISCVResult(Img, D, Min, X, Y, SignedLess ? X : Y);
+        expectRISCVResult(Img, D, Max, X, Y, SignedLess ? Y : X);
+        expectRISCVResult(Img, D, MinU, X, Y, X < Y ? X : Y);
+        expectRISCVResult(Img, D, MaxU, X, Y, X < Y ? Y : X);
+      }
+      expectRISCVResult(Img, D, OrcB, X, 0, Bytes);
+      expectRISCVResult(Img, D, Ctz, X, 0,
+                        Wide ? std::countr_zero(X)
+                             : std::countr_zero(uint32_t(X)));
+      for (unsigned N : {0u, 1u, 31u, 32u, 63u, 64u}) {
+        expectRISCVResult(Img, D, Ror, X, N,
+                          Wide ? std::rotr(X, N) : std::rotr(uint32_t(X), N));
+        expectRISCVResult(Img, D, RolIntoRs2, X, N,
+                          Wide ? std::rotl(X, N) : std::rotl(uint32_t(X), N),
+                          11);
+        expectRISCVResult(Img, D, RorFromZero, X, N, 0);
+        expectRISCVResult(Img, D, RolToZero, X, N, X); // a0 survives rd=x0.
+        if (Wide) {
+          expectRISCVResult(Img, D, RolW, X, N,
+                            llvm::SignExtend64<32>(std::rotl(uint32_t(X), N)));
+          expectRISCVResult(Img, D, RorW, X, N,
+                            llvm::SignExtend64<32>(std::rotr(uint32_t(X), N)));
+        }
+      }
+      if (Wide) {
+        expectRISCVResult(Img, D, RoriW31, X, 0,
+                          llvm::SignExtend64<32>(std::rotl(uint32_t(X), 1)));
+        expectRISCVResult(Img, D, CpopW, X, 0, std::popcount(uint32_t(X)));
+        expectRISCVResult(Img, D, CtzW, X, 0, std::countr_zero(uint32_t(X)));
+        expectRISCVResult(Img, D, ClzW, X, 0, std::countl_zero(uint32_t(X)));
+      }
+    }
+    // The other XLEN's encodings, nonzero rs2 on zext.h, and the reserved
+    // high immediate bit on roriw must not alias an admitted instruction.
+    for (uint32_t Word :
+         {Wide ? Rev8_32 : Rev8_64, Wide ? ZextH32 : ZextH64, ReservedRoriW,
+          (Wide ? ZextH64 : ZextH32) | (1u << 20),
+          Wide ? ReservedUnary : Rori63}) {
+      uint8_t Code[4];
+      llvm::support::endian::write32le(Code, Word);
+      DecodedInsn I;
+      std::vector<LowOp> Ops;
+      if (D.decodeOneForLift(Code, sizeof(Code), 0x1000, I))
+        EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction)
+            << std::hex << Word;
+      EXPECT_TRUE(Ops.empty());
+    }
+  }
+}
+
+TEST(PowerPCReversedTransfers, WidthByteOrderAndReservedFields) {
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE,
+                 Arch::PPC64ELFv1, Arch::PPC64LEELFv1}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    const unsigned Width = isPowerPC64(A) ? 8 : 4;
+    Img.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+    auto &Data = Img.Segments.emplace_back();
+    Data.VA = 0x1fff; // The transferred value starts at the next, aligned byte.
+    Data.Data = {0xa5, 0xf2, 0x83, 0x94, 0x25, 0x36, 0x47, 0x58, 0xe9, 0x5a};
+    Data.Size = Data.FileSz = Data.Data.size();
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    const bool Little = archLittleEndian(A);
+    const auto Order =
+        Little ? llvm::endianness::little : llvm::endianness::big;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    for (auto F : ppc_fixture::ReversedTransfers) {
+      for (unsigned Extra : {0u, 1u, 1u << 6}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << " " << std::hex << (F.Word | Extra));
+        uint8_t Code[4];
+        llvm::support::endian::write32(Code, F.Word | Extra, Order);
+        DecodedInsn I;
+        const int Size = D.decodeOneForLift(Code, sizeof(Code), 0x1000, I);
+        std::vector<LowOp> Ops;
+        if (Extra || F.Bytes > Width) {
+          if (Size)
+            EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+          continue;
+        }
+        ASSERT_EQ(Size, 4);
+        ASSERT_NO_THROW(D.liftToLow(I, Ops));
+        NdOpEmulator Emu(Img);
+        Emu.setStrictMode(true);
+        const uint64_t Value =
+            Width == 8 ? UINT64_C(0xfedcba9876543210) : UINT32_C(0xfedcba98);
+        Emu.setRegister(integerreg::gpr(3), Value);
+        Emu.setRegister(integerreg::gpr(4), Data.VA - 1);
+        Emu.setRegister(integerreg::gpr(5), 2);
+        for (const LowOp &Op : Ops)
+          ASSERT_TRUE(Emu.step(Op));
+        uint64_t Loaded = 0;
+        for (unsigned N = 0; N < Data.Data.size(); ++N) {
+          uint8_t Expected = Data.Data[N];
+          if (N && N <= F.Bytes) {
+            const unsigned Shift = 8 * (Little ? F.Bytes - N : N - 1);
+            Loaded |= uint64_t(Expected) << Shift;
+            if (F.Store)
+              Expected = uint8_t(Value >> Shift);
+          }
+          LowOp Read;
+          Read.Opcode = NdOp::LOAD;
+          Read.Output = NdVar::reg(integerreg::gpr(7), 1);
+          Read.addInput(NdVar::dataAddress(Data.VA + N, Width));
+          ASSERT_TRUE(Emu.step(Read));
+          EXPECT_EQ(Emu.getRegister(integerreg::gpr(7)), Expected);
+        }
+        EXPECT_EQ(Emu.getRegister(integerreg::gpr(3)),
+                  F.Store ? Value : Loaded);
+        EXPECT_EQ(Emu.getRegister(integerreg::gpr(4)), Data.VA - 1);
+      }
+    }
+  }
+}
+
+TEST(PowerPCTrailingZeros, WidthAndCR0WithAndWithoutRecording) {
+  using namespace integerreg::ppc;
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = isPowerPC64(A) ? Bitness::Bits64 : Bitness::Bits32;
+    const auto Endian =
+        archLittleEndian(A) ? llvm::endianness::little : llvm::endianness::big;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    for (bool Double : {false, true})
+      for (unsigned Extra : {0u, 1u, 1u << 11}) {
+        const uint32_t Word =
+            Double ? ppc_fixture::CnttzdR3R4 : ppc_fixture::CnttzwR3R4;
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << " " << std::hex << (Word | Extra));
+        uint8_t Code[4];
+        llvm::support::endian::write32(Code, Word | Extra, Endian);
+        DecodedInsn I;
+        const int Size = D.decodeOneForLift(Code, sizeof(Code), 0x1000, I);
+        std::vector<LowOp> Ops;
+        if ((Double && !isPowerPC64(A)) || Extra > 1) {
+          if (Size)
+            EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+          continue;
+        }
+        ASSERT_EQ(Size, 4);
+        ASSERT_NO_THROW(D.liftToLow(I, Ops));
+        for (uint64_t X : {UINT64_C(0), UINT64_C(1), UINT64_C(0x80000000),
+                           UINT64_C(0x8000000000000000)})
+          for (unsigned SO : {0u, 1u}) {
+            NdOpEmulator Emu(Img);
+            Emu.setStrictMode(true);
+            const auto Source = isPowerPC64(A) ? X : uint32_t(X);
+            const uint64_t Count =
+                Double ? std::countr_zero(X) : std::countr_zero(uint32_t(X));
+            Emu.setRegister(integerreg::gpr(4), Source);
+            Emu.setRegister(XER, uint64_t(SO) << XERSO);
+            for (unsigned Bit = 0; Bit < 32; ++Bit)
+              Emu.setRegister(crBit(Bit), Bit % 2);
+            for (const auto &Op : Ops)
+              ASSERT_TRUE(Emu.step(Op));
+            EXPECT_EQ(Emu.getRegister(integerreg::gpr(3)), Count);
+            EXPECT_EQ(Emu.getRegister(integerreg::gpr(4)), Source);
+            EXPECT_EQ(Emu.getRegister(XER), uint64_t(SO) << XERSO);
+            const unsigned Flags[] = {0, Count != 0, Count == 0, SO};
+            for (unsigned Bit = 0; Bit < 32; ++Bit)
+              EXPECT_EQ(Emu.getRegister(crBit(Bit)),
+                        Extra && Bit < 4 ? Flags[Bit] : Bit % 2);
+          }
       }
   }
 }
