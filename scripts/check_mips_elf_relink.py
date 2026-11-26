@@ -10,7 +10,8 @@ import shutil
 import subprocess
 import tempfile
 
-from mips_relink_linkage import SET_THREAD_AREA, build_linkage_objects, inspect_linkage, verify_linkage_objects
+from mips_relink_linkage import (FIXTURES, SET_THREAD_AREA, build_linkage_objects,
+                                 inspect_linkage, verify_linkage_objects)
 
 
 ABIS = {
@@ -286,10 +287,14 @@ def compile_arithmetic_object(args, build, profile, filename, ir):
          "-relocation-model=static", "-o", build / filename, "-"], source=ir)
 
 
-def build_arithmetic_objects(args, build, profile):
+def assemble_startup(args, build, profile):
     target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
     run([args.mc, "-filetype=obj", f"-triple={profile.triple}", *target,
          "-mattr=+noabicalls", "-o", build / "start.o", "-"], source=startup(profile))
+
+
+def build_arithmetic_objects(args, build, profile):
+    assemble_startup(args, build, profile)
     compile_arithmetic_object(args, build, profile, "calc.o", calculator(profile, False))
     compile_arithmetic_object(args, build, profile, "updated.o", calculator(profile, True))
     compile_arithmetic_object(args, build, profile, "grown.o", GROWING_CALC)
@@ -324,6 +329,30 @@ def check_mixed_float_abis(args, builds, products):
                     raise ValueError(f"{hard}: incompatible {mode} replacement changed the prior output")
 
 
+def build_upgrade_objects(old, new, build, out, profile, partial):
+    inputs = build / "inputs" if partial else build
+    inputs.mkdir(exist_ok=True)
+    assemble_startup(old, inputs, profile)
+    if not partial:
+        compile_arithmetic_object(old, inputs, profile, "calc.o", calculator(profile, False))
+        compile_arithmetic_object(new, inputs, profile, "updated.o", calculator(profile, True))
+        return ["start.o", "calc.o"]
+
+    callers = [inputs / "start.o"]
+    helper = (FIXTURES / "group_helper.ll").read_text()
+    for role, choice in (("left", "0"), ("right", "3")):
+        filename = role + ".o"
+        ir = helper.replace("SIDE", role).replace("CHOICE", choice)
+        compile_arithmetic_object(old, inputs, profile, filename, ir)
+        callers.append(inputs / filename)
+    calc = (FIXTURES / "group_calc.ll").read_text()
+    for tools, name, adjust in ((old, "calc.o", "1"), (new, "updated.o", "5")):
+        compile_arithmetic_object(tools, inputs, profile, name, calc.replace("ADJUST", adjust))
+        run([tools.lld, "-r", "-o", build / name, *callers, inputs / name])
+        shutil.copyfile(build / name, out / name)
+    return ["calc.o"]
+
+
 def qualify_upgrade(args):
     """Reproduce a prior fork release's ELF and link the replacement with the current one."""
     def tools_in(directory):
@@ -341,12 +370,11 @@ def qualify_upgrade(args):
             out = root / profile.name
             build.mkdir()
             out.mkdir(exist_ok=True)
-            objects = build_arithmetic_objects(old, build, profile)
+            objects = build_upgrade_objects(old, new, build, out, profile, args.partial_link)
             for separate, name in ((False, "base.ld"), (True, "section.ld")):
                 write(build / name, layout(profile, separate))
             original = out / "original.elf"
             run([old.lld, "-static", "-T", build / "base.ld", "-o", original, *(build / p for p in objects)])
-            compile_arithmetic_object(new, build, profile, "updated.o", calculator(profile, True))
             manifest = build / "manifest.json"
             encode(manifest, dict(objects=objects, original="calc.o", replacement="updated.o",
                                   function="calc", layout="base.ld", section=".calc.update", sectionLayout="section.ld"))
@@ -504,7 +532,7 @@ def qualify(args):
     print(f"Relinked {len(results)} profiles in both modes")
 
 
-def inspect_elf(image, profile):
+def verify_elf_profile(image, profile, file_type):
     # This runs on the execution host. Native producers only need Python's stdlib.
     abi = profile.abi
     flags = image["e_flags"]
@@ -515,7 +543,7 @@ def inspect_elf(image, profile):
         arch = {1: 5, 2: 7, 3: 7, 5: 7, 6: 9}[profile.release] + (profile.release_isa_bits == 64)
         level, revision = profile.release_isa_bits, profile.release
     extension = {"classic": 0, "micromips": 0x02000000, "mips16": 0x04000000}[profile.isa]
-    if (image["e_type"] != "ET_EXEC" or image["e_machine"] != "EM_MIPS"
+    if (image["e_type"] != file_type or image["e_machine"] != "EM_MIPS"
             or image.little_endian != profile.little or image.elfclass != (64 if abi == "n64" else 32)
             or flags >> 28 != arch or flags & 0x06000000 != extension
             or bool(flags & 0x20) != (abi == "n32")
@@ -527,6 +555,10 @@ def inspect_elf(image, profile):
     if abi == "o32" and (profile.historical_isa >= 3 or profile.gp64_o32):
         if not flags & 0x100 or abi_record.data()[4] != 2:
             raise ValueError(f"{profile.name}: expected the fork's wide-GPR o32 ELF flags")
+
+
+def inspect_elf(image, profile):
+    verify_elf_profile(image, profile, "ET_EXEC")
     if bool(image["e_entry"] & 1) != profile.compressed_entry:
         raise ValueError(f"{profile.name}: incorrect program entry ISA at {image['e_entry']:#x}")
 
@@ -540,7 +572,7 @@ def inspect_elf(image, profile):
     va, size = symbol["st_value"], symbol["st_size"]
     if (symbol["st_info"]["type"] != "STT_FUNC" or not section["sh_flags"] & 4 or size <= 0
             or not section["sh_addr"] <= va <= section["sh_addr"] + section["sh_size"] - size
-            or ((profile.shrinking or profile.linkage) and abi == "n64" and va < 1 << 32)):
+            or ((profile.shrinking or profile.linkage) and profile.abi == "n64" and va < 1 << 32)):
         raise ValueError(f"{profile.name}: invalid calc range {va:#x}+{size:#x} in {section.name}")
     if profile.linkage:
         inspect_linkage(image, profile, symbol, section)
@@ -578,6 +610,54 @@ def execute_image(path, image, profile, expected):
     run([qemu, *(["-cpu", cpu] if cpu else []), path], expected=expected)
 
 
+def verify_partial_object(path, profile):
+    from elftools.elf.elffile import ELFFile
+
+    with path.open("rb") as stream:
+        image = ELFFile(stream)
+        verify_elf_profile(image, profile, "ET_REL")
+        symbols = image.get_section_by_name(".symtab")
+        if symbols is None:
+            raise ValueError(f"{path}: missing combined object symbol table")
+        for name, section in (("_start", ".text.start"), ("calc", ".text.calc")):
+            found = symbols.get_symbol_by_name(name) or []
+            if (len(found) != 1 or found[0]["st_info"]["type"] != "STT_FUNC"
+                    or found[0]["st_info"]["bind"] != "STB_GLOBAL" or found[0]["st_size"] == 0
+                    or found[0]["st_shndx"] != image.get_section_index(section)):
+                raise ValueError(f"{path}: expected a definition of {name} in {section}")
+        relocs = image.get_section_by_name(".rel.text.start" if profile.abi == "o32" else ".rela.text.start")
+        if relocs is None or relocs["sh_info"] != image.get_section_index(".text.start"):
+            raise ValueError(f"{path}: missing startup relocations")
+        targets = image.get_section(relocs["sh_link"])
+        startup = image.get_section(relocs["sh_info"]).data()
+        order = "little" if image.little_endian else "big"
+        calls = {}
+        for reloc in relocs.iter_relocations():
+            offset = reloc["r_offset"]
+            instruction = int.from_bytes(startup[offset:offset + 4], order)
+            calls[offset] = (reloc["r_info_type"], targets.get_symbol(reloc["r_info_sym"]).name,
+                             reloc.entry.get("r_addend", 0), instruction)
+        # Each startup call is a JAL to calc with R_MIPS_26 and a zero addend.
+        if (relocs.num_relocations() != 3 or len(calls) != 3
+                or set(calls.values()) != {(4, "calc", 0, 0x0c000000)}):
+            raise ValueError(f"{path}: unexpected startup relocations {calls}")
+        for name in ("group_choice", "group_increment"):
+            found = symbols.get_symbol_by_name(name) or []
+            if (len(found) != 1 or found[0]["st_info"]["bind"] != "STB_WEAK"
+                    or not isinstance(found[0]["st_shndx"], int)):
+                raise ValueError(f"{path}: expected one defined weak {name}")
+        groups = [section for section in image.iter_sections() if section["sh_type"] == "SHT_GROUP"]
+        if len(groups) != 1:
+            raise ValueError(f"{path}: expected one group for group_increment")
+        group = groups[0]
+        signature = image.get_section(group["sh_link"]).get_symbol(group["sh_info"])
+        data = group.data()
+        words = [int.from_bytes(data[i:i + 4], order) for i in range(0, len(data), 4)]
+        if signature.name != "group_increment" or words[:1] != [1] or signature["st_shndx"] not in words[1:]:
+            raise ValueError(f"{path}: incomplete group_increment COMDAT group")
+    return digest(path)
+
+
 def execute(args):
     from elftools.elf.elffile import ELFFile
 
@@ -595,6 +675,15 @@ def execute(args):
     cases = list(profiles(version))
     if set(hashes) != {p.name for p in cases}:
         raise ValueError("MIPS relink products do not match the expected profile set")
+    if args.partial_link:
+        partial = {}
+        for profile in cases:
+            folder = root / profile.name
+            objects = {name: verify_partial_object(folder / name, profile) for name in ("calc.o", "updated.o")}
+            if objects["calc.o"] == objects["updated.o"]:
+                raise ValueError(f"{profile.name}: expected distinct original and updated objects")
+            partial[profile.name] = objects
+        encode(root / "partial-inputs.json", partial)
     if version >= 4:
         object_hashes = manifest["objects"]
         if set(object_hashes) != {p.name for p in cases if p.linkage}:
@@ -657,7 +746,10 @@ if __name__ == "__main__":
     upgrade.add_argument("--neverd", required=True)
     upgrade.add_argument("--original-tools", required=True, type=Path)
     upgrade.add_argument("--tools", required=True, type=Path)
+    upgrade.add_argument("--partial-link", action="store_true",
+                         help="partially link the startup, weak definitions and function before the final link")
     runtime = commands.add_parser("execute")
     runtime.add_argument("--root", required=True, type=Path)
+    runtime.add_argument("--partial-link", action="store_true", help="verify the combined input objects")
     args = parser.parse_args()
     {"qualify": qualify, "upgrade": qualify_upgrade, "execute": execute}[args.command](args)

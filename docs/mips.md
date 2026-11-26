@@ -99,6 +99,16 @@ backend uses the ABI pointer width for compact word loads and stores,
 including 64-bit base addresses on n64.
 [r14 code generation and linking](https://github.com/NeverSight/llvm-project/pull/23).
 
+The r15 assembler stops its initial mnemonic search on an exact match.
+The instruction matcher then checks operands and ISA features. In a Linux
+Release comparison against r13, assembly CPU time fell 2.21% on branches,
+1.86% on arithmetic and 1.46% on a mix of 32 mnemonics. Each workload
+produced identical object bytes across 48 paired runs. Building
+`LLVMMipsAsmParser` as the first target in a fresh CMake directory now
+generates the MC library's revision header.
+[Fork change](https://github.com/NeverSight/llvm-project/pull/24) ·
+[Assembly workloads and paired samples](https://github.com/gmh5225/test_mac_intel/actions/runs/45904234991).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
@@ -237,10 +247,17 @@ The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
 build produces 1,148 executable images across 336 configurations, including
-812 patched images. The upgrade check builds six more original executables
-with r13, then relinks them with the current fork in both modes. It compares
-each of the 12 replacements byte for byte with a direct link and runs all
-18 executables.
+812 patched images. The upgrade check uses r13 and r14 to build one original
+per ABI and byte order. Six more r14 originals use `ld.lld -r` to combine
+the startup, the function and two helpers. Both helpers define the same
+COMDAT function and different weak implementations of `group_choice`.
+The first helper in link order must supply the result. For each replacement
+the current linker combines the updated function with the original startup
+and helpers. The runner checks the ABI, the surviving COMDAT group, both
+weak symbols and the three `R_MIPS_26` relocations on startup calls in both
+intermediate objects. Across the three input sets it compares all 36
+replacements byte for byte with independent links, runs the 18 originals
+and all 36 replacements, and checks the function placement in every ELF.
 
 For MIPS16 o32 hard float, the ordinary function pointer selects the
 compiler's classic entry adapter and the symbol table retains the MIPS16
