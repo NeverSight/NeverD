@@ -302,6 +302,8 @@ protected:
 };
 
 TEST_P(X86LegacyVM86NativeTest, IretExecutionVMEAndProtectedFrames) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Case = 0; Case != 57; ++Case)
     ASSERT_NO_FATAL_FAILURE(compare(Case));
   RecordProperty("original_sequence_comparisons", Comparisons);

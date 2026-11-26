@@ -87,6 +87,8 @@ TEST_P(X86LegacyMachineStatusNativeTest, WidthsRegistersAndMemory) {
 }
 
 TEST_P(X86LegacyMachineStatusNativeTest, FaultsAndPrivilegePriority) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Form = 0; Form != 3; ++Form)
     for (unsigned CPL : {0u, 1u, 2u, 3u})
       for (bool UMIP : {false, true})
@@ -103,6 +105,8 @@ TEST_P(X86LegacyMachineStatusNativeTest, FaultsAndPrivilegePriority) {
 }
 
 TEST_P(X86LegacyMachineStatusNativeTest, OriginalFaultRepairAndRetry) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Form : {0u, 1u})
     for (bool Code32 : {false, true})
       for (bool Operand32 : {false, true})
@@ -116,6 +120,8 @@ TEST_P(X86LegacyMachineStatusNativeTest, OriginalFaultRepairAndRetry) {
 }
 
 TEST_P(X86LegacyMachineStatusNativeTest, AccessControlFlagsAndPrivilege) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Form : {3u, 4u})
     for (unsigned CPL = 0; CPL != 4; ++CPL)
       for (bool Code32 : {false, true})
