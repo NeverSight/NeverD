@@ -144,8 +144,8 @@ For an unnamed leaf that first tests the word boundary and splits on the
 zero count, recovery follows each return and checks both ABI words. For each
 count from 0 through 63, every output bit must have the input or fill bit
 of the same left, logical-right or arithmetic-right shift. The input words
-and scratch registers are symbolic. This establishes the result width;
-the emitted function keeps its original body, including the RV32I return
+and scratch registers are symbolic. The proof establishes the result width.
+The emitted function keeps its original body, including the RV32I return
 alignment check. A mismatched word, store or unproved path leaves the
 standalone result at its ordinary word width.
 
