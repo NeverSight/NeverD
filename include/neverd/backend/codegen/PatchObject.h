@@ -39,6 +39,20 @@ validateDynCodePatchImage(const DynCodePatchEvidence &Evidence,
                           llvm::ArrayRef<SourcePatchMapping> Mappings,
                           llvm::ArrayRef<SourcePatchBinding> Bindings);
 
+/// The object reader can distinguish a bare assembler symbol from its C
+/// namesake. Match the audit to the linker spelling and the address to the
+/// same symbol's key in the compiled image.
+struct DynCodeObjectEntry {
+  llvm::StringRef ImageName;
+  llvm::StringRef LinkerName;
+};
+
+llvm::Error validateDynCodePatchImage(
+    const DynCodePatchEvidence &Evidence, llvm::StringRef Object,
+    const BinaryImage &Original, const CompiledImage &Compiled,
+    llvm::ArrayRef<SourcePatchMapping> Mappings,
+    llvm::ArrayRef<SourcePatchBinding> Bindings, DynCodeObjectEntry Entry);
+
 /// Install one native ELF, COFF or Mach-O relocatable object, retaining code
 /// and compiler-generated unwind bytes. Only declared relocations and decoded
 /// unwind-address fields change. Symbol/section/relocation evidence belongs to
@@ -68,8 +82,9 @@ llvm::Expected<PatchResult> installCOFFObjectPatch(
 
 /// Native arm64e input retains its exact CPU subtype/ABI, authenticated GOT,
 /// dyld pointer recipes and signed language frames. Explicit dependencies
-/// select providers for undefined pointer references. Final signing, recipe
-/// replay and original-entry redirection precede atomic publication.
+/// select providers for undefined pointer references. LLVM verbatim mapping
+/// and binding names select an exact Mach-O symbol-table spelling. Final
+/// signing, recipe replay and original-entry redirection precede publication.
 llvm::Expected<PatchResult> installMachOObjectPatch(
     llvm::StringRef Object, const BinaryImage &Original,
     llvm::ArrayRef<SourcePatchMapping> Mappings,

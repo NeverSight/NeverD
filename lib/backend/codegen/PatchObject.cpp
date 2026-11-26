@@ -1159,6 +1159,21 @@ validateDynCodePatchImage(const DynCodePatchEvidence &Evidence,
                           const CompiledImage &Compiled,
                           llvm::ArrayRef<SourcePatchMapping> Mappings,
                           llvm::ArrayRef<SourcePatchBinding> Bindings) {
+  const llvm::StringRef Name = Mappings.empty()
+                                   ? llvm::StringRef()
+                                   : llvm::StringRef(Mappings.front().Symbol);
+  const auto LinkerName = Original.isMachO()
+                              ? (macho_arm64e_abi::kSymbolPrefix + Name).str()
+                              : Name.str();
+  return validateDynCodePatchImage(Evidence, Object, Original, Compiled,
+                                   Mappings, Bindings, {Name, LinkerName});
+}
+
+llvm::Error validateDynCodePatchImage(
+    const DynCodePatchEvidence &Evidence, llvm::StringRef Object,
+    const BinaryImage &Original, const CompiledImage &Compiled,
+    llvm::ArrayRef<SourcePatchMapping> Mappings,
+    llvm::ArrayRef<SourcePatchBinding> Bindings, DynCodeObjectEntry Entry) {
   if ((Original.Arch != Arch::X64 && Original.Arch != Arch::AArch64) ||
       Compiled.TargetArch != Original.Arch ||
       Compiled.Format != Original.Format ||
@@ -1190,9 +1205,6 @@ validateDynCodePatchImage(const DynCodePatchEvidence &Evidence,
   auto Target = sourcePatchTargetTriple(Original);
   if (!Target)
     return Target.takeError();
-  const auto Entry = Original.Format == BinaryFormat::MachO
-                         ? "_" + Mappings.front().Symbol
-                         : Mappings.front().Symbol;
   auto Hash = [](llvm::StringRef Bytes) {
     return llvm::toHex(
         llvm::SHA256::hash(llvm::ArrayRef<uint8_t>(
@@ -1200,7 +1212,7 @@ validateDynCodePatchImage(const DynCodePatchEvidence &Evidence,
         true);
   };
   if (Audit->getString("target_triple") != *Target ||
-      Audit->getString("entry_symbol") != Entry ||
+      Audit->getString("entry_symbol") != Entry.LinkerName ||
       Audit->getString("output_digest") != Hash(Evidence.Payload) ||
       Audit->getString("input_digest") != Hash(Object))
     return fail(
@@ -1233,7 +1245,7 @@ validateDynCodePatchImage(const DynCodePatchEvidence &Evidence,
     if (Section.Kind != SectionKind::ReadOnlyData || !Metadata)
       return fail("hosted DynCode has unexpected native data storage: " + Name);
   }
-  const auto Symbol = Compiled.SymbolAddrs.find(Mappings.front().Symbol);
+  const auto Symbol = Compiled.SymbolAddrs.find(Entry.ImageName.str());
   if (!Code || Code->Size != Evidence.Payload.size() ||
       !rangeInBounds(Code->Offset, Code->Size, Compiled.Bytes.size()) ||
       Symbol == Compiled.SymbolAddrs.end() || Symbol->second != Code->VA ||

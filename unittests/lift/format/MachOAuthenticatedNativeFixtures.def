@@ -124,6 +124,19 @@ define i32 @entry(i32 %x) {
 )ir")
 MACHO_AUTH_NATIVE_TEXT(kBindingEntry, "entry")
 MACHO_AUTH_NATIVE_TEXT(kBindingEntrySymbol, "_entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactEntry, "\1_entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactData, "\1entry")
+MACHO_AUTH_NATIVE_TEXT(kConflictingBinding, "conflicts with an original binding")
+MACHO_AUTH_NATIVE_TEXT(kBindingCode, "binding_code")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactMarker, "\1binding_marker")
+MACHO_AUTH_NATIVE_TEXT(kBindingMarker, "binding_marker")
+MACHO_AUTH_NATIVE_TEXT(kBindingMarkerSymbol, "_binding_marker")
+MACHO_AUTH_NATIVE_TEXT(kBindingInterior, "\1binding_interior")
+MACHO_AUTH_NATIVE_TEXT(kBindingAbsentSpelling, "\1_binding_marker")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactCode, "\1_binding_code")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactBareCode, "\1binding_code")
+MACHO_AUTH_NATIVE_TEXT(kBindingOriginalCode, "_binding_original_code")
+MACHO_AUTH_NATIVE_TEXT(kBindingSwapped, "swapped")
 MACHO_AUTH_NATIVE_TEXT(kBindingBiasSymbol, "_bias")
 MACHO_AUTH_NATIVE_TEXT(kBindingRetained, "retained")
 MACHO_AUTH_NATIVE_TEXT(kBoundObjectOutput, "bound-object.dylib")
@@ -246,6 +259,11 @@ LreturnFields:
   add x0, x0, _binding_fields@PAGEOFF
   ret
 LoriginalC:
+#ifdef BIND_OBJECT
+.globl binding_interior
+.alt_entry binding_interior
+binding_interior:
+#endif
   adrp x0, _binding_code@PAGE
   add x0, x0, _binding_code@PAGEOFF
   ret
@@ -254,6 +272,30 @@ LoriginalBare:
   add x0, x0, binding_code@PAGEOFF
   ret
 .cfi_endproc
+#ifdef BIND_OBJECT
+#ifndef BIND_REFERENCE_ONLY
+.globl binding_marker
+#endif
+binding_marker:
+.cfi_startproc
+#ifdef BIND_REFERENCE_ONLY
+.cfi_escape 0x2e, 0
+#endif
+  b binding_helper
+.cfi_endproc
+binding_helper:
+.cfi_startproc
+  mov w0, #27
+  ret
+.cfi_endproc
+#else
+.globl _binding_marker
+_binding_marker:
+.cfi_startproc
+  mov w0, #16
+  ret
+.cfi_endproc
+#endif
 #ifndef BIND_OBJECT
 .private_extern _binding_code
 .private_extern binding_code
@@ -383,8 +425,13 @@ int main(int argc, char **argv) {
   auto entry = reinterpret_cast<uintptr_t (*)(int)>(dlsym(image, "entry"));
   if (!entry || entry(0) != static_cast<uintptr_t>(getpid()))
     return 2;
+  auto marker = reinterpret_cast<int (*)()>(dlsym(image, "binding_marker"));
+  if (!marker || marker() != (argc > 3 ? 27 : 16))
+    return 12;
   auto *code = static_cast<const uintptr_t *>(dlsym(image, "binding_original_code"));
-  if (!code || code[0] == code[1] || entry(3) != code[0] || entry(4) != code[1])
+  const bool swapped = argc == 5;
+  if (!code || code[0] == code[1] || entry(3) != code[swapped] ||
+      entry(4) != code[!swapped])
     return 11;
   auto *fields = reinterpret_cast<const Fields *>(entry(1));
   auto *got = reinterpret_cast<const uintptr_t *>(
