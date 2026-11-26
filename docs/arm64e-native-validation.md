@@ -2551,6 +2551,15 @@ published. The same driver compares two addresses materialized by
 `ADRP`/`ADD` against Apple's rebases for the original image's distinct
 `_binding_code` and `binding_code` functions. [Apple dyld symbol resolution](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/Loader.cpp#L2942-L3008)
 
+For a native arm64e replacement, an LLVM verbatim name selects the exact
+Mach-O symbol-table spelling in an entry mapping or original-image binding.
+For example, `@"\01_entry"` names `_entry`, while `@"\01entry"` names
+`entry`. A named assembly label can own a replacement when its
+address starts a compact-unwind or DWARF range in instruction bytes.
+An interior label, a data symbol and a second spelling of an already mapped
+symbol are rejected before publication. A DynCode audit compares its entry
+to the object's linker spelling and checks the same symbol's placed address.
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,

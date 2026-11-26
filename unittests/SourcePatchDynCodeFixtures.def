@@ -1,0 +1,17 @@
+//===- SourcePatchDynCodeFixtures.def - Native entry names -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef DYNCODE_TEXT
+#define DYNCODE_TEXT(Name, Value)
+#endif
+
+DYNCODE_TEXT(kImageEntry, "replacement")
+DYNCODE_TEXT(kVerbatimEntry, "\1replacement")
+DYNCODE_TEXT(kCLinkerEntry, "_replacement")
+DYNCODE_TEXT(kAuditEntry, "entry_symbol")
+DYNCODE_TEXT(kAuditTriple, "target_triple")
+
+#undef DYNCODE_TEXT

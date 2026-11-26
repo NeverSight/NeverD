@@ -7,9 +7,14 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/SHA256.h"
 
+#include <optional>
+
 namespace {
 using namespace neverd;
 using Kind = llvm::mc_rewrite::RewriteSectionKind;
+
+#define DYNCODE_TEXT(Name, Value) constexpr char Name[] = Value;
+#include "SourcePatchDynCodeFixtures.def"
 
 std::string hash(llvm::StringRef Bytes) {
   return llvm::toHex(
@@ -21,7 +26,7 @@ std::string hash(llvm::StringRef Bytes) {
 struct Artifact {
   BinaryImage Original;
   CompiledImage Linked;
-  SourcePatchMapping Mapping{"replacement", 0x401000};
+  SourcePatchMapping Mapping{kImageEntry, 0x401000};
   const std::string Object = "native object snapshot";
   DynCodePatchEvidence Evidence;
   llvm::json::Object Audit;
@@ -33,7 +38,7 @@ struct Artifact {
     Linked.Format = Original.Format;
     Linked.BaseVA = 0x500000;
     Linked.Bytes = {0x90, 0xc3};
-    Linked.SymbolAddrs.emplace("replacement", Linked.BaseVA);
+    Linked.SymbolAddrs.emplace(kImageEntry, Linked.BaseVA);
     CompiledSection Text;
     Text.Name = ".text";
     Text.VA = Linked.BaseVA;
@@ -53,8 +58,8 @@ struct Artifact {
                                {"alignment", 1},
                                {"entry_offset", 0},
                                {"image_size", 2},
-                               {"target_triple", "x86_64-unknown-linux-gnu"},
-                               {"entry_symbol", "replacement"},
+                               {kAuditTriple, "x86_64-unknown-linux-gnu"},
+                               {kAuditEntry, kImageEntry},
                                {"input_digest", hash(Object)},
                                {"output_digest", hash(Evidence.Payload)}};
     llvm::json::Array Journal;
@@ -66,10 +71,14 @@ struct Artifact {
                              {"value", "ok"}});
     Audit["journal"] = std::move(Journal);
   }
-  llvm::Error verify(llvm::ArrayRef<SourcePatchBinding> Bindings = {}) {
+  llvm::Error verify(llvm::ArrayRef<SourcePatchBinding> Bindings = {},
+                     std::optional<DynCodeObjectEntry> Entry = std::nullopt) {
     Evidence.Audit.clear();
     llvm::raw_string_ostream OS(Evidence.Audit);
     OS << llvm::json::Value(llvm::json::Object(Audit));
+    if (Entry)
+      return validateDynCodePatchImage(Evidence, Object, Original, Linked,
+                                       {Mapping}, Bindings, *Entry);
     return validateDynCodePatchImage(Evidence, Object, Original, Linked,
                                      {Mapping}, Bindings);
   }
@@ -82,8 +91,8 @@ TEST(SourcePatchDynCodeEvidence,
   for (auto [Key, Value] :
        {std::pair<const char *, llvm::json::Value>{"output_digest", "wrong"},
         {"input_digest", "wrong"},
-        {"entry_symbol", "other"},
-        {"target_triple", "aarch64-unknown-linux-gnu"},
+        {kAuditEntry, "other"},
+        {kAuditTriple, "aarch64-unknown-linux-gnu"},
         {"execution_profile", "standalone-v1"},
         {"keep_unwind", false},
         {"runtime_contract_count", 1},
@@ -108,6 +117,30 @@ TEST(SourcePatchDynCodeEvidence,
   llvm::consumeError(std::move(Error));
 }
 
+TEST(SourcePatchDynCodeEvidence, MatchesThePlacedMachOLinkerSymbol) {
+  Artifact MachO;
+  MachO.Original.Format = MachO.Linked.Format = BinaryFormat::MachO;
+  MachO.Mapping.Symbol = kVerbatimEntry;
+  auto Triple = sourcePatchTargetTriple(MachO.Original);
+  ASSERT_TRUE(bool(Triple)) << llvm::toString(Triple.takeError());
+  MachO.Audit[kAuditTriple] = *Triple;
+  MachO.Audit[kAuditEntry] = kImageEntry;
+  MachO.Linked.SymbolAddrs[kImageEntry] += MachO.Evidence.Payload.size();
+  MachO.Linked.SymbolAddrs.emplace(kVerbatimEntry, MachO.Linked.BaseVA);
+  const DynCodeObjectEntry Bare{kVerbatimEntry, kImageEntry};
+  auto Error = MachO.verify({}, Bare);
+  ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+
+  MachO.Audit[kAuditEntry] = kCLinkerEntry;
+  Error = MachO.verify({}, Bare);
+  ASSERT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  // The C symbol is present at a different address in the same image.
+  Error = MachO.verify({}, DynCodeObjectEntry{kImageEntry, kCLinkerEntry});
+  ASSERT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+}
+
 TEST(SourcePatchDynCodeEvidence, RejectsChangedCodeAndReorderedNativeEntry) {
   Artifact Changed;
   Changed.Linked.Bytes.front() ^= 1;
@@ -115,7 +148,7 @@ TEST(SourcePatchDynCodeEvidence, RejectsChangedCodeAndReorderedNativeEntry) {
   ASSERT_TRUE(bool(Error));
   llvm::consumeError(std::move(Error));
   Artifact Reordered;
-  Reordered.Linked.SymbolAddrs["replacement"] += 1;
+  Reordered.Linked.SymbolAddrs[kImageEntry] += 1;
   Error = Reordered.verify();
   ASSERT_TRUE(bool(Error));
   llvm::consumeError(std::move(Error));
