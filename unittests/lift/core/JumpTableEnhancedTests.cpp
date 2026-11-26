@@ -4945,6 +4945,76 @@ TEST_F(JTE_X86_64, ReloadThroughAnUnchangedCursorKeepsTheCompareBound) {
   }
 }
 
+static fs::path flagsCarryX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_flags_carry.o";
+}
+
+// `cmp $7, %edx; jle L` leads to `L: movzbl ...; ja default`, whose `ja`
+// reads the compare's flags (GCC jump threading in libzstd's sequence
+// decoder).  The guard proof follows the flags back through the block's only
+// predecessor, directly or through a relay block that keeps them, so both
+// dispatches read their eight entries.  An index changed after the compare,
+// or a second compare into the `ja` block that admits 101 values, leaves the
+// dispatch unresolved.
+TEST_F(JTE_X86_64, GuardReadsFlagsItsPredecessorCompareSet) {
+  auto ImageOrErr = neverd::loadBinary(flagsCarryX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  // Each table holds eight entries and a zero word.
+  const auto TableBase = [&](size_t Table) {
+    return Rodata->VA + Table * 9 * 4;
+  };
+  const auto Entries = [&](size_t Table) {
+    std::vector<neverd::va_t> Targets;
+    for (size_t Slot = 0; Slot < 8; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(TableBase(Table) + Slot * 4, 4);
+      if (!Bytes)
+        return std::vector<neverd::va_t>{};
+      int32_t Entry = 0;
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+      Targets.push_back(TableBase(Table) + static_cast<int64_t>(Entry));
+    }
+    return Targets;
+  };
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  for (const auto &[Name, Table] :
+       {std::pair{"jt_flags_carry", size_t(0)},
+        std::pair{"jt_flags_carry_chain", size_t(1)}}) {
+    SCOPED_TRACE(Name);
+    const std::vector<neverd::va_t> Expected = Entries(Table);
+    ASSERT_EQ(Expected.size(), 8u);
+    const neverd::LowFunc Func = Build(Name);
+    ASSERT_EQ(Func.JumpTables.size(), 1u);
+    EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+    EXPECT_EQ(Func.JumpTables.front().BaseAddr, TableBase(Table));
+    EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  }
+
+  for (const char *Name : {"jt_flags_stale_index", "jt_flags_two_paths"}) {
+    SCOPED_TRACE(Name);
+    const neverd::LowFunc Refused = Build(Name);
+    EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
+    for (const neverd::JumpTable &Table : Refused.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
+}
+
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;
 // ja`, then indexes its 13-entry table with `movzbl %sil,%eax; andl $0xf,%eax`.
 // The guard's byte is the low byte of that index, so the table keeps the

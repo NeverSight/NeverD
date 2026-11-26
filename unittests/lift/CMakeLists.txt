@@ -3566,6 +3566,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_open_donor.s
   x86_64/test_jumptable_narrow_guard.s
   x86_64/test_jumptable_reload_cursor.s
+  x86_64/test_jumptable_flags_carry.s
   x86_64/test_jumptable_byte_switch.s
   x86_64/test_jumptable_inclusive_postload_clobber.s
   x86_64/test_jumptable_inclusive_postload_unrelated.s

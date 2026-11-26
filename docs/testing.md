@@ -1589,6 +1589,11 @@ an index whose upper bits come from the caller. `JTE_X86_64.ReloadThroughAnUncha
 reloads the byte a loop compared under a cursor its cases advance: the
 dispatch reads its six slots, while reloading the next byte or reloading
 after replacing the cursor stays unresolved.
+`JTE_X86_64.GuardReadsFlagsItsPredecessorCompareSet` dispatches after a `ja`
+that reads the flags of the previous block's `cmp`, directly and through a
+relay block that keeps them: both dispatches read their eight slots, while an
+index changed after the compare, or a second compare into the `ja` block that
+admits 101 values, stays unresolved.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

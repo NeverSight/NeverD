@@ -11620,6 +11620,17 @@ copied into the index's own lane before the compare (`mov %dl, %al`) is the
 index only when the index has that width or a later zero-extend covers the
 whole index: otherwise the index keeps its earlier upper bits, which no
 bound on the lane constrains.
+A guard can read status flags its own block never writes. GCC threads
+`cmp $7, %edx; jle L` into `L: ...; ja default`, as in libzstd's sequence
+decoder, so the `ja` reads the compare's flags. A flag is never the table
+index, so a leaf for it would drop the whole guard. While the condition reads
+such a flag, and the first block of the guard's syntax has exactly one
+predecessor that makes no call, the syntax is collected over that
+predecessor's operations followed by its own, for at most
+`kMaxJumpTableGuardFlagSearchBlocks` blocks. This only proposes syntax: every
+definition unfolded there keeps its all-path definition query, so a second
+path into the block refuses the guard, and an index written after the compare
+is no longer the compared value.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
