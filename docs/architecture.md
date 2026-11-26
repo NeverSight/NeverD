@@ -5137,7 +5137,12 @@ SP, only signs that pointer and does not publish a frame cell. A spill
 whose address never escapes remains that spill across an ordinary call,
 including a call a case reaches before branching back to the reload. A
 call that receives the frame address, or a later store of the spill, keeps
-its own proof. A later AND that
+its own proof. A reload of the memory a guard compared is that value when
+both loads carry the same full register and displacement and nothing between
+them writes that register or memory, as for `cmpb $5, (%rbx); ja` before
+`movzbl (%rbx), %eax` under a loop cursor whose own value has no closed
+form; another displacement or a rewritten register keeps its own proof.
+A later AND that
 repeats the compared lane's own mask from the same unmodified source is that
 lane, including a byte mask (`#0xff`) the full-lane check rejects. A later
 unsigned field `(src >> lsb) & mask` that repeats the compared field, with

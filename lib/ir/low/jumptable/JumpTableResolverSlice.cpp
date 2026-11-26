@@ -9021,8 +9021,68 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                    Op.Output.Size == Def.Output.Size &&
                    Op.MemoryAddressSpace == Def.MemoryAddressSpace;
           };
+          // The full guest register and constant displacement a LOAD's
+          // address carries inside its own instruction: the register itself,
+          // or a temp built from it by same-width copies and constant adds.
+          // Two loads whose addresses carry the same register and
+          // displacement, with no write of that register between them, read
+          // the same address even when the register's own value (a loop
+          // cursor) has no closed form.
+          auto loadAddressCarrier =
+              [&](const std::vector<LowOp> &Ops, int Before, va_t InsnAddr,
+                  NdVar Value) -> std::optional<std::pair<NdVar, uint64_t>> {
+            uint64_t Displacement = 0;
+            for (unsigned N = 0; N < limits::kMaxQuasiCopyDepth; ++N) {
+              if (!consumeEvidence())
+                return std::nullopt;
+              if (Value.isReg())
+                return Value.Size == CurrentImg->getPointerSize()
+                           ? std::optional(std::pair{Value, Displacement})
+                           : std::nullopt;
+              if (!Value.isTemp())
+                return std::nullopt;
+              int Writer = -1;
+              for (int K = Before - 1; K >= 0 && Ops[K].Addr == InsnAddr; --K) {
+                if (!consumeEvidence())
+                  return std::nullopt;
+                if (Ops[K].Output.Space == Value.Space &&
+                    Ops[K].Output.Offset == Value.Offset) {
+                  Writer = K;
+                  break;
+                }
+              }
+              if (Writer < 0)
+                return std::nullopt;
+              const LowOp &Transport = Ops[Writer];
+              if (Transport.Opcode == NdOp::COPY && Transport.NumInputs == 1 &&
+                  Transport.Output.Size == Value.Size &&
+                  Transport.Inputs[0].Size == Value.Size) {
+                Value = Transport.Inputs[0];
+              } else if (Transport.Opcode == NdOp::INT_ADD &&
+                         Transport.NumInputs == 2 &&
+                         Transport.Output.Size == Value.Size &&
+                         Value.Size == CurrentImg->getPointerSize() &&
+                         Transport.Inputs[0].isConst() !=
+                             Transport.Inputs[1].isConst()) {
+                const bool ConstantFirst = Transport.Inputs[0].isConst();
+                Displacement += Transport.Inputs[ConstantFirst ? 0 : 1].Offset;
+                Value = Transport.Inputs[ConstantFirst ? 1 : 0];
+              } else {
+                return std::nullopt;
+              }
+              Before = Writer;
+            }
+            return std::nullopt;
+          };
+          const std::optional<std::pair<NdVar, uint64_t>> LoadCarrier =
+              HasFrameSlot ? std::nullopt
+                           : loadAddressCarrier(B.Ops, I, Def.Addr, Address);
+          const LaneView CarrierView =
+              LoadCarrier ? viewOf(LoadCarrier->first) : LaneView{};
+          const bool CarrierUsable = LoadCarrier && CarrierView.Valid;
           if ((!AddressResolved ||
-               AddressValue.Kind == ResolverResultKind::Value) &&
+               AddressValue.Kind == ResolverResultKind::Value ||
+               CarrierUsable) &&
               Def.MemoryOrdering == NdMemoryOrdering::None &&
               consumeEvidence(2)) {
             int SearchBlock = Block;
@@ -9030,6 +9090,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             std::set<int> Searched{Block};
             std::vector<std::pair<int, int>> CrossedEdges;
             bool Stop = false;
+            bool CarrierWritten = false;
             for (uint32_t Hop = 0;
                  !Stop && Hop < limits::kMaxJumpTableReloadSearchBlocks;
                  ++Hop) {
@@ -9040,8 +9101,12 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                   Stop = true;
                   break;
                 }
-                if (!SameLoad(Op))
+                if (!SameLoad(Op)) {
+                  if (CarrierUsable &&
+                      sameContainer(CarrierView, viewOf(Op.Output)))
+                    CarrierWritten = true;
                   continue;
+                }
                 const NdVar &EarlierAddress =
                     Op.NumInputs >= 2 ? Op.Inputs[1] : Op.Inputs[0];
                 if (HasFrameSlot) {
@@ -9051,8 +9116,33 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                              EarlierBase, EarlierOffset) ||
                       EarlierBase != SlotBase || EarlierOffset != SlotOffset)
                     continue;
+                } else if (const auto EarlierCarrier =
+                               CarrierUsable && !CarrierWritten &&
+                                       !sameContainer(CarrierView,
+                                                      viewOf(Op.Output))
+                                   ? loadAddressCarrier(Searching.Ops, J,
+                                                        Op.Addr, EarlierAddress)
+                                   : std::nullopt;
+                           EarlierCarrier &&
+                           EarlierCarrier->first.Space ==
+                               LoadCarrier->first.Space &&
+                           EarlierCarrier->first.Offset ==
+                               LoadCarrier->first.Offset &&
+                           EarlierCarrier->first.Size ==
+                               LoadCarrier->first.Size &&
+                           EarlierCarrier->second == LoadCarrier->second) {
+                  // Same register and displacement, and neither this load
+                  // nor anything after it wrote the register: the same
+                  // address.
                 } else {
+                  if (CarrierUsable &&
+                      sameContainer(CarrierView, viewOf(Op.Output)))
+                    CarrierWritten = true;
                   if (!resolveLoadAddress()) {
+                    // Only a same-register load further back can still
+                    // match; a load writes no memory.
+                    if (CarrierUsable)
+                      continue;
                     Stop = true;
                     break;
                   }

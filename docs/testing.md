@@ -1583,7 +1583,10 @@ close: that dispatch stays unresolved and no block past it is reachable.
 `JTE_X86_64.NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex` bounds a
 byte lane with `cmpb $0x81, %dl; ja`: indexed by the lane zero-extended, the
 dispatch reads all 130 slots, and indexed by it sign-extended, it stays
-unresolved.
+unresolved. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
+reloads the byte a loop compared under a cursor its cases advance: the
+dispatch reads its six slots, while reloading the next byte or reloading
+after replacing the cursor stays unresolved.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict
