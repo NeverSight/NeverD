@@ -858,6 +858,10 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             pass
         elif kind == "quartic-field-product-383":
             assert code.count("*") <= (24 if llvm else 32), text
+            if llvm:
+                # Real field placements need shifts. Constant projection masks
+                # must not add another shift for every use of a narrow value.
+                assert code.count("<<") <= 48, text
         elif kind == "paired-field-product-268":
             # The square leaves a real high bit. Retain it and the two odd copies.
             assert code.count("*") <= (14 if llvm else 10), text
