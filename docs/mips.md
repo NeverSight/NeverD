@@ -151,6 +151,12 @@ neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=sectio
 neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=inplace -o app.inplace
 ```
 
+When upgrading LLD, pass `--original-linker-path=/path/to/old/ld.lld`
+alongside `--linker-path=/path/to/new/ld.lld` for either mode. The first
+driver must reproduce the entire original file, including the linker
+version recorded in `.comment`. The second links the replacement. By
+default both links use `--linker-path`.
+
 In `section` mode, `sectionLayout` must place the function in the named
 executable output section at a range disjoint from its original range. The
 function can grow, and LLD resolves the callers. The layout can move the
@@ -220,7 +226,10 @@ The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
 build produces 1,148 executable images across 336 configurations, including
-812 patched images.
+812 patched images. The upgrade check builds six more original executables
+with r13, then relinks them with the current fork in both modes. It compares
+each of the 12 replacements byte for byte with a direct link and runs all
+18 executables.
 
 For MIPS16 o32 hard float, the ordinary function pointer selects the
 compiler's classic entry adapter and the symbol table retains the MIPS16

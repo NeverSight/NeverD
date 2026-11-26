@@ -331,6 +331,16 @@ Error checkObject(StringRef Path, StringRef Function) {
   return Error::success();
 }
 
+Expected<std::string> resolveLinker(const cl::opt<std::string> &Option) {
+  if (Option.empty())
+    return createStringError("--" + Option.ArgStr +
+                             " requires an ELF linker executable");
+  auto Path = sys::findProgramByName(Option);
+  if (!Path)
+    return createFileError(Option, Path.getError());
+  return std::move(*Path);
+}
+
 Error linkImage(StringRef Driver, StringRef Layout, StringRef Output,
                 const std::vector<std::string> &Objects) {
   SmallVector<StringRef> Args{Driver, "-static", "-T", Layout, "-o", Output};
@@ -366,11 +376,16 @@ Error relink(StringRef Output) {
   auto M = readManifest(PatchRelink, Inplace);
   if (!M)
     return M.takeError();
-  if (PatchLinkerPath.empty())
-    return createStringError("--linker-path requires an ELF linker executable");
-  auto Driver = sys::findProgramByName(PatchLinkerPath);
+  auto Driver = resolveLinker(PatchLinkerPath);
   if (!Driver)
-    return createFileError(PatchLinkerPath, Driver.getError());
+    return Driver.takeError();
+  std::optional<std::string> OriginalDriver;
+  if (PatchOriginalLinkerPath.getNumOccurrences()) {
+    auto Path = resolveLinker(PatchOriginalLinkerPath);
+    if (!Path)
+      return Path.takeError();
+    OriginalDriver.emplace(std::move(*Path));
+  }
   auto Input = readFile(InputFile);
   if (!Input)
     return Input.takeError();
@@ -409,7 +424,8 @@ Error relink(StringRef Output) {
     if (IsSelected)
       Selected = Staged;
   }
-  if (Error E = linkImage(*Driver, Layout, Candidate, Objects))
+  if (Error E = linkImage(OriginalDriver ? *OriginalDriver : *Driver, Layout,
+                          Candidate, Objects))
     return E;
   auto Baseline = readFile(Candidate);
   if (!Baseline)
@@ -450,7 +466,8 @@ Error relink(StringRef Output) {
 int runRelinkPatch() {
   for (const auto &[Name, Opt] : cl::getRegisteredOptions(PatchCmd)) {
     if (Opt->getNumOccurrences() && Opt != &InputFile && Opt != &OutputFile &&
-        Opt != &PatchRelink && Opt != &PatchLinkerPath && Opt != &PatchStrat &&
+        Opt != &PatchRelink && Opt != &PatchLinkerPath &&
+        Opt != &PatchOriginalLinkerPath && Opt != &PatchStrat &&
         Opt != &Verbose) {
       WithColor::error() << "--relink cannot be combined with --" << Name
                          << "\n";

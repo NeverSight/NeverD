@@ -107,6 +107,24 @@ jobs:
           python scripts/check_mips_elf_relink.py qualify --root products \
             --neverd build-check/bin/neverd$suffix --mc build-tools/bin/llvm-mc$suffix \
             --llc build-tools/bin/llc$suffix --lld build-tools/bin/ld.lld$suffix
+      - name: Relink original r13 executables with the current fork
+        env:
+          ORIGINAL_LLVM: 24ced447e1718432292dc9d54b6eb229323409d1
+        run: |
+          suffix=
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          mkdir current-tools
+          for tool in llc ld.lld; do
+            cp -L "build-tools/bin/$tool$suffix" "current-tools/$tool$suffix"
+          done
+          git -C toolchain-src fetch --no-tags --depth 1 origin "$ORIGINAL_LLVM"
+          git -C toolchain-src checkout --detach "$ORIGINAL_LLVM"
+          cmake --build build-tools --parallel 4 --target llc llvm-mc lld
+          mkdir -p products/from-r13
+          build-tools/bin/ld.lld$suffix --version | tee products/from-r13/linker.txt
+          grep -F "$ORIGINAL_LLVM" products/from-r13/linker.txt
+          python scripts/check_mips_elf_relink.py upgrade --root products/from-r13 \
+            --neverd build-check/bin/neverd$suffix --original-tools build-tools/bin --tools current-tools
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: relink-${{ runner.os }}
@@ -138,6 +156,7 @@ jobs:
             dir="products/relink-$host"
             test "$(cat "$dir/neverd.txt")" = "$(git rev-parse HEAD)"
             /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir"
+            /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir/from-r13"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -145,4 +164,6 @@ jobs:
           path: |
             products/*/execution.json
             products/*/placements.json
+            products/*/from-r13/execution.json
+            products/*/from-r13/placements.json
           if-no-files-found: error

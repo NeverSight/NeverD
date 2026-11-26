@@ -1489,8 +1489,12 @@ std::string patchOutputPath() {
 int runPatch(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
   const std::string OutPath = patchOutputPath();
-  if (PatchLinkerPath.getNumOccurrences()) {
-    WithColor::error() << "--linker-path requires --relink\n";
+  if (PatchLinkerPath.getNumOccurrences() ||
+      PatchOriginalLinkerPath.getNumOccurrences()) {
+    const auto &Option = PatchLinkerPath.getNumOccurrences()
+                             ? PatchLinkerPath
+                             : PatchOriginalLinkerPath;
+    WithColor::error() << "--" << Option.ArgStr << " requires --relink\n";
     return 1;
   }
 

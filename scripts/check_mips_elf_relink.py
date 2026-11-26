@@ -324,6 +324,71 @@ def check_mixed_float_abis(args, builds, products):
                     raise ValueError(f"{hard}: incompatible {mode} replacement changed the prior output")
 
 
+def qualify_upgrade(args):
+    """Reproduce a prior fork release's ELF and link the replacement with the current one."""
+    def tools_in(directory):
+        suffix = ".exe" if (directory / "ld.lld.exe").is_file() else ""
+        return argparse.Namespace(mc=directory / ("llvm-mc" + suffix),
+                                  llc=directory / ("llc" + suffix), lld=directory / ("ld.lld" + suffix))
+
+    old, new = tools_in(args.original_tools.resolve()), tools_in(args.tools.resolve())
+    root = args.root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    results = {}
+    with tempfile.TemporaryDirectory(prefix="mips upgrade ") as temp:
+        for profile in profiles(1):
+            build = Path(temp) / profile.name
+            out = root / profile.name
+            build.mkdir()
+            out.mkdir(exist_ok=True)
+            objects = build_arithmetic_objects(old, build, profile)
+            for separate, name in ((False, "base.ld"), (True, "section.ld")):
+                write(build / name, layout(profile, separate))
+            original = out / "original.elf"
+            run([old.lld, "-static", "-T", build / "base.ld", "-o", original, *(build / p for p in objects)])
+            compile_arithmetic_object(new, build, profile, "updated.o", calculator(profile, True))
+            manifest = build / "manifest.json"
+            encode(manifest, dict(objects=objects, original="calc.o", replacement="updated.o",
+                                  function="calc", layout="base.ld", section=".calc.update", sectionLayout="section.ld"))
+            staged = build / "updated" / "calc.o"
+            staged.parent.mkdir()
+            shutil.copyfile(build / "updated.o", staged)
+            for mode in MODES:
+                target = out / f"{mode}.elf"
+                target.write_bytes(b"prior product\n")
+                command = [args.neverd, "patch", original, f"--relink={manifest}", f"--mode={mode}",
+                           f"--linker-path={new.lld}", "-o", target]
+                # The original linker version is part of the complete file.
+                run(command, error="do not reproduce")
+                if target.read_bytes() != b"prior product\n":
+                    raise ValueError(f"{profile.name}: failed upgrade changed {mode} output")
+                run([*command, f"--original-linker-path={old.lld}"])
+                script = build / ("section.ld" if mode == "section" else "base.ld")
+                reference = build / "reference.elf"
+                run([new.lld, "-static", "-T", script, "-o", reference,
+                     *(staged if p == "calc.o" else build / p for p in objects)])
+                if reference.read_bytes() != target.read_bytes():
+                    raise ValueError(f"{profile.name}: {mode} differs from the new linker's output")
+            if not results:
+                target = out / "inplace.elf"
+                previous = digest(target)
+                base = [args.neverd, "patch", original, "-o", target]
+                relink = [f"--relink={manifest}", f"--linker-path={new.lld}", "--mode=inplace"]
+                missing = "neverd-test-missing-original-linker"
+                for flags, error in (
+                    ([f"--original-linker-path={old.lld}"], "--original-linker-path requires --relink"),
+                    ([*relink, "--original-linker-path="], "--original-linker-path requires an ELF linker"),
+                    ([*relink, f"--original-linker-path={missing}"], missing),
+                ):
+                    run([*base, *flags], error=error)
+                    if digest(target) != previous:
+                        raise ValueError(f"{profile.name}: rejected linker option changed the prior output")
+            results[profile.name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
+    # The original product format describes these six classic R2 profiles.
+    encode(root / "products.json", results)
+    print(f"Relinked {len(results)} original-release programs with the new linker in both modes")
+
+
 def qualify(args):
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -587,7 +652,12 @@ if __name__ == "__main__":
     patch.add_argument("--root", required=True, type=Path)
     for tool in ("neverd", "mc", "llc", "lld"):
         patch.add_argument("--" + tool, required=True)
+    upgrade = commands.add_parser("upgrade")
+    upgrade.add_argument("--root", required=True, type=Path)
+    upgrade.add_argument("--neverd", required=True)
+    upgrade.add_argument("--original-tools", required=True, type=Path)
+    upgrade.add_argument("--tools", required=True, type=Path)
     runtime = commands.add_parser("execute")
     runtime.add_argument("--root", required=True, type=Path)
     args = parser.parse_args()
-    (qualify if args.command == "qualify" else execute)(args)
+    {"qualify": qualify, "upgrade": qualify_upgrade, "execute": execute}[args.command](args)

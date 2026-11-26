@@ -618,6 +618,7 @@ extern llvm::cl::opt<std::string> CgSvg;
 extern llvm::cl::opt<std::string> PatchFromIR;
 extern llvm::cl::opt<std::string> PatchRelink;
 extern llvm::cl::opt<std::string> PatchLinkerPath;
+extern llvm::cl::opt<std::string> PatchOriginalLinkerPath;
 extern llvm::cl::opt<std::string> PatchFromC;
 extern llvm::cl::opt<std::string> PatchFromSource;
 extern llvm::cl::opt<std::string> PatchFromObject;
