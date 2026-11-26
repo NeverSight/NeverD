@@ -4,10 +4,10 @@
 
 | ELF machine | Class and byte order | ABI used for integer arguments and returns | Encoding |
 | --- | --- | --- | --- |
-| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C |
-| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C |
+| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbs |
+| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbs |
 | PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset |
-| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Fixed-width scalar subset |
+| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar and POWER10 prefixed fixed-point forms |
 
 For RISC-V, the ELF class selects XLEN. The loader accepts the integer ABI and
 reads normalized `Tag_RISCV_arch` attributes for M, A and their integer
@@ -22,6 +22,14 @@ instruction can follow a 16-bit instruction at a halfword address. The lifter
 uses the physical instruction length for the link address.
 [Unprivileged ISA, 20260120](https://docs.riscv.org/reference/isa/v20260120/unpriv/unpriv-index.html).
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/).
+
+Zba 1.0 enables the three XLEN-wide shift-and-add forms. On RV64,
+`add.uw`, `sh1add.uw`, `sh2add.uw`, `sh3add.uw` and `slli.uw`
+zero-extend the first source word before arithmetic. Zbs 1.0 enables
+single-bit clear, extract, invert and set, with register and immediate forms.
+A register index uses its low five bits on RV32 and its low six on RV64.
+The ELF ISA attribute supplies the evidence for each extension.
+[RISC-V Bit Manipulation specification](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 
 Linked RV32 and RV64 executables and shared libraries support the default
 psABI PLT. The loader reads `R_RISCV_JUMP_SLOT` from the program's dynamic
@@ -183,13 +191,19 @@ LowIR emulator evaluates aligned ordinary memory under a single-hart model.
 A conditional store needs a known reservation state. Multi-hart interference,
 device memory and guest exception delivery are outside that model.
 
+In ordinary PPC64 code, `paddi`, `plbz`, `plhz`, `plha`, `plwz`, `plwa`,
+`pld`, `pstb`, `psth`, `pstw` and `pstd` use a signed 34-bit displacement.
+Each of the two instruction words follows the ELF byte order. A PC-relative
+form uses the address of its prefix and requires a zero RA field. Other
+forms use zero or the selected GPR as their base. The eight-byte instruction
+must fit within one 64-byte fetch block. The ELFv2 loader uses the same
+displacement and boundary rules for a PC-relative linkage stub.
+[Power ISA, Book I](https://openpowerfoundation.org/specifications/isa/).
+
 The strict lifters report unsupported instructions at their original VA.
-RISC-V system/CSR, FP, V and vendor extensions, and PowerPC VLE, SPE, VMX,
-VSX, prefixed instructions in ordinary function bodies, conditional calls,
-conditional jumps through CTR and system instructions have no qualified
-semantic path. The ELFv2 loader recognizes a PC-relative prefixed load or
-address calculation in a linker stub when its final CTR transfer and
-destination match.
+RISC-V system/CSR, FP, V and vendor extensions, along with PowerPC VLE, SPE,
+VMX, VSX, other prefixed forms, conditional calls, conditional jumps through
+CTR and system instructions, still require lifting support.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
 ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a
@@ -279,6 +293,31 @@ select another compiler-rt source directory.
 ```sh
 python3 unittests/lift/elf-integer/wide_shifts.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
+```
+
+The extended scalar fixture runs linked RV32, RV64 and both byte orders of
+POWER10 PPC64 under Linux QEMU user mode. A separately compiled scalar
+oracle checks return values and each byte of the PPC64 stores. It runs again
+after recompiling HighC, LLVM-derived C and LLVM IR at `-O0` and `-O2`, with
+the original code and data addresses outside the rebuilt mappings.
+
+```sh
+python3 unittests/lift/elf-integer/extended_scalar.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang \
+  --ld /path/to/ld.lld --qemu-dir /usr/bin
+```
+
+With two ELFv2 musl dynamic loaders, the same fixture also executes the
+original POWER10 PLT call in both byte orders. It checks that the linked
+branch enters a prefixed load of the provider’s jump slot, then calls the
+provider repeatedly through the system loader in QEMU. Each rebuilt caller
+links to the same independent provider. Run with LLD or GNU PowerPC64 ld.
+
+```sh
+python3 unittests/lift/elf-integer/extended_scalar.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
+  --profiles powerpc64 powerpc64le --qemu-dir /usr/bin \
+  --ppc64-loaders /path/to/powerpc64/libc.so /path/to/powerpc64le/libc.so
 ```
 
 The RISC-V PLT fixture builds two independent providers and checks ordinary

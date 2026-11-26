@@ -18,6 +18,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
+#include "neverd/lift/PowerPC/PowerPCPrefixed.h"
 #include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -59,6 +60,12 @@ struct State : IntegerLiftState {
     emit(NdOp::COPY, reg(D), {V});
     if (Record)
       compare(0, reg(D), imm(0), true);
+  }
+  void transfer(unsigned T, NdVar EA, unsigned Bytes, bool Store, bool Signed) {
+    if (Store)
+      emit(NdOp::STORE, {}, {EA, resize(reg(T), Bytes)});
+    else
+      result(T, resize(load(EA, Bytes), Width, Signed), false);
   }
   NdVar inverse(NdVar V) {
     return op(
@@ -220,6 +227,49 @@ std::optional<Transfer> memoryTransfer(unsigned Op, unsigned XO, unsigned DS) {
   }
 }
 
+enum class PrefixedOp { Add, Load, SignedLoad, Store };
+
+bool prefixed(State &S, uint32_t Prefix, uint32_t Suffix) {
+  const unsigned T = Suffix >> 21 & 31, RA = Suffix >> 16 & 31;
+  const bool Relative = Prefix & prefix::Relative;
+  if (Relative && RA)
+    return false;
+
+  PrefixedOp Op;
+  unsigned Bytes;
+  // Include reserved prefix bits in the match; only R and the immediate vary.
+  const uint32_t Format =
+      Prefix & ~(prefix::Relative | prefix::HighImmediateMask);
+  switch (Format | (Suffix >> 26)) {
+#define NEVERD_PPC_PREFIXED(Name, Format, SuffixOp, Kind, Width)               \
+  case prefix::Format | SuffixOp:                                              \
+    Op = PrefixedOp::Kind;                                                     \
+    Bytes = Width;                                                             \
+    break;
+#include "PowerPCPrefixed.def"
+  default:
+    return false;
+  }
+
+  const int64_t Disp = prefix::displacement(Prefix, Suffix);
+  NdVar EA;
+  if (RA) {
+    EA = Disp ? S.op(NdOp::INT_ADD, S.reg(RA), S.imm(Disp)) : S.reg(RA);
+  } else {
+    const va_t Target = (Relative ? S.Addr : 0) + Disp;
+    if (Op != PrefixedOp::Add)
+      EA = NdVar::dataAddress(Target, S.Width);
+    else
+      EA = Relative ? NdVar::address(Target, S.Width) : S.imm(Disp);
+  }
+  if (Op == PrefixedOp::Add)
+    S.result(T, EA, false);
+  else
+    S.transfer(T, EA, Bytes, Op == PrefixedOp::Store,
+               Op == PrefixedOp::SignedLoad);
+  return true;
+}
+
 struct Logical {
   NdOp Kind;
   bool InvertRight;
@@ -378,10 +428,7 @@ bool integer(State &S, Arch A, uint32_t W) {
     NdVar EA = Op == opcode::X ? S.op(NdOp::INT_ADD, Base, Y)
                : Disp          ? S.op(NdOp::INT_ADD, Base, S.imm(Disp))
                                : Base;
-    if (M->Store)
-      S.emit(NdOp::STORE, {}, {EA, S.resize(Src, M->Bytes)});
-    else
-      S.result(T, S.resize(S.load(EA, M->Bytes), S.Width, M->Signed), false);
+    S.transfer(T, EA, M->Bytes, M->Store, M->Signed);
     if (M->Update)
       S.emit(NdOp::COPY, X, {EA});
     return true;
@@ -756,6 +803,13 @@ void lift(Arch A, const cs_insn &I, std::vector<LowOp> &Ops) {
   if (I.size == 4 &&
       integer(S, A, readTargetEndian<uint32_t>(I.bytes, archLittleEndian(A))))
     return;
+  if (I.size == prefix::InstructionBytes && isPowerPC64(A)) {
+    const bool Little = archLittleEndian(A);
+    if (prefixed(
+            S, readTargetEndian<uint32_t>(I.bytes, Little),
+            readTargetEndian<uint32_t>(I.bytes + sizeof(uint32_t), Little)))
+      return;
+  }
   Ops.resize(S.OpsStart);
   throw UnliftedInstruction(I.address, I.mnemonic, I.op_str);
 }

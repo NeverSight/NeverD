@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: c9dd4d68f2c7eb1ac7e74e6a452ab240741ffc6db4023e42bba4ef9c8ad4a138 -->
+<!-- i18n-source: 52deeb396fdbb5ecfec7ddcb2d9e7a82788c82c369a6a691a4fec801e2178d48 -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ Los destinos ELF de enteros experimentales admiten la traducción estricta de in
 
 | Destino | Perfiles ELF verificados |
 |---|---|
-| RISC-V | RV32I/ILP32 y RV64I/LP64 en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. |
-| PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. PPC32 admite llamadas entre módulos a través de la PLT segura y de la BSS-PLT clásica. Ambas ABI de PPC64 admiten llamadas entre módulos a través de la PLT y cambios de TOC. ELFv1 utiliza descriptores de función y ELFv2 admite puntos de entrada globales y locales. Las operaciones escalares verificadas incluyen la división con y sin signo, la multiplicación que devuelve la palabra alta del producto y la multiplicación con indicación de desbordamiento, junto con sus efectos en CR0 y XER. |
+| RISC-V | RV32I/ILP32 y RV64I/LP64 en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0 y Zbs 1.0. |
+| PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. PPC32 admite llamadas entre módulos a través de la PLT segura y de la BSS-PLT clásica. Ambas ABI de PPC64 admiten llamadas entre módulos a través de la PLT y cambios de TOC. ELFv1 utiliza descriptores de función y ELFv2 admite puntos de entrada globales y locales. Las operaciones escalares verificadas incluyen la división con y sin signo, la multiplicación que devuelve la palabra alta del producto y la multiplicación con indicación de desbordamiento, junto con sus efectos en CR0 y XER. En PPC64 también se admiten las instrucciones con prefijo de POWER10 para sumar, cargar y almacenar enteros. |
 
 La reescritura de código nativo sigue pendiente para estos perfiles. [Cobertura de RISC-V y PowerPC (en inglés)](../riscv-powerpc.md)
 
