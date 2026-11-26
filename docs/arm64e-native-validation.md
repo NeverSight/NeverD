@@ -2560,6 +2560,28 @@ An interior label, a data symbol and a second spelling of an already mapped
 symbol are rejected before publication. A DynCode audit compares its entry
 to the object's linker spelling and checks the same symbol's placed address.
 
+All four hosts replayed the 37 skips from PR #2678 with the same Release
+test executable and LLVM r6. The eight additional publication cases used an
+arm64 driver to load and call signed dylibs. [Case-by-case results](evidence/arm64e-verbatim-publication-replay-2026-11-26.json)
+
+| Host | Originally skipped cases passed | Still skipped | Publication cases passed |
+| --- | ---: | ---: | ---: |
+| M4 Max, macOS 15.6.1 | 0 | 37 | 8 |
+| macos-15 | 0 | 37 | 8 |
+| macos-26 | 34 | 3 | 8 |
+| xcode-27 | 34 | 3 | 8 |
+
+On macos-26 and xcode-27, 24 dylib cases and eight executable startup cases
+passed their compiler-original PAC and call/unwind controls. The four-key
+PAC comparison and the PACM HINT comparison also passed. The three remaining
+skips require native 128-bit LRCPC3, two-modifier PAuth_LR and PC-sensitive
+PACM. Both macOS 15 hosts stopped at the compiler-original launch gate.
+[Free macOS runner results](https://github.com/gmh5225/test_mac_intel/actions/runs/45857280620)
+
+The M4 generated-IR control compiled an underscored and a bare verbatim name
+at O0 and O2. The original dylib returned 13. All four published dylibs
+passed strict signature verification and returned 31.
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
