@@ -109,6 +109,101 @@ NdVar mulDiv(State &S, unsigned F, NdVar A, NdVar B) {
   return S.select(Zero, Rem ? A : Ones, S.op(Op, A, Divisor));
 }
 
+bool basicBitManipulation(State &S, uint32_t W, bool Imm, bool Word,
+                          unsigned Rd, NdVar X, NdVar Y) {
+  const unsigned Unary = W & opcode::UnaryFormMask;
+  switch (Unary) {
+  case opcode::Clz:
+  case opcode::ClzW:
+  case opcode::Ctz:
+  case opcode::CtzW:
+  case opcode::Cpop:
+  case opcode::CpopW: {
+    X = S.resize(X, Word ? 4 : S.Width);
+    // ~x & (x - 1) has a one for every trailing zero, including all of them
+    // when x is zero.
+    if (Unary == opcode::Ctz || Unary == opcode::CtzW)
+      X = S.op(NdOp::INT_AND, S.op(NdOp::INT_NOT, X),
+               S.op(NdOp::INT_SUB, X, NdVar::scalar(1, X.Size)));
+    S.write(Rd,
+            S.op(Unary == opcode::Clz || Unary == opcode::ClzW ? NdOp::LZCOUNT
+                                                               : NdOp::POPCOUNT,
+                 X));
+    return true;
+  }
+  case opcode::SextB:
+  case opcode::SextH:
+    S.write(Rd, S.resize(X, Unary == opcode::SextB ? 1 : 2), true);
+    return true;
+  case opcode::ZextHRV32:
+  case opcode::ZextHRV64:
+    if ((Unary == opcode::ZextHRV64) != (S.Width == 8))
+      return false;
+    S.write(Rd, S.resize(X, 2));
+    return true;
+  case opcode::Rev8RV32:
+  case opcode::Rev8RV64:
+    if ((Unary == opcode::Rev8RV64) != (S.Width == 8))
+      return false;
+    S.write(Rd, S.byteSwap(X));
+    return true;
+  case opcode::OrcB: {
+    // Adding 0x7f to the low seven bits marks each nonzero byte in bit 7.
+    // No byte can carry into its neighbour. Broadcast each mark to its byte.
+    constexpr uint64_t ByteOnes = UINT64_MAX / UINT8_MAX;
+    NdVar LowBits = S.imm(ByteOnes * (UINT8_MAX >> 1));
+    NdVar Mark =
+        S.op(NdOp::INT_OR, X,
+             S.op(NdOp::INT_ADD, S.op(NdOp::INT_AND, X, LowBits), LowBits));
+    NdVar Flags = S.op(NdOp::INT_AND, S.op(NdOp::INT_RIGHT, Mark, S.imm(7)),
+                       S.imm(ByteOnes));
+    S.write(Rd, S.op(NdOp::INT_MULT, Flags, S.imm(UINT8_MAX)));
+    return true;
+  }
+  }
+
+  const unsigned Key =
+      W & (Imm && !Word && S.Width == 8 ? opcode::WideImmediateFormMask
+                                        : opcode::RegisterFormMask);
+  switch (Key) {
+  case opcode::AndN:
+  case opcode::OrN:
+  case opcode::Xnor:
+    S.write(Rd, S.op(Key == opcode::AndN  ? NdOp::INT_AND
+                     : Key == opcode::OrN ? NdOp::INT_OR
+                                          : NdOp::INT_XOR,
+                     X, S.op(NdOp::INT_NOT, Y)));
+    return true;
+  case opcode::Min:
+  case opcode::MinU:
+  case opcode::Max:
+  case opcode::MaxU: {
+    const bool Signed = Key == opcode::Min || Key == opcode::Max;
+    const bool Min = Key == opcode::Min || Key == opcode::MinU;
+    NdVar Less = S.op(Signed ? NdOp::INT_SLESS : NdOp::INT_LESS, X, Y, 1);
+    S.write(Rd, S.select(Less, Min ? X : Y, Min ? Y : X));
+    return true;
+  }
+  case opcode::Rol:
+  case opcode::RolW:
+  case opcode::Ror:
+  case opcode::RorW:
+  case opcode::Rori:
+  case opcode::RoriW: {
+    const unsigned Bytes = Word ? 4 : S.Width;
+    NdVar Count = Imm ? NdVar::scalar((W >> 20) & (Bytes * 8 - 1), Bytes)
+                      : S.resize(Y, Bytes);
+    S.write(Rd,
+            S.rotate(S.resize(X, Bytes), Count,
+                     Key != opcode::Rol && Key != opcode::RolW),
+            Word);
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
 bool bitManipulation(State &S, RISCVProfile P, uint32_t W, bool Imm, bool Word,
                      unsigned Rd, NdVar X, NdVar Y) {
   const unsigned IndexMask = S.Width * 8 - 1;
@@ -258,6 +353,8 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   if ((!Imm && Op != opcode::Op && Op != opcode::Op32) ||
       (Word && S.Width != 8))
     return false;
+  if (F7 && P.Zbb && basicBitManipulation(S, W, Imm, Word, Rd, X, Y))
+    return true;
   if (F7 && (P.Zba || P.Zbs) && bitManipulation(S, P, W, Imm, Word, Rd, X, Y))
     return true;
   const unsigned Bytes = Word ? 4 : S.Width;
