@@ -68,9 +68,10 @@ void SinkCatalog::addSink(SinkEntry E) {
   if (E.Name.empty())
     return;
   const std::string Canonical = normalize(E.Name);
-  for (unsigned Idx = 0; Idx < SinkList.size(); ++Idx) {
-    if (normalize(SinkList[Idx].Name) != Canonical)
-      continue;
+  const auto [It, Inserted] = CanonicalSinkIndex.try_emplace(
+      Canonical, static_cast<unsigned>(SinkList.size()));
+  const unsigned Idx = It->second;
+  if (!Inserted) {
     for (const std::string &Alias : SinkList[Idx].Aliases) {
       const std::string NormalizedAlias = normalize(Alias);
       const bool AlreadyPresent = std::any_of(
@@ -94,7 +95,6 @@ void SinkCatalog::addSink(SinkEntry E) {
     return;
   }
 
-  unsigned Idx = static_cast<unsigned>(SinkList.size());
   std::vector<std::string> Keys = E.Aliases;
   Keys.push_back(E.Name);
   const bool RebindsKnownIdentity =
