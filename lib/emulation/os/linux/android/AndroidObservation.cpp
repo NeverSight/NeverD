@@ -11,6 +11,9 @@
 
 #include "neverd/emulation/Limits.h"
 
+#include "llvm/ADT/DenseMap.h"
+
+#include <algorithm>
 #include <set>
 
 namespace neverd::emulation::android_model {
@@ -58,7 +61,7 @@ finalMemorySnapshotBytes(const AndroidNativeOptions &Options,
                  Options.ObserveMemoryOnFailure || Options.ObserveMemoryAtStop))
       return failure(diagnostic::SnapshotLimits);
   for (const auto &Read : Options.ReadRegisterMemory)
-    if (Read.Register > 31 || !Reserve(Read.Size, true))
+    if (Read.PC || Read.Register > 31 || !Reserve(Read.Size, true))
       return failure(diagnostic::SnapshotLimits);
   return Available - Remaining;
 }
@@ -110,7 +113,8 @@ validateExecutionObservation(const NativeExecutionObservationOptions &Options) {
     if (!Read.Size || Read.Address > UINT64_MAX - Read.Size)
       return failure(diagnostic::SnapshotLimits);
   for (const auto &Read : Options.ReadRegisterMemory)
-    if (!Read.Size || Read.Register > 31)
+    if (!Read.Size || Read.Register > 31 ||
+        (Read.PC && !Unique.contains(*Read.PC)))
       return failure(diagnostic::ObservationOptions);
   return llvm::Error::success();
 }
@@ -119,26 +123,31 @@ executionObservationBytes(const NativeExecutionObservationOptions &Options,
                           uint64_t Available) {
   if (auto E = validateExecutionObservation(Options))
     return std::move(E);
-  // Scalar record plus each explicit extent and its bytes. Reserve all
-  // retained records before execution, using division to avoid overflow.
-  uint64_t PerRecord = 36 * sizeof(uint64_t);
-  if (PerRecord > Available)
+  // Every retained record could come from the PC with the largest payload.
+  uint64_t Common = 36 * sizeof(uint64_t);
+  if (Common > Available)
     return failure(diagnostic::SnapshotLimits);
-  auto Reserve = [&](uint64_t Size) -> llvm::Error {
-    if (16 > Available - PerRecord)
-      return failure(diagnostic::SnapshotLimits);
-    PerRecord += 16;
-    if (Size > Available - PerRecord)
-      return failure(diagnostic::SnapshotLimits);
-    PerRecord += Size;
-    return llvm::Error::success();
+  auto Reserve = [&](uint64_t &Used, uint64_t Size) {
+    if (Available - Used < 16 || Size > Available - Used - 16)
+      return false;
+    Used += 16 + Size;
+    return true;
   };
   for (const auto &Read : Options.ReadMemory)
-    if (auto E = Reserve(Read.Size))
-      return std::move(E);
-  for (const auto &Read : Options.ReadRegisterMemory)
-    if (auto E = Reserve(Read.Size))
-      return std::move(E);
+    if (!Reserve(Common, Read.Size))
+      return failure(diagnostic::SnapshotLimits);
+  llvm::SmallDenseMap<uint64_t, uint64_t> BytesAtPC;
+  uint64_t Largest = 0;
+  for (const auto &Read : Options.ReadRegisterMemory) {
+    uint64_t &Used = Read.PC ? BytesAtPC[*Read.PC] : Common;
+    if (!Reserve(Used, Read.Size))
+      return failure(diagnostic::SnapshotLimits);
+    if (Read.PC)
+      Largest = std::max(Largest, Used);
+  }
+  if (Largest > Available - Common)
+    return failure(diagnostic::SnapshotLimits);
+  const uint64_t PerRecord = Common + Largest;
   if (Options.Limit > Available / PerRecord)
     return failure(diagnostic::SnapshotLimits);
   return Options.Limit * PerRecord;
@@ -184,6 +193,8 @@ llvm::Expected<NativeExecutionObservation> captureExecutionObservation(
     if (auto E = Capture(Read.Address, Read.Size))
       return std::move(E);
   for (const auto &Read : Options.ReadRegisterMemory) {
+    if (Read.PC && *Read.PC != PC)
+      continue;
     const uint64_t Base =
         Read.Register == 31 ? Out.SP : Out.Registers[Read.Register];
     auto Address = registerAddress(Base, Read.Offset);
