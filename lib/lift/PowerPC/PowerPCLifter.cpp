@@ -100,60 +100,68 @@ struct State : IntegerLiftState {
   }
 };
 
-IntegerControl branch(Arch A, uint32_t W, va_t PC) {
-  unsigned Op = W >> 26;
-  bool Link = W & 1;
+bool testsCondition(unsigned BO) {
   using namespace branch_option;
-  const unsigned BO = W >> 21 & 31;
-  const bool Conditional =
-      (BO & (IgnoreCR | IgnoreCTR)) != (IgnoreCR | IgnoreCTR);
-  if (Op == opcode::B || Op == opcode::BC) {
-    const bool TestsCondition = Op == opcode::BC && Conditional;
-    // A conditional call needs a predicated link/call edge.
-    if (TestsCondition && Link)
-      return {};
-    int64_t Disp = Op == opcode::B ? llvm::SignExtend64<26>(W & 0x3fffffc)
-                                   : llvm::SignExtend64<16>(W & 0xfffc);
-    va_t Dest = ((W & 2) ? 0 : PC) + Disp;
-    // A link to the following instruction materializes the PC in LR. There
-    // is no callee, register clobber or independent function at that address.
-    if (Link && !TestsCondition && Dest == PC + ppc_elf::InstructionAlignment)
-      return {NdOp::COPY, isPowerPC64(A) ? Dest : uint32_t(Dest)};
-    return {Link             ? NdOp::CALL
-            : TestsCondition ? NdOp::COND_BR
-                             : NdOp::BRANCH,
-            isPowerPC64(A) ? Dest : uint32_t(Dest)};
-  }
-  if (Op != opcode::XL || (W & ReservedXLBits))
+  return (BO & (IgnoreCR | IgnoreCTR)) != (IgnoreCR | IgnoreCTR);
+}
+
+va_t branchAddress(Arch A, va_t Address) {
+  return isPowerPC64(A) ? Address : uint32_t(Address);
+}
+
+IntegerControl branch(Arch A, uint32_t W, va_t PC) {
+  using namespace branch_option;
+  const unsigned Op = W >> 26;
+  if (Op != opcode::B && Op != opcode::BC && Op != opcode::XL)
     return {};
-  unsigned XO = W >> 1 & 1023;
-  if (Conditional) {
-    // The two prediction bits are adjacent for CR-only tests and split for
-    // CTR-only tests. The encoding 01 is reserved in either form.
-    const bool ReservedPrediction =
-        (BO & IgnoreCTR)
-            ? (BO & (BranchIfCTRZero | PredictionTaken)) == PredictionTaken
-            : (BO & IgnoreCR) &&
-                  (BO & (BranchIfCRSet | PredictionTaken)) == PredictionTaken;
-    if (XO != opcode::BCLR || Link || (W & HintMask) == ReservedHint ||
-        ReservedPrediction)
-      return {};
-    const va_t Next = PC + ppc_elf::InstructionAlignment;
-    return {NdOp::RETURN, isPowerPC64(A) ? Next : uint32_t(Next)};
+  const bool Linked = W & Link;
+  const unsigned BO = W >> 21 & 31;
+  const bool Conditional = Op != opcode::B && testsCondition(BO);
+  // The prediction encoding 01 is reserved for CR-only and CTR-only tests.
+  if (Conditional &&
+      ((BO & IgnoreCTR)
+           ? (BO & (BranchIfCTRZero | PredictionTaken)) == PredictionTaken
+           : (BO & IgnoreCR) &&
+                 (BO & (BranchIfCRSet | PredictionTaken)) == PredictionTaken))
+    return {};
+  const va_t Next = branchAddress(A, PC + ppc_elf::InstructionAlignment);
+  if (Op != opcode::XL) {
+    const int64_t Disp =
+        Op == opcode::B ? llvm::SignExtend64<26>(W & DirectDisplacement)
+                        : llvm::SignExtend64<16>(W & ConditionalDisplacement);
+    const va_t Dest = branchAddress(A, ((W & AbsoluteAddress) ? 0 : PC) + Disp);
+    // Both outcomes of a link to the next instruction materialize the PC.
+    if (Linked && Dest == Next)
+      return {NdOp::COPY, Next};
+    return {Linked        ? NdOp::CALL
+            : Conditional ? NdOp::COND_BR
+                          : NdOp::BRANCH,
+            Dest};
   }
+  const unsigned XO = W >> 1 & 1023;
+  const unsigned Hint = W & HintMask;
+  if ((W & ReservedXLBits) || Hint == ReservedHint)
+    return {};
   if (XO == opcode::BCLR)
-    return {Link ? NdOp::INDIR_CALL : NdOp::RETURN};
-  if (XO == opcode::BCCTR)
-    return {Link ? NdOp::INDIR_CALL : NdOp::INDIR_BR};
+    return {Linked ? NdOp::INDIR_CALL : NdOp::RETURN,
+            Conditional && !Linked ? Next : InvalidVA};
+  if (XO == opcode::BCCTR && (BO & IgnoreCTR) && Hint != LROnlyHint)
+    return {Linked ? NdOp::INDIR_CALL : NdOp::INDIR_BR,
+            Conditional && !Linked ? Next : InvalidVA};
   return {};
+}
+
+NdVar decrementCTR(State &S) {
+  NdVar Counter = S.special(CTR);
+  S.emit(NdOp::INT_SUB, Counter, {Counter, S.imm(1)});
+  return Counter;
 }
 
 NdVar condition(State &S, unsigned BO, unsigned BI) {
   using namespace branch_option;
   NdVar Cond = NdVar::scalar(1, 1);
   if (!(BO & IgnoreCTR)) {
-    NdVar Counter = S.special(CTR);
-    S.emit(NdOp::INT_SUB, Counter, {Counter, S.imm(1)});
+    NdVar Counter = decrementCTR(S);
     Cond = S.op((BO & BranchIfCTRZero) ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL,
                 Counter, S.imm(0), 1);
   }
@@ -364,34 +372,33 @@ bool integer(State &S, Arch A, uint32_t W) {
   NdVar Base = RA ? X : S.imm(0);
   if (auto Flow = branch(A, W, S.Addr); Flow.Opcode != NdOp::NOP) {
     if (Flow.Opcode == NdOp::COPY) {
+      if (Op == opcode::BC && !(T & branch_option::IgnoreCTR))
+        decrementCTR(S);
       S.emit(NdOp::COPY, S.special(LR),
              {NdVar::addressFragment(Flow.Target, S.Width)});
       return true;
     }
-    if (Flow.hasReturnFallthrough()) {
-      // CTR decrements even on the not-taken edge. Guard only the transfer.
+    NdVar Dest =
+        Op == opcode::XL
+            ? S.op(NdOp::INT_AND, S.special(XO == opcode::BCLR ? LR : CTR),
+                   S.imm(-uint64_t(ppc_elf::InstructionAlignment)))
+            : NdVar::codeAddress(Flow.Target, S.Width);
+    if (Flow.Opcode == NdOp::COND_BR) {
+      S.emit(NdOp::COND_BR, {}, {Dest, condition(S, T, RA)});
+      return true;
+    }
+    // bclrl targets the old LR. LK writes the next PC and BO updates CTR on
+    // both edges. Only the transfer and its call effects are predicated.
+    const va_t Next = branchAddress(A, S.Addr + ppc_elf::InstructionAlignment);
+    if (Rc)
+      S.emit(NdOp::COPY, S.special(LR), {NdVar::codeAddress(Next, S.Width)});
+    if (Op != opcode::B && testsCondition(T)) {
       NdVar Taken = condition(S, T, RA);
       NdVar Skip = S.makeTemp(1);
       S.emit(NdOp::BOOL_NOT, Skip, {Taken});
-      S.emit(NdOp::COND_BR, {},
-             {NdVar::codeAddress(Flow.Target, S.Width), Skip});
+      S.emit(NdOp::COND_BR, {}, {NdVar::codeAddress(Next, S.Width), Skip});
     }
-    NdVar Dest;
-    if (Op == opcode::XL)
-      Dest = S.op(NdOp::INT_AND, S.special(XO == opcode::BCLR ? LR : CTR),
-                  S.imm(~uint64_t(3)));
-    else
-      Dest = NdVar::codeAddress(Flow.Target, S.Width);
-    if (Flow.Opcode == NdOp::COND_BR)
-      S.emit(NdOp::COND_BR, {}, {Dest, condition(S, T, RA)});
-    else {
-      if (Rc) {
-        va_t Next = S.Addr + 4;
-        S.emit(NdOp::COPY, S.special(LR),
-               {NdVar::codeAddress(Wide ? Next : uint32_t(Next), S.Width)});
-      }
-      S.emit(Flow.Opcode, Rc ? S.reg(3) : NdVar{}, {Dest});
-    }
+    S.emit(Flow.Opcode, Rc ? S.reg(3) : NdVar{}, {Dest});
     return true;
   }
   if (const auto Key = barrierKey(W)) {

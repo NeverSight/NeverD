@@ -1555,6 +1555,22 @@ void recoverCallAbi(
       noteRead(CI.TargetAddr);
       if (CallSlot)
         noteRead(*CallSlot);
+      // The guarded integer callback captured the platform GPRs on its
+      // taken edge. A scan of this synthetic block would find no setup.
+      if (isPowerPC(TheArch) && Blk.Role == MedBlockRole::PredicatedEffect &&
+          CI.IsIndirect &&
+          Op.CalleeRegisterArgs == static_cast<int>(IntParamRegs.size()) &&
+          Op.CalleeStackArgs == 0 && Op.CalleeVectorArgs == 0 &&
+          Op.NumInputs == 1u + Op.CalleeRegisterArgs &&
+          !Op.IntegerCallSignature && !Op.ScalarCallSignature &&
+          !Op.SourceCallHint) {
+        CI.Args.assign(Op.Inputs.begin() + 1, Op.Inputs.begin() + Op.NumInputs);
+        CI.IntegerRegisterArgCount = Op.CalleeRegisterArgs;
+        for (const MedVar &Arg : CI.Args)
+          CI.ArgReadBytes.push_back(Arg.Size);
+        Func.CallInfos.push_back(std::move(CI));
+        continue;
+      }
       if (hasBoundIntegerCallArguments(Op)) {
         CI.Args.assign(Op.Inputs.begin() + 1, Op.Inputs.begin() + Op.NumInputs);
         CI.IntegerRegisterArgCount = 0;

@@ -22,6 +22,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
+#include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/IntegerRegisters.h"
@@ -838,8 +839,7 @@ TEST(PowerPCControl, ConditionalReturnRequiresTheCallersLinkOnEveryPath) {
       else
         EXPECT_NO_THROW(Converter.convert(Low, A, BinaryFormat::ELF));
     }
-    for (uint32_t Word :
-         {BeqLR | 1, BeqLR | 0x1000, BeqLR | 0x200000, BeqLR | 0x400}) {
+    for (uint32_t Word : Unsupported) {
       LinkedImage File(A);
       File.setWords({Word, Ret});
       auto Img = ELFLoader().loadBuffer(File.buffer());
@@ -848,6 +848,72 @@ TEST(PowerPCControl, ConditionalReturnRequiresTheCallersLinkOnEveryPath) {
       ASSERT_TRUE(D.init(*Img));
       auto Low = CFGBuilder().build(*Img, D, Img->Entry, "unmodeled");
       EXPECT_FALSE(Low.hasCompleteLiftCoverage());
+    }
+  }
+}
+
+TEST(PowerPCControl, ConditionalCTRPreservesThePhysicalIndirectEdge) {
+  using namespace conditional_return_fixture;
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    for (bool Taken : {false, true}) {
+      LinkedImage File(A);
+      File.setWords({Taken ? EQ : Zero, SetCTR, SetCR, BeqCTR, Ret});
+      auto Img = ELFLoader().loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+      Decoder D;
+      ASSERT_TRUE(D.init(*Img));
+      auto Low = CFGBuilder().build(*Img, D, Img->Entry, "unknown_target");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      const auto *Block = Low.blockFor(Img->Entry);
+      ASSERT_TRUE(Block && !Block->InstructionBoundaries.empty());
+      const auto &Boundary = Block->InstructionBoundaries.back();
+      EXPECT_EQ(Boundary.Control, LowInstructionControl::Branch);
+      EXPECT_FALSE(Boundary.Immediate);
+      EXPECT_TRUE(hasLowInstructionControlFlag(
+          Boundary.ControlFlags, LowInstructionControlFlag::InstructionGuard));
+      EXPECT_TRUE(hasLowInstructionControlFlag(
+          Boundary.ControlFlags, LowInstructionControlFlag::Indirect));
+      ASSERT_EQ(Block->Succs.size(), 1u);
+      EXPECT_EQ(Low.Blocks[Block->Succs.front()].StartAddr, Img->Entry + 16);
+      const va_t Target = Img->Entry + 24;
+      NdOpEmulator Emu(*Img);
+      Emu.setStrictMode(true);
+      auto Reached = Emu.computeTarget(*Block, integerreg::gpr(4), Target + 3);
+      EXPECT_EQ(bool(Reached), Taken);
+      if (Reached)
+        EXPECT_EQ(Reached->Address, Target);
+      EXPECT_EQ(Emu.getRegister(integerreg::ppc::CTR), Target + 3);
+      LowToMedConverter Converter;
+      Converter.setBinaryImage(&*Img);
+      EXPECT_THROW(Converter.convert(Low, A, BinaryFormat::ELF),
+                   LowToMedConversionError);
+    }
+  }
+}
+
+TEST(PowerPCControl, LinkedDisplacementsUseTheGuestAddressWidth) {
+  using namespace conditional_return_fixture;
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    LinkedImage File(A);
+    File.setWords({LinkNext, LinkBack, AbsoluteBack});
+    auto Img = ELFLoader().loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+    Decoder D;
+    ASSERT_TRUE(D.init(*Img));
+    const va_t Mask = isPowerPC64(A) ? UINT64_MAX : UINT32_MAX;
+    for (auto [Offset, PC, Target] :
+         {std::tuple<unsigned, va_t, va_t>{0, Mask - 3, 0},
+          {4, 4, Mask - 3},
+          {8, 0x1000, Mask - 7}}) {
+      DecodedInsn I;
+      ASSERT_EQ(
+          D.decodeOneForLift(File.Bytes.data() + 0x100 + Offset, 4, PC, I), 4);
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(D.liftToLow(I, Ops));
+      ASSERT_FALSE(Ops.empty());
+      EXPECT_EQ(D.directCallTarget(I), Offset ? Target : InvalidVA);
+      EXPECT_EQ(Ops.back().Opcode, Offset ? NdOp::CALL : NdOp::COPY);
+      EXPECT_EQ(Ops.back().Inputs[0].Offset, Target);
     }
   }
 }
