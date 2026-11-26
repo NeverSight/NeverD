@@ -27,6 +27,44 @@ SymRef affine(SymContext &Ctx, SymRef X, int64_t Scale, int64_t Offset) {
   return Ctx.mkAdd(Ctx.mkMul(literal(Scale), X), literal(Offset));
 }
 
+TEST(SymMBAAffineFastPath, DistinctProjectedCornersKeepTheAffineReading) {
+  auto Check = [](unsigned Width, unsigned Shift,
+                  std::array<unsigned, 3> Slopes, bool Distinct) {
+    SCOPED_TRACE(::testing::Message() << Width << ':' << Shift);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width);
+    const std::array Fields{C.mkSExt(C.mkExtract(X, 0, 31), Width),
+                            C.mkZExt(C.mkExtract(Y, 7, 17), Width),
+                            C.mkSExt(C.mkExtract(Z, 3, 27), Width)};
+    llvm::SmallVector<SymRef, 4> Terms{C.mkConst(Width, 3)};
+    for (unsigned I = 0; I < Fields.size(); ++I)
+      Terms.push_back(C.mkMul(
+          C.mkConst(llvm::APInt(Width, Slopes[I]).shl(Shift)), Fields[I]));
+    MBAOptions Options;
+    Options.MaxWork = 65536;
+    const auto Input = C.mkAdd(Terms);
+    const auto Result = simplifyMBADeep(C, Input, Options);
+    if (Distinct) {
+      EXPECT_EQ(Result.Expr, Input);
+      EXPECT_LT(Result.Work, Options.MaxWork);
+    } else {
+      EXPECT_LT(Result.SizeAfter, Result.SizeBefore);
+    }
+    SymEvalPlan Original(C, Input), Reduced(C, Result.Expr);
+    for (unsigned I = 0; I < 32; ++I) {
+      const std::array Values{~llvm::APInt(Width, 27 * I),
+                              llvm::APInt(Width, I).shl(7),
+                              llvm::APInt(Width, I * I).shl(3)};
+      EXPECT_EQ(Original.eval(Values), Reduced.eval(Values));
+    }
+  };
+  Check(16385, 130, {1, 3, 7}, true);
+  // Only four bits of the final limb are live in the corner certificate.
+  Check(1028, 1024, {1, 3, 9}, true);
+  Check(1025, 1021, {1, 1, 5}, false);
+}
+
 TEST(SymMBAAffineFastPath, SameParitySharedInputsFitBoundedWork) {
   for (unsigned Parity : {0u, 1u}) {
     SymContext Ctx;

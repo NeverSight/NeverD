@@ -9,7 +9,20 @@
 
 #include "neverd/symbolic/SymExpr.h"
 
+#include <bit>
+
 namespace neverd::symbolic::detail {
+
+// On sorted factors, one equal pair this far apart certifies a run longer
+// than a binary search. Three probes avoid walking a large product to find it.
+inline bool hasLongFactorRun(llvm::ArrayRef<SymRef> Factors) {
+  const size_t Probe = std::bit_width(Factors.size()),
+               Middle = Factors.size() / 2;
+  return Probe < Middle &&
+         (Factors.front() == Factors[Probe] ||
+          Factors[Middle] == Factors[Middle + Probe] ||
+          Factors.back() == Factors[Factors.size() - 1 - Probe]);
+}
 
 // A stage selects bits with a literal mask, then multiplies by a literal.
 struct WeightedFieldStage {

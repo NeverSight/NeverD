@@ -1634,6 +1634,90 @@ SymRef extractFactorScale(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   Rebuilt.push_back(Ctx.mkConst(Scale));
   return Ctx.mkMul(Rebuilt);
 }
+// Pair (c + 2^k*h) with an identical factor, where k is one bit below
+// the square-zero threshold. The pair is c^2 + 2^(k+1) times
+// (c*h + 2^(k-1)*h^2). Only one or two bits of h^2 survive, and
+// a square modulo four is exactly the parity of its operand.
+bool appendPairedFields(SymContext &Ctx, SymRef F, unsigned PairCount,
+                        unsigned Precision, unsigned Shift, WorkBudget &Budget,
+                        size_t &Storage, llvm::SmallVectorImpl<Factor> &Rows,
+                        llvm::SmallVectorImpl<unsigned> &Counts,
+                        llvm::SmallVectorImpl<uint64_t> &Weights) {
+  const unsigned Bits = Precision - Shift, K = Shift - 1;
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  const auto Args = Ctx.operands(F);
+  // Only an odd number of pairs at even precision needs the two bit
+  // selectors and cross term. Otherwise each input contributes one row.
+  const size_t Slots =
+      Args.size() - 1 + (!(Precision & 1) && (PairCount & 1) ? 3 : 0);
+  const size_t Bytes =
+      2 * (sizeof(Factor) + sizeof(unsigned) + 4 * sizeof(SymRef) +
+           3 * sizeof(SymNode) + 3 * Words * sizeof(uint64_t));
+  const size_t Work = 16 + 8 * Words + Words * Words;
+  if (Slots > Storage / Bytes || Slots > Budget.available() / Work)
+    return false;
+  Storage -= Slots * Bytes;
+  Budget.consume(Slots * Work);
+
+  const llvm::APInt C(Precision,
+                      Ctx.constWords(Args.front()).take_front(Words));
+  // Interning the squared offset or a projected field may move the operand
+  // pool.
+  const llvm::SmallVector<SymRef, 8> Terms(Args.drop_front());
+  const auto Offset = Ctx.mkConst(C * C);
+  llvm::APInt Scale = C.trunc(Bits) * PairCount;
+  const auto Square = llvm::APInt(Bits, PairCount, /*isSigned=*/false,
+                                  /*implicitTrunc=*/true)
+                          .shl(K - 1);
+  const bool LinearParity = Square.isZero() || Square.isSignMask();
+  if (LinearParity)
+    Scale += Square;
+  // With two live square bits, expand a parity of at most two coordinates:
+  // x&1 = x - 2*bit1(x) (mod 4), and a^b = a+b-2*(a&b).
+  // The top-bit corrections then combine across factors in the shared emitter.
+  const bool ExpandParity =
+      !LinearParity && llvm::count_if(Terms, [&](SymRef T) {
+                         const auto W = Ctx.constWords(Ctx.operand(T, 0));
+                         return (W[K / llvm::APInt::APINT_BITS_PER_WORD] >>
+                                 (K % llvm::APInt::APINT_BITS_PER_WORD)) &
+                                1;
+                       }) <= 2;
+
+  unsigned Multiplicity = PairCount;
+  auto append = [&](SymRef Field, const llvm::APInt &Coefficient) {
+    Rows.push_back({F, Field, {}, Offset, Shift, 0, 0, false});
+    Counts.push_back(Multiplicity);
+    Multiplicity = 0;
+    const auto Weight = Coefficient.zext(Precision).shl(Shift);
+    Weights.append(Weight.getRawData(), Weight.getRawData() + Words);
+  };
+  llvm::SmallVector<SymRef, 8> Parity;
+  for (const auto Term : Terms) {
+    const auto Literal = Ctx.operand(Term, 0), Word = Ctx.operand(Term, 1);
+    const auto Low = lowOperand(Ctx, Word);
+    const auto Field =
+        Low && Ctx.width(Low) == Bits ? Low : Ctx.mkExtract(Word, 0, Bits);
+    const llvm::APInt Full(Precision,
+                           Ctx.constWords(Literal).take_front(Words));
+    const auto Coefficient = Full.extractBits(Bits, K);
+    auto Linear = Coefficient * Scale;
+    if (!LinearParity && Coefficient[0]) {
+      if (ExpandParity) {
+        Linear += Square;
+        append(Ctx.mkZExt(Ctx.mkExtract(Field, 1, 1), Bits), Square.shl(1));
+        Parity.push_back(Field);
+      } else {
+        Parity.push_back(Ctx.mkExtract(Field, 0, 1));
+      }
+    }
+    append(Field, Linear);
+  }
+  if (ExpandParity && Parity.size() == 2)
+    append(Ctx.mkAnd(Parity[0], Parity[1]), Square.shl(1));
+  else if (!ExpandParity && !Parity.empty())
+    append(Ctx.mkZExt(Ctx.mkXor(Parity), Bits), Square);
+  return true;
+}
 // In the observed ring, perturbations divisible by 2^ceil(Precision/2)
 // annihilate one another. A factor can contribute several field coefficients
 // but its scalar offset contributes to the product exactly once.
@@ -1654,12 +1738,7 @@ SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
 
   // Several short runs fit one contiguous scan. Switch to charged searches
   // only when a sampled run is longer than a binary search of the product.
-  const size_t Probe = std::bit_width(Factors.size()),
-               Middle = Factors.size() / 2;
-  const bool LongRuns =
-      Probe < Middle && (Factors.front() == Factors[Probe] ||
-                         Factors[Middle] == Factors[Middle + Probe] ||
-                         Factors.back() == Factors[Factors.size() - 1 - Probe]);
+  const bool LongRuns = hasLongFactorRun(Factors);
   if (!LongRuns && !Budget.consume(Factors.size()))
     return Root;
 
@@ -1680,6 +1759,7 @@ SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
   llvm::SmallVector<uint64_t, 32> Weights;
   llvm::SmallVector<SymRef, 16> Parts;
   llvm::SmallVector<std::pair<SymRef, unsigned>, 4> Overlaps;
+  llvm::SmallVector<std::pair<SymRef, unsigned>, 4> Pairs;
   Storage -= 2 * Factors.size() * sizeof(SymRef);
   for (size_t I = 0; I != Factors.size();) {
     const auto F = Factors[I];
@@ -1702,6 +1782,9 @@ SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
     if (Terms.size() > Budget.available() / (4 + 2 * Words))
       return Root;
     Budget.consume(Terms.size() * (4 + 2 * Words));
+    const bool CanPair =
+        Copies > 1 && Shift > 1 && Ctx.op(F) == SymOp::Add && !Outer.Mask;
+    const unsigned Required = Shift - unsigned(CanPair);
     unsigned Zeros = Precision;
     for (const auto D : Terms) {
       if (!scaledWord(Ctx, D)) {
@@ -1711,10 +1794,16 @@ SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
       Zeros = std::min(
           Zeros,
           llvm::APInt::tcLSB(Ctx.constWords(Ctx.operand(D, 0)).data(), Words));
-      if (Zeros < Shift)
+      if (Zeros < Required)
         break;
     }
     if (Zeros < Shift) {
+      if (Zeros == Required) {
+        Pairs.emplace_back(F, Copies / 2);
+        if (Copies & 1)
+          Parts.push_back(F);
+        continue;
+      }
       if (LongRuns && !Budget.consume(Copies))
         return Root;
       Parts.append(Copies, F);
@@ -1867,6 +1956,10 @@ SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
                             .shl(Shift);
     Weights.append(Weight.getRawData(), Weight.getRawData() + Words);
   }
+  for (const auto &[F, Copies] : Pairs)
+    if (!appendPairedFields(Ctx, F, Copies, Precision, Shift, Budget, Storage,
+                            Rows, Counts, Weights))
+      return Root;
   const auto Sum = buildProjectedLinearProduct(
       Ctx, Rows, Scale, Precision, Shift, Budget, Storage, Counts, Weights);
   if (!Sum)
@@ -1875,9 +1968,13 @@ SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
   const auto Candidate = Ctx.mkMul(Parts);
   if (!(readingScore(Ctx, Candidate) < readingScore(Ctx, Root)))
     return Root;
-  recordResidueReading(Ctx, FirstGenerated, Budget, Storage);
-  if (EmittedReading)
-    *EmittedReading = true;
+  // The complete small-word search can still distribute a scalar into an odd
+  // copy or absorb a sign-bit parity after restoring the original fields.
+  if (Pairs.empty() || Width > limits::kMaxAffineResidueTableBits) {
+    recordResidueReading(Ctx, FirstGenerated, Budget, Storage);
+    if (EmittedReading)
+      *EmittedReading = true;
+  }
   return Candidate;
 }
 

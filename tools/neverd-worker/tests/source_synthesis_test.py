@@ -379,19 +379,22 @@ def variable_field_elf(degree, *, repeated_offsets=False, terminal_period=0,
 
 def distributed_field_elf(degree, *, joined_offsets=False, masked_offsets=False, field_masks=False,
                           scaled_fields=False, result_masks=False, carry_masks=False,
-                          sparse_masks=False):
+                          sparse_masks=False, paired_fields=False):
     carry_masks = carry_masks or sparse_masks
     output_mask = result_masks or carry_masks
     scaled = scaled_fields or output_mask
     # Each factor reads independently signed bytes of x and y+z. The low
     # weight in one row preserves cross terms with the rest of the product.
-    scale = 3 << 16
+    scale = 3 << (9 if paired_fields else 16)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
-    for i in range(degree):
-        left_weight = (3, 5, -7, 9)[i % 4] << (2 if i == 29 else 8)
-        right_weight = (-3, 7, 5, -9, 11)[i % 5] << 8
-        offset = 6 if i == 17 else (-9, 3, 5, 7, -3)[i % 5]
+    shift = 11 if paired_fields else 8
+    for index in range(degree):
+        # Repeated rows put the square of a weighted byte sum in the top bit after the external scale.
+        i = index % 19 if paired_fields else index
+        left_weight = (3, 5, -7, 9)[i % 4] << (2 if i == 29 else shift)
+        right_weight = (-3, 7, 5, -9, 11)[i % 5] << shift
+        offset = 6 if i == 17 and not paired_fields else (-9, 3, 5, 7, -3)[i % 5]
         left = 8 * (i % 4)
         right = 8 * ((i // 3) % 4)
         code += bytes.fromhex("89f9 c1c9") + bytes([left])
@@ -853,6 +856,9 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "paired-field-product-268":
+            # The square leaves a real high bit. Retain it and the two odd copies.
+            assert code.count("*") <= (14 if llvm else 10), text
         elif kind == "sparse-mask-product-389":
             # The LLVM optimizer can move the common external scale into
             # one affine factor. Require both views to recover the product.
@@ -1081,6 +1087,7 @@ if __name__ == "__main__":
             ("result-mask-product-257", *distributed_field_elf(257, result_masks=True)),
             ("carry-mask-product-313", *distributed_field_elf(313, carry_masks=True)),
             ("sparse-mask-product-389", *distributed_field_elf(389, sparse_masks=True)),
+            ("paired-field-product-268", *distributed_field_elf(268, paired_fields=True)),
             ("funnel-perturbation-composed-product-283",
              *variable_field_elf(283, terminal_period=3, repeated_offsets=True,
                                  raw_rotations=True, composed_rotations=True)),
