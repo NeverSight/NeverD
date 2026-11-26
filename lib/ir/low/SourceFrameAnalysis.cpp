@@ -4,6 +4,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/low/LowAlignmentGuard.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/med/MedNoReturn.h"
 
@@ -41,28 +42,7 @@ bool hasNativeScalarIntrinsicEvidence(const LowOp &Operation,
 }
 
 bool isSourceFrameObservationGuard(const LowOp &Operation) {
-  if (Operation.Opcode != NdOp::INTRINSIC ||
-      Operation.MemoryOrdering != NdMemoryOrdering::None ||
-      Operation.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-      (Operation.NumInputs != 3 && Operation.NumInputs != 4) ||
-      !Operation.Inputs[0].isConst() || Operation.Inputs[0].Size != 2 ||
-      Operation.Inputs[0].Offset != uint64_t(Intrinsic::RequireAligned) ||
-      !intrinsicMemoryAddressSpaceShapeIsValid(
-          Intrinsic::RequireAligned, Operation.NumInputs, Operation.Output.Size,
-          Operation.Inputs[1].Size, Operation.Inputs[2].Size,
-          Operation.NumInputs == 4 ? Operation.Inputs[3].Size : 0) ||
-      !Operation.Inputs[2].isConst() || !Operation.Inputs[2].Offset ||
-      (Operation.Inputs[2].Offset & (Operation.Inputs[2].Offset - 1)))
-    return false;
-  for (unsigned I : {1U, 3U}) {
-    if (I >= Operation.NumInputs)
-      continue;
-    const auto &Value = Operation.Inputs[I];
-    if ((!Value.isReg() && !Value.isTemp() && !Value.isConst()) ||
-        (!Value.isConst() && Value.Offset > UINT64_MAX - Value.Size))
-      return false;
-  }
-  return true;
+  return isDefaultAddressAlignmentGuard(Operation);
 }
 
 namespace {
