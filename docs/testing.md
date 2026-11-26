@@ -12569,6 +12569,15 @@ a preceding read still runs on paths that skip an operand. It exercises all
 three short-circuit forms and an indirect target with its own effect.
 `HighValueForward.ConditionalUseStillReadsTheCapturedMemberOnBothPaths`
 executes emitted C at O0 and O2 with an observer on the field read.
+`HighValueForward.SkippedOperandStillFoldsAFrameSlotRead` folds a read of a
+fixed frame slot into a conditional and a short-circuit operand, since such a
+read observes nothing outside the function's own frame, and executes the C
+at O0 and O2.
+`HighValueForward.ReturnedCallCaptureConvertsOnlyWhereTheReturnDoesNot`
+returns forwarded call results as they are: a capture at least as wide as
+the return type prints no conversion of its own, a narrower one keeps it,
+as does one a Boolean function returns, and the C runs at O0 and O2 with a
+call counter.
 
 `HighCIntegerConversion.*` in `NeverDHighControlFlowTests` checks the integer conversions the HighC writer leaves to C. A conversion inside an operand that keeps the bytes an outer conversion keeps prints no cast of its own; an assignment to a declared integer local and a return convert implicitly, and a literal is spelled as the value it converts to, while a pointer keeps its explicit conversion. Stores convert like assignments, and a zero-extended argument to a typed wider parameter keeps its extension. A callee whose debug symbol has no type, or that nothing declares while the code reads more than an int of its result, returns its whole register, so a 64-bit pointer keeps its upper half. Each case runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic. Non-Windows fixture executables link the math library so fused floating operations also execute on hosts where those builtins lower to library calls.
 
@@ -14445,6 +14454,14 @@ machine-state boundary; they do not qualify kernel continuation execution.
 The callee-save visibility cases cover explicit and recorded Win64 call
 arguments, a call with its own home space, and a dynamic frame-relative read.
 They exercise the combined source pass and its individual callee-save entry.
+`MedPrologueSaves.AnotherFrameObjectsAddressLeavesTheSave` hands a callee,
+and reads at a run-time index, the buffer below a save, also when the index
+lies between the save's address and the constant that reaches the buffer or
+between the buffer's address and a constant that alone would reach the
+save, and
+`MedPrologueSaves.DataReadThroughAFrameAddressIsNoEscape` passes a callee
+what an SSE operation read through a frame address: neither names a byte of
+the save, so both keep it a prologue save.
 
 `NeverDMedPrologueSavesTests` runs the same save, restore, overlapping-store,
 return-address and process-entry cases through separate and combined source

@@ -93,6 +93,7 @@ bool readable(const QString &operation) {
 bool command(const QString &operation) {
   static const QSet<QString> operations{"open",
                                         "analyze",
+                                        "memory_safety_scan",
                                         "signatures_load",
                                         "pdb_load",
                                         "dwarf_load",
@@ -1416,6 +1417,17 @@ QueryService::enqueueCommand(QString operation, QJsonObject payload,
   }
   return state_->add(std::move(spec), State::Command, owner,
                      std::move(complete), leaves);
+}
+void QueryService::cancelCommand(SubscriptionId id) {
+  const auto job = state_->jobs.value(state_->subscriptions.value(id).job);
+  if (!job || job->kind != State::Command || job->phase == State::Delivering)
+    return;
+  if (job->phase == State::Queued) {
+    state_->queue.removeAll(job->id);
+    state_->finish(job, {{"status", "cancelled"}});
+  } else {
+    state_->cancelJob(job);
+  }
 }
 void QueryService::unsubscribe(SubscriptionId id) {
   state_->detach(id);

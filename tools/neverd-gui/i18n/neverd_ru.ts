@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Memory Safety Scan...</source>
+        <translation>Проверка безопасности памяти...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>Проверить время жизни объектов, инициализацию, границы и строки формата</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>Переключить плавающее рабочее пространство с дизассемблированием, псевдокодом и выводом</translation>
     </message>
@@ -11223,6 +11231,85 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>Загрузка %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>Проверка безопасности памяти</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>&amp;Анализаторы</translation>
+    </message>
+    <message>
+        <source>Audit and Hunt</source>
+        <translation>Audit и Hunt</translation>
+    </message>
+    <message>
+        <source>Audit</source>
+        <translation>Audit</translation>
+    </message>
+    <message>
+        <source>Hunt</source>
+        <translation>Hunt</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Результаты</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>Вердикт</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>Свойство</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Адрес</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Функция</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>Анализаторы</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>Обоснование результата</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>&amp;Проверить</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Отменить проверку</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>Отмена проверки…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>Идёт проверка…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>Проверка отменена до запуска.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>Вердикт: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2 (проверено %3, пропущено %4, без заключения %5)</translation>
     </message>
 </context>
 </TS>

@@ -4,6 +4,8 @@
 
 # 記憶體安全稽核與獵取
 
+執行 `neverd scan <binary>` 可同時進行兩項檢查。使用 `--analyzer=audit` 或 `--analyzer=hunt` 可選擇單項。[統一掃描與報告格式（英文）](../memory-safety-scan.md)。
+
 NeverD 對已載入二進位做兩類記憶體安全分析，並以結構化 JSON 回報結果。兩條軌道都跑在格式無關的提升 IR 上，因此 **PE/COFF、ELF、Mach-O 是同等的一等目標**——發現不會藏在某一種格式的掃描器或匯入表後面。
 
 | 軌道 | 命令 | 報告內容 |

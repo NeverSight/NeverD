@@ -27696,14 +27696,17 @@ TEST(HighCPointerAddresses, TypedPointerIndexLoadPrintsBucketsAndNodeFields) {
   EXPECT_EQ(Source.find("]->m_nHash"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("]->m_value"), std::string::npos) << Source;
   EXPECT_NE(Source.find("m_nHash == eRecord"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("m_key == eRecord"), std::string::npos) << Source;
   EXPECT_NE(Source.find("t1->m_pNext"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("return t1->m_value"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t1->m_pNext ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t22 ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t32 ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t23 ="), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("t34 ="), std::string::npos) << Source;
+  // The key and value are read before the test on every path. The key's read
+  // stays out of the operand `&&` may skip, and the value's out of the branch.
+  EXPECT_NE(Source.find("t33 = t1->m_key;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("&& t33 == eRecord"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("t34 = t1->m_value;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("return t34;"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, AnIntegerLocalIndexesThroughThePointerItHolds) {

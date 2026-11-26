@@ -97,3 +97,41 @@ Run the helper's offline regression checks with:
 ```sh
 python3 -m unittest discover -s tools/neverd-bench/tests -p test_sigprof_ab.py -v
 ```
+
+## Isolate first SDK load on macOS
+
+On macOS 13 or later with the Xcode command line tools installed, run the
+native loader probe against the signed Release SDK. Use a scratch directory
+on the SDK's APFS volume.
+
+```sh
+python3 tools/neverd-bench/sigprof/macos_sdk_load.py build-release/bin/libneverd.dylib \
+  --scratch-dir build-release --pairs 8 --json build-release/sdk-load.json
+```
+
+Every launch uses a new process. Each pair alternates the order of direct and
+staged loads on separate file clones. `fresh` measures the first mapping of
+a new clone, `pre_read` reads its bytes before the first mapping, and
+`repeat` maps the same file again. The probe records page residency before
+each load, verifies the device and inode of the loaded SDK, and checks the
+clone's SHA-256 after both launches. These conditions describe the SDK file
+cache on a running host. A reboot is a separate experiment.
+
+Compare direct `dlopen` with `staged_total` on the same file state. The latter
+includes native Mach-O slice inspection, registration of its embedded signature,
+library validation, and the subsequent ordinary `dlopen`. Moving validation
+earlier can make that last call appear much faster. The total includes the
+cost of moving it. [Apple's dyld loader](https://github.com/apple-oss-distributions/dyld/blob/dyld-1285.19/dyld/Loader.cpp#L1535-L1555)
+
+The probe records wall time for each operation. A separate process samples
+the single loader thread's process counters while the thread waits on a pipe.
+`ready` estimates runnable time waiting for a CPU. `other` is elapsed time
+outside the runnable interval and can include blocking inside validation.
+The `empty` phase shows the sampling resolution. Very short phases can have
+small negative residuals. The summary reports medians and nearest-rank wall
+P95 within each cell. The JSON keeps paired samples for comparisons across
+builds. Time the full HighC command separately to measure user-visible latency.
+
+```sh
+python3 -m unittest discover -s tools/neverd-bench/tests -p test_macos_sdk_load.py -v
+```

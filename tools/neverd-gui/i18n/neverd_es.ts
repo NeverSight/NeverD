@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Memory Safety Scan...</source>
+        <translation>Análisis de seguridad de memoria...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>Comprobar la vida útil de los objetos, su inicialización, los límites y las cadenas de formato</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>Alternar un espacio flotante con desensamblado, pseudocódigo y salida</translation>
     </message>
@@ -11187,6 +11195,85 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>Loading %1…</source>
         <translation>Cargando %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>Análisis de seguridad de memoria</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>&amp;Analizadores</translation>
+    </message>
+    <message>
+        <source>Audit and Hunt</source>
+        <translation>Audit y Hunt</translation>
+    </message>
+    <message>
+        <source>Audit</source>
+        <translation>Audit</translation>
+    </message>
+    <message>
+        <source>Hunt</source>
+        <translation>Hunt</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Hallazgos</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>Veredicto</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>Propiedad</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Dirección</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Función</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>Analizadores</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>Evidencia del hallazgo</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>&amp;Analizar</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Cancelar análisis</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>Cancelando el análisis…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>Analizando…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>Se canceló el análisis antes de iniciarse.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>Veredicto: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2 (%3 examinados, %4 omitidos, %5 sin conclusión)</translation>
     </message>
 </context>
 </TS>

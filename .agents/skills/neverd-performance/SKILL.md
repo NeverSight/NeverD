@@ -175,6 +175,9 @@ executed on each path before updating assembly expectations.
      it).
    - A phase with a small CPU share that runs on one thread can still take a
      large part of the wall time on a many-core host.
+   - For a macOS pre-main tail, time first and repeat SDK mappings separately.
+     Compare direct loading with the sum of validation and loading. Check the
+     full command's P95 before changing startup. [SDK load probe](../../../tools/neverd-bench/sigprof/README.md#isolate-first-sdk-load-on-macos)
 2. **Same-base A/B.** Build baseline and candidate from the same `origin/dev`
    commit. Use Release, the same compiler, the same dependency snapshot
    (`neverd-dependency-inputs.json`), the same allocator and the same

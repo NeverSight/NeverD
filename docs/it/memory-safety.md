@@ -4,6 +4,8 @@
 
 # Audit e hunt di sicurezza della memoria
 
+Eseguire entrambe le analisi con `neverd scan <binary>`. Selezionarne una con `--analyzer=audit` o `--analyzer=hunt`. [Guida all’analisi unificata (in inglese)](../memory-safety-scan.md).
+
 NeverD analizza un binario caricato per due famiglie di difetti di sicurezza della memoria e li riporta come JSON strutturato. Entrambe le piste girano sull’IR sollevato, indipendente dal formato, quindi **PE/COFF, ELF e Mach-O sono bersagli di primo livello, paritari** — un reperto non resta mai dietro allo scanner o alla tabella degli import di un solo formato.
 
 | Pista | Comando | Riporta |

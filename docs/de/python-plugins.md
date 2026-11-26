@@ -125,6 +125,8 @@ Der Register-Offset ist ein Byte-Offset in NeverDs Registerdatei, kein nativer Z
 
 ### Speicher-Audit und Hunt
 
+`session.scan()` führt beide Analysen aus und liefert Befunde und Abdeckung in einem Bericht. [Leitfaden zum gemeinsamen Scan (Englisch)](../memory-safety-scan.md).
+
 `session.audit()` und `session.hunt()` liefern geparste JSON-Berichte (dasselbe Schema wie die CLI). Sie brauchen eine geliftete native Session:
 
 ```python

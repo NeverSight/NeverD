@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: e3e9fcab1e12687d1ff30cd2bd7831cf3d6dabeb1e4d1316bca2beaa223e0657 -->
+<!-- i18n-source: 5b30479355a233a39e16db9fe89bb7403892904dbe7b7750653520445705a79e -->
 
 <div align="center">
 
@@ -181,6 +181,7 @@ cmake --build build
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
+./build/bin/neverd scan binary
 ./build/bin/neverd audit binary
 ./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary

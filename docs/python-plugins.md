@@ -210,6 +210,8 @@ results rather than exceptions. Local argument errors raise `TypeError` or
 
 ### Memory-safety audit and hunt
 
+`session.scan()` runs both analyzers and returns their findings and coverage in one report. Use `analyzer="audit"` or `analyzer="hunt"` to select one. [Unified scan guide](memory-safety-scan.md).
+
 `session.audit()` and `session.hunt()` return parsed JSON reports (the same
 schema as the CLI). They require a lifted native session:
 
