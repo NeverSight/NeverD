@@ -385,13 +385,13 @@ static int realMain(int Argc, char *Argv[]) {
       !loadAnalysisSections(Sess))
     return 1;
   if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd || SymbolicCmd ||
-       AuditCmd || HuntCmd) &&
+       ScanCmd || AuditCmd || HuntCmd) &&
       !configureAnalysisSession(Sess))
     return 1;
 
   // Hunt and audit name callees through the same identity view as the rest of
   // the engine, so optional signature matching has to land before they run.
-  if ((AuditCmd || HuntCmd || DecompileCmd || FuncsCmd) &&
+  if ((ScanCmd || AuditCmd || HuntCmd || DecompileCmd || FuncsCmd) &&
       (SigAuto || !SigBase.getValue().empty() || !SigFile.getValue().empty() ||
        !SigDir.getValue().empty())) {
     Expected<int> MatchCount = applyRequestedSignatures(Sess, Argv[0]);
@@ -401,8 +401,8 @@ static int realMain(int Argc, char *Argv[]) {
     }
   }
 
-  if (!PatchBytesCmd && !JsonOutput && !SymbolicCmd && !AuditCmd && !HuntCmd &&
-      !(PatchCmd && PatchReport)) {
+  if (!PatchBytesCmd && !JsonOutput && !SymbolicCmd && !ScanCmd && !AuditCmd &&
+      !HuntCmd && !(PatchCmd && PatchReport)) {
     const char *ArchStr = neverd_session_arch_name(Sess);
     outs() << "=== " << ProjectName << " v" << VersionString << " (" << Command
            << ") ===\n";
@@ -476,6 +476,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runCfg(Sess);
   if (SymbolicCmd)
     return runSymbolicExplore(Sess);
+  if (ScanCmd)
+    return runScan(Sess);
   if (AuditCmd)
     return runAudit(Sess);
   if (HuntCmd)

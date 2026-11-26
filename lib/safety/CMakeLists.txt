@@ -17,6 +17,7 @@ add_neverd_component_library(NeverDSafety
   ObjectModel.cpp
   HuntEngine.cpp
   AllocLifetime.cpp
+  SafetyScan.cpp
   Safety.cpp
 
   LINK_COMPONENTS

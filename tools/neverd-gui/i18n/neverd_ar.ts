@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Memory Safety Scan...</source>
+        <translation>فحص سلامة الذاكرة...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>تحقّق من أعمار الكائنات والتهيئة والحدود وسلاسل التنسيق</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>تبديل مساحة عمل عائمة تضم التفكيك والشيفرة الزائفة والمخرجات</translation>
     </message>
@@ -11331,6 +11339,85 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>جارٍ تحميل %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>فحص سلامة الذاكرة</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>أدوات ال&amp;تحليل</translation>
+    </message>
+    <message>
+        <source>Audit and Hunt</source>
+        <translation>Audit وHunt</translation>
+    </message>
+    <message>
+        <source>Audit</source>
+        <translation>Audit</translation>
+    </message>
+    <message>
+        <source>Hunt</source>
+        <translation>Hunt</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>النتائج</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>الحكم</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>الخاصية</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>العنوان</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>الدالة</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>أدوات التحليل</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>أدلة النتيجة</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>ا&amp;فحص</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>إلغاء الفحص</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>جارٍ إلغاء الفحص…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>جارٍ الفحص…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>أُلغي الفحص قبل أن يبدأ.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>الحكم: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2 (فُحص %3، وتُخطّي %4، ولم يُحسم %5)</translation>
     </message>
 </context>
 </TS>

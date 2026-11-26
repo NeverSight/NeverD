@@ -893,6 +893,17 @@ class NeverDSafetyOptions(ctypes.Structure):
     ]
 
 
+class NeverDScanOptions(ctypes.Structure):
+    """Layout of the additive unified scan options."""
+    _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("analysis", ctypes.POINTER(NeverDSafetyOptions)),
+        ("analyzers", ctypes.c_uint),
+        ("cancel", CancelProbeCallback),
+        ("context", ctypes.c_void_p),
+    ]
+
+
 class NeverDSourcePatchMappingV1(ctypes.Structure):
     _fields_ = [
         ("symbol", ctypes.c_char_p),
@@ -1137,6 +1148,7 @@ _C_TYPES: dict[str, object] = {
         NeverDLowIRConcolicOptionsV1
     ),
     "const neverd_safety_options *": ctypes.POINTER(NeverDSafetyOptions),
+    "const neverd_scan_options *": ctypes.POINTER(NeverDScanOptions),
     "const neverd_driver_options_v1 *": ctypes.POINTER(NeverDDriverOptionsV1),
     "const neverd_sanitize_options_v1 *": ctypes.POINTER(NeverDSanitizeOptionsV1),
     "neverd_sanitize_result_v1 *": ctypes.POINTER(NeverDSanitizeResultV1),
@@ -1970,6 +1982,11 @@ _declare(
         "neverd_va_t",
         "const neverd_lowir_concolic_options_v1 *",
     ],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_session_scan_json", "const char *",
+    ["neverd_session_t", "const neverd_scan_options *"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
@@ -2892,6 +2909,7 @@ __all__ = [
     "NeverDLowIRConcolicOptionsV1",
     "NeverDLowIRConcolicRegisterSeedV1",
     "NeverDSafetyOptions",
+    "NeverDScanOptions",
     "NeverDSanitizeOptionsV1",
     "NeverDSanitizeResultV1",
     "NeverDSimplifyOptions",

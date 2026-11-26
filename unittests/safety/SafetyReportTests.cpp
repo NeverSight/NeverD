@@ -11,13 +11,14 @@
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/pipeline/Pipeline.h"
-#include "neverd/safety/Safety.h"
+#include "neverd/safety/SafetyScan.h"
 
 #include "llvm/Support/JSON.h"
 
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <stdexcept>
 
 using namespace neverd::safety;
 
@@ -1023,8 +1024,8 @@ TEST(SafetyReport, CapacityPrecisionIsStableAndStorageIsNotReportedExact) {
   }
 }
 
-TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
-  neverd::BinaryImage Img;
+namespace {
+void buildAllocationFixture(neverd::PipelineResult &Pipeline) {
   neverd::MedFunc F;
   F.Entry = 0x100;
   F.Name = "f";
@@ -1102,9 +1103,15 @@ TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
   LB.Ops.push_back(std::move(LowRet));
   LF.Blocks.push_back(std::move(LB));
 
-  neverd::PipelineResult Pipeline;
   Pipeline.MedFuncs.push_back(std::move(F));
   Pipeline.LowFuncs.push_back(std::move(LF));
+}
+} // namespace
+
+TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
+  neverd::BinaryImage Img;
+  neverd::PipelineResult Pipeline;
+  buildAllocationFixture(Pipeline);
   AnalysisInput In = validatedInput(Img, Pipeline);
   SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
   EXPECT_EQ(Report.Scanned, 2u);
@@ -1514,4 +1521,90 @@ TEST(SafetyReport, NullOnlyDoubleFreeIsInfeasibleForAnAllocation) {
   AnalysisInput In = validatedInput(Img, Pipeline);
   SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
   EXPECT_TRUE(Report.Findings.empty());
+}
+
+TEST(SafetyScan, FailedOrCanceledAnalyzerRetainsCompletedSibling) {
+  neverd::BinaryImage Img;
+  neverd::PipelineResult Pipeline;
+  buildAllocationFixture(Pipeline);
+  const auto In = validatedInput(Img, Pipeline);
+  for (bool Fail : {false, true}) {
+    auto scan = runScan(
+        In, SinkCatalog::defaults(), {}, ScanSelection::Both, [Fail](Track T) {
+          if (Fail && T == Track::Hunt)
+            throw std::runtime_error("injected analyzer failure");
+          return T == Track::Hunt;
+        });
+    const auto &Audit = scan.Analyzers.front();
+    EXPECT_EQ(Audit.State, ScanState::Completed);
+    ASSERT_EQ(Audit.Report.Findings.size(), 1u);
+    EXPECT_EQ(Audit.Report.Findings[0].TheVerdict, Verdict::Unsafe);
+    EXPECT_EQ(scan.Analyzers.back().State,
+              Fail ? ScanState::Failed : ScanState::Canceled);
+    auto parsed = llvm::json::parse(toJson(scan));
+    ASSERT_TRUE(static_cast<bool>(parsed));
+    EXPECT_EQ(parsed->getAsObject()->getString("verdict"), "UNSAFE");
+    EXPECT_EQ(parsed->getAsObject()->getBoolean("coverage_complete"), false);
+  }
+}
+
+TEST(SafetyScan, MergesOnlyTheSamePropertyLocationAndScope) {
+  ScanReport scan(ScanSelection::Both, ScanState::Completed);
+  Finding F;
+  F.Class = VulnClass::BufferOverflow;
+  F.Sink = "copy";
+  F.FuncEntry = 0x100;
+  F.CallVA = 0x110;
+  F.BlockId = 0;
+  F.OpIdx = 1;
+  F.OriginSeq = 0;
+  F.SharedCheck = CatalogCheck{CatalogRequirement::CallEffects, 1};
+  F.Origin = Track::Audit;
+  F.Source = NameSource::Dwarf;
+  F.Detail = "first observation";
+  scan.Analyzers.front().Report.Findings.push_back(F);
+  F.Origin = Track::Hunt;
+  F.Source = NameSource::Import;
+  F.Detail = "second observation";
+  auto &Hunt = scan.Analyzers.back().Report.Findings;
+  Hunt.push_back(F);
+  F.SharedCheck->Requirement = CatalogRequirement::DebugSignature;
+  Hunt.push_back(F);
+  F.Class = VulnClass::FormatString;
+  Hunt.push_back(F);
+  ++F.OriginSeq;
+  Hunt.push_back(F);
+
+  const auto Json = toJson(scan);
+  std::reverse(Hunt.begin(), Hunt.end());
+  EXPECT_EQ(toJson(scan), Json);
+  auto Parsed = llvm::json::parse(Json);
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const auto *Groups = Parsed->getAsObject()->getArray("findings");
+  ASSERT_NE(Groups, nullptr);
+  ASSERT_EQ(Groups->size(), 4u);
+  const auto *Observations =
+      Groups->front().getAsObject()->getArray("observations");
+  ASSERT_NE(Observations, nullptr);
+  ASSERT_EQ(Observations->size(), 2u);
+  for (size_t Index = 0; Index != 2; ++Index) {
+    const auto *Row = (*Observations)[Index].getAsObject();
+    EXPECT_EQ(Row->getString("analyzer"), Index ? "hunt" : "audit");
+    const auto *Finding = Row->getObject("finding");
+    EXPECT_EQ(Finding->getString("detail"),
+              Index ? "second observation" : "first observation");
+    EXPECT_EQ(Finding->getString("name_source"), Index ? "import" : "dwarf");
+  }
+}
+
+TEST(SafetyScan, EmptyBudgetLimitedReportIsUnknown) {
+  ScanReport Scan(ScanSelection::Audit, ScanState::BudgetExhausted);
+  auto Parsed = llvm::json::parse(toJson(Scan));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const auto *Root = Parsed->getAsObject();
+  EXPECT_EQ(Root->getBoolean("coverage_complete"), false);
+  EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
+  const auto *Tracks = Root->getObject("analyzers");
+  EXPECT_EQ(Tracks->getObject("audit")->getString("state"), "budget_exhausted");
+  EXPECT_EQ(Tracks->getObject("hunt")->getString("state"), "disabled");
 }

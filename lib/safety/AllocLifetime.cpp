@@ -1065,7 +1065,7 @@ public:
     buildSummaries();
   }
 
-  std::vector<Finding> run() {
+  std::vector<Finding> run(llvm::function_ref<bool()> Canceled = nullptr) {
     std::vector<Finding> All;
     if (!In.MedFuncs)
       return All;
@@ -1085,13 +1085,19 @@ public:
       All.push_back(std::move(Fn));
       return All;
     }
-    for (const MedFunc &F : *In.MedFuncs)
-      auditFunction(F, All);
     std::vector<Finding> Kept;
-    Kept.reserve(All.size());
-    for (Finding &Fn : All)
-      if (corroborate(Fn))
-        Kept.push_back(std::move(Fn));
+    for (const MedFunc &F : *In.MedFuncs) {
+      if (Canceled && Canceled())
+        break;
+      All.clear();
+      auditFunction(F, All);
+      for (Finding &Fn : All) {
+        if (Canceled && Canceled())
+          return Kept;
+        if (corroborate(Fn))
+          Kept.push_back(std::move(Fn));
+      }
+    }
     return Kept;
   }
 
@@ -2402,6 +2408,17 @@ private:
                                  CI.TargetAddr, CI.IsIndirect);
         Fn.TheVerdict = Verdict::Unknown;
         Fn.TheConfidence = Confidence::Low;
+        if (Entry->Kind == SinkKind::Copy || Entry->Kind == SinkKind::Format) {
+          Fn.SharedCheck =
+              CatalogCheck{DebugConflict ? CatalogRequirement::DebugSignature
+                                         : CatalogRequirement::CallEffects,
+                           Entry->decidingArg()};
+          Fn.Kind = Entry->Kind;
+          Fn.BlockId = CI.BlockId;
+          Fn.OpIdx = CI.OpIdx;
+          if (const MedOp *Op = opAt(F, CI.BlockId, CI.OpIdx))
+            Fn.OriginSeq = Op->OriginSeq;
+        }
         Fn.Detail = DebugConflict
                         ? "debug function signature conflicts with sink summary"
                         : "no exact external-call effect summary applies";
@@ -3256,9 +3273,10 @@ std::vector<Finding> neverd::safety::auditHeap(const AnalysisInput &In,
   return A.run();
 }
 
-std::vector<Finding> neverd::safety::auditMemory(const AnalysisInput &In,
-                                                 const SinkCatalog &Cat,
-                                                 const SafetyBudgets &Budgets) {
+std::vector<Finding>
+neverd::safety::auditMemory(const AnalysisInput &In, const SinkCatalog &Cat,
+                            const SafetyBudgets &Budgets,
+                            llvm::function_ref<bool()> Canceled) {
   Auditor A(In, Cat, Budgets, /*IncludeStackReads=*/true);
-  return A.run();
+  return A.run(Canceled);
 }

@@ -310,6 +310,12 @@ if(BUILD_TESTING)
   add_test(NAME NeverDGuiAppearance COMMAND neverd-gui-appearance-tests)
   set_tests_properties(NeverDGuiAppearance PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+  qt_add_executable(neverd-gui-safety-scan-tests tests/SafetyScanDialogTests.cpp)
+  target_link_libraries(neverd-gui-safety-scan-tests PRIVATE neverd_gui_app Qt6::Test)
+  add_test(NAME NeverDGuiSafetyScan COMMAND neverd-gui-safety-scan-tests)
+  set_tests_properties(NeverDGuiSafetyScan PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
   qt_add_executable(neverd-gui-x87-tests tests/X87CapabilitiesTests.cpp)
   target_link_libraries(neverd-gui-x87-tests PRIVATE neverd_gui_app Qt6::Test)
   set_target_properties(neverd-gui-x87-tests PROPERTIES WIN32_EXECUTABLE FALSE)

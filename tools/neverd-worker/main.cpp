@@ -403,6 +403,8 @@ Json hello() {
       result["capabilities"].push_back(operation);
   if (Engine::reportsUnwindFrames())
     result["capabilities"].push_back(unwind_query::kOperation);
+  if (Engine::supportsSafetyScan())
+    result["capabilities"].push_back("memory_safety_scan");
   if (Engine::reportsX87Capabilities())
     result["capabilities"].push_back("x87_capabilities");
   if (Engine::reportsComputedStrings())
@@ -637,7 +639,14 @@ void executeLoop(State &state, Transport &transport) {
               ComparisonPartial ||
               (result.contains("error") &&
                result["error"].value("code", std::string()) == "cancelled");
-          result["completed_before_cancellation"] = !ComparisonStopped;
+          bool scanStopped = false;
+          if (op == "memory_safety_scan" && result.contains("payload")) {
+            for (const auto &analyzer : result["payload"].at("analyzers"))
+              scanStopped |= analyzer.at("state") == "canceled";
+            result["partial_result_retained"] = scanStopped;
+          }
+          result["completed_before_cancellation"] =
+              !ComparisonStopped && !scanStopped;
           if (ComparisonOperation)
             result["partial_result_retained"] = ComparisonPartial;
           if (LineageOperation)

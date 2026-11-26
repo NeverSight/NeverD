@@ -2980,6 +2980,106 @@
       }
     },
     {
+      "id": "safety.native-memory-scan",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "safety",
+      "targets": [
+        "x86_64",
+        "aarch64"
+      ],
+      "docs": [
+        "docs/memory-safety-scan.md"
+      ],
+      "limitations": [
+        "Static Audit and Hunt properties within the admitted lift, catalog and budgets. Incomplete coverage is explicit."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyTests",
+          "source": "unittests/safety/SafetyReportTests.cpp",
+          "filter": "SafetyScan.MergesOnlyTheSamePropertyLocationAndScope",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyTests",
+          "source": "unittests/safety/SafetyReportTests.cpp",
+          "filter": "SafetyScan.FailedOrCanceledAnalyzerRetainsCompletedSibling",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyTests",
+          "source": "unittests/safety/SafetyReportTests.cpp",
+          "filter": "SafetyScan.EmptyBudgetLimitedReportIsUnknown",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_session_scan_json"
+        ],
+        "python": [
+          "Session.scan"
+        ],
+        "cli": [
+          "neverd scan",
+          "neverd scan --analyzer",
+          "neverd scan --arm-function-mode",
+          "neverd scan --auto",
+          "neverd scan --download-symbols",
+          "neverd scan --dwarf",
+          "neverd scan --json",
+          "neverd scan --load-base",
+          "neverd scan --load-entry",
+          "neverd scan --load-offset",
+          "neverd scan --load-size",
+          "neverd scan --loader",
+          "neverd scan --map",
+          "neverd scan --map-unchecked",
+          "neverd scan --max-call-depth",
+          "neverd scan --max-loop",
+          "neverd scan --max-paths",
+          "neverd scan --max-steps",
+          "neverd scan --max-summary-iterations",
+          "neverd scan --no-debug",
+          "neverd scan --no-dwarf",
+          "neverd scan --no-map",
+          "neverd scan --no-pdb",
+          "neverd scan --no-symtab",
+          "neverd scan --o",
+          "neverd scan --pdb",
+          "neverd scan --pdb-unverified",
+          "neverd scan --platform",
+          "neverd scan --processor",
+          "neverd scan --sig-base",
+          "neverd scan --sig-dir",
+          "neverd scan --sig-file",
+          "neverd scan --sinks",
+          "neverd scan --solver-conflicts",
+          "neverd scan --sources",
+          "neverd scan --symbol-path"
+        ],
+        "json": [
+          "neverd_session_scan_json"
+        ]
+      }
+    },
+    {
       "id": "safety.binary-sanitizer-publication",
       "kind": "rewrite",
       "status": "experimental",

@@ -826,6 +826,62 @@ TEST(SafetyCAPI, LegacyOptionsPrefixAndNullOptionsRemainSupported) {
   neverd_session_destroy(Sess);
 }
 
+TEST(SafetyCAPI, ScanOptionsRespectSizeSelectionAndBorrowedCancellation) {
+  const FixtureSpec Spec = fixtureSpecs().front();
+  neverd_session_t Sess = neverd_session_create();
+  ASSERT_TRUE(neverd_session_load(Sess, Spec.Path.c_str()));
+  const std::string MissingCatalog = Spec.Path + "/missing-scan-catalog";
+  neverd_safety_options Analysis{};
+  Analysis.struct_size = sizeof(Analysis);
+  Analysis.sinks_path = MissingCatalog.c_str();
+  unsigned Calls = 0;
+  neverd_scan_options Options{};
+  Options.analysis = &Analysis;
+  Options.analyzers = NEVERD_SCAN_HUNT;
+  Options.context = &Calls;
+  Options.cancel = [](void *Context) {
+    ++*static_cast<unsigned *>(Context);
+    return 1;
+  };
+  const auto Expect = [](neverd_session_t Session,
+                         const neverd_scan_options *Opt, llvm::StringRef Audit,
+                         llvm::StringRef Hunt) {
+    auto Report =
+        llvm::json::parse(takeOwned(neverd_session_scan_json(Session, Opt)));
+    ASSERT_TRUE(static_cast<bool>(Report));
+    const auto *Root = Report->getAsObject();
+    ASSERT_NE(Root, nullptr);
+    EXPECT_EQ(Root->getString("schema"), "neverd.memory-safety-scan");
+    const auto *Analyzers = Root->getObject("analyzers");
+    ASSERT_NE(Analyzers, nullptr);
+    const auto *A = Analyzers->getObject("audit");
+    const auto *H = Analyzers->getObject("hunt");
+    ASSERT_NE(A, nullptr);
+    ASSERT_NE(H, nullptr);
+    EXPECT_EQ(A->getString("state"), Audit);
+    EXPECT_EQ(H->getString("state"), Hunt);
+    if (Hunt == "canceled" || Hunt == "failed") {
+      EXPECT_EQ(Root->getBoolean("ok"), false);
+      EXPECT_EQ(Root->getBoolean("coverage_complete"), false);
+      EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
+    }
+  };
+  // A prefix that ends before the selector uses both analyzers. The callback
+  // and its paired context are borrowed only when both fields are present.
+  Options.struct_size = offsetof(neverd_scan_options, analyzers);
+  Expect(Sess, &Options, "failed", "failed");
+  Options.struct_size = offsetof(neverd_scan_options, context);
+  Expect(Sess, &Options, "disabled", "failed");
+  EXPECT_EQ(Calls, 0u);
+  Options.struct_size = sizeof(Options);
+  Expect(Sess, &Options, "disabled", "canceled");
+  EXPECT_EQ(Calls, 1u);
+  Options.analyzers = 42;
+  Expect(Sess, &Options, "failed", "failed");
+  Expect(nullptr, nullptr, "failed", "failed");
+  neverd_session_destroy(Sess);
+}
+
 TEST(SafetyCAPI, InterproceduralBudgetsAppendAfterTheLegacyOptionsPrefix) {
   struct LegacyOptions {
     size_t struct_size;
