@@ -736,6 +736,8 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
        true},
       {"_zba1p0_zbb1p0_zbs1p0", "+i,+zba,+zbb,+zbs", false, false, false, false,
        false, true, true, true},
+      {"_b1p0_zba1p0_zbb1p0_zbs1p0", "+i,+zba,+zbb,+zbs", false, false, false,
+       false, false, true, true, true},
       {"_zmmul1p0", "+i,+zmmul", true, false, false, false, false},
       {"_zaamo1p0", "+i,+zaamo", false, false, true, false, false},
       {"_zalrsc1p0", "+i,+zalrsc", false, false, false, true, false},

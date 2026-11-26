@@ -73,6 +73,22 @@ constexpr uint32_t BSETI = 0x28051513;
 constexpr uint32_t ReservedRV32[] = {AddUW,      SH1ADDUW,   0x0bf5151b,
                                      0x2a051513, 0x4a051513, 0x4a055513,
                                      0x6a051513};
+constexpr uint32_t AndN = 0x40b57533;
+constexpr uint32_t OrN = 0x40b56533;
+constexpr uint32_t Xnor = 0x40b54533;
+constexpr uint32_t Min = 0x0ab54533;
+constexpr uint32_t MinU = 0x0ab55533;
+constexpr uint32_t Max = 0x0ab56533;
+constexpr uint32_t MaxU = 0x0ab57533;
+constexpr uint32_t Clz = 0x60051513;
+constexpr uint32_t Cpop = 0x60251513;
+constexpr uint32_t SextB = 0x60451513;
+constexpr uint32_t SextH = 0x60551513;
+constexpr uint32_t Ror = 0x60b55533;
+constexpr uint32_t RolW = 0x60b5153b;
+constexpr uint32_t CpopW = 0x6025151b;
+constexpr uint32_t Rori31 = 0x61f55513;
+constexpr uint32_t RoriW31 = 0x61f5551b;
 constexpr uint32_t RolIntoRs2 = 0x60b515b3;
 constexpr uint32_t RorFromZero = 0x60b05533;
 constexpr uint32_t RolToZero = 0x60b51033;

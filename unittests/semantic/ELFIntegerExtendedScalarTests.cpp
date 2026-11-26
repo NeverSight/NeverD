@@ -276,21 +276,54 @@ TEST(RISCVBasicBitManipulation, CountsLanesAliasesAndWordRotates) {
       for (unsigned I = 0; I < 64; I += 8)
         if ((X >> I) & UINT8_MAX)
           Bytes |= uint64_t(UINT8_MAX) << I;
+      const unsigned Bits = Wide ? 64 : 32;
+      uint64_t Reverse = 0;
+      for (unsigned I = 0; I < Bits; I += 8)
+        Reverse = (Reverse << 8) | ((X >> I) & UINT8_MAX);
+      expectRISCVResult(Img, D, Wide ? Rev8_64 : Rev8_32, X, 0, Reverse);
+      expectRISCVResult(Img, D, Wide ? ZextH64 : ZextH32, X, 0, uint16_t(X));
+      expectRISCVResult(Img, D, SextH, X, 0, llvm::SignExtend64<16>(X));
+      expectRISCVResult(Img, D, SextB, X, 0, llvm::SignExtend64<8>(X));
+      expectRISCVResult(Img, D, Clz, X, 0,
+                        Wide ? std::countl_zero(X)
+                             : std::countl_zero(uint32_t(X)));
+      expectRISCVResult(Img, D, Cpop, X, 0, std::popcount(X));
+      expectRISCVResult(Img, D, Wide ? Rori63 : Rori31, X, 0,
+                        Wide ? std::rotl(X, 1) : std::rotl(uint32_t(X), 1));
+      for (uint64_t Y : {UINT64_C(0), X, UINT64_C(1) << (Bits - 1)}) {
+        const bool SignedLess =
+            llvm::SignExtend64(X, Bits) < llvm::SignExtend64(Y, Bits);
+        expectRISCVResult(Img, D, AndN, X, Y, X & ~Y);
+        expectRISCVResult(Img, D, OrN, X, Y, X | ~Y);
+        expectRISCVResult(Img, D, Xnor, X, Y, ~(X ^ Y));
+        expectRISCVResult(Img, D, Min, X, Y, SignedLess ? X : Y);
+        expectRISCVResult(Img, D, Max, X, Y, SignedLess ? Y : X);
+        expectRISCVResult(Img, D, MinU, X, Y, X < Y ? X : Y);
+        expectRISCVResult(Img, D, MaxU, X, Y, X < Y ? Y : X);
+      }
       expectRISCVResult(Img, D, OrcB, X, 0, Bytes);
       expectRISCVResult(Img, D, Ctz, X, 0,
                         Wide ? std::countr_zero(X)
                              : std::countr_zero(uint32_t(X)));
       for (unsigned N : {0u, 1u, 31u, 32u, 63u, 64u}) {
+        expectRISCVResult(Img, D, Ror, X, N,
+                          Wide ? std::rotr(X, N) : std::rotr(uint32_t(X), N));
         expectRISCVResult(Img, D, RolIntoRs2, X, N,
                           Wide ? std::rotl(X, N) : std::rotl(uint32_t(X), N),
                           11);
         expectRISCVResult(Img, D, RorFromZero, X, N, 0);
         expectRISCVResult(Img, D, RolToZero, X, N, X); // a0 survives rd=x0.
-        if (Wide)
+        if (Wide) {
+          expectRISCVResult(Img, D, RolW, X, N,
+                            llvm::SignExtend64<32>(std::rotl(uint32_t(X), N)));
           expectRISCVResult(Img, D, RorW, X, N,
                             llvm::SignExtend64<32>(std::rotr(uint32_t(X), N)));
+        }
       }
       if (Wide) {
+        expectRISCVResult(Img, D, RoriW31, X, 0,
+                          llvm::SignExtend64<32>(std::rotl(uint32_t(X), 1)));
+        expectRISCVResult(Img, D, CpopW, X, 0, std::popcount(uint32_t(X)));
         expectRISCVResult(Img, D, CtzW, X, 0, std::countr_zero(uint32_t(X)));
         expectRISCVResult(Img, D, ClzW, X, 0, std::countl_zero(uint32_t(X)));
       }
@@ -321,7 +354,7 @@ TEST(PowerPCReversedTransfers, WidthByteOrderAndReservedFields) {
     const unsigned Width = isPowerPC64(A) ? 8 : 4;
     Img.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
     auto &Data = Img.Segments.emplace_back();
-    Data.VA = 0x2000;
+    Data.VA = 0x1fff; // The transferred value starts at the next, aligned byte.
     Data.Data = {0xa5, 0xf2, 0x83, 0x94, 0x25, 0x36, 0x47, 0x58, 0xe9, 0x5a};
     Data.Size = Data.FileSz = Data.Data.size();
     Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
