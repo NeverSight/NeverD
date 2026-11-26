@@ -1,19 +1,16 @@
 // Linux ELF entry for the freestanding oracle.
+#include "scalar-elf-function.inc"
 .text
-.globl _start
-.type _start,@function
+begin_function _start
 #ifdef __riscv
-_start:
  call check
  li a7,93
  ecall
 #else
-.abiversion 2
-_start:
  lis 2,.TOC.@ha
  addi 2,2,.TOC.@l
  bl check
  li 0,1
  sc
 #endif
-.size _start,.-_start
+end_function _start

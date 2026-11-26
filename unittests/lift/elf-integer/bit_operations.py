@@ -130,15 +130,17 @@ def execute(args, profile, path):
         subprocess.run([args.qemu_dir / ("qemu-" + qemu), "-cpu", cpu, path], check=True)
 
 
-def check(args, work, profile):
+def check(args, work, profile, ppc64_abi="elfv2"):
     rv = profile.startswith("riscv")
     bits = 64 if "64" in profile else 32
-    flags = [f"-march=rv{bits}i_zbb"] if rv else []
+    descriptors = not rv and bits == 64 and ppc64_abi == "elfv1"
+    abi = ["-mabi=elfv1", "-fPIC"] if descriptors else []
+    flags = [f"-march=rv{bits}i_zbb"] if rv else abi
     source = HERE / ("riscv-zbb.S" if rv else "powerpc-byte-reversed.S")
     oracle = work / "check.c"
     oracle.write_text(riscv_oracle(bits) if rv else ppc_oracle(bits, profile.endswith("le")))
     # Keep the caller's ABI independent; base I also enforces the source's IALIGN=32.
-    caller_flags = compiler_flags(profile) + ([f"-march=rv{bits}i"] if rv else [])
+    caller_flags = compiler_flags(profile) + ([f"-march=rv{bits}i"] if rv else abi)
     sources = [oracle]
     if rv or bits == 64:
         sources.append(HERE / "extended-scalar-start.S")
@@ -156,7 +158,14 @@ def check(args, work, profile):
     print(f"{profile} original passed", flush=True)
     placement = image_base_option(args.ld)
     with original.open("rb") as stream:
-        old_entry = ELFFile(stream)["e_entry"]
+        elf = ELFFile(stream)
+        old_entries = [elf["e_entry"]]
+        if descriptors:
+            opd = elf.get_section_by_name(".opd")
+            assert opd and opd["sh_addr"] <= old_entries[0] < opd["sh_addr"] + opd["sh_size"]
+            offset = old_entries[0] - opd["sh_addr"]
+            old_entries.append(int.from_bytes(opd.data()[offset:offset + 8],
+                                              "little" if elf.little_endian else "big"))
     for route in ("highc", "llvmc", "llvm"):
         generated = project(args, original, "eval", route)
         for opt, base in (("-O0", "0x210000"), ("-O2", "0x610000")):
@@ -165,7 +174,7 @@ def check(args, work, profile):
                         [*flags, "-fno-strict-aliasing", f"-Wl,{placement}={base}"])
             with rebuilt.open("rb") as stream:
                 if any(s["p_type"] == "PT_LOAD" and
-                       s["p_vaddr"] <= old_entry < s["p_vaddr"] + s["p_memsz"]
+                       any(s["p_vaddr"] <= addr < s["p_vaddr"] + s["p_memsz"] for addr in old_entries)
                        for s in ELFFile(stream).iter_segments()):
                     raise AssertionError("original entry is still mapped")
             execute(args, profile, rebuilt)
@@ -177,13 +186,14 @@ def main():
     for tool in ("neverd", "clang", "ld"):
         parser.add_argument("--" + tool, required=True, type=Path)
     parser.add_argument("--qemu-dir", type=Path, default=Path("/usr/bin"))
+    parser.add_argument("--ppc64-abi", choices=("elfv1", "elfv2"), default="elfv2")
     parser.add_argument("--profiles", nargs="+", choices=PROFILES, default=PROFILES)
     args = parser.parse_args()
     with TemporaryDirectory() as temp:
         for profile in args.profiles:
             work = Path(temp) / profile
             work.mkdir()
-            check(args, work, profile)
+            check(args, work, profile, args.ppc64_abi)
 
 
 if __name__ == "__main__":

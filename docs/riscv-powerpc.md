@@ -322,6 +322,11 @@ python3 unittests/lift/elf-integer/bit_operations.py \
   --ld /path/to/ld.lld --qemu-dir /usr/bin
 ```
 
+For PPC64 ELFv1, pass `--profiles powerpc64 powerpc64le --ppc64-abi elfv1`
+and select a GNU PowerPC64 linker with `--ld`. The entry descriptor and the
+code it names must both lie outside every rebuilt mapping. Plain-pointer
+C projections use the `-fno-strict-aliasing` flag specified in their prelude.
+
 The extended scalar fixture runs linked RV32, RV64 and both byte orders of
 POWER10 PPC64 under Linux QEMU user mode. A separately compiled scalar
 oracle checks return values and each byte of the PPC64 stores. It runs again
