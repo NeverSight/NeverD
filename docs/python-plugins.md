@@ -39,6 +39,11 @@ CPython link dependency. A Python-enabled build stages the matching package and
 examples under `build/bin/sdk/python/`; that directory is also directly
 installable with `python3 -m pip install build/bin/sdk/python`.
 
+For macOS 15 or later deployment targets, builds with CMake 3.24 or later and
+a linker that supports delayed initialization defer the shared CPython library’s
+native initializers until the first call into Python. The library remains a
+required dependency of Python-enabled builds.
+
 ## Write a plugin
 
 One module declares exactly one decorated class:
