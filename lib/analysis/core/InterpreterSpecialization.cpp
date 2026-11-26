@@ -115,11 +115,6 @@ struct FrameFacts {
   std::map<size_t, bool> ReturnedObjectNonNull;
 };
 
-struct ReturningFrameOutput {
-  uint64_t Offset;
-  uint16_t Bytes;
-};
-
 struct ControlMarginal {
   uint32_t Field;
   uint64_t Mask;
@@ -1225,7 +1220,7 @@ private:
                           int64_t PreservedBegin,
                           const SpecializationReturningCall &Call,
                           const RecoveryCallTransition &Policy,
-                          llvm::ArrayRef<ReturningFrameOutput> Outputs,
+                          llvm::ArrayRef<ReturningCallFrameOutput> Outputs,
                           FrameOrigins &Origins, FrameFacts &Frame);
   bool applyReturningResultObject(SymExec &Exec, SymState &State,
                                   SymRef FrameRoot,
@@ -1337,9 +1332,8 @@ bool Specializer::applyReturningCall(
     SymState &State, SymRef FrameRoot, SymRef CallerStack,
     int64_t PreservedBegin, const SpecializationReturningCall &Call,
     const RecoveryCallTransition &Policy,
-    llvm::ArrayRef<ReturningFrameOutput> Outputs, FrameOrigins &Origins,
+    llvm::ArrayRef<ReturningCallFrameOutput> Outputs, FrameOrigins &Origins,
     FrameFacts &Frame) {
-  SymContext &Ctx = State.context();
   const uint64_t Begin = static_cast<uint64_t>(PreservedBegin);
   const uint64_t Size =
       static_cast<uint64_t>(Options.EntryFrameBounds->End) - Begin;
@@ -1428,20 +1422,15 @@ bool Specializer::applyReturningCall(
   Effect.MaxNodes = Options.MaxSymbolicNodes;
   applyReturningCallState(State, FrameRoot, CallerStack, PreservedBegin,
                           Options.EntryFrameBounds->End,
-                          Call.Original.Fallthrough.Address, Policy, Effect);
+                          Call.Original.Fallthrough.Address, Policy, Effect,
+                          Outputs);
   Result.EvaluatedOperations += Effect.WorkUsed;
   if (Effect.Status != SpecializationStatus::Complete)
     // A failed composition belongs only to this evaluator and is discarded.
     return fail(Effect.Status, Effect.Diagnostic);
   for (const auto &Output : Outputs) {
     for (uint16_t I = 0; I < Output.Bytes; ++I) {
-      if (!chargeCallWork(2))
-        return false;
       const uint64_t Offset = Output.Offset + I;
-      const SymRef Address = Ctx.mkAdd(FrameRoot, Ctx.mkConst(64, Offset));
-      if (!State.store(Address, Ctx.mkFreshVar(8, "returning_call_output")))
-        return fail(SpecializationStatus::InvalidInput,
-                    "returning-call frame output write was refused");
       NextOrigins.ExternalFrameBytes.erase(Offset);
       for (auto It = NextFrame.AffineValues.begin();
            It != NextFrame.AffineValues.end();) {
@@ -1456,9 +1445,6 @@ bool Specializer::applyReturningCall(
           Offset - static_cast<uint64_t>(Options.EntryReturnSlot->Offset) <
               Options.EntryReturnSlot->Bytes)
         NextFrame.EntryReturnSlotIntact = false;
-      if (Ctx.numNodes() > Options.MaxSymbolicNodes)
-        return fail(SpecializationStatus::BudgetExceeded,
-                    "returning-call frame output node budget exhausted");
     }
   }
   for (uint64_t Flag : Policy.FreshFlags)
@@ -4251,7 +4237,7 @@ bool Specializer::evaluate(int Id) {
                              Policy.ReturnedObject->Size.Offset,
                              Policy.ReturnedObject->Size.Size)
                 : SymRef();
-        std::vector<ReturningFrameOutput> Outputs;
+        std::vector<ReturningCallFrameOutput> Outputs;
         Outputs.reserve(Policy.FrameOutputs.size());
         for (const auto &Output : Policy.FrameOutputs) {
           if (!Output.Pointer.isReg() || Output.Pointer.Size != 8 ||
