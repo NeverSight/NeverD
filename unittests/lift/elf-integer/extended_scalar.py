@@ -40,11 +40,13 @@ def check(args, work, profile):
     qemu, cpu = CPUS[profile]
     runner = [args.qemu_dir / f"qemu-{qemu}", "-cpu", cpu]
     placement = image_base_option(args.ld)
+    # The RISC-V source ELF has IALIGN=32. Build the oracle with base I
+    # so its return PCs are word aligned and its bit operations are independent.
+    oracle_flags = compiler_flags(profile) + ([f"-march=rv{bits}i"] if rv else [])
     objects = []
     for name in ("extended-scalar-check.c", "extended-scalar-start.S"):
         obj = work / (name + ".o")
-        # Compile the oracle separately using just the base target features.
-        subprocess.run([args.clang, *compiler_flags(profile), "-O2", "-c", HERE / name,
+        subprocess.run([args.clang, *oracle_flags, "-O2", "-c", HERE / name,
                         "-o", obj], check=True)
         objects.append(obj)
 
