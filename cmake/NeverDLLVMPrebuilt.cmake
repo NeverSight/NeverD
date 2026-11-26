@@ -22,7 +22,7 @@
 
 set(NEVERD_LLVM_PREBUILT_REPO "NeverSight/llvm-project"
     CACHE STRING "GitHub owner/repo that hosts the prebuilt LLVM releases")
-set(NEVERD_LLVM_PREBUILT_TAG "neverd-llvm-v23.0.0-r13"
+set(NEVERD_LLVM_PREBUILT_TAG "neverd-llvm-v23.0.0-r14"
     CACHE STRING "Release tag of the prebuilt LLVM package to download")
 set(NEVERD_LLVM_PREBUILT_BASE_URL ""
     CACHE STRING "Override the release base URL (advanced/mirror). Empty = GitHub releases")
@@ -36,15 +36,15 @@ set(NEVERD_LLVM_PREBUILT_SHA256 ""
 # Publish a new -rN tag and refresh the commit plus all three digests together.
 # A stale entry stops configure at the source boundary instead of resurfacing
 # later as a header or behavior the older package happened not to contain.
-set(NEVERD_LLVM_PREBUILT_PINNED_TAG "neverd-llvm-v23.0.0-r13")
+set(NEVERD_LLVM_PREBUILT_PINNED_TAG "neverd-llvm-v23.0.0-r14")
 set(NEVERD_LLVM_PREBUILT_PINNED_COMMIT
-    "24ced447e1718432292dc9d54b6eb229323409d1")
+    "6c769154fbe9db2fe9e2e2dc1b04bebfe64e1312")
 set(_NEVERD_LLVM_PIN_LINUX_X86_64
-    "9c48f639fa51c5de8d1482ea9e23409d215fc6d6022873cff5899154862c8672")
+    "8bdcf7289ada160858c35ccb6dbf848c46c75161063c65b5653954b3e4d4d2bd")
 set(_NEVERD_LLVM_PIN_MACOS_ARM64
-    "c29df29cf1c9dcad48576752e312b89032a18de2cde6a6a1022869cf5c504476")
+    "b8e70c79d2a44ba0dfd49803fa958b6408037960930fbeb2cb5f0bc60b98ac54")
 set(_NEVERD_LLVM_PIN_WINDOWS_X64
-    "ba36aec4b41c0f8075cddfee2d924946156a5eb343ddb838eda2a1afb60388fe")
+    "2f23b21740c23036f33c7cf6d5cc19486b9d6cf25bc882795f86dd41482f2184")
 
 # CMake preserves cache values across source upgrades. Move old default build
 # trees to the current qualified package unless
@@ -61,7 +61,8 @@ if((NEVERD_LLVM_PREBUILT_TAG STREQUAL "neverd-llvm-v23.0.0" OR
     NEVERD_LLVM_PREBUILT_TAG STREQUAL "neverd-llvm-v23.0.0-r9" OR
     NEVERD_LLVM_PREBUILT_TAG STREQUAL "neverd-llvm-v23.0.0-r10" OR
     NEVERD_LLVM_PREBUILT_TAG STREQUAL "neverd-llvm-v23.0.0-r11" OR
-    NEVERD_LLVM_PREBUILT_TAG STREQUAL "neverd-llvm-v23.0.0-r12") AND
+    NEVERD_LLVM_PREBUILT_TAG STREQUAL "neverd-llvm-v23.0.0-r12" OR
+    NEVERD_LLVM_PREBUILT_TAG STREQUAL "neverd-llvm-v23.0.0-r13") AND
    NOT NEVERD_LLVM_PREBUILT_SHA256)
   message(STATUS
     "NeverD prebuilt LLVM: migrating previous default package to "

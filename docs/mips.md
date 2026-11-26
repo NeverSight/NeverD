@@ -88,6 +88,17 @@ microMIPS64, the compiler fills a register return's delay slot with a full-width
 instruction when available. Otherwise it can emit a compact return.
 [LLVM and LLD changes](https://github.com/NeverSight/llvm-project/pull/21).
 
+The r13 fork links MIPS16 PIC calls and hard-float adapters, and emits
+small-data and static TLS accesses in compressed code.
+[r13 code generation and linking](https://github.com/NeverSight/llvm-project/pull/22).
+
+The r14 assembler extends MIPS16 branches that exceed their short range.
+It emits `R_MIPS16_PC16_S1` for a target in another object. LLD resolves the
+signed halfword displacement in direct and relocatable links. The microMIPS
+backend uses the ABI pointer width for compact word loads and stores,
+including 64-bit base addresses on n64.
+[r14 code generation and linking](https://github.com/NeverSight/llvm-project/pull/23).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
