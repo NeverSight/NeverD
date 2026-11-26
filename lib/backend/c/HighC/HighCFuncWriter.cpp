@@ -46,6 +46,7 @@
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -1357,7 +1358,8 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
   const bool SavedHandler = InEHClauseBody;
   // Names this walk assigns a value that is no frame address: one derived
   // from an alias a later assignment proved ambiguous no longer is one.
-  std::set<std::string> NotFrameAddresses;
+  // Nearly every name ends up here, and the walk repeats to a fixed point.
+  llvm::StringSet<> NotFrameAddresses;
   std::function<bool(const HighExpr &, unsigned)> ReadsNotFrame =
       [&](const HighExpr &E, unsigned Depth) {
         if (NotFrameAddresses.empty() ||
@@ -1436,8 +1438,9 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
       const auto Before = FrameAliases;
       const size_t NotBefore = NotFrameAddresses.size();
       WalkAliases(Func.Body, false, false);
-      for (const std::string &Name : NotFrameAddresses)
-        FrameAliases.erase(Name);
+      for (auto It = FrameAliases.begin(); It != FrameAliases.end();)
+        It = NotFrameAddresses.contains(It->first) ? FrameAliases.erase(It)
+                                                   : std::next(It);
       Grew = FrameAliases != Before || NotFrameAddresses.size() != NotBefore;
     }
   };
