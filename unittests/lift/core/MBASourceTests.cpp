@@ -1518,20 +1518,48 @@ TEST_P(MBAMachOExplicitMixedSourceTest,
             "-o", Object.string()});
   ASSERT_TRUE(Compiled.ok()) << Compiled.err;
 
+  // A unit leaves out a function no evidence gives a mode and names it at its
+  // head with the option that supplies one. A whole LLVM unit admitting no
+  // function fails naming the first, as one asked for alone does.
   const auto NoModeOutput = tmpFile("macho-ambiguous.c");
-  const std::vector<std::vector<std::string>> MissingModes = {
-      {}, {"--arm-function-mode=0x0:thumb"}, {"--func=0x10"}};
+  struct MissingMode {
+    std::vector<std::string> Given;
+    std::vector<std::string> Unknown;
+    bool Defines = false;
+  };
+  const std::vector<MissingMode> MissingModes = {
+      {{}, {"0x0", "0x10"}},
+      {{"--arm-function-mode=0x0:thumb"}, {"0x10"}, true},
+      {{"--func=0x10"}, {"0x10"}}};
   for (const auto &Missing : MissingModes) {
-    SCOPED_TRACE(Missing.empty() ? "no mode evidence" : Missing.front());
+    SCOPED_TRACE(Missing.Given.empty() ? "no mode evidence"
+                                       : Missing.Given.front());
     std::vector<std::string> Args{"decompile", "--no-debug"};
-    Args.insert(Args.end(), Missing.begin(), Missing.end());
+    Args.insert(Args.end(), Missing.Given.begin(), Missing.Given.end());
     if (GetParam())
       Args.push_back("--llvm");
     Args.insert(Args.end(), {"-o", NoModeOutput.string(), Object.string()});
     const auto Result = exec(ndBin(), Args);
-    EXPECT_FALSE(Result.ok());
-    EXPECT_NE(Result.err.find("--arm-function-mode"), std::string::npos)
-        << Result.err;
+    const bool Named = Missing.Given.size() == 1 &&
+                       Missing.Given.front().starts_with("--func=");
+    if (Named || (GetParam() && !Missing.Defines)) {
+      EXPECT_FALSE(Result.ok());
+      EXPECT_NE(Result.err.find("--arm-function-mode"), std::string::npos)
+          << Result.err;
+      continue;
+    }
+    ASSERT_TRUE(Result.ok()) << Result.err;
+    const std::string Unit = readSource(NoModeOutput);
+    for (const auto &Entry : Missing.Unknown)
+      EXPECT_NE(
+          Unit.find(" at " + Entry + ": ARM/Thumb mode cannot be established"),
+          std::string::npos)
+          << Unit;
+    EXPECT_NE(Unit.find("--arm-function-mode"), std::string::npos) << Unit;
+    if (Missing.Defines)
+      EXPECT_FALSE(functionBody(Unit, "unmarked_mba").empty());
+    else
+      EXPECT_EQ(Unit.find("unmarked_mba("), std::string::npos) << Unit;
   }
 
   const auto Output = tmpFile("macho-explicit-mixed.c");

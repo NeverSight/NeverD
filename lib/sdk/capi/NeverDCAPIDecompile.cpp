@@ -34,8 +34,8 @@
 #include "neverd/ir/high/HighVariableEdits.h"
 #include "neverd/ir/high/SEHFinallyBodies.h"
 #include "neverd/libc/LibCNames.h"
-#include "neverd/loader/ARM/ARMModeCLIStrings.h"
 #include "neverd/loader/COFF/COFFException.h"
+#include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
@@ -308,17 +308,6 @@ void emitMedView(const MedFunc &F, const LowFunc *Low, const IRRowSink &Sink) {
 // ===--------------------------------------------------------------------===//
 
 namespace {
-std::optional<std::string> missingARMModeReason(const BinaryImage &Img,
-                                                va_t Entry) {
-  if (Img.Arch != Arch::ARM || !Img.isCodeAddress(Entry) ||
-      Img.instructionModeAt(Entry))
-    return std::nullopt;
-  return "ARM/Thumb mode cannot be established for function at 0x" +
-         llvm::utohexstr(Entry) + "; supply --" + arm_mode_cli::Option +
-         arm_mode_cli::HintEntryPrefix + arm_mode_cli::ARM + "|" +
-         arm_mode_cli::Thumb;
-}
-
 /// Why \p Entry has no HighIR, naming the pipeline's audit disposition when
 /// it recorded one (for example a rejected or absorbed candidate).
 std::string missingHighFunctionReason(const PipelineResult &Result,

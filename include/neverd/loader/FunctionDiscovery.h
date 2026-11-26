@@ -25,7 +25,9 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
+#include <string>
 
 namespace neverd {
 
@@ -156,6 +158,12 @@ applyARMFunctionModeHints(BinaryImage &Img,
 llvm::Error
 verifyARMFunctionModeHints(const BinaryImage &Img,
                            const std::map<va_t, InstructionMode> &Hints);
+
+/// Why the AArch32 function at \p Entry cannot be decoded: no evidence gave
+/// its first instruction a mode. Names the option that asserts one. Empty for
+/// another architecture, a non-code address, or an entry with a mode.
+std::optional<std::string> missingARMModeReason(const BinaryImage &Img,
+                                                va_t Entry);
 
 /// Correct relocated pointers to literal data inside executable sections when
 /// every decoded path through the literal region traps, and no code metadata

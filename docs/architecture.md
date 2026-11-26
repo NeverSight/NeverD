@@ -12585,6 +12585,9 @@ regions, and exact symbol/relocation evidence before reachable decoding. If
 reachable decoding runs, an asserted entry must decode in its stated mode.
 Contradictory or unsupported assertions fail the load. The mode of a different
 unreached function remains unknown until it has its own evidence or assertion.
+A whole unit leaves such a function out and names it with that option; an
+LLVM unit that admits no function fails naming the first, and the admission
+diagnostic gives the missing mode, not the decode failure it causes.
 
 `BinaryImage::readImmutableARMLiteral` is the shared authority for folding a
 fixed-width read from a `$d` island inside executable storage. Both HighIR and
