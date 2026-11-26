@@ -32,6 +32,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/HighExprEvaluation.h"
 #include "neverd/ir/high/HighPointerTypeInference.h"
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/ItaniumHandlers.h"
@@ -4026,30 +4027,39 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
   // destination writes.
   struct SiteNames {
     std::unordered_map<std::string, unsigned> Reads, DestReads;
+    std::vector<std::string> ConditionalReads;
     std::string DestName;
   };
   std::unordered_map<const HighStmt *, SiteNames> NamesAt;
   std::unordered_map<std::string, std::vector<const HighStmt *>> DefsOf;
   std::unordered_map<std::string, std::vector<const HighStmt *>> SitesNaming;
   std::function<void(const HighExpr &,
-                     std::unordered_map<std::string, unsigned> &)>
+                     std::unordered_map<std::string, unsigned> &,
+                     std::vector<std::string> &, bool)>
       CountReads = [&](const HighExpr &E,
-                       std::unordered_map<std::string, unsigned> &Into) {
+                       std::unordered_map<std::string, unsigned> &Into,
+                       std::vector<std::string> &ConditionalReads,
+                       bool Conditional) {
         // A call's reads stop at its debug argument limit.
-        if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi)
-          ++Into[varName(E.Var)];
+        if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) {
+          std::string Name = varName(E.Var);
+          ++Into[Name];
+          if (Conditional)
+            ConditionalReads.push_back(std::move(Name));
+        }
         if (E.Kind == ExprKind::Call) {
           const size_t Limit = debugCallArgLimit(E);
           for (size_t I = 0; I < E.Operands.size() && I < Limit; ++I)
             if (E.Operands[I])
-              CountReads(*E.Operands[I], Into);
+              CountReads(*E.Operands[I], Into, ConditionalReads, Conditional);
           if (E.IndirectTarget)
-            CountReads(*E.IndirectTarget, Into);
+            CountReads(*E.IndirectTarget, Into, ConditionalReads, Conditional);
           return;
         }
-        for (const ExprPtr &Op : E.Operands)
-          if (Op)
-            CountReads(*Op, Into);
+        for (size_t I = 0; I < E.Operands.size(); ++I)
+          if (const ExprPtr &Op = E.Operands[I])
+            CountReads(*Op, Into, ConditionalReads,
+                       Conditional || highOperandMayBeSkipped(E, I));
       };
   for (const HighStmt *Stmt : SiteOrder) {
     const Site &Info = Sites.at(Stmt);
@@ -4060,8 +4070,8 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
       Names.DestName = varName(Stmt->Dst->Var);
     forEachExpr(*Stmt, [&](const ExprPtr &E) {
       if (E)
-        CountReads(*E,
-                   Assign && E == Stmt->Dst ? Names.DestReads : Names.Reads);
+        CountReads(*E, Assign && E == Stmt->Dst ? Names.DestReads : Names.Reads,
+                   Names.ConditionalReads, false);
     });
     std::set<std::string> Named;
     for (const auto &Entry : Names.Reads)
@@ -4350,6 +4360,19 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
           Load ? frameDisplacement(*Load->Operands[0]) : std::nullopt;
       const std::optional<std::string> SlotName =
           Load ? namedFrameSlot(*Load->Operands[0]) : std::nullopt;
+      // Forwarding must not turn an earlier observation into a conditional
+      // one. Materialized frame locals use their own alias and lifetime rules.
+      if (ReadsMemory &&
+          (llvm::any_of(UseStmts,
+                        [&](const HighStmt *S) {
+                          return llvm::is_contained(
+                              NamesAt.at(S).ConditionalReads, C.Name);
+                        }) ||
+           (!Slot && llvm::all_of(UseStmts, [&](const HighStmt *S) {
+             const auto Region = Sites.at(S).Region;
+             return Region != C.Region && regionDominatedBy(Region, C.Region);
+           }))))
+        continue;
       // Memory reached otherwise than through this one named slot, which
       // any slot is once a frame address escapes.
       const bool Escapes =

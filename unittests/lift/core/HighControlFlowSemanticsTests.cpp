@@ -5464,6 +5464,50 @@ TEST(HighControlFlowSemantics, CopyChainRetainsItsSourceBranchEntry) {
   }
 }
 
+TEST(HighControlFlowSemantics, AdjacentLoadRequiresUnconditionalUse) {
+  auto Local = [](unsigned Id, unsigned Bytes) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = Bytes;
+    return HighExpr::makeVar(V, NdType::makeInt(Bytes, false));
+  };
+  for (NdOp Op : {NdOp::SELECT, NdOp::BOOL_AND, NdOp::BOOL_OR}) {
+    SCOPED_TRACE(static_cast<int>(Op));
+    for (bool First : {false, true}) {
+      const auto Captured = Local(1, 1);
+      const auto Condition = Local(2, 1);
+      auto Expr = HighExpr::makeBinop(Op, First ? Captured : Condition,
+                                      First ? Condition : Captured);
+      if (Op == NdOp::SELECT)
+        Expr->Operands.push_back(HighExpr::makeConst(0, 1));
+      Expr->Type = Captured->Type;
+      HighStmt Capture;
+      Capture.Kind = StmtKind::Assign;
+      Capture.Dst = Captured;
+      Capture.Val = HighExpr::makeLoad(Local(3, 8), Captured->Type);
+      HighFunc F;
+      F.Body = {Capture, result(0x1010, Expr)};
+      EXPECT_EQ(inlineAdjacentLoads(F), First);
+      EXPECT_EQ(F.Body.size(), First ? 1u : 2u);
+    }
+  }
+
+  // The target of an indirect call is evaluated as well as its arguments.
+  auto Captured = Local(4, 8);
+  auto Call = HighExpr::makeCall("", 0, {Captured});
+  Call->IsIndirectCall = true;
+  Call->IndirectTarget = HighExpr::makeCall("replace_target", 0x2000, {});
+  HighStmt Capture;
+  Capture.Kind = StmtKind::Assign;
+  Capture.Dst = Captured;
+  Capture.Val = HighExpr::makeLoad(Local(5, 8), Captured->Type);
+  HighFunc F;
+  F.Body = {Capture, result(0x1020, Call)};
+  EXPECT_FALSE(inlineAdjacentLoads(F));
+  EXPECT_EQ(F.Body.size(), 2u);
+}
+
 TEST(HighControlFlowSemantics, NestedCallRetainsItsPrecedingMemorySnapshot) {
   HighFunc F;
   const auto Address = HighExpr::makeConst(0x4000, 8);
