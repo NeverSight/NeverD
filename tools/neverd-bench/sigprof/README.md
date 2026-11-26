@@ -98,6 +98,70 @@ Run the helper's offline regression checks with:
 python3 -m unittest discover -s tools/neverd-bench/tests -p test_sigprof_ab.py -v
 ```
 
+## Locate a warm macOS launch tail
+
+Use one Release Ninja build of the CLI and two signed SDKs built with the same
+configuration. Supply the linked input and function used for the original
+timing. The harness uses one HighC thread and disables the signature cache.
+The included n32 short function can be assembled with an LLVM toolchain
+that supports MIPS.
+
+```sh
+clang --target=mips64-linux-gnuabin32 -mabi=n32 -march=mips64r2 -mabicalls -fPIC \
+  -Wa,-L -c tools/neverd-bench/sigprof/warm-route.s -o build-release/warm-route.o
+ld.lld -m elf32btsmipn32 -shared build-release/warm-route.o -o build-release/warm-route.elf
+python3 tools/neverd-bench/sigprof/macos_warm_launch.py \
+  --build build-release --baseline-sdk before/libneverd.dylib \
+  --candidate-sdk after/libneverd.dylib --image build-release/warm-route.elf \
+  --function route_value --jsonl build-release/warm.jsonl
+python3 tools/neverd-bench/sigprof/macos_warm_report.py \
+  build-release/warm.jsonl --json build-release/warm-report.json
+```
+
+Each round interleaves the stock CLI, a privately relinked CLI that timestamps
+entry to and return from `main`, and a second baseline copy for the A/A control.
+The probe writes both timestamps after `main` returns. The parent reads kernel
+birth and exit times before reaping the child. This separates startup, work
+inside `main`, teardown and the delay before the parent observes exit. Both
+executables must load the selected SDK and emit byte-identical C. Switch the
+primed SDKs by renaming their containing directories. Creating or removing a
+hard link changes the file's metadata and can cause library validation again.
+
+On a dedicated host, add `--control-load` to alternate ambient rounds with two
+CPU workers per logical CPU. A quiet round uses at most 35% CPU in both
+ambient windows and at most 70% during the measurements. A busy round uses at
+least 85% in both windows and at least 90% during the measurements. Other
+rounds appear as `unclassified`. Compare the difference between the two P95s.
+The interval resamples rounds and consecutive pairs. To attribute the tail,
+rank complete launches by wall time and compare their component times on those
+same launches. The pre-main breakdown uses the kernel's process birth timestamp
+to separate time before the child exists from time spent reaching `main`.
+
+If a build or other background work is occupying the machine, use a separate
+measurement host. Add `--quiet-wait 100` to wait for three consecutive
+three-second quiet windows before each unpressured round and observe a fixed
+seven-second window after it. A timeout keeps the round in the raw data.
+The report requires a successful wait to label that round quiet.
+
+### Warm launch qualification
+
+The stock HighC measurements compare the SDK at `b185e8f` with `035a081`.
+The M4 Max used the original signed images. The M1 VM ran the same public
+revisions built on a separate machine. Both used the same n32 machine
+instructions and emitted identical C.
+
+| Host and measured load | A/B pairs | Before P95 (ms) | After P95 (ms) | 95% interval for change (ms) | Extra time before `main` (ms) | Extra time inside `main` (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| M4 Max, busy | 512 | 265.00 | 267.78 | -30.23 to +33.15 | 218.22 | 38.17 |
+| M1 VM, quiet | 768 | 33.52 | 33.59 | -0.96 to +2.27 | 7.86 | -1.89 |
+| M1 VM, busy | 768 | 37.37 | 38.52 | -0.93 to +2.41 | 10.09 | 0.41 |
+
+The P95 interval resamples whole rounds and blocks of consecutive pairs.
+Each host and load has its own baseline. The last two columns compare the
+slowest 5% of marked candidate launches with the middle 45th–55th percentile
+of those launches. The raw observations also record child teardown and parent
+wakeup. [Isolated measurement run](https://github.com/NeverSight/NeverD/actions/runs/45855229077)
+
 ## Isolate first SDK load on macOS
 
 On macOS 13 or later with the Xcode command line tools installed, run the

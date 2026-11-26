@@ -178,6 +178,10 @@ executed on each path before updating assembly expectations.
    - For a macOS pre-main tail, time first and repeat SDK mappings separately.
      Compare direct loading with the sum of validation and loading. Check the
      full command's P95 before changing startup. [SDK load probe](../../../tools/neverd-bench/sigprof/README.md#isolate-first-sdk-load-on-macos)
+   - For warm launches, classify host load independently of launch times and
+     interleave A/B pairs with an identical-binary A/A control. Use the same
+     slow launches to attribute time before, inside, and after `main`.
+     [Warm launch measurement](../../../tools/neverd-bench/sigprof/README.md#locate-a-warm-macos-launch-tail)
 2. **Same-base A/B.** Build baseline and candidate from the same `origin/dev`
    commit. Use Release, the same compiler, the same dependency snapshot
    (`neverd-dependency-inputs.json`), the same allocator and the same
