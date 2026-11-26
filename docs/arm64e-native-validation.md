@@ -2614,6 +2614,31 @@ mismatched return-signing rule, conflicting extents and a compact start with
 no relocation. The test records the driver architecture and the number of
 published ranges.
 
+The M4 Max passed 17 targeted Release cases using an arm64 driver with real
+arm64e dylibs. Its broader CTest run completed 226 of 1,094 cases
+before the system classic linker stalled. A minimal arm64e dylib reproduced
+the stall independently and linked with Apple's default linker. After the classic
+linker recovered, all five interrupted fixtures passed individually. On free
+macOS 26 runners, the same two Release binaries passed 1,091 of
+1,094 registered cases with 3 hardware skips and 0 failures.
+[Complete Release inventory](https://github.com/gmh5225/test_mac_intel/actions/runs/45880235245)
+
+Both free runners ran the nine frame
+cases in an arm64e process. Each completed 34 of the 37 previously skipped
+cases. Four signal tests recorded ten caller steps, eight vector-state
+resumptions and eight deliveries in each of the two cleanup tests.
+[Release verification](evidence/arm64e-published-frames-2026-11-27.json) ·
+[Native frame and binding run](https://github.com/gmh5225/test_mac_intel/actions/runs/45875705163)
+
+The complete signed-unwind and lifted-image replay passed all 222
+cases on each runner. Of 141 asynchronous unwind cases, 108
+recorded a positive native execution counter. Of 81 lifted-image cases,
+76 recorded one. The 32 explicit two-modifier signing cases checked
+128 image layouts per host. One other unwind case verified a landing pad
+at the function entry using LSDA coordinates. Five image cases checked
+displacement bounds, literal ownership or refusal to overwrite a signed input.
+[Complete suite replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45876433371)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
