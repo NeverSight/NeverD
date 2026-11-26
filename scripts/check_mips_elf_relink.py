@@ -657,11 +657,13 @@ def verify_partial_object(path, profile):
         for reloc in relocs.iter_relocations():
             offset = reloc["r_offset"]
             instruction = int.from_bytes(startup[offset:offset + 4], order)
-            calls[offset] = (reloc["r_info_type"], targets.get_symbol(reloc["r_info_sym"]).name,
+            operations = (reloc["r_info_type"], reloc.entry.get("r_info_type2", 0),
+                          reloc.entry.get("r_info_type3", 0))
+            calls[offset] = (operations, targets.get_symbol(reloc["r_info_sym"]).name,
                              reloc.entry.get("r_addend", 0), instruction)
         # Each startup call is a JAL to calc with R_MIPS_26 and a zero addend.
         if (relocs.num_relocations() != 3 or len(calls) != 3
-                or set(calls.values()) != {(4, "calc", 0, 0x0c000000)}):
+                or set(calls.values()) != {((4, 0, 0), "calc", 0, 0x0c000000)}):
             raise ValueError(f"{path}: unexpected startup relocations {calls}")
         for name in ("group_choice", "group_increment"):
             found = symbols.get_symbol_by_name(name) or []

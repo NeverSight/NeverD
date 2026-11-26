@@ -173,18 +173,32 @@ def verify_linkage_objects(folder, profile, hashes, digest):
         with path.open("rb") as source:
             image = ELFFile(source)
             refs = set()
+            packed = set()
             for table in image.iter_sections():
                 if not isinstance(table, RelocationSection) or image.get_section(table["sh_info"]).name not in sections:
                     continue
                 symbols = image.get_section(table["sh_link"])
                 for rel in table.iter_relocations():
-                    refs.add((rel["r_info_type"], symbols.get_symbol(rel["r_info_sym"]).name))
-            return refs
+                    name = symbols.get_symbol(rel["r_info_sym"]).name
+                    refs.add((rel["r_info_type"], name))
+                    if rel.entry.get("r_info_type2") or rel.entry.get("r_info_type3"):
+                        packed.add((name, rel["r_info_type"], rel["r_info_type2"], rel["r_info_type3"],
+                                    rel["r_info_ssym"], rel.entry.get("r_addend")))
+            return refs, packed
 
     if set(hashes) != {"caller.o", "calc.o"}:
         raise ValueError(f"{profile.name}: expected both original object files")
-    caller = references("caller.o", (".text", ".data", ".sdata"))
-    callee = references("calc.o", (".text.calc",))
+    caller, caller_packed = references("caller.o", (".text", ".data", ".sdata"))
+    callee, callee_packed = references("calc.o", (".text.calc",))
+    if profile.abi == "n64" and profile.linkage in ("pic-hard", "pic-soft"):
+        # Each PIC function computes GP from its entry with GPREL16 / SUB / HI16 or LO16.
+        gp = {"classic": (7, 24, 5, 6), "micromips": (136, 150, 134, 135)}
+        for packed, names, isa in ((caller_packed, ("helper", "run_calls"), "classic"),
+                                   (callee_packed, ("calc",), profile.isa)):
+            gprel, sub, hi, lo = gp[isa]
+            needed = {(name, gprel, sub, half, 0, 0) for name in names for half in (hi, lo)}
+            if not needed <= packed:
+                raise ValueError(f"{profile.name}: missing packed GP relocations {needed - packed}")
     # Primary relocation numbers are common to REL, RELA and packed MIPS64 RELA.
     required = {(18 if profile.abi == "n64" else 2, "calc")}  # R_MIPS_64 or R_MIPS_32
     if profile.linkage == "far-branches":

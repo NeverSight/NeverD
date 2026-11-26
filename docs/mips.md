@@ -225,7 +225,10 @@ value through their own ISA's data or TLS relocations. The guest checks
 both full 64-bit results and the helper's two visible side effects. It
 exits with 41 before the replacement and 73 afterward. The Linux runner
 checks both objects' relocations, the FP ABI, the linked callback, and
-initialized `PT_TLS` storage for both TLS models. The matrix covers the following combinations.
+initialized `PT_TLS` storage for both TLS models. In the n64 hard- and
+soft-float PIC cases it also checks all three operations of the packed GP
+relocations in the caller and callee. Classic and microMIPS each use their
+own `GPREL16`, `SUB` and `HI16` or `LO16` relocations.
 
 | Workload | ISA and ABI |
 | --- | --- |
