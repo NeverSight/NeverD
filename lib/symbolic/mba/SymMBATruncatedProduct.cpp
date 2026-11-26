@@ -1940,6 +1940,85 @@ SymRef buildQuadraticBlocks(SymContext &Ctx, llvm::ArrayRef<QuadraticRun> Runs,
   return Polynomial.emit(Offset, D, Width);
 }
 
+// Adding 2^(P-D) to an odd base leaves its 2^D-th power unchanged
+// modulo 2^P. A block can therefore retain every higher degree by indexing
+// just its unknown base bits. Charge the whole table before constructing it.
+SymRef buildResiduePowerBlocks(SymContext &Ctx,
+                               llvm::ArrayRef<QuadraticRun> Runs, SymRef Outer,
+                               unsigned Precision, unsigned P, unsigned K,
+                               WorkBudget &Budget, size_t &Storage) {
+  const unsigned Half = P - P / 2;
+  if (Half <= K || Half - K >= std::numeric_limits<unsigned>::digits)
+    return {};
+  const unsigned Mask = (1u << (Half - K)) - 1;
+  const unsigned Width = Ctx.width(Outer);
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  llvm::SmallVector<SymRef, 16> Parts{
+      Ctx.mkConst(productScaleUnit(Ctx, Outer, Width - Precision, P))};
+  unsigned Accepted = 0;
+  for (const auto &[F, N, Content] : Runs) {
+    const unsigned Rest = N & Mask, Count = N - Rest;
+    if (Rest + size_t{1} > Storage / (2 * sizeof(SymRef)) ||
+        !Budget.consume(Rest + size_t{1}))
+      return {};
+    Storage -= (Rest + size_t{1}) * 2 * sizeof(SymRef);
+    if (Rest)
+      Parts.append(Rest, Ctx.mkExtract(F, Content, P));
+    if (!Count)
+      continue;
+    Accepted += Count;
+    const unsigned Fixed =
+        std::min(P - K, unsigned(std::countr_zero(Count))) + K;
+    const unsigned Bits = P - Fixed;
+    if (Bits >= std::numeric_limits<unsigned>::digits)
+      return {};
+    const unsigned Entries = 1u << Bits,
+                   Stride = std::bit_ceil(std::max(1u, Bits));
+    if (Entries > std::numeric_limits<unsigned>::max() / Stride ||
+        Entries > uint64_t(Count) * Ctx.numOperands(F))
+      return {};
+    const size_t TableWords = llvm::APInt::getNumWords(Entries * Stride);
+    const size_t PowerWork =
+        (2 + Words * Words) * (2 * std::bit_width(Count) + 1);
+    const size_t Bytes = 4 * TableWords * sizeof(uint64_t) +
+                         10 * (sizeof(SymNode) + Words * sizeof(uint64_t));
+    if (Bytes > Storage || Entries + size_t{1} > Budget.available() / PowerWork)
+      return {};
+    Storage -= Bytes;
+    Budget.consume((Entries + size_t{1}) * PowerWork);
+    const llvm::APInt Raw(Precision,
+                          Ctx.constWords(Ctx.operand(F, 0)).take_front(Words));
+    const auto C = Raw.extractBits(P, Content);
+    const auto Offset = llvm::APIntOps::pow(C, Count);
+    if (!Bits) {
+      Parts.push_back(Ctx.mkConst(Offset));
+      continue;
+    }
+    llvm::APInt Table(Entries * Stride, 0);
+    bool Constant = true;
+    const auto Low = C.trunc(K).zext(P);
+    for (unsigned J = 0; J < Entries; ++J) {
+      const auto Base = Low | llvm::APInt(P, J).shl(K);
+      const auto V = llvm::APIntOps::pow(Base, Count);
+      Constant &= V == Offset;
+      Table.insertBits(V.extractBits(Bits, Fixed), J * Stride);
+    }
+    if (Constant) {
+      Parts.push_back(Ctx.mkConst(Offset));
+      continue;
+    }
+    const auto Index = Ctx.mkExtract(F, Content + K, Bits);
+    const auto Position = Ctx.mkMul(Ctx.mkZExt(Index, Table.getBitWidth()),
+                                    Ctx.mkConst(Table.getBitWidth(), Stride));
+    const auto High =
+        Ctx.mkExtract(Ctx.mkLShr(Ctx.mkConst(Table), Position), 0, Bits);
+    Parts.push_back(Ctx.mkConcat(High, Ctx.mkConst(Offset.trunc(Fixed))));
+  }
+  if (Accepted < limits::kMinResidueProductFactors)
+    return {};
+  return Ctx.mkConcat(Ctx.mkMul(Parts), Ctx.mkConst(Width - P, 0));
+}
+
 // Compute a complete second-degree product in its observed ring. Factoring a
 // common power of two out of each row makes its offset a unit. For the
 // normalized factors 1+2^K*h, the linear sum is S = sum(n*h), and twice
@@ -2013,6 +2092,9 @@ SymRef foldQuadraticFields(SymContext &Ctx, SymRef Root, unsigned Precision,
                                 Storage);
   };
   auto Best = build(Minimum);
+  if (!Best && Minimum)
+    Best = buildResiduePowerBlocks(Ctx, Runs, Outer, Precision, P, K, Budget,
+                                   Storage);
   if (!Best)
     return {};
   const unsigned Half = P - P / 2;

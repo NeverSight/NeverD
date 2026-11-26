@@ -1023,8 +1023,49 @@ TEST(SymMBAResiduePowers, RepeatedPowersKeepLiveFourthDegrees) {
   const auto Original = C.mkMul({C.mkConst(Width, 1u << 11), F, F, F, F});
   size_t Bytes = 1 << 20;
   detail::WorkBudget Budget(65536);
-  EXPECT_EQ(detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr),
-            Original);
+  const auto Folded =
+      detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+  SymEvalPlan Plan(C, Folded);
+  for (unsigned A = 0; A != 16; ++A)
+    for (unsigned B = 0; B != 16; ++B) {
+      std::array Values{llvm::APInt(4, A), llvm::APInt(4, B)};
+      const auto V = 3 + 6 * Values[0].zext(Width) + 10 * Values[1].sext(Width);
+      EXPECT_EQ(Plan.eval(Values),
+                llvm::APInt(Width, 1u << 11) * V * V * V * V);
+    }
+}
+
+TEST(SymMBAResiduePowers, SmallOddPowerBlocksKeepTheirFullResidues) {
+  constexpr unsigned Width = 13;
+  SymContext C;
+  const auto X = C.mkVar("x", 4), Y = C.mkVar("y", 4);
+  const auto A = C.mkZExt(X, Width), B = C.mkSExt(Y, Width);
+  auto literal = [&](int V) { return C.mkConst(llvm::APInt(Width, V, true)); };
+  const auto F =
+      C.mkAdd({literal(-3), C.mkMul(literal(6), A), C.mkMul(literal(-2), B)});
+  const auto G =
+      C.mkAdd({literal(5), C.mkMul(literal(-10), A), C.mkMul(literal(14), B)});
+  llvm::SmallVector<SymRef, 64> Factors{literal(8)};
+  Factors.append(16, F);
+  Factors.append(30, G);
+  const auto Original = C.mkMul(Factors);
+  size_t Bytes = 1 << 20;
+  detail::WorkBudget Budget(65536);
+  const auto Result =
+      detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+  ASSERT_NE(Result, Original);
+  SymEvalPlan Plan(C, Result);
+  for (unsigned I = 0; I < 16; ++I)
+    for (unsigned J = 0; J < 16; ++J) {
+      std::array Values{llvm::APInt(4, I), llvm::APInt(4, J)};
+      const auto U = Values[0].zext(Width), V = Values[1].sext(Width);
+      auto Expected = llvm::APInt(Width, 8);
+      for (unsigned K = 0; K < 16; ++K)
+        Expected *= 6 * U - 2 * V - 3;
+      for (unsigned K = 0; K < 30; ++K)
+        Expected *= 5 - 10 * U + 14 * V;
+      ASSERT_EQ(Plan.eval(Values), Expected);
+    }
 }
 
 TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
