@@ -30,7 +30,7 @@ def findings(rows):
 
 
 def verify(cli, worker, path, expected):
-    legacy = {name: cli_report(cli, path, name)[0] for name in ("audit", "hunt")}
+    legacy = {name: cli_report(cli, path, name, trace=True)[0] for name in ("audit", "hunt")}
     combined, serialized = cli_report(cli, path, "scan", trace=True)
     assert combined["schema"] == "neverd.memory-safety-scan" and combined["schema_version"] == 1
     assert combined["verdict"] == expected, combined

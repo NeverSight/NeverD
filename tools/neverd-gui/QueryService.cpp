@@ -93,6 +93,7 @@ bool readable(const QString &operation) {
 bool command(const QString &operation) {
   static const QSet<QString> operations{"open",
                                         "analyze",
+                                        "memory_safety_scan",
                                         "signatures_load",
                                         "pdb_load",
                                         "dwarf_load",

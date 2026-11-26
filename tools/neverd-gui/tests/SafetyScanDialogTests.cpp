@@ -10,11 +10,13 @@
 #include "SafetyScanDialog.h"
 
 #include <QComboBox>
-#include <QDialogButtonBox>
+#include <QFile>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QTreeWidget>
 #include <algorithm>
@@ -52,16 +54,10 @@ private slots:
     service.setAvailable(true);
     neverd::gui::SafetyScanDialog dialog(service, nullptr);
     dialog.show();
-    auto *box = dialog.findChild<QDialogButtonBox *>();
     auto *analyzers = dialog.findChild<QComboBox *>();
     QCOMPARE(analyzers->currentData().toString(), "both");
-    QPushButton *run = nullptr, *cancel = nullptr;
-    for (auto *button : box->buttons()) {
-      if (button->text() == "&Scan")
-        run = qobject_cast<QPushButton *>(button);
-      if (button->text() == "Cancel scan")
-        cancel = qobject_cast<QPushButton *>(button);
-    }
+    auto *run = dialog.findChild<QPushButton *>("runSafetyScan");
+    auto *cancel = dialog.findChild<QPushButton *>("cancelSafetyScan");
     QVERIFY(run && cancel);
     run->click();
     QTRY_COMPARE(sent.size(), 1);
@@ -111,6 +107,71 @@ private slots:
     run->click();
     QTRY_COMPARE(sent.size(), 3);
     QCOMPARE(sent.back()["payload"].toObject()["analyzer"].toString(), "hunt");
+  }
+  void realWorkbenchScanMatchesCli() {
+#ifdef TEST_SAFETY_CLI
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString fixture = directory.filePath("safety_cases_elf_x64");
+    QVERIFY(QFile::copy(TEST_SAFETY_FIXTURE, fixture));
+    QProcess cli;
+    cli.start(TEST_SAFETY_CLI, {"scan", fixture});
+    QVERIFY(cli.waitForFinished());
+    QCOMPARE(cli.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(cli.exitCode(), 2);
+    const auto expected =
+        QJsonDocument::fromJson(cli.readAllStandardOutput()).object();
+    const auto groups = expected.value("findings").toArray();
+    QVERIFY(!groups.isEmpty());
+
+    EngineClient client;
+    QJsonObject received;
+    QueryService service(&client);
+    connect(&client, &EngineClient::message, &service,
+            [&](const QJsonObject &message) {
+              if (message.value("type") == "hello")
+                service.setAvailable(message.value("capabilities")
+                                         .toArray()
+                                         .contains("memory_safety_scan"));
+              else if (message.value("operation") == "memory_safety_scan" &&
+                       message.value("status") == "ok")
+                received = message.value("payload").toObject();
+            });
+    client.start(TEST_SAFETY_WORKER);
+    QTRY_VERIFY_WITH_TIMEOUT(service.available(), 15000);
+    QJsonObject opened;
+    service.enqueueCommand("open",
+                           {{"path", fixture},
+                            {"analysis", false},
+                            { "warm",
+                              false }},
+                           this,
+                           [&](const QJsonObject &reply) { opened = reply; });
+    QTRY_VERIFY_WITH_TIMEOUT(!opened.isEmpty(), 15000);
+    QCOMPARE(opened.value("status").toString(), "ok");
+
+    neverd::gui::SafetyScanDialog dialog(service, nullptr);
+    dialog.show();
+    auto *run = dialog.findChild<QPushButton *>("runSafetyScan");
+    QVERIFY(run);
+    QTest::mouseClick(run, Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(!received.isEmpty(), 15000);
+    QCOMPARE(received, expected);
+    auto *table = dialog.findChild<QTreeWidget *>();
+    QTRY_COMPARE(table->topLevelItemCount(), groups.size());
+    auto *details = dialog.findChild<QPlainTextEdit *>();
+    for (qsizetype i = 0; i < groups.size(); ++i) {
+      table->setCurrentItem(table->topLevelItem(static_cast<int>(i)));
+      QCOMPARE(
+          QJsonDocument::fromJson(details->toPlainText().toUtf8()).object(),
+          groups[i].toObject());
+    }
+    const auto status = dialog.findChild<QLabel *>("safetyScanStatus")->text();
+    QVERIFY(status.contains("audit: completed"));
+    QVERIFY(status.contains("hunt: completed"));
+#else
+    QSKIP("Requires the native CLI and worker");
+#endif
   }
 };
 QTEST_MAIN(SafetyScanDialogTests)

@@ -44,6 +44,7 @@ SafetyScanDialog::SafetyScanDialog(QueryService &Service, QWidget *Parent)
   controls->addStretch();
   layout->addLayout(controls);
   Status = new QLabel(this);
+  Status->setObjectName("safetyScanStatus");
   Status->setTextFormat(Qt::PlainText);
   Status->setWordWrap(true);
   Status->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -73,6 +74,8 @@ SafetyScanDialog::SafetyScanDialog(QueryService &Service, QWidget *Parent)
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
   Run = buttons->addButton(tr("&Scan"), QDialogButtonBox::ActionRole);
   Cancel = buttons->addButton(tr("Cancel scan"), QDialogButtonBox::ActionRole);
+  Run->setObjectName("runSafetyScan");
+  Cancel->setObjectName("cancelSafetyScan");
   Cancel->setEnabled(false);
   connect(Run, &QPushButton::clicked, this, &SafetyScanDialog::start);
   connect(Cancel, &QPushButton::clicked, this, [this] {

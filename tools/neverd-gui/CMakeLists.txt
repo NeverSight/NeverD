@@ -313,9 +313,16 @@ if(BUILD_TESTING)
   qt_add_executable(neverd-gui-safety-scan-tests tests/SafetyScanDialogTests.cpp)
   target_link_libraries(neverd-gui-safety-scan-tests PRIVATE neverd_gui_app Qt6::Test)
   set_target_properties(neverd-gui-safety-scan-tests PROPERTIES WIN32_EXECUTABLE FALSE)
+  if(NEVERD_WORKER_REAL_ENGINE_TESTS AND TARGET neverd)
+    target_compile_definitions(neverd-gui-safety-scan-tests PRIVATE
+      TEST_SAFETY_CLI="$<TARGET_FILE:neverd>"
+      TEST_SAFETY_WORKER="$<TARGET_FILE:neverd-worker>"
+      TEST_SAFETY_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/safety/fixtures/binaries/safety_cases_elf_x64")
+    add_dependencies(neverd-gui-safety-scan-tests neverd neverd-worker)
+  endif()
   add_test(NAME NeverDGuiSafetyScan COMMAND neverd-gui-safety-scan-tests)
   set_tests_properties(NeverDGuiSafetyScan PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
   qt_add_executable(neverd-gui-x87-tests tests/X87CapabilitiesTests.cpp)
   target_link_libraries(neverd-gui-x87-tests PRIVATE neverd_gui_app Qt6::Test)
