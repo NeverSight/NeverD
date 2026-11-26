@@ -14,6 +14,25 @@ constexpr uint32_t AddPrefix = 0x06000000;
 constexpr uint32_t AddR3Suffix = 0x38600000;
 constexpr uint32_t ReservedPrefixes[] = {0x06040000, 0x06400000, 0x04000000};
 constexpr uint32_t AddR3R4One = 0x38640001;
+// Each independent pair encodes r3 at -1(r4) with R=0.
+constexpr struct {
+  uint32_t Prefix;
+  uint32_t Suffix;
+  unsigned Bytes;
+  bool Store;
+  bool Signed;
+} MemoryForms[] = {
+    {0x0603ffff, 0x8864ffff, 1, false, false}, // plbz
+    {0x0603ffff, 0xa064ffff, 2, false, false}, // plhz
+    {0x0603ffff, 0xa864ffff, 2, false, true},  // plha
+    {0x0603ffff, 0x8064ffff, 4, false, false}, // plwz
+    {0x0403ffff, 0xa464ffff, 4, false, true},  // plwa
+    {0x0403ffff, 0xe464ffff, 8, false, false}, // pld
+    {0x0603ffff, 0x9864ffff, 1, true, false},  // pstb
+    {0x0603ffff, 0xb064ffff, 2, true, false},  // psth
+    {0x0603ffff, 0x9064ffff, 4, true, false},  // pstw
+    {0x0403ffff, 0xf464ffff, 8, true, false},  // pstd
+};
 } // namespace ppc_fixture
 
 namespace rv_fixture {

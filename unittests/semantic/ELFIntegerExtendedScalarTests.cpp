@@ -18,6 +18,7 @@
 #include "neverd/lift/IntegerRegisters.h"
 
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <cstdint>
 #include <iomanip>
@@ -90,6 +91,63 @@ TEST(PowerPCPrefixed, SignedD34AndFetchBoundaries) {
                                                                Disp);
           }
         }
+  }
+}
+
+TEST(PowerPCPrefixed, MemoryWidthsAndSignedLoadsInBothByteOrders) {
+  for (Arch A : {Arch::PPC64, Arch::PPC64LE}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = Bitness::Bits64;
+    Segment &Data = Img.Segments.emplace_back();
+    Data.VA = 0x2000;
+    Data.Data = {0x81, 0x92, 0xa3, 0xb4, 0xc5, 0xd6, 0xe7, 0xf8, 0x5a};
+    Data.Size = Data.FileSz = Data.Data.size();
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    const bool Little = archLittleEndian(A);
+    const auto Endian =
+        Little ? llvm::endianness::little : llvm::endianness::big;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    for (auto Form : ppc_fixture::MemoryForms) {
+      SCOPED_TRACE(::testing::Message()
+                   << std::hex << Form.Suffix << " " << Little);
+      uint8_t Code[8];
+      llvm::support::endian::write32(Code, Form.Prefix, Endian);
+      llvm::support::endian::write32(Code + 4, Form.Suffix, Endian);
+      DecodedInsn I;
+      ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, I), 8);
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(D.liftToLow(I, Ops));
+      NdOpEmulator Emu(Img);
+      Emu.setStrictMode(true);
+      const uint64_t Source = UINT64_C(0x1032547698badcfe);
+      Emu.setRegister(integerreg::gpr(3), Source);
+      Emu.setRegister(integerreg::gpr(4), Data.VA + 1);
+      for (const LowOp &Op : Ops)
+        ASSERT_TRUE(Emu.step(Op));
+      uint64_t Loaded = 0;
+      for (unsigned N = 0; N < Data.Data.size(); ++N) {
+        uint8_t Byte = Data.Data[N];
+        if (N < Form.Bytes) {
+          const unsigned Shift = 8 * (Little ? N : Form.Bytes - 1 - N);
+          Loaded |= uint64_t(Byte) << Shift;
+          if (Form.Store)
+            Byte = uint8_t(Source >> Shift);
+        }
+        LowOp Read;
+        Read.Opcode = NdOp::LOAD;
+        Read.Output = NdVar::reg(integerreg::gpr(5), 1);
+        Read.addInput(NdVar::dataAddress(Data.VA + N, 8));
+        ASSERT_TRUE(Emu.step(Read));
+        EXPECT_EQ(Emu.getRegister(integerreg::gpr(5)), Byte);
+      }
+      if (Form.Signed)
+        Loaded = llvm::SignExtend64(Loaded, Form.Bytes * 8);
+      EXPECT_EQ(Emu.getRegister(integerreg::gpr(3)),
+                Form.Store ? Source : Loaded);
+      EXPECT_EQ(Emu.getRegister(integerreg::gpr(4)), Data.VA + 1);
+    }
   }
 }
 
