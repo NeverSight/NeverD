@@ -1580,6 +1580,10 @@ and `x64tt_threemachine` round trips in `NeverDTwoTableXformTests` execute the
 same shape. `JTE_X86_64.SecondMachineBehindAnOpenEntryDispatchStaysUnreachable`
 enters a second machine only through a first entry dispatch that can never
 close: that dispatch stays unresolved and no block past it is reachable.
+`JTE_X86_64.NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex` bounds a
+byte lane with `cmpb $0x81, %dl; ja`: indexed by the lane zero-extended, the
+dispatch reads all 130 slots, and indexed by it sign-extended, it stays
+unresolved.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

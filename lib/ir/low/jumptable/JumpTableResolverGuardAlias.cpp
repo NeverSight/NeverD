@@ -3608,6 +3608,9 @@ alias_done:
     }
   }
   std::map<const GuardSyntaxNode *, GuardExprPtr> ExprMemo;
+  // The syntax leaf behind each materialized index leaf, for the narrow-lane
+  // extension check after the solver.
+  std::map<const GuardExpr *, const GuardSyntaxNode *> IndexLeafSources;
   std::set<const GuardSyntaxNode *> ActiveExprs;
   bool SawIncompleteProofQuery = false;
   if (!consumeGuardBuildWork())
@@ -3677,6 +3680,7 @@ alias_done:
     if (IndexMatches) {
       Expr->K = GuardExpr::Kind::Index;
       Expr->ContainsIndex = true;
+      IndexLeafSources.emplace(Expr.get(), Node.get());
       return Finish(Expr);
     }
     const bool LiteralQueryPresent =
@@ -4592,11 +4596,76 @@ alias_done:
       Info.SemanticGuardDomainAmbiguous = true;
     return false;
   }
+  // Past the narrow lane's sign bit, sign- and zero-extension of that lane no
+  // longer agree. The bound still names the index when every index leaf of
+  // the selected guards reaches the table index zero-extended: a structural
+  // leaf (the lane itself, its zero-extend, or an AND keeping the whole lane),
+  // or a leaf whose identity query also holds with sign extension excluded.
+  // Those queries run on a copy of the account, charged only when they hold,
+  // so a lane they cannot prove fails exactly as before.
+  auto selectedLaneZeroExtended = [&]() {
+    std::vector<JumpTableValueQuery> ZeroQueries;
+    std::vector<const GuardExpr *> Work;
+    std::set<const GuardExpr *> Seen;
+    for (const auto &[Guard, TableCondition] : IndexGuards) {
+      (void)TableCondition;
+      if (Guard)
+        Work.push_back(Guard.get());
+    }
+    size_t Visits = 0;
+    while (!Work.empty()) {
+      if (++Visits > limits::kMaxJumpTableEvidenceWork)
+        return false;
+      const GuardExpr *Expr = Work.back();
+      Work.pop_back();
+      if (!Seen.insert(Expr).second)
+        continue;
+      if (Expr->K != GuardExpr::Kind::Index) {
+        for (const GuardExprPtr &Input : Expr->Inputs)
+          if (Input)
+            Work.push_back(Input.get());
+        continue;
+      }
+      const auto Source = IndexLeafSources.find(Expr);
+      if (Source == IndexLeafSources.end())
+        return false;
+      const GuardSyntaxNode &Leaf = *Source->second;
+      if (Leaf.StructuralIndex)
+        continue;
+      auto holds = [&](size_t Query) {
+        return Query < ProofQueries.size() && Query < ProofResults.size() &&
+               Query < ProofQueryComplete.size() && ProofQueryComplete[Query] &&
+               ProofResults[Query];
+      };
+      if (!holds(Leaf.IndexQuery) ||
+          (Leaf.IndexQueryUsesDefinition && !holds(Leaf.DefQuery)))
+        return false;
+      JumpTableValueQuery Query = ProofQueries[Leaf.IndexQuery];
+      Query.AllowSignExtension = false;
+      ZeroQueries.push_back(std::move(Query));
+    }
+    if (ZeroQueries.empty())
+      return true;
+    size_t ZeroBudget = *CandidateEvidenceBudget;
+    bool BatchComplete = false;
+    std::vector<bool> QueryComplete;
+    const std::vector<bool> Results = ResolveGuardQueries(
+        ZeroQueries, QueryComplete, BatchComplete, &ZeroBudget);
+    if (Results.size() != ZeroQueries.size() ||
+        QueryComplete.size() != ZeroQueries.size())
+      return false;
+    for (size_t I = 0; I < Results.size(); ++I)
+      if (!QueryComplete[I] || !Results[I])
+        return false;
+    *CandidateEvidenceBudget = ZeroBudget;
+    return true;
+  };
   if (SelectedIndexWidth < Info.IndexValueAtUse.Size) {
     const unsigned SourceBits = unsigned(SelectedIndexWidth) * 8u;
     if (SourceBits == 0 ||
-        (SourceBits < 64 &&
-         FirstRejected > (uint64_t(1) << (SourceBits - 1)))) {
+        (SourceBits < 64 && FirstRejected > (uint64_t(1) << (SourceBits - 1)) &&
+         (FirstRejected > (uint64_t(1) << SourceBits) ||
+          !selectedLaneZeroExtended()))) {
       return failSemantic();
     }
   }
