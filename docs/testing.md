@@ -26555,7 +26555,7 @@ HighExprSimplify exact-demand regressions independently check multiple readers, 
 
 HighExprSimplify selected-byte regressions recover only contiguous captured-local lanes with matching pure guards. Offset, sign-extension, different-guard, load and unknown-value controls remain unchanged; generated source executes at both result widths and optimization levels.
 
-Common-word equality cancellation is covered by independent APInt evaluations at 1--256 bits. It cancels only identical complete XOR or additive operands; subtraction reuses the same additive collector. Packed word contents remain unconstrained.
+Common-word equality cancellation is covered by independent APInt evaluations at 1--256 bits. It cancels only identical complete XOR or additive operands; subtraction reuses the same additive collector. Packed word contents remain unconstrained. A literal both equality sides carry stays, so a selector compared with each of its case values keeps one target; `BinaryLowIRRefinement.PartitionedCoverageKeepsAllNativeAndCandidateArms` groups its cases by that target.
 
 SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
 
