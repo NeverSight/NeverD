@@ -147,6 +147,17 @@ The LowIR emulator tracks those bits as unknown. On PPC64, a successful word
 division exposes its defined low word even when the full register and CR0
 comparison depend on the processor.
 
+On PPC64, `mullw` writes the full signed product of the low 32 bits of both
+operands. `mullwo` sets OV when that product does not fit a signed word.
+`mulldo` tests whether the doubleword product fits a signed doubleword. Both
+update sticky SO. Their record forms compare the returned GPR with zero.
+`mulhw` and `mulhwu` put the upper word of the signed or unsigned product in
+the low word of the GPR. In 64-bit mode the upper GPR word and the recorded
+LT, GT and EQ bits are unspecified. LowIR keeps those bits unknown. Rebuilt
+C and LLVM execute the native instruction for each occurrence and capture
+the CR0 comparison from the same multiply.
+[Power ISA, Book I, Fixed-Point Arithmetic Instructions](https://openpowerfoundation.org/specifications/isa/).
+
 RISC-V atomics retain width and acquire/release bits. HighC and LLVM-derived C
 use target GNU inline assembly for ordering and reservation instructions. The
 LowIR emulator evaluates aligned ordinary memory under a single-hart model.
@@ -159,10 +170,7 @@ VSX, prefixed instructions in ordinary function bodies, conditional calls,
 conditional jumps through CTR and system instructions have no qualified
 semantic path. The ELFv2 loader recognizes a PC-relative prefixed load or
 address calculation in a linker stub when its final CTR transfer and
-destination match. On PPC64, `mullw` and `mullw.` write the full signed 64-bit product of the
-two low 32-bit operands. The record form compares that full result for CR0.
-The overflow-enabled forms and the word high-product instructions
-(`mulhw` and `mulhwu`) remain outside the PPC64 profile.
+destination match.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
 ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a
@@ -225,6 +233,17 @@ rebuilding target-dependent source. For big-endian PowerPC64, pass
 
 ```sh
 python3 unittests/lift/elf-integer/roundtrip.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
+```
+
+The PowerPC product fixture executes a separately compiled caller against the
+original and all three projections in both byte orders. It checks the full
+return register and the stored CR fields, including an independent comparison
+after the multiply. A PPC64 function with repeated operands must still execute
+both recorded high-word multiplies.
+
+```sh
+python3 unittests/lift/elf-integer/ppc_products.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
 ```
 

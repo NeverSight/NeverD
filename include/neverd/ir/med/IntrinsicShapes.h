@@ -52,8 +52,8 @@ inline bool hasValidMedIntrinsicId(const MedOp &Op) {
          Op.NumInputs <= Op.Inputs.size() && Op.Inputs.front().isConst();
 }
 
-inline bool powerPCDivisionMedShapeIsValid(const MedOp &Op, Arch A,
-                                           const ppc::Division &D) {
+inline bool powerPCFixedPointMedShapeIsValid(const MedOp &Op, Arch A,
+                                             const ppc::FixedPoint &D) {
   return hasValidMedIntrinsicId(Op) && Op.NumInputs == 3 &&
          Op.Inputs[0].ConstVal == static_cast<uint64_t>(D.Id) &&
          Op.IntrinsicOutputs.size() == unsigned(D.Record) &&
@@ -61,6 +61,12 @@ inline bool powerPCDivisionMedShapeIsValid(const MedOp &Op, Arch A,
          Op.MemoryOrdering == NdMemoryOrdering::None &&
          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
          D.matches(A, Op.Output.Size, Op.Inputs[1].Size, Op.Inputs[2].Size);
+}
+
+inline bool powerPCDivisionMedShapeIsValid(const MedOp &Op, Arch A,
+                                           const ppc::Division &D) {
+  return D.Kind == ppc::FixedPointKind::Divide &&
+         powerPCFixedPointMedShapeIsValid(Op, A, D);
 }
 
 inline bool aarch64VectorMedShapeIsValid(const MedOp &Op) {

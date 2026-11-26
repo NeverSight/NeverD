@@ -133,7 +133,7 @@ def execute(path, profile, function, cases, symbol=None):
     return results
 
 
-def count_word_divides(path, function):
+def powerpc_xform_opcodes(path, function):
     with path.open("rb") as file:
         elf = ELFFile(file)
         symbol = elf.get_section_by_name(".symtab").get_symbol_by_name(function)[0]
@@ -141,9 +141,13 @@ def count_word_divides(path, function):
         start = symbol["st_value"] - section["sh_addr"]
         code = section.data()[start:start + symbol["st_size"]]
         order = "little" if elf.little_endian else "big"
-        # divw without OE or Rc. Ignore only the three register selectors.
-        return sum((int.from_bytes(code[i:i + 4], order) & 0xfc0007ff) == 0x7c0003d6
-                   for i in range(0, len(code), 4))
+        # Ignore only the three register selectors. Preserve OE and Rc.
+        return [int.from_bytes(code[i:i + 4], order) & 0xfc0007ff
+                for i in range(0, len(code), 4)]
+
+
+def count_word_divides(path, function):
+    return powerpc_xform_opcodes(path, function).count(0x7c0003d6)
 
 
 def check_double_word_sum(args, work, profile):
@@ -266,6 +270,8 @@ def main():
             if profile.startswith("powerpc"):
                 functions.extend(("independent_divides", "recorded_divide", "divide_flags",
                                   "conditional_return", "population_counts", "recorded_word_product"))
+                if bits == 64:
+                    functions.append("word_constant_quotients")
             for function in functions:
                 cases = all_cases
                 if function in ("unsigned_quotient", "signed_quotient"):
@@ -300,6 +306,10 @@ def main():
                         product = (c_int32(a).value * c_int32(b).value) & mask
                         flags = 4 if product >> (bits - 1) else 2 if product else 1
                         expected.append((product ^ flags, a))
+                    elif function == "word_constant_quotients":
+                        left = c_int32(a).value
+                        quotient = (-1 if left < 0 else 1) * (abs(left) // 7)
+                        expected.append(((quotient + (b & 0xffffffff) // 10) & mask, a))
                     elif function == "population_counts":
                         words = sum(((a >> n) & 0xffffffff).bit_count() << n
                                     for n in range(0, bits, 32))

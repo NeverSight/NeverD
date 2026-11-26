@@ -20,7 +20,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.h"
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/low/X86/X86CompactShape.h"
@@ -590,9 +590,9 @@ bool NdOpEmulator::executeStore(const LowOp &Op) {
   return true;
 }
 
-bool NdOpEmulator::executePowerPCDivision(const LowOp &Op,
-                                          const ppc::Division &D,
-                                          llvm::ArrayRef<LowOp> Following) {
+bool NdOpEmulator::executePowerPCFixedPoint(const LowOp &Op,
+                                            const ppc::FixedPoint &D,
+                                            llvm::ArrayRef<LowOp> Following) {
   using namespace integerreg::ppc;
   const NdVar &Left = Op.Inputs[1], &Right = Op.Inputs[2];
   if (Op.Inputs[0].Size != 2 ||
@@ -612,35 +612,38 @@ bool NdOpEmulator::executePowerPCDivision(const LowOp &Op,
       return false;
     Condition = Outputs.front();
   }
-  const llvm::APInt Dividend(D.Bytes * 8, readOperand(Left));
-  const llvm::APInt Divisor(D.Bytes * 8, readOperand(Right));
-  const bool Invalid =
-      Divisor.isZero() ||
-      (D.Signed && Dividend.isMinSignedValue() && Divisor.isAllOnes());
-  const bool PartialWord = D.Bytes < Op.Output.Size;
-  if (Invalid) {
-    writeOutput(Op.Output, 0,
-                llvm::maskTrailingOnes<uint64_t>(Op.Output.Size * 8));
-    if (Condition)
-      writeOutput(*Condition, 0, CR0ComparisonMask);
-    return true;
+  const llvm::APInt LHS(D.Bytes * 8, readOperand(Left));
+  const llvm::APInt RHS(D.Bytes * 8, readOperand(Right));
+  llvm::APInt Result;
+  if (D.Kind == ppc::FixedPointKind::HighWordProduct) {
+    Result = D.Signed ? llvm::APIntOps::mulhs(LHS, RHS)
+                      : llvm::APIntOps::mulhu(LHS, RHS);
+  } else {
+    if (RHS.isZero() ||
+        (D.Signed && LHS.isMinSignedValue() && RHS.isAllOnes())) {
+      writeOutput(Op.Output, 0,
+                  llvm::maskTrailingOnes<uint64_t>(Op.Output.Size * 8));
+      if (Condition)
+        writeOutput(*Condition, 0, CR0ComparisonMask);
+      return true;
+    }
+    Result = D.Signed ? LHS.sdiv(RHS) : LHS.udiv(RHS);
   }
-  const auto Quotient =
-      D.Signed ? Dividend.sdiv(Divisor) : Dividend.udiv(Divisor);
+  const bool PartialWord = D.Bytes < Op.Output.Size;
   if (Condition) {
     if (PartialWord)
       writeOutput(*Condition, 0, CR0ComparisonMask);
     else {
-      const unsigned BI = Quotient.isNegative() ? CRLT
-                          : Quotient.isZero()   ? CREQ
-                                                : CRGT;
+      const unsigned BI = Result.isNegative() ? CRLT
+                          : Result.isZero()   ? CREQ
+                                              : CRGT;
       writeOutput(*Condition, uint64_t(1) << crShift(BI));
     }
   }
   // Word forms define only the low word on the common Power ISA profile.
   const uint64_t Unknown =
       PartialWord ? ~llvm::maskTrailingOnes<uint64_t>(D.Bytes * 8) : 0;
-  writeOutput(Op.Output, Quotient.getZExtValue(), Unknown);
+  writeOutput(Op.Output, Result.getZExtValue(), Unknown);
   return true;
 }
 

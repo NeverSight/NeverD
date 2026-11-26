@@ -1,0 +1,24 @@
+//===- PowerPCFixedPoint.def - Native fixed-point operations --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Operations whose result or recorded condition can depend on the processor.
+/// Each row gives the stable intrinsic IDs of the plain and record forms.
+///
+//===----------------------------------------------------------------------===//
+
+#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, RecordValue, XO, Bytes, Signed, \
+                          Mnemonic)                                            \
+  NEVERD_PPC_FIXED_POINT(Divide, Id, Value, RecordId, RecordValue, Bytes,      \
+                         Signed, Mnemonic)
+#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
+
+NEVERD_PPC_FIXED_POINT(HighWordProduct, PPCMulhw, 18012, PPCMulhwRecord, 18013,
+                       4, true, "mulhw")
+NEVERD_PPC_FIXED_POINT(HighWordProduct, PPCMulhwu, 18014, PPCMulhwuRecord,
+                       18015, 4, false, "mulhwu")
+
+#undef NEVERD_PPC_FIXED_POINT

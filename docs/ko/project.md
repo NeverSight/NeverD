@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: b9cda6cb01918cadfe48b4bc6544a4dc7baeb2e8ecd51cece677de52b5708065 -->
+<!-- i18n-source: f00e3001b8210e9c53c405a926f38372af3c51b0e9c8b6f4733c747a6734d227 -->
 
 <div align="center">
 
@@ -69,7 +69,7 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 | 대상 | 검증된 ELF 프로필 |
 |---|---|
 | RISC-V | 리틀 엔디언 RV32I/ILP32 및 RV64I/LP64. ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. |
-| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. PPC32는 secure PLT와 기존 BSS-PLT를 통한 모듈 간 호출을 지원합니다. 두 PPC64 ABI 모두 PLT를 통한 모듈 간 호출과 TOC 전환을 지원합니다. ELFv1은 함수 디스크립터를 사용하고 ELFv2는 전역 및 지역 진입점을 지원합니다. 검증한 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, CR0에 기록되는 결과, XER 오버플로 비트에 미치는 영향이 포함됩니다. |
+| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. PPC32는 secure PLT와 기존 BSS-PLT를 통한 모듈 간 호출을 지원합니다. 두 PPC64 ABI 모두 PLT를 통한 모듈 간 호출과 TOC 전환을 지원합니다. ELFv1은 함수 디스크립터를 사용하고 ELFv2는 전역 및 지역 진입점을 지원합니다. 검증된 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, 곱의 상위 워드를 반환하는 곱셈, 오버플로를 표시하는 곱셈이 포함되며, 이 연산들이 CR0와 XER에 미치는 영향도 검증했습니다. |
 
 이 프로필의 네이티브 코드 재작성은 향후 과제입니다. [RISC-V 및 PowerPC 지원 범위(영문)](../riscv-powerpc.md)
 

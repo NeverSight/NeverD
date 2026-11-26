@@ -26,7 +26,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
 #include "neverd/ir/low/LowArchitecturalValue.h"
@@ -643,8 +643,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
     return false;
   if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs && Op.Inputs[0].isConst()) {
     if (const auto D =
-            ppc::division(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
-      return executePowerPCDivision(Op, *D, Following);
+            ppc::fixedPoint(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
+      return executePowerPCFixedPoint(Op, *D, Following);
   }
   if (MIPSReservationGranule) {
     if (Op.NumInputs > std::size(Op.Inputs))

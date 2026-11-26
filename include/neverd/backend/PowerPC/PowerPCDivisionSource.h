@@ -13,44 +13,22 @@
 #ifndef NEVERD_BACKEND_POWERPC_POWERPCDIVISIONSOURCE_H
 #define NEVERD_BACKEND_POWERPC_POWERPCDIVISIONSOURCE_H
 
+#include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
 
-#include <string>
-
 namespace neverd::ppc {
-inline constexpr char DivisionMarker[] = "neverd.ppc.divide";
 inline const char *divisionConstraints(Division D) {
-  return D.Record ? "=r,=r,r,r,~{cr0}" : "=r,r,r";
+  return fixedPointConstraints(D);
 }
 
 inline std::string divisionAssembly(Division D, char Operand) {
-  const std::string Q = std::string(1, Operand) + "0";
-  if (!D.Record)
-    return std::string(D.Mnemonic) + " " + Q + ", " + Operand + "1, " +
-           Operand + "2";
-  const std::string CR = std::string(1, Operand) + "1";
-  return std::string(D.Mnemonic) + ". " + Q + ", " + Operand + "2, " + Operand +
-         "3; mfcr " + CR + "; rlwinm " + CR + ", " + CR + ", 0, 0, 2";
+  return fixedPointAssembly(D, Operand);
 }
 
 inline std::string divisionSource(Division D, const std::string &Left,
                                   const std::string &Right,
                                   const std::string &Condition = {}) {
-  std::string Text = "(__extension__ ({ __UINTPTR_TYPE__ __nd_quotient";
-  if (D.Record)
-    Text += ", __nd_condition";
-  Text += "; __asm__ volatile (\"" + divisionAssembly(D, '%') +
-          "\" : \"=r\" (__nd_quotient)";
-  if (D.Record)
-    Text += ", \"=r\" (__nd_condition)";
-  Text += " : \"r\" ((__UINTPTR_TYPE__)(" + Left +
-          ")), \"r\" ((__UINTPTR_TYPE__)(" + Right + "))";
-  if (D.Record)
-    Text += " : \"cr0\"";
-  Text += "); ";
-  if (!Condition.empty())
-    Text += Condition + " = __nd_condition; ";
-  return Text + "__nd_quotient; }))";
+  return fixedPointSource(D, Left, Right, Condition);
 }
 } // namespace neverd::ppc
 
