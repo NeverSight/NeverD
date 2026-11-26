@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/pipeline/PipelineWideIntReturnDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
@@ -146,6 +147,109 @@ struct LinkedImage {
 };
 
 class ELFIntegerTarget : public ::testing::TestWithParam<Arch> {};
+
+TEST(RegisterPairShift, OnlyTheZeroCountEdgeCanForwardTheInputPair) {
+  for (Arch A : {Arch::RISCV32, Arch::PPC32, Arch::PPC32LE}) {
+    const auto &TRI = getTargetRegInfo(A);
+    auto Argument = [&](int I) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.TheArch = A;
+      V.Size = 4;
+      V.Id = I;
+      V.RegOff = TRI.IntParamRegs[I];
+      return V;
+    };
+    MedVar First = Argument(0), Second = Argument(1), Count = Argument(2);
+    MedVar Condition;
+    Condition.Kind = MedVar::Temp;
+    Condition.Size = 1;
+    MedOp Cmp;
+    Cmp.Opcode = NdOp::INT_EQUAL;
+    Cmp.Output = Condition;
+    Cmp.addInput(Count);
+    Cmp.addInput(MedVar::makeConst(0, 4));
+    MedOp Branch;
+    Branch.Opcode = NdOp::COND_BR;
+    Branch.addInput(MedVar::makeConst(0x1010, 4));
+    Branch.addInput(Condition);
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    MedFunc Func;
+    Func.Entry = 0x1000;
+    Func.Blocks.resize(3);
+    auto &Entry = Func.Blocks[0], &Shift = Func.Blocks[1],
+         &Join = Func.Blocks[2];
+    Entry.Id = 0;
+    Entry.StartAddr = Func.Entry;
+    Entry.Succs = {2, 1};
+    Entry.Ops = {Cmp, Branch};
+    Shift.Id = 1;
+    Shift.StartAddr = 0x1008;
+    Shift.Preds = {0};
+    Shift.Succs = {2};
+    Join.Id = 2;
+    Join.StartAddr = 0x1010;
+    Join.Preds = {0, 1};
+    Join.Ops = {Return};
+    for (MedVar V : {First, Second}) {
+      MedOp Op;
+      Op.Opcode = NdOp::INT_LEFT;
+      Op.addInput(V);
+      Op.addInput(Count);
+      Op.Output = V;
+      Op.Output.SSAVer = 1;
+      Shift.Ops.push_back(Op);
+      PhiNode Phi;
+      Phi.Output = V;
+      Phi.Output.SSAVer = 2;
+      Phi.Args = {{1, Op.Output}, {0, V}};
+      Join.Phis.push_back(Phi);
+    }
+    auto Accepts = [&] {
+      return returnsRegisterPairI64(
+          Func, TRI, [](const MedOp &) { return false; },
+          /*ShiftReturnsInputOnZero=*/true);
+    };
+    EXPECT_FALSE(returnsRegisterPairI64(Func, TRI));
+    EXPECT_TRUE(Accepts());
+    Entry.Ops[0].Opcode = NdOp::INT_NOTEQUAL;
+    EXPECT_FALSE(Accepts());
+    Entry.Ops[0] = Cmp;
+    Entry.Ops[0].Inputs[0] = First;
+    EXPECT_FALSE(Accepts());
+    Entry.Ops[0] = Cmp;
+    auto &FirstEdge = Join.Phis.front().Args[1].second;
+    FirstEdge = MedVar::makeConst(0, 4);
+    EXPECT_FALSE(Accepts());
+    FirstEdge = First;
+    Entry.Ops.insert(Entry.Ops.begin(), Shift.Ops.front());
+    Entry.Ops.front().Output.SSAVer = 3;
+    FirstEdge = Entry.Ops.front().Output;
+    EXPECT_FALSE(Accepts());
+    FirstEdge = First;
+    Entry.Ops.erase(Entry.Ops.begin());
+    // The same PHI does not justify an untouched pair if the common exit
+    // overwrites its first word.
+    Join.Ops.insert(Join.Ops.begin(), Shift.Ops.front());
+    Join.Ops.front().Inputs[0] = Join.Phis.front().Output;
+    Join.Ops.front().Output.SSAVer = 4;
+    EXPECT_FALSE(Accepts());
+
+    // A conditional return in the block takes the fallthrough edge. The
+    // branch to the shifting block must therefore test for a nonzero count.
+    Func.Blocks.pop_back();
+    Entry.Ops = {Cmp, Branch, Return};
+    Entry.Succs = {Shift.Id};
+    Entry.Ops[0].Opcode = NdOp::INT_NOTEQUAL;
+    Entry.Ops[1].Inputs[0] = MedVar::makeConst(Shift.StartAddr, 4);
+    Shift.Succs.clear();
+    Shift.Ops.push_back(Return);
+    EXPECT_TRUE(Accepts());
+    Entry.Ops[0].Opcode = NdOp::INT_EQUAL;
+    EXPECT_FALSE(Accepts());
+  }
+}
 
 #include "DoubleWordSumFixture.inc"
 
