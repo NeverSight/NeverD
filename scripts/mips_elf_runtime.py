@@ -24,7 +24,8 @@ def map_image(uc, image, pages, bias=0, *, enforce_permissions=False):
             uc.mem_protect(first, end - first, access)
 
 
-def run_micromips64(image, release, exit_nr, expected, *, instruction_limit=256, set_thread_area=None):
+def run_micromips64(image, release, exit_nr, expected, *, instruction_limit=256,
+                    set_thread_area=None, thread_pointers=None):
     from unicorn import (Uc, UC_ARCH_MIPS, UC_HOOK_INTR, UC_MODE_BIG_ENDIAN,
                          UC_MODE_MIPS64, UC_TLB_VIRTUAL)
     from unicorn import mips_const as mips
@@ -49,8 +50,9 @@ def run_micromips64(image, release, exit_nr, expected, *, instruction_limit=256,
     observed = []
     expected_events = []
     if set_thread_area is not None:
-        tp = image.get_section_by_name(".tdata")["sh_addr"] + 0x7000
-        expected_events.append((17, set_thread_area, tp))
+        if thread_pointers is None:
+            thread_pointers = (image.get_section_by_name(".tdata")["sh_addr"] + 0x7000,)
+        expected_events.extend((17, set_thread_area, pointer) for pointer in thread_pointers)
     expected_events.append((17, exit_nr, expected))
 
     def interrupt(uc, number, _):

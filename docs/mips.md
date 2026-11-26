@@ -204,8 +204,23 @@ initialized `PT_TLS` storage for both TLS models. The matrix covers the followin
 | --- | --- |
 | PIC hard and soft float, static GP-relative small data, local-exec and initial-exec TLS | Classic and microMIPS R2/R6 on all three ABIs, MIPS16 R2 on o32 |
 | Scalar FP addition with hard-float arguments | Classic and microMIPS R2/R6 on all three ABIs |
+| Independent TLS blocks with initialized and zero-filled storage, local-exec and initial-exec | Classic and microMIPS R2/R6 on all three ABIs, MIPS16 R2 on o32 |
+| Extended branches to functions in another object | MIPS16 R2 on o32 |
 | Packed-byte DSP arithmetic | Classic R2 on all three ABIs |
 | MSA vector arithmetic | Classic R5 on all three ABIs |
+
+The 52 two-block TLS configurations use a four-byte initialized word and a
+259-byte zero-filled array aligned to 256 bytes. Each program switches
+thread pointers in the order A, B, A, B. The second call on each block
+checks its own prior writes to the word and both ends of the array. The
+runner verifies the TLS symbol offsets and the 4-byte file size, 515-byte
+memory size and 256-byte alignment of `PT_TLS`.
+
+The MIPS16 branch programs take both arms of a conditional and swap the
+two destinations in the replacement. The targets are more than 2 KiB ahead
+in the original layout and behind the new `section` placement. Each native
+build produces 1,148 executable images across 336 configurations, including
+812 patched images.
 
 For MIPS16 o32 hard float, the ordinary function pointer selects the
 compiler's classic entry adapter and the symbol table retains the MIPS16

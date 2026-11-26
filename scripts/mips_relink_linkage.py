@@ -9,7 +9,7 @@ SET_THREAD_AREA = {"o32": 4283, "n32": 6246, "n64": 5242}
 
 def build_linkage_objects(args, build, profile, run):
     pic = profile.linkage != "small-data"
-    soft = profile.linkage == "pic-soft"
+    soft = profile.soft_float
     n64 = profile.abi == "n64"
     target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}", "-filetype=obj"]
     attrs = ([] if pic else ["+noabicalls"]) + (["+soft-float"] if soft else [])
@@ -20,7 +20,7 @@ def build_linkage_objects(args, build, profile, run):
         attrs.extend(("+msa", "+fp64", "+nan2008" if profile.abi == "o32" else "-nan2008"))
     load_address = "dla" if n64 else "la"
     set_tp = ""
-    if profile.tls_model:
+    if profile.tls_model and not profile.tls_blocks:
         # Linux MIPS uses a biased thread pointer. This freestanding single-thread
         # program uses its own initialized TLS image as the first thread's storage.
         set_thread_area = SET_THREAD_AREA[profile.abi]
@@ -32,6 +32,11 @@ def build_linkage_objects(args, build, profile, run):
     start = ((FIXTURES / "start.s").read_text().replace("LOAD_ADDRESS", load_address)
              .replace("SET_THREAD_POINTER", set_tp).replace("EXIT_NR", str(profile.exit_nr))
              .replace("CALL_REGISTER", "jalrc $25" if profile.release == 6 else "jalr $25\n    nop"))
+    if profile.tls_blocks:
+        start += ((FIXTURES / "tls_blocks.s").read_text()
+                  .replace("ADD_POINTER", "daddiu" if n64 else "addiu")
+                  .replace("SET_THREAD_AREA_NR", str(SET_THREAD_AREA[profile.abi]))
+                  .replace("RETURN_TO_CALLER", "jrc $31" if profile.release == 6 else "jr $31\n    nop"))
     run([args.mc, *target, f"-triple={profile.triple}", *(["-mattr=" + ",".join(attrs)] if attrs else []),
          "-o", build / "start.o", "-"], source=start)
 
@@ -42,7 +47,25 @@ def build_linkage_objects(args, build, profile, run):
              *(["-mattr=" + ",".join(features)] if features else []),
              *([] if pic else ["-mgpopt"]), "-o", build / name, "-"], source=source)
 
+    if profile.linkage == "far-branches":
+        compile_object("caller.o", (FIXTURES / "branch_caller.ll").read_text(), attrs)
+        branches = (FIXTURES / "far_branches.s").read_text()
+        for obj, first, second in (("calc.o", "left", "right"), ("updated.o", "right", "left")):
+            source = branches.replace("TAKEN_ARM", first).replace("FALLTHROUGH_ARM", second)
+            run([args.mc, *target, f"-triple={profile.triple}", "-mattr=+mips16,+soft-float",
+                 "-o", build / obj, "-"], source=source)
+        # calc.o also supplies the gap before the two branch targets in caller.o.
+        return ["start.o", "calc.o", "caller.o"]
     storage = f"thread_local({profile.tls_model})" if profile.tls_model else ""
+    if profile.tls_blocks:
+        driver = (FIXTURES / "tls_blocks.ll").read_text().replace("TLS_STORAGE", storage)
+        calc = ((FIXTURES / "tls_blocks_calc.ll").read_text().replace("TLS_STORAGE", storage)
+                .replace("POINTER_INT", "i64" if n64 else "i32"))
+        compile_object("caller.o", driver, attrs)
+        features = attrs + ([] if profile.isa == "classic" else ["+" + profile.isa])
+        compile_object("calc.o", calc.replace("ADJUST", "1"), features)
+        compile_object("updated.o", calc.replace("ADJUST", "7"), features)
+        return ["start.o", "caller.o", "calc.o"]
     driver = (FIXTURES / "caller.ll").read_text().replace("SEED_STORAGE", storage)
     calc = (FIXTURES / "calc.ll").read_text().replace("SEED_STORAGE", storage)
     fp_sum = profile.linkage == "pic-hard" and profile.isa != "mips16"
@@ -83,7 +106,7 @@ def inspect_linkage(image, profile, function, text):
         raise ValueError(f"{profile.name}: invalid callback storage")
     pointer = int.from_bytes(data.data()[offset:offset + size], "little" if profile.little else "big")
     expected = function["st_value"] | (profile.isa != "classic")
-    if profile.isa == "mips16" and profile.linkage != "pic-soft":
+    if profile.isa == "mips16" and not profile.soft_float:
         # The classic entry stub moves the two doubles into the MIPS16 calling convention.
         stub, = symtab.get_symbol_by_name("__fn_stub_calc")
         expected = stub["st_value"]
@@ -91,11 +114,34 @@ def inspect_linkage(image, profile, function, text):
         raise ValueError(f"{profile.name}: callback contains {pointer:#x}, expected {expected:#x}")
     fp_abi = image.get_section_by_name(".MIPS.abiflags").data()[7]
     expected_abi = 6 if profile.abi == "o32" and (profile.release == 6 or profile.linkage == "msa") else 1
-    if fp_abi != (3 if profile.linkage == "pic-soft" else expected_abi):
+    if fp_abi != (3 if profile.soft_float else expected_abi):
         raise ValueError(f"{profile.name}: unexpected floating-point ABI {fp_abi}")
+    if profile.linkage == "far-branches":
+        if function["st_size"] != 8:
+            raise ValueError(f"{profile.name}: expected two extended branch instructions")
+        for name in ("left", "right"):
+            target, = symtab.get_symbol_by_name(name)
+            distance = target["st_value"] - function["st_value"]
+            if (distance - 8 if text.name == ".text" else -distance) <= 2048:
+                raise ValueError(f"{profile.name}: {name} is within short branch range or in the wrong direction")
     if profile.tls_model:
         tls, = (s for s in image.iter_segments() if s["p_type"] == "PT_TLS")
-        if tls["p_filesz"] < 8:
+        if profile.tls_blocks:
+            seed, = symtab.get_symbol_by_name("seed")
+            zeroes, = symtab.get_symbol_by_name("zeroes")
+            tdata = image.get_section(seed["st_shndx"])
+            tbss = image.get_section(zeroes["st_shndx"])
+            # LLD can put the alignment gap inside .tbss. TLS symbols are
+            # offsets from the template, including that zero-filled gap.
+            if ((tls["p_filesz"], tls["p_memsz"], tls["p_align"]) != (4, 515, 256)
+                    or seed["st_info"]["type"] != "STT_TLS" or zeroes["st_info"]["type"] != "STT_TLS"
+                    or (seed["st_value"], seed["st_size"], tdata.name) != (0, 4, ".tdata")
+                    or (zeroes["st_value"], zeroes["st_size"], tbss.name) != (256, 259, ".tbss")
+                    or tbss["sh_type"] != "SHT_NOBITS" or tbss["sh_addralign"] != 256
+                    or not tls["p_vaddr"] + 4 <= tbss["sh_addr"] <= tls["p_vaddr"] + 256
+                    or tbss["sh_addr"] + tbss["sh_size"] != tls["p_vaddr"] + 515):
+                raise ValueError(f"{profile.name}: incorrect .tdata/.tbss TLS template")
+        elif tls["p_filesz"] < 8:
             raise ValueError(f"{profile.name}: missing initialized TLS storage")
     if profile.linkage in ("dsp", "msa"):
         flags = image.get_section_by_name(".MIPS.abiflags").data()
@@ -141,6 +187,22 @@ def verify_linkage_objects(folder, profile, hashes, digest):
     callee = references("calc.o", (".text.calc",))
     # Primary relocation numbers are common to REL, RELA and packed MIPS64 RELA.
     required = {(18 if profile.abi == "n64" else 2, "calc")}  # R_MIPS_64 or R_MIPS_32
+    if profile.linkage == "far-branches":
+        branches = {(113, name) for name in ("left", "right")}  # R_MIPS16_PC16_S1
+        if not required <= caller or callee != branches:
+            raise ValueError(f"{profile.name}: incorrect callback or external MIPS16 branches")
+        return
+    if profile.tls_model == "initialexec":
+        codes = ({"classic": 46, "micromips": 166, "mips16": 110}[profile.isa],)
+    elif profile.tls_model:
+        high = {"classic": 49, "micromips": 169, "mips16": 111}[profile.isa]
+        codes = (high, high + 1)
+    if profile.tls_blocks:
+        required.add((11, "set_block"))  # R_MIPS_CALL16 in the classic driver
+        accesses = {(code, symbol) for code in codes for symbol in ("seed", "zeroes")}
+        if not required <= caller or not accesses <= callee:
+            raise ValueError(f"{profile.name}: missing caller {required - caller}, callee {accesses - callee}")
+        return
     if profile.linkage == "small-data":
         required.update(((7, "seed"), (7, "visits")))  # R_MIPS_GPREL16
         has_call = any(symbol == "helper" for _, symbol in callee)
@@ -155,12 +217,8 @@ def verify_linkage_objects(folder, profile, hashes, digest):
             required.add((got, "seed"))
         call16 = {"classic": 11, "mips16": 103, "micromips": 142}[profile.isa]
         has_call = (call16, "helper") in callee
-    if profile.linkage == "tls-ie":
-        gottprel = {"classic": 46, "micromips": 166, "mips16": 110}[profile.isa]
-        seed_refs = {(gottprel, "seed")}
-    elif profile.linkage == "tls":
-        high = {"classic": 49, "micromips": 169, "mips16": 111}[profile.isa]
-        seed_refs = {(high, "seed"), (high + 1, "seed")}
+    if profile.tls_model:
+        seed_refs = {(code, "seed") for code in codes}
     elif profile.linkage == "small-data":
         gprel = {"classic": 7, "micromips": 136, "mips16": 101}[profile.isa]
         seed_refs = {(gprel, "seed")}

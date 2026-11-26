@@ -19,7 +19,7 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
-PRODUCT_VERSION = 5
+PRODUCT_VERSION = 6
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -107,7 +107,16 @@ class Profile:
 
     @property
     def tls_model(self):
-        return {"tls": "localexec", "tls-ie": "initialexec"}.get(self.linkage)
+        return {"tls": "localexec", "tls-ie": "initialexec",
+                "tls-bss": "localexec", "tls-bss-ie": "initialexec"}.get(self.linkage)
+
+    @property
+    def tls_blocks(self):
+        return self.linkage in ("tls-bss", "tls-bss-ie")
+
+    @property
+    def soft_float(self):
+        return self.linkage in ("pic-soft", "far-branches") or self.tls_blocks
 
     @property
     def name(self):
@@ -159,13 +168,18 @@ def profiles(version=PRODUCT_VERSION):
                     yield replace(profile, gp64_o32=True)
 
             if version >= 4:
+                workloads = ("pic-hard", "pic-soft", "small-data", "tls", "tls-ie")
+                if version >= 6:
+                    workloads += ("tls-bss", "tls-bss-ie")
                 for release in (2, 6):
                     for isa in ("classic", "micromips"):
-                        for linkage in ("pic-hard", "pic-soft", "small-data", "tls", "tls-ie"):
+                        for linkage in workloads:
                             yield Profile(abi, little, isa, release, linkage=linkage)
                 if abi == "o32":
-                    for linkage in ("pic-hard", "pic-soft", "small-data", "tls", "tls-ie"):
+                    for linkage in workloads:
                         yield Profile(abi, little, "mips16", linkage=linkage)
+                    if version >= 6:
+                        yield Profile(abi, little, "mips16", linkage="far-branches")
                 yield Profile(abi, little, linkage="dsp")
                 yield Profile(abi, little, release=5, linkage="msa")
 
@@ -225,7 +239,12 @@ def layout(profile, section, *, split_entry=False):
     calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
             ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
     script = LAYOUT
-    if profile.tls_model:
+    if profile.tls_blocks:
+        script = script.replace("  .data :", """  .tdata ALIGN(256) : { *(.tdata*) }
+  __tls_image = ADDR(.tdata);
+  .tbss ALIGN(256) (NOLOAD) : { *(.tbss*) }
+  .data :""")
+    elif profile.tls_model:
         script = script.replace("  .data :", "  .tdata : { *(.tdata*) }\n  __tls_image = ADDR(.tdata);\n  .data :")
     return (script.replace("BASE_ADDRESS", hex(base + (0x100000 if section else 0)))
             .replace("PROGRAM_HEADERS", headers if split_entry else "")
@@ -464,12 +483,18 @@ def inspect_elf(image, profile):
 
 
 def execute_image(path, image, profile, expected):
-    needs_fpu = profile.release < 6 and profile.linkage and profile.linkage != "pic-soft"
+    needs_fpu = profile.release < 6 and profile.linkage and not profile.soft_float
     if profile.isa == "micromips" and (profile.abi != "o32" or profile.gp64_o32 or needs_fpu):
         from mips_elf_runtime import run_micromips64
+        pointers = None
+        if profile.tls_blocks:
+            blocks, = image.get_section_by_name(".symtab").get_symbol_by_name("tls_blocks")
+            first = blocks["st_value"] + 0x7000
+            pointers = (first, first + 768) * 2
         run_micromips64(image, profile.release, profile.exit_nr, expected,
                         instruction_limit=2048 if profile.linkage else 256,
-                        set_thread_area=SET_THREAD_AREA[profile.abi] if profile.tls_model else None)
+                        set_thread_area=SET_THREAD_AREA[profile.abi] if profile.tls_model else None,
+                        thread_pointers=pointers)
         return
     arch = {"o32": "mips", "n32": "mipsn32", "n64": "mips64"}[profile.abi]
     qemu = f"qemu-{arch}{'el' if profile.little else ''}"
@@ -495,7 +520,7 @@ def execute(args):
     manifest = json.loads((root / "products.json").read_text())
     if "version" in manifest:
         version = manifest["version"]
-        if version not in (2, 3, 4, 5):
+        if version not in (2, 3, 4, 5, 6):
             raise ValueError("Unknown MIPS relink products version")
         hashes = manifest["profiles"]
     else:
