@@ -170,7 +170,27 @@ if(NEVERD_ENABLE_DRIVER_EMULATION)
 endif()
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
-    target_link_libraries(neverd_shared PRIVATE Python3::Python)
+    set(_neverd_python_host Python3::Python)
+    get_target_property(_neverd_python_type Python3::Python TYPE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.24
+       AND _neverd_python_type STREQUAL "SHARED_LIBRARY"
+       AND (NOT CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET VERSION_GREATER_EQUAL 15))
+        # Plain decompilation never calls CPython. Let dyld initialize the
+        # embedded runtime on first use by the Python plugin host.
+        include(CheckCXXSourceCompiles)
+        include(CMakePushCheckState)
+        cmake_push_check_state(RESET)
+        # The linker only warns when the implicit deployment target is too old.
+        set(CMAKE_REQUIRED_LINK_OPTIONS "LINKER:-fatal_warnings,-delay-lm")
+        check_cxx_source_compiles("int main() { return 0; }" NEVERD_LINKER_HAS_DELAY_INIT)
+        cmake_pop_check_state()
+        if(NEVERD_LINKER_HAS_DELAY_INIT)
+            set(CMAKE_CXX_LINK_LIBRARY_USING_neverd_delay_init_SUPPORTED TRUE)
+            set(CMAKE_CXX_LINK_LIBRARY_USING_neverd_delay_init "LINKER:-delay_library,<LIBRARY>")
+            set(_neverd_python_host "$<LINK_LIBRARY:neverd_delay_init,Python3::Python>")
+        endif()
+    endif()
+    target_link_libraries(neverd_shared PRIVATE ${_neverd_python_host})
     target_compile_definitions(neverd_shared PRIVATE
         NEVERD_ENABLE_PYTHON_PLUGINS=1
         NEVERD_PYTHON_SDK_SOURCE_DIR="${CMAKE_SOURCE_DIR}/pluginsdk/python"

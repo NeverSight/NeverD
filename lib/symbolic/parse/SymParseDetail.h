@@ -25,6 +25,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -79,7 +80,7 @@ class Lexer {
 public:
   explicit Lexer(llvm::StringRef T) : Text(T) { advance(); }
 
-  llvm::StringRef parenthesizedSpelling(size_t Begin) const;
+  llvm::StringRef parenthesizedSpelling(size_t Begin, size_t Limit) const;
   llvm::StringRef from(size_t Begin) const { return Text.drop_front(Begin); }
   void skipSpelling(llvm::StringRef Spelling) {
     Pos = Spelling.end() - Text.begin();
@@ -141,7 +142,8 @@ private:
   // success at the same or a greater depth discharges the nesting policy.
   template <typename Parse>
   SymRef reuseProductTerm(size_t Begin, Parse ParseNormally) {
-    const auto Spelling = Lex.parenthesizedSpelling(Begin);
+    const auto Spelling = Lex.parenthesizedSpelling(
+        Begin, limits::symbolic::kSymParseProductSpellingBytes);
     if (Spelling.empty())
       return reuseLongProductTerm(Begin, ParseNormally);
     const auto It = ProductTerms.find(Spelling);
@@ -163,18 +165,40 @@ private:
     const auto Prefix =
         Input.take_front(limits::symbolic::kSymParseProductSpellingBytes);
     const auto It = LongProductTerms.find(Prefix);
-    if (It != LongProductTerms.end() && Depth <= It->second.Term.Depth) {
-      const auto Saved = It->second.Spelling;
-      if (Input.drop_front(Prefix.size())
-              .starts_with(Saved.drop_front(Prefix.size()))) {
-        Lex.skipSpelling(Input.take_front(Saved.size()));
-        return It->second.Term.Value;
+    if (It != LongProductTerms.end()) {
+      const auto &Entry = It->second;
+      if (Entry.MaxLength) {
+        // Shared prefixes can denote different fields with the same length.
+        // Look up complete spellings and scan only as far as a known field.
+        const auto Full = Lex.parenthesizedSpelling(Begin, Entry.MaxLength);
+        const auto Known = ProductTerms.find(Full);
+        if (Known != ProductTerms.end() && Depth <= Known->second.Depth) {
+          Lex.skipSpelling(Full);
+          return Known->second.Value;
+        }
+      } else if (Depth <= Entry.Term.Depth &&
+                 Input.drop_front(Prefix.size())
+                     .starts_with(Entry.Spelling.drop_front(Prefix.size()))) {
+        Lex.skipSpelling(Input.take_front(Entry.Spelling.size()));
+        return Entry.Term.Value;
       }
     }
     const auto Result = ParseNormally();
     if (Result) {
       const auto Full = Input.take_front(Lex.peek().Offset - Begin).rtrim();
-      LongProductTerms[Prefix] = {Full, {Result, Depth}};
+      // Parsing a nested call can grow either map. Reacquire the entry.
+      auto &Entry = LongProductTerms[Prefix];
+      if (!Entry.MaxLength &&
+          (Entry.Spelling.empty() || Entry.Spelling == Full))
+        Entry = {Full, {Result, Depth}, 0};
+      else {
+        if (!Entry.MaxLength) {
+          ProductTerms[Entry.Spelling] = Entry.Term;
+          Entry.MaxLength = Entry.Spelling.size();
+        }
+        Entry.MaxLength = std::max(Entry.MaxLength, Full.size());
+        ProductTerms[Full] = {Result, Depth};
+      }
     }
     return Result;
   }
@@ -271,6 +295,7 @@ private:
   struct LongTerm {
     llvm::StringRef Spelling;
     ParsedTerm Term;
+    size_t MaxLength = 0;
   };
   llvm::DenseMap<llvm::StringRef, LongTerm> LongProductTerms;
   SymContext &Ctx;

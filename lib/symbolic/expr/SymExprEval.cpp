@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../SymFunnel.h"
+#include "../SymWordProduct.h"
 
 #include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
@@ -1051,26 +1052,9 @@ void evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
     return;
   }
   case SymOp::Mul: {
-    // A small signed coefficient times a power of two needs only one
-    // word multiply. Restore its sign and shift in the original modulus.
-    if (W > 64 && NumArgs == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
-      const auto &Scale = Arg(0);
-      const unsigned Shift = Scale.countr_zero();
-      if (Shift < W && Scale.getSignificantBits() - Shift <= 64) {
-        const unsigned Bits = std::min(64u, W - Shift);
-        uint64_t Multiplier = Scale.extractBitsAsZExtValue(Bits, Shift);
-        const bool Negative = Scale.isNegative();
-        if (Negative)
-          Multiplier = -uint64_t(llvm::SignExtend64(Multiplier, Bits));
-        Result = Arg(1);
-        if (Multiplier != 1)
-          Result *= Multiplier;
-        if (Negative)
-          Result.negate();
-        Result <<= Shift;
-        return;
-      }
-    }
+    if (W > 64 && NumArgs == 2 && Ctx.isConst(Ctx.operand(R, 0)) &&
+        detail::multiplyByShortScale(Arg(0), Arg(1), Result))
+      return;
     Start(1);
     for (size_t I = 1; I < NumArgs && !Result.isZero(); ++I)
       Result *= Arg(I);

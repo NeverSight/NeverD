@@ -188,6 +188,10 @@ CALL/RET distinguish actual outcomes from PC inequality. Both generated C
 routes run through Clang/NeverC at O0/O2. Separate software cases cover BTF
 clearing, deferred/failed entry, v1 refusal and raw-TF REP group inputs. The
 local KVM masks DEBUGCTL.BTF; accepted MSR writes do not qualify execution.
+A hypervisor may not virtualize BTF either, and then ptrace block steps stop
+after every instruction (seen on Xeon 6975P-C CI runners). The oracle probes
+`nop; jmp` first; such a host keeps the single-step comparisons and reports
+the branch half skipped.
 Repeat on both SDKs and P/E cores, retaining the precise oracle limitations.
 
 `X64PagedDebugTest.*` in `NeverDX64PagedExecutionTests` qualifies the opt-in
@@ -208,6 +212,11 @@ paged-execution and continuation source/export regressions. See the
 Native tests disable debugger interception and compare all RAM and represented
 state, including DR6/DR7. The shared Intel host gate bounds those native
 comparisons; software admission tests retain their ordinary host coverage.
+The legacy control, machine-status, halt, stack, system-selector and VM86
+rows, fast system calls, mode transitions and INIT/SIPI startup take the same
+gate: AMD runners differ there in SYSENTER, segment caches and CR3 checks.
+Each paging comparison bounds `KVM_RUN` at 20 s, so a guest that misses its
+stop fails with its RIP and CR2 instead of hanging the suite.
 They cover all enable pairs, RF/TF, coincident causes,
 MOV/POP SS, original linear addresses, fetch/operand/PVI faults and failed
 debug entry. x64 adds eligible/masked IRQ/NMI and IRET/RETF targets, including
@@ -373,7 +382,10 @@ explicit TF/ICEBP binding. The native matrix disables KVM guest debugging,
 executes original instruction sequences and halts in real exception handlers.
 It compares DR6/DR7, full GPR/segment state, flags, CR2, inhibition and all RAM
 under legacy/PAE paging, independent code/stack/gate widths, CPL0/3, RF and
-sticky DR6 inputs. Disabled breakpoint comparators deliberately match the
+sticky DR6 inputs. A host with bus-lock detection or RTM lets MOV DR6 clear
+DR6 bit 11 or 16, which the model keeps reserved; `X86NativeDebugStatus.h`
+finds those bits in a throwaway VM, and native DR6 comparisons leave out
+exactly them. Disabled breakpoint comparators deliberately match the
 instruction addresses. Cases include POPF/IRET TF transitions, MOV/POP SS and
 LSS, REP progress, near/far control, SYSENTER/SYSEXIT, faults, software entries
 and failed #DB gate/frame/target entry. Original handlers count #DB events,
@@ -4732,6 +4744,13 @@ Use `--carry-masks` to place holes above and below the bits an even multiplier
 can carry into the result. Width 2,359,301 and case 3 generate 163,838 factors.
 The 313-factor native fixture exercises both source views against the original
 arithmetic, including a factor whose low weight retains mixed products.
+
+Use `--sparse-masks --width 3145741 --case 3` for a 245,757-factor
+product with disjoint striped masks, odd carries, absorbed OR and AND-NOT
+bits, and a surviving one-bit overlap. Use `--reference` for the reduced
+expression or `--counted` for the original factors with their multiplicities.
+The 389-factor x86 fixture executes both source views against the original
+32-bit arithmetic at Clang O0 and O2.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
@@ -12485,6 +12504,10 @@ The generated paged execution suite exercises the actual HighC validator that
 exposed the reserved-key collision. Host floating-conversion fixtures link
 `libm` on POSIX when scalar FMA needs a library call.
 
+`HighControlFlowSemantics.ImpliedGuardsPreserveSeparateObservations` checks
+that condition folding keeps distinct atomic, ordered and segment-relative
+observations while still combining tests of one captured scalar.
+
 `HighControlFlowDAG.*` in `NeverDHighControlFlowTests` checks single-use
 condition folding on large shared expression graphs. Shared reads retain
 their multiplicity without expanding every path, and substitution reaches a
@@ -12521,11 +12544,31 @@ condition still executes independently.
 
 `HighBoundPrivateFrameCopies.*` in `NeverDHighControlFlowTests` checks copies through nonescaping private frame slots after call ABI binding, including branches, slot reuse and agreement across guard contexts. For x64 and AArch64, the emitted C runs at `-O0` and `-O2` with undefined-behavior traps and independent arithmetic checks. Negative cases preserve the original function for frame escape, unknown call ABIs, missing or inconsistent frame aliases, reassigned entry inputs, overlapping accesses, ordered or atomic memory, malformed statements, cycles and exhausted budgets. Ordinary value conversions must not become PHI copies.
 
+`HighControlFlowSemantics.PhiCoalescingKeepsDistinctIncomingValues` checks
+that a PHI copy on one path cannot merge distinct values used on a different
+path before any definition. It covers direct and transitive copies.
+
 `HighIntegerSignedness.*` in `NeverDHighControlFlowTests` checks the late pass that declares each register or temporary local signed or unsigned by what most of its uses read. Wrapping arithmetic, logical shifts and unsigned comparisons favor unsigned; signed comparisons, signed division, arithmetic shifts and sign extension favor signed; a conversion to an integer as wide as its operand favors the signedness it converts to; a shift count reads unsigned, so its masking arithmetic prints without a signed view; a local with any non-integer use keeps its types. The emitted C runs at `-O0` and `-O2` with undefined-behavior traps against independent reference arithmetic, including a signed comparison of a local that became unsigned.
+
+`HighValueForward.CallCaptureRetainsTheAssignmentConversion` executes a
+forwarded call's byte test and signed word comparison at O0 and O2. The
+boundary inputs distinguish the captured type from the full return value
+and each case checks that the call runs exactly once.
 
 `HighNarrowLocals.*` in `NeverDHighControlFlowTests` checks the late pass that declares a register or temporary local only as wide as its reads take: every read takes at most its low N bytes and every definition extends a value of at most N bytes or is a constant that keeps its meaning in N bytes. A constant definition keeps only its low bytes; a wide read, an incoming register, a join, a call result or a definition that computes all register bytes keeps the declaration. The emitted C runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic.
 
+The large-function `HighValueForward` fixtures exercise direct integer calls
+whose next statement is their only use. The emitted C runs at O0 and O2 with
+an independent call counter. Loop snapshots and captures before a backward
+branch target keep their assignments.
+
 `HighValueForward.*` in `NeverDHighControlFlowTests` checks when the HighC writer may fold a single-use value into its use. A loop condition keeps a value whose variables the loop assigns, since one name can denote several SSA values; a reloaded frame slot keeps its value across a store to that slot and folds past a store to another slot. A copy keeps its value when its source is reassigned before the use. Each case runs at `-O0` and `-O2` with undefined-behavior traps.
+
+`HighControlFlowSemantics.AdjacentLoadRequiresUnconditionalUse` checks that
+a preceding read still runs on paths that skip an operand. It exercises all
+three short-circuit forms and an indirect target with its own effect.
+`HighValueForward.ConditionalUseStillReadsTheCapturedMemberOnBothPaths`
+executes emitted C at O0 and O2 with an observer on the field read.
 
 `HighCIntegerConversion.*` in `NeverDHighControlFlowTests` checks the integer conversions the HighC writer leaves to C. A conversion inside an operand that keeps the bytes an outer conversion keeps prints no cast of its own; an assignment to a declared integer local and a return convert implicitly, and a literal is spelled as the value it converts to, while a pointer keeps its explicit conversion. Stores convert like assignments, and a zero-extended argument to a typed wider parameter keeps its extension. A callee whose debug symbol has no type, or that nothing declares while the code reads more than an int of its result, returns its whole register, so a 64-bit pointer keeps its upper half. Each case runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic. Non-Windows fixture executables link the math library so fused floating operations also execute on hosts where those builtins lower to library calls.
 
@@ -14398,6 +14441,10 @@ admission through both decoder modes, LowIR, MedIR, native LLVM and C rendering.
 Handwritten legacy intrinsics, masked LLVM functions and hidden HighIR branches
 must fail recoverably before source publication. These tests protect the missing
 machine-state boundary; they do not qualify kernel continuation execution.
+
+The callee-save visibility cases cover explicit and recorded Win64 call
+arguments, a call with its own home space, and a dynamic frame-relative read.
+They exercise the combined source pass and its individual callee-save entry.
 
 `NeverDMedPrologueSavesTests` runs the same save, restore, overlapping-store,
 return-address and process-entry cases through separate and combined source

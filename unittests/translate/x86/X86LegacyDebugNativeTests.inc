@@ -629,7 +629,9 @@ protected:
     EXPECT_EQ(Special.cr3, Memory->controls().CR3);
     EXPECT_EQ(Special.cr4, Memory->controls().CR4);
     EXPECT_EQ(Special.efer, Memory->controls().EFER);
-    EXPECT_EQ(Debug.dr6, State.Debug->DR6);
+    // Status bits the host implements and the model keeps reserved.
+    const uint64_t Unmodeled = neverd::test::clearableDR6StatusBits();
+    EXPECT_EQ(Debug.dr6 & ~Unmodeled, State.Debug->DR6 & ~Unmodeled);
     EXPECT_EQ(Debug.dr7, State.Debug->DR7);
     if (RegistersAccess || Watch)
       for (unsigned Slot = 0; Slot != 4; ++Slot)

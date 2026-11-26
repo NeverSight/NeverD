@@ -22,13 +22,18 @@ TEST_F(X86LegacyBranchDebugTest, OriginalProtectedBranchSelection) {
   if (!neverd::test::hostCpuIsIntel())
     GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   unsigned Comparisons = 0;
+  bool BlockSteps = true;
   for (bool Code16 : {false, true}) {
     neverd::test::X86BranchDebugOracle CPU;
     using Mode = neverd::test::X86BranchDebugOracle::Mode;
     ASSERT_NO_FATAL_FAILURE(
         CPU.initialize(Code16 ? Mode::Code16 : Mode::Code32));
+    BlockSteps = CPU.stepsByBlocks();
+    ASSERT_FALSE(HasFatalFailure());
     for (const auto &Case : neverd::test::x86BranchDebugCases(Code16))
       for (bool Branch : {false, true}) {
+        if (Branch && !BlockSteps)
+          continue;
         SCOPED_TRACE(testing::Message() << "code16=" << Code16 << " branch="
                                         << Branch << " case=" << Comparisons);
         neverd::test::X86BranchDebugOracle::Result Native;
@@ -63,6 +68,8 @@ TEST_F(X86LegacyBranchDebugTest, OriginalProtectedBranchSelection) {
       }
   }
   RecordProperty("branch_selection_comparisons", Comparisons);
+  if (!BlockSteps)
+    GTEST_SKIP() << neverd::test::X86BranchDebugOracle::NoBlockStepReason;
 }
 #endif
 

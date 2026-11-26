@@ -90,6 +90,8 @@ TEST_P(X86LegacyStackNativeTest, SegmentLimitsAreCheckedAtEachActualAccess) {
 }
 
 TEST_P(X86LegacyStackNativeTest, WordStackWrapAndNonzeroBaseKeepHighRegisters) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   ExtraMemoryChecks = {{0x20000, 256}, {0x2ff80, 256}, {0x2c080, 128}};
   for (bool Code32 : {false, true})
     for (unsigned Width : {2u, 4u})

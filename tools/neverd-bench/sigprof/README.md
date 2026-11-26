@@ -74,6 +74,16 @@ with both SDKs loaded from the same pathname. For warm-file-cache measurements,
 prime each copy first. On macOS the loaded image UUID identifies the version.
 Measure process start to exit separately from time inside the decompile command.
 
+For a macOS pre-main tail, use a fresh process for every launch. Compare the
+first executable mapping of a fresh SDK copy, a first mapping after reading
+its bytes, and a repeat launch using the same file. Check residency with
+`mincore` before timing and verify the file hash afterwards. At the first
+statement of `main`, a probe can timestamp entry and block on a pipe. Once
+the child is blocked, the parent can read its completed runnable interval
+with `proc_pid_rusage`. For a single-threaded launch, runnable time minus
+CPU time estimates time waiting for a CPU. Record the remaining elapsed
+time separately. An SDK-free process timing `dlopen` isolates library load.
+
 The comparison exits nonzero and suppresses paired results if any command fails,
 any output is missing, or any full SHA-256 differs (including between repeated
 runs of the same side). A positive `--runs` count is required. CPU ratios are

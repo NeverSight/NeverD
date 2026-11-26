@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """NDDB inputs across the public SDK, CLI and worker; no target execution."""
 import argparse
+from contextlib import closing
 import ctypes
 import hashlib
 import json
@@ -16,7 +17,7 @@ import zlib
 
 
 def pack(path, data, name="owned.bin", base="0x1000", chunk_size=128 * 1024):
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.executescript("""
             PRAGMA application_id = 1313096770;
             CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -45,12 +46,12 @@ def pack(path, data, name="owned.bin", base="0x1000", chunk_size=128 * 1024):
 
 
 def mutate(path, sql, parameters=()):
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute(sql, parameters)
 
 
 def run(arguments, expected=(0, 2, 3)):
-    result = subprocess.run(arguments, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(arguments, capture_output=True, encoding="utf-8", timeout=60)
     assert result.returncode in expected, (result.returncode, result.stdout, result.stderr)
     return result
 
@@ -312,7 +313,7 @@ def worker_checks(executable, root, a, b):
         # Keep a WAL writer connected. Its commits leave the main file alone.
         wal_path = root / "wal.nddb"
         shutil.copyfile(a, wal_path)
-        with sqlite3.connect(wal_path) as db:
+        with closing(sqlite3.connect(wal_path)) as db, db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA wal_autocheckpoint=0")
             db.execute("UPDATE meta SET value='before' WHERE key='generator'")

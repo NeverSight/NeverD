@@ -60,6 +60,8 @@ TEST_P(X86LegacyControlNativeTest, WidthsRegistersIgnoredModAndPrefixes) {
 }
 
 TEST_P(X86LegacyControlNativeTest, PrivilegeLockAndUndefinedRegisterPriority) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Write : {false, true})
     for (unsigned CR = 0; CR != 8; ++CR)
       for (unsigned CPL = 0; CPL != 4; ++CPL)
@@ -110,6 +112,8 @@ TEST_P(X86LegacyControlNativeTest, CR0FixedIgnoredAndInvalidBits) {
 }
 
 TEST_P(X86LegacyControlNativeTest, CR3RebindAndPAEPointerValidation) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Low = 0; Low != 32; ++Low) {
     ASSERT_NO_FATAL_FAILURE(check(3, true, 0x13000 | Low, 6, 3, true, false, 0,
                                   0, [&](kvm_sregs &, kvm_regs &) {

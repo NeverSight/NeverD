@@ -858,15 +858,29 @@ sym::SymRef Translator::in(llvm::Value *Root) {
     }
 
     Active.erase(V);
-    Memo[V] = build(I);
+    const sym::SymRef Built = build(I);
+    // A builder that answers with one of the instruction's own operands has
+    // applied an identity, which leaves that instruction unneeded. Values a
+    // region computes twice share one node too, but that is no identity.
+    if (Built.isValid() && !OperandFold)
+      for (llvm::Value *Kid : children(I))
+        if (Memo.lookup(Kid) == Built) {
+          OperandFold = true;
+          break;
+        }
+    Memo[V] = Built;
   }
   return Memo.lookup(Root);
 }
 
-bool Translator::foldedToOperand(const llvm::Instruction &Root,
-                                 sym::SymRef Value, size_t MinNodes) const {
-  return Memo.size() >= MinNodes &&
-         llvm::any_of(Root.operands(), [&](const llvm::Use &Op) {
+bool Translator::foldedByConstruction(const llvm::Instruction &Root,
+                                      sym::SymRef Value,
+                                      size_t MinNodes) const {
+  if (Memo.size() < MinNodes)
+    return false;
+  // An interior instruction that built as one of its operands: derivation
+  // finds nothing left to change in what construction made of the region.
+  return OperandFold || llvm::any_of(Root.operands(), [&](const llvm::Use &Op) {
            return Memo.lookup(Op.get()) == Value;
          });
 }

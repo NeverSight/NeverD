@@ -197,35 +197,36 @@ llvm::APInt OpSemantics::apply(GramOp Op,
   }
 }
 
-template <typename Word>
+template <typename Word, bool BroadcastLeft>
 void OpSemantics::applyColumn(GramOp Op, const Word *A, const Word *B,
                               Word *Out, size_t Count) const {
   const unsigned Width = Ones.getBitWidth();
   const Word Mask = static_cast<Word>(Ones.getZExtValue());
+  const auto Left = [A](size_t I) { return A[BroadcastLeft ? 0 : I]; };
   const auto Each = [&](auto Value) {
     for (size_t I = 0; I != Count; ++I)
       Out[I] = Value(I);
   };
   switch (Op) {
   case GramOp::Add:
-    return Each([=](size_t I) { return (A[I] + B[I]) & Mask; });
+    return Each([=](size_t I) { return (Left(I) + B[I]) & Mask; });
   case GramOp::Sub:
-    return Each([=](size_t I) { return (A[I] - B[I]) & Mask; });
+    return Each([=](size_t I) { return (Left(I) - B[I]) & Mask; });
   case GramOp::Mul:
-    return Each([=](size_t I) { return (A[I] * B[I]) & Mask; });
+    return Each([=](size_t I) { return (Left(I) * B[I]) & Mask; });
   case GramOp::And:
-    return Each([=](size_t I) { return A[I] & B[I]; });
+    return Each([=](size_t I) { return Left(I) & B[I]; });
   case GramOp::Or:
-    return Each([=](size_t I) { return A[I] | B[I]; });
+    return Each([=](size_t I) { return Left(I) | B[I]; });
   case GramOp::Xor:
-    return Each([=](size_t I) { return A[I] ^ B[I]; });
+    return Each([=](size_t I) { return Left(I) ^ B[I]; });
   case GramOp::Shl:
     return Each([=](size_t I) {
-      return B[I] >= Width ? Word(0) : (A[I] << B[I]) & Mask;
+      return B[I] >= Width ? Word(0) : (Left(I) << B[I]) & Mask;
     });
   case GramOp::LShr:
     return Each(
-        [=](size_t I) { return B[I] >= Width ? Word(0) : A[I] >> B[I]; });
+        [=](size_t I) { return B[I] >= Width ? Word(0) : Left(I) >> B[I]; });
   case GramOp::AShr:
     return Each([=](size_t I) {
       // The value's sign fills the word, so shifting past its width leaves that
@@ -233,13 +234,13 @@ void OpSemantics::applyColumn(GramOp Op, const Word *A, const Word *B,
       constexpr unsigned WordBits = sizeof(Word) * 8;
       const unsigned Spare = WordBits - Width;
       const auto Signed =
-          static_cast<std::make_signed_t<Word>>(A[I] << Spare) >> Spare;
+          static_cast<std::make_signed_t<Word>>(Left(I) << Spare) >> Spare;
       return Word(Signed >> std::min<Word>(B[I], WordBits - 1)) & Mask;
     });
   case GramOp::Not:
-    return Each([=](size_t I) { return ~A[I] & Mask; });
+    return Each([=](size_t I) { return ~Left(I) & Mask; });
   case GramOp::Neg:
-    return Each([=](size_t I) { return (0 - A[I]) & Mask; });
+    return Each([=](size_t I) { return (0 - Left(I)) & Mask; });
   }
   llvm_unreachable("unhandled grammar operator");
 }
@@ -250,6 +251,15 @@ template void OpSemantics::applyColumn(GramOp, const uint32_t *,
 template void OpSemantics::applyColumn(GramOp, const uint64_t *,
                                        const uint64_t *, uint64_t *,
                                        size_t) const;
+
+template void OpSemantics::applyColumn<uint32_t, true>(GramOp, const uint32_t *,
+                                                       const uint32_t *,
+                                                       uint32_t *,
+                                                       size_t) const;
+template void OpSemantics::applyColumn<uint64_t, true>(GramOp, const uint64_t *,
+                                                       const uint64_t *,
+                                                       uint64_t *,
+                                                       size_t) const;
 
 //===----------------------------------------------------------------------===//
 // Behaviours

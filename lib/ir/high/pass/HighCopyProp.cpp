@@ -30,6 +30,7 @@
 #include "HighDCEDetail.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/HighExprEvaluation.h"
 #include "neverd/ir/high/MedToHigh.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -596,9 +597,10 @@ bool inlineAdjacentLoads(HighFunc &Func) {
       return nullptr;
     if (E->Kind == ExprKind::Var && VK(E->Var) == Key)
       return &E;
-    for (ExprPtr &C : E->Operands)
-      if (ExprPtr *Found = SlotOf(C, Key))
-        return Found;
+    for (size_t I = 0; I < E->Operands.size(); ++I)
+      if (!highOperandMayBeSkipped(*E, I))
+        if (ExprPtr *Found = SlotOf(E->Operands[I], Key))
+          return Found;
     return nullptr;
   };
   // The statement \p N reads its operands before any effect of its own, so a
@@ -607,6 +609,8 @@ bool inlineAdjacentLoads(HighFunc &Func) {
   auto Takes = [&](HighStmt &N, const VarKey &Key) -> ExprPtr * {
     auto CallArgument = [&](ExprPtr &Call) -> ExprPtr * {
       if (!Call || Call->Kind != ExprKind::Call)
+        return nullptr;
+      if (!Pure(Call->IndirectTarget))
         return nullptr;
       for (const ExprPtr &Operand : Call->Operands)
         if (!Pure(Operand))

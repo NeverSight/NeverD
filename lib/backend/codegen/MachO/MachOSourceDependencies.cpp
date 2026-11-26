@@ -476,7 +476,8 @@ machOSourceLibraryCommandBytes(const BinaryImage &Original,
 
 llvm::Expected<std::map<std::string, uint32_t>>
 admitMachOSourceLibraries(std::vector<uint8_t> &B,
-                          llvm::ArrayRef<SourcePatchDependency> Requests) {
+                          llvm::ArrayRef<SourcePatchDependency> Requests,
+                          const std::map<std::string, bool> &ObjectImports) {
   auto State = readMachODependencyState(B);
   if (!State)
     return State.takeError();
@@ -505,8 +506,12 @@ admitMachOSourceLibraries(std::vector<uint8_t> &B,
       if (Ordinal > Parsed.MachODylibReferences.size())
         continue;
       const auto &R = Parsed.MachODylibReferences[Ordinal - 1];
-      if (R.Weak)
-        return fail(kWeakLibrary);
+      if (R.Weak) {
+        const auto It = ObjectImports.find(
+            macho_arm64e_abi::importName(I.Symbol, ObjectImports));
+        if (It == ObjectImports.end() || !It->second)
+          return fail(kWeakLibrary);
+      }
       continue;
     }
     Libraries.emplace(I.Library, Libraries.size() + 1);

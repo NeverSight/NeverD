@@ -95,8 +95,12 @@ public:
   /// an opaque input.
   sym::SymRef in(llvm::Value *Root);
 
-  bool foldedToOperand(const llvm::Instruction &Root, sym::SymRef Value,
-                       size_t MinNodes) const;
+  /// Whether construction already applied an identity to the region rooted at
+  /// \p Root, which had at least \p MinNodes values: \p Value is one of the
+  /// root's operands, or an instruction inside built as one of its own. The
+  /// region qualified for measurement however small what construction left.
+  bool foldedByConstruction(const llvm::Instruction &Root, sym::SymRef Value,
+                            size_t MinNodes) const;
 
   /// Whether \p R still references every instruction that became an opaque
   /// input on the way in.  A candidate may simplify around such a boundary,
@@ -283,6 +287,8 @@ private:
   bool CarryComparisons = false;
   bool ExpandSharedPure = false;
   bool SharedBoundary = false;
+  /// Some region instruction built as one of its own operands.
+  bool OperandFold = false;
   llvm::DenseMap<const llvm::Value *, sym::SymRef> Memo;
   llvm::DenseSet<const llvm::Value *> Region;
   /// Engine node index to the LLVM value it stands for, for the way back.

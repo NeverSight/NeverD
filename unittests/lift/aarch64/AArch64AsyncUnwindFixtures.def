@@ -159,7 +159,7 @@ ASYNC_FRAME_TEXT(kObjCFramework, "-framework")
 ASYNC_FRAME_TEXT(kFoundation, "Foundation")
 ASYNC_FRAME_TEXT(kObjCExceptions, "-fobjc-exceptions")
 ASYNC_FRAME_TEXT(kObjCWeakClass, "-DNEVERD_WEAK_TYPE")
-ASYNC_FRAME_TEXT(kObjCDirectRef, "-DNEVERD_DIRECT_WEAK_REFERENCE")
+ASYNC_FRAME_TEXT(kObjCWeakDifference, "-DNEVERD_WEAK_DIFFERENCE")
 ASYNC_FRAME_TEXT(kObjCPaths, "native_objc_exception_paths")
 ASYNC_FRAME_TEXT(kObjCBody, R"objc(
 #import <Foundation/Foundation.h>
@@ -171,9 +171,9 @@ ASYNC_FRAME_TEXT(kObjCBody, R"objc(
 #else
 #define CatchType NSException
 #endif
-#ifdef NEVERD_DIRECT_WEAK_REFERENCE
+#ifdef NEVERD_WEAK_DIFFERENCE
 __asm__(".section __DATA_CONST,__const\n"
-        ".quad _OBJC_EHTYPE_$_NSString\n.text");
+        ".long _OBJC_EHTYPE_$_NSString - .\n.text");
 #endif
 extern int source_value(int);
 extern int observe_value(int);

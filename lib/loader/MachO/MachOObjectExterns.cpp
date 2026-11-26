@@ -14,6 +14,7 @@
 
 #include "MachOObjectExterns.h"
 
+#include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/object/SectionNames.h"
 
@@ -26,19 +27,10 @@
 
 namespace neverd::macho_loader {
 
-namespace {
-
 using llvm::object::DataRefImpl;
 using llvm::object::MachOObjectFile;
 
-struct NList {
-  uint8_t Type = 0;
-  uint8_t Sect = 0;
-  uint16_t Desc = 0;
-  uint64_t Value = 0;
-};
-
-NList nlistOf(const MachOObjectFile &Obj, DataRefImpl DRI) {
+ObjectNList readObjectNList(const MachOObjectFile &Obj, DataRefImpl DRI) {
   if (Obj.is64Bit()) {
     const llvm::MachO::nlist_64 Entry = Obj.getSymbol64TableEntry(DRI);
     return {Entry.n_type, Entry.n_sect, Entry.n_desc, Entry.n_value};
@@ -48,17 +40,26 @@ NList nlistOf(const MachOObjectFile &Obj, DataRefImpl DRI) {
           Entry.n_value};
 }
 
-bool isUndefined(const NList &N) {
+std::optional<bool> ObjectNList::importWeakness() const {
+  using namespace llvm::MachO;
+  if ((Type & (N_TYPE | N_STAB | N_EXT)) != N_EXT || Sect != NO_SECT || Value)
+    return std::nullopt;
+  return bool(Desc & N_WEAK_REF);
+}
+
+namespace {
+
+bool isUndefined(const ObjectNList &N) {
   return (N.Type & llvm::MachO::N_TYPE) == llvm::MachO::N_UNDF;
 }
 
 /// An undefined external whose value is not zero is a common symbol of that
 /// many bytes.
-bool isCommon(const NList &N) {
+bool isCommon(const ObjectNList &N) {
   return isUndefined(N) && N.Value != 0 && (N.Type & llvm::MachO::N_EXT) != 0;
 }
 
-uint64_t commonAlignment(const NList &N) {
+uint64_t commonAlignment(const ObjectNList &N) {
   return uint64_t(1) << llvm::MachO::GET_COMM_ALIGN(N.Desc);
 }
 
@@ -102,14 +103,6 @@ bool isGOTPointerReference(Arch A, uint32_t Type) {
   return false;
 }
 
-bool isWeakObjectImport(const MachOObjectFile &Obj,
-                        const llvm::object::SymbolRef &Sym) {
-  using namespace llvm::MachO;
-  const NList N = nlistOf(Obj, Sym.getRawDataRefImpl());
-  return isUndefined(N) && (N.Type & (N_STAB | N_EXT)) == N_EXT &&
-         N.Sect == NO_SECT && N.Value == 0 && (N.Desc & N_WEAK_REF);
-}
-
 llvm::Expected<ObjectExterns> planObjectExterns(const MachOObjectFile &Obj,
                                                 const BinaryImage &Img) {
   object_externs::ExternRequests Requests;
@@ -130,7 +123,7 @@ llvm::Expected<ObjectExterns> planObjectExterns(const MachOObjectFile &Obj,
       if (Sym == Obj.symbol_end())
         continue;
       const DataRefImpl DRI = Sym->getRawDataRefImpl();
-      const NList N = nlistOf(Obj, DRI);
+      const auto N = readObjectNList(Obj, DRI);
       if (!isUndefined(N))
         continue;
       const std::optional<std::string> Name = nameOf(Obj, DRI);
@@ -147,7 +140,7 @@ llvm::Expected<ObjectExterns> planObjectExterns(const MachOObjectFile &Obj,
   // A linker allocates every common symbol, named by a relocation or not.
   for (const llvm::object::SymbolRef &Sym : Obj.symbols()) {
     const DataRefImpl DRI = Sym.getRawDataRefImpl();
-    const NList N = nlistOf(Obj, DRI);
+    const auto N = readObjectNList(Obj, DRI);
     if (!isCommon(N))
       continue;
     if (const std::optional<std::string> Name = nameOf(Obj, DRI))
@@ -197,7 +190,7 @@ void addObjectExterns(const MachOObjectFile &Obj, const ObjectExterns &Externs,
     if (Sym == Obj.symbol_end())
       continue;
     const DataRefImpl DRI = Sym->getRawDataRefImpl();
-    const NList N = nlistOf(Obj, DRI);
+    const auto N = readObjectNList(Obj, DRI);
     const std::optional<std::string> Name = nameOf(Obj, DRI);
     if (!Name)
       continue;
@@ -258,7 +251,7 @@ resolveObjectExtern(const MachOObjectFile &Obj, const ObjectExterns &Externs,
   if (Sym == Obj.symbol_end())
     return std::nullopt;
   const DataRefImpl DRI = Sym->getRawDataRefImpl();
-  const NList N = nlistOf(Obj, DRI);
+  const auto N = readObjectNList(Obj, DRI);
   if (!isUndefined(N))
     return std::nullopt;
   const std::optional<std::string> Name = nameOf(Obj, DRI);

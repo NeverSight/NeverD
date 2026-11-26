@@ -843,6 +843,17 @@ TEST(SymSynth, ColumnSemanticsAgreeWithNodes) {
     for (const GramOp Op : Ops) {
       SCOPED_TRACE(unsigned(Op));
       Sem.applyColumn(Op, A.data(), B.data(), Out.data(), A.size());
+      // Batched final-tier probes reuse one left point across a whole row.
+      // Check every shift boundary and sign against ordinary full columns.
+      if (!isUnaryGramOp(Op)) {
+        std::vector<uint64_t> Row(Values.size());
+        for (size_t I = 0; I != A.size(); I += Row.size()) {
+          Sem.applyColumn<uint64_t, true>(Op, &A[I], B.data() + I, Row.data(),
+                                          Row.size());
+          ASSERT_TRUE(
+              llvm::equal(Row, llvm::ArrayRef(Out).slice(I, Row.size())));
+        }
+      }
       if (Width <= 32) {
         const std::vector<uint32_t> Left(A.begin(), A.end()),
             Right(B.begin(), B.end());
@@ -850,6 +861,15 @@ TEST(SymSynth, ColumnSemanticsAgreeWithNodes) {
         Sem.applyColumn(Op, Left.data(), Right.data(), Narrow.data(),
                         Narrow.size());
         ASSERT_TRUE(llvm::equal(Narrow, Out));
+        if (!isUnaryGramOp(Op)) {
+          std::vector<uint32_t> Row(Values.size());
+          for (size_t I = 0; I != Left.size(); I += Row.size()) {
+            Sem.applyColumn<uint32_t, true>(Op, &Left[I], Right.data() + I,
+                                            Row.data(), Row.size());
+            ASSERT_TRUE(
+                llvm::equal(Row, llvm::ArrayRef(Narrow).slice(I, Row.size())));
+          }
+        }
       }
       for (size_t I = 0; I != A.size(); ++I) {
         const llvm::APInt Args[] = {llvm::APInt(Width, A[I]),

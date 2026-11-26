@@ -2066,12 +2066,13 @@ TEST(AArch64AsyncUnwind, ObjectiveCCatchesAndFinallyPreserveSignedCallers) {
         ASSERT_NE(Other, nullptr);
         ASSERT_NO_FATAL_FAILURE(
             Reject((*Bytes)->getBuffer(), *Strong, Other->Addr));
-        ASSERT_EQ(Compile({kObjCDirectRef, kCompile, Source, kOutput, Object}),
-                  0);
-        auto Direct = llvm::MemoryBuffer::getFile(Object);
-        ASSERT_TRUE(bool(Direct));
+        ASSERT_EQ(
+            Compile({kObjCWeakDifference, kCompile, Source, kOutput, Object}),
+            0);
+        auto Difference = llvm::MemoryBuffer::getFile(Object);
+        ASSERT_TRUE(bool(Difference));
         ASSERT_NO_FATAL_FAILURE(
-            Reject((*Direct)->getBuffer(), *Original, Entry->Addr));
+            Reject((*Difference)->getBuffer(), *Original, Entry->Addr));
       } else {
         std::string Changed = (*Bytes)->getBuffer().str();
         auto File = llvm::object::ObjectFile::createObjectFile(

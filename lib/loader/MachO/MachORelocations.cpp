@@ -775,7 +775,9 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
                                      RAddr);
             Auth.Target = *Target;
           } else {
-            if (Name->empty() || !isWeakObjectImport(Obj, *Symbol))
+            const auto Entry =
+                readObjectNList(Obj, Symbol->getRawDataRefImpl());
+            if (Name->empty() || !Entry.importWeakness().value_or(false))
               return relocationError(arm64e::kInvalidObjectPointer, SecAddr,
                                      RAddr);
             Auth.WeakImport = true;

@@ -382,6 +382,33 @@ TEST(SymParse, RepeatedProductFieldsHonorDepthAndReportTheOriginalToken) {
   EXPECT_FALSE(parseSymExpr(Ctx, Product + "*varid(100)", 16, Options).ok());
 }
 
+TEST(SymParse, LongProductCallsWithSharedPrefixesKeepExactSpellingAndDepth) {
+  SymContext C;
+  const std::string Prefix = "zext(" + std::string(80, ' ') + "extract((a+b),";
+  const auto X = Prefix + "1,3),16)";
+  const auto Y = Prefix + "2,3),16)";
+  const auto Z = Prefix + "10,3),16)";
+  const auto Product = "a*b*c*" + X + "*" + Y + "*" + Z + "*" + Y + "*" + X;
+  SymParseOptions Options;
+  Options.MaxNesting = 3;
+  const auto R = parseSymExpr(C, Product, 16, Options);
+  ASSERT_TRUE(R.ok()) << R.Error;
+  const auto A = C.mkVar("a", 16), B = C.mkVar("b", 16), V = C.mkAdd(A, B);
+  auto field = [&](unsigned Low) {
+    return C.mkZExt(C.mkExtract(V, Low, 3), 16);
+  };
+  EXPECT_EQ(R.Root, C.mkMul({A, B, C.mkVar("c", 16), field(1), field(2),
+                             field(10), field(2), field(1)}));
+
+  const auto Invalid = Product + "*" + Prefix + "2,?),16)";
+  const auto Error = parseSymExpr(C, Invalid, 16, Options);
+  ASSERT_FALSE(Error.ok());
+  EXPECT_EQ(Error.ErrorOffset, Invalid.find('?'));
+  const auto Deep = parseSymExpr(C, Product + "*(" + Y + ")", 16, Options);
+  ASSERT_FALSE(Deep.ok());
+  EXPECT_NE(Deep.Error.find("nests too deeply"), std::string::npos);
+}
+
 TEST(SymParse, CallerOwnsTheNestingAndWidthPolicy) {
   SymContext Ctx;
 

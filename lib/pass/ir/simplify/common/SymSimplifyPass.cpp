@@ -337,9 +337,11 @@ SymSimplifyResult rewriteRoot(llvm::Instruction *Root,
     *HadSharedBoundary = Xlat.hasSharedBoundary();
   if (!Before.isValid())
     return Result;
-  // Construction can already fold the root to one of its operands. The
-  // original region qualified for measurement even if that operand is small.
-  if (Xlat.foldedToOperand(*Root, Before, Opts.MinMeasuredNodes) &&
+  // Construction can already apply an identity, at the root or inside it:
+  // zext((x ^ (x | y)) | (x | y)) builds as zext(x | y). The original region
+  // qualified for measurement, and derivation would find nothing left to
+  // change in what construction made of it.
+  if (Xlat.foldedByConstruction(*Root, Before, Opts.MinMeasuredNodes) &&
       materializeCandidate(Root, Xlat, Before, Opts, Dead)) {
     Result.Rewrites = 1;
     Result.Outcome = SymSimplifyOutcome::Rewritten;

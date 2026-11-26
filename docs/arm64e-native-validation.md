@@ -1447,11 +1447,14 @@ alternative handlers. [Apple Objective-C exception runtime](https://github.com/a
 An Objective-C replacement with the same image-info version and flags reuses
 the original runtime declaration. Foundation supplies the type descriptor for
 `NSException`. For an object that contributes its own weak fallback, such as a
-typed `NSString` catch, the publisher can use the existing sealed GOT slot
-with dyld's weak lookup ordinal. This requires an exported data fallback, a
-separate weak atom and indirect references through that slot. Conflicting
-image flags, additional live atoms in the same storage and direct references
-to a discarded fallback cause publication to fail.
+typed `NSString` catch, the publisher retains the original exported data
+fallback and discards the replacement's separate weak atom. GOT references
+reuse a matching sealed slot or allocate one with dyld's weak lookup ordinal.
+Ordinary and authenticated pointer fields can also bind
+directly to the coalesced symbol, preserving their addends. A static
+difference against discarded storage has no dyld coalescing relocation and
+causes publication to fail, as do conflicting image flags and additional live
+atoms in the same storage.
 
 Each Apple M1 runner passed all 33 publication tests in the
 [Objective-C execution run](https://github.com/gmh5225/test_mac_intel/actions/runs/43294345635). On each runner, the original and redirected
@@ -2516,6 +2519,24 @@ pinned r6 build also reproduced and ran all six Darwin memory programs. With
 an explicit IR frontend and a real arm64e code section, the Release analysis
 suite passed 749 cases and skipped 37. All eleven MIPS object cases passed
 with r8. The r6 package registered X86, ARM and AArch64.
+
+### Published weak imports and GOT references
+
+The `MachOArm64eNativeBindings` tests combine required and optional imports
+in the original dylib and replacement object. The object either supplies a
+second weak data definition or refers to the original export. Each test checks
+the import ordinal, weakness, addend, key and discriminator in the published
+dyld chains. One input has a required symbol and an optional dylib. The test
+checks the raw symbol flag independently of runtime nullability.
+GOT page instructions and both forms of `POINTER_TO_GOT` must
+address one cell. A directly bound pointer has its own addend and signature.
+
+On Apple Silicon, enable `NEVERD_ARM64E_LIFTED_NATIVE=1` when running the tests.
+An arm64 driver loads the arm64e dylib, calls the replaced entry and checks
+authenticated data in process. One driver supplies another weak definition
+and one uses the dylib's fallback. When a weak-loaded provider is absent, the
+direct signed pointer, the ordinary pointer and the contents of its GOT cell
+must all be null. The absolute GOT reference still addresses that cell.
 
 ### Native x1 runner qualification
 

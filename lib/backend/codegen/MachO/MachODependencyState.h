@@ -12,6 +12,7 @@
 #include "neverd/object/MachOLayout.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Error.h"
 
 #include <array>
@@ -48,6 +49,9 @@ struct MachOChainedFixups {
   unsigned LinkeditIndex = 0;
   std::vector<MachOChainedSegment> Segments;
   std::vector<MachOChainedImport> Imports;
+  /// Bind slots whose on-disk symbol is optional. A weak dylib load command
+  /// independently makes a reference nullable at runtime.
+  llvm::DenseSet<uint64_t> WeakImportSlots;
   std::vector<std::string> Libraries;
   /// Regular weak definitions exported by the original image, keyed by the
   /// exact dyld spelling and carrying the linked address of the fallback.
@@ -55,9 +59,18 @@ struct MachOChainedFixups {
   /// Strong per-thread exports name the already-registered dyld descriptor.
   std::map<std::string, uint64_t> ThreadLocalDefinitions;
 
-  using Provider = std::pair<int64_t, bool>; // Library ordinal and weak import.
-  /// A disengaged value records conflicting dyld lookup scopes for a name.
-  std::map<std::string, std::optional<Provider>> uniqueImportProviders() const;
+  struct Provider {
+    /// Each field is known when all original imports for the name agree on it.
+    std::optional<int64_t> Ordinal;
+    std::optional<bool> WeakImport;
+    bool LocalWeakDefinition = false;
+
+    std::optional<bool>
+    bindingStrength(const std::string &Name,
+                    const std::map<std::string, bool> &ObjectImports) const;
+  };
+  std::map<std::string, Provider>
+  uniqueImportProviders(const std::map<std::string, bool> &ObjectImports) const;
 };
 struct MachODependencyState {
   uint32_t CPUType = 0, CPUSubtype = 0;

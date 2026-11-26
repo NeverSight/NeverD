@@ -1900,6 +1900,22 @@ Its target and provider stay unresolved. A GOT relocation addresses the
 symbol's GOT entry. Direct relocations to the same symbol address the symbol
 itself, even when both forms occur in one object.
 
+When publishing a native arm64e object, the undefined symbol's `N_WEAK_REF`
+bit sets the binding strength of each new signed pointer, ordinary pointer
+and call stub. The original image or an explicit dylib declaration supplies
+the library ordinal. Different ordinals for one symbol require an explicit
+provider. A declared weak import can also use an existing weak-loaded dylib.
+Both the dylib and its symbol may be absent at runtime. Existing bindings
+retain their own strength. For GOT reuse the publisher compares the on-disk
+weak-import bit, provider and signing schema. Runtime analyses also account
+for the possibility that a weak-loaded dylib is absent.
+An absolute `.quad symbol@GOT` becomes a dyld rebase to that cell.
+The PC-relative `.long symbol@GOT-.` and the GOT page instructions address
+the same cell. A direct pointer carries its own addend and signing recipe.
+An original weak data export supplies the fallback for a separate replacement
+weak definition, even when the original had no GOT cell or import row for it.
+Direct and GOT references both use dyld's weak lookup ordinal.
+
 `installMachOObjectPatch` also connects this native object profile to the shared
 publication transaction. Before final signing, native arm64e publication
 migrates threaded inputs through the existing checked chained-fixup converter;
@@ -1929,9 +1945,10 @@ Native compact language records retain LSDA addresses and personality slots.
 The arm64e personality slot uses IA/address diversity with zero discriminator;
 RTTI slots remain ordinary pointers. Existing unambiguous personality slots
 can be reused, and explicit providers can allocate new slots. Native
-`ARM64_RELOC_POINTER_TO_GOT` uses the linker's addend-free PC-relative contract;
-GOT page/pageoff references use the same allocated slots. The shared chain
-installer handles both pointer kinds in modern and threaded images. Language
+`ARM64_RELOC_POINTER_TO_GOT` supports a signed PC-relative word or an absolute
+pointer-sized field in relocatable data. GOT page/pageoff references use the
+same allocated slots. The shared chain installer handles both pointer kinds
+in modern and threaded images. Language
 name resolution consumes canonical ordinary bindings and authenticated recipes
 even when a new slot has no indirect-symbol-table entry; it does not reclassify
 an authenticated slot as ordinary import storage.
@@ -8417,11 +8434,17 @@ For a scaled product that reads only the low lane of an extension or
 concatenation, the evaluation plan can read that lane directly. A shared
 use that observes more bits keeps the wider value. A binary product whose observed prefix costs fewer limb
 operations can multiply at that precision. The evaluator takes the widest
-demand across all uses before shortening either operand. A fixed shift or rotation
+demand across all uses before shortening either operand. At wide widths a
+signed literal with a short significand only multiplies its significant limbs.
+Smaller multi-limb products use the native bitvector multiplication. Constant
+folding, evaluation and polynomial normalization use the same word arithmetic to
+restore its sign and zero suffix. A fixed shift or rotation
 can supply a low word from its source when every observed bit precedes the
 first padding or wrapped bit.
 Repeated long factor calls share a parse result after their complete spelling
-and the applicable nesting depth have been checked.
+and the applicable nesting depth have been checked. Calls with the same short
+prefix keep separate complete spellings. A lookup stops at the longest spelling
+already parsed for that prefix.
 A scaled product can also contain several weighted fields per factor. If
 the outer scale leaves `p` bits and every weight is divisible by
 `2^ceil(p/2)`, products of two perturbations vanish. Recovery groups the
@@ -8443,6 +8466,14 @@ the width of the other factors. The product restores the discarded zero suffix
 once after multiplying their live bits.
 An even scalar shifts the live interval of each mask. Bits discarded above
 the observed width and holes below the shifted field cannot change a carry.
+For two nonuniform masks, the product reader intersects their possible set bits
+in the common observed window. An odd multiplier congruent to one there
+preserves holes. Other odd multipliers can carry from the first possible one
+into higher bits. If the second mask or the literal join erases all possible
+bits, only the scalar offset contributes. Offsets equal at the observed product
+precision share one modular power and cofactor. An affine factor whose offset
+and coefficient share a power of two can supply the external product scale.
+The quotient and any lower-weight factors retain their full modular value.
 When every live coefficient is the top bit, only the parity of the input
 fields contributes to the result.
 Equal projected fields accumulate their signed coefficients modulo
@@ -8463,8 +8494,9 @@ reads the arbitrary-width values from the same grid.
 Enumeration stores one 32-bit sample per point for widths through 32.
 Wider words retain all required limbs.
 For enumerated candidates, a bounded hash spans the measurement grid. A
-matching hash still requires equality of the complete measurement vectors
-before a candidate reaches independent validation.
+native-word column stores the sampled blocks together. Each operation reads
+the same point order. A matching hash still requires equality of the complete
+measurement vectors before a candidate reaches independent validation.
 When translating flagged LLVM arithmetic, the source width of a sign or zero
 extension bounds its result. Those bounds can justify a surrounding no-wrap
 sum or product while keeping every operand's definedness checks.
@@ -12570,6 +12602,9 @@ regions, and exact symbol/relocation evidence before reachable decoding. If
 reachable decoding runs, an asserted entry must decode in its stated mode.
 Contradictory or unsupported assertions fail the load. The mode of a different
 unreached function remains unknown until it has its own evidence or assertion.
+A whole unit leaves such a function out and names it with that option; an
+LLVM unit that admits no function fails naming the first, and the admission
+diagnostic gives the missing mode, not the decode failure it causes.
 
 `BinaryImage::readImmutableARMLiteral` is the shared authority for folding a
 fixed-width read from a `$d` island inside executable storage. Both HighIR and
@@ -18905,8 +18940,10 @@ representatives in discovery order before offering the candidate. An
 unsuccessful search can discard its recipes without interning those nodes.
 For machine words, the cost bound or the remaining work can make the current
 tier the last one reachable. The search screens those candidates at one grid
-point and checks survivors against the full grid. If any survivor matches, it
-replays the tier in discovery order for the independent checker and verifier.
+point in operand rows and checks survivors against the full grid. Neutral and
+absorbing operands reuse the represented column, with each offer charged.
+If any survivor matches, it replays the tier in discovery order for the
+independent checker and verifier.
 An unsuccessful final tier charges every visited candidate without storing
 signatures that no later tier can read.
 
@@ -20275,6 +20312,8 @@ The same owner also proves an Optional around a labeled tuple of two independent
 The shared frame analysis distinguishes a live opaque value from completely initialized bytes. Independently authenticated initialize/read/destroy effects carry one bounded type identity and extent; every reaching path and loop backedge must agree on live values, and destruction must precede frame release. Raw loads, untyped borrows, overlapping writes, duplicate initialization, missing destruction and uncertain aliases cannot consume this fact. May-written padding retains its previous possible frame-pointer taint; only definite stores can remove it. Existing initialized-byte, by-value-copy and saved-register proofs remain separate. Real Swift AnyHashable copy witnesses leave some destination padding untouched, as confirmed by original ARM64 helpers and unchanged generated C at O0/O2. This IR protocol does not identify those helpers or grant their frame effects or source-publication permission; a loader consumer still needs independent current machine, type, ABI and lifetime certificates.
 
 `SwiftOpaqueValueEffects` independently authenticates bounded AnyHashable copy, equality and destruction. Four compiler/SDK profiles prove a 40-byte typed temporary with copy, borrowed use, destruction and lifetime end; padding remains unspecified. The loader replays the current complete ARM64 caller and callee machine/LowIR/CFG, validates every helper instruction and physical ABI, and requires exact strong metadata/runtime imports in immutable ordinary GOT slots. Copy initializes a typed value, equality reads it, and destruction ends its lifetime; returned addresses retain only possible frame aliases. Dynamic value-witness dispatch and true `swiftcc i1` equality remain intact. The existing IR owner checks actual frame initialization, escape, aliases, every path and loop backedge. Native inference now consumes this same owner with current callee LowIR and complete audits. LowToMed records each original occurrence and transformations preserve its unique evaluation. Publication independently rebuilds the callee and entry ABIs from the current image, then compares complete canonical MedIR/HighIR and bound source bodies, including branches, collision-loop backedges, all arguments and every memory effect. Removing a receipt or supplying a defined scalar result cannot bypass the lifetime proof. The bounded first consumer accepts complete copy/equality/destroy call groups; unrelated calls require separate integration. It neither flattens loops nor treats padding as initialized.
+
+`SymSimplifyPass` measures a region only when its translated expression has at least `MinMeasuredNodes` nodes, but the expression builders can already apply an identity: `zext((t - x) | t)` with `t = x | y` builds as `zext(x | y)`. When the region itself qualified and some instruction in it built as one of its own operands, what construction made of the region is the candidate, under the usual instruction-count rule; derivation would find nothing left to change. Values the region computes twice share a node without such a fold and still reach synthesis, and a region too small to measure stays below the threshold.
 
 `SymSimplifyPass` also evaluates bounded integer slices whose inputs derive from one SSA value with at most two possible concrete values. Boolean values, single-bit masks and sign extraction establish complete domains without sampling. Every intermediate operation must be defined for both values, including overflow, exact shifts, disjoint OR, narrowing and sign annotations. The replacement retains the original anchor, counts only instructions that become dead, and must reduce LLVM instruction count. Unrelated inputs, incomplete domains, explicit undef/poison and exhausted work never authorize a rewrite. `MaxFiniteValueWork` bounds this derivational phase; zero disables it. The budget participates in translation cache identity, and the optimization recipe is pipeline schema 7. This does not infer memory privacy, loop invariants or a source ABI.
 

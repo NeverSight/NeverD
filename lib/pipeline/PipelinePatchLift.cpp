@@ -30,6 +30,7 @@
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
 
@@ -67,7 +68,7 @@ bool isFatalOptimizationStop(OptimizationStopReason Stop) {
          Stop == OptimizationStopReason::VerificationFailed;
 }
 
-std::string functionAdmissionDiagnostic(va_t Entry,
+std::string functionAdmissionDiagnostic(const BinaryImage &Img, va_t Entry,
                                         const PipelineFunctionAudit *Audit) {
   std::string Message =
       "function 0x" + llvm::utohexstr(Entry) + " was not admitted";
@@ -76,14 +77,22 @@ std::string functionAdmissionDiagnostic(va_t Entry,
   Message += " (" +
              std::string(pipelineFunctionDispositionName(Audit->Disposition)) +
              ")";
-  if (!Audit->Diagnostic.empty())
+  if (!Audit->Diagnostic.empty()) {
     Message += "; " + Audit->Diagnostic;
-  else if (!Audit->DecodeFailures.empty())
-    Message += "; decode failure at 0x" +
-               llvm::utohexstr(Audit->DecodeFailures.front());
-  else if (!Audit->UnsupportedInstructions.empty())
+  } else if (!Audit->DecodeFailures.empty()) {
+    // An AArch32 entry no evidence gave a mode decodes in neither; the mode
+    // is what failed, and the caller can assert it.
+    const va_t Failed = Audit->DecodeFailures.front();
+    const auto NoMode = normalizeCodeAddress(Failed, Img.Arch, Img.Mode) ==
+                                normalizeCodeAddress(Entry, Img.Arch, Img.Mode)
+                            ? missingARMModeReason(Img, Entry)
+                            : std::nullopt;
+    Message += NoMode ? "; " + *NoMode
+                      : "; decode failure at 0x" + llvm::utohexstr(Failed);
+  } else if (!Audit->UnsupportedInstructions.empty()) {
     Message += "; unsupported instruction at 0x" +
                llvm::utohexstr(Audit->UnsupportedInstructions.front());
+  }
   return Message;
 }
 
@@ -113,7 +122,7 @@ bool admitsRequestedFunctions(const BinaryImage &Img,
                      });
     Error = "selected " + std::string(ModeName) + " " +
             functionAdmissionDiagnostic(
-                Requested,
+                Img, Requested,
                 Audit != Result.FunctionAudits.end() ? &*Audit : nullptr);
     return false;
   }
@@ -122,8 +131,8 @@ bool admitsRequestedFunctions(const BinaryImage &Img,
 
 /// An empty module is not a successful lift of bodies every one of which was
 /// refused. Names the first such refusal in \p Error.
-bool admitsSomeFunction(const PipelineResult &Result, const char *ModeName,
-                        std::string &Error) {
+bool admitsSomeFunction(const BinaryImage &Img, const PipelineResult &Result,
+                        const char *ModeName, std::string &Error) {
   if (!Result.MedFuncs.empty())
     return true;
   for (const auto &Audit : Result.FunctionAudits)
@@ -131,7 +140,7 @@ bool admitsSomeFunction(const PipelineResult &Result, const char *ModeName,
         Audit.Disposition == PipelineFunctionDisposition::RejectedIncomplete ||
         Audit.Disposition == PipelineFunctionDisposition::MedIRFailed) {
       Error = "no " + std::string(ModeName) + " functions were admitted; " +
-              functionAdmissionDiagnostic(Audit.Entry, &Audit);
+              functionAdmissionDiagnostic(Img, Audit.Entry, &Audit);
       return false;
     }
   return true;
@@ -181,7 +190,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // Intentional runtime/import skips and read-only analysis retain their
   // existing outcome.
   if (!Opts.MedAnalysisOnly &&
-      !admitsSomeFunction(Result, ModeName, Result.Error))
+      !admitsSomeFunction(Img, Result, ModeName, Result.Error))
     return false;
   if (Opts.PatchMode)
     for (const MedFunc &Function : Result.MedFuncs) {
@@ -356,7 +365,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     if (!refuseObservedCallReturnReads(Img, Result, refusalFailsRun(Opts),
                                        Dbg) ||
         !admitsRequestedFunctions(Img, Opts, Result, ModeName, Result.Error) ||
-        !admitsSomeFunction(Result, ModeName, Result.Error))
+        !admitsSomeFunction(Img, Result, ModeName, Result.Error))
       return false;
   }
 
