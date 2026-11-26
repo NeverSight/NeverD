@@ -27,7 +27,7 @@ The per-analyzer `scanned` and `skipped` counters retain their legacy units. Aud
 | `budget_exhausted` | A lifting or analysis limit cut coverage short. |
 | `failed` | The request or analyzer failed. The summary carries a diagnostic. |
 
-`coverage_complete` means all **selected** analyzers finished their inventories within budget. `ok` means at least one analyzer ran to completion or produced observations. Consult the individual states for partial work. Any established `UNSAFE` finding yields exit code **2**, including when another analyzer stopped. With no such finding, an inconclusive observation or incomplete selected analyzer yields `UNKNOWN` and exit code **1**. Otherwise the verdict is `SAFE` within the selected static checks and the exit code is **0**. Argument, file loading and output errors also return **1**.
+`coverage_complete` means all **selected** analyzers finished their inventories within budget. `ok` means at least one analyzer finished its pass (possibly with a budget limit) or produced observations before stopping. Consult the individual states for partial work. Any established `UNSAFE` finding yields exit code **2**, including when another analyzer stopped. With no such finding, an inconclusive observation or incomplete selected analyzer yields `UNKNOWN` and exit code **1**. Otherwise the verdict is `SAFE` within the selected static checks and the exit code is **0**. Argument, file loading and output errors also return **1**.
 
 ## Limits and evidence
 

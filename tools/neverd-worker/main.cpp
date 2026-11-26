@@ -640,7 +640,7 @@ void executeLoop(State &state, Transport &transport) {
               (result.contains("error") &&
                result["error"].value("code", std::string()) == "cancelled");
           bool scanStopped = false;
-          if (op == "memory_safety_scan" && result.contains("payload")) {
+          if (op == "memory_safety_scan" && result.at("status") == "ok") {
             for (const auto &analyzer : result["payload"].at("analyzers"))
               scanStopped |= analyzer.at("state") == "canceled";
             result["partial_result_retained"] = scanStopped;
@@ -815,6 +815,8 @@ int main(int argc, char **argv) {
                         !LineageService::cancellable(
                             state.active->value["operation"]
                                 .get<std::string>()) &&
+                        state.active->value["operation"] !=
+                            "memory_safety_scan" &&
                         state.active->value["operation"] != "functions" &&
                         state.active->value["operation"] != "names"))}}));
           } else if (op == "shutdown") {
