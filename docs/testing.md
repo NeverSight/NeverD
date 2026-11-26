@@ -1566,6 +1566,11 @@ requests LLVM output explicitly to exercise that complete native proof.
 128-bit remainders and quotient/subtract identities against unknown high
 halves, signed division, zero divisors and undersized storage. Compact selector
 recovery must also pass `ModuloBoundProbesCompactCandidatesIndependently`.
+`JTE_X86_64.CyclicMaskedSelectorReadsOnlyItsOwnRelocatedSlots` masks a cyclic
+switch's sum of absolute differences, whose upstream-mask search cannot finish:
+eight owned relocated slots publish the eight cases, and four owned slots under
+the same mask keep the dispatch unresolved. The `x64v52_redsad` round trip in
+`NeverDSemanticTests` executes the same shape.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

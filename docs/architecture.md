@@ -5121,7 +5121,12 @@ keeps the value query. An unfinished value query does not withdraw the
 local extend. An unfinished mask search does not turn a guard that already
 rejected the selector into an incomplete proof, and it does not withdraw a
 sibling that published in the same stage. A guard that is itself unfinished
-still fails closed. A register
+still fails closed. A mask that alone produces the index keeps its coordinates
+when the search for masks upstream of it cannot finish, as for a selector a
+cyclic switch computes from arrays its cases rewrite, but only when every
+coordinate names a slot of the table's own anchor-bounded relocation run: an
+upstream mask could only narrow them, and a shorter run keeps the dispatch
+unresolved. A register
 other than a direct copy of the compared register, a later clobber, a call,
 or a mask that drops a lane bit keeps its own proof. A direct copy of the
 compared register into the index, taken before the compare, is that lane
