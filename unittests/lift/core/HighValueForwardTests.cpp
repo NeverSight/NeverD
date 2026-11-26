@@ -9,6 +9,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
 
@@ -724,6 +725,39 @@ int main(void) { return other_slot(7) == 7 && other_slot(9) == 9 ? 0 : 1; }
 )");
 }
 
+TEST(HighValueForward, SkippedOperandStillFoldsAFrameSlotRead) {
+  // A read at a fixed frame displacement observes nothing beyond the
+  // function's own frame: it may run only on the path that uses its value.
+  const auto Word = NdType::makeInt(8, false);
+  auto Nonzero = [] {
+    return op(NdOp::INT_NOTEQUAL, input(), constant(0), true);
+  };
+  auto Choice = op(NdOp::SELECT, Nonzero(), local(1, Word));
+  Choice->Operands.push_back(constant(42));
+  Choice->Type = Word;
+  auto Both = op(NdOp::BOOL_AND, Nonzero(),
+                 op(NdOp::INT_EQUAL, local(1, Word), constant(7), true), true);
+  std::vector<HighFunc> Functions;
+  for (const auto &[Name, Value] :
+       {std::pair<const char *, ExprPtr>{"slot_choice", Choice},
+        std::pair<const char *, ExprPtr>{"slot_both", Both}}) {
+    HighFunc F = function(
+        Name, {store(frameSlot(16), input()),
+               assign(local(1, Word), HighExpr::makeLoad(frameSlot(16), Word)),
+               result(Value)});
+    F.FrameSize = 64;
+    Functions.push_back(std::move(F));
+  }
+  const std::string Source = emit(Functions);
+  EXPECT_TRUE(declarationOf(Source, "t1").empty()) << Source;
+  compileAndRun(Source + R"(
+int main(void) {
+  return slot_choice(7) != 7 || slot_choice(0) != 42 || slot_both(7) != 1 ||
+         slot_both(5) != 0 || slot_both(0) != 0;
+}
+)");
+}
+
 TEST(HighValueForward, SlotLoadStaysBeforeAStoreComputedFromTheFrame) {
   // Two words at -40 and -32 are one array.  A store to the first plus a
   // run-time offset writes the second when the offset is 8, whether the
@@ -917,6 +951,68 @@ int main(void) {
     calls = 0;
     if (captured_byte(x) != ((uint8_t)x ? 3u : 4u) || calls != 1) return 1;
     if (captured_word(x) != (((x >> 31) & 1) ? 3u : 4u) || calls != 2) return 2;
+  }
+  return 0;
+}
+)");
+}
+
+TEST(HighValueForward, ReturnedCallCaptureConvertsOnlyWhereTheReturnDoesNot) {
+  // A captured call result returned as it is converts to the return type at
+  // the return. Through a capture at least as wide as the return type, the
+  // assignment's conversion keeps the same bits and prints nothing; a
+  // narrower capture keeps its conversion, and so does a capture a Boolean
+  // returns, since that conversion tests the whole value for zero.
+  constexpr va_t Callee = 0x2700;
+  class CallDebug : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Callee)
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = "return_bits";
+      Function.ReturnType = NdType::makeInt(8, true);
+      Function.Params = {{"value", NdType::makeInt(8, false)}};
+      return Function;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  auto Returned = [&](const char *Name, TypeRef Type) {
+    auto Call = HighExpr::makeCall("return_bits", Callee, {input()});
+    Call->Type = NdType::makeInt(8, true);
+    auto Local = local(23, Type);
+    Local->Var.Size = Type->Size;
+    return function(Name, {assign(Local, Call), result(Local)});
+  };
+  const auto Word = Returned("returned_word", NdType::makeInt(8, false));
+  const auto Byte = Returned("returned_byte", NdType::makeInt(1, false));
+  auto Flag = Returned("returned_flag", NdType::makeInt(1, false));
+  Flag.ReturnType = NdType::makeInt(1, false);
+  Flag.ReturnType->SourceName = kSourceBooleanCType;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({Word, Byte, Flag}, Out, Options, &Debug));
+  EXPECT_TRUE(declarationOf(Source, "t23").empty()) << Source;
+  EXPECT_EQ(Source.find("(uint64_t)(return_bits"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint8_t)"), std::string::npos) << Source;
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t return_bits(uint64_t value) {
+  ++calls;
+  return (int64_t)value;
+}
+int main(void) {
+  const uint64_t inputs[] = {0, 1, 0x7f, 0x80, 0x1ff, 0x7fffffff, 0x80000000,
+                             UINT64_C(0x8000000000000000), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    const uint64_t x = inputs[i];
+    calls = 0;
+    if (returned_word(x) != x || calls != 1) return 1;
+    if (returned_byte(x) != (uint8_t)x || calls != 2) return 2;
+    if (returned_flag(x) != ((uint8_t)x != 0) || calls != 3) return 3;
   }
   return 0;
 }

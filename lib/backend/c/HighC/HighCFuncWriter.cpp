@@ -4397,17 +4397,19 @@ void HighCWriter::collectValueForward(
       const std::optional<std::string> SlotName =
           Load ? namedFrameSlot(*Load->Operands[0]) : std::nullopt;
       // Forwarding must not turn an earlier observation into a conditional
-      // one. Materialized frame locals use their own alias and lifetime rules.
-      if (ReadsMemory &&
+      // one. A read at a fixed frame displacement observes nothing beyond the
+      // function's own frame, and materialized frame locals use their own
+      // alias and lifetime rules, so such a read may still be skipped.
+      if (ReadsMemory && !Slot &&
           (llvm::any_of(UseStmts,
                         [&](const HighStmt *S) {
                           return llvm::is_contained(
                               NamesAt.at(S).ConditionalReads, C.Name);
                         }) ||
-           (!Slot && llvm::all_of(UseStmts, [&](const HighStmt *S) {
+           llvm::all_of(UseStmts, [&](const HighStmt *S) {
              const auto Region = Sites.at(S).Region;
              return Region != C.Region && regionDominatedBy(Region, C.Region);
-           }))))
+           })))
         continue;
       // Memory reached otherwise than through this one named slot, which
       // any slot is once a frame address escapes.
@@ -4793,11 +4795,23 @@ void HighCWriter::collectValueForward(
     if (!Fwd || readsThroughForwards(*Fwd, C.Name))
       continue;
     // Removing the assignment removes its implicit C conversion. Keep the
-    // integer type of the captured call result at its new use.
-    if (auto View = integerCallCapture(C.Stmt->Val, C.Stmt->Dst->Type)) {
-      Fwd = View.get();
-      CaptureConversions.push_back(std::move(View));
-    }
+    // integer type of the captured call result at its new use. A result
+    // returned as it is converts to the return type there, and a conversion
+    // through a type at least that wide keeps the same bits. A Boolean
+    // return tests the whole value for zero instead.
+    const TypeRef &Captured = C.Stmt->Dst->Type;
+    const bool ReturnKeepsBits =
+        UseStmt->Kind == StmtKind::Return && UseStmt->RetVal &&
+        UseStmt->RetVal->Kind == ExprKind::Var &&
+        varName(UseStmt->RetVal->Var) == C.Name && Captured && FuncReturnType &&
+        FuncReturnType->Kind == NdTypeKind::Int && !FuncReturnType->IsEnum &&
+        !isSourceBooleanType(FuncReturnType) &&
+        FuncReturnType->Size <= Captured->Size;
+    if (!ReturnKeepsBits)
+      if (auto View = integerCallCapture(C.Stmt->Val, Captured)) {
+        Fwd = View.get();
+        CaptureConversions.push_back(std::move(View));
+      }
     ValueForward[C.Name] = Fwd;
     // A field value is not a frame-address alias, but that alone must not
     // force its definition to print after this proof has folded every use.
