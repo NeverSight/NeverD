@@ -120,6 +120,50 @@ INSTANTIATE_TEST_SUITE_P(SourceStackAccesses, MedPrologueSaves,
 
 const MedOp &save(const MedFunc &Func) { return Func.Blocks[0].Ops[4]; }
 
+TEST_P(MedPrologueSaves, ACallCanObserveAnExposedSaveSlot) {
+  for (bool InMetadata : {false, true}) {
+    for (bool PassSlot : {false, true}) {
+      SCOPED_TRACE(InMetadata);
+      SCOPED_TRACE(PassSlot);
+      auto Func = pushedRbx(CallingConv::Win64);
+      Func.FrameSize = 40;
+      auto &Ops = Func.Blocks.front().Ops;
+      // Give the call its own home space. The save lies just above it.
+      auto Call = op(NdOp::CALL, none(), {MedVar::makeConst(0x3000, 8)});
+      const MedVar Argument = PassSlot ? temp(20) : rcx(0);
+      if (InMetadata) {
+        MedCallInfo Info;
+        Info.BlockId = 0;
+        Info.OpIdx = 7;
+        Info.Args = {Argument};
+        Func.CallInfos.push_back(Info);
+      } else {
+        Call.addInput(Argument);
+      }
+      Ops[8].Output = sp(4);
+      Ops[8].Inputs[0] = sp(3);
+      Ops[6].Inputs[0] = sp(3);
+      Ops.insert(Ops.begin() + 5,
+                 {op(NdOp::COPY, temp(20), {sp(1)}),
+                  op(NdOp::INT_SUB, sp(2), {sp(1), MedVar::makeConst(32, 8)}),
+                  Call,
+                  op(NdOp::INT_ADD, sp(3), {sp(2), MedVar::makeConst(32, 8)})});
+      markStackAccesses(Func, Arch::X64, BinaryFormat::COFF);
+      EXPECT_EQ(save(Func).PrologueSave, !PassSlot);
+    }
+  }
+}
+
+TEST_P(MedPrologueSaves, AComputedFrameReadCanObserveTheSave) {
+  auto Func = pushedRbx();
+  auto &Ops = Func.Blocks.front().Ops;
+  Ops.insert(Ops.begin() + 5, {op(NdOp::INT_ADD, temp(20), {sp(1), rcx(0)}),
+                               op(NdOp::LOAD, temp(21), {temp(20)})});
+  Ops.back().Inputs[0] = temp(21);
+  markStackAccesses(Func, Arch::X64, BinaryFormat::ELF);
+  EXPECT_FALSE(save(Func).PrologueSave);
+}
+
 TEST_P(MedPrologueSaves, APushedEntryValueIsAPrologueSave) {
   MedFunc Func = pushedRbx();
   markStackAccesses(Func, Arch::X64, BinaryFormat::ELF);

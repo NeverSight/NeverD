@@ -14399,6 +14399,10 @@ Handwritten legacy intrinsics, masked LLVM functions and hidden HighIR branches
 must fail recoverably before source publication. These tests protect the missing
 machine-state boundary; they do not qualify kernel continuation execution.
 
+The callee-save visibility cases cover explicit and recorded Win64 call
+arguments, a call with its own home space, and a dynamic frame-relative read.
+They exercise the combined source pass and its individual callee-save entry.
+
 `NeverDMedPrologueSavesTests` runs the same save, restore, overlapping-store,
 return-address and process-entry cases through separate and combined source
 annotations. It also checks a function that has both a saved register and a
