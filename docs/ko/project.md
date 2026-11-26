@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: f00e3001b8210e9c53c405a926f38372af3c51b0e9c8b6f4733c747a6734d227 -->
+<!-- i18n-source: e3e9fcab1e12687d1ff30cd2bd7831cf3d6dabeb1e4d1316bca2beaa223e0657 -->
 
 <div align="center">
 
@@ -211,7 +211,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r12
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r13
 cmake --build build
 ```
 
@@ -227,19 +227,19 @@ cmake --build build
 
 각 아카이브는 `~/.cache/neverd-llvm/<tag>/<arch>/` 또는 `NEVERD_LLVM_PREBUILT_CACHE_DIR` 경로에 압축을 풀기 전에 `cmake/NeverDLLVMPrebuilt.cmake`에 고정된 다이제스트로 검증됩니다. 고정 정보에 없는 태그는 게시된 `.sha256`을 사용합니다. 기본 고정 버전은 `BUILDINFO.txt`의 LLVM 서브모듈 커밋도 정확히 일치해야 합니다. 릴리스 빌드는 macOS/Linux에서 ccache, Windows clang-cl에서 sccache와 GitHub Actions 캐시를 사용합니다. 컴파일러 캐시는 재빌드만 가속하며 릴리스 자산으로 게시하지 않습니다.
 
-기본 패키지 리비전은 `neverd-llvm-v23.0.0-r12`입니다. Git 태그, 릴리스 대상, 소스 커밋, 아카이브 세 개의 다이제스트를 하나의 변경 불가 소스 리비전으로 고정합니다. 이전 기본 태그, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9`, `neverd-llvm-v23.0.0-r10`, `neverd-llvm-v23.0.0-r11`를 캐시한 빌드 디렉터리는 명시적인 `NEVERD_LLVM_PREBUILT_SHA256`이 없으면 자동으로 `r12`로 이동합니다. `Prebuilt LLVM Audit`를 수동으로 실행하면 `scripts/audit_prebuilt_llvm_release.py`가 고정 정보와 현재 GitHub 릴리스 및 각 체크섬 파일을 비교합니다.
+기본 패키지 리비전은 `neverd-llvm-v23.0.0-r13`입니다. Git 태그, 릴리스 대상, 소스 커밋, 아카이브 세 개의 다이제스트를 하나의 변경 불가 소스 리비전으로 고정합니다. 이전 기본 태그, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9`, `neverd-llvm-v23.0.0-r10`, `neverd-llvm-v23.0.0-r11`, `neverd-llvm-v23.0.0-r12`를 캐시한 빌드 디렉터리는 명시적인 `NEVERD_LLVM_PREBUILT_SHA256`이 없으면 자동으로 `r13`로 이동합니다. `Prebuilt LLVM Audit`를 수동으로 실행하면 `scripts/audit_prebuilt_llvm_release.py`가 고정 정보와 현재 GitHub 릴리스 및 각 체크섬 파일을 비교합니다.
 
-LLVM fork가 변경되었지만 LLVM 버전이 여전히 `23.0.0`이면 다음 패키지 리비전인 `neverd-llvm-v23.0.0-r13`, 이후 `-r14`를 게시합니다. 기존 릴리스를 덮어쓰거나 LLVM 버전 `23.0.1`을 임의로 만들지 않습니다.
+LLVM fork가 변경되었지만 LLVM 버전이 여전히 `23.0.0`이면 다음 패키지 리비전인 `neverd-llvm-v23.0.0-r14`, 이후 `-r15`를 게시합니다. 기존 릴리스를 덮어쓰거나 LLVM 버전 `23.0.1`을 임의로 만들지 않습니다.
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r13 \
+  -f release_tag=neverd-llvm-v23.0.0-r14 \
   -f overwrite_existing_assets=false
 ```
 
-워크플로 성공 후 `cmake/NeverDLLVMPrebuilt.cmake`의 기본 태그, 고정 커밋, 다이제스트 세 개를 함께 갱신합니다. 각 패키지 리비전은 별도 캐시 디렉터리를 사용하며 현재 기본 리비전은 `.cache/neverd-llvm/neverd-llvm-v23.0.0-r12` 아래에 저장됩니다. 오래되거나 다시 게시된 아카이브는 압축 해제 전에 실패합니다. `overwrite_existing_assets`는 이전 릴리스 복구 전용이며 일반 리비전 게시에서는 끕니다.
+워크플로 성공 후 `cmake/NeverDLLVMPrebuilt.cmake`의 기본 태그, 고정 커밋, 다이제스트 세 개를 함께 갱신합니다. 각 패키지 리비전은 별도 캐시 디렉터리를 사용하며 현재 기본 리비전은 `.cache/neverd-llvm/neverd-llvm-v23.0.0-r13` 아래에 저장됩니다. 오래되거나 다시 게시된 아카이브는 압축 해제 전에 실패합니다. `overwrite_existing_assets`는 이전 릴리스 복구 전용이며 일반 리비전 게시에서는 끕니다.
 
 **산출물**
 

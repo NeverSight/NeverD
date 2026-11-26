@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: f00e3001b8210e9c53c405a926f38372af3c51b0e9c8b6f4733c747a6734d227 -->
+<!-- i18n-source: e3e9fcab1e12687d1ff30cd2bd7831cf3d6dabeb1e4d1316bca2beaa223e0657 -->
 
 <div align="center">
 
@@ -211,7 +211,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r12
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r13
 cmake --build build
 ```
 
@@ -227,19 +227,19 @@ cmake --build build
 
 各アーカイブは `~/.cache/neverd-llvm/<tag>/<arch>/`（または `NEVERD_LLVM_PREBUILT_CACHE_DIR` の指定先）への展開前に、`cmake/NeverDLLVMPrebuilt.cmake` の固定ダイジェストで検証されます。固定値の対象外のタグでは、公開された `.sha256` を使います。既定の固定版では `BUILDINFO.txt` の LLVM サブモジュールコミットも完全一致が必要です。リリースビルドは macOS/Linux で ccache、Windows clang-cl で sccache と GitHub Actions キャッシュを使用します。コンパイラーキャッシュは再ビルドの高速化専用で、リリース成果物には含めません。
 
-既定のパッケージ改訂版は `neverd-llvm-v23.0.0-r12` です。Git タグ、リリース対象、ソースコミット、3アーカイブのダイジェストを不可変の改訂版として固定します。古い基本タグ、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7`、`neverd-llvm-v23.0.0-r8`、`neverd-llvm-v23.0.0-r9`、`neverd-llvm-v23.0.0-r10`、`neverd-llvm-v23.0.0-r11` をキャッシュしたビルドディレクトリは、明示的な `NEVERD_LLVM_PREBUILT_SHA256` がなければ自動で `r12` に移行します。`Prebuilt LLVM Audit` を手動で実行すると、`scripts/audit_prebuilt_llvm_release.py` が固定値と GitHub の現在のリリースおよび各チェックサムファイルを照合します。
+既定のパッケージ改訂版は `neverd-llvm-v23.0.0-r13` です。Git タグ、リリース対象、ソースコミット、3アーカイブのダイジェストを不可変の改訂版として固定します。古い基本タグ、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7`、`neverd-llvm-v23.0.0-r8`、`neverd-llvm-v23.0.0-r9`、`neverd-llvm-v23.0.0-r10`、`neverd-llvm-v23.0.0-r11`、`neverd-llvm-v23.0.0-r12` をキャッシュしたビルドディレクトリは、明示的な `NEVERD_LLVM_PREBUILT_SHA256` がなければ自動で `r13` に移行します。`Prebuilt LLVM Audit` を手動で実行すると、`scripts/audit_prebuilt_llvm_release.py` が固定値と GitHub の現在のリリースおよび各チェックサムファイルを照合します。
 
-LLVM fork が変更されても LLVM のバージョンが `23.0.0` の場合は、次のパッケージ改訂版 `neverd-llvm-v23.0.0-r13`、続いて `-r14` を公開します。既存リリースの上書きや架空の LLVM バージョン `23.0.1` は使用しません。
+LLVM fork が変更されても LLVM のバージョンが `23.0.0` の場合は、次のパッケージ改訂版 `neverd-llvm-v23.0.0-r14`、続いて `-r15` を公開します。既存リリースの上書きや架空の LLVM バージョン `23.0.1` は使用しません。
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r13 \
+  -f release_tag=neverd-llvm-v23.0.0-r14 \
   -f overwrite_existing_assets=false
 ```
 
-成功後は `cmake/NeverDLLVMPrebuilt.cmake` の既定タグ、固定コミット、3つのダイジェストを同時に更新します。パッケージの改訂版ごとに専用のキャッシュディレクトリを使い、現在の既定版は `.cache/neverd-llvm/neverd-llvm-v23.0.0-r12` 以下に保存されます。古い、または再公開されたアーカイブは展開前に拒否されます。`overwrite_existing_assets` は旧版復旧専用で、通常の改訂版公開では無効にします。
+成功後は `cmake/NeverDLLVMPrebuilt.cmake` の既定タグ、固定コミット、3つのダイジェストを同時に更新します。パッケージの改訂版ごとに専用のキャッシュディレクトリを使い、現在の既定版は `.cache/neverd-llvm/neverd-llvm-v23.0.0-r13` 以下に保存されます。古い、または再公開されたアーカイブは展開前に拒否されます。`overwrite_existing_assets` は旧版復旧専用で、通常の改訂版公開では無効にします。
 
 **成果物**
 
