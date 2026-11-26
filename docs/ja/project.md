@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: f00e3001b8210e9c53c405a926f38372af3c51b0e9c8b6f4733c747a6734d227 -->
+<!-- i18n-source: 6a9a7d478fd7bf4b28cb7e33863164c5bfa5cbb4afc97c9be1aa3c323ad245be -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 
 | ターゲット | 検証済みの ELF プロファイル |
 |---|---|
-| RISC-V | リトルエンディアンの RV32I/ILP32 と RV64I/LP64。ELF の情報に従って M、A、整数 C、または個別の Zmmul、Zaamo、Zalrsc、Zca 拡張を選択します。 |
-| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。PPC32 は secure PLT と従来の BSS-PLT を介したモジュール間呼び出しに対応しています。両方の PPC64 ABI で、PLT を介したモジュール間呼び出しと TOC の切り替えに対応しています。ELFv1 は関数記述子を使用し、ELFv2 はグローバルエントリとローカルエントリに対応しています。検証済みのスカラー命令には、符号付き・符号なし除算、積の上位ワードを返す乗算、オーバーフローを検出する乗算が含まれ、各命令が CR0 と XER に与える影響も検証しています。 |
+| RISC-V | リトルエンディアンの RV32I/ILP32 と RV64I/LP64。ELF の情報に従って M、A、整数 C、または個別の Zmmul、Zaamo、Zalrsc、Zca 拡張を選択します。ELF の ISA 属性に応じて Zba 1.0 と Zbs 1.0 も有効になります。 |
+| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。PPC32 は secure PLT と従来の BSS-PLT を介したモジュール間呼び出しに対応しています。両方の PPC64 ABI で、PLT を介したモジュール間呼び出しと TOC の切り替えに対応しています。ELFv1 は関数記述子を使用し、ELFv2 はグローバルエントリとローカルエントリに対応しています。検証済みのスカラー命令には、符号付き・符号なし除算、積の上位ワードを返す乗算、オーバーフローを検出する乗算が含まれ、各命令が CR0 と XER に与える影響も検証しています。PPC64 では POWER10 のプレフィックス付き整数加算、ロード、ストア命令もサポートします。 |
 
 これらのプロファイルのネイティブコード書き換えは今後の課題です。 [RISC-V と PowerPC の対応範囲（英語）](../riscv-powerpc.md)
 
