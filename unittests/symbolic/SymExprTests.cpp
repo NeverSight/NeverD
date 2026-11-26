@@ -2759,7 +2759,7 @@ TEST(SymExpr, ProductsKeepAllBitsDemandedAcrossUsers) {
 
 TEST(SymExpr, ShortMultiwordScalesPreserveSignedProductsAndPartialLimbs) {
   std::mt19937_64 Random(0x6c696d6273);
-  for (unsigned W : {257u, 513u, 1025u, 4101u}) {
+  for (unsigned W : {257u, 513u, 1025u, 1984u, 1985u, 4101u}) {
     SymContext C;
     const auto X = C.mkVar("x", W);
     for (unsigned Shift : {0u, 3u, 64u, 127u, W - 196}) {

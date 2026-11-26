@@ -54,7 +54,9 @@ inline bool multiplyByShortScale(const llvm::APInt &Scale,
   const unsigned MaxUnitWords =
       Scale.getNumWords() /
       ::neverd::limits::symbolic::kSymExprMinProductLimbReduction;
-  if (llvm::APInt::getNumWords(Bits) > MaxUnitWords)
+  if (Scale.getNumWords() <
+          ::neverd::limits::symbolic::kSymExprMinMultiLimbProductWords ||
+      llvm::APInt::getNumWords(Bits) > MaxUnitWords)
     return false;
   auto Unit = Scale.extractBits(Bits, Shift);
   if (Negative)

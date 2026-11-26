@@ -42,6 +42,9 @@ inline constexpr unsigned kSymKnownBitsMaxCachedFacts = 65536;
 // Cover unpacking the sign and shift by at least halving the number of
 // multiplier limbs. A single-limb scale uses the native multiply directly.
 inline constexpr unsigned kSymExprMinProductLimbReduction = 2;
+// At smaller widths a native product costs less than staging a signed
+// multi-limb coefficient and its truncated result.
+inline constexpr unsigned kSymExprMinMultiLimbProductWords = 32;
 
 // include/neverd/symbolic/SymMBA.h
 inline constexpr size_t kSymMBAMBARewriteCacheCapacity = 65536;

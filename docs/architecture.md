@@ -8411,9 +8411,10 @@ For a scaled product that reads only the low lane of an extension or
 concatenation, the evaluation plan can read that lane directly. A shared
 use that observes more bits keeps the wider value. A binary product whose observed prefix costs fewer limb
 operations can multiply at that precision. The evaluator takes the widest
-demand across all uses before shortening either operand. A signed literal with
-a short significand only multiplies its significant limbs. Constant folding,
-evaluation and polynomial normalization use the same word arithmetic to
+demand across all uses before shortening either operand. At wide widths a
+signed literal with a short significand only multiplies its significant limbs.
+Smaller multi-limb products use the native bitvector multiplication. Constant
+folding, evaluation and polynomial normalization use the same word arithmetic to
 restore its sign and zero suffix. A fixed shift or rotation
 can supply a low word from its source when every observed bit precedes the
 first padding or wrapped bit.
