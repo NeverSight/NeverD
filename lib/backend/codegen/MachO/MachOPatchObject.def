@@ -22,6 +22,8 @@ MACHO_OBJECT_TEXT(kAddressReach,
 MACHO_OBJECT_TEXT(kAddressPageReach,
                   "source address exceeds the signed ADRP page displacement")
 MACHO_OBJECT_TEXT(kNoPlacement, "original Mach-O has no safe placement")
+MACHO_OBJECT_TEXT(kUnsupportedNativeSymbol,
+                  "unsupported native weak definition, common or undefined symbol")
 MACHO_OBJECT_TEXT(kClassicReturnCFI,
                   "classic arm64e requires implicit signed-return CFI; "
                   "explicit rule does not match the installed signing "
@@ -103,7 +105,6 @@ MACHO_OBJECT_VALUE(uint32_t, kBranchAuthZeroX16, 0xd61f0a1f)
 MACHO_OBJECT_TEXT(kMissingDSOHeader,
                   "image handle requires a mapped Mach header")
 MACHO_OBJECT_VALUE(unsigned, kTLVOffsetField, 2 * sizeof(uint64_t))
-MACHO_OBJECT_TEXT(kTLVSymbolPrefix, "_")
 MACHO_OBJECT_VALUE(uint8_t, kDefaultFunctionPointerKey,
                    0) // IA, zero discriminator.
 MACHO_OBJECT_VALUE(unsigned, kTLVDescriptorBytes, 3 * sizeof(uint64_t))
@@ -139,9 +140,9 @@ MACHO_OBJECT_TEXT(kWeakDataAtom,
                   "weak data requires an independently owned regular data atom")
 MACHO_OBJECT_TEXT(
     kWeakDataFallback,
-    "weak data lacks an exported fallback and sealed coalescing GOT slot")
+    "weak data lacks an unambiguous exported coalescing fallback")
 MACHO_OBJECT_TEXT(kWeakDataReference,
-                  "weak data reference bypasses its coalescing GOT")
+                  "weak data reference has no coalescing relocation")
 MACHO_OBJECT_TEXT(kPrivateWeak,
                   "native private weak data requires a coalescing contract")
 MACHO_OBJECT_TEXT(kSharedCache,

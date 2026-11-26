@@ -911,6 +911,79 @@ TEST(MachOArm64eInstallation, ProducerRequiresOneExactProviderPerSymbol) {
   }
 }
 
+TEST(MachOArm64eInstallation, NativeImportStrengthPreservesLookupScope) {
+  for (bool DifferentOrdinal : {false, true}) {
+    auto Original = linkedImage(Chains[0]);
+    auto *Payload = Original.data() + kChains;
+    auto *Header = reinterpret_cast<dyld_chained_fixups_header *>(Payload);
+    Header->imports_count = 2;
+    dyld_chained_import_addend64 Second{};
+    Second.lib_ordinal =
+        DifferentOrdinal ? BIND_SPECIAL_DYLIB_SELF : kProducerLibraryOrdinal;
+    Second.weak_import = true;
+    std::memcpy(Payload + kImportTable + sizeof(Second), &Second,
+                sizeof(Second));
+    Original = largePageImage(Original);
+    auto Image = producerImage(Original);
+    auto Unknown = collectMachOAuthenticatedFixups(Original, Image);
+    ASSERT_FALSE(bool(Unknown));
+    llvm::consumeError(Unknown.takeError());
+    Image.InputKind = RewriteInputKind::ReplacementObject;
+    Image.Sections.back().FixupReferences.back().Symbol =
+        llvm::StringRef(kSymbol).drop_front().str();
+    for (bool Weak : {false, true}) {
+      Image.MachOImportWeakness[kSymbol] = Weak;
+      auto Bytes = Original;
+      auto Error = MachOPatcher().appendReplacementImage(Bytes, Image);
+      if (DifferentOrdinal) {
+        ASSERT_TRUE(bool(Error));
+        llvm::consumeError(std::move(Error));
+        EXPECT_EQ(Bytes, Original);
+        continue;
+      }
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      auto Published =
+          Loader::create(BinaryFormat::MachO)
+              ->loadBuffer(llvm::MemoryBufferRef(
+                  llvm::toStringRef(llvm::ArrayRef(Bytes)), kProducerModule));
+      ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+      auto Bind = Published->MachOAuthenticatedPointers.find(
+          Image.Sections.back().VA + kSlotBytes);
+      ASSERT_NE(Bind, Published->MachOAuthenticatedPointers.end());
+      EXPECT_EQ(Bind->second.WeakImport, Weak);
+      EXPECT_EQ(Bind->second.LibraryOrdinal, kProducerLibraryOrdinal);
+      EXPECT_EQ(Bind->second.Symbol, kSymbol);
+    }
+  }
+}
+
+TEST(MachOArm64eInstallation, NativeObjectOverridesThreadedImportWeakness) {
+  for (bool OriginalWeak : {false, true}) {
+    auto Original = threadedImage();
+    if (OriginalWeak)
+      Original[kChains + kThreadedSymbolFlagsOffset] |=
+          BIND_SYMBOL_FLAGS_WEAK_IMPORT;
+    Original = largePageImage(Original);
+    auto Image = producerImage(Original);
+    auto Source = collectMachOAuthenticatedFixups(Original, Image);
+    ASSERT_TRUE(bool(Source)) << llvm::toString(Source.takeError());
+    ASSERT_EQ(Source->back().Recipe.WeakImport, OriginalWeak);
+    Image.InputKind = RewriteInputKind::ReplacementObject;
+    Image.Sections.back().FixupReferences.back().Symbol =
+        llvm::StringRef(kSymbol).drop_front().str();
+    for (bool ObjectWeak : {false, true}) {
+      Image.MachOImportWeakness[kSymbol] = ObjectWeak;
+      auto Expected = *Source;
+      Expected.back().Recipe.WeakImport = ObjectWeak;
+      auto Bytes = Original;
+      auto Error = MachOPatcher().appendReplacementImage(Bytes, Image);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+      Error = verifyMachOAuthenticatedFixups(Bytes, Expected);
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    }
+  }
+}
+
 TEST(MachOArm64eInstallation, CompilerRetainsOrRefusesNestedSigningConstants) {
   llvm::LLVMContext Context;
   llvm::SMDiagnostic Diagnostic;

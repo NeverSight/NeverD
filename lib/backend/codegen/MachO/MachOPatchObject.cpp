@@ -28,6 +28,7 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/MachO/MachOPlatform.h"
 #include "neverd/loader/MachO/MachORelocations.h"
 #include "neverd/object/MachOLayout.h"
@@ -66,13 +67,19 @@ llvm::Error fail(const llvm::Twine &Message) {
                                  kObjectErrorPrefix + Message);
 }
 std::string canonical(llvm::StringRef Name) {
-  return (Name.starts_with("_") ? Name.drop_front() : Name).str();
+  Name.consume_front(macho_arm64e_abi::kSymbolPrefix);
+  return Name.str();
 }
 struct Symbol {
   std::string Name;
   uint32_t Section = 0;
   uint64_t Offset = 0, Size = 0;
   bool Function = false, Thumb = false, External = false;
+  bool HasPrefix = false;
+
+  std::string linkerName() const {
+    return HasPrefix ? macho_arm64e_abi::kSymbolPrefix + Name : Name;
+  }
 };
 struct Relocation {
   size_t Section;
@@ -258,6 +265,9 @@ bool isCompactPersonality(const NativeMachO &Object, const Relocation &R) {
              Ptr + kCompactFixedBytes;
 }
 
+llvm::Error prepareAuthenticatedCallStubs(NativeMachO &Object,
+                                          std::set<unsigned> Functions);
+
 // The arm64e unwind personality ABI uses an IA/address-diversified GOT slot;
 // LSDA type information uses an ordinary data pointer. Keep these identities
 // distinct even when a symbol appears in both roles.
@@ -274,30 +284,44 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
            R.Type == ARM64_RELOC_POINTER_TO_GOT || isGOTLoad(R.Type) ||
            isTLVLoad(R.Type);
   };
-  if (Object.WeakData.empty() && llvm::none_of(Object.Relocations, UsesGOT))
+  const auto IsImportBranch = [&](const Relocation &R) {
+    if (!R.External || R.Type != ARM64_RELOC_BRANCH26)
+      return false;
+    const auto I = Object.Symbols.find(R.SymbolIndex);
+    return I != Object.Symbols.end() && !I->second.Section &&
+           !Declared.contains(I->second.Name) &&
+           !Object.AuthenticatedCallStubs.contains(R.SymbolIndex);
+  };
+  if (Object.WeakData.empty() &&
+      llvm::none_of(Object.Relocations, [&](const auto &R) {
+        return UsesGOT(R) || IsImportBranch(R);
+      }))
     return llvm::Error::success();
   MachOChainedFixups Chains;
   auto State = readMachODependencyState(Original.Raw, &Chains);
   if (!State)
     return State.takeError();
-  const auto Providers = Chains.uniqueImportProviders();
-  const auto MatchesProvider = [&](const std::string &Name, const auto &B) {
+  const auto Providers =
+      Chains.uniqueImportProviders(Object.Image.MachOImportWeakness);
+  const auto MatchesProvider = [&](va_t Address, const std::string &Name,
+                                   const auto &B) {
     auto It = Providers.find(Name);
-    return It != Providers.end() && It->second && B.LibraryOrdinal &&
-           *It->second ==
-               MachOChainedFixups::Provider{*B.LibraryOrdinal, B.WeakImport};
+    return It != Providers.end() && B.LibraryOrdinal &&
+           It->second.Ordinal == B.LibraryOrdinal &&
+           It->second.bindingStrength(Name, Object.Image.MachOImportWeakness) ==
+               Chains.WeakImportSlots.contains(Address);
   };
   std::map<std::string, va_t> Personalities, Ordinary;
   for (const auto &[Address, P] : Original.MachOAuthenticatedPointers)
     if (!P.Symbol.empty() && !P.Addend && P.Key == kPersonalityKey &&
         P.Diversity == kPersonalityDiversity &&
         P.AddressDiversity == kPersonalityAddressDiversity &&
-        MatchesProvider(P.Symbol, P))
-      Personalities.try_emplace(canonical(P.Symbol), Address);
+        MatchesProvider(Address, P.Symbol, P))
+      Personalities.try_emplace(P.Symbol, Address);
   // A mutable data variable can have the same bind. Only reuse non-lazy
   // pointer storage that dyld seals after applying the ordinary binding.
   for (const auto &[Address, B] : Original.DyldBindSlots) {
-    if (B.Addend || !MatchesProvider(B.Name, B))
+    if (B.Addend || !MatchesProvider(Address, B.Name, B))
       continue;
     const auto *Sec = Original.getSectionFor(Address);
     if (!Sec || (Sec->Type & SECTION_TYPE) != S_NON_LAZY_SYMBOL_POINTERS ||
@@ -309,25 +333,24 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
                  rangeInBounds(Address - S.VMAddr, arm64e::kPointerBytes,
                                S.FileSize);
         }))
-      Ordinary.try_emplace(canonical(B.Name), Address);
+      Ordinary.try_emplace(B.Name, Address);
   }
-  // A public weak fallback can be discarded only when all its users go
-  // through the original coalescing GOT. The original definition and dyld
-  // lookup scope then continue to choose the runtime address together.
+  // Keep the original weak data export as the fallback. Each new reference
+  // lets dyld select the coalesced definition, including a newly allocated GOT.
   for (const auto &[Section, Index] : Object.WeakData) {
     const auto &Symbol = Object.Symbols.at(Index);
-    const auto Slot = Ordinary.find(Symbol.Name);
-    if (Slot == Ordinary.end() || Declared.contains(Symbol.Name))
-      return fail(kWeakDataFallback);
-    const auto &Bind = Original.DyldBindSlots.at(Slot->second);
-    const auto Export = Chains.WeakDefinitions.find(Bind.Name);
-    if (Bind.LibraryOrdinal != BIND_SPECIAL_DYLIB_WEAK_LOOKUP ||
-        Bind.WeakImport || Export == Chains.WeakDefinitions.end() ||
+    const auto Name = Symbol.linkerName();
+    const auto Export = Chains.WeakDefinitions.find(Name);
+    const auto Provider = Providers.find(Name);
+    if (Declared.contains(Symbol.Name) ||
+        Export == Chains.WeakDefinitions.end() ||
         !Original.getSectionFor(Export->second) ||
-        Original.isCodeAddress(Export->second))
+        Original.isCodeAddress(Export->second) || Provider == Providers.end() ||
+        !Provider->second.LocalWeakDefinition)
       return fail(kWeakDataFallback);
-    Object.GOT.emplace(std::pair{Index, false},
-                       NativeMachO::GOTSlot{std::nullopt, Slot->second});
+    if (const auto Slot = Ordinary.find(Name); Slot != Ordinary.end())
+      Object.GOT.emplace(std::pair{Index, false},
+                         NativeMachO::GOTSlot{std::nullopt, Slot->second});
     auto &Discarded = Object.Image.Sections[Section];
     Discarded.IsAllocated = Discarded.IsInImage = false;
   }
@@ -346,6 +369,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     return I == Object.WeakData.end() ? std::nullopt : std::optional(I->second);
   };
   llvm::DenseMap<uint64_t, uint8_t> PersonalityFields;
+  std::set<unsigned> BranchImports;
   for (const auto &F : Object.OldFDEs)
     if (F.Personality)
       PersonalityFields.try_emplace(F.Personality->Offset,
@@ -358,14 +382,24 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
         (Object.EH == R.Section && R.Type == ARM64_RELOC_POINTER_TO_GOT);
     if (!Object.WeakData.empty()) {
       const auto Target = WeakTarget(R.SymbolIndex, R.External);
+      const bool BindablePointer =
+          !R.PCRel && R.Width == arm64e::kPointerBytes &&
+          (R.Type == ARM64_RELOC_UNSIGNED ||
+           R.Type == ARM64_RELOC_AUTHENTICATED_POINTER);
       if ((R.SubtractSymbol && WeakTarget(*R.SubtractSymbol, true)) ||
-          (Target && (!UsesGOT(R) || !R.External || R.SymbolIndex != *Target ||
-                      R.SubtractSymbol || R.Scattered || Personality)))
+          (Target && ((!UsesGOT(R) && !BindablePointer) || !R.External ||
+                      R.SymbolIndex != *Target || R.SubtractSymbol ||
+                      R.Scattered || Personality)))
         return fail(kWeakDataReference);
     }
     if (Personality && Object.EH == R.Section &&
         PersonalityFields.lookup(R.Offset) != R.Width)
       return fail(kLanguagePointer);
+    if (IsImportBranch(R)) {
+      const auto &Symbol = Object.Symbols.at(R.SymbolIndex);
+      if (Providers.contains(Symbol.linkerName()))
+        BranchImports.insert(R.SymbolIndex);
+    }
     if (!UsesGOT(R))
       continue;
     if (!R.External || R.Scattered || R.SubtractVA || R.SubtractSymbol ||
@@ -389,7 +423,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
         Object.TLV.emplace(R.SymbolIndex, NativeMachO::TLVReference{0, true});
         continue;
       }
-      const std::string Name = kTLVSymbolPrefix + Symbol.Name;
+      const std::string Name = Symbol.linkerName();
       const auto Export = Chains.ThreadLocalDefinitions.find(Name);
       if (Export != Chains.ThreadLocalDefinitions.end()) {
         const auto Address = Export->second;
@@ -407,12 +441,12 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
             P.Key != kDefaultFunctionPointerKey || P.Addend ||
             P.AddressDiversity || P.Diversity || P.WeakImport ||
             !P.LibraryOrdinal || *P.LibraryOrdinal <= 0 ||
-            !MatchesProvider(P.Symbol, P))
+            !MatchesProvider(Address, P.Symbol, P))
           return fail(kTLVDescriptor);
         Object.TLV.emplace(R.SymbolIndex,
                            NativeMachO::TLVReference{Address, true});
       } else {
-        const auto Slot = Ordinary.find(Symbol.Name);
+        const auto Slot = Ordinary.find(Name);
         if (Slot == Ordinary.end())
           return fail(kTLVDescriptor);
         const auto &B = Original.DyldBindSlots.at(Slot->second);
@@ -433,7 +467,8 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     if (!Symbol.Section && !Object.Image.SymbolAddrs.contains(Symbol.Name) &&
         !Declared.contains(Symbol.Name)) {
       const auto &Candidates = Personality ? Personalities : Ordinary;
-      if (auto It = Candidates.find(Symbol.Name); It != Candidates.end()) {
+      if (auto It = Candidates.find(Symbol.linkerName());
+          It != Candidates.end()) {
         Object.GOT.emplace(Key, NativeMachO::GOTSlot{std::nullopt, It->second});
         continue;
       }
@@ -457,7 +492,23 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     Object.GOT.emplace(Key, NativeMachO::GOTSlot{Object.Image.Sections.size()});
     Object.Image.Sections.push_back(std::move(Slot));
   }
-  return llvm::Error::success();
+  if (BranchImports.empty())
+    return llvm::Error::success();
+  // A registered stub can serve a branch when every original import for
+  // that spelling has the requested provider and strength. Otherwise the
+  // branch needs its own callable, even if an ordinary GOT cell exists.
+  for (const auto &[VA, Index] : Original.ImportStubIndices) {
+    const auto *Stub = Original.findImportStubAt(VA);
+    if (!Stub)
+      continue;
+    const auto P = Providers.find(Stub->Name);
+    const auto N = Object.Image.MachOImportWeakness.find(Stub->Name);
+    if (P != Providers.end() && P->second.Ordinal &&
+        N != Object.Image.MachOImportWeakness.end() &&
+        P->second.WeakImport == N->second)
+      BranchImports.erase(Object.Names.at(canonical(Stub->Name)));
+  }
+  return prepareAuthenticatedCallStubs(Object, std::move(BranchImports));
 }
 
 bool matchesArm64eABI(const llvm::object::MachOObjectFile &Object,
@@ -817,16 +868,8 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
     if (!Name)
       return Name.takeError();
     const auto Index = M->getSymbolIndex(S.getRawDataRefImpl());
-    const uint8_t Type =
-        M->is64Bit() ? M->getSymbol64TableEntry(S.getRawDataRefImpl()).n_type
-                     : M->getSymbolTableEntry(S.getRawDataRefImpl()).n_type;
-    const uint16_t Desc =
-        M->is64Bit() ? M->getSymbol64TableEntry(S.getRawDataRefImpl()).n_desc
-                     : M->getSymbolTableEntry(S.getRawDataRefImpl()).n_desc;
-    const uint32_t Number = M->getSymbolSectionID(S) + 1;
-    const uint64_t Value =
-        M->is64Bit() ? M->getSymbol64TableEntry(S.getRawDataRefImpl()).n_value
-                     : M->getSymbolTableEntry(S.getRawDataRefImpl()).n_value;
+    const auto Entry = macho_loader::readObjectNList(*M, S.getRawDataRefImpl());
+    const auto &[Type, Number, Desc, Value] = Entry;
     if (Type & N_STAB)
       continue;
     if ((Type & N_TYPE) != N_SECT && (Type & N_TYPE) != N_UNDF)
@@ -836,12 +879,26 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
     const bool PublicWeak = Original.isArm64e() && (Type & N_TYPE) == N_SECT &&
                             (Type & N_EXT) && !(Type & N_PEXT) &&
                             (Desc & (N_WEAK_DEF | N_WEAK_REF)) == N_WEAK_DEF;
-    if (((Desc & (N_WEAK_REF | N_WEAK_DEF)) && !PrivateWeak && !PublicWeak) ||
-        ((Type & N_TYPE) == N_UNDF && Value))
-      return fail("weak/common native definitions are unsupported");
-    Symbol Item{
-        canonical(*Name),  Number, 0, 0, false, bool(Desc & N_ARM_THUMB_DEF),
-        bool(Type & N_EXT)};
+    if ((Type & N_TYPE) == N_UNDF && Original.isArm64e()) {
+      const auto Weak = Entry.importWeakness();
+      // N_REF_TO_WEAK describes the definition. Only N_WEAK_REF allows
+      // this object reference to be absent when dyld resolves the symbol.
+      if (!Weak.has_value())
+        return fail(kUnsupportedNativeSymbol);
+      Image.MachOImportWeakness.emplace(Name->str(), *Weak);
+    } else if (((Desc & (N_WEAK_REF | N_WEAK_DEF)) && !PrivateWeak &&
+                !PublicWeak) ||
+               ((Type & N_TYPE) == N_UNDF && Value)) {
+      return fail(kUnsupportedNativeSymbol);
+    }
+    Symbol Item{canonical(*Name),
+                Number,
+                0,
+                0,
+                false,
+                bool(Desc & N_ARM_THUMB_DEF),
+                bool(Type & N_EXT),
+                Name->starts_with(macho_arm64e_abi::kSymbolPrefix)};
     if ((Type & N_TYPE) == N_SECT) {
       if (!Result.Sections.contains(Number))
         continue;
@@ -850,7 +907,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
           Value - Result.OldSectionVAs.at(Number) >= Section.Size)
         return fail("symbol exceeds native section");
       Item.Offset = Value - Result.OldSectionVAs.at(Number);
-      Item.Function = Section.Kind == Kind::Code && Name->starts_with("_") &&
+      Item.Function = Section.Kind == Kind::Code && Item.HasPrefix &&
                       machODataInCodeRanges(Data, Value, 1).empty();
       // Hidden compiler helpers (e.g. terminate landing pads) bind within this
       // object. Staging adds no exported weak definition or coalescing promise.
@@ -860,6 +917,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
             Section.Kind != Kind::WritableData ||
             !Result.WeakData.emplace(Result.Sections.at(Number), Index).second)
           return fail(kWeakDataAtom);
+        Image.MachOImportWeakness.emplace(Name->str(), false);
       }
       if (Result.Descriptors == Result.Sections.at(Number) &&
           !(Type & N_PEXT) && (Type & N_EXT) && !PublicWeak) {
@@ -1173,7 +1231,7 @@ static CompiledFixupReference signedFunctionImport(llvm::StringRef Name) {
   return Ref;
 }
 
-// A native B/BL to a newly declared function needs a local callable. Keep the
+// A native B/BL to an imported function needs a local callable. Keep the
 // slot in RELRO and describe the leaf stub to the system unwinder.
 llvm::Error prepareAuthenticatedCallStubs(NativeMachO &Object,
                                           std::set<unsigned> Functions) {
@@ -1730,13 +1788,15 @@ resolve(const NativeMachO &Object, unsigned Index, const BinaryImage &Original,
   if (auto B = Bindings.find(S.Name); B != Bindings.end())
     return B->second.OriginalVA;
   std::set<uint64_t> VAs;
+  const bool NativeBranch = DirectBranch && Original.isArm64e();
+  const auto LinkerName = NativeBranch ? S.linkerName() : S.Name;
   for (const auto &S0 : Original.Symbols)
-    if (canonical(S0.Name) == S.Name && S0.IsFunc &&
-        Original.hasAuthenticatedFunctionEntryAt(S0.Addr))
+    if ((NativeBranch ? S0.Name == LinkerName : canonical(S0.Name) == S.Name) &&
+        S0.IsFunc && Original.hasAuthenticatedFunctionEntryAt(S0.Addr))
       VAs.insert(S0.Addr);
   for (const auto &[VA, Import] : Original.ImportStubIndices)
     if (Import < Original.Imports.size() &&
-        Original.Imports[Import].Name == S.Name &&
+        Original.Imports[Import].Name == LinkerName &&
         Original.findImportStubAt(VA))
       VAs.insert(VA);
   if (VAs.size() != 1)
@@ -2015,7 +2075,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       Reference.IsResolved = true;
       Reference.PointerAuth = CompiledPointerAuthentication{
           Word->Key, Word->Diversity, Word->AddressDiversity};
-      if (Symbol->second.Section || Bindings.contains(Symbol->second.Name)) {
+      if (Object.Image.SymbolAddrs.contains(Reference.Symbol)) {
         auto Target = resolve(Object, R.SymbolIndex, Original, Bindings);
         if (!Target)
           return Target.takeError();
@@ -2034,14 +2094,16 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     const bool CompactPersonality = isCompactPersonality(Object, R);
     const bool PointerToGOT =
         A == Arch::AArch64 && R.Type == ARM64_RELOC_POINTER_TO_GOT;
-    if (Original.isArm64e() && (CompactPersonality || PointerToGOT)) {
+    const bool AbsoluteGOT = PointerToGOT && !R.PCRel;
+    if (Original.isArm64e() &&
+        (CompactPersonality || (PointerToGOT && !AbsoluteGOT))) {
       const bool Personality = CompactPersonality || Object.EH == R.Section;
       auto Slot = Object.GOT.find({R.SymbolIndex, Personality});
       if (Slot == Object.GOT.end() ||
           (CompactPersonality &&
            (R.Type != ARM64_RELOC_UNSIGNED ||
             R.Width != arm64e::kPointerBytes || R.PCRel || Raw)) ||
-          (PointerToGOT && (!R.PCRel || R.Width != sizeof(uint32_t))))
+          (PointerToGOT && R.Width != sizeof(uint32_t)))
         return fail(kGOTRelocation);
       if (CompactPersonality)
         writeLE<uint64_t>(Out, Slot->second.Address);
@@ -2056,8 +2118,9 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       }
       continue;
     }
-    if (Original.isArm64e() && R.Type == ARM64_RELOC_UNSIGNED &&
-        !R.SubtractSymbol && !R.SubtractVA && S.IsAllocated &&
+    if (Original.isArm64e() &&
+        (R.Type == ARM64_RELOC_UNSIGNED || AbsoluteGOT) && !R.SubtractSymbol &&
+        !R.SubtractVA && S.IsAllocated &&
         (S.IsInImage || isExternalMachORelro(Object.Image, S))) {
       if (R.PCRel || R.Scattered || R.Width != arm64e::kPointerBytes ||
           S.Kind != Kind::WritableData)
@@ -2067,13 +2130,19 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       Reference.Kind = R.Type;
       Reference.BitWidth = R.Width * CHAR_BIT;
       Reference.IsResolved = Reference.OrdinaryPointer = true;
-      if (R.External) {
+      if (AbsoluteGOT) {
+        const auto Slot = Object.GOT.find({R.SymbolIndex, false});
+        if (Raw || Slot == Object.GOT.end())
+          return fail(kGOTRelocation);
+        // This field rebases to the GOT cell. Only the cell binds the symbol.
+        Reference.ResolvedValue = Slot->second.Address;
+      } else if (R.External) {
         auto Symbol = Object.Symbols.find(R.SymbolIndex);
         if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty())
           return fail(kOrdinarySymbol);
         Reference.Symbol = Symbol->second.Name;
         Reference.Addend = int64_t(Raw);
-        if (Symbol->second.Section || Bindings.contains(Symbol->second.Name)) {
+        if (Object.Image.SymbolAddrs.contains(Reference.Symbol)) {
           auto Target = resolve(Object, R.SymbolIndex, Original, Bindings);
           if (!Target)
             return Target.takeError();

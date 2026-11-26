@@ -1287,7 +1287,8 @@ llvm::Error MachOPatcher::appendReplacementImage(
     if (auto Error = validateSourcePatchDependencyRequests(Dependencies))
       return Error;
     DependencyImage = Binary;
-    auto Admitted = admitMachOSourceLibraries(DependencyImage, Dependencies);
+    auto Admitted = admitMachOSourceLibraries(DependencyImage, Dependencies,
+                                              Image.MachOImportWeakness);
     if (!Admitted)
       return Admitted.takeError();
   }
