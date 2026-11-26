@@ -188,6 +188,168 @@ MACHO_AUTH_NATIVE_TEXT(kCleanupSymbol, "_cleanup_frame")
 MACHO_AUTH_NATIVE_TEXT(kRebaseSymbol, "_rebased")
 MACHO_AUTH_NATIVE_TEXT(kBindSymbol, "_bound")
 MACHO_AUTH_NATIVE_TEXT(kInstalledImportSymbol, "_getpid")
+MACHO_AUTH_NATIVE_TEXT(kOptionalBinding, "neverd_missing_binding_fixture")
+MACHO_AUTH_NATIVE_TEXT(kBindingFieldsSymbol, "_binding_fields")
+MACHO_AUTH_NATIVE_TEXT(kCoalescedSymbol, "_binding_fallback")
+MACHO_AUTH_NATIVE_TEXT(kWeakLookupProvider, "<weak-def-coalesce>")
+MACHO_AUTH_NATIVE_TEXT(kBindingWeakOption, "-DBIND_WEAK")
+MACHO_AUTH_NATIVE_TEXT(kBindingObjectOption, "-DBIND_OBJECT")
+MACHO_AUTH_NATIVE_TEXT(kBindingReferenceOnlyOption, "-DBIND_REFERENCE_ONLY")
+MACHO_AUTH_NATIVE_TEXT(kBindingHostFallback, "-DBIND_HOST_FALLBACK")
+MACHO_AUTH_NATIVE_TEXT(kBindingWeakLoadImage, "weak-load.dylib")
+MACHO_AUTH_NATIVE_TEXT(kBindingSystemLibrary, "/usr/lib/libSystem.B.dylib")
+MACHO_AUTH_NATIVE_TEXT(kBindingWeakLibrary, "-Wl,-weak_library,")
+MACHO_AUTH_NATIVE_TEXT(kBindingProvider, R"cpp(
+extern "C" { int binding_provider_anchor = 1; }
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kBindingNativeEnv, "NEVERD_ARM64E_LIFTED_NATIVE")
+MACHO_AUTH_NATIVE_ARGS(kBindingDriverArgs, "-arch", "arm64", "-std=c++20",
+                       "-fptrauth-intrinsics", "-march=armv8.3-a",
+                       "-Wl,-export_dynamic")
+MACHO_AUTH_NATIVE_VALUE(int64_t, kBindingDirectAddend, 8)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kBindingCallWord, 4)
+MACHO_AUTH_NATIVE_TEXT(kBindingAssembly, R"asm(
+.text
+.globl _entry
+.p2align 2
+_entry:
+.cfi_startproc
+  cbnz x0, Lfields
+  adrp x16, _getpid@GOTPAGE
+  ldr x16, [x16, _getpid@GOTPAGEOFF]
+  cbz x16, Labsent
+  b _getpid
+Labsent:
+  mov x0, #0
+  ret
+Lfields:
+  adrp x0, _binding_fields@PAGE
+  add x0, x0, _binding_fields@PAGEOFF
+  ret
+.cfi_endproc
+#ifdef BIND_WEAK
+.weak_reference _getpid
+#elif defined(BIND_OBJECT)
+// N_REF_TO_WEAK on an undefined symbol still requires a definition.
+.desc _getpid, 0x80
+#endif
+#ifdef BIND_REFERENCE_ONLY
+#ifdef BIND_WEAK
+.weak_reference _binding_fallback
+#endif
+#else
+.data
+.p2align 3
+.globl _binding_fallback
+.weak_definition _binding_fallback
+_binding_fallback:
+#ifdef BIND_OBJECT
+  .quad 99
+#else
+  .quad 42
+#endif
+#endif
+.section __DATA_CONST,__const
+.p2align 3
+.globl _binding_fields
+_binding_fields:
+  .quad (_getpid-4)@AUTH(da,0x1234,addr)
+  .quad _getpid+8
+#ifdef BIND_OBJECT
+  .quad _getpid@GOT
+#else
+  .quad 0
+#endif
+  .long _getpid@GOT-.
+  .long 0
+#ifdef BIND_OBJECT
+  .weak_reference neverd_missing_binding_fixture
+  .quad neverd_missing_binding_fixture@AUTH(db,0x1234,addr)
+#elif defined(BIND_WEAK)
+  .weak_reference _binding_provider_anchor
+  .quad _binding_provider_anchor
+#else
+  .quad 0
+#endif
+#if defined(BIND_OBJECT) || defined(BIND_WEAK)
+  .quad (_binding_fallback+4)@AUTH(da,0x1234,addr)
+  .quad _binding_fallback
+  .long _binding_fallback@GOT-.
+  .long 0
+#else
+  .space 24
+#endif
+#ifdef BIND_OBJECT
+  .quad neverd_missing_binding_fixture
+  .quad neverd_missing_binding_fixture@GOT
+#else
+  .space 16
+#endif
+.subsections_via_symbols
+)asm")
+MACHO_AUTH_NATIVE_TEXT(kBindingDriver, R"cpp(
+#include <cstdint>
+#include <cstdio>
+#include <dlfcn.h>
+#include <ptrauth.h>
+#include <unistd.h>
+#ifdef BIND_HOST_FALLBACK
+extern "C" __attribute__((weak, used, visibility("default")))
+uint64_t binding_fallback = 77;
+constexpr uint64_t expectedFallback = 77;
+#else
+constexpr uint64_t expectedFallback = 42;
+#endif
+struct Fields {
+  void *auth;
+  uintptr_t direct;
+  const uintptr_t *got;
+  int32_t relative;
+  uint32_t padding;
+  uintptr_t optional;
+  void *coalescedAuth;
+  uintptr_t coalescedDirect;
+  int32_t coalescedRelative;
+  uint32_t coalescedPadding;
+  uintptr_t optionalDirect;
+  const uintptr_t *optionalGOT;
+};
+int main(int argc, char **argv) {
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) {
+    std::fprintf(stderr, "%s\n", dlerror());
+    return 1;
+  }
+  auto entry = reinterpret_cast<uintptr_t (*)(int)>(dlsym(image, "entry"));
+  if (!entry || entry(0) != static_cast<uintptr_t>(getpid()))
+    return 2;
+  auto *fields = reinterpret_cast<const Fields *>(entry(1));
+  auto *got = reinterpret_cast<const uintptr_t *>(
+      reinterpret_cast<uintptr_t>(&fields->relative) + fields->relative);
+  auto function = reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "getpid"));
+  auto authenticated = ptrauth_auth_data(fields->auth, ptrauth_key_asda,
+      ptrauth_blend_discriminator(&fields->auth, 0x1234));
+  if (reinterpret_cast<uintptr_t>(authenticated) != function - 4)
+    return 4;
+  if (*got != function || fields->direct != function + 8 || fields->optional)
+    return 3;
+  if (argc == 2 && !fields->coalescedDirect)
+    return 0;
+  auto *fallback = reinterpret_cast<const uintptr_t *>(
+      reinterpret_cast<uintptr_t>(&fields->coalescedRelative) +
+      fields->coalescedRelative);
+  auto coalesced = ptrauth_auth_data(fields->coalescedAuth, ptrauth_key_asda,
+      ptrauth_blend_discriminator(&fields->coalescedAuth, 0x1234));
+  if (fields->coalescedDirect != *fallback ||
+      reinterpret_cast<uintptr_t>(coalesced) != *fallback + 4 ||
+      *reinterpret_cast<const uint64_t *>(*fallback) != expectedFallback)
+    return 5;
+  if (argc > 2 && (fields->got != got || fields->optionalDirect ||
+                   !fields->optionalGOT || *fields->optionalGOT))
+    return 6;
+  return 0;
+}
+)cpp")
 MACHO_AUTH_NATIVE_TEXT(kMissingHost,
                        "requires Apple Clang, ld, codesign and dyld_info")
 MACHO_AUTH_NATIVE_TEXT(kFixupsHeading, "fixup_chain_details:")

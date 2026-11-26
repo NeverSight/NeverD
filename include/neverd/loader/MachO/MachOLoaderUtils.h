@@ -29,6 +29,18 @@
 namespace neverd {
 namespace macho_loader {
 
+/// The fields shared by 32-bit and 64-bit object symbol table entries.
+struct ObjectNList {
+  uint8_t Type, Sect;
+  uint16_t Desc;
+  uint64_t Value;
+
+  /// Only an undefined external can require or weakly reference an import.
+  std::optional<bool> importWeakness() const;
+};
+ObjectNList readObjectNList(const llvm::object::MachOObjectFile &Obj,
+                            llvm::object::DataRefImpl Symbol);
+
 /// Only the last fifteen encodings denote negative special library ordinals.
 inline int32_t chainedLibraryOrdinal(uint32_t Raw, uint32_t Modulus) {
   const int32_t Value = static_cast<int32_t>(Raw);

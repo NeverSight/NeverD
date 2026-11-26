@@ -11,12 +11,24 @@
 #define NEVERD_BACKEND_CODEGEN_MACHO_MACHOARM64EABI_H
 
 #include <cstdint>
+#include <map>
+#include <string>
 
 namespace neverd::macho_arm64e_abi {
 #define MACHO_ARM64E_ABI_VALUE(Type, Name, Value)                              \
   inline constexpr Type Name = Value;
 #define MACHO_ARM64E_ABI_TEXT(Name, Text) inline constexpr char Name[] = Text;
 #include "MachOArm64eABI.def"
+
+/// C names gain an underscore. Assembly may already use a bare dyld name;
+/// the object's nlist records that spelling before symbol canonicalization.
+inline std::string
+importName(const std::string &Symbol,
+           const std::map<std::string, bool> &ObjectImports) {
+  if (!Symbol.starts_with(kSymbolPrefix) && ObjectImports.contains(Symbol))
+    return Symbol;
+  return kSymbolPrefix + Symbol;
+}
 
 enum class PAuthEncoding : uint32_t {
 #define NEVERD_A64_PAUTH_HINT(Name, Word, Operation, Pointer, Modifier)        \

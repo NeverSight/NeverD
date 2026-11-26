@@ -1900,6 +1900,22 @@ Its target and provider stay unresolved. A GOT relocation addresses the
 symbol's GOT entry. Direct relocations to the same symbol address the symbol
 itself, even when both forms occur in one object.
 
+When publishing a native arm64e object, the undefined symbol's `N_WEAK_REF`
+bit sets the binding strength of each new signed pointer, ordinary pointer
+and call stub. The original image or an explicit dylib declaration supplies
+the library ordinal. Different ordinals for one symbol require an explicit
+provider. A declared weak import can also use an existing weak-loaded dylib.
+Both the dylib and its symbol may be absent at runtime. Existing bindings
+retain their own strength. For GOT reuse the publisher compares the on-disk
+weak-import bit, provider and signing schema. Runtime analyses also account
+for the possibility that a weak-loaded dylib is absent.
+An absolute `.quad symbol@GOT` becomes a dyld rebase to that cell.
+The PC-relative `.long symbol@GOT-.` and the GOT page instructions address
+the same cell. A direct pointer carries its own addend and signing recipe.
+An original weak data export supplies the fallback for a separate replacement
+weak definition, even when the original had no GOT cell or import row for it.
+Direct and GOT references both use dyld's weak lookup ordinal.
+
 `installMachOObjectPatch` also connects this native object profile to the shared
 publication transaction. Before final signing, native arm64e publication
 migrates threaded inputs through the existing checked chained-fixup converter;
@@ -1929,9 +1945,10 @@ Native compact language records retain LSDA addresses and personality slots.
 The arm64e personality slot uses IA/address diversity with zero discriminator;
 RTTI slots remain ordinary pointers. Existing unambiguous personality slots
 can be reused, and explicit providers can allocate new slots. Native
-`ARM64_RELOC_POINTER_TO_GOT` uses the linker's addend-free PC-relative contract;
-GOT page/pageoff references use the same allocated slots. The shared chain
-installer handles both pointer kinds in modern and threaded images. Language
+`ARM64_RELOC_POINTER_TO_GOT` supports a signed PC-relative word or an absolute
+pointer-sized field in relocatable data. GOT page/pageoff references use the
+same allocated slots. The shared chain installer handles both pointer kinds
+in modern and threaded images. Language
 name resolution consumes canonical ordinary bindings and authenticated recipes
 even when a new slot has no indirect-symbol-table entry; it does not reclassify
 an authenticated slot as ordinary import storage.

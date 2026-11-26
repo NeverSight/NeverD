@@ -297,7 +297,7 @@ neverd::collectMachOAuthenticatedFixups(
   if (State->CPUType != CPU_TYPE_ARM64 ||
       !arm64e::isSubtype(State->CPUSubtype) || !Chains.CommandOffset)
     return fail(kImageABI);
-  auto Providers = Chains.uniqueImportProviders();
+  auto Providers = Chains.uniqueImportProviders(Image.MachOImportWeakness);
   std::map<llvm::StringRef, unsigned> LibraryOrdinals;
   if (!Dependencies.empty())
     for (unsigned I = 0; I < Chains.Libraries.size(); ++I)
@@ -306,11 +306,12 @@ neverd::collectMachOAuthenticatedFixups(
   std::map<std::string, bool> Declared;
   for (const auto &Dependency : Dependencies) {
     auto Library = LibraryOrdinals.find(Dependency.Library);
-    const auto Name = kNativeSymbolPrefix + Dependency.Symbol;
+    const auto Name = macho_arm64e_abi::importName(Dependency.Symbol,
+                                                   Image.MachOImportWeakness);
     if (Library == LibraryOrdinals.end() ||
         !Declared.emplace(Name, false).second)
       return fail(kDeclaredProvider);
-    Providers[Name] = MachOChainedFixups::Provider{Library->second, false};
+    Providers[Name] = {Library->second, false};
   }
   for (const auto &Section : Image.Sections) {
     const bool ExternalRelro = isExternalMachORelro(Image, Section);
@@ -367,19 +368,24 @@ neverd::collectMachOAuthenticatedFixups(
         Fixup.Recipe.Target = Reference.ResolvedValue;
       } else {
         const auto Name = Image.InputKind == RewriteInputKind::ReplacementObject
-                              ? kNativeSymbolPrefix + Reference.Symbol
+                              ? macho_arm64e_abi::importName(
+                                    Reference.Symbol, Image.MachOImportWeakness)
                               : Reference.Symbol;
         auto Provider = Providers.find(Name);
-        if (Provider == Providers.end() || !Provider->second)
+        if (Provider == Providers.end() || !Provider->second.Ordinal)
           return fail(kProducerImport);
-        const auto [Ordinal, Weak] = *Provider->second;
+        const auto Weak =
+            Provider->second.bindingStrength(Name, Image.MachOImportWeakness);
+        if (!Weak.has_value())
+          return fail(kProducerImport);
+        const auto Ordinal = *Provider->second.Ordinal;
         Fixup.Recipe.Symbol = Name;
         if (auto Entry = Declared.find(Name); Entry != Declared.end())
           Entry->second = true;
         Fixup.Recipe.LibraryOrdinal = Ordinal;
         if (Ordinal > 0)
           Fixup.Recipe.Module = Chains.Libraries[Ordinal - 1];
-        Fixup.Recipe.WeakImport = Weak;
+        Fixup.Recipe.WeakImport = *Weak;
         Fixup.Recipe.Addend = Reference.Addend;
       }
       Result.push_back(std::move(Fixup));
