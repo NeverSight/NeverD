@@ -177,8 +177,13 @@ original program and both relink modes.
 | microMIPS R2, R3, R5, R6 | o32, n32, n64 | Classic and tagged microMIPS |
 | MIPS16 R2 | o32 | Classic and tagged MIPS16 |
 
-These 110 configurations call the rebuilt function three times. Six cover
-same-size replacements, and 104 cover shrinking replacements. All also link
+The release-based o32 rows run on both MIPS32 and MIPS64 ISA profiles. The
+fork marks a MIPS64/o32 executable with `EF_MIPS_32BITMODE`, ELF32 and the
+o32 ABI. These rows qualify static relinking. Instruction lifting for
+MIPS64/o32 currently supports classic historical MIPS III.
+
+These 140 configurations call the rebuilt function three times. Six cover
+same-size replacements, and 134 cover shrinking replacements. All also link
 a larger replacement in `section` mode and observe exit status 161. The
 same object must fail in `inplace` mode and preserve the previous output.
 The runner checks the function size, file offset, ISA marker and exact ISA

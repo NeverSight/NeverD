@@ -105,20 +105,24 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     return profileError("vendor/ASE profile is not supported");
   const uint32_t ISA = Flags & EF_MIPS_ARCH;
   const unsigned Historical = ISA <= EF_MIPS_ARCH_5 ? (ISA >> 28) + 1 : 0;
-  const bool HistoricalO32 = !Wide && Historical >= 3;
-  const bool R1 = ISA == (Wide ? EF_MIPS_ARCH_64 : EF_MIPS_ARCH_32);
-  const bool R6 = ISA == (Wide ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
+  const bool Release64 = ISA == EF_MIPS_ARCH_64 || ISA == EF_MIPS_ARCH_64R2 ||
+                         ISA == EF_MIPS_ARCH_64R6;
+  const bool WideO32 =
+      !Wide && (Historical >= 3 || (Release64 && (Flags & EF_MIPS_32BITMODE)));
+  const bool WideISA = Wide || WideO32;
+  const bool R1 = ISA == (WideISA ? EF_MIPS_ARCH_64 : EF_MIPS_ARCH_32);
+  const bool R6 = ISA == (WideISA ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
   if (Historical &&
       ((Wide && Historical < 3) ||
        (Flags & (EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16 | EF_MIPS_NAN2008))))
     return profileError(
         "historical ISA requires classic MIPS I-V o32 or III-V n32/n64");
   if (!Historical && !R1 && !R6 &&
-      ISA != (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
+      ISA != (WideISA ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
     return profileError(
         "requires matching ELF class and MIPS32/MIPS64 release flags");
   if ((Flags & EF_MIPS_ABI) != (Wide ? 0u : EF_MIPS_ABI_O32) ||
-      (!HistoricalO32 && (Flags & EF_MIPS_32BITMODE)))
+      (!WideO32 && (Flags & EF_MIPS_32BITMODE)))
     return profileError("requires ELF32/o32, ELF32/n32 or ELF64/n64 ABI");
   constexpr uint32_t KnownFlags =
       EF_MIPS_NOREORDER | EF_MIPS_PIC | EF_MIPS_CPIC | EF_MIPS_ABI2 |
@@ -137,7 +141,7 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   const bool Compressed = Profile.HasMicroMIPS || Profile.HasMIPS16;
   if (R1 && (Compressed || (Flags & EF_MIPS_NAN2008)))
     return profileError("Release 1 requires classic encoding and legacy NaNs");
-  if (R1 && !Wide && (Flags & EF_MIPS_FP64))
+  if (R1 && !WideISA && (Flags & EF_MIPS_FP64))
     return profileError("MIPS32 Release 1 requires 32-bit floating registers");
   if (R6 && Profile.HasMIPS16)
     return profileError("Release 6 compressed profile is unsupported");
@@ -293,7 +297,7 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
 
   if (GP.Value && !GP.HasScopedGP &&
       (Header.e_type == ET_EXEC || Header.e_type == ET_DYN)) {
-    const uint64_t Value = (N32 || HistoricalO32)
+    const uint64_t Value = (N32 || WideO32)
                                ? uint64_t(llvm::SignExtend64<32>(*GP.Value))
                                : *GP.Value;
     if (Flags & (EF_MIPS_PIC | EF_MIPS_CPIC))
@@ -311,8 +315,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     if (llvm::support::endian::read16<ELFT::Endianness>(Bytes.data()) != 0)
       return profileError("unsupported .MIPS.abiflags version");
     const uint32_t ASE = Read32(12);
-    if (R1 && (ASE || (!Wide && (Bytes[5] > 1 || Bytes[7] == 4 ||
-                                 Bytes[7] == 6 || Bytes[7] == 7))))
+    if (R1 && (ASE || (!WideISA && (Bytes[5] > 1 || Bytes[7] == 4 ||
+                                    Bytes[7] == 6 || Bytes[7] == 7))))
       return profileError(
           "unsupported Release 1 extension or FP register width");
     if (Historical && ASE)
@@ -351,11 +355,11 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
                                      : 0u) &&
         (Bytes[3] == 3 || Bytes[3] == 5);
     if (Bytes[2] != (Historical ? Historical
-                     : Wide     ? 64
+                     : WideISA  ? 64
                                 : 32) ||
         (!LaterScalar &&
          Bytes[3] != (Profile.HasMSA ? 5 : Profile.ISARevision)) ||
-        (Bytes[4] != (Wide ? 2 : 1) && !(HistoricalO32 && Bytes[4] == 2)))
+        (Bytes[4] != (Wide ? 2 : 1) && !(WideO32 && Bytes[4] == 2)))
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
         Read32(8) != 0 ||

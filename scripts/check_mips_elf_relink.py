@@ -103,6 +103,7 @@ class Profile:
     compressed_entry: bool = False
     historical_isa: int = 0
     linkage: str = ""
+    gp64_o32: bool = False
 
     @property
     def tls_model(self):
@@ -111,6 +112,8 @@ class Profile:
     @property
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
+        if self.gp64_o32:
+            suffix = "gp64-" + suffix
         if self.linkage:
             return f"{self.linkage}-{self.isa}-r{self.release}-{suffix}"
         if self.historical_isa:
@@ -128,10 +131,14 @@ class Profile:
         return ABIS[self.abi][2]
 
     @property
+    def release_isa_bits(self):
+        return 64 if self.gp64_o32 or self.abi != "o32" else 32
+
+    @property
     def cpu(self):
         if self.historical_isa:
             return f"mips{self.historical_isa}"
-        base = f"mips{32 if self.abi == 'o32' else 64}"
+        base = f"mips{self.release_isa_bits}"
         return base if self.release == 1 else f"{base}r{self.release}"
 
 
@@ -146,20 +153,10 @@ def profiles(version=PRODUCT_VERSION):
                 last_level = 3 if version == 4 and abi == "o32" else 5
                 for level in range(first_level, last_level + 1):
                     yield Profile(abi, little, shrinking=True, historical_isa=level)
-            for isa in ("classic", "micromips"):
-                releases = (2, 6)
-                if version >= 4:
-                    releases = (1, 2, 3, 5, 6) if isa == "classic" else (2, 3, 5, 6)
-                for release in releases:
-                    profile = Profile(abi, little, isa, release, shrinking=True)
-                    yield profile
-                    if isa == "micromips" and version >= 3:
-                        yield replace(profile, compressed_entry=True)
-            if abi == "o32":
-                profile = Profile(abi, little, "mips16", shrinking=True)
+            for profile in scalar_release_profiles(abi, little, version):
                 yield profile
-                if version >= 3:
-                    yield replace(profile, compressed_entry=True)
+                if version >= 5 and abi == "o32":
+                    yield replace(profile, gp64_o32=True)
 
             if version >= 4:
                 for release in (2, 6):
@@ -171,6 +168,23 @@ def profiles(version=PRODUCT_VERSION):
                         yield Profile(abi, little, "mips16", linkage=linkage)
                 yield Profile(abi, little, linkage="dsp")
                 yield Profile(abi, little, release=5, linkage="msa")
+
+
+def scalar_release_profiles(abi, little, version):
+    for isa in ("classic", "micromips"):
+        releases = (2, 6)
+        if version >= 4:
+            releases = (1, 2, 3, 5, 6) if isa == "classic" else (2, 3, 5, 6)
+        for release in releases:
+            profile = Profile(abi, little, isa, release, shrinking=True)
+            yield profile
+            if isa == "micromips" and version >= 3:
+                yield replace(profile, compressed_entry=True)
+    if abi == "o32":
+        profile = Profile(abi, little, "mips16", shrinking=True)
+        yield profile
+        if version >= 3:
+            yield replace(profile, compressed_entry=True)
 
 
 def startup(profile):
@@ -403,8 +417,8 @@ def inspect_elf(image, profile):
         arch = profile.historical_isa - 1
         level, revision = profile.historical_isa, 0
     else:
-        arch = {1: 5, 2: 7, 3: 7, 5: 7, 6: 9}[profile.release] + (abi != "o32")
-        level, revision = (32 if abi == "o32" else 64), profile.release
+        arch = {1: 5, 2: 7, 3: 7, 5: 7, 6: 9}[profile.release] + (profile.release_isa_bits == 64)
+        level, revision = profile.release_isa_bits, profile.release
     extension = {"classic": 0, "micromips": 0x02000000, "mips16": 0x04000000}[profile.isa]
     if (image["e_type"] != "ET_EXEC" or image["e_machine"] != "EM_MIPS"
             or image.little_endian != profile.little or image.elfclass != (64 if abi == "n64" else 32)
@@ -415,7 +429,7 @@ def inspect_elf(image, profile):
     abi_record = image.get_section_by_name(".MIPS.abiflags")
     if abi_record is None or abi_record.data()[2:4] != bytes((level, revision)):
         raise ValueError(f"{profile.name}: expected ISA level {level}, revision {revision} in .MIPS.abiflags")
-    if abi == "o32" and profile.historical_isa >= 3:
+    if abi == "o32" and (profile.historical_isa >= 3 or profile.gp64_o32):
         if not flags & 0x100 or abi_record.data()[4] != 2:
             raise ValueError(f"{profile.name}: expected the fork's wide-GPR o32 ELF flags")
     if bool(image["e_entry"] & 1) != profile.compressed_entry:
@@ -440,7 +454,7 @@ def inspect_elf(image, profile):
 
 def execute_image(path, image, profile, expected):
     needs_fpu = profile.release < 6 and profile.linkage and profile.linkage != "pic-soft"
-    if profile.isa == "micromips" and (profile.abi != "o32" or needs_fpu):
+    if profile.isa == "micromips" and (profile.abi != "o32" or profile.gp64_o32 or needs_fpu):
         from mips_elf_runtime import run_micromips64
         run_micromips64(image, profile.release, profile.exit_nr, expected,
                         instruction_limit=2048 if profile.linkage else 256,

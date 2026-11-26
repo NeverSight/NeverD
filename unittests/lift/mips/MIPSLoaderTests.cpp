@@ -93,6 +93,37 @@ TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
   }
 }
 
+TEST(MIPSO32Loader, MIPS64CompatibilityModeRetainsReleaseAndPointerWidth) {
+  using namespace llvm::ELF;
+  ELFLoader Loader;
+  for (bool Little : {false, true}) {
+    for (unsigned Revision : {1u, 2u, 3u, 5u, 6u}) {
+      SCOPED_TRACE(Revision);
+      ELFBytes File(Little ? Arch::MIPS32EL : Arch::MIPS32);
+      const uint32_t ISA = Revision == 1   ? EF_MIPS_ARCH_64
+                           : Revision == 6 ? EF_MIPS_ARCH_64R6
+                                           : EF_MIPS_ARCH_64R2;
+      File.put(36, ISA | EF_MIPS_32BITMODE | EF_MIPS_ABI_O32, 4);
+      File.abiFlags();
+      File.Bytes[0xe2] = 64;
+      File.Bytes[0xe3] = Revision;
+      File.Bytes[0xe4] = File.Bytes[0xe5] = 2;
+      File.Bytes[0xe7] = 6;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      EXPECT_EQ(Image->Arch, Little ? Arch::MIPS64O32EL : Arch::MIPS64O32);
+      EXPECT_EQ(Image->getPointerSize(), 4u);
+      EXPECT_EQ(Image->MIPS->ABI, MIPSABI::O32);
+      EXPECT_EQ(Image->MIPS->ISARevision, Revision);
+      EXPECT_TRUE(Image->MIPS->hasScalarFP64ABI(Image->Arch));
+      File.Bytes[0xe2] = 32;
+      auto Conflict = Loader.loadBuffer(File.buffer());
+      ASSERT_FALSE(bool(Conflict));
+      llvm::consumeError(Conflict.takeError());
+    }
+  }
+}
+
 TEST(MIPSHistoricalLoader, MIPSIIIO32RetainsMachineAndABIWidths) {
   for (bool Little : {false, true}) {
     const Arch A = Little ? Arch::MIPS64O32EL : Arch::MIPS64O32;
