@@ -1589,6 +1589,17 @@ an index whose upper bits come from the caller. `JTE_X86_64.ReloadThroughAnUncha
 reloads the byte a loop compared under a cursor its cases advance: the
 dispatch reads its six slots, while reloading the next byte or reloading
 after replacing the cursor stays unresolved.
+`JTE_X86_64.GuardReadsFlagsItsPredecessorCompareSet` dispatches after a `ja`
+that reads the flags of the previous block's `cmp`, directly and through a
+relay block that keeps them: both dispatches read their eight slots, while an
+index changed after the compare, or a second compare into the `ja` block that
+admits 101 values, stays unresolved.
+`JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
+whose first state is a constant: scalar recovery first takes its dispatch as a
+direct branch and withdraws that guess when the cases loop back, and the
+resolver's guarded four-slot table then stays usable for switch lowering. An
+unguarded dispatch whose next state comes from memory stays unsafe. The
+fixture needs `ld.lld`; without it the test is skipped.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

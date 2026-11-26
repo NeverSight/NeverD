@@ -2291,9 +2291,13 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   auto hasNoProvedTarget = [](const InsnRecord &Rec) {
     return Rec.JumpTableTargets.empty() || Rec.ValueDispatch;
   };
+  // A withdrawn scalar proof keeps the original transfer, and the ordinary
+  // resolver reconsiders it on the completed graph.  Only a transfer that
+  // resolver leaves without a proved target stays unsafe; a table it proves
+  // owns the edges the graph keeps.
   for (const auto &[Addr, Rec] : Insns)
     if ((Rec.RejectedScalarBranch || Rec.RejectedComputedTargets) &&
-        ReachableInsnAddrs.count(Addr))
+        ReachableInsnAddrs.count(Addr) && hasNoProvedTarget(Rec))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
   if (UnsafeJumpTableBranches)
     for (va_t Addr : *UnsafeJumpTableBranches)

@@ -3566,6 +3566,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_open_donor.s
   x86_64/test_jumptable_narrow_guard.s
   x86_64/test_jumptable_reload_cursor.s
+  x86_64/test_jumptable_flags_carry.s
   x86_64/test_jumptable_byte_switch.s
   x86_64/test_jumptable_inclusive_postload_clobber.s
   x86_64/test_jumptable_inclusive_postload_unrelated.s
@@ -4925,6 +4926,30 @@ if(LLD_EXEC)
     COMMENT "Linking x86-64 GCC cold fragment fixtures")
   list(APPEND ELF_EXECUTABLES ${gcc_cold_x64_obj} ${gcc_cold_x64_so}
                               ${gcc_cold_x64_stripped})
+
+  # A state machine whose first state is a constant, linked so its table holds
+  # plain offsets: exact scalar recovery first takes the dispatch as a direct
+  # branch, then withdraws that guess once the cases loop back.
+  set(scalar_retracted_x64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_jumptable_scalar_retracted.s")
+  set(scalar_retracted_x64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_scalar_retracted.o")
+  set(scalar_retracted_x64_so
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_scalar_retracted.so")
+  add_custom_command(
+    OUTPUT ${scalar_retracted_x64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c
+            ${scalar_retracted_x64_src} -o ${scalar_retracted_x64_obj}
+    DEPENDS ${scalar_retracted_x64_src}
+    COMMENT "Compiling x86-64 withdrawn scalar dispatch fixture")
+  add_custom_command(
+    OUTPUT ${scalar_retracted_x64_so}
+    COMMAND ${LLD_EXEC} -shared -o ${scalar_retracted_x64_so}
+            ${scalar_retracted_x64_obj}
+    DEPENDS ${scalar_retracted_x64_obj}
+    COMMENT "Linking x86-64 withdrawn scalar dispatch fixture")
+  list(APPEND ELF_EXECUTABLES ${scalar_retracted_x64_obj}
+                              ${scalar_retracted_x64_so})
 
   # Functions that never return, and callers whose compiler knew it, linked
   # and stripped.

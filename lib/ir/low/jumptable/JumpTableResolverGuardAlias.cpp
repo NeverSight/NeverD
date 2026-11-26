@@ -2007,6 +2007,77 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     }
   }
 alias_done:
+  // The block holding \p Addr: the nearest block start at or before it.
+  auto blockContaining = [&](va_t Addr) -> std::optional<va_t> {
+    auto It = BlockStarts.upper_bound(Addr);
+    if (It == BlockStarts.begin())
+      return std::nullopt;
+    --It;
+    return *It;
+  };
+  // How the block that \p Term ends enters \p Target: by its fallthrough, or
+  // by a branch, conditional-return or table target that names it.  Empty
+  // when the evidence account runs out.
+  struct BlockEntry {
+    bool Falls = false;
+    bool Named = false;
+  };
+  auto entersBlock = [&](const InsnRecord &Term,
+                         va_t Target) -> std::optional<BlockEntry> {
+    const bool Sized = Term.Size != 0 && Term.Addr <= InvalidVA - Term.Size;
+    const va_t Fall = Sized ? Term.Addr + Term.Size : InvalidVA;
+    BlockEntry Entry;
+    bool Falls = false;
+    if (Term.IsRet && Term.IsCond && Term.IsBranch) {
+      Entry.Named = Term.BranchTarget == Target;
+    } else if (Term.IsRet) {
+      return Entry;
+    } else if (Term.IsBranch && Term.IsIndirect) {
+      Falls = Term.IsCond && Sized;
+      for (va_t Successor : Term.JumpTableTargets) {
+        if (!consumeCandidateEvidence())
+          return std::nullopt;
+        if (Successor == Target)
+          Entry.Named = true;
+      }
+    } else if (Term.IsBranch && !Term.IsIndirect && !Term.IsCall) {
+      Falls = Term.IsCond && Sized;
+      Entry.Named = Term.BranchTarget == Target;
+    } else if ((!Term.IsBranch || Term.IsCall) &&
+               (!Term.IsNoReturnCall || Term.IsCond)) {
+      Falls = Sized;
+    }
+    Entry.Falls = Falls && Fall == Target;
+    return Entry;
+  };
+  // The blocks whose terminators enter \p Target.  Empty when the account
+  // runs out or an instruction lies before every block.
+  auto blocksEntering = [&](va_t Target) -> std::optional<std::set<va_t>> {
+    std::set<va_t> Entering;
+    const InsnRecord *Pending = nullptr;
+    va_t PendingBlock = 0;
+    auto consider = [&]() {
+      const auto Entry = entersBlock(*Pending, Target);
+      if (Entry && (Entry->Falls || Entry->Named))
+        Entering.insert(PendingBlock);
+      return Entry.has_value();
+    };
+    for (const auto &[Addr, Insn] : Insns) {
+      if (!consumeCandidateEvidence())
+        return std::nullopt;
+      const auto Block = blockContaining(Addr);
+      if (!Block)
+        return std::nullopt;
+      if (Pending && *Block != PendingBlock && !consider())
+        return std::nullopt;
+      Pending = &Insn;
+      PendingBlock = *Block;
+    }
+    if (Pending && !consider())
+      return std::nullopt;
+    return Entering;
+  };
+
   // The compared register reaches the table index when this guard branch's
   // conditional fallthrough is the use block's only incoming edge and every
   // later write of that register is a same-lane copy or the lifter's
@@ -2051,13 +2122,7 @@ alias_done:
         CompareAddr == InvalidVA || CompareSeq < 0 ||
         GuardBranchAddr == InvalidVA)
       return false;
-    auto blockOf = [&](va_t Addr) -> std::optional<va_t> {
-      auto It = BlockStarts.upper_bound(Addr);
-      if (It == BlockStarts.begin())
-        return std::nullopt;
-      --It;
-      return *It;
-    };
+    const auto &blockOf = blockContaining;
     const auto CompareBlock = blockOf(CompareAddr);
     const auto IndexBlock = blockOf(Info.IndexUseAddr);
     if (!CompareBlock || !IndexBlock)
@@ -2139,41 +2204,15 @@ alias_done:
       auto considerTerminator = [&](const InsnRecord &Term, va_t Block) {
         if (Reject)
           return;
-        const bool Sized = Term.Size != 0 && Term.Addr <= InvalidVA - Term.Size;
-        const va_t Fall = Sized ? Term.Addr + Term.Size : InvalidVA;
-        bool OtherHit = false;
-        auto note = [&](va_t Target) {
-          if (Target == *IndexBlock)
-            OtherHit = true;
-        };
-        bool Falls = false;
-        if (Term.IsRet && Term.IsCond && Term.IsBranch) {
-          note(Term.BranchTarget);
-        } else if (Term.IsRet) {
+        const auto Entry = entersBlock(Term, *IndexBlock);
+        if (!Entry) {
+          Reject = true;
           return;
-        } else if (Term.IsBranch && Term.IsIndirect) {
-          Falls = Term.IsCond && Sized;
-          for (va_t Target : Term.JumpTableTargets) {
-            if (!consumeCandidateEvidence()) {
-              Reject = true;
-              return;
-            }
-            note(Target);
-          }
-        } else if (Term.IsBranch && !Term.IsIndirect && !Term.IsCall) {
-          Falls = Term.IsCond && Sized;
-          note(Term.BranchTarget);
-        } else if ((!Term.IsBranch || Term.IsCall) &&
-                   (!Term.IsNoReturnCall || Term.IsCond)) {
-          Falls = Sized;
         }
-        if (Reject)
-          return;
-        const bool FallEdge = Falls && Fall == *IndexBlock;
-        if (!FallEdge && !OtherHit)
+        if (!Entry->Falls && !Entry->Named)
           return;
         IndexPredecessors.insert(Block);
-        if (FallEdge && !OtherHit && Term.IsCond && Term.IsBranch &&
+        if (Entry->Falls && !Entry->Named && Term.IsCond && Term.IsBranch &&
             !Term.IsCall && !Term.IsIndirect && !Term.IsRet) {
           IndexGuardBlock = Block;
           IndexGuardBranch = Term.Addr;
@@ -3057,6 +3096,102 @@ alias_done:
     }
     if (CondIndex < 0)
       continue;
+
+    // GCC threads `cmp $7, %edx; jle L` into `L: ...; ja default`, so the
+    // branch at L reads the flags its predecessor's compare set.  A flag is
+    // never the table index, so a leaf for it drops the whole guard.  While
+    // the branch instruction reads a flag that no earlier operation here
+    // writes, and the first block has one predecessor, which makes no call,
+    // that block runs right before it: prepend its operations, so the flag's
+    // definition and its inputs unfold there.  This only proposes syntax.
+    // Every unfolded definition keeps its all-path DefQuery, so another path
+    // into the block, or a write this walk does not see, still refuses the
+    // guard.  The search stops at the flags' nearest writer and, like the
+    // block inventory, is charged to the candidate account.
+    if (CurrentImg) {
+      const TargetRegInfo &Registers = getTargetRegInfo(CurrentImg->Arch);
+      auto overlaps = [](const NdVar &Left, const NdVar &Right) {
+        return Left.Space == Right.Space && Left.Size != 0 && Right.Size != 0 &&
+               Left.Offset < Right.Offset + Right.Size &&
+               Right.Offset < Left.Offset + Left.Size;
+      };
+      std::vector<va_t> Walked{BlockStart};
+      for (uint32_t Hop = 0; Hop < limits::kMaxJumpTableGuardFlagSearchBlocks;
+           ++Hop) {
+        // The flags the branch instruction reads before it writes them.
+        int First = CondIndex;
+        while (First > 0 && Ops[First - 1].Addr == BranchAddr)
+          --First;
+        std::vector<NdVar> Carried;
+        for (int I = First; I <= CondIndex; ++I) {
+          if (!consumeCandidateEvidence())
+            break;
+          for (int J = 0; J < Ops[I].NumInputs; ++J) {
+            const NdVar &Input = Ops[I].Inputs[J];
+            if (!Input.isReg() || !Registers.isFlag(Input.Offset, Input.Size))
+              continue;
+            bool WrittenBefore = false;
+            for (int K = First; K < I && !WrittenBefore; ++K)
+              WrittenBefore = overlaps(Ops[K].Output, Input);
+            if (!WrittenBefore)
+              Carried.push_back(Input);
+          }
+        }
+        // Drop the flags an earlier operation writes, the nearest first.
+        for (int I = First - 1; I >= 0 && !Carried.empty(); --I) {
+          if (!consumeCandidateEvidence())
+            break;
+          const NdVar &Out = Ops[I].Output;
+          Carried.erase(std::remove_if(Carried.begin(), Carried.end(),
+                                       [&](const NdVar &Flag) {
+                                         return overlaps(Out, Flag);
+                                       }),
+                        Carried.end());
+        }
+        if (GuardBuildExhausted) {
+          Info.IncompleteGuardDomain = true;
+          return false;
+        }
+        if (Carried.empty())
+          break;
+        const auto Entering = blocksEntering(Walked.back());
+        if (GuardBuildExhausted) {
+          Info.IncompleteGuardDomain = true;
+          return false;
+        }
+        if (!Entering || Entering->size() != 1 ||
+            std::find(Walked.begin(), Walked.end(), *Entering->begin()) !=
+                Walked.end())
+          break;
+        const va_t Predecessor = *Entering->begin();
+        std::vector<LowOp> Prefix;
+        bool Calls = false;
+        for (auto It = Insns.lower_bound(Predecessor);
+             It != Insns.end() && blockContaining(It->first) == Predecessor &&
+             !GuardBuildExhausted;
+             ++It) {
+          if (!consumeCandidateEvidence())
+            break;
+          for (const LowOp &Op : It->second.Ops) {
+            if (!consumeCandidateEvidence(/*scan + retention=*/2))
+              break;
+            if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+              Calls = true;
+            Prefix.push_back(Op);
+          }
+        }
+        if (GuardBuildExhausted) {
+          Info.IncompleteGuardDomain = true;
+          return false;
+        }
+        if (Calls ||
+            Ops.size() + Prefix.size() > limits::kMaxJumpTableEvidenceWork / 4)
+          break;
+        Ops.insert(Ops.begin(), Prefix.begin(), Prefix.end());
+        CondIndex += static_cast<int>(Prefix.size());
+        Walked.push_back(Predecessor);
+      }
+    }
 
     // The narrower value whose bytes the low lane \p Lane of the register
     // written at \p WriterIndex carries unchanged, as MSVC's

@@ -264,6 +264,12 @@ constexpr uint32_t kMaxJumpTableGuardExpressionDepth = 64;
 /// with `mov eax, [rcx]` in the next block.
 constexpr uint32_t kMaxJumpTableReloadSearchBlocks = 4;
 
+/// Blocks a jump-table guard looks straight back through, each its
+/// successor's only predecessor, for the compare that set the status flags
+/// its condition reads.  GCC threads `cmp $7, %edx; jle L` into
+/// `L: ...; ja default`, reusing the compare's flags in the next block.
+constexpr uint32_t kMaxJumpTableGuardFlagSearchBlocks = 4;
+
 /// CFG value reconstruction for target/address roles, masks and exact guard
 /// occurrences can cross many predecessors in an expanded dispatch graph.
 /// A 3-machine x64 selector reaches 65 distinct exact states before closing its
