@@ -2519,6 +2519,11 @@ with r8. The r6 package registered X86, ARM and AArch64.
 
 ### Native x1 runner qualification
 
+- [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
+  PC-sensitive PACM, CPTA-on and checked writeback when a free GitHub Actions
+  runner exposes these features. An M6 Mac is one candidate. Record the
+  original and generated execution reports from the same host for each check.
+
 The PAuth_LR and PACM suites compare the same six IA/IB operations in the C
 projections and the direct backend objects. A native process must demonstrate
 active keys and the modifier behavior under test. The PACM HINT comparison
