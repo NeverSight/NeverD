@@ -12485,6 +12485,10 @@ The generated paged execution suite exercises the actual HighC validator that
 exposed the reserved-key collision. Host floating-conversion fixtures link
 `libm` on POSIX when scalar FMA needs a library call.
 
+`HighControlFlowSemantics.ImpliedGuardsPreserveSeparateObservations` checks
+that condition folding keeps distinct atomic, ordered and segment-relative
+observations while still combining tests of one captured scalar.
+
 `HighControlFlowDAG.*` in `NeverDHighControlFlowTests` checks single-use
 condition folding on large shared expression graphs. Shared reads retain
 their multiplicity without expanding every path, and substitution reaches a

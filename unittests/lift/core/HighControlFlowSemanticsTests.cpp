@@ -9855,6 +9855,34 @@ TEST(HighControlFlowSemantics, UnreachableCleanupDropsCodeAfterAJump) {
   EXPECT_EQ(execute(F, 0), std::optional<uint64_t>(1));
 }
 
+TEST(HighControlFlowSemantics, ImpliedGuardsPreserveSeparateObservations) {
+  // A second evaluation can observe another value even when the two guards
+  // share an expression node. Two tests of a captured scalar can coalesce.
+  auto Add = HighExpr::makeBinop(NdOp::ATOMIC_ADD, local(0),
+                                 HighExpr::makeConst(1, 8));
+  Add->MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  auto Read = HighExpr::makeLoad(local(0), NdType::makeInt(8),
+                                 NdMemoryOrdering::Acquire);
+  auto Segment =
+      HighExpr::makeLoad(local(0), NdType::makeInt(8), NdMemoryOrdering::None,
+                         NdMemoryAddressSpace::X86GS);
+  for (const ExprPtr &Input : {Add, Read, Segment, local(1)}) {
+    HighFunc F;
+    HighStmt Inner;
+    Inner.Kind = StmtKind::If;
+    Inner.Cond =
+        HighExpr::makeBinop(NdOp::INT_EQUAL, Input, HighExpr::makeConst(0, 8));
+    Inner.Body = {result(0x1010, HighExpr::makeConst(1, 4))};
+    HighStmt Outer = Inner;
+    Outer.Body = {Inner, result(0x1020, HighExpr::makeConst(2, 4))};
+    F.Body = {Outer, result(0x1030, HighExpr::makeConst(3, 4))};
+    invertSkipGotos(F);
+    size_t Conditions = 0;
+    walkStmts(F.Body, [&](const HighStmt &S) { Conditions += bool(S.Cond); });
+    EXPECT_EQ(Conditions, Input->Kind == ExprKind::Var ? 1u : 2u);
+  }
+}
+
 TEST(HighControlFlowSemantics, GuardWithAnEarlyExitStillJoinsTheElseArm) {
   // { if (c & 1) { if (c & 2) { v = 1; goto F; } return 7; } v = 2; }
   // F: return v; -- the early return turns inside out, so the jump ends the
