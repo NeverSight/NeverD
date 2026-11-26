@@ -2601,10 +2601,14 @@ that FDE. A redundant FDE can be omitted when its compact row describes the
 same start and length. Conflicting extents fail before writing an image.
 
 The `MachOArm64ePublishedFrames` tests compare Apple-linked and NeverD-published
-dylibs. They check the normal return, catch a typed C++ exception across a
-signed frame and count initializer calls. Six cases use 27 producer ranges
-with one named text entry. Two others use a standalone FDE, with and without
-a neighboring compact leaf. Rejection cases cover an initializer landing
+dylibs. The Apple reference supplies private atom names and classic Darwin's
+implicit signed-LR rule. Each test requires byte-identical instruction
+sections in the reference and the unnamed producer object. The tests check
+the normal return, catch a typed C++ exception across a signed frame and
+count initializer calls. Six cases use 27 producer ranges
+with one named text entry. Three others use an FDE alone, with a neighboring
+compact leaf, or with a matching compact row for the same function. The last
+case keeps the destination compact-only. Rejection cases cover an initializer landing
 inside a function, the wrong initializer key, an entry in embedded data, a
 mismatched return-signing rule, conflicting extents and a compact start with
 no relocation. The test records the driver architecture and the number of

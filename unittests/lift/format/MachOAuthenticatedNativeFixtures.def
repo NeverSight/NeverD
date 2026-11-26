@@ -233,6 +233,9 @@ MACHO_AUTH_NATIVE_ARGS(kBindingDriverArgs, "-arch", "arm64", "-std=c++20",
 MACHO_AUTH_NATIVE_VALUE(int64_t, kBindingDirectAddend, 8)
 MACHO_AUTH_NATIVE_VALUE(unsigned, kBindingCallWord, 4)
 MACHO_AUTH_NATIVE_TEXT(kAnonymousRejectedObject, "rejected-frames.o")
+MACHO_AUTH_NATIVE_TEXT(kAppleFrameReferenceObject, "apple-control.o")
+MACHO_AUTH_NATIVE_TEXT(kAppleFrameReferenceOption,
+                       "-DNEVERD_APPLE_FRAME_REFERENCE")
 MACHO_AUTH_NATIVE_TEXT(kAnonymousAppleImage, "apple-frames.dylib")
 MACHO_AUTH_NATIVE_TEXT(kAnonymousEntry, "replacement")
 MACHO_AUTH_NATIVE_TEXT(kAnonymousOriginalEntry, "original_entry")
@@ -258,6 +261,7 @@ MACHO_AUTH_NATIVE_TEXT(kMissingWriterOption, "-DNEVERD_MISSING_WRITER")
 MACHO_AUTH_NATIVE_TEXT(kConflictingExtentError,
                        "DWARF and compact extents disagree")
 MACHO_AUTH_NATIVE_TEXT(kMissingWriterError, "compact language or range fields")
+MACHO_AUTH_NATIVE_TEXT(kRedundantFDEOption, "-DNEVERD_MATCHING_COMPACT")
 MACHO_AUTH_NATIVE_TEXT(kMixedFDEOption, "-DNEVERD_COMPACT_NEIGHBOR")
 MACHO_AUTH_NATIVE_VALUE(unsigned, kAnonymousProducerFrames, 27)
 MACHO_AUTH_NATIVE_TEXT(kPublishedFrameCountProperty, "published_frame_count")
@@ -269,6 +273,10 @@ _replacement:
 .cfi_startproc
  b Lframe
 .cfi_endproc
+#ifdef NEVERD_APPLE_FRAME_REFERENCE
+.private_extern _apple_frame
+_apple_frame:
+#endif
 Lframe:
 .cfi_startproc
 #ifdef NEVERD_INDEXED_FRAME
@@ -284,7 +292,7 @@ Lframe:
 #else
  pacibsp
 #endif
-#ifdef NEVERD_INDEXED_FRAME
+#if defined(NEVERD_INDEXED_FRAME) && !defined(NEVERD_APPLE_FRAME_REFERENCE)
 .cfi_negate_ra_state
 #endif
  stp x29, x30, [sp, #-16]!
@@ -310,12 +318,18 @@ Lframe:
 .cfi_restore x29
 .cfi_restore x30
  autibsp
+#ifndef NEVERD_APPLE_FRAME_REFERENCE
 .cfi_negate_ra_state
+#endif
  ret
 #else
  retab
 #endif
 .cfi_endproc
+#ifdef NEVERD_APPLE_FRAME_REFERENCE
+.private_extern _apple_initializer
+_apple_initializer:
+#endif
 Linitializer:
 .cfi_startproc
  nop
@@ -361,6 +375,10 @@ _replacement:
  ret
 Lend:
 #ifdef NEVERD_COMPACT_NEIGHBOR
+#ifdef NEVERD_APPLE_FRAME_REFERENCE
+.private_extern _apple_compact_leaf
+_apple_compact_leaf:
+#endif
 Lcompact_leaf:
 .cfi_startproc
  ret
@@ -398,7 +416,7 @@ Lfde_body:
 .byte 0x44
 .p2align 3
 Lfde_end:
-#if defined(NEVERD_CONFLICTING_EXTENT) || defined(NEVERD_MISSING_WRITER)
+#if defined(NEVERD_CONFLICTING_EXTENT) || defined(NEVERD_MISSING_WRITER) || defined(NEVERD_MATCHING_COMPACT)
 .section __LD,__compact_unwind,regular,debug
 .p2align 3
 #ifdef NEVERD_MISSING_WRITER
@@ -406,7 +424,11 @@ Lfde_end:
 #else
  .quad _replacement
 #endif
+#ifdef NEVERD_MATCHING_COMPACT
+ .long Lend-_replacement
+#else
  .long Lend-_replacement-4
+#endif
  .long 0x04000000
  .quad 0, 0
 #endif

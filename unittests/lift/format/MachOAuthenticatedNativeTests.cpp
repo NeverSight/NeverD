@@ -1782,7 +1782,7 @@ INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeObjectInstallation,
                          ::testing::Combine(::testing::Values(kO0, kO2),
                                             ::testing::Bool()));
 
-enum class PublishedFrame { Compact, Indexed, DwarfOnly, Mixed };
+enum class PublishedFrame { Compact, Indexed, DwarfOnly, Mixed, Redundant };
 enum class AnonymousInitializer { None, Plain, Authenticated };
 
 class MachOArm64ePublishedFrames
@@ -1806,6 +1806,7 @@ TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
   const auto Object = (Root / kObjectFile).string();
   const auto RejectedObject = (Root / kAnonymousRejectedObject).string();
   const auto Original = (Root / kOriginalFile).string();
+  const auto AppleObject = (Root / kAppleFrameReferenceObject).string();
   const auto Apple = (Root / kAnonymousAppleImage).string();
   const auto Published = (Root / kInstalledFile).string();
   std::ofstream(Assembly) << (Anonymous ? kAnonymousFrameAssembly
@@ -1830,6 +1831,11 @@ TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
       Native ? llvm::ArrayRef(kRuntimeCompileArgs)
              : llvm::ArrayRef(kBindingDriverArgs);
   ASSERT_EQ(Compile(DriverArgs, {DriverSource}, Driver), 0);
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto DriverImage = Reader->load(Driver);
+  ASSERT_TRUE(bool(DriverImage)) << llvm::toString(DriverImage.takeError());
+  ASSERT_EQ(DriverImage->Arch, Arch::AArch64);
+  ASSERT_EQ(DriverImage->isArm64e(), Native);
   RecordProperty(kAnonymousDriverProperty, DriverArgs[1].str());
   ASSERT_EQ(Compile(kCompileArgs, {kO2, Source}, Original), 0);
   const auto Run = [&](llvm::StringRef Image, llvm::StringRef Symbol,
@@ -1845,13 +1851,21 @@ TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
     Options.push_back(kAnonymousIndexOption);
   if (Format == PublishedFrame::Mixed)
     Options.push_back(kMixedFDEOption);
+  if (Format == PublishedFrame::Redundant)
+    Options.push_back(kRedundantFDEOption);
   if (Init != AnonymousInitializer::None)
     Options.push_back(kAnonymousInitOption);
   if (Init == AnonymousInitializer::Authenticated)
     Options.push_back(kAnonymousSignedInitOption);
   Options.push_back(Assembly);
   ASSERT_EQ(Compile(kObjectCompileArgs, Options, Object), 0);
-  ASSERT_EQ(Compile(kCompileArgs, {kO2, Source, Object}, Apple), 0);
+  // Apple ld needs separate atoms to retain the private unwind rows, and
+  // classic Darwin describes a signed LR implicitly. Only the reference uses
+  // those conventions. The two objects must contain identical instructions.
+  auto ControlOptions = Options;
+  ControlOptions.insert(ControlOptions.begin(), kAppleFrameReferenceOption);
+  ASSERT_EQ(Compile(kObjectCompileArgs, ControlOptions, AppleObject), 0);
+  ASSERT_EQ(Compile(kCompileArgs, {kO2, Source, AppleObject}, Apple), 0);
   const auto *Count =
       Init == AnonymousInitializer::None ? kAnonymousNoInit : kAnonymousOneInit;
   ASSERT_EQ(Run(Apple, kAnonymousEntry, kAnonymousPublishedResult, Count), 0);
@@ -1862,16 +1876,30 @@ TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
       llvm::object::ObjectFile::createObjectFile((*Buffer)->getMemBufferRef());
   ASSERT_TRUE(bool(Producer)) << llvm::toString(Producer.takeError());
   bool HasCompact = false, HasDwarf = false;
-  uint64_t TextSize = 0;
+  llvm::StringRef ProducerText;
   for (const auto &Section : (*Producer)->sections()) {
     auto Name = Section.getName();
     ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
     HasCompact |= *Name == section_names::macho::CompactUnwind;
     HasDwarf |= *Name == kEHFrameSection;
-    if (Section.isText())
-      TextSize = Section.getSize();
+    if (Section.isText()) {
+      auto Bytes = Section.getContents();
+      ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+      ProducerText = *Bytes;
+    }
   }
-  ASSERT_NE(TextSize, 0u);
+  ASSERT_FALSE(ProducerText.empty());
+  auto ControlProducer =
+      llvm::object::ObjectFile::createObjectFile(AppleObject);
+  ASSERT_TRUE(bool(ControlProducer))
+      << llvm::toString(ControlProducer.takeError());
+  const auto &Reference = *ControlProducer->getBinary();
+  const auto Text = llvm::find_if(Reference.sections(),
+                                  [](const auto &S) { return S.isText(); });
+  ASSERT_NE(Text, Reference.section_end());
+  auto ControlText = Text->getContents();
+  ASSERT_TRUE(bool(ControlText)) << llvm::toString(ControlText.takeError());
+  ASSERT_EQ(*ControlText, ProducerText);
   EXPECT_EQ(HasCompact, Format != PublishedFrame::DwarfOnly);
   EXPECT_EQ(HasDwarf, Format != PublishedFrame::Compact);
   // The text atom and section-start symbol can name only the mapped entry.
@@ -1885,7 +1913,6 @@ TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
     ASSERT_EQ(*Address, (*Section)->getAddress());
   }
 
-  auto Reader = Loader::create(BinaryFormat::MachO);
   auto Before = Reader->load(Original);
   ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
   if (!Anonymous)
@@ -1930,6 +1957,9 @@ TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
   ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
   auto After = Reader->load(Published);
   ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+  if (!Anonymous)
+    EXPECT_EQ(After->hasSection(kEHFrameSection),
+              Format != PublishedFrame::Redundant);
   const va_t Owner = Patch->PatchedFunctions.front().OwnerVA;
   va_t FrameVA = Owner;
   if (Anonymous) {
@@ -1948,7 +1978,8 @@ TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
                                   ? kAnonymousProducerFrames
                                   : 1u + (Format == PublishedFrame::Mixed);
   const auto FrameCount = llvm::count_if(Unwind.Entries, [&](const auto &F) {
-    return F.CodeRange.Begin >= Owner && F.CodeRange.Begin < Owner + TextSize;
+    return F.CodeRange.Begin >= Owner &&
+           F.CodeRange.Begin < Owner + ProducerText.size();
   });
   EXPECT_EQ(FrameCount, ExpectedFrames);
   RecordProperty(kPublishedFrameCountProperty, FrameCount);
@@ -1956,9 +1987,11 @@ TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
     return F.CodeRange.Begin == FrameVA;
   });
   ASSERT_NE(Frame, Unwind.Entries.end());
+  const bool CompactFrame =
+      Format == PublishedFrame::Compact || Format == PublishedFrame::Redundant;
   EXPECT_EQ(Frame->NativeEncoding & macho_unwind::kModeMask,
-            Format == PublishedFrame::Compact ? macho_unwind::kARM64ModeFrame
-                                              : macho_unwind::kARM64ModeDwarf);
+            CompactFrame ? macho_unwind::kARM64ModeFrame
+                         : macho_unwind::kARM64ModeDwarf);
   auto Signature = macho_signing::verifyStrict(Published);
   ASSERT_FALSE(bool(Signature)) << llvm::toString(std::move(Signature));
   EXPECT_EQ(
@@ -1980,7 +2013,8 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     StandaloneFDE, MachOArm64ePublishedFrames,
     ::testing::Combine(::testing::Values(PublishedFrame::DwarfOnly,
-                                         PublishedFrame::Mixed),
+                                         PublishedFrame::Mixed,
+                                         PublishedFrame::Redundant),
                        ::testing::Values(AnonymousInitializer::None)));
 
 class MachOArm64eNativeBindings
