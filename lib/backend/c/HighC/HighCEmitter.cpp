@@ -602,20 +602,24 @@ std::string HighCWriter::functionIdentifier(const HighFunc &Func) const {
 }
 
 std::string HighCWriter::functionIdentifier(llvm::StringRef SourceName) const {
-  if (auto It = FunctionIdentifiersBySourceName.find(SourceName.str());
+  const std::string_view Name(SourceName.data(), SourceName.size());
+  if (auto It = FunctionIdentifiersBySourceName.find(Name);
       It != FunctionIdentifiersBySourceName.end())
     return It->second;
-  if (auto It = ExternalSourceIdentifiers.find(SourceName.str());
+  if (auto It = ExternalSourceIdentifiers.find(Name);
       It != ExternalSourceIdentifiers.end())
     return It->second;
-  if (auto It = ExternalFunctionIdentifiers.find(SourceName.str());
+  if (auto It = ExternalFunctionIdentifiers.find(Name);
       It != ExternalFunctionIdentifiers.end())
     return It->second;
   // A reference keeps its symbol's exact C name, which it links by.
-  std::string Identifier = canonicalizeCProjectionIdentifier(
-      cNameOfSymbol(SourceName, Opts.Format, Opts.TheArch), "nd_function");
-  ReferencedFunctionSymbols.try_emplace(Identifier, SourceName.str());
-  return Identifier;
+  auto [Spelled, First] = ReferenceIdentifiers.try_emplace(SourceName);
+  if (First) {
+    Spelled->second = canonicalizeCProjectionIdentifier(
+        cNameOfSymbol(SourceName, Opts.Format, Opts.TheArch), "nd_function");
+    ReferencedFunctionSymbols.try_emplace(Spelled->second, SourceName.str());
+  }
+  return Spelled->second;
 }
 
 std::string HighCWriter::memoryTypeName(const TypeRef &Ty) const {
