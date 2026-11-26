@@ -188,6 +188,10 @@ CALL/RET distinguish actual outcomes from PC inequality. Both generated C
 routes run through Clang/NeverC at O0/O2. Separate software cases cover BTF
 clearing, deferred/failed entry, v1 refusal and raw-TF REP group inputs. The
 local KVM masks DEBUGCTL.BTF; accepted MSR writes do not qualify execution.
+A hypervisor may not virtualize BTF either, and then ptrace block steps stop
+after every instruction (seen on Xeon 6975P-C CI runners). The oracle probes
+`nop; jmp` first; such a host keeps the single-step comparisons and reports
+the branch half skipped.
 Repeat on both SDKs and P/E cores, retaining the precise oracle limitations.
 
 `X64PagedDebugTest.*` in `NeverDX64PagedExecutionTests` qualifies the opt-in
@@ -373,7 +377,10 @@ explicit TF/ICEBP binding. The native matrix disables KVM guest debugging,
 executes original instruction sequences and halts in real exception handlers.
 It compares DR6/DR7, full GPR/segment state, flags, CR2, inhibition and all RAM
 under legacy/PAE paging, independent code/stack/gate widths, CPL0/3, RF and
-sticky DR6 inputs. Disabled breakpoint comparators deliberately match the
+sticky DR6 inputs. A host with bus-lock detection or RTM lets MOV DR6 clear
+DR6 bit 11 or 16, which the model keeps reserved; `X86NativeDebugStatus.h`
+finds those bits in a throwaway VM, and native DR6 comparisons leave out
+exactly them. Disabled breakpoint comparators deliberately match the
 instruction addresses. Cases include POPF/IRET TF transitions, MOV/POP SS and
 LSS, REP progress, near/far control, SYSENTER/SYSEXIT, faults, software entries
 and failed #DB gate/frame/target entry. Original handlers count #DB events,

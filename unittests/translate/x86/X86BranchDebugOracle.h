@@ -113,6 +113,21 @@ public:
     ASSERT_EQ(ptrace(PTRACE_GETREGS, Child, nullptr, &Initial), 0);
   }
 
+  /// Whether PTRACE_SINGLEBLOCK stops this host at the first taken branch.
+  /// It relies on DEBUGCTL.BTF, which a hypervisor need not virtualize; its
+  /// guests then single-step every instruction, which is no branch evidence.
+  bool stepsByBlocks() {
+    // nop; jmp +0; int3: a block step passes the nop and stops after the jmp.
+    const X86BranchDebugCase Probe{{0x90, 0xeb, 0, 0xcc}, {1, 2}};
+    Result Stepped;
+    run(Probe, true, Stepped);
+    return !::testing::Test::HasFatalFailure() && Stepped.PC == 3;
+  }
+
+  static constexpr const char *NoBlockStepReason =
+      "this host single-steps PTRACE_SINGLEBLOCK (DEBUGCTL.BTF is not "
+      "virtualized), so it gives no taken-branch evidence";
+
   void run(const X86BranchDebugCase &Case, bool Branch, Result &Output) {
     ASSERT_GT(Child, 0);
     ASSERT_LT(Case.Code.size(), StackOffset);

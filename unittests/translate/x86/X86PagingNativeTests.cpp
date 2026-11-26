@@ -17,6 +17,7 @@
 #include "X86LegacyTaskTestState.h"
 #include "X86LegacyTestState.h"
 #include "X86LegacyVM86TestState.h"
+#include "X86NativeDebugStatus.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
