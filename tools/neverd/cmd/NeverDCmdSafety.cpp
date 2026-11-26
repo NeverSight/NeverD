@@ -19,10 +19,13 @@
 #include "neverd/sdk/NeverDCAPI.h"
 #include "neverd/sdk/NeverDCAPISafety.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/Signals.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <atomic>
 #include <optional>
 
 using namespace llvm;
@@ -98,6 +101,23 @@ int emit(const char *Report) {
 }
 
 } // namespace
+
+int runScan(neverd_session_t Sess) {
+  static std::atomic_flag Interrupted;
+  Interrupted.clear(std::memory_order_relaxed);
+  sys::SetInterruptFunction(
+      [] { Interrupted.test_and_set(std::memory_order_relaxed); });
+  scope_exit RestoreInterrupt([] { sys::SetInterruptFunction(nullptr); });
+  const neverd_safety_options Analysis = makeOptions();
+  neverd_scan_options Options{};
+  Options.struct_size = sizeof(Options);
+  Options.analysis = &Analysis;
+  Options.analyzers = ScanAnalyzers;
+  Options.cancel = [](void *) -> int {
+    return Interrupted.test(std::memory_order_relaxed);
+  };
+  return emit(neverd_session_scan_json(Sess, &Options));
+}
 
 int runAudit(neverd_session_t Sess) {
   neverd_safety_options Options = makeOptions();

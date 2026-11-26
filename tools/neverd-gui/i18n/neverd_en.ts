@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Memory Safety Scan...</source>
+        <translation>Memory Safety Scan...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>Check object lifetimes, initialization, bounds and formats</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>Toggle a floating workspace with disassembly, pseudocode and output</translation>
     </message>
@@ -11187,6 +11195,85 @@ Your previous graph is still available.</translation>
     <message>
         <source>Loading %1…</source>
         <translation>Loading %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>Memory Safety Scan</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>&amp;Analyzers</translation>
+    </message>
+    <message>
+        <source>Audit and Hunt</source>
+        <translation>Audit and Hunt</translation>
+    </message>
+    <message>
+        <source>Audit</source>
+        <translation>Audit</translation>
+    </message>
+    <message>
+        <source>Hunt</source>
+        <translation>Hunt</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Findings</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>Verdict</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>Property</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Address</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Function</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>Analyzers</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>Finding evidence</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>&amp;Scan</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Cancel scan</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>Canceling scan…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>Scanning…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>Scan canceled before it started.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>Verdict: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</translation>
     </message>
 </context>
 </TS>

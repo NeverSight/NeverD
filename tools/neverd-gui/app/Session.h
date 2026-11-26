@@ -125,6 +125,9 @@ public:
   bool reportsUnwindFrames() const {
     return capabilities_.contains(QLatin1String(unwind_info::kOperation));
   }
+  bool supportsSafetyScan() const {
+    return capabilities_.contains(QStringLiteral("memory_safety_scan"));
+  }
   bool reportsX87Capabilities() const {
     return capabilities_.contains(QStringLiteral("x87_capabilities"));
   }

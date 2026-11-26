@@ -125,6 +125,8 @@ for flip in report.flips:
 
 ### تدقيق وصيد أمان الذاكرة
 
+تشغّل `session.scan()` كلا المحللين وتعيد النتائج والتغطية في تقرير واحد. [دليل الفحص الموحد بالإنجليزية](../memory-safety-scan.md).
+
 تعيد `session.audit()` و`session.hunt()` تقارير JSON محلولة (نفس مخطط CLI). تتطلب جلسة أصلية مرفوعة:
 
 ```python

@@ -125,6 +125,8 @@ for flip in report.flips:
 
 ### メモリ安全性の監査とハント
 
+`session.scan()` は両方の解析を実行し、検出結果と解析範囲を一つのレポートにまとめます。[統合スキャンガイド（英語）](../memory-safety-scan.md)。
+
 `session.audit()` と `session.hunt()` は解析済み JSON レポートを返します（CLI と同じスキーマ）。リフト済みのネイティブセッションが必要です。
 
 ```python

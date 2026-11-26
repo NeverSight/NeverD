@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Memory Safety Scan...</source>
+        <translation>메모리 안전성 검사...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>객체 수명, 초기화, 경계 및 서식 문자열을 검사합니다</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>디스어셈블리, 의사 코드 및 출력을 포함하는 부동 작업 공간 전환</translation>
     </message>
@@ -11151,6 +11159,85 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>%1 불러오는 중…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>메모리 안전성 검사</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>분석기(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Audit and Hunt</source>
+        <translation>Audit 및 Hunt</translation>
+    </message>
+    <message>
+        <source>Audit</source>
+        <translation>Audit</translation>
+    </message>
+    <message>
+        <source>Hunt</source>
+        <translation>Hunt</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>발견 항목</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>판정</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>속성</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>주소</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>함수</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>분석기</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>발견 항목 근거</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>검사(&amp;S)</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>검사 취소</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>검사를 취소하는 중…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>검사 중…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>시작 전에 검사가 취소되었습니다.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>판정: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2(검사 %3개, 건너뜀 %4개, 판정 불가 %5개)</translation>
     </message>
 </context>
 </TS>

@@ -7,17 +7,21 @@
 #include "neverd/safety/Safety.h"
 
 #include "ProcessInputReplay.h"
+#include "SafetyJSON.h"
 
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/safety/InterprocReachability.h"
+#include "neverd/safety/SafetyScan.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <exception>
+#include <new>
 #include <set>
 #include <tuple>
 
@@ -33,7 +37,12 @@ void describeImage(const AnalysisInput &In, SafetyReport &R) {
   R.Arch = getArchName(In.Img->Arch);
 }
 
-std::optional<std::string> validateAnalysisInput(const AnalysisInput &In) {
+std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
+                                                 const BinaryImage *Img,
+                                                 bool &BudgetHit);
+
+std::optional<std::string> validateAnalysisInput(const AnalysisInput &In,
+                                                 bool &BudgetHit) {
   if (!In.Img)
     return "safety analysis requires a loaded image";
   if (!In.MedFuncs || In.MedFuncs->empty())
@@ -48,7 +57,7 @@ std::optional<std::string> validateAnalysisInput(const AnalysisInput &In) {
       &In.ValidatedPipeline->LowFuncs != In.LowFuncs)
     return "safety analysis received detached pipeline artifacts";
   if (std::optional<std::string> Error =
-          validatePipelineCoverage(*In.ValidatedPipeline, In.Img))
+          checkPipelineCoverage(*In.ValidatedPipeline, In.Img, BudgetHit))
     return Error;
   std::set<va_t> MedEntries;
   for (const MedFunc &F : *In.MedFuncs)
@@ -65,20 +74,9 @@ std::optional<std::string> validateAnalysisInput(const AnalysisInput &In) {
   return std::nullopt;
 }
 
-void recordInputStatus(const AnalysisInput &In, SafetyReport &R) {
-  if (std::optional<std::string> Error = validateAnalysisInput(In)) {
-    R.AnalysisComplete = false;
-    R.Error = std::move(*Error);
-    return;
-  }
-  R.AnalysisComplete = true;
-}
-
-} // namespace
-
-std::optional<std::string>
-neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
-                                         const BinaryImage *Img) {
+std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
+                                                 const BinaryImage *Img,
+                                                 bool &BudgetHit) {
   if (Img && Result.SourceImage != Img)
     return "safety pipeline artifacts do not belong to the supplied image";
   using Disposition = PipelineFunctionDisposition;
@@ -119,6 +117,7 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
     }
     if (!Incomplete)
       continue;
+    BudgetHit = Audit.Disposition == Disposition::SkippedLimit;
     return "incomplete safety lift at 0x" + llvm::utohexstr(Audit.Entry) +
            " (" + pipelineFunctionDispositionName(Audit.Disposition) + ")";
   }
@@ -347,65 +346,134 @@ neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
   return std::nullopt;
 }
 
-SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
-                                     const SinkCatalog &Cat,
-                                     const SafetyBudgets &Budgets) {
-  SafetyReport R;
-  R.Origin = Track::Hunt;
-  describeImage(In, R);
-  recordInputStatus(In, R);
-  if (!R.AnalysisComplete)
-    return R;
+void analyzeTrack(AnalyzerResult &Result, const AnalysisInput &In,
+                  const SinkCatalog &Cat, const SafetyBudgets &Budgets,
+                  const InterprocResult &Interproc,
+                  const std::vector<SinkSite> &Sites,
+                  llvm::function_ref<bool(Track)> Canceled) {
+  SafetyReport &R = Result.Report;
+  auto stopped = [&] {
+    if (Canceled && Canceled(R.Origin)) {
+      Result.State = ScanState::Canceled;
+      return true;
+    }
+    return false;
+  };
+  if (stopped())
+    return;
+  R.BudgetHit = Interproc.BudgetHit;
+  if (R.Origin == Track::Audit) {
+    for (const SinkSite &Site : Sites)
+      if (Site.Kind == SinkKind::Alloc || Site.Kind == SinkKind::Realloc)
+        ++R.Scanned;
+    R.Findings = auditMemory(In, Cat, Budgets, stopped);
+    for (Finding &F : R.Findings) {
+      Interproc.annotate(F);
+      R.BudgetHit |= F.BudgetHit;
+    }
+  } else {
+    for (const SinkSite &Site : Sites) {
+      if (stopped())
+        break;
+      const MedFunc *F = In.findMedFunc(Site.FuncEntry);
+      if (!F)
+        continue;
+      auto Found = huntSink(In, Cat, Budgets, *F, Site);
+      if (!Found)
+        continue;
+      ++R.Scanned;
+      if (!Found->SkipReason.empty())
+        ++R.Skipped;
+      R.BudgetHit |= Found->BudgetHit;
+      Interproc.annotate(*Found);
+      R.Findings.push_back(std::move(*Found));
+    }
+  }
+  if (Result.State != ScanState::Canceled) {
+    R.AnalysisComplete = true;
+    Result.State =
+        R.BudgetHit ? ScanState::BudgetExhausted : ScanState::Completed;
+  }
+}
 
-  InterprocResult Interproc = analyzeInterprocedural(In, Cat, Budgets);
+ScanReport analyze(const AnalysisInput &In, const SinkCatalog &Cat,
+                   const SafetyBudgets &Budgets, ScanSelection Selection,
+                   llvm::function_ref<bool(Track)> Canceled,
+                   bool IsolateFailures) {
+  ScanReport Scan(Selection);
+  bool BudgetHit = false;
+  auto Error = validateAnalysisInput(In, BudgetHit);
+  for (auto &Result : Scan.Analyzers) {
+    describeImage(In, Result.Report);
+    if (Error && Result.State != ScanState::Disabled) {
+      Result.Report.Error = *Error;
+      if (BudgetHit)
+        Result.State = ScanState::BudgetExhausted;
+    }
+  }
+  if (Error)
+    return Scan;
+  const InterprocResult Interproc = analyzeInterprocedural(In, Cat, Budgets);
   AnalysisInput Effective = In;
   Effective.ParameterFlows = &Interproc.Parameters;
-  R.BudgetHit |= Interproc.BudgetHit;
-
-  for (const SinkSite &Site : scanSinks(Effective, Cat)) {
-    const MedFunc *F = Effective.findMedFunc(Site.FuncEntry);
-    if (!F)
+  const auto Sites = scanSinks(Effective, Cat);
+  for (auto &Result : Scan.Analyzers) {
+    if (Result.State == ScanState::Disabled)
       continue;
-    std::optional<Finding> Fnd = huntSink(Effective, Cat, Budgets, *F, Site);
-    if (!Fnd)
+    auto Run = [&] {
+      analyzeTrack(Result, Effective, Cat, Budgets, Interproc, Sites, Canceled);
+    };
+    if (!IsolateFailures) {
+      Run();
       continue;
-    ++R.Scanned;
-    if (!Fnd->SkipReason.empty())
-      ++R.Skipped;
-    if (Fnd->BudgetHit)
-      R.BudgetHit = true;
-    Interproc.annotate(*Fnd);
-    R.Findings.push_back(std::move(*Fnd));
+    }
+    try {
+      Run();
+    } catch (const std::bad_alloc &) {
+      Result.State = ScanState::Failed;
+      Result.Report.Error = "analyzer allocation failed";
+    } catch (const std::exception &E) {
+      Result.State = ScanState::Failed;
+      Result.Report.Error = llvm::json::fixUTF8(E.what());
+    } catch (...) {
+      Result.State = ScanState::Failed;
+      Result.Report.Error = "unexpected analyzer failure";
+    }
   }
-  return R;
+  return Scan;
+}
+} // namespace
+
+std::optional<std::string>
+neverd::safety::validatePipelineCoverage(const PipelineResult &Result,
+                                         const BinaryImage *Img) {
+  bool BudgetHit = false;
+  return checkPipelineCoverage(Result, Img, BudgetHit);
+}
+
+ScanReport neverd::safety::runScan(const AnalysisInput &In,
+                                   const SinkCatalog &Cat,
+                                   const SafetyBudgets &Budgets,
+                                   ScanSelection Selection,
+                                   llvm::function_ref<bool(Track)> Canceled) {
+  return analyze(In, Cat, Budgets, Selection, Canceled, true);
 }
 
 SafetyReport neverd::safety::runAudit(const AnalysisInput &In,
                                       const SinkCatalog &Cat,
                                       const SafetyBudgets &Budgets) {
-  SafetyReport R;
-  R.Origin = Track::Audit;
-  describeImage(In, R);
-  recordInputStatus(In, R);
-  if (!R.AnalysisComplete)
-    return R;
-  InterprocResult Interproc = analyzeInterprocedural(In, Cat, Budgets);
-  AnalysisInput Effective = In;
-  Effective.ParameterFlows = &Interproc.Parameters;
-  R.BudgetHit |= Interproc.BudgetHit;
-  for (const SinkSite &Site : scanSinks(Effective, Cat))
-    if (Site.Kind == SinkKind::Alloc || Site.Kind == SinkKind::Realloc)
-      ++R.Scanned;
-  R.Findings = auditMemory(Effective, Cat, Budgets);
-  for (Finding &F : R.Findings) {
-    Interproc.annotate(F);
-    if (F.BudgetHit)
-      R.BudgetHit = true;
-  }
-  return R;
+  auto Scan = analyze(In, Cat, Budgets, ScanSelection::Audit, nullptr, false);
+  return std::move(Scan.Analyzers.front().Report);
 }
 
-std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
+SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
+                                     const SinkCatalog &Cat,
+                                     const SafetyBudgets &Budgets) {
+  auto Scan = analyze(In, Cat, Budgets, ScanSelection::Hunt, nullptr, false);
+  return std::move(Scan.Analyzers.back().Report);
+}
+
+llvm::json::Object neverd::safety::findingJson(const Finding &F) {
   using namespace llvm;
 
   auto vaHex = [](va_t Addr) { return "0x" + utohexstr(Addr); };
@@ -421,145 +489,149 @@ std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
     return Result;
   };
 
-  json::Array Findings;
-  for (const Finding &F : Report.Findings) {
-    json::Object Ev;
-    if (!F.SkipReason.empty())
-      Ev["skip_reason"] = F.SkipReason;
-    if (!F.Constraints.empty())
-      Ev["constraints"] = F.Constraints;
-    if (!F.Witness.empty()) {
-      json::Object Concrete;
-      json::Array CandidateValues;
-      for (const auto &[K, V] : F.Witness) {
-        // Preserve the legacy object without allowing a custom source name to
-        // overwrite a derived key such as copy_length.  The array is the
-        // lossless representation and also preserves duplicate source names.
-        if (Concrete.find(K) == Concrete.end())
-          Concrete[K] = V;
-        CandidateValues.push_back(json::Object{{"name", K}, {"value", V}});
-      }
-      Ev["concrete_input"] = std::move(Concrete);
-      Ev["candidate_values"] = std::move(CandidateValues);
+  json::Object Ev;
+  if (!F.SkipReason.empty())
+    Ev["skip_reason"] = F.SkipReason;
+  if (!F.Constraints.empty())
+    Ev["constraints"] = F.Constraints;
+  if (!F.Witness.empty()) {
+    json::Object Concrete;
+    json::Array CandidateValues;
+    for (const auto &[K, V] : F.Witness) {
+      // Preserve the legacy object without allowing a custom source name to
+      // overwrite a derived key such as copy_length.  The array is the
+      // lossless representation and also preserves duplicate source names.
+      if (Concrete.find(K) == Concrete.end())
+        Concrete[K] = V;
+      CandidateValues.push_back(json::Object{{"name", K}, {"value", V}});
     }
-    if (!F.SymbolicModel.empty()) {
-      json::Array Model;
-      for (const SolverAssignment &Assignment : F.SymbolicModel)
-        Model.push_back(
-            json::Object{{"id", int64_t(Assignment.Id)},
-                         {"name", Assignment.Name},
-                         {"width", int64_t(Assignment.Width)},
-                         {"value_hex", Assignment.ValueHex},
-                         {"origin", Assignment.Fresh ? "fresh" : "input"}});
-      Ev["symbolic_model"] = std::move(Model);
-    }
-    if (!F.Witness.empty() || !F.SymbolicModel.empty() || F.Replay ||
-        !F.ReplayReason.empty()) {
-      std::optional<std::string> ReplayError;
-      if (F.Replay)
-        ReplayError = validateProcessInputReplay(*F.Replay, F.SymbolicModel);
-      const bool Replayable = F.Replay.has_value() && !ReplayError;
-      Ev["replayable"] = Replayable;
-
-      json::Object Replay{{"adapter", "process-input-v1"}};
-      if (Replayable) {
-        std::vector<uint32_t> QueryVariables = F.Replay->QueryVariables;
-        std::sort(QueryVariables.begin(), QueryVariables.end());
-        json::Array SerializedQueryVariables;
-        for (uint32_t Id : QueryVariables)
-          SerializedQueryVariables.push_back(int64_t(Id));
-        Replay["query_variables"] = std::move(SerializedQueryVariables);
-
-        json::Array Inputs;
-        for (const ReplayInput &Input : F.Replay->Inputs) {
-          json::Object Serialized{
-              {"kind", toString(Input.Kind)},
-              {"call_va", vaHex(Input.CallVA)},
-              {"seq", Input.Seq},
-              {"invocation", int64_t(Input.Invocation)},
-              {"offset", int64_t(Input.Offset)},
-              {"bytes_hex", bytesHex(Input.Bytes)},
-              {"eof_after", Input.EOFAfter},
-              {"terminator_implicit", Input.TerminatorImplicit}};
-          if (Input.Kind == ReplayInputKind::Environment)
-            Serialized["name"] = Input.Name;
-          if (!Input.Bindings.empty()) {
-            json::Array Bindings;
-            for (const ReplayBinding &Binding : Input.Bindings)
-              Bindings.push_back(
-                  json::Object{{"assignment_id", int64_t(Binding.AssignmentId)},
-                               {"role", toString(Binding.Role)},
-                               {"offset", int64_t(Binding.ByteOffset)}});
-            Serialized["bindings"] = std::move(Bindings);
-          }
-          Inputs.push_back(std::move(Serialized));
-        }
-        Replay["inputs"] = std::move(Inputs);
-      } else if (ReplayError) {
-        Replay["reason"] = *ReplayError;
-      } else if (!F.ReplayReason.empty()) {
-        Replay["reason"] = F.ReplayReason;
-      } else if (!F.SymbolicModel.empty()) {
-        Replay["reason"] =
-            "symbolic query variables lack explicit process-input bindings";
-      } else {
-        Replay["reason"] = "no exact process-input replay plan";
-      }
-      Ev["replay"] = std::move(Replay);
-    }
-
-    json::Object O;
-    O["class"] = toString(F.Class);
-    O["function"] = F.Function;
-    O["function_va"] = vaHex(F.FuncEntry);
-    O["name"] = F.Name;
-    O["name_source"] = toString(F.Source);
-    O["call_va"] = vaHex(F.CallVA);
-    if (!F.SourceLoc.empty())
-      O["source"] = F.SourceLoc;
-    O["sink"] = F.Sink;
-    if (F.ArgIndex >= 0)
-      O["arg_index"] = F.ArgIndex;
-    O["flow"] = toString(F.Flow);
-    O["verdict"] = toString(F.TheVerdict);
-    O["confidence"] = toString(F.TheConfidence);
-    if (F.Capacity) {
-      O["capacity"] = *F.Capacity;
-      O["capacity_kind"] = F.CapacityKind == CapacityPrecision::TypedBufferExact
-                               ? "exact"
-                               : "upper_bound";
-      O["capacity_precision"] = toString(F.CapacityKind);
-    }
-    if (!F.Detail.empty())
-      O["detail"] = F.Detail;
-    if (!F.Corroboration.empty())
-      O["corroboration"] = F.Corroboration;
-    json::Object Reachability{
-        {"status", toString(F.Reachability.Status)},
-        {"attacker_control", toString(F.Reachability.AttackerControl)},
-        {"budget_hit", F.Reachability.BudgetHit}};
-    if (F.Reachability.EntryVA) {
-      Reachability["entry"] =
-          json::Object{{"va", vaHex(*F.Reachability.EntryVA)},
-                       {"name", F.Reachability.EntryName},
-                       {"kind", toString(F.Reachability.Kind)}};
-    }
-    if (!F.Reachability.CallChain.empty()) {
-      json::Array Chain;
-      for (const ReachabilityCall &Call : F.Reachability.CallChain)
-        Chain.push_back(
-            json::Object{{"caller_va", vaHex(Call.CallerVA)},
-                         {"call_va", vaHex(Call.CallVA)},
-                         {"callee_va", vaHex(Call.CalleeVA)},
-                         {"kind", Call.Indirect ? "indirect" : "direct"}});
-      Reachability["call_chain"] = std::move(Chain);
-    }
-    if (!F.Reachability.Reason.empty())
-      Reachability["reason"] = F.Reachability.Reason;
-    O["reachability"] = std::move(Reachability);
-    O["evidence"] = std::move(Ev);
-    Findings.push_back(std::move(O));
+    Ev["concrete_input"] = std::move(Concrete);
+    Ev["candidate_values"] = std::move(CandidateValues);
   }
+  if (!F.SymbolicModel.empty()) {
+    json::Array Model;
+    for (const SolverAssignment &Assignment : F.SymbolicModel)
+      Model.push_back(
+          json::Object{{"id", int64_t(Assignment.Id)},
+                       {"name", Assignment.Name},
+                       {"width", int64_t(Assignment.Width)},
+                       {"value_hex", Assignment.ValueHex},
+                       {"origin", Assignment.Fresh ? "fresh" : "input"}});
+    Ev["symbolic_model"] = std::move(Model);
+  }
+  if (!F.Witness.empty() || !F.SymbolicModel.empty() || F.Replay ||
+      !F.ReplayReason.empty()) {
+    std::optional<std::string> ReplayError;
+    if (F.Replay)
+      ReplayError = validateProcessInputReplay(*F.Replay, F.SymbolicModel);
+    const bool Replayable = F.Replay.has_value() && !ReplayError;
+    Ev["replayable"] = Replayable;
+
+    json::Object Replay{{"adapter", "process-input-v1"}};
+    if (Replayable) {
+      std::vector<uint32_t> QueryVariables = F.Replay->QueryVariables;
+      std::sort(QueryVariables.begin(), QueryVariables.end());
+      json::Array SerializedQueryVariables;
+      for (uint32_t Id : QueryVariables)
+        SerializedQueryVariables.push_back(int64_t(Id));
+      Replay["query_variables"] = std::move(SerializedQueryVariables);
+
+      json::Array Inputs;
+      for (const ReplayInput &Input : F.Replay->Inputs) {
+        json::Object Serialized{
+            {"kind", toString(Input.Kind)},
+            {"call_va", vaHex(Input.CallVA)},
+            {"seq", Input.Seq},
+            {"invocation", int64_t(Input.Invocation)},
+            {"offset", int64_t(Input.Offset)},
+            {"bytes_hex", bytesHex(Input.Bytes)},
+            {"eof_after", Input.EOFAfter},
+            {"terminator_implicit", Input.TerminatorImplicit}};
+        if (Input.Kind == ReplayInputKind::Environment)
+          Serialized["name"] = Input.Name;
+        if (!Input.Bindings.empty()) {
+          json::Array Bindings;
+          for (const ReplayBinding &Binding : Input.Bindings)
+            Bindings.push_back(
+                json::Object{{"assignment_id", int64_t(Binding.AssignmentId)},
+                             {"role", toString(Binding.Role)},
+                             {"offset", int64_t(Binding.ByteOffset)}});
+          Serialized["bindings"] = std::move(Bindings);
+        }
+        Inputs.push_back(std::move(Serialized));
+      }
+      Replay["inputs"] = std::move(Inputs);
+    } else if (ReplayError) {
+      Replay["reason"] = *ReplayError;
+    } else if (!F.ReplayReason.empty()) {
+      Replay["reason"] = F.ReplayReason;
+    } else if (!F.SymbolicModel.empty()) {
+      Replay["reason"] =
+          "symbolic query variables lack explicit process-input bindings";
+    } else {
+      Replay["reason"] = "no exact process-input replay plan";
+    }
+    Ev["replay"] = std::move(Replay);
+  }
+
+  json::Object O;
+  O["class"] = toString(F.Class);
+  O["function"] = F.Function;
+  O["function_va"] = vaHex(F.FuncEntry);
+  O["name"] = F.Name;
+  O["name_source"] = toString(F.Source);
+  O["call_va"] = vaHex(F.CallVA);
+  if (!F.SourceLoc.empty())
+    O["source"] = F.SourceLoc;
+  O["sink"] = F.Sink;
+  if (F.ArgIndex >= 0)
+    O["arg_index"] = F.ArgIndex;
+  O["flow"] = toString(F.Flow);
+  O["verdict"] = toString(F.TheVerdict);
+  O["confidence"] = toString(F.TheConfidence);
+  if (F.Capacity) {
+    O["capacity"] = *F.Capacity;
+    O["capacity_kind"] = F.CapacityKind == CapacityPrecision::TypedBufferExact
+                             ? "exact"
+                             : "upper_bound";
+    O["capacity_precision"] = toString(F.CapacityKind);
+  }
+  if (!F.Detail.empty())
+    O["detail"] = F.Detail;
+  if (!F.Corroboration.empty())
+    O["corroboration"] = F.Corroboration;
+  json::Object Reachability{
+      {"status", toString(F.Reachability.Status)},
+      {"attacker_control", toString(F.Reachability.AttackerControl)},
+      {"budget_hit", F.Reachability.BudgetHit}};
+  if (F.Reachability.EntryVA) {
+    Reachability["entry"] =
+        json::Object{{"va", vaHex(*F.Reachability.EntryVA)},
+                     {"name", F.Reachability.EntryName},
+                     {"kind", toString(F.Reachability.Kind)}};
+  }
+  if (!F.Reachability.CallChain.empty()) {
+    json::Array Chain;
+    for (const ReachabilityCall &Call : F.Reachability.CallChain)
+      Chain.push_back(
+          json::Object{{"caller_va", vaHex(Call.CallerVA)},
+                       {"call_va", vaHex(Call.CallVA)},
+                       {"callee_va", vaHex(Call.CalleeVA)},
+                       {"kind", Call.Indirect ? "indirect" : "direct"}});
+    Reachability["call_chain"] = std::move(Chain);
+  }
+  if (!F.Reachability.Reason.empty())
+    Reachability["reason"] = F.Reachability.Reason;
+  O["reachability"] = std::move(Reachability);
+  O["evidence"] = std::move(Ev);
+  return O;
+}
+
+std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
+  using namespace llvm;
+  json::Array Findings;
+  for (const Finding &F : Report.Findings)
+    Findings.push_back(findingJson(F));
 
   // Verdict tally, so a caller can key an exit code off one number.
   unsigned Unsafe = 0, Unknown = 0, Safe = 0;

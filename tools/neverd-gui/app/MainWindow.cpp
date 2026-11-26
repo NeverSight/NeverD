@@ -44,6 +44,7 @@
 #include "ProjectDatabase.h"
 #include "QuickStartDialog.h"
 #include "Resolve.h"
+#include "SafetyScanDialog.h"
 #include "SecondaryTextDelegate.h"
 #include "Session.h"
 #include "SetTypeDialog.h"
@@ -2565,6 +2566,10 @@ void MainWindow::connectActions() {
     showModelessDialog(new PluginManagerDialog(session_.pluginServices(), this),
                        this);
   });
+  on(ActionId::OptionsMemorySafetyScan, [this] {
+    auto *dialog = new SafetyScanDialog(session_.queries(), commandView());
+    showModelessDialog(dialog, dialog->parentWidget(), &session_);
+  });
   on(ActionId::OptionsAnalyze, [this] { session_.analyzeWholeProgram(); });
   on(ActionId::OptionsCancel, [this] { session_.cancelReads(); });
   on(ActionId::OptionsRestartWorker, [this] { session_.restart(); });
@@ -2897,6 +2902,8 @@ void MainWindow::updateActions() {
          declarations && session_.convertsParameters() && code &&
              code->text()->function().has_value());
   enable(ActionId::EditRepeatableComment, location && !session_.readOnly());
+  enable(ActionId::OptionsMemorySafetyScan,
+         loaded && session_.supportsSafetyScan());
   enable(ActionId::OptionsAnalyze,
          loaded && !session_.metadata().value("analyzed").toBool());
   enable(ActionId::EditCopyLink, loaded && linkHere().has_value());

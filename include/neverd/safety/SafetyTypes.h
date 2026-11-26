@@ -20,6 +20,7 @@
 #include "neverd/ir/NdOps.h"
 #include "neverd/safety/Limits.h"
 
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -161,6 +162,7 @@ struct FindingEvent {
   va_t VA = 0;
   int Seq = -1;
   NdOp Opcode = NdOp::_COUNT;
+  auto operator<=>(const FindingEvent &) const = default;
 };
 
 /// One free-variable assignment from the solver model that establishes a
@@ -241,6 +243,14 @@ struct ReachabilityEvidence {
   bool BudgetHit = false;
 };
 
+/// A prerequisite checked by both analyzers against the same catalog entry.
+enum class CatalogRequirement { CallEffects, DebugSignature };
+struct CatalogCheck {
+  CatalogRequirement Requirement;
+  int Argument;
+  auto operator<=>(const CatalogCheck &) const = default;
+};
+
 /// One evidence-carrying record in a report.
 struct Finding {
   Track Origin = Track::Hunt;
@@ -258,6 +268,7 @@ struct Finding {
   int OpIdx = -1;
   int OriginSeq = -1;
   uint32_t CallSiteId = 0;
+  std::optional<CatalogCheck> SharedCheck;
   std::string SourceLoc; ///< "file:line" when debug info supplies it.
   std::string Sink;      ///< normalized catalog name.
   /// Non-serialized sink role used by strict instrumentation classification.

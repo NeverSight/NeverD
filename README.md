@@ -183,6 +183,7 @@ cmake --build build
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
+./build/bin/neverd scan binary
 ./build/bin/neverd audit binary
 ./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary

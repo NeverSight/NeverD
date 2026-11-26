@@ -26,7 +26,7 @@
 #ifndef NEVERD_SDK_CAPI_SAFETY_H
 #define NEVERD_SDK_CAPI_SAFETY_H
 
-#include "neverd/sdk/NeverDCAPITypes.h"
+#include "neverd/sdk/NeverDCAPISession.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,6 +41,12 @@ extern "C" {
 #else
 #define NEVERD_API __attribute__((visibility("default")))
 #endif
+
+typedef enum neverd_scan_analyzers {
+  NEVERD_SCAN_BOTH = 0,
+  NEVERD_SCAN_AUDIT = 1,
+  NEVERD_SCAN_HUNT = 2
+} neverd_scan_analyzers;
 
 /// Resource limits and catalog overrides for a safety analysis.  Zero the
 /// struct, set `struct_size`, and leave any numeric field zero to use the
@@ -61,6 +67,18 @@ typedef struct neverd_safety_options {
   unsigned max_summary_iterations;
 } neverd_safety_options;
 
+/// Options for neverd_session_scan_json. Zero initialize and set struct_size.
+/// Pointers are borrowed only for the synchronous call.
+typedef struct neverd_scan_options {
+  size_t struct_size;
+  /// NULL selects the engine's default budgets and catalog.
+  const neverd_safety_options *analysis;
+  /// One neverd_scan_analyzers value. Zero selects both.
+  unsigned analyzers;
+  neverd_cancel_probe_fn cancel;
+  void *context;
+} neverd_scan_options;
+
 /// Audit heap-object lifetimes and local stack initialization, returning an
 /// owned JSON report.  Heap findings carry the callee name, its identity
 /// origin, and the call address.  Caller frees the returned string with
@@ -80,6 +98,13 @@ neverd_session_audit_json(neverd_session_t Sess,
 NEVERD_API const char *
 neverd_session_hunt_json(neverd_session_t Sess,
                          const neverd_safety_options *Options);
+
+/// Run the selected static analyses against one lift of the loaded image.
+/// Returns an owned neverd.memory-safety-scan v1 report, including partial
+/// findings on cancellation. Free it with neverd_free_string().
+NEVERD_API const char *
+neverd_session_scan_json(neverd_session_t Sess,
+                         const neverd_scan_options *Options);
 
 #ifdef __cplusplus
 }

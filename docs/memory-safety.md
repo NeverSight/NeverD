@@ -4,6 +4,8 @@
 
 # Memory-Safety Audit & Hunt
 
+Run both tracks with `neverd scan <binary>`. Choose one with `--analyzer=audit` or `--analyzer=hunt`. [Unified scan guide](memory-safety-scan.md).
+
 NeverD analyses a loaded binary for two families of memory-safety defect and
 reports them as structured JSON. Both run on the format-neutral lifted IR, so
 **PE/COFF, ELF, and Mach-O are first-class, co-equal targets** — a finding is
