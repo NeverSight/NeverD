@@ -4835,6 +4835,55 @@ TEST_F(JTE_X86_64, SecondMachineBehindAnOpenEntryDispatchStaysUnreachable) {
   }
 }
 
+static fs::path narrowGuardX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard.o";
+}
+
+// `cmpb $0x81, %dl; ja` bounds a byte lane past its sign bit (GCC's shape for
+// sqlite3VdbeExec).  Indexed by that lane zero-extended, the dispatch reads
+// all 130 slots.  Indexed by the lane sign-extended, lane values 0x80 and 0x81
+// are negative indices, so the dispatch stays unresolved.
+TEST_F(JTE_X86_64, NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex) {
+  auto ImageOrErr = neverd::loadBinary(narrowGuardX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 130; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Zext = Build("jt_narrow_zext");
+  ASSERT_EQ(Zext.JumpTables.size(), 1u);
+  EXPECT_FALSE(Zext.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Zext.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Zext.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Zext.UnsafeIndirectBranchAddresses.empty());
+
+  const neverd::LowFunc Sext = Build("jt_narrow_sext");
+  EXPECT_FALSE(Sext.UnsafeIndirectBranchAddresses.empty());
+  for (const neverd::JumpTable &Table : Sext.JumpTables)
+    EXPECT_TRUE(Table.AnalysisOnly);
+}
+
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;
 // ja`, then indexes its 13-entry table with `movzbl %sil,%eax; andl $0xf,%eax`.
 // The guard's byte is the low byte of that index, so the table keeps the

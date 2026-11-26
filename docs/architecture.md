@@ -11605,6 +11605,12 @@ such a lane, both queries retry rooted at the narrower value the lane carries
 unchanged, found through whole-width copies and extensions in the guard's
 block. The resolver still proves both, the narrow-lane bound check keeps the
 domain below that value's sign bit, and a failed retry changes nothing.
+A narrow bound past the sign bit, such as GCC's `cmpb $0xb8, %dl; ja` before
+`movzbl %dl, %esi` in sqlite3VdbeExec, stands only when every index leaf of
+the selected guards reaches the table index zero-extended: a structural leaf,
+or one whose identity query also holds with sign extension excluded. Those
+queries spend a copy of the account, so a lane they cannot prove fails as
+before; a sign-extended lane keeps the dispatch unresolved.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph

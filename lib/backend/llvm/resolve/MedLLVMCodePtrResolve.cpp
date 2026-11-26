@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../safety/StackSlotFlow.h"
 #include "../data/MedLLVMFailureSnapshot.h"
 
 #include "neverd/Common.h"
@@ -29,6 +30,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/loader/ELF/PPC64FunctionDescriptor.h"
+#include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -40,6 +42,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/WithColor.h"
 
 #include <cstdlib>
@@ -4030,6 +4033,29 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
         FatalCodePointerResolution = true;
         return nullptr;
       }
+    }
+  }
+  // A PowerPC register branch clears two address bits. When the register
+  // holds a native argument, its masked value is already in the executing
+  // image's address space. Image-derived targets still need rebinding.
+  if (isPowerPC(Img->Arch) && V.Size == Img->getPointerSize()) {
+    const unsigned PointerSize = V.Size;
+    const MedOp *Mask = lookupDef(V);
+    const uint64_t Aligned = llvm::maskTrailingOnes<uint64_t>(PointerSize * 8) &
+                             -uint64_t(ppc_elf::InstructionAlignment);
+    if (Mask && Mask->Opcode == NdOp::INT_AND && Mask->NumInputs == 2 &&
+        Mask->Inputs[0].Size == PointerSize && Mask->Inputs[1].isConst() &&
+        Mask->Inputs[1].Provenance == ConstantAddressProvenance::Scalar &&
+        Mask->Inputs[1].ConstVal == Aligned) {
+      const MedVar &Base = Mask->Inputs[0];
+      if ((Base.Kind == MedVar::Param ||
+           safety::detail::isAuthenticatedEntryRegisterLiveIn(*CurMedFunc,
+                                                              Base)) &&
+          llvm::any_of(CurMedFunc->Params, [&](const MedVar &Param) {
+            return Param.Id == Base.Id && Param.RegOff == Base.RegOff &&
+                   Param.Size == Base.Size;
+          }))
+        return getVar(V, Builder);
     }
   }
   return tryResolveCodeAddressValue(V, /*RequireCodeRole=*/true, Builder);
