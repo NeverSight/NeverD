@@ -2582,6 +2582,34 @@ The M4 generated-IR control compiled an underscored and a bare verbatim name
 at O0 and O2. The original dylib returned 13. All four published dylibs
 passed strict signature verification and returned 31.
 
+### Publishing local frames and standalone FDEs
+
+The Darwin assembler can omit a private function's name from the Mach-O
+symbol table while emitting its exact unwind range. The publisher accepts
+that range when it is instruction-aligned, stays inside one input code
+section and starts in instructions. A compact row must have a relocation to
+code in the replacement object. The published entry table retains only the
+requested mappings. An image or thread initializer may use a local function
+pointer encoded as a named atom plus an addend. The resolved address must
+start an unwind range. An authenticated initializer additionally requires the
+Darwin function-pointer schema (IA, zero discriminator, no address diversity).
+
+An input dylib with only compact unwind can acquire a registered
+`__eh_frame` when the object supplies a standalone FDE. Each function can
+use its own format. A compact row for a neighboring function cannot replace
+that FDE. A redundant FDE can be omitted when its compact row describes the
+same start and length. Conflicting extents fail before writing an image.
+
+The `MachOArm64ePublishedFrames` tests compare Apple-linked and NeverD-published
+dylibs. They check the normal return, catch a typed C++ exception across a
+signed frame and count initializer calls. Six cases use 27 producer ranges
+with one named text entry. Two others use a standalone FDE, with and without
+a neighboring compact leaf. Rejection cases cover an initializer landing
+inside a function, the wrong initializer key, an entry in embedded data, a
+mismatched return-signing rule, conflicting extents and a compact start with
+no relocation. The test records the driver architecture and the number of
+published ranges.
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,

@@ -765,8 +765,8 @@ llvm::Expected<MachOCompactUnwindInstallReceipt>
 applyMachOCompactUnwindInstall(std::vector<uint8_t> &Binary,
                                const MachOCompactUnwindInstallPlan &Plan);
 
-/// A native producer range has no MC range token. The object reader proves
-/// its function symbol, section extent and exact compact record before use.
+/// A native producer range has no MC range token. The object reader checks
+/// its section extent and unwind record, including assembler-local functions.
 struct NativeMachOCompactRange {
   uint64_t BeginVA = 0, EndVA = 0;
   uint32_t Encoding = 0;

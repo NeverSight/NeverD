@@ -79,7 +79,7 @@ struct NativeSymbol {
   // Bare assembly labels in arm64e text need an exact unwind start.
   bool UnwindCandidate = false;
 
-  // A mapping or initializer obliges relocation to verify the unwind range.
+  // A requested definition must prove its unwind range during relocation.
   bool requireFunction() {
     Function = Function || UnwindCandidate;
     return Function;
@@ -231,32 +231,83 @@ uint64_t installationCommandBytes(const NativeMachO &Object,
   return NewDICE ? SegmentBytes + sizeof(linkedit_data_command) * 2 : 0;
 }
 
+unsigned compactRecordSize(const NativeMachO &Object) {
+  return Object.Image.PointerWidth * kCompactPointers + kCompactFixedBytes;
+}
+
 // Count both possible sources. A frame described by both tables can reserve
 // two entries. Final installation validates the relocated encoding and LSDA.
 MachOUnwindFunctionCounts unwindFunctionCounts(const NativeMachO &Object) {
+  uint64_t Functions = Object.OldFDEs.size() + Object.Thunks.size();
   uint64_t LSDAs = llvm::count_if(
       Object.OldFDEs, [](const auto &Frame) { return Frame.LSDA.has_value(); });
   if (Object.CompactSection) {
     const auto &Data =
         Object.Image.Sections[*Object.CompactSection].ExternalBytes;
     const auto Ptr = Object.Image.PointerWidth;
-    const auto Stride = Ptr * kCompactPointers + kCompactFixedBytes;
+    const auto Stride = compactRecordSize(Object);
+    Functions += Data.size() / Stride;
     for (size_t Offset = 0; Offset + Stride <= Data.size(); Offset += Stride) {
       const auto Encoding =
           readLE<uint32_t>(Data.data() + Offset + Ptr + sizeof(uint32_t));
       LSDAs += bool(Encoding & macho_unwind::kHasLSDA);
     }
   }
-  return {Object.Symbols.size() +
+  return {Functions +
               unsigned(Object.Descriptors.has_value() ||
                        !Object.ThreadInitializers.empty()) +
               Object.AuthenticatedCallStubs.size(),
           LSDAs};
 }
 
-// A linked arm64e input can have only compact records while the replacement
-// compiler emits an indexed DWARF function. Reserve its real FDE registry
-// before any section addresses or instruction displacements are finalized.
+struct NativeCodeOffset {
+  uint32_t Section;
+  uint64_t Offset;
+};
+
+// Darwin may encode a temporary label as the nearest atom plus a signed
+// addend. Keep it in the referenced code section in either address space.
+std::optional<NativeCodeOffset>
+localCodePointer(const NativeMachO &Object, const Relocation &R, uint64_t Raw) {
+  if (R.Width != arm64e::kPointerBytes || R.PCRel || R.Scattered ||
+      R.SubtractSymbol || R.SubtractVA || R.InstructionAddend ||
+      (R.Type != ARM64_RELOC_UNSIGNED &&
+       R.Type != ARM64_RELOC_AUTHENTICATED_POINTER))
+    return std::nullopt;
+  uint32_t Section = R.SymbolIndex;
+  uint64_t Offset = Raw;
+  if (R.External) {
+    const auto Sym = Object.Symbols.find(R.SymbolIndex);
+    if (Sym == Object.Symbols.end() || !Sym->second.Section)
+      return std::nullopt;
+    Section = Sym->second.Section;
+    int64_t Addend = static_cast<int64_t>(Raw);
+    if (R.Type == ARM64_RELOC_AUTHENTICATED_POINTER) {
+      const auto Word = arm64e::decodeObjectPointerWord(Raw);
+      if (!Word || Word->Key != kDefaultFunctionPointerKey || Word->Diversity ||
+          Word->AddressDiversity)
+        return std::nullopt;
+      Addend = Word->Addend;
+    }
+    int64_t Relative;
+    if (llvm::AddOverflow(int64_t(Sym->second.Offset), Addend, Relative) ||
+        Relative < 0)
+      return std::nullopt;
+    Offset = Relative;
+  } else {
+    if (R.Type != ARM64_RELOC_UNSIGNED || !Object.Sections.contains(Section) ||
+        Raw < Object.OldSectionVAs.at(Section))
+      return std::nullopt;
+    Offset -= Object.OldSectionVAs.at(Section);
+  }
+  const auto &Code = Object.Image.Sections[Object.Sections.at(Section)];
+  if (Code.Kind != Kind::Code || Offset >= Code.Size)
+    return std::nullopt;
+  return NativeCodeOffset{Section, Offset};
+}
+
+// A compact-only image may need an FDE registry for its new code. Decide
+// before finalizing section addresses and instruction displacements.
 uint64_t requiredNativeEHBytes(const NativeMachO &Object,
                                const std::vector<uint8_t> &Binary) {
   if (!Object.EH)
@@ -264,19 +315,46 @@ uint64_t requiredNativeEHBytes(const NativeMachO &Object,
   const auto Size = Object.Image.Sections[*Object.EH].Size;
   if (!Object.Thunks.empty() || findMachOEHFrameRegion(Binary))
     return Size;
-  if (Object.Image.TargetArch != Arch::AArch64 || !Object.CompactSection)
+  if (Object.Image.TargetArch != Arch::AArch64)
     return 0;
+  const bool Arm64e = llvm::Triple(Object.Image.TargetTriple).isArm64e();
+  if (!Object.CompactSection)
+    return Arm64e && !Object.OldFDEs.empty() ? Size : 0;
   const auto &Data =
       Object.Image.Sections[*Object.CompactSection].ExternalBytes;
   const auto Width = Object.Image.PointerWidth;
-  const auto Stride = kCompactPointers * Width + kCompactFixedBytes;
+  const auto Stride = compactRecordSize(Object);
   for (size_t Off = 0; Off + Stride <= Data.size(); Off += Stride) {
     auto Encoding =
         readLE<uint32_t>(Data.data() + Off + Width + sizeof(uint32_t));
     if ((Encoding & macho_unwind::kModeMask) == macho_unwind::kARM64ModeDwarf)
       return Size;
   }
-  return 0;
+  if (!Arm64e || Object.OldFDEs.empty())
+    return 0;
+
+  // An assembly object may contribute compact rows for only some functions.
+  // Elide redundant FDEs only if those rows cover every producer frame.
+  llvm::DenseMap<va_t, va_t> Missing;
+  for (const auto &FDE : Object.OldFDEs)
+    Missing.try_emplace(FDE.BeginVA, FDE.EndVA);
+  for (const auto &R : Object.Relocations) {
+    if (R.Section != *Object.CompactSection || R.Offset % Stride ||
+        R.Type != ARM64_RELOC_UNSIGNED ||
+        !rangeInBounds(R.Offset, Stride, Data.size()))
+      continue;
+    const auto Target =
+        localCodePointer(Object, R, readLE<uint64_t>(Data.data() + R.Offset));
+    if (!Target)
+      continue;
+    const va_t Begin =
+        Object.OldSectionVAs.at(Target->Section) + Target->Offset;
+    const auto FDE = Missing.find(Begin);
+    const auto Length = readLE<uint32_t>(Data.data() + R.Offset + Width);
+    if (FDE != Missing.end() && FDE->second - Begin == Length)
+      Missing.erase(FDE);
+  }
+  return Missing.empty() ? 0 : Size;
 }
 
 bool isTLVLoad(unsigned Type) {
@@ -292,8 +370,7 @@ bool isGOTLoad(unsigned Type) {
 bool isCompactPersonality(const NativeMachO &Object, const Relocation &R) {
   const unsigned Ptr = Object.Image.PointerWidth;
   return Object.CompactSection == R.Section &&
-         R.Offset % (Ptr * kCompactPointers + kCompactFixedBytes) ==
-             Ptr + kCompactFixedBytes;
+         R.Offset % compactRecordSize(Object) == Ptr + kCompactFixedBytes;
 }
 
 llvm::Error prepareAuthenticatedCallStubs(NativeMachO &Object,
@@ -1967,6 +2044,7 @@ llvm::Error
 relocate(NativeMachO &Object, const BinaryImage &Original,
          const std::map<std::string, SourcePatchBinding> &Bindings) {
   const Arch A = Original.Arch;
+  llvm::SmallVector<va_t> InitializerTargets;
   std::map<std::pair<size_t, uint64_t>, unsigned> Written;
   for (const auto &R : Object.Relocations) {
     const auto &S = Object.Image.Sections[R.Section];
@@ -1995,49 +2073,24 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     const uint64_t Raw = R.Width == 8 ? readLE<uint64_t>(Out)
                                       : readLE<uint32_t>(Out),
                    P = S.VA + R.Offset;
+    const bool CompactStart = Original.isArm64e() &&
+                              Object.CompactSection == R.Section &&
+                              R.Offset % compactRecordSize(Object) == 0;
     const auto ThreadInit = llvm::find(Object.ThreadInitializers, R.Section);
-    if (Object.InitializerPointers == R.Section ||
+    if (CompactStart || Object.InitializerPointers == R.Section ||
         ThreadInit != Object.ThreadInitializers.end()) {
-      if (R.Width != arm64e::kPointerBytes || R.Offset % R.Width || R.PCRel ||
-          R.Scattered || R.SubtractSymbol || R.SubtractVA ||
-          (R.Type != ARM64_RELOC_UNSIGNED &&
-           R.Type != ARM64_RELOC_AUTHENTICATED_POINTER))
-        return fail(kInitializerStorage);
-      uint64_t Address;
-      if (R.External) {
-        auto Sym = Object.Symbols.find(R.SymbolIndex);
-        if (Sym == Object.Symbols.end() || !Sym->second.Section ||
-            !Sym->second.requireFunction())
-          return fail(kInitializerStorage);
-        if (R.Type == ARM64_RELOC_AUTHENTICATED_POINTER) {
-          const auto Word = arm64e::decodeObjectPointerWord(Raw);
-          if (!Word || Word->Key != kDefaultFunctionPointerKey ||
-              Word->Addend || Word->Diversity || Word->AddressDiversity)
-            return fail(kInitializerStorage);
-        } else if (Raw) {
-          return fail(kInitializerStorage);
-        }
-        Address = Object.Image.SymbolAddrs.at(Sym->second.Name);
-      } else {
-        if (R.Type != ARM64_RELOC_UNSIGNED ||
-            !Object.Sections.contains(R.SymbolIndex))
-          return fail(kInitializerStorage);
-        const auto &Code =
-            Object.Image.Sections[Object.Sections.at(R.SymbolIndex)];
-        const auto Old = Object.OldSectionVAs.at(R.SymbolIndex);
-        if (Code.Kind != Kind::Code || Raw < Old || Raw - Old >= Code.Size)
-          return fail(kInitializerStorage);
-        auto I = llvm::find_if(Object.Symbols, [&](const auto &P) {
-          const auto &Symbol = P.second;
-          return Symbol.Section == R.SymbolIndex &&
-                 Symbol.Offset == Raw - Old &&
-                 (Symbol.Function || Symbol.UnwindCandidate);
-        });
-        if (I == Object.Symbols.end())
-          return fail(kInitializerStorage);
-        I->second.requireFunction();
-        Address = Code.VA + Raw - Old;
+      const auto Target = localCodePointer(Object, R, Raw);
+      if (!Target || R.Offset % R.Width ||
+          (CompactStart && R.Type != ARM64_RELOC_UNSIGNED))
+        return fail(CompactStart ? kCompactLanguage : kInitializerStorage);
+      const auto &Code =
+          Object.Image.Sections[Object.Sections.at(Target->Section)];
+      const va_t Address = Code.VA + Target->Offset;
+      if (CompactStart) {
+        writeLE<uint64_t>(Out, Address);
+        continue;
       }
+      InitializerTargets.push_back(Address);
       if (ThreadInit != Object.ThreadInitializers.end()) {
         const auto &T = *Object.PerThread;
         auto At =
@@ -2558,7 +2611,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     const auto &Data =
         Object.Image.Sections[*Object.CompactSection].ExternalBytes;
     const unsigned Ptr = Object.Image.PointerWidth,
-                   Stride = Ptr * kCompactPointers + kCompactFixedBytes;
+                   Stride = compactRecordSize(Object);
     if (Data.size() % Stride)
       return fail("truncated native compact records");
     for (size_t O = 0; O < Data.size(); O += Stride) {
@@ -2577,6 +2630,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
         return It != Written.end() && It->second == Ptr;
       };
       if (!Length || Begin > UINT64_MAX - Length ||
+          (Original.isArm64e() && !HasPointerWriter(O)) ||
           ((Personality || LSDA) && !Original.isArm64e()) ||
           (Personality && !HasPointerWriter(O + Ptr + 8)) ||
           (LSDA && !HasPointerWriter(O + 2 * Ptr + 8)) ||
@@ -2612,7 +2666,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     for (const auto &R : *Records) {
       auto [It, Added] = Extents.emplace(R.BeginVA, R.EndVA);
       if (!Added && It->second != R.EndVA)
-        return fail("native DWARF and compact extents disagree");
+        return fail(kInconsistentFrameExtents);
     }
     // Placement owns the index base for both registered and private frames.
     const va_t SectionVA = Object.EHSectionVA;
@@ -2694,9 +2748,38 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
   }
   for (auto [Alias, Owner] : Aliases)
     Alias->Size = Owner->Size;
-  for (const auto &[Begin, End] : Extents)
-    if (!Functions.contains(Begin) || Functions.at(Begin)->Size != End - Begin)
-      return fail("native unwind has no exact function symbol");
+  // Source code sections are placed in object order. An assembler-local
+  // function has an unwind row but may have no nlist entry at its start.
+  auto Code = Object.Sections.begin();
+  for (const auto &[Begin, End] : Extents) {
+    if (Functions.contains(Begin))
+      continue;
+    if (!Original.isArm64e())
+      return fail(kUnownedNativeUnwind);
+    Code = std::find_if(Code, Object.Sections.end(), [&](const auto &Item) {
+      const auto &S = Object.Image.Sections[Item.second];
+      return S.Kind == Kind::Code && Begin < S.VA + S.Size;
+    });
+    if (Code == Object.Sections.end() || Begin >= End ||
+        Begin % aarch64::kInsnSize || End % aarch64::kInsnSize)
+      return fail(kAnonymousFrameRange);
+    const auto Index = Code->second;
+    const auto &S = Object.Image.Sections[Index];
+    if (Begin < S.VA || !rangeInBounds(Begin - S.VA, End - Begin, S.Size))
+      return fail(kAnonymousFrameRange);
+    const auto Offset = Begin - S.VA;
+    const auto Island =
+        llvm::partition_point(Object.Embedded, [&](const auto &I) {
+          return I.first < Index ||
+                 (I.first == Index && I.second.End <= Offset);
+        });
+    if (Island != Object.Embedded.end() && Island->first == Index &&
+        Island->second.Begin < Offset + aarch64::kInsnSize)
+      return fail(kAnonymousFrameRange);
+  }
+  for (va_t Address : InitializerTargets)
+    if (Address % aarch64::kInsnSize || !Extents.contains(Address))
+      return fail(kInitializerStorage);
   return llvm::Error::success();
 }
 

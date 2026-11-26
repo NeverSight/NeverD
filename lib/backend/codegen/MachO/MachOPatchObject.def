@@ -31,8 +31,9 @@ MACHO_OBJECT_TEXT(kBindingDependencyConflict,
 MACHO_OBJECT_TEXT(kMissingUnwindStart,
                   "assembly function lacks an exact native unwind start")
 MACHO_OBJECT_TEXT(kDuplicateNativeSymbol, "duplicate native symbol")
-MACHO_OBJECT_TEXT(kUnsupportedNativeSymbol,
-                  "unsupported native weak definition, common or undefined symbol")
+MACHO_OBJECT_TEXT(
+    kUnsupportedNativeSymbol,
+    "unsupported native weak definition, common or undefined symbol")
 MACHO_OBJECT_TEXT(kClassicReturnCFI,
                   "classic arm64e requires implicit signed-return CFI; "
                   "explicit rule does not match the installed signing "
@@ -86,6 +87,14 @@ MACHO_OBJECT_TEXT(kTLVDescriptor,
 MACHO_OBJECT_VALUE(unsigned, kRuntimeSegmentCount, 3)
 MACHO_OBJECT_VALUE(unsigned, kTLVSectionCount, 2)
 MACHO_OBJECT_VALUE(unsigned, kInitializerSectionCount, 2)
+MACHO_OBJECT_TEXT(kInconsistentFrameExtents,
+                  "native DWARF and compact extents disagree")
+MACHO_OBJECT_TEXT(kUnownedNativeUnwind,
+                  "native unwind has no exact function symbol")
+MACHO_OBJECT_TEXT(
+    kAnonymousFrameRange,
+    "anonymous native unwind range does not start in instructions "
+    "or exceeds its code section")
 MACHO_OBJECT_TEXT(kFunctionAlias,
                   "aliased native function entries have no shared unwind range")
 MACHO_OBJECT_TEXT(
@@ -147,9 +156,8 @@ MACHO_OBJECT_TEXT(
     "native Objective-C image flags differ or lack an installed declaration")
 MACHO_OBJECT_TEXT(kWeakDataAtom,
                   "weak data requires an independently owned regular data atom")
-MACHO_OBJECT_TEXT(
-    kWeakDataFallback,
-    "weak data lacks an unambiguous exported coalescing fallback")
+MACHO_OBJECT_TEXT(kWeakDataFallback,
+                  "weak data lacks an unambiguous exported coalescing fallback")
 MACHO_OBJECT_TEXT(kWeakDataReference,
                   "weak data reference has no coalescing relocation")
 MACHO_OBJECT_TEXT(kPrivateWeak,

@@ -1782,6 +1782,207 @@ INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeObjectInstallation,
                          ::testing::Combine(::testing::Values(kO0, kO2),
                                             ::testing::Bool()));
 
+enum class PublishedFrame { Compact, Indexed, DwarfOnly, Mixed };
+enum class AnonymousInitializer { None, Plain, Authenticated };
+
+class MachOArm64ePublishedFrames
+    : public ::testing::TestWithParam<
+          std::tuple<PublishedFrame, AnonymousInitializer>> {};
+
+TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  const auto [Format, Init] = GetParam();
+  const bool Anonymous =
+      Format == PublishedFrame::Compact || Format == PublishedFrame::Indexed;
+  llvm::SmallString<kPathCapacity> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory(kObjectArtifactPrefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Assembly = (Root / kDwarfSourceFile).string();
+  const auto Source = (Root / kSourceFile).string();
+  const auto DriverSource = (Root / kRuntimeLoaderFile).string();
+  const auto Driver = (Root / kRuntimeLoaderBinary).string();
+  const auto Object = (Root / kObjectFile).string();
+  const auto RejectedObject = (Root / kAnonymousRejectedObject).string();
+  const auto Original = (Root / kOriginalFile).string();
+  const auto Apple = (Root / kAnonymousAppleImage).string();
+  const auto Published = (Root / kInstalledFile).string();
+  std::ofstream(Assembly) << (Anonymous ? kAnonymousFrameAssembly
+                                        : kStandaloneFDEAssembly);
+  std::ofstream(Source) << kAnonymousFrameSource;
+  std::ofstream(DriverSource) << kAnonymousFrameDriver;
+
+  const auto Compile = [&](llvm::ArrayRef<llvm::StringLiteral> Profile,
+                           llvm::ArrayRef<llvm::StringRef> Inputs,
+                           llvm::StringRef Output) {
+    llvm::SmallVector<llvm::StringRef> Args{kCompiler};
+    llvm::append_range(Args, Profile);
+    llvm::append_range(Args, Inputs);
+    llvm::append_range(Args, kOutputArgs);
+    Args.push_back(Output);
+    return llvm::sys::ExecuteAndWait(kCompiler, Args);
+  };
+  const char *Profile = std::getenv(kExecutableEnvironment);
+  const bool Native =
+      Profile && llvm::StringRef(Profile) == kAnonymousSystemProfile;
+  const llvm::ArrayRef<llvm::StringLiteral> DriverArgs =
+      Native ? llvm::ArrayRef(kRuntimeCompileArgs)
+             : llvm::ArrayRef(kBindingDriverArgs);
+  ASSERT_EQ(Compile(DriverArgs, {DriverSource}, Driver), 0);
+  RecordProperty(kAnonymousDriverProperty, DriverArgs[1].str());
+  ASSERT_EQ(Compile(kCompileArgs, {kO2, Source}, Original), 0);
+  const auto Run = [&](llvm::StringRef Image, llvm::StringRef Symbol,
+                       llvm::StringRef Result, llvm::StringRef Count) {
+    return llvm::sys::ExecuteAndWait(Driver,
+                                     {Driver, Image, Symbol, Result, Count});
+  };
+  ASSERT_EQ(Run(Original, kAnonymousOriginalEntry, kAnonymousOriginalResult,
+                kAnonymousNoInit),
+            0);
+  llvm::SmallVector<llvm::StringRef> Options;
+  if (Format == PublishedFrame::Indexed)
+    Options.push_back(kAnonymousIndexOption);
+  if (Format == PublishedFrame::Mixed)
+    Options.push_back(kMixedFDEOption);
+  if (Init != AnonymousInitializer::None)
+    Options.push_back(kAnonymousInitOption);
+  if (Init == AnonymousInitializer::Authenticated)
+    Options.push_back(kAnonymousSignedInitOption);
+  Options.push_back(Assembly);
+  ASSERT_EQ(Compile(kObjectCompileArgs, Options, Object), 0);
+  ASSERT_EQ(Compile(kCompileArgs, {kO2, Source, Object}, Apple), 0);
+  const auto *Count =
+      Init == AnonymousInitializer::None ? kAnonymousNoInit : kAnonymousOneInit;
+  ASSERT_EQ(Run(Apple, kAnonymousEntry, kAnonymousPublishedResult, Count), 0);
+
+  auto Buffer = llvm::MemoryBuffer::getFile(Object);
+  ASSERT_TRUE(bool(Buffer));
+  auto Producer =
+      llvm::object::ObjectFile::createObjectFile((*Buffer)->getMemBufferRef());
+  ASSERT_TRUE(bool(Producer)) << llvm::toString(Producer.takeError());
+  bool HasCompact = false, HasDwarf = false;
+  uint64_t TextSize = 0;
+  for (const auto &Section : (*Producer)->sections()) {
+    auto Name = Section.getName();
+    ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+    HasCompact |= *Name == section_names::macho::CompactUnwind;
+    HasDwarf |= *Name == kEHFrameSection;
+    if (Section.isText())
+      TextSize = Section.getSize();
+  }
+  ASSERT_NE(TextSize, 0u);
+  EXPECT_EQ(HasCompact, Format != PublishedFrame::DwarfOnly);
+  EXPECT_EQ(HasDwarf, Format != PublishedFrame::Compact);
+  // The text atom and section-start symbol can name only the mapped entry.
+  for (const auto &Symbol : (*Producer)->symbols()) {
+    auto Section = Symbol.getSection();
+    ASSERT_TRUE(bool(Section)) << llvm::toString(Section.takeError());
+    if (*Section == (*Producer)->section_end() || !(*Section)->isText())
+      continue;
+    auto Address = Symbol.getAddress();
+    ASSERT_TRUE(bool(Address)) << llvm::toString(Address.takeError());
+    ASSERT_EQ(*Address, (*Section)->getAddress());
+  }
+
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto Before = Reader->load(Original);
+  ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+  if (!Anonymous)
+    ASSERT_FALSE(Before->hasSection(kEHFrameSection));
+  const auto *Entry = Before->findSymbol(kAnonymousOriginalSymbol);
+  ASSERT_TRUE(Entry);
+  const SourcePatchMapping Map{kAnonymousEntry, Entry->Addr};
+  const auto Install = [&](llvm::StringRef Bytes) {
+    return installMachOObjectPatch(Bytes, *Before, {Map}, {}, Published, {});
+  };
+  const auto Reject = [&](llvm::StringRef Option, llvm::StringRef Expected) {
+    auto RejectedOptions = Options;
+    RejectedOptions.insert(RejectedOptions.begin(), Option);
+    ASSERT_EQ(Compile(kObjectCompileArgs, RejectedOptions, RejectedObject), 0);
+    auto Rejected = llvm::MemoryBuffer::getFile(RejectedObject);
+    ASSERT_TRUE(bool(Rejected));
+    auto Result = Install((*Rejected)->getBuffer());
+    ASSERT_FALSE(bool(Result));
+    const auto Error = llvm::toString(Result.takeError());
+    EXPECT_TRUE(llvm::StringRef(Error).contains(Expected)) << Error;
+    EXPECT_FALSE(std::filesystem::exists(Published));
+  };
+  if (Init != AnonymousInitializer::None)
+    ASSERT_NO_FATAL_FAILURE(
+        Reject(kAnonymousInteriorOption, kAnonymousInitError));
+  if (Init == AnonymousInitializer::Authenticated)
+    ASSERT_NO_FATAL_FAILURE(
+        Reject(kAnonymousBadInitKeyOption, kAnonymousInitError));
+  if (Format == PublishedFrame::Compact && Init == AnonymousInitializer::None)
+    ASSERT_NO_FATAL_FAILURE(Reject(kAnonymousDataOption, kAnonymousCodeError));
+  if (Format == PublishedFrame::Indexed && Init == AnonymousInitializer::None)
+    ASSERT_NO_FATAL_FAILURE(
+        Reject(kAnonymousWrongKeyOption, kAnonymousSigningError));
+
+  if (Format == PublishedFrame::DwarfOnly) {
+    ASSERT_NO_FATAL_FAILURE(
+        Reject(kConflictingExtentOption, kConflictingExtentError));
+    ASSERT_NO_FATAL_FAILURE(Reject(kMissingWriterOption, kMissingWriterError));
+  }
+  auto Patch = Install((*Buffer)->getBuffer());
+  ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+  ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
+  auto After = Reader->load(Published);
+  ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+  const va_t Owner = Patch->PatchedFunctions.front().OwnerVA;
+  va_t FrameVA = Owner;
+  if (Anonymous) {
+    const auto *Word = After->readVA(Owner, kInstructionBytes);
+    ASSERT_TRUE(Word);
+    size_t Length;
+    const auto Target =
+        decodeDirectBranchTarget(After->Arch, InstructionMode::Default, Word,
+                                 kInstructionBytes, Owner, Length);
+    ASSERT_EQ(Target, Owner + kInstructionBytes);
+    FrameVA = *Target;
+  }
+  const auto Unwind = macho_unwind::parseCompactUnwind(*After);
+  ASSERT_EQ(Unwind.ParseStatus, ExceptionParseStatus::Complete);
+  const auto ExpectedFrames = Anonymous
+                                  ? kAnonymousProducerFrames
+                                  : 1u + (Format == PublishedFrame::Mixed);
+  const auto FrameCount = llvm::count_if(Unwind.Entries, [&](const auto &F) {
+    return F.CodeRange.Begin >= Owner && F.CodeRange.Begin < Owner + TextSize;
+  });
+  EXPECT_EQ(FrameCount, ExpectedFrames);
+  RecordProperty(kPublishedFrameCountProperty, FrameCount);
+  const auto Frame = llvm::find_if(Unwind.Entries, [&](const auto &F) {
+    return F.CodeRange.Begin == FrameVA;
+  });
+  ASSERT_NE(Frame, Unwind.Entries.end());
+  EXPECT_EQ(Frame->NativeEncoding & macho_unwind::kModeMask,
+            Format == PublishedFrame::Compact ? macho_unwind::kARM64ModeFrame
+                                              : macho_unwind::kARM64ModeDwarf);
+  auto Signature = macho_signing::verifyStrict(Published);
+  ASSERT_FALSE(bool(Signature)) << llvm::toString(std::move(Signature));
+  EXPECT_EQ(
+      Run(Published, kAnonymousOriginalEntry, kAnonymousPublishedResult, Count),
+      0);
+#else
+  GTEST_SKIP() << kMissingHost;
+#endif
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AppleClang, MachOArm64ePublishedFrames,
+    ::testing::Combine(::testing::Values(PublishedFrame::Compact,
+                                         PublishedFrame::Indexed),
+                       ::testing::Values(AnonymousInitializer::None,
+                                         AnonymousInitializer::Plain,
+                                         AnonymousInitializer::Authenticated)));
+
+INSTANTIATE_TEST_SUITE_P(
+    StandaloneFDE, MachOArm64ePublishedFrames,
+    ::testing::Combine(::testing::Values(PublishedFrame::DwarfOnly,
+                                         PublishedFrame::Mixed),
+                       ::testing::Values(AnonymousInitializer::None)));
+
 class MachOArm64eNativeBindings
     : public ::testing::TestWithParam<std::tuple<bool, bool, bool>> {};
 
