@@ -1884,18 +1884,37 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
             llvm::any_of(Before->DyldBindSlots, [](const auto &B) {
               return B.second.Name == kCoalescedSymbol;
             }));
-  const SourcePatchMapping Map{kBindingEntry, Entry->Addr};
+  const auto *Marker = Before->findSymbol(kBindingMarkerSymbol);
+  const auto *OriginalCode = Before->findSymbol(kBindingOriginalCode);
+  ASSERT_NE(Marker, nullptr);
+  ASSERT_NE(OriginalCode, nullptr);
+  const auto *CodeFields =
+      Before->readVA(OriginalCode->Addr, 2 * kPointerBytes);
+  ASSERT_NE(CodeFields, nullptr);
+  const SourcePatchMapping Map{ObjectWeak ? kBindingEntry : kBindingExactEntry,
+                               Entry->Addr};
+  const SourcePatchMapping MarkerMap{kBindingExactMarker, Marker->Addr};
+  llvm::SmallVector<SourcePatchBinding> Bindings;
+  if (DefinesFallback) {
+    // Cross-bind the addresses so an implicit lookup cannot pass the control.
+    Bindings.push_back({kBindingExactCode, SourcePatchBindingKind::Function,
+                        readLE<uint64_t>(CodeFields + kPointerBytes)});
+    Bindings.push_back({kBindingExactBareCode, SourcePatchBindingKind::Function,
+                        readLE<uint64_t>(CodeFields)});
+  }
   const SourcePatchDependency Dependency{
       OriginalWeak ? Library : Old->second.Module, kOptionalBinding,
       SourcePatchDependencyKind::Data};
   auto Bytes = llvm::MemoryBuffer::getFile(Object);
   ASSERT_TRUE(bool(Bytes));
-  const auto Install = [&](llvm::ArrayRef<SourcePatchDependency> Dependencies) {
-    return installMachOObjectPatch((*Bytes)->getBuffer(), *Before, {Map}, {},
-                                   Published, {}, nullptr, nullptr,
+  const auto Install = [&](llvm::ArrayRef<SourcePatchMapping> Entries,
+                           llvm::ArrayRef<SourcePatchBinding> References,
+                           llvm::ArrayRef<SourcePatchDependency> Dependencies) {
+    return installMachOObjectPatch((*Bytes)->getBuffer(), *Before, Entries,
+                                   References, Published, {}, nullptr, nullptr,
                                    Dependencies);
   };
-  auto Missing = Install({});
+  auto Missing = Install({Map, MarkerMap}, Bindings, {});
   ASSERT_FALSE(bool(Missing));
   llvm::consumeError(Missing.takeError());
   ASSERT_FALSE(std::filesystem::exists(Published));
@@ -1903,11 +1922,51 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
   if (DefinesFallback)
     Dependencies.push_back(
         {Library, kVerbatimBinding, SourcePatchDependencyKind::Function});
-  auto Patch = Install(Dependencies);
+  for (const auto Name : {kBindingInterior, kBindingAbsentSpelling,
+                          kBindingExactData, kBindingExactEntry}) {
+    auto Invalid = Install({Map, {Name, Marker->Addr}}, Bindings, Dependencies);
+    ASSERT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+    ASSERT_FALSE(std::filesystem::exists(Published));
+  }
+  if (DefinesFallback) {
+    auto Aliased = Bindings;
+    auto Alias = Bindings.front();
+    Alias.Symbol = kBindingCode;
+    Aliased.push_back(std::move(Alias));
+    auto Invalid = Install({Map, MarkerMap}, Aliased, Dependencies);
+    ASSERT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+    ASSERT_FALSE(std::filesystem::exists(Published));
+
+    auto Conflicting = Dependencies;
+    Conflicting.push_back(
+        {Library, kBindingCode, SourcePatchDependencyKind::Function});
+    Invalid = Install({Map, MarkerMap}, Bindings, Conflicting);
+    ASSERT_FALSE(bool(Invalid));
+    const auto Detail = llvm::toString(Invalid.takeError());
+    EXPECT_TRUE(llvm::StringRef(Detail).contains(kConflictingBinding))
+        << Detail;
+    ASSERT_FALSE(std::filesystem::exists(Published));
+  }
+  auto Patch = Install({Map, MarkerMap}, Bindings, Dependencies);
   ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
-  ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
+  ASSERT_EQ(Patch->PatchedFunctions.size(), 2u);
+  EXPECT_EQ(Patch->PatchedFunctions[0].SourceFunction, Map.Symbol);
+  EXPECT_EQ(Patch->PatchedFunctions[1].SourceFunction, MarkerMap.Symbol);
+  EXPECT_EQ(Patch->PatchedFunctions[0].OwnerSymbol, kBindingEntry);
+  EXPECT_EQ(Patch->PatchedFunctions[1].OwnerSymbol, kBindingMarker);
   auto After = Reader->load(Published);
   ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+  const auto Unwind = macho_unwind::parseCompactUnwind(*After);
+  ASSERT_EQ(Unwind.ParseStatus, ExceptionParseStatus::Complete);
+  const auto MarkerFrame = llvm::find_if(Unwind.Entries, [&](const auto &E) {
+    return E.CodeRange.contains(Patch->PatchedFunctions[1].OwnerVA);
+  });
+  ASSERT_NE(MarkerFrame, Unwind.Entries.end());
+  EXPECT_EQ(MarkerFrame->NativeEncoding & macho_unwind::kModeMask,
+            DefinesFallback ? macho_unwind::kARM64ModeFrameless
+                            : macho_unwind::kARM64ModeDwarf);
   auto Signature = macho_signing::verifyStrict(Published);
   ASSERT_FALSE(bool(Signature)) << llvm::toString(std::move(Signature));
 
@@ -2150,8 +2209,11 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
         };
         Run({Program, Original, Library}, OriginalWeak);
         // Retained original fixups and newly published fixups both bind.
-        Run({Program, Published, Library, kPublishedProperty},
-            OriginalWeak || ObjectWeak);
+        llvm::SmallVector<llvm::StringRef> PublishedArgs{
+            Program, Published, Library, kPublishedProperty};
+        if (DefinesFallback)
+          PublishedArgs.push_back(kBindingSwapped);
+        Run(PublishedArgs, OriginalWeak || ObjectWeak);
       }
     }
   }

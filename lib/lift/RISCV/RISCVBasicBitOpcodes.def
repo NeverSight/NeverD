@@ -1,0 +1,43 @@
+//===- RISCVBasicBitOpcodes.def - Zbb 1.0 encodings ----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Fixed instruction fields from the RISC-V basic bit-manipulation extension.
+/// Unary forms retain all twelve bits above rs1, including the zero rs2 of
+/// zext.h. Register and rotate-immediate forms use the shared bit-op masks.
+///
+///===----------------------------------------------------------------------===//
+
+NEVERD_RISCV_ZBB(UnaryFormMask, 0xfff0707f)
+NEVERD_RISCV_ZBB(Clz, 0x60001013)
+NEVERD_RISCV_ZBB(Ctz, 0x60101013)
+NEVERD_RISCV_ZBB(Cpop, 0x60201013)
+NEVERD_RISCV_ZBB(SextB, 0x60401013)
+NEVERD_RISCV_ZBB(SextH, 0x60501013)
+NEVERD_RISCV_ZBB(OrcB, 0x28705013)
+NEVERD_RISCV_ZBB(Rev8RV32, 0x69805013)
+NEVERD_RISCV_ZBB(Rev8RV64, 0x6b805013)
+NEVERD_RISCV_ZBB(ZextHRV32, 0x08004033)
+NEVERD_RISCV_ZBB(ZextHRV64, 0x0800403b)
+NEVERD_RISCV_ZBB(ClzW, 0x6000101b)
+NEVERD_RISCV_ZBB(CtzW, 0x6010101b)
+NEVERD_RISCV_ZBB(CpopW, 0x6020101b)
+
+NEVERD_RISCV_ZBB(AndN, 0x40007033)
+NEVERD_RISCV_ZBB(OrN, 0x40006033)
+NEVERD_RISCV_ZBB(Xnor, 0x40004033)
+NEVERD_RISCV_ZBB(Min, 0x0a004033)
+NEVERD_RISCV_ZBB(MinU, 0x0a005033)
+NEVERD_RISCV_ZBB(Max, 0x0a006033)
+NEVERD_RISCV_ZBB(MaxU, 0x0a007033)
+NEVERD_RISCV_ZBB(Rol, 0x60001033)
+NEVERD_RISCV_ZBB(Ror, 0x60005033)
+NEVERD_RISCV_ZBB(Rori, 0x60005013)
+NEVERD_RISCV_ZBB(RolW, 0x6000103b)
+NEVERD_RISCV_ZBB(RorW, 0x6000503b)
+NEVERD_RISCV_ZBB(RoriW, 0x6000501b)
+
+#undef NEVERD_RISCV_ZBB

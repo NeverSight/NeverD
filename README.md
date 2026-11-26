@@ -73,7 +73,7 @@ structured C, LLVM IR and LLVM-derived C for these profiles.
 
 | Target | Qualified ELF profiles |
 |---|---|
-| RISC-V | Little-endian RV32I/ILP32 and RV64I/LP64. ELF evidence selects M, A and integer C, or the individual Zmmul, Zaamo, Zalrsc and Zca extensions. The ELF ISA attribute also enables Zba 1.0 and Zbs 1.0. |
+| RISC-V | Little-endian RV32I/ILP32 and RV64I/LP64. ELF evidence selects M, A and integer C, or the individual Zmmul, Zaamo, Zalrsc and Zca extensions. The ELF ISA attribute also enables Zba 1.0, Zbb 1.0 and Zbs 1.0. |
 | PowerPC | Big- and little-endian PPC32 System V and PPC64 ELFv1/ELFv2. PPC32 supports cross-module calls through secure PLTs and the classic BSS-PLT. Both PPC64 ABIs support cross-module PLT calls and TOC switches. ELFv1 uses function descriptors and ELFv2 supports global and local entries. The scalar subset covers signed and unsigned division, high-word multiplication and overflow-reporting multiplication, including their CR0 and XER effects. PPC64 also lifts POWER10 prefixed integer addition, loads and stores. |
 
 Native rewriting remains open for these profiles. See [RISC-V and PowerPC coverage](docs/riscv-powerpc.md).

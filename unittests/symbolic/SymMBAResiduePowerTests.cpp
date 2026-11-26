@@ -873,6 +873,94 @@ TEST(SymMBAResiduePowers, ParityMajorityDoesNotReplaceTheZeroBranchProof) {
     }
 }
 
+TEST(SymMBAResiduePowers, SampledProductAndRewrittenTailKeepAllAddends) {
+  constexpr unsigned Width = 257, Observed = 135;
+  SymContext C;
+  auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  auto U = C.mkVar("u", Width), V = C.mkVar("v", Width);
+  auto Two = C.mkConst(Width, 2);
+  auto Sum = [&](SymRef A, SymRef B) {
+    return C.mkAdd(C.mkXor(A, B), C.mkMul(Two, C.mkAnd(A, B)));
+  };
+  auto Product = [&](SymRef Body, unsigned Offset) {
+    const auto Factor = C.mkAdd(C.mkConst(Width, Offset), Body);
+    llvm::SmallVector<SymRef, 40> Factors(33, Factor);
+    Factors.push_back(C.mkConst(llvm::APInt(Width, 3).shl(Width - Observed)));
+    return C.mkMul(Factors);
+  };
+  const auto Original = C.mkAdd(Product(Sum(X, Y), 7), Sum(U, V));
+  const auto P = Product(C.mkAdd(X, Y), 7), Tail = C.mkAdd(U, V);
+  const auto Result = C.mkAdd(P, Tail);
+  ASSERT_NE(Original, Result);
+  EXPECT_TRUE(detail::agreeOnSamples(C, Original, Result, 12));
+  EXPECT_FALSE(detail::agreeOnSamples(
+      C, Original, C.mkAdd(Result, C.mkConst(Width, 1)), 12));
+  EXPECT_FALSE(detail::agreeOnSamples(
+      C, Original, C.mkAdd(Product(C.mkAdd(X, Y), 9), Tail), 12));
+}
+
+TEST(SymMBAResiduePowers, RepeatedFieldsKeepTheirLastSquareAndOddCopies) {
+  for (unsigned Precision : {4u, 5u, 12u, 13u, 130u, 131u}) {
+    const unsigned Bits = Precision / 2, Shift = Precision - Bits;
+    const unsigned K = Shift - 1, Width = Precision + 7;
+    for (unsigned Copies : {2u, 3u, 4u, 6u}) {
+      SCOPED_TRACE(::testing::Message() << Precision << ':' << Copies);
+      SymContext C;
+      auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      auto A = C.mkSExt(C.mkExtract(X, 1, Bits), Width);
+      auto B = C.mkZExt(C.mkExtract(Y, 0, Bits), Width);
+      auto Z = C.mkZExt(C.mkExtract(X, 0, Bits), Width);
+      auto Weight = [&](int N, unsigned Zeros) {
+        return C.mkConst(llvm::APInt(Width, N, true).shl(Zeros));
+      };
+      auto Affine = [&](int Offset, unsigned Zeros) {
+        llvm::SmallVector<SymRef, 4> Terms{Weight(Offset, 0),
+                                           C.mkMul(Weight(-3, Zeros), A),
+                                           C.mkMul(Weight(5, K), B)};
+        if (Copies == 6)
+          Terms.push_back(C.mkMul(Weight(7, K), Z));
+        return C.mkAdd(Terms);
+      };
+      auto F = Affine(-3, K), G = Affine(2, K);
+      auto Neighbor = Affine(7, K - 1);
+      auto Outer = Weight(3, Width - Precision);
+      llvm::SmallVector<SymRef, 16> Factors{Outer, G, G, Neighbor};
+      Factors.append(Copies, F);
+      auto Input = C.mkMul(Factors);
+      auto Fold = [&](size_t Work, size_t Bytes) {
+        detail::WorkBudget Budget(Work);
+        return detail::foldDistributedProduct(C, Input, Budget, Bytes, nullptr);
+      };
+      EXPECT_EQ(Fold(1, 1 << 20), Input);
+      EXPECT_EQ(Fold(65536, 1), Input);
+      auto Reduced = Fold(65536, 1 << 20);
+      ASSERT_NE(Reduced, Input);
+      SymEvalPlan Plan(C, Reduced);
+      for (unsigned I = 0; I < 16; ++I)
+        for (unsigned J = 0; J < 16; ++J) {
+          std::array Values{llvm::APInt::getAllOnes(Width) - 2 * I,
+                            llvm::APInt(Width, J)};
+          if (I & 1)
+            Values[1].setBit(Bits - 1);
+          if (J & 1)
+            Values[0].clearBit(Bits);
+          const auto U = Values[0].extractBits(Bits, 1).sext(Width);
+          const auto V = Values[1].trunc(Bits).zext(Width);
+          auto Linear = 5 * V;
+          if (Copies == 6)
+            Linear += 7 * Values[0].trunc(Bits).zext(Width);
+          const auto H = (Linear - 3 * U).shl(K);
+          auto Expected = llvm::APInt(Width, 3).shl(Width - Precision) *
+                          (2 + H) * (2 + H) *
+                          (7 + Linear.shl(K) - (3 * U).shl(K - 1));
+          for (unsigned N = 0; N < Copies; ++N)
+            Expected *= H - 3;
+          ASSERT_EQ(Plan.eval(Values), Expected);
+        }
+    }
+  }
+}
+
 TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
   for (const unsigned Bits : {4u, 17u, 65u}) {
     const unsigned Width = 3 * Bits + 2, Shift = Bits + 1;

@@ -5121,7 +5121,12 @@ keeps the value query. An unfinished value query does not withdraw the
 local extend. An unfinished mask search does not turn a guard that already
 rejected the selector into an incomplete proof, and it does not withdraw a
 sibling that published in the same stage. A guard that is itself unfinished
-still fails closed. A register
+still fails closed. A mask that alone produces the index keeps its coordinates
+when the search for masks upstream of it cannot finish, as for a selector a
+cyclic switch computes from arrays its cases rewrite, but only when every
+coordinate names a slot of the table's own anchor-bounded relocation run: an
+upstream mask could only narrow them, and a shorter run keeps the dispatch
+unresolved. A register
 other than a direct copy of the compared register, a later clobber, a call,
 or a mask that drops a lane bit keeps its own proof. A direct copy of the
 compared register into the index, taken before the compare, is that lane
@@ -8486,8 +8491,20 @@ fields contributes to the result.
 Equal projected fields accumulate their signed coefficients modulo
 the observed precision, including multiplicity. A mixed inner mask keeps its holes, and addition
 or subtraction takes place at the surviving field width so carries and borrows
-remain observable. A weight below the required shift keeps the entire factor,
-including its cross terms.
+remain observable. An unpaired factor below the required shift retains
+its cross terms. Identical additive factors one bit below this threshold
+can be paired. For a factor `c + 2^k h`, squaring raises the
+linear term by one bit. The surviving square reads only `h mod 2` because
+a square modulo four is its input parity. The pair contributes its squared
+offset once. An odd copy remains in the product at its original precision.
+When sampling a wide repeated product beside a rewritten additive tail,
+the verifier can evaluate each addend at the same assignment. This lets
+the product reuse its schedule for repeated factors.
+For a wide affine sum of two or three projected words with an odd offset
+and even slopes, distinct subset sums in their first nonzero limb certify
+that every Boolean corner has a different weight. The direct affine form
+then avoids building a separate minterm for each corner. Colliding subset
+sums retain the general search.
 Independent evaluation of a wide scaled product can combine repeated
 factors by binary exponentiation. When a sum of weighted words has a common
 power of two and its observed coefficients fit a signed 32-bit word, the

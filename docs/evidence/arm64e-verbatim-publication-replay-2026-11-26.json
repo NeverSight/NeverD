@@ -1,0 +1,370 @@
+{
+  "baseline_pull_request": "https://github.com/NeverSight/NeverD/pull/2678",
+  "tested_revision": "20bfbd9f8223093f35275614d79c7817e0c78884",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "test_executable_sha256": "a048a02b53e6bb89e2ab4bb1c02b117b23a9b9103b6c41d4f7fa59e923839d6d",
+  "qualification_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45841521916",
+  "case_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45857280620",
+  "hosts": {
+    "M4 Max": {
+      "os": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+      "cpu": "Apple M4 Max",
+      "compiler_control": "unavailable",
+      "control_returncode": -9,
+      "original_cases": {
+        "skipped": 37
+      },
+      "publication_cases": {
+        "completed": 8
+      },
+      "case_report_sha256": "69905edbd32d47d1425604a2f5064a97f0de59196c19ccf455821d5cbd899ccf",
+      "publication_report_sha256": "63612678f8aa3ea9a750c9f22fc3a4e413535bd7707dc2dec3ec2167b795f5e8",
+      "skip_reasons": {
+        "Native 128-bit ordered loads and stores are unavailable on this host": 1,
+        "this host cannot execute arm64e with all four active pointer signing keys and generic signatures": 1,
+        "this host cannot execute arm64e PAuth_LR with active keys": 1,
+        "this host cannot execute PACM with active IA/IB keys and a second diversifier": 1,
+        "this host cannot execute arm64e with active IA/IB keys and PACM hint behavior": 1,
+        "arm64e execution/PAC-enforcement control unavailable: -2": 24,
+        "executable runtime requires a qualified native verifier profile": 8
+      }
+    },
+    "macos-15": {
+      "os": "macOS-15.8.2-arm64-arm-64bit-Mach-O",
+      "cpu": "Apple M1 (Virtual)",
+      "ir_compiler": "Homebrew clang version 22.1.8",
+      "compiler_control": "unavailable",
+      "original_cases": {
+        "skipped": 37
+      },
+      "publication_cases": {
+        "completed": 8
+      },
+      "case_report_sha256": "599d50519aed686317197e7a01e58748544a19150a5369a8a598f1ea5b2a23e8",
+      "skip_reasons": {
+        "Native 128-bit ordered loads and stores are unavailable on this host": 1,
+        "this host cannot execute arm64e with all four active pointer signing keys and generic signatures": 1,
+        "this host cannot execute arm64e PAuth_LR with active keys": 1,
+        "this host cannot execute PACM with active IA/IB keys and a second diversifier": 1,
+        "this host cannot execute arm64e with active IA/IB keys and PACM hint behavior": 1,
+        "arm64e execution/PAC-enforcement control unavailable: -2": 24,
+        "executable runtime requires a qualified native verifier profile": 8
+      }
+    },
+    "macos-26": {
+      "os": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+      "cpu": "Apple M1 (Virtual)",
+      "ir_compiler": "Homebrew clang version 22.1.8",
+      "compiler_control": "passed",
+      "original_cases": {
+        "completed": 34,
+        "skipped": 3
+      },
+      "publication_cases": {
+        "completed": 8
+      },
+      "case_report_sha256": "f0ba6c87df7cf5164bf476ce087fa4c3902c1d22cc0c5f35f5ebe28c43aece1b",
+      "skip_reasons": {
+        "Native 128-bit ordered loads and stores are unavailable on this host": 1,
+        "this host cannot execute arm64e PAuth_LR with active keys": 1,
+        "this host cannot execute PACM with active IA/IB keys and a second diversifier": 1
+      },
+      "installation_cases_passing_original_pac_and_unwind_controls": 32,
+      "system_startup_cases_passed": 8
+    },
+    "xcode-27": {
+      "os": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+      "cpu": "Apple M1 (Virtual)",
+      "ir_compiler": "Homebrew clang version 22.1.8",
+      "compiler_control": "passed",
+      "original_cases": {
+        "completed": 34,
+        "skipped": 3
+      },
+      "publication_cases": {
+        "completed": 8
+      },
+      "case_report_sha256": "b31039477dbe7f57aed80f4a40d3a8a717c7830e9add83b5c9b297c9f23e0239",
+      "skip_reasons": {
+        "Native 128-bit ordered loads and stores are unavailable on this host": 1,
+        "this host cannot execute arm64e PAuth_LR with active keys": 1,
+        "this host cannot execute PACM with active IA/IB keys and a second diversifier": 1
+      },
+      "installation_cases_passing_original_pac_and_unwind_controls": 32,
+      "system_startup_cases_passed": 8
+    }
+  },
+  "originally_skipped": {
+    "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "skipped",
+      "xcode-27": "skipped"
+    },
+    "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    },
+    "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "skipped",
+      "xcode-27": "skipped"
+    },
+    "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "skipped",
+      "xcode-27": "skipped"
+    },
+    "AArch64PACMSemantics.NativeHintModeAgreesWithCAndDirectObjects": {
+      "M4 Max": "skipped",
+      "macos-15": "skipped",
+      "macos-26": "completed",
+      "xcode-27": "completed"
+    }
+  },
+  "publication": [
+    "AppleClang/MachOArm64eNativeBindings.PublishesDirectAndGOTReferences/0",
+    "AppleClang/MachOArm64eNativeBindings.PublishesDirectAndGOTReferences/1",
+    "AppleClang/MachOArm64eNativeBindings.PublishesDirectAndGOTReferences/2",
+    "AppleClang/MachOArm64eNativeBindings.PublishesDirectAndGOTReferences/3",
+    "AppleClang/MachOArm64eNativeBindings.PublishesDirectAndGOTReferences/4",
+    "AppleClang/MachOArm64eNativeBindings.PublishesDirectAndGOTReferences/5",
+    "AppleClang/MachOArm64eNativeBindings.PublishesDirectAndGOTReferences/6",
+    "AppleClang/MachOArm64eNativeBindings.PublishesDirectAndGOTReferences/7"
+  ],
+  "local_related_ctest": {
+    "selected": 246,
+    "passed": 246
+  },
+  "local_generated_ir": {
+    "original_result": 13,
+    "published": [
+      {
+        "optimization": "-O0",
+        "linker_name": "_replacement",
+        "observed_result": 31
+      },
+      {
+        "optimization": "-O0",
+        "linker_name": "raw_replacement",
+        "observed_result": 31
+      },
+      {
+        "optimization": "-O2",
+        "linker_name": "_replacement",
+        "observed_result": 31
+      },
+      {
+        "optimization": "-O2",
+        "linker_name": "raw_replacement",
+        "observed_result": 31
+      }
+    ]
+  },
+  "still_skipped_on_all_hosts": [
+    "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+    "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+    "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections"
+  ],
+  "hardware_todo_outside_original_selection": [
+    "CPTA-on",
+    "checked writeback"
+  ]
+}

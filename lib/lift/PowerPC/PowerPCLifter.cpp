@@ -61,11 +61,15 @@ struct State : IntegerLiftState {
     if (Record)
       compare(0, reg(D), imm(0), true);
   }
-  void transfer(unsigned T, NdVar EA, unsigned Bytes, bool Store, bool Signed) {
+  void transfer(unsigned T, NdVar EA, unsigned Bytes, bool Store, bool Signed,
+                bool Reversed = false) {
+    NdVar V = Store ? resize(reg(T), Bytes) : load(EA, Bytes);
+    if (Reversed)
+      V = byteSwap(V);
     if (Store)
-      emit(NdOp::STORE, {}, {EA, resize(reg(T), Bytes)});
+      emit(NdOp::STORE, {}, {EA, V});
     else
-      result(T, resize(load(EA, Bytes), Width, Signed), false);
+      result(T, resize(V, Width, Signed), false);
   }
   NdVar inverse(NdVar V) {
     return op(
@@ -190,17 +194,25 @@ struct Transfer {
   bool Signed;
   bool Update;
   bool Requires64;
+  bool Reversed = false;
 };
 
 std::optional<Transfer> memoryTransfer(unsigned Op, unsigned XO, unsigned DS) {
   if (Op == opcode::X) {
-    switch (XO & ~32u) {
+    switch (XO) {
 #define NEVERD_PPC_DX_TRANSFER(Name, D, X, Bytes, Store, Signed)               \
   case X:                                                                      \
-    return Transfer{Bytes, Store, Signed, bool(XO & 32), false};
+  case X | opcode::IndexedUpdate:                                              \
+    return Transfer{Bytes, Store, Signed, bool(XO & opcode::IndexedUpdate),    \
+                    false};
 #define NEVERD_PPC_X64_TRANSFER(Name, X, Bytes, Store, Signed)                 \
   case X:                                                                      \
-    return Transfer{Bytes, Store, Signed, bool(XO & 32), true};
+  case X | opcode::IndexedUpdate:                                              \
+    return Transfer{Bytes, Store, Signed, bool(XO & opcode::IndexedUpdate),    \
+                    true};
+#define NEVERD_PPC_REVERSED_TRANSFER(Name, X, Bytes, Store)                    \
+  case X:                                                                      \
+    return Transfer{Bytes, Store, false, false, Bytes == 8, true};
 #include "PowerPCIntegerForms.def"
     default:
       return std::nullopt;
@@ -324,16 +336,6 @@ uint64_t mask(unsigned Begin, unsigned End, unsigned Bits) {
          llvm::maskTrailingOnes<uint64_t>(Bits);
 }
 
-NdVar rotate(State &S, NdVar V, NdVar Shift) {
-  NdVar CountMask = NdVar::scalar(V.Size * 8 - 1, V.Size);
-  NdVar Amount = S.op(NdOp::INT_AND, Shift, CountMask);
-  NdVar Complement =
-      S.op(NdOp::INT_AND, S.op(NdOp::INT_SUB, NdVar::scalar(0, V.Size), Amount),
-           CountMask);
-  return S.op(NdOp::INT_OR, S.op(NdOp::INT_LEFT, V, Amount),
-              S.op(NdOp::INT_RIGHT, V, Complement));
-}
-
 // Count bits independently in each byte, word or doubleword of the GPR.
 // CONCAT takes its high half first in either instruction byte order.
 NdVar populationCount(State &S, NdVar V, unsigned LaneBytes) {
@@ -428,7 +430,7 @@ bool integer(State &S, Arch A, uint32_t W) {
     NdVar EA = Op == opcode::X ? S.op(NdOp::INT_ADD, Base, Y)
                : Disp          ? S.op(NdOp::INT_ADD, Base, S.imm(Disp))
                                : Base;
-    S.transfer(T, EA, M->Bytes, M->Store, M->Signed);
+    S.transfer(T, EA, M->Bytes, M->Store, M->Signed, M->Reversed);
     if (M->Update)
       S.emit(NdOp::COPY, X, {EA});
     return true;
@@ -490,10 +492,10 @@ bool integer(State &S, Arch A, uint32_t W) {
         Shift = Y;
       } else
         return false;
-      V = rotate(S, Src, Shift);
+      V = S.rotate(Src, Shift);
     } else {
-      V = rotate(S, S.resize(Src, 4),
-                 Op == opcode::RLWNM ? S.resize(Y, 4) : NdVar::scalar(RB, 4));
+      V = S.rotate(S.resize(Src, 4),
+                   Op == opcode::RLWNM ? S.resize(Y, 4) : NdVar::scalar(RB, 4));
       if (Wide) {
         if (MB > ME) {
           NdVar Repeated = S.makeTemp(8);
@@ -669,12 +671,16 @@ bool integer(State &S, Arch A, uint32_t W) {
     break;
 #include "PowerPCIntegerForms.def"
   case opcode::CNTLZW:
-  case opcode::CNTLZD: {
-    if (RB || (XO == opcode::CNTLZD && !Wide))
+  case opcode::CNTLZD:
+  case opcode::CNTTZW:
+  case opcode::CNTTZD: {
+    const bool Double = XO == opcode::CNTLZD || XO == opcode::CNTTZD;
+    if (RB || (Double && !Wide))
       return false;
-    NdVar In = S.resize(Src, XO == opcode::CNTLZW ? 4 : 8);
-    NdVar Count = S.makeTemp(In.Size);
-    S.emit(NdOp::LZCOUNT, Count, {In});
+    NdVar In = S.resize(Src, Double ? 8 : 4);
+    NdVar Count = XO == opcode::CNTTZW || XO == opcode::CNTTZD
+                      ? S.countTrailingZeros(In)
+                      : S.op(NdOp::LZCOUNT, In);
     V = S.resize(Count, S.Width);
     break;
   }

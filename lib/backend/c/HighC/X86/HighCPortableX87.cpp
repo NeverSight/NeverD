@@ -50,7 +50,7 @@ HighCEmitter::emitPortableX87(const PreparedPortableX87Function &Prepared,
     Function.ReturnType = NdType::makeInt(4, false);
     // Parameter inference must not narrow a guest integer or turn the two
     // explicit host pointers into source-register values.
-    std::set<const HighExpr *> Seen;
+    HighExprSet Seen;
     std::function<void(const ExprPtr &)> Bind = [&](const ExprPtr &Expr) {
       if (!Expr || !Seen.insert(Expr.get()).second)
         return;

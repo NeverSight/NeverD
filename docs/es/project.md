@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 3063a2b0d15a9f1ca80fcf702ba4cc465127d87d1851222c77a32a9035fb8205 -->
+<!-- i18n-source: 8a87e7404123aa834ef89d99ed7c470a535df3c93ff385e5de564ae1fbdfc329 -->
 
 <div align="center">
 
@@ -68,7 +68,7 @@ Los destinos ELF de enteros experimentales admiten la traducción estricta de in
 
 | Destino | Perfiles ELF verificados |
 |---|---|
-| RISC-V | RV32I/ILP32 y RV64I/LP64 en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0 y Zbs 1.0. |
+| RISC-V | RV32I/ILP32 y RV64I/LP64 en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0, Zbb 1.0 y Zbs 1.0. |
 | PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. PPC32 admite llamadas entre módulos a través de la PLT segura y de la BSS-PLT clásica. Ambas ABI de PPC64 admiten llamadas entre módulos a través de la PLT y cambios de TOC. ELFv1 utiliza descriptores de función y ELFv2 admite puntos de entrada globales y locales. Las operaciones escalares verificadas incluyen la división con y sin signo, la multiplicación que devuelve la palabra alta del producto y la multiplicación con indicación de desbordamiento, junto con sus efectos en CR0 y XER. En PPC64 también se admiten las instrucciones con prefijo de POWER10 para sumar, cargar y almacenar enteros. |
 
 La reescritura de código nativo sigue pendiente para estos perfiles. [Cobertura de RISC-V y PowerPC (en inglés)](../riscv-powerpc.md)

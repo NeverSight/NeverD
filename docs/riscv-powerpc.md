@@ -4,8 +4,8 @@
 
 | ELF machine | Class and byte order | ABI used for integer arguments and returns | Encoding |
 | --- | --- | --- | --- |
-| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbs |
-| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbs |
+| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs |
+| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs |
 | PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset |
 | PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar and POWER10 prefixed fixed-point forms |
 
@@ -28,7 +28,11 @@ Zba 1.0 enables the three XLEN-wide shift-and-add forms. On RV64,
 zero-extend the first source word before arithmetic. Zbs 1.0 enables
 single-bit clear, extract, invert and set, with register and immediate forms.
 A register index uses its low five bits on RV32 and its low six on RV64.
-The ELF ISA attribute supplies the evidence for each extension.
+Zbb 1.0 adds logical operations with a complemented operand, signed and
+unsigned min/max, rotates, zero and population counts, sign and zero
+extension, `orc.b` and `rev8`. RV64 word rotates sign-extend bit 31. Word
+counts examine the low 32 bits, and counting the leading or trailing zeros
+of a zero word yields 32. The ELF ISA attribute selects each extension.
 [RISC-V Bit Manipulation specification](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 
 Linked RV32 and RV64 executables and shared libraries support the default
@@ -131,7 +135,7 @@ The scalar encodings and flag definitions follow Books I and II of versions
 | Stage | RISC-V | PowerPC |
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
-| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary and update-form loads/stores, reservations and barriers |
+| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
 | CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, unconditional indirect calls/jumps, guarded and unconditional LR returns, integer register arguments |
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
 | Native rewrite | Unsupported | Unsupported |
@@ -190,6 +194,16 @@ use target GNU inline assembly for ordering and reservation instructions. The
 LowIR emulator evaluates aligned ordinary memory under a single-hart model.
 A conditional store needs a known reservation state. Multi-hart interference,
 device memory and guest exception delivery are outside that model.
+
+On PPC32 and PPC64, `lhbrx`, `lwbrx`, `sthbrx` and `stwbrx` transfer a
+halfword or word in the opposite byte order to ordinary memory accesses.
+PPC64 also supports `ldbrx` and `stdbrx` for a doubleword. Loads zero-extend
+to the register width. Stores take the low bits of the source register.
+The effective address adds RB to RA, using zero for a zero RA field.
+Power ISA 3.0 `cnttzw` counts trailing zeros in the low word, and `cnttzd`
+counts across the full PPC64 register. A zero input returns 32 or 64,
+respectively. Their record forms update CR0 and copy XER.SO to CR0.SO.
+[Power ISA, Book I, Fixed-Point Byte-Reverse Load and Store Instructions](https://openpowerfoundation.org/specifications/isa/).
 
 In ordinary PPC64 code, `paddi`, `plbz`, `plhz`, `plha`, `plwz`, `plwa`,
 `pld`, `pstb`, `psth`, `pstw` and `pstd` use a signed 34-bit displacement.
@@ -294,6 +308,24 @@ select another compiler-rt source directory.
 python3 unittests/lift/elf-integer/wide_shifts.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
 ```
+
+The bit-operation fixture executes all Zbb instructions and the indexed
+byte-reversed transfers and trailing-zero counts. A separate caller compares each register result and
+each affected or surrounding byte with a Python oracle. It checks the
+original and all three rebuilt projections at two optimization levels on
+RV32, RV64, PPC32 and PPC64, including both PowerPC byte orders. PPC32 runs in Unicorn with MSR.SF clear.
+RV32, RV64 and the two PPC64 profiles use Linux user-mode QEMU.
+
+```sh
+python3 unittests/lift/elf-integer/bit_operations.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang \
+  --ld /path/to/ld.lld --qemu-dir /usr/bin
+```
+
+For PPC64 ELFv1, pass `--profiles powerpc64 powerpc64le --ppc64-abi elfv1`
+and select a GNU PowerPC64 linker with `--ld`. The entry descriptor and the
+code it names must both lie outside every rebuilt mapping. Plain-pointer
+C projections use the `-fno-strict-aliasing` flag specified in their prelude.
 
 The extended scalar fixture runs linked RV32, RV64 and both byte orders of
 POWER10 PPC64 under Linux QEMU user mode. A separately compiled scalar

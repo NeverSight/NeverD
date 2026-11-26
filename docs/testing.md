@@ -1566,6 +1566,11 @@ requests LLVM output explicitly to exercise that complete native proof.
 128-bit remainders and quotient/subtract identities against unknown high
 halves, signed division, zero divisors and undersized storage. Compact selector
 recovery must also pass `ModuloBoundProbesCompactCandidatesIndependently`.
+`JTE_X86_64.CyclicMaskedSelectorReadsOnlyItsOwnRelocatedSlots` masks a cyclic
+switch's sum of absolute differences, whose upstream-mask search cannot finish:
+eight owned relocated slots publish the eight cases, and four owned slots under
+the same mask keep the dispatch unresolved. The `x64v52_redsad` round trip in
+`NeverDSemanticTests` executes the same shape.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict
@@ -4751,6 +4756,14 @@ bits, and a surviving one-bit overlap. Use `--reference` for the reduced
 expression or `--counted` for the original factors with their multiplicities.
 The 389-factor x86 fixture executes both source views against the original
 32-bit arithmetic at Clang O0 and O2.
+
+`tools/neverd-bench/generate_paired_product.py --width 65536 --case 7`
+emits a product whose repeated factors retain square and mixed terms.
+`--reference` reconstructs the result from finite differences of the original
+modular powers. Use `--counted` to evaluate the original without expanding
+repetitions. At width 4194319, case 7 contains 360,018 factors and requires
+`neverd simplify --exhaustive`. A 268-factor x86 fixture exercises the same
+square corrections through both decompiler views.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
@@ -16159,9 +16172,10 @@ build-release/bin/NeverDLiftTests --gtest_filter='ExceptionCFGSeed.*:COFFExcepti
 ```
 
 `MedImmutableTableScanTests` checks exact sentinel exit counts, integer widths,
-mutable/truncated storage, independent roots and budget refusal. Pointer tests
-cover nested recurrences, shared expression DAGs, role-neutral address leaves
-and independently materialized SELECT arms. Both suites retain ambiguous
+mutable/truncated storage, independent roots and budget refusal. It also
+checks that a literal arriving only through a PHI still folds its consumer.
+Pointer tests cover nested recurrences, shared expression DAGs, role-neutral
+address leaves and independently materialized SELECT arms. Both suites retain ambiguous
 relocatable comparisons and distinguish adjacent objects' one-past addresses.
 `NeverDMedPhiRecompositionTests` owns correlated word-PHI regressions
 alongside the existing constant-propagation cases. Reordered edges,
