@@ -132,6 +132,12 @@ small negative residuals. The summary reports medians and nearest-rank wall
 P95 within each cell. The JSON keeps paired samples for comparisons across
 builds. Time the full HighC command separately to measure user-visible latency.
 
+For a smaller SDK, check the unstripped images before timing. Compare local
+Mach-O symbols by name, type, section, flags and multiplicity. Compare dyld
+exports separately. Alternate builds at the same load path and use separate
+new clones for the probe and the complete command. Running one on the other's
+clone warms library validation for the second measurement.
+
 ```sh
 python3 -m unittest discover -s tools/neverd-bench/tests -p test_macos_sdk_load.py -v
 ```
