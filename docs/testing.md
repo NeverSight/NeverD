@@ -215,6 +215,8 @@ comparisons; software admission tests retain their ordinary host coverage.
 The legacy control, machine-status, halt, stack, system-selector and VM86
 rows, fast system calls, mode transitions and INIT/SIPI startup take the same
 gate: AMD runners differ there in SYSENTER, segment caches and CR3 checks.
+Each paging comparison bounds `KVM_RUN` at 20 s, so a guest that misses its
+stop fails with its RIP and CR2 instead of hanging the suite.
 They cover all enable pairs, RF/TF, coincident causes,
 MOV/POP SS, original linear addresses, fetch/operand/PVI faults and failed
 debug entry. x64 adds eligible/masked IRQ/NMI and IRET/RETF targets, including
