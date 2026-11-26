@@ -37,6 +37,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <tuple>
 #include <vector>
 
@@ -251,6 +252,37 @@ TEST(RegisterPairShift, OnlyTheZeroCountEdgeCanForwardTheInputPair) {
   }
 }
 
+void checkLeafReturnWidth(Arch A, llvm::ArrayRef<uint32_t> Words,
+                          unsigned ResultBytes, bool Compressed = false) {
+  LinkedImage File(A);
+  File.setWords(Words);
+  if (Compressed)
+    File.put(offsetof(llvm::ELF::Elf32_Ehdr, e_flags), llvm::ELF::EF_RISCV_RVC,
+             sizeof(llvm::ELF::Elf32_Word));
+  auto Img = ELFLoader().loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+  for (bool LLVM : {false, true}) {
+    PipelineOptions Options;
+    Options.LiftMode = LLVM;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Ctx;
+    auto R = Pipeline().run(*Img, Ctx, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    ASSERT_EQ(R.MedFuncs.size(), 1u);
+    if (LLVM) {
+      ASSERT_TRUE(R.LlvmModule);
+      auto *F = R.LlvmModule->getFunction(R.MedFuncs.front().Name);
+      ASSERT_TRUE(F);
+      EXPECT_TRUE(F->getReturnType()->isIntegerTy(ResultBytes * 8));
+      EXPECT_FALSE(llvm::verifyModule(*R.LlvmModule, &llvm::errs()));
+    } else {
+      ASSERT_EQ(R.HighFuncs.size(), 1u);
+      ASSERT_TRUE(R.HighFuncs.front().ReturnType);
+      EXPECT_EQ(R.HighFuncs.front().ReturnType->Size, ResultBytes);
+    }
+  }
+}
+
 #include "DoubleWordSumFixture.inc"
 
 TEST(ELF32DoubleWordSum, RecoversBothWordsOnlyForTheABISum) {
@@ -271,31 +303,30 @@ TEST(ELF32DoubleWordSum, RecoversBothWordsOnlyForTheABISum) {
   for (const Case &C : Cases) {
     SCOPED_TRACE(::testing::Message() << getArchName(C.A) << " " << C.Words[0]
                                       << " " << C.Words.size());
-    LinkedImage File(C.A);
-    File.setWords(C.Words);
-    auto Img = ELFLoader().loadBuffer(File.buffer());
-    ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
-    for (bool LLVM : {false, true}) {
-      PipelineOptions Options;
-      Options.LiftMode = LLVM;
-      Options.EmitDumpOutput = false;
-      llvm::LLVMContext Ctx;
-      auto R = Pipeline().run(*Img, Ctx, Options);
-      ASSERT_TRUE(R.Success) << R.Error;
-      ASSERT_EQ(R.MedFuncs.size(), 1u);
-      if (LLVM) {
-        ASSERT_TRUE(R.LlvmModule);
-        auto *F = R.LlvmModule->getFunction(R.MedFuncs.front().Name);
-        ASSERT_TRUE(F);
-        EXPECT_TRUE(F->getReturnType()->isIntegerTy(C.ResultBytes * 8));
-        EXPECT_FALSE(llvm::verifyModule(*R.LlvmModule, &llvm::errs()));
-      } else {
-        ASSERT_EQ(R.HighFuncs.size(), 1u);
-        ASSERT_TRUE(R.HighFuncs.front().ReturnType);
-        EXPECT_EQ(R.HighFuncs.front().ReturnType->Size, C.ResultBytes);
-      }
-    }
+    checkLeafReturnWidth(C.A, C.Words, C.ResultBytes);
   }
+}
+
+#include "DoubleWordShiftFixture.inc"
+
+TEST(RegisterPairShift, OnlyTheCompleteShiftQualifiesWithoutACaller) {
+  using namespace wordshift;
+  checkLeafReturnWidth(Arch::RISCV32, RVLeft, 8, /*Compressed=*/true);
+  checkLeafReturnWidth(Arch::RISCV32, RVBaseLeft, 8);
+  checkLeafReturnWidth(Arch::RISCV32, RVWrongAt17, 4);
+  checkLeafReturnWidth(Arch::PPC32, BELeft, 8);
+  checkLeafReturnWidth(Arch::PPC32LE, BELeft, 4);
+
+  // Each near-miss still defines both carriers and keeps the zero-count exit.
+  std::vector<uint32_t> RV(std::begin(RVLeft), std::end(RVLeft));
+  RV[7] = ShiftHighAgain;
+  checkLeafReturnWidth(Arch::RISCV32, RV, 4, /*Compressed=*/true);
+  std::vector<uint32_t> PPC(std::begin(BELeft), std::end(BELeft));
+  PPC[6] = CrossFromHigh;
+  checkLeafReturnWidth(Arch::PPC32, PPC, 4);
+  PPC[6] = BELeft[6];
+  PPC[13] = FillOne;
+  checkLeafReturnWidth(Arch::PPC32, PPC, 4);
 }
 
 TEST_P(ELFIntegerTarget, StrippedELFToCAndVerifiedLLVM) {

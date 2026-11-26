@@ -140,8 +140,19 @@ and `__lshrdi3` take a double word followed by a shift count. A zero-count
 branch can return both incoming words untouched. Recovery checks the actual
 count register, the direction of the branch and the values reaching that
 return. At a shared exit, both words must come from the same predecessor.
-This rule uses the named runtime declaration. An unnamed shift needs
-independent evidence for its result width.
+For an unnamed leaf that first tests the word boundary and splits on the
+zero count, recovery follows each return and checks both ABI words. For each
+count from 0 through 63, every output bit must have the input or fill bit
+of the same left, logical-right or arithmetic-right shift. The input words
+and scratch registers are symbolic. This establishes the result width;
+the emitted function keeps its original body, including the RV32I return
+alignment check. A mismatched word, store or unproved path leaves the
+standalone result at its ordinary word width.
+
+PowerPC `slw` and `srw` use six bits of the count. On PPC32, LowIR zero-extends
+the source word to 64 bits, shifts, and takes the low 32 bits. Counts from
+32 through 63 therefore produce zero through the same expression in LLVM
+and C. The record forms compare the result at the target register width.
 
 JALR through x0 has a signed absolute target. In a stripped linked ELF,
 function discovery also follows an AUIPC/JALR call when both instructions
@@ -256,9 +267,12 @@ python3 unittests/lift/elf-integer/ppc_products.py \
 ```
 
 The shift fixture builds the three compiler-rt helpers with Clang at `-O2`.
-A separate caller uses the original C prototypes and reads both returned
-words for every shift count from 0 to 63. All six target profiles rebuild
-HighC, LLVM-derived C and module IR at `-O0` and `-O2`. By default the
+A separately compiled caller uses the original C prototypes and checks
+independent high and low input words for every shift count from 0 to 63.
+All six target profiles rebuild HighC, LLVM-derived C and module IR at
+`-O0` and `-O2`, from both a named module and individual fully stripped
+ELFs selected by entry address. RV32 also runs the stripped fixtures with
+the base ISA's four-byte instruction alignment. By default the
 fixture reads the builtins from the LLVM submodule. Use `--builtins` to
 select another compiler-rt source directory.
 

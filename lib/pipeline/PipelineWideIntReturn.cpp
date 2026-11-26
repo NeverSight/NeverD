@@ -440,7 +440,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
       std::map<va_t, const MedFunc *> ByEntry;
       std::set<va_t> Proven;
       std::set<va_t> Shifts;
-      for (const auto &MF : Result.MedFuncs) {
+      for (const auto &[Index, MF] : llvm::enumerate(Result.MedFuncs)) {
         ByEntry[MF.Entry] = &MF;
         const auto Name = cNameOfSymbol(MF.Name, Img.Format, Img.Arch);
         if (libc::returnsDoubleWord(Name, TRI.PointerSize)) {
@@ -448,11 +448,17 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
           if ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
               isDoubleWordShift(Name))
             Shifts.insert(MF.Entry);
-        } else if ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
-                   !WideRetCallees.count(MF.Entry) &&
-                   returnsDoubleWordSum(MF, TRI))
-          // The sum proof already checked both final register definitions.
-          Proven.insert(MF.Entry);
+        } else if (isRISCV(Img.Arch) || isPowerPC(Img.Arch)) {
+          const auto Order = archLittleEndian(Img.Arch)
+                                 ? llvm::endianness::little
+                                 : llvm::endianness::big;
+          if ((!WideRetCallees.count(MF.Entry) &&
+               returnsDoubleWordSum(MF, TRI)) ||
+              (Index < Result.LowFuncs.size() &&
+               Result.LowFuncs[Index].Entry == MF.Entry &&
+               returnsDoubleWordShift(Result.LowFuncs[Index], MF, TRI, Order)))
+            Proven.insert(MF.Entry);
+        }
       }
       for (va_t Entry : WideRetCallees)
         if (!ByEntry.count(Entry))
