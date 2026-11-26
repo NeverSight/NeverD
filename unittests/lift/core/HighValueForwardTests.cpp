@@ -990,11 +990,16 @@ TEST(HighValueForward, ReturnedCallCaptureConvertsOnlyWhereTheReturnDoesNot) {
   auto Flag = Returned("returned_flag", NdType::makeInt(1, false));
   Flag.ReturnType = NdType::makeInt(1, false);
   Flag.ReturnType->SourceName = kSourceBooleanCType;
+  // MSVC declarations spell the same type `bool`.
+  auto Spelled = Returned("returned_bool", NdType::makeInt(1, false));
+  Spelled.ReturnType = NdType::makeInt(1, false);
+  Spelled.ReturnType->SourceName = "bool";
   std::string Source;
   llvm::raw_string_ostream Out(Source);
   CEmitterOptions Options;
   Options.TheArch = Arch::X64;
-  ASSERT_TRUE(HighCEmitter().emit({Word, Byte, Flag}, Out, Options, &Debug));
+  ASSERT_TRUE(
+      HighCEmitter().emit({Word, Byte, Flag, Spelled}, Out, Options, &Debug));
   EXPECT_TRUE(declarationOf(Source, "t23").empty()) << Source;
   EXPECT_EQ(Source.find("(uint64_t)(return_bits"), std::string::npos) << Source;
   EXPECT_NE(Source.find("(uint8_t)"), std::string::npos) << Source;
@@ -1013,6 +1018,7 @@ int main(void) {
     if (returned_word(x) != x || calls != 1) return 1;
     if (returned_byte(x) != (uint8_t)x || calls != 2) return 2;
     if (returned_flag(x) != ((uint8_t)x != 0) || calls != 3) return 3;
+    if (returned_bool(x) != ((uint8_t)x != 0) || calls != 4) return 4;
   }
   return 0;
 }

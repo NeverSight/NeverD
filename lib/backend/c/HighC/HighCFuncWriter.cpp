@@ -4798,7 +4798,8 @@ void HighCWriter::collectValueForward(
     // integer type of the captured call result at its new use. A result
     // returned as it is converts to the return type there, and a conversion
     // through a type at least that wide keeps the same bits. A Boolean
-    // return tests the whole value for zero instead.
+    // return, spelled `_Bool` or (as MSVC declarations spell it) `bool`,
+    // tests the whole value for zero instead.
     const TypeRef &Captured = C.Stmt->Dst->Type;
     const bool ReturnKeepsBits =
         UseStmt->Kind == StmtKind::Return && UseStmt->RetVal &&
@@ -4806,6 +4807,7 @@ void HighCWriter::collectValueForward(
         varName(UseStmt->RetVal->Var) == C.Name && Captured && FuncReturnType &&
         FuncReturnType->Kind == NdTypeKind::Int && !FuncReturnType->IsEnum &&
         !isSourceBooleanType(FuncReturnType) &&
+        FuncReturnType->SourceName != "bool" &&
         FuncReturnType->Size <= Captured->Size;
     if (!ReturnKeepsBits)
       if (auto View = integerCallCapture(C.Stmt->Val, Captured)) {
