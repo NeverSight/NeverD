@@ -162,6 +162,11 @@ function(add_neverd_unittest name)
   neverd_link_mimalloc(${name})
 
   target_compile_features(${name} PRIVATE cxx_std_20)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    # Each test runner links its own copy of the NeverD and LLVM components.
+    # Keeping unused code in every Release executable exhausts the macOS runner.
+    target_link_options(${name} PRIVATE "$<$<CONFIG:Release>:LINKER:-dead_strip>")
+  endif()
 
   # GoogleTest and LLVM template instantiations can exceed the standard COFF
   # section count even in a small fixture translation unit.

@@ -15541,6 +15541,8 @@ usable and explicit unavailable-backend requests are rejected.
 
 `add_neverd_unittest` creates one GoogleTest executable and assigns every
 discovered case a CTest label equal to that executable's target name.
+On macOS, Release builds link these executables with `-dead_strip` to remove
+unused code and data from their static dependencies.
 
 | Source area | Target and CTest label | What it covers |
 |-------------|-------------------------|----------------|
