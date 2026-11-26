@@ -5015,6 +5015,61 @@ TEST_F(JTE_X86_64, GuardReadsFlagsItsPredecessorCompareSet) {
   }
 }
 
+static fs::path scalarRetractedX64So() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_scalar_retracted.so";
+}
+
+// A state machine whose first state is a constant, as zlib's inflateBack
+// starts at `mode = TYPE`: exact scalar recovery first takes the dispatch as a
+// direct branch to slot 0, then withdraws that guess once the cases loop back
+// with other states.  The ordinary resolver proves the guarded four-slot table
+// on the completed graph, and the withdrawn guess no longer leaves that proved
+// dispatch unsafe for switch lowering.  An unguarded dispatch whose next state
+// comes from memory stays unsafe.
+TEST_F(JTE_X86_64, WithdrawnScalarGuessKeepsTheProvedTable) {
+  const fs::path Path = scalarRetractedX64So();
+  if (!fs::exists(Path))
+    GTEST_SKIP() << "ld.lld did not link " << Path.string();
+  auto ImageOrErr = neverd::loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 4; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Machine = Build("jt_scalar_retracted");
+  ASSERT_EQ(Machine.JumpTables.size(), 1u);
+  EXPECT_FALSE(Machine.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Machine.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Machine.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Machine.UnsafeIndirectBranchAddresses.empty());
+
+  const neverd::LowFunc Unbounded = Build("jt_scalar_unbounded");
+  EXPECT_FALSE(Unbounded.UnsafeIndirectBranchAddresses.empty());
+  for (const neverd::JumpTable &Table : Unbounded.JumpTables)
+    EXPECT_TRUE(Table.AnalysisOnly);
+}
+
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;
 // ja`, then indexes its 13-entry table with `movzbl %sil,%eax; andl $0xf,%eax`.
 // The guard's byte is the low byte of that index, so the table keeps the

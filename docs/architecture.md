@@ -2987,7 +2987,10 @@ Independent roots and exceptional entries stop the walk, and recovered
 indirect edges cannot supply their own proof. Only the traversed direct-edge
 control operations leave the symbolic sequence; instruction guards remain.
 Recovery revalidates the complete producer path after discovering new edges.
-Lost or incomplete proofs retain the original indirect transfer. The native function
+Lost or incomplete proofs retain the original indirect transfer, which the
+ordinary resolver reconsiders on the completed graph. A table it proves keeps
+its edges and its switch; only a withdrawn transfer it leaves without a proved
+target is unsafe for switch lowering. The native function
 disassembly API publishes these same instruction boundaries and targets; raw
 disassembly remains linear. The worker uses recovered bodies for function
 listings and replaces their linear reference-scan results, so skipped bytes do
