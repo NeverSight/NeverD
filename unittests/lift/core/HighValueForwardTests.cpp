@@ -9,6 +9,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
 
@@ -950,6 +951,68 @@ int main(void) {
     calls = 0;
     if (captured_byte(x) != ((uint8_t)x ? 3u : 4u) || calls != 1) return 1;
     if (captured_word(x) != (((x >> 31) & 1) ? 3u : 4u) || calls != 2) return 2;
+  }
+  return 0;
+}
+)");
+}
+
+TEST(HighValueForward, ReturnedCallCaptureConvertsOnlyWhereTheReturnDoesNot) {
+  // A captured call result returned as it is converts to the return type at
+  // the return. Through a capture at least as wide as the return type, the
+  // assignment's conversion keeps the same bits and prints nothing; a
+  // narrower capture keeps its conversion, and so does a capture a Boolean
+  // returns, since that conversion tests the whole value for zero.
+  constexpr va_t Callee = 0x2700;
+  class CallDebug : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Callee)
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = "return_bits";
+      Function.ReturnType = NdType::makeInt(8, true);
+      Function.Params = {{"value", NdType::makeInt(8, false)}};
+      return Function;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  auto Returned = [&](const char *Name, TypeRef Type) {
+    auto Call = HighExpr::makeCall("return_bits", Callee, {input()});
+    Call->Type = NdType::makeInt(8, true);
+    auto Local = local(23, Type);
+    Local->Var.Size = Type->Size;
+    return function(Name, {assign(Local, Call), result(Local)});
+  };
+  const auto Word = Returned("returned_word", NdType::makeInt(8, false));
+  const auto Byte = Returned("returned_byte", NdType::makeInt(1, false));
+  auto Flag = Returned("returned_flag", NdType::makeInt(1, false));
+  Flag.ReturnType = NdType::makeInt(1, false);
+  Flag.ReturnType->SourceName = kSourceBooleanCType;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({Word, Byte, Flag}, Out, Options, &Debug));
+  EXPECT_TRUE(declarationOf(Source, "t23").empty()) << Source;
+  EXPECT_EQ(Source.find("(uint64_t)(return_bits"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint8_t)"), std::string::npos) << Source;
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t return_bits(uint64_t value) {
+  ++calls;
+  return (int64_t)value;
+}
+int main(void) {
+  const uint64_t inputs[] = {0, 1, 0x7f, 0x80, 0x1ff, 0x7fffffff, 0x80000000,
+                             UINT64_C(0x8000000000000000), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    const uint64_t x = inputs[i];
+    calls = 0;
+    if (returned_word(x) != x || calls != 1) return 1;
+    if (returned_byte(x) != (uint8_t)x || calls != 2) return 2;
+    if (returned_flag(x) != ((uint8_t)x != 0) || calls != 3) return 3;
   }
   return 0;
 }
