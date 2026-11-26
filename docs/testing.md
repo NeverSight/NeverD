@@ -1582,8 +1582,10 @@ enters a second machine only through a first entry dispatch that can never
 close: that dispatch stays unresolved and no block past it is reachable.
 `JTE_X86_64.NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex` bounds a
 byte lane with `cmpb $0x81, %dl; ja`: indexed by the lane zero-extended, the
-dispatch reads all 130 slots, and indexed by it sign-extended, it stays
-unresolved. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
+dispatch reads all 130 slots, while sign extension after the compare, into
+the compared register before it, or to 32 bits before the implicit
+zero-extend keeps it unresolved, as does a byte copied into the low lane of
+an index whose upper bits come from the caller. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
 reloads the byte a loop compared under a cursor its cases advance: the
 dispatch reads its six slots, while reloading the next byte or reloading
 after replacing the cursor stays unresolved.

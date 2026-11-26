@@ -11615,7 +11615,11 @@ A narrow bound past the sign bit, such as GCC's `cmpb $0xb8, %dl; ja` before
 the selected guards reaches the table index zero-extended: a structural leaf,
 or one whose identity query also holds with sign extension excluded. Those
 queries spend a copy of the account, so a lane they cannot prove fails as
-before; a sign-extended lane keeps the dispatch unresolved.
+before; a sign-extended lane keeps the dispatch unresolved. A compared byte
+copied into the index's own lane before the compare (`mov %dl, %al`) is the
+index only when the index has that width or a later zero-extend covers the
+whole index: otherwise the index keeps its earlier upper bits, which no
+bound on the lane constrains.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph

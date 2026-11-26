@@ -4841,8 +4841,12 @@ static fs::path narrowGuardX64Obj() {
 
 // `cmpb $0x81, %dl; ja` bounds a byte lane past its sign bit (GCC's shape for
 // sqlite3VdbeExec).  Indexed by that lane zero-extended, the dispatch reads
-// all 130 slots.  Indexed by the lane sign-extended, lane values 0x80 and 0x81
-// are negative indices, so the dispatch stays unresolved.
+// all 130 slots.  Sign-extended after the compare, sign-extended into the
+// compared register before it, or sign-extended to 32 bits before the
+// implicit zero-extend, lane values 0x80 and 0x81 are no slots, so those
+// dispatches stay unresolved.  A byte copied into the index's low lane leaves
+// the caller's upper bits in the index, so even a 128-slot bound does not
+// bound it.
 TEST_F(JTE_X86_64, NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex) {
   auto ImageOrErr = neverd::loadBinary(narrowGuardX64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -4878,10 +4882,14 @@ TEST_F(JTE_X86_64, NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex) {
   EXPECT_EQ(Zext.JumpTables.front().Targets, Expected);
   EXPECT_TRUE(Zext.UnsafeIndirectBranchAddresses.empty());
 
-  const neverd::LowFunc Sext = Build("jt_narrow_sext");
-  EXPECT_FALSE(Sext.UnsafeIndirectBranchAddresses.empty());
-  for (const neverd::JumpTable &Table : Sext.JumpTables)
-    EXPECT_TRUE(Table.AnalysisOnly);
+  for (const char *Name : {"jt_narrow_sext", "jt_narrow_sext_before",
+                           "jt_narrow_sextl", "jt_copied_lane"}) {
+    SCOPED_TRACE(Name);
+    const neverd::LowFunc Refused = Build(Name);
+    EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
+    for (const neverd::JumpTable &Table : Refused.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
 }
 
 static fs::path reloadCursorX64Obj() {

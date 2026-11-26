@@ -2852,6 +2852,11 @@ alias_done:
     const bool TrackCopiedRegister = !SawWideIdentity && !SameOffset;
     bool CopiedBeforeCompare = false;
     bool CopyInvalid = false;
+    // The copy writes only the index's own lane and leaves the rest of the
+    // index register as it was (`mov %dl, %al` before a RAX index). Only a
+    // later zero-extend of that lane over the whole index makes the wider
+    // index the compared value.
+    bool CopiedLaneZeroExtended = false;
     auto copiedLaneRefresh = [&](const LowOp &Op) {
       if (Op.NumInputs < 1 || !Op.Output.isReg() || !Op.Inputs[0].isReg())
         return false;
@@ -2905,10 +2910,13 @@ alias_done:
             if (copyOfCompared(Op) && !Insn.IsInstructionGuard) {
               CopiedBeforeCompare = true;
               CopyInvalid = false;
+              CopiedLaneZeroExtended = false;
             } else if (!(CopiedBeforeCompare && !CopyInvalid &&
                          copiedLaneRefresh(Op))) {
               CopiedBeforeCompare = false;
               CopyInvalid = false;
+            } else if (Op.Opcode == NdOp::INT_ZEXT) {
+              CopiedLaneZeroExtended = true;
             }
           } else if (CopiedBeforeCompare && !CopyInvalid &&
                      overlapsCompared(Op.Output)) {
@@ -2938,6 +2946,8 @@ alias_done:
             regOverlaps(Op.Output, Index)) {
           if (Insn.IsInstructionGuard || !copiedLaneRefresh(Op))
             return false;
+          if (Op.Opcode == NdOp::INT_ZEXT)
+            CopiedLaneZeroExtended = true;
           continue;
         }
         if (LaneAndAccepted && exactIndexWrite(Op))
@@ -2973,7 +2983,8 @@ alias_done:
         return false;
       }
     }
-    if (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid)
+    if (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid &&
+        (Index.Size == Compared.Size || CopiedLaneZeroExtended))
       SawWideIdentity = true;
     return SawWideIdentity;
   };
@@ -3680,7 +3691,8 @@ alias_done:
     if (IndexMatches) {
       Expr->K = GuardExpr::Kind::Index;
       Expr->ContainsIndex = true;
-      IndexLeafSources.emplace(Expr.get(), Node.get());
+      // A discarded leaf's address can be reused; the live one wins.
+      IndexLeafSources.insert_or_assign(Expr.get(), Node.get());
       return Finish(Expr);
     }
     const bool LiteralQueryPresent =
