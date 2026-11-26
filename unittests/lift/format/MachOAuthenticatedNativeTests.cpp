@@ -1815,19 +1815,19 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
   };
   const auto Library = (Root / kRuntimeProviderFile).string();
   const auto WeakLibraryOption = kBindingWeakLibrary + Library;
-  llvm::SmallVector<llvm::StringRef> Link{kChainedOption, Source};
-  if (OriginalWeak) {
-    const auto ProviderSource = (Root / kRuntimeProviderSourceFile).string();
-    std::ofstream(ProviderSource) << kBindingProvider;
-    ASSERT_EQ(Compile(kCompileArgs, false, {ProviderSource}, Library), 0);
-    Link.push_back(WeakLibraryOption);
-  }
+  const auto ProviderSource = (Root / kRuntimeProviderSourceFile).string();
+  std::ofstream(ProviderSource) << kBindingProvider;
+  ASSERT_EQ(Compile(kCompileArgs, false, {ProviderSource}, Library), 0);
+  llvm::SmallVector<llvm::StringRef> Link{
+      kChainedOption, Source, OriginalWeak ? Library : WeakLibraryOption};
   ASSERT_EQ(Compile(kCompileArgs, OriginalWeak, Link, Original), 0);
   // Make the dylib optional while keeping its required on-disk symbol.
   // This exercises both ways of reusing a sealed cell under a weak load
   // command.
   const bool RequiredInWeakDylib = !OriginalWeak && !DefinesFallback;
-  if (RequiredInWeakDylib) {
+  if (OriginalWeak || RequiredInWeakDylib) {
+    const llvm::StringRef WeakLoad =
+        OriginalWeak ? llvm::StringRef(Library) : kBindingSystemLibrary;
     auto Input = llvm::MemoryBuffer::getFile(Original);
     ASSERT_TRUE(bool(Input));
     std::vector<uint8_t> Data((*Input)->getBufferStart(),
@@ -1845,7 +1845,7 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
                   ->dylib.name;
           if (Name >= Size ||
               readFixedName(reinterpret_cast<const char *>(C + Name),
-                            Size - Name) != kBindingSystemLibrary)
+                            Size - Name) != WeakLoad)
             return;
           writeLE<uint32_t>(Data.data() + (C - Data.data()),
                             llvm::MachO::LC_LOAD_WEAK_DYLIB);
@@ -1860,8 +1860,6 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
         macho_signing::adHocResign(Original, Signature->Slices.front());
     ASSERT_FALSE(bool(Signed)) << llvm::toString(std::move(Signed));
   }
-  if (OriginalWeak)
-    ASSERT_TRUE(std::filesystem::remove(Library));
   llvm::SmallVector<llvm::StringRef> Input{kBindingObjectOption};
   if (!DefinesFallback)
     Input.push_back(kBindingReferenceOnlyOption);
@@ -1876,7 +1874,7 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
   ASSERT_NE(OldFields, nullptr);
   auto Old = Before->MachOAuthenticatedPointers.find(OldFields->Addr);
   ASSERT_NE(Old, Before->MachOAuthenticatedPointers.end());
-  ASSERT_EQ(Old->second.WeakImport, OriginalWeak || RequiredInWeakDylib);
+  ASSERT_EQ(Old->second.WeakImport, OriginalWeak);
   ASSERT_EQ(Old->second.Symbol, kInstalledImportSymbol);
   ASSERT_EQ(Old->second.Key, kAArch64PAuthKeyDA);
   ASSERT_EQ(Old->second.Diversity, kObjectDiversity);
@@ -1901,7 +1899,11 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
   ASSERT_FALSE(bool(Missing));
   llvm::consumeError(Missing.takeError());
   ASSERT_FALSE(std::filesystem::exists(Published));
-  auto Patch = Install({Dependency});
+  llvm::SmallVector<SourcePatchDependency> Dependencies{Dependency};
+  if (DefinesFallback)
+    Dependencies.push_back(
+        {Library, kVerbatimBinding, SourcePatchDependencyKind::Function});
+  auto Patch = Install(Dependencies);
   ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
   ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
   auto After = Reader->load(Published);
@@ -1920,17 +1922,8 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
       });
   ASSERT_NE(New, After->MachOAuthenticatedPointers.end());
   ASSERT_TRUE(New->second.LibraryOrdinal);
-  const auto ImportIsNullable = [&](const MachOAuthenticatedPointer &Recipe) {
-    const auto Ordinal = Recipe.LibraryOrdinal;
-    return Recipe.WeakImport ||
-           (Ordinal && *Ordinal > 0 &&
-            After->MachODylibReferences.at(*Ordinal - 1).Weak);
-  };
-  // dyld_info reports the encoded weak-import bit. The analysis loader also
-  // accounts for an optional dylib when describing a nullable runtime value.
-  auto ExpectedImport = New->second;
-  ExpectedImport.WeakImport = ObjectWeak;
-  EXPECT_EQ(New->second.WeakImport, ImportIsNullable(ExpectedImport));
+  const auto &ExpectedImport = New->second;
+  EXPECT_EQ(ExpectedImport.WeakImport, ObjectWeak);
   EXPECT_EQ(New->second.Module, Old->second.Module);
   EXPECT_EQ(New->second.LibraryOrdinal, Old->second.LibraryOrdinal);
   EXPECT_EQ(New->second.Addend, Old->second.Addend);
@@ -1945,6 +1938,10 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
     int32_t CoalescedRelative;
     uint32_t CoalescedPadding;
     uint64_t OptionalDirect, OptionalGOT;
+    uint64_t BareAuth, BareDirect;
+    int32_t BareRelative;
+    uint32_t BarePadding;
+    uint64_t LocalAuth, LocalDirect, LocalValue;
   };
   const va_t FieldsVA = New->first;
   const auto *Data = After->readVA(FieldsVA, sizeof(Fields));
@@ -1962,8 +1959,7 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
   auto PreservedGOT = After->DyldBindSlots.find(OldGOT);
   ASSERT_NE(PreservedGOT, After->DyldBindSlots.end());
   EXPECT_EQ(PreservedGOT->second.WeakImport, Old->second.WeakImport);
-  auto ExpectedOriginal = Preserved->second;
-  ExpectedOriginal.WeakImport = OriginalWeak;
+  const auto &ExpectedOriginal = Preserved->second;
   std::vector<MachOAuthenticatedFixup> Recipes{{OldVA, ExpectedOriginal},
                                                {FieldsVA, ExpectedImport}};
   const auto CheckPlain =
@@ -1971,7 +1967,7 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
         auto Bound = After->DyldBindSlots.find(Slot);
         ASSERT_NE(Bound, After->DyldBindSlots.end());
         EXPECT_EQ(Bound->second.Name, Target.Symbol);
-        EXPECT_EQ(Bound->second.WeakImport, ImportIsNullable(Target));
+        EXPECT_EQ(Bound->second.WeakImport, Target.WeakImport);
         EXPECT_EQ(Bound->second.LibraryOrdinal, Target.LibraryOrdinal);
         EXPECT_EQ(Bound->second.Addend, Addend);
         MachOAuthenticatedPointer Expected;
@@ -2034,6 +2030,38 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
   Recipes.push_back(
       {FieldsVA + offsetof(Fields, OptionalGOT), Rebase, true, false});
 
+  const va_t LocalVA = FieldsVA + offsetof(Fields, LocalValue);
+  const auto Local = After->MachOAuthenticatedPointers.find(
+      FieldsVA + offsetof(Fields, LocalAuth));
+  ASSERT_NE(Local, After->MachOAuthenticatedPointers.end());
+  EXPECT_EQ(Local->second.Target, LocalVA);
+  EXPECT_EQ(Local->second.Key, kAArch64PAuthKeyDA);
+  EXPECT_EQ(Local->second.Diversity, kObjectDiversity);
+  EXPECT_TRUE(Local->second.AddressDiversity);
+  Recipes.push_back({Local->first, Local->second});
+  Rebase.Target = LocalVA;
+  Recipes.push_back(
+      {FieldsVA + offsetof(Fields, LocalDirect), Rebase, true, false});
+  EXPECT_EQ(readLE<uint64_t>(Data + offsetof(Fields, LocalDirect)), LocalVA);
+
+  const auto Bare = After->MachOAuthenticatedPointers.find(
+      FieldsVA + offsetof(Fields, BareAuth));
+  ASSERT_NE(Bare, After->MachOAuthenticatedPointers.end());
+  EXPECT_EQ(Bare->second.Symbol, kBareBinding);
+  EXPECT_EQ(Bare->second.Module, Library);
+  EXPECT_NE(Bare->second.LibraryOrdinal, ExpectedImport.LibraryOrdinal);
+  EXPECT_EQ(Bare->second.Key, kAArch64PAuthKeyDB);
+  EXPECT_EQ(Bare->second.Diversity, kObjectDiversity);
+  EXPECT_TRUE(Bare->second.AddressDiversity);
+  EXPECT_EQ(Bare->second.WeakImport, !ObjectWeak);
+  const auto &ExpectedBare = Bare->second;
+  Recipes.push_back({Bare->first, ExpectedBare});
+  const va_t BareGOT = FieldsVA + offsetof(Fields, BareRelative) +
+                       readLE<int32_t>(Data + offsetof(Fields, BareRelative));
+  EXPECT_NE(BareGOT, GOT);
+  CheckPlain(BareGOT, ExpectedBare, 0);
+  CheckPlain(FieldsVA + offsetof(Fields, BareDirect), ExpectedBare, 0);
+
   const va_t Owner = Patch->PatchedFunctions.front().OwnerVA;
   const auto LoadTarget = [&](va_t PC) -> std::optional<va_t> {
     const auto *Code = After->readVA(PC, 2 * kInstructionBytes);
@@ -2072,14 +2100,12 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
     auto Callable = After->MachOAuthenticatedPointers.find(*CallSlot);
     ASSERT_NE(Callable, After->MachOAuthenticatedPointers.end());
     EXPECT_EQ(Callable->second.Symbol, kInstalledImportSymbol);
-    EXPECT_EQ(Callable->second.WeakImport, ImportIsNullable(ExpectedImport));
+    EXPECT_EQ(Callable->second.WeakImport, ExpectedImport.WeakImport);
     EXPECT_EQ(Callable->second.LibraryOrdinal, Old->second.LibraryOrdinal);
     EXPECT_EQ(Callable->second.Key, kAArch64PAuthKeyIA);
     EXPECT_FALSE(Callable->second.AddressDiversity);
     EXPECT_EQ(Callable->second.Diversity, 0u);
-    auto ExpectedCall = Callable->second;
-    ExpectedCall.WeakImport = ObjectWeak;
-    Recipes.push_back({*CallSlot, ExpectedCall});
+    Recipes.push_back({*CallSlot, Callable->second});
   }
   llvm::SmallVector<llvm::StringRef> Args{kXcrun};
   llvm::append_range(Args, kInfoArgs);
@@ -2096,15 +2122,37 @@ TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
     const auto DriverSource = (Root / kRuntimeHarnessFile).string();
     const auto Driver = (Root / kRuntimeDriverFile).string();
     std::ofstream(DriverSource) << kBindingDriver;
-    for (bool HostDefinesFallback : {false, true}) {
-      llvm::SmallVector<llvm::StringRef> Sources{DriverSource};
-      if (HostDefinesFallback)
-        Sources.push_back(kBindingHostFallback);
-      ASSERT_EQ(Compile(kBindingDriverArgs, false, Sources, Driver), 0);
-      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Original}), 0);
-      ASSERT_EQ(llvm::sys::ExecuteAndWait(
-                    Driver, {Driver, Published, kPublishedProperty}),
-                0);
+    const auto HostDriver = (Root / kBindingHostDriver).string();
+    ASSERT_EQ(Compile(kBindingDriverArgs, false, {DriverSource}, Driver), 0);
+    ASSERT_EQ(Compile(kBindingDriverArgs, false,
+                      {DriverSource, kBindingHostFallback}, HostDriver),
+              0);
+    for (bool Present : {true, false}) {
+      if (!Present)
+        ASSERT_TRUE(std::filesystem::remove(Library));
+      for (const auto &Program : {Driver, HostDriver}) {
+        const auto Run = [&](llvm::ArrayRef<llvm::StringRef> Args,
+                             bool Required) {
+          const auto Log = (Root / kToolLog).string();
+          const std::optional<llvm::StringRef> Redirects[] = {
+              std::nullopt, std::nullopt, Log};
+          const int Status = llvm::sys::ExecuteAndWait(
+              Program, Args, std::nullopt, Redirects, kToolTimeout);
+          auto Errors = llvm::MemoryBuffer::getFile(Log);
+          ASSERT_TRUE(bool(Errors));
+          if (!Present && Required) {
+            EXPECT_EQ(Status, kBindingDlopenFailure);
+            EXPECT_TRUE((*Errors)->getBuffer().contains(kMissingBareImport))
+                << (*Errors)->getBuffer().str();
+          } else {
+            EXPECT_EQ(Status, 0) << (*Errors)->getBuffer().str();
+          }
+        };
+        Run({Program, Original, Library}, OriginalWeak);
+        // Retained original fixups and newly published fixups both bind.
+        Run({Program, Published, Library, kPublishedProperty},
+            OriginalWeak || ObjectWeak);
+      }
     }
   }
 #endif

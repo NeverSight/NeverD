@@ -3560,6 +3560,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_slot_reload_guard.s
   x86_64/test_jumptable_guard_chain.c
   x86_64/test_jumptable_masked_byte.s
+  x86_64/test_jumptable_cyclic_sad.s
   x86_64/test_jumptable_byte_switch.s
   x86_64/test_jumptable_inclusive_postload_clobber.s
   x86_64/test_jumptable_inclusive_postload_unrelated.s

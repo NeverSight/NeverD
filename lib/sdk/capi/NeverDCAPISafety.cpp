@@ -119,17 +119,15 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
       return Request.error(llvm::toString(std::move(E)),
                            safety::ScanState::Failed, &S->Img);
 
-  // The analyses read recovered call arguments, which only the lift pipeline
-  // fills, so run one here regardless of the session's default mode.
+  // Both engines consume the native lift's function inventory and recovered
+  // call arguments. Their last input is the machine MedIR ready for emission.
   llvm::LLVMContext Ctx;
   PipelineOptions PO;
   PO.LiftMode = true;
+  PO.EmitLiftedLLVM = false;
   S->applyAnalysisOptions(PO);
   Pipeline Pipe;
   PipelineResult Res = Pipe.run(S->Img, Ctx, PO, S->Dbg.get());
-  // Call-ABI recovery runs before LLVM emission.  Hunt and audit read
-  // MedIR/LowIR, so a CRT emission failure must not hide recovered program
-  // functions.  MedIR verification, or no functions at all, still fail closed.
   if (Request.canceled())
     return Request.error("scan canceled", safety::ScanState::Canceled, &S->Img);
   if (Res.MedIRVerifierFailures != 0 || Res.MedFuncs.empty()) {

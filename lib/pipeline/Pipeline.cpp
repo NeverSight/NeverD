@@ -583,9 +583,9 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   // Machine ABI preparation is shared by analysis and LLVM emission.
   if (Opts.usesMachineMedIR()) {
-    Trace.start(Opts.MedAnalysisOnly
-                    ? NativePipelineTrace::Stage::MachineMedIR
-                    : NativePipelineTrace::Stage::LLVMEmission);
+    Trace.start(Opts.emitsMachineLLVM()
+                    ? NativePipelineTrace::Stage::LLVMEmission
+                    : NativePipelineTrace::Stage::MachineMedIR);
     Result.Success = runPatchLiftMode(Img, Ctx, Opts, Result, Dbg);
     Trace.finish(Result.Success);
     return Result;

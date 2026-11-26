@@ -1566,6 +1566,11 @@ requests LLVM output explicitly to exercise that complete native proof.
 128-bit remainders and quotient/subtract identities against unknown high
 halves, signed division, zero divisors and undersized storage. Compact selector
 recovery must also pass `ModuloBoundProbesCompactCandidatesIndependently`.
+`JTE_X86_64.CyclicMaskedSelectorReadsOnlyItsOwnRelocatedSlots` masks a cyclic
+switch's sum of absolute differences, whose upstream-mask search cannot finish:
+eight owned relocated slots publish the eight cases, and four owned slots under
+the same mask keep the dispatch unresolved. The `x64v52_redsad` round trip in
+`NeverDSemanticTests` executes the same shape.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict
@@ -24775,8 +24780,9 @@ broad whole-project and native Apple CPTA qualification remain false.
 checks: GPR W/X, signed LDPSW and SIMD S/D/Q, offset/pre/post/non-temporal forms,
 215 independent LLVM MC samples and all 5,504 encoding/imm7 combinations through
 full and fast decoding. Native HighC/LLVMC O0/O2 and actual LLVM objects compare
-both complete values, the base and every byte of a 4096-byte buffer. The same
-suite checks malformed three-result bindings, the second store operand,
+both complete values, the base and every byte of a 4096-byte buffer. The
+address-memory harness allows 120 seconds to compile each generated translation
+unit and 30 seconds to execute it. The same suite checks malformed three-result bindings, the second store operand,
 source filtering, original-word ambiguity, aliases, x1-only admission, finite
 tracer refusal, nominal frame footprints, image spans, returned bases and
 retained effects after all values are discarded.

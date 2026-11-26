@@ -14,9 +14,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "../../LLVMHostFixture.h"
 #include "../../../lib/backend/llvm/resolve/MedLLVMScalarProof.h"
 #include "../../../lib/ir/low/jumptable/JumpTableResolverDetail.h"
+#include "../../LLVMHostFixture.h"
 #include "NeverDLiftFixture.h"
 #include "PipelineLowIRDetail.h"
 
@@ -347,7 +347,7 @@ TEST(JumpTableHighSelector, MissingExactSelectorRemainsAnUnresolvedGoto) {
 class JTE_X86_32 : public NeverDLiftTest {
 protected:
   void expectBiasedSelectArmUsesItsOwner(const fs::path &Source,
-                                        const fs::path &Object, bool PIC);
+                                         const fs::path &Object, bool PIC);
 };
 
 // A guard over the final index has already accounted for subtraction and
@@ -622,8 +622,8 @@ biased_select_arm:
 )";
 
 void JTE_X86_32::expectBiasedSelectArmUsesItsOwner(const fs::path &Source,
-                                                 const fs::path &Object,
-                                                 bool PIC) {
+                                                   const fs::path &Object,
+                                                   bool PIC) {
   {
     std::ofstream File(Source);
     File << BiasedSelectArmAssembly;
@@ -4629,6 +4629,61 @@ TEST_F(JTE_X86_64, TableBehindALongCompareChainKeepsItsBound) {
   EXPECT_EQ(Low.JumpTables.front().BaseAddr, Rodata->VA);
   EXPECT_EQ(Low.JumpTables.front().Targets, Expected);
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+static fs::path cyclicSadX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_cyclic_sad.o";
+}
+
+// Both cyclic switches mask a sum of absolute differences with `and $7`. The
+// cases rewrite the arrays the next round sums, so the search for masks
+// upstream of the AND cannot finish once the cases are reachable. Every slot
+// the mask names in `jt_cyclic_sad8` is one of its own eight relocated slots,
+// so the mask's coordinates stand. `jt_cyclic_sad_short` owns four relocated
+// slots under the same mask; its dispatch stays unresolved.
+TEST_F(JTE_X86_64, CyclicMaskedSelectorReadsOnlyItsOwnRelocatedSlots) {
+  auto ImageOrErr = neverd::loadBinary(cyclicSadX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const neverd::Symbol &Function) {
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function.Addr, Function.Name);
+  };
+
+  const neverd::Symbol *Function = Image.findSymbol("jt_cyclic_sad8");
+  const neverd::Symbol *Table = Image.findSymbol("jt_cyclic_sad8_table");
+  const neverd::Symbol *Branch = Image.findSymbol("jt_cyclic_sad8_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(Branch, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Case = 0; Case < 8; ++Case) {
+    const uint8_t *Bytes = Image.readVA(Table->Addr + Case * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Table->Addr + static_cast<int64_t>(Entry));
+  }
+  const neverd::LowFunc Low = Build(*Function);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().InsnAddr, Branch->Addr);
+  EXPECT_EQ(Low.JumpTables.front().BaseAddr, Table->Addr);
+  EXPECT_EQ(Low.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+
+  const neverd::Symbol *Short = Image.findSymbol("jt_cyclic_sad_short");
+  const neverd::Symbol *ShortBranch =
+      Image.findSymbol("jt_cyclic_sad_short_branch");
+  ASSERT_NE(Short, nullptr);
+  ASSERT_NE(ShortBranch, nullptr);
+  const neverd::LowFunc Refused = Build(*Short);
+  for (const neverd::JumpTable &Candidate : Refused.JumpTables)
+    if (Candidate.InsnAddr == ShortBranch->Addr)
+      EXPECT_TRUE(Candidate.AnalysisOnly);
+  EXPECT_TRUE(Refused.UnsafeIndirectBranchAddresses.count(ShortBranch->Addr));
 }
 
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;

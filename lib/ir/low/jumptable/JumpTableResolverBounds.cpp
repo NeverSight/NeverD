@@ -3728,6 +3728,11 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
   // exhausting the bounded proposal search.  This shortcut is valid only when
   // the mask's dynamic input does not itself depend on another mask occurrence:
   // nested masks must first pass through the domain-intersection closure below.
+  // An upstream mask can only narrow the coordinates this mask proves.  When
+  // the dependence search cannot finish, as for a selector computed from
+  // arrays the case bodies rewrite each iteration, every coordinate stays
+  // feasible; they are read only when each one names a slot of this table's own
+  // anchor-bounded relocation run, so no coordinate reaches past the table.
   bool DirectIndexAnalysisIncomplete = false;
   auto directIndexBound = [&]() -> std::optional<uint32_t> {
     if (IndexOccurrences.empty())
@@ -3812,15 +3817,16 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
         bool UpstreamMaskAnalysisComplete = false;
         const std::vector<bool> DependsOnUpstreamMask =
             matchAtUses(UpstreamMaskQueries, &UpstreamMaskAnalysisComplete);
-        if (!UpstreamMaskAnalysisComplete ||
-            DependsOnUpstreamMask.size() != UpstreamMaskQueries.size()) {
-          DirectIndexAnalysisIncomplete = true;
-          return std::nullopt;
-        }
         if (std::any_of(DependsOnUpstreamMask.begin(),
                         DependsOnUpstreamMask.end(),
                         [](bool Depends) { return Depends; }))
           continue;
+        if ((!UpstreamMaskAnalysisComplete ||
+             DependsOnUpstreamMask.size() != UpstreamMaskQueries.size()) &&
+            MaxCoordinate >= Info.ExactBoundedRelativeRelocationSlots) {
+          DirectIndexAnalysisIncomplete = true;
+          return std::nullopt;
+        }
         if (FeasibleCoordinates && !consumeWork(Coordinates.size())) {
           DirectIndexAnalysisIncomplete = true;
           return std::nullopt;
