@@ -16162,9 +16162,10 @@ build-release/bin/NeverDLiftTests --gtest_filter='ExceptionCFGSeed.*:COFFExcepti
 ```
 
 `MedImmutableTableScanTests` checks exact sentinel exit counts, integer widths,
-mutable/truncated storage, independent roots and budget refusal. Pointer tests
-cover nested recurrences, shared expression DAGs, role-neutral address leaves
-and independently materialized SELECT arms. Both suites retain ambiguous
+mutable/truncated storage, independent roots and budget refusal. It also
+checks that a literal arriving only through a PHI still folds its consumer.
+Pointer tests cover nested recurrences, shared expression DAGs, role-neutral
+address leaves and independently materialized SELECT arms. Both suites retain ambiguous
 relocatable comparisons and distinguish adjacent objects' one-past addresses.
 `NeverDMedPhiRecompositionTests` owns correlated word-PHI regressions
 alongside the existing constant-propagation cases. Reordered edges,

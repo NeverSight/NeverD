@@ -274,6 +274,28 @@ TEST(MedImmutableTableScans,
   }
 }
 
+TEST(MedImmutableTableScans, AConstantPhiArmCanBeTheOnlyLiteralSource) {
+  auto Image = table(8, 1);
+  MedFunc F;
+  F.Entry = 0x1000;
+  F.Blocks.resize(2);
+  auto &Entry = F.Blocks[0];
+  Entry.Id = 0;
+  Entry.StartAddr = F.Entry;
+  Entry.Succs = {1};
+  auto &Exit = F.Blocks[1];
+  Exit.Id = 1;
+  Exit.StartAddr = 0x1010;
+  Exit.Preds = {0};
+  const auto One = MedVar::makeConst(1, 4, ConstantAddressProvenance::Scalar);
+  Exit.Phis.push_back({var(1, 4), {{0, One}}});
+  Exit.Ops = {op(NdOp::INT_ADD, var(2, 4), {var(1, 4), One})};
+
+  ASSERT_TRUE(foldImmutableTableScans(F, Image));
+  ASSERT_EQ(Exit.Ops.front().Opcode, NdOp::COPY);
+  EXPECT_EQ(Exit.Ops.front().Inputs[0].ConstVal, 2u);
+}
+
 TEST(MedImmutableTableScans, ScalarFoldingKeepsTheOperationWidth) {
   auto Image = table(8, 1);
   MedFunc F;
