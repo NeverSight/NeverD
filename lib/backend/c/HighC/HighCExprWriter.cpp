@@ -7787,7 +7787,13 @@ const HighExpr *HighCWriter::truthTestedValue(const HighExpr *E) const {
     // only set bits, and floating negative zero has a nonzero bit pattern.
     const HighExpr &Inner = *E->Operands[0];
     const uint16_t Outer = integerViewWidth(*E);
-    const uint16_t In = integerViewWidth(Inner);
+    uint16_t In = integerViewWidth(Inner);
+    // A call the IR leaves untyped yields its declared C result.
+    if (!In && Inner.Kind == ExprKind::Call)
+      if (const TypeRef Return = knownCallReturnType(Inner);
+          Return &&
+          (Return->Kind == NdTypeKind::Int || Return->Kind == NdTypeKind::Ptr))
+        In = Return->Size;
     if (!Outer || !In || (Outer < In && !valueFitsInBytes(Inner, Outer)))
       return E;
     E = &Inner;
