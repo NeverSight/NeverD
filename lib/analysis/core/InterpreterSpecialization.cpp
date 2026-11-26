@@ -134,6 +134,13 @@ struct ControlRange {
   bool operator==(const ControlRange &) const = default;
 };
 
+struct ObjectRegisterRange {
+  size_t RootIndex;
+  uint64_t Minimum;
+  uint64_t Maximum;
+  bool operator==(const ObjectRegisterRange &) const = default;
+};
+
 struct Projection {
   uint32_t FrameResidue = 0;
   Constants Scalars;
@@ -144,6 +151,10 @@ struct Projection {
   /// register domains retain no correlations or symbolic identities. Absence
   /// denotes Top; joins union offsets and widen when the tuple cap is exceeded.
   std::map<uint64_t, std::vector<uint64_t>> FrameRegisterOffsets;
+  /// Every value equals the current returned-object root plus an offset in
+  /// this proved inclusive range. Missing means unconstrained. This relation
+  /// survives joins that discard differing exact pointer displacements.
+  std::map<uint64_t, ObjectRegisterRange> ObjectRegisterRanges;
   /// Complete values of nominated eight-byte entry-frame words. A missing
   /// domain is Top. Each predecessor proves its own values before a join can
   /// retain their union; no numeric entry-frame address is assumed.
@@ -293,6 +304,12 @@ void seed(SymContext &Ctx, SymState &State, SymRef Root,
       if (!Values.AffineRegisters.count(Register))
         State.write(SymSpace::Register, Register,
                     Ctx.mkAdd(Root, Ctx.mkFreshVar(64, "frame_offset")));
+    for (const auto &[Register, Range] : Values.ObjectRegisterRanges)
+      if (!Values.AffineRegisters.count(Register) &&
+          Range.RootIndex < ObjectRoots.size())
+        State.write(SymSpace::Register, Register,
+                    Ctx.mkAdd(ObjectRoots[Range.RootIndex],
+                              Ctx.mkFreshVar(64, "object_offset")));
     for (const auto &[Register, Pointer] : Values.AffineRegisters)
       State.write(SymSpace::Register, Register,
                   entryPointerValue(Ctx, Root, ObjectRoots, Pointer));
@@ -511,6 +528,26 @@ bool intersect(Projection &Into, const Projection &Incoming,
     }
     if (Joined != It->second) {
       It->second = std::move(Joined);
+      Changed = true;
+    }
+    ++It;
+  }
+  for (auto It = Into.ObjectRegisterRanges.begin();
+       It != Into.ObjectRegisterRanges.end();) {
+    const auto Found = Incoming.ObjectRegisterRanges.find(It->first);
+    if (Found == Incoming.ObjectRegisterRanges.end() ||
+        Found->second.RootIndex != It->second.RootIndex) {
+      It = Into.ObjectRegisterRanges.erase(It);
+      Changed = true;
+      continue;
+    }
+    const uint64_t Minimum =
+        std::min(It->second.Minimum, Found->second.Minimum);
+    const uint64_t Maximum =
+        std::max(It->second.Maximum, Found->second.Maximum);
+    if (Minimum != It->second.Minimum || Maximum != It->second.Maximum) {
+      It->second.Minimum = Minimum;
+      It->second.Maximum = Maximum;
       Changed = true;
     }
     ++It;
@@ -1168,6 +1205,10 @@ private:
                 FrameOffsetProof Proof = FrameOffsetProof::Optional);
   bool projectObjects(SymState &State, llvm::ArrayRef<SymRef> Roots,
                       Projection &Out);
+  bool projectObjectRegisterRanges(SymState &State,
+                                   llvm::ArrayRef<SymRef> Roots,
+                                   const FrameFacts &Frame, SymRef Predicate,
+                                   Projection &Out);
 
   SpecializationProvider &Provider;
   SpecializationCursor Entry;
@@ -1541,6 +1582,102 @@ bool Specializer::projectObjects(SymState &State, llvm::ArrayRef<SymRef> Roots,
         return fail(SpecializationStatus::BudgetExceeded,
                     "current object projection symbolic-node budget "
                     "exhausted");
+    }
+  }
+  return true;
+}
+
+bool Specializer::projectObjectRegisterRanges(SymState &State,
+                                              llvm::ArrayRef<SymRef> Roots,
+                                              const FrameFacts &Frame,
+                                              SymRef Predicate,
+                                              Projection &Out) {
+  if (Frame.ReturnedObjectSizes.empty() ||
+      (!Options.ProveStoreFrameSeparation &&
+       !Options.ProveStoreReturnSlotSeparation))
+    return true;
+  SymContext &Ctx = State.context();
+  const size_t ReturnBegin = Options.EntryFrameExcludedObjects.size() +
+                             Options.EntryFrameLoadedObjects.size();
+  for (uint64_t Register : AffineCandidates) {
+    const SymRef Value = State.read(SymSpace::Register, Register, 8);
+    const auto Exact = Out.AffineRegisters.find(Register);
+    for (const auto &[Index, Size] : Frame.ReturnedObjectSizes) {
+      const size_t RootIndex = ReturnBegin + Index;
+      if (!Size || RootIndex >= Roots.size())
+        continue;
+      if (Exact != Out.AffineRegisters.end()) {
+        if (Exact->second.Root == RootIndex + 1 && Exact->second.Offset <= Size)
+          Out.ObjectRegisterRanges.emplace(
+              Register, ObjectRegisterRange{RootIndex, Exact->second.Offset,
+                                            Exact->second.Offset});
+        break;
+      }
+      const SymRef Base = Roots[RootIndex];
+      if (!Ctx.isVar(Base) || !Ctx.containsVariable(Value, Ctx.varId(Base)))
+        continue;
+      const SymRef Offset = Ctx.mkSub(Value, Base);
+      // A failed or incomplete optional proof never creates a range. Once
+      // containment is proved, partial endpoint searches retain the original
+      // conservative bounds.
+      const auto Check = [&](SymRef Bound) -> int {
+        if (Result.EvaluatedOperations >= Options.MaxOperations) {
+          fail(SpecializationStatus::BudgetExceeded,
+               "object pointer range projection budget exhausted");
+          return -1;
+        }
+        ++Result.EvaluatedOperations;
+        if (Ctx.numNodes() > Options.MaxSymbolicNodes) {
+          fail(SpecializationStatus::BudgetExceeded,
+               "object pointer range projection node budget exhausted");
+          return -1;
+        }
+        const auto Domain = enumerate(Ctx, Predicate, {Bound}, 1);
+        if (Failed)
+          return -1;
+        if (Domain.Status == FiniteValueStatus::TooManyValues)
+          return 2;
+        if (Domain.Status != FiniteValueStatus::Complete ||
+            Domain.Tuples.size() != 1)
+          return -1;
+        return Domain.Tuples.front() == std::vector<uint64_t>{1} ? 1 : 0;
+      };
+      if (Check(Ctx.mkUle(Offset, Ctx.mkConst(64, Size))) != 1) {
+        if (Failed)
+          return false;
+        continue;
+      }
+      uint64_t Minimum = 0;
+      uint64_t Ceiling = Size;
+      while (Minimum < Ceiling) {
+        const uint64_t Middle = Minimum + (Ceiling - Minimum) / 2 + 1;
+        const int Above = Check(Ctx.mkUle(Ctx.mkConst(64, Middle), Offset));
+        if (Failed)
+          return false;
+        if (Above < 0)
+          break;
+        if (Above == 1)
+          Minimum = Middle;
+        else
+          Ceiling = Middle - 1;
+      }
+      uint64_t Maximum = Size;
+      uint64_t Floor = 0;
+      while (Floor < Maximum) {
+        const uint64_t Middle = Floor + (Maximum - Floor) / 2;
+        const int Below = Check(Ctx.mkUle(Offset, Ctx.mkConst(64, Middle)));
+        if (Failed)
+          return false;
+        if (Below < 0)
+          break;
+        if (Below == 1)
+          Maximum = Middle;
+        else
+          Floor = Middle + 1;
+      }
+      Out.ObjectRegisterRanges.emplace(
+          Register, ObjectRegisterRange{RootIndex, Minimum, Maximum});
+      break;
     }
   }
   return true;
@@ -2167,6 +2304,8 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
   Reachable = !Ctx.isConstZero(Predicate);
   if (!Reachable)
     return true;
+  if (!projectObjectRegisterRanges(State, ObjectRoots, Frame, Predicate, Out))
+    return false;
   if (Root) {
     const auto Hints =
         Refinement.FrameWordHints.find({Successor.Address, Successor.Mode});
@@ -3319,6 +3458,21 @@ bool Specializer::evaluate(int Id) {
     if (Ctx.numNodes() > Options.MaxSymbolicNodes)
       return fail(SpecializationStatus::BudgetExceeded,
                   "frame offset predicate symbolic-node budget exhausted");
+  }
+  for (const auto &[Register, Range] : Draft.Incoming.ObjectRegisterRanges) {
+    if (Range.RootIndex >= ObjectRoots.size() ||
+        2 > Options.MaxOperations - Result.EvaluatedOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "object pointer range predicate budget exhausted");
+    Result.EvaluatedOperations += 2;
+    const auto Offset = Ctx.mkSub(State.read(SymSpace::Register, Register, 8),
+                                  ObjectRoots[Range.RootIndex]);
+    IncomingPredicate = Ctx.mkAnd(
+        {IncomingPredicate, Ctx.mkUle(Ctx.mkConst(64, Range.Minimum), Offset),
+         Ctx.mkUle(Offset, Ctx.mkConst(64, Range.Maximum))});
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "object pointer range predicate node budget exhausted");
   }
   if (Options.EntryFrameBounds) {
     const auto &Bounds = *Options.EntryFrameBounds;

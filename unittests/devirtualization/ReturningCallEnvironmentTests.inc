@@ -325,6 +325,86 @@ TEST_F(PEFixedImageTest, ReturningCallResultObjectKeepsNullAndBoundedWrites) {
   EXPECT_TRUE(Outside.Residual.Blocks.empty());
 }
 
+TEST_F(PEFixedImageTest, ReturningCallObjectPointerRangeSurvivesJoin) {
+  // Two feasible paths carry different offsets from the same returned root.
+  // The joined write fits the declared object for either path, including its
+  // full eight-byte extent. The null arm never reaches the write. A saved
+  // stack pointer is checked after the write, so a possible alias must
+  // retain the trap path.
+  std::vector<uint8_t> Code{0x48, 0x89, 0x64, 0x24, 0x90, // mov [rsp-112],rsp
+                            0xba, 0x40, 0,    0,    0,    // mov edx,64
+                            0x48, 0x83, 0xec, 0x40,       // sub rsp,64
+                            0xff, 0xd7,                   // call rdi
+                            0x48, 0x83, 0xc4, 0x40,       // add rsp,64
+                            0x48, 0x85, 0xc0,             // test rax,rax
+                            0x74, 0x16,                   // je ret
+                            0x48, 0x89, 0xc3,             // mov rbx,rax
+                            0x48, 0x85, 0xf6,             // test rsi,rsi
+                            0x74, 0x06,                   // je second offset
+                            0x48, 0x83, 0xc3, 0x08,       // add rbx,8
+                            0xeb, 0x04,                   // jmp join
+                            0x48, 0x83, 0xc3, 0x28,       // add rbx,40
+                            0x48, 0x89, 0x4b, 0x08,       // mov [rbx+8],rcx
+                            0x48, 0x8b, 0x5c, 0x24, 0x90, // mov rbx,[rsp-112]
+                            0x48, 0x39, 0xe3,             // cmp rbx,rsp
+                            0x75, 0x01,                   // jne trap
+                            0xc3,                         // ret
+                            0xcc};                        // trap
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x100e, Base + 0x1000 + Code.size() - 2);
+  O.X64MachineExits = {
+      {1, Base + 0x1000 + Code.size() - 2, MachineExitKind::Return},
+      {1, Base + 0x1000 + Code.size() - 1, MachineExitKind::Trap}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  O.MaxChainedTransfers = 0;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 3;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_EQ(R.ReturningCalls.size(), 1U);
+  unsigned Stores = 0;
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops)
+      Stores += Op.Opcode == NdOp::STORE;
+  EXPECT_GE(Stores, 2U);
+  ASSERT_FALSE(R.ExternalExits.empty());
+  for (const auto &Exit : R.ExternalExits) {
+    ASSERT_TRUE(Exit.MachineExit);
+    EXPECT_EQ(Exit.MachineExit->Kind, MachineExitKind::Return);
+  }
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  // The second offset now makes the eight-byte write exceed the 64-byte
+  // object. With entry RSP 0x1008 and object root 0xf48, the object ends
+  // just below the frame, yet the write at root + 80 reaches the saved
+  // stack pointer at entry RSP - 112. Its later reload may take the trap.
+  Code[42] = 0x48;
+  auto OutsideLoaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(OutsideLoaded)) << llvm::toString(OutsideLoaded.takeError());
+  const auto Outside =
+      specializeBinaryInterpreter(*OutsideLoaded, Base + 0x1000, O);
+  if (Outside.complete()) {
+    bool HasTrap = false;
+    for (const auto &Exit : Outside.ExternalExits)
+      HasTrap |=
+          Exit.MachineExit && Exit.MachineExit->Kind == MachineExitKind::Trap;
+    EXPECT_TRUE(HasTrap);
+    auto OutsideValid = validateSpecializationRawEnvironment(Outside, O);
+    EXPECT_FALSE(bool(OutsideValid)) << llvm::toString(std::move(OutsideValid));
+  } else {
+    EXPECT_TRUE(Outside.Residual.Blocks.empty());
+    EXPECT_FALSE(Outside.RawEnvironment);
+  }
+}
+
 TEST_F(PEFixedImageTest,
        ReturningCallRepeatedContainedWritesReuseNonnullProof) {
   std::vector<uint8_t> Code{0xba, 0x40, 0,    0,    0, // mov edx,64
