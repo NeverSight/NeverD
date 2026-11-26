@@ -4397,17 +4397,19 @@ void HighCWriter::collectValueForward(
       const std::optional<std::string> SlotName =
           Load ? namedFrameSlot(*Load->Operands[0]) : std::nullopt;
       // Forwarding must not turn an earlier observation into a conditional
-      // one. Materialized frame locals use their own alias and lifetime rules.
-      if (ReadsMemory &&
+      // one. A read at a fixed frame displacement observes nothing beyond the
+      // function's own frame, and materialized frame locals use their own
+      // alias and lifetime rules, so such a read may still be skipped.
+      if (ReadsMemory && !Slot &&
           (llvm::any_of(UseStmts,
                         [&](const HighStmt *S) {
                           return llvm::is_contained(
                               NamesAt.at(S).ConditionalReads, C.Name);
                         }) ||
-           (!Slot && llvm::all_of(UseStmts, [&](const HighStmt *S) {
+           llvm::all_of(UseStmts, [&](const HighStmt *S) {
              const auto Region = Sites.at(S).Region;
              return Region != C.Region && regionDominatedBy(Region, C.Region);
-           }))))
+           })))
         continue;
       // Memory reached otherwise than through this one named slot, which
       // any slot is once a frame address escapes.

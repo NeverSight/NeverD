@@ -724,6 +724,39 @@ int main(void) { return other_slot(7) == 7 && other_slot(9) == 9 ? 0 : 1; }
 )");
 }
 
+TEST(HighValueForward, SkippedOperandStillFoldsAFrameSlotRead) {
+  // A read at a fixed frame displacement observes nothing beyond the
+  // function's own frame: it may run only on the path that uses its value.
+  const auto Word = NdType::makeInt(8, false);
+  auto Nonzero = [] {
+    return op(NdOp::INT_NOTEQUAL, input(), constant(0), true);
+  };
+  auto Choice = op(NdOp::SELECT, Nonzero(), local(1, Word));
+  Choice->Operands.push_back(constant(42));
+  Choice->Type = Word;
+  auto Both = op(NdOp::BOOL_AND, Nonzero(),
+                 op(NdOp::INT_EQUAL, local(1, Word), constant(7), true), true);
+  std::vector<HighFunc> Functions;
+  for (const auto &[Name, Value] :
+       {std::pair<const char *, ExprPtr>{"slot_choice", Choice},
+        std::pair<const char *, ExprPtr>{"slot_both", Both}}) {
+    HighFunc F = function(
+        Name, {store(frameSlot(16), input()),
+               assign(local(1, Word), HighExpr::makeLoad(frameSlot(16), Word)),
+               result(Value)});
+    F.FrameSize = 64;
+    Functions.push_back(std::move(F));
+  }
+  const std::string Source = emit(Functions);
+  EXPECT_TRUE(declarationOf(Source, "t1").empty()) << Source;
+  compileAndRun(Source + R"(
+int main(void) {
+  return slot_choice(7) != 7 || slot_choice(0) != 42 || slot_both(7) != 1 ||
+         slot_both(5) != 0 || slot_both(0) != 0;
+}
+)");
+}
+
 TEST(HighValueForward, SlotLoadStaysBeforeAStoreComputedFromTheFrame) {
   // Two words at -40 and -32 are one array.  A store to the first plus a
   // run-time offset writes the second when the offset is 8, whether the
