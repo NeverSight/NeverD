@@ -372,6 +372,9 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   if (Opts.SourceProjection && !Opts.PatchMode)
     pipeline_detail::projectMIPS16EntryCalls(Img, Result.MedFuncs, Dbg);
 
+  if (!Opts.emitsMachineLLVM())
+    return true;
+
   std::vector<std::pair<va_t, std::string>> ImportMap;
   for (const auto &[Addr, Name] : Img.getImportAddressNames())
     ImportMap.emplace_back(Addr, Name);

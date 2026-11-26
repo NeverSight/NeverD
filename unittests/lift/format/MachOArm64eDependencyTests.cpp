@@ -957,6 +957,46 @@ TEST(MachOArm64eInstallation, NativeImportStrengthPreservesLookupScope) {
   }
 }
 
+TEST(MachOArm64eInstallation, NativeSymbolSpellingsKeepTheirOwnProviders) {
+  for (bool BareFirst : {false, true}) {
+    auto Bytes = linkedImage(Chains[0]);
+    auto *Payload = Bytes.data() + kChains;
+    auto *Header = reinterpret_cast<dyld_chained_fixups_header *>(Payload);
+    dyld_chained_import_addend64 CImport{}, BareImport{};
+    CImport.lib_ordinal = kProducerLibraryOrdinal;
+    BareImport.lib_ordinal = BIND_SPECIAL_DYLIB_SELF;
+    BareImport.weak_import = true;
+    // Both names are already in the same string table entry.
+    BareImport.name_offset = sizeof(kSymbol) - sizeof(kBareTarget);
+    const dyld_chained_import_addend64 Imports[] = {
+        BareFirst ? BareImport : CImport, BareFirst ? CImport : BareImport};
+    Header->imports_count = std::size(Imports);
+    std::memcpy(Payload + kImportTable, Imports, sizeof(Imports));
+    Bytes = largePageImage(Bytes);
+    auto Image = producerImage(Bytes);
+    Image.InputKind = RewriteInputKind::ReplacementObject;
+    Image.SymbolAddrs.clear();
+    Image.MachOImportWeakness = {{kSymbol, false}, {kBareTarget, true}};
+    auto &Fields = Image.Sections.back().FixupReferences;
+    Fields.front().Symbol = kBareTarget;
+    Fields.back().Symbol = kVerbatimTarget;
+    const SourcePatchDependency CProvider{kLibrary, kBareTarget,
+                                          SourcePatchDependencyKind::Data};
+    auto Fixups = collectMachOAuthenticatedFixups(Bytes, Image, {CProvider});
+    ASSERT_TRUE(bool(Fixups)) << llvm::toString(Fixups.takeError());
+    ASSERT_EQ(Fixups->size(), Fields.size());
+    const auto &C = Fixups->front().Recipe;
+    EXPECT_EQ(C.Symbol, kSymbol);
+    EXPECT_EQ(C.LibraryOrdinal, kProducerLibraryOrdinal);
+    EXPECT_FALSE(C.WeakImport);
+    const auto &Bare = Fixups->back().Recipe;
+    EXPECT_EQ(Bare.Symbol, kBareTarget);
+    EXPECT_EQ(Bare.LibraryOrdinal, BIND_SPECIAL_DYLIB_SELF);
+    EXPECT_TRUE(Bare.WeakImport);
+    EXPECT_EQ(Bare.Addend, kImportAddend);
+  }
+}
+
 TEST(MachOArm64eInstallation, NativeObjectOverridesThreadedImportWeakness) {
   for (bool OriginalWeak : {false, true}) {
     auto Original = threadedImage();

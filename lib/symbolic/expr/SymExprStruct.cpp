@@ -1174,8 +1174,11 @@ SymRef SymContext::mkEq(SymRef A, SymRef B) {
     return Match;
   }
   // A captured status word need not be expanded when comparing it with an
-  // XOR-adjusted copy. Only the terms that differ can affect equality.
-  if (auto Terms = detail::cancelCommonOperands(*this, A, B, SymOp::Xor)) {
+  // XOR-adjusted copy. Only the terms that differ can affect equality. A
+  // shared literal is no such word: it stays, so one selector keeps one
+  // target against every value it is compared with.
+  if (auto Terms = detail::cancelCommonOperands(*this, A, B, SymOp::Xor,
+                                                /*WordsOnly=*/true)) {
     const uint32_t W = width(A);
     A = Terms->Left.empty() ? mkZero(W) : mkXor(Terms->Left);
     B = Terms->Right.empty() ? mkZero(W) : mkXor(Terms->Right);
@@ -1185,7 +1188,8 @@ SymRef SymContext::mkEq(SymRef A, SymRef B) {
   // Cancel before bitwise expansion can hide that shared word. In particular,
   // a packed state compared with itself plus an offset observes only the
   // offset.
-  if (auto Terms = detail::cancelCommonOperands(*this, A, B, SymOp::Add)) {
+  if (auto Terms = detail::cancelCommonOperands(*this, A, B, SymOp::Add,
+                                                /*WordsOnly=*/true)) {
     const uint32_t W = width(A);
     A = Terms->Left.empty() ? mkZero(W) : mkAdd(Terms->Left);
     B = Terms->Right.empty() ? mkZero(W) : mkAdd(Terms->Right);

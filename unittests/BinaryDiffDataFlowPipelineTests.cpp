@@ -225,6 +225,17 @@ TEST(BinaryDiffDataFlowPipeline, LLVMRetentionPreservesSerialAndShardedOutput) {
     ASSERT_TRUE(Plain.Success) << Plain.Error;
     ASSERT_TRUE(Plain.LlvmModule);
     EXPECT_FALSE(Plain.LLVMSources);
+    PipelineOptions MedOptions = Options;
+    MedOptions.EmitLiftedLLVM = false;
+    const auto Prepared = Pipeline().run(Image, Context, MedOptions);
+    ASSERT_TRUE(Prepared.Success) << Prepared.Error;
+    EXPECT_FALSE(Prepared.LlvmModule);
+    ASSERT_EQ(Prepared.MedFuncs.size(), Count);
+    std::string LiftedIR, PreparedIR;
+    llvm::raw_string_ostream LiftedStream(LiftedIR), PreparedStream(PreparedIR);
+    Pipeline::dumpMedIR(Plain.MedFuncs, LiftedStream);
+    Pipeline::dumpMedIR(Prepared.MedFuncs, PreparedStream);
+    EXPECT_EQ(LiftedIR, PreparedIR);
     Options.RetainLLVMSourceObservations = true;
     const auto Observed = Pipeline().run(Image, Context, Options);
     ASSERT_TRUE(Observed.Success) << Observed.Error;

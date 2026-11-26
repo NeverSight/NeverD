@@ -430,7 +430,7 @@ void compileMemoryC(
     std::string Diagnostic;
     const auto Status =
         llvm::sys::ExecuteAndWait(Compiler, Args, std::nullopt, Redirects,
-                                  kTimeoutSeconds, 0, &Diagnostic);
+                                  kCompileTimeoutSeconds, 0, &Diagnostic);
     const auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
     ASSERT_EQ(Status, 0) << Diagnostic
                          << (Errors ? (*Errors)->getBuffer().str()
@@ -444,7 +444,7 @@ void compileMemoryC(
     if (Execute) {
       const llvm::StringRef RunArgs[] = {OutputPath};
       EXPECT_EQ(llvm::sys::ExecuteAndWait(OutputPath, RunArgs, std::nullopt,
-                                          Redirects, kTimeoutSeconds, 0,
+                                          Redirects, kRunTimeoutSeconds, 0,
                                           &Diagnostic),
                 0)
           << Diagnostic << Source;

@@ -838,7 +838,7 @@ source and MPX context/encoding targets.
 
 `InterpreterMachineRegionSourceTest.EntryObjects*` executes all four region state interfaces through HighC and LLVMC at O0/O2 with ASan/UBSan. Complete state, guest writes and query tapes cover optional alignment, object aliases, equal roots with disjoint relative ranges, one-byte overlaps and rejected inputs before any effects. An independent 128-bit arithmetic oracle covers signed displacement extremes, address wraparound and UINT64_MAX endpoints. Exact/short source budgets and changed authenticated declarations remain checked; ordinary source consumers still refuse the raw domain.
 
-`PEFixedImageTest.EntryLoadedObjectBindsAChangingMemoryPointer` checks a complete entry memory pointer field through raw symbolic specialization, a concrete original-instruction replay, missing-relation refusal and malformed source domains. `EntryLoadedObjectSurvivesAConditionalCall` checks the preserved pointer across a declared returning call, while `EntryLoadedObjectForgetsOverwrittenPointerField` checks that a guest write cannot resurrect its initial relation. Run `NeverDInterpreterSpecializationTests` and `NeverDInterpreterMachineStateTests` when changing the loaded-object relation or its source guard. These tests qualify the declared initial pointer domain, not an observed address or an actual driver's loader contract.
+`PEFixedImageTest.EntryLoadedObjectBindsAChangingMemoryPointer` checks a complete entry memory pointer field through raw symbolic specialization, a concrete original-instruction replay, missing-relation refusal and malformed source domains. `EntryLoadedObjectSurvivesAConditionalCall` checks the preserved pointer across a declared returning call and a node boundary: its return exit needs no frame proof, so a stack word saved above the call's outgoing bytes and checked after the pointer's store makes the relation necessary, while `EntryLoadedObjectForgetsOverwrittenPointerField` checks that a guest write cannot resurrect its initial relation. Run `NeverDInterpreterSpecializationTests` and `NeverDInterpreterMachineStateTests` when changing the loaded-object relation or its source guard. These tests qualify the declared initial pointer domain, not an observed address or an actual driver's loader contract.
 
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` runs x64/ARM64 Mach-O integer, floating and mixed stack carriers through the source pipeline. `IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` keeps entry storage for memory reads, calls, escaping stack addresses and opaque or memory intrinsics. Pure value paths use declared parameters without inventing physical SP writes; register FP state effects remain. The macOS mobile matrix independently compiles and executes recovered Swift; successful emission alone is not execution evidence.
 
@@ -24777,8 +24777,9 @@ broad whole-project and native Apple CPTA qualification remain false.
 checks: GPR W/X, signed LDPSW and SIMD S/D/Q, offset/pre/post/non-temporal forms,
 215 independent LLVM MC samples and all 5,504 encoding/imm7 combinations through
 full and fast decoding. Native HighC/LLVMC O0/O2 and actual LLVM objects compare
-both complete values, the base and every byte of a 4096-byte buffer. The same
-suite checks malformed three-result bindings, the second store operand,
+both complete values, the base and every byte of a 4096-byte buffer. The
+address-memory harness allows 120 seconds to compile each generated translation
+unit and 30 seconds to execute it. The same suite checks malformed three-result bindings, the second store operand,
 source filtering, original-word ambiguity, aliases, x1-only admission, finite
 tracer refusal, nominal frame footprints, image spans, returned bases and
 retained effects after all values are discarded.
@@ -26557,7 +26558,7 @@ HighExprSimplify exact-demand regressions independently check multiple readers, 
 
 HighExprSimplify selected-byte regressions recover only contiguous captured-local lanes with matching pure guards. Offset, sign-extension, different-guard, load and unknown-value controls remain unchanged; generated source executes at both result widths and optimization levels.
 
-Common-word equality cancellation is covered by independent APInt evaluations at 1--256 bits. It cancels only identical complete XOR or additive operands; subtraction reuses the same additive collector. Packed word contents remain unconstrained.
+Common-word equality cancellation is covered by independent APInt evaluations at 1--256 bits. It cancels only identical complete XOR or additive operands; subtraction reuses the same additive collector. Packed word contents remain unconstrained. A literal both equality sides carry stays, so a selector compared with each of its case values keeps one target; `BinaryLowIRRefinement.PartitionedCoverageKeepsAllNativeAndCandidateArms` groups its cases by that target.
 
 SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
 

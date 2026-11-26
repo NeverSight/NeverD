@@ -2526,17 +2526,30 @@ The `MachOArm64eNativeBindings` tests combine required and optional imports
 in the original dylib and replacement object. The object either supplies a
 second weak data definition or refers to the original export. Each test checks
 the import ordinal, weakness, addend, key and discriminator in the published
-dyld chains. One input has a required symbol and an optional dylib. The test
-checks the raw symbol flag independently of runtime nullability.
+dyld chains. Both the analysis loader and Apple's `dyld_info` report the
+symbol flag independently of the dylib load command.
 GOT page instructions and both forms of `POINTER_TO_GOT` must
 address one cell. A directly bound pointer has its own addend and signature.
 
 On Apple Silicon, enable `NEVERD_ARM64E_LIFTED_NATIVE=1` when running the tests.
 An arm64 driver loads the arm64e dylib, calls the replaced entry and checks
 authenticated data in process. One driver supplies another weak definition
-and one uses the dylib's fallback. When a weak-loaded provider is absent, the
-direct signed pointer, the ordinary pointer and the contents of its GOT cell
-must all be null. The absolute GOT reference still addresses that cell.
+and one uses the dylib's fallback. For an absent weak import in a loadable
+image, the direct signed pointer, ordinary pointer and contents of its GOT
+cell must all be null. The absolute GOT reference still addresses that cell.
+
+The same fixture imports libSystem's `_getpid` and a separate dylib's bare
+assembly symbol `getpid`. With the optional dylib loaded, the guarded tail
+calls return the process ID and the provider's fixed result, respectively.
+After removing the provider, the driver still calls libSystem if every
+retained and newly published reference to the absent symbol is optional.
+A required eager reference in either set makes `dlopen(RTLD_NOW)` fail with
+the bare symbol's name. The driver also authenticates signed fields for both
+imports and checks that the signed and ordinary references to local data
+`entry` still address that data after the mapped function `_entry` is
+published. The same driver compares two addresses materialized by
+`ADRP`/`ADD` against Apple's rebases for the original image's distinct
+`_binding_code` and `binding_code` functions. [Apple dyld symbol resolution](https://github.com/apple-oss-distributions/dyld/blob/fd8d0c4d52320ebf64db34f3cb280310d905c5ae/dyld/Loader.cpp#L2942-L3008)
 
 ### Native x1 runner qualification
 

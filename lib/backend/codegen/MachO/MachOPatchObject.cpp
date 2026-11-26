@@ -72,14 +72,10 @@ std::string canonical(llvm::StringRef Name) {
 }
 struct Symbol {
   std::string Name;
+  llvm::StringRef LinkerName; // Borrows the input object's string table.
   uint32_t Section = 0;
   uint64_t Offset = 0, Size = 0;
   bool Function = false, Thumb = false, External = false;
-  bool HasPrefix = false;
-
-  std::string linkerName() const {
-    return HasPrefix ? macho_arm64e_abi::kSymbolPrefix + Name : Name;
-  }
 };
 struct Relocation {
   size_t Section;
@@ -153,6 +149,23 @@ struct NativeMachO {
   std::map<unsigned, AuthenticatedCallStub> AuthenticatedCallStubs;
   // Section index to the sole public weak definition that owns its storage.
   std::map<size_t, unsigned> WeakData;
+
+  // C symbols are indexed first. A bare assembly symbol can keep its old
+  // shorthand unless a distinct C symbol already owns that source name.
+  std::string sourceName(llvm::StringRef LinkerName) const {
+    llvm::StringRef Name = LinkerName;
+    const bool Prefixed = Name.consume_front(macho_arm64e_abi::kSymbolPrefix);
+    if (Name.starts_with(macho_arm64e_abi::kVerbatimPrefix) ||
+        (Prefixed && Name.empty()))
+      return (macho_arm64e_abi::kVerbatimPrefix + LinkerName).str();
+    std::string Key = Name.str();
+    if (!Prefixed) {
+      const auto I = Names.find(Key);
+      if (I != Names.end() && Symbols.at(I->second).LinkerName != LinkerName)
+        return (macho_arm64e_abi::kVerbatimPrefix + LinkerName).str();
+    }
+    return Key;
+  }
 };
 
 // New data mappings and dyld runtime sections require segment commands.
@@ -303,25 +316,24 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     return State.takeError();
   const auto Providers =
       Chains.uniqueImportProviders(Object.Image.MachOImportWeakness);
-  const auto MatchesProvider = [&](va_t Address, const std::string &Name,
-                                   const auto &B) {
+  const auto MatchesProvider = [&](const std::string &Name, const auto &B) {
     auto It = Providers.find(Name);
     return It != Providers.end() && B.LibraryOrdinal &&
            It->second.Ordinal == B.LibraryOrdinal &&
            It->second.bindingStrength(Name, Object.Image.MachOImportWeakness) ==
-               Chains.WeakImportSlots.contains(Address);
+               B.WeakImport;
   };
   std::map<std::string, va_t> Personalities, Ordinary;
   for (const auto &[Address, P] : Original.MachOAuthenticatedPointers)
     if (!P.Symbol.empty() && !P.Addend && P.Key == kPersonalityKey &&
         P.Diversity == kPersonalityDiversity &&
         P.AddressDiversity == kPersonalityAddressDiversity &&
-        MatchesProvider(Address, P.Symbol, P))
+        MatchesProvider(P.Symbol, P))
       Personalities.try_emplace(P.Symbol, Address);
   // A mutable data variable can have the same bind. Only reuse non-lazy
   // pointer storage that dyld seals after applying the ordinary binding.
   for (const auto &[Address, B] : Original.DyldBindSlots) {
-    if (B.Addend || !MatchesProvider(Address, B.Name, B))
+    if (B.Addend || !MatchesProvider(B.Name, B))
       continue;
     const auto *Sec = Original.getSectionFor(Address);
     if (!Sec || (Sec->Type & SECTION_TYPE) != S_NON_LAZY_SYMBOL_POINTERS ||
@@ -339,7 +351,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
   // lets dyld select the coalesced definition, including a newly allocated GOT.
   for (const auto &[Section, Index] : Object.WeakData) {
     const auto &Symbol = Object.Symbols.at(Index);
-    const auto Name = Symbol.linkerName();
+    const auto Name = Symbol.LinkerName.str();
     const auto Export = Chains.WeakDefinitions.find(Name);
     const auto Provider = Providers.find(Name);
     if (Declared.contains(Symbol.Name) ||
@@ -397,7 +409,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
       return fail(kLanguagePointer);
     if (IsImportBranch(R)) {
       const auto &Symbol = Object.Symbols.at(R.SymbolIndex);
-      if (Providers.contains(Symbol.linkerName()))
+      if (Providers.contains(Symbol.LinkerName.str()))
         BranchImports.insert(R.SymbolIndex);
     }
     if (!UsesGOT(R))
@@ -423,7 +435,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
         Object.TLV.emplace(R.SymbolIndex, NativeMachO::TLVReference{0, true});
         continue;
       }
-      const std::string Name = Symbol.linkerName();
+      const auto Name = Symbol.LinkerName.str();
       const auto Export = Chains.ThreadLocalDefinitions.find(Name);
       if (Export != Chains.ThreadLocalDefinitions.end()) {
         const auto Address = Export->second;
@@ -441,7 +453,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
             P.Key != kDefaultFunctionPointerKey || P.Addend ||
             P.AddressDiversity || P.Diversity || P.WeakImport ||
             !P.LibraryOrdinal || *P.LibraryOrdinal <= 0 ||
-            !MatchesProvider(Address, P.Symbol, P))
+            !MatchesProvider(P.Symbol, P))
           return fail(kTLVDescriptor);
         Object.TLV.emplace(R.SymbolIndex,
                            NativeMachO::TLVReference{Address, true});
@@ -467,7 +479,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     if (!Symbol.Section && !Object.Image.SymbolAddrs.contains(Symbol.Name) &&
         !Declared.contains(Symbol.Name)) {
       const auto &Candidates = Personality ? Personalities : Ordinary;
-      if (auto It = Candidates.find(Symbol.linkerName());
+      if (auto It = Candidates.find(Symbol.LinkerName.str());
           It != Candidates.end()) {
         Object.GOT.emplace(Key, NativeMachO::GOTSlot{std::nullopt, It->second});
         continue;
@@ -506,7 +518,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     if (P != Providers.end() && P->second.Ordinal &&
         N != Object.Image.MachOImportWeakness.end() &&
         P->second.WeakImport == N->second)
-      BranchImports.erase(Object.Names.at(canonical(Stub->Name)));
+      BranchImports.erase(Object.Names.at(Object.sourceName(Stub->Name)));
   }
   return prepareAuthenticatedCallStubs(Object, std::move(BranchImports));
 }
@@ -891,14 +903,15 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
                ((Type & N_TYPE) == N_UNDF && Value)) {
       return fail(kUnsupportedNativeSymbol);
     }
-    Symbol Item{canonical(*Name),
+    const bool Prefixed = Name->starts_with(macho_arm64e_abi::kSymbolPrefix);
+    Symbol Item{{},
+                *Name,
                 Number,
                 0,
                 0,
                 false,
                 bool(Desc & N_ARM_THUMB_DEF),
-                bool(Type & N_EXT),
-                Name->starts_with(macho_arm64e_abi::kSymbolPrefix)};
+                bool(Type & N_EXT)};
     if ((Type & N_TYPE) == N_SECT) {
       if (!Result.Sections.contains(Number))
         continue;
@@ -907,7 +920,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
           Value - Result.OldSectionVAs.at(Number) >= Section.Size)
         return fail("symbol exceeds native section");
       Item.Offset = Value - Result.OldSectionVAs.at(Number);
-      Item.Function = Section.Kind == Kind::Code && Item.HasPrefix &&
+      Item.Function = Section.Kind == Kind::Code && Prefixed &&
                       machODataInCodeRanges(Data, Value, 1).empty();
       // Hidden compiler helpers (e.g. terminate landing pads) bind within this
       // object. Staging adds no exported weak definition or coalescing promise.
@@ -929,11 +942,21 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
         return fail(kPrivateWeak);
     } else
       Item.Section = 0;
-    if (!Name->empty() && !Result.Names.emplace(Item.Name, Index).second)
-      return fail("duplicate native symbol");
-    Result.Symbols.emplace(Index, Item);
+    if (!Name->empty() && (!Original.isArm64e() || Prefixed)) {
+      Item.Name =
+          Original.isArm64e() ? Result.sourceName(*Name) : canonical(*Name);
+      if (!Result.Names.emplace(Item.Name, Index).second)
+        return fail(kDuplicateNativeSymbol);
+    }
+    Result.Symbols.emplace(Index, std::move(Item));
   }
-  for (const auto &[Index, S] : Result.Symbols) {
+  for (auto &[Index, S] : Result.Symbols) {
+    if (Original.isArm64e() && !S.LinkerName.empty() &&
+        !S.LinkerName.starts_with(macho_arm64e_abi::kSymbolPrefix)) {
+      S.Name = Result.sourceName(S.LinkerName);
+      if (!Result.Names.emplace(S.Name, Index).second)
+        return fail(kDuplicateNativeSymbol);
+    }
     if (!S.Section)
       continue;
     auto It = Result.WeakData.find(Result.Sections.at(S.Section));
@@ -1278,6 +1301,16 @@ prepareRuntimeDependencies(NativeMachO &Object, const BinaryImage &Original,
                            llvm::ArrayRef<SourcePatchBinding> Bindings = {}) {
   std::set<unsigned> Functions;
   if (Original.isArm64e()) {
+    for (auto &Dependency : Dependencies) {
+      llvm::StringRef Spelling = Dependency.Symbol;
+      if (!Spelling.consume_front(macho_arm64e_abi::kVerbatimPrefix))
+        continue;
+      auto Name = Object.sourceName(Spelling);
+      const auto I = Object.Names.find(Name);
+      if (I != Object.Names.end() &&
+          Object.Symbols.at(I->second).LinkerName == Spelling)
+        Dependency.Symbol = std::move(Name);
+    }
     const auto AdmitRuntime = [&](const SourcePatchDependency &Runtime) {
       const auto I = Object.Names.find(Runtime.Symbol);
       if (I == Object.Names.end() || Object.Symbols.at(I->second).Section ||
@@ -1294,8 +1327,7 @@ prepareRuntimeDependencies(NativeMachO &Object, const BinaryImage &Original,
         return;
       // Keep the original dyld provider. A direct branch can still need a
       // callable when the original only stored the imported pointer.
-      if (Original.findImport((llvm::Twine('_') + Runtime.Symbol).str()) ||
-          Original.findImport(Runtime.Symbol)) {
+      if (Original.findImport(Object.Symbols.at(I->second).LinkerName)) {
         if (Runtime.Kind == SourcePatchDependencyKind::Function)
           Functions.insert(I->second);
       } else {
@@ -1788,10 +1820,12 @@ resolve(const NativeMachO &Object, unsigned Index, const BinaryImage &Original,
   if (auto B = Bindings.find(S.Name); B != Bindings.end())
     return B->second.OriginalVA;
   std::set<uint64_t> VAs;
-  const bool NativeBranch = DirectBranch && Original.isArm64e();
-  const auto LinkerName = NativeBranch ? S.linkerName() : S.Name;
+  const bool ExactSpelling = Original.isArm64e();
+  const llvm::StringRef LinkerName =
+      ExactSpelling ? S.LinkerName : llvm::StringRef(S.Name);
   for (const auto &S0 : Original.Symbols)
-    if ((NativeBranch ? S0.Name == LinkerName : canonical(S0.Name) == S.Name) &&
+    if ((ExactSpelling ? S0.Name == LinkerName
+                       : canonical(S0.Name) == S.Name) &&
         S0.IsFunc && Original.hasAuthenticatedFunctionEntryAt(S0.Addr))
       VAs.insert(S0.Addr);
   for (const auto &[VA, Import] : Original.ImportStubIndices)

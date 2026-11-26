@@ -137,9 +137,6 @@ struct Reader {
       return fail("invalid bind library or symbol");
     if (auto Error = chargeThreadedNames(Name.size()))
       return Error;
-    if (Chained && Phase == kBindPhase &&
-        (Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT))
-      Chained->WeakImportSlots.insert(*VA);
     Bytes Row;
     number(Row, Ordinal);
     text(Row, Name);
