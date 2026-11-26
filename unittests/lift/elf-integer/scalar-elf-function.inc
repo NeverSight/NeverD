@@ -1,4 +1,5 @@
 // ELFv1 names a three-word descriptor. The other scalar ABIs name the code.
+// clang-format off
 #ifdef __powerpc64__
 .abiversion _CALL_ELF
 #endif
@@ -22,3 +23,4 @@
  .size \name,.-\name
 #endif
 .endm
+        // clang-format on
