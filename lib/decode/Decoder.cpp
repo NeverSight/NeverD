@@ -157,7 +157,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     CsArch = CS_ARCH_RISCV;
     CsMode =
         cs_mode((TheArch == Arch::RISCV64 ? CS_MODE_RISCV64 : CS_MODE_RISCV32) |
-                CS_MODE_RISCV_C | CS_MODE_RISCV_A);
+                CS_MODE_RISCV_C | CS_MODE_RISCV_A | CS_MODE_RISCV_ZBA |
+                CS_MODE_RISCV_ZBS);
     break;
   case Arch::PPC32:
   case Arch::PPC32LE:

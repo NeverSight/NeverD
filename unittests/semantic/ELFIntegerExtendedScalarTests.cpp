@@ -111,4 +111,85 @@ TEST(PowerPCPrefixed, ReservedAndMismatchedPrefixFormats) {
     }
   }
 }
+
+TEST(RISCVBitManipulation, ReservedRV32EncodingsDoNotAcquireRV64Semantics) {
+  BinaryImage Img;
+  Img.Arch = Arch::RISCV32;
+  Img.Bits = Bitness::Bits32;
+  Img.RISCV = {.Zba = true, .Zbs = true};
+  Decoder D;
+  ASSERT_TRUE(D.init(Img));
+  for (uint32_t Word : rv_fixture::ReservedRV32) {
+    uint8_t Code[4];
+    llvm::support::endian::write32le(Code, Word);
+    DecodedInsn I;
+    std::vector<LowOp> Ops;
+    if (D.decodeOneForLift(Code, sizeof(Code), 0x1000, I))
+      EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+    EXPECT_TRUE(Ops.empty());
+  }
+}
+
+TEST(RISCVBitManipulation, WordInputsAndBitIndicesUseTheirArchitecturalWidths) {
+  using namespace rv_fixture;
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    const bool Wide = A == Arch::RISCV64;
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+    Img.RISCV = {.Zba = true, .Zbs = true};
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    const uint64_t Mask = Wide ? UINT64_MAX : UINT32_MAX;
+    for (uint64_t X : {UINT64_C(0x13579bdf80000001), UINT64_MAX})
+      for (uint64_t Y : {UINT64_C(0), UINT64_C(31), UINT64_C(32), UINT64_C(63),
+                         UINT64_C(64), UINT64_MAX}) {
+        const unsigned N = Y & (Wide ? 63 : 31);
+        const uint64_t Bit = UINT64_C(1) << N;
+        const uint64_t U = uint32_t(X);
+        // a0 is both rs1 and rd, a1 supplies rs2. Immediate forms use the
+        // largest index and register forms also receive out-of-range values.
+        auto Check = [&](uint32_t Word, uint64_t Expected) {
+          SCOPED_TRACE(::testing::Message()
+                       << std::hex << Word << " " << X << " " << Y);
+          uint8_t Code[4];
+          llvm::support::endian::write32le(Code, Word);
+          DecodedInsn I;
+          ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, I), 4);
+          std::vector<LowOp> Ops;
+          ASSERT_NO_THROW(D.liftToLow(I, Ops));
+          NdOpEmulator Emu(Img);
+          Emu.setStrictMode(true);
+          Emu.setRegister(integerreg::gpr(10), X & Mask);
+          Emu.setRegister(integerreg::gpr(11), Y & Mask);
+          for (const auto &Op : Ops)
+            ASSERT_TRUE(Emu.step(Op));
+          EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), Expected & Mask);
+        };
+        Check(SH1ADD, 2 * X + Y);
+        Check(SH2ADD, 4 * X + Y);
+        Check(SH3ADD, 8 * X + Y);
+        Check(SH3ADDZero, Y); // sh3add a0,zero,a1
+        if (Wide) {
+          Check(AddUW, U + Y);
+          Check(SH1ADDUW, 2 * U + Y);
+          Check(SH2ADDUW, 4 * U + Y);
+          Check(SH3ADDUW, 8 * U + Y);
+          for (unsigned Shift : {0u, 31u, 32u, 63u})
+            Check(SLLIUW | Shift << 20, U << Shift);
+        }
+        Check(BCLR, X & ~Bit);
+        Check(BEXT, ((X & Mask) >> N) & 1);
+        Check(BINV, X ^ Bit);
+        Check(BSET, X | Bit);
+        Check(BSETZero, X | 1); // bset a0,a0,zero
+        const unsigned Shift = Wide ? 63 : 31;
+        const uint64_t High = UINT64_C(1) << Shift;
+        Check(BCLRI | Shift << 20, X & ~High);
+        Check(BEXTI | Shift << 20, bool(X & High));
+        Check(BINVI | Shift << 20, X ^ High);
+        Check(BSETI | Shift << 20, X | High);
+      }
+  }
+}
 } // namespace
