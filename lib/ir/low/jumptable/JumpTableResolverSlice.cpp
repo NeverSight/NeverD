@@ -13242,6 +13242,65 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         if (!ExactScale || Ambiguous)
           continue;
         ScaledIndex = IndexUse.Output;
+      } else if (IndexUse.NumInputs == 1 && IndexUse.Output.isReg() &&
+                 IndexUse.Output.Size > IndexUse.Inputs[0].Size &&
+                 ((IndexUse.Opcode == NdOp::INT_ZEXT &&
+                   Role.AllowZeroExtension) ||
+                  (IndexUse.Opcode == NdOp::INT_SEXT &&
+                   Role.AllowSignExtension)) &&
+                 Role.Load.Addr != InvalidVA &&
+                 Role.Load.Addr >= IndexUse.Addr) {
+        // x86 writes a 32-bit register through an implicit zero-extend of the
+        // whole register (`mov 0x6ea4(%rdi), %ecx` lifts as COPY ECX and
+        // INT_ZEXT RCX), and the LOAD's own instruction scales that register
+        // (`movslq (%r9,%rcx,4)`).  Follow the extended register forward
+        // through the rest of its block, up to the role's LOAD, while nothing
+        // writes any byte of it, calls, or runs predicated: straight-line code
+        // carries it unchanged to the one scale that reads it.
+        if (!sameVar(guestAddressView(IndexUse.Inputs[0]),
+                     guestAddressView(Index.Value)))
+          continue;
+        const NdVar &Extended = IndexUse.Output;
+        auto writesExtended = [&](const LowOp &Op) {
+          return Op.Output.Space == Extended.Space && Op.Output.Size != 0 &&
+                 Op.Output.Offset < Extended.Offset + Extended.Size &&
+                 Extended.Offset < Op.Output.Offset + Op.Output.Size;
+        };
+        ExactScale = nullptr;
+        bool Ambiguous = false;
+        bool Stopped = false;
+        for (auto It = InsnIt;
+             It != Insns.end() && !Stopped && It->first <= Role.Load.Addr;
+             ++It) {
+          if (!consumeWork(orderedSetLookupWork(BlockStarts.size())))
+            return false;
+          if (It != InsnIt &&
+              (BlockStarts.count(It->first) || It->second.IsInstructionGuard))
+            break;
+          if (!consumeProduct(It->second.Ops.size(), 2))
+            return false;
+          for (const LowOp &Op : It->second.Ops) {
+            if (It == InsnIt && Op.Seq <= IndexUse.Seq)
+              continue;
+            if ((It->first == Role.Load.Addr && Op.Seq >= Role.Load.Seq) ||
+                Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+              Stopped = true;
+              break;
+            }
+            const int Side = scaleIndexSide(Op, Role.AddressScale);
+            if (Side >= 0 && sameVar(Op.Inputs[Side], Extended)) {
+              Ambiguous |= ExactScale != nullptr;
+              ExactScale = &Op;
+            }
+            if (writesExtended(Op)) {
+              Stopped = true;
+              break;
+            }
+          }
+        }
+        if (!ExactScale || Ambiguous)
+          continue;
+        ScaledIndex = Extended;
       }
       const int IndexSide = scaleIndexSide(*ExactScale, Role.AddressScale);
       if (IndexSide < 0 ||

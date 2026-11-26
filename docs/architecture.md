@@ -11634,6 +11634,17 @@ predecessor's operations followed by its own, for at most
 definition unfolded there keeps its all-path definition query, so a second
 path into the block refuses the guard, and an index written after the compare
 is no longer the compared value.
+The address-role proof takes a table load's scale from the role's own index
+occurrence first. An AArch64 extended-register operand widens the index into
+a temporary the same instruction scales. An x86 32-bit write widens it into
+the whole register (`movl 0x10(%rdi), %ecx` lifts as COPY ECX and INT_ZEXT
+RCX), and the table load's own instruction scales that register: the proof
+follows it forward through the rest of its block, up to the load, while
+nothing writes any byte of it, calls, or runs predicated. Only a role without
+such an occurrence asks every same-scale operation of the function whether
+it carries the index, and one query of that batch that cannot finish fails
+the role. liblzma's decoder lost its table that way once the table's targets
+brought a deep scaled value into the function.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
