@@ -1568,6 +1568,19 @@ TEST(SafetyScan, MergesOnlyTheSamePropertyLocationAndScope) {
   F.Detail = "second observation";
   auto &Hunt = scan.Analyzers.back().Report.Findings;
   Hunt.push_back(F);
+  Finding OtherArgument = F;
+  ++OtherArgument.SharedCheck->Argument;
+  Hunt.push_back(OtherArgument);
+  Finding Returned = F;
+  Returned.RequireReturnedPath = true;
+  Hunt.push_back(Returned);
+
+  // A matching native address alone cannot identify the lifted occurrence.
+  Finding Ambiguous = F;
+  Ambiguous.OriginSeq = -1;
+  Hunt.push_back(Ambiguous);
+  Ambiguous.Origin = Track::Audit;
+  scan.Analyzers.front().Report.Findings.push_back(Ambiguous);
   F.SharedCheck->Requirement = CatalogRequirement::DebugSignature;
   Hunt.push_back(F);
   F.Class = VulnClass::FormatString;
@@ -1582,11 +1595,18 @@ TEST(SafetyScan, MergesOnlyTheSamePropertyLocationAndScope) {
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const auto *Groups = Parsed->getAsObject()->getArray("findings");
   ASSERT_NE(Groups, nullptr);
-  ASSERT_EQ(Groups->size(), 4u);
-  const auto *Observations =
-      Groups->front().getAsObject()->getArray("observations");
+  ASSERT_EQ(Groups->size(), 8u);
+  const llvm::json::Array *Observations = nullptr;
+  for (const auto &Group : *Groups) {
+    const auto *Rows = Group.getAsObject()->getArray("observations");
+    ASSERT_NE(Rows, nullptr);
+    if (Rows->size() == 1)
+      continue;
+    ASSERT_EQ(Rows->size(), 2u);
+    ASSERT_EQ(Observations, nullptr);
+    Observations = Rows;
+  }
   ASSERT_NE(Observations, nullptr);
-  ASSERT_EQ(Observations->size(), 2u);
   for (size_t Index = 0; Index != 2; ++Index) {
     const auto *Row = (*Observations)[Index].getAsObject();
     EXPECT_EQ(Row->getString("analyzer"), Index ? "hunt" : "audit");

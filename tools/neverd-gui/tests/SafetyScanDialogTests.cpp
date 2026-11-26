@@ -22,6 +22,24 @@
 class SafetyScanDialogTests : public QObject {
   Q_OBJECT
 private slots:
+  void queuedCancellationFinishesWithoutStartingTheScan() {
+    int sends = 0;
+    QueryService service(
+        [&](const QString &, const QJsonObject &, const QString &) {
+          return QString::number(++sends);
+        });
+    service.setAvailable(true);
+    QObject owner;
+    QJsonObject terminal;
+    const auto id = service.enqueueCommand(
+        "memory_safety_scan", {}, &owner,
+        [&](const QJsonObject &reply) { terminal = reply; });
+    service.cancelCommand(id);
+    QTRY_COMPARE(terminal.value("status").toString(), "cancelled");
+    QCOMPARE(sends, 0);
+    QVERIFY(!service.hasCommands());
+  }
+
   void cancelRetainsEvidenceAndAnalyzerCoverage() {
     QList<QJsonObject> sent;
     QueryService service(
