@@ -297,12 +297,39 @@ bool isFrameAddress(const MedVar &V, const TargetRegInfo &TRI,
           Addresses.contains(keyOf(V)));
 }
 
+/// Whether \p Op computes an address from its frame-address input: a copy, an
+/// offset, an alignment mask, a pointer extension or truncation, or the arm
+/// a selection chooses. What an intrinsic, a lane or a product computes from
+/// such an input is data.
+bool formsFrameAddress(const MedOp &Op, unsigned Input) {
+  switch (Op.Opcode) {
+  case NdOp::COPY:
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+    return true;
+  case NdOp::SUBBYTES:
+    return Input == 0 && Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+           Op.Inputs[1].ConstVal == 0;
+  case NdOp::SELECT:
+    return Input != 0;
+  default:
+    return false;
+  }
+}
+
 /// Values derived from this frame, including addresses that travel through
 /// a PHI or a frame slot. This supplies may-alias information to both spill
-/// proofs, without assigning an exact offset to a dynamic address.
+/// proofs, without assigning an exact offset to a dynamic address. With
+/// \p AddressesOnly, only address computations (formsFrameAddress) carry the
+/// derivation, not every value computed from a frame address.
 bool collectFrameAddresses(const MedFunc &Func, const TargetRegInfo &TRI,
                            const FrameAccessMap &Accesses,
-                           FrameAddressSet &FrameAddresses, size_t &Budget) {
+                           FrameAddressSet &FrameAddresses, size_t &Budget,
+                           bool AddressesOnly = false) {
   const auto Derived = [&](const MedVar &V) {
     return isFrameAddress(V, TRI, FrameAddresses);
   };
@@ -353,7 +380,8 @@ bool collectFrameAddresses(const MedFunc &Func, const TargetRegInfo &TRI,
         if (Op.Output.Id < 0)
           continue;
         for (unsigned I = 0; I < Op.NumInputs; ++I)
-          if (Derived(Op.Inputs[I])) {
+          if (Derived(Op.Inputs[I]) &&
+              (!AddressesOnly || formsFrameAddress(Op, I))) {
             Add(Op.Output);
             break;
           }
@@ -364,13 +392,28 @@ bool collectFrameAddresses(const MedFunc &Func, const TargetRegInfo &TRI,
   return true;
 }
 
-/// Whether the use inventory still leaves the direct save/restore proof
-/// incomplete. A callee given a frame pointer may read outside the exact
-/// argument address. Ordinary calls with no such operand keep their usual
-/// stack ownership.
-bool mayObserveCalleeSave(const MedFunc &Func, const TargetRegInfo &TRI,
-                          llvm::ArrayRef<FrameAccess> Loads,
-                          llvm::ArrayRef<FrameAccess> Stores) {
+/// Where a frame address that leaves the direct save/restore proof points:
+/// the entry offset of the frame address its copies and additions start
+/// from, that offset plus the constants they add, and whether a run-time
+/// index is among them.
+struct FrameObserver {
+  int64_t Base = 0;
+  int64_t Address = 0;
+  bool Indexed = false;
+};
+
+/// The frame addresses that uses outside the direct save/restore proof may
+/// reach a callee-save slot through: one a call or intrinsic receives, one a
+/// computed access reads through, or one stored outside the frame. Such an
+/// address reaches the object it points into and no other object of the
+/// frame. An address no entry offset places, typically a pointer a loop steps
+/// through a local array, is left out: only an address placed in a slot
+/// exposes it. There is no answer when the work budget runs out.
+std::optional<std::vector<FrameObserver>>
+calleeSaveObservers(const MedFunc &Func, Arch Architecture, BinaryFormat Format,
+                    StackEntryKind Entry, const TargetRegInfo &TRI,
+                    llvm::ArrayRef<FrameAccess> Loads,
+                    llvm::ArrayRef<FrameAccess> Stores) {
   FrameAccessMap Accesses;
   for (const FrameAccess &Access : Loads)
     Accesses.emplace(Access.Op, &Access);
@@ -378,16 +421,22 @@ bool mayObserveCalleeSave(const MedFunc &Func, const TargetRegInfo &TRI,
     Accesses.emplace(Access.Op, &Access);
   FrameAddressSet Addresses;
   size_t Budget = limits::ir::kSourceEntrySpillWork;
-  if (!collectFrameAddresses(Func, TRI, Accesses, Addresses, Budget))
-    return true;
+  if (!collectFrameAddresses(Func, TRI, Accesses, Addresses, Budget,
+                             /*AddressesOnly=*/true))
+    return std::nullopt;
   const auto Derived = [&](const MedVar &V) {
     return isFrameAddress(V, TRI, Addresses);
   };
+  std::vector<MedVar> Observers;
   for (const MedCallInfo &Call : Func.CallInfos)
-    if (llvm::any_of(Call.Args, Derived))
-      return true;
+    for (const MedVar &Arg : Call.Args)
+      if (Derived(Arg))
+        Observers.push_back(Arg);
+  std::map<ValueKey, const MedOp *> Definitions;
   for (const MedBlock &Block : Func.Blocks)
     for (const MedOp &Op : Block.Ops) {
+      if (Op.Output.Id >= 0 && !Op.Output.isConst())
+        Definitions.emplace(keyOf(Op.Output), &Op);
       if (Op.Dead || !Op.NumInputs)
         continue;
       switch (Op.Opcode) {
@@ -396,24 +445,105 @@ bool mayObserveCalleeSave(const MedFunc &Func, const TargetRegInfo &TRI,
       case NdOp::INTRINSIC:
         for (unsigned I = 0; I < Op.NumInputs; ++I)
           if (Derived(Op.Inputs[I]))
-            return true;
+            Observers.push_back(Op.Inputs[I]);
         break;
       case NdOp::LOAD:
       case NdOp::ATOMIC_ADD:
       case NdOp::ATOMIC_XCHG:
       case NdOp::ATOMIC_CMPXCHG:
         if (Derived(Op.Inputs[0]) && !Accesses.count(&Op))
-          return true;
+          Observers.push_back(Op.Inputs[0]);
         break;
       case NdOp::STORE:
         if (Op.NumInputs >= 2 && Derived(Op.Inputs[1]) && !Accesses.count(&Op))
-          return true;
+          Observers.push_back(Op.Inputs[1]);
         break;
       default:
         break;
       }
     }
-  return false;
+  if (Observers.empty())
+    return std::vector<FrameObserver>{};
+  // The constant an index operand adds, through nested additions.
+  std::function<int64_t(const MedVar &)> ConstantPart =
+      [&](const MedVar &V) -> int64_t {
+    if (V.isConst())
+      return llvm::SignExtend64(
+          V.ConstVal, V.Size && V.Size < sizeof(uint64_t) ? V.Size * 8 : 64);
+    if (!Budget)
+      return 0;
+    --Budget;
+    const auto Definition = Definitions.find(keyOf(V));
+    if (Definition == Definitions.end() ||
+        Definition->second->Opcode != NdOp::INT_ADD ||
+        Definition->second->NumInputs != 2)
+      return 0;
+    return ConstantPart(Definition->second->Inputs[0]) +
+           ConstantPart(Definition->second->Inputs[1]);
+  };
+  // Each observer, then the frame addresses it copies or offsets, each with
+  // the constant displacement from it to the observer and whether a run-time
+  // index lies between; the first that one entry offset places is the base.
+  std::vector<MedVar> Chains;
+  std::vector<int64_t> Displacements;
+  std::vector<bool> Indexed;
+  std::vector<size_t> Ends;
+  for (const MedVar &Observer : Observers) {
+    const size_t First = Chains.size();
+    Chains.push_back(Observer);
+    Displacements.push_back(0);
+    Indexed.push_back(false);
+    while (true) {
+      if (!Budget)
+        return std::nullopt;
+      --Budget;
+      const auto Definition = Definitions.find(keyOf(Chains.back()));
+      if (Definition == Definitions.end())
+        break;
+      const MedOp &Op = *Definition->second;
+      std::optional<MedVar> Next;
+      int64_t NextDisplacement = Displacements.back();
+      bool NextIndexed = Indexed.back();
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+          Derived(Op.Inputs[0])) {
+        Next = Op.Inputs[0];
+      } else if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2 &&
+                 Derived(Op.Inputs[0]) != Derived(Op.Inputs[1])) {
+        const unsigned Base = Derived(Op.Inputs[0]) ? 0 : 1;
+        Next = Op.Inputs[Base];
+        NextDisplacement += ConstantPart(Op.Inputs[1 - Base]);
+        NextIndexed = NextIndexed || !Op.Inputs[1 - Base].isConst();
+      } else if (Op.Opcode == NdOp::INT_SUB && Op.NumInputs == 2 &&
+                 Derived(Op.Inputs[0]) && Op.Inputs[1].isConst()) {
+        Next = Op.Inputs[0];
+        NextDisplacement -= ConstantPart(Op.Inputs[1]);
+      }
+      // An entry self-copy (`COPY RSP RSP`) defines the value it reads.
+      if (!Next || std::any_of(Chains.begin() + First, Chains.end(),
+                               [&](const MedVar &Seen) {
+                                 return keyOf(Seen) == keyOf(*Next);
+                               }))
+        break;
+      Chains.push_back(*Next);
+      Displacements.push_back(NextDisplacement);
+      Indexed.push_back(NextIndexed);
+    }
+    Ends.push_back(Chains.size());
+  }
+  const auto Offsets =
+      entryStackOffsets(Func, Chains, Architecture, Format, Entry);
+  std::vector<FrameObserver> Placed;
+  size_t Begin = 0;
+  for (const size_t End : Ends) {
+    for (size_t I = Begin; I < End; ++I)
+      if (Offsets[I]) {
+        Placed.push_back(
+            {*Offsets[I], *Offsets[I] + Displacements[I], Indexed[I]});
+        break;
+      }
+    Begin = End;
+  }
+  return Placed;
 }
 
 /// A load the body uses of a callee-save slot. It reads the incoming register
@@ -581,9 +711,14 @@ void markCalleeSavePrologueSaves(
   size_t ReadBudget = limits::ir::kSourceEntrySpillWork;
   size_t ForwardBudget = limits::ir::kSourceEntrySpillWork;
   OpPositions Positions;
-  std::vector<MedOp *> Saves;
+  // A save the direct proof accepts, with the body reads it forwards.
+  struct ProvenSave {
+    const FrameAccess *Access = nullptr;
+    MedVar Saved;
+    std::vector<MedOp *> Uses;
+  };
+  std::vector<ProvenSave> Saves;
   std::vector<MedOp *> Uses;
-  std::vector<CalleeSaveRead> CandidateReads;
   // Go code keeps no register for its caller but the stack and frame
   // pointers, as its calls keep none (callRegisterContractOf): an incoming
   // RBX, R12 or X19 is a parameter or scratch there, and a store of it, such
@@ -659,16 +794,39 @@ void markCalleeSavePrologueSaves(
     });
     if (!OnlyRestored)
       continue;
-    Saves.push_back(Save.Op);
-    for (MedOp *Use : Uses)
-      CandidateReads.push_back({Use, Saved});
+    Saves.push_back({&Save, Saved, Uses});
   }
-  if (Saves.empty() || mayObserveCalleeSave(Func, TRI, Loads, Stores))
+  if (Saves.empty())
     return;
-  for (MedOp *Save : Saves)
-    Save->PrologueSave = true;
-  BodyReads.insert(BodyReads.end(), CandidateReads.begin(),
-                   CandidateReads.end());
+  const auto Observers = calleeSaveObservers(Func, Architecture, Format, Entry,
+                                             TRI, Loads, Stores);
+  if (!Observers)
+    return;
+  const auto InSave = [&](const ProvenSave &Save, int64_t At) {
+    return Save.Access->Offset <= At &&
+           At < Save.Access->Offset + Save.Saved.Size;
+  };
+  const auto InAnySave = [&](int64_t At) {
+    return llvm::any_of(
+        Saves, [&](const ProvenSave &Save) { return InSave(Save, At); });
+  };
+  for (const ProvenSave &Save : Saves) {
+    // Without a run-time index the constants place the address exactly.
+    // With one, the object may start at the base or at the base plus the
+    // constants, as an index biased either way reaches: the address names a
+    // save only when both of those are save slots.
+    if (llvm::any_of(*Observers, [&](const FrameObserver &Observer) {
+          if (!Observer.Indexed)
+            return InSave(Save, Observer.Address);
+          return InAnySave(Observer.Base) && InAnySave(Observer.Address) &&
+                 (InSave(Save, Observer.Base) ||
+                  InSave(Save, Observer.Address));
+        }))
+      continue;
+    Save.Access->Op->PrologueSave = true;
+    for (MedOp *Use : Save.Uses)
+      BodyReads.push_back({Use, Save.Saved});
+  }
 }
 
 bool hasStackReturnAddress(Arch Architecture, StackEntryKind Entry) {

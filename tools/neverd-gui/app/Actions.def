@@ -695,6 +695,12 @@ NEVERD_ACTION(
     "Ctrl+Shift+R", "palette_repeat",
     QT_TRANSLATE_NOOP("Actions",
                       "Run the last command chosen in the palette again"))
+NEVERD_ACTION(OptionsMemorySafetyScan,
+              QT_TRANSLATE_NOOP("Actions", "Memory Safety Scan..."), "",
+              "analyze",
+              QT_TRANSLATE_NOOP(
+                  "Actions",
+                  "Check object lifetimes, initialization, bounds and formats"))
 NEVERD_ACTION(
     OptionsAnalyze, QT_TRANSLATE_NOOP("Actions", "&Whole-program analysis"), "",
     "analyze",

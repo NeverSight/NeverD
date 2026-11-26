@@ -4,6 +4,8 @@
 
 # Speicher-Audit und Hunt
 
+Mit `neverd scan <binary>` laufen beide Analysen. Mit `--analyzer=audit` oder `--analyzer=hunt` lässt sich eine einzelne Analyse auswählen. [Leitfaden zur gemeinsamen Prüfung (Englisch)](../memory-safety-scan.md).
+
 NeverD analysiert ein geladenes Binärfile auf zwei Familien von Speichersicherheitsfehlern und berichtet sie als strukturiertes JSON. Beide Spuren laufen auf dem formatneutralen, gelifteten IR, daher sind **PE/COFF, ELF und Mach-O gleichrangige Erstklassziele** — ein Fund hängt nie an einem format-spezifischen Scanner oder einer Importtabelle.
 
 | Spur | Befehl | Berichtet |

@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Memory Safety Scan...</source>
+        <translation>メモリ安全性スキャン...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>オブジェクトの寿命、初期化、境界、書式文字列を検査します</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>逆アセンブリ、疑似コード、出力を含むフローティング作業領域を切り替える</translation>
     </message>
@@ -11151,6 +11159,85 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>%1 を読み込み中…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>メモリ安全性スキャン</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>解析器(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Audit and Hunt</source>
+        <translation>Audit と Hunt</translation>
+    </message>
+    <message>
+        <source>Audit</source>
+        <translation>Audit</translation>
+    </message>
+    <message>
+        <source>Hunt</source>
+        <translation>Hunt</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>検出結果</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>判定</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>検査項目</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>アドレス</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>関数</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>解析器</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>検出の根拠</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>スキャン(&amp;S)</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>スキャンをキャンセル</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>スキャンをキャンセルしています…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>スキャン中…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>開始前にスキャンをキャンセルしました。</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>判定：%1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1：%2（検査 %3 件、スキップ %4 件、判定不能 %5 件）</translation>
     </message>
 </context>
 </TS>

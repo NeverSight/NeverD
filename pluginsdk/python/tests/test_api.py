@@ -207,6 +207,14 @@ class _SafetyHost:
         self.calls.append(name)
         if name == "neverd_last_error":
             return "native safety error"
+        if name == "neverd_session_scan_json":
+            self.options[name] = arguments[1]._obj
+            return json.dumps({
+                "schema": "neverd.memory-safety-scan",
+                "schema_version": 1,
+                "coverage_complete": False,
+                "verdict": "UNKNOWN",
+            })
         if name not in {"neverd_session_audit_json", "neverd_session_hunt_json"}:
             raise AssertionError(name)
         options = arguments[1]._obj
@@ -1041,6 +1049,25 @@ class SessionTests(unittest.TestCase):
             host.options["neverd_session_hunt_json"].max_summary_iterations,
             10,
         )
+
+    def test_scan_selection_and_incomplete_coverage(self) -> None:
+        from neverd_plugin import NeverDError, Session
+
+        host = _SafetyHost()
+        session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+        for name, selection in (("both", 0), ("audit", 1), ("hunt", 2)):
+            result = session.scan(analyzer=name, max_steps=31)
+            self.assertEqual(result["verdict"], "UNKNOWN")
+            self.assertFalse(result["coverage_complete"])
+            options = host.options["neverd_session_scan_json"]
+            self.assertEqual(options.analyzers, selection)
+            self.assertEqual(options.analysis.contents.max_steps, 31)
+        with self.assertRaises(ValueError):
+            session.scan(analyzer="none")
+        future_report = json.dumps({"schema": "neverd.memory-safety-scan", "schema_version": 2})
+        with mock.patch.object(host, "owned_string", return_value=future_report):
+            with self.assertRaisesRegex(NeverDError, "invalid memory-safety scan report"):
+                session.scan()
 
     def test_safety_tracks_surface_native_errors_and_validate_budgets(self) -> None:
         from neverd_plugin import NeverDError, Session

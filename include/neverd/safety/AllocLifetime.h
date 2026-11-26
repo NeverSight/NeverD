@@ -21,6 +21,8 @@
 #include "neverd/safety/SafetyTypes.h"
 #include "neverd/safety/SinkCatalog.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+
 #include <vector>
 
 namespace neverd::safety {
@@ -35,6 +37,12 @@ std::vector<Finding> auditHeap(const AnalysisInput &In, const SinkCatalog &Cat,
 std::vector<Finding> auditMemory(const AnalysisInput &In,
                                  const SinkCatalog &Cat,
                                  const SafetyBudgets &Budgets);
+
+/// Return the findings already corroborated if the caller requests a stop.
+std::vector<Finding> auditMemory(const AnalysisInput &In,
+                                 const SinkCatalog &Cat,
+                                 const SafetyBudgets &Budgets,
+                                 llvm::function_ref<bool()> Canceled);
 
 } // namespace neverd::safety
 

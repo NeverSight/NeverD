@@ -37,6 +37,7 @@ from .abi import (
     NeverDSynthesizeOptions,
     NeverDSynthesizeResult,
     NeverDSafetyOptions,
+    NeverDScanOptions,
     NeverDSymbolicExploreOptions,
     NeverDTranslateObjectRequestV1,
     NeverDTranslateObjectResultV1,
@@ -1359,6 +1360,49 @@ class Session:
             "max_summary_iterations", max_summary_iterations, 32
         )
         return options
+
+    def scan(
+        self,
+        *,
+        analyzer: str = "both",
+        max_paths: int = 0,
+        max_steps: int = 0,
+        max_loop: int = 0,
+        solver_conflicts: int = 0,
+        sinks: str | None = None,
+        sources: str | None = None,
+        max_call_depth: int = 0,
+        max_summary_iterations: int = 0,
+    ) -> Mapping[str, object]:
+        """Run a static memory-safety scan and return its per-analyzer coverage."""
+        selections = {"both": 0, "audit": 1, "hunt": 2}
+        if analyzer not in selections:
+            raise ValueError("analyzer must be both, audit, or hunt")
+        options = self._safety_options(
+            max_paths=max_paths,
+            max_steps=max_steps,
+            max_loop=max_loop,
+            solver_conflicts=solver_conflicts,
+            sinks=sinks,
+            sources=sources,
+            max_call_depth=max_call_depth,
+            max_summary_iterations=max_summary_iterations,
+        )
+        scan = NeverDScanOptions(
+            struct_size=ctypes.sizeof(NeverDScanOptions),
+            analysis=ctypes.pointer(options),
+            analyzers=selections[analyzer],
+        )
+        report = self._json(
+            "neverd_session_scan_json", "memory-safety scan", ctypes.byref(scan)
+        )
+        if (
+            not isinstance(report, Mapping)
+            or report.get("schema") != "neverd.memory-safety-scan"
+            or report.get("schema_version") != 1
+        ):
+            raise NeverDError("invalid memory-safety scan report")
+        return report
 
     def audit(
         self,

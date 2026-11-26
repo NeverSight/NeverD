@@ -22,6 +22,7 @@
 #include "neverd/sdk/NeverDCAPIDisasm.h"
 #include "neverd/sdk/NeverDCAPIPersist.h"
 #include "neverd/sdk/NeverDCAPIQuery.h"
+#include "neverd/sdk/NeverDCAPISafety.h"
 #include "neverd/sdk/NeverDCAPISigs.h"
 #include "neverd/support/FileStamp.h"
 #include "neverd/support/ProjectFiles.h"
@@ -191,6 +192,10 @@ using IRViewFunction = const char *(*)(neverd_session_t, neverd_va_t,
 using StringEncodingsFunction = const char *(*)();
 using DecodeTextFunction = const char *(*)(const unsigned char *, int,
                                            const char *);
+auto safetyScanFunction() {
+  return engineSymbol<decltype(&neverd_session_scan_json)>(
+      "neverd_session_scan_json");
+}
 using X87CapabilitiesFunction = const char *(*)(neverd_session_t);
 X87CapabilitiesFunction x87CapabilitiesFunction() {
   return engineSymbol<X87CapabilitiesFunction>("neverd_x87_capabilities_json");
@@ -881,6 +886,8 @@ std::string Engine::version() { return ownedString(neverd_version_number()); }
 bool Engine::reportsUnwindFrames() {
   return unwind_query::function() != nullptr;
 }
+bool Engine::supportsSafetyScan() { return safetyScanFunction() != nullptr; }
+
 bool Engine::reportsX87Capabilities() {
   return x87CapabilitiesFunction() != nullptr;
 }
@@ -4906,6 +4913,35 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       !(operation == "analysis_snapshot" && p.is_object() &&
         p.value("in_memory", false)))
     history_->finishWrites();
+  if (operation == "memory_safety_scan") {
+    requireLoaded();
+    const auto scan = safetyScanFunction();
+    if (!scan)
+      throw Error("unsupported",
+                  "This engine does not support memory-safety scans");
+    if (!p.is_object() ||
+        (!p.empty() && (p.size() != 1 || !p.contains("analyzer") ||
+                        !p.at("analyzer").is_string())))
+      throw Error("invalid_request",
+                  "memory_safety_scan accepts an optional analyzer");
+    const auto analyzer = p.value("analyzer", std::string("both"));
+    neverd_scan_options options{};
+    options.struct_size = sizeof(options);
+    if (analyzer == "audit")
+      options.analyzers = NEVERD_SCAN_AUDIT;
+    else if (analyzer == "hunt")
+      options.analyzers = NEVERD_SCAN_HUNT;
+    else if (analyzer != "both")
+      throw Error("invalid_request", "analyzer must be both, audit or hunt");
+    options.context = &cancelled_;
+    options.cancel = [](void *context) -> int {
+      const auto &probe = *static_cast<const std::function<bool()> *>(context);
+      return probe && probe();
+    };
+    // Preserve the versioned SDK report verbatim, including address spellings.
+    return transport::parseBackendJson(
+        backendText(scan(session_, &options), false));
+  }
   if (operation == "x87_capabilities") {
     if (!p.is_object() || !p.empty())
       throw Error("invalid_request", "x87_capabilities accepts no parameters");

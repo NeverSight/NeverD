@@ -171,5 +171,15 @@ if(TARGET neverd_shared)
     NEVERD_RUNTIME_FIXTURE_COMPILER="${NEVERD_HOST_RUNTIME_FIXTURE_COMPILER_EXECUTABLE}")
   if(TARGET neverd)
     add_dependencies(NeverDSafetyIntegrationTests neverd)
+    set(_scan_worker)
+    if(TARGET neverd-worker)
+      set(_scan_worker --worker "$<TARGET_FILE:neverd-worker>")
+      add_dependencies(NeverDSafetyIntegrationTests neverd-worker)
+    endif()
+    add_test(NAME NeverDMemorySafetyScan
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/neverd-worker/tests/memory_safety_scan_test.py"
+              "$<TARGET_FILE:neverd>" "${_safety_fixture_root}/safety_cases_elf_x64" ${_scan_worker})
+    set_tests_properties(NeverDMemorySafetyScan PROPERTIES
+      LABELS NeverDSafetyIntegrationTests TIMEOUT 300)
   endif()
 endif()

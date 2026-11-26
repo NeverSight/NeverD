@@ -125,6 +125,8 @@ L’offset del registro è un offset in byte nel file di registri NeverD, non un
 
 ### Audit e hunt di sicurezza della memoria
 
+`session.scan()` esegue entrambe le analisi e restituisce i risultati e la copertura in un unico rapporto. [Guida in inglese](../memory-safety-scan.md).
+
 `session.audit()` e `session.hunt()` restituiscono report JSON analizzati (lo stesso schema del CLI). Richiedono una sessione nativa sollevata:
 
 ```python

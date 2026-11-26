@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Memory Safety Scan...</source>
+        <translation>記憶體安全掃描...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>檢查物件生命週期、初始化、邊界和格式字串</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>切換包含反組譯、虛擬碼和輸出的浮動工作區</translation>
     </message>
@@ -11151,6 +11159,85 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>正在載入 %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>記憶體安全掃描</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>分析器(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Audit and Hunt</source>
+        <translation>Audit 和 Hunt</translation>
+    </message>
+    <message>
+        <source>Audit</source>
+        <translation>Audit</translation>
+    </message>
+    <message>
+        <source>Hunt</source>
+        <translation>Hunt</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>發現項目</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>判定</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>屬性</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>位址</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>函式</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>分析器</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>發現項目證據</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>掃描(&amp;S)</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>取消掃描</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>正在取消掃描…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>正在掃描…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>掃描已在開始前取消。</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>判定：%1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1：%2（已掃描 %3，已略過 %4，結論未定 %5）</translation>
     </message>
 </context>
 </TS>

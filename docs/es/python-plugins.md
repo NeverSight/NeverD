@@ -125,6 +125,8 @@ El desplazamiento del registro es un desplazamiento de bytes en el archivo de re
 
 ### Auditoría y caza de seguridad de memoria
 
+`session.scan()` ejecuta ambos análisis y devuelve los hallazgos y la cobertura en un informe. [Guía del análisis unificado (en inglés)](../memory-safety-scan.md).
+
 `session.audit()` y `session.hunt()` devuelven informes JSON analizados (el mismo esquema que el CLI). Requieren una sesión nativa levantada:
 
 ```python
