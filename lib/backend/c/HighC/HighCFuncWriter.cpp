@@ -3647,7 +3647,8 @@ bool HighCWriter::readsThroughForwards(const HighExpr &E,
   return Reads(E);
 }
 
-void HighCWriter::collectValueForward(const HighFunc &Func) {
+void HighCWriter::collectValueForward(
+    const HighFunc &Func, std::vector<ExprPtr> &CaptureConversions) {
   ValueForward.clear();
   auto containsName = [&](const HighExpr &E, const std::string &Name,
                           auto &&Self) -> bool {
@@ -4756,6 +4757,12 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
         Fwd = Inner;
     if (!Fwd || readsThroughForwards(*Fwd, C.Name))
       continue;
+    // Removing the assignment removes its implicit C conversion. Keep the
+    // integer type of the captured call result at its new use.
+    if (auto View = integerCallCapture(C.Stmt->Val, C.Stmt->Dst->Type)) {
+      Fwd = View.get();
+      CaptureConversions.push_back(std::move(View));
+    }
     ValueForward[C.Name] = Fwd;
     // A field value is not a frame-address alias, but that alone must not
     // force its definition to print after this proof has folded every use.
@@ -6370,7 +6377,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   invalidateJoinPhiFrameAliases(Func);
   // Display-only: one mention of `x` so ValueForward can compose GetLength.
   foldSignedJleConds(const_cast<std::vector<HighStmt> &>(Func.Body));
-  collectValueForward(Func);
+  std::vector<ExprPtr> CaptureConversions;
+  collectValueForward(Func, CaptureConversions);
   hideCleanupSlotCopyIntoCall(Func);
   aliasCtorReturnThis(Func);
   collectFieldLoadForward(Func);
