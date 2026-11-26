@@ -8411,11 +8411,16 @@ For a scaled product that reads only the low lane of an extension or
 concatenation, the evaluation plan can read that lane directly. A shared
 use that observes more bits keeps the wider value. A binary product whose observed prefix costs fewer limb
 operations can multiply at that precision. The evaluator takes the widest
-demand across all uses before shortening either operand. A fixed shift or rotation
+demand across all uses before shortening either operand. A signed literal with
+a short significand only multiplies its significant limbs. Constant folding,
+evaluation and polynomial normalization use the same word arithmetic to
+restore its sign and zero suffix. A fixed shift or rotation
 can supply a low word from its source when every observed bit precedes the
 first padding or wrapped bit.
 Repeated long factor calls share a parse result after their complete spelling
-and the applicable nesting depth have been checked.
+and the applicable nesting depth have been checked. Calls with the same short
+prefix keep separate complete spellings. A lookup stops at the longest spelling
+already parsed for that prefix.
 A scaled product can also contain several weighted fields per factor. If
 the outer scale leaves `p` bits and every weight is divisible by
 `2^ceil(p/2)`, products of two perturbations vanish. Recovery groups the
@@ -8437,6 +8442,14 @@ the width of the other factors. The product restores the discarded zero suffix
 once after multiplying their live bits.
 An even scalar shifts the live interval of each mask. Bits discarded above
 the observed width and holes below the shifted field cannot change a carry.
+For two nonuniform masks, the product reader intersects their possible set bits
+in the common observed window. An odd multiplier congruent to one there
+preserves holes. Other odd multipliers can carry from the first possible one
+into higher bits. If the second mask or the literal join erases all possible
+bits, only the scalar offset contributes. Offsets equal at the observed product
+precision share one modular power and cofactor. An affine factor whose offset
+and coefficient share a power of two can supply the external product scale.
+The quotient and any lower-weight factors retain their full modular value.
 When every live coefficient is the top bit, only the parity of the input
 fields contributes to the result.
 Equal projected fields accumulate their signed coefficients modulo
@@ -8457,8 +8470,9 @@ reads the arbitrary-width values from the same grid.
 Enumeration stores one 32-bit sample per point for widths through 32.
 Wider words retain all required limbs.
 For enumerated candidates, a bounded hash spans the measurement grid. A
-matching hash still requires equality of the complete measurement vectors
-before a candidate reaches independent validation.
+native-word column stores the sampled blocks together. Each operation reads
+the same point order. A matching hash still requires equality of the complete
+measurement vectors before a candidate reaches independent validation.
 When translating flagged LLVM arithmetic, the source width of a sign or zero
 extension bounds its result. Those bounds can justify a surrounding no-wrap
 sum or product while keeping every operand's definedness checks.
@@ -18899,8 +18913,10 @@ representatives in discovery order before offering the candidate. An
 unsuccessful search can discard its recipes without interning those nodes.
 For machine words, the cost bound or the remaining work can make the current
 tier the last one reachable. The search screens those candidates at one grid
-point and checks survivors against the full grid. If any survivor matches, it
-replays the tier in discovery order for the independent checker and verifier.
+point in operand rows and checks survivors against the full grid. Neutral and
+absorbing operands reuse the represented column, with each offer charged.
+If any survivor matches, it replays the tier in discovery order for the
+independent checker and verifier.
 An unsuccessful final tier charges every visited candidate without storing
 signatures that no later tier can read.
 

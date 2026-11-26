@@ -4733,6 +4733,13 @@ can carry into the result. Width 2,359,301 and case 3 generate 163,838 factors.
 The 313-factor native fixture exercises both source views against the original
 arithmetic, including a factor whose low weight retains mixed products.
 
+Use `--sparse-masks --width 3145741 --case 3` for a 245,757-factor
+product with disjoint striped masks, odd carries, absorbed OR and AND-NOT
+bits, and a surviving one-bit overlap. Use `--reference` for the reduced
+expression or `--counted` for the original factors with their multiplicities.
+The 389-factor x86 fixture executes both source views against the original
+32-bit arithmetic at Clang O0 and O2.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may

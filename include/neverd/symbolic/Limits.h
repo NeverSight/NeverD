@@ -38,6 +38,11 @@ inline constexpr unsigned kSymKnownBitsMaxDepth = 32;
 inline constexpr unsigned kSymKnownBitsMaxWidth = 128;
 inline constexpr unsigned kSymKnownBitsMaxCachedFacts = 65536;
 
+// lib/symbolic/SymWordProduct.h
+// Cover unpacking the sign and shift by at least halving the number of
+// multiplier limbs. A single-limb scale uses the native multiply directly.
+inline constexpr unsigned kSymExprMinProductLimbReduction = 2;
+
 // include/neverd/symbolic/SymMBA.h
 inline constexpr size_t kSymMBAMBARewriteCacheCapacity = 65536;
 

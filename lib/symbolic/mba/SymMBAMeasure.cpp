@@ -36,6 +36,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../SymWordProduct.h"
 #include "Limits.h"
 #include "SampleWords.h"
 #include "SymMBADetail.h"
@@ -488,12 +489,13 @@ agreeAfterFactoringProducts(const SymContext &Ctx, SymRef A, SymRef B,
           Rest -= Plan.evalWith(Lookup);
         llvm::APInt Left(Width, 1), Right(Width, 1);
         for (SymEvalPlan &Plan : LeftPlans)
-          Left *= Plan.evalWith(Lookup);
+          Left = multiplyWords(Left, Plan.evalWith(Lookup));
         for (SymEvalPlan &Plan : RightPlans)
-          Right *= Plan.evalWith(Lookup);
+          Right = multiplyWords(Right, Plan.evalWith(Lookup));
         llvm::APInt Difference = Left - Right;
         for (size_t I = 0; I < Common.size() && !Difference.isZero(); ++I)
-          Difference *= CommonPlan(I).evalWith(Lookup);
+          Difference =
+              multiplyWords(Difference, CommonPlan(I).evalWith(Lookup));
         return (Difference + Rest).isZero();
       });
 }
