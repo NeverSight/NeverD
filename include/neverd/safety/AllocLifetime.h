@@ -36,8 +36,13 @@ std::vector<Finding> auditHeap(const AnalysisInput &In, const SinkCatalog &Cat,
 /// initialization checks.
 std::vector<Finding> auditMemory(const AnalysisInput &In,
                                  const SinkCatalog &Cat,
+                                 const SafetyBudgets &Budgets);
+
+/// Return the findings already corroborated if the caller requests a stop.
+std::vector<Finding> auditMemory(const AnalysisInput &In,
+                                 const SinkCatalog &Cat,
                                  const SafetyBudgets &Budgets,
-                                 llvm::function_ref<bool()> Canceled = nullptr);
+                                 llvm::function_ref<bool()> Canceled);
 
 } // namespace neverd::safety
 

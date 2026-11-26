@@ -3273,6 +3273,12 @@ std::vector<Finding> neverd::safety::auditHeap(const AnalysisInput &In,
   return A.run();
 }
 
+std::vector<Finding> neverd::safety::auditMemory(const AnalysisInput &In,
+                                                 const SinkCatalog &Cat,
+                                                 const SafetyBudgets &Budgets) {
+  return auditMemory(In, Cat, Budgets, nullptr);
+}
+
 std::vector<Finding>
 neverd::safety::auditMemory(const AnalysisInput &In, const SinkCatalog &Cat,
                             const SafetyBudgets &Budgets,
