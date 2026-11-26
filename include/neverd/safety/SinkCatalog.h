@@ -150,6 +150,8 @@ public:
 
 private:
   std::vector<SinkEntry> SinkList;
+  // Stable replacement slots, including canonical names shadowed by an alias.
+  llvm::StringMap<unsigned> CanonicalSinkIndex;
   llvm::StringMap<unsigned> SinkIndex; ///< normalized name/alias -> SinkList.
   std::vector<SourceEntry> SourceList;
   llvm::StringMap<unsigned> SourceIndex; ///< normalized name -> SourceList.

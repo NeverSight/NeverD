@@ -450,6 +450,25 @@ TEST(SinkCatalog, CanonicalOverridePreservesBuiltInFormatAliases) {
   EXPECT_EQ(ArmEabi->Severity, 91u);
 }
 
+TEST(SinkCatalog, CanonicalReplacementAfterAliasRebinding) {
+  SinkCatalog C;
+  C.addSink({.Name = "first", .Aliases = {"early"}});
+  C.addSink({.Name = "second", .Aliases = {"first"}});
+  ASSERT_NE(C.matchSink("first"), nullptr);
+  ASSERT_EQ(C.matchSink("first"), C.matchSink("second"));
+
+  C.addSink({.Name = "module!_first@8", .Aliases = {"late"}});
+  EXPECT_EQ(C.sinkCount(), 2u);
+  const SinkEntry *First = C.matchSink("first");
+  ASSERT_NE(First, nullptr);
+  EXPECT_EQ(First->Name, "module!_first@8");
+  EXPECT_EQ(C.matchSink("early"), First);
+  EXPECT_EQ(C.matchSink("late"), First);
+  const SinkEntry *Second = C.matchSink("second");
+  ASSERT_NE(Second, nullptr);
+  EXPECT_EQ(Second->Name, "second");
+}
+
 TEST(SinkCatalog, RejectsInvalidConfiguredEffectsTransactionally) {
   struct InvalidEffectCase {
     const char *Suffix;
