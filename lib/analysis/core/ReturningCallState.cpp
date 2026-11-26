@@ -91,7 +91,11 @@ void applyReturningCallState(SymState &State, SymRef FrameRoot,
         return;
       const uint64_t Offset = Output.Offset + I;
       const SymRef Address = Ctx.mkAdd(FrameRoot, Ctx.mkConst(64, Offset));
-      if (!State.store(Address, Ctx.mkFreshVar(8, "returning_call_output"))) {
+      // A valid symbolic-region store returns false when it must forget other
+      // regions. Check the written byte itself, not that alias-preservation
+      // result, before accepting the effect.
+      State.store(Address, Ctx.mkFreshVar(8, "returning_call_output"));
+      if (!State.hasMaterializedRegionRange(FrameRoot, Offset, 1)) {
         fail(SpecializationStatus::InvalidInput,
              "returning-call frame output write was refused");
         return;
