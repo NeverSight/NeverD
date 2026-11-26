@@ -365,14 +365,13 @@ bool parseThreadedBindStreams(const uint8_t *BasePtr, size_t FileSize,
   for (auto &Record : Plan->Imports) {
     llvm::StringRef Module;
     llvm::StringRef DisplayModule = kExternModule;
-    bool Weak = Record.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT;
+    const bool Weak = Record.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT;
     if (Record.Ordinal > 0) {
       const auto &Reference = Img.MachODylibReferences[Record.Ordinal - 1];
       Module = Reference.Name;
       if (Module.empty())
         return fail();
       DisplayModule = Module;
-      Weak |= Reference.Weak;
     }
     const size_t Extra = Module.size() + DisplayModule.size();
     if (Extra > limits::loader::kMachOThreadedMaxCopiedBytes - CopiedBytes)

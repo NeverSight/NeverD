@@ -24775,8 +24775,9 @@ broad whole-project and native Apple CPTA qualification remain false.
 checks: GPR W/X, signed LDPSW and SIMD S/D/Q, offset/pre/post/non-temporal forms,
 215 independent LLVM MC samples and all 5,504 encoding/imm7 combinations through
 full and fast decoding. Native HighC/LLVMC O0/O2 and actual LLVM objects compare
-both complete values, the base and every byte of a 4096-byte buffer. The same
-suite checks malformed three-result bindings, the second store operand,
+both complete values, the base and every byte of a 4096-byte buffer. The
+address-memory harness allows 120 seconds to compile each generated translation
+unit and 30 seconds to execute it. The same suite checks malformed three-result bindings, the second store operand,
 source filtering, original-word ambiguity, aliases, x1-only admission, finite
 tracer refusal, nominal frame footprints, image spans, returned bases and
 retained effects after all values are discarded.

@@ -188,13 +188,11 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
                 Img.DynInfo.NeededLibs[static_cast<size_t>(Ordinal - 1)];
           // The legacy symbol-level display is not exact-slot evidence.
           std::string BindingModule;
-          bool WeakImport = SymbolWeakImport;
           if (Ordinal > 0 && static_cast<uint64_t>(Ordinal) <=
                                  Img.MachODylibReferences.size()) {
             const MachODylibReference &Reference =
                 Img.MachODylibReferences[static_cast<size_t>(Ordinal - 1)];
             BindingModule = Reference.Name;
-            WeakImport = WeakImport || Reference.Weak;
           }
 
           auto It = ImportIndex.find(SymName);
@@ -216,7 +214,7 @@ void parseBindStreams(const uint8_t *BasePtr, size_t FileSize,
             if (Img.isValidImportStorageSlot(BindAddr, SymName)) {
               detail::clearLocalPointerClassification(Img, BindAddr);
               Img.recordDyldBindSlot(BindAddr, SymName, Addend, BindingModule,
-                                     WeakImport, LibOrdinal);
+                                     SymbolWeakImport, LibOrdinal);
             }
           }
         };

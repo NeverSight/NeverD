@@ -506,12 +506,9 @@ admitMachOSourceLibraries(std::vector<uint8_t> &B,
       if (Ordinal > Parsed.MachODylibReferences.size())
         continue;
       const auto &R = Parsed.MachODylibReferences[Ordinal - 1];
-      if (R.Weak) {
-        const auto It = ObjectImports.find(
-            macho_arm64e_abi::importName(I.Symbol, ObjectImports));
-        if (It == ObjectImports.end() || !It->second)
-          return fail(kWeakLibrary);
-      }
+      if (R.Weak && !ObjectImports.contains(
+                        macho_arm64e_abi::importName(I.Symbol, ObjectImports)))
+        return fail(kWeakLibrary);
       continue;
     }
     Libraries.emplace(I.Library, Libraries.size() + 1);

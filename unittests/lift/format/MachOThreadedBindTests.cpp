@@ -492,8 +492,9 @@ TEST(MachOThreadedBind, OrdinalsKeepDuplicateNamesAndExactLibraryIdentity) {
   EXPECT_EQ(Second.Addend, kTableAddend);
   EXPECT_EQ(First.Module, kLibrary);
   EXPECT_EQ(Second.Module, kLibrary);
-  EXPECT_TRUE(First.WeakImport);
-  EXPECT_TRUE(Second.WeakImport);
+  EXPECT_FALSE(First.WeakImport);
+  EXPECT_FALSE(Second.WeakImport);
+  EXPECT_TRUE(F.Image.MachODylibReferences.back().Weak);
 }
 
 TEST(MachOThreadedBind, RootSegmentsUseLoadCommandOrder) {
@@ -652,5 +653,6 @@ TEST(MachOThreadedBind, EqualSymbolsKeepTheirDistinctLibraryBindings) {
   EXPECT_EQ(First.Module, kLibrary);
   EXPECT_EQ(Second.Module, kOtherLibrary);
   EXPECT_FALSE(First.WeakImport);
-  EXPECT_TRUE(Second.WeakImport);
+  EXPECT_FALSE(Second.WeakImport);
+  EXPECT_TRUE(F.Image.MachODylibReferences.back().Weak);
 }

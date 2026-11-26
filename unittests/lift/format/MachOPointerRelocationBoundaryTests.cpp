@@ -9211,7 +9211,11 @@ TEST(MachOClassicBindBoundary, RecordsNativeProviderAndWeakness) {
       const auto &Binding = Image.DyldBindSlots.at(DataVA);
       EXPECT_EQ(Binding.Name, "_numeric_target");
       EXPECT_EQ(Binding.Module, Test.Module);
-      EXPECT_EQ(Binding.WeakImport, Test.LibraryWeak || SymbolWeak);
+      EXPECT_EQ(Binding.WeakImport, SymbolWeak);
+      if (Test.Ordinal > 0 && static_cast<uint64_t>(Test.Ordinal) <=
+                                  Image.MachODylibReferences.size())
+        EXPECT_EQ(Image.MachODylibReferences[Test.Ordinal - 1].Weak,
+                  Test.LibraryWeak);
       EXPECT_EQ(Binding.Addend, -3);
       EXPECT_EQ(Image.ImportStorageSlots.at(DataVA).Addend, -3);
       EXPECT_TRUE(Image.ConflictingImportStorageSlots.empty());
@@ -9240,8 +9244,7 @@ TEST(MachOClassicBindBoundary, ProviderConflictsAreStickyAcrossStreams) {
       ASSERT_EQ(Image.DyldBindSlots.size(), 1U);
       EXPECT_EQ(Image.DyldBindSlots.at(DataVA + 8).Module,
                 ConflictingOrdinal == 2 ? "second" : "first");
-      EXPECT_EQ(Image.DyldBindSlots.at(DataVA + 8).WeakImport,
-                ConflictingOrdinal == 3);
+      EXPECT_FALSE(Image.DyldBindSlots.at(DataVA + 8).WeakImport);
       EXPECT_EQ(Image.collectImportStorageSlots().Slots.count(DataVA), 0U);
     }
 }
@@ -9297,9 +9300,7 @@ TEST(MachOChainedPointerBoundary, PreservesNativeProviderAndWeakness) {
             const auto &Binding = Image.DyldBindSlots.at(DataVA);
             EXPECT_EQ(Binding.Name, "_numeric_target");
             EXPECT_EQ(Binding.Module, Ordinal == 1 ? "native-module" : "");
-            EXPECT_EQ(Binding.WeakImport,
-                      SymbolWeak ||
-                          ((Ordinal == 1 || Ordinal == 2) && LibraryWeak));
+            EXPECT_EQ(Binding.WeakImport, SymbolWeak);
             EXPECT_EQ(Binding.Addend, 0);
             EXPECT_TRUE(Image.ConflictingImportStorageSlots.empty());
           }
@@ -9336,7 +9337,8 @@ TEST(MachOChainedPointerBoundary, DuplicateNamesKeepIndependentProviderSlots) {
   EXPECT_EQ(Image.DyldBindSlots.at(DataVA).Module, "first");
   EXPECT_EQ(Image.DyldBindSlots.at(DataVA + 8).Module, "second");
   EXPECT_FALSE(Image.DyldBindSlots.at(DataVA).WeakImport);
-  EXPECT_TRUE(Image.DyldBindSlots.at(DataVA + 8).WeakImport);
+  EXPECT_FALSE(Image.DyldBindSlots.at(DataVA + 8).WeakImport);
+  EXPECT_TRUE(Image.MachODylibReferences.back().Weak);
 }
 
 TEST(MachOChainedPointerBoundary, ProviderConflictsAreStickyAcrossParsers) {

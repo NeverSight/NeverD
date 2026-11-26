@@ -22,6 +22,7 @@ MACHO_OBJECT_TEXT(kAddressReach,
 MACHO_OBJECT_TEXT(kAddressPageReach,
                   "source address exceeds the signed ADRP page displacement")
 MACHO_OBJECT_TEXT(kNoPlacement, "original Mach-O has no safe placement")
+MACHO_OBJECT_TEXT(kDuplicateNativeSymbol, "duplicate native symbol")
 MACHO_OBJECT_TEXT(kUnsupportedNativeSymbol,
                   "unsupported native weak definition, common or undefined symbol")
 MACHO_OBJECT_TEXT(kClassicReturnCFI,

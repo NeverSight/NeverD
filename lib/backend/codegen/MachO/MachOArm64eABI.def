@@ -15,6 +15,7 @@
 
 MACHO_ARM64E_ABI_TEXT(kTriple, "arm64e-apple-macosx")
 MACHO_ARM64E_ABI_TEXT(kSymbolPrefix, "_")
+MACHO_ARM64E_ABI_TEXT(kVerbatimPrefix, "\1")
 MACHO_ARM64E_ABI_TEXT(kSourceAddressPool, "__nd_addr")
 MACHO_ARM64E_ABI_TEXT(kLibSystem, "/usr/lib/libSystem.B.dylib")
 MACHO_ARM64E_ABI_TEXT(kStackProbe, "__chkstk_darwin")
