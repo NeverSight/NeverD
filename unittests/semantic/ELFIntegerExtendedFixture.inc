@@ -33,6 +33,19 @@ constexpr struct {
     {0x0603ffff, 0x9064ffff, 4, true, false},  // pstw
     {0x0403ffff, 0xf464ffff, 8, true, false},  // pstd
 };
+// r3 is the transfer register, r4 the base and r5 the index.
+constexpr struct {
+  uint32_t Word;
+  unsigned Bytes;
+  bool Store;
+} ReversedTransfers[] = {
+    {0x7c642e2c, 2, false}, // lhbrx
+    {0x7c642c2c, 4, false}, // lwbrx
+    {0x7c642c28, 8, false}, // ldbrx
+    {0x7c642f2c, 2, true},  // sthbrx
+    {0x7c642d2c, 4, true},  // stwbrx
+    {0x7c642d28, 8, true},  // stdbrx
+};
 } // namespace ppc_fixture
 
 namespace rv_fixture {
@@ -60,4 +73,19 @@ constexpr uint32_t BSETI = 0x28051513;
 constexpr uint32_t ReservedRV32[] = {AddUW,      SH1ADDUW,   0x0bf5151b,
                                      0x2a051513, 0x4a051513, 0x4a055513,
                                      0x6a051513};
+constexpr uint32_t RolIntoRs2 = 0x60b515b3;
+constexpr uint32_t RorFromZero = 0x60b05533;
+constexpr uint32_t RolToZero = 0x60b51033;
+constexpr uint32_t OrcB = 0x28755513;
+constexpr uint32_t Ctz = 0x60151513;
+constexpr uint32_t RorW = 0x60b5553b;
+constexpr uint32_t CtzW = 0x6015151b;
+constexpr uint32_t ClzW = 0x6005151b;
+constexpr uint32_t Rev8_32 = 0x69855513;
+constexpr uint32_t Rev8_64 = 0x6b855513;
+constexpr uint32_t ZextH32 = 0x08054533;
+constexpr uint32_t ZextH64 = 0x0805453b;
+constexpr uint32_t Rori63 = 0x63f55513;
+constexpr uint32_t ReservedUnary = 0x60351513;
+constexpr uint32_t ReservedRoriW = 0x63f5551b; // shamt[5] set
 } // namespace rv_fixture

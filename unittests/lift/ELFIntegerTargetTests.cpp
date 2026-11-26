@@ -725,12 +725,17 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
     bool Compressed;
     bool Zba = false;
     bool Zbs = false;
+    bool Zbb = false;
   };
   const AttributeCase Cases[] = {
       {"_zba1p0", "+i,+zba", false, false, false, false, false, true},
       {"_zbs1p0", "+i,+zbs", false, false, false, false, false, false, true},
       {"_zba1p0_zbs1p0", "+i,+zba,+zbs", false, false, false, false, false,
        true, true},
+      {"_zbb1p0", "+i,+zbb", false, false, false, false, false, false, false,
+       true},
+      {"_zba1p0_zbb1p0_zbs1p0", "+i,+zba,+zbb,+zbs", false, false, false, false,
+       false, true, true, true},
       {"_zmmul1p0", "+i,+zmmul", true, false, false, false, false},
       {"_zaamo1p0", "+i,+zaamo", false, false, true, false, false},
       {"_zalrsc1p0", "+i,+zalrsc", false, false, false, true, false},
@@ -761,6 +766,7 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
           EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
       };
       Check(0x20b52533, C.Zba);         // sh1add a0,a0,a1
+      Check(0x60b51533, C.Zbb);         // rol a0,a0,a1
       Check(0x28b51533, C.Zbs);         // bset a0,a0,a1
       Check(0x02b50533, C.Multiply);    // mul a0,a0,a1
       Check(0x02b54533, C.Divide);      // div a0,a0,a1
@@ -783,7 +789,7 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
       EXPECT_EQ(Body->getFnAttribute("target-features").getValueAsString(),
                 C.Features);
     }
-    for (const char *Version : {"_zmmul1p1", "_zba1p1", "_zbs2p0"}) {
+    for (const char *Version : {"_zmmul1p1", "_zba1p1", "_zbb1p1", "_zbs2p0"}) {
       LinkedImage Unsupported(A);
       Unsupported.riscvAttributes(Base + Version);
       auto Bad = ELFLoader().loadBuffer(Unsupported.buffer());
