@@ -3798,6 +3798,7 @@ void HighCWriter::collectValueForward(
     }
   };
   Walk(Func.Body, NextRegion++, false, false);
+  const bool LocalOnly = Sites.size() > limits::kMaxValueForwardSites;
 
   auto regionDominatedBy = [&](uint64_t Child, uint64_t Ancestor) {
     unsigned Depth = 0;
@@ -3875,7 +3876,7 @@ void HighCWriter::collectValueForward(
     const std::string Name = varName(Def.Dst->Var);
     for (size_t I = Info.Index + 1; I < Seq.size(); ++I) {
       const HighStmt &Next = *Seq[I];
-      if (isLabelAddress(Next.Addr))
+      if (isLabelAddress(Next.Addr) || (LocalOnly && I != Info.Index + 1))
         return false;
       if (Analysis.DeadStmts.count(&Next) || stmtHiddenFromC(Next) ||
           Next.Kind == StmtKind::Block)
@@ -3883,6 +3884,14 @@ void HighCWriter::collectValueForward(
       if ((Next.Kind != StmtKind::If && Next.Kind != StmtKind::IfElse) ||
           !Next.Cond)
         return false;
+      if (LocalOnly) {
+        const bool NeedsTest = llvm::any_of(Next.Body, [&](const HighStmt &S) {
+          return S.Kind == StmtKind::Return && !Analysis.DeadStmts.count(&S) &&
+                 !stmtHiddenFromC(S);
+        });
+        if (!NeedsTest || Func.CxxContinuationTargets.count(Next.Addr))
+          return false;
+      }
       unsigned Reads = 0;
       std::function<bool(const HighExpr &)> Plain = [&](const HighExpr &E) {
         if (E.Kind == ExprKind::Const)
@@ -3964,13 +3973,27 @@ void HighCWriter::collectValueForward(
     }
     if (Stmt->IsPhiCopy || Stmt->KeepsName)
       continue;
+    if (LocalOnly) {
+      // Large functions keep the bounded case of a direct call followed by
+      // its test. Use the existing same-region and effect checks below.
+      const auto &Value = *Stmt->Val;
+      const auto &Type = Stmt->Dst->Type;
+      if (Value.Kind != ExprKind::Call || Value.IsIndirectCall || !Type ||
+          Type->Kind != NdTypeKind::Int || Type->IsEnum ||
+          !equalSourceTypes(Type, Value.Type))
+        continue;
+      if (const auto Return = knownCallReturnType(Value);
+          Return && !equalSourceTypes(Type, Return))
+        continue;
+    }
     const bool SavedEH = InEHClauseBody;
     if (Info.Handler)
       InEHClauseBody = true;
-    const bool Fwdable = isForwardableValueExpr(*Stmt->Val) ||
-                         isTypedIndexLoad(*Stmt->Val) ||
-                         callResultReturnedNext(*Stmt, Info) ||
-                         callResultTestedNext(*Stmt, Info);
+    const bool Fwdable =
+        (!LocalOnly &&
+         (isForwardableValueExpr(*Stmt->Val) || isTypedIndexLoad(*Stmt->Val) ||
+          callResultReturnedNext(*Stmt, Info))) ||
+        callResultTestedNext(*Stmt, Info);
     const HighExpr *Src = peelIntegerViewOps(Stmt->Val.get());
     const bool LosesFieldNarrowing =
         Src && !fieldProjectionDoesNotNarrow(Stmt->Val.get(), Src) &&
@@ -4013,9 +4036,7 @@ void HighCWriter::collectValueForward(
     CandidateStmts.insert(Stmt);
   }
 
-  // Each candidate below rescans every site.  Forwarding only folds
-  // single-use temporaries into their use, so a body this large keeps them.
-  if (Sites.size() > limits::kMaxValueForwardSites)
+  if (Candidates.empty())
     return;
   // The candidate defining each name, whose value a fold may bring along.
   std::map<std::string, const HighStmt *> CandidateDefs;
@@ -4034,6 +4055,7 @@ void HighCWriter::collectValueForward(
   std::unordered_map<const HighStmt *, SiteNames> NamesAt;
   std::unordered_map<std::string, std::vector<const HighStmt *>> DefsOf;
   std::unordered_map<std::string, std::vector<const HighStmt *>> SitesNaming;
+  std::set<std::string> IntrinsicOutputs;
   std::function<void(const HighExpr &,
                      std::unordered_map<std::string, unsigned> &,
                      std::vector<std::string> &, bool)>
@@ -4049,6 +4071,9 @@ void HighCWriter::collectValueForward(
             ConditionalReads.push_back(std::move(Name));
         }
         if (E.Kind == ExprKind::Call) {
+          if (LocalOnly)
+            for (const MedVar &Output : E.IntrinsicOutputs)
+              IntrinsicOutputs.insert(varName(Output));
           const size_t Limit = debugCallArgLimit(E);
           for (size_t I = 0; I < E.Operands.size() && I < Limit; ++I)
             if (E.Operands[I])
@@ -4063,9 +4088,7 @@ void HighCWriter::collectValueForward(
                        Conditional || highOperandMayBeSkipped(E, I));
       };
   for (const HighStmt *Stmt : SiteOrder) {
-    const Site &Info = Sites.at(Stmt);
-    (void)Info;
-    SiteNames &Names = NamesAt[Stmt];
+    SiteNames Names;
     const bool Assign = Stmt->Kind == StmtKind::Assign && Stmt->Dst;
     if (Assign)
       Names.DestName = varName(Stmt->Dst->Var);
@@ -4084,6 +4107,9 @@ void HighCWriter::collectValueForward(
       DefsOf[Names.DestName].push_back(Stmt);
       Named.insert(Names.DestName);
     }
+    if (Named.empty())
+      continue;
+    NamesAt.emplace(Stmt, std::move(Names));
     for (const std::string &Name : Named)
       SitesNaming[Name].push_back(Stmt);
   }
@@ -4119,6 +4145,15 @@ void HighCWriter::collectValueForward(
   std::set<std::string> Decided;
   for (const Candidate &C : Candidates) {
     Decided.insert(C.Name);
+    if (LocalOnly) {
+      const auto &Naming = sitesIn(SitesNaming, C.Name);
+      if (Naming.size() != 2 || Naming.front() != C.Stmt ||
+          sitesIn(DefsOf, C.Name).size() != 1 || IntrinsicOutputs.count(C.Name))
+        continue;
+      const Site &Use = Sites.at(Naming.back());
+      if (Use.Region != C.Region || Use.Index != C.Index + 1)
+        continue;
+    }
     unsigned Uses = 0;
     bool Redefined = false;
     bool OtherRegion = false;

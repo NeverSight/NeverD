@@ -12538,6 +12538,11 @@ and each case checks that the call runs exactly once.
 
 `HighNarrowLocals.*` in `NeverDHighControlFlowTests` checks the late pass that declares a register or temporary local only as wide as its reads take: every read takes at most its low N bytes and every definition extends a value of at most N bytes or is a constant that keeps its meaning in N bytes. A constant definition keeps only its low bytes; a wide read, an incoming register, a join, a call result or a definition that computes all register bytes keeps the declaration. The emitted C runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic.
 
+The large-function `HighValueForward` fixtures exercise direct integer calls
+whose next statement is their only use. The emitted C runs at O0 and O2 with
+an independent call counter. Loop snapshots and captures before a backward
+branch target keep their assignments.
+
 `HighValueForward.*` in `NeverDHighControlFlowTests` checks when the HighC writer may fold a single-use value into its use. A loop condition keeps a value whose variables the loop assigns, since one name can denote several SSA values; a reloaded frame slot keeps its value across a store to that slot and folds past a store to another slot. A copy keeps its value when its source is reassigned before the use. Each case runs at `-O0` and `-O2` with undefined-behavior traps.
 
 `HighControlFlowSemantics.AdjacentLoadRequiresUnconditionalUse` checks that
