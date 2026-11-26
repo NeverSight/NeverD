@@ -74,6 +74,19 @@ struct State : IntegerLiftState {
     xerBit(XEROV, V);
     xerBit(XERSO, op(NdOp::BOOL_OR, bit(special(XER), XERSO), V, 1));
   }
+  void fixedPointResult(unsigned T, Intrinsic Id, NdVar X, NdVar Y,
+                        bool Record) {
+    emitIntrinsic(Id, reg(T), {X, Y});
+    if (!Record)
+      return;
+    // The recorded comparison belongs to this execution. Its three bits and
+    // the upper GPR word may all be unspecified in 64-bit mode.
+    const NdVar CR = makeTemp(Width);
+    emit(NdOp::COPY, CR, {makeTemp(Width)});
+    for (unsigned I = 0; I != CRSO; ++I)
+      emit(NdOp::COPY, cr(I), {bit(CR, crShift(I))});
+    emit(NdOp::COPY, cr(CRSO), {bit(special(XER), XERSO)});
+  }
 };
 
 IntegerControl branch(Arch A, uint32_t W, va_t PC) {
@@ -291,8 +304,8 @@ bool integer(State &S, Arch A, uint32_t W) {
   const unsigned Op = W >> 26, T = W >> 21 & 31, RA = W >> 16 & 31,
                  RB = W >> 11 & 31;
   const unsigned XO = W >> 1 & 1023;
-  const unsigned Arithmetic = XO & 511;
-  const bool OE = XO & 512;
+  const unsigned Arithmetic = XO & ~opcode::OverflowEnable;
+  const bool OE = XO & opcode::OverflowEnable;
   const bool Wide = S.Width == 8, Rc = W & 1;
   const uint64_t SI = llvm::SignExtend64<16>(W & 0xffff);
   NdVar X = S.reg(RA), Y = S.reg(RB), Src = S.reg(T);
@@ -539,16 +552,7 @@ bool integer(State &S, Arch A, uint32_t W) {
       }
       S.overflow(Overflow);
     }
-    S.emitIntrinsic(D->Id, S.reg(T), {X, Y});
-    if (Rc) {
-      // Bind the comparison from the very same divide. A 64-bit word result
-      // cannot reconstruct CR0 from its defined low half.
-      const NdVar CR = S.makeTemp(S.Width);
-      S.emit(NdOp::COPY, CR, {S.makeTemp(S.Width)});
-      for (unsigned I = 0; I != CRSO; ++I)
-        S.emit(NdOp::COPY, S.cr(I), {S.bit(CR, crShift(I))});
-      S.emit(NdOp::COPY, S.cr(CRSO), {S.bit(S.special(XER), XERSO)});
-    }
+    S.fixedPointResult(T, D->Id, X, Y, Rc);
     return true;
   }
   if (const auto Form = carryForm(Arithmetic)) {
@@ -676,10 +680,17 @@ bool integer(State &S, Arch A, uint32_t W) {
   case opcode::MULHWU:
   case opcode::MULHD:
   case opcode::MULHW: {
-    // Word variants leave the high half of a 64-bit destination undefined.
-    if ((XO == opcode::MULHDU || XO == opcode::MULHD) != Wide)
+    const bool Double = XO == opcode::MULHDU || XO == opcode::MULHD;
+    if (Double && !Wide)
       return false;
     const bool Signed = XO == opcode::MULHD || XO == opcode::MULHW;
+    if (!Double && Wide) {
+      const Intrinsic Id =
+          Signed ? (Rc ? Intrinsic::PPCMulhwRecord : Intrinsic::PPCMulhw)
+                 : (Rc ? Intrinsic::PPCMulhwuRecord : Intrinsic::PPCMulhwu);
+      S.fixedPointResult(T, Id, X, Y, Rc);
+      return true;
+    }
     S.result(T, S.multiplyHigh(X, Y, Signed, Signed), Rc);
     return true;
   }
@@ -689,15 +700,29 @@ bool integer(State &S, Arch A, uint32_t W) {
     S.result(T, S.op(NdOp::INT_SUB, S.imm(0), X), Rc);
     return true;
   case opcode::MULLW:
-  case opcode::MULLD: {
-    if (XO == opcode::MULLD && !Wide)
+  case opcode::MULLW | opcode::OverflowEnable:
+  case opcode::MULLD:
+  case opcode::MULLD | opcode::OverflowEnable: {
+    const unsigned Bytes =
+        Arithmetic == opcode::MULLW ? sizeof(int32_t) : sizeof(int64_t);
+    if (Bytes > S.Width)
       return false;
-    // MULLW writes the full signed product of the two low words on PPC64.
-    if (XO == opcode::MULLW && Wide) {
-      X = S.resize(S.resize(X, sizeof(int32_t)), S.Width, /*Signed=*/true);
-      Y = S.resize(S.resize(Y, sizeof(int32_t)), S.Width, /*Signed=*/true);
+    const unsigned ProductBytes = OE ? 2 * Bytes : S.Width;
+    X = S.resize(S.resize(X, Bytes), ProductBytes, /*Signed=*/true);
+    Y = S.resize(S.resize(Y, Bytes), ProductBytes, /*Signed=*/true);
+    const NdVar Product = S.op(NdOp::INT_MULT, X, Y);
+    const NdVar Result = S.resize(Product, S.Width);
+    if (OE) {
+      // OV tests the operand width even when PPC64 returns the full word
+      // product.
+      const NdVar Low = S.resize(Result, Bytes);
+      const NdVar High = S.makeTemp(Bytes);
+      S.emit(NdOp::SUBBYTES, High, {Product, NdVar::scalar(Bytes, 4)});
+      const NdVar Sign =
+          S.op(NdOp::INT_ASHR, Low, NdVar::scalar(Bytes * 8 - 1, Bytes));
+      S.overflow(S.op(NdOp::INT_NOTEQUAL, High, Sign, 1));
     }
-    S.result(T, S.op(NdOp::INT_MULT, X, Y), Rc);
+    S.result(T, Result, Rc);
     return true;
   }
   default:

@@ -15,7 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/IntegerMemorySource.h"
-#include "neverd/backend/PowerPC/PowerPCDivisionSource.h"
+#include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
 #include "neverd/backend/llvm/LLVMSyscallAsm.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -127,8 +127,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
         " n_in=" + std::to_string(Op.NumInputs) +
         " target=" + std::to_string(static_cast<unsigned>(TargetArch)));
   };
-  if (const auto D = ppc::division(IC)) {
-    if (!powerPCDivisionMedShapeIsValid(Op, TargetArch, *D))
+  if (const auto D = ppc::fixedPoint(IC)) {
+    if (!powerPCFixedPointMedShapeIsValid(Op, TargetArch, *D))
       return refuseUnhandled();
     auto *Word = Builder.getIntNTy(Op.Output.Size * 8);
     llvm::Type *Result = D->Record
@@ -136,15 +136,15 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
                                    llvm::StructType::get(*Ctx, {Word, Word}))
                              : Word;
     auto *Ty = llvm::FunctionType::get(Result, {Word, Word}, false);
-    auto *Asm = llvm::InlineAsm::get(Ty, ppc::divisionAssembly(*D, '$'),
-                                     ppc::divisionConstraints(*D), true);
+    auto *Asm = llvm::InlineAsm::get(Ty, ppc::fixedPointAssembly(*D, '$'),
+                                     ppc::fixedPointConstraints(*D), true);
     auto Operand = [&](unsigned I) -> llvm::Value * {
       auto *V = getVar(Op.Inputs[I], Builder);
       return V->getType()->isPointerTy() ? Builder.CreatePtrToInt(V, Word)
                                          : Builder.CreateZExtOrTrunc(V, Word);
     };
     auto *Call = Builder.CreateCall(Asm, {Operand(1), Operand(2)});
-    Call->setMetadata(ppc::DivisionMarker,
+    Call->setMetadata(ppc::fixedPointMarker(*D),
                       llvm::MDNode::get(*Ctx, llvm::ConstantAsMetadata::get(
                                                   Builder.getInt16(IntrCode))));
     if (D->Record) {

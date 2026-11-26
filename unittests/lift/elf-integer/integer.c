@@ -45,6 +45,12 @@ word recorded_word_product(word a, word b) {
   return product ^ ((unsigned)cr >> 29);
 }
 
+#if defined(__powerpc64__)
+word word_constant_quotients(word a, word b) {
+  return (word)((int)a / 7) + (unsigned)b / 10;
+}
+#endif
+
 word independent_divides(word a, word b) {
   word first, second;
   __asm__ volatile("divw %0, %1, %2" : "=r"(first) : "r"(a), "r"(b));

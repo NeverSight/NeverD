@@ -7,9 +7,9 @@
 // The counts are aligned in a column, which clang-format would undo.
 // clang-format off
 
-// PowerPC record forms produce a quotient and the same instruction's CR0.
-#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, ...) MULTI_OUT(Intrinsic::RecordId, 1);
-#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
+// PowerPC record forms produce a GPR result and the same instruction's CR0.
+#define NEVERD_PPC_FIXED_POINT(Kind, Id, Value, RecordId, ...) MULTI_OUT(Intrinsic::RecordId, 1);
+#include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.def"
 
 // x86/x64
 MULTI_OUT(Intrinsic::Cpuid,   4);  // eax, ebx, ecx, edx

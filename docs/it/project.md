@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: b9cda6cb01918cadfe48b4bc6544a4dc7baeb2e8ecd51cece677de52b5708065 -->
+<!-- i18n-source: f00e3001b8210e9c53c405a926f38372af3c51b0e9c8b6f4733c747a6734d227 -->
 
 <div align="center">
 
@@ -69,7 +69,7 @@ I target ELF sperimentali per le istruzioni intere supportano il lifting rigoros
 | Target | Profili ELF verificati |
 |---|---|
 | RISC-V | RV32I/ILP32 e RV64I/LP64 little-endian. Le informazioni ELF determinano le estensioni M, A e C per gli interi oppure le singole estensioni Zmmul, Zaamo, Zalrsc e Zca. |
-| PowerPC | PPC32 System V e PPC64 ELFv1/ELFv2 in entrambi gli ordini dei byte. PPC32 supporta chiamate tra moduli tramite la PLT sicura e la BSS-PLT classica. Entrambe le ABI PPC64 supportano chiamate tra moduli tramite la PLT e cambi di TOC. ELFv1 usa descrittori di funzione ed ELFv2 supporta punti di ingresso globali e locali. Le operazioni scalari verificate comprendono la divisione con e senza segno, il risultato registrato in CR0 e gli effetti sull’overflow in XER. |
+| PowerPC | PPC32 System V e PPC64 ELFv1/ELFv2 in entrambi gli ordini dei byte. PPC32 supporta chiamate tra moduli tramite la PLT sicura e la BSS-PLT classica. Entrambe le ABI PPC64 supportano chiamate tra moduli tramite la PLT e cambi di TOC. ELFv1 usa descrittori di funzione ed ELFv2 supporta punti di ingresso globali e locali. Le operazioni scalari verificate comprendono la divisione con e senza segno, la moltiplicazione che restituisce la parola alta del prodotto e la moltiplicazione con segnalazione di overflow, inclusi gli effetti su CR0 e XER. |
 
 La riscrittura del codice nativo resta da implementare per questi profili. [Copertura di RISC-V e PowerPC (in inglese)](../riscv-powerpc.md)
 

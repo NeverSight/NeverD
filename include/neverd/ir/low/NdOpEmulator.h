@@ -40,7 +40,7 @@
 
 namespace neverd {
 namespace ppc {
-struct Division;
+struct FixedPoint;
 }
 
 /// Effective scalar CPA checks at the instruction's exception level. Arm
@@ -313,8 +313,8 @@ private:
   // Single-hart RISC-V/PowerPC reservation. Entry has no proven monitor state.
   bool IntegerReservationKnown = false;
   std::optional<std::pair<uint64_t, uint16_t>> IntegerReservation;
-  bool executePowerPCDivision(const LowOp &Op, const ppc::Division &D,
-                              llvm::ArrayRef<LowOp> Following);
+  bool executePowerPCFixedPoint(const LowOp &Op, const ppc::FixedPoint &D,
+                                llvm::ArrayRef<LowOp> Following);
   bool executeIntegerMemory(const LowOp &Op, Intrinsic Id);
   void forgetReservations();
   std::optional<uint32_t> MIPSReservationGranule;
