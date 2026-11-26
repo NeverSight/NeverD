@@ -125,6 +125,8 @@ Le décalage de registre est un décalage en octets dans le fichier de registres
 
 ### Audit et chasse de sûreté mémoire
 
+`session.scan()` exécute les deux analyses et renvoie leurs résultats et leur couverture dans un rapport commun. [Guide en anglais](../memory-safety-scan.md).
+
 `session.audit()` et `session.hunt()` renvoient des rapports JSON analysés (même schéma que le CLI). Ils exigent une session native levée :
 
 ```python

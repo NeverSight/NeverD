@@ -125,6 +125,8 @@ for flip in report.flips:
 
 ### 内存安全审计与猎取
 
+`session.scan()` 运行两项分析，并在一份报告中返回发现和覆盖情况。[统一扫描指南（英文）](../memory-safety-scan.md)。
+
 `session.audit()` 与 `session.hunt()` 返回解析后的 JSON 报告（与 CLI 同一模式）。它们需要已提升的原生会话：
 
 ```python

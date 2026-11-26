@@ -76,6 +76,39 @@ def verify(cli, worker, path, expected):
             assert client.call("memory_safety_scan", {"analyzer": "typo"})["error"]["code"] == "invalid_request"
 
 
+def verify_cli_options(cli, clean, output):
+    run = subprocess.run([cli, "scan", str(clean), "--json", "--analyzer=both", "-o", str(output)],
+                         capture_output=True, text=True, timeout=90)
+    assert run.returncode == 0 and not run.stdout, run.stderr
+    assert output.read_text() == cli_report(cli, clean, "scan")[1]
+    for command, selection in (("scan", "typo"), ("audit", "both"), ("hunt", "both")):
+        rejected = subprocess.run([cli, command, str(clean), "--analyzer=" + selection],
+                                  capture_output=True, text=True, timeout=90)
+        assert rejected.returncode == 1 and "analyzer" in rejected.stderr, rejected
+
+
+def verify_shared_catalog_scope(cli, mixed, catalog):
+    # The fixture's puts calls take one argument. Both engines independently
+    # report the unmet seven-argument catalog requirement at each call.
+    catalog.write_text(json.dumps({"sinks": [{
+        "name": "puts", "kind": "format", "fmt": 0,
+        "effect": {"min_arity": 7, "max_arity": 7, "formats": ["elf"], "abis": ["sysv"]},
+    }]}))
+    flag = "--sinks=" + str(catalog)
+    reports = {name: cli_report(cli, mixed, name, flag)[0]
+               for name in ("scan", "audit", "hunt")}
+    groups = [group for group in reports["scan"]["findings"] if group["scope"]["sink"] == "puts"]
+    assert groups
+    for group in groups:
+        assert group["property"] == "format_string" and group["verdict"] == "UNKNOWN"
+        assert group["scope"]["kind"] == "catalog_call_effects" and group["scope"]["arg_index"] == 0
+        assert [row["analyzer"] for row in group["observations"]] == ["audit", "hunt"]
+    for name in ("audit", "hunt"):
+        merged = [ob["finding"] for group in groups for ob in group["observations"]
+                  if ob["analyzer"] == name]
+        assert findings(merged) == findings(row for row in reports[name]["findings"] if row["sink"] == "puts")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cli")
@@ -92,6 +125,8 @@ def main():
         incomplete.write_bytes(pe(bytes.fromhex("ff e0")))  # unresolved indirect jump
         for path, expected in ((clean, "SAFE"), (incomplete, "UNKNOWN"), (mixed, "UNSAFE")):
             verify(args.cli, args.worker, path, expected)
+        verify_cli_options(args.cli, clean, root / "report.json")
+        verify_shared_catalog_scope(args.cli, mixed, root / "catalog.json")
 
 
 if __name__ == "__main__":

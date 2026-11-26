@@ -31,7 +31,7 @@ The per-analyzer `scanned` and `skipped` counters retain their legacy units. Aud
 
 ## Limits and evidence
 
-One scan uses one loaded image, one lift, one validated function inventory, and one set of interprocedural facts and resolved catalog sites. Each analyzer applies its usual path, step, loop, call-depth, fixed-point and solver budgets. The scan accepts the legacy symbol, catalog and budget options. Ctrl-C in the CLI or **Cancel scan** in the workbench requests a cooperative stop. Loading, the current lifting pass, shared preparation or a bounded analyzer operation can finish before the next checkpoint. Evidence from completed work stays in the report.
+One scan uses one loaded image, one lift, one validated function inventory, and one set of interprocedural facts and resolved catalog sites. Each analyzer applies its usual path, step, loop, call-depth, fixed-point and solver budgets. The scan accepts the legacy symbol, catalog and budget options. Ctrl-C in the CLI or **Cancel scan** in the workbench requests a cooperative stop. Loading, the current lifting pass, shared preparation or a bounded analyzer operation can finish before the next checkpoint. Evidence from completed work stays in the report. The desktop worker reports an error if a reply exceeds its 8 MiB transport limit. Use `neverd scan program -o scan.json` to write a larger report.
 
 The scan requires neither target execution nor a Lean installation. An independently checked proof in the Lean 4 M3 pilot applies to its exact property, location and assumptions. Version 1 reports static observations and does not issue proof certificates. Unresolved obligations keep their `UNKNOWN` verdict. [Shared evidence and the M3 pilot, #1675](https://github.com/NeverSight/NeverD/issues/1675).
 

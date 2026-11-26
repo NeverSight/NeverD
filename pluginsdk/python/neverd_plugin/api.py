@@ -1388,10 +1388,19 @@ class Session:
             max_call_depth=max_call_depth,
             max_summary_iterations=max_summary_iterations,
         )
-        scan = NeverDScanOptions(struct_size=ctypes.sizeof(NeverDScanOptions),
-                                analysis=ctypes.pointer(options), analyzers=selections[analyzer])
-        report = self._json("neverd_session_scan_json", "memory-safety scan", ctypes.byref(scan))
-        if not isinstance(report, Mapping) or report.get("schema") != "neverd.memory-safety-scan":
+        scan = NeverDScanOptions(
+            struct_size=ctypes.sizeof(NeverDScanOptions),
+            analysis=ctypes.pointer(options),
+            analyzers=selections[analyzer],
+        )
+        report = self._json(
+            "neverd_session_scan_json", "memory-safety scan", ctypes.byref(scan)
+        )
+        if (
+            not isinstance(report, Mapping)
+            or report.get("schema") != "neverd.memory-safety-scan"
+            or report.get("schema_version") != 1
+        ):
             raise NeverDError("invalid memory-safety scan report")
         return report
 

@@ -312,6 +312,7 @@ if(BUILD_TESTING)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
   qt_add_executable(neverd-gui-safety-scan-tests tests/SafetyScanDialogTests.cpp)
   target_link_libraries(neverd-gui-safety-scan-tests PRIVATE neverd_gui_app Qt6::Test)
+  set_target_properties(neverd-gui-safety-scan-tests PROPERTIES WIN32_EXECUTABLE FALSE)
   add_test(NAME NeverDGuiSafetyScan COMMAND neverd-gui-safety-scan-tests)
   set_tests_properties(NeverDGuiSafetyScan PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
