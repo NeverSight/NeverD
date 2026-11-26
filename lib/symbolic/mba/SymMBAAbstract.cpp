@@ -16,6 +16,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../SymWordProduct.h"
 #include "Limits.h"
 #include "SymMBADetail.h"
 
@@ -403,7 +404,7 @@ llvm::APInt multiplyAffine(const llvm::APInt &A, const llvm::APInt &B) {
     if (const auto Scale = B.tryZExtValue())
       return *Scale == 1 ? A : A * *Scale;
   }
-  return A * B;
+  return multiplyWords(A, B);
 }
 
 std::optional<AffineInput> affineInput(const SymContext &Ctx, SymRef Root,

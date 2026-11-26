@@ -8,10 +8,12 @@ from collections import Counter
 
 def distributed_product(width, case, *, reference=False, counted=False,
                         joined_offsets=False, masked_offsets=False, field_masks=False,
-                        scaled_fields=False, result_masks=False, carry_masks=False):
+                        scaled_fields=False, result_masks=False, carry_masks=False,
+                        sparse_masks=False):
     """Return one input, its affine reference, or its counted evaluation form."""
-    if sum((joined_offsets, masked_offsets, field_masks, scaled_fields, result_masks, carry_masks)) > 1:
+    if sum((joined_offsets, masked_offsets, field_masks, scaled_fields, result_masks, carry_masks, sparse_masks)) > 1:
         raise ValueError("choose one bitwise offset family")
+    carry_masks = carry_masks or sparse_masks
     output_mask = result_masks or carry_masks
     scaled = scaled_fields or output_mask
     gated = field_masks or scaled
@@ -44,6 +46,8 @@ def distributed_product(width, case, *, reference=False, counted=False,
                   (105019, 111029, 121021, 131071))[variant]
     if carry_masks:
         degree += degree // 4
+    if sparse_masks:
+        degree += (degree + 1) // 2
     shift = bits + case % 2
     precision = shift + bits
     mask = (1 << precision) - 1
@@ -163,6 +167,36 @@ def distributed_product(width, case, *, reference=False, counted=False,
                     sign, live_overlap = 0, False
                 else:
                     live_overlap = input_bits != visible or output_bits != visible
+                if sparse_masks:
+                    mode = (row[0][0] + 2 * row[-1][0]) % 8
+                    near = variant >= 2 and j == degree // 5
+                    if near:
+                        mode = 0
+                    if mode < 5 and not (variant >= 2 and j == degree // 4):
+                        stripe = max(1, visible // 3)
+                        if (row[1][0] + case) % 2:
+                            stripe = visible ^ stripe or 1
+                        if mode < 2:
+                            # The non-shift part disappears at the observed width.
+                            multiplier = ((-1 if mode else 1) << bits) + (1 << trailing)
+                            gate = stripe
+                            result_gate = (visible ^ stripe) << trailing
+                            if near:
+                                result_gate |= (stripe & -stripe) << trailing
+                        elif mode == 2:
+                            # Even with carries, no output below the first set
+                            # input bit and the multiplier's shift can survive.
+                            split = max(1, visible.bit_length() // 2)
+                            gate = visible & ~((1 << split) - 1)
+                            result_gate = (1 << (split + trailing)) - 1
+                        else:
+                            gate = visible
+                            result_gate = stripe << trailing
+                            high = result_gate if mode == 3 else field_mask ^ result_gate
+                            offset = (offset & ~(field_mask << shift)) | (high << shift)
+                            op = "|" if mode == 3 else "&~"
+                        lane_mask = (1 << (precision + 3 + row[0][0])) | (gate << shift) | 5
+                        sign, live_overlap = 0, near
                 result_mask = (1 << (precision + 2 + row[1][0])) | (result_gate << shift) | 3
 
         if variant and j == degree // 2:
@@ -231,6 +265,8 @@ if __name__ == "__main__":
                         help="mask weighted sums both before and after multiplication")
     offsets.add_argument("--carry-masks", action="store_true",
                          help="mix observable mask holes with bits lost to even multipliers")
+    offsets.add_argument("--sparse-masks", action="store_true",
+                         help="interleave sparse selections, modular shifts and live carry controls")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--reference", action="store_true",
                         help="emit the independently calculated reference expression")
@@ -242,6 +278,6 @@ if __name__ == "__main__":
                                   joined_offsets=args.joined_offsets, masked_offsets=args.masked_offsets,
                                   field_masks=args.field_masks, scaled_fields=args.scaled_fields,
                                   result_masks=args.result_masks,
-                                  carry_masks=args.carry_masks))
+                                  carry_masks=args.carry_masks, sparse_masks=args.sparse_masks))
     except ValueError as error:
         parser.error(str(error))

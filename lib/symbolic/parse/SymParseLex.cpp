@@ -43,11 +43,9 @@ bool isRadixDigit(char C, unsigned Radix) {
 
 } // namespace
 
-llvm::StringRef Lexer::parenthesizedSpelling(size_t Begin) const {
+llvm::StringRef Lexer::parenthesizedSpelling(size_t Begin, size_t Limit) const {
   size_t Open = 1;
-  const size_t End =
-      Begin + std::min(Text.size() - Begin,
-                       limits::symbolic::kSymParseProductSpellingBytes);
+  const size_t End = Begin + std::min(Text.size() - Begin, Limit);
   for (size_t I = Pos; I < End; ++I) {
     if (Text[I] == '(')
       ++Open;

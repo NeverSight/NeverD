@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../SymWordProduct.h"
 #include "Limits.h"
 #include "SymMBADetail.h"
 
@@ -353,14 +354,14 @@ public:
           return false;
         const llvm::APInt LowA(Bits, llvm::ArrayRef(A.getRawData() + SkipA, N));
         const llvm::APInt LowB(Bits, llvm::ArrayRef(B.getRawData() + SkipB, N));
-        Product = (LowA * LowB).zext(Width);
+        Product = multiplyWords(LowA, LowB).zext(Width);
         Product <<= Skip;
         return true;
       }
     }
     if (!Resources.charge(Words * Words))
       return false;
-    Product = A * B;
+    Product = multiplyWords(A, B);
     return true;
   }
 
@@ -843,13 +844,13 @@ public:
                     !Resources.array(Words, sizeof(uint64_t)))
                   return nullptr;
                 if (Exponent & 1)
-                  Scale *= Power;
+                  Scale = multiplyWords(Scale, Power);
                 Exponent >>= 1;
                 if (Exponent) {
                   if (!Resources.charge(Words * Words) ||
                       !Resources.array(Words, sizeof(uint64_t)))
                     return nullptr;
-                  Power *= Power;
+                  Power = multiplyWords(Power, Power);
                 }
               }
             }

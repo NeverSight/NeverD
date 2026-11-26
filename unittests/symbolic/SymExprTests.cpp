@@ -2757,6 +2757,47 @@ TEST(SymExpr, ProductsKeepAllBitsDemandedAcrossUsers) {
   }
 }
 
+TEST(SymExpr, ShortMultiwordScalesPreserveSignedProductsAndPartialLimbs) {
+  std::mt19937_64 Random(0x6c696d6273);
+  for (unsigned W : {257u, 513u, 1025u, 1984u, 1985u, 4101u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", W);
+    for (unsigned Shift : {0u, 3u, 64u, 127u, W - 196}) {
+      const unsigned High = Shift == W - 196 ? 193 : 97;
+      const auto Unit = llvm::APInt::getOneBitSet(W, High) +
+                        llvm::APInt::getOneBitSet(W, 65) + 5;
+      for (bool Negative : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << W << '/' << Shift << '/' << Negative);
+        const auto K = (Negative ? -Unit : Unit).shl(Shift);
+        const auto Root = C.mkMul(C.mkConst(K), X);
+        SymEvalPlan Plan(C, Root);
+        for (unsigned I = 0; I != 12; ++I) {
+          auto Value = llvm::APInt(W, 0);
+          for (unsigned J = 0; J < W; J += 64)
+            Value |= llvm::APInt(W, Random()).shl(J);
+          if (I == 0)
+            Value.clearAllBits();
+          else if (I == 1)
+            Value.setAllBits();
+          auto Want = (Value.shl(High) + Value.shl(65) + Value.shl(2) + Value)
+                          .shl(Shift);
+          if (Negative)
+            Want.negate();
+          EXPECT_EQ(Plan.eval({Value}), Want);
+          EXPECT_EQ(C.eval(Root, {Value}), Want);
+          const auto V = C.mkConst(Value), Coeff = C.mkConst(K);
+          EXPECT_EQ(C.constValue(C.mkMul(Coeff, V)), Want);
+          EXPECT_EQ(C.constValue(C.mkMul(V, Coeff)), Want);
+          const auto MinusThree = C.mkConst(-llvm::APInt(W, 3));
+          EXPECT_EQ(C.constValue(C.mkMul({V, MinusThree, Coeff})),
+                    Want - Want.shl(2));
+        }
+      }
+    }
+  }
+}
+
 TEST(SymExpr, NegatingAWideProductPreservesCanonicalFactors) {
   SymContext C;
   constexpr unsigned W = 513;

@@ -118,7 +118,7 @@ public:
 
   /// \c apply across \p Count operand pairs, at a width of at most 64 bits with
   /// every value in the low bits of its word.  A unary operator ignores \p B.
-  template <typename Word>
+  template <typename Word, bool BroadcastLeft = false>
   void applyColumn(GramOp Op, const Word *A, const Word *B, Word *Out,
                    size_t Count) const;
 
