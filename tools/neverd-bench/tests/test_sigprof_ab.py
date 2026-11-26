@@ -37,12 +37,15 @@ class ComparisonTests(unittest.TestCase):
     def assert_invalid(self, result):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("B/A", result.stdout)
+        self.assertNotIn("B-A", result.stdout)
+        self.assertNotIn("A_wall_ms", result.stdout)
 
     def test_matching_outputs_report_full_sha256(self):
         result = self.compare("import pathlib, sys; pathlib.Path(sys.argv[1]).write_bytes(b'ok')", runs=2)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(hashlib.sha256(b"ok").hexdigest(), result.stdout)
         self.assertIn("B/A wall:", result.stdout)
+        self.assertNotIn("A_wall_ms", result.stdout)
 
     def test_failed_command_with_matching_output_is_invalid(self):
         result = self.compare(
@@ -64,13 +67,30 @@ class ComparisonTests(unittest.TestCase):
                 self.assert_invalid(self.compare("raise AssertionError('must not run')", runs=runs))
 
     def test_all_runs_must_agree_not_just_each_pair(self):
-        with patch.object(sys, "argv", [str(SCRIPT), "--runs", "2", "--a", "a", "--b", "b"]), \
+        args = [str(SCRIPT), "--runs", "2", "--a", "a", "--b", "b", "--show-pairs"]
+        with patch.object(sys, "argv", args), \
              patch.object(ab, "run", side_effect=[(0, 1., 1., "a"), (0, 1., 1., "a"),
                                                 (0, 1., 1., "b"), (0, 1., 1., "b")]), \
              contextlib.redirect_stdout(io.StringIO()) as output, \
              contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(ab.main(), 1)
             self.assertNotIn("B/A", output.getvalue())
+            self.assertNotIn("B-A", output.getvalue())
+            self.assertNotIn("A_wall_ms", output.getvalue())
+
+    def test_absolute_deltas_pair_the_same_round_in_both_orders(self):
+        samples = [(0, .010, .030, "same"), (0, .011, .060, "same"),
+                   (0, .021, .04053, "same"), (0, .020, .040, "same"),
+                   (0, .030, .075, "same"), (0, .031, .07447, "same")]
+        args = [str(SCRIPT), "--runs", "3", "--a", "a", "--b", "b", "--show-pairs"]
+        with patch.object(sys, "argv", args), patch.object(ab, "run", side_effect=samples), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(ab.main(), 0)
+        text = output.getvalue()
+        self.assertIn("wall 0.040000s (medians)", text)
+        self.assertIn("wall 0.060000s (medians)", text)
+        self.assertIn("2 BA 20.000 21.000 40.000 40.530", text)
+        self.assertIn("B-A wall: median +0.530 ms, range [-0.530, +30.000] ms", text)
 
     def test_zero_cpu_baseline_does_not_divide_by_zero(self):
         with patch.object(sys, "argv", [str(SCRIPT), "--runs", "1", "--a", "a", "--b", "b"]), \
@@ -78,6 +98,7 @@ class ComparisonTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(ab.main(), 0)
             self.assertIn("B/A cpu: unavailable", output.getvalue())
+            self.assertIn("B-A cpu: median +0.000 ms", output.getvalue())
             self.assertIn("B/A wall:", output.getvalue())
 
 

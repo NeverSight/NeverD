@@ -502,16 +502,36 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                   *RetVar, RetVar->Size, Builder, /*IsValueOperand=*/true))
             RetVal = Builder.CreatePtrToInt(Sym, RetTy);
       }
-      // Splice the high half above the low half into the 64-bit result.
+      llvm::Value *SecondWord = nullptr;
       if (WantPair && RetVal && HiVar) {
         rejectEscapingAddressFragment(*HiVar,
                                       "the high half of a return value");
+        SecondWord = GetReturnValue(*HiVar);
+      } else if (WantPair && !RetVar && !HiVar &&
+                 ParamRegoffMap.count(IntRetOff) &&
+                 ParamRegoffMap.count(HiRetOff) &&
+                 registerUntouchedFromEntry(*CurMedFunc, Blk, IntRetOff,
+                                            WordBytes, TargetArch) &&
+                 registerUntouchedFromEntry(*CurMedFunc, Blk, HiRetOff,
+                                            WordBytes, TargetArch)) {
+        // A bare return can forward the entire incoming argument pair.
+        MedVar Incoming;
+        Incoming.Kind = MedVar::Reg;
+        Incoming.TheArch = TargetArch;
+        Incoming.Size = WordBytes;
+        Incoming.SSAVer = -1;
+        Incoming.RegOff = IntRetOff;
+        RetVal = getIncomingParameter(Incoming, Builder);
+        Incoming.RegOff = HiRetOff;
+        SecondWord = getIncomingParameter(Incoming, Builder);
+      }
+      if (RetVal && SecondWord) {
         auto ToLimb = [&](llvm::Value *V) {
           return Builder.CreateZExt(
               Builder.CreateZExtOrTrunc(V, sizeToType(WordBytes)), RetTy);
         };
         llvm::Value *Lo = ToLimb(RetVal);
-        llvm::Value *Hi = ToLimb(GetReturnValue(*HiVar));
+        llvm::Value *Hi = ToLimb(SecondWord);
         if (TRI.IntegerReturnPairHighFirst)
           std::swap(Lo, Hi);
         RetVal = Builder.CreateOr(Builder.CreateShl(Hi, WordBytes * 8), Lo,

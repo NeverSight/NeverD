@@ -135,6 +135,14 @@ addition. Word spills and reloads can carry the inputs through the leaf's
 own frame. PPC32 places the high word in r3 on big endian and r4 on little
 endian. The source projections can retain four word-sized parameters.
 
+On RV32 and PPC32, the compiler runtime helpers `__ashldi3`, `__ashrdi3`
+and `__lshrdi3` take a double word followed by a shift count. A zero-count
+branch can return both incoming words untouched. Recovery checks the actual
+count register, the direction of the branch and the values reaching that
+return. At a shared exit, both words must come from the same predecessor.
+This rule uses the named runtime declaration. An unnamed shift needs
+independent evidence for its result width.
+
 JALR through x0 has a signed absolute target. In a stripped linked ELF,
 function discovery also follows an AUIPC/JALR call when both instructions
 belong to one reachable basic block and use the same base register.
@@ -244,6 +252,18 @@ both recorded high-word multiplies.
 
 ```sh
 python3 unittests/lift/elf-integer/ppc_products.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
+```
+
+The shift fixture builds the three compiler-rt helpers with Clang at `-O2`.
+A separate caller uses the original C prototypes and reads both returned
+words for every shift count from 0 to 63. All six target profiles rebuild
+HighC, LLVM-derived C and module IR at `-O0` and `-O2`. By default the
+fixture reads the builtins from the LLVM submodule. Use `--builtins` to
+select another compiler-rt source directory.
+
+```sh
+python3 unittests/lift/elf-integer/wide_shifts.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
 ```
 

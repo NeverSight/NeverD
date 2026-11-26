@@ -24,7 +24,8 @@ struct TargetRegInfo;
 /// unmodelled calls cannot supply a missing carrier.
 bool returnsRegisterPairI64(
     const MedFunc &Func, const TargetRegInfo &TRI,
-    llvm::function_ref<bool(const MedOp &)> TailReturnsPair);
+    llvm::function_ref<bool(const MedOp &)> TailReturnsPair,
+    bool ShiftReturnsInputOnZero = false);
 
 bool returnsRegisterPairI64(const MedFunc &Func, const TargetRegInfo &TRI);
 

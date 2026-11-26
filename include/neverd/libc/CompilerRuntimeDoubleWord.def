@@ -26,15 +26,22 @@
     "define NEVERD_DOUBLE_WORD_RESULT(Name, WordBytes) before including this file"
 #endif
 
+// The shift count is the word after the double-word input. A zero count
+// returns the input pair unchanged.
+#ifndef NEVERD_DOUBLE_WORD_SHIFT
+#define NEVERD_DOUBLE_WORD_SHIFT(Name, WordBytes)                              \
+  NEVERD_DOUBLE_WORD_RESULT(Name, WordBytes)
+#endif
+
 // libgcc and compiler-rt integer arithmetic.
 NEVERD_DOUBLE_WORD_RESULT("__absvdi2", 4)
 NEVERD_DOUBLE_WORD_RESULT("__addvdi3", 4)
-NEVERD_DOUBLE_WORD_RESULT("__ashldi3", 4)
-NEVERD_DOUBLE_WORD_RESULT("__ashrdi3", 4)
+NEVERD_DOUBLE_WORD_SHIFT("__ashldi3", 4)
+NEVERD_DOUBLE_WORD_SHIFT("__ashrdi3", 4)
 NEVERD_DOUBLE_WORD_RESULT("__bswapdi2", 4)
 NEVERD_DOUBLE_WORD_RESULT("__divdi3", 4)
 NEVERD_DOUBLE_WORD_RESULT("__divmoddi4", 4)
-NEVERD_DOUBLE_WORD_RESULT("__lshrdi3", 4)
+NEVERD_DOUBLE_WORD_SHIFT("__lshrdi3", 4)
 NEVERD_DOUBLE_WORD_RESULT("__moddi3", 4)
 NEVERD_DOUBLE_WORD_RESULT("__muldi3", 4)
 NEVERD_DOUBLE_WORD_RESULT("__mulvdi3", 4)
@@ -103,3 +110,4 @@ NEVERD_DOUBLE_WORD_RESULT("__fixunsxfti", 8)
 NEVERD_DOUBLE_WORD_RESULT("__fixxfti", 8)
 
 #undef NEVERD_DOUBLE_WORD_RESULT
+#undef NEVERD_DOUBLE_WORD_SHIFT
