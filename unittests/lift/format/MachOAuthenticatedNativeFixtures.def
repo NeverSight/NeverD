@@ -188,6 +188,13 @@ MACHO_AUTH_NATIVE_TEXT(kCleanupSymbol, "_cleanup_frame")
 MACHO_AUTH_NATIVE_TEXT(kRebaseSymbol, "_rebased")
 MACHO_AUTH_NATIVE_TEXT(kBindSymbol, "_bound")
 MACHO_AUTH_NATIVE_TEXT(kInstalledImportSymbol, "_getpid")
+MACHO_AUTH_NATIVE_TEXT(kBarePID, "getpid")
+MACHO_AUTH_NATIVE_TEXT(kVerbatimPID, "\1getpid")
+MACHO_AUTH_NATIVE_VALUE(int, kBindingDlopenFailure, 1)
+MACHO_AUTH_NATIVE_TEXT(kMissingBareImport, "Symbol not found: getpid")
+MACHO_AUTH_NATIVE_TEXT(kBareBinding, "getpid")
+MACHO_AUTH_NATIVE_TEXT(kVerbatimBinding, "\1getpid")
+MACHO_AUTH_NATIVE_TEXT(kBindingHostDriver, "host-fallback-driver")
 MACHO_AUTH_NATIVE_TEXT(kOptionalBinding, "neverd_missing_binding_fixture")
 MACHO_AUTH_NATIVE_TEXT(kBindingFieldsSymbol, "_binding_fields")
 MACHO_AUTH_NATIVE_TEXT(kCoalescedSymbol, "_binding_fallback")
@@ -200,7 +207,8 @@ MACHO_AUTH_NATIVE_TEXT(kBindingWeakLoadImage, "weak-load.dylib")
 MACHO_AUTH_NATIVE_TEXT(kBindingSystemLibrary, "/usr/lib/libSystem.B.dylib")
 MACHO_AUTH_NATIVE_TEXT(kBindingWeakLibrary, "-Wl,-weak_library,")
 MACHO_AUTH_NATIVE_TEXT(kBindingProvider, R"cpp(
-extern "C" { int binding_provider_anchor = 1; }
+extern "C" int binding_pid() asm("getpid");
+extern "C" int binding_pid() { return 73; }
 )cpp")
 MACHO_AUTH_NATIVE_TEXT(kBindingNativeEnv, "NEVERD_ARM64E_LIFTED_NATIVE")
 MACHO_AUTH_NATIVE_ARGS(kBindingDriverArgs, "-arch", "arm64", "-std=c++20",
@@ -223,10 +231,40 @@ Labsent:
   mov x0, #0
   ret
 Lfields:
+  cmp x0, #2
+  b.ne LreturnFields
+  adrp x16, getpid@GOTPAGE
+  ldr x16, [x16, getpid@GOTPAGEOFF]
+  cbz x16, Labsent
+  b getpid
+LreturnFields:
+  cmp x0, #3
+  b.eq LoriginalC
+  cmp x0, #4
+  b.eq LoriginalBare
   adrp x0, _binding_fields@PAGE
   add x0, x0, _binding_fields@PAGEOFF
   ret
+LoriginalC:
+  adrp x0, _binding_code@PAGE
+  add x0, x0, _binding_code@PAGEOFF
+  ret
+LoriginalBare:
+  adrp x0, binding_code@PAGE
+  add x0, x0, binding_code@PAGEOFF
+  ret
 .cfi_endproc
+#ifndef BIND_OBJECT
+.private_extern _binding_code
+.private_extern binding_code
+_binding_code:
+  ret
+binding_code:
+  ret
+#endif
+#ifndef BIND_WEAK
+.weak_reference getpid
+#endif
 #ifdef BIND_WEAK
 .weak_reference _getpid
 #elif defined(BIND_OBJECT)
@@ -265,9 +303,6 @@ _binding_fields:
 #ifdef BIND_OBJECT
   .weak_reference neverd_missing_binding_fixture
   .quad neverd_missing_binding_fixture@AUTH(db,0x1234,addr)
-#elif defined(BIND_WEAK)
-  .weak_reference _binding_provider_anchor
-  .quad _binding_provider_anchor
 #else
   .quad 0
 #endif
@@ -284,6 +319,24 @@ _binding_fields:
   .quad neverd_missing_binding_fixture@GOT
 #else
   .space 16
+#endif
+  .quad getpid@AUTH(db,0x1234,addr)
+  .quad getpid
+  .long getpid@GOT-.
+  .long 0
+  .quad entry@AUTH(da,0x1234,addr)
+  .quad entry
+// A local is listed before _entry. A private external follows it.
+#ifndef BIND_REFERENCE_ONLY
+.private_extern entry
+#endif
+entry:
+  .quad 42
+#ifndef BIND_OBJECT
+.globl _binding_original_code
+_binding_original_code:
+  .quad _binding_code
+  .quad binding_code
 #endif
 .subsections_via_symbols
 )asm")
@@ -313,6 +366,13 @@ struct Fields {
   uint32_t coalescedPadding;
   uintptr_t optionalDirect;
   const uintptr_t *optionalGOT;
+  void *bareAuth;
+  uintptr_t bareDirect;
+  int32_t bareRelative;
+  uint32_t barePadding;
+  void *localAuth;
+  const uint64_t *localDirect;
+  uint64_t localValue;
 };
 int main(int argc, char **argv) {
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
@@ -323,6 +383,9 @@ int main(int argc, char **argv) {
   auto entry = reinterpret_cast<uintptr_t (*)(int)>(dlsym(image, "entry"));
   if (!entry || entry(0) != static_cast<uintptr_t>(getpid()))
     return 2;
+  auto *code = static_cast<const uintptr_t *>(dlsym(image, "binding_original_code"));
+  if (!code || code[0] == code[1] || entry(3) != code[0] || entry(4) != code[1])
+    return 11;
   auto *fields = reinterpret_cast<const Fields *>(entry(1));
   auto *got = reinterpret_cast<const uintptr_t *>(
       reinterpret_cast<uintptr_t>(&fields->relative) + fields->relative);
@@ -333,7 +396,26 @@ int main(int argc, char **argv) {
     return 4;
   if (*got != function || fields->direct != function + 8 || fields->optional)
     return 3;
-  if (argc == 2 && !fields->coalescedDirect)
+  auto local = ptrauth_auth_data(fields->localAuth, ptrauth_key_asda,
+      ptrauth_blend_discriminator(&fields->localAuth, 0x1234));
+  if (local != &fields->localValue || fields->localDirect != &fields->localValue ||
+      fields->localValue != 42)
+    return 10;
+  const bool present = access(argv[2], F_OK) == 0;
+  auto *bareGOT = reinterpret_cast<const uintptr_t *>(
+      reinterpret_cast<uintptr_t>(&fields->bareRelative) + fields->bareRelative);
+  if (bareGOT == got || *bareGOT != fields->bareDirect ||
+      present != bool(fields->bareDirect) || entry(2) != (present ? 73u : 0u))
+    return 7;
+  if (present) {
+    auto bare = ptrauth_auth_data(fields->bareAuth, ptrauth_key_asdb,
+        ptrauth_blend_discriminator(&fields->bareAuth, 0x1234));
+    if (reinterpret_cast<uintptr_t>(bare) != fields->bareDirect ||
+        fields->bareDirect == function)
+      return 8;
+  } else if (fields->bareAuth)
+    return 9;
+  if (argc == 3 && !fields->coalescedDirect)
     return 0;
   auto *fallback = reinterpret_cast<const uintptr_t *>(
       reinterpret_cast<uintptr_t>(&fields->coalescedRelative) +
@@ -344,7 +426,7 @@ int main(int argc, char **argv) {
       reinterpret_cast<uintptr_t>(coalesced) != *fallback + 4 ||
       *reinterpret_cast<const uint64_t *>(*fallback) != expectedFallback)
     return 5;
-  if (argc > 2 && (fields->got != got || fields->optionalDirect ||
+  if (argc > 3 && (fields->got != got || fields->optionalDirect ||
                    !fields->optionalGOT || *fields->optionalGOT))
     return 6;
   return 0;

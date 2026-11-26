@@ -168,7 +168,6 @@ decodeChainedImports(const uint8_t *BasePtr, size_t FileSize,
       const MachODylibReference &Reference =
           Img.MachODylibReferences[static_cast<size_t>(LibOrdinal - 1)];
       BindingModule = Reference.Name;
-      WeakImport = WeakImport || Reference.Weak;
     }
     Records[I].Name = std::move(SymName);
     Records[I].Module = std::move(BindingModule);

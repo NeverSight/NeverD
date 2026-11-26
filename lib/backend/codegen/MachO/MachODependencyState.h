@@ -12,7 +12,6 @@
 #include "neverd/object/MachOLayout.h"
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Error.h"
 
 #include <array>
@@ -49,9 +48,6 @@ struct MachOChainedFixups {
   unsigned LinkeditIndex = 0;
   std::vector<MachOChainedSegment> Segments;
   std::vector<MachOChainedImport> Imports;
-  /// Bind slots whose on-disk symbol is optional. A weak dylib load command
-  /// independently makes a reference nullable at runtime.
-  llvm::DenseSet<uint64_t> WeakImportSlots;
   std::vector<std::string> Libraries;
   /// Regular weak definitions exported by the original image, keyed by the
   /// exact dyld spelling and carrying the linked address of the fallback.

@@ -1904,14 +1904,21 @@ When publishing a native arm64e object, the undefined symbol's `N_WEAK_REF`
 bit sets the binding strength of each new signed pointer, ordinary pointer
 and call stub. The original image or an explicit dylib declaration supplies
 the library ordinal. Different ordinals for one symbol require an explicit
-provider. A declared weak import can also use an existing weak-loaded dylib.
-Both the dylib and its symbol may be absent at runtime. Existing bindings
-retain their own strength. For GOT reuse the publisher compares the on-disk
-weak-import bit, provider and signing schema. Runtime analyses also account
-for the possibility that a weak-loaded dylib is absent.
+provider. The dylib load command and the symbol's weak-import bit are
+independent. When an optional dylib is absent, dyld writes zero for an
+optional symbol. A required eager binding prevents the image from loading.
+The loader retains symbol strength for classic, threaded and chained binds.
+The publisher compares that strength, the provider and the signing schema
+when reusing a GOT cell. Existing bindings retain their own strength.
 An absolute `.quad symbol@GOT` becomes a dyld rebase to that cell.
 The PC-relative `.long symbol@GOT-.` and the GOT page instructions address
 the same cell. A direct pointer carries its own addend and signing recipe.
+The native publisher distinguishes the Mach-O spellings `_foo` and `foo`
+throughout relocation, including when one is a definition in the object.
+When both exist, the source name `foo` selects the C symbol `_foo`. LLVM's
+verbatim spelling `\01foo` (a leading byte of value 1) selects the bare
+assembly symbol. Each import keeps its own provider, weak flag and GOT cell.
+[LLVM identifier spelling](https://llvm.org/docs/LangRef.html#identifiers)
 An original weak data export supplies the fallback for a separate replacement
 weak definition, even when the original had no GOT cell or import row for it.
 Direct and GOT references both use dyld's weak lookup ordinal.
