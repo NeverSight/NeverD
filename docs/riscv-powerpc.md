@@ -123,6 +123,19 @@ CTR. Source recovery requires the incoming return address to reach the branch
 on every path. A reaching call or explicit LR write, including an unproven
 save/restore, leaves that source return unresolved.
 
+PPC32 and PPC64 lift conditional direct calls (relative and absolute), calls
+through LR or CTR, and conditional jumps through CTR. Linking writes the
+next instruction address to LR on both paths. A call through LR uses its
+previous value. Branches through CTR clear its low two bits and require a BO
+encoding that leaves CTR unchanged. A link to the next instruction preserves
+the counter update and materializes the PC without introducing a callee.
+For a conditional CTR jump, LowIR retains the register target and the
+fallthrough. Source and LLVM projections require a proven set of local taken
+targets, including cases where the fallthrough is also a taken target.
+An untyped register callback forwards the integer argument registers on the
+taken edge. ELFv1 descriptor and ELFv2 global-entry checks apply there.
+[Power ISA, Book I, Branch Processor](https://openpowerfoundation.org/specifications/isa/).
+
 PPC64 arithmetic models the common CA, OV and SO bits. A full XER read
 requires processor evidence for the ISA 3.0 CA32 and OV32 fields and is
 currently rejected. [OpenPOWER ELFv2 ABI](https://openpower.foundation/specifications/64bitelfabi/).
@@ -136,7 +149,7 @@ The scalar encodings and flag definitions follow Books I and II of versions
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
 | Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
-| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, unconditional indirect calls/jumps, guarded and unconditional LR returns, integer register arguments |
+| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
 | Native rewrite | Unsupported | Unsupported |
 
@@ -216,8 +229,7 @@ displacement and boundary rules for a PC-relative linkage stub.
 
 The strict lifters report unsupported instructions at their original VA.
 RISC-V system/CSR, FP, V and vendor extensions, along with PowerPC VLE, SPE,
-VMX, VSX, other prefixed forms, conditional calls, conditional jumps through
-CTR and system instructions, still require lifting support.
+VMX, VSX, other prefixed forms and system instructions, still require lifting support.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
 ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a
@@ -326,6 +338,16 @@ For PPC64 ELFv1, pass `--profiles powerpc64 powerpc64le --ppc64-abi elfv1`
 and select a GNU PowerPC64 linker with `--ld`. The entry descriptor and the
 code it names must both lie outside every rebuilt mapping. Plain-pointer
 C projections use the `-fno-strict-aliasing` flag specified in their prelude.
+
+The conditional-transfer fixture checks original machine execution and
+relocated HighC, LLVM C and LLVM IR rebuilds at both optimization levels.
+Use GNU PowerPC64 ld with `--ppc64-abi elfv1 --profiles powerpc64 powerpc64le`
+to exercise descriptors in both byte orders.
+
+```bash
+python3 unittests/lift/elf-integer/conditional_branches.py \
+  --neverd /path/to/neverd --clang /path/to/clang --ld /path/to/ld.lld
+```
 
 The extended scalar fixture runs linked RV32, RV64 and both byte orders of
 POWER10 PPC64 under Linux QEMU user mode. A separately compiled scalar

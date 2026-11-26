@@ -32,6 +32,92 @@ namespace {
 
 class ELFIntegerSemantic : public ::testing::TestWithParam<Arch> {};
 
+#include "PowerPCConditionalBranchFixture.inc"
+
+TEST(PowerPCConditionalBranches, TransferAndRegisterStateMatchUnicorn) {
+  using namespace integerreg::ppc;
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    const bool Wide = isPowerPC64(A);
+    Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    uc_engine *Engine = nullptr;
+    ASSERT_EQ(uc_open(UC_ARCH_PPC,
+                      uc_mode(UC_MODE_BIG_ENDIAN |
+                              (Wide ? UC_MODE_PPC64 : UC_MODE_PPC32)),
+                      &Engine),
+              UC_ERR_OK);
+    std::unique_ptr<uc_engine, decltype(&uc_close)> Owner(Engine, uc_close);
+    if (Wide)
+      ASSERT_EQ(uc_ctl_tlb_mode(Engine, UC_TLB_VIRTUAL), UC_ERR_OK);
+    uint64_t MSR = (uint64_t(Wide) << 63) | uint64_t(archLittleEndian(A));
+    ASSERT_EQ(uc_reg_write(Engine, UC_PPC_REG_MSR, &MSR), UC_ERR_OK);
+    ASSERT_EQ(uc_mem_map(Engine, 0x1000, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+    uint64_t PC = 0x1800;
+    for (auto Form : ConditionalBranches) {
+      SCOPED_TRACE(::testing::Message()
+                   << int(A) << " word " << std::hex << Form.Word);
+      uint8_t Bytes[4];
+      llvm::support::endian::write32(Bytes, Form.Word,
+                                     archLittleEndian(A)
+                                         ? llvm::endianness::little
+                                         : llvm::endianness::big);
+      ASSERT_EQ(uc_mem_write(Engine, PC, Bytes, sizeof(Bytes)), UC_ERR_OK);
+      DecodedInsn I;
+      ASSERT_EQ(D.decodeOneForLift(Bytes, sizeof(Bytes), PC, I), 4);
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(D.liftToLow(I, Ops));
+      ASSERT_FALSE(Ops.empty());
+      ASSERT_EQ(Ops.back().Opcode, Form.Transfer);
+      const bool Direct = Form.Transfer == NdOp::CALL;
+      EXPECT_EQ(D.directCallTarget(I),
+                Direct ? Ops.back().Inputs[0].Offset : InvalidVA);
+      EXPECT_EQ(D.returnsToCaller(I), false);
+      EXPECT_FALSE(D.isFunctionTerminator(I));
+      // Observe the taken operand just before the original transfer, on the
+      // same side of its guard. No guest instruction here writes r31.
+      const NdVar Observed = NdVar::reg(integerreg::gpr(31), Wide ? 8 : 4);
+      if (Form.Transfer != NdOp::COPY) {
+        LowOp ReadTarget = Ops.back();
+        ReadTarget.Opcode = NdOp::COPY;
+        ReadTarget.Output = Observed;
+        Ops.insert(Ops.end() - 1, ReadTarget);
+      }
+      for (uint64_t Seed :
+           {UINT64_C(0), UINT64_C(1), UINT64_C(2), UINT64_C(0x100000001)}) {
+        for (unsigned EQ : {0u, 1u}) {
+          uint64_t Link = 0x1503;
+          uint64_t Count = Form.ViaCTR ? 0x1600 + (Seed & 3)
+                           : Wide      ? Seed
+                                       : uint32_t(Seed);
+          uint32_t CR = EQ << 29;
+          ASSERT_EQ(uc_reg_write(Engine, UC_PPC_REG_LR, &Link), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_write(Engine, UC_PPC_REG_CTR, &Count), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_write(Engine, UC_PPC_REG_CR, &CR), UC_ERR_OK);
+          NdOpEmulator Emu(Img);
+          Emu.setStrictMode(true);
+          Emu.setRegister(LR, Link);
+          Emu.setRegister(CTR, Count);
+          Emu.setRegister(crBit(2), EQ);
+          Emu.setRegister(Observed.Offset, PC + 4);
+          Emu.run(Ops);
+          ASSERT_EQ(uc_emu_start(Engine, PC, PC + 4, 0, 1), UC_ERR_OK);
+          uint64_t Target = 0;
+          ASSERT_EQ(uc_reg_read(Engine, UC_PPC_REG_PC, &Target), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_read(Engine, UC_PPC_REG_LR, &Link), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_read(Engine, UC_PPC_REG_CTR, &Count), UC_ERR_OK);
+          EXPECT_EQ(Emu.getRegister(Observed.Offset), Target);
+          EXPECT_EQ(Emu.getRegister(LR), Link);
+          EXPECT_EQ(Emu.getRegister(CTR), Count);
+        }
+      }
+      PC += sizeof(Bytes);
+    }
+  }
+}
+
 TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
   const Arch A = GetParam();
   const bool RV = isRISCV(A), Wide = A == Arch::RISCV64 || isPowerPC64(A);

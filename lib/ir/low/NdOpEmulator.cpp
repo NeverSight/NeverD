@@ -109,7 +109,7 @@ boundaryForOp(llvm::ArrayRef<LowOp> Ops,
   return OpIndex >= First && OpIndex < End ? &*It : nullptr;
 }
 
-/// End of the instruction containing an ARM predicate guard, or zero when
+/// End of the instruction containing a predicate guard, or zero when
 /// this is an ordinary block-level conditional branch.  A LowBlock's boundary
 /// metadata uses InstructionGuard authoritatively after structural validation.
 /// The legacy vector API retains the conservative control-only same-address
@@ -125,9 +125,7 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
   if (!Boundaries.empty()) {
     const LowInstructionBoundary *Boundary =
         boundaryForOp(Ops, Boundaries, Guard);
-    if (!Boundary ||
-        (Boundary->Mode != InstructionMode::ARM &&
-         Boundary->Mode != InstructionMode::Thumb && !Boundary->DelaySlot))
+    if (!Boundary)
       return 0;
     const bool IsTaggedGuard = hasLowInstructionControlFlag(
         Boundary->ControlFlags, LowInstructionControlFlag::InstructionGuard);
@@ -1416,7 +1414,7 @@ NdOpEmulator::runImpl(llvm::ArrayRef<LowOp> Ops,
         PredicateValue = getRegister(Predicate.Offset);
       if (!PredicateValue)
         break;
-      // ARM's guard targets the next instruction when !predicate holds.  A
+      // The guard targets the next instruction when !predicate holds. A
       // concrete true guard therefore skips every remaining effect in this
       // instruction; a false guard executes them in order.  Neither choice is
       // a block terminator by itself.

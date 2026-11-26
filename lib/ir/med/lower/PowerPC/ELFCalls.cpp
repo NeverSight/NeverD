@@ -477,6 +477,35 @@ void recoverPPC64ELFCalls(MedFunc &Function, const BinaryImage *Image,
     llvm::SmallPtrSet<const MedOp *, 8> Loads;
     std::optional<MedVar> TOC, Env;
     std::optional<MedVar> IndirectEntry;
+    auto TrackDescriptorState = [&](const MedOp &Op) {
+      if (Op.Opcode == NdOp::LOAD && Op.Output.Size == WordSize &&
+          Op.NumInputs == 1 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          Op.MemoryOrdering == NdMemoryOrdering::None)
+        Loads.insert(&Op);
+      if ((opcodeSupportsMemoryAddressSpace(Op.Opcode) &&
+           Op.Opcode != NdOp::LOAD) ||
+          (Op.Output.Size && Op.Output.Kind == MedVar::Stack) ||
+          Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        Loads.clear();
+        if (Op.Opcode != NdOp::STORE) {
+          TOC.reset();
+          Env.reset();
+        }
+      }
+      if (Op.Output.Kind == MedVar::Reg && Op.Output.Size == WordSize) {
+        if (Op.Output.RegOff == TOCReg)
+          TOC = Op.Output;
+        if (Op.Output.RegOff == EnvReg)
+          Env = Op.Output;
+      }
+    };
+    // The predicate split moves only the call. Its one guard predecessor
+    // still owns the reaching descriptor loads and any intervening clobbers.
+    if (Descriptors && Block.Role == MedBlockRole::PredicatedEffect &&
+        Block.Preds.size() == 1)
+      for (const MedOp &Op : Function.Blocks[Block.Preds.front()].Ops)
+        TrackDescriptorState(Op);
     for (auto &Op : Block.Ops) {
       if (Op.Opcode == NdOp::COPY && Op.Output.Kind == MedVar::Temp) {
         if (Calls.IndirectEntrySnapshots.contains(Op.Output.Id))
@@ -532,27 +561,7 @@ void recoverPPC64ELFCalls(MedFunc &Function, const BinaryImage *Image,
         Op.Inputs[0] = *Base;
       }
 
-      if (Op.Opcode == NdOp::LOAD && Op.Output.Size == WordSize &&
-          Op.NumInputs == 1 &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-          Op.MemoryOrdering == NdMemoryOrdering::None)
-        Loads.insert(&Op);
-      if ((opcodeSupportsMemoryAddressSpace(Op.Opcode) &&
-           Op.Opcode != NdOp::LOAD) ||
-          (Op.Output.Size && Op.Output.Kind == MedVar::Stack) ||
-          Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        Loads.clear();
-        if (Op.Opcode != NdOp::STORE) {
-          TOC.reset();
-          Env.reset();
-        }
-      }
-      if (Op.Output.Kind == MedVar::Reg && Op.Output.Size == WordSize) {
-        if (Op.Output.RegOff == TOCReg)
-          TOC = Op.Output;
-        if (Op.Output.RegOff == EnvReg)
-          Env = Op.Output;
-      }
+      TrackDescriptorState(Op);
     }
   }
   if (EntryTOC)

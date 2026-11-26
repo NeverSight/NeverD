@@ -2245,6 +2245,8 @@ MedFunc LowToMedConverter::convertFunction(
               Image->PPC32PLTGOTDisplacements.contains(Op.Inputs[0].ConstVal))
             throw LowToMedConversionError("PPC32 PIC PLT call requires SSA");
     Func.SkippedSSA = true;
+    if (isPowerPC(TheArch))
+      materializePredicatedEffects(Func, Low);
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
     if (QualifyMIPSReturns)
@@ -2357,7 +2359,8 @@ MedFunc LowToMedConverter::convertFunction(
     simplifyCfg(Func);
     debugVerifyMedFunc(Func, "simplifyCfg");
 
-    // ARM predication and MIPS annulled slots use execution-unit guards.
+    // ARM predication, MIPS annulled slots and PowerPC conditional transfers
+    // use execution-unit guards.
     // Materialize that micro-CFG before SSA so the skip path keeps the incoming
     // architectural registers while the effect path receives the new
     // definitions.  Doing this in the LLVM emitter would be too late: SSA would

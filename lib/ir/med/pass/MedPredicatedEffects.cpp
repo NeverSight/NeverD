@@ -11,9 +11,13 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedCodeIdentity.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
@@ -75,8 +79,34 @@ std::optional<int> successorAtAddress(const MedFunc &Func,
 
 void LowToMedConverter::materializePredicatedEffects(MedFunc &Func,
                                                      const LowFunc &Low) {
-  if ((TargetArch != Arch::ARM && !isMIPS(TargetArch)) || Func.Blocks.empty())
+  const bool PPC = isPowerPC(TargetArch);
+  if ((TargetArch != Arch::ARM && !isMIPS(TargetArch) && !PPC) ||
+      Func.Blocks.empty())
     return;
+
+  // An existing PPC conditional return already has a caller-link proof.
+  // Only guarded calls and branches through CTR need a separate effect block.
+  llvm::SmallDenseMap<va_t, const JumpTable *, 4> PPCTransfers;
+  if (PPC) {
+    for (const LowBlock &Block : Low.Blocks) {
+      if (Block.InstructionBoundaries.empty())
+        continue;
+      const auto &Last = Block.InstructionBoundaries.back();
+      if ((Last.Control == LowInstructionControl::ConditionalCall ||
+           Last.Control == LowInstructionControl::Branch) &&
+          hasLowInstructionControlFlag(
+              Last.ControlFlags, LowInstructionControlFlag::InstructionGuard))
+        PPCTransfers.try_emplace(Last.Address, nullptr);
+    }
+    if (PPCTransfers.empty())
+      return;
+    if (Func.SkippedSSA)
+      throw LowToMedConversionError("PPC conditional transfer requires SSA");
+    for (const JumpTable &JT : Low.JumpTables)
+      if (auto It = PPCTransfers.find(JT.InsnAddr);
+          It != PPCTransfers.end() && JT.OriginalAddressSelector)
+        It->second = &JT;
+  }
 
   // Source boundaries own the slot membership, including operations that
   // return to the head address after the slot. Do not infer units from nearby
@@ -127,7 +157,8 @@ void LowToMedConverter::materializePredicatedEffects(MedFunc &Func,
         continue;
 
       const auto Slot = GuardedSlots.find(Guard.Addr);
-      if (isMIPS(TargetArch) && Slot == GuardedSlots.end())
+      if ((isMIPS(TargetArch) && Slot == GuardedSlots.end()) ||
+          (PPC && !PPCTransfers.contains(Guard.Addr)))
         continue;
       size_t EffectEnd = GuardIndex + 1;
       while (EffectEnd < GuardBlock.Ops.size() &&
@@ -168,12 +199,46 @@ void LowToMedConverter::materializePredicatedEffects(MedFunc &Func,
           std::make_move_iterator(GuardBlock.Ops.begin() + GuardIndex + 1),
           std::make_move_iterator(GuardBlock.Ops.begin() + EffectEnd));
 
-      const MedOp *Terminal = nullptr;
-      for (const MedOp &Op : EffectBlock.Ops)
+      MedOp *Terminal = nullptr;
+      for (MedOp &Op : EffectBlock.Ops) {
+        // An untyped register callback can observe every integer argument
+        // register. Capture their values on the call edge before SSA joins
+        // its result with the original r3 on the skip edge.
+        if (PPC && Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
+            Op.CalleeRegisterArgs < 0 && !Op.SourceCallHint) {
+          const auto &TRI = getTargetRegInfo(TargetArch);
+          const auto Registers = TRI.integerParamRegs(TargetFormat);
+          for (uint64_t Offset : Registers)
+            Op.addInput(ndVarToMedVar(NdVar::reg(Offset, TRI.PointerSize)));
+          Op.CalleeRegisterArgs = Registers.size();
+          Op.CalleeStackArgs = 0;
+          Op.CalleeVectorArgs = 0;
+        }
         if (isTerminalEffect(Op.Opcode) || isNoReturnCall(Op))
           Terminal = &Op;
+      }
 
-      if (!Terminal) {
+      if (PPC && Terminal && Terminal->Opcode == NdOp::INDIR_BR) {
+        const JumpTable *Table = PPCTransfers.lookup(Guard.Addr);
+        if (!Table || Table->Targets.empty())
+          throw LowToMedConversionError(
+              "PPC conditional CTR branch has no proven local target set");
+        // The not-taken successor can also be a taken target. Only the
+        // proven CTR values determine the successors of the effect block.
+        for (va_t Address : Table->Targets) {
+          const auto Target = successorAtAddress(Func, GuardBlock, Address);
+          if (!Target)
+            throw LowToMedConversionError(
+                "PPC conditional CTR target has no matching CFG successor");
+          EffectBlock.Succs.push_back(*Target);
+        }
+        if (Table->Targets.size() == 1) {
+          Terminal->Opcode = NdOp::BRANCH;
+          Terminal->Inputs[0] = MedVar::makeConst(
+              Table->Targets.front(), Terminal->Inputs[0].Size,
+              ConstantAddressProvenance::CodeAddress);
+        }
+      } else if (!Terminal) {
         EffectBlock.Succs = {SkipId};
       } else if (Terminal->Opcode == NdOp::BRANCH) {
         if (Terminal->NumInputs < 1 || !Terminal->Inputs[0].isConst())
@@ -201,6 +266,11 @@ void LowToMedConverter::materializePredicatedEffects(MedFunc &Func,
     }
   }
 
+  if (PPC)
+    llvm::erase_if(Func.JumpTables, [&](const JumpTable &JT) {
+      const JumpTable *Proof = PPCTransfers.lookup(JT.InsnAddr);
+      return Proof && Proof->Targets.size() == 1;
+    });
   Func.Blocks.insert(Func.Blocks.end(),
                      std::make_move_iterator(AddedBlocks.begin()),
                      std::make_move_iterator(AddedBlocks.end()));
