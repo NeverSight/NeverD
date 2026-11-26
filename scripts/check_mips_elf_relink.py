@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import tempfile
 
+from mips_relink_linkage import SET_THREAD_AREA, build_linkage_objects, inspect_linkage, verify_linkage_objects
+
 
 ABIS = {
     "o32": ("mips", "gnu", 4001),
@@ -98,10 +100,16 @@ class Profile:
     release: int = 2
     shrinking: bool = False
     compressed_entry: bool = False
+    historical_isa: int = 0
+    linkage: str = ""
 
     @property
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
+        if self.linkage:
+            return f"{self.linkage}-{self.isa}-r{self.release}-{suffix}"
+        if self.historical_isa:
+            return f"mips{self.historical_isa}-{suffix}"
         name = f"{self.isa}-r{self.release}-{suffix}" if self.shrinking else suffix
         return name + "-compressed-entry" if self.compressed_entry else name
 
@@ -116,23 +124,47 @@ class Profile:
 
     @property
     def cpu(self):
-        return f"mips{32 if self.abi == 'o32' else 64}r{self.release}"
+        if self.historical_isa:
+            return f"mips{self.historical_isa}"
+        base = f"mips{32 if self.abi == 'o32' else 64}"
+        return base if self.release == 1 else f"{base}r{self.release}"
 
 
-def profiles():
+def profiles(version=4):
     for abi in ABIS:
         for little in (False, True):
             yield Profile(abi, little)
+            if version == 1:
+                continue
+            if version >= 4:
+                # These are the historical ISA/ABI combinations admitted by the loader.
+                for level in ((1, 2, 3) if abi == "o32" else (3, 4, 5)):
+                    yield Profile(abi, little, shrinking=True, historical_isa=level)
             for isa in ("classic", "micromips"):
-                for release in (2, 6):
+                releases = (2, 6)
+                if version >= 4:
+                    releases = (1, 2, 3, 5, 6) if isa == "classic" else (2, 3, 5, 6)
+                for release in releases:
                     profile = Profile(abi, little, isa, release, shrinking=True)
                     yield profile
-                    if isa == "micromips":
+                    if isa == "micromips" and version >= 3:
                         yield replace(profile, compressed_entry=True)
             if abi == "o32":
                 profile = Profile(abi, little, "mips16", shrinking=True)
                 yield profile
-                yield replace(profile, compressed_entry=True)
+                if version >= 3:
+                    yield replace(profile, compressed_entry=True)
+
+            if version >= 4:
+                for release in (2, 6):
+                    for isa in ("classic", "micromips"):
+                        for linkage in ("pic-hard", "pic-soft", "small-data", "tls"):
+                            yield Profile(abi, little, isa, release, linkage=linkage)
+                if abi == "o32":
+                    for linkage in ("pic-hard", "pic-soft", "small-data", "tls"):
+                        yield Profile(abi, little, "mips16", linkage=linkage)
+                yield Profile(abi, little, linkage="dsp")
+                yield Profile(abi, little, release=5, linkage="msa")
 
 
 def startup(profile):
@@ -168,11 +200,14 @@ def calculator(profile, updated):
 
 
 def layout(profile, section, *, split_entry=False):
-    base = 0x120000000 if profile.shrinking and profile.abi == "n64" else 0x400000
+    base = 0x120000000 if (profile.shrinking or profile.linkage) and profile.abi == "n64" else 0x400000
     headers = "PHDRS { startup PT_LOAD FLAGS(5); code PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }"
     calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
             ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
-    return (LAYOUT.replace("BASE_ADDRESS", hex(base + (0x100000 if section else 0)))
+    script = LAYOUT
+    if profile.linkage == "tls":
+        script = script.replace("  .data :", "  .tdata : { *(.tdata*) }\n  __tls_image = ADDR(.tdata);\n  .data :")
+    return (script.replace("BASE_ADDRESS", hex(base + (0x100000 if section else 0)))
             .replace("PROGRAM_HEADERS", headers if split_entry else "")
             .replace("ENTRY_SEGMENT", ":startup" if split_entry else "")
             .replace("DATA_SEGMENT", ":data" if split_entry else "")
@@ -205,10 +240,55 @@ def run(args, *, error=None, expected=0, source=None):
                            f"{error or expected}\n{result.stdout}\n{result.stderr}")
 
 
+def compile_arithmetic_object(args, build, profile, filename, ir):
+    target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
+    features = "+noabicalls" + (f",+{profile.isa}" if profile.isa != "classic" else "")
+    run([args.llc, "-filetype=obj", f"-mtriple={profile.triple}", *target, f"-mattr={features}",
+         "-relocation-model=static", "-o", build / filename, "-"], source=ir)
+
+
+def build_arithmetic_objects(args, build, profile):
+    target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
+    run([args.mc, "-filetype=obj", f"-triple={profile.triple}", *target,
+         "-mattr=+noabicalls", "-o", build / "start.o", "-"], source=startup(profile))
+    compile_arithmetic_object(args, build, profile, "calc.o", calculator(profile, False))
+    compile_arithmetic_object(args, build, profile, "updated.o", calculator(profile, True))
+    compile_arithmetic_object(args, build, profile, "grown.o", GROWING_CALC)
+    objects = ["start.o"]
+    if profile.isa == "mips16":
+        compile_arithmetic_object(args, build, profile, "invoke.o", MIPS16_CALLER)
+        objects.append("invoke.o")
+        if profile.compressed_entry:
+            compile_arithmetic_object(args, build, profile, "entry.o", MIPS16_ENTRY)
+            objects.append("entry.o")
+    objects.append("calc.o")
+    return objects
+
+
+def check_mixed_float_abis(args, builds, products):
+    for abi in ABIS:
+        for little in (False, True):
+            hard = Profile(abi, little, linkage="pic-hard").name
+            soft = Profile(abi, little, linkage="pic-soft").name
+            build = builds / hard
+            manifest = json.loads((build / "manifest.json").read_text())
+            shutil.copyfile(builds / soft / "updated.o", build / "soft.o")
+            path = build / "mixed.json"
+            encode(path, {**manifest, "replacement": "soft.o"})
+            previous = build / "prior-output.elf"
+            previous.write_bytes(b"existing product\n")
+            for mode in MODES:
+                run([args.neverd, "patch", products / hard / "original.elf", f"--relink={path}",
+                     f"--linker-path={args.lld}", f"--mode={mode}", "-o", previous],
+                    error="incompatible with target floating point ABI")
+                if previous.read_bytes() != b"existing product\n":
+                    raise ValueError(f"{hard}: incompatible {mode} replacement changed the prior output")
+
+
 def qualify(args):
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    results = {}
+    results, object_hashes = {}, {}
     with tempfile.TemporaryDirectory(prefix="mips relink ") as temp:
         for profile in profiles():
             name = profile.name
@@ -216,30 +296,14 @@ def qualify(args):
             out.mkdir(exist_ok=True)
             build = Path(temp) / name
             build.mkdir()
-            target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
-            features = "+noabicalls" + (f",+{profile.isa}" if profile.isa != "classic" else "")
-            run([args.mc, "-filetype=obj", f"-triple={profile.triple}", *target,
-                 "-mattr=+noabicalls", "-o", build / "start.o", "-"], source=startup(profile))
-
-            def compile_object(filename, ir, triple=profile.triple):
-                run([args.llc, "-filetype=obj", f"-mtriple={triple}", *target, f"-mattr={features}",
-                     "-relocation-model=static", "-o", build / filename, "-"], source=ir)
-
-            compile_object("calc.o", calculator(profile, False))
-            compile_object("updated.o", calculator(profile, True))
-            compile_object("grown.o", GROWING_CALC)
+            if profile.linkage:
+                objects = build_linkage_objects(args, build, profile, run)
+            else:
+                objects = build_arithmetic_objects(args, build, profile)
             write(build / "base.ld", layout(profile, False))
             section_layout = layout(profile, True)
             write(build / "section.ld", section_layout)
             write(build / "wrong-entry.ld", section_layout.replace("ENTRY(_start)", "ENTRY(calc)"))
-            objects = ["start.o"]
-            if profile.isa == "mips16":
-                compile_object("invoke.o", MIPS16_CALLER)
-                objects.append("invoke.o")
-                if profile.compressed_entry:
-                    compile_object("entry.o", MIPS16_ENTRY)
-                    objects.append("entry.o")
-            objects.append("calc.o")
             original = out / "original.elf"
             run([args.lld, "-static", "-T", build / "base.ld", "-o", original,
                  *(build / obj for obj in objects)])
@@ -256,6 +320,13 @@ def qualify(args):
 
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
+            if profile.linkage:
+                results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
+                object_hashes[name] = {}
+                for obj in ("caller.o", "calc.o"):
+                    shutil.copyfile(build / obj, out / obj)
+                    object_hashes[name][obj] = digest(out / obj)
+                continue
             split = layout(profile, True, split_entry=True)
             write(build / "grown.ld", split)
             encode(manifest_path, {**manifest, "replacement": "grown.o", "sectionLayout": "grown.ld"})
@@ -306,14 +377,15 @@ def qualify(args):
             reject("inplace", "missing defined global function", replacement="start.o")
             reject("inplace", "exactly one entry", original="absent.o")
             opposite = replace(profile, little=not profile.little)
-            compile_object("wrong-endian.o", calculator(profile, True), opposite.triple)
+            compile_arithmetic_object(args, build, opposite, "wrong-endian.o", calculator(profile, True))
             reject("section", "ELF linker exited", replacement="wrong-endian.o")
-            compile_object("adjacent.o", CALC.replace("ADJUST", "7").replace("12345", "9"))
+            compile_arithmetic_object(args, build, profile, "adjacent.o", CALC.replace("ADJUST", "7").replace("12345", "9"))
             reject("inplace", "other loaded bytes", replacement="adjacent.o")
             encode(manifest_path, manifest)
             run([args.neverd, "patch", original, *options, "--from-object=updated.o", "-o", sentinel],
                 error="cannot be combined")
-    encode(root / "products.json", {"version": 3, "profiles": results})
+        check_mixed_float_abis(args, Path(temp), root)
+    encode(root / "products.json", {"version": 4, "profiles": results, "objects": object_hashes})
     print(f"Relinked {len(results)} profiles in both modes")
 
 
@@ -321,7 +393,12 @@ def inspect_elf(image, profile):
     # This runs on the execution host. Native producers only need Python's stdlib.
     abi = profile.abi
     flags = image["e_flags"]
-    arch = (7 if profile.release == 2 else 9) + (abi != "o32")
+    if profile.historical_isa:
+        arch = profile.historical_isa - 1
+        level, revision = profile.historical_isa, 0
+    else:
+        arch = {1: 5, 2: 7, 3: 7, 5: 7, 6: 9}[profile.release] + (abi != "o32")
+        level, revision = (32 if abi == "o32" else 64), profile.release
     extension = {"classic": 0, "micromips": 0x02000000, "mips16": 0x04000000}[profile.isa]
     if (image["e_type"] != "ET_EXEC" or image["e_machine"] != "EM_MIPS"
             or image.little_endian != profile.little or image.elfclass != (64 if abi == "n64" else 32)
@@ -329,6 +406,9 @@ def inspect_elf(image, profile):
             or bool(flags & 0x20) != (abi == "n32")
             or flags & 0xf000 != (0x1000 if abi == "o32" else 0)):
         raise ValueError(f"{profile.name}: unexpected ELF header or ABI flags {flags:#x}")
+    abi_record = image.get_section_by_name(".MIPS.abiflags")
+    if abi_record is None or abi_record.data()[2:4] != bytes((level, revision)):
+        raise ValueError(f"{profile.name}: expected ISA level {level}, revision {revision} in .MIPS.abiflags")
     if bool(image["e_entry"] & 1) != profile.compressed_entry:
         raise ValueError(f"{profile.name}: incorrect program entry ISA at {image['e_entry']:#x}")
 
@@ -342,20 +422,29 @@ def inspect_elf(image, profile):
     va, size = symbol["st_value"], symbol["st_size"]
     if (symbol["st_info"]["type"] != "STT_FUNC" or not section["sh_flags"] & 4 or size <= 0
             or not section["sh_addr"] <= va <= section["sh_addr"] + section["sh_size"] - size
-            or (profile.shrinking and abi == "n64" and va < 1 << 32)):
+            or ((profile.shrinking or profile.linkage) and abi == "n64" and va < 1 << 32)):
         raise ValueError(f"{profile.name}: invalid calc range {va:#x}+{size:#x} in {section.name}")
+    if profile.linkage:
+        inspect_linkage(image, profile, symbol, section)
     return dict(va=va, offset=section["sh_offset"] + va - section["sh_addr"], size=size, section=section.name)
 
 
 def execute_image(path, image, profile, expected):
-    if profile.isa == "micromips" and profile.abi != "o32":
+    needs_fpu = profile.release < 6 and profile.linkage and profile.linkage != "pic-soft"
+    if profile.isa == "micromips" and (profile.abi != "o32" or needs_fpu):
         from mips_elf_runtime import run_micromips64
-        run_micromips64(image, profile.release, profile.exit_nr, expected)
+        run_micromips64(image, profile.release, profile.exit_nr, expected,
+                        instruction_limit=2048 if profile.linkage else 256,
+                        set_thread_area=SET_THREAD_AREA[profile.abi] if profile.linkage == "tls" else None)
         return
     arch = {"o32": "mips", "n32": "mipsn32", "n64": "mips64"}[profile.abi]
     qemu = f"qemu-{arch}{'el' if profile.little else ''}"
     cpu = None
-    if profile.release == 6:
+    if profile.linkage == "dsp":
+        cpu = "74Kf" if profile.abi == "o32" else "mips64dspr2"
+    elif profile.linkage == "msa":
+        cpu = "P5600" if profile.abi == "o32" else "Loongson-3A4000"
+    elif profile.release == 6:
         cpu = "mips32r6-generic" if profile.abi == "o32" else "I6400"
     elif profile.isa == "micromips":
         cpu = "M14Kc"
@@ -370,28 +459,31 @@ def execute(args):
 
     root = args.root.resolve()
     manifest = json.loads((root / "products.json").read_text())
-    cases = list(profiles())
     if "version" in manifest:
         version = manifest["version"]
-        if version not in (2, 3):
+        if version not in (2, 3, 4):
             raise ValueError("Unknown MIPS relink products version")
-        if version == 2:
-            cases = [p for p in cases if not p.compressed_entry]
         hashes = manifest["profiles"]
     else:
         # Archived original-format manifests contain the six classic R2 cases.
         version = 1
-        cases = [p for p in cases if not p.shrinking]
         hashes = manifest
+    cases = list(profiles(version))
     if set(hashes) != {p.name for p in cases}:
         raise ValueError("MIPS relink products do not match the expected profile set")
-    section_cases = ("section", "section-grown") if version == 3 else ("section",)
+    if version == 4:
+        object_hashes = manifest["objects"]
+        if set(object_hashes) != {p.name for p in cases if p.linkage}:
+            raise ValueError("MIPS relink object receipts do not match the expected linkage profiles")
     results, placements = {}, {}
     for profile in cases:
         row, ranges = {}, {}
         original, updated = (81, 29) if profile.shrinking else (25, 37)
+        if profile.linkage:
+            original, updated = 41, 73
+            verify_linkage_objects(root / profile.name, profile, object_hashes[profile.name], digest)
         expected_results = {"original": original, "section": updated, "inplace": updated}
-        if version == 3:
+        if version >= 3 and not profile.linkage:
             # The larger body returns 61, 56 and 44 for the three startup calls.
             expected_results["section-grown"] = 161
         if hashes[profile.name].keys() != expected_results.keys():
@@ -412,7 +504,7 @@ def execute(args):
         if (inplace["va"] != old["va"] or inplace["offset"] != old["offset"]
                 or not sizes_match):
             raise ValueError(f"{profile.name}: incorrect function placement {ranges}")
-        for case in section_cases:
+        for case in (case for case in ranges if case.startswith("section")):
             section = ranges[case]
             if (section["section"] != ".calc.update"
                     or not (section["va"] >= old["va"] + old["size"]

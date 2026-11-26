@@ -166,20 +166,44 @@ A read-only startup segment without execute permission or a `NOLOAD`
 startup section fails this check even when the rebuilt function is executable.
 
 The runtime qualification uses the NeverSight LLVM fork's code generator,
-assembler and ELF linker. It builds classic MIPS and microMIPS for Release 2
-and Release 6 on o32, n32 and n64 in both byte orders, plus MIPS16 Release 2
-on o32 in both orders. Each program calls the rebuilt function three times.
-The matrix includes classic and tagged compressed entry points. The
-MIPS16 programs call the rebuilt function through an O32 `R_MIPS16_26`
-relocation. The compressed-entry variant also calls the classic startup
-routine from MIPS16 code.
-The six original classic cases return 25 before relinking and 37 afterward.
-The 40 shrinking-function cases return 81 and 29. They check the smaller
-symbol size, file offset, placement and ISA marker. The shrinking n64 images
-place executable code above 4 GiB. All 46 profiles also link a larger
-function in `section` mode. Its three calls return 61, 56 and 44, giving
-exit status 161. The same object must fail in `inplace` mode and preserve
-the previous output.
+assembler and ELF linker. Each row below runs in both byte orders with the
+original program and both relink modes.
+
+| Instruction set | ABIs | Entry points |
+| --- | --- | --- |
+| MIPS I, II | o32 | Classic |
+| MIPS III | o32, n32, n64 | Classic |
+| MIPS IV, V | n32, n64 | Classic |
+| MIPS32/64 R1, R2, R3, R5, R6 | o32, n32, n64 | Classic |
+| microMIPS R2, R3, R5, R6 | o32, n32, n64 | Classic and tagged microMIPS |
+| MIPS16 R2 | o32 | Classic and tagged MIPS16 |
+
+These 106 configurations call the rebuilt function three times. Six cover
+same-size replacements, and 100 cover shrinking replacements. All also link
+a larger replacement in `section` mode and observe exit status 161. The
+same object must fail in `inplace` mode and preserve the previous output.
+The runner checks the function size, file offset, ISA marker and exact ISA
+revision in `.MIPS.abiflags`. Shrinking n64 images place code above 4 GiB.
+
+The cross-object programs exercise their own stack, function pointer, ELF
+global pointer, 64-bit data and arguments beyond the register argument area.
+The callee calls a helper in another object. The guest checks both full
+64-bit results and the helper's two visible side effects. It exits with 41
+before the replacement and 73 afterward. The Linux runner checks the input
+relocations, FP ABI, linked callback and, for local-exec TLS, initialized
+`PT_TLS` storage. The matrix covers the following combinations.
+
+| Workload | ISA and ABI |
+| --- | --- |
+| PIC hard and soft float, static GP-relative small data, local-exec TLS | Classic and microMIPS R2/R6 on all three ABIs, MIPS16 R2 on o32 |
+| Scalar FP addition with hard-float arguments | Classic and microMIPS R2/R6 on all three ABIs |
+| Packed-byte DSP arithmetic | Classic R2 on all three ABIs |
+| MSA vector arithmetic | Classic R5 on all three ABIs |
+
+For MIPS16 o32 hard float, the ordinary function pointer selects the
+compiler's classic entry adapter and the symbol table retains the MIPS16
+body. Pre-R6 microMIPS small-data programs use `+long-calls` to call
+the external classic function across ISA modes.
 
 To build the tools from NeverD's pinned fork checkout, run
 
@@ -195,7 +219,10 @@ Use `build-mips-tools/bin/ld.lld` as the linker. Run
 `python3 scripts/check_mips_elf_relink.py qualify --help` for the tool
 paths, then `python3 scripts/check_mips_elf_relink.py execute --root products`
 on Linux with QEMU user-mode and pyelftools. The n32 and n64 microMIPS
-cases use the pinned NeverSight Unicorn fork. Set `LIBUNICORN_PATH` to its
+cases and the pre-R6 o32 microMIPS cases using the FPU run on the pinned
+NeverSight Unicorn fork. Its runner configures the floating-point register
+width from the ELF ABI record and implements the single-thread
+`set_thread_area` call for the TLS fixture. Set `LIBUNICORN_PATH` to its
 MIPS-enabled shared-library build and `PYTHONPATH` to
 `third_party/unicorn/bindings/python`. The runner applies the ELF load
 segments' memory permissions, starts at the entry point, and checks the ABI
