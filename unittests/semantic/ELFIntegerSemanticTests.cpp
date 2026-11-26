@@ -106,6 +106,8 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
                                0x7cc53a79, 0x4d8a8982,   // xor. / crxor
                                0x7cc53a39, 0x4d8a8a42}); // eqv. / creqv
     Words.insert(Words.end(), {MultiplyWord, MultiplyWordRecord});
+    Words.insert(Words.end(), std::begin(LogicalWordShifts),
+                 std::end(LogicalWordShifts));
     if (Wide)
       for (auto Form : PopulationForms)
         Words.push_back(Form.Word);
@@ -136,8 +138,11 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
                                  UINT64_C(0x8000000000000000),
                                  UINT64_C(0xffffffff80000000),
                                  UINT64_C(0x789abcde76543210)};
+  std::vector<uint64_t> Right(std::begin(Values), std::end(Values));
+  if (!RV)
+    Right.insert(Right.end(), {31, 32, 33, 63, 64, 65});
   for (uint64_t L : Values)
-    for (uint64_t R : Values) {
+    for (uint64_t R : Right) {
       SCOPED_TRACE(::testing::Message() << "lhs=" << L << " rhs=" << R);
       uc_engine *Engine = nullptr;
       auto Mode = RV ? (Wide ? UC_MODE_RISCV64 : UC_MODE_RISCV32)

@@ -633,6 +633,17 @@ bool integer(State &S, Arch A, uint32_t W) {
   }
   case opcode::SLW:
   case opcode::SRW:
+    if (!Wide) {
+      // A six-bit count can shift every bit out of a word. Widen first so
+      // the shift is defined in LLVM and C even when the count exceeds 31.
+      NdVar Word = S.resize(Src, sizeof(uint64_t));
+      NdVar Count = S.op(NdOp::INT_AND, Y, S.imm(Word.Size * 8 - 1));
+      NdVar Shifted = S.op(XO == opcode::SLW ? NdOp::INT_LEFT : NdOp::INT_RIGHT,
+                           Word, S.resize(Count, Word.Size));
+      V = S.resize(Shifted, S.Width);
+      break;
+    }
+    [[fallthrough]];
   case opcode::SLD:
   case opcode::SRD: {
     unsigned Size = XO == opcode::SLW || XO == opcode::SRW ? 4 : 8;
