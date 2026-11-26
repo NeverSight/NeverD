@@ -961,6 +961,72 @@ TEST(SymMBAResiduePowers, RepeatedFieldsKeepTheirLastSquareAndOddCopies) {
   }
 }
 
+TEST(SymMBAResiduePowers, RepeatedPowersRetainQuadraticsAndResidualCopies) {
+  for (const auto [Precision, D] :
+       {std::pair{8u, 2u}, {9u, 3u}, {16u, 3u}, {25u, 4u}, {130u, 4u}}) {
+    const unsigned Bits = Precision / 2, Shift = Precision - Bits;
+    const unsigned Width = Precision + 5, K = Shift - D, Group = 1u << D;
+    for (const unsigned Extra : {0u, 1u, Group - 1}) {
+      SCOPED_TRACE(::testing::Message() << Precision << ':' << Extra);
+      SymContext C;
+      const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      const auto A = C.mkSExt(C.mkExtract(X, 1, Bits), Width);
+      const auto B = C.mkZExt(C.mkExtract(Y, 0, Bits), Width);
+      auto literal = [&](int N, unsigned S = 0) {
+        return C.mkConst(llvm::APInt(Width, N, true).shl(S));
+      };
+      auto affine = [&](int Offset, int AX, int BY) {
+        return C.mkAdd({literal(Offset), C.mkMul(literal(AX, K), A),
+                        C.mkMul(literal(BY, K), B)});
+      };
+      const int OtherOffset = Extra == 1 ? 2 : 5;
+      const auto F = affine(-3, -5, 3), G = affine(OtherOffset, 7, 2);
+      const auto Scale = literal(3, Width - Precision);
+      llvm::SmallVector<SymRef, 64> Factors{Scale};
+      Factors.append(Group + Extra, F);
+      Factors.append(3 * Group, G);
+      const auto Original = C.mkMul(Factors);
+      size_t Bytes = 1 << 20;
+      detail::WorkBudget Budget(65536);
+      const auto Result =
+          detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+      ASSERT_NE(Result, Original);
+      SymEvalPlan Eval(C, Result);
+      for (unsigned I = 0; I < 16; ++I)
+        for (unsigned J = 0; J < 16; ++J) {
+          std::array Values{llvm::APInt(Width, I), llvm::APInt(Width, J)};
+          if (J & 1)
+            Values[0].setBit(Bits);
+          const auto U = Values[0].extractBits(Bits, 1).sext(Width);
+          const auto V = Values[1].trunc(Bits).zext(Width);
+          const auto First = (3 * V - 5 * U).shl(K) - 3;
+          const auto Second = (7 * U + 2 * V).shl(K) + OtherOffset;
+          auto Expected = llvm::APInt(Width, 3).shl(Width - Precision);
+          for (unsigned N = 0; N < Group + Extra; ++N)
+            Expected *= First;
+          for (unsigned N = 0; N < 3 * Group; ++N)
+            Expected *= Second;
+          ASSERT_EQ(Eval.eval(Values), Expected);
+        }
+    }
+  }
+}
+
+TEST(SymMBAResiduePowers, RepeatedPowersKeepLiveFourthDegrees) {
+  // With five observed bits (c + 2*h)^4 still contains 16*h^4.
+  constexpr unsigned Width = 16;
+  SymContext C;
+  const auto X = C.mkZExt(C.mkVar("x", 4), Width);
+  const auto Y = C.mkSExt(C.mkVar("y", 4), Width);
+  const auto F = C.mkAdd({C.mkConst(Width, 3), C.mkMul(C.mkConst(Width, 6), X),
+                          C.mkMul(C.mkConst(Width, 10), Y)});
+  const auto Original = C.mkMul({C.mkConst(Width, 1u << 11), F, F, F, F});
+  size_t Bytes = 1 << 20;
+  detail::WorkBudget Budget(65536);
+  EXPECT_EQ(detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr),
+            Original);
+}
+
 TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
   for (const unsigned Bits : {4u, 17u, 65u}) {
     const unsigned Width = 3 * Bits + 2, Shift = Bits + 1;

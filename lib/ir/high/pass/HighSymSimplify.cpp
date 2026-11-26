@@ -1217,8 +1217,14 @@ ExprPtr packedExtractWord(sym::SymContext &Ctx, sym::SymRef Root,
       const auto Low = Ctx.node(R).Aux;
       return Low ? Binary(NdOp::INT_RIGHT, Word, Literal(Low)) : Word;
     }
-    if (Op == SymOp::ZExt)
-      return Clip(Word, Ctx.width(Args.front()));
+    if (Op == SymOp::ZExt || Op == SymOp::SExt) {
+      const unsigned Bits = Ctx.width(Args.front());
+      auto Low = Clip(Word, Bits);
+      if (Op == SymOp::ZExt)
+        return Low;
+      const auto Sign = Literal(uint64_t{1} << (Bits - 1));
+      return Binary(NdOp::INT_SUB, Binary(NdOp::INT_XOR, Low, Sign), Sign);
+    }
     NdOp Operation;
     switch (Op) {
     case SymOp::Add:
@@ -1261,20 +1267,23 @@ ExprPtr packedExtractWord(sym::SymContext &Ctx, sym::SymRef Root,
       continue;
     const unsigned Bits = Ctx.width(R);
     ExprPtr Word;
-    if (Bits == 1 || Bits % 8 == 0 || Bits >= 64) {
-      const auto It = Built.find(R.index());
-      if (Bits <= 64 && It != Built.end() && It->second) {
-        Word = std::make_shared<HighExpr>();
-        Word->Kind = ExprKind::Cast;
-        Word->Type = Word->CastTo = NdType::makeInt(8, false);
-        Word->Operands = {It->second};
+    const bool NativeWidth = Bits == 1 || Bits % 8 == 0;
+    const auto Native = NativeWidth ? Built.find(R.index()) : Built.end();
+    if (Bits <= 64 && Native != Built.end() && Native->second) {
+      Word = std::make_shared<HighExpr>();
+      Word->Kind = ExprKind::Cast;
+      Word->Type = Word->CastTo = NdType::makeInt(8, false);
+      Word->Operands = {Native->second};
+    } else if (Bits < 64 && Bits % 8 &&
+               (Bits != 1 || Ctx.op(R) == SymOp::Extract)) {
+      // A one-bit extract may have no standalone source spelling. Its
+      // enclosing packed word can read the bit from an unsigned carrier.
+      if (!Ready) {
+        Work.emplace_back(R, true);
+        for (auto Child : Ctx.operands(R))
+          Work.emplace_back(Child, false);
+        continue;
       }
-    } else if (!Ready) {
-      Work.emplace_back(R, true);
-      for (auto Child : Ctx.operands(R))
-        Work.emplace_back(Child, false);
-      continue;
-    } else {
       Word = Assemble(R);
     }
     Words.try_emplace(R.index(), std::move(Word));
