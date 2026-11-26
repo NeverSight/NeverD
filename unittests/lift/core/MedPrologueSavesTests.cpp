@@ -164,6 +164,80 @@ TEST_P(MedPrologueSaves, AComputedFrameReadCanObserveTheSave) {
   EXPECT_FALSE(save(Func).PrologueSave);
 }
 
+TEST_P(MedPrologueSaves, AnotherFrameObjectsAddressLeavesTheSave) {
+  // A frame address reaches the object it points into. Handing a callee the
+  // buffer below the save, or reading that buffer at a run-time index, names
+  // no byte of the save, as a va_list over homed arguments does not. An
+  // index between the save's own address and the constant that reaches the
+  // buffer, as `-O0` code indexes a local array through rbp, names the
+  // buffer; so does the buffer's address plus an index biased low and a
+  // constant that alone would reach the save.
+  enum Shape { Passed, Indexed, IndexedThenOffset, IndexedTowardTheSave };
+  for (bool InMetadata : {false, true}) {
+    for (Shape Address :
+         {Passed, Indexed, IndexedThenOffset, IndexedTowardTheSave}) {
+      SCOPED_TRACE(InMetadata);
+      SCOPED_TRACE(Address);
+      auto Func = pushedRbx(CallingConv::Win64);
+      Func.FrameSize = 40;
+      auto &Ops = Func.Blocks.front().Ops;
+      auto Call = op(NdOp::CALL, none(), {MedVar::makeConst(0x3000, 8)});
+      if (InMetadata) {
+        MedCallInfo Info;
+        Info.BlockId = 0;
+        Info.OpIdx = 9;
+        Info.Args = {temp(22)};
+        Func.CallInfos.push_back(Info);
+      } else {
+        Call.addInput(temp(22));
+      }
+      const MedOp Index = Address == Passed ? op(NdOp::COPY, temp(20), {sp(2)})
+                          : Address == IndexedThenOffset
+                              ? op(NdOp::INT_ADD, temp(20), {sp(1), rcx(0)})
+                              : op(NdOp::INT_ADD, temp(20), {sp(2), rcx(0)});
+      const MedOp Offset =
+          Address == IndexedThenOffset
+              ? op(NdOp::INT_ADD, temp(22),
+                   {temp(20), MedVar::makeConst(uint64_t(-32), 8)})
+          : Address == IndexedTowardTheSave
+              ? op(NdOp::INT_ADD, temp(22),
+                   {temp(20), MedVar::makeConst(32, 8)})
+              : op(NdOp::COPY, temp(22), {temp(20)});
+      const MedOp Read = Address == Passed
+                             ? op(NdOp::COPY, temp(21), {rcx(0)})
+                             : op(NdOp::LOAD, temp(21), {temp(22)});
+      Ops[8].Output = sp(4);
+      Ops[8].Inputs[0] = sp(3);
+      Ops[6].Inputs[0] = sp(3);
+      Ops.insert(Ops.begin() + 5,
+                 {op(NdOp::INT_SUB, sp(2), {sp(1), MedVar::makeConst(32, 8)}),
+                  Index, Offset, Read, Call,
+                  op(NdOp::INT_ADD, sp(3), {sp(2), MedVar::makeConst(32, 8)})});
+      markStackAccesses(Func, Arch::X64, BinaryFormat::COFF);
+      EXPECT_TRUE(save(Func).PrologueSave);
+    }
+  }
+}
+
+TEST_P(MedPrologueSaves, DataReadThroughAFrameAddressIsNoEscape) {
+  // An SSE operation with a memory operand reads the frame through its
+  // address, and what it returns is data: a call that receives the result
+  // reaches no frame slot.
+  auto Func = pushedRbx(CallingConv::Win64);
+  Func.FrameSize = 40;
+  auto &Ops = Func.Blocks.front().Ops;
+  Ops[8].Output = sp(4);
+  Ops[8].Inputs[0] = sp(3);
+  Ops[6].Inputs[0] = sp(3);
+  Ops.insert(Ops.begin() + 5,
+             {op(NdOp::INT_SUB, sp(2), {sp(1), MedVar::makeConst(32, 8)}),
+              op(NdOp::INTRINSIC, temp(21), {sp(2)}),
+              op(NdOp::CALL, none(), {MedVar::makeConst(0x3000, 8), temp(21)}),
+              op(NdOp::INT_ADD, sp(3), {sp(2), MedVar::makeConst(32, 8)})});
+  markStackAccesses(Func, Arch::X64, BinaryFormat::COFF);
+  EXPECT_TRUE(save(Func).PrologueSave);
+}
+
 TEST_P(MedPrologueSaves, APushedEntryValueIsAPrologueSave) {
   MedFunc Func = pushedRbx();
   markStackAccesses(Func, Arch::X64, BinaryFormat::ELF);

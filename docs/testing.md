@@ -14454,6 +14454,14 @@ machine-state boundary; they do not qualify kernel continuation execution.
 The callee-save visibility cases cover explicit and recorded Win64 call
 arguments, a call with its own home space, and a dynamic frame-relative read.
 They exercise the combined source pass and its individual callee-save entry.
+`MedPrologueSaves.AnotherFrameObjectsAddressLeavesTheSave` hands a callee,
+and reads at a run-time index, the buffer below a save, also when the index
+lies between the save's address and the constant that reaches the buffer or
+between the buffer's address and a constant that alone would reach the
+save, and
+`MedPrologueSaves.DataReadThroughAFrameAddressIsNoEscape` passes a callee
+what an SSE operation read through a frame address: neither names a byte of
+the save, so both keep it a prologue save.
 
 `NeverDMedPrologueSavesTests` runs the same save, restore, overlapping-store,
 return-address and process-entry cases through separate and combined source
