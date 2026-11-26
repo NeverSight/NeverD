@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9b19c34302a77af77ca450ee98125d3a8d7bbce44915a0b16696b6e9cda9eacf -->
+<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
 
 <div align="center">
 
@@ -212,7 +212,7 @@ cmake --build build
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r14
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r15
 cmake --build build
 ```
 
@@ -228,19 +228,19 @@ cmake --build build
 
 每個封存檔解壓縮至 `~/.cache/neverd-llvm/<tag>/<arch>/`（或 `NEVERD_LLVM_PREBUILT_CACHE_DIR` 指定的目錄）前，都會核對 `cmake/NeverDLLVMPrebuilt.cmake` 中固定的摘要；未被這些固定值描述的 tag 則核對隨包發布的 `.sha256`。預設固定版本的 `BUILDINFO.txt` 也必須記錄完全一致的 LLVM 子模組提交。發布建置在 macOS 與 Linux 使用 ccache，Windows clang-cl 使用 sccache 與 GitHub Actions 快取後端；編譯器快取只加速重建，不作為發布產物上傳。
 
-預設套件修訂版為 `neverd-llvm-v23.0.0-r14`。其 Git tag、發布目標、原始碼提交與三個封存檔摘要共同構成不可變的版本化原始碼固定值。若現有建置目錄快取舊基礎 tag、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7`、`neverd-llvm-v23.0.0-r8`、`neverd-llvm-v23.0.0-r9`、`neverd-llvm-v23.0.0-r10`、`neverd-llvm-v23.0.0-r11`、`neverd-llvm-v23.0.0-r12` 或 `neverd-llvm-v23.0.0-r13`，會自動遷移至 `r14`，除非明確設定 `NEVERD_LLVM_PREBUILT_SHA256`。手動執行 `Prebuilt LLVM Audit` 工作流程會呼叫 `scripts/audit_prebuilt_llvm_release.py`，核對 GitHub 目前發布及各校驗和附屬檔案。
+預設套件修訂版為 `neverd-llvm-v23.0.0-r15`。其 Git tag、發布目標、原始碼提交與三個封存檔摘要共同構成不可變的版本化原始碼固定值。若現有建置目錄快取舊基礎 tag、`neverd-llvm-v23.0.0-r1`、`neverd-llvm-v23.0.0-r2`、`neverd-llvm-v23.0.0-r3`、`neverd-llvm-v23.0.0-r4`、`neverd-llvm-v23.0.0-r5`、`neverd-llvm-v23.0.0-r6`、`neverd-llvm-v23.0.0-r7`、`neverd-llvm-v23.0.0-r8`、`neverd-llvm-v23.0.0-r9`、`neverd-llvm-v23.0.0-r10`、`neverd-llvm-v23.0.0-r11`、`neverd-llvm-v23.0.0-r12`、`neverd-llvm-v23.0.0-r13` 或 `neverd-llvm-v23.0.0-r14`，會自動遷移至 `r15`，除非明確設定 `NEVERD_LLVM_PREBUILT_SHA256`。手動執行 `Prebuilt LLVM Audit` 工作流程會呼叫 `scripts/audit_prebuilt_llvm_release.py`，核對 GitHub 目前發布及各校驗和附屬檔案。
 
-若 LLVM fork 原始碼改變而 LLVM 仍回報 `23.0.0`，應發布下一個套件修訂版——`neverd-llvm-v23.0.0-r15`，之後為 `-r16`——不要覆寫既有發布，也不要虛構 LLVM 版本 `23.0.1`：
+若 LLVM fork 原始碼改變而 LLVM 仍回報 `23.0.0`，應發布下一個套件修訂版——`neverd-llvm-v23.0.0-r16`，之後為 `-r17`——不要覆寫既有發布，也不要虛構 LLVM 版本 `23.0.1`：
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r15 \
+  -f release_tag=neverd-llvm-v23.0.0-r16 \
   -f overwrite_existing_assets=false
 ```
 
-工作流程成功後，同時更新 `cmake/NeverDLLVMPrebuilt.cmake` 中的預設 tag、固定提交與三個摘要。每個套件修訂版使用獨立的快取目錄；目前預設版本位於 `.cache/neverd-llvm/neverd-llvm-v23.0.0-r14`。過期或重新發布的封存檔會在解壓縮前失敗。`overwrite_existing_assets` 僅用於舊版復原，正常的修訂版發布保持關閉。
+工作流程成功後，同時更新 `cmake/NeverDLLVMPrebuilt.cmake` 中的預設 tag、固定提交與三個摘要。每個套件修訂版使用獨立的快取目錄；目前預設版本位於 `.cache/neverd-llvm/neverd-llvm-v23.0.0-r15`。過期或重新發布的封存檔會在解壓縮前失敗。`overwrite_existing_assets` 僅用於舊版復原，正常的修訂版發布保持關閉。
 
 **產物**
 
