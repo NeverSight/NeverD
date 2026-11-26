@@ -1388,7 +1388,8 @@ size_t equalFactorRun(llvm::ArrayRef<SymRef> Remaining, WorkBudget &Budget) {
 std::optional<int> uniformJoinSlope(const SymContext &Ctx, SymOp Op,
                                     const llvm::APInt &Literal, unsigned Zeros,
                                     WeightedFieldStage Outer,
-                                    WeightedFieldStage Inner) {
+                                    WeightedFieldStage Inner,
+                                    WorkBudget &Budget) {
   const unsigned Precision = Literal.getBitWidth();
   auto scaleZeros = [&](SymRef Scale, unsigned Available) {
     if (!Scale || !Available)
@@ -1420,19 +1421,63 @@ std::optional<int> uniformJoinSlope(const SymContext &Ctx, SymOp Op,
   // Trace the observable interval back through each even multiplier. Its
   // trailing zeros lift the bottom edge and discard the same number of top
   // bits. A hole outside this interval cannot affect the result or its carries.
-  bool Partial = false;
-  for (const auto [Ref, High] :
-       {std::pair{Outer.Mask, Precision - OuterShift},
-        std::pair{Inner.Mask, Precision - OuterShift - InnerShift}}) {
+  // Keep mixed masks in the same coordinates after removing both shifts.
+  std::optional<llvm::APInt> InnerMask, OuterMask;
+  auto readMask = [&](SymRef Ref, unsigned High,
+                      std::optional<llvm::APInt> &Window) {
     if (!Ref)
-      continue;
+      return true;
     const llvm::APInt Mask(
         High, Ctx.constWords(Ref).take_front(llvm::APInt::getNumWords(High)));
     if (Mask.getActiveBits() <= High - Live)
+      return false;
+    if (Mask.countl_one() < Live)
+      Window.emplace(Mask.extractBits(Live, High - Live));
+    return true;
+  };
+  if (!readMask(Outer.Mask, Precision - OuterShift, OuterMask) ||
+      !readMask(Inner.Mask, Precision - OuterShift - InnerShift, InnerMask))
+    return 0;
+  if (!InnerMask && !OuterMask)
+    return Direction;
+  const bool AbsorbingJoin =
+      !Direction && (Op == SymOp::Or || Op == SymOp::And);
+  if ((!InnerMask || !OuterMask) && !AbsorbingJoin)
+    return std::nullopt;
+
+  // An odd multiplier congruent to one on the remaining bits preserves
+  // sparse support. Other odd multipliers can carry into any higher hole.
+  auto spread = [&](llvm::APInt &Possible, SymRef Scale, unsigned Shift) {
+    if (!Scale)
+      return true;
+    const auto Work = llvm::APInt::getNumWords(Shift + Live);
+    if (!Budget.canConsume(Work))
+      return false;
+    Budget.consume(Work);
+    const unsigned Low = Possible.countr_zero(), Bits = Live - Low;
+    const unsigned End = Shift + Bits;
+    const llvm::APInt K(
+        End, Ctx.constWords(Scale).take_front(llvm::APInt::getNumWords(End)));
+    if (K.getActiveBits() > Shift + 1)
+      Possible.setBitsFrom(Low);
+    return true;
+  };
+  auto Possible =
+      InnerMask ? std::move(*InnerMask) : llvm::APInt::getAllOnes(Live);
+  if (InnerMask && !spread(Possible, Inner.Scale, InnerShift))
+    return std::nullopt;
+  if (OuterMask) {
+    Possible &= *OuterMask;
+    if (Possible.isZero())
       return 0;
-    Partial |= Mask.countl_one() < Live;
   }
-  return Partial ? std::nullopt : Direction;
+  if (AbsorbingJoin && spread(Possible, Outer.Scale, OuterShift)) {
+    const auto High = Literal.extractBits(Live, Precision - Live);
+    if (Op == SymOp::Or ? Possible.isSubsetOf(High)
+                        : !Possible.intersects(High))
+      return 0;
+  }
+  return std::nullopt;
 }
 
 // The factor is c OP (2^Shift * h). Its low Shift bits are the
@@ -1518,12 +1563,9 @@ bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
          (Ctx.op(Field) == SymOp::Xor || Ctx.op(Field) == SymOp::Or);
 }
 
-bool hasDistributedFactors(const SymContext &Ctx, SymRef Root) {
-  const auto Operands = Ctx.operands(Root);
-  if (!Ctx.isConst(Operands.front()) ||
-      (Ctx.constWords(Operands.front()).front() & 1))
-    return false;
-  const auto Factors = Operands.drop_front();
+namespace {
+bool hasDistributedFields(const SymContext &Ctx,
+                          llvm::ArrayRef<SymRef> Factors) {
   auto HasSum = [&](SymRef F) {
     const auto Terms = readWeightedFactor(Ctx, F).Terms;
     if (Terms.size() < 2)
@@ -1540,14 +1582,65 @@ bool hasDistributedFactors(const SymContext &Ctx, SymRef Root) {
          HasSum(Factors[Factors.size() / 2]);
 }
 
+// A backend may distribute the product scale into one affine factor:
+// (2^s*c + 2^s*k*x) * F = 2^s * (c + k*x) * F in the original ring.
+// Reuse the ordinary projected-product proof after extracting that common
+// power. Keep the input when the projected proof cannot shorten it.
+SymRef extractFactorScale(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                          size_t &Storage) {
+  auto Ops = Ctx.operands(Root);
+  const bool Scaled = Ctx.isConst(Ops.front());
+  const auto Factors = Ops.drop_front(Scaled);
+  if (!Budget.canConsume(Factors.size()))
+    return {};
+  Budget.consume(Factors.size());
+  const unsigned Width = Ctx.width(Root);
+  const size_t Words = llvm::APInt::getNumWords(Width);
+  unsigned Shift = 0;
+  size_t Index = 0;
+  for (auto [I, F] : llvm::enumerate(Factors)) {
+    if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) != 2)
+      continue;
+    const auto C = Ctx.operand(F, 0), D = Ctx.operand(F, 1);
+    if (!Ctx.isConst(C) || (Ctx.constWords(C).front() & 1) ||
+        !scaledWord(Ctx, D))
+      continue;
+    const auto A = Ctx.constWords(C), K = Ctx.constWords(Ctx.operand(D, 0));
+    if (!Budget.consume(2 * Words))
+      return {};
+    const auto S = std::min(llvm::APInt::tcLSB(A.data(), Words),
+                            llvm::APInt::tcLSB(K.data(), Words));
+    if (S > Shift) {
+      Shift = S;
+      Index = I;
+    }
+  }
+  if (!Shift)
+    return {};
+  const size_t Bytes = 4 * Factors.size() * sizeof(SymRef) +
+                       6 * (sizeof(SymNode) + Words * sizeof(uint64_t));
+  const size_t Work =
+      8 * Words + Factors.size() * (2 + std::bit_width(Factors.size()));
+  if (Bytes > Storage || !Budget.consume(Work))
+    return {};
+  Storage -= Bytes;
+  const auto F = Factors[Index], D = Ctx.operand(F, 1), X = Ctx.operand(D, 1);
+  auto Offset = Ctx.constValue(Ctx.operand(F, 0)).ashr(Shift);
+  auto K = Ctx.constValue(Ctx.operand(D, 0)).ashr(Shift);
+  auto Scale = Scaled ? Ctx.constValue(Ops.front()).shl(Shift)
+                      : llvm::APInt::getOneBitSet(Width, Shift);
+  llvm::SmallVector<SymRef, 16> Rebuilt(Factors);
+  Rebuilt[Index] = Ctx.mkAdd(Ctx.mkConst(Offset), Ctx.mkMul(Ctx.mkConst(K), X));
+  Rebuilt.push_back(Ctx.mkConst(Scale));
+  return Ctx.mkMul(Rebuilt);
+}
 // In the observed ring, perturbations divisible by 2^ceil(Precision/2)
 // annihilate one another. A factor can contribute several field coefficients
 // but its scalar offset contributes to the product exactly once.
-SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
-                              size_t &Storage, bool *EmittedReading) {
+SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
+                                    WorkBudget &Budget, size_t &Storage,
+                                    bool *EmittedReading) {
   const auto Scale = Ctx.operand(Root, 0);
-  if (!hasDistributedFactors(Ctx, Root))
-    return Root;
   const auto Factors = Ctx.operands(Root).drop_front();
   const auto Digits = Ctx.constWords(Scale);
   if (!Budget.consume(Digits.size()))
@@ -1641,7 +1734,7 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       const llvm::APInt Literal(Precision,
                                 Ctx.constWords(Offset).take_front(Words));
       if (const auto Slope =
-              uniformJoinSlope(Ctx, Op, Literal, Zeros, Outer, Inner)) {
+              uniformJoinSlope(Ctx, Op, Literal, Zeros, Outer, Inner, Budget)) {
         Direction = *Slope;
       } else {
         const size_t Nodes = Terms.size() + 2 + (Op == SymOp::And) +
@@ -1736,7 +1829,25 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   // Project general carriers after the operand walk: interning an extract
   // can relocate the original operand pool. Narrow fields already name
   // their exact value, including fields shared by different extensions.
+  // Offsets with different discarded prefixes have the same power and the
+  // same leave-one-out cofactor. Intern the observed residue once per input
+  // literal before grouping the powers, including zero and even residues.
+  llvm::SmallDenseMap<uint32_t, SymRef, 16> Offsets;
   for (auto &Row : Rows) {
+    if (!Budget.consume())
+      return Root;
+    auto It = Offsets.find(Row.Offset.index());
+    if (It == Offsets.end()) {
+      const size_t Bytes = 4 * sizeof(std::pair<uint32_t, SymRef>) +
+                           sizeof(SymNode) + Words * sizeof(uint64_t);
+      if (Bytes > Storage || !Budget.consume(2 + Words))
+        return Root;
+      Storage -= Bytes;
+      const llvm::APInt Value(Precision,
+                              Ctx.constWords(Row.Offset).take_front(Words));
+      It = Offsets.try_emplace(Row.Offset.index(), Ctx.mkConst(Value)).first;
+    }
+    Row.Offset = It->second;
     if (Ctx.width(Row.Word) != Bits) {
       if (!Budget.consume(Words + 1))
         return Root;
@@ -1768,6 +1879,52 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   if (EmittedReading)
     *EmittedReading = true;
   return Candidate;
+}
+
+} // namespace
+
+bool hasDistributedFactors(const SymContext &Ctx, SymRef Root) {
+  const auto Ops = Ctx.operands(Root);
+  const bool Scaled = Ctx.isConst(Ops.front());
+  const auto Factors = Ops.drop_front(Scaled);
+  if (Scaled && !(Ctx.constWords(Ops.front()).front() & 1))
+    return hasDistributedFields(Ctx, Factors);
+  // A literal spread over an affine factor still needs the minimum number
+  // of accepted factors. At that boundary a single residual prevents a
+  // reading. Extracting the scale can only change an additive literal row,
+  // which the factor reader already recognizes.
+  if (Factors.size() < limits::kMinResidueProductFactors ||
+      !hasDistributedFields(Ctx, Factors))
+    return false;
+  return Factors.size() > limits::kMinResidueProductFactors ||
+         llvm::all_of(Factors, [&](SymRef F) {
+           return bool(readWeightedFactor(Ctx, F).Offset);
+         });
+}
+
+SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                              size_t &Storage, bool *EmittedReading) {
+  if (!hasDistributedFactors(Ctx, Root))
+    return Root;
+  const auto First = Ctx.operand(Root, 0);
+  if (Ctx.isConst(First) && !(Ctx.constWords(First).front() & 1))
+    return foldScaledDistributedProduct(Ctx, Root, Budget, Storage,
+                                        EmittedReading);
+  const auto Scaled = extractFactorScale(Ctx, Root, Budget, Storage);
+  if (!Scaled || Ctx.op(Scaled) != SymOp::Mul)
+    return Root;
+  const auto Scale = Ctx.operand(Scaled, 0);
+  if (!Ctx.isConst(Scale) || (Ctx.constWords(Scale).front() & 1))
+    return Root;
+  bool Emitted = false;
+  const auto Result =
+      foldScaledDistributedProduct(Ctx, Scaled, Budget, Storage, &Emitted);
+  if (Result == Scaled ||
+      !(readingScore(Ctx, Result) < readingScore(Ctx, Root)))
+    return Root;
+  if (EmittedReading)
+    *EmittedReading = Emitted;
+  return Result;
 }
 
 SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
