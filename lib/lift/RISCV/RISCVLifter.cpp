@@ -109,6 +109,65 @@ NdVar mulDiv(State &S, unsigned F, NdVar A, NdVar B) {
   return S.select(Zero, Rem ? A : Ones, S.op(Op, A, Divisor));
 }
 
+bool bitManipulation(State &S, RISCVProfile P, uint32_t W, bool Imm, bool Word,
+                     unsigned Rd, NdVar X, NdVar Y) {
+  const unsigned IndexMask = S.Width * 8 - 1;
+  // RV64 encodes shamt[5] in bit 25. It is an opcode bit on RV32 and
+  // in register forms on both targets.
+  const unsigned Key = W & (Imm && S.Width == 8 ? opcode::WideImmediateFormMask
+                                                : opcode::RegisterFormMask);
+  const unsigned Shamt = (W >> 20) & IndexMask;
+  enum class BitOp { ShiftAdd, ShiftUW, Clear, Extract, Invert, Set };
+  BitOp Op;
+  unsigned Shift = 0;
+  switch (Key) {
+#define NEVERD_RISCV_SHIFT_ADD(Name, Encoding, Count)                          \
+  case Encoding:                                                               \
+    Op = BitOp::ShiftAdd;                                                      \
+    Shift = Count;                                                             \
+    break;
+#define NEVERD_RISCV_SHIFT_UW(Name, Encoding)                                  \
+  case Encoding:                                                               \
+    Op = BitOp::ShiftUW;                                                       \
+    Shift = Shamt;                                                             \
+    break;
+#define NEVERD_RISCV_SINGLE_BIT(Name, Funct, Kind)                             \
+  case Funct | opcode::Op:                                                     \
+  case Funct | opcode::OpImm:                                                  \
+    Op = BitOp::Kind;                                                          \
+    break;
+#include "RISCVBitManipulation.def"
+  default:
+    return false;
+  }
+
+  if (Op == BitOp::ShiftAdd || Op == BitOp::ShiftUW) {
+    if (!P.Zba)
+      return false;
+    if (Word)
+      X = S.resize(S.resize(X, 4), S.Width);
+    if (Shift)
+      X = S.op(NdOp::INT_LEFT, X, S.imm(Shift));
+    S.write(Rd, Op == BitOp::ShiftAdd ? S.op(NdOp::INT_ADD, X, Y) : X);
+    return true;
+  }
+  if (!P.Zbs)
+    return false;
+  NdVar N = Imm ? S.imm(Shamt) : S.op(NdOp::INT_AND, Y, S.imm(IndexMask));
+  if (Op == BitOp::Extract) {
+    S.write(Rd, S.op(NdOp::INT_AND, S.op(NdOp::INT_RIGHT, X, N), S.imm(1)));
+  } else {
+    NdVar Mask = S.op(NdOp::INT_LEFT, S.imm(1), N);
+    if (Op == BitOp::Clear)
+      Mask = S.op(NdOp::INT_XOR, Mask, S.imm(-1));
+    S.write(Rd, S.op(Op == BitOp::Clear ? NdOp::INT_AND
+                     : Op == BitOp::Set ? NdOp::INT_OR
+                                        : NdOp::INT_XOR,
+                     X, Mask));
+  }
+  return true;
+}
+
 bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
   const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
@@ -199,6 +258,8 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   if ((!Imm && Op != opcode::Op && Op != opcode::Op32) ||
       (Word && S.Width != 8))
     return false;
+  if (F7 && (P.Zba || P.Zbs) && bitManipulation(S, P, W, Imm, Word, Rd, X, Y))
+    return true;
   const unsigned Bytes = Word ? 4 : S.Width;
   X = S.resize(X, Bytes);
   Y = Imm ? S.resize(S.imm(Immediate), Bytes) : S.resize(Y, Bytes);

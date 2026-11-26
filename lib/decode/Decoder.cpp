@@ -22,6 +22,7 @@
 #include "neverd/lift/ARM/ARMLifter.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/PowerPC/PowerPCLifter.h"
+#include "neverd/lift/PowerPC/PowerPCPrefixed.h"
 #include "neverd/lift/RISCV/RISCVLifter.h"
 #include "neverd/lift/X86/X86Lifter.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -156,7 +157,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     CsArch = CS_ARCH_RISCV;
     CsMode =
         cs_mode((TheArch == Arch::RISCV64 ? CS_MODE_RISCV64 : CS_MODE_RISCV32) |
-                CS_MODE_RISCV_C | CS_MODE_RISCV_A);
+                CS_MODE_RISCV_C | CS_MODE_RISCV_A | CS_MODE_RISCV_ZBA |
+                CS_MODE_RISCV_ZBS);
     break;
   case Arch::PPC32:
   case Arch::PPC32LE:
@@ -402,6 +404,9 @@ Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   const bool Decoded =
       X86 && Text ? X86_disasmIterText(Handle, &Code, &Remaining, &PC, InsnBuf)
                   : cs_disasm_iter(Handle, &Code, &Remaining, &PC, InsnBuf);
+  if (Decoded && InsnBuf->size == ppc::prefix::InstructionBytes &&
+      isPowerPC(TargetArch))
+    return isPowerPC64(TargetArch) && ppc::prefix::fitsFetchBlock(Addr);
   return Decoded || (X86 && (decodePrefixedX86Fence(Bytes, Len, Addr) ||
                              decodeX86MpxFallback(Bytes, Len, Addr)));
 }

@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 5b30479355a233a39e16db9fe89bb7403892904dbe7b7750653520445705a79e -->
+<!-- i18n-source: 3063a2b0d15a9f1ca80fcf702ba4cc465127d87d1851222c77a32a9035fb8205 -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ Les cibles ELF entières expérimentales prennent en charge la traduction strict
 
 | Cible | Profils ELF vérifiés |
 |---|---|
-| RISC-V | RV32I/ILP32 et RV64I/LP64 petit-boutistes. Les informations ELF déterminent les extensions M, A et C entière ou les extensions individuelles Zmmul, Zaamo, Zalrsc et Zca. |
-| PowerPC | PPC32 System V et PPC64 ELFv1/ELFv2 dans les deux ordres d’octets. PPC32 prend en charge les appels entre modules via la PLT sécurisée et la BSS-PLT classique. Les deux ABI PPC64 prennent en charge les appels entre modules via la PLT et les changements de TOC. ELFv1 utilise des descripteurs de fonction et ELFv2 prend en charge les points d’entrée globaux et locaux. Les opérations scalaires vérifiées couvrent la division signée et non signée, la multiplication qui renvoie le mot de poids fort du produit et la multiplication avec détection de dépassement, ainsi que leurs effets sur CR0 et XER. |
+| RISC-V | RV32I/ILP32 et RV64I/LP64 petit-boutistes. Les informations ELF déterminent les extensions M, A et C entière ou les extensions individuelles Zmmul, Zaamo, Zalrsc et Zca. L’attribut ISA du fichier ELF active également Zba 1.0 et Zbs 1.0. |
+| PowerPC | PPC32 System V et PPC64 ELFv1/ELFv2 dans les deux ordres d’octets. PPC32 prend en charge les appels entre modules via la PLT sécurisée et la BSS-PLT classique. Les deux ABI PPC64 prennent en charge les appels entre modules via la PLT et les changements de TOC. ELFv1 utilise des descripteurs de fonction et ELFv2 prend en charge les points d’entrée globaux et locaux. Les opérations scalaires vérifiées couvrent la division signée et non signée, la multiplication qui renvoie le mot de poids fort du produit et la multiplication avec détection de dépassement, ainsi que leurs effets sur CR0 et XER. Sur PPC64, les instructions préfixées de POWER10 pour l’addition, le chargement et le stockage d’entiers sont également prises en charge. |
 
 La réécriture du code natif reste à implémenter pour ces profils. [Couverture de RISC-V et PowerPC (en anglais)](../riscv-powerpc.md)
 

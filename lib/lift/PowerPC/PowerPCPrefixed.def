@@ -1,0 +1,24 @@
+//===- PowerPCPrefixed.def - Prefixed fixed-point D forms --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Prefix format, suffix primary opcode, operation and transfer width.
+///
+//===----------------------------------------------------------------------===//
+
+NEVERD_PPC_PREFIXED(PADDI, MLS, 14, Add, 0)
+NEVERD_PPC_PREFIXED(PLBZ, MLS, 34, Load, 1)
+NEVERD_PPC_PREFIXED(PLHZ, MLS, 40, Load, 2)
+NEVERD_PPC_PREFIXED(PLHA, MLS, 42, SignedLoad, 2)
+NEVERD_PPC_PREFIXED(PLWZ, MLS, 32, Load, 4)
+NEVERD_PPC_PREFIXED(PLWA, EightLS, 41, SignedLoad, 4)
+NEVERD_PPC_PREFIXED(PLD, EightLS, 57, Load, 8)
+NEVERD_PPC_PREFIXED(PSTB, MLS, 38, Store, 1)
+NEVERD_PPC_PREFIXED(PSTH, MLS, 44, Store, 2)
+NEVERD_PPC_PREFIXED(PSTW, MLS, 36, Store, 4)
+NEVERD_PPC_PREFIXED(PSTD, EightLS, 61, Store, 8)
+
+#undef NEVERD_PPC_PREFIXED

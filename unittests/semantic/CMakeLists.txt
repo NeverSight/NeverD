@@ -10,6 +10,7 @@ if(WIN32)
 endif()
 
 add_neverd_unittest(NeverDELFIntegerSemanticTests
+  ELFIntegerExtendedScalarTests.cpp
   ELFIntegerSemanticTests.cpp
   LINK_COMPONENTS IRLow Lift Decode
   LINK_LIBS unicorn)
