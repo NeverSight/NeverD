@@ -342,6 +342,9 @@ public:
   // no equality; it only avoids repeating the same search under fewer
   // resources.
   std::shared_ptr<ResidueMemo> Residues;
+  // Set by a completed polynomial product proof. Only this arithmetic
+  // reading can benefit from comparing an expansion of the original factors.
+  SymRef ArithmeticProductReading;
   size_t MultipleResidueAttempts = 0;
   size_t IncompleteAbstractions = 0;
   // Numbered placeholder declarations are independent of an abstraction's

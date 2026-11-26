@@ -4781,6 +4781,18 @@ repetitions. At width 4194319, case 7 contains 360,018 factors and requires
 `neverd simplify --exhaustive`. A 268-factor x86 fixture exercises the same
 square corrections through both decompiler views.
 
+Use `--group-log 2`, `3` or `4` for blocks of four, eight or sixteen
+equal factors. The weights can retain quadratic cross terms even after the
+outer scale. Signed and unsigned views of a field may carry different bits
+into the result. The reference reconstructs the complete blocks from their
+values at zero, unit coordinates and pairs of unit coordinates, then restores
+any incomplete block. Width 6,291,469, case 7 and group log 4 generate
+524,329 factors across 189 distinct rows. The 383-factor machine-code
+fixture checks this family in HighC and LLVM-to-C through the worker and CLI.
+`SymMBAResiduePowers.SmallOddPowerBlocksKeepTheirFullResidues` checks
+blocks whose cubic and quartic terms still affect the result. It exhausts
+all pairs of four-bit inputs against the original product.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may

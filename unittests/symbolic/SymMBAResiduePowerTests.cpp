@@ -961,6 +961,144 @@ TEST(SymMBAResiduePowers, RepeatedFieldsKeepTheirLastSquareAndOddCopies) {
   }
 }
 
+TEST(SymMBAResiduePowers, RepeatedPowersRetainQuadraticsAndResidualCopies) {
+  for (const auto [Precision, D] :
+       {std::pair{8u, 2u}, {9u, 3u}, {16u, 3u}, {25u, 4u}, {130u, 4u}}) {
+    const unsigned Bits = Precision / 2, Shift = Precision - Bits;
+    const unsigned Width = Precision + 5, K = Shift - D, Group = 1u << D;
+    for (const unsigned Extra : {0u, 1u, Group - 1}) {
+      SCOPED_TRACE(::testing::Message() << Precision << ':' << Extra);
+      SymContext C;
+      const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      const auto A = C.mkSExt(C.mkExtract(X, 1, Bits), Width);
+      const auto B = C.mkZExt(C.mkExtract(Y, 0, Bits), Width);
+      auto literal = [&](int N, unsigned S = 0) {
+        return C.mkConst(llvm::APInt(Width, N, true).shl(S));
+      };
+      auto affine = [&](int Offset, int AX, int BY) {
+        return C.mkAdd({literal(Offset), C.mkMul(literal(AX, K), A),
+                        C.mkMul(literal(BY, K), B)});
+      };
+      const int OtherOffset = Extra == 1 ? 2 : 5;
+      const auto F = affine(-3, -5, 3), G = affine(OtherOffset, 7, 2);
+      const auto Scale = literal(3, Width - Precision);
+      llvm::SmallVector<SymRef, 64> Factors{Scale};
+      Factors.append(Group + Extra, F);
+      Factors.append(3 * Group, G);
+      const auto Original = C.mkMul(Factors);
+      size_t Bytes = 1 << 20;
+      detail::WorkBudget Budget(65536);
+      const auto Result =
+          detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+      ASSERT_NE(Result, Original);
+      SymEvalPlan Eval(C, Result);
+      for (unsigned I = 0; I < 16; ++I)
+        for (unsigned J = 0; J < 16; ++J) {
+          std::array Values{llvm::APInt(Width, I), llvm::APInt(Width, J)};
+          if (J & 1)
+            Values[0].setBit(Bits);
+          const auto U = Values[0].extractBits(Bits, 1).sext(Width);
+          const auto V = Values[1].trunc(Bits).zext(Width);
+          const auto First = (3 * V - 5 * U).shl(K) - 3;
+          const auto Second = (7 * U + 2 * V).shl(K) + OtherOffset;
+          auto Expected = llvm::APInt(Width, 3).shl(Width - Precision);
+          for (unsigned N = 0; N < Group + Extra; ++N)
+            Expected *= First;
+          for (unsigned N = 0; N < 3 * Group; ++N)
+            Expected *= Second;
+          ASSERT_EQ(Eval.eval(Values), Expected);
+        }
+    }
+  }
+}
+
+TEST(SymMBAResiduePowers, RepeatedPowersKeepLiveFourthDegrees) {
+  // With five observed bits (c + 2*h)^4 still contains 16*h^4.
+  constexpr unsigned Width = 16;
+  SymContext C;
+  const auto X = C.mkZExt(C.mkVar("x", 4), Width);
+  const auto Y = C.mkSExt(C.mkVar("y", 4), Width);
+  const auto F = C.mkAdd({C.mkConst(Width, 3), C.mkMul(C.mkConst(Width, 6), X),
+                          C.mkMul(C.mkConst(Width, 10), Y)});
+  const auto Original = C.mkMul({C.mkConst(Width, 1u << 11), F, F, F, F});
+  size_t Bytes = 1 << 20;
+  detail::WorkBudget Budget(65536);
+  const auto Folded =
+      detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+  SymEvalPlan Plan(C, Folded);
+  for (unsigned A = 0; A != 16; ++A)
+    for (unsigned B = 0; B != 16; ++B) {
+      std::array Values{llvm::APInt(4, A), llvm::APInt(4, B)};
+      const auto V = 3 + 6 * Values[0].zext(Width) + 10 * Values[1].sext(Width);
+      EXPECT_EQ(Plan.eval(Values),
+                llvm::APInt(Width, 1u << 11) * V * V * V * V);
+    }
+}
+
+TEST(SymMBAResiduePowers, SmallOddPowerBlocksKeepTheirFullResidues) {
+  constexpr unsigned Width = 13;
+  SymContext C;
+  const auto X = C.mkVar("x", 4), Y = C.mkVar("y", 4);
+  const auto A = C.mkZExt(X, Width), B = C.mkSExt(Y, Width);
+  auto literal = [&](int V) { return C.mkConst(llvm::APInt(Width, V, true)); };
+  const auto F =
+      C.mkAdd({literal(-3), C.mkMul(literal(6), A), C.mkMul(literal(-2), B)});
+  const auto G =
+      C.mkAdd({literal(5), C.mkMul(literal(-10), A), C.mkMul(literal(14), B)});
+  llvm::SmallVector<SymRef, 64> Factors{literal(8)};
+  Factors.append(16, F);
+  Factors.append(30, G);
+  const auto Original = C.mkMul(Factors);
+  size_t Bytes = 1 << 20;
+  detail::WorkBudget Budget(65536);
+  const auto Result =
+      detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+  ASSERT_NE(Result, Original);
+  SymEvalPlan Plan(C, Result);
+  for (unsigned I = 0; I < 16; ++I)
+    for (unsigned J = 0; J < 16; ++J) {
+      std::array Values{llvm::APInt(4, I), llvm::APInt(4, J)};
+      const auto U = Values[0].zext(Width), V = Values[1].sext(Width);
+      auto Expected = llvm::APInt(Width, 8);
+      for (unsigned K = 0; K < 16; ++K)
+        Expected *= 6 * U - 2 * V - 3;
+      for (unsigned K = 0; K < 30; ++K)
+        Expected *= 5 - 10 * U + 14 * V;
+      ASSERT_EQ(Plan.eval(Values), Expected);
+    }
+}
+
+TEST(SymMBAResiduePowers, PackedProductsCompeteWithExpandedNativeArithmetic) {
+  constexpr unsigned Width = 16;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  const auto A = C.mkZExt(C.mkExtract(X, 1, 4), Width);
+  const auto B = C.mkZExt(C.mkExtract(Y, 1, 2), Width);
+  const auto D = C.mkSExt(C.mkExtract(Y, 1, 2), Width);
+  const auto E = C.mkSExt(C.mkExtract(X, 1, 3), Width);
+  const auto H = C.mkZExt(C.mkExtract(Y, 0, 2), Width);
+  auto literal = [&](int V) { return C.mkConst(llvm::APInt(Width, V, true)); };
+  auto scale = [&](int V, SymRef R) { return C.mkMul(literal(V), R); };
+  llvm::SmallVector<SymRef, 80> Factors{literal(-384)};
+  Factors.append(16, C.mkAdd({literal(7), scale(4, A), scale(-4, B)}));
+  Factors.append(
+      26, C.mkAdd({literal(5), scale(28, D), scale(-12, A), scale(12, E)}));
+  Factors.append(24, C.mkAdd({literal(3), scale(4, E), scale(12, H)}));
+  const auto Original = C.mkMul(Factors);
+  MBAOptions Options;
+  Options.MaxWork = 65536;
+  const auto Result = simplifyMBADeep(C, Original, Options);
+  EXPECT_LT(Result.Work, Options.MaxWork);
+  // The packed form costs 149. The fully expanded arithmetic reading costs 100.
+  EXPECT_LE(C.readabilityCost(Result.Expr), 100u);
+  SymEvalPlan Before(C, Original), After(C, Result.Expr);
+  for (unsigned XV = 0; XV < 32; ++XV)
+    for (unsigned YV = 0; YV < 8; ++YV) {
+      std::array Values{llvm::APInt(Width, XV), llvm::APInt(Width, YV)};
+      ASSERT_EQ(After.eval(Values), Before.eval(Values));
+    }
+}
+
 TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
   for (const unsigned Bits : {4u, 17u, 65u}) {
     const unsigned Width = 3 * Bits + 2, Shift = Bits + 1;

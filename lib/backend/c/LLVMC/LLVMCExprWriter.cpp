@@ -44,6 +44,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
@@ -4162,9 +4163,15 @@ std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
     // Wider carriers are exact C23 _BitInt(N); shifting by N to manufacture
     // a mask would itself be undefined. Only rounded narrow carriers need it.
     if (Width <= 128 && Width != 8 && Width != 16 && Width != 32 &&
-        Width != 64 && Width != 128)
-      Result = "(" + Result + " & (((" + Carrier + ")1 << " +
-               std::to_string(Width) + ") - 1))";
+        Width != 64 && Width != 128) {
+      // The cast on the left already supplies the unsigned carrier. A mask
+      // that fits a C literal needs no shift or subtraction in the output.
+      const std::string Mask =
+          Width < 64
+              ? "0x" + llvm::utohexstr(llvm::maskTrailingOnes<uint64_t>(Width))
+              : "(((" + Carrier + ")1 << " + std::to_string(Width) + ") - 1)";
+      Result = "(" + Result + " & " + Mask + ")";
+    }
     return Result;
   };
   const unsigned PointerWidth = CurMod->getDataLayout().getPointerSizeInBits(0);
