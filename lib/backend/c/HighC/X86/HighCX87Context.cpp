@@ -302,7 +302,7 @@ std::string HighCWriter::renderX87ContextCall(const HighExpr &E) {
 }
 
 void HighCWriter::writeX87ContextHelpers(const std::vector<HighFunc> &Funcs) {
-  std::set<const HighExpr *> Seen;
+  HighExprSet Seen;
   std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
     if (!E || !Seen.insert(E.get()).second)
       return;

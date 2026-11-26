@@ -532,7 +532,7 @@ void HighCWriter::prepareFunctionIdentifiers(
   std::map<std::string, std::vector<std::string>> SymbolsByStem;
   std::map<std::string, std::set<std::string>> SourcesBySymbol;
   std::set<std::string> ImageHeaderSymbols;
-  std::set<const HighExpr *> Calls;
+  HighExprSet Calls;
   std::function<void(const ExprPtr &)> VisitCall = [&](const ExprPtr &Expr) {
     if (!Expr || !Calls.insert(Expr.get()).second)
       return;
@@ -3872,7 +3872,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // can address a load and also escape as a returned or stored value.
   std::set<const ExprPtr *> AccessOperands;
   std::vector<const HighExpr *> ImageConstants;
-  std::set<const HighExpr *> SeenImageConstants;
+  HighExprSet SeenImageConstants;
   auto NoteAccessAddress = [&](const ExprPtr &Address,
                                const TypeRef &Access = nullptr,
                                bool Written = false) {
@@ -4266,7 +4266,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // slots. A shared node may have both kinds of use; bounded tables and
   // escaping image addresses consume this same classification.
   std::vector<va_t> Values;
-  std::set<const HighExpr *> ValueExpressions, SeenAddresses, SeenValues;
+  HighExprSet ValueExpressions, SeenAddresses, SeenValues;
   const HighFunc *ValueFunction = nullptr;
   // An escaping address needs backing for every byte its object owns. A
   // missing or over-limit extent cannot fall back to a guessed scalar. This
