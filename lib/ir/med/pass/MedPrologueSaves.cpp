@@ -287,6 +287,135 @@ void frameAccessesOf(MedFunc &Func, Arch Architecture, BinaryFormat Format,
   }
 }
 
+using FrameAddressSet = llvm::DenseSet<ValueKey, ValueKeyInfo>;
+using FrameAccessMap = std::map<const MedOp *, const FrameAccess *>;
+
+bool isFrameAddress(const MedVar &V, const TargetRegInfo &TRI,
+                    const FrameAddressSet &Addresses) {
+  return !V.isConst() && V.Id >= 0 &&
+         ((V.Kind == MedVar::Reg && TRI.isStackPointer(V.RegOff)) ||
+          Addresses.contains(keyOf(V)));
+}
+
+/// Values derived from this frame, including addresses that travel through
+/// a PHI or a frame slot. This supplies may-alias information to both spill
+/// proofs, without assigning an exact offset to a dynamic address.
+bool collectFrameAddresses(const MedFunc &Func, const TargetRegInfo &TRI,
+                           const FrameAccessMap &Accesses,
+                           FrameAddressSet &FrameAddresses, size_t &Budget) {
+  const auto Derived = [&](const MedVar &V) {
+    return isFrameAddress(V, TRI, FrameAddresses);
+  };
+  std::vector<std::pair<int64_t, int64_t>> AddressSlots;
+  const auto HoldsAddress = [&](const FrameAccess &Access) {
+    return llvm::any_of(AddressSlots, [&](const auto &Slot) {
+      return Access.overlaps(Slot.first, Slot.second);
+    });
+  };
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    const auto Add = [&](const MedVar &V) {
+      if (V.Id >= 0 && !V.isConst() && FrameAddresses.insert(keyOf(V)).second)
+        Changed = true;
+    };
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const PhiNode &Phi : Block.Phis)
+        if (llvm::any_of(Phi.Args, [&](const auto &Incoming) {
+              return Derived(Incoming.second);
+            }))
+          Add(Phi.Output);
+      for (const MedOp &Op : Block.Ops) {
+        if (!Budget)
+          return false;
+        --Budget;
+        if (Op.Dead)
+          continue;
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+            Derived(Op.Inputs[1])) {
+          const auto At = Accesses.find(&Op);
+          if (At != Accesses.end() &&
+              llvm::none_of(AddressSlots, [&](const auto &Slot) {
+                return Slot.first == At->second->Offset &&
+                       Slot.second == At->second->Offset + At->second->Size;
+              })) {
+            AddressSlots.emplace_back(At->second->Offset,
+                                      At->second->Offset + At->second->Size);
+            Changed = true;
+          }
+          continue;
+        }
+        if (Op.Opcode == NdOp::LOAD) {
+          const auto At = Accesses.find(&Op);
+          if (At != Accesses.end() && HoldsAddress(*At->second))
+            Add(Op.Output);
+          continue;
+        }
+        if (Op.Output.Id < 0)
+          continue;
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          if (Derived(Op.Inputs[I])) {
+            Add(Op.Output);
+            break;
+          }
+      }
+    }
+  }
+
+  return true;
+}
+
+/// Whether the use inventory still leaves the direct save/restore proof
+/// incomplete. A callee given a frame pointer may read outside the exact
+/// argument address. Ordinary calls with no such operand keep their usual
+/// stack ownership.
+bool mayObserveCalleeSave(const MedFunc &Func, const TargetRegInfo &TRI,
+                          llvm::ArrayRef<FrameAccess> Loads,
+                          llvm::ArrayRef<FrameAccess> Stores) {
+  FrameAccessMap Accesses;
+  for (const FrameAccess &Access : Loads)
+    Accesses.emplace(Access.Op, &Access);
+  for (const FrameAccess &Access : Stores)
+    Accesses.emplace(Access.Op, &Access);
+  FrameAddressSet Addresses;
+  size_t Budget = limits::ir::kSourceEntrySpillWork;
+  if (!collectFrameAddresses(Func, TRI, Accesses, Addresses, Budget))
+    return true;
+  const auto Derived = [&](const MedVar &V) {
+    return isFrameAddress(V, TRI, Addresses);
+  };
+  for (const MedCallInfo &Call : Func.CallInfos)
+    if (llvm::any_of(Call.Args, Derived))
+      return true;
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Dead || !Op.NumInputs)
+        continue;
+      switch (Op.Opcode) {
+      case NdOp::CALL:
+      case NdOp::INDIR_CALL:
+      case NdOp::INTRINSIC:
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          if (Derived(Op.Inputs[I]))
+            return true;
+        break;
+      case NdOp::LOAD:
+      case NdOp::ATOMIC_ADD:
+      case NdOp::ATOMIC_XCHG:
+      case NdOp::ATOMIC_CMPXCHG:
+        if (Derived(Op.Inputs[0]) && !Accesses.count(&Op))
+          return true;
+        break;
+      case NdOp::STORE:
+        if (Op.NumInputs >= 2 && Derived(Op.Inputs[1]) && !Accesses.count(&Op))
+          return true;
+        break;
+      default:
+        break;
+      }
+    }
+  return false;
+}
+
 /// A load the body uses of a callee-save slot. It reads the incoming register
 /// value the prologue save stored there.
 struct CalleeSaveRead {
@@ -454,6 +583,7 @@ void markCalleeSavePrologueSaves(
   OpPositions Positions;
   std::vector<MedOp *> Saves;
   std::vector<MedOp *> Uses;
+  std::vector<CalleeSaveRead> CandidateReads;
   // Go code keeps no register for its caller but the stack and frame
   // pointers, as its calls keep none (callRegisterContractOf): an incoming
   // RBX, R12 or X19 is a parameter or scratch there, and a store of it, such
@@ -531,10 +661,14 @@ void markCalleeSavePrologueSaves(
       continue;
     Saves.push_back(Save.Op);
     for (MedOp *Use : Uses)
-      BodyReads.push_back({Use, Saved});
+      CandidateReads.push_back({Use, Saved});
   }
+  if (Saves.empty() || mayObserveCalleeSave(Func, TRI, Loads, Stores))
+    return;
   for (MedOp *Save : Saves)
     Save->PrologueSave = true;
+  BodyReads.insert(BodyReads.end(), CandidateReads.begin(),
+                   CandidateReads.end());
 }
 
 bool hasStackReturnAddress(Arch Architecture, StackEntryKind Entry) {
@@ -1511,68 +1645,15 @@ private:
   }
 
   bool isFrameAddress(const MedVar &V) const {
-    return !V.isConst() && V.Id >= 0 &&
-           ((V.Kind == MedVar::Reg && TRI.isStackPointer(V.RegOff)) ||
-            FrameAddresses.contains(keyOf(V)));
+    return neverd::isFrameAddress(V, TRI, FrameAddresses);
   }
 
   /// Every value the stack pointer reaches by computation or through a frame
   /// slot some store fills with such a value, and where those values go.
   bool collectFrameAddresses() {
-    std::vector<std::pair<int64_t, int64_t>> AddressSlots;
-    const auto HoldsAddress = [&](const FrameAccess &Access) {
-      return llvm::any_of(AddressSlots, [&](const auto &Slot) {
-        return Access.overlaps(Slot.first, Slot.second);
-      });
-    };
-    for (bool Changed = true; Changed;) {
-      Changed = false;
-      const auto Add = [&](const MedVar &V) {
-        if (V.Id >= 0 && !V.isConst() && FrameAddresses.insert(keyOf(V)).second)
-          Changed = true;
-      };
-      for (const MedBlock &Block : Func.Blocks) {
-        for (const PhiNode &Phi : Block.Phis)
-          if (llvm::any_of(Phi.Args, [&](const auto &Incoming) {
-                return isFrameAddress(Incoming.second);
-              }))
-            Add(Phi.Output);
-        for (const MedOp &Op : Block.Ops) {
-          if (!Budget)
-            return false;
-          --Budget;
-          if (Op.Dead)
-            continue;
-          if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
-              isFrameAddress(Op.Inputs[1])) {
-            const auto At = Accesses.find(&Op);
-            if (At != Accesses.end() &&
-                llvm::none_of(AddressSlots, [&](const auto &Slot) {
-                  return Slot.first == At->second->Offset &&
-                         Slot.second == At->second->Offset + At->second->Size;
-                })) {
-              AddressSlots.emplace_back(At->second->Offset,
-                                        At->second->Offset + At->second->Size);
-              Changed = true;
-            }
-            continue;
-          }
-          if (Op.Opcode == NdOp::LOAD) {
-            const auto At = Accesses.find(&Op);
-            if (At != Accesses.end() && HoldsAddress(*At->second))
-              Add(Op.Output);
-            continue;
-          }
-          if (Op.Output.Id < 0)
-            continue;
-          for (unsigned I = 0; I < Op.NumInputs; ++I)
-            if (isFrameAddress(Op.Inputs[I])) {
-              Add(Op.Output);
-              break;
-            }
-        }
-      }
-    }
+    if (!neverd::collectFrameAddresses(Func, TRI, Accesses, FrameAddresses,
+                                       Budget))
+      return false;
     for (const MedBlock &Block : Func.Blocks)
       for (const MedOp &Op : Block.Ops) {
         if (Op.Dead)

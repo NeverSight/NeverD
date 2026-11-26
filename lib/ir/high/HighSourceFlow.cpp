@@ -1357,7 +1357,8 @@ class SourceFlow {
   // ones written other than by assignment, never assigned, possibly assigned
   // an unknown value, or able to hold a frame address, whose name the C
   // writer ties to frame slots.
-  void coalesce(const std::vector<bool> &Reachable, size_t Words) {
+  void coalesce(size_t Entry, const std::vector<bool> &Reachable,
+                size_t Words) {
     const size_t Count = Locals.size();
     std::vector<unsigned> Definitions(Count);
     std::vector<bool> Excluded(Count), Frame(Count);
@@ -1503,9 +1504,12 @@ class SourceFlow {
     // local any member interferes with.
     std::vector<size_t> Parent(Count);
     std::vector<std::vector<size_t>> Members(Count);
+    std::vector<bool> HasIncomingValue(Count);
     for (size_t L = 0; L < Count; ++L) {
       Parent[L] = L;
       Members[L] = {L};
+      HasIncomingValue[L] =
+          Involved[L] && ((Live[Entry * Words + L / 64] >> (L % 64)) & 1);
     }
     std::function<size_t(size_t)> Find = [&](size_t L) {
       while (Parent[L] != L)
@@ -1516,13 +1520,16 @@ class SourceFlow {
     for (const auto &[Index, Copy] : Copies) {
       spend();
       const size_t A = Find(Copy.Destination), B = Find(Copy.Source);
-      if (A == B)
+      // Distinct live-ins interfere at entry, even when neither one has a
+      // definition on that path. Carry this constraint through class merges.
+      if (A == B || (HasIncomingValue[A] && HasIncomingValue[B]))
         continue;
       const bool Conflict = llvm::any_of(
           Members[A], [&](size_t M) { return Interferes[B].count(M) != 0; });
       if (Conflict)
         continue;
       Parent[B] = A;
+      HasIncomingValue[A] = HasIncomingValue[A] || HasIncomingValue[B];
       Members[A].insert(Members[A].end(), Members[B].begin(), Members[B].end());
       Members[B].clear();
       Interferes[A].insert(Interferes[B].begin(), Interferes[B].end());
@@ -1632,7 +1639,7 @@ class SourceFlow {
       return;
     }
     if (Merges) {
-      coalesce(Reachable, Words);
+      coalesce(Entry, Reachable, Words);
       return;
     }
     spend(Nodes.size() * Words);

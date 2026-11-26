@@ -80,6 +80,9 @@ def cancel_input_loading(args, root, small):
 
 
 def cancel_saved_restore(args, root, base, saved):
+    if os.name != "posix":
+        print("SKIP: CLI saved-review restore interrupt requires POSIX child SIGINT delivery")
+        return
     report = root / "恢复-取消.nddiff"
     document = json.loads(saved.read_text())
     document["warnings"].append("retained diagnostic " + "x" * (64 * 1024 * 1024))

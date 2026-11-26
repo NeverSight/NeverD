@@ -32,6 +32,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/HighExprEvaluation.h"
 #include "neverd/ir/high/HighPointerTypeInference.h"
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/ItaniumHandlers.h"
@@ -3646,7 +3647,8 @@ bool HighCWriter::readsThroughForwards(const HighExpr &E,
   return Reads(E);
 }
 
-void HighCWriter::collectValueForward(const HighFunc &Func) {
+void HighCWriter::collectValueForward(
+    const HighFunc &Func, std::vector<ExprPtr> &CaptureConversions) {
   ValueForward.clear();
   auto containsName = [&](const HighExpr &E, const std::string &Name,
                           auto &&Self) -> bool {
@@ -3796,6 +3798,7 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
     }
   };
   Walk(Func.Body, NextRegion++, false, false);
+  const bool LocalOnly = Sites.size() > limits::kMaxValueForwardSites;
 
   auto regionDominatedBy = [&](uint64_t Child, uint64_t Ancestor) {
     unsigned Depth = 0;
@@ -3873,7 +3876,7 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
     const std::string Name = varName(Def.Dst->Var);
     for (size_t I = Info.Index + 1; I < Seq.size(); ++I) {
       const HighStmt &Next = *Seq[I];
-      if (isLabelAddress(Next.Addr))
+      if (isLabelAddress(Next.Addr) || (LocalOnly && I != Info.Index + 1))
         return false;
       if (Analysis.DeadStmts.count(&Next) || stmtHiddenFromC(Next) ||
           Next.Kind == StmtKind::Block)
@@ -3881,6 +3884,14 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
       if ((Next.Kind != StmtKind::If && Next.Kind != StmtKind::IfElse) ||
           !Next.Cond)
         return false;
+      if (LocalOnly) {
+        const bool NeedsTest = llvm::any_of(Next.Body, [&](const HighStmt &S) {
+          return S.Kind == StmtKind::Return && !Analysis.DeadStmts.count(&S) &&
+                 !stmtHiddenFromC(S);
+        });
+        if (!NeedsTest || Func.CxxContinuationTargets.count(Next.Addr))
+          return false;
+      }
       unsigned Reads = 0;
       std::function<bool(const HighExpr &)> Plain = [&](const HighExpr &E) {
         if (E.Kind == ExprKind::Const)
@@ -3962,13 +3973,27 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
     }
     if (Stmt->IsPhiCopy || Stmt->KeepsName)
       continue;
+    if (LocalOnly) {
+      // Large functions keep the bounded case of a direct call followed by
+      // its test. Use the existing same-region and effect checks below.
+      const auto &Value = *Stmt->Val;
+      const auto &Type = Stmt->Dst->Type;
+      if (Value.Kind != ExprKind::Call || Value.IsIndirectCall || !Type ||
+          Type->Kind != NdTypeKind::Int || Type->IsEnum ||
+          !equalSourceTypes(Type, Value.Type))
+        continue;
+      if (const auto Return = knownCallReturnType(Value);
+          Return && !equalSourceTypes(Type, Return))
+        continue;
+    }
     const bool SavedEH = InEHClauseBody;
     if (Info.Handler)
       InEHClauseBody = true;
-    const bool Fwdable = isForwardableValueExpr(*Stmt->Val) ||
-                         isTypedIndexLoad(*Stmt->Val) ||
-                         callResultReturnedNext(*Stmt, Info) ||
-                         callResultTestedNext(*Stmt, Info);
+    const bool Fwdable =
+        (!LocalOnly &&
+         (isForwardableValueExpr(*Stmt->Val) || isTypedIndexLoad(*Stmt->Val) ||
+          callResultReturnedNext(*Stmt, Info))) ||
+        callResultTestedNext(*Stmt, Info);
     const HighExpr *Src = peelIntegerViewOps(Stmt->Val.get());
     const bool LosesFieldNarrowing =
         Src && !fieldProjectionDoesNotNarrow(Stmt->Val.get(), Src) &&
@@ -4011,9 +4036,7 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
     CandidateStmts.insert(Stmt);
   }
 
-  // Each candidate below rescans every site.  Forwarding only folds
-  // single-use temporaries into their use, so a body this large keeps them.
-  if (Sites.size() > limits::kMaxValueForwardSites)
+  if (Candidates.empty())
     return;
   // The candidate defining each name, whose value a fold may bring along.
   std::map<std::string, const HighStmt *> CandidateDefs;
@@ -4026,42 +4049,53 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
   // destination writes.
   struct SiteNames {
     std::unordered_map<std::string, unsigned> Reads, DestReads;
+    std::vector<std::string> ConditionalReads;
     std::string DestName;
   };
   std::unordered_map<const HighStmt *, SiteNames> NamesAt;
   std::unordered_map<std::string, std::vector<const HighStmt *>> DefsOf;
   std::unordered_map<std::string, std::vector<const HighStmt *>> SitesNaming;
+  std::set<std::string> IntrinsicOutputs;
   std::function<void(const HighExpr &,
-                     std::unordered_map<std::string, unsigned> &)>
+                     std::unordered_map<std::string, unsigned> &,
+                     std::vector<std::string> &, bool)>
       CountReads = [&](const HighExpr &E,
-                       std::unordered_map<std::string, unsigned> &Into) {
+                       std::unordered_map<std::string, unsigned> &Into,
+                       std::vector<std::string> &ConditionalReads,
+                       bool Conditional) {
         // A call's reads stop at its debug argument limit.
-        if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi)
-          ++Into[varName(E.Var)];
+        if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) {
+          std::string Name = varName(E.Var);
+          ++Into[Name];
+          if (Conditional)
+            ConditionalReads.push_back(std::move(Name));
+        }
         if (E.Kind == ExprKind::Call) {
+          if (LocalOnly)
+            for (const MedVar &Output : E.IntrinsicOutputs)
+              IntrinsicOutputs.insert(varName(Output));
           const size_t Limit = debugCallArgLimit(E);
           for (size_t I = 0; I < E.Operands.size() && I < Limit; ++I)
             if (E.Operands[I])
-              CountReads(*E.Operands[I], Into);
+              CountReads(*E.Operands[I], Into, ConditionalReads, Conditional);
           if (E.IndirectTarget)
-            CountReads(*E.IndirectTarget, Into);
+            CountReads(*E.IndirectTarget, Into, ConditionalReads, Conditional);
           return;
         }
-        for (const ExprPtr &Op : E.Operands)
-          if (Op)
-            CountReads(*Op, Into);
+        for (size_t I = 0; I < E.Operands.size(); ++I)
+          if (const ExprPtr &Op = E.Operands[I])
+            CountReads(*Op, Into, ConditionalReads,
+                       Conditional || highOperandMayBeSkipped(E, I));
       };
   for (const HighStmt *Stmt : SiteOrder) {
-    const Site &Info = Sites.at(Stmt);
-    (void)Info;
-    SiteNames &Names = NamesAt[Stmt];
+    SiteNames Names;
     const bool Assign = Stmt->Kind == StmtKind::Assign && Stmt->Dst;
     if (Assign)
       Names.DestName = varName(Stmt->Dst->Var);
     forEachExpr(*Stmt, [&](const ExprPtr &E) {
       if (E)
-        CountReads(*E,
-                   Assign && E == Stmt->Dst ? Names.DestReads : Names.Reads);
+        CountReads(*E, Assign && E == Stmt->Dst ? Names.DestReads : Names.Reads,
+                   Names.ConditionalReads, false);
     });
     std::set<std::string> Named;
     for (const auto &Entry : Names.Reads)
@@ -4073,6 +4107,9 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
       DefsOf[Names.DestName].push_back(Stmt);
       Named.insert(Names.DestName);
     }
+    if (Named.empty())
+      continue;
+    NamesAt.emplace(Stmt, std::move(Names));
     for (const std::string &Name : Named)
       SitesNaming[Name].push_back(Stmt);
   }
@@ -4108,6 +4145,15 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
   std::set<std::string> Decided;
   for (const Candidate &C : Candidates) {
     Decided.insert(C.Name);
+    if (LocalOnly) {
+      const auto &Naming = sitesIn(SitesNaming, C.Name);
+      if (Naming.size() != 2 || Naming.front() != C.Stmt ||
+          sitesIn(DefsOf, C.Name).size() != 1 || IntrinsicOutputs.count(C.Name))
+        continue;
+      const Site &Use = Sites.at(Naming.back());
+      if (Use.Region != C.Region || Use.Index != C.Index + 1)
+        continue;
+    }
     unsigned Uses = 0;
     bool Redefined = false;
     bool OtherRegion = false;
@@ -4350,6 +4396,19 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
           Load ? frameDisplacement(*Load->Operands[0]) : std::nullopt;
       const std::optional<std::string> SlotName =
           Load ? namedFrameSlot(*Load->Operands[0]) : std::nullopt;
+      // Forwarding must not turn an earlier observation into a conditional
+      // one. Materialized frame locals use their own alias and lifetime rules.
+      if (ReadsMemory &&
+          (llvm::any_of(UseStmts,
+                        [&](const HighStmt *S) {
+                          return llvm::is_contained(
+                              NamesAt.at(S).ConditionalReads, C.Name);
+                        }) ||
+           (!Slot && llvm::all_of(UseStmts, [&](const HighStmt *S) {
+             const auto Region = Sites.at(S).Region;
+             return Region != C.Region && regionDominatedBy(Region, C.Region);
+           }))))
+        continue;
       // Memory reached otherwise than through this one named slot, which
       // any slot is once a frame address escapes.
       const bool Escapes =
@@ -4733,6 +4792,12 @@ void HighCWriter::collectValueForward(const HighFunc &Func) {
         Fwd = Inner;
     if (!Fwd || readsThroughForwards(*Fwd, C.Name))
       continue;
+    // Removing the assignment removes its implicit C conversion. Keep the
+    // integer type of the captured call result at its new use.
+    if (auto View = integerCallCapture(C.Stmt->Val, C.Stmt->Dst->Type)) {
+      Fwd = View.get();
+      CaptureConversions.push_back(std::move(View));
+    }
     ValueForward[C.Name] = Fwd;
     // A field value is not a frame-address alias, but that alone must not
     // force its definition to print after this proof has folded every use.
@@ -6347,7 +6412,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   invalidateJoinPhiFrameAliases(Func);
   // Display-only: one mention of `x` so ValueForward can compose GetLength.
   foldSignedJleConds(const_cast<std::vector<HighStmt> &>(Func.Body));
-  collectValueForward(Func);
+  std::vector<ExprPtr> CaptureConversions;
+  collectValueForward(Func, CaptureConversions);
   hideCleanupSlotCopyIntoCall(Func);
   aliasCtorReturnThis(Func);
   collectFieldLoadForward(Func);

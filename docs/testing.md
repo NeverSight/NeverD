@@ -12492,6 +12492,10 @@ The generated paged execution suite exercises the actual HighC validator that
 exposed the reserved-key collision. Host floating-conversion fixtures link
 `libm` on POSIX when scalar FMA needs a library call.
 
+`HighControlFlowSemantics.ImpliedGuardsPreserveSeparateObservations` checks
+that condition folding keeps distinct atomic, ordered and segment-relative
+observations while still combining tests of one captured scalar.
+
 `HighControlFlowDAG.*` in `NeverDHighControlFlowTests` checks single-use
 condition folding on large shared expression graphs. Shared reads retain
 their multiplicity without expanding every path, and substitution reaches a
@@ -12528,11 +12532,31 @@ condition still executes independently.
 
 `HighBoundPrivateFrameCopies.*` in `NeverDHighControlFlowTests` checks copies through nonescaping private frame slots after call ABI binding, including branches, slot reuse and agreement across guard contexts. For x64 and AArch64, the emitted C runs at `-O0` and `-O2` with undefined-behavior traps and independent arithmetic checks. Negative cases preserve the original function for frame escape, unknown call ABIs, missing or inconsistent frame aliases, reassigned entry inputs, overlapping accesses, ordered or atomic memory, malformed statements, cycles and exhausted budgets. Ordinary value conversions must not become PHI copies.
 
+`HighControlFlowSemantics.PhiCoalescingKeepsDistinctIncomingValues` checks
+that a PHI copy on one path cannot merge distinct values used on a different
+path before any definition. It covers direct and transitive copies.
+
 `HighIntegerSignedness.*` in `NeverDHighControlFlowTests` checks the late pass that declares each register or temporary local signed or unsigned by what most of its uses read. Wrapping arithmetic, logical shifts and unsigned comparisons favor unsigned; signed comparisons, signed division, arithmetic shifts and sign extension favor signed; a conversion to an integer as wide as its operand favors the signedness it converts to; a shift count reads unsigned, so its masking arithmetic prints without a signed view; a local with any non-integer use keeps its types. The emitted C runs at `-O0` and `-O2` with undefined-behavior traps against independent reference arithmetic, including a signed comparison of a local that became unsigned.
+
+`HighValueForward.CallCaptureRetainsTheAssignmentConversion` executes a
+forwarded call's byte test and signed word comparison at O0 and O2. The
+boundary inputs distinguish the captured type from the full return value
+and each case checks that the call runs exactly once.
 
 `HighNarrowLocals.*` in `NeverDHighControlFlowTests` checks the late pass that declares a register or temporary local only as wide as its reads take: every read takes at most its low N bytes and every definition extends a value of at most N bytes or is a constant that keeps its meaning in N bytes. A constant definition keeps only its low bytes; a wide read, an incoming register, a join, a call result or a definition that computes all register bytes keeps the declaration. The emitted C runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic.
 
+The large-function `HighValueForward` fixtures exercise direct integer calls
+whose next statement is their only use. The emitted C runs at O0 and O2 with
+an independent call counter. Loop snapshots and captures before a backward
+branch target keep their assignments.
+
 `HighValueForward.*` in `NeverDHighControlFlowTests` checks when the HighC writer may fold a single-use value into its use. A loop condition keeps a value whose variables the loop assigns, since one name can denote several SSA values; a reloaded frame slot keeps its value across a store to that slot and folds past a store to another slot. A copy keeps its value when its source is reassigned before the use. Each case runs at `-O0` and `-O2` with undefined-behavior traps.
+
+`HighControlFlowSemantics.AdjacentLoadRequiresUnconditionalUse` checks that
+a preceding read still runs on paths that skip an operand. It exercises all
+three short-circuit forms and an indirect target with its own effect.
+`HighValueForward.ConditionalUseStillReadsTheCapturedMemberOnBothPaths`
+executes emitted C at O0 and O2 with an observer on the field read.
 
 `HighCIntegerConversion.*` in `NeverDHighControlFlowTests` checks the integer conversions the HighC writer leaves to C. A conversion inside an operand that keeps the bytes an outer conversion keeps prints no cast of its own; an assignment to a declared integer local and a return convert implicitly, and a literal is spelled as the value it converts to, while a pointer keeps its explicit conversion. Stores convert like assignments, and a zero-extended argument to a typed wider parameter keeps its extension. A callee whose debug symbol has no type, or that nothing declares while the code reads more than an int of its result, returns its whole register, so a 64-bit pointer keeps its upper half. Each case runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic. Non-Windows fixture executables link the math library so fused floating operations also execute on hosts where those builtins lower to library calls.
 
@@ -14405,6 +14429,10 @@ admission through both decoder modes, LowIR, MedIR, native LLVM and C rendering.
 Handwritten legacy intrinsics, masked LLVM functions and hidden HighIR branches
 must fail recoverably before source publication. These tests protect the missing
 machine-state boundary; they do not qualify kernel continuation execution.
+
+The callee-save visibility cases cover explicit and recorded Win64 call
+arguments, a call with its own home space, and a dynamic frame-relative read.
+They exercise the combined source pass and its individual callee-save entry.
 
 `NeverDMedPrologueSavesTests` runs the same save, restore, overlapping-store,
 return-address and process-entry cases through separate and combined source

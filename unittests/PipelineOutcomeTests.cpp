@@ -331,9 +331,11 @@ TEST(PipelineOutcome, ImportSummariesNeedABIWithoutSourceDeclarations) {
         const auto &Variadic = Architecture == Arch::X64
                                    ? Result.CallEntryVariadicArguments.get()
                                    : *Result.OmittedCalleeVariadicArguments;
-        EXPECT_EQ(Variadic.contains(0x2010), !Local);
-        if (!Local)
-          EXPECT_EQ(Variadic.at(0x2010), (std::vector<uint16_t>{2}));
+        // Header and explicit user declarations both retain the fixed prefix.
+        ASSERT_TRUE(Variadic.contains(0x2010));
+        EXPECT_EQ(Variadic.at(0x2010), (std::vector<uint16_t>{2}));
+        EXPECT_FALSE(Variadic.contains(0x2000));
+        EXPECT_FALSE(Variadic.contains(0x2020));
       }
       EXPECT_GT(Debug.ABIQueries, 0u);
       EXPECT_EQ(Debug.FullQueries, 0u);
