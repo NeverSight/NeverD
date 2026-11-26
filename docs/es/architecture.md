@@ -132,6 +132,8 @@ separadas de los certificados de apariciones nativas y parches binarios.
 
 `InterpreterSpecialization` se encarga de la propagación inversa acotada de demandas de bits tras un intento fallido. Reutiliza el evaluador escalar sin cambiar hechos del grafo ni añadir campos de control o contextos; todo el trabajo sigue sujeto a los presupuestos y la publicación exige una nueva prueba completa.
 
+Una pista `s` de ocho bytes con máscara completa puede solicitar un dominio finito para una palabra del marco de entrada en el sucesor indicado. Cada arista entrante debe demostrar por separado todos sus valores; la unión solo se conserva dentro del límite. Si falta la prueba, es incompleta o supera el límite, la palabra queda sin restricciones. La pista no aporta valores supuestos ni una nueva premisa de separación de memoria. STORE y los retornos siguen requiriendo sus pruebas habituales.
+
 El refinamiento de contextos puede proponer además un contenedor de dirección de ocho bytes ya seguido cuando una demanda de memoria posterior usa solo una porción de sus bytes. Las coordenadas estrechas originales del productor siguen siendo la referencia; solo la inserción en la cola forma claves a partir de constantes o desplazamientos de marco demostrados.
 
 La enumeración finita puede observar tuplas factibles sin cambiar la consulta de prueba. El rechazo del observador devuelve un resultado incompleto sin tuplas. La caché solo conserva pruebas matemáticas del dominio; los certificados de lectura inmutable permanecen locales hasta completar la enumeración.

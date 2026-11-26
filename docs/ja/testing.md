@@ -44,6 +44,8 @@ NeverD のテストは、表現が期待した形か、バイナリ fixture の�
 
 `InterpreterSpecialization.MXCSR*` は任意の初期状態、正確なメモリ値、予約ビット、DAZ、別名、無効な形式、ノード投影、予算境界を検証します。`PEFixedImageTest.RawMXCSR*` は legacy/VEX バイトとマスクを結び付けた記録を検証します。マシン状態とネイティブ/LLVM 精緻化のテストは、未使用の機能でもインターフェースを拡張できないことを確認します。
 
+`InterpreterSpecialization.ProducerHintProvesFiniteFrameWordAtJoin` は2本の入力辺の値域の和集合と、分離が証明された書き込み後も保存フレームポインターを保持できることを検査します。部分ヒント、上限不足、無界入力では部分グラフを公開しません。
+
 ## セグメント書き込みの復元テスト
 
 `InterpreterSpecialization.SegmentedWrite*` は独立したバイトメモリ結果、全スカラー幅、基底加算の桁あふれ、フレームのエイリアス、上書きされたポインター由来、ノード間の無効化、正確な予算と不足予算を検証します。`SegmentedWritesAndReadsShareLinearMemory` は同一および異なる基底を扱います。`PEFixedImageTest.RawSegmented*` はネイティブバイト、戻りスロットのエイリアス拒否、機能変更後の証跡を検証します。既存の互換性値は保持します。特化、PE 固定イメージ、機械状態、ネイティブ/LLVM 精緻化のテストをビルドしてください。未使用の書き込み機能もソースと証明の拒否対象です。

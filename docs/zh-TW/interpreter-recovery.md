@@ -361,6 +361,8 @@ v10 C API `neverd_devirtualize_source_v10()` 與 `neverd_devirtualize_machine_so
 
 v11 C API `neverd_devirtualize_source_v11()` 與 `neverd_devirtualize_machine_source_v11()` 可接收 `nextControlProducerHints` 中的候選；命令列可重複指定 `--vm-producer-hint=位址:r|s:位移:位元組數:位元遮罩`。重用前，應以報告中的映像雜湊確認相同的實體映像。候選只要求投影精度並計入探索預算，不提供數值或可達路徑的證明；每次執行仍重新證明完整可達圖。`controlProducerHintsTruncated` 表示清單已截斷。
 
+完整位元遮罩的八位元組 `s` 提示，也可在指定後繼處要求入口堆疊框架字的有限數值域。每條入邊獨立且完整地證明其數值；合流只保留上限內的聯集。證明缺失、不完整或超過上限時，該字保持無約束。提示不提供數值或新的記憶體不相交前提；STORE 與返回仍須依原有規則證明。
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## 桌面中的直譯器還原

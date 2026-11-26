@@ -132,6 +132,8 @@ certificats d’occurrences natives et de patch binaire.
 
 `InterpreterSpecialization` gère la propagation arrière bornée des demandes de bits après une tentative échouée. Il réutilise l’évaluateur scalaire sans modifier les faits du graphe ni ajouter de champs de contrôle ou de contextes ; tout travail reste soumis aux budgets et la publication exige une nouvelle preuve complète.
 
+Un indice `s` de huit octets avec un masque complet peut demander un domaine fini pour un mot du cadre d’entrée au successeur indiqué. Chaque arête entrante doit prouver séparément toutes ses valeurs ; seule leur union bornée survit à la jonction. Si la preuve manque, reste incomplète ou dépasse la limite, le mot demeure libre. L’indice ne fournit ni valeur supposée ni nouvelle hypothèse de séparation mémoire. Les STORE et retours gardent leurs preuves habituelles.
+
 Le raffinement des contextes peut aussi proposer un support d’adresse de huit octets déjà suivi lorsqu’une demande mémoire ultérieure n’utilise qu’une tranche de ses octets. Les coordonnées étroites du producteur restent la référence ; seule la mise en file construit les clés à partir de constantes ou de déplacements de cadre prouvés.
 
 L’énumération finie peut observer des tuples réalisables sans modifier la requête de preuve. Un refus de l’observateur renvoie un résultat incomplet sans tuple. Le cache ne conserve que les preuves mathématiques du domaine ; les certificats de lecture immuable restent locaux jusqu’à la fin de l’énumération.

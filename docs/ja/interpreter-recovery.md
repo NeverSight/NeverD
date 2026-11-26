@@ -361,6 +361,8 @@ v10 C API の `neverd_devirtualize_source_v10()` と `neverd_devirtualize_machin
 
 v11 C API の `neverd_devirtualize_source_v11()` と `neverd_devirtualize_machine_source_v11()` は `nextControlProducerHints` の候補を受け取ります。CLI では `--vm-producer-hint=アドレス:r|s:オフセット:バイト数:ビットマスク` を繰り返し指定できます。再利用前に、報告のイメージハッシュで同じ物理イメージに結び付けてください。候補は精度だけを要求し、発見予算を消費します。値や到達可能経路の証拠にはならず、毎回、到達可能なグラフ全体を改めて証明します。`controlProducerHintsTruncated` は一覧の切り詰めを示します。
 
+全ビットを指定した8バイトの `s` ヒントは、指定した後続位置で入口フレームのワードについて有限値域を要求できます。各入力辺は値を個別に完全証明し、合流では上限内の和集合だけを保持します。証明がない場合、不完全な場合、上限を超える場合、そのワードは制約されません。ヒントは値やメモリー分離の前提を追加せず、STORE とリターンには従来の証明が必要です。
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## デスクトップでのインタープリター復元

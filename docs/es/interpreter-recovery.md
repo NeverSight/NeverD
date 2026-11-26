@@ -434,6 +434,8 @@ Las API C v10 `neverd_devirtualize_source_v10()` y `neverd_devirtualize_machine_
 
 Las API C v11 `neverd_devirtualize_source_v11()` y `neverd_devirtualize_machine_source_v11()` aceptan candidatos de `nextControlProducerHints`; la CLI admite opciones repetidas `--vm-producer-hint=dirección:r|s:desplazamiento:bytes:máscara`. Antes de reutilizarlos, vincule los candidatos a la misma imagen física mediante el hash del informe. Solo solicitan precisión, consumen el presupuesto de descubrimiento y no aportan valores ni rutas demostradas: cada ejecución vuelve a probar todo el flujo alcanzable. `controlProducerHintsTruncated` indica una lista recortada.
 
+Una pista `s` de ocho bytes con máscara completa puede solicitar un dominio finito para una palabra del marco de entrada en el sucesor indicado. Cada arista entrante debe demostrar por separado todos sus valores; la unión solo se conserva dentro del límite. Si falta la prueba, es incompleta o supera el límite, la palabra queda sin restricciones. La pista no aporta valores supuestos ni una nueva premisa de separación de memoria. STORE y los retornos siguen requiriendo sus pruebas habituales.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## Recuperación del intérprete en el escritorio

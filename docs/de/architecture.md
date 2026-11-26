@@ -132,6 +132,8 @@ nativer Instruktionsvorkommen und binärer Patches getrennt.
 
 `InterpreterSpecialization` verantwortet die begrenzte Rückwärtspropagierung von Bit-Anforderungen nach einem fehlgeschlagenen Versuch. Es nutzt den skalaren Auswerter, ohne Graphfakten zu ändern oder Kontrollfelder und Kontexte hinzuzufügen; sämtliche Arbeit bleibt budgetiert und die Veröffentlichung erfordert einen neuen vollständigen Beweis.
 
+Ein `s`-Hinweis für ein vollständiges Acht-Byte-Wort kann am angegebenen Nachfolger eine endliche Wertemenge für ein Wort im Eingangs-Stackframe anfordern. Jede eingehende Kante muss ihre Werte vollständig selbst beweisen; am Join bleibt nur die begrenzte Vereinigung erhalten. Fehlt ein Beweis, ist er unvollständig oder überschreitet er das Limit, bleibt das Wort unbeschränkt. Der Hinweis liefert weder einen angenommenen Wert noch eine neue Speichertrennungsannahme. STORE und Rückkehr benötigen weiterhin ihre üblichen Beweise.
+
 Die Kontextverfeinerung kann zusätzlich einen bereits verfolgten Acht-Byte-Adressträger nominieren, wenn eine spätere Speicheranforderung nur einen Byteausschnitt verwendet. Die ursprünglichen schmalen Erzeugerkoordinaten bleiben maßgeblich; nur das Einreihen bildet Schlüssel aus bewiesenen Konstanten oder Frame-Offsets.
 
 Die endliche Werteaufzählung darf mögliche Tupel beobachten, ohne die Beweisabfrage zu ändern. Eine Ablehnung des Beobachters liefert ein unvollständiges Ergebnis ohne Tupel. Der Cache hält nur mathematische Beweise der Wertemenge; Zertifikate unveränderlicher Lesezugriffe bleiben bis zum Abschluss lokal.

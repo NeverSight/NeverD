@@ -435,6 +435,8 @@ Les API C v10 `neverd_devirtualize_source_v10()` et `neverd_devirtualize_machine
 
 Les API C v11 `neverd_devirtualize_source_v11()` et `neverd_devirtualize_machine_source_v11()` acceptent les candidats de `nextControlProducerHints` ; la CLI accepte plusieurs options `--vm-producer-hint=adresse:r|s:décalage:octets:masque`. Avant réutilisation, rattachez-les à la même image physique au moyen du hachage du rapport. Ces indices demandent seulement plus de précision, consomment le budget de découverte et ne prouvent ni valeur ni chemin ; chaque exécution reprend la preuve complète du graphe accessible. `controlProducerHintsTruncated` signale une liste tronquée.
 
+Un indice `s` de huit octets avec un masque complet peut demander un domaine fini pour un mot du cadre d’entrée au successeur indiqué. Chaque arête entrante doit prouver séparément toutes ses valeurs ; seule leur union bornée survit à la jonction. Si la preuve manque, reste incomplète ou dépasse la limite, le mot demeure libre. L’indice ne fournit ni valeur supposée ni nouvelle hypothèse de séparation mémoire. Les STORE et retours gardent leurs preuves habituelles.
+
 <!-- i18n-section: gui-interpreter-recovery -->
 
 ## Reconstitution de l’interpréteur dans l’application

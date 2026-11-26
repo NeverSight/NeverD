@@ -43,6 +43,8 @@ NeverD 테스트는 표현 모양이 예상과 같은지, 바이너리 fixture�
 
 `InterpreterSpecialization.MXCSR*`는 임의 초기 상태, 정확한 메모리 값, 예약 비트, DAZ, 별칭, 잘못된 형식, 노드 투영과 예산 경계를 검사합니다. `PEFixedImageTest.RawMXCSR*`는 legacy/VEX 바이트와 마스크가 결합된 기록을 검사합니다. 기계 상태와 네이티브/LLVM 정제 테스트는 사용하지 않은 기능도 인터페이스를 확장할 수 없음을 확인합니다.
 
+`InterpreterSpecialization.ProducerHintProvesFiniteFrameWordAtJoin`는 두 진입 영역의 합집합과 분리가 증명된 쓰기 이후 저장된 프레임 포인터의 보존을 검사합니다. 부분 힌트, 부족한 한도, 무한 입력은 부분 그래프를 공개하지 않습니다.
+
 ## 세그먼트 쓰기 복원 검사
 
 `InterpreterSpecialization.SegmentedWrite*`는 독립 바이트 메모리 결과, 모든 스칼라 폭, 베이스 덧셈 순환, 프레임 별칭, 덮어쓴 포인터 출처, 노드 간 무효화 및 정확하거나 부족한 예산을 검사합니다. `SegmentedWritesAndReadsShareLinearMemory`는 같거나 다른 베이스를 다룹니다. `PEFixedImageTest.RawSegmented*`는 네이티브 바이트, 반환 슬롯 별칭 거부 및 기능 변경 증빙을 검사합니다. 기존 호환성 값은 유지됩니다. 특수화, PE 고정 이미지, 머신 상태, 네이티브/LLVM 정제 테스트를 빌드하세요. 소스 및 증명 거부 검사는 사용하지 않는 쓰기 기능도 포함합니다.

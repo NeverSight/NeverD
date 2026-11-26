@@ -43,6 +43,8 @@ NeverD 的測試回答三個不同問題：表示形狀是否符合預期、完�
 
 `InterpreterSpecialization.MXCSR*` 涵蓋任意入口狀態、精確記憶體值、保留位元、DAZ、別名、非法形式、節點投影及精確/不足預算。`PEFixedImageTest.RawMXCSR*` 檢查傳統/VEX 原生位元組與繫結遮罩的憑據。機器狀態及原生/LLVM 精化測試確保未使用的能力也不能擴大介面。
 
+`InterpreterSpecialization.ProducerHintProvesFiniteFrameWordAtJoin` 檢查兩條入邊數值域的聯集，以及已證明不相交的寫入後仍保留已儲存框架指標。部分位元提示、上限不足和無界輸入均不得發布部分圖。
+
 ## 分段寫入還原檢查
 
 `InterpreterSpecialization.SegmentedWrite*` 檢查獨立位元組記憶體結果、全部純量寬度、基址加法回繞、堆疊別名、覆寫的指標來源、跨節點失效及精確與不足預算。`SegmentedWritesAndReadsShareLinearMemory` 涵蓋相同及不同段基址。`PEFixedImageTest.RawSegmented*` 檢查原生位元組、有效返回槽別名拒絕及能力變更憑據。既有憑據相容性數值維持不變。建置特化、PE 固定映像、機器狀態及原生/LLVM 細化測試；原始碼與證明拒絕測試也涵蓋未使用的寫入能力。

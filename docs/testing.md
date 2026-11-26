@@ -14225,6 +14225,11 @@ Entry-alignment regressions cover finer partitions, every allowed residue, diffe
 producer-bit candidates across independent runs, checks concrete loop outputs,
 and requires budget and malformed-hint refusal without a partial residual.
 The candidate list does not bind a code image or certify a path by itself.
+`InterpreterSpecialization.ProducerHintProvesFiniteFrameWordAtJoin` checks a
+saved frame pointer across two possible external writes, each independently
+proved disjoint from the declared frame. It compares residual results with an
+independent byte-memory oracle and rejects absent, partial, overflowing and
+unbounded word domains without publishing a partial graph.
 `SessionCAPITest.InterpreterRecoveryV11KeepsProducerHintsAsCandidates` checks
 the size-delimited C tail, both source routes, malformed hints, reports and
 older-version tail isolation. The CLI source fixture checks the repeatable
