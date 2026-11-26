@@ -4841,8 +4841,12 @@ static fs::path narrowGuardX64Obj() {
 
 // `cmpb $0x81, %dl; ja` bounds a byte lane past its sign bit (GCC's shape for
 // sqlite3VdbeExec).  Indexed by that lane zero-extended, the dispatch reads
-// all 130 slots.  Indexed by the lane sign-extended, lane values 0x80 and 0x81
-// are negative indices, so the dispatch stays unresolved.
+// all 130 slots.  Sign-extended after the compare, sign-extended into the
+// compared register before it, or sign-extended to 32 bits before the
+// implicit zero-extend, lane values 0x80 and 0x81 are no slots, so those
+// dispatches stay unresolved.  A byte copied into the index's low lane leaves
+// the caller's upper bits in the index, so even a 128-slot bound does not
+// bound it.
 TEST_F(JTE_X86_64, NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex) {
   auto ImageOrErr = neverd::loadBinary(narrowGuardX64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -4878,10 +4882,67 @@ TEST_F(JTE_X86_64, NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex) {
   EXPECT_EQ(Zext.JumpTables.front().Targets, Expected);
   EXPECT_TRUE(Zext.UnsafeIndirectBranchAddresses.empty());
 
-  const neverd::LowFunc Sext = Build("jt_narrow_sext");
-  EXPECT_FALSE(Sext.UnsafeIndirectBranchAddresses.empty());
-  for (const neverd::JumpTable &Table : Sext.JumpTables)
-    EXPECT_TRUE(Table.AnalysisOnly);
+  for (const char *Name : {"jt_narrow_sext", "jt_narrow_sext_before",
+                           "jt_narrow_sextl", "jt_copied_lane"}) {
+    SCOPED_TRACE(Name);
+    const neverd::LowFunc Refused = Build(Name);
+    EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
+    for (const neverd::JumpTable &Table : Refused.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
+}
+
+static fs::path reloadCursorX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_reload_cursor.o";
+}
+
+// `cmpb $5, (%rbx); ja` bounds the byte under a loop cursor that the cases
+// advance and call out past, and `movzbl (%rbx), %eax` reloads it as the
+// index: the same address, unchanged in between, so the dispatch reads its six
+// slots.  Reloading the next byte, or reloading after replacing the cursor,
+// is not bounded by the compare and stays unresolved.
+TEST_F(JTE_X86_64, ReloadThroughAnUnchangedCursorKeepsTheCompareBound) {
+  auto ImageOrErr = neverd::loadBinary(reloadCursorX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 6; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Loop = Build("jt_reload_loop");
+  ASSERT_EQ(Loop.JumpTables.size(), 1u);
+  EXPECT_FALSE(Loop.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Loop.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Loop.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Loop.UnsafeIndirectBranchAddresses.empty());
+
+  for (const char *Name : {"jt_reload_shifted", "jt_reload_rebased"}) {
+    SCOPED_TRACE(Name);
+    const neverd::LowFunc Refused = Build(Name);
+    EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
+    for (const neverd::JumpTable &Table : Refused.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
 }
 
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;

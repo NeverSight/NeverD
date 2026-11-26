@@ -5137,7 +5137,12 @@ SP, only signs that pointer and does not publish a frame cell. A spill
 whose address never escapes remains that spill across an ordinary call,
 including a call a case reaches before branching back to the reload. A
 call that receives the frame address, or a later store of the spill, keeps
-its own proof. A later AND that
+its own proof. A reload of the memory a guard compared is that value when
+both loads carry the same full register and displacement and nothing between
+them writes that register or memory, as for `cmpb $5, (%rbx); ja` before
+`movzbl (%rbx), %eax` under a loop cursor whose own value has no closed
+form; another displacement or a rewritten register keeps its own proof.
+A later AND that
 repeats the compared lane's own mask from the same unmodified source is that
 lane, including a byte mask (`#0xff`) the full-lane check rejects. A later
 unsigned field `(src >> lsb) & mask` that repeats the compared field, with
@@ -11610,7 +11615,11 @@ A narrow bound past the sign bit, such as GCC's `cmpb $0xb8, %dl; ja` before
 the selected guards reaches the table index zero-extended: a structural leaf,
 or one whose identity query also holds with sign extension excluded. Those
 queries spend a copy of the account, so a lane they cannot prove fails as
-before; a sign-extended lane keeps the dispatch unresolved.
+before; a sign-extended lane keeps the dispatch unresolved. A compared byte
+copied into the index's own lane before the compare (`mov %dl, %al`) is the
+index only when the index has that width or a later zero-extend covers the
+whole index: otherwise the index keeps its earlier upper bits, which no
+bound on the lane constrains.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph

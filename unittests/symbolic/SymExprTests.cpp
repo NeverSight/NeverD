@@ -3243,6 +3243,37 @@ TEST(SymExpr, BinaryProductsPreserveOpaqueOperandsAndModularOverflow) {
   }
 }
 
+TEST(SymExpr, WidePrefixPlansRetainCarriesSignsAndSharedHighUses) {
+  constexpr unsigned Width = 1031;
+  SymContext C;
+  const auto X = C.mkVar("x", 97), Y = C.mkVar("y", 73);
+  const auto SX = C.mkSExt(X, Width), ZY = C.mkZExt(Y, Width);
+  const auto Bias = llvm::APInt::getAllOnes(Width) - 18;
+  const auto Mixed = C.mkAdd({C.mkConst(Bias), C.mkMul(C.mkConst(Width, 7), SX),
+                              C.mkMul(C.mkConst(Width, 9), ZY)});
+  const auto Other = C.mkAdd(C.mkConst(Width, 5), ZY);
+  for (const unsigned Bits : {65u, 97u, 129u, 131u}) {
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Bits);
+    const auto Product = C.mkMul({C.mkConst(Scale), Mixed, Mixed, Other});
+    const auto High = llvm::APInt::getHighBitsSet(Width, 55);
+    SymEvalPlan Packed(C, Product);
+    SymEvalPlan Shared(C, C.mkXor(Product, C.mkAnd(Mixed, C.mkConst(High))));
+    for (unsigned I = 0; I < 32; ++I) {
+      auto A = llvm::APInt::getAllOnes(97) - 3 * I;
+      auto B = llvm::APInt::getAllOnes(73) - 5 * I;
+      if (I & 1)
+        A.clearSignBit();
+      if (I & 2)
+        B.clearBit(63);
+      const llvm::APInt Inputs[] = {A, B};
+      const auto F = Bias + 7 * A.sext(Width) + 9 * B.zext(Width);
+      const auto Expected = Scale * F * F * (B.zext(Width) + 5);
+      EXPECT_EQ(Packed.eval(Inputs), Expected);
+      EXPECT_EQ(Shared.eval(Inputs), Expected ^ (F & High));
+    }
+  }
+}
+
 } // namespace
 
 TEST(SymExpr, ConditionalConstantWindowsIgnorePredicatesAndRespectWork) {
