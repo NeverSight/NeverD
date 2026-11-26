@@ -11474,7 +11474,22 @@ exact finite occurrence query on the complete current graph. The prior storage
 certificate supplies only the query ceiling. Unknown transfers or reentry,
 unbounded values and incomplete evidence cannot authorize coordinates; normal
 mask proofs retain their existing path and cost. Module-wide storage mutation
-checks still run before source publication.
+checks still run before source publication. A stable self replay that cannot
+prove the domain over its own published targets is replayed once more the way
+any published table is: from the entry, where the candidate-local fixed point
+grows its own targets and the published fallback refuses rather than certify
+them, without its published runtime range or retained provisional edges. That
+attempt spends a copy of the account and restores the branch's exploration
+request unless it proves the domain, so a failed attempt leaves the restricted
+failure unchanged. A relative singleton whose target role reads a borrowed edge
+overlay may publish only when its whole physical object is independently
+authenticated; its complete-CFG proof replays it in every later stage, and once
+the borrowed edge is published the replay no longer reads the overlay. While
+that edge stays provisional, the dispatch it comes from stays unresolved and
+nothing past it is reachable. Two state machines in one function need both:
+the second machine is entered only through the first machine's provisional
+edges, and the first machine's entry dispatch closes only after the second
+machine resolves.
 Structural modulo recipes retain x86's complete double-width dividend. The
 symbolic adapter admits 128-bit words only for these bounded structural queries;
 ordinary SAT and finite-set symbolization retain their word-width limit.

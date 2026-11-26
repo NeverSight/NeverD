@@ -1571,6 +1571,15 @@ switch's sum of absolute differences, whose upstream-mask search cannot finish:
 eight owned relocated slots publish the eight cases, and four owned slots under
 the same mask keep the dispatch unresolved. The `x64v52_redsad` round trip in
 `NeverDSemanticTests` executes the same shape.
+`JTE_X86_64.TwoStateMachinesReadOnlyTheirOwnAdjacentTables` lifts two state
+machines whose adjacent relative tables form one relocation run: each loop
+dispatch reads its own five slots and each entry dispatch slot 0. An exhausted
+account publishes nothing, and a second machine seeded from the first machine's
+exit state reads before its table and stays unresolved. The `x64tt_twomachine`
+and `x64tt_threemachine` round trips in `NeverDTwoTableXformTests` execute the
+same shape. `JTE_X86_64.SecondMachineBehindAnOpenEntryDispatchStaysUnreachable`
+enters a second machine only through a first entry dispatch that can never
+close: that dispatch stays unresolved and no block past it is reachable.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

@@ -4686,6 +4686,155 @@ TEST_F(JTE_X86_64, CyclicMaskedSelectorReadsOnlyItsOwnRelocatedSlots) {
   EXPECT_TRUE(Refused.UnsafeIndirectBranchAddresses.count(ShortBranch->Addr));
 }
 
+static fs::path twoMachinesX64Obj(const char *Name) {
+  return fs::path(TEST_OBJ_DIR) / Name;
+}
+
+// Two state machines whose adjacent relative tables form one relocation run.
+// The second machine's entry dispatch is reachable only through the first
+// machine's table edges, and the first machine's entry dispatch closes only
+// once the second machine is resolved.  Each dispatch still reads only its own
+// table: a loop dispatch all five slots, an entry dispatch slot 0.  Seeded
+// with the first machine's exit state instead, the second entry dispatch reads
+// the word before its table, and no table may decode a foreign slot.
+TEST_F(JTE_X86_64, TwoStateMachinesReadOnlyTheirOwnAdjacentTables) {
+  struct Lifted {
+    std::map<neverd::va_t, std::vector<neverd::va_t>> Tables;
+    neverd::LowFunc Low;
+  };
+  const auto Lift = [&](const char *Object, const char *Name,
+                        size_t Budget = 0) -> std::optional<Lifted> {
+    auto ImageOrErr = neverd::loadBinary(twoMachinesX64Obj(Object));
+    if (!ImageOrErr) {
+      ADD_FAILURE() << llvm::toString(ImageOrErr.takeError());
+      return std::nullopt;
+    }
+    neverd::BinaryImage &Image = *ImageOrErr;
+    Lifted Result;
+    // The five targets each table's relative words name.
+    for (const neverd::Section &Section : Image.Sections) {
+      if (Section.Name != ".rodata")
+        continue;
+      for (neverd::va_t Base : {Section.VA, Section.VA + 20}) {
+        for (size_t Slot = 0; Slot < 5; ++Slot) {
+          const uint8_t *Bytes = Image.readVA(Base + Slot * 4, 4);
+          if (!Bytes)
+            return std::nullopt;
+          int32_t Entry = 0;
+          std::memcpy(&Entry, Bytes, sizeof(Entry));
+          Result.Tables[Base].push_back(Base + static_cast<int64_t>(Entry));
+        }
+      }
+    }
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    neverd::Decoder Decoder;
+    if (!Function || !Decoder.init(Image.Arch, Image.Mode))
+      return std::nullopt;
+    neverd::CFGBuilder Builder;
+    if (Budget != 0)
+      Builder.setMaskFixedPointEvidenceBudgetForTesting(Budget);
+    Result.Low = Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    return Result;
+  };
+
+  const auto Machines =
+      Lift("test_jumptable_two_machines.o", "jt_two_machines");
+  ASSERT_TRUE(Machines);
+  ASSERT_EQ(Machines->Tables.size(), 2u);
+  const neverd::LowFunc &Low = Machines->Low;
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  ASSERT_EQ(Low.JumpTables.size(), 4u);
+  std::map<neverd::va_t, std::vector<std::vector<neverd::va_t>>> ByBase;
+  for (const neverd::JumpTable &Table : Low.JumpTables) {
+    EXPECT_FALSE(Table.AnalysisOnly);
+    ASSERT_TRUE(Table.HasBaseAddr);
+    ByBase[Table.BaseAddr].push_back(Table.Targets);
+  }
+  ASSERT_EQ(ByBase.size(), 2u);
+  for (const auto &[Base, Targets] : Machines->Tables) {
+    ASSERT_EQ(ByBase.count(Base), 1u);
+    std::vector<std::vector<neverd::va_t>> Read = ByBase.at(Base);
+    std::sort(Read.begin(), Read.end(),
+              [](const auto &L, const auto &R) { return L.size() < R.size(); });
+    ASSERT_EQ(Read.size(), 2u);
+    EXPECT_EQ(Read[0], std::vector<neverd::va_t>{Targets.front()});
+    EXPECT_EQ(Read[1], Targets);
+  }
+
+  // An exhausted proof account publishes nothing and keeps the dispatch.
+  const auto Starved = Lift("test_jumptable_two_machines.o", "jt_two_machines",
+                            /*Budget=*/1);
+  ASSERT_TRUE(Starved);
+  EXPECT_TRUE(std::all_of(
+      Starved->Low.JumpTables.begin(), Starved->Low.JumpTables.end(),
+      [](const neverd::JumpTable &Table) { return Table.AnalysisOnly; }));
+  EXPECT_FALSE(Starved->Low.UnsafeIndirectBranchAddresses.empty());
+
+  const auto Escaped =
+      Lift("test_jumptable_two_machines_escape.o", "jt_two_machines_escape");
+  ASSERT_TRUE(Escaped);
+  ASSERT_EQ(Escaped->Tables.size(), 2u);
+  EXPECT_FALSE(Escaped->Low.UnsafeIndirectBranchAddresses.empty());
+  for (const neverd::JumpTable &Table : Escaped->Low.JumpTables) {
+    if (Table.AnalysisOnly)
+      continue;
+    ASSERT_EQ(Escaped->Tables.count(Table.BaseAddr), 1u);
+    const std::vector<neverd::va_t> &Targets =
+        Escaped->Tables.at(Table.BaseAddr);
+    for (neverd::va_t Target : Table.Targets)
+      EXPECT_NE(std::find(Targets.begin(), Targets.end(), Target),
+                Targets.end());
+  }
+}
+
+// The first entry dispatch can never close: one of its cases dispatches
+// through the same table with an index loaded from memory.  The second machine
+// is entered only through that entry dispatch's provisional edge, so its
+// constant entry dispatch may read the overlay, but the first entry dispatch
+// stays unresolved and no block past it is reachable from the entry.
+TEST_F(JTE_X86_64, SecondMachineBehindAnOpenEntryDispatchStaysUnreachable) {
+  auto ImageOrErr =
+      neverd::loadBinary(twoMachinesX64Obj("test_jumptable_open_donor.o"));
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function = Image.findSymbol("jt_open_donor");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  std::map<int, const neverd::LowBlock *> ById;
+  const neverd::LowBlock *EntryBlock = nullptr;
+  for (const neverd::LowBlock &Block : Low.Blocks) {
+    ById[Block.Id] = &Block;
+    if (Block.StartAddr == Function->Addr)
+      EntryBlock = &Block;
+  }
+  ASSERT_NE(EntryBlock, nullptr);
+  neverd::va_t EntryDispatch = 0;
+  for (const neverd::LowOp &Op : EntryBlock->Ops)
+    if (Op.Opcode == neverd::NdOp::INDIR_BR)
+      EntryDispatch = Op.Addr;
+  ASSERT_NE(EntryDispatch, 0u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.count(EntryDispatch));
+
+  std::set<int> Reached{EntryBlock->Id};
+  std::vector<int> Work{EntryBlock->Id};
+  while (!Work.empty()) {
+    const auto It = ById.find(Work.back());
+    Work.pop_back();
+    if (It == ById.end())
+      continue;
+    EXPECT_LE(It->second->StartAddr, EntryDispatch);
+    for (int Succ : It->second->Succs)
+      if (Reached.insert(Succ).second)
+        Work.push_back(Succ);
+  }
+}
+
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;
 // ja`, then indexes its 13-entry table with `movzbl %sil,%eax; andl $0xf,%eax`.
 // The guard's byte is the low byte of that index, so the table keeps the

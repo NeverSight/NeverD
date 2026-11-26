@@ -4392,9 +4392,20 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
        (CertifiedSiblingRuntimeStorage &&
         CertifiedSiblingRuntimeStorage->PhysicalSlotCount >=
             limits::kMinJumpTableEntries));
+  // A borrowed edge overlay proves the target role only inside this proposal
+  // universe.  A singleton may still read it when the whole physical object
+  // is independently authenticated: its publication requires a complete-CFG
+  // proof, so every later stage replays it, and once the borrowed edge is
+  // published the replay no longer reads the overlay.  A second machine
+  // entered only through the first machine's still-provisional edge needs
+  // this; the first machine's closure in turn waits for the second.
+  const bool SingletonMayReadEdgeOverlay =
+      TargetRoleEdgeOverrides == &RelativeEdgeOverrides &&
+      ProvisionalRelativeEdgeTemplate &&
+      ProvisionalRelativeEdgeTemplate->AuthenticatesPhysicalStorage;
   std::optional<va_t> *ExactFiniteRelativeSingletonTarget =
       CandidateProposalStageActive && HasExactFiniteSingletonStorage &&
-              !TargetRoleEdgeOverrides
+              (!TargetRoleEdgeOverrides || SingletonMayReadEdgeOverlay)
           ? &ExactFiniteRelativeSingletonTargetValue
           : nullptr;
   bool *ExactFiniteRelativeClosureUnknown =
@@ -4681,8 +4692,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // Edge-only certificates deliberately have no strong ownership to carry.
     // Treat that as a successful no-op, not local proof loss.  Conversely, an
     // exact physical certificate may carry its independently authenticated
-    // storage role across a lower-rank edge overlay; the overlay still grants
-    // no singleton or stable-publication authority.
+    // storage role across a lower-rank edge overlay.  The overlay grants no
+    // stable-publication authority; a singleton read across it stays under
+    // complete-CFG replay (SingletonMayReadEdgeOverlay).
     std::optional<JumpTableStorageRange> ClosureStorage;
     if (ProvisionalRelativeEdgeTemplate->AuthenticatesPhysicalStorage) {
       ClosureStorage = ProvisionalRelativeEdgeTemplate->Storage;
@@ -4739,7 +4751,8 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     return {};
   }
   if (ExactFiniteRelativeSingletonTargetValue) {
-    if (!ProvisionalRelativeEdgeTemplate || TargetRoleEdgeOverrides ||
+    if (!ProvisionalRelativeEdgeTemplate ||
+        (TargetRoleEdgeOverrides && !SingletonMayReadEdgeOverlay) ||
         (!ProvisionalRelativeEdgeTemplate->AuthenticatesPhysicalStorage &&
          !CertifiedSiblingRuntimeStorage) ||
         MaskBound == 0 || MaskCoordinates.size() != 1 || Info.EntrySize == 0 ||
