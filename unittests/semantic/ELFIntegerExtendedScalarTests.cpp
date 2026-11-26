@@ -412,4 +412,59 @@ TEST(PowerPCReversedTransfers, WidthByteOrderAndReservedFields) {
     }
   }
 }
+
+TEST(PowerPCTrailingZeros, WidthAndCR0WithAndWithoutRecording) {
+  using namespace integerreg::ppc;
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = isPowerPC64(A) ? Bitness::Bits64 : Bitness::Bits32;
+    const auto Endian =
+        archLittleEndian(A) ? llvm::endianness::little : llvm::endianness::big;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    for (bool Double : {false, true})
+      for (unsigned Extra : {0u, 1u, 1u << 11}) {
+        const uint32_t Word =
+            Double ? ppc_fixture::CnttzdR3R4 : ppc_fixture::CnttzwR3R4;
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << " " << std::hex << (Word | Extra));
+        uint8_t Code[4];
+        llvm::support::endian::write32(Code, Word | Extra, Endian);
+        DecodedInsn I;
+        const int Size = D.decodeOneForLift(Code, sizeof(Code), 0x1000, I);
+        std::vector<LowOp> Ops;
+        if ((Double && !isPowerPC64(A)) || Extra > 1) {
+          if (Size)
+            EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+          continue;
+        }
+        ASSERT_EQ(Size, 4);
+        ASSERT_NO_THROW(D.liftToLow(I, Ops));
+        for (uint64_t X : {UINT64_C(0), UINT64_C(1), UINT64_C(0x80000000),
+                           UINT64_C(0x8000000000000000)})
+          for (unsigned SO : {0u, 1u}) {
+            NdOpEmulator Emu(Img);
+            Emu.setStrictMode(true);
+            const auto Source = isPowerPC64(A) ? X : uint32_t(X);
+            const uint64_t Count =
+                Double ? std::countr_zero(X) : std::countr_zero(uint32_t(X));
+            Emu.setRegister(integerreg::gpr(4), Source);
+            Emu.setRegister(XER, uint64_t(SO) << XERSO);
+            for (unsigned Bit = 0; Bit < 32; ++Bit)
+              Emu.setRegister(crBit(Bit), Bit % 2);
+            for (const auto &Op : Ops)
+              ASSERT_TRUE(Emu.step(Op));
+            EXPECT_EQ(Emu.getRegister(integerreg::gpr(3)), Count);
+            EXPECT_EQ(Emu.getRegister(integerreg::gpr(4)), Source);
+            EXPECT_EQ(Emu.getRegister(XER), uint64_t(SO) << XERSO);
+            const unsigned Flags[] = {0, Count != 0, Count == 0, SO};
+            for (unsigned Bit = 0; Bit < 32; ++Bit)
+              EXPECT_EQ(Emu.getRegister(crBit(Bit)),
+                        Extra && Bit < 4 ? Flags[Bit] : Bit % 2);
+          }
+      }
+  }
+}
 } // namespace

@@ -7,6 +7,7 @@
 #define STREG stw
 #endif
 .text
+.machine power9
 .globl eval
 .type eval,@function
 eval:
@@ -26,6 +27,25 @@ eval:
 #ifdef __powerpc64__
  addi 7,5,24
  stdbrx 6,4,7
+#endif
+ // Observe the count and CR0.EQ independently, including for a zero word
+ // with nonzero bits in the upper half of a PPC64 source.
+#ifdef __powerpc64__
+ .set offset,3*__SIZEOF_LONG__
+#else
+ .set offset,2*__SIZEOF_LONG__
+#endif
+.macro count op
+ \op 7,6
+ STREG 7,offset(3)
+ mfcr 8
+ rlwinm 8,8,3,31,31
+ STREG 8,offset+__SIZEOF_LONG__(3)
+ .set offset,offset+2*__SIZEOF_LONG__
+.endm
+ count cnttzw.
+#ifdef __powerpc64__
+ count cnttzd.
 #endif
  mr 3,5
  blr

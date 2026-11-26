@@ -65,6 +65,13 @@ struct IntegerLiftState : LiftStateBase {
     return op(NdOp::INT_OR, op(NdOp::INT_LEFT, V, Right ? Inverse : Count),
               op(NdOp::INT_RIGHT, V, Right ? Count : Inverse));
   }
+  NdVar countTrailingZeros(NdVar V) {
+    // ~v & (v - 1) has a one for each trailing zero, including every bit
+    // when v is zero. All three operations stay at the source width.
+    NdVar MinusOne = op(NdOp::INT_SUB, V, NdVar::scalar(1, V.Size));
+    return op(NdOp::POPCOUNT,
+              op(NdOp::INT_AND, op(NdOp::INT_NOT, V), MinusOne));
+  }
   NdVar byteSwap(NdVar V) {
     if (V.Size == 1)
       return V;

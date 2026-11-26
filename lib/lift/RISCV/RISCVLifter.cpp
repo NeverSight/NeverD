@@ -113,24 +113,19 @@ bool basicBitManipulation(State &S, uint32_t W, bool Imm, bool Word,
                           unsigned Rd, NdVar X, NdVar Y) {
   const unsigned Unary = W & opcode::UnaryFormMask;
   switch (Unary) {
-  case opcode::Clz:
-  case opcode::ClzW:
   case opcode::Ctz:
   case opcode::CtzW:
+    S.write(Rd, S.countTrailingZeros(S.resize(X, Word ? 4 : S.Width)));
+    return true;
+  case opcode::Clz:
+  case opcode::ClzW:
   case opcode::Cpop:
-  case opcode::CpopW: {
-    X = S.resize(X, Word ? 4 : S.Width);
-    // ~x & (x - 1) has a one for every trailing zero, including all of them
-    // when x is zero.
-    if (Unary == opcode::Ctz || Unary == opcode::CtzW)
-      X = S.op(NdOp::INT_AND, S.op(NdOp::INT_NOT, X),
-               S.op(NdOp::INT_SUB, X, NdVar::scalar(1, X.Size)));
+  case opcode::CpopW:
     S.write(Rd,
             S.op(Unary == opcode::Clz || Unary == opcode::ClzW ? NdOp::LZCOUNT
                                                                : NdOp::POPCOUNT,
-                 X));
+                 S.resize(X, Word ? 4 : S.Width)));
     return true;
-  }
   case opcode::SextB:
   case opcode::SextH:
     S.write(Rd, S.resize(X, Unary == opcode::SextB ? 1 : 2), true);

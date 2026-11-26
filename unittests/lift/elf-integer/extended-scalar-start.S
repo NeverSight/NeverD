@@ -7,16 +7,11 @@ _start:
  call check
  li a7,93
  ecall
-#elif defined(__powerpc64__)
+#else
 .abiversion 2
 _start:
  lis 2,.TOC.@ha
  addi 2,2,.TOC.@l
- bl check
- li 0,1
- sc
-#else
-_start:
  bl check
  li 0,1
  sc

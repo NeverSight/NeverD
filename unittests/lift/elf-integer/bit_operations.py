@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check all Zbb forms and PowerPC byte-reversed transfers after each ELF projection."""
+"""Check all Zbb forms and PowerPC byte-reversed transfers and trailing-zero counts after each ELF projection."""
 
 import argparse
 from pathlib import Path
@@ -80,27 +80,32 @@ def ppc_oracle(bits, little):
     sizes = (2, 4, 8) if bits == 64 else (2, 4)
     cases = []
     for index in (0, 8):
-        for value in (0, (1 << bits) - 1, 0xf123456789abcdef & ((1 << bits) - 1)):
+        for value in (0, 0x100, 1 << (bits - 1), (1 << bits) - 1,
+                      0xf123456789abcdef & ((1 << bits) - 1)):
             data = bytearray((0x83 + i * 19) % 256 for i in range(48))
             loads = [int.from_bytes(data[index:index + size], order) for size in sizes]
             for size, start in zip(sizes, (index + 8, 16, index + 24)):
                 low = value % (1 << (8 * size))
                 data[start:start + size] = low.to_bytes(size, order)
+            for width in ([32, 64] if bits == 64 else [32]):
+                count = trailing(value % (1 << width), width)
+                loads.extend((count, int(count == 0)))
             cases.append(f"{{{index},{value:#x}UL,{{{words(loads)}}},{{{words(data)}}}}}")
+    slots = len(sizes) + (4 if bits == 64 else 2)
     return f"""
 typedef unsigned long Word;
 extern Word eval(Word *, unsigned char *, Word, Word);
-static const struct {{ Word index, value, loads[{len(sizes)}]; unsigned char bytes[48]; }}
+static const struct {{ Word index, value, results[{slots}]; unsigned char bytes[48]; }}
 cases[] = {{ {", ".join(cases)} }};
 int check(void) {{
-  Word out[{len(sizes)}], storage[48 / sizeof(Word)];
+  Word out[{slots}], storage[48 / sizeof(Word)];
   unsigned char *data = (unsigned char *)storage;
   for (unsigned i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {{
-    for (unsigned j = 0; j < {len(sizes)}; ++j) out[j] = ~cases[i].loads[j];
+    for (unsigned j = 0; j < {slots}; ++j) out[j] = ~cases[i].results[j];
     for (unsigned j = 0; j < 48; ++j) data[j] = 0x83 + j * 19;
     if (eval(out, data, cases[i].index, cases[i].value) != cases[i].index) return 1;
-    for (unsigned j = 0; j < {len(sizes)}; ++j)
-      if (out[j] != cases[i].loads[j]) return 2 + j;
+    for (unsigned j = 0; j < {slots}; ++j)
+      if (out[j] != cases[i].results[j]) return 2 + j;
     for (unsigned j = 0; j < 48; ++j)
       if (data[j] != cases[i].bytes[j]) return 8 + j;
   }}
@@ -110,8 +115,9 @@ int check(void) {{
 
 
 def execute(args, profile, path):
-    if profile == "powerpcle":
-        cpu, symbols = machine(path, profile)
+    if profile in ("powerpc", "powerpcle"):
+        # The 64-bit model executes ISA 3.0 word instructions with MSR.SF clear.
+        cpu, symbols = machine(path, profile, power8=True)
         cpu.reg_write(ppc_const.UC_PPC_REG_1, STACK + 2048)
         cpu.reg_write(ppc_const.UC_PPC_REG_LR, RETURN)
         cpu.emu_start(symbols["check"], RETURN, count=100000)
@@ -120,8 +126,7 @@ def execute(args, profile, path):
             raise RuntimeError(f"{profile} {path.name}: check returned {status} or timed out")
     else:
         qemu = profile.replace("powerpc", "ppc")
-        cpu = "power10" if "ppc64" in qemu else (
-            "750" if qemu == "ppc" else "rv" + profile[-2:] + ",zbb=true")
+        cpu = "power10" if "ppc64" in qemu else "rv" + profile[-2:] + ",zbb=true"
         subprocess.run([args.qemu_dir / ("qemu-" + qemu), "-cpu", cpu, path], check=True)
 
 
@@ -135,14 +140,14 @@ def check(args, work, profile):
     # Keep the caller's ABI independent; base I also enforces the source's IALIGN=32.
     caller_flags = compiler_flags(profile) + ([f"-march=rv{bits}i"] if rv else [])
     sources = [oracle]
-    if profile != "powerpcle":
+    if rv or bits == 64:
         sources.append(HERE / "extended-scalar-start.S")
     objects = []
     for src in sources:
         obj = work / (src.name + ".o")
         subprocess.run([args.clang, *caller_flags, "-O2", "-c", src, "-o", obj], check=True)
         objects.append(obj)
-    entry = "check" if profile == "powerpcle" else "_start"
+    entry = "_start" if rv or bits == 64 else "check"
     original = work / "original.elf"
     compile_elf(args, work, profile, source, original, "eval", extra_flags=flags)
     native = work / "native.elf"

@@ -200,6 +200,9 @@ halfword or word in the opposite byte order to ordinary memory accesses.
 PPC64 also supports `ldbrx` and `stdbrx` for a doubleword. Loads zero-extend
 to the register width. Stores take the low bits of the source register.
 The effective address adds RB to RA, using zero for a zero RA field.
+Power ISA 3.0 `cnttzw` counts trailing zeros in the low word, and `cnttzd`
+counts across the full PPC64 register. A zero input returns 32 or 64,
+respectively. Their record forms update CR0 and copy XER.SO to CR0.SO.
 [Power ISA, Book I, Fixed-Point Byte-Reverse Load and Store Instructions](https://openpowerfoundation.org/specifications/isa/).
 
 In ordinary PPC64 code, `paddi`, `plbz`, `plhz`, `plha`, `plwz`, `plwa`,
@@ -307,11 +310,11 @@ python3 unittests/lift/elf-integer/wide_shifts.py \
 ```
 
 The bit-operation fixture executes all Zbb instructions and the indexed
-byte-reversed transfers. A separate caller compares each register result and
+byte-reversed transfers and trailing-zero counts. A separate caller compares each register result and
 each affected or surrounding byte with a Python oracle. It checks the
 original and all three rebuilt projections at two optimization levels on
-RV32, RV64, PPC32 and PPC64, including both PowerPC byte orders. PPC32
-little-endian uses Unicorn. The other five profiles use Linux user-mode QEMU.
+RV32, RV64, PPC32 and PPC64, including both PowerPC byte orders. PPC32 runs in Unicorn with MSR.SF clear.
+RV32, RV64 and the two PPC64 profiles use Linux user-mode QEMU.
 
 ```sh
 python3 unittests/lift/elf-integer/bit_operations.py \

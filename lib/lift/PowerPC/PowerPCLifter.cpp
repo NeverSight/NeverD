@@ -671,12 +671,16 @@ bool integer(State &S, Arch A, uint32_t W) {
     break;
 #include "PowerPCIntegerForms.def"
   case opcode::CNTLZW:
-  case opcode::CNTLZD: {
-    if (RB || (XO == opcode::CNTLZD && !Wide))
+  case opcode::CNTLZD:
+  case opcode::CNTTZW:
+  case opcode::CNTTZD: {
+    const bool Double = XO == opcode::CNTLZD || XO == opcode::CNTTZD;
+    if (RB || (Double && !Wide))
       return false;
-    NdVar In = S.resize(Src, XO == opcode::CNTLZW ? 4 : 8);
-    NdVar Count = S.makeTemp(In.Size);
-    S.emit(NdOp::LZCOUNT, Count, {In});
+    NdVar In = S.resize(Src, Double ? 8 : 4);
+    NdVar Count = XO == opcode::CNTTZW || XO == opcode::CNTTZD
+                      ? S.countTrailingZeros(In)
+                      : S.op(NdOp::LZCOUNT, In);
     V = S.resize(Count, S.Width);
     break;
   }

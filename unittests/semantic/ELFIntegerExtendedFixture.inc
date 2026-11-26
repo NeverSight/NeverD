@@ -46,6 +46,8 @@ constexpr struct {
     {0x7c642d2c, 4, true},  // stwbrx
     {0x7c642d28, 8, true},  // stdbrx
 };
+constexpr uint32_t CnttzwR3R4 = 0x7c830434;
+constexpr uint32_t CnttzdR3R4 = 0x7c830474;
 } // namespace ppc_fixture
 
 namespace rv_fixture {
