@@ -22,6 +22,8 @@ def cli_report(cli, path, command, *flags, trace=False):
     if trace:
         assert run.stderr.count("phase=session_load event=begin") == 1, run.stderr
         assert run.stderr.count("stage=low_ir event=begin") == 1, run.stderr
+        assert run.stderr.count("stage=machine_med_ir event=begin") == 1, run.stderr
+        assert "stage=llvm_emission" not in run.stderr, run.stderr
     return report, run.stdout
 
 
@@ -125,6 +127,13 @@ def main():
         incomplete.write_bytes(pe(bytes.fromhex("ff e0")))  # unresolved indirect jump
         for path, expected in ((clean, "SAFE"), (incomplete, "UNKNOWN"), (mixed, "UNSAFE")):
             verify(args.cli, args.worker, path, expected)
+        # MOV EAX, ESI followed by an unsupported XACQUIRE LOCK XADD.
+        refused = root / "refused.exe"
+        refused.write_bytes(pe(bytes.fromhex("89 f0 f2 f0 0f c1 07 c3")))
+        report, _ = cli_report(args.cli, refused, "scan")
+        assert report["verdict"] == "UNKNOWN" and not report["coverage_complete"]
+        for row in report["analyzers"].values():
+            assert row["state"] == "unsupported" and "unsupported instruction at 0x140001002" in row["error"], row
         verify_cli_options(args.cli, clean, root / "report.json")
         verify_shared_catalog_scope(args.cli, mixed, root / "catalog.json")
 

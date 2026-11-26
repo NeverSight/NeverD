@@ -171,6 +171,9 @@ struct PipelineOptions {
   bool MedAnalysisOnly = false;
   bool PatchMode = false;
   bool LiftMode = false;
+  /// A native lift may return the fully prepared machine MedIR without
+  /// emitting its LLVM module. Lift admission and ABI recovery still apply.
+  bool EmitLiftedLLVM = true;
   /// Retain native emission observations through LLVM replacement/deletion.
   /// This sidecar does not enable source-only transformations or infer origins
   /// for optimizer-created values.
@@ -264,6 +267,10 @@ struct PipelineOptions {
   /// Machine analysis and rewriting exclude presentation-only source hints.
   bool usesMachineMedIR() const {
     return PatchMode || LiftMode || MedAnalysisOnly;
+  }
+
+  bool emitsMachineLLVM() const {
+    return PatchMode || (LiftMode && EmitLiftedLLVM);
   }
 
   /// A requested LLVM source view can bind explicit declarations without
