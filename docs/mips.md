@@ -187,22 +187,25 @@ revision in `.MIPS.abiflags`. Shrinking n64 images place code above 4 GiB.
 
 The cross-object programs exercise their own stack, function pointer, ELF
 global pointer, 64-bit data and arguments beyond the register argument area.
-The callee calls a helper in another object. The guest checks both full
-64-bit results and the helper's two visible side effects. It exits with 41
-before the replacement and 73 afterward. The Linux runner checks the input
-relocations, FP ABI, linked callback and, for local-exec TLS, initialized
-`PT_TLS` storage. The matrix covers the following combinations.
+The replacement and its classic helper each read the initialized 64-bit
+value through their own ISA's data or TLS relocations. The guest checks
+both full 64-bit results and the helper's two visible side effects. It
+exits with 41 before the replacement and 73 afterward. The Linux runner
+checks both objects' relocations, the FP ABI, the linked callback, and
+initialized `PT_TLS` storage for both TLS models. The matrix covers the following combinations.
 
 | Workload | ISA and ABI |
 | --- | --- |
-| PIC hard and soft float, static GP-relative small data, local-exec TLS | Classic and microMIPS R2/R6 on all three ABIs, MIPS16 R2 on o32 |
+| PIC hard and soft float, static GP-relative small data, local-exec and initial-exec TLS | Classic and microMIPS R2/R6 on all three ABIs, MIPS16 R2 on o32 |
 | Scalar FP addition with hard-float arguments | Classic and microMIPS R2/R6 on all three ABIs |
 | Packed-byte DSP arithmetic | Classic R2 on all three ABIs |
 | MSA vector arithmetic | Classic R5 on all three ABIs |
 
 For MIPS16 o32 hard float, the ordinary function pointer selects the
 compiler's classic entry adapter and the symbol table retains the MIPS16
-body. Pre-R6 microMIPS small-data programs use `+long-calls` to call
+body. A MIPS16 function reading TLS calls the fork's classic o32
+thread-pointer helper and accesses its variable in MIPS16 mode. Pre-R6
+microMIPS small-data programs use `+long-calls` to call
 the external classic function across ISA modes.
 
 To build the tools from NeverD's pinned fork checkout, run

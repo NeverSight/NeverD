@@ -1,5 +1,6 @@
 source_filename = "calc.c"
 
+@seed = external SEED_STORAGE global i64
 declare i64 @helper(i64)
 ASE_DECLARATIONS
 
@@ -19,7 +20,11 @@ X_BITS
   %sum = add i32 %abcdef, %last
   %ext = sext i32 %sum to i64
   %arg = add i64 %payload, %ext
-  %mixed = notail call i64 @helper(i64 %arg)
+  ; Both sides of the ISA boundary read the same initialized location.
+  %seed = load volatile i64, ptr @seed
+  %difference = xor i64 %seed, 4294967315
+  %checked = xor i64 %arg, %difference
+  %mixed = notail call i64 @helper(i64 %checked)
 ADJUST_RESULT
   ret i64 %result
 }

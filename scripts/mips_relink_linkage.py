@@ -10,7 +10,6 @@ SET_THREAD_AREA = {"o32": 4283, "n32": 6246, "n64": 5242}
 def build_linkage_objects(args, build, profile, run):
     pic = profile.linkage != "small-data"
     soft = profile.linkage == "pic-soft"
-    tls = profile.linkage == "tls"
     n64 = profile.abi == "n64"
     target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}", "-filetype=obj"]
     attrs = ([] if pic else ["+noabicalls"]) + (["+soft-float"] if soft else [])
@@ -21,7 +20,7 @@ def build_linkage_objects(args, build, profile, run):
         attrs.extend(("+msa", "+fp64", "+nan2008" if profile.abi == "o32" else "-nan2008"))
     load_address = "dla" if n64 else "la"
     set_tp = ""
-    if tls:
+    if profile.tls_model:
         # Linux MIPS uses a biased thread pointer. This freestanding single-thread
         # program uses its own initialized TLS image as the first thread's storage.
         set_thread_area = SET_THREAD_AREA[profile.abi]
@@ -43,8 +42,9 @@ def build_linkage_objects(args, build, profile, run):
              *(["-mattr=" + ",".join(features)] if features else []),
              *([] if pic else ["-mgpopt"]), "-o", build / name, "-"], source=source)
 
-    driver = (FIXTURES / "caller.ll").read_text().replace("SEED_STORAGE", "thread_local(localexec)" if tls else "")
-    calc = (FIXTURES / "calc.ll").read_text()
+    storage = f"thread_local({profile.tls_model})" if profile.tls_model else ""
+    driver = (FIXTURES / "caller.ll").read_text().replace("SEED_STORAGE", storage)
+    calc = (FIXTURES / "calc.ll").read_text().replace("SEED_STORAGE", storage)
     fp_sum = profile.linkage == "pic-hard" and profile.isa != "mips16"
     # Independent full-width results for the two argument lists in caller.ll.
     # After the helper returns, the adjustment increases from three to eleven.
@@ -93,7 +93,7 @@ def inspect_linkage(image, profile, function, text):
     expected_abi = 6 if profile.abi == "o32" and (profile.release == 6 or profile.linkage == "msa") else 1
     if fp_abi != (3 if profile.linkage == "pic-soft" else expected_abi):
         raise ValueError(f"{profile.name}: unexpected floating-point ABI {fp_abi}")
-    if profile.linkage == "tls":
+    if profile.tls_model:
         tls, = (s for s in image.iter_segments() if s["p_type"] == "PT_TLS")
         if tls["p_filesz"] < 8:
             raise ValueError(f"{profile.name}: missing initialized TLS storage")
@@ -147,11 +147,27 @@ def verify_linkage_objects(folder, profile, hashes, digest):
     else:
         got = 9 if profile.abi == "o32" else 19  # R_MIPS_GOT16 or R_MIPS_GOT_DISP
         required.add((got, "visits"))
-        if profile.linkage == "tls":
+        if profile.linkage == "tls-ie":
+            required.add((46, "seed"))  # R_MIPS_TLS_GOTTPREL
+        elif profile.linkage == "tls":
             required.update(((49, "seed"), (50, "seed")))  # R_MIPS_TLS_TPREL_HI16/LO16
         else:
             required.add((got, "seed"))
         call16 = {"classic": 11, "mips16": 103, "micromips": 142}[profile.isa]
         has_call = (call16, "helper") in callee
-    if not required <= caller or not has_call:
-        raise ValueError(f"{profile.name}: missing caller relocations {required - caller} or helper call {callee}")
+    if profile.linkage == "tls-ie":
+        gottprel = {"classic": 46, "micromips": 166, "mips16": 110}[profile.isa]
+        seed_refs = {(gottprel, "seed")}
+    elif profile.linkage == "tls":
+        high = {"classic": 49, "micromips": 169, "mips16": 111}[profile.isa]
+        seed_refs = {(high, "seed"), (high + 1, "seed")}
+    elif profile.linkage == "small-data":
+        gprel = {"classic": 7, "micromips": 136, "mips16": 101}[profile.isa]
+        seed_refs = {(gprel, "seed")}
+    else:
+        got = {"classic": 9 if profile.abi == "o32" else 19,
+               "micromips": 138 if profile.abi == "o32" else 145, "mips16": 102}[profile.isa]
+        seed_refs = {(got, "seed")}
+    if not required <= caller or not seed_refs <= callee or not has_call:
+        raise ValueError(f"{profile.name}: missing caller {required - caller}, "
+                         f"callee {seed_refs - callee}, helper call present={has_call}")

@@ -104,6 +104,10 @@ class Profile:
     linkage: str = ""
 
     @property
+    def tls_model(self):
+        return {"tls": "localexec", "tls-ie": "initialexec"}.get(self.linkage)
+
+    @property
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
         if self.linkage:
@@ -158,10 +162,10 @@ def profiles(version=4):
             if version >= 4:
                 for release in (2, 6):
                     for isa in ("classic", "micromips"):
-                        for linkage in ("pic-hard", "pic-soft", "small-data", "tls"):
+                        for linkage in ("pic-hard", "pic-soft", "small-data", "tls", "tls-ie"):
                             yield Profile(abi, little, isa, release, linkage=linkage)
                 if abi == "o32":
-                    for linkage in ("pic-hard", "pic-soft", "small-data", "tls"):
+                    for linkage in ("pic-hard", "pic-soft", "small-data", "tls", "tls-ie"):
                         yield Profile(abi, little, "mips16", linkage=linkage)
                 yield Profile(abi, little, linkage="dsp")
                 yield Profile(abi, little, release=5, linkage="msa")
@@ -205,7 +209,7 @@ def layout(profile, section, *, split_entry=False):
     calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
             ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
     script = LAYOUT
-    if profile.linkage == "tls":
+    if profile.tls_model:
         script = script.replace("  .data :", "  .tdata : { *(.tdata*) }\n  __tls_image = ADDR(.tdata);\n  .data :")
     return (script.replace("BASE_ADDRESS", hex(base + (0x100000 if section else 0)))
             .replace("PROGRAM_HEADERS", headers if split_entry else "")
@@ -435,7 +439,7 @@ def execute_image(path, image, profile, expected):
         from mips_elf_runtime import run_micromips64
         run_micromips64(image, profile.release, profile.exit_nr, expected,
                         instruction_limit=2048 if profile.linkage else 256,
-                        set_thread_area=SET_THREAD_AREA[profile.abi] if profile.linkage == "tls" else None)
+                        set_thread_area=SET_THREAD_AREA[profile.abi] if profile.tls_model else None)
         return
     arch = {"o32": "mips", "n32": "mipsn32", "n64": "mips64"}[profile.abi]
     qemu = f"qemu-{arch}{'el' if profile.little else ''}"
