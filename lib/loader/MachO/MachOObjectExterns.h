@@ -48,6 +48,10 @@ std::optional<uint32_t> directTypeOfGOTReference(Arch A, uint32_t Type);
 /// distance, of its symbol's GOT entry (MachOObjectRelocations.def).
 bool isGOTPointerReference(Arch A, uint32_t Type);
 
+/// Whether an undefined external may be absent when dyld binds the object.
+bool isWeakObjectImport(const llvm::object::MachOObjectFile &Obj,
+                        const llvm::object::SymbolRef &Sym);
+
 /// Place the undefined and common symbols the relocations of \p Obj name, and
 /// the GOT entries its GOT references reach, past every section of \p Img.
 llvm::Expected<ObjectExterns>

@@ -88,6 +88,8 @@ std::optional<uint32_t> directTypeOfGOTReference(Arch A, uint32_t Type) {
   if (A == Arch::TheArch && Type == GotType)                                   \
     return DirectType;
 #include "MachOObjectRelocations.def"
+  if (isGOTPointerReference(A, Type))
+    return Type;
   return std::nullopt;
 }
 
@@ -98,6 +100,14 @@ bool isGOTPointerReference(Arch A, uint32_t Type) {
     return true;
 #include "MachOObjectRelocations.def"
   return false;
+}
+
+bool isWeakObjectImport(const MachOObjectFile &Obj,
+                        const llvm::object::SymbolRef &Sym) {
+  using namespace llvm::MachO;
+  const NList N = nlistOf(Obj, Sym.getRawDataRefImpl());
+  return isUndefined(N) && (N.Type & (N_STAB | N_EXT)) == N_EXT &&
+         N.Sect == NO_SECT && N.Value == 0 && (N.Desc & N_WEAK_REF);
 }
 
 llvm::Expected<ObjectExterns> planObjectExterns(const MachOObjectFile &Obj,
@@ -113,8 +123,7 @@ llvm::Expected<ObjectExterns> planObjectExterns(const MachOObjectFile &Obj,
         continue;
       const uint32_t Type = Obj.getAnyRelocationType(Raw);
       const uint32_t Index = Obj.getPlainRelocationSymbolNum(Raw);
-      if ((directTypeOfGOTReference(Img.Arch, Type) ||
-           isGOTPointerReference(Img.Arch, Type)) &&
+      if (directTypeOfGOTReference(Img.Arch, Type) &&
           SeenCells.insert(Index).second)
         Cells.push_back(Index);
       const llvm::object::symbol_iterator Sym = Obj.getSymbolByIndex(Index);

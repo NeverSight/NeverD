@@ -1894,6 +1894,12 @@ the signed addend and exact provider. Writable storage is required even when
 the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
 be a slid address.
 
+In a relocatable Mach-O, an authenticated pointer to an undefined weak
+external retains the symbol, signed addend and signing fields until link time.
+Its target and provider stay unresolved. A GOT relocation addresses the
+symbol's GOT entry. Direct relocations to the same symbol address the symbol
+itself, even when both forms occur in one object.
+
 `installMachOObjectPatch` also connects this native object profile to the shared
 publication transaction. Before final signing, native arm64e publication
 migrates threaded inputs through the existing checked chained-fixup converter;
