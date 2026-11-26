@@ -13,6 +13,10 @@ constexpr struct {
 constexpr uint32_t MultiplyWord = 0x7ca639d6;       // mullw r5,r6,r7
 constexpr uint32_t MultiplyWordRecord = 0x7ca639d7; // mullw. r5,r6,r7
 
+// slw, slw., srw and srw. with r6/r7 as inputs and r5 as destination.
+constexpr uint32_t LogicalWordShifts[] = {0x7cc53830, 0x7cc53831, 0x7cc53c30,
+                                          0x7cc53c31};
+
 // The destination aliases the first source. Bit zero selects the record form.
 constexpr uint32_t HighWordSigned = 0x7cc63896;   // mulhw r6,r6,r7
 constexpr uint32_t HighWordUnsigned = 0x7cc63816; // mulhwu r6,r6,r7

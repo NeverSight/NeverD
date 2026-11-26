@@ -390,12 +390,17 @@ llvm::Error validateControl(const LowBlock &Block,
                        : "canonical same-instruction guard is missing its "
                          "instruction-local metadata");
 
-  if (IsInstructionGuard &&
-      ((!IsBranch || !IsConditional) ||
-       (Boundary.Mode != InstructionMode::ARM &&
-        Boundary.Mode != InstructionMode::Thumb && !Boundary.DelaySlot)))
-    return invalid("instruction-local guard requires conditional ARM or "
-                   "delayed control flags");
+  // PowerPC bclr uses the default decode mode. Its guard skips the RETURN
+  // inside the same instruction when the branch condition is false.
+  const bool DefaultReturn =
+      Boundary.Mode == InstructionMode::Default &&
+      Boundary.Control == LowInstructionControl::ConditionalReturn;
+  const bool SupportsGuard = Boundary.Mode == InstructionMode::ARM ||
+                             Boundary.Mode == InstructionMode::Thumb ||
+                             Boundary.DelaySlot || DefaultReturn;
+  if (IsInstructionGuard && (!IsBranch || !IsConditional || !SupportsGuard))
+    return invalid("instruction-local guard requires conditional ARM, delayed "
+                   "control or a default-mode conditional return");
 
   switch (Boundary.Control) {
   case LowInstructionControl::None:
