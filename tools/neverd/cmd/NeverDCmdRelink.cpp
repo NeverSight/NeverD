@@ -6,6 +6,7 @@
 
 #include "../NeverDCLI.h"
 
+#include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/support/AtomicOutput.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/FilePath.h"
@@ -373,6 +374,9 @@ Error relink(StringRef Output) {
   auto Input = readFile(InputFile);
   if (!Input)
     return Input.takeError();
+  // Apply the same structural and ISA/ABI checks as an ordinary ELF load.
+  if (auto Image = ELFLoader().loadBuffer((*Input)->getMemBufferRef()); !Image)
+    return createFileError(InputFile, Image.takeError());
   auto Old = inspect(**Input, M->Function);
   if (!Old)
     return createFileError(InputFile, Old.takeError());
@@ -443,7 +447,7 @@ Error relink(StringRef Output) {
 
 } // namespace
 
-int runRelinkPatch(StringRef Output) {
+int runRelinkPatch() {
   for (const auto &[Name, Opt] : cl::getRegisteredOptions(PatchCmd)) {
     if (Opt->getNumOccurrences() && Opt != &InputFile && Opt != &OutputFile &&
         Opt != &PatchRelink && Opt != &PatchLinkerPath && Opt != &PatchStrat &&
@@ -453,6 +457,7 @@ int runRelinkPatch(StringRef Output) {
       return 1;
     }
   }
+  const std::string Output = patchOutputPath();
   if (Error E = relink(Output)) {
     WithColor::error() << toString(std::move(E)) << "\n";
     return 1;

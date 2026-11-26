@@ -1481,14 +1481,14 @@ int runDecompile(neverd_session_t Sess) {
   return 0;
 }
 
+std::string patchOutputPath() {
+  return OutputFile.empty() ? InputFile.getValue() + ".patched"
+                            : OutputFile.getValue();
+}
+
 int runPatch(neverd_session_t Sess) {
   const char *InPath = InputFile.getValue().c_str();
-
-  const std::string OutPath = OutputFile.empty()
-                                  ? InputFile.getValue() + ".patched"
-                                  : OutputFile.getValue();
-  if (PatchRelink.getNumOccurrences())
-    return runRelinkPatch(OutPath);
+  const std::string OutPath = patchOutputPath();
   if (PatchLinkerPath.getNumOccurrences()) {
     WithColor::error() << "--linker-path requires --relink\n";
     return 1;

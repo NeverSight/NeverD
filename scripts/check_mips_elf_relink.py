@@ -373,6 +373,17 @@ def qualify(args):
             if profile.shrinking:
                 continue
 
+            # The manifest path must still apply the ELF loader's ISA admission.
+            invalid_isa = bytearray(original.read_bytes())
+            offset = 48 if profile.abi == "n64" else 36
+            order = "little" if profile.little else "big"
+            flags = int.from_bytes(invalid_isa[offset:offset + 4], order)
+            invalid_isa[offset:offset + 4] = (flags | 0x00010000).to_bytes(4, order)  # EF_MIPS_MACH
+            invalid_input = build / "vendor-isa.elf"
+            invalid_input.write_bytes(invalid_isa)
+            for mode in MODES:
+                reject(mode, "vendor/ASE profile is not supported", input_elf=invalid_input)
+
             # Check an unusable input as well as the candidate section layout.
             bad_input = build / "readonly-entry.elf"
             run([args.lld, "-static", "-T", build / "readonly-entry.ld", "-o", bad_input,

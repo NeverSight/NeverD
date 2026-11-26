@@ -847,7 +847,8 @@ int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);
 int runContinuation(neverd_session_t Sess);
 int runPatch(neverd_session_t Sess);
-int runRelinkPatch(llvm::StringRef Output);
+std::string patchOutputPath();
+int runRelinkPatch();
 
 } // namespace neverd::cli
 

@@ -179,7 +179,9 @@ original program and both relink modes.
 
 The release-based o32 rows run on both MIPS32 and MIPS64 ISA profiles. The
 fork marks a MIPS64/o32 executable with `EF_MIPS_32BITMODE`, ELF32 and the
-o32 ABI. These rows qualify static relinking. Instruction lifting for
+o32 ABI. The manifest command loads the ELF structure and validates the
+original link inputs directly. `neverd identify` reports the ELF profile.
+These rows qualify static relinking. Instruction lifting for
 MIPS64/o32 currently supports classic historical MIPS III.
 
 These 140 configurations call the rebuilt function three times. Six cover
