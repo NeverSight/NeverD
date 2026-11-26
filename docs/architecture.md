@@ -8491,8 +8491,20 @@ fields contributes to the result.
 Equal projected fields accumulate their signed coefficients modulo
 the observed precision, including multiplicity. A mixed inner mask keeps its holes, and addition
 or subtraction takes place at the surviving field width so carries and borrows
-remain observable. A weight below the required shift keeps the entire factor,
-including its cross terms.
+remain observable. An unpaired factor below the required shift retains
+its cross terms. Identical additive factors one bit below this threshold
+can be paired. For a factor `c + 2^k h`, squaring raises the
+linear term by one bit. The surviving square reads only `h mod 2` because
+a square modulo four is its input parity. The pair contributes its squared
+offset once. An odd copy remains in the product at its original precision.
+When sampling a wide repeated product beside a rewritten additive tail,
+the verifier can evaluate each addend at the same assignment. This lets
+the product reuse its schedule for repeated factors.
+For a wide affine sum of two or three projected words with an odd offset
+and even slopes, distinct subset sums in their first nonzero limb certify
+that every Boolean corner has a different weight. The direct affine form
+then avoids building a separate minterm for each corner. Colliding subset
+sums retain the general search.
 Independent evaluation of a wide scaled product can combine repeated
 factors by binary exponentiation. When a sum of weighted words has a common
 power of two and its observed coefficients fit a signed 32-bit word, the

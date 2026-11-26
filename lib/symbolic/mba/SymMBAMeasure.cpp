@@ -36,6 +36,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../SymWeightedFactor.h"
 #include "../SymWordProduct.h"
 #include "Limits.h"
 #include "SampleWords.h"
@@ -536,8 +537,28 @@ std::optional<bool> agreeAfterCancelingAddends(const SymContext &Ctx, SymRef A,
             Common, OtherLeft, OtherRight))
       return Agrees;
   }
-  if (Common.empty())
-    return std::nullopt;
+  if (Common.empty()) {
+    // A product beside a rewritten tail otherwise loses its root plan.
+    // Keep the same assignments and evaluate every addend, including the tail.
+    auto benefitsFromProductPlan = [&](llvm::ArrayRef<SymRef> Terms, size_t I) {
+      if (I == Terms.size() || Ctx.width(A) <= 64)
+        return false;
+      auto Args = Ctx.operands(Terms[I]);
+      if (!Ctx.isConst(Args.front()) ||
+          (Ctx.constWords(Args.front()).front() & 1))
+        return false;
+      if (!hasLongFactorRun(Args.drop_front()))
+        return false;
+      const auto Scale = Ctx.constWords(Args.front());
+      const unsigned Bits =
+          Ctx.width(A) - llvm::APInt::tcLSB(Scale.data(), Scale.size());
+      return Bits > llvm::APInt::APINT_BITS_PER_WORD &&
+             llvm::APInt::getNumWords(Bits) < Scale.size();
+    };
+    if (!benefitsFromProductPlan(LeftRest, LeftProduct) &&
+        !benefitsFromProductPlan(RightRest, RightProduct))
+      return std::nullopt;
+  }
 
   llvm::SmallVector<uint32_t, 16> Vars;
   Ctx.collectVars(Common, Vars);

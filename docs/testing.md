@@ -4757,6 +4757,14 @@ expression or `--counted` for the original factors with their multiplicities.
 The 389-factor x86 fixture executes both source views against the original
 32-bit arithmetic at Clang O0 and O2.
 
+`tools/neverd-bench/generate_paired_product.py --width 65536 --case 7`
+emits a product whose repeated factors retain square and mixed terms.
+`--reference` reconstructs the result from finite differences of the original
+modular powers. Use `--counted` to evaluate the original without expanding
+repetitions. At width 4194319, case 7 contains 360,018 factors and requires
+`neverd simplify --exhaustive`. A 268-factor x86 fixture exercises the same
+square corrections through both decompiler views.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may
