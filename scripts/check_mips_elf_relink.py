@@ -353,6 +353,26 @@ def build_upgrade_objects(old, new, build, out, profile, partial):
     return ["calc.o"]
 
 
+def check_partial_link_order(neverd, old_lld, new_lld, manifest, out):
+    build = manifest.parent
+    inputs = build / "inputs"
+    other = build / "other-order"
+    other.mkdir()
+    # Use the same original objects and LLD, but select the other weak definition.
+    run([old_lld, "-r", "-o", other / "calc.o", inputs / "start.o", inputs / "right.o",
+         inputs / "left.o", inputs / "calc.o"])
+    original = other / "original.elf"
+    run([old_lld, "-static", "-T", build / "base.ld", "-o", original, other / "calc.o"])
+    for mode in MODES:
+        target = out / f"{mode}.elf"
+        previous = digest(target)
+        run([neverd, "patch", original, f"--relink={manifest}", f"--mode={mode}",
+             f"--original-linker-path={old_lld}", f"--linker-path={new_lld}", "-o", target],
+            error="do not reproduce")
+        if digest(target) != previous:
+            raise ValueError(f"{build.name}: mismatched input order changed the {mode} output")
+
+
 def qualify_upgrade(args):
     """Reproduce a prior fork release's ELF and link the replacement with the current one."""
     def tools_in(directory):
@@ -397,6 +417,8 @@ def qualify_upgrade(args):
                      *(staged if p == "calc.o" else build / p for p in objects)])
                 if reference.read_bytes() != target.read_bytes():
                     raise ValueError(f"{profile.name}: {mode} differs from the new linker's output")
+            if args.partial_link:
+                check_partial_link_order(args.neverd, old.lld, new.lld, manifest, out)
             if not results:
                 target = out / "inplace.elf"
                 previous = digest(target)

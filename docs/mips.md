@@ -255,9 +255,12 @@ The first helper in link order must supply the result. For each replacement
 the current linker combines the updated function with the original startup
 and helpers. The runner checks the ABI, the surviving COMDAT group, both
 weak symbols and the three `R_MIPS_26` relocations on startup calls in both
-intermediate objects. Across the three input sets it compares all 36
-replacements byte for byte with independent links, runs the 18 originals
-and all 36 replacements, and checks the function placement in every ELF.
+intermediate objects. Reversing the original helpers selects a different
+weak definition. Both modes reject that executable when given the original
+input order and preserve the previous output. Across the three input sets
+the runner compares all 36 replacements byte for byte with independent
+links, runs the 18 originals and all 36 replacements, and checks the
+function placement in every ELF.
 
 For MIPS16 o32 hard float, the ordinary function pointer selects the
 compiler's classic entry adapter and the symbol table retains the MIPS16
