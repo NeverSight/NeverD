@@ -247,25 +247,34 @@ TEST_P(MIPSLoader, GlobalPointerRecordsRequireBoundedPayloadsAndImageScope) {
 TEST(MIPSHistoricalLoader,
      HeaderAndABIRecordsRetainIndependentArchitectureLevel) {
   for (bool Little : {false, true})
-    for (bool N32 : {false, true})
+    for (MIPSABI ABI : {MIPSABI::O32, MIPSABI::N32, MIPSABI::N64})
       for (unsigned Level : {4, 5})
-        for (bool ABI : {false, true}) {
-          ELFBytes File(N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
-                            : (Little ? Arch::MIPS64EL : Arch::MIPS64));
-          File.put(N32 ? 36 : 48, ((Level - 1) << 28) | (N32 ? 0x20 : 0), 4);
-          if (ABI) {
+        for (bool HasABIFlags : {false, true}) {
+          const bool Is64 = ABI == MIPSABI::N64;
+          ELFBytes File(Is64 ? (Little ? Arch::MIPS64EL : Arch::MIPS64)
+                             : (Little ? Arch::MIPS32EL : Arch::MIPS32));
+          const uint32_t ABIFlags = ABI == MIPSABI::O32   ? 0x1100
+                                    : ABI == MIPSABI::N32 ? 0x20
+                                                          : 0;
+          File.put(Is64 ? 48 : 36, ((Level - 1) << 28) | ABIFlags, 4);
+          if (HasABIFlags) {
             File.abiFlags();
             File.Bytes[0xe2] = Level;
             File.Bytes[0xe3] = 0;
             File.Bytes[0xe4] = File.Bytes[0xe5] = 2;
-            File.Bytes[0xe7] = 1;
+            File.Bytes[0xe7] = ABI == MIPSABI::O32 ? 6 : 1;
           }
           ELFLoader Loader;
           auto Image = Loader.loadBuffer(File.buffer());
           ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          EXPECT_EQ(Image->MIPS->ABI, ABI);
+          EXPECT_EQ(Image->getPointerSize(), Is64 ? 8u : 4u);
+          if (ABI == MIPSABI::O32)
+            EXPECT_EQ(Image->Arch,
+                      Little ? Arch::MIPS64O32EL : Arch::MIPS64O32);
           EXPECT_EQ(Image->MIPS->HistoricalISA, Level);
           EXPECT_EQ(Image->MIPS->ISARevision, 0);
-          if (ABI) {
+          if (HasABIFlags) {
             for (unsigned Wrong : {32u, 64u, 9u - Level}) {
               File.Bytes[0xe2] = Wrong;
               auto Bad = Loader.loadBuffer(File.buffer());

@@ -80,7 +80,7 @@ struct MIPSImageMetadata {
       return LittleEndian ? Arch::MIPS64EL : Arch::MIPS64;
     if (ABI == MIPSABI::N32)
       return LittleEndian ? Arch::MIPS64N32EL : Arch::MIPS64N32;
-    if (HistoricalISA == 3)
+    if (HistoricalISA >= 3)
       return LittleEndian ? Arch::MIPS64O32EL : Arch::MIPS64O32;
     return LittleEndian ? Arch::MIPS32EL : Arch::MIPS32;
   }

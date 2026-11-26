@@ -172,14 +172,13 @@ original program and both relink modes.
 | Instruction set | ABIs | Entry points |
 | --- | --- | --- |
 | MIPS I, II | o32 | Classic |
-| MIPS III | o32, n32, n64 | Classic |
-| MIPS IV, V | n32, n64 | Classic |
+| MIPS III, IV, V | o32, n32, n64 | Classic |
 | MIPS32/64 R1, R2, R3, R5, R6 | o32, n32, n64 | Classic |
 | microMIPS R2, R3, R5, R6 | o32, n32, n64 | Classic and tagged microMIPS |
 | MIPS16 R2 | o32 | Classic and tagged MIPS16 |
 
-These 106 configurations call the rebuilt function three times. Six cover
-same-size replacements, and 100 cover shrinking replacements. All also link
+These 110 configurations call the rebuilt function three times. Six cover
+same-size replacements, and 104 cover shrinking replacements. All also link
 a larger replacement in `section` mode and observe exit status 161. The
 same object must fail in `inplace` mode and preserve the previous output.
 The runner checks the function size, file offset, ISA marker and exact ISA
@@ -2203,8 +2202,11 @@ The shared availability catalog gates physical words before decoder fallbacks
 and at direct lift entry, including after decoder reuse. It does not imply that
 every architecturally available instruction has a semantic implementation.
 Trapping arithmetic, privileged operations and reservations retain the limits
-listed above. MIPS IV–V o32 remains unqualified; I–III scheduling has
-the explicit execution and reconstruction boundaries described above.
+listed above. For MIPS IV/V o32, ELF loading and static relinking preserve
+32-bit pointers and the 64-bit register architecture in both byte orders.
+Instruction decoding and lifting for these two o32 profiles require separate
+qualification. I–III scheduling has the execution and reconstruction
+boundaries described above.
 
 IV admits the implemented integer and scalar COP1/COP1X slice; V additionally
 admits paired-single and LUXC1/SUXC1. ROTR, EXT, MFHC1 and other release-only

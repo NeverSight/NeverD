@@ -19,6 +19,7 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
+PRODUCT_VERSION = 5
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -134,15 +135,16 @@ class Profile:
         return base if self.release == 1 else f"{base}r{self.release}"
 
 
-def profiles(version=4):
+def profiles(version=PRODUCT_VERSION):
     for abi in ABIS:
         for little in (False, True):
             yield Profile(abi, little)
             if version == 1:
                 continue
             if version >= 4:
-                # These are the historical ISA/ABI combinations admitted by the loader.
-                for level in ((1, 2, 3) if abi == "o32" else (3, 4, 5)):
+                first_level = 1 if abi == "o32" else 3
+                last_level = 3 if version == 4 and abi == "o32" else 5
+                for level in range(first_level, last_level + 1):
                     yield Profile(abi, little, shrinking=True, historical_isa=level)
             for isa in ("classic", "micromips"):
                 releases = (2, 6)
@@ -389,7 +391,7 @@ def qualify(args):
             run([args.neverd, "patch", original, *options, "--from-object=updated.o", "-o", sentinel],
                 error="cannot be combined")
         check_mixed_float_abis(args, Path(temp), root)
-    encode(root / "products.json", {"version": 4, "profiles": results, "objects": object_hashes})
+    encode(root / "products.json", {"version": PRODUCT_VERSION, "profiles": results, "objects": object_hashes})
     print(f"Relinked {len(results)} profiles in both modes")
 
 
@@ -413,6 +415,9 @@ def inspect_elf(image, profile):
     abi_record = image.get_section_by_name(".MIPS.abiflags")
     if abi_record is None or abi_record.data()[2:4] != bytes((level, revision)):
         raise ValueError(f"{profile.name}: expected ISA level {level}, revision {revision} in .MIPS.abiflags")
+    if abi == "o32" and profile.historical_isa >= 3:
+        if not flags & 0x100 or abi_record.data()[4] != 2:
+            raise ValueError(f"{profile.name}: expected the fork's wide-GPR o32 ELF flags")
     if bool(image["e_entry"] & 1) != profile.compressed_entry:
         raise ValueError(f"{profile.name}: incorrect program entry ISA at {image['e_entry']:#x}")
 
@@ -465,7 +470,7 @@ def execute(args):
     manifest = json.loads((root / "products.json").read_text())
     if "version" in manifest:
         version = manifest["version"]
-        if version not in (2, 3, 4):
+        if version not in (2, 3, 4, 5):
             raise ValueError("Unknown MIPS relink products version")
         hashes = manifest["profiles"]
     else:
@@ -475,7 +480,7 @@ def execute(args):
     cases = list(profiles(version))
     if set(hashes) != {p.name for p in cases}:
         raise ValueError("MIPS relink products do not match the expected profile set")
-    if version == 4:
+    if version >= 4:
         object_hashes = manifest["objects"]
         if set(object_hashes) != {p.name for p in cases if p.linkage}:
             raise ValueError("MIPS relink object receipts do not match the expected linkage profiles")
