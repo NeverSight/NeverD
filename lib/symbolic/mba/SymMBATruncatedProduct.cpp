@@ -1970,12 +1970,11 @@ SymRef buildResiduePowerBlocks(SymContext &Ctx,
     const unsigned Fixed =
         std::min(P - K, unsigned(std::countr_zero(Count))) + K;
     const unsigned Bits = P - Fixed;
-    if (Bits >= std::numeric_limits<unsigned>::digits)
+    if (Bits > limits::kMaxAffineResidueTableBits)
       return {};
     const unsigned Entries = 1u << Bits,
                    Stride = std::bit_ceil(std::max(1u, Bits));
-    if (Entries > std::numeric_limits<unsigned>::max() / Stride ||
-        Entries > uint64_t(Count) * Ctx.numOperands(F))
+    if (Entries > uint64_t(Count) * Ctx.numOperands(F))
       return {};
     const size_t TableWords = llvm::APInt::getNumWords(Entries * Stride);
     const size_t PowerWork =
@@ -2092,9 +2091,16 @@ SymRef foldQuadraticFields(SymContext &Ctx, SymRef Root, unsigned Precision,
                                 Storage);
   };
   auto Best = build(Minimum);
-  if (!Best && Minimum)
-    Best = buildResiduePowerBlocks(Ctx, Runs, Outer, Precision, P, K, Budget,
-                                   Storage);
+  SymRef PackedPower;
+  // Large incomplete blocks can be shorter as exact powers than as a
+  // quadratic polynomial multiplied by many remaining copies.
+  if (Minimum && (!Best || Minimum + K > P - P / 2)) {
+    PackedPower = buildResiduePowerBlocks(Ctx, Runs, Outer, Precision, P, K,
+                                          Budget, Storage);
+    if (PackedPower &&
+        (!Best || readingScore(Ctx, PackedPower) < readingScore(Ctx, Best)))
+      Best = PackedPower;
+  }
   if (!Best)
     return {};
   const unsigned Half = P - P / 2;
@@ -2114,6 +2120,8 @@ SymRef foldQuadraticFields(SymContext &Ctx, SymRef Root, unsigned Precision,
   }
   if (!(readingScore(Ctx, Best) < readingScore(Ctx, Root)))
     return {};
+  if (Best != PackedPower)
+    Budget.ArithmeticProductReading = Best;
   recordResidueReading(Ctx, First, Budget, Storage);
   return Best;
 }

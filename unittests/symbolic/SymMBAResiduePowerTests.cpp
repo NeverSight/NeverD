@@ -1068,6 +1068,37 @@ TEST(SymMBAResiduePowers, SmallOddPowerBlocksKeepTheirFullResidues) {
     }
 }
 
+TEST(SymMBAResiduePowers, PackedProductsCompeteWithExpandedNativeArithmetic) {
+  constexpr unsigned Width = 16;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  const auto A = C.mkZExt(C.mkExtract(X, 1, 4), Width);
+  const auto B = C.mkZExt(C.mkExtract(Y, 1, 2), Width);
+  const auto D = C.mkSExt(C.mkExtract(Y, 1, 2), Width);
+  const auto E = C.mkSExt(C.mkExtract(X, 1, 3), Width);
+  const auto H = C.mkZExt(C.mkExtract(Y, 0, 2), Width);
+  auto literal = [&](int V) { return C.mkConst(llvm::APInt(Width, V, true)); };
+  auto scale = [&](int V, SymRef R) { return C.mkMul(literal(V), R); };
+  llvm::SmallVector<SymRef, 80> Factors{literal(-384)};
+  Factors.append(16, C.mkAdd({literal(7), scale(4, A), scale(-4, B)}));
+  Factors.append(
+      26, C.mkAdd({literal(5), scale(28, D), scale(-12, A), scale(12, E)}));
+  Factors.append(24, C.mkAdd({literal(3), scale(4, E), scale(12, H)}));
+  const auto Original = C.mkMul(Factors);
+  MBAOptions Options;
+  Options.MaxWork = 65536;
+  const auto Result = simplifyMBADeep(C, Original, Options);
+  EXPECT_LT(Result.Work, Options.MaxWork);
+  // The packed form costs 149. The fully expanded arithmetic reading costs 100.
+  EXPECT_LE(C.readabilityCost(Result.Expr), 100u);
+  SymEvalPlan Before(C, Original), After(C, Result.Expr);
+  for (unsigned XV = 0; XV < 32; ++XV)
+    for (unsigned YV = 0; YV < 8; ++YV) {
+      std::array Values{llvm::APInt(Width, XV), llvm::APInt(Width, YV)};
+      ASSERT_EQ(After.eval(Values), Before.eval(Values));
+    }
+}
+
 TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
   for (const unsigned Bits : {4u, 17u, 65u}) {
     const unsigned Width = 3 * Bits + 2, Shift = Bits + 1;

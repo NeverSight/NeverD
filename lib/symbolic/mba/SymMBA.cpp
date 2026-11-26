@@ -2109,8 +2109,32 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
       simplifyLinearTail(Ctx, E, Opts, Budget, WholeRep,
                          detail::limits::kMinLinearTailProductDegree,
                          /*SingleProductOnly=*/true);
+  Budget.ArithmeticProductReading = {};
   SymRef Prepared =
       foldProductValuations(Ctx, EarlyTail, Budget, ValuationStorage);
+  // A compact modular proof may still print each factor in an incomplete
+  // block. For a native product of this size the ordinary arithmetic engine
+  // can give a shorter polynomial over the original fields.
+  if (Prepared == Budget.ArithmeticProductReading && Ctx.op(E) == SymOp::Mul &&
+      Ctx.op(Prepared) == SymOp::Concat && Ctx.width(E) <= 64 &&
+      Ctx.numOperands(E) <= detail::limits::kMaxResidueProductFactors &&
+      readingCost(Ctx, Prepared) >= Ctx.numOperands(E)) {
+    const auto Available = Budget.available();
+    const auto Reserve =
+        std::max(Budget.used(),
+                 Available / detail::limits::kProductReadingReserveDivisor);
+    if (Reserve < Available) {
+      WorkBudget Trial(Available - Reserve);
+      MBAOptions Local = Opts;
+      Local.MaxTableBytes = ValuationStorage;
+      SolveReport Arithmetic;
+      const auto Alternative = solveArithmetic(Ctx, E, Local, Trial, Arithmetic,
+                                               /*ExpandComplements=*/false);
+      Budget.consume(Trial.used());
+      if (readingScore(Ctx, Alternative) < readingScore(Ctx, Prepared))
+        Prepared = Alternative;
+    }
+  }
   if (EarlyTail == E && !Budget.exhausted() &&
       (Budget.MultipleResidueAttempts != ResidueAttempts ||
        (Prepared != E &&
