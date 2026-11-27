@@ -21075,7 +21075,8 @@ three relocated callbacks in their read-only tables. The outer stdio wrapper
 restores ESP from EBP after its nested calls. The inner wrapper depends on
 the UCRT calling convention. On Windows,
 `RegistrationCRTFrame.OriginalPE32XCPT4RunsOnWindows` executes the original
-file and checks the ordered outcomes of all 90 exception cases.
+file and checks all 90 outcomes in order. The x86 source enables 85 cases
+and explicitly skips 29, 58, 61, 87 and 89.
 
 The public xcpt4 PE32 and PE64 issue tests remain separate required acceptance
 checks; passing these focused tests does not close either issue.
