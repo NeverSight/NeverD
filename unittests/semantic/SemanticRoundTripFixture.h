@@ -67,6 +67,7 @@ enum class RecoveredSwitchExpectation : uint8_t {
   Unspecified,
   Required,
   Forbidden,
+  ByValue,
 };
 
 struct RoundTripTC {
@@ -173,8 +174,12 @@ inline std::ostream &operator<<(std::ostream &OS, const RoundTripTC &TC) {
 // ============================================================================
 class SemanticRoundTripFixture : public ::testing::Test {
 protected:
-  static size_t functionBodySwitchCount(std::string_view IR,
-                                        std::string_view FunctionName) {
+  struct SwitchCounts {
+    size_t Tables = 0;
+    size_t ByValue = 0;
+  };
+  static SwitchCounts functionBodySwitchCounts(std::string_view IR,
+                                               std::string_view FunctionName) {
     const std::string DefinitionName = "@" + std::string(FunctionName) + "(";
     size_t SearchFrom = 0;
     while (true) {
@@ -189,18 +194,17 @@ protected:
       if (DefinitionLine.find("define ") != std::string_view::npos) {
         const size_t BodyBegin = IR.find('{', NameAt + DefinitionName.size());
         if (BodyBegin == std::string_view::npos)
-          return 0;
+          return {};
         const size_t BodyEnd = IR.find("\n}", BodyBegin + 1);
         if (BodyEnd == std::string_view::npos)
-          return 0;
-        size_t Count = 0;
+          return {};
+        SwitchCounts Counts;
         size_t SwitchAt = BodyBegin + 1;
         while ((SwitchAt = IR.find("switch i", SwitchAt)) !=
                    std::string_view::npos &&
                SwitchAt < BodyEnd) {
           // A dispatch by value compares the jump's target with the labels
-          // it may reach and recovers no table: the emitter marks its switch
-          // after the case list, and it does not count.
+          // it may reach. Its marker follows the case list.
           const size_t Close = IR.find(']', SwitchAt);
           const size_t CloseEnd = Close == std::string_view::npos
                                       ? std::string_view::npos
@@ -211,15 +215,17 @@ protected:
                                    ? std::string_view::npos
                                    : CloseEnd - Close)
                       .find("!neverd.value-dispatch") != std::string_view::npos;
-          if (!ByValue)
-            ++Count;
+          if (ByValue)
+            ++Counts.ByValue;
+          else
+            ++Counts.Tables;
           SwitchAt += std::string_view("switch i").size();
         }
-        return Count;
+        return Counts;
       }
       SearchFrom = NameAt + DefinitionName.size();
     }
-    return 0;
+    return {};
   }
 
   static void SetUpTestSuite() {
@@ -537,18 +543,21 @@ private:
       ASSERT_NE(RawIR, nullptr) << "No roundtrip IR for " << TC.Name;
       const std::string RoundTripIR(RawIR);
       neverd_free_string(RawIR);
-      const size_t SwitchCount = functionBodySwitchCount(RoundTripIR, TC.Name);
-      if (TC.RecoveredSwitch == RecoveredSwitchExpectation::Required) {
+      const auto Counts = functionBodySwitchCounts(RoundTripIR, TC.Name);
+      if (TC.RecoveredSwitch == RecoveredSwitchExpectation::ByValue) {
+        ASSERT_EQ(Counts.Tables, 0u) << TC.Name;
+        ASSERT_GE(Counts.ByValue, 1u) << TC.Name;
+      } else if (TC.RecoveredSwitch == RecoveredSwitchExpectation::Required) {
         ASSERT_GT(TC.MinimumRecoveredSwitchCount, 0u)
             << "required switch count must be positive"
             << "\n  Test: " << TC.Name;
-        ASSERT_GE(SwitchCount,
+        ASSERT_GE(Counts.Tables,
                   static_cast<size_t>(TC.MinimumRecoveredSwitchCount))
             << "not every required computed-goto dispatch was recovered as a "
                "switch in the target function"
             << "\n  Test: " << TC.Name;
       } else {
-        ASSERT_EQ(SwitchCount, 0u)
+        ASSERT_EQ(Counts.Tables, 0u)
             << "unauthenticated computed-goto frame storage was recovered as "
                "a switch in the target function"
             << "\n  Test: " << TC.Name;
