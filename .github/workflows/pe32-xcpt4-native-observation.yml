@@ -28,11 +28,17 @@ jobs:
           if ($expected -ne $actual) { throw "Unexpected fixture revision" }
           python scripts/check_windows_xcpt4_original.py original-case/corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe | Tee-Object -FilePath xcpt4.json
           exit $LASTEXITCODE
+      - name: Identify the modules loaded by the original PE32 process
+        shell: pwsh
+        run: |
+          ./scripts/observe_xcpt4_provider_modules.ps1 original-case/corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ always() }}
         with:
           name: original-pe32-xcpt4
-          path: xcpt4.json
+          path: |
+            xcpt4.json
+            xcpt4-modules.json
           if-no-files-found: error
           retention-days: 14
 
