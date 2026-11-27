@@ -16,6 +16,7 @@
 #include "llvm/Support/Error.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -41,6 +42,18 @@ struct Derivation {
   std::optional<int64_t> Offset;
 };
 
+/// What the proof knows at a point: the stack derivations, and the registers
+/// and temporaries that may hold an address of this function's own code, or a
+/// value read through or computed from a table of such addresses.  A branch to
+/// such a value is a computed jump within the function, as a switch's relative
+/// table makes one (`lea table(%rip), %rcx; movslq (%rcx,%rax,4), %rdx;
+/// add %rcx, %rdx; jmp *%rdx`), however its index is bounded.
+struct FrameFacts {
+  StackValues Stack;
+  std::set<Key> Local;
+  bool operator==(const FrameFacts &) const = default;
+};
+
 /// The general-purpose registers both x86-64 calling conventions preserve
 /// across a call.  RSI and RDI are preserved only by the Microsoft one.
 constexpr uint64_t kPreserved[] = {x86reg::RBX, x86reg::RSP, x86reg::RBP,
@@ -50,6 +63,88 @@ constexpr uint64_t kPreserved[] = {x86reg::RBX, x86reg::RSP, x86reg::RBP,
 class X64TailFrameGuard {
   const BinaryImage &Image;
   size_t Remaining;
+  /// The function's own code: the span of its blocks and its positive
+  /// ownership metadata.  A switch's case code that only its unresolved table
+  /// reaches lies there, though no block holds it.  The entry is a call
+  /// target: a branch there recurses.
+  ExceptionAddressRange OwnedCode;
+  va_t CodeBegin = InvalidVA;
+  va_t CodeEnd = 0;
+  va_t Entry = InvalidVA;
+
+  bool localCode(uint64_t Address) const {
+    return Address != Entry &&
+           ((Address >= CodeBegin && Address < CodeEnd) ||
+            (OwnedCode.isValid() && Address >= OwnedCode.Begin &&
+             Address < OwnedCode.End));
+  }
+
+  /// Whether the read-only data at \p Address starts a table of this
+  /// function's own code: a 32-bit offset from \p Address to it, as a relative
+  /// switch table holds, or its absolute address.  Writable memory, which the
+  /// dynamic linker or the program may fill (a GOT slot, which names its PLT
+  /// stub until bound), and code are no such table, nor is a slot whose
+  /// pointer the loader supplies, such as the one a Control Flow Guard
+  /// dispatch jumps through.
+  bool localTable(uint64_t Address) const {
+    const Section *Holder = Image.getSectionFor(Address);
+    if (!Holder || Holder->isWritable() || Holder->isExecutable() ||
+        Image.hasRuntimeCallablePointerSlotAt(Address))
+      return false;
+    if (const uint8_t *Bytes = Image.readVA(Address, sizeof(int32_t))) {
+      int32_t Offset = 0;
+      std::memcpy(&Offset, Bytes, sizeof(Offset));
+      if (localCode(Address + static_cast<int64_t>(Offset)))
+        return true;
+    }
+    if (const uint8_t *Bytes = Image.readVA(Address, sizeof(uint64_t))) {
+      uint64_t Word = 0;
+      std::memcpy(&Word, Bytes, sizeof(Word));
+      return localCode(Word);
+    }
+    return false;
+  }
+
+  /// The 8-byte constants this instruction's temporaries hold: a RIP-relative
+  /// operand lifts as the next instruction's address plus its displacement,
+  /// and only the sum names what the operand addresses.
+  std::map<uint64_t, uint64_t> TempValues;
+
+  std::optional<uint64_t> valueOf(const NdVar &Value) const {
+    if (Value.isConst() && Value.Size == sizeof(uint64_t))
+      return Value.Offset;
+    if (Value.isTemp())
+      if (const auto It = TempValues.find(Value.Offset); It != TempValues.end())
+        return It->second;
+    return std::nullopt;
+  }
+
+  /// The constant \p Op computes from constants alone, if any.
+  std::optional<uint64_t> folded(const LowOp &Op) const {
+    if (Op.Output.Size != sizeof(uint64_t))
+      return std::nullopt;
+    if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
+      return valueOf(Op.Inputs[0]);
+    if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+        Op.NumInputs == 2) {
+      const auto Left = valueOf(Op.Inputs[0]);
+      const auto Right = valueOf(Op.Inputs[1]);
+      if (Left && Right)
+        return Op.Opcode == NdOp::INT_ADD ? *Left + *Right : *Left - *Right;
+    }
+    return std::nullopt;
+  }
+
+  /// Whether \p Value may hold what FrameFacts::Local names.  A constant does
+  /// when it starts a table of this function's code; a constant that is such
+  /// an address marks only the result that computes it (folded above), since
+  /// every RIP-relative operand starts from one.
+  bool mayBeLocal(const FrameFacts &Facts, const NdVar &Value) const {
+    if (const auto Constant = valueOf(Value))
+      return localTable(*Constant);
+    const auto K = keyOf(Value);
+    return K && Facts.Local.count(*K);
+  }
 
   bool charge(size_t Work) {
     if (Work > Remaining)
@@ -161,24 +256,52 @@ class X64TailFrameGuard {
       State.erase(It);
   }
 
-  static void forgetTemps(StackValues &State) {
-    std::erase_if(State, [](const auto &Entry) {
+  static void forgetTemps(FrameFacts &Facts) {
+    std::erase_if(Facts.Stack, [](const auto &Entry) {
       return Entry.first.first == VnodeSpace::TEMP;
     });
+    std::erase_if(Facts.Local,
+                  [](const Key &K) { return K.first == VnodeSpace::TEMP; });
   }
 
-  /// Run \p Block from \p State.  \p Candidates collects the indirect jumps
+  /// Record whether \p Out may now hold what FrameFacts::Local names.  A
+  /// partial or guarded write keeps what the rest of the container held.
+  static void writeLocal(FrameFacts &Facts, const NdVar &Out, bool Local,
+                         bool Guarded) {
+    if (Out.isReg() && Out.Size > 8) {
+      std::erase_if(Facts.Local, [&](const Key &K) {
+        return K.first == VnodeSpace::REG && K.second < Out.Offset + Out.Size &&
+               Out.Offset < K.second + 8;
+      });
+      if (Local)
+        for (uint64_t Byte = Out.Offset & ~uint64_t{7};
+             Byte < Out.Offset + Out.Size; Byte += 8)
+          Facts.Local.insert({VnodeSpace::REG, Byte});
+      return;
+    }
+    const auto K = keyOf(Out);
+    if (!K)
+      return;
+    if (Local)
+      Facts.Local.insert(*K);
+    else if (!Guarded && whole(Out))
+      Facts.Local.erase(*K);
+  }
+
+  /// Run \p Block from \p Facts.  \p Candidates collects the indirect jumps
   /// that may hand on the return address: the incoming stack pointer is in
   /// place, or nothing derived from it is, so the jump runs on another stack.
-  bool transfer(const LowBlock &Block, StackValues &State,
+  bool transfer(const LowBlock &Block, FrameFacts &Facts,
                 std::set<va_t> *Candidates) {
+    StackValues &State = Facts.Stack;
     for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries) {
-      forgetTemps(State);
+      forgetTemps(Facts);
+      TempValues.clear();
       // A guarded instruction writes its outputs only on one of its paths.
       const bool Guarded = hasLowInstructionControlFlag(
           Boundary.ControlFlags, LowInstructionControlFlag::InstructionGuard);
       for (uint64_t I = 0; I < Boundary.OpCount; ++I) {
-        if (!charge(1 + State.size()))
+        if (!charge(1 + State.size() + Facts.Local.size()))
           return false;
         const LowOp &Op = Block.Ops[Boundary.FirstOp + I];
         if (Op.Opcode == NdOp::INDIR_BR) {
@@ -194,7 +317,9 @@ class X64TailFrameGuard {
               Image.hasRuntimeCallablePointerSlotAt(
                   Op.Inputs[0].Offset,
                   RuntimeCallablePointerSlotKind::ELFLazyResolver);
-          if (Candidates && (Restored || LazyResolver))
+          const bool WithinFunction =
+              Op.NumInputs == 1 && mayBeLocal(Facts, Op.Inputs[0]);
+          if (Candidates && (Restored || LazyResolver) && !WithinFunction)
             Candidates->insert(Op.Addr);
           continue;
         }
@@ -215,31 +340,55 @@ class X64TailFrameGuard {
               It = State.erase(It);
             }
           }
+          // Under either convention a callee may leave RSI and RDI changed,
+          // so only the registers both keep may still hold local code.
+          std::erase_if(Facts.Local, [](const Key &K) {
+            return K.first != VnodeSpace::REG || !preserved(K.second);
+          });
           write(State, Op.Output, {}, false);
+          writeLocal(Facts, Op.Output, false, false);
           continue;
         }
+        // A constant result is local code or a table of it by itself;
+        // anything else is marked by what it reads.
+        const auto Constant = folded(Op);
+        bool Local = false;
+        if (Constant)
+          Local = localCode(*Constant) || localTable(*Constant);
+        for (unsigned In = 0; !Constant && In < Op.NumInputs && !Local; ++In)
+          Local = mayBeLocal(Facts, Op.Inputs[In]);
+        if (Op.Output.isTemp()) {
+          if (Constant)
+            TempValues[Op.Output.Offset] = *Constant;
+          else
+            TempValues.erase(Op.Output.Offset);
+        }
         write(State, Op.Output, resultOf(State, Op), Guarded);
+        writeLocal(Facts, Op.Output, Local, Guarded);
       }
     }
-    forgetTemps(State);
+    forgetTemps(Facts);
+    TempValues.clear();
     return true;
   }
 
-  static StackValues meet(const StackValues &Left, const StackValues &Right) {
-    StackValues Result = Left;
-    for (auto &[K, Value] : Result) {
-      const auto It = Right.find(K);
-      if (It == Right.end() || It->second != Value)
+  static FrameFacts meet(const FrameFacts &Left, const FrameFacts &Right) {
+    FrameFacts Result = Left;
+    for (auto &[K, Value] : Result.Stack) {
+      const auto It = Right.Stack.find(K);
+      if (It == Right.Stack.end() || It->second != Value)
         Value.reset();
     }
-    for (const auto &[K, Value] : Right)
-      Result.try_emplace(K, std::nullopt);
+    for (const auto &[K, Value] : Right.Stack)
+      Result.Stack.try_emplace(K, std::nullopt);
+    Result.Local.insert(Right.Local.begin(), Right.Local.end());
     return Result;
   }
 
 public:
-  X64TailFrameGuard(const BinaryImage &Image, size_t MaxWork)
-      : Image(Image), Remaining(MaxWork) {}
+  X64TailFrameGuard(const BinaryImage &Image, ExceptionAddressRange OwnedCode,
+                    size_t MaxWork)
+      : Image(Image), Remaining(MaxWork), OwnedCode(OwnedCode) {}
 
   std::set<va_t> run(const LowFunc &Function) {
     if (auto Error = validateLowInstructionBoundaries(Function)) {
@@ -274,20 +423,25 @@ public:
           return {};
       if (Block.StartAddr == Function.Entry)
         Entry = Block.Id;
+      CodeBegin = std::min(CodeBegin, Block.StartAddr);
+      CodeEnd = std::max(CodeEnd, Block.EndAddr);
     }
     if (Entry < 0)
       return {};
+    this->Entry = Function.Entry;
 
-    std::vector<std::optional<StackValues>> In(Count);
+    std::vector<std::optional<FrameFacts>> In(Count);
     std::vector<int> Work;
-    In[Entry] = StackValues{{{VnodeSpace::REG, x86reg::RSP}, 0}};
+    In[Entry] = FrameFacts{{{{VnodeSpace::REG, x86reg::RSP}, 0}}, {}};
     Work.push_back(Entry);
     // A landing pad or another analysis root enters on this function's stack
     // at an offset this proof has not followed, and any preserved register
-    // may hold a frame address.
-    StackValues Unfollowed;
-    for (uint64_t Register : kPreserved)
-      Unfollowed.emplace(Key{VnodeSpace::REG, Register}, std::nullopt);
+    // may hold a frame address or one of this function's own labels.
+    FrameFacts Unfollowed;
+    for (uint64_t Register : kPreserved) {
+      Unfollowed.Stack.emplace(Key{VnodeSpace::REG, Register}, std::nullopt);
+      Unfollowed.Local.insert(Key{VnodeSpace::REG, Register});
+    }
     for (size_t I = 0; I < Count; ++I) {
       const LowBlock &Block = Function.Blocks[I];
       if (static_cast<int>(I) == Entry ||
@@ -300,13 +454,13 @@ public:
     while (!Work.empty()) {
       const int Id = Work.back();
       Work.pop_back();
-      StackValues State = *In[Id];
-      if (!transfer(Function.Blocks[Id], State, nullptr))
+      FrameFacts Facts = *In[Id];
+      if (!transfer(Function.Blocks[Id], Facts, nullptr))
         return {};
       for (int Succ : Function.Blocks[Id].Succs) {
-        if (!charge(1 + State.size()))
+        if (!charge(1 + Facts.Stack.size() + Facts.Local.size()))
           return {};
-        StackValues Next = In[Succ] ? meet(*In[Succ], State) : State;
+        FrameFacts Next = In[Succ] ? meet(*In[Succ], Facts) : Facts;
         if (In[Succ] && *In[Succ] == Next)
           continue;
         In[Succ] = std::move(Next);
@@ -318,8 +472,8 @@ public:
     for (size_t I = 0; I < Count; ++I) {
       if (!In[I])
         continue;
-      StackValues State = *In[I];
-      if (!transfer(Function.Blocks[I], State, &Candidates))
+      FrameFacts Facts = *In[I];
+      if (!transfer(Function.Blocks[I], Facts, &Candidates))
         return {};
     }
     return Candidates;
@@ -330,8 +484,9 @@ public:
 
 std::set<va_t> restoredX64IndirectTailFrames(const LowFunc &Function,
                                              const BinaryImage &Image,
+                                             ExceptionAddressRange OwnedCode,
                                              size_t MaxWork) {
-  return X64TailFrameGuard(Image, MaxWork).run(Function);
+  return X64TailFrameGuard(Image, OwnedCode, MaxWork).run(Function);
 }
 
 } // namespace neverd

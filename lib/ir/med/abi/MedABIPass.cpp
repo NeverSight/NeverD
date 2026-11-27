@@ -1361,6 +1361,54 @@ void recoverCallAbi(
   MedDefSiteIndex &DefSites = StackDeltas.definitions();
   // The loop adds no blocks, so one index serves every call's walks.
   const MedBlockIdIndex BlockIds(Func);
+  const MedBlock *EntryBlock = nullptr;
+  for (const MedBlock &Block : Func.Blocks)
+    if (Block.StartAddr == Func.Entry && Block.Preds.empty() &&
+        Block.ExceptionalPreds.empty())
+      EntryBlock = &Block;
+  // Whether every way into a call brings in \p V either what an earlier call
+  // left in register \p Reg or the value that register entered the function
+  // with where it carries no parameter, and some way the former: what neither
+  // the function nor its caller set for an argument.  A write on any way, a
+  // parameter's incoming value or an exceptional entry may set one.  SSA
+  // version zero can also name the first real write, which sets one too.
+  auto leftOnlyGarbage = [&](const MedVar &V, uint64_t Reg) {
+    std::vector<MedVar> Work{V};
+    std::set<std::tuple<int, int, int, uint64_t>> Seen;
+    bool SawLeftover = false;
+    while (!Work.empty()) {
+      const MedVar Value = Work.back();
+      Work.pop_back();
+      if (!Seen.emplace(static_cast<int>(Value.Kind), Value.Id, Value.SSAVer,
+                        Value.RegOff)
+               .second)
+        continue;
+      if (callLeftovers().containsForRegister(Value, Reg)) {
+        SawLeftover = true;
+        continue;
+      }
+      const auto Site = DefSites.find(Value);
+      if (Site.Ambiguous)
+        return false;
+      if (Site.Phi) {
+        if (Site.Phi->ExceptionalEntry)
+          return false;
+        for (const auto &[Pred, Arm] : Site.Phi->Args)
+          Work.push_back(Arm);
+        continue;
+      }
+      if (Value.Kind != MedVar::Reg || Value.SSAVer > 0 ||
+          Value.RegOff != Reg || !EntryBlock ||
+          (Site.Op &&
+           (Site.Block != EntryBlock ||
+            !med_calling_conv_detail::isEntryLiveInCopy(*Site.Op, Reg))) ||
+          llvm::any_of(Func.Params, [&](const MedVar &Param) {
+            return Param.RegOff == Reg;
+          }))
+        return false;
+    }
+    return SawLeftover;
+  };
   size_t VirtualReceiverWork = limits::ir::kMedABIVirtualReceiverWorkBudget;
   auto lookupDefinition = [&](const MedVar &V) { return Definitions.find(V); };
   // A value in an FP/vector register, or its low scalar: `movsd [rsp], xmm9`
@@ -3788,7 +3836,8 @@ void recoverCallAbi(
             V = fpPhiValue(Blk, Reg);
             // A join of caller-saved clobbers supplies no argument setup.
             // A known FP contract still observes the unavailable value;
-            // mixed joins and partially preserved lanes remain inputs.
+            // mixed joins and partially preserved lanes remain inputs here,
+            // where the check below may still end the list.
             if (V && !KnownFPCallee && callLeftovers().contains(*V))
               V.reset();
             // A call into Go code takes no join of an entry value where no
@@ -3840,10 +3889,15 @@ void recoverCallAbi(
               continue;
             break; // Independent FP banks use a consecutive prefix.
           }
+          // Nor does a direct callee nothing describes read a floating
+          // register each way leaves holding only such a leftover or what no
+          // parameter brought in.
           if (!KnownFPCallee && Op.NumInputs == 1 && !Op.SourceCallHint &&
               !(VectorArgumentCallees &&
                 VectorArgumentCallees->count(CI.TargetAddr)) &&
-              callLeftovers().containsForRegister(*V, Reg)) {
+              (callLeftovers().containsForRegister(*V, Reg) ||
+               (!CI.IsIndirect && TheArch == Arch::X64 &&
+                Fmt == BinaryFormat::ELF && leftOnlyGarbage(*V, Reg)))) {
             if (PositionalFP)
               continue;
             break;
@@ -4190,6 +4244,16 @@ void recoverCallAbi(
           const MedVar &Argument = IntPart[I];
           const bool LeftByCall = callLeftovers().containsForRegister(
               Argument, IntParamRegs[IntPartSlots[I]]);
+          // A compiler sets each argument of a call on every way to it, so a
+          // direct callee nothing describes reads no register that each way
+          // into the call leaves holding only what an earlier call left
+          // there or what no parameter brought in.
+          const bool LeftOnlyGarbage =
+              !LeftByCall && !CI.IsIndirect && CalleeRegArgs < 0 &&
+              TheArch == Arch::X64 && Fmt == BinaryFormat::ELF &&
+              !CI.ArgumentsInCalleeRegisterOrder && !UseExternalArity &&
+              !UseVariableArity && !IntegerSummary && !HeaderVariadic &&
+              leftOnlyGarbage(Argument, IntParamRegs[IntPartSlots[I]]);
           // An unresolved SysV call has no proof that it consumes a slot
           // supplied only on some edges. Keep it in its machine position
           // until here so later scratch writes cannot slide into its place.
@@ -4198,7 +4262,7 @@ void recoverCallAbi(
                                  !CI.ArgumentsInCalleeRegisterOrder &&
                                  !UseExternalArity && !UseVariableArity &&
                                  !IntegerSummary && !HeaderVariadic;
-          if (!LeftByCall) {
+          if (!LeftByCall && !LeftOnlyGarbage) {
             if (!CheckJoin)
               continue;
             const auto Site = DefSites.find(Argument);

@@ -13,6 +13,10 @@
 # of two paths, tf_aligned_lost after a realignment it does not undo,
 # tf_dynamic after moving RSP by a register, tf_frame_lost after LEAVE reads
 # an RBP a call result moved, and tf_loop_push after a loop that pushes.
+# Through a table of the function's own labels, so a branch within it however
+# the frame stands: tf_leaf_table jumps with nothing pushed through an
+# unbounded relative table, and tf_table_kept through one whose base RBX
+# keeps across a call, after popping RBX.
 
   .text
   .globl tf_ext
@@ -244,6 +248,43 @@ tf_loop_push:
   jmpq *%rdi
   .size tf_loop_push, .-tf_loop_push
 
+  .globl tf_leaf_table
+  .type tf_leaf_table, @function
+  .p2align 4
+tf_leaf_table:
+  movl (%rdi), %eax
+  leaq .Ltf_leaf_table(%rip), %rdx
+  movslq (%rdx,%rax,4), %rax
+  addq %rdx, %rax
+  jmpq *%rax
+.Ltf_l0:
+  movl $1, %eax
+  retq
+.Ltf_l1:
+  movl $2, %eax
+  retq
+  .size tf_leaf_table, .-tf_leaf_table
+
+  .globl tf_table_kept
+  .type tf_table_kept, @function
+  .p2align 4
+tf_table_kept:
+  pushq %rbx
+  leaq .Ltf_kept_table(%rip), %rbx
+  callq tf_ext
+  movl (%rax), %eax
+  movslq (%rbx,%rax,4), %rax
+  addq %rbx, %rax
+  popq %rbx
+  jmpq *%rax
+.Ltf_k0:
+  movl $3, %eax
+  retq
+.Ltf_k1:
+  movl $4, %eax
+  retq
+  .size tf_table_kept, .-tf_table_kept
+
   .section .rodata,"a",@progbits
   .p2align 2
 .Ltf_table:
@@ -251,5 +292,11 @@ tf_loop_push:
   .long .Ltf_c1-.Ltf_table
   .long .Ltf_c2-.Ltf_table
   .long 0
+.Ltf_leaf_table:
+  .long .Ltf_l0-.Ltf_leaf_table
+  .long .Ltf_l1-.Ltf_leaf_table
+.Ltf_kept_table:
+  .long .Ltf_k0-.Ltf_kept_table
+  .long .Ltf_k1-.Ltf_kept_table
 
   .section .note.GNU-stack,"",@progbits

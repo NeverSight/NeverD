@@ -73,7 +73,7 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
             limits::kMaxIndirectTailFrameWork, CurrentImg);
       else
         RestoredFrames = restoredX64IndirectTailFrames(
-            Func, *CurrentImg, limits::kMaxIndirectTailFrameWork);
+            Func, *CurrentImg, OwnedCode, limits::kMaxIndirectTailFrameWork);
     }
     return RestoredFrames->count(Addr) != 0;
   };
