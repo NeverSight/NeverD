@@ -86,8 +86,11 @@ bool hasImmutableCalleeInstruction(const BinaryImage &Image,
   std::vector<va_t> AbsoluteOperands;
   for (unsigned I = 0; I != X86.op_count; ++I) {
     const auto &Operand = X86.operands[I];
-    if (Operand.type == X86_OP_MEM && Operand.mem.base == X86_REG_INVALID &&
-        X86.encoding.disp_size == 4)
+    // In a 32-bit flat address, a register can index a relocated image base.
+    // Only the displacement is fixed up. The lifter adds the live register.
+    if (Operand.type == X86_OP_MEM && X86.encoding.disp_size == 4 &&
+        (Operand.mem.base == X86_REG_INVALID ||
+         (X86.addr_size == 4 && Operand.mem.segment == X86_REG_INVALID)))
       AbsoluteOperands.push_back(Boundary.Address + X86.encoding.disp_offset);
     if (Operand.type == X86_OP_IMM && X86.encoding.imm_size == 4 &&
         (Insn.Id == X86_INS_MOV || Insn.Id == X86_INS_PUSH ||
