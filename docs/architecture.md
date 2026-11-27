@@ -13777,7 +13777,19 @@ those slots shows they are no arguments (an -O0 spill near the call), so they
 end with it.
 That count is the named parameters of a variadic callee and zero for a callee
 nothing describes. Below it the callee reads the register, and the unknown
-value stays. The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
+value stays. On System V x86-64 a direct callee nothing describes also ends
+its integer and floating registers at one that every way into the call
+leaves holding either such a leftover or the value the register entered the
+function with where no parameter arrives, and some way the former: neither
+the function nor its caller set it for an argument, and a compiler sets each
+argument of a call on every way to it. A write on any way keeps the
+register, since one call instruction can serve calls of different arity
+(`printf("%d", x)` and `printf("hi")` cross-jumped), as does a parameter's
+incoming value, which the function may pass on. sqlite's `parse.o` called
+`sqlite3ErrorMsg(pParse, "too many terms in compound SELECT")` with two more
+unknown values from such joins, and `printf.o` passed `sqlite3_value_int64`,
+which takes one pointer, two.
+The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
 routine comes from its register save area, which spills the argument registers
 from the first unnamed one to the last (`MedFunc::VariadicFirstRegister`).
 Windows ARM64 has no va_list record: va_start spills x(first) through x7 to

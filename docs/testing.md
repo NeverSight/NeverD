@@ -16107,6 +16107,12 @@ trap on a register earlier calls left behind, and no incoming stack slot taken
 for the routine's open arity. `MedCallLeftovers.JoinsOfCallClobbersOnly`
 checks which clobbers and joins `ValuesLeftByCalls` names, loops and exception
 entries included.
+`X86_64_CallAbi.AnUndescribedCalleeTakesNoRegisterNothingSetForIt` decompiles
+GCC's call of an undescribed external after a branch that may call another,
+in a function that receives no parameter in those registers: through HighC
+and LLVM C each call passes its one set argument and no unknown value.
+`MedABIPass.CallClobberPhisDoNotInventTrailingArguments` keeps a join that a
+write on one way sets.
 `CallsTakeNoIncomingRegisterAnEarlierCallChanged` links, for x86-64, i386,
 ARM and AArch64, a routine that reads four argument registers with callers
 that declare it with one, calling it after another call, after a join of two
