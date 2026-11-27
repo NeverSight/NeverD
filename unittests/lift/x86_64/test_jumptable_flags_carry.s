@@ -5,8 +5,10 @@
 # jt_flags_carry_chain reaches the `ja` through one more block that keeps the
 # flags.  jt_flags_stale_index changes the index between the compare and the
 # dispatch, and jt_flags_two_paths enters the `ja` block from a second compare
-# that admits 101 values: neither dispatch may be resolved.  Every table ends
-# with a zero word, which is no entry.
+# that admits 101 values: neither dispatch may be resolved.  jt_flags_rooted
+# is jt_flags_carry with its `ja` block's address taken in .data: that entry
+# brings arbitrary flags, so its dispatch may not be resolved either.  Every
+# table ends with a zero word, which is no entry.
 
   .text
   .globl jt_flags_carry
@@ -209,6 +211,54 @@ jt_flags_two_paths:
   ret
   .size jt_flags_two_paths, .-jt_flags_two_paths
 
+  .globl jt_flags_rooted
+  .type jt_flags_rooted, @function
+  .p2align 4
+jt_flags_rooted:
+  testl %edx, %edx
+  je .Lfr_out
+  cmpl $7, %edx
+  jle .Lfr_switch
+.Lfr_out:
+  xorl %eax, %eax
+  ret
+.Lfr_switch:
+  movzbl 3(%rsi), %r8d
+  ja .Lfr_default
+  leaq .Lfr_table(%rip), %rcx
+  movl %edx, %r11d
+  movslq (%rcx,%r11,4), %r11
+  addq %rcx, %r11
+  jmpq *%r11
+.Lfr_c0:
+  movl $50, %eax
+  ret
+.Lfr_c1:
+  movl $51, %eax
+  ret
+.Lfr_c2:
+  movl $52, %eax
+  ret
+.Lfr_c3:
+  movl $53, %eax
+  ret
+.Lfr_c4:
+  movl $54, %eax
+  ret
+.Lfr_c5:
+  movl $55, %eax
+  ret
+.Lfr_c6:
+  movl $56, %eax
+  ret
+.Lfr_c7:
+  movl %r8d, %eax
+  ret
+.Lfr_default:
+  movl $-1, %eax
+  ret
+  .size jt_flags_rooted, .-jt_flags_rooted
+
   .section .rodata
   .p2align 2
 .Lfc_table:
@@ -251,5 +301,20 @@ jt_flags_two_paths:
   .long .Lft_c6-.Lft_table
   .long .Lft_c7-.Lft_table
   .long 0
+.Lfr_table:
+  .long .Lfr_c0-.Lfr_table
+  .long .Lfr_c1-.Lfr_table
+  .long .Lfr_c2-.Lfr_table
+  .long .Lfr_c3-.Lfr_table
+  .long .Lfr_c4-.Lfr_table
+  .long .Lfr_c5-.Lfr_table
+  .long .Lfr_c6-.Lfr_table
+  .long .Lfr_c7-.Lfr_table
+  .long 0
+
+  .data
+  .p2align 3
+jt_flags_rooted_entry:
+  .quad .Lfr_switch
 
   .section .note.GNU-stack,"",@progbits

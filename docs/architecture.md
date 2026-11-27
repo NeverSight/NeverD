@@ -11651,6 +11651,14 @@ remaining candidate account (`kJumpTableGuardAliasQueryAccountDivisor`) and
 are charged what they spent. An unfinished batch abandons those alternatives
 and leaves the guard proof the rest; charged in full, pcre2's alias batches
 spent the account the guard itself needed.
+When the compare that names the index is a structural leaf, the session over
+every controlling condition runs on a copy of the candidate account. That
+session can also run out of its own match allowance with the account to
+spare, and then answers none of its queries. The compare's own queries are
+then asked alone, in a session of their own, exactly as after the copy runs
+out; the other conditions stay unanswered and only drop out of the proof.
+pcre2's pattern converter puts 22 controlling conditions and 179 queries in
+front of one dispatch.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph

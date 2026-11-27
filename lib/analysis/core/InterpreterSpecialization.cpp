@@ -5373,7 +5373,18 @@ bool Specializer::evaluate(int Id) {
           OutputUnsafe = true;
         }
       } else {
-        if (StorePreservation && FrameRoot && Original.Opcode == NdOp::STORE) {
+        bool TrackNativeReturnWithoutPreservation = false;
+        const bool MayTrackNativeReturn =
+            FrameRoot && Original.Opcode == NdOp::STORE &&
+            !Frame.NativeReturnSlots.empty();
+        const auto ConditionalAddress =
+            MayTrackNativeReturn && !StorePreservation &&
+                    Options.ProveStoreReturnSlotSeparation
+                ? Exec.memoryAddressValue(Evaluated)
+                : SymRef{};
+        if (MayTrackNativeReturn &&
+            (StorePreservation ||
+             (ConditionalAddress && Ctx.width(ConditionalAddress) == 64))) {
           const auto ContainsSlot = [](int64_t Begin, int64_t End,
                                        uint64_t Slot) {
             const uint64_t Size =
@@ -5389,13 +5400,14 @@ bool Specializer::evaluate(int Id) {
             if (Begin > std::numeric_limits<int64_t>::max() - 8 ||
                 !State.hasMaterializedRegionRange(FrameRoot, Slot, 8))
               continue;
-            if (StorePreservation->Base == FrameRoot &&
+            if (StorePreservation && StorePreservation->Base == FrameRoot &&
                 (ContainsSlot(StorePreservation->Begin, StorePreservation->End,
                               Slot) ||
                  llvm::any_of(ProvedStoreRanges, [&](const auto &Range) {
                    return ContainsSlot(Range.Begin, Range.End, Slot);
                  })))
               continue;
+            TrackNativeReturnWithoutPreservation |= !StorePreservation;
             if (llvm::any_of(ConditionalFrameStores, [&](const auto &Region) {
                   return Region.Base == FrameRoot && Region.Begin == Begin &&
                          Region.End == Begin + 8;
@@ -5410,14 +5422,22 @@ bool Specializer::evaluate(int Id) {
           StorePreservation->MaxWork =
               Options.MaxOperations - Result.EvaluatedOperations;
         std::optional<SymConditionalStore> Conditional;
-        if (StorePreservation && !ConditionalFrameStores.empty()) {
+        if (!ConditionalFrameStores.empty() &&
+            (StorePreservation || TrackNativeReturnWithoutPreservation)) {
           Conditional.emplace();
           Conditional->MaxWork =
               Options.MaxOperations - Result.EvaluatedOperations;
-          Conditional->TrackedRegions = ConditionalFrameStores;
-          Flow = Exec.stepWithConditionalStore(
-              FoldedImmutableRead ? Residual : Evaluated, *Conditional,
-              *StorePreservation);
+          if (StorePreservation) {
+            Conditional->TrackedRegions = ConditionalFrameStores;
+            Flow = Exec.stepWithConditionalStore(
+                FoldedImmutableRead ? Residual : Evaluated, *Conditional,
+                *StorePreservation);
+          } else {
+            // Without a preservation contract, the symbolic owner updates
+            // every current memory byte and charges the complete work.
+            Flow = Exec.stepWithConditionalStore(
+                FoldedImmutableRead ? Residual : Evaluated, *Conditional);
+          }
           if (Conditional->Status == SymConditionalStoreStatus::BudgetExceeded)
             return fail(SpecializationStatus::BudgetExceeded,
                         "conditional frame store budget exhausted");
