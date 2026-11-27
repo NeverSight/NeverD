@@ -47,6 +47,12 @@ def build_linkage_objects(args, build, profile, run):
              *(["-mattr=" + ",".join(features)] if features else []),
              *([] if pic else ["-mgpopt"]), "-o", build / name, "-"], source=source)
 
+    if profile.linkage == "init-arrays":
+        compile_object("caller.o", (FIXTURES / "init_arrays.ll").read_text(), attrs)
+        calc = (FIXTURES / "init_arrays_calc.ll").read_text()
+        compile_object("calc.o", calc.replace("RESULT", "41"), attrs)
+        compile_object("updated.o", calc.replace("RESULT", "73"), attrs)
+        return ["start.o", "caller.o", "calc.o"]
     if profile.linkage == "far-branches":
         compile_object("caller.o", (FIXTURES / "branch_caller.ll").read_text(), attrs)
         branches = (FIXTURES / "far_branches.s").read_text()
@@ -97,6 +103,23 @@ def build_linkage_objects(args, build, profile, run):
 def inspect_linkage(image, profile, function, text):
     """Verify the actual callable pointer and floating-point ABI in each ET_EXEC."""
     symtab = image.get_section_by_name(".symtab")
+    if profile.linkage == "init-arrays":
+        width = image.elfclass // 8
+        order = "little" if profile.little else "big"
+        for name, hooks in (("preinit_array", ("preinit",)),
+                            ("init_array", ("first", "calc", "last")),
+                            ("fini_array", ("finish_last", "finish_first"))):
+            section = image.get_section_by_name("." + name)
+            expected = bytearray()
+            for hook in hooks:
+                symbols = symtab.get_symbol_by_name(hook) or []
+                if len(symbols) != 1 or symbols[0]["st_info"]["type"] != "STT_FUNC":
+                    raise ValueError(f"{profile.name}: expected one function named {hook}")
+                expected.extend(symbols[0]["st_value"].to_bytes(width, order))
+            if (section is None or section["sh_type"] != "SHT_" + name.upper()
+                    or section["sh_addr"] % width or section.data() != expected):
+                raise ValueError(f"{profile.name}: incorrect {name} function pointers")
+        return
     callback, = symtab.get_symbol_by_name("callback")
     data = image.get_section(callback["st_shndx"])
     offset = callback["st_value"] - data["sh_addr"]
@@ -188,6 +211,15 @@ def verify_linkage_objects(folder, profile, hashes, digest):
 
     if set(hashes) != {"caller.o", "calc.o"}:
         raise ValueError(f"{profile.name}: expected both original object files")
+    if profile.linkage == "init-arrays":
+        pointer = 18 if profile.abi == "n64" else 2  # R_MIPS_64 or R_MIPS_32
+        caller, _ = references("caller.o", (".preinit_array", ".init_array.101", ".init_array.300",
+                                            ".fini_array.101", ".fini_array.200"))
+        callee, _ = references("calc.o", (".init_array.200",))
+        hooks = {"preinit", "first", "last", "finish_first", "finish_last"}
+        if caller != {(pointer, hook) for hook in hooks} or callee != {(pointer, "calc")}:
+            raise ValueError(f"{profile.name}: missing typed constructor or destructor relocations")
+        return
     caller, caller_packed = references("caller.o", (".text", ".data", ".sdata"))
     callee, callee_packed = references("calc.o", (".text.calc",))
     if profile.abi == "n64" and profile.linkage in ("pic-hard", "pic-soft"):
