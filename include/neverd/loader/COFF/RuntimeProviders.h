@@ -27,6 +27,10 @@ namespace neverd::coff_loader {
   }
 #include "neverd/loader/COFF/RuntimeProviders.def"
 
+inline bool isX64CRTStdioProvider(llvm::StringRef Module) {
+  return isUCRTStdioProvider(Module);
+}
+
 } // namespace neverd::coff_loader
 
 #endif // NEVERD_LOADER_COFF_RUNTIMEPROVIDERS_H

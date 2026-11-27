@@ -21065,6 +21065,11 @@ an incoming-object conditional finally separately from its returning-stack
 contract. Far returns, unknown stack restoration, malformed metadata, writable
 code, changed frame registers and nested calls that only have a pop summary
 refuse. This regression does not certify the helper's object-memory effects.
+The PE32 stdio tests cover the direct and veneer calls for the one-DWORD
+stream lookup and six-DWORD formatted output. They check the original xcpt4
+imports, caller cleanup and refusals for a changed provider, delayed binding
+or conflicting slot.
+
 The public xcpt4 PE32 and PE64 issue tests remain separate required acceptance
 checks; passing these focused tests does not close either issue.
 

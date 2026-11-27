@@ -21555,6 +21555,9 @@ paths at the same level still intersect their initialized bytes and values.
 `RuntimeProviders.h` generates case-insensitive LLVM `StringSwitch` queries.
 PE32 and Win64 control-FP, legacy CRT, C++ exception, SEH handler, continuation
 and jump/local-unwind contracts retain their distinct provider sets.
+PE32 also uses the UCRT stdio provider set for the caller-cleanup convention
+of `__acrt_iob_func` and `__stdio_common_vfprintf`. Proving a stream, a format
+string or the effects of output requires the arguments at the call.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case

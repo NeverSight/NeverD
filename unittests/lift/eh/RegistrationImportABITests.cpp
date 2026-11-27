@@ -120,6 +120,38 @@ struct ImportImage {
 };
 } // namespace
 
+TEST(RegistrationImportABI, UCRTStdioReturnsWithCallerCleanup) {
+  // The physical PE32 calls use one DWORD for the stream index and six
+  // DWORDs for vfprintf, whose first argument is a 64-bit options word.
+  for (const ImportCase C : {ImportCase{"__acrt_iob_func", 1},
+                             ImportCase{"__stdio_common_vfprintf", 6}})
+    for (const char *Provider : {"api-ms-win-crt-stdio-l1-1-0.dll",
+                                 "UCRTBASE.DLL", "ucrtbased.dll"})
+      for (bool ThroughStub : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << C.Name << ' ' << Provider << ' '
+                                         << ThroughStub);
+        ImportImage F(C, ThroughStub, true);
+        auto &Image = F.Image;
+        Image.Imports.front().Module = Provider;
+        const auto Pop = [&] {
+          return registration_abi::checkedRegistrationImportStackPop(
+              Image, ImportImage::IATVA);
+        };
+        ASSERT_EQ(Pop(), 0u);
+        EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA), 0u);
+        EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
+            Image, ImportImage::IATVA));
+        Image.Imports.front().IsDelayImport = true;
+        EXPECT_FALSE(Pop());
+        Image.Imports.front().IsDelayImport = false;
+        Image.Imports.front().Module = "api-ms-win-crt-math-l1-1-0.dll";
+        EXPECT_FALSE(Pop());
+        Image.Imports.front().Module = Provider;
+        Image.ConflictingImportStorageSlots.insert(ImportImage::IATVA);
+        EXPECT_FALSE(Pop());
+      }
+}
+
 TEST(RegistrationImportABI, ControlFPBindsCurrentRuntimeProvider) {
   for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
     for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {

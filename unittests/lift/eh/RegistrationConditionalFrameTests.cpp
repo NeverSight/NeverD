@@ -629,6 +629,23 @@ auto loadXCPT4(bool Selected = false) {
 }
 } // namespace
 
+TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {
+  auto Image = loadXCPT4(true);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  for (const auto &[Slot, Name] :
+       {std::pair{0x4080f8u, "__stdio_common_vfprintf"},
+        std::pair{0x4080fcu, "__acrt_iob_func"}}) {
+    SCOPED_TRACE(Name);
+    const auto *Import = Image->findImportAt(Slot);
+    ASSERT_TRUE(Import);
+    ASSERT_EQ(Import->Name, Name);
+    EXPECT_EQ(registration_abi::checkedRegistrationImportStackPop(*Image, Slot),
+              0u);
+    EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(*Image,
+                                                                      Slot));
+  }
+}
+
 TEST(RegistrationConditionalFrame, BoundRaiseWrapperRetainsOnlyLocalProofs) {
   using namespace registration_state;
   auto Image = loadXCPT4();
