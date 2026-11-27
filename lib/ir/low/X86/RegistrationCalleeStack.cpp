@@ -1474,8 +1474,13 @@ freshStackPopAnswer(const BinaryImage &Image, va_t Target, size_t &Work,
       });
 }
 
-std::optional<uint32_t> freshOpaqueStackProjection(const BinaryImage &Image,
-                                                   va_t Target, size_t &Work) {
+} // namespace
+
+std::optional<uint32_t>
+registration_abi::projectOpaqueCallReturnStack(const BinaryImage &Image,
+                                               va_t Target, size_t &Work) {
+  if (!isPlainRegistrationCalleeEntry(Image, Target))
+    return std::nullopt;
   return memoizedStackPopAnswer(
              Image, Target, Work,
              RegistrationStackPopMemo::QueryKind::OpaqueProjection,
@@ -1492,7 +1497,6 @@ std::optional<uint32_t> freshOpaqueStackProjection(const BinaryImage &Image,
              })
       .Pop;
 }
-} // namespace
 
 std::optional<uint32_t> getCheckedX86CalleeStackPop(const BinaryImage &Image,
                                                     va_t Target,
@@ -1548,12 +1552,11 @@ std::optional<uint32_t> getCheckedX86IndependentCalleeStackPop(
   std::optional<uint32_t> Pop =
       Answer.HasImportDependencies ? std::nullopt : Answer.Pop;
   if (Answer.HasImportDependencies && Answer.Pop &&
-      CalleeWork < limits::kMaxRegistrationEHStateWork &&
-      registration_abi::isPlainRegistrationCalleeEntry(Image, Target)) {
+      CalleeWork < limits::kMaxRegistrationEHStateWork) {
     // This projection grants only returning ESP. Its separate memo key keeps
     // ordinary contracts and their IAT-preservation premises intact.
-    const auto Independent =
-        freshOpaqueStackProjection(Image, Target, CalleeWork);
+    const auto Independent = registration_abi::projectOpaqueCallReturnStack(
+        Image, Target, CalleeWork);
     if (Independent == Answer.Pop)
       Pop = Independent;
   }

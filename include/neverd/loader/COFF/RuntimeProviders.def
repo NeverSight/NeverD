@@ -92,6 +92,12 @@ NEVERD_COFF_RUNTIME_PROVIDER("ucrtbased.dll")
 NEVERD_COFF_RUNTIME_PROVIDER("api-ms-win-crt-stdio-l1-1-0.dll")
 NEVERD_COFF_RUNTIME_PROVIDERS_END()
 
+NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isUCRTRuntimeProvider)
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbase.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("ucrtbased.dll")
+NEVERD_COFF_RUNTIME_PROVIDER("api-ms-win-crt-runtime-l1-1-0.dll")
+NEVERD_COFF_RUNTIME_PROVIDERS_END()
+
 // The Win64 memory-effect contract does not include msvcrt.dll.
 NEVERD_COFF_RUNTIME_PROVIDERS_BEGIN(isX64ControlFPProvider)
 NEVERD_COFF_RUNTIME_PROVIDER("ucrtbase.dll")

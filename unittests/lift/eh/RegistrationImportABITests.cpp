@@ -118,38 +118,49 @@ struct ImportImage {
     return Caller;
   }
 };
+
+void checkUCRTCallerCleanup(ImportCase C, const char *API,
+                            const char *WrongAPI) {
+  for (const char *Provider : {API, "UCRTBASE.DLL", "ucrtbased.dll"})
+    for (bool ThroughStub : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << C.Name << ' ' << Provider << ' ' << ThroughStub);
+      ImportImage F(C, ThroughStub, true);
+      auto &Image = F.Image;
+      Image.Imports.front().Module = Provider;
+      const auto Pop = [&] {
+        return registration_abi::checkedRegistrationImportStackPop(
+            Image, ImportImage::IATVA);
+      };
+      ASSERT_EQ(Pop(), 0u);
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA), 0u);
+      EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
+          Image, ImportImage::IATVA));
+      Image.Imports.front().IsDelayImport = true;
+      EXPECT_FALSE(Pop());
+      Image.Imports.front().IsDelayImport = false;
+      Image.Imports.front().Module = WrongAPI;
+      EXPECT_FALSE(Pop());
+      Image.Imports.front().Module = Provider;
+      Image.ConflictingImportStorageSlots.insert(ImportImage::IATVA);
+      EXPECT_FALSE(Pop());
+    }
+}
 } // namespace
 
 TEST(RegistrationImportABI, UCRTStdioReturnsWithCallerCleanup) {
-  // The physical PE32 calls use one DWORD for the stream index and six
-  // DWORDs for vfprintf, whose first argument is a 64-bit options word.
+  // The vfprintf options word occupies two PE32 stack slots.
   for (const ImportCase C : {ImportCase{"__acrt_iob_func", 1},
                              ImportCase{"__stdio_common_vfprintf", 6}})
-    for (const char *Provider : {"api-ms-win-crt-stdio-l1-1-0.dll",
-                                 "UCRTBASE.DLL", "ucrtbased.dll"})
-      for (bool ThroughStub : {false, true}) {
-        SCOPED_TRACE(::testing::Message() << C.Name << ' ' << Provider << ' '
-                                         << ThroughStub);
-        ImportImage F(C, ThroughStub, true);
-        auto &Image = F.Image;
-        Image.Imports.front().Module = Provider;
-        const auto Pop = [&] {
-          return registration_abi::checkedRegistrationImportStackPop(
-              Image, ImportImage::IATVA);
-        };
-        ASSERT_EQ(Pop(), 0u);
-        EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA), 0u);
-        EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
-            Image, ImportImage::IATVA));
-        Image.Imports.front().IsDelayImport = true;
-        EXPECT_FALSE(Pop());
-        Image.Imports.front().IsDelayImport = false;
-        Image.Imports.front().Module = "api-ms-win-crt-math-l1-1-0.dll";
-        EXPECT_FALSE(Pop());
-        Image.Imports.front().Module = Provider;
-        Image.ConflictingImportStorageSlots.insert(ImportImage::IATVA);
-        EXPECT_FALSE(Pop());
-      }
+    checkUCRTCallerCleanup(C, "api-ms-win-crt-stdio-l1-1-0.dll",
+                           "api-ms-win-crt-runtime-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, UCRTInitializerWalkersUseTheRuntimeProvider) {
+  for (const ImportCase C :
+       {ImportCase{"_initterm", 2}, ImportCase{"_initterm_e", 2}})
+    checkUCRTCallerCleanup(C, "api-ms-win-crt-runtime-l1-1-0.dll",
+                           "api-ms-win-crt-stdio-l1-1-0.dll");
 }
 
 TEST(RegistrationImportABI, ControlFPBindsCurrentRuntimeProvider) {

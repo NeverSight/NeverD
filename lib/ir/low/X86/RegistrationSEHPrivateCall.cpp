@@ -7,8 +7,10 @@
 #include "RegistrationSEHPrivateCall.h"
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationOpaqueStack.h"
 #include "RegistrationSourceCall.h"
 
+#include "neverd/Limits.h"
 #include "neverd/ir/low/LowNoReturn.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
@@ -87,6 +89,28 @@ bool SEHPrivateCallProof::preservesFrame(const LowOp &Op, size_t &Work) {
     It->second = proveCallee(Target, Work);
   }
   return Occurrences.emplace(&Op, It->second).first->second;
+}
+
+std::optional<uint32_t> SEHPrivateCallProof::opaqueStackPop(const LowOp &Op,
+                                                            size_t &Work) {
+  if (!registration_abi::chargeCalleeWork(Work, 1))
+    return std::nullopt;
+  if (const auto Known = StackOccurrences.find(&Op);
+      Known != StackOccurrences.end())
+    return Known->second;
+  const auto *Source = checkedRegistrationDirectCall(Image, Function, Op, Work);
+  if (!Source || isUnconditionalNoReturn(*Source))
+    return std::nullopt;
+  const va_t Target = Op.Inputs[0].Offset;
+  auto Known = StackTargets.find(Target);
+  if (Known == StackTargets.end()) {
+    const auto Pop =
+        registration_abi::projectOpaqueCallReturnStack(Image, Target, Work);
+    if (Work >= limits::kMaxRegistrationEHStateWork)
+      return std::nullopt;
+    Known = StackTargets.emplace(Target, Pop).first;
+  }
+  return StackOccurrences.emplace(&Op, Known->second).first->second;
 }
 
 } // namespace neverd::registration_state

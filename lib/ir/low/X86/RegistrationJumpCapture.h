@@ -65,6 +65,8 @@ struct SEHJumpRuntime {
   /// Proves image storage disjoint from suspended callback/parent frames.
   /// Contents remain runtime values; writes cannot replace import bindings.
   std::function<bool(va_t, uint16_t, bool, size_t &)> ImageMemory;
+  /// Physical returning ESP of a direct call with unavailable import bindings.
+  std::function<std::optional<uint32_t>(const LowOp &, size_t &)> OpaqueStack;
 };
 
 /// EH3 initializes ten DWORDs; EH4 also saves its cookie address at offset 40.
