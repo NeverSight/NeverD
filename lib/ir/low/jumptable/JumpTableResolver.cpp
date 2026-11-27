@@ -756,7 +756,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
     Finite.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
     Finite.UnsignedUpperBound = BranchSlotCount;
     std::vector<bool> Complete;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     const std::vector<bool> Matches = ProofScratch.tableValuesMatchAtUses(
         {Present, Finite}, nullptr, &Complete,
         /*CandidateBranchOverride=*/InvalidVA,
@@ -768,7 +768,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
     if (Matches.size() != 2 || Complete.size() != 2 || Masks.size() != 2 ||
         !Complete[0] || !Complete[1])
       return Incomplete();
-    if (!Matches[0] || !Matches[1] || Masks[1] == 0)
+    if (!Matches[0] || !Matches[1] || Masks[1].none())
       return false;
     bool ReachComplete = false;
     bool Closed = false;
@@ -792,7 +792,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
       return false;
     std::vector<uint32_t> Coordinates;
     for (uint32_t I = 0; I < BranchSlotCount; ++I)
-      if (Masks[1] & (uint64_t{1} << I))
+      if (Masks[1].test(I))
         Coordinates.push_back(I);
     if (Coordinates.empty())
       return false;
@@ -873,7 +873,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
     Finite.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
     Finite.UnsignedUpperBound = BranchSlotCount;
     std::vector<bool> Complete;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     const std::vector<bool> Matches = tableValuesMatchAtUses(
         {Present, Finite}, nullptr, &Complete,
         /*CandidateBranchOverride=*/InvalidVA,
@@ -887,9 +887,12 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
       return Incomplete();
     if (!Matches[0] || !Matches[1])
       return false;
-    uint64_t ExpectedMask = 0;
-    for (uint32_t Coordinate : Coordinates)
-      ExpectedMask |= uint64_t{1} << Coordinate;
+    JumpTableFeasibleSet ExpectedMask;
+    for (uint32_t Coordinate : Coordinates) {
+      if (Coordinate >= JumpTableFeasibleSet::Capacity)
+        return false;
+      ExpectedMask.set(Coordinate);
+    }
     if (Masks[1] != ExpectedMask)
       return false;
   }

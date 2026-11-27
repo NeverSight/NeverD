@@ -12880,6 +12880,15 @@ refusal cases on incoming frame bytes whose writer is outside the function.
 `GeneratedSourceExecutesJoinedEqualityAndRange` runs the register and frame
 variants through HighC and optimized/unoptimized LLVMC, compiling the generated
 x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.
+`JumpTableJoinedGuard.WideJoinedDomainsKeepEveryCase` uses bash's shape: a zero
+byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97 and 128
+cross the one-word mask and reach the joined ceiling, and each keeps every
+slot. `WideJoinedDomainsRefuseAHoleOrTheNextSize` refuses 129 cases, whose
+literal is past the ceiling, and an equality path that reads one slot past
+the table. `AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed
+envelope to 128 with an unrelated compare and still proves the three slots.
+`GeneratedSourceExecutesAWideJoinedDomain` compiles and runs the 97-case
+function from all three C routes at O0/O2.
 `JumpTableFiniteSelector.ExactSingletonReplayPreservesAProvedSibling`
 uses i386 and x64 consumers sharing one relocated table. The exact singleton
 keeps its finite replay without poisoning the independently bounded sibling's

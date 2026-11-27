@@ -4173,7 +4173,7 @@ alias_done:
           const NdVar &Value = Op.Inputs[I];
           if (isGuardLiteral(Value) && Value.Size != 0 &&
               Value.Size <= sizeof(uint64_t) &&
-              Value.Offset < std::numeric_limits<uint64_t>::digits)
+              Value.Offset < limits::kMaxJumpTableJoinedDomainValues)
             ProposedJoinedBound =
                 std::max(ProposedJoinedBound, Value.Offset + 1);
         }
@@ -4192,7 +4192,7 @@ alias_done:
     Joined.Relation = JumpTableValueRelation::JoinedUnsignedFeasibleSet;
     Joined.UnsignedUpperBound = ProposedJoinedBound;
     std::vector<bool> Complete;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     const auto Results = tableValuesMatchAtUses(
         {Joined}, nullptr, &Complete, InvalidVA, nullptr,
         CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
@@ -4202,9 +4202,9 @@ alias_done:
     // bytes are unused, so its last reaching value bounds that table.
     // The proved mask, not the literal envelope, is the bound.
     if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
-        Masks.size() == 1 && Results[0] && Masks[0] &&
-        ((Masks[0] & (Masks[0] + 1)) == 0 || AllowSparseDomain)) {
-      const uint32_t Bound = std::bit_width(Masks[0]);
+        Masks.size() == 1 && Results[0] && !Masks[0].none() &&
+        (Masks[0].isDensePrefix() || AllowSparseDomain)) {
+      const uint32_t Bound = Masks[0].bitWidth();
       // A prefix bounds this use but does not shrink a relocation-owned
       // object whose remaining slots may serve another dispatch.
       const bool PrefixOfOwnedObject =
@@ -4254,17 +4254,17 @@ alias_done:
       Lookup.UseAddr = Info.IndexUseAddr;
       Lookup.UseSeq = Info.IndexUseSeq;
       Lookup.Relation = JumpTableValueRelation::ReadonlyUnsignedEnvelope;
-      Lookup.UnsignedUpperBound = 64;
+      Lookup.UnsignedUpperBound = limits::kMaxJumpTableFeasibleSetValues;
       std::vector<bool> Complete;
-      std::vector<uint64_t> Masks;
+      std::vector<JumpTableFeasibleSet> Masks;
       const auto Results = tableValuesMatchAtUses(
           {Lookup}, nullptr, &Complete, InvalidVA, nullptr,
           CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
           CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
       if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
-          Masks.size() == 1 && Results[0] && Masks[0] &&
-          (Masks[0] & (Masks[0] + 1)) == 0) {
-        const uint32_t Bound = std::bit_width(Masks[0]);
+          Masks.size() == 1 && Results[0] && !Masks[0].none() &&
+          Masks[0].isDensePrefix()) {
+        const uint32_t Bound = Masks[0].bitWidth();
         if (Bound >= limits::kMinJumpTableEntries) {
           if (Info.MaxEntries == 0 || Bound < Info.MaxEntries)
             Info.MaxEntries = Bound;

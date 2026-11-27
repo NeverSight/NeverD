@@ -346,13 +346,15 @@ inline constexpr uint32_t kJumpTableResolverSliceMaxI386GOTOFFSiblingTables = 8;
 // under modular address arithmetic.
 inline constexpr uint64_t kJumpTableResolverSliceMaxIndexSpan = uint64_t{1}
                                                                 << 20;
-// Each independently symbolized predecessor arm can need one envelope
-// query and one equality query per coordinate; a constant index needs
-// only one path-predicate query. Reserve that allowance before its first
-// SAT call, but cap the entire expanded proof at 128 possible calls.
+// Each independently symbolized predecessor arm asks one envelope query,
+// then reads one feasible coordinate per query from a model until a last
+// query finds none left; coordinates an earlier arm proved are excluded
+// first. A constant index needs only one path-predicate query. Cap the
+// entire expanded proof at 256 calls: the largest joined domain (128
+// coordinates) plus an envelope and a closing call for each of 64 arms.
 // Every actual call also pays the local and candidate evidence accounts
 // below. Exceeding either limit fails closed.
-inline constexpr size_t kJumpTableResolverSliceMaxFiniteSetSolverQueries = 128;
+inline constexpr size_t kJumpTableResolverSliceMaxFiniteSetSolverQueries = 256;
 
 // lib/ir/low/jumptable/ResolverDefinitionCache.h
 inline constexpr size_t kResolverDefinitionCacheCapacity = 4096;

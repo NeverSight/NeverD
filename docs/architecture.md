@@ -11697,7 +11697,15 @@ without treating depth exhaustion as a completed proof or skipping replay.
 When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
-the proposal supplies no table capacity or range authority. A dominating
+the proposal supplies no table capacity or range authority. That envelope may
+reach 128 values, where an ordinary finite set stops at one 64-bit word. Each
+arm's solver proves the envelope, then reads one feasible coordinate per call
+from a model and excludes it; members an earlier arm proved are excluded
+first. The calls therefore follow the members, not the proposed envelope, and
+an unrelated wide literal elsewhere in the function costs a few calls. bash
+enters a 97-case dispatch this way from a zero byte that skips its range
+guard. The ceiling stays below a byte lane's 256 values, so a byte read on an
+unguarded path is a counterexample rather than a domain proved by width. A dominating
 equality, or a dominating signed upper bound, that is not itself an unsigned
 dense prefix does not discard those predecessor ranges: the same query proves
 the prefix and keeps the dominating edge constraints. A dominating range that
