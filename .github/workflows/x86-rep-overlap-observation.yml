@@ -1,0 +1,38 @@
+name: Original user-mode x86 REP copies
+on:
+  push:
+    branches: [codex/x86-rep-overlap-qualification]
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/qualification/rep
+      - name: Install the 32-bit C runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-multilib libc6-dev-i386
+      - name: Observe byte, word and dword copies
+        run: |
+          set -euo pipefail
+          lscpu > cpu.txt
+          gcc -m32 -O2 -Wall -Wextra -Werror .github/qualification/rep/{observe.c,moves.S} -o observe
+          objdump -d --disassemble=byte16 observe > instruction.txt
+          ./observe > results.csv
+          test "$(wc -l < results.csv)" -eq 121
+          cat cpu.txt | head -18
+          cat results.csv
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-i386-rep-observations
+          path: |
+            cpu.txt
+            instruction.txt
+            results.csv
+          if-no-files-found: error
+          retention-days: 14
