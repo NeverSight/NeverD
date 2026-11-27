@@ -170,6 +170,14 @@ std::optional<uint32_t> pcRelativeAuthentication(Intrinsic Op, va_t PC,
 
 } // namespace
 
+bool machORestoresSigningAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes,
+                                 va_t PC, unsigned Register, va_t Target) {
+  const auto Pair = decodeMachOPageAddress(Decode, Bytes, PC);
+  const auto R = AARCH64_REG_X0 + Register;
+  return Pair && Pair->PageRegister == R && Pair->ResultRegister == R &&
+         Pair->Target == Target;
+}
+
 MachOSigningAddress machOSigningAddress(Decoder &Decode,
                                         const MachOLiftedSource &Source,
                                         va_t Start, va_t PC, va_t Target,
@@ -207,8 +215,7 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
       // A previous publication can set a separate scratch register for a
       // forward or distant signer. Its own ADR remains local on the next lift.
       if (I.Id == AARCH64_INS_ADR && D.operands[0].type == AARCH64_OP_REG &&
-          D.operands[1].type == AARCH64_OP_IMM &&
-          !llvm::is_contained(Aliases, D.operands[0].reg)) {
+          D.operands[1].type == AARCH64_OP_IMM) {
         SeparateModifier =
             std::pair(D.operands[0].reg, va_t(D.operands[1].imm));
         continue;
@@ -233,6 +240,8 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
         (!Consumers.empty() && !llvm::binary_search(Consumers, AuthPC)))
       return {};
     const bool Immediate = D.operands[0].type == AARCH64_OP_IMM;
+    const auto AuthRegister =
+        Immediate ? AARCH64_REG_INVALID : D.operands[0].reg;
     const bool Independent = Immediate || SeparateModifier.has_value();
     va_t SignedAt = Target;
     if (SeparateModifier) {
@@ -264,6 +273,23 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
     const auto Sign = machOPCSigningInstruction(I.Id);
     if (!Sign || Sign->Authenticate || Auth->Key != Sign->Key)
       return {};
+    if (SeparateModifier &&
+        llvm::is_contained(Aliases, SeparateModifier->first)) {
+      const auto Restore = AuthPC + Word;
+      if (!Auth->Return && AuthRegister >= AARCH64_REG_X0 &&
+          AuthRegister <= AARCH64_REG_X28 &&
+          rangeInBounds(Restore - Start, 2 * Word, Source.Bytes.size()) &&
+          machODataInCodeRanges(Source.Embedded, Restore, 2 * Word).empty() &&
+          machORestoresSigningAddress(
+              Decode, Source.Bytes.drop_front(Restore - Start), Restore,
+              AuthRegister - AARCH64_REG_X0, Target))
+        return {.Use = MachOSigningAddress::Observable,
+                .InstalledSigner = At(SignedAt),
+                .RestorePC = Restore};
+      // The independent ADR overwrote this copy. Only the surviving aliases
+      // or an earlier store can still expose the original address.
+      llvm::erase(Aliases, AuthRegister);
+    }
     const auto Use = signingAddressUse(Decode, Source, Start, AuthPC + Word,
                                        Aliases, Auth->Return, Stored);
     if (Use == SigningAddressUse::Local && !Independent)
@@ -281,8 +307,7 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
       // immediate.
       for (auto Scratch : SigningScratchRegisters) {
         const unsigned Number = Scratch - AARCH64_REG_X0;
-        if (llvm::is_contained(Aliases, Scratch) ||
-            !aarch64::encodePCRelativeAddress(aarch64::AddressInstruction::ADR,
+        if (!aarch64::encodePCRelativeAddress(aarch64::AddressInstruction::ADR,
                                               Number, AuthPC, Target) ||
             signingAddressUse(Decode, Source, Start, AuthPC + Word, Scratch,
                               Auth->Return) != SigningAddressUse::Local)
@@ -295,6 +320,19 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
                 .Authentication = MachOAuthenticationReplacement{
                     {AuthPC, Number}, Encoding, Target}};
       }
+      // The input value has an exact source relocation. AUT falls through
+      // without changing this GPR, so it can be reconstructed immediately
+      // afterwards without borrowing another register or changing SP.
+      if (!Auth->Return && AuthRegister >= AARCH64_REG_X0 &&
+          AuthRegister <= AARCH64_REG_X28 &&
+          aarch64::encodePCRelativeAddress(aarch64::AddressInstruction::ADR,
+                                           AuthRegister - AARCH64_REG_X0,
+                                           AuthPC, Target))
+        return {.Use = MachOSigningAddress::Observable,
+                .Authentication = MachOAuthenticationReplacement{
+                    {AuthPC, unsigned(AuthRegister - AARCH64_REG_X0), true},
+                    At(AuthPC),
+                    Target}};
     }
     return {};
   }

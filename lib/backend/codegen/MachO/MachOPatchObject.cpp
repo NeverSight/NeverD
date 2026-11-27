@@ -3063,8 +3063,6 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
     const bool Expanded = Fixup.Form == MachOAddressForm::Expanded;
     if (Expanded)
       AddedBytes += kInsnSize;
-    if (Fixup.insertsSigningModifier())
-      AddedBytes += kInsnSize;
     const auto *Before =
         Original.readVA(Fixup.Instruction, Pair ? 2 * kInsnSize : kInsnSize);
     if (!Before || Object.Sections.at(Sym.Section) != Plan.TextSection ||
@@ -3082,6 +3080,33 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
     const va_t PC = Plan.TextVA + At;
     const va_t Target = Fixup.Target + Slide;
     const uint32_t Rd = Word & kRdMask;
+    if (Fixup.insertsSigningModifier()) {
+      const auto &Auth = *Fixup.Authentication;
+      if (Auth.RestoreSource) {
+        // The original register can be live on both sides of AUT. Its
+        // restoration begins after the local ADR and AUT, independent of
+        // the opcode or destination of the original address producer.
+        const auto Restore =
+            Auth.Instruction - Entry.OriginalVA + AddedBytes + 2 * kInsnSize;
+        if (!rangeInBounds(Restore, 2 * kInsnSize, Text->Size - Sym.Offset))
+          return fail(kAddressSourceWord);
+        const auto AtRestore = Sym.Offset + Restore;
+        const auto Reg = *Auth.ModifierRegister;
+        const auto Page = encodePCRelativeAddress(
+            AddressInstruction::ADRP, Reg, Plan.TextVA + AtRestore, Target);
+        const auto Add =
+            kAddImmediate64 | (Reg << kAddressBaseRegisterShift) | Reg;
+        const auto Imm = branch::A64AddImm12;
+        // Both signing instructions are in the image-relative compact-unwind
+        // range. Apply the same page reach check as an expanded address.
+        if (!Page)
+          return fail(kAddressPageReach);
+        const auto Low = uint32_t((Target & ~kPageMask) << Imm.Low);
+        Plan.Sites.push_back({&Sym, AtRestore, kADRP_Op | Reg, *Page, {}});
+        Plan.Sites.push_back({&Sym, AtRestore + kInsnSize, Add, Add | Low, {}});
+      }
+      AddedBytes += Auth.insertedWords() * kInsnSize;
+    }
     if (Pair || Expanded) {
       const auto Page =
           encodePCRelativeAddress(AddressInstruction::ADRP, Rd, PC, Target);

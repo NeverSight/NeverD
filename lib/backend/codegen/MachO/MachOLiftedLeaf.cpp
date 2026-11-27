@@ -8,6 +8,7 @@
 #include "MachOArm64eABI.h"
 #include "MachOLiftedObject.h"
 #include "MachOPageAddress.h"
+#include "MachOSigningAddress.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/analysis/LLVMPrivateFrameAccesses.h"
@@ -568,11 +569,21 @@ std::optional<FrameBody> signedFrameBody(llvm::ArrayRef<uint8_t> Code,
 // still names its first word, while every later boundary moves.
 struct AddressExpansion {
   llvm::SmallVector<uint64_t, 2> Sites;
+  llvm::SmallVector<std::pair<uint64_t, unsigned>, 0> Restores;
 
   uint64_t operator()(uint64_t Offset) const {
     const auto Word = llvm::alignDown(Offset, aarch64::kInsnSize);
     return Offset + aarch64::kInsnSize *
                         (llvm::lower_bound(Sites, Word) - Sites.begin());
+  }
+
+  uint64_t unwindBoundary(uint64_t Offset) const {
+    const auto It =
+        llvm::lower_bound(Restores, Offset, [](const auto &R, uint64_t PC) {
+          return R.first < PC;
+        });
+    return (*this)(Offset) -
+           (It != Restores.end() && It->first == Offset ? It->second : 0);
   }
 };
 
@@ -623,7 +634,7 @@ bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
                        if (Growth.Sites.empty())
                          return dwarf_eh::sameCFIInstruction(A, B);
                        auto Mapped = A;
-                       Mapped.CodeOffset = Growth(A.CodeOffset);
+                       Mapped.CodeOffset = Growth.unwindBoundary(A.CodeOffset);
                        return dwarf_eh::sameCFIInstruction(Mapped, B);
                      });
 }
@@ -708,9 +719,9 @@ bool sameLanguageTable(const ExceptionFunction &Before,
   for (size_t I = 0; I < Old.CallSites.size(); ++I) {
     const auto &A = Old.CallSites[I];
     const auto &B = New.CallSites[I];
-    if (Growth(A.GuardedRange.Begin - Before.CodeRange.Begin) !=
+    if (Growth.unwindBoundary(A.GuardedRange.Begin - Before.CodeRange.Begin) !=
             B.GuardedRange.Begin - Range.BeginVA ||
-        Growth(A.GuardedRange.End - Before.CodeRange.Begin) !=
+        Growth.unwindBoundary(A.GuardedRange.End - Before.CodeRange.Begin) !=
             B.GuardedRange.End - Range.BeginVA ||
         A.FirstActionOffset != B.FirstActionOffset ||
         (A.LandingPadVA ? (!B.LandingPadVA ||
@@ -1068,9 +1079,15 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                      Site.insertsSigningModifier();
       if (Site.Form == MachOAddressForm::Expanded)
         InstalledOffset.Sites.push_back(Site.Instruction - Start);
-      if (Site.insertsSigningModifier())
-        InstalledOffset.Sites.push_back(Site.Authentication->Instruction -
-                                        Start);
+      if (Site.insertsSigningModifier()) {
+        const auto &Auth = *Site.Authentication;
+        const auto At = Auth.Instruction - Start;
+        InstalledOffset.Sites.append(Auth.insertedWords(), At);
+        if (Auth.RestoreSource)
+          InstalledOffset.Restores.emplace_back(At + aarch64::kInsnSize,
+                                                Auth.restoreWords() *
+                                                    aarch64::kInsnSize);
+      }
     }
     const auto *Frame = Original.ExceptionMetadata.findFunction(Start);
     const auto Owner = Generated.SymbolAddrs.find(Mapping.Symbol);
@@ -1221,6 +1238,10 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
           const auto Id = I.Id;
           const auto Register =
               SigningConsumer->Authentication->ModifierRegister;
+          const bool Restore = SigningConsumer->Authentication->RestoreSource;
+          if (Restore && I.Raw->detail->aarch64.operands[0].reg !=
+                             AARCH64_REG_X0 + *Register)
+            return refuse(kSourceAddressTarget);
           const auto Prefix = Register ? Size : 0;
           if (After.size() < Prefix + Size)
             return refuse(kSourceAddressTarget);
@@ -1250,6 +1271,10 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                 PC - Sign != Distance)
               return refuse(kSourceAddressTarget);
           }
+          if (Restore && !machORestoresSigningAddress(
+                             Decode, After.drop_front(Prefix + Size), PC + Size,
+                             *Register, SigningConsumer->Target + Slide))
+            return refuse(kSourceAddressTarget);
           SigningConsumer = nullptr;
           continue;
         }

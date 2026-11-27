@@ -2738,11 +2738,22 @@ in the installed image. This also preserves the row if an unwind starts
 between the modifier setup and AUT. The test keeps X16 and X17 live and
 checks stores through both registers after authentication.
 
-A rewritten consumer must have a single reaching definition. The publisher
-declines an alternate entry that can supply a different modifier and a
-forward case in which all eligible scratch registers are live. On a second
-lift it follows the original entry's forwarding chain and checks the
-retained signing word even when the old unwind range is one instruction.
+When every scratch register is live after a forward authentication, the
+publisher sets the original modifier register to the installed signing PC for
+the AUT. On fallthrough, an ADRP/ADD pair restores the caller-visible address
+in that same register. This also works when the address already went through a
+copy or store and when the original signer is outside ADR range. A direct
+branch or landing pad targeting the following original instruction lands past
+the pair. The next DWARF row and LSDA guard boundary take effect at the first
+restore instruction because LR is already authenticated there.
+
+At an authenticated return, a scratch register containing a copy of the address
+can supply the modifier if its value is dead at the return. The original value
+in X0 still reaches the caller. The publisher requires a single reaching
+definition for a rewritten consumer and rejects an alternate entry that can
+supply a different modifier. On a second lift it follows the original entry's
+forwarding chain, verifies the retained signing word and checks both register
+operands and the target of the restore pair.
 
 The unwind analysis also recognizes a full-width literal load from an
 immutable, dyld-rebased slot as a possible signing address. Recovery checks
@@ -2755,15 +2766,26 @@ Apple Silicon. The corresponding `run --model FVP --guests GUESTS --output
 REPORT` executes those bodies at EL0 and EL1 with all four EnPACM/EnPACM0
 settings and checks a disabled-feature control.
 
-With LLVM r6, the M4 Max published 44 images and verified 80 signing
-rows. All 223 image and asynchronous-unwind cases, 63 adjacent cases
-and 40 implicit-unwind tests passed. The 32 explicit language-frame cases
+In the initial LLVM r6 run, the M4 Max published 44 images and verified 80
+signing rows. All 223 image and asynchronous-unwind cases, 63 adjacent
+cases and 40 implicit-unwind tests passed. The 32 explicit language-frame cases
 exercised Darwin personalities with 288 exceptions and 720 pairs of search and
 cleanup observations. The Arm FVP executed 66 original and published function
 bodies with both caller inputs at EL0 and EL1 in each EnPACM configuration
 (1,056 invocations). Native x1 delivery remains on the hardware checklist below.
 [Validation record](evidence/arm64e-observable-signing-address-2026-11-27.json) ·
 [Release model run](https://github.com/gmh5225/test_mac_intel/actions/runs/45969329510)
+
+The live-register regression published 64 images and checked 116 signed or
+unsigned unwind rows on the M4 Max. IA and IB each rejected the independent
+entry with an ambiguous modifier. The 223 image and asynchronous-unwind
+cases, 63 adjacent cases and 40 portable cases all passed with zero skips.
+The Arm model executed 96 original and published bodies, for 1,536 calls.
+The same job replayed the archived 66-body guest for another 1,056 calls.
+Both runs checked both exception levels, all four EnPACM settings and the
+disabled-feature control.
+[Release evidence](evidence/arm64e-live-signing-modifier-2026-11-27.json) ·
+[Arm model and archived guest replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45978541273)
 
 ### Native x1 runner qualification
 
