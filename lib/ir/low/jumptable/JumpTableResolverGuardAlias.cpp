@@ -3714,7 +3714,14 @@ alias_done:
     return true;
   };
   if (!ProofQueries.empty() && HasStructuralCompare) {
-    size_t SideBudget = *CandidateEvidenceBudget;
+    // The other conditions only add constraints to a compare already in
+    // hand, so their session runs on a share of the candidate account.  One
+    // that cannot finish within it leaves the compare's own queries to be
+    // asked alone, exactly as an exhausted account always did.
+    const size_t SideAllowance =
+        *CandidateEvidenceBudget /
+        limits::kJumpTableGuardSideSessionAccountDivisor;
+    size_t SideBudget = SideAllowance;
     bool BatchComplete = false;
     std::vector<bool> BatchQueryComplete;
     const std::vector<bool> BatchResults = ResolveGuardQueries(
@@ -3723,7 +3730,7 @@ alias_done:
                              BatchQueryComplete.size() == ProofQueries.size() &&
                              SideBudget != 0;
     if (BatchUsable) {
-      *CandidateEvidenceBudget = SideBudget;
+      *CandidateEvidenceBudget -= SideAllowance - SideBudget;
       assignBatch(std::move(BatchResults), std::move(BatchQueryComplete),
                   BatchComplete);
       // The session can also run out of its own match allowance with the

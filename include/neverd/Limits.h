@@ -122,6 +122,14 @@ constexpr uint32_t kMaxJumpTableGuardAliasEvidenceWork = 16384;
 /// whole account is 16 Mi.
 constexpr uint32_t kJumpTableGuardAliasQueryAccountDivisor = 32;
 
+/// Share of the remaining candidate account, as a divisor, that a precise
+/// guard proof's session over every controlling condition may spend once the
+/// compare that names the index is structural.  The other conditions only
+/// add constraints; a session that cannot finish within the share leaves the
+/// compare's own queries to be asked alone.  On one pcre2 parse_regex
+/// dispatch that session spent about 490 Mi and still did not finish.
+constexpr uint32_t kJumpTableGuardSideSessionAccountDivisor = 8;
+
 /// Local allowance for constructing and replaying one precise guard expression
 /// batch.  An ARM32 auto-vectorized reduction followed by an eight-way switch
 /// uses about 13.3 KiB after exact syntax, query, and replay accounting;

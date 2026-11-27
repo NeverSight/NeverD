@@ -1620,6 +1620,14 @@ dispatches whose index takes the compared lane after the guard
 `cmpl $5, %r11d; ja`): both read their six slots, while twins that change
 the lane between the guard and the index (`incb %sil`, `incl %r11d`) stay
 unresolved.
+`JTE_X86_64.LoopCarriedTokenDispatchFitsASmallCandidateAccount` builds a
+lexer loop whose 64 arms each recompute a token dispatched through
+`lea -0x107(%r13), %eax; cmp $63, %eax; ja` and checks its 64 slots under a
+14 Mi and a 20 Mi candidate account. The first needs the target role's
+lexical chain filter and the address proof's single authenticated order
+(without them the dispatch needed 16 and 19.5 Mi); the second needs the
+guard session's share (a session that finished on the whole account left the
+other proofs too little between 16.5 and 23.5 Mi).
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

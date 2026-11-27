@@ -11645,6 +11645,20 @@ such an occurrence asks every same-scale operation of the function whether
 it carries the index, and one query of that batch that cannot finish fails
 the role. liblzma's decoder lost its table that way once the table's targets
 brought a deep scaled value into the function.
+When the table load's own instruction forms its address and one operand of
+that add already is an authenticated index occurrence through the local copy
+chain, the address proof asks that order alone. The other order would ask
+whether the index is the table base, and answering that rebuilds the index's
+whole value: a lexer's loop-carried token, whose definitions merge every arm
+of the loop.
+The target-role proof first grows the table load's transforms over its
+lexical region, the code between the table address and the branch, and an
+operation there continues a chain only through an input whose nearest earlier
+write in the region is an occurrence already derived in that state. Like the
+region, this only narrows the search: every step is still a proved query, and
+a chain it misses falls back to the whole-graph pass. Unfiltered, the scaled
+address computation asked for the whole value of bash's loop-carried token,
+and its lexer spent 524 Mi on one dispatch.
 A guard proof's predicated-alias queries, which only add index alternatives
 for a select whose predicate the guard repeats, run on a share of the
 remaining candidate account (`kJumpTableGuardAliasQueryAccountDivisor`) and
@@ -11652,7 +11666,13 @@ are charged what they spent. An unfinished batch abandons those alternatives
 and leaves the guard proof the rest; charged in full, pcre2's alias batches
 spent the account the guard itself needed.
 When the compare that names the index is a structural leaf, the session over
-every controlling condition runs on a copy of the candidate account. That
+every controlling condition runs on a share of the remaining candidate
+account (`kJumpTableGuardSideSessionAccountDivisor`) and is charged what it
+spent: the other conditions only add constraints to a bound already in hand.
+Run on the whole account, a session that finished could leave the address
+and domain proofs too little, as in a lexer loop whose 64 arms each recompute
+the dispatched token. A session that cannot finish within its share answers
+none of its queries. That
 session can also run out of its own match allowance with the account to
 spare, and then answers none of its queries. The compare's own queries are
 then asked alone, in a session of their own, exactly as after the copy runs

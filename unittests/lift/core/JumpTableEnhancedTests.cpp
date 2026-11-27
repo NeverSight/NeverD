@@ -5280,6 +5280,59 @@ TEST_F(JTE_X86_64, IndexTakesTheComparedLaneAfterTheGuard) {
   }
 }
 
+static fs::path tokenLoopX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_token_loop.o";
+}
+
+// A lexer-shaped loop: 64 arms each compute the next token in %r13d with
+// their own arithmetic and return to one guarded dispatch on it, the shape
+// of bash's read_token (`lea -0x107(%r13), %eax; cmp $63, %eax; ja`, then
+// `movslq (%rcx,%rax,4)` from a `lea`'d table).  The token's whole value
+// merges 64 loop-carried definitions, and no proof of the dispatch needs
+// it: the target role's lexical pass follows only chains from the table
+// load's derived occurrences, the address proof asks only the order whose
+// dynamic operand is the authenticated index, and the guard's session over
+// the loop condition and the bound runs on a share of the candidate
+// account.  With a 14 Mi account the dispatch reads its 64 slots only when
+// both proofs skip the token (they needed 16 and 19.5 Mi); with 20 Mi a
+// guard session that finished on the whole account left the address and
+// domain proofs too little.
+TEST_F(JTE_X86_64, LoopCarriedTokenDispatchFitsASmallCandidateAccount) {
+  auto ImageOrErr = neverd::loadBinary(tokenLoopX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 64; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  const neverd::Symbol *Function = Image.findSymbol("jt_token_loop");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  for (const size_t Account : {size_t{14} << 20, size_t{20} << 20}) {
+    SCOPED_TRACE(Account);
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Account);
+    const neverd::LowFunc Func =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Func.JumpTables.size(), 1u);
+    EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+    EXPECT_EQ(Func.JumpTables.front().BaseAddr, Rodata->VA);
+    EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;
 // ja`, then indexes its 13-entry table with `movzbl %sil,%eax; andl $0xf,%eax`.
 // The guard's byte is the low byte of that index, so the table keeps the
