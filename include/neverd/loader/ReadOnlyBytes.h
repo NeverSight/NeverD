@@ -35,7 +35,8 @@ std::optional<uint32_t> readMIPS16LiteralWord(const BinaryImage &Image,
 std::optional<std::vector<uint8_t>>
 readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size);
 
-/// Read an initial structural byte range with unique storage and no fixups.
+/// Read file-initial data in a linked Mach-O64 or i386 PE image. The whole
+/// range must have one file-backed mapping and no overlapping fixups.
 /// Writable records are permitted only as initializer evidence. This is not a
 /// stable runtime value or permission to emit a copied object; declaration
 /// owners must authenticate the record and retain dynamic accesses separately.

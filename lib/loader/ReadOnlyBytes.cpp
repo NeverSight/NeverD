@@ -481,7 +481,10 @@ readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
 
 std::optional<std::vector<uint8_t>>
 readInitialImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
-  if (!supportedImage(Image) || !Size ||
+  const bool LinkedI386 = Image.Arch == Arch::X86 &&
+                          Image.Bits == Bitness::Bits32 &&
+                          supportedPEImage(Image);
+  if ((!supportedImage(Image) && !LinkedI386) || !Size ||
       Size > ::neverd::limits::loader::kMaxImageReadBytes)
     return std::nullopt;
   const auto *Bytes = mappedBytes(Image, Address, Size, false);
