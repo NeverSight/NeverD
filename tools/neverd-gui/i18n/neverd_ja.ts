@@ -1359,6 +1359,14 @@
         <source>Recover a Lua artifact and inspect its prototypes</source>
         <translation>Lua ファイルを復元して関数プロトタイプを調べる</translation>
     </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Python コードとパッケージの構成要素を調べる</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Python ソースを復元…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11249,7 +11257,7 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
-    <name>neverd::gui::LuaRecoveryDialog</name>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
         <translation>Lua ソースを復元</translation>
@@ -11373,6 +11381,62 @@ Your previous graph is still available.</source>
     <message>
         <source>Original line %1</source>
         <translation>元の行 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>構成要素</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>エントリースクリプト</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>ネイティブ構成要素をエクスポート中…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>フォルダー…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>関数</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>関数 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>ネイティブ構成要素をエクスポートしました。</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>PyInstaller フォルダーを開く</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Python ファイルを開く</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>ネイティブ解析で開く…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>このワーカーでは Python ソースを復元できません。</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python ソース (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Python ソースを復元</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>ネイティブ構成要素を新しいファイルに保存</translation>
     </message>
 </context>
 </TS>

@@ -89,8 +89,8 @@ static int realMain(int Argc, char *Argv[]) {
   // reads textual LLVM IR.
   if (PluginsCmd)
     return runPlugins(Argv[0]);
-  if (LuaCmd)
-    return runLua();
+  if (LuaCmd || PythonCmd)
+    return runScriptRecovery();
   // identify reads the input's headers only; a file NeverD cannot load still
   // gets its rows.
   if (IdentifyCmd)

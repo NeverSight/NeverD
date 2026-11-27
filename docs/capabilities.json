@@ -5604,6 +5604,113 @@
       }
     },
     {
+      "id": "python.source-recovery",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "bytecode",
+      "targets": [
+        "CPython 3.10.16 disk wordcode",
+        "CPython 3.11.11 disk wordcode",
+        "PyInstaller onefile, onedir and PYZ",
+        "Python sources and native extensions"
+      ],
+      "docs": [
+        "docs/python-recovery.md"
+      ],
+      "limitations": [
+        "Issue #1022. Qualified CPython 3.10 regions publish source. CPython 3.11 publishes disassembly and exception-table evidence. The release matrix lists unvalidated versions and packaging profiles.",
+        "Original source retains its bytes. Native images use the native analysis backend. Unsupported functions keep their own diagnostics."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.OwnedCodeObjectsMatchDisassembly",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.ModernDiskCachesLinesAndUnwindRegionsMatchCompiler",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.PartialFunctionPreservesSiblingsAndRejectsAlteredCleanup",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.PackageMembersHaveDistinctIdentitiesAndNativeRoutes",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.InvalidArchiveExtentsNamesAndExpansion",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.OnedirAndNativeExportRevalidateSelectedBytes",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_python_recover_json_v1",
+          "neverd_python_export_native_json_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd python",
+          "neverd python --json",
+          "neverd python --profile",
+          "neverd python --function",
+          "neverd python --component",
+          "neverd python --native",
+          "neverd python --o"
+        ],
+        "json": [
+          "neverd_python_recover_json_v1",
+          "neverd_python_export_native_json_v1"
+        ]
+      }
+    },
+    {
       "id": "mobile.source-recovery",
       "kind": "analysis",
       "status": "experimental",

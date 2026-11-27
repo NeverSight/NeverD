@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
+<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -46,6 +46,7 @@
 | [GUI 프로세스 플러그인(영문)](../gui-plugins.md) | 관리자, 메뉴 배치, 작업 결과 및 프로세스 프로토콜 |
 | [NPH 프로세스 플러그인 호스트(영문)](../plugin-host.md) | 공유 소유권, 작업 수락, 프로토콜 및 프로세스 수명 |
 | [네이티브 플러그인](plugins.md) | 순수 C descriptor ABI, callback과 event, build/link workflow, discovery 및 호환성 규칙 |
+| [Python 산출물 복원](../python-recovery.md) | CPython 버전별 지원, PyInstaller 구성 요소, 네이티브 분석, 소스 검증 |
 | [Python 플러그인](python-plugins.md) | 플러그인 작성, 세션·이벤트 API, 격리, 테스트 및 배포 |
 | [모바일 지원 개요](mobile.md) | Android / iOS 입력, 소스 출력, CLI 흐름 및 제한 |
 | [Android Java 복구](android.md) | APK(multidex)·DEX·smali 파일/디렉터리 → Java. CLI 흐름, 실행 환경, 옵션, JSON 보고서, 오류 처리 및 검증 제한 |

@@ -1,0 +1,488 @@
+{
+  "compiler": "3.10.16 (main, Mar 11 2025, 17:39:54) [Clang 20.1.0 ]",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "magic": "6f0d0d0a",
+  "packager": "6.16.0",
+  "flags": "exec, dont_inherit=True, on-disk marshal; per-row optimization",
+  "native_compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+  "fixtures": [
+    {
+      "name": "program0.pyc",
+      "sha256": "9f0aae82da612bcdfa2666c6931f810064de68a5a3976496d695aec57e7fcb34",
+      "data": "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",
+      "source": "program.py",
+      "optimize": 0,
+      "header": "checked_hash",
+      "disassembly": [
+        {
+          "name": "<module>",
+          "instructions": [
+            [0, "LOAD_CONST", 1, null],
+            [2, "LOAD_CONST", 1, null],
+            [4, "IMPORT_NAME", 1, null],
+            [6, "STORE_NAME", 1, null],
+            [8, "LOAD_CONST", 2, null],
+            [10, "LOAD_CONST", 2, null],
+            [12, "IMPORT_NAME", 2, null],
+            [14, "IMPORT_FROM", 2, null],
+            [16, "STORE_NAME", 2, null],
+            [18, "POP_TOP", 2, null],
+            [20, "LOAD_CONST", 4, null],
+            [22, "LOAD_CONST", 4, null],
+            [24, "LOAD_CONST", 4, null],
+            [26, "BUILD_CONST_KEY_MAP", 4, null],
+            [28, "LOAD_CONST", 4, null],
+            [30, "LOAD_CONST", 4, null],
+            [32, "MAKE_FUNCTION", 4, null],
+            [34, "STORE_NAME", 4, null],
+            [36, "LOAD_CONST", 7, null],
+            [38, "LOAD_CONST", 7, null],
+            [40, "MAKE_FUNCTION", 7, null],
+            [42, "STORE_NAME", 7, null],
+            [44, "LOAD_CONST", 12, null],
+            [46, "LOAD_CONST", 12, null],
+            [48, "MAKE_FUNCTION", 12, null],
+            [50, "STORE_NAME", 12, null],
+            [52, "LOAD_CONST", 18, null],
+            [54, "LOAD_CONST", 18, null],
+            [56, "MAKE_FUNCTION", 18, null],
+            [58, "STORE_NAME", 18, null],
+            [60, "LOAD_CONST", 26, null],
+            [62, "LOAD_CONST", 26, null],
+            [64, "MAKE_FUNCTION", 26, null],
+            [66, "STORE_NAME", 26, null],
+            [68, "LOAD_CONST", 29, null],
+            [70, "LOAD_CONST", 29, null],
+            [72, "MAKE_FUNCTION", 29, null],
+            [74, "STORE_NAME", 29, null],
+            [76, "LOAD_CONST", 33, null],
+            [78, "LOAD_CONST", 33, null],
+            [80, "MAKE_FUNCTION", 33, null],
+            [82, "STORE_NAME", 33, null],
+            [84, "LOAD_CONST", 36, null],
+            [86, "LOAD_CONST", 36, null],
+            [88, "MAKE_FUNCTION", 36, null],
+            [90, "STORE_NAME", 36, null],
+            [92, "LOAD_CONST", 45, null],
+            [94, "LOAD_CONST", 45, null],
+            [96, "MAKE_FUNCTION", 45, null],
+            [98, "STORE_NAME", 45, null],
+            [100, "LOAD_CONST", 50, null],
+            [102, "LOAD_CONST", 50, null],
+            [104, "MAKE_FUNCTION", 50, null],
+            [106, "STORE_NAME", 50, null],
+            [108, "LOAD_CONST", 57, null],
+            [110, "LOAD_CONST", 57, null],
+            [112, "MAKE_FUNCTION", 57, null],
+            [114, "STORE_NAME", 57, null],
+            [116, "LOAD_CONST", 57, null],
+            [118, "RETURN_VALUE", 57, null]
+          ]
+        },
+        {
+          "name": "arithmetic",
+          "instructions": [
+            [0, "LOAD_FAST", 5, null],
+            [2, "LOAD_FAST", 5, null],
+            [4, "BINARY_ADD", 5, null],
+            [6, "LOAD_FAST", 5, null],
+            [8, "BINARY_MULTIPLY", 5, null],
+            [10, "RETURN_VALUE", 5, null]
+          ]
+        },
+        {
+          "name": "choose",
+          "instructions": [
+            [0, "LOAD_FAST", 8, null],
+            [2, "LOAD_CONST", 8, null],
+            [4, "COMPARE_OP", 8, null],
+            [6, "POP_JUMP_IF_FALSE", 8, 14],
+            [8, "LOAD_FAST", 9, null],
+            [10, "UNARY_NEGATIVE", 9, null],
+            [12, "RETURN_VALUE", 9, null],
+            [14, "LOAD_FAST", 10, null],
+            [16, "LOAD_CONST", 10, null],
+            [18, "BINARY_ADD", 10, null],
+            [20, "RETURN_VALUE", 10, null]
+          ]
+        },
+        {
+          "name": "walk",
+          "instructions": [
+            [0, "LOAD_CONST", 13, null],
+            [2, "STORE_FAST", 13, null],
+            [4, "LOAD_FAST", 14, null],
+            [6, "GET_ITER", 14, null],
+            [8, "FOR_ITER", 14, 22],
+            [10, "STORE_FAST", 14, null],
+            [12, "LOAD_FAST", 15, null],
+            [14, "LOAD_FAST", 15, null],
+            [16, "INPLACE_ADD", 15, null],
+            [18, "STORE_FAST", 15, null],
+            [20, "JUMP_ABSOLUTE", 15, 8],
+            [22, "LOAD_FAST", 16, null],
+            [24, "RETURN_VALUE", 16, null]
+          ]
+        },
+        {
+          "name": "maker",
+          "instructions": [
+            [0, "LOAD_FAST", 19, null],
+            [2, "STORE_DEREF", 19, null],
+            [4, "LOAD_CLOSURE", 20, null],
+            [6, "BUILD_TUPLE", 20, null],
+            [8, "LOAD_CONST", 20, null],
+            [10, "LOAD_CONST", 20, null],
+            [12, "MAKE_FUNCTION", 20, null],
+            [14, "STORE_FAST", 20, null],
+            [16, "LOAD_FAST", 24, null],
+            [18, "RETURN_VALUE", 24, null]
+          ]
+        },
+        {
+          "name": "advance",
+          "instructions": [
+            [0, "LOAD_DEREF", 22, null],
+            [2, "LOAD_FAST", 22, null],
+            [4, "INPLACE_ADD", 22, null],
+            [6, "STORE_DEREF", 22, null],
+            [8, "LOAD_DEREF", 23, null],
+            [10, "RETURN_VALUE", 23, null]
+          ]
+        },
+        {
+          "name": "positives",
+          "instructions": [
+            [0, "LOAD_CONST", 27, null],
+            [2, "LOAD_CONST", 27, null],
+            [4, "MAKE_FUNCTION", 27, null],
+            [6, "LOAD_FAST", 27, null],
+            [8, "GET_ITER", 27, null],
+            [10, "CALL_FUNCTION", 27, null],
+            [12, "RETURN_VALUE", 27, null]
+          ]
+        },
+        {
+          "name": "<listcomp>",
+          "instructions": [
+            [0, "BUILD_LIST", 27, null],
+            [2, "LOAD_FAST", 27, null],
+            [4, "FOR_ITER", 27, 26],
+            [6, "STORE_FAST", 27, null],
+            [8, "LOAD_FAST", 27, null],
+            [10, "LOAD_CONST", 27, null],
+            [12, "COMPARE_OP", 27, null],
+            [14, "POP_JUMP_IF_FALSE", 27, 4],
+            [16, "LOAD_FAST", 27, null],
+            [18, "LOAD_CONST", 27, null],
+            [20, "BINARY_MULTIPLY", 27, null],
+            [22, "LIST_APPEND", 27, null],
+            [24, "JUMP_ABSOLUTE", 27, 4],
+            [26, "RETURN_VALUE", 27, null]
+          ]
+        },
+        {
+          "name": "ticks",
+          "instructions": [
+            [0, "GEN_START", null, null],
+            [2, "LOAD_FAST", 30, null],
+            [4, "GET_ITER", 30, null],
+            [6, "FOR_ITER", 30, 22],
+            [8, "STORE_FAST", 30, null],
+            [10, "LOAD_FAST", 31, null],
+            [12, "LOAD_CONST", 31, null],
+            [14, "BINARY_ADD", 31, null],
+            [16, "YIELD_VALUE", 31, null],
+            [18, "POP_TOP", 31, null],
+            [20, "JUMP_ABSOLUTE", 31, 6],
+            [22, "LOAD_CONST", 30, null],
+            [24, "RETURN_VALUE", 30, null]
+          ]
+        },
+        {
+          "name": "wait_for",
+          "instructions": [
+            [0, "GEN_START", null, null],
+            [2, "LOAD_FAST", 34, null],
+            [4, "GET_AWAITABLE", 34, null],
+            [6, "LOAD_CONST", 34, null],
+            [8, "YIELD_FROM", 34, null],
+            [10, "RETURN_VALUE", 34, null]
+          ]
+        },
+        {
+          "name": "guarded",
+          "instructions": [
+            [0, "SETUP_FINALLY", 37, 68],
+            [2, "SETUP_FINALLY", 37, 14],
+            [4, "LOAD_FAST", 38, null],
+            [6, "CALL_FUNCTION", 38, null],
+            [8, "STORE_FAST", 38, null],
+            [10, "POP_BLOCK", 38, null],
+            [12, "JUMP_FORWARD", 38, 36],
+            [14, "DUP_TOP", 39, null],
+            [16, "LOAD_GLOBAL", 39, null],
+            [18, "JUMP_IF_NOT_EXC_MATCH", 39, 34],
+            [20, "POP_TOP", 39, null],
+            [22, "POP_TOP", 39, null],
+            [24, "POP_TOP", 39, null],
+            [26, "LOAD_CONST", 40, null],
+            [28, "STORE_FAST", 40, null],
+            [30, "POP_EXCEPT", 40, null],
+            [32, "JUMP_FORWARD", 40, 52],
+            [34, "RERAISE", 39, null],
+            [36, "POP_BLOCK", 38, null],
+            [38, "LOAD_FAST", 42, null],
+            [40, "LOAD_METHOD", 42, null],
+            [42, "LOAD_CONST", 42, null],
+            [44, "CALL_METHOD", 42, null],
+            [46, "POP_TOP", 42, null],
+            [48, "LOAD_FAST", 43, null],
+            [50, "RETURN_VALUE", 43, null],
+            [52, "POP_BLOCK", 40, null],
+            [54, "LOAD_FAST", 42, null],
+            [56, "LOAD_METHOD", 42, null],
+            [58, "LOAD_CONST", 42, null],
+            [60, "CALL_METHOD", 42, null],
+            [62, "POP_TOP", 42, null],
+            [64, "LOAD_FAST", 43, null],
+            [66, "RETURN_VALUE", 43, null],
+            [68, "LOAD_FAST", 42, null],
+            [70, "LOAD_METHOD", 42, null],
+            [72, "LOAD_CONST", 42, null],
+            [74, "CALL_METHOD", 42, null],
+            [76, "POP_TOP", 42, null],
+            [78, "RERAISE", 42, null]
+          ]
+        },
+        {
+          "name": "using",
+          "instructions": [
+            [0, "LOAD_FAST", 46, null],
+            [2, "SETUP_WITH", 46, 28],
+            [4, "STORE_FAST", 46, null],
+            [6, "LOAD_FAST", 47, null],
+            [8, "LOAD_ATTR", 47, null],
+            [10, "STORE_FAST", 47, null],
+            [12, "POP_BLOCK", 47, null],
+            [14, "LOAD_CONST", 46, null],
+            [16, "DUP_TOP", 46, null],
+            [18, "DUP_TOP", 46, null],
+            [20, "CALL_FUNCTION", 46, null],
+            [22, "POP_TOP", 46, null],
+            [24, "LOAD_FAST", 48, null],
+            [26, "RETURN_VALUE", 48, null],
+            [28, "WITH_EXCEPT_START", 46, null],
+            [30, "POP_JUMP_IF_TRUE", 46, 34],
+            [32, "RERAISE", 46, null],
+            [34, "POP_TOP", 46, null],
+            [36, "POP_TOP", 46, null],
+            [38, "POP_TOP", 46, null],
+            [40, "POP_EXCEPT", 46, null],
+            [42, "POP_TOP", 46, null],
+            [44, "LOAD_FAST", 48, null],
+            [46, "RETURN_VALUE", 48, null]
+          ]
+        },
+        {
+          "name": "tagged",
+          "instructions": [
+            [0, "LOAD_FAST", 51, null],
+            [2, "LOAD_CONST", 52, null],
+            [4, "COMPARE_OP", 52, null],
+            [6, "POP_JUMP_IF_FALSE", 52, 12],
+            [8, "LOAD_CONST", 53, null],
+            [10, "RETURN_VALUE", 53, null],
+            [12, "NOP", 54, null],
+            [14, "LOAD_CONST", 55, null],
+            [16, "RETURN_VALUE", 55, null]
+          ]
+        },
+        {
+          "name": "assigned",
+          "instructions": [
+            [0, "LOAD_FAST", 58, null],
+            [2, "LOAD_CONST", 58, null],
+            [4, "BINARY_ADD", 58, null],
+            [6, "DUP_TOP", 58, null],
+            [8, "STORE_FAST", 58, null],
+            [10, "LOAD_FAST", 58, null],
+            [12, "BINARY_MULTIPLY", 58, null],
+            [14, "RETURN_VALUE", 58, null]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "held_out0.pyc",
+      "sha256": "822d62423ffc1885967bdf3905af9e66e57ff19b36c7143436d37bc9a6769852",
+      "data": "bw0NCgAAAAAA8VNlKwEAAOMAAAAAAAAAAAAAAAAAAAAAAgAAAEAAAABzJAAAAGQAZAGEAFoAZAJkA4QAWgFkBGQFhABaAmQGZAeEAFoDZAhTACkJYwIAAAAAAAAAAAAAAAIAAAABAAAAQwAAAHMMAAAAfACDAG8FfAGDAFMAqQFOqQApAtoFZmlyc3TaBnNlY29uZHICAAAAcgIAAADaC2hlbGRfb3V0LnB52gtjb25kaXRpb25hbAEAAABzAgAAAAwBcgYAAABjAAAAAAAAAAAAAAAAAAAAAAEAAABDAAAAcwQAAABkAVMAKQJOKQRpBwAAAmcAAAAAAAARwHMCAAAAAP91AwAAAOapmXICAAAAcgIAAAByAgAAAHICAAAAcgUAAADaCWNvbnN0YW50cwQAAABzAgAAAAQBcgcAAABjAQAAAAAAAAAAAAAAAQAAAAEAAABDAgAAcwwAAACBAnwAVgABAGQAUwByAQAAAHICAAAAKQHaBXZhbHVlcgIAAAByAgAAAHIFAAAA2gZzdHJlYW0HAAAAcwQAAAACgAoBcgkAAABjAgAAAAAAAAAAAAAAAwAAAAkAAABDAAAAcyQAAAB6C3wAgwB9AlcAfAGgAGQBoQEBAHwCUwB8AaAAZAGhAQEAdwApAk7aBGRvbmUpAdoGYXBwZW5kKQPaBmFjdGlvbtoGcmVjb3Jk2gZyZXN1bHRyAgAAAHICAAAAcgUAAADaB2NsZWFudXAKAAAAcwoAAAACAQgBCgIEAQz/cg8AAABOKQRyBgAAAHIHAAAAcgkAAAByDwAAAHICAAAAcgIAAAByAgAAAHIFAAAA2gg8bW9kdWxlPgEAAABzCAAAAAgACAMIAwwD",
+      "source": "held_out.py",
+      "optimize": 0,
+      "header": "timestamp",
+      "disassembly": [
+        {
+          "name": "<module>",
+          "instructions": [
+            [0, "LOAD_CONST", 1, null],
+            [2, "LOAD_CONST", 1, null],
+            [4, "MAKE_FUNCTION", 1, null],
+            [6, "STORE_NAME", 1, null],
+            [8, "LOAD_CONST", 4, null],
+            [10, "LOAD_CONST", 4, null],
+            [12, "MAKE_FUNCTION", 4, null],
+            [14, "STORE_NAME", 4, null],
+            [16, "LOAD_CONST", 7, null],
+            [18, "LOAD_CONST", 7, null],
+            [20, "MAKE_FUNCTION", 7, null],
+            [22, "STORE_NAME", 7, null],
+            [24, "LOAD_CONST", 10, null],
+            [26, "LOAD_CONST", 10, null],
+            [28, "MAKE_FUNCTION", 10, null],
+            [30, "STORE_NAME", 10, null],
+            [32, "LOAD_CONST", 10, null],
+            [34, "RETURN_VALUE", 10, null]
+          ]
+        },
+        {
+          "name": "conditional",
+          "instructions": [
+            [0, "LOAD_FAST", 2, null],
+            [2, "CALL_FUNCTION", 2, null],
+            [4, "JUMP_IF_FALSE_OR_POP", 2, 10],
+            [6, "LOAD_FAST", 2, null],
+            [8, "CALL_FUNCTION", 2, null],
+            [10, "RETURN_VALUE", 2, null]
+          ]
+        },
+        {
+          "name": "constants",
+          "instructions": [
+            [0, "LOAD_CONST", 5, null],
+            [2, "RETURN_VALUE", 5, null]
+          ]
+        },
+        {
+          "name": "stream",
+          "instructions": [
+            [0, "GEN_START", null, null],
+            [2, "LOAD_FAST", 8, null],
+            [4, "YIELD_VALUE", 8, null],
+            [6, "POP_TOP", 8, null],
+            [8, "LOAD_CONST", 8, null],
+            [10, "RETURN_VALUE", 8, null]
+          ]
+        },
+        {
+          "name": "cleanup",
+          "instructions": [
+            [0, "SETUP_FINALLY", 11, 24],
+            [2, "LOAD_FAST", 12, null],
+            [4, "CALL_FUNCTION", 12, null],
+            [6, "STORE_FAST", 12, null],
+            [8, "POP_BLOCK", 12, null],
+            [10, "LOAD_FAST", 14, null],
+            [12, "LOAD_METHOD", 14, null],
+            [14, "LOAD_CONST", 14, null],
+            [16, "CALL_METHOD", 14, null],
+            [18, "POP_TOP", 14, null],
+            [20, "LOAD_FAST", 15, null],
+            [22, "RETURN_VALUE", 15, null],
+            [24, "LOAD_FAST", 14, null],
+            [26, "LOAD_METHOD", 14, null],
+            [28, "LOAD_CONST", 14, null],
+            [30, "CALL_METHOD", 14, null],
+            [32, "POP_TOP", 14, null],
+            [34, "RERAISE", 14, null]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "optimization1.pyc",
+      "sha256": "b502d7dc593dc5b15cf36b2601db116d65dba0202e30174f7998c6c93ae08742",
+      "data": "bw0NCgEAAAAnWkgaqfOl7uMAAAAAAAAAAAAAAAAAAAAAAgAAAEAAAABzDAAAAGQAZAGEAFoAZAJTACkDYwEAAAAAAAAAAAAAAAEAAAACAAAAQwAAAHMIAAAAZAF8AGYCUwApAnocQSBkb2NzdHJpbmcgYWZmZWN0ZWQgYnkgLU9PLkapACkB2gV2YWx1ZXIBAAAAcgEAAADaD29wdGltaXphdGlvbi5wedoHc2V0dGluZwEAAABzAgAAAAgCcgQAAABOKQFyBAAAAHIBAAAAcgEAAAByAQAAAHIDAAAA2gg8bW9kdWxlPgEAAABzAgAAAAwA",
+      "source": "optimization.py",
+      "optimize": 1,
+      "header": "unchecked_hash",
+      "disassembly": [
+        {
+          "name": "<module>",
+          "instructions": [
+            [0, "LOAD_CONST", 1, null],
+            [2, "LOAD_CONST", 1, null],
+            [4, "MAKE_FUNCTION", 1, null],
+            [6, "STORE_NAME", 1, null],
+            [8, "LOAD_CONST", 1, null],
+            [10, "RETURN_VALUE", 1, null]
+          ]
+        },
+        {
+          "name": "setting",
+          "instructions": [
+            [0, "LOAD_CONST", 3, null],
+            [2, "LOAD_FAST", 3, null],
+            [4, "BUILD_TUPLE", 3, null],
+            [6, "RETURN_VALUE", 3, null]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "optimization2.pyc",
+      "sha256": "8fc2a0c271951a1d5c9e1aa99259624190ace9f03045446557565aa6af0b3c29",
+      "data": "bw0NCgMAAAAnWkgaqfOl7uMAAAAAAAAAAAAAAAAAAAAAAgAAAEAAAABzDAAAAGQAZAGEAFoAZAJTACkDYwEAAAAAAAAAAAAAAAEAAAACAAAAQwAAAHMKAAAACQBkAXwAZgJTACkCTkapACkB2gV2YWx1ZXIBAAAAcgEAAADaD29wdGltaXphdGlvbi5wedoHc2V0dGluZwEAAABzBAAAAAIBCAFyBAAAAE4pAXIEAAAAcgEAAAByAQAAAHIBAAAAcgMAAADaCDxtb2R1bGU+AQAAAHMCAAAADAA=",
+      "source": "optimization.py",
+      "optimize": 2,
+      "header": "checked_hash",
+      "disassembly": [
+        {
+          "name": "<module>",
+          "instructions": [
+            [0, "LOAD_CONST", 1, null],
+            [2, "LOAD_CONST", 1, null],
+            [4, "MAKE_FUNCTION", 1, null],
+            [6, "STORE_NAME", 1, null],
+            [8, "LOAD_CONST", 1, null],
+            [10, "RETURN_VALUE", 1, null]
+          ]
+        },
+        {
+          "name": "setting",
+          "instructions": [
+            [0, "NOP", 2, null],
+            [2, "LOAD_CONST", 3, null],
+            [4, "LOAD_FAST", 3, null],
+            [6, "BUILD_TUPLE", 3, null],
+            [8, "RETURN_VALUE", 3, null]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "owned.so",
+      "sha256": "9baf3e01c4edb251024353ec618c2e08e165f6d3798a58a5a9a894729bfd4f8e",
+      "data": "f0VMRgIBAQAAAAAAAAAAAAEAPgABAAAAAAAAAAAAAAAAAAAAAAAAAMgAAAAAAAAAAAAAAEAAAAAAAEAABAABAMPDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGgAAABIAAgAAAAAAAAAAAAEAAAAAAAAABwAAABIAAgABAAAAAAAAAAEAAAAAAAAAAC50ZXh0AF9fcHl4X293bmVkX21hcmtlcgBQeUluaXRfb3duZWQALnN0cnRhYgAuc3ltdGFiAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJwAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAkAAAAAAAAAA3AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAABAAAABgAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAvAAAAAgAAAAAAAAAAAAAAAAAAAAAAAABIAAAAAAAAAEgAAAAAAAAAAQAAAAEAAAAIAAAAAAAAABgAAAAAAAAA",
+      "producer": "owned x86_64 ELF assembly"
+    },
+    {
+      "name": "members.pyz",
+      "sha256": "44d10ccc80569174a9ebb7dd9033fefacca88d67e108f31878f391b64ef4ef70",
+      "data": "UFlaAG8NDQoAAAF7AAAAAAB4nG1RzUrDQBDe2fy2DULPXr140RcQEbz3UlDwFjKrBtIkbBKLEkGpL+FNj3kLn2OvQl+gNy91Zmu1BAMzk92dme+bbz5F75NkZ2SrA3IoEF7ElUCJDkVAFz2KEn0MKDoYTsXhIJG9eiA75x4RuVYsROG1sBCUC5NOdNJ416muauNXKily1A6lWfe1V8xzhcfJbZrhUXlvRvye1mmRxxl3XXH7CHRIIelT/4V1mToQnJx0bhoQqZtNxvijslzXDaMtu9c/6B1HBcIMCLmq47yu3C2uC5oHSqCHaXHlz7jPshUXdIWbcW3HDox3F2eN6oP4Va1VPAu2pOXTEPSYMXYl5fzBdjZey8OIRX2Ul6KFN5r0HUC0crpzmvPsxsUiVwTux2Wpcuwc+ktYTONrUl4jx6rJ6j6vIMlUnDflkBHZSQhhKF2I1nqfjiSrXYHVwxK21/8KGZ7MCmwydWr3x1WhCJ3QiZxvV3hzLNsCAAAAKQL6C293bmVkLmNoaWxkKQPpAAAAAOkRAAAAaWoBAACpAtoFb3duZWQpA+kDAAAAaXsBAAByAgAAAA==",
+      "producer": "PyInstaller 6.16.0 PYZ"
+    },
+    {
+      "name": "owned.pkg",
+      "sha256": "0c0aa10f40bd632f9614ca564da632bc32de343f87e7bacd10fa3e5cb34a97ce",
+      "data": "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",
+      "producer": "PyInstaller 6.16.0 CArchive"
+    },
+    {
+      "name": "external.pkg",
+      "sha256": "853b2cccd9c0f06c8251a3f41a3582db063920f0c7485dedb8433688cbb63a26",
+      "data": "AAAAMAAAAAAAAAAAAAAAAABkY29tcGFuaW9uOmxpYnJhcnkuYmluAAAAAAAAAAAATUVJDAsKCw4AAACIAAAAAAAAADAAAAE2bGlicHl0aG9uMy4xMC5keWxpYgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "producer": "PyInstaller external dependency"
+    }
+  ]
+}

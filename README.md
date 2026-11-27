@@ -339,6 +339,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | counts | Default C for every loaded function; each body is dropped after it is checked |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimizer |
 | `decompile --devirtualize` | `.c` + optional JSON | Experimental x64 interpreter recovery; requires `--func`; [contract and examples](docs/interpreter-recovery.md) |
+| `python` | `.py` / JSON / native components | [CPython and PyInstaller artifact recovery](docs/python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Lua, LuaJIT and Luau source recovery](docs/lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimental: [Android](docs/android.md), [iOS](docs/ios.md) |
 | `patch` | binary | Rewrite machine code |

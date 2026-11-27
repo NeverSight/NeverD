@@ -8,7 +8,7 @@
 /// through the dialog.
 //===----------------------------------------------------------------------===//
 
-#include "LuaRecoveryDialog.h"
+#include "ScriptRecoveryDialog.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -52,7 +52,7 @@ private slots:
                         .object()["fixtures"]
                         .toArray();
     QVERIFY(!Manifest.isEmpty());
-    LuaRecoveryDialog Dialog(TEST_LUA_WORKER);
+    ScriptRecoveryDialog Dialog(TEST_LUA_WORKER);
     auto *Path = Dialog.findChild<QLineEdit *>("luaPath");
     auto *Profiles = Dialog.findChild<QComboBox *>("luaProfile");
     auto *Prototypes = Dialog.findChild<QComboBox *>("luaPrototypes");
@@ -139,8 +139,8 @@ private slots:
     QString File = Temp.filePath("test.lua");
     QVERIFY(write(File, "return 7\n"));
     for (int I = 0; I < 2; ++I) {
-      QPointer<LuaRecoveryDialog> Dialog =
-          new LuaRecoveryDialog(TEST_LUA_WORKER);
+      QPointer<ScriptRecoveryDialog> Dialog =
+          new ScriptRecoveryDialog(TEST_LUA_WORKER);
       Dialog->show();
       Dialog->findChild<QLineEdit *>("luaPath")->setText(File);
       auto *Run = Dialog->findChild<QPushButton *>("luaRecover");
@@ -149,7 +149,7 @@ private slots:
       Dialog->close();
       QTRY_VERIFY(Dialog.isNull());
     }
-    LuaRecoveryDialog Failed(Temp.filePath("missing-worker"));
+    ScriptRecoveryDialog Failed(Temp.filePath("missing-worker"));
     Failed.findChild<QLineEdit *>("luaPath")->setText(File);
     auto *Status = Failed.findChild<QLabel *>("luaStatus");
     QTRY_VERIFY(Status->text() != tr("Starting analysis worker…") &&

@@ -1,6 +1,6 @@
 **Языки**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
+<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
 
 [← Проект NeverD](project.md)
 
@@ -46,6 +46,7 @@
 | [Процессные плагины GUI (англ.)](../gui-plugins.md) | Менеджер, размещение меню, результаты задач и протокол провайдеров |
 | [Хост процессных плагинов NPH (англ.)](../plugin-host.md) | Общие владельцы, приём задач, протокол и жизненный цикл процессов |
 | [Нативные плагины](plugins.md) | Чистый descriptor ABI C, callbacks и события, сборка/линковка, обнаружение и правила совместимости |
+| [Восстановление артефактов Python](../python-recovery.md) | Версии CPython, компоненты PyInstaller, анализ машинного кода и проверка исходного текста |
 | [Плагины Python](python-plugins.md) | Разработка, API сессий и событий, изоляция, тестирование и публикация |
 | [Обзор поддержки мобильных платформ](mobile.md) | Входы Android / iOS, исходники на выходе, работа CLI и ограничения |
 | [Восстановление Java для Android](android.md) | APK (multidex), DEX, файл или каталог smali → Java. Встроенный нативный движок на C++20, CLI, отчёты JSON, ограничения и проверка |

@@ -1359,6 +1359,14 @@
         <source>Recover a Lua artifact and inspect its prototypes</source>
         <translation>Восстановить код Lua и изучить прототипы функций</translation>
     </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Просмотреть код Python и компоненты пакета</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Восстановить исходный код Python…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11321,7 +11329,7 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
-    <name>neverd::gui::LuaRecoveryDialog</name>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
         <translation>Восстановить исходный код Lua</translation>
@@ -11445,6 +11453,62 @@ Your previous graph is still available.</source>
     <message>
         <source>Original line %1</source>
         <translation>Исходная строка %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>Компонент</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>Точки входа скриптов</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>Экспорт нативного компонента…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Папка…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Функция</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>Функция %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>Нативный компонент экспортирован.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>Открыть папку PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Открыть артефакт Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>Открыть в анализаторе машинного кода…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>Этот рабочий процесс не поддерживает восстановление исходного кода Python.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Исходный код Python (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Восстановить исходный код Python</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>Сохранить нативный компонент в новый файл</translation>
     </message>
 </context>
 </TS>

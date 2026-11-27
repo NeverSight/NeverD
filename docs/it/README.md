@@ -1,6 +1,6 @@
 **Lingue**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
+<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
 
 [← Progetto NeverD](project.md)
 
@@ -46,6 +46,7 @@ Le guide inglesi sono direttamente in `docs/`. Le traduzioni sono raggruppate in
 | [Plugin di processo GUI (inglese)](../gui-plugins.md) | Gestore, posizione nei menu, risultati e protocollo dei fornitori |
 | [Host NPH per plugin di processo (inglese)](../plugin-host.md) | Proprietari condivisi, ammissione attività, protocollo e durata dei processi |
 | [Plugin nativi](plugins.md) | ABI del descrittore C puro, callback ed eventi, flusso di build/link, rilevamento e regole di compatibilità |
+| [Recupero degli artefatti Python](../python-recovery.md) | Versioni di CPython, componenti PyInstaller, analisi nativa e convalida del sorgente |
 | [Plugin Python](python-plugins.md) | Sviluppo, API di sessione ed eventi, isolamento, test e pubblicazione |
 | [Panoramica mobile](mobile.md) | CLI sperimentale Android/iOS, input, output, report e limiti |
 | [Ricostruzione Java per Android](android.md) | APK (incluso multidex), DEX, file/directory smali → Java; CLI, report JSON, risoluzione dei problemi, limiti e verifica |

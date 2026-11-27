@@ -1359,6 +1359,14 @@
         <source>Recover a Lua artifact and inspect its prototypes</source>
         <translation>استعادة مصدر Lua وفحص النماذج الأولية للدوال</translation>
     </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>فحص شيفرة Python ومكوّنات الحزمة</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>استعادة شيفرة Python المصدرية…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11429,7 +11437,7 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
-    <name>neverd::gui::LuaRecoveryDialog</name>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
         <translation>استعادة مصدر Lua</translation>
@@ -11553,6 +11561,62 @@ Your previous graph is still available.</source>
     <message>
         <source>Original line %1</source>
         <translation>السطر الأصلي %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>المكوّن</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>برامج بدء التشغيل</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>جارٍ تصدير المكوّن الأصلي…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>مجلد…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>دالة</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>الدالة %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>تم تصدير المكوّن الأصلي.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>فتح مجلد PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>فتح ملف Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>فتح في محلل الشيفرة الأصلية…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>استعادة شيفرة Python غير متاحة في هذه العملية.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>شيفرة Python المصدرية (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>استعادة شيفرة Python المصدرية</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>حفظ المكوّن الأصلي في ملف جديد</translation>
     </message>
 </context>
 </TS>

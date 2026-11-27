@@ -151,6 +151,22 @@ cl::SubCommand PatchBytesCmd("patch-bytes",
                              "Preview, apply, revert and export byte patches");
 cl::SubCommand PatchCmd("patch", "Patch binary with modified IR");
 cl::SubCommand InfoCmd("info", "Show binary metadata summary");
+cl::SubCommand PythonCmd("python",
+                         "Recover Python source, bytecode and packages");
+cl::opt<std::string> PythonProfile(
+    "profile",
+    cl::desc("Python profile (auto, cpython-3.10, cpython-3.11 or renpy)"),
+    cl::init("auto"), cl::sub(PythonCmd));
+cl::opt<unsigned> PythonFunction("function",
+                                 cl::desc("Export one recovered function ID"),
+                                 cl::sub(PythonCmd));
+cl::opt<unsigned> PythonComponent("component",
+                                  cl::desc("Recover a package component ID"),
+                                  cl::sub(PythonCmd));
+cl::opt<unsigned> PythonNative("native",
+                               cl::desc("Export a native component to -o and "
+                                        "analyze it with the native loader"),
+                               cl::sub(PythonCmd));
 cl::SubCommand LuaCmd("lua", "Recover Lua-family source and bytecode");
 cl::opt<std::string>
     LuaProfile("profile",
@@ -304,7 +320,7 @@ cl::SubCommand TranslateObjectCmd(
 cl::opt<std::string> InputFile(
     cl::Positional, cl::desc("<binary>"), cl::Required, cl::sub(PatchBytesCmd),
     cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
-    cl::sub(InfoCmd), cl::sub(LuaCmd), cl::sub(IdentifyCmd),
+    cl::sub(InfoCmd), cl::sub(LuaCmd), cl::sub(PythonCmd), cl::sub(IdentifyCmd),
     cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
     cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
     cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
@@ -317,12 +333,13 @@ cl::opt<std::string> InputFile(
     cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd),
     cl::sub(MobileCmd), cl::sub(AnalysisSectionsCmd));
 
-cl::opt<std::string> OutputFile("o", cl::sub(LuaCmd), cl::desc("Output file"),
-                                cl::init(""), cl::sub(PatchBytesCmd),
-                                cl::sub(LiftCmd), cl::sub(DecompileCmd),
-                                cl::sub(PatchCmd), cl::sub(AuditCmd),
-                                cl::sub(HuntCmd), cl::sub(ScanCmd),
-                                cl::sub(MobileCmd), cl::sub(TypesCmd));
+cl::opt<std::string> OutputFile("o", cl::sub(LuaCmd), cl::sub(PythonCmd),
+                                cl::desc("Output file"), cl::init(""),
+                                cl::sub(PatchBytesCmd), cl::sub(LiftCmd),
+                                cl::sub(DecompileCmd), cl::sub(PatchCmd),
+                                cl::sub(AuditCmd), cl::sub(HuntCmd),
+                                cl::sub(ScanCmd), cl::sub(MobileCmd),
+                                cl::sub(TypesCmd));
 
 cl::opt<bool>
     Verbose("v", cl::desc("Verbose output"), cl::sub(LiftCmd),
@@ -1525,18 +1542,19 @@ cl::opt<std::string>
 
 cl::opt<bool> JsonOutput(
     "json", cl::desc("Output as JSON"), cl::sub(InfoCmd), cl::sub(LuaCmd),
-    cl::sub(IdentifyCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
-    cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(StringsCmd), cl::sub(XrefsCmd),
-    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(ImportsCmd),
-    cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(PluginsCmd),
-    cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
-    cl::sub(RenameCmd), cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
-    cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
-    cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
-    cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd), cl::sub(DashboardCmd),
-    cl::sub(SigsCmd), cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd),
-    cl::sub(MobileCmd), cl::sub(DecompileCmd), cl::sub(TypesCmd),
-    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(AnalysisSectionsCmd));
+    cl::sub(PythonCmd), cl::sub(IdentifyCmd), cl::sub(FuncsCmd),
+    cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(StringsCmd),
+    cl::sub(XrefsCmd), cl::sub(PathsCmd), cl::sub(CallTreeCmd),
+    cl::sub(ImportsCmd), cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
+    cl::sub(PluginsCmd), cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
+    cl::sub(CallGraphCmd), cl::sub(RenameCmd), cl::sub(FunctionEditsCmd),
+    cl::sub(ItemsCmd), cl::sub(OperandsCmd), cl::sub(SearchCmd),
+    cl::sub(SectionsCmd), cl::sub(SymbolsCmd), cl::sub(RelocsCmd),
+    cl::sub(HeadersCmd), cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
+    cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(AuditCmd),
+    cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(MobileCmd),
+    cl::sub(DecompileCmd), cl::sub(TypesCmd), cl::sub(PathsCmd),
+    cl::sub(CallTreeCmd), cl::sub(AnalysisSectionsCmd));
 
 //===----------------------------------------------------------------------===//
 // Plugins-specific options

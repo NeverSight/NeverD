@@ -1359,6 +1359,14 @@
         <source>Recover a Lua artifact and inspect its prototypes</source>
         <translation>Ricostruisci un file Lua e analizza i suoi prototipi</translation>
     </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Esamina il codice Python e i componenti del pacchetto</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Recupera il sorgente Python…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11285,7 +11293,7 @@ Il grafo precedente è ancora disponibile.</translation>
     </message>
 </context>
 <context>
-    <name>neverd::gui::LuaRecoveryDialog</name>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
         <translation>Ricostruisci sorgente Lua</translation>
@@ -11409,6 +11417,62 @@ Il grafo precedente è ancora disponibile.</translation>
     <message>
         <source>Original line %1</source>
         <translation>Riga originale %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>Componente</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>Script di avvio</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>Esportazione del componente nativo…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Cartella…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Funzione</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>Funzione %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>Componente nativo esportato.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>Apri cartella PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Apri artefatto Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>Apri nell’analisi nativa…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>Il recupero del sorgente Python non è disponibile in questo processo.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Sorgente Python (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Recupera il sorgente Python</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>Salva il componente nativo in un nuovo file</translation>
     </message>
 </context>
 </TS>

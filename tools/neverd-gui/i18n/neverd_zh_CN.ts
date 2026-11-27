@@ -1359,6 +1359,14 @@
         <source>Recover a Lua artifact and inspect its prototypes</source>
         <translation>恢复 Lua 源码并检查函数原型</translation>
     </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>检查 Python 代码和包组件</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>恢复 Python 源码…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11249,7 +11257,7 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
-    <name>neverd::gui::LuaRecoveryDialog</name>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
         <translation>恢复 Lua 源码</translation>
@@ -11373,6 +11381,62 @@ Your previous graph is still available.</source>
     <message>
         <source>Original line %1</source>
         <translation>原始行号 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>组件</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>入口脚本</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>正在导出原生组件…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>文件夹…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>函数</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>函数 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>原生组件已导出。</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>打开 PyInstaller 文件夹</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>打开 Python 文件</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>在原生分析中打开…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>此工作进程不支持 Python 源码恢复。</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python 源码 (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>恢复 Python 源码</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>将原生组件保存到新文件</translation>
     </message>
 </context>
 </TS>
