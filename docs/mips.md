@@ -187,6 +187,8 @@ the last two manifest fields are optional. The function must fit its original
 range at the same virtual address and file offset. The program entry, load
 segments and all loaded bytes outside that range must match the original.
 Both modes check the target ABI before publishing the executable atomically.
+The loader validates the MIPS ELF tables and mappings. The relinker locates
+the named function directly in the symbol table.
 The entry address in each ELF must point to file-backed bytes in a
 `PT_LOAD` segment with `PF_X`. Bit zero selects the entry ISA mode.
 A read-only startup segment without execute permission or a `NOLOAD`

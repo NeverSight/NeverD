@@ -42,6 +42,7 @@ class MIPSLoader : public ::testing::TestWithParam<Arch> {};
 TEST_P(MIPSLoader, MapsLinkedImageAndReadsTargetOrderPointers) {
   ELFBytes File(GetParam());
   ELFLoader Loader;
+  EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())), "");
   auto Image = Loader.loadBuffer(File.buffer());
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   EXPECT_EQ(Image->Arch, GetParam());
@@ -79,6 +80,7 @@ TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
     ELFLoader::identify(File.buffer(), Rows);
     ASSERT_EQ(Rows.size(), 1u);
     ASSERT_TRUE(Rows[0].Loadable) << Rows[0].Reason;
+    EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())), "");
     auto Image = Loader.loadBuffer(File.buffer());
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
     const Arch A = Little ? Arch::MIPS64N32EL : Arch::MIPS64N32;
@@ -89,7 +91,8 @@ TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
     File.Bytes[0xe4] = 1;
     auto Invalid = Loader.loadBuffer(File.buffer());
     ASSERT_FALSE(bool(Invalid));
-    llvm::consumeError(Invalid.takeError());
+    EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())),
+              llvm::toString(Invalid.takeError()));
   }
 }
 
@@ -660,8 +663,9 @@ TEST_P(MIPSLoader, GlobalGOTSuffixBindsImportsWithoutPerCellRelocations) {
   File.put(0x180 + 15 * (File.Is64 ? 8 : 4), 3, File.Is64 ? 8 : 4);
   auto Invalid = Loader.loadBuffer(File.buffer());
   ASSERT_FALSE(bool(Invalid));
-  EXPECT_NE(llvm::toString(Invalid.takeError()).find("inconsistent"),
-            std::string::npos);
+  const auto Message = llvm::toString(Invalid.takeError());
+  EXPECT_NE(Message.find("inconsistent"), std::string::npos);
+  EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())), Message);
 }
 
 TEST_P(MIPSLoader, Packed64RelocationsAreRejectedExplicitly) {
@@ -764,6 +768,7 @@ TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
     ASSERT_FALSE(bool(Image));
     const std::string Error = llvm::toString(Image.takeError());
     EXPECT_NE(Error.find(Expected.str()), std::string::npos) << Error;
+    EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())), Error);
     std::vector<LoadCandidate> Rows;
     ELFLoader::identify(File.buffer(), Rows);
     ASSERT_EQ(Rows.size(), 1u);

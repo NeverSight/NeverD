@@ -390,8 +390,8 @@ Error relink(StringRef Output) {
   if (!Input)
     return Input.takeError();
   // Apply the same structural and ISA/ABI checks as an ordinary ELF load.
-  if (auto Image = ELFLoader().loadBuffer((*Input)->getMemBufferRef()); !Image)
-    return createFileError(InputFile, Image.takeError());
+  if (Error E = ELFLoader().validateBuffer((*Input)->getMemBufferRef()))
+    return createFileError(InputFile, std::move(E));
   auto Old = inspect(**Input, M->Function);
   if (!Old)
     return createFileError(InputFile, Old.takeError());
