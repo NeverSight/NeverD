@@ -647,6 +647,52 @@ TEST(RegistrationCRTFrame, XCPT4StartupClockHelperKeepsItsPrivateOutputs) {
   EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
 }
 
+TEST(RegistrationCRTFrame, XCPT4StartupCookieWritesLeaveTheImportTableIntact) {
+  struct Storage {
+    va_t OverlappingSlot = 0;
+    uint32_t ExtraFlags = 0;
+  };
+  const Storage Cases[] = {{},
+                           {0x40b1b5},
+                           {0x40b1b9},
+                           {0, llvm::COFF::IMAGE_SCN_MEM_DISCARDABLE},
+                           {0, llvm::COFF::IMAGE_SCN_MEM_SHARED}};
+  for (bool Selected : {false, true}) {
+    auto Original = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    for (const auto &Case : Cases) {
+      SCOPED_TRACE(::testing::Message()
+                   << Selected << ' ' << Case.OverlappingSlot << ' '
+                   << Case.ExtraFlags);
+      auto Image = *Original;
+      if (Case.OverlappingSlot) {
+        ASSERT_FALSE(Image.Imports.empty());
+        auto Binding = Image.Imports.front();
+        Binding.IATAddr = Case.OverlappingSlot;
+        Image.Imports.push_back(std::move(Binding));
+      }
+      if (Case.ExtraFlags) {
+        const auto *Owner = Image.getSectionFor(0x40b1b8);
+        ASSERT_TRUE(Owner);
+        Image.Sections[Owner - Image.Sections.data()].Type |= Case.ExtraFlags;
+      }
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Callees(Image, &Work);
+      const auto Cookie = Callees.stackContract(0x407213);
+      if (Case.OverlappingSlot || Case.ExtraFlags) {
+        EXPECT_FALSE(Cookie && Cookie->PreservesImportBindings);
+        continue;
+      }
+      ASSERT_TRUE(Cookie);
+      EXPECT_EQ(Cookie->StackPopBytes, 0u);
+      EXPECT_TRUE(Cookie->PreservesImportBindings);
+      EXPECT_EQ(Cookie->RequiredImports,
+                (std::vector<va_t>{0x408024, 0x408028, 0x40802c, 0x408030}));
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4MainArgumentCallsBindTheirRuntimeSlots) {
   using namespace registration_state;
   auto Image = loadXCPT4(true);
