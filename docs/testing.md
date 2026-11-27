@@ -16173,6 +16173,17 @@ in a live frame, and after an `svc`.
 the `__release_weak` shape through HighC, LLVM-C and unoptimized LLVM-C: none
 keeps the unresolved-branch trap, each calls through the loaded vtable slot,
 and the HighC compiles for AArch64.
+`X64IndirectTailFrame.RestoredStackPointerKeepsTheTailCall` links and strips
+x86-64 jumps that leave RSP at its incoming value (nothing pushed, pops,
+LEAVE after a realignment, an added-back frame, `lea -8(%rbp), %rsp`, a
+balanced diamond and loop) or at nothing derived from it (a fiber switch to an
+argument's stack, RSP loaded from memory): each becomes `INDIR_CALL + RETURN`.
+`LiveOrUnknownStackPointerKeepsTheBranch` keeps the indirect branch inside a
+live frame, through an unbounded relative table inside one, after a push on
+one of two paths, after an unrestored realignment or a register adjustment,
+after LEAVE reads an RBP a call result moved, and after a pushing loop.
+`LazyBindingResolverJumpKeepsTheTailCall` keeps the library's PLT0 jump to
+the lazy-binding resolver a tail call after its push.
 `LowIntrinsicMemoryOperands.DecodeOnlyTheLiftedShapes` rejects width, ordering
 and segment mismatches and intrinsics without a memory contract.
 

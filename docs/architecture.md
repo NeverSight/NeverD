@@ -12541,6 +12541,29 @@ identity or source ABI. Successful classification emits an explicit
 successorless `INDIR_BR`. An unresolved transfer without a usable switch
 remains an explicit failure path.
 
+An x86-64 candidate has no link register to restore: its caller's CALL left
+the return address on the stack, so `restoredX64IndirectTailFrames`
+(`X86/IndirectTailFrameX86.cpp`) requires every reaching path to leave RSP at
+its incoming value. The proof follows what each register and temporary
+derives from the incoming RSP: pushes, pops, constant adjustments, LEAVE and
+copies through RBP or a temporary carry an exact offset, and any other
+operation of a derived value, a partial or guarded write and a disagreeing
+join keep the derivation and lose the offset. A call keeps RSP and the
+registers both x86-64 conventions preserve. Landing pads and other roots
+enter at an unknown offset. An unknown or nonzero offset keeps the indirect
+branch. A value read from memory, an argument or a call's result derives
+from nothing here, so a jump whose RSP derives from nothing on every path
+resumes saved state on another stack, as `gogo<>`, longjmp and a fiber switch
+do, and stays a tail call, as does PLT0's jump through the DT_PLTGOT slot the
+dynamic linker fills with its lazy-binding resolver
+(`RuntimeCallablePointerSlotKind::ELFLazyResolver`), which receives the word
+PLT0 pushes. Before the condition, a jump inside its frame through a
+relative table the resolver could not bound became a call of its case labels
+in a stripped library, which no relocation names the table in: liblzma's
+encoder, libjq, gawk, sqlite3Parser and bash each had one. A frameless
+function's unresolved local dispatch still depends on the resolver's table
+identity.
+
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
 `lib/sdk/SessionImpl.h`; `neverd_session_load` selects a loader and builds a

@@ -5007,8 +5007,8 @@ TEST_F(JTE_X86_64, ByteComparedOnEachEntryPathBoundsAJoinedDomain) {
   EXPECT_EQ(Joined.JumpTables.front().Targets, Expected);
   EXPECT_TRUE(Joined.UnsafeIndirectBranchAddresses.empty());
 
-  for (const char *Name : {"jt_lane_paths_sext", "jt_lane_paths_open",
-                           "jt_lane_paths_signed"}) {
+  for (const char *Name :
+       {"jt_lane_paths_sext", "jt_lane_paths_open", "jt_lane_paths_signed"}) {
     SCOPED_TRACE(Name);
     const neverd::LowFunc Refused = Build(Name);
     EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
@@ -10239,7 +10239,6 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsPrescaledBackedgeWidening) {
   bool SawMask56 = false;
   bool SawLiteral120 = false;
   const neverd::LowBlock *Dispatch = nullptr;
-  neverd::va_t DispatchAddr = neverd::InvalidVA;
   for (const neverd::LowBlock &Block : Low.Blocks)
     for (const neverd::LowOp &Op : Block.Ops) {
       if (Op.Opcode == neverd::NdOp::INT_AND)
@@ -10251,7 +10250,6 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsPrescaledBackedgeWidening) {
         ASSERT_EQ(Dispatch, nullptr)
             << "the fixture must contain one indirect dispatch";
         Dispatch = &Block;
-        DispatchAddr = Op.Addr;
       }
     }
   ASSERT_TRUE(SawMask56)
@@ -10259,13 +10257,12 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsPrescaledBackedgeWidening) {
   ASSERT_TRUE(SawLiteral120)
       << "case seven must expose the widened pre-scaled selector";
   EXPECT_TRUE(Low.JumpTables.empty());
-  if (Dispatch) {
-    EXPECT_TRUE(Dispatch->Succs.empty());
-    EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
-  } else {
-    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::RETURN));
-  }
+  // The table holds this function's own labels, and case seven enters the
+  // dispatch from a label no proof follows, so the jump is no tail call: no
+  // table proves its successors.
+  ASSERT_NE(Dispatch, nullptr);
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
 }
 
 TEST_F(JTE_X86_64,
@@ -11560,11 +11557,15 @@ TEST_F(JTE_X86_64, RegisterABIMemcpyRejectsCdeclStackDecoys) {
   neverd::LowFunc Low = buildNamedLowFunction(
       *ImageOrErr, "jt_stack_memcpy_register_abi_cdecl_decoys");
 
-  EXPECT_TRUE(Low.JumpTables.empty());
-  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR))
-      << "cdecl-shaped decoys must not promote a register-ABI tail transfer "
-         "to a local-table candidate";
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "cdecl-shaped decoys must not promote the jump to a local-table "
+         "candidate";
+  // The copied table holds this function's own labels and the frame is live
+  // at the jump, so it is no tail call: the labels its value can name are
+  // dispatched by value.
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Low.ValueDispatches.size(), 1u);
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
