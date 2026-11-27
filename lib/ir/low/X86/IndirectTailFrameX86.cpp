@@ -14,6 +14,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <cstring>
@@ -206,14 +207,14 @@ class X64TailFrameGuard {
       for (unsigned I = 0; I < 2; ++I) {
         const auto Amount = constantOf(Op.Inputs[1 - I]);
         if (Inputs[I].Offset && Amount &&
-            !__builtin_add_overflow(*Inputs[I].Offset, *Amount, &Sum))
+            !llvm::AddOverflow(*Inputs[I].Offset, *Amount, Sum))
           return {true, Sum};
       }
     if (Op.Output.Size == 8 && Op.NumInputs == 2 &&
         Op.Opcode == NdOp::INT_SUB) {
       const auto Amount = constantOf(Op.Inputs[1]);
       if (Inputs[0].Offset && Amount &&
-          !__builtin_sub_overflow(*Inputs[0].Offset, *Amount, &Sum))
+          !llvm::SubOverflow(*Inputs[0].Offset, *Amount, Sum))
         return {true, Sum};
     }
     return {true, std::nullopt};
