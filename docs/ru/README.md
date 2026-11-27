@@ -1,6 +1,6 @@
 **Языки**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← Проект NeverD](project.md)
 
@@ -46,6 +46,7 @@
 | [Процессные плагины GUI (англ.)](../gui-plugins.md) | Менеджер, размещение меню, результаты задач и протокол провайдеров |
 | [Хост процессных плагинов NPH (англ.)](../plugin-host.md) | Общие владельцы, приём задач, протокол и жизненный цикл процессов |
 | [Нативные плагины](plugins.md) | Чистый descriptor ABI C, callbacks и события, сборка/линковка, обнаружение и правила совместимости |
+| [Восстановление артефактов Java](../jvm-recovery.md) | Версии файлов классов JVM, выбор вариантов в JAR, типизированное IR и восстановление методов Java |
 | [Восстановление артефактов Python](../python-recovery.md) | Версии CPython, компоненты PyInstaller, анализ машинного кода и проверка исходного текста |
 | [Плагины Python](python-plugins.md) | Разработка, API сессий и событий, изоляция, тестирование и публикация |
 | [Обзор поддержки мобильных платформ](mobile.md) | Входы Android / iOS, исходники на выходе, работа CLI и ограничения |

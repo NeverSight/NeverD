@@ -4,9 +4,6 @@ add_neverd_component_library(NeverDWeb
   packages/PackageReader.cpp
   packages/PackageDiff.cpp
   packages/PackageArchive.cpp
-  archives/PathIndex.cpp
-  archives/Zip.cpp
-  archives/ZipPayload.cpp
   packages/PackageIntegrity.cpp
   packages/SHA512.cpp
   packages/evidence/Descriptor.cpp
@@ -100,7 +97,6 @@ add_neverd_component_library(NeverDWeb
   SessionElectronIPC.cpp
   SessionElectronEntries.cpp
   PathPolicy.cpp
-  BlobStore.cpp
   Bun.cpp
   BunContainer.cpp
   sea/Blob.cpp
@@ -137,13 +133,10 @@ add_neverd_component_library(NeverDWeb
   features/Publication.cpp
   SessionAnchor.cpp
   SessionNative.cpp
+  LINK_COMPONENTS Zip
   LLVM_COMPONENTS Support
 )
 include("${CMAKE_SOURCE_DIR}/cmake/NeverDWebURL.cmake")
-if(WIN32)
-  target_sources(NeverDWeb PRIVATE platform/WindowsFile.cpp)
-  target_link_libraries(NeverDWeb PRIVATE advapi32 bcrypt)
-endif()
 include("${CMAKE_SOURCE_DIR}/cmake/NeverDWebBrotli.cmake")
 neverd_add_web_brotli()
 include(${CMAKE_SOURCE_DIR}/cmake/NeverDZlib.cmake)

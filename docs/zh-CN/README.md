@@ -1,6 +1,6 @@
 **语言**: [English](../README.md) | [简体中文](README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← NeverD 项目](project.md)
 
@@ -46,6 +46,7 @@
 | [GUI 进程插件（英文）](../gui-plugins.md) | 管理器、菜单位置、任务结果和进程提供程序协议 |
 | [NPH 进程插件宿主（英文）](../plugin-host.md) | 共享所有权、任务准入、协议和进程生命周期 |
 | [原生插件](plugins.md) | 纯 C 描述符 ABI、回调与事件、构建/链接流程、发现顺序及兼容性规则 |
+| [Java 产物恢复](../jvm-recovery.md) | JVM class 文件版本、JAR 版本选择、带类型的 IR 与逐方法 Java 恢复 |
 | [Python 产物恢复](../python-recovery.md) | CPython 版本支持、PyInstaller 组件、原生分析和源码验证 |
 | [Python 插件](python-plugins.md) | 插件编写、会话与事件 API、隔离、测试及发布 |
 | [移动端总览](mobile.md) | Android 与 iOS 支持范围、输入输出格式、快速开始及各平台指南入口 |

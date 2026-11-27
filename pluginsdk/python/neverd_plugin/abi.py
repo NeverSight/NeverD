@@ -1256,6 +1256,12 @@ _declare("neverd_session_load", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_session_load_cancellable", "int",
          ["neverd_session_t", "const char *", "neverd_cancel_probe_fn", "void *"])
 _declare(
+    "neverd_jvm_recover_json_v1",
+    "const char *",
+    ["const char *", "const char *", "neverd_cancel_probe_fn", "void *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_python_recover_json_v1",
     "const char *",
     ["const char *", "const char *", "int", "neverd_cancel_probe_fn", "void *"],

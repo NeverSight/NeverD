@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>Inspeccionar clases JVM y archivos JAR…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Inspeccionar el bytecode Java, la representación intermedia tipada y los métodos reconstruidos</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>Análisis de seguridad de memoria...</translation>
     </message>
@@ -11290,6 +11298,109 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2 (%3 examinados, %4 omitidos, %5 sin conclusión)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>Inspeccionar clases JVM y archivos JAR</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Examinar…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>Artefacto</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>Entradas base del JAR</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>Activar funciones de vista previa</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>Entorno de ejecución</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>Dependencias locales…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Limpiar</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Dependencias</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>Clase o miembro</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Método</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>Inspeccionar inventario</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>Analizar selección</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Cancelar</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Código fuente Java</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>Bytecode</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>Representación intermedia tipada</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidencia</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Correspondencias de bytecode</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>Copiar vista</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>Exportar vista…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Exportar informe…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>Abrir artefacto JVM</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>Vista del entorno seleccionado</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>Todos los métodos</translation>
     </message>
 </context>
 <context>

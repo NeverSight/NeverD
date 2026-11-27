@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>Исследовать классы JVM и JAR-файлы…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Исследовать байт-код Java, типизированное промежуточное представление и восстановленные методы</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>Проверка безопасности памяти...</translation>
     </message>
@@ -11326,6 +11334,109 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2 (проверено %3, пропущено %4, без заключения %5)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>Исследовать классы JVM и JAR-файлы</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>Артефакт</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>Базовые записи JAR</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>Включить предварительные возможности</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>Среда выполнения</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>Локальные зависимости…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Очистить</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Зависимости</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>Класс или элемент</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Метод</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>Показать состав</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>Анализировать выбранное</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Исходный код Java</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>Байт-код</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>Типизированное промежуточное представление</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Сведения</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Соответствия байт-кода</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>Копировать представление</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>Экспортировать представление…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Экспортировать отчёт…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>Открыть артефакт JVM</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>Представление выбранной среды</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>Все методы</translation>
     </message>
 </context>
 <context>

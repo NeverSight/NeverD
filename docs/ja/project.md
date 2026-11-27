@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: db03bee82e3870d4eb292f41490c55212e8b3be7e212005b253a78c7a0b43d46 -->
+<!-- i18n-source: 21284b2f875981795182bc036debd072bfd230dcd4c3ad06d1a35ee39e586e38 -->
 
 <div align="center">
 
@@ -304,6 +304,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 件数 | 読み込まれた各関数を既定の C 経路で処理し、確認後に関数本体を破棄 |
 | `decompile -llvm` | `.c` | LLVM IR + 最適化経由 |
 | `decompile --devirtualize` | `.c` + 任意の JSON | 実験的な x64 インタープリター復元。`--func` が必須。[契約と例](interpreter-recovery.md) |
+| `java` | Java / JVM IR / バイトコード / JSON | [クラスファイルとマルチリリース JAR](../jvm-recovery.md) |
 | `python` | `.py` / JSON / ネイティブ構成要素 | [CPython と PyInstaller の成果物の復元](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT、Luau のソース復元](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 実験的: [Android](android.md), [iOS](ios.md) |

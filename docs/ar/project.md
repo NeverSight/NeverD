@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: db03bee82e3870d4eb292f41490c55212e8b3be7e212005b253a78c7a0b43d46 -->
+<!-- i18n-source: 21284b2f875981795182bc036debd072bfd230dcd4c3ad06d1a35ee39e586e38 -->
 
 <div align="center" dir="rtl">
 
@@ -304,6 +304,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | أعداد | C الافتراضي لكل دالة محمّلة؛ يُحرّر جسم كل دالة بعد التحقق منه |
 | `decompile -llvm` | `.c` | عبر LLVM IR + المحسّن |
 | `decompile --devirtualize` | `.c` + JSON اختياري | استعادة تجريبية لمفسّرات x64؛ تتطلب `--func`؛ [العقد والأمثلة](interpreter-recovery.md) |
+| `java` | Java / تمثيل JVM الوسيط / البايت كود / JSON | [ملفات class وأرشيفات JAR متعددة الإصدارات](../jvm-recovery.md) |
 | `python` | `.py` / JSON / مكوّنات أصلية | [استعادة ملفات CPython وPyInstaller](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [استعادة مصادر Lua وLuaJIT وLuau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | تجريبي: [Android](android.md), [iOS](ios.md) |

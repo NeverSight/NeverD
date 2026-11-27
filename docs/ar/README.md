@@ -1,6 +1,6 @@
 **اللغات**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](README.md)
 
-<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← مشروع NeverD](project.md)
 
@@ -46,6 +46,7 @@
 | [إضافات العمليات للواجهة (بالإنجليزية)](../gui-plugins.md) | المدير ومواضع القوائم ونتائج المهام وبروتوكول الموفّرين |
 | [مضيف إضافات العمليات NPH (بالإنجليزية)](../plugin-host.md) | الملكية المشتركة وقبول المهام والبروتوكول وعمر العمليات |
 | [الإضافات الأصلية](plugins.md) | ABI واصف بلغة C الخالصة، والاستدعاءات والأحداث، ومسار البناء/الربط، والاكتشاف، وقواعد التوافق |
+| [استعادة ملفات Java](../jvm-recovery.md) | إصدارات ملفات JVM class واختيار JAR والتمثيل الوسيط المنمّط واستعادة طرق Java |
 | [استعادة ملفات Python](../python-recovery.md) | إصدارات CPython ومكوّنات PyInstaller وتحليل الشيفرة الأصلية والتحقق من الشيفرة المصدرية |
 | [إضافات Python](python-plugins.md) | تأليف الإضافات، وواجهة الجلسة والأحداث، والعزل، والاختبارات، والنشر |
 | [نظرة عامة على mobile](mobile.md) | واجهة سطر الأوامر التجريبية لـAndroid وiOS، والمدخلات والمخرجات والتقارير والقيود |

@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: db03bee82e3870d4eb292f41490c55212e8b3be7e212005b253a78c7a0b43d46 -->
+<!-- i18n-source: 21284b2f875981795182bc036debd072bfd230dcd4c3ad06d1a35ee39e586e38 -->
 
 <div align="center">
 
@@ -304,6 +304,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 집계 | 로드된 모든 함수를 기본 C 경로로 처리하고 검사 후 각 함수 본문을 해제 |
 | `decompile -llvm` | `.c` | LLVM IR + 최적화 경로 |
 | `decompile --devirtualize` | `.c` + 선택적 JSON | 실험적 x64 인터프리터 복원. `--func` 필수. [계약과 예제](interpreter-recovery.md) |
+| `java` | Java / JVM IR / 바이트코드 / JSON | [클래스 파일 및 다중 릴리스 JAR](../jvm-recovery.md) |
 | `python` | `.py` / JSON / 네이티브 구성 요소 | [CPython 및 PyInstaller 산출물 복원](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Lua, LuaJIT 및 Luau 소스 복원](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 실험적: [Android](android.md), [iOS](ios.md) |

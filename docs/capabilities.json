@@ -5486,6 +5486,114 @@
       }
     },
     {
+      "id": "jvm.source-recovery",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "bytecode",
+      "targets": [
+        "JVM class-file majors 45 through 71, including short early Code records",
+        "Base and explicitly selected multi-release JAR views",
+        "Kotlin metadata observations independent of Java bytecode"
+      ],
+      "docs": [
+        "docs/jvm-recovery.md"
+      ],
+      "limitations": [
+        "Issue #1035. Java reconstruction is a per-method subset. Unproven regions retain bytecode and diagnostics.",
+        "Dependencies use explicit ordered local inputs. Dynamic linkage, reflection and JNI bindings remain symbolic."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.CompilerVersionsInstructionsAndExceptionRanges",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.SelectionPreviewAndJobLimits",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.SyntheticCodeTypesSwitchesAndOpaqueRecords",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.PhysicalJarMembersAndExplicitRuntimeSelection",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.OrderedLocalHierarchyAndContentCache",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.BootstrapMetadataAndNativeRelations",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_jvm_recover_json_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd java",
+          "neverd java --json",
+          "neverd java --inventory",
+          "neverd java --release",
+          "neverd java --enable-preview",
+          "neverd java --class",
+          "neverd java --method",
+          "neverd java --component",
+          "neverd java --dependency",
+          "neverd java --view",
+          "neverd java --o"
+        ],
+        "json": [
+          "neverd_jvm_recover_json_v1"
+        ]
+      }
+    },
+    {
       "id": "lua.source-recovery",
       "kind": "analysis",
       "status": "experimental",

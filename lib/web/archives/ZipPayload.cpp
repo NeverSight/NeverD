@@ -33,10 +33,13 @@ bool packageZipDeflateAvailable() {
 }
 
 void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
-                     uint32_t ExpectedCRC, BlobStore &Store, uint64_t &Steps) {
+                     uint32_t ExpectedCRC, BlobStore &Store, uint64_t &Steps,
+                     llvm::function_ref<bool()> Stop) {
   uint64_t Read = 0, Produced = 0;
   uint32_t CRC = 0;
   const auto Step = [&] {
+    if (Stop && Stop())
+      throw Error("cancelled");
     if (++Steps > 4 * MaxPackageArchiveBytes / BlobTransferBytes +
                       2 * MaxPackageArchiveMembers)
       throw Error("zip_work_budget_exceeded");

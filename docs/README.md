@@ -48,6 +48,7 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [GUI process plugins](gui-plugins.md) | Manager, menu placement, task results and process-provider protocol |
 | [NPH process-plugin host](plugin-host.md) | Shared owners, task admission, protocol and process lifetime |
 | [Native plugins](plugins.md) | Pure-C descriptor ABI, callbacks and events, build/link workflow, discovery, and compatibility rules |
+| [Java artifact recovery](jvm-recovery.md) | JVM class versions, JAR selection, typed IR and method-level Java recovery |
 | [Python artifact recovery](python-recovery.md) | CPython version matrix, PyInstaller components, native routing and source qualification |
 | [Python plugins](python-plugins.md) | Typed authoring SDK, embedded host, lifecycle, loading, safety, tests, and publishing |
 | [Mobile overview](mobile.md) | Android and iOS support, input/output formats, quick start, and links to platform guides |
