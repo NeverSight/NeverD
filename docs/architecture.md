@@ -4155,7 +4155,7 @@ DBI cannot be newer than Info. GUID and effective age must still match the PE.
 `PDBSectionIdentity.h` shares the native section checks: only a trailing
 resource/relocation suffix permits layout changes, and names and permissions
 must still agree. The name hint keeps its indexed GSI bucket lookup and does
-not construct a full debug context. NB10 retains its separate reader.
+not construct a full debug context. NB10 retains its separate reader. For Windows x64 and ARM64, a native PDB can authenticate an individual `void` or pointer return from an ordinary CodeView procedure. The scan requires an exact entry and a single executable contribution covering the whole procedure. Folded contributions and untranslated OMAP addresses provide no return declaration.
 
 `PDBDebugContext::inspect` owns manual PE/PDB validation. A missing CodeView
 identity allows machine- and section-checked inspection without changing the
@@ -19518,7 +19518,7 @@ for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
 ### Experimental RISC-V and PowerPC ELF analysis
 
-The ELF loader admits little-endian RV32I/ILP32 and RV64I/LP64, classic PPC32
+The ELF loader admits little-endian RISC-V ILP32, LP64, ILP32D and LP64D, classic PPC32
 System V, and PPC64 ELFv1 and ELFv2 in either byte order. On PPC32 the runtime
 jump table identifies the secure PLT's pointer slots or the classic BSS-PLT's
 executable entries. For a secure PIC stub, MedIR binds the call to a slot
@@ -19533,7 +19533,7 @@ reaching r2 and carries its saved value through the return edge. For ELFv2,
 reads the global prologue for its TOC and associates linkage stubs with
 eight-byte jump slots. MedIR checks the register required at the selected
 entry and tracks the native save and reload at 24(r1).
-RISC-V extension evidence belongs to the image. Decode,
+RISC-V extension evidence belongs to the image. The double-float ABI uses `fa0` through `fa7` for named floating arguments and `fa0`/`fa1` for results. Source placement also handles mixed scalar records and the integer convention for unnamed arguments. Decode,
 lift and function discovery share the physical instruction size and
 control-transfer semantics.
 Both families feed the existing LowIR, ABI recovery, HighC and LLVM backends.

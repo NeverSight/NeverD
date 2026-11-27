@@ -14,6 +14,7 @@ add_neverd_component_library(NeverDIR
   SourceStackFrame.cpp
   SourceVariableFlow.cpp
   SourceParameterPlacement.cpp
+  RISCV/SourceParameterPlacementRISCV.cpp
   MIPS/SourceParameterPlacementMIPS.cpp
   AArch64/SourceParameterPlacementAAPCS64.cpp
   ARM/SourceParameterPlacementAAPCS32.cpp

@@ -29,6 +29,9 @@ template <unsigned First, size_t Count> constexpr auto registers() {
 }
 constexpr auto GPRs = registers<0, 32>();
 constexpr auto RVArgs = registers<10, 8>();
+using integerreg::riscv::fpr;
+constexpr std::array RVFPArgs = {fpr(10), fpr(11), fpr(12), fpr(13),
+                                 fpr(14), fpr(15), fpr(16), fpr(17)};
 constexpr auto PPCArgs = registers<3, 8>();
 // gp and tp are fixed throughout ordinary psABI calls.
 constexpr uint64_t RVSaved[] = {gpr(3),  gpr(4),  gpr(8),  gpr(9),  gpr(18),
@@ -43,7 +46,14 @@ constexpr const char *PPCNames[] = {
     "r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",  "r8",  "r9",  "r10",
     "r11", "r12", "r13", "r14", "r15", "r16", "r17", "r18", "r19", "r20", "r21",
     "r22", "r23", "r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31"};
+constexpr const char *RVFPNames[] = {
+    "ft0", "ft1", "ft2",  "ft3",  "ft4", "ft5", "ft6",  "ft7",
+    "fs0", "fs1", "fa0",  "fa1",  "fa2", "fa3", "fa4",  "fa5",
+    "fa6", "fa7", "fs2",  "fs3",  "fs4", "fs5", "fs6",  "fs7",
+    "fs8", "fs9", "fs10", "fs11", "ft8", "ft9", "ft10", "ft11"};
 const char *rvName(uint64_t Off, uint16_t) {
+  if (Off >= fpr(0) && Off < fpr(32) && Off % 8 == 0)
+    return RVFPNames[(Off - fpr(0)) / 8];
   if (Off == integerreg::PC)
     return "pc";
   return Off >= gpr(0) && Off < gpr(32) && Off % 8 == 0 ? RVNames[Off / 8 - 1]
@@ -75,8 +85,7 @@ TargetRegInfo integerInfo(Arch A) {
   TargetRegInfo Info;
   const bool RV = isRISCV(A);
   Info.TheArch = A;
-  Info.FullRegWidth = Info.PointerSize =
-      A == Arch::RISCV64 || isPowerPC64(A) ? 8 : 4;
+  Info.FullRegWidth = Info.PointerSize = isRISCV64(A) || isPowerPC64(A) ? 8 : 4;
   Info.MinInsnAlign = RV ? 2 : 4;
   Info.IntParamRegs = RV ? llvm::ArrayRef(RVArgs) : llvm::ArrayRef(PPCArgs);
   Info.IntReturnRegs = Info.IntParamRegs.take_front(2);
@@ -91,6 +100,17 @@ TargetRegInfo integerInfo(Arch A) {
   Info.GeneralRegs =
       RV ? llvm::ArrayRef(GPRs).drop_front() : llvm::ArrayRef(GPRs);
   Info.GetRegName = RV ? rvName : ppcName;
+  if (RV) {
+    Info.VecRegBase = fpr(0);
+    Info.VecRegCount = 32;
+    Info.VecRegStride = Info.VecRegWidth = 8;
+    if (hasRISCVDoubleABI(A)) {
+      Info.FPABIRegWidth = 8;
+      Info.FPParamRegs = RVFPArgs;
+      Info.FPReturnRegs = Info.FPParamRegs.take_front(2);
+      Info.FPReturnReg = fpr(10);
+    }
+  }
   if (!RV)
     Info.CallStackArgumentBase =
         isPowerPC64ELFv1(A) ? ppc_elf::ELFv1StackArgumentBase

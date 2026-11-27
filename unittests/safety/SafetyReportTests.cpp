@@ -100,6 +100,15 @@ TEST(SafetyReport, PipelineCoverageRejectsPartialFunctionLifts) {
   EXPECT_NE(Error->find("0x3000"), std::string::npos);
   EXPECT_NE(Error->find("rejected-incomplete"), std::string::npos);
 
+  Result.FunctionAudits.back().Disposition =
+      neverd::PipelineFunctionDisposition::MedIRFailed;
+  Result.FunctionAudits.back().Diagnostic = "return target was not proven";
+  const auto MedError = validatePipelineCoverage(Result);
+  ASSERT_TRUE(MedError.has_value());
+  EXPECT_NE(
+      MedError->find("0x3000 (med-ir-failed) return target was not proven"),
+      std::string::npos);
+
   // Older producers may still report a rejection based on missing unwind
   // metadata. Such an omitted body cannot count as complete coverage, even
   // without a loader-authenticated function entry.

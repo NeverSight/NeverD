@@ -85,7 +85,7 @@ inline std::optional<Form> form(Arch A, Intrinsic Id, uint64_t Key) {
     }
   }
   if (Id != Intrinsic::RISCVAtomic || !isRISCV(A) || Key > 255 ||
-      ((Key & 1) && A == Arch::RISCV32))
+      ((Key & 1) && isRISCV32(A)))
     return std::nullopt;
   const unsigned Bytes = Key & 1 ? 8 : 4, Order = Key >> 1 & 3;
   switch (Key >> 3) {

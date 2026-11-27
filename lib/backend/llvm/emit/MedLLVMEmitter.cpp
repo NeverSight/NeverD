@@ -1134,7 +1134,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   if (!PortableBody && isRISCV(TheArch))
     Mod_->addModuleFlag(
         llvm::Module::Error, "target-abi",
-        llvm::MDString::get(LCtx, TheArch == Arch::RISCV32 ? "ilp32" : "lp64"));
+        llvm::MDString::get(LCtx,
+                            hasRISCVDoubleABI(TheArch)
+                                ? (isRISCV32(TheArch) ? "ilp32d" : "lp64d")
+                                : (isRISCV32(TheArch) ? "ilp32" : "lp64")));
   Img = Img_;
   RelocatedEntryProofs.reset();
   ImportStorageSnapshotImage = nullptr;
