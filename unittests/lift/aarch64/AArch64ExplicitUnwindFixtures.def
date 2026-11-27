@@ -453,7 +453,7 @@ Lmodifier_lsda:
 LsitesBegin:
  .uleb128 Lmaterialize-_signal_tick
  .uleb128 LcheckedAfter-Lmaterialize
- .uleb128 Lterminate-_signal_tick
+ .uleb128 LcheckedAfter-_signal_tick
  .uleb128 0
  .uleb128 LcheckedAfter-_signal_tick
  .uleb128 Lvalues-LcheckedAfter

@@ -1141,8 +1141,8 @@ TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
           ASSERT_EQ(Sites.size(), 2u);
           EXPECT_EQ(Sites[0].GuardedRange.End, AuthPC + Word);
           EXPECT_EQ(Sites[1].GuardedRange.Begin, AuthPC + Word);
-          EXPECT_EQ(Sites[0].LandingPadVA, Sites[1].LandingPadVA);
-          EXPECT_GT(Sites[1].LandingPadVA, AuthPC + Word);
+          EXPECT_EQ(Sites[0].LandingPadVA, AuthPC + 3 * Word);
+          EXPECT_GT(Sites[1].LandingPadVA, Sites[0].LandingPadVA);
         }
         auto Rows = recoverDarwinAArch64Unwind(*Image, *Frame);
         ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
