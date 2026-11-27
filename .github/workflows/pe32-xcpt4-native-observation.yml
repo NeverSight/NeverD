@@ -1,0 +1,38 @@
+name: Original PE32 xcpt4 runtime
+on:
+  push:
+    branches: [codex/pe32-xcpt4-native-observation]
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: NeverSight/testbins
+          ref: 071a867fc0ab620d6f01b1a4251807044f4d6cbd
+          path: original-case
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe
+      - name: Verify corpus revision and run the original x86 executable
+        shell: pwsh
+        run: |
+          $expected = (git rev-parse HEAD:unittests/corpus).Trim()
+          $actual = (git -C original-case rev-parse HEAD).Trim()
+          if ($expected -ne $actual) { throw "Unexpected fixture revision" }
+          python scripts/check_windows_xcpt4_original.py original-case/corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe | Tee-Object -FilePath xcpt4.json
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
+        with:
+          name: original-pe32-xcpt4
+          path: xcpt4.json
+          if-no-files-found: error
+          retention-days: 14
+
