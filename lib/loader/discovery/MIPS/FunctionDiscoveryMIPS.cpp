@@ -34,7 +34,9 @@ std::optional<va_t> mipsImportThunkSlot(const BinaryImage &Img, va_t Address) {
   const uint32_t Jump = readTargetEndian<uint32_t>(Bytes + 8, Little);
   const uint32_t Slot = readTargetEndian<uint32_t>(Bytes + 12, Little);
   // lui r15,hi; lw/ld t9,lo(r15); jr t9; addiu/daddiu t8,r15,lo
-  const bool Wide = isMIPS64(Img.Arch);
+  // PLT slots hold ABI pointers. n32 and historical o32 use LW/ADDIU
+  // even though their general-purpose registers are 64 bits.
+  const bool Wide = isMIPSN64(Img.Arch);
   if ((High & 0xffff0000u) != 0x3c0f0000u ||
       (Load & 0xffff0000u) != (Wide ? 0xddf90000u : 0x8df90000u) ||
       Jump != 0x03200008u ||
