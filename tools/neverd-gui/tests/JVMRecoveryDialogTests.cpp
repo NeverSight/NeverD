@@ -22,6 +22,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QSignalSpy>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
@@ -101,6 +102,7 @@ private slots:
     const QString Key = "arithmetic(II)I";
     QVERIFY(Methods->findData(Key) > 0);
     Methods->setCurrentIndex(Methods->findData(Key));
+    QSignalSpy BytecodeChanges(Bytecode, &QPlainTextEdit::textChanged);
     Run->click();
     QVERIFY(!Run->isEnabled());
     QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
@@ -114,11 +116,16 @@ private slots:
     QCOMPARE(F["status"].toString(), "reconstructed_source");
     QCOMPARE(Tabs->currentWidget(), Source);
     QCOMPARE(Source->toPlainText(), F["source"].toString());
+    QCOMPARE(BytecodeChanges.count(), 0);
+    Tabs->setCurrentWidget(Bytecode);
     QCOMPARE(QJsonDocument::fromJson(Bytecode->toPlainText().toUtf8()).array(),
              F["instructions"].toArray());
+    Tabs->setCurrentWidget(IR);
     QCOMPARE(QJsonDocument::fromJson(IR->toPlainText().toUtf8()).object(),
              F["ir"].toObject());
+    BytecodeChanges.clear();
     Tabs->setCurrentWidget(Bytecode);
+    QCOMPARE(BytecodeChanges.count(), 0);
     Copy->click();
     QCOMPARE(QApplication::clipboard()->text(), Bytecode->toPlainText());
     Tabs->setCurrentWidget(Source);
@@ -152,6 +159,11 @@ private slots:
     QCOMPARE(readFile(View), F["source"].toString().toUtf8());
     QVERIFY(!Dialog.exportView(View, false));
     QCOMPARE(readFile(View), F["source"].toString().toUtf8());
+    Tabs->setCurrentWidget(Bytecode);
+    QVERIFY(Bytecode->document()->isEmpty());
+    QVERIFY(!Copy->isEnabled());
+    Tabs->setCurrentWidget(IR);
+    QVERIFY(IR->document()->isEmpty());
   }
   void incompleteMethodShowsMappedBytecodeAndDiagnostics() {
     QTemporaryDir Temp;
@@ -208,11 +220,13 @@ private slots:
     QCOMPARE(Tabs->currentWidget(), IR);
     QCOMPARE(QJsonDocument::fromJson(IR->toPlainText().toUtf8()).object(),
              F["ir"].toObject());
+    Tabs->setCurrentWidget(Bytecode);
     QCOMPARE(QJsonDocument::fromJson(Bytecode->toPlainText().toUtf8()).array(),
              F["instructions"].toArray());
     auto D = F["diagnostics"].toArray();
     QVERIFY(!D.isEmpty());
     QVERIFY(Status->text().contains(D.first().toObject()["code"].toString()));
+    Tabs->setCurrentWidget(Evidence);
     QCOMPARE(QJsonDocument::fromJson(Evidence->toPlainText().toUtf8())
                  .object()["diagnostics"]
                  .toArray(),
