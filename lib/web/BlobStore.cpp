@@ -13,6 +13,7 @@
 
 #include "platform/WindowsFile.h"
 
+#include "neverd/support/SHA256.h"
 #include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
 
@@ -22,7 +23,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #endif
-#include "llvm/Support/SHA256.h"
 
 #include <algorithm>
 #include <array>
@@ -110,7 +110,7 @@ std::string Blob::read(uint64_t Offset, uint64_t Size, uint64_t Budget) const {
 std::string Blob::digest() const {
   if (Owner && !Owner->Sealed)
     throw Error("blob_not_sealed");
-  llvm::SHA256 Hash;
+  SHA256Stream Hash;
   for (uint64_t Offset = 0; Offset < Length;) {
     const auto Size = std::min(BlobTransferBytes, Length - Offset);
     Hash.update(llvm::StringRef(read(Offset, Size)));
@@ -211,7 +211,7 @@ BlobStore::Captured BlobStore::capture(int Descriptor, uint64_t ExpectedSize) {
     initialize();
     const uint64_t Start = Used;
     std::array<char, BlobTransferBytes> Buffer;
-    llvm::SHA256 Hash;
+    SHA256Stream Hash;
     uint64_t Done = 0;
     while (Done < ExpectedSize) {
 #ifdef _WIN32
