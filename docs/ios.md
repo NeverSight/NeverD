@@ -75,7 +75,7 @@ checks before its status becomes `recovered`. Use this graph for helper work;
 
 For repeated coverage analysis, the following command runs the same analysis
 and publication checks as
-`--format=objc-methods`, but omits `native_source` and each method's `source`.
+`--format=objc-methods`, but omits `native_source`, its optional `native_emitted_function_count` and each method's `source`.
 The JSON adds `sources_omitted=true`; method identities, statuses, diagnostics,
 signatures, shared helper references and dependency evidence retain their full
 export meaning. Rendering checks still run, so this saves source retention,
@@ -260,7 +260,7 @@ neverd export recovered-ios/artifacts/selected.macho \
   --source-signatures=recovered-ios/metadata/swift-signatures.json -o swift-batch.json
 ```
 
-Swift export consumes the structured signature inventory produced by the built-in signature parser during a normal mobile run. Objective-C batch JSON includes `native_source`, `native_function_count`, `objc_metadata`, and per-method C source, function name, return type, and parameters. Mobile performs further declaration/body/layout checks before generating `.m`, so its final method coverage can be narrower than batch C coverage. A successful native export can contain no recovered methods.
+Swift export consumes the structured signature inventory produced by the built-in signature parser during a normal mobile run. Objective-C batch JSON includes `native_source`, `native_function_count`, `objc_metadata`, and per-method C source, function name, return type, and parameters. When the raw C emitter omits an individual definition, the full report includes its diagnostic in `native_source` and the number of emitted bodies in `native_emitted_function_count`. The inventory count stays available in both modes. Mobile performs further declaration/body/layout checks before generating `.m`, so its final method coverage can be narrower than batch C coverage. A successful native export can contain no recovered methods.
 
 When a method fails call binding, its batch row includes `unbound_call` with the first rejected target name/address, indirect-call flag, and recovered argument count. If a source signature exists, the record also includes its binding name and expected argument count. This identifies the first blocking call; it is not an inventory of every remaining problem in that method.
 

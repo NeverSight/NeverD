@@ -215,6 +215,7 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     HighCEmitter Emitter;
     Emitter.prepareImageFunctionNames(S->Img);
     std::string NativeSource;
+    size_t RefusedNativeCount = 0;
     // Summary mode still renders and checks every publishable method below.
     // The unrelated whole-image native source is only returned by full export.
     if (IncludeSources) {
@@ -227,7 +228,8 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         Trace.finish(false);
         return nullptr;
       }
-      if (!Refused.empty())
+      RefusedNativeCount = Refused.size();
+      if (RefusedNativeCount)
         NativeSource.insert(0, refusedDefinitionNotes(Refused));
     }
     std::map<va_t, const HighFunc *> Functions;
@@ -1288,10 +1290,14 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         {"recovered_method_count", static_cast<int64_t>(Recovered)},
         {"methods", std::move(Methods)},
         {"limitations", std::move(Limitations)}};
-    if (IncludeSources)
+    if (IncludeSources) {
       Report["native_source"] = jsonSafeText(NativeSource);
-    else
+      if (RefusedNativeCount)
+        Report["native_emitted_function_count"] =
+            static_cast<int64_t>(NativeFunctionCount - RefusedNativeCount);
+    } else {
       Report["sources_omitted"] = true;
+    }
     std::string Text;
     llvm::raw_string_ostream OS(Text);
     OS << llvm::json::Value(std::move(Report));

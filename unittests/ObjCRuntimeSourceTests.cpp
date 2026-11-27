@@ -471,6 +471,7 @@ void verifyRuntime(bool Chained,
       SummaryObject->erase("sources_omitted");
       auto Expected = Full;
       Expected.getAsObject()->erase("native_source");
+      Expected.getAsObject()->erase("native_emitted_function_count");
       for (auto &Method : *Expected.getAsObject()->getArray("methods"))
         Method.getAsObject()->erase("source");
       EXPECT_TRUE(Expected == *Summary);
@@ -523,6 +524,20 @@ void verifyRuntime(bool Chained,
         EXPECT_EQ(Nodes.at(Dependency->str())->getBoolean("closure_closed"),
                   true);
     }
+  }
+  if (ReadOnlyTables) {
+    const auto Native = Object->getString("native_source");
+    const auto Inventory = Object->getInteger("native_function_count");
+    ASSERT_TRUE(Native);
+    ASSERT_TRUE(Inventory);
+    const auto Definitions =
+        static_cast<int64_t>(Native->count("/* neverd.entry: "));
+    const auto Refusals =
+        static_cast<int64_t>(Native->count("/* neverd.not-decompiled: "));
+    EXPECT_EQ(*Inventory, Definitions + Refusals);
+    EXPECT_EQ(Object->getInteger("native_emitted_function_count")
+                  .value_or(*Inventory),
+              Definitions);
   }
   const auto *Methods = Object->getArray("methods");
   ASSERT_NE(Methods, nullptr);
