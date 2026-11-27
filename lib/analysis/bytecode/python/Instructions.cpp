@@ -54,6 +54,14 @@ StringRef neverd::python::mnemonic(Op Opcode) {
     return #NAME;
 #include "Opcodes310.def"
 #undef PYTHON_OPCODE
+  case Op::SmallInteger:
+    return "LOAD_SMALL_INT";
+  case Op::CommonConstant:
+    return "LOAD_COMMON_CONSTANT";
+  case Op::PushNull:
+    return "PUSH_NULL";
+  case Op::CallWithSlot:
+    return "CALL";
   }
   return "unknown";
 }
@@ -158,8 +166,10 @@ void neverd::python::recoverCode(Job &J, unsigned Id, StringRef Bytes,
   if (Root.Type != Object::CodeObject)
     malformed(At, "Expected a marshalled module code object");
   auto &Component = *J.Components[Id].getAsObject();
-  Component["dialect"] = Version == 310 ? "CPython 3.10" : "CPython 3.11";
-  Component["representation"] = "on-disk wordcode";
+  if (!Component.getString("dialect"))
+    Component["dialect"] = dialectName(Version);
+  Component["representation"] =
+      Version < 306 ? "variable-width bytecode" : "on-disk wordcode";
   std::vector<Function> Functions;
   Functions.reserve(Reader.codes().size());
   for (const Object *O : Reader.codes()) {
@@ -167,8 +177,10 @@ void neverd::python::recoverCode(Job &J, unsigned Id, StringRef Bytes,
     try {
       if (Version == 311)
         decode311(J, F);
-      else
+      else if (Version == 310)
         decode(J, F);
+      else
+        decodeRelease(J, F);
     } catch (const Failure &E) {
       if (E.Status != "unsupported" && E.Status != "malformed")
         throw;

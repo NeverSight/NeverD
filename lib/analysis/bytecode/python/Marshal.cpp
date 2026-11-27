@@ -43,13 +43,18 @@ void Marshal::code(Object &O, unsigned Depth) {
   C.Version = Version;
   C.Id = Codes.size();
   Codes.push_back(&O);
-  C.Args = count();
-  C.PosOnly = count();
-  C.KwOnly = count();
-  if (Version == 310)
-    C.Locals = count();
-  C.Stack = count();
-  C.Flags = count();
+  auto CodeCount = [&]() -> unsigned {
+    return Version < 203 ? support::endian::read16le(take(2).data()) : count();
+  };
+  if (Version >= 103) {
+    C.Args = CodeCount();
+    C.PosOnly = Version >= 308 ? CodeCount() : 0;
+    C.KwOnly = Version >= 300 ? CodeCount() : 0;
+    if (Version < 311)
+      C.Locals = CodeCount();
+    C.Stack = Version >= 105 ? CodeCount() : 0;
+    C.Flags = CodeCount();
+  }
   auto Field = [&](Object::Kind Expected) {
     Object *Field = object(Depth + 1);
     if (Field->Type != Expected)
@@ -57,23 +62,30 @@ void Marshal::code(Object &O, unsigned Depth) {
     return Field;
   };
   C.Bytes = Field(Object::Bytes);
-  C.Consts = Field(Object::Tuple);
+  auto Sequence = Version <= 100 ? Object::List : Object::Tuple;
+  C.Consts = Field(Sequence);
+  auto IsName = [&](const Object *V) {
+    return V->Type == Object::Unicode ||
+           (Version < 300 && V->Type == Object::Bytes && json::isUTF8(V->Data));
+  };
   auto Names = [&] {
-    auto *Tuple = Field(Object::Tuple);
-    if (!llvm::all_of(Tuple->Items, [](const Object *V) {
-          return V->Type == Object::Unicode;
-        }))
+    auto *Tuple = Field(Sequence);
+    if (!llvm::all_of(Tuple->Items, IsName))
       malformed(Tuple->Offset, "Non-string name in code object");
     for (const auto *Name : Tuple->Items)
       J.charge(J.Text, Name->Data.size(), limits::kTextBytes, Name->Offset);
     return Tuple;
   };
   C.Names = Names();
-  C.Vars = Names();
-  if (Version == 310) {
-    C.Free = Names();
-    C.Cells = Names();
-    if (C.Locals != C.Vars->Items.size())
+  C.Vars = Version >= 103 ? Names() : &Nodes.emplace_back();
+  if (Version < 103)
+    C.Vars->Type = Object::Tuple;
+  if (Version < 311) {
+    C.Free = Version >= 201 ? Names() : &EmptyTuple;
+    C.Cells = Version >= 201 ? Names() : &EmptyTuple;
+    // The pre-2.5 compiler also recorded module bindings in co_varnames.
+    if (C.Locals > C.Vars->Items.size() ||
+        (Version >= 205 && C.Locals != C.Vars->Items.size()))
       malformed(O.Offset, "Inconsistent local name count");
   } else {
     // 3.11 stores fast locals, cells and free variables in one indexed table.
@@ -83,27 +95,40 @@ void Marshal::code(Object &O, unsigned Depth) {
                 "Local kinds do not match localsplus names");
     C.Locals = 0;
     for (unsigned char Kind : C.LocalKinds->Data) {
+      if (Kind & 0x20) {
+        if (Version >= 312)
+          Kind &= ~0x10u; // Hidden local in an inlined comprehension.
+        if (Version >= 314)
+          Kind &=
+              ~0x0eu; // Positional, keyword and variadic argument attributes.
+      }
       if (Kind != 0x20 && Kind != 0x40 && Kind != 0x60 && Kind != 0x80)
         malformed(C.LocalKinds->Offset, "Unknown localsplus kind");
       C.Locals += bool(Kind & 0x20);
     }
   }
-  C.Filename = Field(Object::Unicode);
-  C.Name = Field(Object::Unicode);
-  if (Version == 311)
+  auto NameField = [&] {
+    auto *V = object(Depth + 1);
+    if (!IsName(V))
+      malformed(V->Offset, "Invalid code-object name or filename");
+    return V;
+  };
+  C.Filename = NameField();
+  C.Name = Version == 8 ? &Unnamed : NameField();
+  if (Version >= 311)
     C.QualifiedName = Field(Object::Unicode);
   J.charge(J.Text,
            C.Name->Data.size() + C.Filename->Data.size() +
                (C.QualifiedName ? C.QualifiedName->Data.size() : 0),
            limits::kTextBytes, O.Offset);
-  C.FirstLine = count();
-  C.Lines = Field(Object::Bytes);
-  if (Version == 311)
+  C.FirstLine = Version >= 105 ? CodeCount() : 0;
+  C.Lines = Version >= 105 ? Field(Object::Bytes) : &EmptyLines;
+  if (Version >= 311)
     C.Exceptions = Field(Object::Bytes);
   uint64_t Params =
       uint64_t(C.Args) + C.KwOnly + bool(C.Flags & 4) + bool(C.Flags & 8);
   if (C.PosOnly > C.Args || Params > C.Locals || C.Bytes->Data.empty() ||
-      C.Bytes->Data.size() % 2)
+      (Version >= 306 && C.Bytes->Data.size() % 2))
     malformed(O.Offset, "Inconsistent CPython code dimensions");
 }
 Object *Marshal::object(unsigned Depth, bool AllowEnd) {
@@ -114,6 +139,14 @@ Object *Marshal::object(unsigned Depth, bool AllowEnd) {
   uint8_t Tag = take(1).front();
   bool Register = Tag & 128;
   Tag &= 127;
+  if (Version < 304 && Register)
+    malformed(At, "Marshal reference flag predates this code layout");
+  if (Tag == 'R' && Version >= 204 && Version < 300) {
+    unsigned Id = count();
+    if (Id >= Interned.size())
+      malformed(At, "Invalid interned string reference");
+    return Interned[Id];
+  }
   if (Tag == 'r') {
     unsigned Id = count();
     if (Register || Id >= References.size())
@@ -122,6 +155,16 @@ Object *Marshal::object(unsigned Depth, bool AllowEnd) {
       unsupported(At, "Recursive marshal value");
     return References[Id];
   }
+  auto TextFloat = [&] {
+    auto Text = take(uint8_t(take(1).front()));
+    double Value;
+    if (Text.getAsDouble(Value))
+      malformed(At, "Invalid textual marshal float");
+    return Value;
+  };
+  auto BinaryFloat = [&] {
+    return std::bit_cast<double>(support::endian::read64le(take(8).data()));
+  };
   auto Index = References.size();
   if (Register)
     References.push_back(nullptr);
@@ -174,9 +217,29 @@ Object *Marshal::object(unsigned Depth, bool AllowEnd) {
     O.Digits = (N < 0 ? "-" : "") + S.str().str();
     break;
   }
+  case 'f':
   case 'g':
     O.Type = Object::Float;
-    O.Real = std::bit_cast<double>(support::endian::read64le(take(8).data()));
+    O.Real = Tag == 'f' ? TextFloat() : BinaryFloat();
+    break;
+  case 'x':
+  case 'y':
+    O.Type = Object::Complex;
+    if (Tag == 'x') {
+      TextFloat();
+      TextFloat();
+    } else
+      take(16);
+    break;
+  case 'S':
+    O.Type = Object::StopIteration;
+    break;
+  case ':':
+    if (Version < 314)
+      unsupported(At, "Slice constant predates marshal slice support");
+    O.Type = Object::Slice;
+    for (unsigned I = 0; I < 3; ++I)
+      O.Items.push_back(object(Depth + 1));
     break;
   case 's':
   case 'u':
@@ -186,7 +249,10 @@ Object *Marshal::object(unsigned Depth, bool AllowEnd) {
   case 'Z':
   case 't': {
     unsigned N = Tag == 'z' || Tag == 'Z' ? uint8_t(take(1).front()) : count();
-    O.Type = Tag == 's' ? Object::Bytes : Object::Unicode;
+    O.Type = Tag == 's' || (Tag == 't' && Version < 300) ? Object::Bytes
+                                                         : Object::Unicode;
+    if (Tag == 't' && Version >= 204 && Version < 300)
+      Interned.push_back(&O);
     O.DataOffset = Position;
     O.Data = take(N);
     if ((Tag == 'a' || Tag == 'A' || Tag == 'z' || Tag == 'Z') &&
@@ -224,7 +290,10 @@ Object *Marshal::object(unsigned Depth, bool AllowEnd) {
       O.Items.push_back(object(Depth + 1));
     }
     break;
+  case 'C':
   case 'c':
+    if ((Tag == 'C') != (Version <= 102))
+      malformed(At, "Code type tag conflicts with release layout");
     O.Type = Object::CodeObject;
     code(O, Depth);
     break;

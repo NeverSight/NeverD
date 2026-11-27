@@ -25,6 +25,7 @@ struct Expr {
     Cell,
     Cells,
     Iterator,
+    NullCallSlot,
     Awaitable,
     YieldFrom,
     Definition,
