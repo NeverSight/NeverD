@@ -135,10 +135,12 @@ def build(binary, output):
         staged.rename(output)
 
 
-def build_signing_address(binary, output):
+def build_signing_address(binary, output, *, joins=False):
     if output.exists():
         raise FileExistsError(output)
     profile = CONFIG["signing_address"]
+    if joins:
+        profile = profile | profile["joins"]
     source = ROOT / CONFIG["guest_directory"]
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
         scratch = Path(temporary).resolve()
@@ -325,6 +327,10 @@ def run_native_ordered(guests, output):
 def check_signing_address_inventory(manifest):
     profile = CONFIG["signing_address"]
     version = profile["inventory_property"]
+    if manifest.get("return_profile") == profile["joins"]["profile"]:
+        if manifest.get(version) != profile["joins"]["inventory"] or manifest.get(profile["count_property"]) != profile["joins"]["bodies"]:
+            raise ValueError(CONFIG["bad_inventory"])
+        return
     if version in manifest and manifest[version] != profile["inventory"]:
         raise ValueError(CONFIG["bad_inventory"])
     count = profile["bodies"] if version in manifest else profile["legacy_bodies"]
@@ -348,9 +354,9 @@ def run(model, guests, output, cursor=False, ordered=False, *, writeback=False):
     records_required = ([policy["control_record"].format(mode) for mode in range(policy["control_count"])]
                         if writeback else policy["control_records"])
     publication = (not (cursor or ordered or writeback) and
-                   manifest.get("return_profile") == CONFIG["signing_address"]["profile"])
+                   manifest.get("return_profile") in (CONFIG["signing_address"]["profile"], CONFIG["signing_address"]["joins"]["profile"]))
     if publication:
-        names = [CONFIG["signing_address"]["profile"]]
+        names = [manifest["return_profile"]]
         check_signing_address_inventory(manifest)
     elif ordered:
         profile = manifest.get("ordered_profile", policy["quadword_profile"])
@@ -407,6 +413,7 @@ if __name__ == "__main__":
     options = CONFIG["commands"]
     link = commands.add_parser(options["build"])
     signing_link = commands.add_parser(options["build_signing_address"])
+    signing_link.add_argument(options["joined_addresses"], action="store_true")
     ordered_link = commands.add_parser(options["build_ordered"])
     native_link = commands.add_parser(options["build_native_ordered"])
     native_execute = commands.add_parser(options["run_native_ordered"])
@@ -429,7 +436,7 @@ if __name__ == "__main__":
     if args.command == options["build"]:
         build(args.tests.resolve(), args.output.resolve())
     elif args.command == options["build_signing_address"]:
-        build_signing_address(args.tests.resolve(), args.output.resolve())
+        build_signing_address(args.tests.resolve(), args.output.resolve(), joins=args.joins)
     elif args.command in (options["build_ordered"], options["build_native_ordered"]):
         build_ordered(args.tests.resolve(), args.output.resolve(), native=args.command == options["build_native_ordered"])
     elif args.command == options["run_native_ordered"]:

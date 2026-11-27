@@ -371,8 +371,16 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
       Function &= ~1u;
     if (Function == 32 && (F == 5 || (F == 0 && !Imm)))
       Alternate = true;
-    else if (Function)
-      return false;
+    else if (Function) {
+      const unsigned Form = W & opcode::RegisterFormMask;
+      if (!P.Zicond || (Form != opcode::CzeroEqz && Form != opcode::CzeroNez))
+        return false;
+      NdVar Zero = S.imm(0);
+      NdOp Test =
+          Form == opcode::CzeroEqz ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL;
+      S.write(Rd, S.select(S.op(Test, Y, Zero, 1), Zero, X));
+      return true;
+    }
   }
   constexpr NdOp ALU[] = {NdOp::INT_ADD,  NdOp::INT_LEFT, NdOp::INT_SLESS,
                           NdOp::INT_LESS, NdOp::INT_XOR,  NdOp::INT_RIGHT,

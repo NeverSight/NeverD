@@ -25,6 +25,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <bit>
 #include <bitset>
 #include <climits>
 #include <deque>
@@ -95,10 +96,20 @@ struct Value {
   bool operator==(const Value &) const = default;
 };
 
+// Different signing instructions can reach the same PC. Preserve only the
+// relation that holds on every path between live LR and a full-width GPR.
+struct SigningModifiers {
+  AArch64RAKey Key = AArch64RAKey::A;
+  uint32_t Registers = 0;
+  llvm::SmallVector<va_t, 2> SigningPCs;
+  bool operator==(const SigningModifiers &) const = default;
+};
+
 struct State {
   std::array<Value, kFrameRegisters> Registers;
   std::map<int64_t, Value> Stack;
   std::optional<bool> PACM = false;
+  SigningModifiers Modifiers;
 };
 
 template <typename T>
@@ -117,8 +128,40 @@ bool intersect(Value &A, const Value &B) {
   return Changed;
 }
 
+SigningModifiers signingModifiers(const State &S) {
+  auto Result = S.Modifiers;
+  const auto &LR = S.Registers[kLR].Return;
+  if (LR && LR->Kind == AArch64RASigningKind::SPAndPC &&
+      LR->Recipe == AArch64RARecipe::NonHintPAuthLR && LR->SigningPC) {
+    Result.Key = LR->Key;
+    for (unsigned R = 0; R < kLR; ++R)
+      if (S.Registers[R].CodeAddress == LR->SigningPC)
+        Result.Registers |= uint32_t(1) << R;
+    if (Result.Registers)
+      Result.SigningPCs.assign(1, *LR->SigningPC);
+  }
+  return Result;
+}
+
 bool merge(State &A, const State &B) {
   bool Changed = intersect(A.PACM, B.PACM);
+  if (A.Modifiers.Registers || B.Modifiers.Registers ||
+      A.Registers[kLR].Return != B.Registers[kLR].Return) {
+    auto Common = signingModifiers(A);
+    const auto Other = signingModifiers(B);
+    Common.Registers &= Common.Key == Other.Key ? Other.Registers : 0;
+    if (Common.Registers) {
+      for (va_t PC : Other.SigningPCs) {
+        auto It = llvm::lower_bound(Common.SigningPCs, PC);
+        if (It == Common.SigningPCs.end() || *It != PC)
+          Common.SigningPCs.insert(It, PC);
+      }
+    } else {
+      Common = {};
+    }
+    Changed |= Common != A.Modifiers;
+    A.Modifiers = std::move(Common);
+  }
   for (unsigned R = 0; R < kFrameRegisters; ++R)
     Changed |= intersect(A.Registers[R], B.Registers[R]);
   for (auto I = A.Stack.begin(); I != A.Stack.end();) {
@@ -243,6 +286,7 @@ void updateSignature(State &S, const State &Before, AArch64RAKey Key,
                      bool Authenticate, std::optional<AArch64RARecipe> Recipe,
                      std::optional<va_t> ModifierPC) {
   auto &LR = S.Registers[kLR];
+  S.Modifiers = {};
   LR = {};
   const auto &Prior = Before.Registers[kLR].Return;
   if (!Prior || Before.Registers[kSP].StackOffset != 0 ||
@@ -268,6 +312,10 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
   const auto UpdateHint = [&](Intrinsic Id, Operand Pointer, Operand Modifier) {
     const unsigned Dest = Pointer == Operand::X30 ? kLR : kHintDestination;
     S.Registers[Dest] = {};
+    if (Dest == kLR)
+      S.Modifiers = {};
+    else
+      S.Modifiers.Registers &= ~(uint32_t(1) << Dest);
     if (Dest != kLR || Modifier != Operand::SP || !Before.PACM)
       return;
     const auto Op = *aarch64PAuthOperation(Id);
@@ -287,6 +335,7 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
     return true;
 #define NEVERD_A64_PAUTH_STRIP_HINT(Insn, Encoding, Id, Pointer)               \
   case Encoding:                                                               \
+    S.Modifiers = {};                                                          \
     S.Registers[kLR] = {};                                                     \
     return true;
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.def"
@@ -295,6 +344,7 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
   }
   const auto UpdateExplicit = [&](Intrinsic Id, Operand Pointer, Operand Mod2) {
     if (Pointer != Operand::X30) {
+      S.Modifiers.Registers &= ~(uint32_t(1) << kHintDestination);
       S.Registers[kHintDestination] = {};
       return;
     }
@@ -317,6 +367,12 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
     }
     updateSignature(S, Before, Key, Op.Authenticate,
                     AArch64RARecipe::NonHintPAuthLR, Address);
+    if (Op.Authenticate && Mod2 == Operand::Rn && Before.Modifiers.Key == Key &&
+        Before.Registers[kSP].StackOffset == 0) {
+      const auto R = (Word >> kAArch64PAuthLRImmShift) & kAArch64PAuthLRRegMask;
+      if (Before.Modifiers.Registers & (uint32_t(1) << R))
+        S.Registers[kLR].Return = AArch64ReturnAddressState{};
+    }
   };
 #define NEVERD_A64_PAUTH_LR_INSTRUCTION(Mask, Encoding, Id, Pointer, Mod,      \
                                         Mod2)                                  \
@@ -455,6 +511,7 @@ void discardInactiveStack(State &S) {
 }
 
 void clobberCallState(State &S) {
+  S.Modifiers = {};
   for (unsigned R = 0; R < kVolatileEnd; ++R)
     S.Registers[R] = {};
   S.Registers[kLR] = {};
@@ -475,9 +532,13 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
                      &NumWrites) != CS_ERR_OK)
     return false;
   for (const auto R : llvm::ArrayRef(Writes, NumWrites)) {
-    if (const auto Number = reg(R))
+    if (const auto Number = reg(R)) {
       S.Registers[*Number] = {};
-    else if (const auto D = preservedDSlot(R)) {
+      if (*Number == kLR)
+        S.Modifiers = {};
+      else
+        S.Modifiers.Registers &= ~(uint32_t(1) << *Number);
+    } else if (const auto D = preservedDSlot(R)) {
       S.Registers[*D] = {};
       S.Registers[*D + NDArm64ePreservedDCount] = {};
     }
@@ -524,8 +585,11 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
       Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
       Ops[1].type == AARCH64_OP_REG && wide(Ops[0].reg) && wide(Ops[1].reg)) {
     const auto Dest = reg(Ops[0].reg), Src = reg(Ops[1].reg);
-    if (Dest && Src)
+    if (Dest && Src) {
       S.Registers[*Dest] = Before.Registers[*Src];
+      if (*Dest < kLR && (Before.Modifiers.Registers & (uint32_t(1) << *Src)))
+        S.Modifiers.Registers |= uint32_t(1) << *Dest;
+    }
   }
   if ((I.Id == AARCH64_INS_ADD || I.Id == AARCH64_INS_SUB) && Ops.size() == 3 &&
       Ops[0].type == AARCH64_OP_REG && Ops[1].type == AARCH64_OP_REG &&
@@ -589,7 +653,7 @@ FrameRow instructionFrameRow(const State &S, const FrameRow *Declared,
     const auto Holds = [&](const Value &V) {
       return R == kLR ? V.Return.has_value() : V.IncomingRegister == R;
     };
-    if (Holds(S.Registers[R]))
+    if (Holds(S.Registers[R]) || (R == kLR && S.Modifiers.Registers))
       continue;
     auto &Rule = Row.Registers[R];
     Rule.Location = AArch64UnwindRegister::Undefined;
@@ -1089,11 +1153,16 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
         Rules.empty() ? nullptr : &std::prev(Rules.upper_bound(Offset))->second;
     FrameRow Rule;
     std::optional<AArch64ReturnAddressState> Signing;
+    std::optional<AArch64LiveSigningModifier> Live;
     if (States[I]) {
       const auto &S = *States[I];
       Rule = instructionFrameRow(
           S, Declared, Function.Compact ? &*Function.Compact : nullptr);
       Signing = savedReturn(S, Rule);
+      if (!Signing && Rule.CFARegister && S.Modifiers.Registers &&
+          Rule.Registers[kLR].Location == AArch64UnwindRegister::SameValue)
+        Live.emplace(unsigned(std::countr_zero(S.Modifiers.Registers)),
+                     S.Modifiers.Key, S.Modifiers.SigningPCs);
       // Local epilogue edges use the source unwind contract. Check that
       // every reached instruction also reproduces its effective source row.
       if (CheckSourceRows && !matchesClassicRow(S, *Declared, Signing,
@@ -1111,7 +1180,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
         Result.back().CFARegister == Rule.CFARegister &&
         Result.back().CFAOffset == Rule.CFAOffset &&
         Result.back().Registers == Rule.Registers &&
-        Result.back().Signing.State == Signing)
+        Result.back().Signing.State == Signing &&
+        Result.back().LiveSigningModifier == Live)
       continue;
     Result.push_back(
         {Offset,
@@ -1121,7 +1191,9 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
          {Signing ? AArch64RAQueryStatus::Known : AArch64RAQueryStatus::Unknown,
           Signing, Signing ? nullptr : kUnknown},
          SP,
-         FP});
+         FP,
+         false,
+         std::move(Live)});
   }
   return Result;
 }
@@ -1258,8 +1330,31 @@ std::optional<AArch64SystemCallerPlan>
 prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
                                 ExceptionAddressRange Range,
                                 va_t LoadedFrameStart) {
-  if (!Row.Signing.State || Row.Signing.Status != AArch64RAQueryStatus::Known ||
-      (Row.CFARegister != kSP && Row.CFARegister != kFP) ||
+  return prepareDarwinArm64eSystemCaller(Row, Range, LoadedFrameStart, {});
+}
+
+std::optional<AArch64SystemCallerPlan> prepareDarwinArm64eSystemCaller(
+    const AArch64RecoveredUnwindRow &Row, ExceptionAddressRange Range,
+    va_t LoadedFrameStart, llvm::ArrayRef<va_t> InterruptedGPRs) {
+  auto Signing = Row.Signing.State;
+  if (Row.Signing.Status == AArch64RAQueryStatus::Unknown &&
+      Row.LiveSigningModifier) {
+    const auto &Live = *Row.LiveSigningModifier;
+    if (Live.Register >= InterruptedGPRs.size())
+      return std::nullopt;
+    const auto LoadedPC = InterruptedGPRs[Live.Register];
+    if (LoadedPC < LoadedFrameStart ||
+        LoadedPC - LoadedFrameStart >= Range.size())
+      return std::nullopt;
+    const auto PC = Range.Begin + (LoadedPC - LoadedFrameStart);
+    if (!llvm::binary_search(Live.SigningPCs, PC))
+      return std::nullopt;
+    Signing = AArch64ReturnAddressState{AArch64RASigningKind::SPAndPC, Live.Key,
+                                        AArch64RARecipe::NonHintPAuthLR, PC};
+  } else if (Row.Signing.Status != AArch64RAQueryStatus::Known || !Signing) {
+    return std::nullopt;
+  }
+  if ((Row.CFARegister != kSP && Row.CFARegister != kFP) ||
       Row.CodeOffset >= Range.size() ||
       !std::in_range<ptrdiff_t>(Row.CFAOffset))
     return std::nullopt;
@@ -1302,7 +1397,7 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
       Vectors.HighOffsets[D] = High.Offset;
     }
   }
-  const auto &State = *Row.Signing.State;
+  const auto &State = *Signing;
   const bool B = State.Key == AArch64RAKey::B;
   switch (State.Kind) {
   case AArch64RASigningKind::Unsigned:

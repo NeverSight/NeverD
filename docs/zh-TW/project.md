@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 770aa2b5d4cd265ed9e78bf95b3a616c83f41d8203c5f7791704cbe9d506c17f -->
+<!-- i18n-source: ffb9cc2753916bb01223ed5f796ce889835795af5d3c24fe97fd3cb12ff50b59 -->
 
 <div align="center">
 
@@ -68,7 +68,7 @@ CLI、整合方與 AI 智慧體透過 **純 C API** 使用同一個引擎 **`lib
 
 | 目標 | 已驗證的 ELF 組態 |
 |---|---|
-| RISC-V | 小端序 RV32I/ILP32 和 RV64I/LP64。依 ELF 標記選用 M、A、整數 C，或個別的 Zmmul、Zaamo、Zalrsc 和 Zca 擴充。ELF ISA 屬性也可啟用 Zba 1.0、Zbb 1.0 與 Zbs 1.0。 |
+| RISC-V | 小端序 RV32I/ILP32 和 RV64I/LP64。依 ELF 標記選用 M、A、整數 C，或個別的 Zmmul、Zaamo、Zalrsc 和 Zca 擴充。ELF ISA 屬性也可啟用 Zba 1.0、Zbb 1.0、Zbs 1.0 與 Zicond 1.0。 |
 | PowerPC | 大端序及小端序的 PPC32 System V 和 PPC64 ELFv1/ELFv2。PPC32 支援透過 secure PLT 和傳統 BSS-PLT 進行跨模組呼叫。兩種 PPC64 ABI 均支援跨模組 PLT 呼叫及 TOC 切換。ELFv1 使用函式描述元，ELFv2 支援全域進入點與本地進入點。已驗證帶號及無號除法、傳回乘積高位字組的乘法、回報溢位的乘法，以及這些指令對 CR0 和 XER 的影響。PPC64 也支援 POWER10 帶前綴的整數加法、載入與儲存指令。 |
 
 這些架構設定的原生程式碼重寫仍待實作。 [RISC-V 與 PowerPC 支援範圍（英文）](../riscv-powerpc.md)

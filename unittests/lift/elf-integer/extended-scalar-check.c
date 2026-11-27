@@ -23,6 +23,21 @@ int check(void) {
       return 1;
   return 0;
 }
+#elif defined(TEST_RISCV_ZICOND)
+extern Word eval(Word, Word, Word);
+
+int check(void) {
+  const Word Conditions[] = {0, 1, ~0UL, 1UL << (sizeof(Word) * 8 - 1),
+                             (Word)0x100000000ULL};
+  for (unsigned I = 0; I < sizeof(Inputs) / sizeof(Word); ++I)
+    for (unsigned J = 0; J < sizeof(Inputs) / sizeof(Word); ++J)
+      for (unsigned K = 0; K < sizeof(Conditions) / sizeof(Word); ++K) {
+        Word C = Conditions[K];
+        if (eval(Inputs[I], Inputs[J], C) != (C ? Inputs[I] : Inputs[J]))
+          return 1;
+      }
+  return 0;
+}
 #elif defined(__riscv)
 extern Word eval(Word, Word);
 

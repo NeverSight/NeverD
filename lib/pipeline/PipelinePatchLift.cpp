@@ -437,14 +437,18 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     const bool OmitRefused = Opts.OmitRefusedLLVMBodies && !Opts.PatchMode &&
                              !Result.InterpreterMachineSourceABI;
     std::vector<char> Mask;
-    if (Opts.PatchMode && Img.isArm64e())
+    if (Opts.PatchMode && Img.isArm64e()) {
+      llvm::DenseMap<va_t, const LowFunc *> Source;
+      for (const auto &LF : Result.LowFuncs)
+        Source.try_emplace(LF.Entry, &LF);
       for (const auto &[Index, F] : llvm::enumerate(Result.MedFuncs))
-        if (needsMachONativeRegisterBody(F, Img)) {
+        if (needsMachONativeRegisterBody(F, Img, Source.lookup(F.Entry))) {
           if (Mask.empty())
             Mask.assign(Result.MedFuncs.size(), 1);
           Mask[Index] = 0;
           NativeRegisterEntries.push_back(F.Entry);
         }
+    }
     uint64_t UnhandledValueIntrinsics = 0;
     // Why a refused body fails a lift that cannot leave it out.
     std::string Refusal;

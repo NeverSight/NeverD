@@ -44,6 +44,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <functional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -194,6 +195,57 @@ llvm::APInt OpSemantics::apply(GramOp Op,
     return evalNodeAP(Ctx, Template[unsigned(Op)], Args);
   default:
     return evalNodeAP(Ctx, Template[unsigned(Op)], Args);
+  }
+}
+
+void OpSemantics::applyWideColumn(GramOp Op, const uint64_t *A,
+                                  const uint64_t *B,
+                                  llvm::MutableArrayRef<uint64_t> Out) const {
+  const unsigned Words = Ones.getNumWords();
+  const uint64_t HighMask = Ones.getRawData()[Words - 1];
+  for (size_t I = 0; I < Out.size(); I += Words) {
+    uint64_t *Dst = Out.data() + I;
+    const uint64_t *Left = A + I;
+    switch (Op) {
+    case GramOp::Add:
+      std::copy_n(Left, Words, Dst);
+      llvm::APInt::tcAdd(Dst, B + I, 0, Words);
+      break;
+    case GramOp::Sub:
+      std::copy_n(Left, Words, Dst);
+      llvm::APInt::tcSubtract(Dst, B + I, 0, Words);
+      break;
+    case GramOp::Neg:
+      std::copy_n(Left, Words, Dst);
+      llvm::APInt::tcNegate(Dst, Words);
+      break;
+    case GramOp::Mul:
+      llvm::APInt::tcMultiply(Dst, Left, B + I, Words);
+      break;
+    case GramOp::And:
+      std::transform(Left, Left + Words, B + I, Dst, std::bit_and<>());
+      break;
+    case GramOp::Or:
+      std::transform(Left, Left + Words, B + I, Dst, std::bit_or<>());
+      break;
+    case GramOp::Xor:
+      std::transform(Left, Left + Words, B + I, Dst, std::bit_xor<>());
+      break;
+    case GramOp::Not:
+      std::transform(Left, Left + Words, Dst, std::bit_not<>());
+      break;
+    case GramOp::Shl:
+    case GramOp::LShr:
+    case GramOp::AShr: {
+      const unsigned Width = Ones.getBitWidth();
+      const llvm::APInt Args[] = {llvm::APInt(Width, {Left, Words}),
+                                  llvm::APInt(Width, {B + I, Words})};
+      const llvm::APInt Value = apply(Op, Args);
+      std::copy_n(Value.getRawData(), Words, Dst);
+      break;
+    }
+    }
+    Dst[Words - 1] &= HighMask;
   }
 }
 

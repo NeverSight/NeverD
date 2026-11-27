@@ -2052,8 +2052,7 @@ TEST(SymSimplifyGuard, OpaqueLoadStillChecksItsOwnPoisonGeneratingMetadata) {
 //===----------------------------------------------------------------------===//
 
 /// Two different IR spellings of the same logical shift are added together.
-/// The derivational MBA engine deliberately treats the shifts as opaque, while
-/// synthesis can discover the shorter `2 * (x lshr 4)` spelling.
+/// Their sum has the shorter spelling `2 * (x lshr 4)`.
 llvm::Function *buildSynthesisShiftDouble(llvm::Module &M,
                                           llvm::StringRef Name) {
   llvm::LLVMContext &C = M.getContext();
@@ -2130,9 +2129,48 @@ llvm::Function *buildTwoSynthesisShiftRoots(llvm::Module &M) {
 
 SymSimplifyOptions synthesisOptions() {
   SymSimplifyOptions Opts;
+  // Exercise candidate search and proof even when the input also admits an
+  // exact local MBA derivation.
+  Opts.MBA.MaxWork = 0;
   Opts.EnableSynthesis = true;
   Opts.Synthesis.UseStochasticFallback = false;
   return Opts;
+}
+
+void expectDoubledShift(const llvm::Function &F) {
+  unsigned Adds = 0;
+  unsigned MultipliesByTwo = 0;
+  unsigned LogicalShiftsByFour = 0;
+  for (const llvm::Instruction &I : llvm::instructions(F)) {
+    Adds += I.getOpcode() == llvm::Instruction::Add;
+    if (I.getOpcode() == llvm::Instruction::Mul)
+      for (const llvm::Value *Op : I.operand_values())
+        if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(Op))
+          MultipliesByTwo += CI->equalsInt(2);
+    if (I.getOpcode() == llvm::Instruction::LShr)
+      if (const auto *Amount =
+              llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1)))
+        LogicalShiftsByFour += Amount->equalsInt(4);
+  }
+  EXPECT_EQ(Adds, 0u) << printFunction(F);
+  EXPECT_EQ(MultipliesByTwo, 1u) << printFunction(F);
+  EXPECT_EQ(LogicalShiftsByFour, 1u) << printFunction(F);
+}
+
+TEST(SymSimplifyGuard, ShiftDerivationPrecedesSynthesis) {
+  llvm::LLVMContext C;
+  llvm::Module M("m", C);
+  llvm::Function *F = buildSynthesisShiftDouble(M, "derived_shift");
+  SymSimplifyOptions Opts;
+  Opts.EnableSynthesis = true;
+
+  const auto Result = SymSimplifyPass::simplifyWithResult(*F, Opts);
+
+  EXPECT_EQ(Result.Rewrites, 1u);
+  EXPECT_EQ(Result.SearchWork, 0u);
+  EXPECT_EQ(Result.ProofWork.Queries, 0u);
+  expectDoubledShift(*F);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
 TEST(SymSimplifyGuard, SynthesisEquivalent) {
@@ -2151,23 +2189,7 @@ TEST(SymSimplifyGuard, SynthesisEquivalent) {
   EXPECT_FALSE(Result.Counterexample.has_value());
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 
-  unsigned Adds = 0;
-  unsigned MultipliesByTwo = 0;
-  unsigned LogicalShiftsByFour = 0;
-  for (const llvm::Instruction &I : llvm::instructions(*F)) {
-    Adds += I.getOpcode() == llvm::Instruction::Add;
-    if (I.getOpcode() == llvm::Instruction::Mul)
-      for (const llvm::Value *Op : I.operand_values())
-        if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(Op))
-          MultipliesByTwo += CI->equalsInt(2);
-    if (I.getOpcode() == llvm::Instruction::LShr)
-      if (const auto *Amount =
-              llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1)))
-        LogicalShiftsByFour += Amount->equalsInt(4);
-  }
-  EXPECT_EQ(Adds, 0u) << printFunction(*F);
-  EXPECT_EQ(MultipliesByTwo, 1u) << printFunction(*F);
-  EXPECT_EQ(LogicalShiftsByFour, 1u) << printFunction(*F);
+  expectDoubledShift(*F);
 }
 
 TEST(SymSimplifyGuard, SemanticAffineSynthesisAcrossBlocksAndAtCallArguments) {
@@ -3012,9 +3034,6 @@ TEST(SymSimplifyGuard, DeepO0ForwardsSemanticOptionsAndCountsDefinitionsOnce) {
   Options.Strength = Pipeline::OptStrength::Deep;
   Options.LLVMLevel = llvm::OptimizationLevel::O0;
   Options.Semantic = synthesisOptions();
-  // Make synthesis, rather than the derivational MBA engine, the only route to
-  // the shorter x^z result.  InstCombine cannot remove the vanishing y input.
-  Options.Semantic.MBA.MaxWork = 0;
   OptimizationResult Result = Pipeline::optimizeModule(M, Options);
 
   EXPECT_EQ(Result.FunctionsVisited, 1u);

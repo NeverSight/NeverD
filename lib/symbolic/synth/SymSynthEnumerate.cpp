@@ -415,31 +415,20 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
       Overshift[I] = Ctx.constValue(Bank.node(I)).uge(P.Width);
     }
 
-  llvm::SmallVector<llvm::APInt, 2> Args;
-
-  // Read a candidate's behaviour off its operands'.  Nearly every search is at
-  // a machine width, where a column of words needs no per-point interpretation.
+  // Source and destination are disjoint rows in the bank. A probe may read
+  // one complete point, including all of its words at arbitrary widths.
   auto measure = [&](GramOp Op, llvm::ArrayRef<size_t> Operands,
-                     llvm::MutableArrayRef<Word> Out) {
+                     llvm::MutableArrayRef<Word> Out, size_t FirstPoint = 0) {
+    const size_t Offset = FirstPoint * ValueWords;
+    const Word *A = Bank.behaviour(Operands.front()).data() + Offset;
+    const Word *B = Operands.size() == 2
+                        ? Bank.behaviour(Operands.back()).data() + Offset
+                        : nullptr;
     if constexpr (std::is_same_v<Word, uint64_t>) {
-      if (ValueWords > 1) {
-        Args.resize(Operands.size());
-        for (size_t Pt = 0; Pt < Points; ++Pt) {
-          for (size_t K = 0; K < Operands.size(); ++K)
-            Args[K] = llvm::APInt(
-                P.Width,
-                Bank.behaviour(Operands[K]).slice(Pt * ValueWords, ValueWords));
-          const llvm::APInt Value = Sem.apply(Op, Args);
-          std::copy_n(Value.getRawData(), ValueWords,
-                      Out.data() + Pt * ValueWords);
-        }
-        return;
-      }
+      if (ValueWords > 1)
+        return Sem.applyWideColumn(Op, A, B, Out);
     }
-    Sem.applyColumn(Op, Bank.behaviour(Operands[0]).data(),
-                    Operands.size() > 1 ? Bank.behaviour(Operands[1]).data()
-                                        : nullptr,
-                    Out.data(), Points);
+    Sem.applyColumn(Op, A, B, Out.data(), Out.size());
   };
 
   // Consider one candidate: read its behaviour off its operands', and build it
@@ -598,59 +587,75 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
     const size_t Left = Effort.remaining();
     if (!Left)
       return Result;
-    if (ValueWords == 1 && isLastTier(Cost, Left)) {
+    if (isLastTier(Cost, Left)) {
       // A mismatch at one measured point rules out a match of the complete
       // grid. A surviving match replays this tier in the ordinary order,
       // preserving even the recipes and proof callbacks before that match.
       size_t Visited = 0;
       bool Match = false;
-      llvm::SmallVector<Word, 16> Inputs, Results;
-      const size_t Pt = Packed ? HashWords - 1 : Points - 1;
-      visitGroups(Cost, [&](GramOp Op, llvm::ArrayRef<size_t> Lhs,
-                            llvm::ArrayRef<size_t> Rhs, bool Triangular) {
-        const bool Unary = isUnaryGramOp(Op);
-        const auto Indices = Unary ? Lhs : Rhs;
-        if (Lhs.empty() || Indices.empty())
-          return true;
-        // Read the probe point once per operand in this group. Evaluate a
-        // whole row against the fixed left operand with the same word
-        // semantics as a full signature. A work cutoff limits the row itself.
-        Inputs.clear();
-        for (size_t I : Indices.take_front(Left - Visited))
-          Inputs.push_back(Bank.behaviour(I)[Pt]);
-        Results.resize_for_overwrite(Inputs.size());
-        auto probeRow = [&](size_t A, size_t Start) {
-          const size_t Count = std::min(Inputs.size() - Start, Left - Visited);
-          if (Unary)
-            Sem.applyColumn<Word>(Op, Inputs.data(), nullptr, Results.data(),
-                                  Count);
-          else {
-            const Word X = Bank.behaviour(A)[Pt];
-            Sem.applyColumn<Word, true>(Op, &X, Inputs.data() + Start,
-                                        Results.data(), Count);
-          }
-          Visited += Count;
-          for (size_t I = 0; I != Count; ++I) {
-            if (Results[I] != Target[Pt])
-              continue;
-            const size_t Other = Indices[Start + I];
-            const size_t Pair[] = {Unary ? Other : A, Other};
-            measure(Op, llvm::ArrayRef(Pair).take_front(Unary ? 1 : 2),
-                    Measured);
-            if (Behaviour(Measured) == Behaviour(Target)) {
-              Match = true;
-              return false;
+      if (ValueWords > 1) {
+        const auto Expected = Behaviour(Target).take_back(ValueWords);
+        auto Probe = llvm::MutableArrayRef(Measured).take_back(ValueWords);
+        visitTier(Cost,
+                  [&](GramOp Op, llvm::ArrayRef<size_t> Operands, size_t) {
+                    ++Visited;
+                    measure(Op, Operands, Probe, Points - 1);
+                    if (Behaviour(Probe) == Expected) {
+                      measure(Op, Operands, Measured);
+                      Match = Behaviour(Measured) == Behaviour(Target);
+                    }
+                    return !Match && Visited != Left;
+                  });
+      } else {
+        llvm::SmallVector<Word, 16> Inputs, Results;
+        const size_t Pt = Packed ? HashWords - 1 : Points - 1;
+        visitGroups(Cost, [&](GramOp Op, llvm::ArrayRef<size_t> Lhs,
+                              llvm::ArrayRef<size_t> Rhs, bool Triangular) {
+          const bool Unary = isUnaryGramOp(Op);
+          const auto Indices = Unary ? Lhs : Rhs;
+          if (Lhs.empty() || Indices.empty())
+            return true;
+          // Read the probe point once per operand in this group. Evaluate a
+          // whole row against the fixed left operand with the same word
+          // semantics as a full signature. A work cutoff limits the row itself.
+          Inputs.clear();
+          for (size_t I : Indices.take_front(Left - Visited))
+            Inputs.push_back(Bank.behaviour(I)[Pt]);
+          Results.resize_for_overwrite(Inputs.size());
+          auto probeRow = [&](size_t A, size_t Start) {
+            const size_t Count =
+                std::min(Inputs.size() - Start, Left - Visited);
+            if (Unary)
+              Sem.applyColumn<Word>(Op, Inputs.data(), nullptr, Results.data(),
+                                    Count);
+            else {
+              const Word X = Bank.behaviour(A)[Pt];
+              Sem.applyColumn<Word, true>(Op, &X, Inputs.data() + Start,
+                                          Results.data(), Count);
             }
-          }
-          return Visited != Left;
-        };
-        if (Unary)
-          return probeRow(0, 0);
-        for (size_t J = 0; J != Lhs.size(); ++J)
-          if (!probeRow(Lhs[J], Triangular ? J : 0))
-            return false;
-        return true;
-      });
+            Visited += Count;
+            for (size_t I = 0; I != Count; ++I) {
+              if (Results[I] != Target[Pt])
+                continue;
+              const size_t Other = Indices[Start + I];
+              const size_t Pair[] = {Unary ? Other : A, Other};
+              measure(Op, llvm::ArrayRef(Pair).take_front(Unary ? 1 : 2),
+                      Measured);
+              if (Behaviour(Measured) == Behaviour(Target)) {
+                Match = true;
+                return false;
+              }
+            }
+            return Visited != Left;
+          };
+          if (Unary)
+            return probeRow(0, 0);
+          for (size_t J = 0; J != Lhs.size(); ++J)
+            if (!probeRow(Lhs[J], Triangular ? J : 0))
+              return false;
+          return true;
+        });
+      }
       if (!Match) {
         Effort.spend(std::max<size_t>(Visited, 1));
         return Result;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute compiled Power ISA 3.1 fixed-point and RISC-V Zba/Zbs fixtures in QEMU."""
+"""Execute compiled Power ISA 3.1 fixed-point and RISC-V Zba/Zbs and Zicond fixtures in QEMU."""
 
 import argparse
 from pathlib import Path
@@ -32,21 +32,20 @@ def project(args, image, function, route):
     return source
 
 
-def check(args, work, profile):
+def check(args, work, profile, asm, flags, cpu, oracle_flags=()):
     rv = profile.startswith("riscv")
     bits = profile[-2:]
-    flags = [f"-march=rv{bits}i_zba_zbs"] if rv else ["-mcpu=pwr10"]
-    asm = HERE / ("riscv-bitmanip.S" if rv else "ppc64-prefixed.S")
-    qemu, cpu = CPUS[profile]
+    asm = HERE / asm
+    qemu, _ = CPUS[profile]
     runner = [args.qemu_dir / f"qemu-{qemu}", "-cpu", cpu]
     placement = image_base_option(args.ld)
     # The RISC-V source ELF has IALIGN=32. Build the oracle with base I
     # so its return PCs are word aligned and its bit operations are independent.
-    oracle_flags = compiler_flags(profile) + ([f"-march=rv{bits}i"] if rv else [])
+    caller_flags = compiler_flags(profile) + ([f"-march=rv{bits}i"] if rv else [])
     objects = []
     for name in ("extended-scalar-check.c", "extended-scalar-start.S"):
         obj = work / (name + ".o")
-        subprocess.run([args.clang, *oracle_flags, "-O2", "-c", HERE / name,
+        subprocess.run([args.clang, *caller_flags, *oracle_flags, "-O2", "-c", HERE / name,
                         "-o", obj], check=True)
         objects.append(obj)
 
@@ -55,7 +54,7 @@ def check(args, work, profile):
     native = work / "native.elf"
     compile_elf(args, work, profile, asm, native, "_start", callees=objects, extra_flags=flags)
     subprocess.run([*runner, native], check=True)
-    print(f"{profile} original passed", flush=True)
+    print(f"{profile} {asm.stem} original passed", flush=True)
     with original.open("rb") as stream:
         elf = ELFFile(stream)
         original_addresses = [elf["e_entry"]]
@@ -75,7 +74,7 @@ def check(args, work, profile):
                            for a in original_addresses) for s in ELFFile(stream).iter_segments()):
                     raise AssertionError("original code or data is still mapped")
             subprocess.run([*runner, rebuilt], check=True)
-            print(f"{profile} {route} {opt} passed", flush=True)
+            print(f"{profile} {asm.stem} {route} {opt} passed", flush=True)
 
 
 def check_power10_linkage(args, work, profile, loader):
@@ -155,7 +154,14 @@ def main():
         for profile in args.profiles:
             work = Path(directory) / profile
             work.mkdir()
-            check(args, work, profile)
+            _, cpu = CPUS[profile]
+            if profile.startswith("riscv"):
+                base = "rv" + profile[-2:]
+                check(args, work, profile, "riscv-bitmanip.S", [f"-march={base}i_zba_zbs"], cpu)
+                check(args, work, profile, "riscv-zicond.S", [f"-march={base}i_zicond"],
+                      f"{base},zicond=true", ["-DTEST_RISCV_ZICOND"])
+            else:
+                check(args, work, profile, "ppc64-prefixed.S", ["-mcpu=pwr10"], cpu)
             if args.ppc64_loaders and profile.startswith("powerpc"):
                 loader = args.ppc64_loaders[int(profile.endswith("le"))]
                 check_power10_linkage(args, work, profile, loader)
