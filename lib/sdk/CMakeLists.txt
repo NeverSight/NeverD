@@ -139,6 +139,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDAArch64UnwindRecovery
     NeverDLift
     NeverDLoader
+    NeverDJVMRecovery
     NeverDPythonRecovery
     NeverDLuaRecovery
     NeverDSupport

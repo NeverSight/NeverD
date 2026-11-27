@@ -151,6 +151,33 @@ cl::SubCommand PatchBytesCmd("patch-bytes",
                              "Preview, apply, revert and export byte patches");
 cl::SubCommand PatchCmd("patch", "Patch binary with modified IR");
 cl::SubCommand InfoCmd("info", "Show binary metadata summary");
+cl::SubCommand JavaCmd("java", "Inspect JVM classes and multi-release JARs");
+cl::opt<unsigned>
+    JavaRelease("release",
+                cl::desc("Java runtime release (0 selects the JAR base)"),
+                cl::sub(JavaCmd));
+cl::opt<int> JavaComponent("component",
+                           cl::desc("Select a physical component ID"),
+                           cl::init(-1), cl::sub(JavaCmd));
+cl::opt<bool> JavaPreview("enable-preview",
+                          cl::desc("Admit preview for the selected release"),
+                          cl::sub(JavaCmd));
+cl::opt<bool>
+    JavaInventory("inventory",
+                  cl::desc("Index classes and methods without decoding bodies"),
+                  cl::sub(JavaCmd));
+cl::opt<std::string> JavaClass("class",
+                               cl::desc("Select an internal class name"),
+                               cl::sub(JavaCmd));
+cl::opt<std::string>
+    JavaMethod("method", cl::desc("Select a method by name and JVM descriptor"),
+               cl::sub(JavaCmd));
+cl::opt<std::string> JavaView("view", cl::desc("Export java, bytecode, or ir"),
+                              cl::init("java"), cl::sub(JavaCmd));
+cl::list<std::string>
+    JavaDependencies("dependency",
+                     cl::desc("Ordered local class or JAR dependency"),
+                     cl::ZeroOrMore, cl::sub(JavaCmd));
 cl::SubCommand PythonCmd("python",
                          "Recover Python source, bytecode and packages");
 cl::opt<std::string> PythonProfile(
@@ -315,25 +342,25 @@ cl::SubCommand TranslateObjectCmd(
 cl::opt<std::string> InputFile(
     cl::Positional, cl::desc("<binary>"), cl::Required, cl::sub(PatchBytesCmd),
     cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
-    cl::sub(InfoCmd), cl::sub(LuaCmd), cl::sub(PythonCmd), cl::sub(IdentifyCmd),
-    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
-    cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
-    cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
-    cl::sub(SegmentsCmd), cl::sub(ExportCmd), cl::sub(BookmarksCmd),
-    cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
-    cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd), cl::sub(OperandsCmd),
-    cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
-    cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
-    cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(ScanCmd), cl::sub(MobileCmd),
-    cl::sub(AnalysisSectionsCmd));
+    cl::sub(InfoCmd), cl::sub(LuaCmd), cl::sub(PythonCmd), cl::sub(JavaCmd),
+    cl::sub(IdentifyCmd), cl::sub(StringsCmd), cl::sub(XrefsCmd),
+    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(FuncsCmd),
+    cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
+    cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
+    cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
+    cl::sub(RenameCmd), cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
+    cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
+    cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
+    cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd), cl::sub(DashboardCmd),
+    cl::sub(SigsCmd), cl::sub(SymbolicCmd), cl::sub(ScanCmd),
+    cl::sub(MobileCmd), cl::sub(AnalysisSectionsCmd));
 
 cl::opt<std::string> OutputFile("o", cl::sub(LuaCmd), cl::sub(PythonCmd),
-                                cl::desc("Output file"), cl::init(""),
-                                cl::sub(PatchBytesCmd), cl::sub(LiftCmd),
-                                cl::sub(DecompileCmd), cl::sub(PatchCmd),
-                                cl::sub(ScanCmd), cl::sub(MobileCmd),
-                                cl::sub(TypesCmd));
+                                cl::sub(JavaCmd), cl::desc("Output file"),
+                                cl::init(""), cl::sub(PatchBytesCmd),
+                                cl::sub(LiftCmd), cl::sub(DecompileCmd),
+                                cl::sub(PatchCmd), cl::sub(ScanCmd),
+                                cl::sub(MobileCmd), cl::sub(TypesCmd));
 
 cl::opt<bool>
     Verbose("v", cl::desc("Verbose output"), cl::sub(LiftCmd),
@@ -1513,18 +1540,19 @@ cl::opt<std::string>
 
 cl::opt<bool> JsonOutput(
     "json", cl::desc("Output as JSON"), cl::sub(InfoCmd), cl::sub(LuaCmd),
-    cl::sub(PythonCmd), cl::sub(IdentifyCmd), cl::sub(FuncsCmd),
-    cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(StringsCmd),
-    cl::sub(XrefsCmd), cl::sub(PathsCmd), cl::sub(CallTreeCmd),
-    cl::sub(ImportsCmd), cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
-    cl::sub(PluginsCmd), cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
-    cl::sub(CallGraphCmd), cl::sub(RenameCmd), cl::sub(FunctionEditsCmd),
-    cl::sub(ItemsCmd), cl::sub(OperandsCmd), cl::sub(SearchCmd),
-    cl::sub(SectionsCmd), cl::sub(SymbolsCmd), cl::sub(RelocsCmd),
-    cl::sub(HeadersCmd), cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
-    cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(ScanCmd),
-    cl::sub(MobileCmd), cl::sub(DecompileCmd), cl::sub(TypesCmd),
-    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(AnalysisSectionsCmd));
+    cl::sub(PythonCmd), cl::sub(JavaCmd), cl::sub(IdentifyCmd),
+    cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd),
+    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
+    cl::sub(CallTreeCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
+    cl::sub(SegmentsCmd), cl::sub(PluginsCmd), cl::sub(BookmarksCmd),
+    cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
+    cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd), cl::sub(OperandsCmd),
+    cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
+    cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
+    cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+    cl::sub(ScanCmd), cl::sub(MobileCmd), cl::sub(DecompileCmd),
+    cl::sub(TypesCmd), cl::sub(PathsCmd), cl::sub(CallTreeCmd),
+    cl::sub(AnalysisSectionsCmd));
 
 //===----------------------------------------------------------------------===//
 // Plugins-specific options

@@ -88,6 +88,14 @@ NEVERD_API const char *neverd_lua_recover_json_v1(const char *Path,
                                                   neverd_cancel_probe_fn Stop,
                                                   void *Context);
 /// Recover immutable Python evidence. Component -1 selects entry scripts.
+/// Inspect a JVM class, source file or JAR. Options is an optional UTF-8 JSON
+/// object with release, preview, inventory, class, method, component and
+/// ordered local dependencies. Free the report with neverd_free_string.
+NEVERD_API const char *neverd_jvm_recover_json_v1(const char *Path,
+                                                  const char *Options,
+                                                  neverd_cancel_probe_fn Stop,
+                                                  void *Context);
+
 /// Return a language-recovery-v1 report; release it with neverd_free_string.
 NEVERD_API const char *
 neverd_python_recover_json_v1(const char *Path, const char *Profile,

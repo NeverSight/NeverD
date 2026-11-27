@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>檢視 JVM 類別與 JAR 檔案…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>檢視 Java 位元組碼、具型別的中介表示與重建的方法</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>記憶體安全掃描...</translation>
     </message>
@@ -11254,6 +11262,109 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1：%2（已掃描 %3，已略過 %4，結論未定 %5）</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>檢視 JVM 類別與 JAR 檔案</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>瀏覽…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>成品</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>JAR 基本項目</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>啟用預覽功能</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>執行環境</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>本機相依項目…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>清除</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>相依項目</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>類別或成員</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>方法</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>檢視清單</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>分析所選項目</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java 原始碼</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>位元組碼</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>具型別的中介表示</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>證據</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>位元組碼對應</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>複製檢視</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>匯出檢視…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>匯出報告…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>開啟 JVM 成品</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>所選執行環境檢視</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>所有方法</translation>
     </message>
 </context>
 <context>

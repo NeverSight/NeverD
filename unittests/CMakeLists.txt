@@ -90,6 +90,13 @@ add_neverd_unittest(NeverDSupportSharedValueTests
 target_include_directories(NeverDSupportSharedValueTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
+add_neverd_unittest(NeverDJVMRecoveryTests
+  jvm/JVMRecoveryTests.cpp
+  LINK_COMPONENTS JVMRecovery
+)
+target_compile_definitions(NeverDJVMRecoveryTests PRIVATE
+  JVM_ARTIFACT_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/jvm/fixtures/classes.json")
+
 add_neverd_unittest(NeverDPythonRecoveryTests
   python/PythonRecoveryTests.cpp
   LINK_COMPONENTS PythonRecovery

@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include "../PathPolicy.h"
+
 #include <cstdint>
 #include <map>
 #include <string>
@@ -23,10 +25,13 @@ class ArchivePathIndex {
   };
   std::map<std::string, Node> Paths;
   uint64_t &Metadata;
+  std::string (*Key)(std::string_view);
   void charge(uint64_t Bytes);
 
 public:
-  explicit ArchivePathIndex(uint64_t &Metadata) : Metadata(Metadata) {}
+  explicit ArchivePathIndex(
+      uint64_t &Metadata, std::string (*Key)(std::string_view) = archivePathKey)
+      : Metadata(Metadata), Key(Key) {}
   void admit(const std::string &Path, bool Directory);
 };
 } // namespace neverd::web
