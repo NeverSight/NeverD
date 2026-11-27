@@ -630,7 +630,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       return std::nullopt;
     FrameTransfer Transfer(State, 0);
     registration_abi::PrecisionArguments Arguments;
-    registration_abi::CRTDataStoreProof CRTData;
+    registration_abi::CRTDataProof CRTData;
     bool DoesNotReturn = false;
     for (const auto &Op : Block.Ops) {
       size_t Width = Op.Output.Size;
@@ -640,31 +640,30 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         return std::nullopt;
       Transfer.beginInstruction(Op.Addr);
       const auto Abstract = Body.stackOperation(Op);
-      if (PreservesEntryImports && Op.Opcode != NdOp::CALL &&
-          Op.Opcode != NdOp::INDIR_CALL &&
-          !registration_abi::preservesOrdinaryRegistrationBindings(
-              Image, Abstract, Transfer, Body.callerArgumentReadBytes(), Work))
+      const bool CheckEntryBindings = PreservesEntryImports &&
+                                      Op.Opcode != NdOp::CALL &&
+                                      Op.Opcode != NdOp::INDIR_CALL;
+      const bool TrackCRTData =
+          !Registration && !CxxPaths &&
+          (CRTData.active() || !Body.ImportDataLoads.empty());
+      const bool CheckCRTMemory =
+          TrackCRTData && (Op.Opcode == NdOp::LOAD ||
+                           (CRTData.active() && Op.Opcode == NdOp::STORE));
+      const bool Closed =
+          (CheckEntryBindings || CheckCRTMemory) &&
+          registration_abi::preservesOrdinaryRegistrationBindings(
+              Image, Abstract, Transfer, Body.callerArgumentReadBytes(), Work);
+      std::optional<registration_abi::CRTDataAccess> CRTAccess;
+      if (TrackCRTData &&
+          !CRTData.transfer(
+              Abstract, Body.ImportDataLoads.contains({Op.Addr, Op.Seq}),
+              State.ImportBindingsIntact, Closed, Work, CRTAccess))
+        return std::nullopt;
+      if (CheckEntryBindings && !Closed &&
+          CRTAccess != registration_abi::CRTDataAccess::ReadArgumentWord)
         PreservesEntryImports = false;
-      bool CRTDataStore = false;
-      if ((!Body.ImportDataLoads.empty() || CRTData.active()) &&
-          !Registration && !CxxPaths) {
-        const auto DataLoad = Body.ImportDataLoads.find({Op.Addr, Op.Seq});
-        const bool ClosedAccess =
-            (Op.Opcode == NdOp::LOAD ||
-             (CRTData.active() && Op.Opcode == NdOp::STORE)) &&
-            registration_abi::preservesOrdinaryRegistrationBindings(
-                Image, Abstract, Transfer, Body.callerArgumentReadBytes(),
-                Work);
-        if (!CRTData.transfer(Abstract,
-                              DataLoad == Body.ImportDataLoads.end()
-                                  ? std::nullopt
-                                  : std::optional<va_t>{DataLoad->second},
-                              State.ImportBindingsIntact, ClosedAccess, Work,
-                              CRTDataStore))
-          return std::nullopt;
-      }
       if (!Registration && !CxxPaths && State.ImportBindingsIntact &&
-          !Body.ImportSlots.empty() && !CRTDataStore &&
+          !Body.ImportSlots.empty() && !CRTAccess &&
           (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE)) {
         const bool CurrentImportRead =
             Op.Opcode == NdOp::LOAD &&
@@ -703,7 +702,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         if (!registration_state::isFramePreservingIntrinsic(Op))
           return std::nullopt;
       }
-      if (!CRTDataStore && !Body.ImportSlots.empty()) {
+      if (!CRTAccess && !Body.ImportSlots.empty()) {
         if (!chargeCalleeWork(Work, Body.ImportSlots.size() + 1))
           return std::nullopt;
         Transfer.invalidateImportBindings(Op, Body.ImportSlots);
@@ -847,11 +846,12 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
           !CxxPaths && Op.Output.Size == 4 &&
           (Op.Output == NdVar::reg(x86reg::RAX, 4) || Op.Output.isTemp())) {
         const auto *Imported = Image.findImportAt(*ImportedSlot);
-        if (Imported &&
-            registration_abi::isRegistrationCRTIntAccessor(*Imported) &&
-            registration_state::checkedCRTCallSlot(Image, Op, Work) ==
-                ImportedSlot)
-          CRTData.recordAccessorReturn(*ImportedSlot, Op.Output);
+        if (Imported && State.ImportBindingsIntact)
+          if (const auto Access =
+                  registration_abi::registrationCRTAccessorAccess(*Imported);
+              Access && registration_state::checkedCRTCallSlot(
+                            Image, Op, Work) == ImportedSlot)
+            CRTData.recordAccessorReturn(*Access, Op.Output);
       }
       if (PrecisionSuccess)
         // The source CALL and its FP effects remain. This exact invocation's

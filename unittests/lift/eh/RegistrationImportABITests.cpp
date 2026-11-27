@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <optional>
 #include <vector>
 
@@ -177,6 +178,51 @@ TEST(RegistrationImportABI, MainArgumentsUseTheirRuntimeAccessors) {
   checkUCRTCallerCleanup({"_get_initial_narrow_environment", 0},
                          "api-ms-win-crt-runtime-l1-1-0.dll",
                          "api-ms-win-crt-stdio-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, MainArgumentGettersBoundOnlyTheirOwnWord) {
+  struct Case {
+    std::vector<uint8_t> Body;
+    bool ReadsArgumentCell;
+  };
+  const Case Cases[] = {
+      {{0x8b, 0x30}, true},              // MOV ESI,[EAX]
+      {{0xff, 0x30, 0x59}, true},        // PUSH [EAX]; POP ECX
+      {{0x8b, 0x30, 0x8b, 0x08}, true},  // Same cell read twice
+      {{0x89, 0xc1, 0x8b, 0x31}, true},  // Copy of its address
+      {{0x8b, 0x00, 0x8b, 0x30}, false}, // Follow argv itself
+      {{0x8b, 0x30, 0x8b, 0x16}, false}, // Follow the loaded ESI
+      {{0x66, 0x8b, 0x30}, false},       // Partial word
+      {{0x89, 0x30}, false},             // Store to the cell
+      {{0xb0, 1, 0x8b, 0x30}, false},    // Rewritten address
+      {{0x8b, 0x70, 4}, false},          // Adjacent word
+  };
+  for (const char *Name : {"__p___argc", "__p___argv"}) {
+    for (bool ThroughStub : {false, true}) {
+      for (const auto &C : Cases) {
+        SCOPED_TRACE(::testing::Message() << Name << '/' << ThroughStub << '/'
+                                          << ::testing::PrintToString(C.Body));
+        ImportImage F({Name, 0}, ThroughStub);
+        F.Image.Imports.front().Module = "api-ms-win-crt-runtime-l1-1-0.dll";
+        auto &Code = F.Image.Segments.front().Data;
+        // A fresh direct use of the slot after the read needs a live binding.
+        auto Next = std::copy(C.Body.begin(), C.Body.end(),
+                              Code.begin() + (ThroughStub ? 5 : 6));
+        const uint8_t End[] = {0xff, 0x15, 0, 0x30, 0x40, 0, 0x31, 0xc0, 0xc3};
+        std::copy(std::begin(End), std::end(End), Next);
+        const auto Contract =
+            RegistrationCallCalleeIndex(F.Image).stackContract(
+                ImportImage::TextVA);
+        EXPECT_EQ(bool(Contract), C.ReadsArgumentCell);
+        if (Contract) {
+          EXPECT_EQ(Contract->StackPopBytes, 0u);
+          EXPECT_TRUE(Contract->PreservesImportBindings);
+          EXPECT_EQ(Contract->RequiredImports,
+                    (std::vector<va_t>{ImportImage::IATVA}));
+        }
+      }
+    }
+  }
 }
 
 TEST(RegistrationImportABI, StandardStreamGetterPreservesLiveBindings) {

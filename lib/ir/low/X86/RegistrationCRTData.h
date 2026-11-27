@@ -28,17 +28,21 @@ struct NdVar;
 
 namespace registration_abi {
 
-bool isRegistrationCRTIntAccessor(const Import &Imported);
+enum class CRTDataAccess : uint8_t { ReadArgumentWord, WriteInt };
+
+std::optional<CRTDataAccess>
+registrationCRTAccessorAccess(const Import &Imported);
 bool isCheckedRegistrationCRTDataSlot(const BinaryImage &Image, va_t Slot);
 
-/// One ordinary block's exact CRT int addresses. Receipts never feed frame
-/// loads, scalar results, cached CALL targets or a native memory contract.
-class CRTDataStoreProof {
+/// One ordinary block's authenticated CRT data addresses. Receipts never feed
+/// frame loads, scalar results, cached CALL targets or a native memory
+/// contract.
+class CRTDataProof {
   struct Pointer {
-    va_t Slot;
+    CRTDataAccess Access;
     uint16_t Width;
   };
-  std::array<std::optional<va_t>, 8> Registers;
+  std::array<std::optional<CRTDataAccess>, 8> Registers;
   std::map<uint64_t, Pointer> Temps;
   va_t Instruction = InvalidVA;
   bool Active = false;
@@ -49,16 +53,16 @@ class CRTDataStoreProof {
 
 public:
   bool active() const { return Active; }
-  /// The authenticated no-argument accessor returned its CRT-owned int in EAX.
-  void recordAccessorReturn(va_t Slot, const NdVar &Output);
+  /// The checked no-argument accessor returned its CRT-owned cell in EAX.
+  void recordAccessorReturn(CRTDataAccess Access, const NdVar &Output);
 
-  /// AuthenticatedLoad names only this exact current LOAD's typed import
-  /// receipt. A current binding is required to introduce its runtime address.
+  /// AuthenticatedDataLoad identifies a direct read of an eager CRT int import.
+  /// A live binding is required to introduce its runtime address.
   /// ClosedAccess permits a checked read or a write to allocated private
   /// stack bytes. Neither supplies a new CRT pointer.
-  bool transfer(const LowOp &Op, std::optional<va_t> AuthenticatedLoad,
-                bool BindingsLive, bool ClosedAccess, size_t &Work,
-                bool &DisjointStore);
+  bool transfer(const LowOp &Op, bool AuthenticatedDataLoad, bool BindingsLive,
+                bool ClosedAccess, size_t &Work,
+                std::optional<CRTDataAccess> &CurrentAccess);
 };
 
 } // namespace registration_abi

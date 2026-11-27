@@ -28,11 +28,6 @@
 namespace neverd::registration_abi {
 namespace {
 
-bool isUCRTMainArgumentAccessor(const Import &Imported) {
-  return (Imported.Name == "__p___argc" || Imported.Name == "__p___argv") &&
-         coff_loader::isUCRTRuntimeProvider(Imported.Module);
-}
-
 bool isCallerCleanupCRTImport(const Import &Imported) {
   enum class Family { Unknown, Legacy, Math, Stdio, Runtime, Initializers };
   const auto Provider = llvm::StringSwitch<Family>(Imported.Name)
@@ -50,7 +45,7 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
   if (Provider == Family::Initializers)
     return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
            coff_loader::isUCRTRuntimeProvider(Imported.Module);
-  return isUCRTMainArgumentAccessor(Imported);
+  return registrationCRTAccessorAccess(Imported).has_value();
 }
 
 } // namespace
@@ -233,8 +228,7 @@ bool preservesRegistrationImportBindings(const BinaryImage &Image,
     return true;
   // The no-argument argc and argv accessors return addresses of CRT globals.
   // Loading through those pointers reads live process inputs.
-  if (isRegistrationCRTIntAccessor(*Import) ||
-      isUCRTMainArgumentAccessor(*Import))
+  if (registrationCRTAccessorAccess(*Import))
     return true;
   // These APIs transform pointer bits with a process-specific secret, without
   // replacing the caller image's import slots. Keep the runtime result opaque;
