@@ -237,10 +237,12 @@ TEST(RegistrationImportABI, StartupImportsUseTheirOwnUCRTFamily) {
   const char *Runtime = "api-ms-win-crt-runtime-l1-1-0.dll";
   const char *Locale = "api-ms-win-crt-locale-l1-1-0.dll";
   const char *Math = "api-ms-win-crt-math-l1-1-0.dll";
-  for (ImportCase C : {ImportCase{"_configure_narrow_argv", 1},
-                       ImportCase{"_initialize_narrow_environment", 0},
-                       ImportCase{"_initialize_onexit_table", 1},
-                       ImportCase{"_register_onexit_function", 2}})
+  for (ImportCase C :
+       {ImportCase{"_configure_narrow_argv", 1},
+        ImportCase{"_initialize_narrow_environment", 0},
+        ImportCase{"_initialize_onexit_table", 1},
+        ImportCase{"_register_onexit_function", 2},
+        ImportCase{"_crt_atexit", 1}, ImportCase{"_crt_at_quick_exit", 1}})
     checkUCRTCallerCleanup(C, Runtime, Locale);
   checkUCRTCallerCleanup({"_configthreadlocale", 1}, Locale, Math);
   checkUCRTCallerCleanup({"__setusermatherr", 1}, Math, Runtime);

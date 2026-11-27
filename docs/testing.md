@@ -21078,7 +21078,8 @@ The PE32 startup ABI test covers the argument, environment, on-exit, math and
 locale routines used by the original MSVC program. It checks direct imports
 and their jump veneers against the owning API set and both UCRT DLLs. A
 different API set, a delayed import or conflicting storage withdraws the
-stack contract.
+stack contract. Both loader selections check the two exit-registration veneers
+in the original executable against their individual eager import slots.
 
 The PE32 startup fixture also checks both UCRT initializer walkers and the
 three relocated callbacks in their read-only tables.

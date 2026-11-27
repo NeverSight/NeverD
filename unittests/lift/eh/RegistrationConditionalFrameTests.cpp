@@ -1291,6 +1291,26 @@ TEST(RegistrationCRTFrame, XCPT4TypeInfoInitializesAnAlignedPrivateListHead) {
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4ExitRegistrarsUseTheirEagerRuntimeSlots) {
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    size_t Work = 0;
+    RegistrationCallCalleeIndex Index(*Image, &Work);
+    for (const auto &[Entry, Slot] :
+         {std::pair<va_t, va_t>{0x407d5c, 0x4080b0}, {0x407d62, 0x4080b4}}) {
+      SCOPED_TRACE(::testing::Message() << Selected << '/' << Entry);
+      const auto Callee = Index.stackContract(Entry);
+      ASSERT_TRUE(Callee);
+      EXPECT_TRUE(Callee->ImportVeneer);
+      EXPECT_EQ(Callee->RequiredImports, (std::vector<va_t>{Slot}));
+      EXPECT_EQ(Callee->StackPopBytes, 0u);
+      EXPECT_FALSE(Callee->PreservesImportBindings);
+    }
+    EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4StartupCallsTheUCRTCommodeAccessor) {
   auto Image = loadXCPT4();
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
