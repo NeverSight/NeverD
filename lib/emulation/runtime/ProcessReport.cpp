@@ -16,6 +16,7 @@
 #include "ProcessLinuxSignalsJSON.h"
 #include "ProcessLinuxTimeJSON.h"
 #include "ProcessNetworkJSON.h"
+#include "ProcessTraceJSON.h"
 #include "ProcessWindowsJSON.h"
 
 #include "neverd/emulation/ProcessReportFields.h"
@@ -32,21 +33,22 @@ llvm::Error invalid(llvm::StringRef Reason, llvm::StringRef Detail = {}) {
                                  llvm::Twine(Reason) + Detail);
 }
 std::string bits(uint64_t Value) { return llvm::utohexstr(Value, true); }
+llvm::json::Value bits(std::optional<uint64_t> Value) {
+  return Value ? llvm::json::Value(bits(*Value)) : nullptr;
+}
 llvm::json::Value faultJSON(const std::optional<BackendFault> &Fault) {
   if (!Fault)
     return nullptr;
   llvm::json::Object Object{{field::Kind, backendFaultKindName(Fault->Kind)},
                             {field::PC, bits(Fault->PC)}};
-  Object[field::Address] =
-      Fault->Address ? llvm::json::Value(bits(*Fault->Address)) : nullptr;
+  Object[field::Address] = bits(Fault->Address);
   Object[field::Size] = Fault->Size ? llvm::json::Value(*Fault->Size) : nullptr;
   Object[field::Access] =
       Fault->Access ? llvm::json::Value(backendAccessKindName(*Fault->Access))
                     : nullptr;
   Object[field::Interrupt] =
       Fault->Interrupt ? llvm::json::Value(*Fault->Interrupt) : nullptr;
-  Object[field::ErrorCode] =
-      Fault->ErrorCode ? llvm::json::Value(bits(*Fault->ErrorCode)) : nullptr;
+  Object[field::ErrorCode] = bits(Fault->ErrorCode);
   Object[field::Cause] =
       Fault->Cause ? llvm::json::Value(backendFaultCauseName(*Fault->Cause))
                    : nullptr;
@@ -218,135 +220,150 @@ llvm::Expected<ProcessOptions> processOptionsFromJSON(llvm::StringRef Text) {
   return Options;
 }
 
-std::string processResultJSON(const ProcessResult &Result) {
-  llvm::json::Array Services;
-  for (const auto &Event : Result.Services) {
-    llvm::json::Array Arguments;
-    for (uint64_t Value : Event.Arguments)
-      Arguments.push_back(bits(Value));
-    llvm::json::Object Service{
-        {field::PC, bits(Event.PC)},
-        {field::Number, bits(Event.Number)},
-        {field::Arguments, std::move(Arguments)},
-        {field::Result,
-         Event.Result ? llvm::json::Value(bits(*Event.Result)) : nullptr}};
-    if (Event.Error)
-      Service[field::Error] = *Event.Error;
-    if (Event.ThreadID)
-      Service[field::ThreadID] = *Event.ThreadID;
-    Services.push_back(std::move(Service));
-  }
-  llvm::json::Object Object{
-      {field::Version, field::SchemaVersion},
-      {field::Profile, processProfileName(Result.Profile)},
-      {field::Architecture, guestArchitectureName(Result.Architecture)},
-      {field::Backend, executionBackendName(Result.SelectedBackend)},
-      {field::SelectionReason, Result.BackendSelectionReason},
-      {field::Stop, processStopReasonName(Result.Stop)},
-      {field::ExitStatus,
-       Result.ExitStatus ? llvm::json::Value(*Result.ExitStatus) : nullptr},
-      {field::Diagnostic, Result.Diagnostic},
-      {field::Entry, bits(Result.Entry)},
-      {field::PC, bits(Result.PC)},
-      {field::Instructions, Result.Instructions},
-      {field::Events, Result.Events},
-      {field::Stdout, llvm::toHex(Result.StandardOutput, true)},
-      {field::Stderr, llvm::toHex(Result.StandardError, true)},
-      {field::Services, std::move(Services)},
-      {field::CPUExit, nullptr}};
-  if (Result.IoctlTraceEnabled) {
-    llvm::json::Array Calls;
+void writeHexArray(llvm::json::OStream &J, llvm::StringRef Key,
+                   llvm::ArrayRef<uint64_t> Values) {
+  J.attributeArray(Key, [&] {
+    for (uint64_t Value : Values)
+      J.value(bits(Value));
+  });
+}
+
+void writeNativeCalls(llvm::json::OStream &J, const ProcessResult &Result) {
+  const bool Android = Result.Profile == ProcessProfile::AndroidNativeAArch64;
+  J.attributeArray(field::NativeCalls, [&] {
+    for (const auto &Event : Result.NativeCalls) {
+      J.object([&] {
+        llvm::ArrayRef<uint64_t> Args(Event.Arguments);
+        writeHexArray(J, field::Arguments,
+                      Android ? Args : Args.take_front(Event.ArgumentCount));
+        if (Result.Profile == ProcessProfile::WindowsPE64 &&
+            Event.DirectServiceNumber)
+          J.attribute(field::DirectServiceNumber,
+                      bits(*Event.DirectServiceNumber));
+        if (Android && !Event.Library.empty())
+          J.attribute(field::Library, Event.Library);
+        if (!Android)
+          J.attribute(field::Module, Event.Module);
+        J.attribute(field::Name, Event.Name);
+        J.attribute(field::PC, bits(Event.PC));
+        J.attribute(field::Result, bits(Event.Result));
+        if (Android && !Event.Symbol.empty())
+          J.attribute(field::Symbol, Event.Symbol);
+        if (Android && Event.ThreadID)
+          J.attribute(field::ThreadID, *Event.ThreadID);
+      });
+    }
+  });
+}
+
+namespace {
+void writeIoctls(llvm::json::OStream &J, const ProcessResult &Result) {
+  J.attributeArray(field::IoctlTrace, [&] {
     for (const auto &Event : Result.IoctlTrace) {
-      llvm::json::Array Memory;
-      for (const auto &M : Event.Memory)
-        Memory.push_back(llvm::json::Object{
-            {field::Address,
-             M.Address ? llvm::json::Value(bits(*M.Address)) : nullptr},
-            {field::Size, M.Size},
-            {field::IoctlTraceBefore, llvm::toHex(M.Before, true)},
-            {field::IoctlTraceAfter, llvm::toHex(M.After, true)},
-            {field::IoctlTraceBeforeStatus, M.BeforeStatus},
-            {field::IoctlTraceAfterStatus, M.AfterStatus}});
-      llvm::json::Object Call{
-          {field::PC, bits(Event.PC)},
-          {field::DeviceRequest, bits(Event.Request)},
-          {field::DeviceArgument, bits(Event.Argument)},
-          {field::ThreadID, Event.ThreadID},
-          {field::IoctlTraceFD, Event.FD},
-          {field::Result,
-           Event.Result ? llvm::json::Value(bits(*Event.Result)) : nullptr},
-          {field::Memory, std::move(Memory)}};
-      if (Event.ReturnAddress)
-        Call[field::ReturnAddress] = bits(*Event.ReturnAddress);
-      Calls.push_back(std::move(Call));
+      J.object([&] {
+        J.attribute(field::DeviceArgument, bits(Event.Argument));
+        J.attribute(field::IoctlTraceFD, Event.FD);
+        J.attributeArray(field::Memory, [&] {
+          for (const auto &M : Event.Memory)
+            J.value(llvm::json::Object{
+                {field::Address, bits(M.Address)},
+                {field::Size, M.Size},
+                {field::IoctlTraceBefore, llvm::toHex(M.Before, true)},
+                {field::IoctlTraceAfter, llvm::toHex(M.After, true)},
+                {field::IoctlTraceBeforeStatus, M.BeforeStatus},
+                {field::IoctlTraceAfterStatus, M.AfterStatus}});
+        });
+        J.attribute(field::PC, bits(Event.PC));
+        J.attribute(field::DeviceRequest, bits(Event.Request));
+        J.attribute(field::Result, bits(Event.Result));
+        if (Event.ReturnAddress)
+          J.attribute(field::ReturnAddress, bits(*Event.ReturnAddress));
+        J.attribute(field::ThreadID, Event.ThreadID);
+      });
     }
-    Object[field::IoctlTrace] = std::move(Calls);
-    Object[field::IoctlTraceTruncated] = Result.IoctlTraceTruncated;
-  }
-  if (Result.TerminationSignal)
-    Object[field::TerminationSignal] = *Result.TerminationSignal;
-  if (Result.Profile == ProcessProfile::AndroidNativeAArch64) {
-    Object[field::Android] = androidResultJSON(Result);
-    Object[field::ReturnValue] =
-        Result.ReturnValue ? llvm::json::Value(bits(*Result.ReturnValue))
-                           : nullptr;
-  }
-  if (Result.Profile == ProcessProfile::WindowsPE64) {
-    llvm::json::Array Calls;
-    for (const auto &Event : Result.NativeCalls) {
-      llvm::json::Array Arguments;
-      for (unsigned I = 0; I < Event.ArgumentCount; ++I)
-        Arguments.push_back(bits(Event.Arguments[I]));
-      llvm::json::Object Call{
-          {field::PC, bits(Event.PC)},
-          {field::Module, Event.Module},
-          {field::Name, Event.Name},
-          {field::Arguments, std::move(Arguments)},
-          {field::Result,
-           Event.Result ? llvm::json::Value(bits(*Event.Result)) : nullptr}};
-      if (Event.DirectServiceNumber)
-        Call[field::DirectServiceNumber] = bits(*Event.DirectServiceNumber);
-      Calls.push_back(std::move(Call));
+  });
+  J.attribute(field::IoctlTraceTruncated, Result.IoctlTraceTruncated);
+}
+
+void writeServices(llvm::json::OStream &J, const ProcessResult &Result) {
+  J.attributeArray(field::Services, [&] {
+    for (const auto &Event : Result.Services) {
+      J.object([&] {
+        writeHexArray(J, field::Arguments, Event.Arguments);
+        if (Event.Error)
+          J.attribute(field::Error, *Event.Error);
+        J.attribute(field::Number, bits(Event.Number));
+        J.attribute(field::PC, bits(Event.PC));
+        J.attribute(field::Result, bits(Event.Result));
+        if (Event.ThreadID)
+          J.attribute(field::ThreadID, *Event.ThreadID);
+      });
     }
-    Object[field::Windows] =
-        llvm::json::Object{{field::Initialize, Result.InitializersEnabled},
-                           {field::NativeCalls, std::move(Calls)}};
-    Object[field::ReturnValue] =
-        Result.ReturnValue ? llvm::json::Value(bits(*Result.ReturnValue))
-                           : nullptr;
-  }
-  if (!Result.NativeCalls.empty() &&
-      (Result.Profile == ProcessProfile::MacOSMachO64 ||
-       Result.Profile == ProcessProfile::IOSMachO64 ||
-       Result.Profile == ProcessProfile::IOSSimulatorMachO64)) {
-    llvm::json::Array Calls;
-    for (const auto &Event : Result.NativeCalls) {
-      llvm::json::Array Arguments;
-      for (unsigned I = 0; I < Event.ArgumentCount; ++I)
-        Arguments.push_back(bits(Event.Arguments[I]));
-      Calls.push_back(llvm::json::Object{
-          {field::PC, bits(Event.PC)},
-          {field::Module, Event.Module},
-          {field::Name, Event.Name},
-          {field::Arguments, std::move(Arguments)},
-          {field::Result,
-           Event.Result ? llvm::json::Value(bits(*Event.Result)) : nullptr}});
+  });
+}
+} // namespace
+
+void writeProcessResultJSON(llvm::raw_ostream &OS,
+                            const ProcessResult &Result) {
+  llvm::json::OStream J(OS);
+  // Keep the lexical key order of the original llvm::json::Object reports.
+  J.object([&] {
+    const bool Android = Result.Profile == ProcessProfile::AndroidNativeAArch64;
+    const bool Windows = Result.Profile == ProcessProfile::WindowsPE64;
+    if (Android)
+      J.attributeObject(field::Android,
+                        [&] { writeAndroidResultFields(J, Result); });
+    J.attribute(field::Architecture,
+                guestArchitectureName(Result.Architecture));
+    J.attribute(field::Backend, executionBackendName(Result.SelectedBackend));
+    J.attribute(field::SelectionReason, Result.BackendSelectionReason);
+    if (Result.LastCPUExit) {
+      const auto &Exit = *Result.LastCPUExit;
+      J.attribute(
+          field::CPUExit,
+          llvm::json::Object{{field::Kind, executionExitKindName(Exit.Kind)},
+                             {field::Diagnostic, Exit.Diagnostic},
+                             {field::Fault, faultJSON(Exit.Fault)},
+                             {field::StopRequested, Exit.StopRequested},
+                             {field::DeadlineReached, Exit.DeadlineReached}});
+    } else {
+      J.attribute(field::CPUExit, nullptr);
     }
-    Object[field::Darwin] =
-        llvm::json::Object{{field::NativeCalls, std::move(Calls)}};
-  }
-  if (Result.LastCPUExit) {
-    const auto &Exit = *Result.LastCPUExit;
-    Object[field::CPUExit] =
-        llvm::json::Object{{field::Kind, executionExitKindName(Exit.Kind)},
-                           {field::Diagnostic, Exit.Diagnostic},
-                           {field::Fault, faultJSON(Exit.Fault)},
-                           {field::StopRequested, Exit.StopRequested},
-                           {field::DeadlineReached, Exit.DeadlineReached}};
-  }
+    if (!Result.NativeCalls.empty() &&
+        (Result.Profile == ProcessProfile::MacOSMachO64 ||
+         Result.Profile == ProcessProfile::IOSMachO64 ||
+         Result.Profile == ProcessProfile::IOSSimulatorMachO64))
+      J.attributeObject(field::Darwin, [&] { writeNativeCalls(J, Result); });
+    J.attribute(field::Diagnostic, Result.Diagnostic);
+    J.attribute(field::Entry, bits(Result.Entry));
+    J.attribute(field::Events, Result.Events);
+    J.attribute(field::ExitStatus, Result.ExitStatus);
+    J.attribute(field::Instructions, Result.Instructions);
+    if (Result.IoctlTraceEnabled)
+      writeIoctls(J, Result);
+    J.attribute(field::PC, bits(Result.PC));
+    J.attribute(field::Profile, processProfileName(Result.Profile));
+    if (Android || Windows)
+      J.attribute(field::ReturnValue, bits(Result.ReturnValue));
+    J.attribute(field::Version, field::SchemaVersion);
+    writeServices(J, Result);
+    J.attribute(field::Stderr, llvm::toHex(Result.StandardError, true));
+    J.attribute(field::Stdout, llvm::toHex(Result.StandardOutput, true));
+    J.attribute(field::Stop, processStopReasonName(Result.Stop));
+    if (Result.TerminationSignal)
+      J.attribute(field::TerminationSignal, *Result.TerminationSignal);
+    if (Windows)
+      J.attributeObject(field::Windows, [&] {
+        J.attribute(field::Initialize, Result.InitializersEnabled);
+        writeNativeCalls(J, Result);
+      });
+  });
+}
+
+std::string processResultJSON(const ProcessResult &Result) {
   std::string Text;
   llvm::raw_string_ostream OS(Text);
-  OS << llvm::json::Value(std::move(Object));
+  writeProcessResultJSON(OS, Result);
   return Text;
 }
 } // namespace neverd::emulation
