@@ -11,6 +11,7 @@
 #include "../os/linux/android/AndroidObservation.h"
 #include "ProcessJSONInteger.h"
 #include "ProcessNetworkJSON.h"
+#include "ProcessTraceJSON.h"
 
 #include "neverd/dalvik/Budget.h"
 #include "neverd/dalvik/Limits.h"
@@ -1178,47 +1179,8 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
     return invalid(field::JavaLibrary);
   return Out;
 }
-llvm::json::Object androidResultJSON(const ProcessResult &Result) {
-  llvm::json::Array Calls, Trace, Memory;
-  for (const auto &Event : Result.NativeCalls) {
-    llvm::json::Array Args;
-    for (uint64_t A : Event.Arguments)
-      Args.push_back(bits(A));
-    llvm::json::Object Call{
-        {field::PC, bits(Event.PC)},
-        {field::Name, Event.Name},
-        {field::Arguments, std::move(Args)},
-        {field::Result,
-         Event.Result ? llvm::json::Value(bits(*Event.Result)) : nullptr}};
-    if (!Event.Library.empty())
-      Call[field::Library] = Event.Library;
-    if (!Event.Symbol.empty())
-      Call[field::Symbol] = Event.Symbol;
-    if (Event.ThreadID)
-      Call[field::ThreadID] = *Event.ThreadID;
-    Calls.push_back(std::move(Call));
-  }
-  for (uint64_t PC : Result.Trace)
-    Trace.push_back(bits(PC));
-  for (const auto &Snapshot : Result.MemorySnapshots) {
-    llvm::json::Object Value{
-        {field::Address, Snapshot.AddressResolved
-                             ? llvm::json::Value(bits(Snapshot.Address))
-                             : nullptr},
-        {field::Bytes, llvm::toHex(Snapshot.Bytes, true)}};
-    if (!Snapshot.Diagnostic.empty())
-      Value[field::Diagnostic] = Snapshot.Diagnostic;
-    Memory.push_back(std::move(Value));
-  }
-  llvm::json::Object Out{{field::Initialize, Result.InitializersEnabled},
-                         {field::NativeCalls, std::move(Calls)},
-                         {field::Trace, std::move(Trace)},
-                         {field::TraceTruncated, Result.TraceTruncated},
-                         {field::Memory, std::move(Memory)}};
-  if (Result.EventLogWritesConsumed)
-    Out[field::EventLogWritesConsumed] = *Result.EventLogWritesConsumed;
-  if (Result.TextLogWritesConsumed)
-    Out[field::TextLogWritesConsumed] = *Result.TextLogWritesConsumed;
+void writeAndroidResultFields(llvm::json::OStream &J,
+                              const ProcessResult &Result) {
   auto CPUStateJSON = [](const NativeCPUState &State) {
     llvm::json::Value Registers = nullptr;
     if (State.Registers) {
@@ -1234,26 +1196,34 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
         {field::Diagnostic, State.Diagnostic}};
   };
   if (Result.CPUState)
-    Out[field::CPUState] = CPUStateJSON(*Result.CPUState);
-  if (Result.ThreadCPUStates) {
-    llvm::json::Array States;
-    for (const auto &Thread : *Result.ThreadCPUStates) {
-      auto State = CPUStateJSON(Thread.State);
-      State[field::CurrentCPU] = Thread.Current;
-      States.push_back(std::move(State));
-    }
-    Out[field::ThreadCPUStates] = std::move(States);
+    J.attribute(field::CPUState, CPUStateJSON(*Result.CPUState));
+  if (Result.EventLogWritesConsumed)
+    J.attribute(field::EventLogWritesConsumed, *Result.EventLogWritesConsumed);
+  if (Result.ExecutionObservationsEnabled) {
+    J.attributeArray(field::ExecutionObservations, [&] {
+      for (const auto &Record : Result.ExecutionObservations) {
+        J.object([&] {
+          J.attribute(field::Instructions, Record.Instructions);
+          J.attributeArray(field::Memory, [&] {
+            for (const auto &Read : Record.Memory) {
+              J.object([&] {
+                J.attribute(field::Address, bits(Read.Address));
+                J.attribute(field::Bytes, llvm::toHex(Read.Bytes, true));
+              });
+            }
+          });
+          J.attribute(field::ObservationNZCV, bits(Record.NZCV));
+          J.attribute(field::PC, bits(Record.PC));
+          writeHexArray(J, field::ObservationRegisters, Record.Registers);
+          J.attribute(field::ObservationSP, bits(Record.SP));
+          J.attribute(field::ThreadID, Record.ThreadID);
+        });
+      }
+    });
+    J.attribute(field::ExecutionObservationsTruncated,
+                Result.ExecutionObservationsTruncated);
   }
-  if (!Result.JNIRegistrations.empty()) {
-    llvm::json::Array Bindings;
-    for (const auto &Binding : Result.JNIRegistrations)
-      Bindings.push_back(
-          llvm::json::Object{{field::JNIClass, Binding.Class},
-                             {field::Name, Binding.Name},
-                             {field::JNISignature, Binding.Signature},
-                             {field::Address, bits(Binding.Address)}});
-    Out[field::JNIRegistrations] = std::move(Bindings);
-  }
+  J.attribute(field::Initialize, Result.InitializersEnabled);
   if (Result.JavaState) {
     using namespace mobile::dalvik;
     const auto &State = *Result.JavaState;
@@ -1387,60 +1357,76 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
           {field::JavaProjectedLoader,
            C.projected_loader ? llvm::json::Value(Loader(*C.projected_loader))
                               : nullptr}});
-    Out[field::JavaState] =
-        llvm::json::Object{{field::JavaClasses, std::move(Classes)},
-                           {field::JavaFramework, std::move(Framework)},
-                           {field::JavaTerminal, State.terminal}};
+    J.attribute(field::JavaState,
+                llvm::json::Object{{field::JavaClasses, std::move(Classes)},
+                                   {field::JavaFramework, std::move(Framework)},
+                                   {field::JavaTerminal, State.terminal}});
   }
-  if (Result.ExecutionObservationsEnabled) {
-    llvm::json::Array Observations;
-    for (const auto &Record : Result.ExecutionObservations) {
-      llvm::json::Array Registers, Reads;
-      for (uint64_t R : Record.Registers)
-        Registers.push_back(bits(R));
-      for (const auto &Read : Record.Memory)
-        Reads.push_back(
-            llvm::json::Object{{field::Address, bits(Read.Address)},
-                               {field::Bytes, llvm::toHex(Read.Bytes, true)}});
-      Observations.push_back(llvm::json::Object{
-          {field::PC, bits(Record.PC)},
-          {field::ThreadID, Record.ThreadID},
-          {field::Instructions, Record.Instructions},
-          {field::ObservationSP, bits(Record.SP)},
-          {field::ObservationNZCV, bits(Record.NZCV)},
-          {field::ObservationRegisters, std::move(Registers)},
-          {field::Memory, std::move(Reads)}});
+  if (!Result.JNIRegistrations.empty()) {
+    J.attributeArray(field::JNIRegistrations, [&] {
+      for (const auto &Binding : Result.JNIRegistrations)
+        J.value(llvm::json::Object{{field::JNIClass, Binding.Class},
+                                   {field::Name, Binding.Name},
+                                   {field::JNISignature, Binding.Signature},
+                                   {field::Address, bits(Binding.Address)}});
+    });
+  }
+  J.attributeArray(field::Memory, [&] {
+    for (const auto &Snapshot : Result.MemorySnapshots) {
+      J.object([&] {
+        J.attribute(field::Address,
+                    Snapshot.AddressResolved
+                        ? llvm::json::Value(bits(Snapshot.Address))
+                        : nullptr);
+        J.attribute(field::Bytes, llvm::toHex(Snapshot.Bytes, true));
+        if (!Snapshot.Diagnostic.empty())
+          J.attribute(field::Diagnostic, Snapshot.Diagnostic);
+      });
     }
-    Out[field::ExecutionObservations] = std::move(Observations);
-    Out[field::ExecutionObservationsTruncated] =
-        Result.ExecutionObservationsTruncated;
+  });
+  writeNativeCalls(J, Result);
+  if (Result.TextLogWritesConsumed)
+    J.attribute(field::TextLogWritesConsumed, *Result.TextLogWritesConsumed);
+  if (Result.ThreadCPUStates) {
+    J.attributeArray(field::ThreadCPUStates, [&] {
+      for (const auto &Thread : *Result.ThreadCPUStates) {
+        auto State = CPUStateJSON(Thread.State);
+        State[field::CurrentCPU] = Thread.Current;
+        J.value(std::move(State));
+      }
+    });
   }
   if (!Result.NativeThreads.empty()) {
-    llvm::json::Array Threads, Spans;
-    for (const auto &T : Result.NativeThreads) {
-      llvm::json::Object Thread{
-          {field::ThreadID, T.ID},
-          {field::Handle, bits(T.Handle)},
-          {field::TLS, bits(T.TLS)},
-          {field::StackBase, bits(T.StackBase)},
-          {field::StackBytes, T.StackSize},
-          {field::GuardSize, T.GuardSize},
-          {field::Finished, T.Finished},
-          {field::Detached, T.Detached},
-          {field::Retired, T.Retired},
-          {field::Waiting, T.Waiting},
-          {field::ReturnValue,
-           T.ReturnValue ? llvm::json::Value(bits(*T.ReturnValue)) : nullptr}};
-      if (T.TerminationSignal)
-        Thread[field::TerminationSignal] = *T.TerminationSignal;
-      Threads.push_back(std::move(Thread));
-    }
-    for (const auto &Span : Result.TraceThreads)
-      Spans.push_back(llvm::json::Object{{field::TraceIndex, Span.Index},
-                                         {field::ThreadID, Span.ID}});
-    Out[field::Threads] = std::move(Threads);
-    Out[field::TraceThreads] = std::move(Spans);
+    J.attributeArray(field::Threads, [&] {
+      for (const auto &T : Result.NativeThreads) {
+        llvm::json::Object Thread{
+            {field::ThreadID, T.ID},
+            {field::Handle, bits(T.Handle)},
+            {field::TLS, bits(T.TLS)},
+            {field::StackBase, bits(T.StackBase)},
+            {field::StackBytes, T.StackSize},
+            {field::GuardSize, T.GuardSize},
+            {field::Finished, T.Finished},
+            {field::Detached, T.Detached},
+            {field::Retired, T.Retired},
+            {field::Waiting, T.Waiting},
+            {field::ReturnValue, T.ReturnValue
+                                     ? llvm::json::Value(bits(*T.ReturnValue))
+                                     : nullptr}};
+        if (T.TerminationSignal)
+          Thread[field::TerminationSignal] = *T.TerminationSignal;
+        J.value(std::move(Thread));
+      }
+    });
   }
-  return Out;
+  writeHexArray(J, field::Trace, Result.Trace);
+  if (!Result.NativeThreads.empty()) {
+    J.attributeArray(field::TraceThreads, [&] {
+      for (const auto &Span : Result.TraceThreads)
+        J.value(llvm::json::Object{{field::TraceIndex, Span.Index},
+                                   {field::ThreadID, Span.ID}});
+    });
+  }
+  J.attribute(field::TraceTruncated, Result.TraceTruncated);
 }
 } // namespace neverd::emulation

@@ -1,5 +1,6 @@
 #include "ComparisonService.h"
 #include "Engine.h"
+#include "EngineSymbols.h"
 #include "LineageService.h"
 #include "LoadProgress.h"
 #include "Protocol.h"
@@ -7,6 +8,7 @@
 #include "UnwindQuery.h"
 #include "WebEngine.h"
 
+#include "neverd/sdk/NeverDCAPISession.h"
 #include "neverd/support/StackSizeMain.h"
 
 #ifdef NEVERD_WORKER_HAS_MIMALLOC
@@ -133,6 +135,31 @@ struct Request {
   Request(Json Value, std::size_t Bytes)
       : value(std::move(Value)), bytes(Bytes) {}
 };
+auto luaRecovery() {
+  static auto Recover = engineSymbol<decltype(&neverd_lua_recover_json_v1)>(
+      "neverd_lua_recover_json_v1");
+  return Recover;
+}
+Json recoverLua(const Json &input, std::atomic<bool> &cancelled) {
+  auto Recover = luaRecovery();
+  if (!Recover)
+    throw Error("unsupported", "This engine does not provide Lua recovery");
+  const auto path = stringField(input, "path");
+  const auto profile = stringField(input, "profile", "auto");
+  if (path.empty() || path.find(char(0)) != std::string::npos ||
+      profile.find(char(0)) != std::string::npos)
+    throw Error("invalid_request",
+                "A valid artifact path and profile are required");
+  auto stop = [](void *ctx) -> int {
+    return static_cast<std::atomic<bool> *>(ctx)->load();
+  };
+  std::unique_ptr<const char, decltype(&neverd_free_string)> result(
+      Recover(path.c_str(), profile.c_str(), stop, &cancelled),
+      neverd_free_string);
+  if (!result)
+    throw Error("engine_error", "Lua recovery returned no report");
+  return parseJson(result.get());
+}
 bool isWeb(const Json &request) {
   if (!request.is_object())
     return false;
@@ -362,6 +389,8 @@ Json hello() {
       result["capabilities"].push_back(operation);
   if (Engine::keepsOperandFormats())
     result["capabilities"].push_back("operand_format");
+  if (luaRecovery())
+    result["capabilities"].push_back("lua_recover");
   if (Engine::identifiesFiles())
     result["capabilities"].push_back("identify");
   if (Engine::loadsPdbFiles()) {
@@ -600,8 +629,14 @@ void executeLoop(State &state, Transport &transport) {
           then = std::move(*follow);
           input.erase("then");
         }
-        auto reply = webRequest ? Engine::Reply{web.execute(op, input), {}}
-                                : engine.executeResponse(op, input);
+        if (op == "lua_recover")
+          transport.send(response(value, revision(), project(), "progress",
+                                  {{"phase", "reading"}}));
+        auto reply =
+            op == "lua_recover"
+                ? Engine::Reply{recoverLua(input, request->cancelled), {}}
+            : webRequest ? Engine::Reply{web.execute(op, input), {}}
+                         : engine.executeResponse(op, input);
         encodedPayload = std::move(reply.encoded);
         result = response(value, revision(), project(), "ok",
                           std::move(reply.value));
@@ -646,7 +681,10 @@ void executeLoop(State &state, Transport &transport) {
             result["partial_result_retained"] = scanStopped;
           }
           result["completed_before_cancellation"] =
-              !ComparisonStopped && !scanStopped;
+              !ComparisonStopped && !scanStopped &&
+              !(op == "lua_recover" && result["status"] == "ok" &&
+                result["payload"].value("status", std::string()) ==
+                    "cancelled");
           if (ComparisonOperation)
             result["partial_result_retained"] = ComparisonPartial;
           if (LineageOperation)

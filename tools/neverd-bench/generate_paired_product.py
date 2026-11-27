@@ -12,10 +12,12 @@ def paired_product(width, case, *, reference=False, counted=False, group_log=1):
         (width - 2) // 2,
         (5, 7, 9, 11)[case % 4] if width <= 32 else (9, 17, 37, 65)[case % 4],
     )
+    if not 1 <= group_log <= 6:
+        raise ValueError("expected group_log from 1 through 6")
+    if group_log >= 5:
+        bits = min((width - 2) // 2, max(bits, 2 * group_log + 1))
     shift = bits + (case % 2)
     precision = shift + bits
-    if not 1 <= group_log <= 4:
-        raise ValueError("expected group_log from 1 through 4")
     k = shift - group_log
     if group_log > 1 and (
         k < 1 or min(3 * k + group_log, 4 * k + group_log - 2) < precision
@@ -26,6 +28,8 @@ def paired_product(width, case, *, reference=False, counted=False, group_log=1):
     group = 1 << group_log
     unit = (3, 5, 7, 11)[case % 4]
     axes = ["x", "(y^z)", "((u&v)+x)", "(v|z)", "(u-y)", "(x^v)"]
+    if group_log >= 5:
+        axes.extend(["((x-u)^(y+z))", "(u|(y&v))", "(z-(u^x))"])
     names = []
     for i, axis in enumerate(axes):
         start = (i * 7 + case) % (width - bits + 1)
@@ -43,22 +47,29 @@ def paired_product(width, case, *, reference=False, counted=False, group_log=1):
             degree = (393253, 434081, 487073, 524321)[case % 4]
         else:
             degree = 2 * degree + 4 * group + 1
+    if group_log >= 5 and width > 65536:
+        degree = (589829, 655373, 786433, 917537)[case % 4]
     factors = []
     rows = []
     pool_size = 109 + 11 * (case % 4) if width > 65536 else 7 + case % 4
     if group_log > 1 and width > 65536:
         pool_size += 47
+    if group_log >= 5 and width > 65536:
+        pool_size += 61
     for j in range(pool_size):
         offset = (1, 3, 5, 9, -3, 7, 11)[j % 7]
         if j >= 10:
             offset *= 2 * (j // 7) + 1
         if case % 4 == 2 and j == 0:
             offset = 2
-        terms = [(j % 6, (1, 3, -5)[j % 3]), ((j + 1) % 6, (3, -7, 5)[j % 3])]
+        terms = [
+            (j % len(axes), (1, 3, -5)[j % 3]),
+            ((j + 1) % len(axes), (3, -7, 5)[j % 3]),
+        ]
         if j % 3 == 2:
-            terms.append(((j + 4) % 6, 3 if case >= 4 else 2))
+            terms.append(((j + 4) % len(axes), 3 if case >= 4 else 2))
         if case >= 4 and j % 4 == 1:
-            terms.append(((j + 3) % 6, -5))
+            terms.append(((j + 3) % len(axes), -5))
         if j >= 10:
             terms[0] = (terms[0][0], terms[0][1] * (2 * (j // 6) + 1))
         weighted_terms = []
@@ -77,6 +88,8 @@ def paired_product(width, case, *, reference=False, counted=False, group_log=1):
     leftovers = [1, 3][: 1 + int(case % 4 >= 2)]
     if group_log > 1:
         leftovers.extend([2] * (case % group))
+    if group_log >= 5:
+        leftovers.extend([4, 6, 4])
     outside = [factors[i] for i in leftovers]
     scale = f"{unit << (width - precision):#x}"
     if counted:
@@ -155,7 +168,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--group-log",
         type=int,
-        choices=range(1, 5),
+        choices=range(1, 7),
         default=1,
         help="log2 of the repeated block size",
     )

@@ -1351,6 +1351,14 @@
         <source>Find conditional strings computed by functions</source>
         <translation>尋找函式在特定條件下計算出的字串</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>還原 Lua 原始碼…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>還原 Lua 原始碼並檢查函式原型</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11238,6 +11246,133 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1：%2（已掃描 %3，已略過 %4，結論未定 %5）</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LuaRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>還原 Lua 原始碼</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>瀏覽…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>輸入檔案(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>依檔案辨識</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>上游 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>設定檔(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>還原</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>正在啟動分析工作程序…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>函式原型</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>原始碼</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>位元組碼對應</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>證據</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>複製原始碼</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>匯出原始碼…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>匯出報告…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>開啟 Lua 檔案</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>正在取消…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>匯出至新檔案</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua 原始碼 (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>分析工作程序已停止。</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>正在還原原始碼…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>此工作程序不支援 Lua 還原。</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>正在讀取檔案…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>函式原型 %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>原始行號 %1</translation>
     </message>
 </context>
 </TS>

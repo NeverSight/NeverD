@@ -32,6 +32,7 @@
 #include "ListingView.h"
 #include "LoadFileDialog.h"
 #include "LocalTypesView.h"
+#include "LuaRecoveryDialog.h"
 #include "MapPromptDialog.h"
 #include "MicrosoftSymbols.h"
 #include "ModelessDialog.h"
@@ -2186,6 +2187,13 @@ void MainWindow::connectActions() {
     comparison_->raise();
     comparison_->activateWindow();
   });
+  on(ActionId::FileLuaRecovery, [this] {
+    if (!luaRecovery_)
+      luaRecovery_ = new LuaRecoveryDialog(session_.workerPath(), this);
+    luaRecovery_->show();
+    luaRecovery_->raise();
+    luaRecovery_->activateWindow();
+  });
   on(ActionId::FilePackageReview, [this] {
     if (!packageReview_)
       packageReview_ =
@@ -2762,6 +2770,7 @@ void MainWindow::updateActions() {
                         name == QLatin1String("FileNewInstance") ||
                         name == QLatin1String("FileOpen") ||
                         name == QLatin1String("FilePackageReview") ||
+                        name == QLatin1String("FileLuaRecovery") ||
                         name == QLatin1String("FileCompare") ||
                         name == QLatin1String("FileExit") ||
                         name == QLatin1String("FileQuickStart") ||

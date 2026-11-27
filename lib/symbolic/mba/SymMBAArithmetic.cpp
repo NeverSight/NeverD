@@ -366,8 +366,11 @@ public:
   }
 
   bool multiply(const Polynomial &A, const Polynomial &B, Polynomial &Out) {
-    for (const auto &[AK, AC] : A) {
-      for (const auto &[BK, BC] : B) {
+    const bool Square = &A == &B;
+    for (auto L = A.begin(); L != A.end(); ++L) {
+      const auto &[AK, AC] = *L;
+      for (auto R = Square ? L : B.begin(); R != B.end(); ++R) {
+        const auto &[BK, BC] = *R;
         if (Words > std::numeric_limits<size_t>::max() / Words ||
             AK.size() > std::numeric_limits<size_t>::max() - BK.size())
           return Resources.stop();
@@ -375,6 +378,11 @@ public:
         if (!Resources.array(Words, sizeof(uint64_t)) ||
             !multiplyCoefficients(AC, BC, Coefficient))
           return false;
+        if (Square && L != R) {
+          if (!Resources.charge(Words))
+            return false;
+          Coefficient <<= 1;
+        }
         if (Coefficient.isZero())
           continue;
         if (!Resources.array(AK.size() + BK.size(), sizeof(Factor)))
@@ -399,6 +407,39 @@ public:
         if (!addOwned(Out, std::move(Key), std::move(Coefficient)))
           return false;
       }
+    }
+    return true;
+  }
+
+  // The accumulator contains the common scalar. Bits above its live prefix
+  // in a repeated unit factor can never reach the full-width product.
+  bool multiplyPower(Polynomial &P, const Polynomial &Base, size_t Count,
+                     uint64_t LiveMask) {
+    const Polynomial *Power = &Base;
+    Polynomial Squared;
+    while (Count && !P.empty()) {
+      if (Count & 1) {
+        Polynomial Next;
+        if (!multiply(P, *Power, Next))
+          return false;
+        P = std::move(Next);
+      }
+      Count >>= 1;
+      if (!Count)
+        break;
+      Polynomial Next;
+      if (!multiply(*Power, *Power, Next))
+        return false;
+      if (!Resources.charge(Next.size()))
+        return false;
+      for (auto It = Next.begin(); It != Next.end();) {
+        if (!(It->second.getZExtValue() & LiveMask))
+          It = Next.erase(It);
+        else
+          ++It;
+      }
+      Squared = std::move(Next);
+      Power = &Squared;
     }
     return true;
   }
@@ -898,17 +939,39 @@ public:
             PolynomialOperands >= limits::kMinDelayedPolynomialOperands;
         if (!add(P, DelayCommon ? Monomial{} : Key, Scale))
           return nullptr;
-        for (SymRef Child : Ctx.operands(R)) {
-          if (P.empty())
-            break;
-          if (Memo.at(Child.index())->size() == 1)
+        for (auto Rest = Operands; !Rest.empty() && !P.empty();) {
+          const auto Child = Rest.front();
+          Rest = Rest.drop_front();
+          const auto &Factor = *Memo.at(Child.index());
+          if (Factor.size() <= 1)
             continue;
+          constexpr auto MinCopies = limits::kMinArithmeticPowerCopies;
+          if (!ExpandComplements && Width <= llvm::APInt::APINT_BITS_PER_WORD &&
+              Rest.size() >= MinCopies - 1 && Rest[MinCopies - 2] == Child &&
+              Factor.begin()->first.empty() && Factor.begin()->second[0]) {
+            if (!Resources.charge(Factor.size()))
+              return nullptr;
+            if (llvm::all_of(llvm::drop_begin(Factor), [](const auto &Term) {
+                  return !Term.second[0];
+                })) {
+              // Equal references are adjacent in a canonical multiplication.
+              const auto Copies =
+                  llvm::find_if(Rest, [&](SymRef F) { return F != Child; }) -
+                  Rest.begin();
+              Rest = Rest.drop_front(Copies);
+              const auto Mask =
+                  llvm::APInt::getLowBitsSet(Width, Width - Scale.countr_zero())
+                      .getZExtValue();
+              if (!Resources.charge(Copies) ||
+                  !multiplyPower(P, Factor, Copies + 1, Mask))
+                return nullptr;
+              continue;
+            }
+          }
           Polynomial Next;
-          if (!multiply(P, *Memo.at(Child.index()), Next))
+          if (!multiply(P, Factor, Next))
             return nullptr;
           P = std::move(Next);
-          if (P.empty())
-            break;
         }
         if (DelayCommon && !P.empty()) {
           Polynomial Common, Next;

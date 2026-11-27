@@ -78,6 +78,15 @@ NEVERD_API int neverd_session_load_cancellable(neverd_session_t Sess,
 /// {"rows":[],"error"} when \p Path names no regular file.  Path is UTF-8.
 /// Free with neverd_free_string.
 NEVERD_API const char *neverd_identify_json(const char *Path);
+
+/// Recover a standalone Lua artifact offline. Profile is auto (NULL), puc,
+/// luajit, or luau-0.659. The optional stop probe is synchronous. The owned
+/// language-recovery-v1 report includes failures, source and byte mappings.
+/// Free it with neverd_free_string(). NULL means the report could not be built.
+NEVERD_API const char *neverd_lua_recover_json_v1(const char *Path,
+                                                  const char *Profile,
+                                                  neverd_cancel_probe_fn Stop,
+                                                  void *Context);
 /// List an arm64e shared cache's validated image catalogue, including its
 /// subcache files: {"images":[{"path","address"}]}, or {"images":[],"error"}.
 /// Paths are exact install names for load-options JSON's cache_image key.

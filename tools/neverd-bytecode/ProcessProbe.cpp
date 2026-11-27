@@ -6,6 +6,7 @@
 #include "neverd/emulation/ProcessSession.h"
 
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_os_ostream.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <fstream>
@@ -34,7 +35,14 @@ int main(int Argc, char **Argv) {
   if (!Result)
     return Fail(Result.takeError());
   std::ofstream Out(Argv[4]);
-  Out << processResultJSON(*Result) << '\n';
+  if (!Out)
+    return 1;
+  {
+    llvm::raw_os_ostream OS(Out);
+    writeProcessResultJSON(OS, *Result);
+    OS << '\n';
+  }
+  Out.close();
   if (!Out)
     return 1;
   llvm::errs() << processStopReasonName(Result->Stop) << ": "
