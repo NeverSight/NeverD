@@ -135,14 +135,9 @@ symbolic::SymRef symbolicScalarExpression(
   return Expression;
 }
 
-std::optional<uint64_t> constantScalarExpression(
-    llvm::ArrayRef<LowOp> Operations, const NdVar &Value, va_t QueryInstruction,
-    size_t &RemainingWork,
-    llvm::function_ref<std::optional<uint64_t>(const LowOp &, uint64_t)>
-        ReadImage) {
-  symbolic::SymContext Ctx;
-  const auto Expression = symbolicScalarExpression(
-      Ctx, Operations, Value, QueryInstruction, RemainingWork, ReadImage);
+std::optional<uint64_t> constantScalarExpression(symbolic::SymContext &Ctx,
+                                                 symbolic::SymRef Expression,
+                                                 size_t &RemainingWork) {
   if (!Expression)
     return {};
   if (const auto Constant = Ctx.asConst(Expression))

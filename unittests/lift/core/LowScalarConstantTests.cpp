@@ -242,6 +242,25 @@ LowOp unary(NdOp Opcode, uint16_t Width, uint64_t Value, uint16_t OutputWidth) {
   return Op;
 }
 
+TEST(LowScalarConstant, SelectReadsOnlyTheChosenWord) {
+  LowOp Op;
+  Op.Opcode = NdOp::SELECT;
+  Op.Output = NdVar::reg(0, 4);
+  Op.addInput(NdVar::scalar(0x100, 4));
+  Op.addInput(NdVar::scalar(17, 4));
+  Op.addInput(NdVar::reg(8, 4));
+  EXPECT_EQ(lowScalarConstantResult(Op, constant), 17u);
+  Op.Inputs[0] = NdVar::scalar(0, 1);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  std::swap(Op.Inputs[1], Op.Inputs[2]);
+  EXPECT_EQ(lowScalarConstantResult(Op, constant), 17u);
+  Op.Inputs[0] = NdVar::reg(16, 1);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  Op.Inputs[0] = NdVar::scalar(0, 1);
+  Op.Inputs[1].Size = 2;
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+}
+
 TEST(LowScalarConstant, UnaryResultsMatchConcreteFixedWidthExecution) {
   for (uint16_t Width : {1, 2, 4, 8}) {
     const uint64_t Mask = UINT64_MAX >> ((8 - Width) * 8);
