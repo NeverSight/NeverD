@@ -358,6 +358,43 @@ ASYNC_FRAME_TEXT(kSignalLocalCatch, "-DNEVERD_LOCAL_CATCH")
 ASYNC_FRAME_TEXT(kSignalLiveLRBridge, "_ndDarwinArm64eLiveLRBridge")
 ASYNC_FRAME_TEXT(kSignalLiveLRResume, "_ndDarwinArm64eLiveLRResume")
 ASYNC_FRAME_TEXT(kSignalFramelessFrame, "-DNEVERD_FRAMELESS_FRAME")
+ASYNC_FRAME_TEXT(kEntryPadCleanups, "native_entry_landing_pad_cleanups")
+ASYNC_FRAME_TEXT(kEntryPadCaller, R"cpp(
+#include <dlfcn.h>
+#include <typeinfo>
+
+struct Outer {
+  int &trace;
+  ~Outer() { trace = trace * 10 + 2; }
+};
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  using Scope = void (*)(int *, const int *);
+  auto scope = reinterpret_cast<Scope>(dlsym(image, "signal_scope"));
+  if (!scope)
+    return 3;
+  int trace = 0, mode = 0;
+  scope(&trace, &mode);
+  if (trace != 0)
+    return 4;
+  mode = 1;
+  try {
+    Outer outer{trace};
+    scope(&trace, &mode);
+    return 5;
+  } catch (const std::bad_cast &) {
+    if (trace != 12)
+      return 6;
+  } catch (...) {
+    return 7;
+  }
+  return dlclose(image) != 0;
+}
+)cpp")
 ASYNC_FRAME_TEXT(kSignalEntryPad, "-DNEVERD_ENTRY_LANDING_PAD")
 ASYNC_FRAME_TEXT(kSignalGeneratedExplicitLSDA,
                  "Lneverd_lsda_${:uid}:\n.byte 27\n")
@@ -385,7 +422,11 @@ Lfunc_begin:
  .cfi_personality 155, ___gxx_personality_v0
 #endif
  .cfi_lsda 16, Lexception
-#ifdef NEVERD_COMPACT_FRAME
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ // Normal calls pass a mode pointer. A cleanup arrives with selector zero
+ // and the caller's saved frame. It must not run the normal prologue again.
+ cbz x1, Lcleanup
+#elif defined(NEVERD_COMPACT_FRAME)
  nop
 #endif
 #ifdef NEVERD_PACM_LR
@@ -454,8 +495,17 @@ Lsign:
 #if !defined(NEVERD_COMPACT_FRAME) && !defined(NEVERD_COMPACT_LIVE_LR)
  .cfi_escape 0x2e, 0
 #endif
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ ldr w9, [x1]
+ cbnz w9, Lprotected
+ ldp x29, x30, [sp, #16]
+ ldp x20, x19, [sp], #32
+ retab
+#endif
 Lprotected:
-#ifdef NEVERD_COMPACT_LIVE_LR
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ bl ___cxa_bad_cast
+#elif defined(NEVERD_COMPACT_LIVE_LR)
  ldr x9, [sp]
  ldr w10, [x9]
 #else
@@ -570,8 +620,6 @@ Lresume:
  .cfi_restore x19
  .cfi_def_cfa_offset 0
  retab
-#elif defined(NEVERD_ENTRY_LANDING_PAD)
- b Lprotected
 #else
  bl __Unwind_Resume
 #endif

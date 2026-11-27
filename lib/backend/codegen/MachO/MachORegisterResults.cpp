@@ -82,6 +82,7 @@ struct RegisterBody {
   bool HasSavedFrame = false;
   bool HasLanguageFrame = false;
   bool HasBareReturn = false;
+  bool HasInteriorEntry = false;
   bool IsForwarder = false;
   bool LoadsStackArgument = false;
   bool MaterializesCursor = false;
@@ -778,6 +779,13 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     }
   }
   Body.RecoveredData = std::move(Dispatch.Recovered);
+  if (ControlFlow) {
+    // A separately reachable instruction has its own incoming registers.
+    // Ordinary LLVM lowering can discard the instructions leading up to it.
+    const auto &Roots = ControlFlow->OrdinaryModuleAnalysisRoots;
+    const auto Root = Roots.upper_bound(Start);
+    Body.HasInteriorEntry = Root != Roots.end() && *Root < End;
+  }
   Body.HasEmbeddedData = !Source->Embedded.empty();
   Body.HasLanguageFrame = Frame->Itanium.has_value();
   Body.HasSavedFrame = Framed || !Compact.SavedRegisterSlots.empty();
@@ -1525,8 +1533,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     // their complete native body, including runtime checked-pointer behavior.
     if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
         Body.HasSavedFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
-        Body.IsForwarder || Body.HasEmbeddedData || Body.HasDataPage ||
-        !Body.SourceAddresses.empty())
+        Body.HasInteriorEntry || Body.IsForwarder || Body.HasEmbeddedData ||
+        Body.HasDataPage || !Body.SourceAddresses.empty())
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))

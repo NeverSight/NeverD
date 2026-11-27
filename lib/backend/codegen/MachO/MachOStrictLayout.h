@@ -31,6 +31,19 @@
 
 namespace neverd::macho_patch_detail {
 
+/// A nonempty data-in-code table still owns bytes in the published image.
+inline bool canReclaimToolCommand(const uint8_t *Command, uint32_t ID,
+                                  uint32_t Size) {
+  for (uint32_t Tool : kToolOnlyLoadCmds)
+    if (Tool == ID)
+      return ID != llvm::MachO::LC_DATA_IN_CODE ||
+             (Size == sizeof(llvm::MachO::linkedit_data_command) &&
+              !reinterpret_cast<const llvm::MachO::linkedit_data_command *>(
+                   Command)
+                   ->datasize);
+  return false;
+}
+
 inline bool checkedAdd(uint64_t Left, uint64_t Right, uint64_t &Result) {
   if (Right > std::numeric_limits<uint64_t>::max() - Left)
     return false;
