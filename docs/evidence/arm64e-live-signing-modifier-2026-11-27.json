@@ -1,0 +1,105 @@
+{
+  "implementation": "0f1c512659aaec62ea8a80006848874b1fc20346",
+  "dev_baseline": "1145966d56390a5e3f454ad1b22068a97d484a0a",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "regressions": {
+    "input": "Apple-linked Mach-O dylibs with IA and IB",
+    "publication_generations": [
+      "source to O0 image",
+      "O0 image to O2 image"
+    ],
+    "published_signing_address_images": 64,
+    "verified_signing_rows": 116,
+    "refused_signing_address_cases": 2,
+    "refusal_controls": [
+      "independent entry at the authenticator, IA and IB"
+    ],
+    "register_pressure": [
+      "one caller-visible original address and seven independently checked output pointers",
+      "original or copied modifier in X15 or X0",
+      "dead scratch-register aliases at authenticated return"
+    ],
+    "restore": "ADRP and ADD rematerialize the original image address after AUT, including beyond ADR reach.",
+    "language_table": "The two protected ranges meet at the first restore word. The independent branch and the first landing pad target the original instruction past the pair.",
+    "indexed_dwarf_same_value": "The row starts at the added modifier instruction in each generation and key.",
+    "post_authentication_row": "The next row starts at the first restore instruction in each generation and key."
+  },
+  "m4": {
+    "cpu": "Apple M4 Max",
+    "macos": "15.6.1",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "release_test_sha256": "bcff2d824f6a7b1505db5bbb63d309c57f251d54e62d6d1ecf34cb236e855b19",
+    "unwind_test_sha256": "b3c1e09de3db5f2d26eaa72e34876f72cba5f0264f846722908e82e76deee970",
+    "async_unwind_and_lifted_images": {
+      "discovered": 223,
+      "passed": 223,
+      "skipped": [],
+      "failures": []
+    },
+    "other_image_suites": {
+      "discovered": 63,
+      "passed": 63,
+      "skipped": []
+    },
+    "portable_unwind_recovery": {
+      "discovered": 40,
+      "passed": 40,
+      "skipped": []
+    },
+    "explicit_language_unwind": {
+      "cases": 32,
+      "darwin_personality_images": 192,
+      "darwin_personality_exceptions": 288,
+      "darwin_personality_phase_pairs": 720,
+      "native_pc_recipe_deliveries": 0
+    }
+  },
+  "arm_fvp": {
+    "runner": "GitHub-hosted ubuntu-24.04",
+    "action": "https://github.com/gmh5225/test_mac_intel/actions/runs/45978541273",
+    "actions_revision": "949a6a10f70b98c14731fee2b51cb345b7429234",
+    "version": "11.32+19",
+    "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "manifest_sha256": "49bf5946b6edc28390f0b160212d3a061eabb4ee851d1ea8b6fc29f5b0070533",
+    "guest_sha256": "8c39cf4b1f8ae20373f7a2400bd261ae5de62085edbbb9d9c8752143d9a5c67b",
+    "guest_object_sha256": "f110e9f2c408b4b0862605055863c2a5c7208c481385889860cf8f7a48ccd36a",
+    "assembly_sha256": "3749ff07a8eb78f0fe8073855ad1b4402550f1e8e18fbe20a1cb2ae4e1818c8d",
+    "function_bodies": 96,
+    "caller_inputs_per_body": 2,
+    "exception_levels": [
+      "EL0",
+      "EL1"
+    ],
+    "enpacm_enpacm0": [
+      "00",
+      "10",
+      "01",
+      "11"
+    ],
+    "modeled_function_invocations": 1536,
+    "enabled_exit": 0,
+    "disabled_feature_control": {
+      "records": [
+        "RETURN-MODEL feature mismatch"
+      ],
+      "exit_code": 1
+    }
+  },
+  "archived_guest_replay": {
+    "upstream_actions_revision": "2688a884a0ea15b4859f0937696ace62f5243653",
+    "manifest_sha256": "f2909ad561ac462a8045e94a772a835689bf4c43617d54d941c2cdf3d11947d2",
+    "guest_sha256": "cd3cb071590e01d50a384f57231cd1cc0fadac3a46c405703d2bf1b6ffdeb49d",
+    "function_bodies": 66,
+    "modeled_function_invocations": 1056,
+    "enabled_exit": 0,
+    "disabled_exit": 1
+  },
+  "hardware_todo": [
+    "128-bit LRCPC3",
+    "two-modifier PAuth_LR",
+    "PC-sensitive PACM",
+    "CPTA-on",
+    "checked writeback"
+  ]
+}
