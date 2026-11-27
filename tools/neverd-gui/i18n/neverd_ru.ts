@@ -1351,6 +1351,14 @@
         <source>Find conditional strings computed by functions</source>
         <translation>Найти условные строки, вычисляемые функциями</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Восстановить исходный код Lua…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Восстановить код Lua и изучить прототипы функций</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11310,6 +11318,133 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2 (проверено %3, пропущено %4, без заключения %5)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LuaRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Восстановить исходный код Lua</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;Файл</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>Определить по файлу</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Официальный Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>&amp;Профиль</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Восстановить</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Запуск процесса анализа…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>Прототип</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Исходный код</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Соответствия байткода</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Данные анализа</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>Копировать исходный код</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>Экспортировать исходный код…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Экспортировать отчёт…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Открыть файл Lua</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Отмена…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>Экспортировать в новый файл</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Исходный код Lua (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Процесс анализа остановлен.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>Восстановление исходного кода…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>Этот процесс не поддерживает восстановление кода Lua.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>Чтение файла…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Отменено</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>Прототип %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>Исходная строка %1</translation>
     </message>
 </context>
 </TS>

@@ -5524,6 +5524,86 @@
       }
     },
     {
+      "id": "lua.source-recovery",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "bytecode",
+      "targets": [
+        "PUC Lua 5.1–5.5",
+        "LuaJIT dump v2",
+        "Upstream Luau 0.659 bytecode v6/type v3"
+      ],
+      "docs": [
+        "docs/lua-recovery.md"
+      ],
+      "limitations": [
+        "Issue #1023. File → Recover Lua source and neverd lua share the cancellable SDK report and export the same source and prototype evidence. The linked matrix distinguishes identification, decoding, source emission and behavioral qualification for each dialect.",
+        "Only qualified instruction windows and structured regions publish bodies. Unsupported opcodes, unresolved close or capture scopes, custom profiles and malformed input retain explicit statuses. Bytecode is never executed."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.OwnedCompilerDumps",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.SourceProfilesAndCancellation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.MalformedOperandsAndAuxiliaryBoundaries",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.EveryTruncatedRecordFailsClosed",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_lua_recover_json_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd lua",
+          "neverd lua --json",
+          "neverd lua --profile",
+          "neverd lua --prototype",
+          "neverd lua --o"
+        ],
+        "json": [
+          "neverd_lua_recover_json_v1"
+        ]
+      }
+    },
+    {
       "id": "mobile.source-recovery",
       "kind": "analysis",
       "status": "experimental",

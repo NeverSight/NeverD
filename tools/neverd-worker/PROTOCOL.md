@@ -6,6 +6,13 @@ or LLVM linkage of its own. The GUI must launch the bundled worker by explicit
 path, continuously drain stdout and stderr, and validate `protocol_major` before
 opening a binary. It does not listen on a network port or execute target code.
 
+A worker advertising `lua_recover` accepts `{"path":"...","profile":"auto"}`
+before opening a native project. The profile is optional. The terminal payload
+is the same `language-recovery-v1` report exported by `neverd lua --json`.
+A progress reply precedes the offline read. The normal `cancel` request targets
+the recovery request ID. Its terminal reply distinguishes an observed stop from
+completion before cancellation. See the [dialect matrix](../../docs/lua-recovery.md).
+
 ## Transport and lifecycle
 
 Each message is a **4-byte unsigned big-endian byte length**, followed by that
