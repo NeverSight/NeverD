@@ -223,7 +223,8 @@ ASYNC_FRAME_TEXT(kSigningModelExport, "NEVERD_ARM64E_SIGNING_ADDRESS_FIXTURES")
 ASYNC_FRAME_TEXT(kSigningModelFile, "signing-address.S")
 ASYNC_FRAME_TEXT(kSigningModelPath, "signing_address_model_assembly")
 ASYNC_FRAME_TEXT(kSigningModelCases, "exported_signing_address_bodies")
-ASYNC_FRAME_TEXT(kSigningModelCall, " check_body {0}, {1}, {2}, {3}, {4}, {5}\n")
+ASYNC_FRAME_TEXT(kSigningModelCall,
+                 " check_body {0}, {1}, {2}, {3}, {4}, {5}\n")
 ASYNC_FRAME_TEXT(kSigningModelLabel, "Lbody{0}:\n")
 ASYNC_FRAME_TEXT(kSigningModelWord, " .long {0}\n")
 ASYNC_FRAME_TEXT(kSigningModelBegin, R"asm(

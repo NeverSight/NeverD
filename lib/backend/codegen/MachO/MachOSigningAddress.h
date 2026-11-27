@@ -3,18 +3,26 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Classify signing-PC references and describe their authentication consumers.
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_BACKEND_CODEGEN_MACHO_MACHOSIGNINGADDRESS_H
 #define NEVERD_LIB_BACKEND_CODEGEN_MACHO_MACHOSIGNINGADDRESS_H
 
+#include "neverd/Common.h"
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
-#include "neverd/lift/AArch64/AArch64Regs.h"
 
+#include "capstone/aarch64.h"
+#include "llvm/ADT/ArrayRef.h"
+
+#include <cstdint>
 #include <optional>
 
 namespace neverd {
 class Decoder;
+struct MachOLiftedSource;
 
 struct MachOAuthenticationReplacement {
   MachOSigningConsumer Consumer;

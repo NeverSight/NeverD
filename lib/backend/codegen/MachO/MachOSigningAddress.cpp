@@ -3,6 +3,9 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Track signing-PC values through Darwin register bodies before publication.
+//===----------------------------------------------------------------------===//
 
 #include "MachOSigningAddress.h"
 
@@ -10,11 +13,15 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/ir/med/MedIR.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/support/AArch64Literal.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <utility>
