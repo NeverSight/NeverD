@@ -39,6 +39,11 @@ struct MachOSigningAddress {
   std::optional<va_t> RestorePC;
 };
 
+/// Check the retained source instruction and the forwarding chain from the
+/// entry owning Address to Current, even for a one-word unwind range.
+bool machORetainsSigningWord(const BinaryImage &Image, va_t Current, va_t Entry,
+                             va_t Address, uint32_t Word);
+
 /// Classify the address materialized at PC. A nonempty sorted Consumers list
 /// restricts the proof to authentications belonging to the current MedFunc.
 MachOSigningAddress machOSigningAddress(Decoder &Decode,
