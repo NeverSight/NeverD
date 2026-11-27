@@ -21085,6 +21085,12 @@ The tests check both wrappers with the real push and a same-relocation
 register move. Separate cases cover a 16-bit push, a read crossing the
 argument boundary, a write, and an earlier change to the required import.
 
+The CRT data tests check which import bindings survive a full-width
+store through an eager `_fmode`, `_commode` or `__p__commode` address.
+They check both the direct return and the later call to `Sleep`.
+The original startup sequence also exercises the store between its pushed
+mode argument and the call that consumes it.
+
 The PE32 startup fixture also checks both UCRT initializer walkers and the
 three relocated callbacks in their read-only tables.
 `InitializerCallsKeepOnlyProvenCallbackEffects` covers a callback that

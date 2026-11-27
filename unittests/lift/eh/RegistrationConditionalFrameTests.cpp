@@ -1197,6 +1197,14 @@ TEST(RegistrationCRTFrame,
     const auto Stack = getCheckedX86CalleeStackPop(Image, 0x406ba2, &Work);
     EXPECT_EQ(Stack, Kind == Input::Current ? std::optional<uint32_t>(0)
                                             : std::nullopt);
+    const auto Caller =
+        RegistrationCallCalleeIndex(Image, &Work).stackContract(0x406ba2);
+    EXPECT_EQ(bool(Caller && Caller->PreservesImportBindings),
+              Kind == Input::Current);
+    if (Kind == Input::Current) {
+      ASSERT_TRUE(Caller);
+      EXPECT_EQ(Caller->RequiredImports, (std::vector<va_t>{0x408100}));
+    }
     EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
   }
 }
