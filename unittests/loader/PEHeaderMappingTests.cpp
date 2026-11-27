@@ -653,6 +653,59 @@ TEST(PEHeaderMapping, LoaderWritesCannotSupplyImmutableHeaderBytes) {
     }
 }
 
+TEST(PEHeaderMapping, ExtendedPE32GuardSlotsHaveBoundedLoaderWrites) {
+  using Config = coff_load_configuration32;
+  constexpr unsigned ConfigRVA = 0x1020, RelocsRVA = 0x1140;
+  constexpr unsigned Check = offsetof(Config, GuardCFCheckFunction);
+  constexpr unsigned Cast = offsetof(Config, CastGuardOsDeterminedFailureMode);
+  auto Original = test::peHeaderImage(false, IMAGE_FILE_MACHINE_I386);
+  std::fill(Original.begin() + 0x210, Original.end(), 0);
+  auto *Data = reinterpret_cast<uint8_t *>(Original.data());
+  auto PE = locatePEHeaders(Data, Original.size());
+  auto *Section = reinterpret_cast<coff_section *>(PE.SectionTable);
+  Section->VirtualSize = 0x200;
+  const uint32_t Base = getPEImageBase(PE);
+  setPEDataDirectory(PE, LOAD_CONFIG_TABLE, ConfigRVA, 64);
+  setPEDataDirectory(PE, BASE_RELOCATION_TABLE, RelocsRVA, 12);
+  auto *ConfigBytes = Data + 0x220;
+  writeLE<uint32_t>(ConfigBytes, sizeof(Config));
+  writeLE<uint32_t>(ConfigBytes + Check, Base + 0x1180);
+  writeLE<uint32_t>(ConfigBytes + Cast, Base + 0x11c0);
+  writeLE<uint32_t>(ConfigBytes + offsetof(Config, GuardFlags),
+                    uint32_t(GuardFlags::CF_INSTRUMENTED));
+  writeLE<uint32_t>(Data + 0x340, 0x1000);
+  writeLE<uint32_t>(Data + 0x344, 12);
+  const auto Fixup = [](unsigned Offset) {
+    return uint16_t((IMAGE_REL_BASED_HIGHLOW << 12) | (0x20 + Offset));
+  };
+  writeLE<uint16_t>(Data + 0x348, Fixup(Check));
+  writeLE<uint16_t>(Data + 0x34a, Fixup(Cast));
+
+  const auto HasHeaders = [&](const std::string &Bytes) {
+    auto Image = load(Bytes, false);
+    if (!Image) {
+      llvm::consumeError(Image.takeError());
+      return false;
+    }
+    return bool(readImmutableImageBytes(*Image, Base, 2));
+  };
+  EXPECT_TRUE(HasHeaders(Original));
+  const auto AfterWrite = [&](size_t Offset, auto Value) {
+    auto Bytes = Original;
+    writeLE(reinterpret_cast<uint8_t *>(Bytes.data()) + Offset, Value);
+    return HasHeaders(Bytes);
+  };
+  for (unsigned Field : {Check, Cast}) {
+    EXPECT_FALSE(AfterWrite(0x220 + Field, Base + 0x3c));
+    EXPECT_FALSE(AfterWrite(Field == Check ? 0x348 : 0x34a, uint16_t{0}));
+  }
+  EXPECT_FALSE(AfterWrite(0x220 + Cast, Base + 0x1180));
+  EXPECT_FALSE(AfterWrite(0x220 + offsetof(Config, DynamicValueRelocTable),
+                          Base + 0x1190));
+  EXPECT_FALSE(AfterWrite(0x220 + offsetof(Config, GuardFlags),
+                          uint32_t(GuardFlags::CF_FUNCTION_TABLE_PRESENT)));
+}
+
 TEST(PEHeaderMapping, InitializationExhaustionDoesNotPublishPartialHeaders) {
   for (bool Is64 : {false, true}) {
     auto Bytes = test::peHeaderImage(Is64, Is64 ? IMAGE_FILE_MACHINE_AMD64

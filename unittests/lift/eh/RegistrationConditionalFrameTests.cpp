@@ -650,6 +650,26 @@ TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4HeaderGuardReadsItsImageHeaders) {
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    size_t Work = 0;
+    const auto Read = [&](va_t Address, uint16_t Width) {
+      const auto Scalar = registration_abi::readImmutableRegistrationScalar(
+          *Image, Address, Width, Work);
+      return Scalar ? Scalar->Value : std::nullopt;
+    };
+    ASSERT_EQ(Read(Image->Base, 2), 0x5a4du);
+    const auto NT = Read(Image->Base + 0x3c, 4);
+    ASSERT_TRUE(NT);
+    EXPECT_EQ(Read(Image->Base + *NT, 4), 0x4550u);
+    EXPECT_EQ(Read(Image->Base + *NT + 0x18, 2), 0x10bu);
+    EXPECT_FALSE(readImmutableImageBytes(*Image, 0x408108, 4));
+    EXPECT_FALSE(readImmutableImageBytes(*Image, 0x40b22c, 4));
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4HeaderGuardInstallsItsSharedFrame) {
   auto Image = loadXCPT4();
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
