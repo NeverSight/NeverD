@@ -94,6 +94,11 @@ std::optional<uint64_t> readImmutableChainedImageValue(const BinaryImage &Image,
 bool isFileBackedWritableImageRange(const BinaryImage &Image, va_t Address,
                                     uint32_t Size);
 
+/// Prove a live PE32 read can address a unique writable data range, including
+/// a virtual tail materialized by the loader. Its runtime value is unknown.
+bool isMappedWritablePE32DataRange(const BinaryImage &Image, va_t Address,
+                                   uint32_t Size);
+
 /// Whether scalar bits could name a source-owned image object or instruction.
 /// A pointer requires the target width and a mapped section owner; segment
 /// padding and narrow integer pieces do not provide that identity. This check

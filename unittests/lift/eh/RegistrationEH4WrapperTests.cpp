@@ -12,6 +12,7 @@
 #include "neverd/Limits.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Support/Endian.h"
@@ -168,6 +169,40 @@ TEST(RegistrationEH4Wrapper, NormalizerCannotObserveOrEscapeItsCallerFrame) {
               Text.begin() + 0x104 + Body.size());
     EXPECT_FALSE(coff_loader::getCheckedX86EH4CookieCheck(Image, 0x401000));
   }
+}
+
+TEST(RegistrationEH4Wrapper, ReadsLiveVirtualDataBeforeLeaveAndReturn) {
+  constexpr uint32_t Base = 0x400000;
+  auto Image = normalizedWrapper(Base);
+  auto &Data = Image.Segments.back();
+  auto &Storage = Image.Sections.back();
+  Data.Flags = Storage.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.FileSz = Storage.FileSz = 0x10;
+  const va_t Cell = Base + 0x2010;
+  EXPECT_FALSE(isFileBackedWritableImageRange(Image, Cell, 4));
+  auto &Text = Image.Segments.front().Data;
+  const uint8_t Body[] = {0x55, 0x8b, 0xec, 0x51, 0xa1, 0, 0, 0, 0, 0xc9, 0xc3};
+  std::copy(std::begin(Body), std::end(Body), Text.begin() + 0x100);
+  llvm::support::endian::write32le(Text.data() + 0x105, Cell);
+  const auto Check = [&] {
+    return coff_loader::getCheckedX86EH4PersonalityABI(Image, Base + 0x1000);
+  };
+  for (uint32_t Contents : {0u, 7u}) {
+    llvm::support::endian::write32le(Data.Data.data() + 0x10, Contents);
+    const auto ABI = Check();
+    ASSERT_TRUE(ABI);
+    ASSERT_EQ(ABI->ImageReads.size(), 1u);
+    EXPECT_EQ(ABI->ImageReads.front().Begin, Cell);
+    EXPECT_EQ(ABI->ImageReads.front().End, Cell + 4);
+  }
+  Text[0x10a] = 0xc2; // A callee-cleanup return has a different ABI.
+  EXPECT_FALSE(Check());
+  Text[0x10a] = 0xc3;
+  Data.Data.resize(0x12);
+  EXPECT_FALSE(Check());
+  Data.Data.resize(Data.Size);
+  Image.Sections.push_back(Storage);
+  EXPECT_FALSE(Check());
 }
 
 TEST(RegistrationEH4Wrapper, RetainsRuntimeDataAndMXCSRBranches) {

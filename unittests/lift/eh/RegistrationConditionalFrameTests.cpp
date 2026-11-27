@@ -19,6 +19,8 @@
 #include "neverd/ir/med/X86/X86RegistrationSEHCall.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFLoader.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -646,6 +648,26 @@ TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {
     EXPECT_FALSE(
         registration_abi::preservesRegistrationImportBindings(*Image, Slot));
   }
+}
+
+TEST(RegistrationCRTFrame, XCPT4HeaderGuardInstallsItsSharedFrame) {
+  auto Image = loadXCPT4();
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto *Guard = Image->ExceptionMetadata.findFunction(0x407088);
+  ASSERT_TRUE(Guard && Guard->Registration);
+  const auto Entry = coff_loader::getCheckedX86SEH4PrologueCall(*Image, *Guard);
+  ASSERT_TRUE(Entry);
+  EXPECT_EQ(Entry->CallVA, 0x40708fu);
+  EXPECT_EQ(Guard->Registration->RegistrationOffset, -16);
+  EXPECT_EQ(Guard->Registration->TryLevelOffset, -4);
+  const auto ABI =
+      coff_loader::getCheckedX86EH4PersonalityABI(*Image, Guard->PersonalityVA);
+  ASSERT_TRUE(ABI);
+  EXPECT_EQ(ABI->CookieCheckVA, 0x407946u);
+  ASSERT_EQ(ABI->ImageReads.size(), 1u);
+  EXPECT_EQ(ABI->ImageReads.front().Begin, 0x40b230u);
+  EXPECT_EQ(ABI->ImageReads.front().End, 0x40b234u);
+  EXPECT_FALSE(isFileBackedWritableImageRange(*Image, 0x40b230, 4));
 }
 
 TEST(RegistrationCRTFrame, XCPT4CRTStartupHasTwoCallerCleanedWalkers) {
