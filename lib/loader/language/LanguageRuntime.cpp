@@ -20,12 +20,16 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <bitset>
 #include <cstring>
+#include <iterator>
 
 #define DEBUG_TYPE "neverd-language-runtime"
 
@@ -111,25 +115,6 @@ bool hasSymbolPrefix(const BinaryImage &Img, llvm::StringRef Prefix,
   return false;
 }
 
-bool hasExactSymbol(const BinaryImage &Img, llvm::StringRef Name) {
-  auto matches = [&](llvm::StringRef Candidate) {
-    for (llvm::StringRef Spelling : symbolNameCandidates(Candidate))
-      if (Spelling == Name)
-        return true;
-    return false;
-  };
-  for (const Symbol &Sym : Img.Symbols)
-    if (matches(Sym.Name))
-      return true;
-  for (const Import &Imp : Img.Imports)
-    if (matches(Imp.Name))
-      return true;
-  for (const Export &Exp : Img.Exports)
-    if (matches(Exp.Name))
-      return true;
-  return false;
-}
-
 // The evidence detectLanguageRuntime reads; see LanguageRuntime.def.
 enum class EvidenceOrder { Chain, Otherwise, Fallback };
 enum class ProbeKind {
@@ -178,12 +163,64 @@ constexpr Probe Probes[] = {
 #define NEVERD_LANGUAGE_VALUE(Name, Value) constexpr size_t Name = Value;
 #include "LanguageRuntime.def"
 
-bool probeHolds(const BinaryImage &Img, const Probe &P) {
+// Normalize each symbol, import and export at most once. Resume at the next
+// entry after a hit so a match near the front can still end a search early.
+class ExactSymbolSearch {
+public:
+  explicit ExactSymbolSearch(const BinaryImage &Img)
+      : Symbols(Img.Symbols), Imports(Img.Imports), Exports(Img.Exports) {}
+
+  bool matches(const Probe &Wanted) {
+    const size_t WantedIndex = &Wanted - Probes;
+    if (Seen[WantedIndex])
+      return true;
+    if (Symbols.empty() && Imports.empty() && Exports.empty())
+      return false;
+
+    return scanUntil(WantedIndex);
+  }
+
+private:
+  // One spelling can satisfy several probes. Bit positions follow Probes.
+  using ProbeBits = std::bitset<std::size(Probes)>;
+
+  bool scanUntil(size_t WantedIndex) {
+    static const auto ProbesByName = [] {
+      llvm::DenseMap<llvm::StringRef, ProbeBits> Index;
+      for (auto [I, P] : llvm::enumerate(Probes))
+        if (P.Kind == ProbeKind::Symbol)
+          Index[P.Value].set(I);
+      return Index;
+    }();
+
+    auto consume = [&](auto &Remaining) {
+      while (!Remaining.empty()) {
+        const llvm::StringRef Name = Remaining.front().Name;
+        Remaining = Remaining.drop_front();
+        for (llvm::StringRef Spelling : symbolNameCandidates(Name))
+          if (auto It = ProbesByName.find(Spelling); It != ProbesByName.end())
+            Seen |= It->second;
+        if (Seen[WantedIndex])
+          return true;
+      }
+      return false;
+    };
+    return consume(Symbols) || consume(Imports) || consume(Exports);
+  }
+
+  ProbeBits Seen;
+  llvm::ArrayRef<Symbol> Symbols;
+  llvm::ArrayRef<Import> Imports;
+  llvm::ArrayRef<Export> Exports;
+};
+
+bool probeHolds(const BinaryImage &Img, const Probe &P,
+                ExactSymbolSearch &ExactSymbols) {
   switch (P.Kind) {
   case ProbeKind::Section:
     return sectionExists(Img, P.Value);
   case ProbeKind::Symbol:
-    return hasExactSymbol(Img, P.Value);
+    return ExactSymbols.matches(P);
   case ProbeKind::SymbolPrefix:
     return hasSymbolPrefix(Img, P.Value);
   case ProbeKind::Bytes:
@@ -206,9 +243,10 @@ bool probeHolds(const BinaryImage &Img, const Probe &P) {
 
 /// Whether any probe of \p Group holds, trying them in the order listed: the
 /// byte searches, which scan every data segment, come last in their groups.
-bool evidenceHolds(const BinaryImage &Img, EvidenceId Group) {
+bool evidenceHolds(const BinaryImage &Img, EvidenceId Group,
+                   ExactSymbolSearch &ExactSymbols) {
   return llvm::any_of(Probes, [&](const Probe &P) {
-    return P.Group == Group && probeHolds(Img, P);
+    return P.Group == Group && probeHolds(Img, P, ExactSymbols);
   });
 }
 
@@ -245,6 +283,7 @@ const char *getSourceLanguageRuntimeName(SourceLanguageRuntime Runtime) {
 }
 
 LanguageRuntimeInfo detectLanguageRuntime(const BinaryImage &Img) {
+  ExactSymbolSearch ExactSymbols(Img);
   LanguageRuntimeInfo Info;
   std::vector<SourceLanguageRuntime> Found;
   auto record = [&](SourceLanguageRuntime Runtime, std::string Evidence) {
@@ -265,14 +304,14 @@ LanguageRuntimeInfo detectLanguageRuntime(const BinaryImage &Img) {
       ChainHeld = false;
     else if (ChainHeld)
       continue;
-    if (evidenceHolds(Img, E.Id)) {
+    if (evidenceHolds(Img, E.Id, ExactSymbols)) {
       record(E.Runtime, E.Description.str());
       ChainHeld = true;
     }
   }
   for (const Evidence &E : Evidences)
     if (E.Order == EvidenceOrder::Fallback && Found.empty() &&
-        evidenceHolds(Img, E.Id))
+        evidenceHolds(Img, E.Id, ExactSymbols))
       record(E.Runtime, E.Description.str());
   if (Found.empty())
     return Info;
