@@ -39,6 +39,7 @@ MACHO_REGISTER_TEXT(kInvalidBody,
 MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
 MACHO_REGISTER_TEXT(kCall, "bl ")
 MACHO_REGISTER_TEXT(kTail, "b ")
+MACHO_REGISTER_TEXT(kAddress, "adr ")
 MACHO_REGISTER_TEXT(kAddressPage, "adrp ")
 MACHO_REGISTER_TEXT(kPage, "@PAGE\n")
 MACHO_REGISTER_TEXT(kPageOffset, "@PAGEOFF\n")
@@ -100,6 +101,20 @@ MACHO_REGISTER_VALUE(unsigned, kDwarfSP, 31)
 // Memory, branches, PC-relative addresses, SVE and SME use separate classes.
 MACHO_REGISTER_VALUE(uint32_t, kSIMDDataMask, 0x0e000000)
 MACHO_REGISTER_VALUE(uint32_t, kSIMDDataClass, 0x0e000000)
+
+// Darwin intra-procedure call registers first, then the other caller-saved
+// temporaries that do not carry NeverD's Darwin register results.
+#ifdef MACHO_SIGNING_SCRATCH
+MACHO_SIGNING_SCRATCH(X16)
+MACHO_SIGNING_SCRATCH(X17)
+MACHO_SIGNING_SCRATCH(X10)
+MACHO_SIGNING_SCRATCH(X11)
+MACHO_SIGNING_SCRATCH(X12)
+MACHO_SIGNING_SCRATCH(X13)
+MACHO_SIGNING_SCRATCH(X14)
+MACHO_SIGNING_SCRATCH(X15)
+#undef MACHO_SIGNING_SCRATCH
+#endif
 
 // These instructions retain their signing-PC displacement within the body.
 MACHO_REGISTER_PC_SIGNING(PACIASPPC, A64_Pacia2)

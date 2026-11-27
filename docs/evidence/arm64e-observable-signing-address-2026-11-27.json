@@ -1,0 +1,95 @@
+{
+  "implementation": "c3fb3b55cc7781bf8067bf702d0fef1c595a10b4",
+  "dev_baseline": "2c135ac6040ff6b60075eefb09ebbaef5471773a",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "regressions": {
+    "input": "Apple-linked Mach-O dylibs with IA and IB",
+    "publication_generations": [
+      "source to O0 image",
+      "O0 image to O2 image"
+    ],
+    "published_signing_address_images": 44,
+    "verified_signing_rows": 80,
+    "refused_signing_address_cases": 4,
+    "refusal_controls": [
+      "independent entry at the authenticator",
+      "no eligible dead scratch register for a forward signer"
+    ],
+    "indexed_dwarf_same_value": "The row starts at the added modifier instruction in each generation and key.",
+    "implicit_literal_signer": [
+      "matching immutable ordinary rebase",
+      "different signing PC",
+      "writable slot",
+      "missing rebase"
+    ]
+  },
+  "m4": {
+    "cpu": "Apple M4 Max",
+    "macos": "15.6.1",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "release_test_sha256": "2d5a0f4cfb5abd07107ba3a59bd005a0862648ec9baae33a96c548cce79552d6",
+    "unwind_test_sha256": "27fa98e7f7f8ac98a991cf8a565b4adb3764d52354a13a251bab70fac7bac8f6",
+    "async_unwind_and_lifted_images": {
+      "discovered": 223,
+      "passed": 223,
+      "skipped": [],
+      "failures": []
+    },
+    "other_image_suites": {
+      "discovered": 63,
+      "passed": 63,
+      "skipped": []
+    },
+    "portable_unwind_recovery": {
+      "discovered": 40,
+      "passed": 40,
+      "skipped": []
+    },
+    "explicit_language_unwind": {
+      "cases": 32,
+      "darwin_personality_images": 192,
+      "darwin_personality_exceptions": 288,
+      "darwin_personality_phase_pairs": 720,
+      "native_pc_recipe_deliveries": 0
+    }
+  },
+  "arm_fvp": {
+    "runner": "GitHub-hosted ubuntu-24.04",
+    "action": "https://github.com/gmh5225/test_mac_intel/actions/runs/45969329510",
+    "actions_revision": "2688a884a0ea15b4859f0937696ace62f5243653",
+    "version": "11.32+19",
+    "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+    "manifest_sha256": "f2909ad561ac462a8045e94a772a835689bf4c43617d54d941c2cdf3d11947d2",
+    "guest_sha256": "cd3cb071590e01d50a384f57231cd1cc0fadac3a46c405703d2bf1b6ffdeb49d",
+    "guest_object_sha256": "080b7442d5a1bdac4def8da0e3618c01b9bd8c72ff8cea8cf97d5472de93c126",
+    "assembly_sha256": "652f5d7aa65d2650d780125d5ae2408a506288a7f6f2c31712b6d19c5fd0e208",
+    "function_bodies": 66,
+    "caller_inputs_per_body": 2,
+    "exception_levels": [
+      "EL0",
+      "EL1"
+    ],
+    "enpacm_enpacm0": [
+      "00",
+      "10",
+      "01",
+      "11"
+    ],
+    "modeled_function_invocations": 1056,
+    "enabled_exit": 0,
+    "disabled_feature_control": {
+      "records": [
+        "RETURN-MODEL feature mismatch"
+      ],
+      "exit_code": 1
+    }
+  },
+  "hardware_todo": [
+    "128-bit LRCPC3",
+    "two-modifier PAuth_LR",
+    "PC-sensitive PACM",
+    "CPTA-on",
+    "checked writeback"
+  ]
+}

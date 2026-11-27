@@ -28,6 +28,7 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/ISAEncoding.h"
@@ -1063,9 +1064,13 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     for (const auto &Site : Addresses) {
       if (Site.Instruction >= End)
         break;
-      RebuiltLSDA |= Site.Form != MachOAddressForm::PagePair;
+      RebuiltLSDA |= Site.Form != MachOAddressForm::PagePair ||
+                     Site.insertsSigningModifier();
       if (Site.Form == MachOAddressForm::Expanded)
         InstalledOffset.Sites.push_back(Site.Instruction - Start);
+      if (Site.insertsSigningModifier())
+        InstalledOffset.Sites.push_back(Site.Authentication->Instruction -
+                                        Start);
     }
     const auto *Frame = Original.ExceptionMetadata.findFunction(Start);
     const auto Owner = Generated.SymbolAddrs.find(Mapping.Symbol);
@@ -1187,6 +1192,7 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
       // A call between functions must resolve to the installed entry.
       if (!Indexed && (FDEs.count(Owner->second) || Frame->Dwarf))
         return refuse(kLeafFrame);
+      const MachOLiftedSourceAddress *SigningConsumer = nullptr;
       for (size_t Offset = 0; Offset < Source.size();
            Offset += aarch64::kInsnSize) {
         auto Before = Source.drop_front(Offset);
@@ -1199,12 +1205,62 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
             return refuse(kLeafCode);
           continue;
         }
+        if (SigningConsumer &&
+            SigningConsumer->Authentication->Instruction == Start + Offset) {
+          // Decode both instructions independently of the lowering plan. The
+          // opcode preserves the IA/IB key and AUT/return behavior. Only the
+          // second modifier changes representation.
+          DecodedInsn I{};
+          constexpr auto Size = aarch64::kInsnSize;
+          if (Decode.decodeOne(Before.data(), Size, Start + Offset, I) !=
+                  int(Size) ||
+              !I.Raw || !I.Raw->detail ||
+              I.Raw->detail->aarch64.op_count != 1 ||
+              I.Raw->detail->aarch64.operands[0].type != AARCH64_OP_REG)
+            return refuse(kSourceAddressTarget);
+          const auto Id = I.Id;
+          const auto Register =
+              SigningConsumer->Authentication->ModifierRegister;
+          const auto Prefix = Register ? Size : 0;
+          if (After.size() < Prefix + Size)
+            return refuse(kSourceAddressTarget);
+          const va_t PC = Owner->second + InstalledOffset(Offset) + Prefix;
+          if (Decode.decodeOne(After.data() + Prefix, Size, PC, I) !=
+                  int(Size) ||
+              I.Id != Id || !I.Raw || !I.Raw->detail ||
+              I.Raw->detail->aarch64.op_count != 1)
+            return refuse(kSourceAddressTarget);
+          const va_t Sign =
+              Owner->second + InstalledOffset(SigningConsumer->Target - Start);
+          const auto &Modifier = I.Raw->detail->aarch64.operands[0];
+          if (Register) {
+            const uint32_t Setup = readLE<uint32_t>(After.data());
+            if (Modifier.type != AARCH64_OP_REG ||
+                unsigned(Modifier.reg - AARCH64_REG_X0) != *Register ||
+                aarch64::encodePCRelativeAddress(
+                    aarch64::AddressInstruction::ADR, *Register, PC - Size,
+                    Sign) != Setup)
+              return refuse(kSourceAddressTarget);
+          } else {
+            const auto Distance =
+                ((readLE<uint32_t>(After.data()) >> kAArch64PAuthLRImmShift) &
+                 kAArch64PAuthLRImmMask) *
+                kAArch64PAuthLRScale;
+            if (Modifier.type != AARCH64_OP_IMM || Sign > PC ||
+                PC - Sign != Distance)
+              return refuse(kSourceAddressTarget);
+          }
+          SigningConsumer = nullptr;
+          continue;
+        }
         if (!Addresses.empty() &&
             Addresses.front().Instruction == Start + Offset) {
-          const auto Fixup = Addresses.front();
+          const auto &Fixup = Addresses.front();
           Addresses = Addresses.drop_front();
           const auto Word = readLE<uint32_t>(After.data());
           const auto PC = Owner->second + InstalledOffset(Offset);
+          if (Fixup.Authentication)
+            SigningConsumer = &Fixup;
           if (Fixup.Form != MachOAddressForm::Single) {
             const auto New = decodeMachOPageAddress(Decode, After, PC);
             if (!New || New->Target != Fixup.Target + Slide ||

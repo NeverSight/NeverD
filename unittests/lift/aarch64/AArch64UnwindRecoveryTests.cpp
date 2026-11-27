@@ -338,6 +338,30 @@ TEST(AArch64ImplicitUnwind, AnUnprovedLRNeverBecomesAnUnsignedReturn) {
   EXPECT_EQ(WrongKey.at(2).Status, Status::Unknown);
 }
 
+TEST(AArch64ImplicitUnwind,
+     RegisterModifierCanLoadAnImmutableRebasedSigningPC) {
+  Frame F{ExplicitSignB, SigningLiteralX11, ExplicitAuthBX11, Ret};
+  const auto Slot = F.Function.CodeRange.End;
+  auto &Cell = F.Image.Segments.emplace_back();
+  Cell.VA = Slot;
+  Cell.Size = Cell.FileSz = sizeof(va_t);
+  Cell.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Cell.Data.resize(Cell.Size);
+  Cell.ReadOnlyAfterRelocations = true;
+  F.Image.MachOResolvedChainedPointerSlots.insert(Slot);
+  const auto Restored = F.at(3);
+  ASSERT_TRUE(Restored.State);
+  EXPECT_EQ(Restored.State->Kind, Kind::Unsigned);
+  writeLE<va_t>(Cell.Data.data(), sizeof(uint32_t));
+  EXPECT_EQ(F.at(3).Status, Status::Unknown);
+  writeLE<va_t>(Cell.Data.data(), 0);
+  Cell.ReadOnlyAfterRelocations = false;
+  EXPECT_EQ(F.at(3).Status, Status::Unknown);
+  Cell.ReadOnlyAfterRelocations = true;
+  F.Image.MachOResolvedChainedPointerSlots.clear();
+  EXPECT_EQ(F.at(3).Status, Status::Unknown);
+}
+
 TEST(AArch64ImplicitUnwind, InstructionAddressRecipesSurviveImageSlides) {
   Frame Explicit{ExplicitSignB, ExplicitAuthBPrevious, Ret};
   auto Rows = recoverDarwinAArch64Unwind(Explicit.Image, Explicit.Function);

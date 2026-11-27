@@ -24,6 +24,7 @@
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -59,8 +60,10 @@ bool canPublishMachOLanguageFrame(const BinaryImage &Image,
 bool canBindMachOLanguageTable(const BinaryImage &Image,
                                const ItaniumEHInfo &Table);
 
-/// An indexed access using the physical SP cannot use a reconstructed stack.
-bool needsMachONativeStackIndex(const MedFunc &Function);
+/// Physical SP addressing and simultaneous signing-PC/source-address uses need
+/// their machine register body before LLVM resolves an address-valued PHI.
+bool needsMachONativeRegisterBody(const MedFunc &Function,
+                                  const BinaryImage &Image);
 
 /// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
 /// SP accesses, ordinary indexed/writeback memory, scalar FP/NEON data
@@ -79,6 +82,13 @@ lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
 
 enum class MachOAddressForm { Single, PagePair, Expanded };
 
+/// An AUT or authenticated return which must consume the installed signing PC.
+struct MachOSigningConsumer {
+  va_t Instruction;
+  /// An extra ADR sets this otherwise dead GPR for the register form.
+  std::optional<unsigned> ModifierRegister;
+};
+
 /// A numeric source address produced by a PC-relative instruction or pair.
 /// Instruction and target use the input image's preferred addresses.
 struct MachOLiftedSourceAddress {
@@ -89,6 +99,11 @@ struct MachOLiftedSourceAddress {
   uint64_t AssemblyOffset = 0;
   /// Inserting a word here preserves the body's local PC-relative encodings.
   bool CanExpand = true;
+  std::optional<MachOSigningConsumer> Authentication;
+
+  bool insertsSigningModifier() const {
+    return Authentication && Authentication->ModifierRegister.has_value();
+  }
 };
 
 /// Check each register body and its symbolic call operands against the image

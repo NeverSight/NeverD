@@ -397,7 +397,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                    Result.MedFuncs.size() >= 8 &&
                    !requiresSerialLLVMEmission(Result.MedFuncs, Img);
 
-  llvm::SmallVector<va_t> NativeStackEntries;
+  llvm::SmallVector<va_t> NativeRegisterEntries;
   // The bodies the module declares only, by index into MedFuncs, with why.
   std::vector<std::pair<size_t, std::string>> LeftOut;
   if (UseShards) {
@@ -439,11 +439,11 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     std::vector<char> Mask;
     if (Opts.PatchMode && Img.isArm64e())
       for (const auto &[Index, F] : llvm::enumerate(Result.MedFuncs))
-        if (needsMachONativeStackIndex(F)) {
+        if (needsMachONativeRegisterBody(F, Img)) {
           if (Mask.empty())
             Mask.assign(Result.MedFuncs.size(), 1);
           Mask[Index] = 0;
-          NativeStackEntries.push_back(F.Entry);
+          NativeRegisterEntries.push_back(F.Entry);
         }
     uint64_t UnhandledValueIntrinsics = 0;
     // Why a refused body fails a lift that cannot leave it out.
@@ -572,7 +572,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         Admitted.push_back(Audit.Entry);
     if (auto Error =
             lowerMachORegisterResults(*Result.LlvmModule, Img, Admitted,
-                                      NativeStackEntries, Result.LowFuncs)) {
+                                      NativeRegisterEntries, Result.LowFuncs)) {
       Result.Error = llvm::toString(std::move(Error));
       Result.LlvmModule.reset();
       Result.LLVMSources.reset();
