@@ -5374,8 +5374,17 @@ bool Specializer::evaluate(int Id) {
         }
       } else {
         bool TrackNativeReturnWithoutPreservation = false;
-        if (FrameRoot && Original.Opcode == NdOp::STORE &&
-            (StorePreservation || Options.ProveStoreReturnSlotSeparation)) {
+        const bool MayTrackNativeReturn =
+            FrameRoot && Original.Opcode == NdOp::STORE &&
+            !Frame.NativeReturnSlots.empty();
+        const auto ConditionalAddress =
+            MayTrackNativeReturn && !StorePreservation &&
+                    Options.ProveStoreReturnSlotSeparation
+                ? Exec.memoryAddressValue(Evaluated)
+                : SymRef{};
+        if (MayTrackNativeReturn &&
+            (StorePreservation ||
+             (ConditionalAddress && Ctx.width(ConditionalAddress) == 64))) {
           const auto ContainsSlot = [](int64_t Begin, int64_t End,
                                        uint64_t Slot) {
             const uint64_t Size =
