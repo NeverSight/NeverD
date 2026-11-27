@@ -136,6 +136,11 @@ struct Request {
   Request(Json Value, std::size_t Bytes)
       : value(std::move(Value)), bytes(Bytes) {}
 };
+auto jvmRecovery() {
+  static auto Recover = engineSymbol<decltype(&neverd_jvm_recover_json_v1)>(
+      "neverd_jvm_recover_json_v1");
+  return Recover;
+}
 auto luaRecovery() {
   static auto Recover = engineSymbol<decltype(&neverd_lua_recover_json_v1)>(
       "neverd_lua_recover_json_v1");
@@ -153,7 +158,7 @@ auto pythonNativeExport() {
   return Export;
 }
 bool scriptOperation(const std::string &Op) {
-  return Op == "lua_recover" || Op == "python_recover" ||
+  return Op == "jvm_recover" || Op == "lua_recover" || Op == "python_recover" ||
          Op == "python_export_native";
 }
 Json recoverScript(const std::string &Op, const Json &input,
@@ -168,7 +173,15 @@ Json recoverScript(const std::string &Op, const Json &input,
     return static_cast<std::atomic<bool> *>(ctx)->load();
   };
   const char *raw = nullptr;
-  if (Op == "lua_recover") {
+  if (Op == "jvm_recover") {
+    auto Recover = jvmRecovery();
+    if (!Recover)
+      throw Error("unsupported", "This engine does not provide JVM recovery");
+    auto Options = input.value("options", Json::object());
+    if (!Options.is_object())
+      throw Error("invalid_request", "JVM options must be an object");
+    raw = Recover(path.c_str(), Options.dump().c_str(), stop, &cancelled);
+  } else if (Op == "lua_recover") {
     auto recover = luaRecovery();
     if (!recover)
       throw Error("unsupported", "This engine does not provide Lua recovery");
@@ -437,6 +450,8 @@ Json hello() {
       result["capabilities"].push_back(operation);
   if (Engine::keepsOperandFormats())
     result["capabilities"].push_back("operand_format");
+  if (jvmRecovery())
+    result["capabilities"].push_back("jvm_recover");
   if (pythonRecovery())
     result["capabilities"].push_back("python_recover");
   if (pythonNativeExport())

@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>JVM 클래스 및 JAR 검사…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Java 바이트코드와 형식화된 중간 표현 및 복원한 메서드를 검사합니다</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>메모리 안전성 검사...</translation>
     </message>
@@ -11254,6 +11262,109 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2(검사 %3개, 건너뜀 %4개, 판정 불가 %5개)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>JVM 클래스 및 JAR 검사</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>찾아보기…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>분석 대상</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>JAR 기본 항목</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>미리 보기 기능 사용</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>런타임</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>로컬 종속성…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>지우기</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>종속성</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>클래스 또는 멤버</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>메서드</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>목록 검사</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>선택 항목 분석</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>취소</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java 소스</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>바이트코드</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>형식화된 중간 표현</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>근거</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>바이트코드 매핑</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>보기 복사</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>보기 내보내기…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>보고서 내보내기…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>JVM 파일 열기</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>선택한 런타임 보기</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>모든 메서드</translation>
     </message>
 </context>
 <context>

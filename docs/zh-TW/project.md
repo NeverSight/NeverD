@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4c1b1447cb6abdf3a60477b6e281d0686e117fd9743f27592f63fedc38241ef7 -->
+<!-- i18n-source: ffb9cc2753916bb01223ed5f796ce889835795af5d3c24fe97fd3cb12ff50b59 -->
 
 <div align="center">
 
@@ -304,6 +304,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 統計 | 對每個已載入函式產生預設 C；檢查後即釋放該函式本體 |
 | `decompile -llvm` | `.c` | 經 LLVM IR + 最佳化器 |
 | `decompile --devirtualize` | `.c` + 選用 JSON | 實驗性 x64 直譯器還原；需要 `--func`；[契約與範例](interpreter-recovery.md) |
+| `java` | Java / JVM IR / 位元組碼 / JSON | [class 檔與多版本 JAR](../jvm-recovery.md) |
 | `python` | `.py` / JSON / 原生元件 | [CPython 與 PyInstaller 產物還原](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT 與 Luau 原始碼還原](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 實驗性: [Android](android.md), [iOS](ios.md) |

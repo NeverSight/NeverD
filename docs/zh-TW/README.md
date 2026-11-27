@@ -1,6 +1,6 @@
 **語言**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← NeverD 專案](project.md)
 
@@ -46,6 +46,7 @@
 | [GUI 行程外掛（英文）](../gui-plugins.md) | 管理員、功能表位置、工作結果與行程提供程式通訊協定 |
 | [NPH 行程外掛宿主（英文）](../plugin-host.md) | 共用擁有權、工作准入、通訊協定與行程生命週期 |
 | [原生外掛](plugins.md) | 純 C 描述元 ABI、回呼與事件、建置/連結流程、探索順序及相容性規則 |
+| [Java 產物還原](../jvm-recovery.md) | JVM class 檔版本、JAR 版本選擇、具型別的 IR 及逐方法 Java 還原 |
 | [Python 產物還原](../python-recovery.md) | CPython 版本支援、PyInstaller 元件、原生程式分析與原始碼驗證 |
 | [Python 外掛](python-plugins.md) | 外掛撰寫、工作階段與事件 API、隔離、測試及發佈 |
 | [行動平台支援總覽](mobile.md) | Android / iOS 輸入、原始碼輸出、CLI 流程與限制 |

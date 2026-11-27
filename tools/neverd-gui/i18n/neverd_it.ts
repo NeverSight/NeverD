@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>Esamina classi JVM e archivi JAR…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Esamina bytecode Java, rappresentazione intermedia tipizzata e metodi ricostruiti</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>Analisi della sicurezza della memoria...</translation>
     </message>
@@ -11290,6 +11298,109 @@ Il grafo precedente è ancora disponibile.</translation>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2 (%3 esaminati, %4 saltati, %5 inconcludenti)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>Esamina classi JVM e archivi JAR</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Sfoglia…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>Artefatto</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>Voci base del JAR</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>Abilita funzionalità in anteprima</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>Ambiente di esecuzione</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>Dipendenze locali…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Cancella</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Dipendenze</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>Classe o membro</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Metodo</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>Esamina inventario</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>Analizza selezione</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annulla</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Sorgente Java</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>Bytecode</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>Rappresentazione intermedia tipizzata</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidenze</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Corrispondenze del bytecode</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>Copia vista</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>Esporta vista…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Esporta rapporto…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>Apri artefatto JVM</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>Vista dell’ambiente selezionato</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>Tutti i metodi</translation>
     </message>
 </context>
 <context>

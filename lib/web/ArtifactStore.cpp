@@ -12,41 +12,9 @@
 #include "Internal.h"
 #include "JsonReader.h"
 
-#include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <array>
-
 namespace neverd::web {
-bool validUtf8(std::string_view Bytes) {
-  return llvm::json::isUTF8(llvm::StringRef(Bytes));
-}
-
-std::string sha256(std::string_view Bytes) {
-  llvm::SHA256 Hash;
-  Hash.update(llvm::StringRef(Bytes));
-  return llvm::toHex(Hash.final(), true);
-}
-
-std::string identity(std::string_view Domain,
-                     const std::vector<std::string_view> &Fields) {
-  llvm::SHA256 Hash;
-  auto Field = [&](std::string_view Text) {
-    std::array<uint8_t, 8> Size{};
-    uint64_t Length = Text.size();
-    for (unsigned I = 0; I != 8; ++I)
-      Size[7 - I] = uint8_t(Length >> (I * 8));
-    Hash.update(Size);
-    Hash.update(llvm::StringRef(Text));
-  };
-  Field("neverd.web.identity.v1");
-  Field(Domain);
-  for (auto Text : Fields)
-    Field(Text);
-  return llvm::toHex(Hash.final(), true);
-}
-
 std::string json(llvm::json::Value Value) {
   std::string Result;
   llvm::raw_string_ostream(Result) << Value;

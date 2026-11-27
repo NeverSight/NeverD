@@ -1,6 +1,6 @@
 **Languages**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← NeverD プロジェクト](project.md)
 
@@ -46,6 +46,7 @@
 | [GUI プロセスプラグイン（英語）](../gui-plugins.md) | マネージャー、メニュー配置、タスク結果とプロセスプロトコル |
 | [NPH プロセスプラグインホスト（英語）](../plugin-host.md) | 共有の所有権、タスク受付、プロトコルとプロセスの寿命 |
 | [ネイティブプラグイン](plugins.md) | 純粋 C descriptor ABI、callback と event、build/link workflow、discovery、互換性規則 |
+| [Java 成果物の復元](../jvm-recovery.md) | JVM クラスファイルのバージョン、JAR 内の選択、型付き IR、メソッド単位の Java 復元 |
 | [Python 成果物の復元](../python-recovery.md) | CPython のバージョン別対応状況、PyInstaller の構成要素、ネイティブ解析、ソースの検証 |
 | [Python プラグイン](python-plugins.md) | プラグイン作成、セッション／イベント API、分離、テスト、公開 |
 | [モバイル対応の概要](mobile.md) | Android / iOS の入力、ソース出力、CLI の流れと制限 |

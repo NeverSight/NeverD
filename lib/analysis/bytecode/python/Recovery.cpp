@@ -8,6 +8,7 @@
 /// distinct native backend for compiled images.
 //===----------------------------------------------------------------------===//
 
+#include "../ReportStream.h"
 #include "Artifacts.h"
 
 #include "neverd/support/SHA256.h"
@@ -652,34 +653,12 @@ json::Object neverd::python::exportNative(StringRef Path, StringRef Profile,
   return json::Object{{"status", "exported"}, {"sha256", Expected.str()}};
 }
 namespace {
-// Preserve the small, buffered writes from the JSON formatter while bounding
-// the backing string even when the full inventory cannot fit in a worker reply.
-class ReportStream final : public raw_ostream {
-  std::string &Text;
-  bool Full = false;
-
-  void write_impl(const char *Data, size_t Size) override {
-    if (Full)
-      return;
-    if (Size > limits::kReportBytes - Text.size()) {
-      Full = true;
-      return;
-    }
-    Text.append(Data, Size);
-  }
-  uint64_t current_pos() const override { return Text.size(); }
-
-public:
-  explicit ReportStream(std::string &Text) : Text(Text) {}
-  bool exceeded() const { return Full; }
-};
-
 std::string serialize(json::Object Report,
                       ArrayRef<FunctionInstructions> Tables) {
   json::Value Value(std::move(Report));
   std::string Text;
   {
-    ReportStream OS(Text);
+    neverd::bytecode::ReportStream OS(Text, limits::kReportBytes);
     if (Tables.empty())
       OS << Value;
     else {

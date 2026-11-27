@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 4c1b1447cb6abdf3a60477b6e281d0686e117fd9743f27592f63fedc38241ef7 -->
+<!-- i18n-source: ffb9cc2753916bb01223ed5f796ce889835795af5d3c24fe97fd3cb12ff50b59 -->
 
 <div align="center">
 
@@ -306,6 +306,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | Zähler | Standard-C für jede geladene Funktion; jeder Funktionsrumpf wird nach der Prüfung freigegeben |
 | `decompile -llvm` | `.c` | Über LLVM IR + Optimizer |
 | `decompile --devirtualize` | `.c` + optionales JSON | Experimentelle x64-Interpreterrekonstruktion; benötigt `--func`; [Vertrag und Beispiele](interpreter-recovery.md) |
+| `java` | Java / JVM-IR / Bytecode / JSON | [Klassendateien und Multi-Release-JARs](../jvm-recovery.md) |
 | `python` | `.py` / JSON / native Komponenten | [Wiederherstellung von CPython- und PyInstaller-Artefakten](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Quelltextrekonstruktion für Lua, LuaJIT und Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimentell: [Android](android.md), [iOS](ios.md) |

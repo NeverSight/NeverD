@@ -40,3 +40,15 @@ add_neverd_component_library(NeverDPythonRecovery
   LLVM_COMPONENTS Object Support
 )
 target_link_libraries(NeverDPythonRecovery PRIVATE ZLIB::ZLIB)
+
+add_neverd_component_library(NeverDJVMRecovery
+  jvm/Attributes.cpp
+  jvm/Class.cpp
+  jvm/Flow.cpp
+  jvm/Instructions.cpp
+  jvm/Java.cpp
+  jvm/Method.cpp
+  jvm/Recovery.cpp
+  LINK_COMPONENTS Zip
+  LLVM_COMPONENTS Support
+)

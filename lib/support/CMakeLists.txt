@@ -22,3 +22,19 @@ add_neverd_component_library(NeverDSupport
   LINK_LIBS neverd_text_acceleration
 )
 target_include_directories(NeverDSupport PRIVATE "${NEVERD_LLVM_TARGET_INCLUDE_DIR}")
+
+# The language frontends and the optional web workbench share ZIP admission.
+add_neverd_component_library(NeverDZip
+  ../web/archives/Identity.cpp
+  ../web/archives/PathIndex.cpp
+  ../web/archives/Zip.cpp
+  ../web/archives/ZipPayload.cpp
+  ../web/BlobStore.cpp
+  LLVM_COMPONENTS Support
+  LINK_LIBS ZLIB::ZLIB
+)
+target_compile_definitions(NeverDZip PRIVATE NEVERD_WEB_ZLIB=1)
+if(WIN32)
+  target_sources(NeverDZip PRIVATE ../web/platform/WindowsFile.cpp)
+  target_link_libraries(NeverDZip PRIVATE advapi32 bcrypt)
+endif()
