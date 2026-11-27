@@ -17,11 +17,17 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 
 #include "llvm/ADT/StringRef.h"
 
 namespace neverd::registration_abi {
+
+bool isRegistrationCRTIntAccessor(const Import &Imported) {
+  return Imported.Name == "__p__commode" &&
+         coff_loader::isUCRTStdioProvider(Imported.Module);
+}
 
 bool isCheckedRegistrationCRTDataSlot(const BinaryImage &Image, va_t Slot) {
   const auto *Import = checkedImportSlot(Image, Slot);
@@ -77,9 +83,16 @@ void CRTDataStoreProof::write(const NdVar &Var, std::optional<Pointer> Value) {
   Active |= Value.has_value();
 }
 
+void CRTDataStoreProof::recordAccessorReturn(va_t Slot, const NdVar &Output) {
+  clear();
+  const Pointer Value{Slot, 4};
+  write(NdVar::reg(x86reg::RAX, 4), Value);
+  write(Output, Value);
+}
+
 bool CRTDataStoreProof::transfer(const LowOp &Op,
                                  std::optional<va_t> AuthenticatedLoad,
-                                 bool BindingsLive, bool ClosedRead,
+                                 bool BindingsLive, bool ClosedAccess,
                                  size_t &Work, bool &DisjointStore) {
   DisjointStore = false;
   if (Instruction != Op.Addr) {
@@ -101,7 +114,7 @@ bool CRTDataStoreProof::transfer(const LowOp &Op,
     // an earlier register address, even if that register is not the output.
     // A separately closed current read retains only untouched carriers;
     // write() still invalidates any full or partial destination alias below.
-    if (!ClosedRead)
+    if (!ClosedAccess)
       clear();
     if (AuthenticatedLoad && BindingsLive && Op.NumInputs == 1 &&
         Op.Output.isTemp() && Op.Output.Size == 4)
@@ -109,9 +122,10 @@ bool CRTDataStoreProof::transfer(const LowOp &Op,
   } else if (Op.Opcode == NdOp::STORE) {
     if (Op.NumInputs == 2 && Op.Inputs[1].Size == 4)
       DisjointStore = read(Op.Inputs[0]).has_value();
-    // A receipt is consumed once. A second write needs a fresh authenticated
-    // load, never a saved memory cell or an assumption about trap callbacks.
-    clear();
+    // A write through the pointer consumes it. An independent, permitted
+    // private stack store (such as PUSH imm) leaves the register untouched.
+    if (DisjointStore || !ClosedAccess)
+      clear();
     return true;
   } else if (!isNontrappingFrameScalarOperation(Op)) {
     clear();

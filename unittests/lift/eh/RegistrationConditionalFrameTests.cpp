@@ -643,8 +643,8 @@ TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {
     ASSERT_EQ(Import->Name, Name);
     EXPECT_EQ(registration_abi::checkedRegistrationImportStackPop(*Image, Slot),
               0u);
-    EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(*Image,
-                                                                      Slot));
+    EXPECT_FALSE(
+        registration_abi::preservesRegistrationImportBindings(*Image, Slot));
   }
 }
 
@@ -668,6 +668,35 @@ TEST(RegistrationCRTFrame, XCPT4CRTStartupHasTwoCallerCleanedWalkers) {
        {std::pair{0x408114u, 0x406c3bu}, std::pair{0x408120u, 0x406b88u},
         std::pair{0x408124u, 0x406c33u}})
     EXPECT_EQ(readImmutablePE32CodePointerStorage(*Image, Slot), Target);
+}
+
+TEST(RegistrationCRTFrame, XCPT4StartupCallsTheUCRTCommodeAccessor) {
+  auto Image = loadXCPT4();
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Image));
+  CFGBuilder Builder;
+  const auto Function =
+      Builder.buildIntegerFrameProof(*Image, Dec, 0x406b88, "pre-c-init");
+  size_t Work = 0;
+  unsigned Calls = 0;
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (Op.Addr != 0x406ba2 || Op.Opcode != NdOp::CALL)
+        continue;
+      const auto Slot =
+          registration_state::checkedCRTCallSlot(*Image, Op, Work);
+      ASSERT_TRUE(Slot);
+      const auto *Imported = Image->findImportAt(*Slot);
+      ASSERT_TRUE(Imported);
+      EXPECT_EQ(Imported->Name, "__p__commode");
+      EXPECT_EQ(Imported->Module, "api-ms-win-crt-stdio-l1-1-0.dll");
+      EXPECT_EQ(
+          registration_abi::checkedRegistrationImportStackPop(*Image, *Slot),
+          0u);
+      ++Calls;
+    }
+  EXPECT_EQ(Calls, 1u);
 }
 
 TEST(RegistrationCRTFrame, XCPT4StdioWrappersSeparateExplicitStackRestoration) {

@@ -23,10 +23,12 @@
 namespace neverd {
 struct BinaryImage;
 struct LowOp;
+struct Import;
 struct NdVar;
 
 namespace registration_abi {
 
+bool isRegistrationCRTIntAccessor(const Import &Imported);
 bool isCheckedRegistrationCRTDataSlot(const BinaryImage &Image, va_t Slot);
 
 /// One ordinary block's exact CRT int addresses. Receipts never feed frame
@@ -46,12 +48,16 @@ class CRTDataStoreProof {
   void write(const NdVar &Var, std::optional<Pointer> Value);
 
 public:
+  bool active() const { return Active; }
+  /// The authenticated no-argument accessor returned its CRT-owned int in EAX.
+  void recordAccessorReturn(va_t Slot, const NdVar &Output);
+
   /// AuthenticatedLoad names only this exact current LOAD's typed import
   /// receipt. A current binding is required to introduce its runtime address.
-  /// ClosedRead retains other carriers only through the shared current scalar
-  /// memory-access proof. It supplies no value for this LOAD's destination.
+  /// ClosedAccess permits a checked read or a write to allocated private
+  /// stack bytes. Neither supplies a new CRT pointer.
   bool transfer(const LowOp &Op, std::optional<va_t> AuthenticatedLoad,
-                bool BindingsLive, bool ClosedRead, size_t &Work,
+                bool BindingsLive, bool ClosedAccess, size_t &Work,
                 bool &DisjointStore);
 };
 

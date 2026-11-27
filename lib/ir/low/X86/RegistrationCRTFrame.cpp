@@ -30,8 +30,8 @@ bool isCheckedControlFPSlot(const BinaryImage &Image, va_t Slot) {
          isFileBackedPEImportSlot(Image, Slot);
 }
 
-bool isCheckedControlFPCall(const BinaryImage &Image, const LowOp &Op,
-                            size_t &Work) {
+std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
+                                       const LowOp &Op, size_t &Work) {
   const bool Indirect = Op.Opcode == NdOp::INDIR_CALL;
   const unsigned Size = Indirect ? 6 : 5;
   if ((!Indirect && Op.Opcode != NdOp::CALL) || Op.NumInputs != 1 ||
@@ -41,26 +41,34 @@ bool isCheckedControlFPCall(const BinaryImage &Image, const LowOp &Op,
       Op.MemoryOrdering != NdMemoryOrdering::None ||
       Op.Addr > UINT32_MAX - Size ||
       !registration_abi::chargeCalleeWork(Work, Indirect ? 10 : 15))
-    return false;
+    return std::nullopt;
   const va_t Target = Op.Inputs[0].Offset;
   if (Indirect) {
     const auto Bytes =
         readImmutablePE32CodeBytes(Image, Op.Addr, 6, {Op.Addr + 2});
-    return Bytes && (*Bytes)[0] == 0xff && (*Bytes)[1] == 0x15 &&
-           readLE<uint32_t>(Bytes->data() + 2) == Target &&
-           isCheckedControlFPSlot(Image, Target);
+    if (!Bytes || (*Bytes)[0] != 0xff || (*Bytes)[1] != 0x15 ||
+        readLE<uint32_t>(Bytes->data() + 2) != Target)
+      return std::nullopt;
+    return Target;
   }
   // A direct CRT veneer is the exact E8 occurrence followed by one immutable
   // FF25 import jump. Cached stub names do not authenticate either instruction.
   if (Target > UINT32_MAX - 6)
-    return false;
+    return std::nullopt;
   const auto Bytes = readImmutablePE32CodeBytes(Image, Op.Addr, 5, {});
   const auto Stub = readImmutablePE32CodeBytes(Image, Target, 6, {Target + 2});
-  return Bytes && (*Bytes)[0] == 0xe8 &&
-         uint32_t(Op.Addr + 5 + int64_t(readLE<int32_t>(Bytes->data() + 1))) ==
-             Target &&
-         Stub && (*Stub)[0] == 0xff && (*Stub)[1] == 0x25 &&
-         isCheckedControlFPSlot(Image, readLE<uint32_t>(Stub->data() + 2));
+  if (!Bytes || (*Bytes)[0] != 0xe8 ||
+      uint32_t(Op.Addr + 5 + int64_t(readLE<int32_t>(Bytes->data() + 1))) !=
+          Target ||
+      !Stub || (*Stub)[0] != 0xff || (*Stub)[1] != 0x25)
+    return std::nullopt;
+  return readLE<uint32_t>(Stub->data() + 2);
+}
+
+bool isCheckedControlFPCall(const BinaryImage &Image, const LowOp &Op,
+                            size_t &Work) {
+  const auto Slot = checkedCRTCallSlot(Image, Op, Work);
+  return Slot && isCheckedControlFPSlot(Image, *Slot);
 }
 
 } // namespace neverd::registration_state

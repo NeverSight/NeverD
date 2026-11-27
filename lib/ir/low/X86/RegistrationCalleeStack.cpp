@@ -643,10 +643,12 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
               Image, Abstract, Transfer, Body.callerArgumentReadBytes(), Work))
         PreservesEntryImports = false;
       bool CRTDataStore = false;
-      if (!Body.ImportDataLoads.empty() && !Registration && !CxxPaths) {
+      if ((!Body.ImportDataLoads.empty() || CRTData.active()) &&
+          !Registration && !CxxPaths) {
         const auto DataLoad = Body.ImportDataLoads.find({Op.Addr, Op.Seq});
-        const bool ClosedRead =
-            Op.Opcode == NdOp::LOAD &&
+        const bool ClosedAccess =
+            (Op.Opcode == NdOp::LOAD ||
+             (CRTData.active() && Op.Opcode == NdOp::STORE)) &&
             registration_abi::preservesOrdinaryRegistrationBindings(
                 Image, Abstract, Transfer, Body.callerArgumentReadBytes(),
                 Work);
@@ -654,7 +656,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                               DataLoad == Body.ImportDataLoads.end()
                                   ? std::nullopt
                                   : std::optional<va_t>{DataLoad->second},
-                              State.ImportBindingsIntact, ClosedRead, Work,
+                              State.ImportBindingsIntact, ClosedAccess, Work,
                               CRTDataStore))
           return std::nullopt;
       }
@@ -758,6 +760,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       std::optional<uint32_t> CalleePop;
       bool ImportedCall = false;
       bool PreserveImportBindings = false;
+      std::optional<va_t> ImportedSlot;
       if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
           State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset)
@@ -766,6 +769,8 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
             (Callee->RequiredImports.empty() || State.ImportBindingsIntact)) {
           CalleePop = Callee->StackPopBytes;
           ImportedCall = Callee->ImportVeneer;
+          if (ImportedCall)
+            ImportedSlot = Callee->RequiredImports.front();
           PreserveImportBindings = Callee->PreservesImportBindings;
         }
       if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
@@ -781,6 +786,8 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
               registration_abi::checkedRegistrationImportStackPop(Image, *Slot);
         ImportedCall = CalleePop.has_value() &&
                        (!Op.Inputs[0].isConst() || State.ImportBindingsIntact);
+        if (ImportedCall)
+          ImportedSlot = Slot;
         PreserveImportBindings =
             ImportedCall &&
             registration_abi::preservesRegistrationImportBindings(Image, *Slot);
@@ -808,6 +815,16 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                      0, ImportedCall, PreserveImportBindings);
       if (CallSP)
         State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
+      if (ImportedSlot && PreserveImportBindings && !Registration &&
+          !CxxPaths && Op.Output.Size == 4 &&
+          (Op.Output == NdVar::reg(x86reg::RAX, 4) || Op.Output.isTemp())) {
+        const auto *Imported = Image.findImportAt(*ImportedSlot);
+        if (Imported &&
+            registration_abi::isRegistrationCRTIntAccessor(*Imported) &&
+            registration_state::checkedCRTCallSlot(Image, Op, Work) ==
+                ImportedSlot)
+          CRTData.recordAccessorReturn(*ImportedSlot, Op.Output);
+      }
       if (PrecisionSuccess)
         // The source CALL and its FP effects remain. This exact invocation's
         // zero ordinary result supplies only the following stack-proof branch.

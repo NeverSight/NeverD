@@ -224,6 +224,8 @@ bool preservesRegistrationImportBindings(const BinaryImage &Image,
   if (Module.equals_insensitive("msvcr100.dll") &&
       (Import->Name == "__set_app_type" || Import->Name == "__setusermatherr"))
     return true;
+  if (isRegistrationCRTIntAccessor(*Import))
+    return true;
   // These APIs transform pointer bits with a process-specific secret, without
   // replacing the caller image's import slots. Keep the runtime result opaque;
   // in particular, decoding does not establish frame-independent provenance.
