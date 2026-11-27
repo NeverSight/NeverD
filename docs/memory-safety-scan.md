@@ -36,14 +36,18 @@ The same `neverd scan` command reads the architecture, byte order and ABI from t
 | ELF target | Linked stack-read control |
 | --- | --- |
 | MIPS32r2 o32 and MIPS64r2 n64, big- and little-endian | Identifies the uninitialized read and its function as `UNSAFE`. |
-| MIPS64r2 n32, big- and little-endian | Identifies the same read. Its evidence yields `UNKNOWN`. |
+| MIPS64r2 n32, big- and little-endian | Checks the 32-bit signed-word condition on the 64-bit stack register and corroborates the read as `UNSAFE`. |
 | MIPS III o32, big- and little-endian | An access that needs runtime MMU translation yields `UNKNOWN` with `unresolved-memory-translation`. |
 | PowerPC32 and PowerPC64 ELFv1/ELFv2, big- and little-endian | Identifies the uninitialized read and its function as `UNSAFE`. |
-| RISC-V RV32I/ILP32 and RV64I/LP64, little-endian | Identifies the uninitialized read and its function as `UNSAFE`. |
+| RISC-V ILP32, LP64, ILP32D and LP64D, little-endian | Identifies the uninitialized read and its function as `UNSAFE`. The D-ABI controls load and store an eight-byte floating local. |
 
-The paired control initializes a local of the same width before reading it. A second fixture calls a separately linked one-argument text function with an immutable literal. On PowerPC64 ELFv2 the scan resolves the local entry and proves the literal safe. On other admitted profiles the report can identify the call while leaving the string's origin inconclusive. Missing call targets or unsupported instructions can leave another binary inconclusive. The RISC-V controls cover the integer calling conventions. An unsupported file ABI can fail during loading before a report exists.
+The paired control initializes a local of the same width before reading it. A second fixture calls a separately linked one-argument text function with an immutable literal. On PowerPC64 ELFv2 the scan resolves the local entry and proves the literal safe. On other admitted profiles the report can identify the call while leaving the string's origin inconclusive. Missing call targets or unsupported instructions can leave another binary inconclusive. The RISC-V D-ABI control also calls a function with two floating arguments, changes the sign of the value and consumes the floating result. An unsupported file ABI can fail during loading before a report exists.
 
 The regression runs against linked binaries on every test host. To rebuild them, run `python3 unittests/safety/fixtures/elf-profiles/build.py --clang clang --lld ld.lld --ppc64-ld powerpc64le-linux-gnu-ld` with Clang/LLD 22 and GNU PowerPC64 binutils 2.40. GNU ld supplies the ELFv1 function descriptors.
+
+## Heap ownership and debug companions
+
+A call to `malloc` can leave its pointer in the ABI return register even in a `void` function. A matching declaration lets the scan distinguish that leak from a function that transfers ownership to its caller. On x64 and ARM64 PE, the scan checks the PDB identity, the procedure's code contribution and the CodeView return type. For an external Mach-O dSYM, the image and companion must have matching architecture and build UUID. A map alone supplies names. With an unresolved return contract, the scan reports `UNKNOWN` for this pattern.
 
 ## Limits and evidence
 

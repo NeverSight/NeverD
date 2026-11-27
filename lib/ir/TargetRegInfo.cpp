@@ -336,6 +336,11 @@ bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
            Size <= PreservedEnd - RegOff;
   }
 
+  if (hasRISCVDoubleABI(TheArch) && isVectorReg(RegOff)) {
+    const unsigned Index = (RegOff - VecRegBase) / VecRegStride;
+    return Size <= 8 &&
+           (Index == 8 || Index == 9 || (Index >= 18 && Index <= 27));
+  }
   if (isMIPS(TheArch) && isVectorReg(RegOff)) {
     const unsigned Index = (RegOff - VecRegBase) / VecRegStride;
     return Size <= 8 &&

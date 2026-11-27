@@ -2924,14 +2924,16 @@
         "powerpc64-elfv1",
         "powerpc64le-elfv1",
         "riscv32",
-        "riscv64"
+        "riscv64",
+        "riscv32-ilp32d",
+        "riscv64-lp64d"
       ],
       "docs": [
         "docs/memory-safety-scan.md"
       ],
       "limitations": [
         "Static Audit and Hunt properties within the admitted lift, catalog and budgets. Incomplete coverage is explicit.",
-        "MIPS, PowerPC and RISC-V coverage is qualified on linked ELF images. RISC-V uses RV32I/ILP32 or RV64I/LP64. MIPS n32 can identify an inconclusive stack read. Historical MIPS III o32 accesses that require runtime MMU translation report unsupported coverage."
+        "MIPS, PowerPC and RISC-V coverage is qualified on linked ELF images. RISC-V admits ILP32, LP64, ILP32D and LP64D. The double-float controls cover register transfers, sign injection and floating memory operations. On MIPS64r2 n32 the static verifier checks the signed-word precondition for the stack read. Historical MIPS III o32 accesses that require runtime MMU translation report unsupported coverage."
       ],
       "tests": [
         {

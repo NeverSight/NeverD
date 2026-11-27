@@ -807,6 +807,32 @@ TEST(SymExplore, MalformedInstructionGuardMetadataFailsClosed) {
   EXPECT_FALSE(Exploration.Complete);
 }
 
+TEST(SymExplore, N32StaticWordGuardRequiresAnActualSignExtension) {
+  for (Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    for (uint64_t Word : {UINT64_C(0x7fffffff), UINT64_C(0xffffffff80000000),
+                          UINT64_C(0x80000000), UINT64_C(0x100000000)}) {
+      SymContext Ctx;
+      FunctionBuilder B;
+      B.block({op(NdOp::INTRINSIC, {},
+                  {NdVar::scalar(uint64_t(Intrinsic::MIPSRequireWord),
+                                 sizeof(Intrinsic)),
+                   NdVar::scalar(Word, 8)}),
+               op(NdOp::RETURN, {}, {})},
+              {});
+      ExploreOptions Opts;
+      Opts.WordCheckTarget = A;
+      auto Walk = explorePathsDetailed(Ctx, B.function(), Opts);
+      ASSERT_TRUE(Walk.Complete);
+      EXPECT_EQ(Walk.UnmodelledOps, 0u);
+      ASSERT_EQ(Walk.Paths.size(), 1u);
+      const bool Fits =
+          Word == UINT64_C(0x7fffffff) || Word == UINT64_C(0xffffffff80000000);
+      EXPECT_EQ(Walk.Paths[0].Outcome,
+                Fits ? PathOutcome::Returned : PathOutcome::Infeasible);
+    }
+  }
+}
+
 TEST(SymExplore, AlignmentPreconditionConstrainsOnlyEnabledAccesses) {
   for (unsigned Address : {0x1000U, 0x1002U})
     for (int Enabled : {-1, 0, 1}) {

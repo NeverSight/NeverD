@@ -753,6 +753,45 @@ TEST(PDBIdentityIntegration, MatchingFixtureAuthenticatesNamesButNotExtents) {
   }
 }
 
+TEST(PDBDataContributions,
+     FoldedAndNestedCodeContributionsCannotOwnDeclarations) {
+  using pdb_loader_detail::ModuleRange;
+  std::vector<ModuleRange> Ranges{{0x1000, 0x1010, 1, 1, false, true},
+                                  {0x1010, 0x1030, 1, 1, false, true},
+                                  {0x1010, 0x1020, 2, 1, false, true},
+                                  {0x1028, 0x1038, 3, 1, false, true},
+                                  {0x1038, 0x1040, 3, 1, false, true}};
+  pdb_loader_detail::excludeSharedCode(Ranges);
+  EXPECT_TRUE(Ranges[0].ExclusiveCode);
+  EXPECT_FALSE(Ranges[1].ExclusiveCode);
+  EXPECT_FALSE(Ranges[2].ExclusiveCode);
+  EXPECT_FALSE(Ranges[3].ExclusiveCode);
+  EXPECT_TRUE(Ranges[4].ExclusiveCode);
+}
+
+TEST(PDBIdentityIntegration,
+     MatchedWin64ProcedureTypesAuthenticateOnlyExactReturns) {
+  for (const std::string CPU : {"x64", "arm64"}) {
+    const std::string Base = "safety_cases_pe_" + CPU;
+    auto Image = loadPEFixture(Base + ".exe");
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto Context = PDBDebugContext::load(safetyFixture(Base + ".pdb"), *Image);
+    ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
+    EXPECT_TRUE((*Context)->hasAuthenticatedReturnDeclarations());
+    EXPECT_FALSE((*Context)->hasAuthenticatedFunctionSignatures());
+    const auto Functions = (*Context)->allFunctions();
+    const auto It = std::find_if(
+        Functions.begin(), Functions.end(),
+        [](const FunctionSym &F) { return F.Name == "leaks_memory"; });
+    ASSERT_NE(It, Functions.end());
+    EXPECT_EQ((*Context)->resolveAuthenticatedReturnValueState(It->Addr).Kind,
+              AuthenticatedReturnKind::NoValue);
+    EXPECT_EQ(
+        (*Context)->resolveAuthenticatedReturnValueState(It->Addr + 1).Kind,
+        AuthenticatedReturnKind::Unknown);
+  }
+}
+
 TEST(PDBDataContributions, StorageRegionsRetainGapsAndRejectConflicts) {
   using pdb_loader_detail::ModuleRange;
   const std::vector<ModuleRange> Contributions{

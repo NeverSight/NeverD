@@ -1213,7 +1213,7 @@ private:
 
   ReturnContract returnContract(const MedFunc &F) const {
     ReturnContract Declared;
-    if (In.Dbg && In.Dbg->hasAuthenticatedFunctionSignatures()) {
+    if (In.Dbg && In.Dbg->hasAuthenticatedReturnDeclarations()) {
       const AuthenticatedReturnValueState State =
           In.Dbg->resolveAuthenticatedReturnValueState(F.Entry);
       Declared = {State.Kind, State.Size};
@@ -1821,14 +1821,14 @@ private:
       }
     }
 
+    const ReturnContract HeapContract = returnContract(F);
     for (int PI = 0; PI < static_cast<int>(F.Params.size()); ++PI) {
       if (F.Params[PI].isConst())
         continue;
-      const ReturnContract Contract = returnContract(F);
       llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(F.Params[PI]);
       llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(F.Params[PI]);
       ReturnEscapeEvents ReturnEvents =
-          returnEscapeEvents(F, Mem, Alias, MustAlias, Contract);
+          returnEscapeEvents(F, Mem, Alias, MustAlias, HeapContract);
       std::vector<FreeEvent> DefiniteEscapes = std::move(ReturnEvents.Definite);
       bool HasPotentialEscape = !ReturnEvents.Potential.empty();
       for (const MedBlock &B : F.Blocks) {
@@ -1880,7 +1880,6 @@ private:
         S.UnknownParam.insert(PI);
     }
 
-    const ReturnContract HeapContract = returnContract(F);
     if (HeapContract.hasNoValue())
       return S;
 
@@ -2276,6 +2275,12 @@ private:
             : ::neverd::limits::safety::kDefaultExplorationLoopVisits;
     if (In.Img) {
       const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
+      if (isMIPSN32(In.Img->Arch)) {
+        Opts.WordCheckTarget = In.Img->Arch;
+        Opts.ByteOrder = archLittleEndian(In.Img->Arch)
+                             ? llvm::endianness::little
+                             : llvm::endianness::big;
+      }
       const uint16_t Bytes = TRI.PointerSize ? TRI.PointerSize : 8;
       for (const TargetRegisterRange &R :
            TRI.callPreservedRanges(In.Img->abiFormat()))
@@ -2439,6 +2444,7 @@ private:
     if (IncludeStackReads)
       auditUninitializedStackReads(F, Mem, Out);
 
+    std::optional<ReturnContract> Contract;
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
       const MedCallInfo &CI = F.CallInfos[I];
       const HeapReturnState Allocation = allocationState(CI);
@@ -2519,7 +2525,10 @@ private:
         }
       }
 
-      const EscapeState Escape = escapes(F, Mem, Alias, MustAlias, CI);
+      if (!Contract)
+        Contract = returnContract(F);
+      const EscapeState Escape =
+          escapes(F, Mem, Alias, MustAlias, CI, *Contract);
       const bool UnresolvedLifecycle =
           HasPotentialFree || hasUnresolvedLifecycleCall(F, G, CI);
 
@@ -3209,8 +3218,8 @@ private:
   EscapeState escapes(const MedFunc &F, const MemModel &Mem,
                       const llvm::DenseSet<ValueKey> &Alias,
                       const llvm::DenseSet<ValueKey> &MustAlias,
-                      const MedCallInfo &Alloc) const {
-    const ReturnContract Contract = returnContract(F);
+                      const MedCallInfo &Alloc,
+                      const ReturnContract &Contract) const {
     ReturnEscapeEvents ReturnEvents =
         returnEscapeEvents(F, Mem, Alias, MustAlias, Contract);
     std::vector<FreeEvent> DefiniteEscapes = std::move(ReturnEvents.Definite);

@@ -12,10 +12,13 @@
 
 #ifndef NEVERD_LIB_LIFT_RISCV_RISCVCOMPRESSED_H
 #define NEVERD_LIB_LIFT_RISCV_RISCVCOMPRESSED_H
+#include "neverd/lift/RISCV/RISCVProfile.h"
+
 #include <cstdint>
 #include <optional>
 
 namespace neverd::riscv {
-std::optional<uint32_t> expandCompressed(uint16_t Half, bool RV64);
+std::optional<uint32_t> expandCompressed(uint16_t Half, bool RV64,
+                                         RISCVProfile Profile);
 }
 #endif // NEVERD_LIB_LIFT_RISCV_RISCVCOMPRESSED_H

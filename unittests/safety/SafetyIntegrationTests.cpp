@@ -403,23 +403,15 @@ TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
   const auto *Audit = scanAnalyzer(*Root, "audit");
   ASSERT_NE(Audit, nullptr);
   EXPECT_EQ(Audit->getInteger("scanned"), 7);
-  // In-image ELF DWARF authenticates the void declarations on leaks_memory and
-  // guarded_free, so neither can publish ownership into main.  PDB Phase A
-  // publishes names only, while these particular reproducible Mach-O fixtures
-  // intentionally omit LC_UUID and therefore cannot authenticate their
-  // adjacent dSYM's type graph.  On those fixtures the live ABI return carrier
-  // is indistinguishable from an untyped wrapper that returns its allocation:
-  // preserve a May summary and report the two ignored results in main as
-  // UNKNOWN instead of folding that uncertainty to No.
-  const bool HasReturnDeclarations = Spec.Format == "ELF";
+  // Each fixture carries matching type information for both void functions.
   const auto Findings = scanFindings(*Root);
   EXPECT_EQ(std::count_if(Findings.begin(), Findings.end(),
                           [](const auto *F) {
                             return F->getString("verdict") == "UNSAFE";
                           }),
-            HasReturnDeclarations ? 4 : 3);
-  EXPECT_EQ(Audit->getInteger("unknown"), HasReturnDeclarations ? 1 : 4);
-  ASSERT_EQ(Findings.size(), HasReturnDeclarations ? 5u : 7u);
+            4);
+  EXPECT_EQ(Audit->getInteger("unknown"), 1);
+  ASSERT_EQ(Findings.size(), 5u);
   struct ExpectedImportFinding {
     const char *Function;
     const char *Callee;
@@ -428,8 +420,7 @@ TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
   };
   const std::vector<ExpectedImportFinding> ExpectedImports = {
       {"tainted_heap_overflow", "memcpy", "uninitialized_read", "UNKNOWN"},
-      {"leaks_memory", "malloc", "heap_leak",
-       HasReturnDeclarations ? "UNSAFE" : "UNKNOWN"},
+      {"leaks_memory", "malloc", "heap_leak", "UNSAFE"},
       {"leak_on_one_path", "malloc", "heap_leak", "UNSAFE"},
       {"double_frees", "free", "double_free", "UNSAFE"},
       {"uses_after_free", "free", "use_after_free", "UNSAFE"},
@@ -456,8 +447,7 @@ TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
   const llvm::json::Object *LeaksMemory = findingNamed(*Root, "leaks_memory");
   ASSERT_NE(LeaksMemory, nullptr) << Spec.Path;
   EXPECT_EQ(LeaksMemory->getString("class"), "heap_leak");
-  EXPECT_EQ(LeaksMemory->getString("verdict"),
-            HasReturnDeclarations ? "UNSAFE" : "UNKNOWN");
+  EXPECT_EQ(LeaksMemory->getString("verdict"), "UNSAFE");
   EXPECT_TRUE(
       namesMatch(LeaksMemory->getString("name").value_or(""), "malloc"));
   EXPECT_EQ(LeaksMemory->getString("name_source"), "import");
@@ -468,20 +458,7 @@ TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
 
   for (llvm::StringRef Callee :
        {llvm::StringRef("leaks_memory"), llvm::StringRef("guarded_free")}) {
-    const std::vector<const llvm::json::Object *> CallerFindings =
-        findingsAtCall(*Root, "main", Callee);
-    if (HasReturnDeclarations) {
-      EXPECT_TRUE(CallerFindings.empty()) << Callee.str();
-      continue;
-    }
-    ASSERT_EQ(CallerFindings.size(), 1u) << Callee.str();
-    const llvm::json::Object &CallerFinding = *CallerFindings.front();
-    EXPECT_EQ(CallerFinding.getString("class"), "heap_leak");
-    EXPECT_EQ(CallerFinding.getString("verdict"), "UNKNOWN");
-    EXPECT_EQ(CallerFinding.getString("name_source"),
-              Spec.Format == "PE" ? "pdb" : "export");
-    EXPECT_TRUE(CallerFinding.getString("detail").value_or("").contains(
-        "callee may return heap ownership"));
+    EXPECT_TRUE(findingsAtCall(*Root, "main", Callee).empty()) << Callee.str();
   }
 }
 
@@ -640,16 +617,12 @@ TEST_P(SafetyIntegration, CompanionIdentityAndNoDebugPolicyAreEnforced) {
 TEST_P(SafetyIntegration, EveryFindingCarriesStatedIdentity) {
   const FixtureSpec &Spec = GetParam();
   for (auto Analyzer : {NEVERD_SCAN_HUNT, NEVERD_SCAN_AUDIT}) {
-    const bool Hunt = Analyzer == NEVERD_SCAN_HUNT;
     llvm::json::Value V(nullptr);
     ASSERT_TRUE(scanFixture(Spec.Path, Analyzer, V)) << Spec.Path;
     const llvm::json::Object *Root = V.getAsObject();
     ASSERT_NE(Root, nullptr);
     const auto Findings = scanFindings(*Root);
     ASSERT_FALSE(Findings.empty()) << Spec.Path;
-
-    unsigned MainLeaksMemory = 0;
-    unsigned MainGuardedFree = 0;
 
     for (const auto *O : Findings) {
       const std::string Where = Spec.Format + " " + Spec.Arch + " " +
@@ -664,31 +637,9 @@ TEST_P(SafetyIntegration, EveryFindingCarriesStatedIdentity) {
 
       const std::optional<llvm::StringRef> Name = O->getString("name");
       ASSERT_TRUE(Name.has_value()) << Where;
-      const bool IsMainLeaksMemory = !Hunt && Spec.Format != "ELF" &&
-                                     namesMatch(*Fn, "main") &&
-                                     namesMatch(*Name, "leaks_memory");
-      const bool IsMainGuardedFree = !Hunt && Spec.Format != "ELF" &&
-                                     namesMatch(*Fn, "main") &&
-                                     namesMatch(*Name, "guarded_free");
-      const bool IsUntrustedReturnMay = IsMainLeaksMemory || IsMainGuardedFree;
-      MainLeaksMemory += IsMainLeaksMemory;
-      MainGuardedFree += IsMainGuardedFree;
-
-      if (IsUntrustedReturnMay) {
-        EXPECT_EQ(O->getString("class"), "heap_leak") << Where;
-        EXPECT_EQ(O->getString("verdict"), "UNKNOWN") << Where;
-        EXPECT_TRUE(O->getString("detail").value_or("").contains(
-            "callee may return heap ownership"))
-            << Where;
-        EXPECT_EQ(O->getString("name_source"),
-                  Spec.Format == "PE" ? "pdb" : "export")
-            << Where;
-      } else {
-        // Every direct runtime sink in the fixtures must still resolve through
-        // the IAT, PLT, or dyld bind table.  The only non-import findings are
-        // the two precisely enumerated May summaries above.
-        EXPECT_EQ(O->getString("name_source"), "import") << Where;
-      }
+      // Matched return declarations remove the two possible factory calls in
+      // main. Every remaining reported callee resolves through its import.
+      EXPECT_EQ(O->getString("name_source"), "import") << Where;
 
       // DWARF states the line a call sits on; a PDB carries names and
       // addresses only, so the report omits the key rather than inventing one.
@@ -703,10 +654,6 @@ TEST_P(SafetyIntegration, EveryFindingCarriesStatedIdentity) {
             << Where << " -> " << Loc->str();
       }
     }
-
-    const unsigned ExpectedMainMay = !Hunt && Spec.Format != "ELF" ? 1u : 0u;
-    EXPECT_EQ(MainLeaksMemory, ExpectedMainMay) << Spec.Path;
-    EXPECT_EQ(MainGuardedFree, ExpectedMainMay) << Spec.Path;
   }
 }
 

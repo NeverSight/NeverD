@@ -1,4 +1,4 @@
-# RISC-V and PowerPC integer ELF analysis
+# RISC-V and PowerPC ELF analysis
 
 ## Experimental ELF profiles
 
@@ -6,22 +6,25 @@
 | --- | --- | --- | --- |
 | RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs, Zicond |
 | RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs, Zicond |
+| RISC-V | ELF32 or ELF64, little-endian | ILP32D or LP64D, eight floating argument registers and two floating result registers | Integer profile plus F/D loads, stores, register transfers and sign injection, including compressed floating memory forms |
 | PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset |
 | PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar and POWER10 prefixed fixed-point forms |
 
-For RISC-V, the ELF class selects XLEN. The loader accepts the integer ABI and
+For RISC-V, the ELF class selects XLEN. The float ABI flag selects the integer or double-float calling convention. A double-float image with an explicit ISA attribute must advertise D. The loader
 reads normalized `Tag_RISCV_arch` attributes for M, A and their integer
 subextensions. Zmmul permits multiplication, Zaamo permits atomic
 read-modify-write operations, and Zalrsc permits load-reserved/store-conditional.
 LLVM functions retain the evidenced features, including Zca on a Zca-only
 image. An explicit stack alignment must match the 16-byte ILP32/LP64
-convention. Either the RVC ELF
+convention, including its D variants. Either the RVC ELF
 flag or the C/Zca attribute permits halfword instruction boundaries. Without
 extension evidence the decoder uses the base integer profile. A 32-bit
 instruction can follow a 16-bit instruction at a halfword address. The lifter
 uses the physical instruction length for the link address.
 [Unprivileged ISA, 20260120](https://docs.riscv.org/reference/isa/v20260120/unpriv/unpriv-index.html).
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/).
+
+The double-float ABI passes named floating values in `fa0`–`fa7` while integer arguments independently consume `a0`–`a7`. A qualifying one- or two-member record can use both register files. Unnamed variadic arguments follow the integer convention. Single-precision register values are NaN-boxed in the 64-bit floating register file. Loads, stores and raw register moves retain payload bits. Sign injection checks narrow operand boxing. [RISC-V hardware floating-point calling convention](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#_hardware_floating_point_calling_convention).
 
 Zba 1.0 enables the three XLEN-wide shift-and-add forms. On RV64,
 `add.uw`, `sh1add.uw`, `sh2add.uw`, `sh3add.uw` and `slli.uw`
@@ -159,8 +162,8 @@ The scalar encodings and flag definitions follow Books I and II of versions
 | Stage | RISC-V | PowerPC |
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
-| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
-| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
+| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics and the floating transfers and sign operations above | Integer ALU, signed and unsigned word/doubleword division, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
+| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer and double-float ABI argument registers | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
 | Native rewrite | Unsupported | Unsupported |
 
@@ -239,13 +242,12 @@ displacement and boundary rules for a PC-relative linkage stub.
 [Power ISA, Book I](https://openpowerfoundation.org/specifications/isa/).
 
 The strict lifters report unsupported instructions at their original VA.
-RISC-V system/CSR, FP, V and vendor extensions, along with PowerPC VLE, SPE,
+RISC-V system/CSR, rounded floating arithmetic, V and vendor extensions, along with PowerPC VLE, SPE,
 VMX, VSX, other prefixed forms and system instructions, still require lifting support.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
 ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a
-proven r30-relative jump slot. FP arguments, variadic and
-aggregate calls require separate ABI coverage. Link objects with relocations
+proven r30-relative jump slot. PowerPC floating arguments, variadic and aggregate calls require separate ABI coverage. Link objects with relocations
 against allocated sections before analysis. Raw firmware mapping and native
 guest execution have separate entry points and coverage.
 

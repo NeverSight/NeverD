@@ -207,6 +207,8 @@ struct ExploreOptions {
   /// Concrete memory input, written only into the shadow. The symbolic state
   /// retains its entry-memory origins, including all possible aliases.
   std::vector<SymConcreteMemory> ConcolicMemory;
+  /// Machine word preconditions requested by a static path verification.
+  Arch WordCheckTarget = Arch::Unknown;
 };
 
 struct SymCallResult {

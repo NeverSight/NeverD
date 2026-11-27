@@ -17,6 +17,7 @@ PROFILES = (
     "mips", "mipsel", "mips64", "mips64el", "mips64n32", "mips64n32el",
     "mips64o32", "mips64o32el", "powerpc", "powerpcle", "powerpc64",
     "powerpc64le", "powerpc64-elfv1", "powerpc64le-elfv1", "riscv32", "riscv64",
+    "riscv32-ilp32d", "riscv64-lp64d",
 )
 HISTORICAL = {"mips64o32", "mips64o32el"}
 
@@ -46,13 +47,12 @@ def verify_frame(cli, image, name):
         for report in reports.values():
             translation_unavailable(report, name)
     else:
-        verdict = "UNKNOWN" if name in ("mips64n32", "mips64n32el") else "UNSAFE"
-        assert both["coverage_complete"] and both["verdict"] == audit["verdict"] == verdict, name
+        assert both["coverage_complete"] and both["verdict"] == audit["verdict"] == "UNSAFE", name
         assert hunt["coverage_complete"] and hunt["verdict"] == "SAFE" and not hunt["findings"], name
         # Only first reads the slot before initialization. Second initializes
         # a slot of the same size before reading it.
         found = [(f["function"], f["class"], f["verdict"]) for f in observations(both, "audit")]
-        assert found == [("first", "uninitialized_read", verdict)], (name, found)
+        assert found == [("first", "uninitialized_read", "UNSAFE")], (name, found)
     return reports
 
 
@@ -100,7 +100,7 @@ def main():
         for name in PROFILES:
             shutil.copyfile(args.directory / name, image)
             reports = verify_frame(args.cli, image, name)
-            if name in ("mips64n32el", "powerpc64-elfv1", "riscv32"):
+            if name in ("mips64n32el", "powerpc64-elfv1", "riscv32", "riscv64-lp64d"):
                 assert reports == sdk_reports(host, image), name
                 if args.worker:
                     with Client(args.worker) as worker:
