@@ -21221,6 +21221,10 @@ root-address precedence. The union is private to the pass; later call erasure
 and register reload insertion do not change its block extents. This lookup
 supplies no additional native frame or control-flow proof.
 
+A source stretch containing an intrinsic can leave its try level only if the
+LowIR intrinsic contract proves it has value-only effects. For example, x87
+`FWAIT` can deliver a pending exception under the current filter.
+
 For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
 in the private source module. It preflights distinct, closed finally bodies,
 their normal calls, local-unwind ancestors and owned filter CFGs before
