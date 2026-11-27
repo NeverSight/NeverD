@@ -456,6 +456,7 @@ json::Object view(const Index &T, const Options &Q, Job &J, const Input &Root) {
   auto &Functions = *R.getArray("functions"),
        &Components = *R.getArray("components"),
        &Edges = *R.getArray("relations");
+  Components.reserve(T.Components.size());
   bool Matched = false, Partial = false, Source = false, Extracted = false;
   unsigned FunctionId = 0;
   int RootId = -1;
@@ -560,6 +561,7 @@ json::Object view(const Index &T, const Options &Q, Job &J, const Input &Root) {
                  "Class requires a compatible release and preview policy"}});
       }
       json::Array Methods;
+      Methods.reserve(C.Methods.size());
       for (auto &Meth : C.Methods) {
         auto Key = Meth.Name + Meth.Desc;
         json::Object Summary{{"id", FunctionId},
