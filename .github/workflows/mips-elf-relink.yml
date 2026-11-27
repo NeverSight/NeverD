@@ -71,7 +71,7 @@ jobs:
             -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
             -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
             -DLLVM_PARALLEL_LINK_JOBS=1 "${args[@]}"
-          cmake --build build-tools --parallel 4 --target llc llvm-mc lld
+          cmake --build build-tools --parallel 4 --target llc llvm-mc llvm-ar lld
       - name: Build the native CLI with the published fork SDK
         env:
           CC: ${{ matrix.cc }}
@@ -115,7 +115,7 @@ jobs:
           suffix=
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
           mkdir current-tools
-          for tool in llc ld.lld; do
+          for tool in llc ld.lld llvm-ar; do
             cp -L "build-tools/bin/$tool$suffix" "current-tools/$tool$suffix"
           done
           for release in r13 r14; do
@@ -131,8 +131,8 @@ jobs:
             args=(--neverd "build-check/bin/neverd$suffix" --original-tools build-tools/bin --tools current-tools)
             python scripts/check_mips_elf_relink.py upgrade --root "$root" "${args[@]}"
             if [[ "$release" == r14 ]]; then
-              python scripts/check_mips_elf_relink.py upgrade --root "$root-partial" --partial-link "${args[@]}"
-              python scripts/check_mips_elf_relink.py upgrade --root "$root-partial-pic" --partial-link=pic "${args[@]}"
+              python scripts/check_mips_elf_relink.py upgrade --root "$root-partial" --partial-link --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
+              python scripts/check_mips_elf_relink.py upgrade --root "$root-partial-pic" --partial-link=pic --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
             fi
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -291,8 +291,8 @@ memory size and 256-byte alignment of `PT_TLS`.
 The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
-build produces 1,202 executable images across 354 configurations, including
-848 patched images. The upgrade check uses r13 and r14 to build one original
+build produces 1,262 executable images across 366 configurations, including
+896 updated images. The upgrade check uses r13 and r14 to build one original
 per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.
@@ -308,6 +308,13 @@ input order and preserve the previous output. Across the four input sets
 the runner compares all 48 replacements byte for byte with independent
 links, runs the 24 originals and all 48 replacements, and checks the
 function placement in every ELF.
+
+When the original build uses a static library in a partial link, keep the
+result of that `ld.lld -r` step as the manifest object. Rebuild it from the
+same inputs and archive order for the replacement. The CI partial links use
+fork `llvm-ar` to archive two definitions of `calc` and an unused member
+with an unresolved reference. Each partial object must match a direct link
+of the selected members byte for byte before the final executable runs.
 
 For MIPS16 o32 hard float, the ordinary function pointer selects the
 compiler's classic entry adapter and the symbol table retains the MIPS16

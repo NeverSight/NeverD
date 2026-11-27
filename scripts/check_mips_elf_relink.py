@@ -361,7 +361,7 @@ def check_mixed_float_abis(args, builds, products):
                     raise ValueError(f"{hard}: incompatible {mode} replacement changed the prior output")
 
 
-def build_upgrade_objects(old, new, build, out, profile, partial):
+def build_upgrade_objects(old, new, build, out, profile, partial, archive_tool=None):
     inputs = build / "inputs" if partial else build
     inputs.mkdir(exist_ok=True)
     assemble_startup(old, inputs, profile)
@@ -378,9 +378,25 @@ def build_upgrade_objects(old, new, build, out, profile, partial):
         compile_arithmetic_object(old, inputs, profile, filename, ir)
         callers.append(inputs / filename)
     calc = (FIXTURES / "group_calc.ll").read_text()
-    for tools, name, adjust in ((old, "calc.o", "1"), (new, "updated.o", "5")):
+    versions = ((old, "calc.o", "updated.o", "1"), (new, "updated.o", "calc.o", "5"))
+    for tools, name, _, adjust in versions:
         compile_arithmetic_object(tools, inputs, profile, name, calc.replace("ADJUST", adjust), pic=partial == "pic")
-        run([tools.lld, "-r", "-o", build / name, *callers, inputs / name])
+    if archive_tool:
+        unused = (FIXTURES / "archive_unused.ll").read_text()
+        compile_arithmetic_object(old, inputs, profile, "unused.o", unused)
+    for tools, name, alternate, _ in versions:
+        selected = inputs / name
+        if archive_tool:
+            # Both versions define calc. LLD should pull the first definition
+            # and leave the unreferenced member with its unresolved call behind.
+            explicit = inputs / (name + ".explicit")
+            run([tools.lld, "-r", "-o", explicit, *callers, selected])
+            archive = inputs / (name + ".a")
+            run([archive_tool, "--format=gnu", "rcsD", archive, selected, inputs / alternate, inputs / "unused.o"])
+            selected = archive
+        run([tools.lld, "-r", "-o", build / name, *callers, selected])
+        if archive_tool and digest(build / name) != digest(explicit):
+            raise ValueError(f"{profile.name}: archive member selection changed {name}")
         shutil.copyfile(build / name, out / name)
     return ["calc.o"]
 
@@ -422,7 +438,7 @@ def qualify_upgrade(args):
             out = root / profile.name
             build.mkdir()
             out.mkdir(exist_ok=True)
-            objects = build_upgrade_objects(old, new, build, out, profile, args.partial_link)
+            objects = build_upgrade_objects(old, new, build, out, profile, args.partial_link, args.archive_tool)
             for separate, name in ((False, "base.ld"), (True, "section.ld")):
                 write(build / name, layout(profile, separate))
             original = out / "original.elf"
@@ -949,10 +965,14 @@ if __name__ == "__main__":
     upgrade.add_argument("--neverd", required=True)
     upgrade.add_argument("--original-tools", required=True, type=Path)
     upgrade.add_argument("--tools", required=True, type=Path)
+    upgrade.add_argument("--archive-tool", type=Path,
+                         help="use fork llvm-ar to check lazy member selection during a partial link")
     runtime = commands.add_parser("execute")
     runtime.add_argument("--root", required=True, type=Path)
     for command in (upgrade, runtime):
         command.add_argument("--partial-link", nargs="?", const="static", choices=("static", "pic"),
                              help="combine the startup and weak definitions with a static or PIC callee")
     args = parser.parse_args()
+    if args.command == "upgrade" and args.archive_tool and not args.partial_link:
+        parser.error("--archive-tool requires --partial-link")
     {"qualify": qualify, "upgrade": qualify_upgrade, "execute": execute}[args.command](args)
