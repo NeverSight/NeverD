@@ -367,7 +367,7 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
     }
     return;
   }
-  auto Cookie = B.rfind(StringRef(CookieMagic, sizeof(CookieMagic)));
+  auto Cookie = findArchiveCookie(B);
   if (Cookie != StringRef::npos) {
     archive(*this, Id, B, Cookie, Depth);
     return;

@@ -75,7 +75,7 @@ bool safeMemberName(llvm::StringRef Name);
 void archive(Job &J, unsigned Id, llvm::StringRef Bytes, size_t Cookie,
              unsigned Depth);
 void pyz(Job &J, unsigned Id, llvm::StringRef Bytes, unsigned Depth);
-inline constexpr char CookieMagic[] = {'M', 'E', 'I', 12, 11, 10, 11, 14};
+size_t findArchiveCookie(llvm::StringRef Bytes);
 inline constexpr unsigned Magic310 = 3439;
 inline constexpr unsigned Magic311 = 3495;
 inline unsigned pythonVersion(unsigned Magic) {

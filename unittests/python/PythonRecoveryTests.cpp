@@ -237,6 +237,33 @@ TEST(PythonRecovery, PackageMembersHaveDistinctIdentitiesAndNativeRoutes) {
       Missing.getArray("components")->back().getAsObject()->getString("status"),
       "missing_member");
 }
+TEST(PythonRecovery, LastArchiveCookieIncludesOverlaysAndWindowEdges) {
+  constexpr StringLiteral Magic("MEI\x0c\x0b\x0a\x0b\x0e");
+  EXPECT_EQ(findArchiveCookie(Magic.drop_back()), StringRef::npos);
+  for (unsigned Size : {8u, 88u, 100u, 512u, 2048u}) {
+    std::string Input(Size, 'M');
+    EXPECT_EQ(findArchiveCookie(Input), StringRef::npos);
+    for (size_t Start = 0; Start + Magic.size() <= Input.size(); ++Start) {
+      Input.replace(Start, Magic.size(), Magic.str());
+      EXPECT_EQ(findArchiveCookie(Input), StringRef(Input).rfind(Magic))
+          << Size << " " << Start;
+      std::fill_n(Input.begin() + Start, Magic.size(), 'M');
+    }
+  }
+  auto Pack = bytes("owned.pkg");
+  auto Last = Pack.size() + 319;
+  Pack.append(319, 'M');
+  Pack += Magic.str();
+  EXPECT_EQ(findArchiveCookie(Pack), Last);
+  auto Report = analyze(Pack, "overlay.pkg");
+  EXPECT_EQ(Report.getString("status"), "malformed");
+  EXPECT_EQ(Report.getArray("diagnostics")
+                ->front()
+                .getAsObject()
+                ->getInteger("offset"),
+            Last);
+}
+
 TEST(PythonRecovery, InvalidArchiveExtentsNamesAndExpansion) {
   auto Data = bytes("owned.pkg");
   ASSERT_GT(Data.size(), 88u);
