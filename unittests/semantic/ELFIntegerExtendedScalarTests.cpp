@@ -27,6 +27,7 @@
 
 using namespace neverd;
 namespace {
+#include "../lift/fixtures/RISCVConditionalZero.inc"
 #include "ELFIntegerExtendedFixture.inc"
 
 TEST(PowerPCPrefixed, SignedD34AndFetchBoundaries) {
@@ -208,6 +209,44 @@ void expectRISCVResult(const BinaryImage &Img, Decoder &D, uint32_t Word,
   for (const auto &Op : Ops)
     ASSERT_TRUE(Emu.step(Op));
   EXPECT_EQ(Emu.getRegister(integerreg::gpr(Result)), Expected & Mask);
+  EXPECT_EQ(Emu.getRegister(integerreg::gpr(0)).value_or(0), 0u);
+}
+
+TEST(RISCVConditionalZero, FullWidthConditionsOverlapsAndZeroRegister) {
+  using namespace zicond_fixture;
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = A == Arch::RISCV64 ? Bitness::Bits64 : Bitness::Bits32;
+    Img.RISCV.Zicond = true;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    const uint64_t Mask = A == Arch::RISCV64 ? UINT64_MAX : UINT32_MAX;
+    const uint64_t X = UINT64_C(0xfedcba9880000001);
+    for (uint64_t Y : {UINT64_C(0), UINT64_C(1), UINT64_C(0x80000000),
+                       UINT64_C(0x100000000), UINT64_C(1) << 63, UINT64_MAX}) {
+      const uint64_t IfNonzero = (Y & Mask) ? X : 0;
+      const uint64_t IfZero = (Y & Mask) ? 0 : X;
+      expectRISCVResult(Img, D, Eqz, X, Y, IfNonzero);
+      expectRISCVResult(Img, D, Nez, X, Y, IfZero);
+      expectRISCVResult(Img, D, EqzIntoCond, X, Y, IfNonzero, 11);
+      expectRISCVResult(Img, D, NezIntoCond, X, Y, IfZero, 11);
+      expectRISCVResult(Img, D, EqzZeroCond, X, Y, 0);
+      expectRISCVResult(Img, D, NezZeroCond, X, Y, X);
+      expectRISCVResult(Img, D, EqzZeroData, X, Y, 0);
+      expectRISCVResult(Img, D, NezDiscard, X, Y, X);
+    }
+    for (uint32_t Word : NonZicond) {
+      uint8_t Code[4];
+      llvm::support::endian::write32le(Code, Word);
+      DecodedInsn I;
+      if (D.decodeOneForLift(Code, sizeof(Code), 0x1000, I)) {
+        std::vector<LowOp> Ops;
+        EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+      }
+    }
+  }
 }
 
 TEST(RISCVBitManipulation, WordInputsAndBitIndicesUseTheirArchitecturalWidths) {

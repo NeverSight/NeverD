@@ -1,12 +1,12 @@
-//===- RISCVIntegerOpcodes.def - RISC-V base integer opcodes --------------===//
+//===- RISCVIntegerOpcodes.def - RISC-V integer opcode fields -------------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// NEVERD_RISCV_OPCODE(Name, Opcode) names a seven-bit major opcode shared
-/// by compressed expansion, control-flow classification and scalar lifting.
+/// Major opcodes shared by compressed expansion, control-flow classification
+/// and scalar lifting, followed by fixed fields of scalar register forms.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -23,5 +23,9 @@ NEVERD_RISCV_OPCODE(Op32, 0x3b)
 NEVERD_RISCV_OPCODE(Branch, 0x63)
 NEVERD_RISCV_OPCODE(Jalr, 0x67)
 NEVERD_RISCV_OPCODE(Jal, 0x6f)
+
+// Zicond 1.0 register forms, excluding rd, rs1 and rs2.
+NEVERD_RISCV_OPCODE(CzeroEqz, 0x0e005033)
+NEVERD_RISCV_OPCODE(CzeroNez, 0x0e007033)
 
 #undef NEVERD_RISCV_OPCODE

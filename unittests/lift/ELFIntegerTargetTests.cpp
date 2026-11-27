@@ -44,6 +44,8 @@
 
 using namespace neverd;
 namespace {
+#include "fixtures/RISCVConditionalZero.inc"
+
 struct LinkedImage {
   static constexpr va_t Entry = 0x10100;
   bool Wide, Little;
@@ -727,8 +729,15 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
     bool Zba = false;
     bool Zbs = false;
     bool Zbb = false;
+    bool Zicond = false;
   };
   const AttributeCase Cases[] = {
+      {.Attribute = "", .Features = "+i"},
+      {.Attribute = "_zicond1p0", .Features = "+i,+zicond", .Zicond = true},
+      {.Attribute = "_c2p0_zicond1p0",
+       .Features = "+i,+c,+zicond",
+       .Compressed = true,
+       .Zicond = true},
       {"_zba1p0", "+i,+zba", false, false, false, false, false, true},
       {"_zbs1p0", "+i,+zbs", false, false, false, false, false, false, true},
       {"_zba1p0_zbs1p0", "+i,+zba,+zbs", false, false, false, false, false,
@@ -757,17 +766,21 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
       auto Img = ELFLoader().loadBuffer(File.buffer());
       ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
       ASSERT_TRUE(D.init(*Img));
+      // A 32-bit instruction may start after a compressed instruction.
+      const va_t PC = File.Entry + (C.Compressed ? 2 : 0);
       const auto Check = [&](uint32_t Word, bool Expected) {
         uint8_t Code[4];
         llvm::support::endian::write32le(Code, Word);
         DecodedInsn I;
-        ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), File.Entry, I), 4);
+        ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), PC, I), 4);
         std::vector<LowOp> Ops;
         if (Expected)
           EXPECT_NO_THROW(D.liftToLow(I, Ops));
         else
           EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
       };
+      Check(zicond_fixture::Eqz, C.Zicond);
+      Check(zicond_fixture::Nez, C.Zicond);
       Check(0x20b52533, C.Zba);         // sh1add a0,a0,a1
       Check(0x60b51533, C.Zbb);         // rol a0,a0,a1
       Check(0x28b51533, C.Zbs);         // bset a0,a0,a1
@@ -792,7 +805,8 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
       EXPECT_EQ(Body->getFnAttribute("target-features").getValueAsString(),
                 C.Features);
     }
-    for (const char *Version : {"_zmmul1p1", "_zba1p1", "_zbb1p1", "_zbs2p0"}) {
+    for (const char *Version : {"_zmmul1p1", "_zba1p1", "_zbb1p1", "_zbs2p0",
+                                "_zicond1p1", "_zicond2p0"}) {
       LinkedImage Unsupported(A);
       Unsupported.riscvAttributes(Base + Version);
       auto Bad = ELFLoader().loadBuffer(Unsupported.buffer());
