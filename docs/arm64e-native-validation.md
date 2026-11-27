@@ -2755,6 +2755,16 @@ Apple Silicon. The corresponding `run --model FVP --guests GUESTS --output
 REPORT` executes those bodies at EL0 and EL1 with all four EnPACM/EnPACM0
 settings and checks a disabled-feature control.
 
+With LLVM r6, the M4 Max published 44 images and verified 80 signing
+rows. All 223 image and asynchronous-unwind cases, 63 adjacent cases
+and 40 implicit-unwind tests passed. The 32 explicit language-frame cases
+exercised Darwin personalities with 288 exceptions and 720 pairs of search and
+cleanup observations. The Arm FVP executed 66 original and published function
+bodies with both caller inputs at EL0 and EL1 in each EnPACM configuration
+(1,056 invocations). Native x1 delivery remains on the hardware checklist below.
+[Validation record](evidence/arm64e-observable-signing-address-2026-11-27.json) ·
+[Release model run](https://github.com/gmh5225/test_mac_intel/actions/runs/45969329510)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
