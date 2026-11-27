@@ -151,6 +151,14 @@ cl::SubCommand PatchBytesCmd("patch-bytes",
                              "Preview, apply, revert and export byte patches");
 cl::SubCommand PatchCmd("patch", "Patch binary with modified IR");
 cl::SubCommand InfoCmd("info", "Show binary metadata summary");
+cl::SubCommand LuaCmd("lua", "Recover Lua-family source and bytecode");
+cl::opt<std::string>
+    LuaProfile("profile",
+               cl::desc("Lua recovery profile: auto, puc, luajit, luau-0.659"),
+               cl::init("auto"), cl::sub(LuaCmd));
+cl::opt<unsigned> LuaPrototype("prototype",
+                               cl::desc("Show one prototype by report ID"),
+                               cl::sub(LuaCmd));
 cl::SubCommand IdentifyCmd("identify",
                            "List the ways NeverD can load a file, as the load "
                            "dialog does");
@@ -296,25 +304,25 @@ cl::SubCommand TranslateObjectCmd(
 cl::opt<std::string> InputFile(
     cl::Positional, cl::desc("<binary>"), cl::Required, cl::sub(PatchBytesCmd),
     cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
-    cl::sub(InfoCmd), cl::sub(IdentifyCmd), cl::sub(StringsCmd),
-    cl::sub(XrefsCmd), cl::sub(PathsCmd), cl::sub(CallTreeCmd),
-    cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd),
-    cl::sub(ImportsCmd), cl::sub(ExportsCmd), cl::sub(SegmentsCmd),
-    cl::sub(ExportCmd), cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
-    cl::sub(CallGraphCmd), cl::sub(RenameCmd), cl::sub(FunctionEditsCmd),
-    cl::sub(ItemsCmd), cl::sub(OperandsCmd), cl::sub(SearchCmd),
-    cl::sub(SectionsCmd), cl::sub(SymbolsCmd), cl::sub(RelocsCmd),
-    cl::sub(HeadersCmd), cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
-    cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
-    cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(MobileCmd),
-    cl::sub(AnalysisSectionsCmd));
+    cl::sub(InfoCmd), cl::sub(LuaCmd), cl::sub(IdentifyCmd),
+    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
+    cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
+    cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
+    cl::sub(SegmentsCmd), cl::sub(ExportCmd), cl::sub(BookmarksCmd),
+    cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
+    cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd), cl::sub(OperandsCmd),
+    cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
+    cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
+    cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd),
+    cl::sub(MobileCmd), cl::sub(AnalysisSectionsCmd));
 
-cl::opt<std::string> OutputFile("o", cl::desc("Output file"), cl::init(""),
-                                cl::sub(PatchBytesCmd), cl::sub(LiftCmd),
-                                cl::sub(DecompileCmd), cl::sub(PatchCmd),
-                                cl::sub(AuditCmd), cl::sub(HuntCmd),
-                                cl::sub(ScanCmd), cl::sub(MobileCmd),
-                                cl::sub(TypesCmd));
+cl::opt<std::string> OutputFile("o", cl::sub(LuaCmd), cl::desc("Output file"),
+                                cl::init(""), cl::sub(PatchBytesCmd),
+                                cl::sub(LiftCmd), cl::sub(DecompileCmd),
+                                cl::sub(PatchCmd), cl::sub(AuditCmd),
+                                cl::sub(HuntCmd), cl::sub(ScanCmd),
+                                cl::sub(MobileCmd), cl::sub(TypesCmd));
 
 cl::opt<bool>
     Verbose("v", cl::desc("Verbose output"), cl::sub(LiftCmd),
@@ -1516,19 +1524,19 @@ cl::opt<std::string>
                     cl::sub(InfoCmd));
 
 cl::opt<bool> JsonOutput(
-    "json", cl::desc("Output as JSON"), cl::sub(InfoCmd), cl::sub(IdentifyCmd),
-    cl::sub(FuncsCmd), cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd),
-    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
-    cl::sub(CallTreeCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
-    cl::sub(SegmentsCmd), cl::sub(PluginsCmd), cl::sub(BookmarksCmd),
-    cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
-    cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd), cl::sub(OperandsCmd),
-    cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
-    cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
-    cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(MobileCmd),
-    cl::sub(DecompileCmd), cl::sub(TypesCmd), cl::sub(PathsCmd),
-    cl::sub(CallTreeCmd), cl::sub(AnalysisSectionsCmd));
+    "json", cl::desc("Output as JSON"), cl::sub(InfoCmd), cl::sub(LuaCmd),
+    cl::sub(IdentifyCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
+    cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(StringsCmd), cl::sub(XrefsCmd),
+    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(ImportsCmd),
+    cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(PluginsCmd),
+    cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
+    cl::sub(RenameCmd), cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
+    cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
+    cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
+    cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd), cl::sub(DashboardCmd),
+    cl::sub(SigsCmd), cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd),
+    cl::sub(MobileCmd), cl::sub(DecompileCmd), cl::sub(TypesCmd),
+    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(AnalysisSectionsCmd));
 
 //===----------------------------------------------------------------------===//
 // Plugins-specific options

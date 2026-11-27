@@ -1592,8 +1592,9 @@ after replacing the cursor stays unresolved.
 `JTE_X86_64.GuardReadsFlagsItsPredecessorCompareSet` dispatches after a `ja`
 that reads the flags of the previous block's `cmp`, directly and through a
 relay block that keeps them: both dispatches read their eight slots, while an
-index changed after the compare, or a second compare into the `ja` block that
-admits 101 values, stays unresolved.
+index changed after the compare, a second compare into the `ja` block that
+admits 101 values, or an address of the `ja` block that .data holds, stays
+unresolved.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the
@@ -1609,6 +1610,10 @@ reload and the table load leaves the dispatch unresolved.
 64-case byte-code walk whose `cmova` selects propose about 10 Mi of alias
 queries with a 14 Mi candidate account: the guard still bounds the dispatch
 to its 64 slots.
+`JTE_X86_64.CompareQueriesOutliveAnUnfinishedGuardSession` puts 24
+controlling compares before a byte dispatch and limits each guard query
+session to a match allowance the whole batch overruns: the compare's own
+queries, asked alone, still bound the six slots.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict
@@ -4814,6 +4819,13 @@ fixture checks this family in HighC and LLVM-to-C through the worker and CLI.
 `SymMBAResiduePowers.SmallOddPowerBlocksKeepTheirFullResidues` checks
 blocks whose cubic and quartic terms still affect the result. It exhausts
 all pairs of four-bit inputs against the original product.
+
+Group logs 5 and 6 add three overlapping word expressions and leave several
+independent factors outside the complete blocks. At width 9,437,201, case 7
+and group log 6 generate 917,516 factors. Use `--counted` for their exact
+multiplicities and `--reference` for the interpolated polynomial. The
+611-factor native fixture exercises blocks of 32 with three remaining copies
+in both source views.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
@@ -10008,6 +10020,12 @@ to a different valid image. Truncated instruction streams remain unretained.
 a function whose lift is incomplete until its callee is proved never to
 return: the second build's kept contract answers and it reads no graph, and
 once the prover's answer changes the call is proved again.
+`PipelineOutcome.ASmallX64WholeImageBatchLiftsNoCalleeAgain` runs a
+six-function whole-image x64 batch, too small to run in parallel, through the
+pipeline: its first batch makes no x87 call graph build
+(`PipelineOptions::X87GraphBuildsForTesting`; the single-pass batch made five,
+each a second lift of a function the batch builds), and every body is the
+one a run of that function alone builds.
 
 Publishing an additional code reference may retain the pipeline's raw x87
 graphs, but cannot retain an earlier tag proof. A shared-cache test publishes a
@@ -15670,6 +15688,10 @@ usable and explicit unavailable-backend requests are rejected.
 discovered case a CTest label equal to that executable's target name.
 On macOS, Release builds link these executables with `-dead_strip` to remove
 unused code and data from their static dependencies.
+
+On Windows the executable reserves the decompiler's 128 MiB main stack
+(`kDecompilerMainStackSize`): its cases run on GoogleTest's main thread,
+which would otherwise get 1 MiB there against 8 MiB on Linux and macOS.
 
 | Source area | Target and CTest label | What it covers |
 |-------------|-------------------------|----------------|

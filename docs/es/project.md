@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: 66b517b82cb69472267b5af6974d898f472b53e9df11842407628a76797f97fd -->
 
 <div align="center">
 
@@ -306,6 +306,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | recuentos | C predeterminado para cada función cargada; cada cuerpo se libera después de comprobarlo |
 | `decompile -llvm` | `.c` | Vía LLVM IR + optimizador |
 | `decompile --devirtualize` | `.c` + JSON opcional | Recuperación experimental de intérpretes x64; requiere `--func`; [contrato y ejemplos](interpreter-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Reconstrucción de código Lua, LuaJIT y Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimental: [Android](android.md), [iOS](ios.md) |
 | `patch` | binario | Reescribir código máquina |
 

@@ -11,9 +11,9 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/LLVMAnalysisDispatch.h"
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
-#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -165,10 +165,13 @@ public:
   }
 
   /// A run of every one of \p Entries that selects none of them, as a
-  /// whole-image decompile is.
+  /// whole-image decompile is, adding the x87 call graph builds its first
+  /// batch made to \p X87GraphBuilds when given.
   static void buildWholeLowIR(const BinaryImage &Image, PipelineResult &Result,
-                              const std::vector<va_t> &Entries) {
+                              const std::vector<va_t> &Entries,
+                              size_t *X87GraphBuilds = nullptr) {
     PipelineOptions Options;
+    Options.X87GraphBuildsForTesting = X87GraphBuilds;
     std::vector<std::pair<va_t, std::string>> Candidates;
     for (va_t Entry : Entries)
       Candidates.emplace_back(Entry, Image.getFunctionNameAt(Entry));
@@ -627,15 +630,11 @@ TEST(PipelineOutcome, JumpTableRebuildsKeepTheImageX87Graphs) {
   expectSameSelection(Again, Cold);
 }
 
-TEST(PipelineOutcome, AnX64WholeImageBatchKeepsEveryOrdinaryBody) {
-  // Two chains of wrappers, one ending in a leaf that returns 1.0 on the x87
-  // stack and one in a leaf that returns zero: a whole-image batch large
-  // enough to run in parallel.  The batch builds every function without the
-  // x87 fixup first, keeping its graph for its caller; a body the fixup
-  // changes (each wrapper of the floating leaf binds its call's result) is
-  // built anew.  Every body is the one a run of that function alone builds,
-  // which takes the ordinary build.  That no graph is lifted again is the
-  // DeferredX87Fixup tests' to show.
+/// Two chains of \p ChainLength x64 functions at 0x1000 and 0x1800, each
+/// calling the next, one ending in a leaf that returns 1.0 on the x87 stack
+/// and one in a leaf that returns zero; \p Entries receives every function.
+BinaryImage wrapperChainsImage(unsigned ChainLength,
+                               std::vector<va_t> &Entries) {
   BinaryImage Image;
   Image.Arch = Arch::X64;
   Image.Bits = Bitness::Bits64;
@@ -647,8 +646,6 @@ TEST(PipelineOutcome, AnX64WholeImageBatchKeepsEveryOrdinaryBody) {
   Text.Size = Text.FileSz = 0x2000;
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data.assign(Text.Size, 0xcc);
-  constexpr unsigned ChainLength = 20;
-  std::vector<va_t> Entries;
   for (const va_t Chain : {va_t(0x1000), va_t(0x1800)}) {
     for (unsigned I = 0; I != ChainLength; ++I) {
       const va_t From = Chain + I * 0x40;
@@ -671,12 +668,15 @@ TEST(PipelineOutcome, AnX64WholeImageBatchKeepsEveryOrdinaryBody) {
     }
   }
   Image.Segments.push_back(std::move(Text));
-  ASSERT_GE(Entries.size(), limits::kMinParallelIRWorkItems);
+  return Image;
+}
 
-  PipelineResult Batch;
-  PipelineTestPeer::buildWholeLowIR(Image, Batch, Entries);
-  ASSERT_EQ(Batch.LowFuncs.size(), Entries.size());
-
+/// Expects every body of \p Batch to be the one a run of that function
+/// alone builds, which takes the ordinary build, and that some wrapper binds
+/// its call's result from the x87 stack: the fixup changed that body, so the
+/// batch built it anew.
+void expectOrdinaryBodies(const BinaryImage &Image,
+                          const PipelineResult &Batch) {
   const auto Dump = [](const LowFunc &Function) {
     std::string Text;
     llvm::raw_string_ostream Stream(Text);
@@ -696,8 +696,47 @@ TEST(PipelineOutcome, AnX64WholeImageBatchKeepsEveryOrdinaryBody) {
                                Op.Output.Offset >= x86reg::ST0 &&
                                Op.Output.Offset <= x86reg::ST7;
   }
-  // The floating chain's results are bound, so its bodies took the new build.
   EXPECT_TRUE(BoundFloatingResult);
+}
+
+TEST(PipelineOutcome, AnX64WholeImageBatchKeepsEveryOrdinaryBody) {
+  // Two chains of wrappers, one ending in a leaf that returns 1.0 on the x87
+  // stack and one in a leaf that returns zero: a whole-image batch large
+  // enough to run in parallel.  The batch builds every function without the
+  // x87 fixup first, keeping its graph for its caller; a body the fixup
+  // changes (each wrapper of the floating leaf binds its call's result) is
+  // built anew.  Every body is the one a run of that function alone builds,
+  // which takes the ordinary build.  That no graph is lifted again is the
+  // DeferredX87Fixup tests' to show.
+  std::vector<va_t> Entries;
+  const BinaryImage Image = wrapperChainsImage(/*ChainLength=*/20, Entries);
+  ASSERT_GE(Entries.size(), limits::kMinParallelIRWorkItems);
+
+  PipelineResult Batch;
+  PipelineTestPeer::buildWholeLowIR(Image, Batch, Entries);
+  ASSERT_EQ(Batch.LowFuncs.size(), Entries.size());
+  expectOrdinaryBodies(Image, Batch);
+}
+
+TEST(PipelineOutcome, ASmallX64WholeImageBatchLiftsNoCalleeAgain) {
+  // The same chains, three functions each: a whole-image batch too small to
+  // run in parallel, as an object file's often is.  Built in one thread with
+  // the fixup, each caller's build lifted its callee again for the callee's
+  // x87 call graph before the callee's own build lifted it once more (42%
+  // of pcre2_match.o's CPU went to its matcher's second lift).  Building
+  // every function without the fixup first keeps the graph each caller
+  // reads, so no graph build lifts a function, and every body is still the
+  // ordinary build's.
+  std::vector<va_t> Entries;
+  const BinaryImage Image = wrapperChainsImage(/*ChainLength=*/3, Entries);
+  ASSERT_LT(Entries.size(), limits::kMinParallelIRWorkItems);
+
+  PipelineResult Batch;
+  size_t GraphBuilds = 0;
+  PipelineTestPeer::buildWholeLowIR(Image, Batch, Entries, &GraphBuilds);
+  ASSERT_EQ(Batch.LowFuncs.size(), Entries.size());
+  EXPECT_EQ(GraphBuilds, 0u);
+  expectOrdinaryBodies(Image, Batch);
 }
 
 TEST(PipelineOutcome, ArbitrationRebuildsUnderUnchangedInputsKeepTheirBodies) {
@@ -3369,7 +3408,8 @@ TEST(PipelineOutcome, SourceEHRefusalsAgreeAcrossSingleAndShardedEmission) {
         size_t Calls = 0;
         for (const auto &Block : *Function)
           for (const auto &Instruction : Block)
-            if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+            if (const auto *Call =
+                    llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
               // An unrecovered return value has an IR provider of its own.
               if (llvm_source_unknown::isValue(Call))
                 continue;

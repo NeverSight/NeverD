@@ -1351,6 +1351,14 @@
         <source>Find conditional strings computed by functions</source>
         <translation>Find conditional strings computed by functions</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Recover Lua source…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Recover a Lua artifact and inspect its prototypes</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11274,6 +11282,133 @@ Your previous graph is still available.</translation>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LuaRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Recover Lua source</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Browse…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;Artifact</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>Detect from artifact</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Upstream Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>&amp;Profile</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Recover</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Starting analysis worker…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>Prototype</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Source</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Bytecode mappings</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidence</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>Copy source</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>Export source…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Export report…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Open Lua artifact</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Cancelling…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>Export to a new file</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua source (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Analysis worker stopped.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>Recovering source…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>This worker does not support Lua recovery.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>Reading artifact…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Cancelled</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>Prototype %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>Original line %1</translation>
     </message>
 </context>
 </TS>

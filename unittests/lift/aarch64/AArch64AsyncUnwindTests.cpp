@@ -4,10 +4,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "AArch64DarwinFixtureDriver.h"
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/MachO/MachOSigner.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
@@ -913,25 +915,30 @@ static void verifySignalLanguageCleanup(
   std::ofstream(Source) << (NonCall      ? kSignalNonCallBody
                             : ObjectiveC ? kSignalObjCBody
                                          : kSignalScopeBody);
-  std::ofstream(DriverSource) << kSignalScopeDriver;
-  const auto *Override = std::getenv(kHeaderRoot);
-  const auto Include =
-      Override
-          ? std::string(Override)
-          : (std::filesystem::path(__FILE__).parent_path() / kSourceIncludes)
-                .lexically_normal()
-                .string();
-  llvm::SmallVector<llvm::StringRef> DriverArgs{
-      kCxxCompiler, kTargetFlag, kTarget,      kCXXStandard,   kOptimize,
-      kIncludeFlag, Include,     kAllWarnings, kExtraWarnings, kErrorWarnings,
-      DriverSource, kOutput,     Driver};
-  if (ObjectiveC)
-    DriverArgs.append({kObjCExceptions, kObjCFramework, kFoundation});
-  if (NonCall)
-    DriverArgs.push_back(kSignalNonCallDriver);
-  if (LocalCatch)
-    DriverArgs.push_back(kSignalLocalCatch);
-  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, DriverArgs), 0);
+  if (EntryPad) {
+    ASSERT_NO_FATAL_FAILURE(
+        test::buildDarwinFixtureDriver(Driver, kEntryPadCaller));
+  } else {
+    std::ofstream(DriverSource) << kSignalScopeDriver;
+    const auto *Override = std::getenv(kHeaderRoot);
+    const auto Include =
+        Override
+            ? std::string(Override)
+            : (std::filesystem::path(__FILE__).parent_path() / kSourceIncludes)
+                  .lexically_normal()
+                  .string();
+    llvm::SmallVector<llvm::StringRef> DriverArgs{
+        kCxxCompiler, kTargetFlag, kTarget,      kCXXStandard,   kOptimize,
+        kIncludeFlag, Include,     kAllWarnings, kExtraWarnings, kErrorWarnings,
+        DriverSource, kOutput,     Driver};
+    if (ObjectiveC)
+      DriverArgs.append({kObjCExceptions, kObjCFramework, kFoundation});
+    if (NonCall)
+      DriverArgs.push_back(kSignalNonCallDriver);
+    if (LocalCatch)
+      DriverArgs.push_back(kSignalLocalCatch);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, DriverArgs), 0);
+  }
   auto Reader = Loader::create(BinaryFormat::MachO);
   if (LiveLR) {
     auto DriverImage = Reader->load(Driver);
@@ -1054,6 +1061,12 @@ static void verifySignalLanguageCleanup(
     if (Explicit)
       ASSERT_NE(SourceFrame->Itanium->LandingPadBase,
                 SourceFrame->CodeRange.Begin);
+    if (EntryPad) {
+      ASSERT_TRUE(
+          llvm::any_of(SourceFrame->Itanium->CallSites, [&](const auto &Site) {
+            return Site.LandingPadVA == Scope->Addr;
+          }));
+    }
     if (BackwardPad) {
       const auto &Table = *SourceFrame->Itanium;
       ASSERT_EQ(SourceFrame->ParseStatus, ExceptionParseStatus::Complete);
@@ -1173,9 +1186,16 @@ static void verifySignalLanguageCleanup(
           EXPECT_EQ(After.LandingPadVA, 0u);
       }
     }
-    // This coordinate-boundary fixture qualifies serialization only. Its
-    // entry-point handler deliberately has no executable cleanup contract.
     if (EntryPad) {
+      if (Execute) {
+        for (const auto &Path : {Input, Output}) {
+          SCOPED_TRACE(Path);
+          auto Verified = macho_signing::verifyStrict(Path);
+          ASSERT_FALSE(bool(Verified)) << llvm::toString(std::move(Verified));
+          ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Path}), 0);
+          ++Delivered;
+        }
+      }
       ASSERT_TRUE(std::filesystem::remove(Output));
       continue;
     }
@@ -1278,9 +1298,10 @@ static void verifySignalLanguageCleanup(
     ASSERT_TRUE(std::filesystem::remove(Output));
   }
   ::testing::Test::RecordProperty(
-      NonCall ? (ObjectiveC ? kSignalNonCallObjCExceptions
-                            : kSignalNonCallExceptions)
-              : (ObjectiveC ? kSignalObjCExceptions : kSignalExceptions),
+      EntryPad  ? kEntryPadCleanups
+      : NonCall ? (ObjectiveC ? kSignalNonCallObjCExceptions
+                              : kSignalNonCallExceptions)
+                : (ObjectiveC ? kSignalObjCExceptions : kSignalExceptions),
       Delivered);
   if (PCSigning) {
     ::testing::Test::RecordProperty(kSignalPCImages, StructuralImages);

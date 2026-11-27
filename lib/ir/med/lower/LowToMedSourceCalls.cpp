@@ -14,6 +14,7 @@
 #include "neverd/ir/low/SourceCallOccurrence.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/CFunctionParameterCalls.h"
 #include "neverd/loader/MachO/ImmutableNativeCalls.h"
@@ -23,6 +24,11 @@
 #include "neverd/loader/Swift/SwiftOpaqueValueEffects.h"
 #include "neverd/loader/Swift/SwiftValueWitnessCalls.h"
 #include "neverd/loader/Swift/SwiftVirtualCalls.h"
+
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallBitVector.h"
 
 #include <algorithm>
 #include <optional>
@@ -91,6 +97,88 @@ void appendMIPSByteResult(
       Emit(NdOp::COPY, Result, Word, {});
     ObjectOffset += Width;
   }
+}
+
+/// Wide moves whose low lane reaches a declared narrow return. The same
+/// physical register can hold unrelated pointers before its result is written.
+std::vector<llvm::SmallBitVector>
+narrowReturnCopies(const MedFunc &Func, const SourceABIValueLocation &Return,
+                   const TargetRegInfo &TRI, BinaryFormat Fmt) {
+  const auto Bytes = Return.ValueBytes;
+  auto WideCopy = [&](const MedOp &Op) {
+    return Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+           Op.Output.Kind == MedVar::Reg && Op.Inputs[0].Kind == MedVar::Reg &&
+           Op.Output.Size > Bytes &&
+           (Op.Output.Size == 2 || Op.Output.Size == 4 ||
+            Op.Output.Size == 8) &&
+           Op.Inputs[0].Size == Op.Output.Size &&
+           !TRI.isFrameOrLinkReg(Op.Output.RegOff) &&
+           !TRI.isStackPointer(Op.Output.RegOff) &&
+           !TRI.isVectorReg(Op.Output.RegOff) &&
+           !TRI.isFrameOrLinkReg(Op.Inputs[0].RegOff) &&
+           !TRI.isStackPointer(Op.Inputs[0].RegOff) &&
+           !TRI.isVectorReg(Op.Inputs[0].RegOff);
+  };
+
+  using Registers = llvm::SmallSetVector<uint64_t, 4>;
+  struct Demands {
+    Registers AtExit, AtException;
+  };
+  std::vector<Demands> Demanded(Func.Blocks.size());
+  std::vector<llvm::SmallBitVector> Copies(Func.Blocks.size());
+  llvm::DenseMap<int, size_t> Indices;
+  llvm::SmallSetVector<size_t, 16> Pending;
+  for (auto [I, Block] : llvm::enumerate(Func.Blocks)) {
+    Indices.try_emplace(Block.Id, I);
+    if (llvm::any_of(Block.Ops,
+                     [](const MedOp &Op) { return Op.Opcode == NdOp::RETURN; }))
+      Pending.insert(I);
+  }
+  while (!Pending.empty()) {
+    const auto I = Pending.pop_back_val();
+    const auto &Block = Func.Blocks[I];
+    const auto &Unwind = Demanded[I].AtException;
+    auto Live = Demanded[I].AtExit;
+    Live.insert(Unwind.begin(), Unwind.end());
+    for (size_t OI = Block.Ops.size(); OI-- > 0;) {
+      const auto &Op = Block.Ops[OI];
+      if (Op.Opcode == NdOp::RETURN)
+        Live.insert(Return.RegisterOffset);
+      for (const auto &V : Op.IntrinsicOutputs)
+        if (V.Kind == MedVar::Reg && V.Size >= Bytes)
+          Live.remove(V.RegOff);
+      if (Op.Output.Kind == MedVar::Reg && Op.Output.Size >= Bytes &&
+          Live.remove(Op.Output.RegOff) && WideCopy(Op)) {
+        if (Copies[I].empty())
+          Copies[I].resize(Block.Ops.size());
+        Copies[I].set(OI);
+        Live.insert(Op.Inputs[0].RegOff);
+      }
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        Live.remove_if([&](uint64_t Reg) {
+          return callClobbersRegister(Op, Reg, Bytes, TRI, Fmt);
+        });
+      // A protected range can leave at an interior operation. Retain copies
+      // feeding a handler even across later ordinary-path overwrites.
+      Live.insert(Unwind.begin(), Unwind.end());
+    }
+    const auto Propagate = [&](int Id, bool Exceptional) {
+      const auto At = Indices.find(Id);
+      if (At == Indices.end())
+        return;
+      auto &Pred = Demanded[At->second];
+      auto &Needed = Exceptional ? Pred.AtException : Pred.AtExit;
+      const auto Before = Needed.size();
+      Needed.insert(Live.begin(), Live.end());
+      if (Needed.size() != Before)
+        Pending.insert(At->second);
+    };
+    for (int Pred : Block.Preds)
+      Propagate(Pred, false);
+    for (const auto &Edge : Block.ExceptionalPreds)
+      Propagate(Edge.BlockId, true);
+  }
+  return Copies;
 }
 } // namespace
 
@@ -842,34 +930,16 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
       EntrySignature->ReturnLocation.ValueBytes >= 8)
     return EntrySignature;
   const auto Bytes = EntrySignature->ReturnLocation.ValueBytes;
-  std::set<uint64_t> ReturnRegisters{
-      EntrySignature->ReturnLocation.RegisterOffset};
-  auto WideCopy = [&](const MedOp &Op) {
-    return Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-           Op.Output.Kind == MedVar::Reg && Op.Inputs[0].Kind == MedVar::Reg &&
-           Op.Output.Size > Bytes &&
-           (Op.Output.Size == 2 || Op.Output.Size == 4 ||
-            Op.Output.Size == 8) &&
-           Op.Inputs[0].Size == Op.Output.Size &&
-           !TRI.isFrameOrLinkReg(Op.Output.RegOff) &&
-           !TRI.isStackPointer(Op.Output.RegOff) &&
-           !TRI.isVectorReg(Op.Output.RegOff) &&
-           !TRI.isFrameOrLinkReg(Op.Inputs[0].RegOff) &&
-           !TRI.isStackPointer(Op.Inputs[0].RegOff) &&
-           !TRI.isVectorReg(Op.Inputs[0].RegOff);
-  };
-  bool Changed = true;
-  while (Changed) {
-    Changed = false;
-    for (const auto &Block : Func.Blocks)
-      for (const auto &Op : Block.Ops)
-        if (WideCopy(Op) && ReturnRegisters.count(Op.Output.RegOff))
-          Changed |= ReturnRegisters.insert(Op.Inputs[0].RegOff).second;
-  }
-  for (auto &Block : Func.Blocks) {
+  const auto Copies =
+      narrowReturnCopies(Func, EntrySignature->ReturnLocation, TRI, Fmt);
+  for (auto [BI, Block] : llvm::enumerate(Func.Blocks)) {
+    if (Copies[BI].empty())
+      continue;
     std::vector<MedOp> Ops;
-    for (auto Op : Block.Ops) {
-      if (WideCopy(Op) && ReturnRegisters.count(Op.Output.RegOff)) {
+    Ops.reserve(Block.Ops.size());
+    for (auto [OI, Original] : llvm::enumerate(Block.Ops)) {
+      auto Op = std::move(Original);
+      if (Copies[BI].test(OI)) {
         // A saved full register can carry a narrow result through several
         // merges before the final return. Expose its low-lane dependency now
         // so subregister normalization builds narrow PHIs along that path.

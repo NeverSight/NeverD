@@ -1731,12 +1731,9 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
       if (Fits())
         break;
       for (const auto &Command : Cmds)
-        if (Command.Cmd == ToolOnly) {
-          if (ToolOnly == LC_DATA_IN_CODE &&
-              reinterpret_cast<const linkedit_data_command *>(Binary.data() +
-                                                              Command.Off)
-                  ->datasize)
-            continue;
+        if (Command.Cmd == ToolOnly &&
+            macho_patch_detail::canReclaimToolCommand(
+                Binary.data() + Command.Off, Command.Cmd, Command.Size)) {
           Freed += Command.Size;
           DroppedCommands.insert(Command.Off);
         }

@@ -11651,6 +11651,14 @@ remaining candidate account (`kJumpTableGuardAliasQueryAccountDivisor`) and
 are charged what they spent. An unfinished batch abandons those alternatives
 and leaves the guard proof the rest; charged in full, pcre2's alias batches
 spent the account the guard itself needed.
+When the compare that names the index is a structural leaf, the session over
+every controlling condition runs on a copy of the candidate account. That
+session can also run out of its own match allowance with the account to
+spare, and then answers none of its queries. The compare's own queries are
+then asked alone, in a session of their own, exactly as after the copy runs
+out; the other conditions stay unanswered and only drop out of the proof.
+pcre2's pattern converter puts 22 controlling conditions and 179 queries in
+front of one dispatch.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
@@ -15088,7 +15096,7 @@ Builds with registration callees share no proof. A shape-checked integer
 DIV/IDIV precondition preserves x87 state on normal continuation. It remains in the emitted body and grants no
 permission to suppress divide faults; malformed guards and unknown state
 intrinsics still refuse the call summary.
-An x64 whole-image batch large enough to run in parallel first builds every
+An x64 whole-image batch of any size first builds every
 function without the fixup (`CFGBuilder::buildDeferringX87`). Such a build asks no
 callee's call graph, and it keeps its own for its callers: it is configured
 as their proofs configure a callee's graph build, one no-return level
@@ -15098,7 +15106,10 @@ checks an incomplete lift's answers. A second pass keeps each body the fixup
 would leave unchanged, by the checks a retained body passes
 (`deferredBuildStandsIn`), and builds the rest again with every graph they
 read already kept. Before, a graph not yet kept lifted the callee again, most
-often while the callee's own build was still running. A selected run keeps
+often while the callee's own build was still running; a batch too small to
+run in parallel, as an object file's often is, lifted each called function
+twice in one thread, once for its first caller's graph and once for itself.
+A selected run keeps
 one pass: its cache keeps the callee bodies its call summaries read, which
 the left-out callee graph builds supply.
 One LowIR analysis may share up to 128 immutable machine
@@ -20977,7 +20988,19 @@ Frame-offset proof keys normalize a top-level 64-bit address sum by removing its
 
 The Objective-C source exporter clears `CEmitterOptions::EmitRecordGuards` and `CEmitterOptions::UseUnalignedPointers` for the complete native unit and individual method units. Exact-width byte copies preserve unaligned memory access while keeping generated macros outside the mobile parser; conditional and mutating directives remain rejected.
 
-The reader also recognizes the exact, complete `ContractionPolicy` and AArch64 raw-call pointer-authentication blocks shared by the C emitters. Either or both may precede declarations; their text remains intact for compilation and does not contribute function definitions. The reader does not evaluate arbitrary conditional directives. Modified, truncated, wrapped or nested blocks, and subsequent macro redefinitions, remain unsupported.
+The full Objective-C report includes native C for the image. If the C writer
+refuses a function definition, this unit records its entry and reason in a
+`neverd.not-decompiled` comment. Each method uses its own ABI, storage and
+dependency evidence. A typed method can therefore be recovered even when its
+raw native definition has an address of unknown extent.
+
+For a declared narrow integer return, source-call lowering follows the low
+bytes backwards from each return through wide register moves and control-flow
+joins. An intervening register definition ends that dependency. Earlier
+full-width values in the same physical register keep their original identity
+in pointer comparisons and calls.
+
+The reader recognizes the exact floating-point contraction policy, fixed-width GCC rotate fallbacks and AArch64 raw-call pointer-authentication blocks defined by the C backend. Each block can precede declarations. The assembler preserves the original text and excludes it from the function count. The reader does not evaluate arbitrary conditional directives. Modified, truncated, wrapped or nested blocks, and subsequent macro redefinitions, remain unsupported.
 
 ## Bounded bulk directory attributes
 

@@ -1,6 +1,6 @@
 **Языки**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: 66b517b82cb69472267b5af6974d898f472b53e9df11842407628a76797f97fd -->
 
 <div align="center">
 
@@ -307,6 +307,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | счётчики | C по умолчанию для каждой загруженной функции; тело освобождается после проверки |
 | `decompile -llvm` | `.c` | Через LLVM IR + оптимизатор |
 | `decompile --devirtualize` | `.c` + необязательный JSON | Экспериментальное восстановление интерпретаторов x64; нужен `--func`; [контракт и примеры](interpreter-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Восстановление исходного кода Lua, LuaJIT и Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Экспериментально: [Android](android.md), [iOS](ios.md) |
 | `patch` | бинарник | Перезапись машинного кода |
 

@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: 66b517b82cb69472267b5af6974d898f472b53e9df11842407628a76797f97fd -->
 
 <div align="center">
 
@@ -306,6 +306,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 統計 | 對每個已載入函式產生預設 C；檢查後即釋放該函式本體 |
 | `decompile -llvm` | `.c` | 經 LLVM IR + 最佳化器 |
 | `decompile --devirtualize` | `.c` + 選用 JSON | 實驗性 x64 直譯器還原；需要 `--func`；[契約與範例](interpreter-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT 與 Luau 原始碼還原](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 實驗性: [Android](android.md), [iOS](ios.md) |
 | `patch` | 二進位 | 重寫機器碼 |
 

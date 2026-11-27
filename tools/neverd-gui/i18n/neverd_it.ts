@@ -1351,6 +1351,14 @@
         <source>Find conditional strings computed by functions</source>
         <translation>Trova stringhe condizionali calcolate dalle funzioni</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Ricostruisci sorgente Lua…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Ricostruisci un file Lua e analizza i suoi prototipi</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11274,6 +11282,133 @@ Il grafo precedente è ancora disponibile.</translation>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2 (%3 esaminati, %4 saltati, %5 inconcludenti)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LuaRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Ricostruisci sorgente Lua</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Sfoglia…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;File</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>Rileva dal file</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Luau ufficiale 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>&amp;Profilo</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Ricostruisci</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annulla</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Avvio del processo di analisi…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>Prototipo</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Sorgente</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Corrispondenze del bytecode</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidenze</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>Copia sorgente</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>Esporta sorgente…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Esporta rapporto…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Apri file Lua</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Annullamento…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>Esporta in un nuovo file</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Sorgente Lua (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Il processo di analisi si è arrestato.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>Ricostruzione del sorgente…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>Questo processo non supporta la ricostruzione Lua.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>Lettura del file…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Annullato</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>Prototipo %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>Riga originale %1</translation>
     </message>
 </context>
 </TS>

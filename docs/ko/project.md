@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: 66b517b82cb69472267b5af6974d898f472b53e9df11842407628a76797f97fd -->
 
 <div align="center">
 
@@ -306,6 +306,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 집계 | 로드된 모든 함수를 기본 C 경로로 처리하고 검사 후 각 함수 본문을 해제 |
 | `decompile -llvm` | `.c` | LLVM IR + 최적화 경로 |
 | `decompile --devirtualize` | `.c` + 선택적 JSON | 실험적 x64 인터프리터 복원. `--func` 필수. [계약과 예제](interpreter-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Lua, LuaJIT 및 Luau 소스 복원](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 실험적: [Android](android.md), [iOS](ios.md) |
 | `patch` | 바이너리 | 기계어 재작성 |
 

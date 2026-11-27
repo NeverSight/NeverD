@@ -1,5 +1,13 @@
 # NeverD Daily Progress
 
+## Current snapshot — 2026-11-27T00:56:31Z
+
+- Reviewed [a0c68c29 to 1b876a4f](https://github.com/NeverSight/NeverD/compare/a0c68c29481ab81d081a980d0a20dd3478c1b0d4...1b876a4f983d62bf0db2e8ea7020f9792e78d9aa): 139 commits ahead; the changed-path listing reached GitHub's 300-path cap. Selected review covered the x86-64 jump-table alias-account cap, compare-only fallback, and their assembly fixtures. Optional alias queries spend only a bounded share; the compare-only fallback does not turn unanswered per-query results into positive matches. The address-taken block regression checks that a known target list is not promoted to a proved table through a partial predecessor walk. Reported PCRE2 timings accompany different recovery output and are not a controlled speed comparison. This is a sampled review, not a whole-repository audit. No additional defect was established in the reviewed dev code; no product fixes were submitted in this pass.
+- Activity: 63 open ordinary issues and 10 open PRs (three drafts; seven fewer open PRs than yesterday). Since 2026-11-26T00:58:36Z, the GitHub search index shows no new ordinary issues, one closure ([#2620](https://github.com/NeverSight/NeverD/issues/2620)), 25 product PR openings, 31 merges, and no unmerged closures; progress-only [#2663](https://github.com/NeverSight/NeverD/pull/2663) is excluded. The returned search sets fit a single page. No formal reviews were returned on [#2666](https://github.com/NeverSight/NeverD/pull/2666), [#2670](https://github.com/NeverSight/NeverD/pull/2670), or draft [#2687](https://github.com/NeverSight/NeverD/pull/2687).
+- Existing CI: No Actions run matched exact dev `1b876a4f` in the sampled listing. The existing [r15 provenance audit](https://github.com/NeverSight/NeverD/actions/runs/45916601841) passed on #2670 head `f81e1d7f`; the [general regression](https://github.com/NeverSight/NeverD/actions/runs/45916574862) and [MIPS relink checks](https://github.com/NeverSight/NeverD/actions/runs/45916589182) were still running on that PR head. Provenance is not behavioral validation. No build, test, benchmark, repository script execution, or CI dispatch was performed by this static report.
+- Suggested priorities: (1) Qualify the guard fallback and address-taken refusal on exact dev; require exact expected target sets and no proved table on refused inputs. (2) Finish [#2666](https://github.com/NeverSight/NeverD/pull/2666) return-slot regressions for both byte orders and address widths before integration. (3) Finish #2670's existing native-host qualification and paired comparisons; distinguish product revision, host, emulator results and equal-output performance.
+
+
 ## Current snapshot — 2026-11-26T00:58:36Z
 
 - Reviewed [c6df2f25 to a0c68c29](https://github.com/NeverSight/NeverD/compare/c6df2f25c9189936a7b57ee8a01d123be11aba68...a0c68c29481ab81d081a980d0a20dd3478c1b0d4): 201 commits ahead; the 300-path compare limit is not a total. Selected static review covered the conditional saved-frame write in [#2658](https://github.com/NeverSight/NeverD/pull/2658) and its two-byte-order regression. The tracked slot must be materialized; unresolved aliasing does not preserve its pointer relation; conditional and preservation work are charged against the remaining operation budget. Reviewed the test-only Windows changes in [#2659](https://github.com/NeverSight/NeverD/pull/2659) and [#2660](https://github.com/NeverSight/NeverD/pull/2660). No new confirmed source defect or fix in this static pass.
@@ -2958,3 +2966,8 @@ Bounded static review of the LoongArch dependency change and adjacent call-analy
 ## 2026-11-26 — static review
 
 - 2026-11-26T00:58:36Z: Reviewed conditional saved-frame writes and two Windows test-harness changes; no new confirmed defect. 63 open issues, 17 open PRs. Next: validate selected return checks and both Windows fixes without losing coverage. No project code, build, test, or workflow dispatch in this snapshot.
+
+
+## 2026-11-27 — static review
+
+- 2026-11-27T00:56:31Z: Reviewed bounded guard proof and its x86-64 fixtures; 63 open issues, 10 open PRs. Next: exact-dev guard regression, #2666 return cases, and #2670 qualification. No product source change or active verification in this snapshot.

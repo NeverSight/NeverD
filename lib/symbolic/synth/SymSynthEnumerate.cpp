@@ -114,8 +114,10 @@ uint64_t hashBehaviour(llvm::ArrayRef<Word> Words, bool Packed) {
 
 /// The behaviour array this thread keeps between searches.  Growing a new one
 /// for each search copies it repeatedly and faults in fresh pages.
-using RetainedColumns =
-    std::variant<std::vector<uint32_t>, std::vector<uint64_t>>;
+struct RetainedColumns {
+  std::variant<std::vector<uint32_t>, std::vector<uint64_t>> Words;
+  size_t WordsPerRow = 0, Rows = 0;
+};
 RetainedColumns &retainedBehaviours() {
   static thread_local RetainedColumns Words;
   return Words;
@@ -153,15 +155,32 @@ public:
   TermBank(SymContext &Ctx, size_t BehaviourWords, bool Packed)
       : Ctx(Ctx), BehaviourWords(BehaviourWords), Packed(Packed) {
     auto &Retained = retainedBehaviours();
-    if (auto *Words = std::get_if<std::vector<Word>>(&Retained))
+    if (auto *Words = std::get_if<std::vector<Word>>(&Retained.Words)) {
       Flat.swap(*Words);
+      if (Retained.WordsPerRow == BehaviourWords)
+        PriorRows = Retained.Rows;
+    }
   }
 
   ~TermBank() {
     constexpr size_t Limit = limits::symbolic::kSynthRetainedBehaviourWords *
                              sizeof(uint64_t) / sizeof(Word);
-    if (Flat.capacity() <= Limit)
-      retainedBehaviours() = std::move(Flat);
+    if (Flat.capacity() <= Limit) {
+      auto &Retained = retainedBehaviours();
+      Retained.Words = std::move(Flat);
+      Retained.WordsPerRow = BehaviourWords;
+      Retained.Rows = size();
+    }
+  }
+
+  // Reserve the index only after the leaf and fitting stages need enumeration.
+  // Completed rows from the same column layout bound the hint, and each new
+  // row still needs at least one unit of this search's remaining work.
+  void prepareEnumeration(size_t Work) {
+    const size_t Rows = std::min(PriorRows, Work);
+    ByHash.reserve(Rows);
+    Previous.reserve(Rows);
+    Pending.reserve(Rows);
   }
 
   TermBank(const TermBank &) = delete;
@@ -260,6 +279,7 @@ private:
   size_t BehaviourWords;
   bool Packed;
   std::vector<SymRef> Nodes;
+  size_t PriorRows = 0;
   std::vector<Word> Flat;
   /// Term indices by cost, in the order they were built, so that the search
   /// visits them the same way on every run.
@@ -379,6 +399,8 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
     Result.SawRefuted = Quadratic.SawRefuted;
   }
 
+  Bank.prepareEnumeration(Effort.remaining());
+
   // Literal terms alone, for the shifts: an amount that is itself computed
   // multiplies the branching factor of every shift by the whole pool, for a
   // shape that hardly occurs in what this engine is aimed at.  Read back out
@@ -386,9 +408,12 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
   // behaved like an earlier one was never recorded and the two orderings would
   // then disagree.
   llvm::SmallVector<size_t, 8> LiteralTerms;
+  llvm::SmallVector<bool, 16> Overshift(Bank.size());
   for (size_t I : Bank.atCost(1))
-    if (Ctx.isConst(Bank.node(I)))
+    if (Ctx.isConst(Bank.node(I))) {
       LiteralTerms.push_back(I);
+      Overshift[I] = Ctx.constValue(Bank.node(I)).uge(P.Width);
+    }
 
   llvm::SmallVector<llvm::APInt, 2> Args;
 
@@ -463,6 +488,8 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
     case GramOp::AShr:
       if (A == Zero || B == Zero || (Op == GramOp::AShr && A == Ones))
         Known = A;
+      else if (Op != GramOp::AShr && B < Overshift.size() && Overshift[B])
+        Known = Zero;
       break;
     case GramOp::Neg:
       if (A == Zero)
