@@ -30,6 +30,7 @@ add_neverd_component_library(NeverDZip
   ../web/archives/Zip.cpp
   ../web/archives/ZipPayload.cpp
   ../web/BlobStore.cpp
+  LINK_COMPONENTS Digest
   LLVM_COMPONENTS Support
   LINK_LIBS ZLIB::ZLIB
 )

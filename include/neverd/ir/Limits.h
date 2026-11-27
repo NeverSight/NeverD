@@ -350,11 +350,11 @@ inline constexpr uint64_t kJumpTableResolverSliceMaxIndexSpan = uint64_t{1}
 // then reads one feasible coordinate per query from a model until a last
 // query finds none left; coordinates an earlier arm proved are excluded
 // first. A constant index needs only one path-predicate query. Cap the
-// entire expanded proof at 256 calls: the largest joined domain (128
-// coordinates) plus an envelope and a closing call for each of 64 arms.
+// entire expanded proof at 512 calls: the largest joined domain (255
+// coordinates) plus an envelope and a closing call for each of 128 arms.
 // Every actual call also pays the local and candidate evidence accounts
 // below. Exceeding either limit fails closed.
-inline constexpr size_t kJumpTableResolverSliceMaxFiniteSetSolverQueries = 256;
+inline constexpr size_t kJumpTableResolverSliceMaxFiniteSetSolverQueries = 512;
 
 // lib/ir/low/jumptable/ResolverDefinitionCache.h
 inline constexpr size_t kResolverDefinitionCacheCapacity = 4096;

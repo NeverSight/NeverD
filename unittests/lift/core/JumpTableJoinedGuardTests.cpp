@@ -379,8 +379,10 @@ protected:
 
   // bash's expand_subscript_string helper enters its 97-case dispatch from a
   // zero byte that skips the range guard, so no guard dominates the load.
-  // Variant 1 sends one value past the table down that path instead, and
-  // variant 2 adds an unrelated compare literal of 127.
+  // Variant 1 sends one value past the table down that path instead,
+  // variant 2 adds an unrelated compare literal of 254, variant 3 enters the
+  // dispatch with an unchecked byte, and variant 4 guards a 16-bit value, so
+  // the lane's width bounds nothing.
   fs::path wideFixture(unsigned Cases, unsigned Variant = 0) {
     const std::string Stem =
         "wide" + std::to_string(Cases) + '-' + std::to_string(Variant);
@@ -391,15 +393,17 @@ protected:
            "jt_wide_join:\n  movzbl %dil,%r10d\n";
     if (Variant == 1)
       Out << "  cmp $" << Cases + 1 << ",%r10d\n  je .Ldispatch\n";
+    else if (Variant == 3)
+      Out << "  testl %edx,%edx\n  jne .Ldispatch\n";
     else
       Out << "  test %r10b,%r10b\n  je .Ldispatch\n";
-    Out << "  movzbl %sil,%r10d\n  cmp $" << Cases - 1
-        << ",%r10d\n  ja .Ldefault\n"
+    Out << (Variant == 4 ? "  movzwl %si,%r10d\n" : "  movzbl %sil,%r10d\n")
+        << "  cmp $" << Cases - 1 << ",%r10d\n  ja .Ldefault\n"
            ".Ldispatch:\n  lea .Ltable(%rip),%r8\n"
            "  movslq (%r8,%r10,4),%rax\n  add %r8,%rax\n  jmp *%rax\n";
     for (unsigned I = 0; I < Cases; ++I)
       Out << ".Lcase" << I << ":\n  mov $" << I + 1000 << ",%eax\n  ret\n";
-    Out << (Variant == 2 ? ".Ldefault:\n  cmp $127,%edx\n  sete %al\n"
+    Out << (Variant == 2 ? ".Ldefault:\n  cmp $254,%edx\n  sete %al\n"
                            "  movzbl %al,%eax\n  ret\n"
                          : ".Ldefault:\n  mov $99,%eax\n  ret\n")
         << ".size jt_wide_join,.-jt_wide_join\n"
@@ -800,8 +804,9 @@ int main(void) {
 }
 
 TEST_F(JumpTableJoinedGuard, WideJoinedDomainsKeepEveryCase) {
-  // The sizes cross the one-word mask at 64 and reach the joined ceiling.
-  for (unsigned Cases : {63u, 64u, 65u, 97u, 128u}) {
+  // The sizes cross each word of the feasible set and reach the joined
+  // ceiling.
+  for (unsigned Cases : {63u, 64u, 65u, 97u, 128u, 129u, 173u, 255u}) {
     SCOPED_TRACE(Cases);
     auto Image = neverd::loadBinary(wideFixture(Cases));
     ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
@@ -817,10 +822,13 @@ TEST_F(JumpTableJoinedGuard, WideJoinedDomainsKeepEveryCase) {
   }
 }
 
-TEST_F(JumpTableJoinedGuard, WideJoinedDomainsRefuseAHoleOrTheNextSize) {
-  // 129 cases need a literal past the joined ceiling. The hole variant's
-  // equality path reads one slot past the table.
-  for (auto [Cases, Variant] : {std::pair{129u, 0u}, std::pair{97u, 1u}}) {
+TEST_F(JumpTableJoinedGuard, WideJoinedDomainsRefuseUnboundedOrHoledPaths) {
+  // 256 cases of a 16-bit value need a literal past the joined ceiling (a
+  // byte index of 256 cases is bounded by its own width). The hole variant's
+  // equality path reads one slot past the table. At the ceiling, an
+  // unchecked byte can still be 255: a counterexample, not a domain.
+  for (auto [Cases, Variant] :
+       {std::pair{256u, 4u}, std::pair{97u, 1u}, std::pair{255u, 3u}}) {
     SCOPED_TRACE(std::to_string(Cases) + ':' + std::to_string(Variant));
     auto Image = neverd::loadBinary(wideFixture(Cases, Variant));
     ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());

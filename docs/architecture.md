@@ -11622,14 +11622,17 @@ A writer that copies an extended narrower value hides the extension: MSVC's
 ECX guard's lane names an opaque RCX occurrence. When neither identity binds
 such a lane, both queries retry rooted at the narrower value the lane carries
 unchanged, found through whole-width copies and extensions in the guard's
-block. The resolver still proves both, the narrow-lane bound check keeps the
-domain below that value's sign bit, and a failed retry changes nothing.
+block. The resolver still proves both, and a failed retry changes nothing.
 A narrow bound past the sign bit, such as GCC's `cmpb $0xb8, %dl; ja` before
 `movzbl %dl, %esi` in sqlite3VdbeExec, stands only when every index leaf of
 the selected guards reaches the table index zero-extended: a structural leaf,
-or one whose identity query also holds with sign extension excluded. Those
-queries spend a copy of the account, so a lane they cannot prove fails as
-before; a sign-extended lane keeps the dispatch unresolved. A compared byte
+or one whose identity also holds with sign extension excluded. That identity
+is the one that bound the leaf: its index query, the extended lane's query,
+or the lane source's. pcre2's set_start_bits compares the low lane of the
+register `movzbl` loaded and indexes with that register, a leaf only the
+extended lane binds. Those queries spend a copy of the account, so a lane
+they cannot prove fails as before; a sign-extended lane keeps the dispatch
+unresolved. A compared byte
 copied into the index's own lane before the compare (`mov %dl, %al`) is the
 index only when the index has that width or a later zero-extend covers the
 whole index: otherwise the index keeps its earlier upper bits, which no
@@ -11720,14 +11723,16 @@ When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
 the proposal supplies no table capacity or range authority. That envelope may
-reach 128 values, where an ordinary finite set stops at one 64-bit word. Each
+reach 255 values, where an ordinary finite set stops at one 64-bit word. Each
 arm's solver proves the envelope, then reads one feasible coordinate per call
 from a model and excludes it; members an earlier arm proved are excluded
 first. The calls therefore follow the members, not the proposed envelope, and
 an unrelated wide literal elsewhere in the function costs a few calls. bash
 enters a 97-case dispatch this way from a zero byte that skips its range
-guard. The ceiling stays below a byte lane's 256 values, so a byte read on an
-unguarded path is a counterexample rather than a domain proved by width. A dominating
+guard, and pcre2's set_start_bits a 173-case dispatch whose two entry paths
+each compare the opcode with 0xac. The ceiling stays below a byte lane's 256
+values, so a byte read on an unguarded path can be 255, a counterexample
+rather than a domain proved by width. A dominating
 equality, or a dominating signed upper bound, that is not itself an unsigned
 dense prefix does not discard those predecessor ranges: the same query proves
 the prefix and keeps the dominating edge constraints. A dominating range that

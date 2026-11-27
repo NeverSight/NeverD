@@ -1585,7 +1585,17 @@ byte lane with `cmpb $0x81, %dl; ja`: indexed by the lane zero-extended, the
 dispatch reads all 130 slots, while sign extension after the compare, into
 the compared register before it, or to 32 bits before the implicit
 zero-extend keeps it unresolved, as does a byte copied into the low lane of
-an index whose upper bits come from the caller. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
+an index whose upper bits come from the caller.
+`JTE_X86_64.LoadedByteLanePastTheSignBitBoundsAZeroExtendedIndex` compares
+the low lane of the register a byte was loaded into, which is the index:
+loaded with `movzbl` (bound through the extended lane) or `movzbq` (through
+the lane source), each dispatch reads all 130 slots, while `movsbl; cltq`,
+`movsbq` and a bare `movsbl` keep theirs unresolved.
+`JTE_X86_64.ByteComparedOnEachEntryPathBoundsAJoinedDomain` enters a
+dispatch on two paths that each load a byte with `movzbl` and compare it with
+`cmpb $0xac`: the joined domain reads all 173 slots, while a sign-extended
+second byte, a second path without a compare, or a signed `jg` on it keeps
+the dispatch unresolved. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
 reloads the byte a loop compared under a cursor its cases advance: the
 dispatch reads its six slots, while reloading the next byte or reloading
 after replacing the cursor stays unresolved.
@@ -12893,12 +12903,15 @@ refusal cases on incoming frame bytes whose writer is outside the function.
 variants through HighC and optimized/unoptimized LLVMC, compiling the generated
 x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.
 `JumpTableJoinedGuard.WideJoinedDomainsKeepEveryCase` uses bash's shape: a zero
-byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97 and 128
-cross the one-word mask and reach the joined ceiling, and each keeps every
-slot. `WideJoinedDomainsRefuseAHoleOrTheNextSize` refuses 129 cases, whose
-literal is past the ceiling, and an equality path that reads one slot past
-the table. `AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed
-envelope to 128 with an unrelated compare and still proves the three slots.
+byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97, 128,
+129, 173 and 255 cross each word of the feasible set and reach the joined
+ceiling, and each keeps every slot. `WideJoinedDomainsRefuseUnboundedOrHoledPaths`
+refuses 256 cases of a 16-bit value, whose literal is past the ceiling (256
+byte cases are bounded by the byte's own width), an equality path that reads
+one slot past the table, and a 255-case dispatch that a second path enters
+with an unchecked byte, which can be 255.
+`AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed envelope
+to the ceiling with an unrelated compare and still proves the three slots.
 `GeneratedSourceExecutesAWideJoinedDomain` compiles and runs the 97-case
 function from all three C routes at O0/O2.
 `X86_64ColdFragment.TheLoaderBindsAFramelessTrapPart` loads GCC 15.2's output
