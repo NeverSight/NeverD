@@ -10,9 +10,11 @@
 
 #include "../../../loader/ReadOnlyBytesIndex.h"
 #include "RegistrationABIPrivate.h"
+#include "RegistrationFrame.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/RuntimeProviders.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -69,6 +71,61 @@ std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
   return readLE<uint32_t>(Stub->data() + 2);
 }
 
+namespace {
+const LowInstructionBoundary *precedingInstruction(const LowBlock &Block,
+                                                   va_t Address, size_t &Work) {
+  const auto &Bounds = Block.InstructionBoundaries;
+  if (!registration_abi::chargeCalleeWork(Work, Bounds.size()))
+    return nullptr;
+  const auto Call =
+      std::find_if(Bounds.begin(), Bounds.end(),
+                   [&](const auto &I) { return I.Address == Address; });
+  if (Call == Bounds.begin() || Call == Bounds.end())
+    return nullptr;
+  const auto &Previous = Call[-1];
+  return Address >= Previous.Size && Previous.Address == Address - Previous.Size
+             ? &Previous
+             : nullptr;
+}
+} // namespace
+
+std::optional<StartupQuery> kernelStartupQuery(const Import &Imported) {
+  if (!llvm::StringRef(Imported.Module).equals_insensitive("kernel32.dll"))
+    return std::nullopt;
+  if (Imported.Name == "GetCurrentProcessId" ||
+      Imported.Name == "GetCurrentThreadId")
+    return StartupQuery::Identifier;
+  if (Imported.Name == "GetSystemTimeAsFileTime" ||
+      Imported.Name == "QueryPerformanceCounter")
+    return StartupQuery::Clock;
+  return std::nullopt;
+}
+
+bool hasPrivateStartupClockOutput(const BinaryImage &Image,
+                                  const LowBlock &Block, const LowOp &Op,
+                                  va_t Slot, const FrameState &Frame,
+                                  size_t &Work) {
+  const auto *Imported = Image.findImportAt(Slot);
+  if (!Imported || kernelStartupQuery(*Imported) != StartupQuery::Clock ||
+      !Frame.ImportBindingsIntact || !isFileBackedPEImportSlot(Image, Slot) ||
+      checkedCRTCallSlot(Image, Op, Work) != Slot)
+    return false;
+  const auto *Push = precedingInstruction(Block, Op.Addr, Work);
+  if (!Push || Push->Size != 1)
+    return false;
+  const auto Byte = readImmutableCodeBytes(Image, Push->Address, 1);
+  if (!Byte || (*Byte)[0] < 0x50 || (*Byte)[0] > 0x57 || (*Byte)[0] == 0x54)
+    return false;
+  // PUSH leaves its source GPR intact. The complete output must be above the
+  // argument slot, in the active private frame, below the original return PC.
+  const auto &SP = Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
+  const auto &Buffer = Frame.Registers[(*Byte)[0] - 0x50];
+  return SP.Offset && SP == FrameValue::frame(*SP.Offset) && Buffer.Offset &&
+         Buffer == FrameValue::frame(*Buffer.Offset) &&
+         *Buffer.Offset >= int64_t(*SP.Offset) + 4 &&
+         int64_t(*Buffer.Offset) + 8 <= 0;
+}
+
 bool isCheckedCRTStandardStreamCall(const BinaryImage &Image,
                                     const LowBlock &Block, const LowOp &Op,
                                     va_t Slot, size_t &Work) {
@@ -76,28 +133,19 @@ bool isCheckedCRTStandardStreamCall(const BinaryImage &Image,
   if (!Import || Import->Name != "__acrt_iob_func" ||
       !coff_loader::isUCRTStdioProvider(Import->Module) ||
       !isFileBackedPEImportSlot(Image, Slot) ||
-      checkedCRTCallSlot(Image, Op, Work) != Slot ||
-      !registration_abi::chargeCalleeWork(Work,
-                                          Block.InstructionBoundaries.size()))
+      checkedCRTCallSlot(Image, Op, Work) != Slot)
     return false;
-  const auto &Bounds = Block.InstructionBoundaries;
-  const auto Call =
-      std::find_if(Bounds.begin(), Bounds.end(),
-                   [&](const auto &I) { return I.Address == Op.Addr; });
-  if (Call == Bounds.begin() || Call == Bounds.end())
-    return false;
-  const auto &Push = Call[-1];
-  if ((Push.Size != 2 && Push.Size != 5) || Op.Addr < Push.Size ||
-      Push.Address != Op.Addr - Push.Size)
+  const auto *Push = precedingInstruction(Block, Op.Addr, Work);
+  if (!Push || (Push->Size != 2 && Push->Size != 5))
     return false;
   const auto Bytes =
-      readImmutablePE32CodeBytes(Image, Push.Address, Push.Size, {}, Work,
+      readImmutablePE32CodeBytes(Image, Push->Address, Push->Size, {}, Work,
                                  limits::kMaxRegistrationEHStateWork);
   if (!Bytes)
     return false;
   // UCRT returns the FILE member of the selected stdin, stdout or stderr
   // record. A different index has no checked stream object.
-  return Push.Size == 2
+  return Push->Size == 2
              ? (*Bytes)[0] == 0x6a && (*Bytes)[1] <= 2
              : (*Bytes)[0] == 0x68 && readLE<uint32_t>(Bytes->data() + 1) <= 2;
 }

@@ -633,6 +633,20 @@ auto loadXCPT4(bool Selected = false) {
 }
 } // namespace
 
+TEST(RegistrationCRTFrame, XCPT4StartupClockHelperKeepsItsPrivateOutputs) {
+  auto Image = loadXCPT4(true);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  size_t Work = 0;
+  RegistrationCallCalleeIndex Callees(*Image, &Work);
+  const auto Clock = Callees.stackContract(0x4071c6);
+  ASSERT_TRUE(Clock);
+  EXPECT_EQ(Clock->StackPopBytes, 0u);
+  EXPECT_TRUE(Clock->PreservesImportBindings);
+  EXPECT_EQ(Clock->RequiredImports,
+            (std::vector<va_t>{0x408024, 0x408028, 0x40802c, 0x408030}));
+  EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+}
+
 TEST(RegistrationCRTFrame, XCPT4MainArgumentCallsBindTheirRuntimeSlots) {
   using namespace registration_state;
   auto Image = loadXCPT4(true);

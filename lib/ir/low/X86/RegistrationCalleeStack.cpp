@@ -802,7 +802,9 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
             SP == FrameValue::frame(*SP.Offset)) {
           PreserveImportBindings =
               registration_state::isCheckedCRTStandardStreamCall(
-                  Image, Block, Op, *ImportedSlot, Work);
+                  Image, Block, Op, *ImportedSlot, Work) ||
+              registration_state::hasPrivateStartupClockOutput(
+                  Image, Block, Op, *ImportedSlot, State, Work);
           if (!PreserveImportBindings && *SP.Offset <= -8)
             if (const auto Targets =
                     registration_state::checkedCRTInitializerTargets(
