@@ -375,6 +375,31 @@ SymRef foldObservedWindow(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       }
     }
   }
+  const SymOp Outer = Ctx.op(Root);
+  if (Outer == SymOp::LShr || Outer == SymOp::AShr) {
+    const SymRef Inner = Ctx.operand(Root, 0);
+    const SymOp Op = Ctx.op(Inner);
+    if (Op != SymOp::LShr && (Op != SymOp::AShr || Outer != SymOp::AShr))
+      return Root;
+    const SymRef A = Ctx.operand(Inner, 1), B = Ctx.operand(Root, 1);
+    if (!Ctx.isConst(A) || !Ctx.isConst(B))
+      return Root;
+    // Both literal counts in a surviving shift are positive and below the
+    // value width. A logical inner shift therefore clears the sign bit.
+    const unsigned Width = Ctx.width(Root);
+    const size_t Words = llvm::APInt::getNumWords(Width);
+    if (Words > Storage / sizeof(uint64_t) || !Budget.consume(1 + Words))
+      return Root;
+    Storage -= Words * sizeof(uint64_t);
+    const uint64_t Total =
+        Ctx.constWords(A).front() + Ctx.constWords(B).front();
+    const SymRef Source = Ctx.operand(Inner, 0);
+    if (Op == SymOp::LShr)
+      return Total >= Width ? Ctx.mkZero(Width)
+                            : Ctx.mkLShr(Source, Ctx.mkConst(Width, Total));
+    return Ctx.mkAShr(Source,
+                      Ctx.mkConst(Width, std::min<uint64_t>(Total, Width - 1)));
+  }
   if (Ctx.op(Root) != SymOp::And || Ctx.numOperands(Root) < 2 ||
       !Ctx.isConst(Ctx.operand(Root, 0)))
     return Root;

@@ -1,6 +1,6 @@
 **Sprachen**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← NeverD-Projekt](project.md)
 
@@ -40,12 +40,14 @@ Englische Anleitungen liegen direkt unter `docs/`. Übersetzungen sind in `ar/`,
 | [macOS/iOS-Prozessumgebungen](darwin-emulation.md) | Mach-O-Start, Geräte- und Simulatorplattformen, Darwin-Dienste und Seitenregeln |
 | [macOS HVF](macos-hvf.md) | Hardwareausführung mit der Host-ISA, Signaturrechte, Paketierung und Prüfung |
 | [Emulation von Windows-Treibern](driver-emulation.md) | Begrenzter x64-WDM/KMDF-Lebenszyklus, Anforderungen, Hardwareszenarien, SEH, PnP-Teilmengen, Backend-Auswahl und Grenzen |
-| [Speicher-Audit und Hunt](memory-safety.md) | Heap-Lebensdauer- und Copy-Überlaufanalyse: Identitätsvertrag je Format, Senken-/Quellenkatalog, Urteile, Budgets und JSON-Schema |
+| [Speichersicherheitsprüfung](memory-safety.md) | Heap-Lebensdauer- und Copy-Überlaufanalyse: Identitätsvertrag je Format, Senken-/Quellenkatalog, Urteile, Budgets und JSON-Schema |
 | [Prozess-Plugin-SDK (Englisch)](../process-plugin-sdk.md) | Eigenständiger Python-Helfer, Protokoll und unabhängige Beispiele |
 | [Tools-Schicht (Englisch)](../tools-layer.md) | Exakte Pluginaufrufe, eingefrorene Verbraucherschritte und Vorgangsprotokolle |
 | [GUI-Prozess-Plugins (Englisch)](../gui-plugins.md) | Manager, Menüplatzierung, Aufgabenergebnisse und Anbieterprotokoll |
 | [NPH-Prozess-Pluginhost (Englisch)](../plugin-host.md) | Gemeinsame Eigentümer, Aufgabenzulassung, Protokoll und Prozesslebensdauer |
 | [Native Plugins](plugins.md) | Reine C-Deskriptor-ABI, Callbacks und Ereignisse, Build-/Link-Ablauf, Erkennung und Kompatibilitätsregeln |
+| [Java-Artefakte wiederherstellen](../jvm-recovery.md) | JVM-Klassendateiversionen, JAR-Auswahl, typisierte IR und Rekonstruktion einzelner Java-Methoden |
+| [Python-Artefakte wiederherstellen](../python-recovery.md) | CPython-Versionsmatrix, PyInstaller-Komponenten, native Analyse und Quelltextvalidierung |
 | [Python-Plugins](python-plugins.md) | Plugin-Entwicklung, Session-/Event-API, Isolation, Tests und Veröffentlichung |
 | [Mobile-Überblick](mobile.md) | Experimentelle Android-/iOS-CLI, Eingaben, Ausgaben, Berichte und Grenzen |
 | [Java-Rekonstruktion für Android](android.md) | APK (einschließlich Multidex), DEX, smali-Dateien/-Verzeichnisse → Java; CLI, JSON-Bericht, Fehlerbehandlung, Grenzen und Verifikation |

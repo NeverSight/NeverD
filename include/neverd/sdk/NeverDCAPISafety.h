@@ -1,4 +1,4 @@
-//===- NeverDCAPISafety.h - C API memory-safety audit & hunt ------*- C -*-===//
+//===- NeverDCAPISafety.h - C API native memory-safety scan -------*- C -*-===//
 //
 // NeverD Decompiler
 //
@@ -78,26 +78,6 @@ typedef struct neverd_scan_options {
   neverd_cancel_probe_fn cancel;
   void *context;
 } neverd_scan_options;
-
-/// Audit heap-object lifetimes and local stack initialization, returning an
-/// owned JSON report.  Heap findings carry the callee name, its identity
-/// origin, and the call address.  Caller frees the returned string with
-/// neverd_free_string().
-NEVERD_API const char *
-neverd_session_audit_json(neverd_session_t Sess,
-                          const neverd_safety_options *Options);
-
-/// Hunt dangerous-copy overflows and return an owned JSON report.  Each finding
-/// carries a verdict (SAFE / UNSAFE / UNKNOWN), a confidence, and — for a
-/// proven overflow — a solver model plus candidate witness values. The
-/// evidence's `replayable` field is derived from a complete plan in `replay`;
-/// a non-replayable witness includes the adapter and the reason no plan could
-/// be formed. Replay fields are additive and the report's
-/// `schema_version` remains 1. Caller frees the returned string with
-/// neverd_free_string().
-NEVERD_API const char *
-neverd_session_hunt_json(neverd_session_t Sess,
-                         const neverd_safety_options *Options);
 
 /// Run the selected static analyses against one lift of the loaded image.
 /// Returns an owned neverd.memory-safety-scan v1 report, including partial

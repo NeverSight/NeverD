@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>Исследовать классы JVM и JAR-файлы…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Исследовать байт-код Java, типизированное промежуточное представление и восстановленные методы</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>Проверка безопасности памяти...</translation>
     </message>
@@ -1358,6 +1366,14 @@
     <message>
         <source>Recover a Lua artifact and inspect its prototypes</source>
         <translation>Восстановить код Lua и изучить прототипы функций</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Просмотреть код Python и компоненты пакета</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Восстановить исходный код Python…</translation>
     </message>
 </context>
 <context>
@@ -11252,16 +11268,16 @@ Your previous graph is still available.</source>
         <translation>&amp;Анализаторы</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit и Hunt</translation>
+        <source>All checks</source>
+        <translation>Все проверки</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Время жизни и инициализация</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Границы и строки формата</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11321,7 +11337,110 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
-    <name>neverd::gui::LuaRecoveryDialog</name>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>Исследовать классы JVM и JAR-файлы</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>Артефакт</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>Базовые записи JAR</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>Включить предварительные возможности</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>Среда выполнения</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>Локальные зависимости…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Очистить</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Зависимости</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>Класс или элемент</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Метод</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>Показать состав</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>Анализировать выбранное</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Исходный код Java</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>Байт-код</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>Типизированное промежуточное представление</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Сведения</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Соответствия байт-кода</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>Копировать представление</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>Экспортировать представление…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Экспортировать отчёт…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>Открыть артефакт JVM</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>Представление выбранной среды</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>Все методы</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
         <translation>Восстановить исходный код Lua</translation>
@@ -11345,6 +11464,10 @@ Your previous graph is still available.</source>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Официальный Luau</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>
@@ -11445,6 +11568,62 @@ Your previous graph is still available.</source>
     <message>
         <source>Original line %1</source>
         <translation>Исходная строка %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>Компонент</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>Точки входа скриптов</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>Экспорт нативного компонента…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Папка…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Функция</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>Функция %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>Нативный компонент экспортирован.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>Открыть папку PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Открыть артефакт Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>Открыть в анализаторе машинного кода…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>Этот рабочий процесс не поддерживает восстановление исходного кода Python.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Исходный код Python (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Восстановить исходный код Python</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>Сохранить нативный компонент в новый файл</translation>
     </message>
 </context>
 </TS>

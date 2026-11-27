@@ -1584,6 +1584,17 @@ entries and unwind frame starts; a frame that begins later, a chained row or a
 cold fragment cannot supply an independent callable identity. Next-entry bounds
 use those primary identities as well. Explicitly selecting code for analysis
 retains its separate decode and admission checks.
+GCC's hot/cold partitioning gives a function's `.text.unlikely` part an FDE of
+its own. The DWARF loader binds the part to the one function whose direct
+branches enter it with the frame its rules describe there, when the part
+begins inside that frame. A frameless function's part has no frame to begin
+inside, so its FDE starts with the entry rule as a function's does. That part
+is bound only when it ends in `ud2`, the trap of a path GCC isolated such as a
+store through a pointer it proved null, and nothing names it as a function:
+no symbol other than a `.cold` name, no direct call, no RIP-relative address
+and no relocated code pointer. An entry-like region that returns is a function
+tail-called once and stays one. Lua's reallymarkobject enters its isolated part
+from a jump table, which could not take a function entry as a case.
 COFF `IMAGE_SCN_CNT_CODE` is instruction-storage evidence independently of
 page execute permission. Ownership, selected pipeline entries and SDK batch
 selection share that distinction without changing the image's page flags.
@@ -11667,16 +11678,16 @@ and leaves the guard proof the rest; charged in full, pcre2's alias batches
 spent the account the guard itself needed.
 When the compare that names the index is a structural leaf, the session over
 every controlling condition runs on a share of the remaining candidate
-account (`kJumpTableGuardSideSessionAccountDivisor`) and is charged what it
-spent: the other conditions only add constraints to a bound already in hand.
-Run on the whole account, a session that finished could leave the address
-and domain proofs too little, as in a lexer loop whose 64 arms each recompute
-the dispatched token. A session that cannot finish within its share answers
-none of its queries. That
+account (`kJumpTableGuardSideSessionAccountDivisor`): the other conditions
+only add constraints to a bound already in hand. A session that finishes is
+charged what it spent. Run on the whole account, such a session could leave
+the address and domain proofs too little, as in a lexer loop whose 64 arms
+each recompute the dispatched token. A session that cannot finish within its
+share answers none of its queries and costs the account nothing. That
 session can also run out of its own match allowance with the account to
-spare, and then answers none of its queries. The compare's own queries are
-then asked alone, in a session of their own, exactly as after the copy runs
-out; the other conditions stay unanswered and only drop out of the proof.
+spare, and then answers none of its queries. Either way the compare's own
+queries are then asked alone, in a session of their own; the other
+conditions stay unanswered and only drop out of the proof.
 pcre2's pattern converter puts 22 controlling conditions and 179 queries in
 front of one dispatch.
 The compare is that structural leaf also when the index takes the compared
@@ -11688,8 +11699,19 @@ ESI's own INT_ZEXT into RSI). Nothing may write the lane between the compare
 and that copy or extension, each extension must widen what the previous one
 left, and a temporary counts only within its own instruction. Without the
 identity pcre2's parse_regex asked one session over 556 controlling
-conditions for such a dispatch; it spent 362 Mi of the candidate account and
-did not finish.
+conditions for such a dispatch; the session spent 339 Mi of the candidate
+account and did not finish, and the guard proof 362 Mi in all.
+A byte compared in memory is that leaf too when the index reloads it
+(`cmpb $0xc, 0x2(%r11); ja; movzbl 0x2(%r11), %edx`): a load of the same
+width through the same register and displacement, reached into the index by
+zero-extensions and same-width copies, in a block only the guard's
+fallthrough enters. Nothing between the two loads may write memory or that
+register, and no call may run before the index is used. These are the
+conditions under which the value resolver's reload search also reads one
+value; the address carrier and the memory-write test are its own helpers.
+pcre2_dfa_match's dispatch of this shape spent the whole 487 Mi left in its
+candidate account on the guard session, and two tables the function had
+proved were then withdrawn because that dispatch stayed open.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
@@ -11697,7 +11719,15 @@ without treating depth exhaustion as a completed proof or skipping replay.
 When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
-the proposal supplies no table capacity or range authority. A dominating
+the proposal supplies no table capacity or range authority. That envelope may
+reach 128 values, where an ordinary finite set stops at one 64-bit word. Each
+arm's solver proves the envelope, then reads one feasible coordinate per call
+from a model and excludes it; members an earlier arm proved are excluded
+first. The calls therefore follow the members, not the proposed envelope, and
+an unrelated wide literal elsewhere in the function costs a few calls. bash
+enters a 97-case dispatch this way from a zero byte that skips its range
+guard. The ceiling stays below a byte lane's 256 values, so a byte read on an
+unguarded path is a counterexample rather than a domain proved by width. A dominating
 equality, or a dominating signed upper bound, that is not itself an unsigned
 dense prefix does not discard those predecessor ranges: the same query proves
 the prefix and keeps the dominating edge constraints. A dominating range that

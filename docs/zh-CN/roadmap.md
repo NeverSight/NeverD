@@ -81,7 +81,7 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 
 ---
 
-## 4. 内存安全审计与猎取
+## 4. 内存安全扫描
 
 对已提升的二进制做堆对象生命周期缺陷（泄漏、重复释放、释放后使用）与危险拷贝越界分析，并以结构化 JSON 报告；对已证明的越界给出有界求解器模型。分析跑在格式无关的 IR 与共享身份视图上，因此 **PE、ELF、Mach-O 是同等目标**，并复用自研符号执行与位向量求解器——不依赖外部求解器或容器。
 
@@ -92,14 +92,12 @@ Review/development 的显式 opt-in target；`latest` 仍为 Fusaka。EOFv1/EIP-
 | 可达性证据 | 从已知入口出发的控制状态、独立的攻击者控制不动点，以及精确的根／调用链见证 |
 | 身份契约 | 按格式解析汇（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名称来源 |
 
-**状态：** PE、ELF、Mach-O 的 Phase 1 已实现。P0 包含闭世界堆生命周期与危险拷贝分析；schema v1 的增量证据可为精确字面环境值及第一次受支持的 `read(0)` 系列标准输入消费提供 `process-input-v1` 重放，其他输入类型保持不可重放并附带原因。P1 已覆盖栈/全局越界、未初始化局部读取与格式串。未知或只能部分适用的调用效果保持 UNKNOWN。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全审计与猎取](memory-safety.md)。
+**状态：** PE、ELF、Mach-O 的 Phase 1 已实现。P0 包含闭世界堆生命周期与危险拷贝分析；schema v1 的增量证据可为精确字面环境值及第一次受支持的 `read(0)` 系列标准输入消费提供 `process-input-v1` 重放，其他输入类型保持不可重放并附带原因。P1 已覆盖栈/全局越界、未初始化局部读取与格式串。未知或只能部分适用的调用效果保持 UNKNOWN。判定与身份覆盖由 [`unittests/safety`](../../unittests/safety)（目录、扫描器、参数预过滤、对象模型、hunt、audit）以及在每个主机上强制运行 PE/ELF/Mach-O × x86-64/AArch64 六单元 fixture 矩阵的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 锁定。详见 [内存安全扫描](memory-safety.md)。
 
 当前过程间切片在不改变独立 `verdict` 的前提下，为 schema v1 增加
 `reachability.status` 与 `reachability.attacker_control`。它报告
 `application`、`image` 或 `export` 根、精确内部调用链，以及闭合失败的 UNKNOWN
-状态。`max_call_depth` 与 `max_summary_iterations` 预算可通过 C API、两条 CLI 命令和
-两个 Python 方法配置。因此，
-`control_reachable` 与 `attacker_reachable` 是可达性计数，而非另一套裁决计数。
+状态。`max_call_depth` 与 `max_summary_iterations` 预算可通过 C API、`neverd scan` 和 `Session.scan()` 配置。
 
 P2 分析面与计划采用带明确状态的版本化边界：
 
@@ -141,5 +139,5 @@ Phase 1 与当前已知入口可达性切片已有回归覆盖；保守的 EVM �
 | EVM 传统解码/lifting              | 到 Fusaka 已完成；有回归测试覆盖 |
 | EVM 源码重建                      | 持续进行 — 有证据才报告，保持保守 |
 | Solana eBPF（SBF）反编译         | 已完成 — v0-v4、C、Rust 与 LLVM；有回归测试覆盖 |
-| 内存安全审计与猎取                   | Phase 1 与已知入口可达性切片已完成；`lowir-concolic-v1` 与 Darwin `binary-sanitizer-v1` 发布为实验性能力；原生 `process-replay-v1` 仍停留在故障关闭的 Phase 0 适配器后且不可用 |
+| 内存安全扫描                   | Phase 1 与已知入口可达性切片已完成；`lowir-concolic-v1` 与 Darwin `binary-sanitizer-v1` 发布为实验性能力；原生 `process-replay-v1` 仍停留在故障关闭的 Phase 0 适配器后且不可用 |
 | 引擎与产品加固                     | 持续进行      |

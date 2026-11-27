@@ -1,6 +1,6 @@
 **Языки**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 43c16b0119e7742e48d299e50d42224b09635b32fccff585a2f42918cfe3aefb -->
+<!-- i18n-source: ffb9cc2753916bb01223ed5f796ce889835795af5d3c24fe97fd3cb12ff50b59 -->
 
 <div align="center">
 
@@ -68,7 +68,7 @@ CLI, интеграторы и ИИ-агенты используют один �
 
 | Архитектура | Проверенные профили ELF |
 |---|---|
-| RISC-V | RV32I/ILP32 и RV64I/LP64 с порядком байтов от младшего к старшему. Сведения из ELF определяют расширения M, A и целочисленную часть C либо отдельные расширения Zmmul, Zaamo, Zalrsc и Zca. Атрибут ISA в ELF также включает Zba 1.0, Zbb 1.0 и Zbs 1.0. |
+| RISC-V | RV32I/ILP32 и RV64I/LP64 с порядком байтов от младшего к старшему. Сведения из ELF определяют расширения M, A и целочисленную часть C либо отдельные расширения Zmmul, Zaamo, Zalrsc и Zca. Атрибут ISA в ELF также включает Zba 1.0, Zbb 1.0, Zbs 1.0 и Zicond 1.0. |
 | PowerPC | PPC32 System V и PPC64 ELFv1/ELFv2 с обоими порядками байтов. PPC32 поддерживает межмодульные вызовы через secure PLT и классическую BSS-PLT. Оба ABI PPC64 поддерживают межмодульные вызовы через PLT и переключение TOC. ELFv1 использует дескрипторы функций, а ELFv2 поддерживает глобальные и локальные точки входа. Проверены деление со знаком и без знака, умножение с выдачей старшего слова произведения и умножение с контролем переполнения, а также влияние этих операций на CR0 и XER. На PPC64 также поддерживаются префиксные инструкции POWER10 для сложения, загрузки и сохранения целых чисел. |
 
 Перезапись машинного кода для этих профилей ещё не реализована. [Поддержка RISC-V и PowerPC (на английском)](../riscv-powerpc.md)
@@ -182,8 +182,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -307,6 +305,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | счётчики | C по умолчанию для каждой загруженной функции; тело освобождается после проверки |
 | `decompile -llvm` | `.c` | Через LLVM IR + оптимизатор |
 | `decompile --devirtualize` | `.c` + необязательный JSON | Экспериментальное восстановление интерпретаторов x64; нужен `--func`; [контракт и примеры](interpreter-recovery.md) |
+| `java` | Java / IR JVM / байт-код / JSON | [Файлы классов и мультиверсионные JAR](../jvm-recovery.md) |
+| `python` | `.py` / JSON / нативные компоненты | [Восстановление артефактов CPython и PyInstaller](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Восстановление исходного кода Lua, LuaJIT и Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Экспериментально: [Android](android.md), [iOS](ios.md) |
 | `patch` | бинарник | Перезапись машинного кода |
@@ -342,8 +342,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | Найденные функции |
 | `disasm` | Дизассемблирование (`--func` имя или hex) |
 | `sym-explore` | Ограниченное исследование путей нативного LowIR (`--func`; вывод JSON) |
-| `audit` | Ошибки времени жизни объектов кучи и чтение неинициализированного локального стека (JSON) |
-| `hunt` | Выход за границы опасных копирований с символьными свидетелями и дополнительными доказательствами воспроизведения `process-input-v1` при наличии полного плана (схема JSON v1) |
+| `scan` | [Проверка времени жизни и инициализации объектов, границ и строк формата (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex dump по адресу |
 | `cfg` / `callgraph` | CFG / граф вызовов (JSON; опционально DOT/SVG) |
 | `xrefs` | Перекрёстные ссылки |

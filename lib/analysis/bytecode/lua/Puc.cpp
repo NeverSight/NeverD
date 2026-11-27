@@ -18,7 +18,8 @@ namespace {
 class PucReader {
   Chunk &C;
   Reader &R;
-  unsigned V, SizeT = 0, Integer = 8, Number = 8;
+  unsigned V, SizeT = 0, Integer = 8, Number = 8, WordBytes = 4;
+  bool DebugFirst;
   std::vector<llvm::StringRef> Strings;
   uint64_t size() {
     return V < 0x54 ? R.word(4) : R.varint(false, V == 0x54, 64);
@@ -124,8 +125,9 @@ class PucReader {
         P.SourceName = ParentSource;
     }
     P.FirstLine = index();
-    P.LastLine = index();
-    if (V == 0x51)
+    if (V != 0x50)
+      P.LastLine = index();
+    if (V <= 0x51)
       P.Up.resize(R.count(R.byte()));
     P.Params = R.byte();
     P.Flags = R.byte();
@@ -133,6 +135,26 @@ class PucReader {
       unsupported(R.at() - 1, "Unknown prototype flags");
     P.Vararg = V == 0x51 ? (P.Flags & 2) : V == 0x55 ? (P.Flags & 3) : P.Flags;
     P.Stack = R.byte();
+    P.WordBytes = WordBytes;
+    if (DebugFirst) {
+      for (unsigned I = count(); I; --I)
+        P.Lines.push_back(index());
+      localNames(P);
+      upvalueNames(P);
+      for (unsigned I = count(); I; --I)
+        P.K.push_back(constant());
+      for (unsigned I = count(); I; --I)
+        P.Children.push_back(function(Depth + 1, P.SourceName).Id);
+      C.code(P, R, size());
+      if (!P.Lines.empty() && P.Lines.size() != P.Code.size())
+        malformed(P.CodeAt, "Line table does not cover the code");
+      for (const auto &L : P.Locals)
+        if (L.End > P.Code.size())
+          malformed(P.CodeAt, "Invalid local lifetime");
+      P.End = R.at();
+      P.Complete = true;
+      return P;
+    }
     auto N = size();
     if (V == 0x55)
       R.align(4);
@@ -162,21 +184,27 @@ class PucReader {
           if (Up.Index >= (Up.Local ? P.Stack : P.Up.size()))
             malformed(R.at(), "Invalid parent capture index");
     lines(P);
+    localNames(P);
+    upvalueNames(P);
+    P.End = R.at();
+    P.Complete = true;
+    return P;
+  }
+  void localNames(Proto &P) {
     for (unsigned I = count(); I; --I) {
       auto S = string();
       unsigned Begin = index(), End = index();
-      if (Begin > End || End > P.Code.size())
+      if (Begin > End || (!DebugFirst && End > P.Code.size()))
         malformed(R.at(), "Invalid local lifetime");
       P.Locals.push_back({S, Begin, End});
     }
+  }
+  void upvalueNames(Proto &P) {
     auto Names = count();
     if (Names && Names != P.Up.size())
       malformed(R.at(), "Invalid upvalue name count");
     for (unsigned I = 0; I < Names; ++I)
       P.Up[I].Name = string();
-    P.End = R.at();
-    P.Complete = true;
-    return P;
   }
   void detectEndian(unsigned Width, uint64_t Expected) {
     auto Probe = R.slice(Width);
@@ -190,13 +218,16 @@ class PucReader {
   }
 
 public:
-  PucReader(Chunk &C, Reader &R, unsigned V) : C(C), R(R), V(V) {}
+  PucReader(Chunk &C, Reader &R, unsigned V, bool Early51)
+      : C(C), R(R), V(V), DebugFirst(V == 0x50 || Early51) {}
   void run() {
     auto &E = C.Evidence;
-    unsigned Format = R.byte();
-    E["format"] = Format;
-    if (Format)
-      unsupported(R.at() - 1, "Custom PUC Lua format");
+    if (V >= 0x51) {
+      unsigned Format = R.byte();
+      E["format"] = Format;
+      if (Format)
+        unsupported(R.at() - 1, "Custom PUC Lua format");
+    }
     constexpr llvm::StringLiteral Marker("\x19\x93\x0d\x0a\x1a\x0a");
     if (V >= 0x53)
       R.expect(Marker);
@@ -218,9 +249,9 @@ public:
         unsupported(R.at() - 1, "Unsupported C int width");
       detectEndian(4, uint32_t(-0x5678));
     }
-    unsigned Instruction = R.byte();
-    E["instruction_bytes"] = Instruction;
-    if (Instruction != 4)
+    WordBytes = R.byte();
+    E["instruction_bytes"] = WordBytes;
+    if (WordBytes != 4 && !(V == 0x50 && WordBytes == 8))
       unsupported(R.at() - 1, "Unsupported instruction width");
     if (V == 0x55 && R.word(4) != 0x12345678)
       unsupported(R.at() - 4, "Unsupported instruction representation");
@@ -228,6 +259,8 @@ public:
       Integer = R.byte();
     if (V == 0x55 && (Integer != 8 || R.word(8) != uint64_t(-0x5678)))
       unsupported(R.at(), "Unsupported Lua integer representation");
+    if (V == 0x50)
+      R.expect(llvm::StringRef("\x06\x08\x09\x09", 4));
     Number = R.byte();
     E["number_bytes"] = Number;
     if (V >= 0x53)
@@ -236,7 +269,11 @@ public:
       unsupported(
           R.at(),
           "Only binary64 numbers and native 64-bit Lua integers are qualified");
-    if (V <= 0x52) {
+    if (V == 0x50) {
+      if (std::bit_cast<double>(R.word(Number)) != 3.14159265358979323846e7)
+        unsupported(R.at() - Number,
+                    "Unsupported Lua 5.0 number representation");
+    } else if (V <= 0x52) {
       auto Integral = R.byte();
       E["integral_number"] = bool(Integral);
       if (Integral)
@@ -258,13 +295,48 @@ public:
   }
 };
 } // namespace
-void neverd::lua::readPuc(Chunk &C, Reader &R) {
+void neverd::lua::readPuc(Chunk &C, Reader &R, llvm::StringRef Profile) {
   R.expect("\x1bLua");
   auto V = R.byte();
   C.Version = V;
   C.Evidence["version_byte"] = V;
-  if (V < 0x51 || V > 0x55)
+  if (Profile.starts_with("luajit-1.")) {
+    if (V != 0x51)
+      unsupported(R.at() - 1,
+                  "Selected LuaJIT 1.x profile requires a Lua 5.1 chunk");
+    C.Evidence["declared_runtime"] = Profile;
+    if (Profile == "luajit-1.0")
+      C.Evidence["prototype_layout"] = "Lua 5.1 alpha";
+  }
+  if (V == 0x23 || V == 0x25 || V == 0x31 || V == 0x32 || V == 0x40) {
+    readStackChunk(C, R);
+    return;
+  }
+  if (V < 0x50 || V > 0x55)
     unsupported(R.at() - 1, "Unknown PUC Lua version");
   C.Evidence["dialect"] = "Lua 5." + std::to_string(V - 0x50);
-  PucReader(C, R, V).run();
+  if (V != 0x51 || Profile != "auto") {
+    PucReader(C, R, V, Profile == "luajit-1.0").run();
+    return;
+  }
+  // Lua 5.1 alpha and the final release have the same ABI signature.
+  // Try the earlier record order only after the stable layout fails.
+  auto Original = R;
+  try {
+    PucReader(C, R, V, false).run();
+  } catch (const Failure &Stable) {
+    if (C.Functions.empty() || llvm::StringRef(Stable.Status) == "cancelled")
+      throw;
+    Chunk Early{C.Job, Family::Puc, C.Evidence, V};
+    try {
+      PucReader(Early, Original, V, true).run();
+    } catch (const Failure &Alternative) {
+      if (llvm::StringRef(Alternative.Status) == "cancelled")
+        throw;
+      throw Stable;
+    }
+    C.Functions = std::move(Early.Functions);
+    C.Evidence["prototype_layout"] = "Lua 5.1 alpha";
+    R.Pos = Original.Pos;
+  }
 }

@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 43c16b0119e7742e48d299e50d42224b09635b32fccff585a2f42918cfe3aefb -->
+<!-- i18n-source: ffb9cc2753916bb01223ed5f796ce889835795af5d3c24fe97fd3cb12ff50b59 -->
 
 <div align="center">
 
@@ -68,7 +68,7 @@ Los destinos ELF de enteros experimentales admiten la traducción estricta de in
 
 | Destino | Perfiles ELF verificados |
 |---|---|
-| RISC-V | RV32I/ILP32 y RV64I/LP64 en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0, Zbb 1.0 y Zbs 1.0. |
+| RISC-V | RV32I/ILP32 y RV64I/LP64 en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0, Zbb 1.0, Zbs 1.0 y Zicond 1.0. |
 | PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. PPC32 admite llamadas entre módulos a través de la PLT segura y de la BSS-PLT clásica. Ambas ABI de PPC64 admiten llamadas entre módulos a través de la PLT y cambios de TOC. ELFv1 utiliza descriptores de función y ELFv2 admite puntos de entrada globales y locales. Las operaciones escalares verificadas incluyen la división con y sin signo, la multiplicación que devuelve la palabra alta del producto y la multiplicación con indicación de desbordamiento, junto con sus efectos en CR0 y XER. En PPC64 también se admiten las instrucciones con prefijo de POWER10 para sumar, cargar y almacenar enteros. |
 
 La reescritura de código nativo sigue pendiente para estos perfiles. [Cobertura de RISC-V y PowerPC (en inglés)](../riscv-powerpc.md)
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -306,6 +304,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | recuentos | C predeterminado para cada función cargada; cada cuerpo se libera después de comprobarlo |
 | `decompile -llvm` | `.c` | Vía LLVM IR + optimizador |
 | `decompile --devirtualize` | `.c` + JSON opcional | Recuperación experimental de intérpretes x64; requiere `--func`; [contrato y ejemplos](interpreter-recovery.md) |
+| `java` | Java / IR de la JVM / bytecode / JSON | [Archivos de clase y JAR multiversión](../jvm-recovery.md) |
+| `python` | `.py` / JSON / componentes nativos | [Recuperación de artefactos de CPython y PyInstaller](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Reconstrucción de código Lua, LuaJIT y Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimental: [Android](android.md), [iOS](ios.md) |
 | `patch` | binario | Reescribir código máquina |
@@ -341,8 +341,7 @@ Repita la opción para otras entradas ambiguas, usando `:arm` cuando corresponda
 | `funcs` | Funciones descubiertas |
 | `disasm` | Desensamblar (`--func` nombre o hex) |
 | `sym-explore` | Exploración acotada de rutas LowIR nativas (`--func`; salida JSON) |
-| `audit` | Defectos del ciclo de vida del heap y lecturas de pila local sin inicializar (JSON) |
-| `hunt` | Desbordamientos de copias peligrosas con testigos simbólicos y pruebas adicionales de reproducción `process-input-v1` cuando existe un plan completo (esquema JSON v1) |
+| `scan` | [Comprueba la vida útil de los objetos, la inicialización, los límites y las cadenas de formato (JSON)](../memory-safety-scan.md) |
 | `hex` | Volcado hex en una dirección |
 | `cfg` / `callgraph` | CFG / grafo de llamadas (JSON; DOT/SVG opcional) |
 | `xrefs` | Referencias cruzadas |

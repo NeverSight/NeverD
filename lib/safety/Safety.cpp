@@ -17,13 +17,13 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <exception>
 #include <new>
 #include <set>
 #include <tuple>
+#include <unordered_map>
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -59,18 +59,9 @@ std::optional<std::string> validateAnalysisInput(const AnalysisInput &In,
   if (std::optional<std::string> Error =
           checkPipelineCoverage(*In.ValidatedPipeline, In.Img, BudgetHit))
     return Error;
-  std::set<va_t> MedEntries;
-  for (const MedFunc &F : *In.MedFuncs)
-    if (!MedEntries.insert(F.Entry).second)
-      return "safety analysis received duplicate MedIR functions";
-  std::set<va_t> LowEntries;
   for (const LowFunc &F : *In.LowFuncs)
     if (!F.hasCompleteLiftCoverage())
       return "safety analysis received incomplete LowIR coverage";
-    else if (!LowEntries.insert(F.Entry).second)
-      return "safety analysis received duplicate LowIR functions";
-  if (MedEntries != LowEntries)
-    return "safety analysis received mismatched MedIR/LowIR inventories";
   return std::nullopt;
 }
 
@@ -131,9 +122,10 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
         return "incomplete safety lift at 0x" + llvm::utohexstr(F.Entry) +
                " (duplicate-block-identity)";
   }
-  std::set<va_t> MedEntries;
+  std::unordered_map<va_t, const MedFunc *> MedByEntry;
+  MedByEntry.reserve(Result.MedFuncs.size());
   for (const MedFunc &F : Result.MedFuncs) {
-    if (!MedEntries.insert(F.Entry).second)
+    if (!MedByEntry.try_emplace(F.Entry, &F).second)
       return "incomplete safety lift inventory";
     std::set<int> BlockIds;
     for (const MedBlock &Block : F.Blocks)
@@ -142,7 +134,9 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
                " (duplicate-block-identity)";
   }
   if (AcceptedEntries.empty() || AcceptedEntries != LowEntries ||
-      AcceptedEntries != MedEntries)
+      AcceptedEntries.size() != MedByEntry.size() ||
+      !std::all_of(AcceptedEntries.begin(), AcceptedEntries.end(),
+                   [&](va_t Entry) { return MedByEntry.contains(Entry); }))
     return "incomplete safety lift inventory";
   // An absorbed chunk must really be lifted inside an accepted function and
   // must not be a function the image itself names.
@@ -236,11 +230,7 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
       }
   }
   for (const LowFunc &Low : Result.LowFuncs) {
-    const auto MedIt = std::find_if(
-        Result.MedFuncs.begin(), Result.MedFuncs.end(),
-        [&](const MedFunc &Med) { return Med.Entry == Low.Entry; });
-    if (MedIt == Result.MedFuncs.end())
-      return "incomplete safety lift inventory";
+    const MedFunc &Med = *MedByEntry.at(Low.Entry);
     using CallIdentity = std::tuple<va_t, int, unsigned, va_t>;
     std::vector<CallIdentity> LowCalls;
     std::vector<CallIdentity> MedCalls;
@@ -259,11 +249,18 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
               (Op.NumInputs == 0 || !Op.Inputs[0].isConst()))
             return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
                    " (incomplete-call-inventory)";
-          const va_t Target = Op.Opcode == NdOp::CALL ? Op.Inputs[0].Offset : 0;
+          va_t Target = 0;
+          if (Op.Opcode == NdOp::CALL) {
+            Target = Op.Inputs[0].Offset;
+            // ELFv2 can branch to a symbol's local entry. MedIR names the
+            // same callee by its global entry after verifying the call ABI.
+            if (Img)
+              Target = Img->ppc64GlobalEntry(Target);
+          }
           LowCalls.emplace_back(Op.Addr, Op.Seq,
                                 static_cast<unsigned>(Op.Opcode), Target);
         }
-    for (const MedBlock &Block : MedIt->Blocks)
+    for (const MedBlock &Block : Med.Blocks)
       for (const MedOp &Op : Block.Ops)
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
           if (Op.OriginSeq < 0)
@@ -296,11 +293,20 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
       if (!Table.MutatedUnsafe && !Table.Targets.empty())
         ResolvedIndirectBranches.insert(Table.InsnAddr);
     for (const LowBlock &Block : F.Blocks)
-      for (const LowOp &Op : Block.Ops)
+      for (const LowOp &Op : Block.Ops) {
         if (Op.Opcode == NdOp::INDIR_BR &&
             ResolvedIndirectBranches.count(Op.Addr) == 0)
           return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
                  " (unresolved-indirect-branch)";
+        // This operation returns a physical address selected by the historical
+        // MIPS MMU. The static scan has no translation state for that access.
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Offset ==
+                static_cast<uint64_t>(Intrinsic::MIPSHistoricalAddressCheck))
+          return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
+                 " (unresolved-memory-translation)";
+      }
   }
   for (const MedFunc &F : Result.MedFuncs)
     for (const MedCallInfo &Call : F.CallInfos) {
@@ -334,8 +340,8 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
           if (Op.Opcode != NdOp::CALL || Op.NumInputs == 0 ||
               !Op.Inputs[0].isConst())
             continue;
-          const va_t Target =
-              normalizeCodeAddress(Op.Inputs[0].Offset, Img->Arch, Img->Mode);
+          const va_t Target = Img->ppc64GlobalEntry(
+              normalizeCodeAddress(Op.Inputs[0].Offset, Img->Arch, Img->Mode));
           const Segment *TargetSegment = Img->getSegmentFor(Target);
           if (!TargetSegment || !TargetSegment->isExecutable() ||
               Img->isImportStubAt(Target) || AcceptedEntries.count(Target) != 0)
@@ -457,13 +463,6 @@ ScanReport neverd::safety::runScan(const AnalysisInput &In,
                                    ScanSelection Selection,
                                    llvm::function_ref<bool(Track)> Canceled) {
   return analyze(In, Cat, Budgets, Selection, Canceled, true);
-}
-
-SafetyReport neverd::safety::runAudit(const AnalysisInput &In,
-                                      const SinkCatalog &Cat,
-                                      const SafetyBudgets &Budgets) {
-  auto Scan = analyze(In, Cat, Budgets, ScanSelection::Audit, nullptr, false);
-  return std::move(Scan.Analyzers.front().Report);
 }
 
 SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
@@ -625,97 +624,4 @@ llvm::json::Object neverd::safety::findingJson(const Finding &F) {
   O["reachability"] = std::move(Reachability);
   O["evidence"] = std::move(Ev);
   return O;
-}
-
-std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
-  using namespace llvm;
-  json::Array Findings;
-  for (const Finding &F : Report.Findings)
-    Findings.push_back(findingJson(F));
-
-  // Verdict tally, so a caller can key an exit code off one number.
-  unsigned Unsafe = 0, Unknown = 0, Safe = 0;
-  unsigned ControlReachable = 0, AttackerReachable = 0;
-  unsigned ReachabilityUnknown = 0, Unreachable = 0;
-  for (const Finding &F : Report.Findings) {
-    switch (F.TheVerdict) {
-    case Verdict::Unsafe:
-      ++Unsafe;
-      break;
-    case Verdict::Unknown:
-      ++Unknown;
-      break;
-    case Verdict::Safe:
-      ++Safe;
-      break;
-    }
-    switch (F.Reachability.Status) {
-    case ReachabilityStatus::Reachable:
-      ++ControlReachable;
-      if (F.Reachability.AttackerControl == ArgFlow::Tainted)
-        ++AttackerReachable;
-      break;
-    case ReachabilityStatus::Unknown:
-      ++ReachabilityUnknown;
-      break;
-    case ReachabilityStatus::Unreachable:
-      ++Unreachable;
-      break;
-    }
-  }
-
-  const Verdict Aggregate = !Report.AnalysisComplete ? Verdict::Unknown
-                            : Unsafe > 0             ? Verdict::Unsafe
-                            : Unknown > 0            ? Verdict::Unknown
-                                                     : Verdict::Safe;
-  Confidence AggregateConfidence = Confidence::High;
-  bool HaveAggregateConfidence = false;
-  for (const Finding &F : Report.Findings) {
-    if (F.TheVerdict != Aggregate)
-      continue;
-    if (!HaveAggregateConfidence) {
-      AggregateConfidence = F.TheConfidence;
-      HaveAggregateConfidence = true;
-      continue;
-    }
-    const auto Current = static_cast<unsigned>(AggregateConfidence);
-    const auto Candidate = static_cast<unsigned>(F.TheConfidence);
-    // One proven unsafe finding establishes the aggregate; SAFE/UNKNOWN must
-    // retain the least-confident contributing result.
-    AggregateConfidence = static_cast<Confidence>(
-        Aggregate == Verdict::Unsafe ? std::min(Current, Candidate)
-                                     : std::max(Current, Candidate));
-  }
-  if (!Report.AnalysisComplete && Aggregate == Verdict::Unknown)
-    AggregateConfidence = Confidence::Low;
-
-  json::Object Root;
-  Root["schema_version"] = 1;
-  Root["ok"] = Report.AnalysisComplete;
-  if (!Report.Error.empty())
-    Root["error"] = Report.Error;
-  Root["track"] = toString(Report.Origin);
-  Root["verdict"] = toString(Aggregate);
-  Root["confidence"] = toString(AggregateConfidence);
-  Root["format"] = Report.Format;
-  Root["arch"] = Report.Arch;
-  Root["scanned"] = Report.Scanned;
-  Root["skipped"] = Report.Skipped;
-  Root["budget_hit"] = Report.BudgetHit;
-  Root["unsafe"] = Unsafe;
-  Root["unknown"] = Unknown;
-  Root["safe"] = Safe;
-  Root["control_reachable"] = ControlReachable;
-  Root["attacker_reachable"] = AttackerReachable;
-  Root["reachability_unknown"] = ReachabilityUnknown;
-  Root["unreachable"] = Unreachable;
-  Root["findings"] = std::move(Findings);
-
-  std::string Buf;
-  raw_string_ostream OS(Buf);
-  if (Pretty)
-    OS << formatv("{0:2}", json::Value(std::move(Root)));
-  else
-    OS << json::Value(std::move(Root));
-  return OS.str();
 }

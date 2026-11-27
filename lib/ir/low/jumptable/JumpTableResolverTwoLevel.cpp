@@ -1914,7 +1914,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     ActiveJumpTableProofRoots = std::move(*CandidateRoots);
     bool Complete = false;
     std::vector<bool> QueryComplete;
-    std::vector<uint64_t> FeasibleMasks;
+    std::vector<JumpTableFeasibleSet> FeasibleMasks;
     const std::vector<va_t> NoCandidateTargets;
     const std::vector<bool> Results = tableValuesMatchAtUses(
         Queries, &Complete, &QueryComplete, Rec.Addr, &NoCandidateTargets,
@@ -1931,8 +1931,8 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
         OrdinaryGuardProven
             ? OrdinaryGuardBound >= limits::kMinJumpTableEntries &&
                   OrdinaryGuardBound <= IdxCap
-            : EntryProofComplete && Results[1] && FeasibleMasks[1] != 0 &&
-                  (IdxCap == 64 || (FeasibleMasks[1] >> IdxCap) == uint64_t{0});
+            : EntryProofComplete && Results[1] && !FeasibleMasks[1].none() &&
+                  FeasibleMasks[1].bitWidth() <= IdxCap;
     const bool EntryProven = EntrySemanticsProven && EntryDomainProven;
 
     // The empty-edge query above proves only the entry value (normally zero).
@@ -2167,7 +2167,11 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
       return SawBoundedReentry;
     };
 
-    uint64_t EntryDomainMask = FeasibleMasks[1];
+    // An exhausted entry proof may return no masks at all; EntryProven is then
+    // false and the closure below never reads this word.
+    uint64_t EntryDomainMask = 0;
+    if (FeasibleMasks.size() == Queries.size())
+      EntryDomainMask = FeasibleMasks[1].lowWord().value_or(0);
     if (OrdinaryGuardProven)
       EntryDomainMask = OrdinaryGuardBound >= 64
                             ? std::numeric_limits<uint64_t>::max()
@@ -2200,7 +2204,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     // that false negative must not replace the stronger shape-local proof.
     bool FinalComplete = false;
     std::vector<bool> FinalQueryComplete;
-    std::vector<uint64_t> FinalFeasibleMasks;
+    std::vector<JumpTableFeasibleSet> FinalFeasibleMasks;
     std::vector<bool> FinalResults;
     if (EntryProven && Closure && *Closure)
       FinalResults = tableValuesMatchAtUses(
@@ -2222,7 +2226,7 @@ bool CFGBuilder::tryTwoLevelIndexTable(const BinaryImage &Img,
     const bool FinalSelectorSemanticsProven =
         !Clamp.DirectSelect ||
         (FinalSelectorSemanticsComplete && FinalResults[0] && FinalResults[1] &&
-         FinalFeasibleMasks[1] != 0);
+         !FinalFeasibleMasks[1].none());
     const bool FinalSemanticsProven =
         FinalConstantSemanticsProven && FinalSelectorSemanticsProven;
     GuardProven = EntryProven && Closure && *Closure && FinalSemanticsProven;

@@ -1620,6 +1620,18 @@ dispatches whose index takes the compared lane after the guard
 `cmpl $5, %r11d; ja`): both read their six slots, while twins that change
 the lane between the guard and the index (`incb %sil`, `incl %r11d`) stay
 unresolved.
+`JTE_X86_64.AReloadOfTheComparedByteIsTheIndex` reloads a byte compared in
+memory as the index (`cmpb $5, 2(%rdi); ja; movzbl 2(%rdi), %eax`) and reads
+its six slots under the same limit. With the full allowance, a store or an
+address-register write between the loads, another displacement or width, a
+sign-extending reload of a byte the guard admits up to 0x81, a call or a
+change after the reload, a second way into the reload block and a reload
+block whose address is data keep their dispatches unproved. Deleting the
+memory-write, register-write, displacement, width, zero-extension or
+later-write check lets its twin publish a table. The call and second-path
+twins are refused before the guard is read as well: the dispatch after the
+call lifts as an indirect tail call, and the second path leaves the guard
+controlling nothing.
 `JTE_X86_64.LoopCarriedTokenDispatchFitsASmallCandidateAccount` builds a
 lexer loop whose 64 arms each recompute a token dispatched through
 `lea -0x107(%r13), %eax; cmp $63, %eax; ja` and checks its 64 slots under a
@@ -4840,6 +4852,19 @@ and group log 6 generate 917,516 factors. Use `--counted` for their exact
 multiplicities and `--reference` for the interpolated polynomial. The
 611-factor native fixture exercises blocks of 32 with three remaining copies
 in both source views.
+
+Group logs 7 and 8 use twelve overlapping word expressions with both signed
+and unsigned slices. Some rows have four differently weighted fields and
+several incomplete blocks survive. To reproduce a constrained run, generate
+width 65,536, case 7, group log 8 and pass it to `neverd simplify` with
+`--width=65536 --max-work=65536`. With the same case and group log, width
+14,680,111 generates 1,572,880 factors across 317 distinct rows. Use
+`--exhaustive` to simplify it or generate its compact form with `--counted`.
+
+`SymMBAResiduePowers.SparseFieldRunsStayFactoredWithinBudget` exercises 65
+overlapping signed and unsigned coordinates with short repeated powers. Its
+65,536-work run compares the result with direct evaluation, including an even
+singleton beside the repeated odd factors.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
@@ -12867,6 +12892,24 @@ refusal cases on incoming frame bytes whose writer is outside the function.
 `GeneratedSourceExecutesJoinedEqualityAndRange` runs the register and frame
 variants through HighC and optimized/unoptimized LLVMC, compiling the generated
 x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.
+`JumpTableJoinedGuard.WideJoinedDomainsKeepEveryCase` uses bash's shape: a zero
+byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97 and 128
+cross the one-word mask and reach the joined ceiling, and each keeps every
+slot. `WideJoinedDomainsRefuseAHoleOrTheNextSize` refuses 129 cases, whose
+literal is past the ceiling, and an equality path that reads one slot past
+the table. `AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed
+envelope to 128 with an unrelated compare and still proves the three slots.
+`GeneratedSourceExecutesAWideJoinedDomain` compiles and runs the 97-case
+function from all three C routes at O0/O2.
+`X86_64ColdFragment.TheLoaderBindsAFramelessTrapPart` loads GCC 15.2's output
+for the shape of Lua's reallymarkobject, linked with and without symbols. Its
+isolated trap part begins with the entry rule and is bound in both copies.
+`AFramelessTrapPartIsACaseOfItsSwitch` decompiles the stripped copy: the
+dispatch is a switch whose isolated path traps, not a call through the table,
+and the part has no definition of its own.
+`EntryLikePartsSomethingNamesStayFunctions` binds a control part and keeps as
+functions a part that is also called, one that returns and one a relocated
+pointer names; the control part's own symbol keeps it a function too.
 `JumpTableFiniteSelector.ExactSingletonReplayPreservesAProvedSibling`
 uses i386 and x64 consumers sharing one relocated table. The exact singleton
 keeps its finite replay without poisoning the independently bounded sibling's

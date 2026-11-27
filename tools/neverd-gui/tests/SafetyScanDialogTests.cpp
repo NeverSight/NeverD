@@ -56,6 +56,7 @@ private slots:
     dialog.show();
     auto *analyzers = dialog.findChild<QComboBox *>();
     QCOMPARE(analyzers->currentData().toString(), "both");
+    QCOMPARE(analyzers->currentText(), "All checks");
     auto *run = dialog.findChild<QPushButton *>("runSafetyScan");
     auto *cancel = dialog.findChild<QPushButton *>("cancelSafetyScan");
     QVERIFY(run && cancel);
@@ -95,13 +96,13 @@ private slots:
     auto *table = dialog.findChild<QTreeWidget *>();
     QCOMPARE(table->topLevelItemCount(), 1);
     QCOMPARE(table->topLevelItem(0)->text(1), "uninitialized_read");
-    QCOMPARE(table->topLevelItem(0)->text(4), "audit");
+    QCOMPARE(table->topLevelItem(0)->text(4), "Lifetime and initialization");
     const auto details = dialog.findChild<QPlainTextEdit *>()->toPlainText();
     QCOMPARE(QJsonDocument::fromJson(details.toUtf8()).object(), group);
     const auto labels = dialog.findChildren<QLabel *>();
     QVERIFY(std::any_of(labels.begin(), labels.end(), [](auto *label) {
-      return label->text().contains("audit: completed") &&
-             label->text().contains("hunt: canceled");
+      return label->text().contains("Lifetime and initialization: completed") &&
+             label->text().contains("Bounds and format strings: canceled");
     }));
     analyzers->setCurrentIndex(analyzers->findData("hunt"));
     run->click();
@@ -167,8 +168,8 @@ private slots:
           groups[i].toObject());
     }
     const auto status = dialog.findChild<QLabel *>("safetyScanStatus")->text();
-    QVERIFY(status.contains("audit: completed"));
-    QVERIFY(status.contains("hunt: completed"));
+    QVERIFY(status.contains("Lifetime and initialization: completed"));
+    QVERIFY(status.contains("Bounds and format strings: completed"));
 #else
     QSKIP("Requires the native CLI and worker");
 #endif

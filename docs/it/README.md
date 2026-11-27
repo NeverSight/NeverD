@@ -1,6 +1,6 @@
 **Lingue**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← Progetto NeverD](project.md)
 
@@ -40,12 +40,14 @@ Le guide inglesi sono direttamente in `docs/`. Le traduzioni sono raggruppate in
 | [Ambienti di processo macOS/iOS](darwin-emulation.md) | Avvio Mach-O, piattaforme dispositivo e simulatore, servizi Darwin e regole delle pagine |
 | [macOS HVF](macos-hvf.md) | Esecuzione hardware con la ISA dell’host, autorizzazioni di firma, packaging e verifica |
 | [Emulazione dei driver Windows](driver-emulation.md) | Ciclo WDM/KMDF x64 limitato, richieste, scenari hardware, SEH, sottoinsiemi PnP, selezione backend e limiti |
-| [Audit e hunt di sicurezza della memoria](memory-safety.md) | Analisi di vita dell’heap e overflow di copia: contratto di identità per formato, catalogo sink/source, verdetti, budget e schema JSON |
+| [Analisi della sicurezza della memoria](memory-safety.md) | Analisi di vita dell’heap e overflow di copia: contratto di identità per formato, catalogo sink/source, verdetti, budget e schema JSON |
 | [SDK per plugin di processo (inglese)](../process-plugin-sdk.md) | Helper Python autonomo, protocollo ed esempi indipendenti |
 | [Livello Tools (inglese)](../tools-layer.md) | Chiamate esatte, passi congelati del consumatore e registri operativi |
 | [Plugin di processo GUI (inglese)](../gui-plugins.md) | Gestore, posizione nei menu, risultati e protocollo dei fornitori |
 | [Host NPH per plugin di processo (inglese)](../plugin-host.md) | Proprietari condivisi, ammissione attività, protocollo e durata dei processi |
 | [Plugin nativi](plugins.md) | ABI del descrittore C puro, callback ed eventi, flusso di build/link, rilevamento e regole di compatibilità |
+| [Recupero degli artefatti Java](../jvm-recovery.md) | Versioni dei file di classe, selezione nei JAR, IR tipizzata e ricostruzione dei metodi Java |
+| [Recupero degli artefatti Python](../python-recovery.md) | Versioni di CPython, componenti PyInstaller, analisi nativa e convalida del sorgente |
 | [Plugin Python](python-plugins.md) | Sviluppo, API di sessione ed eventi, isolamento, test e pubblicazione |
 | [Panoramica mobile](mobile.md) | CLI sperimentale Android/iOS, input, output, report e limiti |
 | [Ricostruzione Java per Android](android.md) | APK (incluso multidex), DEX, file/directory smali → Java; CLI, report JSON, risoluzione dei problemi, limiti e verifica |

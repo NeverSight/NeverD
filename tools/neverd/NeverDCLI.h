@@ -221,7 +221,17 @@ extern llvm::cl::SubCommand ItemsCmd;
 extern llvm::cl::SubCommand LuaCmd;
 extern llvm::cl::opt<std::string> LuaProfile;
 extern llvm::cl::opt<unsigned> LuaPrototype;
-int runLua();
+extern llvm::cl::SubCommand JavaCmd;
+extern llvm::cl::opt<unsigned> JavaRelease;
+extern llvm::cl::opt<int> JavaComponent;
+extern llvm::cl::opt<bool> JavaPreview, JavaInventory;
+extern llvm::cl::opt<std::string> JavaClass, JavaMethod, JavaView;
+extern llvm::cl::list<std::string> JavaDependencies;
+int runJavaRecovery();
+extern llvm::cl::SubCommand PythonCmd;
+extern llvm::cl::opt<std::string> PythonProfile;
+extern llvm::cl::opt<unsigned> PythonFunction, PythonComponent, PythonNative;
+int runScriptRecovery();
 extern llvm::cl::SubCommand IdentifyCmd;
 extern llvm::cl::SubCommand OperandsCmd;
 extern llvm::cl::SubCommand SearchCmd;
@@ -255,8 +265,6 @@ extern llvm::cl::SubCommand X87CapabilitiesCmd;
 extern llvm::cl::SubCommand EmulateProcessCmd;
 extern llvm::cl::SubCommand UnpackCmd;
 extern llvm::cl::SubCommand ScanCmd;
-extern llvm::cl::SubCommand AuditCmd;
-extern llvm::cl::SubCommand HuntCmd;
 extern llvm::cl::SubCommand ConcolicCmd;
 extern llvm::cl::SubCommand MobileCmd;
 extern llvm::cl::SubCommand WebCmd;
@@ -456,7 +464,7 @@ extern llvm::cl::opt<unsigned> SymbolicMaxSteps;
 extern llvm::cl::opt<unsigned> SymbolicMaxBlockVisits;
 extern llvm::cl::opt<bool> SymbolicExpressions;
 
-// Safety (audit / hunt).
+// Memory-safety scan.
 extern llvm::cl::opt<std::string> SafetySinks;
 extern llvm::cl::opt<std::string> SafetySources;
 extern llvm::cl::opt<neverd_scan_analyzers> ScanAnalyzers;
@@ -777,9 +785,7 @@ int runPaths(neverd_session_t Sess);
 int runCallTree(neverd_session_t Sess);
 int runSymbolicExplore(neverd_session_t Sess);
 
-// NeverDCmdSafety.cpp — memory-safety audit and hunt over the lifted IR.
-int runAudit(neverd_session_t Sess);
-int runHunt(neverd_session_t Sess);
+// NeverDCmdSafety.cpp — native memory-safety scan.
 int runScan(neverd_session_t Sess);
 
 // NeverDCmdConcolic.cpp — dedicated versioned JSON command.  It owns its

@@ -9,6 +9,7 @@
 #include "../../core/RAMTransaction.h"
 #include "AArch64InstructionEffects.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -146,10 +147,10 @@ llvm::Error CheckedAArch64Backend::execute(const cs_insn &I) {
     return Atomic.takeError();
   if (*Atomic)
     return llvm::Error::success();
-  auto Effects = getAArch64InstructionEffects(I, CPU);
-  if (!Effects)
-    return Effects.takeError();
-  const auto &Accesses = *Effects;
+  // Scalar and pair instructions fit inline. Structure transfers may grow.
+  llvm::SmallVector<AArch64MemoryAccess, 2> Accesses;
+  if (auto E = getAArch64InstructionEffects(I, CPU, Accesses))
+    return E;
   // Validate the entire instruction before any native access or pair write.
   for (const auto &M : Accesses) {
     // Ordinary device loads/stores and cache maintenance need their own
@@ -195,13 +196,14 @@ llvm::Error CheckedAArch64Backend::execute(const cs_insn &I) {
   }
   if (auto E = buildAArch64PageTables(*this->Memory, UserMode))
     return E;
-  std::vector<RAMWriteRange> Writes;
-  std::vector<RAMWriteRange> Inputs{{I.address, I.size}};
-  for (const auto &M : Accesses)
+  llvm::SmallVector<RAMWriteRange, 2> Writes;
+  llvm::SmallVector<RAMWriteRange, 3> Inputs{{I.address, I.size}};
+  Inputs.reserve(1 + Accesses.size());
+  for (const auto &M : Accesses) {
     if (M.Permission == Write)
       Writes.push_back({M.Address, M.Size});
-  for (const auto &M : Accesses)
     Inputs.push_back({M.Address, M.Size});
+  }
   auto Transaction = RAMTransaction::create(
       *this->Memory, Writes, execution_limits::InstructionRAMWriteBytes,
       executionPermissions(Write));

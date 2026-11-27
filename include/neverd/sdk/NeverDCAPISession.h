@@ -80,13 +80,34 @@ NEVERD_API int neverd_session_load_cancellable(neverd_session_t Sess,
 NEVERD_API const char *neverd_identify_json(const char *Path);
 
 /// Recover a standalone Lua artifact offline. Profile is auto (NULL), puc,
-/// luajit, or luau-0.659. The optional stop probe is synchronous. The owned
-/// language-recovery-v1 report includes failures, source and byte mappings.
-/// Free it with neverd_free_string(). NULL means the report could not be built.
+/// luajit, luajit-1.0, luajit-1.1, luau-upstream, or luau-0.659. The optional
+/// stop probe is synchronous. The owned language-recovery-v1 report includes
+/// failures, source and byte mappings. Free it with neverd_free_string(). NULL
+/// means the report could not be built.
 NEVERD_API const char *neverd_lua_recover_json_v1(const char *Path,
                                                   const char *Profile,
                                                   neverd_cancel_probe_fn Stop,
                                                   void *Context);
+/// Recover immutable Python evidence. Component -1 selects entry scripts.
+/// Inspect a JVM class, source file or JAR. Options is an optional UTF-8 JSON
+/// object with release, preview, inventory, class, method, component and
+/// ordered local dependencies. Free the report with neverd_free_string.
+NEVERD_API const char *neverd_jvm_recover_json_v1(const char *Path,
+                                                  const char *Options,
+                                                  neverd_cancel_probe_fn Stop,
+                                                  void *Context);
+
+/// Return a language-recovery-v1 report; release it with neverd_free_string.
+NEVERD_API const char *
+neverd_python_recover_json_v1(const char *Path, const char *Profile,
+                              int Component, neverd_cancel_probe_fn Stop,
+                              void *Context);
+/// Revalidate a selected native component against its reported SHA-256 and
+/// write its original bytes to a new file for the native loader.
+NEVERD_API const char *neverd_python_export_native_json_v1(
+    const char *Path, const char *Profile, unsigned Component,
+    const char *ExpectedSHA256, const char *Destination,
+    neverd_cancel_probe_fn Stop, void *Context);
 /// List an arm64e shared cache's validated image catalogue, including its
 /// subcache files: {"images":[{"path","address"}]}, or {"images":[],"error"}.
 /// Paths are exact install names for load-options JSON's cache_image key.

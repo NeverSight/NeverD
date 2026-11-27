@@ -18,6 +18,7 @@
 #include <bit>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -82,7 +83,8 @@ struct Constant {
     Import,
     Closure,
     Vector,
-    CData
+    CData,
+    ClassShape
   } Type;
   int64_t I = 0;
   double F = 0;
@@ -98,16 +100,35 @@ struct Local {
   unsigned Start, End;
   int Reg = -1;
 };
+struct StackInstruction {
+  llvm::StringRef Name, Operation;
+  unsigned PC, Width;
+  int64_t Operand;
+  unsigned Extra = 0;
+};
+struct StackCode {
+  std::vector<StackInstruction> Instructions;
+  std::vector<std::pair<unsigned, llvm::StringRef>> LocalEvents;
+  unsigned FirstNumber = 0;
+  bool HasFrame = true, HasParameters = true;
+};
 struct Proto {
+  std::unique_ptr<StackCode> Legacy;
   unsigned Id, Params = 0, Stack = 0, Flags = 0;
   bool Vararg = false, Complete = false;
   size_t Start = 0, End = 0, CodeAt = 0;
+  unsigned WordBytes = 4;
+  size_t codeOffset(unsigned PC) const {
+    return CodeAt + size_t(PC) * WordBytes;
+  }
   unsigned FirstLine = 0, LastLine = 0;
   llvm::StringRef Name, SourceName;
   std::vector<uint32_t> Code, Lines;
   std::vector<Constant> K, GC;
   std::vector<unsigned> Children;
   llvm::json::Object Types;
+  std::optional<unsigned> FeedbackSlots;
+  std::optional<uint64_t> InlineCost;
   std::vector<Local> Locals;
   std::vector<Upvalue> Up;
 };
@@ -124,11 +145,12 @@ struct Chunk {
   void code(Proto &P, Reader &R, uint64_t Words);
 };
 
-void readPuc(Chunk &C, Reader &R);
+void readPuc(Chunk &C, Reader &R, llvm::StringRef Profile);
+void readStackChunk(Chunk &C, Reader &R);
 void readJit(Chunk &C, Reader &R);
-void readLuau(Chunk &C, Reader &R);
+void readLuau(Chunk &C, Reader &R, bool Pinned);
 void render(Chunk &C, llvm::json::Object &Result);
-std::string quote(llvm::StringRef S);
+std::string quote(llvm::StringRef S, bool DecimalEscapes = true);
 std::string number(double F, bool FloatSubtype);
 std::string integer(int64_t I);
 } // namespace neverd::lua

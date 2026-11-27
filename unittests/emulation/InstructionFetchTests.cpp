@@ -83,7 +83,8 @@ protected:
     return llvm::cantFail(CPU->readRegister(R))[0];
   }
   uint64_t nopSize() const { return X64 ? sizeof(NopX64) : sizeof(NopARM); }
-  ExecutionExit run(uint64_t Begin, uint64_t End, BackendHooks Hooks = {}) {
+  ExecutionExit run(uint64_t Begin, uint64_t End, BackendHooks Hooks = {},
+                    uint64_t TimeoutMicroseconds = Timeout) {
     auto Observer = std::move(Hooks.Instruction);
     Hooks.Instruction = [&, End, Observer = std::move(Observer)](uint64_t PC,
                                                                  uint32_t N) {
@@ -93,7 +94,7 @@ protected:
         CPU->stop();
     };
     llvm::cantFail(CPU->installHooks(std::move(Hooks)));
-    return llvm::cantFail(CPU->runUntilExit(Begin, Timeout));
+    return llvm::cantFail(CPU->runUntilExit(Begin, TimeoutMicroseconds));
   }
   ExecutionExit program(llvm::ArrayRef<uint8_t> B, BackendHooks Hooks = {}) {
     llvm::cantFail(CPU->write(Code, B));
@@ -139,7 +140,8 @@ TEST_P(InstructionFetch, RepeatedOperandsSurviveCodeWorkingSetEviction) {
   for (unsigned Round = 0; Round != 4; ++Round) {
     if (Round == 2) {
       const auto Exit =
-          run(Code + PageSize, Code + PageSize + WorkingSet.size() - nopSize());
+          run(Code + PageSize, Code + PageSize + WorkingSet.size() - nopSize(),
+              {}, LongRunTimeout);
       ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
     }
     unsigned Seen = 0, Reads = 0, Writes = 0;
@@ -415,7 +417,8 @@ TEST_P(InstructionFetch, RepeatedStepsRetainExactLoopAndStopState) {
       CPU->stop();
     }
   };
-  const auto Exit = run(Code, Code + Program.size(), std::move(Hooks));
+  const auto Exit =
+      run(Code, Code + Program.size(), std::move(Hooks), LongRunTimeout);
   ASSERT_EQ(Exit.Kind, ExecutionExitKind::Stopped) << Exit.Diagnostic;
   EXPECT_EQ(value(Result), LoopIterations);
   EXPECT_EQ(value(PCRegister), Code);

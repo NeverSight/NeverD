@@ -175,9 +175,13 @@ class SimplifySurfaceAgreementTests(unittest.TestCase):
         tool = self.binaries / ("neverd.exe" if sys.platform == "win32" else "neverd")
         with tempfile.TemporaryDirectory() as directory:
             corpus = Path(directory) / "products.txt"
-            cases = ((16, 0, 2), (32, 5, 4), (65536, 1, 3), (65536, 1, 5))
-            for width, case, depth in cases:
-                with self.subTest(width=width, case=case, depth=depth):
+            cases = (
+                (16, 0, 2, 65536), (32, 5, 4, 65536), (65, 7, 3, 2432),
+                (65536, 1, 3, 65536), (65536, 1, 5, 65536),
+                (65536, 3, 7, 65536), (65536, 7, 8, 65536),
+            )
+            for width, case, depth, budget in cases:
+                with self.subTest(width=width, case=case, depth=depth, budget=budget):
                     expressions = [
                         product(width, case, group_log=depth, reference=reference)
                         for reference in (False, True)
@@ -188,12 +192,13 @@ class SimplifySurfaceAgreementTests(unittest.TestCase):
                     normal = subprocess.run(args, capture_output=True, text=True, check=True)
                     default, reference = json.loads(normal.stdout)
                     corpus.write_text(expressions[0] + "\n", encoding="utf-8")
-                    limited = subprocess.run(args + ["--max-work=65536"],
+                    limited = subprocess.run(args + [f"--max-work={budget}"],
                                              capture_output=True, text=True, check=True)
                     constrained = json.loads(limited.stdout)[0]
                     for reduced in (default, constrained):
                         self.assertTrue(reduced["changed"])
                         self.assertLessEqual(reduced["costAfter"], reference["costAfter"])
+                    self.assertLessEqual(constrained["costAfter"], default["costAfter"])
                     self.assertLess(constrained["work"], 65536)
 
     def test_the_corpus_still_exercises_the_optimiser(self) -> None:

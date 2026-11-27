@@ -4,8 +4,8 @@
 
 | ELF machine | Class and byte order | ABI used for integer arguments and returns | Encoding |
 | --- | --- | --- | --- |
-| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs |
-| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs |
+| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs, Zicond |
+| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs, Zicond |
 | PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset |
 | PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar and POWER10 prefixed fixed-point forms |
 
@@ -34,6 +34,12 @@ extension, `orc.b` and `rev8`. RV64 word rotates sign-extend bit 31. Word
 counts examine the low 32 bits, and counting the leading or trailing zeros
 of a zero word yields 32. The ELF ISA attribute selects each extension.
 [RISC-V Bit Manipulation specification](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
+
+Zicond 1.0 adds `czero.eqz` and `czero.nez`. They compare the whole second
+source register with zero. When the named condition holds, the result is
+zero. Otherwise the result is the first source register. Linked ELF inputs
+need the `zicond1p0` ISA attribute, and rebuilt LLVM functions retain
+`+zicond`. [RISC-V Zicond specification](https://docs.riscv.org/reference/isa/unpriv/zicond.html).
 
 Linked RV32 and RV64 executables and shared libraries support the default
 psABI PLT. The loader reads `R_RISCV_JUMP_SLOT` from the program's dynamic
@@ -132,6 +138,11 @@ the counter update and materializes the PC without introducing a callee.
 For a conditional CTR jump, LowIR retains the register target and the
 fallthrough. Source and LLVM projections require a proven set of local taken
 targets, including cases where the fallthrough is also a taken target.
+An `isel` can choose between local label addresses before `mtctr`. Both
+addresses are checked after alignment, independently of the condition on
+`bcctr`. An unknown selectable address leaves the target set unresolved.
+The native CFG marks each taken CTR edge as true and the fallthrough as false.
+When both reach one block, JSON and DOT show both edges.
 An untyped register callback forwards the integer argument registers on the
 taken edge. ELFv1 descriptor and ELFv2 global-entry checks apply there.
 [Power ISA, Book I, Branch Processor](https://openpowerfoundation.org/specifications/isa/).
@@ -341,6 +352,8 @@ C projections use the `-fno-strict-aliasing` flag specified in their prelude.
 
 The conditional-transfer fixture checks original machine execution and
 relocated HighC, LLVM C and LLVM IR rebuilds at both optimization levels.
+It varies the `isel` choice independently of the branch condition and checks
+the diagnostic when one of the selectable addresses comes from a parameter.
 Use GNU PowerPC64 ld with `--ppc64-abi elfv1 --profiles powerpc64 powerpc64le`
 to exercise descriptors in both byte orders.
 
@@ -350,8 +363,10 @@ python3 unittests/lift/elf-integer/conditional_branches.py \
 ```
 
 The extended scalar fixture runs linked RV32, RV64 and both byte orders of
-POWER10 PPC64 under Linux QEMU user mode. A separately compiled scalar
-oracle checks return values and each byte of the PPC64 stores. It runs again
+POWER10 PPC64 under Linux QEMU user mode. For Zicond, the RV32 and RV64
+fixtures combine both instructions in a branchless select. A caller compiled
+for the base ISA checks zero, nonzero and high-bit-only conditions. The PPC64
+oracle checks return values and each byte of the stores. It runs again
 after recompiling HighC, LLVM-derived C and LLVM IR at `-O0` and `-O2`, with
 the original code and data addresses outside the rebuilt mappings.
 

@@ -2118,6 +2118,63 @@ alias_done:
   std::set<va_t> IndexPredecessors;
   va_t IndexGuardBlock = InvalidVA;
   va_t IndexGuardBranch = InvalidVA;
+  // Every block whose terminator enters the index block, and the conditional
+  // branch whose fallthrough does. Scanned once per candidate; a terminator
+  // whose entry cannot be decided, or an exhausted account, declines.
+  auto scanIndexPredecessors = [&](va_t IndexBlock) -> bool {
+    if (IndexPredecessorsScanned)
+      return true;
+    bool Reject = false;
+    const InsnRecord *Pending = nullptr;
+    va_t PendingBlock = 0;
+    auto considerTerminator = [&](const InsnRecord &Term, va_t Block) {
+      if (Reject)
+        return;
+      const auto Entry = entersBlock(Term, IndexBlock);
+      if (!Entry) {
+        Reject = true;
+        return;
+      }
+      if (!Entry->Falls && !Entry->Named)
+        return;
+      IndexPredecessors.insert(Block);
+      if (Entry->Falls && !Entry->Named && Term.IsCond && Term.IsBranch &&
+          !Term.IsCall && !Term.IsIndirect && !Term.IsRet) {
+        IndexGuardBlock = Block;
+        IndexGuardBranch = Term.Addr;
+      }
+    };
+    for (const auto &[Addr, Insn] : Insns) {
+      if (!consumeCandidateEvidence())
+        return false;
+      const auto Block = blockContaining(Addr);
+      if (!Block) {
+        Reject = true;
+        break;
+      }
+      if (Pending && *Block != PendingBlock)
+        considerTerminator(*Pending, PendingBlock);
+      Pending = &Insn;
+      PendingBlock = *Block;
+    }
+    if (Pending)
+      considerTerminator(*Pending, PendingBlock);
+    if (Reject)
+      return false;
+    IndexPredecessorsScanned = true;
+    return true;
+  };
+  // One overlap primitive for guest registers: the same lane, or one a
+  // sub-register of the other.
+  auto regOverlaps = [&](const NdVar &A, const NdVar &B) {
+    if (!A.isReg() || !B.isReg() || A.Size == 0 || B.Size == 0)
+      return false;
+    if (A.Offset == B.Offset)
+      return true;
+    const TargetRegInfo &TRI = getTargetRegInfo(CurrentImg->Arch);
+    return TRI.isSubRegOf(A.Offset, A.Size, B.Offset, B.Size) ||
+           TRI.isSubRegOf(B.Offset, B.Size, A.Offset, A.Size);
+  };
   auto structuralRegisterIndex = [&](const NdVar &Compared, va_t CompareAddr,
                                      int CompareSeq,
                                      va_t GuardBranchAddr) -> bool {
@@ -2203,46 +2260,8 @@ alias_done:
       return true;
     }
 
-    if (!IndexPredecessorsScanned) {
-      bool Reject = false;
-      const InsnRecord *Pending = nullptr;
-      va_t PendingBlock = 0;
-      auto considerTerminator = [&](const InsnRecord &Term, va_t Block) {
-        if (Reject)
-          return;
-        const auto Entry = entersBlock(Term, *IndexBlock);
-        if (!Entry) {
-          Reject = true;
-          return;
-        }
-        if (!Entry->Falls && !Entry->Named)
-          return;
-        IndexPredecessors.insert(Block);
-        if (Entry->Falls && !Entry->Named && Term.IsCond && Term.IsBranch &&
-            !Term.IsCall && !Term.IsIndirect && !Term.IsRet) {
-          IndexGuardBlock = Block;
-          IndexGuardBranch = Term.Addr;
-        }
-      };
-      for (const auto &[Addr, Insn] : Insns) {
-        if (!consumeCandidateEvidence())
-          return false;
-        const auto Block = blockOf(Addr);
-        if (!Block) {
-          Reject = true;
-          break;
-        }
-        if (Pending && *Block != PendingBlock)
-          considerTerminator(*Pending, PendingBlock);
-        Pending = &Insn;
-        PendingBlock = *Block;
-      }
-      if (Pending)
-        considerTerminator(*Pending, PendingBlock);
-      if (Reject)
-        return false;
-      IndexPredecessorsScanned = true;
-    }
+    if (!scanIndexPredecessors(*IndexBlock))
+      return false;
     if (IndexPredecessors.size() != 1 ||
         *IndexPredecessors.begin() != *CompareBlock ||
         IndexGuardBlock != *CompareBlock ||
@@ -2361,14 +2380,6 @@ alias_done:
       return Op.Output.isReg() && Op.Output.Space == Compared.Space &&
              Op.Output.Offset == Compared.Offset &&
              Op.Output.Size == Compared.Size;
-    };
-    auto regOverlaps = [&](const NdVar &A, const NdVar &B) {
-      if (!A.isReg() || !B.isReg() || A.Size == 0 || B.Size == 0)
-        return false;
-      if (A.Offset == B.Offset)
-        return true;
-      return TRI.isSubRegOf(A.Offset, A.Size, B.Offset, B.Size) ||
-             TRI.isSubRegOf(B.Offset, B.Size, A.Offset, A.Size);
     };
     // `and wLane, wSrc, #0xff` then `and xIndex, xSrc, #0xff` recompute the
     // compared lane. The lifter zero-extends the W write before the compare,
@@ -3093,6 +3104,151 @@ alias_done:
     return SawWideIdentity;
   };
 
+  // A compared memory operand is the index when the index reloads it: a load
+  // of the same width through the same register and displacement,
+  // zero-extended into the index, in the block only the guard's fallthrough
+  // enters. Nothing between the two loads may write memory or that register,
+  // and no call may run before the index is used. Both loads then read one
+  // value, as the value resolver's reload identity holds, and the compare
+  // bounds the index without asking the whole guard session.
+  auto structuralMemoryIndex = [&](const std::vector<LowOp> &GuardOps,
+                                   int LoadAt, va_t GuardBranchAddr) -> bool {
+    const NdVar &Index = Info.IndexValueAtUse;
+    const LowOp &CompareLoad = GuardOps[LoadAt];
+    if (!CurrentImg || !Index.isReg() || CompareLoad.Opcode != NdOp::LOAD ||
+        CompareLoad.MemoryOrdering != NdMemoryOrdering::None ||
+        CompareLoad.Output.Size == 0 || CompareLoad.Output.Size > Index.Size ||
+        Info.IndexUseAddr == InvalidVA || Info.IndexUseSeq < 0 ||
+        GuardBranchAddr == InvalidVA || CompareLoad.Addr > GuardBranchAddr)
+      return false;
+    const auto CompareInsn = Insns.find(CompareLoad.Addr);
+    if (CompareInsn == Insns.end() || CompareInsn->second.IsInstructionGuard)
+      return false;
+    const auto CompareBlock = blockContaining(CompareLoad.Addr);
+    const auto GuardBlock = blockContaining(GuardBranchAddr);
+    const auto IndexBlock = blockContaining(Info.IndexUseAddr);
+    if (!CompareBlock || !GuardBlock || !IndexBlock ||
+        *GuardBlock != *CompareBlock || *IndexBlock == *CompareBlock)
+      return false;
+    if (!scanIndexPredecessors(*IndexBlock))
+      return false;
+    if (IndexPredecessors.size() != 1 ||
+        *IndexPredecessors.begin() != *CompareBlock ||
+        IndexGuardBlock != *CompareBlock || IndexGuardBranch != GuardBranchAddr)
+      return false;
+    auto consume = [&] { return consumeCandidateEvidence(); };
+    const unsigned PointerSize = CurrentImg->getPointerSize();
+    const auto CompareCarrier = detail::loadAddressCarrier(
+        GuardOps, LoadAt, CompareLoad.Addr,
+        detail::loadAddressOperand(CompareLoad), PointerSize, consume);
+    if (!CompareCarrier)
+      return false;
+    // The index block before the index use. A call there may change the
+    // index, the memory or the address register.
+    std::vector<LowOp> IndexOps;
+    for (auto It = Insns.lower_bound(*IndexBlock);
+         It != Insns.end() && It->first <= Info.IndexUseAddr; ++It) {
+      if (!consumeCandidateEvidence())
+        return false;
+      const auto Here = blockContaining(It->first);
+      if (!Here || *Here != *IndexBlock)
+        break;
+      if (It->second.IsInstructionGuard ||
+          (It->second.IsCall && It->first < Info.IndexUseAddr))
+        return false;
+      for (const LowOp &Op : It->second.Ops) {
+        if (!consumeCandidateEvidence())
+          return false;
+        if (Op.Addr == Info.IndexUseAddr && Op.Seq >= Info.IndexUseSeq)
+          break;
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+          return false;
+        IndexOps.push_back(Op);
+      }
+    }
+    // The index's writers back to the reload: zero-extends and same-width
+    // copies only. A temp is followed inside its consumer's instruction.
+    auto overlaps = [&](const NdVar &A, const NdVar &B) {
+      if (A.isReg() || B.isReg())
+        return regOverlaps(A, B);
+      return A.Space == B.Space && A.Size != 0 && B.Size != 0 &&
+             A.Offset < B.Offset + B.Size && B.Offset < A.Offset + A.Size;
+    };
+    NdVar Value = Index;
+    int At = static_cast<int>(IndexOps.size());
+    int ReloadAt = -1;
+    for (int Step = 0; Step < limits::kMaxQuasiCopyDepth && ReloadAt < 0;
+         ++Step) {
+      int Writer = -1;
+      for (int K = At - 1; K >= 0; --K) {
+        if (!consumeCandidateEvidence())
+          return false;
+        if (Value.isTemp() && At < static_cast<int>(IndexOps.size()) &&
+            IndexOps[K].Addr != IndexOps[At].Addr)
+          break;
+        const NdVar &Out = IndexOps[K].Output;
+        if (Out.Space == Value.Space && Out.Offset == Value.Offset &&
+            Out.Size == Value.Size) {
+          Writer = K;
+          break;
+        }
+        if (overlaps(Out, Value))
+          return false;
+      }
+      if (Writer < 0)
+        return false;
+      const LowOp &Op = IndexOps[Writer];
+      if (Op.Opcode == NdOp::LOAD) {
+        ReloadAt = Writer;
+        break;
+      }
+      const bool ZeroExtends = Op.Opcode == NdOp::INT_ZEXT &&
+                               Op.NumInputs == 1 &&
+                               Op.Inputs[0].Size < Op.Output.Size;
+      const bool Copies = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                          Op.Inputs[0].Size == Op.Output.Size;
+      if ((!ZeroExtends && !Copies) ||
+          (!Op.Inputs[0].isReg() && !Op.Inputs[0].isTemp()))
+        return false;
+      Value = Op.Inputs[0];
+      At = Writer;
+    }
+    if (ReloadAt < 0)
+      return false;
+    const LowOp &Reload = IndexOps[ReloadAt];
+    if (Reload.MemoryOrdering != NdMemoryOrdering::None ||
+        Reload.Output.Size != CompareLoad.Output.Size ||
+        Reload.MemoryAddressSpace != CompareLoad.MemoryAddressSpace ||
+        Reload.NumInputs != CompareLoad.NumInputs)
+      return false;
+    const auto ReloadCarrier = detail::loadAddressCarrier(
+        IndexOps, ReloadAt, Reload.Addr, detail::loadAddressOperand(Reload),
+        PointerSize, consume);
+    if (!ReloadCarrier ||
+        ReloadCarrier->first.Space != CompareCarrier->first.Space ||
+        ReloadCarrier->first.Offset != CompareCarrier->first.Offset ||
+        ReloadCarrier->first.Size != CompareCarrier->first.Size ||
+        ReloadCarrier->second != CompareCarrier->second)
+      return false;
+    // From the compare's load through the guard and up to the reload.
+    const NdVar &Carrier = CompareCarrier->first;
+    for (size_t K = static_cast<size_t>(LoadAt) + 1; K < GuardOps.size(); ++K) {
+      if (!consumeCandidateEvidence())
+        return false;
+      if (detail::mayWriteMemory(GuardOps[K]) ||
+          regOverlaps(GuardOps[K].Output, Carrier))
+        return false;
+    }
+    for (int K = 0; K < ReloadAt; ++K) {
+      if (!consumeCandidateEvidence())
+        return false;
+      if (detail::mayWriteMemory(IndexOps[K]) ||
+          regOverlaps(IndexOps[K].Output, Carrier))
+        return false;
+    }
+    return true;
+  };
+
   for (size_t GuardIndex = 0; GuardIndex < GuardBranchAddrs.size();
        ++GuardIndex) {
     if (!consumeCandidateEvidence())
@@ -3460,6 +3616,12 @@ alias_done:
         if (GuardSplit == Source->second.Ops.end() ||
             Def.Seq >= GuardSplit->Seq)
           return Finish(Node);
+      }
+      // A compared memory operand the index reloads is the index too.
+      if (V.isTemp() && Info.IndexValueAtUse.isReg() &&
+          structuralMemoryIndex(Ops, DefIndex, BranchAddr)) {
+        adoptStructuralIndex();
+        return Finish(Node);
       }
       if (!supportedGuardOpcode(Def.Opcode)) {
         // A nearby literal STORE is a proposal, not the value of this LOAD.
@@ -4173,7 +4335,7 @@ alias_done:
           const NdVar &Value = Op.Inputs[I];
           if (isGuardLiteral(Value) && Value.Size != 0 &&
               Value.Size <= sizeof(uint64_t) &&
-              Value.Offset < std::numeric_limits<uint64_t>::digits)
+              Value.Offset < limits::kMaxJumpTableJoinedDomainValues)
             ProposedJoinedBound =
                 std::max(ProposedJoinedBound, Value.Offset + 1);
         }
@@ -4192,7 +4354,7 @@ alias_done:
     Joined.Relation = JumpTableValueRelation::JoinedUnsignedFeasibleSet;
     Joined.UnsignedUpperBound = ProposedJoinedBound;
     std::vector<bool> Complete;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     const auto Results = tableValuesMatchAtUses(
         {Joined}, nullptr, &Complete, InvalidVA, nullptr,
         CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
@@ -4202,9 +4364,9 @@ alias_done:
     // bytes are unused, so its last reaching value bounds that table.
     // The proved mask, not the literal envelope, is the bound.
     if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
-        Masks.size() == 1 && Results[0] && Masks[0] &&
-        ((Masks[0] & (Masks[0] + 1)) == 0 || AllowSparseDomain)) {
-      const uint32_t Bound = std::bit_width(Masks[0]);
+        Masks.size() == 1 && Results[0] && !Masks[0].none() &&
+        (Masks[0].isDensePrefix() || AllowSparseDomain)) {
+      const uint32_t Bound = Masks[0].bitWidth();
       // A prefix bounds this use but does not shrink a relocation-owned
       // object whose remaining slots may serve another dispatch.
       const bool PrefixOfOwnedObject =
@@ -4254,17 +4416,17 @@ alias_done:
       Lookup.UseAddr = Info.IndexUseAddr;
       Lookup.UseSeq = Info.IndexUseSeq;
       Lookup.Relation = JumpTableValueRelation::ReadonlyUnsignedEnvelope;
-      Lookup.UnsignedUpperBound = 64;
+      Lookup.UnsignedUpperBound = limits::kMaxJumpTableFeasibleSetValues;
       std::vector<bool> Complete;
-      std::vector<uint64_t> Masks;
+      std::vector<JumpTableFeasibleSet> Masks;
       const auto Results = tableValuesMatchAtUses(
           {Lookup}, nullptr, &Complete, InvalidVA, nullptr,
           CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
           CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
       if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
-          Masks.size() == 1 && Results[0] && Masks[0] &&
-          (Masks[0] & (Masks[0] + 1)) == 0) {
-        const uint32_t Bound = std::bit_width(Masks[0]);
+          Masks.size() == 1 && Results[0] && !Masks[0].none() &&
+          Masks[0].isDensePrefix()) {
+        const uint32_t Bound = Masks[0].bitWidth();
         if (Bound >= limits::kMinJumpTableEntries) {
           if (Info.MaxEntries == 0 || Bound < Info.MaxEntries)
             Info.MaxEntries = Bound;

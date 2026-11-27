@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <deque>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -135,15 +136,33 @@ struct Request {
   Request(Json Value, std::size_t Bytes)
       : value(std::move(Value)), bytes(Bytes) {}
 };
+auto jvmRecovery() {
+  static auto Recover = engineSymbol<decltype(&neverd_jvm_recover_json_v1)>(
+      "neverd_jvm_recover_json_v1");
+  return Recover;
+}
 auto luaRecovery() {
   static auto Recover = engineSymbol<decltype(&neverd_lua_recover_json_v1)>(
       "neverd_lua_recover_json_v1");
   return Recover;
 }
-Json recoverLua(const Json &input, std::atomic<bool> &cancelled) {
-  auto Recover = luaRecovery();
-  if (!Recover)
-    throw Error("unsupported", "This engine does not provide Lua recovery");
+auto pythonRecovery() {
+  static auto Recover = engineSymbol<decltype(&neverd_python_recover_json_v1)>(
+      "neverd_python_recover_json_v1");
+  return Recover;
+}
+auto pythonNativeExport() {
+  static auto Export =
+      engineSymbol<decltype(&neverd_python_export_native_json_v1)>(
+          "neverd_python_export_native_json_v1");
+  return Export;
+}
+bool scriptOperation(const std::string &Op) {
+  return Op == "jvm_recover" || Op == "lua_recover" || Op == "python_recover" ||
+         Op == "python_export_native";
+}
+Json recoverScript(const std::string &Op, const Json &input,
+                   std::atomic<bool> &cancelled) {
   const auto path = stringField(input, "path");
   const auto profile = stringField(input, "profile", "auto");
   if (path.empty() || path.find(char(0)) != std::string::npos ||
@@ -153,11 +172,53 @@ Json recoverLua(const Json &input, std::atomic<bool> &cancelled) {
   auto stop = [](void *ctx) -> int {
     return static_cast<std::atomic<bool> *>(ctx)->load();
   };
+  const char *raw = nullptr;
+  if (Op == "jvm_recover") {
+    auto Recover = jvmRecovery();
+    if (!Recover)
+      throw Error("unsupported", "This engine does not provide JVM recovery");
+    auto Options = input.value("options", Json::object());
+    if (!Options.is_object())
+      throw Error("invalid_request", "JVM options must be an object");
+    raw = Recover(path.c_str(), Options.dump().c_str(), stop, &cancelled);
+  } else if (Op == "lua_recover") {
+    auto recover = luaRecovery();
+    if (!recover)
+      throw Error("unsupported", "This engine does not provide Lua recovery");
+    raw = recover(path.c_str(), profile.c_str(), stop, &cancelled);
+  } else {
+    int component = -1;
+    if (auto id = input.find("component"); id != input.end()) {
+      if (!id->is_number_integer() || *id < -1 ||
+          *id > std::numeric_limits<int>::max())
+        throw Error("invalid_request", "Invalid Python component ID");
+      component = id->get<int>();
+    }
+    if (Op == "python_export_native") {
+      auto exportNative = pythonNativeExport();
+      if (!exportNative)
+        throw Error("unsupported", "Native component export is unavailable");
+      const auto sha = stringField(input, "sha256"),
+                 dest = stringField(input, "destination");
+      if (component < 0 || sha.size() != 64 || dest.empty() ||
+          dest.find(char(0)) != std::string::npos)
+        throw Error(
+            "invalid_request",
+            "Native export requires a component, hash and new file path");
+      raw = exportNative(path.c_str(), profile.c_str(), component, sha.c_str(),
+                         dest.c_str(), stop, &cancelled);
+    } else {
+      auto recover = pythonRecovery();
+      if (!recover)
+        throw Error("unsupported",
+                    "This engine does not provide Python recovery");
+      raw = recover(path.c_str(), profile.c_str(), component, stop, &cancelled);
+    }
+  }
   std::unique_ptr<const char, decltype(&neverd_free_string)> result(
-      Recover(path.c_str(), profile.c_str(), stop, &cancelled),
-      neverd_free_string);
+      raw, neverd_free_string);
   if (!result)
-    throw Error("engine_error", "Lua recovery returned no report");
+    throw Error("engine_error", "Script recovery returned no report");
   return parseJson(result.get());
 }
 bool isWeb(const Json &request) {
@@ -389,6 +450,12 @@ Json hello() {
       result["capabilities"].push_back(operation);
   if (Engine::keepsOperandFormats())
     result["capabilities"].push_back("operand_format");
+  if (jvmRecovery())
+    result["capabilities"].push_back("jvm_recover");
+  if (pythonRecovery())
+    result["capabilities"].push_back("python_recover");
+  if (pythonNativeExport())
+    result["capabilities"].push_back("python_export_native");
   if (luaRecovery())
     result["capabilities"].push_back("lua_recover");
   if (Engine::identifiesFiles())
@@ -629,12 +696,13 @@ void executeLoop(State &state, Transport &transport) {
           then = std::move(*follow);
           input.erase("then");
         }
-        if (op == "lua_recover")
+        if (scriptOperation(op))
           transport.send(response(value, revision(), project(), "progress",
                                   {{"phase", "reading"}}));
         auto reply =
-            op == "lua_recover"
-                ? Engine::Reply{recoverLua(input, request->cancelled), {}}
+            scriptOperation(op)
+                ? Engine::Reply{recoverScript(op, input, request->cancelled),
+                                {}}
             : webRequest ? Engine::Reply{web.execute(op, input), {}}
                          : engine.executeResponse(op, input);
         encodedPayload = std::move(reply.encoded);
@@ -682,7 +750,7 @@ void executeLoop(State &state, Transport &transport) {
           }
           result["completed_before_cancellation"] =
               !ComparisonStopped && !scanStopped &&
-              !(op == "lua_recover" && result["status"] == "ok" &&
+              !(scriptOperation(op) && result["status"] == "ok" &&
                 result["payload"].value("status", std::string()) ==
                     "cancelled");
           if (ComparisonOperation)

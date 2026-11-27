@@ -123,19 +123,16 @@ for flip in report.flips:
 
 Le décalage de registre est un décalage en octets dans le fichier de registres de NeverD, pas un pointeur natif ni un numéro de registre. Le rapport reste toujours non exhaustif ; UNSAT, les limites du solveur et les refus de projection ou de réexécution sont des résultats typés, pas des exceptions.
 
-### Audit et chasse de sûreté mémoire
+### Analyse de sûreté mémoire
 
 `session.scan()` exécute les deux analyses et renvoie leurs résultats et leur couverture dans un rapport commun. [Guide en anglais](../memory-safety-scan.md).
 
-`session.audit()` et `session.hunt()` renvoient des rapports JSON analysés (même schéma que le CLI). Ils exigent une session native levée :
-
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-Les sessions EVM et SBF rejettent ces appels.
+Pour les entrées EVM et SBF, les analyseurs sélectionnés renvoient l’état `unsupported`.
 
 Les six variantes d’événement immuables sont `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` et `PATCH_APPLIED`. Les chaînes du payload sont copiées pendant le callback ; les champs sans rapport avec la variante valent `None`.
 

@@ -61,8 +61,10 @@ json::Object neverd::lua::recover(StringRef B, StringRef Ext, StringRef Profile,
       throw Failure{"budget_exceeded", "Lua input byte budget exceeded", 0};
     Result["input_sha256"] = toHex(sha256(arrayRefFromStringRef(B)), true);
     Result["input_bytes"] = B.size();
-    bool Auto = Profile == "auto", Puc = Profile == "puc",
-         Jit = Profile == "luajit", Luau = Profile == "luau-0.659";
+    bool Jit1 = Profile == "luajit-1.0" || Profile == "luajit-1.1";
+    bool Auto = Profile == "auto", Puc = Profile == "puc" || Jit1,
+         Jit = Profile == "luajit",
+         Luau = Profile == "luau-0.659" || Profile == "luau-upstream";
     if (!Auto && !Puc && !Jit && !Luau)
       unsupported(0, "Unknown Lua recovery profile");
     bool PucHeader = B.starts_with("\x1bLua"),
@@ -74,7 +76,9 @@ json::Object neverd::lua::recover(StringRef B, StringRef Ext, StringRef Profile,
     if (Source) {
       if (LuauSource && (Puc || Jit))
         unsupported(0, "Source extension conflicts with selected dialect");
-      E["dialect"] = Luau || LuauSource ? "Luau" : Jit ? "LuaJIT" : "Lua";
+      E["dialect"] = Luau || LuauSource ? "Luau"
+                     : (Jit || Jit1)    ? "LuaJIT"
+                                        : "Lua";
       E["identification"] = "source extension and UTF-8 text";
       Result["status"] = "extracted_source";
       Result["root"] = 0;
@@ -97,7 +101,7 @@ json::Object neverd::lua::recover(StringRef B, StringRef Ext, StringRef Profile,
            StringRef("\x1bLJ").starts_with(B)))
         malformed(B.size(), "Truncated Lua chunk signature");
       unsupported(0, "Unknown Lua artifact. Upstream Luau bytecode requires "
-                     "profile luau-0.659");
+                     "an explicit upstream Luau profile");
     }
     Reader R{B, Job};
     Chunk C{Job,
@@ -106,15 +110,17 @@ json::Object neverd::lua::recover(StringRef B, StringRef Ext, StringRef Profile,
                         : Family::Luau,
             E};
     E["family"] = PucHeader ? "PUC Lua" : JitHeader ? "LuaJIT" : "Luau";
-    E["identification"] =
-        Luau ? "explicit upstream compiler profile" : "binary signature";
+    E["identification"] = Luau ? "explicit upstream compiler profile"
+                          : Jit1
+                              ? "shared PUC header and caller-selected runtime"
+                              : "binary signature";
     try {
       if (PucHeader)
-        readPuc(C, R);
+        readPuc(C, R, Profile);
       else if (JitHeader)
         readJit(C, R);
       else
-        readLuau(C, R);
+        readLuau(C, R, Profile == "luau-0.659");
     } catch (const Failure &F) {
       if (StringRef(F.Status) == "malformed" ||
           StringRef(F.Status) == "unsupported") {
@@ -134,25 +140,23 @@ json::Object neverd::lua::recover(StringRef B, StringRef Ext, StringRef Profile,
 }
 json::Object neverd::lua::recoverFile(StringRef Path, StringRef Profile,
                                       Cancel Stop) {
-  auto Result = report(Profile);
+  auto FileError = [&](StringRef Status, StringRef Message) {
+    auto Result = report(Profile);
+    failed(Result, Status, Message);
+    return Result;
+  };
   auto File = std::filesystem::path(std::u8string(Path.begin(), Path.end()));
   std::error_code EC;
   auto Size = std::filesystem::file_size(File, EC);
-  if (EC) {
-    failed(Result, "io_error", "Cannot read a regular input file");
-    return Result;
-  }
-  if (Size > limits::kInputBytes) {
-    failed(Result, "budget_exceeded", "Lua input byte budget exceeded");
-    return Result;
-  }
+  if (EC)
+    return FileError("io_error", "Cannot read a regular input file");
+  if (Size > limits::kInputBytes)
+    return FileError("budget_exceeded", "Lua input byte budget exceeded");
   std::ifstream In(File, std::ios::binary);
   std::string Data(Size, '\0');
   if (!In.read(Data.data(), Size) ||
-      In.peek() != std::char_traits<char>::eof() || In.bad()) {
-    failed(Result, "io_error", "Cannot read a stable input extent");
-    return Result;
-  }
+      In.peek() != std::char_traits<char>::eof() || In.bad())
+    return FileError("io_error", "Cannot read a stable input extent");
   return recover(Data, sys::path::extension(Path), Profile, Stop);
 }
 
