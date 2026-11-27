@@ -21636,6 +21636,43 @@ and jump/local-unwind contracts retain their distinct provider sets.
 PE32 also uses the UCRT stdio provider set for the caller-cleanup convention
 of `__acrt_iob_func` and `__stdio_common_vfprintf`. Proving a stream, a format
 string or the effects of output requires the arguments at the call.
+The PE32 CRT startup ABI assigns caller cleanup to the argument, environment
+and on-exit table routines in the runtime API set. The math and locale
+API sets supply `__setusermatherr` and `_configthreadlocale`, respectively.
+These call summaries describe the returning stack pointer. Import binding
+and memory effects require evidence for the invocation.
+For the UCRT startup setters `_set_app_type`, `_set_fmode` and `_set_new_mode`,
+PE32 retains live import bindings when the checked call receives a documented
+mode on the private stack. MSVC can push that value directly or call a linked
+option getter that returns an immediate in EAX and then push EAX.
+The Windows CRT startup also installs a top-level filter. Its returning
+`SetUnhandledExceptionFilter` call preserves import bindings when the
+argument is a relocated pointer into immutable code. A later exception
+dispatch requires its own handler proof.
+For the PE32 `InitializeSListHead` startup call, both the output pointer and
+the import operand carry loader relocations. Its Win32 header occupies eight
+aligned bytes in private writable image storage. The complete write must be
+disjoint from the import table before the caller can retain its bindings.
+For a checked `_initterm` or `_initterm_e` table, the caller collects the
+eager imports required by every returning callback before analyzing its
+first instruction. A preceding store can invalidate one of those imports.
+The walker preserves the bindings on return only if they are live at the
+call and every callback preserves them.
+An ordinary PE32 helper can return a relocated data address in EAX, with
+or without a frame pointer. The caller checks the physical call, the whole
+getter and its HIGHLOW operand. A later store must still prove its width,
+destination permissions and disjointness from every import slot.
+The ordinary stack proof keeps a scalar pushed before a checked store to a
+CRT-owned cell for the immediately following direct call. The actual push
+establishes the private word at ESP. The live accessor establishes that EAX
+still points outside the stack. Under these inputs, the bound integer proof
+checks the reached branches, the return cleanup, and the exact image-relative
+reads and writes. A nested call can contribute reads from a checked, call-free
+integer leaf. The caller consumes only the proved low result byte for control
+flow. Other invocations of the same target have their own inputs and effects.
+An operand-free `FNCLEX` preserves the integer frame on ordinary continuation.
+The PE32 frame transfer drops both bytes of its previous x87 status value so
+that a later `FNSTSW` cannot reuse stale exception flags or condition codes.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case

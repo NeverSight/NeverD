@@ -10,6 +10,7 @@
 #include "../../../lib/ir/low/X86/RegistrationCRTFrame.h"
 #include "../../../lib/ir/low/X86/RegistrationFrameEffects.h"
 #include "../../../lib/ir/low/X86/RegistrationSEHPrivateCall.h"
+#include "../../../lib/ir/low/X86/RegistrationSourceCall.h"
 #include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "gtest/gtest.h"
 
@@ -746,19 +747,221 @@ TEST(RegistrationCRTFrame, XCPT4PrintfObtainsTheStandardOutputStream) {
       const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
       ASSERT_EQ(Slot, 0x4080fcu);
       EXPECT_TRUE(
-          isCheckedCRTStandardStreamCall(*Image, Block, Op, *Slot, Work));
+          hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
       LowBlock EntryAtCall;
       for (const auto &Boundary : Block.InstructionBoundaries)
         if (Boundary.Address >= Op.Addr)
           EntryAtCall.InstructionBoundaries.push_back(Boundary);
+      EXPECT_FALSE(hasBindingPreservingCRTArgument(*Image, EntryAtCall, Op,
+                                                   *Slot, Work));
       EXPECT_FALSE(
-          isCheckedCRTStandardStreamCall(*Image, EntryAtCall, Op, *Slot, Work));
-      EXPECT_FALSE(
-          isCheckedCRTStandardStreamCall(*Image, Block, Op, 0x4080f8, Work));
+          hasBindingPreservingCRTArgument(*Image, Block, Op, 0x4080f8, Work));
       return;
     }
   }
   FAIL() << "missing original standard stream call";
+}
+
+TEST(RegistrationCRTFrame, XCPT4StartupModesRequireTheirActualArgument) {
+  using namespace registration_state;
+  struct Invocation {
+    va_t Entry, Call, ValueInstruction;
+    const char *Name;
+  };
+  const Invocation Cases[] = {{0x406b88, 0x406b8b, 0x406b89, "_set_app_type"},
+                              {0x406b88, 0x406b96, 0x407268, "_set_fmode"},
+                              {0x406c3b, 0x406c46, 0x40726e, "_set_new_mode"}};
+  for (const bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(*Image));
+    for (const auto &Case : Cases) {
+      SCOPED_TRACE(::testing::Message() << Selected << " " << Case.Name);
+      const auto Caller = CFGBuilder().buildIntegerFrameProof(
+          *Image, Dec, Case.Entry, "startup initializer");
+      unsigned Calls = 0;
+      for (const auto &Block : Caller.Blocks)
+        for (const auto &Op : Block.Ops) {
+          if (Op.Addr != Case.Call || Op.Opcode != NdOp::CALL)
+            continue;
+          ++Calls;
+          size_t Work = 0;
+          const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
+          ASSERT_TRUE(Slot);
+          const auto *Import = Image->findImportAt(*Slot);
+          ASSERT_TRUE(Import);
+          ASSERT_EQ(Import->Name, Case.Name);
+          EXPECT_TRUE(
+              hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
+          LowBlock AfterProducer;
+          for (const auto &Boundary : Block.InstructionBoundaries)
+            if (Boundary.Address >= Case.Call - 1)
+              AfterProducer.InstructionBoundaries.push_back(Boundary);
+          EXPECT_FALSE(hasBindingPreservingCRTArgument(*Image, AfterProducer,
+                                                       Op, *Slot, Work));
+          auto *Byte = const_cast<uint8_t *>(
+              Image->readVA(Case.ValueInstruction + 1, 1));
+          ASSERT_TRUE(Byte);
+          const uint8_t Saved = *Byte;
+          *Byte = 0xff;
+          EXPECT_FALSE(
+              hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
+          *Byte = Saved;
+          EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+        }
+      EXPECT_EQ(Calls, 1u);
+    }
+  }
+}
+
+TEST(RegistrationCRTFrame, XCPT4StartupFilterSetterPreservesLiveBindings) {
+  enum class Change { None, MissingRelocation, DataTarget, Provider, NewMode };
+  for (const bool Selected : {false, true}) {
+    auto Original = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    for (const auto Variant :
+         {Change::None, Change::MissingRelocation, Change::DataTarget,
+          Change::Provider, Change::NewMode}) {
+      SCOPED_TRACE(::testing::Message() << Selected << ' ' << int(Variant));
+      BinaryImage Image = *Original;
+      if (Variant == Change::MissingRelocation)
+        ASSERT_EQ(
+            std::erase_if(Image.BaseRelocations,
+                          [](const auto &R) { return R.Address == 0x407489; }),
+            1u);
+      if (Variant == Change::DataTarget) {
+        auto *Word = const_cast<uint8_t *>(Image.readVA(0x407489, 4));
+        ASSERT_TRUE(Word);
+        writeLE<uint32_t>(Word, 0x40b1b8);
+      }
+      if (Variant == Change::Provider) {
+        const auto Import = llvm::find_if(
+            Image.Imports, [](const auto &I) { return I.IATAddr == 0x408014; });
+        ASSERT_NE(Import, Image.Imports.end());
+        Import->Module = "other.dll";
+      }
+      if (Variant == Change::NewMode) {
+        auto *Getter = const_cast<uint8_t *>(Image.readVA(0x40726f, 1));
+        ASSERT_TRUE(Getter);
+        *Getter = 0xff;
+      }
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Callees(Image, &Work);
+      const auto Callback = Callees.stackContract(0x406c3b);
+      if (Variant != Change::None) {
+        EXPECT_FALSE(Callback && Callback->PreservesImportBindings);
+        continue;
+      }
+      ASSERT_TRUE(Callback);
+      EXPECT_EQ(Callback->StackPopBytes, 0u);
+      EXPECT_TRUE(Callback->PreservesImportBindings);
+      EXPECT_EQ(Callback->RequiredImports,
+                (std::vector<va_t>{0x408014, 0x408078}));
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
+TEST(RegistrationCRTFrame, XCPT4StdioOptionStoresUseTheReturnedDataAddress) {
+  struct Change {
+    va_t MissingFixup;
+    va_t Overlap;
+    va_t Instruction = 0;
+    uint8_t Byte = 0;
+  };
+  const Change Cases[] = {{},
+                          {0x4045b4, 0},
+                          {0x4072b7, 0},
+                          {0, 0x40b55f},
+                          {0, 0x40b223},
+                          {0, 0, 0x4045b8, 0x58},  // POP EAX
+                          {0, 0, 0x4072b6, 0xb9}}; // MOV ECX,imm32
+  for (bool Selected : {false, true}) {
+    auto Original = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    // The first getter uses a frame pointer, the second returns directly.
+    for (const auto &[MissingFixup, Overlap, Instruction, Byte] : Cases) {
+      SCOPED_TRACE(::testing::Message()
+                   << Selected << ' ' << MissingFixup << ' ' << Overlap << ' '
+                   << Instruction);
+      BinaryImage Image = *Original;
+      if (Instruction) {
+        auto *Code = const_cast<uint8_t *>(Image.readVA(Instruction, 1));
+        ASSERT_TRUE(Code);
+        *Code = Byte;
+      }
+      if (MissingFixup)
+        ASSERT_EQ(std::erase_if(
+                      Image.BaseRelocations,
+                      [&](const auto &R) { return R.Address == MissingFixup; }),
+                  1u);
+      if (Overlap) {
+        ASSERT_FALSE(Image.Imports.empty());
+        auto Binding = Image.Imports.front();
+        Binding.IATAddr = Overlap;
+        Image.Imports.push_back(std::move(Binding));
+      }
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Callees(Image, &Work);
+      for (va_t Entry : {0x4072bcu, 0x406c33u}) {
+        const auto Contract = Callees.stackContract(Entry);
+        if (MissingFixup || Overlap || Instruction) {
+          EXPECT_FALSE(Contract && Contract->PreservesImportBindings);
+          continue;
+        }
+        ASSERT_TRUE(Contract);
+        EXPECT_EQ(Contract->StackPopBytes, 0u);
+        EXPECT_TRUE(Contract->PreservesImportBindings);
+        EXPECT_TRUE(Contract->RequiredImports.empty());
+      }
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
+TEST(RegistrationConditionalFrame, DirectCallsRetainTheirPhysicalOwner) {
+  auto Image = loadXCPT4(true);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Image));
+  const auto Startup = CFGBuilder().buildIntegerFrameProof(
+      *Image, Dec, 0x406c3b, "CRT initializer");
+  for (const auto &Block : Startup.Blocks) {
+    for (size_t Index = 0; Index < Block.Ops.size(); ++Index) {
+      if (Block.Ops[Index].Opcode != NdOp::CALL)
+        continue;
+      LowFunc Function;
+      LowBlock Other;
+      Other.StartAddr = 0x401000;
+      Other.EndAddr = 0x401010;
+      Function.Blocks.push_back(Other);
+      Function.Blocks.push_back(Block);
+      Function.Blocks.push_back(Block);
+      const auto &Owner = Function.Blocks.back();
+      const auto &Call = Owner.Ops[Index];
+      const auto Boundary =
+          llvm::find_if(Owner.InstructionBoundaries,
+                        [&](const auto &I) { return I.Address == Call.Addr; });
+      ASSERT_NE(Boundary, Owner.InstructionBoundaries.end());
+      size_t Work = 0;
+      EXPECT_EQ(registration_state::checkedRegistrationDirectCall(
+                    *Image, Function, Call, Work),
+                &*Boundary);
+      // More operations at a different address cannot change ownership.
+      Function.Blocks.front().Ops.resize(512);
+      size_t More = 0;
+      EXPECT_EQ(registration_state::checkedRegistrationDirectCall(
+                    *Image, Function, Call, More),
+                &*Boundary);
+      EXPECT_EQ(More, Work);
+      const LowOp Copy = Call;
+      EXPECT_FALSE(registration_state::checkedRegistrationDirectCall(
+          *Image, Function, Copy, Work));
+      return;
+    }
+  }
+  FAIL() << "missing direct initializer call";
 }
 
 TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {
@@ -876,6 +1079,200 @@ TEST(RegistrationCRTFrame, XCPT4BindsOrderedInitializerRangesAtBothCalls) {
       ++Calls;
     }
   EXPECT_EQ(Calls, 2u);
+}
+
+TEST(RegistrationCRTFrame, XCPT4OnExitInitializationUsesItsCallingMode) {
+  using namespace registration_state;
+  using registration_abi::BoundFrameCalls;
+  using Ranges = std::set<std::pair<va_t, va_t>>;
+  const Ranges Reads{{0x40b1bc, 0x40b1c0}, {0x40b1fd, 0x40b1fe}};
+  Ranges Writes{{0x40b1fd, 0x40b1fe}};
+  for (va_t VA = 0x40b200; VA < 0x40b218; VA += 4)
+    Writes.emplace(VA, VA + 4);
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(*Image));
+    auto Caller = CFGBuilder().buildIntegerFrameProof(*Image, Dec, 0x406b88,
+                                                      "pre-c-init");
+    const LowOp *Call = nullptr;
+    for (const auto &Block : Caller.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.Addr == 0x406bab)
+          Call = &Op;
+    ASSERT_TRUE(Call);
+    const std::map<unsigned, FrameValue> Registers{
+        {x86reg::RAX / x86reg::GeneralRegStride, {}}};
+    const std::map<int32_t, FrameValue> Arguments{{8, FrameValue::constant(1)}};
+    size_t Work = 0;
+    const auto Effect = registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, Registers,
+        BoundFrameCalls::ReadOnlyLeaves, Work);
+    ASSERT_TRUE(Effect) << Selected;
+    EXPECT_EQ(Effect->Result.numericLowByte(), 1);
+    EXPECT_EQ(Effect->Memory.Reads, Reads);
+    EXPECT_EQ(Effect->Memory.Writes, Writes);
+    EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    for (uint32_t Mode : {0u, 2u}) {
+      size_t Used = 0;
+      EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+          *Image, Caller, *Call, {{8, FrameValue::constant(Mode)}}, Registers,
+          BoundFrameCalls::ReadOnlyLeaves, Used));
+    }
+    size_t Used = 0;
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, {}, BoundFrameCalls::ReadOnlyLeaves,
+        Used));
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, Registers, BoundFrameCalls::CallFree,
+        Used));
+    auto Unowned = *Call;
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, Unowned, Arguments, Registers,
+        BoundFrameCalls::ReadOnlyLeaves, Used));
+    Used = limits::kMaxRegistrationEHStateWork;
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, Registers,
+        BoundFrameCalls::ReadOnlyLeaves, Used));
+    for (va_t Field : {0x407006u, 0x40793eu, 0x407052u}) {
+      BinaryImage Missing = *Image;
+      ASSERT_EQ(
+          std::erase_if(Missing.BaseRelocations,
+                        [=](const auto &R) { return R.Address == Field; }),
+          1u);
+      size_t Attempt = 0;
+      EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+          Missing, Caller, *Call, Arguments, Registers,
+          BoundFrameCalls::ReadOnlyLeaves, Attempt))
+          << std::hex << Field;
+    }
+    // Change the leaf's CMP [image],EAX to MOV [image],EAX.
+    auto *Compare = const_cast<uint8_t *>(Image->readVA(0x40793c, 1));
+    ASSERT_TRUE(Compare);
+    ASSERT_EQ(*Compare, 0x39);
+    *Compare = 0x89;
+    Used = 0;
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, Registers,
+        BoundFrameCalls::ReadOnlyLeaves, Used));
+  }
+}
+
+TEST(RegistrationCRTFrame,
+     StartupCallerCarriesItsPrivateWordAcrossTheCRTStore) {
+  auto Original = loadXCPT4(true);
+  ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+  enum class Input {
+    Current,
+    DifferentMode,
+    UnknownAddress,
+    DifferentProvider
+  };
+  for (Input Kind : {Input::Current, Input::DifferentMode,
+                     Input::UnknownAddress, Input::DifferentProvider}) {
+    SCOPED_TRACE(int(Kind));
+    BinaryImage Image = *Original;
+    // Keep the original accessor, push, store, direct call and complete
+    // callees. Two different RET cleanups expose whether the caller proved the
+    // returned AL.
+    constexpr uint8_t Tail[] = {0x83, 0xc4, 4,    0x84, 0xc0, 0x74,
+                                1,    0xc3, 0xc2, 4,    0};
+    auto *Code =
+        const_cast<uint8_t *>(Image.readVA(0x406ba2, 14 + sizeof(Tail)));
+    ASSERT_TRUE(Code);
+    std::copy(std::begin(Tail), std::end(Tail), Code + 14);
+    if (Kind == Input::DifferentMode)
+      Code[6] = 2; // PUSH 2
+    if (Kind == Input::UnknownAddress)
+      Code[8] = 0x31; // MOV [ECX],ESI
+    if (Kind == Input::DifferentProvider) {
+      auto Accessor = llvm::find_if(Image.Imports, [](const auto &Entry) {
+        return Entry.Name == "__p__commode";
+      });
+      ASSERT_NE(Accessor, Image.Imports.end());
+      Accessor->Module = "api-ms-win-crt-runtime-l1-1-0.dll";
+    }
+    size_t Work = 0;
+    const auto Stack = getCheckedX86CalleeStackPop(Image, 0x406ba2, &Work);
+    EXPECT_EQ(Stack, Kind == Input::Current ? std::optional<uint32_t>(0)
+                                            : std::nullopt);
+    EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  }
+}
+
+TEST(RegistrationCRTFrame, XCPT4TypeInfoInitializesAnAlignedPrivateListHead) {
+  enum class Input {
+    Current,
+    WrongProvider,
+    DelayImport,
+    Unaligned,
+    MissingOutputFixup,
+    MissingSlotFixup,
+    OverlappingImport,
+    Shared,
+    Discardable,
+    ReadOnly
+  };
+  for (bool Selected : {false, true}) {
+    auto Original = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    for (auto Kind : {Input::Current, Input::WrongProvider, Input::DelayImport,
+                      Input::Unaligned, Input::MissingOutputFixup,
+                      Input::MissingSlotFixup, Input::OverlappingImport,
+                      Input::Shared, Input::Discardable, Input::ReadOnly}) {
+      SCOPED_TRACE(::testing::Message() << Selected << '/' << int(Kind));
+      BinaryImage Image = *Original;
+      const auto Slot = llvm::find_if(
+          Image.Imports, [](const auto &I) { return I.IATAddr == 0x408020; });
+      ASSERT_NE(Slot, Image.Imports.end());
+      ASSERT_EQ(Slot->Name, "InitializeSListHead");
+      if (Kind == Input::WrongProvider)
+        Slot->Module = "application.dll";
+      if (Kind == Input::DelayImport)
+        Slot->IsDelayImport = true;
+      if (Kind == Input::MissingOutputFixup ||
+          Kind == Input::MissingSlotFixup) {
+        const va_t Field =
+            Kind == Input::MissingOutputFixup ? 0x407275 : 0x40727b;
+        ASSERT_EQ(
+            std::erase_if(Image.BaseRelocations,
+                          [=](const auto &R) { return R.Address == Field; }),
+            1u);
+      }
+      if (Kind == Input::Unaligned) {
+        auto *Field = const_cast<uint8_t *>(Image.readVA(0x407275, 4));
+        ASSERT_TRUE(Field);
+        ASSERT_EQ(readLE<uint32_t>(Field), 0x40b218u);
+        writeLE<uint32_t>(Field, 0x40b21c);
+      }
+      if (Kind == Input::OverlappingImport) {
+        auto Extra = *Slot;
+        Extra.IATAddr = 0x40b21f;
+        Image.Imports.push_back(std::move(Extra));
+      }
+      const auto *Owner = Image.getSectionFor(0x40b218);
+      ASSERT_TRUE(Owner);
+      auto &Storage = Image.Sections[Owner - Image.Sections.data()];
+      if (Kind == Input::Shared)
+        Storage.Type |= llvm::COFF::IMAGE_SCN_MEM_SHARED;
+      if (Kind == Input::Discardable)
+        Storage.Type |= llvm::COFF::IMAGE_SCN_MEM_DISCARDABLE;
+      if (Kind == Input::ReadOnly)
+        Storage.Flags = SegmentFlags::Readable;
+      size_t Work = 0;
+      const auto Stack =
+          RegistrationCallCalleeIndex(Image, &Work).stackContract(0x407274);
+      EXPECT_EQ(bool(Stack && Stack->PreservesImportBindings),
+                Kind == Input::Current);
+      if (Kind == Input::Current) {
+        ASSERT_TRUE(Stack);
+        EXPECT_EQ(Stack->StackPopBytes, 0u);
+        EXPECT_EQ(Stack->RequiredImports, (std::vector<va_t>{0x408020}));
+      }
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
 }
 
 TEST(RegistrationCRTFrame, XCPT4StartupCallsTheUCRTCommodeAccessor) {
@@ -1399,6 +1796,61 @@ TEST(RegistrationCRTFrame, MathHelperStackFactsDoNotGrantMemoryEffects) {
       EXPECT_EQ(getCheckedX86CalleeStackPop(*Image, 0x401540, &Work), 0u);
     } else
       EXPECT_FALSE(Pop);
+  }
+}
+
+TEST(RegistrationCRTFrame, XCPT4ClearsX87StatusWithinItsIntegerFrame) {
+  using namespace registration_state;
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(*Image));
+    const auto Function = CFGBuilder().buildIntegerFrameProof(
+        *Image, Dec, 0x406b88, "pre-c-initializer");
+    unsigned Matches = 0;
+    for (const auto &Block : Function.Blocks)
+      for (const auto &Op : Block.Ops) {
+        if (Op.Addr != 0x406bb8)
+          continue;
+        ++Matches;
+        ASSERT_EQ(Op.Opcode, NdOp::INTRINSIC);
+        ASSERT_EQ(Op.NumInputs, 1u);
+        ASSERT_EQ(Op.Inputs[0], NdVar::cst(uint64_t(Intrinsic::X87Fnclex), 2));
+        EXPECT_TRUE(isFramePreservingIntrinsic(Op));
+        EXPECT_FALSE(isX86FrameReadIntrinsic(Op, Arch::X86));
+
+        FrameState State;
+        FrameTransfer Transfer(State, 0);
+        const auto Status = NdVar::reg(x86reg::FPU_SW, 2);
+        State.OtherRegisterBytes[x86reg::FPU_SW] = FrameValue::constant(0x41);
+        State.OtherRegisterBytes[x86reg::FPU_SW + 1] =
+            FrameValue::constant(0x38);
+        State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-8);
+        State.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
+            FrameValue::constant(1);
+        State.store(-8, 4, FrameValue::constant(42));
+        EXPECT_EQ(Transfer.read(Status).Constant, 0x3841u);
+        Transfer.beginInstruction(Op.Addr);
+        Transfer.write(Op, Transfer.evaluate(Op, false));
+        EXPECT_FALSE(Transfer.read(Status).Constant);
+        EXPECT_EQ(Transfer.read(NdVar::reg(x86reg::RSP, 4)),
+                  FrameValue::frame(-8));
+        EXPECT_EQ(Transfer.read(NdVar::reg(x86reg::RAX, 4)).Constant, 1u);
+        EXPECT_EQ(State.load(-8, 4).Constant, 42u);
+
+        auto Malformed = Op;
+        Malformed.Output = NdVar::reg(x86reg::RSP, 4);
+        EXPECT_FALSE(isFramePreservingIntrinsic(Malformed));
+        Malformed = Op;
+        Malformed.addInput(NdVar::reg(x86reg::RAX, 4));
+        EXPECT_FALSE(isFramePreservingIntrinsic(Malformed));
+        Malformed = Op;
+        Malformed.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+        EXPECT_FALSE(isFramePreservingIntrinsic(Malformed));
+      }
+    EXPECT_EQ(Matches, 1u);
   }
 }
 

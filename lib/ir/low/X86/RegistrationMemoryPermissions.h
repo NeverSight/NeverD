@@ -22,6 +22,7 @@ struct BinaryImage;
 struct LowOp;
 namespace registration_state {
 class FrameTransfer;
+struct FrameValue;
 }
 namespace registration_abi {
 
@@ -74,6 +75,12 @@ inline bool hasClosedRegistrationIntegerEffect(const LowOp &Op) {
     return false;
   }
 }
+
+/// An exact image-relative address in resident private storage. Permissions
+/// and access width are checked separately by the ordinary memory proof.
+bool hasResidentRegistrationData(const BinaryImage &Image,
+                                 const registration_state::FrameValue &Address,
+                                 bool Write, size_t &Work);
 
 /// Only the ordinary entry frame, known Win32 thread fields and complete
 /// mapped image ranges. Writes also require writable storage. No scalar,

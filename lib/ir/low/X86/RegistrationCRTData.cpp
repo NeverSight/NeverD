@@ -89,6 +89,10 @@ void CRTDataProof::write(const NdVar &Var, std::optional<Pointer> Value) {
   Active |= Value.has_value();
 }
 
+bool CRTDataProof::eaxHoldsDataAddress() const {
+  return read(NdVar::reg(x86reg::RAX, 4)).has_value();
+}
+
 void CRTDataProof::recordAccessorReturn(CRTDataAccess Access,
                                         const NdVar &Output) {
   clear();

@@ -29,7 +29,17 @@ namespace neverd::registration_abi {
 namespace {
 
 bool isCallerCleanupCRTImport(const Import &Imported) {
-  enum class Family { Unknown, Legacy, Math, Stdio, Runtime, Initializers };
+  enum class Family {
+    Unknown,
+    Legacy,
+    Math,
+    MathHandler,
+    Locale,
+    Stdio,
+    Runtime,
+    Heap,
+    Initializers
+  };
   const auto Provider = llvm::StringSwitch<Family>(Imported.Name)
 #define NEVERD_REGISTRATION_CRT_CLEANUP(Name, Kind) .Case(Name, Family::Kind)
 #include "RegistrationRuntimeImports.def"
@@ -38,10 +48,18 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
     return coff_loader::isX86LegacyCRTProvider(Imported.Module);
   if (Provider == Family::Math)
     return coff_loader::isX86MathCleanupProvider(Imported.Module);
+  if (Provider == Family::MathHandler)
+    return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
+           coff_loader::isX86MathCleanupProvider(Imported.Module);
+  if (Provider == Family::Locale)
+    return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
+           coff_loader::isUCRTLocaleProvider(Imported.Module);
   if (Provider == Family::Stdio)
     return coff_loader::isUCRTStdioProvider(Imported.Module);
   if (Provider == Family::Runtime)
     return coff_loader::isUCRTRuntimeProvider(Imported.Module);
+  if (Provider == Family::Heap)
+    return coff_loader::isUCRTHeapProvider(Imported.Module);
   if (Provider == Family::Initializers)
     return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
            coff_loader::isUCRTRuntimeProvider(Imported.Module);
@@ -187,8 +205,8 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
     return std::nullopt;
   // These are returning ESP facts only. Dispatch, allocation, memory writes,
   // pointer results, callbacks and FP state need separate effect contracts.
-  if (const auto Query = registration_state::kernelStartupQuery(*Import))
-    return *Query == registration_state::StartupQuery::Identifier ? 0 : 4;
+  if (const auto Call = registration_state::kernelStartupCall(*Import))
+    return *Call == registration_state::KernelStartupCall::Identifier ? 0 : 4;
   if (isRaiseExceptionProvider(*Import))
     return 16;
   if (isStartupInfoProvider(*Import))
@@ -201,8 +219,7 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
     // The SDK's PE32 WINAPI declarations use 32-bit stack carriers. Exact
     // exports matter: neither similarly named APIs nor other DLLs inherit it.
     if (Name == "DecodePointer" || Name == "EncodePointer" || Name == "Sleep" ||
-        Name == "IsProcessorFeaturePresent" ||
-        Name == "SetUnhandledExceptionFilter")
+        Name == "IsProcessorFeaturePresent")
       return 4;
     if (Name == "InterlockedExchange")
       return 8;
@@ -231,8 +248,8 @@ bool preservesRegistrationImportBindings(const BinaryImage &Image,
   // The no-argument argc and argv accessors return addresses of CRT globals.
   // Loading through those pointers reads live process inputs.
   if (registrationCRTAccessorAccess(*Import) ||
-      registration_state::kernelStartupQuery(*Import) ==
-          registration_state::StartupQuery::Identifier)
+      registration_state::kernelStartupCall(*Import) ==
+          registration_state::KernelStartupCall::Identifier)
     return true;
   // These APIs transform pointer bits with a process-specific secret, without
   // replacing the caller image's import slots. Keep the runtime result opaque;

@@ -198,7 +198,13 @@ checkedRegistrationDirectCall(const BinaryImage &Image, const LowFunc &Function,
       !registration_abi::chargeCalleeWork(Work, 16))
     return nullptr;
   for (const auto &Block : Function.Blocks) {
-    if (!registration_abi::chargeCalleeWork(Work, Block.Ops.size() + 1))
+    if (!registration_abi::chargeCalleeWork(Work, 1))
+      return nullptr;
+    // Only a block covering the call can have a valid instruction boundary.
+    // Overlapping instruction streams still require the exact LowOp below.
+    if (Op.Addr < Block.StartAddr || Op.Addr >= Block.EndAddr)
+      continue;
+    if (!registration_abi::chargeCalleeWork(Work, Block.Ops.size()))
       return nullptr;
     for (size_t I = 0; I != Block.Ops.size(); ++I) {
       if (&Block.Ops[I] != &Op)

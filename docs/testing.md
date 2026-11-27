@@ -16683,6 +16683,10 @@ zero callee cleanup, while private object/initializer borrows and exception
 dispatch remain unproved. `StackCleanupCannotAuthorizeDispatchOrObservation`
 also checks that these table, lock and exit-registration imports cannot acquire
 the separate RaiseException caller-frame contract from their stack fact.
+The two PE32 startup-mode tests check the UCRT provider and caller cleanup,
+then decode the actual arguments to `_set_app_type`, `_set_fmode` and
+`_set_new_mode` in the MSVC `xcpt4` fixture. They exercise whole-image and
+selected-function loading, including a changed getter and a split call sequence.
 Managed-name variants, partial or missing caller cleanup, and stale provider or
 slot bindings receive no normal-return stack contract.
 `CxxCookieSourceProofReachesTheParentAndMedCallABI` also checks an independent
@@ -21140,8 +21144,36 @@ stream lookup and six-DWORD formatted output. They check the original xcpt4
 imports, caller cleanup and refusals for a changed provider, delayed binding
 or conflicting slot.
 
+The PE32 startup ABI test covers the argument, environment, on-exit, math and
+locale routines used by the original MSVC program. It checks direct imports
+and their jump veneers against the owning API set and both UCRT DLLs. A
+different API set, a delayed import or conflicting storage withdraws the
+stack contract.
+
 The PE32 startup fixture also checks both UCRT initializer walkers and the
-three relocated callbacks in their read-only tables. The outer stdio wrapper
+three relocated callbacks in their read-only tables.
+`InitializerCallsKeepOnlyProvenCallbackEffects` covers a callback that
+uses an eager import, an earlier store that replaces its slot, and a
+delay-loaded callback dependency. The stdio initializer uses one framed and
+one frameless getter for its two option records. Whole-image and selected
+loading check each store with the real instructions. Missing relocations,
+a changed destination register or an overlapping import withdraw the effect.
+The original on-exit table initializer takes mode 1 after the store through
+the UCRT commode pointer. Whole-image and selected loading check its two
+possible image reads, seven possible writes, and returned AL. The tests vary
+the mode, incoming EAX, physical call ownership, relocations and nested leaf
+effects. A caller with two distinct return cleanups also checks that the
+actual argument survives the CRT store and selects the correct return.
+The type-info initializer calls `KERNEL32.dll!InitializeSListHead` with an
+eight-byte header. Both loader selections check the original call and reject
+a changed DLL, delay binding, missing relocation, unaligned address, an
+overlapping import on the final byte, and shared, discardable or read-only
+storage.
+The original startup `FNCLEX` also checks the integer and floating-state
+boundary. Its stack pointer, private stack word and integer result survive.
+The test seeds a known x87 status word and checks that the frame analysis
+withdraws it after the instruction in both loader selections.
+The outer stdio wrapper
 restores ESP from EBP after its nested calls. The inner wrapper depends on
 the UCRT calling convention. On Windows,
 `RegistrationCRTFrame.OriginalPE32XCPT4RunsOnWindows` executes the original

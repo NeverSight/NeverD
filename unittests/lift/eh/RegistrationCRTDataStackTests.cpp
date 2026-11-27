@@ -250,18 +250,39 @@ TEST(RegistrationCRTDataStack, InitializerCallsKeepOnlyProvenCallbackEffects) {
   enum class Table {
     NullOnly,
     Returning,
+    UsesImport,
+    UsesImportWithEarlyExit,
+    LostBinding,
+    DelayedImport,
     WritesUnknownMemory,
     Mutable,
     MissingFixup
   };
-  for (const auto Kind :
-       {Table::NullOnly, Table::Returning, Table::WritesUnknownMemory,
-        Table::Mutable, Table::MissingFixup}) {
+  for (const auto Kind : {Table::NullOnly, Table::Returning, Table::UsesImport,
+                          Table::UsesImportWithEarlyExit, Table::LostBinding,
+                          Table::DelayedImport, Table::WritesUnknownMemory,
+                          Table::Mutable, Table::MissingFixup}) {
     SCOPED_TRACE(int(Kind));
     constexpr va_t Base = 0x400000, TableVA = Base + 0x4000;
-    auto Image = dataImage(Base, "api-ms-win-crt-runtime-l1-1-0.dll",
-                           "_initterm", 0, false, 0);
+    const char *Walker =
+        Kind == Table::UsesImportWithEarlyExit ? "_initterm_e" : "_initterm";
+    auto Image = dataImage(Base, "api-ms-win-crt-runtime-l1-1-0.dll", Walker, 0,
+                           false, 0);
+    const bool CallsImport =
+        Kind == Table::UsesImport || Kind == Table::UsesImportWithEarlyExit ||
+        Kind == Table::LostBinding || Kind == Table::DelayedImport;
     const va_t Slot = Image.Imports.front().IATAddr;
+    const va_t CallbackSlot = Slot + 12;
+    if (CallsImport) {
+      Import Query;
+      Query.Name = "GetCurrentThreadId";
+      Query.Module = "kernel32.dll";
+      Query.IATAddr = CallbackSlot;
+      Query.IsDelayImport = Kind == Table::DelayedImport;
+      Image.Imports.push_back(Query);
+      ASSERT_TRUE(Image.recordImportStorageSlot(
+          CallbackSlot, Query.Name, 0, ImportStorageEvidence::ImportDirectory));
+    }
     auto &Text = Image.Segments.front();
     auto &Code = Text.Data;
     Code.clear();
@@ -274,6 +295,10 @@ TEST(RegistrationCRTDataStack, InitializerCallsKeepOnlyProvenCallbackEffects) {
         Image.DataAddressRelocOperands[Image.Entry + At] = {Value, Value, 4,
                                                             TableVA};
     };
+    if (Kind == Table::LostBinding) {
+      Code.insert(Code.end(), {0x6a, 0, 0xff, 0x15});
+      Address(Slot + 4);
+    }
     Code.push_back(0x68);
     Address(TableVA + 8, true);
     Code.push_back(0x68);
@@ -286,6 +311,10 @@ TEST(RegistrationCRTDataStack, InitializerCallsKeepOnlyProvenCallbackEffects) {
     Code.resize(0x40, 0xcc);
     if (Kind == Table::WritesUnknownMemory)
       Code.insert(Code.end(), {0x89, 0x08}); // MOV [EAX], ECX
+    if (CallsImport) {
+      Code.insert(Code.end(), {0xff, 0x15});
+      Address(CallbackSlot);
+    }
     Code.push_back(0xc3);
     Text.Size = Text.FileSz = Code.size();
     Image.Sections.front().Size = Image.Sections.front().FileSz = Text.Size;
@@ -312,11 +341,16 @@ TEST(RegistrationCRTDataStack, InitializerCallsKeepOnlyProvenCallbackEffects) {
     Image.Segments.push_back(std::move(Data));
     const auto Contract =
         RegistrationCallCalleeIndex(Image).stackContract(Image.Entry);
-    const bool Expected = Kind == Table::NullOnly || Kind == Table::Returning;
+    const bool Expected = Kind == Table::NullOnly || Kind == Table::Returning ||
+                          Kind == Table::UsesImport ||
+                          Kind == Table::UsesImportWithEarlyExit;
     EXPECT_EQ(bool(Contract), Expected);
     if (Contract) {
       EXPECT_EQ(Contract->StackPopBytes, 0u);
-      EXPECT_EQ(Contract->RequiredImports, (std::vector<va_t>{Slot, Slot + 4}));
+      std::vector<va_t> Required{Slot, Slot + 4};
+      if (CallsImport)
+        Required.push_back(CallbackSlot);
+      EXPECT_EQ(Contract->RequiredImports, Required);
     }
   }
 }

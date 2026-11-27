@@ -222,6 +222,22 @@ std::optional<RegistrationLeafCalleeABI>
 checkedObjectCallbackCalleeABI(const BinaryImage &Image, va_t Target,
                                size_t &Work, ObjectCallbackContext &Context);
 
+enum class BoundFrameCalls : uint8_t { Raise, CallFree, ReadOnlyLeaves };
+
+struct BoundIntegerCall {
+  registration_state::FrameValue Result;
+  ImageFrameEffects Memory;
+};
+
+/// A source-owned, caller-cleanup PE32 integer call under the supplied inputs.
+/// ReadOnlyLeaves permits one level of call-free helpers with only image reads.
+/// Every reached image access must name resident image-relative data.
+std::optional<BoundIntegerCall> checkedBoundIntegerCall(
+    const BinaryImage &Image, const LowFunc &Caller, const LowOp &Op,
+    const std::map<int32_t, registration_state::FrameValue> &Arguments,
+    const std::map<unsigned, registration_state::FrameValue> &Registers,
+    BoundFrameCalls Calls, size_t &Work);
+
 struct PrivateFrameOptions {
   bool BorrowECX = false;
   RegistrationThrowCalleeABI *ThrowProof = nullptr;
@@ -246,15 +262,15 @@ struct PrivateFrameOptions {
   /// an incomplete result shape. Callee frame identities need caller
   /// projection.
   std::optional<registration_state::FrameValue> *ReturnValue = nullptr;
-  /// The bound source consumer owns no nested runtime/callback effects.
-  /// Unreached calls remain outside the invocation's memory footprint.
-  bool ExcludeCalls = false;
+  /// A source effect can require call-free execution. A bound integer caller
+  /// may instead admit one checked, read-only leaf at a reached direct call.
+  BoundFrameCalls Calls = BoundFrameCalls::Raise;
   /// Only the explicit original-image invocation query supplies this scope.
   /// It requires the closed plain-callee domain and cannot publish native
   /// admission or an unscoped layout-independent scalar return.
   registration_state::OriginalImageFrameProof *OriginalImage = nullptr;
-  /// Optional stronger effect proof. Unknown faults, FP and calls other than
-  /// ThrowProof's exact terminal runtime call withdraw it monotonically.
+  /// Optional stronger effect proof. Unknown faults, FP and unchecked calls
+  /// withdraw it. A checked integer leaf contributes its image reads.
   /// Declared ECX accesses remain conditional on the caller's object proof.
   bool *ClosedIntegerEffects = nullptr;
   /// Returning cleanup for this bound invocation only. Every reached exit

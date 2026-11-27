@@ -9,6 +9,7 @@
 #include "RegistrationABIPrivate.h"
 #include "RegistrationConditionalFrame.h"
 #include "RegistrationOriginalImage.h"
+#include "RegistrationSourceCall.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -47,6 +48,42 @@ bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
   // obligations of the enclosing language solver, rather than an ABI fact.
   return !Args[0].MayBeFrame && Args[1].Constant && *Args[1].Constant <= 1 &&
          Args[2].Constant == 0 && Args[3].Constant == 0;
+}
+
+std::optional<BoundIntegerCall>
+checkedBoundIntegerCall(const BinaryImage &Image, const LowFunc &Caller,
+                        const LowOp &Op,
+                        const std::map<int32_t, FrameValue> &Arguments,
+                        const std::map<unsigned, FrameValue> &Registers,
+                        BoundFrameCalls Calls, size_t &Work) {
+  if (Calls == BoundFrameCalls::Raise || !hasX86ScalarCallOutput(Op) ||
+      !checkedRegistrationDirectCall(Image, Caller, Op, Work) ||
+      !isPlainRegistrationCalleeEntry(Image, Op.Inputs[0].Offset))
+    return std::nullopt;
+  Decoder Dec;
+  if (!Dec.init(Image))
+    return std::nullopt;
+  const auto Callee = CFGBuilder().buildIntegerFrameProof(
+      Image, Dec, Op.Inputs[0].Offset, "bound-integer-call");
+  if (!Callee.hasCompleteLiftCoverage() || Callee.ExceptionMetadata ||
+      !chargeDecodedCallee(Work, Callee))
+    return std::nullopt;
+  BoundIntegerCall Result;
+  bool Closed = false;
+  std::optional<FrameValue> Returned;
+  std::optional<uint32_t> Pop;
+  if (!hasPrivateCallerFrame(Callee, Image, Work, Result.Memory,
+                             {.ScalarArguments = &Arguments,
+                              .ScalarRegisters = &Registers,
+                              .ReturnValue = &Returned,
+                              .Calls = Calls,
+                              .ClosedIntegerEffects = &Closed,
+                              .StackPopBytes = &Pop}) ||
+      !Closed || Pop != 0 || !Returned || Returned->MayBeFrame ||
+      !Result.Memory.CallerPCWrites.empty())
+    return std::nullopt;
+  Result.Result = projectX86CallReturnValue(*Returned);
+  return Result;
 }
 
 bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
@@ -125,7 +162,7 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
            .ScalarRegisters = &Registers,
            .ReturnValue =
                ReturnValue || Effect || Invocation ? &Returned : nullptr,
-           .ExcludeCalls = Effect != nullptr,
+           .Calls = Effect ? BoundFrameCalls::CallFree : BoundFrameCalls::Raise,
            .OriginalImage = OriginalImage,
            .StackPopBytes = &Pop,
            .Dispatch = Invocation ? &Dispatch : nullptr}) ||

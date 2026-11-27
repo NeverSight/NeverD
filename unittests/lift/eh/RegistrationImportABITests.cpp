@@ -223,6 +223,29 @@ TEST(RegistrationImportABI, UCRTInitializerWalkersUseTheRuntimeProvider) {
                            "api-ms-win-crt-stdio-l1-1-0.dll");
 }
 
+TEST(RegistrationImportABI, StartupModesReturnWithCallerCleanup) {
+  checkUCRTCallerCleanup({"_set_app_type", 1},
+                         "api-ms-win-crt-runtime-l1-1-0.dll",
+                         "api-ms-win-crt-stdio-l1-1-0.dll");
+  checkUCRTCallerCleanup({"_set_fmode", 1}, "api-ms-win-crt-stdio-l1-1-0.dll",
+                         "api-ms-win-crt-runtime-l1-1-0.dll");
+  checkUCRTCallerCleanup({"_set_new_mode", 1}, "api-ms-win-crt-heap-l1-1-0.dll",
+                         "api-ms-win-crt-runtime-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, StartupImportsUseTheirOwnUCRTFamily) {
+  const char *Runtime = "api-ms-win-crt-runtime-l1-1-0.dll";
+  const char *Locale = "api-ms-win-crt-locale-l1-1-0.dll";
+  const char *Math = "api-ms-win-crt-math-l1-1-0.dll";
+  for (ImportCase C : {ImportCase{"_configure_narrow_argv", 1},
+                       ImportCase{"_initialize_narrow_environment", 0},
+                       ImportCase{"_initialize_onexit_table", 1},
+                       ImportCase{"_register_onexit_function", 2}})
+    checkUCRTCallerCleanup(C, Runtime, Locale);
+  checkUCRTCallerCleanup({"_configthreadlocale", 1}, Locale, Math);
+  checkUCRTCallerCleanup({"__setusermatherr", 1}, Math, Runtime);
+}
+
 TEST(RegistrationImportABI, MainArgumentsUseTheirRuntimeAccessors) {
   for (const char *Name : {"__p___argc", "__p___argv"})
     checkUCRTCallerCleanup({Name, 0}, "api-ms-win-crt-runtime-l1-1-0.dll",

@@ -53,6 +53,7 @@ class CRTDataProof {
 
 public:
   bool active() const { return Active; }
+  bool eaxHoldsDataAddress() const;
   /// The checked no-argument accessor returned its CRT-owned cell in EAX.
   void recordAccessorReturn(CRTDataAccess Access, const NdVar &Output);
 
