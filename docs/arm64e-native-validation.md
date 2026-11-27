@@ -2804,6 +2804,20 @@ disabled-feature control.
 [Release evidence](evidence/arm64e-live-signing-modifier-2026-11-27.json) ·
 [Arm model and archived guest replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45978541273)
 
+For the multi-entry cases, the M4 Max published 24 images across two
+generations and checked 96 unwind rows. At shared authenticators with
+distinct signers, 60 register snapshots selected the expected slid PC.
+Twelve contradictory or incomplete paths and the two original IA/IB branches
+that skip the modifier assignment were rejected. On GitHub’s virtual Apple M1 runner,
+all 224 image and asynchronous-unwind tests, 63 adjacent tests and 42
+portable unwind tests passed with zero skips. The Arm FVP executed 36
+original and published bodies with both caller inputs at EL0 and EL1 in all
+four EnPACM configurations (576 calls). The same run replayed the earlier
+96- and 66-body guests and their disabled-feature controls.
+[Release evidence](evidence/arm64e-joined-signing-address-2026-11-27.json) ·
+[Arm model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45997050094) ·
+[Hosted macOS Release run](https://github.com/gmh5225/test_mac_intel/actions/runs/45989233449)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
