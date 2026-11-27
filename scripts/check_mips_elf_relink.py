@@ -20,7 +20,7 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
-PRODUCT_VERSION = 7
+PRODUCT_VERSION = 8
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -158,6 +158,8 @@ def profiles(version=PRODUCT_VERSION):
             yield Profile(abi, little)
             if version == 1:
                 continue
+            if version >= 8:
+                yield Profile(abi, little, linkage="large-segments")
             if version >= 7:
                 yield Profile(abi, little, linkage="init-arrays")
             if version >= 4:
@@ -484,7 +486,7 @@ def qualify(args):
 
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
-                if profile.linkage == "init-arrays":
+                if profile.linkage in ("init-arrays", "large-segments"):
                     reference = build / "reference.elf"
                     script = build / ("section.ld" if mode == "section" else "base.ld")
                     run([args.lld, "-static", "-T", script, "-o", reference,
@@ -715,7 +717,7 @@ def execute(args):
     manifest = json.loads((root / "products.json").read_text())
     if "version" in manifest:
         version = manifest["version"]
-        if version not in (2, 3, 4, 5, 6, 7):
+        if version not in (2, 3, 4, 5, 6, 7, 8):
             raise ValueError("Unknown MIPS relink products version")
         hashes = manifest["profiles"]
     else:

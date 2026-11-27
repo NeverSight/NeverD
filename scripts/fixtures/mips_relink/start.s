@@ -11,7 +11,7 @@ _start:
     LOAD_ADDRESS $sp, stack_top
     LOAD_ADDRESS $gp, _gp
     SET_THREAD_POINTER
-    LOAD_ADDRESS $25, run_calls
+    LOAD_ADDRESS $25, ENTRY_FUNCTION
     CALL_REGISTER
     addu $4, $2, $zero
     addiu $2, $zero, EXIT_NR

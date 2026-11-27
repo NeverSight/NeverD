@@ -32,6 +32,8 @@ def build_linkage_objects(args, build, profile, run):
     start = ((FIXTURES / "start.s").read_text().replace("LOAD_ADDRESS", load_address)
              .replace("SET_THREAD_POINTER", set_tp).replace("EXIT_NR", str(profile.exit_nr))
              .replace("CALL_REGISTER", "jalrc $25" if profile.release == 6 else "jalr $25\n    nop"))
+    entry = "check_large_segments" if profile.linkage == "large-segments" else "run_calls"
+    start = start.replace("ENTRY_FUNCTION", entry)
     if profile.tls_blocks:
         start += ((FIXTURES / "tls_blocks.s").read_text()
                   .replace("ADD_POINTER", "daddiu" if n64 else "addiu")
@@ -73,6 +75,8 @@ def build_linkage_objects(args, build, profile, run):
         compile_object("updated.o", calc.replace("ADJUST", "7"), features)
         return ["start.o", "caller.o", "calc.o"]
     driver = (FIXTURES / "caller.ll").read_text().replace("SEED_STORAGE", storage)
+    if profile.linkage == "large-segments":
+        driver += "\n" + (FIXTURES / "large_segments.ll").read_text()
     calc = (FIXTURES / "calc.ll").read_text().replace("SEED_STORAGE", storage)
     fp_sum = profile.linkage == "pic-hard" and profile.isa != "mips16"
     # Independent full-width results for the two argument lists in caller.ll.
@@ -100,6 +104,32 @@ def build_linkage_objects(args, build, profile, run):
     return ["start.o", "caller.o", "calc.o"]
 
 
+def verify_large_segments(image, profile, symtab):
+    for name, size, storage in (("payload", 16 << 20, "SHT_PROGBITS"),
+                                ("arena", 64 << 20, "SHT_NOBITS")):
+        symbols = symtab.get_symbol_by_name(name) or []
+        if len(symbols) != 1 or not isinstance(symbols[0]["st_shndx"], int):
+            raise ValueError(f"{profile.name}: expected one defined {name} object")
+        symbol = symbols[0]
+        section = image.get_section(symbol["st_shndx"])
+        begin = symbol["st_value"]
+        end = begin + size
+        if (symbol["st_info"]["type"] != "STT_OBJECT" or symbol["st_size"] != size
+                or section["sh_type"] != storage
+                or not section["sh_addr"] <= begin < end <= section["sh_addr"] + section["sh_size"]):
+            raise ValueError(f"{profile.name}: incorrect storage for {name}")
+        loads = [ph for ph in image.iter_segments() if ph["p_type"] == "PT_LOAD"
+                 and ph["p_vaddr"] <= begin and end <= ph["p_vaddr"] + ph["p_memsz"]]
+        if len(loads) != 1:
+            raise ValueError(f"{profile.name}: expected one load segment for {name}")
+        segment = loads[0]
+        file_end = segment["p_vaddr"] + segment["p_filesz"]
+        if (not segment["p_flags"] & 4
+                or storage == "SHT_PROGBITS" and (end > file_end or section["sh_flags"] & 1)
+                or storage == "SHT_NOBITS" and (begin < file_end or not segment["p_flags"] & 2)):
+            raise ValueError(f"{profile.name}: incorrect file extent or permissions for {name}")
+
+
 def inspect_linkage(image, profile, function, text):
     """Verify the actual callable pointer and floating-point ABI in each ET_EXEC."""
     symtab = image.get_section_by_name(".symtab")
@@ -120,6 +150,8 @@ def inspect_linkage(image, profile, function, text):
                     or section["sh_addr"] % width or section.data() != expected):
                 raise ValueError(f"{profile.name}: incorrect {name} function pointers")
         return
+    if profile.linkage == "large-segments":
+        verify_large_segments(image, profile, symtab)
     callback, = symtab.get_symbol_by_name("callback")
     data = image.get_section(callback["st_shndx"])
     offset = callback["st_value"] - data["sh_addr"]
