@@ -441,10 +441,40 @@ def qualify_upgrade(args):
     print(f"Relinked {len(results)} original-release programs with the new linker in both modes")
 
 
+def check_same_basename_inputs(args, build, out, manifest):
+    names = ["调用 端/模块.o", "计算 端/模块.o"]
+    for name, original in zip(names, manifest["objects"], strict=True):
+        path = build / name
+        path.parent.mkdir()
+        shutil.copyfile(build / original, path)
+    job = {**manifest, "objects": names, "original": names[1]}
+    manifest_path = build / "构建 输入.json"
+    same = out / "更新 程序.elf"
+    reference = build / "reference.elf"
+    for mode in MODES:
+        fields = job.copy()
+        if mode == "inplace":
+            del fields["section"], fields["sectionLayout"]
+        encode(manifest_path, fields)
+        shutil.copy2(out / "original.elf", same)
+        run([args.neverd, "patch", same, f"--relink={manifest_path}",
+             f"--linker-path={args.lld}", f"--mode={mode}", "-o", same])
+        layout = fields.get("sectionLayout", fields["layout"])
+        run([args.lld, "-static", "-T", build / layout, "-o", reference,
+             build / manifest["objects"][0], build / manifest["replacement"]])
+        product = out / f"{mode}.elf"
+        expected = digest(reference)
+        if digest(same) != expected or digest(product) != expected:
+            raise ValueError(f"{build.name}: {mode} relink with same-basename inputs differs")
+        # Run this same-path output in the guest execution matrix.
+        same.replace(product)
+
+
 def qualify(args):
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     results, object_hashes = {}, {}
+    classic_r2 = set(profiles(1))
     with tempfile.TemporaryDirectory(prefix="mips relink ") as temp:
         for profile in profiles():
             name = profile.name
@@ -476,6 +506,8 @@ def qualify(args):
 
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
+            if profile in classic_r2:
+                check_same_basename_inputs(args, build, out, manifest)
             if profile.linkage:
                 results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
                 object_hashes[name] = {}

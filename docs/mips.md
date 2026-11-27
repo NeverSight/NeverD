@@ -297,7 +297,10 @@ MIPS-enabled shared-library build and `PYTHONPATH` to
 segments' memory permissions, starts at the entry point, and checks the ABI
 exit syscall and its result. The manual **MIPS ELF relink**
 workflow builds the programs on Linux, macOS and Windows and runs all three
-sets on Linux.
+sets on Linux. For the six classic R2 ABI and byte-order combinations, the
+runner uses same-named objects in different directories, UTF-8 paths with
+spaces and the input pathname as the output. Both modes must match independent
+links. The inplace manifest omits the optional section fields.
 
 ## Implementation boundaries
 
