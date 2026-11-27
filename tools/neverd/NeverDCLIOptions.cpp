@@ -154,8 +154,7 @@ cl::SubCommand InfoCmd("info", "Show binary metadata summary");
 cl::SubCommand PythonCmd("python",
                          "Recover Python source, bytecode and packages");
 cl::opt<std::string> PythonProfile(
-    "profile",
-    cl::desc("Python profile (auto, cpython-3.10, cpython-3.11 or renpy)"),
+    "profile", cl::desc("Python profile (auto, cpython-MAJOR.MINOR or renpy)"),
     cl::init("auto"), cl::sub(PythonCmd));
 cl::opt<unsigned> PythonFunction("function",
                                  cl::desc("Export one recovered function ID"),

@@ -236,7 +236,11 @@ void neverd::python::archive(Job &J, unsigned Id, StringRef B, size_t Cookie,
     Members.push_back({Name, Start + At, N, Unpacked, bool(Flag), Type});
     P += Record;
   }
-  visit(J, Id, B, Members, Depth, Version);
+  // Older package writers encoded single-digit minor versions as 27 or 39.
+  unsigned Runtime = Version >= 20 && Version < 40
+                         ? Version / 10 * 100 + Version % 10
+                         : Version;
+  visit(J, Id, B, Members, Depth, Runtime);
 }
 
 void neverd::python::pyz(Job &J, unsigned Id, StringRef B, unsigned Depth) {
@@ -249,7 +253,8 @@ void neverd::python::pyz(Job &J, unsigned Id, StringRef B, unsigned Depth) {
   R["kind"] = "pyinstaller_pyz";
   R["backend"] = "package";
   R["magic"] = Magic;
-  unsigned Version = pythonVersion(Magic);
+  unsigned Version = pythonVersion(support::endian::read32le(B.data() + 4),
+                                   profileVersion(J.Profile));
   if (!Version)
     unsupported(4, "Unqualified PYZ marshal layout");
   size_t Toc = support::endian::read32be(B.data() + 8);
@@ -261,7 +266,9 @@ void neverd::python::pyz(Job &J, unsigned Id, StringRef B, unsigned Depth) {
     malformed(Toc, "Invalid PYZ table type");
   std::vector<Member> Members;
   auto Entry = [&](const Object &Name, const Object &Fields) {
-    if (Name.Type != Object::Unicode || !safeMemberName(Name.Data))
+    if ((Name.Type != Object::Unicode &&
+         !(Version < 300 && Name.Type == Object::Bytes)) ||
+        !safeMemberName(Name.Data))
       malformed(Name.Offset, "Unsafe PYZ module name");
     if (Fields.Type != Object::Tuple || Fields.Items.size() != 3 ||
         !llvm::all_of(Fields.Items, [](const Object *O) {

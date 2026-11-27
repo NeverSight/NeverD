@@ -5609,8 +5609,8 @@
       "status": "experimental",
       "owner": "bytecode",
       "targets": [
-        "CPython 3.10.16 disk wordcode",
-        "CPython 3.11.11 disk wordcode",
+        "CPython 0.9.8 and 0.9.9 disk bytecode",
+        "CPython 1.0–1.6, 2.0–2.7 and 3.0–3.15 disk bytecode",
         "PyInstaller onefile, onedir and PYZ",
         "Python sources and native extensions"
       ],
@@ -5618,7 +5618,7 @@
         "docs/python-recovery.md"
       ],
       "limitations": [
-        "Issue #1022. Qualified CPython 3.10 regions publish source. CPython 3.11 publishes disassembly and exception-table evidence. The release matrix lists unvalidated versions and packaging profiles.",
+        "Issue #1022. Source coverage is per function and release. The release matrix records compiler fixtures for the qualified disk layouts.",
         "Original source retains its bytes. Native images use the native analysis backend. Unsupported functions keep their own diagnostics."
       ],
       "tests": [

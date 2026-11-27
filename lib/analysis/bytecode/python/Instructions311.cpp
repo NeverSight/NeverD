@@ -86,7 +86,10 @@ public:
   }
 };
 
-std::vector<std::optional<unsigned>> sourceLines(Job &J, const Code &C) {
+} // namespace
+
+std::vector<std::optional<unsigned>>
+neverd::python::locationLines(Job &J, const Code &C) {
   const size_t Units = C.Bytes->Data.size() / 2;
   std::vector<std::optional<unsigned>> Lines;
   Lines.reserve(Units);
@@ -123,7 +126,8 @@ std::vector<std::optional<unsigned>> sourceLines(Job &J, const Code &C) {
   return Lines;
 }
 
-json::Array exceptionRegions(Job &J, const Code &C, ArrayRef<int> Starts) {
+json::Array neverd::python::exceptionRegions(Job &J, const Code &C,
+                                             ArrayRef<int> Starts) {
   TableReader R(*C.Exceptions);
   json::Array Regions;
   unsigned Previous = 0;
@@ -149,14 +153,12 @@ json::Array exceptionRegions(Job &J, const Code &C, ArrayRef<int> Starts) {
   }
   return Regions;
 }
-} // namespace
-
 void neverd::python::decode311(Job &J, Function &F) {
   const Code &C = *F.Node.Body;
   StringRef Bytes = C.Bytes->Data;
   J.charge(J.Instructions, Bytes.size() / 2, limits::kInstructions,
            C.Bytes->DataOffset);
-  auto Lines = sourceLines(J, C);
+  auto Lines = locationLines(J, C);
   std::vector<int> Starts(Bytes.size() / 2, -1);
   SmallVector<unsigned> Targets;
   std::vector<InstructionRecord> Rows;

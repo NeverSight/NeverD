@@ -12,6 +12,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/PythonRecovery.h"
+#include "neverd/analysis/PythonVersions.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
@@ -22,6 +23,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <filesystem>
+#include <set>
 
 using namespace llvm;
 using namespace neverd::python;
@@ -81,6 +83,76 @@ const json::Object *named(const json::Array &Rows, StringRef Name) {
       return V.getAsObject();
   return nullptr;
 }
+TEST(PythonRecovery, ReleaseFixturesMatchProducerInstructionsAndSource) {
+  auto Path = std::filesystem::path(PYTHON_ARTIFACT_MANIFEST).parent_path() /
+              "releases.json";
+  auto File = MemoryBuffer::getFile(Path.string());
+  ASSERT_TRUE(File);
+  auto Manifest = json::parse((*File)->getBuffer());
+  ASSERT_TRUE(bool(Manifest));
+  const auto *Rows = Manifest->getAsArray();
+  ASSERT_NE(Rows, nullptr);
+  std::set<unsigned> Seen;
+  for (const auto &Row : *Rows) {
+    const auto &Fixture = *Row.getAsObject();
+    auto Exact = *Fixture.getString("version");
+    SCOPED_TRACE(Exact.str());
+    StringRef Minor = Exact;
+    if (!Exact.starts_with("0.") && Exact.count('.') > 1)
+      Minor = Exact.rsplit('.').first;
+    std::string Profile = ("cpython-" + Minor).str();
+    auto Version = profileVersion(Profile);
+    ASSERT_NE(Version, 0u);
+    Seen.insert(Version);
+    auto Disk = fixtureBytes(Fixture);
+    auto Read = [&](StringRef B, StringRef Name, StringRef P) {
+      return recover(B, Name, P, [] { return false; });
+    };
+    auto R = Read(Disk, "fixture.pyc", Profile);
+    ASSERT_EQ(R.getString("status"), "reconstructed_source");
+    EXPECT_EQ(R.getString("input_sha256"), Fixture.getString("sha256"));
+    const auto &Functions = *R.getArray("functions");
+    const auto &Expected = *Fixture.getArray("functions");
+    ASSERT_EQ(Functions.size(), Expected.size());
+    for (size_t J = 0; J < Expected.size(); ++J) {
+      const auto &F = *Functions[J].getAsObject();
+      ASSERT_EQ(F.getString("status"), "reconstructed_source");
+      ASSERT_TRUE(F.getString("source"));
+      const auto &Instructions = *F.getArray("instructions");
+      const auto &Oracle = *Expected[J].getAsObject()->getArray("instructions");
+      ASSERT_EQ(Instructions.size(), Oracle.size());
+      for (size_t N = 0; N < Oracle.size(); ++N) {
+        const auto &I = *Instructions[N].getAsObject();
+        const auto &Observation = *Oracle[N].getAsArray();
+        EXPECT_EQ(I.getInteger("pc"), Observation[0].getAsInteger());
+        EXPECT_EQ(I.getString("opcode"), Observation[1].getAsString());
+      }
+    }
+    auto Automatic = Read(Disk, "untagged", "auto");
+    EXPECT_EQ(Automatic.getString("status"), "reconstructed_source");
+    const auto &Component =
+        *Automatic.getArray("components")->front().getAsObject();
+    if (Version == 101 || Version == 102)
+      EXPECT_EQ(Component.getString("dialect"), "CPython 1.1/1.2");
+    else
+      EXPECT_EQ(Component.getString("dialect"), dialectName(Version));
+    size_t Header = Version >= 307 ? 16 : Version >= 303 ? 12 : 8;
+    ASSERT_GT(Disk.size(), Header);
+    auto Raw =
+        Read(StringRef(Disk).drop_front(Header), "owned.marshal", Profile);
+    EXPECT_EQ(Raw.getString("status"), "reconstructed_source");
+    EXPECT_EQ(Read(StringRef(Disk).take_front(Header - 1), "owned.pyc", Profile)
+                  .getString("status"),
+              "malformed");
+    EXPECT_EQ(
+        Read(Disk, "untagged", Version == 310 ? "cpython-3.9" : "cpython-3.10")
+            .getString("status"),
+        "unsupported");
+  }
+  for (const auto &R : Releases)
+    EXPECT_TRUE(Seen.contains(R.Version)) << R.Number;
+}
+
 TEST(PythonRecovery, OwnedCodeObjectsMatchDisassembly) {
   unsigned Cases = 0;
   for (const auto &Value : fixtures()) {

@@ -100,12 +100,22 @@ void writeFunction(json::OStream &OS, const json::Object &Fn,
 
 void neverd::python::attachInstructionRows(Job &J, Function &F,
                                            json::Object &Row) {
-  const bool Modern = F.Node.Body->Version == 311;
-  const size_t Count = Modern ? F.DiskInstructions.size() : F.Code.size();
+  const bool HasDiskRows = F.Node.Body->Version != 310;
+  if (HasDiskRows && !F.Lines.empty()) {
+    size_t N = 0;
+    for (auto &Row : F.DiskInstructions) {
+      while (N < F.Code.size() && F.Code[N].Byte == Row.PC) {
+        if (!Row.SourceLine && F.Lines[N])
+          Row.SourceLine = F.Lines[N];
+        ++N;
+      }
+    }
+  }
+  const size_t Count = HasDiskRows ? F.DiskInstructions.size() : F.Code.size();
   if (J.InstructionTables && Count) {
     auto &Table = J.InstructionTables->emplace_back();
     Table.FunctionIndex = J.Functions.size();
-    if (Modern) {
+    if (HasDiskRows) {
       Table.Rows = std::move(F.DiskInstructions);
     } else {
       Table.Rows.reserve(Count);
@@ -119,7 +129,7 @@ void neverd::python::attachInstructionRows(Job &J, Function &F,
   Instructions.reserve(Count);
   for (size_t N = 0; N < Count; ++N)
     Instructions.emplace_back(instructionObject(
-        Modern ? F.DiskInstructions[N] : instructionRecord(F, N)));
+        HasDiskRows ? F.DiskInstructions[N] : instructionRecord(F, N)));
   Row["instructions"] = std::move(Instructions);
 }
 

@@ -90,9 +90,6 @@ std::string portable(const fs::path &P) {
   auto U = P.generic_u8string();
   return {U.begin(), U.end()};
 }
-unsigned profileVersion(StringRef Profile) {
-  return Profile == "cpython-3.10" ? 310 : Profile == "cpython-3.11" ? 311 : 0;
-}
 void checkProfile(StringRef Profile, unsigned Version, size_t At) {
   if (auto Requested = profileVersion(Profile);
       Requested && Requested != Version)
@@ -298,7 +295,8 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
   StringRef Ext = sys::path::extension(Name);
   if (B.starts_with(StringRef("PYZ\0", 4))) {
     if (B.size() >= 8) {
-      unsigned Tag = pythonVersion(support::endian::read16le(B.data() + 4));
+      unsigned Tag = pythonVersion(support::endian::read32le(B.data() + 4),
+                                   profileVersion(Profile));
       if (Version && Tag && Tag != Version)
         malformed(4, "PYZ magic conflicts with enclosing runtime");
       checkProfile(Profile, Tag, 4);
@@ -306,11 +304,13 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
     pyz(*this, Id, B, Depth);
     return;
   }
-  if (RawCode) {
+  bool HasPycMagic =
+      B.size() >= 4 && pythonVersion(support::endian::read32le(B.data()));
+  if (RawCode && !HasPycMagic) {
     R["kind"] = "marshalled_code";
     R["backend"] = "python";
     R["python_version_tag"] = Version;
-    if (Version != 310 && Version != 311)
+    if (!knownVersion(Version))
       unsupported(0, "Unqualified packaging runtime for raw code");
     checkProfile(Profile, Version, 0);
     if (!selected(*this, Id)) {
@@ -321,40 +321,19 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
     return;
   }
   if (Ext.equals_insensitive(".pyc") ||
-      (B.size() >= 4 && B.substr(2, 2) == "\r\n" &&
-       pythonVersion(support::endian::read16le(B.data())) &&
-       !Ext.equals_insensitive(".py"))) {
+      (HasPycMagic && (RawCode || !Ext.equals_insensitive(".py")))) {
     R["kind"] = "pyc";
     R["backend"] = "python";
-    if (B.size() < 4 || B.substr(2, 2) != "\r\n")
-      malformed(0, "Invalid or truncated pyc magic");
-    unsigned Magic = support::endian::read16le(B.data());
-    R["magic"] = Magic;
-    unsigned Tag = pythonVersion(Magic);
-    if (!Tag)
-      unsupported(0, "Unqualified CPython magic and code layout");
+    unsigned Tag;
+    size_t Header = pycHeader(*this, R, B, Tag);
     checkProfile(Profile, Tag, 0);
-    if (B.size() < 16)
-      malformed(B.size(), "Truncated pyc header");
-    unsigned Flags = support::endian::read32le(B.data() + 4);
-    if (Flags != 0 && Flags != 1 && Flags != 3)
-      malformed(4, "Invalid pyc invalidation flags");
-    R["header_mode"] = Flags == 0   ? "timestamp"
-                       : Flags == 1 ? "unchecked_hash"
-                                    : "checked_hash";
-    if (Flags)
-      R["source_hash"] = toHex(B.substr(8, 8), true);
-    else {
-      R["timestamp"] = support::endian::read32le(B.data() + 8);
-      R["source_size"] = support::endian::read32le(B.data() + 12);
-    }
-    R["optimization"] = "unknown";
-    R["dialect"] = Tag == 310 ? "CPython 3.10" : "CPython 3.11";
+    if (Version && Version != Tag)
+      malformed(0, "Python magic conflicts with enclosing runtime");
     if (!selected(*this, Id)) {
       R["status"] = "available";
       return;
     }
-    recoverCode(*this, Id, B, 16, Tag);
+    recoverCode(*this, Id, B, Header, Tag);
     return;
   }
   if (Ext.equals_insensitive(".py")) {
