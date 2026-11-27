@@ -22,7 +22,7 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
-PRODUCT_VERSION = 10
+PRODUCT_VERSION = 11
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -107,6 +107,11 @@ class Profile:
     historical_isa: int = 0
     linkage: str = ""
     gp64_o32: bool = False
+    dwarf_version: int = 0
+
+    @property
+    def high_address(self):
+        return self.abi == "n64" and bool(self.shrinking or self.linkage or self.dwarf_version)
 
     @property
     def tls_model(self):
@@ -124,6 +129,8 @@ class Profile:
     @property
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
+        if self.dwarf_version:
+            return f"dwarf{self.dwarf_version}-{suffix}"
         if self.gp64_o32:
             suffix = "gp64-" + suffix
         if self.linkage:
@@ -160,6 +167,9 @@ def profiles(version=PRODUCT_VERSION):
             yield Profile(abi, little)
             if version == 1:
                 continue
+            if version >= 11:
+                for dwarf_version in (4, 5):
+                    yield Profile(abi, little, dwarf_version=dwarf_version)
             if version >= 9:
                 yield Profile(abi, little, linkage="callback-table")
             if version >= 8:
@@ -233,6 +243,11 @@ def startup(profile):
 
 
 def calculator(profile, updated):
+    if profile.dwarf_version:
+        return ((FIXTURES / "debug_calc.ll").read_text()
+                .replace("DWARF_VERSION", str(profile.dwarf_version))
+                .replace("SOURCE_LINE", "29" if updated else "14")
+                .replace("ADJUST", "7" if updated else "3"))
     if not profile.shrinking:
         return CALC.replace("ADJUST", "7" if updated else "3")
     # A changing FDE size would legitimately change loaded bytes outside calc.
@@ -243,7 +258,7 @@ def calculator(profile, updated):
 
 
 def layout(profile, section, *, split_entry=False):
-    base = 0x120000000 if (profile.shrinking or profile.linkage) and profile.abi == "n64" else 0x400000
+    base = 0x120000000 if profile.high_address else 0x400000
     headers = "PHDRS { startup PT_LOAD FLAGS(5); code PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }"
     calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
             ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
@@ -313,7 +328,8 @@ def build_arithmetic_objects(args, build, profile):
     assemble_startup(args, build, profile)
     compile_arithmetic_object(args, build, profile, "calc.o", calculator(profile, False))
     compile_arithmetic_object(args, build, profile, "updated.o", calculator(profile, True))
-    compile_arithmetic_object(args, build, profile, "grown.o", GROWING_CALC)
+    if not profile.dwarf_version:
+        compile_arithmetic_object(args, build, profile, "grown.o", GROWING_CALC)
     objects = ["start.o"]
     if profile.isa == "mips16":
         compile_arithmetic_object(args, build, profile, "invoke.o", MIPS16_CALLER)
@@ -583,15 +599,17 @@ def qualify(args):
 
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
-                if profile.linkage in ("init-arrays", "large-segments", "callback-table"):
+                if profile.dwarf_version or profile.linkage in ("init-arrays", "large-segments", "callback-table"):
                     reference = build / "reference.elf"
                     script = build / ("section.ld" if mode == "section" else "base.ld")
                     run([args.lld, "-static", "-T", script, "-o", reference,
                          *(build / ("updated.o" if obj == manifest["original"] else obj) for obj in objects)])
                     if digest(reference) != digest(out / f"{mode}.elf"):
                         raise ValueError(f"{name}: {mode} output differs from the direct link")
+            results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
+            if profile.dwarf_version:
+                continue
             if profile.linkage:
-                results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
                 object_hashes[name] = {}
                 for obj in ("caller.o", "calc.o"):
                     shutil.copyfile(build / obj, out / obj)
@@ -601,8 +619,7 @@ def qualify(args):
             write(build / "grown.ld", split)
             encode(manifest_path, {**manifest, "replacement": "grown.o", "sectionLayout": "grown.ld"})
             patch("section", out / "section-grown.elf")
-            results[name] = {case: digest(out / f"{case}.elf")
-                             for case in ("original", *MODES, "section-grown")}
+            results[name]["section-grown"] = digest(out / "section-grown.elf")
             if profile == Profile(profile.abi, profile.little):
                 results[name].update(qualify_second_updates(args, build, out, profile, manifest, patch))
 
@@ -716,11 +733,40 @@ def inspect_elf(image, profile, *, require_pic_marker=False):
     va, size = symbol["st_value"], symbol["st_size"]
     if (symbol["st_info"]["type"] != "STT_FUNC" or not section["sh_flags"] & 4 or size <= 0
             or not section["sh_addr"] <= va <= section["sh_addr"] + section["sh_size"] - size
-            or ((profile.shrinking or profile.linkage) and profile.abi == "n64" and va < 1 << 32)):
+            or (profile.high_address and va < 1 << 32)):
         raise ValueError(f"{profile.name}: invalid calc range {va:#x}+{size:#x} in {section.name}")
     if profile.linkage:
         inspect_linkage(image, profile, symbol, section)
     return dict(va=va, offset=section["sh_offset"] + va - section["sh_addr"], size=size, section=section.name)
+
+
+def verify_dwarf(image, version, placement, line):
+    from elftools.dwarf.descriptions import describe_form_class
+
+    dwarf = image.get_dwarf_info()
+    unit, = dwarf.iter_CUs()
+    if unit["version"] != version or unit["address_size"] != image.elfclass // 8:
+        raise ValueError("Unexpected MIPS DWARF version or address size")
+    subprogram, = (die for die in unit.iter_DIEs() if die.tag == "DW_TAG_subprogram")
+    attrs = subprogram.attributes
+    start = attrs["DW_AT_low_pc"].value
+    high = attrs["DW_AT_high_pc"]
+    end = high.value + (start if describe_form_class(high.form) == "constant" else 0)
+    if (attrs["DW_AT_name"].value != b"calc" or attrs["DW_AT_decl_line"].value != line
+            or (start, end) != (placement["va"], placement["va"] + placement["size"])):
+        raise ValueError(f"DWARF subprogram does not match calc at {placement['va']:#x}")
+    program = dwarf.line_program_for_CU(unit)
+    states = [e.state for e in program.get_entries() if e.state is not None]
+    if (len(states) < 2 or states[0].address != start or not states[-1].end_sequence
+            or states[-1].address != end):
+        raise ValueError("DWARF line table does not span calc")
+    for state in states[:-1]:
+        # DWARF 5 numbers files from zero. Earlier line tables start at one.
+        index = state.file if version == 5 else state.file - 1
+        if (state.end_sequence or state.line != line or not start <= state.address < end
+                or not 0 <= index < len(program.header.file_entry)
+                or program.header.file_entry[index].name != b"calc.c"):
+            raise ValueError(f"DWARF line table does not identify calc.c line {line}")
 
 
 def execute_image(path, image, profile, expected):
@@ -811,7 +857,7 @@ def execute(args):
     manifest = json.loads((root / "products.json").read_text())
     if "version" in manifest:
         version = manifest["version"]
-        if version not in (2, 3, 4, 5, 6, 7, 8, 9, 10):
+        if version not in range(2, PRODUCT_VERSION + 1):
             raise ValueError("Unknown MIPS relink products version")
         hashes = manifest["profiles"]
     else:
@@ -842,7 +888,7 @@ def execute(args):
             original, updated = 41, 73
             verify_linkage_objects(root / profile.name, profile, object_hashes[profile.name], digest)
         expected_results = {"original": original, "section": updated, "inplace": updated}
-        if version >= 3 and not profile.linkage:
+        if version >= 3 and not profile.linkage and not profile.dwarf_version:
             # The larger body returns 61, 56 and 44 for the three startup calls.
             expected_results["section-grown"] = 161
         second_updates = version >= 10 and profile == Profile(profile.abi, profile.little)
@@ -858,6 +904,8 @@ def execute(args):
             with path.open("rb") as source:
                 image = ELFFile(source)
                 ranges[case] = inspect_elf(image, profile, require_pic_marker=args.partial_link == "pic")
+                if profile.dwarf_version:
+                    verify_dwarf(image, profile.dwarf_version, ranges[case], 14 if case == "original" else 29)
                 execute_image(path, image, profile, expected)
             row[case] = expected
         old, inplace = ranges["original"], ranges["inplace"]

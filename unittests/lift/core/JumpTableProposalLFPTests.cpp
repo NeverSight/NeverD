@@ -1583,15 +1583,19 @@ TEST_F(JumpTableProposalLFP,
             nullptr);
   EXPECT_TRUE(
       Exhausted.Low.UnsafeIndirectBranchAddresses.count(LocallyClaimed->Addr));
+  // The sibling jumps through the same read-only table of this function's
+  // own labels, so it stays a branch rather than a call of a case label
+  // (restoredX64IndirectTailFrames), but the budget the claimed branch ran
+  // out of quarantines nothing there.
   EXPECT_NE(
-      findOpcodeAtAddress(Exhausted.Low, Other->Addr, neverd::NdOp::INDIR_CALL),
-      nullptr);
-  EXPECT_EQ(
       findOpcodeAtAddress(Exhausted.Low, Other->Addr, neverd::NdOp::INDIR_BR),
       nullptr);
+  EXPECT_EQ(
+      findOpcodeAtAddress(Exhausted.Low, Other->Addr, neverd::NdOp::INDIR_CALL),
+      nullptr);
   EXPECT_FALSE(Exhausted.Low.UnsafeIndirectBranchAddresses.count(Other->Addr))
-      << "the sibling that did not reach its local certificate must remain "
-         "eligible for callback lowering";
+      << "the sibling that did not reach its local certificate must not "
+         "inherit the claimed branch's fail-closed identity";
 
   const BudgetedBuild Callback =
       BuildWithBudget(*CallbackFunction, *ExhaustingBudget);

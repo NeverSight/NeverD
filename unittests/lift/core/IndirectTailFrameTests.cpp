@@ -106,6 +106,16 @@ TEST_F(X64IndirectTailFrame, LazyBindingResolverJumpKeepsTheTailCall) {
   EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
   EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::RETURN));
+
+  // tf_ext's PLT entry jumps through its GOT slot, which names the entry's
+  // own push until the dynamic linker binds it.  Writable memory is no table
+  // of the entry's labels, so that jump stays a tail call too.
+  ASSERT_GE(Plt->Size, 32u);
+  neverd::CFGBuilder EntryBuilder;
+  const auto Entry = EntryBuilder.build(*Image, Decoder, Plt->VA + 16, "plt1");
+  EXPECT_FALSE(hasOpcode(Entry, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(hasOpcode(Entry, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(hasOpcode(Entry, neverd::NdOp::RETURN));
 }
 
 // A live, disagreeing or unknown frame keeps the jump an unresolved branch:
@@ -120,6 +130,23 @@ TEST_F(X64IndirectTailFrame, LiveOrUnknownStackPointerKeepsTheBranch) {
         "tf_frame_lost", "tf_loop_push"}) {
     SCOPED_TRACE(Name);
     const auto Low = build(*Image, Name);
+    EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
+
+// A jump through a read-only table of the function's own labels stays within
+// the function whatever its frame: calling a case label as a function would
+// drop the cases from the decompiled body.  Neither table is bounded, and the
+// stripped library names neither, yet each first entry decodes to a label of
+// its function, also through a base RBX keeps across a call.
+TEST_F(X64IndirectTailFrame, OwnLabelTableKeepsTheBranch) {
+  auto Image = neverd::loadBinary(linkedFixture().string());
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  for (const char *Name : {"tf_leaf_table", "tf_table_kept"}) {
+    SCOPED_TRACE(Name);
+    const auto Low = build(*Image, Name);
+    ASSERT_FALSE(Low.Blocks.empty());
     EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
     EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
   }

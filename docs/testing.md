@@ -16110,6 +16110,12 @@ trap on a register earlier calls left behind, and no incoming stack slot taken
 for the routine's open arity. `MedCallLeftovers.JoinsOfCallClobbersOnly`
 checks which clobbers and joins `ValuesLeftByCalls` names, loops and exception
 entries included.
+`X86_64_CallAbi.AnUndescribedCalleeTakesNoRegisterNothingSetForIt` decompiles
+GCC's call of an undescribed external after a branch that may call another,
+in a function that receives no parameter in those registers: through HighC
+and LLVM C each call passes its one set argument and no unknown value.
+`MedABIPass.CallClobberPhisDoNotInventTrailingArguments` keeps a join that a
+write on one way sets.
 `CallsTakeNoIncomingRegisterAnEarlierCallChanged` links, for x86-64, i386,
 ARM and AArch64, a routine that reads four argument registers with callers
 that declare it with one, calling it after another call, after a join of two
@@ -16193,6 +16199,9 @@ one of two paths, after an unrestored realignment or a register adjustment,
 after LEAVE reads an RBP a call result moved, and after a pushing loop.
 `LazyBindingResolverJumpKeepsTheTailCall` keeps the library's PLT0 jump to
 the lazy-binding resolver a tail call after its push.
+`OwnLabelTableKeepsTheBranch` keeps the branch through an unbounded relative
+table of the function's own labels with nothing pushed, and through one whose
+base RBX keeps across a call, after popping RBX.
 `LowIntrinsicMemoryOperands.DecodeOnlyTheLiftedShapes` rejects width, ordering
 and segment mismatches and intrinsics without a memory contract.
 

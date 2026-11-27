@@ -12582,9 +12582,20 @@ dynamic linker fills with its lazy-binding resolver
 PLT0 pushes. Before the condition, a jump inside its frame through a
 relative table the resolver could not bound became a call of its case labels
 in a stripped library, which no relocation names the table in: liblzma's
-encoder, libjq, gawk, sqlite3Parser and bash each had one. A frameless
-function's unresolved local dispatch still depends on the resolver's table
-identity.
+encoder, libjq, gawk, sqlite3Parser and bash each had one. The proof also
+follows which registers and temporaries may hold an address of the function's
+own code, or a value read through or computed from a table of them: a value
+an instruction computes from constants alone that is such an address, or
+that starts read-only data whose first 32-bit offset from it, or whose first
+word, names the function's code, and anything derived from one. Only that
+computed value counts, since a RIP-relative operand starts from the next
+instruction's address, which lies in the function. A call keeps only the
+preserved registers' marks. A jump to such a value stays within the function
+whatever its frame, so a frameless function's unbounded relative table no
+longer becomes a call of its case labels. Writable memory is no such table,
+nor is a slot the loader fills, such as a Control Flow Guard dispatch slot: a
+GOT slot names its PLT stub until the dynamic linker binds it, and the stub's
+jump through it stays a tail call.
 
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
@@ -13776,7 +13787,19 @@ those slots shows they are no arguments (an -O0 spill near the call), so they
 end with it.
 That count is the named parameters of a variadic callee and zero for a callee
 nothing describes. Below it the callee reads the register, and the unknown
-value stays. The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
+value stays. On System V x86-64 a direct callee nothing describes also ends
+its integer and floating registers at one that every way into the call
+leaves holding either such a leftover or the value the register entered the
+function with where no parameter arrives, and some way the former: neither
+the function nor its caller set it for an argument, and a compiler sets each
+argument of a call on every way to it. A write on any way keeps the
+register, since one call instruction can serve calls of different arity
+(`printf("%d", x)` and `printf("hi")` cross-jumped), as does a parameter's
+incoming value, which the function may pass on. sqlite's `parse.o` called
+`sqlite3ErrorMsg(pParse, "too many terms in compound SELECT")` with two more
+unknown values from such joins, and `printf.o` passed `sqlite3_value_int64`,
+which takes one pointer, two.
+The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
 routine comes from its register save area, which spills the argument registers
 from the first unnamed one to the last (`MedFunc::VariadicFirstRegister`).
 Windows ARM64 has no va_list record: va_start spills x(first) through x7 to

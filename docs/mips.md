@@ -202,6 +202,12 @@ The runtime qualification uses the NeverSight LLVM fork's code generator,
 assembler and ELF linker. Each row below runs in both byte orders with the
 original program and both relink modes.
 
+DWARF 4 and 5 fixtures exercise all three ABIs in both byte orders. The
+runner checks the function's debug address range against its linked symbol
+and reads the file and line at the linked instructions. Both modes carry
+the rebuilt function's new source line. The n64 fixtures place the
+function above 4 GiB.
+
 | Instruction set | ABIs | Entry points |
 | --- | --- | --- |
 | MIPS I, II | o32 | Classic |
