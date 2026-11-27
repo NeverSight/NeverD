@@ -187,6 +187,7 @@ class SimplifySurfaceAgreementTests(unittest.TestCase):
                             f"--width={width}"]
                     normal = subprocess.run(args, capture_output=True, text=True, check=True)
                     default, reference = json.loads(normal.stdout)
+                    corpus.write_text(expressions[0] + "\n", encoding="utf-8")
                     limited = subprocess.run(args + ["--max-work=65536"],
                                              capture_output=True, text=True, check=True)
                     constrained = json.loads(limited.stdout)[0]
