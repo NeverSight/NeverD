@@ -3967,6 +3967,11 @@ alias_done:
     ProofQueryComplete.insert(ProofQueryComplete.end(),
                               FallbackQueryComplete.begin(),
                               FallbackQueryComplete.end());
+    // ProofQueries[I] stays the query behind ProofResults[I]: the narrow-lane
+    // extension check below asks a bound leaf's identity again.
+    ProofQueries.insert(ProofQueries.end(),
+                        std::make_move_iterator(FallbackQueries.begin()),
+                        std::make_move_iterator(FallbackQueries.end()));
   }
   // Lane-source identities only add evidence: they run for lanes no query
   // above bound, and a pair that fails or cannot complete leaves its guard
@@ -4007,6 +4012,9 @@ alias_done:
       ProofResults.push_back(LaneResults[2 * I + 1]);
       ProofQueryComplete.push_back(LaneQueryComplete[2 * I + 1]);
     }
+    ProofQueries.insert(ProofQueries.end(),
+                        std::make_move_iterator(LaneQueries.begin()),
+                        std::make_move_iterator(LaneQueries.end()));
   }
   std::map<const GuardSyntaxNode *, GuardExprPtr> ExprMemo;
   // The syntax leaf behind each materialized index leaf, for the narrow-lane
@@ -5002,7 +5010,11 @@ alias_done:
   // longer agree. The bound still names the index when every index leaf of
   // the selected guards reaches the table index zero-extended: a structural
   // leaf (the lane itself, its zero-extend, or an AND keeping the whole lane),
-  // or a leaf whose identity query also holds with sign extension excluded.
+  // or a leaf whose identity also holds with sign extension excluded. That
+  // identity is the one Materialize bound the leaf with: its index query, the
+  // extended lane's query, or the lane source's. A lane read again on each
+  // entry path binds only through the extended lane: the narrowed index query
+  // names one definition, which another path does not reach.
   // Those queries run on a copy of the account, charged only when they hold,
   // so a lane they cannot prove fails exactly as before.
   auto selectedLaneZeroExtended = [&]() {
@@ -5039,10 +5051,18 @@ alias_done:
                Query < ProofQueryComplete.size() && ProofQueryComplete[Query] &&
                ProofResults[Query];
       };
-      if (!holds(Leaf.IndexQuery) ||
-          (Leaf.IndexQueryUsesDefinition && !holds(Leaf.DefQuery)))
+      size_t Identity;
+      if (holds(Leaf.IndexQuery) &&
+          (!Leaf.IndexQueryUsesDefinition || holds(Leaf.DefQuery)))
+        Identity = Leaf.IndexQuery;
+      else if (holds(Leaf.ExtendedLaneQuery))
+        Identity = Leaf.ExtendedLaneQuery;
+      else if (holds(Leaf.LaneSourceIndexQuery) &&
+               holds(Leaf.LaneSourceDefQuery))
+        Identity = Leaf.LaneSourceIndexQuery;
+      else
         return false;
-      JumpTableValueQuery Query = ProofQueries[Leaf.IndexQuery];
+      JumpTableValueQuery Query = ProofQueries[Identity];
       Query.AllowSignExtension = false;
       ZeroQueries.push_back(std::move(Query));
     }

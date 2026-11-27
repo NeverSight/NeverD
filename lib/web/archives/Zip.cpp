@@ -13,9 +13,11 @@
 #include "PathIndex.h"
 #include "ZipInternal.h"
 
+#include "neverd/support/SHA256.h"
 #include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
@@ -281,6 +283,7 @@ class ZipReader {
 
   void payloads() {
     BlobStore Store(Budget);
+    SHA256Stream ExpandedHash;
     uint64_t Steps = 0;
     for (uint64_t I = 0; I < A.Members.size(); ++I) {
       check();
@@ -288,19 +291,25 @@ class ZipReader {
       if (!M.available() && !(Jar && M.Kind == "directory"))
         continue;
       M.Offset = A.ExpandedBytes;
+      SHA256Stream MemberHash;
+      auto Append = [&](std::string_view Bytes) {
+        Store.append(Bytes);
+        MemberHash.update(Bytes);
+        ExpandedHash.update(Bytes);
+      };
       decodeZipMember(A.Original.slice(M.StoredOffset, M.StoredSize),
-                      M.Compression, M.Size, Records[I].CRC, Store, Steps,
+                      M.Compression, M.Size, Records[I].CRC, Append, Steps,
                       Stop);
+      if (M.available())
+        M.BlobHash = llvm::toHex(MemberHash.final(), true);
       A.ExpandedBytes += M.Size;
     }
     Store.seal();
     A.Expanded = Store.whole();
-    A.ExpandedHash = A.Expanded.digest();
+    A.ExpandedHash = llvm::toHex(ExpandedHash.final(), true);
     for (auto &M : A.Members)
-      if (M.available()) {
+      if (M.available())
         M.Content = A.Expanded.slice(M.Offset, M.Size);
-        M.BlobHash = M.Content.digest();
-      }
   }
 
 public:
@@ -353,7 +362,7 @@ PackageArchive readJarArchive(std::string_view Bytes, uint64_t ExpandedBudget,
   A.Format = "jar";
   A.Profile = "jvm-zip32-v1";
   A.Original = Store.whole();
-  A.BlobHash = A.Original.digest();
+  A.BlobHash = sha256(Bytes);
   A.ID = identity("package-archive", {A.BlobHash, A.Profile});
   readZipArchive(A, ExpandedBudget, JarPath, true, Stop);
   return A;

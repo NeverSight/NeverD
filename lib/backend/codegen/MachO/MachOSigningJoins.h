@@ -1,9 +1,11 @@
-//===- MachOSigningJoins.h - Joined Darwin signing addresses ------*- C++
-//-*-===//
+//===- MachOSigningJoins.h - Darwin signing joins -------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+
+/// \file
+/// Prove signing-PC identities at ordinary control-flow joins.
 
 #ifndef NEVERD_LIB_BACKEND_CODEGEN_MACHO_MACHOSIGNINGJOINS_H
 #define NEVERD_LIB_BACKEND_CODEGEN_MACHO_MACHOSIGNINGJOINS_H
@@ -13,6 +15,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 
+#include <utility>
+
 namespace neverd {
 struct LowFunc;
 
@@ -21,6 +25,10 @@ struct MachOSigningJoins {
   bool Unresolved = false;
   llvm::DenseMap<va_t, MachOSigningAddress> Addresses{};
   llvm::DenseMap<va_t, uint32_t> Consumers{};
+  // Only explicit incoming branches need a non-default label.
+  llvm::DenseMap<va_t, std::pair<va_t, unsigned>> BranchRoutes{};
+  llvm::DenseMap<va_t, MachOSigningConsumer> Dispatches{};
+  llvm::SmallDenseSet<va_t, 2> SigningPCs{};
   llvm::SmallDenseSet<uint32_t, 2> RetainedSigningWords{};
 };
 

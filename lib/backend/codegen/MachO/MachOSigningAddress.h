@@ -76,6 +76,12 @@ inline MachOAuthenticationForm machOPCAuthenticationForm(uint32_t Bits) {
   return MachOAuthenticationForm::None;
 }
 
+/// An ordinary reference to a proved signer can escape independently of the
+/// reaching definition used by AUT. Follow its aliases through their uses.
+bool machOObservesSigningAddress(Decoder &Decode,
+                                 const MachOLiftedSource &Source, va_t Start,
+                                 va_t After, aarch64_reg Reg);
+
 /// Check both register operands and the address of a published restore pair.
 bool machORestoresSigningAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes,
                                  va_t PC, unsigned Register, va_t Target);

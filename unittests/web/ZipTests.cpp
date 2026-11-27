@@ -111,6 +111,27 @@ TEST_F(WebZip, StoredDeflateDescriptorsAndEmptyFilesKeepExactEvidence) {
                   .Members.empty());
 }
 
+TEST_F(WebZip, ExpandedHashSpansChunksAndSkipsUnavailableMembers) {
+  std::string Payload(BlobTransferBytes + 17, 'x');
+  Payload[BlobTransferBytes] = '\0';
+  for (uint16_t Method : {0, 8}) {
+    if (Method == 8 && !packageZipDeflateAvailable())
+      continue;
+    const ZipFixture F({{"head", "prefix"},
+                        {"hidden", "opaque", 0, 1},
+                        {"data", Payload, Method},
+                        {"empty", ""},
+                        {"tail", "end"}});
+    const auto A = extractPackageArchive(input(F.Bytes), "zip");
+    ASSERT_EQ(A.Members.size(), 5u);
+    EXPECT_EQ(A.ExpandedHash, sha256("prefix" + Payload + "end"));
+    EXPECT_EQ(A.ExpandedHash, A.Expanded.digest());
+    EXPECT_TRUE(A.Members[1].BlobHash.empty());
+    EXPECT_EQ(A.Members[2].BlobHash, sha256(Payload));
+    EXPECT_EQ(A.Members[3].BlobHash, sha256(""));
+  }
+}
+
 TEST_F(WebZip, UnavailableMembersHaveNoBytesAndStillOwnTheirNames) {
   const ZipFixture F({{"ok.js", "let x=1;"},
                       {"encrypted", "opaque", 0, 1},

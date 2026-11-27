@@ -680,6 +680,7 @@ json::Object irReport(const Flow &G, const Instructions &CodeRows,
     return json::Object{{"id", V.Id}, {"type", V.Type}};
   };
   json::Array Blocks;
+  Blocks.reserve(G.Blocks.size());
   for (auto &B : G.Blocks) {
     json::Object O{{"pc", CodeRows.Rows[B.Begin].PC},
                    {"reachable", bool(B.Entry)}};
@@ -698,6 +699,7 @@ json::Object irReport(const Flow &G, const Instructions &CodeRows,
     O["exception_successors"] = std::move(Exceptional);
     if (B.Entry) {
       json::Array Stack, Locals, Ops;
+      Ops.reserve(B.End - B.Begin);
       for (auto &V : B.Entry->Stack)
         Stack.emplace_back(value(V));
       for (unsigned I = 0; I < B.Entry->Locals.size(); ++I) {
@@ -711,6 +713,7 @@ json::Object irReport(const Flow &G, const Instructions &CodeRows,
       for (unsigned I = B.Begin; I < B.End; ++I) {
         auto &Node = G.Ops[I];
         json::Array Inputs;
+        Inputs.reserve(Node.Inputs.size());
         for (auto &V : Node.Inputs)
           Inputs.emplace_back(value(V));
         json::Object Op{{"pc", CodeRows.Rows[I].PC},

@@ -184,7 +184,8 @@ JVMRecoveryDialog::JVMRecoveryDialog(const QString &Worker, QWidget *Parent)
   connect(Classes, &QComboBox::currentIndexChanged, this,
           [this] { methods(); });
   connect(Results, &QComboBox::currentIndexChanged, this, [this] { select(); });
-  connect(Tabs, &QTabWidget::currentChanged, this, [this] { updateActions(); });
+  connect(Tabs, &QTabWidget::currentChanged, this,
+          [this] { showCurrentTab(); });
   connect(Mappings, &QListWidget::currentRowChanged, this, [this](int N) {
     if (N < 0)
       return;
@@ -244,6 +245,8 @@ JVMRecoveryDialog::JVMRecoveryDialog(const QString &Worker, QWidget *Parent)
 void JVMRecoveryDialog::resetIndex() {
   Index = {};
   Report = {};
+  for (auto *View : {Bytecode, IR, Evidence})
+    View->clear();
   Results->clear();
   classes();
   select();
@@ -326,40 +329,18 @@ void JVMRecoveryDialog::receive(const QJsonObject &M) {
     }
   }
 
-  select();
-  if (Inventory)
-    Tabs->setCurrentWidget(Evidence);
-  else if (!Java->document()->isEmpty())
-    Tabs->setCurrentWidget(Java);
-  else if (!IR->document()->isEmpty())
-    Tabs->setCurrentWidget(IR);
-  else if (!Bytecode->document()->isEmpty())
-    Tabs->setCurrentWidget(Bytecode);
-  else
-    Tabs->setCurrentWidget(Evidence);
+  select(true);
   updateActions();
 }
-void JVMRecoveryDialog::select() {
-  auto Fs = Report["functions"].toArray();
-  auto F = Fs.at(Results->currentIndex()).toObject();
+QJsonObject JVMRecoveryDialog::currentFunction() const {
+  return Report["functions"].toArray().at(Results->currentIndex()).toObject();
+}
+void JVMRecoveryDialog::select(bool ChooseTab) {
+  const auto F = currentFunction();
+  RenderedTabs.fill(false, Tabs->count());
   QSignalBlocker Guard(Java);
   Java->setPlainText(F["source"].toString());
-  IR->setPlainText(json(F["ir"]));
-  auto Instructions = F["instructions"].toArray();
-  Bytecode->setPlainText(Instructions.isEmpty() ? QString()
-                                                : json(Instructions));
-  if (Report.isEmpty())
-    Evidence->clear();
-  else if (F.isEmpty()) {
-    auto Details = Report;
-    Details.remove("functions");
-    Evidence->setPlainText(json(Details));
-  } else {
-    auto Details = F;
-    for (auto K : {"source", "instructions", "ir"})
-      Details.remove(K);
-    Evidence->setPlainText(json(Details));
-  }
+  const auto Instructions = F["instructions"].toArray();
   Mappings->clear();
   for (auto V : Instructions) {
     auto I = V.toObject();
@@ -378,7 +359,44 @@ void JVMRecoveryDialog::select() {
   Flags.removeAll(QString());
   Flags.removeDuplicates();
   Status->setText(Flags.join(QStringLiteral(" · ")));
-  updateActions();
+  if (ChooseTab) {
+    auto *View = Evidence;
+    if (!Inventory && !Java->document()->isEmpty())
+      View = Java;
+    else if (!Inventory && (F["ir"].isObject() || F["ir"].isArray()))
+      View = IR;
+    else if (!Inventory && !Instructions.isEmpty())
+      View = Bytecode;
+    if (Tabs->currentWidget() != View) {
+      Tabs->setCurrentWidget(View);
+      return;
+    }
+  }
+  showCurrentTab();
+}
+void JVMRecoveryDialog::showCurrentTab() {
+  const int Tab = Tabs->currentIndex();
+  auto *View = Tabs->currentWidget();
+  if (View != Java && !RenderedTabs.testBit(Tab)) {
+    RenderedTabs.setBit(Tab);
+    const auto F = currentFunction();
+    if (View == Bytecode) {
+      const auto Instructions = F["instructions"].toArray();
+      Bytecode->setPlainText(Instructions.isEmpty() ? QString()
+                                                    : json(Instructions));
+    } else if (View == IR) {
+      IR->setPlainText(json(F["ir"]));
+    } else if (View == Evidence) {
+      auto Details = F.isEmpty() ? Report : F;
+      if (F.isEmpty())
+        Details.remove("functions");
+      else
+        for (auto K : {"source", "instructions", "ir"})
+          Details.remove(K);
+      Evidence->setPlainText(Report.isEmpty() ? QString() : json(Details));
+    }
+  }
+  updateViewActions();
 }
 bool JVMRecoveryDialog::exportView(const QString &Dest, bool Full) {
   if (Report.isEmpty() || (!Full && !Save->isEnabled()))
@@ -400,12 +418,7 @@ bool JVMRecoveryDialog::exportView(const QString &Dest, bool Full) {
 }
 QByteArray JVMRecoveryDialog::selectedText() const {
   if (Tabs->currentWidget() == Java)
-    return Report["functions"]
-        .toArray()
-        .at(Results->currentIndex())
-        .toObject()["source"]
-        .toString()
-        .toUtf8();
+    return currentFunction()["source"].toString().toUtf8();
   return qobject_cast<QPlainTextEdit *>(Tabs->currentWidget())
       ->toPlainText()
       .toUtf8();
@@ -423,16 +436,14 @@ void JVMRecoveryDialog::updateActions() {
   Preview->setEnabled(Idle && Release->currentData().toInt() >= 12);
   Classes->setEnabled(Idle);
   Methods->setEnabled(Idle);
+  Export->setEnabled(!Report.isEmpty());
+}
+void JVMRecoveryDialog::updateViewActions() {
   bool Has = Tabs->currentWidget() == Java
-                 ? Report["functions"]
-                       .toArray()
-                       .at(Results->currentIndex())
-                       .toObject()["source"]
-                       .isString()
+                 ? currentFunction()["source"].isString()
                  : !qobject_cast<QPlainTextEdit *>(Tabs->currentWidget())
                         ->document()
                         ->isEmpty();
   Copy->setEnabled(Has);
   Save->setEnabled(Has);
-  Export->setEnabled(!Report.isEmpty());
 }

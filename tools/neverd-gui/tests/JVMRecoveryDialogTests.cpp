@@ -22,6 +22,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QSignalSpy>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
@@ -68,6 +69,7 @@ private slots:
     auto *Release = Dialog.findChild<QComboBox *>("jvmRelease");
     auto *Classes = Dialog.findChild<QComboBox *>("jvmClasses");
     auto *Methods = Dialog.findChild<QComboBox *>("jvmMethods");
+    auto *Results = Dialog.findChild<QComboBox *>("jvmResults");
     auto *Run = Dialog.findChild<QPushButton *>("jvmAnalyze");
     auto *Inspect = Dialog.findChild<QPushButton *>("jvmInspect");
     auto *Source = Dialog.findChild<QPlainTextEdit *>("jvmSource");
@@ -76,8 +78,8 @@ private slots:
     auto *Mappings = Dialog.findChild<QListWidget *>("jvmMappings");
     auto *Tabs = Dialog.findChild<QTabWidget *>();
     auto *Copy = Dialog.findChild<QPushButton *>("jvmCopy");
-    QVERIFY(Input && Release && Classes && Methods && Run && Inspect &&
-            Source && Bytecode && IR && Mappings && Tabs && Copy);
+    QVERIFY(Input && Release && Classes && Methods && Results && Run &&
+            Inspect && Source && Bytecode && IR && Mappings && Tabs && Copy);
     Input->setText(Path);
     Release->setCurrentIndex(Release->findData(17));
     QTRY_VERIFY_WITH_TIMEOUT(Inspect->isEnabled(), 15000);
@@ -101,6 +103,7 @@ private slots:
     const QString Key = "arithmetic(II)I";
     QVERIFY(Methods->findData(Key) > 0);
     Methods->setCurrentIndex(Methods->findData(Key));
+    QSignalSpy BytecodeChanges(Bytecode, &QPlainTextEdit::textChanged);
     Run->click();
     QVERIFY(!Run->isEnabled());
     QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
@@ -114,11 +117,16 @@ private slots:
     QCOMPARE(F["status"].toString(), "reconstructed_source");
     QCOMPARE(Tabs->currentWidget(), Source);
     QCOMPARE(Source->toPlainText(), F["source"].toString());
+    QCOMPARE(BytecodeChanges.count(), 0);
+    Tabs->setCurrentWidget(Bytecode);
     QCOMPARE(QJsonDocument::fromJson(Bytecode->toPlainText().toUtf8()).array(),
              F["instructions"].toArray());
+    Tabs->setCurrentWidget(IR);
     QCOMPARE(QJsonDocument::fromJson(IR->toPlainText().toUtf8()).object(),
              F["ir"].toObject());
+    BytecodeChanges.clear();
     Tabs->setCurrentWidget(Bytecode);
+    QCOMPARE(BytecodeChanges.count(), 0);
     Copy->click();
     QCOMPARE(QApplication::clipboard()->text(), Bytecode->toPlainText());
     Tabs->setCurrentWidget(Source);
@@ -141,6 +149,22 @@ private slots:
     Source->setTextCursor(
         QTextCursor(Source->document()->findBlockByNumber(Line - 1)));
     QCOMPARE(Mappings->selectedItems().size(), Map["pcs"].toArray().size());
+    Methods->setCurrentIndex(0);
+    Run->click();
+    QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
+    const int Row = Results->findText(Key, Qt::MatchEndsWith);
+    QVERIFY(Row >= 0 && Row != Results->currentIndex());
+    Tabs->setCurrentWidget(Bytecode);
+    Tabs->setCurrentWidget(IR);
+    BytecodeChanges.clear();
+    Results->setCurrentIndex(Row);
+    QCOMPARE(Tabs->currentWidget(), IR);
+    QCOMPARE(QJsonDocument::fromJson(IR->toPlainText().toUtf8()).object(),
+             F["ir"].toObject());
+    QCOMPARE(BytecodeChanges.count(), 0);
+    Tabs->setCurrentWidget(Bytecode);
+    QCOMPARE(QJsonDocument::fromJson(Bytecode->toPlainText().toUtf8()).array(),
+             F["instructions"].toArray());
     Classes->setCurrentIndex(Classes->findData(Attached));
     Run->click();
     QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
@@ -152,6 +176,11 @@ private slots:
     QCOMPARE(readFile(View), F["source"].toString().toUtf8());
     QVERIFY(!Dialog.exportView(View, false));
     QCOMPARE(readFile(View), F["source"].toString().toUtf8());
+    Tabs->setCurrentWidget(Bytecode);
+    QVERIFY(Bytecode->document()->isEmpty());
+    QVERIFY(!Copy->isEnabled());
+    Tabs->setCurrentWidget(IR);
+    QVERIFY(IR->document()->isEmpty());
   }
   void incompleteMethodShowsMappedBytecodeAndDiagnostics() {
     QTemporaryDir Temp;
@@ -208,11 +237,13 @@ private slots:
     QCOMPARE(Tabs->currentWidget(), IR);
     QCOMPARE(QJsonDocument::fromJson(IR->toPlainText().toUtf8()).object(),
              F["ir"].toObject());
+    Tabs->setCurrentWidget(Bytecode);
     QCOMPARE(QJsonDocument::fromJson(Bytecode->toPlainText().toUtf8()).array(),
              F["instructions"].toArray());
     auto D = F["diagnostics"].toArray();
     QVERIFY(!D.isEmpty());
     QVERIFY(Status->text().contains(D.first().toObject()["code"].toString()));
+    Tabs->setCurrentWidget(Evidence);
     QCOMPARE(QJsonDocument::fromJson(Evidence->toPlainText().toUtf8())
                  .object()["diagnostics"]
                  .toArray(),

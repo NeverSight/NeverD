@@ -11630,14 +11630,17 @@ A writer that copies an extended narrower value hides the extension: MSVC's
 ECX guard's lane names an opaque RCX occurrence. When neither identity binds
 such a lane, both queries retry rooted at the narrower value the lane carries
 unchanged, found through whole-width copies and extensions in the guard's
-block. The resolver still proves both, the narrow-lane bound check keeps the
-domain below that value's sign bit, and a failed retry changes nothing.
+block. The resolver still proves both, and a failed retry changes nothing.
 A narrow bound past the sign bit, such as GCC's `cmpb $0xb8, %dl; ja` before
 `movzbl %dl, %esi` in sqlite3VdbeExec, stands only when every index leaf of
 the selected guards reaches the table index zero-extended: a structural leaf,
-or one whose identity query also holds with sign extension excluded. Those
-queries spend a copy of the account, so a lane they cannot prove fails as
-before; a sign-extended lane keeps the dispatch unresolved. A compared byte
+or one whose identity also holds with sign extension excluded. That identity
+is the one that bound the leaf: its index query, the extended lane's query,
+or the lane source's. pcre2's set_start_bits compares the low lane of the
+register `movzbl` loaded and indexes with that register, a leaf only the
+extended lane binds. Those queries spend a copy of the account, so a lane
+they cannot prove fails as before; a sign-extended lane keeps the dispatch
+unresolved. A compared byte
 copied into the index's own lane before the compare (`mov %dl, %al`) is the
 index only when the index has that width or a later zero-extend covers the
 whole index: otherwise the index keeps its earlier upper bits, which no
@@ -11728,14 +11731,16 @@ When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
 the proposal supplies no table capacity or range authority. That envelope may
-reach 128 values, where an ordinary finite set stops at one 64-bit word. Each
+reach 255 values, where an ordinary finite set stops at one 64-bit word. Each
 arm's solver proves the envelope, then reads one feasible coordinate per call
 from a model and excludes it; members an earlier arm proved are excluded
 first. The calls therefore follow the members, not the proposed envelope, and
 an unrelated wide literal elsewhere in the function costs a few calls. bash
 enters a 97-case dispatch this way from a zero byte that skips its range
-guard. The ceiling stays below a byte lane's 256 values, so a byte read on an
-unguarded path is a counterexample rather than a domain proved by width. A dominating
+guard, and pcre2's set_start_bits a 173-case dispatch whose two entry paths
+each compare the opcode with 0xac. The ceiling stays below a byte lane's 256
+values, so a byte read on an unguarded path can be 255, a counterexample
+rather than a domain proved by width. A dominating
 equality, or a dominating signed upper bound, that is not itself an unsigned
 dense prefix does not discard those predecessor ranges: the same query proves
 the prefix and keeps the dominating edge constraints. A dominating range that
@@ -12543,6 +12548,29 @@ identity or source ABI. Successful classification emits an explicit
 `INDIR_CALL + RETURN` pair; HighIR cannot infer another tail call from a
 successorless `INDIR_BR`. An unresolved transfer without a usable switch
 remains an explicit failure path.
+
+An x86-64 candidate has no link register to restore: its caller's CALL left
+the return address on the stack, so `restoredX64IndirectTailFrames`
+(`X86/IndirectTailFrameX86.cpp`) requires every reaching path to leave RSP at
+its incoming value. The proof follows what each register and temporary
+derives from the incoming RSP: pushes, pops, constant adjustments, LEAVE and
+copies through RBP or a temporary carry an exact offset, and any other
+operation of a derived value, a partial or guarded write and a disagreeing
+join keep the derivation and lose the offset. A call keeps RSP and the
+registers both x86-64 conventions preserve. Landing pads and other roots
+enter at an unknown offset. An unknown or nonzero offset keeps the indirect
+branch. A value read from memory, an argument or a call's result derives
+from nothing here, so a jump whose RSP derives from nothing on every path
+resumes saved state on another stack, as `gogo<>`, longjmp and a fiber switch
+do, and stays a tail call, as does PLT0's jump through the DT_PLTGOT slot the
+dynamic linker fills with its lazy-binding resolver
+(`RuntimeCallablePointerSlotKind::ELFLazyResolver`), which receives the word
+PLT0 pushes. Before the condition, a jump inside its frame through a
+relative table the resolver could not bound became a call of its case labels
+in a stripped library, which no relocation names the table in: liblzma's
+encoder, libjq, gawk, sqlite3Parser and bash each had one. A frameless
+function's unresolved local dispatch still depends on the resolver's table
+identity.
 
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in

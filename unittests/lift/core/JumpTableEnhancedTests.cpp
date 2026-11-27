@@ -4892,6 +4892,131 @@ TEST_F(JTE_X86_64, NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex) {
   }
 }
 
+static fs::path narrowLoadX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_load.o";
+}
+
+// `cmpb $0x81, %al; ja` bounds the low lane of the register the byte was
+// loaded into, which is also the table index (pcre2's set_start_bits).  A
+// `movzbl` lane binds through the extended lane's identity and a `movzbq`
+// lane through the lane source's, and each dispatch reads all 130 slots.
+// After `movsbl; cltq` and `movsbq` those identities hold only with sign
+// extension, and after a bare `movsbl` not at all, so those dispatches stay
+// unresolved.
+TEST_F(JTE_X86_64, LoadedByteLanePastTheSignBitBoundsAZeroExtendedIndex) {
+  auto ImageOrErr = neverd::loadBinary(narrowLoadX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  // Each table holds 130 entries and a zero word.
+  const auto TableBase = [&](size_t Table) {
+    return Rodata->VA + Table * 131 * 4;
+  };
+  const auto Entries = [&](size_t Table) {
+    std::vector<neverd::va_t> Targets;
+    for (size_t Slot = 0; Slot < 130; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(TableBase(Table) + Slot * 4, 4);
+      if (!Bytes)
+        return std::vector<neverd::va_t>{};
+      int32_t Entry = 0;
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+      Targets.push_back(TableBase(Table) + static_cast<int64_t>(Entry));
+    }
+    return Targets;
+  };
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  for (const auto &[Name, Table] : {std::pair{"jt_load_movzbl", size_t{0}},
+                                    std::pair{"jt_load_movzbq", size_t{1}}}) {
+    SCOPED_TRACE(Name);
+    const std::vector<neverd::va_t> Expected = Entries(Table);
+    ASSERT_EQ(Expected.size(), 130u);
+    const neverd::LowFunc Low = Build(Name);
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    EXPECT_FALSE(Low.JumpTables.front().AnalysisOnly);
+    EXPECT_EQ(Low.JumpTables.front().BaseAddr, TableBase(Table));
+    EXPECT_EQ(Low.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  }
+
+  for (const char *Name :
+       {"jt_load_cltq", "jt_load_movsbq", "jt_load_movsbl"}) {
+    SCOPED_TRACE(Name);
+    const neverd::LowFunc Refused = Build(Name);
+    EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
+    for (const neverd::JumpTable &Table : Refused.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
+}
+
+static fs::path laneEntryPathsX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_lane_entry_paths.o";
+}
+
+// Each of two entry paths loads a byte with `movzbl` and compares it with
+// `cmpb $0xac` (pcre2's set_start_bits), so no compare dominates the table
+// load and the joined predecessor domain has to prove all 173 slots.  A
+// sign-extended second byte, a second path without a compare, and a signed
+// `jg` on that path each admit a value past the table, so those dispatches
+// stay unresolved.
+TEST_F(JTE_X86_64, ByteComparedOnEachEntryPathBoundsAJoinedDomain) {
+  auto ImageOrErr = neverd::loadBinary(laneEntryPathsX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 173; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Joined = Build("jt_lane_paths");
+  ASSERT_EQ(Joined.JumpTables.size(), 1u);
+  EXPECT_FALSE(Joined.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Joined.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Joined.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Joined.UnsafeIndirectBranchAddresses.empty());
+
+  for (const char *Name :
+       {"jt_lane_paths_sext", "jt_lane_paths_open", "jt_lane_paths_signed"}) {
+    SCOPED_TRACE(Name);
+    const neverd::LowFunc Refused = Build(Name);
+    EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
+    for (const neverd::JumpTable &Table : Refused.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
+}
+
 static fs::path reloadCursorX64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_reload_cursor.o";
 }
@@ -10114,7 +10239,6 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsPrescaledBackedgeWidening) {
   bool SawMask56 = false;
   bool SawLiteral120 = false;
   const neverd::LowBlock *Dispatch = nullptr;
-  neverd::va_t DispatchAddr = neverd::InvalidVA;
   for (const neverd::LowBlock &Block : Low.Blocks)
     for (const neverd::LowOp &Op : Block.Ops) {
       if (Op.Opcode == neverd::NdOp::INT_AND)
@@ -10126,7 +10250,6 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsPrescaledBackedgeWidening) {
         ASSERT_EQ(Dispatch, nullptr)
             << "the fixture must contain one indirect dispatch";
         Dispatch = &Block;
-        DispatchAddr = Op.Addr;
       }
     }
   ASSERT_TRUE(SawMask56)
@@ -10134,13 +10257,12 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsPrescaledBackedgeWidening) {
   ASSERT_TRUE(SawLiteral120)
       << "case seven must expose the widened pre-scaled selector";
   EXPECT_TRUE(Low.JumpTables.empty());
-  if (Dispatch) {
-    EXPECT_TRUE(Dispatch->Succs.empty());
-    EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
-  } else {
-    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::RETURN));
-  }
+  // The table holds this function's own labels, and case seven enters the
+  // dispatch from a label no proof follows, so the jump is no tail call: no
+  // table proves its successors.
+  ASSERT_NE(Dispatch, nullptr);
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
 }
 
 TEST_F(JTE_X86_64,
@@ -11435,11 +11557,15 @@ TEST_F(JTE_X86_64, RegisterABIMemcpyRejectsCdeclStackDecoys) {
   neverd::LowFunc Low = buildNamedLowFunction(
       *ImageOrErr, "jt_stack_memcpy_register_abi_cdecl_decoys");
 
-  EXPECT_TRUE(Low.JumpTables.empty());
-  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR))
-      << "cdecl-shaped decoys must not promote a register-ABI tail transfer "
-         "to a local-table candidate";
+  EXPECT_TRUE(Low.JumpTables.empty())
+      << "cdecl-shaped decoys must not promote the jump to a local-table "
+         "candidate";
+  // The copied table holds this function's own labels and the frame is live
+  // at the jump, so it is no tail call: the labels its value can name are
+  // dispatched by value.
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Low.ValueDispatches.size(), 1u);
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 

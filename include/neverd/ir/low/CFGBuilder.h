@@ -1617,13 +1617,13 @@ private:
 
   /// The feasible coordinates of one finite-set query: member I is the
   /// unsigned value I.  Capacity is the widest envelope any finite-set
-  /// relation may prove; fixed storage keeps the value-batch cache's byte
-  /// accounting exact.  There is no conversion to an integer, so no caller
-  /// can keep only the low word.
+  /// relation may prove, in whole words; fixed storage keeps the value-batch
+  /// cache's byte accounting exact.  There is no conversion to an integer, so
+  /// no caller can keep only the low word.
   class JumpTableFeasibleSet {
   public:
     static constexpr uint32_t Capacity =
-        limits::kMaxJumpTableJoinedDomainValues;
+        (limits::kMaxJumpTableJoinedDomainValues + 63) / 64 * 64;
 
     /// The set of the members below 64 that \p Word holds.
     static JumpTableFeasibleSet fromLowWord(uint64_t Word) {
