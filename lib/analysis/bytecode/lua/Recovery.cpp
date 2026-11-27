@@ -161,14 +161,19 @@ std::string neverd::lua::serializeReport(json::Object Report) {
   // Keep the input identity and header when the full inventory cannot travel
   // through both frontends. The item/text budgets also bound serialization.
   json::Value Value(std::move(Report));
-  raw_string_ostream(Text) << Value;
+  raw_string_ostream OS(Text);
+  // Batch the single-byte writes from JSON string escaping.
+  OS.SetBuffered();
+  OS << Value;
+  OS.flush();
   if (Text.size() <= limits::kReportBytes)
     return Text;
-  auto &R = *Value.getAsObject();
-  R["functions"] = json::Array{};
-  R["root"] = nullptr;
-  failed(R, "budget_exceeded", "Lua report exceeds export budget");
+  auto &Object = *Value.getAsObject();
+  Object["functions"] = json::Array{};
+  Object["root"] = nullptr;
+  failed(Object, "budget_exceeded", "Lua report exceeds export budget");
   Text.clear();
-  raw_string_ostream(Text) << Value;
+  OS << Value;
+  OS.flush();
   return Text;
 }

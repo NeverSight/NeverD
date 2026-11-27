@@ -8,6 +8,7 @@
 /// cases.
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/analysis/bytecode/lua/Limits.h"
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/LuaRecovery.h"
@@ -127,6 +128,38 @@ TEST(LuaRecovery, SourceProfilesAndCancellation) {
   EXPECT_EQ(analyze(std::string(513 * 1024, 'a')).getString("status"),
             "budget_exceeded");
 }
+TEST(LuaRecovery, SerializedReportAtExportLimit) {
+  StringRef Input = "return 42\n";
+  auto Report = recover(Input, ".lua", "auto", [] { return false; });
+  const auto InputHash = Report.getString("input_sha256")->str();
+  auto &Source =
+      (*Report.getArray("functions")->front().getAsObject())["source"];
+  Source = "";
+  const size_t EnvelopeBytes = serializeReport(Report).size();
+  ASSERT_LT(EnvelopeBytes, limits::kReportBytes);
+  const size_t SourceBytes = limits::kReportBytes - EnvelopeBytes;
+  Source = std::string(SourceBytes, 'x');
+  EXPECT_EQ(serializeReport(Report).size(), limits::kReportBytes);
+
+  Source = std::string(SourceBytes + 1, 'x');
+  auto Reduced = json::parse(serializeReport(std::move(Report)));
+  ASSERT_TRUE(static_cast<bool>(Reduced)) << toString(Reduced.takeError());
+  const auto *Root = Reduced->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_EQ(Root->getString("status"), "budget_exceeded");
+  EXPECT_EQ(Root->getString("input_sha256"), InputHash);
+  EXPECT_TRUE(Root->getNull("root"));
+  ASSERT_NE(Root->getArray("functions"), nullptr);
+  EXPECT_TRUE(Root->getArray("functions")->empty());
+  const auto *Diagnostics = Root->getArray("diagnostics");
+  ASSERT_NE(Diagnostics, nullptr);
+  ASSERT_EQ(Diagnostics->size(), 1u);
+  const auto *Diagnostic = Diagnostics->front().getAsObject();
+  ASSERT_NE(Diagnostic, nullptr);
+  EXPECT_EQ(Diagnostic->getString("message"),
+            "Lua report exceeds export budget");
+}
+
 TEST(LuaRecovery, MalformedOperandsAndAuxiliaryBoundaries) {
   auto Data = sample("luau/values/debug");
   ASSERT_FALSE(Data.empty());
