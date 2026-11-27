@@ -74,6 +74,14 @@ std::optional<SymRef> symbolizeJumpTableIntegerOperation(
   };
 
   switch (Opcode) {
+  case NdOp::SELECT: {
+    if (RawInputs.size() != 3 || Ctx.width(RawInputs[1]) != OutputWidth ||
+        Ctx.width(RawInputs[2]) != OutputWidth)
+      return std::nullopt;
+    const SymRef Cond = RawInputs[0];
+    return Ctx.mkIte(Ctx.mkNe(Cond, Ctx.mkZero(Ctx.width(Cond))), RawInputs[1],
+                     RawInputs[2]);
+  }
   case NdOp::COPY:
   case NdOp::INT_ZEXT:
     if (RawInputs.size() != 1)

@@ -395,6 +395,12 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
               if (Path.DirectEdges.contains(Instruction) &&
                   (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR))
                 continue;
+              // Reaching the indirect transfer means its own instruction
+              // guard fell through. Keep the selector independent of the
+              // predicate and leave every earlier control boundary intact.
+              if (Instruction == &Terminator && Terminator.IsInstructionGuard &&
+                  Op.Opcode == NdOp::COND_BR)
+                continue;
               if (Operations.size() ==
                   limits::kMaxScalarBranchSymbolicOperations) {
                 Bounded = false;

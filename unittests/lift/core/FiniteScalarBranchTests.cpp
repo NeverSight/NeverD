@@ -147,6 +147,33 @@ TEST(FiniteScalarExpression, SparseMasksAndArithmeticWrapAtEveryWidth) {
   }
 }
 
+TEST(FiniteScalarExpression, SelectedAddressesKeepOnlyTheirAlignedTargets) {
+  for (unsigned Bytes : {4, 8}) {
+    const auto Target = NdVar::reg(0, Bytes);
+    LowOp Select;
+    Select.Addr = 0x1000;
+    Select.Opcode = NdOp::SELECT;
+    Select.Output = Target;
+    Select.addInput(NdVar::reg(16, 4));
+    Select.addInput(NdVar::scalar(0x1011, Bytes));
+    Select.addInput(NdVar::scalar(0x20ef, Bytes));
+    LowOp Align;
+    Align.Addr = 0x1004;
+    Align.Opcode = NdOp::INT_AND;
+    Align.Output = Target;
+    Align.addInput(Target);
+    Align.addInput(NdVar::scalar(~uint64_t{3}, Bytes));
+    size_t Work = limits::kMaxScalarBranchEvidenceWork;
+    EXPECT_EQ(finiteScalarExpression({Select, Align}, Target, Align.Addr, Work),
+              (std::vector<uint64_t>{0x1010, 0x20ec}));
+
+    Select.Inputs[2] = NdVar::reg(24, Bytes);
+    Work = limits::kMaxScalarBranchEvidenceWork;
+    EXPECT_FALSE(
+        finiteScalarExpression({Select, Align}, Target, Align.Addr, Work));
+  }
+}
+
 TEST(FiniteScalarExpression, BudgetsNeverReturnAnEnumeratedPrefix) {
   for (size_t Budget = 0; Budget < 2048; Budget += 7) {
     size_t Work = Budget;
