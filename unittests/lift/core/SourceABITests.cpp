@@ -4155,6 +4155,66 @@ int main(void) {
   }
 }
 
+TEST(SourceABI, NarrowReturnKeepsEarlierWholeRegisterCopiesIntact) {
+  for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    const auto &TRI = getTargetRegInfo(Architecture);
+    const auto Word = NdVar::reg(TRI.IntReturnReg, 8);
+    const auto Saved = NdVar::reg(
+        Architecture == Arch::AArch64 ? a64reg::X19 : x86reg::RBX, 8);
+    SourceFunctionTypeHint Narrow, Provider;
+    Narrow.ReturnType = NdType::makeInt(1, false);
+    Provider.ReturnType = NdType::makePtr();
+    std::string Error;
+    ASSERT_TRUE(assignDarwinScalarSourceABI(Narrow, Architecture, Error));
+    ASSERT_TRUE(assignDarwinScalarSourceABI(Provider, Architecture, Error));
+    LowFunc Low;
+    Low.Entry = 0x1200;
+    LowBlock B;
+    B.Id = 0;
+    B.StartAddr = Low.Entry;
+    const auto Append = [&](NdOp Opcode, NdVar Output,
+                            std::initializer_list<NdVar> Inputs) {
+      LowOp Op;
+      Op.Addr = B.StartAddr + 4 * B.Ops.size();
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      B.Ops.push_back(std::move(Op));
+    };
+    Append(NdOp::CALL, Word, {NdVar::cst(0x2000, 8)});
+    Append(NdOp::COPY, Saved, {Word});
+    Append(NdOp::STORE, {}, {NdVar::cst(0x4000, 8), Saved});
+    Append(NdOp::CALL, Word, {NdVar::cst(0x2100, 8)});
+    Append(NdOp::COPY, Saved, {Word});
+    Append(NdOp::COPY, Word, {Saved});
+    Append(NdOp::RETURN, {}, {Word});
+    B.EndAddr = B.Ops.back().Addr + 4;
+    Low.Blocks.push_back(std::move(B));
+    std::map<va_t, SourceFunctionTypeHint> Hints{
+        {Low.Entry, Narrow}, {0x2000, Provider}, {0x2100, Narrow}};
+    LowToMedConverter Converter;
+    Converter.setSourceCallHintsEnabled(true);
+    Converter.setSourceCalleeTypeHints(&Hints);
+    auto Med = Converter.convert(Low, Architecture, BinaryFormat::MachO);
+
+    const MedOp *Pointer = nullptr, *Store = nullptr;
+    for (const auto &Block : Med.Blocks)
+      for (const auto &Op : Block.Ops) {
+        if (Op.Opcode == NdOp::CALL && Op.Addr == Low.Entry)
+          Pointer = &Op;
+        if (Op.Opcode == NdOp::STORE)
+          Store = &Op;
+      }
+    ASSERT_NE(Pointer, nullptr);
+    ASSERT_NE(Store, nullptr);
+    ASSERT_EQ(Store->NumInputs, 2u);
+    EXPECT_EQ(Store->Inputs[1].Size, 8u);
+    EXPECT_EQ(Store->Inputs[1], Pointer->Output);
+  }
+}
+
 TEST(SourceABI, NarrowDarwinReturnsPreserveWordReadsWithoutInventingHighBits) {
   for (const auto Architecture : {Arch::AArch64, Arch::X64}) {
     const auto ReturnReg = getTargetRegInfo(Architecture).IntReturnReg;
