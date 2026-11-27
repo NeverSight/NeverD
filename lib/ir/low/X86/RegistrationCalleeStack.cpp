@@ -149,8 +149,10 @@ using registration_abi::checkedNearReturnStackPop;
 using registration_state::FrameState;
 using registration_state::FrameTransfer;
 using registration_state::FrameValue;
+enum class CallerStack { Unbound, PushedWord };
 using NestedStackProof =
-    std::function<std::optional<RegistrationCalleeStackContract>(va_t)>;
+    std::function<std::optional<RegistrationCalleeStackContract>(va_t,
+                                                                 CallerStack)>;
 
 bool endsInReturn(const LowBlock &Block) {
   return !Block.Ops.empty() && Block.Ops.back().Opcode == NdOp::RETURN;
@@ -171,7 +173,10 @@ struct StackBody {
   std::set<va_t> ImportSlots;
   llvm::SmallPtrSet<const LowOp *, 2> BindingPreservingInitializers;
   llvm::DenseMap<const LowOp *, uint32_t> DataAddressReturns;
+  llvm::DenseMap<const LowOp *, RegistrationCalleeStackContract>
+      PushedWordCalls;
   uint32_t ArgumentReadBytes = 0;
+  CallerStack Arguments = CallerStack::Unbound;
   bool CheckedArgumentReadBytes = false;
   bool PreservesImportBindings = false;
   bool Valid = false;
@@ -368,7 +373,7 @@ struct StackBody {
       return true;
     llvm::SmallVector<va_t, 4> Required;
     for (va_t Target : *Targets) {
-      const auto Callback = Nested(Target);
+      const auto Callback = Nested(Target, CallerStack::Unbound);
       if (!Callback || Callback->ImportVeneer || Callback->StackPopBytes != 0 ||
           !Callback->PreservesImportBindings)
         return true;
@@ -417,6 +422,30 @@ struct StackBody {
     return readLE<uint32_t>(Bytes->data() + Offset);
   }
 
+  bool hasPushedWord(const LowBlock &Block, const LowOp &Op) {
+    if (&Op == Block.Ops.data() || (&Op)[-1].Opcode != NdOp::STORE)
+      return false;
+    const auto *Call = registration_state::checkedRegistrationDirectCall(
+        Image, Source, Op, Work);
+    if (!Call || Call == Block.InstructionBoundaries.data())
+      return false;
+    const auto &Previous = Call[-1];
+    if (Previous.Address + Previous.Size != Op.Addr ||
+        !chargeCalleeWork(Work, Previous.Size + 1))
+      return false;
+    const auto *Bytes = Image.readVA(Previous.Address, Previous.Size);
+    DecodedInsn Push;
+    if (!Bytes ||
+        !Dec.decodeOne(Bytes, Previous.Size, Previous.Address, Push) ||
+        Push.Size != Previous.Size || Push.Id != X86_INS_PUSH || !Push.Raw ||
+        !Push.Raw->detail)
+      return false;
+    const auto &Operands = Push.Raw->detail->x86;
+    return Operands.op_count == 1 && Operands.operands[0].size == 4 &&
+           llvm::all_of(Operands.prefix,
+                        [](uint8_t Prefix) { return !Prefix; });
+  }
+
   bool collectCalleeImports(const NestedStackProof &Nested, bool Ordinary) {
     // Collect before transfer: a store can invalidate a dependency of a
     // later direct helper, including a veneer hidden behind another helper.
@@ -438,13 +467,20 @@ struct StackBody {
               continue;
             }
           }
-          if (const auto Callee = Nested(Op.Inputs[0].Offset)) {
+          const va_t Target = Op.Inputs[0].Offset;
+          auto Callee = Nested(Target, CallerStack::Unbound);
+          const bool Bound = !Callee && Ordinary && hasPushedWord(*Block, Op);
+          if (Bound)
+            Callee = Nested(Target, CallerStack::PushedWord);
+          if (Callee) {
             if (!chargeCalleeWork(Work, Callee->RequiredImports.size() + 1))
               return false;
             ImportSlots.insert(Callee->RequiredImports.begin(),
                                Callee->RequiredImports.end());
             if (Callee->ImportVeneer)
               Slot = Callee->RequiredImports.front();
+            if (Bound)
+              PushedWordCalls.try_emplace(&Op, std::move(*Callee));
           }
           if (!chargeCalleeWork(Work, 1))
             return false;
@@ -457,6 +493,21 @@ struct StackBody {
       }
     }
     return true;
+  }
+
+  std::optional<RegistrationCalleeStackContract>
+  calleeAt(const LowOp &Op, const FrameValue &SP,
+           const NestedStackProof &Nested) {
+    const auto It = PushedWordCalls.find(&Op);
+    if (It == PushedWordCalls.end())
+      return Nested(Op.Inputs[0].Offset, CallerStack::Unbound);
+    // The immediately preceding DWORD push must have completed in this block,
+    // within the current caller's allocation. The callee may read those four
+    // bytes. Their value and the caller's next stack word remain unknown.
+    if (!SP.Offset || *SP.Offset > -4 || SP != FrameValue::frame(*SP.Offset) ||
+        !chargeCalleeWork(Work, It->second.RequiredImports.size() + 1))
+      return std::nullopt;
+    return It->second;
   }
 
   bool immutableInstruction(const LowInstructionBoundary &Boundary) {
@@ -496,7 +547,7 @@ struct StackBody {
     return true;
   }
 
-  uint32_t callerArgumentReadBytes() {
+  uint32_t uniformReturnPop() {
     if (CheckedArgumentReadBytes)
       return ArgumentReadBytes;
     CheckedArgumentReadBytes = true;
@@ -515,6 +566,13 @@ struct StackBody {
     }
     ArgumentReadBytes = Pop.value_or(0);
     return ArgumentReadBytes;
+  }
+
+  uint32_t callerArgumentBytes(NdOp Opcode) {
+    const uint32_t Pop = uniformReturnPop();
+    return Arguments == CallerStack::PushedWord && Opcode == NdOp::LOAD
+               ? std::max(Pop, uint32_t{4})
+               : Pop;
   }
 
   LowOp stackOperation(const LowOp &Op) const {
@@ -750,7 +808,8 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       const bool Closed =
           (CheckEntryBindings || CheckCRTMemory) &&
           registration_abi::preservesOrdinaryRegistrationBindings(
-              Image, Abstract, Transfer, Body.callerArgumentReadBytes(), Work);
+              Image, Abstract, Transfer, Body.callerArgumentBytes(Op.Opcode),
+              Work);
       const auto BoundArgument =
           std::exchange(FollowingCRTArgument, std::nullopt);
       const bool StoreWithDataEAX = Op.Opcode == NdOp::STORE && TrackCRTData &&
@@ -778,7 +837,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
              Body.ImportDataLoads.count({Op.Addr, Op.Seq}));
         if (!CurrentImportRead &&
             !registration_abi::hasClosedOrdinaryRegistrationMemoryAccess(
-                Image, Abstract, Transfer, Body.callerArgumentReadBytes(),
+                Image, Abstract, Transfer, Body.callerArgumentBytes(Op.Opcode),
                 Work))
           // A continuing read/write-fault handler can replace an IAT without
           // changing the physical GPR context. Spatial disjointness alone
@@ -872,9 +931,9 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       std::optional<va_t> ImportedSlot;
       std::optional<uint32_t> DataAddress;
       std::optional<uint8_t> ResultByte;
+      const auto &SP = State.Registers[x86reg::RSP / x86reg::GeneralRegStride];
       if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
-          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
-          State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset) {
+          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 && SP.Offset) {
         if (BoundArgument) {
           const auto Bound = registration_abi::checkedBoundIntegerCall(
               Image, Body.Source, Op,
@@ -893,7 +952,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
             CalleePop = 0;
             PreserveImportBindings = true;
             DataAddress = It->second;
-          } else if (const auto Callee = NestedPop(Op.Inputs[0].Offset);
+          } else if (const auto Callee = Body.calleeAt(Op, SP, NestedPop);
                      Callee && (Callee->RequiredImports.empty() ||
                                 State.ImportBindingsIntact)) {
             CalleePop = Callee->StackPopBytes;
@@ -925,8 +984,6 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       }
       if (ImportedSlot && !PreserveImportBindings &&
           State.ImportBindingsIntact && !Registration && !CxxPaths) {
-        const auto &SP =
-            State.Registers[x86reg::RSP / x86reg::GeneralRegStride];
         if (SP.Offset && *SP.Offset <= -4 &&
             SP == FrameValue::frame(*SP.Offset)) {
           PreserveImportBindings =
@@ -1194,7 +1251,7 @@ stackPopForRegistration(StackBody &Body, const LowFunc &Function,
           !EH->CodeRange.contains(Scope.HandlerVA) ||
           !preservesFinallyFrame(Body, Scope.HandlerVA))
         return std::nullopt;
-      const auto Pop = NestedPop(Scope.HandlerVA);
+      const auto Pop = NestedPop(Scope.HandlerVA, CallerStack::Unbound);
       if (!Pop || Pop->StackPopBytes != 0)
         return std::nullopt;
     }
@@ -1276,11 +1333,16 @@ public:
         Parent(Parent) {}
 
   std::optional<RegistrationCalleeStackContract>
-  prove(va_t Target, bool *Reusable = nullptr) {
+  prove(va_t Target, CallerStack Arguments = CallerStack::Unbound,
+        bool *Reusable = nullptr) {
     if (Reusable)
       *Reusable = false;
     const registration_abi::StackProofOwnerScope OwnerScope(Owner, Work);
     if (!chargeCalleeWork(Work, 1))
+      return std::nullopt;
+    if (Arguments == CallerStack::PushedWord &&
+        (Parent ||
+         !registration_abi::isPlainRegistrationCalleeEntry(Image, Target)))
       return std::nullopt;
     // The parent may have dispatcher-entered returns. Its ordinary entry
     // cannot borrow the proof intended only for separately called interiors.
@@ -1290,6 +1352,7 @@ public:
       return std::nullopt;
     }
     const bool LocalEntry = Parent && Parent->Entries.count(Target);
+    const bool Standalone = !LocalEntry && Arguments == CallerStack::Unbound;
     if (LocalEntry)
       if (auto It = LocalCache.find(Target); It != LocalCache.end()) {
         if (!chargeCalleeWork(
@@ -1301,7 +1364,7 @@ public:
       }
     // Local witnesses belong to this source graph. Neither a cached standalone
     // refusal nor a local success may answer the other entry's proof domain.
-    if (!LocalEntry)
+    if (Standalone)
       if (auto It = Cache.find(Target); It != Cache.end()) {
         if (It->second &&
             !chargeCalleeWork(Work, It->second->RequiredImports.size() + 1))
@@ -1341,7 +1404,7 @@ public:
           Result.PreservesImportBindings =
               registration_abi::preservesRegistrationImportBindings(
                   Image, Result.RequiredImports.front());
-          if (!LocalEntry)
+          if (Standalone)
             Cache.emplace(Target, Result);
           if (Reusable)
             *Reusable = true;
@@ -1359,9 +1422,9 @@ public:
     // In-progress entries carry no fact: recursion cannot certify itself.
     // Even failed nested bodies consume the same cumulative work allowance.
     std::optional<RegistrationCalleeStackContract> LocalResult;
-    auto &Result = LocalEntry
-                       ? LocalResult
-                       : Cache.emplace(Target, std::nullopt).first->second;
+    auto &Result = Standalone
+                       ? Cache.emplace(Target, std::nullopt).first->second
+                       : LocalResult;
     ActiveStackProofs.insert(Identity);
     ++Depth;
     const llvm::scope_exit Leave([&] {
@@ -1369,15 +1432,16 @@ public:
       ActiveStackProofs.erase(Identity);
     });
     bool DependenciesReusable = true;
-    const auto Nested = [&](va_t Callee) {
+    const auto Nested = [&](va_t Callee, CallerStack Incoming) {
       // An independently built callee cannot export a local witness through
       // its transitive dependencies either. Its children use the same entry
       // admission as a fresh standalone query.
       bool NestedReusable = false;
       auto Contract =
-          LocalEntry ? prove(Callee, &NestedReusable)
-                     : ReturningStackProof(Image, Work, Cache, Owner, Depth)
-                           .prove(Callee, &NestedReusable);
+          LocalEntry && Incoming == CallerStack::Unbound
+              ? prove(Callee, Incoming, &NestedReusable)
+              : ReturningStackProof(Image, Work, Cache, Owner, Depth)
+                    .prove(Callee, Incoming, &NestedReusable);
       DependenciesReusable &= NestedReusable;
       return Contract;
     };
@@ -1421,6 +1485,7 @@ public:
           const LowFunc Callee = readStackGraph(Builder, Image, Dec, Target);
           StackBody Body(Image, Callee, Work,
                          Callee.ExceptionMetadata ? InvalidVA : Target);
+          Body.Arguments = Arguments;
           Record(Body, Callee.ExceptionMetadata
                            ? stackPopForRegistration(Body, Callee, Nested)
                            : stackPopForBody(Body, Target, Nested));

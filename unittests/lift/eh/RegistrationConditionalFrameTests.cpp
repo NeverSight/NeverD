@@ -1311,6 +1311,41 @@ TEST(RegistrationCRTFrame, XCPT4ExitRegistrarsUseTheirEagerRuntimeSlots) {
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4ExitRegistrarReadsThePushedCallerWord) {
+  for (bool Selected : {false, true}) {
+    auto Original = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    for (bool Pushed : {true, false}) {
+      SCOPED_TRACE(::testing::Message() << Selected << '/' << Pushed);
+      BinaryImage Image = *Original;
+      // Retain both entire callees and the original PUSH imm32 / CALL prefix.
+      // End this isolated caller after the call with its matching cleanup.
+      auto *CallPrefix = const_cast<uint8_t *>(Image.readVA(0x406bbf, 12));
+      ASSERT_TRUE(CallPrefix);
+      ASSERT_EQ(CallPrefix[0], 0x68);
+      ASSERT_EQ(CallPrefix[5], 0xe8);
+      if (!Pushed)
+        CallPrefix[0] = 0xb8; // MOV EAX,imm32 retains the same relocation.
+      CallPrefix[10] = Pushed ? 0x59 : 0xc3;
+      CallPrefix[11] = 0xc3;
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Index(Image, &Work);
+      EXPECT_FALSE(Index.stackContract(0x407161));
+      const auto Caller = Index.stackContract(0x406bbf);
+      EXPECT_EQ(bool(Caller), Pushed);
+      if (Caller) {
+        EXPECT_EQ(Caller->StackPopBytes, 0u);
+        EXPECT_EQ(Caller->RequiredImports,
+                  (std::vector<va_t>{0x4080b0, 0x4080dc}));
+        EXPECT_FALSE(Caller->PreservesImportBindings);
+      }
+      EXPECT_FALSE(Index.stackContract(0x4071b1));
+      EXPECT_FALSE(Index.stackContract(0x407161));
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4StartupCallsTheUCRTCommodeAccessor) {
   auto Image = loadXCPT4();
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
