@@ -1,0 +1,13 @@
+//===- PowerPCVMX.def - Classic VMX integer vector instructions -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// VX-form fixed fields omit vD, vA and vB.
+/// NEVERD_PPC_VMX(Id, Value, Word, Mnemonic)
+//===----------------------------------------------------------------------===//
+
+NEVERD_PPC_VMX(PPCVaddubm, 18018, 0x10000000, "vaddubm")
+
+#undef NEVERD_PPC_VMX

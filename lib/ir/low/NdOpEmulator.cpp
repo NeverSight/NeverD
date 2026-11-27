@@ -27,6 +27,7 @@
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
 #include "neverd/ir/low/LowArchitecturalValue.h"
@@ -378,32 +379,30 @@ void NdOpEmulator::writeOutput(const NdVar &Output, uint64_t Value,
     return;
   if (!UnknownBits.empty() || Unknown)
     setOutputUnknownBits(Output, Unknown);
-  uint64_t Mask = Output.Size < 8 ? (1ULL << (Output.Size * 8)) - 1 : ~0ULL;
+  const uint64_t Mask =
+      Output.Size < sizeof(Value) ? (1ULL << (Output.Size * 8)) - 1 : ~0ULL;
+  uint64_t &Stored = Registers[Output.Offset];
   uint64_t Result = Value & Mask;
-  if (Output.isReg() && Output.Size < 8) {
-    auto Existing = Registers.find(Output.Offset);
-    if (Existing != Registers.end())
-      Result = (Existing->second & ~Mask) | Result;
-  }
-  Registers[Output.Offset] = Result;
+  if (Output.isReg() && Output.Size < sizeof(Value))
+    Result |= Stored & ~Mask;
+  Stored = Result;
   if (Output.Size > sizeof(Value)) {
     std::vector<uint8_t> Bytes(Output.Size, 0);
     std::memcpy(Bytes.data(), &Value, sizeof(Value));
     WideRegisters[Output.Offset] = std::move(Bytes);
-  } else if (Output.isReg()) {
+  } else if (!WideRegisters.empty()) {
     auto Existing = WideRegisters.find(Output.Offset);
-    if (Existing != WideRegisters.end() &&
-        Existing->second.size() > Output.Size) {
+    if (Existing == WideRegisters.end())
+      return;
+    if (Output.isReg() && Existing->second.size() > Output.Size) {
       std::memcpy(Existing->second.data(), &Result, Output.Size);
       uint64_t Low = 0;
       std::memcpy(&Low, Existing->second.data(),
                   std::min(Existing->second.size(), sizeof(Low)));
-      Registers[Output.Offset] = Low;
-      return;
+      Stored = Low;
+    } else {
+      WideRegisters.erase(Existing);
     }
-    WideRegisters.erase(Output.Offset);
-  } else {
-    WideRegisters.erase(Output.Offset);
   }
 }
 
@@ -1186,7 +1185,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
           Id == Intrinsic::EVEXExpandLoad || Id == Intrinsic::AesEnc ||
           Id == Intrinsic::AesEncLast || Id == Intrinsic::AesDec ||
           Id == Intrinsic::AesDecLast || Id == Intrinsic::Pclmulqdq ||
-          isX86AtomicIntrinsic(Id))
+          isX86AtomicIntrinsic(Id) || Id == Intrinsic::PPCVaddubm ||
+          riscv::cycleRead(Id))
         return executeIntrinsic(Op);
     }
     // Opaque intrinsic (SSE/NEON vector op, etc.): it cannot alter control
