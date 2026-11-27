@@ -3,6 +3,7 @@
 
 #include "neverd/backend/c/FloatingPointContract.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
+#include "neverd/backend/c/render/CRotateBuiltins.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -64,7 +65,10 @@ const std::set<std::string> storage = {"static", "inline", "extern",
 struct Token {
   std::string text;
   size_t start, end;
-  unsigned kind = 0;
+  enum Kind { Code, Literal, Directive, CompilerPreamble } kind = Code;
+  bool directive() const {
+    return kind == Directive || kind == CompilerPreamble;
+  }
 };
 std::vector<Token> tokens(std::string_view s) {
   std::vector<Token> result;
@@ -75,16 +79,22 @@ std::vector<Token> tokens(std::string_view s) {
     // Keep the C backend's exact compiler policies as complete leading
     // units. Other directives and changed helper bodies retain their
     // ordinary validation, including a helper nested inside a condition.
-    if (inPreamble) {
+    if (inPreamble && s[p] == '#') {
       const llvm::StringRef remaining(s.substr(p));
       llvm::StringRef preamble;
       if (remaining.starts_with(c_float::ContractionPolicy))
         preamble = c_float::ContractionPolicy;
       else if (remaining.starts_with(kAArch64PAuthCRawCallHeader))
         preamble = kAArch64PAuthCRawCallHeader;
+      else
+        for (const auto &builtin : CRotateBuiltins)
+          if (remaining.starts_with(builtin.Preamble)) {
+            preamble = builtin.Preamble;
+            break;
+          }
       if (!preamble.empty()) {
         p += preamble.size();
-        result.push_back({preamble.str(), start, p, 2});
+        result.push_back({preamble.str(), start, p, Token::CompilerPreamble});
         continue;
       }
     }
@@ -145,7 +155,8 @@ std::vector<Token> tokens(std::string_view s) {
       }
       if (!closed || p > s.size())
         throw Error("unterminated C literal");
-      result.push_back({std::string(s.substr(start, p - start)), start, p, 1});
+      result.push_back(
+          {std::string(s.substr(start, p - start)), start, p, Token::Literal});
       continue;
     }
     if (c == '#') {
@@ -166,7 +177,8 @@ std::vector<Token> tokens(std::string_view s) {
         if (!q || s[q - 1] != '\\')
           break;
       }
-      result.push_back({std::string(s.substr(start, p - start)), start, p, 2});
+      result.push_back({std::string(s.substr(start, p - start)), start, p,
+                        Token::Directive});
       continue;
     }
     if (identifier(std::string_view(&c, 1))) {
@@ -179,7 +191,8 @@ std::vector<Token> tokens(std::string_view s) {
       p += 2;
     else
       ++p;
-    result.push_back({std::string(s.substr(start, p - start)), start, p, 0});
+    result.push_back(
+        {std::string(s.substr(start, p - start)), start, p, Token::Code});
   }
   return result;
 }
@@ -219,12 +232,11 @@ std::vector<Definition> definitions(const std::vector<Token> &t,
   size_t start = 0;
   for (size_t i = 0; i < t.size(); ++i) {
     auto v = t[i].text;
-    if (t[i].kind == 2) {
-      if (llvm::StringRef(v) == c_float::ContractionPolicy ||
-          llvm::StringRef(v) == kAArch64PAuthCRawCallHeader) {
-        start = i + 1;
-        continue;
-      }
+    if (t[i].kind == Token::CompilerPreamble) {
+      start = i + 1;
+      continue;
+    }
+    if (t[i].kind == Token::Directive) {
       auto text = llvm::StringRef(v).drop_front().ltrim();
       auto d = text.take_front(text.find_first_of(" \t\r\n"));
       if (d != "include" && d != "import" && d != "pragma")
@@ -965,7 +977,7 @@ Rendered render(const Object &native, const Object &runtime,
   for (size_t i = d.bo + 1; i < d.bc; ++i) {
     auto v = t[i].text;
     content |= v != ";";
-    if (t[i].kind == 2 || v == "self" || v == "_cmd" || v == "super")
+    if (t[i].directive() || v == "self" || v == "_cmd" || v == "super")
       throw Error("native method body conflicts with implicit bindings");
     if (v == "{")
       ++depth;
@@ -1146,7 +1158,7 @@ Rendered render(const Object &native, const Object &runtime,
       i = record->second + 1;
       continue;
     }
-    if (t[i].kind == 2) {
+    if (t[i].directive()) {
       ++i;
       continue;
     }
@@ -1171,7 +1183,7 @@ Rendered render(const Object &native, const Object &runtime,
       // not the identity used to merge declarations from different methods.
       size_t declaratorEnd = end;
       if (end - i >= 4 && t[end - 4].text == "__asm__" &&
-          t[end - 3].text == "(" && t[end - 2].kind == 1 &&
+          t[end - 3].text == "(" && t[end - 2].kind == Token::Literal &&
           t[end - 2].text.starts_with('"') && t[end - 1].text == ")")
         declaratorEnd -= 4;
       size_t opening = i;

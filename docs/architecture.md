@@ -21000,7 +21000,7 @@ joins. An intervening register definition ends that dependency. Earlier
 full-width values in the same physical register keep their original identity
 in pointer comparisons and calls.
 
-The reader also recognizes the exact, complete `ContractionPolicy` and AArch64 raw-call pointer-authentication blocks shared by the C emitters. Either or both may precede declarations; their text remains intact for compilation and does not contribute function definitions. The reader does not evaluate arbitrary conditional directives. Modified, truncated, wrapped or nested blocks, and subsequent macro redefinitions, remain unsupported.
+The reader recognizes the exact floating-point contraction policy, fixed-width GCC rotate fallbacks and AArch64 raw-call pointer-authentication blocks defined by the C backend. Each block can precede declarations. The assembler preserves the original text and excludes it from the function count. The reader does not evaluate arbitrary conditional directives. Modified, truncated, wrapped or nested blocks, and subsequent macro redefinitions, remain unsupported.
 
 ## Bounded bulk directory attributes
 
