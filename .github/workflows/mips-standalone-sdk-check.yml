@@ -1,0 +1,135 @@
+name: MIPS relink with published LLVM libraries
+on:
+  push:
+    branches: [codex/mips-sdk-standalone-qualification]
+permissions:
+  contents: read
+  actions: read
+env:
+  PROJECT: f81e1d7fb33b543dee6a8ad8a7abafccf9e9c4a6
+  FORK: 54143a8d7c037ee4c22f1f238bd4d50ca9a5fd00
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, cc: clang-18, cxx: clang++-18}
+          - {os: windows-latest, cc: clang-cl, cxx: clang-cl}
+          - {os: macos-15, cc: clang, cxx: clang++}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 175
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PROJECT }}
+          path: project
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NeverSight/llvm-project
+          ref: ${{ env.FORK }}
+          path: llvm-src
+          sparse-checkout: |
+            cmake
+            llvm
+            lld
+            libunwind/include
+            third-party
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Get previously executed ELF files and their original link inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci/check_standalone_mips_sdk.py fetch
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes ninja-build clang-18 lld-18 g++-14
+      - if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: brew install ninja
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./project/scripts/ci/Install-WindowsFixtureClang.ps1 -AddToPath
+      - name: Build the exact NeverD candidate with its r15 SDK
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -euo pipefail
+          test "$(git -C project rev-parse HEAD)" = "$PROJECT"
+          test "$(git -C project rev-parse HEAD:third_party/llvm-project)" = "$FORK"
+          git -C project submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
+          flags=()
+          if [[ "$RUNNER_OS" == Linux ]]; then flags+=(-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14); fi
+          cmake -S project -B project/build-sdk -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_ENABLE_CPU_EMULATION=OFF \
+            -DNEVERD_ENABLE_WEB_ANALYSIS=OFF "${flags[@]}"
+          (cd project && python scripts/build.py build-sdk --config Release --parallel 4 --target neverd)
+      - name: Link the standalone r14 and r15 drivers to their published static libraries
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          git -C llvm-src fetch --no-tags --depth=1 origin 6c769154fbe9db2fe9e2e2dc1b04bebfe64e1312
+          python scripts/ci/check_standalone_mips_sdk.py build
+      - name: Check the public patch command against prior native products and direct links
+        run: |
+          echo 'pyelftools==0.33 --hash=sha256:f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036' > requirements.txt
+          python -m pip install --require-hashes --no-deps -r requirements.txt
+          python scripts/ci/check_standalone_mips_sdk.py check
+          cp drivers/source.json products/drivers.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-relink-${{ runner.os }}
+          path: products/
+          if-no-files-found: error
+
+  execute:
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PROJECT }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sdk-relink-*
+          path: products
+      - name: Run all three hosts' original programs and both patch modes
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install --yes qemu-user python3-pyelftools
+          for host in Linux Windows macOS; do
+            for model in static pic; do
+              /usr/bin/python3 scripts/check_mips_elf_relink.py execute \
+                --root "products/sdk-relink-$host/$model" "--partial-link=$model"
+            done
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-guest-execution
+          path: |
+            products/*/*/execution.json
+            products/*/*/placements.json
+            products/*/*/partial-inputs.json
+          if-no-files-found: error
