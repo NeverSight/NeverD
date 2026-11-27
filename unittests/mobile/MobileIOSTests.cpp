@@ -3,6 +3,7 @@
 
 #include "neverd/backend/c/FloatingPointContract.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
+#include "neverd/backend/c/render/CRotateBuiltins.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ObjC/ObjCEncoding.h"
 
@@ -843,6 +844,46 @@ TEST(MobileIOSNative, ChangedOrNestedRawCallPreamblesRemainUnsupported) {
   EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
                    "recovered_method_count"),
             0);
+}
+TEST(MobileIOSNative, PreservesCanonicalRotateFallbacksInRecoveredSource) {
+  std::string prefix = neverd::c_float::ContractionPolicy.str();
+  for (const auto &builtin : neverd::CRotateBuiltins)
+    prefix += builtin.Preamble.str();
+  prefix += neverd::kAArch64PAuthCRawCallHeader;
+  Budget b;
+  const std::string body = "return __builtin_rotateleft32(arg0, arg1);";
+  auto [batch, metadata] = objcFixture(body);
+  auto &method = *batch.getArray("methods")->front().getAsObject();
+  method["source"] = prefix + requiredString(method, "source");
+  EXPECT_EQ(nativeFunctionCount(prefix), 0u);
+  EXPECT_EQ(nativeFunctionCount(requiredString(method, "source")), 1u);
+  const auto result = objcSources(batch, metadata, 8, b);
+  EXPECT_EQ(number(result.coverage, "recovered_method_count"), 1);
+  EXPECT_NE(result.source.find(prefix), result.source.npos);
+  EXPECT_NE(result.source.find(body), result.source.npos);
+}
+
+TEST(MobileIOSNative, RejectsChangedOrNestedRotateFallbacks) {
+  for (const auto &builtin : neverd::CRotateBuiltins) {
+    const auto prefix = builtin.Preamble.str();
+    auto changed = prefix;
+    changed.replace(changed.find("__auto_type"), 11, "int");
+    for (const auto &invalid :
+         {changed, prefix.substr(0, prefix.find("#endif")),
+          "#if 0\n" + prefix + "#endif\n", "int earlier;\n" + prefix,
+          prefix + "#define __builtin_rotateleft32(V,A) 0\n"}) {
+      SCOPED_TRACE(invalid);
+      EXPECT_THROW(nativeFunctionCount(invalid + "int real(){return 1;}\n"),
+                   Error);
+      Budget b;
+      auto [batch, metadata] = objcFixture();
+      auto &method = *batch.getArray("methods")->front().getAsObject();
+      method["source"] = invalid + requiredString(method, "source");
+      EXPECT_EQ(number(objcSources(batch, metadata, 8, b).coverage,
+                       "recovered_method_count"),
+                0);
+    }
+  }
 }
 TEST(MobileIOSNative, CCommentsLiteralsCannotCreateFunctionBodies) {
   EXPECT_EQ(

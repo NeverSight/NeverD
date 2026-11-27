@@ -27,6 +27,7 @@
 #include "ObjCSwiftVirtualSources.h"
 #include "ObjCSynchronizedSource.h"
 #include "SessionImpl.h"
+#include "SourceDefinitionNotes.h"
 #include "SourceProjectionEvidenceJSON.h"
 #include "SourceRegisterCopyProjection.h"
 #include "SourceSwiftConsumedInputProjection.h"
@@ -214,15 +215,22 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     HighCEmitter Emitter;
     Emitter.prepareImageFunctionNames(S->Img);
     std::string NativeSource;
+    size_t RefusedNativeCount = 0;
     // Summary mode still renders and checks every publishable method below.
     // The unrelated whole-image native source is only returned by full export.
     if (IncludeSources) {
+      std::vector<CEmitterOptions::RefusedDefinition> Refused;
+      auto NativeOptions = COptions;
+      NativeOptions.RefusedDefinitions = &Refused;
       llvm::raw_string_ostream NativeOS(NativeSource);
-      if (!Emitter.emit(Result.HighFuncs, NativeOS, COptions)) {
+      if (!Emitter.emit(Result.HighFuncs, NativeOS, NativeOptions)) {
         S->setError("native C source projection failed");
         Trace.finish(false);
         return nullptr;
       }
+      RefusedNativeCount = Refused.size();
+      if (RefusedNativeCount)
+        NativeSource.insert(0, refusedDefinitionNotes(Refused));
     }
     std::map<va_t, const HighFunc *> Functions;
     size_t NativeFunctionCount = 0;
@@ -1282,10 +1290,14 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
         {"recovered_method_count", static_cast<int64_t>(Recovered)},
         {"methods", std::move(Methods)},
         {"limitations", std::move(Limitations)}};
-    if (IncludeSources)
+    if (IncludeSources) {
       Report["native_source"] = jsonSafeText(NativeSource);
-    else
+      if (RefusedNativeCount)
+        Report["native_emitted_function_count"] =
+            static_cast<int64_t>(NativeFunctionCount - RefusedNativeCount);
+    } else {
       Report["sources_omitted"] = true;
+    }
     std::string Text;
     llvm::raw_string_ostream OS(Text);
     OS << llvm::json::Value(std::move(Report));
