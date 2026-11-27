@@ -81,7 +81,7 @@ IntegerControl branch(Arch A, uint32_t W, va_t PC) {
 struct State : IntegerLiftState {
   using IntegerLiftState::IntegerLiftState;
   NdVar read(unsigned Rs) { return Rs ? reg(Rs) : imm(0); }
-  void write(unsigned Rd, NdVar V, bool Signed = false) {
+  void write(unsigned Rd, const NdVar &V, bool Signed = false) {
     if (Rd)
       emit(NdOp::COPY, reg(Rd), {resize(V, Width, Signed)});
   }
