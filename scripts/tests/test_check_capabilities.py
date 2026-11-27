@@ -3244,6 +3244,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "llvm.semantic.synthesis-rewrite": "supported",
                 "lua.source-recovery": "experimental",
                 "mobile.source-recovery": "experimental",
+                "python.source-recovery": "experimental",
                 "translation.executable-engine": "experimental",
                 "translation.runtime-contract": "experimental",
                 "unpack.observed-entry": "experimental",
@@ -3373,6 +3374,38 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "cli": [],
                 "json": ["neverd_bytecode_recover_json_v1",
                       "neverd_bytecode_recover_decoder_json_v1"],
+            },
+            "lua.source-recovery": {
+                "c": ["neverd_lua_recover_json_v1"],
+                "python": [],
+                "cli": [
+                    "neverd lua",
+                    "neverd lua --json",
+                    "neverd lua --profile",
+                    "neverd lua --prototype",
+                    "neverd lua --o",
+                ],
+                "json": ["neverd_lua_recover_json_v1"],
+            },
+            "python.source-recovery": {
+                "c": [
+                    "neverd_python_recover_json_v1",
+                    "neverd_python_export_native_json_v1",
+                ],
+                "python": [],
+                "cli": [
+                    "neverd python",
+                    "neverd python --json",
+                    "neverd python --profile",
+                    "neverd python --function",
+                    "neverd python --component",
+                    "neverd python --native",
+                    "neverd python --o",
+                ],
+                "json": [
+                    "neverd_python_recover_json_v1",
+                    "neverd_python_export_native_json_v1",
+                ],
             },
             "analysis.interpreter-source-recovery": {
                 "c": ["neverd_devirtualize_source_v1",
