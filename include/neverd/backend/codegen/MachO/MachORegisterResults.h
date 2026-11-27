@@ -65,6 +65,12 @@ bool canBindMachOLanguageTable(const BinaryImage &Image,
 bool needsMachONativeRegisterBody(const MedFunc &Function,
                                   const BinaryImage &Image, const LowFunc *CFG);
 
+/// Sorted FunctionStarts bound source storage when a published image has
+/// forwarding entries beyond the original Mach-O function starts.
+bool needsMachONativeRegisterBody(const MedFunc &Function,
+                                  const BinaryImage &Image, const LowFunc *CFG,
+                                  llvm::ArrayRef<va_t> FunctionStarts);
+
 /// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
 /// SP accesses, ordinary indexed/writeback memory, scalar FP/NEON data
 /// operations, compact FP/frameless saved frames (including PAuth_LR FP

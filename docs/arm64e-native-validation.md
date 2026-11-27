@@ -2781,6 +2781,13 @@ language scope agree with the authenticator. The final image check resolves
 each direct target, decodes each authentication against the installed signer
 and compares the duplicated prefix with the source instructions.
 
+A compact saved-register frame can use a PC-relative authenticated return
+without materializing the signing address as data. The publisher keeps its
+compact unwind recipe. When the function does reference a signing address in
+old storage, both lifting and publication check the retained instruction and
+follow its owning entry to the current function. An address can be materialized
+after the last authentication in the function.
+
 Full-width MOV and ADD/SUB by zero carry a joined signing-PC relation
 through a register copy. A full-width self-copy of LR also preserves the
 relation between LR and its modifier. A partial copy or nonzero adjustment cannot
