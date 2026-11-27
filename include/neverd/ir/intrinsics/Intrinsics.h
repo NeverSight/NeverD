@@ -566,6 +566,11 @@ enum class Intrinsic : uint16_t {
   Id = Value, RecordId = RecordValue,
 #include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.def"
 
+#define NEVERD_RISCV_CYCLE(Id, Value, ...) Id = Value,
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+#define NEVERD_PPC_VMX(Id, Value, ...) Id = Value,
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
+
   _Count = 21000
 };
 

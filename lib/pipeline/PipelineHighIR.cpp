@@ -307,7 +307,8 @@ bool returnHoldsACalleesLeftover(
 
 void bindFloatCallResults(const BinaryImage &Img, PipelineResult &Result) {
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
-  if (TRI.FPReturnReg == 0 || TRI.ReturnsFPInX87 ||
+  // VMX returns vectors in v2. A scalar float uses the separate FPR bank.
+  if (isPowerPC(Img.Arch) || TRI.FPReturnReg == 0 || TRI.ReturnsFPInX87 ||
       !TRI.isVectorReg(TRI.fpReturnModelReg()))
     return;
   settleFloatReturnsByCallers(Img, Result, TRI);

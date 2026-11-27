@@ -18,6 +18,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
@@ -391,6 +392,24 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
       S.emit(NdOp::STORE, {}, {EA, S.resize(Y, Bytes)});
     else
       S.write(Rd, S.load(EA, Bytes), F < 4);
+    return true;
+  }
+  if (Op == opcode::System) {
+    if (!P.Zicntr)
+      return false;
+    Intrinsic Id;
+    switch (W & opcode::ExceptRdMask) {
+#define NEVERD_RISCV_CYCLE(Name, Value, Word, High, Text)                      \
+  case Word:                                                                   \
+    Id = Intrinsic::Name;                                                      \
+    break;
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+    default:
+      return false;
+    }
+    if (!cycleRead(Id)->admits(A))
+      return false;
+    S.emitIntrinsic(Id, Rd ? S.reg(Rd) : S.makeTemp(S.Width), {});
     return true;
   }
   if (Op == opcode::Atomic) {

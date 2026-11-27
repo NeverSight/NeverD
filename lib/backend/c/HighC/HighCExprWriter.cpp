@@ -43,6 +43,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
+#include "neverd/backend/RISCV/RISCVCycleSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
@@ -62,6 +63,7 @@
 #include "neverd/ir/high/X86/X87GuardedValueShape.h"
 #include "neverd/ir/high/X86/X87ValueShape.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
 #include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -2355,6 +2357,19 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
+    if (E.IntrinsicId == Intrinsic::PPCVaddubm) {
+      if (!isPowerPC(Opts.TheArch) || E.Operands.size() != 2)
+        throw std::runtime_error("invalid PowerPC vector byte addition");
+      static const std::string Bytes = typeToC(ppc::byteVectorType());
+      return "(__builtin_bit_cast(" + Bytes + ", " + exprStr(*E.Operands[0]) +
+             ") + __builtin_bit_cast(" + Bytes + ", " +
+             exprStr(*E.Operands[1]) + "))";
+    }
+    if (const auto *Read = riscv::cycleRead(E.IntrinsicId)) {
+      if (!Read->admits(Opts.TheArch) || !E.Operands.empty())
+        throw std::runtime_error("invalid RISC-V cycle read");
+      return riscv::cycleSource(*Read);
+    }
     if (const auto D = ppc::fixedPoint(E.IntrinsicId)) {
       if (!D->admits(Opts.TheArch) || E.Operands.size() != 2 ||
           E.IntrinsicOutputs.size() != unsigned(D->Record))

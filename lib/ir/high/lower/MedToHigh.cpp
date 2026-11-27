@@ -2066,7 +2066,8 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
                         : inferReturnType(Med, ReturnTRI.IntReturnReg);
   // A whole vector returned in the FP return register is its bits, which C
   // carries as the unsigned 128-bit integer HighC holds vector registers in.
-  if (Med.ReturnsVectorRegister && Func.ReturnType)
+  if (Med.ReturnsVectorRegister && Func.ReturnType &&
+      Func.ReturnType->Kind != NdTypeKind::Vector)
     Func.ReturnType = NdType::makeInt(Func.ReturnType->Size, false);
   if (!Med.SourceParametersBound && !Med.ExplicitMIPSRecordResult &&
       isWholeIntegerReturnPair(Med.MultiReturn, ReturnTRI) &&
@@ -2175,7 +2176,9 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
         HP.Type = Med.TypedParams[PI].Type;
       } else if (PI < Med.TypedParams.size() && Med.TypedParams[PI].Type &&
                  (Med.TypedParams[PI].Type->Kind == NdTypeKind::Ptr ||
-                  Med.TypedParams[PI].Type->Kind == NdTypeKind::Float)) {
+                  Med.TypedParams[PI].Type->Kind == NdTypeKind::Float ||
+                  (isPowerPC(TheArch) &&
+                   Med.TypedParams[PI].Type->Kind == NdTypeKind::Vector))) {
         // Direct memory uses and exact forwarded call roles share the MedIR
         // parameter certificate with the LLVM backend.
         HP.Type = Med.TypedParams[PI].Type;

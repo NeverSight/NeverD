@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ffb9cc2753916bb01223ed5f796ce889835795af5d3c24fe97fd3cb12ff50b59 -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ Los destinos ELF de enteros experimentales admiten la traducción estricta de in
 
 | Destino | Perfiles ELF verificados |
 |---|---|
-| RISC-V | RV32I/ILP32 y RV64I/LP64 en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0, Zbb 1.0, Zbs 1.0 y Zicond 1.0. |
-| PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. PPC32 admite llamadas entre módulos a través de la PLT segura y de la BSS-PLT clásica. Ambas ABI de PPC64 admiten llamadas entre módulos a través de la PLT y cambios de TOC. ELFv1 utiliza descriptores de función y ELFv2 admite puntos de entrada globales y locales. Las operaciones escalares verificadas incluyen la división con y sin signo, la multiplicación que devuelve la palabra alta del producto y la multiplicación con indicación de desbordamiento, junto con sus efectos en CR0 y XER. En PPC64 también se admiten las instrucciones con prefijo de POWER10 para sumar, cargar y almacenar enteros. |
+| RISC-V | RV32 (ILP32, ILP32D) y RV64 (LP64, LP64D) en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0, Zbb 1.0, Zbs 1.0 y Zicond 1.0. Zicntr 2.0 habilita `rdcycle` y, en RV32, `rdcycleh`. |
+| PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. PPC32 admite llamadas entre módulos a través de la PLT segura y de la BSS-PLT clásica. Ambas ABI de PPC64 admiten llamadas entre módulos a través de la PLT y cambios de TOC. ELFv1 utiliza descriptores de función y ELFv2 admite puntos de entrada globales y locales. Las operaciones escalares verificadas incluyen la división con y sin signo, la multiplicación que devuelve la palabra alta del producto y la multiplicación con indicación de desbordamiento, junto con sus efectos en CR0 y XER. En PPC64 también se admiten las instrucciones con prefijo de POWER10 para sumar, cargar y almacenar enteros. La instrucción VMX `vaddubm` suma 16 pares de bytes módulo 256. |
 
 La reescritura de código nativo sigue pendiente para estos perfiles. [Cobertura de RISC-V y PowerPC (en inglés)](../riscv-powerpc.md)
 

@@ -27,6 +27,7 @@
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
 #include "neverd/ir/low/LowArchitecturalValue.h"
@@ -34,6 +35,7 @@
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -1124,6 +1126,33 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
           return false;
         // Without a proven value, preserve the ordinary strict/lenient
         // handling of an unknown intrinsic output below.
+      }
+      if (const auto *Read = riscv::cycleRead(Id)) {
+        if (!Read->admits(Img.Arch) || Op.NumInputs != 1 ||
+            (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+            Op.Output.Size != Img.getPointerSize() || !RISCVCycleReader)
+          return false;
+        const auto Sample = RISCVCycleReader();
+        if (!Sample)
+          return false;
+        writeOutput(Op.Output, Read->HighHalf ? *Sample >> 32 : *Sample);
+        return true;
+      }
+      if (Id == Intrinsic::PPCVaddubm) {
+        if (!isPowerPC(Img.Arch) || Op.NumInputs != 3 ||
+            (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+            Op.Output.Size != ppc::VectorBytes ||
+            Op.Inputs[1].Size != ppc::VectorBytes ||
+            Op.Inputs[2].Size != ppc::VectorBytes ||
+            !knownOperandBytes(Op.Inputs[1], 0, ppc::VectorBytes) ||
+            !knownOperandBytes(Op.Inputs[2], 0, ppc::VectorBytes))
+          return false;
+        auto Bytes = readOperandBytes(Op.Inputs[1]);
+        const auto Right = readOperandBytes(Op.Inputs[2]);
+        for (unsigned I = 0; I != ppc::VectorBytes; ++I)
+          Bytes[I] += Right[I];
+        writeOutputBytes(Op.Output, Bytes);
+        return true;
       }
       if (integer_memory::owns(Id))
         return executeIntegerMemory(Op, Id);

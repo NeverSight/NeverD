@@ -402,8 +402,28 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       const MedVar *RetVar = nullptr;
       const MedVar *HiVar = nullptr;
       bool SawReturnView = false;
-      bool PassedReturn = false;
-      for (auto RIt = Blk.Ops.rbegin(); RIt != Blk.Ops.rend(); ++RIt) {
+      // A bare RV32 return also checks its link alignment. When it has just
+      // one incoming edge, both words of a proven pair can have been defined
+      // in that predecessor, including the successful iteration of a loop.
+      const MedBlock *Writes = &Blk;
+      if (WantPair && isRISCV32(TargetArch) && Blk.Preds.size() == 1 &&
+          Blk.ExceptionalPreds.empty() && Blk.Phis.empty() &&
+          llvm::all_of(Blk.Ops, [&](const MedOp &O) {
+            return O.Addr == Op.Addr && O.Output.Kind != MedVar::Reg &&
+                   O.IntrinsicOutputs.empty() && O.Opcode != NdOp::CALL &&
+                   O.Opcode != NdOp::INDIR_CALL;
+          })) {
+        if (const auto *Blocks = uniqueBlocksById())
+          if (auto Pred = Blocks->find(Blk.Preds.front());
+              Pred != Blocks->end())
+            Writes = Pred->second;
+      }
+      bool PassedReturn = Writes != &Blk;
+      for (auto RIt = Writes->Ops.rbegin(); RIt != Writes->Ops.rend(); ++RIt) {
+        if (Writes != &Blk &&
+            (RIt->Opcode == NdOp::CALL || RIt->Opcode == NdOp::INDIR_CALL ||
+             !RIt->IntrinsicOutputs.empty()))
+          break;
         if (&*RIt == &Op) {
           PassedReturn = true;
           continue;
