@@ -132,6 +132,14 @@ TEST(SafetyReport, PipelineCoverageMatchesAcceptedFunctionIdentities) {
   DuplicateAudit.MedFuncs[1].Entry = 0x2000;
   EXPECT_TRUE(validatePipelineCoverage(DuplicateAudit).has_value());
 
+  // A function can use an address one byte below the invalid VA sentinel.
+  constexpr neverd::va_t kHighEntry = neverd::InvalidVA - 1;
+  DuplicateAudit.FunctionAudits[1] = accepted(kHighEntry);
+  DuplicateAudit.LowFuncs[1].Entry = DuplicateAudit.MedFuncs[1].Entry =
+      kHighEntry;
+  std::swap(DuplicateAudit.MedFuncs[0].Entry, DuplicateAudit.MedFuncs[1].Entry);
+  EXPECT_FALSE(validatePipelineCoverage(DuplicateAudit).has_value());
+
   neverd::PipelineResult CrossedInventories;
   CrossedInventories.FunctionAudits = {accepted(0x1000)};
   CrossedInventories.LowFuncs.resize(1);
@@ -483,6 +491,26 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
       neverd::MedVar::makeConst(kTarget, 8));
   Result.MedFuncs.front().CallInfos.front().TargetAddr = kTarget;
   EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
+
+  // A PPC64 ELFv2 branch can name the local entry of the exact symbol
+  // recorded in MedIR. Adjacent interior addresses still fail coverage.
+  neverd::BinaryImage Img;
+  Img.Arch = neverd::Arch::PPC64LE;
+  Result.SourceImage = &Img;
+  auto &RawTarget =
+      Result.LowFuncs.front().Blocks.front().Ops.front().Inputs[0];
+  RawTarget.Offset = kTarget + 8;
+  Error = validatePipelineCoverage(Result, &Img);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  Img.PPC64EntryContexts[kTarget].LocalEntryOffset = 8;
+  EXPECT_FALSE(validatePipelineCoverage(Result, &Img).has_value());
+  RawTarget.Offset = kTarget + 4;
+  Error = validatePipelineCoverage(Result, &Img);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  RawTarget.Offset = kTarget;
+  Result.SourceImage = nullptr;
 
   Result.LowFuncs.front().Blocks.front().Ops.push_back(
       Result.LowFuncs.front().Blocks.front().Ops.front());
