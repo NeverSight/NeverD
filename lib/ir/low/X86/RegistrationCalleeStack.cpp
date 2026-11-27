@@ -34,6 +34,8 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <deque>
@@ -162,6 +164,7 @@ struct StackBody {
   std::map<std::pair<va_t, int>, va_t> ImportLoads;
   std::map<std::pair<va_t, int>, va_t> ImportDataLoads;
   std::set<va_t> ImportSlots;
+  llvm::SmallPtrSet<const LowOp *, 2> BindingPreservingInitializers;
   uint32_t ArgumentReadBytes = 0;
   bool CheckedArgumentReadBytes = false;
   bool PreservesImportBindings = false;
@@ -340,24 +343,61 @@ struct StackBody {
     return false;
   }
 
-  bool collectCalleeImports(const NestedStackProof &Nested) {
+  bool collectInitializerImports(const LowBlock &Block, const LowOp &Op,
+                                 va_t Slot, const NestedStackProof &Nested) {
+    const auto Targets = registration_state::checkedCRTInitializerTargets(
+        Image, Block, Op, Slot, Work);
+    if (!Targets)
+      return true;
+    llvm::SmallVector<va_t, 4> Required;
+    for (va_t Target : *Targets) {
+      const auto Callback = Nested(Target);
+      if (!Callback || Callback->ImportVeneer || Callback->StackPopBytes != 0 ||
+          !Callback->PreservesImportBindings)
+        return true;
+      if (!chargeCalleeWork(Work, Callback->RequiredImports.size() + 1))
+        return false;
+      Required.append(Callback->RequiredImports.begin(),
+                      Callback->RequiredImports.end());
+    }
+    // Either walker may return after a prefix. Every possible callback
+    // preserves its incoming bindings once the caller supplies them.
+    ImportSlots.insert(Required.begin(), Required.end());
+    BindingPreservingInitializers.insert(&Op);
+    return true;
+  }
+
+  bool collectCalleeImports(const NestedStackProof &Nested,
+                            bool CheckInitializers) {
     // Collect before transfer: a store can invalidate a dependency of a
     // later direct helper, including a veneer hidden behind another helper.
     for (const auto &[Id, Block] : Blocks) {
       if (!chargeCalleeWork(Work, Block->Ops.size() + 1))
         return false;
-      for (const auto &Op : Block->Ops)
-        if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
-            Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4) {
+      for (const auto &Op : Block->Ops) {
+        if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
+            Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
+            Op.Inputs[0].Size != 4)
+          continue;
+        std::optional<va_t> Slot;
+        if (Op.Opcode == NdOp::CALL) {
           if (const auto Callee = Nested(Op.Inputs[0].Offset)) {
             if (!chargeCalleeWork(Work, Callee->RequiredImports.size() + 1))
               return false;
             ImportSlots.insert(Callee->RequiredImports.begin(),
                                Callee->RequiredImports.end());
+            if (Callee->ImportVeneer)
+              Slot = Callee->RequiredImports.front();
           }
           if (!chargeCalleeWork(Work, 1))
             return false;
+        } else {
+          Slot = Op.Inputs[0].Offset;
         }
+        if (CheckInitializers && Slot &&
+            !collectInitializerImports(*Block, Op, *Slot, Nested))
+          return false;
+      }
     }
     return true;
   }
@@ -580,7 +620,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
        !Body.hasPrecisionResultCandidate()) ||
       (!Registration && !CxxPaths && Entry != Body.FunctionEntry &&
        Body.losesEntryStackBeforeCall(Entry)) ||
-      !Body.collectCalleeImports(NestedPop))
+      !Body.collectCalleeImports(NestedPop, !Registration && !CxxPaths))
     return std::nullopt;
   const auto &Image = Body.Image;
   size_t &Work = Body.Work;
@@ -804,21 +844,9 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
               registration_state::hasBindingPreservingCRTArgument(
                   Image, Block, Op, *ImportedSlot, Work) ||
               registration_state::hasBindingPreservingKernelArgument(
-                  Image, Block, Op, *ImportedSlot, State, Work);
-          if (!PreserveImportBindings && *SP.Offset <= -8)
-            if (const auto Targets =
-                    registration_state::checkedCRTInitializerTargets(
-                        Image, Block, Op, *ImportedSlot, Work)) {
-              // Either walker may return after any prefix. Every possible
-              // callback independently returns with its no-argument stack
-              // and preserves bindings without borrowing the caller's imports.
-              PreserveImportBindings = llvm::all_of(*Targets, [&](va_t Target) {
-                const auto Callback = NestedPop(Target);
-                return Callback && Callback->StackPopBytes == 0 &&
-                       Callback->RequiredImports.empty() &&
-                       Callback->PreservesImportBindings;
-              });
-            }
+                  Image, Block, Op, *ImportedSlot, State, Work) ||
+              (*SP.Offset <= -8 &&
+               Body.BindingPreservingInitializers.contains(&Op));
         }
       }
       std::optional<FrameValue> CallSP;

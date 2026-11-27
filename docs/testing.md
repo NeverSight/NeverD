@@ -21075,7 +21075,10 @@ imports, caller cleanup and refusals for a changed provider, delayed binding
 or conflicting slot.
 
 The PE32 startup fixture also checks both UCRT initializer walkers and the
-three relocated callbacks in their read-only tables. The outer stdio wrapper
+three relocated callbacks in their read-only tables.
+`InitializerCallsKeepOnlyProvenCallbackEffects` covers a callback that
+uses an eager import, an earlier store that replaces its slot, and a
+delay-loaded callback dependency. The outer stdio wrapper
 restores ESP from EBP after its nested calls. The inner wrapper depends on
 the UCRT calling convention. On Windows,
 `RegistrationCRTFrame.OriginalPE32XCPT4RunsOnWindows` executes the original

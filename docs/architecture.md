@@ -21566,6 +21566,11 @@ The Windows CRT startup also installs a top-level filter. Its returning
 `SetUnhandledExceptionFilter` call preserves import bindings when the
 argument is a relocated pointer into immutable code. A later exception
 dispatch requires its own handler proof.
+For a checked `_initterm` or `_initterm_e` table, the caller collects the
+eager imports required by every returning callback before analyzing its
+first instruction. A preceding store can invalidate one of those imports.
+The walker preserves the bindings on return only if they are live at the
+call and every callback preserves them.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case
