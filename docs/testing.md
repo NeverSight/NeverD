@@ -21080,6 +21080,10 @@ and their jump veneers against the owning API set and both UCRT DLLs. A
 different API set, a delayed import or conflicting storage withdraws the
 stack contract. Both loader selections check the two exit-registration veneers
 in the original executable against their individual eager import slots.
+The original exit-registration wrappers forward a DWORD from their caller.
+The tests check both wrappers with the real push and a same-relocation
+register move. Separate cases cover a 16-bit push, a read crossing the
+argument boundary, a write, and an earlier change to the required import.
 
 The PE32 startup fixture also checks both UCRT initializer walkers and the
 three relocated callbacks in their read-only tables.

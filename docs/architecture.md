@@ -10339,8 +10339,11 @@ the current entry frame, known Win32 thread fields and mapped image data.
 Image writes additionally need writable section and segment storage outside
 read-only-after-relocation ranges. IAT disjointness alone cannot discharge a
 write fault; typed CRT data stores retain their independent receipt.
-An argument read additionally needs a uniform current near-return cleanup;
-the maximum `CalleePopBytes` over other returns cannot establish its extent.
+Uniform current near-return cleanup establishes the callee-popped argument
+extent. A direct caller can also supply one readable DWORD to a cdecl callee
+by pushing it immediately before the call in the same block. The stack proof
+checks the instruction bytes, the live stack offset and the callee's transitive
+import dependencies. This additional read permission belongs to that call.
 The permission carries no read value, frame cell, saved-SP restoration or
 native mapping. An earlier resident callable remains a separate register
 identity, while later loads and direct slot calls require reaching bindings.

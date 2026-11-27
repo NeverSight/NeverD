@@ -248,6 +248,48 @@ TEST(RegistrationImportABI, StartupImportsUseTheirOwnUCRTFamily) {
   checkUCRTCallerCleanup({"__setusermatherr", 1}, Math, Runtime);
 }
 
+TEST(RegistrationImportABI, PushedWordBoundsOnlyTheCurrentCalleeRead) {
+  enum class Input { Word, ShortPush, NextByte, NextWord, Write, Rebound };
+  for (auto Kind : {Input::Word, Input::ShortPush, Input::NextByte,
+                    Input::NextWord, Input::Write, Input::Rebound}) {
+    SCOPED_TRACE(int(Kind));
+    ImportImage F({"GetCurrentThreadId", 0}, false);
+    auto &Text = F.Image.Segments.front();
+    auto &Code = Text.Data;
+    Code.clear();
+    if (Kind == Input::Rebound)
+      Code.insert(Code.end(), {0xc6, 0x05, 0, 0x30, 0x40, 0, 0});
+    if (Kind == Input::ShortPush)
+      Code.push_back(0x66);
+    Code.insert(Code.end(), {0x6a, 1, 0xe8});
+    const size_t Field = Code.size();
+    Code.resize(Field + 4);
+    writeLE<uint32_t>(Code.data() + Field,
+                      ImportImage::StubVA - (ImportImage::TextVA + Field + 4));
+    Code.insert(Code.end(),
+                {0x83, 0xc4, uint8_t(Kind == Input::ShortPush ? 2 : 4), 0xc3});
+    Code.resize(ImportImage::StubVA - ImportImage::TextVA, 0xcc);
+    // The cdecl callee accesses [esp+disp8], then calls the live IAT slot.
+    uint8_t Disp = Kind == Input::NextByte   ? 5
+                   : Kind == Input::NextWord ? 8
+                                             : 4;
+    Code.insert(Code.end(), {uint8_t(Kind == Input::Write ? 0x89 : 0x8b), 0x44,
+                             0x24, Disp, 0xff, 0x15, 0, 0x30, 0x40, 0, 0xc3});
+    Text.FileSz = Text.Size = Code.size();
+    F.Image.Sections.front().FileSz = F.Image.Sections.front().Size = Text.Size;
+    RegistrationCallCalleeIndex Index(F.Image);
+    const auto Caller = Index.stackContract(ImportImage::TextVA);
+    EXPECT_EQ(bool(Caller), Kind == Input::Word);
+    if (Caller) {
+      EXPECT_EQ(Caller->StackPopBytes, 0u);
+      EXPECT_TRUE(Caller->PreservesImportBindings);
+      EXPECT_EQ(Caller->RequiredImports,
+                (std::vector<va_t>{ImportImage::IATVA}));
+    }
+    EXPECT_FALSE(Index.stackContract(ImportImage::StubVA));
+  }
+}
+
 TEST(RegistrationImportABI, MainArgumentsUseTheirRuntimeAccessors) {
   for (const char *Name : {"__p___argc", "__p___argv"})
     checkUCRTCallerCleanup({Name, 0}, "api-ms-win-crt-runtime-l1-1-0.dll",
