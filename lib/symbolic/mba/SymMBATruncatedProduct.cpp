@@ -2400,7 +2400,8 @@ SymRef buildResiduePowerBlocks(SymContext &Ctx,
 // the quadratic term is S^2 - sum(n*h^2). Moving the division by two into
 // the outer shift keeps this identity exact even in a power-of-two ring.
 SymRef foldQuadraticFields(SymContext &Ctx, SymRef Root, unsigned Precision,
-                           WorkBudget &Budget, size_t &Storage) {
+                           WorkBudget &Budget, size_t &Storage,
+                           bool FoldRunsSeparately = false) {
   const auto FirstFactor = Ctx.operand(Root, 0);
   const bool Scaled = Ctx.isConst(FirstFactor);
   const auto Outer = Scaled ? FirstFactor : Ctx.mkConst(Ctx.width(Root), 1);
@@ -2453,6 +2454,37 @@ SymRef foldQuadraticFields(SymContext &Ctx, SymRef Root, unsigned Precision,
   }
   const size_t First = Ctx.numNodes();
   const unsigned P = Precision - Removed;
+  if (FoldRunsSeparately) {
+    // Each normalized factor is C + 2^K*h. When degree three vanishes,
+    // reduce each repeated factor at the observed width. Multiplying those
+    // smaller powers retains every cross term between distinct runs.
+    if (3ULL * K < P)
+      return {};
+    llvm::SmallVector<SymRef, 16> Parts{
+        Ctx.mkConst(productScaleUnit(Ctx, Outer, Width - Precision, P))};
+    for (const auto &Run : Runs) {
+      if (Run.Copies < limits::kMinResidueProductFactors) {
+        if (!Budget.consume(Run.Copies))
+          return {};
+        Parts.append(Run.Copies, Ctx.mkExtract(Run.F, Run.Content, P));
+        continue;
+      }
+      QuadraticFieldPolynomial Row(Ctx, K, P, llvm::APInt(P, 1));
+      const auto Power = Row.build(llvm::ArrayRef(Run), Precision, P, /*D=*/0,
+                                   std::nullopt, Budget, Storage);
+      if (!Power)
+        return {};
+      Parts.push_back(Power);
+    }
+    auto V = Ctx.mkMul(Parts);
+    if (P != Width)
+      V = Ctx.mkConcat(V, Ctx.mkConst(Width - P, 0));
+    if (!(readingScore(Ctx, V) < readingScore(Ctx, Root)))
+      return {};
+    Budget.ArithmeticProductReading = V;
+    recordResidueReading(Ctx, First, Budget, Storage);
+    return V;
+  }
   // v2(choose(n,j)) >= v2(n)-v2(j). Above degree two, the least
   // j*K-v2(j) occurs at j=3 or 4. Keep the incomplete block as an
   // ordinary multiplier when those higher terms are still observable.
@@ -2603,11 +2635,14 @@ SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
         break;
     }
     if (Zeros < Shift) {
+      const bool SharedBlock = Shift - Zeros < std::bit_width(Copies);
+      const bool QuadraticPower = 3ULL * Zeros >= Precision &&
+                                  Copies >= limits::kMinResidueProductFactors;
       if (!TriedQuadratic && CanPair && Zeros && Zeros < Required &&
-          Shift - Zeros < std::bit_width(Copies)) {
+          (SharedBlock || QuadraticPower)) {
         TriedQuadratic = true;
-        if (auto Q =
-                foldQuadraticFields(Ctx, Root, Precision, Budget, Storage)) {
+        if (auto Q = foldQuadraticFields(Ctx, Root, Precision, Budget, Storage,
+                                         /*FoldRunsSeparately=*/!SharedBlock)) {
           if (EmittedReading)
             *EmittedReading = true;
           return Q;

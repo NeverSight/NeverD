@@ -4849,6 +4849,11 @@ width 65,536, case 7, group log 8 and pass it to `neverd simplify` with
 14,680,111 generates 1,572,880 factors across 317 distinct rows. Use
 `--exhaustive` to simplify it or generate its compact form with `--counted`.
 
+`SymMBAResiduePowers.SparseFieldRunsStayFactoredWithinBudget` exercises 65
+overlapping signed and unsigned coordinates with short repeated powers. Its
+65,536-work run compares the result with direct evaluation, including an even
+singleton beside the repeated odd factors.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may

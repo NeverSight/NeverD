@@ -1017,6 +1017,43 @@ TEST(SymMBAResiduePowers, RepeatedPowersRetainQuadraticsAndResidualCopies) {
   }
 }
 
+TEST(SymMBAResiduePowers, SparseFieldRunsStayFactoredWithinBudget) {
+  constexpr unsigned Width = 257, Precision = 40, Shift = 15, Rows = 65;
+  std::mt19937_64 Random(0x526f77506f776572ULL);
+  for (bool EvenSingleton : {false, true}) {
+    SCOPED_TRACE(EvenSingleton);
+    SymContext C;
+    const auto Z = C.mkVar("z", Width);
+    llvm::SmallVector<SymRef, 16> Factors{
+        C.mkConst(llvm::APInt(Width, 3).shl(Width - Precision))};
+    for (unsigned I = 0; I < Rows; ++I) {
+      const auto A = C.mkZExt(C.mkExtract(Z, 3 * I, 3), Width);
+      const auto Field = C.mkExtract(Z, 3 * ((I + 1) % Rows), 3);
+      const auto B = I % 2 ? C.mkSExt(Field, Width) : C.mkZExt(Field, Width);
+      const bool Single = EvenSingleton && I == 0;
+      const auto F =
+          C.mkAdd({C.mkConst(Width, Single ? 2u : 2 * I + 1),
+                   C.mkMul(C.mkConst(Width, (1 + 2 * (I % 3)) << Shift), A),
+                   C.mkMul(C.mkConst(Width, (3 + I % 2) << Shift), B)});
+      Factors.append(Single ? 1u : 8u + (I + 1 == Rows), F);
+    }
+    const auto Input = C.mkMul(Factors);
+    MBAOptions Options;
+    Options.MaxWork = 65536;
+    const auto R = simplifyMBADeep(C, Input, Options);
+    ASSERT_LT(R.Work, Options.MaxWork);
+    ASSERT_LT(R.SizeAfter, R.SizeBefore / 2);
+    SymEvalPlan Original(C, Input), Reduced(C, R.Expr);
+    for (unsigned Trial = 0; Trial < 128; ++Trial) {
+      std::array<uint64_t, 5> Words{};
+      for (auto &Word : Words)
+        Word = Trial == 0 ? 0 : Trial == 1 ? UINT64_MAX : Random();
+      const std::array Values{llvm::APInt(Width, Words)};
+      ASSERT_EQ(Reduced.eval(Values), Original.eval(Values)) << Trial;
+    }
+  }
+}
+
 TEST(SymMBAResiduePowers, RepeatedPowersKeepLiveFourthDegrees) {
   // With five observed bits (c + 2*h)^4 still contains 16*h^4.
   constexpr unsigned Width = 16;
