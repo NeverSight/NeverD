@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 
@@ -590,13 +591,21 @@ def qualify(args):
             for mode in MODES:
                 reject(mode, entry_error, input_elf=bad_input, layout="readonly-entry.ld")
 
-            # Exercise atomic replacement of the input pathname as well.
+            # Deliver the same-path results to the guest runner. A retry with
+            # the old objects must leave the last successful executable intact.
             encode(manifest_path, manifest)
-            same = build / "same.elf"
-            shutil.copyfile(original, same)
-            patch("inplace", same, input_elf=same)
-            if digest(same) != digest(out / "inplace.elf"):
-                raise RuntimeError(f"{name}: inconsistent same-path result")
+            with tempfile.TemporaryDirectory(dir=out) as replay:
+                same = Path(replay) / "更新 app.elf"
+                for mode in MODES:
+                    shutil.copyfile(original, same)
+                    same.chmod(0o751)
+                    permissions = stat.S_IMODE(same.stat().st_mode)
+                    for error in (None, "do not reproduce"):
+                        patch(mode, same, input_elf=same, error=error)
+                        if (digest(same) != results[name][mode] or
+                                stat.S_IMODE(same.stat().st_mode) != permissions):
+                            raise ValueError(f"{name}: {mode} same-path bytes or permissions changed")
+                    same.replace(out / f"{mode}.elf")
 
             reject("section", "do not reproduce", objects=["start.o", "updated.o"],
                    original="updated.o")
