@@ -633,6 +633,74 @@ auto loadXCPT4(bool Selected = false) {
 }
 } // namespace
 
+TEST(RegistrationCRTFrame, XCPT4MainArgumentCallsBindTheirRuntimeSlots) {
+  using namespace registration_state;
+  auto Image = loadXCPT4(true);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Image));
+  const auto Startup =
+      CFGBuilder().buildIntegerFrameProof(*Image, Dec, 0x406c57, "CRT startup");
+  const std::map<va_t, const char *> Expected = {
+      {0x406d35, "_get_initial_narrow_environment"},
+      {0x406d3c, "__p___argv"},
+      {0x406d43, "__p___argc"}};
+  size_t Work = 0;
+  std::set<va_t> Seen;
+  for (const auto &Block : Startup.Blocks) {
+    for (const auto &Op : Block.Ops) {
+      auto It = Expected.find(Op.Addr);
+      if (Op.Opcode != NdOp::CALL || It == Expected.end())
+        continue;
+      SCOPED_TRACE(Op.Addr);
+      ASSERT_TRUE(Seen.insert(Op.Addr).second);
+      const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
+      ASSERT_TRUE(Slot);
+      const auto *Import = Image->findImportAt(*Slot);
+      ASSERT_TRUE(Import);
+      EXPECT_EQ(Import->Name, It->second);
+      EXPECT_EQ(
+          registration_abi::checkedRegistrationImportStackPop(*Image, *Slot),
+          0u);
+      EXPECT_EQ(
+          registration_abi::preservesRegistrationImportBindings(*Image, *Slot),
+          Op.Addr != 0x406d35);
+    }
+  }
+  EXPECT_EQ(Seen.size(), Expected.size());
+}
+
+TEST(RegistrationCRTFrame, XCPT4PrintfObtainsTheStandardOutputStream) {
+  using namespace registration_state;
+  auto Image = loadXCPT4(true);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Image));
+  const auto Wrapper = CFGBuilder().buildIntegerFrameProof(
+      *Image, Dec, 0x4045f0, "stdio wrapper");
+  size_t Work = 0;
+  for (const auto &Block : Wrapper.Blocks) {
+    for (const auto &Op : Block.Ops) {
+      if (Op.Opcode != NdOp::INDIR_CALL || Op.Addr != 0x404608)
+        continue;
+      const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
+      ASSERT_EQ(Slot, 0x4080fcu);
+      EXPECT_TRUE(
+          isCheckedCRTStandardStreamCall(*Image, Block, Op, *Slot, Work));
+      LowBlock EntryAtCall;
+      for (const auto &Boundary : Block.InstructionBoundaries)
+        if (Boundary.Address >= Op.Addr)
+          EntryAtCall.InstructionBoundaries.push_back(Boundary);
+      EXPECT_FALSE(
+          isCheckedCRTStandardStreamCall(*Image, EntryAtCall, Op, *Slot, Work));
+      EXPECT_FALSE(
+          isCheckedCRTStandardStreamCall(*Image, Block, Op, 0x4080f8, Work));
+      return;
+    }
+  }
+  FAIL() << "missing original standard stream call";
+}
+
 TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {
   auto Image = loadXCPT4(true);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());

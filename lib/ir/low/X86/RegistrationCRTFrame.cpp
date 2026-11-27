@@ -69,6 +69,39 @@ std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
   return readLE<uint32_t>(Stub->data() + 2);
 }
 
+bool isCheckedCRTStandardStreamCall(const BinaryImage &Image,
+                                    const LowBlock &Block, const LowOp &Op,
+                                    va_t Slot, size_t &Work) {
+  const auto *Import = Image.findImportAt(Slot);
+  if (!Import || Import->Name != "__acrt_iob_func" ||
+      !coff_loader::isUCRTStdioProvider(Import->Module) ||
+      !isFileBackedPEImportSlot(Image, Slot) ||
+      checkedCRTCallSlot(Image, Op, Work) != Slot ||
+      !registration_abi::chargeCalleeWork(Work,
+                                          Block.InstructionBoundaries.size()))
+    return false;
+  const auto &Bounds = Block.InstructionBoundaries;
+  const auto Call =
+      std::find_if(Bounds.begin(), Bounds.end(),
+                   [&](const auto &I) { return I.Address == Op.Addr; });
+  if (Call == Bounds.begin() || Call == Bounds.end())
+    return false;
+  const auto &Push = Call[-1];
+  if ((Push.Size != 2 && Push.Size != 5) || Op.Addr < Push.Size ||
+      Push.Address != Op.Addr - Push.Size)
+    return false;
+  const auto Bytes =
+      readImmutablePE32CodeBytes(Image, Push.Address, Push.Size, {}, Work,
+                                 limits::kMaxRegistrationEHStateWork);
+  if (!Bytes)
+    return false;
+  // UCRT returns the FILE member of the selected stdin, stdout or stderr
+  // record. A different index has no checked stream object.
+  return Push.Size == 2
+             ? (*Bytes)[0] == 0x6a && (*Bytes)[1] <= 2
+             : (*Bytes)[0] == 0x68 && readLE<uint32_t>(Bytes->data() + 1) <= 2;
+}
+
 std::optional<std::vector<va_t>>
 checkedCRTInitializerTargets(const BinaryImage &Image, const LowBlock &Block,
                              const LowOp &Op, va_t Slot, size_t &Work) {

@@ -119,8 +119,8 @@ struct ImportImage {
   }
 };
 
-void checkUCRTCallerCleanup(ImportCase C, const char *API,
-                            const char *WrongAPI) {
+void checkUCRTCallerCleanup(ImportCase C, const char *API, const char *WrongAPI,
+                            bool PreservesBindings = false) {
   for (const char *Provider : {API, "UCRTBASE.DLL", "ucrtbased.dll"})
     for (bool ThroughStub : {false, true}) {
       SCOPED_TRACE(::testing::Message()
@@ -134,16 +134,22 @@ void checkUCRTCallerCleanup(ImportCase C, const char *API,
       };
       ASSERT_EQ(Pop(), 0u);
       EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA), 0u);
-      EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
-          Image, ImportImage::IATVA));
+      const auto Preserves = [&] {
+        return registration_abi::preservesRegistrationImportBindings(
+            Image, ImportImage::IATVA);
+      };
+      EXPECT_EQ(Preserves(), PreservesBindings);
       Image.Imports.front().IsDelayImport = true;
       EXPECT_FALSE(Pop());
+      EXPECT_FALSE(Preserves());
       Image.Imports.front().IsDelayImport = false;
       Image.Imports.front().Module = WrongAPI;
       EXPECT_FALSE(Pop());
+      EXPECT_FALSE(Preserves());
       Image.Imports.front().Module = Provider;
       Image.ConflictingImportStorageSlots.insert(ImportImage::IATVA);
       EXPECT_FALSE(Pop());
+      EXPECT_FALSE(Preserves());
     }
 }
 } // namespace
@@ -161,6 +167,60 @@ TEST(RegistrationImportABI, UCRTInitializerWalkersUseTheRuntimeProvider) {
        {ImportCase{"_initterm", 2}, ImportCase{"_initterm_e", 2}})
     checkUCRTCallerCleanup(C, "api-ms-win-crt-runtime-l1-1-0.dll",
                            "api-ms-win-crt-stdio-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, MainArgumentsUseTheirRuntimeAccessors) {
+  for (const char *Name : {"__p___argc", "__p___argv"})
+    checkUCRTCallerCleanup({Name, 0}, "api-ms-win-crt-runtime-l1-1-0.dll",
+                           "api-ms-win-crt-stdio-l1-1-0.dll", true);
+  // Requesting the initial environment can trigger lazy initialization.
+  checkUCRTCallerCleanup({"_get_initial_narrow_environment", 0},
+                         "api-ms-win-crt-runtime-l1-1-0.dll",
+                         "api-ms-win-crt-stdio-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, StandardStreamGetterPreservesLiveBindings) {
+  struct Case {
+    std::vector<uint8_t> Push;
+    bool Standard;
+  };
+  for (const auto &C : {Case{{0x6a, 0}, true}, Case{{0x6a, 1}, true},
+                        Case{{0x68, 2, 0, 0, 0}, true}, Case{{0x6a, 3}, false},
+                        Case{{0x6a, 0xff}, false},
+                        Case{{0x68, 0, 1, 0, 0}, false}, Case{{0x51}, false}}) {
+    for (const bool ThroughStub : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << int(C.Push.front()) << ' ' << int(C.Push.back()) << ' '
+                   << ThroughStub);
+      ImportImage F({"__acrt_iob_func", 1}, ThroughStub, true);
+      F.Image.Imports.front().Module = "api-ms-win-crt-stdio-l1-1-0.dll";
+      std::vector<uint8_t> Body = C.Push;
+      if (ThroughStub) {
+        Body.push_back(0xe8);
+        const size_t Field = Body.size();
+        Body.resize(Field + 4);
+        writeLE<uint32_t>(Body.data() + Field,
+                          ImportImage::StubVA -
+                              (ImportImage::TextVA + Body.size()));
+      } else {
+        Body.insert(Body.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+      }
+      Body.insert(Body.end(), {0x83, 0xc4, 4, 0x31, 0xc0, 0xc3});
+      auto &Text = F.Image.Segments.front().Data;
+      std::fill_n(Text.begin(), ImportImage::StubVA - ImportImage::TextVA,
+                  0xcc);
+      std::copy(Body.begin(), Body.end(), Text.begin());
+      RegistrationCallCalleeIndex Callees(F.Image);
+      const auto Contract = Callees.stackContract(ImportImage::TextVA);
+      ASSERT_TRUE(Contract);
+      EXPECT_EQ(Contract->StackPopBytes, 0u);
+      EXPECT_EQ(Contract->RequiredImports,
+                (std::vector<va_t>{ImportImage::IATVA}));
+      EXPECT_EQ(Contract->PreservesImportBindings, C.Standard);
+      EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
+          F.Image, ImportImage::IATVA));
+    }
+  }
 }
 
 TEST(RegistrationImportABI, ControlFPBindsCurrentRuntimeProvider) {
