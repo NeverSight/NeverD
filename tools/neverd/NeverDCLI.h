@@ -625,6 +625,7 @@ extern llvm::cl::opt<std::string> CgSvg;
 extern llvm::cl::opt<std::string> PatchFromIR;
 extern llvm::cl::opt<std::string> PatchRelink;
 extern llvm::cl::opt<std::string> PatchLinkerPath;
+extern llvm::cl::opt<std::string> PatchOriginalLinkerPath;
 extern llvm::cl::opt<std::string> PatchFromC;
 extern llvm::cl::opt<std::string> PatchFromSource;
 extern llvm::cl::opt<std::string> PatchFromObject;
@@ -854,7 +855,8 @@ int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);
 int runContinuation(neverd_session_t Sess);
 int runPatch(neverd_session_t Sess);
-int runRelinkPatch(llvm::StringRef Output);
+std::string patchOutputPath();
+int runRelinkPatch();
 
 } // namespace neverd::cli
 

@@ -1218,6 +1218,7 @@
           "neverd patch --nop",
           "neverd patch --o",
           "neverd patch --opaque",
+          "neverd patch --original-linker-path",
           "neverd patch --patch-report",
           "neverd patch --pdb",
           "neverd patch --pdb-unverified",

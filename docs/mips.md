@@ -88,6 +88,27 @@ microMIPS64, the compiler fills a register return's delay slot with a full-width
 instruction when available. Otherwise it can emit a compact return.
 [LLVM and LLD changes](https://github.com/NeverSight/llvm-project/pull/21).
 
+The r13 fork links MIPS16 PIC calls and hard-float adapters, and emits
+small-data and static TLS accesses in compressed code.
+[r13 code generation and linking](https://github.com/NeverSight/llvm-project/pull/22).
+
+The r14 assembler extends MIPS16 branches that exceed their short range.
+It emits `R_MIPS16_PC16_S1` for a target in another object. LLD resolves the
+signed halfword displacement in direct and relocatable links. The microMIPS
+backend uses the ABI pointer width for compact word loads and stores,
+including 64-bit base addresses on n64.
+[r14 code generation and linking](https://github.com/NeverSight/llvm-project/pull/23).
+
+The r15 assembler stops its initial mnemonic search on an exact match.
+The instruction matcher then checks operands and ISA features. In a Linux
+Release comparison against r13, assembly CPU time fell 2.21% on branches,
+1.86% on arithmetic and 1.46% on a mix of 32 mnemonics. Each workload
+produced identical object bytes across 48 paired runs. Building
+`LLVMMipsAsmParser` as the first target in a fresh CMake directory now
+generates the MC library's revision header.
+[Fork change](https://github.com/NeverSight/llvm-project/pull/24) ·
+[Assembly workloads and paired samples](https://github.com/gmh5225/test_mac_intel/actions/runs/45904234991).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
@@ -151,6 +172,12 @@ neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=sectio
 neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=inplace -o app.inplace
 ```
 
+When upgrading LLD, pass `--original-linker-path=/path/to/old/ld.lld`
+alongside `--linker-path=/path/to/new/ld.lld` for either mode. The first
+driver must reproduce the entire original file, including the linker
+version recorded in `.comment`. The second links the replacement. By
+default both links use `--linker-path`.
+
 In `section` mode, `sectionLayout` must place the function in the named
 executable output section at a range disjoint from its original range. The
 function can grow, and LLD resolves the callers. The layout can move the
@@ -166,20 +193,86 @@ A read-only startup segment without execute permission or a `NOLOAD`
 startup section fails this check even when the rebuilt function is executable.
 
 The runtime qualification uses the NeverSight LLVM fork's code generator,
-assembler and ELF linker. It builds classic MIPS and microMIPS for Release 2
-and Release 6 on o32, n32 and n64 in both byte orders, plus MIPS16 Release 2
-on o32 in both orders. Each program calls the rebuilt function three times.
-The matrix includes classic and tagged compressed entry points. The
-MIPS16 programs call the rebuilt function through an O32 `R_MIPS16_26`
-relocation. The compressed-entry variant also calls the classic startup
-routine from MIPS16 code.
-The six original classic cases return 25 before relinking and 37 afterward.
-The 40 shrinking-function cases return 81 and 29. They check the smaller
-symbol size, file offset, placement and ISA marker. The shrinking n64 images
-place executable code above 4 GiB. All 46 profiles also link a larger
-function in `section` mode. Its three calls return 61, 56 and 44, giving
-exit status 161. The same object must fail in `inplace` mode and preserve
-the previous output.
+assembler and ELF linker. Each row below runs in both byte orders with the
+original program and both relink modes.
+
+| Instruction set | ABIs | Entry points |
+| --- | --- | --- |
+| MIPS I, II | o32 | Classic |
+| MIPS III, IV, V | o32, n32, n64 | Classic |
+| MIPS32/64 R1, R2, R3, R5, R6 | o32, n32, n64 | Classic |
+| microMIPS R2, R3, R5, R6 | o32, n32, n64 | Classic and tagged microMIPS |
+| MIPS16 R2 | o32 | Classic and tagged MIPS16 |
+
+The release-based o32 rows run on both MIPS32 and MIPS64 ISA profiles. The
+fork marks a MIPS64/o32 executable with `EF_MIPS_32BITMODE`, ELF32 and the
+o32 ABI. The manifest command loads the ELF structure and validates the
+original link inputs directly. `neverd identify` reports the ELF profile.
+These rows qualify static relinking. Instruction lifting for
+MIPS64/o32 currently supports classic historical MIPS III.
+
+These 140 configurations call the rebuilt function three times. Six cover
+same-size replacements, and 134 cover shrinking replacements. All also link
+a larger replacement in `section` mode and observe exit status 161. The
+same object must fail in `inplace` mode and preserve the previous output.
+The runner checks the function size, file offset, ISA marker and exact ISA
+revision in `.MIPS.abiflags`. Shrinking n64 images place code above 4 GiB.
+
+The cross-object programs exercise their own stack, function pointer, ELF
+global pointer, 64-bit data and arguments beyond the register argument area.
+The replacement and its classic helper each read the initialized 64-bit
+value through their own ISA's data or TLS relocations. The guest checks
+both full 64-bit results and the helper's two visible side effects. It
+exits with 41 before the replacement and 73 afterward. The Linux runner
+checks both objects' relocations, the FP ABI, the linked callback, and
+initialized `PT_TLS` storage for both TLS models. In the n64 hard- and
+soft-float PIC cases it also checks all three operations of the packed GP
+relocations in the caller and callee. Classic and microMIPS each use their
+own `GPREL16`, `SUB` and `HI16` or `LO16` relocations.
+
+| Workload | ISA and ABI |
+| --- | --- |
+| PIC hard and soft float, static GP-relative small data, local-exec and initial-exec TLS | Classic and microMIPS R2/R6 on all three ABIs, MIPS16 R2 on o32 |
+| Scalar FP addition with hard-float arguments | Classic and microMIPS R2/R6 on all three ABIs |
+| Independent TLS blocks with initialized and zero-filled storage, local-exec and initial-exec | Classic and microMIPS R2/R6 on all three ABIs, MIPS16 R2 on o32 |
+| Extended branches to functions in another object | MIPS16 R2 on o32 |
+| Packed-byte DSP arithmetic | Classic R2 on all three ABIs |
+| MSA vector arithmetic | Classic R5 on all three ABIs |
+
+The 52 two-block TLS configurations use a four-byte initialized word and a
+259-byte zero-filled array aligned to 256 bytes. Each program switches
+thread pointers in the order A, B, A, B. The second call on each block
+checks its own prior writes to the word and both ends of the array. The
+runner verifies the TLS symbol offsets and the 4-byte file size, 515-byte
+memory size and 256-byte alignment of `PT_TLS`.
+
+The MIPS16 branch programs take both arms of a conditional and swap the
+two destinations in the replacement. The targets are more than 2 KiB ahead
+in the original layout and behind the new `section` placement. Each native
+build produces 1,148 executable images across 336 configurations, including
+812 patched images. The upgrade check uses r13 and r14 to build one original
+per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
+the startup, the function and two helpers. Both helpers define the same
+COMDAT function and different weak implementations of `group_choice`.
+The first helper in link order must supply the result. Six programs call
+a PIC function from the static startup. The runner checks that the linked
+function retains `STO_MIPS_PIC` and uses the classic instruction set.
+The current linker combines the updated function with the original startup
+and helpers. The runner checks the ABI, the surviving COMDAT group, both
+weak symbols and the three `R_MIPS_26` relocations on startup calls in both
+intermediate objects. Reversing the original helpers selects a different
+weak definition. Both modes reject that executable when given the original
+input order and preserve the previous output. Across the four input sets
+the runner compares all 48 replacements byte for byte with independent
+links, runs the 24 originals and all 48 replacements, and checks the
+function placement in every ELF.
+
+For MIPS16 o32 hard float, the ordinary function pointer selects the
+compiler's classic entry adapter and the symbol table retains the MIPS16
+body. A MIPS16 function reading TLS calls the fork's classic o32
+thread-pointer helper and accesses its variable in MIPS16 mode. Pre-R6
+microMIPS small-data programs use `+long-calls` to call
+the external classic function across ISA modes.
 
 To build the tools from NeverD's pinned fork checkout, run
 
@@ -195,13 +288,19 @@ Use `build-mips-tools/bin/ld.lld` as the linker. Run
 `python3 scripts/check_mips_elf_relink.py qualify --help` for the tool
 paths, then `python3 scripts/check_mips_elf_relink.py execute --root products`
 on Linux with QEMU user-mode and pyelftools. The n32 and n64 microMIPS
-cases use the pinned NeverSight Unicorn fork. Set `LIBUNICORN_PATH` to its
+cases and the pre-R6 o32 microMIPS cases using the FPU run on the pinned
+NeverSight Unicorn fork. Its runner configures the floating-point register
+width from the ELF ABI record and implements the single-thread
+`set_thread_area` call for the TLS fixture. Set `LIBUNICORN_PATH` to its
 MIPS-enabled shared-library build and `PYTHONPATH` to
 `third_party/unicorn/bindings/python`. The runner applies the ELF load
 segments' memory permissions, starts at the entry point, and checks the ABI
 exit syscall and its result. The manual **MIPS ELF relink**
 workflow builds the programs on Linux, macOS and Windows and runs all three
-sets on Linux.
+sets on Linux. For the six classic R2 ABI and byte-order combinations, the
+runner uses same-named objects in different directories, UTF-8 paths with
+spaces and the input pathname as the output. Both modes must match independent
+links. The inplace manifest omits the optional section fields.
 
 ## Implementation boundaries
 
@@ -2173,8 +2272,11 @@ The shared availability catalog gates physical words before decoder fallbacks
 and at direct lift entry, including after decoder reuse. It does not imply that
 every architecturally available instruction has a semantic implementation.
 Trapping arithmetic, privileged operations and reservations retain the limits
-listed above. MIPS IV–V o32 remains unqualified; I–III scheduling has
-the explicit execution and reconstruction boundaries described above.
+listed above. For MIPS IV/V o32, ELF loading and static relinking preserve
+32-bit pointers and the 64-bit register architecture in both byte orders.
+Instruction decoding and lifting for these two o32 profiles require separate
+qualification. I–III scheduling has the execution and reconstruction
+boundaries described above.
 
 IV admits the implemented integer and scalar COP1/COP1X slice; V additionally
 admits paired-single and LUXC1/SUXC1. ROTR, EXT, MFHC1 and other release-only
