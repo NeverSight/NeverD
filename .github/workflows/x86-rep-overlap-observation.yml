@@ -7,7 +7,7 @@ permissions:
 jobs:
   observe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 105
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -27,12 +27,39 @@ jobs:
           test "$(wc -l < results.csv)" -eq 61
           head -18 cpu.txt
           cat results.csv
+      - name: Check out the unchanged dev test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 698978daec1bb23c4affc588dbeb375c5da5d39b
+          path: project
+          persist-credentials: false
+      - name: Build the Release paging test
+        working-directory: project
+        run: |
+          git submodule update --init --depth 1 third_party/capstone
+          python3 scripts/prepare_kvm_ci.py --output ../kvm-device.json
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 \
+            -DBUILD_TESTING=ON -DNEVERD_BUILD_SHARED=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=OFF -DNEVERD_ENABLE_CPU_EMULATION=ON \
+            -DNEVERD_ENABLE_DRIVER_EMULATION=OFF -DNEVERD_EMULATION_BACKEND_UNICORN=OFF \
+            -DNEVERD_LLVM_PREBUILT=ON
+          python3 scripts/build.py build --config Release --target NeverDX86PagingTests --parallel 4
+      - name: Compare original KVM runs on the same host
+        run: |
+          ctest --test-dir project/build --build-config Release --no-tests=error \
+            -R 'X86LegacyStringNativeTest.OverlappingMovesObserveEarlierElements' \
+            --output-junit "$PWD/kvm.xml" --output-on-failure
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
         with:
           name: native-i386-rep-observations
           path: |
             cpu.txt
             instruction.txt
             results.csv
+            kvm-device.json
+            kvm.xml
           if-no-files-found: error
           retention-days: 14
