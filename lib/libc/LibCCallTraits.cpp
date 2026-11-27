@@ -22,6 +22,7 @@
 #include "neverd/loader/ReadOnlyBytes.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringSwitch.h"
 
 #include <algorithm>
@@ -29,7 +30,6 @@
 #include <set>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace neverd::libc {
 namespace {
@@ -615,18 +615,23 @@ NoReturnTargetIndex::NoReturnTargetIndex(const BinaryImage &Img,
   // export at an address proves it too: the image's own code calls the
   // routines it exports, such as the kernel's ExRaiseStatus.
   if (SymbolsIndexed) {
-    // Which symbol is first at an address is all the sets answer: hashed,
-    // they cost a fraction of ordered ones over an image's symbols.
-    std::unordered_set<va_t> SymbolAddresses;
-    SymbolAddresses.reserve(Img.Symbols.size());
+    // Track first names for all 64-bit addresses. Nearby addresses share one
+    // word. The word number also leaves DenseMap's reserved keys unused.
+    const auto FirstAt = [](llvm::DenseMap<va_t, uint64_t> &Words, va_t Addr) {
+      const uint64_t Mask = uint64_t{1} << (Addr % 64);
+      uint64_t &Word = Words[Addr / 64];
+      const bool First = (Word & Mask) == 0;
+      Word |= Mask;
+      return First;
+    };
+    llvm::DenseMap<va_t, uint64_t> SymbolWords;
     for (const Symbol &Sym : Img.Symbols)
-      if (!Sym.IsSection && SymbolAddresses.insert(Sym.Addr).second &&
+      if (!Sym.IsSection && FirstAt(SymbolWords, Sym.Addr) &&
           NoReturn(Sym.Name))
         Targets.insert(Sym.Addr);
-    std::unordered_set<va_t> ExportAddresses;
-    ExportAddresses.reserve(Img.Exports.size());
+    llvm::DenseMap<va_t, uint64_t> ExportWords;
     for (const Export &Exp : Img.Exports)
-      if (ExportAddresses.insert(Exp.Addr).second && NoReturn(Exp.Name))
+      if (FirstAt(ExportWords, Exp.Addr) && NoReturn(Exp.Name))
         Targets.insert(Exp.Addr);
   }
   // The Go runtime routines Go's compiler gives no continuation.

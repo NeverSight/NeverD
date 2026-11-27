@@ -1216,6 +1216,36 @@ TEST(IsNoReturnTarget, IndexPreservesFirstNamesAndImportPrecedence) {
   }
 }
 
+TEST(IsNoReturnTarget, KeepsFirstSymbolAndExportAtEachFullWidthAddress) {
+  BinaryImage Img;
+  Img.Symbols = {{"warn", 64},
+                 {"abort", 63},
+                 {"warn", 0},
+                 {"_exit", InvalidVA - 1},
+                 {"warn", InvalidVA - 2},
+                 {"abort", 0},
+                 {"abort", 64},
+                 {"abort", InvalidVA}};
+  Img.Exports = {{"warn", 0, 65},
+                 {"_exit", 0, 64},
+                 {"_exit", 0, 65},
+                 {"_exit", 0, InvalidVA - 2}};
+
+  const NoReturnTargetIndex Index(Img);
+  const std::pair<va_t, bool> Cases[] = {{0, false},
+                                         {63, true},
+                                         {64, true},
+                                         {65, false},
+                                         {InvalidVA - 2, true},
+                                         {InvalidVA - 1, true},
+                                         {InvalidVA, false}};
+  for (const auto &[Address, Expected] : Cases) {
+    SCOPED_TRACE(Address);
+    EXPECT_EQ(isNoReturnTarget(Img, Address), Expected);
+    EXPECT_EQ(Index.contains(Img, Address), Expected);
+  }
+}
+
 TEST(IsNoReturnTarget, VeneerIndexUsesTheSameEntryAdmissionAsLiveLookup) {
   for (Arch A : {Arch::X64, Arch::AArch64, Arch::ARM}) {
     for (unsigned Case = 0; Case < 5; ++Case) {
