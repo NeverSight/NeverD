@@ -21637,7 +21637,8 @@ PE32 also uses the UCRT stdio provider set for the caller-cleanup convention
 of `__acrt_iob_func` and `__stdio_common_vfprintf`. Proving a stream, a format
 string or the effects of output requires the arguments at the call.
 The PE32 CRT startup ABI assigns caller cleanup to the argument, environment
-and on-exit table routines in the runtime API set. The math and locale
+and on-exit table routines in the runtime API set, including
+`_crt_atexit` and `_crt_at_quick_exit`. The math and locale
 API sets supply `__setusermatherr` and `_configthreadlocale`, respectively.
 These call summaries describe the returning stack pointer. Import binding
 and memory effects require evidence for the invocation.
