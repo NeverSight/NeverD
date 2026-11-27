@@ -90,6 +90,34 @@ bool isTakenSuccessor(const LowFunc &F, const LowBlock &B, size_t Index) {
   return Index == 0;
 }
 
+void emitNativeBlockDisassembly(llvm::json::OStream &J, Session &S,
+                                const LowBlock &B) {
+  va_t Cur = B.StartAddr;
+  while (Cur < B.EndAddr) {
+    const Segment *Seg = S.Img.getSegmentFor(Cur);
+    if (!Seg)
+      break;
+    uint64_t Off64 = Cur - Seg->VA;
+    if (Off64 >= Seg->Data.size())
+      break;
+    size_t Off = static_cast<size_t>(Off64);
+    size_t Avail = static_cast<size_t>(std::min<uint64_t>(
+        16, std::min<uint64_t>(B.EndAddr - Cur,
+                               std::min<uint64_t>(Seg->Size - Off64,
+                                                  Seg->Data.size() - Off))));
+    if (Avail == 0)
+      break;
+    const uint8_t *Bytes = Seg->Data.data() + Off;
+    DecodedInsn DI;
+    int Sz = S.Dec.decodeOne(Bytes, Avail, Cur, DI);
+    if (Sz <= 0)
+      break;
+    J.value(vaHex(Cur) + ": " + (DI.Raw ? DI.Raw->mnemonic : "") + " " +
+            (DI.Raw ? DI.Raw->op_str : ""));
+    Cur += Sz;
+  }
+}
+
 std::optional<va_t> guardedCTRSkip(const LowBlock &Block) {
   if (Block.InstructionBoundaries.empty())
     return std::nullopt;
@@ -366,62 +394,40 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
     return dupStr(std::string("{}"));
   }
 
-  llvm::json::Array Nodes;
-  llvm::json::Array Edges;
-
-  for (const auto &B : F->Blocks) {
-    llvm::json::Object Node;
-    Node["id"] = B.Id;
-    Node["start"] = vaHex(B.StartAddr);
-    Node["end"] = vaHex(B.EndAddr);
-    Node["insn_count"] = static_cast<int64_t>(B.Ops.size());
-
-    llvm::json::Array DisasmLines;
-    va_t Cur = B.StartAddr;
-    while (Cur < B.EndAddr) {
-      const Segment *Seg = S->Img.getSegmentFor(Cur);
-      if (!Seg)
-        break;
-      uint64_t Off64 = Cur - Seg->VA;
-      if (Off64 >= Seg->Data.size())
-        break;
-      size_t Off = static_cast<size_t>(Off64);
-      size_t Avail = static_cast<size_t>(std::min<uint64_t>(
-          16, std::min<uint64_t>(B.EndAddr - Cur,
-                                 std::min<uint64_t>(Seg->Size - Off64,
-                                                    Seg->Data.size() - Off))));
-      if (Avail == 0)
-        break;
-      const uint8_t *Bytes = Seg->Data.data() + Off;
-      DecodedInsn DI;
-      int Sz = S->Dec.decodeOne(Bytes, Avail, Cur, DI);
-      if (Sz <= 0)
-        break;
-      std::string Line = vaHex(Cur) + ": " + (DI.Raw ? DI.Raw->mnemonic : "") +
-                         " " + (DI.Raw ? DI.Raw->op_str : "");
-      DisasmLines.push_back(Line);
-      Cur += Sz;
-    }
-    Node["disasm"] = std::move(DisasmLines);
-    Nodes.push_back(std::move(Node));
-  }
-  forEachNativeCFGEdge(
-      *F, S->Img.Arch, [&](int From, int To, std::optional<bool> Taken) {
-        llvm::json::Object Edge;
-        Edge["from"] = From;
-        Edge["to"] = To;
-        Edge["type"] = Taken ? (*Taken ? "true" : "false") : "unconditional";
-        Edges.push_back(std::move(Edge));
-      });
-
-  llvm::json::Object Root;
-  Root["name"] = jsonSafeText(F->Name);
-  Root["entry"] = vaHex(F->Entry);
-  if (F->AnalysisOnly)
-    Root["analysis_only"] = true;
-  Root["nodes"] = std::move(Nodes);
-  Root["edges"] = std::move(Edges);
-  return dupStr(jsonToString(llvm::json::Value(std::move(Root))));
+  // Stream in the same sorted key order as a json::Object.
+  std::string Buf;
+  llvm::raw_string_ostream OS(Buf);
+  llvm::json::OStream J(OS);
+  J.object([&] {
+    if (F->AnalysisOnly)
+      J.attribute("analysis_only", true);
+    J.attributeArray("edges", [&] {
+      forEachNativeCFGEdge(
+          *F, S->Img.Arch, [&](int From, int To, std::optional<bool> Taken) {
+            J.object([&] {
+              J.attribute("from", From);
+              J.attribute("to", To);
+              J.attribute("type", Taken ? (*Taken ? "true" : "false")
+                                        : "unconditional");
+            });
+          });
+    });
+    J.attribute("entry", vaHex(F->Entry));
+    J.attribute("name", jsonSafeText(F->Name));
+    J.attributeArray("nodes", [&] {
+      for (const LowBlock &B : F->Blocks)
+        J.object([&] {
+          J.attributeArray("disasm",
+                           [&] { emitNativeBlockDisassembly(J, *S, B); });
+          J.attribute("end", vaHex(B.EndAddr));
+          J.attribute("id", B.Id);
+          J.attribute("insn_count", static_cast<int64_t>(B.Ops.size()));
+          J.attribute("start", vaHex(B.StartAddr));
+        });
+    });
+  });
+  OS.flush();
+  return dupStr(Buf);
 }
 
 const char *neverd_cfg_dot(neverd_session_t Sess, const char *InputPath,
