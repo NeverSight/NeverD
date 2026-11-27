@@ -5013,6 +5013,14 @@ TEST_F(JTE_X86_64, GuardReadsFlagsItsPredecessorCompareSet) {
     for (const neverd::JumpTable &Table : Refused.JumpTables)
       EXPECT_TRUE(Table.AnalysisOnly);
   }
+
+  // The `ja` block whose address .data holds is entered with any flags, so
+  // its guard bounds nothing and the eight slots are no proved table.
+  const std::vector<neverd::va_t> RootedSlots = Entries(4);
+  ASSERT_EQ(RootedSlots.size(), 8u);
+  const neverd::LowFunc Rooted = Build("jt_flags_rooted");
+  for (const neverd::JumpTable &Table : Rooted.JumpTables)
+    EXPECT_TRUE(Table.AnalysisOnly || Table.Targets != RootedSlots);
 }
 
 static fs::path scalarRetractedX64So() {

@@ -1592,8 +1592,9 @@ after replacing the cursor stays unresolved.
 `JTE_X86_64.GuardReadsFlagsItsPredecessorCompareSet` dispatches after a `ja`
 that reads the flags of the previous block's `cmp`, directly and through a
 relay block that keeps them: both dispatches read their eight slots, while an
-index changed after the compare, or a second compare into the `ja` block that
-admits 101 values, stays unresolved.
+index changed after the compare, a second compare into the `ja` block that
+admits 101 values, or an address of the `ja` block that .data holds, stays
+unresolved.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the
