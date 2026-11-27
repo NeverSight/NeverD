@@ -2930,6 +2930,27 @@ alias_done:
              Op.Inputs[0].Size == Compared.Size;
     };
     bool LaneAndAccepted = false;
+    // GCC also copies the compared register into the index after the guard
+    // (`cmp $0x1c, %r11d; ja; mov %r11d, %eax` before an RAX index).  Nothing
+    // may write the compared register between the compare and that copy; the
+    // copy, and the lifter's zero-extend of it, are then the index's only
+    // writes before the use.  A later write of the compared register does not
+    // replace the copy.
+    bool CopiedAfterCompare = false;
+    bool CopyAfterInvalid = false;
+    // After the compare the lane's register may take the lane's zero-extend
+    // in steps: `movzbl %sil, %esi` lifts as INT_ZEXT into a temporary, a
+    // COPY of it into ESI, and the architectural INT_ZEXT of ESI into RSI.
+    // ZeroExtendedWidth is the width at which the lane's register holds the
+    // compared lane zero-extended; the temporary is that instruction's own.
+    size_t ZeroExtendedWidth = 0;
+    std::optional<std::pair<va_t, NdVar>> ZeroExtendedTemp;
+    auto extendsLaneFrom = [&](const NdVar &Input) {
+      return Input.isReg() && Input.Space == Compared.Space &&
+             Input.Offset == Compared.Offset &&
+             Input.Size ==
+                 (ZeroExtendedWidth ? ZeroExtendedWidth : Compared.Size);
+    };
     for (auto It = Insns.lower_bound(std::min(*CompareBlock, *IndexBlock));
          It != Insns.end() && It->first <= Info.IndexUseAddr; ++It) {
       if (!consumeCandidateEvidence())
@@ -2995,12 +3016,36 @@ alias_done:
             CopiedLaneZeroExtended = true;
           continue;
         }
+        if (TrackCopiedRegister && !CopiedBeforeCompare && !LaneAndAccepted &&
+            !CopiedSlotIdentity && !CopyAfterInvalid &&
+            regOverlaps(Op.Output, Index)) {
+          if (!CopiedAfterCompare && copyOfCompared(Op) &&
+              !Insn.IsInstructionGuard) {
+            CopiedAfterCompare = true;
+            CopiedLaneZeroExtended = false;
+          } else if (CopiedAfterCompare && !Insn.IsInstructionGuard &&
+                     copiedLaneRefresh(Op)) {
+            if (Op.Opcode == NdOp::INT_ZEXT)
+              CopiedLaneZeroExtended = true;
+          } else {
+            CopyAfterInvalid = true;
+          }
+          continue;
+        }
         if (LaneAndAccepted && exactIndexWrite(Op))
           return false;
+        if (SameOffset && Index.Size > Compared.Size &&
+            Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
+            Op.Output.isTemp() && Op.Output.Size <= Index.Size &&
+            extendsLaneFrom(Op.Inputs[0]) && !Insn.IsInstructionGuard) {
+          ZeroExtendedTemp = std::pair{Op.Addr, Op.Output};
+          continue;
+        }
         if (!overlapsCompared(Op.Output))
           continue;
         if ((CopiedSlotIdentity ||
-             (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid)) &&
+             (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid) ||
+             (CopiedAfterCompare && !CopyAfterInvalid)) &&
             !regOverlaps(Op.Output, Index))
           continue;
         if (Insn.IsInstructionGuard)
@@ -3013,22 +3058,36 @@ alias_done:
                                 Op.Inputs[0].Size == Compared.Size;
         // Extending another register does not make it the table index.
         // Cross-register identities require the copy proof above.
+        const bool LaneRegisterWrite =
+            SameOffset && Index.Size > Compared.Size && Op.NumInputs >= 1 &&
+            Op.Output.Space == Compared.Space &&
+            Op.Output.Offset == Compared.Offset && Op.Output.Size <= Index.Size;
         const bool WideZeroExtend =
-            SameOffset && Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
-            Op.Output.Size == Index.Size && Index.Size > Compared.Size &&
-            Op.Output.Offset == Compared.Offset && Op.Inputs[0].isReg() &&
-            Op.Inputs[0].Offset == Compared.Offset &&
-            Op.Inputs[0].Size == Compared.Size;
+            LaneRegisterWrite &&
+            ((Op.Opcode == NdOp::INT_ZEXT && extendsLaneFrom(Op.Inputs[0]) &&
+              Op.Output.Size > Op.Inputs[0].Size) ||
+             (Op.Opcode == NdOp::COPY && ZeroExtendedTemp &&
+              ZeroExtendedTemp->first == Op.Addr &&
+              Op.Inputs[0].Space == ZeroExtendedTemp->second.Space &&
+              Op.Inputs[0].Offset == ZeroExtendedTemp->second.Offset &&
+              Op.Inputs[0].Size == ZeroExtendedTemp->second.Size &&
+              Op.Output.Size == Op.Inputs[0].Size));
         if (NarrowCopy)
           continue;
         if (WideZeroExtend) {
-          SawWideIdentity = true;
+          ZeroExtendedWidth = Op.Output.Size;
+          ZeroExtendedTemp.reset();
+          if (ZeroExtendedWidth == Index.Size)
+            SawWideIdentity = true;
           continue;
         }
         return false;
       }
     }
     if (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid &&
+        (Index.Size == Compared.Size || CopiedLaneZeroExtended))
+      SawWideIdentity = true;
+    if (CopiedAfterCompare && !CopyAfterInvalid &&
         (Index.Size == Compared.Size || CopiedLaneZeroExtended))
       SawWideIdentity = true;
     return SawWideIdentity;

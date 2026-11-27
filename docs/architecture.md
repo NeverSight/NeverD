@@ -11659,6 +11659,17 @@ then asked alone, in a session of their own, exactly as after the copy runs
 out; the other conditions stay unanswered and only drop out of the proof.
 pcre2's pattern converter puts 22 controlling conditions and 179 queries in
 front of one dispatch.
+The compare is that structural leaf also when the index takes the compared
+lane only after the guard. GCC copies the compared register into the index
+register (`cmp $0x1c, %r11d; ja; mov %r11d, %eax`), or zero-extends the
+compared byte into its own register (`cmp $0x13, %sil; ja; movzbl %sil,
+%esi`, which lifts as an INT_ZEXT into a temporary, a COPY of it into ESI and
+ESI's own INT_ZEXT into RSI). Nothing may write the lane between the compare
+and that copy or extension, each extension must widen what the previous one
+left, and a temporary counts only within its own instruction. Without the
+identity pcre2's parse_regex asked one session over 556 controlling
+conditions for such a dispatch; it spent 362 Mi of the candidate account and
+did not finish.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph

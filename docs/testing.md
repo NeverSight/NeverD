@@ -1614,6 +1614,12 @@ to its 64 slots.
 controlling compares before a byte dispatch and limits each guard query
 session to a match allowance the whole batch overruns: the compare's own
 queries, asked alone, still bound the six slots.
+`JTE_X86_64.IndexTakesTheComparedLaneAfterTheGuard` uses the same limit on
+dispatches whose index takes the compared lane after the guard
+(`movzbl %sil, %esi` after `cmpb $5, %sil; ja`, and `movl %r11d, %eax` after
+`cmpl $5, %r11d; ja`): both read their six slots, while twins that change
+the lane between the guard and the index (`incb %sil`, `incl %r11d`) stay
+unresolved.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

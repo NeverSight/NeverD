@@ -5219,6 +5219,67 @@ TEST_F(JTE_X86_64, CompareQueriesOutliveAnUnfinishedGuardSession) {
   EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
 }
 
+static fs::path laneIdentityX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_lane_identity.o";
+}
+
+// Each dispatch here sits behind 24 controlling compares, and each guard
+// query session may spend a match allowance of 2000, so only the queries of
+// the compare that names the index, asked alone, can bound a table.  The
+// index takes the compared lane after the guard: `movzbl %sil, %esi` after
+// `cmpb $5, %sil; ja` (a zero-extend into a temporary, a copy of it into
+// ESI, and ESI's own zero-extend into RSI, the shape of pcre2's
+// parse_regex), or `movl %r11d, %eax` after `cmpl $5, %r11d; ja`.  The
+// twins change the lane between the guard and the index (`incb %sil`,
+// `incl %r11d`): that index is no compared value, and their dispatches,
+// which would read the trailing zero word, stay unresolved.
+TEST_F(JTE_X86_64, IndexTakesTheComparedLaneAfterTheGuard) {
+  auto ImageOrErr = neverd::loadBinary(laneIdentityX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  // Four tables of six entries and a zero word each, in function order.
+  constexpr uint64_t TableBytes = 7 * 4;
+  for (const auto &[Name, TableIndex, Resolved] :
+       {std::tuple{"jt_lane_extend_after_guard", 0u, true},
+        std::tuple{"jt_lane_changed_after_guard", 1u, false},
+        std::tuple{"jt_copy_after_guard", 2u, true},
+        std::tuple{"jt_copy_changed_after_guard", 3u, false}}) {
+    SCOPED_TRACE(Name);
+    const neverd::va_t TableVA = Rodata->VA + TableIndex * TableBytes;
+    std::vector<neverd::va_t> Expected;
+    for (size_t Slot = 0; Slot < 6; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(TableVA + Slot * 4, 4);
+      ASSERT_NE(Bytes, nullptr);
+      int32_t Entry = 0;
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+      Expected.push_back(TableVA + static_cast<int64_t>(Entry));
+    }
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    Builder.setGuardQueryMatchEvidenceBudgetForTesting(2000);
+    const neverd::LowFunc Func =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    if (!Resolved) {
+      EXPECT_TRUE(Func.JumpTables.empty());
+      continue;
+    }
+    ASSERT_EQ(Func.JumpTables.size(), 1u);
+    EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+    EXPECT_EQ(Func.JumpTables.front().BaseAddr, TableVA);
+    EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;
 // ja`, then indexes its 13-entry table with `movzbl %sil,%eax; andl $0xf,%eax`.
 // The guard's byte is the low byte of that index, so the table keeps the
