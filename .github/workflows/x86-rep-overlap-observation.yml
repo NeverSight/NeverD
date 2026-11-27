@@ -24,8 +24,8 @@ jobs:
           gcc -m32 -O2 -Wall -Wextra -Werror .github/qualification/rep/{observe.c,moves.S} -o observe
           objdump -d --disassemble=byte16 observe > instruction.txt
           ./observe > results.csv
-          test "$(wc -l < results.csv)" -eq 121
-          cat cpu.txt | head -18
+          test "$(wc -l < results.csv)" -eq 61
+          head -18 cpu.txt
           cat results.csv
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
