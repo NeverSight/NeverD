@@ -28,10 +28,14 @@ std::set<va_t> restoredAArch64IndirectTailFrames(
 /// incoming value before this exact branch, or else at nothing derived from
 /// it, where the branch resumes saved state on another stack.  PLT0's jump to
 /// the lazy-binding resolver, which receives the word PLT0 pushed, qualifies
-/// too.  It establishes no callee and no jump-table domain; an incomplete
+/// too.  A branch to an address that may derive from this function's own code,
+/// or from a read-only table whose entries name it, stays within the function
+/// and never qualifies.  OwnedCode is positive ownership metadata, as for
+/// AArch64.  It establishes no callee and no jump-table domain; an incomplete
 /// proof grants nothing.
 std::set<va_t> restoredX64IndirectTailFrames(
     const LowFunc &Function, const BinaryImage &Image,
+    ExceptionAddressRange OwnedCode = {},
     size_t MaxWork = limits::kMaxIndirectTailFrameWork);
 
 } // namespace neverd

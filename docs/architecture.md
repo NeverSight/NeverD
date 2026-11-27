@@ -12572,9 +12572,20 @@ dynamic linker fills with its lazy-binding resolver
 PLT0 pushes. Before the condition, a jump inside its frame through a
 relative table the resolver could not bound became a call of its case labels
 in a stripped library, which no relocation names the table in: liblzma's
-encoder, libjq, gawk, sqlite3Parser and bash each had one. A frameless
-function's unresolved local dispatch still depends on the resolver's table
-identity.
+encoder, libjq, gawk, sqlite3Parser and bash each had one. The proof also
+follows which registers and temporaries may hold an address of the function's
+own code, or a value read through or computed from a table of them: a value
+an instruction computes from constants alone that is such an address, or
+that starts read-only data whose first 32-bit offset from it, or whose first
+word, names the function's code, and anything derived from one. Only that
+computed value counts, since a RIP-relative operand starts from the next
+instruction's address, which lies in the function. A call keeps only the
+preserved registers' marks. A jump to such a value stays within the function
+whatever its frame, so a frameless function's unbounded relative table no
+longer becomes a call of its case labels. Writable memory is no such table,
+nor is a slot the loader fills, such as a Control Flow Guard dispatch slot: a
+GOT slot names its PLT stub until the dynamic linker binds it, and the stub's
+jump through it stays a tail call.
 
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in

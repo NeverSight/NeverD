@@ -16190,6 +16190,9 @@ one of two paths, after an unrestored realignment or a register adjustment,
 after LEAVE reads an RBP a call result moved, and after a pushing loop.
 `LazyBindingResolverJumpKeepsTheTailCall` keeps the library's PLT0 jump to
 the lazy-binding resolver a tail call after its push.
+`OwnLabelTableKeepsTheBranch` keeps the branch through an unbounded relative
+table of the function's own labels with nothing pushed, and through one whose
+base RBX keeps across a call, after popping RBX.
 `LowIntrinsicMemoryOperands.DecodeOnlyTheLiftedShapes` rejects width, ordering
 and segment mismatches and intrinsics without a memory contract.
 
