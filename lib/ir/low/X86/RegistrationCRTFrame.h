@@ -21,9 +21,14 @@ struct LowBlock;
 struct LowOp;
 namespace registration_state {
 struct FrameState;
-enum class KernelStartupCall { Identifier, Clock, SetExceptionFilter };
+enum class KernelStartupCall {
+  Identifier,
+  Clock,
+  SetExceptionFilter,
+  InitializeSList
+};
 std::optional<KernelStartupCall> kernelStartupCall(const Import &Imported);
-/// Check a private clock output or the installed filter's code pointer.
+/// Check the clock output, installed filter or aligned image list header.
 /// The caller owns the live binding and private outgoing argument word.
 bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
                                         const LowBlock &Block, const LowOp &Op,

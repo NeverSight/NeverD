@@ -1201,6 +1201,80 @@ TEST(RegistrationCRTFrame,
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4TypeInfoInitializesAnAlignedPrivateListHead) {
+  enum class Input {
+    Current,
+    WrongProvider,
+    DelayImport,
+    Unaligned,
+    MissingOutputFixup,
+    MissingSlotFixup,
+    OverlappingImport,
+    Shared,
+    Discardable,
+    ReadOnly
+  };
+  for (bool Selected : {false, true}) {
+    auto Original = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    for (auto Kind : {Input::Current, Input::WrongProvider, Input::DelayImport,
+                      Input::Unaligned, Input::MissingOutputFixup,
+                      Input::MissingSlotFixup, Input::OverlappingImport,
+                      Input::Shared, Input::Discardable, Input::ReadOnly}) {
+      SCOPED_TRACE(::testing::Message() << Selected << '/' << int(Kind));
+      BinaryImage Image = *Original;
+      const auto Slot = llvm::find_if(
+          Image.Imports, [](const auto &I) { return I.IATAddr == 0x408020; });
+      ASSERT_NE(Slot, Image.Imports.end());
+      ASSERT_EQ(Slot->Name, "InitializeSListHead");
+      if (Kind == Input::WrongProvider)
+        Slot->Module = "application.dll";
+      if (Kind == Input::DelayImport)
+        Slot->IsDelayImport = true;
+      if (Kind == Input::MissingOutputFixup ||
+          Kind == Input::MissingSlotFixup) {
+        const va_t Field =
+            Kind == Input::MissingOutputFixup ? 0x407275 : 0x40727b;
+        ASSERT_EQ(
+            std::erase_if(Image.BaseRelocations,
+                          [=](const auto &R) { return R.Address == Field; }),
+            1u);
+      }
+      if (Kind == Input::Unaligned) {
+        auto *Field = const_cast<uint8_t *>(Image.readVA(0x407275, 4));
+        ASSERT_TRUE(Field);
+        ASSERT_EQ(readLE<uint32_t>(Field), 0x40b218u);
+        writeLE<uint32_t>(Field, 0x40b21c);
+      }
+      if (Kind == Input::OverlappingImport) {
+        auto Extra = *Slot;
+        Extra.IATAddr = 0x40b21f;
+        Image.Imports.push_back(std::move(Extra));
+      }
+      const auto *Owner = Image.getSectionFor(0x40b218);
+      ASSERT_TRUE(Owner);
+      auto &Storage = Image.Sections[Owner - Image.Sections.data()];
+      if (Kind == Input::Shared)
+        Storage.Type |= llvm::COFF::IMAGE_SCN_MEM_SHARED;
+      if (Kind == Input::Discardable)
+        Storage.Type |= llvm::COFF::IMAGE_SCN_MEM_DISCARDABLE;
+      if (Kind == Input::ReadOnly)
+        Storage.Flags = SegmentFlags::Readable;
+      size_t Work = 0;
+      const auto Stack =
+          RegistrationCallCalleeIndex(Image, &Work).stackContract(0x407274);
+      EXPECT_EQ(bool(Stack && Stack->PreservesImportBindings),
+                Kind == Input::Current);
+      if (Kind == Input::Current) {
+        ASSERT_TRUE(Stack);
+        EXPECT_EQ(Stack->StackPopBytes, 0u);
+        EXPECT_EQ(Stack->RequiredImports, (std::vector<va_t>{0x408020}));
+      }
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4StartupCallsTheUCRTCommodeAccessor) {
   auto Image = loadXCPT4();
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());

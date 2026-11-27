@@ -21094,6 +21094,11 @@ possible image reads, seven possible writes, and returned AL. The tests vary
 the mode, incoming EAX, physical call ownership, relocations and nested leaf
 effects. A caller with two distinct return cleanups also checks that the
 actual argument survives the CRT store and selects the correct return.
+The type-info initializer calls `KERNEL32.dll!InitializeSListHead` with an
+eight-byte header. Both loader selections check the original call and reject
+a changed DLL, delay binding, missing relocation, unaligned address, an
+overlapping import on the final byte, and shared, discardable or read-only
+storage.
 The outer stdio wrapper
 restores ESP from EBP after its nested calls. The inner wrapper depends on
 the UCRT calling convention. On Windows,

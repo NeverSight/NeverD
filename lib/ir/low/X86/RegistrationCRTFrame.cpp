@@ -11,6 +11,7 @@
 #include "../../../loader/ReadOnlyBytesIndex.h"
 #include "RegistrationABIPrivate.h"
 #include "RegistrationFrame.h"
+#include "RegistrationMemoryPermissions.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/LowIR.h"
@@ -37,8 +38,9 @@ bool isCheckedControlFPSlot(const BinaryImage &Image, va_t Slot) {
          isFileBackedPEImportSlot(Image, Slot);
 }
 
-std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
-                                       const LowOp &Op, size_t &Work) {
+namespace {
+std::optional<va_t> checkedCallSlot(const BinaryImage &Image, const LowOp &Op,
+                                    size_t &Work, bool RequireSlotFixup) {
   const bool Indirect = Op.Opcode == NdOp::INDIR_CALL;
   const unsigned Size = Indirect ? 6 : 5;
   if ((!Indirect && Op.Opcode != NdOp::CALL) || Op.NumInputs != 1 ||
@@ -50,9 +52,14 @@ std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
       !registration_abi::chargeCalleeWork(Work, Indirect ? 10 : 15))
     return std::nullopt;
   const va_t Target = Op.Inputs[0].Offset;
+  auto readSlotInstruction = [&](va_t Address) {
+    if (RequireSlotFixup)
+      return readRelocatedPE32CodeBytes(Image, Address, 6, {Address + 2}, Work,
+                                        limits::kMaxRegistrationEHStateWork);
+    return readImmutablePE32CodeBytes(Image, Address, 6, {Address + 2});
+  };
   if (Indirect) {
-    const auto Bytes =
-        readImmutablePE32CodeBytes(Image, Op.Addr, 6, {Op.Addr + 2});
+    const auto Bytes = readSlotInstruction(Op.Addr);
     if (!Bytes || (*Bytes)[0] != 0xff || (*Bytes)[1] != 0x15 ||
         readLE<uint32_t>(Bytes->data() + 2) != Target)
       return std::nullopt;
@@ -63,7 +70,7 @@ std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
   if (Target > UINT32_MAX - 6)
     return std::nullopt;
   const auto Bytes = readImmutablePE32CodeBytes(Image, Op.Addr, 5, {});
-  const auto Stub = readImmutablePE32CodeBytes(Image, Target, 6, {Target + 2});
+  const auto Stub = readSlotInstruction(Target);
   if (!Bytes || (*Bytes)[0] != 0xe8 ||
       uint32_t(Op.Addr + 5 + int64_t(readLE<int32_t>(Bytes->data() + 1))) !=
           Target ||
@@ -72,7 +79,6 @@ std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
   return readLE<uint32_t>(Stub->data() + 2);
 }
 
-namespace {
 const LowInstructionBoundary *precedingInstruction(const LowBlock &Block,
                                                    va_t Address, size_t &Work) {
   const auto &Bounds = Block.InstructionBoundaries;
@@ -90,6 +96,11 @@ const LowInstructionBoundary *precedingInstruction(const LowBlock &Block,
 }
 } // namespace
 
+std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
+                                       const LowOp &Op, size_t &Work) {
+  return checkedCallSlot(Image, Op, Work, false);
+}
+
 std::optional<KernelStartupCall> kernelStartupCall(const Import &Imported) {
   if (!llvm::StringRef(Imported.Module).equals_insensitive("kernel32.dll"))
     return std::nullopt;
@@ -99,6 +110,8 @@ std::optional<KernelStartupCall> kernelStartupCall(const Import &Imported) {
   if (Imported.Name == "GetSystemTimeAsFileTime" ||
       Imported.Name == "QueryPerformanceCounter")
     return KernelStartupCall::Clock;
+  if (Imported.Name == "InitializeSListHead")
+    return KernelStartupCall::InitializeSList;
   if (Imported.Name == "SetUnhandledExceptionFilter")
     return KernelStartupCall::SetExceptionFilter;
   return std::nullopt;
@@ -114,12 +127,14 @@ bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
   const auto Call = kernelStartupCall(*Imported);
   if (!Call || *Call == KernelStartupCall::Identifier ||
       !isFileBackedPEImportSlot(Image, Slot) ||
-      checkedCRTCallSlot(Image, Op, Work) != Slot)
+      checkedCallSlot(Image, Op, Work,
+                      *Call == KernelStartupCall::InitializeSList) != Slot)
     return false;
   const auto *Push = precedingInstruction(Block, Op.Addr, Work);
   if (!Push)
     return false;
-  if (*Call == KernelStartupCall::SetExceptionFilter) {
+  if (*Call == KernelStartupCall::SetExceptionFilter ||
+      *Call == KernelStartupCall::InitializeSList) {
     if (Push->Size != 5)
       return false;
     const auto Limit = limits::kMaxRegistrationEHStateWork;
@@ -127,10 +142,20 @@ bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
         Image, Push->Address, 5, {Push->Address + 1}, Work, Limit);
     if (!Bytes || (*Bytes)[0] != 0x68)
       return false;
+    const auto Address = readLE<uint32_t>(Bytes->data() + 1);
+    if (*Call == KernelStartupCall::InitializeSList) {
+      // The Win32 SLIST_HEADER occupies one aligned eight-byte cell. Check
+      // the whole output, including the last byte, against every import.
+      constexpr uint16_t HeaderSize = 8;
+      return Image.Base % HeaderSize == 0 && Address % HeaderSize == 0 &&
+             registration_abi::hasResidentRegistrationData(
+                 Image, FrameValue::imageAddress(Address), true, Work) &&
+             registration_abi::hasSEHCallbackImageMemory(
+                 Image, Address, HeaderSize, true, Work);
+    }
     // Installation records the pointer in Windows. A later unhandled
     // exception has its own dispatch and handler obligations.
-    return readImmutablePE32CodeBytes(
-               Image, readLE<uint32_t>(Bytes->data() + 1), 1, {}, Work, Limit)
+    return readImmutablePE32CodeBytes(Image, Address, 1, {}, Work, Limit)
         .has_value();
   }
   if (Push->Size != 1)

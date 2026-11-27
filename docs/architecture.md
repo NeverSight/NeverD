@@ -21571,6 +21571,10 @@ The Windows CRT startup also installs a top-level filter. Its returning
 `SetUnhandledExceptionFilter` call preserves import bindings when the
 argument is a relocated pointer into immutable code. A later exception
 dispatch requires its own handler proof.
+For the PE32 `InitializeSListHead` startup call, both the output pointer and
+the import operand carry loader relocations. Its Win32 header occupies eight
+aligned bytes in private writable image storage. The complete write must be
+disjoint from the import table before the caller can retain its bindings.
 For a checked `_initterm` or `_initterm_e` table, the caller collects the
 eager imports required by every returning callback before analyzing its
 first instruction. A preceding store can invalidate one of those imports.
