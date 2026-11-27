@@ -2,7 +2,7 @@
 
 Run `neverd lua` or choose **File → Recover Lua source…**. Both use the same
 offline C++ reader. The workbench sends the request to its analysis worker.
-Select **Upstream Luau 0.659** for binary output from that compiler. Luau
+Select **Upstream Luau** for a stock compiler artifact or **Upstream Luau 0.659** to require that release’s bytecode and type versions. Luau
 bytecode has no identifying signature. A filename alone cannot establish its
 opcode encoding.
 
@@ -26,16 +26,29 @@ request a stop. Closing the dialog releases its worker.
 | Input or selected profile | Identification | Layout and instruction decoding | Source emission | Owned validation |
 | --- | --- | --- | --- | --- |
 | UTF-8 `.lua`, `.luau` | Extension and text check | Byte range of the original file | Exact bytes, including BOM and line endings | Extraction, copy/export and CLI/GUI parity |
+| PUC Lua 1.0, 1.1, 2.1, 2.2 | Source input | These releases shipped before the external binary compiler | Original source bytes | UTF-8 extraction |
+| PUC Lua 2.4 | Signature and disk version 0x23 | Byte instructions, four-byte function references and symbol relocation chains | Arithmetic, global access, direct function definitions and fixed calls | 2.4, including an original 32-bit producer |
+| PUC Lua 2.5 and 3.0 | Shared disk version 0x25 | The header records reference width. The common encoding retains both version candidates. | Stack expressions, named functions and fixed calls | 2.5 and 3.0 |
+| PUC Lua 3.1 and 3.2 | Distinct disk versions 0x31 and 0x32 | Prototype constants, byte operands, stack frames, source-line and local events, native or portable numeric encoding | Qualified stack operations, functions and calls | 3.1 and 3.2.2 |
+| PUC Lua 4.0 | Signature, version 0x40 and numeric probe | Stack instructions in native words, string and number pools, nested functions, PC/line runs | Qualified stack expressions, fixed calls and closures | 4.0.1 |
+| PUC Lua 5.0 | Signature, version 0x50, instruction layout and numeric probe | Register code with 5.0 RK, call, constant and capture layouts | Qualified register operations, functions and calls | 5.0.3 |
 | PUC Lua 5.1 | Signature, version 0x51, ABI header | 5.1 prototypes, RK operands and inline closure bindings | Qualified register operations and structured regions | 5.1.5 |
 | PUC Lua 5.2 | Signature, version 0x52, ABI header and tail | 5.2 constants, nested prototypes, upvalue descriptors and jumps | Qualified operations including environment access | 5.2.4 |
 | PUC Lua 5.3 | Signature, version 0x53 and numeric probes | 5.3 integer/float tags, operands and debug records | Includes integer operators and float literals | 5.3.6 |
 | PUC Lua 5.4 | Signature, version 0x54 and numeric probes | Terminating-bit sizes, delta line tables, paired arithmetic | Includes checked metamethod order and lexical close scopes | 5.4.8 |
 | PUC Lua 5.5 | Signature, version 0x55 and four representation probes | Aligned code, shared strings, signed integer varints and 5.5 loop slots | Includes qualified ordinary varargs, numeric/generic loops and finalizers | 5.5.0 |
-| LuaJIT | ESC-LJ, dump v2 and compatibility flags | Independent child stack, GC/numeric pools, debug records, FR1/FR2 call layout | Qualified LuaJIT operations, closures, calls and loops | Both dump frame layouts at revision `3bfb8fa4ab970b36d42d108ead04e92341c49998` |
+| LuaJIT 1.0 and 1.1 | Explicit runtime profiles and shared Lua 5.1 header | 1.0 stores debug records before constants and code. 1.1 uses the stable 5.1 prototype order. | Qualified Lua 5.1 register operations | 1.0.3 and 1.1.8 |
+| LuaJIT 2.0 | ESC-LJ, dump v1 | Separate opcode numbering, FR1 and v1 flags | Qualified LuaJIT operations | Revision `d7b8df8edd962bd5acb800c86be5ad88d407bd37` |
+| LuaJIT 2.1 | ESC-LJ, dump v2 and compatibility flags | Independent child stack, GC/numeric pools, debug records, FR1/FR2 call layout | Qualified LuaJIT operations, closures, calls and loops | Both dump frame layouts at revision `3bfb8fa4ab970b36d42d108ead04e92341c49998` |
 | Upstream Luau 0.659 | Explicit profile, bytecode 6, type version 3 | Prototype/string tables, AUX words, capture records and line tables | Qualified Luau operations, calls, closures and loops | Compiler `f8a1e0129dce62c8c07ed5828781438e74452671`, `-O0`, including `-t1` type metadata |
+| Upstream Luau | Explicit profile, serialized versions 1 through 14, type versions 1 through 3 when present | Versioned opcode, constant, debug, feedback and length-prefixed prototype layouts | Qualified expressions, functions and calls | Owned compiler output for each serialized version and all three type encodings |
 | Other revisions, encodings or embeddings | Retain the available version/profile evidence | Unsupported layouts stop at their boundary | No compatibility assumed | Unqualified |
 
-PUC compiler fixtures use 32-bit C `int`, binary64 numbers and little-endian
+Select `luajit-1.0` for a known LuaJIT 1.0 producer. Its Lua 5.1 alpha header matches the later file signature, while its prototype layout differs. The `luajit-1.1` profile records a caller-supplied runtime for the stable 5.1 format. Automatic detection reports the wire family and tries the alpha record order when the stable layout fails. Both attempts share the job budget.
+
+The classic compiler artifacts use 32-bit C counts. Lua 2.4 writes function references in four bytes. Lua 2.5/3.0 specify their width. The analyzer resolves references from the child records and symbol chains without dereferencing the producer’s pointer bytes. A missing frame size is reported as unavailable. In 3.1 and 3.2 the stored frame header precedes the first physical instruction by two bytes. Report PCs start at the first instruction. The byte offset always names its original file location.
+
+The 5.1–5.5 PUC compiler fixtures use 32-bit C `int`, binary64 numbers and little-endian
 instruction words. A synthetic 5.1 test also checks big-endian decoding.
 Versions with a separate integer subtype use 64-bit Lua integers. The reader follows the header's byte order and 4/8-byte serialized
 `size_t` where present. The fixture matrix records the actual toolchain
@@ -83,6 +96,8 @@ multiple returns, varargs, iteration, integer subtypes, metamethod order and
 5.4/5.5 finalization. The behavioral qualifier compiles the owned inputs, checks
 the recorded byte hashes and runs the original and recovered **source text**
 with each matching interpreter. Submitted bytecode is never executed.
+The additional release manifest records the compiler, flags, input hash and independent instruction observations. Reproduce one entry with `python3 unittests/lua/qualify_releases.py ID --cli PATH --compiler PATH --runtime PATH`. For an early Luau release the combined executable supplies both tools. Lua 2 function-pointer slots vary between compiler processes and are compared after applying the recorded relocations. All remaining bytes must match. The runtime comparison covers two arithmetic inputs on the classic Lua and LuaJIT fixtures, and a nested call on each Luau version. The explicit Luau profile includes stable serialized formats from upstream tags through 0.748. Experimental class bytecode 100 and custom opcode encoders need a separate layout.
+
 The [reader tests](../unittests/lua/LuaRecoveryTests.cpp) include damaged
 operands, missing auxiliary words, every truncated prefix of representative
 chunks and cancellation. The [workbench test](../tools/neverd-gui/tests/LuaRecoveryDialogTests.cpp)

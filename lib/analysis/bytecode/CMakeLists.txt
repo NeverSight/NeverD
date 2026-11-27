@@ -17,6 +17,8 @@ add_neverd_component_library(NeverDLuaRecovery
   lua/PucInstructions.cpp
   lua/Recovery.cpp
   lua/Source.cpp
+  lua/StackChunk.cpp
+  lua/StackInstructions.cpp
   LINK_COMPONENTS Digest
   LLVM_COMPONENTS Support
 )

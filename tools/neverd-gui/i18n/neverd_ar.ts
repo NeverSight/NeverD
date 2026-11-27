@@ -11463,6 +11463,10 @@ Your previous graph is still available.</source>
         <translation>LuaJIT</translation>
     </message>
     <message>
+        <source>Upstream Luau</source>
+        <translation>Luau الرسمي</translation>
+    </message>
+    <message>
         <source>Upstream Luau 0.659</source>
         <translation>Luau الرسمي 0.659</translation>
     </message>

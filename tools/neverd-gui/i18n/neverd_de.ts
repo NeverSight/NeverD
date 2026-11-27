@@ -11319,6 +11319,10 @@ Ihr vorheriger Graph ist weiterhin verfügbar.</translation>
         <translation>LuaJIT</translation>
     </message>
     <message>
+        <source>Upstream Luau</source>
+        <translation>Upstream-Luau</translation>
+    </message>
+    <message>
         <source>Upstream Luau 0.659</source>
         <translation>Upstream-Luau 0.659</translation>
     </message>

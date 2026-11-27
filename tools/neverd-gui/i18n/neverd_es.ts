@@ -11319,6 +11319,10 @@ Su grafo anterior sigue disponible.</translation>
         <translation>LuaJIT</translation>
     </message>
     <message>
+        <source>Upstream Luau</source>
+        <translation>Luau oficial</translation>
+    </message>
+    <message>
         <source>Upstream Luau 0.659</source>
         <translation>Luau oficial 0.659</translation>
     </message>
