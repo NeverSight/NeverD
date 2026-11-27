@@ -69,6 +69,7 @@ private slots:
     auto *Release = Dialog.findChild<QComboBox *>("jvmRelease");
     auto *Classes = Dialog.findChild<QComboBox *>("jvmClasses");
     auto *Methods = Dialog.findChild<QComboBox *>("jvmMethods");
+    auto *Results = Dialog.findChild<QComboBox *>("jvmResults");
     auto *Run = Dialog.findChild<QPushButton *>("jvmAnalyze");
     auto *Inspect = Dialog.findChild<QPushButton *>("jvmInspect");
     auto *Source = Dialog.findChild<QPlainTextEdit *>("jvmSource");
@@ -77,8 +78,8 @@ private slots:
     auto *Mappings = Dialog.findChild<QListWidget *>("jvmMappings");
     auto *Tabs = Dialog.findChild<QTabWidget *>();
     auto *Copy = Dialog.findChild<QPushButton *>("jvmCopy");
-    QVERIFY(Input && Release && Classes && Methods && Run && Inspect &&
-            Source && Bytecode && IR && Mappings && Tabs && Copy);
+    QVERIFY(Input && Release && Classes && Methods && Results && Run &&
+            Inspect && Source && Bytecode && IR && Mappings && Tabs && Copy);
     Input->setText(Path);
     Release->setCurrentIndex(Release->findData(17));
     QTRY_VERIFY_WITH_TIMEOUT(Inspect->isEnabled(), 15000);
@@ -148,6 +149,22 @@ private slots:
     Source->setTextCursor(
         QTextCursor(Source->document()->findBlockByNumber(Line - 1)));
     QCOMPARE(Mappings->selectedItems().size(), Map["pcs"].toArray().size());
+    Methods->setCurrentIndex(0);
+    Run->click();
+    QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
+    const int Row = Results->findText(Key, Qt::MatchEndsWith);
+    QVERIFY(Row >= 0 && Row != Results->currentIndex());
+    Tabs->setCurrentWidget(Bytecode);
+    Tabs->setCurrentWidget(IR);
+    BytecodeChanges.clear();
+    Results->setCurrentIndex(Row);
+    QCOMPARE(Tabs->currentWidget(), IR);
+    QCOMPARE(QJsonDocument::fromJson(IR->toPlainText().toUtf8()).object(),
+             F["ir"].toObject());
+    QCOMPARE(BytecodeChanges.count(), 0);
+    Tabs->setCurrentWidget(Bytecode);
+    QCOMPARE(QJsonDocument::fromJson(Bytecode->toPlainText().toUtf8()).array(),
+             F["instructions"].toArray());
     Classes->setCurrentIndex(Classes->findData(Attached));
     Run->click();
     QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
