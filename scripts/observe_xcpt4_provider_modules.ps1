@@ -89,21 +89,27 @@ public static class Xcpt4Volumes {
         $path = Resolve-ImagePath $fields.ImageName
         $file = Get-Item -LiteralPath $path
         $hash = (Get-FileHash -LiteralPath $file.FullName).Hash.ToLowerInvariant()
-        $stream = [IO.BinaryReader]::new([IO.File]::OpenRead($file.FullName))
+        $stream = [Reflection.PortableExecutable.PEReader]::new([IO.File]::OpenRead($file.FullName))
         try {
-            if ($stream.ReadUInt16() -ne 0x5a4d) { throw "Missing MZ header in $path" }
-            $stream.BaseStream.Position = 60
-            $stream.BaseStream.Position = $stream.ReadUInt32()
-            if ($stream.ReadUInt32() -ne 0x4550 -or $stream.ReadUInt16() -ne 0x14c) {
+            $headers = $stream.PEHeaders
+            if ($headers.CoffHeader.Machine -ne 'I386' -or $headers.PEHeader.Magic -ne 'PE32') {
                 throw "Expected an x86 PE in $path"
             }
+            $pdbs = @(foreach ($entry in $stream.ReadDebugDirectory()) {
+                if ($entry.Type -eq 'CodeView') {
+                    $pdb = $stream.ReadCodeViewDebugDirectoryData($entry)
+                    [ordered]@{ name = [IO.Path]::GetFileName($pdb.Path); guid = $pdb.Guid.ToString('N'); age = $pdb.Age }
+                }
+            })
+            $identity = [ordered]@{ coff_timestamp = $headers.CoffHeader.TimeDateStamp.ToString('X8')
+                size_of_image = $headers.PEHeader.SizeOfImage; codeview = $pdbs }
         }
         finally { $stream.Dispose() }
         if ($images.ContainsKey($name) -and $images[$name].sha256 -ne $hash) {
             throw "Two different images were reported for $name"
         }
         $images[$name] = [ordered]@{ file = $file.FullName; sha256 = $hash
-            version = $file.VersionInfo.FileVersion; machine = 'i386'; loaded_utc = $time.ToString('o') }
+            version = $file.VersionInfo.FileVersion; machine = 'i386'; loaded_utc = $time.ToString('o'); pe = $identity }
     }
     foreach ($name in $wanted) {
         if (-not $images.ContainsKey($name)) { throw "Missing a loader event for $name" }
