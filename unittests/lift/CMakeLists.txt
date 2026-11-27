@@ -3565,6 +3565,8 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_two_machines_escape.s
   x86_64/test_jumptable_open_donor.s
   x86_64/test_jumptable_narrow_guard.s
+  x86_64/test_jumptable_narrow_load.s
+  x86_64/test_jumptable_lane_entry_paths.s
   x86_64/test_jumptable_reload_cursor.s
   x86_64/test_jumptable_flags_carry.s
   x86_64/test_jumptable_scale_after_extend.s

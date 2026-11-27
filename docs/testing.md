@@ -1585,7 +1585,17 @@ byte lane with `cmpb $0x81, %dl; ja`: indexed by the lane zero-extended, the
 dispatch reads all 130 slots, while sign extension after the compare, into
 the compared register before it, or to 32 bits before the implicit
 zero-extend keeps it unresolved, as does a byte copied into the low lane of
-an index whose upper bits come from the caller. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
+an index whose upper bits come from the caller.
+`JTE_X86_64.LoadedByteLanePastTheSignBitBoundsAZeroExtendedIndex` compares
+the low lane of the register a byte was loaded into, which is the index:
+loaded with `movzbl` (bound through the extended lane) or `movzbq` (through
+the lane source), each dispatch reads all 130 slots, while `movsbl; cltq`,
+`movsbq` and a bare `movsbl` keep theirs unresolved.
+`JTE_X86_64.ByteComparedOnEachEntryPathBoundsAJoinedDomain` enters a
+dispatch on two paths that each load a byte with `movzbl` and compare it with
+`cmpb $0xac`: the joined domain reads all 173 slots, while a sign-extended
+second byte, a second path without a compare, or a signed `jg` on it keeps
+the dispatch unresolved. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
 reloads the byte a loop compared under a cursor its cases advance: the
 dispatch reads its six slots, while reloading the next byte or reloading
 after replacing the cursor stays unresolved.
