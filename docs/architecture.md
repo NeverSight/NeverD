@@ -11464,6 +11464,10 @@ Their bounds describe the exact index occurrence used by the table load,
 including any subtraction or shift already performed. Source-label
 normalization must not adjust those bounds again: it belongs only to case-label
 recovery. Reapplying it can silently remove a reachable final case.
+When arithmetic is distributed over the incoming states of a loop, a
+normalized arm can be newer than the selector expression used to search for
+reciprocal division. The bounded SAT query checks that arm directly. A
+reachable out-of-range state prevents publication of the table.
 A loader-normalized absolute table may use the same exact, point-sensitive
 finite-domain proof as a relative table. The physical pointer run supplies a
 read ceiling, not a selector bound. An AArch64 indexed load whose address

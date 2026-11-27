@@ -14015,6 +14015,30 @@ TEST_F(JTE_ARM32, InlineStateDomainRejectsUnrelatedPredicateAndZeroBackedge) {
   }
 }
 
+TEST_F(JTE_ARM32, NormalizedMergedStatesRequireEveryArmInRange) {
+  auto Image = neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
+                                  "test_inline_state_domain_arm.o");
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image->Arch, Image->Mode));
+  for (const char *Name : {"arm_inline_merged_states",
+                           "arm_inline_merged_outside"}) {
+    SCOPED_TRACE(Name);
+    const auto *Entry = Image->findSymbol(Name);
+    ASSERT_NE(Entry, nullptr);
+    neverd::CFGBuilder Builder;
+    const auto Low = Builder.build(*Image, Decoder, Entry->Addr, Entry->Name);
+    if (Entry->Name == "arm_inline_merged_states") {
+      ASSERT_EQ(Low.JumpTables.size(), 1u);
+      EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+      EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+    } else {
+      EXPECT_TRUE(Low.JumpTables.empty());
+      EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+    }
+  }
+}
+
 static fs::path jteARMObj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_enhanced_arm.o";
 }
