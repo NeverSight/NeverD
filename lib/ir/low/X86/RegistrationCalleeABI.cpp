@@ -218,8 +218,7 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
   if (Module.equals_insensitive("kernel32.dll")) {
     // The SDK's PE32 WINAPI declarations use 32-bit stack carriers. Exact
     // exports matter: neither similarly named APIs nor other DLLs inherit it.
-    if (Name == "DecodePointer" || Name == "EncodePointer" || Name == "Sleep" ||
-        Name == "IsProcessorFeaturePresent")
+    if (Name == "DecodePointer" || Name == "EncodePointer" || Name == "Sleep")
       return 4;
     if (Name == "InterlockedExchange")
       return 8;

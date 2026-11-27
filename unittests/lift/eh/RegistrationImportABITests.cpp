@@ -595,6 +595,64 @@ TEST(RegistrationImportABI, StartupCleanupRequiresCurrentProviderAndStorage) {
       }
 }
 
+TEST(RegistrationImportABI, FeatureQueryPreservesItsCurrentBinding) {
+  for (bool ThroughStub : {false, true})
+    for (uint8_t Feature : {10, 23, 255}) {
+      SCOPED_TRACE(::testing::Message() << ThroughStub << ' ' << int(Feature));
+      ImportImage F({"IsProcessorFeaturePresent", 1}, ThroughStub);
+      F.Image.Segments.front().Data[1] = Feature;
+      const va_t Field = (ThroughStub ? ImportImage::StubVA : F.CallVA) + 2;
+      F.Image.BaseRelocations = {{Field, 3}};
+      auto Effect =
+          RegistrationCallCalleeIndex(F.Image).stackContract(F.Image.Entry);
+      ASSERT_TRUE(Effect);
+      EXPECT_EQ(Effect->StackPopBytes, 0u);
+      EXPECT_EQ(Effect->PreservesImportBindings, Feature != 255);
+      EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
+          F.Image, ImportImage::IATVA));
+      F.Image.BaseRelocations.clear();
+      Effect =
+          RegistrationCallCalleeIndex(F.Image).stackContract(F.Image.Entry);
+      EXPECT_FALSE(Effect && Effect->PreservesImportBindings);
+    }
+}
+
+TEST(RegistrationImportABI, CPUQueriesDiscardOverwrittenStackCoordinates) {
+  for (const bool Cpuid : {false, true})
+    for (const uint8_t Reg : {0, 1, 2, 3, 6}) {
+      SCOPED_TRACE(::testing::Message() << Cpuid << ' ' << int(Reg));
+      ImportImage F({"GetCurrentThreadId", 0}, false);
+      // Save ESP in a GPR, allocate a word, query the CPU, then restore ESP
+      // from the saved register. CPUID writes EAX/ECX/EDX/EBX; XGETBV writes
+      // EAX/EDX. Both leave ESI intact on ordinary continuation.
+      std::vector<uint8_t> Body = {0x8b, uint8_t(0xc4 | Reg << 3), 0x83, 0xec,
+                                   4};
+      uint8_t Restore = Reg;
+      if (Cpuid) {
+        Body.insert(Body.end(), {0x53, 0x0f, 0xa2});
+        if (Reg == 3) {
+          // Consume the CPU's EBX result before restoring the saved EBX.
+          Body.insert(Body.end(), {0x89, 0xda});
+          Restore = 2;
+        }
+        Body.push_back(0x5b);
+      } else {
+        Body.insert(Body.end(), {0x0f, 0x01, 0xd0});
+      }
+      Body.insert(Body.end(), {0x8b, uint8_t(0xe0 | Restore), 0xc3});
+      std::copy(Body.begin(), Body.end(),
+                F.Image.Segments.front().Data.begin());
+      const auto Effect =
+          RegistrationCallCalleeIndex(F.Image).stackContract(F.Image.Entry);
+      const bool Preserved = Reg == 6 || (!Cpuid && (Reg == 1 || Reg == 3));
+      ASSERT_EQ(bool(Effect), Preserved);
+      if (Effect) {
+        EXPECT_EQ(Effect->StackPopBytes, 0u);
+        EXPECT_FALSE(Effect->PreservesImportBindings);
+      }
+    }
+}
+
 TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {
   using namespace registration_state;
   for (const auto &C :

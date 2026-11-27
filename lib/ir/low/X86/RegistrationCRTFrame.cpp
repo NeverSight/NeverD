@@ -94,6 +94,10 @@ const LowInstructionBoundary *precedingInstruction(const LowBlock &Block,
              ? &Previous
              : nullptr;
 }
+
+std::optional<uint32_t> pushedScalarArgument(const BinaryImage &Image,
+                                             const LowBlock &Block, va_t Call,
+                                             bool AllowGetter, size_t &Work);
 } // namespace
 
 std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
@@ -114,6 +118,8 @@ std::optional<KernelStartupCall> kernelStartupCall(const Import &Imported) {
     return KernelStartupCall::InitializeSList;
   if (Imported.Name == "SetUnhandledExceptionFilter")
     return KernelStartupCall::SetExceptionFilter;
+  if (Imported.Name == "IsProcessorFeaturePresent")
+    return KernelStartupCall::ProcessorFeature;
   return std::nullopt;
 }
 
@@ -128,8 +134,20 @@ bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
   if (!Call || *Call == KernelStartupCall::Identifier ||
       !isFileBackedPEImportSlot(Image, Slot) ||
       checkedCallSlot(Image, Op, Work,
-                      *Call == KernelStartupCall::InitializeSList) != Slot)
+                      *Call == KernelStartupCall::InitializeSList ||
+                          *Call == KernelStartupCall::ProcessorFeature) != Slot)
     return false;
+  if (*Call == KernelStartupCall::ProcessorFeature) {
+    // The CRT queries PF_XMMI64_INSTRUCTIONS_AVAILABLE and
+    // PF_FASTFAIL_AVAILABLE before choosing a code path on this machine.
+    // The scalar query retains the IAT and leaves the BOOL result unknown.
+    const auto &SP = Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
+    if (!SP.Offset || *SP.Offset > -4 || SP != FrameValue::frame(*SP.Offset))
+      return false;
+    const auto Feature =
+        pushedScalarArgument(Image, Block, Op.Addr, false, Work);
+    return Feature == 10 || Feature == 23;
+  }
   const auto *Push = precedingInstruction(Block, Op.Addr, Work);
   if (!Push)
     return false;
@@ -174,9 +192,9 @@ bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
 }
 
 namespace {
-std::optional<uint32_t> pushedCRTArgument(const BinaryImage &Image,
-                                          const LowBlock &Block, va_t Call,
-                                          bool AllowGetter, size_t &Work) {
+std::optional<uint32_t> pushedScalarArgument(const BinaryImage &Image,
+                                             const LowBlock &Block, va_t Call,
+                                             bool AllowGetter, size_t &Work) {
   const auto *Push = precedingInstruction(Block, Call, Work);
   if (!Push || (Push->Size != 1 && Push->Size != 2 && Push->Size != 5))
     return std::nullopt;
@@ -233,7 +251,7 @@ bool hasBindingPreservingCRTArgument(const BinaryImage &Image,
       !registration_abi::checkedRegistrationImportStackPop(Image, Slot) ||
       checkedCRTCallSlot(Image, Op, Work) != Slot)
     return false;
-  const auto Value = pushedCRTArgument(Image, Block, Op.Addr, !Stream, Work);
+  const auto Value = pushedScalarArgument(Image, Block, Op.Addr, !Stream, Work);
   if (!Value)
     return false;
   if (Name == "_set_fmode")
