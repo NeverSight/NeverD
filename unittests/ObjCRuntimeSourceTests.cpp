@@ -560,7 +560,7 @@ void verifyRuntime(bool Chained,
       const auto Hex = "0x" + llvm::utohexstr(Address);
       EXPECT_TRUE(Native->contains("/* neverd.entry: " + Hex + " */") ||
                   Native->contains(" at " + Hex + ": c-emission-failed; "))
-          << *Entry;
+          << Entry->str();
     }
   }
   if (DynamicProperties) {
