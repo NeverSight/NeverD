@@ -132,6 +132,14 @@ TEST(SafetyReport, PipelineCoverageMatchesAcceptedFunctionIdentities) {
   DuplicateAudit.MedFuncs[1].Entry = 0x2000;
   EXPECT_TRUE(validatePipelineCoverage(DuplicateAudit).has_value());
 
+  // A function can use an address one byte below the invalid VA sentinel.
+  constexpr neverd::va_t kHighEntry = neverd::InvalidVA - 1;
+  DuplicateAudit.FunctionAudits[1] = accepted(kHighEntry);
+  DuplicateAudit.LowFuncs[1].Entry = DuplicateAudit.MedFuncs[1].Entry =
+      kHighEntry;
+  std::swap(DuplicateAudit.MedFuncs[0].Entry, DuplicateAudit.MedFuncs[1].Entry);
+  EXPECT_FALSE(validatePipelineCoverage(DuplicateAudit).has_value());
+
   neverd::PipelineResult CrossedInventories;
   CrossedInventories.FunctionAudits = {accepted(0x1000)};
   CrossedInventories.LowFuncs.resize(1);

@@ -23,6 +23,7 @@
 #include <new>
 #include <set>
 #include <tuple>
+#include <unordered_map>
 
 using namespace neverd;
 using namespace neverd::safety;
@@ -58,18 +59,9 @@ std::optional<std::string> validateAnalysisInput(const AnalysisInput &In,
   if (std::optional<std::string> Error =
           checkPipelineCoverage(*In.ValidatedPipeline, In.Img, BudgetHit))
     return Error;
-  std::set<va_t> MedEntries;
-  for (const MedFunc &F : *In.MedFuncs)
-    if (!MedEntries.insert(F.Entry).second)
-      return "safety analysis received duplicate MedIR functions";
-  std::set<va_t> LowEntries;
   for (const LowFunc &F : *In.LowFuncs)
     if (!F.hasCompleteLiftCoverage())
       return "safety analysis received incomplete LowIR coverage";
-    else if (!LowEntries.insert(F.Entry).second)
-      return "safety analysis received duplicate LowIR functions";
-  if (MedEntries != LowEntries)
-    return "safety analysis received mismatched MedIR/LowIR inventories";
   return std::nullopt;
 }
 
@@ -130,9 +122,10 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
         return "incomplete safety lift at 0x" + llvm::utohexstr(F.Entry) +
                " (duplicate-block-identity)";
   }
-  std::set<va_t> MedEntries;
+  std::unordered_map<va_t, const MedFunc *> MedByEntry;
+  MedByEntry.reserve(Result.MedFuncs.size());
   for (const MedFunc &F : Result.MedFuncs) {
-    if (!MedEntries.insert(F.Entry).second)
+    if (!MedByEntry.try_emplace(F.Entry, &F).second)
       return "incomplete safety lift inventory";
     std::set<int> BlockIds;
     for (const MedBlock &Block : F.Blocks)
@@ -141,7 +134,9 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
                " (duplicate-block-identity)";
   }
   if (AcceptedEntries.empty() || AcceptedEntries != LowEntries ||
-      AcceptedEntries != MedEntries)
+      AcceptedEntries.size() != MedByEntry.size() ||
+      !std::all_of(AcceptedEntries.begin(), AcceptedEntries.end(),
+                   [&](va_t Entry) { return MedByEntry.contains(Entry); }))
     return "incomplete safety lift inventory";
   // An absorbed chunk must really be lifted inside an accepted function and
   // must not be a function the image itself names.
@@ -235,11 +230,7 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
       }
   }
   for (const LowFunc &Low : Result.LowFuncs) {
-    const auto MedIt = std::find_if(
-        Result.MedFuncs.begin(), Result.MedFuncs.end(),
-        [&](const MedFunc &Med) { return Med.Entry == Low.Entry; });
-    if (MedIt == Result.MedFuncs.end())
-      return "incomplete safety lift inventory";
+    const MedFunc &Med = *MedByEntry.at(Low.Entry);
     using CallIdentity = std::tuple<va_t, int, unsigned, va_t>;
     std::vector<CallIdentity> LowCalls;
     std::vector<CallIdentity> MedCalls;
@@ -262,7 +253,7 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
           LowCalls.emplace_back(Op.Addr, Op.Seq,
                                 static_cast<unsigned>(Op.Opcode), Target);
         }
-    for (const MedBlock &Block : MedIt->Blocks)
+    for (const MedBlock &Block : Med.Blocks)
       for (const MedOp &Op : Block.Ops)
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
           if (Op.OriginSeq < 0)
