@@ -3115,6 +3115,68 @@ TEST(InterpreterSpecialization,
   }
 }
 
+TEST(InterpreterSpecialization,
+     ConditionalStoreTracksNativeReturnWithoutOtherFramePreservation) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SCOPED_TRACE(static_cast<int>(Order));
+    Provider P;
+    P.add(0x100, {op(NdOp::CALL, reg(0), {constant(0x200)})});
+    P.Code.at(0x100).NativeStackControl =
+        SpecializationNativeStackControl::Call;
+    P.add(0x101, {op(NdOp::COPY, reg(0), {constant(17)})});
+    P.add(0x102, {ret()});
+    P.Code.at(0x102).NativeStackControl =
+        SpecializationNativeStackControl::Return;
+    P.add(0x103, {op(NdOp::COPY, reg(0), {constant(29)}), jump(0x102)});
+
+    const uint64_t ReturnByte = Order == llvm::endianness::little ? 0 : 7;
+    // An absolute address can overlap the return word for some entry SP,
+    // even with stack alignment. Use a distinct stack-relative byte to make
+    // this a genuine two-outcome test without an entry frame exclusion.
+    P.add(0x200,
+          {op(NdOp::INT_ADD, reg(48), {reg(32), constant(ReturnByte)}),
+           op(NdOp::INT_SUB, reg(56), {reg(32), constant(16)}),
+           op(NdOp::SELECT, reg(40), {reg(8, 1), reg(48), reg(56)}),
+           op(NdOp::STORE, {}, {reg(40), constant(3, 1)})});
+    P.add(0x201, {ret()});
+    P.Code.at(0x201).NativeStackControl =
+        SpecializationNativeStackControl::Return;
+
+    auto O = separatedStoreOptions();
+    O.ByteOrder = Order;
+    ASSERT_FALSE(O.EntryFrameBounds);
+    ASSERT_FALSE(O.ProveStoreFrameSeparation);
+    const auto R = specializeInterpreter(P, {0x100}, O);
+    ASSERT_TRUE(R.complete()) << R.Diagnostic;
+    for (uint64_t Root : {0x1008u, 0x2008u})
+      for (bool Alias : {false, true}) {
+        SCOPED_TRACE(Root);
+        SCOPED_TRACE(Alias);
+        WideByteOracle Actual(Order);
+        Actual.word(reg(8, 1), Alias);
+        Actual.word(reg(32), Root);
+        for (unsigned I = 0; I != 8; ++I)
+          Actual.Memory[Root + I] = 0xa0 + I;
+        Actual.Memory[Root - 24] = 0x55;
+        ASSERT_TRUE(Actual.run(R.Residual)) << Actual.Diagnostic;
+        EXPECT_EQ(Actual.number(reg(0)), Alias ? 29u : 17u);
+        EXPECT_EQ(Actual.number(reg(32)), Root);
+        EXPECT_EQ(Actual.Memory.at(Root - 8 + ReturnByte), Alias ? 3u : 1u);
+        EXPECT_EQ(Actual.Memory.at(Root - 24), Alias ? 0x55u : 3u);
+      }
+
+    if (Order == llvm::endianness::big) {
+      // SP=0x8008 is a legal aligned entry state. An absolute 0x8000
+      // write can replace the most significant byte of the return address.
+      P.Code.at(0x200).Ops[2].Inputs[2] = constant(0x8000);
+      const auto Overlap = specializeInterpreter(P, {0x100}, O);
+      EXPECT_FALSE(Overlap.complete());
+      EXPECT_NE(Overlap.Diagnostic.find("0x300000000000101"), std::string::npos)
+          << Overlap.Diagnostic;
+    }
+  }
+}
+
 TEST(InterpreterSpecialization, WideTransportPreservesEveryByte) {
   for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
     const auto A = reg(x86reg::XMM0, 16), B = reg(x86reg::XMM1, 16);

@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: c9d5599249d1aa9a3f85ce6420c4392f82d07513739f5eb8811dcda6db244c95 -->
 
 <div align="center">
 
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -306,6 +304,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 統計 | 對每個已載入函式產生預設 C；檢查後即釋放該函式本體 |
 | `decompile -llvm` | `.c` | 經 LLVM IR + 最佳化器 |
 | `decompile --devirtualize` | `.c` + 選用 JSON | 實驗性 x64 直譯器還原；需要 `--func`；[契約與範例](interpreter-recovery.md) |
+| `python` | `.py` / JSON / 原生元件 | [CPython 與 PyInstaller 產物還原](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT 與 Luau 原始碼還原](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 實驗性: [Android](android.md), [iOS](ios.md) |
 | `patch` | 二進位 | 重寫機器碼 |
 
@@ -340,8 +340,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 發現的函式 |
 | `disasm` | 反組譯（`--func` 名稱或十六進位） |
 | `sym-explore` | 有界原生 LowIR 路徑探索（`--func`；JSON 輸出） |
-| `audit` | 堆積物件生命週期缺陷及未初始化的區域堆疊讀取（JSON） |
-| `hunt` | 危險複製越界與符號見證；存在完整方案時附加 `process-input-v1` 重播證據（JSON schema v1） |
+| `scan` | [檢查物件生命週期、初始化、存取邊界與格式字串，輸出 JSON](../memory-safety-scan.md) |
 | `hex` | 依位址十六進位傾印 |
 | `cfg` / `callgraph` | CFG / 呼叫圖（JSON；可選 DOT/SVG） |
 | `xrefs` | 交叉參照 |

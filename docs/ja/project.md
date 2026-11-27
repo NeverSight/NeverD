@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: c9d5599249d1aa9a3f85ce6420c4392f82d07513739f5eb8811dcda6db244c95 -->
 
 <div align="center">
 
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -306,6 +304,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 件数 | 読み込まれた各関数を既定の C 経路で処理し、確認後に関数本体を破棄 |
 | `decompile -llvm` | `.c` | LLVM IR + 最適化経由 |
 | `decompile --devirtualize` | `.c` + 任意の JSON | 実験的な x64 インタープリター復元。`--func` が必須。[契約と例](interpreter-recovery.md) |
+| `python` | `.py` / JSON / ネイティブ構成要素 | [CPython と PyInstaller の成果物の復元](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT、Luau のソース復元](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 実験的: [Android](android.md), [iOS](ios.md) |
 | `patch` | バイナリ | 機械語の書き換え |
 
@@ -340,8 +340,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 検出された関数 |
 | `disasm` | 逆アセンブル（`--func` 名または hex） |
 | `sym-explore` | ネイティブ LowIR の有界パス探索（`--func`、JSON 出力） |
-| `audit` | ヒープの寿命に関する不具合と未初期化ローカルスタック読み取り（JSON） |
-| `hunt` | 危険なコピーの境界超過とシンボリックな証拠。完全な計画がある場合は `process-input-v1` 再生証拠を追加（JSON schema v1） |
+| `scan` | [オブジェクトの寿命、初期化、境界、書式文字列を検査（JSON）](../memory-safety-scan.md) |
 | `hex` | アドレスの hex dump |
 | `cfg` / `callgraph` | CFG / コールグラフ（JSON；DOT/SVG 任意） |
 | `xrefs` | クロスリファレンス |

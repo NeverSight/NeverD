@@ -1584,6 +1584,17 @@ entries and unwind frame starts; a frame that begins later, a chained row or a
 cold fragment cannot supply an independent callable identity. Next-entry bounds
 use those primary identities as well. Explicitly selecting code for analysis
 retains its separate decode and admission checks.
+GCC's hot/cold partitioning gives a function's `.text.unlikely` part an FDE of
+its own. The DWARF loader binds the part to the one function whose direct
+branches enter it with the frame its rules describe there, when the part
+begins inside that frame. A frameless function's part has no frame to begin
+inside, so its FDE starts with the entry rule as a function's does. That part
+is bound only when it ends in `ud2`, the trap of a path GCC isolated such as a
+store through a pointer it proved null, and nothing names it as a function:
+no symbol other than a `.cold` name, no direct call, no RIP-relative address
+and no relocated code pointer. An entry-like region that returns is a function
+tail-called once and stays one. Lua's reallymarkobject enters its isolated part
+from a jump table, which could not take a function entry as a case.
 COFF `IMAGE_SCN_CNT_CODE` is instruction-storage evidence independently of
 page execute permission. Ownership, selected pipeline entries and SDK batch
 selection share that distinction without changing the image's page flags.
@@ -11645,12 +11656,51 @@ such an occurrence asks every same-scale operation of the function whether
 it carries the index, and one query of that batch that cannot finish fails
 the role. liblzma's decoder lost its table that way once the table's targets
 brought a deep scaled value into the function.
+When the table load's own instruction forms its address and one operand of
+that add already is an authenticated index occurrence through the local copy
+chain, the address proof asks that order alone. The other order would ask
+whether the index is the table base, and answering that rebuilds the index's
+whole value: a lexer's loop-carried token, whose definitions merge every arm
+of the loop.
+The target-role proof first grows the table load's transforms over its
+lexical region, the code between the table address and the branch, and an
+operation there continues a chain only through an input whose nearest earlier
+write in the region is an occurrence already derived in that state. Like the
+region, this only narrows the search: every step is still a proved query, and
+a chain it misses falls back to the whole-graph pass. Unfiltered, the scaled
+address computation asked for the whole value of bash's loop-carried token,
+and its lexer spent 524 Mi on one dispatch.
 A guard proof's predicated-alias queries, which only add index alternatives
 for a select whose predicate the guard repeats, run on a share of the
 remaining candidate account (`kJumpTableGuardAliasQueryAccountDivisor`) and
 are charged what they spent. An unfinished batch abandons those alternatives
 and leaves the guard proof the rest; charged in full, pcre2's alias batches
 spent the account the guard itself needed.
+When the compare that names the index is a structural leaf, the session over
+every controlling condition runs on a share of the remaining candidate
+account (`kJumpTableGuardSideSessionAccountDivisor`): the other conditions
+only add constraints to a bound already in hand. A session that finishes is
+charged what it spent. Run on the whole account, such a session could leave
+the address and domain proofs too little, as in a lexer loop whose 64 arms
+each recompute the dispatched token. A session that cannot finish within its
+share answers none of its queries and costs the account nothing. That
+session can also run out of its own match allowance with the account to
+spare, and then answers none of its queries. Either way the compare's own
+queries are then asked alone, in a session of their own; the other
+conditions stay unanswered and only drop out of the proof.
+pcre2's pattern converter puts 22 controlling conditions and 179 queries in
+front of one dispatch.
+The compare is that structural leaf also when the index takes the compared
+lane only after the guard. GCC copies the compared register into the index
+register (`cmp $0x1c, %r11d; ja; mov %r11d, %eax`), or zero-extends the
+compared byte into its own register (`cmp $0x13, %sil; ja; movzbl %sil,
+%esi`, which lifts as an INT_ZEXT into a temporary, a COPY of it into ESI and
+ESI's own INT_ZEXT into RSI). Nothing may write the lane between the compare
+and that copy or extension, each extension must widen what the previous one
+left, and a temporary counts only within its own instruction. Without the
+identity pcre2's parse_regex asked one session over 556 controlling
+conditions for such a dispatch; the session spent 339 Mi of the candidate
+account and did not finish, and the guard proof 362 Mi in all.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
@@ -11658,7 +11708,15 @@ without treating depth exhaustion as a completed proof or skipping replay.
 When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
-the proposal supplies no table capacity or range authority. A dominating
+the proposal supplies no table capacity or range authority. That envelope may
+reach 128 values, where an ordinary finite set stops at one 64-bit word. Each
+arm's solver proves the envelope, then reads one feasible coordinate per call
+from a model and excludes it; members an earlier arm proved are excluded
+first. The calls therefore follow the members, not the proposed envelope, and
+an unrelated wide literal elsewhere in the function costs a few calls. bash
+enters a 97-case dispatch this way from a zero byte that skips its range
+guard. The ceiling stays below a byte lane's 256 values, so a byte read on an
+unguarded path is a counterexample rather than a domain proved by width. A dominating
 equality, or a dominating signed upper bound, that is not itself an unsigned
 dense prefix does not discard those predecessor ranges: the same query proves
 the prefix and keeps the dominating edge constraints. A dominating range that
@@ -15088,7 +15146,7 @@ Builds with registration callees share no proof. A shape-checked integer
 DIV/IDIV precondition preserves x87 state on normal continuation. It remains in the emitted body and grants no
 permission to suppress divide faults; malformed guards and unknown state
 intrinsics still refuse the call summary.
-An x64 whole-image batch large enough to run in parallel first builds every
+An x64 whole-image batch of any size first builds every
 function without the fixup (`CFGBuilder::buildDeferringX87`). Such a build asks no
 callee's call graph, and it keeps its own for its callers: it is configured
 as their proofs configure a callee's graph build, one no-return level
@@ -15098,7 +15156,10 @@ checks an incomplete lift's answers. A second pass keeps each body the fixup
 would leave unchanged, by the checks a retained body passes
 (`deferredBuildStandsIn`), and builds the rest again with every graph they
 read already kept. Before, a graph not yet kept lifted the callee again, most
-often while the callee's own build was still running. A selected run keeps
+often while the callee's own build was still running; a batch too small to
+run in parallel, as an object file's often is, lifted each called function
+twice in one thread, once for its first caller's graph and once for itself.
+A selected run keeps
 one pass: its cache keeps the callee bodies its call summaries read, which
 the left-out callee graph builds supply.
 One LowIR analysis may share up to 128 immutable machine

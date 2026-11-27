@@ -1123,7 +1123,7 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
       Queries.push_back(std::move(Feasible));
     }
     std::vector<bool> QueryComplete;
-    std::vector<uint64_t> FeasibleMasks;
+    std::vector<JumpTableFeasibleSet> FeasibleMasks;
     const std::vector<bool> Matches = QueryGraph->tableValuesMatchAtUses(
         Queries, nullptr, &QueryComplete, Rec.Addr, Targets, EvidenceBudget,
         /*LocalMatchEvidenceLimit=*/0, SharedTargetBranches, &FeasibleMasks,
@@ -1160,10 +1160,10 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
         continue;
       PresentBranches.insert(
           OccurrenceBranches ? (*OccurrenceBranches)[Occurrence] : Rec.Addr);
-      if (!Matches[Begin + 1] || FeasibleMasks[Begin + 1] == 0)
+      if (!Matches[Begin + 1] || FeasibleMasks[Begin + 1].none())
         return std::nullopt;
       for (uint32_t Coordinate = 0; Coordinate < QueryCapacity; ++Coordinate) {
-        if ((FeasibleMasks[Begin + 1] & (uint64_t{1} << Coordinate)) == 0)
+        if (!FeasibleMasks[Begin + 1].test(Coordinate))
           continue;
         Seen[Coordinate] = true;
       }
@@ -5772,7 +5772,7 @@ bool CFGBuilder::inferBoundsFromModulo(
                 BoundQueries.push_back(std::move(Query));
               }
               std::vector<bool> BoundComplete;
-              std::vector<uint64_t> BoundFeasibleMasks;
+              std::vector<JumpTableFeasibleSet> BoundFeasibleMasks;
               const std::vector<bool> BoundMatches = tableValuesMatchAtUses(
                   BoundQueries, nullptr, &BoundComplete, Rec.Addr, &NoTargets,
                   AggregateEvidenceBudget,
@@ -5796,11 +5796,13 @@ bool CFGBuilder::inferBoundsFromModulo(
                         {{BoundFeasibleMasks.size(), 2}}))
                   return false;
                 uint64_t FeasibleMask = 0;
-                for (uint64_t Mask : BoundFeasibleMasks) {
-                  if (Mask == 0 || (CandidateCapacity < 64 &&
-                                    (Mask >> CandidateCapacity) != 0))
+                for (const JumpTableFeasibleSet &Set : BoundFeasibleMasks) {
+                  const std::optional<uint64_t> Mask = Set.lowWord();
+                  if (!Mask || *Mask == 0 ||
+                      (CandidateCapacity < 64 &&
+                       (*Mask >> CandidateCapacity) != 0))
                     return false;
-                  FeasibleMask |= Mask;
+                  FeasibleMask |= *Mask;
                 }
                 const size_t InsertWork =
                     orderedEvidenceLookupWork(CandidateCapacity) + 3;

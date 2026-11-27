@@ -1,0 +1,166 @@
+//===- AArch64PublicationBoundaryFixtures.def - Native publication oracles
+//-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+A64_LEAF_TEXT(kLiteralBoundaryWords, "native_literal_boundary_instructions")
+A64_LEAF_TEXT(kAddressBoundaryWords, "native_address_boundary_instructions")
+A64_LEAF_TEXT(kRequirementOriginalCalls, "native_requirement_original_runs")
+A64_LEAF_TEXT(kLiteralRootOriginals, "native_literal_root_originals")
+A64_LEAF_TEXT(kLiteralRootPublications, "native_literal_root_publications")
+A64_LEAF_TEXT(kLiteralRootRejections, "ambiguous_literal_root_rejections")
+A64_LEAF_TEXT(kCellRuns, "native_dyld_cell_images")
+A64_LEAF_VALUE(unsigned, kLiteralBoundaryCount, 2)
+A64_LEAF_VALUE(unsigned, kOriginalControlRuns, 2)
+A64_LEAF_VALUE(unsigned, kOriginalAndPublished, 2)
+A64_LEAF_TEXT(kLiteralBoundaryAssembly, R"asm(
+.text
+.p2align 3
+.globl _limit_forward
+_limit_forward:
+Lforward: .long {0}
+ ret
+ .space {2} - (. - Lforward)
+ .quad 0x1020304050607080
+Lback_data: .quad 0x7162534435261708
+ .space {3} - (. - Lback_data)
+.globl _limit_backward
+_limit_backward:
+ .long {1}
+ ret
+)asm")
+A64_LEAF_TEXT(kLiteralBoundaryCaller, R"cpp(
+#include <cstdint>
+#include <dlfcn.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  using Load = uint64_t (*)();
+  auto forward = reinterpret_cast<Load>(dlsym(image, "limit_forward"));
+  auto backward = reinterpret_cast<Load>(dlsym(image, "limit_backward"));
+  if (!forward || !backward || forward() != UINT64_C(0x1020304050607080) ||
+      backward() != UINT64_C(0x7162534435261708))
+    return 3;
+  return dlclose(image) != 0;
+}
+)cpp")
+A64_LEAF_TEXT(kAddressBoundaryAssembly, R"asm(
+.text
+.p2align 2
+.macro byte_delta name, word
+.globl \name
+\name:
+1: .long \word
+ adr x1, 1b
+ sub x0, x0, x1
+ ret
+.endm
+.macro page_delta name, word
+.globl \name
+\name:
+1: .long \word
+ adr x1, 1b
+ and x1, x1, #-4096
+ sub x0, x0, x1
+ ret
+.endm
+ byte_delta _adr_min, {0}
+ byte_delta _adr_max, {1}
+ page_delta _adrp_min, {2}
+ page_delta _adrp_max, {3}
+)asm")
+A64_LEAF_TEXT(kAddressBoundaryCaller, R"cpp(
+#include <cstdint>
+#include <dlfcn.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  constexpr int64_t reach = INT64_C(1) << 20;
+  struct Case {
+    const char *name;
+    int64_t delta;
+  };
+  const Case cases[] = {{"adr_min", -reach},
+                        {"adr_max", reach - 1},
+                        {"adrp_min", -reach * 4096},
+                        {"adrp_max", (reach - 1) * 4096}};
+  for (const Case &c : cases) {
+    auto delta = reinterpret_cast<int64_t (*)()>(dlsym(image, c.name));
+    if (!delta || delta() != c.delta)
+      return 3;
+  }
+  return dlclose(image) != 0;
+}
+)cpp")
+A64_LEAF_TEXT(kCellCaller, R"cpp(
+#include <cstdint>
+#include <dlfcn.h>
+#include <ptrauth.h>
+using Leaf = uintptr_t (*)(uintptr_t);
+struct Cells {
+  const void *interior;
+  Leaf entry;
+  const void *imported;
+  const void *zero;
+};
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  auto cells = static_cast<const Cells *>(dlsym(image, "address_cells"));
+  auto slot = static_cast<const void *volatile *>(dlsym(image, "mutable_cell"));
+  auto entry = reinterpret_cast<Leaf>(dlsym(image, "leaf_sum"));
+  void *putsRef = dlsym(RTLD_DEFAULT, "puts");
+  if (!cells || !slot || !entry || !putsRef)
+    return 3;
+  auto base = reinterpret_cast<uintptr_t>(
+      ptrauth_strip(entry, ptrauth_key_function_pointer));
+  if (reinterpret_cast<uintptr_t>(cells->interior) != base + 4 ||
+      *slot != cells->interior || cells->zero ||
+      cells->imported != ptrauth_strip(putsRef, ptrauth_key_function_pointer))
+    return 4;
+  const void *original = *slot;
+  *slot = &original;
+  if (*slot != &original || cells->interior != original || entry(37) != 37)
+    return 5;
+  *slot = original;
+#if __has_feature(ptrauth_calls)
+  if (cells->entry(73) != 73)
+    return 6;
+#endif
+  return dlclose(image) != 0;
+}
+)cpp")
+A64_LEAF_TEXT(kLiteralRootCaller, R"cpp(
+#include <cstdint>
+#include <cstring>
+#include <dlfcn.h>
+int main(int argc, char **argv) {
+  if (argc != 3)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  auto sum = reinterpret_cast<const void *(*)()>(dlsym(image, "leaf_sum"));
+  auto cells = static_cast<const void *const *>(dlsym(image, "address_cells"));
+  if (!sum || !cells)
+    return 3;
+  const void *tail = sum();
+  if (tail != cells[0] || (argv[2][0] == '2' && tail != cells[1]))
+    return 4;
+  const uint32_t expected[] = {0xffffffff, 0x0abcdef0};
+  if (std::memcmp(tail, expected, sizeof(expected)))
+    return 5;
+  return dlclose(image) != 0;
+}
+)cpp")

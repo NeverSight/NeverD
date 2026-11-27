@@ -1,5 +1,6 @@
 #include "ComparisonService.h"
 #include "Engine.h"
+#include "EngineSymbols.h"
 #include "LineageService.h"
 #include "LoadProgress.h"
 #include "Protocol.h"
@@ -7,6 +8,7 @@
 #include "UnwindQuery.h"
 #include "WebEngine.h"
 
+#include "neverd/sdk/NeverDCAPISession.h"
 #include "neverd/support/StackSizeMain.h"
 
 #ifdef NEVERD_WORKER_HAS_MIMALLOC
@@ -21,6 +23,7 @@
 #include <cstdio>
 #include <deque>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -133,6 +136,78 @@ struct Request {
   Request(Json Value, std::size_t Bytes)
       : value(std::move(Value)), bytes(Bytes) {}
 };
+auto luaRecovery() {
+  static auto Recover = engineSymbol<decltype(&neverd_lua_recover_json_v1)>(
+      "neverd_lua_recover_json_v1");
+  return Recover;
+}
+auto pythonRecovery() {
+  static auto Recover = engineSymbol<decltype(&neverd_python_recover_json_v1)>(
+      "neverd_python_recover_json_v1");
+  return Recover;
+}
+auto pythonNativeExport() {
+  static auto Export =
+      engineSymbol<decltype(&neverd_python_export_native_json_v1)>(
+          "neverd_python_export_native_json_v1");
+  return Export;
+}
+bool scriptOperation(const std::string &Op) {
+  return Op == "lua_recover" || Op == "python_recover" ||
+         Op == "python_export_native";
+}
+Json recoverScript(const std::string &Op, const Json &input,
+                   std::atomic<bool> &cancelled) {
+  const auto path = stringField(input, "path");
+  const auto profile = stringField(input, "profile", "auto");
+  if (path.empty() || path.find(char(0)) != std::string::npos ||
+      profile.find(char(0)) != std::string::npos)
+    throw Error("invalid_request",
+                "A valid artifact path and profile are required");
+  auto stop = [](void *ctx) -> int {
+    return static_cast<std::atomic<bool> *>(ctx)->load();
+  };
+  const char *raw = nullptr;
+  if (Op == "lua_recover") {
+    auto recover = luaRecovery();
+    if (!recover)
+      throw Error("unsupported", "This engine does not provide Lua recovery");
+    raw = recover(path.c_str(), profile.c_str(), stop, &cancelled);
+  } else {
+    int component = -1;
+    if (auto id = input.find("component"); id != input.end()) {
+      if (!id->is_number_integer() || *id < -1 ||
+          *id > std::numeric_limits<int>::max())
+        throw Error("invalid_request", "Invalid Python component ID");
+      component = id->get<int>();
+    }
+    if (Op == "python_export_native") {
+      auto exportNative = pythonNativeExport();
+      if (!exportNative)
+        throw Error("unsupported", "Native component export is unavailable");
+      const auto sha = stringField(input, "sha256"),
+                 dest = stringField(input, "destination");
+      if (component < 0 || sha.size() != 64 || dest.empty() ||
+          dest.find(char(0)) != std::string::npos)
+        throw Error(
+            "invalid_request",
+            "Native export requires a component, hash and new file path");
+      raw = exportNative(path.c_str(), profile.c_str(), component, sha.c_str(),
+                         dest.c_str(), stop, &cancelled);
+    } else {
+      auto recover = pythonRecovery();
+      if (!recover)
+        throw Error("unsupported",
+                    "This engine does not provide Python recovery");
+      raw = recover(path.c_str(), profile.c_str(), component, stop, &cancelled);
+    }
+  }
+  std::unique_ptr<const char, decltype(&neverd_free_string)> result(
+      raw, neverd_free_string);
+  if (!result)
+    throw Error("engine_error", "Script recovery returned no report");
+  return parseJson(result.get());
+}
 bool isWeb(const Json &request) {
   if (!request.is_object())
     return false;
@@ -362,6 +437,12 @@ Json hello() {
       result["capabilities"].push_back(operation);
   if (Engine::keepsOperandFormats())
     result["capabilities"].push_back("operand_format");
+  if (pythonRecovery())
+    result["capabilities"].push_back("python_recover");
+  if (pythonNativeExport())
+    result["capabilities"].push_back("python_export_native");
+  if (luaRecovery())
+    result["capabilities"].push_back("lua_recover");
   if (Engine::identifiesFiles())
     result["capabilities"].push_back("identify");
   if (Engine::loadsPdbFiles()) {
@@ -600,8 +681,15 @@ void executeLoop(State &state, Transport &transport) {
           then = std::move(*follow);
           input.erase("then");
         }
-        auto reply = webRequest ? Engine::Reply{web.execute(op, input), {}}
-                                : engine.executeResponse(op, input);
+        if (scriptOperation(op))
+          transport.send(response(value, revision(), project(), "progress",
+                                  {{"phase", "reading"}}));
+        auto reply =
+            scriptOperation(op)
+                ? Engine::Reply{recoverScript(op, input, request->cancelled),
+                                {}}
+            : webRequest ? Engine::Reply{web.execute(op, input), {}}
+                         : engine.executeResponse(op, input);
         encodedPayload = std::move(reply.encoded);
         result = response(value, revision(), project(), "ok",
                           std::move(reply.value));
@@ -646,7 +734,10 @@ void executeLoop(State &state, Transport &transport) {
             result["partial_result_retained"] = scanStopped;
           }
           result["completed_before_cancellation"] =
-              !ComparisonStopped && !scanStopped;
+              !ComparisonStopped && !scanStopped &&
+              !(scriptOperation(op) && result["status"] == "ok" &&
+                result["payload"].value("status", std::string()) ==
+                    "cancelled");
           if (ComparisonOperation)
             result["partial_result_retained"] = ComparisonPartial;
           if (LineageOperation)

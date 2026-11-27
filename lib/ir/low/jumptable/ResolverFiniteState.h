@@ -41,8 +41,11 @@ readonlyScalarEnvelope(const GraphT &Graph, const BinaryImage &Image,
                        std::pair<int, int> Point, uint64_t Bound,
                        ConditionEdges Edges, Consume ConsumeWork,
                        size_t *SharedWork, bool &Complete) {
+  static_assert(limits::kMaxJumpTableFeasibleSetValues <= 64,
+                "the envelope is one machine word");
   Complete = true;
-  if (!Bound || Bound > 64 || !Candidate.Size || Candidate.Size > 8 ||
+  if (!Bound || Bound > limits::kMaxJumpTableFeasibleSetValues ||
+      !Candidate.Size || Candidate.Size > 8 ||
       !supportsImmutableImageReads(Image) || !Graph.InstructionGuards.empty())
     return {};
   size_t Remaining = limits::kMaxJumpTableScalarStateWork;

@@ -100,6 +100,10 @@ observation ends at the selected function's return. The libc
 
 ### Execution observations
 
+The process probe writes trace records directly to its JSON output file.
+C++ callers can use `writeProcessResultJSON` with an LLVM output stream or
+`processResultJSON` to obtain the same bytes as a string.
+
 `android.observe_cpu_state: true` adds `android.cpu_state` to the final report.
 It contains the current guest `thread_id` and all modeled ARM64 registers:
 `X0`–`X30`, `SP`, `PC`, `NZCV`, the three modeled `TPIDR` registers, `FPCR`,

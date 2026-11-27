@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: c9d5599249d1aa9a3f85ce6420c4392f82d07513739f5eb8811dcda6db244c95 -->
 
 <div align="center">
 
@@ -183,8 +183,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -308,6 +306,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | Zähler | Standard-C für jede geladene Funktion; jeder Funktionsrumpf wird nach der Prüfung freigegeben |
 | `decompile -llvm` | `.c` | Über LLVM IR + Optimizer |
 | `decompile --devirtualize` | `.c` + optionales JSON | Experimentelle x64-Interpreterrekonstruktion; benötigt `--func`; [Vertrag und Beispiele](interpreter-recovery.md) |
+| `python` | `.py` / JSON / native Komponenten | [Wiederherstellung von CPython- und PyInstaller-Artefakten](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Quelltextrekonstruktion für Lua, LuaJIT und Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimentell: [Android](android.md), [iOS](ios.md) |
 | `patch` | Binärdatei | Maschinencode umschreiben |
 
@@ -342,8 +342,7 @@ Wiederholen Sie die Option für weitere mehrdeutige Einstiege, gegebenenfalls mi
 | `funcs` | Gefundene Funktionen |
 | `disasm` | Disassemblieren (`--func` Name oder Hex) |
 | `sym-explore` | Begrenzte Pfaderkundung für natives LowIR (`--func`; JSON-Ausgabe) |
-| `audit` | Heap-Lebensdauerfehler und uninitialisierte lokale Stack-Lesezugriffe (JSON) |
-| `hunt` | Gefährliche Kopierüberläufe mit symbolischen Zeugen und zusätzlichen `process-input-v1`-Wiedergabenachweisen bei vollständigem Plan (JSON-Schema v1) |
+| `scan` | [Objektlebensdauer, Initialisierung, Bereichsgrenzen und Formatstrings prüfen (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex-Dump an einer Adresse |
 | `cfg` / `callgraph` | CFG / Callgraph (JSON; DOT/SVG optional) |
 | `xrefs` | Querverweise |

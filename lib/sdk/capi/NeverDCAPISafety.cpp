@@ -1,4 +1,4 @@
-//===- NeverDCAPISafety.cpp - C API memory-safety audit & hunt -----------===//
+//===- NeverDCAPISafety.cpp - C API native memory-safety scan ------------===//
 //
 // NeverD Decompiler
 //
@@ -64,7 +64,6 @@ const char *readPath(const neverd_safety_options *In, size_t End,
 }
 
 struct SafetyRequest {
-  std::optional<safety::Track> Legacy;
   safety::ScanSelection Selection = safety::ScanSelection::Both;
 
   neverd_cancel_probe_fn Cancel = nullptr;
@@ -72,19 +71,9 @@ struct SafetyRequest {
 
   bool canceled() const { return Cancel && Cancel(Context); }
 
-  const char *name() const {
-    return Legacy ? safety::toString(*Legacy) : "scan";
-  }
-
   std::string error(const std::string &Message,
                     safety::ScanState State = safety::ScanState::Failed,
                     const BinaryImage *Img = nullptr) const {
-    if (Legacy) {
-      safety::SafetyReport Report;
-      Report.Origin = *Legacy;
-      Report.Error = Message;
-      return safety::toJson(Report);
-    }
     safety::ScanReport Scan(Selection, State, Message);
     if (Img)
       for (auto &Result : Scan.Analyzers) {
@@ -152,17 +141,9 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
   In.FramePointerReg = TRI.FramePointer;
   In.StackRegsKnown = true;
 
-  safety::SafetyBudgets Budgets = readBudgets(Options);
-  if (!Request.Legacy)
-    return safety::toJson(
-        safety::runScan(In, Cat, Budgets, Request.Selection,
-                        [&](safety::Track) { return Request.canceled(); }));
-  safety::SafetyReport Report = *Request.Legacy == safety::Track::Hunt
-                                    ? safety::runHunt(In, Cat, Budgets)
-                                    : safety::runAudit(In, Cat, Budgets);
-  if (!Report.AnalysisComplete)
-    return Request.error(Report.Error);
-  return safety::toJson(Report);
+  return safety::toJson(
+      safety::runScan(In, Cat, readBudgets(Options), Request.Selection,
+                      [&](safety::Track) { return Request.canceled(); }));
 }
 
 void setSafetyBoundaryErrorNoThrow(Session *S,
@@ -180,9 +161,7 @@ const char *internalSafetyErrorReportNoThrow(Session *S,
                                              const SafetyRequest &Request,
                                              llvm::StringRef Message) noexcept {
   try {
-    std::string Detail = "internal_error: unexpected native ";
-    Detail += Request.name();
-    Detail += " failure";
+    std::string Detail = "internal_error: unexpected native scan failure";
     if (!Message.empty()) {
       Detail += ": ";
       Detail += jsonSafeText(Message);
@@ -202,14 +181,15 @@ const char *internalSafetyErrorReportNoThrow(Session *S,
   return nullptr;
 }
 
-const char *
-runSafetyJSONBoundary(neverd_session_t Sess,
-                      const neverd_safety_options *Options,
-                      std::optional<safety::Track> Legacy,
-                      const neverd_scan_options *Scan = nullptr) noexcept {
+} // namespace
+
+extern "C" const char *
+neverd_session_scan_json(neverd_session_t Sess,
+                         const neverd_scan_options *Scan) {
   Session *S = toSession(Sess);
-  SafetyRequest Request{Legacy};
+  SafetyRequest Request;
   try {
+    const neverd_safety_options *Options = nullptr;
     if (S)
       S->clearError();
     if (Scan &&
@@ -253,24 +233,3 @@ runSafetyJSONBoundary(neverd_session_t Sess,
                                             "non-standard native exception");
   }
 }
-
-} // namespace
-
-extern "C" {
-
-const char *neverd_session_audit_json(neverd_session_t Sess,
-                                      const neverd_safety_options *Options) {
-  return runSafetyJSONBoundary(Sess, Options, safety::Track::Audit);
-}
-
-const char *neverd_session_hunt_json(neverd_session_t Sess,
-                                     const neverd_safety_options *Options) {
-  return runSafetyJSONBoundary(Sess, Options, safety::Track::Hunt);
-}
-
-const char *neverd_session_scan_json(neverd_session_t Sess,
-                                     const neverd_scan_options *Options) {
-  return runSafetyJSONBoundary(Sess, nullptr, std::nullopt, Options);
-}
-
-} // extern "C"

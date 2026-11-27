@@ -1351,6 +1351,22 @@
         <source>Find conditional strings computed by functions</source>
         <translation>Найти условные строки, вычисляемые функциями</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Восстановить исходный код Lua…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Восстановить код Lua и изучить прототипы функций</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Просмотреть код Python и компоненты пакета</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Восстановить исходный код Python…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11244,16 +11260,16 @@ Your previous graph is still available.</source>
         <translation>&amp;Анализаторы</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit и Hunt</translation>
+        <source>All checks</source>
+        <translation>Все проверки</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Время жизни и инициализация</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Границы и строки формата</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11310,6 +11326,189 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2 (проверено %3, пропущено %4, без заключения %5)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Восстановить исходный код Lua</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;Файл</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>Определить по файлу</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Официальный Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>&amp;Профиль</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Восстановить</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Запуск процесса анализа…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>Прототип</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Исходный код</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Соответствия байткода</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Данные анализа</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>Копировать исходный код</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>Экспортировать исходный код…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Экспортировать отчёт…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Открыть файл Lua</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Отмена…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>Экспортировать в новый файл</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Исходный код Lua (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Процесс анализа остановлен.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>Восстановление исходного кода…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>Этот процесс не поддерживает восстановление кода Lua.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>Чтение файла…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Отменено</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>Прототип %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>Исходная строка %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>Компонент</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>Точки входа скриптов</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>Экспорт нативного компонента…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Папка…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Функция</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>Функция %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>Нативный компонент экспортирован.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>Открыть папку PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Открыть артефакт Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>Открыть в анализаторе машинного кода…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>Этот рабочий процесс не поддерживает восстановление исходного кода Python.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Исходный код Python (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Восстановить исходный код Python</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>Сохранить нативный компонент в новый файл</translation>
     </message>
 </context>
 </TS>

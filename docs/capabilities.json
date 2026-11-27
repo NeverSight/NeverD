@@ -184,7 +184,6 @@
           "neverd_segments_json",
           "neverd_session_analyze",
           "neverd_session_arch_name",
-          "neverd_session_audit_json",
           "neverd_session_base_addr",
           "neverd_session_bitness",
           "neverd_session_create",
@@ -200,7 +199,6 @@
           "neverd_session_file_path",
           "neverd_session_file_size",
           "neverd_session_format_name",
-          "neverd_session_hunt_json",
           "neverd_session_import_count",
           "neverd_session_input_sha256",
           "neverd_session_inspect_map_json",
@@ -525,41 +523,6 @@
           "neverd annotate --symbol-path",
           "neverd annotate --text",
           "neverd annotate --v",
-          "neverd audit",
-          "neverd audit --arm-function-mode",
-          "neverd audit --auto",
-          "neverd audit --download-symbols",
-          "neverd audit --dwarf",
-          "neverd audit --json",
-          "neverd audit --load-base",
-          "neverd audit --load-entry",
-          "neverd audit --load-offset",
-          "neverd audit --load-size",
-          "neverd audit --loader",
-          "neverd audit --map",
-          "neverd audit --map-unchecked",
-          "neverd audit --max-call-depth",
-          "neverd audit --max-loop",
-          "neverd audit --max-paths",
-          "neverd audit --max-steps",
-          "neverd audit --max-summary-iterations",
-          "neverd audit --no-debug",
-          "neverd audit --no-dwarf",
-          "neverd audit --no-map",
-          "neverd audit --no-pdb",
-          "neverd audit --no-symtab",
-          "neverd audit --o",
-          "neverd audit --pdb",
-          "neverd audit --pdb-unverified",
-          "neverd audit --platform",
-          "neverd audit --processor",
-          "neverd audit --sig-base",
-          "neverd audit --sig-dir",
-          "neverd audit --sig-file",
-          "neverd audit --sinks",
-          "neverd audit --solver-conflicts",
-          "neverd audit --sources",
-          "neverd audit --symbol-path",
           "neverd bookmarks",
           "neverd bookmarks --add",
           "neverd bookmarks --arm-function-mode",
@@ -959,41 +922,6 @@
           "neverd hex --symbol-path",
           "neverd hex --text-encoding",
           "neverd hex --v",
-          "neverd hunt",
-          "neverd hunt --arm-function-mode",
-          "neverd hunt --auto",
-          "neverd hunt --download-symbols",
-          "neverd hunt --dwarf",
-          "neverd hunt --json",
-          "neverd hunt --load-base",
-          "neverd hunt --load-entry",
-          "neverd hunt --load-offset",
-          "neverd hunt --load-size",
-          "neverd hunt --loader",
-          "neverd hunt --map",
-          "neverd hunt --map-unchecked",
-          "neverd hunt --max-call-depth",
-          "neverd hunt --max-loop",
-          "neverd hunt --max-paths",
-          "neverd hunt --max-steps",
-          "neverd hunt --max-summary-iterations",
-          "neverd hunt --no-debug",
-          "neverd hunt --no-dwarf",
-          "neverd hunt --no-map",
-          "neverd hunt --no-pdb",
-          "neverd hunt --no-symtab",
-          "neverd hunt --o",
-          "neverd hunt --pdb",
-          "neverd hunt --pdb-unverified",
-          "neverd hunt --platform",
-          "neverd hunt --processor",
-          "neverd hunt --sig-base",
-          "neverd hunt --sig-dir",
-          "neverd hunt --sig-file",
-          "neverd hunt --sinks",
-          "neverd hunt --solver-conflicts",
-          "neverd hunt --sources",
-          "neverd hunt --symbol-path",
           "neverd identify",
           "neverd identify --json",
           "neverd imports",
@@ -1788,9 +1716,7 @@
           "neverd_renames_json",
           "neverd_sections_json",
           "neverd_segments_json",
-          "neverd_session_audit_json",
           "neverd_session_debug_info_json",
-          "neverd_session_hunt_json",
           "neverd_session_inspect_map_json",
           "neverd_session_inspect_pdb_json",
           "neverd_session_load_diagnostics_json",
@@ -2014,7 +1940,6 @@
           "Session.annotation",
           "Session.annotations",
           "Session.architecture",
-          "Session.audit",
           "Session.base_address",
           "Session.bitness",
           "Session.call_paths",
@@ -2044,7 +1969,6 @@
           "Session.functions",
           "Session.headers",
           "Session.hex_dump",
-          "Session.hunt",
           "Session.import_count",
           "Session.imports",
           "Session.ir",
@@ -5521,6 +5445,193 @@
         ],
         "json": [
           "neverd_synthesize_expr_json_v1"
+        ]
+      }
+    },
+    {
+      "id": "lua.source-recovery",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "bytecode",
+      "targets": [
+        "PUC Lua 5.1–5.5",
+        "LuaJIT dump v2",
+        "Upstream Luau 0.659 bytecode v6/type v3"
+      ],
+      "docs": [
+        "docs/lua-recovery.md"
+      ],
+      "limitations": [
+        "Issue #1023. File → Recover Lua source and neverd lua share the cancellable SDK report and export the same source and prototype evidence. The linked matrix distinguishes identification, decoding, source emission and behavioral qualification for each dialect.",
+        "Only qualified instruction windows and structured regions publish bodies. Unsupported opcodes, unresolved close or capture scopes, custom profiles and malformed input retain explicit statuses. Bytecode is never executed."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.OwnedCompilerDumps",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.SourceProfilesAndCancellation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.MalformedOperandsAndAuxiliaryBoundaries",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.EveryTruncatedRecordFailsClosed",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_lua_recover_json_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd lua",
+          "neverd lua --json",
+          "neverd lua --profile",
+          "neverd lua --prototype",
+          "neverd lua --o"
+        ],
+        "json": [
+          "neverd_lua_recover_json_v1"
+        ]
+      }
+    },
+    {
+      "id": "python.source-recovery",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "bytecode",
+      "targets": [
+        "CPython 0.9.8 and 0.9.9 disk bytecode",
+        "CPython 1.0–1.6, 2.0–2.7 and 3.0–3.15 disk bytecode",
+        "PyInstaller onefile, onedir and PYZ",
+        "Python sources and native extensions"
+      ],
+      "docs": [
+        "docs/python-recovery.md"
+      ],
+      "limitations": [
+        "Issue #1022. Source coverage is per function and release. The release matrix records compiler fixtures for the qualified disk layouts.",
+        "Original source retains its bytes. Native images use the native analysis backend. Unsupported functions keep their own diagnostics."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.OwnedCodeObjectsMatchDisassembly",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.ModernDiskCachesLinesAndUnwindRegionsMatchCompiler",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.PartialFunctionPreservesSiblingsAndRejectsAlteredCleanup",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.PackageMembersHaveDistinctIdentitiesAndNativeRoutes",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.InvalidArchiveExtentsNamesAndExpansion",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDPythonRecoveryTests",
+          "source": "unittests/python/PythonRecoveryTests.cpp",
+          "filter": "PythonRecovery.OnedirAndNativeExportRevalidateSelectedBytes",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_python_recover_json_v1",
+          "neverd_python_export_native_json_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd python",
+          "neverd python --json",
+          "neverd python --profile",
+          "neverd python --function",
+          "neverd python --component",
+          "neverd python --native",
+          "neverd python --o"
+        ],
+        "json": [
+          "neverd_python_recover_json_v1",
+          "neverd_python_export_native_json_v1"
         ]
       }
     },

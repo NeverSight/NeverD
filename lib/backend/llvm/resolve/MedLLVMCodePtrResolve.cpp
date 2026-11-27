@@ -1889,8 +1889,8 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
 
 void MedLLVMEmitter::collectSuppressedTableAddressOps(const MedFunc &Func) {
   SuppressedTableAddressOps.clear();
-  // Without SSA a register variable has no unique definition to follow.
-  if (Func.SkippedSSA)
+  // Only a recovered switch load can suppress its SSA address chain.
+  if (Func.JumpTables.empty() || Func.SkippedSSA)
     return;
 
   // Every read of a value, in operations and in the function's records of

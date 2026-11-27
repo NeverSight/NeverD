@@ -230,11 +230,7 @@ TEST(WebAvailability, CapabilitiesReflectCompiledBackendAndParser) {
         "package_install_analyze", "package_install_records",
         "package_behavior_diff_analyze", "package_behavior_diff_records"})
     EXPECT_EQ(Has(Op), bool(NEVERD_TEST_WEB_JS));
-#ifndef _WIN32
   EXPECT_EQ(Has("source_rewrite_export"), bool(NEVERD_TEST_WEB_JS));
-#else
-  EXPECT_FALSE(Has("source_rewrite_export"));
-#endif
   EXPECT_EQ(Has("source_modules_analyze"), bool(NEVERD_TEST_WEB_JS));
   EXPECT_EQ(Has("source_module_records"), bool(NEVERD_TEST_WEB_JS));
   EXPECT_EQ(Has("source_bundles_analyze"), bool(NEVERD_TEST_WEB_JS));

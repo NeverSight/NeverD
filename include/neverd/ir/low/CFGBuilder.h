@@ -26,6 +26,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cassert>
 #include <functional>
 #include <limits>
 #include <map>
@@ -838,6 +840,10 @@ public:
       const NoReturnCalleeProver *NoReturnCallees,
       const detail::AbsoluteRelocationRootIndex *RelocationRoots,
       const ExecutableCodeOwnerIndex *CodeOwners);
+  /// Unit-test-only: the call graph builds \p Cache admitted, the ones it led
+  /// and the ones it did not lead alike; each lifted its function.
+  static size_t
+  x87CallGraphBuildsForTesting(const std::shared_ptr<X87CallGraphCache> &Cache);
 
   size_t relativeRelocationRootSourceCacheBuildCountForTesting() const {
     return RelativeRelocationRootSourceCacheBuildCountForTesting;
@@ -976,6 +982,12 @@ public:
   /// can distinguish local proof incompleteness from aggregate exhaustion.
   void setFiniteSetSymbolEvidenceBudgetForTesting(std::optional<size_t> Limit) {
     FiniteSetSymbolEvidenceBudgetForTesting = Limit;
+  }
+  /// Override only the structural match allowance of each precise-guard
+  /// query session, so a test can run out the session over every controlling
+  /// condition while the compare's own queries still fit.
+  void setGuardQueryMatchEvidenceBudgetForTesting(std::optional<size_t> Limit) {
+    GuardQueryMatchEvidenceBudgetForTesting = Limit;
   }
   /// Exhaust every proposal stage right after the candidate at \p Addr
   /// resolves, so the candidates after it never run in a stage.
@@ -1603,6 +1615,73 @@ private:
     bool operator==(const JumpTableMaskKnownOneWitness &Other) const = default;
   };
 
+  /// The feasible coordinates of one finite-set query: member I is the
+  /// unsigned value I.  Capacity is the widest envelope any finite-set
+  /// relation may prove; fixed storage keeps the value-batch cache's byte
+  /// accounting exact.  There is no conversion to an integer, so no caller
+  /// can keep only the low word.
+  class JumpTableFeasibleSet {
+  public:
+    static constexpr uint32_t Capacity =
+        limits::kMaxJumpTableJoinedDomainValues;
+
+    /// The set of the members below 64 that \p Word holds.
+    static JumpTableFeasibleSet fromLowWord(uint64_t Word) {
+      JumpTableFeasibleSet Set;
+      Set.Words[0] = Word;
+      return Set;
+    }
+
+    bool test(uint64_t Value) const {
+      return Value < Capacity && ((Words[Value / 64] >> (Value % 64)) & 1);
+    }
+    /// \p Value must be below Capacity.
+    void set(uint64_t Value) {
+      assert(Value < Capacity && "feasible coordinate outside the set");
+      if (Value < Capacity)
+        Words[Value / 64] |= uint64_t{1} << (Value % 64);
+    }
+    /// Add every value below \p Count.
+    void setPrefix(uint64_t Count) {
+      Count = std::min<uint64_t>(Count, Capacity);
+      for (uint64_t &Word : Words) {
+        const uint64_t Bits = std::min<uint64_t>(Count, 64);
+        Word |= Bits == 64 ? ~uint64_t{0} : (uint64_t{1} << Bits) - 1;
+        Count -= Bits;
+      }
+    }
+    bool none() const {
+      return std::all_of(Words.begin(), Words.end(),
+                         [](uint64_t Word) { return Word == 0; });
+    }
+    /// One past the largest member, or zero when the set is empty.
+    uint32_t bitWidth() const {
+      for (size_t I = Words.size(); I-- > 0;)
+        if (Words[I])
+          return static_cast<uint32_t>(I * 64 + std::bit_width(Words[I]));
+      return 0;
+    }
+    /// The members as one word, or nothing when one of them is 64 or more.
+    std::optional<uint64_t> lowWord() const {
+      if (std::any_of(Words.begin() + 1, Words.end(),
+                      [](uint64_t Word) { return Word != 0; }))
+        return std::nullopt;
+      return Words[0];
+    }
+    /// True when the members are exactly the values below bitWidth().
+    bool isDensePrefix() const {
+      uint32_t Members = 0;
+      for (uint64_t Word : Words)
+        Members += static_cast<uint32_t>(std::popcount(Word));
+      return Members == bitWidth();
+    }
+
+    bool operator==(const JumpTableFeasibleSet &Other) const = default;
+
+  private:
+    std::array<uint64_t, Capacity / 64> Words{};
+  };
+
   enum class JumpTableValueRelation : uint8_t {
     /// Every feasible reaching value must equal one authenticated alternative.
     MustEqual,
@@ -1628,9 +1707,10 @@ private:
     /// against every feasible reaching value with the ordinary MustEqual
     /// matcher. Scalars and address fragments cannot propose an address.
     ConstantAddress,
-    /// Every feasible value is below UnsignedUpperBound (at most 64), and the
-    /// exact feasible coordinates are returned in the query's uint64_t result
-    /// mask.  One resolver DAG and symbolic context own the whole enumeration;
+    /// Every feasible value is below UnsignedUpperBound (at most
+    /// limits::kMaxJumpTableFeasibleSetValues), and the exact feasible
+    /// coordinates are returned in the query's JumpTableFeasibleSet result.
+    /// One resolver DAG and symbolic context own the whole enumeration;
     /// coordinates are never inferred from physical storage capacity.
     UnsignedFeasibleSet,
     /// The candidate is the exact output occurrence of an unsigned remainder
@@ -1655,7 +1735,8 @@ private:
     /// Prove a finite set for an actual CFG predecessor join, retaining
     /// compound edge predicates on each incoming value. This guard fallback
     /// does not replace ordinary mask/group domain ownership or treat a
-    /// logical predicate union as a control-flow join.
+    /// logical predicate union as a control-flow join. Its envelope may reach
+    /// limits::kMaxJumpTableJoinedDomainValues.
     JoinedUnsignedFeasibleSet,
     /// Bound all reaching scalar states, including loops and immutable table
     /// reads. The result mask is a conservative finite envelope, not a claim
@@ -2701,7 +2782,7 @@ private:
       const std::vector<va_t> *CandidateTargetsOverride = nullptr,
       size_t *GraphWorkBudget = nullptr, size_t LocalMatchEvidenceLimit = 0,
       const std::set<va_t> *CandidateBranchesSharingTargets = nullptr,
-      std::vector<uint64_t> *QueryUnsignedFeasibleMasks = nullptr,
+      std::vector<JumpTableFeasibleSet> *QueryUnsignedFeasibleMasks = nullptr,
       uint32_t ResolverDepthLimit = 0,
       const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides = nullptr,
       bool UseGroupContext = true, ResolverQueryScope *ReadOnlyScope = nullptr,
@@ -3061,6 +3142,7 @@ private:
   std::optional<size_t> MaskFixedPointEvidenceBudgetForTesting;
   std::optional<size_t> NestedMutationTrackingStageAllowanceForTesting;
   std::optional<size_t> FiniteSetSymbolEvidenceBudgetForTesting;
+  std::optional<size_t> GuardQueryMatchEvidenceBudgetForTesting;
   /// One candidate-local allowance for i386 GOTOFF reaching-value evidence.
   /// It is reset exactly once at resolver entry; its actual use is charged to
   /// the candidate/stage aggregate before the candidate outcome is committed.

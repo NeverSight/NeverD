@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: c9d5599249d1aa9a3f85ce6420c4392f82d07513739f5eb8811dcda6db244c95 -->
 
 <div align="center">
 
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -306,6 +304,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 집계 | 로드된 모든 함수를 기본 C 경로로 처리하고 검사 후 각 함수 본문을 해제 |
 | `decompile -llvm` | `.c` | LLVM IR + 최적화 경로 |
 | `decompile --devirtualize` | `.c` + 선택적 JSON | 실험적 x64 인터프리터 복원. `--func` 필수. [계약과 예제](interpreter-recovery.md) |
+| `python` | `.py` / JSON / 네이티브 구성 요소 | [CPython 및 PyInstaller 산출물 복원](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Lua, LuaJIT 및 Luau 소스 복원](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 실험적: [Android](android.md), [iOS](ios.md) |
 | `patch` | 바이너리 | 기계어 재작성 |
 
@@ -340,8 +340,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 발견된 함수 |
 | `disasm` | 디스어셈블(`--func` 이름 또는 hex) |
 | `sym-explore` | 제한된 네이티브 LowIR 경로 탐색(`--func`, JSON 출력) |
-| `audit` | 힙 객체 수명 결함 및 초기화되지 않은 로컬 스택 읽기（JSON） |
-| `hunt` | 위험한 복사 범위 초과와 기호 증거. 완전한 계획이 있으면 `process-input-v1` 재생 증거 추가（JSON schema v1） |
+| `scan` | [객체 수명, 초기화, 경계 및 서식 문자열 검사(JSON)](../memory-safety-scan.md) |
 | `hex` | 주소의 hex dump |
 | `cfg` / `callgraph` | CFG / 호출 그래프(JSON; DOT/SVG 선택) |
 | `xrefs` | 교차 참조 |

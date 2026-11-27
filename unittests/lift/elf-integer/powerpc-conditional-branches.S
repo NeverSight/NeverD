@@ -104,4 +104,32 @@ end_function \name
 .endm
 jump ctr_jump,0
 jump ctr_join,1
+
+// CR1 picks a tagged address. CR0 independently guards the transfer.
+begin_function ctr_select
+ mflr 0
+ bcl 20,31,1f
+1:
+ mflr 12
+ mtlr 0
+ addi 8,12,4f-1b+1
+ addi 9,12,5f-1b+3
+ cmpwi 1,5,0
+#ifdef UNKNOWN_CTR_ARM
+ isel 12,8,4,6
+#else
+ isel 12,8,9,6
+#endif
+ mtctr 12
+ cmpwi 3,0
+ bcctr 12,2,0
+ addi 3,3,1
+ blr
+4:
+ addi 3,3,7
+ blr
+5:
+ addi 3,3,19
+ blr
+end_function ctr_select
 #endif

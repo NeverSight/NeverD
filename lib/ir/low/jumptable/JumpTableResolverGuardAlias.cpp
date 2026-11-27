@@ -2930,6 +2930,27 @@ alias_done:
              Op.Inputs[0].Size == Compared.Size;
     };
     bool LaneAndAccepted = false;
+    // GCC also copies the compared register into the index after the guard
+    // (`cmp $0x1c, %r11d; ja; mov %r11d, %eax` before an RAX index).  Nothing
+    // may write the compared register between the compare and that copy; the
+    // copy, and the lifter's zero-extend of it, are then the index's only
+    // writes before the use.  A later write of the compared register does not
+    // replace the copy.
+    bool CopiedAfterCompare = false;
+    bool CopyAfterInvalid = false;
+    // After the compare the lane's register may take the lane's zero-extend
+    // in steps: `movzbl %sil, %esi` lifts as INT_ZEXT into a temporary, a
+    // COPY of it into ESI, and the architectural INT_ZEXT of ESI into RSI.
+    // ZeroExtendedWidth is the width at which the lane's register holds the
+    // compared lane zero-extended; the temporary is that instruction's own.
+    size_t ZeroExtendedWidth = 0;
+    std::optional<std::pair<va_t, NdVar>> ZeroExtendedTemp;
+    auto extendsLaneFrom = [&](const NdVar &Input) {
+      return Input.isReg() && Input.Space == Compared.Space &&
+             Input.Offset == Compared.Offset &&
+             Input.Size ==
+                 (ZeroExtendedWidth ? ZeroExtendedWidth : Compared.Size);
+    };
     for (auto It = Insns.lower_bound(std::min(*CompareBlock, *IndexBlock));
          It != Insns.end() && It->first <= Info.IndexUseAddr; ++It) {
       if (!consumeCandidateEvidence())
@@ -2995,12 +3016,36 @@ alias_done:
             CopiedLaneZeroExtended = true;
           continue;
         }
+        if (TrackCopiedRegister && !CopiedBeforeCompare && !LaneAndAccepted &&
+            !CopiedSlotIdentity && !CopyAfterInvalid &&
+            regOverlaps(Op.Output, Index)) {
+          if (!CopiedAfterCompare && copyOfCompared(Op) &&
+              !Insn.IsInstructionGuard) {
+            CopiedAfterCompare = true;
+            CopiedLaneZeroExtended = false;
+          } else if (CopiedAfterCompare && !Insn.IsInstructionGuard &&
+                     copiedLaneRefresh(Op)) {
+            if (Op.Opcode == NdOp::INT_ZEXT)
+              CopiedLaneZeroExtended = true;
+          } else {
+            CopyAfterInvalid = true;
+          }
+          continue;
+        }
         if (LaneAndAccepted && exactIndexWrite(Op))
           return false;
+        if (SameOffset && Index.Size > Compared.Size &&
+            Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
+            Op.Output.isTemp() && Op.Output.Size <= Index.Size &&
+            extendsLaneFrom(Op.Inputs[0]) && !Insn.IsInstructionGuard) {
+          ZeroExtendedTemp = std::pair{Op.Addr, Op.Output};
+          continue;
+        }
         if (!overlapsCompared(Op.Output))
           continue;
         if ((CopiedSlotIdentity ||
-             (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid)) &&
+             (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid) ||
+             (CopiedAfterCompare && !CopyAfterInvalid)) &&
             !regOverlaps(Op.Output, Index))
           continue;
         if (Insn.IsInstructionGuard)
@@ -3013,22 +3058,36 @@ alias_done:
                                 Op.Inputs[0].Size == Compared.Size;
         // Extending another register does not make it the table index.
         // Cross-register identities require the copy proof above.
+        const bool LaneRegisterWrite =
+            SameOffset && Index.Size > Compared.Size && Op.NumInputs >= 1 &&
+            Op.Output.Space == Compared.Space &&
+            Op.Output.Offset == Compared.Offset && Op.Output.Size <= Index.Size;
         const bool WideZeroExtend =
-            SameOffset && Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
-            Op.Output.Size == Index.Size && Index.Size > Compared.Size &&
-            Op.Output.Offset == Compared.Offset && Op.Inputs[0].isReg() &&
-            Op.Inputs[0].Offset == Compared.Offset &&
-            Op.Inputs[0].Size == Compared.Size;
+            LaneRegisterWrite &&
+            ((Op.Opcode == NdOp::INT_ZEXT && extendsLaneFrom(Op.Inputs[0]) &&
+              Op.Output.Size > Op.Inputs[0].Size) ||
+             (Op.Opcode == NdOp::COPY && ZeroExtendedTemp &&
+              ZeroExtendedTemp->first == Op.Addr &&
+              Op.Inputs[0].Space == ZeroExtendedTemp->second.Space &&
+              Op.Inputs[0].Offset == ZeroExtendedTemp->second.Offset &&
+              Op.Inputs[0].Size == ZeroExtendedTemp->second.Size &&
+              Op.Output.Size == Op.Inputs[0].Size));
         if (NarrowCopy)
           continue;
         if (WideZeroExtend) {
-          SawWideIdentity = true;
+          ZeroExtendedWidth = Op.Output.Size;
+          ZeroExtendedTemp.reset();
+          if (ZeroExtendedWidth == Index.Size)
+            SawWideIdentity = true;
           continue;
         }
         return false;
       }
     }
     if (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid &&
+        (Index.Size == Compared.Size || CopiedLaneZeroExtended))
+      SawWideIdentity = true;
+    if (CopiedAfterCompare && !CopyAfterInvalid &&
         (Index.Size == Compared.Size || CopiedLaneZeroExtended))
       SawWideIdentity = true;
     return SawWideIdentity;
@@ -3575,7 +3634,8 @@ alias_done:
           std::vector<bool> &QueryComplete, bool &Complete, size_t *Budget) {
         return tableValuesMatchAtUses(
             Queries, &Complete, &QueryComplete, InvalidVA, nullptr, Budget,
-            /*LocalMatchEvidenceLimit=*/0,
+            /*LocalMatchEvidenceLimit=*/
+            GuardQueryMatchEvidenceBudgetForTesting.value_or(0),
             /*CandidateBranchesSharingTargets=*/nullptr,
             /*QueryUnsignedFeasibleMasks=*/nullptr, GuardValueDepth,
             CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
@@ -3630,8 +3690,38 @@ alias_done:
     ProofQueryComplete = std::move(Complete);
     ProofComplete = BatchComplete;
   };
+  // The compare's own queries, asked alone against the candidate account.
+  // False when that session cannot answer them at all.
+  auto resolveStructuralQueries = [&]() {
+    std::vector<JumpTableValueQuery> StructuralQueries;
+    StructuralQueries.reserve(StructuralQueryIndices.size());
+    for (size_t Index : StructuralQueryIndices)
+      StructuralQueries.push_back(ProofQueries[Index]);
+    bool StructuralComplete = false;
+    std::vector<bool> StructuralQueryComplete;
+    const std::vector<bool> StructuralResults =
+        ResolveGuardQueries(StructuralQueries, StructuralQueryComplete,
+                            StructuralComplete, CandidateEvidenceBudget);
+    if (StructuralResults.size() != StructuralQueries.size() ||
+        StructuralQueryComplete.size() != StructuralQueries.size())
+      return false;
+    for (size_t I = 0; I < StructuralQueryIndices.size(); ++I) {
+      const size_t Index = StructuralQueryIndices[I];
+      ProofResults[Index] = StructuralResults[I];
+      ProofQueryComplete[Index] = StructuralQueryComplete[I];
+    }
+    ProofComplete = StructuralComplete;
+    return true;
+  };
   if (!ProofQueries.empty() && HasStructuralCompare) {
-    size_t SideBudget = *CandidateEvidenceBudget;
+    // The other conditions only add constraints to a compare already in
+    // hand, so their session runs on a share of the candidate account.  One
+    // that cannot finish within it leaves the compare's own queries to be
+    // asked alone, exactly as an exhausted account always did.
+    const size_t SideAllowance =
+        *CandidateEvidenceBudget /
+        limits::kJumpTableGuardSideSessionAccountDivisor;
+    size_t SideBudget = SideAllowance;
     bool BatchComplete = false;
     std::vector<bool> BatchQueryComplete;
     const std::vector<bool> BatchResults = ResolveGuardQueries(
@@ -3640,36 +3730,33 @@ alias_done:
                              BatchQueryComplete.size() == ProofQueries.size() &&
                              SideBudget != 0;
     if (BatchUsable) {
-      *CandidateEvidenceBudget = SideBudget;
+      *CandidateEvidenceBudget -= SideAllowance - SideBudget;
       assignBatch(std::move(BatchResults), std::move(BatchQueryComplete),
                   BatchComplete);
+      // The session can also run out of its own match allowance with the
+      // candidate account to spare: pcre2's pattern converter puts 22
+      // controlling conditions and 179 queries before its dispatch.  The
+      // other conditions do not decide the compare, so when that session
+      // left any of the compare's own queries unanswered, ask those alone.
+      const bool CompareUnanswered =
+          !ProofComplete &&
+          std::any_of(StructuralQueryIndices.begin(),
+                      StructuralQueryIndices.end(),
+                      [&](size_t Index) { return !ProofQueryComplete[Index]; });
+      if (CompareUnanswered && !resolveStructuralQueries()) {
+        if (SawControllingGuard)
+          Info.IncompleteGuardDomain = true;
+        return false;
+      }
     } else {
       AbandonedUnrelatedQueries = true;
       ProofResults.assign(ProofQueries.size(), false);
       ProofQueryComplete.assign(ProofQueries.size(), false);
       ProofComplete = false;
-      if (!StructuralQueryIndices.empty()) {
-        std::vector<JumpTableValueQuery> StructuralQueries;
-        StructuralQueries.reserve(StructuralQueryIndices.size());
-        for (size_t Index : StructuralQueryIndices)
-          StructuralQueries.push_back(ProofQueries[Index]);
-        bool StructuralComplete = false;
-        std::vector<bool> StructuralQueryComplete;
-        const std::vector<bool> StructuralResults =
-            ResolveGuardQueries(StructuralQueries, StructuralQueryComplete,
-                                StructuralComplete, CandidateEvidenceBudget);
-        if (StructuralResults.size() != StructuralQueries.size() ||
-            StructuralQueryComplete.size() != StructuralQueries.size()) {
-          if (SawControllingGuard)
-            Info.IncompleteGuardDomain = true;
-          return false;
-        }
-        for (size_t I = 0; I < StructuralQueryIndices.size(); ++I) {
-          const size_t Index = StructuralQueryIndices[I];
-          ProofResults[Index] = StructuralResults[I];
-          ProofQueryComplete[Index] = StructuralQueryComplete[I];
-        }
-        ProofComplete = StructuralComplete;
+      if (!StructuralQueryIndices.empty() && !resolveStructuralQueries()) {
+        if (SawControllingGuard)
+          Info.IncompleteGuardDomain = true;
+        return false;
       }
     }
   } else if (!ProofQueries.empty()) {
@@ -4086,7 +4173,7 @@ alias_done:
           const NdVar &Value = Op.Inputs[I];
           if (isGuardLiteral(Value) && Value.Size != 0 &&
               Value.Size <= sizeof(uint64_t) &&
-              Value.Offset < std::numeric_limits<uint64_t>::digits)
+              Value.Offset < limits::kMaxJumpTableJoinedDomainValues)
             ProposedJoinedBound =
                 std::max(ProposedJoinedBound, Value.Offset + 1);
         }
@@ -4105,7 +4192,7 @@ alias_done:
     Joined.Relation = JumpTableValueRelation::JoinedUnsignedFeasibleSet;
     Joined.UnsignedUpperBound = ProposedJoinedBound;
     std::vector<bool> Complete;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     const auto Results = tableValuesMatchAtUses(
         {Joined}, nullptr, &Complete, InvalidVA, nullptr,
         CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
@@ -4115,9 +4202,9 @@ alias_done:
     // bytes are unused, so its last reaching value bounds that table.
     // The proved mask, not the literal envelope, is the bound.
     if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
-        Masks.size() == 1 && Results[0] && Masks[0] &&
-        ((Masks[0] & (Masks[0] + 1)) == 0 || AllowSparseDomain)) {
-      const uint32_t Bound = std::bit_width(Masks[0]);
+        Masks.size() == 1 && Results[0] && !Masks[0].none() &&
+        (Masks[0].isDensePrefix() || AllowSparseDomain)) {
+      const uint32_t Bound = Masks[0].bitWidth();
       // A prefix bounds this use but does not shrink a relocation-owned
       // object whose remaining slots may serve another dispatch.
       const bool PrefixOfOwnedObject =
@@ -4167,17 +4254,17 @@ alias_done:
       Lookup.UseAddr = Info.IndexUseAddr;
       Lookup.UseSeq = Info.IndexUseSeq;
       Lookup.Relation = JumpTableValueRelation::ReadonlyUnsignedEnvelope;
-      Lookup.UnsignedUpperBound = 64;
+      Lookup.UnsignedUpperBound = limits::kMaxJumpTableFeasibleSetValues;
       std::vector<bool> Complete;
-      std::vector<uint64_t> Masks;
+      std::vector<JumpTableFeasibleSet> Masks;
       const auto Results = tableValuesMatchAtUses(
           {Lookup}, nullptr, &Complete, InvalidVA, nullptr,
           CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
           CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
       if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
-          Masks.size() == 1 && Results[0] && Masks[0] &&
-          (Masks[0] & (Masks[0] + 1)) == 0) {
-        const uint32_t Bound = std::bit_width(Masks[0]);
+          Masks.size() == 1 && Results[0] && !Masks[0].none() &&
+          Masks[0].isDensePrefix()) {
+        const uint32_t Bound = Masks[0].bitWidth();
         if (Bound >= limits::kMinJumpTableEntries) {
           if (Info.MaxEntries == 0 || Bound < Info.MaxEntries)
             Info.MaxEntries = Bound;

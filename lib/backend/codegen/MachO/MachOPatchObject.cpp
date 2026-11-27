@@ -10,6 +10,7 @@
 #include "MachOLiftedObject.h"
 #include "MachOPublishedData.h"
 #include "MachOSourceDependencies.h"
+#include "MachOStrictLayout.h"
 #include "MachOTLSRuntime.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
@@ -218,14 +219,27 @@ uint64_t installationCommandBytes(const NativeMachO &Object,
     return SegmentBytes * Segments + sizeof(section_64) * Sections +
            sizeof(linkedit_data_command) * (1 + unsigned(NewDICE));
   }
-  if (!NewDICE && Original.isArm64e() &&
-      Original.findSegmentByName(kDefaultNdTextSegment)) {
+  if (!NewDICE && Original.isArm64e()) {
     const auto *Linkedit =
         Original.findSegmentByName(section_names::macho::LinkeditSeg);
     if (Linkedit && Linkedit->VA) {
       const auto *Tail = Original.getSegmentFor(Linkedit->VA - 1);
-      if (!Tail || !Tail->isExecutable())
-        return SegmentBytes + sizeof(linkedit_data_command);
+      if (!Tail || !Tail->isExecutable()) {
+        uint64_t Padding = SegmentBytes + sizeof(linkedit_data_command);
+        if (Original.findSegmentByName(kDefaultNdTextSegment))
+          return Padding;
+        // A data segment before __LINKEDIT prevents extending the original
+        // text mapping. Reserve the part of the first RX command and signing
+        // command that the installer cannot obtain from disposable commands.
+        forEachMachOLoadCommand(
+            Original.Raw.data(), Original.Raw.size(),
+            [&](const uint8_t *Command, uint32_t ID, uint32_t Size, bool) {
+              if (shouldDropLoadCommand(ID) ||
+                  macho_patch_detail::canReclaimToolCommand(Command, ID, Size))
+                Padding -= std::min<uint64_t>(Padding, Size);
+            });
+        return Padding;
+      }
     }
   }
   return NewDICE ? SegmentBytes + sizeof(linkedit_data_command) * 2 : 0;
@@ -3066,6 +3080,33 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
     const va_t PC = Plan.TextVA + At;
     const va_t Target = Fixup.Target + Slide;
     const uint32_t Rd = Word & kRdMask;
+    if (Fixup.insertsSigningModifier()) {
+      const auto &Auth = *Fixup.Authentication;
+      if (Auth.RestoreSource) {
+        // The original register can be live on both sides of AUT. Its
+        // restoration begins after the local ADR and AUT, independent of
+        // the opcode or destination of the original address producer.
+        const auto Restore =
+            Auth.Instruction - Entry.OriginalVA + AddedBytes + 2 * kInsnSize;
+        if (!rangeInBounds(Restore, 2 * kInsnSize, Text->Size - Sym.Offset))
+          return fail(kAddressSourceWord);
+        const auto AtRestore = Sym.Offset + Restore;
+        const auto Reg = *Auth.ModifierRegister;
+        const auto Page = encodePCRelativeAddress(
+            AddressInstruction::ADRP, Reg, Plan.TextVA + AtRestore, Target);
+        const auto Add =
+            kAddImmediate64 | (Reg << kAddressBaseRegisterShift) | Reg;
+        const auto Imm = branch::A64AddImm12;
+        // Both signing instructions are in the image-relative compact-unwind
+        // range. Apply the same page reach check as an expanded address.
+        if (!Page)
+          return fail(kAddressPageReach);
+        const auto Low = uint32_t((Target & ~kPageMask) << Imm.Low);
+        Plan.Sites.push_back({&Sym, AtRestore, kADRP_Op | Reg, *Page, {}});
+        Plan.Sites.push_back({&Sym, AtRestore + kInsnSize, Add, Add | Low, {}});
+      }
+      AddedBytes += Auth.insertedWords() * kInsnSize;
+    }
     if (Pair || Expanded) {
       const auto Page =
           encodePCRelativeAddress(AddressInstruction::ADRP, Rd, PC, Target);

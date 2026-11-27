@@ -338,6 +338,30 @@ TEST(AArch64ImplicitUnwind, AnUnprovedLRNeverBecomesAnUnsignedReturn) {
   EXPECT_EQ(WrongKey.at(2).Status, Status::Unknown);
 }
 
+TEST(AArch64ImplicitUnwind,
+     RegisterModifierCanLoadAnImmutableRebasedSigningPC) {
+  Frame F{ExplicitSignB, SigningLiteralX11, ExplicitAuthBX11, Ret};
+  const auto Slot = F.Function.CodeRange.End;
+  auto &Cell = F.Image.Segments.emplace_back();
+  Cell.VA = Slot;
+  Cell.Size = Cell.FileSz = sizeof(va_t);
+  Cell.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Cell.Data.resize(Cell.Size);
+  Cell.ReadOnlyAfterRelocations = true;
+  F.Image.MachOResolvedChainedPointerSlots.insert(Slot);
+  const auto Restored = F.at(3);
+  ASSERT_TRUE(Restored.State);
+  EXPECT_EQ(Restored.State->Kind, Kind::Unsigned);
+  writeLE<va_t>(Cell.Data.data(), sizeof(uint32_t));
+  EXPECT_EQ(F.at(3).Status, Status::Unknown);
+  writeLE<va_t>(Cell.Data.data(), 0);
+  Cell.ReadOnlyAfterRelocations = false;
+  EXPECT_EQ(F.at(3).Status, Status::Unknown);
+  Cell.ReadOnlyAfterRelocations = true;
+  F.Image.MachOResolvedChainedPointerSlots.clear();
+  EXPECT_EQ(F.at(3).Status, Status::Unknown);
+}
+
 TEST(AArch64ImplicitUnwind, InstructionAddressRecipesSurviveImageSlides) {
   Frame Explicit{ExplicitSignB, ExplicitAuthBPrevious, Ret};
   auto Rows = recoverDarwinAArch64Unwind(Explicit.Image, Explicit.Function);
@@ -369,6 +393,29 @@ TEST(AArch64ImplicitUnwind, InstructionAddressRecipesSurviveImageSlides) {
   const auto PageRelative = Page.at(6);
   ASSERT_TRUE(PageRelative.State);
   EXPECT_EQ(PageRelative.State->Kind, Kind::Unsigned);
+}
+
+TEST(AArch64ImplicitUnwind, RegisterModifierNeedsTheSigningPCAndKey) {
+  for (bool KeyB : {false, true}) {
+    const auto Sign = KeyB ? ExplicitSignB : ExplicitSignA;
+    const auto Auth = KeyB ? ExplicitAuthBX11 : ExplicitAuthAX11;
+    Frame F{Sign, PreviousPCInX11, Auth, Ret};
+    const auto Before = F.at(2);
+    ASSERT_TRUE(Before.State);
+    EXPECT_EQ(Before.State->Kind, Kind::SPAndPC);
+    EXPECT_EQ(Before.State->Key, KeyB ? AArch64RAKey::B : AArch64RAKey::A);
+    EXPECT_EQ(Before.State->SigningPC, 0u);
+    const auto After = F.at(3);
+    ASSERT_TRUE(After.State);
+    EXPECT_EQ(After.State->Kind, Kind::Unsigned);
+  }
+  Frame WrongKey{ExplicitSignA, PreviousPCInX11, ExplicitAuthBX11, Ret};
+  Frame WrongRegister{ExplicitSignB, PreviousPCInX11, ExplicitAuthBX12, Ret};
+  Frame WrongAddress{ExplicitSignB, Nop, PreviousPCInX11, ExplicitAuthBX11,
+                     Ret};
+  EXPECT_EQ(WrongKey.at(3).Status, Status::Unknown);
+  EXPECT_EQ(WrongRegister.at(3).Status, Status::Unknown);
+  EXPECT_EQ(WrongAddress.at(4).Status, Status::Unknown);
 }
 
 TEST(AArch64ImplicitUnwind, CompactRowsRecoverActualCarriersAtInterruption) {

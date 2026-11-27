@@ -16,8 +16,10 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import runpy
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -166,6 +168,38 @@ class SimplifySurfaceAgreementTests(unittest.TestCase):
                         native[index][field],
                         f"CLI and the JSON entry point disagree on {field}",
                     )
+
+    def test_partial_power_blocks_match_the_interpolated_cost(self) -> None:
+        generator = REPO_ROOT / "tools" / "neverd-bench" / "generate_paired_product.py"
+        product = runpy.run_path(str(generator))["paired_product"]
+        tool = self.binaries / ("neverd.exe" if sys.platform == "win32" else "neverd")
+        with tempfile.TemporaryDirectory() as directory:
+            corpus = Path(directory) / "products.txt"
+            cases = (
+                (16, 0, 2, 65536), (32, 5, 4, 65536), (65, 7, 3, 2432),
+                (65536, 1, 3, 65536), (65536, 1, 5, 65536),
+                (65536, 3, 7, 65536), (65536, 7, 8, 65536),
+            )
+            for width, case, depth, budget in cases:
+                with self.subTest(width=width, case=case, depth=depth, budget=budget):
+                    expressions = [
+                        product(width, case, group_log=depth, reference=reference)
+                        for reference in (False, True)
+                    ]
+                    corpus.write_text("\n".join(expressions) + "\n", encoding="utf-8")
+                    args = [str(tool), "simplify", "-f", str(corpus), "--json",
+                            f"--width={width}"]
+                    normal = subprocess.run(args, capture_output=True, text=True, check=True)
+                    default, reference = json.loads(normal.stdout)
+                    corpus.write_text(expressions[0] + "\n", encoding="utf-8")
+                    limited = subprocess.run(args + [f"--max-work={budget}"],
+                                             capture_output=True, text=True, check=True)
+                    constrained = json.loads(limited.stdout)[0]
+                    for reduced in (default, constrained):
+                        self.assertTrue(reduced["changed"])
+                        self.assertLessEqual(reduced["costAfter"], reference["costAfter"])
+                    self.assertLessEqual(constrained["costAfter"], default["costAfter"])
+                    self.assertLess(constrained["work"], 65536)
 
     def test_the_corpus_still_exercises_the_optimiser(self) -> None:
         """A corpus nothing collapses would let the test above pass on nothing.

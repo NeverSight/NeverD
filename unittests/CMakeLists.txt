@@ -90,6 +90,20 @@ add_neverd_unittest(NeverDSupportSharedValueTests
 target_include_directories(NeverDSupportSharedValueTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
+add_neverd_unittest(NeverDPythonRecoveryTests
+  python/PythonRecoveryTests.cpp
+  LINK_COMPONENTS PythonRecovery
+)
+target_compile_definitions(NeverDPythonRecoveryTests PRIVATE
+  PYTHON_ARTIFACT_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/python/fixtures/artifacts.json")
+
+add_neverd_unittest(NeverDLuaRecoveryTests
+  lua/LuaRecoveryTests.cpp
+  LINK_COMPONENTS LuaRecovery
+)
+target_compile_definitions(NeverDLuaRecoveryTests PRIVATE
+  LUA_DUMP_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/lua/fixtures/dumps.json")
+
 add_subdirectory(acceleration)
 add_subdirectory(digest)
 

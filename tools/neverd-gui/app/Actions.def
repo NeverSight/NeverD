@@ -95,6 +95,16 @@ NEVERD_ACTION(FileNewInstance, QT_TRANSLATE_NOOP("Actions", "&New instance"),
               QT_TRANSLATE_NOOP("Actions", "Open a new instance of NeverD"))
 NEVERD_ACTION(FileOpen, QT_TRANSLATE_NOOP("Actions", "&Open..."), "", "open",
               QT_TRANSLATE_NOOP("Actions", "Open a binary for analysis"))
+NEVERD_ACTION(FilePythonRecovery,
+              QT_TRANSLATE_NOOP("Actions", "Recover Python source…"), "",
+              "open",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Inspect Python code and package components"))
+NEVERD_ACTION(
+    FileLuaRecovery, QT_TRANSLATE_NOOP("Actions", "Recover Lua source…"), "",
+    "open",
+    QT_TRANSLATE_NOOP("Actions",
+                      "Recover a Lua artifact and inspect its prototypes"))
 NEVERD_ACTION(
     FilePackageReview,
     QT_TRANSLATE_NOOP("Actions", "Offline package &review..."), "", "open",

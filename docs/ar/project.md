@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: c9d5599249d1aa9a3f85ce6420c4392f82d07513739f5eb8811dcda6db244c95 -->
 
 <div align="center" dir="rtl">
 
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -306,6 +304,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | أعداد | C الافتراضي لكل دالة محمّلة؛ يُحرّر جسم كل دالة بعد التحقق منه |
 | `decompile -llvm` | `.c` | عبر LLVM IR + المحسّن |
 | `decompile --devirtualize` | `.c` + JSON اختياري | استعادة تجريبية لمفسّرات x64؛ تتطلب `--func`؛ [العقد والأمثلة](interpreter-recovery.md) |
+| `python` | `.py` / JSON / مكوّنات أصلية | [استعادة ملفات CPython وPyInstaller](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [استعادة مصادر Lua وLuaJIT وLuau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | تجريبي: [Android](android.md), [iOS](ios.md) |
 | `patch` | ثنائي | إعادة كتابة شفرة الآلة |
 
@@ -340,8 +340,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | الدوال المكتشفة |
 | `disasm` | تفكيك (`--func` اسم أو hex) |
 | `sym-explore` | استكشاف محدود لمسارات LowIR الأصلية (`--func`؛ خرج JSON) |
-| `audit` | عيوب عمر كائنات الكومة وقراءات المكدس المحلي غير المهيأ (JSON) |
-| `hunt` | تجاوزات النسخ الخطرة مع شواهد رمزية وأدلة إعادة تشغيل إضافية من نوع `process-input-v1` عند توفر خطة كاملة (مخطط JSON v1) |
+| `scan` | [فحص عمر الكائنات والتهيئة والحدود وسلاسل التنسيق (JSON)](../memory-safety-scan.md) |
 | `hex` | تفريغ hex عند عنوان |
 | `cfg` / `callgraph` | CFG / رسم استدعاء (JSON؛ DOT/SVG اختياري) |
 | `xrefs` | مراجع متقاطعة |

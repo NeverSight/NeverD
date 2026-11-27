@@ -3,6 +3,7 @@
 set(NEVERD_SDK_SOURCES
     SourcePatchCompiler.cpp
     capi/NeverDCAPIWeb.cpp
+    capi/NeverDCAPIScriptRecovery.cpp
     capi/NeverDCAPIBytecode.cpp
     capi/NeverDCAPI.cpp
     capi/NeverDCAPISections.cpp
@@ -138,6 +139,8 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDAArch64UnwindRecovery
     NeverDLift
     NeverDLoader
+    NeverDPythonRecovery
+    NeverDLuaRecovery
     NeverDSupport
     NeverDPassIR
     NeverDPassMIR

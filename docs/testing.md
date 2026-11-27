@@ -1592,8 +1592,9 @@ after replacing the cursor stays unresolved.
 `JTE_X86_64.GuardReadsFlagsItsPredecessorCompareSet` dispatches after a `ja`
 that reads the flags of the previous block's `cmp`, directly and through a
 relay block that keeps them: both dispatches read their eight slots, while an
-index changed after the compare, or a second compare into the `ja` block that
-admits 101 values, stays unresolved.
+index changed after the compare, a second compare into the `ja` block that
+admits 101 values, or an address of the `ja` block that .data holds, stays
+unresolved.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the
@@ -1609,6 +1610,24 @@ reload and the table load leaves the dispatch unresolved.
 64-case byte-code walk whose `cmova` selects propose about 10 Mi of alias
 queries with a 14 Mi candidate account: the guard still bounds the dispatch
 to its 64 slots.
+`JTE_X86_64.CompareQueriesOutliveAnUnfinishedGuardSession` puts 24
+controlling compares before a byte dispatch and limits each guard query
+session to a match allowance the whole batch overruns: the compare's own
+queries, asked alone, still bound the six slots.
+`JTE_X86_64.IndexTakesTheComparedLaneAfterTheGuard` uses the same limit on
+dispatches whose index takes the compared lane after the guard
+(`movzbl %sil, %esi` after `cmpb $5, %sil; ja`, and `movl %r11d, %eax` after
+`cmpl $5, %r11d; ja`): both read their six slots, while twins that change
+the lane between the guard and the index (`incb %sil`, `incl %r11d`) stay
+unresolved.
+`JTE_X86_64.LoopCarriedTokenDispatchFitsASmallCandidateAccount` builds a
+lexer loop whose 64 arms each recompute a token dispatched through
+`lea -0x107(%r13), %eax; cmp $63, %eax; ja` and checks its 64 slots under a
+14 Mi and a 20 Mi candidate account. The first needs the target role's
+lexical chain filter and the address proof's single authenticated order
+(without them the dispatch needed 16 and 19.5 Mi); the second needs the
+guard session's share (a session that finished on the whole account left the
+other proofs too little between 16.5 and 23.5 Mi).
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict
@@ -4814,6 +4833,26 @@ fixture checks this family in HighC and LLVM-to-C through the worker and CLI.
 `SymMBAResiduePowers.SmallOddPowerBlocksKeepTheirFullResidues` checks
 blocks whose cubic and quartic terms still affect the result. It exhausts
 all pairs of four-bit inputs against the original product.
+
+Group logs 5 and 6 add three overlapping word expressions and leave several
+independent factors outside the complete blocks. At width 9,437,201, case 7
+and group log 6 generate 917,516 factors. Use `--counted` for their exact
+multiplicities and `--reference` for the interpolated polynomial. The
+611-factor native fixture exercises blocks of 32 with three remaining copies
+in both source views.
+
+Group logs 7 and 8 use twelve overlapping word expressions with both signed
+and unsigned slices. Some rows have four differently weighted fields and
+several incomplete blocks survive. To reproduce a constrained run, generate
+width 65,536, case 7, group log 8 and pass it to `neverd simplify` with
+`--width=65536 --max-work=65536`. With the same case and group log, width
+14,680,111 generates 1,572,880 factors across 317 distinct rows. Use
+`--exhaustive` to simplify it or generate its compact form with `--counted`.
+
+`SymMBAResiduePowers.SparseFieldRunsStayFactoredWithinBudget` exercises 65
+overlapping signed and unsigned coordinates with short repeated powers. Its
+65,536-work run compares the result with direct evaluation, including an even
+singleton beside the repeated odd factors.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
@@ -10008,6 +10047,12 @@ to a different valid image. Truncated instruction streams remain unretained.
 a function whose lift is incomplete until its callee is proved never to
 return: the second build's kept contract answers and it reads no graph, and
 once the prover's answer changes the call is proved again.
+`PipelineOutcome.ASmallX64WholeImageBatchLiftsNoCalleeAgain` runs a
+six-function whole-image x64 batch, too small to run in parallel, through the
+pipeline: its first batch makes no x87 call graph build
+(`PipelineOptions::X87GraphBuildsForTesting`; the single-pass batch made five,
+each a second lift of a function the batch builds), and every body is the
+one a run of that function alone builds.
 
 Publishing an additional code reference may retain the pipeline's raw x87
 graphs, but cannot retain an earlier tag proof. A shared-cache test publishes a
@@ -12835,6 +12880,24 @@ refusal cases on incoming frame bytes whose writer is outside the function.
 `GeneratedSourceExecutesJoinedEqualityAndRange` runs the register and frame
 variants through HighC and optimized/unoptimized LLVMC, compiling the generated
 x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.
+`JumpTableJoinedGuard.WideJoinedDomainsKeepEveryCase` uses bash's shape: a zero
+byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97 and 128
+cross the one-word mask and reach the joined ceiling, and each keeps every
+slot. `WideJoinedDomainsRefuseAHoleOrTheNextSize` refuses 129 cases, whose
+literal is past the ceiling, and an equality path that reads one slot past
+the table. `AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed
+envelope to 128 with an unrelated compare and still proves the three slots.
+`GeneratedSourceExecutesAWideJoinedDomain` compiles and runs the 97-case
+function from all three C routes at O0/O2.
+`X86_64ColdFragment.TheLoaderBindsAFramelessTrapPart` loads GCC 15.2's output
+for the shape of Lua's reallymarkobject, linked with and without symbols. Its
+isolated trap part begins with the entry rule and is bound in both copies.
+`AFramelessTrapPartIsACaseOfItsSwitch` decompiles the stripped copy: the
+dispatch is a switch whose isolated path traps, not a call through the table,
+and the part has no definition of its own.
+`EntryLikePartsSomethingNamesStayFunctions` binds a control part and keeps as
+functions a part that is also called, one that returns and one a relocated
+pointer names; the control part's own symbol keeps it a function too.
 `JumpTableFiniteSelector.ExactSingletonReplayPreservesAProvedSibling`
 uses i386 and x64 consumers sharing one relocated table. The exact singleton
 keeps its finite replay without poisoning the independently bounded sibling's
@@ -15670,6 +15733,10 @@ usable and explicit unavailable-backend requests are rejected.
 discovered case a CTest label equal to that executable's target name.
 On macOS, Release builds link these executables with `-dead_strip` to remove
 unused code and data from their static dependencies.
+
+On Windows the executable reserves the decompiler's 128 MiB main stack
+(`kDecompilerMainStackSize`): its cases run on GoogleTest's main thread,
+which would otherwise get 1 MiB there against 8 MiB on Linux and macOS.
 
 | Source area | Target and CTest label | What it covers |
 |-------------|-------------------------|----------------|

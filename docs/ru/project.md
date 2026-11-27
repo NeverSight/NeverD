@@ -1,6 +1,6 @@
 **Языки**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: c9d5599249d1aa9a3f85ce6420c4392f82d07513739f5eb8811dcda6db244c95 -->
 
 <div align="center">
 
@@ -182,8 +182,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -307,6 +305,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | счётчики | C по умолчанию для каждой загруженной функции; тело освобождается после проверки |
 | `decompile -llvm` | `.c` | Через LLVM IR + оптимизатор |
 | `decompile --devirtualize` | `.c` + необязательный JSON | Экспериментальное восстановление интерпретаторов x64; нужен `--func`; [контракт и примеры](interpreter-recovery.md) |
+| `python` | `.py` / JSON / нативные компоненты | [Восстановление артефактов CPython и PyInstaller](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Восстановление исходного кода Lua, LuaJIT и Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Экспериментально: [Android](android.md), [iOS](ios.md) |
 | `patch` | бинарник | Перезапись машинного кода |
 
@@ -341,8 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | Найденные функции |
 | `disasm` | Дизассемблирование (`--func` имя или hex) |
 | `sym-explore` | Ограниченное исследование путей нативного LowIR (`--func`; вывод JSON) |
-| `audit` | Ошибки времени жизни объектов кучи и чтение неинициализированного локального стека (JSON) |
-| `hunt` | Выход за границы опасных копирований с символьными свидетелями и дополнительными доказательствами воспроизведения `process-input-v1` при наличии полного плана (схема JSON v1) |
+| `scan` | [Проверка времени жизни и инициализации объектов, границ и строк формата (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex dump по адресу |
 | `cfg` / `callgraph` | CFG / граф вызовов (JSON; опционально DOT/SVG) |
 | `xrefs` | Перекрёстные ссылки |

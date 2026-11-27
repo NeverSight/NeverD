@@ -180,6 +180,12 @@ std::optional<uint64_t> lowScalarConstantResult(
                                                  : *Left ^ *Right;
       }
     }
+  } else if (Op.Opcode == NdOp::SELECT && Op.NumInputs == 3 &&
+             Op.Inputs[0].Size && Op.Inputs[0].Size <= sizeof(uint64_t) &&
+             Op.Inputs[1].Size == Op.Output.Size &&
+             Op.Inputs[2].Size == Op.Output.Size) {
+    if (const auto Cond = ValueOf(Op.Inputs[0]))
+      Result = ValueOf(Op.Inputs[(*Cond & Mask(Op.Inputs[0].Size)) ? 1 : 2]);
   }
   return Result ? std::optional<uint64_t>{*Result & Mask(Op.Output.Size)}
                 : std::nullopt;

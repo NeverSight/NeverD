@@ -1351,6 +1351,22 @@
         <source>Find conditional strings computed by functions</source>
         <translation>البحث عن سلاسل نصية مشروطة تحسبها الدوال</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>استعادة مصدر Lua…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>استعادة مصدر Lua وفحص النماذج الأولية للدوال</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>فحص شيفرة Python ومكوّنات الحزمة</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>استعادة شيفرة Python المصدرية…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11352,16 +11368,16 @@ Your previous graph is still available.</source>
         <translation>أدوات ال&amp;تحليل</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit وHunt</translation>
+        <source>All checks</source>
+        <translation>كل الفحوص</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>عمر الكائنات والتهيئة</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>الحدود وسلاسل التنسيق</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11418,6 +11434,189 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2 (فُحص %3، وتُخطّي %4، ولم يُحسم %5)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>استعادة مصدر Lua</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>تصفّح…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;ملف الإدخال</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>اكتشاف من الملف</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Luau الرسمي 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>ملف الت&amp;عريف</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>استعادة</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>إلغاء</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>جارٍ بدء عملية التحليل…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>النموذج الأولي للدالة</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>المصدر</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>تعيينات الشيفرة البايتية</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>الأدلة</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>نسخ المصدر</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>تصدير المصدر…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>تصدير التقرير…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>فتح ملف Lua</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>جارٍ الإلغاء…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>تصدير إلى ملف جديد</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>مصدر Lua (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>توقفت عملية التحليل.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>جارٍ استعادة المصدر…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>لا تدعم هذه العملية استعادة مصدر Lua.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>جارٍ قراءة الملف…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>أُلغي</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>النموذج الأولي %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>السطر الأصلي %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>المكوّن</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>برامج بدء التشغيل</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>جارٍ تصدير المكوّن الأصلي…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>مجلد…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>دالة</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>الدالة %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>تم تصدير المكوّن الأصلي.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>فتح مجلد PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>فتح ملف Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>فتح في محلل الشيفرة الأصلية…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>استعادة شيفرة Python غير متاحة في هذه العملية.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>شيفرة Python المصدرية (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>استعادة شيفرة Python المصدرية</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>حفظ المكوّن الأصلي في ملف جديد</translation>
     </message>
 </context>
 </TS>

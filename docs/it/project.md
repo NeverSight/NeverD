@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: ea02493151cf818461aabea76a045d47cd04480a23cb75216f22be1889e22117 -->
+<!-- i18n-source: c9d5599249d1aa9a3f85ce6420c4392f82d07513739f5eb8811dcda6db244c95 -->
 
 <div align="center">
 
@@ -182,8 +182,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -307,6 +305,8 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | conteggi | C predefinito per ogni funzione caricata; ogni corpo viene liberato dopo la verifica |
 | `decompile -llvm` | `.c` | Via LLVM IR + ottimizzatore |
 | `decompile --devirtualize` | `.c` + JSON opzionale | Recupero sperimentale di interpreti x64; richiede `--func`; [contratto ed esempi](interpreter-recovery.md) |
+| `python` | `.py` / JSON / componenti nativi | [Recupero degli artefatti CPython e PyInstaller](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Ricostruzione dei sorgenti Lua, LuaJIT e Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Sperimentale: [Android](android.md), [iOS](ios.md) |
 | `patch` | binario | Riscrittura del codice macchina |
 
@@ -341,8 +341,7 @@ Ripetere l’opzione per altri ingressi ambigui, usando `:arm` quando opportuno.
 | `funcs` | Funzioni scoperte |
 | `disasm` | Disassembla (`--func` nome o hex) |
 | `sym-explore` | Esplorazione limitata dei percorsi LowIR nativi (`--func`; output JSON) |
-| `audit` | Difetti di durata degli oggetti heap e letture non inizializzate dello stack locale (JSON) |
-| `hunt` | Overflow di copie pericolose con testimoni simbolici e prove aggiuntive di riproduzione `process-input-v1` quando è disponibile un piano completo (schema JSON v1) |
+| `scan` | [Verifica durata degli oggetti, inizializzazione, limiti e stringhe di formato (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex dump a un indirizzo |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG opzionale) |
 | `xrefs` | Cross-reference |

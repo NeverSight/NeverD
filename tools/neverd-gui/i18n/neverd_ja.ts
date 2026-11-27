@@ -1351,6 +1351,22 @@
         <source>Find conditional strings computed by functions</source>
         <translation>関数によって計算される条件付き文字列を検索</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Lua ソースを復元…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Lua ファイルを復元して関数プロトタイプを調べる</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Python コードとパッケージの構成要素を調べる</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Python ソースを復元…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11172,16 +11188,16 @@ Your previous graph is still available.</source>
         <translation>解析器(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit と Hunt</translation>
+        <source>All checks</source>
+        <translation>すべての検査</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>オブジェクトの寿命と初期化</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>境界と書式文字列</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11238,6 +11254,189 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1：%2（検査 %3 件、スキップ %4 件、判定不能 %5 件）</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Lua ソースを復元</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>参照…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>入力ファイル(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>ファイルから判定</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>公式 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>プロファイル(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>復元</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>キャンセル</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>解析ワーカーを起動中…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>関数プロトタイプ</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>ソース</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>バイトコード対応表</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>根拠</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>ソースをコピー</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>ソースを書き出す…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>レポートを書き出す…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Lua ファイルを開く</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>キャンセル中…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>新規ファイルに書き出す</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua ソース (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>解析ワーカーが停止しました。</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>ソースを復元中…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>このワーカーは Lua の復元に対応していません。</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>ファイルを読み込み中…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>キャンセル済み</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>関数プロトタイプ %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>元の行 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>構成要素</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>エントリースクリプト</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>ネイティブ構成要素をエクスポート中…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>フォルダー…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>関数</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>関数 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>ネイティブ構成要素をエクスポートしました。</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>PyInstaller フォルダーを開く</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Python ファイルを開く</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>ネイティブ解析で開く…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>このワーカーでは Python ソースを復元できません。</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python ソース (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Python ソースを復元</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>ネイティブ構成要素を新しいファイルに保存</translation>
     </message>
 </context>
 </TS>

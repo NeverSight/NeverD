@@ -39,6 +39,7 @@ class PackageReviewDialog;
 class AnalysisIndicator;
 class AnalysisProgress;
 class AnalysisPlugins;
+class ScriptRecoveryDialog;
 class ComparisonDialog;
 class LineageDialog;
 class LoadProgressCard;
@@ -463,6 +464,7 @@ private:
   QPointer<FindInViewDialog> FindDialog;
   QPointer<QDialog> LocalReferencesDialog;
   QPointer<web::PackageReviewDialog> packageReview_;
+  QPointer<ScriptRecoveryDialog> luaRecovery_, pythonRecovery_;
   QPointer<ComparisonDialog> comparison_;
   QPointer<LineageDialog> lineage_;
   bool startupQuickStartPending_ = false;

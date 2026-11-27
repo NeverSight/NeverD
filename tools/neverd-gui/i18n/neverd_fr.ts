@@ -1351,6 +1351,22 @@
         <source>Find conditional strings computed by functions</source>
         <translation>Rechercher des chaînes conditionnelles calculées par des fonctions</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Reconstruire le code source Lua…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Reconstruire un fichier Lua et examiner ses prototypes</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Examiner le code Python et les composants du paquet</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Récupérer le code source Python…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11208,16 +11224,16 @@ Votre graphe précédent reste disponible.</translation>
         <translation>&amp;Analyseurs</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit et Hunt</translation>
+        <source>All checks</source>
+        <translation>Toutes les vérifications</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Durée de vie et initialisation</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Bornes et chaînes de format</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11274,6 +11290,189 @@ Votre graphe précédent reste disponible.</translation>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1 : %2 (%3 examinés, %4 ignorés, %5 indéterminés)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Reconstruire le code source Lua</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Parcourir…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;Fichier</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>Détecter à partir du fichier</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Luau officiel 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>&amp;Profil</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Reconstruire</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Démarrage du processus d’analyse…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>Prototype</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Code source</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Correspondances du bytecode</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Éléments probants</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>Copier le code source</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>Exporter le code source…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Exporter le rapport…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Ouvrir un fichier Lua</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Annulation…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>Exporter vers un nouveau fichier</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Source Lua (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Le processus d’analyse s’est arrêté.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>Reconstruction du code source…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>Ce processus ne prend pas en charge la reconstruction Lua.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>Lecture du fichier…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Annulé</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>Prototype %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>Ligne d’origine %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>Composant</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>Scripts d’entrée</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>Exportation du composant natif…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Dossier…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Fonction</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>Fonction %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>Composant natif exporté.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>Ouvrir un dossier PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Ouvrir un artefact Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>Ouvrir dans l’analyse native…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>Ce processus de travail ne permet pas de récupérer le code source Python.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Source Python (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Récupérer le code source Python</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>Enregistrer le composant natif dans un nouveau fichier</translation>
     </message>
 </context>
 </TS>

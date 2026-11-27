@@ -1,6 +1,6 @@
 **語言**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
+<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
 
 [← NeverD 專案](project.md)
 
@@ -40,12 +40,13 @@
 | [macOS/iOS 行程環境](darwin-emulation.md) | Mach-O 啟動、裝置與模擬器平台、Darwin 服務及分頁規則 |
 | [macOS HVF](macos-hvf.md) | 主機同架構硬體執行、簽章權限、封裝與驗證 |
 | [Windows 驅動程式模擬](driver-emulation.md) | 有界 x64 WDM/KMDF 生命週期、請求、硬體情境、SEH、PnP 子集、後端選擇及限制 |
-| [記憶體安全稽核與獵取](memory-safety.md) | 堆積生命週期與拷貝越界分析：各格式身分契約、匯/源目錄、判定、預算與 JSON 模式 |
+| [記憶體安全掃描](memory-safety.md) | 堆積生命週期與拷貝越界分析：各格式身分契約、匯/源目錄、判定、預算與 JSON 模式 |
 | [行程外掛 SDK（英文）](../process-plugin-sdk.md) | 獨立 Python 輔助程式、通訊協定與獨立範例 |
 | [Tools 層（英文）](../tools-layer.md) | 精確外掛呼叫、凍結的使用方步驟與操作記錄 |
 | [GUI 行程外掛（英文）](../gui-plugins.md) | 管理員、功能表位置、工作結果與行程提供程式通訊協定 |
 | [NPH 行程外掛宿主（英文）](../plugin-host.md) | 共用擁有權、工作准入、通訊協定與行程生命週期 |
 | [原生外掛](plugins.md) | 純 C 描述元 ABI、回呼與事件、建置/連結流程、探索順序及相容性規則 |
+| [Python 產物還原](../python-recovery.md) | CPython 版本支援、PyInstaller 元件、原生程式分析與原始碼驗證 |
 | [Python 外掛](python-plugins.md) | 外掛撰寫、工作階段與事件 API、隔離、測試及發佈 |
 | [行動平台支援總覽](mobile.md) | Android / iOS 輸入、原始碼輸出、CLI 流程與限制 |
 | [Android Java 還原](android.md) | APK（multidex）、DEX、smali 檔案／目錄 → Java。CLI 流程、執行環境、選項、JSON 報告、錯誤處理與驗證限制 |

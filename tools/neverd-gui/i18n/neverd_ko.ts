@@ -1351,6 +1351,22 @@
         <source>Find conditional strings computed by functions</source>
         <translation>함수에서 계산되는 조건부 문자열 찾기</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Lua 소스 복원…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Lua 소스를 복원하고 함수 프로토타입 검사</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Python 코드 및 패키지 구성 요소 검사</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Python 소스 복원…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11172,16 +11188,16 @@ Your previous graph is still available.</source>
         <translation>분석기(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit 및 Hunt</translation>
+        <source>All checks</source>
+        <translation>모든 검사</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>객체 수명 및 초기화</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>경계 및 서식 문자열</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11238,6 +11254,189 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2(검사 %3개, 건너뜀 %4개, 판정 불가 %5개)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Lua 소스 복원</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>찾아보기…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>입력 파일(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>파일에서 감지</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>공식 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>프로필(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>복원</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>취소</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>분석 작업자 시작 중…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>함수 프로토타입</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>소스</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>바이트코드 매핑</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>근거</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>소스 복사</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>소스 내보내기…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>보고서 내보내기…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Lua 파일 열기</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>취소 중…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>새 파일로 내보내기</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua 소스 (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>분석 작업자가 중지되었습니다.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>소스 복원 중…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>이 작업자는 Lua 복원을 지원하지 않습니다.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>파일 읽는 중…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>취소됨</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>함수 프로토타입 %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>원본 줄 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>구성 요소</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>진입 스크립트</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>네이티브 구성 요소 내보내는 중…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>폴더…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>함수</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>함수 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>네이티브 구성 요소를 내보냈습니다.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>PyInstaller 폴더 열기</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Python 파일 열기</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>네이티브 분석에서 열기…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>이 작업 프로세스에서는 Python 소스를 복원할 수 없습니다.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python 소스 (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Python 소스 복원</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>네이티브 구성 요소를 새 파일로 저장</translation>
     </message>
 </context>
 </TS>

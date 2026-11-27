@@ -2630,14 +2630,162 @@ resumptions and eight deliveries in each of the two cleanup tests.
 [Release verification](evidence/arm64e-published-frames-2026-11-27.json) ·
 [Native frame and binding run](https://github.com/gmh5225/test_mac_intel/actions/runs/45875705163)
 
-The complete signed-unwind and lifted-image replay passed all 222
-cases on each runner. Of 141 asynchronous unwind cases, 108
+Before the six native checks below were added, both runners passed all 222
+signed-unwind and lifted-image cases. Of 141 unwind cases, 108
 recorded a positive native execution counter. Of 81 lifted-image cases,
 76 recorded one. The 32 explicit two-modifier signing cases checked
 128 image layouts per host. One other unwind case verified a landing pad
 at the function entry using LSDA coordinates. Five image cases checked
 displacement bounds, literal ownership or refusal to overwrite a signed input.
 [Complete suite replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45876433371)
+
+### Native checks for displacement limits, pointer slots and entry cleanups
+
+An ordinary CFG entry inside an arm64e function can receive a different
+register state from the function's public entry. The publisher selects the
+verified native register body for such a function. A dyld rebase to the second
+instruction of a two-instruction leaf exercises this case. Publication checks
+the emitted body against the source while the old interior address remains
+available to the image's pointer slots.
+
+A first publication can need a new executable segment when a data segment
+precedes `__LINKEDIT`. The installer reserves header space for the segment
+and replacement signature, taking account of the load commands it can
+reclaim. A nonempty data-in-code table retains its command. The returned
+literal fixture exercises Apple's default linker with no data-in-code table.
+
+The lifted-image tests execute the encoders' outermost LDR, ADR and ADRP
+displacements. They also call an image with read-only and writable dyld
+slots, compare the bytes behind a returned literal address, and exercise
+the signed input before and after a rejected publication. The signed-unwind
+test throws a C++ exception through an explicit LPStart frame with its
+landing pad at the function entry. A trace records the inner cleanup and
+the caller's destructor before the typed catch, in both the Apple-linked
+and published dylibs at O0 and O2.
+
+Enable `NEVERD_ARM64E_LIFTED_NATIVE=1` and `NEVERD_ARM64E_ASYNC_NATIVE=1`
+to execute these checks on an Apple Silicon Mac. For these six tests the
+default arm64 caller loads an arm64e dylib. On a host that passes the
+system arm64e startup probe, `NEVERD_ARM64E_EXECUTABLE_PROFILE=system`
+also builds the caller as arm64e and exercises the signed function-pointer
+field through its declared type.
+
+The six Release cases passed on an M4 Max and in arm64e processes on both
+free Apple M1 runners. Each runner passed all 222 signed-unwind and image
+cases with zero skips. All 81 image cases and 109 of 141 unwind cases
+recorded native execution. In that run, the other 32 exercised layouts for
+explicit two-modifier return signing.
+[Per-case results](evidence/arm64e-native-publication-boundaries-2026-11-27.json) ·
+[Release Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/45927721870)
+
+### Darwin personality decisions for explicit two-modifier frames
+
+The 32 IA and IB cases cover compact and indexed DWARF frames, C++ and
+Objective-C cleanups and catches, and publication from native objects and
+lifted IR. Each case builds an Apple-linked input and its publication at O0
+and O2. A third pair at O2 uses a register for authentication and return.
+For that pair, the tests decode the installed ADR at the cleanup and at the
+leaf return and check its destination against the signing instruction in
+the installed function. The observable-address tests below exercise a caller
+that also receives that address as a return value or through a memory slot.
+
+Set `NEVERD_ARM64E_PERSONALITY_NATIVE=1` to run the language checks on
+Apple Silicon with an arm64 caller loading the arm64e images. The existing
+`NEVERD_ARM64E_ASYNC_NATIVE=1` profile also enables them. The system profile
+builds the observer as arm64e. An ordinary throw supplies the runtime's
+exception object. At the first and last protected return PCs and in the
+resume region, the observer checks Darwin's function and LSDA lookup and
+queries the system personality in both search and cleanup phases. It checks the landing pad,
+exception argument, selector and Objective-C type match. The actual throw
+continues to its outer catch on the original stack.
+
+`darwin_personality_phase_pairs` counts completed pairs of decisions.
+`native_pc_recipe_deliveries` counts actual exception deliveries through
+the two-modifier signing instructions when the host passes the feature
+probe.
+
+The M4 Max and both free Apple M1 runners passed all 32 cases. Each host
+checked 192 input or published images, including 64 with register modifiers.
+The real runtimes supplied 288 exceptions and completed 720 pairs of search
+and cleanup decisions per host. All three hosts passed the same 223
+signed-unwind and image cases with zero skips. On each hosted arm64e runner,
+all 141 unwind cases recorded native execution or system personality decisions. Of the 82 publication cases,
+81 recorded native execution. The remaining case checked installation of the
+local signing address and rejection of the two observable-address variants.
+The hardware delivery counter was zero on all three hosts.
+[Per-case evidence](evidence/arm64e-explicit-personality-2026-11-27.json) ·
+[Apple-linked controls](https://github.com/gmh5225/test_mac_intel/actions/runs/45937609347) ·
+[Release Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/45940557627)
+
+### Publishing a signing address that is also program data
+
+A Darwin function can materialize its signing PC for two different uses.
+An `AUTIASPPC`, `AUTIBSPPC`, `RETAASPPC` or `RETABSPPC` needs the PC where
+its own LR was signed. A copy returned in X0 or written to a caller's
+slot retains the source image address, including its slide. NeverD keeps
+the ordinary address relocation and encodes the authentication against the
+installed signing instruction. A backwards immediate leaves the source
+register intact. A forward signer can use a separate, proven-dead Darwin
+scratch register. The final Mach-O verifier decodes the emitted consumer
+and checks both addresses against the actual layout.
+
+The regression publishes Apple-linked IA and IB images at O0 and publishes
+the resulting images again at O2. It covers conditional returns and stores,
+paired stores, copies on either side of authentication, an ADRP/ADD pair
+and authenticated returns. For a forward signer, an indexed DWARF row
+starting at the original AUT now starts at the extra modifier instruction
+in the installed image. This also preserves the row if an unwind starts
+between the modifier setup and AUT. The test keeps X16 and X17 live and
+checks stores through both registers after authentication.
+
+When every scratch register is live after a forward authentication, the
+publisher sets the original modifier register to the installed signing PC for
+the AUT. On fallthrough, an ADRP/ADD pair restores the caller-visible address
+in that same register. This also works when the address already went through a
+copy or store and when the original signer is outside ADR range. A direct
+branch or landing pad targeting the following original instruction lands past
+the pair. The next DWARF row and LSDA guard boundary take effect at the first
+restore instruction because LR is already authenticated there.
+
+At an authenticated return, a scratch register containing a copy of the address
+can supply the modifier if its value is dead at the return. The original value
+in X0 still reaches the caller. The publisher requires a single reaching
+definition for a rewritten consumer and rejects an alternate entry that can
+supply a different modifier. On a second lift it follows the original entry's
+forwarding chain, verifies the retained signing word and checks both register
+operands and the target of the restore pair.
+
+The unwind analysis also recognizes a full-width literal load from an
+immutable, dyld-rebased slot as a possible signing address. Recovery checks
+the loaded address against the recorded signer. A wrong address, a writable
+slot or a literal without rebase provenance leaves the LR state unknown.
+
+Use `verify_arm64e_return_model.py build-signing-address --tests BINARY
+--output GUESTS` to export the original and published instruction words on
+Apple Silicon. The corresponding `run --model FVP --guests GUESTS --output
+REPORT` executes those bodies at EL0 and EL1 with all four EnPACM/EnPACM0
+settings and checks a disabled-feature control.
+
+In the initial LLVM r6 run, the M4 Max published 44 images and verified 80
+signing rows. All 223 image and asynchronous-unwind cases, 63 adjacent
+cases and 40 implicit-unwind tests passed. The 32 explicit language-frame cases
+exercised Darwin personalities with 288 exceptions and 720 pairs of search and
+cleanup observations. The Arm FVP executed 66 original and published function
+bodies with both caller inputs at EL0 and EL1 in each EnPACM configuration
+(1,056 invocations). Native x1 delivery remains on the hardware checklist below.
+[Validation record](evidence/arm64e-observable-signing-address-2026-11-27.json) ·
+[Release model run](https://github.com/gmh5225/test_mac_intel/actions/runs/45969329510)
+
+The live-register regression published 64 images and checked 116 signed or
+unsigned unwind rows on the M4 Max. IA and IB each rejected the independent
+entry with an ambiguous modifier. The 223 image and asynchronous-unwind
+cases, 63 adjacent cases and 40 portable cases all passed with zero skips.
+The Arm model executed 96 original and published bodies, for 1,536 calls.
+The same job replayed the archived 66-body guest for another 1,056 calls.
+Both runs checked both exception levels, all four EnPACM settings and the
+disabled-feature control.
+[Release evidence](evidence/arm64e-live-signing-modifier-2026-11-27.json) ·
+[Arm model and archived guest replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45978541273)
 
 ### Native x1 runner qualification
 

@@ -55,6 +55,7 @@ add_neverd_tool(neverd
   NeverDSymbolDownload.cpp
   NeverDTranslateOutput.cpp
   ExportTable.cpp
+  cmd/NeverDCmdScriptRecovery.cpp
   cmd/NeverDCmdInfo.cpp
   cmd/NeverDCmdTables.cpp
   cmd/NeverDCmdAnalysisSections.cpp

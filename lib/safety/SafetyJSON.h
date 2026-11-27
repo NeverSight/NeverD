@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Serialize one analyzer observation in the legacy finding schema.
+/// Serialize the finding carried by one scan observation.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_SAFETY_SAFETYJSON_H

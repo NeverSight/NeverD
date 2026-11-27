@@ -6098,15 +6098,17 @@ void Pipeline::buildLowIR(
   // graph not yet kept lifts the callee again, often while the callee's own
   // build is still running in the batch: on a switch-heavy x64 image those
   // second lifts took about a tenth of the whole run's CPU in this pass
-  // alone.  An x64 batch therefore first builds every function without the
-  // x87 fixup, which asks no graph, each build keeping the graph its callers
-  // will ask for (buildDeferringX87).  A second pass keeps each body the
-  // fixup would leave unchanged and builds the rest again, reading the
-  // graphs kept.  A batch too small to run in parallel keeps its single pass,
-  // and so does one whose facts keep callee bodies (a selected run's): those
-  // come from the graph builds the first pass leaves out.
-  const bool DeferX87Fixup = Img.Arch == Arch::X64 && X87Graphs &&
-                             Total >= limits::kMinParallelIRWorkItems;
+  // alone.  A batch run in one thread lifts each called function twice the
+  // same way, once for its first caller's graph and once for itself (42% of
+  // pcre2_match.o's CPU went to its matcher's second lift).  An x64 batch of
+  // any size therefore first builds every function without the x87 fixup,
+  // which asks no graph, each build keeping the graph its callers will ask
+  // for (buildDeferringX87).  A second pass keeps each body the fixup would
+  // leave unchanged and builds the rest again, reading the graphs kept.  A
+  // batch whose facts keep callee bodies (a selected run's) keeps its single
+  // pass, as buildDeferringX87 decides: those bodies come from the graph
+  // builds the first pass leaves out.
+  const bool DeferX87Fixup = Img.Arch == Arch::X64 && X87Graphs;
   std::vector<std::optional<CFGBuilder::DeferredX87Build>> Deferred(
       DeferX87Fixup ? Total : 0);
   const auto configure = [&](CFGBuilder &LocalCFG) {
@@ -6179,6 +6181,9 @@ void Pipeline::buildLowIR(
         finish(I);
       }
     });
+  if (Opts.X87GraphBuildsForTesting)
+    *Opts.X87GraphBuildsForTesting +=
+        CFGBuilder::x87CallGraphBuildsForTesting(X87Graphs);
 
   std::vector<std::set<va_t>> EverPublishedJumpTableBranchHistory(Total);
   for (size_t I = 0; I < Total; ++I)

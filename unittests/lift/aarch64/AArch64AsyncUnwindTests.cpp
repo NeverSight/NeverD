@@ -4,18 +4,23 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "AArch64DarwinFixtureDriver.h"
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/MachO/MachOSigner.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/ReturnAddressSigning.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/AArch64Literal.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
@@ -31,6 +36,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -856,6 +862,332 @@ TEST(AArch64AsyncUnwind, SignalReturnResumesCallerWithRecoveredVectorLanes) {
 #endif
 }
 
+TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kFrameSource).string();
+  const auto Original = (Root / kOriginal).string();
+  std::ofstream(Source) << kSigningAddressBody;
+  const char *Export = std::getenv(kSigningModelExport);
+  std::string Calls, Bodies;
+  unsigned Published = 0, SignedRows = 0, ModelCases = 0, Refused = 0;
+  constexpr auto Word = aarch64::kInsnSize;
+  for (bool KeyB : {false, true})
+    for (const char *Use :
+         {static_cast<const char *>(nullptr), kSigningAddressCopy,
+          kSigningAddressStore, kSigningPairStore, kSigningAddressBoth,
+          kSigningAddressReturn, kSigningBeforeAuth, kSigningPagePair,
+          kSigningForwardReturn, kSigningForwardStore, kBothIPLive,
+          kAllSigningScratchLive, kLiveModifierCopy, kLiveFallthrough,
+          kLivePage, kSigningReturnAliases, kOtherModifierEntry}) {
+      SCOPED_TRACE(Use ? Use : kOriginal);
+      SCOPED_TRACE(KeyB);
+      const bool Fallthrough = Use == kLiveFallthrough;
+      const auto *Compiler = Fallthrough ? kCxxCompiler : kCompiler;
+      llvm::SmallVector<llvm::StringRef> Args{Compiler, kTargetFlag, kTarget,
+                                              kDylib};
+      if (KeyB)
+        Args.push_back(kSigningAddressKeyB);
+      if (Use)
+        Args.push_back(Use);
+      const bool OtherEntry = Use == kOtherModifierEntry;
+      const bool ForwardReturn =
+          Use == kSigningForwardReturn || Use == kSigningReturnAliases;
+      const bool IPPair = Use == kBothIPLive;
+      const bool LiveCopy = Use == kLiveModifierCopy;
+      const bool LivePage = Use == kLivePage;
+      const bool AllLive =
+          Use == kAllSigningScratchLive || LiveCopy || Fallthrough || LivePage;
+      const bool Refusal = OtherEntry;
+      const bool ForwardStore =
+          Use == kSigningForwardStore || IPPair || AllLive;
+      const bool Forward = ForwardReturn || ForwardStore;
+      const bool AuthReturn = Use == kSigningAddressReturn || ForwardReturn;
+      const bool Before = Use == kSigningBeforeAuth;
+      const bool Page = Use == kSigningPagePair || LivePage;
+      if (Use == kSigningReturnAliases)
+        Args.push_back(kSigningForwardReturn);
+      if (OtherEntry)
+        Args.push_back(kSigningAddressStore);
+      if (Use == kSigningPagePair)
+        Args.push_back(kSigningAddressBoth);
+      if (AllLive && Use != kAllSigningScratchLive)
+        Args.push_back(kAllSigningScratchLive);
+      if (IPPair || AllLive)
+        Args.push_back(kSigningForwardStore);
+      Args.append({Source, kOutput, Original});
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Compiler, Args), 0);
+      auto Reader = Loader::create(BinaryFormat::MachO);
+      auto Image = Reader->load(Original);
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      const auto *Public = Image->findSymbol(kSignalTickSymbol);
+      ASSERT_NE(Public, nullptr);
+      va_t Owner = Public->Addr;
+      const bool Returns = Use == kSigningAddressCopy ||
+                           Use == kSigningAddressBoth || AuthReturn || Before ||
+                           Page || ForwardStore;
+      const bool Stores =
+          Use == kSigningAddressStore || Use == kSigningPairStore ||
+          Use == kSigningAddressBoth || Before || Page || ForwardStore;
+      const auto ExportBody = [&](const BinaryImage &Candidate, va_t Entry,
+                                  va_t Observable) {
+        if (!Export || Refusal)
+          return;
+        const auto *F = Candidate.ExceptionMetadata.findFunction(Entry);
+        ASSERT_NE(F, nullptr);
+        auto Body = machOLiftedSource(Candidate, Entry, F->CodeRange.End);
+        ASSERT_TRUE(Body && !Body->ForwardTarget);
+        Calls += llvm::formatv(kSigningModelCall, ModelCases,
+                               int64_t(Observable - Entry), unsigned(Returns),
+                               unsigned(Stores),
+                               unsigned(AuthReturn || Before || ForwardStore),
+                               unsigned(Before || ForwardStore),
+                               unsigned(AllLive), unsigned(Fallthrough))
+                     .str();
+        if (Page || AllLive)
+          Bodies += llvm::formatv(kSigningModelPage, branch::A64PageBytes,
+                                  Entry % branch::A64PageBytes)
+                        .str();
+        Bodies += llvm::formatv(kSigningModelLabel, ModelCases++).str();
+        for (size_t Offset = 0; Offset < Body->Bytes.size(); Offset += Word)
+          Bodies += llvm::formatv(kSigningModelWord,
+                                  readLE<uint32_t>(Body->Bytes.data() + Offset))
+                        .str();
+      };
+      // The Apple-linked input determines the three instruction offsets; new
+      // instructions and data references are checked against it on each lift.
+      const auto *InputFrame = Image->ExceptionMetadata.findFunction(Owner);
+      ASSERT_NE(InputFrame, nullptr);
+      const auto InputBody =
+          machOLiftedSource(*Image, Owner, InputFrame->CodeRange.End);
+      ASSERT_TRUE(InputBody);
+      Decoder SourceDecode;
+      ASSERT_TRUE(SourceDecode.init(*Image));
+      std::optional<size_t> SourceSign, SourceAddress, SourceAuth;
+      for (size_t Offset = 0; Offset < InputBody->Bytes.size();
+           Offset += Word) {
+        DecodedInsn I{};
+        ASSERT_EQ(SourceDecode.decodeOne(InputBody->Bytes.data() + Offset, Word,
+                                         Owner + Offset, I),
+                  int(Word));
+        if (I.Id == (KeyB ? AARCH64_INS_PACIBSPPC : AARCH64_INS_PACIASPPC)) {
+          ASSERT_FALSE(SourceSign);
+          SourceSign = Offset;
+        } else if (I.Id == AARCH64_INS_ADR || I.Id == AARCH64_INS_ADRP) {
+          ASSERT_FALSE(SourceAddress);
+          SourceAddress = Offset;
+        } else if (I.Id ==
+                       (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC) ||
+                   I.Id ==
+                       (KeyB ? AARCH64_INS_RETABSPPC : AARCH64_INS_RETAASPPC)) {
+          ASSERT_FALSE(SourceAuth);
+          SourceAuth = Offset;
+        }
+      }
+      ASSERT_TRUE(SourceSign && SourceAddress && SourceAuth);
+      const auto SignOffset = *SourceSign;
+      ASSERT_NO_FATAL_FAILURE(ExportBody(*Image, Owner, Owner + SignOffset));
+      std::string Input = Original;
+      for (auto Name : {kPublished, kRepublishedSigningImage}) {
+        SCOPED_TRACE(Name);
+        const auto Output = (Root / Name).string();
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.PatchMode = true;
+        Options.NoOpt = Name == kPublished;
+        Options.EmitDumpOutput = false;
+        auto Lifted = Pipeline().run(*Image, Context, Options);
+        if (!Lifted.Success && Refusal) {
+          EXPECT_FALSE(std::filesystem::exists(Output));
+          ++Refused;
+          break;
+        }
+        ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+        MachOPatcher Patcher;
+        Patcher.setImageContext(&*Image);
+        const auto Patch =
+            Patcher.patch(Input, Output, *Lifted.LlvmModule, Image->Arch);
+        if (Refusal) {
+          EXPECT_FALSE(Patch.Success);
+          EXPECT_FALSE(std::filesystem::exists(Output));
+          ++Refused;
+          break;
+        }
+        ASSERT_TRUE(Patch.Success) << Input;
+        const auto It =
+            llvm::find_if(Patch.PatchedFunctions,
+                          [&](const auto &F) { return F.OriginalVA == Owner; });
+        ASSERT_NE(It, Patch.PatchedFunctions.end());
+        Owner = It->OwnerVA;
+        Input = Output;
+        Image = Reader->load(Input);
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        Public = Image->findSymbol(kSignalTickSymbol);
+        ASSERT_NE(Public, nullptr);
+        const va_t Sign = Owner + SignOffset +
+                          (AllLive   ? 3 * Word
+                           : Forward ? Word
+                                     : 0);
+        const va_t OriginalSign = Public->Addr + SignOffset;
+        ASSERT_NE(OriginalSign, Sign);
+        const va_t AddressPC = Owner + *SourceAddress;
+        const va_t AuthPC = Owner + *SourceAuth + (Forward ? Word : 0);
+        if (LivePage)
+          EXPECT_FALSE(aarch64::encodePCRelativeAddress(
+              aarch64::AddressInstruction::ADR, 0, AddressPC, OriginalSign));
+        const auto *SignedWord = Image->readVA(Sign, Word);
+        const auto *AddressBytes =
+            Image->readVA(AddressPC, AuthPC - AddressPC + Word);
+        ASSERT_NE(SignedWord, nullptr);
+        ASSERT_NE(AddressBytes, nullptr);
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(*Image));
+        DecodedInsn I{};
+        ASSERT_EQ(Decode.decodeOne(SignedWord, Word, Sign, I), int(Word));
+        ASSERT_EQ(I.Id, KeyB ? AARCH64_INS_PACIBSPPC : AARCH64_INS_PACIASPPC);
+        const auto AddressWord = readLE<uint32_t>(AddressBytes);
+        auto Address =
+            aarch64::isPointerLiteralLoad(AddressWord)
+                ? machORebasedLiteralAddress(*Image, AddressWord, AddressPC)
+                : aarch64::decodePCRelativeAddress(AddressWord, AddressPC);
+        if (Page) {
+          ASSERT_TRUE(Address);
+          ASSERT_EQ(Decode.decodeOne(AddressBytes, Word, AddressPC, I),
+                    int(Word));
+          ASSERT_EQ(I.Id, AARCH64_INS_ADRP);
+          ASSERT_EQ(
+              Decode.decodeOne(AddressBytes + Word, Word, AddressPC + Word, I),
+              int(Word));
+          ASSERT_EQ(I.Id, AARCH64_INS_ADD);
+          const auto &Add = I.Raw->detail->aarch64;
+          ASSERT_EQ(Add.op_count, 3u);
+          EXPECT_EQ(Add.operands[0].reg, AARCH64_REG_X15);
+          EXPECT_EQ(Add.operands[1].reg, AARCH64_REG_X15);
+          ASSERT_EQ(Add.operands[2].type, AARCH64_OP_IMM);
+          *Address += Add.operands[2].imm;
+        }
+        EXPECT_EQ(Address, Use ? OriginalSign : Sign);
+        const auto *AuthWord = AddressBytes + (AuthPC - AddressPC);
+        ASSERT_EQ(Decode.decodeOne(AuthWord, Word, AuthPC, I), int(Word));
+        ASSERT_EQ(I.Id,
+                  AuthReturn
+                      ? (KeyB ? AARCH64_INS_RETABSPPC : AARCH64_INS_RETAASPPC)
+                      : (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC));
+        const auto &D = I.Raw->detail->aarch64;
+        ASSERT_EQ(D.op_count, 1u);
+        if (Forward) {
+          ASSERT_EQ(D.operands[0].type, AARCH64_OP_REG);
+          const auto Scratch = LiveCopy       ? AARCH64_REG_X0
+                               : AllLive      ? AARCH64_REG_X15
+                               : IPPair       ? AARCH64_REG_X10
+                               : ForwardStore ? AARCH64_REG_X17
+                                              : AARCH64_REG_X16;
+          EXPECT_EQ(D.operands[0].reg, Scratch);
+          ASSERT_EQ(Decode.decodeOne(AuthWord - Word, Word, AuthPC - Word, I),
+                    int(Word));
+          ASSERT_EQ(I.Id, AARCH64_INS_ADR);
+          EXPECT_EQ(I.Raw->detail->aarch64.operands[0].reg, Scratch);
+          EXPECT_EQ(va_t(I.Raw->detail->aarch64.operands[1].imm), Sign);
+        } else if (Use) {
+          ASSERT_EQ(D.operands[0].type, AARCH64_OP_IMM);
+          const auto Distance =
+              ((readLE<uint32_t>(AuthWord) >> kAArch64PAuthLRImmShift) &
+               kAArch64PAuthLRImmMask) *
+              kAArch64PAuthLRScale;
+          EXPECT_EQ(AuthPC - Distance, Sign);
+        } else {
+          ASSERT_EQ(D.operands[0].type, AARCH64_OP_REG);
+          EXPECT_EQ(D.operands[0].reg, AARCH64_REG_X15);
+        }
+        const auto *Frame = Image->ExceptionMetadata.findFunction(Sign);
+        ASSERT_NE(Frame, nullptr);
+        if (IPPair || AllLive) {
+          ASSERT_TRUE(Frame->Dwarf);
+          EXPECT_TRUE(
+              llvm::any_of(Frame->Dwarf->Instructions, [&](const auto &CFI) {
+                return CFI.Kind == CFIOpKind::SameValue &&
+                       CFI.Register == kSigningFrameSameValueRegister &&
+                       CFI.CodeOffset == AuthPC - Word - Owner;
+              }));
+        }
+        if (AllLive) {
+          EXPECT_TRUE(
+              llvm::any_of(Frame->Dwarf->Instructions, [&](const auto &CFI) {
+                return CFI.Kind == CFIOpKind::Restore &&
+                       CFI.Register == kSigningFrameSameValueRegister &&
+                       CFI.CodeOffset == AuthPC + Word - Owner;
+              }));
+          const auto *Restore = Image->readVA(AuthPC + Word, 2 * Word);
+          ASSERT_NE(Restore, nullptr);
+          auto Base = aarch64::decodePCRelativeAddress(
+              readLE<uint32_t>(Restore), AuthPC + Word);
+          ASSERT_TRUE(Base);
+          ASSERT_EQ(
+              Decode.decodeOne(Restore + Word, Word, AuthPC + 2 * Word, I),
+              int(Word));
+          ASSERT_EQ(I.Id, AARCH64_INS_ADD);
+          const auto &Add = I.Raw->detail->aarch64;
+          const auto Reg = LiveCopy ? AARCH64_REG_X0 : AARCH64_REG_X15;
+          ASSERT_EQ(Add.operands[0].reg, Reg);
+          ASSERT_EQ(Add.operands[1].reg, Reg);
+          EXPECT_EQ(*Base + Add.operands[2].imm, OriginalSign);
+        }
+        if (Fallthrough) {
+          ASSERT_TRUE(Frame->Itanium);
+          const auto &Sites = Frame->Itanium->CallSites;
+          ASSERT_EQ(Sites.size(), 2u);
+          EXPECT_EQ(Sites[0].GuardedRange.End, AuthPC + Word);
+          EXPECT_EQ(Sites[1].GuardedRange.Begin, AuthPC + Word);
+          EXPECT_EQ(Sites[0].LandingPadVA, AuthPC + 3 * Word);
+          EXPECT_GT(Sites[1].LandingPadVA, Sites[0].LandingPadVA);
+        }
+        auto Rows = recoverDarwinAArch64Unwind(*Image, *Frame);
+        ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+        const auto &Signed =
+            aarch64UnwindRowAt(*Rows, AuthPC - Frame->CodeRange.Begin).Signing;
+        ASSERT_TRUE(Signed.State);
+        EXPECT_EQ(Signed.State->Key,
+                  KeyB ? dwarf_eh::AArch64RAKey::B : dwarf_eh::AArch64RAKey::A);
+        EXPECT_EQ(Signed.State->Recipe,
+                  dwarf_eh::AArch64RARecipe::NonHintPAuthLR);
+        EXPECT_EQ(Signed.State->SigningPC, Sign);
+        ++SignedRows;
+        if (!AuthReturn) {
+          const auto &After =
+              aarch64UnwindRowAt(*Rows, AuthPC + Word - Frame->CodeRange.Begin)
+                  .Signing;
+          ASSERT_TRUE(After.State);
+          EXPECT_EQ(After.State->Kind,
+                    dwarf_eh::AArch64RASigningKind::Unsigned);
+          ++SignedRows;
+        }
+        ASSERT_NO_FATAL_FAILURE(ExportBody(*Image, Owner, OriginalSign));
+        ++Published;
+      }
+      for (const auto Name : {kPublished, kRepublishedSigningImage})
+        std::filesystem::remove(Root / Name);
+    }
+  if (Export) {
+    std::filesystem::create_directories(Export);
+    const auto Path = std::filesystem::path(Export) / kSigningModelFile;
+    std::ofstream Assembly(Path);
+    Assembly << kSigningModelBegin << Calls << kSigningModelEnd << Bodies;
+    Assembly.close();
+    ASSERT_TRUE(Assembly);
+    RecordProperty(kSigningModelPath, Path.string());
+  }
+  RecordProperty(kSigningModelCases, ModelCases);
+  RecordProperty(kPublishedSigningUses, Published);
+  RecordProperty(kSigningRows, SignedRows);
+  RecordProperty(kSigningRefusals, Refused);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
 enum class LanguageFrame {
   Call,
   IndexedNonCall,
@@ -870,6 +1202,103 @@ enum class LanguageFrame {
   BackwardLandingPad,
   EntryLandingPad
 };
+
+#if defined(__APPLE__) && defined(__aarch64__)
+// Inspect the installed instruction stream as well as its unwind row. A
+// register authentication and a return each have to use the relocated signer.
+static void checkExplicitSigningAddress(const BinaryImage &Image, va_t Owner,
+                                        bool KeyB, bool Return) {
+  const auto *Frame = Image.ExceptionMetadata.findFunction(Owner);
+  ASSERT_NE(Frame, nullptr);
+  const va_t Sign = Owner + (Return ? 0 : kSignalSigningOffset);
+  constexpr auto Word = NDArm64eInstructionAlignment;
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  DecodedInsn I{};
+  const auto Read = [&](va_t PC) {
+    const auto *Bytes = Image.readVA(PC, Word);
+    return Bytes && Decode.decodeOne(Bytes, Word, PC, I) == Word && I.Raw &&
+           I.Raw->detail;
+  };
+  ASSERT_TRUE(Read(Sign));
+  ASSERT_EQ(I.Id, KeyB ? AARCH64_INS_PACIBSPPC : AARCH64_INS_PACIASPPC);
+  const unsigned Consumer =
+      Return ? (KeyB ? AARCH64_INS_RETABSPPC : AARCH64_INS_RETAASPPC)
+             : (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC);
+  ASSERT_TRUE(Return || (Frame->Itanium && !Frame->Itanium->CallSites.empty()));
+  const auto Begin =
+      Return ? Sign + Word : Frame->Itanium->CallSites.front().LandingPadVA;
+  const auto End = Return ? Begin + 2 * Word : Frame->CodeRange.End;
+  unsigned Matches = 0;
+  for (auto PC = Begin + Word; PC < End; PC += Word) {
+    ASSERT_TRUE(Read(PC));
+    if (I.Id != Consumer)
+      continue;
+    const auto &D = I.Raw->detail->aarch64;
+    ASSERT_EQ(D.op_count, 1u);
+    ASSERT_EQ(D.operands[0].type, AARCH64_OP_REG);
+    const auto Modifier = D.operands[0].reg;
+    ASSERT_TRUE(Read(PC - Word));
+    ASSERT_EQ(I.Id, AARCH64_INS_ADR);
+    const auto &Address = I.Raw->detail->aarch64;
+    ASSERT_EQ(Address.op_count, 2u);
+    EXPECT_EQ(Address.operands[0].reg, Modifier);
+    EXPECT_EQ(Address.operands[1].type, AARCH64_OP_IMM);
+    EXPECT_EQ(va_t(Address.operands[1].imm), Sign);
+    ++Matches;
+  }
+  EXPECT_EQ(Matches, 1u);
+}
+
+struct PersonalityObservations {
+  unsigned Images = 0;
+  unsigned Samples = 0;
+  unsigned PhasePairs = 0;
+};
+
+static void checkDarwinPersonality(const std::filesystem::path &Root,
+                                   const std::string &Path,
+                                   const ExceptionFunction &Frame, va_t Export,
+                                   va_t Interrupted, bool ObjectiveC,
+                                   bool LocalCatch,
+                                   PersonalityObservations &Total) {
+  ASSERT_TRUE(Frame.Itanium);
+  const auto &Table = *Frame.Itanium;
+  ASSERT_EQ(Table.CallSites.size(), kPersonalityCallSites);
+  const auto &Guard = Table.CallSites.front();
+  const auto &Resume = Table.CallSites.back();
+  ASSERT_NE(Guard.LandingPadVA, 0u);
+  ASSERT_EQ(Resume.LandingPadVA, 0u);
+  ASSERT_TRUE(Guard.GuardedRange.contains(Interrupted));
+  const auto Owner = Frame.CodeRange.Begin;
+  const auto Observer = (Root / kPersonalityDriver).string();
+  const auto Request = (Root / kPersonalityInput).string();
+  const auto Report = (Root / kPersonalityResult).string();
+  std::ofstream Plan(Request);
+  Plan << ObjectiveC << ' ' << LocalCatch << ' ' << Owner - Export << ' '
+       << int64_t(Table.LSDAVA) - int64_t(Owner) << ' '
+       << Guard.GuardedRange.Begin - Owner << ' '
+       << Guard.GuardedRange.End - Owner << ' ' << Guard.LandingPadVA - Owner
+       << ' ' << Resume.GuardedRange.Begin - Owner;
+  Plan.close();
+  ASSERT_TRUE(Plan);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(Observer,
+                                      {Observer, Path, Request, Report},
+                                      std::nullopt, {}, kSignalDeliverySeconds),
+            0);
+  unsigned Samples = 0, Pairs = 0;
+  std::ifstream Observed(Report);
+  ASSERT_TRUE(Observed >> Samples >> Pairs);
+  ASSERT_EQ(Samples, 1u + unsigned(ObjectiveC));
+  ASSERT_EQ(Pairs, Samples * (kPersonalityCallSites +
+                              unsigned(Guard.GuardedRange.size() >
+                                       NDArm64eInstructionAlignment)));
+  ASSERT_TRUE(std::filesystem::remove(Report));
+  ++Total.Images;
+  Total.Samples += Samples;
+  Total.PhasePairs += Pairs;
+}
+#endif
 
 static void verifySignalLanguageCleanup(
     bool ObjectiveC, LanguageFrame Kind = LanguageFrame::Call,
@@ -913,25 +1342,30 @@ static void verifySignalLanguageCleanup(
   std::ofstream(Source) << (NonCall      ? kSignalNonCallBody
                             : ObjectiveC ? kSignalObjCBody
                                          : kSignalScopeBody);
-  std::ofstream(DriverSource) << kSignalScopeDriver;
-  const auto *Override = std::getenv(kHeaderRoot);
-  const auto Include =
-      Override
-          ? std::string(Override)
-          : (std::filesystem::path(__FILE__).parent_path() / kSourceIncludes)
-                .lexically_normal()
-                .string();
-  llvm::SmallVector<llvm::StringRef> DriverArgs{
-      kCxxCompiler, kTargetFlag, kTarget,      kCXXStandard,   kOptimize,
-      kIncludeFlag, Include,     kAllWarnings, kExtraWarnings, kErrorWarnings,
-      DriverSource, kOutput,     Driver};
-  if (ObjectiveC)
-    DriverArgs.append({kObjCExceptions, kObjCFramework, kFoundation});
-  if (NonCall)
-    DriverArgs.push_back(kSignalNonCallDriver);
-  if (LocalCatch)
-    DriverArgs.push_back(kSignalLocalCatch);
-  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, DriverArgs), 0);
+  if (EntryPad) {
+    ASSERT_NO_FATAL_FAILURE(
+        test::buildDarwinFixtureDriver(Driver, kEntryPadCaller));
+  } else {
+    std::ofstream(DriverSource) << kSignalScopeDriver;
+    const auto *Override = std::getenv(kHeaderRoot);
+    const auto Include =
+        Override
+            ? std::string(Override)
+            : (std::filesystem::path(__FILE__).parent_path() / kSourceIncludes)
+                  .lexically_normal()
+                  .string();
+    llvm::SmallVector<llvm::StringRef> DriverArgs{
+        kCxxCompiler, kTargetFlag, kTarget,      kCXXStandard,   kOptimize,
+        kIncludeFlag, Include,     kAllWarnings, kExtraWarnings, kErrorWarnings,
+        DriverSource, kOutput,     Driver};
+    if (ObjectiveC)
+      DriverArgs.append({kObjCExceptions, kObjCFramework, kFoundation});
+    if (NonCall)
+      DriverArgs.push_back(kSignalNonCallDriver);
+    if (LocalCatch)
+      DriverArgs.push_back(kSignalLocalCatch);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, DriverArgs), 0);
+  }
   auto Reader = Loader::create(BinaryFormat::MachO);
   if (LiveLR) {
     auto DriverImage = Reader->load(Driver);
@@ -976,8 +1410,16 @@ static void verifySignalLanguageCleanup(
                  I.Register2 == NDArm64eSystemLRRegister;
         }));
   }
-  unsigned Delivered = 0, StructuralImages = 0;
+  unsigned Delivered = 0, StructuralImages = 0, RegisterImages = 0;
+  PersonalityObservations Observations;
   bool Execute = std::getenv(kExecute);
+  const bool ObservePersonality =
+      ExplicitPC && (Execute || std::getenv(kPersonalityNative));
+  const auto Observer = (Root / kPersonalityDriver).string();
+  if (ObservePersonality)
+    ASSERT_NO_FATAL_FAILURE(test::buildDarwinFixtureDriver(
+        Observer, kPersonalityBody,
+        {kLanguageFlag, kPersonalityLanguage, kObjCFramework, kFoundation}));
   if (Execute && ExplicitPC) {
     const int Probe =
         llvm::sys::ExecuteAndWait(Driver, {Driver, kSignalExplicitProbe},
@@ -985,8 +1427,13 @@ static void verifySignalLanguageCleanup(
     ASSERT_TRUE(Probe == 0 || Probe == kUnavailableCode);
     Execute = Probe == 0;
   }
-  for (const auto *Opt : {kNoOptimize, kOptimize}) {
+  llvm::SmallVector<std::pair<const char *, bool>, 3> Profiles{
+      {kNoOptimize, false}, {kOptimize, false}};
+  if (ExplicitPC)
+    Profiles.emplace_back(kOptimize, true);
+  for (const auto &[Opt, RegisterModifier] : Profiles) {
     SCOPED_TRACE(Opt);
+    SCOPED_TRACE(RegisterModifier);
     const auto Compile = [&](llvm::ArrayRef<llvm::StringRef> Args) {
       const auto *Compiler = ObjectiveC ? kCompiler : kCxxCompiler;
       llvm::SmallVector<llvm::StringRef> Command{Compiler, kTargetFlag, kTarget,
@@ -1022,6 +1469,8 @@ static void verifySignalLanguageCleanup(
         Command.push_back(kSignalPACMLR);
       if (ExplicitPC)
         Command.push_back(kSignalExplicitLR);
+      if (RegisterModifier)
+        Command.push_back(kRegisterSigningFlag);
       if (LocalCatch)
         Command.push_back(kSignalLocalCatch);
       if (ObjectiveC && llvm::is_contained(Args, kDylib))
@@ -1054,6 +1503,12 @@ static void verifySignalLanguageCleanup(
     if (Explicit)
       ASSERT_NE(SourceFrame->Itanium->LandingPadBase,
                 SourceFrame->CodeRange.Begin);
+    if (EntryPad) {
+      ASSERT_TRUE(
+          llvm::any_of(SourceFrame->Itanium->CallSites, [&](const auto &Site) {
+            return Site.LandingPadVA == Scope->Addr;
+          }));
+    }
     if (BackwardPad) {
       const auto &Table = *SourceFrame->Itanium;
       ASSERT_EQ(SourceFrame->ParseStatus, ExceptionParseStatus::Complete);
@@ -1173,14 +1628,30 @@ static void verifySignalLanguageCleanup(
           EXPECT_EQ(After.LandingPadVA, 0u);
       }
     }
-    // This coordinate-boundary fixture qualifies serialization only. Its
-    // entry-point handler deliberately has no executable cleanup contract.
     if (EntryPad) {
+      if (Execute) {
+        for (const auto &Path : {Input, Output}) {
+          SCOPED_TRACE(Path);
+          auto Verified = macho_signing::verifyStrict(Path);
+          ASSERT_FALSE(bool(Verified)) << llvm::toString(std::move(Verified));
+          ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Path}), 0);
+          ++Delivered;
+        }
+      }
       ASSERT_TRUE(std::filesystem::remove(Output));
       continue;
     }
     for (bool Installed : {false, true}) {
       const auto &Image = Installed ? *Published : *Original;
+      if (RegisterModifier) {
+        const bool KeyB = Signing == NDArm64eSignedIBWithCFAPC;
+        ASSERT_NO_FATAL_FAILURE(checkExplicitSigningAddress(
+            Image, Installed ? Patch->PatchedFunctions[0].OwnerVA : Scope->Addr,
+            KeyB, false));
+        ASSERT_NO_FATAL_FAILURE(checkExplicitSigningAddress(
+            Image, Installed ? Patch->PatchedFunctions[1].OwnerVA : Tick->Addr,
+            KeyB, true));
+      }
       enum class InterruptedSite { Leaf, Call, Prefix, NonCall };
       llvm::SmallVector<InterruptedSite> Modes{InterruptedSite::Leaf,
                                                InterruptedSite::Call,
@@ -1245,7 +1716,12 @@ static void verifySignalLanguageCleanup(
         if (PCSigning) {
           EXPECT_EQ(Plan->Frame.SigningPC, kSignalSigningOffset);
           ++StructuralImages;
+          RegisterImages += RegisterModifier;
         }
+        if (ObservePersonality)
+          ASSERT_NO_FATAL_FAILURE(checkDarwinPersonality(
+              Root, Installed ? Output : Input, *Frame, Public->Addr,
+              Owner + Site->Begin, ObjectiveC, LocalCatch, Observations));
         std::ofstream Out(Rules, std::ios::binary);
         const auto Write = [&](const auto &Value) {
           Out.write(reinterpret_cast<const char *>(&Value), sizeof(Value));
@@ -1278,13 +1754,22 @@ static void verifySignalLanguageCleanup(
     ASSERT_TRUE(std::filesystem::remove(Output));
   }
   ::testing::Test::RecordProperty(
-      NonCall ? (ObjectiveC ? kSignalNonCallObjCExceptions
-                            : kSignalNonCallExceptions)
-              : (ObjectiveC ? kSignalObjCExceptions : kSignalExceptions),
+      EntryPad  ? kEntryPadCleanups
+      : NonCall ? (ObjectiveC ? kSignalNonCallObjCExceptions
+                              : kSignalNonCallExceptions)
+                : (ObjectiveC ? kSignalObjCExceptions : kSignalExceptions),
       Delivered);
   if (PCSigning) {
     ::testing::Test::RecordProperty(kSignalPCImages, StructuralImages);
     ::testing::Test::RecordProperty(kSignalPCNative, Delivered);
+  }
+  if (ExplicitPC) {
+    ::testing::Test::RecordProperty(kRegisterSigningImages, RegisterImages);
+    ::testing::Test::RecordProperty(kPersonalityImages, Observations.Images);
+    ::testing::Test::RecordProperty(kPersonalityExceptions,
+                                    Observations.Samples);
+    ::testing::Test::RecordProperty(kPersonalityPhasePairs,
+                                    Observations.PhasePairs);
   }
 #else
   GTEST_SKIP() << kUnavailable;

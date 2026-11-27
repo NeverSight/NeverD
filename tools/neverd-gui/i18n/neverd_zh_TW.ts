@@ -1351,6 +1351,22 @@
         <source>Find conditional strings computed by functions</source>
         <translation>尋找函式在特定條件下計算出的字串</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>還原 Lua 原始碼…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>還原 Lua 原始碼並檢查函式原型</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>檢查 Python 程式碼與套件元件</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>還原 Python 原始碼…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11172,16 +11188,16 @@ Your previous graph is still available.</source>
         <translation>分析器(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit 和 Hunt</translation>
+        <source>All checks</source>
+        <translation>全部檢查</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>生命週期與初始化</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>邊界與格式字串</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11238,6 +11254,189 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1：%2（已掃描 %3，已略過 %4，結論未定 %5）</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>還原 Lua 原始碼</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>瀏覽…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>輸入檔案(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>依檔案辨識</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>上游 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>設定檔(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>還原</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>正在啟動分析工作程序…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>函式原型</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>原始碼</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>位元組碼對應</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>證據</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>複製原始碼</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>匯出原始碼…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>匯出報告…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>開啟 Lua 檔案</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>正在取消…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>匯出至新檔案</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua 原始碼 (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>分析工作程序已停止。</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>正在還原原始碼…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>此工作程序不支援 Lua 還原。</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>正在讀取檔案…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>函式原型 %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>原始行號 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>元件</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>進入點指令碼</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>正在匯出原生元件…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>資料夾…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>函式</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>函式 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>已匯出原生元件。</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>開啟 PyInstaller 資料夾</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>開啟 Python 檔案</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>在原生程式分析中開啟…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>此工作程序無法還原 Python 原始碼。</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python 原始碼 (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>還原 Python 原始碼</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>將原生元件儲存為新檔案</translation>
     </message>
 </context>
 </TS>

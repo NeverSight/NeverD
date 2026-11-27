@@ -5013,6 +5013,14 @@ TEST_F(JTE_X86_64, GuardReadsFlagsItsPredecessorCompareSet) {
     for (const neverd::JumpTable &Table : Refused.JumpTables)
       EXPECT_TRUE(Table.AnalysisOnly);
   }
+
+  // The `ja` block whose address .data holds is entered with any flags, so
+  // its guard bounds nothing and the eight slots are no proved table.
+  const std::vector<neverd::va_t> RootedSlots = Entries(4);
+  ASSERT_EQ(RootedSlots.size(), 8u);
+  const neverd::LowFunc Rooted = Build("jt_flags_rooted");
+  for (const neverd::JumpTable &Table : Rooted.JumpTables)
+    EXPECT_TRUE(Table.AnalysisOnly || Table.Targets != RootedSlots);
 }
 
 static fs::path scalarRetractedX64So() {
@@ -5166,6 +5174,163 @@ TEST_F(JTE_X86_64, AliasQueriesSpendOnlyTheirShareOfTheCandidateAccount) {
   EXPECT_EQ(Func.JumpTables.front().BaseAddr, Rodata->VA);
   EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
   EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+}
+
+static fs::path guardSessionX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_guard_session.o";
+}
+
+// A byte dispatch behind 24 controlling compares, the shape of pcre2's
+// pattern converter.  Each guard query session here may spend a match
+// allowance of 2000, which the session over every condition overruns, so
+// that session answers none of its queries.  The compare that names the
+// index, `cmpl $5, %ecx; ja` after `movzbl (%rdi), %ecx`, is then asked
+// alone and still bounds the six slots.
+TEST_F(JTE_X86_64, CompareQueriesOutliveAnUnfinishedGuardSession) {
+  auto ImageOrErr = neverd::loadBinary(guardSessionX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 6; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  const neverd::Symbol *Function = Image.findSymbol("jt_many_guards");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  Builder.setGuardQueryMatchEvidenceBudgetForTesting(2000);
+  const neverd::LowFunc Func =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Func.JumpTables.size(), 1u);
+  EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Func.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+}
+
+static fs::path laneIdentityX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_lane_identity.o";
+}
+
+// Each dispatch here sits behind 24 controlling compares, and each guard
+// query session may spend a match allowance of 2000, so only the queries of
+// the compare that names the index, asked alone, can bound a table.  The
+// index takes the compared lane after the guard: `movzbl %sil, %esi` after
+// `cmpb $5, %sil; ja` (a zero-extend into a temporary, a copy of it into
+// ESI, and ESI's own zero-extend into RSI, the shape of pcre2's
+// parse_regex), or `movl %r11d, %eax` after `cmpl $5, %r11d; ja`.  The
+// twins change the lane between the guard and the index (`incb %sil`,
+// `incl %r11d`): that index is no compared value, and their dispatches,
+// which would read the trailing zero word, stay unresolved.
+TEST_F(JTE_X86_64, IndexTakesTheComparedLaneAfterTheGuard) {
+  auto ImageOrErr = neverd::loadBinary(laneIdentityX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  // Four tables of six entries and a zero word each, in function order.
+  constexpr uint64_t TableBytes = 7 * 4;
+  for (const auto &[Name, TableIndex, Resolved] :
+       {std::tuple{"jt_lane_extend_after_guard", 0u, true},
+        std::tuple{"jt_lane_changed_after_guard", 1u, false},
+        std::tuple{"jt_copy_after_guard", 2u, true},
+        std::tuple{"jt_copy_changed_after_guard", 3u, false}}) {
+    SCOPED_TRACE(Name);
+    const neverd::va_t TableVA = Rodata->VA + TableIndex * TableBytes;
+    std::vector<neverd::va_t> Expected;
+    for (size_t Slot = 0; Slot < 6; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(TableVA + Slot * 4, 4);
+      ASSERT_NE(Bytes, nullptr);
+      int32_t Entry = 0;
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+      Expected.push_back(TableVA + static_cast<int64_t>(Entry));
+    }
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    Builder.setGuardQueryMatchEvidenceBudgetForTesting(2000);
+    const neverd::LowFunc Func =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    if (!Resolved) {
+      EXPECT_TRUE(Func.JumpTables.empty());
+      continue;
+    }
+    ASSERT_EQ(Func.JumpTables.size(), 1u);
+    EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+    EXPECT_EQ(Func.JumpTables.front().BaseAddr, TableVA);
+    EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
+static fs::path tokenLoopX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_token_loop.o";
+}
+
+// A lexer-shaped loop: 64 arms each compute the next token in %r13d with
+// their own arithmetic and return to one guarded dispatch on it, the shape
+// of bash's read_token (`lea -0x107(%r13), %eax; cmp $63, %eax; ja`, then
+// `movslq (%rcx,%rax,4)` from a `lea`'d table).  The token's whole value
+// merges 64 loop-carried definitions, and no proof of the dispatch needs
+// it: the target role's lexical pass follows only chains from the table
+// load's derived occurrences, the address proof asks only the order whose
+// dynamic operand is the authenticated index, and the guard's session over
+// the loop condition and the bound runs on a share of the candidate
+// account.  With a 14 Mi account the dispatch reads its 64 slots only when
+// both proofs skip the token (they needed 16 and 19.5 Mi); with 20 Mi a
+// guard session that finished on the whole account left the address and
+// domain proofs too little.
+TEST_F(JTE_X86_64, LoopCarriedTokenDispatchFitsASmallCandidateAccount) {
+  auto ImageOrErr = neverd::loadBinary(tokenLoopX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 64; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  const neverd::Symbol *Function = Image.findSymbol("jt_token_loop");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  for (const size_t Account : {size_t{14} << 20, size_t{20} << 20}) {
+    SCOPED_TRACE(Account);
+    neverd::CFGBuilder Builder;
+    Builder.setMaskFixedPointEvidenceBudgetForTesting(Account);
+    const neverd::LowFunc Func =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Func.JumpTables.size(), 1u);
+    EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+    EXPECT_EQ(Func.JumpTables.front().BaseAddr, Rodata->VA);
+    EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  }
 }
 
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;

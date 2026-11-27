@@ -135,6 +135,36 @@ def build(binary, output):
         staged.rename(output)
 
 
+def build_signing_address(binary, output):
+    if output.exists():
+        raise FileExistsError(output)
+    profile = CONFIG["signing_address"]
+    source = ROOT / CONFIG["guest_directory"]
+    with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+        scratch = Path(temporary).resolve()
+        staged = scratch / CONFIG["staging_directory"]
+        staged.mkdir()
+        exported = export_cases(binary, scratch, [profile["test"]], profile["environment"],
+                                profile["artifact_property"])
+        assembly = exported[profile["test"]]
+        report = json.loads((scratch / CONFIG["report"]).read_text())
+        case, = [case for suite in report["testsuites"] for case in suite["testsuite"]]
+        if int(case[profile["count_property"]]) != profile["bodies"]:
+            raise ValueError(CONFIG["bad_inventory"])
+        entry = scratch / CONFIG["entry_object"]
+        driver = scratch / (Path(CONFIG["guest_driver"]).stem + CONFIG["test_object_extension"])
+        obj = assembly.with_suffix(CONFIG["test_object_extension"])
+        compile_object(source / CONFIG["guest_entry"], entry)
+        compile_object(source / CONFIG["guest_driver"], driver, CONFIG["driver_flags"])
+        compile_object(assembly, obj)
+        name = profile["profile"]
+        guest = link_guest(staged / name, entry, driver, obj)
+        write_json(staged / CONFIG["manifest"], {"return_profile": name, "guests": {name: guest},
+                   "test_binary_sha256": digest(binary), profile["assembly_hash_property"]: digest(assembly),
+                   profile["inventory_property"]: profile["inventory"], profile["count_property"]: profile["bodies"]})
+        staged.rename(output)
+
+
 def build_control_guests(output, family):
     if output.exists():
         raise FileExistsError(output)
@@ -292,6 +322,16 @@ def run_native_ordered(guests, output):
     return first["exit_code"]
 
 
+def check_signing_address_inventory(manifest):
+    profile = CONFIG["signing_address"]
+    version = profile["inventory_property"]
+    if version in manifest and manifest[version] != profile["inventory"]:
+        raise ValueError(CONFIG["bad_inventory"])
+    count = profile["bodies"] if version in manifest else profile["legacy_bodies"]
+    if manifest.get(profile["count_property"]) != count:
+        raise ValueError(CONFIG["bad_inventory"])
+
+
 def run(model, guests, output, cursor=False, ordered=False, *, writeback=False):
     output.mkdir()
     version = subprocess.check_output([model, *CONFIG["version_flags"]], text=True, stderr=subprocess.STDOUT)
@@ -307,7 +347,12 @@ def run(model, guests, output, cursor=False, ordered=False, *, writeback=False):
     passed = policy["passed"]
     records_required = ([policy["control_record"].format(mode) for mode in range(policy["control_count"])]
                         if writeback else policy["control_records"])
-    if ordered:
+    publication = (not (cursor or ordered or writeback) and
+                   manifest.get("return_profile") == CONFIG["signing_address"]["profile"])
+    if publication:
+        names = [CONFIG["signing_address"]["profile"]]
+        check_signing_address_inventory(manifest)
+    elif ordered:
         profile = manifest.get("ordered_profile", policy["quadword_profile"])
         names = [label for label, _, _ in ordered_routes(policy, profile)]
         if profile == policy["quadword_profile"]:
@@ -324,7 +369,7 @@ def run(model, guests, output, cursor=False, ordered=False, *, writeback=False):
         raise ValueError(CONFIG["bad_inventory"])
     result = {"model_version": CONFIG["model_version"], "model_sha256": digest(model),
               "manifest_sha256": digest(guests / CONFIG["manifest"]), "observations": {}}
-    negative_case = names[0] if cursor or ordered or writeback else CONFIG["negative_case"]
+    negative_case = names[0] if publication or cursor or ordered or writeback else CONFIG["negative_case"]
     for label in [negative_case + CONFIG["negative_suffix"], *names]:
         name = label.removesuffix(CONFIG["negative_suffix"])
         negative = name != label
@@ -361,10 +406,11 @@ if __name__ == "__main__":
     commands = parser.add_subparsers(dest="command", required=True)
     options = CONFIG["commands"]
     link = commands.add_parser(options["build"])
+    signing_link = commands.add_parser(options["build_signing_address"])
     ordered_link = commands.add_parser(options["build_ordered"])
     native_link = commands.add_parser(options["build_native_ordered"])
     native_execute = commands.add_parser(options["run_native_ordered"])
-    for command in (link, ordered_link, native_link):
+    for command in (link, signing_link, ordered_link, native_link):
         command.add_argument(options["tests"], type=Path, required=True)
     cursor_link = commands.add_parser(options["build_cursor"])
     writeback_link = commands.add_parser(options["build_writeback"])
@@ -377,11 +423,13 @@ if __name__ == "__main__":
         command.add_argument(options["model"], type=Path, required=True)
     for command in (*executions, native_execute):
         command.add_argument(options["guests"], type=Path, required=True)
-    for command in (link, cursor_link, writeback_link, ordered_link, native_link, *executions, native_execute):
+    for command in (link, signing_link, cursor_link, writeback_link, ordered_link, native_link, *executions, native_execute):
         command.add_argument(options["output"], type=Path, required=True)
     args = parser.parse_args()
     if args.command == options["build"]:
         build(args.tests.resolve(), args.output.resolve())
+    elif args.command == options["build_signing_address"]:
+        build_signing_address(args.tests.resolve(), args.output.resolve())
     elif args.command in (options["build_ordered"], options["build_native_ordered"]):
         build_ordered(args.tests.resolve(), args.output.resolve(), native=args.command == options["build_native_ordered"])
     elif args.command == options["run_native_ordered"]:

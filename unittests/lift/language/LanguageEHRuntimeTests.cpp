@@ -197,6 +197,27 @@ TEST(LanguageRuntimeDetection, ExportsProvideTheSameLanguageEvidenceAsSymbols) {
   }
 }
 
+TEST(LanguageRuntimeDetection, OrdersDecoratedEvidenceAcrossNameTables) {
+  BinaryImage Img;
+  // The Go probe passes both secondary runtimes on its way to the export.
+  Img.Symbols.emplace_back().Name = "DW.ref.__imp____gnu_objc_personality_v0@8";
+  Img.Symbols.emplace_back().Name = "__gcc_personality_v0";
+  Img.Imports.emplace_back().Name = "__imp__rust_eh_personality@8";
+  Img.Exports.emplace_back().Name = "runtime.pclntab";
+  Img.Exports.emplace_back().Name = "objc_msgSend";
+
+  const auto Info = detectLanguageRuntime(Img);
+  EXPECT_TRUE(Info.IsMixed);
+  EXPECT_EQ(Info.Runtime, SourceLanguageRuntime::Go);
+  const std::vector<SourceLanguageRuntime> Secondary{
+      SourceLanguageRuntime::Rust, SourceLanguageRuntime::ObjectiveC};
+  const std::vector<std::string> Evidence{"go runtime module symbol",
+                                          "rust core/std symbol",
+                                          "gnu objective-c personality"};
+  EXPECT_EQ(Info.SecondaryRuntimes, Secondary);
+  EXPECT_EQ(Info.Evidence, Evidence);
+}
+
 TEST(LanguageRuntimeDetection, IdentifiesGoFromBuildInfoInDataNotText) {
   BinaryImage Img = makeImage();
   const char Banner[] = "\xff Go buildinf:";

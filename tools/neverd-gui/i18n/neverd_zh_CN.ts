@@ -1351,6 +1351,22 @@
         <source>Find conditional strings computed by functions</source>
         <translation>查找函数在特定条件下计算出的字符串</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>恢复 Lua 源码…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>恢复 Lua 源码并检查函数原型</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>检查 Python 代码和包组件</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>恢复 Python 源码…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11172,16 +11188,16 @@ Your previous graph is still available.</source>
         <translation>分析器(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit 和 Hunt</translation>
+        <source>All checks</source>
+        <translation>全部检查</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>生命周期与初始化</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>边界与格式字符串</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11238,6 +11254,189 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1：%2（已扫描 %3，已跳过 %4，结论未定 %5）</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>恢复 Lua 源码</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>输入文件(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>按文件识别</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>上游 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>配置(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>恢复</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>正在启动分析工作进程…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>函数原型</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>源码</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>字节码映射</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>证据</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>复制源码</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>导出源码…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>导出报告…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>打开 Lua 文件</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>正在取消…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>导出到新文件</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua 源码 (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>分析工作进程已停止。</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>正在恢复源码…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>此工作进程不支持 Lua 恢复。</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>正在读取文件…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>函数原型 %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>原始行号 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>组件</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>入口脚本</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>正在导出原生组件…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>文件夹…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>函数</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>函数 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>原生组件已导出。</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>打开 PyInstaller 文件夹</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>打开 Python 文件</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>在原生分析中打开…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>此工作进程不支持 Python 源码恢复。</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python 源码 (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>恢复 Python 源码</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>将原生组件保存到新文件</translation>
     </message>
 </context>
 </TS>
