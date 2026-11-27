@@ -218,7 +218,7 @@ same object must fail in `inplace` mode and preserve the previous output.
 The runner checks the function size, file offset, ISA marker and exact ISA
 revision in `.MIPS.abiflags`. Shrinking n64 images place code above 4 GiB.
 
-The cross-object programs exercise their own stack, function pointer, ELF
+The cross-object arithmetic programs exercise their own stack, function pointer, ELF
 global pointer, 64-bit data and arguments beyond the register argument area.
 The replacement and its classic helper each read the initialized 64-bit
 value through their own ISA's data or TLS relocations. The guest checks
@@ -238,6 +238,13 @@ own `GPREL16`, `SUB` and `HI16` or `LO16` relocations.
 | Extended branches to functions in another object | MIPS16 R2 on o32 |
 | Packed-byte DSP arithmetic | Classic R2 on all three ABIs |
 | MSA vector arithmetic | Classic R5 on all three ABIs |
+| ELF preinitialization, constructor and destructor arrays | Classic R2 on all three ABIs in both byte orders |
+
+The array fixture records the order of six calls. It runs preinitializers
+and constructors forwards and destructors backwards. The replacement is
+the middle constructor. Both placements must match direct links, retain
+the ABI-width function pointers in all three arrays and exit with the
+updated value. The n64 layout puts the functions above 4 GiB.
 
 The 52 two-block TLS configurations use a four-byte initialized word and a
 259-byte zero-filled array aligned to 256 bytes. Each program switches
@@ -249,8 +256,8 @@ memory size and 256-byte alignment of `PT_TLS`.
 The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
-build produces 1,148 executable images across 336 configurations, including
-812 patched images. The upgrade check uses r13 and r14 to build one original
+build produces 1,166 executable images across 342 configurations, including
+824 patched images. The upgrade check uses r13 and r14 to build one original
 per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.

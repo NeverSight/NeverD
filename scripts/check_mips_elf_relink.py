@@ -20,7 +20,7 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
-PRODUCT_VERSION = 6
+PRODUCT_VERSION = 7
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -158,6 +158,8 @@ def profiles(version=PRODUCT_VERSION):
             yield Profile(abi, little)
             if version == 1:
                 continue
+            if version >= 7:
+                yield Profile(abi, little, linkage="init-arrays")
             if version >= 4:
                 first_level = 1 if abi == "o32" else 3
                 last_level = 3 if version == 4 and abi == "o32" else 5
@@ -240,7 +242,13 @@ def layout(profile, section, *, split_entry=False):
     calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
             ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
     script = LAYOUT
-    if profile.tls_blocks:
+    if profile.linkage == "init-arrays":
+        arrays = []
+        for name in ("preinit_array", "init_array", "fini_array"):
+            arrays.append(f"  .{name} : {{ __{name}_start = .; KEEP(*(SORT_BY_INIT_PRIORITY(.{name}.*))) "
+                          f"KEEP(*(.{name})) __{name}_end = .; }}")
+        script = script.replace("  .data :", "\n".join(arrays) + "\n  .data :")
+    elif profile.tls_blocks:
         script = script.replace("  .data :", """  .tdata ALIGN(256) : { *(.tdata*) }
   __tls_image = ADDR(.tdata);
   .tbss ALIGN(256) (NOLOAD) : { *(.tbss*) }
@@ -506,6 +514,13 @@ def qualify(args):
 
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
+                if profile.linkage == "init-arrays":
+                    reference = build / "reference.elf"
+                    script = build / ("section.ld" if mode == "section" else "base.ld")
+                    run([args.lld, "-static", "-T", script, "-o", reference,
+                         *(build / ("updated.o" if obj == manifest["original"] else obj) for obj in objects)])
+                    if digest(reference) != digest(out / f"{mode}.elf"):
+                        raise ValueError(f"{name}: {mode} output differs from the direct link")
             if profile in classic_r2:
                 check_same_basename_inputs(args, build, out, manifest)
             if profile.linkage:
@@ -732,7 +747,7 @@ def execute(args):
     manifest = json.loads((root / "products.json").read_text())
     if "version" in manifest:
         version = manifest["version"]
-        if version not in (2, 3, 4, 5, 6):
+        if version not in (2, 3, 4, 5, 6, 7):
             raise ValueError("Unknown MIPS relink products version")
         hashes = manifest["profiles"]
     else:
