@@ -14,6 +14,7 @@
 #include "neverd/web/Error.h"
 #include "neverd/web/PackageArchive.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Path.h"
@@ -655,19 +656,14 @@ std::shared_ptr<const Index> indexed(ArrayRef<Input> Ins, const Options &Q,
   }
   return T;
 }
-json::Object run(std::vector<Input> Inputs, const Options &Q, Cancel Stop,
-                 bool Cacheable) {
+json::Object run(Input Root, const Options &Q, Cancel Stop, bool Cacheable) {
   Job J{Stop, Q.Items, Q.Work, Q.Member, Q.Expanded};
-  size_t Bytes = 0;
-  for (auto &I : Inputs) {
-    J.check(0);
-    Bytes += I.Bytes.size();
-  }
-  if (Bytes > limits::InputBytes)
-    throw Failure{"budget_exceeded", "input_bytes",
-                  "JVM input byte budget exceeded", 0};
-  auto &First = Inputs.front();
-  First.Hash = web::sha256(First.Bytes);
+  J.check(0);
+  size_t Bytes = Root.Bytes.size();
+  Root.Hash = web::sha256(Root.Bytes);
+  SmallVector<Input, 1> Inputs;
+  Inputs.reserve(1 + Q.Dependencies.size());
+  Inputs.push_back(std::move(Root));
   try {
     for (auto &D : Q.Dependencies) {
       J.check(0);
@@ -715,8 +711,7 @@ json::Object recover(StringRef Bytes, StringRef Name,
     if (Bytes.size() > limits::InputBytes)
       throw Failure{"budget_exceeded", "input_bytes",
                     "JVM input byte budget exceeded", 0};
-    return run({Input{Name.str(), Bytes.str(), {}}}, options(Options), Stop,
-               false);
+    return run({Name.str(), Bytes.str(), {}}, options(Options), Stop, false);
   } catch (const Failure &F) {
     auto R = report();
     failed(R, F);
@@ -737,9 +732,8 @@ std::string recoverFileJSON(StringRef Path, StringRef OptionsJSON,
       option("JVM options must be a JSON object");
     auto Q = options(*Parsed->getAsObject());
     auto B = InputFile::read(Path, limits::InputBytes);
-    return serialize(
-        run({Input{sys::path::filename(Path).str(), std::move(B), {}}}, Q, Stop,
-            true));
+    return serialize(run({sys::path::filename(Path).str(), std::move(B), {}}, Q,
+                         Stop, true));
   } catch (const Failure &F) {
     auto R = report();
     failed(R, F);
