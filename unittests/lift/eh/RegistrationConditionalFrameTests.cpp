@@ -26,6 +26,7 @@
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
 
 #include <cstdint>
@@ -1623,6 +1624,41 @@ TEST(RegistrationConditionalFrame,
         **States, [](int32_t Level) { return Level == 1; });
     ASSERT_TRUE(Ranges);
     EXPECT_EQ(Ranges->size(), 1u);
+  }
+}
+
+TEST(RegistrationConditionalFrame, XCPT4DisplayKeepsWaitInItsTryLevel) {
+  auto Image = loadXCPT4(true);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  Options.OnlyFunctionEntries.insert(0x401580);
+  const auto Result = Pipeline().run(*Image, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.LowFuncs.size(), 1u);
+  ASSERT_EQ(Result.MedFuncs.size(), 1u);
+  // The final FWAIT before main resets the try level can deliver a pending
+  // x87 exception. Both source views must keep it under the scalar filter.
+  constexpr va_t Wait = 0x401679;
+  const auto &Low = Result.LowFuncs.front();
+  ASSERT_TRUE(llvm::any_of(Low.Blocks, [&](const LowBlock &Block) {
+    return llvm::any_of(Block.Ops, [&](const LowOp &Op) {
+      return Op.Addr == Wait && Op.Opcode == NdOp::INTRINSIC &&
+             Op.NumInputs == 1 &&
+             Op.Inputs[0] == NdVar::cst(uint64_t(Intrinsic::X87Wait), 2);
+    });
+  }));
+  for (const auto *States :
+       {&Low.RegistrationStates, &Result.MedFuncs.front().RegistrationStates}) {
+    ASSERT_TRUE(*States && (*States)->Display);
+    const auto &Stretches = (*States)->Display->Stretches;
+    const auto It = llvm::find_if(Stretches, [&](const auto &Stretch) {
+      return Stretch.Range.contains(Wait);
+    });
+    ASSERT_NE(It, Stretches.end());
+    EXPECT_EQ(It->Levels, (std::vector<int32_t>{1}));
+    EXPECT_FALSE(It->Quiet);
   }
 }
 

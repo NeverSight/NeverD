@@ -43,6 +43,11 @@ predicate on a wider argument at compile time.
 
 ## Open
 
+- In the original vs2019 PE32 `xcpt4`, the `FWAIT` at `0x401679` can
+  deliver a pending x87 exception before `main` resets its try level.
+  The LowIR and MedIR display ranges keep that instruction under filter 1.
+  The full native proof still requires the live import targets and the
+  effects of the preceding formatted-output calls.
 - `e3743938d5` admits no corpus function yet. Per function with the final
   engine on four vs2019 x64 xcpt4 corpus builds (`fh3/gs/o2`,
   `fh3/no-gs/o2`, `fh3/gs/o0`, `fh4/no-gs/o2`), each build has 24 functions
