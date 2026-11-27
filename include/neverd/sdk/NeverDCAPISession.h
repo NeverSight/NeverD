@@ -80,9 +80,10 @@ NEVERD_API int neverd_session_load_cancellable(neverd_session_t Sess,
 NEVERD_API const char *neverd_identify_json(const char *Path);
 
 /// Recover a standalone Lua artifact offline. Profile is auto (NULL), puc,
-/// luajit, luajit-1.0, luajit-1.1, luau-upstream, or luau-0.659. The optional stop probe is synchronous. The owned
-/// language-recovery-v1 report includes failures, source and byte mappings.
-/// Free it with neverd_free_string(). NULL means the report could not be built.
+/// luajit, luajit-1.0, luajit-1.1, luau-upstream, or luau-0.659. The optional
+/// stop probe is synchronous. The owned language-recovery-v1 report includes
+/// failures, source and byte mappings. Free it with neverd_free_string(). NULL
+/// means the report could not be built.
 NEVERD_API const char *neverd_lua_recover_json_v1(const char *Path,
                                                   const char *Profile,
                                                   neverd_cancel_probe_fn Stop,
