@@ -2639,6 +2639,37 @@ at the function entry using LSDA coordinates. Five image cases checked
 displacement bounds, literal ownership or refusal to overwrite a signed input.
 [Complete suite replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45876433371)
 
+### Native checks for displacement limits, pointer slots and entry cleanups
+
+An ordinary CFG entry inside an arm64e function can receive a different
+register state from the function's public entry. The publisher selects the
+verified native register body for such a function. A dyld rebase to the second
+instruction of a two-instruction leaf exercises this case. Publication checks
+the emitted body against the source while the old interior address remains
+available to the image's pointer slots.
+
+A first publication can need a new executable segment when a data segment
+precedes `__LINKEDIT`. The installer reserves header space for the segment
+and replacement signature, taking account of the load commands it can
+reclaim. A nonempty data-in-code table retains its command. The returned
+literal fixture exercises Apple's default linker with no data-in-code table.
+
+The lifted-image tests execute the encoders' outermost LDR, ADR and ADRP
+displacements. They also call an image with read-only and writable dyld
+slots, compare the bytes behind a returned literal address, and exercise
+the signed input before and after a rejected publication. The signed-unwind
+test throws a C++ exception through an explicit LPStart frame with its
+landing pad at the function entry. A trace records the inner cleanup and
+the caller's destructor before the typed catch, in both the Apple-linked
+and published dylibs at O0 and O2.
+
+Enable `NEVERD_ARM64E_LIFTED_NATIVE=1` and `NEVERD_ARM64E_ASYNC_NATIVE=1`
+to execute these checks on an Apple Silicon Mac. For these six tests the
+default arm64 caller loads an arm64e dylib. On a host that passes the
+system arm64e startup probe, `NEVERD_ARM64E_EXECUTABLE_PROFILE=system`
+also builds the caller as arm64e and exercises the signed function-pointer
+field through its declared type.
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,

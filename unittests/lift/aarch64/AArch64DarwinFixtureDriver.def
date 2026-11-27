@@ -1,0 +1,21 @@
+//===- AArch64DarwinFixtureDriver.def - Native test host profiles ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+DARWIN_DRIVER_TEXT(Compiler, "/usr/bin/clang++")
+DARWIN_DRIVER_TEXT(TargetFlag, "-target")
+DARWIN_DRIVER_TEXT(HostTarget, "arm64-apple-macosx15.0")
+DARWIN_DRIVER_TEXT(NativeTarget, "arm64e-apple-macosx15.0")
+DARWIN_DRIVER_TEXT(Profile, "NEVERD_ARM64E_EXECUTABLE_PROFILE")
+DARWIN_DRIVER_TEXT(SystemProfile, "system")
+DARWIN_DRIVER_TEXT(Standard, "-std=c++17")
+DARWIN_DRIVER_TEXT(Optimize, "-O2")
+DARWIN_DRIVER_TEXT(Output, "-o")
+DARWIN_DRIVER_TEXT(SourceName, "caller.cpp")
+DARWIN_DRIVER_TEXT(Architecture, "native_driver_arch")
+DARWIN_DRIVER_TEXT(HostName, "arm64")
+DARWIN_DRIVER_TEXT(NativeName, "arm64e")
+
+#undef DARWIN_DRIVER_TEXT
