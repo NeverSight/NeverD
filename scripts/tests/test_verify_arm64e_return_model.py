@@ -98,6 +98,12 @@ class ModelProfileTests(unittest.TestCase):
         version, count = policy["inventory_property"], policy["count_property"]
         correct = {"return_profile": family["profile"], version: family["inventory"], count: family["bodies"]}
         model.check_signing_address_inventory(correct)
+        for label, bodies in family["archived_inventories"].items():
+            model.check_signing_address_inventory(correct | {version: label, count: bodies})
+            with self.assertRaises(ValueError):
+                model.check_signing_address_inventory(correct | {version: label})
+            with self.assertRaises(ValueError):
+                model.check_signing_address_inventory(correct | {count: bodies})
         for wrong in ({version: policy["inventory"]}, {count: policy["bodies"]}, {version: None}):
             with self.subTest(wrong=wrong), self.assertRaises(ValueError):
                 model.check_signing_address_inventory(correct | wrong)

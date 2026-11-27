@@ -162,6 +162,13 @@ bool machODeadSigningScratch(Decoder &Decode, const MachOLiftedSource &Source,
          SigningAddressUse::Local;
 }
 
+bool machOObservesSigningAddress(Decoder &Decode,
+                                 const MachOLiftedSource &Source, va_t Start,
+                                 va_t After, aarch64_reg Reg) {
+  return signingAddressUse(Decode, Source, Start, After, Reg, false) ==
+         SigningAddressUse::Observable;
+}
+
 // Use the ISA's PC-relative encoding of the same operation. It uses the same
 // key, LR and SP and leaves the caller's numeric register untouched.
 std::optional<uint32_t> machOPCRelativeAuthentication(Intrinsic Op, va_t PC,
