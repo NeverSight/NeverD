@@ -97,6 +97,10 @@ public:
   void setOriginalImageStorageForSource(bool Enabled) {
     OriginalImageStorageForSource = Enabled;
   }
+  /// The native image loader relocates local label addresses in pointer slots.
+  void setRelocatedDispatchLabels(bool Enabled) {
+    RelocatedDispatchLabels = Enabled;
+  }
   void setAnalystSourceProjection(bool Enabled) {
     AnalystSourceProjection = Enabled;
   }
@@ -210,6 +214,7 @@ private:
   bool AnalysisRecoveryForSource = false;
   bool PreserveUnknownSourceValues = false;
   bool OriginalImageStorageForSource = false;
+  bool RelocatedDispatchLabels = false;
   bool usesOriginalImageStorage() const;
   bool isOriginalImagePageAddress(const MedVar &Value) const;
   bool isOriginalImagePageBase(uint64_t Page) const;
