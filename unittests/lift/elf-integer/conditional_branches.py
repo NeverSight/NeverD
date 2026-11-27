@@ -2,7 +2,9 @@
 """Execute PowerPC conditional calls and local CTR transfers before and after projection."""
 
 import argparse
+import json
 from pathlib import Path
+import re
 import subprocess
 from tempfile import TemporaryDirectory
 
@@ -63,6 +65,31 @@ def execute(path, profile, descriptors, names):
                     raise AssertionError((profile, name, value, choice, actual, expected))
 
 
+def check_graph(neverd, image, name):
+    command = [neverd, "cfg", "--func", name, image]
+    graph = json.loads(subprocess.check_output([*command, "--json"], text=True))
+    branch, = [node for node in graph["nodes"]
+               if node["disasm"][-1].split(": ", 1)[1].split()[0].endswith("ctr")]
+    skip = int(branch["end"], 16)
+    after = sorted((int(node["start"], 16), node["id"]) for node in graph["nodes"]
+                   if int(node["start"], 16) >= skip)
+    if after[0][0] != skip or len(after) != (3 if name == "ctr_select" else 2):
+        raise AssertionError((name, after))
+    expected = [(idx, "true") for _, idx in after[1:]]
+    expected.append((after[0][1], "false"))
+    if name == "ctr_join":
+        expected.append((after[0][1], "true"))
+    observed = [(edge["to"], edge["type"]) for edge in graph["edges"]
+                if edge["from"] == branch["id"]]
+    if sorted(observed) != sorted(expected):
+        raise AssertionError((name, observed, expected))
+    dot = subprocess.check_output([*command, "--dot"], text=True)
+    edges = re.findall(rf"bb{branch['id']} -> bb(\d+) \[color=(\w+)\]", dot)
+    colors = [(str(idx), "green" if role == "true" else "red") for idx, role in expected]
+    if sorted(edges) != sorted(colors):
+        raise AssertionError((name, edges, colors))
+
+
 def check(args, work, profile):
     descriptors = "64" in profile and args.ppc64_abi == "elfv1"
     flags = [f"-mabi={args.ppc64_abi}"] if "64" in profile else []
@@ -70,6 +97,8 @@ def check(args, work, profile):
     compile_elf(args, work, profile, SOURCE, original, FUNCTIONS[0], extra_flags=flags)
     execute(original, profile, descriptors, FUNCTIONS)
     print(profile, "original passed", flush=True)
+    for name in ("ctr_jump", "ctr_join", "ctr_select"):
+        check_graph(args.neverd, original, name)
     with original.open("rb") as stream:
         old_code = ELFFile(stream).get_section_by_name(".text")["sh_addr"]
     placement = image_base_option(args.ld)

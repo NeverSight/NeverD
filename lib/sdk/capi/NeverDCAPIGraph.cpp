@@ -18,13 +18,18 @@
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/analysis/SBFFunctionBody.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cassert>
 #include <map>
 #include <optional>
 #include <set>
@@ -83,6 +88,55 @@ bool isTakenSuccessor(const LowFunc &F, const LowBlock &B, size_t Index) {
     return F.Blocks[Succ].StartAddr == static_cast<va_t>(It->Inputs[0].Offset);
   }
   return Index == 0;
+}
+
+std::optional<va_t> guardedCTRSkip(const LowBlock &Block) {
+  if (Block.InstructionBoundaries.empty())
+    return std::nullopt;
+  const auto &Last = Block.InstructionBoundaries.back();
+  if (Last.Control != LowInstructionControl::Branch ||
+      !hasLowInstructionControlFlag(Last.ControlFlags,
+                                    LowInstructionControlFlag::Indirect) ||
+      !hasLowInstructionControlFlag(
+          Last.ControlFlags, LowInstructionControlFlag::InstructionGuard))
+    return std::nullopt;
+  // InstructionGuard authenticates one COND_BR that skips the transfer.
+  const auto Ops = llvm::ArrayRef(Block.Ops).slice(Last.FirstOp, Last.OpCount);
+  const auto Guard = llvm::find_if(
+      Ops, [](const LowOp &Op) { return Op.Opcode == NdOp::COND_BR; });
+  assert(Guard != Ops.end());
+  return Guard->Inputs[0].Offset;
+}
+
+void forEachNativeCFGEdge(
+    const LowFunc &F, Arch A,
+    llvm::function_ref<void(int, int, std::optional<bool>)> Emit) {
+  const bool PPC = isPowerPC(A);
+  llvm::SmallDenseMap<va_t, llvm::ArrayRef<va_t>> TakenTargets;
+  if (PPC)
+    for (const JumpTable &JT : F.JumpTables)
+      if (JT.OriginalAddressSelector && !JT.AnalysisOnly)
+        TakenTargets.try_emplace(JT.InsnAddr, JT.Targets);
+  for (const LowBlock &Block : F.Blocks) {
+    if (const auto Skip = PPC ? guardedCTRSkip(Block) : std::nullopt) {
+      const va_t Site = Block.InstructionBoundaries.back().Address;
+      const bool SkipAlsoTaken =
+          llvm::is_contained(TakenTargets.lookup(Site), *Skip);
+      for (int Succ : Block.Succs) {
+        const bool Fallthrough = F.Blocks[Succ].StartAddr == *Skip;
+        if (Fallthrough)
+          Emit(Block.Id, Succ, false);
+        if (!Fallthrough || SkipAlsoTaken)
+          Emit(Block.Id, Succ, true);
+      }
+      continue;
+    }
+    for (size_t I = 0; I < Block.Succs.size(); ++I)
+      Emit(Block.Id, Block.Succs[I],
+           Block.Succs.size() == 2
+               ? std::optional{isTakenSuccessor(F, Block, I)}
+               : std::nullopt);
+  }
 }
 } // namespace
 
@@ -350,18 +404,15 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
     }
     Node["disasm"] = std::move(DisasmLines);
     Nodes.push_back(std::move(Node));
-
-    for (size_t I = 0; I < B.Succs.size(); ++I) {
-      llvm::json::Object Edge;
-      Edge["from"] = B.Id;
-      Edge["to"] = B.Succs[I];
-      if (B.Succs.size() == 2)
-        Edge["type"] = isTakenSuccessor(*F, B, I) ? "true" : "false";
-      else
-        Edge["type"] = "unconditional";
-      Edges.push_back(std::move(Edge));
-    }
   }
+  forEachNativeCFGEdge(
+      *F, S->Img.Arch, [&](int From, int To, std::optional<bool> Taken) {
+        llvm::json::Object Edge;
+        Edge["from"] = From;
+        Edge["to"] = To;
+        Edge["type"] = Taken ? (*Taken ? "true" : "false") : "unconditional";
+        Edges.push_back(std::move(Edge));
+      });
 
   llvm::json::Object Root;
   Root["name"] = jsonSafeText(F->Name);
@@ -488,16 +539,14 @@ const char *neverd_cfg_dot(neverd_session_t Sess, const char *InputPath,
   for (const auto &B : Target->Blocks)
     OS << "  bb" << B.Id << " [label=\"BB" << B.Id << " (0x"
        << llvm::utohexstr(B.StartAddr) << ")\"];\n";
-  for (const auto &B : Target->Blocks)
-    for (size_t J = 0; J < B.Succs.size(); ++J) {
-      std::string Color = Styled ? "\"#569cd6\"" : "blue";
-      if (B.Succs.size() == 2)
-        Color = isTakenSuccessor(*Target, B, J)
-                    ? (Styled ? "\"#4ec9b0\"" : "green")
-                    : (Styled ? "\"#f44747\"" : "red");
-      OS << "  bb" << B.Id << " -> bb" << B.Succs[J] << " [color=" << Color
-         << "];\n";
-    }
+  forEachNativeCFGEdge(
+      *Target, R.Img.Arch, [&](int From, int To, std::optional<bool> Taken) {
+        const char *Color = Styled ? "\"#569cd6\"" : "blue";
+        if (Taken)
+          Color = *Taken ? (Styled ? "\"#4ec9b0\"" : "green")
+                         : (Styled ? "\"#f44747\"" : "red");
+        OS << "  bb" << From << " -> bb" << To << " [color=" << Color << "];\n";
+      });
   OS << "}\n";
   return dupStr(Buf);
 }

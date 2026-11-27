@@ -135,6 +135,8 @@ targets, including cases where the fallthrough is also a taken target.
 An `isel` can choose between local label addresses before `mtctr`. Both
 addresses are checked after alignment, independently of the condition on
 `bcctr`. An unknown selectable address leaves the target set unresolved.
+The native CFG marks each taken CTR edge as true and the fallthrough as false.
+When both reach one block, JSON and DOT show both edges.
 An untyped register callback forwards the integer argument registers on the
 taken edge. ELFv1 descriptor and ELFv2 global-entry checks apply there.
 [Power ISA, Book I, Branch Processor](https://openpowerfoundation.org/specifications/isa/).
