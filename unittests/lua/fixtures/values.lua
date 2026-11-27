@@ -1,0 +1,3 @@
+local a, b = ...
+local c = a + b
+return c, false, "Lua\000\255", nil

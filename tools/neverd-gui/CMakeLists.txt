@@ -310,6 +310,17 @@ if(BUILD_TESTING)
   add_test(NAME NeverDGuiAppearance COMMAND neverd-gui-appearance-tests)
   set_tests_properties(NeverDGuiAppearance PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+  if(NEVERD_WORKER_REAL_ENGINE_TESTS AND TARGET neverd)
+    qt_add_executable(neverd-gui-lua-tests tests/LuaRecoveryDialogTests.cpp)
+    target_link_libraries(neverd-gui-lua-tests PRIVATE neverd_gui_app Qt6::Test)
+    set_target_properties(neverd-gui-lua-tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_compile_definitions(neverd-gui-lua-tests PRIVATE
+      TEST_LUA_CLI="$<TARGET_FILE:neverd>" TEST_LUA_WORKER="$<TARGET_FILE:neverd-worker>"
+      TEST_LUA_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/lua/fixtures/dumps.json")
+    add_dependencies(neverd-gui-lua-tests neverd neverd-worker)
+    add_test(NAME NeverDGuiLuaRecovery COMMAND neverd-gui-lua-tests)
+    set_tests_properties(NeverDGuiLuaRecovery PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+  endif()
   qt_add_executable(neverd-gui-safety-scan-tests tests/SafetyScanDialogTests.cpp)
   target_link_libraries(neverd-gui-safety-scan-tests PRIVATE neverd_gui_app Qt6::Test)
   set_target_properties(neverd-gui-safety-scan-tests PROPERTIES WIN32_EXECUTABLE FALSE)

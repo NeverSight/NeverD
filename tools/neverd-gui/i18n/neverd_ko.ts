@@ -1351,6 +1351,14 @@
         <source>Find conditional strings computed by functions</source>
         <translation>함수에서 계산되는 조건부 문자열 찾기</translation>
     </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Lua 소스 복원…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Lua 소스를 복원하고 함수 프로토타입 검사</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11238,6 +11246,133 @@ Your previous graph is still available.</source>
     <message>
         <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
         <translation>%1: %2(검사 %3개, 건너뜀 %4개, 판정 불가 %5개)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LuaRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Lua 소스 복원</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>찾아보기…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>입력 파일(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>파일에서 감지</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>공식 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>프로필(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>복원</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>취소</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>분석 작업자 시작 중…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>함수 프로토타입</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>소스</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>바이트코드 매핑</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>근거</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>소스 복사</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>소스 내보내기…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>보고서 내보내기…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Lua 파일 열기</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>취소 중…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>새 파일로 내보내기</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua 소스 (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>분석 작업자가 중지되었습니다.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>소스 복원 중…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>이 작업자는 Lua 복원을 지원하지 않습니다.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>파일 읽는 중…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>취소됨</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>함수 프로토타입 %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>원본 줄 %1</translation>
     </message>
 </context>
 </TS>
