@@ -1204,6 +1204,7 @@ TEST(RegistrationCRTFrame,
 TEST(RegistrationCRTFrame, XCPT4TypeInfoInitializesAnAlignedPrivateListHead) {
   enum class Input {
     Current,
+    Retargeted,
     WrongProvider,
     DelayImport,
     Unaligned,
@@ -1217,10 +1218,11 @@ TEST(RegistrationCRTFrame, XCPT4TypeInfoInitializesAnAlignedPrivateListHead) {
   for (bool Selected : {false, true}) {
     auto Original = loadXCPT4(Selected);
     ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
-    for (auto Kind : {Input::Current, Input::WrongProvider, Input::DelayImport,
-                      Input::Unaligned, Input::MissingOutputFixup,
-                      Input::MissingSlotFixup, Input::OverlappingImport,
-                      Input::Shared, Input::Discardable, Input::ReadOnly}) {
+    for (auto Kind :
+         {Input::Current, Input::Retargeted, Input::WrongProvider,
+          Input::DelayImport, Input::Unaligned, Input::MissingOutputFixup,
+          Input::MissingSlotFixup, Input::OverlappingImport, Input::Shared,
+          Input::Discardable, Input::ReadOnly}) {
       SCOPED_TRACE(::testing::Message() << Selected << '/' << int(Kind));
       BinaryImage Image = *Original;
       const auto Slot = llvm::find_if(
@@ -1240,11 +1242,24 @@ TEST(RegistrationCRTFrame, XCPT4TypeInfoInitializesAnAlignedPrivateListHead) {
                           [=](const auto &R) { return R.Address == Field; }),
             1u);
       }
-      if (Kind == Input::Unaligned) {
+      if (Kind == Input::Retargeted || Kind == Input::Unaligned) {
+        const uint32_t Address =
+            Kind == Input::Retargeted ? 0x40b200 : 0x40b201;
         auto *Field = const_cast<uint8_t *>(Image.readVA(0x407275, 4));
         ASSERT_TRUE(Field);
         ASSERT_EQ(readLE<uint32_t>(Field), 0x40b218u);
-        writeLE<uint32_t>(Field, 0x40b21c);
+        writeLE<uint32_t>(Field, Address);
+        const auto It = Image.DataAddressRelocOperands.find(0x407275);
+        ASSERT_NE(It, Image.DataAddressRelocOperands.end());
+        auto &Reloc = It->second;
+        ASSERT_EQ(Reloc.TargetVA, 0x40b218u);
+        Reloc.EncodedValue = Address;
+        Reloc.TargetVA = Address;
+        if (Reloc.TargetOwnerVA == 0x40b218)
+          Reloc.TargetOwnerVA = Address;
+        size_t ExtentWork = 0;
+        ASSERT_TRUE(registration_abi::hasSEHCallbackImageMemory(
+            Image, Address, 8, true, ExtentWork));
       }
       if (Kind == Input::OverlappingImport) {
         auto Extra = *Slot;
@@ -1263,9 +1278,10 @@ TEST(RegistrationCRTFrame, XCPT4TypeInfoInitializesAnAlignedPrivateListHead) {
       size_t Work = 0;
       const auto Stack =
           RegistrationCallCalleeIndex(Image, &Work).stackContract(0x407274);
-      EXPECT_EQ(bool(Stack && Stack->PreservesImportBindings),
-                Kind == Input::Current);
-      if (Kind == Input::Current) {
+      const bool ValidCall =
+          Kind == Input::Current || Kind == Input::Retargeted;
+      EXPECT_EQ(bool(Stack && Stack->PreservesImportBindings), ValidCall);
+      if (ValidCall) {
         ASSERT_TRUE(Stack);
         EXPECT_EQ(Stack->StackPopBytes, 0u);
         EXPECT_EQ(Stack->RequiredImports, (std::vector<va_t>{0x408020}));
