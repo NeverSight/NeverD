@@ -1,6 +1,6 @@
 **语言**: [English](../README.md) | [简体中文](README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
+<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
 
 [← NeverD 项目](project.md)
 
@@ -40,7 +40,7 @@
 | [macOS/iOS 进程环境](darwin-emulation.md) | Mach-O 启动、设备与模拟器平台、Darwin 服务与页规则 |
 | [macOS HVF](macos-hvf.md) | 宿主同架构硬件执行、签名权限、打包与验证 |
 | [Windows 驱动模拟](driver-emulation.md) | 有界 x64 WDM/KMDF 生命周期、请求、硬件场景、SEH、PnP 子集、后端选择及限制 |
-| [内存安全审计与猎取](memory-safety.md) | 堆对象生命周期与拷贝越界分析：各格式身份契约、汇/源目录、判定、预算与 JSON 模式 |
+| [内存安全扫描](memory-safety.md) | 堆对象生命周期与拷贝越界分析：各格式身份契约、汇/源目录、判定、预算与 JSON 模式 |
 | [进程插件 SDK（英文）](../process-plugin-sdk.md) | 独立 Python 辅助库、协议和独立示例 |
 | [Tools 层（英文）](../tools-layer.md) | 精确插件调用、冻结的使用方步骤和操作记录 |
 | [GUI 进程插件（英文）](../gui-plugins.md) | 管理器、菜单位置、任务结果和进程提供程序协议 |

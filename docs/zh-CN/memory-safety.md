@@ -2,7 +2,7 @@
 
 [← 文档索引](README.md)
 
-# 内存安全审计与猎取
+# 内存安全扫描
 
 运行 `neverd scan <binary>` 可同时检查两项。用 `--analyzer=audit` 或 `--analyzer=hunt` 可选择单项。[统一扫描与报告格式（英文）](../memory-safety-scan.md)。
 
@@ -10,8 +10,8 @@ NeverD 对已加载二进制做两类内存安全分析，并以结构化 JSON �
 
 | 轨道 | 命令 | 报告内容 |
 |------|------|----------|
-| **审计（Audit）** | `neverd audit <binary>` | 堆对象生命周期缺陷及未初始化局部栈读取 |
-| **猎取（Hunt）** | `neverd hunt <binary>` | 危险拷贝越界，并给出符号证据与候选输入值；仅在存在完整 `process-input-v1` 计划时为 `replayable=true` |
+| **审计（Audit）** | `neverd scan <binary> --analyzer=audit` | 堆对象生命周期缺陷及未初始化局部栈读取 |
+| **猎取（Hunt）** | `neverd scan <binary> --analyzer=hunt` | 危险拷贝越界，并给出符号证据与候选输入值；仅在存在完整 `process-input-v1` 计划时为 `replayable=true` |
 
 引擎复用 NeverD 自研符号执行与位向量求解器生成见证并确认可达性；不依赖外部求解器、虚拟机或容器。
 
@@ -75,7 +75,7 @@ PDB 过程签名用于区分有返回值的分配函数与 `void` 释放函数�
 可用规格文件扩展或覆盖目录：
 
 ```bash
-neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
+neverd scan --sinks extra_sinks.json --sources extra_sources.json app
 ```
 
 ```json
@@ -181,32 +181,27 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 切片，以及深度或摘要预算耗尽，也会让尚未证明的攻击者控制保持 UNKNOWN；已证明的
 事实继续有效，分析不会臆造传播。
 
-报告级计数器按发现计数，而不是按函数或路径计数。`control_reachable` 统计
-`status=REACHABLE`；`attacker_reachable` 是其中还满足
-`attacker_control=TAINTED` 的子集。`reachability_unknown` 与 `unreachable` 统计
-另外两种控制状态。它们不同于按裁决统计的 `safe`、`unsafe` 与 `unknown`。
-
 ---
 
 <!-- i18n-section: budgets -->
 
 ## 预算、输出与绑定
 
-猎取探索与求解器受预算约束（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。过程间分析有两个独立限制：`max_call_depth` 限制从已知入口出发的内部调用边数，`max_summary_iterations` 限制攻击者控制不动点轮数。默认值分别为 64 条边，以及有效深度上限加一轮。预算耗尽按上文所述闭合失败。耗尽 `max_call_depth` 可使尚未到达的函数保持 `status=UNKNOWN`；耗尽 `max_summary_iterations` 不会抹去结构见证，因此 `status=REACHABLE` 可以与 `attacker_control=UNKNOWN`、`budget_hit=true` 同时存在。两条命令都打印 JSON，并尊重 `-o`。退出码：SAFE 为 `0`，UNSAFE 为 `2`，UNKNOWN 或出错为 `1`。
+猎取探索与求解器受预算约束（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。过程间分析有两个独立限制：`max_call_depth` 限制从已知入口出发的内部调用边数，`max_summary_iterations` 限制攻击者控制不动点轮数。默认值分别为 64 条边，以及有效深度上限加一轮。预算耗尽按上文所述闭合失败。耗尽 `max_call_depth` 可使尚未到达的函数保持 `status=UNKNOWN`；耗尽 `max_summary_iterations` 不会抹去结构见证，因此 `status=REACHABLE` 可以与 `attacker_control=UNKNOWN`、`budget_hit=true` 同时存在。`neverd scan` 输出 JSON，可用 `-o` 指定输出文件。退出码：SAFE 为 `0`，UNSAFE 为 `2`，UNKNOWN 或出错为 `1`。
 
 每个公共入口都以 0 选择引擎默认值：
 
 | 接口 | 控制深度 | 攻击者摘要 |
 |------|----------|------------|
-| CLI（`audit` 与 `hunt`） | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| CLI（`scan`） | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
 | C（`neverd_safety_options`） | `max_call_depth` | `max_summary_iterations` |
-| Python（`Session.audit()` / `Session.hunt()`） | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+| Python（`Session.scan()`） | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
 
 C 调用方应将 `neverd_safety_options` 清零，并设置
 `struct_size=sizeof(neverd_safety_options)`；旧结构体大小仍采用默认值。Python 在调用
 C API 前将两项都校验为无符号 32 位整数。
 
-同一分析也可通过 C API（`neverd_session_audit_json` / `neverd_session_hunt_json`，带版本化 `neverd_safety_options`）和 Python SDK（`Session.audit()` / `Session.hunt()`）使用。
+C 调用 `neverd_session_scan_json`，Python 调用 `Session.scan()`。C 调用方通过 `neverd_scan_options.analysis` 设置分析预算。
 
 <!-- i18n-section: finding-schema -->
 

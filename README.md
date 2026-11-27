@@ -184,8 +184,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -382,8 +380,7 @@ setting as `neverd_session_set_arm_function_mode()`.
 | `funcs` | Discovered functions |
 | `disasm` | Disassemble (`--func` name or hex) |
 | `sym-explore` | Bounded native LowIR path exploration (`--func`; JSON output) |
-| `audit` | Heap-lifetime defects and uninitialized local stack reads (JSON) |
-| `hunt` | Dangerous-copy overflows with symbolic witnesses and additive `process-input-v1` replay evidence when a complete plan is available (JSON schema v1) |
+| `scan` | [Check object lifetime, initialization, bounds and format strings (JSON)](docs/memory-safety-scan.md) |
 | `hex` | Hex dump at an address |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG optional) |
 | `xrefs` | Cross-references |

@@ -79,7 +79,7 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 
 ---
 
-## 4. 記憶體安全稽核與獵取
+## 4. 記憶體安全掃描
 
 對已提升的二進位做堆積生命週期缺陷（洩漏、重複釋放、釋放後使用）與危險拷貝越界分析，並以結構化 JSON 報告；對已證明的越界給出有界求解器模型。分析跑在格式無關的 IR 與共享身分檢視上，因此 **PE、ELF、Mach-O 是同等目標**，並複用自研符號執行與位向量求解器——不依賴外部求解器或容器。
 
@@ -90,14 +90,12 @@ EIP-3540 為 Stagnant，兩者都不冒充已定案 mainnet 行為。host ABI �
 | 可達性證據 | 從已知進入點出發的控制狀態、獨立的攻擊者控制固定點，以及精確的根／呼叫鏈見證 |
 | 身分契約 | 依格式解析匯（PE IAT、ELF PLT、Mach-O dyld bind）以及 PDB / DWARF / MAP 名稱來源 |
 
-**狀態：** PE、ELF、Mach-O 的 Phase 1 已實作。P0 包含封閉世界堆積生命週期與危險複製分析；schema v1 的增量證據可為精確字面環境值及第一次受支援的 `read(0)` 系列標準輸入消耗提供 `process-input-v1` 重播，其他輸入類型保持不可重播並附帶原因。P1 已涵蓋堆疊／全域越界、未初始化區域讀取與格式字串。未知或只能部分套用的呼叫效果保持 UNKNOWN。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全稽核與獵取](memory-safety.md)。
+**狀態：** PE、ELF、Mach-O 的 Phase 1 已實作。P0 包含封閉世界堆積生命週期與危險複製分析；schema v1 的增量證據可為精確字面環境值及第一次受支援的 `read(0)` 系列標準輸入消耗提供 `process-input-v1` 重播，其他輸入類型保持不可重播並附帶原因。P1 已涵蓋堆疊／全域越界、未初始化區域讀取與格式字串。未知或只能部分套用的呼叫效果保持 UNKNOWN。判定與身分覆蓋由 [`unittests/safety`](../../unittests/safety) 以及在每個主機強制執行 PE/ELF/Mach-O × x86-64/AArch64 六單元 fixture 矩陣的端到端 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) 鎖定。詳見 [記憶體安全掃描](memory-safety.md)。
 
 目前程序間切片在不改變獨立 `verdict` 的前提下，為 schema v1 加入
 `reachability.status` 與 `reachability.attacker_control`。它報告
 `application`、`image` 或 `export` 根、精確內部呼叫鏈，以及閉合失敗的 UNKNOWN
-狀態。`max_call_depth` 與 `max_summary_iterations` 預算可透過 C API、兩條 CLI 命令和
-兩個 Python 方法設定。因此，
-`control_reachable` 與 `attacker_reachable` 是可達性計數，而非另一套裁決計數。
+狀態。`max_call_depth` 與 `max_summary_iterations` 預算可透過 C API、`neverd scan` 與 `Session.scan()` 設定。
 
 P2 分析面與計畫採用帶明確狀態的版本化邊界：
 
@@ -134,5 +132,5 @@ Phase 1 和目前已知進入點可達性切片已有迴歸覆蓋；保守 EVM �
 | EVM 傳統 decode/lifting | 至 Fusaka 已完成；有迴歸測試覆蓋 |
 | EVM 原始碼重建 | 持續進行 — 只回報有證據的保守結果 |
 | Solana eBPF（SBF）反編譯 | 已完成 — v0-v4、C、Rust 與 LLVM；有迴歸測試覆蓋 |
-| 記憶體安全稽核與獵取 | Phase 1 與已知進入點可達性切片已完成；`lowir-concolic-v1` 與 Darwin `binary-sanitizer-v1` 已作為實驗性能力交付；原生 `process-replay-v1` 仍位於故障關閉的 Phase 0 轉接器後且不可用 |
+| 記憶體安全掃描 | Phase 1 與已知進入點可達性切片已完成；`lowir-concolic-v1` 與 Darwin `binary-sanitizer-v1` 已作為實驗性能力交付；原生 `process-replay-v1` 仍位於故障關閉的 Phase 0 轉接器後且不可用 |
 | 引擎與產品加固 | 持續進行 |

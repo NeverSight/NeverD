@@ -258,8 +258,6 @@ extern llvm::cl::SubCommand X87CapabilitiesCmd;
 extern llvm::cl::SubCommand EmulateProcessCmd;
 extern llvm::cl::SubCommand UnpackCmd;
 extern llvm::cl::SubCommand ScanCmd;
-extern llvm::cl::SubCommand AuditCmd;
-extern llvm::cl::SubCommand HuntCmd;
 extern llvm::cl::SubCommand ConcolicCmd;
 extern llvm::cl::SubCommand MobileCmd;
 extern llvm::cl::SubCommand WebCmd;
@@ -459,7 +457,7 @@ extern llvm::cl::opt<unsigned> SymbolicMaxSteps;
 extern llvm::cl::opt<unsigned> SymbolicMaxBlockVisits;
 extern llvm::cl::opt<bool> SymbolicExpressions;
 
-// Safety (audit / hunt).
+// Memory-safety scan.
 extern llvm::cl::opt<std::string> SafetySinks;
 extern llvm::cl::opt<std::string> SafetySources;
 extern llvm::cl::opt<neverd_scan_analyzers> ScanAnalyzers;
@@ -780,9 +778,7 @@ int runPaths(neverd_session_t Sess);
 int runCallTree(neverd_session_t Sess);
 int runSymbolicExplore(neverd_session_t Sess);
 
-// NeverDCmdSafety.cpp — memory-safety audit and hunt over the lifted IR.
-int runAudit(neverd_session_t Sess);
-int runHunt(neverd_session_t Sess);
+// NeverDCmdSafety.cpp — native memory-safety scan.
 int runScan(neverd_session_t Sess);
 
 // NeverDCmdConcolic.cpp — dedicated versioned JSON command.  It owns its

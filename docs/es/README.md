@@ -1,6 +1,6 @@
 **Idiomas**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
+<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
 
 [← Proyecto NeverD](project.md)
 
@@ -40,7 +40,7 @@ Las guías en inglés se encuentran directamente en `docs/`. Las traducciones se
 | [Entornos de procesos macOS/iOS](darwin-emulation.md) | Inicio Mach-O, plataformas de dispositivo y simulador, servicios Darwin y reglas de páginas |
 | [macOS HVF](macos-hvf.md) | Ejecución por hardware con la ISA del host, permisos de firma, empaquetado y validación |
 | [Emulación de controladores de Windows](driver-emulation.md) | Ciclo WDM/KMDF x64 acotado, solicitudes, escenarios de hardware, SEH, subconjuntos PnP, selección del motor y límites |
-| [Auditoría y caza de seguridad de memoria](memory-safety.md) | Análisis de vida del montón y desbordamiento de copia: contrato de identidad por formato, catálogo de sumideros/fuentes, veredictos, presupuestos y esquema JSON |
+| [Análisis de seguridad de memoria](memory-safety.md) | Análisis de vida del montón y desbordamiento de copia: contrato de identidad por formato, catálogo de sumideros/fuentes, veredictos, presupuestos y esquema JSON |
 | [SDK de plugins de proceso (inglés)](../process-plugin-sdk.md) | Ayudante Python autónomo, protocolo y ejemplos independientes |
 | [Capa Tools (inglés)](../tools-layer.md) | Llamadas exactas, pasos congelados del consumidor y registros de operaciones |
 | [Plugins de proceso GUI (inglés)](../gui-plugins.md) | Administrador, ubicación de menús, resultados y protocolo de proveedores |

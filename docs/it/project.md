@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: bf4dc5471e255b39d6426197c1dd6187b093c30b9a1d9a94ccf0859b3a979810 -->
 
 <div align="center">
 
@@ -182,8 +182,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -343,8 +341,7 @@ Ripetere l’opzione per altri ingressi ambigui, usando `:arm` quando opportuno.
 | `funcs` | Funzioni scoperte |
 | `disasm` | Disassembla (`--func` nome o hex) |
 | `sym-explore` | Esplorazione limitata dei percorsi LowIR nativi (`--func`; output JSON) |
-| `audit` | Difetti di durata degli oggetti heap e letture non inizializzate dello stack locale (JSON) |
-| `hunt` | Overflow di copie pericolose con testimoni simbolici e prove aggiuntive di riproduzione `process-input-v1` quando è disponibile un piano completo (schema JSON v1) |
+| `scan` | [Verifica durata degli oggetti, inizializzazione, limiti e stringhe di formato (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex dump a un indirizzo |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG opzionale) |
 | `xrefs` | Cross-reference |

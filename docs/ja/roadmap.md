@@ -81,7 +81,7 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 
 ---
 
-## 4. メモリ安全性の監査とハント
+## 4. メモリ安全性スキャン
 
 リフト済みバイナリに対してヒープ寿命の欠陥（リーク、二重解放、解放後使用）と危険なコピー越境を解析し、構造化 JSON で報告します。証明された越境には有界なソルバモデルを付けます。解析は形式に依存しない IR と共有の識別ビュー上で動くため **PE、ELF、Mach-O は同等の対象**であり、自前の記号実行とビットベクトルソルバを再利用します。外部ソルバやコンテナはありません。
 
@@ -92,15 +92,13 @@ EIP-3540 は Stagnant であり、確定 mainnet behavior として扱いませ�
 | 到達可能性証拠 | 既知エントリからの制御状態、独立した攻撃者制御の固定点、正確なルート／呼び出し鎖の証人 |
 | 識別契約 | 形式ごとのシンク解決（PE IAT、ELF PLT、Mach-O dyld bind）と PDB / DWARF / MAP の名前出所 |
 
-**状態：** PE、ELF、Mach-O の Phase 1 は実装済みです。P0 はヒープ寿命と危険なコピーの閉世界解析、および正確なリテラル環境値と最初の標準入力消費に対する schema v1 の追加的な `process-input-v1` 再生証拠を含みます。その他の入力種別は理由付きで再生不能のままです。P1 はスタック／グローバル越境、未初期化ローカル読み、書式文字列をカバーします。未知または部分的にしか適用できない呼び出し効果は UNKNOWN のままです。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性の監査とハント](memory-safety.md)。
+**状態：** PE、ELF、Mach-O の Phase 1 は実装済みです。P0 はヒープ寿命と危険なコピーの閉世界解析、および正確なリテラル環境値と最初の標準入力消費に対する schema v1 の追加的な `process-input-v1` 再生証拠を含みます。その他の入力種別は理由付きで再生不能のままです。P1 はスタック／グローバル越境、未初期化ローカル読み、書式文字列をカバーします。未知または部分的にしか適用できない呼び出し効果は UNKNOWN のままです。判定と識別の被覆は [`unittests/safety`](../../unittests/safety) と、全ホストで必須の PE/ELF/Mach-O × x86-64/AArch64 6 セル fixture 行列を実行するエンドツーエンド [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) で固定。詳細は [メモリ安全性スキャン](memory-safety.md)。
 
 現在の手続き間スライスは、独立した `verdict` を変えずに schema v1 へ
 `reachability.status` と `reachability.attacker_control` を追加します。
 `application`、`image`、`export` のルート、正確な内部呼び出し鎖、fail-closed な
 UNKNOWN 状態を報告します。`max_call_depth` と `max_summary_iterations` の予算は
-C API、両 CLI コマンド、両 Python メソッドから設定できます。したがって
-`control_reachable` と
-`attacker_reachable` は到達可能性の集計であり、別の判定集計ではありません。
+C API、`neverd scan`、`Session.scan()`から設定できます。
 
 P2 の解析面と計画は、明示的な状態を持つバージョン付き境界を使用します。
 
@@ -137,5 +135,5 @@ Phase 1 と現在の既知エントリ到達可能性スライスは回帰試験
 | EVM legacy decode/lifting | Fusaka まで完了；回帰試験済み |
 | EVM source reconstruction | 継続 — evidence-backed かつ保守的 |
 | Solana eBPF（SBF）逆コンパイル | 完了 — v0-v4、C、Rust、LLVM；回帰試験済み |
-| メモリ安全性の監査とハント | Phase 1 と既知エントリ到達可能性スライスを完了；`lowir-concolic-v1` と Darwin の `binary-sanitizer-v1` は実験的；ネイティブ `process-replay-v1` は fail-closed な Phase 0 アダプタの背後で未提供 |
+| メモリ安全性スキャン | Phase 1 と既知エントリ到達可能性スライスを完了；`lowir-concolic-v1` と Darwin の `binary-sanitizer-v1` は実験的；ネイティブ `process-replay-v1` は fail-closed な Phase 0 アダプタの背後で未提供 |
 | エンジンとプロダクト強化 | 継続 |

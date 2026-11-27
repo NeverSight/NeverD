@@ -11188,16 +11188,16 @@ Your previous graph is still available.</source>
         <translation>解析器(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit と Hunt</translation>
+        <source>All checks</source>
+        <translation>すべての検査</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>オブジェクトの寿命と初期化</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>境界と書式文字列</translation>
     </message>
     <message>
         <source>Findings</source>

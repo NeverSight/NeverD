@@ -11224,16 +11224,16 @@ Your previous graph is still available.</translation>
         <translation>&amp;Analyzers</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit and Hunt</translation>
+        <source>All checks</source>
+        <translation>All checks</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Lifetime and initialization</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Bounds and format strings</translation>
     </message>
     <message>
         <source>Findings</source>

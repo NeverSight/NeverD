@@ -1,6 +1,6 @@
 **Languages**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
+<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
 
 [← NeverD プロジェクト](project.md)
 
@@ -40,7 +40,7 @@
 | [macOS/iOS プロセス環境](darwin-emulation.md) | Mach-O 起動、デバイスとシミュレータの区別、Darwin サービスとページ規則 |
 | [macOS HVF](macos-hvf.md) | ホストと同じ ISA のハードウェア実行、署名権限、パッケージと検証 |
 | [Windows ドライバーエミュレーション](driver-emulation.md) | 有界 x64 WDM/KMDF ライフサイクル、要求、ハードウェアシナリオ、SEH、PnP サブセット、バックエンド選択と制限 |
-| [メモリ安全性の監査とハント](memory-safety.md) | ヒープ寿命とコピー越境解析：形式ごとの識別契約、シンク／ソースカタログ、判定、予算、JSON スキーマ |
+| [メモリ安全性スキャン](memory-safety.md) | ヒープ寿命とコピー越境解析：形式ごとの識別契約、シンク／ソースカタログ、判定、予算、JSON スキーマ |
 | [プロセスプラグイン SDK（英語）](../process-plugin-sdk.md) | 独立した Python ヘルパー、プロトコルとサンプル |
 | [Tools 層（英語）](../tools-layer.md) | 厳密なプラグイン呼び出し、固定された利用側ステップと操作記録 |
 | [GUI プロセスプラグイン（英語）](../gui-plugins.md) | マネージャー、メニュー配置、タスク結果とプロセスプロトコル |

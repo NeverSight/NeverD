@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: bf4dc5471e255b39d6426197c1dd6187b093c30b9a1d9a94ccf0859b3a979810 -->
 
 <div align="center">
 
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -342,8 +340,7 @@ Repita la opción para otras entradas ambiguas, usando `:arm` cuando corresponda
 | `funcs` | Funciones descubiertas |
 | `disasm` | Desensamblar (`--func` nombre o hex) |
 | `sym-explore` | Exploración acotada de rutas LowIR nativas (`--func`; salida JSON) |
-| `audit` | Defectos del ciclo de vida del heap y lecturas de pila local sin inicializar (JSON) |
-| `hunt` | Desbordamientos de copias peligrosas con testigos simbólicos y pruebas adicionales de reproducción `process-input-v1` cuando existe un plan completo (esquema JSON v1) |
+| `scan` | [Comprueba la vida útil de los objetos, la inicialización, los límites y las cadenas de formato (JSON)](../memory-safety-scan.md) |
 | `hex` | Volcado hex en una dirección |
 | `cfg` / `callgraph` | CFG / grafo de llamadas (JSON; DOT/SVG opcional) |
 | `xrefs` | Referencias cruzadas |

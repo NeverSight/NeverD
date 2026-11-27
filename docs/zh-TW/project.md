@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: bf4dc5471e255b39d6426197c1dd6187b093c30b9a1d9a94ccf0859b3a979810 -->
 
 <div align="center">
 
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -342,8 +340,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 發現的函式 |
 | `disasm` | 反組譯（`--func` 名稱或十六進位） |
 | `sym-explore` | 有界原生 LowIR 路徑探索（`--func`；JSON 輸出） |
-| `audit` | 堆積物件生命週期缺陷及未初始化的區域堆疊讀取（JSON） |
-| `hunt` | 危險複製越界與符號見證；存在完整方案時附加 `process-input-v1` 重播證據（JSON schema v1） |
+| `scan` | [檢查物件生命週期、初始化、存取邊界與格式字串，輸出 JSON](../memory-safety-scan.md) |
 | `hex` | 依位址十六進位傾印 |
 | `cfg` / `callgraph` | CFG / 呼叫圖（JSON；可選 DOT/SVG） |
 | `xrefs` | 交叉參照 |
