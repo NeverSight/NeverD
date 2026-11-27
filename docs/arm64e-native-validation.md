@@ -2630,8 +2630,8 @@ resumptions and eight deliveries in each of the two cleanup tests.
 [Release verification](evidence/arm64e-published-frames-2026-11-27.json) ·
 [Native frame and binding run](https://github.com/gmh5225/test_mac_intel/actions/runs/45875705163)
 
-The complete signed-unwind and lifted-image replay passed all 222
-cases on each runner. Of 141 asynchronous unwind cases, 108
+Before the six native checks below were added, both runners passed all 222
+signed-unwind and lifted-image cases. Of 141 unwind cases, 108
 recorded a positive native execution counter. Of 81 lifted-image cases,
 76 recorded one. The 32 explicit two-modifier signing cases checked
 128 image layouts per host. One other unwind case verified a landing pad
@@ -2669,6 +2669,14 @@ default arm64 caller loads an arm64e dylib. On a host that passes the
 system arm64e startup probe, `NEVERD_ARM64E_EXECUTABLE_PROFILE=system`
 also builds the caller as arm64e and exercises the signed function-pointer
 field through its declared type.
+
+The six Release cases passed on an M4 Max and in arm64e processes on both
+free Apple M1 runners. Each runner passed all 222 signed-unwind and image
+cases with zero skips. All 81 image cases and 109 of 141 unwind cases
+recorded native execution. The other 32 exercised layouts for explicit
+two-modifier return signing and still require hardware execution.
+[Per-case results](evidence/arm64e-native-publication-boundaries-2026-11-27.json) ·
+[Release Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/45927721870)
 
 ### Native x1 runner qualification
 
