@@ -227,6 +227,9 @@ orders of `section` and `inplace`. Their exit statuses progress from 25 to
 37 to 49. Each second output must match its independent complete LLD link.
 Reusing the first generation's input objects must preserve the last
 successful output and report that they do not reproduce the executable.
+For each of the six, both modes also replace the input at a pathname with
+spaces and Unicode characters. The guest runner receives those executables
+after a stale retry verifies their bytes and the host file permissions.
 
 Six classic R2 configurations also carry 16 MiB of initialized read-only
 data and 64 MiB of BSS. The guest reads both ends of each object, writes the
