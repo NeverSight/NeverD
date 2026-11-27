@@ -63,7 +63,7 @@ bool canBindMachOLanguageTable(const BinaryImage &Image,
 /// Physical SP addressing and simultaneous signing-PC/source-address uses need
 /// their machine register body before LLVM resolves an address-valued PHI.
 bool needsMachONativeRegisterBody(const MedFunc &Function,
-                                  const BinaryImage &Image);
+                                  const BinaryImage &Image, const LowFunc *CFG);
 
 /// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
 /// SP accesses, ordinary indexed/writeback memory, scalar FP/NEON data
@@ -90,6 +90,8 @@ struct MachOSigningConsumer {
   /// Rematerialize the input value in its own register after a fallthrough
   /// authentication when all Darwin scratch registers are live.
   bool RestoreSource = false;
+  /// Each predecessor sets the register before its own numeric address.
+  bool PrepareAtSource = false;
 
   unsigned insertedWords() const {
     return ModifierRegister ? 1 + restoreWords() : 0;
@@ -108,6 +110,11 @@ struct MachOLiftedSourceAddress {
   /// Inserting a word here preserves the body's local PC-relative encodings.
   bool CanExpand = true;
   std::optional<MachOSigningConsumer> Authentication;
+
+  va_t modifierSite() const {
+    return Authentication->PrepareAtSource ? Instruction
+                                           : Authentication->Instruction;
+  }
 
   bool insertsSigningModifier() const {
     return Authentication && Authentication->ModifierRegister.has_value();

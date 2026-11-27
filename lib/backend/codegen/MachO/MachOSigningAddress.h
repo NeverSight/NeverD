@@ -47,6 +47,35 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
                                         aarch64_reg Register,
                                         llvm::ArrayRef<va_t> Consumers = {});
 
+llvm::ArrayRef<aarch64_reg> machOSigningScratchRegisters();
+bool machODeadSigningScratch(Decoder &Decode, const MachOLiftedSource &Source,
+                             va_t Start, va_t At, aarch64_reg Reg);
+std::optional<uint32_t> machOPCRelativeAuthentication(Intrinsic Op, va_t PC,
+                                                      va_t Sign);
+
+enum class MachOAuthenticationForm { None, Register, PCRelative };
+
+/// The second modifier of an explicit AUT or authenticated return.
+inline MachOAuthenticationForm machOPCAuthenticationForm(uint32_t Bits) {
+  enum class Field { PC, X15, PCRel, Rn, Rm };
+  const auto Form = [Bits](Field F) {
+    if (F == Field::PCRel)
+      return MachOAuthenticationForm::PCRelative;
+    if (F == Field::Rn || (F == Field::Rm && (Bits & kAArch64PAuthLRRegMask) !=
+                                                 kAArch64PAuthLRRegMask))
+      return MachOAuthenticationForm::Register;
+    return MachOAuthenticationForm::None;
+  };
+#define NEVERD_A64_PAUTH_LR_RETURN(Mask, Encoding, Id, Mod2)                   \
+  if ((Bits & Mask) == Encoding)                                               \
+    return Form(Field::Mod2);
+#define NEVERD_A64_PAUTH_LR_INSTRUCTION(Mask, Encoding, Id, Pointer, Mod,      \
+                                        Mod2)                                  \
+  NEVERD_A64_PAUTH_LR_RETURN(Mask, Encoding, Id, Mod2)
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def"
+  return MachOAuthenticationForm::None;
+}
+
 /// Check both register operands and the address of a published restore pair.
 bool machORestoresSigningAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes,
                                  va_t PC, unsigned Register, va_t Target);

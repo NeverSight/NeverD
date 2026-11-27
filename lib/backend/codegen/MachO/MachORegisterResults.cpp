@@ -16,6 +16,7 @@
 #include "MachOEmbeddedDispatch.h"
 #include "MachOPageAddress.h"
 #include "MachOSigningAddress.h"
+#include "MachOSigningJoins.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -741,6 +742,18 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     OriginalControl = CFGBuilder().build(Image, Decode, Start);
     ControlFlow = &*OriginalControl;
   }
+  // Rebuild incoming edges before classifying the address producers. A
+  // previously published join can already use a PC-relative consumer.
+  if (!ControlFlow && Revalidate) {
+    for (size_t Offset = 0; Offset + Word <= Source->Bytes.size();
+         Offset += Word)
+      if (const auto Bits = readLE<uint32_t>(Source->Bytes.data() + Offset);
+          machOPCAuthenticationForm(Bits) != MachOAuthenticationForm::None) {
+        OriginalControl = CFGBuilder().build(Image, Decode, Start);
+        ControlFlow = &*OriginalControl;
+        break;
+      }
+  }
   llvm::SmallVector<MachODataInCodeRange> EffectiveData;
   if (ControlFlow) {
     auto Layout = machOEmbeddedDispatch(Image, Decode, *Source, *ControlFlow);
@@ -757,6 +770,11 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     }
   }
 
+  auto Joins = ControlFlow
+                   ? machOSigningJoins(Image, Decode, *Source, *ControlFlow)
+                   : MachOSigningJoins{};
+  if (Joins.Unresolved)
+    return std::nullopt;
   RegisterBody Body;
   std::optional<MachOAuthenticationReplacement> NextAuthentication;
   struct RestoredAddress {
@@ -1110,6 +1128,17 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
                       ? machOSigningAddress(Decode, *Source, Start,
                                             AuthProducer, Target, Reg)
                       : MachOSigningAddress{};
+      const auto Joined = Joins.Addresses.find(PC);
+      if (Joined != Joins.Addresses.end())
+        Sign = Joined->second;
+      if (Sign.Use == MachOSigningAddress::None)
+        for (auto SigningWord : Joins.RetainedSigningWords)
+          if (retainedSigningWord(Image, Functions, Start, Target,
+                                  SigningWord)) {
+            Sign.Use = MachOSigningAddress::Observable;
+            Sign.InstalledSigner = SigningWord;
+            break;
+          }
       if (Restored && Restored->PC == PC && Restored->Target == Target) {
         Sign.Use = MachOSigningAddress::Observable;
         Sign.InstalledSigner = Restored->SigningWord;
@@ -1128,7 +1157,16 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         // Changing a register consumer to an immediate requires its sole
         // reaching definition. A branch or exceptional entry at the AUT
         // keeps the incoming register meaningful.
-        if (Sign.Authentication) {
+        if (Joined != Joins.Addresses.end() && Sign.Authentication) {
+          const auto &A = *Sign.Authentication;
+          if (A.Consumer.PrepareAtSource)
+            OS << kAddress
+               << cs_reg_name(Decode.getHandle(),
+                              AARCH64_REG_X0 + *A.Consumer.ModifierRegister)
+               << kSeparator << kLocal << (A.Signer - Start) / Word << '\n';
+          else
+            References.push_back({A.Consumer.Instruction, A.Signer, 0});
+        } else if (Sign.Authentication) {
           if (!ControlFlow) {
             OriginalControl = CFGBuilder().build(Image, Decode, Start);
             ControlFlow = &*OriginalControl;
@@ -1221,8 +1259,12 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     if (KeepEncoding || SIMDData || PCSigning || PACM || Literal) {
       const bool Replace =
           NextAuthentication && NextAuthentication->Consumer.Instruction == PC;
+      const auto Joined = Joins.Consumers.find(PC);
       OS << kInstructionWord
-         << (Replace ? NextAuthentication->Encoding : Encoding) << '\n';
+         << (Joined != Joins.Consumers.end() ? Joined->second
+             : Replace                       ? NextAuthentication->Encoding
+                                             : Encoding)
+         << '\n';
       if (Replace && NextAuthentication->Consumer.RestoreSource) {
         // Fallthrough has already authenticated LR. Start the next unwind
         // row here, but keep branches to the next instruction past the pair.
@@ -1319,7 +1361,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     for (const auto &Site : Sites)
       if (Site.insertsSigningModifier())
         Insertions.append(Site.Authentication->insertedWords(),
-                          Site.Authentication->Instruction);
+                          Site.modifierSite());
+    llvm::sort(Insertions);
     for (const auto &[From, To, Branch] : References) {
       const auto [Low, High] = std::minmax(From, To);
       const auto Inside = llvm::make_range(Before(Low), Before(High));
@@ -1599,8 +1642,9 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     if (Entry == Functions->end())
       return invalidBody();
     const auto Body = Bodies.find(Entry->second);
-    if (Body == Bodies.end() || (!Body->second.HasStackIndex &&
-                                 !Body->second.HasObservableSigningAddress))
+    if (Body == Bodies.end() ||
+        (!Body->second.HasStackIndex && !Body->second.HasSigningAddress &&
+         !Body->second.HasObservableSigningAddress))
       return invalidBody();
     Select(Entry->second);
   }

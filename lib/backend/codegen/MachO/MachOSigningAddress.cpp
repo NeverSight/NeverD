@@ -10,8 +10,10 @@
 #include "MachOSigningAddress.h"
 
 #include "MachOPageAddress.h"
+#include "MachOSigningJoins.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
@@ -148,10 +150,22 @@ SigningAddressUse signingAddressUse(Decoder &Decode,
   return Observed ? SigningAddressUse::Observable : SigningAddressUse::Local;
 }
 
+} // namespace
+
+llvm::ArrayRef<aarch64_reg> machOSigningScratchRegisters() {
+  return SigningScratchRegisters;
+}
+
+bool machODeadSigningScratch(Decoder &Decode, const MachOLiftedSource &Source,
+                             va_t Start, va_t At, aarch64_reg Reg) {
+  return signingAddressUse(Decode, Source, Start, At, Reg, false) ==
+         SigningAddressUse::Local;
+}
+
 // Use the ISA's PC-relative encoding of the same operation. It uses the same
 // key, LR and SP and leaves the caller's numeric register untouched.
-std::optional<uint32_t> pcRelativeAuthentication(Intrinsic Op, va_t PC,
-                                                 va_t Sign) {
+std::optional<uint32_t> machOPCRelativeAuthentication(Intrinsic Op, va_t PC,
+                                                      va_t Sign) {
   if (Sign > PC || (PC - Sign) % kAArch64PAuthLRScale)
     return std::nullopt;
   const auto Distance = (PC - Sign) / kAArch64PAuthLRScale;
@@ -167,8 +181,6 @@ std::optional<uint32_t> pcRelativeAuthentication(Intrinsic Op, va_t PC,
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def"
   return std::nullopt;
 }
-
-} // namespace
 
 bool machORestoresSigningAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes,
                                  va_t PC, unsigned Register, va_t Target) {
@@ -298,7 +310,8 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
       if (Independent)
         return {.Use = MachOSigningAddress::Observable,
                 .InstalledSigner = At(SignedAt)};
-      if (auto Relative = pcRelativeAuthentication(Auth->Id, AuthPC, Target))
+      if (auto Relative =
+              machOPCRelativeAuthentication(Auth->Id, AuthPC, Target))
         return {.Use = MachOSigningAddress::Observable,
                 .Authentication = MachOAuthenticationReplacement{
                     {AuthPC, std::nullopt}, *Relative, Target}};
@@ -364,7 +377,8 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
 }
 
 bool needsMachONativeRegisterBody(const MedFunc &Function,
-                                  const BinaryImage &Image) {
+                                  const BinaryImage &Image,
+                                  const LowFunc *CFG) {
   constexpr auto Word = aarch64::kInsnSize;
   llvm::SmallVector<va_t, 4> Consumers;
   for (const auto &Block : Function.Blocks)
@@ -425,6 +439,11 @@ bool needsMachONativeRegisterBody(const MedFunc &Function,
                             Consumers)
             .Use == MachOSigningAddress::Observable)
       return true;
+  }
+  if (CFG) {
+    const auto Joins = machOSigningJoins(Image, Decode, *Source, *CFG);
+    return Joins.Unresolved || !Joins.Addresses.empty() ||
+           !Joins.RetainedSigningWords.empty();
   }
   return false;
 }
