@@ -224,6 +224,11 @@ last BSS byte, and checks that the first byte stays zero before calling the
 replacement. The runner checks the file and memory extents in the ELF load
 segments and compares both updated executables with independent LLD links.
 
+Six more classic R2 programs each carry 4,096 function pointers. The object
+reader checks every relocation's offset, width, symbol and addend. The guest
+compares every linked pointer with the current function address before running
+the calls. The runner also compares both outputs with independent LLD links.
+
 The cross-object arithmetic programs exercise their own stack, function pointer, ELF
 global pointer, 64-bit data and arguments beyond the register argument area.
 The replacement and its classic helper each read the initialized 64-bit
@@ -262,8 +267,8 @@ memory size and 256-byte alignment of `PT_TLS`.
 The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
-build produces 1,184 executable images across 348 configurations, including
-836 patched images. The upgrade check uses r13 and r14 to build one original
+build produces 1,202 executable images across 354 configurations, including
+848 patched images. The upgrade check uses r13 and r14 to build one original
 per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.

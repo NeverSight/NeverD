@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "mips_relink"
+CALLBACK_COUNT = 4096
 SET_THREAD_AREA = {"o32": 4283, "n32": 6246, "n64": 5242}
 
 
@@ -32,7 +33,8 @@ def build_linkage_objects(args, build, profile, run):
     start = ((FIXTURES / "start.s").read_text().replace("LOAD_ADDRESS", load_address)
              .replace("SET_THREAD_POINTER", set_tp).replace("EXIT_NR", str(profile.exit_nr))
              .replace("CALL_REGISTER", "jalrc $25" if profile.release == 6 else "jalr $25\n    nop"))
-    entry = "check_large_segments" if profile.linkage == "large-segments" else "run_calls"
+    entry = {"large-segments": "check_large_segments", "callback-table": "check_callback_table"}.get(
+        profile.linkage, "run_calls")
     start = start.replace("ENTRY_FUNCTION", entry)
     if profile.tls_blocks:
         start += ((FIXTURES / "tls_blocks.s").read_text()
@@ -77,6 +79,10 @@ def build_linkage_objects(args, build, profile, run):
     driver = (FIXTURES / "caller.ll").read_text().replace("SEED_STORAGE", storage)
     if profile.linkage == "large-segments":
         driver += "\n" + (FIXTURES / "large_segments.ll").read_text()
+    elif profile.linkage == "callback-table":
+        template = (FIXTURES / "callback_table.ll").read_text()
+        driver += "\n" + template.replace("COUNT", str(CALLBACK_COUNT)).replace(
+            "ENTRIES", ", ".join(["ptr @calc"] * CALLBACK_COUNT))
     calc = (FIXTURES / "calc.ll").read_text().replace("SEED_STORAGE", storage)
     fp_sum = profile.linkage == "pic-hard" and profile.isa != "mips16"
     # Independent full-width results for the two argument lists in caller.ll.
@@ -152,6 +158,16 @@ def inspect_linkage(image, profile, function, text):
         return
     if profile.linkage == "large-segments":
         verify_large_segments(image, profile, symtab)
+    if profile.linkage == "callback-table":
+        table, = symtab.get_symbol_by_name("callback_table")
+        width = image.elfclass // 8
+        payload = function["st_value"].to_bytes(width, "little" if profile.little else "big") * CALLBACK_COUNT
+        section = image.get_section(table["st_shndx"])
+        offset = table["st_value"] - section["sh_addr"]
+        if (table["st_info"]["type"] != "STT_OBJECT" or table["st_size"] != len(payload)
+                or section["sh_type"] != "SHT_PROGBITS" or offset < 0
+                or section.data()[offset:offset + len(payload)] != payload):
+            raise ValueError(f"{profile.name}: incorrect linked callback table")
     callback, = symtab.get_symbol_by_name("callback")
     data = image.get_section(callback["st_shndx"])
     offset = callback["st_value"] - data["sh_addr"]
@@ -217,6 +233,25 @@ def inspect_linkage(image, profile, function, text):
             raise ValueError(f"{profile.name}: calc lost its {profile.linkage} arithmetic")
 
 
+def verify_callback_relocations(image, profile):
+    name = ".rodata.callbacks"
+    width = image.elfclass // 8
+    table = image.get_section_by_name((".rel" if profile.abi == "o32" else ".rela") + name)
+    if table is None or table.num_relocations() != CALLBACK_COUNT:
+        raise ValueError(f"{profile.name}: incomplete callback relocation table")
+    storage = image.get_section(table["sh_info"])
+    if storage.name != name or storage.data() != bytes(CALLBACK_COUNT * width):
+        raise ValueError(f"{profile.name}: incorrect callback relocation storage or addends")
+    symbol = table.get_relocation(0)["r_info_sym"]
+    if image.get_section(table["sh_link"]).get_symbol(symbol).name != "calc":
+        raise ValueError(f"{profile.name}: callback relocations do not refer to calc")
+    kind = 18 if width == 8 else 2  # R_MIPS_64 or R_MIPS_32
+    for index, rel in enumerate(table.iter_relocations()):
+        if (rel["r_offset"] != index * width or rel["r_info_type"] != kind or rel["r_info_sym"] != symbol
+                or any(rel.entry.get(field, 0) for field in ("r_addend", "r_info_type2", "r_info_type3", "r_info_ssym"))):
+            raise ValueError(f"{profile.name}: incorrect callback relocation at index {index}")
+
+
 def verify_linkage_objects(folder, profile, hashes, digest):
     from elftools.elf.elffile import ELFFile
     from elftools.elf.relocation import RelocationSection
@@ -227,6 +262,8 @@ def verify_linkage_objects(folder, profile, hashes, digest):
             raise ValueError(f"{path}: SHA-256 mismatch")
         with path.open("rb") as source:
             image = ELFFile(source)
+            if profile.linkage == "callback-table" and obj == "caller.o":
+                verify_callback_relocations(image, profile)
             refs = set()
             packed = set()
             for table in image.iter_sections():
