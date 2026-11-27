@@ -19,12 +19,22 @@
 /// parent is the one function whose direct branches enter the fragment with
 /// the frame the fragment's rules describe there.
 ///
+/// A frameless function's part has no frame to begin inside: its FDE starts
+/// with the entry rule, like a function's.  GCC moves such a function's
+/// isolated trap path there (a null dereference it proved, ending in `ud2`).
+/// That part is bound only when nothing else makes it a function: no name of
+/// its own, no direct call, no RIP-relative address and no relocated code
+/// pointer.  An entry-like region that returns is a function tail-called
+/// once, and stays one.
+///
 //===----------------------------------------------------------------------===//
 
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/CodePointerSources.h"
 #include "neverd/loader/DWARF/ItaniumEH.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
 #include <cstring>
@@ -163,6 +173,48 @@ bool hasLandingPads(const ExceptionFunction &F) {
          });
 }
 
+/// Whether \p F's code ends in x86 `ud2`, the trap that ends a path GCC
+/// isolated.
+bool endsInTrap(const BinaryImage &Img, const Frame &F) {
+  const ExceptionAddressRange &Code = F.Function->CodeRange;
+  if (Code.End - Code.Begin < 2)
+    return false;
+  const uint8_t *Bytes = Img.readVA(Code.End - 2, 2);
+  return Bytes && Bytes[0] == 0x0F && Bytes[1] == 0x0B;
+}
+
+/// Whether \p Name is GCC's name for a part of a function: `foo.cold`, or
+/// `foo.cold.N` when one function has several.
+bool isColdPartName(llvm::StringRef Name) {
+  return Name.ends_with(".cold") || Name.contains(".cold.");
+}
+
+/// Visit each code address \p Img's executable code names other than as a
+/// jump target: x86 `call rel32` and a RIP-relative `lea`, matched at every
+/// offset.  A misaligned match can only add an address, and an address keeps
+/// its region a function.
+template <typename VisitT>
+void forEachNamedCodeAddress(const BinaryImage &Img, VisitT Visit) {
+  for (const Segment &Seg : Img.Segments) {
+    if (!Seg.isExecutable())
+      continue;
+    const uint8_t *D = Seg.Data.data();
+    const size_t N = Seg.Data.size();
+    for (size_t I = 0; I + 5 <= N; ++I) {
+      int32_t Rel;
+      if (D[I] == 0xE8) {
+        std::memcpy(&Rel, D + I + 1, sizeof(Rel));
+        Visit(static_cast<va_t>(Seg.VA + I + 5 + static_cast<int64_t>(Rel)));
+      } else if (D[I] == 0x8D && I + 6 <= N && (D[I + 1] & 0xC7) == 0x05) {
+        // `lea disp32(%rip), r` ends after its displacement, with or without
+        // the REX prefix before the opcode.
+        std::memcpy(&Rel, D + I + 2, sizeof(Rel));
+        Visit(static_cast<va_t>(Seg.VA + I + 6 + static_cast<int64_t>(Rel)));
+      }
+    }
+  }
+}
+
 /// Visit each direct branch encoded in \p Img's executable code as
 /// (source, target): x86 `jmp rel32` and `jcc rel32`, matched at every
 /// offset; the caller's frame check rejects what is not an instruction.
@@ -217,10 +269,33 @@ void bindColdFragments(BinaryImage &Img) {
   llvm::sort(Frames, [](const Frame &A, const Frame &B) {
     return A.Function->CodeRange.Begin < B.Function->CodeRange.Begin;
   });
+  // A part that begins with the entry rule is a candidate only when it ends
+  // in a trap and nothing names it as a function: a symbol of its own, a
+  // direct call, a RIP-relative address or a relocated code pointer.
+  std::set<va_t> TrapParts;
+  for (const Frame &F : Frames)
+    if (!beginsMidFrame(F) && !hasLandingPads(*F.Function) &&
+        endsInTrap(Img, F))
+      TrapParts.insert(F.Function->CodeRange.Begin);
+  if (!TrapParts.empty()) {
+    for (const Symbol &Sym : Img.Symbols)
+      if (Sym.IsFunc && TrapParts.count(Sym.Addr) &&
+          Sym.Name != Symbol::makeFunc(Sym.Addr).Name &&
+          !isColdPartName(Sym.Name))
+        TrapParts.erase(Sym.Addr);
+    if (!TrapParts.empty())
+      forEachNamedCodeAddress(Img,
+                              [&](va_t Target) { TrapParts.erase(Target); });
+    for (va_t Slot : Img.CodePtrRelocSlots)
+      if (const std::optional<va_t> Target =
+              normalizedRelocatedCodeTarget(Img, Slot))
+        TrapParts.erase(*Target);
+  }
   // Fragments whose code a parent can take as its own.
   std::vector<const Frame *> Fragments;
   for (const Frame &F : Frames)
-    if (beginsMidFrame(F) && !hasLandingPads(*F.Function))
+    if (!hasLandingPads(*F.Function) &&
+        (beginsMidFrame(F) || TrapParts.count(F.Function->CodeRange.Begin)))
       Fragments.push_back(&F);
   if (Fragments.empty())
     return;

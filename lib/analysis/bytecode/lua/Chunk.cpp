@@ -79,16 +79,20 @@ Proto &Chunk::proto(Reader &R) {
 }
 void Chunk::code(Proto &P, Reader &R, uint64_t N) {
   Job.use(Job.Words, N, R.at());
-  if (!N || N > R.left() / 4)
+  if (!N || N > R.left() / P.WordBytes)
     malformed(R.at(), "Empty or truncated instruction stream");
   if (P.Params > P.Stack)
     malformed(R.at(), "Parameter count exceeds frame size");
   P.CodeAt = R.at();
   P.Code.reserve(N);
-  for (unsigned I = 0; I < N; ++I)
-    P.Code.push_back(R.word(4));
+  for (unsigned I = 0; I < N; ++I) {
+    auto W = R.word(P.WordBytes);
+    if (W > UINT32_MAX)
+      malformed(P.codeOffset(I), "Instruction exceeds the declared bit layout");
+    P.Code.push_back(W);
+  }
 }
-std::string quote(llvm::StringRef S) {
+std::string quote(llvm::StringRef S, bool DecimalEscapes) {
   std::string Out = "\"";
   for (unsigned char C : S) {
     if (C == '"' || C == '\\') {
@@ -96,7 +100,21 @@ std::string quote(llvm::StringRef S) {
       Out += char(C);
     } else if (C >= 32 && C < 127)
       Out += char(C);
-    else {
+    else if (!DecimalEscapes) {
+      switch (C) {
+      case '\n':
+        Out += "\\n";
+        break;
+      case '\r':
+        Out += "\\r";
+        break;
+      case '\t':
+        Out += "\\t";
+        break;
+      default:
+        return {};
+      }
+    } else {
       Out += '\\';
       Out += char('0' + C / 100);
       Out += char('0' + C / 10 % 10);

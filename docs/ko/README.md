@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
+<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -40,7 +40,7 @@
 | [macOS/iOS 프로세스 환경](darwin-emulation.md) | Mach-O 시작, 기기와 시뮬레이터 구분, Darwin 서비스와 페이지 규칙 |
 | [macOS HVF](macos-hvf.md) | 호스트와 동일한 ISA의 하드웨어 실행, 서명 권한, 패키징과 검증 |
 | [Windows 드라이버 에뮬레이션](driver-emulation.md) | 제한된 x64 WDM/KMDF 수명 주기, 요청, 하드웨어 시나리오, SEH, PnP 하위 집합, 백엔드 선택 및 제한 |
-| [메모리 안전성 감사와 헌트](memory-safety.md) | 힙 수명과 복사 오버플로 분석: 형식별 신원 계약, 싱크/소스 카탈로그, 판정, 예산, JSON 스키마 |
+| [메모리 안전성 검사](memory-safety.md) | 힙 수명과 복사 오버플로 분석: 형식별 신원 계약, 싱크/소스 카탈로그, 판정, 예산, JSON 스키마 |
 | [프로세스 플러그인 SDK(영문)](../process-plugin-sdk.md) | 독립 Python 도우미, 프로토콜 및 예제 |
 | [Tools 계층(영문)](../tools-layer.md) | 정확한 플러그인 호출, 고정된 소비자 단계 및 작업 기록 |
 | [GUI 프로세스 플러그인(영문)](../gui-plugins.md) | 관리자, 메뉴 배치, 작업 결과 및 프로세스 프로토콜 |

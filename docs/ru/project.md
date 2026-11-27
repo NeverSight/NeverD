@@ -1,6 +1,6 @@
 **Языки**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: bf4dc5471e255b39d6426197c1dd6187b093c30b9a1d9a94ccf0859b3a979810 -->
 
 <div align="center">
 
@@ -182,8 +182,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -343,8 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | Найденные функции |
 | `disasm` | Дизассемблирование (`--func` имя или hex) |
 | `sym-explore` | Ограниченное исследование путей нативного LowIR (`--func`; вывод JSON) |
-| `audit` | Ошибки времени жизни объектов кучи и чтение неинициализированного локального стека (JSON) |
-| `hunt` | Выход за границы опасных копирований с символьными свидетелями и дополнительными доказательствами воспроизведения `process-input-v1` при наличии полного плана (схема JSON v1) |
+| `scan` | [Проверка времени жизни и инициализации объектов, границ и строк формата (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex dump по адресу |
 | `cfg` / `callgraph` | CFG / граф вызовов (JSON; опционально DOT/SVG) |
 | `xrefs` | Перекрёстные ссылки |

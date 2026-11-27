@@ -17,6 +17,8 @@ add_neverd_component_library(NeverDLuaRecovery
   lua/PucInstructions.cpp
   lua/Recovery.cpp
   lua/Source.cpp
+  lua/StackChunk.cpp
+  lua/StackInstructions.cpp
   LINK_COMPONENTS Digest
   LLVM_COMPONENTS Support
 )
@@ -30,7 +32,10 @@ add_neverd_component_library(NeverDPythonRecovery
   python/Instructions311.cpp
   python/Marshal.cpp
   python/Recovery.cpp
+  python/ReleaseInstructions.cpp
+  python/ReleaseSource.cpp
   python/Source.cpp
+  python/Versions.cpp
   LINK_COMPONENTS Digest
   LLVM_COMPONENTS Object Support
 )

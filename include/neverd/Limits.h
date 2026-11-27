@@ -155,9 +155,25 @@ constexpr uint32_t kMaxJumpTableOrdinaryControllingGuards =
 /// batch.  Every visit also debits the candidate-wide aggregate account.
 constexpr uint32_t kMaxJumpTableBoundSymbolEvidenceWork = 65536;
 
+/// Exclusive envelope for an ordinary finite-coordinate query (a mask or
+/// physical group domain) and for a read-only scalar envelope.
+constexpr uint32_t kMaxJumpTableFeasibleSetValues = 64;
+
+/// Exclusive envelope for a joined predecessor domain.  Compare literals only
+/// propose it and each feasible coordinate is read from a solver model, so a
+/// wider envelope costs one query per member, not per proposed value.  It
+/// stays below a byte lane's 256 values: a byte read on an unguarded path is
+/// then a counterexample, never a domain proved by the lane's width alone.
+constexpr uint32_t kMaxJumpTableJoinedDomainValues = 128;
+static_assert(kMaxJumpTableJoinedDomainValues % 64 == 0 &&
+              kMaxJumpTableJoinedDomainValues >=
+                  kMaxJumpTableFeasibleSetValues &&
+              kMaxJumpTableJoinedDomainValues < 256);
+
 /// Local symbolization allowance for an exact finite-coordinate query.  Such
 /// a query may symbolize the expanded candidate graph before enumerating at
-/// most 64 coordinates.  The largest supported 64-way expanded selector uses
+/// most 64 coordinates (128 for a joined predecessor domain, whose members
+/// cost a few units each).  The largest supported 64-way expanded selector uses
 /// about 68 Ki work.  A selector read from a loop-carried value expands every
 /// definition the loop gives it: a 16-way table on the high word of a 64-bit
 /// accumulator that every case updates (OptStress336 dense16) uses about

@@ -1,4 +1,4 @@
-//===- LuaJit.cpp - LuaJIT dump v2 records ===//
+//===- LuaJit.cpp - LuaJIT versioned dump records ===//
 //
 // NeverD Decompiler
 //
@@ -99,12 +99,14 @@ void neverd::lua::readJit(Chunk &C, Reader &R) {
   auto &E = C.Evidence;
   E["dialect"] = "LuaJIT";
   E["dump_version"] = C.Version;
-  if (C.Version != 2)
+  if (C.Version != 1 && C.Version != 2)
     unsupported(R.at() - 1, "Unsupported LuaJIT dump version");
-  E["reader_revision"] = "3bfb8fa4ab970b36d42d108ead04e92341c49998";
+  E["reader_revision"] = C.Version == 1
+                             ? "d7b8df8edd962bd5acb800c86be5ad88d407bd37"
+                             : "3bfb8fa4ab970b36d42d108ead04e92341c49998";
   auto Flags = R.varint();
   E["dump_flags"] = Flags;
-  if (Flags & ~31u)
+  if (Flags & ~(C.Version == 1 ? 7u : 31u))
     unsupported(R.at(), "Unknown LuaJIT dump flags");
   R.Big = Flags & 1;
   C.FR2 = Flags & 8;

@@ -11224,16 +11224,16 @@ Il grafo precedente è ancora disponibile.</translation>
         <translation>&amp;Analizzatori</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit e Hunt</translation>
+        <source>All checks</source>
+        <translation>Tutti i controlli</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Durata degli oggetti e inizializzazione</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Limiti e stringhe di formato</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11317,6 +11317,10 @@ Il grafo precedente è ancora disponibile.</translation>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Luau ufficiale</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>

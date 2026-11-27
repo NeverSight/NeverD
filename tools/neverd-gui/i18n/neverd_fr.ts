@@ -11224,16 +11224,16 @@ Votre graphe précédent reste disponible.</translation>
         <translation>&amp;Analyseurs</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit et Hunt</translation>
+        <source>All checks</source>
+        <translation>Toutes les vérifications</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Durée de vie et initialisation</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Bornes et chaînes de format</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11317,6 +11317,10 @@ Votre graphe précédent reste disponible.</translation>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Luau officiel</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>

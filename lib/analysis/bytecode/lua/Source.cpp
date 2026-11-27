@@ -77,19 +77,28 @@ struct Function {
   std::vector<int> Previous;
   std::vector<unsigned> Predecessors;
   std::bitset<256> Captured;
+  unsigned FrameSize = P.Stack;
   Function(Chunk &C, Proto &P)
       : C(C), P(P), Code(P.Code.size()), Previous(P.Code.size() + 1, -1),
         Predecessors(P.Code.size()) {}
   void decode(const std::vector<std::string> &Up) {
+    unsigned StackRow = 0;
+    int Top =
+        P.Legacy && (!P.Legacy->HasParameters || P.Vararg) ? -1 : int(P.Params);
+    if (P.Legacy && !P.Legacy->HasFrame)
+      FrameSize = P.Params;
     for (unsigned PC = 0; PC < Code.size();) {
-      C.Job.use(C.Job.Items, 1, P.CodeAt + 4 * PC);
+      C.Job.use(C.Job.Items, 1, P.codeOffset(PC));
       auto &I = Code[PC];
       I.PC = PC;
-      I.Op = mnemonic(C.Dialect, C.Version, P.Code[PC]);
+      const auto *Legacy =
+          P.Legacy ? &P.Legacy->Instructions[StackRow++] : nullptr;
+      I.Op = Legacy ? Legacy->Name : mnemonic(C.Dialect, C.Version, P.Code[PC]);
+      I.Width = Legacy ? Legacy->Width : 1;
       if (I.Op.empty()) {
         I.Op = "unknown";
         unsupported(
-            P.CodeAt + 4 * PC,
+            P.codeOffset(PC),
             "Unknown opcode " +
                 std::to_string(P.Code[PC] & (C.Dialect == Family::Puc
                                                  ? C.Version < 0x54 ? 63 : 127
@@ -99,7 +108,24 @@ struct Function {
       try {
         switch (C.Dialect) {
         case Family::Puc:
-          decodePuc(D);
+          if (Legacy) {
+            decodeStack(D, *Legacy, Top);
+            if (Legacy->Operation == "PUSHFUNCTION" &&
+                I.Kind == Form::Closure) {
+              auto &Rows = P.Legacy->Instructions;
+              if (StackRow == Rows.size() ||
+                  Rows[StackRow].Operation != "STOREGLOBAL")
+                unsupported(P.codeOffset(PC),
+                            "A legacy function needs a direct global binding");
+              I.Text = D.global(D.constant(Rows[StackRow].Operand));
+            } else if (Legacy->Operation == "STOREGLOBAL" &&
+                       Previous[PC] >= 0 &&
+                       Code[Previous[PC]].Op == "PUSHFUNCTION" &&
+                       Code[Previous[PC]].Kind == Form::Closure) {
+              I.Text.clear(); // Printed by the preceding named declaration.
+            }
+          } else
+            decodePuc(D);
           break;
         case Family::Jit:
           decodeJit(D);
@@ -114,6 +140,12 @@ struct Function {
         I.Kind = Form::Unsupported;
         I.Text = F.Message;
       }
+      if (Legacy) {
+        if (I.Kind == Form::Unsupported)
+          Top = -1;
+        if (!P.Legacy->HasFrame && Top >= 0)
+          FrameSize = std::max(FrameSize, unsigned(Top));
+      }
       for (const auto &Binding : I.Captures)
         if (!Binding.ByValue && Binding.Slot >= 0)
           Captured.set(Binding.Slot);
@@ -124,16 +156,16 @@ struct Function {
       if (!I.Op.empty()) {
         for (auto Dest : successors(I)) {
           if (Dest < 0 || size_t(Dest) >= Code.size() || Code[Dest].Op.empty())
-            malformed(P.CodeAt + 4 * I.PC,
+            malformed(P.codeOffset(I.PC),
                       "Control flow leaves code or enters an auxiliary word");
           ++Predecessors[Dest];
         }
       }
   }
   [[noreturn]] void partial(const Inst &I, StringRef Reason) {
-    unsupported(P.CodeAt + 4 * I.PC, I.Op.str() + " at PC " +
-                                         std::to_string(I.PC) + ": " +
-                                         Reason.str());
+    unsupported(P.codeOffset(I.PC), I.Op.str() + " at PC " +
+                                        std::to_string(I.PC) + ": " +
+                                        Reason.str());
   }
   void line(Page &Out, int Depth, const std::string &Text) {
     C.Job.use(C.Job.Text, Depth * 2 + Text.size() + 1, P.CodeAt);
@@ -143,19 +175,23 @@ struct Function {
     ++Out.Line;
   }
   void body(Page &Out, int Depth, unsigned Nest) {
-    if (P.Stack > 200 ||
-        (C.Dialect == Family::Puc && C.Version == 0x51 && (P.Flags & 4)))
+    if (P.Legacy && (!P.Legacy->HasParameters || P.Vararg))
+      partial(Code.front(),
+              "legacy parameter layout lacks a qualified source spelling");
+    if (FrameSize > (P.Legacy && C.Version <= 0x31 ? 31u : 200u) ||
+        (C.Dialect == Family::Puc && ((C.Version == 0x50 && P.Vararg) ||
+                                      (C.Version == 0x51 && (P.Flags & 4)))))
       partial(Code.front(),
               "frame requires a dialect-specific local or implicit arg table");
-    if (P.Stack > P.Params)
-      line(Out, Depth, "local " + registers(P, P.Params, P.Stack - P.Params));
+    if (FrameSize > P.Params)
+      line(Out, Depth, "local " + registers(P, P.Params, FrameSize - P.Params));
     Out.Map.resize(Code.size());
     region(Out, 0, Code.size(), Depth, Nest);
   }
   void closure(Page &Out, const Inst &I, int Depth, unsigned Nest) {
     if (Nest >= limits::kDepth)
       throw Failure{"budget_exceeded", "Source nesting budget exceeded",
-                    P.CodeAt + 4 * I.PC};
+                    P.codeOffset(I.PC)};
     auto &Child = C.Functions[I.Base];
     if (!Child.Complete)
       partial(I, "incomplete closure prototype");
@@ -182,7 +218,10 @@ struct Function {
     }
     Function F{C, Child};
     F.decode(Up);
-    line(Out, Depth, I.Text + " = function(" + parameters(Child) + ")");
+    std::string Head = P.Legacy && C.Version <= 0x25
+                           ? "function " + I.Text + "("
+                           : I.Text + " = function(";
+    line(Out, Depth, Head + parameters(Child) + ")");
     auto OuterMap = std::move(Out.Map);
     F.body(Out, Depth + 1, Nest + 1);
     Out.Map = std::move(OuterMap);
@@ -234,7 +273,7 @@ struct Function {
     for (int N = L.First; N < L.First + (Numeric ? 1 : L.Results); ++N)
       Dead.set(N);
     for (int PC = Start; PC < Latch; PC += Code[PC].Width) {
-      C.Job.use(C.Job.Items, 1, P.CodeAt + 4 * PC);
+      C.Job.use(C.Job.Items, 1, P.codeOffset(PC));
       auto &B = Code[PC];
       if ((B.Registers & Hidden).any() || (Numeric && B.Writes.test(L.First)))
         partial(I, "body observes or changes loop-control storage");
@@ -243,7 +282,7 @@ struct Function {
     }
     for (int PC = Exit; PC < int(Code.size()) && Dead.any();
          PC += Code[PC].Width) {
-      C.Job.use(C.Job.Items, 1, P.CodeAt + 4 * PC);
+      C.Job.use(C.Job.Items, 1, P.codeOffset(PC));
       auto &S = Code[PC];
       if (Predecessors[PC] <= 1)
         Dead &= ~S.Fresh;
@@ -253,7 +292,7 @@ struct Function {
       // proof.
       if (S.Kind != Form::Statement) {
         for (int J = PC; J < int(Code.size()); J += Code[J].Width) {
-          C.Job.use(C.Job.Items, 1, P.CodeAt + 4 * J);
+          C.Job.use(C.Job.Items, 1, P.codeOffset(J));
           if ((Dead & Code[J].Registers).any())
             partial(I, "loop storage escapes its lexical scope");
         }
@@ -281,11 +320,11 @@ struct Function {
   bool region(Page &Out, int Begin, int End, int Depth, unsigned Nest) {
     if (Nest > limits::kDepth)
       throw Failure{"budget_exceeded", "Source nesting budget exceeded",
-                    P.CodeAt + 4 * Begin};
+                    P.codeOffset(Begin)};
     std::optional<OpenResults> Open;
     for (int PC = Begin; PC < End;) {
       const auto &I = Code[PC];
-      C.Job.check(P.CodeAt + 4 * PC);
+      C.Job.check(P.codeOffset(PC));
       int Next = PC + I.Width;
       map(Out, I);
       // Closing references immediately before returning has the same lifetime
@@ -327,6 +366,14 @@ struct Function {
         } else if (Consumer)
           Args = registers(P, I.First, I.Args);
         if (I.Kind == Form::Return) {
+          if (P.Legacy && C.Version <= 0x25 && P.Id == C.Root) {
+            // These grammars omit the implicit return from the main chunk.
+            if (!Args.empty() || Next != int(Code.size()))
+              partial(I,
+                      "early or value-bearing return from a legacy main chunk");
+            Out.Map[PC] = 0;
+            return false;
+          }
           line(Out, Depth, Args.empty() ? "return" : "return " + Args);
           return false;
         }
@@ -429,8 +476,8 @@ json::Object inventory(Chunk &C, const Proto &P) {
   auto Pool = [&](const auto &Values, StringRef Name) {
     for (const auto &K : Values) {
       static const char *const Kinds[] = {
-          "nil",   "boolean", "integer", "number", "string",
-          "table", "import",  "closure", "vector", "cdata"};
+          "nil",    "boolean", "integer", "number", "string",     "table",
+          "import", "closure", "vector",  "cdata",  "class_shape"};
       json::Object O{{"pool", Name}, {"kind", Kinds[K.Type]}};
       if (K.Type == Constant::String) {
         C.Job.use(C.Job.Text, K.Bytes.size() * 4 + 2, P.Start);
@@ -481,9 +528,13 @@ json::Object inventory(Chunk &C, const Proto &P) {
       {"source_name", Name(P.SourceName)},
       {"offset", P.Start},
       {"end_offset", P.End},
-      {"parameters", P.Params},
-      {"vararg", P.Vararg},
-      {"frame_size", P.Stack},
+      {"parameters", P.Legacy && !P.Legacy->HasParameters
+                         ? json::Value(nullptr)
+                         : json::Value(P.Params)},
+      {"vararg", P.Legacy && !P.Legacy->HasParameters ? json::Value(nullptr)
+                                                      : json::Value(P.Vararg)},
+      {"frame_size", P.Legacy && !P.Legacy->HasFrame ? json::Value(nullptr)
+                                                     : json::Value(P.Stack)},
       {"flags", P.Flags},
       {"first_line", P.FirstLine},
       {"last_line", P.LastLine},
@@ -507,7 +558,7 @@ void addInstructionMappings(json::Object &Row, ArrayRef<Inst> Code,
     if (I.Op.empty())
       continue;
 
-    json::Object Mapping{{"pc", I.PC},       {"offset", P.CodeAt + 4 * I.PC},
+    json::Object Mapping{{"pc", I.PC},       {"offset", P.codeOffset(I.PC)},
                          {"words", I.Width}, {"word", P.Code[I.PC]},
                          {"opcode", I.Op},   {"successors", nullptr}};
     if (I.Kind == Form::Unsupported)
@@ -525,9 +576,10 @@ void addInstructionMappings(json::Object &Row, ArrayRef<Inst> Code,
       AuxiliaryWords.reserve(I.Width - 1);
       for (auto Word : ArrayRef(P.Code).slice(I.PC + 1, I.Width - 1))
         AuxiliaryWords.emplace_back(Word);
-      Mapping["auxiliary_words"] = std::move(AuxiliaryWords);
+      Mapping[P.WordBytes == 1 ? "operand_bytes" : "auxiliary_words"] =
+          std::move(AuxiliaryWords);
     }
-    if (!P.Lines.empty())
+    if (!P.Lines.empty() && (!P.Legacy || P.Lines[I.PC]))
       Mapping["original_line"] = P.Lines[I.PC];
     if (I.PC < SourceLines.size() && SourceLines[I.PC])
       Mapping["source_line"] = SourceLines[I.PC];
@@ -545,6 +597,21 @@ void neverd::lua::render(Chunk &C, json::Object &Result) {
     if (!P.Complete)
       continue;
     auto Row = inventory(C, P);
+    if (P.Legacy && !P.Legacy->LocalEvents.empty()) {
+      json::Array Events;
+      for (const auto &[Line, Name] : P.Legacy->LocalEvents) {
+        C.Job.use(C.Job.Text, Name.size() * 3, P.Start);
+        Events.emplace_back(
+            json::Object{{"line", Line},
+                         {"name", Name.data() ? json::Value(display(Name))
+                                              : json::Value(nullptr)}});
+      }
+      Row["local_line_events"] = std::move(Events);
+    }
+    if (P.FeedbackSlots)
+      Row["feedback_slots"] = *P.FeedbackSlots;
+    if (P.InlineCost)
+      Row["inline_cost"] = std::to_string(*P.InlineCost);
     if (!P.Types.empty())
       Row["type_info"] = std::move(P.Types);
     Page Out;
@@ -567,8 +634,13 @@ void neverd::lua::render(Chunk &C, json::Object &Result) {
               (C.Dialect == Family::Puc && C.Version >= 0x52 ? 1u : 0u))
         unsupported(P.Start, "Root has unbound external upvalues");
       bool Wrapper = P.Id != C.Root || P.Params;
-      if (Wrapper)
-        F.line(Out, 0, "return function(" + Function::parameters(P) + ")");
+      if (Wrapper) {
+        std::string Head =
+            P.Legacy && C.Version <= 0x25
+                ? "function recovered_" + std::to_string(P.Id) + "("
+                : "return function(";
+        F.line(Out, 0, Head + Function::parameters(P) + ")");
+      }
       F.body(Out, Wrapper ? 1 : 0, 0);
       if (Wrapper)
         F.line(Out, 0, "end");

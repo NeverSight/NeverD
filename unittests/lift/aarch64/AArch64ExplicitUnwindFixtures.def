@@ -197,30 +197,271 @@ int main(int Argc, char **Argv) {
 }
 )mm")
 
-ASYNC_FRAME_TEXT(kStaleSigningAddress, "refusing stale-address fallback")
-ASYNC_FRAME_TEXT(kRejectedSigningUses, "refused_observed_signing_addresses")
-ASYNC_FRAME_TEXT(kPublishedSigningUses, "published_local_signing_addresses")
+ASYNC_FRAME_TEXT(kPublishedSigningUses, "published_signing_address_images")
+ASYNC_FRAME_TEXT(kSigningRows, "verified_signing_rows")
 ASYNC_FRAME_TEXT(kSigningAddressCopy, "-DNEVERD_RETURN_SIGNING_ADDRESS")
 ASYNC_FRAME_TEXT(kSigningAddressStore, "-DNEVERD_STORE_SIGNING_ADDRESS")
+ASYNC_FRAME_TEXT(kSigningPairStore, "-DNEVERD_STORE_SIGNING_PAIR")
+ASYNC_FRAME_TEXT(kSigningAddressReturn, "-DNEVERD_AUTHENTICATED_RETURN")
+ASYNC_FRAME_TEXT(kSigningAddressKeyB, "-DNEVERD_SIGN_WITH_B")
+ASYNC_FRAME_TEXT(kOtherModifierEntry, "-DNEVERD_OTHER_MODIFIER_ENTRY")
+ASYNC_FRAME_TEXT(kRepublishedSigningImage, "republished.dylib")
+ASYNC_FRAME_TEXT(kSigningAddressBoth, "-DNEVERD_RETURN_AND_STORE")
+ASYNC_FRAME_TEXT(kSigningBeforeAuth, "-DNEVERD_STORE_AND_COPY_BEFORE_AUTH")
+ASYNC_FRAME_TEXT(kSigningPagePair, "-DNEVERD_SIGNING_PAGE_PAIR")
+ASYNC_FRAME_TEXT(kSigningForwardReturn, "-DNEVERD_FORWARD_RETURN")
+ASYNC_FRAME_TEXT(kSigningReturnAliases, "-DNEVERD_SIGNING_RETURN_ALIASES")
+ASYNC_FRAME_TEXT(kSigningForwardStore, "-DNEVERD_FORWARD_STORE")
+ASYNC_FRAME_TEXT(kBothIPLive, "-DNEVERD_ORIGINAL_IP_PAIR_LIVE")
+ASYNC_FRAME_TEXT(kAllSigningScratchLive, "-DNEVERD_ALL_SIGNING_SCRATCH_LIVE")
+ASYNC_FRAME_TEXT(kLiveModifierCopy, "-DNEVERD_LIVE_MODIFIER_COPY")
+ASYNC_FRAME_TEXT(kLiveFallthrough, "-DNEVERD_LIVE_SIGNING_FALLTHROUGH")
+ASYNC_FRAME_TEXT(kLivePage, "-DNEVERD_LIVE_SIGNING_PAGE")
+ASYNC_FRAME_VALUE(unsigned, kSigningFrameSameValueRegister, 19)
+ASYNC_FRAME_TEXT(kSigningRefusals, "refused_signing_address_cases")
+ASYNC_FRAME_TEXT(kSigningModelPage, " .balign {0}\n .space {1}\n")
+ASYNC_FRAME_TEXT(kSigningModelExport, "NEVERD_ARM64E_SIGNING_ADDRESS_FIXTURES")
+ASYNC_FRAME_TEXT(kSigningModelFile, "signing-address.S")
+ASYNC_FRAME_TEXT(kSigningModelPath, "signing_address_model_assembly")
+ASYNC_FRAME_TEXT(kSigningModelCases, "exported_signing_address_bodies")
+ASYNC_FRAME_TEXT(kSigningModelCall,
+                 " check_body {0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}\n")
+ASYNC_FRAME_TEXT(kSigningModelLabel, "Lbody{0}:\n")
+ASYNC_FRAME_TEXT(kSigningModelWord, " .long {0}\n")
+ASYNC_FRAME_TEXT(kSigningModelBegin, R"asm(
+.text
+.globl _main
+.p2align 2
+_main:
+ stp x29, x30, [sp, #-112]!
+ stp x19, x20, [sp, #16]
+ mov x29, sp
+ add x20, sp, #40
+.macro run_body
+ str xzr, [x20]
+ .if $4
+  .irp offset, 8, 16, 24, 32, 40, 48
+   str xzr, [x20, #\offset]
+  .endr
+ .endif
+ mov x0, x20
+ mov x1, #$1
+ bl Lbody$0
+ .if $2
+  cmp x0, x19
+ .else
+  cmp x0, x20
+ .endif
+ b.ne Lfailed
+ ldr x9, [x20]
+ .if $3
+  cmp x9, x19
+  b.ne Lfailed
+ .else
+  cbnz x9, Lfailed
+ .endif
+ .if $4
+  .irp offset, 8, 16, 24, 32, 40, 48
+   ldr x9, [x20, #\offset]
+   cmp x9, x19
+   b.ne Lfailed
+  .endr
+ .endif
+.endm
+.macro check_body
+ adr x19, Lbody$0
+ ldr x9, =$1
+ add x19, x19, x9
+ run_body $0, 0, $4, $5, $6
+ .if $7
+  mov x19, x20
+ .endif
+ run_body $0, 1, $2, $3, $6
+.endm
+)asm")
+ASYNC_FRAME_TEXT(kSigningModelEnd, R"asm(
+ mov w0, #0
+ b Ldone
+Lfailed:
+ mov w0, #1
+Ldone:
+ ldp x19, x20, [sp, #16]
+ ldp x29, x30, [sp], #112
+ ret
+ .ltorg
+)asm")
 ASYNC_FRAME_TEXT(kSigningAddressBody, R"asm(
  .text
  .globl _signal_tick
  .p2align 2
 _signal_tick:
  .cfi_startproc
-Lsign:
- .inst 0xdac1a3fe // paciasppc
- adr x15, Lsign
- .inst 0xdac191fe // autiasppc x15
- cbz x1, Lreturn
-#ifdef NEVERD_RETURN_SIGNING_ADDRESS
- mov x0, x15
-#elif defined(NEVERD_STORE_SIGNING_ADDRESS)
- str x15, [x0]
+#ifdef NEVERD_LIVE_SIGNING_FALLTHROUGH
+ .cfi_personality 155, ___gxx_personality_v0
+ .cfi_lsda 16, Lmodifier_lsda
+#endif
+#if defined(NEVERD_FORWARD_STORE) || defined(NEVERD_FORWARD_RETURN)
+ b Lsign
+Lmaterialize:
+#ifdef NEVERD_FORWARD_STORE
+ mov x16, x0
+#ifdef NEVERD_ALL_SIGNING_SCRATCH_LIVE
+ add x17, x0, #8
+ add x10, x0, #16
+ add x11, x0, #24
+ add x12, x0, #32
+ add x13, x0, #40
+ add x14, x0, #48
+#elif defined(NEVERD_ORIGINAL_IP_PAIR_LIVE)
+ mov x17, x0
+#endif
+#ifdef NEVERD_LIVE_SIGNING_PAGE
+ adrp x15, Lsign@PAGE
+ add x15, x15, Lsign@PAGEOFF
 #else
+ adr x15, Lsign
+#endif
+#ifdef NEVERD_LIVE_MODIFIER_COPY
+ str x15, [x16]
+ mov x0, x15
+#endif
+#if defined(NEVERD_ORIGINAL_IP_PAIR_LIVE) || defined(NEVERD_ALL_SIGNING_SCRATCH_LIVE)
+ .cfi_same_value x19
+ .cfi_escape 0x2e, 0
+#endif
+#if defined(NEVERD_LIVE_MODIFIER_COPY) && defined(NEVERD_SIGN_WITH_B)
+ .inst 0xdac1941e // autibsppc x0
+#elif defined(NEVERD_LIVE_MODIFIER_COPY)
+ .inst 0xdac1901e // autiasppc x0
+#elif defined(NEVERD_SIGN_WITH_B)
+ .inst 0xdac195fe // autibsppc x15
+#else
+ .inst 0xdac191fe // autiasppc x15
+#endif
+LcheckedAfter:
+#ifdef NEVERD_ALL_SIGNING_SCRATCH_LIVE
+ .cfi_restore x19
+#endif
+#ifdef NEVERD_LIVE_SIGNING_FALLTHROUGH
+ cbz x1, Lvalues
+ mov x1, #0
+ mov x15, x0
+ b LcheckedAfter
+Lvalues:
+#endif
+#ifdef NEVERD_LIVE_MODIFIER_COPY
+ str x0, [x16]
+#else
+ str x15, [x16]
+#endif
+#if defined(NEVERD_ORIGINAL_IP_PAIR_LIVE) || defined(NEVERD_ALL_SIGNING_SCRATCH_LIVE)
+ str x15, [x17]
+#endif
+#ifdef NEVERD_ALL_SIGNING_SCRATCH_LIVE
+ .irp reg, x10, x11, x12, x13, x14
+ str x15, [\reg]
+ .endr
+#endif
+ mov x0, x15
+ ret
+#else
+ adr x0, Lsign
+#ifdef NEVERD_SIGNING_RETURN_ALIASES
+ .irp reg, x16, x17, x10, x11, x12, x13, x14, x15
+ mov \reg, x0
+ .endr
+#endif
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xd65f0fe0 // retabsppc x0
+#else
+ .inst 0xd65f0be0 // retaasppc x0
+#endif
+#endif
+Lsign:
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xdac1a7fe // pacibsppc
+#else
+ .inst 0xdac1a3fe // paciasppc
+#endif
+ b Lmaterialize
+#else
+#ifdef NEVERD_SIGN_WITH_B
+ nop
+#endif
+Lsign:
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xdac1a7fe // pacibsppc
+#else
+ .inst 0xdac1a3fe // paciasppc
+#endif
+#ifdef NEVERD_AUTHENTICATED_RETURN
+ adr x0, Lsign
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xd65f0fe0 // retabsppc x0
+#else
+ .inst 0xd65f0be0 // retaasppc x0
+#endif
+#else
+#ifdef NEVERD_OTHER_MODIFIER_ENTRY
+ cbnz x2, Lauth
+#endif
+#ifdef NEVERD_SIGNING_PAGE_PAIR
+ adrp x15, Lsign@PAGE
+ add x15, x15, Lsign@PAGEOFF
+#else
+ adr x15, Lsign
+#endif
+#ifdef NEVERD_STORE_AND_COPY_BEFORE_AUTH
+ str x15, [x0]
+ mov x0, x15
+#endif
+Lauth:
+#if defined(NEVERD_SIGN_WITH_B) && defined(NEVERD_STORE_AND_COPY_BEFORE_AUTH)
+ .inst 0xdac1941e // autibsppc x0
+#elif defined(NEVERD_STORE_AND_COPY_BEFORE_AUTH)
+ .inst 0xdac1901e // autiasppc x0
+#elif defined(NEVERD_SIGN_WITH_B)
+ .inst 0xdac195fe // autibsppc x15
+#else
+ .inst 0xdac191fe // autiasppc x15
+#endif
+ cbz x1, Lreturn
+#if defined(NEVERD_STORE_SIGNING_PAIR)
+ stp xzr, x15, [x0, #-8]
+#elif defined(NEVERD_STORE_SIGNING_ADDRESS) || defined(NEVERD_RETURN_AND_STORE)
+ str x15, [x0]
+#endif
+#if defined(NEVERD_RETURN_SIGNING_ADDRESS) || defined(NEVERD_RETURN_AND_STORE)
+ mov x0, x15
+#elif !defined(NEVERD_STORE_SIGNING_ADDRESS)
  mov x15, xzr
 #endif
 Lreturn:
  ret
+#endif
+#endif
+#ifdef NEVERD_LIVE_SIGNING_FALLTHROUGH
+Lterminate:
+ brk #0
+#endif
  .cfi_endproc
+#ifdef NEVERD_LIVE_SIGNING_FALLTHROUGH
+ .section __TEXT,__gcc_except_tab
+Lmodifier_lsda:
+ .byte 255, 255, 1
+ .uleb128 LsitesEnd-LsitesBegin
+LsitesBegin:
+ .uleb128 Lmaterialize-_signal_tick
+ .uleb128 LcheckedAfter-Lmaterialize
+ .uleb128 LcheckedAfter-_signal_tick
+ .uleb128 0
+ .uleb128 LcheckedAfter-_signal_tick
+ .uleb128 Lvalues-LcheckedAfter
+ .uleb128 Lterminate-_signal_tick
+ .uleb128 0
+LsitesEnd:
+#endif
+#ifdef NEVERD_LIVE_SIGNING_PAGE
+ .zerofill __DATA,__bss,_signing_image_gap,0x200000,3
+#endif
 )asm")

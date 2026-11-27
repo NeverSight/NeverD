@@ -123,19 +123,16 @@ for flip in report.flips:
 
 Смещение регистра — это байтовое смещение в файле регистров NeverD, а не нативный указатель или номер регистра. Отчёт всегда неисчерпывающий; UNSAT, пределы решателя и отказы проекции или повтора остаются типизированными результатами инверсии, а не исключениями.
 
-### Аудит и охота на ошибки безопасности памяти
+### Проверка безопасности памяти
 
 `session.scan()` запускает оба анализатора и возвращает результаты и сведения об охвате в одном отчёте. [Руководство на английском](../memory-safety-scan.md).
 
-`session.audit()` и `session.hunt()` возвращают разобранные JSON-отчёты (та же схема, что у CLI). Нужна поднятая нативная сессия:
-
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-Сессии EVM и SBF отклоняют эти вызовы.
+Для входных данных EVM и SBF выбранные анализаторы возвращают состояние `unsupported`.
 
 Шесть неизменяемых вариантов событий: `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` и `PATCH_APPLIED`. Строки payload копируются во время callback; поля, не относящиеся к варианту события, равны `None`.
 

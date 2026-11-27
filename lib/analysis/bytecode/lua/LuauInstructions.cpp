@@ -1,4 +1,4 @@
-//===- LuauInstructions.cpp - Upstream Luau v6 source operations ===//
+//===- LuauInstructions.cpp - Upstream Luau source operations ===//
 //
 // NeverD Decompiler
 //
@@ -24,7 +24,10 @@ void neverd::lua::decodeLuau(Decoder &D) {
              Op == "SETGLOBAL" || Op == "GETIMPORT" || Op == "GETTABLEKS" ||
              Op == "SETTABLEKS" || Op == "NAMECALL" || Op == "NEWTABLE" ||
              Op == "SETLIST" || Op == "FORGLOOP" || Op == "LOADKX" ||
-             Op == "FASTCALL2" || Op == "FASTCALL2K" || Op == "FASTCALL3";
+             Op == "FASTCALL2" || Op == "FASTCALL2K" || Op == "FASTCALL3" ||
+             Op == "GETUDATAKS" || Op == "SETUDATAKS" ||
+             Op == "NAMECALLUDATA" || Op == "NEWCLASSMEMBER" ||
+             Op == "CALLFB" || Op == "CMPPROTO";
   uint32_t Data = Aux ? D.extra() : 0;
   auto R = [&](int N) { return D.reg(N); };
   auto Field = [&]() -> const Constant & {
@@ -98,7 +101,7 @@ void neverd::lua::decodeLuau(Decoder &D) {
     for (size_t U = 0; U < D.C.Functions[Child].Up.size(); ++U) {
       uint32_t Bind = D.extra();
       int Type = (Bind >> 8) & 255, Index = (Bind >> 16) & 255;
-      if (mnemonic(Family::Luau, 6, Bind) != "CAPTURE" || Type > 2)
+      if (mnemonic(Family::Luau, D.C.Version, Bind) != "CAPTURE" || Type > 2)
         D.bad("Invalid closure capture");
       I.Captures.push_back(Type == 2 ? Capture{false, D.up(Index)}
                                      : D.localCapture(Index, Type == 0));
@@ -122,9 +125,12 @@ void neverd::lua::decodeLuau(Decoder &D) {
     for (int J = B + 1; J <= C; ++J)
       S += " .. " + R(J);
     D.set(A, S);
-  } else if (Op == "CALL")
+  } else if (Op == "CALL" || Op == "CALLFB") {
+    if (Op == "CALLFB" && Data != UINT32_MAX &&
+        Data >= D.P.FeedbackSlots.value_or(0))
+      D.bad("Call feedback slot outside prototype");
     D.call(A, A + 1, B - 1, C - 1);
-  else if (Op == "GETVARARGS")
+  } else if (Op == "GETVARARGS")
     D.varargs(A, B - 1);
   else if (Op == "PREPVARARGS") {
     if (!D.P.Vararg || I.PC || A != D.P.Params)
@@ -137,6 +143,8 @@ void neverd::lua::decodeLuau(Decoder &D) {
     I.Target = Op == "JUMPX" ? int(I.PC) + 1 + (int32_t(W) >> 8) : Target;
   } else if (Op == "JUMPIF" || Op == "JUMPIFNOT")
     D.branch(R(A), Op == "JUMPIF", Target);
+  else if (Op == "JUMPIFEQK" || Op == "JUMPIFNOTEQK")
+    D.branch(R(A) + " == " + D.k(Data), Op == "JUMPIFEQK", Target);
   else if (Compare) {
     auto Sym = Op.ends_with("EQ")   ? " == "
                : Op.ends_with("LE") ? " <= "

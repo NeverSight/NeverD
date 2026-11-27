@@ -18,13 +18,23 @@ void neverd::lua::decodePuc(Decoder &D) {
   auto &P = D.P;
   int V = D.C.Version;
   bool New = V >= 0x54;
+  bool Lua50 = V == 0x50;
   auto W = P.Code[I.PC];
   auto Op = I.Op;
-  int A = (W >> (New ? 7 : 6)) & 255, B = New ? (W >> 16) & 255 : W >> 23;
-  int C = New ? W >> 24 : (W >> 14) & 511, Bx = W >> (New ? 15 : 14);
+  auto FieldB = [&](uint32_t Word) -> int {
+    return New ? (Word >> 16) & 255 : Lua50 ? (Word >> 15) & 511 : Word >> 23;
+  };
+  auto FieldBx = [&](uint32_t Word) -> int {
+    return Lua50 ? (Word >> 6) & 0x3ffff : Word >> (New ? 15 : 14);
+  };
+  int A = (W >> (New ? 7 : Lua50 ? 24 : 6)) & 255, B = FieldB(W);
+  int C = New ? W >> 24 : (W >> (Lua50 ? 6 : 14)) & 511, Bx = FieldBx(W);
   bool K = New && ((W >> 15) & 1);
   auto R = [&](int X) { return D.reg(X); };
-  auto RK = [&](int X) { return X & 256 ? D.k(X - 256) : R(X); };
+  auto RK = [&](int X) {
+    int FirstConstant = Lua50 ? 250 : 256;
+    return X >= FirstConstant ? D.k(X - FirstConstant) : R(X);
+  };
   auto RC = [&] { return New ? K ? D.k(C) : R(C) : RK(C); };
   auto Field = [&](int X) {
     const auto &Value = D.constant(X);
@@ -39,8 +49,8 @@ void neverd::lua::decodePuc(Decoder &D) {
   };
   auto Jump = [&](uint32_t J, int PC) {
     if (!New && V >= 0x52 && ((J >> 6) & 255))
-      unsupported(P.CodeAt + 4 * PC, "Jump closes live upvalues");
-    return PC + 1 + (New ? int(J >> 7) - 16777215 : int(J >> 14) - 131071);
+      unsupported(P.codeOffset(PC), "Jump closes live upvalues");
+    return PC + 1 + (New ? int(J >> 7) - 16777215 : FieldBx(J) - 131071);
   };
   if (Op == "MOVE")
     D.set(A, R(B));
@@ -56,7 +66,7 @@ void neverd::lua::decodePuc(Decoder &D) {
       I.Target = I.PC + 2;
     }
   } else if (Op == "LOADNIL")
-    D.nils(A, V == 0x51 ? B : A + B);
+    D.nils(A, V <= 0x51 ? B : A + B);
   else if (Op == "GETUPVAL")
     D.set(A, D.up(B));
   else if (Op == "SETUPVAL")
@@ -86,7 +96,7 @@ void neverd::lua::decodePuc(Decoder &D) {
     auto Saved = R(A + 1);
     if (V == 0x54 && !K) {
       R(C);
-      unsupported(P.CodeAt + 4 * I.PC,
+      unsupported(P.codeOffset(I.PC),
                   "Method key in a register has no proven string type");
     }
     auto Key = New ? Field(C) : RK(C);
@@ -100,6 +110,10 @@ void neverd::lua::decodePuc(Decoder &D) {
     if (New && bool(Ax(D.extra())) != K)
       D.bad("Inconsistent table size extension");
     D.set(A, "{}");
+  } else if (Lua50 && (Op == "SETLIST" || Op == "SETLISTO" || Op == "FORLOOP" ||
+                       Op == "TFORPREP" || Op == "TFORLOOP")) {
+    unsupported(P.codeOffset(I.PC),
+                "Lua 5.0 table or loop operation lacks a source rule");
   } else if (Op == "SETLIST") {
     if (New && K)
       Ax(D.extra());
@@ -188,7 +202,7 @@ void neverd::lua::decodePuc(Decoder &D) {
     bool Test = Op.starts_with("TEST");
     std::string Condition;
     if (Test)
-      Condition = R(Op == "TEST" ? A : B);
+      Condition = R(Op == "TEST" && !Lua50 ? A : B);
     else {
       auto L = New ? R(A) : RK(B);
       auto X = Op.ends_with("I") ? std::to_string(B - 127)
@@ -205,7 +219,7 @@ void neverd::lua::decodePuc(Decoder &D) {
       Condition = L + Sym + X;
     }
     D.branch(Condition, New ? K : bool(Test ? C : A), Jump(J, I.PC + 1));
-    if (Op == "TESTSET") {
+    if (Op == "TESTSET" || (Lua50 && Op == "TEST" && A != B)) {
       I.Taken = R(A) + " = " + R(B);
       I.Writes.set(A);
     }
@@ -253,10 +267,10 @@ void neverd::lua::decodePuc(Decoder &D) {
     auto Id = P.Children[Bx];
     D.capture(Id, A);
     for (auto &U : D.C.Functions[Id].Up) {
-      if (V == 0x51) {
+      if (V <= 0x51) {
         auto Bind = D.extra();
         auto Name = mnemonic(Family::Puc, V, Bind);
-        int Slot = Bind >> 23;
+        int Slot = FieldB(Bind);
         if (Name != "MOVE" && Name != "GETUPVAL")
           D.bad("Invalid closure binding instruction");
         I.Captures.push_back(Name == "MOVE" ? D.localCapture(Slot)

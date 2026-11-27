@@ -11188,16 +11188,16 @@ Your previous graph is still available.</source>
         <translation>분석기(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit 및 Hunt</translation>
+        <source>All checks</source>
+        <translation>모든 검사</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>객체 수명 및 초기화</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>경계 및 서식 문자열</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11281,6 +11281,10 @@ Your previous graph is still available.</source>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>공식 Luau</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>

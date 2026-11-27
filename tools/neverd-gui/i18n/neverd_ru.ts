@@ -11260,16 +11260,16 @@ Your previous graph is still available.</source>
         <translation>&amp;Анализаторы</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit и Hunt</translation>
+        <source>All checks</source>
+        <translation>Все проверки</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Время жизни и инициализация</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Границы и строки формата</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11353,6 +11353,10 @@ Your previous graph is still available.</source>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Официальный Luau</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>

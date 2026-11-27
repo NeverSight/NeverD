@@ -782,7 +782,7 @@ CFGBuilder::replayFiniteAbsoluteGroupDomain(const InsnRecord &Rec,
   Finite.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
   Finite.UnsignedUpperBound = Info.PhysicalCapacity;
   std::vector<bool> Complete;
-  std::vector<uint64_t> Masks;
+  std::vector<JumpTableFeasibleSet> Masks;
   const auto Matches = tableValuesMatchAtUses(
       {Present, Finite}, nullptr, &Complete, InvalidVA, nullptr, EvidenceBudget,
       0, nullptr, &Masks, limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
@@ -792,13 +792,13 @@ CFGBuilder::replayFiniteAbsoluteGroupDomain(const InsnRecord &Rec,
     Budget.fail();
     return std::nullopt;
   }
-  if (!Matches[0] || !Matches[1] || Masks[1] == 0 ||
+  if (!Matches[0] || !Matches[1] || Masks[1].none() ||
       !Budget.take(Info.PhysicalCapacity * 8 + 16))
     return std::nullopt;
   std::vector<uint32_t> Coordinates;
   Coordinates.reserve(Info.PhysicalCapacity);
   for (uint32_t I = 0; I < Info.PhysicalCapacity; ++I)
-    if (Masks[1] & (uint64_t{1} << I))
+    if (Masks[1].test(I))
       Coordinates.push_back(I);
   if (Coordinates != Certificate->Domains.at(Rec.Addr))
     return std::nullopt;
@@ -1023,7 +1023,7 @@ bool CFGBuilder::recoverFiniteAbsoluteJumpTableGroup(
     Finite.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
     Finite.UnsignedUpperBound = Info.PhysicalCapacity;
     std::vector<bool> QueryComplete;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     const auto Matches = Scratch.tableValuesMatchAtUses(
         {Present, Finite}, nullptr, &QueryComplete, InvalidVA, nullptr,
         &CandidateProposalStageEvidenceRemaining, 0, nullptr, &Masks,
@@ -1032,14 +1032,14 @@ bool CFGBuilder::recoverFiniteAbsoluteJumpTableGroup(
     if (Matches.size() != 2 || QueryComplete.size() != 2 || Masks.size() != 2 ||
         !QueryComplete[0] || !QueryComplete[1])
       return Incomplete();
-    if (!Matches[0] || !Matches[1] || Masks[1] == 0)
+    if (!Matches[0] || !Matches[1] || Masks[1].none())
       return false;
     std::vector<uint32_t> Domain;
     std::vector<va_t> Edges;
     Domain.reserve(Info.PhysicalCapacity);
     Edges.reserve(Info.PhysicalCapacity);
     for (uint32_t I = 0; I < Info.PhysicalCapacity; ++I)
-      if (Masks[1] & (uint64_t{1} << I)) {
+      if (Masks[1].test(I)) {
         Domain.push_back(I);
         Edges.push_back(Physical[I]);
         RuntimeSlots.insert(Info.BaseAddr + uint64_t(I) * 8);

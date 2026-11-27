@@ -4932,6 +4932,35 @@ if(LLD_EXEC)
   list(APPEND ELF_EXECUTABLES ${gcc_cold_x64_obj} ${gcc_cold_x64_so}
                               ${gcc_cold_x64_stripped})
 
+  # A frameless function's isolated trap part, whose FDE begins with the
+  # entry rule, and entry-like parts that stay functions; linked with their
+  # symbols and stripped.
+  foreach(entry_like_fixture test_gcc_frameless_cold_x64
+                             test_entry_like_parts_x64)
+    set(entry_like_src
+        "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/${entry_like_fixture}.s")
+    set(entry_like_obj "${CMAKE_CURRENT_BINARY_DIR}/${entry_like_fixture}.o")
+    set(entry_like_so "${CMAKE_CURRENT_BINARY_DIR}/${entry_like_fixture}.so")
+    set(entry_like_stripped
+        "${CMAKE_CURRENT_BINARY_DIR}/${entry_like_fixture}_stripped.so")
+    add_custom_command(
+      OUTPUT ${entry_like_obj}
+      COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c ${entry_like_src}
+              -o ${entry_like_obj}
+      DEPENDS ${entry_like_src}
+      COMMENT "Compiling x86-64 ${entry_like_fixture} fixture")
+    add_custom_command(
+      OUTPUT ${entry_like_so} ${entry_like_stripped}
+      COMMAND ${LLD_EXEC} -shared --eh-frame-hdr -o ${entry_like_so}
+              ${entry_like_obj}
+      COMMAND ${LLD_EXEC} -shared --eh-frame-hdr -s -o ${entry_like_stripped}
+              ${entry_like_obj}
+      DEPENDS ${entry_like_obj}
+      COMMENT "Linking x86-64 ${entry_like_fixture} fixtures")
+    list(APPEND ELF_EXECUTABLES ${entry_like_obj} ${entry_like_so}
+                                ${entry_like_stripped})
+  endforeach()
+
   # A state machine whose first state is a constant, linked so its table holds
   # plain offsets: exact scalar recovery first takes the dispatch as a direct
   # branch, then withdraws that guess once the cases loop back.

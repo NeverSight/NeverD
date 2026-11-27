@@ -1,6 +1,6 @@
 **Sprachen**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
+<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
 
 [← NeverD-Projekt](project.md)
 
@@ -40,7 +40,7 @@ Englische Anleitungen liegen direkt unter `docs/`. Übersetzungen sind in `ar/`,
 | [macOS/iOS-Prozessumgebungen](darwin-emulation.md) | Mach-O-Start, Geräte- und Simulatorplattformen, Darwin-Dienste und Seitenregeln |
 | [macOS HVF](macos-hvf.md) | Hardwareausführung mit der Host-ISA, Signaturrechte, Paketierung und Prüfung |
 | [Emulation von Windows-Treibern](driver-emulation.md) | Begrenzter x64-WDM/KMDF-Lebenszyklus, Anforderungen, Hardwareszenarien, SEH, PnP-Teilmengen, Backend-Auswahl und Grenzen |
-| [Speicher-Audit und Hunt](memory-safety.md) | Heap-Lebensdauer- und Copy-Überlaufanalyse: Identitätsvertrag je Format, Senken-/Quellenkatalog, Urteile, Budgets und JSON-Schema |
+| [Speichersicherheitsprüfung](memory-safety.md) | Heap-Lebensdauer- und Copy-Überlaufanalyse: Identitätsvertrag je Format, Senken-/Quellenkatalog, Urteile, Budgets und JSON-Schema |
 | [Prozess-Plugin-SDK (Englisch)](../process-plugin-sdk.md) | Eigenständiger Python-Helfer, Protokoll und unabhängige Beispiele |
 | [Tools-Schicht (Englisch)](../tools-layer.md) | Exakte Pluginaufrufe, eingefrorene Verbraucherschritte und Vorgangsprotokolle |
 | [GUI-Prozess-Plugins (Englisch)](../gui-plugins.md) | Manager, Menüplatzierung, Aufgabenergebnisse und Anbieterprotokoll |

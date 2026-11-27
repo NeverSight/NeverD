@@ -76,6 +76,7 @@ struct Decoder {
   [[noreturn]] void bad(std::string Why) const;
 };
 void decodePuc(Decoder &D);
+void decodeStack(Decoder &D, const StackInstruction &I, int &Top);
 void decodeJit(Decoder &D);
 void decodeLuau(Decoder &D);
 llvm::StringRef mnemonic(Family F, int Version, uint32_t Word);

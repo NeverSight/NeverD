@@ -2,7 +2,7 @@
 
 [← فهرس التوثيق](README.md)
 
-# تدقيق وصيد أمان الذاكرة
+# فحص أمان الذاكرة
 
 شغّل التحليلين معًا باستخدام `neverd scan <binary>`. لاختيار أحدهما، استخدم `--analyzer=audit` أو `--analyzer=hunt`. [دليل الفحص الموحّد (بالإنجليزية)](../memory-safety-scan.md).
 
@@ -10,8 +10,8 @@
 
 | المسار | الأمر | يبلّغ عن |
 |--------|--------|----------|
-| **التدقيق (Audit)** | `neverd audit <binary>` | عيوب عمر كائنات الكومة وقراءات المكدس المحلية غير المهيأة |
-| **الصيد (Hunt)** | `neverd hunt <binary>` | فيضانات النسخ الخطرة مع أدلة رمزية وقيم إدخال مرشحة؛ تكون `replayable=true` فقط مع خطة `process-input-v1` مكتملة |
+| **التدقيق (Audit)** | `neverd scan <binary> --analyzer=audit` | عيوب عمر كائنات الكومة وقراءات المكدس المحلية غير المهيأة |
+| **الصيد (Hunt)** | `neverd scan <binary> --analyzer=hunt` | فيضانات النسخ الخطرة مع أدلة رمزية وقيم إدخال مرشحة؛ تكون `replayable=true` فقط مع خطة `process-input-v1` مكتملة |
 
 يعيد المحرّك استخدام التنفيذ الرمزي ومحلّل المتجهات البتية الداخليين في NeverD للشواهد والقابلية للوصول. لا محلّل خارجي ولا آلة افتراضية ولا حاوية.
 
@@ -75,7 +75,7 @@
 وسّع الكتالوج أو استبدله بملف مواصفات:
 
 ```bash
-neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
+neverd scan --sinks extra_sinks.json --sources extra_sources.json app
 ```
 
 ```json
@@ -183,33 +183,27 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 خانة variadic فقط، أو slice غير مكتمل، أو استنفاد ميزانية العمق أو الملخص، تحكم
 المهاجم غير المثبت UNKNOWN؛ وتبقى الحقائق المثبتة صالحة ولا يخترع التحليل انتقالًا.
 
-تعد عدادات التقرير الاكتشافات لا الدوال ولا المسارات. يعد `control_reachable`
-الحالات ذات `status=REACHABLE`، و`attacker_reachable` هو الجزء منها الذي يحمل
-أيضًا `attacker_control=TAINTED`. ويعد `reachability_unknown` و`unreachable`
-حالتي التحكم الأخريين. وهذه العدادات منفصلة عن `safe` و`unsafe` و`unknown` التي
-تعد الأحكام.
-
 ---
 
 <!-- i18n-section: budgets -->
 
 ## الميزانيات والخرج والارتباطات
 
-استكشاف الصيد والمحلّل محدودان (`--max-paths` و`--max-steps` و`--max-loop` و`--solver-conflicts`). وفي العمل بين الإجراءات يحد `max_call_depth` عدد حواف الاستدعاء الداخلية من مدخل معروف، ويحد `max_summary_iterations` جولات النقطة الثابتة لتحكم المهاجم. القيمتان الافتراضيتان هما 64 حافة، وعدد جولات يساوي حد العمق الفعال زائد واحد. يفشل استنفاد الميزانية مغلقًا كما سبق. قد يترك استنفاد `max_call_depth` دالة لم يُوصل إليها بعد بحالة `status=UNKNOWN`؛ ولا يمحو استنفاد `max_summary_iterations` شاهد البنية، لذلك قد تجتمع `status=REACHABLE` مع `attacker_control=UNKNOWN` و`budget_hit=true`. يطبع الأمران JSON ويحترمان `-o`. رمز الخروج هو `0` لـ SAFE و`2` لـ UNSAFE و`1` لـ UNKNOWN أو الخطأ.
+استكشاف الصيد والمحلّل محدودان (`--max-paths` و`--max-steps` و`--max-loop` و`--solver-conflicts`). وفي العمل بين الإجراءات يحد `max_call_depth` عدد حواف الاستدعاء الداخلية من مدخل معروف، ويحد `max_summary_iterations` جولات النقطة الثابتة لتحكم المهاجم. القيمتان الافتراضيتان هما 64 حافة، وعدد جولات يساوي حد العمق الفعال زائد واحد. يفشل استنفاد الميزانية مغلقًا كما سبق. قد يترك استنفاد `max_call_depth` دالة لم يُوصل إليها بعد بحالة `status=UNKNOWN`؛ ولا يمحو استنفاد `max_summary_iterations` شاهد البنية، لذلك قد تجتمع `status=REACHABLE` مع `attacker_control=UNKNOWN` و`budget_hit=true`. يطبع `neverd scan` تقرير JSON ويدعم `-o`. رمز الخروج هو `0` لـ SAFE و`2` لـ UNSAFE و`1` لـ UNKNOWN أو الخطأ.
 
 تختار القيمة صفر افتراضي المحرك على كل واجهة عامة:
 
 | الواجهة | عمق التحكم | ملخص المهاجم |
 |---------|------------|---------------|
-| CLI (`audit` و`hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| CLI (`scan`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
 | C (`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
-| Python (`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+| Python (`Session.scan()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
 
 يصفّر مستدعي C البنية `neverd_safety_options` ويضبط
 `struct_size=sizeof(neverd_safety_options)`؛ وتحتفظ أحجام البنية الأقدم بالقيم
 الافتراضية. يتحقق Python من القيمتين كعددين صحيحين غير موقّعين بعرض 32 بت.
 
-التحليلان نفسهما متاحان عبر واجهة C (`neverd_session_audit_json` / `neverd_session_hunt_json` مع `neverd_safety_options` ذي إصدار) وSDK بايثون (`Session.audit()` / `Session.hunt()`).
+استدعِ `neverd_session_scan_json` في C أو `Session.scan()` في بايثون. مرّر حدود التحليل في C عبر `neverd_scan_options.analysis`.
 
 <!-- i18n-section: finding-schema -->
 

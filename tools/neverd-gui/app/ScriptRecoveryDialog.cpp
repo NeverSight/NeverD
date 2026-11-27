@@ -10,6 +10,8 @@
 
 #include "ScriptRecoveryDialog.h"
 
+#include "neverd/analysis/PythonVersions.h"
+
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
@@ -75,12 +77,18 @@ ScriptRecoveryDialog::ScriptRecoveryDialog(const QString &Worker,
   Profile->setObjectName(Prefix + QStringLiteral("Profile"));
   Profile->addItem(tr("Detect from artifact"), "auto");
   if (Python) {
-    Profile->addItem(QStringLiteral("CPython 3.10"), "cpython-3.10");
-    Profile->addItem(QStringLiteral("CPython 3.11"), "cpython-3.11");
+    for (const auto &Release : neverd::python::Releases) {
+      auto Number = QString::fromLatin1(Release.Number);
+      Profile->addItem(QStringLiteral("CPython ") + Number,
+                       QStringLiteral("cpython-") + Number);
+    }
     Profile->addItem(QStringLiteral("Ren’Py"), "renpy");
   } else {
     Profile->addItem(tr("PUC Lua"), "puc");
     Profile->addItem(tr("LuaJIT"), "luajit");
+    Profile->addItem(QStringLiteral("LuaJIT 1.0"), "luajit-1.0");
+    Profile->addItem(QStringLiteral("LuaJIT 1.1"), "luajit-1.1");
+    Profile->addItem(tr("Upstream Luau"), "luau-upstream");
     Profile->addItem(tr("Upstream Luau 0.659"), "luau-0.659");
   }
   Inputs->addRow(tr("&Profile"), Profile);
