@@ -155,6 +155,59 @@ void checkUCRTCallerCleanup(ImportCase C, const char *API, const char *WrongAPI,
 }
 } // namespace
 
+TEST(RegistrationImportABI, StartupQueriesKeepOnlyBoundClockOutputs) {
+  using registration_abi::checkedRegistrationImportStackPop;
+  for (const char *Name :
+       {"GetCurrentProcessId", "GetCurrentThreadId", "GetSystemTimeAsFileTime",
+        "QueryPerformanceCounter"}) {
+    const bool Clock = llvm::StringRef(Name) == "QueryPerformanceCounter" ||
+                       llvm::StringRef(Name) == "GetSystemTimeAsFileTime";
+    ImportImage F({Name, 0}, false);
+    EXPECT_EQ(checkedRegistrationImportStackPop(F.Image, ImportImage::IATVA),
+              Clock ? 4u : 0u);
+    EXPECT_EQ(registration_abi::preservesRegistrationImportBindings(
+                  F.Image, ImportImage::IATVA),
+              !Clock);
+    F.Image.Imports.front().Module = "application.dll";
+    EXPECT_FALSE(
+        checkedRegistrationImportStackPop(F.Image, ImportImage::IATVA));
+    F.Image.Imports.front().Module = "KERNEL32.dll";
+    F.Image.Imports.front().IsDelayImport = true;
+    EXPECT_FALSE(
+        checkedRegistrationImportStackPop(F.Image, ImportImage::IATVA));
+    if (!Clock)
+      continue;
+    for (bool ThroughStub : {false, true})
+      for (int8_t Displacement : {-4, 0, 8, 12, 16}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Name << '/' << ThroughStub << '/' << int(Displacement));
+        ImportImage Call({Name, 0}, ThroughStub);
+        // Reserve 16 bytes, take &local, push it, call, then release the frame.
+        std::vector<uint8_t> Body = {
+            0x83, 0xec, 16, 0x8d, 0x44, 0x24, uint8_t(Displacement), 0x50};
+        if (ThroughStub) {
+          Body.push_back(0xe8);
+          const size_t Field = Body.size();
+          Body.resize(Field + 4);
+          writeLE<uint32_t>(Body.data() + Field,
+                            ImportImage::StubVA -
+                                (ImportImage::TextVA + Body.size()));
+        } else {
+          Body.insert(Body.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+        }
+        Body.insert(Body.end(), {0x83, 0xc4, 16, 0xc3});
+        auto &Code = Call.Image.Segments.front().Data;
+        std::copy(Body.begin(), Body.end(), Code.begin());
+        const auto Contract = RegistrationCallCalleeIndex(Call.Image)
+                                  .stackContract(ImportImage::TextVA);
+        ASSERT_TRUE(Contract);
+        EXPECT_EQ(Contract->StackPopBytes, 0u);
+        EXPECT_EQ(Contract->PreservesImportBindings,
+                  Displacement >= 0 && Displacement + 8 <= 16);
+      }
+  }
+}
+
 TEST(RegistrationImportABI, UCRTStdioReturnsWithCallerCleanup) {
   // The vfprintf options word occupies two PE32 stack slots.
   for (const ImportCase C : {ImportCase{"__acrt_iob_func", 1},

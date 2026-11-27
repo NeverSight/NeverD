@@ -187,6 +187,8 @@ checkedRegistrationImportStackPop(const BinaryImage &Image, va_t Target) {
     return std::nullopt;
   // These are returning ESP facts only. Dispatch, allocation, memory writes,
   // pointer results, callbacks and FP state need separate effect contracts.
+  if (const auto Query = registration_state::kernelStartupQuery(*Import))
+    return *Query == registration_state::StartupQuery::Identifier ? 0 : 4;
   if (isRaiseExceptionProvider(*Import))
     return 16;
   if (isStartupInfoProvider(*Import))
@@ -228,7 +230,9 @@ bool preservesRegistrationImportBindings(const BinaryImage &Image,
     return true;
   // The no-argument argc and argv accessors return addresses of CRT globals.
   // Loading through those pointers reads live process inputs.
-  if (registrationCRTAccessorAccess(*Import))
+  if (registrationCRTAccessorAccess(*Import) ||
+      registration_state::kernelStartupQuery(*Import) ==
+          registration_state::StartupQuery::Identifier)
     return true;
   // These APIs transform pointer bits with a process-specific secret, without
   // replacing the caller image's import slots. Keep the runtime result opaque;
