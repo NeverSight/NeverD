@@ -378,15 +378,15 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
                   (Op.Opcode == NdOp::INDIR_BR ||
                    (Op.Opcode == NdOp::BRANCH &&
                     Terminator.ScalarBranchInput))) {
-                Target = constantScalarExpression(
-                    Operations,
+                symbolic::SymContext Ctx;
+                const auto Expr = symbolicScalarExpression(
+                    Ctx, Operations,
                     Terminator.ScalarBranchInput.value_or(Op.Inputs[0]),
                     Terminator.Addr, RemainingWork, ReadImage);
+                Target = constantScalarExpression(Ctx, Expr, RemainingWork);
                 if (!Target && AllowFinite)
-                  FiniteTargets = finiteScalarExpression(
-                      Operations,
-                      Terminator.ScalarBranchInput.value_or(Op.Inputs[0]),
-                      Terminator.Addr, RemainingWork, ReadImage);
+                  FiniteTargets =
+                      finiteScalarExpression(Ctx, Expr, RemainingWork);
                 Bounded = false;
                 break;
               }
