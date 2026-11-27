@@ -338,20 +338,65 @@ Expected<std::string> resolveLinker(const cl::opt<std::string> &Option) {
   auto Path = sys::findProgramByName(Option);
   if (!Path)
     return createFileError(Option, Path.getError());
-  return std::move(*Path);
+  SmallString<128> Absolute(*Path);
+  if (auto EC = sys::fs::make_absolute(Absolute))
+    return createFileError(*Path, EC);
+  return std::string(Absolute);
 }
 
 Error linkImage(StringRef Driver, StringRef Layout, StringRef Output,
-                const std::vector<std::string> &Objects) {
+                const std::vector<std::string> &Objects, StringRef Directory) {
   SmallVector<StringRef> Args{Driver, "-static", "-T", Layout, "-o", Output};
   llvm::append_range(Args, Objects);
+  // This CLI command runs one linker synchronously. LLD matches script
+  // selectors against the spelling of each object argument.
+  SmallString<128> Previous;
+  if (auto EC = sys::fs::current_path(Previous))
+    return errorCodeToError(EC);
+  if (auto EC = sys::fs::set_current_path(Directory))
+    return createFileError(Directory, EC);
   std::string Detail;
   int Status =
       sys::ExecuteAndWait(Driver, Args, std::nullopt, {}, 0, 0, &Detail);
+  if (auto EC = sys::fs::set_current_path(Previous))
+    return createFileError(Previous, EC);
   if (Status)
     return createStringError("ELF linker exited with status %d: %s", Status,
                              Detail.c_str());
   return Error::success();
+}
+
+Expected<fs::path> linkDirectory(const fs::path &Work, const fs::path &Base,
+                                 const std::vector<std::string> &Objects) {
+  // A relative input may live above the manifest, for example ../lib/a.o.
+  // Give those paths enough parents inside the private copy of the inputs.
+  size_t Parents = 0;
+  for (const std::string &Name : Objects) {
+    if (!StringRef(Name).contains(".."))
+      continue;
+    const fs::path Path = fs::u8path(Name).lexically_normal();
+    if (!Path.has_root_path())
+      Parents = std::max(Parents, size_t(std::count(Path.begin(), Path.end(),
+                                                    fs::path(".."))));
+  }
+  fs::path Directory = Work / "inputs";
+  if (!Parents)
+    return Directory;
+  std::error_code EC;
+  fs::path Ancestor = fs::canonical(Base.empty() ? fs::path(".") : Base, EC);
+  if (EC)
+    return createFileError(pathToUTF8(Base), EC);
+  // Use the actual ancestor names so a sibling and the current directory
+  // still name different files when both contain a unit.o.
+  SmallVector<fs::path, 4> Components;
+  for (size_t I = 0; I != Parents; ++I) {
+    Components.push_back(Ancestor.has_relative_path() ? Ancestor.filename()
+                                                      : fs::path("_"));
+    Ancestor = Ancestor.parent_path();
+  }
+  for (const fs::path &Component : llvm::reverse(Components))
+    Directory /= Component;
+  return Directory;
 }
 
 Error publish(StringRef Bytes, StringRef Output, fs::perms Permissions) {
@@ -400,6 +445,8 @@ Error relink(StringRef Output) {
   if (auto EC = sys::fs::createUniqueDirectory("neverd-relink", Temp))
     return errorCodeToError(EC);
   scope_exit Cleanup([&] { sys::fs::remove_directories(Temp); });
+  if (auto EC = sys::fs::make_absolute(Temp))
+    return createFileError(Temp, EC);
   const fs::path Work = fs::u8path(Temp.str().str());
   const fs::path Base = fs::u8path(PatchRelink.getValue()).parent_path();
   const auto Source = [&](StringRef P) { return Base / fs::u8path(P.str()); };
@@ -407,25 +454,44 @@ Error relink(StringRef Output) {
   const std::string Candidate = pathToUTF8(Work / "image.elf");
   if (Error E = copyInput(Source(M->Layout), Work / "layout.ld"))
     return E;
+  auto Inputs = linkDirectory(Work, Base, M->Objects);
+  if (!Inputs)
+    return Inputs.takeError();
+  const fs::path &Directory = *Inputs;
+  std::error_code EC;
+  fs::create_directories(Directory, EC);
+  if (EC)
+    return createFileError(pathToUTF8(Directory), EC);
   std::vector<std::string> Objects;
   fs::path Selected;
   for (const std::string &Name : M->Objects) {
-    // Preserve input basenames when a layout uses file-specific selectors.
-    const fs::path Dir = Work / std::to_string(Objects.size());
-    if (auto EC = sys::fs::create_directory(pathToUTF8(Dir)))
-      return errorCodeToError(EC);
-    const fs::path Staged = Dir / Source(Name).filename();
+    const fs::path Path = fs::u8path(Name);
+    fs::path Staged = Directory / Path;
+    std::string Argument = Name;
+    // Keep absolute inputs, option-like filenames and repeated aliases in
+    // distinct private slots. Substitution applies to one manifest entry.
+    if (Path.has_root_path() || Name.front() == '-' || Name.front() == '@' ||
+        sys::fs::exists(pathToUTF8(Staged))) {
+      Staged = Work / std::to_string(Objects.size()) / Path.filename();
+      Argument = pathToUTF8(Staged);
+    }
+    if (Staged.parent_path() != Directory) {
+      fs::create_directories(Staged.parent_path(), EC);
+      if (EC)
+        return createFileError(pathToUTF8(Staged.parent_path()), EC);
+    }
     if (Error E = copyInput(Source(Name), Staged))
       return E;
-    Objects.push_back(pathToUTF8(Staged));
+    Objects.push_back(std::move(Argument));
     const bool IsSelected = Name == M->Original;
-    if (Error E = checkObject(Objects.back(), IsSelected ? M->Function : ""))
+    if (Error E =
+            checkObject(pathToUTF8(Staged), IsSelected ? M->Function : ""))
       return E;
     if (IsSelected)
       Selected = Staged;
   }
   if (Error E = linkImage(OriginalDriver ? *OriginalDriver : *Driver, Layout,
-                          Candidate, Objects))
+                          Candidate, Objects, pathToUTF8(Directory)))
     return E;
   auto Baseline = readFile(Candidate);
   if (!Baseline)
@@ -442,7 +508,8 @@ Error relink(StringRef Output) {
   if (!Inplace)
     if (Error E = copyInput(Source(M->SectionLayout), Work / "layout.ld"))
       return E;
-  if (Error E = linkImage(*Driver, Layout, Candidate, Objects))
+  if (Error E =
+          linkImage(*Driver, Layout, Candidate, Objects, pathToUTF8(Directory)))
     return E;
   auto Product = readFile(Candidate);
   if (!Product)
@@ -453,7 +520,6 @@ Error relink(StringRef Output) {
   if (Error E = verifyProduct(*Old, *New, (*Input)->getBuffer(),
                               (*Product)->getBuffer(), *M, Inplace))
     return E;
-  std::error_code EC;
   const auto Perms =
       fs::status(fs::u8path(InputFile.getValue()), EC).permissions();
   if (EC)

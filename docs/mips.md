@@ -162,8 +162,10 @@ a nonzero ELF symbol size. Keep the symbol table in the executable.
 ```
 
 Paths are relative to the manifest. Supply self-contained linker scripts and
-static ELF objects. The linker receives the objects under their original
-basenames. Use input section selectors such as `*(.text.calc)`. Link the
+static ELF objects. Write file-specific selectors with the same relative
+path as the object argument, for example `"../objects/unit.o"(.text.calc)`.
+Objects from different directories can share a basename. A selector such
+as `*(.text.calc)` matches that section in any object. Link the
 original with the same LLD driver, object order and layout, for example
 `ld.lld -static -T base.ld -o app start.o calc.o`.
 
@@ -228,8 +230,11 @@ orders of `section` and `inplace`. Their exit statuses progress from 25 to
 Reusing the first generation's input objects must preserve the last
 successful output and report that they do not reproduce the executable.
 For each of the six, both modes also replace the input at a pathname with
-spaces and Unicode characters. The guest runner receives those executables
-after a stale retry verifies their bytes and the host file permissions.
+spaces and Unicode characters. These links use read-only manifests, layouts
+and objects. The layout selects two different `unit.o` files by their
+manifest-relative paths, including one in a sibling directory. The guest
+runner receives those executables after comparison with independent LLD
+links and a stale retry that checks their bytes and host file permissions.
 
 Six classic R2 configurations also carry 16 MiB of initialized read-only
 data and 64 MiB of BSS. The guest reads both ends of each object, writes the
