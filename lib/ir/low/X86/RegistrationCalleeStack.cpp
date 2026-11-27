@@ -158,6 +158,78 @@ bool endsInReturn(const LowBlock &Block) {
   return !Block.Ops.empty() && Block.Ops.back().Opcode == NdOp::RETURN;
 }
 
+/// On ordinary continuation CPUID and XGETBV write only their result GPRs.
+/// The caller has checked this block's instruction boundaries and bytes.
+bool isReturningCPUQuery(const BinaryImage &Image, const LowBlock &Block,
+                         const LowOp &Op, const FrameValue &SP, size_t &Work) {
+  if (Op.NumInputs < 2 || Op.Output != NdVar::reg(x86reg::RAX, 8))
+    return false;
+  const bool Cpuid = Op.Inputs[0] == NdVar::cst(uint64_t(Intrinsic::Cpuid), 2);
+  if (Cpuid) {
+    if (Op.NumInputs != 3 || Op.Inputs[1] != NdVar::reg(x86reg::RAX, 4))
+      return false;
+  } else if (Op.NumInputs != 2 ||
+             Op.Inputs[0] != NdVar::cst(uint64_t(Intrinsic::Xgetbv), 2)) {
+    return false;
+  }
+  if (Op.Inputs[Op.NumInputs - 1] != NdVar::reg(x86reg::RCX, 4))
+    return false;
+  static constexpr uint64_t CpuOutputs[] = {x86reg::RAX, x86reg::RBX,
+                                            x86reg::RCX, x86reg::RDX};
+  static constexpr uint64_t XcrOutputs[] = {x86reg::RAX, x86reg::RDX};
+  const auto Outputs =
+      Cpuid ? llvm::ArrayRef(CpuOutputs) : llvm::ArrayRef(XcrOutputs);
+  const auto &Bounds = Block.InstructionBoundaries;
+  if (!chargeCalleeWork(Work,
+                        std::bit_width(Bounds.size()) + Outputs.size() + 4))
+    return false;
+  const auto It = llvm::lower_bound(
+      Bounds, Op.Addr, [](const auto &B, va_t A) { return B.Address < A; });
+  const unsigned Size = Cpuid ? 2 : 3;
+  if (It == Bounds.end() || It->Address != Op.Addr || It->Size != Size ||
+      It->OpCount != 1 + Outputs.size() || &Block.Ops[It->FirstOp] != &Op)
+    return false;
+  const auto *Bytes = Image.readVA(Op.Addr, Size);
+  if (!Bytes || Bytes[0] != 0x0f ||
+      (Cpuid ? Bytes[1] != 0xa2 : Bytes[1] != 0x01 || Bytes[2] != 0xd0))
+    return false;
+  if (Cpuid) {
+    // CPUID also writes the nonvolatile EBX. MSVC pushes it in the private
+    // frame and pops it after optionally moving the CPU result to a GPR.
+    if (!SP.Offset || *SP.Offset > -4 || SP != FrameValue::frame(*SP.Offset) ||
+        It == Bounds.begin() || It[-1].Size != 1 || It + 1 == Bounds.end())
+      return false;
+    auto Pop = It + 1;
+    const bool HasMove = Pop->Size == 2;
+    if (HasMove)
+      ++Pop;
+    if (Pop == Bounds.end() || Pop->Size != 1)
+      return false;
+    const auto *Save = Image.readVA(It[-1].Address, HasMove ? 6 : 4);
+    if (!Save || Save[0] != 0x53 || Save[HasMove ? 5 : 3] != 0x5b)
+      return false;
+    if (HasMove) {
+      // MOV r32,EBX in either encoding. A write to ESP moves the pop.
+      const uint8_t ModRM = Save[4];
+      const bool FromEBX =
+          (Save[3] == 0x8b && (ModRM & 0xc7) == 0xc3 && ModRM != 0xe3) ||
+          (Save[3] == 0x89 && (ModRM & 0xf8) == 0xd8 && ModRM != 0xdc);
+      if (!FromEBX)
+        return false;
+    }
+  }
+  // Each copy reads a fresh, undefined LowIR temporary in this instruction.
+  // The ordinary transfer below therefore drops every earlier result-GPR fact.
+  for (size_t N = 0; N != Outputs.size(); ++N) {
+    const auto &Copy = Block.Ops[It->FirstOp + 1 + N];
+    if (Copy.Opcode != NdOp::COPY || Copy.Output != NdVar::reg(Outputs[N], 4) ||
+        Copy.NumInputs != 1 || !Copy.Inputs[0].isTemp() ||
+        Copy.Inputs[0].Size != 4)
+      return false;
+  }
+  return true;
+}
+
 struct StackBody {
   const BinaryImage &Image;
   const LowFunc &Source;
@@ -849,6 +921,17 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
           !Arguments.observe(Abstract, Transfer, Work))
         return std::nullopt;
       if (Op.Opcode == NdOp::INTRINSIC) {
+        if (!Registration && !CxxPaths &&
+            isReturningCPUQuery(
+                Image, Block, Op,
+                State.Registers[x86reg::RSP / x86reg::GeneralRegStride],
+                Work)) {
+          // A resumed feature fault can change process memory. The stack
+          // summary grants neither a feature value nor a fresh import binding.
+          State.ImportBindingsIntact = false;
+          PreservesEntryImports = false;
+          continue;
+        }
         if (Op.NumInputs &&
             Op.Inputs[0] ==
                 NdVar::cst(

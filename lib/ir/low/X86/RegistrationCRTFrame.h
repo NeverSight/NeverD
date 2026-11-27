@@ -25,10 +25,11 @@ enum class KernelStartupCall {
   Identifier,
   Clock,
   SetExceptionFilter,
-  InitializeSList
+  InitializeSList,
+  ProcessorFeature
 };
 std::optional<KernelStartupCall> kernelStartupCall(const Import &Imported);
-/// Check the clock output, installed filter or aligned image list header.
+/// Check a Win32 startup call's output storage, filter or feature selector.
 /// The caller owns the live binding and private outgoing argument word.
 bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
                                         const LowBlock &Block, const LowOp &Op,

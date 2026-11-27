@@ -815,6 +815,63 @@ TEST(RegistrationCRTFrame, XCPT4StartupModesRequireTheirActualArgument) {
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4QueriesProcessorFeaturesDuringStartup) {
+  using namespace registration_state;
+  for (const bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(*Image));
+    for (const auto &[Entry, Site] :
+         {std::pair{0x407769u, 0x40777fu}, std::pair{0x4072f1u, 0x4072fdu}}) {
+      SCOPED_TRACE(::testing::Message() << Selected << ' ' << Site);
+      const auto Caller = CFGBuilder().buildIntegerFrameProof(
+          *Image, Decode, Entry, "startup feature query");
+      unsigned Calls = 0;
+      for (const auto &Block : Caller.Blocks)
+        for (const auto &Op : Block.Ops) {
+          if (Op.Addr != Site || Op.Opcode != NdOp::INDIR_CALL)
+            continue;
+          ++Calls;
+          size_t Work = 0;
+          const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
+          ASSERT_TRUE(Slot);
+          const auto *Imported = Image->findImportAt(*Slot);
+          ASSERT_TRUE(Imported);
+          ASSERT_EQ(Imported->Name, "IsProcessorFeaturePresent");
+          FrameState State;
+          State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+              FrameValue::frame(-4);
+          EXPECT_TRUE(hasBindingPreservingKernelArgument(*Image, Block, Op,
+                                                         *Slot, State, Work));
+          State.ImportBindingsIntact = false;
+          EXPECT_FALSE(hasBindingPreservingKernelArgument(*Image, Block, Op,
+                                                          *Slot, State, Work));
+          State.ImportBindingsIntact = true;
+          State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+              FrameValue::frame(0);
+          EXPECT_FALSE(hasBindingPreservingKernelArgument(*Image, Block, Op,
+                                                          *Slot, State, Work));
+        }
+      EXPECT_EQ(Calls, 1u);
+    }
+  }
+}
+
+TEST(RegistrationCRTFrame, XCPT4CPUInitializerRestoresTheCallerStack) {
+  for (const bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    RegistrationCallCalleeIndex Callees(*Image);
+    const auto Init = Callees.stackContract(0x407769);
+    ASSERT_TRUE(Init);
+    EXPECT_EQ(Init->StackPopBytes, 0u);
+    EXPECT_FALSE(Init->PreservesImportBindings);
+    EXPECT_FALSE(
+        Callees.stackContract(0x4072f1)); // Conditional fast-fail path.
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4StartupFilterSetterPreservesLiveBindings) {
   enum class Change { None, MissingRelocation, DataTarget, Provider, NewMode };
   for (const bool Selected : {false, true}) {

@@ -16598,6 +16598,14 @@ intrinsic reject. `DivideFaultCannotCertifyLaterImportBindings` adds 72 physical
 variants of direct slot calls, fresh cached loads, retained register targets and
 reloads. A potential divide fault withdraws later bindings while a target held
 before the divide remains a separate positive control.
+`RegistrationCRTFrame.XCPT4CPUInitializerRestoresTheCallerStack` follows
+the original PE32 CPU initializer through its feature query, CPUID and XGETBV
+in full and selected-function loads. Both graphs restore the caller's stack.
+The feature result stays unknown. A processor instruction can fault, so the
+returning stack proof drops fresh import bindings. The CPUID check requires a
+private EBX save and restore in the same block. The register controls in
+`RegistrationImportABI.CPUQueriesDiscardOverwrittenStackCoordinates` exercise
+each CPU result register and an unaffected stack coordinate.
 `CRTMemoryImportsProveOnlyReturningStackCleanup` checks eleven legacy CRT
 imports through both IAT calls and jump veneers. Provider, name, delayed-import,
 conflicting-slot, addend, backing-byte, metadata, architecture and caller-cleanup
