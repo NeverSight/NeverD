@@ -367,7 +367,7 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
     }
     return;
   }
-  auto Cookie = B.rfind(StringRef(CookieMagic, sizeof(CookieMagic)));
+  auto Cookie = findArchiveCookie(B);
   if (Cookie != StringRef::npos) {
     archive(*this, Id, B, Cookie, Depth);
     return;
@@ -596,7 +596,17 @@ void fromPath(Job &J, StringRef Path) {
       throw;
   }
 }
+json::Object fileReport(Job &J, StringRef Path, int Component) {
+  if (Component >= 0)
+    J.Selection = Component;
+  return run(J, [&] {
+    if (Component < -1)
+      unsupported(0, "Invalid component selection");
+    fromPath(J, Path);
+  });
+}
 } // namespace
+
 json::Object neverd::python::recover(StringRef Bytes, StringRef Name,
                                      StringRef Profile, Cancel Stop,
                                      int Component) {
@@ -622,13 +632,7 @@ json::Object neverd::python::recover(StringRef Bytes, StringRef Name,
 json::Object neverd::python::recoverFile(StringRef Path, StringRef Profile,
                                          Cancel Stop, int Component) {
   Job J{Profile, Stop};
-  if (Component >= 0)
-    J.Selection = Component;
-  return run(J, [&] {
-    if (Component < -1)
-      unsupported(0, "Invalid component selection");
-    fromPath(J, Path);
-  });
+  return fileReport(J, Path, Component);
 }
 json::Object neverd::python::exportNative(StringRef Path, StringRef Profile,
                                           unsigned Id, StringRef Expected,
@@ -690,14 +694,19 @@ public:
   explicit ReportStream(std::string &Text) : Text(Text) {}
   bool exceeded() const { return Full; }
 };
-} // namespace
 
-std::string neverd::python::serializeReport(json::Object Report) {
+std::string serialize(json::Object Report,
+                      ArrayRef<FunctionInstructions> Tables) {
   json::Value Value(std::move(Report));
   std::string Text;
   {
     ReportStream OS(Text);
-    OS << Value;
+    if (Tables.empty())
+      OS << Value;
+    else {
+      json::OStream JSON(OS);
+      writeInstructionReport(JSON, *Value.getAsObject(), Tables);
+    }
     OS.flush();
     if (!OS.exceeded())
       return Text;
@@ -727,4 +736,18 @@ std::string neverd::python::serializeReport(json::Object Report) {
   OS << json::Value(std::move(Summary));
   OS.flush();
   return Text;
+}
+} // namespace
+
+std::string neverd::python::serializeReport(json::Object Report) {
+  return serialize(std::move(Report), {});
+}
+
+std::string neverd::python::recoverFileJSON(StringRef Path, StringRef Profile,
+                                            Cancel Stop, int Component) {
+  Job J{Profile, Stop};
+  std::vector<FunctionInstructions> Tables;
+  J.InstructionTables = &Tables;
+  auto Report = fileReport(J, Path, Component);
+  return serialize(std::move(Report), Tables);
 }

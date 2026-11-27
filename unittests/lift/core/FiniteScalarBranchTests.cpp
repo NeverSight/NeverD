@@ -132,12 +132,20 @@ std::vector<LowOp> expression(unsigned Bytes) {
   return Ops;
 }
 
+std::optional<std::vector<uint64_t>> evaluateCover(llvm::ArrayRef<LowOp> Ops,
+                                                   const NdVar &Value,
+                                                   va_t Query, size_t &Work) {
+  symbolic::SymContext Ctx;
+  const auto Expr = symbolicScalarExpression(Ctx, Ops, Value, Query, Work);
+  return finiteScalarExpression(Ctx, Expr, Work);
+}
+
 TEST(FiniteScalarExpression, SparseMasksAndArithmeticWrapAtEveryWidth) {
   for (unsigned Bytes : {1, 2, 4, 8}) {
     SCOPED_TRACE(Bytes);
     size_t Work = limits::kMaxScalarBranchEvidenceWork;
-    const auto Cover = finiteScalarExpression(
-        expression(Bytes), NdVar::reg(8, Bytes), 0x2000, Work);
+    const auto Cover =
+        evaluateCover(expression(Bytes), NdVar::reg(8, Bytes), 0x2000, Work);
     ASSERT_TRUE(Cover);
     std::set<uint64_t> Expected;
     const uint64_t Mask = UINT64_MAX >> ((8 - Bytes) * 8);
@@ -147,11 +155,37 @@ TEST(FiniteScalarExpression, SparseMasksAndArithmeticWrapAtEveryWidth) {
   }
 }
 
+TEST(FiniteScalarExpression, SelectedAddressesKeepOnlyTheirAlignedTargets) {
+  for (unsigned Bytes : {4, 8}) {
+    const auto Target = NdVar::reg(0, Bytes);
+    LowOp Select;
+    Select.Addr = 0x1000;
+    Select.Opcode = NdOp::SELECT;
+    Select.Output = Target;
+    Select.addInput(NdVar::reg(16, 4));
+    Select.addInput(NdVar::scalar(0x1011, Bytes));
+    Select.addInput(NdVar::scalar(0x20ef, Bytes));
+    LowOp Align;
+    Align.Addr = 0x1004;
+    Align.Opcode = NdOp::INT_AND;
+    Align.Output = Target;
+    Align.addInput(Target);
+    Align.addInput(NdVar::scalar(~uint64_t{3}, Bytes));
+    size_t Work = limits::kMaxScalarBranchEvidenceWork;
+    EXPECT_EQ(evaluateCover({Select, Align}, Target, Align.Addr, Work),
+              (std::vector<uint64_t>{0x1010, 0x20ec}));
+
+    Select.Inputs[2] = NdVar::reg(24, Bytes);
+    Work = limits::kMaxScalarBranchEvidenceWork;
+    EXPECT_FALSE(evaluateCover({Select, Align}, Target, Align.Addr, Work));
+  }
+}
+
 TEST(FiniteScalarExpression, BudgetsNeverReturnAnEnumeratedPrefix) {
   for (size_t Budget = 0; Budget < 2048; Budget += 7) {
     size_t Work = Budget;
     const auto Cover =
-        finiteScalarExpression(expression(8), NdVar::reg(8, 8), 0x2000, Work);
+        evaluateCover(expression(8), NdVar::reg(8, 8), 0x2000, Work);
     EXPECT_LE(Work, Budget);
     if (Cover)
       EXPECT_EQ(*Cover, (std::vector<uint64_t>{232, 240, 264, 272}));
@@ -177,7 +211,7 @@ TEST(FiniteScalarExpression, ClobberedRegisterBytesStayUnknown) {
     }
     Ops.push_back(Clobber);
     size_t Work = limits::kMaxScalarBranchEvidenceWork;
-    EXPECT_FALSE(finiteScalarExpression(Ops, NdVar::reg(8, 8), 0x2000, Work));
+    EXPECT_FALSE(evaluateCover(Ops, NdVar::reg(8, 8), 0x2000, Work));
   }
 }
 TEST(FiniteScalarExpression, TemporaryIdentitiesDoNotCrossInstructions) {
@@ -188,9 +222,9 @@ TEST(FiniteScalarExpression, TemporaryIdentitiesDoNotCrossInstructions) {
   Mask.addInput(NdVar::reg(0, 8));
   Mask.addInput(NdVar::scalar(3, 8));
   size_t Work = limits::kMaxScalarBranchEvidenceWork;
-  EXPECT_EQ(finiteScalarExpression({Mask}, Mask.Output, 0x1000, Work),
+  EXPECT_EQ(evaluateCover({Mask}, Mask.Output, 0x1000, Work),
             (std::optional<std::vector<uint64_t>>{{0, 1, 2, 3}}));
   Work = limits::kMaxScalarBranchEvidenceWork;
-  EXPECT_FALSE(finiteScalarExpression({Mask}, Mask.Output, 0x1001, Work));
+  EXPECT_FALSE(evaluateCover({Mask}, Mask.Output, 0x1001, Work));
 }
 } // namespace

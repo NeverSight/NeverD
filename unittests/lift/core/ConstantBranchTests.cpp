@@ -209,15 +209,22 @@ std::vector<LowOp> scalarIdentity(unsigned Bytes, unsigned Form) {
   return Ops;
 }
 
+std::optional<uint64_t> evaluateConstant(llvm::ArrayRef<LowOp> Ops,
+                                         const NdVar &Value, va_t Query,
+                                         size_t &Work) {
+  symbolic::SymContext Ctx;
+  const auto Expr = symbolicScalarExpression(Ctx, Ops, Value, Query, Work);
+  return constantScalarExpression(Ctx, Expr, Work);
+}
+
 TEST(ScalarControlExpression, IdentitiesUseEveryBitOfTheirOwnWidth) {
   for (unsigned Bytes : {1, 2, 4, 8})
     for (unsigned Form = 0; Form != 4; ++Form) {
       SCOPED_TRACE(::testing::Message() << Bytes << ':' << Form);
       const auto Ops = scalarIdentity(Bytes, Form);
       size_t Work = limits::kMaxScalarBranchEvidenceWork;
-      EXPECT_EQ(
-          constantScalarExpression(Ops, NdVar::reg(16, Bytes), 0x2000, Work),
-          0x80u);
+      EXPECT_EQ(evaluateConstant(Ops, NdVar::reg(16, Bytes), 0x2000, Work),
+                0x80u);
       EXPECT_LT(Work, limits::kMaxScalarBranchEvidenceWork);
     }
 }
@@ -246,8 +253,7 @@ TEST(ScalarControlExpression, WritesCallsAndMemoryReadsRetainTheirIdentities) {
     }
     Ops.insert(Ops.end() - 2, Barrier);
     size_t Work = limits::kMaxScalarBranchEvidenceWork;
-    EXPECT_FALSE(
-        constantScalarExpression(Ops, NdVar::reg(16, 8), 0x2000, Work));
+    EXPECT_FALSE(evaluateConstant(Ops, NdVar::reg(16, 8), 0x2000, Work));
   }
 }
 
@@ -259,7 +265,7 @@ TEST(ScalarControlExpression, TemporariesCannotCrossInstructionBoundaries) {
   Set.addInput(NdVar::scalar(0x1080, 8));
   for (va_t Query : {0x1000, 0x1001}) {
     size_t Work = limits::kMaxScalarBranchEvidenceWork;
-    EXPECT_EQ(constantScalarExpression({Set}, Set.Output, Query, Work),
+    EXPECT_EQ(evaluateConstant({Set}, Set.Output, Query, Work),
               Query == Set.Addr ? std::optional<uint64_t>{0x1080}
                                 : std::nullopt);
   }
@@ -277,8 +283,7 @@ TEST(ScalarControlExpression, MalformedAndUnaffordableQueriesPublishNothing) {
       Ops.front().NumInputs = std::size(Ops.front().Inputs) + 1;
     else
       Ops.front().Inputs[0].Size = 4;
-    EXPECT_FALSE(
-        constantScalarExpression(Ops, NdVar::reg(16, 8), 0x2000, Work));
+    EXPECT_FALSE(evaluateConstant(Ops, NdVar::reg(16, 8), 0x2000, Work));
   }
 }
 

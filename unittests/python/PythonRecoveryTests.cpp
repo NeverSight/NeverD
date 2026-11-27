@@ -40,17 +40,34 @@ const json::Array &fixtures() {
   }();
   return Rows;
 }
+std::string fixtureBytes(const json::Object &Fixture) {
+  std::vector<char> Data;
+  if (auto E = decodeBase64(*Fixture.getString("data"), Data)) {
+    consumeError(std::move(E));
+    return {};
+  }
+  return {Data.begin(), Data.end()};
+}
+
+json::Object modernFixture() {
+  auto Path = std::filesystem::path(PYTHON_ARTIFACT_MANIFEST).parent_path() /
+              "modern.json";
+  auto File = MemoryBuffer::getFile(Path.string());
+  if (!File)
+    return {};
+  auto Doc = json::parse((*File)->getBuffer());
+  if (!Doc) {
+    consumeError(Doc.takeError());
+    return {};
+  }
+  return std::move(*Doc->getAsObject());
+}
+
 std::string bytes(StringRef Name) {
   for (const auto &V : fixtures()) {
     const auto &R = *V.getAsObject();
-    if (R.getString("name") != Name)
-      continue;
-    std::vector<char> Data;
-    if (auto E = decodeBase64(*R.getString("data"), Data)) {
-      consumeError(std::move(E));
-      return {};
-    }
-    return {Data.begin(), Data.end()};
+    if (R.getString("name") == Name)
+      return fixtureBytes(R);
   }
   return {};
 }
@@ -237,6 +254,33 @@ TEST(PythonRecovery, PackageMembersHaveDistinctIdentitiesAndNativeRoutes) {
       Missing.getArray("components")->back().getAsObject()->getString("status"),
       "missing_member");
 }
+TEST(PythonRecovery, LastArchiveCookieIncludesOverlaysAndWindowEdges) {
+  constexpr StringLiteral Magic("MEI\x0c\x0b\x0a\x0b\x0e");
+  EXPECT_EQ(findArchiveCookie(Magic.drop_back()), StringRef::npos);
+  for (unsigned Size : {8u, 88u, 100u, 512u, 2048u}) {
+    std::string Input(Size, 'M');
+    EXPECT_EQ(findArchiveCookie(Input), StringRef::npos);
+    for (size_t Start = 0; Start + Magic.size() <= Input.size(); ++Start) {
+      Input.replace(Start, Magic.size(), Magic.str());
+      EXPECT_EQ(findArchiveCookie(Input), StringRef(Input).rfind(Magic))
+          << Size << " " << Start;
+      std::fill_n(Input.begin() + Start, Magic.size(), 'M');
+    }
+  }
+  auto Pack = bytes("owned.pkg");
+  auto Last = Pack.size() + 319;
+  Pack.append(319, 'M');
+  Pack += Magic.str();
+  EXPECT_EQ(findArchiveCookie(Pack), Last);
+  auto Report = analyze(Pack, "overlay.pkg");
+  EXPECT_EQ(Report.getString("status"), "malformed");
+  EXPECT_EQ(Report.getArray("diagnostics")
+                ->front()
+                .getAsObject()
+                ->getInteger("offset"),
+            Last);
+}
+
 TEST(PythonRecovery, InvalidArchiveExtentsNamesAndExpansion) {
   auto Data = bytes("owned.pkg");
   ASSERT_GT(Data.size(), 88u);
@@ -268,16 +312,9 @@ TEST(PythonRecovery, InvalidArchiveExtentsNamesAndExpansion) {
   EXPECT_EQ(analyze(PYZ, "members.pyz").getString("status"), "malformed");
 }
 TEST(PythonRecovery, ModernDiskCachesLinesAndUnwindRegionsMatchCompiler) {
-  auto Path = std::filesystem::path(PYTHON_ARTIFACT_MANIFEST).parent_path() /
-              "modern.json";
-  auto File = MemoryBuffer::getFile(Path.string());
-  ASSERT_TRUE(static_cast<bool>(File));
-  auto Doc = json::parse((*File)->getBuffer());
-  ASSERT_TRUE(static_cast<bool>(Doc));
-  const auto &Oracle = *Doc->getAsObject();
-  std::vector<char> Raw;
-  ASSERT_FALSE(static_cast<bool>(decodeBase64(*Oracle.getString("data"), Raw)));
-  std::string Data(Raw.begin(), Raw.end());
+  const auto Oracle = modernFixture();
+  ASSERT_TRUE(Oracle.getString("data"));
+  std::string Data = fixtureBytes(Oracle);
   auto Report = analyze(Data);
   ASSERT_EQ(Report.getString("status"), "disassembly_only");
   EXPECT_EQ(Report.getString("input_sha256"), Oracle.getString("sha256"));
@@ -342,6 +379,86 @@ TEST(PythonRecovery, ModernDiskCachesLinesAndUnwindRegionsMatchCompiler) {
                     "cpython-3.11", [] { return false; })
                 .getString("status"),
             "disassembly_only");
+}
+
+TEST(PythonRecovery, SerializedFileEvidenceMatchesObjectReport) {
+  SmallString<128> Dir;
+  ASSERT_FALSE(sys::fs::createUniqueDirectory("neverd-python-report", Dir));
+  auto Cleanup = scope_exit([&] { sys::fs::remove_directories(Dir); });
+  auto Path = [&](StringRef Name) { return (Dir + "/" + Name).str(); };
+  auto Write = [&](StringRef Name, StringRef Data) {
+    std::error_code EC;
+    raw_fd_ostream OS(Path(Name), EC);
+    if (EC)
+      return false;
+    OS << Data;
+    return true;
+  };
+  auto Compare = [&](StringRef File, int Component = -1, unsigned StopAt = 0) {
+    SCOPED_TRACE(File.str());
+    unsigned Calls = 0;
+    auto Stop = [&] { return ++Calls == StopAt; };
+    auto Object = recoverFile(File, "auto", Stop, Component);
+    Calls = 0;
+    auto JSON = recoverFileJSON(File, "auto", Stop, Component);
+    EXPECT_EQ(JSON, serializeReport(std::move(Object)));
+    return JSON;
+  };
+
+  ASSERT_FALSE(fixtures().empty());
+  for (const auto &V : fixtures()) {
+    const auto &Fixture = *V.getAsObject();
+    StringRef Name = *Fixture.getString("name");
+    ASSERT_TRUE(Write(Name, fixtureBytes(Fixture)));
+    Compare(Path(Name));
+  }
+  auto Package = analyze(bytes("owned.pkg"), "owned.pkg");
+  const auto *Child = named(*Package.getArray("components"), "owned.child");
+  ASSERT_NE(Child, nullptr);
+  Compare(Path("owned.pkg"), *Child->getInteger("id"));
+  Compare(Path("program0.pyc"), -1, 12);
+  Compare(Path("missing.pyc"));
+
+  // Plain source contributes a function without an instruction table.
+  ASSERT_TRUE(Write("a.py", "# coding: latin-1\r\ns = '\xe9'\r\n"));
+  Compare(Path("a.py"));
+  Compare(Dir);
+
+  auto Partial = bytes("program0.pyc");
+  auto Good = analyze(Partial);
+  const auto *Choose = named(*Good.getArray("functions"), "choose");
+  ASSERT_NE(Choose, nullptr);
+  Partial[*Choose->getInteger("bytecode_offset")] = char(255);
+  ASSERT_TRUE(Write("partial.pyc", Partial));
+  Compare(Path("partial.pyc"));
+
+  auto Modern = modernFixture();
+  ASSERT_TRUE(Modern.getString("data"));
+  auto Data = fixtureBytes(Modern);
+  ASSERT_TRUE(Write("modern.pyc", Data));
+  Compare(Path("modern.pyc"));
+
+  // Every code object refers to the same marshalled filename. Escaping the
+  // control bytes in its JSON string exceeds the wire budget after decoding.
+  constexpr StringLiteral Filename("modern.py");
+  auto At = Data.find(Filename.str());
+  ASSERT_NE(At, std::string::npos);
+  ASSERT_GE(At, 2u);
+  ASSERT_EQ(static_cast<uint8_t>(Data[At - 2]), 'Z' | 0x80);
+  ASSERT_EQ(static_cast<size_t>(Data[At - 1]), Filename.size());
+  size_t Functions = Modern.getArray("functions")->size();
+  ASSERT_GT(Functions, 0u);
+  size_t Length = limits::kReportBytes / (6 * Functions) + 1;
+  std::string LongName(5 + Length, '\x01');
+  LongName[0] = static_cast<char>('A' | 0x80);
+  support::endian::write32le(LongName.data() + 1, Length);
+  Data.replace(At - 2, 2 + Filename.size(), LongName);
+  ASSERT_EQ(analyze(Data).getString("status"), "disassembly_only");
+  ASSERT_TRUE(Write("large.pyc", Data));
+  auto Summary = json::parse(Compare(Path("large.pyc")));
+  ASSERT_TRUE(static_cast<bool>(Summary));
+  EXPECT_EQ(Summary->getAsObject()->getString("status"), "budget_exceeded");
+  EXPECT_EQ(Summary->getAsObject()->getString("input_sha256"), hash(Data));
 }
 
 TEST(PythonRecovery, OnedirAndNativeExportRevalidateSelectedBytes) {

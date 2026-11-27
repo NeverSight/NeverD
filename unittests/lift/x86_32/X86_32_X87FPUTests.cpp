@@ -822,9 +822,13 @@ TEST_F(X87CallReplay, NativeCRTAdaptersTransportAllBinary80Bits) {
     ASSERT_TRUE(bool(Adapter)) << llvm::toString(Adapter.takeError());
     llvm::SmallVector<llvm::Value *, 2> Args{Builder.CreateBitCast(
         rawBits(UINT64_C(0x8000000000000008), 0x3fff), FP)};
-    if (Count == 2)
-      Args.push_back(Builder.CreateBitCast(
-          rawBits(UINT64_C(0xc000000000000000), 0x4000), FP));
+    if (Count == 2) {
+      // Keep the exact integer-to-binary80 conversion in the host fixture.
+      // Folding it prints 3.0 as a decimal x86_fp80 literal, which older
+      // Clang accepts only in the legacy hexadecimal spelling.
+      Args.push_back(Builder.Insert(new llvm::BitCastInst(
+          rawBits(UINT64_C(0xc000000000000000), 0x4000), FP)));
+    }
     Args.push_back(Runtime);
     auto *Result =
         Builder.CreateBitCast(Builder.CreateCall(*Adapter, Args), Bits);

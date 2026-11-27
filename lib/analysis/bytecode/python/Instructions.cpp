@@ -178,40 +178,22 @@ void neverd::python::recoverCode(Job &J, unsigned Id, StringRef Bytes,
   render(J, Functions, Id);
 }
 
-namespace neverd::python {
-json::Array instructionRows(const Function &F) {
-  json::Array Rows;
-  Rows.reserve(F.Code.size());
-  for (size_t N = 0; N < F.Code.size(); ++N) {
-    const auto &I = F.Code[N];
-    json::Object R{{"pc", I.Byte},
-                   {"offset", F.Node.Body->Bytes->DataOffset + I.Byte},
-                   {"bytes", I.End - I.Byte},
-                   {"opcode", mnemonic(I.Opcode)},
-                   {"opcode_value", unsigned(I.Opcode)},
-                   {"operand", I.Arg},
-                   {"successors", nullptr}};
-    if (I.Target)
-      R["target"] = *I.Target;
-    if (I.Line)
-      R["original_line"] = *I.Line;
-    if (N < F.Lines.size() && F.Lines[N])
-      R["source_line"] = F.Lines[N];
-    if (F.Decoded) {
-      json::Array Edges;
-      if (!terminal(I.Opcode) && I.Opcode != Op::JUMP_ABSOLUTE &&
-          I.Opcode != Op::JUMP_FORWARD)
-        Edges.emplace_back(I.End);
-      if (I.Target) {
-        if (handler(I.Opcode))
-          R["handler"] = *I.Target;
-        else if (Edges.empty() || *I.Target != I.End)
-          Edges.emplace_back(*I.Target);
-      }
-      R["successors"] = std::move(Edges);
-    }
-    Rows.emplace_back(std::move(R));
-  }
-  return Rows;
+InstructionRecord neverd::python::instructionRecord(const Function &F,
+                                                    size_t Index) {
+  const Instruction &I = F.Code[Index];
+  InstructionRecord Row{mnemonic(I.Opcode),
+                        F.Node.Body->Bytes->DataOffset + I.Byte,
+                        I.Byte,
+                        I.End,
+                        static_cast<unsigned>(I.Opcode),
+                        I.Arg};
+  Row.Target = I.Target;
+  Row.OriginalLine = I.Line;
+  if (Index < F.Lines.size() && F.Lines[Index])
+    Row.SourceLine = F.Lines[Index];
+  Row.Complete = F.Decoded;
+  Row.FallsThrough = !terminal(I.Opcode) && I.Opcode != Op::JUMP_ABSOLUTE &&
+                     I.Opcode != Op::JUMP_FORWARD;
+  Row.Handler = I.Target && handler(I.Opcode);
+  return Row;
 }
-} // namespace neverd::python

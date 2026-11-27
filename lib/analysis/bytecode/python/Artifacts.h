@@ -10,6 +10,8 @@
 #ifndef NEVERD_ANALYSIS_BYTECODE_PYTHON_ARTIFACTS_H
 #define NEVERD_ANALYSIS_BYTECODE_PYTHON_ARTIFACTS_H
 
+#include "InstructionReport.h"
+
 #include "neverd/analysis/PythonRecovery.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -68,6 +70,8 @@ struct Job {
                bool RawCode = false);
   std::optional<unsigned> Selection, NativeSelection;
   std::string NativeBytes;
+  // The serialized API keeps typed rows until it writes the report.
+  std::vector<FunctionInstructions> *InstructionTables = nullptr;
 };
 
 std::string hash(llvm::StringRef Bytes);
@@ -75,7 +79,7 @@ bool safeMemberName(llvm::StringRef Name);
 void archive(Job &J, unsigned Id, llvm::StringRef Bytes, size_t Cookie,
              unsigned Depth);
 void pyz(Job &J, unsigned Id, llvm::StringRef Bytes, unsigned Depth);
-inline constexpr char CookieMagic[] = {'M', 'E', 'I', 12, 11, 10, 11, 14};
+size_t findArchiveCookie(llvm::StringRef Bytes);
 inline constexpr unsigned Magic310 = 3439;
 inline constexpr unsigned Magic311 = 3495;
 inline unsigned pythonVersion(unsigned Magic) {
@@ -156,7 +160,8 @@ struct Function {
   std::vector<unsigned> Lines;
   std::string Source;
   std::optional<Failure> Error;
-  llvm::json::Array DiskInstructions, ExceptionRegions;
+  std::vector<InstructionRecord> DiskInstructions;
+  llvm::json::Array ExceptionRegions;
   bool Decoded = false, BindingKnown = false;
   explicit Function(const Object &Node) : Node(Node) {}
 };
@@ -164,7 +169,6 @@ llvm::StringRef mnemonic(Op Opcode);
 void decode(Job &J, Function &F);
 void decode311(Job &J, Function &F);
 void render(Job &J, std::vector<Function> &Functions, unsigned Component);
-llvm::json::Array instructionRows(const Function &F);
 void recoverCode(Job &J, unsigned Id, llvm::StringRef Bytes, size_t At,
                  unsigned Version);
 } // namespace neverd::python

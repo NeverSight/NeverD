@@ -28,6 +28,9 @@ llvm::json::Object exportNative(llvm::StringRef Path, llvm::StringRef Profile,
                                 llvm::StringRef ExpectedHash,
                                 llvm::StringRef Destination, Cancel Stop);
 std::string serializeReport(llvm::json::Object Report);
+/// Serialize file recovery directly, with the same evidence and report limit.
+std::string recoverFileJSON(llvm::StringRef Path, llvm::StringRef Profile,
+                            Cancel Stop, int Component = -1);
 } // namespace neverd::python
 
 #endif // NEVERD_ANALYSIS_PYTHONRECOVERY_H
