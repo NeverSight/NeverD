@@ -42,9 +42,9 @@ const char *neverd_python_recover_json_v1(const char *Path, const char *Profile,
                                           neverd_cancel_probe_fn Stop,
                                           void *Context) {
   return ownedReport([&] {
-    return neverd::python::serializeReport(neverd::python::recoverFile(
+    return neverd::python::recoverFileJSON(
         Path ? Path : "", Profile ? Profile : "auto",
-        [&] { return Stop && Stop(Context); }, Component));
+        [&] { return Stop && Stop(Context); }, Component);
   });
 }
 const char *neverd_python_export_native_json_v1(

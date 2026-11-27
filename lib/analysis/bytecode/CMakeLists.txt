@@ -25,6 +25,7 @@ add_neverd_component_library(NeverDPythonRecovery
   python/Archive.cpp
   python/Exceptions.cpp
   python/Expressions.cpp
+  python/InstructionReport.cpp
   python/Instructions.cpp
   python/Instructions311.cpp
   python/Marshal.cpp
