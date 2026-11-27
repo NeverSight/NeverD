@@ -25,6 +25,22 @@
 
 namespace neverd::registration_abi {
 
+bool hasResidentRegistrationData(const BinaryImage &Image,
+                                 const registration_state::FrameValue &Address,
+                                 bool Write, size_t &Work) {
+  using namespace llvm::COFF;
+  if (!Address.ImageAddress ||
+      Address !=
+          registration_state::FrameValue::imageAddress(*Address.ImageAddress) ||
+      !chargeCalleeWork(Work, Image.Sections.size() + 1))
+    return false;
+  const auto *Section = Image.getSectionFor(*Address.ImageAddress);
+  return Section &&
+         !(Section->Type &
+           (IMAGE_SCN_MEM_DISCARDABLE | IMAGE_SCN_MEM_SHARED)) &&
+         (!Write || (Section->Type & IMAGE_SCN_CNT_INITIALIZED_DATA));
+}
+
 bool hasClosedOrdinaryRegistrationMemoryAccess(
     const BinaryImage &Image, const LowOp &Op,
     const registration_state::FrameTransfer &Transfer,
@@ -90,20 +106,8 @@ bool preservesOrdinaryRegistrationBindings(
         // A store into the caller's return PC could dispatch arbitrary code.
         if (int64_t(*Address.Offset) + Memory.AccessSize > 0)
           return false;
-      } else {
-        // A relocated data destination follows the loaded image. Require
-        // resident private storage. The ordinary access check below also
-        // establishes write permission and excludes every overlapping IAT.
-        using namespace llvm::COFF;
-        if (!Address.ImageAddress ||
-            Address != FrameValue::imageAddress(*Address.ImageAddress) ||
-            !chargeCalleeWork(Work, Image.Sections.size() + 1))
-          return false;
-        const auto *Section = Image.getSectionFor(*Address.ImageAddress);
-        if (!Section || !(Section->Type & IMAGE_SCN_CNT_INITIALIZED_DATA) ||
-            (Section->Type &
-             (IMAGE_SCN_MEM_DISCARDABLE | IMAGE_SCN_MEM_SHARED)))
-          return false;
+      } else if (!hasResidentRegistrationData(Image, Address, true, Work)) {
+        return false;
       }
     }
     return hasClosedOrdinaryRegistrationMemoryAccess(Image, Op, Transfer,

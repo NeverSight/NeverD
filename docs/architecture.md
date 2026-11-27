@@ -21580,6 +21580,14 @@ An ordinary PE32 helper can return a relocated data address in EAX, with
 or without a frame pointer. The caller checks the physical call, the whole
 getter and its HIGHLOW operand. A later store must still prove its width,
 destination permissions and disjointness from every import slot.
+The ordinary stack proof keeps a scalar pushed before a checked store to a
+CRT-owned cell for the immediately following direct call. The actual push
+establishes the private word at ESP. The live accessor establishes that EAX
+still points outside the stack. Under these inputs, the bound integer proof
+checks the reached branches, the return cleanup, and the exact image-relative
+reads and writes. A nested call can contribute reads from a checked, call-free
+integer leaf. The caller consumes only the proved low result byte for control
+flow. Other invocations of the same target have their own inputs and effects.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case

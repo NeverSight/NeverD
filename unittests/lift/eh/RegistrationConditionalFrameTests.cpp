@@ -1081,6 +1081,126 @@ TEST(RegistrationCRTFrame, XCPT4BindsOrderedInitializerRangesAtBothCalls) {
   EXPECT_EQ(Calls, 2u);
 }
 
+TEST(RegistrationCRTFrame, XCPT4OnExitInitializationUsesItsCallingMode) {
+  using namespace registration_state;
+  using registration_abi::BoundFrameCalls;
+  using Ranges = std::set<std::pair<va_t, va_t>>;
+  const Ranges Reads{{0x40b1bc, 0x40b1c0}, {0x40b1fd, 0x40b1fe}};
+  Ranges Writes{{0x40b1fd, 0x40b1fe}};
+  for (va_t VA = 0x40b200; VA < 0x40b218; VA += 4)
+    Writes.emplace(VA, VA + 4);
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(*Image));
+    auto Caller = CFGBuilder().buildIntegerFrameProof(*Image, Dec, 0x406b88,
+                                                      "pre-c-init");
+    const LowOp *Call = nullptr;
+    for (const auto &Block : Caller.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.Addr == 0x406bab)
+          Call = &Op;
+    ASSERT_TRUE(Call);
+    const std::map<unsigned, FrameValue> Registers{
+        {x86reg::RAX / x86reg::GeneralRegStride, {}}};
+    const std::map<int32_t, FrameValue> Arguments{{8, FrameValue::constant(1)}};
+    size_t Work = 0;
+    const auto Effect = registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, Registers,
+        BoundFrameCalls::ReadOnlyLeaves, Work);
+    ASSERT_TRUE(Effect) << Selected;
+    EXPECT_EQ(Effect->Result.numericLowByte(), 1);
+    EXPECT_EQ(Effect->Memory.Reads, Reads);
+    EXPECT_EQ(Effect->Memory.Writes, Writes);
+    EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    for (uint32_t Mode : {0u, 2u}) {
+      size_t Used = 0;
+      EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+          *Image, Caller, *Call, {{8, FrameValue::constant(Mode)}}, Registers,
+          BoundFrameCalls::ReadOnlyLeaves, Used));
+    }
+    size_t Used = 0;
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, {}, BoundFrameCalls::ReadOnlyLeaves,
+        Used));
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, Registers, BoundFrameCalls::CallFree,
+        Used));
+    auto Unowned = *Call;
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, Unowned, Arguments, Registers,
+        BoundFrameCalls::ReadOnlyLeaves, Used));
+    Used = limits::kMaxRegistrationEHStateWork;
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, Registers,
+        BoundFrameCalls::ReadOnlyLeaves, Used));
+    for (va_t Field : {0x407006u, 0x40793eu, 0x407052u}) {
+      BinaryImage Missing = *Image;
+      ASSERT_EQ(
+          std::erase_if(Missing.BaseRelocations,
+                        [=](const auto &R) { return R.Address == Field; }),
+          1u);
+      size_t Attempt = 0;
+      EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+          Missing, Caller, *Call, Arguments, Registers,
+          BoundFrameCalls::ReadOnlyLeaves, Attempt))
+          << std::hex << Field;
+    }
+    // Change the leaf's CMP [image],EAX to MOV [image],EAX.
+    auto *Compare = const_cast<uint8_t *>(Image->readVA(0x40793c, 1));
+    ASSERT_TRUE(Compare);
+    ASSERT_EQ(*Compare, 0x39);
+    *Compare = 0x89;
+    Used = 0;
+    EXPECT_FALSE(registration_abi::checkedBoundIntegerCall(
+        *Image, Caller, *Call, Arguments, Registers,
+        BoundFrameCalls::ReadOnlyLeaves, Used));
+  }
+}
+
+TEST(RegistrationCRTFrame,
+     StartupCallerCarriesItsPrivateWordAcrossTheCRTStore) {
+  auto Original = loadXCPT4(true);
+  ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+  enum class Input {
+    Current,
+    DifferentMode,
+    UnknownAddress,
+    DifferentProvider
+  };
+  for (Input Kind : {Input::Current, Input::DifferentMode,
+                     Input::UnknownAddress, Input::DifferentProvider}) {
+    SCOPED_TRACE(int(Kind));
+    BinaryImage Image = *Original;
+    // Keep the original accessor, push, store, direct call and complete
+    // callees. Two different RET cleanups expose whether the caller proved the
+    // returned AL.
+    constexpr uint8_t Tail[] = {0x83, 0xc4, 4,    0x84, 0xc0, 0x74,
+                                1,    0xc3, 0xc2, 4,    0};
+    auto *Code =
+        const_cast<uint8_t *>(Image.readVA(0x406ba2, 14 + sizeof(Tail)));
+    ASSERT_TRUE(Code);
+    std::copy(std::begin(Tail), std::end(Tail), Code + 14);
+    if (Kind == Input::DifferentMode)
+      Code[6] = 2; // PUSH 2
+    if (Kind == Input::UnknownAddress)
+      Code[8] = 0x31; // MOV [ECX],ESI
+    if (Kind == Input::DifferentProvider) {
+      auto Accessor = llvm::find_if(Image.Imports, [](const auto &Entry) {
+        return Entry.Name == "__p__commode";
+      });
+      ASSERT_NE(Accessor, Image.Imports.end());
+      Accessor->Module = "api-ms-win-crt-runtime-l1-1-0.dll";
+    }
+    size_t Work = 0;
+    const auto Stack = getCheckedX86CalleeStackPop(Image, 0x406ba2, &Work);
+    EXPECT_EQ(Stack, Kind == Input::Current ? std::optional<uint32_t>(0)
+                                            : std::nullopt);
+    EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4StartupCallsTheUCRTCommodeAccessor) {
   auto Image = loadXCPT4();
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());

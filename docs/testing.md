@@ -21088,6 +21088,12 @@ delay-loaded callback dependency. The stdio initializer uses one framed and
 one frameless getter for its two option records. Whole-image and selected
 loading check each store with the real instructions. Missing relocations,
 a changed destination register or an overlapping import withdraw the effect.
+The original on-exit table initializer takes mode 1 after the store through
+the UCRT commode pointer. Whole-image and selected loading check its two
+possible image reads, seven possible writes, and returned AL. The tests vary
+the mode, incoming EAX, physical call ownership, relocations and nested leaf
+effects. A caller with two distinct return cleanups also checks that the
+actual argument survives the CRT store and selects the correct return.
 The outer stdio wrapper
 restores ESP from EBP after its nested calls. The inner wrapper depends on
 the UCRT calling convention. On Windows,

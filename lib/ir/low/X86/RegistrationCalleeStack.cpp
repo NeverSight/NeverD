@@ -47,6 +47,7 @@
 #include <map>
 #include <new>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd::registration_abi {
@@ -332,7 +333,7 @@ struct StackBody {
     return true;
   }
 
-  bool hasPrecisionResultCandidate() {
+  bool hasBoundResultCandidate() {
     // This is an admission to bounded path checking, not a result fact.
     // Actual arguments, current bindings and branch feasibility are proved
     // during transfer. Other unsupported terminals retain the fast refusal
@@ -340,10 +341,21 @@ struct StackBody {
     for (const auto &[Id, Block] : Blocks) {
       if (!chargeCalleeWork(Work, Block->Ops.size() + 1))
         return false;
-      for (const auto &Op : Block->Ops)
-        if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
-            registration_state::isCheckedControlFPCall(Image, Op, Work))
+      for (const auto &Op : Block->Ops) {
+        if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+          continue;
+        const auto Slot =
+            registration_state::checkedCRTCallSlot(Image, Op, Work);
+        if (!Slot)
+          continue;
+        if (registration_state::isCheckedControlFPSlot(Image, *Slot))
           return true;
+        const auto *Imported = Image.findImportAt(*Slot);
+        if (Imported &&
+            registration_abi::registrationCRTAccessorAccess(*Imported) ==
+                registration_abi::CRTDataAccess::WriteInt)
+          return true;
+      }
     }
     return false;
   }
@@ -662,7 +674,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
   // requires its own return proof. Dispatcher paths retain their own rules.
   if (!Body.Valid || !Body.Entries.count(Entry) ||
       (!Registration && !CxxPaths && !Body.hasOnlyReturnTerminals(Entry) &&
-       !Body.hasPrecisionResultCandidate()) ||
+       !Body.hasBoundResultCandidate()) ||
       (!Registration && !CxxPaths && Entry != Body.FunctionEntry &&
        Body.losesEntryStackBeforeCall(Entry)) ||
       !Body.collectCalleeImports(NestedPop, !Registration && !CxxPaths))
@@ -716,6 +728,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
     FrameTransfer Transfer(State, 0);
     registration_abi::PrecisionArguments Arguments;
     registration_abi::CRTDataProof CRTData;
+    std::optional<uint32_t> FollowingCRTArgument;
     bool DoesNotReturn = false;
     for (const auto &Op : Block.Ops) {
       size_t Width = Op.Output.Size;
@@ -738,12 +751,21 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
           (CheckEntryBindings || CheckCRTMemory) &&
           registration_abi::preservesOrdinaryRegistrationBindings(
               Image, Abstract, Transfer, Body.callerArgumentReadBytes(), Work);
+      const auto BoundArgument =
+          std::exchange(FollowingCRTArgument, std::nullopt);
+      const bool StoreWithDataEAX = Op.Opcode == NdOp::STORE && TrackCRTData &&
+                                    CRTData.eaxHoldsDataAddress();
       std::optional<registration_abi::CRTDataAccess> CRTAccess;
       if (TrackCRTData &&
           !CRTData.transfer(
               Abstract, Body.ImportDataLoads.contains({Op.Addr, Op.Seq}),
               State.ImportBindingsIntact, Closed, Work, CRTAccess))
         return std::nullopt;
+      if (StoreWithDataEAX &&
+          CRTAccess == registration_abi::CRTDataAccess::WriteInt)
+        // A checked store to CRT-owned storage preserves both its source EAX
+        // and the private word at SP for the immediately following call.
+        FollowingCRTArgument = Arguments.firstPrivateWord(Transfer, Work);
       if (CheckEntryBindings && !Closed &&
           CRTAccess != registration_abi::CRTDataAccess::ReadArgumentWord)
         PreservesEntryImports = false;
@@ -849,22 +871,37 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       bool PreserveImportBindings = false;
       std::optional<va_t> ImportedSlot;
       std::optional<uint32_t> DataAddress;
+      std::optional<uint8_t> ResultByte;
       if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
           State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset) {
-        if (const auto It = Body.DataAddressReturns.find(&Op);
-            It != Body.DataAddressReturns.end()) {
-          CalleePop = 0;
-          PreserveImportBindings = true;
-          DataAddress = It->second;
-        } else if (const auto Callee = NestedPop(Op.Inputs[0].Offset);
-                   Callee && (Callee->RequiredImports.empty() ||
-                              State.ImportBindingsIntact)) {
-          CalleePop = Callee->StackPopBytes;
-          ImportedCall = Callee->ImportVeneer;
-          if (ImportedCall)
-            ImportedSlot = Callee->RequiredImports.front();
-          PreserveImportBindings = Callee->PreservesImportBindings;
+        if (BoundArgument) {
+          const auto Bound = registration_abi::checkedBoundIntegerCall(
+              Image, Body.Source, Op,
+              {{8, FrameValue::constant(*BoundArgument)}},
+              {{x86reg::RAX / x86reg::GeneralRegStride, {}}},
+              registration_abi::BoundFrameCalls::ReadOnlyLeaves, Work);
+          if (Bound) {
+            CalleePop = 0;
+            PreserveImportBindings = true;
+            ResultByte = Bound->Result.numericLowByte();
+          }
+        }
+        if (!CalleePop) {
+          if (const auto It = Body.DataAddressReturns.find(&Op);
+              It != Body.DataAddressReturns.end()) {
+            CalleePop = 0;
+            PreserveImportBindings = true;
+            DataAddress = It->second;
+          } else if (const auto Callee = NestedPop(Op.Inputs[0].Offset);
+                     Callee && (Callee->RequiredImports.empty() ||
+                                State.ImportBindingsIntact)) {
+            CalleePop = Callee->StackPopBytes;
+            ImportedCall = Callee->ImportVeneer;
+            if (ImportedCall)
+              ImportedSlot = Callee->RequiredImports.front();
+            PreserveImportBindings = Callee->PreservesImportBindings;
+          }
         }
       }
       if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
@@ -924,8 +961,12 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                      0, ImportedCall, PreserveImportBindings);
       if (CallSP)
         State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
-      if (DataAddress) {
-        const auto Value = FrameValue::imageAddress(*DataAddress);
+      if (DataAddress || ResultByte) {
+        auto Value = State.Registers[x86reg::RAX / x86reg::GeneralRegStride];
+        if (DataAddress)
+          Value = FrameValue::imageAddress(*DataAddress);
+        else
+          Value.PartialLowByte = ResultByte;
         State.Registers[x86reg::RAX / x86reg::GeneralRegStride] = Value;
         LowOp Result;
         Result.Opcode = NdOp::COPY;
