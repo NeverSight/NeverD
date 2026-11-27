@@ -715,6 +715,7 @@ TEST(RISCVProfile, DoubleABIFollowsFileFlagsAndRejectsIncompatibleISA) {
     const auto &Info = getTargetRegInfo(Hard);
     EXPECT_EQ(Info.PointerSize, isRISCV32(Base) ? 4 : 8);
     EXPECT_EQ(Info.FPParamRegs.size(), 8u);
+    EXPECT_EQ(Info.FPABIRegWidth, 8u);
     EXPECT_EQ(Info.FPReturnReg, integerreg::riscv::fpr(10));
     EXPECT_TRUE(Info.isCallPreserved(integerreg::riscv::fpr(8), 8));
     EXPECT_FALSE(Info.isCallPreserved(integerreg::riscv::fpr(10), 8));
@@ -811,6 +812,7 @@ TEST(RISCVProfile, LinkedDoubleCallerConsumesBothFloatingArgumentsAndResult) {
     llvm::LLVMContext Context;
     PipelineOptions Options;
     Options.LiftMode = true;
+    Options.NoOpt = true; // Inspect the call before the LLVM inliner runs.
     Options.EmitDumpOutput = false;
     auto Result = Pipeline().run(*Image, Context, Options);
     ASSERT_TRUE(Result.Success) << Result.Error;

@@ -80,6 +80,9 @@ def verify_import(cli, image, name, catalog, arity):
             # and the format argument resolves to the immutable literal "OK".
             assert report["verdict"] == group["verdict"] == "SAFE", name
             assert items[0]["finding"]["detail"] == "format string is a mapped constant", name
+        elif name in ("riscv32-ilp32d", "riscv64-lp64d"):
+            assert group["verdict"] == "UNKNOWN", name
+            assert items[0]["finding"]["detail"] == "dynamic call-site analysis is unavailable for this ABI", name
     else:
         assert [i["analyzer"] for i in items] == ["audit", "hunt"], name
         assert all(i["finding"]["verdict"] == "UNKNOWN" for i in items), name

@@ -41,13 +41,17 @@ The same `neverd scan` command reads the architecture, byte order and ABI from t
 | PowerPC32 and PowerPC64 ELFv1/ELFv2, big- and little-endian | Identifies the uninitialized read and its function as `UNSAFE`. |
 | RISC-V ILP32, LP64, ILP32D and LP64D, little-endian | Identifies the uninitialized read and its function as `UNSAFE`. The D-ABI controls load and store an eight-byte floating local. |
 
-The paired control initializes a local of the same width before reading it. A second fixture calls a separately linked one-argument text function with an immutable literal. On PowerPC64 ELFv2 the scan resolves the local entry and proves the literal safe. On other admitted profiles the report can identify the call while leaving the string's origin inconclusive. Missing call targets or unsupported instructions can leave another binary inconclusive. The RISC-V D-ABI control also calls a function with two floating arguments, changes the sign of the value and consumes the floating result. An unsupported file ABI can fail during loading before a report exists.
+The paired control initializes a local of the same width before reading it. A second fixture calls a separately linked one-argument text function with an immutable literal. On PowerPC64 ELFv2 the scan resolves the local entry and proves the literal safe. On other admitted profiles the report can identify the call while leaving the string's origin inconclusive.
+
+The RISC-V D-ABI control calls a function with two floating arguments, changes the sign and consumes the floating result. The lifter supports floating loads, stores, bit transfers and sign operations. Rounded floating arithmetic and floating control/status register accesses can leave a function unsupported. Audit checks ownership and initialization. Hunt reports `UNKNOWN` for copy and format sites that require its call analysis on these ABIs.
 
 The regression runs against linked binaries on every test host. To rebuild them, run `python3 unittests/safety/fixtures/elf-profiles/build.py --clang clang --lld ld.lld --ppc64-ld powerpc64le-linux-gnu-ld` with Clang/LLD 22 and GNU PowerPC64 binutils 2.40. GNU ld supplies the ELFv1 function descriptors.
 
 ## Heap ownership and debug companions
 
 A call to `malloc` can leave its pointer in the ABI return register even in a `void` function. A matching declaration lets the scan distinguish that leak from a function that transfers ownership to its caller. On x64 and ARM64 PE, the scan checks the PDB identity, the procedure's code contribution and the CodeView return type. For an external Mach-O dSYM, the image and companion must have matching architecture and build UUID. A map alone supplies names. With an unresolved return contract, the scan reports `UNKNOWN` for this pattern.
+
+MIPS n32 carries a 32-bit allocator result in the 64-bit `v0` register. Audit uses that ABI rule when checking for a non-null allocation and follows the pointer into a matching release argument. A separate requirement applies when a function saves its return address on the stack. If the lift cannot establish that an external call preserves that saved link, the report marks coverage incomplete and includes the return-target diagnostic. This occurs in GNU n32 binaries that forward one external call's result to the next.
 
 ## Limits and evidence
 

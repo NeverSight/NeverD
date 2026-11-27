@@ -105,6 +105,7 @@ TargetRegInfo integerInfo(Arch A) {
     Info.VecRegCount = 32;
     Info.VecRegStride = Info.VecRegWidth = 8;
     if (hasRISCVDoubleABI(A)) {
+      Info.FPABIRegWidth = 8;
       Info.FPParamRegs = RVFPArgs;
       Info.FPReturnRegs = Info.FPParamRegs.take_front(2);
       Info.FPReturnReg = fpr(10);
