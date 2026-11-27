@@ -2,7 +2,7 @@
 
 [← ドキュメント索引](README.md)
 
-# メモリ安全性の監査とハント
+# メモリ安全性スキャン
 
 `neverd scan <binary>` で両方の解析を実行します。個別に実行するには `--analyzer=audit` または `--analyzer=hunt` を指定します。[統合スキャンとレポート形式（英語）](../memory-safety-scan.md)。
 
@@ -10,8 +10,8 @@ NeverD は読み込んだバイナリに対して二系統のメモリ安全性�
 
 | トラック | コマンド | 報告内容 |
 |----------|----------|----------|
-| **監査（Audit）** | `neverd audit <binary>` | ヒープ寿命の欠陥と未初期化ローカルスタック読み取り |
-| **ハント（Hunt）** | `neverd hunt <binary>` | 危険なコピー越境と記号的証拠／入力候補（完全な `process-input-v1` プランがある場合のみ `replayable=true`） |
+| **監査（Audit）** | `neverd scan <binary> --analyzer=audit` | ヒープ寿命の欠陥と未初期化ローカルスタック読み取り |
+| **ハント（Hunt）** | `neverd scan <binary> --analyzer=hunt` | 危険なコピー越境と記号的証拠／入力候補（完全な `process-input-v1` プランがある場合のみ `replayable=true`） |
 
 エンジンは NeverD 内蔵の記号実行とビットベクトルソルバを証人生成と到達可能性に再利用します。外部ソルバ、VM、コンテナ依存はありません。
 
@@ -75,7 +75,7 @@ JSON の copy または format シンクで `effect` を省略した場合、適
 仕様ファイルでカタログを拡張または上書きできます。
 
 ```bash
-neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
+neverd scan --sinks extra_sinks.json --sources extra_sources.json app
 ```
 
 ```json
@@ -183,33 +183,27 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 スライス、深さまたは要約予算切れでも、未証明の攻撃者制御は UNKNOWN のままです。
 すでに証明した事実は有効なままで、伝播を推測で補いません。
 
-レポートのカウンタは関数や経路ではなく発見を数えます。`control_reachable` は
-`status=REACHABLE` を数え、`attacker_reachable` はさらに
-`attacker_control=TAINTED` である部分集合です。`reachability_unknown` と
-`unreachable` は残りの制御状態を数えます。これらは判定を数える `safe`、`unsafe`、
-`unknown` とは別です。
-
 ---
 
 <!-- i18n-section: budgets -->
 
 ## 予算、出力、バインディング
 
-ハントの探索とソルバは予算で制限します（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。手続き間解析では、`max_call_depth` が既知エントリからの内部呼び出しエッジ数を、`max_summary_iterations` が攻撃者制御の固定点反復数を制限します。既定値はそれぞれ 64 エッジと、有効な深さ制限に 1 を加えた反復数です。予算切れは上記のとおり fail closed です。`max_call_depth` の枯渇では未到達関数が `status=UNKNOWN` になり得ます。`max_summary_iterations` の枯渇は構造的な証人を消さないため、`status=REACHABLE` と `attacker_control=UNKNOWN`、`budget_hit=true` が共存できます。両コマンドは JSON を出力し、`-o` を尊重します。終了コードは SAFE が `0`、UNSAFE が `2`、UNKNOWN またはエラーが `1` です。
+ハントの探索とソルバは予算で制限します（`--max-paths`、`--max-steps`、`--max-loop`、`--solver-conflicts`）。手続き間解析では、`max_call_depth` が既知エントリからの内部呼び出しエッジ数を、`max_summary_iterations` が攻撃者制御の固定点反復数を制限します。既定値はそれぞれ 64 エッジと、有効な深さ制限に 1 を加えた反復数です。予算切れは上記のとおり fail closed です。`max_call_depth` の枯渇では未到達関数が `status=UNKNOWN` になり得ます。`max_summary_iterations` の枯渇は構造的な証人を消さないため、`status=REACHABLE` と `attacker_control=UNKNOWN`、`budget_hit=true` が共存できます。`neverd scan` は JSON を出力し、`-o` で出力先を指定できます。終了コードは SAFE が `0`、UNSAFE が `2`、UNKNOWN またはエラーが `1` です。
 
 どの公開インターフェイスでも 0 はエンジン既定値を選びます。
 
 | インターフェイス | 制御深さ | 攻撃者要約 |
 |------------------|----------|------------|
-| CLI（`audit` / `hunt`） | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| CLI（`scan`） | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
 | C（`neverd_safety_options`） | `max_call_depth` | `max_summary_iterations` |
-| Python（`Session.audit()` / `Session.hunt()`） | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+| Python（`Session.scan()`） | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
 
 C の呼び出し側は `neverd_safety_options` をゼロ初期化し、
 `struct_size=sizeof(neverd_safety_options)` を設定します。以前の構造体サイズでは既定値を
 維持します。Python は両値を符号なし 32-bit 整数として検証します。
 
-同じ解析は C API（`neverd_session_audit_json` / `neverd_session_hunt_json`、版付き `neverd_safety_options`）と Python SDK（`Session.audit()` / `Session.hunt()`）でも使えます。
+C では `neverd_session_scan_json`、Python では `Session.scan()` を呼び出します。C の解析上限は `neverd_scan_options.analysis` で渡します。
 
 <!-- i18n-section: finding-schema -->
 

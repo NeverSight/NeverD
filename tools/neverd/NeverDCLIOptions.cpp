@@ -237,11 +237,6 @@ cl::SubCommand SigsCmd("sigs", "Apply FLIRT signatures to binary");
 cl::SubCommand SymbolicCmd("sym-explore",
                            "Explore bounded symbolic paths through a function");
 cl::SubCommand ScanCmd("scan", "Run the native memory-safety scan");
-cl::SubCommand AuditCmd("audit",
-                        "Audit heap object lifetimes and uninitialized local "
-                        "stack reads");
-cl::SubCommand HuntCmd("hunt",
-                       "Hunt dangerous-copy overflows and report a witness");
 cl::SubCommand
     ConcolicCmd("concolic",
                 "Generate replay-verified LowIR conditional-branch seeds");
@@ -329,14 +324,13 @@ cl::opt<std::string> InputFile(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd),
-    cl::sub(MobileCmd), cl::sub(AnalysisSectionsCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd), cl::sub(MobileCmd),
+    cl::sub(AnalysisSectionsCmd));
 
 cl::opt<std::string> OutputFile("o", cl::sub(LuaCmd), cl::sub(PythonCmd),
                                 cl::desc("Output file"), cl::init(""),
                                 cl::sub(PatchBytesCmd), cl::sub(LiftCmd),
                                 cl::sub(DecompileCmd), cl::sub(PatchCmd),
-                                cl::sub(AuditCmd), cl::sub(HuntCmd),
                                 cl::sub(ScanCmd), cl::sub(MobileCmd),
                                 cl::sub(TypesCmd));
 
@@ -462,8 +456,7 @@ cl::opt<bool> NoDebug(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<bool> NoDwarf(
     "no-dwarf",
@@ -480,8 +473,7 @@ cl::opt<bool> NoDwarf(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<bool> NoPdb(
     "no-pdb",
@@ -498,8 +490,7 @@ cl::opt<bool> NoPdb(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<bool> NoSymtab(
     "no-symtab",
@@ -518,8 +509,7 @@ cl::opt<bool> NoSymtab(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<std::string> LoadLoader(
     "loader", cl::desc(macho_loader::cache_load::kLoaderHelp), cl::init(""),
@@ -533,8 +523,7 @@ cl::opt<std::string> LoadLoader(
     cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
     cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
     cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd), cl::sub(DashboardCmd),
-    cl::sub(SigsCmd), cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SigsCmd), cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 cl::opt<bool> ListCacheImages(macho_loader::cache_load::kImagesOption,
                               cl::desc(macho_loader::cache_load::kImagesHelp),
                               cl::sub(InfoCmd));
@@ -553,8 +542,7 @@ cl::opt<std::string> LoadCacheImage(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 cl::opt<std::string> LoadProcessor(
     "processor",
     cl::desc("Processor a binary file's code runs on: x86, x86_64, arm, "
@@ -570,8 +558,7 @@ cl::opt<std::string> LoadProcessor(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 cl::opt<std::string> LoadPlatform(
     "platform",
     cl::desc("Platform whose conventions a binary file's code follows: "
@@ -588,40 +575,35 @@ cl::opt<std::string> LoadPlatform(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
-cl::opt<std::string>
-    LoadBase("load-base", cl::desc("Address a binary file maps at (hex)"),
-             cl::init(""), cl::value_desc("address"), cl::sub(LiftCmd),
-             cl::sub(DecompileCmd), cl::sub(PatchCmd), cl::sub(InfoCmd),
-             cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
-             cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
-             cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
-             cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
-             cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
-             cl::sub(RenameCmd), cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
-             cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
-             cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
-             cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
-             cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
-             cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd));
-cl::opt<std::string>
-    LoadOffset("load-offset",
-               cl::desc("Where in a binary file the mapped bytes start (hex)"),
-               cl::init(""), cl::value_desc("offset"), cl::sub(LiftCmd),
-               cl::sub(DecompileCmd), cl::sub(PatchCmd), cl::sub(InfoCmd),
-               cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
-               cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
-               cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
-               cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
-               cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
-               cl::sub(CallGraphCmd), cl::sub(RenameCmd),
-               cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
-               cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
-               cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
-               cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
-               cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
-               cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
+cl::opt<std::string> LoadBase(
+    "load-base", cl::desc("Address a binary file maps at (hex)"), cl::init(""),
+    cl::value_desc("address"), cl::sub(LiftCmd), cl::sub(DecompileCmd),
+    cl::sub(PatchCmd), cl::sub(InfoCmd), cl::sub(StringsCmd), cl::sub(XrefsCmd),
+    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(FuncsCmd),
+    cl::sub(DisasmCmd), cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
+    cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
+    cl::sub(BookmarksCmd), cl::sub(AnnotateCmd), cl::sub(CallGraphCmd),
+    cl::sub(RenameCmd), cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
+    cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
+    cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
+    cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd), cl::sub(DashboardCmd),
+    cl::sub(SigsCmd), cl::sub(SymbolicCmd), cl::sub(ScanCmd));
+cl::opt<std::string> LoadOffset(
+    "load-offset",
+    cl::desc("Where in a binary file the mapped bytes start (hex)"),
+    cl::init(""), cl::value_desc("offset"), cl::sub(LiftCmd),
+    cl::sub(DecompileCmd), cl::sub(PatchCmd), cl::sub(InfoCmd),
+    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
+    cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
+    cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
+    cl::sub(SegmentsCmd), cl::sub(ExportCmd), cl::sub(BookmarksCmd),
+    cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
+    cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd), cl::sub(OperandsCmd),
+    cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
+    cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
+    cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 cl::opt<std::string>
     LoadSize("load-size",
              cl::desc("How many bytes of a binary file to map (hex; the rest "
@@ -638,25 +620,23 @@ cl::opt<std::string>
              cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
              cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
              cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
-             cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd));
-cl::opt<std::string>
-    LoadEntry("load-entry",
-              cl::desc("Where a binary file's execution starts (hex; the base "
-                       "when absent)"),
-              cl::init(""), cl::value_desc("address"), cl::sub(LiftCmd),
-              cl::sub(DecompileCmd), cl::sub(PatchCmd), cl::sub(InfoCmd),
-              cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
-              cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
-              cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd),
-              cl::sub(ExportsCmd), cl::sub(SegmentsCmd), cl::sub(ExportCmd),
-              cl::sub(BookmarksCmd), cl::sub(AnnotateCmd),
-              cl::sub(CallGraphCmd), cl::sub(RenameCmd),
-              cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd),
-              cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
-              cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
-              cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
-              cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(SymbolicCmd),
-              cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd));
+             cl::sub(ScanCmd));
+cl::opt<std::string> LoadEntry(
+    "load-entry",
+    cl::desc("Where a binary file's execution starts (hex; the base "
+             "when absent)"),
+    cl::init(""), cl::value_desc("address"), cl::sub(LiftCmd),
+    cl::sub(DecompileCmd), cl::sub(PatchCmd), cl::sub(InfoCmd),
+    cl::sub(StringsCmd), cl::sub(XrefsCmd), cl::sub(PathsCmd),
+    cl::sub(CallTreeCmd), cl::sub(FuncsCmd), cl::sub(DisasmCmd),
+    cl::sub(CfgCmd), cl::sub(HexCmd), cl::sub(ImportsCmd), cl::sub(ExportsCmd),
+    cl::sub(SegmentsCmd), cl::sub(ExportCmd), cl::sub(BookmarksCmd),
+    cl::sub(AnnotateCmd), cl::sub(CallGraphCmd), cl::sub(RenameCmd),
+    cl::sub(FunctionEditsCmd), cl::sub(ItemsCmd), cl::sub(OperandsCmd),
+    cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
+    cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
+    cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::list<std::string> ARMFunctionModeHints(
     arm_mode_cli::Option, cl::desc(arm_mode_cli::Description),
@@ -671,8 +651,7 @@ cl::list<std::string> ARMFunctionModeHints(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<std::string> PdbFile(
     "pdb",
@@ -689,8 +668,7 @@ cl::opt<std::string> PdbFile(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd),
-    cl::sub(TypesCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd), cl::sub(TypesCmd));
 
 cl::opt<bool> PdbUnverified(
     "pdb-unverified",
@@ -707,8 +685,7 @@ cl::opt<bool> PdbUnverified(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd),
-    cl::sub(TypesCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd), cl::sub(TypesCmd));
 
 cl::opt<std::string> SymbolPathOption(
     "symbol-path",
@@ -726,8 +703,8 @@ cl::opt<std::string> SymbolPathOption(
     cl::sub(OperandsCmd), cl::sub(SearchCmd), cl::sub(SectionsCmd),
     cl::sub(SymbolsCmd), cl::sub(RelocsCmd), cl::sub(HeadersCmd),
     cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd), cl::sub(DashboardCmd),
-    cl::sub(SigsCmd), cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd), cl::sub(TypesCmd));
+    cl::sub(SigsCmd), cl::sub(SymbolicCmd), cl::sub(ScanCmd),
+    cl::sub(TypesCmd));
 
 cl::opt<bool> DownloadSymbols(
     "download-symbols",
@@ -745,8 +722,7 @@ cl::opt<bool> DownloadSymbols(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd), cl::sub(ScanCmd),
-    cl::sub(TypesCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd), cl::sub(TypesCmd));
 
 cl::opt<std::string> MapFile(
     "map",
@@ -766,8 +742,7 @@ cl::opt<std::string> MapFile(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<bool> MapUnchecked(
     "map-unchecked",
@@ -784,8 +759,7 @@ cl::opt<bool> MapUnchecked(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<bool> NoMap(
     "no-map",
@@ -801,8 +775,7 @@ cl::opt<bool> NoMap(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<std::string> DwarfFile(
     "dwarf",
@@ -821,8 +794,7 @@ cl::opt<std::string> DwarfFile(
     cl::sub(SearchCmd), cl::sub(SectionsCmd), cl::sub(SymbolsCmd),
     cl::sub(RelocsCmd), cl::sub(HeadersCmd), cl::sub(EntryPointsCmd),
     cl::sub(SwitchesCmd), cl::sub(DashboardCmd), cl::sub(SigsCmd),
-    cl::sub(SymbolicCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-    cl::sub(ScanCmd));
+    cl::sub(SymbolicCmd), cl::sub(ScanCmd));
 
 cl::opt<bool> NoOpt("no-opt", cl::desc("Skip LLVM optimization passes"),
                     cl::sub(LiftCmd), cl::sub(DecompileCmd), cl::sub(PatchCmd),
@@ -1401,61 +1373,60 @@ cl::opt<bool> SymbolicExpressions(
     cl::sub(SymbolicCmd));
 
 //===----------------------------------------------------------------------===//
-// Safety options (audit / hunt)
+// Memory-safety scan options
 //===----------------------------------------------------------------------===//
 
-cl::opt<neverd_scan_analyzers> ScanAnalyzers(
-    "analyzer", cl::desc("Memory-safety analyses to run"),
-    cl::values(clEnumValN(NEVERD_SCAN_BOTH, "both", "Audit and Hunt"),
-               clEnumValN(NEVERD_SCAN_AUDIT, "audit",
-                          "Object lifetime and initialization"),
-               clEnumValN(NEVERD_SCAN_HUNT, "hunt",
-                          "Bounds and format checks")),
-    cl::init(NEVERD_SCAN_BOTH), cl::sub(ScanCmd));
+cl::opt<neverd_scan_analyzers>
+    ScanAnalyzers("analyzer", cl::desc("Memory-safety analyses to run"),
+                  cl::values(clEnumValN(NEVERD_SCAN_BOTH, "both",
+                                        "Run both analyses (default)"),
+                             clEnumValN(NEVERD_SCAN_AUDIT, "audit",
+                                        "Object lifetime and initialization"),
+                             clEnumValN(NEVERD_SCAN_HUNT, "hunt",
+                                        "Bounds and format checks")),
+                  cl::init(NEVERD_SCAN_BOTH), cl::sub(ScanCmd));
 
 cl::opt<std::string>
     SafetySinks("sinks",
                 cl::desc("Extend the sink catalog from a specification file"),
-                cl::init(""), cl::value_desc("file"), cl::sub(AuditCmd),
-                cl::sub(HuntCmd), cl::sub(ScanCmd));
+                cl::init(""), cl::value_desc("file"), cl::sub(ScanCmd));
 
 cl::opt<std::string>
     SafetySources("sources",
                   cl::desc("Extend the input-source catalog from a file"),
-                  cl::init(""), cl::value_desc("file"), cl::sub(AuditCmd),
-                  cl::sub(HuntCmd), cl::sub(ScanCmd));
+                  cl::init(""), cl::value_desc("file"), cl::sub(ScanCmd));
 
 cl::opt<unsigned>
     SafetyMaxPaths("max-paths", cl::desc("Maximum reachable paths to explore"),
                    cl::init(::neverd::limits::cli::kDefaultSafetyMaxPaths),
-                   cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(AuditCmd));
+                   cl::sub(ScanCmd));
 
 cl::opt<unsigned>
     SafetyMaxSteps("max-steps", cl::desc("Maximum operations along each path"),
                    cl::init(::neverd::limits::cli::kDefaultSafetyMaxSteps),
-                   cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(AuditCmd));
+                   cl::sub(ScanCmd));
 
 cl::opt<unsigned>
     SafetyMaxLoop("max-loop", cl::desc("Maximum iterations of one loop header"),
                   cl::init(::neverd::limits::cli::kDefaultSafetyMaxLoop),
-                  cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(AuditCmd));
+                  cl::sub(ScanCmd));
 
 cl::opt<unsigned> SafetyMaxCallDepth(
     "max-call-depth",
     cl::desc("Maximum internal call edges from a known entry (0 = default)"),
     cl::init(::neverd::limits::cli::kDefaultSafetyMaxCallDepth),
-    cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(AuditCmd));
+    cl::sub(ScanCmd));
 
 cl::opt<unsigned> SafetyMaxSummaryIterations(
     "max-summary-iterations",
     cl::desc("Maximum interprocedural attacker-summary rounds (0 = default)"),
     cl::init(::neverd::limits::cli::kDefaultSafetyMaxSummaryIterations),
-    cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(AuditCmd));
+    cl::sub(ScanCmd));
 
 cl::opt<unsigned long long> SafetySolverConflicts(
     "solver-conflicts", cl::desc("Solver conflict budget (0 = default)"),
     cl::init(::neverd::limits::cli::kDefaultSafetySolverConflicts),
-    cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(AuditCmd));
+    cl::sub(ScanCmd));
 
 //===----------------------------------------------------------------------===//
 // LowIR concolic options
@@ -1550,10 +1521,9 @@ cl::opt<bool> JsonOutput(
     cl::sub(ItemsCmd), cl::sub(OperandsCmd), cl::sub(SearchCmd),
     cl::sub(SectionsCmd), cl::sub(SymbolsCmd), cl::sub(RelocsCmd),
     cl::sub(HeadersCmd), cl::sub(EntryPointsCmd), cl::sub(SwitchesCmd),
-    cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(AuditCmd),
-    cl::sub(HuntCmd), cl::sub(ScanCmd), cl::sub(MobileCmd),
-    cl::sub(DecompileCmd), cl::sub(TypesCmd), cl::sub(PathsCmd),
-    cl::sub(CallTreeCmd), cl::sub(AnalysisSectionsCmd));
+    cl::sub(DashboardCmd), cl::sub(SigsCmd), cl::sub(ScanCmd),
+    cl::sub(MobileCmd), cl::sub(DecompileCmd), cl::sub(TypesCmd),
+    cl::sub(PathsCmd), cl::sub(CallTreeCmd), cl::sub(AnalysisSectionsCmd));
 
 //===----------------------------------------------------------------------===//
 // Plugins-specific options
@@ -2341,26 +2311,25 @@ cl::opt<std::string> TextSection(
 
 cl::opt<std::string> SigDir("sig-dir",
                             cl::desc("Directory containing .pat files"),
-                            cl::init(""), cl::sub(SigsCmd), cl::sub(AuditCmd),
-                            cl::sub(HuntCmd), cl::sub(ScanCmd));
+                            cl::init(""), cl::sub(SigsCmd), cl::sub(ScanCmd));
 
 cl::opt<std::string>
     SigFile("sig-file",
             cl::desc("Byte signature (.pat) or library feature pack (.json)"),
-            cl::init(""), cl::sub(SigsCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-            cl::sub(ScanCmd), cl::sub(DecompileCmd), cl::sub(FuncsCmd));
+            cl::init(""), cl::sub(SigsCmd), cl::sub(ScanCmd),
+            cl::sub(DecompileCmd), cl::sub(FuncsCmd));
 
 cl::opt<bool>
     SigAuto("auto", cl::desc("Auto-detect arch/format and load matching sigs"),
-            cl::sub(SigsCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-            cl::sub(ScanCmd), cl::sub(DecompileCmd), cl::sub(FuncsCmd));
+            cl::sub(SigsCmd), cl::sub(ScanCmd), cl::sub(DecompileCmd),
+            cl::sub(FuncsCmd));
 
 cl::opt<std::string>
     SigBase("sig-base",
             cl::desc("Signature tree to select from as --auto does (default: "
                      "signatures/ beside neverd, then ./signatures)"),
-            cl::init(""), cl::sub(SigsCmd), cl::sub(AuditCmd), cl::sub(HuntCmd),
-            cl::sub(ScanCmd), cl::sub(DecompileCmd), cl::sub(FuncsCmd));
+            cl::init(""), cl::sub(SigsCmd), cl::sub(ScanCmd),
+            cl::sub(DecompileCmd), cl::sub(FuncsCmd));
 
 //===----------------------------------------------------------------------===//
 // merge-project and setup-git

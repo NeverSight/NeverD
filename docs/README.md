@@ -42,7 +42,7 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [macOS/iOS process environments](darwin-emulation.md) | Mach-O startup, explicit device/simulator platforms, Darwin BSD services and page rules |
 | [macOS HVF](macos-hvf.md) | Host-native hardware execution, entitlements, packaging and validation |
 | [Windows driver emulation](driver-emulation.md) | Bounded x64 WDM/KMDF lifecycle, requests, hardware scenarios, SEH, PnP subsets, backend selection and limits |
-| [Memory-safety audit & hunt](memory-safety.md) | Heap-lifetime and copy-overflow analysis: identity contract per format, sink/source catalog, verdicts, budgets, and JSON schema |
+| [Memory-safety scan](memory-safety.md) | Heap-lifetime and copy-overflow analysis: identity contract per format, sink/source catalog, verdicts, budgets, and JSON schema |
 | [Process-plugin SDK](process-plugin-sdk.md) | Standalone Python helper, protocol and independent examples |
 | [Tools layer](tools-layer.md) | Exact plugin calls, frozen consumer steps and operation records |
 | [GUI process plugins](gui-plugins.md) | Manager, menu placement, task results and process-provider protocol |

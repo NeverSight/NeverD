@@ -1,6 +1,6 @@
 **Lingue**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
+<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
 
 [← Progetto NeverD](project.md)
 
@@ -40,7 +40,7 @@ Le guide inglesi sono direttamente in `docs/`. Le traduzioni sono raggruppate in
 | [Ambienti di processo macOS/iOS](darwin-emulation.md) | Avvio Mach-O, piattaforme dispositivo e simulatore, servizi Darwin e regole delle pagine |
 | [macOS HVF](macos-hvf.md) | Esecuzione hardware con la ISA dell’host, autorizzazioni di firma, packaging e verifica |
 | [Emulazione dei driver Windows](driver-emulation.md) | Ciclo WDM/KMDF x64 limitato, richieste, scenari hardware, SEH, sottoinsiemi PnP, selezione backend e limiti |
-| [Audit e hunt di sicurezza della memoria](memory-safety.md) | Analisi di vita dell’heap e overflow di copia: contratto di identità per formato, catalogo sink/source, verdetti, budget e schema JSON |
+| [Analisi della sicurezza della memoria](memory-safety.md) | Analisi di vita dell’heap e overflow di copia: contratto di identità per formato, catalogo sink/source, verdetti, budget e schema JSON |
 | [SDK per plugin di processo (inglese)](../process-plugin-sdk.md) | Helper Python autonomo, protocollo ed esempi indipendenti |
 | [Livello Tools (inglese)](../tools-layer.md) | Chiamate esatte, passi congelati del consumatore e registri operativi |
 | [Plugin di processo GUI (inglese)](../gui-plugins.md) | Gestore, posizione nei menu, risultati e protocollo dei fornitori |

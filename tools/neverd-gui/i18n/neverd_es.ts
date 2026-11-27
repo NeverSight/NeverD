@@ -11224,16 +11224,16 @@ Su grafo anterior sigue disponible.</translation>
         <translation>&amp;Analizadores</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit y Hunt</translation>
+        <source>All checks</source>
+        <translation>Todas las comprobaciones</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Vida útil e inicialización</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Límites y cadenas de formato</translation>
     </message>
     <message>
         <source>Findings</source>

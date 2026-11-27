@@ -11188,16 +11188,16 @@ Your previous graph is still available.</source>
         <translation>分析器(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit 和 Hunt</translation>
+        <source>All checks</source>
+        <translation>全部檢查</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>生命週期與初始化</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>邊界與格式字串</translation>
     </message>
     <message>
         <source>Findings</source>

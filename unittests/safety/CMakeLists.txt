@@ -178,7 +178,8 @@ if(TARGET neverd_shared)
     endif()
     add_test(NAME NeverDMemorySafetyScan
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/neverd-worker/tests/memory_safety_scan_test.py"
-              "$<TARGET_FILE:neverd>" "${_safety_fixture_root}/safety_cases_elf_x64" ${_scan_worker})
+              "$<TARGET_FILE:neverd>" "${_safety_fixture_root}/safety_cases_elf_x64"
+              --sdk "$<TARGET_FILE:neverd_shared>" ${_scan_worker})
     set_tests_properties(NeverDMemorySafetyScan PROPERTIES
       LABELS NeverDSafetyIntegrationTests TIMEOUT 300)
   endif()

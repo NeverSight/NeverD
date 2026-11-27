@@ -1,6 +1,7 @@
 //===- SafetyCLIContractTests.cpp - Safety command-line contracts --------===//
 
 #include "../TestProcess.h"
+#include "ScanReportTestSupport.h"
 #include "gtest/gtest.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -84,15 +85,8 @@ protected:
 
   static const llvm::json::Object *
   findingInFunction(const llvm::json::Object &Report, llvm::StringRef Name) {
-    const llvm::json::Array *Findings = Report.getArray("findings");
-    if (!Findings)
-      return nullptr;
-    for (const llvm::json::Value &Value : *Findings) {
-      const llvm::json::Object *Finding = Value.getAsObject();
-      if (!Finding)
-        continue;
-      const std::optional<llvm::StringRef> Function =
-          Finding->getString("function");
+    for (const auto *Finding : neverd::test::scanFindings(Report)) {
+      const auto Function = Finding->getString("function");
       if (Function && (*Function == Name || *Function == ("_" + Name).str()))
         return Finding;
     }
@@ -109,10 +103,10 @@ private:
   fs::path Directory;
 };
 
-TEST_F(SafetyCLI, AcceptsInterproceduralBudgetsForAuditAndHunt) {
+TEST_F(SafetyCLI, AcceptsInterproceduralBudgetsForEachAnalyzer) {
   for (llvm::StringRef Track :
        {llvm::StringRef("audit"), llvm::StringRef("hunt")}) {
-    const ProcessResult Result = run(Track.str() +
+    const ProcessResult Result = run("scan --analyzer=" + Track.str() +
                                      " --json --max-call-depth=1 "
                                      "--max-summary-iterations=1 " +
                                      neverd::test::shellQuote(fixture()));
@@ -124,8 +118,8 @@ TEST_F(SafetyCLI, AcceptsInterproceduralBudgetsForAuditAndHunt) {
 
 TEST_F(SafetyCLI, BudgetsSeparateControlDepthFromAttackerSummary) {
   const auto Hunt = [&](llvm::StringRef Options) {
-    return parseReport(run("hunt --json " + Options.str() + " " +
-                           neverd::test::shellQuote(fixture())));
+    return parseReport(run("scan --analyzer=hunt --json " + Options.str() +
+                           " " + neverd::test::shellQuote(fixture())));
   };
   const llvm::json::Object Default = Hunt("");
   const llvm::json::Object Depth = Hunt("--max-call-depth=1");

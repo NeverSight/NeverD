@@ -103,7 +103,7 @@ on that cluster's feature activation. See [Solana SBF decompilation](sbf.md).
 
 ---
 
-## 4. Memory-safety audit & hunt
+## 4. Memory-safety scan
 
 Analyse a lifted binary for heap-lifetime defects (leak, double free, use after
 free) and dangerous-copy overflows, reporting structured JSON with a bounded
@@ -129,17 +129,14 @@ The current interprocedural slice adds schema-v1 `reachability.status` and
 `reachability.attacker_control` without changing the independent safety
 `verdict`; it reports `application`, `image`, or `export` roots, exact internal
 call chains, and fail-closed UNKNOWN states. Its `max_call_depth` and
-`max_summary_iterations` budgets are available through the C API, both CLI
-commands, and both Python methods. Report-level `control_reachable` and
-`attacker_reachable` counts are
-therefore reachability tallies, not alternate verdict counts.
+`max_summary_iterations` budgets are available through the C API, `neverd scan`, and `Session.scan()`.
 Verdict and identity coverage is locked by
 [`unittests/safety`](../unittests/safety) (catalog, scanner, argument
 prefilter, object model, hunt, audit) and an end-to-end
 [`SafetyIntegrationTests.cpp`](../unittests/safety/SafetyIntegrationTests.cpp)
 that runs the mandatory PE/ELF/Mach-O × x86-64/AArch64 fixture matrix on every
 host. See
-[Memory-safety audit & hunt](memory-safety.md).
+[Memory-safety scan](memory-safety.md).
 
 P2 work is deliberately decomposed into versioned boundaries:
 
@@ -209,5 +206,5 @@ are committed. Progress will be tracked here.
 | EVM legacy decoding/lifting | Complete through Fusaka — regression-covered |
 | EVM source reconstruction | Ongoing — evidence-backed and conservative |
 | Solana eBPF (SBF) decompilation | Complete — v0-v4, C, Rust, and LLVM; regression-covered |
-| Memory-safety audit & hunt | Phase 1 plus known-entry reachability complete; `lowir-concolic-v1` and Darwin `binary-sanitizer-v1` publication are experimental; native `process-replay-v1` remains unavailable behind a fail-closed phase-0 adapter |
+| Memory-safety scan | Phase 1 plus known-entry reachability complete; `lowir-concolic-v1` and Darwin `binary-sanitizer-v1` publication are experimental; native `process-replay-v1` remains unavailable behind a fail-closed phase-0 adapter |
 | Engine & product hardening | Ongoing |

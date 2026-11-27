@@ -17,7 +17,6 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <exception>
@@ -459,13 +458,6 @@ ScanReport neverd::safety::runScan(const AnalysisInput &In,
   return analyze(In, Cat, Budgets, Selection, Canceled, true);
 }
 
-SafetyReport neverd::safety::runAudit(const AnalysisInput &In,
-                                      const SinkCatalog &Cat,
-                                      const SafetyBudgets &Budgets) {
-  auto Scan = analyze(In, Cat, Budgets, ScanSelection::Audit, nullptr, false);
-  return std::move(Scan.Analyzers.front().Report);
-}
-
 SafetyReport neverd::safety::runHunt(const AnalysisInput &In,
                                      const SinkCatalog &Cat,
                                      const SafetyBudgets &Budgets) {
@@ -625,97 +617,4 @@ llvm::json::Object neverd::safety::findingJson(const Finding &F) {
   O["reachability"] = std::move(Reachability);
   O["evidence"] = std::move(Ev);
   return O;
-}
-
-std::string neverd::safety::toJson(const SafetyReport &Report, bool Pretty) {
-  using namespace llvm;
-  json::Array Findings;
-  for (const Finding &F : Report.Findings)
-    Findings.push_back(findingJson(F));
-
-  // Verdict tally, so a caller can key an exit code off one number.
-  unsigned Unsafe = 0, Unknown = 0, Safe = 0;
-  unsigned ControlReachable = 0, AttackerReachable = 0;
-  unsigned ReachabilityUnknown = 0, Unreachable = 0;
-  for (const Finding &F : Report.Findings) {
-    switch (F.TheVerdict) {
-    case Verdict::Unsafe:
-      ++Unsafe;
-      break;
-    case Verdict::Unknown:
-      ++Unknown;
-      break;
-    case Verdict::Safe:
-      ++Safe;
-      break;
-    }
-    switch (F.Reachability.Status) {
-    case ReachabilityStatus::Reachable:
-      ++ControlReachable;
-      if (F.Reachability.AttackerControl == ArgFlow::Tainted)
-        ++AttackerReachable;
-      break;
-    case ReachabilityStatus::Unknown:
-      ++ReachabilityUnknown;
-      break;
-    case ReachabilityStatus::Unreachable:
-      ++Unreachable;
-      break;
-    }
-  }
-
-  const Verdict Aggregate = !Report.AnalysisComplete ? Verdict::Unknown
-                            : Unsafe > 0             ? Verdict::Unsafe
-                            : Unknown > 0            ? Verdict::Unknown
-                                                     : Verdict::Safe;
-  Confidence AggregateConfidence = Confidence::High;
-  bool HaveAggregateConfidence = false;
-  for (const Finding &F : Report.Findings) {
-    if (F.TheVerdict != Aggregate)
-      continue;
-    if (!HaveAggregateConfidence) {
-      AggregateConfidence = F.TheConfidence;
-      HaveAggregateConfidence = true;
-      continue;
-    }
-    const auto Current = static_cast<unsigned>(AggregateConfidence);
-    const auto Candidate = static_cast<unsigned>(F.TheConfidence);
-    // One proven unsafe finding establishes the aggregate; SAFE/UNKNOWN must
-    // retain the least-confident contributing result.
-    AggregateConfidence = static_cast<Confidence>(
-        Aggregate == Verdict::Unsafe ? std::min(Current, Candidate)
-                                     : std::max(Current, Candidate));
-  }
-  if (!Report.AnalysisComplete && Aggregate == Verdict::Unknown)
-    AggregateConfidence = Confidence::Low;
-
-  json::Object Root;
-  Root["schema_version"] = 1;
-  Root["ok"] = Report.AnalysisComplete;
-  if (!Report.Error.empty())
-    Root["error"] = Report.Error;
-  Root["track"] = toString(Report.Origin);
-  Root["verdict"] = toString(Aggregate);
-  Root["confidence"] = toString(AggregateConfidence);
-  Root["format"] = Report.Format;
-  Root["arch"] = Report.Arch;
-  Root["scanned"] = Report.Scanned;
-  Root["skipped"] = Report.Skipped;
-  Root["budget_hit"] = Report.BudgetHit;
-  Root["unsafe"] = Unsafe;
-  Root["unknown"] = Unknown;
-  Root["safe"] = Safe;
-  Root["control_reachable"] = ControlReachable;
-  Root["attacker_reachable"] = AttackerReachable;
-  Root["reachability_unknown"] = ReachabilityUnknown;
-  Root["unreachable"] = Unreachable;
-  Root["findings"] = std::move(Findings);
-
-  std::string Buf;
-  raw_string_ostream OS(Buf);
-  if (Pretty)
-    OS << formatv("{0:2}", json::Value(std::move(Root)));
-  else
-    OS << json::Value(std::move(Root));
-  return OS.str();
 }
