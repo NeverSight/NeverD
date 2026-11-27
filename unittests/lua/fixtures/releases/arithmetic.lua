@@ -1,0 +1,1 @@
+answer = argument + 7

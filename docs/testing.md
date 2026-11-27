@@ -1620,6 +1620,18 @@ dispatches whose index takes the compared lane after the guard
 `cmpl $5, %r11d; ja`): both read their six slots, while twins that change
 the lane between the guard and the index (`incb %sil`, `incl %r11d`) stay
 unresolved.
+`JTE_X86_64.AReloadOfTheComparedByteIsTheIndex` reloads a byte compared in
+memory as the index (`cmpb $5, 2(%rdi); ja; movzbl 2(%rdi), %eax`) and reads
+its six slots under the same limit. With the full allowance, a store or an
+address-register write between the loads, another displacement or width, a
+sign-extending reload of a byte the guard admits up to 0x81, a call or a
+change after the reload, a second way into the reload block and a reload
+block whose address is data keep their dispatches unproved. Deleting the
+memory-write, register-write, displacement, width, zero-extension or
+later-write check lets its twin publish a table. The call and second-path
+twins are refused before the guard is read as well: the dispatch after the
+call lifts as an indirect tail call, and the second path leaves the guard
+controlling nothing.
 `JTE_X86_64.LoopCarriedTokenDispatchFitsASmallCandidateAccount` builds a
 lexer loop whose 64 arms each recompute a token dispatched through
 `lea -0x107(%r13), %eax; cmp $63, %eax; ja` and checks its 64 slots under a

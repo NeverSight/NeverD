@@ -2911,13 +2911,28 @@
       "owner": "safety",
       "targets": [
         "x86_64",
-        "aarch64"
+        "aarch64",
+        "mips",
+        "mipsel",
+        "mips64",
+        "mips64el",
+        "mips64n32",
+        "mips64n32el",
+        "powerpc",
+        "powerpcle",
+        "powerpc64",
+        "powerpc64le",
+        "powerpc64-elfv1",
+        "powerpc64le-elfv1",
+        "riscv32",
+        "riscv64"
       ],
       "docs": [
         "docs/memory-safety-scan.md"
       ],
       "limitations": [
-        "Static Audit and Hunt properties within the admitted lift, catalog and budgets. Incomplete coverage is explicit."
+        "Static Audit and Hunt properties within the admitted lift, catalog and budgets. Incomplete coverage is explicit.",
+        "MIPS, PowerPC and RISC-V coverage is qualified on linked ELF images. RISC-V uses RV32I/ILP32 or RV64I/LP64. MIPS n32 can identify an inconclusive stack read. Historical MIPS III o32 accesses that require runtime MMU translation report unsupported coverage."
       ],
       "tests": [
         {
@@ -2947,6 +2962,28 @@
           "target": "NeverDSafetyTests",
           "source": "unittests/safety/SafetyReportTests.cpp",
           "filter": "SafetyScan.EmptyBudgetLimitedReportIsUnknown",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyTests",
+          "source": "unittests/safety/SafetyReportTests.cpp",
+          "filter": "SafetyReport.PipelineCoverageRequiresExactCallInventory",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSTests",
+          "source": "unittests/lift/mips/MIPSLoaderTests.cpp",
+          "filter": "MIPSMixedWidthLoader.ELF32ImportSlotRequiresWordTransfers",
           "platforms": [
             "darwin",
             "linux",
@@ -5454,9 +5491,9 @@
       "status": "experimental",
       "owner": "bytecode",
       "targets": [
-        "PUC Lua 5.1–5.5",
-        "LuaJIT dump v2",
-        "Upstream Luau 0.659 bytecode v6/type v3"
+        "PUC Lua 2.4–5.5 bytecode and earlier text sources",
+        "LuaJIT 1.0/1.1 PUC chunks and independent 2.x dump v1/v2",
+        "Upstream Luau bytecode v1–v14, type encodings v1–v3, and pinned 0.659"
       ],
       "docs": [
         "docs/lua-recovery.md"
@@ -5471,6 +5508,17 @@
           "target": "NeverDLuaRecoveryTests",
           "source": "unittests/lua/LuaRecoveryTests.cpp",
           "filter": "LuaRecovery.OwnedCompilerDumps",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.ReleaseInstructionsAndSourceMatchCompilerFixtures",
           "platforms": [
             "darwin",
             "linux",

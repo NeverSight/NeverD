@@ -578,6 +578,24 @@ StackValue stackValueOf(const StackState &S, const NdVar &V) {
   return It == S.end() ? StackValue{} : It->second;
 }
 
+/// Calls arrive in operation order during each block walk. Discard decoded
+/// instruction slices only after the operation has passed their end.
+const LowInstructionBoundary *
+callBoundary(llvm::ArrayRef<LowInstructionBoundary> &Remaining, size_t Index,
+             NdOp Opcode) {
+  if (Opcode != NdOp::CALL && Opcode != NdOp::INDIR_CALL)
+    return nullptr;
+  while (!Remaining.empty()) {
+    const auto &Boundary = Remaining.front();
+    if (Index < Boundary.FirstOp)
+      break;
+    if (Index - Boundary.FirstOp < Boundary.OpCount)
+      return &Boundary;
+    Remaining = Remaining.drop_front();
+  }
+  return nullptr;
+}
+
 /// Bound the incoming stack-argument slots \p F reads: the body reads slot K
 /// when it loads from the entry stack pointer plus EntryStackBase +
 /// K * SlotBytes, directly or through a tail call made at the entry stack
@@ -689,13 +707,8 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
   auto Run = [&](const LowBlock &Block, StackState &S) {
     EntryRun = !EntryDone && &Block == &F.Blocks.front();
     EntryDone |= EntryRun;
-    auto ControlOf = [&](size_t OpIndex) {
-      for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
-        if (OpIndex >= Boundary.FirstOp &&
-            OpIndex - Boundary.FirstOp < Boundary.OpCount)
-          return Boundary.Control;
-      return LowInstructionControl::None;
-    };
+    llvm::ArrayRef<LowInstructionBoundary> Boundaries(
+        Block.InstructionBoundaries);
     auto Set = [&](const NdVar &V, StackValue Value) {
       auto Key = stackKeyOf(V);
       if (!Key)
@@ -723,7 +736,6 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
     };
     for (size_t I = 0; I < Block.Ops.size() && !Unknown; ++I) {
       const LowOp &Op = Block.Ops[I];
-      const bool TailCall = ControlOf(I) == LowInstructionControl::TailCall;
       auto In = [&](unsigned K) {
         return K < Op.NumInputs ? stackValueOf(S, Op.Inputs[K]) : StackValue{};
       };
@@ -887,6 +899,9 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
               : Op.Opcode != NdOp::INDIR_BR || Block.Succs.empty();
       if (!LeavesFunction)
         continue;
+      const auto *Boundary = callBoundary(Boundaries, I, Op.Opcode);
+      const bool TailCall =
+          Boundary && Boundary->Control == LowInstructionControl::TailCall;
       if (Op.Opcode == NdOp::CALL && DirectTarget && !TailCall &&
           libc::stackProbeEffect(Img, Op.Inputs[0].Offset, StackProbes) ==
               libc::StackProbeEffect::Probe)
@@ -1939,14 +1954,8 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
     const auto ScalarFacts = blockScalarFacts(Img, Block, false);
     const auto &SelectedArms = ScalarFacts.SelectedArms;
     auto CpuidSubleafIgnored = ScalarFacts.CpuidSubleafIgnored.begin();
-    auto ControlOf = [&](size_t OpIndex) {
-      for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
-        if (OpIndex >= Boundary.FirstOp &&
-            OpIndex - Boundary.FirstOp < Boundary.OpCount)
-          return std::pair{Boundary.Control, Boundary.ControlFlags};
-      return std::pair{LowInstructionControl::None,
-                       LowInstructionControlFlag::None};
-    };
+    llvm::ArrayRef<LowInstructionBoundary> Boundaries(
+        Block.InstructionBoundaries);
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const LowOp &Op = Block.Ops[I];
       // Keep physical writes separate from argument/ABI simplifications.
@@ -1976,8 +1985,9 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
           Arm != SelectedArms.end() && Op.Output.isReg() &&
           Op.Output == Op.Inputs[Arm->second])
         continue; // A proven identity neither reads nor overwrites the GPR.
-      const auto [Control, Flags] = ControlOf(I);
-      const bool TailCall = Control == LowInstructionControl::TailCall;
+      const auto *Boundary = callBoundary(Boundaries, I, Op.Opcode);
+      const bool TailCall =
+          Boundary && Boundary->Control == LowInstructionControl::TailCall;
       const bool DirectTarget = Op.NumInputs > 0 && Op.Inputs[0].isConst();
       const bool Transfers = Op.Opcode == NdOp::CALL ||
                              Op.Opcode == NdOp::BRANCH ||
@@ -1990,8 +2000,9 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
       // recognized here.
       const bool NoReturnCall =
           Op.Opcode == NdOp::CALL &&
-          (hasLowInstructionControlFlag(Flags,
-                                        LowInstructionControlFlag::NoReturn) ||
+          ((Boundary &&
+            hasLowInstructionControlFlag(
+                Boundary->ControlFlags, LowInstructionControlFlag::NoReturn)) ||
            (TailCall && EntersNoReturnFunction));
       // A name or analyst no-return contract is not original-body evidence.
       Effect.BodyUnknown |= NoReturnCall || EntersNoReturnFunction;

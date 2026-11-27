@@ -760,6 +760,38 @@ TEST_P(MIPSLoader, CompletePLTVeneerNamesOnlyItsBoundImportSlot) {
   EXPECT_EQ(Image->findImportAt(0x10100), nullptr);
 }
 
+TEST(MIPSMixedWidthLoader, ELF32ImportSlotRequiresWordTransfers) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    for (uint32_t Flags : {0x80000020u, 0x20001000u}) {
+      // MIPS64r2 n32 and MIPS III o32 both carry ELF32 pointers.
+      for (bool Word : {true, false}) {
+        SCOPED_TRACE(::testing::Message() << Flags << " word=" << Word);
+        ELFBytes File(Target);
+        File.put(36, Flags, 4);
+        File.put(0x100, 0x3c0f0001, 4);
+        File.put(0x104, Word ? 0x8df90118 : 0xddf90118, 4);
+        File.put(0x108, 0x03200008, 4);
+        File.put(0x10c, Word ? 0x25f80118 : 0x65f80118, 4);
+        ELFLoader Loader;
+        auto Image = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        ASSERT_TRUE(hasMIPS32BitAddressIn64BitGPR(Image->Arch));
+        Import Imported;
+        Imported.Name = "record_label";
+        Imported.IATAddr = 0x10118;
+        Image->Imports.push_back(std::move(Imported));
+        const auto *Found = Image->findImportAt(0x10100);
+        if (Word) {
+          ASSERT_NE(Found, nullptr);
+          EXPECT_EQ(Found->Name, "record_label");
+        } else {
+          EXPECT_EQ(Found, nullptr);
+        }
+      }
+    }
+  }
+}
+
 TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
   const auto Reject = [&](ELFBytes &File, llvm::StringRef Expected) {
     SCOPED_TRACE(Expected.str());

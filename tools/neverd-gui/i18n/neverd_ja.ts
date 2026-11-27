@@ -11283,6 +11283,10 @@ Your previous graph is still available.</source>
         <translation>LuaJIT</translation>
     </message>
     <message>
+        <source>Upstream Luau</source>
+        <translation>公式 Luau</translation>
+    </message>
+    <message>
         <source>Upstream Luau 0.659</source>
         <translation>公式 Luau 0.659</translation>
     </message>

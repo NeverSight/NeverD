@@ -73,6 +73,49 @@ LowFunc indexedLoad(int64_t Displacement) {
   return Function;
 }
 
+TEST(CallStackRange, SeparatesOrdinaryAndTerminalCallBoundaries) {
+  for (bool Tail : {false, true}) {
+    SCOPED_TRACE(Tail);
+    LowFunc Function;
+    Function.Entry = 0x1000;
+    auto &Block = Function.Blocks.emplace_back();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    append(Block, NdOp::COPY, Address, {Index});
+    append(Block, NdOp::CALL, {}, {NdVar::cst(0x2000, 8)});
+    append(Block, NdOp::COPY, Address, {Index});
+    append(Block, NdOp::CALL, {}, {NdVar::cst(0x3000, 8)});
+
+    auto &First = Block.InstructionBoundaries.emplace_back();
+    First.FirstOp = 0;
+    First.OpCount = 2;
+    First.Control = LowInstructionControl::Call;
+    auto &Empty = Block.InstructionBoundaries.emplace_back();
+    Empty.FirstOp = 2;
+    auto &Last = Block.InstructionBoundaries.emplace_back();
+    Last.FirstOp = 2;
+    Last.OpCount = 2;
+    Last.Control =
+        Tail ? LowInstructionControl::TailCall : LowInstructionControl::Call;
+    if (!Tail)
+      Last.ControlFlags = LowInstructionControlFlag::NoReturn;
+
+    const auto Effect = localRegisterEffect(image(), Function);
+    EXPECT_EQ(Effect.StackTailCallees.count(0x2000), 0u);
+    EXPECT_EQ(Effect.StackTailCallees.count(0x3000), unsigned(Tail));
+    ASSERT_EQ(Effect.Blocks.size(), 1u);
+    unsigned Seen = 0;
+    for (const auto &Step : Effect.Blocks.front().Steps) {
+      if (Step.Callee != 0x2000 && Step.Callee != 0x3000)
+        continue;
+      ++Seen;
+      EXPECT_EQ(Step.TailCallee, Step.Callee == 0x3000 && Tail);
+      EXPECT_EQ(Step.Exits, Step.Callee == 0x3000 && !Tail);
+    }
+    EXPECT_EQ(Seen, 2u);
+  }
+}
+
 TEST(CallStackRange, IndexedLocalLoadsDoNotReadTheSpilledHomeArgument) {
   const auto Function = indexedLoad(0x10);
   const auto Effect = localRegisterEffect(image(), Function);

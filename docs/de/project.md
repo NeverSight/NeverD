@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: c9d5599249d1aa9a3f85ce6420c4392f82d07513739f5eb8811dcda6db244c95 -->
+<!-- i18n-source: db03bee82e3870d4eb292f41490c55212e8b3be7e212005b253a78c7a0b43d46 -->
 
 <div align="center">
 
@@ -68,7 +68,7 @@ Die experimentellen Integer-ELF-Ziele unterstützen striktes Lifting, die Rekons
 
 | Ziel | Geprüfte ELF-Profile |
 |---|---|
-| RISC-V | RV32I/ILP32 und RV64I/LP64 in Little Endian. Die ELF-Angaben bestimmen die Erweiterungen M, A und Integer-C oder die einzelnen Erweiterungen Zmmul, Zaamo, Zalrsc und Zca. Das ISA-Attribut der ELF-Datei aktiviert auch Zba 1.0, Zbb 1.0 und Zbs 1.0. |
+| RISC-V | RV32I/ILP32 und RV64I/LP64 in Little Endian. Die ELF-Angaben bestimmen die Erweiterungen M, A und Integer-C oder die einzelnen Erweiterungen Zmmul, Zaamo, Zalrsc und Zca. Das ISA-Attribut der ELF-Datei aktiviert auch Zba 1.0, Zbb 1.0, Zbs 1.0 und Zicond 1.0. |
 | PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. PPC32 unterstützt modulübergreifende Aufrufe über die Secure PLT und die klassische BSS-PLT. Beide PPC64-ABIs unterstützen modulübergreifende PLT-Aufrufe und TOC-Wechsel. ELFv1 verwendet Funktionsdeskriptoren, ELFv2 unterstützt globale und lokale Einsprungpunkte. Die geprüften Skalaroperationen umfassen die Division mit und ohne Vorzeichen, die Multiplikation mit Ausgabe des oberen Produktworts und die Multiplikation mit Überlaufanzeige sowie deren Auswirkungen auf CR0 und XER. Für PPC64 unterstützt der Lifter auch die präfigierten POWER10-Befehle für Ganzzahladdition, Laden und Speichern. |
 
 Das Umschreiben von nativem Code steht für diese Profile noch aus. [Unterstützung für RISC-V und PowerPC (Englisch)](../riscv-powerpc.md)

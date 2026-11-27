@@ -290,6 +290,123 @@ Ldone:
  ret
  .ltorg
 )asm")
+ASYNC_FRAME_TEXT(kJoinCommon, "-DNEVERD_JOIN_COMMON")
+ASYNC_FRAME_TEXT(kJoinDistinct, "-DNEVERD_JOIN_DISTINCT")
+ASYNC_FRAME_TEXT(kJoinCopyPage, "-DNEVERD_JOIN_COPY_PAGE")
+ASYNC_FRAME_TEXT(kJoinLocal, "-DNEVERD_JOIN_LOCAL")
+ASYNC_FRAME_TEXT(kJoinReturn, "-DNEVERD_JOIN_RETURN")
+ASYNC_FRAME_TEXT(kJoinScratch, "-DNEVERD_JOIN_SCRATCH")
+ASYNC_FRAME_TEXT(kJoinUnknown, "-DNEVERD_JOIN_UNKNOWN")
+ASYNC_FRAME_TEXT(kJoinCrossed, "-DNEVERD_JOIN_CROSSED")
+ASYNC_FRAME_TEXT(kJoinSwapped, "-DNEVERD_JOIN_SWAPPED")
+ASYNC_FRAME_TEXT(kJoinOverwrite, "-DNEVERD_JOIN_OVERWRITE")
+ASYNC_FRAME_TEXT(kJoinClobber, "-DNEVERD_JOIN_CLOBBER")
+ASYNC_FRAME_TEXT(kJoinWrongKey, "-DNEVERD_JOIN_WRONG_KEY")
+ASYNC_FRAME_TEXT(kJoinedModelExport, "NEVERD_ARM64E_JOINED_SIGNING_FIXTURES")
+ASYNC_FRAME_TEXT(kJoinedSnapshotCases, "resolved_interrupted_signing_pcs")
+ASYNC_FRAME_TEXT(kJoinModelCall, R"asm(
+ adr x19, Lbody{0}
+ ldr x9, ={1}
+ add x19, x19, x9
+ run_body {0}, 0, {3}, {4}, 0
+ adr x19, Lbody{0}
+ ldr x9, ={2}
+ add x19, x19, x9
+ run_body {0}, 1, {3}, {4}, 0
+)asm")
+ASYNC_FRAME_TEXT(kJoinedSigningBody, R"asm(
+ .text
+ .globl _signal_tick
+ .p2align 2
+_signal_tick:
+ .cfi_startproc
+ nop
+#ifdef NEVERD_SIGN_WITH_B
+#define SIGN .inst 0xdac1a7fe
+#define OTHER_SIGN .inst 0xdac1a3fe
+#else
+#define SIGN .inst 0xdac1a3fe
+#define OTHER_SIGN .inst 0xdac1a7fe
+#endif
+#ifdef NEVERD_JOIN_SCRATCH
+ .irp r, x10, x11, x12, x13, x14, x15, x16, x17
+  mov \r, xzr
+ .endr
+#endif
+#ifdef NEVERD_JOIN_COMMON
+Lfirst:
+ SIGN
+#endif
+ cbnz x1, Lright
+#ifndef NEVERD_JOIN_COMMON
+Lfirst:
+ SIGN
+#endif
+#ifdef NEVERD_JOIN_RETURN
+ adr x0, Lfirst
+#elif defined(NEVERD_JOIN_SWAPPED)
+ adr x15, Lsecond
+#else
+ adr x15, Lfirst
+#endif
+ b Lauth
+Lright:
+#ifndef NEVERD_JOIN_COMMON
+Lsecond:
+#ifdef NEVERD_JOIN_WRONG_KEY
+ OTHER_SIGN
+#else
+ SIGN
+#endif
+#else
+#define Lsecond Lfirst
+#endif
+#if defined(NEVERD_JOIN_UNKNOWN)
+ nop
+#elif defined(NEVERD_JOIN_CROSSED) || defined(NEVERD_JOIN_SWAPPED)
+ adr x15, Lfirst
+#elif defined(NEVERD_JOIN_COPY_PAGE)
+ adrp x10, Lsecond@PAGE
+ add x10, x10, Lsecond@PAGEOFF
+ mov x15, x10
+#elif defined(NEVERD_JOIN_RETURN)
+ adr x0, Lsecond
+#else
+ adr x15, Lsecond
+#endif
+#ifdef NEVERD_JOIN_CLOBBER
+ mov w15, w2
+#endif
+#ifdef NEVERD_JOIN_SCRATCH
+ mov x16, xzr
+#endif
+Lauth:
+#ifdef NEVERD_JOIN_OVERWRITE
+ adr x15, Lfirst
+#endif
+ .cfi_same_value x19
+ .cfi_escape 0x2e, 0
+#ifdef NEVERD_JOIN_RETURN
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xd65f0fe0
+#else
+ .inst 0xd65f0be0
+#endif
+#else
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xdac195fe
+#else
+ .inst 0xdac191fe
+#endif
+ .cfi_restore x19
+#ifndef NEVERD_JOIN_LOCAL
+ str x15, [x0]
+ mov x0, x15
+#endif
+ ret
+#endif
+ .cfi_endproc
+)asm")
 ASYNC_FRAME_TEXT(kSigningAddressBody, R"asm(
  .text
  .globl _signal_tick

@@ -102,7 +102,8 @@ add_neverd_unittest(NeverDLuaRecoveryTests
   LINK_COMPONENTS LuaRecovery
 )
 target_compile_definitions(NeverDLuaRecoveryTests PRIVATE
-  LUA_DUMP_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/lua/fixtures/dumps.json")
+  LUA_DUMP_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/lua/fixtures/dumps.json"
+  LUA_RELEASE_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/lua/fixtures/releases.json")
 
 add_subdirectory(acceleration)
 add_subdirectory(digest)
