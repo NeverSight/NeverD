@@ -20,6 +20,12 @@
 #include <string>
 #include <string_view>
 
+#if NEVERD_USE_SIMDJSON
+namespace simdjson::dom {
+class element;
+}
+#endif
+
 namespace neverd::transport {
 using Json = nlohmann::json;
 
@@ -36,6 +42,15 @@ stringField(const Json &Object, const char *Key, std::string Fallback = {},
             std::size_t Max = ::neverd::limits::transport::kJsonMax);
 std::size_t sizeField(const Json &Object, const char *Key, std::size_t Fallback,
                       std::size_t Max);
+#if NEVERD_USE_SIMDJSON
+/// Visit the borrowed DOM before the next parse on this thread. Returns false
+/// if parsing fails or the visitor needs the normal JSON decoder.
+bool visitSIMDDocument(
+    std::string_view Text,
+    const std::function<bool(simdjson::dom::element)> &Visit);
+#endif
+/// Check the byte and nesting limits before decoding a transport document.
+void checkJsonFrameBounds(std::string_view Text, std::size_t MaxBytes);
 Json parseJson(
     std::string_view Text,
     std::size_t MaxBytes = ::neverd::limits::transport::kJsonMaxJsonBytes);

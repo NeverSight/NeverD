@@ -123,24 +123,11 @@ std::optional<Json> parseWithSIMD(std::string_view Text, DuplicateKeys Keys) {
   bool NeedsNumberParser = Text.find("-0") != std::string_view::npos;
   if (NeedsNumberParser && Keys == DuplicateKeys::KeepLast)
     return Json::parse(Text);
-  // Keep retained storage bounded per transport thread. Larger frames get a
-  // temporary parser whose tape is released after constructing the owned DOM.
-  constexpr auto RetainedBytes =
-      ::neverd::limits::transport::kJsonRetainedParserBytes;
-  auto Parse = [&](simdjson::dom::parser &Parser) -> std::optional<Json> {
-    simdjson::dom::element Root;
-    if (Parser.parse(Text.data(), Text.size()).get(Root))
-      return std::nullopt;
-    return copySIMDValue(Root, NeedsNumberParser, Keys);
-  };
   std::optional<Json> Result;
-  if (Text.size() > RetainedBytes) {
-    simdjson::dom::parser Parser;
-    Result = Parse(Parser);
-  } else {
-    thread_local simdjson::dom::parser Parser(RetainedBytes);
-    Result = Parse(Parser);
-  }
+  visitSIMDDocument(Text, [&](simdjson::dom::element Root) {
+    Result = copySIMDValue(Root, NeedsNumberParser, Keys);
+    return true;
+  });
   if (Result && NeedsNumberParser) {
     // Release a large tape and any partial owned tree before native parsing.
     Result.reset();
@@ -172,6 +159,25 @@ public:
 };
 } // namespace
 
+#if NEVERD_USE_SIMDJSON
+bool visitSIMDDocument(
+    std::string_view Text,
+    const std::function<bool(simdjson::dom::element)> &Visit) {
+  constexpr auto RetainedBytes =
+      ::neverd::limits::transport::kJsonRetainedParserBytes;
+  auto Parse = [&](simdjson::dom::parser &Parser) {
+    simdjson::dom::element Root;
+    return !Parser.parse(Text.data(), Text.size()).get(Root) && Visit(Root);
+  };
+  if (Text.size() > RetainedBytes) {
+    simdjson::dom::parser Parser;
+    return Parse(Parser);
+  }
+  thread_local simdjson::dom::parser Parser(RetainedBytes);
+  return Parse(Parser);
+}
+#endif
+
 std::string stringField(const Json &Object, const char *Key,
                         std::string Fallback, std::size_t Max) {
   const auto It = Object.find(Key);
@@ -202,7 +208,7 @@ std::size_t sizeField(const Json &Object, const char *Key, std::size_t Fallback,
   return static_cast<std::size_t>(Value);
 }
 
-Json parseJson(std::string_view Text, std::size_t MaxBytes) {
+void checkJsonFrameBounds(std::string_view Text, std::size_t MaxBytes) {
   if (Text.empty() || Text.size() > MaxBytes)
     throw Error("invalid_frame", "Empty or oversized JSON frame");
   unsigned Depth = 0;
@@ -223,6 +229,10 @@ Json parseJson(std::string_view Text, std::size_t MaxBytes) {
     } else if ((C == ']' || C == '}') && Depth)
       --Depth;
   }
+}
+
+Json parseJson(std::string_view Text, std::size_t MaxBytes) {
+  checkJsonFrameBounds(Text, MaxBytes);
   try {
 #if NEVERD_USE_SIMDJSON
     if (auto Parsed = parseWithSIMD(Text, DuplicateKeys::Reject))

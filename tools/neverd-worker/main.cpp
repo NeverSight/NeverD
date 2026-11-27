@@ -161,8 +161,8 @@ bool scriptOperation(const std::string &Op) {
   return Op == "jvm_recover" || Op == "lua_recover" || Op == "python_recover" ||
          Op == "python_export_native";
 }
-Json recoverScript(const std::string &Op, const Json &input,
-                   std::atomic<bool> &cancelled) {
+Engine::Reply recoverScript(const std::string &Op, const Json &input,
+                            std::atomic<bool> &cancelled) {
   const auto path = stringField(input, "path");
   const auto profile = stringField(input, "profile", "auto");
   if (path.empty() || path.find(char(0)) != std::string::npos ||
@@ -219,7 +219,12 @@ Json recoverScript(const std::string &Op, const Json &input,
       raw, neverd_free_string);
   if (!result)
     throw Error("engine_error", "Script recovery returned no report");
-  return parseJson(result.get());
+  if (Op == "jvm_recover") {
+    if (auto Report = tryEncodeScriptReport(result.get()))
+      return {Json{{"status", std::move(Report->Status)}},
+              std::make_shared<EncodedJson>(std::move(Report->Payload))};
+  }
+  return {parseJson(result.get()), {}};
 }
 bool isWeb(const Json &request) {
   if (!request.is_object())
@@ -699,12 +704,10 @@ void executeLoop(State &state, Transport &transport) {
         if (scriptOperation(op))
           transport.send(response(value, revision(), project(), "progress",
                                   {{"phase", "reading"}}));
-        auto reply =
-            scriptOperation(op)
-                ? Engine::Reply{recoverScript(op, input, request->cancelled),
-                                {}}
-            : webRequest ? Engine::Reply{web.execute(op, input), {}}
-                         : engine.executeResponse(op, input);
+        auto reply = scriptOperation(op)
+                         ? recoverScript(op, input, request->cancelled)
+                     : webRequest ? Engine::Reply{web.execute(op, input), {}}
+                                  : engine.executeResponse(op, input);
         encodedPayload = std::move(reply.encoded);
         result = response(value, revision(), project(), "ok",
                           std::move(reply.value));
