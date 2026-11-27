@@ -1,0 +1,381 @@
+{
+  "implementation": "aa948b45228870ec93211daa5b5d245ac5f2f8b7",
+  "dev_baseline": "47d0a2f33b15c11295c9b80e50c238a92ac0f965",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "release_test_sha256": "9127e7abec809dccbf2e982ce440785e5f16ba9706abddebba1bda7d52e26555",
+  "regression": {
+    "baseline": {
+      "native_object_case_passed": 1,
+      "rejected_lifted_register_modifier_cases": [
+        "LiftedExplicitIALiveLRRunsLanguageCleanups",
+        "LiftedCompactExplicitIBLiveLRCatchesObjCException"
+      ]
+    },
+    "portable_unwind_recovery_passed": 39,
+    "additional_m4_publication_checks": {
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "tests": [
+        "AArch64LiftedImage.RelativeSwitchDispatchSurvivesAutomaticRelifting",
+        "AArch64LiftedImage.ADRPreservesSourceLiteralAndFunctionAddresses",
+        "AArch64LiftedImage.WidensTwoAddressesAcrossIndexedDwarfFrame",
+        "AArch64LiftedImage.WidensTwoAddressesAcrossSignedLanguageFrame",
+        "AArch64LiftedImage.WidensTwoAddressesAcrossTypedCatchAndCleanup",
+        "AArch64LiftedImage.PublishedOutputParametersKeepOriginalEntryAddresses",
+        "AArch64LiftedImage.RecoversInteriorAddressesInLocalAndPeerFunctions",
+        "AArch64LiftedImage.PublishesLocalAndPeerReferencesToABasicBlock"
+      ]
+    },
+    "signing_address_lifetime": {
+      "published_local": 1,
+      "refused_observed": 2
+    }
+  },
+  "coverage": {
+    "configurations": [
+      "O0 immediate",
+      "O2 immediate",
+      "O2 register"
+    ],
+    "images": [
+      "Apple-linked original",
+      "NeverD publication"
+    ],
+    "languages": [
+      "C++",
+      "Objective-C"
+    ],
+    "tested_decisions": [
+      "search and cleanup at the first and last protected virtual return PC",
+      "resume region continues unwinding",
+      "installed landing-pad PC, exception value and selector",
+      "Objective-C catch accepts the object and declines the C++ type"
+    ],
+    "hardware_todo": [
+      "128-bit LRCPC3",
+      "two-modifier PAuth_LR",
+      "PC-sensitive PACM",
+      "CPTA-on",
+      "checked writeback"
+    ]
+  },
+  "hosts": {
+    "m4": {
+      "observer_abi": "arm64",
+      "cpu": "Apple M4 Max",
+      "cases": 32,
+      "failed": 0,
+      "skipped": 0,
+      "original_controls": {
+        "assembler_controls": 32,
+        "exceptions": 48,
+        "phase_pairs": 120
+      },
+      "darwin_personality_images": 192,
+      "darwin_personality_exceptions": 288,
+      "darwin_personality_phase_pairs": 720,
+      "explicit_register_modifier_images": 64,
+      "native_pc_recipe_deliveries": 0,
+      "extended_passed": 223
+    },
+    "macos-26": {
+      "observer_abi": "arm64e",
+      "cpu": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "cases": 32,
+      "extended_passed": 223,
+      "failed": 0,
+      "skipped": 0,
+      "suites": {
+        "AArch64AsyncUnwind": {
+          "passed": 141,
+          "native_counter_positive": 109,
+          "personality_cases": 32,
+          "native_execution_or_personality": 141
+        },
+        "AArch64LiftedImage": {
+          "passed": 82,
+          "native_counter_positive": 81,
+          "personality_cases": 0,
+          "native_execution_or_personality": 81
+        }
+      },
+      "original_controls": {
+        "assembler_controls": 32,
+        "exceptions": 48,
+        "phase_pairs": 120
+      },
+      "darwin_personality_images": 192,
+      "darwin_personality_exceptions": 288,
+      "darwin_personality_phase_pairs": 720,
+      "explicit_register_modifier_images": 64,
+      "native_pc_recipe_deliveries": 0
+    },
+    "xcode-27": {
+      "observer_abi": "arm64e",
+      "cpu": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "cases": 32,
+      "extended_passed": 223,
+      "failed": 0,
+      "skipped": 0,
+      "suites": {
+        "AArch64AsyncUnwind": {
+          "passed": 141,
+          "native_counter_positive": 109,
+          "personality_cases": 32,
+          "native_execution_or_personality": 141
+        },
+        "AArch64LiftedImage": {
+          "passed": 82,
+          "native_counter_positive": 81,
+          "personality_cases": 0,
+          "native_execution_or_personality": 81
+        }
+      },
+      "original_controls": {
+        "assembler_controls": 32,
+        "exceptions": 48,
+        "phase_pairs": 120
+      },
+      "darwin_personality_images": 192,
+      "darwin_personality_exceptions": 288,
+      "darwin_personality_phase_pairs": 720,
+      "explicit_register_modifier_images": 64,
+      "native_pc_recipe_deliveries": 0
+    }
+  },
+  "per_case_on_each_host": {
+    "AArch64AsyncUnwind.NativeExplicitIALiveLRRunsLanguageCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 12
+    },
+    "AArch64AsyncUnwind.NativeCompactExplicitIALiveLRRunsLanguageCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 18
+    },
+    "AArch64AsyncUnwind.NativeExplicitIBLiveLRRunsLanguageCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 12
+    },
+    "AArch64AsyncUnwind.NativeCompactExplicitIBLiveLRRunsLanguageCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 18
+    },
+    "AArch64AsyncUnwind.NativeExplicitIALiveLRCatchesLanguageException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 12
+    },
+    "AArch64AsyncUnwind.NativeCompactExplicitIALiveLRCatchesLanguageException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 18
+    },
+    "AArch64AsyncUnwind.NativeExplicitIBLiveLRCatchesLanguageException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 12
+    },
+    "AArch64AsyncUnwind.NativeCompactExplicitIBLiveLRCatchesLanguageException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 18
+    },
+    "AArch64AsyncUnwind.NativeExplicitIALiveLRRunsObjCCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 24
+    },
+    "AArch64AsyncUnwind.NativeCompactExplicitIALiveLRRunsObjCCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 36
+    },
+    "AArch64AsyncUnwind.NativeExplicitIBLiveLRRunsObjCCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 24
+    },
+    "AArch64AsyncUnwind.NativeCompactExplicitIBLiveLRRunsObjCCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 36
+    },
+    "AArch64AsyncUnwind.NativeExplicitIALiveLRCatchesObjCException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 24
+    },
+    "AArch64AsyncUnwind.NativeCompactExplicitIALiveLRCatchesObjCException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 36
+    },
+    "AArch64AsyncUnwind.NativeExplicitIBLiveLRCatchesObjCException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 24
+    },
+    "AArch64AsyncUnwind.NativeCompactExplicitIBLiveLRCatchesObjCException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 36
+    },
+    "AArch64AsyncUnwind.LiftedExplicitIALiveLRRunsLanguageCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 12
+    },
+    "AArch64AsyncUnwind.LiftedCompactExplicitIALiveLRRunsLanguageCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 18
+    },
+    "AArch64AsyncUnwind.LiftedExplicitIBLiveLRRunsLanguageCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 12
+    },
+    "AArch64AsyncUnwind.LiftedCompactExplicitIBLiveLRRunsLanguageCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 18
+    },
+    "AArch64AsyncUnwind.LiftedExplicitIALiveLRCatchesLanguageException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 12
+    },
+    "AArch64AsyncUnwind.LiftedCompactExplicitIALiveLRCatchesLanguageException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 18
+    },
+    "AArch64AsyncUnwind.LiftedExplicitIBLiveLRCatchesLanguageException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 12
+    },
+    "AArch64AsyncUnwind.LiftedCompactExplicitIBLiveLRCatchesLanguageException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 6,
+      "darwin_personality_phase_pairs": 18
+    },
+    "AArch64AsyncUnwind.LiftedExplicitIALiveLRRunsObjCCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 24
+    },
+    "AArch64AsyncUnwind.LiftedCompactExplicitIALiveLRRunsObjCCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 36
+    },
+    "AArch64AsyncUnwind.LiftedExplicitIBLiveLRRunsObjCCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 24
+    },
+    "AArch64AsyncUnwind.LiftedCompactExplicitIBLiveLRRunsObjCCleanups": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 36
+    },
+    "AArch64AsyncUnwind.LiftedExplicitIALiveLRCatchesObjCException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 24
+    },
+    "AArch64AsyncUnwind.LiftedCompactExplicitIALiveLRCatchesObjCException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 36
+    },
+    "AArch64AsyncUnwind.LiftedExplicitIBLiveLRCatchesObjCException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 24
+    },
+    "AArch64AsyncUnwind.LiftedCompactExplicitIBLiveLRCatchesObjCException": {
+      "structural_pc_signing_images": 6,
+      "explicit_register_modifier_images": 2,
+      "darwin_personality_images": 6,
+      "darwin_personality_exceptions": 12,
+      "darwin_personality_phase_pairs": 36
+    }
+  },
+  "runs": {
+    "apple_linked_controls": "https://github.com/gmh5225/test_mac_intel/actions/runs/45937609347",
+    "release": "https://github.com/gmh5225/test_mac_intel/actions/runs/45940557627",
+    "actions_revision": "07a28e09f1137e8abef0f50f656409756d359409"
+  }
+}

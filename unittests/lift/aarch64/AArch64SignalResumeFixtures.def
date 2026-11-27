@@ -409,6 +409,24 @@ ASYNC_FRAME_TEXT(kSignalInvalidLSDA, "Lneverd_lsda_${:uid}:\n.byte 0\n")
 ASYNC_FRAME_TEXT(kSignalNonCallExceptions, "native_noncall_language_cleanups")
 ASYNC_FRAME_TEXT(kSignalNonCallObjCExceptions, "native_noncall_objc_cleanups")
 ASYNC_FRAME_TEXT(kSignalNonCallBody, R"asm(
+#ifdef NEVERD_EXPLICIT_LR
+ .macro authenticate_explicit_lr
+#ifdef NEVERD_REGISTER_SIGNING_PC
+ adr x11, Lsign
+#ifdef NEVERD_IA_LR
+ .inst 0xdac1917e // autiasppc x11
+#else
+ .inst 0xdac1957e // autibsppc x11
+#endif
+#else
+#ifdef NEVERD_IA_LR
+ .long 0xf380001f | ((.-Lsign)/4)<<5
+#else
+ .long 0xf3a0001f | ((.-Lsign)/4)<<5
+#endif
+#endif
+ .endm
+#endif
  .text
  .globl _signal_scope
  .p2align 2
@@ -533,11 +551,7 @@ Lcleanup:
  cbnz x9, Lresume_end
  add sp, sp, #32
 #ifdef NEVERD_EXPLICIT_LR
-#ifdef NEVERD_IA_LR
- .long 0xf380001f | ((.-Lsign)/4)<<5
-#else
- .long 0xf3a0001f | ((.-Lsign)/4)<<5
-#endif
+ authenticate_explicit_lr
 #else
 #ifdef NEVERD_PACM_LR
  adr x16, Lsign
@@ -563,11 +577,7 @@ Lresume:
     defined(NEVERD_PACM_LR) || defined(NEVERD_EXPLICIT_LR)
  add sp, sp, #32
 #ifdef NEVERD_EXPLICIT_LR
-#ifdef NEVERD_IA_LR
- .long 0xf380001f | ((.-Lsign)/4)<<5
-#else
- .long 0xf3a0001f | ((.-Lsign)/4)<<5
-#endif
+ authenticate_explicit_lr
 #else
 #ifdef NEVERD_PACM_LR
  adr x16, Lsign
@@ -632,7 +642,20 @@ Lfunction_end:
  .p2align 2
 _signal_tick:
  .cfi_startproc
+#ifdef NEVERD_REGISTER_SIGNING_PC
+Ltick_sign:
+#ifdef NEVERD_IA_LR
+ .inst 0xdac1a3fe // paciasppc
+ adr x15, Ltick_sign
+ .inst 0xd65f0bef // retaasppc x15
+#else
+ .inst 0xdac1a7fe // pacibsppc
+ adr x15, Ltick_sign
+ .inst 0xd65f0fef // retabsppc x15
+#endif
+#else
  ret
+#endif
  .cfi_endproc
 #if defined(NEVERD_COMPACT_LIVE_LR) && defined(NEVERD_LOCAL_CATCH)
  // The compact scope tail-calls a normal language helper after restoring SP
@@ -1168,3 +1191,5 @@ int main(int argc, char **argv) {
          !handled.load() || dlclose(image);
 }
 )cpp")
+
+#include "AArch64ExplicitUnwindFixtures.def"

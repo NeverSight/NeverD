@@ -1,0 +1,226 @@
+//===- AArch64ExplicitUnwindFixtures.def - Darwin personality checks ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+ASYNC_FRAME_VALUE(unsigned, kPersonalityCallSites, 2)
+ASYNC_FRAME_TEXT(kPersonalityNative, "NEVERD_ARM64E_PERSONALITY_NATIVE")
+ASYNC_FRAME_TEXT(kPersonalityDriver, "personality-driver")
+ASYNC_FRAME_TEXT(kPersonalityInput, "personality-input")
+ASYNC_FRAME_TEXT(kPersonalityResult, "personality-result")
+ASYNC_FRAME_TEXT(kPersonalityLanguage, "objective-c++")
+ASYNC_FRAME_TEXT(kPersonalityImages, "darwin_personality_images")
+ASYNC_FRAME_TEXT(kPersonalityExceptions, "darwin_personality_exceptions")
+ASYNC_FRAME_TEXT(kPersonalityPhasePairs, "darwin_personality_phase_pairs")
+ASYNC_FRAME_TEXT(kRegisterSigningFlag, "-DNEVERD_REGISTER_SIGNING_PC")
+ASYNC_FRAME_TEXT(kRegisterSigningImages, "explicit_register_modifier_images")
+ASYNC_FRAME_TEXT(kPersonalityBody, R"mm(
+#include <Foundation/Foundation.h>
+#include <dlfcn.h>
+#include <libunwind.h>
+#include <ptrauth.h>
+#include <unwind.h>
+#include <cstdint>
+#include <fstream>
+#include <initializer_list>
+
+using Personality = _Unwind_Reason_Code(int, _Unwind_Action,
+                                       _Unwind_Exception_Class,
+                                       _Unwind_Exception *, _Unwind_Context *);
+extern "C" Personality __gxx_personality_v0;
+extern "C" Personality __objc_personality_v0;
+extern "C" void observe_throw();
+
+// This ordinary call frame observes the language runtime's own exception
+// during phase one. Its personality lets the real outer catch handle it.
+#if defined(__arm64e__)
+#define OBSERVE_ENTRY " .cfi_b_key_frame\n pacibsp\n"
+#define OBSERVE_RETURN " retab\n"
+#else
+#define OBSERVE_ENTRY ""
+#define OBSERVE_RETURN " ret\n"
+#endif
+asm(".text\n.p2align 2\n.globl _observe_throw\n_observe_throw:\n .cfi_startproc\n"
+    " .cfi_personality 155, _observe_phase\n"
+    OBSERVE_ENTRY
+    " stp x29,x30,[sp,#-16]!\n .cfi_def_cfa_offset 16\n"
+    " .cfi_offset x29,-16\n .cfi_offset x30,-8\n mov x29,sp\n"
+    " .cfi_def_cfa_register x29\n bl _raise_sample\n ldp x29,x30,[sp],#16\n"
+    OBSERVE_RETURN " .cfi_endproc\n");
+#undef OBSERVE_ENTRY
+#undef OBSERVE_RETURN
+
+struct Sample {};
+static NSObject *Object;
+static bool ObjectiveC, LocalCatch, ThrowObject;
+static uintptr_t Owner, LSDA, FirstReturn, LastReturn, LandingPad, ResumeReturn;
+static unsigned Samples, PhasePairs;
+
+extern "C" void raise_sample() {
+  if (ThrowObject)
+    @throw Object;
+  throw Sample{};
+}
+
+static bool checkDecision(int Version, _Unwind_Exception_Class Class,
+                          _Unwind_Exception *Exception, uintptr_t ReturnPC,
+                          bool Protected) {
+  unw_context_t Here;
+  unw_cursor_t Cursor;
+  if (unw_getcontext(&Here) || unw_init_local(&Cursor, &Here))
+    return false;
+  // Darwin's arm64e local cursor takes a return address authenticated for
+  // its own SP. Only inspect PCs from this fixture's verified call sites.
+#if defined(__arm64e__)
+  unw_word_t SP;
+  if (unw_get_reg(&Cursor, UNW_REG_SP, &SP))
+    return false;
+  const auto CursorPC = reinterpret_cast<unw_word_t>(
+      ptrauth_sign_unauthenticated(reinterpret_cast<void *>(ReturnPC),
+                                   ptrauth_key_return_address, SP));
+#else
+  const auto CursorPC = ReturnPC;
+#endif
+  if (unw_set_reg(&Cursor, UNW_REG_IP, CursorPC))
+    return false;
+  auto *Context = reinterpret_cast<_Unwind_Context *>(&Cursor);
+  const char *Name =
+      ObjectiveC ? "__objc_personality_v0" : "__gxx_personality_v0";
+  void *Symbol = dlsym(RTLD_DEFAULT, Name);
+  const auto ExpectedHandler = reinterpret_cast<uintptr_t>(
+      ptrauth_strip(Symbol, ptrauth_key_function_pointer));
+  unw_proc_info_t Info{};
+  if (!Symbol || unw_get_proc_info(&Cursor, &Info) || Info.start_ip != Owner ||
+      Info.end_ip < ReturnPC || Info.lsda != LSDA ||
+      Info.handler != ExpectedHandler ||
+      _Unwind_GetRegionStart(Context) != Owner)
+    return false;
+  // A Mach-O personality reference and a callable C function pointer have
+  // distinct relocation contracts. Call each runtime entry by its C name.
+  const auto Decide = [&](_Unwind_Action Phase) {
+    if (ObjectiveC)
+      return __objc_personality_v0(Version, Phase, Class, Exception, Context);
+    return __gxx_personality_v0(Version, Phase, Class, Exception, Context);
+  };
+  const bool Catches = Protected && LocalCatch && (!ObjectiveC || ThrowObject);
+  if (Decide(_UA_SEARCH_PHASE) !=
+      (Catches ? _URC_HANDLER_FOUND : _URC_CONTINUE_UNWIND))
+    return false;
+  const auto Action = static_cast<_Unwind_Action>(
+      _UA_CLEANUP_PHASE | (Catches ? _UA_HANDLER_FRAME : 0));
+  const bool Installs = Protected && (!LocalCatch || Catches);
+  if (Decide(Action) !=
+      (Installs ? _URC_INSTALL_CONTEXT : _URC_CONTINUE_UNWIND))
+    return false;
+  // Inspect the scratch cursor and discard it. The system drives the real
+  // exception through observe_throw's unchanged cursor to the normal catch.
+  if (_Unwind_GetIP(Context) != (Installs ? LandingPad : ReturnPC))
+    return false;
+  if (Installs && (_Unwind_GetGR(Context, 0) !=
+                       reinterpret_cast<uintptr_t>(Exception) ||
+                   _Unwind_GetGR(Context, 1) != unsigned(Catches)))
+    return false;
+  ++PhasePairs;
+  return true;
+}
+
+extern "C" _Unwind_Reason_Code
+observe_phase(int Version, _Unwind_Action Action, _Unwind_Exception_Class Class,
+              _Unwind_Exception *Exception, _Unwind_Context *) {
+  if (Action == _UA_SEARCH_PHASE &&
+      checkDecision(Version, Class, Exception, ResumeReturn, false) &&
+      checkDecision(Version, Class, Exception, FirstReturn, true) &&
+      (LastReturn == FirstReturn ||
+       checkDecision(Version, Class, Exception, LastReturn, true)))
+    ++Samples;
+  return _URC_CONTINUE_UNWIND;
+}
+
+int main(int Argc, char **Argv) {
+  if (Argc != 4)
+    return 1;
+  uintptr_t OwnerOffset, Begin, End, Pad, Resume;
+  intptr_t TableOffset;
+  std::ifstream Input(Argv[2]);
+  if (!(Input >> ObjectiveC >> LocalCatch >> OwnerOffset >> TableOffset >>
+        Begin >> End >> Pad >> Resume))
+    return 2;
+  void *Image = dlopen(Argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!Image)
+    return 3;
+  void *Entry = dlsym(Image, "signal_scope");
+  if (!Entry)
+    return 4;
+  Owner = reinterpret_cast<uintptr_t>(
+              ptrauth_strip(Entry, ptrauth_key_function_pointer)) + OwnerOffset;
+  LSDA = Owner + TableOffset;
+  FirstReturn = Owner + Begin + sizeof(uint32_t);
+  LastReturn = Owner + End;
+  LandingPad = Owner + Pad;
+  ResumeReturn = Owner + Resume + sizeof(uint32_t);
+  Dl_info Library{};
+  if (!dladdr(Entry, &Library))
+    return 4;
+  for (auto Address :
+       {Owner, FirstReturn, LastReturn, LandingPad, ResumeReturn, LSDA}) {
+    Dl_info Part{};
+    if (!dladdr(reinterpret_cast<const void *>(Address), &Part) ||
+        Part.dli_fbase != Library.dli_fbase)
+      return 4;
+  }
+  @autoreleasepool {
+    Object = [[NSObject new] autorelease];
+    try {
+      observe_throw();
+      return 5;
+    } catch (const Sample &) {}
+    if (ObjectiveC) {
+      ThrowObject = true;
+      @try {
+        observe_throw();
+        return 6;
+      } @catch (NSObject *Seen) {
+        if (Seen != Object)
+          return 7;
+      }
+    }
+  }
+  if (Samples != 1 + unsigned(ObjectiveC) ||
+      PhasePairs != Samples * (2 + unsigned(FirstReturn != LastReturn)) ||
+      dlclose(Image))
+    return 8;
+  std::ofstream Result(Argv[3]);
+  Result << Samples << ' ' << PhasePairs;
+  Result.close();
+  return Result ? 0 : 9;
+}
+)mm")
+
+ASYNC_FRAME_TEXT(kStaleSigningAddress, "refusing stale-address fallback")
+ASYNC_FRAME_TEXT(kRejectedSigningUses, "refused_observed_signing_addresses")
+ASYNC_FRAME_TEXT(kPublishedSigningUses, "published_local_signing_addresses")
+ASYNC_FRAME_TEXT(kSigningAddressCopy, "-DNEVERD_RETURN_SIGNING_ADDRESS")
+ASYNC_FRAME_TEXT(kSigningAddressStore, "-DNEVERD_STORE_SIGNING_ADDRESS")
+ASYNC_FRAME_TEXT(kSigningAddressBody, R"asm(
+ .text
+ .globl _signal_tick
+ .p2align 2
+_signal_tick:
+ .cfi_startproc
+Lsign:
+ .inst 0xdac1a3fe // paciasppc
+ adr x15, Lsign
+ .inst 0xdac191fe // autiasppc x15
+ cbz x1, Lreturn
+#ifdef NEVERD_RETURN_SIGNING_ADDRESS
+ mov x0, x15
+#elif defined(NEVERD_STORE_SIGNING_ADDRESS)
+ str x15, [x0]
+#else
+ mov x15, xzr
+#endif
+Lreturn:
+ ret
+ .cfi_endproc
+)asm")
