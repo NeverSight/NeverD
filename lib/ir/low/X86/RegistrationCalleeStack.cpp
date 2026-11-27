@@ -825,8 +825,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
         // A checked store to CRT-owned storage preserves both its source EAX
         // and the private word at SP for the immediately following call.
         FollowingCRTArgument = Arguments.firstPrivateWord(Transfer, Work);
-      if (CheckEntryBindings && !Closed &&
-          CRTAccess != registration_abi::CRTDataAccess::ReadArgumentWord)
+      if (CheckEntryBindings && !Closed && !CRTAccess)
         PreservesEntryImports = false;
       if (!Registration && !CxxPaths && State.ImportBindingsIntact &&
           !Body.ImportSlots.empty() && !CRTAccess &&

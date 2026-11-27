@@ -10374,16 +10374,15 @@ data-address carriers. The read produces no new address receipt, and a full or
 partial destination alias still invalidates its earlier carrier. This reuses
 the ordinary current-frame and mapped-read permission instead of deciding
 readability from numerical addresses or file contents in the data tracker.
-One complete DWORD store to the exported CRT int is disjoint from the caller
-image's IAT. It consumes the receipt; a later store needs a fresh authenticated
+One complete DWORD store to the exported CRT int preserves the caller image's
+IAT. It consumes the receipt; a later store needs a fresh authenticated
 load and a still-live binding. Partial writes, arithmetic on the address,
 opaque reads, calls, trapping operations and block boundaries withdraw it.
 `RegistrationScalarPackets` owns the shared nontrapping integer barrier rule
 for this receipt and the precision-call argument packet. Required data slots
-remain transitive import dependencies. This side proof supplies no scalar
-value, frame-memory cell, saved-stack restoration or public callee memory and
-binding-preservation contract; registration-state and native EH consumers
-receive no new authority.
+remain transitive import dependencies. A caller can retain its bindings on
+return when every other operation also preserves them. Frame-memory values,
+saved-stack restoration and native EH effects require independent proofs.
 The same owner checks the exact Kernel32 PE32 exports `GetStartupInfoW`,
 `HeapSetInformation`, `InterlockedCompareExchange`, `InterlockedExchange`,
 `DecodePointer`, `EncodePointer` and `Sleep` for their SDK stdcall adjustment.

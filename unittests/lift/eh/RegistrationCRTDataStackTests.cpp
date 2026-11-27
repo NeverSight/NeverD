@@ -19,8 +19,10 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -29,7 +31,8 @@ namespace {
 using namespace neverd;
 
 BinaryImage dataImage(uint32_t Base, const char *Module, const char *Name,
-                      unsigned Register, bool Moffs, unsigned Mutation) {
+                      unsigned Register, bool Moffs, unsigned Mutation,
+                      bool CallSleep = true) {
   BinaryImage Image;
   Image.Arch = Arch::X86;
   Image.Bits = Bitness::Bits32;
@@ -113,8 +116,10 @@ BinaryImage dataImage(uint32_t Base, const char *Module, const char *Name,
     Code.insert(Code.end(), {0xc7, uint8_t(Register)});
     word(9);
   }
-  Code.insert(Code.end(), {0x6a, 0, 0xff, 0x15});
-  word(Slot + 4);
+  if (CallSleep) {
+    Code.insert(Code.end(), {0x6a, 0, 0xff, 0x15});
+    word(Slot + 4);
+  }
   Code.insert(Code.end(), {0x33, 0xc0, 0xc3});
   EXPECT_LE(Code.size(), size_t(Other - Image.Entry));
   Code.resize(Other - Image.Entry, 0xcc);
@@ -224,6 +229,7 @@ TEST(RegistrationCRTDataStack, UCRTCommodeAccessorOwnsOneFullIntStore) {
       Code.insert(Code.end(), {0x89, 0x30}); // MOV [EAX], ESI
       if (Kind == Input::SecondStore)
         Code.insert(Code.end(), {0x89, 0x30});
+      const size_t AfterStore = Code.size();
       Code.insert(Code.end(), {0xff, 0x15});
       Word(Slot + 4); // Sleep consumes the private argument.
       Code.push_back(0xc3);
@@ -242,6 +248,19 @@ TEST(RegistrationCRTDataStack, UCRTCommodeAccessorOwnsOneFullIntStore) {
         EXPECT_EQ(Contract->RequiredImports,
                   (std::vector<va_t>{Slot, Slot + 4}));
         EXPECT_FALSE(Contract->PreservesImportBindings);
+      }
+      // Return directly after the store, consuming the private argument.
+      const uint8_t Return[] = {0x83, 0xc4, 4, 0xc3};
+      std::copy(std::begin(Return), std::end(Return),
+                Code.begin() + AfterStore);
+      const auto StoreOnly =
+          RegistrationCallCalleeIndex(Image).stackContract(Image.Entry);
+      EXPECT_EQ(bool(StoreOnly && StoreOnly->PreservesImportBindings),
+                Kind == Input::Current);
+      if (Kind == Input::Current) {
+        ASSERT_TRUE(StoreOnly);
+        EXPECT_EQ(StoreOnly->RequiredImports, (std::vector<va_t>{Slot}));
+        EXPECT_EQ(StoreOnly->StackPopBytes, 0u);
       }
     }
 }
@@ -383,6 +402,30 @@ TEST(RegistrationCRTDataStack, CompleteCurrentDataStoresPreserveOnlyBindings) {
                     getCheckedX86RegistrationLeafCalleeABI(Image, Image.Entry));
             }
           }
+}
+
+TEST(RegistrationCRTDataStack, ReturnedStoresRequireCurrentLegacyDataSlots) {
+  constexpr va_t Base = 0x18000000;
+  for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
+    for (const char *Name : {"_fmode", "_commode"})
+      for (unsigned Mutation : {0u, 4u, 7u, 12u, 13u, 22u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Module << '/' << Name << '/' << Mutation);
+        const auto Image = dataImage(Base, Module, Name, 1, false, Mutation,
+                                     /*CallSleep=*/false);
+        const auto Contract =
+            RegistrationCallCalleeIndex(Image).stackContract(Image.Entry);
+        const bool Valid = Mutation == 0 || Mutation == 7 || Mutation == 22;
+        EXPECT_EQ(bool(Contract && Contract->PreservesImportBindings), Valid);
+        if (Valid) {
+          ASSERT_TRUE(Contract);
+          std::vector<va_t> Required{Base + 0x3000};
+          if (Mutation == 22)
+            Required.push_back(Base + 0x3008);
+          EXPECT_EQ(Contract->RequiredImports, Required);
+          EXPECT_EQ(Contract->StackPopBytes, 0u);
+        }
+      }
 }
 
 TEST(RegistrationCRTDataStack, ClosedReadsRetainOnlyUnchangedDataCarriers) {
