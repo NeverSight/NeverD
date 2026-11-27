@@ -18,6 +18,7 @@
 #include "neverd/loader/Loader.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Program.h"
@@ -29,8 +30,9 @@
 
 namespace neverd::test {
 
-inline void buildDarwinFixtureDriver(const std::string &Executable,
-                                     llvm::StringRef Body) {
+inline void
+buildDarwinFixtureDriver(const std::string &Executable, llvm::StringRef Body,
+                         llvm::ArrayRef<llvm::StringRef> Flags = {}) {
 #define DARWIN_DRIVER_TEXT(Name, Value) static constexpr char Name[] = Value;
 #include "AArch64DarwinFixtureDriver.def"
   const auto Source =
@@ -39,10 +41,11 @@ inline void buildDarwinFixtureDriver(const std::string &Executable,
   const char *Selected = std::getenv(Profile);
   const bool Native = Selected && llvm::StringRef(Selected) == SystemProfile;
   const auto *Target = Native ? NativeTarget : HostTarget;
-  ASSERT_EQ(llvm::sys::ExecuteAndWait(Compiler,
-                                      {Compiler, TargetFlag, Target, Standard,
-                                       Optimize, Source, Output, Executable}),
-            0);
+  llvm::SmallVector<llvm::StringRef> Args{Compiler, TargetFlag, Target,
+                                          Standard, Optimize};
+  Args.append(Flags.begin(), Flags.end());
+  Args.append({Source, Output, Executable});
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(Compiler, Args), 0);
   auto Image = Loader::create(BinaryFormat::MachO)->load(Executable);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   ASSERT_EQ(Image->Arch, Arch::AArch64);
