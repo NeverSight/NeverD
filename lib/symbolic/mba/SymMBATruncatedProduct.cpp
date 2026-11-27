@@ -1750,7 +1750,8 @@ struct FieldRow {
 
 SymRef emitFieldRows(SymContext &Ctx, llvm::ArrayRef<SymRef> Fields,
                      llvm::ArrayRef<FieldRow> Rows, SymRef Constant,
-                     WorkBudget &Budget, size_t &Storage) {
+                     WorkBudget &Budget, size_t &Storage,
+                     bool NativeArithmetic) {
   const unsigned N = Fields.size(), Width = Ctx.width(Constant);
   if (llvm::all_of(Rows, [](const FieldRow &R) { return R.Terms.empty(); })) {
     llvm::SmallVector<SymRef, 8> Sum{Constant};
@@ -1905,9 +1906,15 @@ SymRef emitFieldRows(SymContext &Ctx, llvm::ArrayRef<SymRef> Fields,
   auto ByCost = Active;
   llvm::stable_sort(ByCost,
                     [&](unsigned A, unsigned B) { return Cost[A] > Cost[B]; });
-  compare(ByCost, false, false);
-  if (TopWeights)
-    compare(ByCost, true, false);
+  if (ByCost != Active) {
+    compare(ByCost, false, false);
+    if (TopWeights)
+      compare(ByCost, true, false);
+  }
+  // Small native products also get an independent arithmetic expansion.
+  // Do not repeat the same pivot search over simple leaf slices first.
+  if (NativeArithmetic)
+    return Best;
   for (unsigned First : Active) {
     if (Degree[First] < 2)
       continue;
@@ -1934,9 +1941,15 @@ SymRef emitFieldRows(SymContext &Ctx, llvm::ArrayRef<SymRef> Fields,
         if (Term.Other != I && Left[Term.Other])
           --Left[Term.Other];
     }
-    compare(Order, false, false);
-    if (TopWeights)
-      compare(Order, true, false);
+    // Reordering zero-degree rows cannot change the printed expression.
+    // Both base orders have already been tried with the same diagonal forms.
+    if (Order == Active)
+      continue;
+    if (Order != ByCost) {
+      compare(Order, false, false);
+      if (TopWeights)
+        compare(Order, true, false);
+    }
     if (TwoBitSquares)
       compare(Order, true, true);
   }
@@ -2126,7 +2139,11 @@ struct QuadraticFieldPolynomial {
           Rows[J].Terms.push_back({I, Weight});
       }
     }
-    auto High = emitFieldRows(Ctx, Projected, Rows, Constant, Budget, Storage);
+    const bool NativeArithmetic =
+        Width <= llvm::APInt::APINT_BITS_PER_WORD &&
+        Accepted + Remainder.size() + 1 <= limits::kMaxResidueProductFactors;
+    auto High = emitFieldRows(Ctx, Projected, Rows, Constant, Budget, Storage,
+                              NativeArithmetic);
     const auto Value = Ctx.mkConcat(High, Ctx.mkConst(Offset.trunc(K + Pad)));
     const auto Zeros = Ctx.mkConst(Width - P, 0);
     llvm::SmallVector<SymRef, 8> Factors(Remainder);

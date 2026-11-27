@@ -43,6 +43,8 @@ inline constexpr std::size_t kMaxCompletedProductTerms = 128;
 
 inline constexpr std::size_t kMinDelayedCommonAtoms = 4;
 inline constexpr unsigned kMinDelayedPolynomialOperands = 2;
+// A repeated polynomial starts saving full convolutions at four copies.
+inline constexpr std::size_t kMinArithmeticPowerCopies = 4;
 
 inline constexpr std::size_t kMaxPolynomialCofactorTerms = 128;
 inline constexpr std::size_t kMaxPolynomialCofactorEdges = 4096;

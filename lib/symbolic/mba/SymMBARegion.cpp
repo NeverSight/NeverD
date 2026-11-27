@@ -84,26 +84,18 @@ bool isMinimalLeafExpression(const SymContext &Ctx, SymRef E,
     return A != B && MaxAtoms >= 2;
   if (Ctx.isVar(A))
     std::swap(A, B);
-  // A word expression that reads three distinct free words through two
-  // full-width binary operations needs all three leaves and both operations.
-  // Each of these operators admits an identity on the other input. A select
-  // would need an additional predicate to use a word wider than one bit.
-  if (MaxAtoms >= 2 && Ctx.width(E) > 1 && Ctx.isVar(B)) {
-    SymRef Inner = A;
-    if (Op == SymOp::Add && Ctx.op(Inner) == SymOp::Mul &&
-        Ctx.numOperands(Inner) == 2 && Ctx.isConstOnes(Ctx.operand(Inner, 0))) {
-      Inner = Ctx.operand(Inner, 1); // a - b in the printed expression
-      if (Ctx.isVar(Inner))
-        return Inner != B;
-    }
-    const auto K = Ctx.op(Inner);
-    if (MaxAtoms >= 3 &&
-        (K == SymOp::Add || K == SymOp::Mul || K == SymOp::And ||
-         K == SymOp::Or || K == SymOp::Xor) &&
+  // A difference of a free word and a bitwise operation on two other free
+  // words requires three leaves and two operations. A select would need an
+  // additional predicate to branch on a word wider than one bit.
+  if (Op == SymOp::Add && MaxAtoms >= 3 && Ctx.width(E) > 1 && Ctx.isVar(B) &&
+      Ctx.op(A) == SymOp::Mul && Ctx.numOperands(A) == 2 &&
+      Ctx.isConstOnes(Ctx.operand(A, 0))) {
+    auto Inner = Ctx.operand(A, 1);
+    const auto Kind = Ctx.op(Inner);
+    if ((Kind == SymOp::Xor || Kind == SymOp::And || Kind == SymOp::Or) &&
         Ctx.numOperands(Inner) == 2) {
       const auto L = Ctx.operand(Inner, 0), R = Ctx.operand(Inner, 1);
-      if (Ctx.isVar(L) && Ctx.isVar(R) && L != R && L != B && R != B &&
-          Ctx.readability(E) == SymReadability{5, 2})
+      if (Ctx.isVar(L) && Ctx.isVar(R) && L != R && L != B && R != B)
         return true;
     }
   }

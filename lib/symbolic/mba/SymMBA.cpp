@@ -2112,7 +2112,7 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
   Budget.ArithmeticProductReading = {};
   SymRef Prepared =
       foldProductValuations(Ctx, EarlyTail, Budget, ValuationStorage);
-  SymRef PackedAlternative;
+  SymRef ProductAlternative;
   // A compact modular proof may still print each factor in an incomplete
   // block. For a native product of this size the ordinary arithmetic engine
   // can give a shorter polynomial over the original fields.
@@ -2140,8 +2140,17 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
             (Ctx.op(Prepared) == SymOp::Mul &&
              Ctx.op(Alternative) == SymOp::Add &&
              std::adjacent_find(Parts.begin(), Parts.end()) != Parts.end())) {
-          PackedAlternative = Prepared;
-          Prepared = Alternative;
+          // A constant suffix exposes the actual width of the varying bits.
+          // Walk that spelling when its DAG is smaller. Retain the checked
+          // full-width expansion even when its printed tree is shorter.
+          if (Ctx.op(Prepared) == SymOp::Concat &&
+              Ctx.isConst(Ctx.operand(Prepared, 1)) &&
+              Ctx.dagSize(Alternative) > Ctx.dagSize(Prepared)) {
+            ProductAlternative = Alternative;
+          } else {
+            ProductAlternative = Prepared;
+            Prepared = Alternative;
+          }
         }
       }
     }
@@ -2573,9 +2582,9 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
   // A locally shorter child can make the composed spelling longer. Retain
   // the independently proved whole-root candidate as an alternative even
   // when subsequent search exhausts its allowance.
-  if (PackedAlternative && readingScore(Ctx, PackedAlternative) <
-                               readingScore(Ctx, WholeAlternative))
-    WholeAlternative = PackedAlternative;
+  if (ProductAlternative && readingScore(Ctx, ProductAlternative) <
+                                readingScore(Ctx, WholeAlternative))
+    WholeAlternative = ProductAlternative;
   const bool KeptWhole = WalkRoot != E && readingScore(Ctx, WholeAlternative) <
                                               readingScore(Ctx, Out);
   if (KeptWhole)
