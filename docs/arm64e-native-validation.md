@@ -2840,6 +2840,18 @@ four EnPACM configurations (576 calls). The same run replayed the earlier
 [Arm model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45997050094) ·
 [Hosted macOS Release run](https://github.com/gmh5225/test_mac_intel/actions/runs/45989233449)
 
+Across nine joined-signing fixtures, including three with every candidate
+scratch register live, O0 publication and O2 republication produced 36 images.
+The tests checked 152 signing rows, resolved 72 interrupted signing PCs, and
+rejected 16 incomplete or conflicting cases. The clean r6 macOS Release run
+passed 329 tests with zero skips. The Arm FVP executed the 54 original and
+published bodies with two caller inputs at EL0 and EL1 under four EnPACM
+settings (864 calls). The independent M4 and hosted Release exports both passed this matrix. The disabled-feature control and the three
+archived guest inventories also passed.
+[Validation record](evidence/arm64e-scratch-free-signing-2026-11-28.json) ·
+[Hosted Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46046283283) ·
+[Arm FVP execution](https://github.com/gmh5225/test_mac_intel/actions/runs/46051104410)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
