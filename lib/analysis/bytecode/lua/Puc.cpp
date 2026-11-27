@@ -113,13 +113,16 @@ class PucReader {
     if (Seen != Anchors)
       malformed(R.at(), "Unused absolute line anchors");
   }
-  Proto &function(unsigned Depth) {
+  Proto &function(unsigned Depth, llvm::StringRef ParentSource = {}) {
     if (Depth > limits::kDepth)
       throw Failure{"budget_exceeded",
                     "Prototype nesting exceeds recovery budget", R.at()};
     auto &P = C.proto(R);
-    if (V != 0x52 && V != 0x55)
+    if (V != 0x52 && V != 0x55) {
       P.SourceName = string();
+      if (!P.SourceName.data())
+        P.SourceName = ParentSource;
+    }
     P.FirstLine = index();
     P.LastLine = index();
     if (V == 0x51)
@@ -138,7 +141,7 @@ class PucReader {
       P.K.push_back(constant());
     auto Children = [&] {
       for (unsigned I = count(); I; --I)
-        P.Children.push_back(function(Depth + 1).Id);
+        P.Children.push_back(function(Depth + 1, P.SourceName).Id);
     };
     if (V <= 0x52)
       Children();

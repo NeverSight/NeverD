@@ -68,6 +68,13 @@ TEST(LuaRecovery, OwnedCompilerDumps) {
       auto &F = *Item.getAsObject();
       if (Id == "luau/typed/debug" && F.getInteger("parameters") == 2)
         ASSERT_NE(F.getObject("type_info"), nullptr);
+      if (Id.ends_with("/capture/debug") &&
+          (Id.starts_with("5.1") || Id.starts_with("5.3") ||
+           Id.starts_with("5.4"))) {
+        auto Name = Fns->front().getAsObject()->getString("source_name");
+        ASSERT_TRUE(Name);
+        EXPECT_EQ(F.getString("source_name"), Name);
+      }
       EXPECT_EQ(F.getString("register_names"), "generated");
       EXPECT_EQ(F.getString("line_info"),
                 Id.ends_with("stripped") ? "unavailable" : "available");
