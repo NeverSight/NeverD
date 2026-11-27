@@ -3063,6 +3063,8 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
     const bool Expanded = Fixup.Form == MachOAddressForm::Expanded;
     if (Expanded)
       AddedBytes += kInsnSize;
+    if (Fixup.insertsSigningModifier())
+      AddedBytes += kInsnSize;
     const auto *Before =
         Original.readVA(Fixup.Instruction, Pair ? 2 * kInsnSize : kInsnSize);
     if (!Before || Object.Sections.at(Sym.Section) != Plan.TextSection ||

@@ -15,6 +15,7 @@
 #include "neverd/loader/ExceptionFunction.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -465,7 +466,7 @@ void clobberCallState(State &S) {
 }
 
 bool transfer(State &S, const State &Before, Decoder &Decode,
-              const DecodedInsn &I) {
+              const DecodedInsn &I, const BinaryImage &Image) {
   const auto &D = I.Raw->detail->aarch64;
   const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
   cs_regs Reads, Writes;
@@ -513,6 +514,12 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
       Ops[1].type == AARCH64_OP_IMM)
     if (const auto R = reg(Ops[0].reg))
       S.Registers[*R].CodeAddress = static_cast<va_t>(Ops[1].imm);
+  // The loader proves an immutable ordinary rebase. A mutable or unbound
+  // cell cannot establish the second modifier of a register authentication.
+  if (neverd::aarch64::isPointerLiteralLoad(Word))
+    if (const auto R = reg(Ops.front().reg))
+      S.Registers[*R].CodeAddress =
+          machORebasedLiteralAddress(Image, Word, I.Addr);
   if ((I.Id == AARCH64_INS_MOV || I.Raw->alias_id == AARCH64_INS_ALIAS_MOV) &&
       Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
       Ops[1].type == AARCH64_OP_REG && wide(Ops[0].reg) && wide(Ops[1].reg)) {
@@ -919,7 +926,7 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
         !I.Raw || !I.Raw->detail)
       return fail(kCode);
     State After = *States[Index];
-    if (!transfer(After, *States[Index], Decode, I))
+    if (!transfer(After, *States[Index], Decode, I, Image))
       return fail(kCode);
     if (After.Stack.size() > Limits.MaxStackCells)
       return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);

@@ -2686,9 +2686,8 @@ lifted IR. Each case builds an Apple-linked input and its publication at O0
 and O2. A third pair at O2 uses a register for authentication and return.
 For that pair, the tests decode the installed ADR at the cleanup and at the
 leaf return and check its destination against the signing instruction in
-the installed function. A separate publication case returns or stores the
-signing address on one branch. It checks that the publisher refuses to
-change the address observed by its caller.
+the installed function. The observable-address tests below exercise a caller
+that also receives that address as a return value or through a memory slot.
 
 Set `NEVERD_ARM64E_PERSONALITY_NATIVE=1` to run the language checks on
 Apple Silicon with an arm64 caller loading the arm64e images. The existing
@@ -2717,6 +2716,44 @@ The hardware delivery counter was zero on all three hosts.
 [Per-case evidence](evidence/arm64e-explicit-personality-2026-11-27.json) ·
 [Apple-linked controls](https://github.com/gmh5225/test_mac_intel/actions/runs/45937609347) ·
 [Release Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/45940557627)
+
+### Publishing a signing address that is also program data
+
+A Darwin function can materialize its signing PC for two different uses.
+An `AUTIASPPC`, `AUTIBSPPC`, `RETAASPPC` or `RETABSPPC` needs the PC where
+its own LR was signed. A copy returned in X0 or written to a caller's
+slot retains the source image address, including its slide. NeverD keeps
+the ordinary address relocation and encodes the authentication against the
+installed signing instruction. A backwards immediate leaves the source
+register intact. A forward signer can use a separate, proven-dead Darwin
+scratch register. The final Mach-O verifier decodes the emitted consumer
+and checks both addresses against the actual layout.
+
+The regression publishes Apple-linked IA and IB images at O0 and publishes
+the resulting images again at O2. It covers conditional returns and stores,
+paired stores, copies on either side of authentication, an ADRP/ADD pair
+and authenticated returns. For a forward signer, an indexed DWARF row
+starting at the original AUT now starts at the extra modifier instruction
+in the installed image. This also preserves the row if an unwind starts
+between the modifier setup and AUT. The test keeps X16 and X17 live and
+checks stores through both registers after authentication.
+
+A rewritten consumer must have a single reaching definition. The publisher
+declines an alternate entry that can supply a different modifier and a
+forward case in which all eligible scratch registers are live. On a second
+lift it follows the original entry's forwarding chain and checks the
+retained signing word even when the old unwind range is one instruction.
+
+The unwind analysis also recognizes a full-width literal load from an
+immutable, dyld-rebased slot as a possible signing address. Recovery checks
+the loaded address against the recorded signer. A wrong address, a writable
+slot or a literal without rebase provenance leaves the LR state unknown.
+
+Use `verify_arm64e_return_model.py build-signing-address --tests BINARY
+--output GUESTS` to export the original and published instruction words on
+Apple Silicon. The corresponding `run --model FVP --guests GUESTS --output
+REPORT` executes those bodies at EL0 and EL1 with all four EnPACM/EnPACM0
+settings and checks a disabled-feature control.
 
 ### Native x1 runner qualification
 
