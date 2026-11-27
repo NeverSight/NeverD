@@ -415,10 +415,9 @@ void neverd::python::render(Job &J, std::vector<Function> &Functions,
                      {"first_line", C.FirstLine},
                      {"status", Status},
                      {"decode_complete", F.Decoded},
-                     {"instructions", instructionRows(F)},
                      {"diagnostics", std::move(Diagnostics)}};
+    attachInstructionRows(J, F, Row);
     if (C.Version == 311) {
-      Row["instructions"] = std::move(F.DiskInstructions);
       Row["exception_regions"] = std::move(F.ExceptionRegions);
       Row["qualified_name"] = C.QualifiedName->Data.str();
       if (!F.Error) {

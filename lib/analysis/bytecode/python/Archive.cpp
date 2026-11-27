@@ -14,7 +14,9 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Endian.h"
 
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <limits>
 #include <zlib.h>
 
@@ -37,6 +39,9 @@ bool neverd::python::safeMemberName(StringRef Name) {
   }
 }
 namespace {
+constexpr size_t CookieBytes = 88;
+constexpr StringLiteral CookieMagic("MEI\x0c\x0b\x0a\x0b\x0e");
+
 struct Member {
   StringRef Name;
   size_t At, Size;
@@ -156,9 +161,30 @@ void visit(Job &J, unsigned Id, StringRef Bytes, ArrayRef<Member> Members,
   }
 }
 } // namespace
+
+size_t neverd::python::findArchiveCookie(StringRef Bytes) {
+  if (Bytes.size() < CookieMagic.size())
+    return StringRef::npos;
+  // A normal footer is in the last block. Skip blocks without the first
+  // signature byte. For the rest, compare complete signatures from the
+  // right, even when a signature crosses the block boundary.
+  size_t End = Bytes.size() - CookieMagic.size() + 1;
+  while (End) {
+    size_t Begin = End - std::min(End, CookieBytes);
+    size_t First = Bytes.slice(Begin, End).find(CookieMagic.front());
+    if (First != StringRef::npos) {
+      for (size_t Pos = End; Pos > Begin + First; --Pos)
+        if (std::memcmp(Bytes.data() + Pos - 1, CookieMagic.data(),
+                        CookieMagic.size()) == 0)
+          return Pos - 1;
+    }
+    End = Begin;
+  }
+  return StringRef::npos;
+}
+
 void neverd::python::archive(Job &J, unsigned Id, StringRef B, size_t Cookie,
                              unsigned Depth) {
-  constexpr size_t CookieBytes = 88;
   if (B.size() - Cookie < CookieBytes)
     malformed(Cookie, "Truncated PyInstaller cookie");
   auto U32 = [&](size_t At) {
