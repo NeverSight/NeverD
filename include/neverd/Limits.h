@@ -114,6 +114,14 @@ constexpr uint32_t kMaxJumpTableStackEvidenceWork = 16384;
 /// the next power-of-two boundary that completes the supported case.
 constexpr uint32_t kMaxJumpTableGuardAliasEvidenceWork = 16384;
 
+/// Share of the remaining candidate account, as a divisor, that one guard
+/// proof's predicated-alias query batch may spend.  The batch only adds index
+/// alternatives, so an unfinished batch is abandoned and the guard proof keeps
+/// the rest.  Uncapped, the batch in pcre2's pattern converter spent 524 Mi
+/// of the 536 Mi account and left the guard itself incomplete; a 32nd of the
+/// whole account is 16 Mi.
+constexpr uint32_t kJumpTableGuardAliasQueryAccountDivisor = 32;
+
 /// Local allowance for constructing and replaying one precise guard expression
 /// batch.  An ARM32 auto-vectorized reduction followed by an eight-way switch
 /// uses about 13.3 KiB after exact syntax, query, and replay accounting;

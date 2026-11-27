@@ -5070,6 +5070,104 @@ TEST_F(JTE_X86_64, WithdrawnScalarGuessKeepsTheProvedTable) {
     EXPECT_TRUE(Table.AnalysisOnly);
 }
 
+static fs::path scaleAfterExtendX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_scale_after_extend.o";
+}
+
+// liblzma's decoder bounds a structure field in memory, reloads it into RCX
+// through the implicit zero-extend of `movl 0x10(%rdi), %ecx`, and scales RCX
+// in the table load's own instruction.  The address proof takes that scale
+// straight from the extended register instead of asking every same-scale
+// operation of the function whether it carries the index: one case scales a
+// value at the end of a chain deeper than any value query follows, which made
+// that whole batch incomplete once the table's targets were decoded.  Writing
+// CL between the reload and the table load makes the index 5, and that
+// dispatch stays unresolved.
+TEST_F(JTE_X86_64, TableAddressScalesTheExtendedIndexRegister) {
+  auto ImageOrErr = neverd::loadBinary(scaleAfterExtendX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 4; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Extended = Build("jt_scale_after_extend");
+  ASSERT_EQ(Extended.JumpTables.size(), 1u);
+  EXPECT_FALSE(Extended.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Extended.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Extended.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Extended.UnsafeIndirectBranchAddresses.empty());
+
+  const neverd::LowFunc Overwritten = Build("jt_scale_after_overwrite");
+  EXPECT_FALSE(Overwritten.UnsafeIndirectBranchAddresses.empty());
+  for (const neverd::JumpTable &Table : Overwritten.JumpTables)
+    EXPECT_TRUE(Table.AnalysisOnly);
+}
+
+static fs::path aliasShareX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_alias_share.o";
+}
+
+// A byte-code walk shaped like pcre2's find_minlength: 64 cases each keep a
+// running maximum with `cmova` before looping back to the guarded dispatch,
+// and every such select proposes a predicated index alias for the guard.
+// Those queries only add index alternatives and cost about 10 Mi here.  With
+// a 14 Mi candidate account they may spend only their share of it, so the
+// guard still bounds the index and the dispatch reads its 64 slots.
+// Charged in full, the batch spent the account the guard proof needed.
+TEST_F(JTE_X86_64, AliasQueriesSpendOnlyTheirShareOfTheCandidateAccount) {
+  auto ImageOrErr = neverd::loadBinary(aliasShareX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 64; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  const neverd::Symbol *Function = Image.findSymbol("jt_alias_share");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  Builder.setMaskFixedPointEvidenceBudgetForTesting(size_t{14} << 20);
+  const neverd::LowFunc Func =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Func.JumpTables.size(), 1u);
+  EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Func.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+}
+
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;
 // ja`, then indexes its 13-entry table with `movzbl %sil,%eax; andl $0xf,%eax`.
 // The guard's byte is the low byte of that index, so the table keeps the
