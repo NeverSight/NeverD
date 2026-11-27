@@ -175,7 +175,9 @@ neverd patch app --relink=build.json --linker-path=/path/to/ld.lld --mode=inplac
 When upgrading LLD, pass `--original-linker-path=/path/to/old/ld.lld`
 alongside `--linker-path=/path/to/new/ld.lld` for either mode. The first
 driver must reproduce the entire original file, including the linker
-version recorded in `.comment`. The second links the replacement. By
+version recorded in `.comment`. Two builds of the same LLVM revision can
+record different repository URLs there. Use the original driver in that
+case as well. The second driver links the replacement. By
 default both links use `--linker-path`.
 
 In `section` mode, `sectionLayout` must place the function in the named
