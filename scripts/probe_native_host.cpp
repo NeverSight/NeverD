@@ -21,6 +21,10 @@
 #include <sys/ioctl.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#if defined(__x86_64__)
+#include <cpuid.h>
+#include <cstddef>
+#endif
 #else
 #error "Native host setup probe requires Linux or Windows"
 #endif
@@ -87,6 +91,45 @@ public:
 };
 
 #if defined(__linux__)
+#define NEVERD_KVM_STRING(Name, Value) constexpr char Name[] = Value;
+#include "../lib/emulation/backends/kvm/KvmProtocol.def"
+#undef NEVERD_KVM_STRING
+
+#if defined(__x86_64__)
+int reportAddressWidths() {
+  unsigned A, B, C, D;
+  if (__get_cpuid(0x80000008, &A, &B, &C, &D))
+    std::printf("host_cpuid_80000008_eax=0x%08x\n", A);
+  const int System = open(Device, O_RDONLY | O_CLOEXEC);
+  if (System < 0) {
+    std::printf("open_errno=%d\n", errno);
+    return 0;
+  }
+  std::printf("kvm_api=%d\n", ioctl(System, KVM_GET_API_VERSION, 0));
+#ifdef KVM_CAP_SMALLER_MAXPHYADDR
+  std::printf("kvm_cap_smaller_maxphyaddr=%d\n",
+              ioctl(System, KVM_CHECK_EXTENSION, KVM_CAP_SMALLER_MAXPHYADDR));
+#endif
+  constexpr unsigned Capacity = 256;
+  struct Query {
+    uint32_t Count, Padding;
+    kvm_cpuid_entry2 Entries[Capacity];
+  } Supported{};
+  static_assert(offsetof(Query, Count) == offsetof(kvm_cpuid2, nent));
+  static_assert(offsetof(Query, Entries) == offsetof(kvm_cpuid2, entries));
+  Supported.Count = Capacity;
+  if (ioctl(System, KVM_GET_SUPPORTED_CPUID, &Supported) == 0) {
+    for (unsigned I = 0; I < Supported.Count && I < Capacity; ++I)
+      if (Supported.Entries[I].function == 0x80000008)
+        std::printf("kvm_supported_cpuid_80000008_eax=0x%08x\n",
+                    Supported.Entries[I].eax);
+  } else {
+    std::printf("kvm_supported_cpuid_errno=%d\n", errno);
+  }
+  return close(System) != 0;
+}
+#endif
+
 struct Host {
   Evidence &Log;
   int System = -1, VM = -1, CPU = -1;
@@ -106,9 +149,6 @@ struct Host {
   }
 
   void probe() {
-#define NEVERD_KVM_STRING(Name, Value) constexpr char Name[] = Value;
-#include "../lib/emulation/backends/kvm/KvmProtocol.def"
-#undef NEVERD_KVM_STRING
     System = open(Device, O_RDWR | O_CLOEXEC);
     const bool Missing =
         errno == ENOENT || errno == ENODEV || errno == EACCES || errno == EPERM;
@@ -283,7 +323,11 @@ struct Host {
 #endif
 } // namespace
 
-int main() {
+int main([[maybe_unused]] int Argc, [[maybe_unused]] char **Argv) {
+#if defined(__linux__) && defined(__x86_64__)
+  if (Argc == 2 && std::strcmp(Argv[1], "--address-widths") == 0)
+    return reportAddressWidths();
+#endif
   Evidence Log;
   if (Log.nativeArchitecture()) {
     Host Native{Log};

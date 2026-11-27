@@ -158,6 +158,19 @@ def run(output: Path, backend: str, architecture: str, compiler: str | None,
             raise ValueError("native probe wrote unexpected stderr")
         report["status"], report["records"] = parse_evidence(
             result.stdout, result.returncode, backend, architecture)
+        if backend == "kvm" and architecture == "X64" and platform.system() == "Linux":
+            widths = command([str(program), "--address-widths"], "address-widths",
+                             values["ProbeTimeoutSeconds"])
+            report["address_widths"] = widths.stdout.splitlines()
+            cpu = Path("/proc/cpuinfo").read_text().split("\n\n", 1)[0]
+            fields = dict(line.split(":", 1) for line in cpu.splitlines() if ":" in line)
+            report["host"]["cpu"] = {k.strip(): v.strip() for k, v in fields.items()
+                                     if k.strip() in ("vendor_id", "model name", "address sizes")}
+            parameter = Path("/sys/module/kvm/parameters/allow_smaller_maxphyaddr")
+            try:
+                report["allow_smaller_maxphyaddr"] = parameter.read_text().strip()
+            except (FileNotFoundError, PermissionError):
+                pass
         report["stage"] = "complete"
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         report["status"] = "failed"
