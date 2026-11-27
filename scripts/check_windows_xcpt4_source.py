@@ -28,7 +28,7 @@ FIXTURE = ROOT / (
     "windows-seh-tests/xcpt4-msvc-x86_64-fh4-gs-o0.exe")
 
 
-def check_runtime(result: dict) -> dict:
+def check_runtime(result: dict, *, pe32: bool = False) -> dict:
     output = result.get("stdout", "")
     # Wine's debugger can return zero after the process faults. Keep crash
     # diagnostics authoritative even if every case printed a passing result.
@@ -37,18 +37,21 @@ def check_runtime(result: dict) -> dict:
                  re.IGNORECASE):
         raise ValueError("original xcpt4 reported an unhandled Wine exception")
     cases = re.findall(r"^\s*test(\d+)\.\.\.(.*)$", output, re.MULTILINE)
+    # xcpt4u.c selects alignment on ARM and nested finally on AMD64.
+    # xcpt4ex.c compiles out cases 87 and 89 on _M_IX86.
+    permitted_skips = {29, 58, 61, 87, 89} if pe32 else {29}
+    skipped = [int(number) for number, text in cases if text.strip() == "skipped"]
     # xcpt4 can print a failure and still return zero. Check every result.
     if (result.get("exit_code") != 0
             or [int(number) for number, _ in cases] != list(range(1, 91))
             or not all(re.search(r"(?:succeeded|passed)\s*$", text)
-                       or (number == "29" and text.strip() == "skipped")
+                       or (int(number) in permitted_skips and text.strip() == "skipped")
                        for number, text in cases)
+            or (pe32 and set(skipped) != permitted_skips)
             or re.search(r"failed|error", output, re.IGNORECASE)
             or output.count("Start of exception test") != 1
             or output.count("End of exception test") != 1):
         raise ValueError("original xcpt4 has a missing, failed or unexpectedly skipped case")
-    # DO_ALIGNMENT_TEST is enabled only for ARM in this original source.
-    skipped = [int(number) for number, text in cases if text.strip() == "skipped"]
     return {"passed": len(cases) - len(skipped), "skipped": skipped}
 
 

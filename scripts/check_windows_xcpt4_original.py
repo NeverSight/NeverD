@@ -17,7 +17,7 @@ def main() -> int:
     before = image_digest(args.image)
     result = run_image(args.image, [], os.environ.copy(), 120)
     try:
-        cases = check_runtime(result)
+        cases = check_runtime(result, pe32=True)
         if image_digest(args.image) != before:
             raise ValueError("PE32 fixture changed during execution")
     except ValueError as error:
