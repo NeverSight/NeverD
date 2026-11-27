@@ -33,12 +33,14 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <tuple>
 #include <vector>
 
@@ -795,6 +797,47 @@ TEST(RISCVProfile, DoubleABIPlacesNamedAndVariadicArgumentsInIndependentBanks) {
     EXPECT_EQ(Var->Parameters[2][0].Location.Kind, K::IntegerRegister);
     EXPECT_EQ(Var->Parameters[2][0].Location.RegisterOffset,
               gpr(isRISCV32(A) ? 12 : 11));
+  }
+}
+
+TEST(RISCVProfile, LinkedDoubleCallerConsumesBothFloatingArgumentsAndResult) {
+  for (const char *Name : {"riscv32-ilp32d", "riscv64-lp64d"}) {
+    SCOPED_TRACE(Name);
+    const auto File =
+        std::filesystem::path(__FILE__).parent_path().parent_path() /
+        "safety/fixtures/elf-profiles/binaries" / Name;
+    auto Image = ELFLoader().load(File);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.LiftMode = true;
+    Options.EmitDumpOutput = false;
+    auto Result = Pipeline().run(*Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_NE(Result.LlvmModule, nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+    const auto *ABI = llvm::dyn_cast_or_null<llvm::MDString>(
+        Result.LlvmModule->getModuleFlag("target-abi"));
+    ASSERT_NE(ABI, nullptr);
+    EXPECT_EQ(ABI->getString(), isRISCV32(Image->Arch) ? "ilp32d" : "lp64d");
+    const auto *Callee = Result.LlvmModule->getFunction("signed_second");
+    const auto *Caller = Result.LlvmModule->getFunction("write_result");
+    ASSERT_NE(Callee, nullptr);
+    ASSERT_NE(Caller, nullptr);
+    ASSERT_EQ(Callee->arg_size(), 2u);
+    EXPECT_TRUE(Callee->getArg(0)->getType()->isDoubleTy());
+    EXPECT_TRUE(Callee->getArg(1)->getType()->isDoubleTy());
+    EXPECT_TRUE(Callee->getReturnType()->isDoubleTy());
+    const llvm::CallBase *Call = nullptr;
+    for (const auto &Block : *Caller)
+      for (const auto &I : Block)
+        if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(&I);
+            CB && CB->getCalledFunction() == Callee)
+          Call = CB;
+    ASSERT_NE(Call, nullptr);
+    ASSERT_EQ(Call->arg_size(), 2u);
+    EXPECT_NE(Call->getArgOperand(0), Call->getArgOperand(1));
+    EXPECT_FALSE(Call->use_empty());
   }
 }
 
