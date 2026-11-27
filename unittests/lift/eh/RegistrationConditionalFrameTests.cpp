@@ -10,6 +10,7 @@
 #include "../../../lib/ir/low/X86/RegistrationCRTFrame.h"
 #include "../../../lib/ir/low/X86/RegistrationFrameEffects.h"
 #include "../../../lib/ir/low/X86/RegistrationSEHPrivateCall.h"
+#include "../../../lib/ir/low/X86/RegistrationSourceCall.h"
 #include "../../../lib/ir/low/X86/RegistrationStateSolver.h"
 #include "gtest/gtest.h"
 
@@ -812,6 +813,50 @@ TEST(RegistrationCRTFrame, XCPT4StartupModesRequireTheirActualArgument) {
       EXPECT_EQ(Calls, 1u);
     }
   }
+}
+
+TEST(RegistrationConditionalFrame, DirectCallsRetainTheirPhysicalOwner) {
+  auto Image = loadXCPT4(true);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Image));
+  const auto Startup = CFGBuilder().buildIntegerFrameProof(
+      *Image, Dec, 0x406c3b, "CRT initializer");
+  for (const auto &Block : Startup.Blocks) {
+    for (size_t Index = 0; Index < Block.Ops.size(); ++Index) {
+      if (Block.Ops[Index].Opcode != NdOp::CALL)
+        continue;
+      LowFunc Function;
+      LowBlock Other;
+      Other.StartAddr = 0x401000;
+      Other.EndAddr = 0x401010;
+      Function.Blocks.push_back(Other);
+      Function.Blocks.push_back(Block);
+      Function.Blocks.push_back(Block);
+      const auto &Owner = Function.Blocks.back();
+      const auto &Call = Owner.Ops[Index];
+      const auto Boundary =
+          llvm::find_if(Owner.InstructionBoundaries,
+                        [&](const auto &I) { return I.Address == Call.Addr; });
+      ASSERT_NE(Boundary, Owner.InstructionBoundaries.end());
+      size_t Work = 0;
+      EXPECT_EQ(registration_state::checkedRegistrationDirectCall(
+                    *Image, Function, Call, Work),
+                &*Boundary);
+      // More operations at a different address cannot change ownership.
+      Function.Blocks.front().Ops.resize(512);
+      size_t More = 0;
+      EXPECT_EQ(registration_state::checkedRegistrationDirectCall(
+                    *Image, Function, Call, More),
+                &*Boundary);
+      EXPECT_EQ(More, Work);
+      const LowOp Copy = Call;
+      EXPECT_FALSE(registration_state::checkedRegistrationDirectCall(
+          *Image, Function, Copy, Work));
+      return;
+    }
+  }
+  FAIL() << "missing direct initializer call";
 }
 
 TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {
