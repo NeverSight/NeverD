@@ -253,6 +253,11 @@ struct PipelineOptions {
   /// jump-table and continuation rebuilds lift again.  Production callers
   /// leave it null; it never changes what a run lifts.
   size_t *RebuiltFunctionsForTesting = nullptr;
+  /// Unit-test-only: when set, a run adds the number of x87 call graph builds
+  /// its first batch made, each a lift of a function the batch also builds or
+  /// a callee outside it.  Production callers leave it null; it never changes
+  /// what a run lifts.
+  size_t *X87GraphBuildsForTesting = nullptr;
   /// Borrowed for this run only. See PipelineAnalysisCache's lifetime and
   /// invalidation contract; nullptr preserves independent analysis.
   PipelineAnalysisCache *AnalysisCache = nullptr;
