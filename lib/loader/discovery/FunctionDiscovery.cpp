@@ -15,6 +15,7 @@
 #include "neverd/support/ISAEncoding.h"
 #include "neverd/support/Limits.h"
 #include "neverd/support/ProloguePatterns.h"
+#include "neverd/support/SortedSearch.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -27,6 +28,8 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 #define DEBUG_TYPE "neverd-func-discovery"
 
@@ -429,6 +432,38 @@ static const void *findLoadByte(const uint8_t *Data, int Byte, size_t Size,
   return nullptr;
 }
 
+namespace {
+/// A pass needs no symbol-address index until it finds a candidate. Keep the
+/// original addresses in one sorted allocation and index only the symbols
+/// this pass appends as it walks the image.
+class DiscoverySymbols {
+public:
+  explicit DiscoverySymbols(BinaryImage &Img) : Img(Img) {}
+
+  bool contains(va_t Addr) {
+    if (!Original) {
+      Original.emplace();
+      Original->reserve(Img.Symbols.size());
+      for (const Symbol &Sym : Img.Symbols)
+        Original->push_back(Sym.Addr);
+      llvm::sort(*Original);
+    }
+    return Added.contains(Addr) ||
+           sorted::contains64(Original->data(), Original->size(), Addr);
+  }
+
+  void append(Symbol Sym) {
+    Added.insert(Sym.Addr);
+    Img.Symbols.push_back(std::move(Sym));
+  }
+
+private:
+  BinaryImage &Img;
+  std::optional<std::vector<va_t>> Original;
+  std::set<va_t> Added;
+};
+} // namespace
+
 void scanPaddingBoundaries(BinaryImage &Img, const LoadProgress &Progress) {
   Progress.check();
   // LC_FUNCTION_STARTS lists every function a linked Mach-O image lays out,
@@ -442,7 +477,7 @@ void scanPaddingBoundaries(BinaryImage &Img, const LoadProgress &Progress) {
     return;
 
   const auto Known = collectClaimedCodeRanges(Img);
-  auto Existing = Img.getSymbolAddresses();
+  DiscoverySymbols Symbols(Img);
 
   const uint8_t PadByte = codePaddingByte(Img.Arch);
   const size_t Alignment = prologueAlignment(Img.Arch);
@@ -462,10 +497,10 @@ void scanPaddingBoundaries(BinaryImage &Img, const LoadProgress &Progress) {
       const va_t Addr = Seg.VA + I;
       if (checkCodePrologueAtOffset(Img, Seg, I, Img.Arch) &&
           !insideInterval(Known, Addr) && !(Literals && Literals->at(Seg, I)) &&
-          Existing.insert(Addr).second) {
+          !Symbols.contains(Addr)) {
         Symbol Guess = Symbol::makeFunc(Addr);
         Guess.IsBoundaryGuess = true;
-        Img.Symbols.push_back(std::move(Guess));
+        Symbols.append(std::move(Guess));
         ++Added;
       }
     };
@@ -546,7 +581,7 @@ void scanX86HotpatchEntries(BinaryImage &Img, const LoadProgress &Progress) {
       Img.IsRelocatable)
     return;
   const auto Known = collectClaimedCodeRanges(Img);
-  auto Existing = Img.getSymbolAddresses();
+  DiscoverySymbols Symbols(Img);
 
   [[maybe_unused]] size_t Added = 0;
   for (const auto &Seg : Img.Segments) {
@@ -569,10 +604,9 @@ void scanX86HotpatchEntries(BinaryImage &Img, const LoadProgress &Progress) {
       // unlike a guess after padding it is not flagged IsBoundaryGuess: a
       // direct jump to it is a tail call.
       if (insideInterval(Known, Addr) ||
-          !Img.hasExecutableCodeOwnerRange(Addr, 3) ||
-          !Existing.insert(Addr).second)
+          !Img.hasExecutableCodeOwnerRange(Addr, 3) || Symbols.contains(Addr))
         continue;
-      Img.Symbols.push_back(Symbol::makeFunc(Addr));
+      Symbols.append(Symbol::makeFunc(Addr));
       ++Added;
     }
   }
@@ -604,7 +638,7 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
   // makes every case label look like a new function when its bytes happen to
   // resemble a prologue.
   const auto Known = collectClaimedCodeRanges(Img);
-  auto Existing = Img.getSymbolAddresses();
+  DiscoverySymbols Symbols(Img);
 
   // This scan only appends zero-sized symbols at already-owned addresses
   // and confirms boundary guesses. Neither changes the ownership predicate,
@@ -703,7 +737,7 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
         Guesses.erase(Guess);
       }
       if (!InExecutableSegment(Val) || insideInterval(Known, Val) ||
-          Existing.count(Val))
+          Symbols.contains(Val))
         continue;
       const auto *ESeg = InExecSeg(Val);
       if (!ESeg)
@@ -712,13 +746,11 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
       if (!checkCodePrologueAtOffset(Img, *ESeg, Off, Img.Arch) ||
           (Literals && Literals->at(*ESeg, Off)))
         continue;
-      if (!Existing.insert(Val).second)
-        continue;
       auto Candidate = Symbol::makeFunc(Val);
       Candidate.IsBoundaryGuess = !Img.CodePtrRelocSlots.count(Cur);
       if (Candidate.IsBoundaryGuess && !Img.CodePtrRelocSlots.empty())
         Guesses.emplace(Val, Img.Symbols.size());
-      Img.Symbols.push_back(std::move(Candidate));
+      Symbols.append(std::move(Candidate));
       ++Added;
     }
   };

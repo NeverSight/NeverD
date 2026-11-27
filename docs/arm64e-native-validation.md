@@ -2673,10 +2673,50 @@ field through its declared type.
 The six Release cases passed on an M4 Max and in arm64e processes on both
 free Apple M1 runners. Each runner passed all 222 signed-unwind and image
 cases with zero skips. All 81 image cases and 109 of 141 unwind cases
-recorded native execution. The other 32 exercised layouts for explicit
-two-modifier return signing and still require hardware execution.
+recorded native execution. In that run, the other 32 exercised layouts for
+explicit two-modifier return signing.
 [Per-case results](evidence/arm64e-native-publication-boundaries-2026-11-27.json) ·
 [Release Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/45927721870)
+
+### Darwin personality decisions for explicit two-modifier frames
+
+The 32 IA and IB cases cover compact and indexed DWARF frames, C++ and
+Objective-C cleanups and catches, and publication from native objects and
+lifted IR. Each case builds an Apple-linked input and its publication at O0
+and O2. A third pair at O2 uses a register for authentication and return.
+For that pair, the tests decode the installed ADR at the cleanup and at the
+leaf return and check its destination against the signing instruction in
+the installed function. A separate publication case returns or stores the
+signing address on one branch. It checks that the publisher refuses to
+change the address observed by its caller.
+
+Set `NEVERD_ARM64E_PERSONALITY_NATIVE=1` to run the language checks on
+Apple Silicon with an arm64 caller loading the arm64e images. The existing
+`NEVERD_ARM64E_ASYNC_NATIVE=1` profile also enables them. The system profile
+builds the observer as arm64e. An ordinary throw supplies the runtime's
+exception object. At the first and last protected return PCs and in the
+resume region, the observer checks Darwin's function and LSDA lookup and
+queries the system personality in both search and cleanup phases. It checks the landing pad,
+exception argument, selector and Objective-C type match. The actual throw
+continues to its outer catch on the original stack.
+
+`darwin_personality_phase_pairs` counts completed pairs of decisions.
+`native_pc_recipe_deliveries` counts actual exception deliveries through
+the two-modifier signing instructions when the host passes the feature
+probe.
+
+The M4 Max and both free Apple M1 runners passed all 32 cases. Each host
+checked 192 input or published images, including 64 with register modifiers.
+The real runtimes supplied 288 exceptions and completed 720 pairs of search
+and cleanup decisions per host. All three hosts passed the same 223
+signed-unwind and image cases with zero skips. On each hosted arm64e runner,
+all 141 unwind cases recorded native execution or system personality decisions. Of the 82 publication cases,
+81 recorded native execution. The remaining case checked installation of the
+local signing address and rejection of the two observable-address variants.
+The hardware delivery counter was zero on all three hosts.
+[Per-case evidence](evidence/arm64e-explicit-personality-2026-11-27.json) ·
+[Apple-linked controls](https://github.com/gmh5225/test_mac_intel/actions/runs/45937609347) ·
+[Release Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/45940557627)
 
 ### Native x1 runner qualification
 

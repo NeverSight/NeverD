@@ -11979,6 +11979,31 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       Queries.push_back(std::move(Query));
       return Index;
     };
+    // In the lexical pass an operation continues the chain only through an
+    // input whose nearest earlier write in the region is an occurrence already
+    // derived in that state.  Like the region, this filters the search alone:
+    // the queries still prove each step, and a chain it misses falls back to
+    // the whole-graph pass.  Unfiltered, every operation asks about every
+    // derived occurrence, and an address computation asks the resolver for the
+    // whole value of a loop-carried index (bash's lexer spent 524 Mi there).
+    std::map<std::tuple<uint8_t, uint64_t, uint16_t>, std::pair<va_t, int>>
+        LexicalWrites;
+    auto lexicallyDerived = [&](const NdVar &Input, uint8_t State) {
+      if (!RestrictToLexicalTargetRegion)
+        return true;
+      if (!consumeWork(1 + Derived.size()))
+        return false;
+      const auto Write = LexicalWrites.find(
+          {static_cast<uint8_t>(Input.Space), Input.Offset, Input.Size});
+      if (Write == LexicalWrites.end())
+        return false;
+      return std::any_of(
+          Derived.begin(), Derived.end(), [&](const DerivedOccurrence &D) {
+            return D.State == State && sameVar(D.Occurrence.Value, Input) &&
+                   D.Occurrence.Addr == Write->second.first &&
+                   D.Occurrence.Seq == Write->second.second;
+          });
+    };
     auto addPending = [&](const LowOp &Op, uint8_t State,
                           llvm::ArrayRef<size_t> QueryIndices) {
       const std::optional<bool> Already = alreadyDerived(Op, State);
@@ -12051,6 +12076,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
               } else if (Op.Inputs[0].Size != Op.Output.Size) {
                 break;
               }
+              if (!lexicallyDerived(Op.Inputs[0], State))
+                break;
               auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
               if (!Query ||
                   !addPending(Op, Next, llvm::ArrayRef<size_t>(&*Query, 1)))
@@ -12065,7 +12092,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                 Op.Inputs[0].Size < Op.Output.Size &&
                 Op.Output.Size <= PointerSize &&
                 ((Info.IsSigned && Op.Opcode == NdOp::INT_SEXT) ||
-                 (!Info.IsSigned && Op.Opcode == NdOp::INT_ZEXT))) {
+                 (!Info.IsSigned && Op.Opcode == NdOp::INT_ZEXT)) &&
+                lexicallyDerived(Op.Inputs[0], State)) {
               auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
               if (!Query ||
                   !addPending(Op,
@@ -12081,7 +12109,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
           case NdOp::SUBBYTES:
             if (Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
                 Op.Inputs[1].Offset == 0 &&
-                Op.Inputs[0].Size == Op.Output.Size) {
+                Op.Inputs[0].Size == Op.Output.Size &&
+                lexicallyDerived(Op.Inputs[0], State)) {
               auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
               if (!Query ||
                   !addPending(Op, State, llvm::ArrayRef<size_t>(&*Query, 1)))
@@ -12098,7 +12127,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                     relativeTargetTransformUsesPointerWidth(
                         Op.Opcode, Op.Inputs[Side].Size,
                         Op.Inputs[1 - Side].Size, Op.Output.Size,
-                        PointerSize)) {
+                        PointerSize) &&
+                    lexicallyDerived(Op.Inputs[Side], State)) {
                   auto Query = addQuery(Op.Inputs[Side], Op, *Alternatives);
                   if (!Query || !addPending(Op, State | TargetScaled,
                                             llvm::ArrayRef<size_t>(&*Query, 1)))
@@ -12114,7 +12144,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                 (uint64_t{1} << Op.Inputs[1].Offset) == Info.EntryScale &&
                 relativeTargetTransformUsesPointerWidth(
                     Op.Opcode, Op.Inputs[0].Size, Op.Inputs[1].Size,
-                    Op.Output.Size, PointerSize)) {
+                    Op.Output.Size, PointerSize) &&
+                lexicallyDerived(Op.Inputs[0], State)) {
               auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
               if (!Query || !addPending(Op, State | TargetScaled,
                                         llvm::ArrayRef<size_t>(&*Query, 1)))
@@ -12130,7 +12161,9 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
               for (int Side = 0; Side < 2; ++Side) {
                 if (!relativeTargetTransformUsesPointerWidth(
                         Op.Opcode, Op.Inputs[Side].Size,
-                        Op.Inputs[1 - Side].Size, Op.Output.Size, PointerSize))
+                        Op.Inputs[1 - Side].Size, Op.Output.Size,
+                        PointerSize) ||
+                    !lexicallyDerived(Op.Inputs[Side], State))
                   continue;
                 std::array<size_t, 2> QueryIndices{};
                 size_t QueryCount = 0;
@@ -12171,7 +12204,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
             }
             break;
           case NdOp::SELECT:
-            if (Op.NumInputs >= 3) {
+            if (Op.NumInputs >= 3 && lexicallyDerived(Op.Inputs[1], State) &&
+                lexicallyDerived(Op.Inputs[2], State)) {
               std::array<size_t, 2> QueryIndices{};
               auto TrueQuery = addQuery(Op.Inputs[1], Op, *Alternatives);
               auto FalseQuery = addQuery(Op.Inputs[2], Op, *Alternatives);
@@ -12186,6 +12220,10 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
             break;
           }
         }
+        if (RestrictToLexicalTargetRegion)
+          LexicalWrites.insert_or_assign({static_cast<uint8_t>(Op.Output.Space),
+                                          Op.Output.Offset, Op.Output.Size},
+                                         std::pair{Op.Addr, Op.Seq});
       }
     }
 
@@ -14582,7 +14620,27 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     auto collectAddressProofs = [&](const LowOp &Add,
                                     std::vector<JumpTableValueQuery> &Queries,
                                     std::vector<AddressProof> &Proofs) {
+      // When one order's dynamic operand already is an authenticated index
+      // occurrence through the local copy chain, the other order would ask
+      // whether that index is the table base: the resolver must rebuild the
+      // whole index to answer what cannot hold (a loop-carried token in
+      // bash's lexer spent the candidate account there).  Prove the
+      // authenticated order alone.
+      std::array<bool, 2> LocalIndex{false, false};
+      if (!consumeWork(2 * State.DynamicAlternatives.size()))
+        return false;
       for (int BaseSide = 0; BaseSide < 2; ++BaseSide) {
+        const NdVar DynamicValue = guestAddressView(Add.Inputs[1 - BaseSide]);
+        LocalIndex[BaseSide] = std::any_of(
+            State.DynamicAlternatives.begin(), State.DynamicAlternatives.end(),
+            [&](const JumpTableValueOccurrence &Alternative) {
+              return localCopyChainMatchesUse(Alternative, DynamicValue, Add);
+            });
+      }
+      const bool AnyLocalIndex = LocalIndex[0] || LocalIndex[1];
+      for (int BaseSide = 0; BaseSide < 2; ++BaseSide) {
+        if (AnyLocalIndex && !LocalIndex[BaseSide])
+          continue;
         const NdVar &RawBaseValue = Add.Inputs[BaseSide];
         const NdVar &RawDynamicValue = Add.Inputs[1 - BaseSide];
         // x86 LowIR uses the wide physical register container for address
@@ -14614,13 +14672,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
                                          Role.SelectedBase))
                          : pushBaseQuery(Queries, BaseValue, Add,
                                          Role.AllowedBases, BaseValue.Size);
-        if (!consumeWork(State.DynamicAlternatives.size()))
-          return false;
-        const bool LocallyAuthenticatedIndex = std::any_of(
-            State.DynamicAlternatives.begin(), State.DynamicAlternatives.end(),
-            [&](const JumpTableValueOccurrence &Alternative) {
-              return localCopyChainMatchesUse(Alternative, DynamicValue, Add);
-            });
+        const bool LocallyAuthenticatedIndex = LocalIndex[BaseSide];
         std::optional<size_t> IndexQuery;
         if (!LocallyAuthenticatedIndex)
           IndexQuery =

@@ -11645,6 +11645,20 @@ such an occurrence asks every same-scale operation of the function whether
 it carries the index, and one query of that batch that cannot finish fails
 the role. liblzma's decoder lost its table that way once the table's targets
 brought a deep scaled value into the function.
+When the table load's own instruction forms its address and one operand of
+that add already is an authenticated index occurrence through the local copy
+chain, the address proof asks that order alone. The other order would ask
+whether the index is the table base, and answering that rebuilds the index's
+whole value: a lexer's loop-carried token, whose definitions merge every arm
+of the loop.
+The target-role proof first grows the table load's transforms over its
+lexical region, the code between the table address and the branch, and an
+operation there continues a chain only through an input whose nearest earlier
+write in the region is an occurrence already derived in that state. Like the
+region, this only narrows the search: every step is still a proved query, and
+a chain it misses falls back to the whole-graph pass. Unfiltered, the scaled
+address computation asked for the whole value of bash's loop-carried token,
+and its lexer spent 524 Mi on one dispatch.
 A guard proof's predicated-alias queries, which only add index alternatives
 for a select whose predicate the guard repeats, run on a share of the
 remaining candidate account (`kJumpTableGuardAliasQueryAccountDivisor`) and
@@ -11652,13 +11666,30 @@ are charged what they spent. An unfinished batch abandons those alternatives
 and leaves the guard proof the rest; charged in full, pcre2's alias batches
 spent the account the guard itself needed.
 When the compare that names the index is a structural leaf, the session over
-every controlling condition runs on a copy of the candidate account. That
+every controlling condition runs on a share of the remaining candidate
+account (`kJumpTableGuardSideSessionAccountDivisor`) and is charged what it
+spent: the other conditions only add constraints to a bound already in hand.
+Run on the whole account, a session that finished could leave the address
+and domain proofs too little, as in a lexer loop whose 64 arms each recompute
+the dispatched token. A session that cannot finish within its share answers
+none of its queries. That
 session can also run out of its own match allowance with the account to
 spare, and then answers none of its queries. The compare's own queries are
 then asked alone, in a session of their own, exactly as after the copy runs
 out; the other conditions stay unanswered and only drop out of the proof.
 pcre2's pattern converter puts 22 controlling conditions and 179 queries in
 front of one dispatch.
+The compare is that structural leaf also when the index takes the compared
+lane only after the guard. GCC copies the compared register into the index
+register (`cmp $0x1c, %r11d; ja; mov %r11d, %eax`), or zero-extends the
+compared byte into its own register (`cmp $0x13, %sil; ja; movzbl %sil,
+%esi`, which lifts as an INT_ZEXT into a temporary, a COPY of it into ESI and
+ESI's own INT_ZEXT into RSI). Nothing may write the lane between the compare
+and that copy or extension, each extension must widen what the previous one
+left, and a temporary counts only within its own instruction. Without the
+identity pcre2's parse_regex asked one session over 556 controlling
+conditions for such a dispatch; it spent 362 Mi of the candidate account and
+did not finish.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
