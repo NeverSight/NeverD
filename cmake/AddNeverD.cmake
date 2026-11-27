@@ -161,6 +161,17 @@ function(add_neverd_unittest name)
   add_executable(${name} ${ARG_UNPARSED_ARGUMENTS})
   neverd_link_mimalloc(${name})
 
+  # The decompiler runs on a 128 MiB main stack (kDecompilerMainStackSize in
+  # neverd/support/StackSizeMain.h).  A test runs on gtest's main thread,
+  # which has 8 MiB on Linux and macOS but only the 1 MiB a Windows image
+  # reserves by default: deep guard proofs, expression nesting and large
+  # export tests crashed there at once.  Reserve the decompiler's size.
+  if(MSVC)
+    target_link_options(${name} PRIVATE "/STACK:134217728")
+  elseif(MINGW)
+    target_link_options(${name} PRIVATE "-Wl,--stack,134217728")
+  endif()
+
   target_compile_features(${name} PRIVATE cxx_std_20)
 
   # GoogleTest and LLVM template instantiations can exceed the standard COFF

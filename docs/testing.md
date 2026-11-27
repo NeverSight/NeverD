@@ -15679,6 +15679,9 @@ usable and explicit unavailable-backend requests are rejected.
 
 `add_neverd_unittest` creates one GoogleTest executable and assigns every
 discovered case a CTest label equal to that executable's target name.
+On Windows the executable reserves the decompiler's 128 MiB main stack
+(`kDecompilerMainStackSize`): its cases run on GoogleTest's main thread,
+which would otherwise get 1 MiB there against 8 MiB on Linux and macOS.
 
 | Source area | Target and CTest label | What it covers |
 |-------------|-------------------------|----------------|
