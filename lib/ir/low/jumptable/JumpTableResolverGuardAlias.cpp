@@ -3575,7 +3575,8 @@ alias_done:
           std::vector<bool> &QueryComplete, bool &Complete, size_t *Budget) {
         return tableValuesMatchAtUses(
             Queries, &Complete, &QueryComplete, InvalidVA, nullptr, Budget,
-            /*LocalMatchEvidenceLimit=*/0,
+            /*LocalMatchEvidenceLimit=*/
+            GuardQueryMatchEvidenceBudgetForTesting.value_or(0),
             /*CandidateBranchesSharingTargets=*/nullptr,
             /*QueryUnsignedFeasibleMasks=*/nullptr, GuardValueDepth,
             CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
@@ -3630,6 +3631,29 @@ alias_done:
     ProofQueryComplete = std::move(Complete);
     ProofComplete = BatchComplete;
   };
+  // The compare's own queries, asked alone against the candidate account.
+  // False when that session cannot answer them at all.
+  auto resolveStructuralQueries = [&]() {
+    std::vector<JumpTableValueQuery> StructuralQueries;
+    StructuralQueries.reserve(StructuralQueryIndices.size());
+    for (size_t Index : StructuralQueryIndices)
+      StructuralQueries.push_back(ProofQueries[Index]);
+    bool StructuralComplete = false;
+    std::vector<bool> StructuralQueryComplete;
+    const std::vector<bool> StructuralResults =
+        ResolveGuardQueries(StructuralQueries, StructuralQueryComplete,
+                            StructuralComplete, CandidateEvidenceBudget);
+    if (StructuralResults.size() != StructuralQueries.size() ||
+        StructuralQueryComplete.size() != StructuralQueries.size())
+      return false;
+    for (size_t I = 0; I < StructuralQueryIndices.size(); ++I) {
+      const size_t Index = StructuralQueryIndices[I];
+      ProofResults[Index] = StructuralResults[I];
+      ProofQueryComplete[Index] = StructuralQueryComplete[I];
+    }
+    ProofComplete = StructuralComplete;
+    return true;
+  };
   if (!ProofQueries.empty() && HasStructuralCompare) {
     size_t SideBudget = *CandidateEvidenceBudget;
     bool BatchComplete = false;
@@ -3643,33 +3667,30 @@ alias_done:
       *CandidateEvidenceBudget = SideBudget;
       assignBatch(std::move(BatchResults), std::move(BatchQueryComplete),
                   BatchComplete);
+      // The session can also run out of its own match allowance with the
+      // candidate account to spare: pcre2's pattern converter puts 22
+      // controlling conditions and 179 queries before its dispatch.  The
+      // other conditions do not decide the compare, so when that session
+      // left any of the compare's own queries unanswered, ask those alone.
+      const bool CompareUnanswered =
+          !ProofComplete &&
+          std::any_of(StructuralQueryIndices.begin(),
+                      StructuralQueryIndices.end(),
+                      [&](size_t Index) { return !ProofQueryComplete[Index]; });
+      if (CompareUnanswered && !resolveStructuralQueries()) {
+        if (SawControllingGuard)
+          Info.IncompleteGuardDomain = true;
+        return false;
+      }
     } else {
       AbandonedUnrelatedQueries = true;
       ProofResults.assign(ProofQueries.size(), false);
       ProofQueryComplete.assign(ProofQueries.size(), false);
       ProofComplete = false;
-      if (!StructuralQueryIndices.empty()) {
-        std::vector<JumpTableValueQuery> StructuralQueries;
-        StructuralQueries.reserve(StructuralQueryIndices.size());
-        for (size_t Index : StructuralQueryIndices)
-          StructuralQueries.push_back(ProofQueries[Index]);
-        bool StructuralComplete = false;
-        std::vector<bool> StructuralQueryComplete;
-        const std::vector<bool> StructuralResults =
-            ResolveGuardQueries(StructuralQueries, StructuralQueryComplete,
-                                StructuralComplete, CandidateEvidenceBudget);
-        if (StructuralResults.size() != StructuralQueries.size() ||
-            StructuralQueryComplete.size() != StructuralQueries.size()) {
-          if (SawControllingGuard)
-            Info.IncompleteGuardDomain = true;
-          return false;
-        }
-        for (size_t I = 0; I < StructuralQueryIndices.size(); ++I) {
-          const size_t Index = StructuralQueryIndices[I];
-          ProofResults[Index] = StructuralResults[I];
-          ProofQueryComplete[Index] = StructuralQueryComplete[I];
-        }
-        ProofComplete = StructuralComplete;
+      if (!StructuralQueryIndices.empty() && !resolveStructuralQueries()) {
+        if (SawControllingGuard)
+          Info.IncompleteGuardDomain = true;
+        return false;
       }
     }
   } else if (!ProofQueries.empty()) {

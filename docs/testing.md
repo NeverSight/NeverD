@@ -1609,6 +1609,10 @@ reload and the table load leaves the dispatch unresolved.
 64-case byte-code walk whose `cmova` selects propose about 10 Mi of alias
 queries with a 14 Mi candidate account: the guard still bounds the dispatch
 to its 64 slots.
+`JTE_X86_64.CompareQueriesOutliveAnUnfinishedGuardSession` puts 24
+controlling compares before a byte dispatch and limits each guard query
+session to a match allowance the whole batch overruns: the compare's own
+queries, asked alone, still bound the six slots.
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict

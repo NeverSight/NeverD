@@ -977,6 +977,12 @@ public:
   void setFiniteSetSymbolEvidenceBudgetForTesting(std::optional<size_t> Limit) {
     FiniteSetSymbolEvidenceBudgetForTesting = Limit;
   }
+  /// Override only the structural match allowance of each precise-guard
+  /// query session, so a test can run out the session over every controlling
+  /// condition while the compare's own queries still fit.
+  void setGuardQueryMatchEvidenceBudgetForTesting(std::optional<size_t> Limit) {
+    GuardQueryMatchEvidenceBudgetForTesting = Limit;
+  }
   /// Exhaust every proposal stage right after the candidate at \p Addr
   /// resolves, so the candidates after it never run in a stage.
   void
@@ -3061,6 +3067,7 @@ private:
   std::optional<size_t> MaskFixedPointEvidenceBudgetForTesting;
   std::optional<size_t> NestedMutationTrackingStageAllowanceForTesting;
   std::optional<size_t> FiniteSetSymbolEvidenceBudgetForTesting;
+  std::optional<size_t> GuardQueryMatchEvidenceBudgetForTesting;
   /// One candidate-local allowance for i386 GOTOFF reaching-value evidence.
   /// It is reset exactly once at resolver entry; its actual use is charged to
   /// the candidate/stage aggregate before the candidate outcome is committed.

@@ -5168,6 +5168,49 @@ TEST_F(JTE_X86_64, AliasQueriesSpendOnlyTheirShareOfTheCandidateAccount) {
   EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
 }
 
+static fs::path guardSessionX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_guard_session.o";
+}
+
+// A byte dispatch behind 24 controlling compares, the shape of pcre2's
+// pattern converter.  Each guard query session here may spend a match
+// allowance of 2000, which the session over every condition overruns, so
+// that session answers none of its queries.  The compare that names the
+// index, `cmpl $5, %ecx; ja` after `movzbl (%rdi), %ecx`, is then asked
+// alone and still bounds the six slots.
+TEST_F(JTE_X86_64, CompareQueriesOutliveAnUnfinishedGuardSession) {
+  auto ImageOrErr = neverd::loadBinary(guardSessionX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 6; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  const neverd::Symbol *Function = Image.findSymbol("jt_many_guards");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  Builder.setGuardQueryMatchEvidenceBudgetForTesting(2000);
+  const neverd::LowFunc Func =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Func.JumpTables.size(), 1u);
+  EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Func.JumpTables.front().BaseAddr, Rodata->VA);
+  EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+}
+
 // `masked_byte_dispatch` bounds `sil & 0xf` with `andb $0xf,%al; cmpb $0xc,%al;
 // ja`, then indexes its 13-entry table with `movzbl %sil,%eax; andl $0xf,%eax`.
 // The guard's byte is the low byte of that index, so the table keeps the
