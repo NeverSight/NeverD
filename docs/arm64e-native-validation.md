@@ -2749,11 +2749,27 @@ restore instruction because LR is already authenticated there.
 
 At an authenticated return, a scratch register containing a copy of the address
 can supply the modifier if its value is dead at the return. The original value
-in X0 still reaches the caller. The publisher requires a single reaching
-definition for a rewritten consumer and rejects an alternate entry that can
-supply a different modifier. On a second lift it follows the original entry's
+in X0 still reaches the caller. On a second lift the publisher follows the original entry's
 forwarding chain, verifies the retained signing word and checks both register
 operands and the target of the restore pair.
+
+Several ordinary branches may enter the same authenticator. On each path the
+publisher traces the full-width modifier and LR back to the address producer
+and signing instruction. Their PCs and IA or IB key must agree on that path.
+For one common signer it can use a backwards immediate. For distinct signers
+it can prepare a local modifier on each incoming arm while keeping the source
+address available for a return or store. A borrowed register must survive
+from every preparation to the authenticator and its original value must be
+dead. A branch straight to AUT that skips the address producer still rejects
+publication for both keys.
+
+At a join with distinct signers, an interrupted register snapshot can identify
+the signing PC for a live LR. The four-argument
+`prepareDarwinArm64eSystemCaller` checks the proven GPR against the incoming
+signing PCs at the supplied load address. A static query at that PC remains
+unknown. After a matching AUT at the original SP, instruction recovery can
+establish an unsigned LR on all paths. A wrong key or a clobbered modifier
+cannot establish this post-authentication state.
 
 The unwind analysis also recognizes a full-width literal load from an
 immutable, dyld-rebased slot as a possible signing address. Recovery checks
@@ -2765,6 +2781,7 @@ Use `verify_arm64e_return_model.py build-signing-address --tests BINARY
 Apple Silicon. The corresponding `run --model FVP --guests GUESTS --output
 REPORT` executes those bodies at EL0 and EL1 with all four EnPACM/EnPACM0
 settings and checks a disabled-feature control.
+Add `--joins` to the export command for the multi-entry fixtures.
 
 In the initial LLVM r6 run, the M4 Max published 44 images and verified 80
 signing rows. All 223 image and asynchronous-unwind cases, 63 adjacent
@@ -2786,6 +2803,20 @@ Both runs checked both exception levels, all four EnPACM settings and the
 disabled-feature control.
 [Release evidence](evidence/arm64e-live-signing-modifier-2026-11-27.json) ·
 [Arm model and archived guest replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45978541273)
+
+For the multi-entry cases, the M4 Max published 24 images across two
+generations and checked 96 unwind rows. At shared authenticators with
+distinct signers, 60 register snapshots selected the expected slid PC.
+Twelve contradictory or incomplete paths and the two original IA/IB branches
+that skip the modifier assignment were rejected. On GitHub’s virtual Apple M1 runner,
+all 224 image and asynchronous-unwind tests, 63 adjacent tests and 42
+portable unwind tests passed with zero skips. The Arm FVP executed 36
+original and published bodies with both caller inputs at EL0 and EL1 in all
+four EnPACM configurations (576 calls). The same run replayed the earlier
+96- and 66-body guests and their disabled-feature controls.
+[Release evidence](evidence/arm64e-joined-signing-address-2026-11-27.json) ·
+[Arm model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45997050094) ·
+[Hosted macOS Release run](https://github.com/gmh5225/test_mac_intel/actions/runs/45989233449)
 
 ### Native x1 runner qualification
 

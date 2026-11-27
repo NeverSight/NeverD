@@ -3058,6 +3058,8 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
       return fail(kAddressSourceWord);
     const auto &Entry = Mappings.front();
     const auto &Sym = *EntrySymbols.at(Entry.OriginalVA);
+    if (Fixup.Authentication && Fixup.Authentication->PrepareAtSource)
+      AddedBytes += kInsnSize;
     const uint64_t Offset = Fixup.Instruction - Entry.OriginalVA + AddedBytes;
     const bool Pair = Fixup.Form == MachOAddressForm::PagePair;
     const bool Expanded = Fixup.Form == MachOAddressForm::Expanded;
@@ -3080,7 +3082,8 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
     const va_t PC = Plan.TextVA + At;
     const va_t Target = Fixup.Target + Slide;
     const uint32_t Rd = Word & kRdMask;
-    if (Fixup.insertsSigningModifier()) {
+    if (Fixup.insertsSigningModifier() &&
+        !Fixup.Authentication->PrepareAtSource) {
       const auto &Auth = *Fixup.Authentication;
       if (Auth.RestoreSource) {
         // The original register can be live on both sides of AUT. Its

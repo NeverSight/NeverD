@@ -92,6 +92,16 @@ class ModelProfileTests(unittest.TestCase):
             with self.subTest(manifest=invalid), self.assertRaisesRegex(ValueError, model.CONFIG["bad_inventory"]):
                 model.check_signing_address_inventory(invalid)
 
+    def test_joined_signing_guest_requires_its_own_inventory(self):
+        policy = model.CONFIG["signing_address"]
+        family = policy["joins"]
+        version, count = policy["inventory_property"], policy["count_property"]
+        correct = {"return_profile": family["profile"], version: family["inventory"], count: family["bodies"]}
+        model.check_signing_address_inventory(correct)
+        for wrong in ({version: policy["inventory"]}, {count: policy["bodies"]}, {version: None}):
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                model.check_signing_address_inventory(correct | wrong)
+
     def test_two_direct_backends_share_both_caller_optimizations(self):
         config = model.CONFIG
         previous = set(model.cases(config["previous_return_profile"]))

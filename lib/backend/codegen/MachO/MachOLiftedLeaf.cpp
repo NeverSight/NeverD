@@ -1071,6 +1071,7 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     const auto Source = SourceBody->Bytes;
     const va_t End = Start + Source.size();
     AddressExpansion InstalledOffset;
+    llvm::DenseMap<va_t, const MachOLiftedSourceAddress *> Authentications;
     bool RebuiltLSDA = false;
     for (const auto &Site : Addresses) {
       if (Site.Instruction >= End)
@@ -1079,9 +1080,11 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                      Site.insertsSigningModifier();
       if (Site.Form == MachOAddressForm::Expanded)
         InstalledOffset.Sites.push_back(Site.Instruction - Start);
+      if (Site.Authentication)
+        Authentications.try_emplace(Site.Authentication->Instruction, &Site);
       if (Site.insertsSigningModifier()) {
         const auto &Auth = *Site.Authentication;
-        const auto At = Auth.Instruction - Start;
+        const auto At = Site.modifierSite() - Start;
         InstalledOffset.Sites.append(Auth.insertedWords(), At);
         if (Auth.RestoreSource)
           InstalledOffset.Restores.emplace_back(At + aarch64::kInsnSize,
@@ -1089,6 +1092,7 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                                                     aarch64::kInsnSize);
       }
     }
+    llvm::sort(InstalledOffset.Sites);
     const auto *Frame = Original.ExceptionMetadata.findFunction(Start);
     const auto Owner = Generated.SymbolAddrs.find(Mapping.Symbol);
     if (Owner == Generated.SymbolAddrs.end())
@@ -1209,7 +1213,6 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
       // A call between functions must resolve to the installed entry.
       if (!Indexed && (FDEs.count(Owner->second) || Frame->Dwarf))
         return refuse(kLeafFrame);
-      const MachOLiftedSourceAddress *SigningConsumer = nullptr;
       for (size_t Offset = 0; Offset < Source.size();
            Offset += aarch64::kInsnSize) {
         auto Before = Source.drop_front(Offset);
@@ -1222,8 +1225,8 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
             return refuse(kLeafCode);
           continue;
         }
-        if (SigningConsumer &&
-            SigningConsumer->Authentication->Instruction == Start + Offset) {
+        if (const auto *SigningConsumer =
+                Authentications.lookup(Start + Offset)) {
           // Decode both instructions independently of the lowering plan. The
           // opcode preserves the IA/IB key and AUT/return behavior. Only the
           // second modifier changes representation.
@@ -1242,7 +1245,9 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
           if (Restore && I.Raw->detail->aarch64.operands[0].reg !=
                              AARCH64_REG_X0 + *Register)
             return refuse(kSourceAddressTarget);
-          const auto Prefix = Register ? Size : 0;
+          const bool Prepared =
+              SigningConsumer->Authentication->PrepareAtSource;
+          const auto Prefix = Register && !Prepared ? Size : 0;
           if (After.size() < Prefix + Size)
             return refuse(kSourceAddressTarget);
           const va_t PC = Owner->second + InstalledOffset(Offset) + Prefix;
@@ -1258,9 +1263,9 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
             const uint32_t Setup = readLE<uint32_t>(After.data());
             if (Modifier.type != AARCH64_OP_REG ||
                 unsigned(Modifier.reg - AARCH64_REG_X0) != *Register ||
-                aarch64::encodePCRelativeAddress(
-                    aarch64::AddressInstruction::ADR, *Register, PC - Size,
-                    Sign) != Setup)
+                (!Prepared && aarch64::encodePCRelativeAddress(
+                                  aarch64::AddressInstruction::ADR, *Register,
+                                  PC - Size, Sign) != Setup))
               return refuse(kSourceAddressTarget);
           } else {
             const auto Distance =
@@ -1275,17 +1280,26 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                              Decode, After.drop_front(Prefix + Size), PC + Size,
                              *Register, SigningConsumer->Target + Slide))
             return refuse(kSourceAddressTarget);
-          SigningConsumer = nullptr;
           continue;
         }
         if (!Addresses.empty() &&
             Addresses.front().Instruction == Start + Offset) {
           const auto &Fixup = Addresses.front();
           Addresses = Addresses.drop_front();
+          auto PC = Owner->second + InstalledOffset(Offset);
+          if (Fixup.Authentication && Fixup.Authentication->PrepareAtSource) {
+            const auto Sign =
+                Owner->second + InstalledOffset(Fixup.Target - Start);
+            const auto ADR = aarch64::encodePCRelativeAddress(
+                aarch64::AddressInstruction::ADR,
+                *Fixup.Authentication->ModifierRegister, PC, Sign);
+            if (After.size() < 2 * aarch64::kInsnSize ||
+                ADR != readLE<uint32_t>(After.data()))
+              return refuse(kSourceAddressTarget);
+            After = After.drop_front(aarch64::kInsnSize);
+            PC += aarch64::kInsnSize;
+          }
           const auto Word = readLE<uint32_t>(After.data());
-          const auto PC = Owner->second + InstalledOffset(Offset);
-          if (Fixup.Authentication)
-            SigningConsumer = &Fixup;
           if (Fixup.Form != MachOAddressForm::Single) {
             const auto New = decodeMachOPageAddress(Decode, After, PC);
             if (!New || New->Target != Fixup.Target + Slide ||

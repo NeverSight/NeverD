@@ -862,6 +862,197 @@ TEST(AArch64AsyncUnwind, SignalReturnResumesCallerWithRecoveredVectorLanes) {
 #endif
 }
 
+TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kFrameSource).string();
+  std::ofstream(Source) << kJoinedSigningBody;
+  const char *Export = std::getenv(kJoinedModelExport);
+  unsigned Published = 0, Refused = 0, ModelCases = 0, VerifiedRows = 0,
+           ResolvedPCs = 0;
+  std::string Calls, Bodies;
+  constexpr auto Word = aarch64::kInsnSize;
+  enum Use { Common, Distinct, Local, Returns, Refuse };
+  struct Case {
+    const char *Flag;
+    Use Behavior;
+  };
+  constexpr Case Cases[] = {
+      {kJoinCommon, Common},     {kJoinDistinct, Distinct},
+      {kJoinCopyPage, Distinct}, {kJoinLocal, Local},
+      {kJoinReturn, Returns},    {kJoinScratch, Distinct},
+      {kJoinUnknown, Refuse},    {kJoinCrossed, Refuse},
+      {kJoinSwapped, Refuse},    {kJoinOverwrite, Refuse},
+      {kJoinClobber, Refuse},    {kJoinWrongKey, Refuse}};
+  for (bool KeyB : {false, true})
+    for (auto [Flag, Behavior] : Cases) {
+      SCOPED_TRACE(Flag);
+      SCOPED_TRACE(KeyB);
+      std::string Input = (Root / kOriginal).string();
+      llvm::SmallVector<llvm::StringRef> Args{kCompiler, kTargetFlag, kTarget,
+                                              kDylib, Flag};
+      if (KeyB)
+        Args.push_back(kSigningAddressKeyB);
+      Args.append({Source, kOutput, Input});
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Args), 0);
+      auto Reader = Loader::create(BinaryFormat::MachO);
+      auto Image = Reader->load(Input);
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      const auto *Entry = Image->findSymbol(kSignalTickSymbol);
+      ASSERT_NE(Entry, nullptr);
+      va_t Owner = Entry->Addr;
+      llvm::SmallVector<va_t, 2> Original;
+      const auto Inspect = [&] {
+        const auto *Frame = Image->ExceptionMetadata.findFunction(Owner);
+        ASSERT_NE(Frame, nullptr);
+        auto Body = machOLiftedSource(*Image, Owner, Frame->CodeRange.End);
+        ASSERT_TRUE(Body && !Body->ForwardTarget);
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(*Image));
+        llvm::SmallVector<va_t, 2> Signs;
+        std::optional<va_t> Auth;
+        for (size_t Offset = 0; Offset < Body->Bytes.size(); Offset += Word) {
+          DecodedInsn I{};
+          ASSERT_EQ(Decode.decodeOne(Body->Bytes.data() + Offset, Word,
+                                     Owner + Offset, I),
+                    int(Word));
+          if (I.Id == (KeyB ? AARCH64_INS_PACIBSPPC : AARCH64_INS_PACIASPPC))
+            Signs.push_back(Owner + Offset);
+          if (I.Id == (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC) ||
+              I.Id == (KeyB ? AARCH64_INS_RETABSPPC : AARCH64_INS_RETAASPPC)) {
+            ASSERT_FALSE(Auth);
+            Auth = Owner + Offset;
+          }
+        }
+        ASSERT_TRUE(Auth);
+        ASSERT_EQ(Signs.size(), Behavior == Common ? 1u : 2u);
+        if (Original.empty())
+          Original = Signs;
+        auto Rows = recoverDarwinAArch64Unwind(*Image, *Frame);
+        ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+        for (auto PC : Signs) {
+          const auto &Row =
+              aarch64UnwindRowAt(*Rows, PC + Word - Frame->CodeRange.Begin)
+                  .Signing;
+          ASSERT_TRUE(Row.State);
+          EXPECT_EQ(Row.State->SigningPC, PC);
+          ++VerifiedRows;
+        }
+        const auto Range = Frame->CodeRange;
+        const auto &Before = aarch64UnwindRowAt(*Rows, *Auth - Range.Begin);
+        if (Signs.size() == 1) {
+          ASSERT_TRUE(Before.Signing.State);
+          EXPECT_EQ(Before.Signing.State->SigningPC, Signs.front());
+        } else {
+          EXPECT_EQ(Before.Signing.Status,
+                    dwarf_eh::AArch64RAQueryStatus::Unknown);
+          ASSERT_TRUE(Before.LiveSigningModifier);
+          EXPECT_EQ(Before.LiveSigningModifier->SigningPCs, Signs);
+          std::array<va_t, aarch64_unwind::kRegisters> GPRs{};
+          const auto R = Before.LiveSigningModifier->Register;
+          ASSERT_LT(R, GPRs.size());
+          EXPECT_FALSE(
+              prepareDarwinArm64eSystemCaller(Before, Range, Range.End));
+          for (va_t Sign : Signs) {
+            GPRs[R] = Range.End + (Sign - Range.Begin);
+            auto Plan =
+                prepareDarwinArm64eSystemCaller(Before, Range, Range.End, GPRs);
+            ASSERT_TRUE(Plan);
+            EXPECT_EQ(Plan->Frame.SigningPC, GPRs[R]);
+            EXPECT_EQ(Plan->Frame.Signing, KeyB ? NDArm64eSignedIBWithCFAPC
+                                                : NDArm64eSignedIAWithCFAPC);
+            ++ResolvedPCs;
+          }
+        }
+        if (Behavior != Returns) {
+          const auto &After =
+              aarch64UnwindRowAt(*Rows, *Auth + Word - Frame->CodeRange.Begin)
+                  .Signing;
+          ASSERT_TRUE(After.State);
+          EXPECT_EQ(After.State->Kind,
+                    dwarf_eh::AArch64RASigningKind::Unsigned);
+          ++VerifiedRows;
+        }
+        if (Export) {
+          Calls +=
+              llvm::formatv(
+                  kJoinModelCall, ModelCases, int64_t(Original.front() - Owner),
+                  int64_t(Original.back() - Owner), unsigned(Behavior != Local),
+                  unsigned(Behavior != Returns && Behavior != Local))
+                  .str();
+          Bodies += llvm::formatv(kSigningModelPage, branch::A64PageBytes,
+                                  Owner % branch::A64PageBytes)
+                        .str();
+          Bodies += llvm::formatv(kSigningModelLabel, ModelCases++).str();
+          for (size_t I = 0; I < Body->Bytes.size(); I += Word)
+            Bodies += llvm::formatv(kSigningModelWord,
+                                    readLE<uint32_t>(Body->Bytes.data() + I))
+                          .str();
+        }
+      };
+      if (Behavior != Refuse)
+        ASSERT_NO_FATAL_FAILURE(Inspect());
+      for (const char *Name : {kPublished, kRepublishedSigningImage}) {
+        SCOPED_TRACE(Name);
+        auto Output = (Root / Name).string();
+        std::filesystem::remove(Output);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.PatchMode = true;
+        Options.NoOpt = Name == kPublished;
+        Options.EmitDumpOutput = false;
+        auto Lifted = Pipeline().run(*Image, Context, Options);
+        if (!Lifted.Success && Behavior == Refuse) {
+          EXPECT_FALSE(std::filesystem::exists(Output));
+          ++Refused;
+          break;
+        }
+        ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+        MachOPatcher Patcher;
+        Patcher.setImageContext(&*Image);
+        const auto Patch =
+            Patcher.patch(Input, Output, *Lifted.LlvmModule, Image->Arch);
+        if (Behavior == Refuse) {
+          EXPECT_FALSE(Patch.Success);
+          EXPECT_FALSE(std::filesystem::exists(Output));
+          ++Refused;
+          break;
+        }
+        ASSERT_TRUE(Patch.Success);
+        const auto Installed =
+            llvm::find_if(Patch.PatchedFunctions,
+                          [&](const auto &F) { return F.OriginalVA == Owner; });
+        ASSERT_NE(Installed, Patch.PatchedFunctions.end());
+        Owner = Installed->OwnerVA;
+        Image = Reader->load(Output);
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        Input = Output;
+        ASSERT_NO_FATAL_FAILURE(Inspect());
+        ++Published;
+      }
+    }
+  if (Export) {
+    std::filesystem::create_directories(Export);
+    const auto Path = std::filesystem::path(Export) / kSigningModelFile;
+    std::ofstream Out(Path);
+    Out << kSigningModelBegin << Calls << kSigningModelEnd << Bodies;
+    Out.close();
+    ASSERT_TRUE(Out);
+    RecordProperty(kSigningModelPath, Path.string());
+  }
+  RecordProperty(kPublishedSigningUses, Published);
+  RecordProperty(kSigningRows, VerifiedRows);
+  RecordProperty(kSigningRefusals, Refused);
+  RecordProperty(kJoinedSnapshotCases, ResolvedPCs);
+  RecordProperty(kSigningModelCases, ModelCases);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
 TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Dir;

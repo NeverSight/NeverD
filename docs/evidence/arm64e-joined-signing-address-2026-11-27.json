@@ -1,0 +1,172 @@
+{
+  "implementation": "37f9ce7d830a766eeccfff0487ca87aea1befcb5",
+  "dev_baseline": "11a3c5a17d18214b1902318ca4d70fa9ebe8740b",
+  "original_regression_baseline": "86c968eaedd1457d776f661fbb4194d8490b7382",
+  "capstone": "3af4f18baa8c88ed070a71f48c53e28bb38f8fc7",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "publication": {
+    "inputs": "Apple-linked Mach-O dylibs with IA and IB",
+    "generations": [
+      "source to O0",
+      "O0 to O2"
+    ],
+    "observed_paths": [
+      "common signing PC",
+      "distinct signing PCs",
+      "ADRP/ADD and register copy",
+      "modifier-only uses",
+      "authenticated return through X0",
+      "scratch clobbered on one branch"
+    ],
+    "refusal_controls": [
+      "undefined incoming GPR",
+      "one crossed signing PC",
+      "both signing PCs exchanged",
+      "shared overwrite after the merge",
+      "32-bit clobber",
+      "wrong signing key"
+    ],
+    "published_signing_address_images": 24,
+    "verified_signing_rows": 96,
+    "refused_signing_address_cases": 12,
+    "resolved_interrupted_signing_pcs": 60
+  },
+  "previous_observable_address_regression": {
+    "published_signing_address_images": 64,
+    "verified_signing_rows": 116,
+    "refused_signing_address_cases": 2
+  },
+  "arm_fvp": {
+    "runner": "GitHub-hosted ubuntu-24.04",
+    "action": "https://github.com/gmh5225/test_mac_intel/actions/runs/45997050094",
+    "actions_revision": "a4802122b9ab7ec2e0d5f194aedb75d68a968eca",
+    "caller_inputs_per_body": 2,
+    "exception_levels": [
+      "EL0",
+      "EL1"
+    ],
+    "enpacm_enpacm0": [
+      "00",
+      "10",
+      "01",
+      "11"
+    ],
+    "new_joined_guests": {
+      "profile": "joined-signing-address",
+      "manifest_sha256": "5a28a445cf0770148e4daff31da14e81ffdf36d9b2b1a59e2fe438a1a1958985",
+      "guest_sha256": "980af01f986087ebc2407bf66c079321b26152b1796705d1774ff58e406554f3",
+      "guest_object_sha256": "bd3b28df7af343c2cb4cb84edcc47ead383b95eee19906b4457108d565453f67",
+      "assembly_sha256": "e1d138ff06ddacd412605e06721d510aa6508c42351de4bd275468dc73503506",
+      "function_bodies": 36,
+      "test_binary_sha256": "741c72770ab4866732ab9138666a738c866adf6dfd80bdc1aa683a8adf10d3c6",
+      "modeled_function_invocations": 576,
+      "enabled_exit": 0,
+      "disabled_feature_control": {
+        "records": [
+          "RETURN-MODEL feature mismatch"
+        ],
+        "exit_code": 1
+      },
+      "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+      "version": "11.32+19"
+    },
+    "archived_observable_guests": {
+      "profile": "observable-signing-address",
+      "manifest_sha256": "49bf5946b6edc28390f0b160212d3a061eabb4ee851d1ea8b6fc29f5b0070533",
+      "guest_sha256": "8c39cf4b1f8ae20373f7a2400bd261ae5de62085edbbb9d9c8752143d9a5c67b",
+      "guest_object_sha256": "f110e9f2c408b4b0862605055863c2a5c7208c481385889860cf8f7a48ccd36a",
+      "assembly_sha256": "3749ff07a8eb78f0fe8073855ad1b4402550f1e8e18fbe20a1cb2ae4e1818c8d",
+      "function_bodies": 96,
+      "test_binary_sha256": "bcff2d824f6a7b1505db5bbb63d309c57f251d54e62d6d1ecf34cb236e855b19",
+      "modeled_function_invocations": 1536,
+      "enabled_exit": 0,
+      "disabled_feature_control": {
+        "records": [
+          "RETURN-MODEL feature mismatch"
+        ],
+        "exit_code": 1
+      },
+      "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+      "version": "11.32+19",
+      "archived_from": "949a6a10f70b98c14731fee2b51cb345b7429234"
+    },
+    "archived_original_guests": {
+      "profile": "observable-signing-address",
+      "manifest_sha256": "f2909ad561ac462a8045e94a772a835689bf4c43617d54d941c2cdf3d11947d2",
+      "guest_sha256": "cd3cb071590e01d50a384f57231cd1cc0fadac3a46c405703d2bf1b6ffdeb49d",
+      "guest_object_sha256": "080b7442d5a1bdac4def8da0e3618c01b9bd8c72ff8cea8cf97d5472de93c126",
+      "assembly_sha256": "652f5d7aa65d2650d780125d5ae2408a506288a7f6f2c31712b6d19c5fd0e208",
+      "function_bodies": 66,
+      "test_binary_sha256": "2d5a0f4cfb5abd07107ba3a59bd005a0862648ec9baae33a96c548cce79552d6",
+      "modeled_function_invocations": 1056,
+      "enabled_exit": 0,
+      "disabled_feature_control": {
+        "records": [
+          "RETURN-MODEL feature mismatch"
+        ],
+        "exit_code": 1
+      },
+      "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+      "version": "11.32+19",
+      "archived_from": "2688a884a0ea15b4859f0937696ace62f5243653"
+    }
+  },
+  "hardware_todo": [
+    "128-bit LRCPC3",
+    "two-modifier PAuth_LR",
+    "PC-sensitive PACM",
+    "CPTA-on",
+    "checked writeback"
+  ],
+  "python_model_inventory_and_workflow_checks": 11,
+  "hosted_macos_release": {
+    "cpu": "Apple M1 (Virtual)",
+    "macos": "26.7.2",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "release_test_sha256": "741c72770ab4866732ab9138666a738c866adf6dfd80bdc1aa683a8adf10d3c6",
+    "unwind_test_sha256": "777603a5adc2cd832d855f31eacf765c3751e14cd2afb7ae051643970756729d",
+    "async_unwind_and_lifted_images": {
+      "discovered": 224,
+      "passed": 224,
+      "skipped": [],
+      "failures": []
+    },
+    "other_image_suites": {
+      "discovered": 63,
+      "passed": 63,
+      "skipped": []
+    },
+    "portable_unwind_recovery": {
+      "discovered": 42,
+      "passed": 42,
+      "skipped": []
+    },
+    "explicit_language_unwind": {
+      "cases": 32,
+      "darwin_personality_images": 192,
+      "darwin_personality_exceptions": 288,
+      "darwin_personality_phase_pairs": 720,
+      "native_pc_recipe_deliveries": 0
+    },
+    "runner": "GitHub-hosted macos-26",
+    "action": "https://github.com/gmh5225/test_mac_intel/actions/runs/45989233449",
+    "actions_revision": "9e194d6ba34c1832bcd52883e445b98c8496fa07"
+  },
+  "m4": {
+    "cpu": "Apple M4 Max",
+    "macos": "15.6.1",
+    "portable_unwind_recovery": {
+      "discovered": 42,
+      "passed": 42,
+      "skipped": []
+    },
+    "focused_image_cases": {
+      "passed": 2,
+      "skipped": []
+    },
+    "focus_test_sha256": "4b80341358164bf15bd528f15ede8c422134d5da0c72469f2df5e53771f9fe88",
+    "focus_model_action": "https://github.com/gmh5225/test_mac_intel/actions/runs/45988004308",
+    "full_release_build": "Stopped the redundant local build after full hosted Release qualification"
+  }
+}

@@ -418,6 +418,91 @@ TEST(AArch64ImplicitUnwind, RegisterModifierNeedsTheSigningPCAndKey) {
   EXPECT_EQ(WrongAddress.at(4).Status, Status::Unknown);
 }
 
+TEST(AArch64ImplicitUnwind, JoinedSigningPCsAuthenticateOnlyMatchingPaths) {
+  const auto Result = [](uint32_t RightSign, uint32_t RightAddress,
+                         uint32_t Copy, uint32_t Change, uint32_t Auth) {
+    Frame F{BranchToSecondSigner,
+            ExplicitSignB,
+            PreviousPCInX11,
+            BranchToSharedAuth,
+            RightSign,
+            RightAddress,
+            Copy,
+            Change,
+            Auth,
+            Ret};
+    // Neither of the two concrete signing PCs describes every arrival.
+    EXPECT_EQ(F.at(JoinedAuthBlock).Status, Status::Unknown);
+    return F.at(JoinedAfterAuth);
+  };
+  const auto Good = Result(ExplicitSignB, PreviousPCInX11, CopyX11ToX12, Nop,
+                           ExplicitAuthBX12);
+  ASSERT_TRUE(Good.State);
+  EXPECT_EQ(Good.State->Kind, Kind::Unsigned);
+  for (auto Change : {ClobberLR, StripLR, Allocate, Call})
+    EXPECT_EQ(Result(ExplicitSignB, PreviousPCInX11, CopyX11ToX12, Change,
+                     ExplicitAuthBX12)
+                  .Status,
+              Status::Unknown);
+  EXPECT_EQ(Result(ExplicitSignA, PreviousPCInX11, CopyX11ToX12, Nop,
+                   ExplicitAuthBX12)
+                .Status,
+            Status::Unknown);
+  EXPECT_EQ(
+      Result(ExplicitSignB, Nop, CopyX11ToX12, Nop, ExplicitAuthBX12).Status,
+      Status::Unknown);
+  EXPECT_EQ(Result(ExplicitSignB, PreviousPCInX11, CopyW11ToW12, Nop,
+                   ExplicitAuthBX12)
+                .Status,
+            Status::Unknown);
+}
+
+TEST(AArch64ImplicitUnwind, InterruptedModifierSelectsAnIncomingSigner) {
+  constexpr auto Word = sizeof(uint32_t);
+  for (bool CompactOnly : {false, true}) {
+    Frame F{BranchToSecondSigner, ExplicitSignB,
+            PreviousPCInX11,      BranchToSharedAuth,
+            ExplicitSignB,        PreviousPCInX11,
+            CopyX11ToX12,         Nop,
+            ExplicitAuthBX12,     Ret};
+    const auto Range = F.Function.CodeRange;
+    if (CompactOnly) {
+      F.Function.Dwarf.reset();
+      auto &Compact = F.Function.Compact.emplace();
+      Compact.CodeRange = Range;
+      Compact.NativeEncoding = macho_unwind::kARM64ModeFrameless;
+      ASSERT_TRUE(macho_unwind::decodeEncoding(
+          Arch::AArch64, Compact.NativeEncoding, Compact));
+    }
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    const auto &Join = aarch64UnwindRowAt(*Rows, JoinedAuthBlock * Word);
+    EXPECT_EQ(Join.Signing.Status, Status::Unknown);
+    ASSERT_TRUE(Join.LiveSigningModifier);
+    const auto R = Join.LiveSigningModifier->Register;
+    std::array<va_t, kRegisters> GPRs{};
+    ASSERT_LT(R, GPRs.size());
+    const auto Loaded = Range.End;
+    EXPECT_FALSE(prepareDarwinArm64eSystemCaller(Join, Range, Loaded));
+    EXPECT_FALSE(prepareDarwinArm64eSystemCaller(
+        Join, Range, Loaded, llvm::ArrayRef(GPRs).take_front(R)));
+    for (auto Sign : {Word, JoinedRightSigner * Word}) {
+      GPRs[R] = Loaded + Sign;
+      const auto Plan =
+          prepareDarwinArm64eSystemCaller(Join, Range, Loaded, GPRs);
+      ASSERT_TRUE(Plan);
+      EXPECT_FALSE(Plan->Frame.SavedLR);
+      EXPECT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFAPC);
+      EXPECT_EQ(Plan->Frame.SigningPC, GPRs[R]);
+    }
+    for (va_t Invalid :
+         {Loaded - Word, Loaded, Loaded + Word + 1, Loaded + Range.size()}) {
+      GPRs[R] = Invalid;
+      EXPECT_FALSE(prepareDarwinArm64eSystemCaller(Join, Range, Loaded, GPRs));
+    }
+  }
+}
+
 TEST(AArch64ImplicitUnwind, CompactRowsRecoverActualCarriersAtInterruption) {
   Frame F{SignB, Push, MoveFP, Call, Pop, AuthB, Ret};
   F.Function.Dwarf.reset();
