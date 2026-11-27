@@ -792,6 +792,26 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
             ImportedCall &&
             registration_abi::preservesRegistrationImportBindings(Image, *Slot);
       }
+      if (ImportedSlot && !PreserveImportBindings &&
+          State.ImportBindingsIntact && !Registration && !CxxPaths) {
+        const auto &SP =
+            State.Registers[x86reg::RSP / x86reg::GeneralRegStride];
+        if (SP.Offset && *SP.Offset <= -8 &&
+            SP == FrameValue::frame(*SP.Offset))
+          if (const auto Targets =
+                  registration_state::checkedCRTInitializerTargets(
+                      Image, Block, Op, *ImportedSlot, Work)) {
+            // Either walker may return after any prefix. Every possible
+            // callback must independently return with its no-argument stack
+            // and preserve bindings without borrowing the caller's imports.
+            PreserveImportBindings = llvm::all_of(*Targets, [&](va_t Target) {
+              const auto Callback = NestedPop(Target);
+              return Callback && Callback->StackPopBytes == 0 &&
+                     Callback->RequiredImports.empty() &&
+                     Callback->PreservesImportBindings;
+            });
+          }
+      }
       std::optional<FrameValue> CallSP;
       if (CalleePop) {
         LowOp Adjust;

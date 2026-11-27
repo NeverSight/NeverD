@@ -670,6 +670,44 @@ TEST(RegistrationCRTFrame, XCPT4CRTStartupHasTwoCallerCleanedWalkers) {
     EXPECT_EQ(readImmutablePE32CodePointerStorage(*Image, Slot), Target);
 }
 
+TEST(RegistrationCRTFrame, XCPT4BindsOrderedInitializerRangesAtBothCalls) {
+  auto Image = loadXCPT4();
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Image));
+  const auto Startup =
+      CFGBuilder().buildIntegerFrameProof(*Image, Dec, 0x406c57, "CRT startup");
+  unsigned Calls = 0;
+  for (const auto &Block : Startup.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (Op.Opcode != NdOp::CALL ||
+          (Op.Addr != 0x406ca8 && Op.Addr != 0x406cce))
+        continue;
+      const bool Checked = Op.Addr == 0x406ca8;
+      const va_t Slot = Checked ? 0x4080e4 : 0x4080cc;
+      const std::vector<va_t> Expected =
+          Checked ? std::vector<va_t>{0x406b88, 0x406c33}
+                  : std::vector<va_t>{0x406c3b};
+      size_t Work = 0;
+      const auto Targets = registration_state::checkedCRTInitializerTargets(
+          *Image, Block, Op, Slot, Work);
+      ASSERT_TRUE(Targets) << std::hex << Op.Addr;
+      EXPECT_EQ(*Targets, Expected);
+      size_t Short = limits::kMaxRegistrationEHStateWork;
+      EXPECT_FALSE(registration_state::checkedCRTInitializerTargets(
+          *Image, Block, Op, Slot, Short));
+      EXPECT_FALSE(registration_state::checkedCRTInitializerTargets(
+          *Image, Block, Op, Checked ? 0x4080cc : 0x4080e4, Work));
+      auto Split = Block;
+      std::erase_if(Split.InstructionBoundaries,
+                    [&](const auto &I) { return I.Address < Op.Addr - 5; });
+      EXPECT_FALSE(registration_state::checkedCRTInitializerTargets(
+          *Image, Split, Op, Slot, Work));
+      ++Calls;
+    }
+  EXPECT_EQ(Calls, 2u);
+}
+
 TEST(RegistrationCRTFrame, XCPT4StartupCallsTheUCRTCommodeAccessor) {
   auto Image = loadXCPT4();
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());

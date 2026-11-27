@@ -246,6 +246,81 @@ TEST(RegistrationCRTDataStack, UCRTCommodeAccessorOwnsOneFullIntStore) {
     }
 }
 
+TEST(RegistrationCRTDataStack, InitializerCallsKeepOnlyProvenCallbackEffects) {
+  enum class Table {
+    NullOnly,
+    Returning,
+    WritesUnknownMemory,
+    Mutable,
+    MissingFixup
+  };
+  for (const auto Kind :
+       {Table::NullOnly, Table::Returning, Table::WritesUnknownMemory,
+        Table::Mutable, Table::MissingFixup}) {
+    SCOPED_TRACE(int(Kind));
+    constexpr va_t Base = 0x400000, TableVA = Base + 0x4000;
+    auto Image = dataImage(Base, "api-ms-win-crt-runtime-l1-1-0.dll",
+                           "_initterm", 0, false, 0);
+    const va_t Slot = Image.Imports.front().IATAddr;
+    auto &Text = Image.Segments.front();
+    auto &Code = Text.Data;
+    Code.clear();
+    const auto Address = [&](va_t Value, bool TableArgument = false) {
+      const size_t At = Code.size();
+      Code.resize(At + 4);
+      writeLE<uint32_t>(Code.data() + At, uint32_t(Value));
+      Image.BaseRelocations.push_back({Image.Entry + At, 3});
+      if (TableArgument)
+        Image.DataAddressRelocOperands[Image.Entry + At] = {Value, Value, 4,
+                                                            TableVA};
+    };
+    Code.push_back(0x68);
+    Address(TableVA + 8, true);
+    Code.push_back(0x68);
+    Address(TableVA, true);
+    Code.insert(Code.end(), {0xff, 0x15});
+    Address(Slot);
+    Code.insert(Code.end(), {0x83, 0xc4, 8, 0x6a, 1, 0xff, 0x15});
+    Address(Slot + 4);
+    Code.push_back(0xc3);
+    Code.resize(0x40, 0xcc);
+    if (Kind == Table::WritesUnknownMemory)
+      Code.insert(Code.end(), {0x89, 0x08}); // MOV [EAX], ECX
+    Code.push_back(0xc3);
+    Text.Size = Text.FileSz = Code.size();
+    Image.Sections.front().Size = Image.Sections.front().FileSz = Text.Size;
+    Segment Data;
+    Data.Name = ".CRT";
+    Data.VA = TableVA;
+    Data.Flags = SegmentFlags::Readable;
+    if (Kind == Table::Mutable)
+      Data.Flags = Data.Flags | SegmentFlags::Writable;
+    Data.Size = Data.FileSz = 12;
+    Data.Data.resize(12);
+    if (Kind != Table::NullOnly) {
+      writeLE<uint32_t>(Data.Data.data() + 4, uint32_t(Image.Entry + 0x40));
+      Image.CodePtrRelocSlots.insert(TableVA + 4);
+      if (Kind != Table::MissingFixup)
+        Image.BaseRelocations.push_back({TableVA + 4, 3});
+    }
+    Section Storage;
+    Storage.Name = Data.Name;
+    Storage.VA = TableVA;
+    Storage.Size = Storage.FileSz = Data.Size;
+    Storage.Flags = Data.Flags;
+    Image.Sections.push_back(Storage);
+    Image.Segments.push_back(std::move(Data));
+    const auto Contract =
+        RegistrationCallCalleeIndex(Image).stackContract(Image.Entry);
+    const bool Expected = Kind == Table::NullOnly || Kind == Table::Returning;
+    EXPECT_EQ(bool(Contract), Expected);
+    if (Contract) {
+      EXPECT_EQ(Contract->StackPopBytes, 0u);
+      EXPECT_EQ(Contract->RequiredImports, (std::vector<va_t>{Slot, Slot + 4}));
+    }
+  }
+}
+
 TEST(RegistrationCRTDataStack, CompleteCurrentDataStoresPreserveOnlyBindings) {
   for (uint32_t Base : {0x400000u, 0x18000000u, 0x50000000u})
     for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
