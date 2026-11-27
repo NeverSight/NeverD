@@ -11,6 +11,7 @@
 namespace neverd::emulation {
 llvm::Expected<AndroidNativeOptions>
 androidOptionsFromJSON(const llvm::json::Value &Value);
-llvm::json::Object androidResultJSON(const ProcessResult &Result);
+void writeAndroidResultFields(llvm::json::OStream &J,
+                              const ProcessResult &Result);
 } // namespace neverd::emulation
 #endif

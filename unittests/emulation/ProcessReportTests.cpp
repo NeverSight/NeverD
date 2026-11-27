@@ -25,11 +25,81 @@
 #include "llvm/Support/Base64.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <string>
 #include <string_view>
 
 namespace neverd::emulation {
+TEST(ProcessReport, StreamKeepsCanonicalBytesAndNativeCallShapeAcrossProfiles) {
+  for (auto Profile :
+       {ProcessProfile::LinuxELF64, ProcessProfile::WindowsPE64,
+        ProcessProfile::AndroidNativeAArch64, ProcessProfile::MacOSMachO64,
+        ProcessProfile::IOSMachO64, ProcessProfile::IOSSimulatorMachO64}) {
+    SCOPED_TRACE(processProfileName(Profile));
+    ProcessResult R{
+        Profile, GuestArchitecture::AArch64, ExecutionBackendKind::Unicorn, {}};
+    R.Diagnostic = "quote \" and newline\n";
+    R.StandardError = std::string("\0\xff", 2);
+    R.Services.push_back({UINT64_MAX, 0, {}, std::nullopt, false, 0});
+    R.IoctlTraceEnabled = true;
+    R.IoctlTrace.emplace_back().ReturnAddress = 0;
+    NativeCallEvent Call{};
+    Call.Name = "name\t";
+    Call.Module = "provider";
+    Call.Library = "library";
+    Call.Symbol = "symbol";
+    Call.Arguments.back() = UINT64_MAX;
+    Call.ArgumentCount = 1;
+    Call.DirectServiceNumber = 0;
+    Call.ThreadID = 0;
+    R.NativeCalls.push_back(Call);
+    R.MemorySnapshots.push_back({7, {}, "unresolved", false});
+    R.ExecutionObservationsEnabled = true;
+    R.ExecutionObservations.emplace_back().Memory.push_back({7, {0, 255}, {}});
+    R.EventLogWritesConsumed = 0;
+    R.TextLogWritesConsumed = 0;
+    R.ThreadCPUStates.emplace();
+    R.NativeThreads.emplace_back();
+    R.TraceThreads.push_back({0, 1});
+    R.ReturnValue = 0;
+    R.TerminationSignal = 6;
+
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    writeProcessResultJSON(OS, R);
+    EXPECT_EQ(Text, processResultJSON(R));
+    auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+    EXPECT_EQ(Text, llvm::formatv("{0}", Parsed).str());
+    const auto *Root = Parsed.getAsObject();
+    ASSERT_NE(Root, nullptr);
+    const bool Android = Profile == ProcessProfile::AndroidNativeAArch64;
+    const bool Windows = Profile == ProcessProfile::WindowsPE64;
+    if (Profile == ProcessProfile::LinuxELF64) {
+      EXPECT_FALSE(Root->get("android") || Root->get("darwin") ||
+                   Root->get("windows"));
+      continue;
+    }
+    const auto *Platform = Root->getObject(Android   ? "android"
+                                           : Windows ? "windows"
+                                                     : "darwin");
+    ASSERT_NE(Platform, nullptr);
+    const auto *Calls = Platform->getArray("native_calls");
+    ASSERT_NE(Calls, nullptr);
+    ASSERT_EQ(Calls->size(), 1u);
+    const auto *Entry = Calls->front().getAsObject();
+    ASSERT_NE(Entry, nullptr);
+    const auto *Arguments = Entry->getArray("arguments");
+    ASSERT_NE(Arguments, nullptr);
+    EXPECT_EQ(Arguments->size(),
+              Android ? Call.Arguments.size() : Call.ArgumentCount);
+    EXPECT_EQ(Entry->get("module") != nullptr, !Android);
+    EXPECT_EQ(Entry->get("symbol") != nullptr, Android);
+    EXPECT_EQ(Entry->get("thread_id") != nullptr, Android);
+    EXPECT_EQ(Entry->get("direct_service_number") != nullptr, Windows);
+  }
+}
+
 TEST(ProcessReport,
      CPUStateObservationIsStrictLosslessAndKeepsFailureSeparate) {
   auto Default = llvm::cantFail(processOptionsFromJSON(R"({"android":{}})"));
