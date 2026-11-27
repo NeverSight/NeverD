@@ -291,6 +291,17 @@ void recoverStructReturnFromCallers(const BinaryImage &Img,
   }
 }
 
+bool forwardsRegisterResults(const MedOp &Call, const MedOp &Return) {
+  if ((Call.Opcode != NdOp::CALL && Call.Opcode != NdOp::INDIR_CALL) ||
+      Return.Opcode != NdOp::RETURN || !Return.NumInputs ||
+      Return.Inputs[0].Kind != MedVar::Reg)
+    return false;
+  if (Call.Output.Kind == MedVar::Reg)
+    return Return.Inputs[0].RegOff == Call.Output.RegOff;
+  return !Call.Output.Size && Call.IsTailCall && Return.IsTailCall &&
+         Call.Addr == Return.Addr;
+}
+
 MedFunc *forwardingCallee(const BinaryImage &Img, const PipelineResult &Result,
                           const std::map<va_t, MedFunc *> &ByEntry,
                           const MedOp &Call, bool *ThroughImport) {
@@ -367,14 +378,9 @@ void propagateStructReturnForwarderShapes(const BinaryImage &Img,
           bool Found = false;
           for (size_t I = 0; I + 1 < Blk.Ops.size(); ++I) {
             const auto &Op = Blk.Ops[I];
-            if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
-                Op.NumInputs < 1 || !Op.Inputs[0].isConst() ||
-                Op.Output.Kind != MedVar::Reg)
-              continue;
             const auto &Ret = Blk.Ops[I + 1];
-            if (Ret.Opcode != NdOp::RETURN || Ret.NumInputs < 1 ||
-                Ret.Inputs[0].Kind != MedVar::Reg ||
-                Ret.Inputs[0].RegOff != Op.Output.RegOff)
+            if (!forwardsRegisterResults(Op, Ret) || !Op.NumInputs ||
+                !Op.Inputs[0].isConst())
               continue;
             bool ThroughImport = false;
             MedFunc *Callee =
